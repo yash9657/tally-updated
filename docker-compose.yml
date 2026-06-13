@@ -1,0 +1,20 @@
+# Local development services. Production runs Aurora PostgreSQL 16 in AWS ap-south-1 (see infra/).
+services:
+  db:
+    image: postgres:16
+    container_name: tally_pg
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: tally
+    ports:
+      - "5433:5432"   # host 5433 -> container 5432 (avoid clashing with a local pg)
+    volumes:
+      - tally_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d tally"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  tally_pgdata:
