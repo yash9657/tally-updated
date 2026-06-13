@@ -27,6 +27,10 @@ const RAW_BINDINGS: Record<string, KeymapAction> = {
   "Ctrl+G": { kind: "switchTo" }, // Switch To (replaces the stack)
   "Ctrl+H": { kind: "changeMode" }, // Change Mode picker (in vouchers)
   F2: { kind: "date" }, // Date (voucher) / Period (report)
+  // Alt+C — create a master inline (e.g. a new ledger from a voucher field).
+  // The default master is a ledger, the by-far most common inline create; the
+  // navigation machine returns to the originating frame on accept/Esc.
+  "Alt+C": { kind: "createMaster", masterKind: "ledger" },
 };
 
 function buildBindings(

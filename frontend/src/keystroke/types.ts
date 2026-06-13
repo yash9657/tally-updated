@@ -6,8 +6,52 @@
  * button-bar labels MUST stay in lock-step with the corpus `expect` blocks.
  */
 
-/** A logical screen on Tally's screen stack. */
-export type ScreenKind = "gateway" | "menu" | "voucher" | "report" | "goto-overlay";
+/**
+ * A logical screen on Tally's screen stack.
+ *
+ *  - "gateway" / "menu"  — the Gateway of Tally and submenus.
+ *  - "voucher"           — any of the six voucher entry/alteration screens.
+ *  - "report"            — any of the five Phase 1 financial reports.
+ *  - "report-detail"     — a drill-down level INSIDE a report (e.g. a group or
+ *                          ledger row expanded, or a party's bills) reached by
+ *                          Enter on a report row that is not itself a voucher.
+ *  - "goto-overlay"      — the Alt+G / Ctrl+G picker (preserves or replaces).
+ *  - "master-create"     — an inline master-creation screen (Alt+C), e.g.
+ *                          creating a ledger from a voucher field and returning.
+ */
+export type ScreenKind =
+  | "gateway"
+  | "menu"
+  | "voucher"
+  | "report"
+  | "report-detail"
+  | "goto-overlay"
+  | "master-create";
+
+/**
+ * The kind of master a "master-create" screen is creating. Mirrors the masters
+ * the backend exposes; the masters agent renders the matching form.
+ */
+export type MasterKind =
+  | "ledger"
+  | "group"
+  | "voucher-type"
+  | "unit"
+  | "stock-item";
+
+/**
+ * The canonical Phase 1 report names. These strings are the `reportName` on a
+ * "report" frame and the Go To picker entries. The reports agent keys its
+ * screen components off these EXACT strings.
+ */
+export const REPORT_NAMES = [
+  "Balance Sheet",
+  "Profit & Loss A/c",
+  "Trial Balance",
+  "Day Book",
+  "Outstandings",
+] as const;
+export type ReportName = (typeof REPORT_NAMES)[number];
 
 /** The six core voucher types reproduced in Phase 0 (RESEARCH.md sec 22). */
 export type VoucherType =
@@ -41,7 +85,8 @@ export type KeymapAction =
   | { kind: "goto" } // Alt+G — overlay, preserves prior screen
   | { kind: "switchTo" } // Ctrl+G — replaces the stack
   | { kind: "changeMode" } // Ctrl+H — Change Mode picker (vouchers)
-  | { kind: "date" }; // F2
+  | { kind: "date" } // F2
+  | { kind: "createMaster"; masterKind: MasterKind }; // Alt+C — inline create
 
 /** A keymap profile: a named, data-driven combo → action table. */
 export interface Keymap {

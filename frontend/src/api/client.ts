@@ -1,0 +1,115 @@
+/**
+ * The CoredClient interface — the single contract every consumer (screens,
+ * tests, the app shell) depends on. Two implementations satisfy it:
+ *
+ *  - {@link createRestClient} (./rest) — the live REST/JSON client.
+ *  - {@link createMockClient} (./mock) — an in-memory implementation for
+ *    hermetic component tests (no live server).
+ *
+ * Depending on this interface (not a concrete client) is what lets a screen be
+ * unit-tested against the mock and shipped against REST without code changes.
+ */
+
+import type {
+  BalanceSheetResponse,
+  CreateCompanyRequest,
+  CreateCompanyResponse,
+  CreateGroupRequest,
+  CreateGroupResponse,
+  CreateLedgerRequest,
+  CreateLedgerResponse,
+  CreateStockItemRequest,
+  CreateStockItemResponse,
+  CreateUnitRequest,
+  CreateUnitResponse,
+  CreateVoucherTypeRequest,
+  CreateVoucherTypeResponse,
+  DayBookQuery,
+  DayBookResponse,
+  GSTR1Query,
+  GSTR1Response,
+  ImportTallyXMLQuery,
+  ImportTallyXMLResponse,
+  OutstandingsQuery,
+  OutstandingsResponse,
+  ProfitLossResponse,
+  TrialBalanceResponse,
+  VoucherRequest,
+  VoucherResponse,
+} from "./types";
+
+export interface CoredClient {
+  // Company
+  createCompany(req: CreateCompanyRequest): Promise<CreateCompanyResponse>;
+
+  // Masters (all company-scoped)
+  createGroup(
+    companyID: string,
+    req: CreateGroupRequest,
+  ): Promise<CreateGroupResponse>;
+  createLedger(
+    companyID: string,
+    req: CreateLedgerRequest,
+  ): Promise<CreateLedgerResponse>;
+  createVoucherType(
+    companyID: string,
+    req: CreateVoucherTypeRequest,
+  ): Promise<CreateVoucherTypeResponse>;
+  createUnit(
+    companyID: string,
+    req: CreateUnitRequest,
+  ): Promise<CreateUnitResponse>;
+  createStockItem(
+    companyID: string,
+    req: CreateStockItemRequest,
+  ): Promise<CreateStockItemResponse>;
+
+  // Vouchers (one per accounting class)
+  postSalesVoucher(
+    companyID: string,
+    req: VoucherRequest,
+  ): Promise<VoucherResponse>;
+  postPurchaseVoucher(
+    companyID: string,
+    req: VoucherRequest,
+  ): Promise<VoucherResponse>;
+  postReceiptVoucher(
+    companyID: string,
+    req: VoucherRequest,
+  ): Promise<VoucherResponse>;
+  postPaymentVoucher(
+    companyID: string,
+    req: VoucherRequest,
+  ): Promise<VoucherResponse>;
+  postContraVoucher(
+    companyID: string,
+    req: VoucherRequest,
+  ): Promise<VoucherResponse>;
+  postJournalVoucher(
+    companyID: string,
+    req: VoucherRequest,
+  ): Promise<VoucherResponse>;
+
+  // Reports
+  getTrialBalance(companyID: string): Promise<TrialBalanceResponse>;
+  getBalanceSheet(companyID: string): Promise<BalanceSheetResponse>;
+  getProfitLoss(companyID: string): Promise<ProfitLossResponse>;
+  getDayBook(
+    companyID: string,
+    query?: DayBookQuery,
+  ): Promise<DayBookResponse>;
+  getOutstandings(
+    companyID: string,
+    query?: OutstandingsQuery,
+  ): Promise<OutstandingsResponse>;
+
+  // GST
+  generateGSTR1(companyID: string, query: GSTR1Query): Promise<GSTR1Response>;
+
+  // Migration import (Tally-XML ingress)
+  importTallyXML(
+    companyID: string,
+    xml: string,
+    query?: ImportTallyXMLQuery,
+  ): Promise<ImportTallyXMLResponse>;
+}

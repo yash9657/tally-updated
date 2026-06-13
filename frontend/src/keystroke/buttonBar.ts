@@ -31,8 +31,14 @@ const VOUCHER_BAR: readonly ButtonBarItem[] = [
   item("F7", "Journal"),
   item("F8", "Sales"),
   item("F9", "Purchase"),
+  item("Alt+C", "Create Master"),
   item("Ctrl+H", "Change Mode"),
   item("Ctrl+A", "Accept"),
+];
+
+const MASTER_BAR: readonly ButtonBarItem[] = [
+  item("Ctrl+A", "Accept"),
+  item("Esc", "Cancel"),
 ];
 
 const GATEWAY_BAR: readonly ButtonBarItem[] = [
@@ -62,7 +68,10 @@ export function buttonBarFor(
     case "voucher":
       return VOUCHER_BAR;
     case "report":
+    case "report-detail":
       return REPORT_BAR;
+    case "master-create":
+      return MASTER_BAR;
     case "gateway":
     case "menu":
       return GATEWAY_BAR;

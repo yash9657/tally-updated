@@ -1,6 +1,7 @@
 import { assign, setup } from "xstate";
 import type {
   KeymapAction,
+  MasterKind,
   ScreenKind,
   VoucherMode,
   VoucherType,
@@ -41,6 +42,51 @@ export type VoucherField = (typeof VOUCHER_FIELDS)[number];
 /** Field used while the Go To overlay is open. */
 export type OverlayField = "goto-search";
 
+/** Ordered field cursor inside a master-create screen (default: ledger). */
+export const MASTER_FIELDS = ["name", "group", "details"] as const;
+export type MasterField = (typeof MASTER_FIELDS)[number];
+
+/**
+ * Reports whose rows are individual vouchers (Enter drills straight into the
+ * underlying voucher in alteration mode). The Day Book is the canonical
+ * example. Statement reports (Balance Sheet, P&L, Trial Balance) instead drill
+ * into a report-detail level first.
+ */
+const VOUCHER_DRILL_REPORTS = new Set<string>(["Day Book"]);
+
+/**
+ * Aliases mapping common Gateway / Go To labels to the canonical Phase 1 report
+ * names. Keyed by lower-cased label. Returns undefined for a non-report entry
+ * (so the caller can fall through, e.g. "Vouchers").
+ */
+const REPORT_ALIASES: Readonly<Record<string, string>> = {
+  "balance sheet": "Balance Sheet",
+  "profit & loss a/c": "Profit & Loss A/c",
+  "profit and loss a/c": "Profit & Loss A/c",
+  "profit & loss": "Profit & Loss A/c",
+  "profit and loss": "Profit & Loss A/c",
+  "p&l": "Profit & Loss A/c",
+  "trial balance": "Trial Balance",
+  "day book": "Day Book",
+  daybook: "Day Book",
+  outstandings: "Outstandings",
+  "bills outstanding": "Outstandings",
+  "bills receivable": "Outstandings",
+  "bills payable": "Outstandings",
+};
+
+/**
+ * Resolve a selected menu/picker label to a canonical Phase 1 report name.
+ * Falls back to the raw label for any unrecognised report-shaped entry, and to
+ * undefined for the "Vouchers" entry and other non-report drills.
+ */
+function canonicalReportName(label: string | undefined): string | undefined {
+  if (!label) return undefined;
+  const key = label.trim().toLowerCase();
+  if (key === "vouchers") return undefined;
+  return REPORT_ALIASES[key] ?? label;
+}
+
 /** How a Go To-style overlay resolves when its selection is confirmed. */
 export type GotoMode = "goto" | "switchTo";
 
@@ -49,8 +95,12 @@ export interface ScreenFrame {
   readonly screen: ScreenKind;
   voucherType?: VoucherType;
   voucherMode?: VoucherMode;
-  field?: VoucherField | OverlayField;
+  field?: VoucherField | OverlayField | MasterField;
   reportName?: string;
+  /** For master-create frames: the kind of master being created. */
+  masterKind?: MasterKind;
+  /** For report-detail frames: the selected row of the parent report. */
+  detailOf?: string;
   /** True once this voucher frame has been accepted at least once (Ctrl+A). */
   saved?: boolean;
   /** Active in-frame overlay (e.g. the Ctrl+H Change Mode picker). */
@@ -117,11 +167,23 @@ function top(stack: readonly ScreenFrame[]): ScreenFrame {
 }
 
 /** Advance the voucher field cursor; returns the next field (clamped). */
-function nextVoucherField(field: VoucherField | OverlayField | undefined): VoucherField {
+function nextVoucherField(
+  field: VoucherField | OverlayField | MasterField | undefined,
+): VoucherField {
   const idx = VOUCHER_FIELDS.indexOf(field as VoucherField);
   if (idx < 0) return "party-ledger"; // from date, advance to party-ledger
   const next = Math.min(idx + 1, VOUCHER_FIELDS.length - 1);
   return VOUCHER_FIELDS[next] as VoucherField;
+}
+
+/** Advance the master-create field cursor; returns the next field (clamped). */
+function nextMasterField(
+  field: VoucherField | OverlayField | MasterField | undefined,
+): MasterField {
+  const idx = MASTER_FIELDS.indexOf(field as MasterField);
+  if (idx < 0) return "group"; // from name, advance to group
+  const next = Math.min(idx + 1, MASTER_FIELDS.length - 1);
+  return MASTER_FIELDS[next] as MasterField;
 }
 
 /**
@@ -134,7 +196,8 @@ function resolveGotoSelection(
   baseFrame: ScreenFrame,
   overlay: ScreenFrame,
 ): ScreenFrame[] {
-  const reportName = overlay.selectedItem ?? "";
+  const reportName =
+    canonicalReportName(overlay.selectedItem) ?? overlay.selectedItem ?? "";
   const report: ScreenFrame = { screen: "report", reportName };
   if (overlay.gotoMode === "switchTo") report.replaced = true;
   return [baseFrame, report];
@@ -188,9 +251,33 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
         return { stack };
       }
       if (active.screen === "report") {
-        // Universal drill: report line -> underlying voucher in alteration mode.
-        const drill = newVoucherFrame(DEFAULT_LAST_VOUCHER, "alter");
-        stack.push(drill);
+        // Universal drill. For a voucher-bearing report (e.g. Day Book) a row is
+        // a voucher, so Enter drills straight into it in alteration mode. For a
+        // statement report (Balance Sheet / P&L / Trial Balance) Enter first
+        // drills into a report-detail level (a group/ledger expansion), from
+        // which a further Enter reaches the voucher.
+        if (VOUCHER_DRILL_REPORTS.has(active.reportName ?? "")) {
+          stack.push(newVoucherFrame(DEFAULT_LAST_VOUCHER, "alter"));
+          return { stack };
+        }
+        const detail: ScreenFrame = {
+          screen: "report-detail",
+          reportName: active.reportName,
+          detailOf: active.selectedItem,
+        };
+        stack.push(detail);
+        return { stack };
+      }
+      if (active.screen === "report-detail") {
+        // A report-detail row resolves to its underlying voucher in alteration
+        // mode (the final drill level of a statement report).
+        stack.push(newVoucherFrame(DEFAULT_LAST_VOUCHER, "alter"));
+        return { stack };
+      }
+      if (active.screen === "master-create") {
+        // Enter advances the master-create field cursor.
+        active.field = nextMasterField(active.field);
+        stack[stack.length - 1] = active;
         return { stack };
       }
       if (active.screen === "gateway" || active.screen === "menu") {
@@ -198,6 +285,13 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
         // last-used voucher type, defaulting to the date field.
         if (active.selectedItem?.toLowerCase() === "vouchers") {
           stack.push(newVoucherFrame(DEFAULT_LAST_VOUCHER));
+          return { stack };
+        }
+        // A selected report entry drills into that report (depth +1), the same
+        // destination the Alt+G Go To picker reaches.
+        const report = canonicalReportName(active.selectedItem);
+        if (report) {
+          stack.push({ screen: "report", reportName: report });
           return { stack };
         }
         return {};
@@ -214,6 +308,19 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
     }
 
     case "accept": {
+      // Ctrl+A on a master-create screen accepts the master and POPS back to the
+      // originating frame (typically a voucher), where the freshly-created
+      // master is now available for selection. This mirrors Tally's inline
+      // Alt+C create-and-return flow.
+      if (active.screen === "master-create" && stack.length > 1) {
+        stack.pop();
+        const parent = { ...top(stack) };
+        // Surface the just-created master as the parent's pending selection so
+        // the voucher screen can pre-fill the field that triggered the create.
+        if (active.detailOf) parent.selectedItem = active.detailOf;
+        stack[stack.length - 1] = parent;
+        return { stack };
+      }
       // Ctrl+A accepts the voucher and re-opens a fresh form for bulk entry.
       if (active.screen === "voucher") {
         const fresh = newVoucherFrame(
@@ -224,6 +331,18 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
         return { stack };
       }
       return {};
+    }
+
+    case "createMaster": {
+      // Alt+C pushes an inline master-create screen that PRESERVES its parent
+      // (the voucher) and returns to it on Ctrl+A (accept) or Esc (cancel).
+      const masterFrame: ScreenFrame = {
+        screen: "master-create",
+        masterKind: action.masterKind,
+        field: "name",
+      };
+      stack.push(masterFrame);
+      return { stack };
     }
 
     case "goto": {
@@ -287,18 +406,35 @@ function reduceSelect(ctx: NavContext, menuItem: string): Partial<NavContext> {
     return { stack };
   }
 
-  // Gateway/menu selection: choosing "Vouchers" highlights it; Enter drills.
-  // We open the last-used voucher form immediately on select+enter, so we
-  // record the selection and let Enter perform the drill. For Phase 0 the only
-  // gateway drill we model is "Vouchers" -> voucher form.
+  // Gateway/menu selection: choosing "Vouchers" or a report highlights it;
+  // Enter then drills (into the voucher form or the report respectively).
   if (active.screen === "gateway" || active.screen === "menu") {
-    if (menuItem.toLowerCase() === "vouchers") {
-      // Stash selection on the frame so Enter drills into the voucher.
+    if (
+      menuItem.toLowerCase() === "vouchers" ||
+      canonicalReportName(menuItem) !== undefined
+    ) {
       active.selectedItem = menuItem;
       stack[stack.length - 1] = active;
       return { stack };
     }
     return {};
+  }
+
+  // Inside a report, a selection highlights the row Enter will drill into.
+  if (active.screen === "report" || active.screen === "report-detail") {
+    active.selectedItem = menuItem;
+    stack[stack.length - 1] = active;
+    return { stack };
+  }
+
+  // Inside a master-create screen, a selection fills the active field (e.g.
+  // picking the parent group) AND is remembered as the master's name so the
+  // accept handler can return it to the originating voucher field. The masters
+  // agent owns the field-level form; the machine only tracks the pending pick.
+  if (active.screen === "master-create") {
+    active.detailOf = menuItem;
+    stack[stack.length - 1] = active;
+    return { stack };
   }
 
   return {};
@@ -346,9 +482,13 @@ export const navMachine = setup({
 export interface NavSnapshot {
   screen: ScreenKind;
   voucherType?: VoucherType;
-  field?: VoucherField | OverlayField;
+  field?: VoucherField | OverlayField | MasterField;
   mode?: VoucherMode;
   reportName?: string;
+  masterKind?: MasterKind;
+  detailOf?: string;
+  /** The active frame's pending selection (e.g. a Go To pick, a created master). */
+  selectedItem?: string;
   saved?: boolean;
   overlay?: "change-mode";
   screenStackDepth: number;
@@ -381,6 +521,9 @@ export function projectSnapshot(ctx: NavContext): NavSnapshot {
   if (active.field !== undefined) snap.field = active.field;
   if (active.voucherMode !== undefined) snap.mode = active.voucherMode;
   if (active.reportName !== undefined) snap.reportName = active.reportName;
+  if (active.masterKind !== undefined) snap.masterKind = active.masterKind;
+  if (active.detailOf !== undefined) snap.detailOf = active.detailOf;
+  if (active.selectedItem !== undefined) snap.selectedItem = active.selectedItem;
   if (active.saved) snap.saved = true;
   if (active.overlay !== undefined) snap.overlay = active.overlay;
   if (parent) {

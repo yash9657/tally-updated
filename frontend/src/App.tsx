@@ -1,78 +1,46 @@
-import { useRef } from "react";
-import { useNavMachine } from "./keystroke/useNavMachine";
-import { buttonBarFor } from "./keystroke/buttonBar";
-import { ButtonBar } from "./screens/ButtonBar";
-import { GatewayScreen } from "./screens/GatewayScreen";
-import { VoucherScreen } from "./screens/VoucherScreen";
-import { SelectionList } from "./screens/SelectionList";
+import { useMemo } from "react";
+import { AppShell } from "./app/AppShell";
+import { CompanyProvider, type CompanyInfo } from "./app/CompanyContext";
+import { createMockClient, createRestClient } from "./api";
+import type { CoredClient } from "./api";
 
 /**
- * Application shell. Owns the navigation machine, captures real keyboard events
- * at the root, and routes to the screen for the active stack frame. The fixed
- * right button bar is always present and context-scoped to the active screen.
+ * Composition root. Wires the {@link CoredClient} and the active company into
+ * the {@link CompanyProvider}, then renders the {@link AppShell} (which owns the
+ * navigation machine, key capture, chrome, and screen routing).
+ *
+ * The client is the live REST client when a backend base URL is configured
+ * (VITE_CORED_BASE_URL), otherwise an in-memory mock so the UI runs standalone.
+ * Tests render <App /> directly and get the mock by default (no live server).
  */
-export function App() {
-  const { snapshot, onKeyDown, onSelect } = useNavMachine({
-    startScreen: "gateway",
-    keymapProfile: "tallyprime",
-  });
-  const rootRef = useRef<HTMLDivElement>(null);
-
-  const bar = buttonBarFor(snapshot.screen, snapshot.voucherType);
+export function App({
+  client,
+  company,
+}: {
+  client?: CoredClient;
+  company?: CompanyInfo;
+} = {}) {
+  const resolvedClient = useMemo<CoredClient>(
+    () => client ?? defaultClient(),
+    [client],
+  );
+  const resolvedCompany = useMemo<CompanyInfo>(
+    () => company ?? { id: "company-demo", name: "Demo Traders" },
+    [company],
+  );
 
   return (
-    <div
-      ref={rootRef}
-      tabIndex={0}
-      role="application"
-      aria-label="Tally-compatible keystroke engine"
-      onKeyDown={onKeyDown}
-      className="flex h-full w-full bg-tally-bg outline-none"
-    >
-      <main className="flex-1 overflow-auto">
-        {snapshot.screen === "voucher" ? (
-          <VoucherScreen snapshot={snapshot} onSelect={onSelect} />
-        ) : snapshot.screen === "report" ? (
-          <ReportScreen name={snapshot.reportName ?? "Report"} />
-        ) : snapshot.screen === "goto-overlay" ? (
-          <GoToOverlay onSelect={onSelect} />
-        ) : (
-          <GatewayScreen onSelect={onSelect} />
-        )}
-      </main>
-      <ButtonBar items={bar} />
-    </div>
+    <CompanyProvider client={resolvedClient} initialCompany={resolvedCompany}>
+      <AppShell />
+    </CompanyProvider>
   );
 }
 
-function ReportScreen({ name }: { name: string }) {
-  return (
-    <section className="flex h-full flex-col bg-tally-bg p-4 font-mono text-tally-field">
-      <h1 className="text-lg font-bold text-tally-title">{name}</h1>
-      <p className="mt-2 text-sm">
-        Press Enter on a line to drill into the underlying voucher; Esc to go back.
-      </p>
-    </section>
-  );
-}
-
-function GoToOverlay({ onSelect }: { onSelect: (item: string) => void }) {
-  return (
-    <section className="flex h-full items-start justify-center bg-tally-bg/80 p-8">
-      <div className="w-80 bg-tally-panel p-3 font-mono text-tally-field">
-        <h2 className="mb-2 text-tally-title">Go To</h2>
-        <SelectionList
-          label="Search"
-          options={[
-            "Day Book",
-            "Balance Sheet",
-            "Profit & Loss A/c",
-            "Stock Summary",
-          ]}
-          onSelect={onSelect}
-          autoFocus
-        />
-      </div>
-    </section>
-  );
+/** Pick the REST client when a base URL is configured, else the mock. */
+function defaultClient(): CoredClient {
+  const env = (import.meta as unknown as { env?: Record<string, string> }).env;
+  if (env?.VITE_CORED_BASE_URL) {
+    return createRestClient({ baseUrl: env.VITE_CORED_BASE_URL });
+  }
+  return createMockClient();
 }
