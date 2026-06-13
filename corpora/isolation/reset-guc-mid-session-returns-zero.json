@@ -1,0 +1,8 @@
+{
+  "id": "reset-guc-mid-session-returns-zero",
+  "description": "After a valid company-A query, RESET-ing the GUC within the same connection drops back to default-deny: a subsequent SELECT returns zero rows rather than leaking the pool connection's prior tenant data",
+  "seed": { "companyA": 2, "companyB": 3 },
+  "session": { "role": "tally_app", "setGuc": true, "company": "A", "thenResetGuc": true },
+  "action": "RESET app.current_company_id; SELECT count(*) FROM voucher_version",
+  "expect": { "rowCountIs": 0 }
+}

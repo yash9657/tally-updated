@@ -1,0 +1,15 @@
+{
+  "id": "intra-state-5",
+  "description": "Intra-state sale @5% -> CGST 2.5% + SGST 2.5%",
+  "rulesetVersion": "gst-2024-09",
+  "input": {
+    "supplierStateCode": "27",
+    "placeOfSupplyStateCode": "27",
+    "reverseCharge": false,
+    "lines": [{ "taxableValue": "1000.0000", "gstRatePct": "5.00", "hsn": "1001" }]
+  },
+  "expected": {
+    "cgst": "25.0000", "sgst": "25.0000", "igst": "0.0000",
+    "totalTax": "50.0000", "invoiceTotal": "1050.0000"
+  }
+}

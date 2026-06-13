@@ -1,0 +1,14 @@
+{
+  "id": "gateway-enter-drills-into-vouchers",
+  "description": "From Gateway of Tally, selecting Vouchers and pressing Enter drills down into the voucher creation screen (defaulting to the last-used voucher type)",
+  "keymapProfile": "tallyprime",
+  "startScreen": "gateway",
+  "events": [
+    { "type": "select", "menuItem": "Vouchers" },
+    { "type": "key", "combo": "Enter" }
+  ],
+  "expect": {
+    "screen": "voucher",
+    "field": "date"
+  }
+}

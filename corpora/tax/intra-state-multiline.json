@@ -1,0 +1,19 @@
+{
+  "id": "intra-state-multiline",
+  "description": "Intra-state multi-line invoice mixing 18%, 12% and 5% slabs; CGST/SGST summed across lines (each component = rate/2 of its line taxable value)",
+  "rulesetVersion": "gst-2024-09",
+  "input": {
+    "supplierStateCode": "27",
+    "placeOfSupplyStateCode": "27",
+    "reverseCharge": false,
+    "lines": [
+      { "taxableValue": "1000.0000", "gstRatePct": "18.00", "hsn": "8471" },
+      { "taxableValue": "500.0000", "gstRatePct": "12.00", "hsn": "3917" },
+      { "taxableValue": "2000.0000", "gstRatePct": "5.00", "hsn": "1001" }
+    ]
+  },
+  "expected": {
+    "cgst": "170.0000", "sgst": "170.0000", "igst": "0.0000",
+    "totalTax": "340.0000", "invoiceTotal": "3840.0000"
+  }
+}

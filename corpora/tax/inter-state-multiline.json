@@ -1,0 +1,19 @@
+{
+  "id": "inter-state-multiline",
+  "description": "Inter-state multi-line invoice mixing 28%, 18% and 0% slabs; IGST = full rate per line, summed",
+  "rulesetVersion": "gst-2024-09",
+  "input": {
+    "supplierStateCode": "27",
+    "placeOfSupplyStateCode": "06",
+    "reverseCharge": false,
+    "lines": [
+      { "taxableValue": "1000.0000", "gstRatePct": "28.00", "hsn": "8703" },
+      { "taxableValue": "1500.0000", "gstRatePct": "18.00", "hsn": "8471" },
+      { "taxableValue": "750.0000", "gstRatePct": "0.00", "hsn": "0701" }
+    ]
+  },
+  "expected": {
+    "cgst": "0.0000", "sgst": "0.0000", "igst": "550.0000",
+    "totalTax": "550.0000", "invoiceTotal": "3800.0000"
+  }
+}

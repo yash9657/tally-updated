@@ -1,0 +1,13 @@
+{
+  "id": "gateway-f7-opens-journal",
+  "description": "From Gateway of Tally, F7 opens the Journal voucher",
+  "keymapProfile": "tallyprime",
+  "startScreen": "gateway",
+  "events": [{ "type": "key", "combo": "F7" }],
+  "expect": {
+    "screen": "voucher",
+    "voucherType": "journal",
+    "field": "date",
+    "buttonBarContains": ["F7 Journal", "F4 Contra"]
+  }
+}

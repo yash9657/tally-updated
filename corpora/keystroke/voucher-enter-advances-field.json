@@ -1,0 +1,15 @@
+{
+  "id": "voucher-enter-advances-field",
+  "description": "Inside a Sales voucher, Enter advances the field cursor from the date field to the party-ledger field",
+  "keymapProfile": "tallyprime",
+  "startScreen": "gateway",
+  "events": [
+    { "type": "key", "combo": "F8" },
+    { "type": "key", "combo": "Enter" }
+  ],
+  "expect": {
+    "screen": "voucher",
+    "voucherType": "sales",
+    "field": "party-ledger"
+  }
+}

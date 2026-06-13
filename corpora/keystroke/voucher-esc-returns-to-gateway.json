@@ -1,0 +1,14 @@
+{
+  "id": "voucher-esc-returns-to-gateway",
+  "description": "Esc pops the screen stack: from a Sales voucher (opened from the Gateway) Esc returns to the Gateway of Tally",
+  "keymapProfile": "tallyprime",
+  "startScreen": "gateway",
+  "events": [
+    { "type": "key", "combo": "F8" },
+    { "type": "key", "combo": "Esc" }
+  ],
+  "expect": {
+    "screen": "gateway",
+    "screenStackDepth": 1
+  }
+}

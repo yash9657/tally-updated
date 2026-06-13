@@ -1,0 +1,16 @@
+{
+  "id": "voucher-ctrl-a-accepts",
+  "description": "Ctrl+A accepts/saves the whole voucher screen and returns to a fresh voucher entry screen (Tally keeps the voucher form open for rapid bulk entry after save)",
+  "keymapProfile": "tallyprime",
+  "startScreen": "gateway",
+  "events": [
+    { "type": "key", "combo": "F8" },
+    { "type": "key", "combo": "Ctrl+A" }
+  ],
+  "expect": {
+    "screen": "voucher",
+    "voucherType": "sales",
+    "saved": true,
+    "field": "date"
+  }
+}

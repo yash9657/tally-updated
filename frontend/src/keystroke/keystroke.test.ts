@@ -1,0 +1,170 @@
+import { describe, it, expect } from "vitest";
+import { readdirSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import { createActor } from "xstate";
+import { navMachine, projectSnapshot } from "./navMachine";
+import { buttonBarLabels } from "./buttonBar";
+import { runCase } from "./runner";
+import type { CorpusCase } from "./runner";
+import type { NavSnapshot } from "./navMachine";
+import type { VoucherType } from "./types";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const CORPUS_DIR = join(here, "..", "..", "..", "corpora", "keystroke");
+
+function loadCases(): CorpusCase[] {
+  const files = readdirSync(CORPUS_DIR).filter((f) => f.endsWith(".json"));
+  return files.map((f) => {
+    const raw = readFileSync(join(CORPUS_DIR, f), "utf8");
+    return JSON.parse(raw) as CorpusCase;
+  });
+}
+
+/** Map a snapshot's overlay enum to its on-screen option labels for assertions. */
+function overlayOptions(snap: NavSnapshot): string[] | undefined {
+  if (snap.overlay === "change-mode") {
+    return ["Item Invoice", "Accounting Invoice", "As Voucher"];
+  }
+  return undefined;
+}
+
+/** Assert a single corpus `expect` block against the resulting snapshot. */
+function assertExpect(snap: NavSnapshot, exp: Record<string, unknown>): void {
+  for (const [key, want] of Object.entries(exp)) {
+    switch (key) {
+      case "screen":
+        expect(snap.screen).toBe(want);
+        break;
+      case "voucherType":
+        expect(snap.voucherType).toBe(want);
+        break;
+      case "field":
+        expect(snap.field).toBe(want);
+        break;
+      case "mode":
+        expect(snap.mode).toBe(want);
+        break;
+      case "reportName":
+        expect(snap.reportName).toBe(want);
+        break;
+      case "saved":
+        expect(snap.saved ?? false).toBe(want);
+        break;
+      case "overlay":
+        expect(snap.overlay).toBe(want);
+        break;
+      case "parentScreen":
+        expect(snap.parentScreen).toBe(want);
+        break;
+      case "parentVoucherType":
+        expect(snap.parentVoucherType).toBe(want);
+        break;
+      case "parentReportName":
+        expect(snap.parentReportName).toBe(want);
+        break;
+      case "screenStackDepth":
+        expect(snap.screenStackDepth).toBe(want);
+        break;
+      case "canReturnToVoucher":
+        expect(snap.canReturnToVoucher).toBe(want);
+        break;
+      case "overlayOptions":
+        expect(overlayOptions(snap)).toEqual(want);
+        break;
+      case "buttonBarContains": {
+        const labels = buttonBarLabels(snap.screen, snap.voucherType);
+        for (const item of want as string[]) {
+          expect(labels).toContain(item);
+        }
+        break;
+      }
+      default:
+        throw new Error(`Unhandled expect key in corpus: "${key}"`);
+    }
+  }
+}
+
+describe("keystroke conformance (golden corpora)", () => {
+  const cases = loadCases();
+
+  it("loads at least the known corpus cases", () => {
+    expect(cases.length).toBeGreaterThanOrEqual(15);
+  });
+
+  for (const c of cases) {
+    it(`${c.id}: ${c.description ?? ""}`, () => {
+      const snap = runCase(c);
+      assertExpect(snap, c.expect);
+    });
+  }
+});
+
+describe("navMachine unit semantics", () => {
+  function drive(events: Array<{ type: "KEY"; combo: string } | { type: "SELECT"; menuItem: string }>) {
+    const actor = createActor(navMachine, {
+      input: { startScreen: "gateway", keymapProfile: "tallyprime" },
+    });
+    actor.start();
+    for (const ev of events) actor.send(ev);
+    const snap = projectSnapshot(actor.getSnapshot().context);
+    actor.stop();
+    return snap;
+  }
+
+  it("Esc pops the screen stack one level", () => {
+    // gateway -> F8 (voucher) -> Esc -> gateway
+    const snap = drive([
+      { type: "KEY", combo: "F8" },
+      { type: "KEY", combo: "Esc" },
+    ]);
+    expect(snap.screen).toBe("gateway");
+    expect(snap.screenStackDepth).toBe(1);
+  });
+
+  it("Esc cannot pop past the root frame", () => {
+    const snap = drive([
+      { type: "KEY", combo: "Esc" },
+      { type: "KEY", combo: "Esc" },
+    ]);
+    expect(snap.screen).toBe("gateway");
+    expect(snap.screenStackDepth).toBe(1);
+  });
+
+  it("Ctrl+A accepts the voucher and reopens a fresh saved form", () => {
+    // gateway -> F8 sales -> advance a field -> Ctrl+A
+    const snap = drive([
+      { type: "KEY", combo: "F8" },
+      { type: "KEY", combo: "Enter" }, // date -> party-ledger
+      { type: "KEY", combo: "Ctrl+A" },
+    ]);
+    expect(snap.screen).toBe("voucher");
+    expect(snap.voucherType).toBe<VoucherType>("sales");
+    expect(snap.saved).toBe(true);
+    // Fresh form: cursor returns to the date field.
+    expect(snap.field).toBe("date");
+  });
+
+  it("F-keys switch the active voucher type in place (no stack growth)", () => {
+    const snap = drive([
+      { type: "KEY", combo: "F8" }, // sales
+      { type: "KEY", combo: "F5" }, // payment, replacing in place
+    ]);
+    expect(snap.screen).toBe("voucher");
+    expect(snap.voucherType).toBe<VoucherType>("payment");
+    expect(snap.screenStackDepth).toBe(2);
+  });
+
+  it("Ctrl+H opens the Change Mode picker over the voucher", () => {
+    const snap = drive([
+      { type: "KEY", combo: "F8" },
+      { type: "KEY", combo: "Ctrl+H" },
+    ]);
+    expect(snap.overlay).toBe("change-mode");
+    expect(overlayOptions(snap)).toEqual([
+      "Item Invoice",
+      "Accounting Invoice",
+      "As Voucher",
+    ]);
+  });
+});

@@ -1,0 +1,36 @@
+# dev overlay — single-replica, lighter footprint for the dev cluster.
+# Production would be a sibling overlay (overlays/prod) with HPA, more replicas,
+# locked-down ingress, and real image digests.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+# Tag every object with the environment for easy filtering / dashboards.
+# includeSelectors:false — env is metadata only; adding it to selectors would
+# break matching against the base's already-rendered pod templates.
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/environment: dev
+
+# Pin all three images to the dev tag in one place (CI rewrites these to a
+# registry path + immutable digest at deploy time).
+images:
+  - name: cored
+    newTag: dev
+  - name: statutoryd
+    newTag: dev
+  - name: insightd
+    newTag: dev
+
+# Dev runs one replica of each plane to save cluster cost.
+patches:
+  - target:
+      kind: Deployment
+      name: cored
+    patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 1

@@ -1,0 +1,79 @@
+# OpenTelemetry Collector configuration (skeleton).
+#
+# Pattern: every plane (cored / statutoryd / insightd) exports OTLP to this
+# collector; the collector batches and fans out to the backends
+# (Tempo=traces, Mimir/Prometheus=metrics, Loki=logs). Centralising export here
+# means the apps only ever speak OTLP and backend choices stay swappable.
+#
+# This is a config skeleton — endpoints are placeholders resolved per
+# environment. It is valid Collector YAML and parses in CI.
+
+receivers:
+  # Apps push OTLP over gRPC (4317) and HTTP (4318).
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # Cap memory so a telemetry spike can't OOM the collector.
+  memory_limiter:
+    check_interval: 5s
+    limit_percentage: 80
+    spike_limit_percentage: 25
+  # Batch for export efficiency.
+  batch:
+    timeout: 5s
+    send_batch_size: 1024
+  # Stamp every signal with the source environment / region for residency
+  # auditing (all data stays in ap-south-1).
+  resource:
+    attributes:
+      - key: deployment.environment
+        value: ${env:DEPLOY_ENV}
+        action: upsert
+      - key: cloud.region
+        value: ap-south-1
+        action: upsert
+
+exporters:
+  # Traces -> Tempo (OTLP).
+  otlp/tempo:
+    endpoint: tempo.observability.svc:4317
+    tls:
+      insecure: true # in-cluster; front with mTLS in prod
+  # Metrics -> Prometheus/Mimir via remote-write-compatible OTLP, or Prometheus
+  # exporter scrape. Here: expose a scrape endpoint for Prometheus/Mimir.
+  prometheus:
+    endpoint: 0.0.0.0:8889
+  # Logs -> Loki (OTLP-native ingestion).
+  otlphttp/loki:
+    endpoint: http://loki.observability.svc:3100/otlp
+  # Operational visibility into the collector itself.
+  debug:
+    verbosity: normal
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, batch]
+      exporters: [otlp/tempo]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, batch]
+      exporters: [prometheus]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, batch]
+      exporters: [otlphttp/loki]
+  telemetry:
+    logs:
+      level: info

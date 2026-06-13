@@ -1,0 +1,8 @@
+{
+  "id": "update-other-company-row-blocked",
+  "description": "Under company A's GUC, an UPDATE targeting company B's rows affects zero rows (the rows are invisible to A, so the predicate matches nothing)",
+  "seed": { "companyA": 1, "companyB": 1 },
+  "session": { "role": "tally_app", "setGuc": true, "company": "A" },
+  "action": "UPDATE voucher_version SET narration = 'tampered' WHERE company_id = :companyB_id",
+  "expect": { "rowsAffected": 0 }
+}

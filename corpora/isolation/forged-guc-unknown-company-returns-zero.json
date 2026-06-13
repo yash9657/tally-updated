@@ -1,0 +1,8 @@
+{
+  "id": "forged-guc-unknown-company-returns-zero",
+  "description": "Setting the GUC to a company id that does not exist (or that the session is not authorized for) returns zero rows; an unknown tenant context never falls back to seeing all data",
+  "seed": { "companyA": 2, "companyB": 3 },
+  "session": { "role": "tally_app", "setGuc": true, "company": "00000000-0000-0000-0000-000000000000" },
+  "action": "SELECT count(*) FROM voucher_version",
+  "expect": { "rowCountIs": 0 }
+}

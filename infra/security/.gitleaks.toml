@@ -1,0 +1,53 @@
+# gitleaks configuration — secret scanning for the monorepo.
+#
+# Extends the upstream default ruleset (AWS keys, private keys, tokens, etc.)
+# and adds project-specific rules + an allowlist for the KNOWN, intentional
+# dev-only credentials (the local Postgres password is `tally_app`/`postgres`
+# on port 5433 — see Makefile/docker-compose). Those are not secrets; flagging
+# them would train developers to ignore gitleaks.
+#
+# CI:  gitleaks detect --config infra/security/.gitleaks.toml --redact --no-banner
+
+title = "tally gitleaks config"
+
+# Pull in gitleaks' built-in rules, then add ours below.
+[extend]
+useDefault = true
+
+[[rules]]
+id = "india-pan"
+description = "Indian PAN (Permanent Account Number) committed in source"
+# 5 letters, 4 digits, 1 letter.
+regex = '''\b[A-Z]{5}[0-9]{4}[A-Z]\b'''
+tags = ["pii", "india", "dpdp"]
+
+[[rules]]
+id = "india-gstin"
+description = "Indian GSTIN committed in source"
+# 2-digit state + 10-char PAN-shaped + entity + Z + checksum.
+regex = '''\b[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9A-Z]\b'''
+tags = ["pii", "india", "dpdp"]
+
+[[rules]]
+id = "india-aadhaar"
+description = "Possible Aadhaar number (12 digits) committed in source"
+regex = '''\b[2-9][0-9]{3}\s?[0-9]{4}\s?[0-9]{4}\b'''
+tags = ["pii", "india", "dpdp"]
+
+[allowlist]
+description = "Known dev-only fixtures and local credentials — not real secrets"
+# Local dev DB creds (postgres/postgres, tally_app/tally_app on :5433) are
+# intentional and documented; CI/Make/compose reference them.
+regexes = [
+  '''tally_app:tally_app''',
+  '''postgres:postgres''',
+]
+paths = [
+  '''Makefile''',
+  '''docker-compose\.yml''',
+  '''\.github/workflows/.*\.ya?ml''',
+  '''corpora/.*''',          # synthetic golden fixtures, no real PII
+  '''.*\.example$''',
+  '''.*/testdata/.*''',
+  '''.*_test\.go''',
+]

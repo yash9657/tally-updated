@@ -1,0 +1,8 @@
+{
+  "id": "insert-into-other-company-blocked",
+  "description": "Under company A's GUC, an INSERT that hard-codes company_id = B must be rejected by the RLS WITH CHECK policy (cannot write rows into another tenant)",
+  "seed": { "companyA": 0, "companyB": 0 },
+  "session": { "role": "tally_app", "setGuc": true, "company": "A" },
+  "action": "INSERT INTO voucher_version (company_id, ...) VALUES (:companyB_id, ...)",
+  "expect": { "errorContains": "row-level security", "rowsAffected": 0 }
+}

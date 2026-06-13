@@ -1,0 +1,15 @@
+{
+  "id": "inter-state-b2b-18",
+  "description": "Inter-state B2B sale @18% -> full IGST 18% (place of supply != supplier state)",
+  "rulesetVersion": "gst-2024-09",
+  "input": {
+    "supplierStateCode": "27",
+    "placeOfSupplyStateCode": "29",
+    "reverseCharge": false,
+    "lines": [{ "taxableValue": "1000.0000", "gstRatePct": "18.00", "hsn": "8471" }]
+  },
+  "expected": {
+    "cgst": "0.0000", "sgst": "0.0000", "igst": "180.0000",
+    "totalTax": "180.0000", "invoiceTotal": "1180.0000"
+  }
+}

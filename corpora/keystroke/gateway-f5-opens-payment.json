@@ -1,0 +1,13 @@
+{
+  "id": "gateway-f5-opens-payment",
+  "description": "From Gateway of Tally, F5 opens the Payment voucher",
+  "keymapProfile": "tallyprime",
+  "startScreen": "gateway",
+  "events": [{ "type": "key", "combo": "F5" }],
+  "expect": {
+    "screen": "voucher",
+    "voucherType": "payment",
+    "field": "date",
+    "buttonBarContains": ["F5 Payment", "F6 Receipt"]
+  }
+}

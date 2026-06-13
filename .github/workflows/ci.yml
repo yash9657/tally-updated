@@ -1,0 +1,261 @@
+# CI — Phase-0 verification gates.
+#
+# Mirrors the Makefile targets and PLAN.md Part C gates:
+#   backend  -> migrate + go build / vet / test (against postgres:16 service)
+#   frontend -> pnpm install + vitest + tsc
+#   corpora  -> python corpora/validate.py (the golden-corpus gate)
+#   security -> gitleaks + semgrep + trivy fs
+#   iac      -> terraform fmt/validate (best-effort) + kustomize build
+#
+# Least-privilege: the workflow defaults to read-only token; jobs that need more
+# (SARIF upload) opt in locally.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Default-deny token: read-only. Jobs widen this only where required.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: "1.26"
+  NODE_VERSION: "22"
+  PYTHON_VERSION: "3.13"
+
+jobs:
+  # --------------------------------------------------------------------------
+  backend:
+    name: backend (go build/vet/test + migrate)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: tally
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d tally"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      # Match the Makefile connection conventions (admin for migrate, app for tests).
+      ADMIN_DATABASE_URL: postgres://postgres:postgres@localhost:5433/tally?sslmode=disable
+      DATABASE_URL: postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Skip if backend module not present yet
+        id: guard
+        run: |
+          if [ -f backend/go.mod ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::backend/go.mod not present yet — skipping backend gate."
+          fi
+
+      - uses: actions/setup-go@v5
+        if: steps.guard.outputs.present == 'true'
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: backend/go.sum
+
+      - name: Apply migrations
+        if: steps.guard.outputs.present == 'true'
+        working-directory: backend
+        run: go run ./cmd/cored migrate
+
+      - name: Build + vet
+        if: steps.guard.outputs.present == 'true'
+        working-directory: backend
+        run: |
+          go build ./...
+          go vet ./...
+
+      - name: Test
+        if: steps.guard.outputs.present == 'true'
+        working-directory: backend
+        run: go test ./... -count=1
+
+  # --------------------------------------------------------------------------
+  frontend:
+    name: frontend (vitest + tsc)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Skip if frontend package not present yet
+        id: guard
+        run: |
+          if [ -f frontend/package.json ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::frontend/package.json not present yet — skipping frontend gate."
+          fi
+
+      - uses: pnpm/action-setup@v4
+        if: steps.guard.outputs.present == 'true'
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        if: steps.guard.outputs.present == 'true'
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install
+        if: steps.guard.outputs.present == 'true'
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Unit tests (vitest)
+        if: steps.guard.outputs.present == 'true'
+        working-directory: frontend
+        run: pnpm test -- --run
+
+      - name: Type-check (tsc)
+        if: steps.guard.outputs.present == 'true'
+        working-directory: frontend
+        # Prefer an explicit typecheck script; fall back to a no-emit tsc pass.
+        run: |
+          if pnpm run | grep -qE '^\s*typecheck'; then
+            pnpm run typecheck
+          else
+            pnpm exec tsc --noEmit
+          fi
+
+  # --------------------------------------------------------------------------
+  corpora:
+    name: corpora (golden-corpus validator)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Validate golden corpora
+        run: |
+          if [ -f corpora/validate.py ]; then
+            python3 corpora/validate.py
+          elif [ -f corpora/validate.sh ]; then
+            bash corpora/validate.sh
+          else
+            echo "::error::no corpora/validate.* found"
+            exit 1
+          fi
+
+  # --------------------------------------------------------------------------
+  security:
+    name: security (gitleaks + semgrep + trivy)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write # upload SARIF to code scanning
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # gitleaks scans history
+
+      - name: gitleaks (secret scan)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITLEAKS_CONFIG: infra/security/.gitleaks.toml
+
+      - name: semgrep (SAST)
+        uses: semgrep/semgrep-action@v1
+        with:
+          config: >-
+            infra/security/semgrep.yml
+            p/default
+            p/secrets
+
+      - name: trivy (filesystem vuln + secret + misconfig)
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: fs
+          scanners: vuln,secret,misconfig
+          format: sarif
+          output: trivy.sarif
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          ignore-unfixed: true
+
+      - name: Upload Trivy SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy.sarif
+
+  # --------------------------------------------------------------------------
+  iac:
+    name: iac (terraform fmt/validate + kustomize build)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: terraform fmt
+        working-directory: infra/terraform
+        continue-on-error: true # tooling/credentials may be absent; do not block Phase 0
+        run: terraform fmt -check -recursive
+
+      - name: terraform validate
+        working-directory: infra/terraform
+        continue-on-error: true # validate needs `init` which needs backend access
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+      - name: Install kustomize
+        run: |
+          curl -fsSL "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+          sudo mv kustomize /usr/local/bin/
+
+      - name: kustomize build dev overlay
+        run: kustomize build infra/k8s/overlays/dev > /dev/null
+
+      - name: Validate YAML parses (observability, k8s, security)
+        run: |
+          python3 - <<'PY'
+          import glob, sys, yaml
+          files = []
+          for pat in ("infra/k8s/**/*.yaml", "infra/observability/**/*.yaml"):
+              files += glob.glob(pat, recursive=True)
+          bad = 0
+          for f in files:
+              try:
+                  list(yaml.safe_load_all(open(f)))
+              except Exception as e:  # noqa: BLE001
+                  print(f"::error file={f}::YAML parse failed: {e}")
+                  bad += 1
+          print(f"checked {len(files)} YAML files, {bad} bad")
+          sys.exit(1 if bad else 0)
+          PY

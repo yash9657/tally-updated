@@ -1,0 +1,15 @@
+{
+  "id": "rounding-half-up-edge",
+  "description": "Rounding edge case: intra-state @18% on 333.335 -> full tax 60.0003; each component (rate/2) computes 30.00015 which rounds HALF-UP to 4 decimal places = 30.0002 for both CGST and SGST. Per-component half-up rounding then summed; totalTax = 60.0004 (NOT 60.0003).",
+  "rulesetVersion": "gst-2024-09",
+  "input": {
+    "supplierStateCode": "27",
+    "placeOfSupplyStateCode": "27",
+    "reverseCharge": false,
+    "lines": [{ "taxableValue": "333.3350", "gstRatePct": "18.00", "hsn": "8471" }]
+  },
+  "expected": {
+    "cgst": "30.0002", "sgst": "30.0002", "igst": "0.0000",
+    "totalTax": "60.0004", "invoiceTotal": "393.3354"
+  }
+}

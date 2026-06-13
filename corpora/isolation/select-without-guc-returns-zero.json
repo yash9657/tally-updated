@@ -1,0 +1,8 @@
+{
+  "id": "select-without-guc-returns-zero",
+  "description": "Querying a tenant table with no app.current_company_id GUC set must return zero rows (default-deny RLS), not all rows",
+  "seed": { "companyA": 2, "companyB": 3 },
+  "session": { "role": "tally_app", "setGuc": false },
+  "action": "SELECT count(*) FROM voucher_version",
+  "expect": { "rowCountIs": 0 }
+}

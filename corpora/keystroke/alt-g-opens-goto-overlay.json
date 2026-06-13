@@ -1,0 +1,16 @@
+{
+  "id": "alt-g-opens-goto-overlay",
+  "description": "Alt+G opens the Go To overlay without losing the current screen; Esc dismisses the overlay and returns to the parent (the Sales voucher) intact",
+  "keymapProfile": "tallyprime",
+  "startScreen": "gateway",
+  "events": [
+    { "type": "key", "combo": "F8" },
+    { "type": "key", "combo": "Alt+G" }
+  ],
+  "expect": {
+    "screen": "goto-overlay",
+    "parentScreen": "voucher",
+    "parentVoucherType": "sales",
+    "field": "goto-search"
+  }
+}

@@ -1,0 +1,74 @@
+# Semgrep ruleset for the Tally competitor.
+#
+# Two layers:
+#   1. `p/...` registry packs (referenced in CI via `--config`), covering the
+#      generic OWASP / language baselines.
+#   2. The custom rules below, which encode THIS project's load-bearing
+#      invariants from PLAN.md — the things a generic scanner can't know:
+#      tenant isolation (RLS/GUC), money-as-decimal (never float), and the
+#      no-raw-SQL-from-AI rule.
+#
+# Run locally:  semgrep --config infra/security/semgrep.yml ./
+# CI uses:      semgrep scan --config infra/security/semgrep.yml --error
+
+rules:
+  - id: no-bypassrls-role-in-app
+    languages: [go]
+    severity: ERROR
+    message: >
+      Application code must never connect as a BYPASSRLS/superuser role. The
+      app role is NOBYPASSRLS; tenant isolation is default-deny RLS keyed by
+      app.current_company_id. See PLAN.md A.4 (#1 risk).
+    patterns:
+      - pattern-regex: "(?i)(bypassrls|user=postgres|tally_admin)"
+    paths:
+      include:
+        - "backend/internal/**"
+
+  - id: money-must-not-be-float
+    languages: [go]
+    severity: ERROR
+    message: >
+      Money must be NUMERIC(19,4) / integer paise / decimal — never float32 or
+      float64. Float drift breaks rupee-exact reconciliation and tax-golden
+      replay (PLAN.md A.3, B.5).
+    patterns:
+      - pattern-regex: "(?i)(amount|debit|credit|taxable|cgst|sgst|igst|total)\\s+float(32|64)"
+    paths:
+      include:
+        - "backend/**"
+
+  - id: ai-must-not-emit-raw-sql
+    languages: [python]
+    severity: ERROR
+    message: >
+      The AI plane must produce a typed DSL executed against a read-only
+      replica — never raw SQL string-built from model output. (PLAN.md B.6,
+      Phase 3 NL-query gate.)
+    patterns:
+      - pattern-either:
+          - pattern: cursor.execute(f"...")
+          - pattern: cursor.execute("..." + $X)
+          - pattern: $CONN.execute(f"...")
+    paths:
+      include:
+        - "insightd/**"
+        - "backend/**"
+
+  - id: no-hardcoded-dsn-secret
+    languages: [go, python, yaml]
+    severity: WARNING
+    message: >
+      Possible hardcoded credential / DSN with embedded password. Use Vault
+      dynamic creds or a Secret reference (PLAN.md A.4: no secrets in
+      env/images).
+    patterns:
+      - pattern-regex: "postgres(ql)?://[^\\s:]+:[^\\s@/]+@"
+    paths:
+      exclude:
+        # The Makefile / docker-compose / CI use a throwaway local dev password.
+        - "Makefile"
+        - "docker-compose.yml"
+        - ".github/**"
+        - "**/*_test.go"
+        - "corpora/**"

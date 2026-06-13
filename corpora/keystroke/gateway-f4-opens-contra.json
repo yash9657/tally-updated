@@ -1,0 +1,13 @@
+{
+  "id": "gateway-f4-opens-contra",
+  "description": "From Gateway of Tally, F4 opens the Contra voucher",
+  "keymapProfile": "tallyprime",
+  "startScreen": "gateway",
+  "events": [{ "type": "key", "combo": "F4" }],
+  "expect": {
+    "screen": "voucher",
+    "voucherType": "contra",
+    "field": "date",
+    "buttonBarContains": ["F7 Journal", "F4 Contra"]
+  }
+}

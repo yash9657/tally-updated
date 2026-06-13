@@ -1,0 +1,8 @@
+{
+  "id": "read-other-company-voucher-by-id",
+  "description": "Session scoped to company A explicitly selects a known company-B voucher by primary key id; RLS must filter it out and return zero rows (no leak even with the exact id)",
+  "seed": { "companyA": 1, "companyB": 1, "captureCompanyBVoucherId": true },
+  "session": { "role": "tally_app", "setGuc": true, "company": "A" },
+  "action": "SELECT count(*) FROM voucher_version WHERE id = :companyB_voucher_id",
+  "expect": { "rowCountIs": 0 }
+}

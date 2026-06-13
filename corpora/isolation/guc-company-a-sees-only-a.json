@@ -1,0 +1,8 @@
+{
+  "id": "guc-company-a-sees-only-a",
+  "description": "With app.current_company_id GUC set to company A, a SELECT returns exactly company A's rows and never company B's",
+  "seed": { "companyA": 2, "companyB": 3 },
+  "session": { "role": "tally_app", "setGuc": true, "company": "A" },
+  "action": "SELECT count(*) FROM voucher_version",
+  "expect": { "rowCountIs": 2 }
+}

@@ -1,0 +1,12 @@
+{
+  "id": "smoke-3-voucher-tb",
+  "description": "Three vouchers (Receipt: Cash Dr 50000 / Capital Cr 50000; Sales: Cash Dr 30000 / Sales Cr 30000; Payment: Rent Dr 8000 / Cash Cr 8000) imported from a Tally XML export must produce this exact trial balance. Cash closing = 50000 + 30000 - 8000 = 72000 Dr.",
+  "tallyExportFile": "smoke-3-voucher.xml",
+  "expectedTrialBalance": [
+    { "ledger": "Cash", "debit": "72000.0000", "credit": "0.0000" },
+    { "ledger": "Capital", "debit": "0.0000", "credit": "50000.0000" },
+    { "ledger": "Rent", "debit": "8000.0000", "credit": "0.0000" },
+    { "ledger": "Sales", "debit": "0.0000", "credit": "30000.0000" }
+  ],
+  "expectedTotals": { "debit": "80000.0000", "credit": "80000.0000", "balanced": true }
+}

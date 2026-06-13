@@ -1,0 +1,8 @@
+{
+  "id": "app-role-cannot-bypass-rls",
+  "description": "The application role tally_app must NOT hold BYPASSRLS nor table ownership; attempting to disable row-level security or reset the GUC mid-transaction must not expose other tenants' rows",
+  "seed": { "companyA": 2, "companyB": 3 },
+  "session": { "role": "tally_app", "setGuc": true, "company": "A" },
+  "action": "ALTER TABLE voucher_version DISABLE ROW LEVEL SECURITY; SELECT count(*) FROM voucher_version",
+  "expect": { "errorContains": "must be owner", "rlsBypassed": false }
+}

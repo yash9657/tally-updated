@@ -1,0 +1,18 @@
+{
+  "id": "report-enter-drills-to-voucher",
+  "description": "Universal Enter drill-down: from a report (Day Book) opened via Go To, Enter on a highlighted line drills into the underlying voucher in alteration mode; Esc walks back up the exact path to the report",
+  "keymapProfile": "tallyprime",
+  "startScreen": "gateway",
+  "events": [
+    { "type": "key", "combo": "Alt+G" },
+    { "type": "select", "menuItem": "Day Book" },
+    { "type": "key", "combo": "Enter" },
+    { "type": "key", "combo": "Enter" }
+  ],
+  "expect": {
+    "screen": "voucher",
+    "mode": "alter",
+    "parentScreen": "report",
+    "parentReportName": "Day Book"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "id": "ctrl-g-switch-to-replaces",
+  "description": "Ctrl+G (Switch To) replaces the current context: selecting Day Book replaces the Sales voucher so Esc CANNOT return to it. After switching, the screen stack holds the report rooted at the gateway (depth 2), not the voucher.",
+  "keymapProfile": "tallyprime",
+  "startScreen": "gateway",
+  "events": [
+    { "type": "key", "combo": "F8" },
+    { "type": "key", "combo": "Ctrl+G" },
+    { "type": "select", "menuItem": "Day Book" },
+    { "type": "key", "combo": "Enter" }
+  ],
+  "expect": {
+    "screen": "report",
+    "reportName": "Day Book",
+    "screenStackDepth": 2,
+    "canReturnToVoucher": false
+  }
+}

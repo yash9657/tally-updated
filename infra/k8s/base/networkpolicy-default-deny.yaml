@@ -1,0 +1,101 @@
+# Default-deny NetworkPolicy: with no other policy selecting a pod, all
+# ingress and egress is denied in the `tally` namespace. Per-plane policies
+# (below) then re-open ONLY the flows each plane needs. This is the
+# zero-trust baseline — a compromised pod cannot freely talk to the cluster
+# or the internet.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: tally
+spec:
+  podSelector: {} # selects every pod in the namespace
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# Allow all pods to resolve DNS via kube-dns (egress UDP/TCP 53). Without this,
+# default-deny egress breaks every name lookup.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: tally
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+# cored ingress: accept HTTP only from the ingress controller namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cored-ingress
+  namespace: tally
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cored
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# statutoryd ingress: only cored may call it (mTLS service-to-service).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: statutoryd-ingress
+  namespace: tally
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: statutoryd
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: cored
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# insightd ingress: only cored may call it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: insightd-ingress
+  namespace: tally
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: insightd
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: cored
+      ports:
+        - protocol: TCP
+          port: 8000

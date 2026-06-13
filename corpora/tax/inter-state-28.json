@@ -1,0 +1,15 @@
+{
+  "id": "inter-state-28",
+  "description": "Inter-state sale @28% -> full IGST 28%",
+  "rulesetVersion": "gst-2024-09",
+  "input": {
+    "supplierStateCode": "27",
+    "placeOfSupplyStateCode": "09",
+    "reverseCharge": false,
+    "lines": [{ "taxableValue": "1000.0000", "gstRatePct": "28.00", "hsn": "8703" }]
+  },
+  "expected": {
+    "cgst": "0.0000", "sgst": "0.0000", "igst": "280.0000",
+    "totalTax": "280.0000", "invoiceTotal": "1280.0000"
+  }
+}

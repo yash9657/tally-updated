@@ -1,0 +1,8 @@
+{
+  "id": "cross-company-join-leaks-nothing",
+  "description": "A join from ledger to voucher_version under company A's GUC cannot pull rows belonging to company B, even if an attacker crafts the join to match B's ledger ids",
+  "seed": { "companyA": 2, "companyB": 3 },
+  "session": { "role": "tally_app", "setGuc": true, "company": "A" },
+  "action": "SELECT count(*) FROM voucher_version v JOIN ledger l ON l.id = v.party_ledger_id",
+  "expect": { "rowCountMax": 2 }
+}

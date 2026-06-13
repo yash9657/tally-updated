@@ -1,0 +1,12 @@
+# Namespace for all three Phase-0 planes (cored, statutoryd, insightd).
+# Pod Security Admission is set to "restricted" (the strictest built-in
+# profile) so workloads cannot run privileged / as root / with host access.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tally
+  labels:
+    app.kubernetes.io/part-of: tally
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

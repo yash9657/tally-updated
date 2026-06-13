@@ -1,0 +1,15 @@
+{
+  "id": "intra-state-0",
+  "description": "Intra-state supply @0% (zero-rated, e.g. fresh produce) -> no tax",
+  "rulesetVersion": "gst-2024-09",
+  "input": {
+    "supplierStateCode": "27",
+    "placeOfSupplyStateCode": "27",
+    "reverseCharge": false,
+    "lines": [{ "taxableValue": "2500.0000", "gstRatePct": "0.00", "hsn": "0701" }]
+  },
+  "expected": {
+    "cgst": "0.0000", "sgst": "0.0000", "igst": "0.0000",
+    "totalTax": "0.0000", "invoiceTotal": "2500.0000"
+  }
+}

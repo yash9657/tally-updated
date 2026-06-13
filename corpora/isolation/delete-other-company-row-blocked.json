@@ -1,0 +1,8 @@
+{
+  "id": "delete-other-company-row-blocked",
+  "description": "Under company A's GUC, a DELETE targeting company B's rows affects zero rows and leaves B's data intact",
+  "seed": { "companyA": 1, "companyB": 3 },
+  "session": { "role": "tally_app", "setGuc": true, "company": "A" },
+  "action": "DELETE FROM voucher_version WHERE company_id = :companyB_id",
+  "expect": { "rowsAffected": 0, "companyBRowCountAfter": 3 }
+}

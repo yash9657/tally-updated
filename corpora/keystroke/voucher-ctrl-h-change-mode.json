@@ -1,0 +1,16 @@
+{
+  "id": "voucher-ctrl-h-change-mode",
+  "description": "Inside a Sales voucher, Ctrl+H opens the unified Change Mode picker offering Item Invoice, Accounting Invoice and As Voucher (TallyPrime replaced ERP9's Alt+I / Ctrl+V two-axis toggles)",
+  "keymapProfile": "tallyprime",
+  "startScreen": "gateway",
+  "events": [
+    { "type": "key", "combo": "F8" },
+    { "type": "key", "combo": "Ctrl+H" }
+  ],
+  "expect": {
+    "screen": "voucher",
+    "voucherType": "sales",
+    "overlay": "change-mode",
+    "overlayOptions": ["Item Invoice", "Accounting Invoice", "As Voucher"]
+  }
+}

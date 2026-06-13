@@ -1,0 +1,13 @@
+{
+  "id": "gateway-f9-opens-purchase",
+  "description": "From Gateway of Tally, F9 opens the Purchase voucher",
+  "keymapProfile": "tallyprime",
+  "startScreen": "gateway",
+  "events": [{ "type": "key", "combo": "F9" }],
+  "expect": {
+    "screen": "voucher",
+    "voucherType": "purchase",
+    "field": "date",
+    "buttonBarContains": ["F8 Sales", "F9 Purchase"]
+  }
+}

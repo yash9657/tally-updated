@@ -1,0 +1,16 @@
+{
+  "id": "alt-g-overlay-esc-returns-to-parent",
+  "description": "After Alt+G opens the Go To overlay over a Sales voucher, Esc pops the overlay and restores the parent Sales voucher exactly (Go To never destroys the prior screen)",
+  "keymapProfile": "tallyprime",
+  "startScreen": "gateway",
+  "events": [
+    { "type": "key", "combo": "F8" },
+    { "type": "key", "combo": "Alt+G" },
+    { "type": "key", "combo": "Esc" }
+  ],
+  "expect": {
+    "screen": "voucher",
+    "voucherType": "sales",
+    "screenStackDepth": 2
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "id": "guc-company-b-cannot-see-a",
+  "description": "With the GUC set to company B, company A's voucher rows are invisible; count reflects only B's seeded rows",
+  "seed": { "companyA": 2, "companyB": 3 },
+  "session": { "role": "tally_app", "setGuc": true, "company": "B" },
+  "action": "SELECT count(*) FROM voucher_version",
+  "expect": { "rowCountIs": 3 }
+}

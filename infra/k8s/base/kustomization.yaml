@@ -1,0 +1,21 @@
+# Kustomize base — the three Phase-0 planes plus the zero-trust network
+# baseline. Overlays (e.g. overlays/dev) layer environment specifics on top.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: tally
+
+# Common labels added to every object (and matchers/selectors, since these are
+# stable identity labels). `labels` replaces the deprecated `commonLabels`.
+labels:
+  - includeSelectors: true
+    pairs:
+      app.kubernetes.io/part-of: tally
+      app.kubernetes.io/managed-by: kustomize
+
+resources:
+  - namespace.yaml
+  - networkpolicy-default-deny.yaml
+  - cored.yaml
+  - statutoryd.yaml
+  - insightd.yaml
