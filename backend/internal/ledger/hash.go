@@ -27,6 +27,17 @@ type CanonicalPosting struct {
 	Amount   string `json:"amount"`
 }
 
+// CanonicalBillAllocation is the stable view of a bill-wise allocation used for
+// hashing. Amounts are fixed-point strings.
+type CanonicalBillAllocation struct {
+	LedgerID string `json:"ledger_id"`
+	RefName  string `json:"ref_name"`
+	RefType  string `json:"ref_type"`
+	DrCr     string `json:"dr_cr"`
+	Amount   string `json:"amount"`
+	DueDate  string `json:"due_date"`
+}
+
 // CanonicalPayload is the canonical, deterministic representation of a voucher
 // version that is hashed and stored verbatim as the voucher_version.payload
 // JSONB. Field order is fixed by the struct; encoding/json emits object keys in
@@ -36,11 +47,16 @@ type CanonicalPayload struct {
 	VoucherTypeID string             `json:"voucher_type_id"`
 	VersionNo     int                `json:"version_no"`
 	Op            string             `json:"op"`
+	Class         string             `json:"class"`
 	VoucherNo     string             `json:"voucher_no"`
 	VoucherDate   string             `json:"voucher_date"`
 	Narration     string             `json:"narration"`
 	Party         string             `json:"party"`
 	Postings      []CanonicalPosting `json:"postings"`
+	// BillAllocations is omitted from the JSON (and so from the hash) when empty,
+	// preserving the byte sequence — and therefore the hash — of vouchers that
+	// carry no bill-wise detail.
+	BillAllocations []CanonicalBillAllocation `json:"bill_allocations,omitempty"`
 }
 
 // Marshal returns the canonical JSON encoding of the payload.

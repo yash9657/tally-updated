@@ -22,20 +22,38 @@ const modulePath = "github.com/khata/cored"
 // composition root and may import any module. Anything not listed is forbidden.
 var allowedDeps = map[string]map[string]bool{
 	"internal/compliance":  {},
-	"internal/inventory":   {},
+	// gstr is a read-only GST return generator (GSTR-1) over the tenant-scoped
+	// db layer. It does not import the parent compliance package.
+	"internal/compliance/gstr": {"internal/platform/db": true},
+	"internal/inventory":       {},
 	"internal/integration": {},
 	"internal/identity":    {"internal/platform/db": true},
-	"internal/ledger":      {"internal/platform/db": true},
+	// ledger derives GST inline during a Sales/Purchase post, so it may import
+	// the pure compliance leaf (no I/O, safe inside the post transaction).
+	"internal/ledger":      {"internal/platform/db": true, "internal/compliance": true},
+	"internal/masters":     {"internal/platform/db": true},
 	"internal/reporting":   {"internal/platform/db": true},
+	// migration is the Tally-XML importer + reconciliation harness: it parses
+	// via integration, ensures masters, posts through ledger, and reconciles via
+	// reporting. It is an orchestration leaf — nothing imports it except server.
+	"internal/migration": {
+		"internal/integration": true,
+		"internal/masters":     true,
+		"internal/ledger":      true,
+		"internal/reporting":   true,
+	},
 	"internal/platform/db": {},
 	"internal/server": {
 		"internal/platform/db": true,
-		"internal/ledger":      true,
-		"internal/reporting":   true,
-		"internal/identity":    true,
-		"internal/compliance":  true,
-		"internal/inventory":   true,
-		"internal/integration": true,
+		"internal/ledger":          true,
+		"internal/masters":         true,
+		"internal/reporting":       true,
+		"internal/identity":        true,
+		"internal/compliance":      true,
+		"internal/compliance/gstr": true,
+		"internal/inventory":       true,
+		"internal/integration":     true,
+		"internal/migration":       true,
 	},
 	"internal/archtest": {},
 }

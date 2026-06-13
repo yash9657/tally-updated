@@ -1,0 +1,687 @@
+// Package gstr generates India GST return outputs from the posted, immutable
+// voucher log. Phase 1 implements GSTR-1 (the outward-supplies return) from
+// Sales vouchers for a tax period, shaped to the GSTN offline-tool JSON schema
+// (RESEARCH sec 7 & 19/20).
+//
+// The generator is a pure read path: it reads the denormalised GST columns the
+// ledger stamps on every Sales voucher_version (taxable_value, cgst, sgst,
+// igst, place_of_supply, is_reverse_charge) plus the counter-party ledger's GST
+// master fields (gstin, state_code, registration_type), classifies each invoice
+// into a GSTR-1 section, and rolls the sections up into the GSTN-shaped
+// structure. It never writes, and it goes through the tenant-scoped GUC guard
+// (db.RunInTx) like every other read in the system, so RLS confines it to the
+// caller's company.
+//
+// Classification (RESEARCH sec 7.3, the Nature-of-Transaction rules):
+//
+//   - B2B (tables 4A/4B/4C): the recipient is GST-registered — a REGULAR /
+//     COMPOSITION / SEZ ledger carrying a GSTIN. Reported invoice-wise, keyed by
+//     the counter-party GSTIN.
+//   - B2CL (table 5A, "B2C Large"): unregistered recipient, inter-state, invoice
+//     value above the B2CL threshold (TallyPrime 5.0 lowered it to Rs 1,00,000).
+//     Reported invoice-wise, keyed by place of supply.
+//   - B2CS (table 7, "B2C Small"): every other unregistered supply (intra-state,
+//     or inter-state at or below the threshold). Reported as a rate-wise summary
+//     per (place-of-supply, rate, intra/inter) bucket — not invoice-wise.
+//   - HSN summary (table 12): a rate-wise rollup of taxable value and tax. Because
+//     Phase 1 persists tax at the voucher aggregate level (no per-line HSN/rate is
+//     stored on the immutable payload or any table), the summary is keyed by the
+//     effective per-voucher rate derived from the persisted aggregate, with the
+//     HSN code left blank unless supplied. This mirrors TallyPrime, which as of
+//     early 2026 shipped GSTR-1 JSON excluding rate-wise HSN (handled separately
+//     via the offline tool) — see RESEARCH sec 19.1c.
+//
+// Reconciliation: Reconcile sums the GST output-tax POSTINGS (the credit
+// amounts on the CGST/SGST/IGST output ledgers) for the same period and asserts
+// they equal the GSTR-1 section tax totals to the paisa. Because an ALTER
+// appends a new version whose postings accumulate on top of the prior version
+// (Phase 0 ledger_balance semantics), both the GSTR-1 rollup and the posting sum
+// aggregate over EVERY version in the period, so the two tie out exactly.
+package gstr
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sort"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/shopspring/decimal"
+
+	"github.com/khata/cored/internal/platform/db"
+)
+
+// TxRunner is the minimal database capability the generator needs: run a unit of
+// work inside a tenant-scoped transaction. *db.Pool satisfies it.
+type TxRunner interface {
+	RunInTx(ctx context.Context, fn db.TxFunc) error
+}
+
+// b2clThreshold is the B2C Large invoice-value threshold. TallyPrime 5.0
+// (Sep 2024) lowered it from Rs 2,50,000 to Rs 1,00,000 (RESEARCH sec 7.0/7.1).
+var b2clThreshold = decimal.NewFromInt(100000)
+
+// Service generates GST returns over the tenant-scoped transaction runner.
+type Service struct {
+	runner TxRunner
+}
+
+// NewService constructs a GSTR generation Service.
+func NewService(runner TxRunner) *Service {
+	return &Service{runner: runner}
+}
+
+// Options configures GSTR-1 generation.
+type Options struct {
+	// GSTIN is the supplier's (filing company's) GSTIN, emitted as the top-level
+	// "gstin" field. Optional; empty is allowed for a draft/preview.
+	GSTIN string
+	// CGSTLedgerID, SGSTLedgerID, IGSTLedgerID identify the output-tax ledgers.
+	// They drive the posting-side reconciliation in Reconcile and may be left
+	// nil if reconciliation is not required.
+	CGSTLedgerID uuid.UUID
+	SGSTLedgerID uuid.UUID
+	IGSTLedgerID uuid.UUID
+}
+
+// GSTR1 is the generated return for one tax period, shaped to the GSTN
+// offline-tool JSON (gstin, fp, b2b[], b2cl[], b2cs[], hsn{}). It marshals to
+// JSON with the GSTN field names via the struct tags below.
+type GSTR1 struct {
+	// GSTIN of the supplier (filer).
+	GSTIN string `json:"gstin,omitempty"`
+	// FP is the filing period in "MMYYYY" form, e.g. "052025" for May 2025.
+	FP string `json:"fp"`
+	// B2B is the registered-recipient section (tables 4A/4B/4C), grouped by the
+	// counter-party GSTIN (the "ctin").
+	B2B []B2BParty `json:"b2b,omitempty"`
+	// B2CL is the B2C Large section (table 5A), grouped by place of supply.
+	B2CL []B2CLPlace `json:"b2cl,omitempty"`
+	// B2CS is the B2C Small rate-wise summary (table 7).
+	B2CS []B2CSItem `json:"b2cs,omitempty"`
+	// HSN is the HSN/rate summary (table 12).
+	HSN HSNSummary `json:"hsn"`
+}
+
+// B2BParty is one registered counter-party's invoices (a GSTN "b2b" entry).
+type B2BParty struct {
+	// CTIN is the counter-party GSTIN.
+	CTIN string `json:"ctin"`
+	// Inv are the invoices issued to this counter-party.
+	Inv []B2BInvoice `json:"inv"`
+}
+
+// B2BInvoice is a single registered-recipient invoice (GSTN "inv" entry).
+type B2BInvoice struct {
+	// Inum is the invoice number.
+	Inum string `json:"inum"`
+	// Idt is the invoice date as "DD-MM-YYYY".
+	Idt string `json:"idt"`
+	// Val is the total invoice value (taxable + tax), 2 dp.
+	Val decimal.Decimal `json:"val"`
+	// Pos is the two-digit place-of-supply state code.
+	Pos string `json:"pos"`
+	// Rchrg is "Y"/"N" reverse-charge flag.
+	Rchrg string `json:"rchrg"`
+	// Itms are the rate-wise line items of this invoice.
+	Itms []ITM `json:"itms"`
+}
+
+// B2CLPlace groups B2C Large invoices by place of supply (GSTN "b2cl" entry).
+type B2CLPlace struct {
+	// Pos is the two-digit place-of-supply state code.
+	Pos string `json:"pos"`
+	// Inv are the large B2C invoices to this place of supply.
+	Inv []B2CLInvoice `json:"inv"`
+}
+
+// B2CLInvoice is a single B2C Large invoice (GSTN b2cl "inv" entry).
+type B2CLInvoice struct {
+	Inum string          `json:"inum"`
+	Idt  string          `json:"idt"`
+	Val  decimal.Decimal `json:"val"`
+	Itms []ITM           `json:"itms"`
+}
+
+// ITM is a rate-wise line of an invoice (GSTN "itms" entry). Num is the rate
+// sequence index (1-based); Itm_det carries the amounts.
+type ITM struct {
+	Num    int        `json:"num"`
+	ItmDet ItemDetail `json:"itm_det"`
+}
+
+// ItemDetail is the per-rate detail block (GSTN "itm_det").
+type ItemDetail struct {
+	// Rt is the combined GST rate percent, e.g. 18.
+	Rt decimal.Decimal `json:"rt"`
+	// Txval is the taxable value at this rate.
+	Txval decimal.Decimal `json:"txval"`
+	// Iamt/Camt/Samt are the IGST/CGST/SGST amounts.
+	Iamt decimal.Decimal `json:"iamt"`
+	Camt decimal.Decimal `json:"camt"`
+	Samt decimal.Decimal `json:"samt"`
+}
+
+// B2CSItem is one rate-wise B2C Small bucket (GSTN "b2cs" entry).
+type B2CSItem struct {
+	// Sply_ty is "INTRA" or "INTER".
+	SplyTy string `json:"sply_ty"`
+	// Pos is the two-digit place-of-supply state code.
+	Pos string `json:"pos"`
+	// Typ is the supply type marker; GSTN uses "OE" (other than e-commerce).
+	Typ string `json:"typ"`
+	// Rt is the combined GST rate percent.
+	Rt decimal.Decimal `json:"rt"`
+	// Txval is the taxable value in this bucket.
+	Txval decimal.Decimal `json:"txval"`
+	// Iamt/Camt/Samt are the IGST/CGST/SGST amounts in this bucket.
+	Iamt decimal.Decimal `json:"iamt"`
+	Camt decimal.Decimal `json:"camt"`
+	Samt decimal.Decimal `json:"samt"`
+}
+
+// HSNSummary is the GSTR-1 table-12 HSN/rate summary (GSTN "hsn").
+type HSNSummary struct {
+	Data []HSNItem `json:"data"`
+}
+
+// HSNItem is one HSN/rate row of the table-12 summary (GSTN hsn "data" entry).
+type HSNItem struct {
+	// Num is the 1-based row index.
+	Num int `json:"num"`
+	// HsnSc is the HSN/SAC code; blank when not attributed (see package doc).
+	HsnSc string `json:"hsn_sc"`
+	// Rt is the combined GST rate percent for the row.
+	Rt decimal.Decimal `json:"rt"`
+	// Txval is the taxable value rolled up at this HSN/rate.
+	Txval decimal.Decimal `json:"txval"`
+	// Iamt/Camt/Samt are the rolled-up tax amounts.
+	Iamt decimal.Decimal `json:"iamt"`
+	Camt decimal.Decimal `json:"camt"`
+	Samt decimal.Decimal `json:"samt"`
+	// TotVal is the total value (taxable + tax) of the row.
+	TotVal decimal.Decimal `json:"tot_val"`
+}
+
+// TaxTotals is the summed CGST/SGST/IGST across a set of rows.
+type TaxTotals struct {
+	CGST decimal.Decimal
+	SGST decimal.Decimal
+	IGST decimal.Decimal
+}
+
+// Total returns the sum of the three heads.
+func (t TaxTotals) Total() decimal.Decimal {
+	return t.CGST.Add(t.SGST).Add(t.IGST)
+}
+
+// Equal reports whether two TaxTotals are equal head-for-head.
+func (t TaxTotals) Equal(o TaxTotals) bool {
+	return t.CGST.Equal(o.CGST) && t.SGST.Equal(o.SGST) && t.IGST.Equal(o.IGST)
+}
+
+// TaxTotals sums the CGST/SGST/IGST recorded across all sections of the return.
+// It is the GSTR-1 side of the reconciliation: it must equal the output-tax
+// posting sum for the period.
+func (g GSTR1) TaxTotals() TaxTotals {
+	var t TaxTotals
+	t.CGST = decimal.Zero
+	t.SGST = decimal.Zero
+	t.IGST = decimal.Zero
+	for _, p := range g.B2B {
+		for _, inv := range p.Inv {
+			for _, it := range inv.Itms {
+				t.CGST = t.CGST.Add(it.ItmDet.Camt)
+				t.SGST = t.SGST.Add(it.ItmDet.Samt)
+				t.IGST = t.IGST.Add(it.ItmDet.Iamt)
+			}
+		}
+	}
+	for _, p := range g.B2CL {
+		for _, inv := range p.Inv {
+			for _, it := range inv.Itms {
+				t.CGST = t.CGST.Add(it.ItmDet.Camt)
+				t.SGST = t.SGST.Add(it.ItmDet.Samt)
+				t.IGST = t.IGST.Add(it.ItmDet.Iamt)
+			}
+		}
+	}
+	for _, b := range g.B2CS {
+		t.CGST = t.CGST.Add(b.Camt)
+		t.SGST = t.SGST.Add(b.Samt)
+		t.IGST = t.IGST.Add(b.Iamt)
+	}
+	return t
+}
+
+// invoice is the internal, fully-resolved view of one posted Sales voucher
+// version used during classification.
+type invoice struct {
+	voucherNo  string
+	date       time.Time
+	pos        string
+	reverse    bool
+	taxable    decimal.Decimal
+	cgst       decimal.Decimal
+	sgst       decimal.Decimal
+	igst       decimal.Decimal
+	ctin       string // counter-party GSTIN, empty if unregistered
+	registered bool
+}
+
+// rate returns the combined effective GST rate percent derived from the
+// persisted aggregate tax over the taxable value, rounded to the nearest whole
+// percent (GST slabs are integral: 0/5/12/18/28). A zero-taxable invoice yields
+// a zero rate.
+func (in invoice) rate() decimal.Decimal {
+	if in.taxable.IsZero() {
+		return decimal.Zero
+	}
+	tax := in.cgst.Add(in.sgst).Add(in.igst)
+	return tax.Mul(decimal.NewFromInt(100)).Div(in.taxable).Round(0)
+}
+
+// total returns the invoice total (taxable + tax). Under reverse charge the
+// supplier does not collect tax, so the invoice value is the taxable value.
+func (in invoice) total() decimal.Decimal {
+	if in.reverse {
+		return in.taxable
+	}
+	return in.taxable.Add(in.cgst).Add(in.sgst).Add(in.igst)
+}
+
+// intra reports whether the supply is intra-state (CGST+SGST charged).
+func (in invoice) intra() bool {
+	return !in.igst.GreaterThan(decimal.Zero)
+}
+
+// Generate produces the GSTR-1 return for the [from, to] inclusive date range
+// (ISO "YYYY-MM-DD"). It reads every Sales voucher_version whose voucher_date
+// falls in the range, classifies each into B2B / B2CL / B2CS, and builds the
+// HSN summary. The period FP is taken from the `from` month.
+func (s *Service) Generate(ctx context.Context, from, to string, opts Options) (GSTR1, error) {
+	if _, ok := db.CompanyFromContext(ctx); !ok {
+		return GSTR1{}, db.ErrNoCompany
+	}
+	fromT, err := time.Parse("2006-01-02", from)
+	if err != nil {
+		return GSTR1{}, fmt.Errorf("gstr: invalid from date %q: %w", from, err)
+	}
+	toT, err := time.Parse("2006-01-02", to)
+	if err != nil {
+		return GSTR1{}, fmt.Errorf("gstr: invalid to date %q: %w", to, err)
+	}
+	if toT.Before(fromT) {
+		return GSTR1{}, fmt.Errorf("gstr: period end %s precedes start %s", to, from)
+	}
+
+	var invoices []invoice
+	err = s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		rows, err := tx.Query(ctx,
+			`SELECT vv.voucher_no, vv.voucher_date, vv.place_of_supply,
+			        vv.is_reverse_charge, vv.taxable_value, vv.cgst, vv.sgst, vv.igst,
+			        pl.gstin, pl.registration_type::text
+			   FROM voucher_version vv
+			   JOIN voucher_type    vt ON vt.id = vv.voucher_type_id
+			   LEFT JOIN ledger     pl ON pl.id = vv.party_ledger_id
+			  WHERE vt.parent_class = 'SALES'
+			    AND vv.voucher_date BETWEEN $1 AND $2
+			    AND vv.taxable_value IS NOT NULL
+			  ORDER BY vv.voucher_date, vv.voucher_no, vv.version_no`,
+			from, to)
+		if err != nil {
+			return fmt.Errorf("gstr: query sales versions: %w", err)
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var (
+				vno     *string
+				vdate   time.Time
+				pos     *string
+				reverse bool
+				taxable decimal.Decimal
+				cgst    *decimal.Decimal
+				sgst    *decimal.Decimal
+				igst    *decimal.Decimal
+				gstin   *string
+				regType *string
+			)
+			if err := rows.Scan(&vno, &vdate, &pos, &reverse, &taxable,
+				&cgst, &sgst, &igst, &gstin, &regType); err != nil {
+				return fmt.Errorf("gstr: scan sales version: %w", err)
+			}
+			in := invoice{
+				date:    vdate,
+				reverse: reverse,
+				taxable: taxable,
+				cgst:    deref(cgst),
+				sgst:    deref(sgst),
+				igst:    deref(igst),
+			}
+			in.voucherNo = derefStr(vno)
+			in.pos = derefStr(pos)
+			in.ctin = derefStr(gstin)
+			in.registered = isRegistered(derefStr(regType), in.ctin)
+			invoices = append(invoices, in)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return GSTR1{}, err
+	}
+
+	return build(fromT, invoices, opts), nil
+}
+
+// PostingTaxTotals sums the output-tax POSTINGS for the period: the amounts
+// posted to the CGST/SGST/IGST output ledgers (identified in opts) on Sales
+// voucher versions whose voucher_date falls in [from, to]. This is the
+// books-side total that Reconcile ties the GSTR-1 rollup against. A nil ledger
+// id contributes zero for that head.
+func (s *Service) PostingTaxTotals(ctx context.Context, from, to string, opts Options) (TaxTotals, error) {
+	if _, ok := db.CompanyFromContext(ctx); !ok {
+		return TaxTotals{}, db.ErrNoCompany
+	}
+	sum := func(ctx context.Context, tx pgx.Tx, ledgerID uuid.UUID) (decimal.Decimal, error) {
+		if ledgerID == uuid.Nil {
+			return decimal.Zero, nil
+		}
+		var total decimal.Decimal
+		err := tx.QueryRow(ctx,
+			`SELECT COALESCE(SUM(p.amount), 0)
+			   FROM posting p
+			   JOIN voucher_version vv ON vv.id = p.voucher_version_id
+			   JOIN voucher_type    vt ON vt.id = vv.voucher_type_id
+			  WHERE p.ledger_id = $1
+			    AND vt.parent_class = 'SALES'
+			    AND vv.voucher_date BETWEEN $2 AND $3`,
+			ledgerID, from, to).Scan(&total)
+		if err != nil {
+			return decimal.Zero, fmt.Errorf("gstr: sum output-tax postings: %w", err)
+		}
+		return total, nil
+	}
+
+	out := TaxTotals{CGST: decimal.Zero, SGST: decimal.Zero, IGST: decimal.Zero}
+	err := s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		var err error
+		if out.CGST, err = sum(ctx, tx, opts.CGSTLedgerID); err != nil {
+			return err
+		}
+		if out.SGST, err = sum(ctx, tx, opts.SGSTLedgerID); err != nil {
+			return err
+		}
+		if out.IGST, err = sum(ctx, tx, opts.IGSTLedgerID); err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return TaxTotals{}, err
+	}
+	return out, nil
+}
+
+// Reconciliation is the result of tying a generated GSTR-1 against the
+// output-tax postings for the same period.
+type Reconciliation struct {
+	// Return is the GSTR-1 side tax total (summed across sections).
+	Return TaxTotals
+	// Postings is the books side tax total (output-tax ledger postings).
+	Postings TaxTotals
+}
+
+// Balanced reports whether the GSTR-1 tax equals the posted output tax to the
+// paisa, head-for-head.
+func (r Reconciliation) Balanced() bool {
+	return r.Return.Equal(r.Postings)
+}
+
+// Reconcile generates the GSTR-1 for the period, sums the output-tax postings,
+// and returns both totals so the caller can assert they tie out. It is the
+// integrity check that the return faithfully reflects the books.
+func (s *Service) Reconcile(ctx context.Context, from, to string, opts Options) (GSTR1, Reconciliation, error) {
+	g, err := s.Generate(ctx, from, to, opts)
+	if err != nil {
+		return GSTR1{}, Reconciliation{}, err
+	}
+	posted, err := s.PostingTaxTotals(ctx, from, to, opts)
+	if err != nil {
+		return GSTR1{}, Reconciliation{}, err
+	}
+	return g, Reconciliation{Return: g.TaxTotals(), Postings: posted}, nil
+}
+
+// build assembles the GSTR1 structure from the resolved invoices. It is pure
+// and deterministic (stable ordering), so it is straightforward to test.
+func build(period time.Time, invoices []invoice, opts Options) GSTR1 {
+	out := GSTR1{
+		GSTIN: opts.GSTIN,
+		FP:    fmt.Sprintf("%02d%04d", int(period.Month()), period.Year()),
+	}
+
+	// B2B grouped by counter-party GSTIN.
+	b2bByCTIN := map[string][]B2BInvoice{}
+	// B2CL grouped by place of supply.
+	b2clByPOS := map[string][]B2CLInvoice{}
+	// B2CS rate-wise buckets keyed by (sply_ty, pos, rate).
+	b2csBuckets := map[b2csKey]*B2CSItem{}
+	// HSN rate-wise rollup keyed by (hsn, rate); Phase 1 hsn is blank.
+	hsnBuckets := map[hsnKey]*HSNItem{}
+
+	for _, in := range invoices {
+		rate := in.rate()
+		itm := ITM{Num: 1, ItmDet: ItemDetail{
+			Rt:    rate,
+			Txval: in.taxable,
+			Iamt:  in.igst,
+			Camt:  in.cgst,
+			Samt:  in.sgst,
+		}}
+
+		switch {
+		case in.registered:
+			b2bByCTIN[in.ctin] = append(b2bByCTIN[in.ctin], B2BInvoice{
+				Inum:  in.voucherNo,
+				Idt:   in.date.Format("02-01-2006"),
+				Val:   in.total(),
+				Pos:   in.pos,
+				Rchrg: ynFlag(in.reverse),
+				Itms:  []ITM{itm},
+			})
+		case !in.intra() && in.total().GreaterThan(b2clThreshold):
+			b2clByPOS[in.pos] = append(b2clByPOS[in.pos], B2CLInvoice{
+				Inum: in.voucherNo,
+				Idt:  in.date.Format("02-01-2006"),
+				Val:  in.total(),
+				Itms: []ITM{itm},
+			})
+		default:
+			sply := "INTER"
+			if in.intra() {
+				sply = "INTRA"
+			}
+			k := b2csKey{sply: sply, pos: in.pos, rate: rate.String()}
+			b := b2csBuckets[k]
+			if b == nil {
+				b = &B2CSItem{
+					SplyTy: sply, Pos: in.pos, Typ: "OE", Rt: rate,
+					Txval: decimal.Zero, Iamt: decimal.Zero,
+					Camt: decimal.Zero, Samt: decimal.Zero,
+				}
+				b2csBuckets[k] = b
+			}
+			b.Txval = b.Txval.Add(in.taxable)
+			b.Iamt = b.Iamt.Add(in.igst)
+			b.Camt = b.Camt.Add(in.cgst)
+			b.Samt = b.Samt.Add(in.sgst)
+		}
+
+		// HSN/rate rollup (every taxable invoice contributes).
+		hk := hsnKey{hsn: "", rate: rate.String()}
+		h := hsnBuckets[hk]
+		if h == nil {
+			h = &HSNItem{
+				HsnSc: "", Rt: rate,
+				Txval: decimal.Zero, Iamt: decimal.Zero,
+				Camt: decimal.Zero, Samt: decimal.Zero, TotVal: decimal.Zero,
+			}
+			hsnBuckets[hk] = h
+		}
+		h.Txval = h.Txval.Add(in.taxable)
+		h.Iamt = h.Iamt.Add(in.igst)
+		h.Camt = h.Camt.Add(in.cgst)
+		h.Samt = h.Samt.Add(in.sgst)
+		h.TotVal = h.TotVal.Add(in.total())
+	}
+
+	out.B2B = sortedB2B(b2bByCTIN)
+	out.B2CL = sortedB2CL(b2clByPOS)
+	out.B2CS = sortedB2CS(b2csBuckets)
+	out.HSN = sortedHSN(hsnBuckets)
+	return out
+}
+
+func sortedB2B(m map[string][]B2BInvoice) []B2BParty {
+	if len(m) == 0 {
+		return nil
+	}
+	ctins := make([]string, 0, len(m))
+	for c := range m {
+		ctins = append(ctins, c)
+	}
+	sort.Strings(ctins)
+	out := make([]B2BParty, 0, len(ctins))
+	for _, c := range ctins {
+		invs := m[c]
+		sort.Slice(invs, func(i, j int) bool { return invs[i].Inum < invs[j].Inum })
+		out = append(out, B2BParty{CTIN: c, Inv: invs})
+	}
+	return out
+}
+
+func sortedB2CL(m map[string][]B2CLInvoice) []B2CLPlace {
+	if len(m) == 0 {
+		return nil
+	}
+	poss := make([]string, 0, len(m))
+	for p := range m {
+		poss = append(poss, p)
+	}
+	sort.Strings(poss)
+	out := make([]B2CLPlace, 0, len(poss))
+	for _, p := range poss {
+		invs := m[p]
+		sort.Slice(invs, func(i, j int) bool { return invs[i].Inum < invs[j].Inum })
+		out = append(out, B2CLPlace{Pos: p, Inv: invs})
+	}
+	return out
+}
+
+// b2csKey identifies a B2C Small rate-wise bucket.
+type b2csKey struct {
+	sply string
+	pos  string
+	rate string
+}
+
+// hsnKey identifies an HSN/rate rollup bucket.
+type hsnKey struct {
+	hsn  string
+	rate string
+}
+
+func sortedB2CS(m map[b2csKey]*B2CSItem) []B2CSItem {
+	if len(m) == 0 {
+		return nil
+	}
+	keys := make([]b2csKey, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].sply != keys[j].sply {
+			return keys[i].sply < keys[j].sply
+		}
+		if keys[i].pos != keys[j].pos {
+			return keys[i].pos < keys[j].pos
+		}
+		return keys[i].rate < keys[j].rate
+	})
+	out := make([]B2CSItem, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, *m[k])
+	}
+	return out
+}
+
+func sortedHSN(m map[hsnKey]*HSNItem) HSNSummary {
+	if len(m) == 0 {
+		return HSNSummary{Data: nil}
+	}
+	keys := make([]hsnKey, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].hsn != keys[j].hsn {
+			return keys[i].hsn < keys[j].hsn
+		}
+		return keys[i].rate < keys[j].rate
+	})
+	data := make([]HSNItem, 0, len(keys))
+	for i, k := range keys {
+		it := *m[k]
+		it.Num = i + 1
+		data = append(data, it)
+	}
+	return HSNSummary{Data: data}
+}
+
+// deref returns the value of a *decimal.Decimal, or zero if nil.
+func deref(d *decimal.Decimal) decimal.Decimal {
+	if d == nil {
+		return decimal.Zero
+	}
+	return *d
+}
+
+// derefStr returns the value of a *string, or "" if nil.
+func derefStr(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+// ynFlag maps a bool to the GSTN "Y"/"N" flag.
+func ynFlag(b bool) string {
+	if b {
+		return "Y"
+	}
+	return "N"
+}
+
+// ErrNoData is returned by callers that choose to treat an empty period as an
+// error rather than an empty return.
+var ErrNoData = errors.New("gstr: no posted sales in period")
+
+// isRegistered reports whether a counter-party is a registered (B2B) recipient.
+// A recipient is registered when it carries a GSTIN and its registration type is
+// one that files returns (REGULAR / COMPOSITION / SEZ). CONSUMER / UNREGISTERED /
+// UNKNOWN are B2C.
+func isRegistered(regType, gstin string) bool {
+	if gstin == "" {
+		return false
+	}
+	switch regType {
+	case "REGULAR", "COMPOSITION", "SEZ":
+		return true
+	default:
+		return false
+	}
+}
+
