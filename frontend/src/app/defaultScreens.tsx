@@ -1,6 +1,14 @@
 import { SelectionList } from "../screens/SelectionList";
 import { GatewayScreen } from "../screens/GatewayScreen";
 import { VoucherScreen } from "../screens/VoucherScreen";
+import { MasterCreateScreen } from "../screens/masters/MasterCreateScreen";
+import {
+  DayBookScreen,
+  TrialBalanceScreen,
+  BalanceSheetScreen,
+  ProfitLossScreen,
+  OutstandingsScreen,
+} from "../screens/reports/ReportScreens";
 import { REPORT_NAMES } from "../keystroke/types";
 import type { ScreenComponent, ScreenComponentProps } from "./screenRegistry";
 import { ScreenRegistry } from "./screenRegistry";
@@ -77,29 +85,13 @@ const ReportDetailScreen: ScreenComponent = ({ snapshot, onSelect }) => {
   );
 };
 
-/** Generic inline master-create screen — the masters agent registers the form. */
-const MasterCreateScreen: ScreenComponent = ({ snapshot, onSelect }) => {
-  const kind = snapshot.masterKind ?? "ledger";
-  return (
-    <section className="flex h-full flex-col bg-tally-bg p-4 font-mono text-tally-field">
-      <h1 className="text-lg font-bold text-tally-title">
-        Create {kind.replace("-", " ")}
-      </h1>
-      <div className="mt-3 max-w-md bg-tally-panel p-3">
-        <p className="mb-1 text-xs">
-          Active field: <span className="text-tally-title">{snapshot.field}</span>
-        </p>
-        <SelectionList
-          label="Under (group)"
-          options={["Sundry Debtors", "Sundry Creditors", "Cash-in-Hand"]}
-          onSelect={onSelect}
-          autoFocus
-        />
-        <p className="mt-2 text-xs">Ctrl+A to accept and return; Esc to cancel.</p>
-      </div>
-    </section>
-  );
-};
+/** Inline master-create adapter — the wired form lives in MasterCreateScreen. */
+const MasterCreateAdapter: ScreenComponent = ({
+  snapshot,
+  onSelect,
+}: ScreenComponentProps) => (
+  <MasterCreateScreen snapshot={snapshot} onSelect={onSelect} />
+);
 
 /** Gateway adapter: the Phase 0 GatewayScreen only needs onSelect. */
 const GatewayAdapter: ScreenComponent = ({ onSelect }: ScreenComponentProps) => (
@@ -126,7 +118,13 @@ export function createDefaultRegistry(): ScreenRegistry {
     voucher: VoucherAdapter,
     report: ReportScreen,
     "report-detail": ReportDetailScreen,
-    "master-create": MasterCreateScreen,
+    "master-create": MasterCreateAdapter,
     "goto-overlay": GoToOverlayScreen,
+    // Live, per-name report screens (override the generic fallback).
+    "report:Day Book": DayBookScreen,
+    "report:Trial Balance": TrialBalanceScreen,
+    "report:Balance Sheet": BalanceSheetScreen,
+    "report:Profit & Loss A/c": ProfitLossScreen,
+    "report:Outstandings": OutstandingsScreen,
   });
 }

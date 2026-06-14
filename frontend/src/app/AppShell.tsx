@@ -1,23 +1,45 @@
-import { useRef } from "react";
+import { useCallback, useRef } from "react";
 import { useNavMachine } from "../keystroke/useNavMachine";
 import { buttonBarFor } from "../keystroke/buttonBar";
 import type { NavSnapshot } from "../keystroke/navMachine";
+import { resolveKeymap } from "../keystroke/keymaps/tallyprime";
+import { normalizeCombo, comboFromEvent } from "../keystroke/normalize";
 import { useCompanyContext } from "./CompanyContext";
+import { ScreenActionsProvider, useScreenActionDispatcher } from "./ScreenActions";
+import { LoadedVoucherProvider } from "./LoadedVoucher";
 import { Chrome } from "./Chrome";
 import { ScreenRegistry } from "./screenRegistry";
 import { createDefaultRegistry } from "./defaultScreens";
 
+/** Screens that require an active company scope (useCompanyID would throw). */
+const COMPANY_SCOPED_SCREENS = new Set<NavSnapshot["screen"]>([
+  "voucher",
+  "report",
+  "report-detail",
+  "master-create",
+]);
+
 /**
- * The application shell. Owns the navigation machine, captures REAL DOM key
- * events at the root and feeds them to the machine, then routes the active
- * stack frame to its registered screen component inside the persistent Tally
- * chrome (top bar + right button bar + bottom hints).
- *
- * The shell is screen-content-agnostic: it knows the machine and the chrome,
- * and delegates rendering to the {@link ScreenRegistry}. Agents add screens by
- * registering components; they never edit this file.
+ * The application shell. Provides the screen-action bridge and the loaded-voucher
+ * store (so it is renderable standalone in tests), then delegates to the inner
+ * shell which owns the navigation machine + chrome. The providers wrap the inner
+ * shell because the inner shell CONSUMES the screen-action dispatcher.
  */
 export function AppShell({
+  registry = createDefaultRegistry(),
+}: {
+  registry?: ScreenRegistry;
+}) {
+  return (
+    <ScreenActionsProvider>
+      <LoadedVoucherProvider>
+        <AppShellInner registry={registry} />
+      </LoadedVoucherProvider>
+    </ScreenActionsProvider>
+  );
+}
+
+function AppShellInner({
   registry = createDefaultRegistry(),
 }: {
   registry?: ScreenRegistry;
@@ -28,9 +50,37 @@ export function AppShell({
     keymapProfile: "tallyprime",
   });
   const rootRef = useRef<HTMLDivElement>(null);
+  const dispatchScreenAction = useScreenActionDispatcher();
+
+  // Wrap the machine's keydown so that an `accept` (Ctrl+A) or `delete` (Alt+D)
+  // fires the active screen's registered side-effect handler with the snapshot
+  // AS IT IS NOW — before the machine's reducer resets the voucher frame and
+  // wipes the captured number. The machine transition still runs (navMachine
+  // stays pure); the client call is the screen's responsibility.
+  const handleKeyDown = useCallback(
+    (ev: React.KeyboardEvent) => {
+      const combo = comboFromEvent({
+        key: ev.key,
+        ctrlKey: ev.ctrlKey,
+        altKey: ev.altKey,
+        shiftKey: ev.shiftKey,
+        metaKey: ev.metaKey,
+      });
+      const action = resolveKeymap("tallyprime").bindings[normalizeCombo(combo)];
+      if (action?.kind === "accept") {
+        dispatchScreenAction("accept", snapshot);
+      } else if (action?.kind === "delete") {
+        dispatchScreenAction("delete", snapshot);
+      }
+      onKeyDown(ev);
+    },
+    [dispatchScreenAction, onKeyDown, snapshot],
+  );
 
   const bar = buttonBarFor(snapshot.screen, snapshot.voucherType);
   const Screen = registry.resolve(snapshot);
+  const needsCompany = COMPANY_SCOPED_SCREENS.has(snapshot.screen);
+  const companyReady = company !== null;
 
   return (
     <div
@@ -38,7 +88,7 @@ export function AppShell({
       tabIndex={0}
       role="application"
       aria-label="Tally-compatible keystroke engine"
-      onKeyDown={onKeyDown}
+      onKeyDown={handleKeyDown}
       className="h-full w-full outline-none"
     >
       <Chrome
@@ -47,13 +97,27 @@ export function AppShell({
         buttonBar={bar}
         hints={hintsFor(snapshot)}
       >
-        {Screen ? (
+        {needsCompany && !companyReady ? (
+          <CompanyLoadingScreen />
+        ) : Screen ? (
           <Screen snapshot={snapshot} onSelect={onSelect} />
         ) : (
           <UnregisteredScreen snapshot={snapshot} />
         )}
       </Chrome>
     </div>
+  );
+}
+
+/** Placeholder shown while the company bootstrap is in flight (gated screens). */
+function CompanyLoadingScreen() {
+  return (
+    <section
+      role="status"
+      className="flex h-full items-center justify-center bg-tally-bg p-4 font-mono text-tally-field"
+    >
+      <p>Preparing company…</p>
+    </section>
   );
 }
 

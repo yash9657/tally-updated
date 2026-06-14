@@ -24,13 +24,16 @@ export function App({
     () => client ?? defaultClient(),
     [client],
   );
-  const resolvedCompany = useMemo<CompanyInfo>(
-    () => company ?? { id: "company-demo", name: "Demo Traders" },
-    [company],
-  );
 
+  // An explicit company prop is the deterministic test/path: bootstrap stays
+  // OFF and no company is auto-created. With no prop we bootstrap a real company
+  // against the live client (persisted/minted), gating screens until it's ready.
   return (
-    <CompanyProvider client={resolvedClient} initialCompany={resolvedCompany}>
+    <CompanyProvider
+      client={resolvedClient}
+      initialCompany={company ?? null}
+      bootstrap={!company}
+    >
       <AppShell />
     </CompanyProvider>
   );

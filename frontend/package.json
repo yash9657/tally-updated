@@ -12,7 +12,8 @@
     "test": "vitest",
     "test:run": "vitest run",
     "e2e:edit": "tsx scripts/e2e-edit-loop.mts",
-    "e2e:alter": "tsx scripts/e2e-edit-loop.mts"
+    "e2e:alter": "tsx scripts/e2e-edit-loop.mts",
+    "e2e:numbering": "tsx scripts/e2e-numbering.mts"
   },
   "dependencies": {
     "@xstate/react": "^4.1.3",

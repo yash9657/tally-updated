@@ -538,6 +538,7 @@ func (s *Server) handleDeleteVoucher(w http.ResponseWriter, r *http.Request) {
 		"voucher_id":         res.VoucherID.String(),
 		"voucher_version_id": res.VoucherVersionID.String(),
 		"version_no":         res.VersionNo,
+		"voucher_no":         res.VoucherNo,
 		"op":                 string(ledger.OpDelete),
 	})
 }
@@ -549,6 +550,7 @@ func voucherResultJSON(res ledger.PostResult) map[string]any {
 		"voucher_id":         res.VoucherID.String(),
 		"voucher_version_id": res.VoucherVersionID.String(),
 		"version_no":         res.VersionNo,
+		"voucher_no":         res.VoucherNo,
 		"cgst":               res.Tax.CGST.StringFixed(4),
 		"sgst":               res.Tax.SGST.StringFixed(4),
 		"igst":               res.Tax.IGST.StringFixed(4),

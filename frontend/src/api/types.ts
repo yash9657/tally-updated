@@ -169,6 +169,15 @@ export interface VoucherResponse {
   voucher_id: string;
   voucher_version_id: string;
   version_no: number;
+  /**
+   * The server-resolved display number for this voucher (prefix + zero-padded,
+   * FY-scoped running counter + suffix). ALWAYS present and non-empty for an
+   * accounting voucher type: auto-allocated when the client sent it empty, or
+   * the exact value the client supplied (manual / override). On ALTER it is the
+   * carried-forward number, identical to the create's value (numbering is never
+   * re-allocated on edit).
+   */
+  voucher_no: string;
   cgst: Money;
   sgst: Money;
   igst: Money;
@@ -185,6 +194,8 @@ export interface DeleteVoucherResponse {
   voucher_version_id: string;
   version_no: number;
   op: string;
+  /** The deleted voucher's display number, carried through for symmetry. */
+  voucher_no: string;
 }
 
 // ---------------------------------------------------------------------------

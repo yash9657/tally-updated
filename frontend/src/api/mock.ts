@@ -51,6 +51,70 @@ function id(prefix: string): string {
   return `${prefix}-${idCounter.toString().padStart(12, "0")}`;
 }
 
+/**
+ * Mirror of the backend numbering model (WORKSTREAM B spec / numbering.go), kept
+ * deliberately aligned so component + e2e-style assertions about FORMAT and
+ * SEQUENCE hold against the mock exactly as they would against the live server:
+ *
+ *  - METHOD: AUTOMATIC — the server (here, the mock) allocates the next number
+ *    when the client sends voucher_no empty. A non-empty client value is an
+ *    OVERRIDE: honored verbatim and the counter is NOT bumped (next auto stays
+ *    prior-max+1). MANUAL with empty voucher_no would be an error, but the mock
+ *    seeds AUTOMATIC types only.
+ *  - FORMAT: prefix + zero-pad(n, width) + suffix, with a per-(type, FY) running
+ *    counter starting at 1.
+ *  - FY SCOPE: Indian FY (1-Apr..31-Mar) derived from the VOUCHER DATE, not
+ *    today. month>=4 => start-year = year, else year-1. The counter restarts at
+ *    1 for each (class, fin_year), so a new FY restarts numbering.
+ *  - GAP-ON-DELETE / NO-REALLOC-ON-ALTER: the counter is monotonic; deletes
+ *    leave gaps and alters never allocate (the loaded number is resent).
+ */
+
+/** Per-class numbering format. Aligned with the server's seeded voucher types. */
+interface NumberFormat {
+  prefix: string;
+  suffix: string;
+  /** Zero-pad width; null/undefined => bare integer (Tally default). */
+  width: number | null;
+}
+
+/**
+ * Seeded per-class formats. The server seeds a Sales voucher type; the mock
+ * gives each class a faithful AUTOMATIC format so every voucher screen's
+ * Ctrl+A surfaces a formatted number. Sales uses a 4-wide zero-padded counter
+ * ("INV/0001"); the others use bare integers (Tally's no-padding default).
+ */
+const CLASS_NUMBER_FORMATS: Readonly<Record<string, NumberFormat>> = {
+  sales: { prefix: "INV/", suffix: "", width: 4 },
+  purchase: { prefix: "BILL/", suffix: "", width: 4 },
+  receipt: { prefix: "RCPT/", suffix: "", width: null },
+  payment: { prefix: "PYMT/", suffix: "", width: null },
+  contra: { prefix: "CTRA/", suffix: "", width: null },
+  journal: { prefix: "JRNL/", suffix: "", width: null },
+};
+
+/** Derive the Indian FY start-year from a YYYY-MM-DD voucher date. */
+export function finYearOf(voucherDate: string): number {
+  const d = (voucherDate || "").slice(0, 10);
+  const [yStr, mStr] = d.split("-");
+  const year = parseInt(yStr ?? "", 10);
+  const month = parseInt(mStr ?? "", 10);
+  if (!Number.isFinite(year) || !Number.isFinite(month)) {
+    // Fall back to the current date's FY (server defaults empty date to today).
+    const now = new Date();
+    const m = now.getMonth() + 1;
+    return m >= 4 ? now.getFullYear() : now.getFullYear() - 1;
+  }
+  return month >= 4 ? year : year - 1;
+}
+
+/** prefix + zero-pad(n, width) + suffix — the formatVoucherNo contract. */
+export function formatVoucherNo(fmt: NumberFormat, n: number): string {
+  const body =
+    fmt.width != null ? String(n).padStart(fmt.width, "0") : String(n);
+  return `${fmt.prefix}${body}${fmt.suffix}`;
+}
+
 /** Fixed-4 string add of two decimal strings (string-safe, no float drift). */
 function addMoney(a: Money, b: Money): Money {
   const scale = 10000;
@@ -64,6 +128,12 @@ interface MockCompany {
   name: string;
   ledgers: { id: string; name: string; group: string }[];
   vouchers: DayBookEntry[];
+  /**
+   * Per-(class, fin_year) NEXT free number. Mirrors voucher_number_counter:
+   * monotonic, advanced ONLY when WE allocate (empty client voucher_no on a
+   * CREATE). Keyed "class:finYear".
+   */
+  counters: Map<string, number>;
 }
 
 export interface MockClientOptions {
@@ -78,7 +148,13 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
   function ensure(companyID: string): MockCompany {
     let c = companies.get(companyID);
     if (!c) {
-      c = { id: companyID, name: "Mock Co", ledgers: [], vouchers: [] };
+      c = {
+        id: companyID,
+        name: "Mock Co",
+        ledgers: [],
+        vouchers: [],
+        counters: new Map(),
+      };
       companies.set(companyID, c);
     }
     return c;
@@ -95,6 +171,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         { id: "ledger-acme", name: "Acme Traders", group: "Sundry Debtors" },
       ],
       vouchers: [],
+      counters: new Map(),
     };
     companies.set(demoID, demo);
   }
@@ -122,6 +199,41 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     return { postings, debit, credit };
   }
 
+  /**
+   * Atomic per-(class, fin_year) allocate: returns the consumed number and bumps
+   * the stored NEXT-free counter (the voucher_number_counter contract). Counters
+   * start at 1; concurrent allocations would serialize on the row, so two creates
+   * get distinct consecutive numbers — modelled here as a synchronous bump.
+   */
+  function allocateNumber(c: MockCompany, cls: string, finYear: number): number {
+    const key = `${cls}:${finYear}`;
+    const next = c.counters.get(key) ?? 1;
+    c.counters.set(key, next + 1);
+    return next;
+  }
+
+  /**
+   * Resolve the display voucher_no on a CREATE: honor a non-empty client value
+   * verbatim (override — counter untouched), else AUTOMATIC-allocate the next
+   * FY-scoped running number and format it.
+   */
+  function resolveCreateNumber(
+    c: MockCompany,
+    cls: string,
+    req: VoucherRequest,
+  ): string {
+    const supplied = (req.voucher_no ?? "").trim();
+    if (supplied !== "") return supplied; // override: do NOT bump the counter
+    const fmt = CLASS_NUMBER_FORMATS[cls] ?? {
+      prefix: "",
+      suffix: "",
+      width: null,
+    };
+    const finYear = finYearOf(req.voucher_date ?? "");
+    const n = allocateNumber(c, cls, finYear);
+    return formatVoucherNo(fmt, n);
+  }
+
   function recordVoucher(
     companyID: string,
     cls: VoucherClass,
@@ -130,13 +242,14 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     const c = ensure(companyID);
     const { postings, debit, credit } = summarize(c, req);
     const voucherID = id("voucher");
+    const voucherNo = resolveCreateNumber(c, cls, req);
     const entry: DayBookEntry = {
       voucher_id: voucherID,
       version_no: 1,
       op: "CREATE",
       class: cls.toUpperCase(),
       voucher_type: cls,
-      voucher_no: req.voucher_no ?? String(c.vouchers.length + 1),
+      voucher_no: voucherNo,
       date: req.voucher_date ?? "1970-01-01",
       narration: req.narration ?? "",
       party: req.party ?? "",
@@ -149,6 +262,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       voucher_id: voucherID,
       voucher_version_id: id("vv"),
       version_no: 1,
+      voucher_no: voucherNo,
       cgst: "0.0000",
       sgst: "0.0000",
       igst: "0.0000",
@@ -178,8 +292,12 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     entry.op = "ALTER";
     entry.class = cls.toUpperCase();
     entry.voucher_type = cls;
-    if (req.voucher_no !== undefined) entry.voucher_no = req.voucher_no;
-    if (req.voucher_date !== undefined) entry.date = req.voucher_date;
+    // NO-REALLOC-ON-ALTER: an empty voucher_no carries forward the prior number;
+    // a supplied value is honored verbatim. The counter is NEVER touched here.
+    const suppliedNo = (req.voucher_no ?? "").trim();
+    if (suppliedNo !== "") entry.voucher_no = suppliedNo;
+    if (req.voucher_date !== undefined && req.voucher_date !== "")
+      entry.date = req.voucher_date;
     entry.narration = req.narration ?? "";
     entry.party = req.party ?? "";
     entry.postings = postings;
@@ -189,6 +307,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       voucher_id: voucherID,
       voucher_version_id: id("vv"),
       version_no: nextVersion,
+      voucher_no: entry.voucher_no,
       cgst: "0.0000",
       sgst: "0.0000",
       igst: "0.0000",
@@ -294,6 +413,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         voucher_version_id: id("vv"),
         version_no: nextVersion,
         op: "DELETE",
+        voucher_no: prior.voucher_no,
       };
     },
 

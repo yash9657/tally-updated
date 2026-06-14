@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -177,6 +178,10 @@ type PostResult struct {
 	VoucherVersionID uuid.UUID
 	VersionNo        int
 	Hash             []byte
+	// VoucherNo is the resolved display number: server-allocated (AUTOMATIC create
+	// with empty voucher_no), echoed (manual/override), or carried forward (alter/
+	// delete). It is the single source the HTTP layer reads for the response.
+	VoucherNo string
 	// Tax is the derived GST breakup, populated when GST derivation ran.
 	Tax compliance.TaxResult
 }
@@ -389,6 +394,81 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 			return fmt.Errorf("ledger: read voucher_head: %w", err)
 		}
 
+		// Tally auto-numbering. Resolve in.VoucherNo BEFORE building the canonical
+		// payload so the number is part of the hashed payload and flows into the
+		// denormalised voucher_no column unchanged.
+		//
+		//   * OpCreate + empty voucher_no + AUTOMATIC-style method => allocate the
+		//     next number in the (company, voucher_type, fin_year) series.
+		//   * OpCreate + empty voucher_no + MANUAL method          => validation error.
+		//   * OpCreate + non-empty voucher_no (override)           => honor verbatim,
+		//     do NOT touch the counter.
+		//   * OpAlter  + empty voucher_no                          => carry forward the
+		//     prior current version's number; NEVER allocate.
+		//   * OpDelete                                             => unchanged (the
+		//     caller already copied the prior voucher_no).
+		// See numbering.go for the full invariant list.
+		// A keystroke post (e.g. F8 Sales) carries the class but not a
+		// voucher_type_id — the class implies the company's default (system)
+		// voucher type, exactly as in Tally. Resolve it so numbering can run and
+		// the version row records a proper type. ALTER/DELETE keep whatever the
+		// prior version carried (set above), so only resolve on CREATE.
+		if op == OpCreate && in.VoucherTypeID == uuid.Nil {
+			vtID, err := defaultVoucherTypeID(ctx, tx, companyID, in.Class)
+			if err != nil {
+				return err
+			}
+			in.VoucherTypeID = vtID
+		}
+
+		switch {
+		case op == OpCreate && in.VoucherNo == "" && in.VoucherTypeID != uuid.Nil:
+			cfg, err := loadNumberingConfig(ctx, tx, in.VoucherTypeID)
+			if err != nil {
+				return err
+			}
+			if !allocatesAutomatically(cfg.method) {
+				return fmt.Errorf("ledger: manual numbering requires a voucher number")
+			}
+			vDateForFY := in.VoucherDate
+			if vDateForFY == "" {
+				// Default an empty date to today server-side so a number can still
+				// be allocated; the FY is derived from the voucher date, not today,
+				// but a missing date must not block allocation.
+				vDateForFY = time.Now().Format("2006-01-02")
+				in.VoucherDate = vDateForFY
+			}
+			finYear, err := finYearOf(vDateForFY)
+			if err != nil {
+				return err
+			}
+			n, err := allocateVoucherNo(ctx, tx, companyID, in.VoucherTypeID, finYear)
+			if err != nil {
+				return err
+			}
+			in.VoucherNo = formatVoucherNo(cfg.prefix, cfg.suffix, cfg.width, n)
+		case op == OpAlter && in.VoucherNo == "":
+			// Carry forward the prior current version's number (same SELECT pattern
+			// as DeleteVoucher). Never allocate on ALTER. If no head row exists the
+			// reverse-prior block above already returned ErrVoucherNotFound.
+			var prevNo *string
+			err := tx.QueryRow(ctx,
+				`SELECT vv.voucher_no
+				   FROM voucher_head vh
+				   JOIN voucher_version vv ON vv.id = vh.current_version_id
+				  WHERE vh.company_id = $1 AND vh.voucher_id = $2`,
+				companyID, voucherID).Scan(&prevNo)
+			switch {
+			case errors.Is(err, pgx.ErrNoRows):
+				return ErrVoucherNotFound
+			case err != nil:
+				return fmt.Errorf("ledger: read prior voucher_no for alter: %w", err)
+			}
+			if prevNo != nil {
+				in.VoucherNo = *prevNo
+			}
+		}
+
 		payload := CanonicalPayload{
 			VoucherID:     voucherID.String(),
 			VoucherTypeID: in.VoucherTypeID.String(),
@@ -548,6 +628,7 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 			VoucherVersionID: versionID,
 			VersionNo:        versionNo,
 			Hash:             hash,
+			VoucherNo:        in.VoucherNo,
 			Tax:              tax,
 		}
 		return nil
