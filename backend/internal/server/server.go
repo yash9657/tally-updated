@@ -132,6 +132,12 @@ func (s *Server) routes() {
 		r.Put("/vouchers/contra/{voucherID}", s.alterVoucher(ledger.Contra))
 		r.Put("/vouchers/journal/{voucherID}", s.alterVoucher(ledger.Journal))
 
+		// Fetch the CURRENT (head) version of one logical voucher. A param route
+		// beside the literal POST/PUT /vouchers/sales etc.; the method differs
+		// (GET vs POST/PUT) so chi resolves it without collision, exactly as the
+		// DELETE /vouchers/{voucherID} below already coexists with the literals.
+		r.Get("/vouchers/{voucherID}", s.handleGetVoucher)
+
 		// Delete: append a tombstone. Class-agnostic — a delete needs only the id.
 		r.Delete("/vouchers/{voucherID}", s.handleDeleteVoucher)
 
@@ -541,6 +547,94 @@ func (s *Server) handleDeleteVoucher(w http.ResponseWriter, r *http.Request) {
 		"voucher_no":         res.VoucherNo,
 		"op":                 string(ledger.OpDelete),
 	})
+}
+
+// handleGetVoucher returns the CURRENT (head) version of one logical voucher.
+// Its postings carry the REAL ledger ids (not names), so a frontend alter path
+// can re-seed a form from the fetched voucher without smuggling a name into a
+// uuid field. An unknown id OR a tombstoned (is_deleted) head both surface as a
+// 404 — the ledger excludes deleted heads from the head join.
+func (s *Server) handleGetVoucher(w http.ResponseWriter, r *http.Request) {
+	ctx, ok := s.scopeCtx(w, r)
+	if !ok {
+		return
+	}
+	voucherID, err := uuid.Parse(chi.URLParam(r, "voucherID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid voucher id")
+		return
+	}
+	v, err := s.ledger.GetVoucher(ctx, voucherID)
+	if err != nil {
+		// A read endpoint: an unknown/deleted voucher is 404 and a missing
+		// company scope is 400, but an unexpected error is a 500 (not the 422
+		// the write path uses for validation failures).
+		switch {
+		case errors.Is(err, ledger.ErrVoucherNotFound):
+			writeError(w, http.StatusNotFound, "voucher not found")
+		case errors.Is(err, db.ErrNoCompany):
+			writeError(w, http.StatusBadRequest, err.Error())
+		default:
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, voucherFullJSON(v))
+}
+
+// voucherFullJSON serialises a fetched voucher to the documented GET shape:
+// money as fixed-4 strings, dr_cr canonical "D"/"C", optional uuids rendered as
+// "" when nil, and postings/bill_allocations as nested arrays.
+func voucherFullJSON(v ledger.VoucherView) map[string]any {
+	postings := make([]map[string]any, 0, len(v.Postings))
+	for _, p := range v.Postings {
+		postings = append(postings, map[string]any{
+			"ledger_id": p.LedgerID.String(),
+			"ledger":    p.LedgerName,
+			"dr_cr":     p.DrCr,
+			"amount":    p.Amount.StringFixed(4),
+		})
+	}
+	bills := make([]map[string]any, 0, len(v.BillAllocations))
+	for _, b := range v.BillAllocations {
+		bills = append(bills, map[string]any{
+			"ledger_id": b.LedgerID.String(),
+			"ref_name":  b.RefName,
+			"ref_type":  b.RefType,
+			"dr_cr":     b.DrCr,
+			"amount":    b.Amount.StringFixed(4),
+			"due_date":  b.DueDate,
+		})
+	}
+	return map[string]any{
+		"voucher_id":       v.VoucherID.String(),
+		"voucher_no":       v.VoucherNo,
+		"voucher_date":     v.VoucherDate,
+		"class":            v.Class,
+		"voucher_type_id":  uuidOrEmpty(v.VoucherTypeID),
+		"party":            v.Party,
+		"party_ledger_id":  uuidOrEmpty(v.PartyLedgerID),
+		"narration":        v.Narration,
+		"version_no":       v.VersionNo,
+		"op":               v.Op,
+		"place_of_supply":  v.PlaceOfSupply,
+		"reverse_charge":   v.ReverseCharge,
+		"taxable_value":    v.Taxable.StringFixed(4),
+		"cgst":             v.CGST.StringFixed(4),
+		"sgst":             v.SGST.StringFixed(4),
+		"igst":             v.IGST.StringFixed(4),
+		"postings":         postings,
+		"bill_allocations": bills,
+	}
+}
+
+// uuidOrEmpty renders a uuid as its canonical string, or "" when nil, so an
+// absent optional id serialises as an empty string rather than the all-zero uuid.
+func uuidOrEmpty(id uuid.UUID) string {
+	if id == uuid.Nil {
+		return ""
+	}
+	return id.String()
 }
 
 // voucherResultJSON builds the response body shared by the POST and PUT voucher

@@ -341,6 +341,185 @@ func TestDeleteUnknownVoucher404(t *testing.T) {
 	}
 }
 
+// TestGetVoucherReturnsRealLedgerIDs proves the GET single-voucher endpoint
+// returns the CURRENT head version with postings carrying the REAL ledger ids
+// (the uuids posted), not ledger names — the fix the alter path depends on. It
+// also asserts the header fields echo, then deletes the voucher and confirms a
+// subsequent GET is a 404.
+func TestGetVoucherReturnsRealLedgerIDs(t *testing.T) {
+	srv := newServer(t)
+	_, base := newCompany(t, srv)
+
+	debtorID := createLedger(t, srv, base, "Acme Corp", "Sundry Debtors")
+	salesID := createLedger(t, srv, base, "Domestic Sales", "Sales Accounts")
+
+	rec, body := do(t, srv, http.MethodPost, base+"/vouchers/sales", map[string]any{
+		"voucher_no": "INV/0001", "voucher_date": "2025-05-10", "party": "Acme Corp", "created_by": "smoke",
+		"postings": []map[string]any{
+			{"ledger_id": debtorID, "dr_cr": "D", "amount": "11800.0000"},
+			{"ledger_id": salesID, "dr_cr": "C", "amount": "11800.0000"},
+		},
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("post sale status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
+	}
+	voucherID, _ := body["voucher_id"].(string)
+	if voucherID == "" {
+		t.Fatalf("post sale returned no voucher_id (body %s)", rec.Body.String())
+	}
+
+	// GET the voucher: header fields echo, op=CREATE, version_no=1.
+	rec, body = do(t, srv, http.MethodGet, base+"/vouchers/"+voucherID, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get voucher status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if body["voucher_no"] != "INV/0001" {
+		t.Fatalf("get voucher voucher_no = %v, want INV/0001", body["voucher_no"])
+	}
+	if body["voucher_date"] != "2025-05-10" {
+		t.Fatalf("get voucher voucher_date = %v, want 2025-05-10", body["voucher_date"])
+	}
+	if body["op"] != "CREATE" {
+		t.Fatalf("get voucher op = %v, want CREATE", body["op"])
+	}
+	if vn, ok := body["version_no"].(float64); !ok || vn != 1 {
+		t.Fatalf("get voucher version_no = %v, want 1", body["version_no"])
+	}
+
+	// Postings carry REAL ledger ids (parseable uuids) — assert the set equals
+	// {debtorID, salesID} with matching amounts, proving names are NOT returned
+	// where uuids belong.
+	postings, _ := body["postings"].([]any)
+	if len(postings) != 2 {
+		t.Fatalf("get voucher postings len = %d, want 2 (body %s)", len(postings), rec.Body.String())
+	}
+	gotAmounts := map[string]string{}
+	for _, raw := range postings {
+		p, _ := raw.(map[string]any)
+		idStr, _ := p["ledger_id"].(string)
+		if _, err := uuid.Parse(idStr); err != nil {
+			t.Fatalf("posting ledger_id %q is not a uuid (the name-as-uuid bug): %v", idStr, err)
+		}
+		amt, _ := p["amount"].(string)
+		gotAmounts[idStr] = amt
+	}
+	if gotAmounts[debtorID] != "11800.0000" {
+		t.Fatalf("debtor posting amount = %q, want 11800.0000 (got map %v)", gotAmounts[debtorID], gotAmounts)
+	}
+	if gotAmounts[salesID] != "11800.0000" {
+		t.Fatalf("sales posting amount = %q, want 11800.0000 (got map %v)", gotAmounts[salesID], gotAmounts)
+	}
+
+	// DELETE then GET -> 404 (the head join excludes deleted vouchers).
+	rec, _ = do(t, srv, http.MethodDelete, base+"/vouchers/"+voucherID+"?created_by=deleter", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	rec, _ = do(t, srv, http.MethodGet, base+"/vouchers/"+voucherID, nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("get deleted voucher status = %d, want 404 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestGetUnknownVoucher404 proves a GET for a random (never-created) voucher id
+// is a 404.
+func TestGetUnknownVoucher404(t *testing.T) {
+	srv := newServer(t)
+	_, base := newCompany(t, srv)
+
+	unknown, _ := uuid.NewV7()
+	rec, _ := do(t, srv, http.MethodGet, base+"/vouchers/"+unknown.String(), nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("get unknown voucher status = %d, want 404 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestGetVoucherReturnsGSTAndSurvivesAlter posts an intra-state 18% GST sale
+// over HTTP, GETs it and asserts the derived CGST/SGST (and zero IGST) plus the
+// tax-ledger postings carry real uuids, then ALTERs the taxable base and GETs
+// again asserting op=ALTER/version_no=2 with the re-derived tax. This is the
+// durable coverage for the GET endpoint's GST attributes + the head-advance
+// case (the reviewer flagged both as untested).
+func TestGetVoucherReturnsGSTAndSurvivesAlter(t *testing.T) {
+	srv := newServer(t)
+	_, base := newCompany(t, srv)
+
+	debtorID := createLedger(t, srv, base, "Acme Corp", "Sundry Debtors")
+	salesID := createLedger(t, srv, base, "Domestic Sales", "Sales Accounts")
+	cgstID := createLedger(t, srv, base, "Output CGST", "Duties & Taxes")
+	sgstID := createLedger(t, srv, base, "Output SGST", "Duties & Taxes")
+	igstID := createLedger(t, srv, base, "Output IGST", "Duties & Taxes")
+
+	// Intra-state 18% on taxable 10000 -> CGST 900, SGST 900, invoice 11800.
+	salePayload := func(taxable, half, total string) map[string]any {
+		return map[string]any{
+			"voucher_no": "INV/0001", "voucher_date": "2025-05-10", "party": "Acme Corp", "created_by": "smoke",
+			"postings": []map[string]any{
+				{"ledger_id": debtorID, "dr_cr": "D", "amount": total},
+				{"ledger_id": salesID, "dr_cr": "C", "amount": taxable},
+				{"ledger_id": cgstID, "dr_cr": "C", "amount": half},
+				{"ledger_id": sgstID, "dr_cr": "C", "amount": half},
+			},
+			"gst": map[string]any{
+				"supplier_state_code":        "29",
+				"place_of_supply_state_code": "29",
+				"lines":                      []map[string]any{{"taxable_value": taxable, "gst_rate_pct": "18"}},
+				"cgst_ledger_id":             cgstID,
+				"sgst_ledger_id":             sgstID,
+				"igst_ledger_id":             igstID,
+			},
+		}
+	}
+
+	rec, body := do(t, srv, http.MethodPost, base+"/vouchers/sales", salePayload("10000.0000", "900.0000", "11800.0000"))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("post GST sale status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
+	}
+	voucherID, _ := body["voucher_id"].(string)
+
+	rec, body = do(t, srv, http.MethodGet, base+"/vouchers/"+voucherID, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get GST voucher status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if body["taxable_value"] != "10000.0000" || body["cgst"] != "900.0000" || body["sgst"] != "900.0000" || body["igst"] != "0.0000" {
+		t.Fatalf("get GST voucher tax = taxable %v cgst %v sgst %v igst %v, want 10000/900/900/0",
+			body["taxable_value"], body["cgst"], body["sgst"], body["igst"])
+	}
+	// Tax-ledger postings must carry real uuids (the name-as-uuid bug guard).
+	for _, raw := range body["postings"].([]any) {
+		p, _ := raw.(map[string]any)
+		idStr, _ := p["ledger_id"].(string)
+		if _, err := uuid.Parse(idStr); err != nil {
+			t.Fatalf("GST posting ledger_id %q is not a uuid: %v", idStr, err)
+		}
+	}
+
+	// ALTER the taxable base to 20000 (CGST 1800, SGST 1800, invoice 23600),
+	// resending INV/0001 so numbering is preserved. GET must show version_no=2,
+	// op=ALTER, and the re-derived tax.
+	rec, _ = do(t, srv, http.MethodPut, base+"/vouchers/sales/"+voucherID, salePayload("20000.0000", "1800.0000", "23600.0000"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("alter GST sale status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	rec, body = do(t, srv, http.MethodGet, base+"/vouchers/"+voucherID, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get altered voucher status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if body["op"] != "ALTER" {
+		t.Fatalf("get altered voucher op = %v, want ALTER", body["op"])
+	}
+	if vn, ok := body["version_no"].(float64); !ok || vn != 2 {
+		t.Fatalf("get altered voucher version_no = %v, want 2", body["version_no"])
+	}
+	if body["voucher_no"] != "INV/0001" {
+		t.Fatalf("alter must preserve number: voucher_no = %v, want INV/0001", body["voucher_no"])
+	}
+	if body["taxable_value"] != "20000.0000" || body["cgst"] != "1800.0000" || body["sgst"] != "1800.0000" {
+		t.Fatalf("re-derived tax = taxable %v cgst %v sgst %v, want 20000/1800/1800",
+			body["taxable_value"], body["cgst"], body["sgst"])
+	}
+}
+
 // createLedger POSTs a ledger and returns its id, failing the test on a non-201.
 func createLedger(t *testing.T, srv *server.Server, base, name, group string) string {
 	t.Helper()

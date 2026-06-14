@@ -281,6 +281,160 @@ func (s *Service) DeleteVoucher(ctx context.Context, voucherID uuid.UUID, create
 	return s.post(ctx, voucherID, OpDelete, in)
 }
 
+// PostingView is one posting line of a fetched voucher, carrying the REAL
+// posting ledger_id (a uuid) alongside the resolved ledger name. This is the
+// load-bearing difference from the day book's name-only projection: an alter
+// path that re-seeds a form from a fetched voucher needs the actual ledger ids
+// so buildVoucherInput's uuid.Parse succeeds (the name-as-uuid bug).
+type PostingView struct {
+	LedgerID   uuid.UUID
+	LedgerName string
+	DrCr       string
+	Amount     decimal.Decimal
+}
+
+// BillAllocationView is one bill-wise allocation of a fetched voucher.
+type BillAllocationView struct {
+	LedgerID uuid.UUID
+	RefName  string
+	RefType  string
+	DrCr     string
+	Amount   decimal.Decimal
+	DueDate  string // YYYY-MM-DD or empty
+}
+
+// VoucherView is the CURRENT (head) version of one logical voucher, projected
+// for a read. Money fields are decimals (the HTTP layer formats them fixed-4);
+// nullable GST attributes default to zero. Postings carry real ledger ids.
+type VoucherView struct {
+	VoucherID       uuid.UUID
+	VoucherNo       string
+	VoucherDate     string // YYYY-MM-DD or empty
+	Class           string
+	VoucherTypeID   uuid.UUID
+	Party           string
+	PartyLedgerID   uuid.UUID
+	Narration       string
+	VersionNo       int
+	Op              string
+	PlaceOfSupply   string
+	ReverseCharge   bool
+	Taxable         decimal.Decimal
+	CGST            decimal.Decimal
+	SGST            decimal.Decimal
+	IGST            decimal.Decimal
+	Postings        []PostingView
+	BillAllocations []BillAllocationView
+}
+
+// GetVoucher returns the CURRENT (head) version of one logical voucher, with its
+// postings (carrying real ledger ids + names), bill allocations, and persisted
+// GST attributes. It mirrors the day-book current-version join: it reads through
+// voucher_head.current_version_id and excludes deleted heads, so a tombstoned or
+// unknown voucher both surface as ErrVoucherNotFound (the HTTP layer maps that to
+// 404). The whole read runs in ONE company-scoped transaction so every query is
+// pinned to the same tenant GUC.
+func (s *Service) GetVoucher(ctx context.Context, voucherID uuid.UUID) (VoucherView, error) {
+	companyID, ok := db.CompanyFromContext(ctx)
+	if !ok {
+		return VoucherView{}, db.ErrNoCompany
+	}
+
+	var v VoucherView
+	v.VoucherID = voucherID
+	err := s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		var (
+			versionID uuid.UUID
+			vtID      *uuid.UUID
+			partyID   *uuid.UUID
+		)
+		err := tx.QueryRow(ctx,
+			`SELECT vv.id, vv.version_no, vv.op::text,
+			        COALESCE(vv.payload->>'class', ''),
+			        vv.voucher_type_id, vv.party_ledger_id,
+			        COALESCE(vv.voucher_no, ''),
+			        to_char(vv.voucher_date, 'YYYY-MM-DD'),
+			        COALESCE(vv.payload->>'narration', ''),
+			        COALESCE(vv.payload->>'party', ''),
+			        COALESCE(vv.place_of_supply, ''),
+			        vv.is_reverse_charge,
+			        COALESCE(vv.taxable_value, 0), COALESCE(vv.cgst, 0),
+			        COALESCE(vv.sgst, 0), COALESCE(vv.igst, 0)
+			   FROM voucher_head vh
+			   JOIN voucher_version vv ON vv.id = vh.current_version_id
+			  WHERE vh.company_id = $1 AND vh.voucher_id = $2 AND vh.is_deleted = false`,
+			companyID, voucherID).Scan(
+			&versionID, &v.VersionNo, &v.Op, &v.Class,
+			&vtID, &partyID, &v.VoucherNo, &v.VoucherDate,
+			&v.Narration, &v.Party, &v.PlaceOfSupply, &v.ReverseCharge,
+			&v.Taxable, &v.CGST, &v.SGST, &v.IGST)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			return ErrVoucherNotFound
+		case err != nil:
+			return fmt.Errorf("ledger: read voucher head: %w", err)
+		}
+		if vtID != nil {
+			v.VoucherTypeID = *vtID
+		}
+		if partyID != nil {
+			v.PartyLedgerID = *partyID
+		}
+
+		// Postings of the current version, with real ledger ids + names. Same
+		// projection and ordering as the day book's loadPostings.
+		prows, err := tx.Query(ctx,
+			`SELECT p.ledger_id, COALESCE(l.name, ''), p.dr_cr::text, p.amount
+			   FROM posting p
+			   LEFT JOIN ledger l ON l.id = p.ledger_id
+			  WHERE p.company_id = $1 AND p.voucher_version_id = $2
+			  ORDER BY p.dr_cr DESC, p.amount DESC`,
+			companyID, versionID)
+		if err != nil {
+			return fmt.Errorf("ledger: query postings: %w", err)
+		}
+		defer prows.Close()
+		for prows.Next() {
+			var p PostingView
+			if err := prows.Scan(&p.LedgerID, &p.LedgerName, &p.DrCr, &p.Amount); err != nil {
+				return fmt.Errorf("ledger: scan posting: %w", err)
+			}
+			v.Postings = append(v.Postings, p)
+		}
+		if err := prows.Err(); err != nil {
+			return fmt.Errorf("ledger: iterate postings: %w", err)
+		}
+
+		// Bill allocations of the current version (keyed by voucher_version_id).
+		brows, err := tx.Query(ctx,
+			`SELECT ledger_id, ref_name, ref_type::text, dr_cr::text, amount,
+			        COALESCE(to_char(due_date, 'YYYY-MM-DD'), '')
+			   FROM bill_allocation
+			  WHERE company_id = $1 AND voucher_version_id = $2
+			  ORDER BY created_at`,
+			companyID, versionID)
+		if err != nil {
+			return fmt.Errorf("ledger: query bill allocations: %w", err)
+		}
+		defer brows.Close()
+		for brows.Next() {
+			var b BillAllocationView
+			if err := brows.Scan(&b.LedgerID, &b.RefName, &b.RefType, &b.DrCr, &b.Amount, &b.DueDate); err != nil {
+				return fmt.Errorf("ledger: scan bill allocation: %w", err)
+			}
+			v.BillAllocations = append(v.BillAllocations, b)
+		}
+		if err := brows.Err(); err != nil {
+			return fmt.Errorf("ledger: iterate bill allocations: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return VoucherView{}, err
+	}
+	return v, nil
+}
+
 // PostSalesVoucher posts a NEW F8 Sales voucher. Backward-compatible shim over
 // PostVoucher.
 func (s *Service) PostSalesVoucher(ctx context.Context, in SalesVoucherInput) (PostResult, error) {

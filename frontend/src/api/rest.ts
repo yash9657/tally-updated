@@ -34,6 +34,7 @@ import type {
   TrialBalanceResponse,
   VoucherRequest,
   VoucherResponse,
+  VoucherView,
 } from "./types";
 
 function company(companyID: string): string {
@@ -170,6 +171,14 @@ export function createRestClient(
       return http.put<VoucherResponse>(
         `${company(companyID)}/vouchers/journal/${encodeURIComponent(voucherID)}`,
         wireVoucher(req),
+      );
+    },
+
+    getVoucher(companyID, voucherID) {
+      // Incoming GET postings/bill-allocations are already the canonical "D"/"C"
+      // wire form; pass them through unchanged (no wireDrCr translation).
+      return http.get<VoucherView>(
+        `${company(companyID)}/vouchers/${encodeURIComponent(voucherID)}`,
       );
     },
 

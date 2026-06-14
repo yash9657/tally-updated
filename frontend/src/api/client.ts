@@ -37,6 +37,7 @@ import type {
   TrialBalanceResponse,
   VoucherRequest,
   VoucherResponse,
+  VoucherView,
 } from "./types";
 
 export interface CoredClient {
@@ -125,6 +126,12 @@ export interface CoredClient {
     voucherID: string,
     req: VoucherRequest,
   ): Promise<VoucherResponse>;
+
+  // Voucher fetch (GET /vouchers/{voucherID}) — the CURRENT head version of one
+  // logical voucher. The source of truth for ALTER hydration: postings carry
+  // REAL ledger_id uuids (not Day Book names) plus persisted GST attributes, so
+  // a full restatement resends valid uuids and the numbering is preserved.
+  getVoucher(companyID: string, voucherID: string): Promise<VoucherView>;
 
   // Voucher deletion (DELETE /vouchers/{voucherID}) — class-agnostic tombstone.
   deleteVoucher(

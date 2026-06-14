@@ -199,6 +199,60 @@ export interface DeleteVoucherResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Voucher fetch (GET /vouchers/{voucherID}) — the CURRENT head version of one
+// logical voucher. This is the source of truth for hydrating an ALTER form:
+// unlike a Day Book row (which carries ledger NAMEs), each posting here carries
+// the REAL ledger_id uuid AND its display name, so a full-restatement alter
+// resends valid uuids (buildVoucherInput's uuid.Parse succeeds). Money is
+// fixed-4 strings; dr_cr is the canonical "D"/"C".
+// ---------------------------------------------------------------------------
+
+export interface PostingView {
+  /** The REAL posting ledger id (uuid) — never a name. */
+  ledger_id: string;
+  /** The ledger's display name (for the form's read-only view). */
+  ledger: string;
+  dr_cr: DrCr;
+  amount: Money;
+}
+
+export interface BillAllocationView {
+  ledger_id: string;
+  ref_name: string;
+  ref_type: string;
+  dr_cr: DrCr;
+  amount: Money;
+  /** "" when no due date is recorded. */
+  due_date: string;
+}
+
+export interface VoucherView {
+  voucher_id: string;
+  voucher_no: string;
+  voucher_date: string;
+  /** The accounting class ("Sales", "Purchase", ...) from the version payload. */
+  class: string;
+  /** "" when not set. */
+  voucher_type_id: string;
+  party: string;
+  /** "" when the head version has no party ledger. */
+  party_ledger_id: string;
+  narration: string;
+  version_no: number;
+  op: string;
+  /** 2-digit state code, "" when not set. */
+  place_of_supply: string;
+  reverse_charge: boolean;
+  /** Persisted GST attributes; "0.0000" when null/absent. */
+  taxable_value: Money;
+  cgst: Money;
+  sgst: Money;
+  igst: Money;
+  postings: PostingView[];
+  bill_allocations: BillAllocationView[];
+}
+
+// ---------------------------------------------------------------------------
 // Reports
 // ---------------------------------------------------------------------------
 

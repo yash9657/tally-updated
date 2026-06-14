@@ -11,6 +11,7 @@
  */
 
 import type { CoredClient } from "./client";
+import { ApiError } from "./http";
 import type {
   BalanceSheetResponse,
   CreateCompanyRequest,
@@ -42,7 +43,11 @@ import type {
   VoucherClass,
   VoucherRequest,
   VoucherResponse,
+  VoucherView,
+  PostingView,
+  BillAllocationView,
 } from "./types";
+import { deriveGstSplit } from "../screens/vouchers/gstDerive";
 
 let idCounter = 0;
 function id(prefix: string): string {
@@ -126,8 +131,15 @@ function addMoney(a: Money, b: Money): Money {
 interface MockCompany {
   id: string;
   name: string;
-  ledgers: { id: string; name: string; group: string }[];
+  ledgers: { id: string; name: string; group: string; stateCode?: string }[];
   vouchers: DayBookEntry[];
+  /**
+   * Head VoucherView per logical voucher_id — the GET /vouchers/{id} source.
+   * Unlike the day-book DayBookEntry (which keeps ledger NAMEs for display),
+   * this RETAINS the real posting ledger_id uuids + persisted GST attributes so
+   * the alter-hydration path resends valid uuids (the name-as-uuid fix).
+   */
+  views: Map<string, VoucherView>;
   /**
    * Per-(class, fin_year) NEXT free number. Mirrors voucher_number_counter:
    * monotonic, advanced ONLY when WE allocate (empty client voucher_no on a
@@ -153,6 +165,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         name: "Mock Co",
         ledgers: [],
         vouchers: [],
+        views: new Map(),
         counters: new Map(),
       };
       companies.set(companyID, c);
@@ -168,35 +181,98 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       ledgers: [
         { id: "ledger-cash", name: "Cash", group: "Cash-in-Hand" },
         { id: "ledger-sales", name: "Sales", group: "Sales Accounts" },
-        { id: "ledger-acme", name: "Acme Traders", group: "Sundry Debtors" },
+        {
+          id: "ledger-acme",
+          name: "Acme Traders",
+          group: "Sundry Debtors",
+          stateCode: "29",
+        },
       ],
       vouchers: [],
+      views: new Map(),
       counters: new Map(),
     };
     companies.set(demoID, demo);
   }
 
-  /** Map a request's postings into day-book postings + Dr/Cr totals. */
+  /**
+   * Map a request's postings into day-book postings (NAMES, for display) +
+   * Dr/Cr totals AND a parallel set of REAL-ledger_id PostingViews (for the
+   * GET /vouchers/{id} hydration path). Canonicalize dr_cr to "D"/"C".
+   */
   function summarize(c: MockCompany, req: VoucherRequest): {
     postings: DayBookPosting[];
+    postingViews: PostingView[];
     debit: Money;
     credit: Money;
   } {
     let debit: Money = "0.0000";
     let credit: Money = "0.0000";
-    const postings = (req.postings ?? []).map((p) => {
-      // Accept both the wire ("D"/"C") and domain ("DR"/"CR") conventions.
-      const dc = p.dr_cr.trim().toUpperCase();
-      if (dc.startsWith("D")) debit = addMoney(debit, p.amount);
+    const postings: DayBookPosting[] = [];
+    const postingViews: PostingView[] = [];
+    for (const p of req.postings ?? []) {
+      // Accept both the wire ("D"/"C") and domain ("DR"/"CR") conventions;
+      // canonicalize to single-letter "D"/"C" as the live GET does.
+      const dc = p.dr_cr.trim().toUpperCase().startsWith("D") ? "D" : "C";
+      if (dc === "D") debit = addMoney(debit, p.amount);
       else credit = addMoney(credit, p.amount);
       const ledger = c.ledgers.find((l) => l.id === p.ledger_id);
-      return {
+      const amount = parseFloat(p.amount || "0").toFixed(4);
+      postings.push({ ledger: ledger?.name ?? p.ledger_id, dr_cr: dc, amount });
+      postingViews.push({
+        // RETAIN the real ledger_id uuid (the day book maps to NAME above; the
+        // view keeps the id so getVoucher round-trips real ids).
+        ledger_id: p.ledger_id,
         ledger: ledger?.name ?? p.ledger_id,
         dr_cr: dc,
-        amount: parseFloat(p.amount || "0").toFixed(4),
-      };
-    });
-    return { postings, debit, credit };
+        amount,
+      });
+    }
+    return { postings, postingViews, debit, credit };
+  }
+
+  /**
+   * Echo the server-derived GST split for a posted voucher: when the request
+   * carries a `gst` block with a single line, mirror the canonical engine via
+   * the shared {@link deriveGstSplit} helper (intra: CGST+SGST; inter: IGST),
+   * else all zeros. Keeps the mock aligned with the live server so component
+   * tests can assert a non-zero split without a backend.
+   */
+  function deriveGst(req: VoucherRequest): {
+    taxable: Money;
+    cgst: Money;
+    sgst: Money;
+    igst: Money;
+  } {
+    const gst = req.gst;
+    const line = gst?.lines?.[0];
+    if (!gst || !line) {
+      return { taxable: "0.0000", cgst: "0.0000", sgst: "0.0000", igst: "0.0000" };
+    }
+    const split = deriveGstSplit(
+      line.taxable_value,
+      line.gst_rate_pct,
+      gst.supplier_state_code ?? "",
+      gst.place_of_supply_state_code ?? "",
+    );
+    return {
+      taxable: parseFloat(line.taxable_value || "0").toFixed(4),
+      cgst: split.cgst,
+      sgst: split.sgst,
+      igst: split.igst,
+    };
+  }
+
+  /** Map a request's bill allocations into BillAllocationViews (canonical D/C). */
+  function billViews(req: VoucherRequest): BillAllocationView[] {
+    return (req.bill_allocations ?? []).map((b) => ({
+      ledger_id: b.ledger_id,
+      ref_name: b.ref_name,
+      ref_type: b.ref_type,
+      dr_cr: b.dr_cr.trim().toUpperCase().startsWith("D") ? "D" : "C",
+      amount: parseFloat(b.amount || "0").toFixed(4),
+      due_date: b.due_date ?? "",
+    }));
   }
 
   /**
@@ -234,15 +310,22 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     return formatVoucherNo(fmt, n);
   }
 
+  /** Title-case class label ("sales" -> "Sales") matching the GET payload. */
+  function classLabel(cls: VoucherClass): string {
+    return cls.charAt(0).toUpperCase() + cls.slice(1);
+  }
+
   function recordVoucher(
     companyID: string,
     cls: VoucherClass,
     req: VoucherRequest,
   ): VoucherResponse {
     const c = ensure(companyID);
-    const { postings, debit, credit } = summarize(c, req);
+    const { postings, postingViews, debit, credit } = summarize(c, req);
+    const gst = deriveGst(req);
     const voucherID = id("voucher");
     const voucherNo = resolveCreateNumber(c, cls, req);
+    const date = req.voucher_date ?? "1970-01-01";
     const entry: DayBookEntry = {
       voucher_id: voucherID,
       version_no: 1,
@@ -250,7 +333,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       class: cls.toUpperCase(),
       voucher_type: cls,
       voucher_no: voucherNo,
-      date: req.voucher_date ?? "1970-01-01",
+      date,
       narration: req.narration ?? "",
       party: req.party ?? "",
       debit,
@@ -258,14 +341,35 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       postings,
     };
     c.vouchers.push(entry);
+    // RETAIN real ledger_id uuids + GST attrs for the GET hydration path.
+    c.views.set(voucherID, {
+      voucher_id: voucherID,
+      voucher_no: voucherNo,
+      voucher_date: date,
+      class: classLabel(cls),
+      voucher_type_id: req.voucher_type_id ?? "",
+      party: req.party ?? "",
+      party_ledger_id: req.party_ledger_id ?? "",
+      narration: req.narration ?? "",
+      version_no: 1,
+      op: "CREATE",
+      place_of_supply: req.gst?.place_of_supply_state_code ?? "",
+      reverse_charge: req.gst?.reverse_charge ?? false,
+      taxable_value: gst.taxable,
+      cgst: gst.cgst,
+      sgst: gst.sgst,
+      igst: gst.igst,
+      postings: postingViews,
+      bill_allocations: billViews(req),
+    });
     return {
       voucher_id: voucherID,
       voucher_version_id: id("vv"),
       version_no: 1,
       voucher_no: voucherNo,
-      cgst: "0.0000",
-      sgst: "0.0000",
-      igst: "0.0000",
+      cgst: gst.cgst,
+      sgst: gst.sgst,
+      igst: gst.igst,
     };
   }
 
@@ -286,7 +390,8 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     if (!entry) {
       throw new Error("voucher not found");
     }
-    const { postings, debit, credit } = summarize(c, req);
+    const { postings, postingViews, debit, credit } = summarize(c, req);
+    const gst = deriveGst(req);
     const nextVersion = entry.version_no + 1;
     entry.version_no = nextVersion;
     entry.op = "ALTER";
@@ -303,14 +408,35 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     entry.postings = postings;
     entry.debit = debit;
     entry.credit = credit;
+    // Restate the head view with the new postings/GST (real ledger_id uuids).
+    c.views.set(voucherID, {
+      voucher_id: voucherID,
+      voucher_no: entry.voucher_no,
+      voucher_date: entry.date,
+      class: classLabel(cls),
+      voucher_type_id: req.voucher_type_id ?? "",
+      party: req.party ?? "",
+      party_ledger_id: req.party_ledger_id ?? "",
+      narration: req.narration ?? "",
+      version_no: nextVersion,
+      op: "ALTER",
+      place_of_supply: req.gst?.place_of_supply_state_code ?? "",
+      reverse_charge: req.gst?.reverse_charge ?? false,
+      taxable_value: gst.taxable,
+      cgst: gst.cgst,
+      sgst: gst.sgst,
+      igst: gst.igst,
+      postings: postingViews,
+      bill_allocations: billViews(req),
+    });
     return {
       voucher_id: voucherID,
       voucher_version_id: id("vv"),
       version_no: nextVersion,
       voucher_no: entry.voucher_no,
-      cgst: "0.0000",
-      sgst: "0.0000",
-      igst: "0.0000",
+      cgst: gst.cgst,
+      sgst: gst.sgst,
+      igst: gst.igst,
     };
   }
 
@@ -334,6 +460,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         id: ledgerID,
         name: req.name,
         group: req.group_name,
+        stateCode: req.state_code,
       });
       return { ledger_id: ledgerID };
     },
@@ -391,6 +518,21 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       return alterVoucher(companyID, "journal", voucherID, req);
     },
 
+    async getVoucher(companyID, voucherID): Promise<VoucherView> {
+      const c = ensure(companyID);
+      const view = c.views.get(voucherID);
+      if (!view) {
+        // Mirror the live GET: unknown id OR a deleted head row -> 404.
+        throw new ApiError(404, "voucher not found", { error: "voucher not found" });
+      }
+      // Return a structural clone so callers can't mutate the store.
+      return {
+        ...view,
+        postings: view.postings.map((p) => ({ ...p })),
+        bill_allocations: view.bill_allocations.map((b) => ({ ...b })),
+      };
+    },
+
     async deleteVoucher(
       companyID,
       voucherID,
@@ -406,8 +548,11 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       const nextVersion = prior.version_no + 1;
       // Tombstone: drop the voucher's accounting effect and default day-book
       // visibility (it leaves the in-memory store entirely), matching the
-      // backend's reverse-prior-then-add-nothing net-zero delete.
+      // backend's reverse-prior-then-add-nothing net-zero delete. The head view
+      // is removed too, so a subsequent getVoucher 404s (rejects) like the live
+      // GET (which excludes is_deleted=true head rows).
       c.vouchers.splice(idx, 1);
+      c.views.delete(voucherID);
       return {
         voucher_id: voucherID,
         voucher_version_id: id("vv"),

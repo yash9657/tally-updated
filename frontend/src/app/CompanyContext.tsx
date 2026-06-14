@@ -20,6 +20,18 @@ import type { CoredClient } from "../api";
 export interface CompanyInfo {
   id: string;
   name: string;
+  /**
+   * The company's principal GST registration state (2-digit code). The `company`
+   * table has NO state_code/gstin column today (only `ledger` does), so the
+   * supplier (home) state cannot be read from the company master — it is sourced
+   * here, as company-level config set at bootstrap, and used as the
+   * supplier_state_code in the GST split (intra- vs inter-state).
+   *
+   * KNOWN GAP: a follow-up must add company.state_code/gstin + CreateCompany
+   * wiring so this is persisted rather than a bootstrap constant. A hardcoded
+   * default would make inter-state detection wrong for any out-of-state company.
+   */
+  homeStateCode?: string;
 }
 
 interface CompanyContextValue {
@@ -37,6 +49,12 @@ const COMPANY_STORAGE_KEY = "tally.companyId";
 const BOOTSTRAP_COMPANY_NAME = "My Company";
 const BOOTSTRAP_FY_START = "2026-04-01";
 const BOOTSTRAP_CURRENCY = "INR";
+/**
+ * Bootstrap supplier (home) GST state code. KNOWN GAP (see CompanyInfo.homeStateCode):
+ * sourced as config until company.state_code lands. "29" = Karnataka, matching the
+ * golden corpora / e2e fixtures.
+ */
+const BOOTSTRAP_HOME_STATE_CODE = "29";
 
 function readPersistedCompanyId(): string | null {
   try {
@@ -85,7 +103,12 @@ export function CompanyProvider({
       if (persisted) {
         // Reuse the known company id (the server holds its data); we only need
         // the id to scope routes. Name is cosmetic until a report loads.
-        if (!cancelled) setCompany({ id: persisted, name: BOOTSTRAP_COMPANY_NAME });
+        if (!cancelled)
+          setCompany({
+            id: persisted,
+            name: BOOTSTRAP_COMPANY_NAME,
+            homeStateCode: BOOTSTRAP_HOME_STATE_CODE,
+          });
         return;
       }
       try {
@@ -96,7 +119,11 @@ export function CompanyProvider({
         });
         persistCompanyId(res.company_id);
         if (!cancelled) {
-          setCompany({ id: res.company_id, name: BOOTSTRAP_COMPANY_NAME });
+          setCompany({
+            id: res.company_id,
+            name: BOOTSTRAP_COMPANY_NAME,
+            homeStateCode: BOOTSTRAP_HOME_STATE_CODE,
+          });
         }
       } catch {
         // Leave company null; gated screens stay behind the "no company" notice
@@ -143,4 +170,16 @@ export function useCompanyID(): string {
     throw new Error("no active company selected");
   }
   return company.id;
+}
+
+/**
+ * The supplier (home) GST state code for the active company. Used as the
+ * supplier_state_code in the server-derived GST split — when it equals the
+ * voucher's place of supply the split is intra-state (CGST+SGST), else IGST.
+ * "" when no company / no home state is configured (split falls back to IGST,
+ * the safe default the server will re-derive). See CompanyInfo.homeStateCode.
+ */
+export function useHomeStateCode(): string {
+  const { company } = useCompanyContext();
+  return company?.homeStateCode ?? "";
 }
