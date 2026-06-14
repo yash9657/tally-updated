@@ -22,6 +22,7 @@ import type {
   CreateVoucherTypeRequest,
   CreateVoucherTypeResponse,
   DayBookQuery,
+  DeleteVoucherResponse,
   DayBookResponse,
   GSTR1Query,
   GSTR1Response,
@@ -37,6 +38,29 @@ import type {
 
 function company(companyID: string): string {
   return `/v1/companies/${encodeURIComponent(companyID)}`;
+}
+
+/**
+ * The backend ledger accepts dr_cr as the canonical single-letter wire values
+ * "D"/"C" only, while the frontend domain model uses the readable "DR"/"CR".
+ * This adapter is the single boundary that translates, so screens and scripts
+ * keep the legible internal convention and the wire stays contract-exact.
+ */
+function wireDrCr(v: string): "D" | "C" {
+  return v.trim().toUpperCase().startsWith("D") ? "D" : "C";
+}
+
+/** Normalize a voucher body's dr_cr fields to the backend wire contract. */
+function wireVoucher(req: VoucherRequest): VoucherRequest {
+  if (!req.postings && !req.bill_allocations) return req;
+  return {
+    ...req,
+    postings: req.postings?.map((p) => ({ ...p, dr_cr: wireDrCr(p.dr_cr) })),
+    bill_allocations: req.bill_allocations?.map((b) => ({
+      ...b,
+      dr_cr: wireDrCr(b.dr_cr),
+    })),
+  };
 }
 
 /** Build a REST CoredClient over an HttpClient (constructed from opts if absent). */
@@ -78,37 +102,81 @@ export function createRestClient(
     postSalesVoucher(companyID, req: VoucherRequest) {
       return http.post<VoucherResponse>(
         `${company(companyID)}/vouchers/sales`,
-        req,
+        wireVoucher(req),
       );
     },
     postPurchaseVoucher(companyID, req: VoucherRequest) {
       return http.post<VoucherResponse>(
         `${company(companyID)}/vouchers/purchase`,
-        req,
+        wireVoucher(req),
       );
     },
     postReceiptVoucher(companyID, req: VoucherRequest) {
       return http.post<VoucherResponse>(
         `${company(companyID)}/vouchers/receipt`,
-        req,
+        wireVoucher(req),
       );
     },
     postPaymentVoucher(companyID, req: VoucherRequest) {
       return http.post<VoucherResponse>(
         `${company(companyID)}/vouchers/payment`,
-        req,
+        wireVoucher(req),
       );
     },
     postContraVoucher(companyID, req: VoucherRequest) {
       return http.post<VoucherResponse>(
         `${company(companyID)}/vouchers/contra`,
-        req,
+        wireVoucher(req),
       );
     },
     postJournalVoucher(companyID, req: VoucherRequest) {
       return http.post<VoucherResponse>(
         `${company(companyID)}/vouchers/journal`,
-        req,
+        wireVoucher(req),
+      );
+    },
+
+    alterSalesVoucher(companyID, voucherID, req: VoucherRequest) {
+      return http.put<VoucherResponse>(
+        `${company(companyID)}/vouchers/sales/${encodeURIComponent(voucherID)}`,
+        wireVoucher(req),
+      );
+    },
+    alterPurchaseVoucher(companyID, voucherID, req: VoucherRequest) {
+      return http.put<VoucherResponse>(
+        `${company(companyID)}/vouchers/purchase/${encodeURIComponent(voucherID)}`,
+        wireVoucher(req),
+      );
+    },
+    alterReceiptVoucher(companyID, voucherID, req: VoucherRequest) {
+      return http.put<VoucherResponse>(
+        `${company(companyID)}/vouchers/receipt/${encodeURIComponent(voucherID)}`,
+        wireVoucher(req),
+      );
+    },
+    alterPaymentVoucher(companyID, voucherID, req: VoucherRequest) {
+      return http.put<VoucherResponse>(
+        `${company(companyID)}/vouchers/payment/${encodeURIComponent(voucherID)}`,
+        wireVoucher(req),
+      );
+    },
+    alterContraVoucher(companyID, voucherID, req: VoucherRequest) {
+      return http.put<VoucherResponse>(
+        `${company(companyID)}/vouchers/contra/${encodeURIComponent(voucherID)}`,
+        wireVoucher(req),
+      );
+    },
+    alterJournalVoucher(companyID, voucherID, req: VoucherRequest) {
+      return http.put<VoucherResponse>(
+        `${company(companyID)}/vouchers/journal/${encodeURIComponent(voucherID)}`,
+        wireVoucher(req),
+      );
+    },
+
+    deleteVoucher(companyID, voucherID, createdBy?: string) {
+      return http.del<DeleteVoucherResponse>(
+        `${company(companyID)}/vouchers/${encodeURIComponent(voucherID)}`,
+        createdBy ? { created_by: createdBy } : undefined,
       );
     },
 

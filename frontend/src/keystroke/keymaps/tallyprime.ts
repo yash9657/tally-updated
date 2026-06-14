@@ -23,6 +23,7 @@ const RAW_BINDINGS: Record<string, KeymapAction> = {
   Enter: { kind: "enter" },
   Esc: { kind: "escape" },
   "Ctrl+A": { kind: "accept" }, // Accept / Save screen
+  "Alt+D": { kind: "delete" }, // Delete the loaded voucher (alteration mode)
   "Alt+G": { kind: "goto" }, // Go To (overlay, keeps prior screen)
   "Ctrl+G": { kind: "switchTo" }, // Switch To (replaces the stack)
   "Ctrl+H": { kind: "changeMode" }, // Change Mode picker (in vouchers)

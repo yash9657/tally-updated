@@ -69,8 +69,13 @@ func (s *Service) DayBook(ctx context.Context, companyID uuid.UUID, from, to str
 			        COALESCE(vv.payload->>'narration', ''),
 			        COALESCE(vv.payload->>'party', '')
 			   FROM voucher_version vv
+			   JOIN voucher_head vh
+			     ON vh.company_id = vv.company_id
+			    AND vh.voucher_id = vv.voucher_id
+			    AND vh.current_version_id = vv.id
 			   LEFT JOIN voucher_type vt ON vt.id = vv.voucher_type_id
-			  WHERE ($1 = '' OR vv.voucher_date >= $1::date)
+			  WHERE vh.is_deleted = false
+			    AND ($1 = '' OR vv.voucher_date >= $1::date)
 			    AND ($2 = '' OR vv.voucher_date <= $2::date)
 			  ORDER BY vv.voucher_date NULLS LAST, vv.created_at, vv.version_no`,
 			from, to)
@@ -173,8 +178,13 @@ func (s *Service) LedgerVouchers(ctx context.Context, companyID, ledgerID uuid.U
 			        COALESCE(vv.payload->>'narration', ''),
 			        COALESCE(vv.payload->>'party', '')
 			   FROM voucher_version vv
+			   JOIN voucher_head vh
+			     ON vh.company_id = vv.company_id
+			    AND vh.voucher_id = vv.voucher_id
+			    AND vh.current_version_id = vv.id
 			   LEFT JOIN voucher_type vt ON vt.id = vv.voucher_type_id
-			  WHERE EXISTS (
+			  WHERE vh.is_deleted = false
+			    AND EXISTS (
 			            SELECT 1 FROM posting p
 			             WHERE p.voucher_version_id = vv.id AND p.ledger_id = $1)
 			    AND ($2 = '' OR vv.voucher_date >= $2::date)

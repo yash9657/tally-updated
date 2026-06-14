@@ -324,9 +324,14 @@ func (s *Service) Generate(ctx context.Context, from, to string, opts Options) (
 			        vv.is_reverse_charge, vv.taxable_value, vv.cgst, vv.sgst, vv.igst,
 			        pl.gstin, pl.registration_type::text
 			   FROM voucher_version vv
+			   JOIN voucher_head    vh
+			     ON vh.company_id = vv.company_id
+			    AND vh.voucher_id = vv.voucher_id
+			    AND vh.current_version_id = vv.id
 			   JOIN voucher_type    vt ON vt.id = vv.voucher_type_id
 			   LEFT JOIN ledger     pl ON pl.id = vv.party_ledger_id
-			  WHERE vt.parent_class = 'SALES'
+			  WHERE vh.is_deleted = false
+			    AND vt.parent_class = 'SALES'
 			    AND vv.voucher_date BETWEEN $1 AND $2
 			    AND vv.taxable_value IS NOT NULL
 			  ORDER BY vv.voucher_date, vv.voucher_no, vv.version_no`,
@@ -394,8 +399,13 @@ func (s *Service) PostingTaxTotals(ctx context.Context, from, to string, opts Op
 			`SELECT COALESCE(SUM(p.amount), 0)
 			   FROM posting p
 			   JOIN voucher_version vv ON vv.id = p.voucher_version_id
+			   JOIN voucher_head    vh
+			     ON vh.company_id = vv.company_id
+			    AND vh.voucher_id = vv.voucher_id
+			    AND vh.current_version_id = vv.id
 			   JOIN voucher_type    vt ON vt.id = vv.voucher_type_id
 			  WHERE p.ledger_id = $1
+			    AND vh.is_deleted = false
 			    AND vt.parent_class = 'SALES'
 			    AND vv.voucher_date BETWEEN $2 AND $3`,
 			ledgerID, from, to).Scan(&total)

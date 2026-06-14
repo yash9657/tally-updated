@@ -2,6 +2,7 @@ package ledger_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 
@@ -250,12 +251,128 @@ func TestAlterCreatesNewVersionWithHashChain(t *testing.T) {
 		t.Fatalf("verify chain: %v", err)
 	}
 
-	// Both versions posted, so the debtor balance reflects 500 + 750 = 1250.
+	// post() nets out the prior version, so the debtor balance reflects only the
+	// CURRENT version (750), not the sum 500 + 750.
 	tb, err := rep.TrialBalance(ctx, companyID)
 	if err != nil {
 		t.Fatalf("trial balance: %v", err)
 	}
 	if !tb.IsBalanced() {
 		t.Fatalf("trial balance not balanced after alter")
+	}
+	if !tb.TotalDebit.Equal(decimal.RequireFromString("750.0000")) {
+		t.Fatalf("alter must restate, not accumulate: total debit = %s, want 750", tb.TotalDebit)
+	}
+}
+
+// TestDeleteVoucherNetsBalancesToZero proves the highest-risk correctness item:
+// a DELETE tombstone reverses the prior current version out of ledger_balance
+// and adds NOTHING, so the voucher's net contribution becomes exactly zero and
+// voucher_head.is_deleted flips to true (while the versions remain in the log).
+func TestDeleteVoucherNetsBalancesToZero(t *testing.T) {
+	if os.Getenv("CORED_SKIP_DB") != "" {
+		t.Skip("db tests skipped")
+	}
+	pool, ctx, companyID, ids := setup(t)
+
+	vtID, _ := ids.VoucherTypeID(ctx, "Sales")
+	debtor, _ := ids.CreateLedger(ctx, "Gamma Inc", "Sundry Debtors")
+	sales, _ := ids.CreateLedger(ctx, "Service Sales", "Sales Accounts")
+
+	led := ledger.NewService(pool)
+	rep := reporting.NewService(pool)
+
+	a := decimal.RequireFromString("1000.0000")
+	v1, err := led.PostSalesVoucher(ctx, ledger.SalesVoucherInput{
+		VoucherTypeID: vtID, VoucherNo: "DEL-1", VoucherDate: "2025-05-12",
+		Narration: "Gamma sale", Party: "Gamma Inc", CreatedBy: "tester",
+		Postings: []ledger.PostingInput{
+			{LedgerID: debtor, DrCr: ledger.Debit, Amount: a},
+			{LedgerID: sales, DrCr: ledger.Credit, Amount: a},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	del, err := led.DeleteVoucher(ctx, v1.VoucherID, "deleter")
+	if err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if del.VoucherID != v1.VoucherID {
+		t.Fatal("delete must reuse the logical voucher id")
+	}
+	if del.VersionNo != 2 {
+		t.Fatalf("delete should produce version 2, got %d", del.VersionNo)
+	}
+
+	// Both ledger balances must net to zero after the delete.
+	tb, err := rep.TrialBalance(ctx, companyID)
+	if err != nil {
+		t.Fatalf("trial balance: %v", err)
+	}
+	if !tb.TotalDebit.Equal(decimal.Zero) || !tb.TotalCredit.Equal(decimal.Zero) {
+		t.Fatalf("delete must net balances to zero: dr=%s cr=%s", tb.TotalDebit, tb.TotalCredit)
+	}
+
+	// voucher_head.is_deleted must be true and the version log must still hold
+	// both versions (immutable audit trail), the tombstone carrying no postings.
+	err = pool.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		var isDeleted bool
+		if err := tx.QueryRow(ctx,
+			`SELECT is_deleted FROM voucher_head WHERE voucher_id = $1`, v1.VoucherID).Scan(&isDeleted); err != nil {
+			return err
+		}
+		if !isDeleted {
+			t.Fatal("voucher_head.is_deleted must be true after delete")
+		}
+		var versions int
+		if err := tx.QueryRow(ctx,
+			`SELECT count(*) FROM voucher_version WHERE voucher_id = $1`, v1.VoucherID).Scan(&versions); err != nil {
+			return err
+		}
+		if versions != 2 {
+			t.Fatalf("expected 2 versions to coexist after delete, got %d", versions)
+		}
+		var tombPostings int
+		if err := tx.QueryRow(ctx,
+			`SELECT count(*) FROM posting WHERE voucher_version_id = $1`, del.VoucherVersionID).Scan(&tombPostings); err != nil {
+			return err
+		}
+		if tombPostings != 0 {
+			t.Fatalf("DELETE tombstone must carry zero postings, got %d", tombPostings)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("verify delete state: %v", err)
+	}
+}
+
+// TestDeleteUnknownVoucherErrors proves the phantom-create guard: deleting an
+// id with no head row returns ErrVoucherNotFound rather than minting version 1.
+func TestDeleteUnknownVoucherErrors(t *testing.T) {
+	if os.Getenv("CORED_SKIP_DB") != "" {
+		t.Skip("db tests skipped")
+	}
+	pool, ctx, _, _ := setup(t)
+	led := ledger.NewService(pool)
+
+	unknown, _ := uuid.NewV7()
+	if _, err := led.DeleteVoucher(ctx, unknown, "deleter"); !errors.Is(err, ledger.ErrVoucherNotFound) {
+		t.Fatalf("expected ErrVoucherNotFound, got %v", err)
+	}
+
+	// AlterVoucher on an unknown id must also refuse to phantom-create. The
+	// postings reuse the unknown id as a stand-in ledger; the not-found guard
+	// fires inside the transaction before any posting is inserted.
+	if _, err := led.AlterVoucher(ctx, unknown, ledger.VoucherInput{
+		Class: ledger.Sales, VoucherNo: "X", VoucherDate: "2025-05-12", CreatedBy: "t",
+		Postings: []ledger.PostingInput{
+			{LedgerID: unknown, DrCr: ledger.Debit, Amount: decimal.RequireFromString("1")},
+			{LedgerID: unknown, DrCr: ledger.Credit, Amount: decimal.RequireFromString("1")},
+		},
+	}); !errors.Is(err, ledger.ErrVoucherNotFound) {
+		t.Fatalf("alter unknown: expected ErrVoucherNotFound, got %v", err)
 	}
 }

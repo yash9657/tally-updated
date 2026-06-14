@@ -172,6 +172,175 @@ func TestPostSaleEndToEnd(t *testing.T) {
 	}
 }
 
+// newCompany creates a unique seeded company over HTTP and returns its id and
+// the base path. It fails the test on any non-201.
+func newCompany(t *testing.T, srv *server.Server) (string, string) {
+	t.Helper()
+	companyID, err := uuid.NewV7()
+	if err != nil {
+		t.Fatalf("new company id: %v", err)
+	}
+	base := "/v1/companies/" + companyID.String()
+	rec, body := do(t, srv, http.MethodPost, "/v1/companies", map[string]any{
+		"id":            companyID.String(),
+		"name":          "Edit Co " + companyID.String()[:8],
+		"fy_start_date": "2025-04-01",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create company status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
+	}
+	if body["company_id"] != companyID.String() {
+		t.Fatalf("create company returned %v, want %s", body["company_id"], companyID)
+	}
+	return companyID.String(), base
+}
+
+// TestAlterVoucherRestatesTrialBalance proves the 400->650->650 invariant over
+// HTTP: an ALTER restates the voucher rather than accumulating versions, so the
+// trial balance reflects the NEW amount (650), not the sum (1050).
+func TestAlterVoucherRestatesTrialBalance(t *testing.T) {
+	srv := newServer(t)
+	_, base := newCompany(t, srv)
+
+	debtorID := createLedger(t, srv, base, "Acme Corp", "Sundry Debtors")
+	salesID := createLedger(t, srv, base, "Domestic Sales", "Sales Accounts")
+
+	// Post sales 400.
+	rec, body := do(t, srv, http.MethodPost, base+"/vouchers/sales", map[string]any{
+		"voucher_no": "INV-1", "voucher_date": "2025-04-10", "party": "Acme Corp", "created_by": "smoke",
+		"postings": []map[string]any{
+			{"ledger_id": debtorID, "dr_cr": "D", "amount": "400.0000"},
+			{"ledger_id": salesID, "dr_cr": "C", "amount": "400.0000"},
+		},
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("post sale status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
+	}
+	voucherID, _ := body["voucher_id"].(string)
+	if voucherID == "" {
+		t.Fatalf("post sale returned no voucher_id (body %s)", rec.Body.String())
+	}
+
+	// Baseline trial balance: 400.
+	rec, body = do(t, srv, http.MethodGet, base+"/trial-balance", nil)
+	if rec.Code != http.StatusOK || body["total_debit"] != "400.0000" {
+		t.Fatalf("baseline trial balance total_debit = %v, want 400.0000 (body %s)", body["total_debit"], rec.Body.String())
+	}
+
+	// Alter to 650, resending the SAME voucher_no/date (numbering preservation).
+	rec, body = do(t, srv, http.MethodPut, base+"/vouchers/sales/"+voucherID, map[string]any{
+		"voucher_no": "INV-1", "voucher_date": "2025-04-10", "party": "Acme Corp", "created_by": "smoke",
+		"postings": []map[string]any{
+			{"ledger_id": debtorID, "dr_cr": "D", "amount": "650.0000"},
+			{"ledger_id": salesID, "dr_cr": "C", "amount": "650.0000"},
+		},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("alter status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if body["voucher_id"] != voucherID {
+		t.Fatalf("alter must preserve voucher_id: got %v, want %s", body["voucher_id"], voucherID)
+	}
+	if vn, ok := body["version_no"].(float64); !ok || vn != 2 {
+		t.Fatalf("alter version_no = %v, want 2", body["version_no"])
+	}
+
+	// Trial balance must now read 650, NOT 1050.
+	rec, body = do(t, srv, http.MethodGet, base+"/trial-balance", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("trial balance status = %d, want 200", rec.Code)
+	}
+	if body["balanced"] != true {
+		t.Fatalf("trial balance not balanced after alter (body %s)", rec.Body.String())
+	}
+	if got := body["total_debit"]; got != "650.0000" {
+		t.Fatalf("trial balance total_debit = %v, want 650.0000 (NOT 1050)", got)
+	}
+}
+
+// TestDeleteVoucherDropsFromReports proves a DELETE removes the voucher from
+// both the trial balance (net to zero) and the default Day Book.
+func TestDeleteVoucherDropsFromReports(t *testing.T) {
+	srv := newServer(t)
+	_, base := newCompany(t, srv)
+
+	debtorID := createLedger(t, srv, base, "Acme Corp", "Sundry Debtors")
+	salesID := createLedger(t, srv, base, "Domestic Sales", "Sales Accounts")
+
+	rec, body := do(t, srv, http.MethodPost, base+"/vouchers/sales", map[string]any{
+		"voucher_no": "INV-1", "voucher_date": "2025-04-10", "party": "Acme Corp", "created_by": "smoke",
+		"postings": []map[string]any{
+			{"ledger_id": debtorID, "dr_cr": "D", "amount": "400.0000"},
+			{"ledger_id": salesID, "dr_cr": "C", "amount": "400.0000"},
+		},
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("post sale status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
+	}
+	voucherID, _ := body["voucher_id"].(string)
+
+	rec, body = do(t, srv, http.MethodDelete, base+"/vouchers/"+voucherID+"?created_by=deleter", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	if body["op"] != "DELETE" {
+		t.Fatalf("delete op = %v, want DELETE", body["op"])
+	}
+	if body["voucher_id"] != voucherID {
+		t.Fatalf("delete must preserve voucher_id: got %v, want %s", body["voucher_id"], voucherID)
+	}
+
+	rec, body = do(t, srv, http.MethodGet, base+"/trial-balance", nil)
+	if rec.Code != http.StatusOK || body["total_debit"] != "0.0000" {
+		t.Fatalf("trial balance total_debit after delete = %v, want 0.0000 (body %s)", body["total_debit"], rec.Body.String())
+	}
+
+	rec, body = do(t, srv, http.MethodGet, base+"/day-book", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("day book status = %d, want 200", rec.Code)
+	}
+	entries, _ := body["entries"].([]any)
+	for _, raw := range entries {
+		e, _ := raw.(map[string]any)
+		if e["voucher_id"] == voucherID {
+			t.Fatalf("deleted voucher must be absent from the day book, but it appeared: %v", e)
+		}
+	}
+}
+
+// TestAlterUnknownVoucher404 proves the phantom-create guard on the alter path.
+func TestAlterUnknownVoucher404(t *testing.T) {
+	srv := newServer(t)
+	_, base := newCompany(t, srv)
+
+	debtorID := createLedger(t, srv, base, "Acme Corp", "Sundry Debtors")
+	salesID := createLedger(t, srv, base, "Domestic Sales", "Sales Accounts")
+
+	unknown, _ := uuid.NewV7()
+	rec, _ := do(t, srv, http.MethodPut, base+"/vouchers/sales/"+unknown.String(), map[string]any{
+		"voucher_no": "INV-X", "voucher_date": "2025-04-10", "created_by": "smoke",
+		"postings": []map[string]any{
+			{"ledger_id": debtorID, "dr_cr": "D", "amount": "100.0000"},
+			{"ledger_id": salesID, "dr_cr": "C", "amount": "100.0000"},
+		},
+	})
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("alter unknown voucher status = %d, want 404 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestDeleteUnknownVoucher404 proves the phantom-create guard on the delete path.
+func TestDeleteUnknownVoucher404(t *testing.T) {
+	srv := newServer(t)
+	_, base := newCompany(t, srv)
+
+	unknown, _ := uuid.NewV7()
+	rec, _ := do(t, srv, http.MethodDelete, base+"/vouchers/"+unknown.String(), nil)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("delete unknown voucher status = %d, want 404 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
 // createLedger POSTs a ledger and returns its id, failing the test on a non-201.
 func createLedger(t *testing.T, srv *server.Server, base, name, group string) string {
 	t.Helper()

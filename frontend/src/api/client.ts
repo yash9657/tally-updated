@@ -25,6 +25,7 @@ import type {
   CreateVoucherTypeRequest,
   CreateVoucherTypeResponse,
   DayBookQuery,
+  DeleteVoucherResponse,
   DayBookResponse,
   GSTR1Query,
   GSTR1Response,
@@ -89,6 +90,48 @@ export interface CoredClient {
     companyID: string,
     req: VoucherRequest,
   ): Promise<VoucherResponse>;
+
+  // Voucher alteration (PUT /vouchers/{class}/{voucherID}) — a FULL restatement.
+  // The class is fixed by the path (one method per class, mirroring the posts);
+  // the logical voucher_id is preserved (no new id is minted) and the client
+  // resends the loaded voucher_no/voucher_date so numbering/date are unchanged.
+  alterSalesVoucher(
+    companyID: string,
+    voucherID: string,
+    req: VoucherRequest,
+  ): Promise<VoucherResponse>;
+  alterPurchaseVoucher(
+    companyID: string,
+    voucherID: string,
+    req: VoucherRequest,
+  ): Promise<VoucherResponse>;
+  alterReceiptVoucher(
+    companyID: string,
+    voucherID: string,
+    req: VoucherRequest,
+  ): Promise<VoucherResponse>;
+  alterPaymentVoucher(
+    companyID: string,
+    voucherID: string,
+    req: VoucherRequest,
+  ): Promise<VoucherResponse>;
+  alterContraVoucher(
+    companyID: string,
+    voucherID: string,
+    req: VoucherRequest,
+  ): Promise<VoucherResponse>;
+  alterJournalVoucher(
+    companyID: string,
+    voucherID: string,
+    req: VoucherRequest,
+  ): Promise<VoucherResponse>;
+
+  // Voucher deletion (DELETE /vouchers/{voucherID}) — class-agnostic tombstone.
+  deleteVoucher(
+    companyID: string,
+    voucherID: string,
+    createdBy?: string,
+  ): Promise<DeleteVoucherResponse>;
 
   // Reports
   getTrialBalance(companyID: string): Promise<TrialBalanceResponse>;

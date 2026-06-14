@@ -24,7 +24,9 @@ export type VoucherClass =
   | "journal";
 
 /** Debit / Credit marker on a posting or bill allocation. */
-export type DrCr = "DR" | "CR" | "Dr" | "Cr";
+// "D"/"C" are the backend's canonical wire values; "DR"/"CR" are the legible
+// frontend domain form. The REST adapter normalizes the latter to the former.
+export type DrCr = "D" | "C" | "DR" | "CR" | "Dr" | "Cr";
 
 /** Bill reference lifecycle type for bill-by-bill allocation. */
 export type RefType = "NEW" | "AGAINST" | "ADVANCE" | "ON_ACCOUNT";
@@ -170,6 +172,19 @@ export interface VoucherResponse {
   cgst: Money;
   sgst: Money;
   igst: Money;
+}
+
+/**
+ * Response of the class-agnostic DELETE /vouchers/{voucherID} tombstone path.
+ * The backend appends an OpDelete version (the voucher is removed from reports
+ * and the day book but stays in the audit log); the response returns the new
+ * tombstone version so the client can confirm and update its edit-log view.
+ */
+export interface DeleteVoucherResponse {
+  voucher_id: string;
+  voucher_version_id: string;
+  version_no: number;
+  op: string;
 }
 
 // ---------------------------------------------------------------------------

@@ -82,6 +82,7 @@ export type KeymapAction =
   | { kind: "enter" }
   | { kind: "escape" }
   | { kind: "accept" } // Ctrl+A
+  | { kind: "delete" } // Alt+D — delete the loaded voucher (alteration mode)
   | { kind: "goto" } // Alt+G — overlay, preserves prior screen
   | { kind: "switchTo" } // Ctrl+G — replaces the stack
   | { kind: "changeMode" } // Ctrl+H — Change Mode picker (vouchers)

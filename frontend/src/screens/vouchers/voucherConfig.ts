@@ -23,6 +23,20 @@ export type PostFn = (
   req: VoucherRequest,
 ) => Promise<VoucherResponse>;
 
+/**
+ * Which alteration method on the client a voucher type maps to. Mirrors
+ * {@link PostFn} but carries the existing logical voucher id — the alter path
+ * NEVER mints a new id and resends the loaded voucher_no/voucher_date unchanged
+ * (the numbering-preservation rule), so the screen passes the full restated
+ * body it loaded plus the original id.
+ */
+export type AlterFn = (
+  client: CoredClient,
+  companyID: string,
+  voucherID: string,
+  req: VoucherRequest,
+) => Promise<VoucherResponse>;
+
 export interface VoucherConfig {
   readonly type: VoucherType;
   /** Voucher title shown in the form header (matches AppShell chrome casing). */
@@ -39,6 +53,12 @@ export interface VoucherConfig {
   readonly hint: string;
   /** The CoredClient method this voucher type posts through on Ctrl+A. */
   readonly post: PostFn;
+  /**
+   * The CoredClient method this voucher type ALTERS through on Ctrl+A when the
+   * frame is in alteration mode (snapshot.mode === "alter"). The screen dispatches
+   * to this instead of {@link post} when editing a loaded voucher.
+   */
+  readonly alter: AlterFn;
 }
 
 export const VOUCHER_CONFIGS: Readonly<Record<VoucherType, VoucherConfig>> = {
@@ -51,6 +71,7 @@ export const VOUCHER_CONFIGS: Readonly<Record<VoucherType, VoucherConfig>> = {
     showGst: false,
     hint: "Cash ↔ Bank / Bank ↔ Bank transfers only.",
     post: (c, id, req) => c.postContraVoucher(id, req),
+    alter: (c, id, vid, req) => c.alterContraVoucher(id, vid, req),
   },
   payment: {
     type: "payment",
@@ -61,6 +82,7 @@ export const VOUCHER_CONFIGS: Readonly<Record<VoucherType, VoucherConfig>> = {
     showGst: false,
     hint: "Money out. Credit the bank/cash, debit the expense or party.",
     post: (c, id, req) => c.postPaymentVoucher(id, req),
+    alter: (c, id, vid, req) => c.alterPaymentVoucher(id, vid, req),
   },
   receipt: {
     type: "receipt",
@@ -71,6 +93,7 @@ export const VOUCHER_CONFIGS: Readonly<Record<VoucherType, VoucherConfig>> = {
     showGst: false,
     hint: "Money in. Debit the bank/cash, credit the party or income.",
     post: (c, id, req) => c.postReceiptVoucher(id, req),
+    alter: (c, id, vid, req) => c.alterReceiptVoucher(id, vid, req),
   },
   journal: {
     type: "journal",
@@ -81,6 +104,7 @@ export const VOUCHER_CONFIGS: Readonly<Record<VoucherType, VoucherConfig>> = {
     showGst: false,
     hint: "Adjustments / non-cash entries. Debits must equal credits.",
     post: (c, id, req) => c.postJournalVoucher(id, req),
+    alter: (c, id, vid, req) => c.alterJournalVoucher(id, vid, req),
   },
   sales: {
     type: "sales",
@@ -91,6 +115,7 @@ export const VOUCHER_CONFIGS: Readonly<Record<VoucherType, VoucherConfig>> = {
     showGst: true,
     hint: "Sales invoice. Party debited; sales + GST credited.",
     post: (c, id, req) => c.postSalesVoucher(id, req),
+    alter: (c, id, vid, req) => c.alterSalesVoucher(id, vid, req),
   },
   purchase: {
     type: "purchase",
@@ -101,6 +126,7 @@ export const VOUCHER_CONFIGS: Readonly<Record<VoucherType, VoucherConfig>> = {
     showGst: true,
     hint: "Purchase invoice. Party credited; purchase + GST debited.",
     post: (c, id, req) => c.postPurchaseVoucher(id, req),
+    alter: (c, id, vid, req) => c.alterPurchaseVoucher(id, vid, req),
   },
 };
 

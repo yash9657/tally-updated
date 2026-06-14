@@ -333,6 +333,25 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
       return {};
     }
 
+    case "delete": {
+      // Alt+D deletes the loaded voucher. It is only meaningful in an
+      // alteration-mode voucher frame (reached by drilling from the Day Book /
+      // a report). The pure machine just pops back to the originating screen —
+      // exactly like Esc — once the voucher is gone; the side-effecting
+      // deleteVoucher() client call lives in the screen's onDelete handler,
+      // keyed off snapshot.mode === "alter". A create-mode voucher (nothing
+      // persisted yet) has nothing to delete, so the key is a no-op.
+      if (
+        active.screen === "voucher" &&
+        active.voucherMode === "alter" &&
+        stack.length > 1
+      ) {
+        stack.pop();
+        return { stack };
+      }
+      return {};
+    }
+
     case "createMaster": {
       // Alt+C pushes an inline master-create screen that PRESERVES its parent
       // (the voucher) and returns to it on Ctrl+A (accept) or Esc (cancel).

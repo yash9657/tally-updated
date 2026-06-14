@@ -58,6 +58,10 @@ function buildQuery(params?: QueryParams): string {
 export interface HttpClient {
   get<T>(path: string, query?: QueryParams): Promise<T>;
   post<T>(path: string, body?: unknown, query?: QueryParams): Promise<T>;
+  /** PUT a JSON body (e.g. a full voucher restatement on alter). Mirrors post. */
+  put<T>(path: string, body?: unknown, query?: QueryParams): Promise<T>;
+  /** DELETE with no body (e.g. a voucher tombstone). Mirrors get. */
+  del<T>(path: string, query?: QueryParams): Promise<T>;
   /** POST a raw body (e.g. a Tally-XML string) with a caller-chosen content type. */
   postRaw<T>(
     path: string,
@@ -126,6 +130,20 @@ export function createHttpClient(opts: HttpClientOptions = {}): HttpClient {
         },
         query,
       );
+    },
+    put<T>(path: string, body?: unknown, query?: QueryParams) {
+      return request<T>(
+        "PUT",
+        path,
+        {
+          body: body === undefined ? undefined : JSON.stringify(body),
+          contentType: "application/json",
+        },
+        query,
+      );
+    },
+    del<T>(path: string, query?: QueryParams) {
+      return request<T>("DELETE", path, {}, query);
     },
     postRaw<T>(
       path: string,

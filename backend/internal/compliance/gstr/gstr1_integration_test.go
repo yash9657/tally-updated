@@ -345,3 +345,103 @@ func TestGenerate_NoCompanyGuard(t *testing.T) {
 		t.Fatalf("want ErrNoCompany, got %v", err)
 	}
 }
+
+// buildIntraSale constructs a balanced intra-state B2B Sales VoucherInput at
+// 18% (CGST 9% + SGST 9%) for the given taxable value. Used to post then alter
+// the SAME logical voucher so the GSTR-1 current-version filter can be proven.
+func buildIntraSale(vtID, party, sales, cgst, sgst, igst uuid.UUID, no, date, taxable string) ledger.VoucherInput {
+	tx := dec(taxable)
+	half := tx.Mul(dec("9")).Div(dec("100")).Round(4)
+	total := tx.Add(half).Add(half)
+	return ledger.VoucherInput{
+		Class:         ledger.Sales,
+		VoucherTypeID: vtID,
+		PartyLedgerID: party,
+		VoucherNo:     no,
+		VoucherDate:   date,
+		Party:         "party",
+		CreatedBy:     "tester",
+		Postings: []ledger.PostingInput{
+			{LedgerID: party, DrCr: ledger.Debit, Amount: total},
+			{LedgerID: sales, DrCr: ledger.Credit, Amount: tx},
+			{LedgerID: cgst, DrCr: ledger.Credit, Amount: half},
+			{LedgerID: sgst, DrCr: ledger.Credit, Amount: half},
+		},
+		GST: &ledger.GSTParams{
+			SupplierStateCode:      supplierState,
+			PlaceOfSupplyStateCode: "29",
+			Lines:                  []compliance.Line{{TaxableValue: tx, GSTRatePct: dec("18"), HSN: "8471"}},
+			CGSTLedgerID:           cgst,
+			SGSTLedgerID:           sgst,
+			IGSTLedgerID:           igst,
+		},
+	}
+}
+
+// TestGSTR1_ReflectsAlterAndDelete proves GSTR-1 reads only the CURRENT,
+// non-deleted version of each voucher. Before the voucher_head join + is_deleted
+// filter, altering a sale's taxable value made the invoice appear TWICE (both
+// versions carry taxable_value) and a delete left the original visible —
+// over-reporting turnover and output tax to the CA. This is the compliance
+// analogue of the Day Book current-version fix.
+func TestGSTR1_ReflectsAlterAndDelete(t *testing.T) {
+	pool, ctx, _ := setup(t)
+	ms := masters.NewService(pool)
+	led := ledger.NewService(pool)
+
+	vtID, err := ms.VoucherTypeID(ctx, "Sales")
+	if err != nil {
+		t.Fatalf("voucher type: %v", err)
+	}
+	cgst, _ := ms.EnsureLedger(ctx, "Output CGST", "Duties & Taxes", "tester")
+	sgst, _ := ms.EnsureLedger(ctx, "Output SGST", "Duties & Taxes", "tester")
+	igst, _ := ms.EnsureLedger(ctx, "Output IGST", "Duties & Taxes", "tester")
+	salesLed, _ := ms.EnsureLedger(ctx, "Domestic Sales", "Sales Accounts", "tester")
+	party, err := ms.CreateLedger(ctx, masters.Ledger{
+		Name: "Acme Pvt Ltd", GroupName: "Sundry Debtors",
+		GSTIN: "29ABCDE1234F1Z5", StateCode: "29", RegistrationType: masters.GSTRegular,
+	}, "tester")
+	if err != nil {
+		t.Fatalf("party: %v", err)
+	}
+
+	gen := gstr.NewService(pool)
+	opts := gstr.Options{GSTIN: "29ZZZZZ0000Z1Z5", CGSTLedgerID: cgst, SGSTLedgerID: sgst, IGSTLedgerID: igst}
+
+	// 1. Post a B2B intra sale of 10000 (CGST 900 / SGST 900, invoice 11800).
+	res, err := led.PostVoucher(ctx, buildIntraSale(vtID, party, salesLed, cgst, sgst, igst, "S-1", "2025-05-05", "10000.0000"))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+
+	// 2. ALTER the SAME voucher to 20000 (CGST 1800 / SGST 1800), resending S-1.
+	if _, err := led.AlterVoucher(ctx, res.VoucherID, buildIntraSale(vtID, party, salesLed, cgst, sgst, igst, "S-1", "2025-05-05", "20000.0000")); err != nil {
+		t.Fatalf("alter: %v", err)
+	}
+
+	g, err := gen.Generate(ctx, "2025-05-01", "2025-05-31", opts)
+	if err != nil {
+		t.Fatalf("generate after alter: %v", err)
+	}
+	// Exactly ONE B2B invoice, reflecting the EDITED 20000 — not two versions,
+	// and not the 30000 sum of both.
+	if len(g.B2B) != 1 || len(g.B2B[0].Inv) != 1 {
+		t.Fatalf("after alter: want exactly 1 B2B invoice, got %d parties", len(g.B2B))
+	}
+	inv := g.B2B[0].Inv[0]
+	if !inv.Val.Equal(dec("23600")) { // 20000 + 1800 + 1800
+		t.Fatalf("after alter: invoice value want 23600 (edited), got %s (double-count would be 35400)", inv.Val)
+	}
+
+	// 3. DELETE the voucher; it must vanish from GSTR-1 entirely.
+	if _, err := led.DeleteVoucher(ctx, res.VoucherID, "tester"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	g, err = gen.Generate(ctx, "2025-05-01", "2025-05-31", opts)
+	if err != nil {
+		t.Fatalf("generate after delete: %v", err)
+	}
+	if len(g.B2B) != 0 {
+		t.Fatalf("after delete: want 0 B2B invoices, got %d parties", len(g.B2B))
+	}
+}

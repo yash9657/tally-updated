@@ -26,7 +26,9 @@ import type {
   CreateVoucherTypeRequest,
   CreateVoucherTypeResponse,
   DayBookEntry,
+  DayBookPosting,
   DayBookQuery,
+  DeleteVoucherResponse,
   DayBookResponse,
   GSTR1Query,
   GSTR1Response,
@@ -97,17 +99,18 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     companies.set(demoID, demo);
   }
 
-  function recordVoucher(
-    companyID: string,
-    cls: VoucherClass,
-    req: VoucherRequest,
-  ): VoucherResponse {
-    const c = ensure(companyID);
+  /** Map a request's postings into day-book postings + Dr/Cr totals. */
+  function summarize(c: MockCompany, req: VoucherRequest): {
+    postings: DayBookPosting[];
+    debit: Money;
+    credit: Money;
+  } {
     let debit: Money = "0.0000";
     let credit: Money = "0.0000";
     const postings = (req.postings ?? []).map((p) => {
-      const dc = p.dr_cr.toUpperCase();
-      if (dc === "DR") debit = addMoney(debit, p.amount);
+      // Accept both the wire ("D"/"C") and domain ("DR"/"CR") conventions.
+      const dc = p.dr_cr.trim().toUpperCase();
+      if (dc.startsWith("D")) debit = addMoney(debit, p.amount);
       else credit = addMoney(credit, p.amount);
       const ledger = c.ledgers.find((l) => l.id === p.ledger_id);
       return {
@@ -116,6 +119,16 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         amount: parseFloat(p.amount || "0").toFixed(4),
       };
     });
+    return { postings, debit, credit };
+  }
+
+  function recordVoucher(
+    companyID: string,
+    cls: VoucherClass,
+    req: VoucherRequest,
+  ): VoucherResponse {
+    const c = ensure(companyID);
+    const { postings, debit, credit } = summarize(c, req);
     const voucherID = id("voucher");
     const entry: DayBookEntry = {
       voucher_id: voucherID,
@@ -136,6 +149,46 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       voucher_id: voucherID,
       voucher_version_id: id("vv"),
       version_no: 1,
+      cgst: "0.0000",
+      sgst: "0.0000",
+      igst: "0.0000",
+    };
+  }
+
+  /**
+   * Alter = full restatement. Find the live entry by voucher_id and REPLACE its
+   * postings/amounts/narration in place (never accumulate), bump version_no, and
+   * stamp op=ALTER so the derived trial balance / day book reflect the NEW
+   * amount. The voucher_id is preserved (identity is stable across versions).
+   */
+  function alterVoucher(
+    companyID: string,
+    cls: VoucherClass,
+    voucherID: string,
+    req: VoucherRequest,
+  ): VoucherResponse {
+    const c = ensure(companyID);
+    const entry = c.vouchers.find((v) => v.voucher_id === voucherID);
+    if (!entry) {
+      throw new Error("voucher not found");
+    }
+    const { postings, debit, credit } = summarize(c, req);
+    const nextVersion = entry.version_no + 1;
+    entry.version_no = nextVersion;
+    entry.op = "ALTER";
+    entry.class = cls.toUpperCase();
+    entry.voucher_type = cls;
+    if (req.voucher_no !== undefined) entry.voucher_no = req.voucher_no;
+    if (req.voucher_date !== undefined) entry.date = req.voucher_date;
+    entry.narration = req.narration ?? "";
+    entry.party = req.party ?? "";
+    entry.postings = postings;
+    entry.debit = debit;
+    entry.credit = credit;
+    return {
+      voucher_id: voucherID,
+      voucher_version_id: id("vv"),
+      version_no: nextVersion,
       cgst: "0.0000",
       sgst: "0.0000",
       igst: "0.0000",
@@ -200,6 +253,50 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       return recordVoucher(companyID, "journal", req);
     },
 
+    async alterSalesVoucher(companyID, voucherID, req) {
+      return alterVoucher(companyID, "sales", voucherID, req);
+    },
+    async alterPurchaseVoucher(companyID, voucherID, req) {
+      return alterVoucher(companyID, "purchase", voucherID, req);
+    },
+    async alterReceiptVoucher(companyID, voucherID, req) {
+      return alterVoucher(companyID, "receipt", voucherID, req);
+    },
+    async alterPaymentVoucher(companyID, voucherID, req) {
+      return alterVoucher(companyID, "payment", voucherID, req);
+    },
+    async alterContraVoucher(companyID, voucherID, req) {
+      return alterVoucher(companyID, "contra", voucherID, req);
+    },
+    async alterJournalVoucher(companyID, voucherID, req) {
+      return alterVoucher(companyID, "journal", voucherID, req);
+    },
+
+    async deleteVoucher(
+      companyID,
+      voucherID,
+      _createdBy?: string,
+    ): Promise<DeleteVoucherResponse> {
+      void _createdBy;
+      const c = ensure(companyID);
+      const idx = c.vouchers.findIndex((v) => v.voucher_id === voucherID);
+      if (idx < 0) {
+        throw new Error("voucher not found");
+      }
+      const prior = c.vouchers[idx] as DayBookEntry;
+      const nextVersion = prior.version_no + 1;
+      // Tombstone: drop the voucher's accounting effect and default day-book
+      // visibility (it leaves the in-memory store entirely), matching the
+      // backend's reverse-prior-then-add-nothing net-zero delete.
+      c.vouchers.splice(idx, 1);
+      return {
+        voucher_id: voucherID,
+        voucher_version_id: id("vv"),
+        version_no: nextVersion,
+        op: "DELETE",
+      };
+    },
+
     async getTrialBalance(companyID): Promise<TrialBalanceResponse> {
       const c = ensure(companyID);
       const acc = new Map<string, { debit: Money; credit: Money; group: string }>();
@@ -215,7 +312,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
               acc.set(p.ledger, r);
               return r;
             })();
-          if (p.dr_cr.toUpperCase() === "DR")
+          if (p.dr_cr.trim().toUpperCase().startsWith("D"))
             row.debit = addMoney(row.debit, p.amount);
           else row.credit = addMoney(row.credit, p.amount);
         }

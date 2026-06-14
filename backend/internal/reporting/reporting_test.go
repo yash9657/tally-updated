@@ -379,6 +379,75 @@ func TestDayBook_ChronologicalOrder(t *testing.T) {
 	}
 }
 
+// TestDayBook_ShowsOnlyCurrentVersion proves the current-version filter: after
+// an ALTER the Day Book lists ONE entry carrying the NEW amount (not the
+// original CREATE plus the ALTER as two rows), and after a DELETE the voucher
+// disappears from the default Day Book entirely.
+func TestDayBook_ShowsOnlyCurrentVersion(t *testing.T) {
+	pool, ctx, companyID, ids := setup(t)
+	led := ledger.NewService(pool)
+	rep := reporting.NewService(pool)
+
+	vtID, _ := ids.VoucherTypeID(ctx, "Sales")
+	debtor, _ := ids.CreateLedger(ctx, "Delta Co", "Sundry Debtors")
+	sales, _ := ids.CreateLedger(ctx, "Online Sales", "Sales Accounts")
+
+	mk := func(amount string) ledger.VoucherInput {
+		a := dec(amount)
+		return ledger.VoucherInput{
+			Class: ledger.Sales, VoucherTypeID: vtID, PartyLedgerID: debtor,
+			VoucherNo: "INV-9", VoucherDate: "2025-04-15", Party: "Delta Co",
+			Narration: "Delta sale", CreatedBy: "tester",
+			Postings: []ledger.PostingInput{
+				{LedgerID: debtor, DrCr: ledger.Debit, Amount: a},
+				{LedgerID: sales, DrCr: ledger.Credit, Amount: a},
+			},
+		}
+	}
+
+	v1, err := led.PostVoucher(ctx, mk("400"))
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	if _, err := led.AlterVoucher(ctx, v1.VoucherID, mk("650")); err != nil {
+		t.Fatalf("alter: %v", err)
+	}
+
+	dbk, err := rep.DayBook(ctx, companyID, "2025-04-01", "2025-04-30")
+	if err != nil {
+		t.Fatalf("day book: %v", err)
+	}
+	var found int
+	for _, e := range dbk.Entries {
+		if e.VoucherID == v1.VoucherID {
+			found++
+			if !e.Debit.Equal(dec("650")) {
+				t.Fatalf("day book entry must show the altered amount 650, got %s", e.Debit)
+			}
+			if e.VersionNo != 2 || e.VoucherNo != "INV-9" {
+				t.Fatalf("day book entry must be the current version (no=INV-9, v2), got no=%s v=%d", e.VoucherNo, e.VersionNo)
+			}
+		}
+	}
+	if found != 1 {
+		t.Fatalf("after alter the day book must list exactly ONE entry for the voucher, got %d", found)
+	}
+
+	// Delete it: it must vanish from the default Day Book.
+	if _, err := led.DeleteVoucher(ctx, v1.VoucherID, "deleter"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	dbk, err = rep.DayBook(ctx, companyID, "2025-04-01", "2025-04-30")
+	if err != nil {
+		t.Fatalf("day book after delete: %v", err)
+	}
+	for _, e := range dbk.Entries {
+		if e.VoucherID == v1.VoucherID {
+			t.Fatalf("deleted voucher must be absent from the day book, but it appeared (op=%s)", e.Op)
+		}
+	}
+}
+
 func TestOutstandings_ReceivablesAndPayables(t *testing.T) {
 	pool, ctx, companyID, ids := setup(t)
 	l := seedBooks(t, pool, ctx, ids)

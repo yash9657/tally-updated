@@ -72,6 +72,12 @@ var validClasses = map[Class]bool{
 	Journal: true, Sales: true, Purchase: true,
 }
 
+// ErrVoucherNotFound is returned by AlterVoucher and DeleteVoucher when no
+// voucher_head row exists for the (company, voucher_id) pair. Without this
+// guard an alter/delete on an unknown id would silently mint version 1 and
+// create a phantom voucher; the HTTP layer maps it to a 404.
+var ErrVoucherNotFound = errors.New("ledger: voucher not found")
+
 // RefType is a bill-wise allocation reference type (RESEARCH sec 5).
 type RefType string
 
@@ -200,9 +206,74 @@ func (s *Service) PostVoucher(ctx context.Context, in VoucherInput) (PostResult,
 
 // AlterVoucher appends a NEW version (op ALTER) to an existing logical voucher,
 // chaining onto the latest version's hash. The prior version is never mutated —
-// immutability is preserved and the edit is auditable.
+// immutability is preserved and the edit is auditable. It errors with
+// ErrVoucherNotFound when the voucher_id has no existing head row.
 func (s *Service) AlterVoucher(ctx context.Context, voucherID uuid.UUID, in VoucherInput) (PostResult, error) {
 	return s.post(ctx, voucherID, OpAlter, in)
+}
+
+// DeleteVoucher appends an append-only tombstone (op DELETE) to an existing
+// logical voucher. In cored's immutable-log model a delete is NOT a row removal:
+// it records a new version that reverses the prior current version out of
+// ledger_balance and adds NO new postings, so the voucher's net accounting
+// contribution becomes exactly zero while every prior version remains in the
+// audit log. The tombstone copies the prior version's class / voucher_type /
+// voucher_no / date so the edit log identifies what was deleted; it takes no
+// VoucherInput because the body is, by definition, empty.
+//
+// It errors with ErrVoucherNotFound when no voucher_head row exists for the id.
+func (s *Service) DeleteVoucher(ctx context.Context, voucherID uuid.UUID, createdBy string) (PostResult, error) {
+	companyID, ok := db.CompanyFromContext(ctx)
+	if !ok {
+		return PostResult{}, db.ErrNoCompany
+	}
+
+	// Read the prior current version's identifying fields so the tombstone can
+	// restate them for the edit log. A missing head row means the voucher does
+	// not exist (or was never created) — surface ErrVoucherNotFound rather than
+	// letting post() mint a phantom version 1.
+	var in VoucherInput
+	err := s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		var (
+			class string
+			vtID  *uuid.UUID
+			vNo   *string
+			vDate *string
+		)
+		err := tx.QueryRow(ctx,
+			`SELECT COALESCE(vv.payload->>'class', ''),
+			        vv.voucher_type_id, vv.voucher_no,
+			        to_char(vv.voucher_date, 'YYYY-MM-DD')
+			   FROM voucher_head vh
+			   JOIN voucher_version vv ON vv.id = vh.current_version_id
+			  WHERE vh.company_id = $1 AND vh.voucher_id = $2`,
+			companyID, voucherID).Scan(&class, &vtID, &vNo, &vDate)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			return ErrVoucherNotFound
+		case err != nil:
+			return fmt.Errorf("ledger: read voucher for delete: %w", err)
+		}
+		in.Class = Class(class)
+		if vtID != nil {
+			in.VoucherTypeID = *vtID
+		}
+		if vNo != nil {
+			in.VoucherNo = *vNo
+		}
+		if vDate != nil {
+			in.VoucherDate = *vDate
+		}
+		return nil
+	})
+	if err != nil {
+		return PostResult{}, err
+	}
+
+	in.CreatedBy = createdBy
+	// The tombstone carries no postings; post()'s OpDelete branch skips the
+	// posting-insert + balance-add loop while still reversing the prior version.
+	return s.post(ctx, voucherID, OpDelete, in)
 }
 
 // PostSalesVoucher posts a NEW F8 Sales voucher. Backward-compatible shim over
@@ -234,8 +305,12 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 	if !validClasses[in.Class] {
 		return PostResult{}, fmt.Errorf("ledger: invalid voucher class %q", in.Class)
 	}
-	if err := validatePostings(in.Postings); err != nil {
-		return PostResult{}, err
+	// A DELETE tombstone carries no postings — it only reverses the prior version
+	// out of ledger_balance. CREATE/ALTER must still be balanced double-entry.
+	if op != OpDelete {
+		if err := validatePostings(in.Postings); err != nil {
+			return PostResult{}, err
+		}
 	}
 	if err := validateBillAllocations(in.BillAllocations); err != nil {
 		return PostResult{}, err
@@ -303,7 +378,13 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 				return fmt.Errorf("ledger: reverse prior version balance: %w", err)
 			}
 		case errors.Is(err, pgx.ErrNoRows):
-			// First version of this voucher; nothing to reverse.
+			// No head row exists. For a CREATE this is the first version of a new
+			// voucher (nothing to reverse). For an ALTER/DELETE it means the
+			// voucher_id is unknown — fail rather than silently mint version 1 and
+			// pollute the books with a phantom voucher.
+			if op != OpCreate {
+				return ErrVoucherNotFound
+			}
 		default:
 			return fmt.Errorf("ledger: read voucher_head: %w", err)
 		}
@@ -385,8 +466,16 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 			return fmt.Errorf("ledger: insert voucher_version: %w", err)
 		}
 
-		// Insert postings and incrementally update ledger_balance.
-		for _, p := range in.Postings {
+		// Insert postings and incrementally update ledger_balance. A DELETE
+		// tombstone inserts ZERO postings: the reverse-prior block above already
+		// backed the voucher out of ledger_balance, so adding nothing here leaves
+		// its net contribution at exactly zero (the voucher fully disappears from
+		// balances and reports while its versions remain in the audit log).
+		postings := in.Postings
+		if op == OpDelete {
+			postings = nil
+		}
+		for _, p := range postings {
 			postingID, err := uuid.NewV7()
 			if err != nil {
 				return fmt.Errorf("ledger: new posting id: %w", err)

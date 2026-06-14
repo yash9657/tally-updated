@@ -122,6 +122,19 @@ func (s *Server) routes() {
 		r.Post("/vouchers/contra", s.postVoucher(ledger.Contra))
 		r.Post("/vouchers/journal", s.postVoucher(ledger.Journal))
 
+		// Alter: PUT a full restatement of an existing voucher. One Put per literal
+		// type segment keeps the class compile-time fixed, exactly like the Posts.
+		// {voucherID} carries the existing logical voucher id (never reallocated).
+		r.Put("/vouchers/sales/{voucherID}", s.alterVoucher(ledger.Sales))
+		r.Put("/vouchers/purchase/{voucherID}", s.alterVoucher(ledger.Purchase))
+		r.Put("/vouchers/receipt/{voucherID}", s.alterVoucher(ledger.Receipt))
+		r.Put("/vouchers/payment/{voucherID}", s.alterVoucher(ledger.Payment))
+		r.Put("/vouchers/contra/{voucherID}", s.alterVoucher(ledger.Contra))
+		r.Put("/vouchers/journal/{voucherID}", s.alterVoucher(ledger.Journal))
+
+		// Delete: append a tombstone. Class-agnostic — a delete needs only the id.
+		r.Delete("/vouchers/{voucherID}", s.handleDeleteVoucher)
+
 		// Backward-compatible alias for the original F8 Sales endpoint.
 		r.Post("/sales", s.postVoucher(ledger.Sales))
 
@@ -460,14 +473,100 @@ func (s *Server) postVoucher(class ledger.Class) http.HandlerFunc {
 			writeError(w, http.StatusUnprocessableEntity, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusCreated, map[string]any{
-			"voucher_id":         res.VoucherID.String(),
-			"voucher_version_id": res.VoucherVersionID.String(),
-			"version_no":         res.VersionNo,
-			"cgst":               res.Tax.CGST.StringFixed(4),
-			"sgst":               res.Tax.SGST.StringFixed(4),
-			"igst":               res.Tax.IGST.StringFixed(4),
-		})
+		writeJSON(w, http.StatusCreated, voucherResultJSON(res))
+	}
+}
+
+// alterVoucher returns a handler bound to a fixed accounting class that appends
+// an ALTER version to an existing logical voucher. It mirrors postVoucher: the
+// class is fixed by the path, the {voucherID} segment carries the existing
+// logical voucher id, and the body is a FULL restatement (all postings resent).
+// The supplied voucher_no/voucher_date are stamped verbatim, so a client that
+// resends the loaded number/date preserves them (Tally never auto-renumbers on
+// alter).
+func (s *Server) alterVoucher(class ledger.Class) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx, ok := s.scopeCtx(w, r)
+		if !ok {
+			return
+		}
+		voucherID, err := uuid.Parse(chi.URLParam(r, "voucherID"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid voucher id")
+			return
+		}
+		var req voucherReq
+		if !decodeJSON(w, r, &req) {
+			return
+		}
+		in, ok := buildVoucherInput(w, class, req)
+		if !ok {
+			return
+		}
+		res, err := s.ledger.AlterVoucher(ctx, voucherID, in)
+		if err != nil {
+			writeVoucherEditError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, voucherResultJSON(res))
+	}
+}
+
+// handleDeleteVoucher appends a DELETE tombstone to an existing logical voucher.
+// A delete needs only the logical id (the class is already recorded on the prior
+// versions), so the route is class-agnostic. The optional ?created_by= query
+// param stamps the deleting user onto the tombstone, consistent with the
+// Tally-XML import endpoint. The tombstone reverses the voucher out of every
+// balance and report while its versions remain in the audit log.
+func (s *Server) handleDeleteVoucher(w http.ResponseWriter, r *http.Request) {
+	ctx, ok := s.scopeCtx(w, r)
+	if !ok {
+		return
+	}
+	voucherID, err := uuid.Parse(chi.URLParam(r, "voucherID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid voucher id")
+		return
+	}
+	createdBy := r.URL.Query().Get("created_by")
+	res, err := s.ledger.DeleteVoucher(ctx, voucherID, createdBy)
+	if err != nil {
+		writeVoucherEditError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"voucher_id":         res.VoucherID.String(),
+		"voucher_version_id": res.VoucherVersionID.String(),
+		"version_no":         res.VersionNo,
+		"op":                 string(ledger.OpDelete),
+	})
+}
+
+// voucherResultJSON builds the response body shared by the POST and PUT voucher
+// handlers so the shape never drifts between create and alter.
+func voucherResultJSON(res ledger.PostResult) map[string]any {
+	return map[string]any{
+		"voucher_id":         res.VoucherID.String(),
+		"voucher_version_id": res.VoucherVersionID.String(),
+		"version_no":         res.VersionNo,
+		"cgst":               res.Tax.CGST.StringFixed(4),
+		"sgst":               res.Tax.SGST.StringFixed(4),
+		"igst":               res.Tax.IGST.StringFixed(4),
+	}
+}
+
+// writeVoucherEditError maps an alter/delete error to an HTTP status: an unknown
+// voucher is a 404, a missing company scope is a 400, and anything else
+// (unbalanced postings, GST mismatch, ledger validation) is a 422 — the same
+// mapping the POST path uses.
+func writeVoucherEditError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, ledger.ErrVoucherNotFound):
+		writeError(w, http.StatusNotFound, "voucher not found")
+	case errors.Is(err, db.ErrNoCompany):
+		writeError(w, http.StatusBadRequest, err.Error())
+	default:
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
 	}
 }
 
