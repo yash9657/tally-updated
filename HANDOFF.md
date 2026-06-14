@@ -2,7 +2,7 @@
 
 **Purpose of this file:** let a fresh session (clean context) pick up and keep building this project to completion without re-deriving everything. Read this top-to-bottom once, then start at **§7 Next tasks**.
 
-**Last updated:** after commit `4cc91eb` (Task B — statutoryd IRN e-invoice + cored freeze-on-external-reference — shipped). Branch: `master`.
+**Last updated:** after commit `6387f8b` (Task C — offline cloud sequencer + partition fuzzer — shipped). Branch: `master`.
 
 ---
 
@@ -45,6 +45,7 @@ The single most important thing that has kept quality high: **re-verify every ga
 ## 4. Current state (what's built, committed, and GREEN)
 
 Commits on `master` (newest first):
+- `6387f8b` — **Task C: offline cloud sequencer + property-based partition fuzzer.** New `internal/sync` commits a desktop node's outbox through the existing ledger path: offline CREATEs get final numbers from the atomic allocator (zero collisions by construction), conflicts resolve by (HLC,node-id) order (loser parked + surfaced with payload), and Task B's freeze rule hard-blocks superseding an e-invoiced voucher. Gate: a 200-seed fuzzer (mutation-tested). Migration 0010, `POST /sync/commit`. Tauri/SQLite/TS-client deferred.
 - `4cc91eb` — **Task B: statutoryd IRN + cored freeze-on-external-reference.** Separate `cmd/statutoryd` Go plane (ProviderAdapter + fake + recorded NIC schema + in-process durable runner, chaos-tested no-double-IRN) mints an IRN and calls cored's freeze hook; cored migration 0009 + `ledger.post()` freeze gate hard-blocks alter/delete of an IRN-pinned voucher → reconciliation queue. Live e2e `backend/scripts/e2e-statutory-freeze.py`.
 - `d7b970e` — **Task A: F9 OCR-draft prefill** — OCR→insightd draft→prefilled F9→Ctrl+A→cored→trial balance, in-browser, HITL kept structural (accept is the only write). New `api/draft.ts`+`api/insightd.ts`+`vouchers/draftAccept.ts`+`app/LoadedDraft.tsx`, VoucherScreen draft mode, live `pnpm e2e:ocr`.
 - `4628634` — **Phase 2 flagship: `insightd`** OCR→voucher pipeline (HITL, no AI write path, PII boundary).
@@ -64,7 +65,9 @@ Commits on `master` (newest first):
 
 - **Connected compliance — IRN + freeze (`4cc91eb`):** a separate `statutoryd` Go deployable mints an e-invoice IRN through a durable, idempotent, chaos-tested workflow (no double-IRN across provider outage/token-expiry/rate-limit/partial-failure) and calls cored's freeze hook; cored then **pins the voucher's display number and hard-blocks any later alter/delete** (→ reconciliation queue). This is the freeze-on-external-reference primitive Task C's offline reconciliation depends on. Proven by the live two-binary e2e + the chaos gate.
 
-**Phase status:** Phase 0 ✅ · Phase 1 ✅ (core + migration thesis complete) · Phase 2 🔄 (flagship OCR ✅ + F9 prefill loop ✅ + **statutoryd IRN+freeze ✅**; **offline desktop** remains; e-way/GSTR-filing deferred) · Phases 3–4 ⬜.
+- **Offline cloud sequencer (`6387f8b`):** a desktop node's append-only outbox commits through the same authenticated ledger path a keystroke uses; the sequencer assigns the final display number (zero collisions, by routing through the existing atomic allocator), resolves document-level conflicts by (HLC,node-id) total-order (loser parked + surfaced with its payload), enforces exactly-once replay, and reuses Task B's freeze rule to hard-block superseding an e-invoiced voucher. Proven by a 200-seed property-based partition fuzzer (mutation-tested to confirm it bites). The actual Tauri/SQLite client is deferred — the correctness novelty (the sequencer) is what shipped.
+
+**Phase status:** Phase 0 ✅ · Phase 1 ✅ (core + migration thesis complete) · Phase 2 ✅ for the build-out targets here (OCR loop ✅ + F9 prefill ✅ + statutoryd IRN+freeze ✅ + offline sequencer ✅); **deferred within Phase 2:** the Tauri/PWA client shells, e-way/GSTR-filing, and Task D (auth). Phases 3–4 ⬜.
 
 ---
 
@@ -106,6 +109,12 @@ cd backend && go build -o /tmp/statutoryd ./cmd/statutoryd
 CORED_BASE_URL=http://localhost:8087 PORT=8091 /tmp/statutoryd &        # IRN plane, calls cored's freeze hook
 go test ./internal/statutory/... -run Chaos -v                          # no-double-IRN chaos gate
 python3 backend/scripts/e2e-statutory-freeze.py                         # live: IRN -> freeze -> 409 alter/delete -> recon queue
+```
+
+**Offline sync sequencer (Task C):**
+```bash
+cd backend && go test ./internal/sync -run Fuzz -v -count=1   # THE GATE: 200-seed partition fuzzer (~90s, DB-backed on :5433)
+# also: go test ./internal/sync -count=1   (sequencer unit + HTTP /sync/commit tests)
 ```
 
 **insightd (Python AI plane):**
@@ -153,9 +162,11 @@ Shipped the IRN e-invoice + freeze vertical slice: separate `cmd/statutoryd` pla
 - **Env reality:** no real GSP/NIC endpoints or Temporal cluster here → build behind a `ProviderAdapter` interface with **recorded GSP/NIC schema fixtures** + a deterministic fake; durable-workflow logic testable with an in-process runner or River (already a dep). Schema conformance gated on NIC golden schemas. Add **chaos tests** (GSP outage, token expiry, rate-limit, partial-failure) asserting idempotent resume.
 - **Workflow:** `phase2-statutoryd-connected-compliance` — Design (service layout; ProviderAdapter contract; IRN/e-way/GSTR JSON schemas from RESEARCH; freeze-on-external-reference DB rule in cored) → Implement parallel: [statutoryd workflows + adapter + fakes/fixtures] ‖ [cored freeze rule + reconciliation-queue surface] → Review (chaos-gated idempotency; schema conformance; freeze rule actually hard-blocks). Gate: go test (both) + chaos sims + schema validation.
 
-### Task C — Offline-first desktop (the dossier's top offline risk) — **do this next**
-- **Dependency satisfied:** Task B (`4cc91eb`) landed the freeze-on-external-reference rule + reconciliation queue in cored. The fuzzer's "hard-block on filed/e-invoiced vouchers" assertion now has a real primitive to test against: register an IRN via `POST /vouchers/{id}/external-reference`, then prove an outbox replay that would supersede it is refused (409 / FrozenError) and routed to `GET /reconciliation-queue`.
-- **Goal:** Tauri 2 desktop shell with a full local **SQLite read-model + append-only voucher-version write-outbox** tagged with a Hybrid Logical Clock + node-partitioned UUIDv7; on reconnect the outbox replays through the **same authenticated voucher-post API a human keystroke uses**; provisional display numbers (`INV/2026-27/PROV-<node>-<seq>`) swapped atomically at commit by the cloud sequencer; deterministic conflict winner + surfaced reconciliation queue.
+### Task C — Offline-first desktop — ✅ DONE (`6387f8b`, cloud sequencer + fuzzer slice)
+Shipped the correctness core: `internal/sync` Service.Commit (offline outbox → existing ledger path; final numbering via the atomic allocator = zero collisions; (HLC,node-id) deterministic conflict resolution with the loser parked + surfaced in the reconciliation queue with its payload; exactly-once replay via `sync_applied`; Task B freeze hard-block reused), deterministic HLC + node-partitioned UUIDv7 + offline Node/Outbox model, `ledger.PostVoucherWithID`/`HeadVersion`, migration 0010, `POST /sync/commit`. Gate: a **200-seed property-based partition fuzzer** that forces non-vacuity (a conflict target + an IRN-frozen target) and was mutation-tested. **Deferred follow-ups** (moved to §6): the actual **Tauri 2 Rust shell + local SQLite read-model/outbox persistence + a TS replay client** (the sequencer is the cloud side; the client is mature packaging that drives `POST /sync/commit`), web PWA TanStack shell, and sequencer HA/leader-election. **Next: Task D.**
+
+### (old Task C detail — Tauri client, now a deferred follow-up of the shipped sequencer)
+- **Goal (deferred client):** Tauri 2 desktop shell with a full local **SQLite read-model + append-only voucher-version write-outbox** tagged with a Hybrid Logical Clock + node-partitioned UUIDv7; on reconnect the outbox replays through the **same authenticated voucher-post API a human keystroke uses**; provisional display numbers (`INV/2026-27/PROV-<node>-<seq>`) swapped atomically at commit by the cloud sequencer; deterministic conflict winner + surfaced reconciliation queue.
 - **Verification (this is the whole point):** a **network-partition fuzzer** (property-based) creating concurrent offline edits, days-long offline branches, and edits to already-e-invoiced vouchers — asserting **zero number collisions**, deterministic winner, loser preserved as a superseded version, and a **hard-block on filed/e-invoiced vouchers** (depends on Task B's freeze rule). Gate this behind the fuzzer before any customer goes offline.
 - **Workflow:** `phase2-offline-outbox-fuzzed` — Design (graded offline model per PLAN A.1 #3; outbox schema; HLC; cloud sequencer; conflict resolution) → Implement parallel: [local SQLite store + outbox replay] ‖ [cloud sequencer + provisional→final numbering + conflict queue] → Review (property-based partition fuzzer; invariants). Gate: the fuzzer must pass with zero collisions.
 
@@ -228,5 +239,5 @@ Then **you** (main loop): read the result, apply any `mustFix`, **re-run the ful
 
 1. Read this file + skim `PLAN.md` Part C (Phase 2 section) + the memory index.
 2. Bring up the stack (§5), run the full gate matrix once to confirm everything is still green from a clean clone state.
-3. Tasks A (`d7b970e`) and B (`4cc91eb`) are DONE. Start **Task C** (`phase2-offline-outbox-fuzzed`) — its offline hard-block dependency (Task B's freeze rule) is now satisfied. After C, **Task D** (auth).
+3. Tasks A (`d7b970e`), B (`4cc91eb`), and C (`6387f8b`) are DONE. Start **Task D** (`phase1-auth-disallow-allow`) — Keycloak + Tally Disallow/Allow ACLs + WebAuthn + account lockout; the deployment switch-blocker for multi-user. (Or, if a customer-facing demo is the priority, pick up a deferred client shell: the Tauri desktop driving `POST /sync/commit`, or the F9 bill-upload UI from §6.)
 4. Keep the discipline in §3. Verify everything yourself. Commit only green. Update this file and memory as state changes.
