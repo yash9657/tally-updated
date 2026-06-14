@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "insightd"
+version = "0.1.0"
+description = "insightd — the AI insight plane: read-only document-to-purchase-voucher DRAFT pipeline (no ledger write path)."
+requires-python = ">=3.11"
+
+# CORE deps ONLY. The testable core (contracts, interfaces, mapper, fakes,
+# redaction, pipeline, api, benchmark harness) imports nothing heavier than
+# these. Tests need none of the optional extras below.
+dependencies = [
+    "pydantic>=2",
+    "pydantic-settings>=2",
+    "fastapi",
+    "httpx<0.28",
+    "uvicorn",
+    "pypdf",  # pure-python PDF page split (lazy-imported only in the real ingest adapter)
+]
+
+[project.optional-dependencies]
+# Each extra is lazy-imported INSIDE a real adapter method, never at module top
+# level. CI installs core-only; these are calibration/production-only.
+ocr = ["paddleocr", "paddlepaddle", "pillow", "pdf2image"]
+llm = ["anthropic"]
+pii = ["presidio-analyzer", "presidio-anonymizer"]
+test = ["pytest"]
+
+[tool.setuptools.packages.find]
+include = ["insightd*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

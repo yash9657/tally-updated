@@ -1,0 +1,3 @@
+# OPTIONAL — real cross-border LLM adapters (Haiku classifier, Opus inferencer).
+# Lazy-imported inside adapters/classifier_haiku.py and adapters/inferencer_opus.py.
+anthropic>=0.40

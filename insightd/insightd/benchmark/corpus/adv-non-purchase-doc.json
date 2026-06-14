@@ -1,0 +1,249 @@
+{
+  "id": "adv-non-purchase-doc",
+  "description": "Delivery challan / quotation -> not a purchase -> manual",
+  "rulesetVersion": "gst-2024-09",
+  "ocr_quality": "clean",
+  "input": {
+    "pages": [
+      {
+        "png_b64": "",
+        "width": 1240,
+        "height": 1754,
+        "dpi": 200
+      }
+    ],
+    "ocr": {
+      "lines": [
+        {
+          "text": "TAX INVOICE",
+          "bbox": [
+            10,
+            10,
+            200,
+            30
+          ],
+          "confidence": 0.99
+        },
+        {
+          "text": "Invoice No: INV-2025-0042",
+          "bbox": [
+            10,
+            40,
+            250,
+            60
+          ],
+          "confidence": 0.98
+        },
+        {
+          "text": "Date: 2025-05-11",
+          "bbox": [
+            10,
+            70,
+            200,
+            90
+          ],
+          "confidence": 0.98
+        },
+        {
+          "text": "Supplier: Acme Components Pvt Ltd",
+          "bbox": [
+            10,
+            100,
+            350,
+            120
+          ],
+          "confidence": 0.97
+        },
+        {
+          "text": "GSTIN: 27ABCDE1234F1Z5",
+          "bbox": [
+            10,
+            130,
+            300,
+            150
+          ],
+          "confidence": 0.96
+        },
+        {
+          "text": "PAN: ABCDE1234F",
+          "bbox": [
+            10,
+            160,
+            250,
+            180
+          ],
+          "confidence": 0.96
+        },
+        {
+          "text": "Aadhaar: 123456789010",
+          "bbox": [
+            10,
+            190,
+            320,
+            210
+          ],
+          "confidence": 0.95
+        },
+        {
+          "text": "Bank IFSC: HDFC0001234",
+          "bbox": [
+            10,
+            220,
+            320,
+            240
+          ],
+          "confidence": 0.95
+        },
+        {
+          "text": "Place of Supply: 27",
+          "bbox": [
+            10,
+            250,
+            300,
+            270
+          ],
+          "confidence": 0.97
+        },
+        {
+          "text": "Item HSN 8471 qty 2.0000 rate 500.0000 1000.0000 @ 18.0000%",
+          "bbox": [
+            10,
+            300,
+            500,
+            320
+          ],
+          "confidence": 0.96
+        },
+        {
+          "text": "DELIVERY CHALLAN (not for accounting)",
+          "bbox": [
+            10,
+            500,
+            400,
+            520
+          ],
+          "confidence": 0.9
+        }
+      ],
+      "mean_confidence": 0.9609
+    },
+    "inferred": {
+      "invoice_no": "INV-2025-0042",
+      "invoice_date": "2025-05-11",
+      "place_of_supply_state_code": "27",
+      "reverse_charge": false,
+      "exempt": false,
+      "line_items": [
+        {
+          "description": "Item",
+          "hsn": "8471",
+          "qty": "2.0000",
+          "rate": "500.0000",
+          "taxable_value": "1000.0000",
+          "gst_rate_pct": "18.0000",
+          "ledger_id": "L-PUR-RM",
+          "ledger_name": "Item",
+          "ledger_confidence": 0.95
+        }
+      ],
+      "totals": {
+        "taxable": "1000.0000",
+        "invoice_total": "1180.0000"
+      }
+    },
+    "tenant": {
+      "company_id": "CO-DEMO",
+      "home_state_code": "27",
+      "ledgers": [
+        {
+          "id": "L-PARTY-1",
+          "name": "Acme Components Pvt Ltd",
+          "gstin_masked": "27ABC\u20261Z5",
+          "state_code": "27",
+          "kind": "party"
+        },
+        {
+          "id": "L-PUR-RM",
+          "name": "Purchase - Raw Material",
+          "kind": "purchase"
+        },
+        {
+          "id": "L-PUR-CONS",
+          "name": "Purchase - Consumables",
+          "kind": "purchase"
+        },
+        {
+          "id": "L-PUR-SVC",
+          "name": "Purchase - Services",
+          "kind": "purchase"
+        },
+        {
+          "id": "L-CGST",
+          "name": "Input CGST",
+          "kind": "tax"
+        },
+        {
+          "id": "L-SGST",
+          "name": "Input SGST",
+          "kind": "tax"
+        },
+        {
+          "id": "L-IGST",
+          "name": "Input IGST",
+          "kind": "tax"
+        }
+      ],
+      "cgst_ledger_id": "L-CGST",
+      "sgst_ledger_id": "L-SGST",
+      "igst_ledger_id": "L-IGST"
+    },
+    "planted_pii": {
+      "GSTIN": [
+        "27ABCDE1234F1Z5"
+      ],
+      "PAN": [
+        "ABCDE1234F"
+      ],
+      "AADHAAR": [
+        "123456789010"
+      ],
+      "IFSC": [
+        "HDFC0001234"
+      ]
+    }
+  },
+  "classify": {
+    "doc_type": "other",
+    "is_purchase": false
+  },
+  "ground_truth": {
+    "header": {
+      "invoice_no": "INV-2025-0042",
+      "invoice_date": "2025-05-11",
+      "place_of_supply_state_code": "27",
+      "reverse_charge": false,
+      "party_ledger_id": null,
+      "totals": {
+        "taxable": "1000.0000",
+        "invoice_total": "1180.0000"
+      }
+    },
+    "line_items": [
+      {
+        "description": "Item",
+        "hsn": "8471",
+        "qty": "2.0000",
+        "rate": "500.0000",
+        "taxable_value": "1000.0000",
+        "gst_rate_pct": "18.0000",
+        "ledger_id": "L-PUR-RM"
+      }
+    ],
+    "expected_status": "low_confidence_manual",
+    "derived_gst": {
+      "cgst": "90.0000",
+      "sgst": "90.0000",
+      "igst": "0.0000"
+    }
+  }
+}

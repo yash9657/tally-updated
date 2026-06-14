@@ -1,0 +1,6 @@
+# OPTIONAL — real OCR + PDF rasterization. NOT installed in core CI.
+# Lazy-imported inside adapters/ocr_paddle.py and adapters/ingest_real.py.
+paddleocr>=2.7
+paddlepaddle>=2.6
+pillow>=10
+pdf2image>=1.17

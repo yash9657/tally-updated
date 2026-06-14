@@ -1,0 +1,9 @@
+# insightd CORE runtime deps — pinned. CI installs THIS file only, so the
+# testable core stays free of anthropic/paddleocr/presidio. Optional extras are
+# pinned separately in requirements-ocr.txt / -llm.txt / -pii.txt.
+pydantic>=2.5,<3
+pydantic-settings>=2.1,<3
+fastapi>=0.110,<1
+httpx>=0.27,<0.28
+uvicorn>=0.27,<1
+pypdf>=4.0,<6

@@ -1,0 +1,23 @@
+Metadata-Version: 2.4
+Name: insightd
+Version: 0.1.0
+Summary: insightd — the AI insight plane: read-only document-to-purchase-voucher DRAFT pipeline (no ledger write path).
+Requires-Python: >=3.11
+Requires-Dist: pydantic>=2
+Requires-Dist: pydantic-settings>=2
+Requires-Dist: fastapi
+Requires-Dist: httpx<0.28
+Requires-Dist: uvicorn
+Requires-Dist: pypdf
+Provides-Extra: ocr
+Requires-Dist: paddleocr; extra == "ocr"
+Requires-Dist: paddlepaddle; extra == "ocr"
+Requires-Dist: pillow; extra == "ocr"
+Requires-Dist: pdf2image; extra == "ocr"
+Provides-Extra: llm
+Requires-Dist: anthropic; extra == "llm"
+Provides-Extra: pii
+Requires-Dist: presidio-analyzer; extra == "pii"
+Requires-Dist: presidio-anonymizer; extra == "pii"
+Provides-Extra: test
+Requires-Dist: pytest; extra == "test"
