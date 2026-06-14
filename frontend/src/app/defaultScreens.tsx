@@ -1,6 +1,7 @@
 import { SelectionList } from "../screens/SelectionList";
 import { GatewayScreen } from "../screens/GatewayScreen";
 import { VoucherScreen } from "../screens/VoucherScreen";
+import { BillInboxScreen } from "../screens/BillInboxScreen";
 import { MasterCreateScreen } from "../screens/masters/MasterCreateScreen";
 import {
   DayBookScreen,
@@ -106,6 +107,14 @@ const VoucherAdapter: ScreenComponent = ({
   <VoucherScreen snapshot={snapshot} onSelect={onSelect} />
 );
 
+/** Bill Inbox adapter: lists OCR drafts and opens one into the F9 voucher. */
+const BillInboxAdapter: ScreenComponent = ({
+  snapshot,
+  onSelect,
+}: ScreenComponentProps) => (
+  <BillInboxScreen snapshot={snapshot} onSelect={onSelect} />
+);
+
 /**
  * Build a registry pre-populated with the default screens. Agents extend the
  * returned registry; call sites that want a clean slate construct their own
@@ -120,6 +129,7 @@ export function createDefaultRegistry(): ScreenRegistry {
     "report-detail": ReportDetailScreen,
     "master-create": MasterCreateAdapter,
     "goto-overlay": GoToOverlayScreen,
+    "bill-inbox": BillInboxAdapter,
     // Live, per-name report screens (override the generic fallback).
     "report:Day Book": DayBookScreen,
     "report:Trial Balance": TrialBalanceScreen,

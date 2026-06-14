@@ -146,6 +146,36 @@ export interface PurchaseVoucherDraft {
 }
 
 /**
+ * A SLIM, inbox-facing projection of a {@link PurchaseVoucherDraft}. Mirrors the
+ * insightd `DraftSummary` response model field-for-field (the LIST route). All
+ * fields are DERIVED server-side from the full draft — there is no top-level
+ * party/total/confidence on the draft itself:
+ *  - party        <- body.party (may be None server-side) || "" fallback.
+ *  - grand_total  <- derived_gst.invoice_total when derived_gst is present, else
+ *                    "0.0000" (derived_gst is Optional). MUST stay a Money STRING;
+ *                    "0.0000" means "unknown total", not a real zero, for a
+ *                    low_confidence_manual draft that never derived GST.
+ *  - confidence   <- confidence.overall (a float / number).
+ * draft_id / company_id / status / source / created_at map directly.
+ */
+export interface DraftSummary {
+  draft_id: string;
+  company_id: string;
+  created_at: string;
+  source: "upload" | "whatsapp" | "email";
+  status: DraftStatus;
+  /** DERIVED: body.party or "" (supplier display name; may be empty). */
+  party: string;
+  /**
+   * DERIVED: derived_gst.invoice_total when present, else "0.0000" (Money string).
+   * "0.0000" should be shown as "unknown total", not a real zero.
+   */
+  grand_total: Money;
+  /** DERIVED: confidence.overall (0.0 .. 1.0). */
+  confidence: number;
+}
+
+/**
  * Request body for createDraft (the e2e / fixture path). `tenant` and `fixture`
  * are opaque to the frontend — they pass through to insightd verbatim.
  */

@@ -18,6 +18,9 @@
  *  - "goto-overlay"      — the Alt+G / Ctrl+G picker (preserves or replaces).
  *  - "master-create"     — an inline master-creation screen (Alt+C), e.g.
  *                          creating a ledger from a voucher field and returning.
+ *  - "bill-inbox"        — the F9 Bill Inbox: lists pending OCR drafts and opens
+ *                          one into the Purchase (F9) voucher in draft-prefill
+ *                          mode (the AI-native upload-to-voucher entry point).
  */
 export type ScreenKind =
   | "gateway"
@@ -26,7 +29,8 @@ export type ScreenKind =
   | "report"
   | "report-detail"
   | "goto-overlay"
-  | "master-create";
+  | "master-create"
+  | "bill-inbox";
 
 /**
  * The kind of master a "master-create" screen is creating. Mirrors the masters

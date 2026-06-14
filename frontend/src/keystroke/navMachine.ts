@@ -90,6 +90,23 @@ function canonicalReportName(label: string | undefined): string | undefined {
 /** How a Go To-style overlay resolves when its selection is confirmed. */
 export type GotoMode = "goto" | "switchTo";
 
+/**
+ * The Gateway entry label that drills into the F9 Bill Inbox. Matched
+ * case-insensitively in the gateway Enter/SELECT branches.
+ */
+export const BILL_INBOX_LABEL = "Bill Inbox";
+
+/**
+ * Pinned sentinel the {@link BillInboxScreen} feeds through `onSelect` (a SELECT
+ * event) AFTER it has set the LoadedDraft context. reduceSelect treats this as
+ * "open the chosen draft in the F9 Purchase voucher": it pushes a purchase
+ * create frame IMMEDIATELY (no follow-up Enter), exactly mirroring the F9 push.
+ * The draft id is NEVER smuggled through this sentinel — the screen resolves the
+ * draft and calls setLoaded({draft}) before firing it, and VoucherScreen reads
+ * the draft from the LoadedDraft context (isDraftMode).
+ */
+export const OPEN_PURCHASE_DRAFT_SENTINEL = "__open-purchase-draft__";
+
 /** A single frame on Tally's screen stack. */
 export interface ScreenFrame {
   readonly screen: ScreenKind;
@@ -287,6 +304,16 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
           stack.push(newVoucherFrame(DEFAULT_LAST_VOUCHER));
           return { stack };
         }
+        // "Bill Inbox" drills into the F9 Bill Inbox screen. This MUST be
+        // checked BEFORE the canonicalReportName fallback below, which would
+        // otherwise treat the unknown report-shaped label as a report name and
+        // wrongly push a report frame called "Bill Inbox".
+        if (
+          active.selectedItem?.toLowerCase() === BILL_INBOX_LABEL.toLowerCase()
+        ) {
+          stack.push({ screen: "bill-inbox" });
+          return { stack };
+        }
         // A selected report entry drills into that report (depth +1), the same
         // destination the Alt+G Go To picker reaches.
         const report = canonicalReportName(active.selectedItem);
@@ -425,15 +452,31 @@ function reduceSelect(ctx: NavContext, menuItem: string): Partial<NavContext> {
     return { stack };
   }
 
-  // Gateway/menu selection: choosing "Vouchers" or a report highlights it;
-  // Enter then drills (into the voucher form or the report respectively).
+  // Gateway/menu selection: choosing "Vouchers", "Bill Inbox" or a report
+  // highlights it; Enter then drills (into the voucher form, the Bill Inbox, or
+  // the report respectively). "Bill Inbox" is neither "vouchers" nor a report
+  // name, so it needs its own highlightable branch.
   if (active.screen === "gateway" || active.screen === "menu") {
     if (
       menuItem.toLowerCase() === "vouchers" ||
+      menuItem.toLowerCase() === BILL_INBOX_LABEL.toLowerCase() ||
       canonicalReportName(menuItem) !== undefined
     ) {
       active.selectedItem = menuItem;
       stack[stack.length - 1] = active;
+      return { stack };
+    }
+    return {};
+  }
+
+  // Bill Inbox: the screen sets the LoadedDraft context, then fires the pinned
+  // sentinel through onSelect. Push the F9 Purchase create frame IMMEDIATELY so
+  // VoucherScreen (purchase && !alter && loadedDraft != null) hydrates from the
+  // draft — exactly mirroring the F9 voucher push. No follow-up Enter needed
+  // because the call is programmatic.
+  if (active.screen === "bill-inbox") {
+    if (menuItem === OPEN_PURCHASE_DRAFT_SENTINEL) {
+      stack.push(newVoucherFrame("purchase", "create"));
       return { stack };
     }
     return {};

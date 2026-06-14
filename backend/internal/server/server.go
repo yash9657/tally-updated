@@ -43,6 +43,7 @@ import (
 	"github.com/khata/cored/internal/platform/db"
 	"github.com/khata/cored/internal/reporting"
 	"github.com/khata/cored/internal/sync"
+	"github.com/khata/cored/internal/webauthn"
 )
 
 // Request-body size caps guard against unbounded uploads. The Tally-XML import
@@ -72,6 +73,19 @@ type Server struct {
 	signer    *authn.Signer
 	authStore authStore
 	authzSeed authSeeder
+
+	// WebAuthn step-up + account lockout (Task D, WS1 AUTH FOLLOW-UP). These are
+	// built UNCONDITIONALLY (they need only pool.Raw(), no signer). webauthn drives
+	// the register/assert ceremonies; webauthnStore is the credential store the
+	// assert/begin route lists allow_credentials from; webauthnRPID is echoed to
+	// the browser. challenges stashes ceremony challenges between begin and finish
+	// (in-memory, single-instance-dev). lockout enforces login lockout. The
+	// /auth/login + assert/finish token minting still gate on signer != nil.
+	webauthn      *webauthn.Service
+	webauthnStore webauthn.CredentialStore
+	webauthnRPID  string
+	challenges    *challengeStore
+	lockout       *authn.Locker
 }
 
 // authSeeder seeds the Owner security level + membership for a freshly created
@@ -97,6 +111,15 @@ func New(ctx context.Context, appDSN string) (*Server, error) {
 	}
 	authzStore := authz.NewStore(pool)
 
+	// WebAuthn + lockout (WS1). Built unconditionally — they need only the raw
+	// pool. The challenge store is in-memory (single-instance-dev). RPID/Origin
+	// default to the dev frontend; override via env for other deployments.
+	rpID := envOr("AUTH_WEBAUTHN_RPID", "localhost")
+	origin := envOr("AUTH_WEBAUTHN_ORIGIN", "http://localhost:5173")
+	waStore := webauthn.NewPGStore(pool.Raw())
+	waService := webauthn.NewService(webauthn.Config{RPID: rpID, Origin: origin}, waStore)
+	locker := authn.NewLocker(authn.DefaultLockoutPolicy(), authn.NewPGLockoutStore(pool.Raw()), time.Now)
+
 	s := &Server{
 		pool:      pool,
 		identity:  identity.NewService(pool),
@@ -110,9 +133,23 @@ func New(ctx context.Context, appDSN string) (*Server, error) {
 		signer:    signer,
 		authStore: authzStore,
 		authzSeed: authzStore,
+
+		webauthn:      waService,
+		webauthnStore: waStore,
+		webauthnRPID:  rpID,
+		challenges:    newChallengeStore(),
+		lockout:       locker,
 	}
 	s.routes()
 	return s, nil
+}
+
+// envOr returns the value of the named env var, or def when it is unset/empty.
+func envOr(name, def string) string {
+	if v := os.Getenv(name); v != "" {
+		return v
+	}
+	return def
 }
 
 // buildAuth selects the authentication mode FAIL-CLOSED. A stock binary with no
@@ -210,6 +247,12 @@ func (s *Server) routes() {
 	if s.signer != nil {
 		r.Post("/auth/token", s.handleDevToken)
 	}
+
+	// WebAuthn step-up ceremony + dev /auth/login lockout flow (WS1 follow-up).
+	// Mounted on this router before it is assigned to s.router. The ceremony
+	// routes are authn-only; /auth/login is pre-auth and gates on the dev signer.
+	s.router = r
+	s.authWebAuthnRoutes()
 
 	// Company lifecycle (identity). authn-ONLY: verify JWT + resolve user
 	// (create-on-first-login); skip membership/PDP (the company does not exist

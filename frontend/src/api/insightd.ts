@@ -11,7 +11,11 @@
  */
 
 import { createHttpClient, type HttpClient } from "./http";
-import type { CreateDraftRequest, PurchaseVoucherDraft } from "./draft";
+import type {
+  CreateDraftRequest,
+  DraftSummary,
+  PurchaseVoucherDraft,
+} from "./draft";
 
 export interface InsightdClient {
   /** GET an existing draft by id (the F9 prefill path). */
@@ -21,6 +25,11 @@ export interface InsightdClient {
     companyID: string,
     req: CreateDraftRequest,
   ): Promise<PurchaseVoucherDraft>;
+  /**
+   * LIST the pending drafts for a company (the Bill Inbox path). Returns a slim
+   * {@link DraftSummary} per draft; an empty list for an unknown company.
+   */
+  listDrafts(companyID: string): Promise<DraftSummary[]>;
 }
 
 /**
@@ -58,6 +67,11 @@ export function createInsightdClient(
       return http.post<PurchaseVoucherDraft>(
         `/companies/${encodeURIComponent(companyID)}/drafts`,
         req,
+      );
+    },
+    listDrafts(companyID) {
+      return http.get<DraftSummary[]>(
+        `/companies/${encodeURIComponent(companyID)}/drafts`,
       );
     },
   };

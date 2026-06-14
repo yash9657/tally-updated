@@ -29,6 +29,7 @@ export type {
   GSTDraft,
   VoucherDraftBody,
   PurchaseVoucherDraft,
+  DraftSummary,
   CreateDraftRequest,
 } from "./draft";
 export { createInsightdClient, type InsightdClient } from "./insightd";
