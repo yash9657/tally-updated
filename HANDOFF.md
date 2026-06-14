@@ -2,7 +2,7 @@
 
 **Purpose of this file:** let a fresh session (clean context) pick up and keep building this project to completion without re-deriving everything. Read it top-to-bottom once, then start at **§7 Next tasks**.
 
-**Last updated:** after commit `6387f8b` (Task C — offline cloud sequencer + partition fuzzer). Branch: `master`. Tasks A, B, C of the Phase-2 queue are done; **Task D (auth) is next.**
+**Last updated:** after commit `19d2fa6` (Task D — server-side auth: JWT + Disallow/Allow PDP + WebAuthn + lockout). Branch: `master`. Tasks A, B, C, **D** of the Phase-2 queue are done; **a client shell (Tauri desktop or F9 bill-inbox UI) is the next high-value increment** (see §7).
 
 ---
 
@@ -51,6 +51,7 @@ The single most important thing that has kept quality high: **re-verify every ga
 ## 4. Current state (what's built, committed, and GREEN)
 
 Commits on `master` (newest first; `docs:` commits between feature commits omitted):
+- `19d2fa6` — **Task D: server-side auth** — JWT (Ed25519/ES256) + Tally Disallow/Allow PDP + WebAuthn + lockout; fail-closed.
 - `6387f8b` — **Task C: offline cloud sequencer + property-based partition fuzzer.**
 - `4cc91eb` — **Task B: statutoryd IRN e-invoice + cored freeze-on-external-reference.**
 - `d7b970e` — **Task A: F9 OCR-draft prefill** (the OCR killer-feature loop closes in-browser).
@@ -70,9 +71,11 @@ Commits on `master` (newest first; `docs:` commits between feature commits omitt
 4. **Connected compliance — IRN + freeze (Task B):** `statutoryd` mints a deterministic e-invoice IRN through a durable, idempotent, **chaos-tested** workflow (no double-IRN across provider outage / token-expiry / rate-limit / partial-failure) and calls cored's freeze hook. cored then **pins the voucher's display number and hard-blocks any later alter/delete** (→ reconciliation queue). Live two-binary e2e + chaos gate green.
 5. **Offline cloud sequencer (Task C):** a desktop node's append-only outbox commits through the same authenticated ledger path a keystroke uses. The sequencer assigns the **final** display number (zero collisions, by routing offline CREATEs through the existing atomic allocator with an empty `voucher_no`), resolves document-level conflicts by **(HLC, node-id) total order** (loser parked + surfaced in the reconciliation queue with its full payload), enforces **exactly-once replay** (`sync_applied`), and reuses Task B's freeze rule to hard-block superseding an e-invoiced voucher. Proven by a **200-seed property-based partition fuzzer** (mutation-tested to confirm it bites).
 
-**DB migrations:** `backend/migrations/0001…0010` (embedded, applied lexically by `cored migrate`). 0009 = freeze (external-reference + reconciliation_queue); 0010 = offline sync (`sync_applied` + `reconciliation_queue.payload`).
+6. **Server-side auth — JWT + Disallow/Allow PDP + WebAuthn + lockout (Task D):** every request is now authenticated and authorized server-side, **fail-closed**. A verified compact-JWS Bearer (Ed25519/ES256, stdlib-only; real Keycloak via `AUTH_JWKS_URL` is the documented swap) establishes the caller; **membership in `{companyID}` is the tenant gate** (the URL path param no longer drives `db.WithCompany` — the authz-verified company is injected into ctx); a Go **PDP** evaluates Tally **Disallow/Allow** rules (disallow beats allow at equal specificity; exact beats wildcard; `default_access` full/none), **back-dated cutoff** on writes, and **WebAuthn step-up** requirement (distinguishable `403 STEPUP_REQUIRED`; `401` reserved for missing/invalid/expired tokens). Auth catalog (migration 0011) is FORCE-RLS + explicit WITH CHECK on new `app_current_user_id()`/`app_current_subject()` GUC resolvers. `svc:*` service principals get signature-gated full access scoped to the target company (statutoryd freeze hook + sync). Proven by an authz matrix (mutation-tested non-vacuous), cross-tenant 403 tests, a fail-closed-by-default regression test, a hermetic WebAuthn software-authenticator harness, and live two-binary + frontend e2e with auth on.
 
-**Phase status:** Phase 0 ✅ · Phase 1 ✅ (core + migration thesis) · Phase 2 ✅ on the time-to-market targets (OCR loop, F9 prefill, statutoryd IRN+freeze, offline sequencer); **deferred within Phase 2:** Tauri/PWA client shells, e-way bill + full GSTR filing, and auth (Task D). Phases 3–4 ⬜.
+**DB migrations:** `backend/migrations/0001…0011` (embedded, applied lexically by `cored migrate`). 0009 = freeze (external-reference + reconciliation_queue); 0010 = offline sync (`sync_applied` + `reconciliation_queue.payload`); 0011 = auth catalog (app_user, security_level, acl_rule, company_membership, webauthn_credential, auth_login_attempt; user/subject GUC resolvers; FORCE RLS).
+
+**Phase status:** Phase 0 ✅ · Phase 1 ✅ (core + migration thesis) · Phase 2 ✅ on the time-to-market targets (OCR loop, F9 prefill, statutoryd IRN+freeze, offline sequencer, **auth**); **deferred within Phase 2:** Tauri/PWA client shells, e-way bill + full GSTR filing, and the WebAuthn/lockout **HTTP route wiring** + real Keycloak/OPA (see §6). Phases 3–4 ⬜.
 
 ---
 
@@ -83,23 +86,28 @@ Commits on `master` (newest first; `docs:` commits between feature commits omitt
 **Backend (`cored`) — the gate matrix:**
 ```bash
 cd backend
-go run ./cmd/cored migrate            # apply embedded migrations (idempotent; 10 files)
+go run ./cmd/cored migrate            # apply embedded migrations (idempotent; 11 files)
 go build ./... && go vet ./...        # must be clean
-go test ./... -count=1                # FULL suite, hits live DB on :5433 (~2-3 min; internal/sync ~90s is the fuzzer)
-# boot cored for live e2e:
+go test ./... -count=1                # FULL suite, hits live DB on :5433 (~2-3 min; internal/sync ~130s is the fuzzer)
+# boot cored for live e2e (AUTH IS FAIL-CLOSED: dev mode mounts /auth/token):
 go build -o /tmp/cored ./cmd/cored && \
-  PORT=8087 APP_DSN="postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable" /tmp/cored serve &
+  AUTH_DEV_TOKEN_ENABLED=true PORT=8087 APP_DSN="postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable" /tmp/cored serve &
 # focused gates for the newest work:
+go test ./internal/authz/... ./internal/authn/... ./internal/webauthn/... -v -count=1   # Task D: PDP matrix, JWS, WebAuthn
+go test ./internal/server -run 'Auth|Tenant|Token' -v -count=1                          # Task D: middleware contract (401 vs 403, fail-closed)
 go test ./internal/sync -run Fuzz -v -count=1        # Task C: 200-seed partition fuzzer (THE gate)
 go test ./internal/statutory/... -run Chaos -v       # Task B: no-double-IRN chaos gate
 ```
 (Admin/migrate DSN default: `postgres://postgres:postgres@localhost:5433/tally?sslmode=disable`.)
+**Auth note (Task D):** without `AUTH_DEV_TOKEN_ENABLED=true` (or `CORED_ENV=dev`), `cored serve` **refuses to start fail-open** — this is intentional (the in-process `/auth/token` mints validly-signed tokens for any subject, so it is dev-only; production sets `AUTH_JWKS_URL` for the external IdP, which is not yet built offline). Every `/v1/companies/*` call needs `Authorization: Bearer <jwt>`; mint one via `curl -XPOST :8087/auth/token -d '{"subject":"owner-x","amr":["webauthn"]}'`.
 
 **statutoryd (IRN plane) + the freeze e2e:**
 ```bash
 cd backend && go build -o /tmp/statutoryd ./cmd/statutoryd
-CORED_BASE_URL=http://localhost:8087 PORT=8091 /tmp/statutoryd &
-python3 backend/scripts/e2e-statutory-freeze.py      # live: post sale -> IRN -> freeze -> 409 alter/delete -> recon queue
+# cored must be booted with AUTH_DEV_TOKEN_ENABLED=true (above); mint a service token:
+SVC=$(curl -s -XPOST http://localhost:8087/auth/token -d '{"subject":"svc:statutoryd"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+CORED_BASE_URL=http://localhost:8087 CORED_SERVICE_TOKEN=$SVC PORT=8091 /tmp/statutoryd &
+python3 backend/scripts/e2e-statutory-freeze.py      # live: 401/403 auth gate -> post sale -> IRN -> freeze -> 409 alter/delete -> recon queue
 ```
 
 **Frontend:**
@@ -138,9 +146,9 @@ INSIGHTD_PII_BOUNDARY_STRICT=1 python -m uvicorn insightd.api.app:app --port 808
 - 🟡 **Client shells not built.** The offline **sequencer** (cloud side) ships, but the **Tauri 2 desktop shell + local SQLite read-model/outbox persistence + a TS replay client** that drives `POST /sync/commit` do not. Same for the **web PWA TanStack shell** (web is plain Vite). Sequencer **HA/leader-election** is also future. These are mature packaging on top of a proven sequencer.
 - 🟡 **F9 OCR prefill is display-only + no upload UI.** Editing a prefilled field does not yet alter the POSTed body (a `ready` draft is accept-as-is). And there is **no UI to upload a bill / pick a `draft_id`** — the draft is injected via the `LoadedDraft` context (tests/e2e seed it). Add a bill-inbox screen + upload affordance to make it demoable.
 - 🟡 **statutoryd is IRN-only.** No **e-way bill**, no **full GSTR-1/3B/CMP-08 filing with ARN tracking**, no **Postgres-backed StepStore** (the durable runner is in-memory, so workflow state does not survive a `statutoryd` restart), no **real GSP/NIC ProviderAdapter / multi-homing / circuit breakers** (deterministic fake + recorded NIC schema only). `FILED_GSTR1` is a supported freeze `kind` but only `IRN` is wired end-to-end.
+- 🟡 **Auth: HTTP route wiring + real IdP deferred (Task D follow-ups).** The PDP, WebAuthn ceremony (`internal/webauthn`), and account lockout (`internal/authn`) packages are **built and unit-tested**, but: (a) the WebAuthn **registration/assertion ceremony is NOT exposed as HTTP routes** yet — the PDP enforces the *requirement* via the JWT `amr:["webauthn"]` claim, but there is no `/auth/webauthn/...` endpoint to actually perform a step-up and obtain a stepped-up token; (b) **lockout is not wired into a login flow** — the dev `/auth/token` is a deterministic fake issuer with **no password check** (and lockout only bites a real credential path); (c) **real Keycloak is not wired** — `AUTH_JWKS_URL` is the documented swap but the `JWKSVerifier` (network JWKS fetch) is not built in this offline tree (prod boot intentionally errors until it is); (d) **OPA/Rego deferred** — the in-Go PDP is the equivalent and is the one tested. `webauthn_credential` + `auth_login_attempt` tables exist (0011); the pg `CredentialStore`/lockout store are compiled, the lockout store has a real-DB test, the webauthn pg store gets coverage when the routes land.
 
 **Pre-existing / smaller:**
-- 🟡 **Auth not built** — Keycloak + Tally Disallow/Allow levels + WebAuthn + account lockout + back-dated cutoff. The multi-user deployment switch-blocker. **(Task D, next.)**
 - 🟡 **insightd accuracy floors run on deterministic fakes** (measure the mapper + invariants, not real OCR/LLM accuracy). The `--real` calibration mode (PaddleOCR + Anthropic key) is the pre-release model-accuracy gate; it does **not** gate merges. Wire `insightd/tests/test_gst_oracle_reconcile.py` (independent GST signal vs Go golden corpora) into CI. `insightd` `DraftStore` is in-memory (add Postgres-backed). `pii_presidio.py` is constructed but the regex floor (`redaction/recognizers.py`) is authoritative.
 - 🟡 **Frontend supplier-state:** `gstVoucher.ts` still sends a hardcoded `"29"`; should send the company's real `state_code` (server default from `company.state_code` is already correct as of `619af10`) and pass `state_code` at company bootstrap. Affects non-Karnataka companies in-browser.
 - 🟡 **GSTR-3B** not built (only GSTR-1).
@@ -152,14 +160,11 @@ INSIGHTD_PII_BOUNDARY_STRICT=1 python -m uvicorn insightd.api.app:app --port 808
 
 > For each, follow §3: pin contracts in design → parallel-implement on disjoint files → adversarial-review → **you integrate + re-run every gate + a live e2e** before committing. Workflow template in §9.
 
-### Task D — Auth: Keycloak + Disallow/Allow + WebAuthn (deployment switch-blocker) — **do this next**
-- **Goal:** Keycloak 26 (OIDC/OAuth2/SAML/SCIM, TOTP/WebAuthn) + Postgres ACL tables replicating Tally's Owner/Data-Entry/custom **Disallow/Allow** levels + OPA/Rego for cross-cutting policy + **mandatory WebAuthn for Owner/Admin** + account lockout + back-dated cutoff. Migrating CAs keep the exact mental model; adds the MFA/SSO Tally lacks.
-- **What already exists to build on:** company scoping is already a per-request GUC (`db.WithCompany` → RLS `app_current_company_id()`); every mutation is company-scoped. The PDP must evaluate Disallow/Allow + back-dated cutoff server-side on every write/read.
-- **Env reality:** no real Keycloak here → build behind an `AuthN`/`IdP` interface with a deterministic fake issuer (signed test JWTs) so the authz matrix is testable without a live Keycloak; document the real-Keycloak wiring.
-- **Workflow:** `phase1-auth-disallow-allow` — Design (ACL schema mirroring Tally levels; JWT→GUC mapping; PDP eval points; WebAuthn registration/assertion flow) → Implement parallel: [identity/ACL tables + PDP middleware + JWT verify] ‖ [WebAuthn ceremony + account lockout + back-dated cutoff] → Review (security-adversarial: privilege escalation, cross-tenant leak, RLS still enforced, lockout bypass). Gate: `go test` + an authz test matrix (role × action × scope) + a cross-tenant isolation test.
+### ✅ Task D — Auth (DONE, `19d2fa6`)
+Server-side JWT authn + Tally Disallow/Allow PDP + back-dated cutoff + WebAuthn step-up requirement + account lockout, **fail-closed**. See §4 capability 6 and §6 for the honest deferrals (WebAuthn/lockout HTTP routes, real Keycloak JWKS, OPA). The natural **Task D follow-up** when multi-user deployment is the priority: wire the `/auth/webauthn/{register,assert}` ceremony routes (the package is built + tested) so a user can actually perform step-up and obtain an `amr:["webauthn"]` token, and build a real login flow that exercises lockout; then wire `JWKSVerifier` for Keycloak.
 
-### Alternative if a customer-facing demo is the priority — a deferred **client shell**
-- **Tauri 2 desktop driving `POST /sync/commit`:** a local SQLite read-model + append-only outbox (HLC + node-partitioned UUIDv7 already modeled in `internal/sync/node.go` as the reference), replaying through the sequencer; provisional `INV/<fy>/PROV-<node>-<seq>` numbers swapped to the server's final number on commit. Turns Task C's proven sequencer into a real offline app.
+### Next high-value increment — a **client shell** (customer-facing demo)
+- **Tauri 2 desktop driving `POST /sync/commit`:** a local SQLite read-model + append-only outbox (HLC + node-partitioned UUIDv7 already modeled in `internal/sync/node.go` as the reference), replaying through the sequencer; provisional `INV/<fy>/PROV-<node>-<seq>` numbers swapped to the server's final number on commit. Turns Task C's proven sequencer into a real offline app. **(Note: it must now obtain + send a Bearer token — reuse the `auth.mts` pattern / `/auth/token` dev issuer.)**
 - **F9 bill-inbox / upload UI:** a screen to upload a bill → `insightd` draft → load into the F9 `LoadedDraft` context (the prefill + accept path already works). Turns Task A into a demoable end-to-end killer feature.
 
 ### Smaller, do-anytime cleanups (good warm-ups / fillers)
@@ -229,5 +234,5 @@ Then **you** (main loop): read the result, apply any `mustFix`, **re-run the ful
 
 1. Read this file + skim `PLAN.md` Part C + the memory index (`MEMORY.md`).
 2. Bring up the stack (§5) and run the full gate matrix once to confirm everything is still green from a clean state: `cd backend && go run ./cmd/cored migrate && go build ./... && go vet ./... && go test ./... -count=1`; `cd frontend && pnpm exec tsc --noEmit && pnpm exec vitest run && pnpm run build`; `cd insightd && python -m pytest`.
-3. Tasks A (`d7b970e`), B (`4cc91eb`), C (`6387f8b`) are DONE. Start **Task D** (`phase1-auth-disallow-allow`, §7) — the multi-user deployment switch-blocker. If a customer demo is the priority instead, pick up a **client shell** (Tauri desktop driving `/sync/commit`, or the F9 bill-upload UI).
+3. Tasks A (`d7b970e`), B (`4cc91eb`), C (`6387f8b`), **D (`19d2fa6`)** are DONE. Next high-value increment: a **client shell** (Tauri desktop driving `/sync/commit`, or the F9 bill-upload UI — both must now send a Bearer token via the `auth.mts`/`/auth/token` pattern), or the **Task-D follow-up** (wire the WebAuthn ceremony + Keycloak JWKS routes, §6/§7). Then Phase 3 (§8).
 4. Keep the §3 discipline: orchestrate with workflows, **verify everything yourself**, commit only green, update this file + memory as state changes.
