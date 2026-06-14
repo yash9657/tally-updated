@@ -806,5 +806,115 @@ func assertError(t *testing.T, sc corpusScenario, err error) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Task D auth-catalog RLS red team: the new 0011 tables (app_user,
+// security_level, acl_rule, company_membership, webauthn_credential) must be
+// RLS-locked exactly like the tenant tables — so even if the PDP middleware were
+// bypassed, the app role sees ZERO catalog rows for the wrong subject/user/
+// company. This defends the membership oracle the PDP trusts.
+// ---------------------------------------------------------------------------
+
+// authCatalogTables are the user/company-scoped auth tables (0011). They are NOT
+// in tenantTables (which the isolation tests reserve for the original 7), but
+// they MUST be ENABLE+FORCE RLS with a non-empty WITH CHECK.
+var authCatalogTables = []string{
+	"app_user", "security_level", "acl_rule",
+	"company_membership", "webauthn_credential",
+}
+
+// TestAuthCatalogTablesForceRLS asserts every new auth catalog table is
+// ENABLE+FORCE RLS with an explicit WITH CHECK (mirroring the tenant tables).
+func TestAuthCatalogTablesForceRLS(t *testing.T) {
+	skipIfNoDB(t)
+	h := setupHarness(t, 0, 0)
+	for _, tbl := range authCatalogTables {
+		var enabled, forced bool
+		if err := h.admin.QueryRow(context.Background(),
+			`SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = $1`, tbl).
+			Scan(&enabled, &forced); err != nil {
+			t.Fatalf("pg_class for %s: %v", tbl, err)
+		}
+		if !enabled || !forced {
+			t.Errorf("SECURITY HOLE: auth catalog %s enabled=%v forced=%v, want both true", tbl, enabled, forced)
+		}
+		var usingExpr, withCheck string
+		if err := h.admin.QueryRow(context.Background(),
+			`SELECT pg_get_expr(polqual, polrelid), COALESCE(pg_get_expr(polwithcheck, polrelid), '')
+			   FROM pg_policy WHERE polrelid = $1::regclass AND polname = 'tenant_isolation'`, tbl).
+			Scan(&usingExpr, &withCheck); err != nil {
+			t.Fatalf("SECURITY HOLE: no tenant_isolation policy on %s: %v", tbl, err)
+		}
+		if withCheck == "" {
+			t.Errorf("SECURITY HOLE: %s has no explicit WITH CHECK", tbl)
+		}
+	}
+}
+
+// TestMembershipRLSScopedToUser proves company_membership is invisible to the
+// wrong user GUC: a row planted for user X is seen under X's user GUC but NOT
+// under a different user GUC. This is the membership oracle's isolation — if it
+// leaked, the PDP could be tricked across tenants even with a valid token.
+func TestMembershipRLSScopedToUser(t *testing.T) {
+	skipIfNoDB(t)
+	h := setupHarness(t, 0, 0)
+	ctx := context.Background()
+
+	// Plant a user, a company-scoped security_level, and a membership via admin.
+	userX := mustV7(t)
+	otherUser := mustV7(t)
+	company := mustV7(t)
+	levelID := mustV7(t)
+	seedCompany(t, h.admin, company)
+	if _, err := h.admin.Exec(ctx,
+		`INSERT INTO app_user (id, subject) VALUES ($1, $2)`, userX, "subjX-"+userX.String()[:8]); err != nil {
+		t.Fatalf("seed app_user: %v", err)
+	}
+	if _, err := h.admin.Exec(ctx,
+		`INSERT INTO security_level (id, company_id, name, is_owner, default_access)
+		 VALUES ($1, $2, 'Owner', true, 'full')`, levelID, company); err != nil {
+		t.Fatalf("seed security_level: %v", err)
+	}
+	if _, err := h.admin.Exec(ctx,
+		`INSERT INTO company_membership (user_id, company_id, security_level_id)
+		 VALUES ($1, $2, $3)`, userX, company, levelID); err != nil {
+		t.Fatalf("seed membership: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = h.admin.Exec(ctx, `DELETE FROM company_membership WHERE user_id = $1`, userX)
+		_, _ = h.admin.Exec(ctx, `DELETE FROM security_level WHERE id = $1`, levelID)
+		_, _ = h.admin.Exec(ctx, `DELETE FROM app_user WHERE id = $1`, userX)
+		_, _ = h.admin.Exec(ctx, `DELETE FROM company WHERE id = $1`, company)
+	})
+
+	countMembership := func(t *testing.T, userGUC string) int {
+		t.Helper()
+		tx, err := h.app.Begin(ctx)
+		if err != nil {
+			t.Fatalf("begin: %v", err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		if userGUC != "" {
+			if _, err := tx.Exec(ctx, `SELECT set_config('app.current_user_id', $1, true)`, userGUC); err != nil {
+				t.Fatalf("set user guc: %v", err)
+			}
+		}
+		var n int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM company_membership`).Scan(&n); err != nil {
+			t.Fatalf("count membership: %v", err)
+		}
+		return n
+	}
+
+	if n := countMembership(t, userX.String()); n != 1 {
+		t.Fatalf("user X should see exactly 1 membership, got %d", n)
+	}
+	if n := countMembership(t, otherUser.String()); n != 0 {
+		t.Fatalf("SECURITY HOLE: a different user GUC saw %d of X's memberships, want 0", n)
+	}
+	if n := countMembership(t, ""); n != 0 {
+		t.Fatalf("SECURITY HOLE: no-user-GUC saw %d memberships, want 0 (default-deny)", n)
+	}
+}
+
 // ensure errors import is used even if all probes pass without wrapping.
 var _ = errors.New

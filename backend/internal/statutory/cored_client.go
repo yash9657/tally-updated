@@ -33,11 +33,31 @@ type CoredClient interface {
 type HTTPCoredClient struct {
 	BaseURL string
 	HTTP    *http.Client
+	// ServiceToken, when non-empty, is attached as Authorization: Bearer on every
+	// cored call. It is a pre-minted service JWT (subject prefix "svc:") that
+	// cored's PDP maps to full access scoped to the targeted company. statutoryd
+	// is a separate deployable and talks to cored ONLY over HTTP (archtest
+	// forbids importing internal/authn), so the token is sourced from config/env
+	// (CORED_SERVICE_TOKEN), never minted in-process.
+	ServiceToken string
 }
 
 // NewHTTPCoredClient builds a client with a default http.Client if none given.
 func NewHTTPCoredClient(baseURL string) *HTTPCoredClient {
 	return &HTTPCoredClient{BaseURL: baseURL, HTTP: http.DefaultClient}
+}
+
+// NewHTTPCoredClientWithToken builds a client that attaches the given service
+// token as a Bearer on every request.
+func NewHTTPCoredClientWithToken(baseURL, serviceToken string) *HTTPCoredClient {
+	return &HTTPCoredClient{BaseURL: baseURL, HTTP: http.DefaultClient, ServiceToken: serviceToken}
+}
+
+// authorize attaches the service Bearer token to a request when configured.
+func (c *HTTPCoredClient) authorize(req *http.Request) {
+	if c.ServiceToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.ServiceToken)
+	}
 }
 
 // voucherFullJSON mirrors the cored GET voucher response (server.voucherFullJSON).
@@ -70,6 +90,7 @@ func (c *HTTPCoredClient) GetVoucher(ctx context.Context, companyID, voucherID s
 	if err != nil {
 		return VoucherSnapshot{}, err
 	}
+	c.authorize(req)
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		return VoucherSnapshot{}, fmt.Errorf("statutory: GET voucher: %w", err)
@@ -114,6 +135,7 @@ func (c *HTTPCoredClient) RegisterExternalReference(ctx context.Context, company
 		return PinnedRef{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	c.authorize(req)
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		return PinnedRef{}, fmt.Errorf("statutory: POST external-reference: %w", err)

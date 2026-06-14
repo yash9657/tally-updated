@@ -22,6 +22,16 @@ const modulePath = "github.com/khata/cored"
 // composition root and may import any module. Anything not listed is forbidden.
 var allowedDeps = map[string]map[string]bool{
 	"internal/compliance":  {},
+	// authn (Task D) verifies/mints JWTs with the Go stdlib ONLY — no sibling
+	// imports (it is a pure crypto/identity leaf). The lockout half (WS2) lives in
+	// the same package and may import the db layer for its pg store.
+	"internal/authn": {"internal/platform/db": true},
+	// authz (Task D) is the PDP + catalog store; it reads the auth catalog over
+	// the db layer and nothing else.
+	"internal/authz": {"internal/platform/db": true},
+	// webauthn (Task D WS2) is the WebAuthn ceremony + credential store over the
+	// db layer; stdlib crypto only, no other siblings.
+	"internal/webauthn": {"internal/platform/db": true},
 	// gstr is a read-only GST return generator (GSTR-1) over the tenant-scoped
 	// db layer. It does not import the parent compliance package.
 	"internal/compliance/gstr": {"internal/platform/db": true},
@@ -58,6 +68,9 @@ var allowedDeps = map[string]map[string]bool{
 	"internal/platform/db": {},
 	"internal/server": {
 		"internal/platform/db": true,
+		"internal/authn":           true,
+		"internal/authz":           true,
+		"internal/webauthn":        true,
 		"internal/ledger":          true,
 		"internal/masters":         true,
 		"internal/reporting":       true,

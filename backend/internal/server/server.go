@@ -14,11 +14,17 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -26,6 +32,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
+	"github.com/khata/cored/internal/authn"
+	"github.com/khata/cored/internal/authz"
 	"github.com/khata/cored/internal/compliance"
 	"github.com/khata/cored/internal/compliance/gstr"
 	"github.com/khata/cored/internal/identity"
@@ -56,6 +64,20 @@ type Server struct {
 	importer *migration.Importer
 	sync     *sync.Service
 	router   chi.Router
+
+	// Auth (Task D, WS1). verifier verifies inbound JWTs; signer mints dev
+	// tokens for POST /auth/token; authStore + the PDP enforce membership and
+	// Disallow/Allow on every {companyID} request.
+	verifier  authn.TokenVerifier
+	signer    *authn.Signer
+	authStore authStore
+	authzSeed authSeeder
+}
+
+// authSeeder seeds the Owner security level + membership for a freshly created
+// company. Backed by the 0011 seed_company_auth_defaults() SQL helper.
+type authSeeder interface {
+	SeedCompanyAuthDefaults(ctx context.Context, companyID, userID uuid.UUID) error
 }
 
 // New constructs a Server backed by the application-DSN connection pool and
@@ -67,18 +89,92 @@ func New(ctx context.Context, appDSN string) (*Server, error) {
 	}
 	m := masters.NewService(pool)
 	l := ledger.NewService(pool)
+
+	verifier, signer, err := buildAuth()
+	if err != nil {
+		pool.Close()
+		return nil, err
+	}
+	authzStore := authz.NewStore(pool)
+
 	s := &Server{
-		pool:     pool,
-		identity: identity.NewService(pool),
-		masters:  m,
-		ledger:   l,
-		report:   reporting.NewService(pool),
-		gstr:     gstr.NewService(pool),
-		importer: migration.NewImporter(m, l),
-		sync:     sync.NewService(l, pool),
+		pool:      pool,
+		identity:  identity.NewService(pool),
+		masters:   m,
+		ledger:    l,
+		report:    reporting.NewService(pool),
+		gstr:      gstr.NewService(pool),
+		importer:  migration.NewImporter(m, l),
+		sync:      sync.NewService(l, pool),
+		verifier:  verifier,
+		signer:    signer,
+		authStore: authzStore,
+		authzSeed: authzStore,
 	}
 	s.routes()
 	return s, nil
+}
+
+// buildAuth selects the authentication mode FAIL-CLOSED. A stock binary with no
+// auth env configured REFUSES to start rather than booting fully open (the dev
+// /auth/token issuer mints validly-signed tokens for any subject, so it must
+// NEVER be the silent default).
+//
+//   - AUTH_JWKS_URL set: production. An external IdP (Keycloak) verifies tokens
+//     via JWKS; there is NO in-process signer, so /auth/token is not mounted.
+//     The JWKS verifier is the documented production swap and is not built in
+//     this offline tree, so this path returns an explicit not-implemented error
+//     instead of falling back to the dev issuer.
+//   - AUTH_DEV_TOKEN_ENABLED=true (or CORED_ENV=dev): dev/test. The in-process
+//     deterministic issuer signs tokens and /auth/token is mounted.
+//   - neither: refuse to start. No fail-open default.
+//
+// Returned signer is non-nil ONLY in dev mode; routes() mounts /auth/token iff
+// the signer is present, and handleDevToken 404s if it is somehow reached.
+func buildAuth() (authn.TokenVerifier, *authn.Signer, error) {
+	if os.Getenv("AUTH_JWKS_URL") != "" {
+		return nil, nil, errors.New("server: AUTH_JWKS_URL is set but the JWKS (Keycloak) verifier is not built in this offline tree; wire JWKSVerifier for production (see devIssuer doc). Refusing to start rather than falling back to the dev issuer")
+	}
+	if os.Getenv("AUTH_DEV_TOKEN_ENABLED") == "true" || os.Getenv("CORED_ENV") == "dev" {
+		signer, verifier, err := devIssuer()
+		if err != nil {
+			return nil, nil, err
+		}
+		return verifier, signer, nil
+	}
+	return nil, nil, errors.New("server: no authentication configured — set AUTH_DEV_TOKEN_ENABLED=true for dev/test (mounts the in-process /auth/token issuer) or AUTH_JWKS_URL for production. Refusing to start fail-open")
+}
+
+// devIssuer builds the dev signing/verifying pair. The Ed25519 private key comes
+// from AUTH_DEV_SIGNING_KEY (base64 RawURL of a 64-byte ed25519 private key) when
+// set, otherwise a fresh key is generated and its public half logged. The
+// matching StaticKeyVerifier (issuer "cored-dev", kid "cored-dev-ed25519")
+// verifies tokens this signer mints.
+//
+// Production swap: set AUTH_JWKS_URL and replace this with a JWKSVerifier that
+// fetches Keycloak's JWKS (ES256). This package never fetches the network.
+func devIssuer() (*authn.Signer, *authn.StaticKeyVerifier, error) {
+	const kid = "cored-dev-ed25519"
+	const issuer = "cored-dev"
+
+	var priv ed25519.PrivateKey
+	if enc := os.Getenv("AUTH_DEV_SIGNING_KEY"); enc != "" {
+		raw, err := base64.RawURLEncoding.DecodeString(enc)
+		if err != nil || len(raw) != ed25519.PrivateKeySize {
+			return nil, nil, errors.New("server: AUTH_DEV_SIGNING_KEY must be base64url of a 64-byte ed25519 private key")
+		}
+		priv = ed25519.PrivateKey(raw)
+	} else {
+		_, generated, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			return nil, nil, err
+		}
+		priv = generated
+		log.Printf("auth: no AUTH_DEV_SIGNING_KEY set; generated an ephemeral dev key (kid=%s)", kid)
+	}
+	signer := authn.NewSigner(priv, kid, issuer)
+	verifier := authn.NewStaticKeyVerifier(kid, signer.Public(), issuer)
+	return signer, verifier, nil
 }
 
 // Close releases resources.
@@ -105,10 +201,25 @@ func (s *Server) routes() {
 
 	r.Get("/healthz", s.handleHealthz)
 
-	// Company lifecycle (identity).
-	r.Post("/v1/companies", s.handleCreateCompany)
+	// Dev auth: mint an Owner/user token. OUTSIDE the authed subtree — this is
+	// how a dev/test caller obtains a Bearer token. Mounted ONLY when the
+	// in-process dev signer is present (dev mode); in production the route does
+	// not exist (404) and tokens come from the external IdP. This gating is the
+	// fix for the unauthenticated token-minting oracle: the endpoint mints a
+	// validly-signed token for any subject, so it must never serve in prod.
+	if s.signer != nil {
+		r.Post("/auth/token", s.handleDevToken)
+	}
+
+	// Company lifecycle (identity). authn-ONLY: verify JWT + resolve user
+	// (create-on-first-login); skip membership/PDP (the company does not exist
+	// yet). handleCreateCompany seeds the Owner level + membership afterward.
+	r.With(s.authnOnlyMiddleware).Post("/v1/companies", s.handleCreateCompany)
 
 	r.Route("/v1/companies/{companyID}", func(r chi.Router) {
+		// Every route in this subtree is authn'd + PDP-enforced.
+		r.Use(s.companyAuthMiddleware)
+
 		// Masters.
 		r.Post("/groups", s.handleCreateGroup)
 		r.Post("/ledgers", s.handleCreateLedger)
@@ -189,6 +300,63 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 }
 
 // --------------------------------------------------------------------------
+// Dev auth: POST /auth/token
+// --------------------------------------------------------------------------
+
+// devTokenReq is the dev /auth/token body. It mints a token for an arbitrary
+// subject (the deterministic fake issuer; real Keycloak is the documented swap).
+// amr may carry "webauthn" to simulate a stepped-up token for the assert
+// ceremony. ttl_seconds defaults to 1 hour.
+type devTokenReq struct {
+	Subject    string   `json:"subject"`
+	Email      string   `json:"email"`
+	AMR        []string `json:"amr"`
+	TTLSeconds int64    `json:"ttl_seconds"`
+}
+
+// handleDevToken mints a signed JWT for the supplied subject using the dev
+// signer. It is the seam tests + e2e scripts use to obtain an Owner token. A
+// service token is requested by passing subject "svc:<name>".
+func (s *Server) handleDevToken(w http.ResponseWriter, r *http.Request) {
+	// Defense in depth: this handler must never run without the dev signer.
+	// routes() only mounts it in dev mode, but guard here too.
+	if s.signer == nil {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	var req devTokenReq
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if req.Subject == "" {
+		writeError(w, http.StatusBadRequest, "subject is required")
+		return
+	}
+	ttl := req.TTLSeconds
+	if ttl <= 0 {
+		ttl = 3600
+	}
+	now := time.Now()
+	tok, err := s.signer.Sign(authn.Claims{
+		Subject:   req.Subject,
+		Email:     req.Email,
+		AMR:       req.AMR,
+		IssuedAt:  now.Unix(),
+		ExpiresAt: now.Add(time.Duration(ttl) * time.Second).Unix(),
+		ID:        uuid.NewString(),
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "sign token")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"token":      tok,
+		"token_type": "Bearer",
+		"expires_in": ttl,
+	})
+}
+
+// --------------------------------------------------------------------------
 // Company
 // --------------------------------------------------------------------------
 
@@ -230,6 +398,17 @@ func (s *Server) handleCreateCompany(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
+
+	// Seed the Owner security level + make the creating user an Owner member, so
+	// subsequent {companyID} requests authorize. The user was resolved by the
+	// authn-only middleware (create-on-first-login) and is in the context.
+	if userID, ok := db.UserFromContext(r.Context()); ok {
+		if err := s.authzSeed.SeedCompanyAuthDefaults(r.Context(), created, userID); err != nil {
+			writeError(w, http.StatusInternalServerError, "seed company auth: "+err.Error())
+			return
+		}
+	}
+
 	writeJSON(w, http.StatusCreated, map[string]string{"company_id": created.String()})
 }
 
@@ -1239,6 +1418,19 @@ func (s *Server) handleSyncCommit(w http.ResponseWriter, r *http.Request) {
 // context for the GUC guard, and returns both. On a bad id it writes a 400 and
 // returns ok=false.
 func (s *Server) scopeCtxID(w http.ResponseWriter, r *http.Request) (context.Context, uuid.UUID, bool) {
+	// Prefer the authz-VERIFIED company injected by companyAuthMiddleware. After
+	// Task D, the path param alone no longer drives db.WithCompany; the middleware
+	// validated membership and injected the authorized company into the context.
+	if authorized, ok := db.CompanyFromContext(r.Context()); ok {
+		// Cross-check the path param when present: a mismatch is a 400 (the route
+		// should never resolve to a different company than the one authorized).
+		if pathID, err := uuid.Parse(chi.URLParam(r, "companyID")); err == nil && pathID != authorized {
+			writeError(w, http.StatusBadRequest, "company id mismatch")
+			return nil, uuid.Nil, false
+		}
+		return r.Context(), authorized, true
+	}
+	// Fallback (no middleware / no injected company): parse the path param.
 	companyID, err := uuid.Parse(chi.URLParam(r, "companyID"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid company id")
@@ -1321,6 +1513,46 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 		return false
 	}
 	return true
+}
+
+// drainBody reads (and caps) the request body, then RESTORES r.Body so the
+// downstream handler can re-read it. Returns the raw bytes, or nil on read
+// failure / empty body. Used by the PDP to peek a write's voucher_date without
+// consuming the body.
+func drainBody(r *http.Request) []byte {
+	if r.Body == nil {
+		return nil
+	}
+	limited := io.LimitReader(r.Body, maxJSONBody)
+	b, err := io.ReadAll(limited)
+	_ = r.Body.Close()
+	if err != nil {
+		// Restore an empty body so the handler errors cleanly rather than panicking.
+		r.Body = io.NopCloser(bytes.NewReader(nil))
+		return nil
+	}
+	r.Body = io.NopCloser(bytes.NewReader(b))
+	if len(b) == 0 {
+		return nil
+	}
+	return b
+}
+
+// peekVoucherDate extracts the voucher_date field from a voucher write body for
+// the back-dated cutoff check. Returns nil when absent/unparseable (the cutoff
+// then does not apply). It tolerates non-voucher bodies (returns nil).
+func peekVoucherDate(body []byte) *time.Time {
+	var probe struct {
+		VoucherDate string `json:"voucher_date"`
+	}
+	if err := json.Unmarshal(body, &probe); err != nil || probe.VoucherDate == "" {
+		return nil
+	}
+	d, err := time.Parse("2006-01-02", probe.VoucherDate)
+	if err != nil {
+		return nil
+	}
+	return &d
 }
 
 // optionalDecimal parses a possibly-empty decimal string, returning zero for an

@@ -14,11 +14,19 @@ IRN-and-freeze loop end to end (stdlib only, no deps):
   5. The reconciliation-queue surfaces both refused attempts.
   6. The voucher is left intact (version 1, not deleted) — the block rolled back.
 
+With cored auth on (Task D), every cored call needs a Bearer token: this script
+mints an Owner token (POST /auth/token) for its direct calls and asserts the auth
+gate (no-token -> 401, cross-tenant -> 403). statutoryd needs a SERVICE token
+(subject "svc:statutoryd") at boot via CORED_SERVICE_TOKEN.
+
 Boot:
   cd backend && go build -o /tmp/cored ./cmd/cored && go build -o /tmp/statutoryd ./cmd/statutoryd
   ADMIN_DSN=... go run ./cmd/cored migrate
-  PORT=8087 APP_DSN=... /tmp/cored serve &
-  CORED_BASE_URL=http://localhost:8087 PORT=8091 /tmp/statutoryd &
+  # auth is fail-closed; enable the in-process dev issuer so /auth/token serves:
+  AUTH_DEV_TOKEN_ENABLED=true PORT=8087 APP_DSN=... /tmp/cored serve &
+  # mint the service token, then boot statutoryd with it:
+  SVC=$(curl -s -XPOST http://localhost:8087/auth/token -d '{"subject":"svc:statutoryd"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+  CORED_BASE_URL=http://localhost:8087 CORED_SERVICE_TOKEN=$SVC PORT=8091 /tmp/statutoryd &
 Run:
   python3 backend/scripts/e2e-statutory-freeze.py
 
@@ -30,11 +38,13 @@ CORED = os.environ.get("CORED_BASE_URL", "http://localhost:8087")
 STAT = os.environ.get("STATUTORYD_BASE_URL", "http://localhost:8091")
 
 
-def req(url, data=None, method=None):
+def req(url, data=None, method=None, token=None):
     body = json.dumps(data).encode() if data is not None else None
     r = urllib.request.Request(url, data=body, method=method or ("POST" if data is not None else "GET"))
     if body is not None:
         r.add_header("Content-Type", "application/json")
+    if token:
+        r.add_header("Authorization", "Bearer " + token)
     try:
         with urllib.request.urlopen(r) as resp:
             t = resp.read().decode()
@@ -44,14 +54,35 @@ def req(url, data=None, method=None):
         return e.code, (json.loads(t) if t else None)
 
 
+def mint_token(subject, amr=None):
+    """Obtain a dev JWT from cored's POST /auth/token (no auth required)."""
+    s, r = req(f"{CORED}/auth/token", {"subject": subject, "amr": amr or []})
+    assert s == 200, ("mint token", s, r)
+    return r["token"]
+
+
 def main():
+    # An Owner token for the direct cored calls. AMR webauthn satisfies the Owner
+    # level's requires_webauthn step-up on writes.
+    owner = mint_token("owner-" + str(uuid.uuid4()), amr=["webauthn"])
+    # A service token for statutoryd's freeze-hook calls (svc:* -> full access).
+    svc = mint_token("svc:statutoryd")
+
     cid = str(uuid.uuid4())
     s, _ = req(f"{CORED}/v1/companies", {"id": cid, "name": "Stat E2E Co",
-                                         "fy_start_date": "2026-04-01", "base_currency": "INR"})
+                                         "fy_start_date": "2026-04-01", "base_currency": "INR"}, token=owner)
     assert s == 201, s
 
+    # NEGATIVE: a request with NO token -> 401, a cross-tenant token -> 403.
+    s, _ = req(f"{CORED}/v1/companies/{cid}/reconciliation-queue")
+    assert s == 401, ("no-token must be 401", s)
+    other = mint_token("intruder-" + str(uuid.uuid4()), amr=["webauthn"])
+    s, _ = req(f"{CORED}/v1/companies/{cid}/reconciliation-queue", token=other)
+    assert s == 403, ("cross-tenant must be 403", s)
+    print("auth gate: no-token -> 401, cross-tenant -> 403")
+
     def ledger(name, group, **kw):
-        s, r = req(f"{CORED}/v1/companies/{cid}/ledgers", {"name": name, "group_name": group, **kw})
+        s, r = req(f"{CORED}/v1/companies/{cid}/ledgers", {"name": name, "group_name": group, **kw}, token=owner)
         assert s == 201, (s, r)
         return r["ledger_id"]
 
@@ -71,12 +102,12 @@ def main():
                 {"ledger_id": osg, "dr_cr": "C", "amount": "90.0000"}]
     s, v = req(f"{CORED}/v1/companies/{cid}/vouchers/sales",
                {"voucher_date": "2026-05-10", "party": "Bharat Buyer",
-                "party_ledger_id": debtor, "postings": postings, "gst": gst})
+                "party_ledger_id": debtor, "postings": postings, "gst": gst}, token=owner)
     assert s == 201, (s, v)
     vid, vno = v["voucher_id"], v["voucher_no"]
     print(f"sales voucher posted: no={vno} cgst/sgst={v['cgst']}/{v['sgst']}")
 
-    s, rq = req(f"{CORED}/v1/companies/{cid}/reconciliation-queue")
+    s, rq = req(f"{CORED}/v1/companies/{cid}/reconciliation-queue", token=owner)
     assert s == 200 and len(rq["entries"]) == 0, rq
     print("recon queue empty before freeze")
 
@@ -95,24 +126,24 @@ def main():
 
     # Idempotent freeze hook.
     s, p1 = req(f"{CORED}/v1/companies/{cid}/vouchers/{vid}/external-reference",
-                {"kind": "IRN", "ref_value": irn})
+                {"kind": "IRN", "ref_value": irn}, token=owner)
     assert s in (200, 201) and p1["pinned_voucher_no"] == vno, (s, p1)
     print("freeze-hook idempotent re-register ok")
 
     # ALTER + DELETE of the frozen voucher -> 409.
     s, a = req(f"{CORED}/v1/companies/{cid}/vouchers/sales/{vid}",
                {"voucher_date": "2026-05-10", "party": "Bharat Buyer",
-                "party_ledger_id": debtor, "postings": postings, "gst": gst}, method="PUT")
+                "party_ledger_id": debtor, "postings": postings, "gst": gst}, method="PUT", token=owner)
     assert s == 409, ("alter not blocked", s, a)
     assert a["frozen"] == {"kind": "IRN", "ref_value": irn, "pinned_voucher_no": vno}, a
     print("ALTER frozen voucher -> 409:", a["frozen"]["kind"])
 
-    s, dl = req(f"{CORED}/v1/companies/{cid}/vouchers/{vid}", method="DELETE")
+    s, dl = req(f"{CORED}/v1/companies/{cid}/vouchers/{vid}", method="DELETE", token=owner)
     assert s == 409, ("delete not blocked", s, dl)
     print("DELETE frozen voucher -> 409")
 
     # Reconciliation-queue surfaces both refused attempts.
-    s, rq = req(f"{CORED}/v1/companies/{cid}/reconciliation-queue")
+    s, rq = req(f"{CORED}/v1/companies/{cid}/reconciliation-queue", token=owner)
     assert s == 200
     ops = sorted(e["attempted_op"] for e in rq["entries"])
     assert ops == ["ALTER", "DELETE"], ("recon entries", rq)
@@ -121,7 +152,7 @@ def main():
     print("recon queue after blocks:", ops)
 
     # Voucher intact.
-    s, gv = req(f"{CORED}/v1/companies/{cid}/vouchers/{vid}")
+    s, gv = req(f"{CORED}/v1/companies/{cid}/vouchers/{vid}", token=owner)
     assert s == 200 and gv["version_no"] == 1 and gv["voucher_no"] == vno, gv
     print("voucher intact after blocked edits: version", gv["version_no"])
 

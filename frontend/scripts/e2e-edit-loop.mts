@@ -21,6 +21,7 @@
  */
 
 import { createRestClient } from "../src/api";
+import { authHeaders } from "./auth.mjs";
 
 const baseUrl =
   process.env.CORED_BASE_URL ??
@@ -41,7 +42,10 @@ function assertEqual(message: string, actual: unknown, expected: unknown): void 
 async function main(): Promise<void> {
   console.log(`e2e-edit against ${baseUrl}`);
   // Real fetch, real client code path — exactly what the app ships.
-  const client = createRestClient({ baseUrl });
+  const client = createRestClient({
+    baseUrl,
+    headers: await authHeaders(baseUrl),
+  });
 
   // Fresh tenant per run: isolated + repeatable.
   const companyUUID = crypto.randomUUID();

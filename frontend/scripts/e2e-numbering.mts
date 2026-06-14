@@ -22,6 +22,7 @@
  */
 
 import { createRestClient } from "../src/api";
+import { authHeaders } from "./auth.mjs";
 
 const baseUrl =
   process.env.CORED_BASE_URL ??
@@ -50,7 +51,10 @@ function splitNumber(no: string): { prefix: string; tail: number; suffix: string
 
 async function main(): Promise<void> {
   console.log(`e2e-numbering against ${baseUrl}`);
-  const client = createRestClient({ baseUrl });
+  const client = createRestClient({
+    baseUrl,
+    headers: await authHeaders(baseUrl),
+  });
 
   // Fresh tenant (FY 2026-27) — seeds the Sales voucher type as AUTOMATIC.
   const companyUUID = crypto.randomUUID();

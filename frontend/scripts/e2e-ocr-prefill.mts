@@ -32,6 +32,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createRestClient, createInsightdClient, acceptPurchaseDraft } from "../src/api";
+import { authHeaders } from "./auth.mjs";
 
 const coredBase =
   process.env.CORED_BASE_URL ?? process.env.VITE_CORED_BASE_URL ?? "http://localhost:8087";
@@ -59,7 +60,10 @@ function assertTrue(message: string, cond: boolean): void {
 
 async function main(): Promise<void> {
   console.log(`e2e-ocr-prefill: cored=${coredBase} insightd=${insightdBase}`);
-  const client = createRestClient({ baseUrl: coredBase });
+  const client = createRestClient({
+    baseUrl: coredBase,
+    headers: await authHeaders(coredBase),
+  });
   const insightd = createInsightdClient({ baseUrl: insightdBase });
 
   // 1. Fresh tenant + its real ledgers (intra-state supplier in state 27).

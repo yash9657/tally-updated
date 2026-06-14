@@ -13,6 +13,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -29,6 +31,51 @@ const (
 
 // newServer applies migrations (idempotent) and returns a wired Server. It
 // skips the test when Postgres is unavailable so the suite stays green offline.
+// TestAuthFailsClosedByDefault is the regression guard for the critical
+// token-minting-oracle hole: with NO auth env configured, server.New must
+// REFUSE to start rather than silently booting the open dev issuer. It also
+// asserts that setting AUTH_JWKS_URL (production) does not fall back to the dev
+// issuer (the JWKS verifier is the documented swap, not yet built offline).
+func TestAuthFailsClosedByDefault(t *testing.T) {
+	if os.Getenv("CORED_SKIP_DB") != "" {
+		t.Skip("db tests skipped (CORED_SKIP_DB set)")
+	}
+	ctx := context.Background()
+	if c, err := pgx.Connect(ctx, appDSN); err != nil {
+		t.Skipf("app postgres unavailable, skipping: %v", err)
+	} else {
+		_ = c.Close(ctx)
+	}
+
+	t.Run("no auth configured -> refuse to start", func(t *testing.T) {
+		t.Setenv("AUTH_DEV_TOKEN_ENABLED", "")
+		t.Setenv("CORED_ENV", "")
+		t.Setenv("AUTH_JWKS_URL", "")
+		srv, err := server.New(ctx, appDSN)
+		if err == nil {
+			srv.Close()
+			t.Fatal("server.New must refuse to start with no auth configured (fail-open is a critical hole)")
+		}
+		if !strings.Contains(err.Error(), "no authentication configured") {
+			t.Fatalf("expected fail-closed auth error, got: %v", err)
+		}
+	})
+
+	t.Run("AUTH_JWKS_URL does not fall back to dev issuer", func(t *testing.T) {
+		t.Setenv("AUTH_DEV_TOKEN_ENABLED", "")
+		t.Setenv("CORED_ENV", "")
+		t.Setenv("AUTH_JWKS_URL", "https://keycloak.example/realms/tally/protocol/openid-connect/certs")
+		srv, err := server.New(ctx, appDSN)
+		if err == nil {
+			srv.Close()
+			t.Fatal("server.New must not fall back to the dev issuer when AUTH_JWKS_URL is set")
+		}
+		if !strings.Contains(err.Error(), "JWKS") {
+			t.Fatalf("expected JWKS-not-built error, got: %v", err)
+		}
+	})
+}
+
 func newServer(t *testing.T) *server.Server {
 	t.Helper()
 	if os.Getenv("CORED_SKIP_DB") != "" {
@@ -46,6 +93,10 @@ func newServer(t *testing.T) *server.Server {
 	}
 	_ = adminConn.Close(ctx)
 
+	// Auth is fail-closed by default; tests opt into the in-process dev issuer
+	// (mounts /auth/token + a deterministic signer) so do()/mintToken work.
+	t.Setenv("AUTH_DEV_TOKEN_ENABLED", "true")
+
 	srv, err := server.New(ctx, appDSN)
 	if err != nil {
 		t.Fatalf("server.New: %v", err)
@@ -54,9 +105,68 @@ func newServer(t *testing.T) *server.Server {
 	return srv
 }
 
-// do issues an in-process request against the router and returns the response
-// recorder plus the decoded JSON body.
+// ownerTokens caches a per-server Owner token so every do() request carries a
+// valid Bearer for a consistent Owner subject. The first POST /v1/companies with
+// that token (create-on-first-login) makes the subject an Owner of the company it
+// creates; the same token then authorizes all subsequent {companyID} requests.
+var ownerTokens sync.Map // *server.Server -> string
+
+// ownerToken mints (once per server) a token for a unique Owner subject via the
+// live POST /auth/token dev endpoint, with AMR ["webauthn"] so the Owner level's
+// requires_webauthn step-up is satisfied on writes.
+func ownerToken(t *testing.T, srv *server.Server) string {
+	t.Helper()
+	if v, ok := ownerTokens.Load(srv); ok {
+		return v.(string)
+	}
+	subject := "owner-" + uuid.NewString()
+	rec, body := doRaw(t, srv, http.MethodPost, "/auth/token", "", map[string]any{
+		"subject": subject,
+		"amr":     []string{"webauthn"},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("mint owner token status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	tok, _ := body["token"].(string)
+	if tok == "" {
+		t.Fatalf("mint owner token returned no token (body %s)", rec.Body.String())
+	}
+	ownerTokens.Store(srv, tok)
+	return tok
+}
+
+// mintToken mints a token for an arbitrary subject (and AMR) via /auth/token.
+func mintToken(t *testing.T, srv *server.Server, subject string, amr ...string) string {
+	t.Helper()
+	rec, body := doRaw(t, srv, http.MethodPost, "/auth/token", "", map[string]any{
+		"subject": subject,
+		"amr":     amr,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("mint token %q status = %d, want 200 (body %s)", subject, rec.Code, rec.Body.String())
+	}
+	tok, _ := body["token"].(string)
+	if tok == "" {
+		t.Fatalf("mint token %q returned no token", subject)
+	}
+	return tok
+}
+
+// do issues an in-process request carrying the per-server Owner token. It is the
+// drop-in used by every existing test, now with auth on.
 func do(t *testing.T, srv *server.Server, method, path string, body any) (*httptest.ResponseRecorder, map[string]any) {
+	t.Helper()
+	token := ""
+	// /auth/token and /healthz are unauthenticated; everything else needs a token.
+	if path != "/auth/token" && path != "/healthz" {
+		token = ownerToken(t, srv)
+	}
+	return doRaw(t, srv, method, path, token, body)
+}
+
+// doRaw issues an in-process request, attaching Authorization: Bearer <token>
+// when token != "". It returns the recorder and the decoded JSON body.
+func doRaw(t *testing.T, srv *server.Server, method, path, token string, body any) (*httptest.ResponseRecorder, map[string]any) {
 	t.Helper()
 	var rdr *bytes.Reader
 	if body != nil {
@@ -69,6 +179,9 @@ func do(t *testing.T, srv *server.Server, method, path string, body any) (*httpt
 		rdr = bytes.NewReader(nil)
 	}
 	req := httptest.NewRequest(method, path, rdr)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	rec := httptest.NewRecorder()
 	srv.Router().ServeHTTP(rec, req)
 

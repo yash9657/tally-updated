@@ -5,8 +5,12 @@
 //
 // ENV:
 //
-//	CORED_BASE_URL  cored base URL (default http://localhost:8087)
-//	PORT            HTTP listen port (default 8091)
+//	CORED_BASE_URL      cored base URL (default http://localhost:8087)
+//	CORED_SERVICE_TOKEN pre-minted service JWT (subject "svc:statutoryd") attached
+//	                    as Authorization: Bearer on every cored call. Obtain it
+//	                    from cored's dev POST /auth/token. With cored's auth on,
+//	                    the freeze hook is rejected (401) without it.
+//	PORT                HTTP listen port (default 8091)
 //
 // Endpoints:
 //
@@ -147,12 +151,17 @@ func (s *server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 
 func main() {
 	coredBaseURL := env("CORED_BASE_URL", defaultCoredBaseURL)
+	serviceToken := os.Getenv("CORED_SERVICE_TOKEN")
 	port := env("PORT", defaultPort)
+
+	if serviceToken == "" {
+		log.Printf("statutoryd: WARNING CORED_SERVICE_TOKEN unset; cored freeze-hook calls will be rejected (401) when cored auth is on")
+	}
 
 	s := &server{
 		store: statutory.NewMemStore(),
 		prov:  statutory.FakeProvider{},
-		cored: statutory.NewHTTPCoredClient(coredBaseURL),
+		cored: statutory.NewHTTPCoredClientWithToken(coredBaseURL, serviceToken),
 	}
 
 	r := chi.NewRouter()

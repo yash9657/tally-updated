@@ -33,6 +33,12 @@ var ErrNoCompany = errors.New("db: no company in context (tenant scope required)
 // companyKey is the unexported context key under which the company id is stored.
 type companyKey struct{}
 
+// userKey and subjectKey carry the authenticated caller's identity, set by the
+// auth middleware (WS1, Task D). They drive the user/subject GUCs the auth
+// catalog RLS policies (0011) resolve against.
+type userKey struct{}
+type subjectKey struct{}
+
 // WithCompany returns a copy of ctx carrying the given company id. All
 // subsequent tenant-scoped queries derived from this context will be scoped to
 // that company.
@@ -48,6 +54,38 @@ func CompanyFromContext(ctx context.Context) (uuid.UUID, bool) {
 		return uuid.Nil, false
 	}
 	return id, true
+}
+
+// WithUser returns a copy of ctx carrying the authenticated user id. Auth
+// catalog reads/writes scoped to the user (company_membership, webauthn_credential,
+// app_user-by-id) run with the user GUC set from this value.
+func WithUser(ctx context.Context, userID uuid.UUID) context.Context {
+	return context.WithValue(ctx, userKey{}, userID)
+}
+
+// UserFromContext extracts the user id previously stored by WithUser.
+func UserFromContext(ctx context.Context) (uuid.UUID, bool) {
+	id, ok := ctx.Value(userKey{}).(uuid.UUID)
+	if !ok || id == uuid.Nil {
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
+// WithSubject returns a copy of ctx carrying the authenticated JWT subject.
+// The create-on-first-login and app_user-by-subject reads run with the subject
+// GUC set from this value.
+func WithSubject(ctx context.Context, subject string) context.Context {
+	return context.WithValue(ctx, subjectKey{}, subject)
+}
+
+// SubjectFromContext extracts the subject previously stored by WithSubject.
+func SubjectFromContext(ctx context.Context) (string, bool) {
+	s, ok := ctx.Value(subjectKey{}).(string)
+	if !ok || s == "" {
+		return "", false
+	}
+	return s, true
 }
 
 // Pool is a thin, tenant-aware wrapper around a pgx connection pool. It must be
@@ -123,6 +161,46 @@ func (p *Pool) RunInTx(ctx context.Context, fn TxFunc) error {
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("db: commit: %w", err)
+	}
+	return nil
+}
+
+// RunInAuthTx runs fn inside a transaction whose subject and/or user GUCs are
+// bound from ctx (WithSubject / WithUser), WITHOUT the ErrNoCompany guard. It is
+// the helper the auth catalog reads use: looking a user up by their JWT subject
+// (or by id), and reading their company memberships, BEFORE any company is in
+// scope. The GUCs are set transaction-local via set_config(...,true), exactly
+// like RunInTx binds the company GUC, so the 0011 RLS resolvers
+// (app_current_subject / app_current_user_id) see them.
+//
+// Unlike RunInTx, an absent subject/user does NOT short-circuit: the tx simply
+// runs with those GUCs unset, which the 0011 policies treat as default-deny (the
+// auth catalog returns no rows). It NEVER sets the company GUC; company-scoped
+// catalog reads (security_level, acl_rule) use RunInTx after membership is
+// confirmed.
+func (p *Pool) RunInAuthTx(ctx context.Context, fn TxFunc) error {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("db: begin auth tx: %w", err)
+	}
+	if subject, ok := SubjectFromContext(ctx); ok {
+		if _, err := tx.Exec(ctx, "SELECT set_config('app.current_subject', $1, true)", subject); err != nil {
+			_ = tx.Rollback(ctx)
+			return fmt.Errorf("db: set subject guc: %w", err)
+		}
+	}
+	if userID, ok := UserFromContext(ctx); ok {
+		if _, err := tx.Exec(ctx, "SELECT set_config('app.current_user_id', $1, true)", userID.String()); err != nil {
+			_ = tx.Rollback(ctx)
+			return fmt.Errorf("db: set user guc: %w", err)
+		}
+	}
+	if err := fn(ctx, tx); err != nil {
+		_ = tx.Rollback(ctx)
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("db: commit auth tx: %w", err)
 	}
 	return nil
 }

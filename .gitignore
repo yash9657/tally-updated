@@ -33,3 +33,6 @@ crash.log
 /dist/
 /tmp/
 coverage/
+
+# Claude Code workflow scripts (local orchestration artifacts)
+.claude/
