@@ -213,6 +213,49 @@ func (s *Service) PostVoucher(ctx context.Context, in VoucherInput) (PostResult,
 	return s.post(ctx, voucherID, OpCreate, in)
 }
 
+// PostVoucherWithID posts a NEW voucher (op CREATE) under a CALLER-SUPPLIED
+// voucher id. This is the offline-sync entry point: a node creates a voucher
+// while partitioned, minting a node-partitioned UUIDv7 locally, and that id IS
+// the committed identity once the outbox commits through the cloud sequencer.
+// It is otherwise identical to PostVoucher — numbering still runs (the input's
+// VoucherNo is left empty so the server allocates the FINAL display number) and
+// a nil VoucherTypeID is resolved from the class — only the id is supplied
+// rather than generated. The caller (the sequencer) guarantees no live head
+// already exists for the id before invoking this.
+func (s *Service) PostVoucherWithID(ctx context.Context, id uuid.UUID, in VoucherInput) (PostResult, error) {
+	return s.post(ctx, id, OpCreate, in)
+}
+
+// HeadVersion returns the current head version_no for a LIVE voucher in the
+// company in context. A voucher is live when a voucher_head row exists and is
+// not tombstoned (is_deleted = false); a deleted voucher still has a head row,
+// so the is_deleted filter distinguishes "live head" from "tombstoned head".
+// It returns (versionNo, true, nil) for a live head and (0, false, nil) when no
+// live head exists (unknown OR tombstoned). The cloud sequencer uses this to
+// detect a stale-base conflict before applying an alter/delete: exists=false ->
+// CONFLICT "no live head"; exists=true && BaseVersion != versionNo -> stale
+// CONFLICT; equal -> apply. The read runs in one company-scoped transaction.
+func (s *Service) HeadVersion(ctx context.Context, voucherID uuid.UUID) (int, bool, error) {
+	companyID, ok := db.CompanyFromContext(ctx)
+	if !ok {
+		return 0, false, db.ErrNoCompany
+	}
+	var versionNo int
+	err := s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT version_no FROM voucher_head
+			  WHERE company_id = $1 AND voucher_id = $2 AND is_deleted = false`,
+			companyID, voucherID).Scan(&versionNo)
+	})
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return 0, false, nil
+	case err != nil:
+		return 0, false, fmt.Errorf("ledger: read head version: %w", err)
+	}
+	return versionNo, true, nil
+}
+
 // AlterVoucher appends a NEW version (op ALTER) to an existing logical voucher,
 // chaining onto the latest version's hash. The prior version is never mutated —
 // immutability is preserved and the edit is auditable. It errors with

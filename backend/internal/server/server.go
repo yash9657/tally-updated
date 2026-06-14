@@ -34,6 +34,7 @@ import (
 	"github.com/khata/cored/internal/migration"
 	"github.com/khata/cored/internal/platform/db"
 	"github.com/khata/cored/internal/reporting"
+	"github.com/khata/cored/internal/sync"
 )
 
 // Request-body size caps guard against unbounded uploads. The Tally-XML import
@@ -53,6 +54,7 @@ type Server struct {
 	report   *reporting.Service
 	gstr     *gstr.Service
 	importer *migration.Importer
+	sync     *sync.Service
 	router   chi.Router
 }
 
@@ -73,6 +75,7 @@ func New(ctx context.Context, appDSN string) (*Server, error) {
 		report:   reporting.NewService(pool),
 		gstr:     gstr.NewService(pool),
 		importer: migration.NewImporter(m, l),
+		sync:     sync.NewService(l, pool),
 	}
 	s.routes()
 	return s, nil
@@ -163,6 +166,11 @@ func (s *Server) routes() {
 
 		// Migration import (Tally-XML ingress).
 		r.Post("/import/tally-xml", s.handleImportTallyXML)
+
+		// Offline cloud-sequencer commit (Task C): a desktop node POSTs its
+		// outbox of voucher intents; the sequencer assigns final numbers,
+		// resolves conflicts, and hard-blocks superseding frozen vouchers.
+		r.Post("/sync/commit", s.handleSyncCommit)
 	})
 
 	s.router = r
@@ -1122,6 +1130,105 @@ func (s *Server) handleImportTallyXML(w http.ResponseWriter, r *http.Request) {
 		"ledgers_ensured": res.LedgersEnsured,
 		"posted":          posted,
 	})
+}
+
+// --------------------------------------------------------------------------
+// Offline cloud-sequencer commit (Task C)
+// --------------------------------------------------------------------------
+
+// hlcReq mirrors sync.HLCTimestamp on the wire.
+type hlcReq struct {
+	WallMillis int64  `json:"wall_millis"`
+	Counter    int64  `json:"counter"`
+	NodeID     string `json:"node_id"`
+}
+
+// syncIntentReq mirrors sync.Intent on the wire. The voucher body reuses the
+// generic voucherReq decoded by buildVoucherInput (its VoucherNo is ignored —
+// the server numbers a committed CREATE — but it is carried so postings/date/
+// party/gst map through unchanged). class is required so the post path can
+// resolve the default voucher type.
+type syncIntentReq struct {
+	IdempotencyKey  string     `json:"idempotency_key"`
+	ClientVoucherID string     `json:"client_voucher_id"`
+	Op              string     `json:"op"`
+	Class           string     `json:"class"`
+	ProvisionalNo   string     `json:"provisional_no"`
+	HLC             hlcReq     `json:"hlc"`
+	NodeID          string     `json:"node_id"`
+	BaseVersion     int        `json:"base_version"`
+	Payload         voucherReq `json:"payload"`
+}
+
+type syncCommitReq struct {
+	Intents []syncIntentReq `json:"intents"`
+}
+
+// handleSyncCommit accepts an offline node's outbox of intents, commits them
+// through the cloud sequencer, and returns one outcome per intent (final number,
+// status, reconciliation id). It is the HTTP face of sync.Service.Commit.
+func (s *Server) handleSyncCommit(w http.ResponseWriter, r *http.Request) {
+	ctx, ok := s.scopeCtx(w, r)
+	if !ok {
+		return
+	}
+	var req syncCommitReq
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+
+	intents := make([]sync.Intent, 0, len(req.Intents))
+	for _, ir := range req.Intents {
+		cvid, err := uuid.Parse(ir.ClientVoucherID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid client_voucher_id")
+			return
+		}
+		class := ledger.Class(ir.Class)
+		payload, ok := buildVoucherInput(w, class, ir.Payload)
+		if !ok {
+			return
+		}
+		intents = append(intents, sync.Intent{
+			IdempotencyKey:  ir.IdempotencyKey,
+			ClientVoucherID: cvid,
+			Op:              sync.Op(ir.Op),
+			Class:           class,
+			ProvisionalNo:   ir.ProvisionalNo,
+			HLC: sync.HLCTimestamp{
+				WallMillis: ir.HLC.WallMillis,
+				Counter:    ir.HLC.Counter,
+				NodeID:     ir.HLC.NodeID,
+			},
+			NodeID:      ir.NodeID,
+			BaseVersion: ir.BaseVersion,
+			Payload:     payload,
+		})
+	}
+
+	result, err := s.sync.Commit(ctx, intents)
+	if err != nil {
+		if errors.Is(err, db.ErrNoCompany) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+
+	outcomes := make([]map[string]any, 0, len(result.Outcomes))
+	for _, o := range result.Outcomes {
+		outcomes = append(outcomes, map[string]any{
+			"idempotency_key":   o.IdempotencyKey,
+			"client_voucher_id": o.ClientVoucherID.String(),
+			"status":            string(o.Status),
+			"final_voucher_no":  o.FinalVoucherNo,
+			"version_no":        o.VersionNo,
+			"reconciliation_id": o.ReconciliationID,
+			"detail":            o.Detail,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"outcomes": outcomes})
 }
 
 // --------------------------------------------------------------------------

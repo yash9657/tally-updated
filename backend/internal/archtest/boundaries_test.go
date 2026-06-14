@@ -33,6 +33,12 @@ var allowedDeps = map[string]map[string]bool{
 	"internal/ledger":      {"internal/platform/db": true, "internal/compliance": true},
 	"internal/masters":     {"internal/platform/db": true},
 	"internal/reporting":   {"internal/platform/db": true},
+	// sync is the OFFLINE cloud-sequencer (Task C WS1): it commits offline node
+	// outbox intents through the ledger, assigning final numbers + resolving
+	// conflicts + reusing the freeze rule. It may import the ledger (the post/
+	// alter/delete/freeze path) and the db layer (its own sync_applied + recon
+	// reads), and NOTHING else — never server or statutory.
+	"internal/sync": {"internal/ledger": true, "internal/platform/db": true},
 	// statutoryd is a separate deployable plane: it generates IRN e-invoices and
 	// talks to cored ONLY over HTTP (the freeze-hook contract). It must NOT import
 	// any sibling internal package — the empty map forbids all of them.
@@ -61,6 +67,7 @@ var allowedDeps = map[string]map[string]bool{
 		"internal/inventory":       true,
 		"internal/integration":     true,
 		"internal/migration":       true,
+		"internal/sync":            true,
 	},
 	"internal/archtest": {},
 }
