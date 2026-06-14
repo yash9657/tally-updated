@@ -50,28 +50,127 @@ type TallyData struct {
 	Messages []TallyMessage `xml:"TALLYMESSAGE"`
 }
 
-// TallyMessage is a single import object. In Phase 1 only VOUCHER messages are
-// consumed; ledger/stockitem master messages are ignored (ledgers are created
-// on demand from the voucher's LEDGERENTRIES).
+// TallyMessage is a single import object. A message carries EITHER a VOUCHER or
+// a LEDGER master (Tally emits both kinds of TALLYMESSAGE in a full export). The
+// importer runs a first pass over LEDGER masters (opening balances + GST master
+// attributes) and a second pass over VOUCHERs.
 type TallyMessage struct {
-	Voucher *TallyVoucher `xml:"VOUCHER"`
+	Voucher *TallyVoucher      `xml:"VOUCHER"`
+	Ledger  *TallyLedgerMaster `xml:"LEDGER"`
+}
+
+// TallyLedgerMaster is a Tally LEDGER master message. The NAME comes from either
+// the NAME attribute or a <NAME> child (Tally uses the attribute on the LEDGER
+// element); PARENT is the Tally account group. OpeningBalance follows the same
+// signed convention as a ledger AMOUNT (debit-natured negative, credit positive)
+// — use OpeningSide()/OpeningMagnitude() rather than the raw field.
+type TallyLedgerMaster struct {
+	NameAttr        string `xml:"NAME,attr"`
+	NameElem        string `xml:"NAME"`
+	Parent          string `xml:"PARENT"`
+	OpeningBalance  string `xml:"OPENINGBALANCE"`
+	GSTIN           string `xml:"PARTYGSTIN"`
+	GSTINAlt        string `xml:"GSTIN"`
+	GSTRegistration string `xml:"GSTREGISTRATIONTYPE"`
+	State           string `xml:"STATE"`
+	StateName       string `xml:"STATENAME"`
+	LedgerStateName string `xml:"LEDSTATENAME"`
+}
+
+// Name returns the ledger master's name, preferring the NAME attribute and
+// falling back to a <NAME> child.
+func (m TallyLedgerMaster) Name() string {
+	if n := strings.TrimSpace(m.NameAttr); n != "" {
+		return n
+	}
+	return strings.TrimSpace(m.NameElem)
+}
+
+// GSTINValue returns the counter-party GSTIN, accepting either the PARTYGSTIN or
+// GSTIN spelling Tally emits.
+func (m TallyLedgerMaster) GSTINValue() string {
+	if g := strings.TrimSpace(m.GSTIN); g != "" {
+		return g
+	}
+	return strings.TrimSpace(m.GSTINAlt)
+}
+
+// OpeningSide reports whether the opening balance is a debit (true) or credit
+// (false), and whether an opening balance is present at all (ok=false when the
+// field is empty or zero). Tally signs OPENINGBALANCE like an AMOUNT: a
+// debit-natured opening carries a NEGATIVE value, a credit-natured opening a
+// POSITIVE value (RESEARCH sec 19), so the Dr/Cr is the inverse of the sign.
+func (m TallyLedgerMaster) OpeningSide() (debit bool, ok bool, err error) {
+	raw := strings.TrimSpace(m.OpeningBalance)
+	if raw == "" {
+		return false, false, nil
+	}
+	d, err := decimal.NewFromString(raw)
+	if err != nil {
+		return false, false, fmt.Errorf("integration: ledger %q: bad OPENINGBALANCE %q: %w", m.Name(), raw, err)
+	}
+	if d.IsZero() {
+		return false, false, nil
+	}
+	// Negative magnitude => debit-natured opening; positive => credit-natured.
+	return d.IsNegative(), true, nil
+}
+
+// OpeningMagnitude returns the absolute opening balance (sign dropped). The sign
+// only encodes Dr/Cr, which OpeningSide() reports.
+func (m TallyLedgerMaster) OpeningMagnitude() (decimal.Decimal, error) {
+	raw := strings.TrimSpace(m.OpeningBalance)
+	if raw == "" {
+		return decimal.Zero, nil
+	}
+	d, err := decimal.NewFromString(raw)
+	if err != nil {
+		return decimal.Zero, fmt.Errorf("integration: ledger %q: bad OPENINGBALANCE %q: %w", m.Name(), raw, err)
+	}
+	return d.Abs(), nil
 }
 
 // TallyVoucher is a Tally voucher with its ledger entries. VchType/Action come
 // from XML attributes on the VOUCHER element; the body carries the date, number,
 // narration and the per-ledger debit/credit lines.
 type TallyVoucher struct {
-	VchType         string             `xml:"VCHTYPE,attr"`
-	Action          string             `xml:"ACTION,attr"`
-	Date            string             `xml:"DATE"`
-	VoucherTypeName string             `xml:"VOUCHERTYPENAME"`
-	VoucherNumber   string             `xml:"VOUCHERNUMBER"`
-	Narration       string             `xml:"NARRATION"`
-	PartyLedgerName string             `xml:"PARTYLEDGERNAME"`
-	LedgerEntries   []TallyLedgerEntry `xml:"LEDGERENTRIES.LIST"`
+	VchType         string `xml:"VCHTYPE,attr"`
+	Action          string `xml:"ACTION,attr"`
+	Date            string `xml:"DATE"`
+	VoucherTypeName string `xml:"VOUCHERTYPENAME"`
+	VoucherNumber   string `xml:"VOUCHERNUMBER"`
+	Narration       string `xml:"NARRATION"`
+	PartyLedgerName string `xml:"PARTYLEDGERNAME"`
+	// GUID is Tally's stable identity for the voucher (RESEARCH sec 19); REMOTEID
+	// is the sync fallback. GUIDValue() returns GUID, falling back to REMOTEID.
+	GUID     string `xml:"GUID"`
+	RemoteID string `xml:"REMOTEID"`
+	// PlaceOfSupply / reverse-charge attributes carried on Sales/Purchase exports.
+	PlaceOfSupply string             `xml:"PLACEOFSUPPLY"`
+	StateName     string             `xml:"STATENAME"`
+	ReverseCharge string             `xml:"ISINVOICEORDER"`
+	RCMFlag       string             `xml:"ISREVERSECHARGEAPPLICABLE"`
+	LedgerEntries []TallyLedgerEntry `xml:"LEDGERENTRIES.LIST"`
 	// AllLedgerEntries is Tally's alternate element name for accounting lines on
 	// inventory vouchers; both are merged by Entries().
 	AllLedgerEntries []TallyLedgerEntry `xml:"ALLLEDGERENTRIES.LIST"`
+}
+
+// GUIDValue returns the stable source GUID, preferring <GUID> and falling back
+// to <REMOTEID>. Empty when neither is present (the voucher then always posts on
+// re-import — it does not participate in (company, guid) idempotency).
+func (v TallyVoucher) GUIDValue() string {
+	if g := strings.TrimSpace(v.GUID); g != "" {
+		return g
+	}
+	return strings.TrimSpace(v.RemoteID)
+}
+
+// ReverseChargeFlag reports whether the voucher is marked reverse-charge. It
+// accepts either of the RCM-style flags Tally may emit; absent/"No" is false.
+func (v TallyVoucher) ReverseChargeFlag() bool {
+	yes := func(s string) bool { return strings.EqualFold(strings.TrimSpace(s), "Yes") }
+	return yes(v.RCMFlag)
 }
 
 // Entries returns the combined ledger lines, accepting either the
@@ -93,6 +192,10 @@ type TallyLedgerEntry struct {
 	LedgerName       string `xml:"LEDGERNAME"`
 	IsDeemedPositive string `xml:"ISDEEMEDPOSITIVE"`
 	Amount           string `xml:"AMOUNT"`
+	// HSN and GSTRate are optional GST attributes Tally may stamp on the taxable
+	// (sales income) line. When present they are preferred over rate inference.
+	HSN     string `xml:"HSNCODE"`
+	GSTRate string `xml:"GSTRATE"`
 }
 
 // Side reports whether this entry is a debit (true) or credit (false) per the

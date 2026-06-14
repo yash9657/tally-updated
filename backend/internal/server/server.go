@@ -182,6 +182,8 @@ type companyReq struct {
 	Name         string `json:"name"`
 	FYStartDate  string `json:"fy_start_date"`
 	BaseCurrency string `json:"base_currency"`
+	StateCode    string `json:"state_code"`
+	GSTIN        string `json:"gstin"`
 }
 
 func (s *Server) handleCreateCompany(w http.ResponseWriter, r *http.Request) {
@@ -206,6 +208,8 @@ func (s *Server) handleCreateCompany(w http.ResponseWriter, r *http.Request) {
 		Name:         req.Name,
 		FYStartDate:  req.FYStartDate,
 		BaseCurrency: req.BaseCurrency,
+		StateCode:    req.StateCode,
+		GSTIN:        req.GSTIN,
 	})
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())

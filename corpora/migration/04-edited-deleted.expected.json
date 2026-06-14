@@ -1,0 +1,23 @@
+{
+  "id": "04-edited-deleted",
+  "description": "INDEPENDENT ORACLE (hand-computed from XML). Immutability/edit-log proof. dup-0001 appears TWICE (idempotency: second import skipped, posts once: Cash 10000 / Sales 10000). alt-0001 created 8000 then ALTERed to 12000; only the current version counts (Cash 12000 / Sales 12000). del-0001 created 5000 then DELETEd; contributes 0. LEDGER closings: Cash = 10000 + 12000 = 22000 Dr; Sales = 10000 + 12000 = 22000 Cr. TB Dr 22000 / Cr 22000 (balanced). P&L Income 22000, Expense 0, NetProfit 22000. BS Assets Cash 22000 = Liabilities NetProfit 22000 (balanced). SCOPE NOTE: this corpus exercises importer GUID idempotency (WS2) AND ACTION=Alter/Delete routing (net-new importer code per spec risks). If the importer descopes Alter/Delete, this corpus's green run is pending that work; the numbers here are the correct target regardless.",
+  "tallyExportFile": "04-edited-deleted.xml",
+  "trialBalance": {
+    "rows": [
+      { "ledger": "Cash", "debit": "22000.0000", "credit": "0.0000" },
+      { "ledger": "Sales", "debit": "0.0000", "credit": "22000.0000" }
+    ],
+    "totals": { "debit": "22000.0000", "credit": "22000.0000", "balanced": true }
+  },
+  "balanceSheet": {
+    "assetsTotal": "22000.0000",
+    "liabilitiesTotal": "22000.0000",
+    "netProfit": "22000.0000",
+    "balanced": true
+  },
+  "profitAndLoss": {
+    "incomeTotal": "22000.0000",
+    "expenseTotal": "0.0000",
+    "netProfit": "22000.0000"
+  }
+}

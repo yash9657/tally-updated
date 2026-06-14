@@ -1,0 +1,170 @@
+<ENVELOPE>
+  <HEADER>
+    <VERSION>1</VERSION>
+    <TALLYREQUEST>Import</TALLYREQUEST>
+    <TYPE>Data</TYPE>
+    <ID>All Masters</ID>
+  </HEADER>
+  <BODY>
+    <DESC>
+      <STATICVARIABLES>
+        <SVCURRENTCOMPANY>Multistate GST Co</SVCURRENTCOMPANY>
+      </STATICVARIABLES>
+    </DESC>
+    <DATA>
+      <!-- ============ PARTY + TAX LEDGER MASTERS (no opening balances) ============
+           Company home state is 29 (Karnataka), set by the harness from
+           exp.stateCode. Sales vouchers deliberately leave SupplierStateCode
+           empty; WS3 fills it with the company's 29 inside post()'s tx, so
+           intra(29->29)=CGST+SGST and inter(29->27)=IGST classify correctly. -->
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <LEDGER NAME="Acme Pvt Ltd" ACTION="Create">
+          <NAME>Acme Pvt Ltd</NAME>
+          <PARENT>Sundry Debtors</PARENT>
+          <PARTYGSTIN>29ABCDE1234F1Z5</PARTYGSTIN>
+          <GSTREGISTRATIONTYPE>Regular</GSTREGISTRATIONTYPE>
+          <STATE>29</STATE>
+        </LEDGER>
+      </TALLYMESSAGE>
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <LEDGER NAME="Walk-in Local" ACTION="Create">
+          <NAME>Walk-in Local</NAME>
+          <PARENT>Sundry Debtors</PARENT>
+          <GSTREGISTRATIONTYPE>Consumer</GSTREGISTRATIONTYPE>
+          <STATE>29</STATE>
+        </LEDGER>
+      </TALLYMESSAGE>
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <LEDGER NAME="Walk-in Mumbai" ACTION="Create">
+          <NAME>Walk-in Mumbai</NAME>
+          <PARENT>Sundry Debtors</PARENT>
+          <GSTREGISTRATIONTYPE>Consumer</GSTREGISTRATIONTYPE>
+          <STATE>27</STATE>
+        </LEDGER>
+      </TALLYMESSAGE>
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <LEDGER NAME="Domestic Sales" ACTION="Create">
+          <NAME>Domestic Sales</NAME>
+          <PARENT>Sales Accounts</PARENT>
+        </LEDGER>
+      </TALLYMESSAGE>
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <LEDGER NAME="Output CGST" ACTION="Create">
+          <NAME>Output CGST</NAME>
+          <PARENT>Duties &amp; Taxes</PARENT>
+        </LEDGER>
+      </TALLYMESSAGE>
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <LEDGER NAME="Output SGST" ACTION="Create">
+          <NAME>Output SGST</NAME>
+          <PARENT>Duties &amp; Taxes</PARENT>
+        </LEDGER>
+      </TALLYMESSAGE>
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <LEDGER NAME="Output IGST" ACTION="Create">
+          <NAME>Output IGST</NAME>
+          <PARENT>Duties &amp; Taxes</PARENT>
+        </LEDGER>
+      </TALLYMESSAGE>
+
+      <!-- ============ SALES VOUCHERS ============ -->
+      <!-- S-1 B2B intra @18% taxable 10000: CGST 900 + SGST 900, total 11800 -->
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <VOUCHER VCHTYPE="Sales" ACTION="Create">
+          <GUID>0b000002-gst-sale-0001</GUID>
+          <DATE>20250505</DATE>
+          <VOUCHERTYPENAME>Sales</VOUCHERTYPENAME>
+          <VOUCHERNUMBER>S-1</VOUCHERNUMBER>
+          <PARTYLEDGERNAME>Acme Pvt Ltd</PARTYLEDGERNAME>
+          <PLACEOFSUPPLY>29</PLACEOFSUPPLY>
+          <NARRATION>B2B intra-state sale to registered party</NARRATION>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Acme Pvt Ltd</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+            <AMOUNT>-11800.00</AMOUNT>
+          </LEDGERENTRIES.LIST>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Domestic Sales</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+            <AMOUNT>10000.00</AMOUNT>
+            <HSNCODE>8471</HSNCODE>
+            <GSTRATE>18</GSTRATE>
+          </LEDGERENTRIES.LIST>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Output CGST</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+            <AMOUNT>900.00</AMOUNT>
+          </LEDGERENTRIES.LIST>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Output SGST</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+            <AMOUNT>900.00</AMOUNT>
+          </LEDGERENTRIES.LIST>
+        </VOUCHER>
+      </TALLYMESSAGE>
+      <!-- S-2 B2CS small intra @18% taxable 5000: CGST 450 + SGST 450, total 5900 -->
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <VOUCHER VCHTYPE="Sales" ACTION="Create">
+          <GUID>0b000002-gst-sale-0002</GUID>
+          <DATE>20250512</DATE>
+          <VOUCHERTYPENAME>Sales</VOUCHERTYPENAME>
+          <VOUCHERNUMBER>S-2</VOUCHERNUMBER>
+          <PARTYLEDGERNAME>Walk-in Local</PARTYLEDGERNAME>
+          <PLACEOFSUPPLY>29</PLACEOFSUPPLY>
+          <NARRATION>B2C small intra-state sale to unregistered party</NARRATION>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Walk-in Local</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+            <AMOUNT>-5900.00</AMOUNT>
+          </LEDGERENTRIES.LIST>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Domestic Sales</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+            <AMOUNT>5000.00</AMOUNT>
+            <HSNCODE>8471</HSNCODE>
+            <GSTRATE>18</GSTRATE>
+          </LEDGERENTRIES.LIST>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Output CGST</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+            <AMOUNT>450.00</AMOUNT>
+          </LEDGERENTRIES.LIST>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Output SGST</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+            <AMOUNT>450.00</AMOUNT>
+          </LEDGERENTRIES.LIST>
+        </VOUCHER>
+      </TALLYMESSAGE>
+      <!-- S-3 B2CL inter @18% taxable 200000: IGST 36000, total 236000 (>1L) -->
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <VOUCHER VCHTYPE="Sales" ACTION="Create">
+          <GUID>0b000002-gst-sale-0003</GUID>
+          <DATE>20250520</DATE>
+          <VOUCHERTYPENAME>Sales</VOUCHERTYPENAME>
+          <VOUCHERNUMBER>S-3</VOUCHERNUMBER>
+          <PARTYLEDGERNAME>Walk-in Mumbai</PARTYLEDGERNAME>
+          <PLACEOFSUPPLY>27</PLACEOFSUPPLY>
+          <NARRATION>B2C large inter-state sale to unregistered party</NARRATION>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Walk-in Mumbai</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+            <AMOUNT>-236000.00</AMOUNT>
+          </LEDGERENTRIES.LIST>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Domestic Sales</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+            <AMOUNT>200000.00</AMOUNT>
+            <HSNCODE>8471</HSNCODE>
+            <GSTRATE>18</GSTRATE>
+          </LEDGERENTRIES.LIST>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Output IGST</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+            <AMOUNT>36000.00</AMOUNT>
+          </LEDGERENTRIES.LIST>
+        </VOUCHER>
+      </TALLYMESSAGE>
+    </DATA>
+  </BODY>
+</ENVELOPE>

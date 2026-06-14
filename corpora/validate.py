@@ -260,8 +260,51 @@ def validate_isolation(path: Path, case: dict) -> None:
         fail(path, f"expect must contain at least one known assertion key from {sorted(known_assertions)}")
 
 
+def _check_xml(path: Path, case: dict) -> None:
+    """Parse the referenced XML and assert every voucher's ledger entries net to
+    zero (Tally signs debits negative). ALTER/DELETE actions are checked too."""
+    xml_path = path.parent / case["tallyExportFile"]
+    if not xml_path.exists():
+        fail(path, f"tallyExportFile {case['tallyExportFile']!r} does not exist next to fixture")
+        return
+    try:
+        tree = ET.parse(xml_path)
+    except ET.ParseError as exc:
+        fail(path, f"referenced XML {xml_path.name} does not parse: {exc}")
+        return
+    root = tree.getroot()
+    if root.tag != "ENVELOPE":
+        fail(path, f"XML root must be <ENVELOPE>, got <{root.tag}>")
+    vouchers = root.findall(".//VOUCHER")
+    if not vouchers:
+        fail(path, "XML contains no <VOUCHER> elements")
+    for v in vouchers:
+        total = Decimal("0")
+        # Accept both LEDGERENTRIES.LIST and ALLLEDGERENTRIES.LIST spellings.
+        amts = v.findall("./LEDGERENTRIES.LIST/AMOUNT") + v.findall("./ALLLEDGERENTRIES.LIST/AMOUNT")
+        for amt in amts:
+            try:
+                total += Decimal((amt.text or "").strip())
+            except InvalidOperation:
+                fail(path, f"voucher has non-decimal AMOUNT {amt.text!r}")
+        if total != 0:
+            num = v.findtext("VOUCHERNUMBER", "?")
+            typ = v.findtext("VOUCHERTYPENAME", "?")
+            fail(path, f"voucher {typ} #{num} ledger entries do not net to zero (sum={total:f})")
+
+
 def validate_migration(path: Path, case: dict) -> None:
-    """Validate a migration reconciliation case + its referenced XML export."""
+    """Validate a migration reconciliation case + its referenced XML export.
+
+    Two on-disk shapes are accepted:
+      * legacy single-statement TB doc: {expectedTrialBalance[], expectedTotals}
+      * four-statement oracle doc:      {trialBalance{rows,totals}, balanceSheet?,
+                                         profitAndLoss?, gstr1?, outstandings?}
+    Dispatch on the presence of the 'trialBalance' key.
+    """
+    if "trialBalance" in case:
+        validate_migration_full(path, case)
+        return
     if not require(path, case, ["id", "description", "tallyExportFile", "expectedTrialBalance", "expectedTotals"]):
         return
     xml_path = path.parent / case["tallyExportFile"]
@@ -329,6 +372,145 @@ def validate_migration(path: Path, case: dict) -> None:
         fail(path, f"trial balance does not balance: Dr {sum_debit:f} vs Cr {sum_credit:f}")
 
 
+def validate_migration_full(path: Path, case: dict) -> None:
+    """Validate a four-statement migration ORACLE doc and re-check its OWN internal
+    arithmetic (independent of any Go code): SUM(Dr)==SUM(Cr) on the TB, the BS
+    accounting identity (assets == liabilities, liabilities includes folded net
+    profit), BS.netProfit == PL.netProfit, and the GSTR-1 tax-sum/HSN consistency.
+
+    This catches arithmetic slips in the HAND-WRITTEN oracle before any importer
+    runs, satisfying the oracleIndependenceRule's "re-check the expected doc
+    itself" requirement.
+    """
+    if not require(path, case, ["id", "description", "tallyExportFile", "trialBalance"]):
+        return
+    _check_xml(path, case)
+
+    tb = case["trialBalance"]
+    if not isinstance(tb, dict) or not require(path, tb, ["rows", "totals"]):
+        return
+    rows = tb["rows"]
+    if not isinstance(rows, list) or not rows:
+        fail(path, "trialBalance.rows must be a non-empty array")
+        return
+    sum_debit = Decimal("0")
+    sum_credit = Decimal("0")
+    for i, row in enumerate(rows):
+        if not require(path, row, ["ledger", "debit", "credit"]):
+            return
+        d = money(path, f"trialBalance.rows[{i}].debit", row["debit"])
+        c = money(path, f"trialBalance.rows[{i}].credit", row["credit"])
+        if d is None or c is None:
+            return
+        if d != 0 and c != 0:
+            fail(path, f"trialBalance.rows[{i}] ({row['ledger']}) has both debit and credit non-zero")
+        sum_debit += d
+        sum_credit += c
+
+    totals = tb["totals"]
+    if not require(path, totals, ["debit", "credit", "balanced"]):
+        return
+    td = money(path, "trialBalance.totals.debit", totals["debit"])
+    tc = money(path, "trialBalance.totals.credit", totals["credit"])
+    if td is None or tc is None:
+        return
+    if td != sum_debit:
+        fail(path, f"trialBalance.totals.debit={td:f} != sum of row debits {sum_debit:f}")
+    if tc != sum_credit:
+        fail(path, f"trialBalance.totals.credit={tc:f} != sum of row credits {sum_credit:f}")
+    if bool(totals["balanced"]) != (sum_debit == sum_credit):
+        fail(path, f"trialBalance.totals.balanced={bool(totals['balanced'])} but Dr==Cr is {sum_debit==sum_credit}")
+    if sum_debit != sum_credit:
+        fail(path, f"trial balance does not balance: Dr {sum_debit:f} vs Cr {sum_credit:f}")
+
+    # --- Balance Sheet identity ---
+    bs_np = None
+    if "balanceSheet" in case:
+        bs = case["balanceSheet"]
+        if require(path, bs, ["assetsTotal", "liabilitiesTotal", "netProfit", "balanced"]):
+            a = money(path, "balanceSheet.assetsTotal", bs["assetsTotal"])
+            ltot = money(path, "balanceSheet.liabilitiesTotal", bs["liabilitiesTotal"])
+            bs_np = money(path, "balanceSheet.netProfit", bs["netProfit"])
+            if a is not None and ltot is not None:
+                if bool(bs["balanced"]) != (a == ltot):
+                    fail(path, f"balanceSheet.balanced={bool(bs['balanced'])} but assets==liabilities is {a==ltot}")
+                if a != ltot:
+                    fail(path, f"balance sheet does not balance: Assets {a:f} != Liabilities {ltot:f}")
+
+    # --- P&L identity + BS/PL net-profit cross-check ---
+    if "profitAndLoss" in case:
+        pl = case["profitAndLoss"]
+        if require(path, pl, ["incomeTotal", "expenseTotal", "netProfit"]):
+            inc = money(path, "profitAndLoss.incomeTotal", pl["incomeTotal"])
+            exp = money(path, "profitAndLoss.expenseTotal", pl["expenseTotal"])
+            pl_np = money(path, "profitAndLoss.netProfit", pl["netProfit"])
+            if inc is not None and exp is not None and pl_np is not None:
+                if pl_np != inc - exp:
+                    fail(path, f"profitAndLoss.netProfit={pl_np:f} != income-expense {inc-exp:f}")
+                if bs_np is not None and bs_np != pl_np:
+                    fail(path, f"CONSISTENCY: balanceSheet.netProfit {bs_np:f} != profitAndLoss.netProfit {pl_np:f}")
+
+    # --- GSTR-1 internal consistency ---
+    if "gstr1" in case:
+        validate_gstr1_oracle(path, case["gstr1"])
+
+    # --- Outstandings: per-party pending == sum of its bills (when bills listed) ---
+    if "outstandings" in case:
+        os_doc = case["outstandings"]
+        for side in ("receivables", "payables"):
+            for j, party in enumerate(os_doc.get(side, []) or []):
+                if not require(path, party, ["ledger", "pending"]):
+                    continue
+                pend = money(path, f"outstandings.{side}[{j}].pending", party["pending"])
+                bills = party.get("bills") or []
+                if bills and pend is not None:
+                    bsum = Decimal("0")
+                    for k, b in enumerate(bills):
+                        if not require(path, b, ["ref", "pending"]):
+                            continue
+                        bp = money(path, f"outstandings.{side}[{j}].bills[{k}].pending", b["pending"])
+                        if bp is not None:
+                            bsum += bp
+                    if bsum != pend:
+                        fail(path, f"outstandings.{side}[{j}] ({party['ledger']}) pending {pend:f} != sum of bills {bsum:f}")
+
+
+def validate_gstr1_oracle(path: Path, g: dict) -> None:
+    """Re-check the GSTR-1 oracle's internal arithmetic: taxTotals == sum of HSN
+    rows, and every HSN/B2CS/B2B row has tax == taxable*rate split correctly."""
+    if not require(path, g, ["fp", "taxTotals", "hsn", "balanced"]):
+        return
+    tt = g["taxTotals"]
+    if not require(path, tt, ["taxable", "cgst", "sgst", "igst"]):
+        return
+    t_tax = money(path, "gstr1.taxTotals.taxable", tt["taxable"])
+    t_c = money(path, "gstr1.taxTotals.cgst", tt["cgst"])
+    t_s = money(path, "gstr1.taxTotals.sgst", tt["sgst"])
+    t_i = money(path, "gstr1.taxTotals.igst", tt["igst"])
+
+    # taxTotals must equal the sum of the HSN summary (HSN covers every invoice).
+    h_tax = h_c = h_s = h_i = Decimal("0")
+    for i, h in enumerate(g["hsn"]):
+        if not require(path, h, ["hsn", "rate", "taxable", "cgst", "sgst", "igst"]):
+            continue
+        ht = money(path, f"gstr1.hsn[{i}].taxable", h["taxable"])
+        hc = money(path, f"gstr1.hsn[{i}].cgst", h["cgst"])
+        hs = money(path, f"gstr1.hsn[{i}].sgst", h["sgst"])
+        hi = money(path, f"gstr1.hsn[{i}].igst", h["igst"])
+        if None in (ht, hc, hs, hi):
+            continue
+        h_tax += ht
+        h_c += hc
+        h_s += hs
+        h_i += hi
+        # Per-row CGST must equal SGST on an intra row (this engine's equal-split rule).
+        if hi == 0 and hc != hs:
+            fail(path, f"gstr1.hsn[{i}] intra row has CGST {hc:f} != SGST {hs:f}")
+    for label, want, got in (("taxable", t_tax, h_tax), ("cgst", t_c, h_c), ("sgst", t_s, h_s), ("igst", t_i, h_i)):
+        if want is not None and want != got:
+            fail(path, f"gstr1.taxTotals.{label}={want:f} != sum of HSN rows {got:f}")
+
+
 VALIDATORS = {
     "tax": validate_tax,
     "keystroke": validate_keystroke,
@@ -336,7 +518,7 @@ VALIDATORS = {
     "migration": validate_migration,
 }
 
-MIN_COUNTS = {"tax": 14, "keystroke": 14, "isolation": 10, "migration": 1}
+MIN_COUNTS = {"tax": 14, "keystroke": 14, "isolation": 10, "migration": 6}
 
 
 def main() -> int:

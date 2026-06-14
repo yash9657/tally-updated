@@ -72,3 +72,42 @@ A fixture pair: a Tally XML export sample and the expected post-import trial bal
   "expectedTotals": { "debit": "5000.0000", "credit": "5000.0000", "balanced": true }
 }
 ```
+
+### Four-statement oracle (`<id>.expected.json`)
+
+Phase 1 adds a richer oracle paired with each `<id>.xml`: besides the trial
+balance it pins the **Balance Sheet, Profit & Loss, GSTR-1 rollups and bill-wise
+Outstandings**, reconciled by `migration.ReconcileFull`. The pinned Go shape is
+`migration.ExpectedReconciliation` (`backend/internal/migration/expected.go`).
+Dispatch is on the presence of the `trialBalance` key; `validate.py` re-checks the
+oracle's own arithmetic (SUM(Dr)==SUM(Cr); Assets==Liabilities; BS.netProfit ==
+PL.netProfit; GSTR-1 taxTotals == sum of HSN rows) independently of any Go code.
+
+```jsonc
+{
+  "id": "02-multistate-gst",
+  "tallyExportFile": "02-multistate-gst.xml",
+  "gstin": "29ZZZZZ0000Z1Z5", "stateCode": "29",
+  "period": { "from": "2025-05-01", "to": "2025-05-31" },
+  "taxLedgers": { "cgst": "Output CGST", "sgst": "Output SGST", "igst": "Output IGST" },
+  "trialBalance": { "rows": [ /* {ledger,debit,credit} */ ], "totals": { "debit": "...", "credit": "...", "balanced": true } },
+  "balanceSheet":  { "assetsTotal": "...", "liabilitiesTotal": "...", "netProfit": "...", "balanced": true },
+  "profitAndLoss": { "incomeTotal": "...", "expenseTotal": "...", "netProfit": "..." },
+  "gstr1": { "fp": "052025", "taxTotals": { "taxable": "...", "cgst": "...", "sgst": "...", "igst": "..." },
+             "hsn": [ /* {hsn,rate,taxable,cgst,sgst,igst} */ ],
+             "b2cs": [ /* {splyTy,pos,rate,...} */ ], "b2b": [ /* {ctin,...} */ ], "balanced": true },
+  "outstandings": { "asOn": "2025-06-30", "receivables": [ /* {ledger,pending,bills[]} */ ] }
+}
+```
+
+**The oracle is INDEPENDENT**: every expected number is derived by hand from the
+input vouchers (double-entry + GST slab arithmetic) and shown in the `description`
+field — NEVER by dumping importer output. The five datasets are:
+
+| id | proves |
+| --- | --- |
+| `01-opening-trading` | opening balances fold into TB/BS; BS.netProfit == PL.netProfit (no GST) |
+| `02-multistate-gst`  | GSTR-1 B2B/B2CS/HSN + TaxTotals tie to output-tax postings; intra(CGST/SGST) vs inter(IGST) via the WS3 company-state default |
+| `03-billwise-outstandings` | per-party + per-bill Pending/ageing; debtor TB == sum of open bills (needs `<BILLALLOCATIONS.LIST>` import) |
+| `04-edited-deleted`  | GUID idempotency (re-import = no-op); ALTER current-version-wins; DELETE contributes zero (needs ACTION=Alter/Delete import) |
+| `05-rounding-edge`   | paisa-exact at a half-paisa rounding boundary; imported tax must match the engine (`deriveAndVerifyGST`) |

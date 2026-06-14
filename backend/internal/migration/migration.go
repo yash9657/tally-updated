@@ -30,6 +30,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
+	"github.com/khata/cored/internal/compliance"
 	"github.com/khata/cored/internal/integration"
 	"github.com/khata/cored/internal/ledger"
 	"github.com/khata/cored/internal/masters"
@@ -74,6 +75,11 @@ type ImportResult struct {
 	LedgersEnsured []string
 	// Posted holds one PostResult per posted voucher, in document order.
 	Posted []ledger.PostResult
+	// Skipped is the count of vouchers that were NOT posted because a voucher with
+	// the same Tally GUID had already been imported into this company (idempotent
+	// re-import). SkippedGUIDs lists those GUIDs in document order.
+	Skipped      int
+	SkippedGUIDs []string
 }
 
 // ImportReader parses a Tally XML export from r and imports every VOUCHER
@@ -115,10 +121,37 @@ func (im *Importer) ImportEnvelope(ctx context.Context, env *integration.TallyEn
 	// several vouchers is resolved/created once.
 	ledgerIDs := make(map[string]uuid.UUID)
 	seenLedger := make(map[string]bool)
+	// ledgerState carries the two-digit GST state code of each named ledger as
+	// declared by its LEDGER master, used to derive a Sales voucher's place of
+	// supply when the voucher itself does not carry one.
+	ledgerState := make(map[string]string)
 
+	// FIRST PASS — LEDGER masters: opening balances + GST master attributes. These
+	// must land before any voucher posts so (a) reporting folds the opening
+	// balances into TB/BS/P&L and (b) the GSTR-1 party join classifies B2B vs B2C.
+	// A master whose ledger already exists is left unchanged (resolve-first).
+	for i, msg := range env.Body.Data.Messages {
+		if msg.Ledger == nil {
+			continue
+		}
+		id, name, state, err := im.importLedgerMaster(ctx, i, msg.Ledger, ledgerIDs, createdBy)
+		if err != nil {
+			return res, err
+		}
+		if state != "" {
+			ledgerState[name] = state
+		}
+		if !seenLedger[name] {
+			seenLedger[name] = true
+			res.LedgersEnsured = append(res.LedgersEnsured, name)
+		}
+		ledgerIDs[name] = id
+	}
+
+	// SECOND PASS — vouchers, in document order.
 	for i, msg := range env.Body.Data.Messages {
 		if msg.Voucher == nil {
-			continue // non-voucher messages (masters, etc.) are ignored in Phase 1
+			continue // ledger masters handled in the first pass
 		}
 		v := msg.Voucher
 		// Action defaults to Create; only creates are supported on import.
@@ -126,7 +159,21 @@ func (im *Importer) ImportEnvelope(ctx context.Context, env *integration.TallyEn
 			return res, fmt.Errorf("migration: voucher %d: unsupported ACTION %q (only Create)", i+1, v.Action)
 		}
 
-		posted, names, err := im.importVoucher(ctx, i, v, ledgerIDs, createdBy)
+		// Idempotency: a voucher carrying a GUID already imported into this company
+		// is skipped (no re-post), matching Tally's same-GUID semantics. A voucher
+		// with NO GUID is never deduped — it always posts (documented in corpus).
+		guid := v.GUIDValue()
+		if guid != "" {
+			if _, found, err := im.ledger.VoucherIDBySourceGUID(ctx, guid); err != nil {
+				return res, fmt.Errorf("migration: voucher %d: idempotency lookup: %w", i+1, err)
+			} else if found {
+				res.Skipped++
+				res.SkippedGUIDs = append(res.SkippedGUIDs, guid)
+				continue
+			}
+		}
+
+		posted, names, err := im.importVoucher(ctx, i, v, ledgerIDs, ledgerState, createdBy)
 		if err != nil {
 			return res, err
 		}
@@ -142,10 +189,139 @@ func (im *Importer) ImportEnvelope(ctx context.Context, env *integration.TallyEn
 	return res, nil
 }
 
+// importLedgerMaster applies one Tally LEDGER master: it ensures the ledger
+// exists with its opening balance (set as ledger.opening_balance/opening_dc so
+// reporting folds it into the statements with zero reporting change) and its GST
+// master attributes (GSTIN / state_code / registration_type). An already-present
+// ledger is left unchanged. It returns the ledger id, resolved name, and the
+// declared state code (empty if none).
+func (im *Importer) importLedgerMaster(ctx context.Context, idx int, m *integration.TallyLedgerMaster,
+	cache map[string]uuid.UUID, createdBy string) (uuid.UUID, string, string, error) {
+
+	name := m.Name()
+	if name == "" {
+		return uuid.Nil, "", "", fmt.Errorf("migration: ledger master %d: empty NAME", idx+1)
+	}
+	if id, ok := cache[name]; ok {
+		return id, name, masterStateCode(m), nil
+	}
+
+	debit, hasOpening, err := m.OpeningSide()
+	if err != nil {
+		return uuid.Nil, "", "", fmt.Errorf("migration: ledger master %d: %w", idx+1, err)
+	}
+	mag, err := m.OpeningMagnitude()
+	if err != nil {
+		return uuid.Nil, "", "", fmt.Errorf("migration: ledger master %d: %w", idx+1, err)
+	}
+
+	group := strings.TrimSpace(m.Parent)
+	if group == "" {
+		// No Tally parent: infer a home from the opening side (debit-natured =>
+		// asset bucket, credit-natured => liability bucket) by name.
+		side := ledger.Credit
+		if debit {
+			side = ledger.Debit
+		}
+		group = inferGroup(name, ledger.Journal, side)
+	}
+
+	openDC := "C"
+	if debit {
+		openDC = "D"
+	}
+	openBal := decimal.Zero
+	if hasOpening {
+		openBal = mag
+	}
+
+	l := masters.Ledger{
+		Name:             name,
+		GroupName:        group,
+		OpeningBalance:   openBal,
+		OpeningDC:        openDC,
+		GSTIN:            m.GSTINValue(),
+		StateCode:        masterStateCode(m),
+		RegistrationType: masterRegType(m),
+	}
+	id, err := im.masters.EnsureLedgerWithOpening(ctx, l, createdBy)
+	if err != nil {
+		return uuid.Nil, "", "", fmt.Errorf("migration: ledger master %d: ensure %q: %w", idx+1, name, err)
+	}
+	return id, name, l.StateCode, nil
+}
+
+// masterStateCode returns the two-digit GST state code declared on a LEDGER
+// master, accepting the STATE / STATENAME / LEDSTATENAME spellings (a two-digit
+// code is taken verbatim; a state NAME is not resolved here — corpora carry the
+// numeric code in STATE).
+func masterStateCode(m *integration.TallyLedgerMaster) string {
+	for _, s := range []string{m.State, m.StateName, m.LedgerStateName} {
+		s = strings.TrimSpace(s)
+		if len(s) == 2 {
+			return s
+		}
+	}
+	return ""
+}
+
+// masterRegType maps a Tally GSTREGISTRATIONTYPE onto the cored enum. A blank or
+// unknown value yields UNKNOWN; a GSTIN with an unspecified type is treated as
+// REGULAR so the GSTR-1 join classifies it B2B.
+func masterRegType(m *integration.TallyLedgerMaster) masters.GSTRegistrationType {
+	switch strings.ToUpper(strings.TrimSpace(m.GSTRegistration)) {
+	case "REGULAR":
+		return masters.GSTRegular
+	case "COMPOSITION":
+		return masters.GSTComposition
+	case "CONSUMER":
+		return masters.GSTConsumer
+	case "UNREGISTERED":
+		return masters.GSTUnregistered
+	case "SEZ", "SPECIAL ECONOMIC ZONE":
+		return masters.GSTSEZ
+	default:
+		if m.GSTINValue() != "" {
+			return masters.GSTRegular
+		}
+		return masters.GSTUnknown
+	}
+}
+
+// taxLedgerKind classifies a ledger name as a CGST/SGST/IGST tax line (or none),
+// so a Sales voucher's GST lines can be separated from its taxable lines.
+type taxLedgerKind int
+
+const (
+	notTax taxLedgerKind = iota
+	taxCGST
+	taxSGST
+	taxIGST
+)
+
+// classifyTaxLedger inspects a ledger name for a GST head. IGST is checked first
+// so a name containing "igst" is not mis-read as cgst/sgst.
+func classifyTaxLedger(name string) taxLedgerKind {
+	l := strings.ToLower(name)
+	switch {
+	case strings.Contains(l, "igst"):
+		return taxIGST
+	case strings.Contains(l, "cgst"):
+		return taxCGST
+	case strings.Contains(l, "sgst"):
+		return taxSGST
+	default:
+		return notTax
+	}
+}
+
 // importVoucher ensures the voucher's ledgers exist and posts it. It returns the
-// post result and the list of ledger names it touched.
+// post result and the list of ledger names it touched. For a Sales voucher whose
+// entries include CGST/SGST/IGST tax lines, it builds ledger.GSTParams so the
+// post path derives + verifies the tax against the engine and stamps the GST
+// breakup on the version (which GSTR-1 then reads).
 func (im *Importer) importVoucher(ctx context.Context, idx int, v *integration.TallyVoucher,
-	ledgerIDs map[string]uuid.UUID, createdBy string) (ledger.PostResult, []string, error) {
+	ledgerIDs map[string]uuid.UUID, ledgerState map[string]string, createdBy string) (ledger.PostResult, []string, error) {
 
 	class, ok := classByVchType[strings.ToLower(strings.TrimSpace(v.VchType))]
 	if !ok {
@@ -168,9 +344,20 @@ func (im *Importer) importVoucher(ctx context.Context, idx int, v *integration.T
 		return ledger.PostResult{}, nil, fmt.Errorf("migration: voucher %d: %w", idx+1, err)
 	}
 
+	party := strings.TrimSpace(v.PartyLedgerName)
+
 	var (
 		postings []ledger.PostingInput
 		names    []string
+		// GST accumulation (Sales only): the taxable (non-tax, non-party) lines and
+		// the tax-ledger ids + posted tax amounts.
+		taxableLines []compliance.Line
+		taxableTotal decimal.Decimal
+		taxTotal     decimal.Decimal
+		cgstID       uuid.UUID
+		sgstID       uuid.UUID
+		igstID       uuid.UUID
+		partyID      uuid.UUID
 	)
 	for _, e := range entries {
 		name := strings.TrimSpace(e.LedgerName)
@@ -197,6 +384,35 @@ func (im *Importer) importVoucher(ctx context.Context, idx int, v *integration.T
 		}
 		postings = append(postings, ledger.PostingInput{LedgerID: id, DrCr: drcr, Amount: amount})
 		names = append(names, name)
+
+		if name == party {
+			partyID = id
+		}
+
+		if class == ledger.Sales {
+			switch classifyTaxLedger(name) {
+			case taxCGST:
+				cgstID = id
+				taxTotal = taxTotal.Add(amount)
+			case taxSGST:
+				sgstID = id
+				taxTotal = taxTotal.Add(amount)
+			case taxIGST:
+				igstID = id
+				taxTotal = taxTotal.Add(amount)
+			default:
+				// A non-tax line that is NOT the party line is a taxable (sales income)
+				// line. The party line is the receivable, not taxable value.
+				if name != party {
+					taxableLines = append(taxableLines, compliance.Line{
+						TaxableValue: amount,
+						GSTRatePct:   decimal.Zero, // set after the loop from total tax/taxable
+						HSN:          strings.TrimSpace(e.HSN),
+					})
+					taxableTotal = taxableTotal.Add(amount)
+				}
+			}
+		}
 	}
 
 	// Resolve the voucher type for this class (the six are seeded per company).
@@ -209,18 +425,66 @@ func (im *Importer) importVoucher(ctx context.Context, idx int, v *integration.T
 	in := ledger.VoucherInput{
 		Class:         class,
 		VoucherTypeID: vtID,
+		PartyLedgerID: partyID,
 		VoucherNo:     strings.TrimSpace(v.VoucherNumber),
 		VoucherDate:   isoDate,
 		Narration:     strings.TrimSpace(v.Narration),
-		Party:         strings.TrimSpace(v.PartyLedgerName),
+		Party:         party,
 		CreatedBy:     createdBy,
 		Postings:      postings,
+		SourceGUID:    v.GUIDValue(),
 	}
+
+	// GST on Sales: when the voucher carried tax lines, attach GSTParams so the
+	// post path derives + verifies the split. SupplierStateCode is left EMPTY on
+	// purpose — ledger.post() fills it from the company's home state inside the tx
+	// (WS3). The rate is inferred from total tax over taxable value (a whole
+	// percent), unless an explicit GSTRATE was present on a taxable line.
+	if class == ledger.Sales && !taxTotal.IsZero() && !taxableTotal.IsZero() {
+		rate := inferRate(v.Entries(), taxTotal, taxableTotal)
+		for i := range taxableLines {
+			taxableLines[i].GSTRatePct = rate
+		}
+		pos := strings.TrimSpace(v.PlaceOfSupply)
+		if len(pos) != 2 {
+			// Derive POS from the party ledger's declared home state.
+			if st := ledgerState[party]; st != "" {
+				pos = st
+			}
+		}
+		in.GST = &ledger.GSTParams{
+			PlaceOfSupplyStateCode: pos,
+			ReverseCharge:          v.ReverseChargeFlag(),
+			Lines:                  taxableLines,
+			CGSTLedgerID:           cgstID,
+			SGSTLedgerID:           sgstID,
+			IGSTLedgerID:           igstID,
+		}
+	}
+
 	res, err := im.ledger.PostVoucher(ctx, in)
 	if err != nil {
 		return ledger.PostResult{}, nil, fmt.Errorf("migration: voucher %d: post: %w", idx+1, err)
 	}
 	return res, names, nil
+}
+
+// inferRate determines the combined GST rate percent for a Sales voucher. It
+// prefers an explicit GSTRATE on any taxable line; otherwise it derives the rate
+// as round(taxTotal*100/taxableTotal) to the nearest whole percent (GST slabs are
+// integral: 0/5/12/18/28). See the rate-inference rounding risk in the spec.
+func inferRate(entries []integration.TallyLedgerEntry, taxTotal, taxableTotal decimal.Decimal) decimal.Decimal {
+	for _, e := range entries {
+		if r := strings.TrimSpace(e.GSTRate); r != "" {
+			if d, err := decimal.NewFromString(r); err == nil && !d.IsZero() {
+				return d
+			}
+		}
+	}
+	if taxableTotal.IsZero() {
+		return decimal.Zero
+	}
+	return taxTotal.Mul(decimal.NewFromInt(100)).Div(taxableTotal).Round(0)
 }
 
 // ensureLedger resolves a ledger by name, creating it (under an inferred group)

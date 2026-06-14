@@ -1,0 +1,93 @@
+<ENVELOPE>
+  <HEADER>
+    <VERSION>1</VERSION>
+    <TALLYREQUEST>Import</TALLYREQUEST>
+    <TYPE>Data</TYPE>
+    <ID>All Masters</ID>
+  </HEADER>
+  <BODY>
+    <DESC>
+      <STATICVARIABLES>
+        <SVCURRENTCOMPANY>Rounding Edge Co</SVCURRENTCOMPANY>
+      </STATICVARIABLES>
+    </DESC>
+    <DATA>
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <LEDGER NAME="Edge Buyer" ACTION="Create">
+          <NAME>Edge Buyer</NAME>
+          <PARENT>Sundry Debtors</PARENT>
+          <PARTYGSTIN>29EDGEB1234E1Z5</PARTYGSTIN>
+          <GSTREGISTRATIONTYPE>Regular</GSTREGISTRATIONTYPE>
+          <STATE>29</STATE>
+        </LEDGER>
+      </TALLYMESSAGE>
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <LEDGER NAME="Edge Sales" ACTION="Create">
+          <NAME>Edge Sales</NAME>
+          <PARENT>Sales Accounts</PARENT>
+        </LEDGER>
+      </TALLYMESSAGE>
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <LEDGER NAME="Output CGST" ACTION="Create">
+          <NAME>Output CGST</NAME>
+          <PARENT>Duties &amp; Taxes</PARENT>
+        </LEDGER>
+      </TALLYMESSAGE>
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <LEDGER NAME="Output SGST" ACTION="Create">
+          <NAME>Output SGST</NAME>
+          <PARENT>Duties &amp; Taxes</PARENT>
+        </LEDGER>
+      </TALLYMESSAGE>
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <LEDGER NAME="Output IGST" ACTION="Create">
+          <NAME>Output IGST</NAME>
+          <PARENT>Duties &amp; Taxes</PARENT>
+        </LEDGER>
+      </TALLYMESSAGE>
+
+      <!-- Sales at a half-paisa rounding boundary.
+           Intra @18%: half = round_half_up(1234.5550 * 9 / 100)
+                            = round_half_up(111.109950) = 111.1100 (5th decimal .00005 rounds 4th up).
+           CGST = SGST = 111.1100; total tax 222.2200; invoice 1234.5550 + 222.2200 = 1456.7750.
+           The imported tax lines below carry EXACTLY 111.11 each; deriveAndVerifyGST
+           cross-checks them against the engine and FAILS the import if they diverge
+           by a paisa. NOTE: this engine computes CGST and SGST as equal halves (no
+           odd-rupee split), so CGST == SGST by construction; the corpus proves that
+           convention holds at the boundary. -->
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <VOUCHER VCHTYPE="Sales" ACTION="Create">
+          <GUID>0e000005-edge-sale-0001</GUID>
+          <DATE>20250507</DATE>
+          <VOUCHERTYPENAME>Sales</VOUCHERTYPENAME>
+          <VOUCHERNUMBER>S-1</VOUCHERNUMBER>
+          <PARTYLEDGERNAME>Edge Buyer</PARTYLEDGERNAME>
+          <PLACEOFSUPPLY>29</PLACEOFSUPPLY>
+          <NARRATION>Rounding-boundary intra-state B2B sale</NARRATION>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Edge Buyer</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+            <AMOUNT>-1456.7750</AMOUNT>
+          </LEDGERENTRIES.LIST>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Edge Sales</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+            <AMOUNT>1234.5550</AMOUNT>
+            <HSNCODE>8471</HSNCODE>
+            <GSTRATE>18</GSTRATE>
+          </LEDGERENTRIES.LIST>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Output CGST</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+            <AMOUNT>111.1100</AMOUNT>
+          </LEDGERENTRIES.LIST>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Output SGST</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+            <AMOUNT>111.1100</AMOUNT>
+          </LEDGERENTRIES.LIST>
+        </VOUCHER>
+      </TALLYMESSAGE>
+    </DATA>
+  </BODY>
+</ENVELOPE>

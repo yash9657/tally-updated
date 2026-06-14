@@ -1,0 +1,128 @@
+<ENVELOPE>
+  <HEADER>
+    <VERSION>1</VERSION>
+    <TALLYREQUEST>Import</TALLYREQUEST>
+    <TYPE>Data</TYPE>
+    <ID>All Masters</ID>
+  </HEADER>
+  <BODY>
+    <DESC>
+      <STATICVARIABLES>
+        <SVCURRENTCOMPANY>Opening Trading Co</SVCURRENTCOMPANY>
+      </STATICVARIABLES>
+    </DESC>
+    <DATA>
+      <!-- ============ FIRST PASS: LEDGER MASTERS WITH OPENING BALANCES ============
+           Tally signs OPENINGBALANCE like AMOUNT: a debit-natured opening is
+           NEGATIVE, a credit-natured opening POSITIVE (RESEARCH sec19).
+             Capital       Cr  100000  -> +100000.00
+             Cash          Dr   40000  ->  -40000.00
+             Opening Stock Dr   60000  ->  -60000.00
+           SUM opening Dr (100000) == SUM opening Cr (100000): the opening TB
+           balances on its own. -->
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <LEDGER NAME="Capital" ACTION="Create">
+          <NAME>Capital</NAME>
+          <PARENT>Capital Account</PARENT>
+          <OPENINGBALANCE>100000.00</OPENINGBALANCE>
+        </LEDGER>
+      </TALLYMESSAGE>
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <LEDGER NAME="Cash A/c" ACTION="Create">
+          <NAME>Cash A/c</NAME>
+          <PARENT>Cash-in-Hand</PARENT>
+          <OPENINGBALANCE>-40000.00</OPENINGBALANCE>
+        </LEDGER>
+      </TALLYMESSAGE>
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <LEDGER NAME="Opening Stock" ACTION="Create">
+          <NAME>Opening Stock</NAME>
+          <PARENT>Stock-in-Hand</PARENT>
+          <OPENINGBALANCE>-60000.00</OPENINGBALANCE>
+        </LEDGER>
+      </TALLYMESSAGE>
+
+      <!-- ============ SECOND PASS: TRADING VOUCHERS ============ -->
+      <!-- 1. Cash Sale 30000: Cash Dr 30000 / Sales Cr 30000 -->
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <VOUCHER VCHTYPE="Sales" ACTION="Create">
+          <GUID>0a000001-trading-sale-0001</GUID>
+          <DATE>20250410</DATE>
+          <VOUCHERTYPENAME>Sales</VOUCHERTYPENAME>
+          <VOUCHERNUMBER>S-1</VOUCHERNUMBER>
+          <NARRATION>Cash sale of goods</NARRATION>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Cash A/c</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+            <AMOUNT>-30000.00</AMOUNT>
+          </LEDGERENTRIES.LIST>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Sales</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+            <AMOUNT>30000.00</AMOUNT>
+          </LEDGERENTRIES.LIST>
+        </VOUCHER>
+      </TALLYMESSAGE>
+      <!-- 2. Cash Purchase 18000: Purchases Dr 18000 / Cash Cr 18000 -->
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <VOUCHER VCHTYPE="Purchase" ACTION="Create">
+          <GUID>0a000001-trading-purc-0001</GUID>
+          <DATE>20250412</DATE>
+          <VOUCHERTYPENAME>Purchase</VOUCHERTYPENAME>
+          <VOUCHERNUMBER>P-1</VOUCHERNUMBER>
+          <NARRATION>Cash purchase of stock</NARRATION>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Purchases</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+            <AMOUNT>-18000.00</AMOUNT>
+          </LEDGERENTRIES.LIST>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Cash A/c</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+            <AMOUNT>18000.00</AMOUNT>
+          </LEDGERENTRIES.LIST>
+        </VOUCHER>
+      </TALLYMESSAGE>
+      <!-- 3. Rent paid 5000: Rent Dr 5000 / Cash Cr 5000 -->
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <VOUCHER VCHTYPE="Payment" ACTION="Create">
+          <GUID>0a000001-trading-paym-0001</GUID>
+          <DATE>20250415</DATE>
+          <VOUCHERTYPENAME>Payment</VOUCHERTYPENAME>
+          <VOUCHERNUMBER>PMT-1</VOUCHERNUMBER>
+          <NARRATION>Office rent paid in cash</NARRATION>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Rent</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+            <AMOUNT>-5000.00</AMOUNT>
+          </LEDGERENTRIES.LIST>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Cash A/c</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+            <AMOUNT>5000.00</AMOUNT>
+          </LEDGERENTRIES.LIST>
+        </VOUCHER>
+      </TALLYMESSAGE>
+      <!-- 4. Commission received 2000: Cash Dr 2000 / Commission Received Cr 2000 -->
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <VOUCHER VCHTYPE="Receipt" ACTION="Create">
+          <GUID>0a000001-trading-recp-0001</GUID>
+          <DATE>20250418</DATE>
+          <VOUCHERTYPENAME>Receipt</VOUCHERTYPENAME>
+          <VOUCHERNUMBER>RCP-1</VOUCHERNUMBER>
+          <NARRATION>Commission received in cash</NARRATION>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Cash A/c</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+            <AMOUNT>-2000.00</AMOUNT>
+          </LEDGERENTRIES.LIST>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Commission Received</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+            <AMOUNT>2000.00</AMOUNT>
+          </LEDGERENTRIES.LIST>
+        </VOUCHER>
+      </TALLYMESSAGE>
+    </DATA>
+  </BODY>
+</ENVELOPE>

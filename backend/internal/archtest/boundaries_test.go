@@ -37,10 +37,13 @@ var allowedDeps = map[string]map[string]bool{
 	// via integration, ensures masters, posts through ledger, and reconciles via
 	// reporting. It is an orchestration leaf — nothing imports it except server.
 	"internal/migration": {
-		"internal/integration": true,
-		"internal/masters":     true,
-		"internal/ledger":      true,
-		"internal/reporting":   true,
+		"internal/integration":     true,
+		"internal/masters":         true,
+		"internal/ledger":          true,
+		"internal/reporting":       true,
+		"internal/compliance":      true,
+		"internal/compliance/gstr": true,
+		"internal/platform/db":     true,
 	},
 	"internal/platform/db": {},
 	"internal/server": {

@@ -158,6 +158,10 @@ type VoucherInput struct {
 	// GST, when non-nil and Class is Sales or Purchase, drives auto-derivation
 	// and verification of the tax lines.
 	GST *GSTParams
+	// SourceGUID is the stable external (Tally) GUID this voucher was imported
+	// from, recorded on voucher_head for idempotent re-import. Empty for natively
+	// created vouchers (those never participate in the (company, guid) dedupe).
+	SourceGUID string
 }
 
 // SalesVoucherInput describes an F8 Sales voucher to post. Retained for
@@ -435,6 +439,38 @@ func (s *Service) GetVoucher(ctx context.Context, voucherID uuid.UUID) (VoucherV
 	return v, nil
 }
 
+// VoucherIDBySourceGUID looks up the logical voucher_id previously imported under
+// the given external (Tally) GUID within the company in context. It returns
+// (id, true, nil) when a head row carries that source_guid, (uuid.Nil, false,
+// nil) when none does, and a non-nil error only on a real query failure. The
+// importer calls this BEFORE posting so a re-import of the same export is a
+// no-op at the (company, guid) grain. An empty guid never matches (guid-less
+// vouchers always post).
+func (s *Service) VoucherIDBySourceGUID(ctx context.Context, guid string) (uuid.UUID, bool, error) {
+	if guid == "" {
+		return uuid.Nil, false, nil
+	}
+	companyID, ok := db.CompanyFromContext(ctx)
+	if !ok {
+		return uuid.Nil, false, db.ErrNoCompany
+	}
+	var id uuid.UUID
+	err := s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		err := tx.QueryRow(ctx,
+			`SELECT voucher_id FROM voucher_head
+			  WHERE company_id = $1 AND source_guid = $2`,
+			companyID, guid).Scan(&id)
+		return err
+	})
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return uuid.Nil, false, nil
+	case err != nil:
+		return uuid.Nil, false, fmt.Errorf("ledger: lookup source_guid: %w", err)
+	}
+	return id, true, nil
+}
+
 // PostSalesVoucher posts a NEW F8 Sales voucher. Backward-compatible shim over
 // PostVoucher.
 func (s *Service) PostSalesVoucher(ctx context.Context, in SalesVoucherInput) (PostResult, error) {
@@ -475,16 +511,8 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 		return PostResult{}, err
 	}
 
-	// Derive GST up front (pure, no I/O) so a derivation error fails before any
-	// DB work, and so the result is available to stamp on the version.
-	var tax compliance.TaxResult
-	if in.GST != nil && (in.Class == Sales || in.Class == Purchase) {
-		t, err := deriveAndVerifyGST(in)
-		if err != nil {
-			return PostResult{}, err
-		}
-		tax = t
-	}
+	// Whether this post carries GST derivation (Sales/Purchase with GST params).
+	gstActive := in.GST != nil && (in.Class == Sales || in.Class == Purchase)
 
 	versionID, err := uuid.NewV7()
 	if err != nil {
@@ -495,8 +523,38 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 		return PostResult{}, db.ErrNoCompany
 	}
 
+	// tax is the derived GST breakup, computed INSIDE the transaction below so the
+	// company-state default (read from the same tx) is causally ordered before the
+	// derivation that consumes it.
+	var tax compliance.TaxResult
+
 	var result PostResult
 	err = s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		// Server-side, atomic SupplierStateCode default (WS3): when a Sales/Purchase
+		// post carries GST but leaves SupplierStateCode empty (e.g. an imported
+		// voucher, or a client that does not know the home state), fill it from the
+		// company's registered state_code. This read MUST precede deriveAndVerifyGST
+		// so the inter/intra (CGST/SGST vs IGST) classification is correct regardless
+		// of the caller. A hand-keyed voucher that already set SupplierStateCode is
+		// left untouched.
+		if gstActive {
+			if in.GST.SupplierStateCode == "" {
+				var homeState string
+				if err := tx.QueryRow(ctx,
+					`SELECT state_code FROM company WHERE id = $1`, companyID).Scan(&homeState); err != nil {
+					return fmt.Errorf("ledger: read company state_code: %w", err)
+				}
+				in.GST.SupplierStateCode = homeState
+			}
+			// Derive + verify GST inside the tx, after the state default has been
+			// applied, so a derivation/verification error rolls the whole post back.
+			t, err := deriveAndVerifyGST(in)
+			if err != nil {
+				return err
+			}
+			tax = t
+		}
+
 		var versionNo int
 		var prevHash []byte
 		err := tx.QueryRow(ctx,
@@ -677,7 +735,7 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 		if in.PartyLedgerID != uuid.Nil {
 			partyID = in.PartyLedgerID
 		}
-		if in.GST != nil && (in.Class == Sales || in.Class == Purchase) {
+		if gstActive {
 			pos = nullIfEmpty(in.GST.PlaceOfSupplyStateCode)
 			rev = in.GST.ReverseCharge
 			taxable = subTaxable(tax, in)
@@ -763,16 +821,18 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 		// reflects exactly the current version of every voucher.
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO voucher_head
-			   (company_id, voucher_id, current_version_id, version_no, op, is_deleted, voucher_date)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7)
+			   (company_id, voucher_id, current_version_id, version_no, op, is_deleted, voucher_date, source_guid)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 			 ON CONFLICT (company_id, voucher_id) DO UPDATE
 			   SET current_version_id = EXCLUDED.current_version_id,
 			       version_no         = EXCLUDED.version_no,
 			       op                 = EXCLUDED.op,
 			       is_deleted         = EXCLUDED.is_deleted,
 			       voucher_date       = EXCLUDED.voucher_date,
+			       source_guid        = COALESCE(EXCLUDED.source_guid, voucher_head.source_guid),
 			       updated_at         = now()`,
 			companyID, voucherID, versionID, versionNo, string(op), op == OpDelete, vDate,
+			nullIfEmpty(in.SourceGUID),
 		); err != nil {
 			return fmt.Errorf("ledger: upsert voucher_head: %w", err)
 		}

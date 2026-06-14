@@ -212,6 +212,22 @@ func (s *Service) EnsureLedger(ctx context.Context, name, groupName string, crea
 	return s.CreateLedger(ctx, Ledger{Name: name, GroupName: groupName}, createdBy)
 }
 
+// EnsureLedgerWithOpening resolves a ledger by name; if it already exists it is
+// returned UNCHANGED (an opening balance or GST master already set is never
+// clobbered — resolve-first). If absent it is created with the supplied opening
+// balance and GST master attributes. This is the importer's first-pass entry
+// point for LEDGER masters carrying an opening balance and/or GST identity.
+func (s *Service) EnsureLedgerWithOpening(ctx context.Context, l Ledger, createdBy string) (uuid.UUID, error) {
+	id, err := s.resolveID(ctx, "ledger", l.Name)
+	if err == nil {
+		return id, nil
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return uuid.Nil, err
+	}
+	return s.CreateLedger(ctx, l, createdBy)
+}
+
 // CreateLedger creates a ledger under the named group and appends a
 // master_audit CREATE row. GST fields are optional.
 func (s *Service) CreateLedger(ctx context.Context, l Ledger, createdBy string) (uuid.UUID, error) {

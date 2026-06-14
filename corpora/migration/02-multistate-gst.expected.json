@@ -1,0 +1,46 @@
+{
+  "id": "02-multistate-gst",
+  "description": "INDEPENDENT ORACLE (hand-computed from XML using the GST slab rules; round-half-up per component). Company state 29. Three Sales @18%: S-1 B2B intra (Acme 29ABCDE1234F1Z5, POS 29, taxable 10000 -> CGST 900 + SGST 900, total 11800); S-2 B2CS intra (Walk-in Local, POS 29, taxable 5000 -> CGST 450 + SGST 450, total 5900); S-3 B2CL inter (Walk-in Mumbai state 27, POS 27, taxable 200000 -> IGST 36000, total 236000 > 1L). LEDGER closings: Acme 11800 Dr; Walk-in Local 5900 Dr; Walk-in Mumbai 236000 Dr; Domestic Sales 215000 Cr; Output CGST 1350 Cr; Output SGST 1350 Cr; Output IGST 36000 Cr. TB Dr = 11800+5900+236000 = 253700; Cr = 215000+1350+1350+36000 = 253700 (balanced). P&L Income 215000, Expense 0, NetProfit 215000. BS Assets (debtors) 253700; Liabilities = CGST 1350 + SGST 1350 + IGST 36000 + NetProfit 215000 = 253700 (balanced). GSTR-1 TaxTotals: CGST 900+450=1350, SGST 900+450=1350, IGST 36000; taxable 10000+5000+200000=215000. HSN (all 18%, hsn blank in Phase1 rollup): one row 215000/1350/1350/36000. B2CS INTRA/29@18: 5000/450/450/0. B2B 29ABCDE1234F1Z5@18: 10000/900/900/0. (S-3 is B2CL: its IGST 36000 lands in TaxTotals.IGST + HSN but B2CL is not asserted per-section here.) GSTR-1 Balanced (return == output-tax postings): true.",
+  "tallyExportFile": "02-multistate-gst.xml",
+  "gstin": "29ZZZZZ0000Z1Z5",
+  "stateCode": "29",
+  "period": { "from": "2025-05-01", "to": "2025-05-31" },
+  "taxLedgers": { "cgst": "Output CGST", "sgst": "Output SGST", "igst": "Output IGST" },
+  "trialBalance": {
+    "rows": [
+      { "ledger": "Acme Pvt Ltd", "debit": "11800.0000", "credit": "0.0000" },
+      { "ledger": "Walk-in Local", "debit": "5900.0000", "credit": "0.0000" },
+      { "ledger": "Walk-in Mumbai", "debit": "236000.0000", "credit": "0.0000" },
+      { "ledger": "Domestic Sales", "debit": "0.0000", "credit": "215000.0000" },
+      { "ledger": "Output CGST", "debit": "0.0000", "credit": "1350.0000" },
+      { "ledger": "Output SGST", "debit": "0.0000", "credit": "1350.0000" },
+      { "ledger": "Output IGST", "debit": "0.0000", "credit": "36000.0000" }
+    ],
+    "totals": { "debit": "253700.0000", "credit": "253700.0000", "balanced": true }
+  },
+  "balanceSheet": {
+    "assetsTotal": "253700.0000",
+    "liabilitiesTotal": "253700.0000",
+    "netProfit": "215000.0000",
+    "balanced": true
+  },
+  "profitAndLoss": {
+    "incomeTotal": "215000.0000",
+    "expenseTotal": "0.0000",
+    "netProfit": "215000.0000"
+  },
+  "gstr1": {
+    "fp": "052025",
+    "taxTotals": { "taxable": "215000.0000", "cgst": "1350.0000", "sgst": "1350.0000", "igst": "36000.0000" },
+    "hsn": [
+      { "hsn": "", "rate": "18", "taxable": "215000.0000", "cgst": "1350.0000", "sgst": "1350.0000", "igst": "36000.0000" }
+    ],
+    "b2cs": [
+      { "splyTy": "INTRA", "pos": "29", "rate": "18", "taxable": "5000.0000", "cgst": "450.0000", "sgst": "450.0000", "igst": "0.0000" }
+    ],
+    "b2b": [
+      { "ctin": "29ABCDE1234F1Z5", "taxable": "10000.0000", "cgst": "900.0000", "sgst": "900.0000", "igst": "0.0000" }
+    ],
+    "balanced": true
+  }
+}

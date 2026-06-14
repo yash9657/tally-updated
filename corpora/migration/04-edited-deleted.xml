@@ -1,0 +1,141 @@
+<ENVELOPE>
+  <HEADER>
+    <VERSION>1</VERSION>
+    <TALLYREQUEST>Import</TALLYREQUEST>
+    <TYPE>Data</TYPE>
+    <ID>Vouchers</ID>
+  </HEADER>
+  <BODY>
+    <DESC>
+      <STATICVARIABLES>
+        <SVCURRENTCOMPANY>Edit Log Co</SVCURRENTCOMPANY>
+      </STATICVARIABLES>
+    </DESC>
+    <DATA>
+      <!-- ============ IDEMPOTENCY: SAME GUID TWICE ============
+           dup-0001 appears twice. The first posts; the second must be SKIPPED
+           (ImportResult.Skipped++), NOT double-posted. Net: Cash 10000 / Sales 10000. -->
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <VOUCHER VCHTYPE="Sales" ACTION="Create">
+          <GUID>0d000004-dup-0001</GUID>
+          <DATE>20250601</DATE>
+          <VOUCHERTYPENAME>Sales</VOUCHERTYPENAME>
+          <VOUCHERNUMBER>S-1</VOUCHERNUMBER>
+          <NARRATION>Cash sale - original</NARRATION>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Cash</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+            <AMOUNT>-10000.00</AMOUNT>
+          </LEDGERENTRIES.LIST>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Sales</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+            <AMOUNT>10000.00</AMOUNT>
+          </LEDGERENTRIES.LIST>
+        </VOUCHER>
+      </TALLYMESSAGE>
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <VOUCHER VCHTYPE="Sales" ACTION="Create">
+          <GUID>0d000004-dup-0001</GUID>
+          <DATE>20250601</DATE>
+          <VOUCHERTYPENAME>Sales</VOUCHERTYPENAME>
+          <VOUCHERNUMBER>S-1</VOUCHERNUMBER>
+          <NARRATION>Cash sale - DUPLICATE of same GUID, must be skipped</NARRATION>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Cash</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+            <AMOUNT>-10000.00</AMOUNT>
+          </LEDGERENTRIES.LIST>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Sales</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+            <AMOUNT>10000.00</AMOUNT>
+          </LEDGERENTRIES.LIST>
+        </VOUCHER>
+      </TALLYMESSAGE>
+
+      <!-- ============ EDIT: CREATE then ALTER same GUID ============
+           alt-0001 created at 8000, then ALTERed to 12000. Only the CURRENT
+           version (12000) contributes to ledger_balance. Net: Cash 12000 / Sales 12000. -->
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <VOUCHER VCHTYPE="Sales" ACTION="Create">
+          <GUID>0d000004-alt-0001</GUID>
+          <DATE>20250602</DATE>
+          <VOUCHERTYPENAME>Sales</VOUCHERTYPENAME>
+          <VOUCHERNUMBER>S-2</VOUCHERNUMBER>
+          <NARRATION>Cash sale - to be edited</NARRATION>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Cash</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+            <AMOUNT>-8000.00</AMOUNT>
+          </LEDGERENTRIES.LIST>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Sales</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+            <AMOUNT>8000.00</AMOUNT>
+          </LEDGERENTRIES.LIST>
+        </VOUCHER>
+      </TALLYMESSAGE>
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <VOUCHER VCHTYPE="Sales" ACTION="Alter">
+          <GUID>0d000004-alt-0001</GUID>
+          <DATE>20250602</DATE>
+          <VOUCHERTYPENAME>Sales</VOUCHERTYPENAME>
+          <VOUCHERNUMBER>S-2</VOUCHERNUMBER>
+          <NARRATION>Cash sale - EDITED to 12000</NARRATION>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Cash</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+            <AMOUNT>-12000.00</AMOUNT>
+          </LEDGERENTRIES.LIST>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Sales</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+            <AMOUNT>12000.00</AMOUNT>
+          </LEDGERENTRIES.LIST>
+        </VOUCHER>
+      </TALLYMESSAGE>
+
+      <!-- ============ TOMBSTONE: CREATE then DELETE same GUID ============
+           del-0001 created at 5000, then DELETEd. Contributes 0 to every statement. -->
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <VOUCHER VCHTYPE="Sales" ACTION="Create">
+          <GUID>0d000004-del-0001</GUID>
+          <DATE>20250603</DATE>
+          <VOUCHERTYPENAME>Sales</VOUCHERTYPENAME>
+          <VOUCHERNUMBER>S-3</VOUCHERNUMBER>
+          <NARRATION>Cash sale - to be deleted</NARRATION>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Cash</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+            <AMOUNT>-5000.00</AMOUNT>
+          </LEDGERENTRIES.LIST>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Sales</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+            <AMOUNT>5000.00</AMOUNT>
+          </LEDGERENTRIES.LIST>
+        </VOUCHER>
+      </TALLYMESSAGE>
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <VOUCHER VCHTYPE="Sales" ACTION="Delete">
+          <GUID>0d000004-del-0001</GUID>
+          <DATE>20250603</DATE>
+          <VOUCHERTYPENAME>Sales</VOUCHERTYPENAME>
+          <VOUCHERNUMBER>S-3</VOUCHERNUMBER>
+          <NARRATION>Cash sale - DELETED</NARRATION>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Cash</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+            <AMOUNT>-5000.00</AMOUNT>
+          </LEDGERENTRIES.LIST>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Sales</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+            <AMOUNT>5000.00</AMOUNT>
+          </LEDGERENTRIES.LIST>
+        </VOUCHER>
+      </TALLYMESSAGE>
+    </DATA>
+  </BODY>
+</ENVELOPE>

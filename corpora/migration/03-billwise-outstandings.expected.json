@@ -1,0 +1,44 @@
+{
+  "id": "03-billwise-outstandings",
+  "description": "INDEPENDENT ORACLE (hand-computed from XML). Two credit Sales with New-Ref bill allocations + a partial Receipt with Agst Ref. Bills (computed by hand): ACE/01 = New 50000 - Agst 20000 = 30000 pending, due 2025-05-31; BHA/01 = New 30000 pending, due 2025-06-15. LEDGER closings: Ace Traders = 50000 Dr - 20000 Cr = 30000 Dr; Bharat Stores = 30000 Dr; Sales = 80000 Cr; Cash = 20000 Dr. TB Dr = 30000+30000+20000 = 80000; Cr = 80000 (balanced). Debtor TB total (Ace 30000 + Bharat 30000 = 60000) == sum of open bills (30000 + 30000 = 60000). P&L Income 80000, Expense 0, NetProfit 80000. BS Assets = Ace 30000 + Bharat 30000 + Cash 20000 = 80000; Liabilities = NetProfit 80000 (balanced). No GST.",
+  "tallyExportFile": "03-billwise-outstandings.xml",
+  "trialBalance": {
+    "rows": [
+      { "ledger": "Ace Traders", "debit": "30000.0000", "credit": "0.0000" },
+      { "ledger": "Bharat Stores", "debit": "30000.0000", "credit": "0.0000" },
+      { "ledger": "Sales", "debit": "0.0000", "credit": "80000.0000" },
+      { "ledger": "Cash", "debit": "20000.0000", "credit": "0.0000" }
+    ],
+    "totals": { "debit": "80000.0000", "credit": "80000.0000", "balanced": true }
+  },
+  "balanceSheet": {
+    "assetsTotal": "80000.0000",
+    "liabilitiesTotal": "80000.0000",
+    "netProfit": "80000.0000",
+    "balanced": true
+  },
+  "profitAndLoss": {
+    "incomeTotal": "80000.0000",
+    "expenseTotal": "0.0000",
+    "netProfit": "80000.0000"
+  },
+  "outstandings": {
+    "asOn": "2025-06-30",
+    "receivables": [
+      {
+        "ledger": "Ace Traders",
+        "pending": "30000.0000",
+        "bills": [
+          { "ref": "ACE/01", "pending": "30000.0000", "dueDate": "2025-05-31" }
+        ]
+      },
+      {
+        "ledger": "Bharat Stores",
+        "pending": "30000.0000",
+        "bills": [
+          { "ref": "BHA/01", "pending": "30000.0000", "dueDate": "2025-06-15" }
+        ]
+      }
+    ]
+  }
+}

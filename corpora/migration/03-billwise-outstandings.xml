@@ -1,0 +1,112 @@
+<ENVELOPE>
+  <HEADER>
+    <VERSION>1</VERSION>
+    <TALLYREQUEST>Import</TALLYREQUEST>
+    <TYPE>Data</TYPE>
+    <ID>Vouchers</ID>
+  </HEADER>
+  <BODY>
+    <DESC>
+      <STATICVARIABLES>
+        <SVCURRENTCOMPANY>Billwise Co</SVCURRENTCOMPANY>
+      </STATICVARIABLES>
+    </DESC>
+    <DATA>
+      <!-- ============ DEBTOR MASTERS (bill-by-bill, no opening balances) ============ -->
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <LEDGER NAME="Ace Traders" ACTION="Create">
+          <NAME>Ace Traders</NAME>
+          <PARENT>Sundry Debtors</PARENT>
+        </LEDGER>
+      </TALLYMESSAGE>
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <LEDGER NAME="Bharat Stores" ACTION="Create">
+          <NAME>Bharat Stores</NAME>
+          <PARENT>Sundry Debtors</PARENT>
+        </LEDGER>
+      </TALLYMESSAGE>
+
+      <!-- ============ CREDIT SALES WITH NEW-REF BILL ALLOCATIONS ============ -->
+      <!-- S-1 to Ace Traders 50000, New Ref ACE/01 due 2025-05-31 -->
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <VOUCHER VCHTYPE="Sales" ACTION="Create">
+          <GUID>0c000003-bill-sale-0001</GUID>
+          <DATE>20250501</DATE>
+          <VOUCHERTYPENAME>Sales</VOUCHERTYPENAME>
+          <VOUCHERNUMBER>S-1</VOUCHERNUMBER>
+          <PARTYLEDGERNAME>Ace Traders</PARTYLEDGERNAME>
+          <NARRATION>Credit sale to Ace Traders</NARRATION>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Ace Traders</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+            <AMOUNT>-50000.00</AMOUNT>
+            <BILLALLOCATIONS.LIST>
+              <NAME>ACE/01</NAME>
+              <BILLTYPE>New Ref</BILLTYPE>
+              <AMOUNT>-50000.00</AMOUNT>
+              <DUEDATE>2025-05-31</DUEDATE>
+            </BILLALLOCATIONS.LIST>
+          </LEDGERENTRIES.LIST>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Sales</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+            <AMOUNT>50000.00</AMOUNT>
+          </LEDGERENTRIES.LIST>
+        </VOUCHER>
+      </TALLYMESSAGE>
+      <!-- S-2 to Bharat Stores 30000, New Ref BHA/01 due 2025-06-15 -->
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <VOUCHER VCHTYPE="Sales" ACTION="Create">
+          <GUID>0c000003-bill-sale-0002</GUID>
+          <DATE>20250505</DATE>
+          <VOUCHERTYPENAME>Sales</VOUCHERTYPENAME>
+          <VOUCHERNUMBER>S-2</VOUCHERNUMBER>
+          <PARTYLEDGERNAME>Bharat Stores</PARTYLEDGERNAME>
+          <NARRATION>Credit sale to Bharat Stores</NARRATION>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Bharat Stores</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+            <AMOUNT>-30000.00</AMOUNT>
+            <BILLALLOCATIONS.LIST>
+              <NAME>BHA/01</NAME>
+              <BILLTYPE>New Ref</BILLTYPE>
+              <AMOUNT>-30000.00</AMOUNT>
+              <DUEDATE>2025-06-15</DUEDATE>
+            </BILLALLOCATIONS.LIST>
+          </LEDGERENTRIES.LIST>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Sales</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+            <AMOUNT>30000.00</AMOUNT>
+          </LEDGERENTRIES.LIST>
+        </VOUCHER>
+      </TALLYMESSAGE>
+      <!-- R-1 partial receipt 20000 from Ace Traders, Agst Ref ACE/01 -->
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <VOUCHER VCHTYPE="Receipt" ACTION="Create">
+          <GUID>0c000003-bill-recp-0001</GUID>
+          <DATE>20250520</DATE>
+          <VOUCHERTYPENAME>Receipt</VOUCHERTYPENAME>
+          <VOUCHERNUMBER>R-1</VOUCHERNUMBER>
+          <PARTYLEDGERNAME>Ace Traders</PARTYLEDGERNAME>
+          <NARRATION>Part payment received from Ace Traders against ACE/01</NARRATION>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Cash</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+            <AMOUNT>-20000.00</AMOUNT>
+          </LEDGERENTRIES.LIST>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Ace Traders</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+            <AMOUNT>20000.00</AMOUNT>
+            <BILLALLOCATIONS.LIST>
+              <NAME>ACE/01</NAME>
+              <BILLTYPE>Agst Ref</BILLTYPE>
+              <AMOUNT>20000.00</AMOUNT>
+            </BILLALLOCATIONS.LIST>
+          </LEDGERENTRIES.LIST>
+        </VOUCHER>
+      </TALLYMESSAGE>
+    </DATA>
+  </BODY>
+</ENVELOPE>

@@ -26,6 +26,14 @@ type Company struct {
 	Name         string
 	FYStartDate  string // ISO date
 	BaseCurrency string
+	// StateCode is the two-digit GST state code of the company's home/registered
+	// place of business. It is the default SupplierStateCode for Sales/Purchase
+	// posts that leave it empty (e.g. imported vouchers). Empty is the safe
+	// default, matching the column default.
+	StateCode string
+	// GSTIN is the company's own (filer's) GSTIN, surfaced as the GSTR-1
+	// top-level gstin. Empty is the safe default.
+	GSTIN string
 }
 
 // Service is the identity application service.
@@ -68,9 +76,10 @@ func (s *Service) CreateCompany(ctx context.Context, c Company) (uuid.UUID, erro
 
 	err := s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx,
-			`INSERT INTO company (id, company_id, name, fy_start_date, base_currency)
-			 VALUES ($1, $1, $2, $3, $4)`,
-			c.ID, c.Name, c.FYStartDate, c.BaseCurrency,
+			`INSERT INTO company
+			   (id, company_id, name, fy_start_date, base_currency, state_code, gstin)
+			 VALUES ($1, $1, $2, $3, $4, $5, $6)`,
+			c.ID, c.Name, c.FYStartDate, c.BaseCurrency, c.StateCode, c.GSTIN,
 		); err != nil {
 			return fmt.Errorf("identity: insert company: %w", err)
 		}

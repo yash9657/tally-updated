@@ -1,0 +1,40 @@
+{
+  "id": "05-rounding-edge",
+  "description": "INDEPENDENT ORACLE (hand-computed using the engine's round-half-up-per-component rule, stated explicitly). One intra-state B2B Sales @18% on taxable 1234.5550. half = round_half_up(1234.5550 * 9 / 100) = round_half_up(111.109950) = 111.1100 (the dropped 5th-decimal '50' = 0.00005 rounds the 4th decimal up). CGST = SGST = 111.1100 (this engine splits into EQUAL halves; CGST == SGST by construction). total tax = 222.2200; invoice = 1234.5550 + 222.2200 = 1456.7750. The imported tax lines carry exactly 111.1100 each; deriveAndVerifyGST must match the engine to the paisa or the import FAILS (correct loud behavior). LEDGER closings: Edge Buyer 1456.7750 Dr; Edge Sales 1234.5550 Cr; Output CGST 111.1100 Cr; Output SGST 111.1100 Cr; Output IGST 0. TB Dr 1456.7750 / Cr (1234.5550+111.1100+111.1100=1456.7750) (balanced). P&L Income 1234.5550, NetProfit 1234.5550. BS Assets 1456.7750; Liabilities = CGST 111.1100 + SGST 111.1100 + NetProfit 1234.5550 = 1456.7750 (balanced). GSTR-1: rate inference = round(222.2200*100/1234.5550) = round(18.00006) = 18. TaxTotals CGST 111.1100, SGST 111.1100, IGST 0, taxable 1234.5550. HSN(18): same. B2B 29EDGEB1234E1Z5@18: 1234.5550/111.1100/111.1100/0. Balanced (return==postings): true.",
+  "tallyExportFile": "05-rounding-edge.xml",
+  "gstin": "29ZZZZZ0000Z1Z5",
+  "stateCode": "29",
+  "period": { "from": "2025-05-01", "to": "2025-05-31" },
+  "taxLedgers": { "cgst": "Output CGST", "sgst": "Output SGST", "igst": "Output IGST" },
+  "trialBalance": {
+    "rows": [
+      { "ledger": "Edge Buyer", "debit": "1456.7750", "credit": "0.0000" },
+      { "ledger": "Edge Sales", "debit": "0.0000", "credit": "1234.5550" },
+      { "ledger": "Output CGST", "debit": "0.0000", "credit": "111.1100" },
+      { "ledger": "Output SGST", "debit": "0.0000", "credit": "111.1100" }
+    ],
+    "totals": { "debit": "1456.7750", "credit": "1456.7750", "balanced": true }
+  },
+  "balanceSheet": {
+    "assetsTotal": "1456.7750",
+    "liabilitiesTotal": "1456.7750",
+    "netProfit": "1234.5550",
+    "balanced": true
+  },
+  "profitAndLoss": {
+    "incomeTotal": "1234.5550",
+    "expenseTotal": "0.0000",
+    "netProfit": "1234.5550"
+  },
+  "gstr1": {
+    "fp": "052025",
+    "taxTotals": { "taxable": "1234.5550", "cgst": "111.1100", "sgst": "111.1100", "igst": "0.0000" },
+    "hsn": [
+      { "hsn": "", "rate": "18", "taxable": "1234.5550", "cgst": "111.1100", "sgst": "111.1100", "igst": "0.0000" }
+    ],
+    "b2b": [
+      { "ctin": "29EDGEB1234E1Z5", "taxable": "1234.5550", "cgst": "111.1100", "sgst": "111.1100", "igst": "0.0000" }
+    ],
+    "balanced": true
+  }
+}
