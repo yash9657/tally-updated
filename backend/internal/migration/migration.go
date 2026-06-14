@@ -26,6 +26,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
@@ -68,8 +69,12 @@ func NewImporter(m *masters.Service, l *ledger.Service) *Importer {
 type ImportResult struct {
 	// SourceCompany is the SVCURRENTCOMPANY name recorded in the export header.
 	SourceCompany string
-	// VouchersPosted is the number of vouchers successfully posted.
+	// VouchersPosted is the number of vouchers successfully posted (created).
 	VouchersPosted int
+	// VouchersAltered / VouchersDeleted count ACTION=Alter / ACTION=Delete
+	// messages that were routed (by Tally GUID) to AlterVoucher / DeleteVoucher.
+	VouchersAltered int
+	VouchersDeleted int
 	// LedgersEnsured is the set of distinct ledger names referenced (created or
 	// already present), in stable order.
 	LedgersEnsured []string
@@ -148,43 +153,114 @@ func (im *Importer) ImportEnvelope(ctx context.Context, env *integration.TallyEn
 		ledgerIDs[name] = id
 	}
 
-	// SECOND PASS — vouchers, in document order.
-	for i, msg := range env.Body.Data.Messages {
-		if msg.Voucher == nil {
-			continue // ledger masters handled in the first pass
-		}
-		v := msg.Voucher
-		// Action defaults to Create; only creates are supported on import.
-		if act := strings.ToUpper(strings.TrimSpace(v.Action)); act != "" && act != "CREATE" {
-			return res, fmt.Errorf("migration: voucher %d: unsupported ACTION %q (only Create)", i+1, v.Action)
-		}
-
-		// Idempotency: a voucher carrying a GUID already imported into this company
-		// is skipped (no re-post), matching Tally's same-GUID semantics. A voucher
-		// with NO GUID is never deduped — it always posts (documented in corpus).
-		guid := v.GUIDValue()
-		if guid != "" {
-			if _, found, err := im.ledger.VoucherIDBySourceGUID(ctx, guid); err != nil {
-				return res, fmt.Errorf("migration: voucher %d: idempotency lookup: %w", i+1, err)
-			} else if found {
-				res.Skipped++
-				res.SkippedGUIDs = append(res.SkippedGUIDs, guid)
-				continue
-			}
-		}
-
-		posted, names, err := im.importVoucher(ctx, i, v, ledgerIDs, ledgerState, createdBy)
-		if err != nil {
-			return res, err
-		}
+	// recordLedgers folds the names referenced by a posted/altered voucher into
+	// the run's distinct ensured-ledger set, in stable first-seen order.
+	recordLedgers := func(names []string) {
 		for _, n := range names {
 			if !seenLedger[n] {
 				seenLedger[n] = true
 				res.LedgersEnsured = append(res.LedgersEnsured, n)
 			}
 		}
-		res.Posted = append(res.Posted, posted)
-		res.VouchersPosted++
+	}
+
+	// SECOND PASS — vouchers, in document order. The Tally ACTION drives the
+	// dispatch: Create posts a new voucher (idempotent on GUID), Alter appends a
+	// new immutable version to the voucher previously imported under that GUID,
+	// and Delete tombstones it. Alter/Delete resolve their target by the stable
+	// Tally GUID, mirroring how Tally itself re-syncs an edited/removed voucher.
+	for i, msg := range env.Body.Data.Messages {
+		if msg.Voucher == nil {
+			continue // ledger masters handled in the first pass
+		}
+		v := msg.Voucher
+		action := strings.ToUpper(strings.TrimSpace(v.Action))
+		if action == "" {
+			action = "CREATE"
+		}
+		guid := v.GUIDValue()
+
+		switch action {
+		case "DELETE":
+			// Tombstone the voucher previously imported under this GUID. With no
+			// GUID there is nothing to resolve; with an unknown GUID there is
+			// nothing to delete (recorded as skipped).
+			if guid == "" {
+				return res, fmt.Errorf("migration: voucher %d: ACTION=Delete requires a GUID", i+1)
+			}
+			vid, found, err := im.ledger.VoucherIDBySourceGUID(ctx, guid)
+			if err != nil {
+				return res, fmt.Errorf("migration: voucher %d: delete lookup: %w", i+1, err)
+			}
+			if !found {
+				res.Skipped++
+				res.SkippedGUIDs = append(res.SkippedGUIDs, guid)
+				continue
+			}
+			if _, err := im.ledger.DeleteVoucher(ctx, vid, createdBy); err != nil {
+				return res, fmt.Errorf("migration: voucher %d: delete: %w", i+1, err)
+			}
+			res.VouchersDeleted++
+
+		case "ALTER":
+			in, names, err := im.buildVoucherInput(ctx, i, v, ledgerIDs, ledgerState, createdBy)
+			if err != nil {
+				return res, err
+			}
+			var (
+				vid   uuid.UUID
+				found bool
+			)
+			if guid != "" {
+				if vid, found, err = im.ledger.VoucherIDBySourceGUID(ctx, guid); err != nil {
+					return res, fmt.Errorf("migration: voucher %d: alter lookup: %w", i+1, err)
+				}
+			}
+			if found {
+				posted, err := im.ledger.AlterVoucher(ctx, vid, in)
+				if err != nil {
+					return res, fmt.Errorf("migration: voucher %d: alter: %w", i+1, err)
+				}
+				recordLedgers(names)
+				res.Posted = append(res.Posted, posted)
+				res.VouchersAltered++
+			} else {
+				// No prior version under this GUID: an Alter with nothing to amend
+				// is treated as a create (the voucher simply did not arrive first).
+				posted, err := im.ledger.PostVoucher(ctx, in)
+				if err != nil {
+					return res, fmt.Errorf("migration: voucher %d: post: %w", i+1, err)
+				}
+				recordLedgers(names)
+				res.Posted = append(res.Posted, posted)
+				res.VouchersPosted++
+			}
+
+		default: // CREATE
+			// Idempotency: a voucher carrying a GUID already imported into this
+			// company is skipped (no re-post), matching Tally's same-GUID
+			// semantics. A GUID-less voucher is never deduped — it always posts.
+			if guid != "" {
+				if _, found, err := im.ledger.VoucherIDBySourceGUID(ctx, guid); err != nil {
+					return res, fmt.Errorf("migration: voucher %d: idempotency lookup: %w", i+1, err)
+				} else if found {
+					res.Skipped++
+					res.SkippedGUIDs = append(res.SkippedGUIDs, guid)
+					continue
+				}
+			}
+			in, names, err := im.buildVoucherInput(ctx, i, v, ledgerIDs, ledgerState, createdBy)
+			if err != nil {
+				return res, err
+			}
+			posted, err := im.ledger.PostVoucher(ctx, in)
+			if err != nil {
+				return res, fmt.Errorf("migration: voucher %d: post: %w", i+1, err)
+			}
+			recordLedgers(names)
+			res.Posted = append(res.Posted, posted)
+			res.VouchersPosted++
+		}
 	}
 	return res, nil
 }
@@ -320,8 +396,29 @@ func classifyTaxLedger(name string) taxLedgerKind {
 // entries include CGST/SGST/IGST tax lines, it builds ledger.GSTParams so the
 // post path derives + verifies the tax against the engine and stamps the GST
 // breakup on the version (which GSTR-1 then reads).
-func (im *Importer) importVoucher(ctx context.Context, idx int, v *integration.TallyVoucher,
-	ledgerIDs map[string]uuid.UUID, ledgerState map[string]string, createdBy string) (ledger.PostResult, []string, error) {
+// billDueISO normalises a bill-allocation DUEDATE to an ISO YYYY-MM-DD string.
+// Tally exports may already emit ISO (as our corpora do) or its own DD-Mon-YYYY
+// form; an unparseable/empty value yields "" (no due date), which the ageing
+// report treats as undated.
+func billDueISO(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if _, err := time.Parse("2006-01-02", s); err == nil {
+		return s // already ISO
+	}
+	if iso, err := integration.TallyDateToISO(s); err == nil {
+		return iso
+	}
+	return ""
+}
+
+// buildVoucherInput assembles the ledger.VoucherInput for one Tally voucher
+// (postings, GST params, bill-wise allocations) WITHOUT posting it — the caller
+// dispatches to PostVoucher/AlterVoucher/DeleteVoucher based on the Tally ACTION.
+func (im *Importer) buildVoucherInput(ctx context.Context, idx int, v *integration.TallyVoucher,
+	ledgerIDs map[string]uuid.UUID, ledgerState map[string]string, createdBy string) (ledger.VoucherInput, []string, error) {
 
 	class, ok := classByVchType[strings.ToLower(strings.TrimSpace(v.VchType))]
 	if !ok {
@@ -329,26 +426,27 @@ func (im *Importer) importVoucher(ctx context.Context, idx int, v *integration.T
 		class, ok = classByVchType[strings.ToLower(strings.TrimSpace(v.VoucherTypeName))]
 	}
 	if !ok {
-		return ledger.PostResult{}, nil, fmt.Errorf(
+		return ledger.VoucherInput{}, nil, fmt.Errorf(
 			"migration: voucher %d: unrecognised VCHTYPE %q", idx+1, v.VchType)
 	}
 
 	entries := v.Entries()
 	if len(entries) < 2 {
-		return ledger.PostResult{}, nil, fmt.Errorf(
+		return ledger.VoucherInput{}, nil, fmt.Errorf(
 			"migration: voucher %d: needs at least two ledger entries, got %d", idx+1, len(entries))
 	}
 
 	isoDate, err := integration.TallyDateToISO(v.Date)
 	if err != nil {
-		return ledger.PostResult{}, nil, fmt.Errorf("migration: voucher %d: %w", idx+1, err)
+		return ledger.VoucherInput{}, nil, fmt.Errorf("migration: voucher %d: %w", idx+1, err)
 	}
 
 	party := strings.TrimSpace(v.PartyLedgerName)
 
 	var (
-		postings []ledger.PostingInput
-		names    []string
+		postings   []ledger.PostingInput
+		billAllocs []ledger.BillAllocationInput
+		names      []string
 		// GST accumulation (Sales only): the taxable (non-tax, non-party) lines and
 		// the tax-ledger ids + posted tax amounts.
 		taxableLines []compliance.Line
@@ -362,15 +460,15 @@ func (im *Importer) importVoucher(ctx context.Context, idx int, v *integration.T
 	for _, e := range entries {
 		name := strings.TrimSpace(e.LedgerName)
 		if name == "" {
-			return ledger.PostResult{}, nil, fmt.Errorf("migration: voucher %d: empty ledger name", idx+1)
+			return ledger.VoucherInput{}, nil, fmt.Errorf("migration: voucher %d: empty ledger name", idx+1)
 		}
 		debit, err := e.Side()
 		if err != nil {
-			return ledger.PostResult{}, nil, fmt.Errorf("migration: voucher %d: %w", idx+1, err)
+			return ledger.VoucherInput{}, nil, fmt.Errorf("migration: voucher %d: %w", idx+1, err)
 		}
 		amount, err := e.Magnitude()
 		if err != nil {
-			return ledger.PostResult{}, nil, fmt.Errorf("migration: voucher %d: %w", idx+1, err)
+			return ledger.VoucherInput{}, nil, fmt.Errorf("migration: voucher %d: %w", idx+1, err)
 		}
 
 		drcr := ledger.Credit
@@ -380,10 +478,34 @@ func (im *Importer) importVoucher(ctx context.Context, idx int, v *integration.T
 
 		id, err := im.ensureLedger(ctx, name, class, drcr, ledgerIDs, createdBy)
 		if err != nil {
-			return ledger.PostResult{}, nil, fmt.Errorf("migration: voucher %d: ledger %q: %w", idx+1, name, err)
+			return ledger.VoucherInput{}, nil, fmt.Errorf("migration: voucher %d: ledger %q: %w", idx+1, name, err)
 		}
 		postings = append(postings, ledger.PostingInput{LedgerID: id, DrCr: drcr, Amount: amount})
 		names = append(names, name)
+
+		// Bill-wise allocations on this line (party ledger): each becomes a
+		// BillAllocationInput on the SAME Dr/Cr side as the line, feeding the
+		// receivables/payables ageing. A "New Ref" opens a bill; "Agst Ref"
+		// settles one. Amount is magnitude (sign is carried by DrCr).
+		for _, ba := range e.BillAllocations {
+			ref := strings.TrimSpace(ba.Name)
+			if ref == "" {
+				continue
+			}
+			amt, err := decimal.NewFromString(strings.TrimSpace(ba.Amount))
+			if err != nil {
+				return ledger.VoucherInput{}, nil, fmt.Errorf(
+					"migration: voucher %d: bill %q: bad AMOUNT %q: %w", idx+1, ref, ba.Amount, err)
+			}
+			billAllocs = append(billAllocs, ledger.BillAllocationInput{
+				LedgerID: id,
+				RefName:  ref,
+				RefType:  ledger.RefType(ba.RefType()),
+				DrCr:     drcr,
+				Amount:   amt.Abs(),
+				DueDate:  billDueISO(ba.DueDate),
+			})
+		}
 
 		if name == party {
 			partyID = id
@@ -418,21 +540,22 @@ func (im *Importer) importVoucher(ctx context.Context, idx int, v *integration.T
 	// Resolve the voucher type for this class (the six are seeded per company).
 	vtID, err := im.masters.VoucherTypeID(ctx, string(class))
 	if err != nil {
-		return ledger.PostResult{}, nil, fmt.Errorf(
+		return ledger.VoucherInput{}, nil, fmt.Errorf(
 			"migration: voucher %d: resolve voucher type %q: %w", idx+1, class, err)
 	}
 
 	in := ledger.VoucherInput{
-		Class:         class,
-		VoucherTypeID: vtID,
-		PartyLedgerID: partyID,
-		VoucherNo:     strings.TrimSpace(v.VoucherNumber),
-		VoucherDate:   isoDate,
-		Narration:     strings.TrimSpace(v.Narration),
-		Party:         party,
-		CreatedBy:     createdBy,
-		Postings:      postings,
-		SourceGUID:    v.GUIDValue(),
+		Class:           class,
+		VoucherTypeID:   vtID,
+		PartyLedgerID:   partyID,
+		VoucherNo:       strings.TrimSpace(v.VoucherNumber),
+		VoucherDate:     isoDate,
+		Narration:       strings.TrimSpace(v.Narration),
+		Party:           party,
+		CreatedBy:       createdBy,
+		Postings:        postings,
+		BillAllocations: billAllocs,
+		SourceGUID:      v.GUIDValue(),
 	}
 
 	// GST on Sales: when the voucher carried tax lines, attach GSTParams so the
@@ -462,11 +585,7 @@ func (im *Importer) importVoucher(ctx context.Context, idx int, v *integration.T
 		}
 	}
 
-	res, err := im.ledger.PostVoucher(ctx, in)
-	if err != nil {
-		return ledger.PostResult{}, nil, fmt.Errorf("migration: voucher %d: post: %w", idx+1, err)
-	}
-	return res, names, nil
+	return in, names, nil
 }
 
 // inferRate determines the combined GST rate percent for a Sales voucher. It

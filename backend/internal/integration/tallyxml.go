@@ -196,6 +196,36 @@ type TallyLedgerEntry struct {
 	// (sales income) line. When present they are preferred over rate inference.
 	HSN     string `xml:"HSNCODE"`
 	GSTRate string `xml:"GSTRATE"`
+	// BillAllocations are the bill-wise references Tally stamps on a party ledger
+	// line (<BILLALLOCATIONS.LIST>) — the source of receivables/payables ageing.
+	BillAllocations []TallyBillAllocation `xml:"BILLALLOCATIONS.LIST"`
+}
+
+// TallyBillAllocation is one bill-wise reference under a party ledger line. NAME
+// is the bill reference (e.g. an invoice number); BILLTYPE is Tally's reference
+// kind ("New Ref" opens a bill, "Agst Ref" settles one, "Advance", "On Account");
+// AMOUNT carries the same Dr/Cr sign as the parent line; DUEDATE is the credit-
+// period due date used for ageing.
+type TallyBillAllocation struct {
+	Name     string `xml:"NAME"`
+	BillType string `xml:"BILLTYPE"`
+	Amount   string `xml:"AMOUNT"`
+	DueDate  string `xml:"DUEDATE"`
+}
+
+// RefType maps Tally's BILLTYPE label to the ledger bill-reference type. An
+// unknown/empty label falls back to a new reference (Tally's default).
+func (b TallyBillAllocation) RefType() string {
+	switch strings.ToUpper(strings.Join(strings.Fields(b.BillType), " ")) {
+	case "AGST REF", "AGAINST REF", "AGAINST":
+		return "AGAINST"
+	case "ADVANCE":
+		return "ADVANCE"
+	case "ON ACCOUNT":
+		return "ON_ACCOUNT"
+	default:
+		return "NEW"
+	}
 }
 
 // Side reports whether this entry is a debit (true) or credit (false) per the

@@ -2,7 +2,6 @@ package migration_test
 
 import (
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/khata/cored/internal/compliance/gstr"
@@ -20,17 +19,15 @@ import (
 // the portion that works today and skips (with a precise message) the part that
 // is genuinely pending — it never fakes a pass.
 type fullCorpus struct {
-	id               string
-	stem             string
-	requiresBillwise bool
-	requiresEditLog  bool
+	id   string
+	stem string
 }
 
 var fullCorpora = []fullCorpus{
 	{id: "01-opening-trading", stem: "01-opening-trading"},
 	{id: "02-multistate-gst", stem: "02-multistate-gst"},
-	{id: "03-billwise-outstandings", stem: "03-billwise-outstandings", requiresBillwise: true},
-	{id: "04-edited-deleted", stem: "04-edited-deleted", requiresEditLog: true},
+	{id: "03-billwise-outstandings", stem: "03-billwise-outstandings"},
+	{id: "04-edited-deleted", stem: "04-edited-deleted"},
 	{id: "05-rounding-edge", stem: "05-rounding-edge"},
 }
 
@@ -55,9 +52,6 @@ func TestReconcileFullEachCorpus(t *testing.T) {
 			pool, ctx, companyID := setupCompanyState(t, exp.StateCode)
 			im := migration.NewImporter(masters.NewService(pool), ledger.NewService(pool))
 			if _, err := im.ImportFile(ctx, xmlPath, "fullrecon"); err != nil {
-				if c.requiresEditLog && strings.Contains(err.Error(), "ACTION") {
-					t.Skipf("corpus %s needs importer ACTION=Alter/Delete routing (pending); import rejected: %v", c.id, err)
-				}
 				t.Fatalf("import %s: %v", c.id, err)
 			}
 
@@ -65,35 +59,30 @@ func TestReconcileFullEachCorpus(t *testing.T) {
 			gen := gstr.NewService(pool)
 			ms := masters.NewService(pool)
 
-			err = migration.ReconcileFull(ctx, rep, gen, ms, companyID, exp)
-
-			// A corpus whose only remaining gap is OUTSTANDING (bill-allocation
-			// import not yet landed) must still reconcile on TB/BS/P&L. Assert that,
-			// then skip on the outstanding-only remainder.
-			if c.requiresBillwise && err != nil && onlyOutstanding(err.Error()) {
-				t.Skipf("corpus %s reconciles on TB/BS/P&L; OUTSTANDING pending bill-allocation import:\n%v", c.id, err)
-			}
-
-			if err != nil {
+			if err := migration.ReconcileFull(ctx, rep, gen, ms, companyID, exp); err != nil {
 				t.Fatalf("corpus %s FULL reconciliation failed:\n%v", c.id, err)
 			}
 		})
 	}
 }
 
-// onlyOutstanding reports whether every discrepancy bullet in a ReconcileFull
-// error names the OUTSTANDING statement (i.e. TB/BS/P&L/GSTR-1 are all clean).
-func onlyOutstanding(msg string) bool {
-	sawBullet := false
-	for _, line := range strings.Split(msg, "\n") {
-		l := strings.TrimSpace(line)
-		if !strings.HasPrefix(l, "- ") {
-			continue
-		}
-		sawBullet = true
-		if !strings.Contains(l, "OUTSTANDING") {
-			return false
-		}
+// TestImportRoutesAlterAndDelete asserts the importer dispatches the Tally ACTION
+// explicitly: corpus 04 has 6 voucher messages — a duplicate Create (idempotent
+// skip), a Create+Alter pair, and a Create+Delete pair — so the result must show
+// 3 posted, 1 skipped, 1 altered, 1 deleted. This pins the GUID-keyed routing so
+// a future regression where Alter silently falls through to a fresh Create (which
+// would double-post) is caught independently of the reconciliation totals.
+func TestImportRoutesAlterAndDelete(t *testing.T) {
+	root := repoRoot(t)
+	pool, ctx, _ := setupCompanyState(t, "")
+	im := migration.NewImporter(masters.NewService(pool), ledger.NewService(pool))
+	res, err := im.ImportFile(ctx, filepath.Join(root, "corpora", "migration", "04-edited-deleted.xml"), "routing")
+	if err != nil {
+		t.Fatalf("import: %v", err)
 	}
-	return sawBullet
+	if res.VouchersPosted != 3 || res.Skipped != 1 || res.VouchersAltered != 1 || res.VouchersDeleted != 1 {
+		t.Fatalf("ACTION routing: posted=%d skipped=%d altered=%d deleted=%d, want 3/1/1/1",
+			res.VouchersPosted, res.Skipped, res.VouchersAltered, res.VouchersDeleted)
+	}
 }
+
