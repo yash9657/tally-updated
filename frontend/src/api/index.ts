@@ -14,3 +14,26 @@ export {
   type HttpClientOptions,
 } from "./http";
 export * from "./types";
+
+// insightd DRAFT contract + client (the OCR-to-draft surface) and the
+// human-accept conversion helpers (draft body -> existing cored write path).
+export type {
+  DraftStatus,
+  FieldSource,
+  FieldConfidence,
+  ConfidenceMap,
+  RedactionReportSummary,
+  GSTAmounts,
+  PostingDraft,
+  GSTLineDraft,
+  GSTDraft,
+  VoucherDraftBody,
+  PurchaseVoucherDraft,
+  CreateDraftRequest,
+} from "./draft";
+export { createInsightdClient, type InsightdClient } from "./insightd";
+export {
+  draftBodyToVoucherRequest,
+  resolveDraftLedgers,
+  acceptPurchaseDraft,
+} from "../screens/vouchers/draftAccept";

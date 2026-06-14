@@ -7,6 +7,7 @@ import { normalizeCombo, comboFromEvent } from "../keystroke/normalize";
 import { useCompanyContext } from "./CompanyContext";
 import { ScreenActionsProvider, useScreenActionDispatcher } from "./ScreenActions";
 import { LoadedVoucherProvider } from "./LoadedVoucher";
+import { LoadedDraftProvider } from "./LoadedDraft";
 import { Chrome } from "./Chrome";
 import { ScreenRegistry } from "./screenRegistry";
 import { createDefaultRegistry } from "./defaultScreens";
@@ -33,7 +34,9 @@ export function AppShell({
   return (
     <ScreenActionsProvider>
       <LoadedVoucherProvider>
-        <AppShellInner registry={registry} />
+        <LoadedDraftProvider>
+          <AppShellInner registry={registry} />
+        </LoadedDraftProvider>
       </LoadedVoucherProvider>
     </ScreenActionsProvider>
   );

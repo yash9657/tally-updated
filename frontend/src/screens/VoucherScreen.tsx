@@ -9,6 +9,7 @@ import {
 } from "../app/CompanyContext";
 import { useRegisterScreenAction } from "../app/ScreenActions";
 import { useLoadedVoucher } from "../app/LoadedVoucher";
+import { useLoadedDraft } from "../app/LoadedDraft";
 import {
   acceptVoucher,
   deleteLoadedVoucher,
@@ -23,8 +24,12 @@ import {
   type GstFormState,
 } from "./vouchers/gstVoucher";
 import { normalizeMoney } from "./vouchers/money";
+import { acceptPurchaseDraft } from "../api";
 import type {
+  FieldConfidence,
   PostingRequest,
+  PurchaseVoucherDraft,
+  VoucherDraftBody,
   VoucherRequest,
   VoucherResponse,
   VoucherView,
@@ -143,6 +148,33 @@ function formFromView(view: VoucherView): VoucherForm {
 }
 
 /**
+ * Seed the form from an OCR-derived {@link VoucherDraftBody} (the F9 draft-mode
+ * prefill path). DISPLAY ONLY: the accept POSTs the ORIGINAL balanced body, not
+ * a form rebuild, so this only populates the visible fields. Money/qty/rate stay
+ * exact fixed-4 strings — never Number()-coerced.
+ */
+function formFromDraft(draft: PurchaseVoucherDraft): VoucherForm {
+  const body = draft.body;
+  const line = body.gst?.lines[0];
+  return {
+    date: body.voucher_date ?? today(),
+    party: body.party ?? "",
+    partyLedgerId: body.party_ledger_id ?? "",
+    partyStateCode: "",
+    narration: body.narration ?? "",
+    postings: [],
+    voucherNo: body.voucher_no ?? "",
+    gst: {
+      placeOfSupply: body.gst?.place_of_supply_state_code ?? "",
+      gstRatePct: line?.gst_rate_pct ?? "",
+      reverseCharge: body.gst?.reverse_charge ?? false,
+      hsn: line?.hsn ?? "",
+    },
+    taxableValue: line?.taxable_value ?? "0.0000",
+  };
+}
+
+/**
  * The voucher entry/alteration screen. Holds the real form state, drives the
  * LIVE backend on Ctrl+A (Accept) and Alt+D (Delete) via {@link editActions},
  * and surfaces the server-resolved voucher_no + the server-DERIVED GST split.
@@ -160,11 +192,19 @@ export function VoucherScreen({
   const companyID = useCompanyID();
   const homeStateCode = useHomeStateCode();
   const { loaded, setLoaded } = useLoadedVoucher();
+  const { loaded: loadedDraft, setLoaded: setLoadedDraft } = useLoadedDraft();
 
   const type = (snapshot.voucherType ?? "sales") as VoucherType;
   const mode = snapshot.mode ?? "create";
   const isAlter = mode === "alter";
   const cfg = configFor(type);
+
+  // DRAFT MODE: the F9 Purchase create screen hydrated from an OCR draft. Active
+  // only for a fresh (non-alter) purchase with a loaded draft. The POST on
+  // accept sends the ORIGINAL balanced body (acceptPurchaseDraft), NOT a form
+  // rebuild — the form prefill below is display-only.
+  const isDraftMode =
+    type === "purchase" && !isAlter && loadedDraft != null;
 
   // On an alter frame, the loaded report row gives us the logical voucher_id;
   // the FORM is hydrated from GET /vouchers/{id} (real posting uuids + GST
@@ -173,6 +213,7 @@ export function VoucherScreen({
   const loadedEntry = isAlter ? (loaded?.entry ?? null) : null;
   const loadedVoucherID = loadedEntry?.voucher_id ?? null;
   const seedRef = useRef<string | null>(null);
+  const draftSeedRef = useRef<string | null>(null);
   const [form, setForm] = useState<VoucherForm>(emptyForm);
   const [status, setStatus] = useState<string | null>(null);
   const [savedNo, setSavedNo] = useState<string | null>(null);
@@ -206,6 +247,16 @@ export function VoucherScreen({
       cancelled = true;
     };
   }, [client, companyID, loadedVoucherID]);
+
+  // Seed the form from an OCR draft when entering draft mode (keyed by draft_id,
+  // mirroring the alter seedRef guard so a re-render doesn't clobber edits and a
+  // fresh draft re-seeds). Prefill is display-only; accept POSTs the orig body.
+  const draftID = isDraftMode ? loadedDraft.draft.draft_id : null;
+  useEffect(() => {
+    if (!draftID || draftSeedRef.current === draftID) return;
+    draftSeedRef.current = draftID;
+    if (loadedDraft) setForm(formFromDraft(loadedDraft.draft));
+  }, [draftID, loadedDraft]);
 
   // Keep the latest form/ctx in refs so the registered action handlers (stable
   // across renders) always read current state without re-registering.
@@ -279,9 +330,37 @@ export function VoucherScreen({
   // Ctrl+A Accept: POST (create) or PUT (alter) via editActions, then surface
   // the server-resolved voucher_no AND the server-derived GST split. Runs BEFORE
   // the machine resets the frame.
+  // Keep the active draft body in a ref so the stable accept handler reads the
+  // current draft without re-registering. null when not in draft mode.
+  const draftBodyRef = useRef<VoucherDraftBody | null>(null);
+  draftBodyRef.current = isDraftMode ? loadedDraft.draft.body : null;
+
   const onAccept = useCallback(() => {
     if (inFlight.current) return;
     inFlight.current = true;
+    // DRAFT MODE: the ONLY write path is acceptPurchaseDraft, which resolves any
+    // null ledger ids (Alt+C create-on-the-fly) then POSTs the ORIGINAL balanced
+    // body verbatim to /vouchers/purchase — NOT a form rebuild. Accept is the
+    // sole human-in-the-loop write; there is no insightd ledger-write path.
+    const draftBody = draftBodyRef.current;
+    if (draftBody) {
+      acceptPurchaseDraft(client, companyID, draftBody)
+        .then((res: VoucherResponse) => {
+          setSavedNo(res.voucher_no);
+          setTaxResult({ cgst: res.cgst, sgst: res.sgst, igst: res.igst });
+          setStatus("Saved");
+          setLoadedDraft(null);
+        })
+        .catch((err: unknown) => {
+          setStatus(
+            `Error: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        })
+        .finally(() => {
+          inFlight.current = false;
+        });
+      return;
+    }
     const f = formRef.current;
     // Capture the edit context SYNCHRONOUSLY, before any async ledger-ensure /
     // GST-derive work: the machine may pop/reset the frame (create<->alter)
@@ -305,7 +384,14 @@ export function VoucherScreen({
       .finally(() => {
         inFlight.current = false;
       });
-  }, [buildGstRequest, buildPlainRequest, cfg.showGst, client, companyID]);
+  }, [
+    buildGstRequest,
+    buildPlainRequest,
+    cfg.showGst,
+    client,
+    companyID,
+    setLoadedDraft,
+  ]);
 
   // Alt+D Delete (alter mode only): tombstone the loaded voucher, then clear the
   // loaded slot. The machine pops back to the originating report.
@@ -402,6 +488,8 @@ export function VoucherScreen({
           tax={taxResult}
         />
       ) : null}
+
+      {isDraftMode ? <DraftPrefillPanel draft={loadedDraft.draft} /> : null}
 
       {snapshot.overlay === "change-mode" ? (
         <ChangeModeOverlay onSelect={onSelect} />
@@ -537,6 +625,114 @@ function TaxRow({
       <span data-testid={testId} className="bg-tally-field px-2 text-tally-fieldText">
         {amount}
       </span>
+    </div>
+  );
+}
+
+/**
+ * A header field is "amber" (needs review) when its confidence is below 0.80.
+ * Missing confidence (undefined) is NOT amber: absent fields are surfaced via
+ * the unresolved list instead, not flagged on present rows.
+ */
+function amber(conf?: FieldConfidence): boolean {
+  return conf != null && conf.confidence < 0.8;
+}
+
+/** Inline amber color (tailwind warn class absent); applied to low-confidence rows. */
+const AMBER_STYLE: React.CSSProperties = { color: "#d97706" };
+
+/**
+ * The OCR draft prefill panel (DRAFT MODE only). Surfaces, read-only:
+ *  - a status banner (ready vs low_confidence_manual),
+ *  - per-field amber confidence flags on the header fields,
+ *  - the unresolved-field focus hints,
+ *  - the redaction proof (PII counts),
+ *  - and the derived GST split PREVIEW (server re-derives on submit).
+ * Money is rendered as exact fixed-4 strings, never Number()-coerced.
+ */
+function DraftPrefillPanel({ draft }: { draft: PurchaseVoucherDraft }) {
+  const header = draft.confidence.header;
+  const ready = draft.status === "ready";
+
+  // The header confidence rows we surface, keyed to the contract's header map.
+  const headerRows: readonly { key: string; label: string }[] = [
+    { key: "invoice_no", label: "Invoice No." },
+    { key: "invoice_date", label: "Invoice Date" },
+    { key: "supplier", label: "Supplier" },
+    { key: "place_of_supply", label: "Place of Supply" },
+    { key: "totals", label: "Totals" },
+  ];
+
+  const red = draft.redaction;
+  const redCounts = Object.entries(red.counts_by_type)
+    .map(([k, n]) => `${k} ${n}`)
+    .join(", ");
+  const dg = draft.derived_gst;
+
+  return (
+    <div className="mt-3 bg-tally-panel p-3" data-testid="draft-panel">
+      <div
+        data-testid="draft-status"
+        className="mb-2 font-bold"
+        style={ready ? undefined : AMBER_STYLE}
+      >
+        {ready
+          ? "Ready — press Ctrl+A to accept"
+          : "Low confidence — review every field before accepting"}
+      </div>
+
+      <div className="mb-2">
+        {headerRows.map((row) => {
+          const conf = header[row.key];
+          const isAmber = amber(conf);
+          return (
+            <div
+              key={row.key}
+              data-testid={`conf-${row.key}`}
+              className={
+                "flex items-center gap-2 py-0.5" +
+                (isAmber ? " text-tally-warn" : "")
+              }
+              style={isAmber ? AMBER_STYLE : undefined}
+            >
+              <span className="w-32">{row.label}</span>
+              <span>
+                {conf
+                  ? `${(conf.confidence * 100).toFixed(0)}% (${conf.source})`
+                  : "—"}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+
+      {draft.unresolved.length > 0 ? (
+        <div data-testid="draft-unresolved" className="mb-2" style={AMBER_STYLE}>
+          <span className="w-32">Review: </span>
+          <span>{draft.unresolved.join(", ")}</span>
+        </div>
+      ) : null}
+
+      <div data-testid="draft-redaction" className="mb-2 text-xs">
+        PII redacted: {red.total}
+        {redCounts ? ` (${redCounts})` : ""}
+      </div>
+
+      {dg ? (
+        <div
+          data-testid="draft-derived-gst"
+          className="mt-2 border-t border-tally-field pt-2 text-xs"
+        >
+          <div className="text-tally-title">
+            Derived GST (preview — server re-derives on submit)
+          </div>
+          <div>CGST {dg.cgst}</div>
+          <div>SGST {dg.sgst}</div>
+          <div>IGST {dg.igst}</div>
+          <div>Total Tax {dg.total_tax}</div>
+          <div>Invoice Total {dg.invoice_total}</div>
+        </div>
+      ) : null}
     </div>
   );
 }
