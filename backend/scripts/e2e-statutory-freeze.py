@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+"""LIVE two-binary e2e for Task B — statutoryd IRN + cored freeze-on-external-reference.
+
+Drives a RUNNING cored (:8087) AND statutoryd (:8091) over HTTP, proving the whole
+IRN-and-freeze loop end to end (stdlib only, no deps):
+
+  1. Post a GST sales voucher in cored.
+  2. statutoryd mints a deterministic IRN (fetching the voucher amounts from cored,
+     validating the NIC e-invoice schema, then calling cored's freeze hook), which
+     PINS the voucher's display number.
+  3. The freeze hook is idempotent (re-register the same IRN -> same pinned number).
+  4. ALTER and DELETE of the now-frozen voucher are HARD-BLOCKED with HTTP 409,
+     carrying the blocking reference, and each raises a reconciliation-queue row.
+  5. The reconciliation-queue surfaces both refused attempts.
+  6. The voucher is left intact (version 1, not deleted) — the block rolled back.
+
+Boot:
+  cd backend && go build -o /tmp/cored ./cmd/cored && go build -o /tmp/statutoryd ./cmd/statutoryd
+  ADMIN_DSN=... go run ./cmd/cored migrate
+  PORT=8087 APP_DSN=... /tmp/cored serve &
+  CORED_BASE_URL=http://localhost:8087 PORT=8091 /tmp/statutoryd &
+Run:
+  python3 backend/scripts/e2e-statutory-freeze.py
+
+Exit 0 + "STATUTORY E2E OK" on success; an AssertionError (non-zero exit) on any mismatch.
+"""
+import json, os, urllib.request, urllib.error, uuid
+
+CORED = os.environ.get("CORED_BASE_URL", "http://localhost:8087")
+STAT = os.environ.get("STATUTORYD_BASE_URL", "http://localhost:8091")
+
+
+def req(url, data=None, method=None):
+    body = json.dumps(data).encode() if data is not None else None
+    r = urllib.request.Request(url, data=body, method=method or ("POST" if data is not None else "GET"))
+    if body is not None:
+        r.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(r) as resp:
+            t = resp.read().decode()
+            return resp.status, (json.loads(t) if t else None)
+    except urllib.error.HTTPError as e:
+        t = e.read().decode()
+        return e.code, (json.loads(t) if t else None)
+
+
+def main():
+    cid = str(uuid.uuid4())
+    s, _ = req(f"{CORED}/v1/companies", {"id": cid, "name": "Stat E2E Co",
+                                         "fy_start_date": "2026-04-01", "base_currency": "INR"})
+    assert s == 201, s
+
+    def ledger(name, group, **kw):
+        s, r = req(f"{CORED}/v1/companies/{cid}/ledgers", {"name": name, "group_name": group, **kw})
+        assert s == 201, (s, r)
+        return r["ledger_id"]
+
+    debtor = ledger("Bharat Buyer", "Sundry Debtors", state_code="29")
+    sales = ledger("Domestic Sales", "Sales Accounts")
+    ocg = ledger("Output CGST", "Duties & Taxes")
+    osg = ledger("Output SGST", "Duties & Taxes")
+    oig = ledger("Output IGST", "Duties & Taxes")
+
+    # intra @18 sale: taxable 1000 -> CGST 90 + SGST 90, party Dr 1180.
+    gst = {"supplier_state_code": "29", "place_of_supply_state_code": "29",
+           "lines": [{"taxable_value": "1000.0000", "gst_rate_pct": "18.0000", "hsn": "8471"}],
+           "cgst_ledger_id": ocg, "sgst_ledger_id": osg, "igst_ledger_id": oig}
+    postings = [{"ledger_id": debtor, "dr_cr": "D", "amount": "1180.0000"},
+                {"ledger_id": sales, "dr_cr": "C", "amount": "1000.0000"},
+                {"ledger_id": ocg, "dr_cr": "C", "amount": "90.0000"},
+                {"ledger_id": osg, "dr_cr": "C", "amount": "90.0000"}]
+    s, v = req(f"{CORED}/v1/companies/{cid}/vouchers/sales",
+               {"voucher_date": "2026-05-10", "party": "Bharat Buyer",
+                "party_ledger_id": debtor, "postings": postings, "gst": gst})
+    assert s == 201, (s, v)
+    vid, vno = v["voucher_id"], v["voucher_no"]
+    print(f"sales voucher posted: no={vno} cgst/sgst={v['cgst']}/{v['sgst']}")
+
+    s, rq = req(f"{CORED}/v1/companies/{cid}/reconciliation-queue")
+    assert s == 200 and len(rq["entries"]) == 0, rq
+    print("recon queue empty before freeze")
+
+    # statutoryd: mint the IRN (fetches amounts from cored, calls the freeze hook).
+    einv = {"seller_gstin": "29ABCDE1234F1Z5", "seller_legal_name": "Stat E2E Co", "seller_state_code": "29",
+            "buyer_gstin": "29ZYXWV9876G1Z2", "buyer_legal_name": "Bharat Buyer", "buyer_state_code": "29",
+            "lines": [{"desc": "Steel widgets", "hsn": "8471", "qty": "2.00", "unit": "NOS",
+                       "unit_price": "500.00", "taxable": "1000.00", "gst_rate_pct": "18.00",
+                       "cgst": "90.00", "sgst": "90.00", "igst": "0.00", "line_total": "1180.00"}]}
+    s, ir = req(f"{STAT}/companies/{cid}/vouchers/{vid}/e-invoice", einv)
+    assert s == 200, (s, ir)
+    irn = ir["irn"]
+    assert len(irn) == 64, ("IRN not 64-hex", irn)
+    assert ir["pinned_voucher_no"] == vno, (ir["pinned_voucher_no"], vno)
+    print(f"IRN minted: {irn[:16]}... status={ir['status']} pinned_no={ir['pinned_voucher_no']}")
+
+    # Idempotent freeze hook.
+    s, p1 = req(f"{CORED}/v1/companies/{cid}/vouchers/{vid}/external-reference",
+                {"kind": "IRN", "ref_value": irn})
+    assert s in (200, 201) and p1["pinned_voucher_no"] == vno, (s, p1)
+    print("freeze-hook idempotent re-register ok")
+
+    # ALTER + DELETE of the frozen voucher -> 409.
+    s, a = req(f"{CORED}/v1/companies/{cid}/vouchers/sales/{vid}",
+               {"voucher_date": "2026-05-10", "party": "Bharat Buyer",
+                "party_ledger_id": debtor, "postings": postings, "gst": gst}, method="PUT")
+    assert s == 409, ("alter not blocked", s, a)
+    assert a["frozen"] == {"kind": "IRN", "ref_value": irn, "pinned_voucher_no": vno}, a
+    print("ALTER frozen voucher -> 409:", a["frozen"]["kind"])
+
+    s, dl = req(f"{CORED}/v1/companies/{cid}/vouchers/{vid}", method="DELETE")
+    assert s == 409, ("delete not blocked", s, dl)
+    print("DELETE frozen voucher -> 409")
+
+    # Reconciliation-queue surfaces both refused attempts.
+    s, rq = req(f"{CORED}/v1/companies/{cid}/reconciliation-queue")
+    assert s == 200
+    ops = sorted(e["attempted_op"] for e in rq["entries"])
+    assert ops == ["ALTER", "DELETE"], ("recon entries", rq)
+    for e in rq["entries"]:
+        assert e["voucher_id"] == vid and e["kind"] == "IRN" and e["frozen_voucher_no"] == vno, e
+    print("recon queue after blocks:", ops)
+
+    # Voucher intact.
+    s, gv = req(f"{CORED}/v1/companies/{cid}/vouchers/{vid}")
+    assert s == 200 and gv["version_no"] == 1 and gv["voucher_no"] == vno, gv
+    print("voucher intact after blocked edits: version", gv["version_no"])
+
+    print("\nSTATUTORY E2E OK — IRN minted, number frozen, alter+delete hard-blocked, recon queue surfaced")
+
+
+if __name__ == "__main__":
+    main()

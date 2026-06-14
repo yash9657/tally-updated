@@ -33,6 +33,10 @@ var allowedDeps = map[string]map[string]bool{
 	"internal/ledger":      {"internal/platform/db": true, "internal/compliance": true},
 	"internal/masters":     {"internal/platform/db": true},
 	"internal/reporting":   {"internal/platform/db": true},
+	// statutoryd is a separate deployable plane: it generates IRN e-invoices and
+	// talks to cored ONLY over HTTP (the freeze-hook contract). It must NOT import
+	// any sibling internal package — the empty map forbids all of them.
+	"internal/statutory": {},
 	// migration is the Tally-XML importer + reconciliation harness: it parses
 	// via integration, ensures masters, posts through ledger, and reconciles via
 	// reporting. It is an orchestration leaf — nothing imports it except server.

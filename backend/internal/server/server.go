@@ -141,6 +141,13 @@ func (s *Server) routes() {
 		// Delete: append a tombstone. Class-agnostic — a delete needs only the id.
 		r.Delete("/vouchers/{voucherID}", s.handleDeleteVoucher)
 
+		// Freeze-on-external-reference: pinning an IRN / filed GSTR-1 to a
+		// voucher freezes its number and hard-blocks later alter/delete. The
+		// POST is the shared seam statutoryd calls at IRN time; the GET lists
+		// open reconciliation entries (refused alter/delete attempts).
+		r.Post("/vouchers/{voucherID}/external-reference", s.handleRegisterExternalReference)
+		r.Get("/reconciliation-queue", s.handleReconciliationQueue)
+
 		// Backward-compatible alias for the original F8 Sales endpoint.
 		r.Post("/sales", s.postVoucher(ledger.Sales))
 
@@ -553,6 +560,93 @@ func (s *Server) handleDeleteVoucher(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// externalRefReq is the body of the freeze-hook POST: the external reference to
+// pin to a voucher. created_by is optional (stamps the registering actor).
+type externalRefReq struct {
+	Kind      string `json:"kind"`
+	RefValue  string `json:"ref_value"`
+	CreatedBy string `json:"created_by"`
+}
+
+// handleRegisterExternalReference pins a voucher's display number to an external
+// reference (IRN / filed GSTR-1), freezing it against later alter/delete. It is
+// the shared seam statutoryd calls at IRN time. Idempotent on
+// (voucher,kind,ref_value): a re-POST returns the SAME pinned number. An unknown
+// or deleted voucher is a 404.
+func (s *Server) handleRegisterExternalReference(w http.ResponseWriter, r *http.Request) {
+	ctx, ok := s.scopeCtx(w, r)
+	if !ok {
+		return
+	}
+	voucherID, err := uuid.Parse(chi.URLParam(r, "voucherID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid voucher id")
+		return
+	}
+	var req externalRefReq
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if req.Kind != "IRN" && req.Kind != "FILED_GSTR1" {
+		writeError(w, http.StatusBadRequest, "kind must be IRN or FILED_GSTR1")
+		return
+	}
+	if req.RefValue == "" {
+		writeError(w, http.StatusBadRequest, "ref_value is required")
+		return
+	}
+	res, err := s.ledger.RegisterExternalReference(ctx, voucherID, req.Kind, req.RefValue, req.CreatedBy)
+	if err != nil {
+		switch {
+		case errors.Is(err, ledger.ErrVoucherNotFound):
+			writeError(w, http.StatusNotFound, "voucher not found")
+		case errors.Is(err, db.ErrNoCompany):
+			writeError(w, http.StatusBadRequest, err.Error())
+		default:
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"voucher_id":        res.VoucherID.String(),
+		"kind":              res.Kind,
+		"ref_value":         res.Ref,
+		"pinned_voucher_no": res.PinnedVoucherNo,
+	})
+}
+
+// handleReconciliationQueue lists the OPEN reconciliation entries — refused
+// alter/delete attempts against frozen vouchers — newest first.
+func (s *Server) handleReconciliationQueue(w http.ResponseWriter, r *http.Request) {
+	ctx, ok := s.scopeCtx(w, r)
+	if !ok {
+		return
+	}
+	rows, err := s.ledger.ListReconciliationQueue(ctx)
+	if err != nil {
+		if errors.Is(err, db.ErrNoCompany) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	entries := make([]map[string]any, 0, len(rows))
+	for _, e := range rows {
+		entries = append(entries, map[string]any{
+			"id":                e.ID.String(),
+			"voucher_id":        e.VoucherID.String(),
+			"attempted_op":      e.AttemptedOp,
+			"kind":              e.Kind,
+			"ref_value":         e.Ref,
+			"frozen_voucher_no": e.FrozenVoucherNo,
+			"detail":            e.Detail,
+			"created_at":        e.CreatedAt,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"entries": entries})
+}
+
 // handleGetVoucher returns the CURRENT (head) version of one logical voucher.
 // Its postings carry the REAL ledger ids (not names), so a frontend alter path
 // can re-seed a form from the fetched voucher without smuggling a name into a
@@ -660,6 +754,20 @@ func voucherResultJSON(res ledger.PostResult) map[string]any {
 // (unbalanced postings, GST mismatch, ledger validation) is a 422 — the same
 // mapping the POST path uses.
 func writeVoucherEditError(w http.ResponseWriter, err error) {
+	// A frozen voucher (pinned by an IRN / filed GSTR-1) is a 409 Conflict
+	// carrying the blocking reference, so a client can show what pinned it.
+	var fe *ledger.FrozenError
+	if errors.As(err, &fe) {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error": fe.Error(),
+			"frozen": map[string]any{
+				"kind":              fe.Kind,
+				"ref_value":         fe.Ref,
+				"pinned_voucher_no": fe.VoucherNo,
+			},
+		})
+		return
+	}
 	switch {
 	case errors.Is(err, ledger.ErrVoucherNotFound):
 		writeError(w, http.StatusNotFound, "voucher not found")

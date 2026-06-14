@@ -218,7 +218,27 @@ func (s *Service) PostVoucher(ctx context.Context, in VoucherInput) (PostResult,
 // immutability is preserved and the edit is auditable. It errors with
 // ErrVoucherNotFound when the voucher_id has no existing head row.
 func (s *Service) AlterVoucher(ctx context.Context, voucherID uuid.UUID, in VoucherInput) (PostResult, error) {
-	return s.post(ctx, voucherID, OpAlter, in)
+	res, err := s.post(ctx, voucherID, OpAlter, in)
+	if err != nil {
+		s.raiseFreezeRecon(ctx, voucherID, "ALTER", err)
+		return res, err
+	}
+	return res, nil
+}
+
+// raiseFreezeRecon routes a frozen-voucher refusal to the reconciliation queue.
+// When post() returns a *FrozenError, the alter/delete was hard-blocked; log the
+// attempt so it surfaces in the recon queue. A raise failure is swallowed (the
+// FrozenError is the authoritative result returned to the caller regardless) but
+// noted, so a transient recon-write hiccup never masks the 409.
+func (s *Service) raiseFreezeRecon(ctx context.Context, voucherID uuid.UUID, op string, err error) {
+	var fe *FrozenError
+	if !errors.As(err, &fe) {
+		return
+	}
+	if _, rerr := s.RaiseReconciliation(ctx, voucherID, op, fe); rerr != nil {
+		fmt.Printf("ledger: raise reconciliation for %s voucher %s: %v\n", op, voucherID, rerr)
+	}
 }
 
 // DeleteVoucher appends an append-only tombstone (op DELETE) to an existing
@@ -282,7 +302,12 @@ func (s *Service) DeleteVoucher(ctx context.Context, voucherID uuid.UUID, create
 	in.CreatedBy = createdBy
 	// The tombstone carries no postings; post()'s OpDelete branch skips the
 	// posting-insert + balance-add loop while still reversing the prior version.
-	return s.post(ctx, voucherID, OpDelete, in)
+	res, err := s.post(ctx, voucherID, OpDelete, in)
+	if err != nil {
+		s.raiseFreezeRecon(ctx, voucherID, "DELETE", err)
+		return res, err
+	}
+	return res, nil
 }
 
 // PostingView is one posting line of a fetched voucher, carrying the REAL
@@ -580,6 +605,20 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 			  WHERE company_id = $1 AND voucher_id = $2`,
 			companyID, voucherID).Scan(&priorCurrentID); {
 		case err == nil:
+			// FREEZE-ON-EXTERNAL-REFERENCE gate. The head exists, so this is an
+			// ALTER/DELETE of a real voucher (OpCreate also reaches this arm only
+			// when re-creating an existing id, which the guard below excludes).
+			// If the voucher is pinned by an IRN / filed GSTR-1, refuse: return
+			// the *FrozenError so RunInTx rolls back BEFORE any balance is
+			// reversed — nothing is written. The entry points map this to a 409
+			// and raise a reconciliation_queue row.
+			if op != OpCreate {
+				if fe, ferr := frozenRef(ctx, tx, companyID, voucherID); ferr != nil {
+					return ferr
+				} else if fe != nil {
+					return fe
+				}
+			}
 			if _, err := tx.Exec(ctx,
 				`UPDATE ledger_balance lb
 				    SET debit  = lb.debit  - s.d,
