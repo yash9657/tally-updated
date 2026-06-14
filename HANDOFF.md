@@ -2,7 +2,7 @@
 
 **Purpose of this file:** let a fresh session (clean context) pick up and keep building this project to completion without re-deriving everything. Read this top-to-bottom once, then start at **§7 Next tasks**.
 
-**Last updated:** after commit `4628634` (Phase 2 flagship `insightd` shipped). Branch: `master`.
+**Last updated:** after commit `d7b970e` (Task A — F9 OCR-draft prefill — shipped; the OCR killer-feature loop closes in-browser). Branch: `master`.
 
 ---
 
@@ -45,6 +45,7 @@ The single most important thing that has kept quality high: **re-verify every ga
 ## 4. Current state (what's built, committed, and GREEN)
 
 Commits on `master` (newest first):
+- `d7b970e` — **Task A: F9 OCR-draft prefill** — OCR→insightd draft→prefilled F9→Ctrl+A→cored→trial balance, in-browser, HITL kept structural (accept is the only write). New `api/draft.ts`+`api/insightd.ts`+`vouchers/draftAccept.ts`+`app/LoadedDraft.tsx`, VoucherScreen draft mode, live `pnpm e2e:ocr`.
 - `4628634` — **Phase 2 flagship: `insightd`** OCR→voucher pipeline (HITL, no AI write path, PII boundary).
 - `258e40b` — Migration story closed: bill-wise outstandings + edit/delete on import; all 5 corpora reconcile.
 - `619af10` — Rupee-exact **four-statement** migration reconciliation (TB/BS/P&L/GSTR-1/Outstandings) + company GST state.
@@ -58,8 +59,9 @@ Commits on `master` (newest first):
 - A Tally user drives all 6 voucher types (F4–F9) in-browser against live `cored`: **Tally auto-numbering** (FY-scoped, gap-on-delete, no-realloc-on-alter), **GST split** (intra→CGST+SGST, inter→IGST, server-derived), **immutable edit/delete** as hash-chained versions, **drill-to-alter** (loads real ledger ids via `GET /vouchers/{id}`), reports with drill-down, master creation.
 - A CA migrates a Tally XML export and **reconciles TB / Balance Sheet / P&L / GSTR-1 / Outstandings to the rupee** (`migration.ReconcileFull`), across opening balances, multi-state GST, bill-wise bills, edit/delete-on-import, and rounding — against an **independently hand-derived** oracle (verified non-circular).
 - A purchase bill flows through `insightd` (OCR → Haiku classify → Opus infer → PII redact) into a pre-filled **F9 Purchase draft** awaiting Ctrl+A, with **human-in-the-loop** (no ledger write path) and **PII-never-leaves-India** invariants enforced by tests.
+- **The full OCR loop now closes in-browser** (`d7b970e`): the F9 Purchase screen consumes an `insightd` draft (prefill + per-field amber confidence + redaction proof + derived-GST preview), and Ctrl+A posts the balanced body verbatim through the **existing** voucher API — verified by the live `pnpm e2e:ocr` (cored+insightd): draft carries the real cored party id, trial balance is all-zero before accept (insightd wrote nothing), then balanced to the rupee after.
 
-**Phase status:** Phase 0 ✅ · Phase 1 ✅ (core + migration thesis complete) · Phase 2 🔄 (flagship OCR done; statutoryd, offline desktop, and frontend F9-prefill wiring remain) · Phases 3–4 ⬜.
+**Phase status:** Phase 0 ✅ · Phase 1 ✅ (core + migration thesis complete) · Phase 2 🔄 (flagship OCR ✅ + F9 prefill loop ✅; **statutoryd** and **offline desktop** remain) · Phases 3–4 ⬜.
 
 ---
 
@@ -85,6 +87,14 @@ pnpm run build                                  # tsc + vite build
 # live e2e against a running cored on :8087:
 CORED_BASE_URL=http://localhost:8087 pnpm e2e:edit                 # edit/delete loop
 CORED_BASE_URL=http://localhost:8087 pnpm exec tsx scripts/e2e-numbering.mts   # auto-numbering
+# OCR-prefill loop (needs BOTH cored :8087 and insightd :8088 running, see below):
+CORED_BASE_URL=http://localhost:8087 INSIGHTD_BASE_URL=http://localhost:8088 pnpm e2e:ocr
+```
+
+**insightd server (for the OCR-prefill e2e):**
+```bash
+cd insightd && . .venv/bin/activate     # venv set up per the insightd block below
+INSIGHTD_PII_BOUNDARY_STRICT=1 python -m uvicorn insightd.api.app:app --port 8088 &
 ```
 
 **insightd (Python AI plane):**
@@ -107,7 +117,7 @@ python -m insightd.benchmark.report             # field-level accuracy floor gat
 
 🔴 / 🟡 = priority. None of these block what's committed; they're the honest edges.
 
-- 🟡 **Frontend F9 OCR-draft prefill not wired.** `insightd` produces the draft (contract frozen in `insightd/docs/frontend-draft-contract.md`); the F8/F9 screen doesn't yet consume `body + confidence + status` to drop the user into a pre-filled voucher. This *completes the killer-feature loop* — small, high-visibility. (Task A below.)
+- ✅ **DONE (`d7b970e`) — Frontend F9 OCR-draft prefill wired.** The F9 Purchase screen consumes `body + confidence + unresolved + status + redaction + derived_gst`; Ctrl+A posts the balanced body verbatim via the existing voucher API (`acceptPurchaseDraft`). Follow-up: draft-mode prefill is **display-only** — editing a prefilled field does not yet alter the POSTed body (a `ready` draft is accept-as-is); wire body-editing if operators need to correct before accept. Also: no UI entry to *upload a bill / pick a draft_id* yet (draft is injected via `LoadedDraft` context; the e2e/tests seed it directly) — add an upload affordance + nav when building the bill-inbox screen.
 - 🟡 **`insightd` accuracy floors run on deterministic fakes** — they measure the *mapper* + invariants, not real OCR/LLM accuracy. The `--real` calibration mode (PaddleOCR + Anthropic key) is the pre-release model-accuracy gate and does **not** gate merges. Wire `tests/test_gst_oracle_reconcile.py` (the independent GST signal vs Go golden corpora) into CI checkout of the repo root.
 - 🟡 **`insightd` PII:** `pii_presidio.py` is constructed but the regex floor (`redaction/recognizers.py`) is authoritative; flesh out Presidio span-adding as an accuracy upgrade. Add a Postgres-backed `DraftStore` (currently in-memory).
 - 🟡 **Frontend supplier-state:** `gstVoucher.ts` still sends a hardcoded `"29"`; should send the company's real `state_code` (or omit → server default from `company.state_code`, which is already correct as of `619af10`) and pass `state_code` at company bootstrap. Affects non-Karnataka companies in-browser.
@@ -121,12 +131,10 @@ python -m insightd.benchmark.report             # field-level accuracy floor gat
 
 > Reminder: for each, follow §3 — pin contracts in design, parallel-implement on disjoint files, adversarial-review, then **you integrate + re-run every gate + a live e2e** before committing. The workflow template is in §9.
 
-### Task A — Wire the frontend F9 OCR-draft prefill (completes the killer feature) — **do this first**
-- **Goal:** the OCR→Ctrl+A loop works in-browser. User uploads a bill → `insightd` returns a draft → the F9 Purchase screen opens pre-filled with party/line-items/GST and per-field confidence (amber below ~0.80), awaiting Ctrl+A → posts via the existing voucher API (the only write path).
-- **Scope:** frontend only (consume `insightd/docs/frontend-draft-contract.md`), plus a thin `insightd` client in the frontend api layer. No backend change. Add a live e2e: a draft → prefilled VoucherScreen → Ctrl+A posts → trial balance reflects it.
-- **Workflow:** `phase2-f9-ocr-prefill` — Design (map the draft contract → VoucherScreen form state; confidence UI; HITL accept = existing POST) → Implement (frontend draft client + VoucherScreen prefill/confidence rendering; component tests) → Review (HITL preserved: accept is the only write; confidence surfaced; no client-side tax compute). Gate: tsc + vitest + build + a live e2e posting a prefilled draft.
+### Task A — Wire the frontend F9 OCR-draft prefill — ✅ DONE (`d7b970e`)
+Shipped: `api/draft.ts` (contract mirror) + `api/insightd.ts` (thin client) + `vouchers/draftAccept.ts` (`draftBodyToVoucherRequest`/`resolveDraftLedgers`/`acceptPurchaseDraft`) + `app/LoadedDraft.tsx` + VoucherScreen draft mode + `DraftPrefillPanel`. Live `pnpm e2e:ocr` proves the loop end-to-end (HITL: zero writes before accept). Key insight that made it clean: the insightd `body` is already a balanced cored payload, so accept posts it verbatim (no client-side tax math); cored's GST verify sums by tax-ledger id ignoring Dr/Cr so input-tax DEBITs pass. Remaining follow-ups moved to §6. **Next: Task B.**
 
-### Task B — `statutoryd`: connected compliance (the conversion lever)
+### Task B — `statutoryd`: connected compliance (the conversion lever) — **do this next**
 - **Goal:** separate Go deployable + durable workflows for **e-invoice IRN generation** (NIC schema), **e-way bill**, and **Connected-GST direct filing** (GSTR-1/3B/CMP-08 with ARN tracking), behind a multi-homed ProviderAdapter (ClearTax/Masters India primary, NIC IRP secondary) with circuit breakers + 6-hour GSP session auto-renew. Plus the **freeze-on-external-reference rule**: pin a voucher's display number at IRN time; hard-block superseding any voucher already e-invoiced or in a filed GSTR-1 (route to a CA reconciliation queue). This rule **must land with e-invoicing** so offline numbering can never clash with a filed return.
 - **Env reality:** no real GSP/NIC endpoints or Temporal cluster here → build behind a `ProviderAdapter` interface with **recorded GSP/NIC schema fixtures** + a deterministic fake; durable-workflow logic testable with an in-process runner or River (already a dep). Schema conformance gated on NIC golden schemas. Add **chaos tests** (GSP outage, token expiry, rate-limit, partial-failure) asserting idempotent resume.
 - **Workflow:** `phase2-statutoryd-connected-compliance` — Design (service layout; ProviderAdapter contract; IRN/e-way/GSTR JSON schemas from RESEARCH; freeze-on-external-reference DB rule in cored) → Implement parallel: [statutoryd workflows + adapter + fakes/fixtures] ‖ [cored freeze rule + reconciliation-queue surface] → Review (chaos-gated idempotency; schema conformance; freeze rule actually hard-blocks). Gate: go test (both) + chaos sims + schema validation.
@@ -205,5 +213,5 @@ Then **you** (main loop): read the result, apply any `mustFix`, **re-run the ful
 
 1. Read this file + skim `PLAN.md` Part C (Phase 2 section) + the memory index.
 2. Bring up the stack (§5), run the full gate matrix once to confirm everything is still green from a clean clone state.
-3. Start **Task A** (`phase2-f9-ocr-prefill`) — it's the smallest high-value increment and completes the OCR killer-feature loop. Then **Task B** (statutoryd) — but note **Task C's** offline hard-block depends on **Task B's** freeze-on-external-reference rule, so build B before C.
+3. Task A is DONE (`d7b970e`). Start **Task B** (`phase2-statutoryd-connected-compliance`) — note **Task C's** offline hard-block depends on **Task B's** freeze-on-external-reference rule, so build B before C.
 4. Keep the discipline in §3. Verify everything yourself. Commit only green. Update this file and memory as state changes.
