@@ -311,6 +311,16 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 		return authz.Create, "import", "", true
 	case method == http.MethodPost && rest == "/sync/commit":
 		return authz.Create, "sync", "", true
+
+	// Conversational query (Phase 3). A read-only NL/DSL query is a DISPLAY,
+	// not a Create: it never writes, so it must NOT inherit the back-dated write
+	// cutoff or the WebAuthn step-up (both gate on Action.IsWrite(), which is
+	// false for Display). An Owner (default_access full) is allowed; a custom
+	// level can disallow resource "query". This mapping is LOAD-BEARING:
+	// routeAction default-denies any unmapped {companyID} route, so without it
+	// EVERY POST /query would 403 even for an Owner.
+	case method == http.MethodPost && rest == "/query":
+		return authz.Display, "query", "", true
 	}
 	return "", "", "", false
 }

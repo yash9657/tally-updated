@@ -39,6 +39,7 @@ import type {
   VoucherResponse,
   VoucherView,
 } from "./types";
+import type { QueryRequest, QueryResult } from "./query";
 
 export interface CoredClient {
   // Company
@@ -155,6 +156,13 @@ export interface CoredClient {
 
   // GST
   generateGSTR1(companyID: string, query: GSTR1Query): Promise<GSTR1Response>;
+
+  // "Ask your books" conversational query (POST /query). Body carries an NL
+  // question (default path) OR a pre-built typed DSL (power users); the server
+  // translates+compiles+executes under a READ-ONLY, tenant-scoped transaction
+  // and returns the typed answer (columns + string rows + the echoed DSL +
+  // sql_preview). Read-only: it NEVER writes. Money stays string.
+  query(companyID: string, body: QueryRequest): Promise<QueryResult>;
 
   // Migration import (Tally-XML ingress)
   importTallyXML(

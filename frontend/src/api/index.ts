@@ -15,6 +15,22 @@ export {
 } from "./http";
 export * from "./types";
 
+// "Ask your books" conversational-query contract (the typed DSL + the
+// /query request/response envelope), mirroring the backend WS1/WS2 shapes.
+export type {
+  QueryEntity,
+  AggFunc,
+  FilterOp,
+  QueryMetric,
+  QueryFilter,
+  DateRange,
+  OrderTerm,
+  Query,
+  QueryRequest,
+  ColumnMeta,
+  QueryResult,
+} from "./query";
+
 // insightd DRAFT contract + client (the OCR-to-draft surface) and the
 // human-accept conversion helpers (draft body -> existing cored write path).
 export type {

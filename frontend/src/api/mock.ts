@@ -47,6 +47,7 @@ import type {
   PostingView,
   BillAllocationView,
 } from "./types";
+import type { QueryRequest, QueryResult } from "./query";
 import { deriveGstSplit } from "../screens/vouchers/gstDerive";
 
 let idCounter = 0;
@@ -653,6 +654,29 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         return { gstr1: base, reconciliation_ok: true };
       }
       return base;
+    },
+
+    async query(companyID, body: QueryRequest): Promise<QueryResult> {
+      ensure(companyID);
+      // The mock does not run the deterministic DSL->SQL compiler; it returns a
+      // small, contract-shaped canned answer so screens that depend on the
+      // CoredClient interface still type-check and render. Tests that exercise
+      // QueryScreen inject their own client returning a richer QueryResult.
+      const dsl: QueryResult["dsl"] = body.dsl ?? {
+        entity: "ledger_balances",
+        metrics: [{ func: "sum", column: "debit", as: "total_debit" }],
+        dimensions: ["group_name"],
+        filters: [],
+        date_range: null,
+        order_by: [],
+        limit: 100,
+      };
+      return {
+        dsl,
+        sql_preview: "SELECT ... FROM ... WHERE ... -- mock (no compiler)",
+        columns: [{ name: "result", type: "text" }],
+        rows: [],
+      };
     },
 
     async importTallyXML(

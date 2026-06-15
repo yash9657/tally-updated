@@ -2,6 +2,7 @@ import { SelectionList } from "../screens/SelectionList";
 import { GatewayScreen } from "../screens/GatewayScreen";
 import { VoucherScreen } from "../screens/VoucherScreen";
 import { BillInboxScreen } from "../screens/BillInboxScreen";
+import { QueryScreen } from "../screens/QueryScreen";
 import { MasterCreateScreen } from "../screens/masters/MasterCreateScreen";
 import {
   DayBookScreen,
@@ -115,6 +116,14 @@ const BillInboxAdapter: ScreenComponent = ({
   <BillInboxScreen snapshot={snapshot} onSelect={onSelect} />
 );
 
+/** Query adapter: the "Ask your books" conversational query screen. */
+const QueryAdapter: ScreenComponent = ({
+  snapshot,
+  onSelect,
+}: ScreenComponentProps) => (
+  <QueryScreen snapshot={snapshot} onSelect={onSelect} />
+);
+
 /**
  * Build a registry pre-populated with the default screens. Agents extend the
  * returned registry; call sites that want a clean slate construct their own
@@ -130,6 +139,7 @@ export function createDefaultRegistry(): ScreenRegistry {
     "master-create": MasterCreateAdapter,
     "goto-overlay": GoToOverlayScreen,
     "bill-inbox": BillInboxAdapter,
+    query: QueryAdapter,
     // Live, per-name report screens (override the generic fallback).
     "report:Day Book": DayBookScreen,
     "report:Trial Balance": TrialBalanceScreen,

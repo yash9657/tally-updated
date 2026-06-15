@@ -4,6 +4,7 @@ import { SelectionList } from "./SelectionList";
 const GATEWAY_MENU = [
   "Vouchers",
   "Bill Inbox",
+  "Query",
   "Day Book",
   "Balance Sheet",
   "Profit & Loss A/c",

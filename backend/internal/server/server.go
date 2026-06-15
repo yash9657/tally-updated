@@ -41,6 +41,7 @@ import (
 	"github.com/khata/cored/internal/masters"
 	"github.com/khata/cored/internal/migration"
 	"github.com/khata/cored/internal/platform/db"
+	"github.com/khata/cored/internal/query"
 	"github.com/khata/cored/internal/reporting"
 	"github.com/khata/cored/internal/sync"
 	"github.com/khata/cored/internal/webauthn"
@@ -64,6 +65,7 @@ type Server struct {
 	gstr     *gstr.Service
 	importer *migration.Importer
 	sync     *sync.Service
+	query    *query.Service
 	router   chi.Router
 
 	// Auth (Task D, WS1). verifier verifies inbound JWTs; signer mints dev
@@ -129,6 +131,13 @@ func New(ctx context.Context, appDSN string) (*Server, error) {
 		gstr:      gstr.NewService(pool),
 		importer:  migration.NewImporter(m, l),
 		sync:      sync.NewService(l, pool),
+		// Conversational query (Phase 3). The FakeTranslator is the deterministic,
+		// shipped-by-default NL->DSL mapper (a real-Claude adapter is the documented
+		// production swap, behind a key; this package never calls the network). Its
+		// clock is time.Now in production; tests construct their own Service/handler
+		// path with a fixed clock where determinism matters. Execution runs through
+		// the same read-only, company-GUC-scoped pool as every report.
+		query: query.NewService(pool, query.FakeTranslator{Now: time.Now}),
 		verifier:  verifier,
 		signer:    signer,
 		authStore: authzStore,
@@ -325,6 +334,12 @@ func (s *Server) routes() {
 		// outbox of voucher intents; the sequencer assigns final numbers,
 		// resolves conflicts, and hard-blocks superseding frozen vouchers.
 		r.Post("/sync/commit", s.handleSyncCommit)
+
+		// Conversational query (Phase 3 flagship): ask the books a question in
+		// English (or POST a typed DSL) and get a typed, read-only answer. The
+		// handler runs under companyAuthMiddleware (PDP maps POST /query ->
+		// Display/query) and executes via the read-only, RLS-scoped pool.
+		r.Post("/query", s.handleQuery)
 	})
 
 	s.router = r
@@ -1451,6 +1466,115 @@ func (s *Server) handleSyncCommit(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"outcomes": outcomes})
+}
+
+// --------------------------------------------------------------------------
+// Conversational query (Phase 3 flagship)
+// --------------------------------------------------------------------------
+
+// queryReq is the POST /query body. Exactly one of nl / dsl is used: dsl WINS
+// when present (the power-user / contract path), otherwise nl is translated.
+type queryReq struct {
+	NL  string       `json:"nl"`
+	DSL *query.Query `json:"dsl"`
+}
+
+// handleQuery answers a natural-language (or typed-DSL) question against the
+// books, read-only and tenant-scoped. The flow:
+//
+//	1. resolve the authz-VERIFIED company from ctx (scopeCtxID), exactly like
+//	   every report handler — never the raw path param.
+//	2. if a DSL is supplied, use it directly; else translate nl -> Query
+//	   (ErrUntranslatable -> 422 with examples).
+//	3. Compile (SQLPreview) + Execute via the read-only, RLS-scoped pool.
+//	4. 200 { dsl, sql_preview, columns, rows }.
+//
+// 422 is returned for an untranslatable question OR an invalid/uncompilable DSL,
+// with a SAFE message — the raw SQL/internal error text is NEVER leaked (a
+// compiler error could otherwise echo schema/identifier internals).
+func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
+	ctx, companyID, ok := s.scopeCtxID(w, r)
+	if !ok {
+		return
+	}
+	var req queryReq
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+
+	// (2) Resolve the typed Query: a supplied DSL wins; otherwise translate the
+	// NL. An empty body (neither nl nor dsl) is an untranslatable question.
+	var q query.Query
+	if req.DSL != nil {
+		q = *req.DSL
+	} else {
+		translated, err := s.query.Translate(ctx, companyID, req.NL)
+		if err != nil {
+			// Untranslatable (or any translator error): 422 with examples. Do not
+			// leak internal error text — the message is fixed and helpful.
+			writeQueryUntranslatable(w)
+			return
+		}
+		q = translated
+	}
+
+	// (3) Compile for the preview, then execute. A compile error (unknown
+	// entity/column/op, empty IN, bad order-by, etc.) is a 422 with a SAFE
+	// message — never the raw compiler/SQL text.
+	preview, err := s.query.Preview(q)
+	if err != nil {
+		writeQueryInvalid(w)
+		return
+	}
+	res, err := s.query.Run(ctx, q)
+	if err != nil {
+		if errors.Is(err, db.ErrNoCompany) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		// Compile failures surface here too (Execute compiles internally). Treat
+		// any execution/compile failure as an invalid query (422), never a 500
+		// that could leak SQL or internal details.
+		writeQueryInvalid(w)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"dsl":         q,
+		"sql_preview": preview,
+		"columns":     queryColumnsJSON(res.Columns),
+		"rows":        res.Rows,
+	})
+}
+
+// queryColumnsJSON serialises the column metadata to the pinned
+// [{name,type},...] shape.
+func queryColumnsJSON(cols []query.ColumnMeta) []map[string]string {
+	out := make([]map[string]string, 0, len(cols))
+	for _, c := range cols {
+		out = append(out, map[string]string{"name": c.Name, "type": c.Type})
+	}
+	return out
+}
+
+// writeQueryUntranslatable writes the 422 for a question the translator could
+// not map, echoing the example questions so the user learns what to ask. It
+// never includes internal error text.
+func writeQueryUntranslatable(w http.ResponseWriter) {
+	writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+		"error":    "could not understand the question; try one of the examples",
+		"examples": query.ExampleQuestions,
+	})
+}
+
+// writeQueryInvalid writes the 422 for a DSL that fails to compile/execute. The
+// message is fixed and SAFE — it never leaks the compiled SQL or the internal
+// compiler error (which could reveal schema/identifier internals).
+func writeQueryInvalid(w http.ResponseWriter) {
+	writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+		"error":    "invalid query",
+		"examples": query.ExampleQuestions,
+	})
 }
 
 // --------------------------------------------------------------------------

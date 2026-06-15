@@ -97,6 +97,15 @@ export type GotoMode = "goto" | "switchTo";
 export const BILL_INBOX_LABEL = "Bill Inbox";
 
 /**
+ * The Gateway entry label that drills into the "Ask your books" query screen.
+ * Matched case-insensitively in the gateway Enter/SELECT branches. Like
+ * {@link BILL_INBOX_LABEL} it is NEITHER "Vouchers" nor a report name, so it
+ * needs its own highlightable branch (and an Enter branch placed BEFORE the
+ * canonicalReportName fallback, else it would be mistaken for a report name).
+ */
+export const QUERY_LABEL = "Query";
+
+/**
  * Pinned sentinel the {@link BillInboxScreen} feeds through `onSelect` (a SELECT
  * event) AFTER it has set the LoadedDraft context. reduceSelect treats this as
  * "open the chosen draft in the F9 Purchase voucher": it pushes a purchase
@@ -314,6 +323,14 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
           stack.push({ screen: "bill-inbox" });
           return { stack };
         }
+        // "Query" drills into the "Ask your books" query screen. Like Bill
+        // Inbox this MUST be checked BEFORE the canonicalReportName fallback,
+        // which would otherwise treat the label as an unknown report name and
+        // wrongly push a report frame called "Query".
+        if (active.selectedItem?.toLowerCase() === QUERY_LABEL.toLowerCase()) {
+          stack.push({ screen: "query" });
+          return { stack };
+        }
         // A selected report entry drills into that report (depth +1), the same
         // destination the Alt+G Go To picker reaches.
         const report = canonicalReportName(active.selectedItem);
@@ -460,6 +477,7 @@ function reduceSelect(ctx: NavContext, menuItem: string): Partial<NavContext> {
     if (
       menuItem.toLowerCase() === "vouchers" ||
       menuItem.toLowerCase() === BILL_INBOX_LABEL.toLowerCase() ||
+      menuItem.toLowerCase() === QUERY_LABEL.toLowerCase() ||
       canonicalReportName(menuItem) !== undefined
     ) {
       active.selectedItem = menuItem;

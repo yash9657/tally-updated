@@ -21,6 +21,10 @@
  *  - "bill-inbox"        — the F9 Bill Inbox: lists pending OCR drafts and opens
  *                          one into the Purchase (F9) voucher in draft-prefill
  *                          mode (the AI-native upload-to-voucher entry point).
+ *  - "query"             — the "Ask your books" conversational query screen: a
+ *                          natural-language question is sent to the safe
+ *                          read-only query core and the typed answer is rendered
+ *                          (the AI-native ask-your-data entry point).
  */
 export type ScreenKind =
   | "gateway"
@@ -30,7 +34,8 @@ export type ScreenKind =
   | "report-detail"
   | "goto-overlay"
   | "master-create"
-  | "bill-inbox";
+  | "bill-inbox"
+  | "query";
 
 /**
  * The kind of master a "master-create" screen is creating. Mirrors the masters

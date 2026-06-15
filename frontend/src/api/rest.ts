@@ -36,6 +36,7 @@ import type {
   VoucherResponse,
   VoucherView,
 } from "./types";
+import type { QueryRequest, QueryResult } from "./query";
 
 function company(companyID: string): string {
   return `/v1/companies/${encodeURIComponent(companyID)}`;
@@ -212,6 +213,10 @@ export function createRestClient(
 
     generateGSTR1(companyID, query: GSTR1Query) {
       return http.get<GSTR1Response>(`${company(companyID)}/gstr1`, query);
+    },
+
+    query(companyID, body: QueryRequest) {
+      return http.post<QueryResult>(`${company(companyID)}/query`, body);
     },
 
     importTallyXML(companyID, xml, query?: ImportTallyXMLQuery) {

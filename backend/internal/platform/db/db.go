@@ -165,6 +165,49 @@ func (p *Pool) RunInTx(ctx context.Context, fn TxFunc) error {
 	return nil
 }
 
+// RunInReadOnlyTx runs fn inside a READ-ONLY, company-scoped transaction. It is
+// byte-for-byte RunInTx except that the transaction is begun with
+// pgx.TxOptions{AccessMode: pgx.ReadOnly}, which maps to Postgres
+// `BEGIN ... READ ONLY`: any INSERT/UPDATE/DELETE/DDL issued inside it errors
+// with "cannot execute ... in a read-only transaction", independent of role
+// grants. This is the execution path for the conversational query core (the
+// NL->DSL->compiler pipeline) and is pure defense-in-depth: a compiler bug that
+// somehow emitted a write would be rejected by Postgres before it could mutate
+// anything.
+//
+// The ErrNoCompany short-circuit is preserved (returned BEFORE any database
+// round-trip), and the company GUC is set with set_config(...,true) as the FIRST
+// statement so RLS still scopes the tenant. set_config(...,true) is a SELECT (a
+// read), so it runs fine inside a read-only transaction. The read-only flag
+// alone does NOT scope the tenant — RLS needs the company GUC; both guarantees
+// are present here.
+func (p *Pool) RunInReadOnlyTx(ctx context.Context, fn TxFunc) error {
+	companyID, ok := CompanyFromContext(ctx)
+	if !ok {
+		return ErrNoCompany
+	}
+
+	tx, err := p.pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return fmt.Errorf("db: begin read-only tx: %w", err)
+	}
+	// Bind the tenant GUC for the lifetime of this transaction. set_config with
+	// is_local=true is a SELECT, so it is permitted in a read-only transaction.
+	if _, err := tx.Exec(ctx, "SELECT set_config('app.current_company_id', $1, true)", companyID.String()); err != nil {
+		_ = tx.Rollback(ctx)
+		return fmt.Errorf("db: set company guc: %w", err)
+	}
+
+	if err := fn(ctx, tx); err != nil {
+		_ = tx.Rollback(ctx)
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("db: commit read-only tx: %w", err)
+	}
+	return nil
+}
+
 // RunInAuthTx runs fn inside a transaction whose subject and/or user GUCs are
 // bound from ctx (WithSubject / WithUser), WITHOUT the ErrNoCompany guard. It is
 // the helper the auth catalog reads use: looking a user up by their JWT subject

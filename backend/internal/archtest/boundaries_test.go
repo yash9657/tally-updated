@@ -43,6 +43,11 @@ var allowedDeps = map[string]map[string]bool{
 	"internal/ledger":      {"internal/platform/db": true, "internal/compliance": true},
 	"internal/masters":     {"internal/platform/db": true},
 	"internal/reporting":   {"internal/platform/db": true},
+	// query (Phase 3) is the NL->typed-DSL->safe-read-only-SQL engine: it compiles
+	// a closed DSL to parameterized SQL and executes it via the db layer's
+	// read-only, RLS-scoped tx. It imports the db layer and nothing else (the
+	// translator is a pure leaf; the real-Claude adapter is the documented swap).
+	"internal/query":       {"internal/platform/db": true},
 	// sync is the OFFLINE cloud-sequencer (Task C WS1): it commits offline node
 	// outbox intents through the ledger, assigning final numbers + resolving
 	// conflicts + reusing the freeze rule. It may import the ledger (the post/
@@ -74,6 +79,7 @@ var allowedDeps = map[string]map[string]bool{
 		"internal/ledger":          true,
 		"internal/masters":         true,
 		"internal/reporting":       true,
+		"internal/query":           true,
 		"internal/identity":        true,
 		"internal/compliance":      true,
 		"internal/compliance/gstr": true,
