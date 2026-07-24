@@ -295,6 +295,13 @@ func (s *Server) routes() {
 		// Every route in this subtree is authn'd + PDP-enforced.
 		r.Use(s.companyAuthMiddleware)
 
+		// Company master read-back (WS8a). The frontend hydrates
+		// CompanyInfo.homeStateCode from state_code so the in-browser GST split
+		// agrees with the server's derivation for non-Karnataka companies.
+		// Handler lives in handler_company_get.go. chi resolves both
+		// /v1/companies/{id} and /v1/companies/{id}/ to this route.
+		r.Get("/", s.handleGetCompany)
+
 		// Masters.
 		r.Post("/groups", s.handleCreateGroup)
 		r.Post("/ledgers", s.handleCreateLedger)

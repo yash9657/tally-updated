@@ -12,6 +12,7 @@
 
 import type {
   BalanceSheetResponse,
+  CompanyView,
   CreateCompanyRequest,
   CreateCompanyResponse,
   CreateGroupRequest,
@@ -44,6 +45,13 @@ import type { QueryRequest, QueryResult } from "./query";
 export interface CoredClient {
   // Company
   createCompany(req: CreateCompanyRequest): Promise<CreateCompanyResponse>;
+  /**
+   * Read the company master back (GET /v1/companies/{companyID}). The shell
+   * calls this on load to hydrate the real `state_code` (home GST state) instead
+   * of assuming a bootstrap constant — without it, every non-Karnataka company
+   * derived the wrong intra/inter-state split in the browser.
+   */
+  getCompany(companyID: string): Promise<CompanyView>;
 
   // Masters (all company-scoped)
   createGroup(

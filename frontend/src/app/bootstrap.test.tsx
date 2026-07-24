@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
-import { render, screen, cleanup, waitFor } from "@testing-library/react";
+import { render, screen, cleanup, waitFor, fireEvent } from "@testing-library/react";
 import { App } from "../App";
 import { createMockClient } from "../api";
 import type { CoredClient } from "../api";
@@ -40,8 +40,69 @@ describe("App company bootstrap", () => {
       /-04-01$/,
     );
     expect((req as { base_currency: string }).base_currency).toBe("INR");
+    // WS8a: the bootstrap MUST persist a home GST state on the company master
+    // (company.state_code), because that column is what cored uses as the
+    // default SupplierStateCode when deriving a voucher's GST split. Without it
+    // the company would be created stateless and every intra-state sale would
+    // derive as inter-state (IGST).
+    const stateCode = (req as { state_code?: string }).state_code;
+    expect(stateCode).toBeTruthy();
+    expect(stateCode).toMatch(/^\d{2}$/);
     // The gateway renders regardless of bootstrap state.
     expect(screen.getByText("Gateway of Tally")).toBeTruthy();
+  });
+
+  it("persists the created company id and hydrates it (not a constant) on reload", async () => {
+    // First mount: mint a company whose home state is NOT the "29" default, so a
+    // regression to a hardcoded constant is detectable.
+    const { client } = spyClient();
+    await client.createCompany({
+      id: "co-mh",
+      name: "Mumbai Traders",
+      fy_start_date: "2026-04-01",
+      base_currency: "INR",
+      state_code: "27",
+    });
+    globalThis.localStorage?.setItem("tally.companyId", "co-mh");
+
+    render(<App client={client} />);
+    // The reload path reads the company master back: the NAME shown comes from
+    // the server, not from the "My Company" bootstrap placeholder.
+    await waitFor(() => expect(screen.getByText("Mumbai Traders")).toBeTruthy());
+  });
+
+  it("does not wedge on a stale persisted id: a 404 mints a fresh company", async () => {
+    const { client, spies } = spyClient();
+    globalThis.localStorage?.setItem("tally.companyId", "co-does-not-exist");
+    render(<App client={client} />);
+    await waitFor(() => expect(spies.getCompany).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(spies.createCompany).toHaveBeenCalledTimes(1));
+    // The dead id was discarded in favour of the newly minted one.
+    await waitFor(() =>
+      expect(globalThis.localStorage?.getItem("tally.companyId")).not.toBe(
+        "co-does-not-exist",
+      ),
+    );
+  });
+
+  it("fails CLOSED (no company selected) when hydration fails for a non-404 reason", async () => {
+    const { client } = spyClient();
+    // Transport/permission failure — NOT a 404. Guessing a home state here would
+    // make the client derive a split the server rejects with a 422, so the shell
+    // must leave the company unselected rather than proceed on an assumption.
+    (client as unknown as Record<string, unknown>).getCompany = vi.fn(async () => {
+      throw new Error("network down");
+    });
+    const createSpy = vi.fn();
+    (client as unknown as Record<string, unknown>).createCompany = createSpy;
+    globalThis.localStorage?.setItem("tally.companyId", "co-1");
+
+    render(<App client={client} />);
+    const app = screen.getByRole("application");
+    fireEvent.keyDown(app, { key: "F8" });
+    await waitFor(() => expect(screen.getByText("Preparing company…")).toBeTruthy());
+    // It must NOT silently mint a second company over a transient failure.
+    expect(createSpy).not.toHaveBeenCalled();
   });
 
   it("does NOT mint a company when an explicit company prop is given", async () => {

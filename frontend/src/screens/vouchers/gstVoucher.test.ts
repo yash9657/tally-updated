@@ -76,6 +76,57 @@ describe("buildGstVoucherRequest", () => {
     expect(p.some((x) => x.ledger_id === "led-cgst")).toBe(false);
     expect(p.some((x) => x.ledger_id === "led-sgst")).toBe(false);
   });
+
+  // WS8a: the supplier (home) state is no longer a hardcoded constant, so it can
+  // legitimately be unknown for one round trip. When it is, the field must be
+  // OMITTED from the wire body rather than sent as "", so the server's
+  // company.state_code default (internal/ledger/ledger.go, inside the post tx) is
+  // the explicit, single source of truth for the supplier state.
+  it("omits supplier_state_code entirely when the home state is unknown", () => {
+    const req = buildGstVoucherRequest({
+      partyLedgerId: "party-1",
+      incomeLedgerId: "income-1",
+      taxableValue: "10000.0000",
+      supplierStateCode: "",
+      gst: { ...emptyGstFormState(), placeOfSupply: "27", gstRatePct: "18" },
+      outputTax: OUTPUT,
+    });
+    // Not merely undefined — the KEY must be absent (JSON.stringify drops it).
+    expect("supplier_state_code" in (req.gst as object)).toBe(false);
+    expect(JSON.stringify(req.gst)).not.toContain("supplier_state_code");
+    // The other codes are untouched.
+    expect(req.gst?.place_of_supply_state_code).toBe("27");
+
+    // DOCUMENTED CONSEQUENCE: with no home state the client-side mirror cannot
+    // classify the sale, so it derives inter-state (IGST) postings. The server
+    // will fill the supplier state from company.state_code and re-derive; if the
+    // company is in fact registered in 27 the posted legs will NOT match and the
+    // post is REJECTED (422) — a loud failure, never a silently wrong tax. This
+    // is why CompanyContext hydrates homeStateCode from the company master
+    // before a gated screen renders instead of guessing a default.
+    const p = req.postings!;
+    expect(p).toHaveLength(3);
+    expect(p[2]).toMatchObject({ ledger_id: "led-igst", dr_cr: "CR", amount: "1800.0000" });
+  });
+
+  it("sends supplier_state_code verbatim when the home state IS known", () => {
+    const req = buildGstVoucherRequest({
+      partyLedgerId: "party-1",
+      incomeLedgerId: "income-1",
+      taxableValue: "10000.0000",
+      supplierStateCode: "27",
+      gst: { ...emptyGstFormState(), placeOfSupply: "27", gstRatePct: "18" },
+      outputTax: OUTPUT,
+    });
+    expect(req.gst?.supplier_state_code).toBe("27");
+    // A Maharashtra company selling within Maharashtra is INTRA-state: the
+    // hardcoded "29" this workstream removed would have produced IGST here.
+    const p = req.postings!;
+    expect(p).toHaveLength(4);
+    expect(p[2]).toMatchObject({ ledger_id: "led-cgst", dr_cr: "CR", amount: "900.0000" });
+    expect(p[3]).toMatchObject({ ledger_id: "led-sgst", dr_cr: "CR", amount: "900.0000" });
+    expect(p.some((x) => x.ledger_id === "led-igst")).toBe(false);
+  });
 });
 
 describe("acceptVoucher with a GST request body", () => {

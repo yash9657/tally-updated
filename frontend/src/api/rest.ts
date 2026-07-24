@@ -9,6 +9,7 @@ import type { CoredClient } from "./client";
 import { createHttpClient, type HttpClient, type HttpClientOptions } from "./http";
 import type {
   BalanceSheetResponse,
+  CompanyView,
   CreateCompanyRequest,
   CreateCompanyResponse,
   CreateGroupRequest,
@@ -74,6 +75,9 @@ export function createRestClient(
   return {
     createCompany(req: CreateCompanyRequest) {
       return http.post<CreateCompanyResponse>("/v1/companies", req);
+    },
+    getCompany(companyID: string) {
+      return http.get<CompanyView>(company(companyID));
     },
 
     createGroup(companyID, req: CreateGroupRequest) {

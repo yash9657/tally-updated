@@ -14,6 +14,7 @@ import type { CoredClient } from "./client";
 import { ApiError } from "./http";
 import type {
   BalanceSheetResponse,
+  CompanyView,
   CreateCompanyRequest,
   CreateCompanyResponse,
   CreateGroupRequest,
@@ -132,6 +133,20 @@ function addMoney(a: Money, b: Money): Money {
 interface MockCompany {
   id: string;
   name: string;
+  /**
+   * The company's home GST state (2-digit code) — the mirror of
+   * `company.state_code`. Mirrors the SERVER contract twice: it is echoed by
+   * {@link CoredClient.getCompany}, and it is the fallback supplier state used
+   * by `deriveGst` when a posted `gst` block leaves `supplier_state_code`
+   * absent/empty (exactly what internal/ledger/ledger.go does inside the post
+   * transaction). Without that fallback the mock would derive IGST for a
+   * server-defaulted intra-state post and silently disagree with cored.
+   */
+  stateCode: string;
+  /** The company's own GSTIN ("" when unset), mirroring `company.gstin`. */
+  gstin: string;
+  fyStartDate: string;
+  baseCurrency: string;
   ledgers: { id: string; name: string; group: string; stateCode?: string }[];
   vouchers: DayBookEntry[];
   /**
@@ -164,6 +179,13 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       c = {
         id: companyID,
         name: "Mock Co",
+        // Unknown until createCompany/getCompany says otherwise. "" mirrors the
+        // column default, and makes deriveGst fall through to inter-state (IGST)
+        // exactly as cored would for a company with no registered state.
+        stateCode: "",
+        gstin: "",
+        fyStartDate: "2026-04-01",
+        baseCurrency: "INR",
         ledgers: [],
         vouchers: [],
         views: new Map(),
@@ -179,6 +201,12 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     const demo: MockCompany = {
       id: demoID,
       name: "Demo Traders",
+      // The seeded demo tenant is a Karnataka company, matching the golden
+      // corpora / e2e fixtures (party "Acme Traders" is also state 29).
+      stateCode: "29",
+      gstin: "",
+      fyStartDate: "2026-04-01",
+      baseCurrency: "INR",
       ledgers: [
         { id: "ledger-cash", name: "Cash", group: "Cash-in-Hand" },
         { id: "ledger-sales", name: "Sales", group: "Sales Accounts" },
@@ -238,8 +266,15 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
    * the shared {@link deriveGstSplit} helper (intra: CGST+SGST; inter: IGST),
    * else all zeros. Keeps the mock aligned with the live server so component
    * tests can assert a non-zero split without a backend.
+   *
+   * SUPPLIER-STATE DEFAULT (mirrors internal/ledger/ledger.go): when the posted
+   * `gst` block omits `supplier_state_code` (or sends ""), cored fills it from
+   * `company.state_code` INSIDE the post transaction, before deriving. The mock
+   * does the same from {@link MockCompany.stateCode}; otherwise a draft-accept
+   * or state-hydrated post would derive IGST here and CGST+SGST on the real
+   * server, and the mock would be a false oracle.
    */
-  function deriveGst(req: VoucherRequest): {
+  function deriveGst(c: MockCompany, req: VoucherRequest): {
     taxable: Money;
     cgst: Money;
     sgst: Money;
@@ -250,10 +285,14 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     if (!gst || !line) {
       return { taxable: "0.0000", cgst: "0.0000", sgst: "0.0000", igst: "0.0000" };
     }
+    const supplierState =
+      (gst.supplier_state_code ?? "").trim() !== ""
+        ? (gst.supplier_state_code as string)
+        : c.stateCode;
     const split = deriveGstSplit(
       line.taxable_value,
       line.gst_rate_pct,
-      gst.supplier_state_code ?? "",
+      supplierState,
       gst.place_of_supply_state_code ?? "",
     );
     return {
@@ -323,7 +362,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
   ): VoucherResponse {
     const c = ensure(companyID);
     const { postings, postingViews, debit, credit } = summarize(c, req);
-    const gst = deriveGst(req);
+    const gst = deriveGst(c, req);
     const voucherID = id("voucher");
     const voucherNo = resolveCreateNumber(c, cls, req);
     const date = req.voucher_date ?? "1970-01-01";
@@ -392,7 +431,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       throw new Error("voucher not found");
     }
     const { postings, postingViews, debit, credit } = summarize(c, req);
-    const gst = deriveGst(req);
+    const gst = deriveGst(c, req);
     const nextVersion = entry.version_no + 1;
     entry.version_no = nextVersion;
     entry.op = "ALTER";
@@ -446,7 +485,31 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       const companyID = req.id ?? id("company");
       const c = ensure(companyID);
       c.name = req.name;
+      // PERSIST the full master (previously only `name` survived). state_code in
+      // particular must round-trip: getCompany is what the shell hydrates
+      // homeStateCode from, and deriveGst falls back to it.
+      if (req.fy_start_date) c.fyStartDate = req.fy_start_date;
+      if (req.base_currency) c.baseCurrency = req.base_currency;
+      c.stateCode = req.state_code ?? "";
+      c.gstin = req.gstin ?? "";
       return { company_id: companyID };
+    },
+
+    async getCompany(companyID: string): Promise<CompanyView> {
+      // Unknown ids 404 like the live route rather than materialising a blank
+      // company — a hydrate against a stale persisted id must be observable.
+      const c = companies.get(companyID);
+      if (!c) {
+        throw new ApiError(404, "company not found", "company not found");
+      }
+      return {
+        id: c.id,
+        name: c.name,
+        fy_start_date: c.fyStartDate,
+        base_currency: c.baseCurrency,
+        state_code: c.stateCode,
+        gstin: c.gstin,
+      };
     },
 
     async createGroup(_c, _req: CreateGroupRequest): Promise<CreateGroupResponse> {

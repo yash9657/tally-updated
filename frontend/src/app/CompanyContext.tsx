@@ -7,6 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { ApiError } from "../api";
 import type { CoredClient } from "../api";
 
 /**
@@ -21,15 +22,25 @@ export interface CompanyInfo {
   id: string;
   name: string;
   /**
-   * The company's principal GST registration state (2-digit code). The `company`
-   * table has NO state_code/gstin column today (only `ledger` does), so the
-   * supplier (home) state cannot be read from the company master — it is sourced
-   * here, as company-level config set at bootstrap, and used as the
-   * supplier_state_code in the GST split (intra- vs inter-state).
+   * The company's principal GST registration state (2-digit code), used as the
+   * supplier_state_code in the GST split (intra-state CGST+SGST when it equals
+   * the place of supply, else IGST).
    *
-   * KNOWN GAP: a follow-up must add company.state_code/gstin + CreateCompany
-   * wiring so this is persisted rather than a bootstrap constant. A hardcoded
-   * default would make inter-state detection wrong for any out-of-state company.
+   * SOURCE OF TRUTH IS THE SERVER: `company.state_code` (migration 0008). It is
+   * written at creation (CreateCompanyRequest.state_code) and READ BACK on load
+   * via `client.getCompany` — see the bootstrap effect below. It is NOT a
+   * hardcoded constant: the create-time DEFAULT (VITE_HOME_STATE_CODE, "29" for
+   * the golden corpora / e2e fixtures) applies ONLY when minting a brand-new
+   * company, never to a company that already exists.
+   *
+   * Keeping this in agreement with the server matters: cored fills an empty
+   * SupplierStateCode from company.state_code inside the post transaction and
+   * then VERIFIES the posted tax legs against its own derivation, so a stale
+   * home state here means a 422, not a silently wrong number.
+   *
+   * `undefined`/"" means "not known yet"; the GST split then falls back to
+   * inter-state, which is also what the server derives for a company with no
+   * registered state — the two stay consistent.
    */
   homeStateCode?: string;
 }
@@ -50,11 +61,21 @@ const BOOTSTRAP_COMPANY_NAME = "My Company";
 const BOOTSTRAP_FY_START = "2026-04-01";
 const BOOTSTRAP_CURRENCY = "INR";
 /**
- * Bootstrap supplier (home) GST state code. KNOWN GAP (see CompanyInfo.homeStateCode):
- * sourced as config until company.state_code lands. "29" = Karnataka, matching the
- * golden corpora / e2e fixtures.
+ * CREATE-TIME default home GST state for a brand-new bootstrapped company, sent
+ * as CreateCompanyRequest.state_code and thereby PERSISTED to company.state_code.
+ * Overridable per deployment via VITE_HOME_STATE_CODE; "29" (Karnataka) keeps the
+ * golden corpora / e2e fixtures stable.
+ *
+ * This is a default for CREATION ONLY. An existing company's home state is always
+ * read back from the server (getCompany) — never assumed from this constant.
  */
-const BOOTSTRAP_HOME_STATE_CODE = "29";
+const DEFAULT_NEW_COMPANY_STATE_CODE = "29";
+
+function configHomeStateCode(): string {
+  // import.meta.env is injected by Vite; guard for non-Vite (node/vitest) runs.
+  const env = (import.meta as unknown as { env?: Record<string, string> }).env;
+  return env?.VITE_HOME_STATE_CODE ?? DEFAULT_NEW_COMPANY_STATE_CODE;
+}
 
 function readPersistedCompanyId(): string | null {
   try {
@@ -62,6 +83,19 @@ function readPersistedCompanyId(): string | null {
   } catch {
     return null;
   }
+}
+
+function clearPersistedCompanyId(): void {
+  try {
+    globalThis.localStorage?.removeItem(COMPANY_STORAGE_KEY);
+  } catch {
+    // Non-fatal (see persistCompanyId).
+  }
+}
+
+/** True for a 404 from the API (the persisted company no longer exists). */
+function isNotFound(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 404;
 }
 
 function persistCompanyId(id: string): void {
@@ -101,28 +135,57 @@ export function CompanyProvider({
     (async () => {
       const persisted = readPersistedCompanyId();
       if (persisted) {
-        // Reuse the known company id (the server holds its data); we only need
-        // the id to scope routes. Name is cosmetic until a report loads.
-        if (!cancelled)
-          setCompany({
-            id: persisted,
-            name: BOOTSTRAP_COMPANY_NAME,
-            homeStateCode: BOOTSTRAP_HOME_STATE_CODE,
-          });
-        return;
+        // HYDRATE the persisted company from the server (GET /v1/companies/{id})
+        // instead of assuming anything about it. This is what makes a
+        // non-Karnataka company derive the correct intra/inter-state GST split
+        // in-browser: homeStateCode comes from company.state_code, the same
+        // column cored defaults SupplierStateCode from when posting.
+        try {
+          const view = await client.getCompany(persisted);
+          if (!cancelled) {
+            setCompany({
+              id: view.id || persisted,
+              name: view.name || BOOTSTRAP_COMPANY_NAME,
+              // Verbatim — including "". A company with no registered state
+              // derives inter-state on BOTH sides, so client and server agree.
+              homeStateCode: view.state_code,
+            });
+          }
+          return;
+        } catch (err) {
+          if (!isNotFound(err)) {
+            // FAIL CLOSED on a transport/permission failure. Selecting the
+            // company with a GUESSED home state is the dangerous option: the
+            // client would build (say) IGST postings while the server derived
+            // CGST+SGST from the real company.state_code and rejected the post
+            // with a 422. Leaving company null keeps gated screens behind the
+            // "no company" notice; a remount retries.
+            bootstrapped.current = false;
+            return;
+          }
+          // 404: the persisted id names a company that no longer exists (fresh
+          // backend, wiped DB, different environment). Drop it and mint a new
+          // one below rather than wedging the app on a dead id.
+          clearPersistedCompanyId();
+        }
       }
       try {
+        // Brand-new company: the create-time config default is the ONLY place a
+        // state code is assumed, and it is PERSISTED server-side by this call,
+        // so the value held here is the value the server will derive from.
+        const stateCode = configHomeStateCode();
         const res = await client.createCompany({
           name: BOOTSTRAP_COMPANY_NAME,
           fy_start_date: BOOTSTRAP_FY_START,
           base_currency: BOOTSTRAP_CURRENCY,
+          state_code: stateCode,
         });
         persistCompanyId(res.company_id);
         if (!cancelled) {
           setCompany({
             id: res.company_id,
             name: BOOTSTRAP_COMPANY_NAME,
-            homeStateCode: BOOTSTRAP_HOME_STATE_CODE,
+            homeStateCode: stateCode,
           });
         }
       } catch {

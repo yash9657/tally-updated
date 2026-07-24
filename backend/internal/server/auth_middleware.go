@@ -251,6 +251,15 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 	method := r.Method
 
 	switch {
+	// GET the company master itself: routeSuffix() is "" for
+	// /v1/companies/{id} and "/" for the trailing-slash form. This is a Display
+	// (never a write), so it must NOT inherit the back-dated write cutoff or the
+	// WebAuthn step-up (both gate on Action.IsWrite()). LOAD-BEARING:
+	// routeAction default-denies unmapped {companyID} routes, so without this an
+	// Owner gets 403 "unmapped route: access denied".
+	case method == http.MethodGet && (rest == "" || rest == "/"):
+		return authz.Display, "company", "", true
+
 	// Masters.
 	case method == http.MethodPost && isMasterPath(rest):
 		return authz.Create, "master", "", true

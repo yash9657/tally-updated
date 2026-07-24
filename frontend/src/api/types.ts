@@ -41,10 +41,38 @@ export interface CreateCompanyRequest {
   name: string;
   fy_start_date: string;
   base_currency: string;
+  /**
+   * The company's home/registered GST state (2-digit code, e.g. "29" Karnataka,
+   * "27" Maharashtra). Persisted to `company.state_code` and used server-side as
+   * the DEFAULT SupplierStateCode when a Sales/Purchase post leaves it empty —
+   * i.e. it is what decides intra-state (CGST+SGST) vs inter-state (IGST).
+   * Omitted / "" is accepted (the column defaults to '').
+   */
+  state_code?: string;
+  /** The company's own (filer's) GSTIN. Optional; "" is the safe default. */
+  gstin?: string;
 }
 
 export interface CreateCompanyResponse {
   company_id: string;
+}
+
+/**
+ * The company master as returned by GET /v1/companies/{companyID}. Field names
+ * MIRROR {@link CreateCompanyRequest} exactly, so create → read round-trips
+ * without a second mapping. `state_code` is the value the frontend hydrates into
+ * `CompanyInfo.homeStateCode`, which is what makes the in-browser GST split
+ * agree with the server's derivation for non-Karnataka companies.
+ */
+export interface CompanyView {
+  id: string;
+  name: string;
+  fy_start_date: string;
+  base_currency: string;
+  /** 2-digit home state code; "" when the company has none recorded. */
+  state_code: string;
+  /** "" when not set. */
+  gstin: string;
 }
 
 // ---------------------------------------------------------------------------

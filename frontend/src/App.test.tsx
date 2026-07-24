@@ -1,8 +1,21 @@
-import { describe, it, expect, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { describe, it, expect, afterEach, beforeEach } from "vitest";
+import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { App } from "./App";
 
 afterEach(cleanup);
+
+// Each case renders a FRESH default (in-memory mock) client, so a company id
+// persisted by a previous case in this file names a company the new client has
+// never heard of. Clearing the key keeps every case on the same "no company yet"
+// starting line (bootstrap.test.tsx does the same). Without this, case 2 onwards
+// take the persisted-company path and hydrate against a client that 404s.
+beforeEach(() => {
+  try {
+    globalThis.localStorage?.clear();
+  } catch {
+    // jsdom always provides localStorage; ignore if absent.
+  }
+});
 
 /**
  * Wiring test: the shell must translate REAL DOM key events into navigation
@@ -14,18 +27,23 @@ describe("App key-event wiring", () => {
     expect(screen.getByText("Gateway of Tally")).toBeTruthy();
   });
 
-  it("F8 from the Gateway drills into the Sales voucher", () => {
+  // The company bootstrap is asynchronous in EVERY path now (a brand-new company
+  // is minted with createCompany; a persisted one is hydrated with getCompany so
+  // its real home state code is known before any GST post can be built). Until it
+  // resolves, company-scoped screens render the "Preparing company…" placeholder,
+  // so these cases await the screen instead of asserting synchronously.
+  it("F8 from the Gateway drills into the Sales voucher", async () => {
     render(<App />);
     const app = screen.getByRole("application");
     fireEvent.keyDown(app, { key: "F8" });
-    expect(screen.getByText(/Sales Voucher/)).toBeTruthy();
+    await waitFor(() => expect(screen.getByText(/Sales Voucher/)).toBeTruthy());
   });
 
-  it("Esc from a voucher returns to the Gateway", () => {
+  it("Esc from a voucher returns to the Gateway", async () => {
     render(<App />);
     const app = screen.getByRole("application");
     fireEvent.keyDown(app, { key: "F8" });
-    expect(screen.getByText(/Sales Voucher/)).toBeTruthy();
+    await waitFor(() => expect(screen.getByText(/Sales Voucher/)).toBeTruthy());
     fireEvent.keyDown(app, { key: "Escape" });
     expect(screen.getByText("Gateway of Tally")).toBeTruthy();
   });

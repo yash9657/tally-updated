@@ -228,7 +228,6 @@ export function buildGstVoucherRequest(
   ];
 
   const gstReq: GSTRequest = {
-    supplier_state_code: supplierStateCode,
     place_of_supply_state_code: gst.placeOfSupply,
     reverse_charge: gst.reverseCharge,
     lines: [
@@ -242,6 +241,17 @@ export function buildGstVoucherRequest(
     sgst_ledger_id: outputTax.sgstId,
     igst_ledger_id: outputTax.igstId,
   };
+  // OMIT supplier_state_code when the home state is unknown, so the server's
+  // company.state_code default fires explicitly (ledger.go fills an empty
+  // SupplierStateCode from the company master INSIDE the post transaction). Same
+  // omit idiom as draftAccept.ts. Note the server treats an absent field and ""
+  // identically, so this is wire hygiene, not a behaviour change on its own —
+  // what actually makes the split correct is that homeStateCode is hydrated from
+  // company.state_code (CompanyContext), so the postings this function derives
+  // and the server's re-derivation agree. If it were empty here while the
+  // company DID have a state, the client's IGST postings would fail the server's
+  // verify with a 422 rather than silently booking the wrong tax.
+  if (supplierStateCode) gstReq.supplier_state_code = supplierStateCode;
 
   const req: VoucherRequest = {
     voucher_date: inputs.voucherDate,

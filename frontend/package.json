@@ -14,6 +14,7 @@
     "e2e:edit": "tsx scripts/e2e-edit-loop.mts",
     "e2e:alter": "tsx scripts/e2e-edit-loop.mts",
     "e2e:numbering": "tsx scripts/e2e-numbering.mts",
+    "e2e:state-code": "tsx scripts/e2e-state-code.mts",
     "e2e:ocr": "tsx scripts/e2e-ocr-prefill.mts"
   },
   "dependencies": {
