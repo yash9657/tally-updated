@@ -21,6 +21,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -81,12 +82,13 @@ type Server struct {
 	// the register/assert ceremonies; webauthnStore is the credential store the
 	// assert/begin route lists allow_credentials from; webauthnRPID is echoed to
 	// the browser. challenges stashes ceremony challenges between begin and finish
-	// (in-memory, single-instance-dev). lockout enforces login lockout. The
+	// (Postgres-backed since WS6 — see auth_challenge_store.go — so the ceremony
+	// works behind more than one replica). lockout enforces login lockout. The
 	// /auth/login + assert/finish token minting still gate on signer != nil.
 	webauthn      *webauthn.Service
 	webauthnStore webauthn.CredentialStore
 	webauthnRPID  string
-	challenges    *challengeStore
+	challenges    ChallengeStore
 	lockout       *authn.Locker
 }
 
@@ -114,8 +116,9 @@ func New(ctx context.Context, appDSN string) (*Server, error) {
 	authzStore := authz.NewStore(pool)
 
 	// WebAuthn + lockout (WS1). Built unconditionally — they need only the raw
-	// pool. The challenge store is in-memory (single-instance-dev). RPID/Origin
-	// default to the dev frontend; override via env for other deployments.
+	// pool. The challenge store is Postgres-backed (WS6, migration 0012), so the
+	// begin->finish handoff survives a replica switch. RPID/Origin default to the
+	// dev frontend; override via env for other deployments.
 	rpID := envOr("AUTH_WEBAUTHN_RPID", "localhost")
 	origin := envOr("AUTH_WEBAUTHN_ORIGIN", "http://localhost:5173")
 	waStore := webauthn.NewPGStore(pool.Raw())
@@ -146,7 +149,7 @@ func New(ctx context.Context, appDSN string) (*Server, error) {
 		webauthn:      waService,
 		webauthnStore: waStore,
 		webauthnRPID:  rpID,
-		challenges:    newChallengeStore(),
+		challenges:    newPGChallengeStore(pool.Raw()),
 		lockout:       locker,
 	}
 	s.routes()
@@ -167,10 +170,17 @@ func envOr(name, def string) string {
 // NEVER be the silent default).
 //
 //   - AUTH_JWKS_URL set: production. An external IdP (Keycloak) verifies tokens
-//     via JWKS; there is NO in-process signer, so /auth/token is not mounted.
-//     The JWKS verifier is the documented production swap and is not built in
-//     this offline tree, so this path returns an explicit not-implemented error
-//     instead of falling back to the dev issuer.
+//     via authn.JWKSVerifier; there is NO in-process signer, so /auth/token and
+//     /auth/login are not mounted and WebAuthn assert/finish 501s (the IdP does
+//     step-up). AUTH_ISSUER is REQUIRED alongside it — an unpinned issuer would
+//     accept tokens from any realm/client sharing the IdP's signing key.
+//     STARTUP BEHAVIOUR CHANGE (WS6): the JWKS is fetched ONCE here, with a 5s
+//     timeout, and a failure is a HARD BOOT FAILURE. An operator whose IdP is
+//     briefly unreachable now gets a refusal to start instead of a process that
+//     boots and 401s every request; that is the deliberate fail-closed choice
+//     (a degraded start is indistinguishable from a working one until traffic
+//     arrives). Steady state stays lazy: JWKSVerifier re-fetches on TTL expiry
+//     or an unknown kid, and serves a stale cache through a brief IdP outage.
 //   - AUTH_DEV_TOKEN_ENABLED=true (or CORED_ENV=dev): dev/test. The in-process
 //     deterministic issuer signs tokens and /auth/token is mounted.
 //   - neither: refuse to start. No fail-open default.
@@ -178,8 +188,18 @@ func envOr(name, def string) string {
 // Returned signer is non-nil ONLY in dev mode; routes() mounts /auth/token iff
 // the signer is present, and handleDevToken 404s if it is somehow reached.
 func buildAuth() (authn.TokenVerifier, *authn.Signer, error) {
-	if os.Getenv("AUTH_JWKS_URL") != "" {
-		return nil, nil, errors.New("server: AUTH_JWKS_URL is set but the JWKS (Keycloak) verifier is not built in this offline tree; wire JWKSVerifier for production (see devIssuer doc). Refusing to start rather than falling back to the dev issuer")
+	if jwksURL := os.Getenv("AUTH_JWKS_URL"); jwksURL != "" {
+		issuer := os.Getenv("AUTH_ISSUER")
+		if issuer == "" {
+			return nil, nil, errors.New("server: AUTH_JWKS_URL is set but AUTH_ISSUER is empty; without a pinned issuer the JWKS verifier would accept tokens from any realm sharing the signing key. Refusing to start fail-open")
+		}
+		verifier := authn.NewJWKSVerifier(jwksURL, issuer)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := verifier.Refresh(ctx); err != nil {
+			return nil, nil, fmt.Errorf("server: AUTH_JWKS_URL %q unreachable or served an invalid JWKS: %w — refusing to start fail-open", jwksURL, err)
+		}
+		return verifier, nil, nil
 	}
 	if os.Getenv("AUTH_DEV_TOKEN_ENABLED") == "true" || os.Getenv("CORED_ENV") == "dev" {
 		signer, verifier, err := devIssuer()
@@ -197,8 +217,11 @@ func buildAuth() (authn.TokenVerifier, *authn.Signer, error) {
 // matching StaticKeyVerifier (issuer "cored-dev", kid "cored-dev-ed25519")
 // verifies tokens this signer mints.
 //
-// Production swap: set AUTH_JWKS_URL and replace this with a JWKSVerifier that
-// fetches Keycloak's JWKS (ES256). This package never fetches the network.
+// Production swap (SHIPPED as of WS6): set AUTH_JWKS_URL + AUTH_ISSUER and
+// buildAuth uses authn.JWKSVerifier instead of this pair — it fetches the IdP's
+// JWKS (ES256/EdDSA only, symmetric keys never admitted) over the network, so
+// this package DOES make outbound requests in production mode. This dev issuer
+// path itself remains network-free.
 func devIssuer() (*authn.Signer, *authn.StaticKeyVerifier, error) {
 	const kid = "cored-dev-ed25519"
 	const issuer = "cored-dev"
@@ -984,7 +1007,7 @@ func uuidOrEmpty(id uuid.UUID) string {
 // voucherResultJSON builds the response body shared by the POST and PUT voucher
 // handlers so the shape never drifts between create and alter.
 func voucherResultJSON(res ledger.PostResult) map[string]any {
-	return map[string]any{
+	out := map[string]any{
 		"voucher_id":         res.VoucherID.String(),
 		"voucher_version_id": res.VoucherVersionID.String(),
 		"version_no":         res.VersionNo,

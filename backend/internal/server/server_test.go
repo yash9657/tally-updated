@@ -9,6 +9,9 @@ package server_test
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -16,10 +19,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/khata/cored/internal/authn"
 	"github.com/khata/cored/internal/server"
 	"github.com/khata/cored/migrations"
 )
@@ -34,8 +39,9 @@ const (
 // TestAuthFailsClosedByDefault is the regression guard for the critical
 // token-minting-oracle hole: with NO auth env configured, server.New must
 // REFUSE to start rather than silently booting the open dev issuer. It also
-// asserts that setting AUTH_JWKS_URL (production) does not fall back to the dev
-// issuer (the JWKS verifier is the documented swap, not yet built offline).
+// pins the WS6 production (AUTH_JWKS_URL) boot matrix: a live JWKS boots without
+// the dev signer; a missing AUTH_ISSUER, a dead endpoint, or a JWKS with no
+// usable asymmetric key all fail closed — never a fall back to the dev issuer.
 func TestAuthFailsClosedByDefault(t *testing.T) {
 	if os.Getenv("CORED_SKIP_DB") != "" {
 		t.Skip("db tests skipped (CORED_SKIP_DB set)")
@@ -61,20 +67,163 @@ func TestAuthFailsClosedByDefault(t *testing.T) {
 		}
 	})
 
-	t.Run("AUTH_JWKS_URL does not fall back to dev issuer", func(t *testing.T) {
+	// WS6: AUTH_JWKS_URL is now a REAL production mode (authn.JWKSVerifier). The
+	// contract it must keep is the fail-closed half: it must never silently fall
+	// back to the dev issuer, and a misconfigured/unreachable IdP must be a hard
+	// BOOT failure (buildAuth fetches the JWKS once, eagerly), not a process that
+	// starts and 401s every request.
+
+	t.Run("AUTH_JWKS_URL without AUTH_ISSUER refuses to start", func(t *testing.T) {
 		t.Setenv("AUTH_DEV_TOKEN_ENABLED", "")
 		t.Setenv("CORED_ENV", "")
-		t.Setenv("AUTH_JWKS_URL", "https://keycloak.example/realms/tally/protocol/openid-connect/certs")
+		t.Setenv("AUTH_ISSUER", "")
+		t.Setenv("AUTH_JWKS_URL", "http://127.0.0.1:1/jwks")
 		srv, err := server.New(ctx, appDSN)
 		if err == nil {
 			srv.Close()
-			t.Fatal("server.New must not fall back to the dev issuer when AUTH_JWKS_URL is set")
+			t.Fatal("server.New must refuse to start with AUTH_JWKS_URL and no AUTH_ISSUER (an unpinned issuer accepts any realm's tokens)")
+		}
+		if !strings.Contains(err.Error(), "AUTH_ISSUER") {
+			t.Fatalf("expected an AUTH_ISSUER fail-closed error, got: %v", err)
+		}
+	})
+
+	t.Run("AUTH_JWKS_URL at a dead endpoint fails closed", func(t *testing.T) {
+		t.Setenv("AUTH_DEV_TOKEN_ENABLED", "")
+		t.Setenv("CORED_ENV", "")
+		t.Setenv("AUTH_ISSUER", jwksTestIssuer)
+		// Port 1 on loopback: guaranteed-dead, no DNS, refuses immediately (so
+		// this cannot hang on the 5s boot timeout in CI).
+		t.Setenv("AUTH_JWKS_URL", "http://127.0.0.1:1/jwks")
+		srv, err := server.New(ctx, appDSN)
+		if err == nil {
+			srv.Close()
+			t.Fatal("server.New must not boot (nor fall back to the dev issuer) when the JWKS endpoint is unreachable")
 		}
 		if !strings.Contains(err.Error(), "JWKS") {
-			t.Fatalf("expected JWKS-not-built error, got: %v", err)
+			t.Fatalf("expected a JWKS boot error, got: %v", err)
+		}
+	})
+
+	t.Run("AUTH_JWKS_URL serving an unusable JWKS fails closed", func(t *testing.T) {
+		// A document containing ONLY a symmetric key must not boot: symmetric
+		// keys are never admitted as verification keys.
+		js := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{"keys":[{"kty":"oct","kid":"h","k":"c2VjcmV0"}]}`))
+		}))
+		defer js.Close()
+		t.Setenv("AUTH_DEV_TOKEN_ENABLED", "")
+		t.Setenv("CORED_ENV", "")
+		t.Setenv("AUTH_ISSUER", jwksTestIssuer)
+		t.Setenv("AUTH_JWKS_URL", js.URL)
+		srv, err := server.New(ctx, appDSN)
+		if err == nil {
+			srv.Close()
+			t.Fatal("server.New must not boot against a JWKS with no usable asymmetric key")
+		}
+		if !strings.Contains(err.Error(), "JWKS") {
+			t.Fatalf("expected a JWKS boot error, got: %v", err)
+		}
+	})
+
+	t.Run("AUTH_JWKS_URL at a live JWKS boots in production mode", func(t *testing.T) {
+		pub, priv, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatalf("gen key: %v", err)
+		}
+		doc, err := json.Marshal(map[string]any{"keys": []map[string]any{{
+			"kty": "OKP", "crv": "Ed25519", "kid": "idp-1", "use": "sig",
+			"x": base64.RawURLEncoding.EncodeToString(pub),
+		}}})
+		if err != nil {
+			t.Fatalf("marshal jwks: %v", err)
+		}
+		js := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(doc)
+		}))
+		defer js.Close()
+
+		t.Setenv("AUTH_DEV_TOKEN_ENABLED", "")
+		t.Setenv("CORED_ENV", "")
+		t.Setenv("AUTH_ISSUER", jwksTestIssuer)
+		t.Setenv("AUTH_JWKS_URL", js.URL)
+		srv, err := server.New(ctx, appDSN)
+		if err != nil {
+			t.Fatalf("server.New with a reachable JWKS must boot, got: %v", err)
+		}
+		defer srv.Close()
+
+		// Production shape: NO in-process signer, so the dev token-minting oracle
+		// is NOT mounted (the endpoint that would otherwise mint a valid token for
+		// any subject).
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/auth/token", strings.NewReader(`{"subject":"attacker"}`))
+		req.Header.Set("Content-Type", "application/json")
+		srv.Router().ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound && rec.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("/auth/token in JWKS mode = %d, want 404/405 (the dev minting oracle must not be mounted)", rec.Code)
+		}
+		// And an unsigned/garbage token is still 401 on a real route.
+		rec = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodGet, "/v1/companies/"+uuid.NewString()+"/reports/trial-balance", nil)
+		req.Header.Set("Authorization", "Bearer not-a-token")
+		srv.Router().ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("garbage bearer in JWKS mode = %d, want 401", rec.Code)
+		}
+
+		// ...and the booted server ACTUALLY VERIFIES against the JWKS, which the
+		// two negative probes above cannot show (a verifier that rejected every
+		// token would pass them). A token signed by the IdP's private key, under
+		// the published kid and the pinned issuer, is AUTHENTICATED: it gets past
+		// the 401 gate and is refused at the AUTHORIZATION gate instead (403 —
+		// the subject has no app_user row; the 401-vs-403 contract pinned by
+		// TestUnprovisionedUserTokenIs403).
+		idpToken, err := authn.NewSigner(priv, "idp-1", jwksTestIssuer).Sign(authn.Claims{
+			Subject:   "idp-user-" + uuid.NewString(),
+			ExpiresAt: time.Now().Add(time.Hour).Unix(),
+		})
+		if err != nil {
+			t.Fatalf("sign IdP token: %v", err)
+		}
+		rec = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodGet, "/v1/companies/"+uuid.NewString()+"/reports/trial-balance", nil)
+		req.Header.Set("Authorization", "Bearer "+idpToken)
+		srv.Router().ServeHTTP(rec, req)
+		if rec.Code == http.StatusUnauthorized {
+			t.Fatalf("a token signed by the published JWKS key was rejected as invalid (401) — the JWKS verifier is not actually verifying (body %s)", rec.Body.String())
+		}
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("JWKS-signed token status = %d, want 403 (authenticated, then unauthorized) (body %s)", rec.Code, rec.Body.String())
+		}
+
+		// Control on the same booted server: the SAME claims signed by a DIFFERENT
+		// key under the same kid must be 401, so the 403 above is attributable to
+		// the signature check and not to the route 403-ing everything.
+		_, wrongPriv, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatalf("gen key: %v", err)
+		}
+		forged, err := authn.NewSigner(wrongPriv, "idp-1", jwksTestIssuer).Sign(authn.Claims{
+			Subject:   "idp-user-" + uuid.NewString(),
+			ExpiresAt: time.Now().Add(time.Hour).Unix(),
+		})
+		if err != nil {
+			t.Fatalf("sign forged token: %v", err)
+		}
+		rec = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodGet, "/v1/companies/"+uuid.NewString()+"/reports/trial-balance", nil)
+		req.Header.Set("Authorization", "Bearer "+forged)
+		srv.Router().ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("token forged under the published kid = %d, want 401", rec.Code)
 		}
 	})
 }
+
+// jwksTestIssuer is the iss the JWKS-mode boot tests pin via AUTH_ISSUER.
+const jwksTestIssuer = "https://idp.test/realms/tally"
 
 func newServer(t *testing.T) *server.Server {
 	t.Helper()

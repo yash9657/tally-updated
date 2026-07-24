@@ -16,18 +16,18 @@
 // authn-only middleware (verify token, resolve user, set subject+user GUC in
 // ctx); /auth/login is fully pre-auth (it IS the login).
 //
-// The challenge store is an in-memory, mutex-guarded map keyed by userID with a
-// short TTL. This is documented SINGLE-INSTANCE-DEV-ONLY: a production deployment
-// must back the begin->finish challenge handoff with a shared cache (Redis), and
-// production step-up is performed by the external IdP, so assert/finish returns
-// 501 when the in-process dev signer is absent.
+// The begin->finish challenge handoff goes through the ChallengeStore interface
+// (auth_challenge_store.go). Since WS6 the shipped implementation is Postgres-
+// backed (migration 0012), so the ceremony is no longer single-instance: any
+// replica can finish what another began. Production step-up itself is still
+// performed by the external IdP, so assert/finish returns 501 when the
+// in-process dev signer is absent.
 package server
 
 import (
 	"encoding/base64"
 	"net/http"
 	"os"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -42,7 +42,8 @@ import (
 var b64URL = base64.RawURLEncoding
 
 // challengeTTL bounds how long a stashed ceremony challenge is valid between the
-// begin and finish calls. Single-instance-dev only.
+// begin and finish calls. It is the default lifetime of both ChallengeStore
+// implementations (auth_challenge_store.go).
 const challengeTTL = 5 * time.Minute
 
 // stepUpTokenTTLSeconds is the lifetime of a minted stepped-up token (1h).
@@ -55,49 +56,6 @@ const (
 	devLoginPasswordEnv     = "AUTH_DEV_PASSWORD"
 	devLoginPasswordDefault = "dev-password"
 )
-
-// challengeStore is an in-memory, mutex-guarded map of userID -> stashed
-// ceremony challenge with a short TTL. The webauthn package deliberately does
-// NOT persist challenges between begin and finish; the caller (this server) must
-// stash them. A second begin for the same user OVERWRITES the first — acceptable
-// for single-instance dev, documented as a known limitation.
-type challengeStore struct {
-	mu  sync.Mutex
-	now func() time.Time
-	m   map[uuid.UUID]stashedChallenge
-}
-
-type stashedChallenge struct {
-	ch      webauthn.Challenge
-	expires time.Time
-}
-
-func newChallengeStore() *challengeStore {
-	return &challengeStore{now: time.Now, m: map[uuid.UUID]stashedChallenge{}}
-}
-
-// put stashes a challenge for a user, replacing any prior one.
-func (c *challengeStore) put(userID uuid.UUID, ch webauthn.Challenge) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.m[userID] = stashedChallenge{ch: ch, expires: c.now().Add(challengeTTL)}
-}
-
-// take returns and removes the stashed challenge for a user, reporting whether a
-// non-expired one was present (single-use: a finish consumes its begin).
-func (c *challengeStore) take(userID uuid.UUID) (webauthn.Challenge, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	s, ok := c.m[userID]
-	if !ok {
-		return webauthn.Challenge{}, false
-	}
-	delete(c.m, userID)
-	if c.now().After(s.expires) {
-		return webauthn.Challenge{}, false
-	}
-	return s.ch, true
-}
 
 // --------------------------------------------------------------------------
 // Route wiring (called from routes())
@@ -140,7 +98,10 @@ func (s *Server) handleWebAuthnRegisterBegin(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusInternalServerError, "registration begin: "+err.Error())
 		return
 	}
-	s.challenges.put(userID, ch)
+	if err := s.challenges.Put(r.Context(), userID, ch); err != nil {
+		writeError(w, http.StatusInternalServerError, "stash challenge: "+err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"challenge": ch.Challenge,
 		"rp_id":     s.webauthnRPID,
@@ -170,8 +131,15 @@ func (s *Server) handleWebAuthnRegisterFinish(w http.ResponseWriter, r *http.Req
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	ch, ok := s.challenges.take(userID)
-	if !ok {
+	// A store FAILURE is a 500; found=false (never begun / already consumed /
+	// expired) is the 400. Conflating them would make a DB blip look like a
+	// single-use violation.
+	ch, found, err := s.challenges.Take(r.Context(), userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "take challenge: "+err.Error())
+		return
+	}
+	if !found {
 		writeError(w, http.StatusBadRequest, "no pending registration challenge (begin first; it may have expired)")
 		return
 	}
@@ -228,7 +196,10 @@ func (s *Server) handleWebAuthnAssertBegin(w http.ResponseWriter, r *http.Reques
 	for _, c := range creds {
 		allow = append(allow, b64URL.EncodeToString(c.CredentialID))
 	}
-	s.challenges.put(userID, ch)
+	if err := s.challenges.Put(r.Context(), userID, ch); err != nil {
+		writeError(w, http.StatusInternalServerError, "stash challenge: "+err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"challenge":         ch.Challenge,
 		"rp_id":             s.webauthnRPID,
@@ -263,8 +234,13 @@ func (s *Server) handleWebAuthnAssertFinish(w http.ResponseWriter, r *http.Reque
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	ch, ok := s.challenges.take(userID)
-	if !ok {
+	// Store failure => 500; found=false => 400 (see register/finish).
+	ch, found, err := s.challenges.Take(r.Context(), userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "take challenge: "+err.Error())
+		return
+	}
+	if !found {
 		writeError(w, http.StatusBadRequest, "no pending assertion challenge (begin first; it may have expired)")
 		return
 	}

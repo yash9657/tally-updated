@@ -820,6 +820,9 @@ func assertError(t *testing.T, sc corpusScenario, err error) {
 var authCatalogTables = []string{
 	"app_user", "security_level", "acl_rule",
 	"company_membership", "webauthn_credential",
+	// 0012: the durable (multi-instance) WebAuthn challenge store. User-scoped
+	// exactly like webauthn_credential, so it belongs under the same red team.
+	"webauthn_challenge",
 }
 
 // TestAuthCatalogTablesForceRLS asserts every new auth catalog table is

@@ -365,6 +365,90 @@ func TestWebAuthnAssertFinishRejectsForgedSignature(t *testing.T) {
 	}
 }
 
+// TestWebAuthnAssertOnlyLatestChallengeIsLive drives the HTTP ceremony through
+// the (now Postgres-backed) ChallengeStore and pins the overwrite + single-use
+// semantics AT THE ROUTE LEVEL, which the store-level conformance suite cannot
+// do: two sequential assert/begin calls leave exactly ONE live challenge — the
+// latest — and finishing consumes it.
+func TestWebAuthnAssertOnlyLatestChallengeIsLive(t *testing.T) {
+	srv := newServer(t)
+
+	subject := "stepup-latest-" + uuid.NewString()
+	baseTok := mintToken(t, srv, subject)
+	auth := newSoftAuthenticator(t, "localhost", "http://localhost:5173")
+
+	// Register a credential so assertions can be verified.
+	_, regBeginBody := doRaw(t, srv, http.MethodPost, "/auth/webauthn/register/begin", baseTok, nil)
+	regChallenge, _ := regBeginBody["challenge"].(string)
+	auth.signCount = 0
+	regRec, _ := doRaw(t, srv, http.MethodPost, "/auth/webauthn/register/finish", baseTok, map[string]any{
+		"credential_id_b64":      b64u.EncodeToString(auth.credID),
+		"client_data_json_b64":   b64u.EncodeToString(auth.clientData("webauthn.create", regChallenge)),
+		"authenticator_data_b64": b64u.EncodeToString(auth.authData(true)),
+	})
+	if regRec.Code != http.StatusOK {
+		t.Fatalf("register/finish status = %d, want 200 (body %s)", regRec.Code, regRec.Body.String())
+	}
+
+	beginChallenge := func(t *testing.T) string {
+		t.Helper()
+		rec, body := doRaw(t, srv, http.MethodPost, "/auth/webauthn/assert/begin", baseTok, nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("assert/begin status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+		}
+		ch, _ := body["challenge"].(string)
+		if ch == "" {
+			t.Fatalf("assert/begin returned no challenge (body %s)", rec.Body.String())
+		}
+		return ch
+	}
+	finishWith := func(t *testing.T, challenge string) (int, map[string]any) {
+		t.Helper()
+		auth.signCount++
+		ad := auth.authData(false)
+		cd := auth.clientData("webauthn.get", challenge)
+		rec, body := doRaw(t, srv, http.MethodPost, "/auth/webauthn/assert/finish", baseTok, map[string]any{
+			"credential_id_b64":      b64u.EncodeToString(auth.credID),
+			"client_data_json_b64":   b64u.EncodeToString(cd),
+			"authenticator_data_b64": b64u.EncodeToString(ad),
+			"signature_b64":          b64u.EncodeToString(auth.sign(ad, cd)),
+		})
+		return rec.Code, body
+	}
+
+	// (a) Two begins, finish with the LATEST -> 200 + a stepped-up token.
+	_ = beginChallenge(t) // ch1: overwritten, must become dead
+	ch2 := beginChallenge(t)
+	code, body := finishWith(t, ch2)
+	if code != http.StatusOK {
+		t.Fatalf("finish with the LATEST challenge status = %d, want 200 (body %+v)", code, body)
+	}
+	if tok, _ := body["token"].(string); tok == "" {
+		t.Fatalf("finish with the latest challenge returned no token (body %+v)", body)
+	}
+
+	// (b) Two begins, finish with the SUPERSEDED one -> rejected, no token.
+	ch3 := beginChallenge(t)
+	_ = beginChallenge(t) // ch4 replaces ch3
+	code, body = finishWith(t, ch3)
+	if code != http.StatusBadRequest {
+		t.Fatalf("finish with a SUPERSEDED challenge status = %d, want 400 (body %+v)", code, body)
+	}
+	if _, ok := body["token"]; ok {
+		t.Fatalf("finish with a superseded challenge must not mint a token (body %+v)", body)
+	}
+
+	// (c) That failed finish still CONSUMED the live challenge (single use), so a
+	// follow-up finish has nothing to work with.
+	code, body = finishWith(t, ch3)
+	if code != http.StatusBadRequest {
+		t.Fatalf("finish after the challenge was consumed status = %d, want 400 (body %+v)", code, body)
+	}
+	if msg, _ := body["error"].(string); !strings.Contains(msg, "no pending assertion challenge") {
+		t.Fatalf("expected a no-pending-challenge error, got %q", msg)
+	}
+}
+
 // TestDevLoginLockout proves the account-lockout flow over HTTP:
 //
 //   - a correct password BEFORE the threshold returns 200 with a token;

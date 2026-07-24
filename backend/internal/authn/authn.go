@@ -6,9 +6,9 @@
 //   - ES256 (ECDSA P-256, crypto/ecdsa + crypto/elliptic) — Keycloak's default.
 //
 // alg=none and the HS* (HMAC) family are REJECTED unless explicitly configured,
-// which they never are here (no symmetric keys are accepted). Real Keycloak is
-// deferred: a JWKSVerifier that fetches a JWKS URL is documented as the swap
-// (see the JWKSVerifier TODO), but this package never touches the network.
+// which they never are here (no symmetric keys are accepted). THIS FILE never
+// touches the network; the sibling jwks.go adds the production JWKSVerifier,
+// which DOES fetch an IdP's JWKS over HTTP (see its file doc).
 //
 // This file is owned by WS1 (Task D). The sibling lockout*.go files (WS2) live
 // in this package but share NO symbols with this file.
