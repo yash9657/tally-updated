@@ -326,6 +326,7 @@ func (s *Server) routes() {
 
 		// GST.
 		r.Get("/gstr1", s.handleGSTR1)
+		r.Get("/gstr3b", s.handleGSTR3B)
 
 		// Migration import (Tally-XML ingress).
 		r.Post("/import/tally-xml", s.handleImportTallyXML)

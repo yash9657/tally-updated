@@ -378,6 +378,8 @@ func reportName(rest string) string {
 		return "outstandings"
 	case "/gstr1":
 		return "gstr1"
+	case "/gstr3b":
+		return "gstr3b"
 	}
 	return ""
 }

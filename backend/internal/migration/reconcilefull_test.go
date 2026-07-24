@@ -180,6 +180,112 @@ func TestReconcileFull_FailsLoudly(t *testing.T) {
 	}
 }
 
+// TestReconcileFull_FailsLoudlyOnGSTR3B is the mutation/non-vacuity gate for the
+// GSTR-3B step: the SAME correct import is reconciled against an oracle whose 3B
+// block is doctored in three independent places — 3.1(a) CGST, 3.1(d) (claimed
+// non-zero when the corpus has no purchases at all) and table-4 ITC. Every one of
+// them must be named in the error, proving the 3B checks are real comparisons and
+// not a block that silently passes because everything it reads is zero.
+//
+// The imported XML is an INTRA-state sale, so table 3.2 is legitimately empty; a
+// doctored 3.2 row must be reported as missing.
+func TestReconcileFull_FailsLoudlyOnGSTR3B(t *testing.T) {
+	pool, ctx, companyID := setupCompanyState(t, "29")
+
+	im := migration.NewImporter(masters.NewService(pool), ledger.NewService(pool))
+	if _, err := im.ImportReader(ctx, strings.NewReader(gstSalesXML), "tester"); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	rep := reporting.NewService(pool)
+	gstrSvc := gstr.NewService(pool)
+	ms := masters.NewService(pool)
+
+	// Truth for this import: 3.1(a) taxable 1000 / CGST 90 / SGST 90 / IGST 0;
+	// 3.1(d) all zero; 3.2 empty; ITC all zero; balanced true.
+	exp := migration.ExpectedReconciliation{
+		ID:        "doctored-3b",
+		GSTIN:     "29AAAAA0000A1Z5",
+		StateCode: "29",
+		Period:    &migration.Period{From: "2025-05-01", To: "2025-05-31"},
+		TaxLedgers: &migration.TaxLedgerNames{
+			CGST: "CGST Output", SGST: "SGST Output", IGST: "",
+		},
+		TrialBalance: migration.ExpectedTrialBalanceDoc{
+			Totals: migration.ExpectedTotals{Debit: "1180.0000", Credit: "1180.0000", Balanced: true},
+		},
+		GSTR3B: &migration.ExpectedGSTR3B{
+			FP:      "052025",
+			Outward: migration.ExpectedTaxTotals{Taxable: "1000.0000", CGST: "999.0000", SGST: "90.0000", IGST: "0.0000"}, // WRONG CGST
+			// WRONG: there are no purchases in this export at all.
+			RCMInward: migration.ExpectedTaxTotals{Taxable: "500.0000", CGST: "45.0000", SGST: "45.0000", IGST: "0.0000"},
+			// WRONG: the sale is intra-state, so 3.2 must be empty.
+			InterUnreg: []migration.ExpectedInterSup{{Pos: "27", Taxable: "1000.0000", IGST: "180.0000"}},
+			// WRONG: no input-tax ledgers, no purchases -> ITC is zero.
+			ITC:      migration.ExpectedTaxTotals{Taxable: "0.0000", CGST: "77.0000", SGST: "0.0000", IGST: "0.0000"},
+			Balanced: true,
+		},
+	}
+
+	err := migration.ReconcileFull(ctx, rep, gstrSvc, ms, companyID, exp)
+	if err == nil {
+		t.Fatal("expected ReconcileFull to FAIL on a doctored GSTR-3B oracle, got nil")
+	}
+	msg := err.Error()
+	for _, want := range []string{
+		"GSTR-3B 3.1(a) CGST",
+		"GSTR-3B 3.1(d) taxable",
+		"GSTR-3B 3.2 pos 27: missing from return",
+		"GSTR-3B ITC CGST",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("error should name %q, got:\n%v", want, msg)
+		}
+	}
+}
+
+// TestReconcileFull_PassesOnTrueGSTR3B is the other half of the mutation gate:
+// the SAME import reconciled against the CORRECT 3B oracle must produce no
+// GSTR-3B problem at all. Without this, a "fails loudly" test could pass simply
+// because the 3B block always fails.
+func TestReconcileFull_PassesOnTrueGSTR3B(t *testing.T) {
+	pool, ctx, companyID := setupCompanyState(t, "29")
+
+	im := migration.NewImporter(masters.NewService(pool), ledger.NewService(pool))
+	if _, err := im.ImportReader(ctx, strings.NewReader(gstSalesXML), "tester"); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+
+	exp := migration.ExpectedReconciliation{
+		ID:        "true-3b",
+		GSTIN:     "29AAAAA0000A1Z5",
+		StateCode: "29",
+		Period:    &migration.Period{From: "2025-05-01", To: "2025-05-31"},
+		TaxLedgers: &migration.TaxLedgerNames{
+			CGST: "CGST Output", SGST: "SGST Output", IGST: "",
+		},
+		TrialBalance: migration.ExpectedTrialBalanceDoc{
+			Totals: migration.ExpectedTotals{Debit: "1180.0000", Credit: "1180.0000", Balanced: true},
+		},
+		GSTR3B: &migration.ExpectedGSTR3B{
+			FP:        "052025",
+			Outward:   migration.ExpectedTaxTotals{Taxable: "1000.0000", CGST: "90.0000", SGST: "90.0000", IGST: "0.0000"},
+			RCMInward: migration.ExpectedTaxTotals{Taxable: "0.0000", CGST: "0.0000", SGST: "0.0000", IGST: "0.0000"},
+			ITC:       migration.ExpectedTaxTotals{Taxable: "0.0000", CGST: "0.0000", SGST: "0.0000", IGST: "0.0000"},
+			Balanced:  true,
+		},
+	}
+
+	err := migration.ReconcileFull(ctx, reporting.NewService(pool), gstr.NewService(pool),
+		masters.NewService(pool), companyID, exp)
+	// The TB block is intentionally empty-rowed here (as in the doctored test), so
+	// ReconcileFull may still report TRIAL BALANCE problems; what must NOT appear
+	// is any GSTR-3B problem.
+	if err != nil && strings.Contains(err.Error(), "GSTR-3B") {
+		t.Fatalf("correct 3B oracle produced a GSTR-3B problem:\n%v", err)
+	}
+}
+
 // TestImportIdempotentOnGUID proves re-importing the same export is a no-op at
 // the (company, guid) grain: the second run skips the voucher and the books are
 // unchanged.

@@ -155,3 +155,44 @@ func createLedgerAs(t *testing.T, srv *server.Server, base, token, name, group s
 	id, _ := body["ledger_id"].(string)
 	return id
 }
+
+// TestGSTR3BRouteAuthMatrix pins the two-touch rule (IMPLEMENTATION_PLAN §1.5)
+// for GET /v1/companies/{companyID}/gstr3b: no token -> 401, a valid token for a
+// DIFFERENT tenant -> 403, Owner -> 200. If only the route registration lands and
+// the reportName() entry is missing, the Owner case is 403 and this test fails.
+func TestGSTR3BRouteAuthMatrix(t *testing.T) {
+	srv := newServer(t)
+
+	owner := ownerToken(t, srv)
+	companyID := createCompanyAs(t, srv, owner)
+	path := "/v1/companies/" + companyID + "/gstr3b?from=2025-05-01&to=2025-05-31"
+
+	// No Authorization header -> 401.
+	if rec, _ := doRaw(t, srv, http.MethodGet, path, "", nil); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("no-token gstr3b status = %d, want 401 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	// A valid token for a user who is not a member of companyID -> 403.
+	otherToken := mintToken(t, srv, "gstr3b-other-"+uuid.NewString(), "webauthn")
+	_ = createCompanyAs(t, srv, otherToken) // provision the other subject
+	if rec, _ := doRaw(t, srv, http.MethodGet, path, otherToken, nil); rec.Code != http.StatusForbidden {
+		t.Fatalf("cross-tenant gstr3b status = %d, want 403 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	// Owner -> 200 with the 3B shape.
+	rec, body := doRaw(t, srv, http.MethodGet, path, owner, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("owner gstr3b status = %d, want 200 (body %s) — a 403 here means the reportName() /gstr3b entry is missing", rec.Code, rec.Body.String())
+	}
+	if body["fp"] != "052025" {
+		t.Fatalf("gstr3b fp = %v, want 052025 (body %s)", body["fp"], rec.Body.String())
+	}
+	if _, ok := body["sup_details"]; !ok {
+		t.Fatalf("gstr3b response missing sup_details: %s", rec.Body.String())
+	}
+
+	// from/to are required.
+	if rec, _ := doRaw(t, srv, http.MethodGet, "/v1/companies/"+companyID+"/gstr3b", owner, nil); rec.Code != http.StatusBadRequest {
+		t.Fatalf("gstr3b without from/to = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+	}
+}

@@ -8,7 +8,8 @@
 // are integer-percent strings ("18"); state codes are 2-char strings ("29").
 // LoadExpectedReconciliation keeps DisallowUnknownFields, so every key is exact.
 //
-// ReconcileFull layers Balance Sheet, P&L, GSTR-1 and Outstandings checks on top
+// ReconcileFull layers Balance Sheet, P&L, GSTR-1, GSTR-3B and Outstandings
+// checks on top
 // of the existing Trial Balance gate (Reconcile). It never early-returns on a
 // single mismatch: it accumulates ALL discrepancies, sorts them, and joins them
 // into one multi-line error so a migration's full divergence is visible in a
@@ -44,15 +45,17 @@ type ExpectedReconciliation struct {
 	Description     string `json:"description"`
 	TallyExportFile string `json:"tallyExportFile"`
 	// CreatedBy/import knobs the harness needs.
-	GSTIN        string                  `json:"gstin,omitempty"`        // filing company GSTIN (GSTR-1 top-level)
-	StateCode    string                  `json:"stateCode,omitempty"`    // company home state (WS3 default)
-	Period       *Period                 `json:"period,omitempty"`       // GSTR-1 [from,to]; nil = skip GSTR-1 checks
-	TaxLedgers   *TaxLedgerNames         `json:"taxLedgers,omitempty"`   // names resolved to IDs for gstr Options + posting recon
-	TrialBalance ExpectedTrialBalanceDoc `json:"trialBalance"`           // REUSES existing structs verbatim
-	BalanceSheet *ExpectedBalanceSheet   `json:"balanceSheet,omitempty"`
-	ProfitAndLoss *ExpectedPL            `json:"profitAndLoss,omitempty"`
-	GSTR1        *ExpectedGSTR1          `json:"gstr1,omitempty"`
-	Outstandings *ExpectedOutstandings   `json:"outstandings,omitempty"`
+	GSTIN         string                  `json:"gstin,omitempty"`      // filing company GSTIN (GSTR-1 top-level)
+	StateCode     string                  `json:"stateCode,omitempty"`  // company home state (WS3 default)
+	Period        *Period                 `json:"period,omitempty"`     // GSTR-1/3B [from,to]; nil = skip both
+	TaxLedgers    *TaxLedgerNames         `json:"taxLedgers,omitempty"` // OUTPUT-tax names resolved to IDs for gstr Options + posting recon
+	ITCLedgers    *TaxLedgerNames         `json:"itcLedgers,omitempty"` // INPUT-tax names for the GSTR-3B table-4 posting recon
+	TrialBalance  ExpectedTrialBalanceDoc `json:"trialBalance"`         // REUSES existing structs verbatim
+	BalanceSheet  *ExpectedBalanceSheet   `json:"balanceSheet,omitempty"`
+	ProfitAndLoss *ExpectedPL             `json:"profitAndLoss,omitempty"`
+	GSTR1         *ExpectedGSTR1          `json:"gstr1,omitempty"`
+	GSTR3B        *ExpectedGSTR3B         `json:"gstr3b,omitempty"`
+	Outstandings  *ExpectedOutstandings   `json:"outstandings,omitempty"`
 }
 
 // Period is an inclusive ISO date range [From, To] (YYYY-MM-DD).
@@ -93,12 +96,12 @@ type ExpectedPL struct {
 // ExpectedGSTR1 mirrors gstr.GSTR1 rollups at the level we assert (totals +
 // per-rate HSN + B2CS buckets + B2B per-ctin). NOT full invoice-wise.
 type ExpectedGSTR1 struct {
-	FP        string             `json:"fp"`              // "MMYYYY"
-	TaxTotals ExpectedTaxTotals  `json:"taxTotals"`       // summed across sections == output-tax postings
-	HSN       []ExpectedHSNRow   `json:"hsn"`             // per (hsn,rate); hsn "" allowed
-	B2CS      []ExpectedB2CS     `json:"b2cs,omitempty"`  // per (splyTy,pos,rate)
-	B2B       []ExpectedB2BParty `json:"b2b,omitempty"`   // per ctin: taxable+tax rollup only
-	Balanced  bool               `json:"balanced"`        // gstr.Reconciliation.Balanced()
+	FP        string             `json:"fp"`             // "MMYYYY"
+	TaxTotals ExpectedTaxTotals  `json:"taxTotals"`      // summed across sections == output-tax postings
+	HSN       []ExpectedHSNRow   `json:"hsn"`            // per (hsn,rate); hsn "" allowed
+	B2CS      []ExpectedB2CS     `json:"b2cs,omitempty"` // per (splyTy,pos,rate)
+	B2B       []ExpectedB2BParty `json:"b2b,omitempty"`  // per ctin: taxable+tax rollup only
+	Balanced  bool               `json:"balanced"`       // gstr.Reconciliation.Balanced()
 }
 
 // ExpectedTaxTotals is the per-head GSTR-1 tax rollup oracle.
@@ -136,6 +139,40 @@ type ExpectedB2BParty struct {
 	Taxable string `json:"taxable"`
 	CGST    string `json:"cgst"`
 	SGST    string `json:"sgst"`
+	IGST    string `json:"igst"`
+}
+
+// ExpectedGSTR3B mirrors gstr.GSTR3B at the level we assert: the 3.1(a) outward
+// row, the 3.1(d) reverse-charge inward row, the 3.2 inter-state-to-unregistered
+// rows, and the table-4C net ITC.
+//
+// LIMITATION OF THE MIGRATION-CORPUS ORACLE (structural, not an oversight): the
+// Tally importer builds GSTParams ONLY for Sales vouchers (migration.go:514,
+// :566), so no imported corpus voucher can stamp the PURCHASE-side GST columns.
+// RCMInward and ITC are therefore necessarily all-zero for every corpus. The
+// NON-ZERO ITC/RCM coverage lives in the hermetic
+// backend/internal/compliance/gstr/gstr3b_integration_test.go, which posts
+// purchases directly through ledger.Service.
+type ExpectedGSTR3B struct {
+	FP string `json:"fp"` // "MMYYYY"
+	// Outward is table 3.1(a): taxable + the three tax heads.
+	Outward ExpectedTaxTotals `json:"outward"`
+	// RCMInward is table 3.1(d): inward supplies liable to reverse charge.
+	RCMInward ExpectedTaxTotals `json:"rcmInward"`
+	// InterUnreg is table 3.2: inter-state supplies to unregistered persons, by POS.
+	InterUnreg []ExpectedInterSup `json:"interUnreg,omitempty"`
+	// ITC is table 4(C): net ITC available (all-eligible v1).
+	ITC ExpectedTaxTotals `json:"itc"`
+	// Balanced is gstr.Reconciliation3B.Balanced() — return vs postings on BOTH
+	// the outward and the ITC side.
+	Balanced bool `json:"balanced"`
+}
+
+// ExpectedInterSup is one place-of-supply row of the 3B table-3.2 oracle. Only
+// IGST can arise on an inter-state supply, so there is no CGST/SGST here.
+type ExpectedInterSup struct {
+	Pos     string `json:"pos"`
+	Taxable string `json:"taxable"`
 	IGST    string `json:"igst"`
 }
 
@@ -214,12 +251,19 @@ type LedgerResolver interface {
 // ReconcileFull runs the full four-statement reconciliation for the company in
 // ctx against the hand-derived oracle exp. It delegates the Trial Balance block
 // to the existing Reconcile (reuse, not reimplement), then layers Balance Sheet,
-// P&L, GSTR-1 and Outstandings checks, accumulating EVERY discrepancy before
-// returning a single sorted, multi-line error. It returns nil only when no
-// statement diverges to the paisa.
+// P&L, GSTR-1, GSTR-3B and Outstandings checks, accumulating EVERY discrepancy
+// before returning a single sorted, multi-line error. It returns nil only when
+// no statement diverges to the paisa.
 //
-// res may be nil when no GSTR-1 block is asserted; it is only consulted to
-// resolve tax-ledger names for the GSTR-1 step.
+// res may be nil when no GSTR-1/3B block is asserted; it is only consulted to
+// resolve tax-ledger names for those steps.
+//
+// GSTR-3B COVERAGE CAVEAT: the Tally importer attaches GSTParams only to Sales
+// vouchers (migration.go:514, :566), so an imported corpus can never stamp the
+// PURCHASE-side GST columns. The 3B step here therefore exercises the OUTWARD
+// half (3.1(a), 3.2) with real values; 3.1(d) and table 4 are necessarily zero
+// for every corpus. Non-zero ITC/reverse-charge coverage lives in the hermetic
+// backend/internal/compliance/gstr/gstr3b_integration_test.go.
 func ReconcileFull(ctx context.Context, rep *reporting.Service, gstrSvc *gstr.Service,
 	res LedgerResolver, companyID uuid.UUID, exp ExpectedReconciliation) error {
 
@@ -275,6 +319,11 @@ func ReconcileFull(ctx context.Context, rep *reporting.Service, gstrSvc *gstr.Se
 	// Step 4: GSTR-1.
 	if exp.Period != nil && exp.GSTR1 != nil {
 		problems = append(problems, reconcileGSTR1(ctx, gstrSvc, res, exp)...)
+	}
+
+	// Step 4b: GSTR-3B (same period block as GSTR-1).
+	if exp.Period != nil && exp.GSTR3B != nil {
+		problems = append(problems, reconcileGSTR3B(ctx, gstrSvc, res, exp)...)
 	}
 
 	// Step 5: Outstandings.
@@ -437,6 +486,110 @@ func reconcileGSTR1(ctx context.Context, gstrSvc *gstr.Service, res LedgerResolv
 			problems = append(problems, fmt.Sprintf("GSTR-1 B2B %q: present in return but not expected", c))
 		}
 	}
+	return problems
+}
+
+// reconcileGSTR3B resolves the output- and input-tax ledger names, runs
+// gstr.Reconcile3B for the period, and diffs the 3B tables (3.1(a), 3.1(d), 3.2,
+// 4C) against exp. Every problem string is prefixed "GSTR-3B" so a failure names
+// the statement.
+//
+// It is an INDEPENDENT check of the same books the GSTR-1 step reads: 3.1(a) is
+// produced by gstr.Generate3B's own aggregating query, not by re-summing the
+// GSTR-1 rollup, so a divergence between the two returns shows up here.
+func reconcileGSTR3B(ctx context.Context, gstrSvc *gstr.Service, res LedgerResolver,
+	exp ExpectedReconciliation) []string {
+
+	var problems []string
+	if gstrSvc == nil {
+		return []string{"GSTR-3B: no gstr service supplied but a gstr3b oracle is present"}
+	}
+
+	resolve := func(name string) uuid.UUID {
+		if name == "" || res == nil {
+			return uuid.Nil
+		}
+		id, err := res.LedgerID(ctx, name)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("GSTR-3B taxLedger %q: %v", name, err))
+			return uuid.Nil
+		}
+		return id
+	}
+
+	var opts gstr.Options3B
+	opts.GSTIN = exp.GSTIN
+	if exp.TaxLedgers != nil {
+		opts.CGSTLedgerID = resolve(exp.TaxLedgers.CGST)
+		opts.SGSTLedgerID = resolve(exp.TaxLedgers.SGST)
+		opts.IGSTLedgerID = resolve(exp.TaxLedgers.IGST)
+	}
+	if exp.ITCLedgers != nil {
+		opts.InputCGSTLedgerID = resolve(exp.ITCLedgers.CGST)
+		opts.InputSGSTLedgerID = resolve(exp.ITCLedgers.SGST)
+		opts.InputIGSTLedgerID = resolve(exp.ITCLedgers.IGST)
+	}
+
+	g, recon, err := gstrSvc.Reconcile3B(ctx, exp.Period.From, exp.Period.To, opts)
+	if err != nil {
+		return append(problems, "GSTR-3B: "+err.Error())
+	}
+
+	if recon.Balanced() != exp.GSTR3B.Balanced {
+		problems = append(problems, fmt.Sprintf(
+			"GSTR-3B balanced (return-vs-postings): got %v expected %v", recon.Balanced(), exp.GSTR3B.Balanced))
+	}
+	if g.FP != exp.GSTR3B.FP {
+		problems = append(problems, fmt.Sprintf("GSTR-3B fp: got %s expected %s", g.FP, exp.GSTR3B.FP))
+	}
+
+	// Table 3.1(a) — outward taxable supplies.
+	a := g.T31.OsupDet
+	cmpDecimal(&problems, "GSTR-3B 3.1(a) taxable", a.Txval, exp.GSTR3B.Outward.Taxable)
+	cmpDecimal(&problems, "GSTR-3B 3.1(a) CGST", a.Camt, exp.GSTR3B.Outward.CGST)
+	cmpDecimal(&problems, "GSTR-3B 3.1(a) SGST", a.Samt, exp.GSTR3B.Outward.SGST)
+	cmpDecimal(&problems, "GSTR-3B 3.1(a) IGST", a.Iamt, exp.GSTR3B.Outward.IGST)
+
+	// Table 3.1(d) — inward supplies liable to reverse charge.
+	d := g.T31.IsupRev
+	cmpDecimal(&problems, "GSTR-3B 3.1(d) taxable", d.Txval, exp.GSTR3B.RCMInward.Taxable)
+	cmpDecimal(&problems, "GSTR-3B 3.1(d) CGST", d.Camt, exp.GSTR3B.RCMInward.CGST)
+	cmpDecimal(&problems, "GSTR-3B 3.1(d) SGST", d.Samt, exp.GSTR3B.RCMInward.SGST)
+	cmpDecimal(&problems, "GSTR-3B 3.1(d) IGST", d.Iamt, exp.GSTR3B.RCMInward.IGST)
+
+	// Table 3.2 — inter-state supplies to unregistered persons, keyed by POS.
+	// Checked in BOTH directions so an extra row is as loud as a missing one.
+	type isup struct{ txval, igst decimal.Decimal }
+	got32 := map[string]isup{}
+	for _, r := range g.T32 {
+		v := got32[r.Pos]
+		got32[r.Pos] = isup{v.txval.Add(r.Txval), v.igst.Add(r.Iamt)}
+	}
+	seen32 := map[string]bool{}
+	for _, want := range exp.GSTR3B.InterUnreg {
+		seen32[want.Pos] = true
+		got, ok := got32[want.Pos]
+		if !ok {
+			problems = append(problems, fmt.Sprintf("GSTR-3B 3.2 pos %s: missing from return", want.Pos))
+			continue
+		}
+		label := "GSTR-3B 3.2 pos " + want.Pos
+		cmpDecimal(&problems, label+" taxable", got.txval, want.Taxable)
+		cmpDecimal(&problems, label+" IGST", got.igst, want.IGST)
+	}
+	for pos := range got32 {
+		if !seen32[pos] {
+			problems = append(problems, fmt.Sprintf("GSTR-3B 3.2 pos %s: present in return but not expected", pos))
+		}
+	}
+
+	// Table 4(C) — net ITC available. The oracle's `taxable` slot is unused for
+	// ITC (table 4 carries tax heads only), so it is not compared.
+	net := g.T4.ItcNet
+	cmpDecimal(&problems, "GSTR-3B ITC CGST", net.Camt, exp.GSTR3B.ITC.CGST)
+	cmpDecimal(&problems, "GSTR-3B ITC SGST", net.Samt, exp.GSTR3B.ITC.SGST)
+	cmpDecimal(&problems, "GSTR-3B ITC IGST", net.Iamt, exp.GSTR3B.ITC.IGST)
+
 	return problems
 }
 
