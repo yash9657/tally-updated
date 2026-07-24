@@ -164,6 +164,8 @@ INSIGHTD_PII_BOUNDARY_STRICT=1 python -m uvicorn insightd.api.app:app --port 808
 
 ## 7. NEXT TASKS (priority-ordered)
 
+> **⚠️ SUPERSEDED BY `IMPLEMENTATION_PLAN.md` (2026-07-23):** a principal-engineer plan now covers ALL §6 gaps (except the Tauri desktop shell, deferred) plus the Phase-3 depth increments, with pinned per-workstream contracts, pre-assigned migration numbers (0012–0014), wave-based dynamic workflows, and a Definition of Done for the review session. **Execute from that file.** The list below remains as background context only.
+
 > For each, follow §3: pin contracts in design → parallel-implement on disjoint files → adversarial-review → **you integrate + re-run every gate + a live e2e** before committing. Workflow template in §9.
 
 ### ✅ Task D — Auth (DONE, `19d2fa6`) + follow-up (DONE, `e43d383`)
