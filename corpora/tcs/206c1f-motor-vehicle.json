@@ -1,0 +1,17 @@
+{
+  "id": "206c1f-motor-vehicle",
+  "description": "s.206C(1F): a seller of a motor vehicle 'of the value exceeding ten lakh rupees' collects 1% from the buyer. 15,00,000 x 1% = 15,000. Hand-computed.",
+  "rulesetVersion": "tcs-2026-04",
+  "input": {
+    "section": "206C(1F)-MV",
+    "panAvailable": true,
+    "taxableAmount": "1500000.0000"
+  },
+  "expected": {
+    "tcs": "15000.0000",
+    "ratePct": "1",
+    "threshold": "1000000.0000",
+    "basis": "PER_TXN",
+    "applied": true
+  }
+}

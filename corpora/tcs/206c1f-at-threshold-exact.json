@@ -1,0 +1,17 @@
+{
+  "id": "206c1f-at-threshold-exact",
+  "description": "Boundary for s.206C(1F): 'exceeding ten lakh rupees'. A vehicle sold for exactly 10,00,000 does NOT exceed the limit, so nothing is collected. Near-miss negative that pins the strict greater-than test.",
+  "rulesetVersion": "tcs-2026-04",
+  "input": {
+    "section": "206C(1F)-MV",
+    "panAvailable": true,
+    "taxableAmount": "1000000.0000"
+  },
+  "expected": {
+    "tcs": "0.0000",
+    "ratePct": "1",
+    "threshold": "1000000.0000",
+    "basis": "PER_TXN",
+    "applied": false
+  }
+}

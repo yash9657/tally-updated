@@ -1,0 +1,18 @@
+{
+  "id": "194c-ind-huf",
+  "description": "s.194C payment to a resident individual/HUF contractor. Rate 1% (s.194C(1)); the 30,000 single-payment limit is s.194C(5). 1,00,000 x 1% = 1,000. Hand-computed.",
+  "rulesetVersion": "tds-2026-04",
+  "input": {
+    "section": "194C",
+    "deducteeType": "IND_HUF",
+    "panAvailable": true,
+    "taxableAmount": "100000.0000"
+  },
+  "expected": {
+    "tds": "1000.0000",
+    "ratePct": "1",
+    "threshold": "30000.0000",
+    "basis": "PER_TXN",
+    "applied": true
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "id": "206cc-no-pan-scrap",
+  "description": "s.206CC (NOT s.206AA): where the collectee furnishes no PAN, tax is collected at the HIGHER of twice the rate in force and 5%. Scrap rate is 1%; max(2 x 1%, 5%) = 5%. 5,00,000 x 5% = 25,000. Hand-computed. Note this is 5%, NOT the 20% that s.206AA would impose on the deduction side \u2014 the two no-PAN regimes are different and must not be collapsed.",
+  "rulesetVersion": "tcs-2026-04",
+  "input": {
+    "section": "206C(1)-SCRAP",
+    "panAvailable": false,
+    "taxableAmount": "500000.0000"
+  },
+  "expected": {
+    "tcs": "25000.0000",
+    "ratePct": "5",
+    "threshold": "0.0000",
+    "basis": "PER_TXN",
+    "applied": true
+  }
+}

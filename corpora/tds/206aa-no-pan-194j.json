@@ -1,0 +1,18 @@
+{
+  "id": "206aa-no-pan-194j",
+  "description": "s.206AA applied over a 10% section: max(10%, 20%) = 20%. 2,00,000 x 20% = 40,000. Hand-computed. Together with 206aa-no-pan-194c this pins that the floor is applied AFTER the deductee-type rate selection.",
+  "rulesetVersion": "tds-2026-04",
+  "input": {
+    "section": "194J-P",
+    "deducteeType": "OTHER",
+    "panAvailable": false,
+    "taxableAmount": "200000.0000"
+  },
+  "expected": {
+    "tds": "40000.0000",
+    "ratePct": "20",
+    "threshold": "50000.0000",
+    "basis": "ANNUAL",
+    "applied": true
+  }
+}

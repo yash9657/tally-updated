@@ -1,0 +1,18 @@
+{
+  "id": "206aa-no-pan-194c",
+  "description": "s.206AA(1): where the deductee fails to furnish a PAN, tax is deducted at the HIGHER of the rate in force and 20%. 194C 'other' rate is 2%; max(2%, 20%) = 20%. 1,00,000 x 20% = 20,000. Hand-computed. Proves 206AA is a FLOOR, not a flat replacement.",
+  "rulesetVersion": "tds-2026-04",
+  "input": {
+    "section": "194C",
+    "deducteeType": "OTHER",
+    "panAvailable": false,
+    "taxableAmount": "100000.0000"
+  },
+  "expected": {
+    "tds": "20000.0000",
+    "ratePct": "20",
+    "threshold": "30000.0000",
+    "basis": "PER_TXN",
+    "applied": true
+  }
+}

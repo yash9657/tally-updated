@@ -732,6 +732,7 @@ type voucherReq struct {
 	Postings        []postingReq        `json:"postings"`
 	BillAllocations []billAllocationReq `json:"bill_allocations"`
 	GST             *gstReq             `json:"gst"`
+	TDS             *tdsReq             `json:"tds"`
 }
 
 // postVoucher returns a handler bound to a fixed accounting class. The same
@@ -1016,6 +1017,20 @@ func voucherResultJSON(res ledger.PostResult) map[string]any {
 		"sgst":               res.Tax.SGST.StringFixed(4),
 		"igst":               res.Tax.IGST.StringFixed(4),
 	}
+	// TDS rides back the same way GST does, but only when derivation actually
+	// ran: Basis is stamped from the matched section rule, so an empty Basis
+	// means the post carried no `tds` block and the key stays absent (existing
+	// clients see a byte-identical body).
+	if res.TDS.Basis != "" {
+		out["tds"] = map[string]any{
+			"tds":       res.TDS.TDS.StringFixed(4),
+			"rate_pct":  res.TDS.RatePct.StringFixed(4),
+			"threshold": res.TDS.Threshold.StringFixed(4),
+			"basis":     string(res.TDS.Basis),
+			"applied":   res.TDS.Applied,
+		}
+	}
+	return out
 }
 
 // writeVoucherEditError maps an alter/delete error to an HTTP status: an unknown
@@ -1110,6 +1125,13 @@ func buildVoucherInput(w http.ResponseWriter, class ledger.Class, req voucherReq
 			return in, false
 		}
 		in.GST = gst
+	}
+	if req.TDS != nil {
+		tds, ok := buildTDS(w, *req.TDS)
+		if !ok {
+			return in, false
+		}
+		in.TDS = tds
 	}
 	return in, true
 }

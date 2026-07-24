@@ -158,6 +158,9 @@ type VoucherInput struct {
 	// GST, when non-nil and Class is Sales or Purchase, drives auto-derivation
 	// and verification of the tax lines.
 	GST *GSTParams
+	// TDS, when non-nil and Class is Purchase, Payment or Journal, drives
+	// derivation and verification of the posted TDS leg. See tds.go.
+	TDS *TDSParams
 	// SourceGUID is the stable external (Tally) GUID this voucher was imported
 	// from, recorded on voucher_head for idempotent re-import. Empty for natively
 	// created vouchers (those never participate in the (company, guid) dedupe).
@@ -188,6 +191,9 @@ type PostResult struct {
 	VoucherNo string
 	// Tax is the derived GST breakup, populated when GST derivation ran.
 	Tax compliance.TaxResult
+	// TDS is the derived deduction, populated when TDS derivation ran. It is
+	// in-process only: nothing about TDS is persisted in v1 (see tds.go).
+	TDS compliance.TDSResult
 }
 
 // Service is the ledger application service.
@@ -581,6 +587,11 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 
 	// Whether this post carries GST derivation (Sales/Purchase with GST params).
 	gstActive := in.GST != nil && (in.Class == Sales || in.Class == Purchase)
+	// Whether this post carries TDS derivation. A deduction is made by the payer,
+	// so it rides Purchase (bill booking), Payment and Journal — never Sales or
+	// Receipt. A DELETE tombstone carries no postings and derives nothing.
+	tdsActive := in.TDS != nil && op != OpDelete &&
+		(in.Class == Purchase || in.Class == Payment || in.Class == Journal)
 
 	versionID, err := uuid.NewV7()
 	if err != nil {
@@ -595,6 +606,9 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 	// company-state default (read from the same tx) is causally ordered before the
 	// derivation that consumes it.
 	var tax compliance.TaxResult
+	// tdsRes is the derived TDS deduction, computed inside the same transaction
+	// so a verification failure rolls the whole post back.
+	var tdsRes compliance.TDSResult
 
 	var result PostResult
 	err = s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
@@ -621,6 +635,15 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 				return err
 			}
 			tax = t
+		}
+		// Derive + verify TDS inside the same tx. Like GST this NEVER injects a
+		// posting: it refuses a voucher whose TDS leg contradicts the engine.
+		if tdsActive {
+			r, err := deriveAndVerifyTDS(in)
+			if err != nil {
+				return err
+			}
+			tdsRes = r
 		}
 
 		var versionNo int
@@ -926,6 +949,7 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 			Hash:             hash,
 			VoucherNo:        in.VoucherNo,
 			Tax:              tax,
+			TDS:              tdsRes,
 		}
 		return nil
 	})

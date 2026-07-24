@@ -1,0 +1,18 @@
+{
+  "id": "194j-annual-basis-approximation",
+  "description": "DISCLOSED v1 APPROXIMATION (IMPLEMENTATION_PLAN.md 7.5). s.194J's 50,000 limit is an ANNUAL AGGREGATE, but v1 tests it PER TRANSACTION. A deductor paying the same professional 25,000 twice in a year crosses the annual limit and must deduct 10% on the aggregate from the second payment onwards; v1 sees 25,000 < 50,000 on BOTH and derives NIL. This fixture pins the v1 behaviour (basis ANNUAL is recorded in the result so the approximation is machine-visible) \u2014 it is NOT a claim that NIL is the statutorily correct answer for the second payment.",
+  "rulesetVersion": "tds-2026-04",
+  "input": {
+    "section": "194J-P",
+    "deducteeType": "OTHER",
+    "panAvailable": true,
+    "taxableAmount": "25000.0000"
+  },
+  "expected": {
+    "tds": "0.0000",
+    "ratePct": "10",
+    "threshold": "50000.0000",
+    "basis": "ANNUAL",
+    "applied": false
+  }
+}

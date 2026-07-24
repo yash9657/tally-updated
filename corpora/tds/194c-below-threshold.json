@@ -1,0 +1,18 @@
+{
+  "id": "194c-below-threshold",
+  "description": "s.194C(5): no deduction where the sum credited/paid to the contractor 'does not exceed thirty thousand rupees'. 25,000 < 30,000 -> NIL deduction. Proves the below-threshold path derives zero.",
+  "rulesetVersion": "tds-2026-04",
+  "input": {
+    "section": "194C",
+    "deducteeType": "IND_HUF",
+    "panAvailable": true,
+    "taxableAmount": "25000.0000"
+  },
+  "expected": {
+    "tds": "0.0000",
+    "ratePct": "1",
+    "threshold": "30000.0000",
+    "basis": "PER_TXN",
+    "applied": false
+  }
+}

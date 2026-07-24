@@ -1,0 +1,18 @@
+{
+  "id": "194i-b-land-building",
+  "description": "s.194I(b) rent of land, building (including factory building), furniture or fittings: 10%. Same 50,000/month limit as 194I(a) after Finance Act 2025. 1,20,000 x 10% = 12,000. Hand-computed.",
+  "rulesetVersion": "tds-2026-04",
+  "input": {
+    "section": "194I-B",
+    "deducteeType": "OTHER",
+    "panAvailable": true,
+    "taxableAmount": "120000.0000"
+  },
+  "expected": {
+    "tds": "12000.0000",
+    "ratePct": "10",
+    "threshold": "50000.0000",
+    "basis": "MONTHLY",
+    "applied": true
+  }
+}

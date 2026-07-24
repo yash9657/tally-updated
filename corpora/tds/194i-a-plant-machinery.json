@@ -1,0 +1,18 @@
+{
+  "id": "194i-a-plant-machinery",
+  "description": "s.194I(a) rent of plant, machinery or equipment: 2%. Finance Act 2025 replaced the 2,40,000/year limit with 50,000 per MONTH (or part of a month). 1,20,000 x 2% = 2,400. Hand-computed. THRESHOLD CONFIDENCE: MEDIUM.",
+  "rulesetVersion": "tds-2026-04",
+  "input": {
+    "section": "194I-A",
+    "deducteeType": "OTHER",
+    "panAvailable": true,
+    "taxableAmount": "120000.0000"
+  },
+  "expected": {
+    "tds": "2400.0000",
+    "ratePct": "2",
+    "threshold": "50000.0000",
+    "basis": "MONTHLY",
+    "applied": true
+  }
+}

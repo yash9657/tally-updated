@@ -1,0 +1,18 @@
+{
+  "id": "194j-technical",
+  "description": "s.194J proviso: fees for technical services (not being professional services), call-centre payments, and royalty for the sale/distribution or exhibition of cinematographic films are deducted at 2%, not 10%. 2,00,000 x 2% = 4,000. Hand-computed.",
+  "rulesetVersion": "tds-2026-04",
+  "input": {
+    "section": "194J-T",
+    "deducteeType": "OTHER",
+    "panAvailable": true,
+    "taxableAmount": "200000.0000"
+  },
+  "expected": {
+    "tds": "4000.0000",
+    "ratePct": "2",
+    "threshold": "50000.0000",
+    "basis": "ANNUAL",
+    "applied": true
+  }
+}

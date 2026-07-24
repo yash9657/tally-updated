@@ -1,0 +1,18 @@
+{
+  "id": "194h-commission",
+  "description": "s.194H commission or brokerage. Rate cut 5% -> 2% w.e.f. 1-Oct-2024 by the Finance (No. 2) Act 2024; threshold raised 15,000 -> 20,000 by Finance Act 2025. 1,00,000 x 2% = 2,000. Hand-computed. CONFIDENCE MEDIUM on BOTH rate and threshold \u2014 spot-check this first.",
+  "rulesetVersion": "tds-2026-04",
+  "input": {
+    "section": "194H",
+    "deducteeType": "OTHER",
+    "panAvailable": true,
+    "taxableAmount": "100000.0000"
+  },
+  "expected": {
+    "tds": "2000.0000",
+    "ratePct": "2",
+    "threshold": "20000.0000",
+    "basis": "ANNUAL",
+    "applied": true
+  }
+}

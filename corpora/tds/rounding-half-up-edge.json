@@ -1,0 +1,18 @@
+{
+  "id": "rounding-half-up-edge",
+  "description": "Rounding contract: money is quantized to 4 dp HALF-UP, matching the NUMERIC(19,4) columns. s.194J-T at 2% on 60,000.0025 gives exactly 1200.00005 \u2014 a true half-way tie at the 5th decimal. Half-up rounds AWAY from zero: 1200.0001, not 1200.0000. Hand-computed.",
+  "rulesetVersion": "tds-2026-04",
+  "input": {
+    "section": "194J-T",
+    "deducteeType": "OTHER",
+    "panAvailable": true,
+    "taxableAmount": "60000.0025"
+  },
+  "expected": {
+    "tds": "1200.0001",
+    "ratePct": "2",
+    "threshold": "50000.0000",
+    "basis": "ANNUAL",
+    "applied": true
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "id": "194j-professional",
+  "description": "s.194J(1)(a) fees for professional services. Rate 10%. Threshold raised 30,000 -> 50,000 by Finance Act 2025 (annual aggregate). 2,00,000 x 10% = 20,000. Hand-computed. THRESHOLD CONFIDENCE: MEDIUM.",
+  "rulesetVersion": "tds-2026-04",
+  "input": {
+    "section": "194J-P",
+    "deducteeType": "OTHER",
+    "panAvailable": true,
+    "taxableAmount": "200000.0000"
+  },
+  "expected": {
+    "tds": "20000.0000",
+    "ratePct": "10",
+    "threshold": "50000.0000",
+    "basis": "ANNUAL",
+    "applied": true
+  }
+}

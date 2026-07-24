@@ -193,6 +193,193 @@ def validate_tax(path: Path, case: dict) -> None:
             )
 
 
+# ---------------------------------------------------------------------------
+# TDS / TCS (corpora/tds, corpora/tcs)
+# ---------------------------------------------------------------------------
+# These fixtures deliberately live in their OWN top-level directories rather
+# than in corpora/tax. Three consumers glob corpora/tax/*.json and assume the
+# GST case shape (validate_tax below, the Go TestTaxDerive_GoldenCorpus, and
+# insightd's test_gst_oracle_reconcile.py); a TDS file dropped in there breaks
+# all three, and it would also inflate MIN_COUNTS["tax"] so a deleted GST
+# fixture would stop being detected.
+#
+# The rate tables below are an INDEPENDENT restatement of the ones in
+# backend/internal/compliance/{tds.go,tcs.go} — written separately so a typo in
+# either side fails this gate. They are NOT imported from Go and must not be
+# "de-duplicated" into a shared data file: the duplication IS the oracle. Note
+# that duplication cannot catch a rate that is wrong in BOTH places; that is
+# what the pre-release statutory spot-check is for (see the provenance banner
+# in tds.go).
+
+TDS_RULESET_VERSION = "tds-2026-04"
+TCS_RULESET_VERSION = "tcs-2026-04"
+
+THRESHOLD_BASES = {"PER_TXN", "ANNUAL", "MONTHLY"}
+
+# section -> (rate for individual/HUF, rate for others, threshold, basis)
+TDS_RATES: dict[str, tuple[Decimal, Decimal, Decimal, str]] = {
+    "194C": (Decimal("1"), Decimal("2"), Decimal("30000"), "PER_TXN"),
+    "194J-P": (Decimal("10"), Decimal("10"), Decimal("50000"), "ANNUAL"),
+    "194J-T": (Decimal("2"), Decimal("2"), Decimal("50000"), "ANNUAL"),
+    "194H": (Decimal("2"), Decimal("2"), Decimal("20000"), "ANNUAL"),
+    "194I-A": (Decimal("2"), Decimal("2"), Decimal("50000"), "MONTHLY"),
+    "194I-B": (Decimal("10"), Decimal("10"), Decimal("50000"), "MONTHLY"),
+}
+# s.206AA(1): no PAN -> the HIGHER of the rate in force and 20%.
+TDS_NO_PAN_FLOOR = Decimal("20")
+
+# section -> (rate, threshold, basis). 206C(1H) is deliberately absent: it was
+# omitted w.e.f. 1-Apr-2025 by the Finance Act 2025.
+TCS_RATES: dict[str, tuple[Decimal, Decimal, str]] = {
+    "206C(1)-SCRAP": (Decimal("1"), Decimal("0"), "PER_TXN"),
+    "206C(1F)-MV": (Decimal("1"), Decimal("1000000"), "PER_TXN"),
+}
+# s.206CC (NOT s.206AA): no PAN -> the HIGHER of twice the rate and 5%.
+TCS_NO_PAN_MULTIPLIER = Decimal("2")
+TCS_NO_PAN_FLOOR = Decimal("5")
+
+DEDUCTEE_TYPES = {"IND_HUF", "OTHER"}
+
+
+def rate_str(path: Path, field: str, value: Any) -> Decimal | None:
+    """Validate a percentage rate expressed as a decimal STRING (never a float)."""
+    if not isinstance(value, str):
+        fail(path, f"{field} must be a decimal STRING, got {type(value).__name__}")
+        return None
+    try:
+        return Decimal(value)
+    except InvalidOperation:
+        fail(path, f"{field} is not a valid decimal: {value!r}")
+        return None
+
+
+def derive_tds(case_input: dict) -> dict[str, Any]:
+    """Reference TDS derivation. Mirrors the backend's pure TDSDerive contract.
+
+    Rate by deductee type, then the s.206AA floor when no PAN is on record, then
+    a STRICT greater-than threshold test ("does not exceed" in the statutes),
+    then round HALF-UP to 4 dp. v1 applies every threshold per transaction; see
+    the ThresholdBasis note in tds.go.
+    """
+    rate_ind, rate_other, threshold, basis = TDS_RATES[case_input["section"]]
+    rate = rate_ind if case_input["deducteeType"] == "IND_HUF" else rate_other
+    if not case_input["panAvailable"] and TDS_NO_PAN_FLOOR > rate:
+        rate = TDS_NO_PAN_FLOOR
+    amount = Decimal(case_input["taxableAmount"])
+    applied = amount > threshold
+    tds = Decimal("0")
+    if applied:
+        tds = (amount * rate / 100).quantize(MONEY_DP, rounding=ROUND_HALF_UP)
+    return {"tds": tds, "ratePct": rate, "threshold": threshold, "basis": basis, "applied": applied}
+
+
+def derive_tcs(case_input: dict) -> dict[str, Any]:
+    """Reference TCS derivation. s.206CC (2x or 5%) — NOT s.206AA's flat 20%."""
+    rate, threshold, basis = TCS_RATES[case_input["section"]]
+    if not case_input["panAvailable"]:
+        rate = rate * TCS_NO_PAN_MULTIPLIER
+        if TCS_NO_PAN_FLOOR > rate:
+            rate = TCS_NO_PAN_FLOOR
+    amount = Decimal(case_input["taxableAmount"])
+    applied = amount > threshold
+    tcs = Decimal("0")
+    if applied:
+        tcs = (amount * rate / 100).quantize(MONEY_DP, rounding=ROUND_HALF_UP)
+    return {"tcs": tcs, "ratePct": rate, "threshold": threshold, "basis": basis, "applied": applied}
+
+
+def _check_withholding(
+    path: Path,
+    case: dict,
+    money_field: str,
+    ruleset_version: str,
+    known_sections: set[str],
+    derive,
+    extra_input_keys: list[str],
+) -> None:
+    """Shared shape + arithmetic check for a TDS or TCS fixture."""
+    if not require(path, case, ["id", "description", "rulesetVersion", "input", "expected"]):
+        return
+    if case["rulesetVersion"] != ruleset_version:
+        fail(path, f"rulesetVersion must be {ruleset_version!r}, got {case['rulesetVersion']!r}")
+        return
+    # The corpus is the oracle for rates that were curated offline; a fixture
+    # without a statutory citation in its description is unreviewable.
+    if not isinstance(case["description"], str) or len(case["description"]) < 40:
+        fail(path, "description must carry the statutory citation (>=40 chars)")
+
+    ci = case["input"]
+    if not require(path, ci, ["section", "panAvailable", "taxableAmount"] + extra_input_keys):
+        return
+    if ci["section"] not in known_sections:
+        fail(path, f"input.section {ci['section']!r} is not in the shipped rate table")
+        return
+    if not isinstance(ci["panAvailable"], bool):
+        fail(path, "input.panAvailable must be a boolean")
+        return
+    if "deducteeType" in extra_input_keys and ci["deducteeType"] not in DEDUCTEE_TYPES:
+        fail(path, f"input.deducteeType must be one of {sorted(DEDUCTEE_TYPES)}, got {ci['deducteeType']!r}")
+        return
+    if money(path, "input.taxableAmount", ci["taxableAmount"]) is None:
+        return
+
+    exp = case["expected"]
+    if not require(path, exp, [money_field, "ratePct", "threshold", "basis", "applied"]):
+        return
+    declared: dict[str, Any] = {}
+    for field in (money_field, "threshold"):
+        dec = money(path, f"expected.{field}", exp[field])
+        if dec is None:
+            return
+        declared[field] = dec
+    rate = rate_str(path, "expected.ratePct", exp["ratePct"])
+    if rate is None:
+        return
+    declared["ratePct"] = rate
+    if exp["basis"] not in THRESHOLD_BASES:
+        fail(path, f"expected.basis must be one of {sorted(THRESHOLD_BASES)}, got {exp['basis']!r}")
+        return
+    declared["basis"] = exp["basis"]
+    if not isinstance(exp["applied"], bool):
+        fail(path, "expected.applied must be a boolean")
+        return
+    declared["applied"] = exp["applied"]
+
+    try:
+        computed = derive(ci)
+    except (KeyError, InvalidOperation) as exc:
+        fail(path, f"could not re-derive: {exc}")
+        return
+
+    for field, want in computed.items():
+        got = declared[field]
+        if isinstance(want, Decimal):
+            if got != want:
+                fail(
+                    path,
+                    f"expected.{field}={got:f} is WRONG; reference derivation = {want:f}",
+                )
+        elif got != want:
+            fail(path, f"expected.{field}={got!r} is WRONG; reference derivation = {want!r}")
+
+    # A non-applied case must declare zero — a stale amount beside applied=false
+    # would silently over-deduct if a caller ignored the flag.
+    if not declared["applied"] and declared[money_field] != 0:
+        fail(path, f"expected.applied is false but expected.{money_field} is non-zero")
+
+
+def validate_tds(path: Path, case: dict) -> None:
+    """Validate a TDS-derivation case and re-check its arithmetic."""
+    _check_withholding(
+        path, case, "tds", TDS_RULESET_VERSION, set(TDS_RATES), derive_tds, ["deducteeType"]
+    )
+
+
+def validate_tcs(path: Path, case: dict) -> None:
+    """Validate a TCS-derivation case and re-check its arithmetic."""
+    _check_withholding(path, case, "tcs", TCS_RULESET_VERSION, set(TCS_RATES), derive_tcs, [])
+
+
 def validate_keystroke(path: Path, case: dict) -> None:
     """Validate a keystroke-conformance case."""
     if not require(path, case, ["id", "description", "keymapProfile", "startScreen", "events", "expect"]):
@@ -513,12 +700,14 @@ def validate_gstr1_oracle(path: Path, g: dict) -> None:
 
 VALIDATORS = {
     "tax": validate_tax,
+    "tds": validate_tds,
+    "tcs": validate_tcs,
     "keystroke": validate_keystroke,
     "isolation": validate_isolation,
     "migration": validate_migration,
 }
 
-MIN_COUNTS = {"tax": 14, "keystroke": 14, "isolation": 10, "migration": 6}
+MIN_COUNTS = {"tax": 14, "tds": 8, "tcs": 2, "keystroke": 14, "isolation": 10, "migration": 6}
 
 
 def main() -> int:

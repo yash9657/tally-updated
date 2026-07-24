@@ -1,0 +1,17 @@
+{
+  "id": "206c1-scrap",
+  "description": "s.206C(1) Table: sale of scrap attracts TCS at 1%. There is no per-transaction exemption limit for scrap, so the threshold is 0. 5,00,000 x 1% = 5,000. Hand-computed.",
+  "rulesetVersion": "tcs-2026-04",
+  "input": {
+    "section": "206C(1)-SCRAP",
+    "panAvailable": true,
+    "taxableAmount": "500000.0000"
+  },
+  "expected": {
+    "tcs": "5000.0000",
+    "ratePct": "1",
+    "threshold": "0.0000",
+    "basis": "PER_TXN",
+    "applied": true
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "id": "194c-at-threshold-exact",
+  "description": "Boundary case for s.194C(5). The statute says 'does not exceed', so a payment of exactly 30,000 attracts NO deduction \u2014 the test is strictly greater-than, not greater-or-equal. Pins the off-by-one.",
+  "rulesetVersion": "tds-2026-04",
+  "input": {
+    "section": "194C",
+    "deducteeType": "OTHER",
+    "panAvailable": true,
+    "taxableAmount": "30000.0000"
+  },
+  "expected": {
+    "tds": "0.0000",
+    "ratePct": "2",
+    "threshold": "30000.0000",
+    "basis": "PER_TXN",
+    "applied": false
+  }
+}
