@@ -7,12 +7,13 @@
 // is defense-in-depth against any write). The LLM produces ONLY the DSL, never
 // SQL; the DSL->SQL compiler is deterministic and hermetically testable.
 //
-// This file is WS2's contribution: the Translator (NL -> Query), the
-// FakeTranslator (deterministic, shipped-by-default), and the query.Service the
-// server's POST /query handler drives. WS1 owns the typed DSL + compiler +
-// executor (dsl.go, whitelist.go, compile.go, execute.go); this file consumes
-// those symbols (Query, Compile, Execute, Result, ColumnMeta, ReadOnlyRunner)
-// by their pinned signatures.
+// This file holds the Translator (NL -> Query), the FakeTranslator
+// (deterministic, shipped-by-default), and the query.Service the server's
+// POST /query handler drives. The typed DSL + compiler + executor live beside it
+// (dsl.go, whitelist.go, compile.go, execute.go); this file consumes those
+// symbols (Query, Compile, Execute, Result, ColumnMeta, ReadOnlyRunner) by their
+// pinned signatures and can only ever emit whitelisted identifiers, because
+// every Query it produces is re-validated by Compile.
 package query
 
 import (
@@ -37,6 +38,7 @@ var ErrUntranslatable = errors.New("query: could not understand the question")
 var ExampleQuestions = []string{
 	"trial balance",
 	"balances by group",
+	"closing balances",
 	"sales this month",
 	"sales this quarter",
 	"sales this year",
@@ -112,6 +114,19 @@ func (f FakeTranslator) ToQuery(_ context.Context, _ uuid.UUID, nl string) (Quer
 	switch {
 	case norm == "":
 		return Query{}, ErrUntranslatable
+
+	// Closing balances -> the OPENING-FOLDED ledger position (closing_net),
+	// which reconciles with the Trial Balance report per ledger. Matched BEFORE
+	// the trial-balance case so a phrasing like "trial balance closing" resolves
+	// to closing_net rather than the movement-only debit/credit columns.
+	case contains(norm, "closing"):
+		return Query{
+			Entity:     "ledger_balances",
+			Metrics:    []Metric{{Func: "sum", Column: "closing_net", As: "closing"}},
+			Dimensions: []string{"ledger_name"},
+			OrderBy:    []OrderTerm{{Column: "ledger_name", Desc: false}},
+			Limit:      100,
+		}, nil
 
 	// Trial balance / balances grouped by account group.
 	case contains(norm, "trial balance") || contains(norm, "balances by group") || norm == "balances":

@@ -32,20 +32,75 @@ package query
 type valueType int
 
 const (
-	valueAny     valueType = iota // any string (names, like-patterns)
-	valueDate                     // ISO date YYYY-MM-DD
-	valueNature                   // ASSET | LIABILITY | INCOME | EXPENSE
-	valueDrCr                     // D | C
+	valueAny    valueType = iota // any string (names, like-patterns)
+	valueDate                    // ISO date YYYY-MM-DD
+	valueNature                  // ASSET | LIABILITY | INCOME | EXPENSE
+	valueDrCr                    // D | C
 )
 
-// metricCol describes a whitelisted numeric/metric source. expr is the constant
-// SQL fragment (a column reference or a fixed aggregate-friendly expression).
-// isMoney marks NUMERIC(19,4) money columns whose result is stringified via
-// StringFixed(4) so totals match report output to the paisa.
+// metricCol describes a whitelisted numeric/metric source.
+//
+//	rawExpr — the constant SQL fragment the compiler aggregates over. For a
+//	          plain metric this is a ROW-LEVEL expression (a bare column such as
+//	          "lb.debit", or a fixed CASE over row columns), and the compiler
+//	          wraps it: COALESCE(SUM(rawExpr),0) / MIN(rawExpr) / MAX(rawExpr) /
+//	          AVG(rawExpr). When preAgg is true, rawExpr is ALREADY a complete
+//	          aggregate expression and is emitted verbatim (sum only).
+//	aggs    — the CLOSED set of aggregate functions legal on this column. A nil
+//	          or missing entry is a hard reject, so every literal below states
+//	          its set EXPLICITLY (never relying on the zero value).
+//	isMoney — marks NUMERIC(19,4) money columns whose result is stringified via
+//	          StringFixed(4) so totals match report output to the paisa.
+//
+// NULL SEMANTICS (pinned, WS2). Only SUM is COALESCE'd to 0. MIN/MAX/AVG are
+// emitted bare, so a group in which every underlying value is SQL NULL yields
+// NULL, which execute.go renders as the EMPTY STRING in a column whose declared
+// type is "numeric". This is deliberate: 0 and "no data" are different answers
+// for a min/max/avg, and silently reporting 0.0000 would be a wrong number.
+// (Under the current schema vv.taxable_value/cgst/sgst/igst are NULLable and are
+// only populated when GST derivation ran, so this case is reachable.)
+//
+// AVG DENOMINATOR (pinned, WS2). Because rawExpr for ledger_balances "debit" and
+// "credit" is the BARE column (which keeps the SUM SQL byte-identical to the
+// pre-WS2 compiler), AVG over them uses the SQL denominator: ledgers with NO
+// ledger_balance row (no posted movement) are EXCLUDED from the average. The
+// "opening"/"closing_net" metrics COALESCE inside rawExpr, so their AVG counts
+// every ledger.
 type metricCol struct {
-	expr    string
+	rawExpr string
+	aggs    map[AggFunc]bool
+	preAgg  bool
 	isMoney bool
 }
+
+// sumOnly is the agg set for composite, PRE-AGGREGATED expressions (e.g. the
+// ledger_balances "net"), where a MIN/MAX/AVG has no meaningful row-level
+// operand. The closed-set rejection message is produced by the compiler.
+func sumOnly() map[AggFunc]bool { return map[AggFunc]bool{AggSum: true} }
+
+// numericAggs is the agg set for ROW-LEVEL numeric columns: all four numeric
+// aggregates are legal because the compiler wraps the raw expression itself.
+func numericAggs() map[AggFunc]bool {
+	return map[AggFunc]bool{AggSum: true, AggMin: true, AggMax: true, AggAvg: true}
+}
+
+// openingSignedExpr is the CONSTANT row-level signed opening balance, oriented
+// exactly like reporting.loadLedgerBalances (which adds the opening to Credit
+// when opening_dc='C' and to Debit otherwise; ledger.opening_dc is CHECK-
+// constrained to 'D'|'C', so the signed CASE is equivalent). Debit-positive.
+const openingSignedExpr = `CASE WHEN l.opening_dc='D' THEN l.opening_balance ELSE -l.opening_balance END`
+
+// closingNetExpr is the CONSTANT row-level closing position: signed opening plus
+// posted movement, debit-positive — i.e. reporting's (Debit - Credit) per ledger.
+//
+// The INNER COALESCEs are LOAD-BEARING, not decoration: ledger_balance's primary
+// key is (company_id, ledger_id) and a row only exists once something has been
+// posted, so the LEFT JOIN yields NULL debit/credit for every ledger with no
+// movement. Without COALESCE, NULL would propagate through the addition and SUM
+// would SKIP those rows entirely — silently vanishing the opening balance of
+// every unposted ledger (e.g. Capital, Opening Stock) and breaking the Trial
+// Balance reconciliation. Do not remove them.
+const closingNetExpr = `(` + openingSignedExpr + `) + COALESCE(lb.debit,0) - COALESCE(lb.credit,0)`
 
 // filterCol describes a whitelisted filter target: the constant SQL identifier,
 // the set of operators it accepts, and the value-type that constrains literals.
@@ -99,14 +154,26 @@ func dateOps() map[Op]bool {
 // entities is the closed registry. A nil lookup result is a hard reject.
 var entities = map[Entity]entityDef{
 	// ---------------------------------------------------------------------
-	// ledger_balances — current ledger balances (movement-only: posted
-	// debit/credit). All three tables are FORCE-RLS, so tenant-scoped. No
-	// version/delete guard needed (no vouchers involved).
+	// ledger_balances — ledger positions. All three tables are FORCE-RLS, so
+	// tenant-scoped. No version/delete guard needed (no vouchers involved).
 	//
-	// DIVERGENCE NOTE: unlike reporting.loadLedgerBalances, opening_balance is
-	// NOT folded in here — ledger_balances reflects POSTED movement only. A
-	// "balances by group" query may therefore differ from the Trial Balance
-	// report by the opening balances; this is pinned and documented.
+	// DIVERGENCE NOTE (updated by WS2 — the divergence is now CLOSABLE by the
+	// caller). Two families of metrics live here and they answer different
+	// questions:
+	//
+	//   - MOVEMENT-ONLY: "debit", "credit", "net" read ledger_balance alone, so
+	//     they report POSTED movement and EXCLUDE opening balances. A "balances
+	//     by group" query built on these still differs from the Trial Balance
+	//     report by exactly the opening balances. This is retained deliberately
+	//     ("what moved this period" is a real question) and remains the default.
+	//
+	//   - OPENING-FOLDED: "opening" (the signed opening balance) and
+	//     "closing_net" (signed opening + posted movement) mirror
+	//     reporting.loadLedgerBalances exactly. Selecting sum(closing_net)
+	//     CLOSES the divergence: per ledger it equals the Trial Balance row's
+	//     (Debit - Credit), and summed over all ledgers it is 0 for a balanced
+	//     book. This equivalence is pinned by an execute test whose oracle is
+	//     the independent reporting package.
 	// ---------------------------------------------------------------------
 	EntityLedgerBalances: {
 		skeleton: `ledger l
@@ -119,10 +186,18 @@ var entities = map[Entity]entityDef{
 			"nature":      "g.nature::text",
 		},
 		metrics: map[string]metricCol{
-			"debit":  {expr: "COALESCE(SUM(lb.debit),0)", isMoney: true},
-			"credit": {expr: "COALESCE(SUM(lb.credit),0)", isMoney: true},
-			// net is a fixed money expression; the user cannot pick the sign.
-			"net": {expr: "COALESCE(SUM(lb.debit),0) - COALESCE(SUM(lb.credit),0)", isMoney: true},
+			"debit":  {rawExpr: "lb.debit", aggs: numericAggs(), isMoney: true},
+			"credit": {rawExpr: "lb.credit", aggs: numericAggs(), isMoney: true},
+			// net is a fixed PRE-AGGREGATED money expression; the user cannot pick
+			// the sign, and there is no row-level operand a min/max/avg could
+			// apply to, so it is sum-only.
+			"net": {rawExpr: "COALESCE(SUM(lb.debit),0) - COALESCE(SUM(lb.credit),0)", aggs: sumOnly(), preAgg: true, isMoney: true},
+			// opening / closing_net fold the opening balance in (see the
+			// DIVERGENCE NOTE above). Both are row-level, so all four aggregates
+			// are legal: sum(closing_net) is the Trial Balance closing,
+			// min/max(opening) answer "largest opening balance" style questions.
+			"opening":     {rawExpr: openingSignedExpr, aggs: numericAggs(), isMoney: true},
+			"closing_net": {rawExpr: closingNetExpr, aggs: numericAggs(), isMoney: true},
 		},
 		filters: map[string]filterCol{
 			"ledger_name": {expr: "l.name", ops: nameOps(), valType: valueAny},
@@ -155,13 +230,23 @@ var entities = map[Entity]entityDef{
 			// user-controlled jsonb path.
 			"voucher_class": "COALESCE(vv.payload->>'class','')",
 			"month":         "to_char(vv.voucher_date,'YYYY-MM')",
-			"party_name":    "COALESCE(party.name,'')",
+			// CALENDAR quarter (Q1 = Jan-Mar), NOT the Indian financial-year
+			// quarter a CA reads on a GST return (where Q1 = Apr-Jun). Pinned
+			// deliberately and consistent with FakeTranslator.quarterRange, which
+			// is also calendar-based. Do not confuse with "this year", which IS
+			// the financial year (FakeTranslator.fyRange).
+			"quarter":    `to_char(vv.voucher_date,'YYYY-"Q"Q')`,
+			"year":       "to_char(vv.voucher_date,'YYYY')",
+			"party_name": "COALESCE(party.name,'')",
 		},
 		metrics: map[string]metricCol{
-			"taxable_value": {expr: "COALESCE(SUM(vv.taxable_value),0)", isMoney: true},
-			"cgst":          {expr: "COALESCE(SUM(vv.cgst),0)", isMoney: true},
-			"sgst":          {expr: "COALESCE(SUM(vv.sgst),0)", isMoney: true},
-			"igst":          {expr: "COALESCE(SUM(vv.igst),0)", isMoney: true},
+			// NOTE: these four columns are NULLable and are only stamped when GST
+			// derivation ran, so min/max/avg over a group of un-stamped vouchers
+			// returns SQL NULL -> "" on the wire (see metricCol's NULL SEMANTICS).
+			"taxable_value": {rawExpr: "vv.taxable_value", aggs: numericAggs(), isMoney: true},
+			"cgst":          {rawExpr: "vv.cgst", aggs: numericAggs(), isMoney: true},
+			"sgst":          {rawExpr: "vv.sgst", aggs: numericAggs(), isMoney: true},
+			"igst":          {rawExpr: "vv.igst", aggs: numericAggs(), isMoney: true},
 		},
 		filters: map[string]filterCol{
 			"voucher_type_name": {expr: "vt.name", ops: nameOps(), valType: valueAny},
@@ -193,9 +278,14 @@ var entities = map[Entity]entityDef{
 			"dr_cr":       "p.dr_cr::text",
 			"nature":      "g.nature::text",
 			"month":       "to_char(vv.voucher_date,'YYYY-MM')",
+			// CALENDAR quarter — see the vouchers entity's note.
+			"quarter": `to_char(vv.voucher_date,'YYYY-"Q"Q')`,
+			"year":    "to_char(vv.voucher_date,'YYYY')",
 		},
 		metrics: map[string]metricCol{
-			"amount": {expr: "COALESCE(SUM(p.amount),0)", isMoney: true},
+			// posting.amount is NOT NULL with CHECK (amount >= 0), so min/max/avg
+			// over it are always defined.
+			"amount": {rawExpr: "p.amount", aggs: numericAggs(), isMoney: true},
 		},
 		filters: map[string]filterCol{
 			"ledger_name":  {expr: "l.name", ops: nameOps(), valType: valueAny},
@@ -235,7 +325,10 @@ var entities = map[Entity]entityDef{
 			"nature":      "g.nature::text",
 		},
 		// "pending" is special-cased by the compiler (sign depends on the nature
-		// filter); count(*) is handled generically. Expose only count here.
+		// filter) BEFORE this map is consulted, and is SUM-ONLY: min/max/avg over
+		// a sign-flipped allocation amount is not a meaningful figure, so the
+		// compiler rejects them there. count(*) is handled generically. This map
+		// therefore stays empty by design — it is not an oversight.
 		metrics: map[string]metricCol{},
 		filters: map[string]filterCol{
 			"nature":      {expr: "g.nature::text", ops: map[Op]bool{OpEq: true}, valType: valueNature},

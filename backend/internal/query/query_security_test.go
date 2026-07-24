@@ -109,6 +109,86 @@ func TestSecurity_InjectionInEveryStringField(t *testing.T) {
 			OrderBy:    []query.OrderTerm{{Column: p}}}); err == nil {
 			t.Errorf("order-by payload %q was not rejected", p)
 		}
+		// (g) payload as Dimension -> rejected (unknown dimension). Dimensions are
+		// concatenated into both the SELECT list and the GROUP BY, so this is the
+		// second identifier-injection surface after Metric.Column.
+		if _, err := query.Execute(ctx, pool, query.Query{Entity: query.EntityVouchers,
+			Dimensions: []string{p}}); err == nil {
+			t.Errorf("dimension payload %q was not rejected", p)
+		}
+
+		// ------------------------------------------------------------------
+		// WS2 WIDENED SURFACE. min/max/avg and the quarter/year buckets added a
+		// new set of places a hostile identifier could reach the SQL text; the
+		// spray covers every one of them.
+		// ------------------------------------------------------------------
+
+		// (h) payload as Metric.Column under EACH new aggregate -> rejected. The
+		// whitelist lookup must happen BEFORE the aggregate wrapper is built, so
+		// there is no MIN(<payload>) / AVG(<payload>) path.
+		for _, fn := range []query.AggFunc{query.AggMin, query.AggMax, query.AggAvg} {
+			for _, ent := range []query.Entity{query.EntityVouchers, query.EntityPostings, query.EntityLedgerBalances} {
+				if _, err := query.Execute(ctx, pool, query.Query{Entity: ent,
+					Metrics: []query.Metric{{Func: fn, Column: p}}}); err == nil {
+					t.Errorf("%s metric column payload %q on %s was not rejected", fn, p, ent)
+				}
+			}
+		}
+		// (i) payload as the AGGREGATE FUNCTION itself, on a VALID column ->
+		// rejected (unknown aggregate function), never concatenated as "<p>(col)".
+		for _, col := range []string{"taxable_value", "cgst"} {
+			if _, err := query.Execute(ctx, pool, query.Query{Entity: query.EntityVouchers,
+				Metrics: []query.Metric{{Func: query.AggFunc(p), Column: col}}}); err == nil {
+				t.Errorf("aggregate-function payload %q (column %q) was not rejected", p, col)
+			}
+		}
+		// (j) payload as a filter VALUE on a query that groups by the NEW
+		// quarter/year buckets and aggregates with the NEW functions -> must
+		// execute with the payload as a harmless bound param and return 0 rows.
+		for _, dim := range []string{"quarter", "year"} {
+			res, err := query.Execute(ctx, pool, query.Query{Entity: query.EntityPostings,
+				Dimensions: []string{dim},
+				Metrics: []query.Metric{
+					{Func: query.AggMin, Column: "amount", As: "lo"},
+					{Func: query.AggAvg, Column: "amount", As: "mean"},
+				},
+				Filters: []query.Filter{{Column: "ledger_name", Op: query.OpEq, Values: []string{p}}}})
+			if err != nil {
+				t.Errorf("%s bucket + min/avg with filter payload %q errored (should be a harmless param): %v", dim, p, err)
+			} else if len(res.Rows) != 0 {
+				t.Errorf("%s bucket + min/avg with filter payload %q matched %d rows, expected 0", dim, p, len(res.Rows))
+			}
+		}
+		// (k) payload as OrderBy on a query that DOES select quarter/year ->
+		// still rejected: the emitted-name set is the only legal order target.
+		for _, dim := range []string{"quarter", "year"} {
+			if _, err := query.Execute(ctx, pool, query.Query{Entity: query.EntityVouchers,
+				Dimensions: []string{dim},
+				Metrics:    []query.Metric{{Func: query.AggMax, Column: "igst", As: "hi"}},
+				OrderBy:    []query.OrderTerm{{Column: p}}}); err == nil {
+				t.Errorf("order-by payload %q alongside the %q bucket was not rejected", p, dim)
+			}
+		}
+		// (l) payload as Metric.Column on the OPENING-FOLDED ledger_balances
+		// metrics' entity, and payload as an alias on a real opening metric. The
+		// alias is user-influenced, so prove it is sanitised, not concatenated.
+		res, err = query.Execute(ctx, pool, query.Query{Entity: query.EntityLedgerBalances,
+			Dimensions: []string{"ledger_name"},
+			Metrics:    []query.Metric{{Func: query.AggSum, Column: "closing_net", As: p}}})
+		if err != nil {
+			// A payload that sanitises to the empty alias is legitimately rejected.
+			if !query.IsCompileError(err) {
+				t.Errorf("closing_net with alias payload %q gave a non-compile error: %v", p, err)
+			}
+		} else if len(res.Columns) > 0 {
+			for _, c := range res.Columns {
+				for _, bad := range []string{";", "'", "\"", "--", "/*", "(", ")", " "} {
+					if strings.Contains(c.Name, bad) {
+						t.Errorf("alias payload %q survived sanitisation as column name %q", p, c.Name)
+					}
+				}
+			}
+		}
 	}
 
 	// The database must be physically intact: the tables still exist and the row
@@ -225,6 +305,55 @@ func TestSecurity_UnknownEntityColumnOpRejected(t *testing.T) {
 		if _, err := query.Execute(ctx, pool, q); err == nil || !query.IsCompileError(err) {
 			t.Errorf("case %d: expected CompileError, got %v", i, err)
 		}
+	}
+}
+
+// TestSecurity_WidenedSurfaceClosedSet is the explicit closed-set gate for the
+// WS2 widening, executed against the LIVE database so a leak would have to be
+// caught by Postgres rather than merely by the compiler's unit tests. Each case
+// must be a CompileError (never a DB error, never a success), and the physical
+// tables must be untouched afterwards.
+//
+// NON-VACUOUS: dropping the per-column agg set (so min/max/avg were allowed
+// everywhere) makes cases 0-3 succeed; adding quarter/year to ledger_balances,
+// which has no vv join, makes case 4-5 produce a DATABASE error instead of a
+// CompileError — both flip an assertion.
+func TestSecurity_WidenedSurfaceClosedSet(t *testing.T) {
+	pool, ctx, companyID, ids := setupCompany(t, "WidenSec Co")
+	seedSales(t, pool, ctx, ids)
+
+	ledgerBefore := rawCount(t, "ledger", companyID)
+	voucherBefore := rawCount(t, "voucher_version", companyID)
+
+	cases := []query.Query{
+		// 0-2: min/max/avg on the pre-aggregated composite `net`.
+		{Entity: query.EntityLedgerBalances, Metrics: []query.Metric{{Func: query.AggMin, Column: "net"}}},
+		{Entity: query.EntityLedgerBalances, Metrics: []query.Metric{{Func: query.AggMax, Column: "net"}}},
+		{Entity: query.EntityLedgerBalances, Metrics: []query.Metric{{Func: query.AggAvg, Column: "net"}}},
+		// 3: min on the sign-oriented outstandings `pending`.
+		{Entity: query.EntityOutstandings, Dimensions: []string{"ledger_name"},
+			Metrics: []query.Metric{{Func: query.AggMin, Column: "pending"}}},
+		// 4-5: the voucher-date buckets on an entity with no voucher_date join.
+		{Entity: query.EntityLedgerBalances, Dimensions: []string{"quarter"}},
+		{Entity: query.EntityLedgerBalances, Dimensions: []string{"year"}},
+		// 6: the opening-folded metrics do NOT exist on other entities.
+		{Entity: query.EntityPostings, Metrics: []query.Metric{{Func: query.AggSum, Column: "closing_net"}}},
+		// 7: an unknown aggregate name on a valid widened column.
+		{Entity: query.EntityPostings, Metrics: []query.Metric{{Func: "median", Column: "amount"}}},
+		// 8: a SQL-shaped aggregate name.
+		{Entity: query.EntityPostings, Metrics: []query.Metric{{Func: "sum(1),(SELECT 1)--", Column: "amount"}}},
+	}
+	for i, q := range cases {
+		if _, err := query.Execute(ctx, pool, q); err == nil || !query.IsCompileError(err) {
+			t.Errorf("case %d (%+v): expected CompileError, got %v", i, q, err)
+		}
+	}
+
+	if got := rawCount(t, "ledger", companyID); got != ledgerBefore {
+		t.Fatalf("ledger row count changed: before=%d after=%d", ledgerBefore, got)
+	}
+	if got := rawCount(t, "voucher_version", companyID); got != voucherBefore {
+		t.Fatalf("voucher_version row count changed: before=%d after=%d", voucherBefore, got)
 	}
 }
 

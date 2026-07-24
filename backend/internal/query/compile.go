@@ -262,24 +262,38 @@ func metricExpr(entity Entity, def entityDef, m Metric, payable bool) (string, s
 			}
 			return outstandingPendingExpr(payable), "numeric", nil
 		}
+		// CLOSED-SET DISCIPLINE: the whitelist lookup happens BEFORE any
+		// expression is built, and the per-column agg set is consulted before the
+		// aggregate wrapper is chosen. No branch below can fall through to
+		// string-building on an unknown column or an unknown/ disallowed agg.
 		mc, ok := def.metrics[m.Column]
 		if !ok {
 			return "", "", compileErrf("unknown metric column %q for entity %q", m.Column, string(entity))
 		}
-		// The whitelist metric expr for sum already wraps SUM(...). For min/max/
-		// avg we wrap the underlying column reference. To keep this simple and
-		// fully whitelisted, we only support SUM over the pre-aggregated money
-		// expressions; min/max/avg apply to the same money columns via a derived
-		// inner reference. We reject min/max/avg to avoid emitting an
-		// un-whitelisted nested expression.
-		if m.Func != AggSum {
+		if !mc.aggs[m.Func] {
 			return "", "", compileErrf("%s is not supported on column %q", string(m.Func), m.Column)
 		}
-		colType := "numeric"
-		if !mc.isMoney {
-			colType = "numeric"
+		// Every fragment concatenated below is a CONSTANT from whitelist.go
+		// (mc.rawExpr) plus a literal function name chosen by this switch — never
+		// anything derived from the request.
+		switch m.Func {
+		case AggSum:
+			if mc.preAgg {
+				// rawExpr is already a complete aggregate expression.
+				return mc.rawExpr, "numeric", nil
+			}
+			return "COALESCE(SUM(" + mc.rawExpr + "),0)", "numeric", nil
+		case AggMin:
+			return "MIN(" + mc.rawExpr + ")", "numeric", nil
+		case AggMax:
+			return "MAX(" + mc.rawExpr + ")", "numeric", nil
+		case AggAvg:
+			return "AVG(" + mc.rawExpr + ")", "numeric", nil
+		default:
+			// Unreachable given the enclosing case, but a hard reject rather than
+			// a fall-through keeps the closed set structurally enforced.
+			return "", "", compileErrf("unknown aggregate function %q", string(m.Func))
 		}
-		return mc.expr, colType, nil
 	default:
 		return "", "", compileErrf("unknown aggregate function %q", string(m.Func))
 	}
