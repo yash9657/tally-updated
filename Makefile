@@ -34,12 +34,31 @@ frontend-install: ## Install frontend deps
 	cd frontend && pnpm install --frozen-lockfile || cd frontend && pnpm install
 
 frontend-test: frontend-install ## Frontend unit tests (XState keystroke machine)
-	cd frontend && pnpm test -- --run
+	# `pnpm test` is `vitest` = WATCH mode: under pnpm 9 the `-- --run` forwarding
+	# no longer reaches vitest, so this target used to hang forever and `make
+	# verify` could never complete. Call the explicit one-shot script instead.
+	cd frontend && pnpm run test:run
 
 frontend-build: frontend-install ## Type-check + build frontend
 	cd frontend && pnpm build
 
-verify: dev-db migrate backend-build backend-test frontend-test ## Run ALL Phase-0 gates locally
-	@echo "\n✅ Phase-0 verification gates passed"
+corpora-verify: ## Independently re-derive the golden tax corpora (no deps beyond stdlib python3)
+	python3 corpora/validate.py
 
-.PHONY: help dev-db dev-db-down migrate backend-build backend-test frontend-install frontend-test frontend-build verify
+# insightd's pytest suite is the Python plane's gate. Its deps live in a venv
+# that is NOT required to exist (a Go-only contributor must still be able to run
+# `make verify`), so this target SKIPS loudly rather than failing when the venv
+# is absent. CI installs the deps, so CI never takes the skip path.
+insightd-test: ## insightd pytest (SKIPS loudly when insightd/.venv is absent)
+	@if [ -x insightd/.venv/bin/python ]; then \
+		cd insightd && .venv/bin/python -m pytest -q; \
+	else \
+		echo "*** SKIP insightd-test: insightd/.venv/bin/python not found."; \
+		echo "***   create it with: python3 -m venv insightd/.venv && insightd/.venv/bin/pip install -r insightd/requirements.txt"; \
+		echo "***   (the insightd plane is therefore NOT verified by this run)"; \
+	fi
+
+verify: dev-db migrate backend-build backend-test frontend-test corpora-verify insightd-test ## Run ALL local gates (Go + frontend + corpora + insightd)
+	@echo "\n✅ verification gates passed (see any SKIP lines above for planes not covered)"
+
+.PHONY: help dev-db dev-db-down migrate backend-build backend-test frontend-install frontend-test frontend-build corpora-verify insightd-test verify

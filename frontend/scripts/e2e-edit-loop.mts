@@ -14,13 +14,16 @@
  *   - numbering/date preserved: the alter resends INV-1 / 2025-04-10 and the
  *     Day Book still shows exactly ONE entry with that number/date.
  *   - DELETE drops the voucher: trial balance total_debit -> 0, Day Book empty.
+ *   - DELETE is IDEMPOTENT: a retried DELETE returns the SAME tombstone
+ *     (voucher_version_id / version_no / voucher_no unchanged), not a new one.
+ *   - ALTER of a DELETED voucher is a 404 — never a silent resurrection.
  *
  * Exit 0 with "e2e-edit OK" on success; exit 1 with "expected vs actual" on the
  * first failed assertion. The integrator runs the live pass; this file only has
  * to be runnable + correct (we do NOT start cored here).
  */
 
-import { createRestClient } from "../src/api";
+import { ApiError, createRestClient } from "../src/api";
 import { authHeaders } from "./auth.mjs";
 
 const baseUrl =
@@ -156,6 +159,66 @@ async function main(): Promise<void> {
     (e) => e.voucher_id === voucherID,
   );
   assertEqual("day book has zero entries for the deleted voucher", remaining.length, 0);
+
+  // Step 9: DELETE POLICY — re-deleting is an IDEMPOTENT no-op (retry safety for
+  // flaky clients / offline replay). The server must echo the EXISTING tombstone
+  // rather than stacking a second one, so every identity field is unchanged.
+  const reDeleted = await client.deleteVoucher(companyUUID, voucherID);
+  assertEqual("re-delete op === DELETE", reDeleted.op, "DELETE");
+  assertEqual("re-delete voucher_id unchanged", reDeleted.voucher_id, deleted.voucher_id);
+  assertEqual(
+    "re-delete echoes the SAME tombstone version id (no new version)",
+    reDeleted.voucher_version_id,
+    deleted.voucher_version_id,
+  );
+  assertEqual(
+    "re-delete does not bump version_no",
+    reDeleted.version_no,
+    deleted.version_no,
+  );
+  assertEqual("re-delete voucher_no unchanged", reDeleted.voucher_no, deleted.voucher_no);
+
+  const tbReDeleted = await client.getTrialBalance(companyUUID);
+  assertEqual(
+    "post-re-delete total_debit still 0.0000",
+    tbReDeleted.total_debit,
+    "0.0000",
+  );
+
+  // Step 10: DELETE POLICY — ALTERing a deleted voucher is a 404, never a silent
+  // resurrection. The read path (GET) already 404s a tombstoned voucher; the
+  // write path must agree.
+  let alterStatus: number | string = "no error thrown";
+  try {
+    await client.alterSalesVoucher(companyUUID, voucherID, {
+      party_ledger_id: debtor.ledger_id,
+      voucher_no: VOUCHER_NO,
+      voucher_date: VOUCHER_DATE,
+      party: "Acme Corp",
+      postings: [
+        { ledger_id: debtor.ledger_id, dr_cr: "DR", amount: "9999.0000" },
+        { ledger_id: sales.ledger_id, dr_cr: "CR", amount: "9999.0000" },
+      ],
+    });
+  } catch (err) {
+    alterStatus = err instanceof ApiError ? err.status : `non-ApiError: ${String(err)}`;
+  }
+  assertEqual("alter of a DELETED voucher rejects with 404", alterStatus, 404);
+
+  // ...and the refusal changed nothing: the books stay flat (a resurrection
+  // would put 9999 back) and the day book stays empty for this voucher.
+  const tbAfterRefusedAlter = await client.getTrialBalance(companyUUID);
+  assertEqual(
+    "refused alter must not resurrect the voucher (total_debit still 0.0000)",
+    tbAfterRefusedAlter.total_debit,
+    "0.0000",
+  );
+  const dayBookAfterRefusedAlter = await client.getDayBook(companyUUID);
+  assertEqual(
+    "day book still has zero entries after the refused alter",
+    dayBookAfterRefusedAlter.entries.filter((e) => e.voucher_id === voucherID).length,
+    0,
+  );
 
   console.log("e2e-edit OK");
   process.exit(0);

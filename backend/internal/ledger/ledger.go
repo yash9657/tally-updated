@@ -265,7 +265,9 @@ func (s *Service) HeadVersion(ctx context.Context, voucherID uuid.UUID) (int, bo
 // AlterVoucher appends a NEW version (op ALTER) to an existing logical voucher,
 // chaining onto the latest version's hash. The prior version is never mutated —
 // immutability is preserved and the edit is auditable. It errors with
-// ErrVoucherNotFound when the voucher_id has no existing head row.
+// ErrVoucherNotFound when the voucher_id has no existing head row, AND when the
+// head row is tombstoned (is_deleted): altering a deleted voucher is a 404, not
+// a silent resurrection — see the policy note in post().
 func (s *Service) AlterVoucher(ctx context.Context, voucherID uuid.UUID, in VoucherInput) (PostResult, error) {
 	res, err := s.post(ctx, voucherID, OpAlter, in)
 	if err != nil {
@@ -300,6 +302,14 @@ func (s *Service) raiseFreezeRecon(ctx context.Context, voucherID uuid.UUID, op 
 // VoucherInput because the body is, by definition, empty.
 //
 // It errors with ErrVoucherNotFound when no voucher_head row exists for the id.
+//
+// DELETE is IDEMPOTENT: deleting an already-tombstoned voucher writes nothing
+// and returns the EXISTING tombstone's PostResult (same voucher_version_id /
+// version_no / voucher_no / hash), so a retried delete is indistinguishable from
+// the first for the caller. NOTE (pre-existing shape): the head probe and the
+// tombstone write run in two separate transactions, so two DELETEs racing
+// between them can still stack one extra tombstone — the guarantee is
+// retry-safety, not serialisable exactly-once.
 func (s *Service) DeleteVoucher(ctx context.Context, voucherID uuid.UUID, createdBy string) (PostResult, error) {
 	companyID, ok := db.CompanyFromContext(ctx)
 	if !ok {
@@ -311,26 +321,55 @@ func (s *Service) DeleteVoucher(ctx context.Context, voucherID uuid.UUID, create
 	// not exist (or was never created) — surface ErrVoucherNotFound rather than
 	// letting post() mint a phantom version 1.
 	var in VoucherInput
+	// tombstone is the already-committed tombstone's identity, populated only when
+	// the head is ALREADY deleted (the idempotent-re-delete case below).
+	var tombstone PostResult
+	var alreadyDeleted bool
 	err := s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		var (
-			class string
-			vtID  *uuid.UUID
-			vNo   *string
-			vDate *string
+			class     string
+			vtID      *uuid.UUID
+			vNo       *string
+			vDate     *string
+			isDeleted bool
+			versionNo int
+			curVerID  uuid.UUID
+			curHash   []byte
 		)
 		err := tx.QueryRow(ctx,
 			`SELECT COALESCE(vv.payload->>'class', ''),
 			        vv.voucher_type_id, vv.voucher_no,
-			        to_char(vv.voucher_date, 'YYYY-MM-DD')
+			        to_char(vv.voucher_date, 'YYYY-MM-DD'),
+			        vh.is_deleted, vh.version_no, vv.id, vv.hash
 			   FROM voucher_head vh
 			   JOIN voucher_version vv ON vv.id = vh.current_version_id
 			  WHERE vh.company_id = $1 AND vh.voucher_id = $2`,
-			companyID, voucherID).Scan(&class, &vtID, &vNo, &vDate)
+			companyID, voucherID).Scan(&class, &vtID, &vNo, &vDate,
+			&isDeleted, &versionNo, &curVerID, &curHash)
 		switch {
 		case errors.Is(err, pgx.ErrNoRows):
 			return ErrVoucherNotFound
 		case err != nil:
 			return fmt.Errorf("ledger: read voucher for delete: %w", err)
+		}
+		if isDeleted {
+			// DELETE POLICY (WS9): re-deleting an already-tombstoned voucher is an
+			// IDEMPOTENT NO-OP. Stacking a second tombstone would append a version
+			// that reverses an empty posting set — pure audit-log noise that also
+			// makes retry-safety (flaky clients, offline replay) impossible to
+			// reason about. Echo the EXISTING tombstone's identity instead so the
+			// caller sees the same body it saw for the first DELETE.
+			alreadyDeleted = true
+			tombstone = PostResult{
+				VoucherID:        voucherID,
+				VoucherVersionID: curVerID,
+				VersionNo:        versionNo,
+				Hash:             curHash,
+			}
+			if vNo != nil {
+				tombstone.VoucherNo = *vNo
+			}
+			return nil
 		}
 		in.Class = Class(class)
 		if vtID != nil {
@@ -346,6 +385,9 @@ func (s *Service) DeleteVoucher(ctx context.Context, voucherID uuid.UUID, create
 	})
 	if err != nil {
 		return PostResult{}, err
+	}
+	if alreadyDeleted {
+		return tombstone, nil
 	}
 
 	in.CreatedBy = createdBy
@@ -666,11 +708,28 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 		// the current version of a voucher contributes to the running balance;
 		// voucher_head tracks which version that is (the log stays append-only).
 		var priorCurrentID uuid.UUID
+		var priorDeleted bool
 		switch err := tx.QueryRow(ctx,
-			`SELECT current_version_id FROM voucher_head
+			`SELECT current_version_id, is_deleted FROM voucher_head
 			  WHERE company_id = $1 AND voucher_id = $2`,
-			companyID, voucherID).Scan(&priorCurrentID); {
+			companyID, voucherID).Scan(&priorCurrentID, &priorDeleted); {
 		case err == nil:
+			// DELETE/ALTER POLICY (WS9). A tombstoned head is NOT a live voucher:
+			// GetVoucher already 404s it, so an ALTER must agree rather than
+			// silently resurrecting it (the head upsert below sets
+			// is_deleted = (op == OpDelete), which would flip a tombstone back to
+			// live). Resurrection must be an explicit future "restore" feature,
+			// never an accidental side effect of an edit.
+			//
+			// Scoped to OpAlter ON PURPOSE:
+			//   * OpDelete of a tombstoned voucher is an idempotent no-op, and is
+			//     short-circuited earlier in DeleteVoucher — it must not 404 here.
+			//   * OpCreate re-posting a tombstoned id keeps its existing behaviour
+			//     (the sequencer's applyCreate already reports StatusDuplicate for
+			//     any existing head, live or tombstoned).
+			if op == OpAlter && priorDeleted {
+				return ErrVoucherNotFound
+			}
 			// FREEZE-ON-EXTERNAL-REFERENCE gate. The head exists, so this is an
 			// ALTER/DELETE of a real voucher (OpCreate also reaches this arm only
 			// when re-creating an existing id, which the guard below excludes).
