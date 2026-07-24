@@ -59,6 +59,13 @@ class Settings(BaseSettings):
     # rejected at startup unless an explicit DEV override env is also set.
     pii_boundary_strict: bool = True
 
+    # Draft-store selection (env INSIGHTD_DATABASE_URL). Unset/empty -> the
+    # in-memory DraftStore (the default; drafts die with the process). Set to a
+    # Postgres DSN -> the RLS-scoped PGDraftStore, so drafts survive a restart.
+    # psycopg is an OPTIONAL extra (requirements-db.txt), lazy-imported only
+    # when this is set — the testable core keeps zero db deps.
+    database_url: str | None = None
+
     # Pinned model ids surfaced on Settings for adapters to read.
     classifier_model: str = CLASSIFIER_MODEL
     inferencer_model: str = INFERENCER_MODEL

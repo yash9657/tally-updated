@@ -1,0 +1,15 @@
+# insightd OPTIONAL db extra — the Postgres-backed DraftStore (PGDraftStore).
+#
+# NOT installed by CI and NOT imported by the testable core: psycopg is
+# lazy-imported inside insightd/api/pg_store.py's methods, and pg_store itself
+# is only imported when INSIGHTD_DATABASE_URL is set (see api/deps.py). With no
+# DSN configured insightd runs the in-memory DraftStore and never touches this.
+#
+# Install with:  pip install -r requirements-db.txt
+#
+# [binary] pulls the prebuilt libpq wheel so no local Postgres client/build
+# toolchain is needed. Deliberately NOT psycopg[pool]: PGDraftStore opens one
+# short-lived connection per operation (the draft routes are sync `def`s served
+# from Starlette's threadpool, so a single shared connection would not be
+# thread-safe), which keeps the dependency set minimal.
+psycopg[binary]>=3.1,<4
