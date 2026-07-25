@@ -94,8 +94,13 @@ function clearPersistedCompanyId(): void {
 }
 
 /** True for a 404 from the API (the persisted company no longer exists). */
-function isNotFound(err: unknown): boolean {
-  return err instanceof ApiError && err.status === 404;
+// A PERSISTED bootstrap id is UNUSABLE — drop it and mint a fresh company —
+// when the server says it does not exist (404) OR the caller is not a member of
+// it (403). The 403 case happens after switching backends, wiping the DB, or
+// carrying over an id minted by the in-memory mock. Only a genuine transport/5xx
+// error still fails closed (below), because there the id may well be fine.
+function isUnusablePersistedId(err: unknown): boolean {
+  return err instanceof ApiError && (err.status === 404 || err.status === 403);
 }
 
 function persistCompanyId(id: string): void {
@@ -153,8 +158,8 @@ export function CompanyProvider({
           }
           return;
         } catch (err) {
-          if (!isNotFound(err)) {
-            // FAIL CLOSED on a transport/permission failure. Selecting the
+          if (!isUnusablePersistedId(err)) {
+            // FAIL CLOSED on a genuine transport/5xx failure. Selecting the
             // company with a GUESSED home state is the dangerous option: the
             // client would build (say) IGST postings while the server derived
             // CGST+SGST from the real company.state_code and rejected the post
@@ -163,9 +168,10 @@ export function CompanyProvider({
             bootstrapped.current = false;
             return;
           }
-          // 404: the persisted id names a company that no longer exists (fresh
-          // backend, wiped DB, different environment). Drop it and mint a new
-          // one below rather than wedging the app on a dead id.
+          // 404/403: the persisted id names a company that no longer exists or
+          // that this caller cannot access (fresh backend, wiped DB, different
+          // environment, or an id carried over from the in-memory mock). Drop it
+          // and mint a new one below rather than wedging the app on a dead id.
           clearPersistedCompanyId();
         }
       }

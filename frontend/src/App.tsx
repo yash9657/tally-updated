@@ -39,11 +39,56 @@ export function App({
   );
 }
 
-/** Pick the REST client when a base URL is configured, else the mock. */
+/** Pick the client: live (same-origin dev proxy + auto-auth) > explicit base URL
+ * > in-memory mock. VITE_LIVE=1 turns on the auto-authenticating live client that
+ * the Vite dev proxy forwards to cored/insightd (see vite.config.ts). */
 function defaultClient(): CoredClient {
   const env = (import.meta as unknown as { env?: Record<string, string> }).env;
+  if (env?.VITE_LIVE) {
+    // Same-origin (baseUrl "") so requests go through the dev proxy; a fetch
+    // wrapper lazily mints + attaches a dev owner token (auth is fail-closed).
+    return createRestClient({ baseUrl: "", fetchImpl: devAuthedFetch() });
+  }
   if (env?.VITE_CORED_BASE_URL) {
     return createRestClient({ baseUrl: env.VITE_CORED_BASE_URL });
   }
   return createMockClient();
+}
+
+/**
+ * DEV ONLY. A fetch that lazily mints a dev owner token from `/auth/token` (once,
+ * cached) and attaches it as a Bearer on every subsequent call — cored is
+ * fail-closed, so an unauthenticated request 401s. The stable subject makes the
+ * caller the Owner of the company the bootstrap creates (create-on-first-login),
+ * and `amr:["webauthn"]` satisfies the write step-up so vouchers post. This
+ * mirrors the CLI/e2e `auth.mjs` path; it is never used in the built app or tests.
+ */
+function devAuthedFetch(): typeof fetch {
+  let tokenPromise: Promise<string> | null = null;
+  const getToken = () => {
+    if (!tokenPromise) {
+      tokenPromise = fetch("/auth/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subject: "browser-dev-owner", amr: ["webauthn"] }),
+      })
+        .then((r) => r.json())
+        .then((d) => d.token as string);
+    }
+    return tokenPromise;
+  };
+  return async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+    // The token-mint call itself is unauthenticated.
+    if (url.includes("/auth/token")) return fetch(input, init);
+    const token = await getToken();
+    const headers = new Headers(init.headers ?? {});
+    headers.set("Authorization", `Bearer ${token}`);
+    return fetch(input, { ...init, headers });
+  };
 }
