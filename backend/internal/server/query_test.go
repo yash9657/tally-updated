@@ -224,6 +224,42 @@ func TestQueryUnknownEntityIs422(t *testing.T) {
 	}
 }
 
+// TestQueryNLTranslatorUnavailableIs503 is the wave-2 WS1 boot-matrix gate: with
+// a (dummy) ANTHROPIC_API_KEY set, buildTranslator selects the real-Claude
+// adapter; pointing QUERY_TRANSLATOR_BASE_URL at a guaranteed-dead loopback port
+// makes every NL translation fail with nlq.ErrTranslatorUnavailable, which the
+// handler must map to 503 (an operator fault) — distinct from the 422 an
+// untranslatable question returns. A typed DSL bypasses the translator entirely,
+// so it still succeeds (200), proving the escape hatch works when the LLM is down.
+//
+// NON-PARALLEL by construction: t.Setenv mutates process-wide env (ANTHROPIC_API_KEY,
+// QUERY_TRANSLATOR_BASE_URL) that must be set BEFORE newServer builds the Service.
+// Port 1 on loopback refuses immediately (copying the JWKS dead-endpoint idiom),
+// so the client cannot hang on its 15s timeout.
+func TestQueryNLTranslatorUnavailableIs503(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "dummy-key-for-test")
+	t.Setenv("QUERY_TRANSLATOR_BASE_URL", "http://127.0.0.1:1")
+
+	srv := newServer(t)
+	base := seedSalesCompany(t, srv)
+
+	// NL path -> translator called -> dead upstream -> 503.
+	rec, body := do(t, srv, http.MethodPost, base+"/query", map[string]any{"nl": "total sales this quarter"})
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("nl with dead translator status = %d, want 503 (body %s)", rec.Code, rec.Body.String())
+	}
+	if msg, _ := body["error"].(string); msg == "" || strings.Contains(strings.ToLower(msg), "sql") {
+		t.Fatalf("503 error message %q is empty or leaks sql", msg)
+	}
+
+	// DSL path -> translator NOT called -> still 200 (typed DSL is the documented
+	// fallback when the LLM is unavailable).
+	rec2, _ := do(t, srv, http.MethodPost, base+"/query", salesByMonthDSL())
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("dsl with dead translator status = %d, want 200 (DSL bypasses the LLM) (body %s)", rec2.Code, rec2.Body.String())
+	}
+}
+
 // TestQueryOwnerAllowed asserts an Owner (default_access full) is permitted to
 // query — proving the routeAction POST /query -> Display/query mapping is wired
 // (an unmapped route default-denies with 403). A custom level that DISALLOWS

@@ -48,6 +48,12 @@ var allowedDeps = map[string]map[string]bool{
 	// read-only, RLS-scoped tx. It imports the db layer and nothing else (the
 	// translator is a pure leaf; the real-Claude adapter is the documented swap).
 	"internal/query":       {"internal/platform/db": true},
+	// nlq (wave 2 WS1) is the real-Claude NL->DSL adapter — the ONLY query-path
+	// package that touches the network. It depends on query (the Query it emits +
+	// the Catalog it advertises) and NOTHING else (not even platform/db). The edge
+	// is ONE-WAY by design: query must stay a network-free pure leaf, so query
+	// never imports nlq (TestQueryPackageIsNetworkFree pins that).
+	"internal/nlq": {"internal/query": true},
 	// sync is the OFFLINE cloud-sequencer (Task C WS1): it commits offline node
 	// outbox intents through the ledger, assigning final numbers + resolving
 	// conflicts + reusing the freeze rule. It may import the ledger (the post/
@@ -80,6 +86,7 @@ var allowedDeps = map[string]map[string]bool{
 		"internal/masters":         true,
 		"internal/reporting":       true,
 		"internal/query":           true,
+		"internal/nlq":             true,
 		"internal/identity":        true,
 		"internal/compliance":      true,
 		"internal/compliance/gstr": true,
@@ -168,4 +175,56 @@ func TestInternalImportBoundaries(t *testing.T) {
 	if violations == 0 {
 		t.Log("import boundaries clean")
 	}
+}
+
+// networkPkgs is the denylist of standard-library packages that would let code
+// open a socket or spawn a process. internal/query is the SAFE read-only query
+// core and must reach the network through NOTHING but the (separate) internal/nlq
+// adapter — so none of its non-test source may import any of these.
+var networkPkgs = map[string]bool{
+	"net":      true,
+	"net/http": true,
+	"net/url":  true,
+	"net/rpc":  true,
+	"os/exec":  true,
+}
+
+// TestQueryPackageIsNetworkFree pins the security-critical invariant that the
+// query compiler/executor is a network-free pure leaf. Until wave 2 this was only
+// a prose comment; now it is enforced. Mutation check: temporarily add
+// `_ "net/http"` to any non-test file under internal/query and this test must go
+// red.
+func TestQueryPackageIsNetworkFree(t *testing.T) {
+	root := backendRoot(t)
+	queryRoot := filepath.Join(root, "internal", "query")
+	fset := token.NewFileSet()
+
+	var scanned int
+	err := filepath.Walk(queryRoot, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		f, perr := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
+		if perr != nil {
+			return perr
+		}
+		scanned++
+		for _, imp := range f.Imports {
+			ip := strings.Trim(imp.Path.Value, `"`)
+			if networkPkgs[ip] || strings.HasPrefix(ip, "net/") {
+				t.Errorf("internal/query must be network-free, but %s imports %q", filepath.Base(path), ip)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk internal/query: %v", err)
+	}
+	if scanned == 0 {
+		t.Fatal("scanned no internal/query source files — the walk is vacuous")
+	}
+	t.Logf("internal/query network-free across %d source files", scanned)
 }

@@ -49,6 +49,7 @@ export function QueryScreen(_props: ScreenComponentProps) {
   const [result, setResult] = useState<QueryResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [examples, setExamples] = useState<string[]>([]);
+  const [retryable, setRetryable] = useState(false);
   const [showHow, setShowHow] = useState(false);
 
   const run = useCallback(
@@ -58,6 +59,7 @@ export function QueryScreen(_props: ScreenComponentProps) {
       setLoading(true);
       setError(null);
       setExamples([]);
+      setRetryable(false);
       try {
         // Send ONLY the NL string. The server owns translation + compilation +
         // read-only execution; the frontend never builds SQL.
@@ -70,7 +72,16 @@ export function QueryScreen(_props: ScreenComponentProps) {
         setResult(null);
         if (e instanceof ApiError) {
           setError(e.message);
-          setExamples(examplesFromError(e));
+          // A 503 is an OPERATOR fault (the real-Claude translator upstream is
+          // down/misconfigured), NOT a bad question. Show a retry hint, and do
+          // NOT fall back to the canned example list — that would wrongly imply
+          // the question needs rephrasing.
+          if (e.status === 503) {
+            setExamples([]);
+            setRetryable(true);
+          } else {
+            setExamples(examplesFromError(e));
+          }
         } else {
           setError(e instanceof Error ? e.message : String(e));
         }
@@ -141,6 +152,12 @@ export function QueryScreen(_props: ScreenComponentProps) {
       {error ? (
         <div data-testid="query-error" className="mb-3 max-w-xl bg-tally-panel p-3">
           <p className="text-sm text-red-400">{error}</p>
+          {retryable ? (
+            <p data-testid="query-retry-hint" className="mt-2 text-xs text-tally-field">
+              The AI translator is temporarily unavailable. Retry in a moment, or
+              type a typed query (DSL) directly.
+            </p>
+          ) : null}
           {examples.length > 0 ? (
             <div className="mt-2 text-xs">
               <span className="text-tally-field">Try one of these: </span>

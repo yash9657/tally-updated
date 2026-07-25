@@ -41,6 +41,7 @@ import (
 	"github.com/khata/cored/internal/ledger"
 	"github.com/khata/cored/internal/masters"
 	"github.com/khata/cored/internal/migration"
+	"github.com/khata/cored/internal/nlq"
 	"github.com/khata/cored/internal/platform/db"
 	"github.com/khata/cored/internal/query"
 	"github.com/khata/cored/internal/reporting"
@@ -134,13 +135,12 @@ func New(ctx context.Context, appDSN string) (*Server, error) {
 		gstr:      gstr.NewService(pool),
 		importer:  migration.NewImporter(m, l),
 		sync:      sync.NewService(l, pool),
-		// Conversational query (Phase 3). The FakeTranslator is the deterministic,
-		// shipped-by-default NL->DSL mapper (a real-Claude adapter is the documented
-		// production swap, behind a key; this package never calls the network). Its
-		// clock is time.Now in production; tests construct their own Service/handler
-		// path with a fixed clock where determinism matters. Execution runs through
-		// the same read-only, company-GUC-scoped pool as every report.
-		query: query.NewService(pool, query.FakeTranslator{Now: time.Now}),
+		// Conversational query (Phase 3 + wave-2 WS1). buildTranslator selects the
+		// real-Claude adapter when ANTHROPIC_API_KEY is present, else the
+		// deterministic, shipped-by-default FakeTranslator. Either way the LLM emits
+		// ONLY the typed DSL; execution runs through the same read-only,
+		// company-GUC-scoped pool as every report, so the safety model is identical.
+		query: query.NewService(pool, buildTranslator()),
 		verifier:  verifier,
 		signer:    signer,
 		authStore: authzStore,
@@ -162,6 +162,31 @@ func envOr(name, def string) string {
 		return v
 	}
 	return def
+}
+
+// buildTranslator selects the NL->DSL translator (wave-2 WS1). With
+// ANTHROPIC_API_KEY set it returns the real-Claude adapter (nlq.ClaudeTranslator);
+// otherwise the deterministic FakeTranslator that ships by default. This mirrors
+// the insightd adapter pattern: the network translator is built ONLY when a key
+// is present, and it is the sole query-path code that touches the network.
+//
+//   - QUERY_TRANSLATOR_MODEL    overrides the model (default claude-haiku-4-5)
+//   - QUERY_TRANSLATOR_BASE_URL overrides the API host (proxy/gateway, and the
+//     test-injection seam — server_test.go points it at a dead loopback port to
+//     prove the 503 path without a network)
+//
+// Whatever Query the translator returns is re-validated by the query compiler and
+// executed read-only, so the safety model does not depend on which translator ran.
+func buildTranslator() query.Translator {
+	key := os.Getenv("ANTHROPIC_API_KEY")
+	if key == "" {
+		return query.FakeTranslator{Now: time.Now}
+	}
+	return &nlq.ClaudeTranslator{
+		APIKey:  key,
+		Model:   envOr("QUERY_TRANSLATOR_MODEL", nlq.DefaultModel),
+		BaseURL: envOr("QUERY_TRANSLATOR_BASE_URL", nlq.DefaultBaseURL),
+	}
 }
 
 // buildAuth selects the authentication mode FAIL-CLOSED. A stock binary with no
@@ -1563,8 +1588,17 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 	} else {
 		translated, err := s.query.Translate(ctx, companyID, req.NL)
 		if err != nil {
-			// Untranslatable (or any translator error): 422 with examples. Do not
-			// leak internal error text — the message is fixed and helpful.
+			// Operator fault first (wave-2 WS1): the real-Claude translator upstream
+			// is unreachable / misconfigured (dead key, bad model id, 429, 5xx). That
+			// is a 503 "retry or POST a typed dsl" — NOT a user's bad question. This
+			// branch MUST precede the 422 fallthrough so the existing NL tests, which
+			// exercise the FakeTranslator (never returning this error), stay identical.
+			if errors.Is(err, nlq.ErrTranslatorUnavailable) {
+				writeError(w, http.StatusServiceUnavailable, "translator unavailable; retry or POST a typed dsl")
+				return
+			}
+			// Untranslatable (or any other translator error): 422 with examples. Do
+			// not leak internal error text — the message is fixed and helpful.
 			writeQueryUntranslatable(w)
 			return
 		}

@@ -151,4 +151,31 @@ describe("QueryScreen (Ask your books)", () => {
     // No result table is shown on an error.
     expect(screen.queryByTestId("query-table")).toBeNull();
   });
+
+  it("on a 503 shows a retry hint, NOT the example-question list", async () => {
+    const query = vi.fn(async () => {
+      throw new ApiError(503, "translator unavailable; retry or POST a typed dsl", {
+        error: "translator unavailable; retry or POST a typed dsl",
+      });
+    });
+    renderQuery({ query });
+
+    const input = screen.getByTestId("query-input") as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "how were sales last spring" } });
+      fireEvent.submit(input.closest("form")!);
+    });
+
+    // The distinct retry hint is shown…
+    await waitFor(() =>
+      expect(screen.getByTestId("query-retry-hint")).toBeTruthy(),
+    );
+    expect(screen.getByTestId("query-error").textContent).toContain(
+      "translator unavailable",
+    );
+    // …and the canned examples are NOT (a 503 is an operator fault, not a bad
+    // question — offering "try one of these" would be misleading).
+    expect(screen.queryByTestId("query-error-example")).toBeNull();
+    expect(screen.queryByTestId("query-table")).toBeNull();
+  });
 });
