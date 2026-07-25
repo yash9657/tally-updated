@@ -29,6 +29,17 @@ def create_app() -> FastAPI:
 
     app.include_router(drafts_router)
 
+    # Forecast plane (WS5b, wave 3) is OPTIONAL: importing it pulls in statsmodels
+    # (requirements-forecast.txt). Mount it only when that dep is present, so the
+    # core suite/deploy stays dep-free — mirroring the lazy psycopg/anthropic/
+    # paddleocr adapters. Absent statsmodels -> the route simply isn't available.
+    try:
+        from .routes_forecast import router as forecast_router
+
+        app.include_router(forecast_router)
+    except ImportError:
+        pass
+
     @app.get("/healthz")
     def healthz() -> dict:
         settings = get_settings()

@@ -1,0 +1,6 @@
+# WS5b (wave 3) statistical cash-flow forecast plane — OPTIONAL.
+# statsmodels ONLY (Holt-Winters). NOT xgboost (IMPLEMENTATION_PLAN §1.1: xgboost
+# needs libomp and is out of scope). numpy comes in transitively. Install this on
+# top of requirements.txt to enable the /forecast/cashflow route + its gate:
+#   pip install -r requirements-forecast.txt
+statsmodels>=0.14,<0.15

@@ -17,6 +17,17 @@ from insightd.api.app import create_app
 PKG = pathlib.Path(__file__).resolve().parent.parent / "insightd"
 
 
+# The POST routes insightd is allowed to expose. /drafts writes the DRAFT store
+# (never cored). /forecast/cashflow (WS5b, mounted only when statsmodels is
+# installed) writes NOTHING — it is a pure read-only computation that uses POST
+# only to carry the history frame in its body; test_forecast_no_cored_write.py
+# separately proves it holds no cored write path.
+_ALLOWED_MUTATING_PATHS = {
+    "/companies/{company_id}/drafts",
+    "/companies/{company_id}/forecast/cashflow",
+}
+
+
 def test_no_route_targets_cored_vouchers_write():
     app = create_app()
     for route in app.routes:
@@ -24,21 +35,22 @@ def test_no_route_targets_cored_vouchers_write():
         methods = getattr(route, "methods", set()) or set()
         # No route may target a cored /vouchers path at all.
         assert "/vouchers" not in path, f"forbidden route: {path}"
-        # The only mutating method is POST /drafts.
+        # The only mutating routes are the drafts write + the read-only forecast.
         mutating = methods & {"POST", "PUT", "PATCH", "DELETE"}
         if mutating:
-            assert path.endswith("/drafts"), f"unexpected mutating route: {methods} {path}"
+            assert path in _ALLOWED_MUTATING_PATHS, f"unexpected mutating route: {methods} {path}"
 
 
-def test_only_post_drafts_mutates():
+def test_only_allowed_routes_mutate():
     app = create_app()
-    mutating = [
-        (sorted(getattr(r, "methods", set()) or set()), getattr(r, "path", ""))
+    paths = {
+        getattr(r, "path", "")
         for r in app.routes
         if (getattr(r, "methods", set()) or set()) & {"POST", "PUT", "PATCH", "DELETE"}
-    ]
-    paths = {p for _, p in mutating}
-    assert paths == {"/companies/{company_id}/drafts"}, paths
+    }
+    # Every mutating path is allowlisted, and /drafts is always present.
+    assert paths <= _ALLOWED_MUTATING_PATHS, paths
+    assert "/companies/{company_id}/drafts" in paths
 
 
 def _module_sources():
