@@ -1,3 +1,5 @@
+> **⚠️ SUPERSEDED (2026-07-24).** Wave 2 is DONE — WS8b `d6a3230`, WS1 `37661a5`, WS5a `0099946`, plus wave-3 WS5b `95ce702`, all on `master`, tree clean. It was implemented DIRECTLY from `docs/WAVE2_DESIGN_CORRECTIONS.md` (the stall was infra, not the plan; direct integration was faster). The `wip/wave2-partial` branch this doc refers to is spent and has been deleted. This file is retained as a historical record; **the authoritative state is `HANDOFF.md`** (only wave-3 WS10 remains, deferred). The runbook below is no longer a live task.
+
 # Session handoff — resume at IMPLEMENTATION_PLAN.md §4 (wave 2)
 
 **Written:** 2026-07-24, end of the session that executed **wave 1** of `IMPLEMENTATION_PLAN.md` and *started* wave 2.
