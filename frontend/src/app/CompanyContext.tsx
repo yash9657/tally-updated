@@ -95,12 +95,16 @@ function clearPersistedCompanyId(): void {
 
 /** True for a 404 from the API (the persisted company no longer exists). */
 // A PERSISTED bootstrap id is UNUSABLE — drop it and mint a fresh company —
-// when the server says it does not exist (404) OR the caller is not a member of
-// it (403). The 403 case happens after switching backends, wiping the DB, or
-// carrying over an id minted by the in-memory mock. Only a genuine transport/5xx
-// error still fails closed (below), because there the id may well be fine.
+// when the server rejects it as malformed (400 "invalid company id"), says it
+// does not exist (404), or says the caller is not a member of it (403). All three
+// happen after switching backends, wiping the DB, or carrying over an id minted
+// by the in-memory mock (whose ids are NOT uuids, so cored 400s on them). Only a
+// genuine transport/5xx error still fails closed (below): there the id may be fine.
 function isUnusablePersistedId(err: unknown): boolean {
-  return err instanceof ApiError && (err.status === 404 || err.status === 403);
+  return (
+    err instanceof ApiError &&
+    (err.status === 400 || err.status === 403 || err.status === 404)
+  );
 }
 
 function persistCompanyId(id: string): void {
@@ -168,10 +172,10 @@ export function CompanyProvider({
             bootstrapped.current = false;
             return;
           }
-          // 404/403: the persisted id names a company that no longer exists or
-          // that this caller cannot access (fresh backend, wiped DB, different
-          // environment, or an id carried over from the in-memory mock). Drop it
-          // and mint a new one below rather than wedging the app on a dead id.
+          // 400/403/404: the persisted id is malformed, inaccessible, or names a
+          // company that no longer exists (fresh backend, wiped DB, different
+          // environment, or a non-uuid id carried over from the in-memory mock).
+          // Drop it and mint a new one below rather than wedging on a dead id.
           clearPersistedCompanyId();
         }
       }
