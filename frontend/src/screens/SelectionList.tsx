@@ -36,7 +36,13 @@ export function SelectionList({
       const choice = matches[active];
       if (choice) {
         ev.preventDefault();
-        ev.stopPropagation();
+        // NOTE: deliberately NOT stopPropagation. onSelect highlights the choice
+        // in the nav machine (a "select" event); the SAME Enter must then bubble
+        // to the shell's key handler so its "key: Enter" drills into the
+        // highlighted item in ONE keypress. Stopping propagation here made the
+        // Gateway and the Go To overlay UN-OPENABLE for a real keyboard user (the
+        // autofocused combobox swallowed the drilling Enter) — the shell's key
+        // handler is on the app root, so a bubbling Enter is the only way it fires.
         onSelect(choice);
       }
     }

@@ -44,13 +44,15 @@ const toGateway = async () => {
     await page.waitForTimeout(250);
   }
 };
-// Gateway menu is two-step (Tally-faithful): a click/selection HIGHLIGHTS the
-// item, then Enter (captured on the app root) drills in.
+// Navigate a Gateway menu item the way a REAL KEYBOARD USER does: the menu's
+// combobox is autofocused, so type to filter then press Enter ONCE. This drives
+// the exact path that was broken (the combobox used to swallow the drilling
+// Enter), so a regression fails this test rather than sailing past it.
 const navMenu = async (label) => {
   await toGateway();
-  await page.getByRole("option", { name: label, exact: true }).click();
+  await page.keyboard.type(label);
   await page.waitForTimeout(150);
-  await app.press("Enter");
+  await page.keyboard.press("Enter");
   await page.waitForTimeout(700);
 };
 
@@ -100,10 +102,9 @@ try {
   await toGateway();
   await app.press("Alt+g");
   await page.waitForTimeout(300);
-  const cb = page.getByRole("combobox").first();
-  await cb.fill("Trial Balance");
-  await cb.press("Enter");
-  await app.press("Enter");
+  await page.keyboard.type("Trial Balance");
+  await page.waitForTimeout(150);
+  await page.keyboard.press("Enter");
   await page.waitForTimeout(700);
   rec("Trial Balance opens (via Go To / Alt+G)", (await page.getByRole("heading", { name: "Trial Balance" }).count()) > 0);
 } catch (e) { rec("Trial Balance opens (via Go To / Alt+G)", false, e.message); }
