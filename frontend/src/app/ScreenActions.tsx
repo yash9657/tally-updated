@@ -31,10 +31,27 @@ import type { NavSnapshot } from "../keystroke/navMachine";
  * to the machine. AppShell never imports the client — it only fires the hook.
  */
 
-export type ScreenActionKind = "accept" | "delete";
+/**
+ * The screen-owned side effects a key can fire. `accept`/`delete` post and
+ * tombstone vouchers; `export` writes the active screen's rows to CSV;
+ * `cancelVoucher`/`duplicate` reshape the in-progress entry; `prevVoucher`/
+ * `nextVoucher` browse the saved vouchers around the loaded one (Page Up/Down).
+ */
+export type ScreenActionKind =
+  | "accept"
+  | "delete"
+  | "export"
+  | "cancelVoucher"
+  | "duplicate"
+  | "prevVoucher"
+  | "nextVoucher";
 
-/** A handler the active screen registers for a screen action. */
-export type ScreenActionHandler = (snapshot: NavSnapshot) => void;
+/**
+ * A handler the active screen registers for a screen action. It may return a
+ * short status message ("Exported 42 rows to Day Book.csv"), which the shell
+ * shows in its status line — so a key press always produces visible feedback.
+ */
+export type ScreenActionHandler = (snapshot: NavSnapshot) => void | string;
 
 interface ScreenActionsValue {
   /** Mutable registry of the active screen's action handlers. */
@@ -67,22 +84,31 @@ function useScreenActions(): ScreenActionsValue {
   return ctx;
 }
 
+/** The outcome of dispatching a screen action (used for the status line). */
+export interface ScreenActionResult {
+  /** True when the active screen had a handler registered for the action. */
+  ran: boolean;
+  /** Optional message the handler wants shown in the shell's status line. */
+  message?: string;
+}
+
 /**
  * Fire the registered handler for an action with the pre-transition snapshot.
- * Returns true when a handler ran. Used by the AppShell keydown wrapper.
+ * Reports whether a handler ran (and any message it returned) so the shell can
+ * tell the user when a key did nothing HERE. Used by the AppShell keydown wrap.
  */
 export function useScreenActionDispatcher(): (
   kind: ScreenActionKind,
   snapshot: NavSnapshot,
-) => boolean {
+) => ScreenActionResult {
   const { handlers } = useScreenActions();
   return (kind, snapshot) => {
     const fn = handlers.current[kind];
     if (fn) {
-      fn(snapshot);
-      return true;
+      const message = fn(snapshot);
+      return typeof message === "string" ? { ran: true, message } : { ran: true };
     }
-    return false;
+    return { ran: false };
   };
 }
 

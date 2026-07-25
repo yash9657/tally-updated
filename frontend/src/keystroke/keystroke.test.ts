@@ -69,6 +69,15 @@ function assertExpect(snap: NavSnapshot, exp: Record<string, unknown>): void {
       case "canReturnToVoucher":
         expect(snap.canReturnToVoucher).toBe(want);
         break;
+      case "config":
+        // The frame's view configuration (F12 / Ctrl+H / Alt+F1 / F5 / F2).
+        // Asserted as a SUBSET so a case pins only the keys it cares about.
+        for (const [k, v] of Object.entries(want as Record<string, unknown>)) {
+          expect(
+            (snap.config as Record<string, unknown> | undefined)?.[k],
+          ).toEqual(v);
+        }
+        break;
       case "overlayOptions":
         expect(overlayOptions(snap)).toEqual(want);
         break;

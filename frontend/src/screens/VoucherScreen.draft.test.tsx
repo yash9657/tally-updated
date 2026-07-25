@@ -68,7 +68,7 @@ function CaptureDispatch({
   onReady,
 }: {
   onReady: (
-    dispatch: (kind: "accept" | "delete", snap: NavSnapshot) => boolean,
+    dispatch: (kind: "accept" | "delete", snap: NavSnapshot) => { ran: boolean; message?: string },
   ) => void;
 }) {
   const dispatch = useScreenActionDispatcher();
@@ -176,7 +176,7 @@ function renderDraftScreen(
   client: CoredClient,
   draft: PurchaseVoucherDraft,
   onReady: (
-    dispatch: (kind: "accept" | "delete", snap: NavSnapshot) => boolean,
+    dispatch: (kind: "accept" | "delete", snap: NavSnapshot) => { ran: boolean; message?: string },
   ) => void,
 ) {
   return render(
@@ -207,7 +207,7 @@ describe("Purchase voucher DRAFT mode (OCR prefill + HITL accept)", () => {
     const { client, spies } = spyClient(base);
 
     let dispatch:
-      | ((kind: "accept" | "delete", snap: NavSnapshot) => boolean)
+      | ((kind: "accept" | "delete", snap: NavSnapshot) => { ran: boolean; message?: string })
       | null = null;
     renderDraftScreen(client, draft, (d) => {
       dispatch = d;
@@ -291,7 +291,7 @@ describe("Purchase voucher DRAFT mode (OCR prefill + HITL accept)", () => {
     const { client, spies } = spyClient(base);
 
     let dispatch:
-      | ((kind: "accept" | "delete", snap: NavSnapshot) => boolean)
+      | ((kind: "accept" | "delete", snap: NavSnapshot) => { ran: boolean; message?: string })
       | null = null;
     renderDraftScreen(client, draft, (d) => {
       dispatch = d;

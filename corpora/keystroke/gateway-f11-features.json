@@ -1,0 +1,12 @@
+{
+  "id": "gateway-f11-features",
+  "description": "F11 opens Company Features from the Gateway",
+  "keymapProfile": "tallyprime",
+  "startScreen": "gateway",
+  "events": [{ "type": "key", "combo": "F11" }],
+  "expect": {
+    "screen": "features",
+    "parentScreen": "gateway",
+    "screenStackDepth": 2
+  }
+}

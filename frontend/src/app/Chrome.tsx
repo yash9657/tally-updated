@@ -4,15 +4,17 @@ import { ButtonBar } from "../screens/ButtonBar";
 
 /**
  * The persistent Tally chrome: a top product/company bar, the main screen area,
- * the fixed right-side button bar, and the bottom keyboard-shortcut hint strip.
- * The chrome is screen-agnostic — it lays out whatever the router renders into
- * `children` and shows the button bar the active screen supplies.
+ * the fixed right-side button bar, a status line, and the bottom keyboard-hint
+ * strip. The chrome is screen-agnostic — it lays out whatever the router renders
+ * into `children` and shows the button bar the active screen supplies.
  */
 export function Chrome({
   companyName,
   screenTitle,
   buttonBar,
   hints,
+  status,
+  onButton,
   children,
 }: {
   companyName: string;
@@ -21,6 +23,10 @@ export function Chrome({
   screenTitle: string;
   buttonBar: readonly ButtonBarItem[];
   hints: readonly string[];
+  /** What the last key press did (or why it did nothing). Null hides the line. */
+  status?: string | null;
+  /** Fire a button-bar item as if its combo had been typed. */
+  onButton?: (combo: string) => void;
   children: ReactNode;
 }) {
   return (
@@ -30,8 +36,9 @@ export function Chrome({
         <main className="min-w-0 flex-1 overflow-auto" aria-label="Screen">
           {children}
         </main>
-        <ButtonBar items={buttonBar} />
+        <ButtonBar items={buttonBar} onPress={onButton} />
       </div>
+      <StatusLine status={status ?? null} />
       <BottomHints hints={hints} />
     </div>
   );
@@ -58,6 +65,24 @@ function TopBar({
       <span className="font-bold text-tally-title">TallyPrime</span>
       <span className="text-tally-title">{companyName}</span>
     </header>
+  );
+}
+
+/**
+ * The status line: the shell's answer to "what did that key just do?". Every
+ * bound key writes here — including keys whose feature is not built and keys
+ * that do not apply on the active screen — so no keystroke is ever silently
+ * swallowed. It is a live region so assistive tech announces it too.
+ */
+function StatusLine({ status }: { status: string | null }) {
+  return (
+    <div
+      aria-live="polite"
+      data-testid="status-line"
+      className="min-h-[1.25rem] bg-tally-bg px-3 py-0.5 text-xs text-tally-title"
+    >
+      {status}
+    </div>
   );
 }
 

@@ -1,0 +1,16 @@
+{
+  "id": "voucher-ctrl-h-esc-closes-picker",
+  "description": "Esc closes the Ctrl+H Change Mode picker and leaves you IN the voucher (before this, Esc dropped the whole voucher screen — the single most jarring thing a Tally user can hit)",
+  "keymapProfile": "tallyprime",
+  "startScreen": "gateway",
+  "events": [
+    { "type": "key", "combo": "F8" },
+    { "type": "key", "combo": "Ctrl+H" },
+    { "type": "key", "combo": "Esc" }
+  ],
+  "expect": {
+    "screen": "voucher",
+    "voucherType": "sales",
+    "screenStackDepth": 2
+  }
+}

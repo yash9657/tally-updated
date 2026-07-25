@@ -1,0 +1,16 @@
+{
+  "id": "report-alt-f1-detailed",
+  "description": "Alt+F1 toggles the Detailed (expand all levels) view on a report, recorded on the frame so the report screen renders every level",
+  "keymapProfile": "tallyprime",
+  "startScreen": "gateway",
+  "events": [
+    { "type": "select", "menuItem": "Balance Sheet" },
+    { "type": "key", "combo": "Enter" },
+    { "type": "key", "combo": "Alt+F1" }
+  ],
+  "expect": {
+    "screen": "report",
+    "reportName": "Balance Sheet",
+    "config": { "detailed": true }
+  }
+}

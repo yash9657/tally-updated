@@ -1,0 +1,16 @@
+{
+  "id": "gateway-f1-help-esc-returns",
+  "description": "F1 opens Help over the current screen (TallyPrime moved Select Company off F1) and Esc returns to the voucher underneath",
+  "keymapProfile": "tallyprime",
+  "startScreen": "gateway",
+  "events": [
+    { "type": "key", "combo": "F8" },
+    { "type": "key", "combo": "F1" }
+  ],
+  "expect": {
+    "screen": "help",
+    "parentScreen": "voucher",
+    "parentVoucherType": "sales",
+    "screenStackDepth": 3
+  }
+}

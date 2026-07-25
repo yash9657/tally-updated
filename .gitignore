@@ -36,3 +36,6 @@ coverage/
 
 # Claude Code workflow scripts (local orchestration artifacts)
 .claude/
+
+# Playwright MCP session artifacts (screenshots, downloads, console logs)
+.playwright-mcp/

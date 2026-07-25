@@ -31,6 +31,12 @@ export interface DrillRow {
   readonly drillable?: boolean;
   /** The rendered cells, laid out by the parent's column template. */
   readonly cells: React.ReactNode;
+  /**
+   * The row's cells as PLAIN TEXT, in column order. Filtering (Ctrl+F), the
+   * zero-balance test (F12) and the CSV export (Alt+E) all read this instead of
+   * trying to parse rendered React nodes — one source of truth per row.
+   */
+  readonly values?: readonly string[];
 }
 
 export function DrillRows({
@@ -48,6 +54,22 @@ export function DrillRows({
   const drillable = rows.filter((r) => r.drillable !== false);
   const [active, setActive] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
+
+  // Take focus when the report opens, so Arrow Up/Down (handled locally, below)
+  // reach this grid instead of falling on <body>. Global keys (Enter/Esc/F-keys)
+  // are handled on the document by the shell and work regardless — this is only
+  // about the in-screen row cursor. Focus is taken ONLY if nothing inside the
+  // app has it already, so it can never steal the caret from a form field.
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const active = document.activeElement;
+    const idle =
+      !active ||
+      active === document.body ||
+      active.getAttribute?.("role") === "application";
+    if (idle) el.focus({ preventScroll: true });
+  }, []);
 
   // Whenever the active drillable row changes, publish it to the machine so a
   // subsequent Enter (handled by the shell) drills into the right row.

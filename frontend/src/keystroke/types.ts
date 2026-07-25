@@ -25,6 +25,11 @@
  *                          natural-language question is sent to the safe
  *                          read-only query core and the typed answer is rendered
  *                          (the AI-native ask-your-data entry point).
+ *  - "help"              — F1 Help: the context-aware keystroke reference, built
+ *                          from the SAME keymap the engine dispatches, so it can
+ *                          never drift from what the keys actually do.
+ *  - "features"          — F11 Company Features: what this edition has enabled,
+ *                          stated honestly (including what is not built yet).
  */
 export type ScreenKind =
   | "gateway"
@@ -35,7 +40,53 @@ export type ScreenKind =
   | "goto-overlay"
   | "master-create"
   | "bill-inbox"
-  | "query";
+  | "query"
+  | "help"
+  | "features";
+
+/**
+ * An in-frame overlay: a sub-screen that keeps its parent frame alive and is
+ * dismissed by Esc (Tally's F12 Configure, F2 period, Ctrl+F filter, Ctrl+N
+ * calculator and Ctrl+H Change Mode all behave this way).
+ */
+export type FrameOverlay =
+  | "change-mode"
+  | "configure"
+  | "period"
+  | "filter"
+  | "calculator";
+
+/**
+ * Per-frame VIEW configuration — the state Tally's F12 Configure / Ctrl+H /
+ * Alt+F1 / F5 buttons mutate. It lives on the frame (not in a screen's local
+ * state) so it survives re-renders, is projected into the snapshot every screen
+ * already receives, and is unit-testable in the pure machine.
+ */
+export interface FrameConfig {
+  /** Alt+F1: expand every level of a statement report. */
+  detailed?: boolean;
+  /** F5 (Trial Balance): ledger-wise (default) instead of group-wise. */
+  ledgerWise?: boolean;
+  /** Ctrl+H (Balance Sheet): vertical instead of horizontal. */
+  vertical?: boolean;
+  /** F12: hide rows whose closing balance is zero. */
+  hideZeroBalances?: boolean;
+  /** F12 (Day Book): show the narration line under each entry. */
+  showNarration?: boolean;
+  /** Ctrl+F: case-insensitive substring filter over the report rows. */
+  filterText?: string;
+  /** F2 / Alt+F2: report period (ISO yyyy-mm-dd). */
+  periodFrom?: string;
+  periodTo?: string;
+}
+
+/**
+ * The value `ledgerWise` has when a report frame has never been toggled. This
+ * build's Trial Balance opens LEDGER-wise, and F5 switches to group-wise — the
+ * machine, the status line and the Trial Balance screen all read this constant
+ * so the toggle, the message and the rendering can never disagree.
+ */
+export const LEDGER_WISE_DEFAULT = true;
 
 /**
  * The kind of master a "master-create" screen is creating. Mirrors the masters
@@ -91,17 +142,53 @@ export type KeymapAction =
   | { kind: "enter" }
   | { kind: "escape" }
   | { kind: "accept" } // Ctrl+A
+  | { kind: "quit" } // Ctrl+Q — quit the screen WITHOUT saving
   | { kind: "delete" } // Alt+D — delete the loaded voucher (alteration mode)
+  | { kind: "cancelVoucher" } // Alt+X — cancel/clear the voucher being entered
+  | { kind: "duplicate" } // Alt+2 — duplicate the loaded voucher into a new one
+  | { kind: "nextField" } // Tab
+  | { kind: "prevField" } // Shift+Tab
+  | { kind: "prevVoucher" } // Page Up — previous saved voucher (alteration)
+  | { kind: "nextVoucher" } // Page Down — next saved voucher (alteration)
   | { kind: "goto" } // Alt+G — overlay, preserves prior screen
   | { kind: "switchTo" } // Ctrl+G — replaces the stack
   | { kind: "changeMode" } // Ctrl+H — Change Mode picker (vouchers)
-  | { kind: "date" } // F2
-  | { kind: "createMaster"; masterKind: MasterKind }; // Alt+C — inline create
+  | { kind: "changeView" } // Ctrl+H on a report — horizontal/vertical view
+  | { kind: "date" } // F2 — voucher date
+  | { kind: "period" } // F2 / Alt+F2 on a report — period (From/To)
+  | { kind: "detailed" } // Alt+F1 / Alt+F5 — detailed (expand all levels)
+  | { kind: "ledgerWise" } // F5 on a report — group-wise <-> ledger-wise
+  | { kind: "filter" } // Ctrl+F — filter report rows
+  | { kind: "exportScreen" } // Alt+E — export the active screen (CSV)
+  | { kind: "calculator" } // Ctrl+N — calculator panel
+  | { kind: "help" } // F1 / Ctrl+F1 — Help (the keystroke reference)
+  | { kind: "features" } // F11 — Company Features
+  | { kind: "configure" } // F12 — screen/report Configure
+  | { kind: "createMaster"; masterKind: MasterKind } // Alt+C — inline create
+  /**
+   * A combo that a real TallyPrime user WILL press but whose feature is not
+   * built in this edition (e.g. payroll, order processing). It is bound on
+   * purpose: pressing it must say so out loud rather than do nothing, which is
+   * what makes a keyboard user distrust the app. `feature` is the human name,
+   * `note` the one-line explanation shown in the status line.
+   */
+  | { kind: "unavailable"; feature: string; note: string };
 
-/** A keymap profile: a named, data-driven combo → action table. */
+/**
+ * A keymap profile: a named, data-driven combo → action table.
+ *
+ * `bindings` is the global table. `screenBindings` holds per-screen OVERRIDES,
+ * because Tally itself re-uses F-keys per context (F5 creates a Payment voucher
+ * from the Gateway, but toggles ledger-wise inside the Trial Balance; F2 is the
+ * voucher date but the report period). Resolution is: screen override first,
+ * then the global table — see `resolveAction`.
+ */
 export interface Keymap {
   readonly profile: string;
   readonly bindings: Readonly<Record<KeyCombo, KeymapAction>>;
+  readonly screenBindings?: Readonly<
+    Partial<Record<ScreenKind, Readonly<Record<KeyCombo, KeymapAction>>>>
+  >;
 }
 
 /**

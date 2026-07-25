@@ -1,0 +1,18 @@
+{
+  "id": "report-f12-configure-esc-returns",
+  "description": "F12 opens Configure as an in-frame overlay over the Trial Balance; Esc cancels the OVERLAY and leaves the report itself untouched (an overlay never costs you your screen)",
+  "keymapProfile": "tallyprime",
+  "startScreen": "gateway",
+  "events": [
+    { "type": "select", "menuItem": "Day Book" },
+    { "type": "key", "combo": "Enter" },
+    { "type": "key", "combo": "F12" },
+    { "type": "key", "combo": "Esc" }
+  ],
+  "expect": {
+    "screen": "report",
+    "reportName": "Day Book",
+    "screenStackDepth": 2,
+    "buttonBarContains": ["F12 Configure", "F2 Period", "Alt+E Export"]
+  }
+}

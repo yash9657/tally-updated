@@ -31,26 +31,53 @@ const VOUCHER_BAR: readonly ButtonBarItem[] = [
   item("F7", "Journal"),
   item("F8", "Sales"),
   item("F9", "Purchase"),
+  item("F2", "Date"),
   item("Alt+C", "Create Master"),
   item("Ctrl+H", "Change Mode"),
+  item("Alt+D", "Delete"),
   item("Ctrl+A", "Accept"),
+  item("Ctrl+Q", "Quit"),
+  item("F1", "Help"),
 ];
 
 const MASTER_BAR: readonly ButtonBarItem[] = [
   item("Ctrl+A", "Accept"),
   item("Esc", "Cancel"),
+  item("F1", "Help"),
 ];
 
 const GATEWAY_BAR: readonly ButtonBarItem[] = [
   item("F1", "Help"),
+  item("F11", "Features"),
   item("Alt+G", "Go To"),
   item("Ctrl+G", "Switch To"),
+  item("Ctrl+N", "Calculator"),
 ];
 
 const REPORT_BAR: readonly ButtonBarItem[] = [
   item("F2", "Period"),
+  item("F5", "Ledger-wise"),
   item("F12", "Configure"),
+  item("Alt+F1", "Detailed"),
   item("Ctrl+H", "Change View"),
+  item("Ctrl+F", "Filter"),
+  item("Alt+E", "Export"),
+  item("Alt+G", "Go To"),
+  item("Ctrl+G", "Switch To"),
+  item("F1", "Help"),
+];
+
+/** Screens that are pure readers (Help, Features): Esc out, nothing to save. */
+const READER_BAR: readonly ButtonBarItem[] = [
+  item("Esc", "Back"),
+  item("Alt+G", "Go To"),
+  item("Ctrl+G", "Switch To"),
+];
+
+/** The AI-native screens (Bill Inbox, Ask your books). */
+const AI_BAR: readonly ButtonBarItem[] = [
+  item("F1", "Help"),
+  item("Esc", "Back"),
   item("Alt+G", "Go To"),
   item("Ctrl+G", "Switch To"),
 ];
@@ -77,6 +104,12 @@ export function buttonBarFor(
       return GATEWAY_BAR;
     case "goto-overlay":
       return GATEWAY_BAR;
+    case "help":
+    case "features":
+      return READER_BAR;
+    case "bill-inbox":
+    case "query":
+      return AI_BAR;
     default:
       return GATEWAY_BAR;
   }

@@ -1,0 +1,14 @@
+{
+  "id": "voucher-ctrl-q-quits",
+  "description": "Ctrl+Q quits the voucher screen WITHOUT saving and returns to the Gateway (RESEARCH sec 4 navigation keys)",
+  "keymapProfile": "tallyprime",
+  "startScreen": "gateway",
+  "events": [
+    { "type": "key", "combo": "F9" },
+    { "type": "key", "combo": "Ctrl+Q" }
+  ],
+  "expect": {
+    "screen": "gateway",
+    "screenStackDepth": 1
+  }
+}

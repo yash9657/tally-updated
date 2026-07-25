@@ -27,6 +27,7 @@ import { normalizeMoney } from "./vouchers/money";
 import { acceptEditedPurchaseDraft, canRebuildDraft } from "./vouchers/draftAccept";
 import { acceptPurchaseDraft } from "../api";
 import type {
+  DayBookEntry,
   FieldConfidence,
   PostingRequest,
   PurchaseVoucherDraft,
@@ -252,14 +253,23 @@ export function VoucherScreen({
   const inFlight = useRef(false);
 
   // Hydrate the alter form from the GET endpoint when a new voucher is drilled.
+  //
+  // The "already seeded" guard is stamped only AFTER the response is applied,
+  // never before the fetch. Under React StrictMode every effect runs twice: the
+  // first run's cleanup sets cancelled=true (so its response is dropped) and, if
+  // the guard had already been stamped, the second run would return early — the
+  // drilled voucher would then load into an EMPTY form, silently. (Ctrl+A on it
+  // would then alter a real voucher into blank lines.) Stamping after the apply
+  // costs one extra idempotent GET under StrictMode and makes the seed correct.
   useEffect(() => {
     if (!loadedVoucherID || seedRef.current === loadedVoucherID) return;
-    seedRef.current = loadedVoucherID;
     let cancelled = false;
     client
       .getVoucher(companyID, loadedVoucherID)
       .then((view) => {
-        if (!cancelled) setForm(formFromView(view));
+        if (cancelled) return;
+        seedRef.current = loadedVoucherID;
+        setForm(formFromView(view));
       })
       .catch((err: unknown) => {
         if (!cancelled) {
@@ -461,8 +471,85 @@ export function VoucherScreen({
       });
   }, [client, companyID, setLoaded]);
 
+  /**
+   * Alt+X Cancel. In CREATE mode it clears the form (the machine resets the
+   * frame off the same key). A SAVED voucher cannot be "cancelled" here: the
+   * ledger is append-only, so the honest answer is Alt+D, which writes a delete
+   * tombstone as a new version rather than mutating history.
+   */
+  const onCancelVoucher = useCallback((): string => {
+    if (ctxRef.current.voucherID) {
+      return "A saved voucher cannot be cancelled in this build — Alt+D deletes it (appends a delete version; nothing is erased).";
+    }
+    setForm(emptyForm());
+    setStatus(null);
+    setSavedNo(null);
+    setTaxResult(null);
+    return "Voucher cancelled — the form is cleared.";
+  }, []);
+
+  /**
+   * Alt+2 Duplicate. Keeps the loaded voucher's lines but drops its identity
+   * (number + loaded slot) so Ctrl+A POSTS a NEW voucher instead of altering the
+   * original. The machine flips the frame to create mode off the same key.
+   */
+  const onDuplicate = useCallback((): string => {
+    if (!ctxRef.current.voucherID) {
+      return "Nothing to duplicate — open a saved voucher (e.g. from the Day Book) first.";
+    }
+    setForm((f) => ({ ...f, voucherNo: "" }));
+    setSavedNo(null);
+    setLoaded(null);
+    seedRef.current = null;
+    return "Duplicated — same lines, new voucher. Ctrl+A to save it.";
+  }, [setLoaded]);
+
+  /**
+   * Page Up / Page Down — browse the SAVED vouchers around the loaded one, in
+   * Day Book order (the same ordering the user drilled from). The Day Book is
+   * fetched once and cached in a ref; moving loads the neighbour into the
+   * loaded-voucher slot, which re-hydrates this form from GET /vouchers/{id}.
+   */
+  const dayBookRef = useRef<DayBookEntry[] | null>(null);
+  const stepVoucher = useCallback(
+    (delta: number): string => {
+      const currentID = ctxRef.current.voucherID;
+      if (!currentID) {
+        return "Page Up / Page Down browse saved vouchers — open one from the Day Book first.";
+      }
+      const apply = (entries: DayBookEntry[]): string => {
+        const idx = entries.findIndex((e) => e.voucher_id === currentID);
+        if (idx < 0) return "This voucher is not in the current Day Book range.";
+        const next = entries[idx + delta];
+        if (!next) {
+          return delta < 0
+            ? "Already at the first voucher."
+            : "Already at the last voucher.";
+        }
+        setLoaded({ entry: next });
+        return `Voucher ${next.voucher_no} (${next.date})`;
+      };
+      if (dayBookRef.current) return apply(dayBookRef.current);
+      client
+        .getDayBook(companyID, {})
+        .then((res) => {
+          dayBookRef.current = res.entries;
+          apply(res.entries);
+        })
+        .catch(() => {
+          /* the status line already told the user we are loading */
+        });
+      return "Loading the Day Book to browse vouchers…";
+    },
+    [client, companyID, setLoaded],
+  );
+
   useRegisterScreenAction("accept", onAccept);
   useRegisterScreenAction("delete", isAlter ? onDelete : undefined);
+  useRegisterScreenAction("cancelVoucher", onCancelVoucher);
+  useRegisterScreenAction("duplicate", onDuplicate);
+  useRegisterScreenAction("prevVoucher", () => stepVoucher(-1));
+  useRegisterScreenAction("nextVoucher", () => stepVoucher(1));
 
   const title = VOUCHER_TITLES[type] ?? type;
   const displayNo = savedNo ?? form.voucherNo;

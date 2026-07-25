@@ -90,6 +90,10 @@ describe("Phase 1 navMachine extensions", () => {
       { type: "KEY", combo: "Alt+G" },
       { type: "SELECT", menuItem: "Balance Sheet" },
       { type: "KEY", combo: "Enter" },
+      // A statement drill needs a highlighted line (the report screen publishes
+      // one for the active row); Enter then opens that line's detail, and a
+      // further Enter — with nothing highlighted inside it — the voucher.
+      { type: "SELECT", menuItem: "Sundry Debtors" },
       { type: "KEY", combo: "Enter" }, // report-detail
       { type: "KEY", combo: "Enter" }, // -> voucher (alter)
     ]);

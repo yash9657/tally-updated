@@ -1,0 +1,17 @@
+{
+  "id": "voucher-tab-walks-fields",
+  "description": "Tab advances the voucher field cursor and Shift+Tab steps it back (RESEARCH sec 4: Tab / Shift+Tab = next/previous input field)",
+  "keymapProfile": "tallyprime",
+  "startScreen": "gateway",
+  "events": [
+    { "type": "key", "combo": "F8" },
+    { "type": "key", "combo": "Tab" },
+    { "type": "key", "combo": "Tab" },
+    { "type": "key", "combo": "Shift+Tab" }
+  ],
+  "expect": {
+    "screen": "voucher",
+    "voucherType": "sales",
+    "field": "party-ledger"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "id": "report-f5-group-wise",
+  "description": "Inside a report F5 is NOT the Payment voucher: it flips the Trial Balance between ledger-wise (default) and group-wise, exactly as TallyPrime context-scopes the key",
+  "keymapProfile": "tallyprime",
+  "startScreen": "gateway",
+  "events": [
+    { "type": "select", "menuItem": "Trial Balance" },
+    { "type": "key", "combo": "Enter" },
+    { "type": "key", "combo": "F5" }
+  ],
+  "expect": {
+    "screen": "report",
+    "reportName": "Trial Balance",
+    "config": { "ledgerWise": false }
+  }
+}

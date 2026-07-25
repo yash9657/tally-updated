@@ -1,13 +1,15 @@
 import { assign, setup } from "xstate";
+import { LEDGER_WISE_DEFAULT } from "./types";
 import type {
+  FrameConfig,
+  FrameOverlay,
   KeymapAction,
   MasterKind,
   ScreenKind,
   VoucherMode,
   VoucherType,
 } from "./types";
-import { resolveKeymap } from "./keymaps/tallyprime";
-import { normalizeCombo } from "./normalize";
+import { resolveAction, resolveKeymap } from "./keymaps/tallyprime";
 
 /**
  * navMachine — a deterministic XState v5 model of Tally's SCREEN STACK
@@ -116,6 +118,27 @@ export const QUERY_LABEL = "Query";
  */
 export const OPEN_PURCHASE_DRAFT_SENTINEL = "__open-purchase-draft__";
 
+/**
+ * The Gateway entry that opens the second-level report menu (Tally's "Display
+ * More Reports"), which is where the Trial Balance and Outstandings live.
+ */
+export const MORE_REPORTS_LABEL = "Display More Reports";
+
+/**
+ * Row-kind prefixes a report screen puts on the keys it publishes through
+ * `onSelect`, so the machine knows HOW DEEP a drill goes without knowing
+ * anything about accounting data:
+ *
+ *   "group:Sundry Debtors"  -> Enter opens another report-detail (its ledgers)
+ *   "ledger:Acme Traders"   -> Enter opens the ledger's vouchers
+ *   anything else           -> Enter opens the underlying voucher
+ *
+ * This is what makes "no report is a dead end" (RESEARCH sec 8) work with a
+ * PURE machine: the drill depth is data on the event, not a hardcoded rule.
+ */
+export const GROUP_ROW_PREFIX = "group:";
+export const LEDGER_ROW_PREFIX = "ledger:";
+
 /** A single frame on Tally's screen stack. */
 export interface ScreenFrame {
   readonly screen: ScreenKind;
@@ -129,8 +152,15 @@ export interface ScreenFrame {
   detailOf?: string;
   /** True once this voucher frame has been accepted at least once (Ctrl+A). */
   saved?: boolean;
-  /** Active in-frame overlay (e.g. the Ctrl+H Change Mode picker). */
-  overlay?: "change-mode";
+  /**
+   * Active in-frame overlay (the Ctrl+H Change Mode picker, F12 Configure, F2
+   * Period, Ctrl+F Filter, Ctrl+N Calculator). An overlay PRESERVES its frame:
+   * Esc closes the overlay and leaves you exactly where you were — it does NOT
+   * pop the screen. Getting this wrong is instantly noticeable to a Tally user.
+   */
+  overlay?: FrameOverlay;
+  /** Per-frame view configuration mutated by F12 / Ctrl+H / Alt+F1 / F5 / F2. */
+  config?: FrameConfig;
   /** When true the frame was reached via Switch To and is NOT returnable-to. */
   replaced?: boolean;
   /** For goto-overlay frames: whether Enter does a Go To or a Switch To. */
@@ -148,7 +178,14 @@ export interface NavContext {
 /** Events accepted by the machine. Mirrors corpus event shapes. */
 export type NavEvent =
   | { type: "KEY"; combo: string }
-  | { type: "SELECT"; menuItem: string };
+  | { type: "SELECT"; menuItem: string }
+  /**
+   * A view-configuration patch for the ACTIVE frame, sent by the F12 Configure
+   * / F2 Period / Ctrl+F Filter overlays when the user changes a setting. The
+   * config lives on the frame so it survives re-render, is projected into the
+   * snapshot every screen already reads, and stays unit-testable.
+   */
+  | { type: "CONFIG"; patch: FrameConfig };
 
 /** Options used to construct an initial machine context. */
 export interface NavMachineOptions {
@@ -202,6 +239,24 @@ function nextVoucherField(
   return VOUCHER_FIELDS[next] as VoucherField;
 }
 
+/** Step the voucher field cursor back one (Shift+Tab); clamped at the first. */
+function prevVoucherField(
+  field: VoucherField | OverlayField | MasterField | undefined,
+): VoucherField {
+  const idx = VOUCHER_FIELDS.indexOf(field as VoucherField);
+  if (idx <= 0) return VOUCHER_FIELDS[0] as VoucherField;
+  return VOUCHER_FIELDS[idx - 1] as VoucherField;
+}
+
+/** Step the master-create field cursor back one (Shift+Tab); clamped. */
+function prevMasterField(
+  field: VoucherField | OverlayField | MasterField | undefined,
+): MasterField {
+  const idx = MASTER_FIELDS.indexOf(field as MasterField);
+  if (idx <= 0) return MASTER_FIELDS[0] as MasterField;
+  return MASTER_FIELDS[idx - 1] as MasterField;
+}
+
 /** Advance the master-create field cursor; returns the next field (clamped). */
 function nextMasterField(
   field: VoucherField | OverlayField | MasterField | undefined,
@@ -236,11 +291,40 @@ function resolveGotoSelection(
  */
 function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
   const keymap = resolveKeymap(ctx.keymapProfile);
-  const action: KeymapAction | undefined = keymap.bindings[normalizeCombo(combo)];
+  const activeScreen = top(ctx.stack).screen;
+  const action: KeymapAction | undefined = resolveAction(
+    keymap,
+    activeScreen,
+    combo,
+  );
   if (!action) return {};
 
   const stack = ctx.stack.slice();
   const active = { ...top(stack) };
+
+  /** Replace the active frame with `frame`. */
+  const replaceActive = (frame: ScreenFrame): Partial<NavContext> => {
+    stack[stack.length - 1] = frame;
+    return { stack };
+  };
+
+  /** Merge a view-config patch into the active frame (F12 / Ctrl+H / Alt+F1). */
+  const patchConfig = (patch: FrameConfig): Partial<NavContext> =>
+    replaceActive({ ...active, config: { ...active.config, ...patch } });
+
+  /** Open an in-frame overlay (Esc closes it, the frame survives). */
+  const openOverlay = (overlay: FrameOverlay): Partial<NavContext> =>
+    replaceActive({ ...active, overlay });
+
+  /** Push a screen unless it is already the active one (F1 twice = one Help). */
+  const pushOnce = (screen: ScreenKind): Partial<NavContext> => {
+    if (active.screen === screen) return {};
+    stack.push({ screen });
+    return { stack };
+  };
+
+  const isReportScreen =
+    active.screen === "report" || active.screen === "report-detail";
 
   switch (action.kind) {
     case "voucher": {
@@ -256,6 +340,14 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
     }
 
     case "enter": {
+      // Confirming ANY in-frame overlay closes it and leaves the frame intact
+      // (Change Mode, Configure, Period, Filter, Calculator all behave this
+      // way in Tally — the sub-screen accepts, the screen underneath stays).
+      if (active.overlay) {
+        const closed = { ...active };
+        delete closed.overlay;
+        return replaceActive(closed);
+      }
       if (active.screen === "goto-overlay") {
         // Confirm the highlighted selection in the Go To / Switch To overlay.
         if (active.selectedItem) {
@@ -266,12 +358,7 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
         return {};
       }
       if (active.screen === "voucher") {
-        if (active.overlay) {
-          // Confirming a picker closes the overlay, leaving the field intact.
-          active.overlay = undefined;
-          stack[stack.length - 1] = active;
-          return { stack };
-        }
+        // (An open overlay was already handled above, for every screen.)
         active.field = nextVoucherField(active.field);
         stack[stack.length - 1] = active;
         return { stack };
@@ -286,6 +373,10 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
           stack.push(newVoucherFrame(DEFAULT_LAST_VOUCHER, "alter"));
           return { stack };
         }
+        // A statement drill needs a highlighted line to drill INTO. With none
+        // (e.g. an empty Balance Sheet), Enter is a no-op — pushing a detail
+        // frame for "nothing" would open a screen describing no account.
+        if (!active.selectedItem) return {};
         const detail: ScreenFrame = {
           screen: "report-detail",
           reportName: active.reportName,
@@ -295,8 +386,21 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
         return { stack };
       }
       if (active.screen === "report-detail") {
-        // A report-detail row resolves to its underlying voucher in alteration
-        // mode (the final drill level of a statement report).
+        // Drill one more level when the highlighted row is a GROUP or a LEDGER
+        // (group > ledger > voucher, Tally's statement drill path); otherwise
+        // the row IS a voucher, so open it in alteration mode.
+        const sel = active.selectedItem ?? "";
+        if (
+          sel.startsWith(GROUP_ROW_PREFIX) ||
+          sel.startsWith(LEDGER_ROW_PREFIX)
+        ) {
+          stack.push({
+            screen: "report-detail",
+            reportName: active.reportName,
+            detailOf: sel,
+          });
+          return { stack };
+        }
         stack.push(newVoucherFrame(DEFAULT_LAST_VOUCHER, "alter"));
         return { stack };
       }
@@ -331,6 +435,16 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
           stack.push({ screen: "query" });
           return { stack };
         }
+        // "Display More Reports" opens the second-level report MENU (Tally's
+        // own structure: the Trial Balance and Outstandings live one level in).
+        // Checked before the report fallback, which would otherwise push a
+        // report frame literally named "Display More Reports".
+        if (
+          active.selectedItem?.toLowerCase() === MORE_REPORTS_LABEL.toLowerCase()
+        ) {
+          stack.push({ screen: "menu" });
+          return { stack };
+        }
         // A selected report entry drills into that report (depth +1), the same
         // destination the Alt+G Go To picker reaches.
         const report = canonicalReportName(active.selectedItem);
@@ -344,11 +458,141 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
     }
 
     case "escape": {
+      // An open overlay (Change Mode / Configure / Period / Filter /
+      // Calculator) is what Esc cancels FIRST — the frame underneath survives.
+      // Only when no overlay is open does Esc pop the screen stack.
+      if (active.overlay) {
+        const closed = { ...active };
+        delete closed.overlay;
+        return replaceActive(closed);
+      }
       if (stack.length > 1) {
         stack.pop();
         return { stack };
       }
       return {}; // cannot pop past the root
+    }
+
+    case "quit": {
+      // Ctrl+Q — quit the screen WITHOUT saving. Unlike Esc it abandons the
+      // whole screen even when an overlay is open (Tally's "quit screen").
+      if (stack.length > 1) {
+        stack.pop();
+        return { stack };
+      }
+      if (active.overlay) {
+        const closed = { ...active };
+        delete closed.overlay;
+        return replaceActive(closed);
+      }
+      return {};
+    }
+
+    case "nextField": {
+      // Tab — same field advance as Enter, but never drills/opens.
+      if (active.screen === "voucher" && !active.overlay) {
+        active.field = nextVoucherField(active.field);
+        return replaceActive(active);
+      }
+      if (active.screen === "master-create") {
+        active.field = nextMasterField(active.field);
+        return replaceActive(active);
+      }
+      return {};
+    }
+
+    case "prevField": {
+      // Shift+Tab — step the field cursor back one.
+      if (active.screen === "voucher" && !active.overlay) {
+        active.field = prevVoucherField(active.field);
+        return replaceActive(active);
+      }
+      if (active.screen === "master-create") {
+        active.field = prevMasterField(active.field);
+        return replaceActive(active);
+      }
+      return {};
+    }
+
+    case "help": {
+      return pushOnce("help");
+    }
+
+    case "features": {
+      return pushOnce("features");
+    }
+
+    case "configure": {
+      return openOverlay("configure");
+    }
+
+    case "calculator": {
+      return openOverlay("calculator");
+    }
+
+    case "period": {
+      // F2 (report) / Alt+F2 — the From/To picker. Only reports have a period.
+      if (isReportScreen) return openOverlay("period");
+      return {};
+    }
+
+    case "filter": {
+      if (isReportScreen) return openOverlay("filter");
+      return {};
+    }
+
+    case "detailed": {
+      if (!isReportScreen) return {};
+      return patchConfig({ detailed: !active.config?.detailed });
+    }
+
+    case "ledgerWise": {
+      if (!isReportScreen) return {};
+      return patchConfig({
+        ledgerWise: !(active.config?.ledgerWise ?? LEDGER_WISE_DEFAULT),
+      });
+    }
+
+    case "changeView": {
+      if (!isReportScreen) return {};
+      return patchConfig({ vertical: !active.config?.vertical });
+    }
+
+    case "cancelVoucher": {
+      // Alt+X — abandon the voucher being entered. In CREATE mode the frame is
+      // reset to a pristine one (the screen clears its form off the same key);
+      // a SAVED voucher cannot be "cancelled" in this build (the ledger is
+      // append-only: Alt+D writes a delete tombstone instead), so the key
+      // reports that through the shell's status line rather than pretending.
+      if (active.screen === "voucher" && active.voucherMode !== "alter") {
+        return replaceActive(
+          newVoucherFrame(active.voucherType ?? DEFAULT_LAST_VOUCHER),
+        );
+      }
+      return {};
+    }
+
+    case "duplicate": {
+      // Alt+2 — duplicate the loaded voucher: same lines, a NEW voucher. The
+      // machine flips the frame to create mode (so Ctrl+A posts rather than
+      // alters); the screen keeps the form and clears the voucher number.
+      if (active.screen === "voucher" && active.voucherMode === "alter") {
+        return replaceActive({
+          ...active,
+          voucherMode: "create",
+          field: "date",
+          saved: false,
+        });
+      }
+      return {};
+    }
+
+    case "prevVoucher":
+    case "nextVoucher":
+    case "exportScreen": {
+      // Pure side effects owned by the active screen (browse saved vouchers,
+      // write a CSV). The machine deliberately does not move the stack.
+      return {};
     }
 
     case "accept": {
@@ -478,6 +722,7 @@ function reduceSelect(ctx: NavContext, menuItem: string): Partial<NavContext> {
       menuItem.toLowerCase() === "vouchers" ||
       menuItem.toLowerCase() === BILL_INBOX_LABEL.toLowerCase() ||
       menuItem.toLowerCase() === QUERY_LABEL.toLowerCase() ||
+      menuItem.toLowerCase() === MORE_REPORTS_LABEL.toLowerCase() ||
       canonicalReportName(menuItem) !== undefined
     ) {
       active.selectedItem = menuItem;
@@ -521,6 +766,18 @@ function reduceSelect(ctx: NavContext, menuItem: string): Partial<NavContext> {
 }
 
 /**
+ * Would this combo change the screen stack? A PURE preview of {@link reduceKey}
+ * used by the shell to tell the user when a key did nothing ON THIS SCREEN
+ * (e.g. F5 Ledger-wise pressed inside a voucher). Sharing the real reducer is
+ * the point: a preview that re-implemented the rules could disagree with them.
+ */
+export function keyChangesStack(ctx: NavContext, combo: string): boolean {
+  const next = reduceKey(ctx, combo);
+  if (!next.stack) return false;
+  return JSON.stringify(next.stack) !== JSON.stringify(ctx.stack);
+}
+
+/**
  * The navigation machine. A single `running` state; all stack transitions are
  * expressed as context updates so the screen-stack invariant lives in one
  * place. Construct context via {@link makeInitialContext} when interpreting.
@@ -540,6 +797,14 @@ export const navMachine = setup({
       if (event.type !== "SELECT") return {};
       return reduceSelect(context, event.menuItem);
     }),
+    applyConfig: assign(({ context, event }) => {
+      if (event.type !== "CONFIG") return {};
+      const stack = context.stack.slice();
+      const active = { ...top(stack) };
+      active.config = { ...active.config, ...event.patch };
+      stack[stack.length - 1] = active;
+      return { stack };
+    }),
   },
 }).createMachine({
   id: "nav",
@@ -550,6 +815,7 @@ export const navMachine = setup({
       on: {
         KEY: { actions: "applyKey" },
         SELECT: { actions: "applySelect" },
+        CONFIG: { actions: "applyConfig" },
       },
     },
   },
@@ -570,7 +836,9 @@ export interface NavSnapshot {
   /** The active frame's pending selection (e.g. a Go To pick, a created master). */
   selectedItem?: string;
   saved?: boolean;
-  overlay?: "change-mode";
+  overlay?: FrameOverlay;
+  /** The frame's view configuration (F12 / Ctrl+H / Alt+F1 / F5 / F2 state). */
+  config?: FrameConfig;
   screenStackDepth: number;
   parentScreen?: ScreenKind;
   parentVoucherType?: VoucherType;
@@ -606,6 +874,7 @@ export function projectSnapshot(ctx: NavContext): NavSnapshot {
   if (active.selectedItem !== undefined) snap.selectedItem = active.selectedItem;
   if (active.saved) snap.saved = true;
   if (active.overlay !== undefined) snap.overlay = active.overlay;
+  if (active.config !== undefined) snap.config = active.config;
   if (parent) {
     snap.parentScreen = parent.screen;
     if (parent.voucherType !== undefined)

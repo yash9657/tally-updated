@@ -3,6 +3,8 @@ import { GatewayScreen } from "../screens/GatewayScreen";
 import { VoucherScreen } from "../screens/VoucherScreen";
 import { BillInboxScreen } from "../screens/BillInboxScreen";
 import { QueryScreen } from "../screens/QueryScreen";
+import { HelpScreen } from "../screens/HelpScreen";
+import { FeaturesScreen } from "../screens/FeaturesScreen";
 import { MasterCreateScreen } from "../screens/masters/MasterCreateScreen";
 import {
   DayBookScreen,
@@ -11,6 +13,7 @@ import {
   ProfitLossScreen,
   OutstandingsScreen,
 } from "../screens/reports/ReportScreens";
+import { ReportDetailScreen } from "../screens/reports/ReportDetailScreen";
 import { REPORT_NAMES } from "../keystroke/types";
 import type { ScreenComponent, ScreenComponentProps } from "./screenRegistry";
 import { ScreenRegistry } from "./screenRegistry";
@@ -44,45 +47,26 @@ const GoToOverlayScreen: ScreenComponent = ({ snapshot, onSelect }) => {
   );
 };
 
-/** Generic report screen — the reports agent registers richer per-name views. */
-const ReportScreen: ScreenComponent = ({ snapshot, onSelect }) => {
+/**
+ * Fallback for a report name that has no wired data source (e.g. Stock Summary,
+ * which needs inventory vouchers this build does not have). It says so plainly
+ * — it must NEVER render placeholder rows, because fabricated numbers in an
+ * accounting screen are worse than a missing screen.
+ */
+const UnwiredReportScreen: ScreenComponent = ({ snapshot }) => {
   const name = snapshot.reportName ?? "Report";
   return (
     <section className="flex h-full flex-col bg-tally-bg p-4 font-mono text-tally-field">
       <h1 className="text-lg font-bold text-tally-title">{name}</h1>
-      <p className="mt-2 text-sm">
-        Press Enter on a line to drill down; Esc to go back.
+      <p className="mt-3 max-w-xl text-sm">
+        {name} is not available in this build — there is no data plane behind it
+        yet (it needs the inventory module). Nothing is shown rather than sample
+        rows, because a report that invents numbers is worse than no report.
       </p>
-      <div className="mt-3 max-w-md bg-tally-panel p-3">
-        <SelectionList
-          label="Rows"
-          options={["Row 1", "Row 2", "Row 3"]}
-          onSelect={onSelect}
-          autoFocus
-        />
-      </div>
-    </section>
-  );
-};
-
-/** Generic report-detail screen (a drill level inside a statement report). */
-const ReportDetailScreen: ScreenComponent = ({ snapshot, onSelect }) => {
-  return (
-    <section className="flex h-full flex-col bg-tally-bg p-4 font-mono text-tally-field">
-      <h1 className="text-lg font-bold text-tally-title">
-        {snapshot.reportName ?? "Report"} — {snapshot.detailOf ?? "Detail"}
-      </h1>
       <p className="mt-2 text-sm">
-        Press Enter on a line to open the underlying voucher; Esc to go back.
+        Working reports: Balance Sheet, Profit &amp; Loss A/c, Trial Balance, Day
+        Book, Outstandings — all reachable with Alt+G. Esc goes back.
       </p>
-      <div className="mt-3 max-w-md bg-tally-panel p-3">
-        <SelectionList
-          label="Rows"
-          options={["Voucher 1", "Voucher 2"]}
-          onSelect={onSelect}
-          autoFocus
-        />
-      </div>
     </section>
   );
 };
@@ -98,6 +82,32 @@ const MasterCreateAdapter: ScreenComponent = ({
 /** Gateway adapter: the Phase 0 GatewayScreen only needs onSelect. */
 const GatewayAdapter: ScreenComponent = ({ onSelect }: ScreenComponentProps) => (
   <GatewayScreen onSelect={onSelect} />
+);
+
+/**
+ * "Display More Reports" — Tally's second-level report menu, where the Trial
+ * Balance and Outstandings live. Selecting an entry and pressing Enter opens it
+ * through the same gateway/menu branch of the machine.
+ */
+const MoreReportsMenu: ScreenComponent = ({ snapshot, onSelect }) => (
+  <section className="flex h-full flex-col bg-tally-bg p-4 text-tally-field">
+    <h1 className="mb-4 text-center font-mono text-lg font-bold text-tally-title">
+      Display More Reports
+    </h1>
+    <div className="mx-auto w-72 bg-tally-panel p-3">
+      <SelectionList
+        label="REPORTS"
+        options={[...REPORT_NAMES]}
+        onSelect={onSelect}
+        autoFocus
+      />
+      {snapshot.selectedItem ? (
+        <p className="mt-2 font-mono text-xs text-tally-field">
+          Enter to open {snapshot.selectedItem}
+        </p>
+      ) : null}
+    </div>
+  </section>
 );
 
 /** Voucher adapter: the Phase 0 VoucherScreen needs the snapshot + onSelect. */
@@ -124,6 +134,14 @@ const QueryAdapter: ScreenComponent = ({
   <QueryScreen snapshot={snapshot} onSelect={onSelect} />
 );
 
+/** F1 Help adapter: the keystroke reference for the frame below it. */
+const HelpAdapter: ScreenComponent = ({ snapshot }: ScreenComponentProps) => (
+  <HelpScreen snapshot={snapshot} />
+);
+
+/** F11 Company Features adapter. */
+const FeaturesAdapter: ScreenComponent = () => <FeaturesScreen />;
+
 /**
  * Build a registry pre-populated with the default screens. Agents extend the
  * returned registry; call sites that want a clean slate construct their own
@@ -132,14 +150,21 @@ const QueryAdapter: ScreenComponent = ({
 export function createDefaultRegistry(): ScreenRegistry {
   return new ScreenRegistry().registerAll({
     gateway: GatewayAdapter,
-    menu: GatewayAdapter,
+    // A "menu" frame is the second-level report menu (Display More Reports).
+    menu: MoreReportsMenu,
     voucher: VoucherAdapter,
-    report: ReportScreen,
+    // A report NAME with no data plane behind it says so; it never fabricates
+    // rows. The five wired reports are registered by name below.
+    report: UnwiredReportScreen,
     "report-detail": ReportDetailScreen,
     "master-create": MasterCreateAdapter,
     "goto-overlay": GoToOverlayScreen,
     "bill-inbox": BillInboxAdapter,
     query: QueryAdapter,
+    // F1 Help (keystroke reference, generated from the live keymap) and F11
+    // Company Features (the honest capability inventory).
+    help: HelpAdapter,
+    features: FeaturesAdapter,
     // Live, per-name report screens (override the generic fallback).
     "report:Day Book": DayBookScreen,
     "report:Trial Balance": TrialBalanceScreen,

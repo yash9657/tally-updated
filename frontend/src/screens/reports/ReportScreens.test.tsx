@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import { render, screen, cleanup, waitFor } from "@testing-library/react";
 import { CompanyProvider } from "../../app/CompanyContext";
 import { LoadedVoucherProvider } from "../../app/LoadedVoucher";
+import { ScreenActionsProvider } from "../../app/ScreenActions";
 import {
   DayBookScreen,
   TrialBalanceScreen,
@@ -34,7 +35,11 @@ function renderReport(
       initialCompany={{ id: "co-1", name: "Test Co" }}
     >
       <LoadedVoucherProvider>
-        <Comp snapshot={SNAP} onSelect={() => {}} />
+        {/* Reports register their Alt+E export handler on the screen-action
+            bridge, exactly as they do inside the shell. */}
+        <ScreenActionsProvider>
+          <Comp snapshot={SNAP} onSelect={() => {}} />
+        </ScreenActionsProvider>
       </LoadedVoucherProvider>
     </CompanyProvider>,
   );
@@ -78,7 +83,7 @@ describe("report screens fetch from the live client on mount", () => {
       ],
     }));
     renderReport(DayBookScreen, { getDayBook });
-    await waitFor(() => expect(getDayBook).toHaveBeenCalledWith("co-1"));
+    await waitFor(() => expect(getDayBook).toHaveBeenCalledWith("co-1", {}));
     expect(screen.getByText("INV/0007")).toBeTruthy();
   });
 
@@ -121,7 +126,11 @@ describe("report screens fetch from the live client on mount", () => {
       total: "400.0000",
     }));
     renderReport(OutstandingsScreen, { getOutstandings });
-    await waitFor(() => expect(getOutstandings).toHaveBeenCalledWith("co-1"));
-    expect(screen.getByTestId("os-total").textContent).toBe("400.00");
+    await waitFor(() => expect(getOutstandings).toHaveBeenCalledWith("co-1", {}));
+    // Await the RENDER, not just the call: the total only exists once the
+    // response has been applied to state.
+    await waitFor(() =>
+      expect(screen.getByTestId("os-total").textContent).toBe("400.00"),
+    );
   });
 });
