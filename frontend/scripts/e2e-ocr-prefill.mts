@@ -32,6 +32,8 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { createRestClient, createInsightdClient, acceptPurchaseDraft } from "../src/api";
+// WS8b edit-through helper lives in the screen module (not re-exported by ../src/api).
+import { acceptEditedPurchaseDraft } from "../src/screens/vouchers/draftAccept";
 import { authHeaders } from "./auth.mjs";
 
 const coredBase =
@@ -58,6 +60,38 @@ function assertTrue(message: string, cond: boolean): void {
   if (!cond) fail(message, true, false);
 }
 
+type RestClient = ReturnType<typeof createRestClient>;
+type InsClient = ReturnType<typeof createInsightdClient>;
+
+/**
+ * Provision a FRESH company (unique id), its real ledgers, and a `ready` draft
+ * whose body references those real uuids. Returned so each accept case runs in
+ * its OWN company — a second accept in the SAME company would break the absolute
+ * trial-balance assertions.
+ */
+async function provision(client: RestClient, insightd: InsClient, name: string) {
+  const cid = crypto.randomUUID();
+  await client.createCompany({ id: cid, name, fy_start_date: "2026-04-01", base_currency: "INR" });
+  const led = async (n: string, group: string, extra: Record<string, string> = {}) =>
+    (await client.createLedger(cid, { name: n, group_name: group, ...extra })).ledger_id;
+  const party = await led("Acme Components Pvt Ltd", "Sundry Creditors", { state_code: "27" });
+  const purchase = await led("Purchase - Raw Material", "Purchase Accounts");
+  const cgst = await led("Input CGST", "Duties & Taxes");
+  const sgst = await led("Input SGST", "Duties & Taxes");
+  const igst = await led("Input IGST", "Duties & Taxes");
+
+  const remap: Record<string, string> = {
+    "CO-DEMO": cid, "L-PARTY-1": party, "L-PUR-RM": purchase, "L-PUR-CONS": purchase,
+    "L-PUR-SVC": purchase, "L-CGST": cgst, "L-SGST": sgst, "L-IGST": igst,
+  };
+  let txt = readFileSync(FIXTURE, "utf8");
+  for (const [k, v] of Object.entries(remap)) txt = txt.split(k).join(v);
+  const fixture = JSON.parse(txt) as Record<string, unknown>;
+  const tenant = (fixture.input as Record<string, unknown>).tenant as Record<string, unknown>;
+  const draft = await insightd.createDraft(cid, { source: "upload", tenant, fixture });
+  return { cid, party, draft };
+}
+
 async function main(): Promise<void> {
   console.log(`e2e-ocr-prefill: cored=${coredBase} insightd=${insightdBase}`);
   const client = createRestClient({
@@ -66,41 +100,8 @@ async function main(): Promise<void> {
   });
   const insightd = createInsightdClient({ baseUrl: insightdBase });
 
-  // 1. Fresh tenant + its real ledgers (intra-state supplier in state 27).
-  const cid = crypto.randomUUID();
-  await client.createCompany({
-    id: cid,
-    name: "E2E OCR Co",
-    fy_start_date: "2026-04-01",
-    base_currency: "INR",
-  });
-  const led = async (name: string, group: string, extra: Record<string, string> = {}) =>
-    (await client.createLedger(cid, { name, group_name: group, ...extra })).ledger_id;
-  const party = await led("Acme Components Pvt Ltd", "Sundry Creditors", { state_code: "27" });
-  const purchase = await led("Purchase - Raw Material", "Purchase Accounts");
-  const cgst = await led("Input CGST", "Duties & Taxes");
-  const sgst = await led("Input SGST", "Duties & Taxes");
-  const igst = await led("Input IGST", "Duties & Taxes");
-
-  // 2. Remap the corpus fixture's synthetic ids -> real cored uuids so the draft
-  //    body references real ledgers (mirrors a real deployment's tenant config).
-  const remap: Record<string, string> = {
-    "CO-DEMO": cid,
-    "L-PARTY-1": party,
-    "L-PUR-RM": purchase,
-    "L-PUR-CONS": purchase,
-    "L-PUR-SVC": purchase,
-    "L-CGST": cgst,
-    "L-SGST": sgst,
-    "L-IGST": igst,
-  };
-  let txt = readFileSync(FIXTURE, "utf8");
-  for (const [k, v] of Object.entries(remap)) txt = txt.split(k).join(v);
-  const fixture = JSON.parse(txt) as Record<string, unknown>;
-  const tenant = (fixture.input as Record<string, unknown>).tenant as Record<string, unknown>;
-
-  // 3. insightd returns a draft; insightd NEVER writes to cored.
-  const draft = await insightd.createDraft(cid, { source: "upload", tenant, fixture });
+  // ===== PART A: pristine accept (regression pin — byte-identical body) =====
+  const { cid, party, draft } = await provision(client, insightd, "E2E OCR Co");
   assertEqual("draft status is ready", draft.status, "ready");
   assertEqual("draft.body.party_ledger_id is the REAL cored ledger id", draft.body.party_ledger_id, party);
   assertTrue("derived_gst preview present", draft.derived_gst != null);
@@ -111,21 +112,21 @@ async function main(): Promise<void> {
   const fetched = await insightd.getDraft(cid, draft.draft_id);
   assertEqual("getDraft returns the same draft_id", fetched.draft_id, draft.draft_id);
 
-  // 4. HITL: every ledger balance is ZERO before accept (insightd wrote nothing).
+  // HITL: every ledger balance is ZERO before accept (insightd wrote nothing).
   const tb0 = await client.getTrialBalance(cid);
   const nonZero0 = tb0.rows.filter(
     (r) => Number.parseFloat(r.debit) !== 0 || Number.parseFloat(r.credit) !== 0,
   );
   assertEqual("HITL: no nonzero balances before accept", nonZero0.length, 0);
 
-  // 5. Ctrl+A — the EXISTING purchase API submits the body; cored re-derives GST.
+  // Ctrl+A — the EXISTING purchase API submits the body; cored re-derives GST.
   const res = await acceptPurchaseDraft(client, cid, draft.body);
   assertTrue("accepted voucher_no non-empty", !!res.voucher_no);
   assertEqual("server-derived CGST = 90.0000", res.cgst, "90.0000");
   assertEqual("server-derived SGST = 90.0000", res.sgst, "90.0000");
   assertEqual("server-derived IGST = 0.0000", res.igst, "0.0000");
 
-  // 6. Trial balance now reflects the purchase, balanced to the rupee.
+  // Trial balance now reflects the purchase, balanced to the rupee.
   const tb = await client.getTrialBalance(cid);
   assertTrue("trial balance is balanced", tb.balanced);
   const bal = (ledger: string) => tb.rows.find((r) => r.ledger === ledger);
@@ -133,6 +134,32 @@ async function main(): Promise<void> {
   assertEqual("Input CGST debited 90", bal("Input CGST")?.debit, "90.0000");
   assertEqual("Input SGST debited 90", bal("Input SGST")?.debit, "90.0000");
   assertEqual("Party credited 1180", bal("Acme Components Pvt Ltd")?.credit, "1180.0000");
+
+  // ===== PART B (WS8b): EDITED accept — taxable 1000 -> 2000 in a NEW company =====
+  const b = await provision(client, insightd, "E2E OCR Edit Co");
+  const tbB0 = await client.getTrialBalance(b.cid);
+  assertEqual(
+    "HITL: no nonzero balances before edited accept",
+    tbB0.rows.filter((r) => Number.parseFloat(r.debit) !== 0 || Number.parseFloat(r.credit) !== 0).length,
+    0,
+  );
+
+  // Edit ONLY the taxable value; acceptEditedPurchaseDraft rebuilds a balanced,
+  // orientation-preserving purchase body and POSTs it via the same purchase API.
+  const resB = await acceptEditedPurchaseDraft(client, b.cid, b.draft.body, { taxableValue: "2000" });
+  assertEqual("edited: server-derived CGST = 180.0000", resB.cgst, "180.0000");
+  assertEqual("edited: server-derived SGST = 180.0000", resB.sgst, "180.0000");
+  assertEqual("edited: server-derived IGST = 0.0000", resB.igst, "0.0000");
+
+  // The REAL server's trial balance proves the orientation (purchase Dr, input tax
+  // Dr, party Cr) AND the edited amounts — a reversed post would flip these.
+  const tbB = await client.getTrialBalance(b.cid);
+  assertTrue("edited: trial balance is balanced", tbB.balanced);
+  const balB = (ledger: string) => tbB.rows.find((r) => r.ledger === ledger);
+  assertEqual("edited: Purchase DEBITED 2000", balB("Purchase - Raw Material")?.debit, "2000.0000");
+  assertEqual("edited: Input CGST DEBITED 180", balB("Input CGST")?.debit, "180.0000");
+  assertEqual("edited: Input SGST DEBITED 180", balB("Input SGST")?.debit, "180.0000");
+  assertEqual("edited: Party CREDITED 2360", balB("Acme Components Pvt Ltd")?.credit, "2360.0000");
 
   console.log("e2e-ocr-prefill OK");
   process.exit(0);

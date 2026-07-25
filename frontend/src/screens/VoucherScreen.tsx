@@ -24,6 +24,7 @@ import {
   type GstFormState,
 } from "./vouchers/gstVoucher";
 import { normalizeMoney } from "./vouchers/money";
+import { acceptEditedPurchaseDraft, canRebuildDraft } from "./vouchers/draftAccept";
 import { acceptPurchaseDraft } from "../api";
 import type {
   FieldConfidence,
@@ -174,6 +175,30 @@ function formFromDraft(draft: PurchaseVoucherDraft): VoucherForm {
   };
 }
 
+/** The editable draft fields, and their OCR-confidence keys (for the amber-drop). */
+const DRAFT_EDITABLE_FIELDS = ["date", "narration", "taxableValue", "gstRatePct", "placeOfSupply"] as const;
+type DraftEditableField = (typeof DRAFT_EDITABLE_FIELDS)[number];
+
+/** confidence key an edited form field invalidates (narration has none). */
+const DRAFT_FIELD_CONF_KEY: Partial<Record<DraftEditableField, string>> = {
+  date: "invoice_date",
+  taxableValue: "totals",
+  gstRatePct: "totals",
+  placeOfSupply: "place_of_supply",
+};
+
+/** The set of editable draft fields whose live value differs from the seed. */
+function draftDirtyFields(seed: VoucherForm | null, form: VoucherForm): Set<DraftEditableField> {
+  const dirty = new Set<DraftEditableField>();
+  if (!seed) return dirty;
+  if (form.date !== seed.date) dirty.add("date");
+  if (form.narration !== seed.narration) dirty.add("narration");
+  if (form.taxableValue !== seed.taxableValue) dirty.add("taxableValue");
+  if (form.gst.gstRatePct !== seed.gst.gstRatePct) dirty.add("gstRatePct");
+  if (form.gst.placeOfSupply !== seed.gst.placeOfSupply) dirty.add("placeOfSupply");
+  return dirty;
+}
+
 /**
  * The voucher entry/alteration screen. Holds the real form state, drives the
  * LIVE backend on Ctrl+A (Accept) and Alt+D (Delete) via {@link editActions},
@@ -251,11 +276,19 @@ export function VoucherScreen({
   // Seed the form from an OCR draft when entering draft mode (keyed by draft_id,
   // mirroring the alter seedRef guard so a re-render doesn't clobber edits and a
   // fresh draft re-seeds). Prefill is display-only; accept POSTs the orig body.
+  // draftSeedFormRef holds the pristine form the draft seeded, so an edit is
+  // detected by comparing the live form to it (no parallel dirty flags to keep
+  // in sync). Cleared/re-set whenever a fresh draft seeds.
+  const draftSeedFormRef = useRef<VoucherForm | null>(null);
   const draftID = isDraftMode ? loadedDraft.draft.draft_id : null;
   useEffect(() => {
     if (!draftID || draftSeedRef.current === draftID) return;
     draftSeedRef.current = draftID;
-    if (loadedDraft) setForm(formFromDraft(loadedDraft.draft));
+    if (loadedDraft) {
+      const seeded = formFromDraft(loadedDraft.draft);
+      draftSeedFormRef.current = seeded;
+      setForm(seeded);
+    }
   }, [draftID, loadedDraft]);
 
   // Keep the latest form/ctx in refs so the registered action handlers (stable
@@ -344,12 +377,33 @@ export function VoucherScreen({
     // sole human-in-the-loop write; there is no insightd ledger-write path.
     const draftBody = draftBodyRef.current;
     if (draftBody) {
-      acceptPurchaseDraft(client, companyID, draftBody)
+      // Pristine accept POSTs the balanced draft body byte-identical (the proven
+      // path). A DIRTY accept (any editable field changed) rebuilds a balanced,
+      // orientation-preserving body from the edits via acceptEditedPurchaseDraft
+      // — NOT buildGstVoucherRequest (which is sales-shaped). Nothing posts before
+      // this Ctrl+A; HITL is untouched.
+      const seed = draftSeedFormRef.current;
+      const f = formRef.current;
+      const dirty = draftDirtyFields(seed, f);
+      // Only rebuild when the shape is editable; a non-rebuildable draft always
+      // posts pristine (the disclosed edit-deferred path), never silently errors.
+      const accept =
+        dirty.size > 0 && canRebuildDraft(draftBody)
+          ? acceptEditedPurchaseDraft(client, companyID, draftBody, {
+              voucherDate: f.date,
+              narration: f.narration,
+              taxableValue: f.taxableValue,
+              gstRatePct: f.gst.gstRatePct,
+              placeOfSupply: f.gst.placeOfSupply,
+            })
+          : acceptPurchaseDraft(client, companyID, draftBody);
+      accept
         .then((res: VoucherResponse) => {
           setSavedNo(res.voucher_no);
           setTaxResult({ cgst: res.cgst, sgst: res.sgst, igst: res.igst });
           setStatus("Saved");
           setLoadedDraft(null);
+          draftSeedFormRef.current = null;
         })
         .catch((err: unknown) => {
           setStatus(
@@ -413,6 +467,18 @@ export function VoucherScreen({
   const title = VOUCHER_TITLES[type] ?? type;
   const displayNo = savedNo ?? form.voucherNo;
 
+  // Draft-mode edit affordances: whether the draft's shape is rebuildable
+  // (single-line, non-RCM, non-exempt), and which OCR-confidence chips to drop
+  // because the human has overridden the underlying field.
+  const draftRebuildable = isDraftMode ? canRebuildDraft(loadedDraft.draft.body) : false;
+  const draftDirtyConfKeys = new Set<string>();
+  if (isDraftMode) {
+    for (const field of draftDirtyFields(draftSeedFormRef.current, form)) {
+      const k = DRAFT_FIELD_CONF_KEY[field];
+      if (k) draftDirtyConfKeys.add(k);
+    }
+  }
+
   // Selecting a party from the list fills the form name AND seeds the place of
   // supply from the party's state code (Tally defaults POS from the party, but
   // allows an override). The real uuid is resolved on accept.
@@ -459,7 +525,14 @@ export function VoucherScreen({
       <p className="mb-2 text-xs text-tally-field">{cfg.hint}</p>
 
       <div className="bg-tally-panel p-3">
-        <FieldRow name="Date" active={snapshot.field === "date"} value={form.date} />
+        <FieldRow
+          name="Date"
+          active={snapshot.field === "date"}
+          value={form.date}
+          editable={draftRebuildable}
+          onChange={(v) => setForm((f) => ({ ...f, date: v }))}
+          testId={isDraftMode ? "draft-date" : undefined}
+        />
         <FieldRow
           name="No."
           active={false}
@@ -478,6 +551,9 @@ export function VoucherScreen({
           name="Narration"
           active={snapshot.field === "narration"}
           value={form.narration}
+          editable={draftRebuildable}
+          onChange={(v) => setForm((f) => ({ ...f, narration: v }))}
+          testId={isDraftMode ? "draft-narration" : undefined}
         />
       </div>
 
@@ -489,7 +565,13 @@ export function VoucherScreen({
         />
       ) : null}
 
-      {isDraftMode ? <DraftPrefillPanel draft={loadedDraft.draft} /> : null}
+      {isDraftMode ? (
+        <DraftPrefillPanel
+          draft={loadedDraft.draft}
+          dirtyConfKeys={draftDirtyConfKeys}
+          editable={draftRebuildable}
+        />
+      ) : null}
 
       {snapshot.overlay === "change-mode" ? (
         <ChangeModeOverlay onSelect={onSelect} />
@@ -503,25 +585,43 @@ function FieldRow({
   active,
   value,
   testId,
+  editable,
+  onChange,
 }: {
   name: string;
   active: boolean;
   value: string;
   testId?: string;
+  /** Draft mode: render an editable input while keeping the active highlight. */
+  editable?: boolean;
+  onChange?: (v: string) => void;
 }) {
   return (
     <div className="flex items-center gap-2 py-0.5">
       <span className="w-32">{name}</span>
-      <span
-        data-testid={testId}
-        className={
-          active
-            ? "bg-tally-active px-2 text-white"
-            : "bg-tally-field px-2 text-tally-fieldText"
-        }
-      >
-        {value || " "}
-      </span>
+      {editable ? (
+        <input
+          data-testid={testId}
+          className={
+            active
+              ? "bg-tally-active px-2 text-white outline-none"
+              : "bg-tally-field px-2 text-tally-fieldText outline-none"
+          }
+          value={value}
+          onChange={(e) => onChange?.(e.target.value)}
+        />
+      ) : (
+        <span
+          data-testid={testId}
+          className={
+            active
+              ? "bg-tally-active px-2 text-white"
+              : "bg-tally-field px-2 text-tally-fieldText"
+          }
+        >
+          {value || " "}
+        </span>
+      )}
     </div>
   );
 }
@@ -650,7 +750,17 @@ const AMBER_STYLE: React.CSSProperties = { color: "#d97706" };
  *  - and the derived GST split PREVIEW (server re-derives on submit).
  * Money is rendered as exact fixed-4 strings, never Number()-coerced.
  */
-function DraftPrefillPanel({ draft }: { draft: PurchaseVoucherDraft }) {
+function DraftPrefillPanel({
+  draft,
+  dirtyConfKeys,
+  editable,
+}: {
+  draft: PurchaseVoucherDraft;
+  /** OCR-confidence keys whose field the human has edited (drop the amber chip). */
+  dirtyConfKeys: Set<string>;
+  /** Whether the draft is rebuildable; false => a disclosed edit-deferred note. */
+  editable: boolean;
+}) {
   const header = draft.confidence.header;
   const ready = draft.status === "ready";
 
@@ -681,10 +791,20 @@ function DraftPrefillPanel({ draft }: { draft: PurchaseVoucherDraft }) {
           : "Low confidence — review every field before accepting"}
       </div>
 
+      {!editable ? (
+        <div data-testid="draft-edit-disabled" className="mb-2 text-xs" style={AMBER_STYLE}>
+          Editing is not available for this draft (multi-line, reverse-charge or
+          exempt); accept as-is or fix it after posting.
+        </div>
+      ) : null}
+
       <div className="mb-2">
         {headerRows.map((row) => {
           const conf = header[row.key];
-          const isAmber = amber(conf);
+          // An EDITED field drops its amber confidence chip: the OCR confidence
+          // described the machine's read, not the human's override.
+          const edited = dirtyConfKeys.has(row.key);
+          const isAmber = amber(conf) && !edited;
           return (
             <div
               key={row.key}
@@ -697,9 +817,11 @@ function DraftPrefillPanel({ draft }: { draft: PurchaseVoucherDraft }) {
             >
               <span className="w-32">{row.label}</span>
               <span>
-                {conf
-                  ? `${(conf.confidence * 100).toFixed(0)}% (${conf.source})`
-                  : "—"}
+                {edited
+                  ? "edited"
+                  : conf
+                    ? `${(conf.confidence * 100).toFixed(0)}% (${conf.source})`
+                    : "—"}
               </span>
             </div>
           );

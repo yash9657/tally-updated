@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { useEffect } from "react";
-import { render, screen, cleanup, waitFor, act } from "@testing-library/react";
+import { render, screen, cleanup, waitFor, act, fireEvent } from "@testing-library/react";
 import { VoucherScreen } from "./VoucherScreen";
 import { CompanyProvider } from "../app/CompanyContext";
 import {
@@ -219,7 +219,12 @@ describe("Purchase voucher DRAFT mode (OCR prefill + HITL accept)", () => {
         (screen.getByTestId("gst-taxable") as HTMLInputElement).value,
       ).toBe("1000.0000"),
     );
-    await waitFor(() => expect(screen.getByText("Steel rods purchase")).toBeTruthy());
+    // Narration is an editable input in (rebuildable) draft mode; read its value.
+    await waitFor(() =>
+      expect(
+        (screen.getByTestId("draft-narration") as HTMLInputElement).value,
+      ).toBe("Steel rods purchase"),
+    );
 
     // Status banner: ready.
     expect(screen.getByTestId("draft-status").textContent).toContain(
@@ -278,5 +283,76 @@ describe("Purchase voucher DRAFT mode (OCR prefill + HITL accept)", () => {
     expect(screen.getByTestId("tax-cgst").textContent).toBe("90.0000");
     expect(screen.getByTestId("tax-sgst").textContent).toBe("90.0000");
     expect(screen.queryByTestId("tax-igst")).toBeNull();
+  });
+
+  it("edits the taxable value -> accept POSTs the rebuilt, balanced purchase body (orientation preserved)", async () => {
+    const base = createMockClient({ seed: false });
+    const draft = await buildReadyDraft(base);
+    const { client, spies } = spyClient(base);
+
+    let dispatch:
+      | ((kind: "accept" | "delete", snap: NavSnapshot) => boolean)
+      | null = null;
+    renderDraftScreen(client, draft, (d) => {
+      dispatch = d;
+    });
+
+    // Wait for prefill, then edit taxable 1000 -> 2000 (intra @18).
+    const taxable = () => screen.getByTestId("gst-taxable") as HTMLInputElement;
+    await waitFor(() => expect(taxable().value).toBe("1000.0000"));
+    await act(async () => {
+      fireEvent.change(taxable(), { target: { value: "2000.0000" } });
+    });
+
+    // Still nothing posted before Ctrl+A (HITL holds through an edit).
+    expect(spies.postPurchaseVoucher).not.toHaveBeenCalled();
+
+    expect(dispatch).not.toBeNull();
+    await act(async () => {
+      dispatch!("accept", PURCHASE_CREATE_SNAPSHOT);
+    });
+
+    await waitFor(() =>
+      expect(spies.postPurchaseVoucher).toHaveBeenCalledTimes(1),
+    );
+    const [, req] = spies.postPurchaseVoucher!.mock.calls[0]!;
+    const postings = (req as { postings: PostingRequest[] }).postings;
+
+    // Independent literals: 2000 @18 intra -> CGST 180 + SGST 180, party Cr 2360.
+    const byAmount = postings.map((p) => `${p.dr_cr}:${p.amount}`);
+    expect(byAmount).toContain("D:2000.0000"); // expense debit
+    expect(byAmount.filter((s) => s === "D:180.0000")).toHaveLength(2); // input CGST+SGST debit
+    expect(byAmount).toContain("C:2360.0000"); // party credit
+    // Orientation: 3 debits, 1 credit — a purchase, not a reversed sale.
+    expect(postings.filter((p) => p.dr_cr === "D")).toHaveLength(3);
+    expect(postings.filter((p) => p.dr_cr === "C")).toHaveLength(1);
+    // Balanced to the paisa, computed here (not echoed by the mock).
+    const paise = (dc: "D" | "C") =>
+      postings
+        .filter((p) => p.dr_cr === dc)
+        .reduce((a, p) => a + Math.round(Number.parseFloat(p.amount) * 10000), 0);
+    expect(paise("D")).toBe(paise("C"));
+  });
+
+  it("an edited field drops its amber confidence chip", async () => {
+    const base = createMockClient({ seed: false });
+    const draft = await buildReadyDraft(base);
+    const { client } = spyClient(base);
+    renderDraftScreen(client, draft, () => {});
+
+    // invoice_date is amber (0.62) until the human overrides the date.
+    await waitFor(() =>
+      expect(screen.getByTestId("conf-invoice_date").style.color).toBe(
+        "rgb(217, 119, 6)",
+      ),
+    );
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("draft-date"), {
+        target: { value: "2026-06-11" },
+      });
+    });
+    // The chip is no longer amber and reads "edited".
+    expect(screen.getByTestId("conf-invoice_date").style.color).toBe("");
+    expect(screen.getByTestId("conf-invoice_date").textContent).toContain("edited");
   });
 });

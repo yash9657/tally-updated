@@ -13,13 +13,17 @@
 
 import type {
   CoredClient,
+  GSTDraft,
   GSTRequest,
+  PostingDraft,
   PostingRequest,
   VoucherDraftBody,
   VoucherRequest,
   VoucherResponse,
 } from "../../api";
 import { ensureLedger } from "./gstVoucher";
+import { deriveGstSplit } from "./gstDerive";
+import { addMoney, isZeroMoney, normalizeMoney } from "./money";
 
 /**
  * PURE: convert a (fully-resolved) draft body into a cored {@link VoucherRequest}.
@@ -81,6 +85,175 @@ export function draftBodyToVoucherRequest(
   }
 
   return req;
+}
+
+// ---------------------------------------------------------------------------
+// Per-field edit-through (WS8b). A DIRTY accept rebuilds the POSTed body from
+// the user's edits, keeping the draft's PURCHASE orientation (expense Dr +
+// Input-tax Dr + party Cr). It deliberately does NOT route through
+// buildGstVoucherRequest — that helper is SALES-shaped (party Dr / income Cr /
+// output-tax Cr) and would post a REVERSED purchase that still passes the
+// server's dr_cr-blind GST verify and a balanced TB. So the rebuild is a local,
+// orientation-preserving function that reuses only the pure split derivation.
+// ---------------------------------------------------------------------------
+
+/** The subset of a prefilled draft a human may edit in v1. Absent = unchanged. */
+export interface DraftEdits {
+  voucherDate?: string;
+  narration?: string;
+  taxableValue?: string;
+  gstRatePct?: string;
+  placeOfSupply?: string;
+}
+
+/** Thrown when a draft cannot be safely rebuilt after an edit (guarded shapes). */
+export class DraftRebuildError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DraftRebuildError";
+  }
+}
+
+/**
+ * A draft is rebuildable ONLY when it is the simple, single-line intra/inter GST
+ * purchase the split derivation models: a GST block, exactly one line, no
+ * reverse-charge and no exemption (neither is modelled by deriveGstSplit), and
+ * exactly one NON-tax debit posting (the expense leg). Multi-line drafts, RCM
+ * and exempt drafts are DEFERRED (disclosed) — their edits keep the pristine
+ * body. This mirrors the guard the plan's own e2e assumes.
+ */
+export function canRebuildDraft(body: VoucherDraftBody): boolean {
+  const g = body.gst;
+  if (!g) return false;
+  if (g.reverse_charge || g.exempt) return false;
+  if (g.lines.length !== 1) return false;
+  const taxIds = taxLedgerIds(g);
+  const nonTaxDebits = body.postings.filter(
+    (p) => p.dr_cr === "D" && (p.ledger_id == null || !taxIds.has(p.ledger_id)),
+  );
+  return nonTaxDebits.length === 1;
+}
+
+/** The set of NON-null input-tax ledger ids declared on the draft's gst block. */
+function taxLedgerIds(g: GSTDraft): Set<string> {
+  return new Set(
+    [g.cgst_ledger_id, g.sgst_ledger_id, g.igst_ledger_id].filter(
+      (x): x is string => !!x,
+    ),
+  );
+}
+
+/**
+ * PURE: apply the human's edits to a prefilled draft body and return a NEW,
+ * balanced body that PRESERVES the purchase orientation. Intra/inter is derived
+ * from the draft's supplier_state_code (the VENDOR's, never the home state) vs
+ * the possibly-edited place of supply — NOT from any home-state code. The three
+ * tax-ledger ids are carried from the draft's gst block verbatim (Input CGST/…,
+ * never the Output CGST buildGstVoucherRequest would create). Throws
+ * DraftRebuildError when the shape is not rebuildable or a needed tax ledger id
+ * is absent — the caller must NOT post in that case (HITL preserved).
+ */
+export function applyDraftEdits(
+  body: VoucherDraftBody,
+  edits: DraftEdits,
+): VoucherDraftBody {
+  if (!canRebuildDraft(body)) {
+    throw new DraftRebuildError(
+      "this draft cannot be edited in v1 (multi-line, reverse-charge or exempt) — accept as-is",
+    );
+  }
+  const g = body.gst as GSTDraft;
+  const line = g.lines[0]!;
+
+  const taxable = normalizeMoney(edits.taxableValue ?? line.taxable_value);
+  const rate = edits.gstRatePct ?? line.gst_rate_pct;
+  const supplierState = g.supplier_state_code ?? "";
+  const placeOfSupply = edits.placeOfSupply ?? g.place_of_supply_state_code ?? "";
+
+  const split = deriveGstSplit(taxable, rate, supplierState, placeOfSupply);
+
+  // Identify the existing legs (orientation-preserving; ledger ids reused).
+  const taxIds = taxLedgerIds(g);
+  const expense = body.postings.find(
+    (p) => p.dr_cr === "D" && (p.ledger_id == null || !taxIds.has(p.ledger_id)),
+  );
+  if (!expense) throw new DraftRebuildError("no expense debit posting found");
+  const party =
+    body.postings.find(
+      (p) => p.dr_cr === "C" && p.ledger_id === body.party_ledger_id,
+    ) ?? body.postings.find((p) => p.dr_cr === "C");
+  if (!party) throw new DraftRebuildError("no party credit posting found");
+
+  // Rebuild the tax DEBIT legs from the derived split (non-zero heads only),
+  // using the draft's own input-tax ledger ids. A needed-but-missing id is a
+  // hard error, not a silent create-under-the-wrong-group.
+  const taxPostings: PostingDraft[] = [];
+  const pushTax = (
+    amount: string,
+    ledgerId: string | null | undefined,
+    name: string,
+  ) => {
+    if (isZeroMoney(amount)) return;
+    if (!ledgerId) {
+      throw new DraftRebuildError(
+        `edited GST needs the ${name} ledger id, which the draft does not carry`,
+      );
+    }
+    taxPostings.push({ ledger_id: ledgerId, ledger_name: name, dr_cr: "D", amount });
+  };
+  if (split.intra) {
+    pushTax(split.cgst, g.cgst_ledger_id, "Input CGST");
+    pushTax(split.sgst, g.sgst_ledger_id, "Input SGST");
+  } else {
+    pushTax(split.igst, g.igst_ledger_id, "Input IGST");
+  }
+
+  // invoice total = taxable + whichever heads are non-zero.
+  const invoiceTotal = addMoney(
+    addMoney(taxable, split.cgst),
+    addMoney(split.sgst, split.igst),
+  );
+
+  const postings: PostingDraft[] = [
+    { ...expense, dr_cr: "D", amount: taxable },
+    ...taxPostings,
+    { ...party, dr_cr: "C", amount: invoiceTotal },
+  ];
+
+  const gst: GSTDraft = {
+    ...g,
+    supplier_state_code: g.supplier_state_code,
+    place_of_supply_state_code: placeOfSupply || g.place_of_supply_state_code,
+    lines: [{ ...line, taxable_value: taxable, gst_rate_pct: rate }],
+  };
+
+  return {
+    ...body,
+    voucher_date: edits.voucherDate ?? body.voucher_date,
+    narration: edits.narration ?? body.narration,
+    postings,
+    gst,
+  };
+}
+
+/**
+ * ASYNC: apply edits, resolve any null ledgers, and POST the rebuilt body via the
+ * SAME proven path as a pristine accept (resolveDraftLedgers +
+ * draftBodyToVoucherRequest). The only difference from acceptPurchaseDraft is
+ * the edit-through rebuild in front of it.
+ */
+export async function acceptEditedPurchaseDraft(
+  client: CoredClient,
+  companyID: string,
+  body: VoucherDraftBody,
+  edits: DraftEdits,
+): Promise<VoucherResponse> {
+  const edited = applyDraftEdits(body, edits);
+  const resolved = await resolveDraftLedgers(client, companyID, edited);
+  return client.postPurchaseVoucher(
+    companyID,
+    draftBodyToVoucherRequest(resolved),
+  );
 }
 
 /**
