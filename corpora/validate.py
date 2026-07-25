@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import sys
 import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
@@ -698,6 +699,140 @@ def validate_gstr1_oracle(path: Path, g: dict) -> None:
             fail(path, f"gstr1.taxTotals.{label}={want:f} != sum of HSN rows {got:f}")
 
 
+_IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def _parse_date(s: str):
+    return datetime.strptime(s, "%Y-%m-%d").date()
+
+
+def validate_forecast(path: Path, data: dict) -> None:
+    """INDEPENDENT oracle for the forecast corpus (wave-2 WS5a).
+
+    Re-derives the cash-flow buckets and the anomaly findings from the fixture's
+    inputs — in Python, with Decimal — and asserts they match the fixture's
+    expected block. This is a second, non-circular check on the Go
+    Project/DetectAnomalies functions (the fixture is the shared oracle; a wrong
+    expected value fails here even if the Go test were also wrong).
+    """
+    kind = data.get("kind")
+    if kind == "cashflow":
+        _validate_forecast_cashflow(path, data)
+    elif kind == "anomaly":
+        _validate_forecast_anomaly(path, data)
+    else:
+        fail(path, f"forecast fixture: unknown kind {kind!r} (want cashflow|anomaly)")
+
+
+def _validate_forecast_cashflow(path: Path, data: dict) -> None:
+    if not require(path, data, ["as_on", "horizon_days", "bucket_days", "opening_cash", "bills", "expected"]):
+        return
+    as_on = _parse_date(data["as_on"])
+    horizon = data["horizon_days"]
+    bucket_days = data["bucket_days"]
+    if not isinstance(horizon, int) or not isinstance(bucket_days, int) or horizon <= 0 or bucket_days <= 0:
+        fail(path, "horizon_days and bucket_days must be positive integers")
+        return
+    opening = money(path, "opening_cash", data["opening_cash"])
+    if opening is None:
+        return
+    n_buckets = -(-horizon // bucket_days)  # ceil
+    inflow = [Decimal(0)] * n_buckets
+    outflow = [Decimal(0)] * n_buckets
+    beyond_in = Decimal(0)
+    beyond_out = Decimal(0)
+    overdue = False
+    for i, b in enumerate(data["bills"]):
+        pend = money(path, f"bills[{i}].pending", b["pending"])
+        if pend is None:
+            return
+        if pend == 0:
+            continue
+        if b.get("due_date"):
+            exp = _parse_date(b["due_date"])
+        elif b.get("voucher_date"):
+            cd = b["credit_days"] if b.get("credit_days") is not None else 30
+            exp = _parse_date(b["voucher_date"]) + timedelta(days=cd)
+        else:
+            fail(path, f"bills[{i}] has neither due_date nor voucher_date")
+            return
+        day_off = (exp - as_on).days
+        if day_off < 0:
+            idx, overdue = 0, True
+        else:
+            idx = day_off // bucket_days
+        if idx >= n_buckets:
+            if b["kind"] == "outflow":
+                beyond_out += pend
+            else:
+                beyond_in += pend
+        elif b["kind"] == "outflow":
+            outflow[idx] += pend
+        else:
+            inflow[idx] += pend
+
+    exp_buckets = data["expected"]["buckets"]
+    if len(exp_buckets) != n_buckets:
+        fail(path, f"expected {n_buckets} buckets, fixture lists {len(exp_buckets)}")
+        return
+    prev_close = opening
+    for k, eb in enumerate(exp_buckets):
+        nett = inflow[k] - outflow[k]
+        open_cash = prev_close
+        close_cash = open_cash + nett
+        prev_close = close_cash
+        for field, got in (
+            ("inflow", inflow[k]), ("outflow", outflow[k]), ("nett", nett),
+            ("opening_cash", open_cash), ("closing_cash", close_cash),
+        ):
+            want = money(path, f"buckets[{k}].{field}", eb[field])
+            if want is not None and want != got:
+                fail(path, f"cashflow bucket {k} {field}: fixture {want:f} != re-derived {got:f}")
+        want_from = (as_on + timedelta(days=k * bucket_days)).isoformat()
+        want_to = (as_on + timedelta(days=(k + 1) * bucket_days)).isoformat()
+        if eb["from"] != want_from or eb["to"] != want_to:
+            fail(path, f"cashflow bucket {k} range [{eb['from']},{eb['to']}) != re-derived [{want_from},{want_to})")
+
+    bh = data["expected"]["beyond_horizon"]
+    for field, got in (("inflow", beyond_in), ("outflow", beyond_out), ("nett", beyond_in - beyond_out)):
+        want = money(path, f"beyond_horizon.{field}", bh[field])
+        if want is not None and want != got:
+            fail(path, f"cashflow beyond_horizon.{field}: fixture {want:f} != re-derived {got:f}")
+    if bool(data["expected"].get("overdue_folded", False)) != overdue:
+        fail(path, f"overdue_folded: fixture {data['expected'].get('overdue_folded')} != re-derived {overdue}")
+
+
+def _validate_forecast_anomaly(path: Path, data: dict) -> None:
+    if not require(path, data, ["records", "expected_findings"]):
+        return
+    findings: list[tuple[str, str]] = []
+    by_voucher: dict[str, list[dict]] = {}
+    for r in data["records"]:
+        vd = _parse_date(r["voucher_date"])
+        ca = datetime.fromisoformat(r["created_at"])
+        if (ca.date() - vd).days > 7:
+            findings.append(("BACKDATED", r["voucher_no"]))
+        hr = ca.astimezone(_IST).hour
+        if hr < 7 or hr >= 22:
+            findings.append(("AFTER_HOURS", r["voucher_no"]))
+        tv = r.get("taxable_value")
+        if tv is not None:
+            d = Decimal(str(tv))
+            if d != 0 and d >= 10000 and d % 1000 == 0:
+                findings.append(("ROUND_AMOUNT", r["voucher_no"]))
+        by_voucher.setdefault(r["voucher_id"], []).append(r)
+    for group in by_voucher.values():
+        if len(group) < 3:
+            continue
+        times = sorted(datetime.fromisoformat(r["created_at"]) for r in group)
+        if any(times[i + 2] - times[i] <= timedelta(hours=24) for i in range(len(times) - 2)):
+            findings.append(("EDIT_BURST", group[0]["voucher_no"]))
+    got = sorted(findings)
+    want = sorted((f["kind"], f["voucher_no"]) for f in data["expected_findings"])
+    if got != want:
+        fail(path, f"anomaly findings re-derived {got} != fixture {want}")
+
+
 VALIDATORS = {
     "tax": validate_tax,
     "tds": validate_tds,
@@ -705,9 +840,10 @@ VALIDATORS = {
     "keystroke": validate_keystroke,
     "isolation": validate_isolation,
     "migration": validate_migration,
+    "forecast": validate_forecast,
 }
 
-MIN_COUNTS = {"tax": 14, "tds": 8, "tcs": 2, "keystroke": 14, "isolation": 10, "migration": 6}
+MIN_COUNTS = {"tax": 14, "tds": 8, "tcs": 2, "keystroke": 14, "isolation": 10, "migration": 6, "forecast": 4}
 
 
 def main() -> int:

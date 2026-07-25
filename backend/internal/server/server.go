@@ -378,6 +378,9 @@ func (s *Server) routes() {
 		r.Get("/profit-and-loss", s.handleProfitAndLoss)
 		r.Get("/day-book", s.handleDayBook)
 		r.Get("/outstandings", s.handleOutstandings)
+		// Forecast/anomaly reports (wave-2 WS5a).
+		r.Get("/cash-flow", s.handleCashFlow)
+		r.Get("/anomalies", s.handleAnomalies)
 
 		// GST.
 		r.Get("/gstr1", s.handleGSTR1)

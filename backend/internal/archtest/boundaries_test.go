@@ -43,6 +43,10 @@ var allowedDeps = map[string]map[string]bool{
 	"internal/ledger":      {"internal/platform/db": true, "internal/compliance": true},
 	"internal/masters":     {"internal/platform/db": true},
 	"internal/reporting":   {"internal/platform/db": true},
+	// forecast (wave 2 WS5a) is a read-only projection/anomaly reporter. It reuses
+	// reporting's Outstandings netting (never re-implementing it) and issues its own
+	// supplementary read-only queries over the db layer. Two siblings, nothing else.
+	"internal/forecast": {"internal/platform/db": true, "internal/reporting": true},
 	// query (Phase 3) is the NL->typed-DSL->safe-read-only-SQL engine: it compiles
 	// a closed DSL to parameterized SQL and executes it via the db layer's
 	// read-only, RLS-scoped tx. It imports the db layer and nothing else (the
@@ -85,6 +89,7 @@ var allowedDeps = map[string]map[string]bool{
 		"internal/ledger":          true,
 		"internal/masters":         true,
 		"internal/reporting":       true,
+		"internal/forecast":        true,
 		"internal/query":           true,
 		"internal/nlq":             true,
 		"internal/identity":        true,

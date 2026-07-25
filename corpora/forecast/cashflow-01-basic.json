@@ -1,0 +1,28 @@
+{
+  "id": "cashflow-01-basic",
+  "kind": "cashflow",
+  "description": "Pen-and-paper derivation. as_on=2026-01-01, 7-day buckets, horizon 30d => ceil(30/7)=5 buckets: B0[01-01,01-08) B1[01-08,01-15) B2[01-15,01-22) B3[01-22,01-29) B4[01-29,02-05); beyond = day>=35. Opening cash 10000. Bills: (i) inflow 5000 due 01-05 => day4 B0; (ii) inflow 3000 due 01-20 => day19 B2; (iii) outflow 2000 due 01-10 => day9 B1; (iv) inflow 1000 no due, voucher 2025-12-20 +30d = 2026-01-19 => day18 B2; (v) outflow 4000 due 03-01 => day59 beyond; (vi) inflow 500 due 2025-12-25 (overdue) => folded to B0. B0 in=5000+500=5500 out=0 nett=5500 open=10000 close=15500. B1 in=0 out=2000 nett=-2000 open=15500 close=13500. B2 in=3000+1000=4000 out=0 nett=4000 open=13500 close=17500. B3 0/0 open=close=17500. B4 0/0 open=close=17500. beyond in=0 out=4000 nett=-4000. Conservation: inflow 5500+4000=9500 == 5000+3000+1000+500; outflow 2000+4000=6000 == 2000+4000.",
+  "as_on": "2026-01-01",
+  "horizon_days": 30,
+  "bucket_days": 7,
+  "opening_cash": "10000",
+  "bills": [
+    { "kind": "inflow", "pending": "5000", "due_date": "2026-01-05" },
+    { "kind": "inflow", "pending": "3000", "due_date": "2026-01-20" },
+    { "kind": "outflow", "pending": "2000", "due_date": "2026-01-10" },
+    { "kind": "inflow", "pending": "1000", "voucher_date": "2025-12-20" },
+    { "kind": "outflow", "pending": "4000", "due_date": "2026-03-01" },
+    { "kind": "inflow", "pending": "500", "due_date": "2025-12-25" }
+  ],
+  "expected": {
+    "overdue_folded": true,
+    "buckets": [
+      { "from": "2026-01-01", "to": "2026-01-08", "inflow": "5500", "outflow": "0", "nett": "5500", "opening_cash": "10000", "closing_cash": "15500" },
+      { "from": "2026-01-08", "to": "2026-01-15", "inflow": "0", "outflow": "2000", "nett": "-2000", "opening_cash": "15500", "closing_cash": "13500" },
+      { "from": "2026-01-15", "to": "2026-01-22", "inflow": "4000", "outflow": "0", "nett": "4000", "opening_cash": "13500", "closing_cash": "17500" },
+      { "from": "2026-01-22", "to": "2026-01-29", "inflow": "0", "outflow": "0", "nett": "0", "opening_cash": "17500", "closing_cash": "17500" },
+      { "from": "2026-01-29", "to": "2026-02-05", "inflow": "0", "outflow": "0", "nett": "0", "opening_cash": "17500", "closing_cash": "17500" }
+    ],
+    "beyond_horizon": { "inflow": "0", "outflow": "4000", "nett": "-4000" }
+  }
+}

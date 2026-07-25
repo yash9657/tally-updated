@@ -385,6 +385,10 @@ func reportName(rest string) string {
 		return "day-book"
 	case "/outstandings":
 		return "outstandings"
+	case "/cash-flow":
+		return "cash-flow"
+	case "/anomalies":
+		return "anomalies"
 	case "/gstr1":
 		return "gstr1"
 	case "/gstr3b":
