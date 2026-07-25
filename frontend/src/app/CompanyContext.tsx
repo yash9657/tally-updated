@@ -136,11 +136,25 @@ export function CompanyProvider({
   // Guard so React 18 StrictMode's double-invoke (and re-renders) don't mint two
   // companies. Bootstrap runs at most once per provider instance.
   const bootstrapped = useRef(false);
+  // Whether this provider is still mounted, so the async bootstrap only commits
+  // state when it is. CRITICAL for StrictMode: a per-effect `cancelled` flag does
+  // NOT work here — StrictMode mounts, cleans up (which would set cancelled), then
+  // REMOUNTS, but `bootstrapped` blocks the remount from re-running, so the sole
+  // in-flight bootstrap would see cancelled=true and silently drop its setCompany
+  // (company stays null -> "Preparing company…" forever). A ref that is reset to
+  // true on the remount fixes it: by the time the async network call resolves, the
+  // remount has set mounted back to true, so the commit lands.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!bootstrap || company || bootstrapped.current) return;
     bootstrapped.current = true;
-    let cancelled = false;
     (async () => {
       const persisted = readPersistedCompanyId();
       if (persisted) {
@@ -151,7 +165,7 @@ export function CompanyProvider({
         // column cored defaults SupplierStateCode from when posting.
         try {
           const view = await client.getCompany(persisted);
-          if (!cancelled) {
+          if (mounted.current) {
             setCompany({
               id: view.id || persisted,
               name: view.name || BOOTSTRAP_COMPANY_NAME,
@@ -191,7 +205,7 @@ export function CompanyProvider({
           state_code: stateCode,
         });
         persistCompanyId(res.company_id);
-        if (!cancelled) {
+        if (mounted.current) {
           setCompany({
             id: res.company_id,
             name: BOOTSTRAP_COMPANY_NAME,
@@ -204,9 +218,6 @@ export function CompanyProvider({
         bootstrapped.current = false;
       }
     })();
-    return () => {
-      cancelled = true;
-    };
   }, [bootstrap, client, company]);
 
   const value = useMemo<CompanyContextValue>(
