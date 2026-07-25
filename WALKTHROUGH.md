@@ -31,6 +31,48 @@ backend (the dev server proxies `/v1`, `/auth` → cored and `/companies` →
 insightd, and auto-mints a dev owner token). Delete that file to run the UI
 against its in-memory mock instead.
 
+### 1.1 The demo company — seed it, then open one link
+
+There is **no pre-existing demo company**: the UI mints an empty `My Company` per
+browser profile, and every other company in the database is throwaway test data.
+Seed a real one:
+
+```bash
+cd frontend && pnpm seed:demo              # books only
+cd frontend && pnpm seed:demo -- --insightd # …and a pending Bill Inbox draft
+```
+
+It prints `OPEN IT: http://localhost:5173/?company=<id>` — that URL selects the
+company and persists it, so later plain reloads stay on it.
+
+**Demo Traders** contains, deliberately, one of everything a screen can show:
+
+| What | Why it is there |
+|---|---|
+| 2 customers + 2 suppliers, one in Karnataka and one out of state | both GST paths — CGST+SGST **and** IGST — in the same books |
+| Opening capital ₹5,00,000, cash + bank | the Balance Sheet has an equity side and two cash accounts |
+| 3 sales, 2 purchases across Apr–Jul 2026 | the F2 period picker, Day Book range and cash-flow buckets all have something to move |
+| Bill-wise refs on every party voucher, **one part-paid** | Outstandings shows a fully open bill *and* a partly settled one, so ageing is non-trivial |
+| Receipt, Payment, Contra, Journal | all six voucher types (F4–F9) have real entries behind them |
+| 1 **altered** voucher (version 2) | the append-only edit trail exists in the data |
+| 1 **deleted** voucher (tombstone) | it vanishes from reports while its versions remain |
+| 1 pending OCR draft (`--insightd`) | the Bill Inbox → F9 prefill flow has a bill to accept |
+
+**Verified after seeding:** Trial Balance Dr = Cr = 722080.0000 (balanced),
+Balance Sheet assets = liabilities = 609480.0000, 2 receivable parties totalling
+145280.0000; in the browser the title bar reads *Demo Traders*, the Day Book lists
+the entries, and the Bill Inbox shows `Acme Components Pvt Ltd · 1180.0000 · ready · 95%`.
+
+> **Seed under the right identity.** Company membership is per-subject, so the
+> seeder authenticates as `browser-dev-owner` — the same subject the dev UI uses.
+> Seeded under any other subject, cored answers 403 and the shell quietly opens a
+> fresh empty company instead (it now logs a console warning saying exactly that).
+> Override with `SEED_SUBJECT=…` if you point the UI at a different identity.
+
+**One honest wrinkle in the data:** the altered invoice (INV-003) does not restate
+its bill-wise reference, so Outstandings ages the original amount. That is the
+documented over-count on altered vouchers, left visible rather than papered over.
+
 **The gates**, all re-runnable:
 
 | Gate | Command | Last result |
@@ -301,8 +343,9 @@ they simply may not reach the page on a Mac unless the OS shortcut is disabled.
 
 ## 5. A five-minute self-test
 
-1. Open http://localhost:5173 → the Gateway.
-2. `F8`, pick a party, taxable `10000`, rate `18`, `Ctrl+A` → a number and a
+0. `cd frontend && pnpm seed:demo -- --insightd`, then open the URL it prints
+   (§1.1) so every screen below has data.
+1. `F8`, pick a party, taxable `10000`, rate `18`, `Ctrl+A` → a number and a
    server-derived CGST/SGST appear.
 3. `Esc` → Gateway. (This is the bug that was fixed: before, `Esc` was dead once
    any screen had been opened.)

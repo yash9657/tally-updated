@@ -77,7 +77,29 @@ function configHomeStateCode(): string {
   return env?.VITE_HOME_STATE_CODE ?? DEFAULT_NEW_COMPANY_STATE_CODE;
 }
 
+/**
+ * A company id supplied in the URL (`?company=<uuid>`). It WINS over whatever is
+ * persisted and is itself persisted, so a link opens a specific set of books and
+ * subsequent reloads stay on them — the seeded demo company (see
+ * `scripts/seed-demo.mts`) is shared exactly this way. Anything that is not a
+ * plausible uuid is ignored rather than sent to the server.
+ */
+function readCompanyIdFromURL(): string | null {
+  try {
+    const raw = new URLSearchParams(globalThis.location?.search ?? "").get(
+      "company",
+    );
+    if (!raw) return null;
+    const id = raw.trim();
+    return /^[0-9a-fA-F-]{36}$/.test(id) ? id : null;
+  } catch {
+    return null;
+  }
+}
+
 function readPersistedCompanyId(): string | null {
+  const fromURL = readCompanyIdFromURL();
+  if (fromURL) return fromURL;
   try {
     return globalThis.localStorage?.getItem(COMPANY_STORAGE_KEY) ?? null;
   } catch {
@@ -165,6 +187,9 @@ export function CompanyProvider({
         // column cored defaults SupplierStateCode from when posting.
         try {
           const view = await client.getCompany(persisted);
+          // A URL-supplied company becomes the persisted one, so a shared link
+          // (e.g. the seeded demo company) survives the next plain reload.
+          persistCompanyId(view.id || persisted);
           if (mounted.current) {
             setCompany({
               id: view.id || persisted,
@@ -190,6 +215,21 @@ export function CompanyProvider({
           // company that no longer exists (fresh backend, wiped DB, different
           // environment, or a non-uuid id carried over from the in-memory mock).
           // Drop it and mint a new one below rather than wedging on a dead id.
+          //
+          // When the id came from the URL the user ASKED for those books, so say
+          // why they are not getting them instead of silently opening different
+          // ones — a 403 here almost always means the company was created by a
+          // different subject than this session authenticates as (e.g. a seed
+          // run under the wrong SEED_SUBJECT).
+          if (readCompanyIdFromURL() === persisted) {
+            const status = err instanceof ApiError ? err.status : "?";
+            console.warn(
+              `[company] ?company=${persisted} was rejected by the server (${status}). ` +
+                "Opening a new company instead. A 403 means this session's user is not a " +
+                "member of that company — re-seed it under the same subject the app " +
+                "authenticates as (see scripts/seed-demo.mts).",
+            );
+          }
           clearPersistedCompanyId();
         }
       }

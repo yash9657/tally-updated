@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "AI-native, keystroke-compatible Tally competitor — frontend keystroke/navigation engine (Phase 0).",
+  "description": "AI-native, keystroke-compatible Tally competitor \u2014 frontend keystroke/navigation engine (Phase 0).",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
@@ -16,7 +16,8 @@
     "e2e:numbering": "tsx scripts/e2e-numbering.mts",
     "e2e:state-code": "tsx scripts/e2e-state-code.mts",
     "e2e:ocr": "tsx scripts/e2e-ocr-prefill.mts",
-    "e2e:ui": "node scripts/e2e-ui-smoke.mjs"
+    "e2e:ui": "node scripts/e2e-ui-smoke.mjs",
+    "seed:demo": "tsx scripts/seed-demo.mts"
   },
   "dependencies": {
     "@xstate/react": "^4.1.3",
