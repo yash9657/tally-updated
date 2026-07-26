@@ -44,6 +44,13 @@ import type {
   SetLedgerOpeningResponse,
 } from "./types";
 import type { QueryRequest, QueryResult } from "./query";
+import type {
+  InviteMemberRequest,
+  InviteMemberResponse,
+  MeResponse,
+  MembersResponse,
+  SecurityLevelsResponse,
+} from "./admin";
 
 export interface CoredClient {
   // Company
@@ -216,6 +223,24 @@ export interface CoredClient {
   // and returns the typed answer (columns + string rows + the echoed DSL +
   // sql_preview). Read-only: it NEVER writes. Money stays string.
   query(companyID: string, body: QueryRequest): Promise<QueryResult>;
+
+  // ---- SaaS admin surface (backend/internal/server/handler_admin.go) -------
+  /**
+   * Who am I, and which companies may I open (GET /v1/me)? authn-ONLY: it
+   * carries no company in the path, because an INVITED user is not yet a member
+   * of anything — this call is what CLAIMS their pending invites and creates the
+   * membership. It is also the company switcher's (F3) data source.
+   */
+  getMe(): Promise<MeResponse>;
+  /** Members of a company + its PENDING invites (people granted access who have not signed in yet). */
+  listMembers(companyID: string): Promise<MembersResponse>;
+  /** Invite a SUBJECT at a security level. Creates an invite, never a user. */
+  inviteMember(
+    companyID: string,
+    req: InviteMemberRequest,
+  ): Promise<InviteMemberResponse>;
+  /** The company's security levels with their Disallow/Allow rules and member counts. */
+  listSecurityLevels(companyID: string): Promise<SecurityLevelsResponse>;
 
   // Migration import (Tally-XML ingress)
   importTallyXML(

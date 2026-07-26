@@ -129,7 +129,7 @@ Every documented TallyPrime combo is bound. The ones whose feature this edition
 does not have answer in the status line instead of doing nothing:
 
 ```
-Alt+F6 → "Credit Note (Alt+F6) — Debit/Credit notes are not built yet; use F8 Sales / F9 Purchase."
+Alt+F7 → "Stock Journal (Alt+F7) — Inventory vouchers are not built yet (no godown/stock movement plane)."
 Ctrl+F4 → "Payroll voucher (Ctrl+F4) — The payroll module is not built yet."
 F10    → "Other Vouchers (F10) — Order, delivery and stock vouchers are not built yet…"
 ```
@@ -139,7 +139,7 @@ A key that exists but does not apply to the screen you are on says that too
 `F1` on any screen for the full generated list, split into "works here" and "bound,
 but not built yet".
 
-**Verified:** live smoke asserts the Alt+F6 message verbatim, and a 68-case unit
+**Verified:** live smoke asserts the Alt+F7 message verbatim, and a 68-case unit
 suite asserts (a) every button on every bar is bound, is not an unbuilt
 placeholder, and does something on that screen, and (b) every documented combo
 resolves to an action with a human label.
@@ -308,6 +308,25 @@ liabilities = 109000.0000; net profit 9000.0000.
   ceremony (`/auth/webauthn/register/begin`) returns a challenge; five bad logins
   → **423 `LOCKED`** with an `until` timestamp.
 
+### 3.13a Users, roles and switching company
+
+- **`F3` — Select Company.** Lists the companies *you* are a member of, with the
+  security level you hold in each (the same person is often an Owner of their own
+  books and a Data Entry operator on a client's). Picking one re-scopes the
+  session and returns you to the Gateway — deliberately, because the screens you
+  had open were showing another company's books.
+- **Gateway > Users & Roles.** Who may open this company, the **pending invites**
+  (an invite is not access until the invitee signs in and claims it), and the
+  security levels with their Allow/Disallow rules. Inviting is done here; the
+  default level offered is the least-privileged one, never Owner.
+- A refusal is explained, not hidden: a Data Entry operator opening this screen is
+  told their level does not permit it, and an Owner without a WebAuthn step-up is
+  told the invite needs a second factor.
+- **Verified:** `pnpm e2e:ui` drives both screens in a real headless browser
+  (24/24 flows); `pnpm verify:tenancy` exercises 48 access-control paths against
+  the live API, including creating a custom level, granting it, and letting the
+  policy engine be the judge of what its holder can reach.
+
 ### 3.14 Help, Features, Calculator, status line
 
 - `F1` Help is **generated from the live keymap**, so the documentation cannot
@@ -326,11 +345,12 @@ liabilities = 109000.0000; net profit 9000.0000.
 |---|---|---|
 | Edit Log **viewer** | versions are recorded but cannot be read back in-app | — |
 | Inventory: stock vouchers, godowns, batches, BoM, orders | no stock movement or valuation | `F10`, `Alt+F7`–`Alt+F9`, `Ctrl+F7`–`Ctrl+F9` |
-| Credit / Debit notes | returns must be entered as sales/purchase | `Alt+F5`, `Alt+F6` |
 | Payroll | — | `Ctrl+F4` |
 | Cost centres / categories | no allocation dimension on postings | — |
 | Multi-currency | INR only | — |
-| Multi-company in one session | one company per session | `F3`, `Alt+F3`, `Ctrl+F3` |
+| Two companies open SIMULTANEOUSLY (and group consolidation) | you switch between companies (`F3`) rather than holding several open at once | `Alt+F3`, `Ctrl+F3` |
+| Password / SSO login | the browser session authenticates as one fixed development subject, so every session is the same person | — |
+| Admin WRITES beyond inviting | changing a member's level, revoking access and creating a custom level are API-only | — |
 | Period filter on BS / P&L / Trial Balance | those three are as-of-latest (Day Book and Outstandings are period-aware) | the `F2` panel says so |
 | Printing / invoice formats | no print or PDF path | `Alt+P` unbound |
 | Banking: reconciliation, cheque printing | — | — |
@@ -356,5 +376,9 @@ they simply may not reach the page on a Mac unless the OS shortcut is disabled.
    sub-group → ledger → the voucher. `Esc` back up.
 8. `F1` → the whole keymap for the screen you were on. `Esc`.
 9. `F11` → what this edition has and has not. `Esc`.
-10. Press `Alt+F6` → it tells you Credit Notes are not built yet, instead of
-    doing nothing.
+10. Press `Alt+F7` → it tells you inventory vouchers are not built yet, instead
+    of doing nothing. (`Alt+F6` DOES open a Credit Note — that one is built.)
+11. Press `F3` → the companies you may open, with the level you hold in each.
+    `Esc` stays put; picking one re-scopes the session and returns you here.
+12. Type `Users` + `Enter` → who may open this company, the pending invites, and
+    the security levels with their rules.

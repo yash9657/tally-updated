@@ -310,6 +310,40 @@ try {
   rec("Bill Inbox opens", headings.some((h) => /Bill Inbox|Inbox/i.test(h)) || !(await atGateway()));
 } catch (e) { rec("Bill Inbox opens", false, e.message); }
 
+// ---------------------------------------------------------------------------
+// The SaaS surface in the browser: F3 company switching and Users & Roles.
+// F3 was bound to "not built" until the admin API made a second membership
+// reachable, so these two flows are the browser-visible half of that work.
+// ---------------------------------------------------------------------------
+try {
+  await toGateway();
+  await press("F3", 900);
+  const h = await heading();
+  const listed = (await body()).includes("List of Companies");
+  // Esc must leave the picker WITHOUT switching (the session stays put).
+  await press("Escape", 400);
+  rec(
+    "F3 opens the company picker (companies this user may open)",
+    /Select Company/i.test(h) && listed && (await atGateway()),
+    h,
+  );
+} catch (e) { rec("F3 opens the company picker", false, e.message); }
+
+try {
+  await navMenu("Users & Roles");
+  const h = await heading();
+  const text = await body();
+  rec(
+    "Users & Roles lists members, invites and security levels",
+    /Users & Roles/i.test(h) &&
+      /Members/.test(text) &&
+      /Pending invites/.test(text) &&
+      /Security levels/.test(text) &&
+      /browser-dev-owner/.test(text),
+    h,
+  );
+} catch (e) { rec("Users & Roles opens", false, e.message); }
+
 await browser.close();
 
 const passed = results.filter((r) => r.ok).length;

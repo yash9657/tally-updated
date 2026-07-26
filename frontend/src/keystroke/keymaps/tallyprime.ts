@@ -66,11 +66,10 @@ const RAW_BINDINGS: Record<string, KeymapAction> = {
 
   // ---- Documented TallyPrime combos whose FEATURE is not in this edition.
   // Bound deliberately so the key answers instead of dying silently.
-  F3: {
-    kind: "unavailable",
-    feature: "Switch company (F3)",
-    note: "This edition runs one company per session; multi-company switching is not built yet.",
-  },
+  // F3 — Switch Company. A REAL action since the admin API made a second
+  // membership reachable: it lists the companies this user may open (GET
+  // /v1/me) and re-scopes the session to the chosen one.
+  F3: { kind: "switchCompany" },
   "Alt+F3": {
     kind: "unavailable",
     feature: "Select Company (Alt+F3)",
@@ -295,6 +294,8 @@ export function actionLabel(action: KeymapAction): string {
       return "Company Features";
     case "configure":
       return "Configure this screen";
+    case "switchCompany":
+      return "Switch Company";
     case "createMaster":
       return `Create ${action.masterKind} on the fly`;
     case "unavailable":

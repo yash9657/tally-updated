@@ -3,6 +3,8 @@ import { GatewayScreen } from "../screens/GatewayScreen";
 import { VoucherScreen } from "../screens/VoucherScreen";
 import { BillInboxScreen } from "../screens/BillInboxScreen";
 import { QueryScreen } from "../screens/QueryScreen";
+import { CompanySelectScreen } from "../screens/CompanySelectScreen";
+import { MembersScreen } from "../screens/MembersScreen";
 import { HelpScreen } from "../screens/HelpScreen";
 import { FeaturesScreen } from "../screens/FeaturesScreen";
 import { MasterCreateScreen } from "../screens/masters/MasterCreateScreen";
@@ -134,6 +136,22 @@ const QueryAdapter: ScreenComponent = ({
   <QueryScreen snapshot={snapshot} onSelect={onSelect} />
 );
 
+/** F3 Select Company adapter: the companies this USER may open (/v1/me). */
+const CompanySelectAdapter: ScreenComponent = ({
+  snapshot,
+  onSelect,
+}: ScreenComponentProps) => (
+  <CompanySelectScreen snapshot={snapshot} onSelect={onSelect} />
+);
+
+/** Users & Roles adapter: members, pending invites and security levels. */
+const MembersAdapter: ScreenComponent = ({
+  snapshot,
+  onSelect,
+}: ScreenComponentProps) => (
+  <MembersScreen snapshot={snapshot} onSelect={onSelect} />
+);
+
 /** F1 Help adapter: the keystroke reference for the frame below it. */
 const HelpAdapter: ScreenComponent = ({ snapshot }: ScreenComponentProps) => (
   <HelpScreen snapshot={snapshot} />
@@ -161,6 +179,9 @@ export function createDefaultRegistry(): ScreenRegistry {
     "goto-overlay": GoToOverlayScreen,
     "bill-inbox": BillInboxAdapter,
     query: QueryAdapter,
+    // The SaaS screens: F3 company switching and Users & Roles.
+    "company-select": CompanySelectAdapter,
+    members: MembersAdapter,
     // F1 Help (keystroke reference, generated from the live keymap) and F11
     // Company Features (the honest capability inventory).
     help: HelpAdapter,

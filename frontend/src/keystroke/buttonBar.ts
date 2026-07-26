@@ -48,6 +48,10 @@ const MASTER_BAR: readonly ButtonBarItem[] = [
 
 const GATEWAY_BAR: readonly ButtonBarItem[] = [
   item("F1", "Help"),
+  // F3 is Tally's company button. It only earned a place on the bar once a
+  // session could actually hold more than one company (the admin API + /v1/me);
+  // buttons.test.ts fails the build if an advertised key is decorative.
+  item("F3", "Company"),
   item("F11", "Features"),
   item("Alt+G", "Go To"),
   item("Ctrl+G", "Switch To"),
@@ -109,6 +113,10 @@ export function buttonBarFor(
       return READER_BAR;
     case "bill-inbox":
     case "query":
+      return AI_BAR;
+    // The SaaS screens: pure readers with a pick-list, like the AI screens.
+    case "company-select":
+    case "members":
       return AI_BAR;
     default:
       return GATEWAY_BAR;

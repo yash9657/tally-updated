@@ -52,6 +52,16 @@ import type {
   SetLedgerOpeningResponse,
 } from "./types";
 import type { QueryRequest, QueryResult } from "./query";
+import type {
+  InviteMemberRequest,
+  InviteMemberResponse,
+  InviteView,
+  MeResponse,
+  MemberView,
+  MembersResponse,
+  SecurityLevelsResponse,
+  SecurityLevelView,
+} from "./admin";
 import { deriveGstSplit } from "../screens/vouchers/gstDerive";
 
 let idCounter = 0;
@@ -183,6 +193,15 @@ interface MockCompany {
    * CREATE). Keyed "class:finYear".
    */
   counters: Map<string, number>;
+  /**
+   * The SaaS admin state, mirroring the server's shape closely enough to drive
+   * the screens: every company is created with the two SEEDED levels and its
+   * creator as an Owner member, and an invite stays PENDING (it is not a
+   * membership) until the invitee claims it.
+   */
+  members: MemberView[];
+  invites: InviteView[];
+  levels: SecurityLevelView[];
 }
 
 /** The migration-0015 company profile, mirrored by the mock. */
@@ -217,6 +236,43 @@ function defaultProfile(fyStartDate: string): CompanyProfile {
   };
 }
 
+/** The single identity the mock authenticates as (mirrors one dev subject). */
+const MOCK_USER_ID = "mock-user-0001";
+const MOCK_SUBJECT = "browser-dev-owner";
+
+/**
+ * The two levels seed_company_auth_defaults creates with every company. Rules
+ * are abridged to the shape the screens render (effect/action/resource); the
+ * PDP itself is server-side, so the mock never evaluates them.
+ */
+function seededLevels(companyID: string): SecurityLevelView[] {
+  return [
+    {
+      id: `${companyID}:owner`,
+      name: "Owner",
+      is_owner: true,
+      default_access: "full",
+      requires_webauthn: true,
+      backdated_cutoff: "",
+      member_count: 1,
+      rules: [],
+    },
+    {
+      id: `${companyID}:data-entry`,
+      name: "Data Entry",
+      is_owner: false,
+      default_access: "none",
+      requires_webauthn: false,
+      backdated_cutoff: "",
+      member_count: 0,
+      rules: [
+        { effect: "allow", action: "create", resource: "sales" },
+        { effect: "allow", action: "display", resource: "report" },
+      ],
+    },
+  ];
+}
+
 export interface MockClientOptions {
   /** Seed a demo company so reports are non-empty. Default true. */
   seed?: boolean;
@@ -243,6 +299,21 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         ledgers: [],
         vouchers: [],
         views: new Map(),
+        members: [
+          {
+            user_id: MOCK_USER_ID,
+            subject: MOCK_SUBJECT,
+            email: "",
+            display_name: "",
+            security_level_id: `${companyID}:owner`,
+            security_level_name: "Owner",
+            is_owner: true,
+            is_self: true,
+            created_at: "2026-04-01T00:00:00Z",
+          },
+        ],
+        invites: [],
+        levels: seededLevels(companyID),
         counters: new Map(),
       };
       companies.set(companyID, c);
@@ -275,6 +346,23 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       vouchers: [],
       views: new Map(),
       counters: new Map(),
+      // The seeded demo tenant carries the same admin defaults every company
+      // gets: its two seeded levels, and the mock identity as its Owner.
+      members: [
+        {
+          user_id: MOCK_USER_ID,
+          subject: MOCK_SUBJECT,
+          email: "",
+          display_name: "",
+          security_level_id: `${demoID}:owner`,
+          security_level_name: "Owner",
+          is_owner: true,
+          is_self: true,
+          created_at: "2026-04-01T00:00:00Z",
+        },
+      ],
+      invites: [],
+      levels: seededLevels(demoID),
     };
     companies.set(demoID, demo);
   }
@@ -881,6 +969,90 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         columns: [{ name: "result", type: "text" }],
         rows: [],
       };
+    },
+
+    // ---- SaaS admin surface -------------------------------------------
+    async getMe(): Promise<MeResponse> {
+      const mine = [...companies.values()].filter((c) =>
+        c.members.some((m) => m.user_id === MOCK_USER_ID),
+      );
+      return {
+        user_id: MOCK_USER_ID,
+        subject: MOCK_SUBJECT,
+        companies: mine.map((c) => {
+          const m = c.members.find((x) => x.user_id === MOCK_USER_ID);
+          return {
+            company_id: c.id,
+            name: c.name,
+            security_level_id: m?.security_level_id ?? "",
+            security_level_name: m?.security_level_name ?? "",
+            is_owner: m?.is_owner ?? false,
+          };
+        }),
+        // The mock has one identity, so there is never a pending invite for it.
+        claimed_invites: [],
+      };
+    },
+
+    async listMembers(companyID: string): Promise<MembersResponse> {
+      const c = ensure(companyID);
+      return {
+        members: [...c.members],
+        invites: c.invites.filter((i) => i.status === "pending"),
+      };
+    },
+
+    async inviteMember(
+      companyID: string,
+      req: InviteMemberRequest,
+    ): Promise<InviteMemberResponse> {
+      const c = ensure(companyID);
+      const subject = (req.subject ?? "").trim();
+      if (!subject) {
+        throw new ApiError(400, "subject is required", "subject is required");
+      }
+      if (c.members.some((m) => m.subject === subject)) {
+        throw new ApiError(
+          409,
+          "already a member of this company",
+          "already a member of this company",
+        );
+      }
+      const level =
+        c.levels.find((l) => l.id === req.security_level_id) ??
+        c.levels.find((l) => l.name === req.security_level_name);
+      if (!level) {
+        throw new ApiError(
+          404,
+          "security level not found",
+          "security level not found",
+        );
+      }
+      // Re-inviting a pending subject updates that invite (the server upserts on
+      // the partial unique index) rather than stacking a second one.
+      const existing = c.invites.find(
+        (i) => i.subject === subject && i.status === "pending",
+      );
+      const invite: InviteView = existing ?? {
+        id: id("invite"),
+        subject,
+        email: req.email ?? "",
+        display_name: req.display_name ?? "",
+        security_level_id: level.id,
+        security_level_name: level.name,
+        status: "pending",
+        created_at: "2026-07-26T00:00:00Z",
+      };
+      invite.security_level_id = level.id;
+      invite.security_level_name = level.name;
+      if (!existing) c.invites.push(invite);
+      return { invite_id: invite.id, subject, status: "pending" };
+    },
+
+    async listSecurityLevels(
+      companyID: string,
+    ): Promise<SecurityLevelsResponse> {
+      return { security_levels: [...ensure(companyID).levels] };
     },
 
     async importTallyXML(

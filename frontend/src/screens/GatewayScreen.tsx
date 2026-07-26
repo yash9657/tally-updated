@@ -9,6 +9,7 @@ const GATEWAY_MENU = [
   "Balance Sheet",
   "Profit & Loss A/c",
   "Stock Summary",
+  "Users & Roles",
   "Display More Reports",
 ] as const;
 

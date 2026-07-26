@@ -139,6 +139,41 @@ const FEATURES: {
       },
     ],
   },
+  {
+    group: "Users and security (Tally's Security Control)",
+    items: [
+      {
+        name: "Multiple users per company, with security levels",
+        state: "on",
+        note: "Gateway > Users & Roles. An Owner invites a sign-in subject at a level; the invitee becomes a member when they next sign in. Every request is then authorised server-side against that level.",
+      },
+      {
+        name: "Custom security levels (Disallow / Allow rules)",
+        state: "on",
+        note: "Beyond the two levels every company is created with (Owner, Data Entry), a level can be defined with its own Allow/Disallow rules per action and resource. Creating one is API-only today; this screen's Users & Roles page lists them.",
+      },
+      {
+        name: "Switch company (F3)",
+        state: "on",
+        note: "F3 lists the companies YOU are a member of, with the level you hold in each, and re-scopes the session to the one you pick.",
+      },
+      {
+        name: "WebAuthn step-up for writes",
+        state: "on",
+        note: "A level may require a second factor for writes only: reading your own books never asks, changing them does. Granting someone access counts as a write.",
+      },
+      {
+        name: "Back-dated entry cutoff",
+        state: "on",
+        note: "A level can be blocked from writing before a date — how a business stops staff back-dating into a filed period. It binds Owners too.",
+      },
+      {
+        name: "Password / SSO login",
+        state: "off",
+        note: "NOT BUILT: this session authenticates as a fixed development subject. The server verifies every token and enforces membership + the security level, but nothing yet issues a token in exchange for a password or an SSO assertion. Until then, 'invite alice@firm' is only as trustworthy as the token issuer.",
+      },
+    ],
+  },
 ];
 
 const BADGE: Record<State, { text: string; className: string }> = {

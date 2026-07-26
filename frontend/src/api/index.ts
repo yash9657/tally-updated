@@ -49,6 +49,21 @@ export type {
   CreateDraftRequest,
 } from "./draft";
 export { createInsightdClient, type InsightdClient } from "./insightd";
+
+// SaaS admin contract (members, invites, security levels, /v1/me).
+export type {
+  MeCompany,
+  ClaimedInvite,
+  MeResponse,
+  MemberView,
+  InviteView,
+  MembersResponse,
+  InviteMemberRequest,
+  InviteMemberResponse,
+  SecurityLevelRule,
+  SecurityLevelView,
+  SecurityLevelsResponse,
+} from "./admin";
 export {
   draftBodyToVoucherRequest,
   resolveDraftLedgers,

@@ -125,6 +125,30 @@ export const OPEN_PURCHASE_DRAFT_SENTINEL = "__open-purchase-draft__";
 export const MORE_REPORTS_LABEL = "Display More Reports";
 
 /**
+ * The Gateway entry that opens Users & Roles (the browser half of the admin
+ * API: members, pending invites and security levels). Like BILL_INBOX_LABEL it
+ * is neither "Vouchers" nor a report name, so it needs its own branch placed
+ * BEFORE the canonicalReportName fallback — otherwise it would push a report
+ * frame literally named "Users & Roles".
+ */
+export const USERS_ROLES_LABEL = "Users & Roles";
+
+/**
+ * Pinned sentinel the CompanySelectScreen feeds through `onSelect` AFTER it has
+ * re-scoped the session (setCompany) to the chosen company. The machine's only
+ * job then is to LEAVE the picker — the company id is never smuggled through
+ * this sentinel, exactly as with OPEN_PURCHASE_DRAFT_SENTINEL: the screen owns
+ * the context write, the machine owns navigation.
+ *
+ * Why pop back to the ROOT rather than just popping one frame: the frames
+ * underneath were rendered for the OLD company (a half-entered voucher, a drill
+ * into last month's Day Book), and silently re-pointing them at a different set
+ * of books is how a user posts an entry into the wrong company. Tally itself
+ * returns you to the Gateway when you switch.
+ */
+export const COMPANY_SWITCHED_SENTINEL = "__company-switched__";
+
+/**
  * Row-kind prefixes a report screen puts on the keys it publishes through
  * `onSelect`, so the machine knows HOW DEEP a drill goes without knowing
  * anything about accounting data:
@@ -435,6 +459,14 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
           stack.push({ screen: "query" });
           return { stack };
         }
+        // "Users & Roles" drills into the members/security-levels screen. Same
+        // ordering requirement as Bill Inbox: BEFORE the report fallback.
+        if (
+          active.selectedItem?.toLowerCase() === USERS_ROLES_LABEL.toLowerCase()
+        ) {
+          stack.push({ screen: "members" });
+          return { stack };
+        }
         // "Display More Reports" opens the second-level report MENU (Tally's
         // own structure: the Trial Balance and Outstandings live one level in).
         // Checked before the report fallback, which would otherwise push a
@@ -520,6 +552,12 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
 
     case "features": {
       return pushOnce("features");
+    }
+
+    case "switchCompany": {
+      // F3 — the company picker. pushOnce so pressing F3 twice does not stack
+      // two pickers (the same treatment Help and Features get).
+      return pushOnce("company-select");
     }
 
     case "configure": {
@@ -722,6 +760,7 @@ function reduceSelect(ctx: NavContext, menuItem: string): Partial<NavContext> {
       menuItem.toLowerCase() === "vouchers" ||
       menuItem.toLowerCase() === BILL_INBOX_LABEL.toLowerCase() ||
       menuItem.toLowerCase() === QUERY_LABEL.toLowerCase() ||
+      menuItem.toLowerCase() === USERS_ROLES_LABEL.toLowerCase() ||
       menuItem.toLowerCase() === MORE_REPORTS_LABEL.toLowerCase() ||
       canonicalReportName(menuItem) !== undefined
     ) {
@@ -741,6 +780,16 @@ function reduceSelect(ctx: NavContext, menuItem: string): Partial<NavContext> {
     if (menuItem === OPEN_PURCHASE_DRAFT_SENTINEL) {
       stack.push(newVoucherFrame("purchase", "create"));
       return { stack };
+    }
+    return {};
+  }
+
+  // Company switch: the screen has ALREADY re-scoped the session (setCompany)
+  // and now asks the machine to leave the picker. Unwind to the ROOT frame —
+  // the frames below were rendered against the previous company's books.
+  if (active.screen === "company-select") {
+    if (menuItem === COMPANY_SWITCHED_SENTINEL) {
+      return { stack: [stack[0] as ScreenFrame] };
     }
     return {};
   }

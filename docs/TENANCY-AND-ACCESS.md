@@ -395,13 +395,45 @@ Honest list. The engine is multi-tenant; the *product* around it is not yet.
 | ~~No admin API for users/roles~~ | **DONE** — §6. Invite, claim, change level, revoke, and custom levels, all over HTTP; `seed-tenancy.mts` no longer touches psql. |
 | ~~No custom security levels~~ | **DONE** — §6. `POST /security-levels` with a vocabulary-validated rule set. |
 | **No login** | `POST /auth/token` mints a token for *any* subject and exists only when a dev signer is configured. There is no password, no SSO, no IdP integration. **This is now the top gap:** the admin API grants access to a *subject*, and until a real IdP owns subjects, "invite `alice@firm`" is only as trustworthy as the token issuer. |
-| **No company switching in the UI** | `GET /v1/me` now returns every company a user may open, with their level in each — the data a switcher needs. `F3` is still bound to "one company per session"; wiring it to `/v1/me` is the next client change. |
-| **UI is single-identity** | The web client authenticates as one hardcoded dev subject. The whole allow/disallow story above is reachable by API but invisible in the browser. No admin screens exist yet (members/levels are API-only). |
+| ~~No company switching in the UI~~ | **DONE** — `F3` opens the list of companies the signed-in user may open (from `GET /v1/me`), with the level held in each, and re-scopes the session. See §9. |
+| **UI is single-identity** | The web client still authenticates as one hardcoded dev subject, so the allow/disallow paths are *reachable* in the browser but always as the same person. Fixing this is the login gap above, not a separate one. |
+| **Admin screens are read-mostly** | Gateway > **Users & Roles** lists members, pending invites and security levels, and can INVITE. Changing a member's level, revoking access and creating a custom level remain API-only. |
 | **No email delivery** | An invite is a database row. Nothing notifies the invitee — the flow assumes the administrator tells them out of band. |
 | **Not deployed** | `infra/` holds k8s + terraform for EKS `ap-south-1`; none of it has been applied. |
 
-Suggested ordering from here: a real login (an IdP that owns subjects), then
-company switching + the admin screens in the browser, then invite delivery.
+Suggested ordering from here: a real login (an IdP that owns subjects), then the
+remaining admin writes in the browser (change level, revoke, create a level),
+then invite delivery.
+
+---
+
+## 9. In the browser
+
+Two screens make the story above clickable rather than curl-only.
+
+**F3 — Select Company.** Lists the companies *this user* is a member of, from
+`GET /v1/me`, with the security level held in each (the same person is routinely
+an Owner of their own books and a Data Entry operator on a client's). Choosing
+one re-reads that company's master so the browser's home GST state comes from the
+server, re-scopes the session, and **unwinds the screen stack to the Gateway** —
+the frames underneath were rendered against the previous company's books, and
+silently re-pointing them is how an entry lands in the wrong company. A company
+that cannot be hydrated is **not** switched to; the error says so.
+
+**Gateway > Users & Roles.** Members (with the level each holds), **pending
+invites listed separately** — an invite is not a membership until the invitee
+signs in and claims it, and hiding that distinction makes a successful invite
+look like a failure — and the security levels with their Allow/Disallow rules.
+Inviting is available here; the level offered by default is the least-privileged
+one, never Owner.
+
+Both screens treat a **403 as the product working**: a Data Entry operator opening
+Users & Roles is told their level does not permit it, and an Owner without a
+WebAuthn AMR is told the invite needs step-up — rather than being shown an empty
+page that reads as broken.
+
+Verified in a real browser by `pnpm e2e:ui` (headless Chromium, keys sent to the
+document exactly as a keyboard user's are): 24/24 flows, including both screens.
 
 ---
 

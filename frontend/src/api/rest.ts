@@ -41,6 +41,13 @@ import type {
   SetLedgerOpeningResponse,
 } from "./types";
 import type { QueryRequest, QueryResult } from "./query";
+import type {
+  InviteMemberRequest,
+  InviteMemberResponse,
+  MeResponse,
+  MembersResponse,
+  SecurityLevelsResponse,
+} from "./admin";
 
 function company(companyID: string): string {
   return `/v1/companies/${encodeURIComponent(companyID)}`;
@@ -257,6 +264,26 @@ export function createRestClient(
 
     query(companyID, body: QueryRequest) {
       return http.post<QueryResult>(`${company(companyID)}/query`, body);
+    },
+
+    // ---- SaaS admin surface -------------------------------------------
+    // /v1/me is NOT company-scoped: an invited user has no company yet.
+    getMe() {
+      return http.get<MeResponse>("/v1/me");
+    },
+    listMembers(companyID) {
+      return http.get<MembersResponse>(`${company(companyID)}/members`);
+    },
+    inviteMember(companyID, req: InviteMemberRequest) {
+      return http.post<InviteMemberResponse>(
+        `${company(companyID)}/members/invites`,
+        req,
+      );
+    },
+    listSecurityLevels(companyID) {
+      return http.get<SecurityLevelsResponse>(
+        `${company(companyID)}/security-levels`,
+      );
     },
 
     importTallyXML(companyID, xml, query?: ImportTallyXMLQuery) {

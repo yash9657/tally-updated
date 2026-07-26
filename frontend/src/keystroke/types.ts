@@ -25,6 +25,12 @@
  *                          natural-language question is sent to the safe
  *                          read-only query core and the typed answer is rendered
  *                          (the AI-native ask-your-data entry point).
+ *  - "company-select"    — F3 Switch Company: the companies THIS USER may open
+ *                          (GET /v1/me), with the security level they hold in
+ *                          each. Selecting one re-scopes the whole session.
+ *  - "members"           — Users & Roles: the company's members, its pending
+ *                          invites, and its security levels. The browser-visible
+ *                          half of the admin API.
  *  - "help"              — F1 Help: the context-aware keystroke reference, built
  *                          from the SAME keymap the engine dispatches, so it can
  *                          never drift from what the keys actually do.
@@ -41,6 +47,8 @@ export type ScreenKind =
   | "master-create"
   | "bill-inbox"
   | "query"
+  | "company-select"
+  | "members"
   | "help"
   | "features";
 
@@ -169,6 +177,13 @@ export type KeymapAction =
   | { kind: "features" } // F11 — Company Features
   | { kind: "configure" } // F12 — screen/report Configure
   | { kind: "createMaster"; masterKind: MasterKind } // Alt+C — inline create
+  /**
+   * F3 — Switch Company. Opens the list of companies this USER is a member of
+   * (GET /v1/me). It was bound to `unavailable` for as long as a session could
+   * only ever hold one company; the admin API made a second membership
+   * reachable, so the key now does what a Tally operator expects.
+   */
+  | { kind: "switchCompany" }
   /**
    * A combo that a real TallyPrime user WILL press but whose feature is not
    * built in this edition (e.g. payroll, order processing). It is bound on
