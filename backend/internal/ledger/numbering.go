@@ -141,14 +141,17 @@ func allocateVoucherNo(ctx context.Context, tx pgx.Tx, companyID, voucherTypeID 
 // accounting class (e.g. Sales -> the seeded "Sales" type), so a keystroke post
 // (F8 Sales) need not carry an explicit voucher_type_id — the class implies the
 // default type exactly as it does in Tally. parent_class is stored upper-cased
-// ('SALES'); the ledger Class is title-case ("Sales"). Returns uuid.Nil with no
-// error when the company has no system type for the class (caller skips
-// numbering rather than failing the post).
+// with underscores ('SALES', 'CREDIT_NOTE'); the ledger Class is title-case and
+// may contain a space ("Sales", "Credit Note"), hence the replace() as well as
+// the upper(). Returns uuid.Nil with no error when the company has no system
+// type for the class (caller skips numbering rather than failing the post).
 func defaultVoucherTypeID(ctx context.Context, tx pgx.Tx, companyID uuid.UUID, class Class) (uuid.UUID, error) {
 	var id uuid.UUID
 	err := tx.QueryRow(ctx,
 		`SELECT id FROM voucher_type
-		  WHERE company_id = $1 AND parent_class = upper($2) AND is_system = true
+		  WHERE company_id = $1
+		    AND parent_class = upper(replace($2, ' ', '_'))
+		    AND is_system = true
 		  ORDER BY created_at
 		  LIMIT 1`,
 		companyID, string(class)).Scan(&id)

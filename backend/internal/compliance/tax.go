@@ -71,6 +71,24 @@ type TaxResult struct {
 	IGST         decimal.Decimal
 	TotalTax     decimal.Decimal
 	InvoiceTotal decimal.Decimal
+	// Lines is the PER-LINE breakdown, in input order and 1:1 with TaxInput.Lines.
+	// It exists so callers that must persist or report at line grain (the GSTR-1
+	// table-12 HSN summary rolls up by (hsn, rate), which is a line-grain key)
+	// use the SAME rounding this engine applied, instead of re-deriving it and
+	// drifting by a paisa. The aggregate fields above are exactly the sums of
+	// these, which TestTaxLinesSumToAggregate pins.
+	Lines []LineTax
+}
+
+// LineTax is one invoice line's derived tax, echoing the line's identity so a
+// caller can persist it without re-joining to the input.
+type LineTax struct {
+	HSN          string
+	TaxableValue decimal.Decimal
+	GSTRatePct   decimal.Decimal
+	CGST         decimal.Decimal
+	SGST         decimal.Decimal
+	IGST         decimal.Decimal
 }
 
 // RuleSet captures the effective-dated GST behaviour for a version. For Phase 0
@@ -121,9 +139,21 @@ func TaxDerive(input TaxInput, rs RuleSet) (TaxResult, error) {
 	igst := decimal.Zero
 	taxableTotal := decimal.Zero
 
+	lines := make([]LineTax, 0, len(input.Lines))
 	for _, line := range input.Lines {
 		taxableTotal = taxableTotal.Add(line.TaxableValue)
+		lt := LineTax{
+			HSN:          line.HSN,
+			TaxableValue: line.TaxableValue,
+			GSTRatePct:   line.GSTRatePct,
+			CGST:         decimal.Zero,
+			SGST:         decimal.Zero,
+			IGST:         decimal.Zero,
+		}
 		if line.GSTRatePct.IsZero() {
+			// A zero-rated / exempt line still belongs in the breakdown: it
+			// carries taxable value that the HSN summary must report.
+			lines = append(lines, lt)
 			continue
 		}
 		if intra {
@@ -132,14 +162,17 @@ func TaxDerive(input TaxInput, rs RuleSet) (TaxResult, error) {
 			half := round(line.TaxableValue.
 				Mul(line.GSTRatePct.Div(two)).
 				Div(hundred))
+			lt.CGST, lt.SGST = half, half
 			cgst = cgst.Add(half)
 			sgst = sgst.Add(half)
 		} else {
 			full := round(line.TaxableValue.
 				Mul(line.GSTRatePct).
 				Div(hundred))
+			lt.IGST = full
 			igst = igst.Add(full)
 		}
+		lines = append(lines, lt)
 	}
 
 	totalTax := cgst.Add(sgst).Add(igst)
@@ -157,5 +190,6 @@ func TaxDerive(input TaxInput, rs RuleSet) (TaxResult, error) {
 		IGST:         round(igst),
 		TotalTax:     round(totalTax),
 		InvoiceTotal: round(invoiceTotal),
+		Lines:        lines,
 	}, nil
 }

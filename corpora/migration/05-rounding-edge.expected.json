@@ -4,16 +4,43 @@
   "tallyExportFile": "05-rounding-edge.xml",
   "gstin": "29ZZZZZ0000Z1Z5",
   "stateCode": "29",
-  "period": { "from": "2025-05-01", "to": "2025-05-31" },
-  "taxLedgers": { "cgst": "Output CGST", "sgst": "Output SGST", "igst": "Output IGST" },
+  "period": {
+    "from": "2025-05-01",
+    "to": "2025-05-31"
+  },
+  "taxLedgers": {
+    "cgst": "Output CGST",
+    "sgst": "Output SGST",
+    "igst": "Output IGST"
+  },
   "trialBalance": {
     "rows": [
-      { "ledger": "Edge Buyer", "debit": "1456.7750", "credit": "0.0000" },
-      { "ledger": "Edge Sales", "debit": "0.0000", "credit": "1234.5550" },
-      { "ledger": "Output CGST", "debit": "0.0000", "credit": "111.1100" },
-      { "ledger": "Output SGST", "debit": "0.0000", "credit": "111.1100" }
+      {
+        "ledger": "Edge Buyer",
+        "debit": "1456.7750",
+        "credit": "0.0000"
+      },
+      {
+        "ledger": "Edge Sales",
+        "debit": "0.0000",
+        "credit": "1234.5550"
+      },
+      {
+        "ledger": "Output CGST",
+        "debit": "0.0000",
+        "credit": "111.1100"
+      },
+      {
+        "ledger": "Output SGST",
+        "debit": "0.0000",
+        "credit": "111.1100"
+      }
     ],
-    "totals": { "debit": "1456.7750", "credit": "1456.7750", "balanced": true }
+    "totals": {
+      "debit": "1456.7750",
+      "credit": "1456.7750",
+      "balanced": true
+    }
   },
   "balanceSheet": {
     "assetsTotal": "1456.7750",
@@ -28,12 +55,30 @@
   },
   "gstr1": {
     "fp": "052025",
-    "taxTotals": { "taxable": "1234.5550", "cgst": "111.1100", "sgst": "111.1100", "igst": "0.0000" },
+    "taxTotals": {
+      "taxable": "1234.5550",
+      "cgst": "111.1100",
+      "sgst": "111.1100",
+      "igst": "0.0000"
+    },
     "hsn": [
-      { "hsn": "", "rate": "18", "taxable": "1234.5550", "cgst": "111.1100", "sgst": "111.1100", "igst": "0.0000" }
+      {
+        "hsn": "8471",
+        "rate": "18",
+        "taxable": "1234.5550",
+        "cgst": "111.1100",
+        "sgst": "111.1100",
+        "igst": "0.0000"
+      }
     ],
     "b2b": [
-      { "ctin": "29EDGEB1234E1Z5", "taxable": "1234.5550", "cgst": "111.1100", "sgst": "111.1100", "igst": "0.0000" }
+      {
+        "ctin": "29EDGEB1234E1Z5",
+        "taxable": "1234.5550",
+        "cgst": "111.1100",
+        "sgst": "111.1100",
+        "igst": "0.0000"
+      }
     ],
     "balanced": true
   }

@@ -34,6 +34,32 @@ type Company struct {
 	// GSTIN is the company's own (filer's) GSTIN, surfaced as the GSTR-1
 	// top-level gstin. Empty is the safe default.
 	GSTIN string
+
+	// --- Mailing block (migration 0015) ------------------------------------
+	// MailingName is the name printed on invoices; empty means "use Name".
+	MailingName string
+	// Address is the principal place of business as a newline-separated block.
+	Address string
+	City    string
+	Pincode string
+	// Country defaults to India when empty (matching the column default).
+	Country string
+
+	// BooksBeginningFrom is the date this company's books begin here, and
+	// therefore the date every opening balance is stated as at. It equals
+	// FYStartDate for a company starting at the top of its financial year and is
+	// LATER for a mid-year migration; it may never be earlier (enforced by the
+	// company_books_begin_within_fy CHECK). Empty defaults to FYStartDate.
+	BooksBeginningFrom string // ISO date
+
+	// --- Base-currency presentation (migration 0015) -----------------------
+	// CurrencySymbol/CurrencyFormalName/DecimalPlaces describe how money is
+	// RENDERED. Storage and arithmetic are NUMERIC(19,4) regardless.
+	CurrencySymbol     string
+	CurrencyFormalName string
+	// DecimalPlaces is a pointer so "unset" (nil) is distinguishable from an
+	// explicit 0, which is a legitimate choice for whole-rupee books.
+	DecimalPlaces *int
 }
 
 // Service is the identity application service.
@@ -65,6 +91,25 @@ func (s *Service) CreateCompany(ctx context.Context, c Company) (uuid.UUID, erro
 	if c.BaseCurrency == "" {
 		c.BaseCurrency = "INR"
 	}
+	// Books begin when the year does unless the caller says otherwise (the
+	// mid-year-migration case). Defaulting here rather than in SQL keeps the
+	// column NOT NULL without a magic date.
+	if c.BooksBeginningFrom == "" {
+		c.BooksBeginningFrom = c.FYStartDate
+	}
+	if c.Country == "" {
+		c.Country = "India"
+	}
+	if c.CurrencySymbol == "" {
+		c.CurrencySymbol = "₹"
+	}
+	if c.CurrencyFormalName == "" {
+		c.CurrencyFormalName = "Indian Rupees"
+	}
+	decimals := 2
+	if c.DecimalPlaces != nil {
+		decimals = *c.DecimalPlaces
+	}
 
 	scoped, ok := db.CompanyFromContext(ctx)
 	if !ok {
@@ -77,9 +122,18 @@ func (s *Service) CreateCompany(ctx context.Context, c Company) (uuid.UUID, erro
 	err := s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO company
-			   (id, company_id, name, fy_start_date, base_currency, state_code, gstin)
-			 VALUES ($1, $1, $2, $3, $4, $5, $6)`,
+			   (id, company_id, name, fy_start_date, base_currency, state_code, gstin,
+			    mailing_name, address, city, pincode, country,
+			    books_beginning_from,
+			    currency_symbol, currency_formal_name, decimal_places)
+			 VALUES ($1, $1, $2, $3, $4, $5, $6,
+			         $7, $8, $9, $10, $11,
+			         $12,
+			         $13, $14, $15)`,
 			c.ID, c.Name, c.FYStartDate, c.BaseCurrency, c.StateCode, c.GSTIN,
+			c.MailingName, c.Address, c.City, c.Pincode, c.Country,
+			c.BooksBeginningFrom,
+			c.CurrencySymbol, c.CurrencyFormalName, decimals,
 		); err != nil {
 			return fmt.Errorf("identity: insert company: %w", err)
 		}

@@ -101,8 +101,38 @@ type GSTR1 struct {
 	B2CL []B2CLPlace `json:"b2cl,omitempty"`
 	// B2CS is the B2C Small rate-wise summary (table 7).
 	B2CS []B2CSItem `json:"b2cs,omitempty"`
+	// CDNR is the credit/debit-note section for REGISTERED counter-parties
+	// (table 9B), grouped by the counter-party GSTIN. A sales return raised on a
+	// registered customer belongs here, NOT in b2b — and it belongs here as its
+	// own dated document rather than as an alteration of the invoice it adjusts.
+	CDNR []CDNRParty `json:"cdnr,omitempty"`
 	// HSN is the HSN/rate summary (table 12).
 	HSN HSNSummary `json:"hsn"`
+}
+
+// CDNRParty is one registered counter-party's credit/debit notes (GSTN "cdnr").
+type CDNRParty struct {
+	// CTIN is the counter-party GSTIN.
+	CTIN string `json:"ctin"`
+	// Nt are the notes issued to this counter-party.
+	Nt []CDNRNote `json:"nt"`
+}
+
+// CDNRNote is a single credit or debit note (GSTN "nt" entry).
+type CDNRNote struct {
+	// Ntty is the note type: "C" credit, "D" debit.
+	Ntty string `json:"ntty"`
+	// Nt_num / Nt_dt are the note's own number and date — NOT the invoice's.
+	NtNum string `json:"nt_num"`
+	NtDt  string `json:"nt_dt"`
+	// Val is the note's total value (taxable + tax).
+	Val decimal.Decimal `json:"val"`
+	// Pos is the place of supply.
+	Pos string `json:"pos"`
+	// Rchrg is the reverse-charge flag ("Y"/"N").
+	Rchrg string `json:"rchrg"`
+	// Itms are the rate-wise line details.
+	Itms []ITM `json:"itms"`
 }
 
 // B2BParty is one registered counter-party's invoices (a GSTN "b2b" entry).
@@ -253,6 +283,23 @@ func (g GSTR1) TaxTotals() TaxTotals {
 		t.SGST = t.SGST.Add(b.Samt)
 		t.IGST = t.IGST.Add(b.Iamt)
 	}
+	// CREDIT NOTES REDUCE liability; DEBIT NOTES increase it. Adding a credit
+	// note like an invoice would report MORE outward tax after a sales return
+	// than before it — and the books would disagree, because the note DEBITS the
+	// output-tax ledgers.
+	for _, p := range g.CDNR {
+		for _, n := range p.Nt {
+			sign := decimal.NewFromInt(-1)
+			if n.Ntty == "D" {
+				sign = decimal.NewFromInt(1)
+			}
+			for _, it := range n.Itms {
+				t.CGST = t.CGST.Add(it.ItmDet.Camt.Mul(sign))
+				t.SGST = t.SGST.Add(it.ItmDet.Samt.Mul(sign))
+				t.IGST = t.IGST.Add(it.ItmDet.Iamt.Mul(sign))
+			}
+		}
+	}
 	return t
 }
 
@@ -269,6 +316,23 @@ type invoice struct {
 	igst       decimal.Decimal
 	ctin       string // counter-party GSTIN, empty if unregistered
 	registered bool
+	// class is the voucher's parent_class: 'SALES' for an invoice, 'CREDIT_NOTE'
+	// / 'DEBIT_NOTE' for an adjustment note. Notes are reported in cdnr (table
+	// 9B) as their own dated documents, never folded into b2b.
+	class string
+}
+
+// isNote reports whether this row is a credit/debit note rather than an invoice.
+func (in invoice) isNote() bool {
+	return in.class == "CREDIT_NOTE" || in.class == "DEBIT_NOTE"
+}
+
+// noteType is the GSTN "ntty" flag: C credit, D debit.
+func (in invoice) noteType() string {
+	if in.class == "DEBIT_NOTE" {
+		return "D"
+	}
+	return "C"
 }
 
 // rate returns the combined effective GST rate percent derived from the
@@ -318,20 +382,39 @@ func (s *Service) Generate(ctx context.Context, from, to string, opts Options) (
 	}
 
 	var invoices []invoice
+	var hsnRows []hsnRow
 	err = s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		var err error
+		if hsnRows, err = loadHSNRows(ctx, tx, from, to); err != nil {
+			return err
+		}
 		rows, err := tx.Query(ctx,
 			`SELECT vv.voucher_no, vv.voucher_date, vv.place_of_supply,
 			        vv.is_reverse_charge, vv.taxable_value, vv.cgst, vv.sgst, vv.igst,
-			        pl.gstin, pl.registration_type::text
+			        pl.gstin, pl.registration_type::text, vt.parent_class
 			   FROM voucher_version vv
 			   JOIN voucher_head    vh
 			     ON vh.company_id = vv.company_id
 			    AND vh.voucher_id = vv.voucher_id
 			    AND vh.current_version_id = vv.id
 			   JOIN voucher_type    vt ON vt.id = vv.voucher_type_id
-			   LEFT JOIN ledger     pl ON pl.id = vv.party_ledger_id
+			   LEFT JOIN ledger        pl ON pl.id = vv.party_ledger_id
+			   LEFT JOIN account_group pg ON pg.id = pl.group_id
 			  WHERE vh.is_deleted = false
-			    AND vt.parent_class = 'SALES'
+			    -- GSTR-1 is the OUTWARD return. Invoices always belong; a
+			    -- credit/debit note belongs ONLY when it is raised on a CUSTOMER.
+			    --
+			    -- The discriminator is the party's group NATURE, not the voucher
+			    -- class: both note classes can face either way. A debit note
+			    -- raised on a SUPPLIER is a purchase return — from our side it
+			    -- reverses input credit and belongs in GSTR-3B, not in our
+			    -- outward return. Filtering on class alone reported supplier-side
+			    -- notes as outward supply, inflating the return.
+			    AND (
+			         vt.parent_class = 'SALES'
+			      OR (vt.parent_class IN ('CREDIT_NOTE', 'DEBIT_NOTE')
+			          AND pg.nature = 'ASSET')
+			    )
 			    AND vv.voucher_date BETWEEN $1 AND $2
 			    AND vv.taxable_value IS NOT NULL
 			  ORDER BY vv.voucher_date, vv.voucher_no, vv.version_no`,
@@ -353,9 +436,10 @@ func (s *Service) Generate(ctx context.Context, from, to string, opts Options) (
 				igst    *decimal.Decimal
 				gstin   *string
 				regType *string
+				class   string
 			)
 			if err := rows.Scan(&vno, &vdate, &pos, &reverse, &taxable,
-				&cgst, &sgst, &igst, &gstin, &regType); err != nil {
+				&cgst, &sgst, &igst, &gstin, &regType, &class); err != nil {
 				return fmt.Errorf("gstr: scan sales version: %w", err)
 			}
 			in := invoice{
@@ -370,6 +454,7 @@ func (s *Service) Generate(ctx context.Context, from, to string, opts Options) (
 			in.pos = derefStr(pos)
 			in.ctin = derefStr(gstin)
 			in.registered = isRegistered(derefStr(regType), in.ctin)
+			in.class = class
 			invoices = append(invoices, in)
 		}
 		return rows.Err()
@@ -378,7 +463,73 @@ func (s *Service) Generate(ctx context.Context, from, to string, opts Options) (
 		return GSTR1{}, err
 	}
 
-	return build(fromT, invoices, opts), nil
+	return build(fromT, invoices, hsnRows, opts), nil
+}
+
+// hsnRow is one (hsn, rate) bucket of the table-12 summary, rolled up in SQL
+// from voucher_gst_line.
+type hsnRow struct {
+	hsn                string
+	rate               decimal.Decimal
+	taxable            decimal.Decimal
+	cgst, sgst, igst   decimal.Decimal
+}
+
+// loadHSNRows builds the GSTR-1 table-12 HSN summary from PER-LINE GST detail
+// (migration 0016). It deliberately does NOT reuse the invoice aggregate: the
+// summary keys on (hsn, rate), and a single invoice may carry several HSN codes
+// at several rates, which a voucher-level aggregate cannot express.
+//
+// The WHERE clause mirrors the invoice query exactly -- current version, not
+// deleted, SALES, in period -- so the two sections describe the same set of
+// vouchers. gl.hsn = '' is included rather than skipped: a line with no code
+// still carries taxable value the summary must report.
+func loadHSNRows(ctx context.Context, tx pgx.Tx, from, to string) ([]hsnRow, error) {
+	// SIGNED by document type: a credit note REDUCES the reported outward value
+	// at its (hsn, rate), a debit note increases it. Table 12 must describe net
+	// outward supply, or a month with a return would overstate every HSN bucket.
+	rows, err := tx.Query(ctx,
+		`SELECT gl.hsn, gl.gst_rate_pct,
+		        SUM(gl.taxable_value * sgn), SUM(gl.cgst * sgn),
+		        SUM(gl.sgst * sgn),          SUM(gl.igst * sgn)
+		   FROM voucher_gst_line gl
+		   JOIN voucher_version vv ON vv.id = gl.voucher_version_id
+		   JOIN voucher_head    vh
+		     ON vh.company_id = vv.company_id
+		    AND vh.voucher_id = vv.voucher_id
+		    AND vh.current_version_id = vv.id
+		   JOIN voucher_type    vt ON vt.id = vv.voucher_type_id
+		   LEFT JOIN ledger        pl ON pl.id = vv.party_ledger_id
+		   LEFT JOIN account_group pg ON pg.id = pl.group_id
+		   CROSS JOIN LATERAL (
+		     SELECT CASE WHEN vt.parent_class = 'CREDIT_NOTE' THEN -1 ELSE 1 END
+		   ) AS s(sgn)
+		  WHERE vh.is_deleted = false
+		    -- Same customer-side restriction as the invoice query above, so
+		    -- table 12 describes exactly the documents the return reports.
+		    AND (
+		         vt.parent_class = 'SALES'
+		      OR (vt.parent_class IN ('CREDIT_NOTE', 'DEBIT_NOTE')
+		          AND pg.nature = 'ASSET')
+		    )
+		    AND vv.voucher_date BETWEEN $1 AND $2
+		  GROUP BY gl.hsn, gl.gst_rate_pct
+		  ORDER BY gl.gst_rate_pct, gl.hsn`,
+		from, to)
+	if err != nil {
+		return nil, fmt.Errorf("gstr: query gst lines: %w", err)
+	}
+	defer rows.Close()
+
+	var out []hsnRow
+	for rows.Next() {
+		var h hsnRow
+		if err := rows.Scan(&h.hsn, &h.rate, &h.taxable, &h.cgst, &h.sgst, &h.igst); err != nil {
+			return nil, fmt.Errorf("gstr: scan gst line: %w", err)
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
 }
 
 // PostingTaxTotals sums the output-tax POSTINGS for the period: the amounts
@@ -396,7 +547,14 @@ func (s *Service) PostingTaxTotals(ctx context.Context, from, to string, opts Op
 		}
 		var total decimal.Decimal
 		err := tx.QueryRow(ctx,
-			`SELECT COALESCE(SUM(p.amount), 0)
+			// NET by dr_cr, not a raw SUM. An invoice CREDITS the output-tax
+			// ledger; a credit note DEBITS it to reverse the liability. Summing
+			// absolute amounts would make a sales return INCREASE the posted tax
+			// total, so the return and the books would drift apart by twice the
+			// note. Invoices are credit-only, so netting is identical to the old
+			// SUM for books with no notes.
+			`SELECT COALESCE(SUM(CASE WHEN p.dr_cr = 'C' THEN p.amount
+			                          ELSE -p.amount END), 0)
 			   FROM posting p
 			   JOIN voucher_version vv ON vv.id = p.voucher_version_id
 			   JOIN voucher_head    vh
@@ -406,7 +564,14 @@ func (s *Service) PostingTaxTotals(ctx context.Context, from, to string, opts Op
 			   JOIN voucher_type    vt ON vt.id = vv.voucher_type_id
 			  WHERE p.ledger_id = $1
 			    AND vh.is_deleted = false
-			    AND vt.parent_class = 'SALES'
+			    AND (
+			         vt.parent_class = 'SALES'
+			      OR (vt.parent_class IN ('CREDIT_NOTE', 'DEBIT_NOTE')
+			          AND EXISTS (SELECT 1 FROM ledger pl
+			                        JOIN account_group pg ON pg.id = pl.group_id
+			                       WHERE pl.id = vv.party_ledger_id
+			                         AND pg.nature = 'ASSET'))
+			    )
 			    AND vv.voucher_date BETWEEN $2 AND $3`,
 			ledgerID, from, to).Scan(&total)
 		if err != nil {
@@ -467,7 +632,7 @@ func (s *Service) Reconcile(ctx context.Context, from, to string, opts Options) 
 
 // build assembles the GSTR1 structure from the resolved invoices. It is pure
 // and deterministic (stable ordering), so it is straightforward to test.
-func build(period time.Time, invoices []invoice, opts Options) GSTR1 {
+func build(period time.Time, invoices []invoice, hsnRows []hsnRow, opts Options) GSTR1 {
 	out := GSTR1{
 		GSTIN: opts.GSTIN,
 		FP:    fmt.Sprintf("%02d%04d", int(period.Month()), period.Year()),
@@ -479,7 +644,9 @@ func build(period time.Time, invoices []invoice, opts Options) GSTR1 {
 	b2clByPOS := map[string][]B2CLInvoice{}
 	// B2CS rate-wise buckets keyed by (sply_ty, pos, rate).
 	b2csBuckets := map[b2csKey]*B2CSItem{}
-	// HSN rate-wise rollup keyed by (hsn, rate); Phase 1 hsn is blank.
+	// Credit/debit notes to registered parties, grouped by counter-party GSTIN.
+	cdnrByCTIN := map[string][]CDNRNote{}
+	// HSN rate-wise rollup keyed by (hsn, rate).
 	hsnBuckets := map[hsnKey]*HSNItem{}
 
 	for _, in := range invoices {
@@ -493,6 +660,19 @@ func build(period time.Time, invoices []invoice, opts Options) GSTR1 {
 		}}
 
 		switch {
+		// CREDIT/DEBIT NOTES first: a note to a registered party belongs in cdnr
+		// (table 9B), never in b2b. Checked BEFORE the registered case, which
+		// would otherwise swallow it and report a return as a fresh sale.
+		case in.isNote() && in.registered:
+			cdnrByCTIN[in.ctin] = append(cdnrByCTIN[in.ctin], CDNRNote{
+				Ntty:  in.noteType(),
+				NtNum: in.voucherNo,
+				NtDt:  in.date.Format("02-01-2006"),
+				Val:   in.total(),
+				Pos:   in.pos,
+				Rchrg: ynFlag(in.reverse),
+				Itms:  []ITM{itm},
+			})
 		case in.registered:
 			b2bByCTIN[in.ctin] = append(b2bByCTIN[in.ctin], B2BInvoice{
 				Inum:  in.voucherNo,
@@ -530,28 +710,57 @@ func build(period time.Time, invoices []invoice, opts Options) GSTR1 {
 			b.Samt = b.Samt.Add(in.sgst)
 		}
 
-		// HSN/rate rollup (every taxable invoice contributes).
-		hk := hsnKey{hsn: "", rate: rate.String()}
+	}
+
+	// HSN/rate rollup (table 12), sourced from PER-LINE detail rather than from
+	// the invoice aggregate above, because (hsn, rate) is a line-grain key.
+	for _, hr := range hsnRows {
+		hk := hsnKey{hsn: hr.hsn, rate: hr.rate.String()}
 		h := hsnBuckets[hk]
 		if h == nil {
 			h = &HSNItem{
-				HsnSc: "", Rt: rate,
+				HsnSc: hr.hsn, Rt: hr.rate,
 				Txval: decimal.Zero, Iamt: decimal.Zero,
 				Camt: decimal.Zero, Samt: decimal.Zero, TotVal: decimal.Zero,
 			}
 			hsnBuckets[hk] = h
 		}
-		h.Txval = h.Txval.Add(in.taxable)
-		h.Iamt = h.Iamt.Add(in.igst)
-		h.Camt = h.Camt.Add(in.cgst)
-		h.Samt = h.Samt.Add(in.sgst)
-		h.TotVal = h.TotVal.Add(in.total())
+		h.Txval = h.Txval.Add(hr.taxable)
+		h.Iamt = h.Iamt.Add(hr.igst)
+		h.Camt = h.Camt.Add(hr.cgst)
+		h.Samt = h.Samt.Add(hr.sgst)
+		// tot_val is taxable + tax FOR THIS BUCKET. Summing the whole invoice
+		// total here (as the aggregate version did) would over-count a
+		// mixed-rate invoice once per bucket it appears in.
+		h.TotVal = h.TotVal.
+			Add(hr.taxable).Add(hr.cgst).Add(hr.sgst).Add(hr.igst)
 	}
 
 	out.B2B = sortedB2B(b2bByCTIN)
 	out.B2CL = sortedB2CL(b2clByPOS)
 	out.B2CS = sortedB2CS(b2csBuckets)
+	out.CDNR = sortedCDNR(cdnrByCTIN)
 	out.HSN = sortedHSN(hsnBuckets)
+	return out
+}
+
+// sortedCDNR renders the cdnr section deterministically: parties by GSTIN, notes
+// by number within a party. Mirrors sortedB2B exactly.
+func sortedCDNR(m map[string][]CDNRNote) []CDNRParty {
+	if len(m) == 0 {
+		return nil
+	}
+	ctins := make([]string, 0, len(m))
+	for c := range m {
+		ctins = append(ctins, c)
+	}
+	sort.Strings(ctins)
+	out := make([]CDNRParty, 0, len(ctins))
+	for _, c := range ctins {
+		notes := m[c]
+		sort.Slice(notes, func(i, j int) bool { return notes[i].NtNum < notes[j].NtNum })
+		out = append(out, CDNRParty{CTIN: c, Nt: notes})
+	}
 	return out
 }
 

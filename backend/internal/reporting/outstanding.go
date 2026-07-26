@@ -79,9 +79,11 @@ type SlabTotal struct {
 }
 
 // Outstandings builds the bill-wise ageing report for receivables or payables as
-// of asOn (ISO date; empty means today). It aggregates bill_allocation across
-// all versions per (ledger, ref_name), nets by dr_cr to the pending amount, and
-// buckets each open bill by days overdue. Only parties under credit-natured
+// of asOn (ISO date; empty means today). It aggregates references per
+// (ledger, ref_name) from TWO sources — bill_allocation rows belonging to the
+// CURRENT, non-deleted version of each voucher, and the ledger's opening
+// bill-wise breakup — nets them by dr_cr to the pending amount, and buckets each
+// open bill by days overdue. Only parties under credit-natured
 // (liability) groups are payables; debit-natured (asset) groups are receivables.
 // Passing nil slabs uses DefaultAgeSlabs.
 func (s *Service) Outstandings(ctx context.Context, companyID uuid.UUID, kind OutstandingKind, asOn string, slabs []AgeSlab) (Outstanding, error) {
@@ -117,11 +119,39 @@ func (s *Service) Outstandings(ctx context.Context, companyID uuid.UUID, kind Ou
 		if kind == Payables {
 			signExpr = "SUM(CASE WHEN ba.dr_cr='C' THEN ba.amount ELSE -ba.amount END)"
 		}
+		// The reference universe is TWO sources UNIONed:
+		//
+		//   1. bill_allocation      — references made by vouchers (current
+		//                             versions only, see the join below).
+		//   2. ledger_opening_bill  — the BILL-WISE OPENING BREAKUP carried in on
+		//                             the ledger master as at
+		//                             company.books_beginning_from.
+		//
+		// Source 2 is not optional bookkeeping: the Balance Sheet's Sundry
+		// Debtors/Creditors totals include ledger.opening_balance (reporting.go
+		// folds it into the closing figure), so omitting the opening references
+		// here would make this report short by exactly the opening balance while
+		// both reports still looked internally consistent.
+		//
+		// A settlement posted LATER against an opening reference nets against it
+		// naturally, because both sides land in the same (ledger, ref_name) group.
 		rows, err := tx.Query(ctx, fmt.Sprintf(
 			`SELECT ba.ledger_id, l.name, g.name, ba.ref_name,
 			        %s AS pending,
 			        to_char(MIN(ba.due_date), 'YYYY-MM-DD') AS due_date
-			   FROM bill_allocation ba
+			   FROM (
+			          SELECT b.ledger_id, b.ref_name, b.dr_cr, b.amount, b.due_date
+			            FROM bill_allocation b
+			            JOIN voucher_version vv ON vv.id = b.voucher_version_id
+			            JOIN voucher_head    vh
+			              ON vh.company_id = vv.company_id
+			             AND vh.voucher_id = vv.voucher_id
+			             AND vh.current_version_id = vv.id
+			           WHERE vh.is_deleted = false
+			          UNION ALL
+			          SELECT ob.ledger_id, ob.ref_name, ob.dr_cr, ob.amount, ob.due_date
+			            FROM ledger_opening_bill ob
+			        ) ba
 			   JOIN ledger l        ON l.id = ba.ledger_id
 			   JOIN account_group g ON g.id = l.group_id
 			  WHERE g.nature = $1

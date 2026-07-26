@@ -44,6 +44,22 @@ type companyViewResp struct {
 	BaseCurrency string `json:"base_currency"`
 	StateCode    string `json:"state_code"`
 	GSTIN        string `json:"gstin"`
+
+	// Mailing block + country (migration 0015).
+	MailingName string `json:"mailing_name"`
+	Address     string `json:"address"`
+	City        string `json:"city"`
+	Pincode     string `json:"pincode"`
+	Country     string `json:"country"`
+
+	// BooksBeginningFrom is distinct from FYStartDate: it is the date the books
+	// begin here, and therefore the date opening balances are stated as at.
+	BooksBeginningFrom string `json:"books_beginning_from"`
+
+	// Base-currency presentation.
+	CurrencySymbol     string `json:"currency_symbol"`
+	CurrencyFormalName string `json:"currency_formal_name"`
+	DecimalPlaces      int    `json:"decimal_places"`
 }
 
 // handleGetCompany returns the company master for the authorized company.
@@ -59,13 +75,30 @@ func (s *Server) handleGetCompany(w http.ResponseWriter, r *http.Request) {
 		baseCurrency string
 		stateCode    string
 		gstin        string
+
+		mailingName string
+		address     string
+		city        string
+		pincode     string
+		country     string
+		booksFrom   time.Time
+
+		currencySymbol     string
+		currencyFormalName string
+		decimalPlaces      int
 	)
 	err := s.pool.RunInReadOnlyTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
-			`SELECT name, fy_start_date, base_currency, state_code, gstin
+			`SELECT name, fy_start_date, base_currency, state_code, gstin,
+			        mailing_name, address, city, pincode, country,
+			        books_beginning_from,
+			        currency_symbol, currency_formal_name, decimal_places
 			   FROM company
 			  WHERE id = $1`, companyID).
-			Scan(&name, &fyStart, &baseCurrency, &stateCode, &gstin)
+			Scan(&name, &fyStart, &baseCurrency, &stateCode, &gstin,
+				&mailingName, &address, &city, &pincode, &country,
+				&booksFrom,
+				&currencySymbol, &currencyFormalName, &decimalPlaces)
 	})
 	if err != nil {
 		// No row = either the company does not exist or RLS hid it. Both are a
@@ -86,5 +119,17 @@ func (s *Server) handleGetCompany(w http.ResponseWriter, r *http.Request) {
 		BaseCurrency: baseCurrency,
 		StateCode:    stateCode,
 		GSTIN:        gstin,
+
+		MailingName: mailingName,
+		Address:     address,
+		City:        city,
+		Pincode:     pincode,
+		Country:     country,
+
+		BooksBeginningFrom: booksFrom.Format("2006-01-02"),
+
+		CurrencySymbol:     currencySymbol,
+		CurrencyFormalName: currencyFormalName,
+		DecimalPlaces:      decimalPlaces,
 	})
 }

@@ -255,8 +255,22 @@ func (s *Service) Generate3B(ctx context.Context, from, to string, opts Options3
 		// without the voucher_head join an ALTERed voucher would be counted twice
 		// (every version carries the GST columns) and a DELETEd one would survive.
 		q, err := tx.Query(ctx,
-			`SELECT vt.parent_class, vv.place_of_supply, vv.is_reverse_charge,
-			        vv.taxable_value, vv.cgst, vv.sgst, vv.igst,
+			// CREDIT/DEBIT NOTES are folded into the SIDE THEY FACE, with a sign.
+			// The side is decided by the party's group nature, NOT by the voucher
+			// class: a note against a customer (ASSET / Sundry Debtors) adjusts
+			// outward supply; a note against a supplier (LIABILITY / Sundry
+			// Creditors) adjusts input credit. Both classes can face either way,
+			// so classifying on class alone puts purchase returns in the outward
+			// tables. Mapping to 'SALES'/'PURCHASE' here means every downstream
+			// aggregate nets automatically instead of each needing note handling.
+			`SELECT CASE
+			          WHEN vt.parent_class IN ('CREDIT_NOTE', 'DEBIT_NOTE')
+			          THEN CASE WHEN pg.nature = 'ASSET' THEN 'SALES' ELSE 'PURCHASE' END
+			          ELSE vt.parent_class
+			        END AS parent_class,
+			        vv.place_of_supply, vv.is_reverse_charge,
+			        vv.taxable_value * s.sgn, vv.cgst * s.sgn,
+			        vv.sgst * s.sgn, vv.igst * s.sgn,
 			        pl.gstin, pl.registration_type::text
 			   FROM voucher_version vv
 			   JOIN voucher_head    vh
@@ -264,9 +278,21 @@ func (s *Service) Generate3B(ctx context.Context, from, to string, opts Options3
 			    AND vh.voucher_id = vv.voucher_id
 			    AND vh.current_version_id = vv.id
 			   JOIN voucher_type    vt ON vt.id = vv.voucher_type_id
-			   LEFT JOIN ledger     pl ON pl.id = vv.party_ledger_id
+			   LEFT JOIN ledger        pl ON pl.id = vv.party_ledger_id
+			   LEFT JOIN account_group pg ON pg.id = pl.group_id
+			   CROSS JOIN LATERAL (
+			     -- A CREDIT note reduces outward supply; a DEBIT note raised on a
+			     -- SUPPLIER (a purchase return) reduces input credit. Both are
+			     -- negative adjustments to the side they face.
+			     SELECT CASE
+			              WHEN vt.parent_class = 'CREDIT_NOTE' THEN -1
+			              WHEN vt.parent_class = 'DEBIT_NOTE'
+			                   AND pg.nature = 'LIABILITY' THEN -1
+			              ELSE 1
+			            END
+			   ) AS s(sgn)
 			  WHERE vh.is_deleted = false
-			    AND vt.parent_class IN ('SALES', 'PURCHASE')
+			    AND vt.parent_class IN ('SALES', 'PURCHASE', 'CREDIT_NOTE', 'DEBIT_NOTE')
 			    AND vv.voucher_date BETWEEN $1 AND $2
 			    AND vv.taxable_value IS NOT NULL
 			  ORDER BY vt.parent_class, vv.voucher_date, vv.voucher_no, vv.version_no`,
@@ -433,7 +459,11 @@ func (s *Service) ITCPostingTotals(ctx context.Context, from, to string, opts Op
 		}
 		var total decimal.Decimal
 		err := tx.QueryRow(ctx,
-			`SELECT COALESCE(SUM(p.amount), 0)
+			// NET by dr_cr: a purchase DEBITS the input-tax ledger; a debit note
+			// raised on a supplier CREDITS it back. A raw SUM would make a
+			// purchase return INCREASE claimable ITC.
+			`SELECT COALESCE(SUM(CASE WHEN p.dr_cr = 'D' THEN p.amount
+			                          ELSE -p.amount END), 0)
 			   FROM posting p
 			   JOIN voucher_version vv ON vv.id = p.voucher_version_id
 			   JOIN voucher_head    vh
@@ -443,7 +473,14 @@ func (s *Service) ITCPostingTotals(ctx context.Context, from, to string, opts Op
 			   JOIN voucher_type    vt ON vt.id = vv.voucher_type_id
 			  WHERE p.ledger_id = $1
 			    AND vh.is_deleted = false
-			    AND vt.parent_class = 'PURCHASE'
+			    AND (
+			         vt.parent_class = 'PURCHASE'
+			      OR (vt.parent_class IN ('CREDIT_NOTE', 'DEBIT_NOTE')
+			          AND EXISTS (SELECT 1 FROM ledger pl
+			                        JOIN account_group pg ON pg.id = pl.group_id
+			                       WHERE pl.id = vv.party_ledger_id
+			                         AND pg.nature = 'LIABILITY'))
+			    )
 			    AND vv.voucher_date BETWEEN $2 AND $3`,
 			ledgerID, from, to).Scan(&total)
 		if err != nil {

@@ -330,6 +330,16 @@ func (s *Server) routes() {
 		// Masters.
 		r.Post("/groups", s.handleCreateGroup)
 		r.Post("/ledgers", s.handleCreateLedger)
+		// Read the chart of accounts back. Until this existed a client could
+		// CREATE ledgers but never enumerate them, so it could not resolve the
+		// id of a ledger it did not create itself — including the two ledgers
+		// every company is seeded with (Cash, Profit & Loss A/c).
+		r.Get("/ledgers", s.handleListLedgers)
+		// Set a ledger's OPENING BALANCE + bill-wise opening breakup. Narrow by
+		// design (not a general master editor): it is the only way to give the
+		// ledgers seeded with every company — Cash, Profit & Loss A/c — an
+		// opening balance, since those are created before any client can speak.
+		r.Put("/ledgers/{ledgerID}/opening", s.handleSetLedgerOpening)
 		r.Post("/voucher-types", s.handleCreateVoucherType)
 		r.Post("/units", s.handleCreateUnit)
 		r.Post("/stock-items", s.handleCreateStockItem)
@@ -342,6 +352,11 @@ func (s *Server) routes() {
 		r.Post("/vouchers/payment", s.postVoucher(ledger.Payment))
 		r.Post("/vouchers/contra", s.postVoucher(ledger.Contra))
 		r.Post("/vouchers/journal", s.postVoucher(ledger.Journal))
+		// Credit Note (sales return) / Debit Note (purchase adjustment). The
+		// CORRECT way to reverse part of an invoice: a separately-dated voucher
+		// with its own number, rather than an alteration that rewrites history.
+		r.Post("/vouchers/credit-note", s.postVoucher(ledger.CreditNote))
+		r.Post("/vouchers/debit-note", s.postVoucher(ledger.DebitNote))
 
 		// Alter: PUT a full restatement of an existing voucher. One Put per literal
 		// type segment keeps the class compile-time fixed, exactly like the Posts.
@@ -352,6 +367,8 @@ func (s *Server) routes() {
 		r.Put("/vouchers/payment/{voucherID}", s.alterVoucher(ledger.Payment))
 		r.Put("/vouchers/contra/{voucherID}", s.alterVoucher(ledger.Contra))
 		r.Put("/vouchers/journal/{voucherID}", s.alterVoucher(ledger.Journal))
+		r.Put("/vouchers/credit-note/{voucherID}", s.alterVoucher(ledger.CreditNote))
+		r.Put("/vouchers/debit-note/{voucherID}", s.alterVoucher(ledger.DebitNote))
 
 		// Fetch the CURRENT (head) version of one logical voucher. A param route
 		// beside the literal POST/PUT /vouchers/sales etc.; the method differs
@@ -484,6 +501,24 @@ type companyReq struct {
 	BaseCurrency string `json:"base_currency"`
 	StateCode    string `json:"state_code"`
 	GSTIN        string `json:"gstin"`
+
+	// Mailing block + country (migration 0015). All optional; omitted fields
+	// take the column/service defaults.
+	MailingName string `json:"mailing_name"`
+	Address     string `json:"address"`
+	City        string `json:"city"`
+	Pincode     string `json:"pincode"`
+	Country     string `json:"country"`
+
+	// BooksBeginningFrom defaults to FYStartDate when omitted. Supply it only
+	// for a mid-year migration; it may not precede fy_start_date (DB CHECK).
+	BooksBeginningFrom string `json:"books_beginning_from"`
+
+	// Base-currency presentation. DecimalPlaces is a pointer so an explicit 0
+	// (whole-rupee books) is distinguishable from "not supplied" (=> 2).
+	CurrencySymbol     string `json:"currency_symbol"`
+	CurrencyFormalName string `json:"currency_formal_name"`
+	DecimalPlaces      *int   `json:"decimal_places"`
 }
 
 func (s *Server) handleCreateCompany(w http.ResponseWriter, r *http.Request) {
@@ -510,6 +545,18 @@ func (s *Server) handleCreateCompany(w http.ResponseWriter, r *http.Request) {
 		BaseCurrency: req.BaseCurrency,
 		StateCode:    req.StateCode,
 		GSTIN:        req.GSTIN,
+
+		MailingName: req.MailingName,
+		Address:     req.Address,
+		City:        req.City,
+		Pincode:     req.Pincode,
+		Country:     req.Country,
+
+		BooksBeginningFrom: req.BooksBeginningFrom,
+
+		CurrencySymbol:     req.CurrencySymbol,
+		CurrencyFormalName: req.CurrencyFormalName,
+		DecimalPlaces:      req.DecimalPlaces,
 	})
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
@@ -576,6 +623,18 @@ type ledgerReq struct {
 	RegistrationType   string `json:"registration_type"`
 	PAN                string `json:"pan"`
 	CreatedBy          string `json:"created_by"`
+	// OpeningBills is the bill-wise breakup of OpeningBalance. masters.CreateLedger
+	// requires it to SUM to the opening balance when present.
+	OpeningBills []openingBillReq `json:"opening_bills"`
+}
+
+// openingBillReq is one bill of a ledger's opening bill-wise breakup.
+type openingBillReq struct {
+	RefName string `json:"ref_name"`
+	RefType string `json:"ref_type"`
+	DrCr    string `json:"dr_cr"`
+	Amount  string `json:"amount"`
+	DueDate string `json:"due_date"`
 }
 
 func (s *Server) handleCreateLedger(w http.ResponseWriter, r *http.Request) {
@@ -592,6 +651,18 @@ func (s *Server) handleCreateLedger(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid opening_balance")
 		return
 	}
+	openingBills := make([]masters.OpeningBill, 0, len(req.OpeningBills))
+	for _, b := range req.OpeningBills {
+		amt, derr := optionalDecimal(b.Amount)
+		if derr != nil {
+			writeError(w, http.StatusBadRequest, "invalid opening bill amount for "+b.RefName)
+			return
+		}
+		openingBills = append(openingBills, masters.OpeningBill{
+			RefName: b.RefName, RefType: b.RefType, DrCr: b.DrCr,
+			Amount: amt, DueDate: b.DueDate,
+		})
+	}
 	id, err := s.masters.CreateLedger(ctx, masters.Ledger{
 		Name:               req.Name,
 		GroupName:          req.GroupName,
@@ -602,6 +673,7 @@ func (s *Server) handleCreateLedger(w http.ResponseWriter, r *http.Request) {
 		StateCode:          req.StateCode,
 		RegistrationType:   masters.GSTRegistrationType(req.RegistrationType),
 		PAN:                req.PAN,
+		OpeningBills:       openingBills,
 	}, req.CreatedBy)
 	if err != nil {
 		writeMastersError(w, err)
@@ -1374,7 +1446,20 @@ func (s *Server) handleGSTR1(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "from and to query params are required (YYYY-MM-DD)")
 		return
 	}
-	opts := gstr.Options{GSTIN: r.URL.Query().Get("gstin")}
+	// The FILER's GSTIN is a property of the company, not of the request. It was
+	// read only from ?gstin=, so every caller that did not happen to pass it —
+	// including the UI — produced a return with NO gstin field at all, which
+	// cannot be filed. Fall back to company.gstin; an explicit query param still
+	// wins (useful for previewing a return under a different registration).
+	gstin := r.URL.Query().Get("gstin")
+	if gstin == "" {
+		var cerr error
+		if gstin, cerr = s.companyGSTIN(ctx); cerr != nil {
+			writeError(w, http.StatusInternalServerError, "read company gstin: "+cerr.Error())
+			return
+		}
+	}
+	opts := gstr.Options{GSTIN: gstin}
 	var err error
 	if opts.CGSTLedgerID, err = optionalUUID(r.URL.Query().Get("cgst_ledger_id")); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid cgst_ledger_id")

@@ -264,6 +264,23 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 	case method == http.MethodPost && isMasterPath(rest):
 		return authz.Create, "master", "", true
 
+	// GET the chart of accounts. A Display over masters, NOT a report: it is the
+	// ledger master list, and modelling it as report:NAME would let a level that
+	// disallows one report accidentally hide the chart of accounts. Read-only, so
+	// it must not inherit the back-dated cutoff or the step-up (both gate on
+	// Action.IsWrite()). LOAD-BEARING: unmapped {companyID} routes default-deny.
+	case method == http.MethodGet && rest == "/ledgers":
+		return authz.Display, "master", "", true
+
+	// Set a ledger's opening balance: an ALTER of a master. It IS a write, so it
+	// correctly inherits the back-dated cutoff and step-up rules.
+	case method == http.MethodPut && strings.HasPrefix(rest, "/ledgers/"):
+		segs := splitPath(rest)
+		if len(segs) == 3 && segs[0] == "ledgers" && segs[2] == "opening" {
+			return authz.Alter, "master", "", true
+		}
+		return "", "", "", false
+
 	// Voucher class POSTs (and the /sales alias).
 	case method == http.MethodPost && rest == "/sales":
 		return authz.Create, "sales", "", true
@@ -365,7 +382,11 @@ func isMasterPath(rest string) bool {
 
 func isVoucherClass(c string) bool {
 	switch c {
-	case "sales", "purchase", "receipt", "payment", "contra", "journal":
+	case "sales", "purchase", "receipt", "payment", "contra", "journal",
+		// Credit/Debit Notes are first-class voucher classes, not variants of
+		// sales/purchase: they carry their own numbering series and their own
+		// GSTR-1 section (cdnr).
+		"credit-note", "debit-note":
 		return true
 	}
 	return false

@@ -65,12 +65,34 @@ const (
 	Sales Class = "Sales"
 	// Purchase (F9): purchase invoices.
 	Purchase Class = "Purchase"
+	// CreditNote (Alt+F6): a SALES return / downward price correction. It is the
+	// reverse of a Sales invoice — Dr Sales, Dr the output-tax heads, Cr the
+	// customer — and reduces outward liability. It is the CORRECT way to undo
+	// part of an invoice: altering the original rewrites history and (before this
+	// pass) silently dropped the invoice from GSTR-1 entirely.
+	CreditNote Class = "Credit Note"
+	// DebitNote (Alt+F5): a PURCHASE return / upward price correction raised on a
+	// supplier — Dr the supplier, Cr Purchases, Cr the input-tax heads.
+	DebitNote Class = "Debit Note"
 )
 
 // validClasses is the set of accepted voucher classes.
 var validClasses = map[Class]bool{
 	Contra: true, Payment: true, Receipt: true,
 	Journal: true, Sales: true, Purchase: true,
+	CreditNote: true, DebitNote: true,
+}
+
+// gstBearing reports whether a class participates in GST derivation. Credit and
+// Debit Notes carry tax exactly as the invoices they adjust do — a credit note
+// that did not derive GST would reduce the sale but not the tax on it, leaving
+// the return overstating liability with nothing to show why.
+func gstBearing(c Class) bool {
+	switch c {
+	case Sales, Purchase, CreditNote, DebitNote:
+		return true
+	}
+	return false
 }
 
 // ErrVoucherNotFound is returned by AlterVoucher and DeleteVoucher when no
@@ -628,7 +650,7 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 	}
 
 	// Whether this post carries GST derivation (Sales/Purchase with GST params).
-	gstActive := in.GST != nil && (in.Class == Sales || in.Class == Purchase)
+	gstActive := in.GST != nil && gstBearing(in.Class)
 	// Whether this post carries TDS derivation. A deduction is made by the payer,
 	// so it rides Purchase (bill booking), Payment and Journal — never Sales or
 	// Receipt. A DELETE tombstone carries no postings and derives nothing.
@@ -787,14 +809,52 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 		// A keystroke post (e.g. F8 Sales) carries the class but not a
 		// voucher_type_id — the class implies the company's default (system)
 		// voucher type, exactly as in Tally. Resolve it so numbering can run and
-		// the version row records a proper type. ALTER/DELETE keep whatever the
-		// prior version carried (set above), so only resolve on CREATE.
-		if op == OpCreate && in.VoucherTypeID == uuid.Nil {
-			vtID, err := defaultVoucherTypeID(ctx, tx, companyID, in.Class)
-			if err != nil {
-				return err
+		// the version row records a proper type.
+		//
+		// An ALTER restates the BODY, not the identity: every caller (the F8/F9
+		// screens, alterSalesVoucher, the seed script, the sync sequencer) sends
+		// postings and amounts and leaves VoucherTypeID zero. The type must
+		// therefore be CARRIED FORWARD from the version being superseded. Leaving
+		// it NULL is not cosmetic: gstr1.go and gstr3b.go reach the voucher class
+		// through an INNER JOIN on voucher_type_id, so a NULL silently ELIMINATES
+		// the current version of an altered invoice from GSTR-1 and GSTR-3B while
+		// it stays fully present in the Trial Balance and P&L — a wrong return
+		// with no error anywhere. See the regression tests in
+		// internal/compliance/gstr/alter_voucher_type_regression_test.go.
+		//
+		// OpDelete needs nothing here: DeleteVoucher reads the prior current
+		// version's voucher_type_id and passes it in before calling post().
+		if in.VoucherTypeID == uuid.Nil {
+			switch op {
+			case OpCreate:
+				vtID, err := defaultVoucherTypeID(ctx, tx, companyID, in.Class)
+				if err != nil {
+					return err
+				}
+				in.VoucherTypeID = vtID
+			case OpAlter:
+				// priorCurrentID is always set for an ALTER: the head-lookup above
+				// returns ErrVoucherNotFound when no head row exists.
+				var priorType *uuid.UUID
+				if err := tx.QueryRow(ctx,
+					`SELECT voucher_type_id FROM voucher_version
+					  WHERE company_id = $1 AND id = $2`,
+					companyID, priorCurrentID).Scan(&priorType); err != nil {
+					return fmt.Errorf("ledger: read prior version voucher type: %w", err)
+				}
+				if priorType != nil {
+					in.VoucherTypeID = *priorType
+					break
+				}
+				// The prior version predates this fix (or was imported without a
+				// type). Fall back to the class default so an alter REPAIRS such a
+				// voucher rather than perpetuating the gap.
+				vtID, err := defaultVoucherTypeID(ctx, tx, companyID, in.Class)
+				if err != nil {
+					return err
+				}
+				in.VoucherTypeID = vtID
 			}
-			in.VoucherTypeID = vtID
 		}
 
 		switch {
@@ -920,6 +980,33 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 			pos, rev, taxable, cgst, sgst, igst,
 		); err != nil {
 			return fmt.Errorf("ledger: insert voucher_version: %w", err)
+		}
+
+		// PER-LINE GST detail (migration 0016). The aggregate columns above feed
+		// the GSTR-1 b2b/b2cl/b2cs sections; these rows feed the table-12 HSN
+		// summary, which rolls up by (hsn, rate) — a LINE-grain key the aggregate
+		// cannot express for a mixed-rate invoice. Written from the SAME
+		// TaxResult, inside the same transaction, so the two can never disagree.
+		//
+		// A DELETE writes none: its tombstone carries no lines, exactly as it
+		// carries no postings, so the voucher leaves every GST report.
+		if gstActive && op != OpDelete {
+			for n, lt := range tax.Lines {
+				lineID, err := uuid.NewV7()
+				if err != nil {
+					return fmt.Errorf("ledger: new gst line id: %w", err)
+				}
+				if _, err := tx.Exec(ctx,
+					`INSERT INTO voucher_gst_line
+					   (id, company_id, voucher_version_id, line_no,
+					    hsn, taxable_value, gst_rate_pct, cgst, sgst, igst)
+					 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+					lineID, companyID, versionID, n+1,
+					lt.HSN, lt.TaxableValue, lt.GSTRatePct, lt.CGST, lt.SGST, lt.IGST,
+				); err != nil {
+					return fmt.Errorf("ledger: insert voucher_gst_line: %w", err)
+				}
+			}
 		}
 
 		// Insert postings and incrementally update ledger_balance. A DELETE

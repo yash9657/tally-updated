@@ -40,7 +40,23 @@ KNOWN_VOUCHER_TYPES = {
     "debit-note",
 }
 
-KNOWN_SCREENS = {"gateway", "voucher", "report", "goto-overlay"}
+# Mirrors ScreenKind in frontend/src/keystroke/types.ts. It had fallen behind:
+# screens that shipped later (help, features, bill-inbox, query, ...) were not
+# added here, so a corpus case naming one FAILED validation even though the
+# screen exists and the case is correct. Keep this set in step with that union.
+KNOWN_SCREENS = {
+    "gateway",
+    "menu",
+    "voucher",
+    "report",
+    "report-detail",
+    "goto-overlay",
+    "master-create",
+    "bill-inbox",
+    "query",
+    "help",
+    "features",
+}
 
 RULESET_VERSION = "gst-2024-09"
 KEYMAP_PROFILE = "tallyprime"

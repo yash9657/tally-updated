@@ -196,6 +196,21 @@ type Ledger struct {
 	RegistrationType   GSTRegistrationType
 	PAN                string
 	CreditDays         *int
+	// OpeningBills is the BILL-WISE BREAKUP of OpeningBalance: the individual
+	// unpaid bills that make it up, as at company.books_beginning_from. Tally
+	// requires this for any bill-wise ledger carrying an opening balance, and
+	// requires it to ADD UP — CreateLedger enforces both. Empty is fine for a
+	// ledger with no opening balance or with bill-wise tracking off.
+	OpeningBills []OpeningBill
+}
+
+// OpeningBill is one bill of a ledger's opening bill-wise breakup.
+type OpeningBill struct {
+	RefName string
+	RefType string // NEW (default) / ADVANCE / ON_ACCOUNT
+	DrCr    string // "D" or "C"
+	Amount  decimal.Decimal
+	DueDate string // ISO date, or "" for none
 }
 
 // EnsureLedger resolves a ledger by name, creating it under groupName if it does
@@ -246,6 +261,30 @@ func (s *Service) CreateLedger(ctx context.Context, l Ledger, createdBy string) 
 	if l.RegistrationType == "" {
 		l.RegistrationType = GSTUnknown
 	}
+	// A bill-wise opening breakup must ACCOUNT FOR the whole opening balance.
+	// Tally refuses a breakup with a difference, and so do we: a breakup that
+	// does not add up makes the Outstandings total disagree with the Balance
+	// Sheet by exactly the shortfall, silently.
+	if len(l.OpeningBills) > 0 {
+		sum := decimal.Zero
+		for i, b := range l.OpeningBills {
+			if b.RefName == "" {
+				return uuid.Nil, fmt.Errorf("masters: opening bill %d has no ref_name", i+1)
+			}
+			if b.Amount.IsNegative() {
+				return uuid.Nil, fmt.Errorf("masters: opening bill %q has a negative amount", b.RefName)
+			}
+			if b.DrCr != "" && b.DrCr != "D" && b.DrCr != "C" {
+				return uuid.Nil, fmt.Errorf("masters: opening bill %q has invalid dr/cr %q", b.RefName, b.DrCr)
+			}
+			sum = sum.Add(b.Amount)
+		}
+		if !sum.Equal(l.OpeningBalance) {
+			return uuid.Nil, fmt.Errorf(
+				"masters: opening bill-wise breakup for %q sums to %s but the opening balance is %s",
+				l.Name, sum.StringFixed(4), l.OpeningBalance.StringFixed(4))
+		}
+	}
 	companyID, ok := db.CompanyFromContext(ctx)
 	if !ok {
 		return uuid.Nil, db.ErrNoCompany
@@ -278,6 +317,29 @@ func (s *Service) CreateLedger(ctx context.Context, l Ledger, createdBy string) 
 		); err != nil {
 			return fmt.Errorf("masters: insert ledger: %w", err)
 		}
+		for _, b := range l.OpeningBills {
+			billID, err := uuid.NewV7()
+			if err != nil {
+				return fmt.Errorf("masters: new opening bill id: %w", err)
+			}
+			refType := b.RefType
+			if refType == "" {
+				refType = "NEW"
+			}
+			drcr := b.DrCr
+			if drcr == "" {
+				// Default to the side the opening balance itself sits on.
+				drcr = l.OpeningDC
+			}
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO ledger_opening_bill
+				   (id, company_id, ledger_id, ref_name, ref_type, dr_cr, amount, due_date)
+				 VALUES ($1, $2, $3, $4, $5::bill_ref_type, $6, $7, NULLIF($8,'')::date)`,
+				billID, companyID, id, b.RefName, refType, drcr, b.Amount, b.DueDate,
+			); err != nil {
+				return fmt.Errorf("masters: insert opening bill %q: %w", b.RefName, err)
+			}
+		}
 		after := map[string]any{
 			"name": l.Name, "group": l.GroupName, "gstin": l.GSTIN,
 			"state_code": l.StateCode, "registration_type": string(l.RegistrationType),
@@ -289,6 +351,113 @@ func (s *Service) CreateLedger(ctx context.Context, l Ledger, createdBy string) 
 		return uuid.Nil, err
 	}
 	return id, nil
+}
+
+// SetLedgerOpening sets a ledger's OPENING BALANCE and its bill-wise opening
+// breakup, replacing any breakup already recorded. It appends a master_audit
+// ALTER row, so the change is traceable exactly like a voucher edit.
+//
+// Deliberately NARROW. This is not a general master editor: opening balances are
+// a books-SETUP operation (they are stated as at company.books_beginning_from),
+// and they are the one master field a caller cannot set at creation time for the
+// ledgers seed_company_defaults creates for every company — Cash and Profit &
+// Loss A/c. Without this, the predefined Cash ledger could never carry an
+// opening balance and callers were pushed into inventing a duplicate cash
+// ledger just to have one they could set.
+//
+// The breakup must SUM to the opening balance, same invariant CreateLedger
+// enforces; see the comment there.
+func (s *Service) SetLedgerOpening(ctx context.Context, ledgerID uuid.UUID, opening decimal.Decimal, openingDC string, bills []OpeningBill, createdBy string) error {
+	if openingDC == "" {
+		openingDC = "D"
+	}
+	if openingDC != "D" && openingDC != "C" {
+		return fmt.Errorf("masters: invalid opening dr/cr %q", openingDC)
+	}
+	if len(bills) > 0 {
+		sum := decimal.Zero
+		for i, b := range bills {
+			if b.RefName == "" {
+				return fmt.Errorf("masters: opening bill %d has no ref_name", i+1)
+			}
+			if b.Amount.IsNegative() {
+				return fmt.Errorf("masters: opening bill %q has a negative amount", b.RefName)
+			}
+			sum = sum.Add(b.Amount)
+		}
+		if !sum.Equal(opening) {
+			return fmt.Errorf(
+				"masters: opening bill-wise breakup sums to %s but the opening balance is %s",
+				sum.StringFixed(4), opening.StringFixed(4))
+		}
+	}
+
+	companyID, ok := db.CompanyFromContext(ctx)
+	if !ok {
+		return db.ErrNoCompany
+	}
+
+	return s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		var (
+			name       string
+			prevOpen   decimal.Decimal
+			prevOpenDC string
+		)
+		err := tx.QueryRow(ctx,
+			`SELECT name, opening_balance, opening_dc FROM ledger WHERE id = $1`,
+			ledgerID).Scan(&name, &prevOpen, &prevOpenDC)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("masters: %w: ledger %s", ErrNotFound, ledgerID)
+		}
+		if err != nil {
+			return fmt.Errorf("masters: read ledger: %w", err)
+		}
+
+		if _, err := tx.Exec(ctx,
+			`UPDATE ledger SET opening_balance = $2, opening_dc = $3 WHERE id = $1`,
+			ledgerID, opening, openingDC); err != nil {
+			return fmt.Errorf("masters: update opening balance: %w", err)
+		}
+
+		// Replace the breakup wholesale: a restated opening is a restatement of
+		// its constituent bills, not an addition to them.
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM ledger_opening_bill WHERE ledger_id = $1`, ledgerID); err != nil {
+			return fmt.Errorf("masters: clear opening bills: %w", err)
+		}
+		for _, b := range bills {
+			billID, err := uuid.NewV7()
+			if err != nil {
+				return fmt.Errorf("masters: new opening bill id: %w", err)
+			}
+			refType := b.RefType
+			if refType == "" {
+				refType = "NEW"
+			}
+			drcr := b.DrCr
+			if drcr == "" {
+				drcr = openingDC
+			}
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO ledger_opening_bill
+				   (id, company_id, ledger_id, ref_name, ref_type, dr_cr, amount, due_date)
+				 VALUES ($1, $2, $3, $4, $5::bill_ref_type, $6, $7, NULLIF($8,'')::date)`,
+				billID, companyID, ledgerID, b.RefName, refType, drcr, b.Amount, b.DueDate,
+			); err != nil {
+				return fmt.Errorf("masters: insert opening bill %q: %w", b.RefName, err)
+			}
+		}
+
+		before := map[string]any{
+			"opening_balance": prevOpen.StringFixed(4), "opening_dc": prevOpenDC,
+		}
+		after := map[string]any{
+			"name":            name,
+			"opening_balance": opening.StringFixed(4), "opening_dc": openingDC,
+			"opening_bills": len(bills),
+		}
+		return appendAudit(ctx, tx, companyID, "ledger", ledgerID, OpAlter, before, after, createdBy)
+	})
 }
 
 // LedgerID resolves a ledger's id by name within the company in context.

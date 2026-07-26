@@ -4,19 +4,58 @@
   "tallyExportFile": "02-multistate-gst.xml",
   "gstin": "29ZZZZZ0000Z1Z5",
   "stateCode": "29",
-  "period": { "from": "2025-05-01", "to": "2025-05-31" },
-  "taxLedgers": { "cgst": "Output CGST", "sgst": "Output SGST", "igst": "Output IGST" },
+  "period": {
+    "from": "2025-05-01",
+    "to": "2025-05-31"
+  },
+  "taxLedgers": {
+    "cgst": "Output CGST",
+    "sgst": "Output SGST",
+    "igst": "Output IGST"
+  },
   "trialBalance": {
     "rows": [
-      { "ledger": "Acme Pvt Ltd", "debit": "11800.0000", "credit": "0.0000" },
-      { "ledger": "Walk-in Local", "debit": "5900.0000", "credit": "0.0000" },
-      { "ledger": "Walk-in Mumbai", "debit": "236000.0000", "credit": "0.0000" },
-      { "ledger": "Domestic Sales", "debit": "0.0000", "credit": "215000.0000" },
-      { "ledger": "Output CGST", "debit": "0.0000", "credit": "1350.0000" },
-      { "ledger": "Output SGST", "debit": "0.0000", "credit": "1350.0000" },
-      { "ledger": "Output IGST", "debit": "0.0000", "credit": "36000.0000" }
+      {
+        "ledger": "Acme Pvt Ltd",
+        "debit": "11800.0000",
+        "credit": "0.0000"
+      },
+      {
+        "ledger": "Walk-in Local",
+        "debit": "5900.0000",
+        "credit": "0.0000"
+      },
+      {
+        "ledger": "Walk-in Mumbai",
+        "debit": "236000.0000",
+        "credit": "0.0000"
+      },
+      {
+        "ledger": "Domestic Sales",
+        "debit": "0.0000",
+        "credit": "215000.0000"
+      },
+      {
+        "ledger": "Output CGST",
+        "debit": "0.0000",
+        "credit": "1350.0000"
+      },
+      {
+        "ledger": "Output SGST",
+        "debit": "0.0000",
+        "credit": "1350.0000"
+      },
+      {
+        "ledger": "Output IGST",
+        "debit": "0.0000",
+        "credit": "36000.0000"
+      }
     ],
-    "totals": { "debit": "253700.0000", "credit": "253700.0000", "balanced": true }
+    "totals": {
+      "debit": "253700.0000",
+      "credit": "253700.0000",
+      "balanced": true
+    }
   },
   "balanceSheet": {
     "assetsTotal": "253700.0000",
@@ -31,26 +70,71 @@
   },
   "gstr1": {
     "fp": "052025",
-    "taxTotals": { "taxable": "215000.0000", "cgst": "1350.0000", "sgst": "1350.0000", "igst": "36000.0000" },
+    "taxTotals": {
+      "taxable": "215000.0000",
+      "cgst": "1350.0000",
+      "sgst": "1350.0000",
+      "igst": "36000.0000"
+    },
     "hsn": [
-      { "hsn": "", "rate": "18", "taxable": "215000.0000", "cgst": "1350.0000", "sgst": "1350.0000", "igst": "36000.0000" }
+      {
+        "hsn": "8471",
+        "rate": "18",
+        "taxable": "215000.0000",
+        "cgst": "1350.0000",
+        "sgst": "1350.0000",
+        "igst": "36000.0000"
+      }
     ],
     "b2cs": [
-      { "splyTy": "INTRA", "pos": "29", "rate": "18", "taxable": "5000.0000", "cgst": "450.0000", "sgst": "450.0000", "igst": "0.0000" }
+      {
+        "splyTy": "INTRA",
+        "pos": "29",
+        "rate": "18",
+        "taxable": "5000.0000",
+        "cgst": "450.0000",
+        "sgst": "450.0000",
+        "igst": "0.0000"
+      }
     ],
     "b2b": [
-      { "ctin": "29ABCDE1234F1Z5", "taxable": "10000.0000", "cgst": "900.0000", "sgst": "900.0000", "igst": "0.0000" }
+      {
+        "ctin": "29ABCDE1234F1Z5",
+        "taxable": "10000.0000",
+        "cgst": "900.0000",
+        "sgst": "900.0000",
+        "igst": "0.0000"
+      }
     ],
     "balanced": true
   },
   "gstr3b": {
     "fp": "052025",
-    "outward": { "taxable": "215000.0000", "cgst": "1350.0000", "sgst": "1350.0000", "igst": "36000.0000" },
-    "rcmInward": { "taxable": "0.0000", "cgst": "0.0000", "sgst": "0.0000", "igst": "0.0000" },
+    "outward": {
+      "taxable": "215000.0000",
+      "cgst": "1350.0000",
+      "sgst": "1350.0000",
+      "igst": "36000.0000"
+    },
+    "rcmInward": {
+      "taxable": "0.0000",
+      "cgst": "0.0000",
+      "sgst": "0.0000",
+      "igst": "0.0000"
+    },
     "interUnreg": [
-      { "pos": "27", "taxable": "200000.0000", "igst": "36000.0000" }
+      {
+        "pos": "27",
+        "taxable": "200000.0000",
+        "igst": "36000.0000"
+      }
     ],
-    "itc": { "taxable": "0.0000", "cgst": "0.0000", "sgst": "0.0000", "igst": "0.0000" },
+    "itc": {
+      "taxable": "0.0000",
+      "cgst": "0.0000",
+      "sgst": "0.0000",
+      "igst": "0.0000"
+    },
     "balanced": true
   }
 }
