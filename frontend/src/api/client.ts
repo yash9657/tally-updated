@@ -39,6 +39,9 @@ import type {
   VoucherRequest,
   VoucherResponse,
   VoucherView,
+  ListLedgersResponse,
+  SetLedgerOpeningRequest,
+  SetLedgerOpeningResponse,
 } from "./types";
 import type { QueryRequest, QueryResult } from "./query";
 
@@ -54,6 +57,23 @@ export interface CoredClient {
   getCompany(companyID: string): Promise<CompanyView>;
 
   // Masters (all company-scoped)
+  /**
+   * Read the chart of accounts (GET .../ledgers). The only way to resolve the
+   * id of a ledger this client did not create itself — including the ledgers
+   * every company is SEEDED with (Cash, Profit & Loss A/c). Without it callers
+   * end up minting duplicates of the predefined ledgers.
+   */
+  listLedgers(companyID: string): Promise<ListLedgersResponse>;
+  /**
+   * Set a ledger's OPENING BALANCE + bill-wise opening breakup. Needed for the
+   * ledgers seeded with the company, which cannot carry one at creation.
+   */
+  setLedgerOpening(
+    companyID: string,
+    ledgerID: string,
+    req: SetLedgerOpeningRequest,
+  ): Promise<SetLedgerOpeningResponse>;
+
   createGroup(
     companyID: string,
     req: CreateGroupRequest,
@@ -100,6 +120,21 @@ export interface CoredClient {
     companyID: string,
     req: VoucherRequest,
   ): Promise<VoucherResponse>;
+  /**
+   * Credit Note — a sales return or downward price correction. The CORRECT way
+   * to reverse part of an invoice: a separately-dated document with its own
+   * number, reported in GSTR-1's cdnr section. Altering the original invoice
+   * instead rewrites history and back-dates the reversal into a filed period.
+   */
+  postCreditNoteVoucher(
+    companyID: string,
+    req: VoucherRequest,
+  ): Promise<VoucherResponse>;
+  /** Debit Note — a purchase return / upward price correction on a supplier. */
+  postDebitNoteVoucher(
+    companyID: string,
+    req: VoucherRequest,
+  ): Promise<VoucherResponse>;
 
   // Voucher alteration (PUT /vouchers/{class}/{voucherID}) — a FULL restatement.
   // The class is fixed by the path (one method per class, mirroring the posts);
@@ -131,6 +166,16 @@ export interface CoredClient {
     req: VoucherRequest,
   ): Promise<VoucherResponse>;
   alterJournalVoucher(
+    companyID: string,
+    voucherID: string,
+    req: VoucherRequest,
+  ): Promise<VoucherResponse>;
+  alterCreditNoteVoucher(
+    companyID: string,
+    voucherID: string,
+    req: VoucherRequest,
+  ): Promise<VoucherResponse>;
+  alterDebitNoteVoucher(
     companyID: string,
     voucherID: string,
     req: VoucherRequest,

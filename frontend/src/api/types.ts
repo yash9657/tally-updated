@@ -21,7 +21,11 @@ export type VoucherClass =
   | "receipt"
   | "payment"
   | "contra"
-  | "journal";
+  | "journal"
+  /** Sales return / downward price correction. GSTR-1 table 9B (cdnr). */
+  | "credit-note"
+  /** Purchase return / upward price correction raised on a supplier. */
+  | "debit-note";
 
 /** Debit / Credit marker on a posting or bill allocation. */
 // "D"/"C" are the backend's canonical wire values; "DR"/"CR" are the legible
@@ -51,6 +55,34 @@ export interface CreateCompanyRequest {
   state_code?: string;
   /** The company's own (filer's) GSTIN. Optional; "" is the safe default. */
   gstin?: string;
+
+  // --- Mailing block + country (migration 0015). All optional. -------------
+  /** Name printed on invoices; "" means "use `name`". */
+  mailing_name?: string;
+  /** Principal place of business, newline-separated free text. */
+  address?: string;
+  city?: string;
+  pincode?: string;
+  /** Defaults to "India" when omitted. */
+  country?: string;
+
+  /**
+   * The date this company's books BEGIN here — and therefore the date every
+   * opening balance is stated as at. DISTINCT from `fy_start_date`, which is
+   * when the financial YEAR begins: they are equal for a company starting fresh
+   * at the top of its year, and differ for a mid-year migration (year starts
+   * 1 April, books begin 1 October). Defaults to `fy_start_date` when omitted;
+   * it may never precede it (enforced by a DB CHECK).
+   */
+  books_beginning_from?: string;
+
+  // --- Base-currency presentation. Storage stays NUMERIC(19,4). -----------
+  /** Defaults to "₹". */
+  currency_symbol?: string;
+  /** Defaults to "Indian Rupees". */
+  currency_formal_name?: string;
+  /** Digits after the decimal point, 0-4. Defaults to 2. Display only. */
+  decimal_places?: number;
 }
 
 export interface CreateCompanyResponse {
@@ -73,6 +105,17 @@ export interface CompanyView {
   state_code: string;
   /** "" when not set. */
   gstin: string;
+
+  mailing_name: string;
+  address: string;
+  city: string;
+  pincode: string;
+  country: string;
+  /** See {@link CreateCompanyRequest.books_beginning_from}. */
+  books_beginning_from: string;
+  currency_symbol: string;
+  currency_formal_name: string;
+  decimal_places: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -91,11 +134,49 @@ export interface CreateGroupResponse {
   group_id: string;
 }
 
+/** One row of the chart of accounts, as returned by GET .../ledgers. */
+export interface LedgerListItem {
+  id: string;
+  name: string;
+  group_name: string;
+  /** Fixed-4 decimal string, like every money value on the wire. */
+  opening_balance: Money;
+  opening_dc: string;
+  maintain_bill_by_bill: boolean;
+  gstin: string;
+  state_code: string;
+  registration_type: string;
+  /** True for ledgers seeded with the company (Cash, Profit & Loss A/c). */
+  is_system: boolean;
+}
+
+export interface ListLedgersResponse {
+  ledgers: LedgerListItem[];
+}
+
+/**
+ * One bill of a ledger's BILL-WISE OPENING BREAKUP — the individual unpaid
+ * invoices that make up its opening balance, as at `books_beginning_from`.
+ * The server REQUIRES these to sum to `opening_balance` when any are supplied
+ * (Tally refuses a breakup with a difference, and so do we).
+ */
+export interface OpeningBillRequest {
+  ref_name: string;
+  /** NEW (default) / ADVANCE / ON_ACCOUNT. */
+  ref_type?: RefType;
+  /** Defaults to the ledger's `opening_dc`. */
+  dr_cr?: DrCr;
+  amount: Money;
+  due_date?: string;
+}
+
 export interface CreateLedgerRequest {
   name: string;
   group_name: string;
   opening_balance?: Money;
   opening_dc?: string;
+  /** Bill-wise breakup of `opening_balance`; must sum to it. */
+  opening_bills?: OpeningBillRequest[];
   maintain_bill_by_bill?: boolean;
   gstin?: string;
   state_code?: string;
@@ -104,6 +185,25 @@ export interface CreateLedgerRequest {
   created_by?: string;
 }
 export interface CreateLedgerResponse {
+  ledger_id: string;
+}
+
+/**
+ * Body of PUT .../ledgers/{id}/opening — set a ledger's opening balance and its
+ * bill-wise opening breakup. The only way to give an opening balance to a
+ * ledger seeded WITH the company (Cash, Profit & Loss A/c), which no client can
+ * pass fields to at creation time.
+ */
+export interface SetLedgerOpeningRequest {
+  opening_balance: Money;
+  /** "D" or "C". Defaults to "D". */
+  opening_dc?: string;
+  /** Must sum to `opening_balance` when present. */
+  opening_bills?: OpeningBillRequest[];
+  created_by?: string;
+}
+
+export interface SetLedgerOpeningResponse {
   ledger_id: string;
 }
 

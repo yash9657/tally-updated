@@ -128,6 +128,30 @@ export const VOUCHER_CONFIGS: Readonly<Record<VoucherType, VoucherConfig>> = {
     post: (c, id, req) => c.postPurchaseVoucher(id, req),
     alter: (c, id, vid, req) => c.alterPurchaseVoucher(id, vid, req),
   },
+  "credit-note": {
+    type: "credit-note",
+    title: "Credit Note",
+    // Double entry: a return restates the sale, the output tax AND the party
+    // in explicit lines, exactly as the invoice it reverses did.
+    entry: "double",
+    partyLabel: "Party A/c Name",
+    primarySide: "CR",
+    showGst: true,
+    hint: "Sales return / downward price correction. Its OWN number series — use this instead of altering the original invoice.",
+    post: (c, id, req) => c.postCreditNoteVoucher(id, req),
+    alter: (c, id, vid, req) => c.alterCreditNoteVoucher(id, vid, req),
+  },
+  "debit-note": {
+    type: "debit-note",
+    title: "Debit Note",
+    entry: "double",
+    partyLabel: "Party A/c Name",
+    primarySide: "DR",
+    showGst: true,
+    hint: "Purchase return / price correction raised on a supplier. Reverses the input credit claimed on those goods.",
+    post: (c, id, req) => c.postDebitNoteVoucher(id, req),
+    alter: (c, id, vid, req) => c.alterDebitNoteVoucher(id, vid, req),
+  },
 };
 
 export function configFor(type: VoucherType): VoucherConfig {

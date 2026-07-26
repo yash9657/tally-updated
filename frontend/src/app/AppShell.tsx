@@ -16,6 +16,7 @@ import {
   type ScreenActionKind,
 } from "./ScreenActions";
 import { LoadedVoucherProvider } from "./LoadedVoucher";
+import { VOUCHER_CONFIGS } from "../screens/vouchers/voucherConfig";
 import { LoadedDraftProvider } from "./LoadedDraft";
 import { Chrome } from "./Chrome";
 import { ScreenRegistry } from "./screenRegistry";
@@ -310,9 +311,12 @@ function screenTitle(snap: NavSnapshot): string {
     case "menu":
       return "Gateway of Tally";
     case "voucher": {
-      const t = snap.voucherType ?? "voucher";
+      // Title from the voucher CONFIG, not by upper-casing the slug: the slug
+      // form rendered "Credit-note Voucher" for the hyphenated types.
+      const t = snap.voucherType;
       const mode = snap.mode === "alter" ? " (Alteration)" : "";
-      return `${t[0]?.toUpperCase()}${t.slice(1)} Voucher${mode}`;
+      const title = t ? VOUCHER_CONFIGS[t].title : "Voucher";
+      return `${title} Voucher${mode}`;
     }
     case "report":
       return snap.reportName ?? "Report";

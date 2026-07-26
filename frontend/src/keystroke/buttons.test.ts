@@ -131,8 +131,23 @@ describe("no documented TallyPrime key is silently dead", () => {
     });
   }
 
+  it("Alt+F5 / Alt+F6 open the REAL Debit / Credit Note screens", () => {
+    // These were bound as "unavailable" until the note classes existed. They are
+    // the correct way to reverse part of an invoice, so they must reach a real
+    // voucher screen — if either regresses to "unavailable", the F11 Features
+    // page and the keymap would contradict each other.
+    const dn = resolveAction(keymap, "gateway", "Alt+F5");
+    expect(dn?.kind).toBe("voucher");
+    if (dn?.kind === "voucher") expect(dn.voucherType).toBe("debit-note");
+    const cn = resolveAction(keymap, "gateway", "Alt+F6");
+    expect(cn?.kind).toBe("voucher");
+    if (cn?.kind === "voucher") expect(cn.voucherType).toBe("credit-note");
+  });
+
   it("keys for features this build lacks say so, with a reason", () => {
-    for (const combo of ["Alt+F6", "Ctrl+F4", "F10"]) {
+    // Alt+F7 (Stock Journal) stands in for the old Alt+F6 example here: credit
+    // notes ARE built now, inventory vouchers are not.
+    for (const combo of ["Alt+F7", "Ctrl+F4", "F10"]) {
       const action = resolveAction(keymap, "gateway", combo);
       expect(action?.kind).toBe("unavailable");
       if (action?.kind === "unavailable") {

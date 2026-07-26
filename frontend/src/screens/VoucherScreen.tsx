@@ -60,15 +60,6 @@ const GST_INCOME_LEDGER: Record<string, { name: string; group: string }> = {
   purchase: { name: "Purchases", group: "Purchase Accounts" },
 };
 
-const VOUCHER_TITLES: Record<string, string> = {
-  contra: "Contra",
-  payment: "Payment",
-  receipt: "Receipt",
-  journal: "Journal",
-  sales: "Sales",
-  purchase: "Purchase",
-};
-
 /** Today's date as YYYY-MM-DD (server default if the user leaves date empty). */
 function today(): string {
   return new Date().toISOString().slice(0, 10);
@@ -551,7 +542,11 @@ export function VoucherScreen({
   useRegisterScreenAction("prevVoucher", () => stepVoucher(-1));
   useRegisterScreenAction("nextVoucher", () => stepVoucher(1));
 
-  const title = VOUCHER_TITLES[type] ?? type;
+  // Title comes from the voucher CONFIG, which is the single source of truth for
+  // per-type presentation. A second local map here silently fell behind when
+  // credit-note/debit-note were added and rendered the raw slug
+  // ("credit-note Voucher") in the header.
+  const title = cfg.title;
   const displayNo = savedNo ?? form.voucherNo;
 
   // Draft-mode edit affordances: whether the draft's shape is rebuildable

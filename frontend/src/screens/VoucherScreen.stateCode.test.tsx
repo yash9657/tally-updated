@@ -193,6 +193,18 @@ describe("home state code end-to-end (WS8a)", () => {
       base_currency: "INR",
       state_code: "07",
       gstin: "07AABCT1234M1Z5",
+      // Migration-0015 profile. None was supplied to createCompany above, so
+      // each lands on its documented default -- and books_beginning_from
+      // tracks fy_start_date rather than a hardcoded date.
+      mailing_name: "",
+      address: "",
+      city: "",
+      pincode: "",
+      country: "India",
+      books_beginning_from: "2027-04-01",
+      currency_symbol: "₹",
+      currency_formal_name: "Indian Rupees",
+      decimal_places: 2,
     });
   });
 });

@@ -47,6 +47,9 @@ import type {
   VoucherView,
   PostingView,
   BillAllocationView,
+  ListLedgersResponse,
+  SetLedgerOpeningRequest,
+  SetLedgerOpeningResponse,
 } from "./types";
 import type { QueryRequest, QueryResult } from "./query";
 import { deriveGstSplit } from "../screens/vouchers/gstDerive";
@@ -147,7 +150,25 @@ interface MockCompany {
   gstin: string;
   fyStartDate: string;
   baseCurrency: string;
-  ledgers: { id: string; name: string; group: string; stateCode?: string }[];
+  /**
+   * The 0015 company-profile block. Grouped rather than splayed across the
+   * type so a new profile field is one edit here and one in `defaultProfile`.
+   * `booksBeginningFrom` is the load-bearing one: distinct from fyStartDate,
+   * it is the date opening balances are stated as at.
+   */
+  profile: CompanyProfile;
+  ledgers: {
+    id: string;
+    name: string;
+    group: string;
+    stateCode?: string;
+    gstin?: string;
+    registrationType?: string;
+    maintainBillByBill?: boolean;
+    openingBalance?: Money;
+    openingDC?: string;
+    isSystem?: boolean;
+  }[];
   vouchers: DayBookEntry[];
   /**
    * Head VoucherView per logical voucher_id — the GET /vouchers/{id} source.
@@ -162,6 +183,38 @@ interface MockCompany {
    * CREATE). Keyed "class:finYear".
    */
   counters: Map<string, number>;
+}
+
+/** The migration-0015 company profile, mirrored by the mock. */
+interface CompanyProfile {
+  mailingName: string;
+  address: string;
+  city: string;
+  pincode: string;
+  country: string;
+  booksBeginningFrom: string;
+  currencySymbol: string;
+  currencyFormalName: string;
+  decimalPlaces: number;
+}
+
+/**
+ * Server-side defaults from identity.CreateCompany, mirrored exactly so the
+ * mock and cored agree on what an omitted field becomes. `booksBeginningFrom`
+ * defaults to the company's fy start, never to a hardcoded date.
+ */
+function defaultProfile(fyStartDate: string): CompanyProfile {
+  return {
+    mailingName: "",
+    address: "",
+    city: "",
+    pincode: "",
+    country: "India",
+    booksBeginningFrom: fyStartDate,
+    currencySymbol: "₹",
+    currencyFormalName: "Indian Rupees",
+    decimalPlaces: 2,
+  };
 }
 
 export interface MockClientOptions {
@@ -186,6 +239,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         gstin: "",
         fyStartDate: "2026-04-01",
         baseCurrency: "INR",
+        profile: defaultProfile("2026-04-01"),
         ledgers: [],
         vouchers: [],
         views: new Map(),
@@ -207,6 +261,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       gstin: "",
       fyStartDate: "2026-04-01",
       baseCurrency: "INR",
+      profile: defaultProfile("2026-04-01"),
       ledgers: [
         { id: "ledger-cash", name: "Cash", group: "Cash-in-Hand" },
         { id: "ledger-sales", name: "Sales", group: "Sales Accounts" },
@@ -492,6 +547,21 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       if (req.base_currency) c.baseCurrency = req.base_currency;
       c.stateCode = req.state_code ?? "";
       c.gstin = req.gstin ?? "";
+      // 0015 profile. Start from the defaults for THIS company's fy start so an
+      // omitted books_beginning_from tracks fy_start_date, as cored does.
+      const p = defaultProfile(c.fyStartDate);
+      c.profile = {
+        mailingName: req.mailing_name ?? p.mailingName,
+        address: req.address ?? p.address,
+        city: req.city ?? p.city,
+        pincode: req.pincode ?? p.pincode,
+        country: req.country || p.country,
+        booksBeginningFrom: req.books_beginning_from || p.booksBeginningFrom,
+        currencySymbol: req.currency_symbol || p.currencySymbol,
+        currencyFormalName: req.currency_formal_name || p.currencyFormalName,
+        // ?? not ||: an explicit 0 (whole-rupee books) is a real choice.
+        decimalPlaces: req.decimal_places ?? p.decimalPlaces,
+      };
       return { company_id: companyID };
     },
 
@@ -509,11 +579,64 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         base_currency: c.baseCurrency,
         state_code: c.stateCode,
         gstin: c.gstin,
+        mailing_name: c.profile.mailingName,
+        address: c.profile.address,
+        city: c.profile.city,
+        pincode: c.profile.pincode,
+        country: c.profile.country,
+        books_beginning_from: c.profile.booksBeginningFrom,
+        currency_symbol: c.profile.currencySymbol,
+        currency_formal_name: c.profile.currencyFormalName,
+        decimal_places: c.profile.decimalPlaces,
       };
     },
 
     async createGroup(_c, _req: CreateGroupRequest): Promise<CreateGroupResponse> {
       return { group_id: id("group") };
+    },
+    async listLedgers(companyID): Promise<ListLedgersResponse> {
+      return {
+        ledgers: ensure(companyID).ledgers.map((l) => ({
+          id: l.id,
+          name: l.name,
+          group_name: l.group,
+          // Server-side column defaults, mirrored so mock and cored agree on
+          // what an unset field reads back as.
+          opening_balance: l.openingBalance ?? "0.0000",
+          opening_dc: l.openingDC ?? "D",
+          maintain_bill_by_bill: l.maintainBillByBill ?? false,
+          gstin: l.gstin ?? "",
+          state_code: l.stateCode ?? "",
+          registration_type: l.registrationType ?? "UNKNOWN",
+          is_system: l.isSystem ?? false,
+        })),
+      };
+    },
+    async setLedgerOpening(
+      companyID,
+      ledgerID,
+      req: SetLedgerOpeningRequest,
+    ): Promise<SetLedgerOpeningResponse> {
+      const c = ensure(companyID);
+      const l = c.ledgers.find((x) => x.id === ledgerID);
+      if (!l) throw new ApiError(404, "ledger not found", "ledger not found");
+      // Mirror the SERVER invariant: a breakup must account for the whole
+      // opening balance, or the Outstandings total silently stops tying to the
+      // Balance Sheet.
+      const bills = req.opening_bills ?? [];
+      if (bills.length > 0) {
+        const sum = bills.reduce((a, b) => addMoney(a, b.amount), "0.0000");
+        if (sum !== parseFloat(req.opening_balance).toFixed(4)) {
+          throw new ApiError(
+            422,
+            `opening bill-wise breakup sums to ${sum} but the opening balance is ${req.opening_balance}`,
+            "unprocessable",
+          );
+        }
+      }
+      l.openingBalance = req.opening_balance;
+      l.openingDC = req.opening_dc ?? "D";
+      return { ledger_id: ledgerID };
     },
     async createLedger(
       companyID,
@@ -525,6 +648,12 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         name: req.name,
         group: req.group_name,
         stateCode: req.state_code,
+        gstin: req.gstin,
+        registrationType: req.registration_type,
+        maintainBillByBill: req.maintain_bill_by_bill,
+        openingBalance: req.opening_balance,
+        openingDC: req.opening_dc,
+        isSystem: false,
       });
       return { ledger_id: ledgerID };
     },
@@ -562,6 +691,12 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     async postJournalVoucher(companyID, req) {
       return recordVoucher(companyID, "journal", req);
     },
+    async postCreditNoteVoucher(companyID, req) {
+      return recordVoucher(companyID, "credit-note", req);
+    },
+    async postDebitNoteVoucher(companyID, req) {
+      return recordVoucher(companyID, "debit-note", req);
+    },
 
     async alterSalesVoucher(companyID, voucherID, req) {
       return alterVoucher(companyID, "sales", voucherID, req);
@@ -580,6 +715,12 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     },
     async alterJournalVoucher(companyID, voucherID, req) {
       return alterVoucher(companyID, "journal", voucherID, req);
+    },
+    async alterCreditNoteVoucher(companyID, voucherID, req) {
+      return alterVoucher(companyID, "credit-note", voucherID, req);
+    },
+    async alterDebitNoteVoucher(companyID, voucherID, req) {
+      return alterVoucher(companyID, "debit-note", voucherID, req);
     },
 
     async getVoucher(companyID, voucherID): Promise<VoucherView> {

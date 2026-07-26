@@ -36,6 +36,9 @@ import type {
   VoucherRequest,
   VoucherResponse,
   VoucherView,
+  ListLedgersResponse,
+  SetLedgerOpeningRequest,
+  SetLedgerOpeningResponse,
 } from "./types";
 import type { QueryRequest, QueryResult } from "./query";
 
@@ -82,6 +85,15 @@ export function createRestClient(
 
     createGroup(companyID, req: CreateGroupRequest) {
       return http.post<CreateGroupResponse>(`${company(companyID)}/groups`, req);
+    },
+    listLedgers(companyID) {
+      return http.get<ListLedgersResponse>(`${company(companyID)}/ledgers`);
+    },
+    setLedgerOpening(companyID, ledgerID, req: SetLedgerOpeningRequest) {
+      return http.put<SetLedgerOpeningResponse>(
+        `${company(companyID)}/ledgers/${ledgerID}/opening`,
+        req,
+      );
     },
     createLedger(companyID, req: CreateLedgerRequest) {
       return http.post<CreateLedgerResponse>(
@@ -141,6 +153,18 @@ export function createRestClient(
         wireVoucher(req),
       );
     },
+    postCreditNoteVoucher(companyID, req: VoucherRequest) {
+      return http.post<VoucherResponse>(
+        `${company(companyID)}/vouchers/credit-note`,
+        wireVoucher(req),
+      );
+    },
+    postDebitNoteVoucher(companyID, req: VoucherRequest) {
+      return http.post<VoucherResponse>(
+        `${company(companyID)}/vouchers/debit-note`,
+        wireVoucher(req),
+      );
+    },
 
     alterSalesVoucher(companyID, voucherID, req: VoucherRequest) {
       return http.put<VoucherResponse>(
@@ -175,6 +199,18 @@ export function createRestClient(
     alterJournalVoucher(companyID, voucherID, req: VoucherRequest) {
       return http.put<VoucherResponse>(
         `${company(companyID)}/vouchers/journal/${encodeURIComponent(voucherID)}`,
+        wireVoucher(req),
+      );
+    },
+    alterCreditNoteVoucher(companyID, voucherID, req: VoucherRequest) {
+      return http.put<VoucherResponse>(
+        `${company(companyID)}/vouchers/credit-note/${encodeURIComponent(voucherID)}`,
+        wireVoucher(req),
+      );
+    },
+    alterDebitNoteVoucher(companyID, voucherID, req: VoucherRequest) {
+      return http.put<VoucherResponse>(
+        `${company(companyID)}/vouchers/debit-note/${encodeURIComponent(voucherID)}`,
         wireVoucher(req),
       );
     },

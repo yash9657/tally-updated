@@ -120,7 +120,11 @@ export type VoucherType =
   | "receipt"
   | "journal"
   | "sales"
-  | "purchase";
+  | "purchase"
+  /** Alt+F6 — sales return / downward price correction. */
+  | "credit-note"
+  /** Alt+F5 — purchase return / price correction raised on a supplier. */
+  | "debit-note";
 
 /** Voucher entry mode (TallyPrime Ctrl+H Change Mode three-state enum). */
 export type VoucherMode = "create" | "alter";

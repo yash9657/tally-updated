@@ -84,18 +84,14 @@ const RAW_BINDINGS: Record<string, KeymapAction> = {
   F10: {
     kind: "unavailable",
     feature: "Other Vouchers (F10)",
-    note: "Order, delivery and stock vouchers are not built yet — F4–F9 cover the six accounting vouchers.",
+    note: "Order, delivery and stock vouchers are not built yet — F4–F9 cover the six accounting vouchers, and Alt+F5/Alt+F6 the debit/credit notes.",
   },
-  "Alt+F5": {
-    kind: "unavailable",
-    feature: "Debit Note (Alt+F5)",
-    note: "Debit/Credit notes are not built yet; use F9 Purchase / F8 Sales.",
-  },
-  "Alt+F6": {
-    kind: "unavailable",
-    feature: "Credit Note (Alt+F6)",
-    note: "Debit/Credit notes are not built yet; use F8 Sales / F9 Purchase.",
-  },
+  // Debit / Credit Note — REAL voucher screens with their own numbering series
+  // and their own GSTR-1 treatment (cdnr, table 9B). They were bound as
+  // "unavailable" until the classes existed; they are the correct way to
+  // reverse part of an invoice, so they must be reachable by their real keys.
+  "Alt+F5": { kind: "voucher", voucherType: "debit-note" },
+  "Alt+F6": { kind: "voucher", voucherType: "credit-note" },
   "Alt+F7": {
     kind: "unavailable",
     feature: "Stock Journal (Alt+F7)",
