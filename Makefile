@@ -9,6 +9,20 @@ DATABASE_URL       ?= postgres://tally_app:tally_app@localhost:5433/tally?sslmod
 export ADMIN_DATABASE_URL
 export DATABASE_URL
 
+# insightd's DURABLE draft store. With this unset, insightd silently falls back
+# to an in-memory DraftStore and every Bill Inbox draft dies with the process —
+# the inbox goes empty on restart with nothing to explain why. Same APP role as
+# the rest of the stack, so migration 0014's RLS scopes it identically.
+INSIGHTD_DATABASE_URL ?= $(DATABASE_URL)
+export INSIGHTD_DATABASE_URL
+
+# Local dev ports. cored's own default is 8080; the frontend and the seed script
+# both expect 8087, so it must be set explicitly or `serve` binds the wrong port.
+CORED_PORT    ?= 8087
+INSIGHTD_PORT ?= 8088
+export CORED_PORT
+export INSIGHTD_PORT
+
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-18s\033[0m %s\n",$$1,$$2}'
 
@@ -58,7 +72,24 @@ insightd-test: ## insightd pytest (SKIPS loudly when insightd/.venv is absent)
 		echo "***   (the insightd plane is therefore NOT verified by this run)"; \
 	fi
 
+run-cored: ## Run cored locally on :$(CORED_PORT) with dev token minting enabled
+	cd backend && PORT=$(CORED_PORT) AUTH_DEV_TOKEN_ENABLED=true go run ./cmd/cored serve
+
+run-insightd: ## Run insightd on :$(INSIGHTD_PORT) with the DURABLE (Postgres) draft store
+	@if [ ! -x insightd/.venv/bin/python ]; then \
+		echo "*** insightd/.venv missing — create it first (see insightd-test)"; exit 1; \
+	fi
+	@if ! insightd/.venv/bin/python -c "import psycopg" >/dev/null 2>&1; then \
+		echo "*** psycopg missing: pip install -r insightd/requirements-db.txt"; \
+		echo "*** without it insightd cannot use the durable draft store"; exit 1; \
+	fi
+	cd insightd && INSIGHTD_DATABASE_URL="$(INSIGHTD_DATABASE_URL)" \
+		.venv/bin/python -m uvicorn insightd.api.app:app --port $(INSIGHTD_PORT)
+
+seed-demo: ## Seed the Demo Traders company (needs cored + insightd running)
+	cd frontend && pnpm seed:demo -- --insightd
+
 verify: dev-db migrate backend-build backend-test frontend-test corpora-verify insightd-test ## Run ALL local gates (Go + frontend + corpora + insightd)
 	@echo "\n✅ verification gates passed (see any SKIP lines above for planes not covered)"
 
-.PHONY: help dev-db dev-db-down migrate backend-build backend-test frontend-install frontend-test frontend-build corpora-verify insightd-test verify
+.PHONY: help dev-db dev-db-down migrate backend-build backend-test frontend-install frontend-test frontend-build corpora-verify insightd-test run-cored run-insightd seed-demo verify

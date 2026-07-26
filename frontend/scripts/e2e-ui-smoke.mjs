@@ -259,12 +259,26 @@ try {
 
 try {
   // A key whose FEATURE is not built must say so — never do nothing.
+  // Alt+F7 (Stock Journal) stands in for the old Alt+F6 probe: credit notes are
+  // built now, inventory vouchers are not.
   await toGateway();
-  await page.keyboard.press("Alt+F6"); // Credit Note
+  await page.keyboard.press("Alt+F7"); // Stock Journal
   await page.waitForTimeout(400);
   const msg = await status();
-  rec("A key for an unbuilt feature explains itself", /Credit Note/.test(msg) && /not built/i.test(msg), msg);
+  rec("A key for an unbuilt feature explains itself", /Stock Journal/.test(msg) && /not built/i.test(msg), msg);
 } catch (e) { rec("A key for an unbuilt feature explains itself", false, e.message); }
+
+try {
+  // Alt+F6 now opens a REAL Credit Note screen — the correct way to reverse
+  // part of an invoice. If this regresses to an "unavailable" message, the F11
+  // Features page and the keymap contradict each other.
+  await toGateway();
+  await page.keyboard.press("Alt+F6");
+  await page.waitForTimeout(500);
+  const h = await heading();
+  await press("Escape", 300);
+  rec("Alt+F6 opens the Credit Note voucher", /Credit Note/.test(h), h);
+} catch (e) { rec("Alt+F6 opens the Credit Note voucher", false, e.message); }
 
 try {
   // Mouse parity: clicking a button-bar item does exactly what its key does.

@@ -17,7 +17,10 @@
     "e2e:state-code": "tsx scripts/e2e-state-code.mts",
     "e2e:ocr": "tsx scripts/e2e-ocr-prefill.mts",
     "e2e:ui": "node scripts/e2e-ui-smoke.mjs",
-    "seed:demo": "tsx scripts/seed-demo.mts"
+    "seed:demo": "tsx scripts/seed-demo.mts",
+    "verify:demo": "tsx scripts/verify-demo.mts",
+    "seed:tenancy": "tsx scripts/seed-tenancy.mts",
+    "verify:tenancy": "tsx scripts/verify-tenancy.mts"
   },
   "dependencies": {
     "@xstate/react": "^4.1.3",

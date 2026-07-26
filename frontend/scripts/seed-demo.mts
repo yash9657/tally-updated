@@ -31,18 +31,8 @@
  * re-derivation, server numbering).
  */
 
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
 import { createRestClient, createInsightdClient } from "../src/api";
 import type { CoredClient, VoucherRequest } from "../src/api";
-
-const here = dirname(fileURLToPath(import.meta.url));
-/** The same deterministic bill fixture the OCR e2e uses (a clean intra-state 18%). */
-const OCR_FIXTURE = resolve(
-  here,
-  "../../insightd/insightd/benchmark/corpus/intra-state-18-1line-clean.json",
-);
 
 const baseUrl =
   process.env.CORED_BASE_URL ??
@@ -55,6 +45,33 @@ const withInsightd = process.argv.includes("--insightd");
 /** Karnataka = the company's own state; Maharashtra = the inter-state case. */
 const HOME_STATE = "29";
 const OTHER_STATE = "27";
+/** Delhi — the second inter-state case, and what "Delhi Parts" actually means. */
+const DELHI_STATE = "07";
+
+/**
+ * HSN codes. GSTR-1 carries a mandatory HSN summary, and the previous demo
+ * emitted `"hsn_sc": ""` for every line because nothing supplied one. Rate and
+ * HSN are correlated in reality, so the 12% line uses a different code from the
+ * 18% ones rather than reusing one everywhere.
+ */
+const HSN_STEEL_ARTICLES = "7326"; // other articles of iron/steel — 18%
+const HSN_STEEL_KITCHEN = "7323"; // table/kitchen articles of iron/steel — 12%
+const HSN_FLAT_ROLLED = "7208"; // flat-rolled iron/steel — 18% (purchases)
+
+/**
+ * The filing company's own GSTIN. Synthetic, but STRUCTURALLY correct, because
+ * the shape carries meaning we rely on elsewhere:
+ *   29        two-digit state code — must equal HOME_STATE
+ *   AACCD1234K  PAN (5 letters, 4 digits, 1 letter)
+ *   1         entity code for this PAN in this state
+ *   Z         fixed
+ *   8         check character
+ * Nothing validates GSTINs server-side today, so the discipline has to live
+ * here: every GSTIN in this file starts with the state code of the ledger it
+ * belongs to, and the PARTIES guard loop below proves it before any voucher
+ * is posted.
+ */
+const COMPANY_GSTIN = "29AACCD1234K1Z8";
 
 /**
  * The seed MUST run as the same subject the dev browser authenticates as
@@ -94,8 +111,28 @@ async function main(): Promise<void> {
   const company = await client.createCompany({
     name: "Demo Traders",
     fy_start_date: "2026-04-01",
+    // BOOKS BEGINNING FROM is a SEPARATE date from the financial-year start.
+    // They are equal here because Demo Traders starts fresh at the top of its
+    // year; a business migrating in on 1 October would keep fy_start_date
+    // 2026-04-01 and set this to 2026-10-01, and its opening balances would be
+    // stated as at THAT date. Set explicitly rather than left to default so the
+    // demo shows the field exists and what it means.
+    books_beginning_from: "2026-04-01",
     base_currency: "INR",
+    currency_symbol: "₹",
+    currency_formal_name: "Indian Rupees",
+    decimal_places: 2,
     state_code: HOME_STATE,
+    // The FILER's own GSTIN — the top-level "gstin" of every GSTR-1 we emit.
+    // Without it the return has no filer identity at all. Synthetic but
+    // correctly structured: 29 (Karnataka) + PAN-shaped AACCD1234K + entity "1"
+    // + "Z" + check char.
+    gstin: COMPANY_GSTIN,
+    mailing_name: "Demo Traders",
+    address: "14, 3rd Cross, Industrial Layout\nKoramangala",
+    city: "Bengaluru",
+    pincode: "560095",
+    country: "India",
   });
   const co = company.company_id;
   console.log(`\nDemo Traders  (created ${stamp})\n  company id: ${co}`);
@@ -110,18 +147,216 @@ async function main(): Promise<void> {
     return res.ledger_id;
   };
 
-  const acme = await ledger("Acme Traders", "Sundry Debtors", HOME_STATE);
-  const mumbai = await ledger("Mumbai Metals", "Sundry Debtors", OTHER_STATE);
-  const steel = await ledger("Steel Suppliers", "Sundry Creditors", HOME_STATE);
-  const delhi = await ledger("Delhi Parts", "Sundry Creditors", OTHER_STATE);
+  /**
+   * A trading party. Everything about its GST identity is derived from ONE
+   * record, so the three things that must agree cannot drift apart:
+   *   - the ledger's state_code,
+   *   - the first two digits of its GSTIN,
+   *   - the place-of-supply on every voucher raised against it.
+   * The previous seed kept these as independent literals and they DID drift:
+   * "Delhi Parts" was created with state 27 (Maharashtra) while its purchase
+   * was posted with place-of-supply 07 (Delhi). Both are non-Karnataka, so IGST
+   * came out right BY LUCK and nothing complained.
+   */
+  interface Party {
+    name: string;
+    group: "Sundry Debtors" | "Sundry Creditors";
+    /** Two-digit GST state code. Drives intra (CGST+SGST) vs inter (IGST). */
+    state: string;
+    /** Must begin with `state`; asserted below. */
+    gstin: string;
+    /**
+     * OPENING BALANCE as at books_beginning_from, with its BILL-WISE BREAKUP.
+     * In Tally a party's opening balance is never a lump sum: it is the specific
+     * unpaid invoices carried in from the old books, each with its own due date.
+     * Without the breakup every carried-forward rupee would age identically and
+     * the Outstandings report would be a fiction on day one.
+     * `bills` MUST sum to `amount` — the server refuses otherwise.
+     */
+    opening?: {
+      amount: number;
+      dc: "D" | "C";
+      bills: { ref: string; amount: number; dueDate: string }[];
+    };
+  }
+
+  const PARTIES = {
+    acme: {
+      name: "Acme Traders",
+      group: "Sundry Debtors",
+      state: HOME_STATE, // 29 Karnataka -> intra-state -> CGST + SGST
+      gstin: "29AACCA5678L1Z3",
+      // Carried in owing two invoices from the previous books.
+      opening: {
+        amount: 120000,
+        dc: "D",
+        bills: [
+          { ref: "OB/ACME/24-25/07", amount: 70000, dueDate: "2026-04-20" },
+          { ref: "OB/ACME/24-25/11", amount: 50000, dueDate: "2026-05-05" },
+        ],
+      },
+    },
+    mumbai: {
+      name: "Mumbai Metals",
+      group: "Sundry Debtors",
+      state: OTHER_STATE, // 27 Maharashtra -> inter-state -> IGST
+      gstin: "27AACCM9012M1Z7",
+    },
+    steel: {
+      name: "Steel Suppliers",
+      group: "Sundry Creditors",
+      state: HOME_STATE, // 29 Karnataka -> intra-state -> CGST + SGST
+      gstin: "29AACCS3456N1Z1",
+      // We carried in owing this supplier two bills.
+      opening: {
+        amount: 68000,
+        dc: "C",
+        bills: [
+          { ref: "OB/STEEL/24-25/42", amount: 40000, dueDate: "2026-04-15" },
+          { ref: "OB/STEEL/24-25/55", amount: 28000, dueDate: "2026-05-10" },
+        ],
+      },
+    },
+    pune: {
+      name: "Pune Fabricators",
+      group: "Sundry Creditors",
+      // 27 Maharashtra. This is the supplier on the Bill Inbox OCR draft, and
+      // the reason that draft must propose IGST: 27 -> 29 is INTER-state.
+      state: OTHER_STATE,
+      gstin: "27AACCP2345Q1Z9",
+    },
+    delhi: {
+      name: "Delhi Parts",
+      group: "Sundry Creditors",
+      // 07 DELHI — matches the name, and matches the place-of-supply its
+      // purchase is posted with. Still != 29, so IGST continues to apply.
+      state: DELHI_STATE,
+      gstin: "07AACCD7890P1Z5",
+    },
+  } as const satisfies Record<string, Party>;
+
+  // Fail LOUD before any voucher is posted if a GSTIN and its state disagree.
+  // A wrong prefix is invisible in the UI but silently misfiles the return.
+  for (const p of Object.values(PARTIES) as Party[]) {
+    if (!p.gstin.startsWith(p.state)) {
+      throw new Error(
+        `party "${p.name}": GSTIN ${p.gstin} does not begin with its state code ${p.state}`,
+      );
+    }
+  }
+  if (!COMPANY_GSTIN.startsWith(HOME_STATE)) {
+    throw new Error(`company GSTIN ${COMPANY_GSTIN} does not begin with ${HOME_STATE}`);
+  }
+
+  /**
+   * Create a party ledger with its FULL GST identity.
+   *
+   *   registration_type: "REGULAR"  — without it the ledger reads as UNKNOWN and
+   *     gstr1.go classifies every invoice to it as B2CS (consumer) instead of
+   *     B2B, so the customer never gets input credit. This was the single
+   *     largest silent defect in the previous demo.
+   *   maintain_bill_by_bill: true   — Tally only tracks bill references on a
+   *     ledger that says Yes here. The old seed attached bill allocations to
+   *     ledgers flagged false, which is self-contradictory data.
+   */
+  const partyLedger = async (p: Party) => {
+    const res = await client.createLedger(co, {
+      name: p.name,
+      group_name: p.group,
+      state_code: p.state,
+      gstin: p.gstin,
+      registration_type: "REGULAR",
+      maintain_bill_by_bill: true,
+      ...(p.opening
+        ? {
+            opening_balance: money(p.opening.amount),
+            opening_dc: p.opening.dc,
+            opening_bills: p.opening.bills.map((b) => ({
+              ref_name: b.ref,
+              ref_type: "NEW" as const,
+              dr_cr: p.opening!.dc,
+              amount: money(b.amount),
+              due_date: b.dueDate,
+            })),
+          }
+        : {}),
+    });
+    return res.ledger_id;
+  };
+
+  const acme = await partyLedger(PARTIES.acme);
+  const mumbai = await partyLedger(PARTIES.mumbai);
+  const steel = await partyLedger(PARTIES.steel);
+  const delhi = await partyLedger(PARTIES.delhi);
+  const pune = await partyLedger(PARTIES.pune);
 
   const sales = await ledger("Domestic Sales", "Sales Accounts");
   const purchases = await ledger("Raw Material Purchases", "Purchase Accounts");
   const rent = await ledger("Rent", "Indirect Expenses");
   const power = await ledger("Electricity", "Indirect Expenses");
-  const capital = await ledger("Capital Account", "Capital Account");
-  const bank = await ledger("HDFC Bank", "Bank Accounts");
-  const cash = await ledger("Cash A/c", "Cash-in-Hand");
+  // OPENING BALANCES, as at books_beginning_from (2026-04-01).
+  //
+  // This is what a real migration into Tally looks like, and what the previous
+  // demo could not teach at all: it introduced its entire equity with a Journal
+  // dated day one, which is a TRANSACTION, not an opening position. The
+  // difference matters — an opening balance is the state the books START in and
+  // is dated at books_beginning_from; a journal is something that HAPPENED.
+  //
+  //   assets  opening : Cash 1,50,000 + Bank 2,50,000 + Acme 1,20,000 = 5,20,000 Dr
+  //   liab.   opening : Steel Suppliers                                =   68,000 Cr
+  //   capital         : the RESIDUAL that makes it balance              = 4,52,000 Cr
+  //
+  // Capital is derived, not invented: in a real migration you know your assets
+  // and liabilities, and owners' equity is whatever reconciles them.
+  const OPENING_CASH = 150000;
+  const OPENING_BANK = 250000;
+  const OPENING_DEBTORS = PARTIES.acme.opening.amount;
+  const OPENING_CREDITORS = PARTIES.steel.opening.amount;
+  const OPENING_CAPITAL =
+    OPENING_CASH + OPENING_BANK + OPENING_DEBTORS - OPENING_CREDITORS;
+
+  // "Capital A/c", not "Capital Account": a LEDGER may not share its GROUP's
+  // name in Tally, and the old seed had exactly that collision.
+  const capital = await client
+    .createLedger(co, {
+      name: "Capital A/c",
+      group_name: "Capital Account",
+      opening_balance: money(OPENING_CAPITAL),
+      opening_dc: "C",
+    })
+    .then((r) => r.ledger_id);
+  const bank = await client
+    .createLedger(co, {
+      name: "HDFC Bank",
+      group_name: "Bank Accounts",
+      opening_balance: money(OPENING_BANK),
+      opening_dc: "D",
+    })
+    .then((r) => r.ledger_id);
+
+  // CASH: reuse the ledger every company is SEEDED with rather than creating a
+  // second one. seed_company_defaults already made "Cash" under Cash-in-Hand;
+  // the old seed could not resolve its id (there was no way to read ledgers
+  // back), so it created "Cash A/c" alongside it and left "Cash" sitting on the
+  // Trial Balance as a permanently-zero dead row. GET .../ledgers now exists.
+  const existing = await client.listLedgers(co);
+  const seededCash = existing.ledgers.find(
+    (l) => l.name === "Cash" && l.is_system,
+  );
+  if (!seededCash) {
+    throw new Error(
+      "expected the seeded system ledger 'Cash' to exist — did seed_company_defaults change?",
+    );
+  }
+  const cash = seededCash.id;
+
+  // The seeded Cash ledger exists BEFORE any client can speak, so its opening
+  // balance cannot be supplied at creation — hence the dedicated setter.
+  await client.setLedgerOpening(co, cash, {
+    opening_balance: money(OPENING_CASH),
+    opening_dc: "D",
+    created_by: "seed",
+  });
 
   const outCgst = await ledger("Output CGST", "Duties & Taxes");
   const outSgst = await ledger("Output SGST", "Duties & Taxes");
@@ -141,6 +376,7 @@ async function main(): Promise<void> {
     partyState: string;
     taxable: number;
     ratePct: number;
+    hsn: string;
     ref: string;
     dueDate: string;
   }) => {
@@ -175,7 +411,13 @@ async function main(): Promise<void> {
       gst: {
         supplier_state_code: HOME_STATE,
         place_of_supply_state_code: opts.partyState,
-        lines: [{ taxable_value: money(opts.taxable), gst_rate_pct: String(opts.ratePct) }],
+        lines: [
+          {
+            taxable_value: money(opts.taxable),
+            gst_rate_pct: String(opts.ratePct),
+            hsn: opts.hsn,
+          },
+        ],
         cgst_ledger_id: outCgst,
         sgst_ledger_id: outSgst,
         igst_ledger_id: outIgst,
@@ -192,6 +434,7 @@ async function main(): Promise<void> {
     partyState: string;
     taxable: number;
     ratePct: number;
+    hsn: string;
     ref: string;
     dueDate: string;
   }) => {
@@ -223,18 +466,49 @@ async function main(): Promise<void> {
           due_date: opts.dueDate,
         },
       ],
+      // THE GST BLOCK WAS MISSING HERE. salesInvoice() sent one; this did not,
+      // so the tax POSTINGS were written but taxable_value/cgst/sgst/igst on the
+      // voucher version stayed NULL. gstr3b.go filters on
+      // `taxable_value IS NOT NULL`, so every purchase was skipped and the
+      // return reported ZERO input tax credit while ~9,000 sat in the Input
+      // CGST/SGST/IGST ledgers. Supplying it makes the ITC real.
+      //
+      // Note the orientation: on a PURCHASE the supplier's state is the party's
+      // and the place of supply is OUR state (we are the recipient) — the mirror
+      // image of the sales case above.
+      gst: {
+        supplier_state_code: opts.partyState,
+        place_of_supply_state_code: HOME_STATE,
+        lines: [
+          {
+            taxable_value: money(opts.taxable),
+            gst_rate_pct: String(opts.ratePct),
+            hsn: opts.hsn,
+          },
+        ],
+        cgst_ledger_id: inCgst,
+        sgst_ledger_id: inSgst,
+        igst_ledger_id: inIgst,
+      },
     };
     return client.postPurchaseVoucher(co, body);
   };
 
   // ---- The books -----------------------------------------------------------
-  // 1. Opening capital (F7 Journal) — gives the Balance Sheet an equity side.
+  // 1. ADDITIONAL capital brought in DURING the year (F7 Journal).
+  //
+  //    Contrast this with the OPENING capital above, and the contrast is the
+  //    whole lesson: the 4,52,000 opening is the equity the books STARTED with,
+  //    dated at books_beginning_from and carrying no voucher; this 50,000 is a
+  //    thing that HAPPENED on 20 May and has a voucher, a narration and a place
+  //    in the Day Book. The old seed conflated the two by introducing all equity
+  //    as a day-one journal.
   await client.postJournalVoucher(co, {
-    voucher_date: "2026-04-01",
-    narration: "Opening capital introduced",
+    voucher_date: "2026-05-20",
+    narration: "Additional capital introduced by proprietor",
     postings: [
-      { ledger_id: cash, dr_cr: "D", amount: money(500000) },
-      { ledger_id: capital, dr_cr: "C", amount: money(500000) },
+      { ledger_id: bank, dr_cr: "D", amount: money(50000) },
+      { ledger_id: capital, dr_cr: "C", amount: money(50000) },
     ],
   });
 
@@ -243,40 +517,40 @@ async function main(): Promise<void> {
     voucher_date: "2026-04-02",
     narration: "Cash deposited to HDFC",
     postings: [
-      { ledger_id: bank, dr_cr: "D", amount: money(300000) },
-      { ledger_id: cash, dr_cr: "C", amount: money(300000) },
+      { ledger_id: bank, dr_cr: "D", amount: money(100000) },
+      { ledger_id: cash, dr_cr: "C", amount: money(100000) },
     ],
   });
 
   // 3. F8 Sales — intra-state (CGST+SGST) and inter-state (IGST), both aged.
-  const inv1 = await salesInvoice({
-    date: "2026-04-12", party: "Acme Traders", partyId: acme, partyState: HOME_STATE,
-    taxable: 50000, ratePct: 18, ref: "INV-001", dueDate: "2026-05-12",
+  await salesInvoice({
+    date: "2026-04-12", party: PARTIES.acme.name, partyId: acme, partyState: PARTIES.acme.state,
+    taxable: 50000, ratePct: 18, hsn: HSN_STEEL_ARTICLES, ref: "INV-001", dueDate: "2026-05-12",
   });
-  const inv2 = await salesInvoice({
-    date: "2026-05-08", party: "Mumbai Metals", partyId: mumbai, partyState: OTHER_STATE,
-    taxable: 80000, ratePct: 18, ref: "INV-002", dueDate: "2026-06-22",
+  await salesInvoice({
+    date: "2026-05-08", party: PARTIES.mumbai.name, partyId: mumbai, partyState: PARTIES.mumbai.state,
+    taxable: 80000, ratePct: 18, hsn: HSN_STEEL_ARTICLES, ref: "INV-002", dueDate: "2026-06-22",
   });
   const inv3 = await salesInvoice({
-    date: "2026-06-19", party: "Acme Traders", partyId: acme, partyState: HOME_STATE,
-    taxable: 24000, ratePct: 12, ref: "INV-003", dueDate: "2026-07-19",
+    date: "2026-06-19", party: PARTIES.acme.name, partyId: acme, partyState: PARTIES.acme.state,
+    taxable: 24000, ratePct: 12, hsn: HSN_STEEL_KITCHEN, ref: "INV-003", dueDate: "2026-07-19",
   });
 
   // 4. F9 Purchases — intra and inter-state input tax.
-  const bill1 = await purchaseBill({
-    date: "2026-04-20", party: "Steel Suppliers", partyId: steel, partyState: HOME_STATE,
-    taxable: 30000, ratePct: 18, ref: "SUP-101", dueDate: "2026-05-20",
+  await purchaseBill({
+    date: "2026-04-20", party: PARTIES.steel.name, partyId: steel, partyState: PARTIES.steel.state,
+    taxable: 30000, ratePct: 18, hsn: HSN_FLAT_ROLLED, ref: "SUP-101", dueDate: "2026-05-20",
   });
   await purchaseBill({
-    date: "2026-05-15", party: "Delhi Parts", partyId: delhi, partyState: "07",
-    taxable: 20000, ratePct: 18, ref: "SUP-102", dueDate: "2026-06-29",
+    date: "2026-05-15", party: PARTIES.delhi.name, partyId: delhi, partyState: PARTIES.delhi.state,
+    taxable: 20000, ratePct: 18, hsn: HSN_FLAT_ROLLED, ref: "SUP-102", dueDate: "2026-06-29",
   });
 
   // 5. F6 Receipt — a PART payment against INV-001, so one bill stays partly
   //    open (the interesting Outstandings case) while INV-002/3 are fully open.
   await client.postReceiptVoucher(co, {
     voucher_date: "2026-05-30",
-    party: "Acme Traders",
+    party: PARTIES.acme.name,
     party_ledger_id: acme,
     narration: "Part payment against INV-001",
     postings: [
@@ -291,7 +565,7 @@ async function main(): Promise<void> {
   // 6. F5 Payments — settle a supplier bill, and pay the rent.
   await client.postPaymentVoucher(co, {
     voucher_date: "2026-06-05",
-    party: "Steel Suppliers",
+    party: PARTIES.steel.name,
     party_ledger_id: steel,
     narration: "Payment against SUP-101",
     postings: [
@@ -326,7 +600,7 @@ async function main(): Promise<void> {
   const inv3Tax = (26500 * 12) / 100;
   await client.alterSalesVoucher(co, inv3.voucher_id, {
     voucher_date: "2026-06-19",
-    party: "Acme Traders",
+    party: PARTIES.acme.name,
     party_ledger_id: acme,
     narration: "INV-003 — corrected quantity",
     postings: [
@@ -335,13 +609,121 @@ async function main(): Promise<void> {
       { ledger_id: outCgst, dr_cr: "C", amount: money(inv3Tax / 2) },
       { ledger_id: outSgst, dr_cr: "C", amount: money(inv3Tax / 2) },
     ],
+    // RESTATE the bill reference at the corrected total. An alter re-states the
+    // WHOLE voucher, allocations included; the previous seed omitted this, so
+    // the bill kept ageing at the original 26,880 while the debtor's balance
+    // moved to 29,680 — Outstandings and the Balance Sheet disagreed by 2,800.
+    bill_allocations: [
+      {
+        ledger_id: acme,
+        ref_name: "INV-003",
+        ref_type: "NEW",
+        dr_cr: "D",
+        amount: money(26500 + inv3Tax),
+        due_date: "2026-07-19",
+      },
+    ],
     gst: {
       supplier_state_code: HOME_STATE,
       place_of_supply_state_code: HOME_STATE,
-      lines: [{ taxable_value: money(26500), gst_rate_pct: "12" }],
+      lines: [
+        { taxable_value: money(26500), gst_rate_pct: "12", hsn: HSN_STEEL_KITCHEN },
+      ],
       cgst_ledger_id: outCgst,
       sgst_ledger_id: outSgst,
       igst_ledger_id: outIgst,
+    },
+  });
+
+  // 8b. A CREDIT NOTE — a partial sales return against INV-002 (Mumbai Metals).
+  //     THE POINT OF THIS VOUCHER: it is how you undo part of an invoice
+  //     CORRECTLY. Note 8 above ALTERS INV-003, which rewrites history — fine
+  //     for a data-entry typo caught the same day, wrong for goods that came
+  //     back in July against an April sale. A credit note is its own dated
+  //     document with its own number series, and it lands in GSTR-1's cdnr
+  //     section (table 9B) rather than silently changing a filed invoice.
+  //
+  //     Goods worth 12,000 of the 80,000 inter-state sale come back @18% IGST.
+  //     Being a return of an INTER-state sale it reverses IGST, not CGST+SGST.
+  const CN_TAXABLE = 12000;
+  const CN_TAX = (CN_TAXABLE * 18) / 100;
+  await client.postCreditNoteVoucher(co, {
+    voucher_date: "2026-07-08",
+    party: PARTIES.mumbai.name,
+    party_ledger_id: mumbai,
+    narration: "Sales return against INV-002 — 12,000 of goods returned",
+    postings: [
+      // Exact mirror of the sale: sales income and output tax come back DOWN,
+      // and the customer no longer owes us the returned amount.
+      { ledger_id: sales, dr_cr: "D", amount: money(CN_TAXABLE) },
+      { ledger_id: outIgst, dr_cr: "D", amount: money(CN_TAX) },
+      { ledger_id: mumbai, dr_cr: "C", amount: money(CN_TAXABLE + CN_TAX) },
+    ],
+    // AGAINST the original bill reference, so Outstandings reduces INV-002
+    // rather than opening a new negative bill.
+    bill_allocations: [
+      {
+        ledger_id: mumbai,
+        ref_name: "INV-002",
+        ref_type: "AGAINST",
+        dr_cr: "C",
+        amount: money(CN_TAXABLE + CN_TAX),
+      },
+    ],
+    gst: {
+      supplier_state_code: HOME_STATE,
+      place_of_supply_state_code: PARTIES.mumbai.state,
+      lines: [
+        { taxable_value: money(CN_TAXABLE), gst_rate_pct: "18", hsn: HSN_STEEL_ARTICLES },
+      ],
+      cgst_ledger_id: outCgst,
+      sgst_ledger_id: outSgst,
+      igst_ledger_id: outIgst,
+    },
+  });
+
+  // 8c. A DEBIT NOTE — a PURCHASE RETURN raised on a supplier.
+  //     We send 2,500 of defective steel back to Steel Suppliers (intra-state,
+  //     so CGST+SGST). WE debit THEM: they owe us, our purchases come down, and
+  //     the input credit we claimed on those goods is REVERSED.
+  //
+  //     Note which way this faces. A note raised on a SUPPLIER is a purchase-side
+  //     document: it belongs in GSTR-3B as an ITC reversal and must NOT appear in
+  //     GSTR-1, which is the OUTWARD return. The reports decide that from the
+  //     party's group (Sundry Creditors => liability => purchase side), not from
+  //     the voucher class — because both note classes can face either way.
+  const DN_TAXABLE = 2500;
+  const DN_TAX = (DN_TAXABLE * 18) / 100;
+  await client.postDebitNoteVoucher(co, {
+    voucher_date: "2026-07-12",
+    party: PARTIES.steel.name,
+    party_ledger_id: steel,
+    narration: "Purchase return against SUP-101 — defective material sent back",
+    postings: [
+      { ledger_id: steel, dr_cr: "D", amount: money(DN_TAXABLE + DN_TAX) },
+      { ledger_id: purchases, dr_cr: "C", amount: money(DN_TAXABLE) },
+      { ledger_id: inCgst, dr_cr: "C", amount: money(DN_TAX / 2) },
+      { ledger_id: inSgst, dr_cr: "C", amount: money(DN_TAX / 2) },
+    ],
+    // AGAINST SUP-101: we now owe the supplier less on that bill.
+    bill_allocations: [
+      {
+        ledger_id: steel,
+        ref_name: "SUP-101",
+        ref_type: "AGAINST",
+        dr_cr: "D",
+        amount: money(DN_TAXABLE + DN_TAX),
+      },
+    ],
+    gst: {
+      supplier_state_code: PARTIES.steel.state,
+      place_of_supply_state_code: HOME_STATE,
+      lines: [
+        { taxable_value: money(DN_TAXABLE), gst_rate_pct: "18", hsn: HSN_FLAT_ROLLED },
+      ],
+      cgst_ledger_id: inCgst,
+      sgst_ledger_id: inSgst,
+      igst_ledger_id: inIgst,
     },
   });
 
@@ -357,7 +739,7 @@ async function main(): Promise<void> {
   });
   await client.deleteVoucher(co, mistake.voucher_id);
 
-  console.log("  vouchers:   11 live across Apr–Jul 2026 (all six types), 1 altered (v2), 1 deleted");
+  console.log("  vouchers:   13 live across Apr–Jul 2026 (all 8 types incl. credit/debit note), 1 altered (v2), 1 deleted");
 
   // ---- Optional: a pending OCR draft for the Bill Inbox --------------------
   // Uses the SAME benchmark fixture the OCR e2e drives, with its placeholder
@@ -366,27 +748,146 @@ async function main(): Promise<void> {
   if (withInsightd) {
     try {
       const insightd = createInsightdClient({ baseUrl: insightdUrl });
-      const remap: Record<string, string> = {
-        "CO-DEMO": co,
-        "L-PARTY-1": steel,
-        "L-PUR-RM": purchases,
-        "L-PUR-CONS": purchases,
-        "L-PUR-SVC": purchases,
-        "L-CGST": inCgst,
-        "L-SGST": inSgst,
-        "L-IGST": inIgst,
+
+      // The bill is BUILT FROM THESE BOOKS rather than string-patched out of a
+      // benchmark fixture. The old approach remapped ledger IDs but left the
+      // fixture's own content behind, so the Bill Inbox showed a bill dated
+      // 2025-05-11 (eleven months BEFORE these books begin), from "Acme
+      // Components Pvt Ltd" and "Steel widgets" — names that exist nowhere in
+      // this company — proposing CGST+SGST for a 27->27 supply that, for a
+      // Karnataka company, is inter-state and must be IGST. Accepting it would
+      // have posted an out-of-period, GST-wrong voucher.
+      const BILL_NO = "PF/2026-27/0117";
+      const BILL_DATE = "2026-07-10"; // inside FY 2026-27, after books begin
+      const BILL_HSN = "7216"; // angles/shapes/sections of iron or steel
+      const BILL_QTY = 40;
+      const BILL_RATE = 450;
+      const BILL_TAXABLE = BILL_QTY * BILL_RATE; // 18,000
+      const BILL_RATE_PCT = 18;
+      const BILL_DESC = "MS Angle 50x50x5mm";
+
+      // 27 (supplier) vs 29 (place of supply = where WE take delivery) => IGST.
+      const ocrLine = (text: string, y: number, confidence: number) => ({
+        text,
+        bbox: [10, y, 520, y + 20],
+        confidence,
+      });
+
+      const fixture = {
+        id: "demo-traders-bill-inbox",
+        description: `MH(27)->KA(29) purchase @${BILL_RATE_PCT}.00 -> IGST; clean scan`,
+        rulesetVersion: "gst-2024-09",
+        ocr_quality: "clean",
+        // The deterministic classifier reads this block to resolve the supplier
+        // to a REAL ledger. Without it the match falls through to the
+        // "ambiguous" path (ledger_id null), and mapper.py then falls back to
+        // using the place of supply AS the supplier state — which makes every
+        // bill look intra-state and propose the wrong split.
+        classify: {
+          doc_type: "purchase_invoice",
+          is_purchase: true,
+          supplier_ledger_id: pune,
+        },
+        input: {
+          pages: [{ png_b64: "", width: 1240, height: 1754, dpi: 200 }],
+          ocr: {
+            lines: [
+              ocrLine("TAX INVOICE", 10, 0.99),
+              ocrLine(`Invoice No: ${BILL_NO}`, 40, 0.98),
+              ocrLine(`Date: ${BILL_DATE}`, 70, 0.98),
+              ocrLine(`Supplier: ${PARTIES.pune.name}`, 100, 0.97),
+              ocrLine(`GSTIN: ${PARTIES.pune.gstin}`, 130, 0.96),
+              // PII the redaction stage must strip before anything leaves the
+              // boundary — kept so the Bill Inbox still demonstrates that.
+              ocrLine("PAN: AACCP2345Q", 160, 0.96),
+              ocrLine("Bank IFSC: HDFC0004321", 190, 0.95),
+              ocrLine(`Place of Supply: ${HOME_STATE}`, 220, 0.97),
+              ocrLine(
+                `${BILL_DESC} HSN ${BILL_HSN} qty ${money(BILL_QTY)} rate ${money(BILL_RATE)} ` +
+                  `${money(BILL_TAXABLE)} @ ${money(BILL_RATE_PCT)}%`,
+                260,
+                0.96,
+              ),
+            ],
+            mean_confidence: 0.967,
+          },
+          inferred: {
+            invoice_no: BILL_NO,
+            invoice_date: BILL_DATE,
+            // Place of supply for goods is the DESTINATION: our state.
+            place_of_supply_state_code: HOME_STATE,
+            reverse_charge: false,
+            exempt: false,
+            line_items: [
+              {
+                description: BILL_DESC,
+                hsn: BILL_HSN,
+                qty: money(BILL_QTY),
+                rate: money(BILL_RATE),
+                taxable_value: money(BILL_TAXABLE),
+                gst_rate_pct: money(BILL_RATE_PCT),
+                ledger_id: purchases,
+                ledger_name: "Raw Material Purchases",
+                ledger_confidence: 0.95,
+              },
+            ],
+            totals: {
+              taxable: money(BILL_TAXABLE),
+              invoice_total: money(
+                BILL_TAXABLE + (BILL_TAXABLE * BILL_RATE_PCT) / 100,
+              ),
+            },
+          },
+          // Every id here is a REAL ledger of this company, so the draft the
+          // inbox shows resolves against these books and can be accepted.
+          tenant: {
+            company_id: co,
+            home_state_code: HOME_STATE,
+            ledgers: [
+              {
+                id: pune,
+                name: PARTIES.pune.name,
+                gstin_masked:
+                  PARTIES.pune.gstin.slice(0, 5) + "\u2026" + PARTIES.pune.gstin.slice(-3),
+                // The supplier's OWN state. mapper.py reads this to decide the
+                // split, so 27 here vs place-of-supply 29 is what makes the
+                // draft propose IGST.
+                state_code: PARTIES.pune.state,
+                kind: "party",
+              },
+              { id: purchases, name: "Raw Material Purchases", kind: "purchase" },
+              { id: inCgst, name: "Input CGST", kind: "tax" },
+              { id: inSgst, name: "Input SGST", kind: "tax" },
+              { id: inIgst, name: "Input IGST", kind: "tax" },
+            ],
+            cgst_ledger_id: inCgst,
+            sgst_ledger_id: inSgst,
+            igst_ledger_id: inIgst,
+          },
+        },
+        expected: {},
       };
-      let txt = readFileSync(OCR_FIXTURE, "utf8");
-      for (const [k, v] of Object.entries(remap)) txt = txt.split(k).join(v);
-      const fixture = JSON.parse(txt) as Record<string, unknown>;
-      const tenant = (fixture.input as Record<string, unknown>).tenant;
+
       const draft = await insightd.createDraft(co, {
         source: "upload",
-        tenant: tenant as never,
+        tenant: fixture.input.tenant as never,
         fixture,
       });
+
+      // Assert the draft actually landed on the inter-state path. A silent
+      // CGST+SGST here would mean the demo teaches the wrong split.
+      const g = draft.body.gst;
+      const igst = draft.body.postings.find((p) => p.ledger_id === inIgst);
+      if (!igst) {
+        throw new Error(
+          `draft proposed no IGST leg — supplier ${g?.supplier_state_code} / POS ` +
+            `${g?.place_of_supply_state_code} should be inter-state`,
+        );
+      }
       console.log(
-        `  bill inbox: 1 pending OCR draft (${draft.status}, ${draft.redaction.total} PII fields redacted) — Gateway → Bill Inbox`,
+        `  bill inbox: 1 pending OCR draft — ${PARTIES.pune.name} ${BILL_NO} ` +
+          `dated ${BILL_DATE}, IGST ${igst.amount} (27->29 inter-state), ` +
+          `${draft.redaction.total} PII fields redacted — Gateway → Bill Inbox`,
       );
     } catch (err) {
       console.log(
@@ -404,13 +905,23 @@ async function main(): Promise<void> {
       `\n  balance sheet: assets ${bs.assets.total} / liabilities ${bs.liabilities.total}  balanced=${bs.balanced}` +
       `\n  receivables:   ${os.parties.length} parties, total ${os.total}`,
   );
-  // Disclosed on purpose: the INV-003 alteration does not restate its bill-wise
-  // reference, so Outstandings still ages the ORIGINAL 26,880 rather than the
-  // corrected 29,680. That is the documented over-count on altered vouchers
-  // (HANDOFF §6) shown honestly in the demo data rather than papered over.
+  // SELF-CHECK, not a note. Sundry Debtors on the Balance Sheet is computed from
+  // ledger_balance; the Outstandings total is computed from bill_allocation.
+  // They are two independent paths over the same books and MUST agree to the
+  // paisa. They did not before this pass (INV-003's alter restated the postings
+  // but not the bill reference, and Outstandings summed superseded versions), so
+  // the seed now asserts it rather than printing a disclaimer.
+  const debtors = bs.assets.nodes
+    .flatMap((n) => n.children ?? [])
+    .find((n) => n.name === "Sundry Debtors");
+  if (!debtors) throw new Error("Balance Sheet has no Sundry Debtors node");
+  if (debtors.amount !== os.total) {
+    throw new Error(
+      `Balance Sheet Sundry Debtors ${debtors.amount} != Outstandings ${os.total}`,
+    );
+  }
   console.log(
-    "  note:          INV-003 was altered (v2) without restating its bill ref —\n" +
-      "                 Outstandings therefore ages the original amount (known gap).",
+    `  cross-check:   Sundry Debtors ${debtors.amount} == Outstandings ${os.total}  ✓`,
   );
 
   console.log(`\n  OPEN IT:  ${uiUrl}/?company=${co}\n`);
