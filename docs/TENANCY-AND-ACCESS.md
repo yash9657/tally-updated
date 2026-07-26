@@ -4,14 +4,14 @@
 This one explains *who is allowed to do what, and why* — the SaaS layer.
 
 Every status code below was observed on the running stack. The whole document is
-gated by `pnpm verify:tenancy`, which exercises **27 paths** and fails if any
+gated by `pnpm verify:tenancy`, which exercises **48 paths** and fails if any
 branch changes behaviour.
 
 ```bash
 cd frontend
 pnpm seed:demo -- --insightd        # company A (Demo Traders) — prints its id
 pnpm seed:tenancy <A>               # adds a 2nd user to A, builds company B
-pnpm verify:tenancy <A> <B>         # 27 access-control checks
+pnpm verify:tenancy <A> <B>         # 48 access-control checks
 ```
 
 The verifier is **self-cleaning**: it must write in order to test write
@@ -100,6 +100,10 @@ evaluates. The mapping is a **closed list** — and an unmapped route is denied:
 | `POST .../import/tally-xml` | `create` / `import` |
 | `POST .../sync/commit` | `create` / `sync` |
 | `POST .../query` | `display` / `query` |
+| `GET .../members`, `GET .../security-levels` | `display` / `security` |
+| `POST .../members/invites`, `POST .../security-levels` | `create` / `security` |
+| `PUT .../members/{userID}`, `PUT .../security-levels/{id}` | `alter` / `security` |
+| `DELETE .../members/…`, `DELETE .../security-levels/{id}` | `delete` / `security` |
 
 > **Observed:** `GET /v1/companies/{A}/not-a-real-route` as an **Owner** →
 > `403 {"error":"unmapped route: access denied"}`.
@@ -165,7 +169,7 @@ WebAuthn ceremony rather than bouncing the user to a login screen.
 | Attempt | Result | Why |
 |---|---|---|
 | Create a Journal voucher | `201` | matched `allow create journal` |
-| Create a **Credit Note** | `201` | matched `allow create credit-note` (see §6) |
+| Create a **Credit Note** | `201` | matched `allow create credit-note` (see §7) |
 | Display Trial Balance | `200` | matched `allow display report` |
 | **Delete a voucher** | `403 "default access: none"` | no `delete` rule anywhere |
 | **Create a ledger master** | `403 "default access: none"` | no `master` rule |
@@ -247,7 +251,122 @@ fuzzing, including "GUC unset", "GUC reset mid-transaction", and "malformed GUC"
 
 ---
 
-## 6. A gap this exercise found
+## 6. Administering users, roles and levels — over HTTP, no SQL
+
+Until this pass, `POST /v1/companies` made its creator an Owner and that was the
+**only** membership any HTTP route could create. Adding a colleague was a psql
+statement. There is now a first-class admin surface, and `seed-tenancy.mts` uses
+it — the seeder no longer shells out to `psql` at all.
+
+### The invite flow
+
+An administrator never writes another person's identity row. They record an
+**invite addressed to a JWT subject**; the invitee materialises their own
+membership the next time they authenticate.
+
+```
+Owner                                     Invitee
+  │                                          │
+  ├─ POST /v1/companies/{A}/members/invites  │
+  │    {subject, security_level_name}        │
+  │      -> 201 {invite_id, status:pending}  │
+  │                                          │
+  │                              GET /v1/me ─┤
+  │                    claims pending invites│
+  │                    -> membership created │
+  │                                          │
+  └─ GET /members  -> the colleague is there ┘
+```
+
+Why this shape and not "create the user, then grant them a role":
+
+* `app_user`'s RLS `WITH CHECK` has always been self-only (`subject =
+  app_current_subject()`). Keeping it that way means **no API can mint an
+  identity for a subject that has never logged in** — the invitee's first
+  authenticated call is what creates their row.
+* An invite is revocable and auditable. A revoked invite is inert: the invitee's
+  `/v1/me` claims nothing and they stay locked out (observed `403`).
+* An unclaimed invite grants **nothing**. Between the invite and the claim, the
+  invitee is `403 not authorized for this company`, exactly like a stranger.
+
+### The endpoints
+
+| Route | What it does |
+|---|---|
+| `GET .../members` | members (subject, email, level, `is_self`) + pending invites |
+| `POST .../members/invites` | invite a subject at a level (by id **or** name) |
+| `DELETE .../members/invites/{id}` | revoke a pending invite |
+| `PUT .../members/{userID}` | change a member's security level |
+| `DELETE .../members/{userID}` | revoke a member's access |
+| `GET .../security-levels` | levels, their ACL rules, and member counts |
+| `POST .../security-levels` | create a **custom** level |
+| `PUT .../security-levels/{id}` | patch a level; `rules` replaces the whole set |
+| `DELETE .../security-levels/{id}` | delete an unused custom level |
+| `GET /v1/me` | who am I + **which companies I may open** (authn-only) |
+
+### The guards, and why each exists
+
+| Guard | Observed | Why |
+|---|---|---|
+| The whole surface is `(action, "security")` | Data Entry → `403 default access: none` | Administering users is not data entry. One ACL rule governs the surface. |
+| Writes inherit **step-up** | Owner without WebAuthn → `403 STEPUP_REQUIRED` | Granting access is at least as sensitive as posting an invoice. |
+| **Service principals refused** | `svc:statutoryd` → `403 service principals cannot administer users` | `svc:` tokens bypass the PDP by design; without this, a compromised side-plane could grant itself Owner. |
+| A `svc:` subject cannot be invited | `422` | A membership for a principal that skips the PDP would be meaningless *and* misleading in the UI. |
+| **Last-Owner guard** | demote/remove the only Owner → `409` | A company must never be left with nobody able to administer it — and since the admin routes are themselves PDP-gated, that state would be permanent. |
+| The **Owner level is immutable** | rename / `default_access` / `requires_webauthn` / rules → `422` | Turning off the Owner level's step-up would silently rewrite the posture every other check assumes. Its **back-dated cutoff IS settable** (Tally behaviour; the cutoff binds Owners too). |
+| A level **in use** cannot be deleted | `409` | Members would point at nothing. Historic (accepted/revoked) invites do **not** block it: they keep the level *name* and their FK is nulled, so the audit trail survives the deletion and the deletion survives the audit trail. |
+| Rules validated against a **closed vocabulary** | `report:trail-balance` → `422 unknown resource` | A misspelled rule is not rejected by the PDP — it simply never matches. For a `disallow` rule that is the difference between "forbidden" and "permitted". |
+
+### A custom level, end to end
+
+```bash
+POST /v1/companies/{A}/security-levels
+  {"name":"Auditor","default_access":"none",
+   "rules":[{"effect":"allow","action":"display","resource":"report:trial-balance"}]}
+POST /v1/companies/{A}/members/invites  {"subject":"auditor@firm","security_level_name":"Auditor"}
+GET  /v1/me                              # as auditor@firm -> claims it
+```
+
+Observed for `auditor@firm` afterwards:
+
+| Attempt | Result |
+|---|---|
+| `GET /trial-balance` (the granted report) | `200` |
+| `GET /balance-sheet` | `403 default access: none` |
+| `POST /vouchers/journal` | `403 default access: none` |
+| `GET /members` | `403 default access: none` |
+
+The engine always supported custom levels. This is the first time anything could
+create one.
+
+### RLS beneath it (migration 0020)
+
+Three changes, each minimal:
+
+1. **`company_invite`** — new table, `ENABLE`+`FORCE` RLS. Readable by the
+   administering company (company GUC) **or** by the addressee (subject GUC —
+   the one read that must work before any membership exists). Writable **only**
+   under the company GUC: were `subject = me` in the `WITH CHECK`, a caller
+   could mint themselves an invite into an arbitrary company and accept it.
+2. **`company_membership`** — read widened to the company GUC (an Owner could
+   not previously list their own company's members), and the **write side
+   NARROWED** to the company GUC at the same time: 0011 allowed a user-GUC-only
+   self-grant into *any* company. Nothing did that; now nothing can.
+3. **`app_user`** — reads now also admit "this row belongs to a member of the
+   company in scope", so a member list can show a colleague's email. The added
+   clause is itself evaluated through `company_membership`'s policy, so there is
+   no path to enumerate the global directory. `WITH CHECK` is unchanged
+   (self-only).
+
+Proven at the store level (`internal/authz/admin_test.go`), including: an invite
+in company A is invisible under company B's GUC even when the query's own
+`WHERE company_id` is removed (RLS, not the SQL text, is what isolates it), a
+membership INSERT naming company A while scoped to B is refused, and an invite
+cannot be claimed by a subject it was not addressed to.
+
+---
+
+## 7. A gap this exercise found
 
 Migration 0018 (this pass) added `credit-note` and `debit-note` as voucher
 classes. The Data Entry ACL, seeded back in 0011, listed exactly six classes.
@@ -267,22 +386,22 @@ you want, but it is still a failure.
 
 ---
 
-## 7. What is missing for this to be a real SaaS
+## 8. What is missing for this to be a real SaaS
 
 Honest list. The engine is multi-tenant; the *product* around it is not yet.
 
 | Missing | Impact |
 |---|---|
-| **No admin API for users/roles** | `POST /v1/companies` makes its creator an Owner, and that is the only membership any HTTP route can create. Inviting a colleague or assigning a role is **SQL only** — which is why `seed-tenancy.mts` shells out to `psql`. A SaaS needs this as a first-class flow. |
-| **No custom security levels** | The engine fully supports them (`security_level` + `acl_rule` are per-company data), but only the two seeded levels exist and nothing can create a third. |
-| **No login** | `POST /auth/token` mints a token for *any* subject and exists only when a dev signer is configured. There is no password, no SSO, no IdP integration. |
-| **No company switching** | `F3` is bound and answers "one company per session". A user with two memberships cannot reach the second in the UI. |
-| **UI is single-identity** | The web client authenticates as one hardcoded dev subject. The whole allow/disallow story above is reachable by API but invisible in the browser. |
+| ~~No admin API for users/roles~~ | **DONE** — §6. Invite, claim, change level, revoke, and custom levels, all over HTTP; `seed-tenancy.mts` no longer touches psql. |
+| ~~No custom security levels~~ | **DONE** — §6. `POST /security-levels` with a vocabulary-validated rule set. |
+| **No login** | `POST /auth/token` mints a token for *any* subject and exists only when a dev signer is configured. There is no password, no SSO, no IdP integration. **This is now the top gap:** the admin API grants access to a *subject*, and until a real IdP owns subjects, "invite `alice@firm`" is only as trustworthy as the token issuer. |
+| **No company switching in the UI** | `GET /v1/me` now returns every company a user may open, with their level in each — the data a switcher needs. `F3` is still bound to "one company per session"; wiring it to `/v1/me` is the next client change. |
+| **UI is single-identity** | The web client authenticates as one hardcoded dev subject. The whole allow/disallow story above is reachable by API but invisible in the browser. No admin screens exist yet (members/levels are API-only). |
+| **No email delivery** | An invite is a database row. Nothing notifies the invitee — the flow assumes the administrator tells them out of band. |
 | **Not deployed** | `infra/` holds k8s + terraform for EKS `ap-south-1`; none of it has been applied. |
 
-The ordering I would suggest: an admin API for membership and roles first (it
-unblocks everything else and makes §4 demonstrable in the UI), then a real login,
-then company switching.
+Suggested ordering from here: a real login (an IdP that owns subjects), then
+company switching + the admin screens in the browser, then invite delivery.
 
 ---
 
@@ -292,7 +411,7 @@ then company switching.
 cd frontend
 pnpm seed:demo -- --insightd     # -> company A
 pnpm seed:tenancy <A>            # -> company B + the Data Entry user
-pnpm verify:tenancy <A> <B>      # 27 checks; exits non-zero on any drift
+pnpm verify:tenancy <A> <B>      # 48 checks; exits non-zero on any drift
 pnpm verify:demo <A>             # 18 accounting checks; unaffected by the above
 ```
 

@@ -332,6 +332,26 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 	case method == http.MethodGet && reportName(rest) != "":
 		return authz.Display, "report", reportName(rest), true
 
+	// SaaS admin surface: members, invites, custom security levels. All map to
+	// the single resource "security" (Tally's "Security Control"), so one ACL
+	// rule governs the whole surface and the seeded Data Entry level — which has
+	// no `security` rule and default_access none — is refused on every one of
+	// them. The WRITES are Create/Alter/Delete, so they inherit the Owner level's
+	// WebAuthn step-up: granting someone access demands a second factor exactly
+	// like posting a voucher does.
+	case isMembersPath(rest) || isSecurityLevelsPath(rest):
+		switch method {
+		case http.MethodGet:
+			return authz.Display, "security", "", true
+		case http.MethodPost:
+			return authz.Create, "security", "", true
+		case http.MethodPut:
+			return authz.Alter, "security", "", true
+		case http.MethodDelete:
+			return authz.Delete, "security", "", true
+		}
+		return "", "", "", false
+
 	// Import + sync.
 	case method == http.MethodPost && rest == "/import/tally-xml":
 		return authz.Create, "import", "", true
@@ -378,6 +398,39 @@ func isMasterPath(rest string) bool {
 		return true
 	}
 	return false
+}
+
+// isMembersPath matches the member/invite admin routes:
+//
+//	/members  /members/invites  /members/invites/{inviteID}  /members/{userID}
+//
+// It matches the SHAPE, not the id, so a malformed id still resolves to the
+// "security" resource and is rejected by the handler with a 400 — rather than
+// falling through to routeAction's default-deny and reporting an authorization
+// failure for what is actually a bad request.
+func isMembersPath(rest string) bool {
+	segs := splitPath(rest)
+	if len(segs) == 0 || segs[0] != "members" {
+		return false
+	}
+	switch len(segs) {
+	case 1: // /members
+		return true
+	case 2: // /members/invites or /members/{userID}
+		return true
+	case 3: // /members/invites/{inviteID}
+		return segs[1] == "invites"
+	}
+	return false
+}
+
+// isSecurityLevelsPath matches /security-levels and /security-levels/{levelID}.
+func isSecurityLevelsPath(rest string) bool {
+	segs := splitPath(rest)
+	if len(segs) == 0 || segs[0] != "security-levels" {
+		return false
+	}
+	return len(segs) == 1 || len(segs) == 2
 }
 
 func isVoucherClass(c string) bool {

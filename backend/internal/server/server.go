@@ -77,6 +77,10 @@ type Server struct {
 	signer    *authn.Signer
 	authStore authStore
 	authzSeed authSeeder
+	// authAdmin is the WRITE side of the same catalog: the SaaS admin surface
+	// (members, invites, custom security levels) behind /members and
+	// /security-levels. See handler_admin.go.
+	authAdmin adminStore
 
 	// WebAuthn step-up + account lockout (Task D, WS1 AUTH FOLLOW-UP). These are
 	// built UNCONDITIONALLY (they need only pool.Raw(), no signer). webauthn drives
@@ -145,6 +149,7 @@ func New(ctx context.Context, appDSN string) (*Server, error) {
 		signer:    signer,
 		authStore: authzStore,
 		authzSeed: authzStore,
+		authAdmin: authzStore,
 
 		webauthn:      waService,
 		webauthnStore: waStore,
@@ -316,6 +321,13 @@ func (s *Server) routes() {
 	// yet). handleCreateCompany seeds the Owner level + membership afterward.
 	r.With(s.authnOnlyMiddleware).Post("/v1/companies", s.handleCreateCompany)
 
+	// Session bootstrap + invite claim. authn-ONLY for the same reason company
+	// creation is: an INVITED user is not yet a member of anything, so the
+	// {companyID} subtree would 403 them before they could ever claim the invite
+	// that would make them a member. It is also the company list a client needs
+	// to offer company switching (F3).
+	r.With(s.authnOnlyMiddleware).Get("/v1/me", s.handleMe)
+
 	r.Route("/v1/companies/{companyID}", func(r chi.Router) {
 		// Every route in this subtree is authn'd + PDP-enforced.
 		r.Use(s.companyAuthMiddleware)
@@ -410,6 +422,21 @@ func (s *Server) routes() {
 		// outbox of voucher intents; the sequencer assigns final numbers,
 		// resolves conflicts, and hard-blocks superseding frozen vouchers.
 		r.Post("/sync/commit", s.handleSyncCommit)
+
+		// SaaS admin surface (handler_admin.go): members, invites and custom
+		// security levels. Every one maps to the "security" resource in
+		// routeAction, so an Owner administers users while a Data Entry level
+		// (default_access none, no `security` rule) is refused by the PDP — and
+		// the writes inherit the Owner level's WebAuthn step-up.
+		r.Get("/members", s.handleListMembers)
+		r.Post("/members/invites", s.handleInviteMember)
+		r.Delete("/members/invites/{inviteID}", s.handleRevokeInvite)
+		r.Put("/members/{userID}", s.handleUpdateMember)
+		r.Delete("/members/{userID}", s.handleRemoveMember)
+		r.Get("/security-levels", s.handleListSecurityLevels)
+		r.Post("/security-levels", s.handleCreateSecurityLevel)
+		r.Put("/security-levels/{levelID}", s.handleUpdateSecurityLevel)
+		r.Delete("/security-levels/{levelID}", s.handleDeleteSecurityLevel)
 
 		// Conversational query (Phase 3 flagship): ask the books a question in
 		// English (or POST a typed DSL) and get a typed, read-only answer. The

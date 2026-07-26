@@ -23,26 +23,30 @@
  * write that is allowed, one that is denied, and a cross-tenant read that is
  * refused. `pnpm verify:tenancy` exercises all of them.
  *
- * A CAVEAT, STATED PLAINLY
- * ------------------------
- * There is NO admin API for users, roles or memberships. `POST /v1/companies`
- * makes its creator an Owner and that is the only membership any HTTP route can
- * create. So granting `demo-data-entry` the Data Entry level on company A is
- * done with direct SQL below. That is a real product gap, not a shortcut for the
- * demo: a SaaS needs "invite a user, assign a role" as a first-class flow.
+ * NO SQL, AS OF THE ADMIN-API PASS
+ * --------------------------------
+ * This script used to shell out to `psql` to grant `demo-data-entry` the Data
+ * Entry level, because no HTTP route could create a membership. It now uses the
+ * real admin surface, which is the flow a customer would use:
+ *
+ *   1. the Owner INVITES a subject at a named security level
+ *        POST /v1/companies/{A}/members/invites
+ *   2. the invitee CLAIMS it on their next authenticated call
+ *        GET  /v1/me
+ *   3. the Owner reads the membership back
+ *        GET  /v1/companies/{A}/members
+ *
+ * An administrator never writes another person's identity row: step 1 records an
+ * invite addressed to a JWT subject, and step 2 is the invitee materialising
+ * their own membership. If this seeder ever needs psql again, that is a signal
+ * the admin API has a hole.
  */
 
-import { execFileSync } from "node:child_process";
 import { createRestClient } from "../src/api";
 import type { CoredClient, VoucherRequest } from "../src/api";
 
 const baseUrl = process.env.CORED_BASE_URL ?? "http://localhost:8087";
 const uiUrl = process.env.UI_BASE_URL ?? "http://localhost:5173";
-
-/** How the seeder reaches Postgres for the membership grant (see caveat above). */
-const PG_CONTAINER = process.env.PG_CONTAINER ?? "tally_pg";
-const PG_USER = process.env.PG_USER ?? "postgres";
-const PG_DB = process.env.PG_DB ?? "tally";
 
 const SUBJ_OWNER_A = "browser-dev-owner";
 const SUBJ_DATA_ENTRY_A = "demo-data-entry";
@@ -75,33 +79,19 @@ function clientFor(tok: string): CoredClient {
 }
 
 /**
- * Run one SQL statement as the DB superuser and return its rows.
- *
- * psql appends a COMMAND TAG line ("INSERT 0 1") after the rows of a
- * `... RETURNING` statement, which is not data — stripped here, or the first
- * caller to read a returned uuid gets "<uuid>\nINSERT 0 1" and a type error.
+ * Raw JSON call against cored. The typed client covers the accounting surface;
+ * the admin surface (members, invites, security levels) is driven directly so a
+ * non-2xx is visible here rather than thrown from inside a wrapper.
  */
-const COMMAND_TAG = /^(INSERT|UPDATE|DELETE|SELECT|MERGE)\s+\d/;
-
-function sql(statement: string): string {
-  let out: string;
-  try {
-    out = execFileSync(
-      "docker",
-      ["exec", PG_CONTAINER, "psql", "-U", PG_USER, "-d", PG_DB, "-t", "-A", "-c", statement],
-      { encoding: "utf8" },
-    );
-  } catch (err) {
-    throw new Error(
-      `SQL failed (is the '${PG_CONTAINER}' container running?): ` +
-        (err instanceof Error ? err.message : String(err)),
-    );
-  }
-  return out
-    .split("\n")
-    .map((l) => l.trim())
-    .filter((l) => l !== "" && !COMMAND_TAG.test(l))
-    .join("\n");
+async function api<T>(method: string, path: string, tok: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${baseUrl}${path}`, {
+    method,
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${tok}` },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`${method} ${path} -> ${res.status} ${text}`);
+  return (text ? JSON.parse(text) : {}) as T;
 }
 
 async function main(): Promise<void> {
@@ -202,32 +192,40 @@ async function main(): Promise<void> {
   console.log("  company B books: 1 customer, 1 intra-state sale of 40,000 @18%");
 
   // ---- A second USER on company A, at the Data Entry level -----------------
-  // No HTTP route can do this (see the caveat at the top), so it is direct SQL.
-  //
-  // The user row is created the same way the auth middleware would on first
-  // login (create-on-first-login), then given the Data Entry security level that
-  // seed_company_auth_defaults already created for company A.
-  const userID = sql(
-    `INSERT INTO app_user (id, subject, email, display_name)
-     VALUES (gen_random_uuid(), '${SUBJ_DATA_ENTRY_A}', 'dataentry@demo.local', 'Demo Data Entry')
-     ON CONFLICT (subject) DO UPDATE SET display_name = EXCLUDED.display_name
-     RETURNING id`,
+  // Through the admin API, exactly as a customer would: the Owner invites a
+  // subject at a named level, and the invitee claims it themselves.
+  const tokOwnerA = await token(SUBJ_OWNER_A);
+
+  const existing = await api<{ members: { subject: string; security_level_name: string }[] }>(
+    "GET",
+    `/v1/companies/${companyA}/members`,
+    tokOwnerA,
   );
-  const deLevel = sql(
-    `SELECT id FROM security_level
-      WHERE company_id = '${companyA}' AND name = 'Data Entry'`,
-  );
-  if (!deLevel) {
-    throw new Error(
-      `company ${companyA} has no 'Data Entry' security level — was it created by POST /v1/companies?`,
+  if (!existing.members.some((m) => m.subject === SUBJ_DATA_ENTRY_A)) {
+    const invite = await api<{ invite_id: string }>(
+      "POST",
+      `/v1/companies/${companyA}/members/invites`,
+      tokOwnerA,
+      {
+        subject: SUBJ_DATA_ENTRY_A,
+        email: "dataentry@demo.local",
+        display_name: "Demo Data Entry",
+        security_level_name: "Data Entry",
+      },
     );
+    console.log(`\n  INVITED ${SUBJ_DATA_ENTRY_A} to A as Data Entry (invite ${invite.invite_id})`);
+
+    // The invitee claims it. GET /v1/me is authn-only precisely so an invited
+    // user — not yet a member of anything — can reach it.
+    const claimed = await api<{ claimed_invites: { company_id: string }[] }>(
+      "GET",
+      "/v1/me",
+      await token(SUBJ_DATA_ENTRY_A, ["pwd"]),
+    );
+    console.log(`  CLAIMED by ${SUBJ_DATA_ENTRY_A}: ${claimed.claimed_invites.length} invite(s)`);
+  } else {
+    console.log(`\n  ${SUBJ_DATA_ENTRY_A} is already a member of A — nothing to invite`);
   }
-  sql(
-    `INSERT INTO company_membership (user_id, company_id, security_level_id)
-     VALUES ('${userID}', '${companyA}', '${deLevel}')
-     ON CONFLICT (user_id, company_id)
-     DO UPDATE SET security_level_id = EXCLUDED.security_level_id`,
-  );
 
   console.log(
     `\n  IDENTITIES\n` +
@@ -236,18 +234,20 @@ async function main(): Promise<void> {
       `    ${SUBJ_OWNER_B.padEnd(20)} Owner      on B   (no membership on A at all)`,
   );
 
-  // Prove the memberships landed, reading them back independently.
-  const rows = sql(
-    `SELECT u.subject || ' -> ' || c.name || ' [' || sl.name || ']'
-       FROM company_membership m
-       JOIN app_user u ON u.id = m.user_id
-       JOIN company c ON c.id = m.company_id
-       JOIN security_level sl ON sl.id = m.security_level_id
-      WHERE m.company_id IN ('${companyA}', '${companyB}')
-      ORDER BY c.name, sl.name`,
-  );
-  console.log(`\n  MEMBERSHIPS (read back from the database)`);
-  for (const r of rows.split("\n").filter(Boolean)) console.log(`    ${r}`);
+  // Prove the memberships landed, reading them back through the admin API —
+  // each company read by ITS OWN owner, since neither may read the other's.
+  console.log(`\n  MEMBERSHIPS (read back through GET /members)`);
+  for (const [label, company, tok] of [
+    ["A", companyA, tokOwnerA],
+    ["B", companyB, tokOwnerB],
+  ] as const) {
+    const { members } = await api<{
+      members: { subject: string; security_level_name: string }[];
+    }>("GET", `/v1/companies/${company}/members`, tok);
+    for (const m of members) {
+      console.log(`    ${m.subject.padEnd(20)} -> company ${label} [${m.security_level_name}]`);
+    }
+  }
 
   console.log(
     `\n  OPEN A:  ${uiUrl}/?company=${companyA}` +

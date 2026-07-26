@@ -166,13 +166,13 @@ async function main(): Promise<void> {
   const stranger = await mint("nobody-at-all", ["webauthn"]);
   const service = await mint("svc:statutoryd", ["pwd"]);
 
-  // Two ledgers on A to post a throwaway journal between.
-  const ledgerIDs = sql(
-    `SELECT id FROM ledger WHERE company_id = '${companyA}'
-      AND name IN ('Cash', 'Capital A/c') ORDER BY name`,
-  ).split("\n");
-  const ledA1 = ledgerIDs[0];
-  const ledA2 = ledgerIDs[1];
+  // Two ledgers on A to post a throwaway journal between. Read through the API
+  // (GET /ledgers), not SQL: the chart of accounts is a supported read now.
+  const ledgerRes = await call("GET", `/v1/companies/${companyA}/ledgers`, ownerA);
+  const ledgers = (JSON.parse(ledgerRes.body) as { ledgers: { id: string; name: string }[] }).ledgers;
+  const byName = (n: string): string | undefined => ledgers.find((l) => l.name === n)?.id;
+  const ledA1 = byName("Cash");
+  const ledA2 = byName("Capital A/c");
   if (!ledA1 || !ledA2) throw new Error("could not resolve two ledgers on company A");
 
   console.log(`\nVERIFYING ACCESS CONTROL\n  A = ${companyA}\n  B = ${companyB}`);
@@ -353,11 +353,24 @@ async function main(): Promise<void> {
   // =========================================================================
   head("5. BACK-DATED CUTOFF — a write before the cutoff is refused");
   // =========================================================================
-  // Applied to the Data Entry level on A, exercised, then removed.
-  sql(
-    `UPDATE security_level SET backdated_cutoff = '2026-07-01'
-      WHERE company_id = '${companyA}' AND name = 'Data Entry'`,
-  );
+  // Applied to the Data Entry level on A, exercised, then removed — through the
+  // ADMIN API (this used to be a psql UPDATE; setting a level's cutoff is now a
+  // supported operation, so the verifier exercises the same path a customer has).
+  const levelsRes = await call("GET", `/v1/companies/${companyA}/security-levels`, ownerA);
+  const levels = (
+    JSON.parse(levelsRes.body) as {
+      security_levels: { id: string; name: string; is_owner: boolean }[];
+    }
+  ).security_levels;
+  const deLevelID = levels.find((l) => l.name === "Data Entry")?.id;
+  if (!deLevelID) throw new Error("company A has no 'Data Entry' security level");
+  const setCutoff = async (value: string): Promise<Res> =>
+    call("PUT", `/v1/companies/${companyA}/security-levels/${deLevelID}`, ownerA, {
+      backdated_cutoff: value,
+    });
+
+  r = await setCutoff("2026-07-01");
+  check("Owner sets the Data Entry back-dated cutoff via the API -> 200", r.status === 200, brief(r));
   try {
     r = await probeJournal(dataEntryA, companyA, ledA1, ledA2, "2026-06-15");
     check(
@@ -372,9 +385,11 @@ async function main(): Promise<void> {
       brief(r),
     );
   } finally {
-    sql(
-      `UPDATE security_level SET backdated_cutoff = NULL
-        WHERE company_id = '${companyA}' AND name = 'Data Entry'`,
+    const cleared = await setCutoff("");
+    check(
+      "cutoff cleared again (the verifier leaves the level as it found it)",
+      cleared.status === 200,
+      brief(cleared),
     );
   }
 
@@ -408,7 +423,160 @@ async function main(): Promise<void> {
   );
 
   // =========================================================================
-  head("8. CLEANUP — leave the books exactly as they were found");
+  head("8. ADMIN SURFACE — users, roles and custom levels, over HTTP");
+  // =========================================================================
+  // Everything here used to be psql-only. The section proves three things: the
+  // surface exists, it is governed by the SAME PDP as the books (so an operator
+  // cannot administer users), and a level created through it actually changes
+  // what its holder can do.
+  r = await call("GET", `/v1/companies/${companyA}/members`, ownerA);
+  const memberSubjects = r.status === 200
+    ? (JSON.parse(r.body) as { members: { subject: string }[] }).members.map((m) => m.subject)
+    : [];
+  check(
+    "Owner -> list members -> 200 with both identities",
+    r.status === 200 &&
+      memberSubjects.includes("browser-dev-owner") &&
+      memberSubjects.includes("demo-data-entry"),
+    `${r.status} [${memberSubjects.join(", ")}]`,
+  );
+
+  r = await call("GET", `/v1/companies/${companyA}/members`, dataEntryA);
+  check(
+    "Data Entry -> list members -> 403 (administering users is not data entry)",
+    r.status === 403,
+    brief(r),
+  );
+
+  r = await call("POST", `/v1/companies/${companyA}/members/invites`, ownerAWeak, {
+    subject: "should-never-exist",
+    security_level_name: "Data Entry",
+  });
+  check(
+    "Owner WITHOUT webauthn -> invite -> 403 STEPUP_REQUIRED (granting access is a write)",
+    r.status === 403 && r.code === "STEPUP_REQUIRED",
+    `code=${r.code ?? "(none)"} ${brief(r)}`,
+  );
+
+  r = await call("GET", `/v1/companies/${companyA}/members`, ownerB);
+  check("Owner of B -> members of A -> 403 (not a member)", r.status === 403, brief(r));
+
+  r = await call("GET", `/v1/companies/${companyA}/members`, service);
+  check(
+    "svc: principal -> members of A -> 403 (svc may pin an IRN, never grant access)",
+    r.status === 403,
+    brief(r),
+  );
+
+  // A misspelled rule is refused at write time. Stored, it would silently never
+  // match — for a `disallow` that is the difference between forbidden and allowed.
+  r = await call("POST", `/v1/companies/${companyA}/security-levels`, ownerA, {
+    name: `ACL Probe Typo ${process.pid}`,
+    default_access: "none",
+    rules: [{ effect: "allow", action: "display", resource: "report:trail-balance" }],
+  });
+  check("a MISSPELLED rule resource -> 422 (closed vocabulary)", r.status === 422, brief(r));
+
+  // A real custom level, granted to a real subject, judged by the PDP.
+  const probeLevelName = `ACL Probe Auditor ${process.pid}`;
+  const probeSubject = `acl-probe-auditor-${process.pid}`;
+  r = await call("POST", `/v1/companies/${companyA}/security-levels`, ownerA, {
+    name: probeLevelName,
+    default_access: "none",
+    rules: [{ effect: "allow", action: "display", resource: "report:trial-balance" }],
+  });
+  const probeLevelID = r.status === 201
+    ? (JSON.parse(r.body) as { security_level_id: string }).security_level_id
+    : "";
+  check("Owner -> create a CUSTOM security level -> 201", r.status === 201 && !!probeLevelID, brief(r));
+
+  r = await call("POST", `/v1/companies/${companyA}/members/invites`, ownerA, {
+    subject: probeSubject,
+    security_level_id: probeLevelID,
+  });
+  check("Owner -> invite a subject at the custom level -> 201", r.status === 201, brief(r));
+
+  const probeTok = await mint(probeSubject, ["pwd"]);
+  r = await call("GET", `/v1/companies/${companyA}/trial-balance`, probeTok);
+  check(
+    "invitee BEFORE claiming -> 403 (an invite is not a membership)",
+    r.status === 403,
+    brief(r),
+  );
+
+  r = await call("GET", "/v1/me", probeTok);
+  const me = r.status === 200
+    ? (JSON.parse(r.body) as {
+        claimed_invites: unknown[];
+        companies: { company_id: string; security_level_name: string }[];
+      })
+    : { claimed_invites: [], companies: [] };
+  check(
+    "GET /v1/me claims the invite and lists the company (the basis for F3 switching)",
+    r.status === 200 &&
+      me.claimed_invites.length === 1 &&
+      me.companies.some((c) => c.company_id === companyA && c.security_level_name === probeLevelName),
+    `${r.status} claimed=${me.claimed_invites.length} companies=${JSON.stringify(me.companies.map((c) => c.security_level_name))}`,
+  );
+
+  r = await call("GET", `/v1/companies/${companyA}/trial-balance`, probeTok);
+  check("custom level -> the ONE report it was granted -> 200", r.status === 200, brief(r));
+
+  r = await call("GET", `/v1/companies/${companyA}/balance-sheet`, probeTok);
+  check("custom level -> a report it was NOT granted -> 403", r.status === 403, brief(r));
+
+  r = await probeJournal(probeTok, companyA, ledA1, ledA2, "2026-07-20");
+  check("custom level -> write a voucher -> 403", r.status === 403, brief(r));
+
+  r = await call("DELETE", `/v1/companies/${companyA}/security-levels/${probeLevelID}`, ownerA);
+  check("delete a level that still has a member -> 409", r.status === 409, brief(r));
+
+  // The last-Owner guard: company A has exactly one Owner, so demoting them is
+  // refused. (Refused, so this check changes no state.)
+  const memberID = async (subject: string): Promise<string> => {
+    const res = await call("GET", `/v1/companies/${companyA}/members`, ownerA);
+    const parsed = JSON.parse(res.body) as { members: { user_id: string; subject: string }[] };
+    return parsed.members.find((m) => m.subject === subject)?.user_id ?? "";
+  };
+  const ownerUserID = await memberID("browser-dev-owner");
+  r = await call("PUT", `/v1/companies/${companyA}/members/${ownerUserID}`, ownerA, {
+    security_level_name: "Data Entry",
+  });
+  check(
+    "demote the LAST Owner -> 409 (a company can never be left unadministrable)",
+    r.status === 409,
+    brief(r),
+  );
+
+  // Undo the probe: remove the member, then the level. Both are also the tests
+  // for those endpoints.
+  const probeUserID = await memberID(probeSubject);
+  r = await call("DELETE", `/v1/companies/${companyA}/members/${probeUserID}`, ownerA);
+  check("Owner -> revoke a member -> 200", r.status === 200, brief(r));
+
+  r = await call("GET", `/v1/companies/${companyA}/trial-balance`, probeTok);
+  check("the revoked member is locked out immediately -> 403", r.status === 403, brief(r));
+
+  r = await call("DELETE", `/v1/companies/${companyA}/security-levels/${probeLevelID}`, ownerA);
+  check("Owner -> delete the now-unused custom level -> 200", r.status === 200, brief(r));
+
+  r = await call("GET", `/v1/companies/${companyA}/security-levels`, ownerA);
+  const remaining = r.status === 200
+    ? (JSON.parse(r.body) as { security_levels: { name: string }[] }).security_levels.map((l) => l.name)
+    : [];
+  // Assert the SEEDED levels are intact and THIS run's probe level is gone —
+  // not that the company has exactly two levels. A real company is expected to
+  // have custom levels; a verifier that failed because of one would be wrong.
+  check(
+    "the seeded levels are intact and this run's probe level is gone",
+    remaining.includes("Owner") &&
+      remaining.includes("Data Entry") &&
+      !remaining.includes(probeLevelName),
+    `[${remaining.join(", ")}]`,
+  );
+
+  // =========================================================================
+  head("9. CLEANUP — leave the books exactly as they were found");
   // =========================================================================
   // Reversing the probes is itself the last check: only an Owner may delete, and
   // the Trial Balance must return to balance afterwards. The tombstones remain

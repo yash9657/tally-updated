@@ -823,6 +823,11 @@ var authCatalogTables = []string{
 	// 0012: the durable (multi-instance) WebAuthn challenge store. User-scoped
 	// exactly like webauthn_credential, so it belongs under the same red team.
 	"webauthn_challenge",
+	// 0020: pending grants addressed to a JWT subject (the SaaS admin surface).
+	// Readable by the administering company OR by the addressee's subject, and
+	// writable ONLY under the company GUC — so it is held to the same
+	// ENABLE+FORCE+explicit-WITH-CHECK bar as every other catalog table.
+	"company_invite",
 }
 
 // TestAuthCatalogTablesForceRLS asserts every new auth catalog table is
