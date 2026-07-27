@@ -57,6 +57,11 @@ type Message struct {
 	Attempts    int
 	LastError   string
 	Status      string
+	// claimedAt is the lease token this message was handed out under. settle
+	// writes only if the row still carries it, so a dispatcher that stalled
+	// past its lease — and whose row was reclaimed and delivered by someone
+	// else — cannot write its own stale outcome over the newer one.
+	claimedAt time.Time
 }
 
 // HasAddress reports whether Recipient looks like something a transport could
@@ -250,6 +255,11 @@ func (d *Dispatcher) dispatchCompany(ctx context.Context, companyID uuid.UUID) (
 	// which then sends the same message. (Measured: four concurrent dispatchers
 	// handed seven of eight messages to the sender twice.)
 	//
+	// SKIP LOCKED is a THROUGHPUT choice, not the correctness mechanism: with it
+	// removed the concurrency test still passes, because what actually
+	// serialises the send is the status transition below plus READ COMMITTED
+	// re-evaluation. Without SKIP LOCKED the losers block instead of moving on.
+	//
 	// So the claim also moves the row to 'sending'. A dispatcher that dies
 	// mid-send leaves a 'sending' row, which becomes claimable again once its
 	// LEASE expires — that is what keeps a crash from stranding a notification
@@ -272,7 +282,7 @@ func (d *Dispatcher) dispatchCompany(ctx context.Context, companyID uuid.UUID) (
 			   FROM claimed c
 			  WHERE n.id = c.id
 			 RETURNING n.id, n.company_id, n.kind, COALESCE(n.ref_id, '00000000-0000-0000-0000-000000000000'::uuid),
-			           n.recipient, n.subject_line, n.body, n.attempts`,
+			           n.recipient, n.subject_line, n.body, n.attempts, n.claimed_at`,
 			companyID, d.batch, d.lease.String())
 		if err != nil {
 			return err
@@ -282,7 +292,7 @@ func (d *Dispatcher) dispatchCompany(ctx context.Context, companyID uuid.UUID) (
 			var m Message
 			var kind string
 			if err := rows.Scan(&m.ID, &m.CompanyID, &kind, &m.RefID,
-				&m.Recipient, &m.SubjectLine, &m.Body, &m.Attempts); err != nil {
+				&m.Recipient, &m.SubjectLine, &m.Body, &m.Attempts, &m.claimedAt); err != nil {
 				return err
 			}
 			m.Kind = Kind(kind)
@@ -308,13 +318,23 @@ func (d *Dispatcher) dispatchCompany(ctx context.Context, companyID uuid.UUID) (
 
 // settle records the outcome of one send: sent, still pending (retry), or
 // failed for good once MaxAttempts is reached.
+//
+// EVERY write is guarded by the lease this message was claimed under
+// (`status = 'sending' AND claimed_at = $N`), because a settle is not
+// necessarily still the authority on the row. A dispatcher that stalls past the
+// 5-minute lease has its row reclaimed and delivered by another; when it
+// finally comes back to record its own failure, an unguarded UPDATE would push
+// an already-'sent' row back to 'pending' and the invitee would be mailed a
+// third time — the very duplicate the lease exists to prevent. Losing that race
+// means the outcome is stale and dropping it is correct.
 func (d *Dispatcher) settle(ctx context.Context, m Message, sendErr error) error {
 	return d.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		if sendErr == nil {
 			_, err := tx.Exec(ctx,
 				`UPDATE notification_outbox
 				    SET status = 'sent', sent_at = now(), last_error = ''
-				  WHERE id = $1`, m.ID)
+				  WHERE id = $1 AND status = 'sending' AND claimed_at = $2`,
+				m.ID, m.claimedAt)
 			return err
 		}
 		status := "pending"
@@ -327,8 +347,9 @@ func (d *Dispatcher) settle(ctx context.Context, m Message, sendErr error) error
 		// have to wait it out — the lease exists for CRASHES, not for failures
 		// the dispatcher lived to record.
 		_, err := tx.Exec(ctx,
-			`UPDATE notification_outbox SET status = $2, last_error = $3 WHERE id = $1`,
-			m.ID, status, truncate(sendErr.Error(), 500))
+			`UPDATE notification_outbox SET status = $2, last_error = $3
+			  WHERE id = $1 AND status = 'sending' AND claimed_at = $4`,
+			m.ID, status, truncate(sendErr.Error(), 500), m.claimedAt)
 		return err
 	})
 }

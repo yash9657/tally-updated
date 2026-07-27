@@ -229,4 +229,47 @@ describe("navMachine unit semantics", () => {
     expect(snap.overlay ?? null).toBeNull();
     expect(snap.config?.entryMode).toBeUndefined();
   });
+
+  // THE CHOICE MUST OUTLIVE THE FRAME.
+  //
+  // entryMode used to live only on the active frame, and Ctrl+A replaces the
+  // frame with a fresh form for bulk entry — so an operator who chose Double
+  // Entry was reverted to single after EVERY save, and again on every F5/F6
+  // round trip. Ctrl+H looked like it worked because the mode did apply; it
+  // just never survived to the next voucher, which is the whole point of a
+  // bulk-entry mode.
+  it("the chosen entry mode SURVIVES Ctrl+A, which re-opens a fresh form", () => {
+    const snap = drive([
+      { type: "KEY", combo: "F5" },
+      { type: "KEY", combo: "Ctrl+H" },
+      { type: "SELECT", menuItem: "Double Entry" },
+      { type: "KEY", combo: "Ctrl+A" },
+    ]);
+    expect(snap.screen).toBe("voucher");
+    expect(snap.config?.entryMode).toBe("double");
+  });
+
+  it("the chosen entry mode survives switching voucher type and back", () => {
+    const snap = drive([
+      { type: "KEY", combo: "F5" },
+      { type: "KEY", combo: "Ctrl+H" },
+      { type: "SELECT", menuItem: "Double Entry" },
+      { type: "KEY", combo: "F6" },
+      { type: "KEY", combo: "F5" },
+    ]);
+    expect(snap.config?.entryMode).toBe("double");
+  });
+
+  it("it is remembered PER TYPE — choosing for Payment says nothing about Receipt", () => {
+    // Tally remembers per voucher type. One global would mean configuring how
+    // you key payments silently reconfigured contras.
+    const snap = drive([
+      { type: "KEY", combo: "F5" },
+      { type: "KEY", combo: "Ctrl+H" },
+      { type: "SELECT", menuItem: "Double Entry" },
+      { type: "KEY", combo: "F6" },
+    ]);
+    expect(snap.voucherType).toBe("receipt");
+    expect(snap.config?.entryMode).toBeUndefined();
+  });
 });

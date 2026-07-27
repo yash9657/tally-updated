@@ -163,6 +163,15 @@ class SupplierMatch(BaseModel):
     gstin_masked: str | None = None
     match_confidence: float = 0.0
 
+    # The ledgers the supplier could be, when the match was AMBIGUOUS rather
+    # than absent. "Which ledger to credit" and "what state the supplier is in"
+    # are separate questions: two ledgers for the same vendor's two branches in
+    # one state leave the first unanswered and the second perfectly clear. Empty
+    # means no candidate was identified at all — a vendor not in these books —
+    # and then the state really is unknown. Ids are validated against the tenant
+    # context before use, so a hallucinated id cannot invent a state.
+    candidate_ledger_ids: list[str] = []
+
 
 class ClassifiedDoc(BaseModel):
     model_config = _FORBID

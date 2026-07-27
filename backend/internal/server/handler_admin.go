@@ -511,7 +511,7 @@ func (s *Server) handleSecurityVocabulary(w http.ResponseWriter, r *http.Request
 		"effects":          effects,
 		"actions":          actions,
 		"resources":        resources,
-		"default_accesses": []string{"full", "none"},
+		"default_accesses": authz.KnownDefaultAccesses,
 	})
 }
 

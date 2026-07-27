@@ -208,6 +208,20 @@ export interface NavContext {
   /** The screen stack; index 0 is the root (gateway), last item is active. */
   stack: ScreenFrame[];
   keymapProfile: string;
+  /**
+   * The entry mode the operator last chose, PER VOUCHER TYPE.
+   *
+   * This cannot live on the frame. Ctrl+A accepts a voucher and re-opens a
+   * fresh form for bulk entry, and a fresh frame carries no config — so an
+   * operator keying a run of double-entry payments was silently reverted to
+   * single entry after EVERY save. Switching F5 -> F6 -> F5 lost it too.
+   * Tally remembers the choice per voucher type, so the map is keyed by type
+   * rather than held as one global: choosing double entry for Payment says
+   * nothing about how you want to key a Contra.
+   *
+   * Absent key = that type's class default (voucherConfig's `entry`).
+   */
+  entryModeByType: Partial<Record<VoucherType, "single" | "double">>;
 }
 
 /** Events accepted by the machine. Mirrors corpus event shapes. */
@@ -235,6 +249,12 @@ const DEFAULT_LAST_VOUCHER: VoucherType = "sales";
 function newVoucherFrame(
   voucherType: VoucherType,
   mode: VoucherMode = "create",
+  /**
+   * The remembered entry mode for this type, from NavContext.entryModeByType.
+   * Omitted leaves the frame with no config, i.e. the class default — which is
+   * what a frame built outside any context (rootFrame) must do.
+   */
+  entryMode?: "single" | "double",
 ): ScreenFrame {
   return {
     screen: "voucher",
@@ -242,6 +262,7 @@ function newVoucherFrame(
     voucherMode: mode,
     field: "date",
     saved: false,
+    ...(entryMode ? { config: { entryMode } } : {}),
   };
 }
 
@@ -256,6 +277,7 @@ export function makeInitialContext(opts: NavMachineOptions = {}): NavContext {
   return {
     stack: [rootFrame(startScreen)],
     keymapProfile: opts.keymapProfile ?? "tallyprime",
+    entryModeByType: {},
   };
 }
 
@@ -365,7 +387,11 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
     case "voucher": {
       // F-key switches voucher type. If the active frame is a voucher, replace
       // it in place; otherwise push a new voucher frame onto the stack.
-      const frame = newVoucherFrame(action.voucherType);
+      const frame = newVoucherFrame(
+        action.voucherType,
+        "create",
+        ctx.entryModeByType[action.voucherType],
+      );
       if (active.screen === "voucher") {
         stack[stack.length - 1] = frame;
       } else {
@@ -673,8 +699,11 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
       }
       // Ctrl+A accepts the voucher and re-opens a fresh form for bulk entry.
       if (active.screen === "voucher") {
+        const type = active.voucherType ?? DEFAULT_LAST_VOUCHER;
         const fresh = newVoucherFrame(
-          active.voucherType ?? DEFAULT_LAST_VOUCHER,
+          type,
+          "create",
+          ctx.entryModeByType[type],
         );
         fresh.saved = true;
         stack[stack.length - 1] = fresh;
@@ -787,10 +816,20 @@ function reduceSelect(ctx: NavContext, menuItem: string): Partial<NavContext> {
     // either: it never offers the label, and effectiveEntryMode() forces
     // "double" for those classes regardless of what the config says.
     const mode = ENTRY_MODE_LABELS[menuItem];
+    active.overlay = undefined;
     if (mode) {
       active.config = { ...(active.config ?? {}), entryMode: mode };
+      stack[stack.length - 1] = active;
+      // Remember it for this voucher TYPE, not just this frame: Ctrl+A replaces
+      // the frame after every save, so a frame-only choice lasts one voucher.
+      const type = active.voucherType;
+      if (type) {
+        return {
+          stack,
+          entryModeByType: { ...ctx.entryModeByType, [type]: mode },
+        };
+      }
     }
-    active.overlay = undefined;
     stack[stack.length - 1] = active;
     return { stack };
   }

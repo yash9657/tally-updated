@@ -103,7 +103,23 @@ def validate_fixture(fx: dict) -> None:
         # derive. (It did exactly that: this check passed for as long as the
         # mapper fell back to supplier_state = place_of_supply, i.e. assumed
         # intra in order to derive intra.)
-        supplier_state = None if header.get("party_ledger_id") is None else "27"
+        #
+        # Read the state off the fixture's OWN tenant ledgers rather than
+        # restating the mapper's rule. A matched party gives its ledger's state;
+        # an AMBIGUOUS match gives the state its candidates agree on (they are
+        # real rows in this fixture's ledger list, so this is document evidence,
+        # not the pipeline's opinion); no candidate at all gives None.
+        by_id = {l["id"]: l for l in fx["input"]["tenant"]["ledgers"]}
+        party = header.get("party_ledger_id")
+        if party is not None:
+            supplier_state = by_id.get(party, {}).get("state_code")
+        else:
+            cands = fx.get("classify", {}).get("supplier_candidates", [])
+            states = {by_id[c].get("state_code") for c in cands if c in by_id}
+            supplier_state = (
+                states.pop() if len(cands) == len(
+                    [c for c in cands if c in by_id]) and len(states) == 1 else None
+            )
         res = taxmod.tax_derive(
             supplier_state_code=supplier_state,
             place_of_supply_state_code=pos,

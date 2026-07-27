@@ -177,10 +177,15 @@ class PureVoucherDraftMapper:
         # vendor it puts input tax in the wrong two ledgers and misstates GSTR-3B
         # table 4.
         #
-        # There is no honest fallback available here: the supplier's GSTIN — the
-        # one field whose first two digits ARE the state code — is masked before
-        # the LLM ever sees it (the PII boundary, working as designed), so
-        # `inferred.supplier_gstin_masked` cannot supply it either.
+        # The obvious source is closed to us: the supplier's GSTIN — the one
+        # field whose first two digits ARE the state code — is masked before the
+        # LLM ever sees it (the PII boundary, working as designed), so
+        # `inferred.supplier_gstin_masked` cannot supply it. One honest fallback
+        # does exist and is applied below: an AMBIGUOUS match whose candidates
+        # all sit in one state tells us the state without telling us the ledger.
+        # (A second, not yet built: the plain-text "State: ... Code: NN" line
+        # that real bills print is not PII and survives redaction, but
+        # InferredInvoice has nowhere to put it. See HANDOFF §6.)
         #
         # So when the supplier is unmatched the state is None, `tax_derive`
         # cannot conclude intra, and the draft says so via `unresolved`. The tax
@@ -192,11 +197,44 @@ class PureVoucherDraftMapper:
             if led.id == party_ledger_id and led.state_code:
                 supplier_state = led.state_code
                 break
+
+        # AMBIGUOUS IS NOT UNKNOWN.
+        #
+        # When the classifier could not choose between several ledgers but they
+        # all sit in the same state, the supplier's state is not in doubt — only
+        # which account to credit is. Two ledgers for one vendor's two branches
+        # in Maharashtra are the ordinary case, and refusing to split the tax
+        # there is as wrong as guessing: it books input IGST on a supply the
+        # document itself shows as intra-state.
+        #
+        # Unanimity is required, every candidate must be a real ledger in THIS
+        # tenant (so a hallucinated id cannot introduce a state), and every one
+        # must carry a state code — one blank makes the set silent, not
+        # unanimous. An empty candidate list is the genuinely-unknown case: a
+        # vendor not in these books at all, where no fallback is available.
+        if supplier_state is None and cls.supplier_match.candidate_ledger_ids:
+            by_id = {led.id: led for led in ctx.ledgers}
+            states = {
+                by_id[cid].state_code
+                for cid in cls.supplier_match.candidate_ledger_ids
+                if cid in by_id
+            }
+            if len(cls.supplier_match.candidate_ledger_ids) == len(
+                [c for c in cls.supplier_match.candidate_ledger_ids if c in by_id]
+            ) and len(states) == 1:
+                only = states.pop()
+                if only:
+                    supplier_state = only
+
         if supplier_state is None:
-            # Distinct from "party": the party is who to credit, the supplier
-            # state is what splits the tax. A human can resolve one without the
-            # other, so the draft names both.
-            unresolved.append("supplier")
+            # A DISTINCT token, not "supplier". The header-confidence floor
+            # already emits "supplier" for the identity question — who this
+            # vendor is — and the state question is a different one that a human
+            # can answer separately: an ambiguous match resolves the state and
+            # leaves the identity open (see the candidate rule above). Sharing
+            # one token made the two indistinguishable in the draft, so a split
+            # that HAD been derived still read as unasserted.
+            unresolved.append("supplier_state")
         reverse_charge = inferred.reverse_charge
 
         # --- line items -> GST lines + postings ---------------------------

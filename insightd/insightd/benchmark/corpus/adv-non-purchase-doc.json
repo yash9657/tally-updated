@@ -1,6 +1,6 @@
 {
   "id": "adv-non-purchase-doc",
-  "description": "Delivery challan / quotation -> not a purchase -> manual. GROUND TRUTH CORRECTED: it previously expected cgst 90 / sgst 90 alongside party_ledger_id: null, which contradicts itself \u2014 an unmatched supplier has no known state, so an intra-state split cannot be ground truth. It recorded what a circular fallback produced (supplier_state = place_of_supply). With the state genuinely unknown the derivation reaches no intra conclusion, so the whole tax sits in IGST: the no-conclusion default, not a claim about this vendor.",
+  "description": "Delivery challan / quotation -> not a purchase -> manual, and NOTHING is posted. The derived_gst block below is therefore not a claim about this document's tax at all — a challan has none to claim. It records the no-conclusion default the pipeline reaches when there is no candidate supplier ledger (contrast adv-ambiguous-supplier, where candidates exist and agree, so the state IS known). The value is retained only so the oracle has something to check; a challan that carried no derived_gst at all would be more honest, and is tracked in HANDOFF §6.",
   "rulesetVersion": "gst-2024-09",
   "ocr_quality": "clean",
   "input": {
@@ -158,7 +158,7 @@
         {
           "id": "L-PARTY-1",
           "name": "Acme Components Pvt Ltd",
-          "gstin_masked": "27ABC\u20261Z5",
+          "gstin_masked": "27ABC…1Z5",
           "state_code": "27",
           "kind": "party"
         },

@@ -180,9 +180,18 @@ func queryBalances(
 	// themselves), so the statement still foots either way.
 	if foldOpening && to != nil {
 		var begins string
+		// Name the company explicitly rather than trusting `LIMIT 1` over
+		// whatever RLS happens to leave visible. It is correct today — company
+		// is FORCE ROW LEVEL SECURITY — but a caller that ran without the
+		// tenant GUC, or any policy that widened `company`, would silently pick
+		// an arbitrary tenant's books-beginning date and mis-date the opening
+		// cutoff on someone else's Balance Sheet. current_setting(...,true)
+		// yields NULL when unset, which matches no row and falls through to the
+		// ErrNoRows branch below — the existing fail-safe.
 		err := tx.QueryRow(ctx,
 			`SELECT to_char(COALESCE(books_beginning_from, fy_start_date), 'YYYY-MM-DD')
-			   FROM company LIMIT 1`).Scan(&begins)
+			   FROM company
+			  WHERE id = current_setting('app.current_company_id', true)::uuid`).Scan(&begins)
 		switch {
 		case errors.Is(err, pgx.ErrNoRows):
 			// No company row in scope; leave the opening in rather than guess.

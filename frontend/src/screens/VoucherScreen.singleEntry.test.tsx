@@ -59,6 +59,29 @@ function renderShell(client: CoredClient) {
   );
 }
 
+/**
+ * Resolve the posted ledger_ids back to names.
+ *
+ * Counting sides is NOT enough to pin orientation. A one-particular voucher has
+ * exactly one debit and one credit whichever way round it is built, so a test
+ * that asserts only lengths and amounts passes just as happily on a REVERSED
+ * voucher. Every orientation assertion below therefore names the ledger it
+ * expects on each side.
+ */
+async function sidesByName(
+  client: CoredClient,
+  postings: PostingRequest[],
+): Promise<{ debits: [string, string][]; credits: [string, string][] }> {
+  const { ledgers } = await client.listLedgers("co-1");
+  const nameOf = new Map(ledgers.map((l) => [l.id, l.name]));
+  const on = (side: string): [string, string][] =>
+    postings
+      .filter((p) => p.dr_cr.toUpperCase().startsWith(side))
+      .map((p): [string, string] => [nameOf.get(p.ledger_id) ?? p.ledger_id, p.amount])
+      .sort((a, b) => a[0].localeCompare(b[0]));
+  return { debits: on("D"), credits: on("C") };
+}
+
 /** Fill the single-entry form: one account, then N particulars. */
 async function fillSingleEntry(
   account: string,
@@ -126,17 +149,20 @@ describe("single entry posts a BALANCED, correctly-ORIENTED voucher", () => {
     const postings = (req as { postings: PostingRequest[] }).postings;
     expect(postings).toHaveLength(3);
 
-    // ORIENTATION: money OUT credits the bank; the expenses are debited.
-    const credits = postings.filter((p) => p.dr_cr.toUpperCase().startsWith("C"));
-    const debits = postings.filter((p) => p.dr_cr.toUpperCase().startsWith("D"));
-    expect(credits).toHaveLength(1);
-    expect(credits[0]!.amount).toBe("4000.0000");
-    expect(debits.map((d) => d.amount).sort()).toEqual(["1500.0000", "2500.0000"]);
+    // ORIENTATION: money OUT credits the bank; the expenses are debited. Named
+    // by LEDGER, so a builder that put the right amounts on the wrong accounts
+    // cannot pass.
+    const { debits, credits } = await sidesByName(client, postings);
+    expect(credits).toEqual([["HDFC Bank", "4000.0000"]]);
+    expect(debits).toEqual([
+      ["Electricity", "1500.0000"],
+      ["Office Rent", "2500.0000"],
+    ]);
 
     // BALANCED to the paisa — the sum is computed in paise, so two lines cannot
     // drift by a rounding cent.
-    const sum = (ps: PostingRequest[]) =>
-      ps.reduce((t, p) => t + Math.round(parseFloat(p.amount) * 10000), 0);
+    const sum = (ps: [string, string][]) =>
+      ps.reduce((t, [, a]) => t + Math.round(parseFloat(a) * 10000), 0);
     expect(sum(debits)).toBe(sum(credits));
   });
 
@@ -144,23 +170,57 @@ describe("single entry posts a BALANCED, correctly-ORIENTED voucher", () => {
     // The control that makes the payment test meaningful. Without it, a builder
     // that credited the account unconditionally would pass above and be wrong
     // for every receipt in the product.
+    //
+    // TWO particulars, deliberately. With one, the voucher has exactly one debit
+    // and one credit whichever way round it is built, and a count-and-amount
+    // assertion is invariant under reversal — which is how this test formerly
+    // stayed green while the bank was CREDITED on money coming IN.
     const { client, spies } = spyClient();
     renderShell(client);
     const app = screen.getByRole("application");
     fireEvent.keyDown(app, { key: "F6" });
 
-    await fillSingleEntry("HDFC Bank", [["Consulting Income", "9000"]]);
+    await fillSingleEntry("HDFC Bank", [
+      ["Consulting Income", "9000"],
+      ["Interest Received", "1000"],
+    ]);
     fireEvent.keyDown(app, { key: "a", ctrlKey: true });
     await waitFor(() => expect(spies.postReceiptVoucher).toHaveBeenCalledTimes(1));
 
     const [, req] = spies.postReceiptVoucher!.mock.calls[0]!;
     const postings = (req as { postings: PostingRequest[] }).postings;
-    const debits = postings.filter((p) => p.dr_cr.toUpperCase().startsWith("D"));
-    const credits = postings.filter((p) => p.dr_cr.toUpperCase().startsWith("C"));
-    expect(debits).toHaveLength(1);
-    expect(debits[0]!.amount).toBe("9000.0000");
-    expect(credits).toHaveLength(1);
-    expect(credits[0]!.amount).toBe("9000.0000");
+    const { debits, credits } = await sidesByName(client, postings);
+    expect(debits).toEqual([["HDFC Bank", "10000.0000"]]);
+    expect(credits).toEqual([
+      ["Consulting Income", "9000.0000"],
+      ["Interest Received", "1000.0000"],
+    ]);
+  });
+
+  it("a CONTRA credits the source account and debits the destination", async () => {
+    // Contra had single-entry mode and NO posting test at all: reversing its
+    // orientation alone left the whole suite green. Cash withdrawn from the bank
+    // CREDITS the bank and DEBITS cash.
+    const { client, spies } = spyClient();
+    renderShell(client);
+    const app = screen.getByRole("application");
+    fireEvent.keyDown(app, { key: "F4" });
+
+    await fillSingleEntry("HDFC Bank", [
+      ["Cash", "5000"],
+      ["Petty Cash", "500"],
+    ]);
+    fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    await waitFor(() => expect(spies.postContraVoucher).toHaveBeenCalledTimes(1));
+
+    const [, req] = spies.postContraVoucher!.mock.calls[0]!;
+    const postings = (req as { postings: PostingRequest[] }).postings;
+    const { debits, credits } = await sidesByName(client, postings);
+    expect(credits).toEqual([["HDFC Bank", "5500.0000"]]);
+    expect(debits).toEqual([
+      ["Cash", "5000.0000"],
+      ["Petty Cash", "500.0000"],
+    ]);
   });
 
   it("refuses to post with no particulars rather than saving an empty voucher", async () => {

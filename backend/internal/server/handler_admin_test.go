@@ -627,6 +627,70 @@ func TestMeIsTheCompanySwitchList(t *testing.T) {
 	}
 }
 
+// TestDataEntryReadsTheCompanyAndMastersAndNothingWider pins the WIDTH of what
+// migration 0022 granted.
+//
+// 0022 gave Data Entry `display company` + `display master` so the voucher party
+// picker can read the real chart of accounts. `display master` must stay a READ:
+// the same `master` resource is also emitted by the master WRITE routes, so a
+// one-token change in routeAction — remapping PUT .../opening from (Alter,
+// master) to (Display, master), say — would hand every operator in the product
+// the power to restate opening balances.
+//
+// That narrowness was previously asserted only by frontend/scripts/verify-tenancy.mts,
+// a live script that `go test ./...` never runs; the widening mutation passed the
+// whole Go suite. Both halves are pinned here, positive and negative, because a
+// grant test that only checks the 403s passes just as well when the feature is
+// broken and the picker is empty.
+func TestDataEntryReadsTheCompanyAndMastersAndNothingWider(t *testing.T) {
+	srv := newServer(t)
+	companyID, ownerTok, _ := newAdminCompany(t, srv)
+	base := "/v1/companies/" + companyID
+	ledgerID := createLedgerAs(t, srv, base, ownerTok, "Grant Probe Ledger", "Sundry Debtors")
+
+	subject := "de-grant-" + uuid.NewString()[:8]
+	rec, _ := doRaw(t, srv, http.MethodPost, base+"/members/invites", ownerTok,
+		map[string]any{"subject": subject, "security_level_name": "Data Entry"})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("invite Data Entry = %d (%s)", rec.Code, rec.Body.String())
+	}
+	de := mintToken(t, srv, subject, "webauthn")
+	// An unclaimed invite grants nothing; GET /v1/me is what claims it.
+	if rec, body := doRaw(t, srv, http.MethodGet, "/v1/me", de, nil); rec.Code != http.StatusOK ||
+		len(list(t, body, "claimed_invites")) != 1 {
+		t.Fatalf("claiming the Data Entry invite = %d (%s)", rec.Code, rec.Body.String())
+	}
+
+	// POSITIVE — without these two the party picker is empty and the first
+	// voucher in a new company is unkeyable.
+	for _, tc := range []struct{ what, path string }{
+		{"read the company it keys", base},
+		{"read the chart of accounts", base + "/ledgers"},
+	} {
+		if rec, _ := doRaw(t, srv, http.MethodGet, tc.path, de, nil); rec.Code != http.StatusOK {
+			t.Errorf("as Data Entry, %s (GET %s) = %d, want 200 — migration 0022 granted this",
+				tc.what, tc.path, rec.Code)
+		}
+	}
+
+	// NEGATIVE — `display master` is a read and nothing more.
+	for _, tc := range []struct{ what, method, path string }{
+		{"restate an opening balance", http.MethodPut, base + "/ledgers/" + ledgerID + "/opening"},
+		{"create a ledger", http.MethodPost, base + "/ledgers"},
+		{"create a group", http.MethodPost, base + "/groups"},
+		{"create a voucher type", http.MethodPost, base + "/voucher-types"},
+		{"list the members", http.MethodGet, base + "/members"},
+		{"read the ACL vocabulary", http.MethodGet, base + "/security-levels/vocabulary"},
+		{"list the security levels", http.MethodGet, base + "/security-levels"},
+	} {
+		rec, _ := doRaw(t, srv, tc.method, tc.path, de, map[string]any{"name": "Widened"})
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("as Data Entry, %s (%s %s) = %d, want 403 — 0022 granted a READ of company and "+
+				"master, nothing wider", tc.what, tc.method, tc.path, rec.Code)
+		}
+	}
+}
+
 // TestMeRequiresAuthentication keeps /v1/me on the right side of the 401/403
 // contract: it is authn-only, so a missing/invalid token is 401 (not 403).
 func TestMeRequiresAuthentication(t *testing.T) {
@@ -793,10 +857,14 @@ func TestAdminVocabularyIsExactlyWhatTheServerAccepts(t *testing.T) {
 			t.Errorf("effect %q is writable but not served", e)
 		}
 	}
-	for _, da := range []string{"full", "none"} {
+	for _, da := range authz.KnownDefaultAccesses {
 		if !has(defaults, da) {
 			t.Errorf("default_access %q is writable but not served", da)
 		}
+	}
+	if len(defaults) != len(authz.KnownDefaultAccesses) {
+		t.Errorf("served default_accesses %v, want exactly %v — a served value the "+
+			"validator rejects is drift in the other direction", defaults, authz.KnownDefaultAccesses)
 	}
 
 	// -- CONTROL: the proven-422 near-misses are not on offer ----------------

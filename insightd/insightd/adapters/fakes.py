@@ -207,16 +207,24 @@ class FakeClassifier:
                     match_confidence=float(spec.get("supplier_confidence", 0.98)),
                 )
         # ambiguous / none / missing-gstin -> leave ledger_id None (Alt+C path).
+        #
+        # `supplier_candidates` states WHICH ledgers tied, the same way the spec
+        # already states that they tied at all. An ambiguous match is not the
+        # same as no match: the real classifier knows the shortlist it could not
+        # choose from, and throwing it away loses the state the shortlist agrees
+        # on. "none" leaves it empty, which is the genuinely-unknown case.
         name = None
         for led in ctx.ledgers:
             if led.kind == "party" and led.name and led.name.upper() in text.upper():
                 name = led.name
                 break
+        candidates = [str(x) for x in spec.get("supplier_candidates", [])]
         return SupplierMatch(
             ledger_id=None,
             name=name,
             gstin_masked=gstin_masked,
             match_confidence=float(spec.get("supplier_confidence", 0.4)),
+            candidate_ledger_ids=candidates,
         )
 
     @staticmethod

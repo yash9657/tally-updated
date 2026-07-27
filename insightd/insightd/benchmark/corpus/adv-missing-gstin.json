@@ -1,6 +1,6 @@
 {
   "id": "adv-missing-gstin",
-  "description": "No GSTIN present; supplier can't be matched -> manual. GROUND TRUTH CORRECTED: it previously expected cgst 90 / sgst 90 alongside party_ledger_id: null, which contradicts itself \u2014 an unmatched supplier has no known state, so an intra-state split cannot be ground truth. It recorded what a circular fallback produced (supplier_state = place_of_supply). With the state genuinely unknown the derivation reaches no intra conclusion, so the whole tax sits in IGST: the no-conclusion default, not a claim about this vendor.",
+  "description": "No GSTIN present; no candidate supplier ledger at all -> the supplier's state is genuinely unknowable from this document, so the derivation reaches no intra conclusion and the whole tax sits in IGST. That is the no-conclusion DEFAULT, not a derived claim about this vendor: the amount is 180 either way and only the split is unasserted, which the draft says via unresolved 'supplier_state'. Contrast adv-ambiguous-supplier: candidates exist there and agree on a state, so it is resolved despite the ledger being unresolved. Ambiguous is not unknown.",
   "rulesetVersion": "gst-2024-09",
   "ocr_quality": "clean",
   "input": {
@@ -108,7 +108,7 @@
         {
           "id": "L-PARTY-1",
           "name": "Acme Components Pvt Ltd",
-          "gstin_masked": "27ABC\u20261Z5",
+          "gstin_masked": "27ABC…1Z5",
           "state_code": "27",
           "kind": "party"
         },

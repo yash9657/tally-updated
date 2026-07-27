@@ -234,6 +234,80 @@ func TestProfitAndLossIsAPeriodStatement(t *testing.T) {
 	}
 }
 
+// TestPeriodBoundsAreInclusiveOnBothEnds pins the boundary contract itself.
+//
+// It exists because two mutations survived the whole package: flipping the
+// P&L's upper bound from `voucher_date <= $2` to `< $2`, and its lower bound
+// from `>= $1` to `> $1`, both left `go test ./internal/reporting` green. No
+// test had ever placed a voucher ON a bound — every fixture date sat strictly
+// inside or outside one — so a full off-by-one on all three statements was
+// invisible to Go, defended only by the live verify:demo script.
+//
+// Inclusive on both ends is the contract users expect: "1 April to 30 June"
+// includes everything posted on 1 April and on 30 June.
+func TestPeriodBoundsAreInclusiveOnBothEnds(t *testing.T) {
+	pool, ctx, companyID, ids := setup(t)
+	l := seedBooks(t, pool, ctx, ids) // everything in April 2025
+	rep := reporting.NewService(pool)
+
+	// One expense standing alone on a date no fixture touches, so every figure
+	// below moves by exactly this amount or not at all.
+	const on, day = "2025-09-10", "333"
+	postJournalOn(t, pool, ctx, ids, on, l.rent, l.cash, day)
+
+	net := func(from, to string) decimal.Decimal {
+		pl, err := rep.ProfitAndLoss(ctx, companyID, from, to)
+		if err != nil {
+			t.Fatalf("p&l %q..%q: %v", from, to, err)
+		}
+		return pl.NetProfit
+	}
+
+	// UPPER bound: the voucher is in when `to` is its own date, out one day
+	// earlier. The difference between the two is the whole of it.
+	upToDay, upToDayBefore := net("2025-09-01", on), net("2025-09-01", "2025-09-09")
+	if !upToDayBefore.Sub(upToDay).Equal(dec(day)) {
+		t.Errorf("P&L to=%s is %s and to=2025-09-09 is %s: an expense dated exactly on the upper "+
+			"bound must be INCLUDED, so the two must differ by exactly %s",
+			on, upToDay.StringFixed(4), upToDayBefore.StringFixed(4), day)
+	}
+
+	// LOWER bound: in when `from` is its own date, out one day later.
+	fromDay, fromDayAfter := net(on, "2025-09-30"), net("2025-09-11", "2025-09-30")
+	if !fromDayAfter.Sub(fromDay).Equal(dec(day)) {
+		t.Errorf("P&L from=%s is %s and from=2025-09-11 is %s: an expense dated exactly on the lower "+
+			"bound must be INCLUDED, so the two must differ by exactly %s",
+			on, fromDay.StringFixed(4), fromDayAfter.StringFixed(4), day)
+	}
+
+	// `as_on` is the same bound on a position. Read the Rent row, not the totals:
+	// a Trial Balance nets each ledger, so debiting Rent and crediting Cash by
+	// the same amount leaves TotalDebit unmoved and would hide the boundary.
+	rentAsOn := func(asOn string) decimal.Decimal {
+		tb, err := rep.TrialBalance(ctx, companyID, asOn)
+		if err != nil {
+			t.Fatalf("trial balance as on %q: %v", asOn, err)
+		}
+		if !tb.IsBalanced() {
+			t.Errorf("Trial Balance as on %q does not balance: %s vs %s",
+				asOn, tb.TotalDebit.StringFixed(4), tb.TotalCredit.StringFixed(4))
+		}
+		for _, r := range tb.Rows {
+			if r.LedgerName == "Rent Paid" {
+				return r.Debit.Sub(r.Credit)
+			}
+		}
+		t.Fatalf("no Rent Paid row in the Trial Balance as on %q", asOn)
+		return decimal.Zero
+	}
+	before, onDay := rentAsOn("2025-09-09"), rentAsOn(on)
+	if !onDay.Sub(before).Equal(dec(day)) {
+		t.Errorf("Rent Paid as_on=2025-09-09 is %s and as_on=%s is %s: a voucher dated exactly "+
+			"on as_on must be INCLUDED, so the two must differ by exactly %s",
+			before.StringFixed(4), on, onDay.StringFixed(4), day)
+	}
+}
+
 // TestProfitAndLossExcludesOpeningBalance is the half most easily got wrong: an
 // opening balance is a position carried from BEFORE the books began, so it is
 // not income or expenditure of any period. The Balance Sheet must still see it.

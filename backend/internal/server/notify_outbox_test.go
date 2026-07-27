@@ -348,3 +348,93 @@ func TestAStrandedClaimIsReclaimedWhenItsLeaseExpires(t *testing.T) {
 			"died mid-send would strand the invitee forever", got)
 	}
 }
+
+// hijackSender runs an arbitrary hook in the middle of a send, so a test can
+// interleave a SECOND dispatcher between one dispatcher's claim and its settle.
+type hijackSender struct {
+	during func(m notify.Message)
+	err    error
+}
+
+func (h hijackSender) Send(_ context.Context, m notify.Message) error {
+	if h.during != nil {
+		h.during(m)
+	}
+	return h.err
+}
+
+// TestAStaleSettleCannotResurrectAMessageAnotherDispatcherAlreadySent closes the
+// hole the lease left open at the OTHER end.
+//
+// The claim is serialised and a dead dispatcher's row is reclaimed after its
+// lease — but the dispatcher that stalled is not necessarily dead. It can come
+// back, after its row has been reclaimed and DELIVERED by someone else, and
+// record the outcome of its own long-dead attempt. `settle` used to UPDATE by
+// id alone, so that late failure would push an already-'sent' row back to
+// 'pending', the next tick would send it again, and the invitee would be mailed
+// a third time — reintroducing the exact duplicate the lease exists to prevent,
+// via the one path the concurrency test does not exercise (it never stalls a
+// dispatcher past its lease).
+//
+// Every settle is therefore guarded by the lease token the message was claimed
+// under. This test makes a dispatcher lose that race deliberately.
+func TestAStaleSettleCannotResurrectAMessageAnotherDispatcherAlreadySent(t *testing.T) {
+	srv := newServer(t)
+	companyID, ownerTok, _ := newAdminCompany(t, srv)
+	subject := "stale-settle-" + uuid.NewString()[:8]
+	inviteID := invite(t, srv, companyID, ownerTok, subject, subject+"@example.test")
+
+	conn := superuser(t)
+	ctx := context.Background()
+	status := func() string {
+		t.Helper()
+		return fmt.Sprint(inviteRow(t, srv, companyID, ownerTok, subject)["notification_status"])
+	}
+
+	var reclaimed int
+	stalled := hijackSender{
+		// Called while THIS dispatcher holds the claim. Standing in for "an hour
+		// passed inside Send": age the claim so the lease has expired, then let a
+		// second dispatcher take the row and deliver it. That reclaim rewrites
+		// claimed_at, which is precisely what makes our token stale — the same
+		// thing that would happen if the clock had really advanced.
+		during: func(notify.Message) {
+			if _, err := conn.Exec(ctx,
+				`UPDATE notification_outbox SET claimed_at = now() - '1 hour'::interval
+				  WHERE ref_id = $1`, inviteID); err != nil {
+				t.Errorf("age the claim: %v", err)
+				return
+			}
+			n, err := srv.DispatchNotifications(ctx)
+			if err != nil {
+				t.Errorf("second dispatcher: %v", err)
+			}
+			reclaimed = n
+		},
+		// ...and only now does the stalled dispatcher's own send fail.
+		err: errors.New("stalled transport gave up"),
+	}
+
+	if _, err := srv.WithNotificationSender(stalled).DispatchOnce(ctx); err != nil {
+		t.Fatalf("stalled dispatcher: %v", err)
+	}
+	if reclaimed != 1 {
+		t.Fatalf("the second dispatcher delivered %d messages, want 1 — the setup did "+
+			"not actually reclaim the row, so this test proves nothing", reclaimed)
+	}
+
+	if got := status(); got != "sent" {
+		t.Fatalf("after a stale settle the notification is %q, want \"sent\" — a dispatcher "+
+			"that lost its lease overwrote the outcome of the one that actually "+
+			"delivered, and the invitee will be mailed again", got)
+	}
+
+	// And nothing is left claimable: a following tick must find nothing to do.
+	n, err := srv.DispatchNotifications(ctx)
+	if err != nil {
+		t.Fatalf("follow-up dispatch: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("a follow-up tick sent %d more copies of an already-delivered message", n)
+	}
+}

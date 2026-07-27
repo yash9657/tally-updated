@@ -110,6 +110,19 @@ func ValidateRule(r Rule) error {
 	return nil
 }
 
-// ValidDefaultAccess reports whether da is one of the two default_access values
-// the DB CHECK constraint permits.
-func ValidDefaultAccess(da string) bool { return da == "full" || da == "none" }
+// KnownDefaultAccesses is every default_access value a security level may carry.
+// The DB CHECK constraint on security_level.default_access pins the same pair;
+// both the validator below and the served vocabulary read it, so the two cannot
+// drift apart.
+var KnownDefaultAccesses = []string{"full", "none"}
+
+// ValidDefaultAccess reports whether da is one of the default_access values the
+// DB CHECK constraint permits.
+func ValidDefaultAccess(da string) bool {
+	for _, k := range KnownDefaultAccesses {
+		if da == k {
+			return true
+		}
+	}
+	return false
+}
