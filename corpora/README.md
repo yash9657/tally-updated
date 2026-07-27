@@ -111,3 +111,41 @@ field — NEVER by dumping importer output. The five datasets are:
 | `03-billwise-outstandings` | per-party + per-bill Pending/ageing; debtor TB == sum of open bills (needs `<BILLALLOCATIONS.LIST>` import) |
 | `04-edited-deleted`  | GUID idempotency (re-import = no-op); ALTER current-version-wins; DELETE contributes zero (needs ACTION=Alter/Delete import) |
 | `05-rounding-edge`   | paisa-exact at a half-paisa rounding boundary; imported tax must match the engine (`deriveAndVerifyGST`) |
+
+## 5. `inventory/` — Stock valuation (consumed by `backend/internal/inventory`)
+
+**Stock value is never stored.** No column holds a derived stock value or a valuation rate: value is derived at report time by replaying the movement ledger through a pure valuer (`inventory.Replay` / `inventory.ReplayAll`). These fixtures are the shared oracle for that replay — `TestWeightedAverageCorpus` on the Go side, and an **independent Python re-derivation** in `validate.py` (`_inv_replay`) that re-computes every expected number from the movements, so a wrong golden value fails CI even if the Go valuer agreed with it.
+
+A position is `(stockItem, godown, batch)`; a `null` dimension is the SQL NULL and is a *different* position from a named one (`IS NOT DISTINCT FROM` grouping). `qty` is **always positive** — `direction` (`IN`/`OUT`, the `stock_direction` enum) carries the sign. Replay order is `(voucherDate, voucherNo, versionCreatedAt, lineNo, versionId)` and the *replayer applies it itself*, so a caller cannot change the answer by reading rows in a different order.
+
+```jsonc
+{
+  "id": "02-rate-change-reprices-closing",
+  "description": "... the hand derivation, shown in full — a fixture that does not show its arithmetic cannot be reviewed ...",
+  "valuationMethod": "WEIGHTED_AVG",
+  "godowns": ["main-location"],                                  // optional; membership is checked
+  "batches": [{ "id": "b-2609", "stockItem": "vaccine", "expiryDate": "2026-09-30" }], // optional
+  "openings": [{ "stockItem": "widget", "godown": null, "batch": null, "qty": "10.0000", "rate": "90.0000" }],
+  "movements": [
+    { "voucherDate": "2026-04-01", "voucherNo": "PUR-1", "versionCreatedAt": "2026-04-01T10:00:00+05:30",
+      "versionId": "PUR-1/v1", "lineNo": 1, "stockItem": "widget", "godown": null, "batch": null,
+      "direction": "IN", "qty": "10.0000", "rate": "100.0000", "discountPct": "0.0000" }
+  ],
+  "expected": { "positions": [
+    { "stockItem": "widget", "godown": null, "batch": null,
+      "openingQty": "...", "openingValue": "...", "inwardQty": "...", "inwardValue": "...",
+      "outwardQty": "...", "outwardValue": "...",
+      "closingQty": "...", "closingValue": "...", "closingRate": "..." } ] }
+}
+```
+
+`outwardValue` is what the issues **consumed at cost**, not what they sold for; `openingValue + inwardValue - outwardValue == closingValue` holds for every position (`TestValueIsConserved`). `versionId` is an opaque token, used only as the final tiebreak that makes the replay order total.
+
+| id | proves |
+| --- | --- |
+| `01-simple-in-out` | the base case: one purchase, one issue at the running average |
+| `02-rate-change-reprices-closing` | a second purchase re-prices every unit on hand; landed cost is net of `discount_pct` |
+| `03-backdated-inward-revalues-outward` | **why value is not materialised** — a purchase *dated before* an already-posted issue changes that issue's cost (1000.0000 → 750.0000) with the issue untouched. Carries a `backdatedInward` block holding the "before" world, which both oracles replay too |
+| `04-per-godown-positions` | one item in two godowns is two positions with two costs; blending them changes the money |
+| `05-batch-with-expiry` | batch is part of the position key; the expiry date is master metadata and never enters the arithmetic |
+| `06-opening-folded-in` | `stock_opening` folds in as the first inward, and a recurring average (1400/15) is carried at 16 dp so only the *consumed value* is rounded to 4 dp |

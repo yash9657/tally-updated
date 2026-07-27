@@ -1,8 +1,13 @@
 // Package masters owns the accounting and inventory master data — Groups,
-// Ledgers, Voucher Types, Stock Items and Units — for a company. It is the
-// authoritative writer of the master tables (account_group, ledger,
-// voucher_type, stock_item, unit) and resolves masters by name for the posting
-// path.
+// Ledgers, Voucher Types, Stock Items, Units, Godowns and Batches — for a
+// company. It is the authoritative writer of the master tables (account_group,
+// ledger, voucher_type, stock_item, unit, godown, stock_batch) and resolves
+// masters by name for the posting path.
+//
+// It also writes stock_opening, the opening POSITION of a stock item. That is
+// master-setup data (stated as at company.books_beginning_from), not a
+// movement: the immutable stock_movement ledger is written only inside
+// ledger.post().
 //
 // Every write goes through the tenant-scoped GUC guard (db.RunInTx), so the
 // default-deny RLS policies confine it to the caller's company. Masters are
@@ -628,20 +633,40 @@ func (s *Service) UnitID(ctx context.Context, symbol string) (uuid.UUID, error) 
 
 // StockItem is an inventory master item.
 type StockItem struct {
-	ID          uuid.UUID
-	Name        string
-	UnitSymbol  string // resolved to unit_id; optional
-	HSN         string
-	GSTRatePct  decimal.Decimal
+	ID         uuid.UUID
+	Name       string
+	UnitSymbol string // resolved to unit_id; optional
+	HSN        string
+	GSTRatePct decimal.Decimal
+	// OpeningQty/OpeningRate are the item's OPENING POSITION — the stock
+	// already on hand as at company.books_beginning_from. They are NOT columns
+	// on the item: since migration 0025 they are written as a stock_opening
+	// row at the company's system 'Main Location' with no batch, which is the
+	// only position the retired dimensionless stock_item.opening_qty /
+	// opening_rate pair could ever have meant.
+	//
+	// A position is (item, godown, batch, qty, rate); "40 units" on its own is
+	// not a fact. Keeping the pair on the master would leave two sources of
+	// truth for the same position, and the easier one to write to — the column
+	// — is the one that cannot express where the stock is.
 	OpeningQty  decimal.Decimal
 	OpeningRate decimal.Decimal
 }
 
 // CreateStockItem creates a stock item and appends a master_audit row. If
-// UnitSymbol is set it is resolved to a unit id (must already exist).
+// UnitSymbol is set it is resolved to a unit id (must already exist). A
+// non-zero opening position is written as a stock_opening row in the SAME
+// transaction — an item whose insert succeeded but whose opening was lost
+// would misstate the closing stock of every later report, silently.
 func (s *Service) CreateStockItem(ctx context.Context, si StockItem, createdBy string) (uuid.UUID, error) {
 	if si.Name == "" {
 		return uuid.Nil, errors.New("masters: stock item name is required")
+	}
+	// stock_opening.rate carries CHECK (rate >= 0); catch it here so the user
+	// is told which field is wrong rather than reading a constraint name.
+	if si.OpeningRate.IsNegative() {
+		return uuid.Nil, fmt.Errorf("masters: stock item %q has a negative opening rate %s",
+			si.Name, si.OpeningRate.StringFixed(4))
 	}
 	companyID, ok := db.CompanyFromContext(ctx)
 	if !ok {
@@ -666,17 +691,40 @@ func (s *Service) CreateStockItem(ctx context.Context, si StockItem, createdBy s
 		}
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO stock_item
-			   (id, company_id, name, unit_id, hsn, gst_rate_pct,
-			    opening_qty, opening_rate)
-			 VALUES ($1, $2, $3, $4, NULLIF($5,''), $6, $7, $8)`,
+			   (id, company_id, name, unit_id, hsn, gst_rate_pct)
+			 VALUES ($1, $2, $3, $4, NULLIF($5,''), $6)`,
 			id, companyID, si.Name, unitID, si.HSN, si.GSTRatePct,
-			si.OpeningQty, si.OpeningRate,
 		); err != nil {
 			return fmt.Errorf("masters: insert stock item: %w", err)
 		}
 		after := map[string]any{
 			"name": si.Name, "unit": si.UnitSymbol, "hsn": si.HSN,
 			"gst_rate_pct": si.GSTRatePct.String(),
+		}
+		// An opening position is only recorded when there IS one. A zero row
+		// would claim a position exists at Main Location for every item ever
+		// created, which is both untrue and a needless dependency on the
+		// location for tenants that only keep accounts.
+		if !si.OpeningQty.IsZero() || !si.OpeningRate.IsZero() {
+			godownID, err := mainLocationID(ctx, tx, companyID)
+			if err != nil {
+				return err
+			}
+			openingID, err := uuid.NewV7()
+			if err != nil {
+				return fmt.Errorf("masters: new stock opening id: %w", err)
+			}
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO stock_opening
+				   (id, company_id, stock_item_id, godown_id, batch_id, qty, rate)
+				 VALUES ($1, $2, $3, $4, NULL, $5, $6)`,
+				openingID, companyID, id, godownID, si.OpeningQty, si.OpeningRate,
+			); err != nil {
+				return fmt.Errorf("masters: insert stock opening: %w", err)
+			}
+			after["opening_qty"] = si.OpeningQty.StringFixed(4)
+			after["opening_rate"] = si.OpeningRate.StringFixed(4)
+			after["opening_godown"] = MainLocationName
 		}
 		return appendAudit(ctx, tx, companyID, "stock_item", id, OpCreate, nil, after, createdBy)
 	})

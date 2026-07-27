@@ -1,0 +1,67 @@
+{
+  "id": "02-rate-change-reprices-closing",
+  "description": "A second purchase at a different price re-prices EVERY unit on hand, not just the new ones. IN 10 @ 100.0000 = 1000.0000; IN 10 @ 125.0000 less 4% discount = 10*125*0.96 = 1200.0000 (this line also pins that the landed cost is net of stock_movement.discount_pct); state 20.0000 units / 2200.0000 -> average 110.0000. Issue 5 consumes 5*110.0000 = 550.0000 (NOT 5*100 at the first purchase's price, and NOT the sale price). Closing 15.0000 / 1650.0000 @ 110.0000. Conservation: 0 + 2200.0000 - 550.0000 = 1650.0000.",
+  "valuationMethod": "WEIGHTED_AVG",
+  "movements": [
+    {
+      "voucherDate": "2026-04-01",
+      "voucherNo": "PUR-1",
+      "versionCreatedAt": "2026-04-01T10:00:00+05:30",
+      "versionId": "PUR-1/v1",
+      "lineNo": 1,
+      "stockItem": "widget",
+      "godown": null,
+      "batch": null,
+      "direction": "IN",
+      "qty": "10.0000",
+      "rate": "100.0000",
+      "discountPct": "0.0000"
+    },
+    {
+      "voucherDate": "2026-04-08",
+      "voucherNo": "PUR-2",
+      "versionCreatedAt": "2026-04-08T09:15:00+05:30",
+      "versionId": "PUR-2/v1",
+      "lineNo": 1,
+      "stockItem": "widget",
+      "godown": null,
+      "batch": null,
+      "direction": "IN",
+      "qty": "10.0000",
+      "rate": "125.0000",
+      "discountPct": "4.0000"
+    },
+    {
+      "voucherDate": "2026-04-20",
+      "voucherNo": "SAL-1",
+      "versionCreatedAt": "2026-04-20T18:45:00+05:30",
+      "versionId": "SAL-1/v1",
+      "lineNo": 1,
+      "stockItem": "widget",
+      "godown": null,
+      "batch": null,
+      "direction": "OUT",
+      "qty": "5.0000",
+      "rate": "300.0000",
+      "discountPct": "0.0000"
+    }
+  ],
+  "expected": {
+    "positions": [
+      {
+        "stockItem": "widget",
+        "godown": null,
+        "batch": null,
+        "openingQty": "0.0000",
+        "openingValue": "0.0000",
+        "inwardQty": "20.0000",
+        "inwardValue": "2200.0000",
+        "outwardQty": "5.0000",
+        "outwardValue": "550.0000",
+        "closingQty": "15.0000",
+        "closingValue": "1650.0000",
+        "closingRate": "110.0000"
+      }
+    ]
+  }
+}

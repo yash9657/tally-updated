@@ -232,6 +232,8 @@ func voucherDateFromRequest(r *http.Request, act authz.Action) *time.Time {
 // optional resource name (for report:NAME). The pinned table:
 //
 //	POST  .../groups|ledgers|voucher-types|units|stock-items -> Create/master
+//	POST  .../godowns|batches                                -> Create/master
+//	GET   .../ledgers|units|stock-items|godowns|batches      -> Display/master
 //	POST  .../vouchers/{class}                               -> Create/{class}
 //	POST  .../sales (alias)                                  -> Create/sales
 //	PUT   .../vouchers/{class}/{voucherID}                   -> Alter/{class}
@@ -240,7 +242,7 @@ func voucherDateFromRequest(r *http.Request, act authz.Action) *time.Time {
 //	POST  .../vouchers/{voucherID}/external-reference        -> svc (handled before this)
 //	GET   .../reconciliation-queue                           -> Display/report:reconciliation-queue
 //	GET   .../trial-balance|balance-sheet|profit-and-loss|day-book|outstandings|gstr1
-//	                                                          -> Display/report:NAME
+//	GET   .../stock-summary                                   -> Display/report:NAME
 //	POST  .../import/tally-xml                               -> Create/import
 //	POST  .../sync/commit                                    -> Create/sync
 //
@@ -264,12 +266,22 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 	case method == http.MethodPost && isMasterPath(rest):
 		return authz.Create, "master", "", true
 
-	// GET the chart of accounts. A Display over masters, NOT a report: it is the
-	// ledger master list, and modelling it as report:NAME would let a level that
-	// disallows one report accidentally hide the chart of accounts. Read-only, so
-	// it must not inherit the back-dated cutoff or the step-up (both gate on
-	// Action.IsWrite()). LOAD-BEARING: unmapped {companyID} routes default-deny.
-	case method == http.MethodGet && rest == "/ledgers":
+	// GET a master list: the chart of accounts, and the inventory masters
+	// (godowns, batches, stock items, units). A Display over masters, NOT a
+	// report: these are master lists, and modelling them as report:NAME would
+	// let a level that disallows one report accidentally hide the chart of
+	// accounts or empty the item picker. Read-only, so they must not inherit the
+	// back-dated cutoff or the step-up (both gate on Action.IsWrite()).
+	// LOAD-BEARING: unmapped {companyID} routes default-deny.
+	//
+	// It shares isMasterPath with the POST arm ON PURPOSE. The read and the
+	// write of the same master must emit the SAME resource token, because that
+	// is the only thing that keeps `allow display master` (migration 0022's
+	// grant to Data Entry) a READ: the moment a read and a write disagree about
+	// which resource they are, one ACL rule stops governing both and a
+	// one-token slip hands an operator a power a supervisor never granted.
+	// TestDataEntryReadsTheCompanyAndMastersAndNothingWider pins that width.
+	case method == http.MethodGet && isMasterPath(rest):
 		return authz.Display, "master", "", true
 
 	// Set a ledger's opening balance: an ALTER of a master. It IS a write, so it
@@ -401,9 +413,16 @@ func splitPath(rest string) []string {
 	return strings.Split(rest, "/")
 }
 
+// isMasterPath matches the master COLLECTION paths — the ones a POST creates
+// into and a GET enumerates. `godown` and `stock_batch` (migration 0025) are
+// masters like any other: a batch is a MASTER row, never a free-text column on
+// a movement, so creating one is (Create, "master") and listing them is
+// (Display, "master"). Modelling them as anything else would put stock masters
+// outside the one rule a supervisor writes to govern master creation.
 func isMasterPath(rest string) bool {
 	switch rest {
-	case "/groups", "/ledgers", "/voucher-types", "/units", "/stock-items":
+	case "/groups", "/ledgers", "/voucher-types", "/units", "/stock-items",
+		"/godowns", "/batches":
 		return true
 	}
 	return false
@@ -476,6 +495,12 @@ func reportName(rest string) string {
 		return "gstr1"
 	case "/gstr3b":
 		return "gstr3b"
+	// The Stock Summary (INV-F). A Display over report:stock-summary — read-only,
+	// so it must NOT inherit the back-dated write cutoff or the WebAuthn step-up
+	// (both gate on Action.IsWrite()). An Owner who has not stepped up can read
+	// the stock position for the same reason they can read the Trial Balance.
+	case "/stock-summary":
+		return "stock-summary"
 	}
 	return ""
 }

@@ -19,7 +19,7 @@ import json
 import sys
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
-from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation, localcontext
 from pathlib import Path
 from typing import Any
 
@@ -849,6 +849,256 @@ def _validate_forecast_anomaly(path: Path, data: dict) -> None:
         fail(path, f"anomaly findings re-derived {got} != fixture {want}")
 
 
+# ---------------------------------------------------------------------------
+# Inventory valuation (corpora/inventory)
+# ---------------------------------------------------------------------------
+# Stock value is NEVER stored: it is derived at report time by replaying the
+# movement ledger through a valuer (backend/internal/inventory). These fixtures
+# are the shared oracle for that replay, and the derivation below is a SECOND,
+# INDEPENDENT implementation of it — written from the rules, not transcribed
+# from the Go, and deliberately not a checksum of anything. A fixture whose
+# expected closing value is off by 0.0001 fails here even if the Go valuer
+# agreed with it, which is the only way a wrong golden number gets caught.
+#
+# The rules, in full:
+#   * replay order is (voucherDate, voucherNo, versionCreatedAt, lineNo,
+#     versionId) — applied here, not assumed of the file's order;
+#   * the opening folds in first, as an inward, whatever the dates say;
+#   * a movement's value is qty * rate * (100 - discountPct)/100 at 4 dp;
+#   * an inward adds qty and value; an outward consumes at the CURRENT average
+#     (value/qty), never at its own rate, which on a sale is the SELLING price;
+#   * an outward that empties the position takes the whole remaining value, so
+#     no sub-paisa residue is left on an empty position;
+#   * the average is carried at 16 dp and only the consumed value is rounded to
+#     4 dp (rounding the rate first loses value on every issue).
+
+INVENTORY_METHODS = {"WEIGHTED_AVG"}
+
+# Working precision of the running average cost. Must equal rateScale in
+# backend/internal/inventory/valuation.go, or the two implementations will
+# disagree on any position whose average does not terminate (e.g. 1400/15).
+INV_RATE_DP = Decimal("1E-16")
+
+
+def _inv_div(numerator: Decimal, denominator: Decimal, dp: Decimal) -> Decimal:
+    """Divide at high context precision, then round HALF-UP to *dp*.
+
+    The local context keeps the default 28-significant-digit precision from
+    truncating a 16-dp quotient of a large value, and keeps this rounding rule
+    from leaking into the other validators.
+    """
+    with localcontext() as ctx:
+        ctx.prec = 60
+        return (numerator / denominator).quantize(dp, rounding=ROUND_HALF_UP)
+
+
+def _inv_key(obj: dict) -> tuple[str, str, str]:
+    """Position key: (item, godown, batch) with JSON null mapped to ''."""
+    return (obj["stockItem"], obj.get("godown") or "", obj.get("batch") or "")
+
+
+def _inv_replay(opening: dict | None, movements: list[dict]) -> dict[str, Decimal]:
+    """Re-derive one position from its opening and movements."""
+    ordered = sorted(
+        movements,
+        key=lambda m: (
+            m["voucherDate"],
+            m["voucherNo"],
+            datetime.fromisoformat(m["versionCreatedAt"]),
+            m["lineNo"],
+            m["versionId"],
+        ),
+    )
+
+    open_qty = Decimal(opening["qty"]) if opening else Decimal("0")
+    open_val = (
+        (Decimal(opening["qty"]) * Decimal(opening["rate"])).quantize(MONEY_DP, rounding=ROUND_HALF_UP)
+        if opening
+        else Decimal("0")
+    )
+
+    qty, value = open_qty, open_val
+    in_qty = in_val = out_qty = out_val = Decimal("0")
+
+    for m in ordered:
+        gross = Decimal(m["qty"]) * Decimal(m["rate"])
+        disc = Decimal(m["discountPct"])
+        net = (gross * (Decimal("100") - disc) / Decimal("100")).quantize(MONEY_DP, rounding=ROUND_HALF_UP)
+        if m["direction"] == "IN":
+            qty += Decimal(m["qty"])
+            value += net
+            in_qty += Decimal(m["qty"])
+            in_val += net
+            continue
+        remaining = qty - Decimal(m["qty"])
+        if remaining == 0:
+            consumed = value
+            qty, value = Decimal("0"), Decimal("0")
+        else:
+            rate = _inv_div(value, qty, INV_RATE_DP) if qty != 0 else Decimal("0")
+            consumed = (Decimal(m["qty"]) * rate).quantize(MONEY_DP, rounding=ROUND_HALF_UP)
+            qty = remaining
+            value -= consumed
+        out_qty += Decimal(m["qty"])
+        out_val += consumed
+
+    return {
+        "openingQty": open_qty,
+        "openingValue": open_val,
+        "inwardQty": in_qty,
+        "inwardValue": in_val,
+        "outwardQty": out_qty,
+        "outwardValue": out_val,
+        "closingQty": qty,
+        "closingValue": value.quantize(MONEY_DP, rounding=ROUND_HALF_UP),
+        "closingRate": _inv_div(value, qty, MONEY_DP) if qty != 0 else Decimal("0"),
+    }
+
+
+def _inv_check_expected(path: Path, label: str, expected: dict, derived: dict[str, Decimal]) -> None:
+    """Compare one expected position block against the re-derivation."""
+    for field, want in derived.items():
+        if field not in expected:
+            fail(path, f"{label}: expected block is missing {field!r}")
+            continue
+        got = money(path, f"{label}.{field}", expected[field])
+        if got is None:
+            continue
+        if got != want:
+            fail(
+                path,
+                f"{label}: {field}={got:f} is WRONG; replaying the movements gives {want:f} "
+                f"(a stock summary built from this fixture would be out by {got - want:f})",
+            )
+
+
+def validate_inventory(path: Path, case: dict) -> None:
+    """Validate an inventory-valuation case and re-derive its closing position."""
+    if not require(path, case, ["id", "description", "valuationMethod", "movements", "expected"]):
+        return
+    if case["valuationMethod"] not in INVENTORY_METHODS:
+        fail(path, f"valuationMethod {case['valuationMethod']!r} is not one stock_item.valuation_method allows")
+        return
+    # The fixture IS the derivation's proof; a case that does not show its
+    # arithmetic in prose cannot be reviewed by a human.
+    if not isinstance(case["description"], str) or len(case["description"]) < 40:
+        fail(path, "description must show the hand derivation (>=40 chars)")
+
+    godowns = set(case.get("godowns") or [])
+    batches = {}
+    for i, b in enumerate(case.get("batches") or []):
+        if not require(path, b, ["id", "stockItem", "expiryDate"]):
+            continue
+        try:
+            _parse_date(b["expiryDate"])
+        except ValueError:
+            fail(path, f"batches[{i}].expiryDate {b['expiryDate']!r} is not YYYY-MM-DD")
+        batches[b["id"]] = b
+
+    # --- shape of the movements -------------------------------------------
+    if not isinstance(case["movements"], list):
+        fail(path, "movements must be an array")
+        return
+    seen_lines = set()
+    for i, m in enumerate(case["movements"]):
+        if not require(
+            path,
+            m,
+            ["voucherDate", "voucherNo", "versionCreatedAt", "versionId", "lineNo",
+             "stockItem", "direction", "qty", "rate", "discountPct"],
+        ):
+            return
+        try:
+            _parse_date(m["voucherDate"])
+            datetime.fromisoformat(m["versionCreatedAt"])
+        except ValueError as exc:
+            fail(path, f"movements[{i}] has an unparseable date: {exc}")
+            return
+        if m["direction"] not in ("IN", "OUT"):
+            fail(path, f"movements[{i}].direction must be 'IN' or 'OUT' (the stock_direction enum), got {m['direction']!r}")
+            return
+        if not isinstance(m["lineNo"], int) or m["lineNo"] < 1:
+            fail(path, f"movements[{i}].lineNo must be an integer >= 1")
+            return
+        key = (m["versionId"], m["lineNo"])
+        if key in seen_lines:
+            fail(path, f"movements[{i}] repeats (versionId, lineNo) {key} — UNIQUE (voucher_version_id, line_no) forbids it")
+        seen_lines.add(key)
+        qty = money(path, f"movements[{i}].qty", m["qty"])
+        rate = money(path, f"movements[{i}].rate", m["rate"])
+        disc = money(path, f"movements[{i}].discountPct", m["discountPct"])
+        if qty is None or rate is None or disc is None:
+            return
+        # qty is ALWAYS positive: direction carries the sign (CHECK (qty > 0)).
+        if qty <= 0:
+            fail(path, f"movements[{i}].qty must be > 0 — direction, not the sign of qty, says which way stock moved")
+        if rate < 0:
+            fail(path, f"movements[{i}].rate must be >= 0")
+        if not (0 <= disc <= 100):
+            fail(path, f"movements[{i}].discountPct must be within 0..100, got {disc:f}")
+        if m.get("godown") is not None and godowns and m["godown"] not in godowns:
+            fail(path, f"movements[{i}].godown {m['godown']!r} is not declared in this fixture's godowns")
+        if m.get("batch") is not None and batches and m["batch"] not in batches:
+            fail(path, f"movements[{i}].batch {m['batch']!r} is not declared in this fixture's batches")
+
+    # --- group by position and re-derive -----------------------------------
+    openings: dict[tuple[str, str, str], dict] = {}
+    for i, o in enumerate(case.get("openings") or []):
+        if not require(path, o, ["stockItem", "qty", "rate"]):
+            return
+        if money(path, f"openings[{i}].qty", o["qty"]) is None:
+            return
+        if money(path, f"openings[{i}].rate", o["rate"]) is None:
+            return
+        if _inv_key(o) in openings:
+            fail(path, f"openings[{i}] repeats a position — stock_opening's UNIQUE NULLS NOT DISTINCT key forbids two rows for one position")
+        openings[_inv_key(o)] = o
+
+    grouped: dict[tuple[str, str, str], list[dict]] = {k: [] for k in openings}
+    for m in case["movements"]:
+        grouped.setdefault(_inv_key(m), []).append(m)
+
+    expected = case["expected"]
+    if not require(path, expected, ["positions"]):
+        return
+    by_key = {}
+    for p in expected["positions"]:
+        if not require(path, p, ["stockItem"]):
+            return
+        by_key[_inv_key(p)] = p
+    if set(by_key) != set(grouped):
+        fail(
+            path,
+            f"expected.positions cover {sorted(by_key)} but the movements and openings produce {sorted(grouped)} "
+            f"— a stock position would be blended away or invented",
+        )
+        return
+
+    for key, ms in grouped.items():
+        derived = _inv_replay(openings.get(key), ms)
+        _inv_check_expected(path, f"expected.positions[{key}]", by_key[key], derived)
+
+    # --- the back-dated case's "before" world ------------------------------
+    bi = case.get("backdatedInward")
+    if bi is not None:
+        if not require(path, bi, ["voucherNo", "expectedWithout"]):
+            return
+        remaining = [m for m in case["movements"] if m["voucherNo"] != bi["voucherNo"]]
+        if len(remaining) == len(case["movements"]):
+            fail(path, f"backdatedInward.voucherNo {bi['voucherNo']!r} matches no movement")
+            return
+        key = _inv_key(case["expected"]["positions"][0])
+        derived = _inv_replay(openings.get(key), [m for m in remaining if _inv_key(m) == key])
+        _inv_check_expected(path, "backdatedInward.expectedWithout", bi["expectedWithout"], derived)
+        after = by_key[key]
+        if after["outwardValue"] == bi["expectedWithout"]["outwardValue"]:
+            fail(
+                path,
+                "backdatedInward: the issue consumes the same value with and without the back-dated "
+                "purchase — this fixture no longer demonstrates that valuation re-values history",
+            )
+
+
 VALIDATORS = {
     "tax": validate_tax,
     "tds": validate_tds,
@@ -857,9 +1107,24 @@ VALIDATORS = {
     "isolation": validate_isolation,
     "migration": validate_migration,
     "forecast": validate_forecast,
+    "inventory": validate_inventory,
 }
 
-MIN_COUNTS = {"tax": 14, "tds": 8, "tcs": 2, "keystroke": 14, "isolation": 10, "migration": 6, "forecast": 4}
+MIN_COUNTS = {
+    "tax": 14,
+    "tds": 8,
+    "tcs": 2,
+    "keystroke": 14,
+    "isolation": 10,
+    "migration": 6,
+    "forecast": 4,
+    # The inventory floor is the six behaviours the valuation contract rests on:
+    # simple in/out, a rate change repricing the closing value, a BACK-DATED
+    # inward re-valuing an already-posted outward, per-godown positions, a batch
+    # dimension, and an opening folded in. Deleting any of them must fail CI
+    # rather than quietly shrink the gate.
+    "inventory": 6,
+}
 
 
 def main() -> int:

@@ -50,6 +50,14 @@ var KnownReportNames = []string{
 	"trial-balance", "balance-sheet", "profit-and-loss", "day-book",
 	"outstandings", "cash-flow", "anomalies", "gstr1", "gstr3b",
 	"reconciliation-queue",
+	// The Stock Summary is a REPORT, not a master list: its numbers are
+	// DERIVED by replaying the movement ledger through a valuer, and nothing
+	// it prints is stored anywhere. Naming it here is what lets an
+	// administrator write `disallow display report:stock-summary` for a level
+	// that may key invoices but must not see what the goods COST — the closing
+	// rate on this report is the company's own cost price, which is
+	// commercially sensitive in a way the chart of accounts is not.
+	"stock-summary",
 }
 
 // ValidAction reports whether a is a legal rule action (Wildcard included).

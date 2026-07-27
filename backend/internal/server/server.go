@@ -423,6 +423,28 @@ func (s *Server) routes() {
 		r.Post("/units", s.handleCreateUnit)
 		r.Post("/stock-items", s.handleCreateStockItem)
 
+		// Inventory masters (wave-1 INV-F). Godowns (stock locations) and
+		// batches/lots are masters like ledgers are: routeAction maps every
+		// path in isMasterPath to (Create, "master") on POST and
+		// (Display, "master") on GET, so ONE ACL rule governs stock masters and
+		// accounting masters alike.
+		//
+		// The READS are what make the F9 item grid usable at all. Until they
+		// existed a client could create a godown and receive its id, but could
+		// never enumerate the 'Main Location' every company is seeded with —
+		// the same hole that made the demo seed mint a duplicate cash ledger
+		// (see handler_ledgers_list.go). GET /stock-items and GET /units close
+		// the matching hole for the two masters that already had a POST.
+		//
+		// No {id} sub-route is registered under either collection, so there is
+		// no chi literal-vs-parameter collision to order around.
+		r.Get("/godowns", s.handleListGodowns)
+		r.Post("/godowns", s.handleCreateGodown)
+		r.Get("/batches", s.handleListStockBatches)
+		r.Post("/batches", s.handleCreateStockBatch)
+		r.Get("/stock-items", s.handleListStockItems)
+		r.Get("/units", s.handleListUnits)
+
 		// Vouchers: one endpoint per accounting class (F4-F9). The body is the
 		// same generic voucher shape; the path fixes the class.
 		r.Post("/vouchers/sales", s.postVoucher(ledger.Sales))
@@ -483,6 +505,11 @@ func (s *Server) routes() {
 		// Forecast/anomaly reports (wave-2 WS5a).
 		r.Get("/cash-flow", s.handleCashFlow)
 		r.Get("/anomalies", s.handleAnomalies)
+		// The Stock Summary (wave-1 INV-F): quantity from the movement ledger,
+		// VALUE from a replay through the pure valuer. It is a report and
+		// nothing it prints is stored, which is why it sits here beside the
+		// financial statements rather than beside the masters above.
+		r.Get("/stock-summary", s.handleStockSummary)
 
 		// GST.
 		r.Get("/gstr1", s.handleGSTR1)
@@ -932,6 +959,34 @@ type gstReq struct {
 	IGSTLedgerID           string       `json:"igst_ledger_id"`
 }
 
+// inventoryLineReq is ONE line of the F8/F9 item grid on the wire. It mirrors
+// ledger.InventoryLine field-for-field, and every numeric field is a STRING for
+// the same reason every money field on this surface is: a JSON number is a
+// float64, and a float quantity makes a closing stock balance depend on the
+// order the lines were entered. Quantities are money here.
+//
+// godown_id and batch_id are OPTIONAL: "" means "not tracked on this line" and
+// becomes uuid.Nil, which the post path writes as SQL NULL. A company that never
+// enables multi-location or batches is not forced to invent master rows.
+//
+// amount is taken AS ENTERED and is never recomputed from qty * rate — Tally
+// lets a user override a line total, and silently "correcting" it would make the
+// printed invoice disagree with the stored one.
+type inventoryLineReq struct {
+	StockItemID string `json:"stock_item_id"`
+	GodownID    string `json:"godown_id"`
+	BatchID     string `json:"batch_id"`
+	// Direction is "IN" or "OUT"; qty is ALWAYS positive and the direction
+	// carries the sign. Validation of the token itself belongs to the ledger
+	// (validateInventory), so an unknown direction is a 422 with a domain
+	// message rather than a 400 from a second, drifting copy of the rule here.
+	Direction   string `json:"direction"`
+	Qty         string `json:"qty"`
+	Rate        string `json:"rate"`
+	DiscountPct string `json:"discount_pct"`
+	Amount      string `json:"amount"`
+}
+
 type voucherReq struct {
 	VoucherTypeID   string              `json:"voucher_type_id"`
 	PartyLedgerID   string              `json:"party_ledger_id"`
@@ -942,8 +997,18 @@ type voucherReq struct {
 	CreatedBy       string              `json:"created_by"`
 	Postings        []postingReq        `json:"postings"`
 	BillAllocations []billAllocationReq `json:"bill_allocations"`
-	GST             *gstReq             `json:"gst"`
-	TDS             *tdsReq             `json:"tds"`
+	// Inventory is the item grid. Declared HERE — after bill_allocations and
+	// before gst — to mirror ledger.VoucherInput's field order, so the wire
+	// shape and the domain shape read the same way top to bottom.
+	//
+	// It is carried on THIS type, not on a parallel struct, which is what makes
+	// POST /sync/commit carry stock for free: syncIntentReq.Payload IS a
+	// voucherReq and buildVoucherInput is the single translator. A second
+	// inventory type on the sync wire would compile, decode and then silently
+	// drop every stock line an offline node ever recorded.
+	Inventory []inventoryLineReq `json:"inventory"`
+	GST       *gstReq            `json:"gst"`
+	TDS       *tdsReq            `json:"tds"`
 }
 
 // postVoucher returns a handler bound to a fixed accounting class. The same
@@ -1185,6 +1250,29 @@ func voucherFullJSON(v ledger.VoucherView) map[string]any {
 			"due_date":  b.DueDate,
 		})
 	}
+	// The item grid. Field names MIRROR inventoryLineReq so a client can fetch a
+	// voucher and re-POST it verbatim on an alter — the round trip
+	// ledger.TestAlterRoundTripPreservesStock pins in the domain layer. The
+	// uuids are the load-bearing part: re-resolving an item by NAME would
+	// silently drop a line whose item was renamed, turning an edit of the
+	// narration into an inventory write-off.
+	inventory := make([]map[string]any, 0, len(v.InventoryLines))
+	for _, l := range v.InventoryLines {
+		inventory = append(inventory, map[string]any{
+			"line_no":       l.LineNo,
+			"stock_item_id": l.StockItemID.String(),
+			"item":          l.ItemName,
+			"godown_id":     uuidOrEmpty(l.GodownID),
+			"godown":        l.GodownName,
+			"batch_id":      uuidOrEmpty(l.BatchID),
+			"batch":         l.BatchName,
+			"direction":     l.Direction,
+			"qty":           l.Qty.StringFixed(4),
+			"rate":          l.Rate.StringFixed(4),
+			"discount_pct":  l.DiscountPct.StringFixed(4),
+			"amount":        l.Amount.StringFixed(4),
+		})
+	}
 	return map[string]any{
 		"voucher_id":       v.VoucherID.String(),
 		"voucher_no":       v.VoucherNo,
@@ -1204,6 +1292,7 @@ func voucherFullJSON(v ledger.VoucherView) map[string]any {
 		"igst":             v.IGST.StringFixed(4),
 		"postings":         postings,
 		"bill_allocations": bills,
+		"inventory":        inventory,
 	}
 }
 
@@ -1330,6 +1419,13 @@ func buildVoucherInput(w http.ResponseWriter, class ledger.Class, req voucherReq
 			DueDate:  b.DueDate,
 		})
 	}
+	for i, l := range req.Inventory {
+		line, ok := buildInventoryLine(w, i+1, l)
+		if !ok {
+			return in, false
+		}
+		in.Inventory = append(in.Inventory, line)
+	}
 	if req.GST != nil {
 		gst, ok := buildGST(w, *req.GST)
 		if !ok {
@@ -1345,6 +1441,78 @@ func buildVoucherInput(w http.ResponseWriter, class ledger.Class, req voucherReq
 		in.TDS = tds
 	}
 	return in, true
+}
+
+// buildInventoryLine converts one wire inventory line into a
+// ledger.InventoryLine, writing a 400 naming the 1-based line and the field and
+// returning ok=false on any malformed value.
+//
+// EVERY NUMERIC FIELD GOES THROUGH decimal.NewFromString (or optionalDecimal,
+// which is the same parse with "" -> zero). Never strconv.ParseFloat: float
+// parsing ACCEPTS "NaN" and "Inf", which then blow up inside the decimal
+// package as a panic the Recoverer turns into an opaque 500 — a malformed
+// quantity typed by a data-entry operator has to come back as a 400 that names
+// the line, not as a server error. It would also silently round a
+// 19-digit quantity, so the stock movement stored would not be the one keyed.
+//
+// The line's SEMANTICS (direction token, positive quantity, discount in 0..100)
+// are deliberately NOT re-checked here: ledger.validateInventory owns them and
+// returns a domain message. A second copy of those rules in the HTTP layer is a
+// copy that drifts, and the drifted one always wins for whichever caller reaches
+// it first.
+func buildInventoryLine(w http.ResponseWriter, lineNo int, l inventoryLineReq) (ledger.InventoryLine, bool) {
+	var out ledger.InventoryLine
+	where := fmt.Sprintf(" on inventory line %d", lineNo)
+
+	itemID, err := uuid.Parse(l.StockItemID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid stock_item_id"+where)
+		return out, false
+	}
+	godownID, err := optionalUUID(l.GodownID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid godown_id"+where)
+		return out, false
+	}
+	batchID, err := optionalUUID(l.BatchID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid batch_id"+where)
+		return out, false
+	}
+	// qty is REQUIRED (there is no such thing as a stock line for no quantity),
+	// so it is parsed strictly: "" is a 400 rather than a silent zero that
+	// ledger.validateInventory would then reject with a less specific message.
+	qty, err := decimal.NewFromString(l.Qty)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid qty"+where)
+		return out, false
+	}
+	rate, err := optionalDecimal(l.Rate)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid rate"+where)
+		return out, false
+	}
+	discount, err := optionalDecimal(l.DiscountPct)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid discount_pct"+where)
+		return out, false
+	}
+	amount, err := optionalDecimal(l.Amount)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid amount"+where)
+		return out, false
+	}
+
+	return ledger.InventoryLine{
+		StockItemID: itemID,
+		GodownID:    godownID,
+		BatchID:     batchID,
+		Direction:   ledger.Direction(l.Direction),
+		Qty:         qty,
+		Rate:        rate,
+		DiscountPct: discount,
+		Amount:      amount,
+	}, true
 }
 
 // buildGST converts the GST request block into ledger.GSTParams, writing a 400

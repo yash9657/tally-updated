@@ -177,6 +177,14 @@ type VoucherInput struct {
 	Postings []PostingInput
 	// BillAllocations are optional bill-wise references on party ledgers.
 	BillAllocations []BillAllocationInput
+	// Inventory are the stock lines this voucher moves, in KEYED ORDER (the
+	// order is preserved as line_no and is part of the replay ordering key).
+	//
+	// It is INDEPENDENT of Postings, not derived from them: a three-item invoice
+	// billed to one Sales ledger is one posting and three inventory lines, and a
+	// Delivery Note is three inventory lines and no postings at all. A DELETE
+	// tombstone carries none, exactly as it carries no postings.
+	Inventory []InventoryLine
 	// GST, when non-nil and Class is Sales or Purchase, drives auto-derivation
 	// and verification of the tax lines.
 	GST *GSTParams
@@ -467,6 +475,11 @@ type VoucherView struct {
 	IGST            decimal.Decimal
 	Postings        []PostingView
 	BillAllocations []BillAllocationView
+	// InventoryLines are the stock lines of the head version, carrying REAL
+	// item/godown/batch uuids (not just names) so an alter round-trip —
+	// GetVoucher -> rebuild VoucherInput -> AlterVoucher — restates the same
+	// movements instead of silently zeroing the stock.
+	InventoryLines []InventoryLineView
 }
 
 // GetVoucher returns the CURRENT (head) version of one logical voucher, with its
@@ -569,6 +582,15 @@ func (s *Service) GetVoucher(ctx context.Context, voucherID uuid.UUID) (VoucherV
 		if err := brows.Err(); err != nil {
 			return fmt.Errorf("ledger: iterate bill allocations: %w", err)
 		}
+
+		// Inventory lines of the current version, with real ids. Same
+		// current-version keying as the postings above: an altered voucher's
+		// superseded movements stay in the log and must not be projected.
+		lines, err := loadInventoryLines(ctx, tx, companyID, versionID)
+		if err != nil {
+			return err
+		}
+		v.InventoryLines = lines
 		return nil
 	})
 	if err != nil {
@@ -642,6 +664,11 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 	// out of ledger_balance. CREATE/ALTER must still be balanced double-entry.
 	if op != OpDelete {
 		if err := validatePostings(in.Postings); err != nil {
+			return PostResult{}, err
+		}
+		// Same guard, same reason: a tombstone's body is empty by definition, so
+		// its inventory lines are neither validated nor written.
+		if err := validateInventory(in.Inventory); err != nil {
 			return PostResult{}, err
 		}
 	}
@@ -905,6 +932,18 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 			}
 		}
 
+		// THE DELETE GUARD FOR STOCK, single-sourced so the hashed payload and
+		// the movement rows can never disagree about what the tombstone carries.
+		// A DELETE reverses the voucher's entire contribution — accounting AND
+		// inventory — so it records ZERO movements, exactly as it records zero
+		// postings. Were the tombstone to restate the lines, the deleted goods
+		// would stay on the shelf forever in every stock report while the
+		// invoice had vanished from the books.
+		movements := in.Inventory
+		if op == OpDelete {
+			movements = nil
+		}
+
 		payload := CanonicalPayload{
 			VoucherID:     voucherID.String(),
 			VoucherTypeID: in.VoucherTypeID.String(),
@@ -932,6 +971,30 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 				Amount:   b.Amount.StringFixed(4),
 				DueDate:  b.DueDate,
 			})
+		}
+
+		// Inventory rides in the hashed payload for the same reason postings do:
+		// what the edit log SHOWS must be what the edit log SIGNS. A quantity
+		// changed in stock_movement without a matching payload change would leave
+		// the chain verifying happily over a voucher that no longer says what it
+		// did. Ids are stringified (empty for an untracked dimension) and every
+		// number is fixed-4 — see CanonicalStockLine.
+		for _, l := range movements {
+			cl := CanonicalStockLine{
+				StockItemID: l.StockItemID.String(),
+				Direction:   string(l.Direction),
+				Qty:         l.Qty.StringFixed(4),
+				Rate:        l.Rate.StringFixed(4),
+				DiscountPct: l.DiscountPct.StringFixed(4),
+				Amount:      l.Amount.StringFixed(4),
+			}
+			if l.GodownID != uuid.Nil {
+				cl.GodownID = l.GodownID.String()
+			}
+			if l.BatchID != uuid.Nil {
+				cl.BatchID = l.BatchID.String()
+			}
+			payload.Inventory = append(payload.Inventory, cl)
 		}
 
 		payloadJSON, err := payload.Marshal()
@@ -1007,6 +1070,25 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 					return fmt.Errorf("ledger: insert voucher_gst_line: %w", err)
 				}
 			}
+		}
+
+		// STOCK MOVEMENTS — the inventory sibling of the GST-line loop above.
+		//
+		// Same seam, same transaction, same OpDelete guard, and for the same
+		// reason: a movement is an immutable child of THIS voucher version, so it
+		// must be impossible for one to exist without the version, or for the
+		// version to commit without them. Doing this in a second transaction
+		// after post() returns would leave orphan stock behind every time a later
+		// posting failed — the books would roll back and the warehouse would not.
+		//
+		// The negative-stock pre-check runs first so the refusal names the item;
+		// the deferred trigger stock_movement_not_negative is the authority and
+		// fires at COMMIT regardless of what this layer concluded.
+		if err := checkNegativeStock(ctx, tx, companyID, voucherID, movements); err != nil {
+			return err
+		}
+		if err := writeStockMovements(ctx, tx, companyID, versionID, movements); err != nil {
+			return err
 		}
 
 		// Insert postings and incrementally update ledger_balance. A DELETE

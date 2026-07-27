@@ -1,0 +1,96 @@
+{
+  "id": "04-per-godown-positions",
+  "description": "The same item in two godowns is TWO positions carrying two different average costs, never one blended one. A single purchase receives 10 @ 100.0000 into Main Location (line 1) and 5 @ 150.0000 into Warehouse B (line 2); a single sale ships 3 from Main and 1 from Warehouse B. Main: 1000.0000 in, 3*100.0000 = 300.0000 out, closing 7.0000 / 700.0000 @ 100.0000. Warehouse B: 750.0000 in, 1*150.0000 = 150.0000 out, closing 4.0000 / 600.0000 @ 150.0000. Total closing value 1300.0000. Blending the godowns away would give one pool of 15.0000 @ 1750.0000 = 116.666667/unit, cost the four issued units 466.6667 instead of 450.0000 and leave a closing value of 1283.3333 - so the dimension is not cosmetic, it changes the money.",
+  "valuationMethod": "WEIGHTED_AVG",
+  "godowns": ["main-location", "warehouse-b"],
+  "movements": [
+    {
+      "voucherDate": "2026-04-01",
+      "voucherNo": "PUR-1",
+      "versionCreatedAt": "2026-04-01T10:00:00+05:30",
+      "versionId": "PUR-1/v1",
+      "lineNo": 1,
+      "stockItem": "widget",
+      "godown": "main-location",
+      "batch": null,
+      "direction": "IN",
+      "qty": "10.0000",
+      "rate": "100.0000",
+      "discountPct": "0.0000"
+    },
+    {
+      "voucherDate": "2026-04-01",
+      "voucherNo": "PUR-1",
+      "versionCreatedAt": "2026-04-01T10:00:00+05:30",
+      "versionId": "PUR-1/v1",
+      "lineNo": 2,
+      "stockItem": "widget",
+      "godown": "warehouse-b",
+      "batch": null,
+      "direction": "IN",
+      "qty": "5.0000",
+      "rate": "150.0000",
+      "discountPct": "0.0000"
+    },
+    {
+      "voucherDate": "2026-04-06",
+      "voucherNo": "SAL-1",
+      "versionCreatedAt": "2026-04-06T14:00:00+05:30",
+      "versionId": "SAL-1/v1",
+      "lineNo": 1,
+      "stockItem": "widget",
+      "godown": "main-location",
+      "batch": null,
+      "direction": "OUT",
+      "qty": "3.0000",
+      "rate": "250.0000",
+      "discountPct": "0.0000"
+    },
+    {
+      "voucherDate": "2026-04-06",
+      "voucherNo": "SAL-1",
+      "versionCreatedAt": "2026-04-06T14:00:00+05:30",
+      "versionId": "SAL-1/v1",
+      "lineNo": 2,
+      "stockItem": "widget",
+      "godown": "warehouse-b",
+      "batch": null,
+      "direction": "OUT",
+      "qty": "1.0000",
+      "rate": "250.0000",
+      "discountPct": "0.0000"
+    }
+  ],
+  "expected": {
+    "positions": [
+      {
+        "stockItem": "widget",
+        "godown": "main-location",
+        "batch": null,
+        "openingQty": "0.0000",
+        "openingValue": "0.0000",
+        "inwardQty": "10.0000",
+        "inwardValue": "1000.0000",
+        "outwardQty": "3.0000",
+        "outwardValue": "300.0000",
+        "closingQty": "7.0000",
+        "closingValue": "700.0000",
+        "closingRate": "100.0000"
+      },
+      {
+        "stockItem": "widget",
+        "godown": "warehouse-b",
+        "batch": null,
+        "openingQty": "0.0000",
+        "openingValue": "0.0000",
+        "inwardQty": "5.0000",
+        "inwardValue": "750.0000",
+        "outwardQty": "1.0000",
+        "outwardValue": "150.0000",
+        "closingQty": "4.0000",
+        "closingValue": "600.0000",
+        "closingRate": "150.0000"
+      }
+    ]
+  }
+}

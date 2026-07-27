@@ -1,0 +1,8 @@
+{
+  "id": "stock-movement-immutable-under-update",
+  "description": "Under company A's OWN GUC, an UPDATE of company A's OWN stock_movement row is still refused: the movement ledger is append-only because stock value is replayed from it, so a correction appends a new voucher version rather than editing a line in place",
+  "seed": { "companyA": 1, "companyB": 0 },
+  "session": { "role": "tally_app", "setGuc": true, "company": "A" },
+  "action": "UPDATE stock_movement SET qty = 9999 WHERE id = :companyA_movement_id",
+  "expect": { "errorContains": "stock_movement is immutable" }
+}

@@ -53,7 +53,13 @@ var allowedDeps = map[string]map[string]bool{
 	// the pure compliance leaf (no I/O, safe inside the post transaction).
 	"internal/ledger":      {"internal/platform/db": true, "internal/compliance": true},
 	"internal/masters":     {"internal/platform/db": true},
-	"internal/reporting":   {"internal/platform/db": true},
+	// reporting gained internal/inventory with the Stock Summary. Stock VALUE is
+	// never stored: the report derives it by replaying the movement ledger through
+	// the pure valuer, so reporting MUST be able to call the leaf. The edge is
+	// one-way by construction — inventory's own entry above is the empty map, so
+	// the valuer can never reach back into a report, a database or a tenant
+	// context, which is the whole reason a valuation is reproducible.
+	"internal/reporting":   {"internal/platform/db": true, "internal/inventory": true},
 	// forecast (wave 2 WS5a) is a read-only projection/anomaly reporter. It reuses
 	// reporting's Outstandings netting (never re-implementing it) and issues its own
 	// supplementary read-only queries over the db layer. Two siblings, nothing else.

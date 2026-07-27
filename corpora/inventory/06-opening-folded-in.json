@@ -1,0 +1,62 @@
+{
+  "id": "06-opening-folded-in",
+  "description": "The stock_opening row is folded in as the FIRST inward, before every movement and regardless of dates, and it is reported on its own Opening line rather than inside Inward. Opening 10.0000 @ 90.0000 = 900.0000; IN 5 @ 100.0000 = 500.0000 -> 15.0000 units / 1400.0000. The average is 1400.0000/15 = 93.3333333333333333 recurring, which is the point of this fixture: the rate is carried at 16 dp and only the CONSUMED VALUE is rounded to 4 dp, so an issue of 6 costs round(6 * 93.3333333333333333) = round(559.9999999999999998) = 560.0000, not 6 * 93.3333 = 559.9998. Closing 9.0000 / 840.0000, displayed at 93.3333. Conservation: 900.0000 + 500.0000 - 560.0000 = 840.0000.",
+  "valuationMethod": "WEIGHTED_AVG",
+  "openings": [
+    {
+      "stockItem": "widget",
+      "godown": null,
+      "batch": null,
+      "qty": "10.0000",
+      "rate": "90.0000"
+    }
+  ],
+  "movements": [
+    {
+      "voucherDate": "2026-04-03",
+      "voucherNo": "PUR-1",
+      "versionCreatedAt": "2026-04-03T10:00:00+05:30",
+      "versionId": "PUR-1/v1",
+      "lineNo": 1,
+      "stockItem": "widget",
+      "godown": null,
+      "batch": null,
+      "direction": "IN",
+      "qty": "5.0000",
+      "rate": "100.0000",
+      "discountPct": "0.0000"
+    },
+    {
+      "voucherDate": "2026-04-11",
+      "voucherNo": "SAL-1",
+      "versionCreatedAt": "2026-04-11T13:00:00+05:30",
+      "versionId": "SAL-1/v1",
+      "lineNo": 1,
+      "stockItem": "widget",
+      "godown": null,
+      "batch": null,
+      "direction": "OUT",
+      "qty": "6.0000",
+      "rate": "160.0000",
+      "discountPct": "0.0000"
+    }
+  ],
+  "expected": {
+    "positions": [
+      {
+        "stockItem": "widget",
+        "godown": null,
+        "batch": null,
+        "openingQty": "10.0000",
+        "openingValue": "900.0000",
+        "inwardQty": "5.0000",
+        "inwardValue": "500.0000",
+        "outwardQty": "6.0000",
+        "outwardValue": "560.0000",
+        "closingQty": "9.0000",
+        "closingValue": "840.0000",
+        "closingRate": "93.3333"
+      }
+    ]
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "id": "01-simple-in-out",
+  "description": "The base case. One item, no godown and no batch dimension (both SQL NULL). Purchase 10 @ 100.0000 = 1000.0000 in, then issue 4 at the running average cost of 1000.0000/10 = 100.0000 -> consumed 400.0000. Closing 6.0000 units carried at 600.0000, rate 100.0000. Conservation: 0 + 1000.0000 - 400.0000 = 600.0000.",
+  "valuationMethod": "WEIGHTED_AVG",
+  "movements": [
+    {
+      "voucherDate": "2026-04-01",
+      "voucherNo": "PUR-1",
+      "versionCreatedAt": "2026-04-01T10:00:00+05:30",
+      "versionId": "PUR-1/v1",
+      "lineNo": 1,
+      "stockItem": "widget",
+      "godown": null,
+      "batch": null,
+      "direction": "IN",
+      "qty": "10.0000",
+      "rate": "100.0000",
+      "discountPct": "0.0000"
+    },
+    {
+      "voucherDate": "2026-04-05",
+      "voucherNo": "SAL-1",
+      "versionCreatedAt": "2026-04-05T11:30:00+05:30",
+      "versionId": "SAL-1/v1",
+      "lineNo": 1,
+      "stockItem": "widget",
+      "godown": null,
+      "batch": null,
+      "direction": "OUT",
+      "qty": "4.0000",
+      "rate": "175.0000",
+      "discountPct": "0.0000"
+    }
+  ],
+  "expected": {
+    "positions": [
+      {
+        "stockItem": "widget",
+        "godown": null,
+        "batch": null,
+        "openingQty": "0.0000",
+        "openingValue": "0.0000",
+        "inwardQty": "10.0000",
+        "inwardValue": "1000.0000",
+        "outwardQty": "4.0000",
+        "outwardValue": "400.0000",
+        "closingQty": "6.0000",
+        "closingValue": "600.0000",
+        "closingRate": "100.0000"
+      }
+    ]
+  }
+}

@@ -754,6 +754,32 @@ func runCorpusScenario(t *testing.T, sc corpusScenario) {
 			}
 		}
 
+	case "stock-movement-cross-company-invisible":
+		// The inventory plane (0025) joins the same red team: the fixture plants
+		// a real movement line in BOTH companies, so a leak would show up as a
+		// count of 2 rather than as an empty table that proves nothing.
+		setupInventory(t, h)
+		h.asCompany(t, guc, func(tx pgx.Tx) {
+			var n int
+			if err := tx.QueryRow(context.Background(),
+				`SELECT count(*) FROM stock_movement`).Scan(&n); err != nil {
+				t.Fatalf("count stock movements: %v", err)
+			}
+			assertCount(t, sc, n)
+		})
+
+	case "stock-movement-immutable-under-update":
+		// Note this is A editing A's OWN row: the refusal is the immutability
+		// trigger, not RLS. Stock value is derived by replaying these rows, so a
+		// line that can change after the fact makes every closing value a
+		// function of when you asked.
+		inv := setupInventory(t, h)
+		h.asCompany(t, guc, func(tx pgx.Tx) {
+			_, err := tx.Exec(context.Background(),
+				`UPDATE stock_movement SET qty = 9999 WHERE id = $1`, inv.moveInA)
+			assertError(t, sc, err)
+		})
+
 	case "app-role-cannot-bypass-rls":
 		// Attempt to DISABLE RLS, then assert it failed and rows are still scoped.
 		h.asCompany(t, guc, func(tx pgx.Tx) {

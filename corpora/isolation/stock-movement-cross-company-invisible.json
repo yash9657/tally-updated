@@ -1,0 +1,8 @@
+{
+  "id": "stock-movement-cross-company-invisible",
+  "description": "With app.current_company_id set to company A, a SELECT over stock_movement returns exactly company A's movement lines and never company B's, even though B holds real inventory planted with superuser privileges",
+  "seed": { "companyA": 1, "companyB": 1 },
+  "session": { "role": "tally_app", "setGuc": true, "company": "A" },
+  "action": "SELECT count(*) FROM stock_movement",
+  "expect": { "rowCountIs": 1 }
+}

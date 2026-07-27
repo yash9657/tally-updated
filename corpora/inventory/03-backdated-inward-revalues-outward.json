@@ -1,0 +1,81 @@
+{
+  "id": "03-backdated-inward-revalues-outward",
+  "description": "WHY STOCK VALUE IS NEVER STORED. PUR-1 is entered on 20-Apr but DATED 05-Apr, i.e. before an issue that has already been valued. Replay order is by voucher_date, so PUR-1 (10 @ 100.0000 = 1000.0000) lands first, then PUR-2 dated 10-Apr (10 @ 200.0000 = 2000.0000) -> 20.0000 units / 3000.0000 @ 150.0000, and SAL-1 dated 15-Apr consumes 5*150.0000 = 750.0000, closing 15.0000 / 2250.0000 @ 150.0000. WITHOUT the back-dated PUR-1 the very same SAL-1 consumed 5*200.0000 = 1000.0000 and the closing was 5.0000 / 1000.0000 @ 200.0000. One already-posted, unedited outward changed its cost by 250.0000 because an OLDER voucher appeared: a materialised value could not have expressed that, which is the whole architecture. Note PUR-1's versionCreatedAt is the LATEST of the three - entry order must not affect the answer.",
+  "valuationMethod": "WEIGHTED_AVG",
+  "backdatedInward": {
+    "voucherNo": "PUR-1",
+    "expectedWithout": {
+      "openingQty": "0.0000",
+      "openingValue": "0.0000",
+      "inwardQty": "10.0000",
+      "inwardValue": "2000.0000",
+      "outwardQty": "5.0000",
+      "outwardValue": "1000.0000",
+      "closingQty": "5.0000",
+      "closingValue": "1000.0000",
+      "closingRate": "200.0000"
+    }
+  },
+  "movements": [
+    {
+      "voucherDate": "2026-04-10",
+      "voucherNo": "PUR-2",
+      "versionCreatedAt": "2026-04-10T09:00:00+05:30",
+      "versionId": "PUR-2/v1",
+      "lineNo": 1,
+      "stockItem": "widget",
+      "godown": null,
+      "batch": null,
+      "direction": "IN",
+      "qty": "10.0000",
+      "rate": "200.0000",
+      "discountPct": "0.0000"
+    },
+    {
+      "voucherDate": "2026-04-15",
+      "voucherNo": "SAL-1",
+      "versionCreatedAt": "2026-04-15T16:20:00+05:30",
+      "versionId": "SAL-1/v1",
+      "lineNo": 1,
+      "stockItem": "widget",
+      "godown": null,
+      "batch": null,
+      "direction": "OUT",
+      "qty": "5.0000",
+      "rate": "400.0000",
+      "discountPct": "0.0000"
+    },
+    {
+      "voucherDate": "2026-04-05",
+      "voucherNo": "PUR-1",
+      "versionCreatedAt": "2026-04-20T12:00:00+05:30",
+      "versionId": "PUR-1/v1",
+      "lineNo": 1,
+      "stockItem": "widget",
+      "godown": null,
+      "batch": null,
+      "direction": "IN",
+      "qty": "10.0000",
+      "rate": "100.0000",
+      "discountPct": "0.0000"
+    }
+  ],
+  "expected": {
+    "positions": [
+      {
+        "stockItem": "widget",
+        "godown": null,
+        "batch": null,
+        "openingQty": "0.0000",
+        "openingValue": "0.0000",
+        "inwardQty": "20.0000",
+        "inwardValue": "3000.0000",
+        "outwardQty": "5.0000",
+        "outwardValue": "750.0000",
+        "closingQty": "15.0000",
+        "closingValue": "2250.0000",
+        "closingRate": "150.0000"
+      }
+    ]
+  }
+}

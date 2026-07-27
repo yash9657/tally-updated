@@ -38,6 +38,31 @@ type CanonicalBillAllocation struct {
 	DueDate  string `json:"due_date"`
 }
 
+// CanonicalStockLine is the stable view of ONE inventory line used for hashing.
+//
+// EVERY FIELD IS A STRING, DELIBERATELY. The chain is verified by decoding the
+// stored JSONB back into this struct and re-marshalling it (see history.go):
+// Postgres does not preserve the input text of a jsonb column, so the bytes
+// that were hashed have to be RE-DERIVED. That re-derivation is only exact
+// while every value is a string or an int. A float quantity would break it in
+// two ways at once — 12.3400 and 12.34 would hash identically (so a corrected
+// scale would be undetectable), and two quantities that differ below float64's
+// ~16 significant digits would collide outright. Quantity is fixed-4 for the
+// same reason money is.
+//
+// An absent dimension is the empty string, not the zero uuid: "" reads as "not
+// tracked" and cannot be confused with a real id.
+type CanonicalStockLine struct {
+	StockItemID string `json:"stock_item_id"`
+	GodownID    string `json:"godown_id"`
+	BatchID     string `json:"batch_id"`
+	Direction   string `json:"direction"`
+	Qty         string `json:"qty"`
+	Rate        string `json:"rate"`
+	DiscountPct string `json:"discount_pct"`
+	Amount      string `json:"amount"`
+}
+
 // CanonicalPayload is the canonical, deterministic representation of a voucher
 // version that is hashed and stored verbatim as the voucher_version.payload
 // JSONB. Field order is fixed by the struct; encoding/json emits object keys in
@@ -57,6 +82,22 @@ type CanonicalPayload struct {
 	// preserving the byte sequence — and therefore the hash — of vouchers that
 	// carry no bill-wise detail.
 	BillAllocations []CanonicalBillAllocation `json:"bill_allocations,omitempty"`
+	// Inventory is the stock lines this version records.
+	//
+	// THE HASH CHAIN IS A ONE-WAY DOOR, so this field obeys three rules that are
+	// not stylistic:
+	//   * it is LAST — encoding/json emits keys in struct-declaration order, so
+	//     inserting it anywhere else would move every following key and change
+	//     the bytes of every voucher ever written;
+	//   * it is `omitempty` — a voucher with no stock lines must marshal to
+	//     BYTE-IDENTICAL JSON to what it marshalled to before this field
+	//     existed, or every historical hash is retroactively invalidated and
+	//     VerifyChain reports the entire book as tampered with;
+	//   * its element type is all-strings (see CanonicalStockLine) so the
+	//     JSONB -> struct -> bytes re-derivation VerifyChain depends on is exact.
+	// The pinned vector in stock_hash_test.go exists to make a violation of the
+	// first two rules a failing test rather than a corrupted audit log.
+	Inventory []CanonicalStockLine `json:"inventory,omitempty"`
 }
 
 // Marshal returns the canonical JSON encoding of the payload.
