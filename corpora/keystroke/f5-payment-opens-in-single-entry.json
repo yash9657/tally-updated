@@ -1,0 +1,15 @@
+{
+  "id": "f5-payment-opens-in-single-entry",
+  "description": "F5 opens the Payment voucher in SINGLE-ENTRY mode without the user touching Ctrl+H. Tally defaults Payment / Receipt / Contra to single entry (one account on one side, multiple on the other), which is why bulk cash work is fast there; a clone that opened them in double entry would cost a Tally operator a keystroke on every voucher. The frame carries no entryMode of its own — an absent config means 'the class default', so the config only ever records a deviation the user chose.",
+  "keymapProfile": "tallyprime",
+  "startScreen": "gateway",
+  "events": [
+    { "type": "key", "combo": "F5" }
+  ],
+  "expect": {
+    "screen": "voucher",
+    "voucherType": "payment",
+    "mode": "create",
+    "overlay": null
+  }
+}

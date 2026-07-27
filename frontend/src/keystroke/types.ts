@@ -72,6 +72,19 @@ export type FrameOverlay =
  * already receives, and is unit-testable in the pure machine.
  */
 export interface FrameConfig {
+  /**
+   * Ctrl+H on a voucher: SINGLE- vs DOUBLE-entry data capture.
+   *
+   * Tally defaults Payment / Receipt / Contra to single entry — "one account on
+   * one side, multiple on the other" (RESEARCH.md §"Voucher entry") — which is
+   * why bulk cash work is fast there. Undefined means "the class's default"
+   * (voucherConfig.entry), so the config only ever records a DEVIATION the user
+   * chose, and changing a class default does not fight a stale frame.
+   *
+   * This is a DATA-ENTRY affordance, not a different accounting model: the
+   * posted voucher is balanced double-entry either way. Only the form differs.
+   */
+  entryMode?: "single" | "double";
   /** Alt+F1: expand every level of a statement report. */
   detailed?: boolean;
   /** F5 (Trial Balance): ledger-wise (default) instead of group-wise. */

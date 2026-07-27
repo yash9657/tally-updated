@@ -15,7 +15,11 @@ import {
   deleteLoadedVoucher,
   type VoucherEditContext,
 } from "./vouchers/editActions";
-import { configFor } from "./vouchers/voucherConfig";
+import {
+  configFor,
+  effectiveEntryMode,
+  entryModesFor,
+} from "./vouchers/voucherConfig";
 import {
   emptyGstFormState,
   ensureLedger,
@@ -116,6 +120,15 @@ interface VoucherForm {
   gst: GstFormState;
   /** The taxable base (income posting amount) for a GST voucher, fixed-4 string. */
   taxableValue: string;
+  /**
+   * SINGLE-ENTRY particulars: the ledgers on the MANY side, with amounts.
+   *
+   * In single entry the user names one account (the bank/cash) and then lists
+   * what it paid for / was received against; the single side's amount is the
+   * SUM and is never typed. Empty rows are ignored on accept, so the form can
+   * always offer one more line without forcing the user to fill it.
+   */
+  lines: { ledger: string; amount: string }[];
 }
 
 function emptyForm(): VoucherForm {
@@ -129,6 +142,7 @@ function emptyForm(): VoucherForm {
     voucherNo: "",
     gst: emptyGstFormState(),
     taxableValue: "0.0000",
+    lines: [{ ledger: "", amount: "" }],
   };
 }
 
@@ -154,7 +168,27 @@ function formFromView(view: VoucherView): VoucherForm {
       hsn: "",
     },
     taxableValue: view.taxable_value,
+    // Seed the single-entry particulars from the loaded postings, so ALTERING a
+    // payment opens a form the user can edit rather than an empty one over a
+    // voucher that already has lines. Which side is "many" depends on the class
+    // (a payment credits one bank and debits many expenses), so the rows are
+    // whichever side is NOT the class's primary side.
+    lines: linesFromPostings(view),
   };
+}
+
+/**
+ * The MANY side of a loaded voucher, as single-entry particulars. Rows carry
+ * the ledger NAME because that is what the picker selects on; the real uuid is
+ * resolved on accept exactly as it is for a fresh entry.
+ */
+function linesFromPostings(view: VoucherView): { ledger: string; amount: string }[] {
+  const cfg = configFor(view.class.toLowerCase() as VoucherType);
+  const manySide = cfg.primarySide === "DR" ? "CR" : "DR";
+  const rows = view.postings
+    .filter((p) => p.dr_cr.toUpperCase().startsWith(manySide[0]!))
+    .map((p) => ({ ledger: p.ledger, amount: p.amount }));
+  return rows.length > 0 ? rows : [{ ledger: "", amount: "" }];
 }
 
 /**
@@ -181,6 +215,9 @@ function formFromDraft(draft: PurchaseVoucherDraft): VoucherForm {
       hsn: line?.hsn ?? "",
     },
     taxableValue: line?.taxable_value ?? "0.0000",
+    // Draft mode is F9 Purchase, which is a GST (double-entry) form — the
+    // single-entry particulars are unused there, but the shape must be whole.
+    lines: [{ ledger: "", amount: "" }],
   };
 }
 
@@ -239,6 +276,12 @@ export function VoucherScreen({
   // rebuild — the form prefill below is display-only.
   const isDraftMode =
     type === "purchase" && !isAlter && loadedDraft != null;
+
+  // SINGLE vs DOUBLE entry (Ctrl+H). Undefined config means "the class default",
+  // so Payment / Receipt / Contra open in SINGLE entry the way a Tally operator
+  // expects, and a class that has no single form (Journal, and the GST vouchers)
+  // is forced to double regardless of what a stale frame config says.
+  const entryMode = effectiveEntryMode(type, snapshot.config?.entryMode);
 
   // On an alter frame, the loaded report row gives us the logical voucher_id;
   // the FORM is hydrated from GET /vouchers/{id} (real posting uuids + GST
@@ -362,6 +405,84 @@ export function VoucherScreen({
   const ctxRef = useRef(editCtx);
   ctxRef.current = editCtx;
 
+  /**
+   * SINGLE-ENTRY -> a balanced DOUBLE-ENTRY request.
+   *
+   * Single entry is a data-capture affordance, not a different accounting
+   * model: what gets posted is an ordinary balanced voucher. The user names one
+   * account and lists what it moved against; this puts the SUM on the single
+   * side and each line on the other, oriented by the class —
+   *
+   *   Payment  (primarySide CR): Cr Bank (total), Dr each expense/party
+   *   Receipt  (primarySide DR): Dr Bank (total), Cr each income/party
+   *   Contra   (primarySide CR): Cr the account paid FROM, Dr the one paid INTO
+   *
+   * Getting that orientation backwards is the failure this project has already
+   * shipped once (WS8b: a purchase posted through the sales-shaped builder came
+   * out REVERSED and still passed the server's dr_cr-blind GST verify). Here the
+   * server's double-entry constraint catches an unbalanced body, but NOT a
+   * reversed one — so the orientation is pinned by test, not by the server.
+   */
+  const buildSingleEntryRequest = useCallback(
+    async (f: VoucherForm): Promise<VoucherRequest> => {
+      const rows = f.lines.filter(
+        (l) => l.ledger.trim() !== "" && parseFloat(l.amount || "0") > 0,
+      );
+      if (rows.length === 0) {
+        throw new Error("Add at least one particular with an amount.");
+      }
+      const accountName = f.party.trim();
+      if (accountName === "") {
+        throw new Error(`${cfg.partyLabel} is required.`);
+      }
+
+      // The single side takes the SUM, computed in paise so a two-line entry
+      // cannot drift by a rounding cent.
+      const paise = rows.reduce(
+        (sum, l) => sum + Math.round(parseFloat(l.amount || "0") * 10000),
+        0,
+      );
+      const total = (paise / 10000).toFixed(4);
+
+      const accountID =
+        f.partyLedgerId ||
+        (await ensureLedger(client, companyID, {
+          name: accountName,
+          groupName: "Bank Accounts",
+        }));
+      const manySide: "DR" | "CR" = cfg.primarySide === "DR" ? "CR" : "DR";
+
+      const postings: PostingRequest[] = [
+        { ledger_id: accountID, dr_cr: cfg.primarySide, amount: total },
+      ];
+      for (const l of rows) {
+        const id = await ensureLedger(client, companyID, {
+          name: l.ledger.trim(),
+          // A payment's counter-ledgers are usually expenses, a receipt's
+          // usually income. Both are create-or-select: an EXISTING ledger keeps
+          // its own group and this is never consulted.
+          groupName: cfg.primarySide === "CR" ? "Indirect Expenses" : "Direct Incomes",
+        });
+        postings.push({
+          ledger_id: id,
+          dr_cr: manySide,
+          amount: normalizeMoney(l.amount),
+        });
+      }
+
+      const req: VoucherRequest = {
+        voucher_date: f.date,
+        narration: f.narration,
+        party: accountName,
+        postings,
+      };
+      if (f.partyLedgerId) req.party_ledger_id = f.partyLedgerId;
+      if (f.voucherNo) req.voucher_no = f.voucherNo;
+      return req;
+    },
+    [client, companyID, cfg.primarySide, cfg.partyLabel],
+  );
+
   /** Build a plain (non-GST) request: forward the loaded/seeded postings verbatim. */
   const buildPlainRequest = useCallback((f: VoucherForm): VoucherRequest => {
     const req: VoucherRequest = {
@@ -479,7 +600,9 @@ export function VoucherScreen({
     const ctx = ctxRef.current;
     const reqPromise = cfg.showGst
       ? buildGstRequest(f)
-      : Promise.resolve(buildPlainRequest(f));
+      : entryMode === "single"
+        ? buildSingleEntryRequest(f)
+        : Promise.resolve(buildPlainRequest(f));
     reqPromise
       .then((req) => acceptVoucher(client, companyID, ctx, req))
       .then((res: VoucherResponse) => {
@@ -498,6 +621,8 @@ export function VoucherScreen({
     buildGstRequest,
     buildPlainRequest,
     cfg.showGst,
+    entryMode,
+    buildSingleEntryRequest,
     client,
     companyID,
     setLoadedDraft,
@@ -720,6 +845,14 @@ export function VoucherScreen({
           setForm={setForm}
           tax={taxResult}
         />
+      ) : entryMode === "single" ? (
+        <SingleEntryPanel
+          form={form}
+          setForm={setForm}
+          accountLabel={cfg.partyLabel}
+          primarySide={cfg.primarySide}
+          parties={partyNames}
+        />
       ) : null}
 
       {isDraftMode ? (
@@ -731,7 +864,7 @@ export function VoucherScreen({
       ) : null}
 
       {snapshot.overlay === "change-mode" ? (
-        <ChangeModeOverlay onSelect={onSelect} />
+        <ChangeModeOverlay type={type} current={entryMode} onSelect={onSelect} />
       ) : null}
     </section>
   );
@@ -1017,20 +1150,157 @@ function DraftPrefillPanel({
 }
 
 /** The Ctrl+H Change Mode picker (Item Invoice / Accounting Invoice / As Voucher). */
-function ChangeModeOverlay({ onSelect }: { onSelect: (item: string) => void }) {
+/**
+ * Ctrl+H Change Mode.
+ *
+ * It used to offer three invoice labels on EVERY voucher and do nothing at all
+ * when you picked one — a dead end on the key Tally uses to switch entry style.
+ * It now offers the modes that apply to THIS class (RESEARCH.md: Ctrl+H toggles
+ * Single vs Double entry for Payment / Receipt / Contra), marks the one in
+ * force, and picking one takes effect immediately — Tally's behaviour, and no
+ * confirming Enter.
+ *
+ * Sales/Purchase keep their invoice-mode labels, each marked "not built": the
+ * same honesty the keymap applies to unavailable combos, since a key that
+ * silently does nothing is what makes a keyboard user distrust the app.
+ */
+function ChangeModeOverlay({
+  type,
+  current,
+  onSelect,
+}: {
+  type: VoucherType;
+  current: "single" | "double";
+  onSelect: (item: string) => void;
+}) {
+  const options = entryModesFor(type);
+  const label = (o: { label: string; mode: string | null }) =>
+    o.mode === current ? `${o.label}  ← current` : o.label;
   return (
     <div
       role="dialog"
       aria-label="Change Mode"
-      className="mt-3 mx-auto w-72 bg-tally-panel p-3"
+      className="mt-3 mx-auto w-80 bg-tally-panel p-3"
+      data-testid="change-mode-overlay"
     >
       <h2 className="mb-2 text-tally-title">Change Mode</h2>
       <SelectionList
         label="Mode"
-        options={["Item Invoice", "Accounting Invoice", "As Voucher"]}
-        onSelect={onSelect}
+        options={options.map(label)}
+        // Strip the "← current" marker before handing the label to the machine,
+        // which matches on the canonical label.
+        onSelect={(item) => onSelect(item.replace(/\s+← current$/, ""))}
         autoFocus
       />
+    </div>
+  );
+}
+
+/**
+ * The SINGLE-ENTRY particulars: one account on one side, many on the other.
+ *
+ * The single side's amount is DERIVED (the sum) and deliberately not editable —
+ * that is the whole point of the mode, and an editable total would let the two
+ * sides disagree in a form whose job is to make them agree.
+ */
+function SingleEntryPanel({
+  form,
+  setForm,
+  accountLabel,
+  primarySide,
+  parties,
+}: {
+  form: VoucherForm;
+  setForm: React.Dispatch<React.SetStateAction<VoucherForm>>;
+  accountLabel: string;
+  primarySide: "DR" | "CR";
+  parties: string[];
+}) {
+  const rows = form.lines;
+  const paise = rows.reduce(
+    (sum, l) => sum + Math.round(parseFloat(l.amount || "0") * 10000),
+    0,
+  );
+  const total = (paise / 10000).toFixed(4);
+  const manySide = primarySide === "DR" ? "Cr" : "Dr";
+  const oneSide = primarySide === "DR" ? "Dr" : "Cr";
+
+  const setLine = (i: number, patch: Partial<{ ledger: string; amount: string }>) =>
+    setForm((f) => ({
+      ...f,
+      lines: f.lines.map((l, idx) => (idx === i ? { ...l, ...patch } : l)),
+    }));
+
+  return (
+    <div className="mt-3 max-w-2xl bg-tally-panel p-3 text-sm" data-testid="single-entry-panel">
+      <h2 className="mb-1 text-tally-title">
+        Particulars ({manySide}) — {accountLabel} is {oneSide} {total}
+      </h2>
+      <p className="mb-2 text-xs">
+        Single entry: name the account once, list what it moved against. The
+        account&rsquo;s amount is the total and is not typed. Ctrl+H switches to
+        double entry.
+      </p>
+      <ul>
+        {rows.map((l, i) => (
+          <li key={i} className="mb-1 flex flex-wrap items-center gap-2">
+            <span className="w-6">{manySide}</span>
+            <input
+              aria-label={`Particular ${i + 1} ledger`}
+              data-testid={`single-ledger:${i}`}
+              list="single-entry-ledgers"
+              className="bg-tally-field px-1 text-tally-fieldText outline-none"
+              value={l.ledger}
+              placeholder="ledger"
+              onChange={(e) => setLine(i, { ledger: e.target.value })}
+            />
+            <input
+              aria-label={`Particular ${i + 1} amount`}
+              data-testid={`single-amount:${i}`}
+              className="w-32 bg-tally-field px-1 text-right text-tally-fieldText outline-none"
+              value={l.amount}
+              placeholder="0.0000"
+              onChange={(e) => setLine(i, { amount: e.target.value })}
+            />
+            {rows.length > 1 ? (
+              <button
+                type="button"
+                data-testid={`single-remove:${i}`}
+                className="px-1 text-xs underline"
+                onClick={() =>
+                  setForm((f) => ({
+                    ...f,
+                    lines: f.lines.filter((_, idx) => idx !== i),
+                  }))
+                }
+              >
+                remove
+              </button>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+      {/* The company's real accounts, offered as completions rather than a
+          closed list: a counter-ledger that does not exist yet is created on
+          accept, exactly as the party field does. */}
+      <datalist id="single-entry-ledgers">
+        {parties.map((p) => (
+          <option key={p} value={p} />
+        ))}
+      </datalist>
+      <button
+        type="button"
+        data-testid="single-add-line"
+        className="mt-1 px-2 py-0.5 text-xs underline"
+        onClick={() =>
+          setForm((f) => ({ ...f, lines: [...f.lines, { ledger: "", amount: "" }] }))
+        }
+      >
+        + Add particular
+      </button>
+      <p className="mt-2" data-testid="single-total">
+        {oneSide} {accountLabel}: {total}
+      </p>
     </div>
   );
 }

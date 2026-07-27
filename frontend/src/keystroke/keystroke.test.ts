@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { createActor } from "xstate";
 import { navMachine, projectSnapshot } from "./navMachine";
 import { buttonBarLabels } from "./buttonBar";
+import { entryModesFor } from "../screens/vouchers/voucherConfig";
 import { runCase } from "./runner";
 import type { CorpusCase } from "./runner";
 import type { NavSnapshot } from "./navMachine";
@@ -21,10 +22,19 @@ function loadCases(): CorpusCase[] {
   });
 }
 
-/** Map a snapshot's overlay enum to its on-screen option labels for assertions. */
+/**
+ * Map a snapshot's overlay enum to its on-screen option labels for assertions.
+ *
+ * Change Mode is CLASS-AWARE: Ctrl+H offers Single/Double entry on Payment,
+ * Receipt and Contra and the invoice-mode family on Sales/Purchase. This used to
+ * return the same three invoice labels for every voucher, which is exactly what
+ * the screen used to render — so the corpus agreed with a screen that was wrong.
+ * Deriving it from the same `entryModesFor` the screen renders means the corpus
+ * cannot drift from the product.
+ */
 function overlayOptions(snap: NavSnapshot): string[] | undefined {
   if (snap.overlay === "change-mode") {
-    return ["Item Invoice", "Accounting Invoice", "As Voucher"];
+    return entryModesFor(snap.voucherType ?? "sales").map((m) => m.label);
   }
   return undefined;
 }
@@ -52,7 +62,17 @@ function assertExpect(snap: NavSnapshot, exp: Record<string, unknown>): void {
         expect(snap.saved ?? false).toBe(want);
         break;
       case "overlay":
-        expect(snap.overlay).toBe(want);
+        // `null` in a case means "no overlay is open". The snapshot represents
+        // that as undefined, and a case that had to write `undefined` in JSON
+        // could not (JSON has no such literal) — so null is the corpus spelling
+        // and both are accepted. Asserting the CLOSED state matters: Tally's
+        // Change Mode applies and dismisses in one keystroke, and a case that
+        // could only assert "an overlay is open" could not pin that.
+        if (want === null) {
+          expect(snap.overlay ?? null).toBeNull();
+        } else {
+          expect(snap.overlay).toBe(want);
+        }
         break;
       case "parentScreen":
         expect(snap.parentScreen).toBe(want);
@@ -170,10 +190,43 @@ describe("navMachine unit semantics", () => {
       { type: "KEY", combo: "Ctrl+H" },
     ]);
     expect(snap.overlay).toBe("change-mode");
+    // Sales gets the invoice-mode family, each disclosed as not built.
     expect(overlayOptions(snap)).toEqual([
-      "Item Invoice",
-      "Accounting Invoice",
-      "As Voucher",
+      "Item Invoice — not built",
+      "Accounting Invoice — not built",
+      "As Voucher — not built",
     ]);
+  });
+
+  it("Ctrl+H offers SINGLE vs DOUBLE entry on a Payment, not the invoice modes", () => {
+    // The picker is class-aware. It previously showed the same three invoice
+    // labels on every voucher — and did nothing when one was chosen — so the
+    // key Tally uses to switch entry style was a dead end on the three classes
+    // where it matters most.
+    const snap = drive([
+      { type: "KEY", combo: "F5" },
+      { type: "KEY", combo: "Ctrl+H" },
+    ]);
+    expect(overlayOptions(snap)).toEqual(["Single Entry", "Double Entry"]);
+  });
+
+  it("choosing a mode applies it and CLOSES the overlay in one keystroke", () => {
+    const snap = drive([
+      { type: "KEY", combo: "F5" },
+      { type: "KEY", combo: "Ctrl+H" },
+      { type: "SELECT", menuItem: "Double Entry" },
+    ]);
+    expect(snap.overlay ?? null).toBeNull();
+    expect(snap.config?.entryMode).toBe("double");
+  });
+
+  it("a NOT-BUILT invoice mode dismisses without changing anything", () => {
+    const snap = drive([
+      { type: "KEY", combo: "F8" },
+      { type: "KEY", combo: "Ctrl+H" },
+      { type: "SELECT", menuItem: "As Voucher — not built" },
+    ]);
+    expect(snap.overlay ?? null).toBeNull();
+    expect(snap.config?.entryMode).toBeUndefined();
   });
 });

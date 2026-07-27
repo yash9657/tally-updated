@@ -76,13 +76,37 @@ describe("VoucherScreen Ctrl+A create wiring", () => {
     { fkey: "F7", cls: "journal", method: "postJournalVoucher" },
   ];
 
+  // Payment / Receipt / Contra open in SINGLE-ENTRY mode (Tally's default for
+  // those three), which requires an account and at least one particular. They
+  // are filled here the way an operator fills them; the other classes still
+  // accept an empty form, which is the pre-existing behaviour.
+  const SINGLE_ENTRY: Record<string, boolean> = {
+    receipt: true,
+    payment: true,
+    contra: true,
+  };
+
   for (const { fkey, cls, method } of cases) {
     it(`Ctrl+A in a ${cls} voucher calls ${method} with empty voucher_no and shows the returned number`, async () => {
       const { client, spies } = spyClient();
       renderShell(client);
       const app = screen.getByRole("application");
       fireEvent.keyDown(app, { key: fkey });
-      // Accept the (empty) voucher.
+
+      if (SINGLE_ENTRY[cls]) {
+        fireEvent.change(screen.getByRole("combobox", { name: "Account" }), {
+          target: { value: "HDFC Bank" },
+        });
+        fireEvent.mouseDown(await screen.findByText(/HDFC Bank/));
+        fireEvent.change(screen.getByTestId("single-ledger:0"), {
+          target: { value: "Office Rent" },
+        });
+        fireEvent.change(screen.getByTestId("single-amount:0"), {
+          target: { value: "2500" },
+        });
+      }
+
+      // Accept the voucher.
       fireEvent.keyDown(app, { key: "a", ctrlKey: true });
 
       await waitFor(() => expect(spies[method]).toHaveBeenCalledTimes(1));

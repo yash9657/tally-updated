@@ -1,0 +1,16 @@
+{
+  "id": "ctrl-h-on-a-voucher-lists-that-class-modes",
+  "description": "Ctrl+H on a Payment voucher lists the entry modes for THAT class, with the one in force marked. A Sales voucher gets the invoice-mode family instead, each labelled 'not built' rather than omitted — the same honesty the keymap applies to unavailable combos, because a key that silently does nothing is what makes a keyboard user distrust the app.",
+  "keymapProfile": "tallyprime",
+  "startScreen": "gateway",
+  "events": [
+    { "type": "key", "combo": "F5" },
+    { "type": "key", "combo": "Ctrl+H" }
+  ],
+  "expect": {
+    "screen": "voucher",
+    "voucherType": "payment",
+    "overlay": "change-mode",
+    "overlayOptions": ["Single Entry", "Double Entry"]
+  }
+}

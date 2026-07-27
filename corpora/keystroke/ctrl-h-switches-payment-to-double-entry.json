@@ -1,0 +1,17 @@
+{
+  "id": "ctrl-h-switches-payment-to-double-entry",
+  "description": "Ctrl+H (Change Mode) on a Payment voucher offers Single and Double Entry — the modes that apply to THAT class — and choosing Double Entry takes effect immediately, with no confirming Enter, exactly as Tally's Change Mode does. Before this the overlay listed three invoice labels on every voucher and did nothing at all when one was picked. The chosen mode is recorded on the FRAME config, so it survives while the voucher is open and does not leak to the next one.",
+  "keymapProfile": "tallyprime",
+  "startScreen": "gateway",
+  "events": [
+    { "type": "key", "combo": "F5" },
+    { "type": "key", "combo": "Ctrl+H" },
+    { "type": "select", "menuItem": "Double Entry" }
+  ],
+  "expect": {
+    "screen": "voucher",
+    "voucherType": "payment",
+    "overlay": null,
+    "config": { "entryMode": "double" }
+  }
+}

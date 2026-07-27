@@ -157,3 +157,56 @@ export const VOUCHER_CONFIGS: Readonly<Record<VoucherType, VoucherConfig>> = {
 export function configFor(type: VoucherType): VoucherConfig {
   return VOUCHER_CONFIGS[type];
 }
+
+
+/**
+ * The entry modes Ctrl+H offers for a voucher class, in Tally's own order.
+ *
+ * RESEARCH.md §"Voucher entry": Ctrl+H (Change Mode) toggles Single Entry
+ * (Payment / Receipt / Contra — one account on one side, multiple on the other)
+ * against Double Entry (classic Dr/Cr). Sales and Purchase instead toggle the
+ * invoice modes, which this edition does not implement — so they are listed
+ * with an honest "not built" marker rather than omitted, on the same principle
+ * as the keymap's `unavailable` actions: a key that silently does nothing is
+ * worse than one that says why.
+ */
+export interface EntryModeOption {
+  label: string;
+  /** The FrameConfig.entryMode this option selects, or null when not built. */
+  mode: "single" | "double" | null;
+}
+
+export function entryModesFor(type: VoucherType): EntryModeOption[] {
+  const cfg = configFor(type);
+  if (cfg.showGst) {
+    // Sales / Purchase: Tally's invoice-mode family. None is implemented.
+    return [
+      { label: "Item Invoice — not built", mode: null },
+      { label: "Accounting Invoice — not built", mode: null },
+      { label: "As Voucher — not built", mode: null },
+    ];
+  }
+  if (cfg.entry === "double") {
+    // Journal is double-entry only in Tally too: there is no single side to
+    // infer when both sides are the point.
+    return [{ label: "Double Entry", mode: "double" }];
+  }
+  return [
+    { label: "Single Entry", mode: "single" },
+    { label: "Double Entry", mode: "double" },
+  ];
+}
+
+/**
+ * The entry mode in force for a frame: the user's Ctrl+H choice if they made
+ * one, else the class default. Single-capable classes default to SINGLE, which
+ * is what a Tally operator expects when they press F5.
+ */
+export function effectiveEntryMode(
+  type: VoucherType,
+  chosen: "single" | "double" | undefined,
+): "single" | "double" {
+  const cfg = configFor(type);
+  if (cfg.entry === "double") return "double"; // never offer single where Tally does not
+  return chosen ?? cfg.entry;
+}

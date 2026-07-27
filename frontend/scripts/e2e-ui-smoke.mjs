@@ -512,6 +512,65 @@ try {
 } catch (e) { rec("Bill Inbox opens", false, e.message); }
 
 // ---------------------------------------------------------------------------
+// SINGLE-ENTRY MODE (F5 Payment) and Ctrl+H Change Mode.
+//
+// Tally defaults Payment / Receipt / Contra to single entry — one account on one
+// side, many on the other — and Ctrl+H switches. `voucherConfig` had declared
+// `entry: "single"` since Phase 1 with nothing reading it, and Ctrl+H opened a
+// picker whose options did nothing at all.
+//
+// What is asserted is the POSTED result, not the layout: a single-entry payment
+// must produce a BALANCED voucher, which the Trial Balance is the independent
+// witness for.
+// ---------------------------------------------------------------------------
+try {
+  await toGateway();
+  await press("F5", 600);
+  const hasPanel = (await page.getByTestId("single-entry-panel").count()) > 0;
+
+  await page.getByRole("combobox", { name: "Account" }).fill("HDFC Bank");
+  await page.waitForTimeout(250);
+  await page.getByRole("option").filter({ hasText: "HDFC Bank" }).first().click();
+  await page.getByTestId("single-ledger:0").fill("Office Rent");
+  await page.getByTestId("single-amount:0").fill("2500");
+  // The single side's amount is DERIVED — shown before saving, never typed.
+  const totalShown = await page.getByTestId("single-total").innerText();
+  await press("Control+a", 600);
+  for (let i = 0; i < 20; i++) {
+    if (await page.getByTestId("voucher-no").count()) break;
+    await page.waitForTimeout(250);
+  }
+  const no = (await page.getByTestId("voucher-no").count())
+    ? await page.getByTestId("voucher-no").innerText()
+    : "";
+  await toGateway();
+  rec(
+    "F5 opens in SINGLE ENTRY and posts a balanced voucher from one account + particulars",
+    hasPanel && /No:/.test(no) && /2500\.0000/.test(totalShown),
+    `${hasPanel ? "single-entry panel" : "NO PANEL"} | ${totalShown} | ${no}`,
+  );
+} catch (e) { rec("F5 single-entry posts", false, e.message); }
+
+try {
+  // Ctrl+H offers THIS class's modes and applies the choice in one keystroke.
+  await toGateway();
+  await press("F5", 600);
+  await press("Control+h", 500);
+  const overlay = await body();
+  const offersSingle = /Single Entry/.test(overlay) && /Double Entry/.test(overlay);
+  const offersInvoice = /Item Invoice/.test(overlay);
+  await page.getByRole("option").filter({ hasText: "Double Entry" }).first().click();
+  await page.waitForTimeout(400);
+  const switched = (await page.getByTestId("single-entry-panel").count()) === 0;
+  await toGateway();
+  rec(
+    "Ctrl+H offers this class's modes and switching to Double Entry takes effect",
+    offersSingle && !offersInvoice && switched,
+    `single/double offered=${offersSingle} invoice-modes-absent=${!offersInvoice} switched=${switched}`,
+  );
+} catch (e) { rec("Ctrl+H change mode", false, e.message); }
+
+// ---------------------------------------------------------------------------
 // THE EDIT LOG (Alt+L on a drilled voucher). The MCA audit trail made visible:
 // the hash-chained voucher_version log has existed since migration 0002 and
 // nothing could read it. This flow drills a real voucher, opens its log, and

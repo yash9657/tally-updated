@@ -134,6 +134,17 @@ export const MORE_REPORTS_LABEL = "Display More Reports";
 export const USERS_ROLES_LABEL = "Users & Roles";
 
 /**
+ * The two Ctrl+H Change Mode labels the machine acts on. Kept here (not in the
+ * screen) because the MACHINE owns what a selection does; the screen owns which
+ * options a voucher class offers. Any other label — including the "not built"
+ * invoice modes — simply dismisses the overlay.
+ */
+const ENTRY_MODE_LABELS: Readonly<Record<string, "single" | "double">> = {
+  "Single Entry": "single",
+  "Double Entry": "double",
+};
+
+/**
  * Pinned sentinel the CompanySelectScreen feeds through `onSelect` AFTER it has
  * re-scoped the session (setCompany) to the chosen company. The machine's only
  * job then is to LEAVE the picker — the company id is never smuggled through
@@ -755,6 +766,34 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
 function reduceSelect(ctx: NavContext, menuItem: string): Partial<NavContext> {
   const stack = ctx.stack.slice();
   const active = { ...top(stack) };
+
+  // CTRL+H CHANGE MODE: picking a mode applies it and closes the overlay.
+  //
+  // Unlike the Go To pick-list below, this needs no confirming Enter — Tally's
+  // Change Mode takes effect the moment you choose, and the overlay was
+  // previously a dead end: it rendered three labels that did nothing at all.
+  //
+  // A "not built" option (the invoice modes on Sales/Purchase) is ACCEPTED as a
+  // dismissal rather than silently ignored: the overlay closes, the mode is
+  // unchanged, and the label already said why.
+  if (active.screen === "voucher" && active.overlay === "change-mode") {
+    // The machine interprets the two CANONICAL labels and nothing else. Which
+    // options a class OFFERS is the screen's business (voucherConfig's
+    // entryModesFor) — putting that table here would make the pure machine
+    // import from screens/, inverting the layering. Anything else, including
+    // the "not built" invoice modes, falls through as a dismissal.
+    //
+    // A double-entry-only class cannot be pushed into single mode this way
+    // either: it never offers the label, and effectiveEntryMode() forces
+    // "double" for those classes regardless of what the config says.
+    const mode = ENTRY_MODE_LABELS[menuItem];
+    if (mode) {
+      active.config = { ...(active.config ?? {}), entryMode: mode };
+    }
+    active.overlay = undefined;
+    stack[stack.length - 1] = active;
+    return { stack };
+  }
 
   // In a Go To / Switch To overlay, a selection highlights the item; Enter
   // confirms it (matching Tally's type-ahead pick-list then Enter).
