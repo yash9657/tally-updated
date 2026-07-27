@@ -39,6 +39,7 @@ import type {
   ListLedgersResponse,
   SetLedgerOpeningRequest,
   SetLedgerOpeningResponse,
+  VoucherHistoryResponse,
 } from "./types";
 import type { QueryRequest, QueryResult } from "./query";
 import type {
@@ -264,6 +265,12 @@ export function createRestClient(
       return http.get<OutstandingsResponse>(
         `${company(companyID)}/outstandings`,
         query,
+      );
+    },
+
+    getVoucherHistory(companyID, voucherID) {
+      return http.get<VoucherHistoryResponse>(
+        `${company(companyID)}/vouchers/${encodeURIComponent(voucherID)}/history`,
       );
     },
 

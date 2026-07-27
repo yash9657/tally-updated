@@ -190,9 +190,18 @@ erased, and the voucher number is carried forward, never re-allocated.
 `voucher_no "1"`; delete → `version_no 3, op DELETE`. After the delete the Day
 Book no longer lists it and the Trial Balance is still balanced (0.00 / 0.00).
 
-> **Gap:** the version history exists in the ledger but there is **no Edit Log
-> screen or API to read it back** — `GET /vouchers/{id}` returns the latest
-> version only. This is the top functional gap I would close next.
+**The Edit Log — `Alt+L` on a drilled voucher.** Every version, oldest first,
+with who made it and when, what changed from the version before, and — the part
+that matters — the server's **verification of the BLAKE3 hash chain**. A
+deleted voucher still has a log; the tombstone is an entry in it. The endpoint
+is `GET .../vouchers/{id}/history`.
+
+The verification is why this is evidence rather than a claim. It is proven by a
+test that DEFEATS the append-only trigger as the postgres superuser, edits a
+stored payload, and asserts the endpoint reports the chain broken at the right
+version — then repairs the row and asserts it verifies again
+(`TestVoucherHistoryDetectsTampering`, three tamper modes: an edited payload, an
+edited amount, and a removed version).
 
 ### 3.4 Masters
 
@@ -343,7 +352,6 @@ liabilities = 109000.0000; net profit 9000.0000.
 
 | Missing | Consequence | Keys that say so |
 |---|---|---|
-| Edit Log **viewer** | versions are recorded but cannot be read back in-app | — |
 | Inventory: stock vouchers, godowns, batches, BoM, orders | no stock movement or valuation | `F10`, `Alt+F7`–`Alt+F9`, `Ctrl+F7`–`Ctrl+F9` |
 | Payroll | — | `Ctrl+F4` |
 | Cost centres / categories | no allocation dimension on postings | — |

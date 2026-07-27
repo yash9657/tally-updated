@@ -118,6 +118,9 @@ export function buttonBarFor(
     case "company-select":
     case "members":
       return AI_BAR;
+    // The Edit Log is a pure reader: nothing on it is editable, by design.
+    case "edit-log":
+      return READER_BAR;
     default:
       return GATEWAY_BAR;
   }

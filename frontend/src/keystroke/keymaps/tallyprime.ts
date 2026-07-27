@@ -152,6 +152,13 @@ const RAW_SCREEN_BINDINGS: Partial<
     "Ctrl+H": { kind: "changeView" },
     "Alt+F5": { kind: "detailed" },
   },
+  // Alt+L on a voucher opens its EDIT LOG. RESEARCH sec 6 pins the PLACEMENT
+  // (Tally shows the Edit Log from the voucher alteration screen and the Day
+  // Book) but not the combo, so this is scoped to the voucher screen rather
+  // than claimed as a documented global binding — see the KeymapAction comment.
+  voucher: {
+    "Alt+L": { kind: "editLog" },
+  },
 };
 
 function buildBindings(
@@ -296,6 +303,8 @@ export function actionLabel(action: KeymapAction): string {
       return "Configure this screen";
     case "switchCompany":
       return "Switch Company";
+    case "editLog":
+      return "Edit Log (every version of this voucher)";
     case "createMaster":
       return `Create ${action.masterKind} on the fly`;
     case "unavailable":

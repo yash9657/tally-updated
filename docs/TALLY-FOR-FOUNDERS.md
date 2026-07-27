@@ -432,7 +432,9 @@ by `pnpm verify:demo` (18/18 checks). Specifically:
   Balance Sheet to the paisa on both the receivable and payable sides.
 - Opening balances stated as at *books beginning from*.
 - An **immutable, hash-chained edit log**: an alter or delete appends a new
-  version and never mutates the old one.
+  version and never mutates the old one — and `Alt+L` on a voucher READS it
+  back, every version with its author, what changed, and a verification of the
+  hash chain. A deleted voucher keeps its log; the tombstone is an entry in it.
 - e-Invoice / IRN generation, with a voucher freezing against edits once pinned.
 
 ### Deliberately not built

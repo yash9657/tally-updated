@@ -42,6 +42,7 @@ import type {
   ListLedgersResponse,
   SetLedgerOpeningRequest,
   SetLedgerOpeningResponse,
+  VoucherHistoryResponse,
 } from "./types";
 import type { QueryRequest, QueryResult } from "./query";
 import type {
@@ -202,6 +203,17 @@ export interface CoredClient {
   // REAL ledger_id uuids (not Day Book names) plus persisted GST attributes, so
   // a full restatement resends valid uuids and the numbering is preserved.
   getVoucher(companyID: string, voucherID: string): Promise<VoucherView>;
+
+  /**
+   * The EDIT LOG of one logical voucher (GET .../vouchers/{id}/history): every
+   * hash-chained version, oldest first, WITH the server's verification of the
+   * chain. Unlike {@link getVoucher} it reads THROUGH a tombstone — a deletion
+   * is the most interesting entry an audit log can carry.
+   */
+  getVoucherHistory(
+    companyID: string,
+    voucherID: string,
+  ): Promise<VoucherHistoryResponse>;
 
   // Voucher deletion (DELETE /vouchers/{voucherID}) — class-agnostic tombstone.
   deleteVoucher(

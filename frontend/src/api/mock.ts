@@ -50,6 +50,8 @@ import type {
   ListLedgersResponse,
   SetLedgerOpeningRequest,
   SetLedgerOpeningResponse,
+  VoucherHistoryResponse,
+  VoucherVersionView,
 } from "./types";
 import type { QueryRequest, QueryResult } from "./query";
 import type {
@@ -212,6 +214,20 @@ interface MockCompany {
   members: MemberView[];
   invites: InviteView[];
   levels: SecurityLevelView[];
+  /**
+   * The EDIT LOG, keyed by logical voucher_id: every create/alter/delete, in
+   * order. The rest of the mock RESTATES a voucher in place (that is what makes
+   * the derived reports right), so without this log a version history would be
+   * unrecoverable — the mock would have to fabricate one, which on an audit-trail
+   * screen is the worst possible thing to fake.
+   *
+   * What it deliberately does NOT do is hash. The chain is BLAKE3 over the
+   * canonical payload and only the server computes it, so every entry here
+   * carries an empty hash and `getVoucherHistory` returns a verification that
+   * SAYS no chain was checked. A mock that answered `ok: true` would assert the
+   * one property this feature exists to prove.
+   */
+  history: Map<string, VoucherVersionView[]>;
 }
 
 /** The migration-0015 company profile, mirrored by the mock. */
@@ -459,6 +475,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         ],
         invites: [],
         levels: seededLevels(companyID),
+        history: new Map(),
         counters: new Map(),
       };
       companies.set(companyID, c);
@@ -508,6 +525,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       ],
       invites: [],
       levels: seededLevels(demoID),
+      history: new Map(),
     };
     companies.set(demoID, demo);
   }
@@ -643,6 +661,49 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     return cls.charAt(0).toUpperCase() + cls.slice(1);
   }
 
+
+  /**
+   * Append one entry to a voucher's EDIT LOG. Called on every create, alter and
+   * delete, because the rest of the mock restates in place and would otherwise
+   * have no history to show.
+   *
+   * `hash`/`prev_hash` are left EMPTY on purpose: the chain is BLAKE3 over the
+   * server's canonical payload, and inventing hashes here would let a screen
+   * test pass against a chain nobody verified.
+   */
+  function logVersion(
+    c: MockCompany,
+    voucherID: string,
+    e: {
+      op: string;
+      cls: string;
+      voucherNo: string;
+      date: string;
+      narration: string;
+      party: string;
+      createdBy: string;
+      postings: { ledger_id: string; dr_cr: string; amount: Money }[];
+    },
+  ): void {
+    const log = c.history.get(voucherID) ?? [];
+    log.push({
+      version_no: log.length + 1,
+      op: e.op,
+      created_by: e.createdBy,
+      created_at: "2026-07-27T00:00:00Z",
+      node_id: "mock-0",
+      hash: "",
+      prev_hash: "",
+      class: e.cls,
+      voucher_no: e.voucherNo,
+      voucher_date: e.date,
+      narration: e.narration,
+      party: e.party,
+      postings: e.postings,
+    });
+    c.history.set(voucherID, log);
+  }
+
   function recordVoucher(
     companyID: string,
     cls: VoucherClass,
@@ -669,6 +730,16 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       postings,
     };
     c.vouchers.push(entry);
+    logVersion(c, voucherID, {
+      op: "CREATE",
+      cls: classLabel(cls),
+      voucherNo,
+      date,
+      narration: req.narration ?? "",
+      party: req.party ?? "",
+      createdBy: req.created_by ?? "",
+      postings: req.postings ?? [],
+    });
     // RETAIN real ledger_id uuids + GST attrs for the GET hydration path.
     c.views.set(voucherID, {
       voucher_id: voucherID,
@@ -736,6 +807,16 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     entry.postings = postings;
     entry.debit = debit;
     entry.credit = credit;
+    logVersion(c, voucherID, {
+      op: "ALTER",
+      cls: classLabel(cls),
+      voucherNo: entry.voucher_no,
+      date: entry.date,
+      narration: req.narration ?? "",
+      party: req.party ?? "",
+      createdBy: req.created_by ?? "",
+      postings: req.postings ?? [],
+    });
     // Restate the head view with the new postings/GST (real ledger_id uuids).
     c.views.set(voucherID, {
       voucher_id: voucherID,
@@ -989,6 +1070,16 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       // backend's reverse-prior-then-add-nothing net-zero delete. The head view
       // is removed too, so a subsequent getVoucher 404s (rejects) like the live
       // GET (which excludes is_deleted=true head rows).
+      logVersion(c, voucherID, {
+        op: "DELETE",
+        cls: classLabel(prior.voucher_type as VoucherClass),
+        voucherNo: prior.voucher_no,
+        date: prior.date,
+        narration: prior.narration,
+        party: prior.party,
+        createdBy: _createdBy ?? "",
+        postings: [],
+      });
       c.vouchers.splice(idx, 1);
       c.views.delete(voucherID);
       return {
@@ -997,6 +1088,35 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         version_no: nextVersion,
         op: "DELETE",
         voucher_no: prior.voucher_no,
+      };
+    },
+
+    async getVoucherHistory(
+      companyID: string,
+      voucherID: string,
+    ): Promise<VoucherHistoryResponse> {
+      const c = ensure(companyID);
+      const versions = c.history.get(voucherID);
+      if (!versions || versions.length === 0) {
+        throw new ApiError(404, "voucher not found", "voucher not found");
+      }
+      return {
+        voucher_id: voucherID,
+        // The mock removes a deleted voucher from the live store, so a head view
+        // that is gone while a log exists IS the tombstone.
+        is_deleted: !c.views.has(voucherID),
+        versions: versions.map((v) => ({ ...v })),
+        // NOT `ok: true`. The mock computes no hashes (see MockCompany.history),
+        // so claiming a verified chain would assert the single property this
+        // whole feature exists to prove. It reports honestly that it checked
+        // nothing, and the screen renders that as the unknown state it is.
+        verification: {
+          ok: false,
+          versions_checked: 0,
+          broken_at_version: 0,
+          reason:
+            "mock client: no hash chain is computed in memory — only the server verifies the log",
+        },
       };
     },
 

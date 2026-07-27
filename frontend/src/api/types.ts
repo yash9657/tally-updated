@@ -569,3 +569,64 @@ export interface ImportTallyXMLResponse {
   ledgers_ensured: number;
   posted: ImportedVoucher[];
 }
+
+// ---------------------------------------------------------------------------
+// The EDIT LOG (GET .../vouchers/{voucherID}/history)
+// ---------------------------------------------------------------------------
+
+/**
+ * One immutable entry of a voucher's edit log, as RECORDED — the postings come
+ * from the hashed payload, not from the posting table, so what is displayed is
+ * exactly what is signed.
+ */
+export interface VoucherVersionView {
+  version_no: number;
+  /** CREATE | ALTER | DELETE. */
+  op: string;
+  created_by: string;
+  created_at: string;
+  node_id: string;
+  /** BLAKE3 over (canonical payload || prev_hash), hex. */
+  hash: string;
+  /** "" on version 1, which begins the chain. */
+  prev_hash: string;
+  class: string;
+  voucher_no: string;
+  voucher_date: string;
+  narration: string;
+  party: string;
+  postings: { ledger_id: string; dr_cr: string; amount: string }[];
+  bill_allocations?: {
+    ledger_id: string;
+    ref_name: string;
+    ref_type: string;
+    dr_cr: string;
+    amount: string;
+    due_date: string;
+  }[];
+}
+
+/**
+ * The server's answer to "has this record been tampered with?".
+ *
+ * `ok` is true only when every version recomputes to its recorded hash, each
+ * links to its predecessor, and the numbering has no gaps. This is the half of
+ * the edit log that makes it evidence rather than a claim, so a client MUST
+ * render it — a viewer that showed the versions and dropped the verification
+ * would be strictly more misleading than showing nothing.
+ */
+export interface ChainVerification {
+  ok: boolean;
+  versions_checked: number;
+  /** The version_no where verification first failed, or 0 when ok. */
+  broken_at_version: number;
+  reason: string;
+}
+
+export interface VoucherHistoryResponse {
+  voucher_id: string;
+  /** True when the head is a tombstone. A deleted voucher still HAS a history. */
+  is_deleted: boolean;
+  versions: VoucherVersionView[];
+  verification: ChainVerification;
+}

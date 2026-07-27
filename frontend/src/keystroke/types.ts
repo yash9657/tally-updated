@@ -49,6 +49,7 @@ export type ScreenKind =
   | "query"
   | "company-select"
   | "members"
+  | "edit-log"
   | "help"
   | "features";
 
@@ -184,6 +185,17 @@ export type KeymapAction =
    * reachable, so the key now does what a Tally operator expects.
    */
   | { kind: "switchCompany" }
+  /**
+   * Alt+L on a voucher — open its EDIT LOG (every hash-chained version, with a
+   * verification of the chain).
+   *
+   * PLACEMENT is from RESEARCH.md sec 6: Tally surfaces the Edit Log from the
+   * voucher alteration screen and the Day Book. The COMBO is not pinned there —
+   * RESEARCH records Alt+L for other log-ish actions (Get IRN Info, Update
+   * Opening BRS) but never for opening a voucher's log — so Alt+L is OUR choice,
+   * and it is scoped to the voucher screen rather than claimed globally.
+   */
+  | { kind: "editLog" }
   /**
    * A combo that a real TallyPrime user WILL press but whose feature is not
    * built in this edition (e.g. payroll, order processing). It is bound on

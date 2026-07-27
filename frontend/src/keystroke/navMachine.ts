@@ -560,6 +560,19 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
       return pushOnce("company-select");
     }
 
+    case "editLog": {
+      // Alt+L on a voucher — its EDIT LOG (every hash-chained version plus a
+      // verification of the chain).
+      //
+      // Only from a VOUCHER frame, and only in ALTERATION mode: a voucher being
+      // entered has no history yet, and pushing an empty log would read as a
+      // broken screen rather than as "there is nothing here". The machine stays
+      // PURE — no voucher id travels through it. The screen reads the drilled
+      // voucher from LoadedVoucher, exactly as the alter form already does.
+      if (active.screen !== "voucher" || active.voucherMode !== "alter") return {};
+      return pushOnce("edit-log");
+    }
+
     case "configure": {
       return openOverlay("configure");
     }

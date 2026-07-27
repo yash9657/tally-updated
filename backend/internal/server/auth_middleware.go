@@ -310,10 +310,19 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 		}
 		return "", "", "", false
 
-	// GET single voucher.
+	// GET single voucher, and its EDIT LOG.
+	//
+	// The history is the SAME (Display, voucher) pair as the voucher itself:
+	// whoever may see a voucher may see how it came to look that way, and a
+	// level that cannot see it cannot see its history either. Modelling the log
+	// as its own resource would let the two drift apart, which for an audit
+	// trail is the wrong direction.
 	case method == http.MethodGet && strings.HasPrefix(rest, "/vouchers/"):
 		segs := splitPath(rest)
 		if len(segs) == 2 && segs[0] == "vouchers" {
+			return authz.Display, "voucher", "", true
+		}
+		if len(segs) == 3 && segs[0] == "vouchers" && segs[2] == "history" {
 			return authz.Display, "voucher", "", true
 		}
 		return "", "", "", false

@@ -417,6 +417,12 @@ func (s *Server) routes() {
 		// DELETE /vouchers/{voucherID} below already coexists with the literals.
 		r.Get("/vouchers/{voucherID}", s.handleGetVoucher)
 
+		// The EDIT LOG of one logical voucher: every hash-chained version plus a
+		// verification of the chain. Reads THROUGH a tombstone, unlike the head
+		// fetch above — a deletion is the most interesting entry an audit log
+		// can carry. See handler_voucher_history.go.
+		r.Get("/vouchers/{voucherID}/history", s.handleVoucherHistory)
+
 		// Delete: append a tombstone. Class-agnostic — a delete needs only the id.
 		r.Delete("/vouchers/{voucherID}", s.handleDeleteVoucher)
 

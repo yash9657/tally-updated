@@ -4,14 +4,14 @@
 This one explains *who is allowed to do what, and why* — the SaaS layer.
 
 Every status code below was observed on the running stack. The whole document is
-gated by `pnpm verify:tenancy`, which exercises **97 paths** and fails if any
+gated by `pnpm verify:tenancy`, which exercises **105 paths** and fails if any
 branch changes behaviour.
 
 ```bash
 cd frontend
 pnpm seed:demo -- --insightd        # company A (Demo Traders) — prints its id
 pnpm seed:tenancy <A>               # adds a 2nd user to A, builds company B
-pnpm verify:tenancy <A> <B>         # 97 access-control checks
+pnpm verify:tenancy <A> <B>         # 105 access-control checks
 ```
 
 The verifier is **self-cleaning**: it must write in order to test write
@@ -92,6 +92,7 @@ evaluates. The mapping is a **closed list** — and an unmapped route is denied:
 | `PUT .../vouchers/{class}/{id}` | `alter` / `{class}` |
 | `DELETE .../vouchers/{id}` | `delete` / `voucher` |
 | `GET .../vouchers/{id}` | `display` / `voucher` |
+| `GET .../vouchers/{id}/history` (edit log) | `display` / `voucher` — the SAME pair, deliberately: whoever may see a voucher may see how it came to look that way, and a level that cannot see it cannot see its history either |
 | `POST .../ledgers|groups|units|stock-items` | `create` / `master` |
 | `GET .../ledgers` | `display` / `master` |
 | `PUT .../ledgers/{id}/opening` | `alter` / `master` |
@@ -573,7 +574,7 @@ PDP — not the admin API reading its own write — as the oracle.
 cd frontend
 pnpm seed:demo -- --insightd     # -> company A
 pnpm seed:tenancy <A>            # -> company B + the Data Entry user
-pnpm verify:tenancy <A> <B>      # 97 checks; exits non-zero on any drift
+pnpm verify:tenancy <A> <B>      # 105 checks; exits non-zero on any drift
 pnpm verify:demo <A>             # 18 accounting checks; unaffected by the above
 ```
 

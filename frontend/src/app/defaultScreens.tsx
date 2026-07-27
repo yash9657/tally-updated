@@ -5,6 +5,7 @@ import { BillInboxScreen } from "../screens/BillInboxScreen";
 import { QueryScreen } from "../screens/QueryScreen";
 import { CompanySelectScreen } from "../screens/CompanySelectScreen";
 import { MembersScreen } from "../screens/MembersScreen";
+import { EditLogScreen } from "../screens/EditLogScreen";
 import { HelpScreen } from "../screens/HelpScreen";
 import { FeaturesScreen } from "../screens/FeaturesScreen";
 import { MasterCreateScreen } from "../screens/masters/MasterCreateScreen";
@@ -152,6 +153,17 @@ const MembersAdapter: ScreenComponent = ({
   <MembersScreen snapshot={snapshot} onSelect={onSelect} />
 );
 
+/**
+ * Edit Log adapter (Alt+L on a voucher in alteration mode): the voucher's
+ * hash-chained version history plus the server's verification of it.
+ */
+const EditLogAdapter: ScreenComponent = ({
+  snapshot,
+  onSelect,
+}: ScreenComponentProps) => (
+  <EditLogScreen snapshot={snapshot} onSelect={onSelect} />
+);
+
 /** F1 Help adapter: the keystroke reference for the frame below it. */
 const HelpAdapter: ScreenComponent = ({ snapshot }: ScreenComponentProps) => (
   <HelpScreen snapshot={snapshot} />
@@ -182,6 +194,8 @@ export function createDefaultRegistry(): ScreenRegistry {
     // The SaaS screens: F3 company switching and Users & Roles.
     "company-select": CompanySelectAdapter,
     members: MembersAdapter,
+    // Alt+L on a voucher: the MCA audit trail, made visible.
+    "edit-log": EditLogAdapter,
     // F1 Help (keystroke reference, generated from the live keymap) and F11
     // Company Features (the honest capability inventory).
     help: HelpAdapter,

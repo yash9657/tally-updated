@@ -804,6 +804,86 @@ async function main(): Promise<void> {
   check("...and cannot read company A -> 403", r.status === 403, brief(r));
 
   // =========================================================================
+  head("8c. THE EDIT LOG — who may read a voucher's history, and what it says");
+  // =========================================================================
+  // GET .../vouchers/{id}/history is the MCA audit trail made readable. Two
+  // things need pinning live: it is governed by the SAME (Display, voucher) pair
+  // as fetching the voucher — so nobody can see a history they could not see the
+  // voucher for — and, unlike the head fetch, it reads THROUGH a tombstone.
+  r = await probeJournal(ownerA, companyA, ledA1, ledA2, "2026-07-20");
+  const histVoucherID = r.status === 201
+    ? (JSON.parse(r.body) as { voucher_id: string }).voucher_id
+    : "";
+  check("post a probe voucher to inspect the log of -> 201", r.status === 201 && !!histVoucherID, brief(r));
+
+  const historyOf = async (tok: string | null): Promise<Res> =>
+    call("GET", `/v1/companies/${companyA}/vouchers/${histVoucherID}/history`, tok);
+
+  r = await historyOf(ownerA);
+  const hist = r.status === 200
+    ? (JSON.parse(r.body) as {
+        is_deleted: boolean;
+        versions: { version_no: number; op: string; created_by: string; hash: string; prev_hash: string }[];
+        verification: { ok: boolean; versions_checked: number; reason: string };
+      })
+    : null;
+  check(
+    "Owner -> the edit log -> 200, and the server VERIFIES the hash chain",
+    r.status === 200 && hist?.verification.ok === true && hist.verification.versions_checked === 1,
+    `${r.status} verified=${hist?.verification.ok} checked=${hist?.verification.versions_checked}`,
+  );
+  check(
+    "v1 is a CREATE that begins the chain (a hash, and no previous hash)",
+    hist?.versions[0]?.op === "CREATE" &&
+      (hist?.versions[0]?.hash.length ?? 0) === 64 &&
+      hist?.versions[0]?.prev_hash === "",
+    `op=${hist?.versions[0]?.op} hash=${hist?.versions[0]?.hash.slice(0, 16)}… prev=${JSON.stringify(hist?.versions[0]?.prev_hash)}`,
+  );
+
+  // The history and the voucher must give the SAME answer to the same caller.
+  // A log readable by somebody who cannot read the voucher would be a leak; one
+  // refused to somebody who can read the voucher would be a useless audit trail.
+  const voucherStatus = (await call(
+    "GET", `/v1/companies/${companyA}/vouchers/${histVoucherID}`, dataEntryA)).status;
+  r = await historyOf(dataEntryA);
+  check(
+    "Data Entry gets the SAME answer for the log as for the voucher itself",
+    r.status === voucherStatus,
+    `history=${r.status} voucher=${voucherStatus} (they must agree)`,
+  );
+
+  r = await historyOf(ownerB);
+  check("Owner of B -> a voucher's log in A -> 403 (cross-tenant)", r.status === 403, brief(r));
+
+  r = await historyOf(null);
+  check("no token -> the log -> 401", r.status === 401, brief(r));
+
+  // DELETE it, then read the log again. The head fetch 404s; the log does not —
+  // a deletion is the single most interesting entry an audit trail can carry,
+  // and an edit log that forgot deletions would defeat its own purpose.
+  r = await call("DELETE", `/v1/companies/${companyA}/vouchers/${histVoucherID}`, ownerA);
+  check("Owner deletes the probe voucher -> 200", r.status === 200, brief(r));
+  const headAfter = (await call(
+    "GET", `/v1/companies/${companyA}/vouchers/${histVoucherID}`, ownerA)).status;
+  r = await historyOf(ownerA);
+  const after = r.status === 200
+    ? (JSON.parse(r.body) as {
+        is_deleted: boolean;
+        versions: { op: string }[];
+        verification: { ok: boolean };
+      })
+    : null;
+  check(
+    "the DELETED voucher's head is 404 but its log survives, tombstone and all",
+    headAfter === 404 &&
+      r.status === 200 &&
+      after?.is_deleted === true &&
+      after.versions.map((v) => v.op).join(",") === "CREATE,DELETE" &&
+      after.verification.ok === true,
+    `head=${headAfter} log=${r.status} ops=[${after?.versions.map((v) => v.op).join(",")}] verified=${after?.verification.ok}`,
+  );
+
+  // =========================================================================
   head("9. PASSWORD LOGIN — a real first-party credential, not a dev mint");
   // =========================================================================
   // Every token above came from POST /auth/token, which mints for ANY subject:

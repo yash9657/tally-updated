@@ -488,6 +488,39 @@ try {
 } catch (e) { rec("Bill Inbox opens", false, e.message); }
 
 // ---------------------------------------------------------------------------
+// THE EDIT LOG (Alt+L on a drilled voucher). The MCA audit trail made visible:
+// the hash-chained voucher_version log has existed since migration 0002 and
+// nothing could read it. This flow drills a real voucher, opens its log, and
+// asserts BOTH halves of the claim — the versions are there, AND the server
+// verified the chain. A viewer that listed versions without the verification
+// would be a claim rather than evidence, so the banner is what is asserted.
+// ---------------------------------------------------------------------------
+try {
+  await toGateway();
+  await navMenu("Day Book");
+  await press("ArrowDown", 250);
+  await press("Enter", 900); // drill into the voucher (alteration mode)
+  const onVoucher = /Voucher \(Alteration\)/.test(await heading());
+  await press("Alt+L", 1200);
+  const h = await heading();
+  const text = await body();
+  // The chain must be VERIFIED — not merely present. "Not verified" is what a
+  // client that never got a verification shows, and it must not pass here.
+  const verified = /Chain verified/.test(text);
+  const hasVersion = /v1 · Created/.test(text);
+  await press("Escape", 400);
+  const backOnVoucher = /Voucher \(Alteration\)/.test(await heading());
+  await toGateway();
+  rec(
+    "Alt+L opens the Edit Log, and the server VERIFIES the hash chain",
+    onVoucher && /Edit Log/i.test(h) && verified && hasVersion && backOnVoucher,
+    verified
+      ? `${h} — chain verified, v1 present, Esc returns to the voucher`
+      : `${h} — verification banner said: ${(text.match(/(Chain verified|TAMPERED[^\n]*|Not verified)/) ?? ["(none)"])[0]}`,
+  );
+} catch (e) { rec("Alt+L opens the Edit Log", false, e.message); }
+
+// ---------------------------------------------------------------------------
 // The SaaS surface in the browser: F3 company switching and Users & Roles.
 // F3 was bound to "not built" until the admin API made a second membership
 // reachable, so these two flows are the browser-visible half of that work.
