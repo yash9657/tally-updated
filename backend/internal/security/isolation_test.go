@@ -50,7 +50,7 @@ var tenantTables = []string{
 
 // harness holds the two adversary tenants and both privilege levels.
 type harness struct {
-	admin    *pgx.Conn   // superuser; bypasses RLS, used only to seed/inspect ground truth.
+	admin    *pgx.Conn     // superuser; bypasses RLS, used only to seed/inspect ground truth.
 	app      *pgxpool.Pool // tally_app; the surface the red team attacks.
 	companyA uuid.UUID
 	companyB uuid.UUID
@@ -594,12 +594,12 @@ type corpusScenario struct {
 	} `json:"session"`
 	Action string `json:"action"`
 	Expect struct {
-		RowCountIs            *int    `json:"rowCountIs"`
-		RowCountMax           *int    `json:"rowCountMax"`
-		RowsAffected          *int    `json:"rowsAffected"`
-		CompanyBRowCountAfter *int    `json:"companyBRowCountAfter"`
-		ErrorContains         string  `json:"errorContains"`
-		RLSBypassed           *bool   `json:"rlsBypassed"`
+		RowCountIs            *int   `json:"rowCountIs"`
+		RowCountMax           *int   `json:"rowCountMax"`
+		RowsAffected          *int   `json:"rowsAffected"`
+		CompanyBRowCountAfter *int   `json:"companyBRowCountAfter"`
+		ErrorContains         string `json:"errorContains"`
+		RLSBypassed           *bool  `json:"rlsBypassed"`
 	} `json:"expect"`
 }
 
@@ -938,3 +938,87 @@ func TestMembershipRLSScopedToUser(t *testing.T) {
 
 // ensure errors import is used even if all probes pass without wrapping.
 var _ = errors.New
+
+// TestStatutorydRoleReachesOnlyItsOwnTable pins the least-privilege posture
+// migration 0024 establishes.
+//
+// WHY THIS MATTERS. Migration 0013 gave statutoryd a durable step store, and to
+// reach it statutoryd was handed a `tally_app` DSN — the same role cored uses
+// for the ENTIRE ledger. A separate deployable whose only legitimate database
+// need is its own workflow bookkeeping could read every tenant's vouchers,
+// company masters and password verifiers. Everything else statutoryd does goes
+// over HTTP to cored as a service principal, through the PDP; an archtest
+// already enforces that boundary in the CODE, and this makes the DATABASE agree
+// with it instead of quietly contradicting it.
+//
+// Asserted by PRIVILEGE, not by connecting: has_table_privilege is what the
+// grant actually means, and it does not depend on a password this test would
+// otherwise have to know.
+func TestStatutorydRoleReachesOnlyItsOwnTable(t *testing.T) {
+	skipIfNoDB(t)
+	h := setupHarness(t, 0, 0)
+	ctx := context.Background()
+
+	var exists bool
+	if err := h.admin.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'tally_statutory')`).
+		Scan(&exists); err != nil {
+		t.Fatalf("query pg_roles: %v", err)
+	}
+	if !exists {
+		t.Fatal("tally_statutory does not exist — migration 0024 did not run")
+	}
+
+	// It CAN work on its own table, or statutoryd cannot run at all.
+	for _, priv := range []string{"SELECT", "INSERT", "UPDATE", "DELETE"} {
+		var ok bool
+		if err := h.admin.QueryRow(ctx,
+			`SELECT has_table_privilege('tally_statutory', 'statutory_step', $1)`, priv).
+			Scan(&ok); err != nil {
+			t.Fatalf("has_table_privilege: %v", err)
+		}
+		if !ok {
+			t.Errorf("tally_statutory lacks %s on statutory_step — statutoryd cannot run", priv)
+		}
+	}
+
+	// And it can reach NOTHING else. Every tenant table plus the auth catalog:
+	// these are precisely the rows a compromised side-plane must not be able to
+	// read, and the ones the tally_app DSN did expose.
+	forbidden := append([]string{}, tenantTables...)
+	forbidden = append(forbidden,
+		"company", "app_user", "user_credential", "webauthn_credential",
+		"security_level", "acl_rule", "company_membership", "company_invite",
+		"notification_outbox",
+	)
+	for _, tbl := range forbidden {
+		var present bool
+		if err := h.admin.QueryRow(ctx,
+			`SELECT to_regclass('public.' || $1) IS NOT NULL`, tbl).Scan(&present); err != nil {
+			t.Fatalf("to_regclass %s: %v", tbl, err)
+		}
+		if !present {
+			continue // a table a later migration may not have created
+		}
+		var ok bool
+		if err := h.admin.QueryRow(ctx,
+			`SELECT has_table_privilege('tally_statutory', $1, 'SELECT')`, tbl).Scan(&ok); err != nil {
+			t.Fatalf("has_table_privilege %s: %v", tbl, err)
+		}
+		if ok {
+			t.Errorf("SECURITY HOLE: tally_statutory can SELECT %s — statutoryd's DB role "+
+				"must reach statutory_step and nothing else", tbl)
+		}
+	}
+
+	// Belt and braces on the role itself: no bypass, no superuser.
+	var bypass, super bool
+	if err := h.admin.QueryRow(ctx,
+		`SELECT rolbypassrls, rolsuper FROM pg_roles WHERE rolname = 'tally_statutory'`).
+		Scan(&bypass, &super); err != nil {
+		t.Fatalf("query pg_roles: %v", err)
+	}
+	if bypass || super {
+		t.Fatalf("SECURITY HOLE: tally_statutory bypassrls=%v superuser=%v", bypass, super)
+	}
+}
