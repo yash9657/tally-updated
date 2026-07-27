@@ -1,6 +1,16 @@
-# OPTIONAL — real OCR + PDF rasterization. NOT installed in core CI.
-# Lazy-imported inside adapters/ocr_paddle.py and adapters/ingest_real.py.
-paddleocr>=2.7
-paddlepaddle>=2.6
+# OPTIONAL — real OCR + PDF rasterization. NOT installed in core CI, and NOT in
+# requirements.txt: the 83-test core suite must stay heavy-dep-free, which is a
+# load-bearing property (see tests/test_hitl_invariant.py's import-lint).
+# Lazy-imported inside adapters/ocr_paddle.py and adapters/ingest_real.py, and
+# reached only when INSIGHTD_USE_REAL_OCR=1.
+#
+# PINNED, NOT FLOORED. The previous `paddleocr>=2.7` is exactly why the adapter
+# broke: 3.x changed both the constructor (`show_log` is rejected) and the result
+# shape (parallel rec_texts/rec_scores/rec_polys arrays, not the 2.x
+# [[[box,(text,conf)],...]] nesting), so a range that spans the 2->3 boundary
+# resolves to an API the code cannot use. These are the versions the feasibility
+# spike actually ran offline — see docs/spikes/ws10-paddleocr-spike.md §8.6.
+paddleocr==3.7.0
+paddlepaddle==3.3.1
 pillow>=10
 pdf2image>=1.17

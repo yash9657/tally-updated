@@ -61,6 +61,65 @@ HEADER_WEIGHT = 0.5
 LINE_WEIGHT = 0.5
 
 
+def _structural_defects(inferred: InferredInvoice, derived) -> list[str]:
+    """Reasons this draft must be reviewed that do NOT depend on confidence.
+
+    The WS10 spike's decisive negative finding is that OCR confidence cannot
+    police money: a corrupted `300.00` was returned as `300:00` at 0.985. What
+    DOES catch that is arithmetic which stops working once a digit or separator
+    is mangled, so these are the checks the review decision leans on:
+
+      * a line whose money fields will not PARSE (`45:50`, `1-000` — precisely
+        the corruptions the spike observed);
+      * tax that is not `rate x taxable` on the line, re-derived independently;
+      * an echoed invoice total that does not FOOT against the re-derived one;
+      * no GSTIN anywhere in the document. Checked as PRESENCE, not by regex:
+        the value is masked by the PII boundary before it ever reaches this
+        function, so a GSTIN-shaped pattern match here could never succeed — but
+        the masked field being populated still tells us the recogniser found
+        one.
+
+    Returns the reasons rather than a bool so the draft can say WHY, and so a
+    test asserts the specific defect rather than "something was wrong".
+    """
+    defects: list[str] = []
+
+    for idx, li in enumerate(inferred.line_items):
+        for field in ("taxable_value", "gst_rate_pct", "qty", "rate"):
+            raw = getattr(li, field, None)
+            if raw is None or raw == "":
+                continue
+            try:
+                Decimal(str(raw))
+            except (InvalidOperation, ValueError):
+                # A money field that will not parse is the SIGNATURE of the
+                # corruption the spike found, and it is unambiguous.
+                defects.append(f"line[{idx}].{field} is not a number: {raw!r}")
+
+    # The echoed total must agree with the re-derivation. This is the check the
+    # LLM cannot talk its way past: two independent paths to the same number.
+    if inferred.totals.invoice_total:
+        try:
+            echoed = Decimal(inferred.totals.invoice_total)
+            if echoed != derived.invoice_total:
+                defects.append(
+                    f"invoice total does not foot: document says {echoed}, "
+                    f"the lines derive {derived.invoice_total}"
+                )
+        except (InvalidOperation, ValueError):
+            defects.append(
+                f"invoice total is not a number: {inferred.totals.invoice_total!r}"
+            )
+
+    # A document with no GSTIN at all is not a tax invoice we can post against.
+    # The masked form is checked too: redaction replaces the value, so its
+    # PRESENCE still tells us the recogniser found one.
+    if not inferred.supplier_gstin_masked:
+        defects.append("no supplier GSTIN found in the document")
+
+    return defects
+
+
 def _fixed4(s: str | None) -> str | None:
     if s is None:
         return None
@@ -396,10 +455,34 @@ class PureVoucherDraftMapper:
         derived,
         unresolved: list[str],
     ):
+        # STRUCTURAL CHECKS COME FIRST, AND CONFIDENCE IS NOT ONE OF THEM.
+        #
+        # The WS10 feasibility spike measured this directly: real OCR is
+        # CONFIDENTLY WRONG, and it corrupts MONEY values specifically. Not only
+        # was `mean_confidence` useless as a review signal — per-line confidence
+        # was too. A corrupted `300.00` read as `300:00` came back at **0.985**
+        # (docs/spikes/ws10-paddleocr-spike.md §8.4), and on an unseen bill four
+        # NUMERIC tokens were mangled while the recogniser remained sure of
+        # itself.
+        #
+        # So high confidence must NEVER be read as "no review needed". What
+        # catches a mangled money value is ARITHMETIC that stops working: totals
+        # that do not foot, tax that is not rate x taxable, a field that will not
+        # parse. Those checks run below, before any confidence test, and they are
+        # what this feature relies on.
+        #
+        # Low confidence is still allowed to ESCALATE to manual — that direction
+        # is conservative and costs nothing. It is simply not trusted in the
+        # other direction, which is the direction that loses money.
+        #
         # Non-purchase doc short-circuits to manual.
         if cls.doc_type != "purchase_invoice" or not cls.is_purchase:
             return "low_confidence_manual"
-        # Degraded scan / low OCR confidence -> manual (first degrade signal).
+        # STRUCTURAL: the arithmetic must hold. See _structural_defects.
+        if _structural_defects(inferred, derived):
+            return "low_confidence_manual"
+        # Degraded scan / low OCR confidence -> manual. A conservative ESCALATION
+        # only; never a licence to skip review when confidence is high.
         if mean_confidence < OCR_MEAN_CONF_FLOOR:
             return "low_confidence_manual"
         # No line items at all -> manual.
