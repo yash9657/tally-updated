@@ -26,6 +26,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -155,20 +156,20 @@ func New(ctx context.Context, appDSN string) (*Server, error) {
 	locker := authn.NewLocker(authn.DefaultLockoutPolicy(), authn.NewPGLockoutStore(pool.Raw()), time.Now)
 
 	s := &Server{
-		pool:      pool,
-		identity:  identity.NewService(pool),
-		masters:   m,
-		ledger:    l,
-		report:    reporting.NewService(pool),
-		gstr:      gstr.NewService(pool),
-		importer:  migration.NewImporter(m, l),
-		sync:      sync.NewService(l, pool),
+		pool:     pool,
+		identity: identity.NewService(pool),
+		masters:  m,
+		ledger:   l,
+		report:   reporting.NewService(pool),
+		gstr:     gstr.NewService(pool),
+		importer: migration.NewImporter(m, l),
+		sync:     sync.NewService(l, pool),
 		// Conversational query (Phase 3 + wave-2 WS1). buildTranslator selects the
 		// real-Claude adapter when ANTHROPIC_API_KEY is present, else the
 		// deterministic, shipped-by-default FakeTranslator. Either way the LLM emits
 		// ONLY the typed DSL; execution runs through the same read-only,
 		// company-GUC-scoped pool as every report, so the safety model is identical.
-		query: query.NewService(pool, buildTranslator()),
+		query:     query.NewService(pool, buildTranslator()),
 		verifier:  verifier,
 		signer:    signer,
 		authStore: authzStore,
@@ -1356,12 +1357,35 @@ func buildGST(w http.ResponseWriter, g gstReq) (*ledger.GSTParams, bool) {
 // Reports
 // --------------------------------------------------------------------------
 
+// reportDate validates an optional YYYY-MM-DD query param. An unparseable date
+// is a 400, NOT a silent fallback to "no bound": a report that quietly ignored
+// the period a user asked for would answer a different question than the one on
+// screen, and still look right.
+func reportDate(w http.ResponseWriter, r *http.Request, param string) (string, bool) {
+	v := strings.TrimSpace(r.URL.Query().Get(param))
+	if v == "" {
+		return "", true
+	}
+	if _, err := time.Parse("2006-01-02", v); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid "+param+" (want YYYY-MM-DD)")
+		return "", false
+	}
+	return v, true
+}
+
 func (s *Server) handleTrialBalance(w http.ResponseWriter, r *http.Request) {
 	ctx, companyID, ok := s.scopeCtxID(w, r)
 	if !ok {
 		return
 	}
-	tb, err := s.report.TrialBalance(ctx, companyID)
+	// AS AT a date, not a from/to range: a Trial Balance is a POSITION. It
+	// takes `as_on` only, and the response echoes it so a client cannot render
+	// a period it did not get.
+	asOn, ok2 := reportDate(w, r, "as_on")
+	if !ok2 {
+		return
+	}
+	tb, err := s.report.TrialBalance(ctx, companyID, asOn)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -1380,6 +1404,7 @@ func (s *Server) handleTrialBalance(w http.ResponseWriter, r *http.Request) {
 		"total_debit":  tb.TotalDebit.StringFixed(4),
 		"total_credit": tb.TotalCredit.StringFixed(4),
 		"balanced":     tb.IsBalanced(),
+		"as_on":        asOn,
 	})
 }
 
@@ -1388,7 +1413,11 @@ func (s *Server) handleBalanceSheet(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	bs, err := s.report.BalanceSheet(ctx, companyID)
+	asOn, ok2 := reportDate(w, r, "as_on")
+	if !ok2 {
+		return
+	}
+	bs, err := s.report.BalanceSheet(ctx, companyID, asOn)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -1398,6 +1427,7 @@ func (s *Server) handleBalanceSheet(w http.ResponseWriter, r *http.Request) {
 		"liabilities": sectionJSON(bs.Liabilities),
 		"net_profit":  bs.NetProfit.StringFixed(4),
 		"balanced":    bs.IsBalanced(),
+		"as_on":       asOn,
 	})
 }
 
@@ -1406,7 +1436,17 @@ func (s *Server) handleProfitAndLoss(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	pl, err := s.report.ProfitAndLoss(ctx, companyID)
+	// FOR A PERIOD, so this one takes both bounds — a P&L is the only statement
+	// of the three for which a lower bound is meaningful.
+	from, okFrom := reportDate(w, r, "from")
+	if !okFrom {
+		return
+	}
+	to, okTo := reportDate(w, r, "to")
+	if !okTo {
+		return
+	}
+	pl, err := s.report.ProfitAndLoss(ctx, companyID, from, to)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -1415,6 +1455,8 @@ func (s *Server) handleProfitAndLoss(w http.ResponseWriter, r *http.Request) {
 		"income":     sectionJSON(pl.Income),
 		"expenses":   sectionJSON(pl.Expenses),
 		"net_profit": pl.NetProfit.StringFixed(4),
+		"from":       from,
+		"to":         to,
 	})
 }
 
@@ -1714,12 +1756,12 @@ type queryReq struct {
 // handleQuery answers a natural-language (or typed-DSL) question against the
 // books, read-only and tenant-scoped. The flow:
 //
-//	1. resolve the authz-VERIFIED company from ctx (scopeCtxID), exactly like
-//	   every report handler — never the raw path param.
-//	2. if a DSL is supplied, use it directly; else translate nl -> Query
-//	   (ErrUntranslatable -> 422 with examples).
-//	3. Compile (SQLPreview) + Execute via the read-only, RLS-scoped pool.
-//	4. 200 { dsl, sql_preview, columns, rows }.
+//  1. resolve the authz-VERIFIED company from ctx (scopeCtxID), exactly like
+//     every report handler — never the raw path param.
+//  2. if a DSL is supplied, use it directly; else translate nl -> Query
+//     (ErrUntranslatable -> 422 with examples).
+//  3. Compile (SQLPreview) + Execute via the read-only, RLS-scoped pool.
+//  4. 200 { dsl, sql_preview, columns, rows }.
 //
 // 422 is returned for an untranslatable question OR an invalid/uncompilable DSL,
 // with a SAFE message — the raw SQL/internal error text is NEVER leaked (a

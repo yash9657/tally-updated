@@ -422,7 +422,7 @@ it cannot reach another company's data.
 ### What is real today
 
 Everything in this document was executed against the running system and verified
-by `pnpm verify:demo` (18/18 checks). Specifically:
+by `pnpm verify:demo` (24/24 checks). Specifically:
 
 - All six accounting voucher types plus Credit and Debit Notes, on their real
   Tally keys, with independent numbering series.

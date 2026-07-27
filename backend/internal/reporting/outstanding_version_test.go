@@ -75,7 +75,7 @@ func buildBillSale(party, sales uuid.UUID, no, date, ref, amount string) ledger.
 // from bill_allocation, so the two agreeing is a real cross-check.
 func debtorsFromBalanceSheet(t *testing.T, svc *reporting.Service, ctx context.Context, companyID uuid.UUID) decimal.Decimal {
 	t.Helper()
-	bs, err := svc.BalanceSheet(ctx, companyID)
+	bs, err := svc.BalanceSheet(ctx, companyID, "")
 	if err != nil {
 		t.Fatalf("balance sheet: %v", err)
 	}

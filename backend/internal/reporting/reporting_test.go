@@ -216,7 +216,7 @@ func TestTrialBalance_BalancesAndGroups(t *testing.T) {
 	seedBooks(t, pool, ctx, ids)
 	rep := reporting.NewService(pool)
 
-	tb, err := rep.TrialBalance(ctx, companyID)
+	tb, err := rep.TrialBalance(ctx, companyID, "")
 	if err != nil {
 		t.Fatalf("trial balance: %v", err)
 	}
@@ -244,7 +244,7 @@ func TestProfitAndLoss_NetsCorrectly(t *testing.T) {
 	seedBooks(t, pool, ctx, ids)
 	rep := reporting.NewService(pool)
 
-	pl, err := rep.ProfitAndLoss(ctx, companyID)
+	pl, err := rep.ProfitAndLoss(ctx, companyID, "", "")
 	if err != nil {
 		t.Fatalf("p&l: %v", err)
 	}
@@ -266,7 +266,7 @@ func TestBalanceSheet_Balances(t *testing.T) {
 	seedBooks(t, pool, ctx, ids)
 	rep := reporting.NewService(pool)
 
-	bs, err := rep.BalanceSheet(ctx, companyID)
+	bs, err := rep.BalanceSheet(ctx, companyID, "")
 	if err != nil {
 		t.Fatalf("balance sheet: %v", err)
 	}
@@ -299,7 +299,7 @@ func TestBalanceSheet_DrillDownReachesVoucher(t *testing.T) {
 	l := seedBooks(t, pool, ctx, ids)
 	rep := reporting.NewService(pool)
 
-	bs, err := rep.BalanceSheet(ctx, companyID)
+	bs, err := rep.BalanceSheet(ctx, companyID, "")
 	if err != nil {
 		t.Fatalf("balance sheet: %v", err)
 	}
@@ -498,10 +498,10 @@ func TestReports_RejectWrongCompanyScope(t *testing.T) {
 	rep := reporting.NewService(pool)
 
 	other, _ := uuid.NewV7()
-	if _, err := rep.TrialBalance(ctx, other); err == nil {
+	if _, err := rep.TrialBalance(ctx, other, ""); err == nil {
 		t.Fatal("expected scope error for mismatched company on trial balance")
 	}
-	if _, err := rep.BalanceSheet(ctx, other); err == nil {
+	if _, err := rep.BalanceSheet(ctx, other, ""); err == nil {
 		t.Fatal("expected scope error for mismatched company on balance sheet")
 	}
 	_ = companyID

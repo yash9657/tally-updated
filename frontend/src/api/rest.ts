@@ -247,15 +247,29 @@ export function createRestClient(
       );
     },
 
-    getTrialBalance(companyID) {
-      return http.get<TrialBalanceResponse>(`${company(companyID)}/trial-balance`);
+    // An EMPTY bound is omitted rather than sent as "": the server 400s an
+    // unparseable date on purpose (a report that quietly ignored the period
+    // would answer a different question than the one on screen), so sending an
+    // empty string would turn "no period" into a bad request.
+    getTrialBalance(companyID, asOn?: string) {
+      return http.get<TrialBalanceResponse>(
+        `${company(companyID)}/trial-balance`,
+        asOn ? { as_on: asOn } : undefined,
+      );
     },
-    getBalanceSheet(companyID) {
-      return http.get<BalanceSheetResponse>(`${company(companyID)}/balance-sheet`);
+    getBalanceSheet(companyID, asOn?: string) {
+      return http.get<BalanceSheetResponse>(
+        `${company(companyID)}/balance-sheet`,
+        asOn ? { as_on: asOn } : undefined,
+      );
     },
-    getProfitLoss(companyID) {
+    getProfitLoss(companyID, from?: string, to?: string) {
+      const q: Record<string, string> = {};
+      if (from) q.from = from;
+      if (to) q.to = to;
       return http.get<ProfitLossResponse>(
         `${company(companyID)}/profit-and-loss`,
+        Object.keys(q).length > 0 ? q : undefined,
       );
     },
     getDayBook(companyID, query?: DayBookQuery) {

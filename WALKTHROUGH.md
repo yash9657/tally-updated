@@ -231,8 +231,13 @@ Report buttons, all verified live in the smoke test:
   overlay, keeping the report.
 - `Ctrl+F` — filters the rows (6 → 1 on a no-match string).
 - `Alt+E` — downloads a real CSV (`Trial-Balance.csv`).
-- `F2` — period picker (Day Book and Outstandings are period-aware server-side;
-  the picker says so plainly for the reports that are as-of-latest in this build).
+- `F2` — period picker, applied SERVER-SIDE by every report with a date
+  dimension. Which bounds a report honours depends on what kind of statement it
+  is, and the panel says which: the **Day Book and Profit & Loss are period
+  statements** (both bounds), while the **Trial Balance, Balance Sheet and
+  Outstandings are positions AS AT a date** (only "To"). Bounding a position
+  below would drop the entity's earlier history and still foot — a wrong answer
+  that looks right — so "From" is refused rather than quietly applied.
 
 ### 3.6 Bill Inbox — OCR bill → draft purchase voucher (AI-native)
 
@@ -359,7 +364,6 @@ liabilities = 109000.0000; net profit 9000.0000.
 | Two companies open SIMULTANEOUSLY (and group consolidation) | you switch between companies (`F3`) rather than holding several open at once | `Alt+F3`, `Ctrl+F3` |
 | Password / SSO login | the browser session authenticates as one fixed development subject, so every session is the same person | — |
 | Admin WRITES beyond inviting | changing a member's level, revoking access and creating a custom level are API-only | — |
-| Period filter on BS / P&L / Trial Balance | those three are as-of-latest (Day Book and Outstandings are period-aware) | the `F2` panel says so |
 | Printing / invoice formats | no print or PDF path | `Alt+P` unbound |
 | Banking: reconciliation, cheque printing | — | — |
 

@@ -302,7 +302,7 @@ func TestImportIdempotentOnGUID(t *testing.T) {
 	}
 
 	rep := reporting.NewService(pool)
-	tb1, err := rep.TrialBalance(ctx, companyID)
+	tb1, err := rep.TrialBalance(ctx, companyID, "")
 	if err != nil {
 		t.Fatalf("tb1: %v", err)
 	}
@@ -319,7 +319,7 @@ func TestImportIdempotentOnGUID(t *testing.T) {
 		t.Fatalf("expected skipped guid rf-sale-0001, got %v", second.SkippedGUIDs)
 	}
 
-	tb2, err := rep.TrialBalance(ctx, companyID)
+	tb2, err := rep.TrialBalance(ctx, companyID, "")
 	if err != nil {
 		t.Fatalf("tb2: %v", err)
 	}
@@ -348,7 +348,7 @@ func TestImportOpeningBalancesFold(t *testing.T) {
 	}
 
 	rep := reporting.NewService(pool)
-	tb, err := rep.TrialBalance(ctx, companyID)
+	tb, err := rep.TrialBalance(ctx, companyID, "")
 	if err != nil {
 		t.Fatalf("tb: %v", err)
 	}

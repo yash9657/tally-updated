@@ -149,7 +149,7 @@ func TestPostSalesVoucher_BalancesAndAppears(t *testing.T) {
 	}
 
 	// Trial balance must balance and include the debtor.
-	tb, err := rep.TrialBalance(ctx, companyID)
+	tb, err := rep.TrialBalance(ctx, companyID, "")
 	if err != nil {
 		t.Fatalf("trial balance: %v", err)
 	}
@@ -253,7 +253,7 @@ func TestAlterCreatesNewVersionWithHashChain(t *testing.T) {
 
 	// post() nets out the prior version, so the debtor balance reflects only the
 	// CURRENT version (750), not the sum 500 + 750.
-	tb, err := rep.TrialBalance(ctx, companyID)
+	tb, err := rep.TrialBalance(ctx, companyID, "")
 	if err != nil {
 		t.Fatalf("trial balance: %v", err)
 	}
@@ -307,7 +307,7 @@ func TestDeleteVoucherNetsBalancesToZero(t *testing.T) {
 	}
 
 	// Both ledger balances must net to zero after the delete.
-	tb, err := rep.TrialBalance(ctx, companyID)
+	tb, err := rep.TrialBalance(ctx, companyID, "")
 	if err != nil {
 		t.Fatalf("trial balance: %v", err)
 	}

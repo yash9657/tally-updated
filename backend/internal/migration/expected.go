@@ -281,7 +281,7 @@ func ReconcileFull(ctx context.Context, rep *reporting.Service, gstrSvc *gstr.Se
 		bsNetProfit decimal.Decimal
 	)
 	if exp.BalanceSheet != nil {
-		got, err := rep.BalanceSheet(ctx, companyID)
+		got, err := rep.BalanceSheet(ctx, companyID, "")
 		if err != nil {
 			problems = append(problems, "BALANCE SHEET: "+err.Error())
 		} else {
@@ -298,7 +298,7 @@ func ReconcileFull(ctx context.Context, rep *reporting.Service, gstrSvc *gstr.Se
 	}
 
 	if exp.ProfitAndLoss != nil {
-		pl, err := rep.ProfitAndLoss(ctx, companyID)
+		pl, err := rep.ProfitAndLoss(ctx, companyID, "", "")
 		if err != nil {
 			problems = append(problems, "PROFIT AND LOSS: "+err.Error())
 		} else {

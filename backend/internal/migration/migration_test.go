@@ -149,7 +149,7 @@ func TestImportSmoke3VoucherReconcilesToThePaisa(t *testing.T) {
 
 	// Belt-and-braces: independently assert the Cash closing balance and the
 	// balanced 80000 totals straight off the report.
-	tb, err := rep.TrialBalance(ctx, companyID)
+	tb, err := rep.TrialBalance(ctx, companyID, "")
 	if err != nil {
 		t.Fatalf("trial balance: %v", err)
 	}

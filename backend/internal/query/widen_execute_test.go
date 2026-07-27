@@ -165,7 +165,7 @@ func TestExecute_ClosingNetEqualsTrialBalance(t *testing.T) {
 	seedOpeningsAndMovement(t, pool, ctx, ids)
 
 	// --- independent oracle ---
-	tb, err := reporting.NewService(pool).TrialBalance(ctx, companyID)
+	tb, err := reporting.NewService(pool).TrialBalance(ctx, companyID, "")
 	if err != nil {
 		t.Fatalf("trial balance oracle: %v", err)
 	}
@@ -656,7 +656,7 @@ func TestExecute_FakeTranslatorClosingBalancesEndToEnd(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 
-	tb, err := reporting.NewService(pool).TrialBalance(ctx, companyID)
+	tb, err := reporting.NewService(pool).TrialBalance(ctx, companyID, "")
 	if err != nil {
 		t.Fatalf("oracle: %v", err)
 	}

@@ -186,10 +186,15 @@ function ConfigureOverlay({
 }
 
 /**
- * F2 / Alt+F2 Period. Applied server-side where the report is period-aware (Day
- * Book: from/to; Outstandings: as-on = To). The Balance Sheet, P&L and Trial
- * Balance are as-of-latest in this build — the panel says so instead of showing
- * a filter that silently does nothing.
+ * F2 / Alt+F2 Period, applied SERVER-SIDE by every report that has a date
+ * dimension. Which bounds a report uses depends on what kind of statement it is,
+ * and the panel says so rather than implying a range that two of them cannot
+ * honour:
+ *
+ *  - Day Book and Profit & Loss are FOR A PERIOD — both bounds apply.
+ *  - Trial Balance, Balance Sheet and Outstandings are POSITIONS AS AT a date —
+ *    only "To" applies. Bounding a position below would drop the entity's
+ *    earlier history and still foot, which is a wrong answer that looks right.
  */
 function PeriodOverlay({
   snapshot,
@@ -203,8 +208,15 @@ function PeriodOverlay({
   const cfg = snapshot.config ?? {};
   const [from, setFrom] = useState(cfg.periodFrom ?? "");
   const [to, setTo] = useState(cfg.periodTo ?? "");
+  // Which reports read only the upper bound (they are positions, not periods).
+  const asAtOnly =
+    snapshot.reportName === "Trial Balance" ||
+    snapshot.reportName === "Balance Sheet" ||
+    snapshot.reportName === "Outstandings";
   const periodAware =
-    snapshot.reportName === "Day Book" || snapshot.reportName === "Outstandings";
+    asAtOnly ||
+    snapshot.reportName === "Day Book" ||
+    snapshot.reportName === "Profit & Loss A/c";
 
   return (
     <OverlayPanel title="Period">
@@ -240,11 +252,16 @@ function PeriodOverlay({
           }}
         />
       </label>
-      {!periodAware ? (
+      {asAtOnly ? (
+        <p data-testid="period-as-at-note" className="mt-2 text-xs">
+          Note: {snapshot.reportName} is a POSITION as at a date, so only “To”
+          applies to it. “From” is ignored here on purpose — bounding a position
+          below would drop earlier history and still balance.
+        </p>
+      ) : !periodAware ? (
         <p className="mt-2 text-xs">
-          Note: {snapshot.reportName ?? "This report"} is computed as-of-latest in
-          this build, so a period is not applied to it yet. Day Book and
-          Outstandings are period-aware.
+          Note: {snapshot.reportName ?? "This report"} has no date dimension in
+          this build, so a period is not applied to it.
         </p>
       ) : null}
       <button

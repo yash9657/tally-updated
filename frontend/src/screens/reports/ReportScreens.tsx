@@ -67,7 +67,18 @@ function ReportFrame({
 function ViewBanner({ snapshot }: { snapshot: NavSnapshot }) {
   const cfg = snapshot.config ?? {};
   const bits: string[] = [];
-  if (cfg.periodFrom || cfg.periodTo) {
+  // A POSITION report applies only the upper bound, so it must not print a
+  // range it did not use. Saying "Period: X to Y" on a Balance Sheet that
+  // ignored X is exactly the kind of quiet mismatch this banner exists to
+  // prevent — the report would be right and the label wrong.
+  const asAtOnly =
+    snapshot.reportName === "Trial Balance" ||
+    snapshot.reportName === "Balance Sheet";
+  if (asAtOnly && cfg.periodTo) {
+    bits.push(`As on ${cfg.periodTo}`);
+  } else if (asAtOnly && cfg.periodFrom) {
+    bits.push(`As on latest (a ${snapshot.reportName} is a position; set "To" to date it)`);
+  } else if (cfg.periodFrom || cfg.periodTo) {
     bits.push(`Period: ${cfg.periodFrom || "…"} to ${cfg.periodTo || "…"}`);
   }
   if (cfg.detailed) bits.push("Detailed");
@@ -186,15 +197,20 @@ export function TrialBalanceScreen({ snapshot, onSelect }: ReportProps) {
   const companyID = useCompanyID();
   const [data, setData] = useState<TrialBalanceResponse | null>(null);
 
+  // A Trial Balance is a POSITION, so the F2 period's "To" becomes `as on` and
+  // the "From" is deliberately not sent — bounding it below would drop the
+  // entity's earlier history and still foot. The banner says "as on <date>" so
+  // the screen never claims a range it did not ask for.
+  const asOn = snapshot.config?.periodTo;
   useEffect(() => {
     let cancelled = false;
-    client.getTrialBalance(companyID).then((res) => {
+    client.getTrialBalance(companyID, asOn).then((res) => {
       if (!cancelled) setData(res);
     });
     return () => {
       cancelled = true;
     };
-  }, [client, companyID]);
+  }, [client, companyID, asOn]);
 
   // F5 — ledger-wise (the default here) ⇄ group-wise, which sums each ledger's
   // debit/credit into its parent group exactly as Tally's group-wise Trial
@@ -312,15 +328,17 @@ export function BalanceSheetScreen({ snapshot, onSelect }: ReportProps) {
   const companyID = useCompanyID();
   const [data, setData] = useState<BalanceSheetResponse | null>(null);
 
+  // Same as the Trial Balance: a Balance Sheet is a position AS AT a date.
+  const asOn = snapshot.config?.periodTo;
   useEffect(() => {
     let cancelled = false;
-    client.getBalanceSheet(companyID).then((res) => {
+    client.getBalanceSheet(companyID, asOn).then((res) => {
       if (!cancelled) setData(res);
     });
     return () => {
       cancelled = true;
     };
-  }, [client, companyID]);
+  }, [client, companyID, asOn]);
 
   const columns = "grid-cols-[1fr_10rem]";
   // Ctrl+H Change View: Tally's horizontal Balance Sheet puts Liabilities on
@@ -400,15 +418,19 @@ export function ProfitLossScreen({ snapshot, onSelect }: ReportProps) {
   const companyID = useCompanyID();
   const [data, setData] = useState<ProfitLossResponse | null>(null);
 
+  // The ONE statement of the three for which a lower bound is meaningful: a P&L
+  // is a statement FOR A PERIOD, so both F2 bounds are sent.
+  const from = snapshot.config?.periodFrom;
+  const to = snapshot.config?.periodTo;
   useEffect(() => {
     let cancelled = false;
-    client.getProfitLoss(companyID).then((res) => {
+    client.getProfitLoss(companyID, from, to).then((res) => {
       if (!cancelled) setData(res);
     });
     return () => {
       cancelled = true;
     };
-  }, [client, companyID]);
+  }, [client, companyID, from, to]);
 
   const columns = "grid-cols-[1fr_10rem]";
   const rows: DrillRow[] = [];

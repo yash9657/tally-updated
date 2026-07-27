@@ -382,7 +382,7 @@ func runFuzzSeed(t *testing.T, seed int64) {
 
 	// ---- Invariant (6) LEDGER INTEGRITY: trial balance balanced; every live head
 	// is a single current version. ----
-	tb, err := e.rep.TrialBalance(e.ctx, e.cid)
+	tb, err := e.rep.TrialBalance(e.ctx, e.cid, "")
 	if err != nil {
 		t.Fatalf("seed %d: trial balance: %v", seed, err)
 	}

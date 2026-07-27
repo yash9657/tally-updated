@@ -22,7 +22,9 @@ package reporting
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -90,18 +92,117 @@ func (lb ledgerBalance) signed() decimal.Decimal {
 	}
 }
 
-// loadLedgerBalances reads every ledger's closing position (opening balance +
-// incremental posted debit/credit) joined to its group nature. It is the common
-// substrate for the Trial Balance, Balance Sheet and P&L.
+// PERIOD SEMANTICS — the reason there are two loaders and not one flag.
+//
+// A period means something DIFFERENT to each statement, and collapsing them
+// onto one "from/to" would produce confidently wrong numbers:
+//
+//   - The Balance Sheet and the Trial Balance are POSITIONS AS AT a date. They
+//     need the opening balance plus EVERY movement up to `asOn` — including
+//     movement before a `from` the user typed. Applying a lower bound to them
+//     would silently drop the entity's own history and still foot, which is the
+//     worst kind of wrong.
+//   - The Profit & Loss is a statement FOR A PERIOD. It needs movement inside
+//     [from, to] and must NOT fold in the opening balance, which is a position
+//     carried from before the books began, not income earned this quarter.
+//
+// So `loadClosingBalances` takes one date and `loadPeriodMovement` takes two,
+// and neither can be called with the other's meaning by accident.
+//
+// BOTH derive from the POSTINGS of current, non-deleted voucher versions rather
+// than reading the materialised `ledger_balance` table, which has no date
+// dimension. For the unbounded case the two must agree exactly — that identity
+// is asserted as a gate (TestDerivedBalancesMatchTheMaterialisedTable), because
+// a derivation that quietly disagreed with the running totals would make every
+// report depend on which code path produced it.
+
+// movementSQL is the shared derivation of posted debit/credit per ledger,
+// bounded by an optional date range. $1 = from, $2 = to; either may be NULL.
+const movementSQL = `
+	SELECT p.ledger_id,
+	       SUM(CASE WHEN p.dr_cr = 'D' THEN p.amount ELSE 0 END) AS debit,
+	       SUM(CASE WHEN p.dr_cr = 'C' THEN p.amount ELSE 0 END) AS credit
+	  FROM posting p
+	  JOIN voucher_version vv ON vv.id = p.voucher_version_id
+	  JOIN voucher_head vh
+	    ON vh.company_id = vv.company_id
+	   AND vh.voucher_id = vv.voucher_id
+	   AND vh.current_version_id = vv.id
+	 WHERE vh.is_deleted = false
+	   -- The vh join above is what actually does the work: it keeps only the
+	   -- CURRENT version, so an ALTERed voucher counts once at its new amount
+	   -- and a DELETED one contributes nothing (its tombstone version carries
+	   -- zero posting rows). is_deleted is belt-and-braces, kept because the
+	   -- query DSL's postings entity states the same guard and the two must
+	   -- not drift. TestBalancesFollowAltersAndDeletes pins the real invariant.
+	   AND ($1::date IS NULL OR vv.voucher_date >= $1::date)
+	   AND ($2::date IS NULL OR vv.voucher_date <= $2::date)
+	 GROUP BY p.ledger_id`
+
+// nullDate turns "" into a NULL bound so one query serves bounded and unbounded
+// callers without string-building SQL.
+func nullDate(d string) any {
+	if strings.TrimSpace(d) == "" {
+		return nil
+	}
+	return strings.TrimSpace(d)
+}
+
+// loadClosingBalances reads every ledger's POSITION AS AT `asOn` — its opening
+// balance plus all posted movement up to and including that date. `asOn` empty
+// means "everything ever posted", which is what callers got before periods
+// existed. Substrate for the Trial Balance and the Balance Sheet.
+func loadClosingBalances(ctx context.Context, tx pgx.Tx, asOn string) ([]ledgerBalance, error) {
+	return queryBalances(ctx, tx, nil, nullDate(asOn), true)
+}
+
+// loadPeriodMovement reads every ledger's MOVEMENT WITHIN [from, to], with the
+// opening balance deliberately excluded. Substrate for the Profit & Loss.
+func loadPeriodMovement(ctx context.Context, tx pgx.Tx, from, to string) ([]ledgerBalance, error) {
+	return queryBalances(ctx, tx, nullDate(from), nullDate(to), false)
+}
+
+// loadLedgerBalances is the unbounded, opening-inclusive form — the behaviour
+// every caller had before periods existed.
 func loadLedgerBalances(ctx context.Context, tx pgx.Tx) ([]ledgerBalance, error) {
+	return loadClosingBalances(ctx, tx, "")
+}
+
+func queryBalances(
+	ctx context.Context, tx pgx.Tx, from, to any, foldOpening bool,
+) ([]ledgerBalance, error) {
+	// AN OPENING BALANCE IS DATED TOO — as at company.books_beginning_from.
+	// It carries no date column of its own, so an as-at query that folded it in
+	// unconditionally would report a position for a date BEFORE the books
+	// existed: the live verifier caught exactly that, a Trial Balance dated
+	// 2020 showing 520000 of opening capital on a company whose books begin in
+	// 2026. Excluding openings is ALL-OR-NOTHING (they balance among
+	// themselves), so the statement still foots either way.
+	if foldOpening && to != nil {
+		var begins string
+		err := tx.QueryRow(ctx,
+			`SELECT to_char(COALESCE(books_beginning_from, fy_start_date), 'YYYY-MM-DD')
+			   FROM company LIMIT 1`).Scan(&begins)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			// No company row in scope; leave the opening in rather than guess.
+		case err != nil:
+			return nil, fmt.Errorf("reporting: read books beginning date: %w", err)
+		default:
+			if asOn, ok := to.(string); ok && asOn < begins {
+				foldOpening = false
+			}
+		}
+	}
+
 	rows, err := tx.Query(ctx,
 		`SELECT l.id, l.name, g.id, g.name, g.nature::text, g.is_pl,
 		        l.opening_balance, l.opening_dc,
-		        COALESCE(lb.debit, 0), COALESCE(lb.credit, 0)
+		        COALESCE(m.debit, 0), COALESCE(m.credit, 0)
 		   FROM ledger l
 		   JOIN account_group g ON g.id = l.group_id
-		   LEFT JOIN ledger_balance lb ON lb.ledger_id = l.id
-		  ORDER BY g.name, l.name`)
+		   LEFT JOIN (`+movementSQL+`) m ON m.ledger_id = l.id
+		  ORDER BY g.name, l.name`, from, to)
 	if err != nil {
 		return nil, fmt.Errorf("reporting: query ledger balances: %w", err)
 	}
@@ -118,12 +219,16 @@ func loadLedgerBalances(ctx context.Context, tx pgx.Tx) ([]ledgerBalance, error)
 			&lb.Nature, &lb.IsPL, &openBal, &openDC, &lb.Debit, &lb.Credit); err != nil {
 			return nil, fmt.Errorf("reporting: scan ledger balance: %w", err)
 		}
-		// Fold the opening balance into the debit/credit totals so the closing
-		// figures are self-contained.
-		if openDC == "C" {
-			lb.Credit = lb.Credit.Add(openBal)
-		} else {
-			lb.Debit = lb.Debit.Add(openBal)
+		// Fold the opening balance into the debit/credit totals so a CLOSING
+		// figure is self-contained. A period statement (P&L) must not: an
+		// opening balance is a position carried from before the books began,
+		// not movement inside the period being reported.
+		if foldOpening {
+			if openDC == "C" {
+				lb.Credit = lb.Credit.Add(openBal)
+			} else {
+				lb.Debit = lb.Debit.Add(openBal)
+			}
 		}
 		out = append(out, lb)
 	}
@@ -174,7 +279,7 @@ func (tb TrialBalance) IsBalanced() bool {
 // TrialBalance rolls up every ledger's closing position into a Trial Balance,
 // presented both group-wise (default Tally view) and as flat rows. Opening
 // balances are folded in, so the totals reconcile with the Balance Sheet + P&L.
-func (s *Service) TrialBalance(ctx context.Context, companyID uuid.UUID) (TrialBalance, error) {
+func (s *Service) TrialBalance(ctx context.Context, companyID uuid.UUID, asOn string) (TrialBalance, error) {
 	if err := scope(ctx, companyID); err != nil {
 		return TrialBalance{}, err
 	}
@@ -184,7 +289,7 @@ func (s *Service) TrialBalance(ctx context.Context, companyID uuid.UUID) (TrialB
 	tb.TotalCredit = decimal.Zero
 
 	err := s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		balances, err := loadLedgerBalances(ctx, tx)
+		balances, err := loadClosingBalances(ctx, tx, asOn)
 		if err != nil {
 			return err
 		}
@@ -375,7 +480,7 @@ type ProfitAndLoss struct {
 // ProfitAndLoss builds the Profit & Loss statement as a drill-down tree. Only
 // P&L-nature groups (Income / Expense) contribute; the net result balances the
 // two sides and flows to the Balance Sheet.
-func (s *Service) ProfitAndLoss(ctx context.Context, companyID uuid.UUID) (ProfitAndLoss, error) {
+func (s *Service) ProfitAndLoss(ctx context.Context, companyID uuid.UUID, from, to string) (ProfitAndLoss, error) {
 	if err := scope(ctx, companyID); err != nil {
 		return ProfitAndLoss{}, err
 	}
@@ -388,9 +493,13 @@ func (s *Service) ProfitAndLoss(ctx context.Context, companyID uuid.UUID) (Profi
 		if err != nil {
 			return err
 		}
-		if err := attachLedgers(ctx, tx, nodes); err != nil {
+		// A P&L is a statement FOR A PERIOD: movement inside [from, to], with
+		// the opening balance deliberately excluded.
+		balances, err := loadPeriodMovement(ctx, tx, from, to)
+		if err != nil {
 			return err
 		}
+		attachLedgers(nodes, balances)
 		// Roots are P&L groups whose parent is not itself a P&L group.
 		for _, id := range order {
 			gn := nodes[id]
@@ -449,7 +558,7 @@ func (bs BalanceSheet) IsBalanced() bool {
 // groups (Asset / Liability nature, non-P&L) form the two sides; the current
 // period's net profit is folded into Liabilities as a computed node so the
 // accounting identity Assets = Liabilities + Capital + Profit holds.
-func (s *Service) BalanceSheet(ctx context.Context, companyID uuid.UUID) (BalanceSheet, error) {
+func (s *Service) BalanceSheet(ctx context.Context, companyID uuid.UUID, asOn string) (BalanceSheet, error) {
 	if err := scope(ctx, companyID); err != nil {
 		return BalanceSheet{}, err
 	}
@@ -462,9 +571,14 @@ func (s *Service) BalanceSheet(ctx context.Context, companyID uuid.UUID) (Balanc
 		if err != nil {
 			return err
 		}
-		if err := attachLedgers(ctx, tx, nodes); err != nil {
+		// A Balance Sheet is a POSITION AS AT a date: opening plus every
+		// movement up to `asOn`. It takes no lower bound — dropping an
+		// entity's earlier history would still foot, and be wrong.
+		balances, err := loadClosingBalances(ctx, tx, asOn)
+		if err != nil {
 			return err
 		}
+		attachLedgers(nodes, balances)
 
 		income, expense := decimal.Zero, decimal.Zero
 		for _, id := range order {
@@ -525,17 +639,13 @@ func (s *Service) BalanceSheet(ctx context.Context, companyID uuid.UUID) (Balanc
 	return bs, nil
 }
 
-// attachLedgers loads ledger balances and attaches each to its group node so
-// the statement builders can roll them up.
-func attachLedgers(ctx context.Context, tx pgx.Tx, nodes map[uuid.UUID]*groupNode) error {
-	balances, err := loadLedgerBalances(ctx, tx)
-	if err != nil {
-		return err
-	}
+// attachLedgers attaches each ledger balance to its group node so the statement
+// builders can roll them up. It takes the balances rather than loading them, so
+// each statement chooses its own period semantics (see PERIOD SEMANTICS above).
+func attachLedgers(nodes map[uuid.UUID]*groupNode, balances []ledgerBalance) {
 	for _, lb := range balances {
 		if gn, ok := nodes[lb.GroupID]; ok {
 			gn.ledgers = append(gn.ledgers, lb)
 		}
 	}
-	return nil
 }

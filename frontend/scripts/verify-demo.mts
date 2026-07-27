@@ -309,6 +309,84 @@ async function main(): Promise<void> {
     );
   }
 
+  // -------------------------------------------------------------------------
+  // PERIOD SEMANTICS on the real books. The Trial Balance and Balance Sheet are
+  // POSITIONS AS AT a date; the Profit & Loss is a statement FOR A PERIOD. Two
+  // properties are checked because either alone can pass while the numbers are
+  // wrong: a POSITION must still BALANCE at every date (a filter that dropped
+  // one leg of a voucher would not), and a PERIOD statement must be ADDITIVE
+  // (halves summing to the whole is what makes it a period rather than a
+  // position).
+  // -------------------------------------------------------------------------
+  const asAt = ["2026-04-30", "2026-05-31", "2026-06-30", "2026-07-31", FY.to];
+  const unbalanced: string[] = [];
+  for (const d of asAt) {
+    const b = await client.getBalanceSheet(co, d);
+    if (!b.balanced) unbalanced.push(`${d} (A ${b.assets.total} / L ${b.liabilities.total})`);
+    const t = await client.getTrialBalance(co, d);
+    if (!t.balanced) unbalanced.push(`TB ${d} (Dr ${t.total_debit} / Cr ${t.total_credit})`);
+  }
+  check(
+    "Balance Sheet and Trial Balance BALANCE at every month-end of the year",
+    unbalanced.length === 0,
+    unbalanced.length === 0 ? `${asAt.length} dates checked, all balanced` : unbalanced.join("; "),
+  );
+
+  // A position BEFORE the books begin is empty, and an empty position balances.
+  const preBooks = await client.getTrialBalance(co, "2020-01-01");
+  check(
+    "a Trial Balance dated before the books begin is empty, not an error",
+    preBooks.balanced && parseFloat(preBooks.total_debit) === 0,
+    `total_debit ${preBooks.total_debit} balanced=${preBooks.balanced}`,
+  );
+
+  // ...and a position AS AT the end of the year equals the unbounded one, since
+  // nothing is posted beyond it. If these differed, the date bound would be
+  // dropping real movement.
+  const tbYearEnd = await client.getTrialBalance(co, FY.to);
+  const tbUnbounded = await client.getTrialBalance(co);
+  check(
+    "a Trial Balance as at the year end equals the unbounded one (nothing is posted after it)",
+    tbYearEnd.total_debit === tbUnbounded.total_debit,
+    `as-at ${tbYearEnd.total_debit} vs unbounded ${tbUnbounded.total_debit}`,
+  );
+
+  // ADDITIVITY: the P&L for two disjoint, exhaustive halves must sum to the year.
+  const plYear = await client.getProfitLoss(co, FY.from, FY.to);
+  const plH1 = await client.getProfitLoss(co, FY.from, "2026-06-30");
+  const plH2 = await client.getProfitLoss(co, "2026-07-01", FY.to);
+  const sum = (
+    Math.round(parseFloat(plH1.net_profit) * 10000) +
+    Math.round(parseFloat(plH2.net_profit) * 10000)
+  ) / 10000;
+  check(
+    "Profit & Loss is ADDITIVE: Apr–Jun + Jul–Mar equals the whole year",
+    Math.abs(sum - parseFloat(plYear.net_profit)) < 0.00005,
+    `${plH1.net_profit} + ${plH2.net_profit} = ${sum.toFixed(4)} vs year ${plYear.net_profit}`,
+  );
+
+  // A window with nothing in it is zero — not the whole year, which is what a
+  // silently-ignored period would return.
+  const plEmpty = await client.getProfitLoss(co, "2027-02-01", "2027-02-28");
+  check(
+    "a Profit & Loss over an EMPTY window is zero, not the whole year",
+    parseFloat(plEmpty.net_profit) === 0,
+    `Feb-2027 net_profit ${plEmpty.net_profit} (year is ${plYear.net_profit})`,
+  );
+
+  // An unparseable date is a 400, never a silent fallback to "no bound": a
+  // report that quietly ignored the period would answer a different question
+  // than the one on screen and still look right.
+  const badDate = await fetch(
+    `${baseUrl}/v1/companies/${co}/trial-balance?as_on=last-tuesday`,
+    { headers },
+  );
+  check(
+    "an unparseable as_on is a 400, not a silently-ignored filter",
+    badDate.status === 400,
+    `status ${badDate.status}`,
+  );
+
   console.log(
     `\n${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`}` +
       ` (${checks - failures}/${checks})\n`,

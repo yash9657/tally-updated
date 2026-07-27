@@ -741,7 +741,7 @@ func LoadExpectedFile(path string) (ExpectedTrialBalance, error) {
 // This is the switching-cost gate: a non-nil return means the migration is NOT
 // faithful and must not be trusted.
 func Reconcile(ctx context.Context, rep *reporting.Service, companyID uuid.UUID, expected ExpectedTrialBalance) error {
-	tb, err := rep.TrialBalance(ctx, companyID)
+	tb, err := rep.TrialBalance(ctx, companyID, "")
 	if err != nil {
 		return fmt.Errorf("migration: reconcile: trial balance: %w", err)
 	}

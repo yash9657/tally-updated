@@ -223,9 +223,31 @@ export interface CoredClient {
   ): Promise<DeleteVoucherResponse>;
 
   // Reports
-  getTrialBalance(companyID: string): Promise<TrialBalanceResponse>;
-  getBalanceSheet(companyID: string): Promise<BalanceSheetResponse>;
-  getProfitLoss(companyID: string): Promise<ProfitLossResponse>;
+  //
+  // PERIOD SEMANTICS DIFFER BY STATEMENT, and the signatures say so rather than
+  // taking a uniform {from,to} that two of the three would have to reinterpret:
+  //
+  //  - The Trial Balance and Balance Sheet are POSITIONS AS AT a date. They take
+  //    `asOn` only. Applying a lower bound would silently drop the entity's
+  //    earlier history and still foot — wrong, and invisibly so.
+  //  - The Profit & Loss is a statement FOR A PERIOD, so it takes both bounds
+  //    and excludes the opening balance (a position carried from before the
+  //    books began is not income of this quarter).
+  //
+  // Every argument is optional; omitting them is "everything ever posted".
+  getTrialBalance(
+    companyID: string,
+    asOn?: string,
+  ): Promise<TrialBalanceResponse>;
+  getBalanceSheet(
+    companyID: string,
+    asOn?: string,
+  ): Promise<BalanceSheetResponse>;
+  getProfitLoss(
+    companyID: string,
+    from?: string,
+    to?: string,
+  ): Promise<ProfitLossResponse>;
   getDayBook(
     companyID: string,
     query?: DayBookQuery,

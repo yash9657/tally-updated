@@ -92,7 +92,7 @@ func dpHeadState(t *testing.T, f dpFixture) (isDeleted bool, versionNo int, curr
 func dpAssertTrialBalanceZero(t *testing.T, f dpFixture, when string) {
 	t.Helper()
 	rep := reporting.NewService(f.pool)
-	tb, err := rep.TrialBalance(f.ctx, f.companyID)
+	tb, err := rep.TrialBalance(f.ctx, f.companyID, "")
 	if err != nil {
 		t.Fatalf("trial balance (%s): %v", when, err)
 	}
@@ -227,7 +227,7 @@ func TestDeletePolicy_AlterOfLiveVoucherStillWorks(t *testing.T) {
 
 	// Independent oracle: the altered amount is what the reporting package sees.
 	rep := reporting.NewService(f.pool)
-	tb, err := rep.TrialBalance(f.ctx, f.companyID)
+	tb, err := rep.TrialBalance(f.ctx, f.companyID, "")
 	if err != nil {
 		t.Fatalf("trial balance: %v", err)
 	}

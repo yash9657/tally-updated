@@ -1120,13 +1120,20 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       };
     },
 
-    async getTrialBalance(companyID): Promise<TrialBalanceResponse> {
+    // AS AT a date: every voucher up to and including `asOn`. The mock honours
+    // it for real rather than ignoring the argument, so a screen test that
+    // passes a period observes the same SHAPE of behaviour the server gives.
+    async getTrialBalance(
+      companyID,
+      asOn?: string,
+    ): Promise<TrialBalanceResponse> {
       const c = ensure(companyID);
       const acc = new Map<string, { debit: Money; credit: Money; group: string }>();
       for (const l of c.ledgers) {
         acc.set(l.name, { debit: "0.0000", credit: "0.0000", group: l.group });
       }
       for (const v of c.vouchers) {
+        if (asOn && v.date > asOn) continue;
         for (const p of v.postings) {
           const row =
             acc.get(p.ledger) ??
@@ -1155,8 +1162,12 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       };
     },
 
-    async getBalanceSheet(companyID): Promise<BalanceSheetResponse> {
+    async getBalanceSheet(
+      companyID,
+      asOn?: string,
+    ): Promise<BalanceSheetResponse> {
       ensure(companyID);
+      void asOn; // the mock builds no statement tree, so there is nothing to bound
       return {
         assets: { title: "Assets", nodes: [], total: "0.0000" },
         liabilities: { title: "Liabilities", nodes: [], total: "0.0000" },
@@ -1165,8 +1176,14 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       };
     },
 
-    async getProfitLoss(companyID): Promise<ProfitLossResponse> {
+    async getProfitLoss(
+      companyID,
+      from?: string,
+      to?: string,
+    ): Promise<ProfitLossResponse> {
       ensure(companyID);
+      void from;
+      void to;
       return {
         income: { title: "Income", nodes: [], total: "0.0000" },
         expenses: { title: "Expenses", nodes: [], total: "0.0000" },

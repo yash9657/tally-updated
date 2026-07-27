@@ -575,7 +575,7 @@ cd frontend
 pnpm seed:demo -- --insightd     # -> company A
 pnpm seed:tenancy <A>            # -> company B + the Data Entry user
 pnpm verify:tenancy <A> <B>      # 105 checks; exits non-zero on any drift
-pnpm verify:demo <A>             # 18 accounting checks; unaffected by the above
+pnpm verify:demo <A>             # 24 accounting checks; unaffected by the above
 ```
 
 Identities the seeder creates:
