@@ -1,5 +1,15 @@
 # HANDOFF — AI-native, keystroke-compatible Tally competitor
 
+> ## ⚠️ HANDING OVER? READ `NEXT-SESSION.md` FIRST.
+>
+> The 2026-07-27 worklist session ran to ~82% of its context window and landed
+> **eleven commits** (`cadf3af..f95ef2c`). A long-context session's self-report is
+> not evidence. `NEXT-SESSION.md` is the verify-then-continue wrapper: the gate
+> matrix with expected numbers, a per-item spot-check list, **the one live sweep
+> that was interrupted and never completed**, the environment gotchas, and a
+> dynamic-workflow template for confirming it all WITHOUT burning another
+> context window. Confirm before you build.
+
 **Purpose of this file:** let a fresh session (clean context) pick up and keep building this project to completion without re-deriving everything. Read it top-to-bottom once, then start at **§10 START HERE** — that is the live worklist. (§7 and §8 are older background, kept for context.)
 
 **Last updated (2026-07-27, worklist session — items B, D, E, F):** four §10 items shipped, each adversarially reviewed, mutation-gated and integrator-verified: **B** admin surface in the browser (`1da7a6c`), **D** the **Edit Log viewer with hash-chain verification** (`85546a0` — the top functional gap, now closed), **E** period support on Balance Sheet / P&L / Trial Balance (`e5483cc`), and **F** both open product decisions (`79e919b`, migration **0022**). Gates moved: vitest 259 → **293**, `verify:demo` 18 → **24**, `verify:tenancy` 72 → **108**, `e2e:ui` 29 → **35** (run twice). Branch `master`, tree clean. **START AT §10** — C, G, H and I-wiring remain.
