@@ -24,5 +24,9 @@
 
     "types": ["vitest/globals", "node"]
   },
-  "include": ["src", "vite.config.ts", "vitest.config.ts"]
+  // "scripts" is INCLUDED deliberately. The .mts verifiers and e2e drivers there
+  // are only ever run by tsx, so before this they were type-checked by nothing:
+  // a redeclared local in verify-tenancy.mts reached a live run as an esbuild
+  // TransformError instead of failing this gate. They check clean today.
+  "include": ["src", "scripts", "vite.config.ts", "vitest.config.ts"]
 }

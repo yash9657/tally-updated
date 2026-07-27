@@ -1,6 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ApiError } from "../api";
-import type { MembersResponse, SecurityLevelView } from "../api";
+import type {
+  MembersResponse,
+  SecurityLevelRule,
+  SecurityLevelView,
+  SecurityVocabulary,
+} from "../api";
 import { useClient, useCompanyID } from "../app/CompanyContext";
 import type { ScreenComponentProps } from "../app/screenRegistry";
 
@@ -9,37 +14,64 @@ import type { ScreenComponentProps } from "../app/screenRegistry";
  *
  * Shows, for the active company: its MEMBERS (with the security level each
  * holds), its PENDING INVITES, and its SECURITY LEVELS with their Disallow/Allow
- * rules. Inviting is the one write offered here, because it is the flow a real
- * administrator needs first; changing a level, revoking a member and creating a
- * custom level remain API-only for now (see docs/TENANCY-AND-ACCESS.md §6).
+ * rules — and now performs every write the API offers: invite, CHANGE A
+ * MEMBER'S LEVEL, REVOKE ACCESS, REVOKE A PENDING INVITE, and CREATE / EDIT /
+ * DELETE a custom security level.
  *
- * TWO THINGS THIS SCREEN MUST NOT HIDE:
+ * FIVE THINGS THIS SCREEN MUST NOT HIDE:
  *
  *  1. **An invite is not a membership.** The server records an invite addressed
  *     to a JWT subject and the INVITEE materialises their own membership on
  *     their next `GET /v1/me`. Pending invites are therefore listed separately
  *     and explicitly, or an administrator would think the invite failed.
  *
- *  2. **A 403 here is the product working.** This screen is PDP-gated on the
+ *  2. **A 403 is the product working.** This screen is PDP-gated on the
  *     `security` resource, so a Data Entry operator gets a 403 — and the error
  *     says why, rather than rendering an empty page that looks broken. A 403
- *     STEPUP_REQUIRED on the invite (an Owner without a WebAuthn AMR) says that
+ *     STEPUP_REQUIRED on any write (an Owner without a WebAuthn AMR) says that
  *     too: granting access is a write, and writes need the second factor.
+ *
+ *  3. **The four server guards are EXPLAINED, not swallowed.** Demoting or
+ *     removing the last Owner is a 409 (a company can never be left
+ *     unadministrable); the Owner level is immutable except its back-dated
+ *     cutoff (422); a level still used by a member OR a pending invite cannot be
+ *     deleted (409); and a rule naming a token outside the closed vocabulary is
+ *     a 422. Each is rendered as the reason, not as a failed action.
+ *
+ *  4. **A rule's tokens come from the SERVER** (`getSecurityVocabulary`), never
+ *     from a hardcoded list here. A misspelled rule is not rejected by the PDP —
+ *     it silently never matches, so a `disallow` an administrator believes they
+ *     wrote would permit the thing instead. Dropdowns built from the served
+ *     vocabulary make that rule unrepresentable rather than merely rejected.
+ *
+ *  5. **Destructive actions confirm INLINE, never with `window.confirm`.** A
+ *     native modal blocks the CDP channel the browser e2e drives, so a
+ *     confirm() here would make revoke/delete permanently untestable — and an
+ *     untested revoke path on an access-control screen is the wrong trade.
  */
 
 /** Human explanation for the status codes this screen can legitimately receive. */
 function explain(err: unknown): string {
   if (err instanceof ApiError) {
+    const detail = err.message?.trim() ? ` ${err.message}` : "";
     if (err.status === 403 && /STEPUP|step-up/i.test(err.message)) {
-      return "WebAuthn step-up required: granting access is a write, so it needs a second factor (403 STEPUP_REQUIRED).";
+      return "WebAuthn step-up required: administering users is a write, so it needs a second factor (403 STEPUP_REQUIRED).";
     }
     if (err.status === 403) {
-      return `Not permitted for your security level (403). ${err.message}`;
+      return `Not permitted for your security level (403).${detail}`;
     }
     if (err.status === 409) {
-      return `Already a member of this company (409). Change their level from the API instead.`;
+      // 409 now covers three distinct refusals, so the server's own sentence is
+      // the message — a fixed string here would misreport two of them.
+      if (/already a member/i.test(err.message)) {
+        return `Already a member of this company (409). Change their level below instead of re-inviting.${""}`;
+      }
+      return `Refused (409).${detail}`;
     }
-    return `${err.status}: ${err.message}`;
+    if (err.status === 422) {
+      return `Rejected (422).${detail}`;
+    }
+    return `${err.status}:${detail}`;
   }
   return err instanceof Error ? err.message : String(err);
 }
@@ -52,12 +84,57 @@ function ruleText(l: SecurityLevelView): string {
   return l.rules.map((r) => `${r.effect} ${r.action} ${r.resource}`).join(", ");
 }
 
+/** The level editor's working copy. `levelID` empty means "creating". */
+interface LevelDraft {
+  levelID: string;
+  name: string;
+  defaultAccess: string;
+  requiresWebauthn: boolean;
+  cutoff: string;
+  rules: SecurityLevelRule[];
+  /** True when editing the Owner level: only the cutoff may be sent (422 otherwise). */
+  ownerLocked: boolean;
+}
+
+function emptyDraft(vocab: SecurityVocabulary | null): LevelDraft {
+  return {
+    levelID: "",
+    name: "",
+    // Default-DENY, mirroring the server: a level created with no explicit
+    // default must not silently grant everything.
+    defaultAccess: "none",
+    requiresWebauthn: false,
+    cutoff: "",
+    rules: vocab
+      ? [{ effect: "allow", action: "display", resource: "report" }]
+      : [],
+    ownerLocked: false,
+  };
+}
+
+function draftOf(l: SecurityLevelView): LevelDraft {
+  return {
+    levelID: l.id,
+    name: l.name,
+    defaultAccess: l.default_access,
+    requiresWebauthn: l.requires_webauthn,
+    cutoff: l.backdated_cutoff,
+    rules: l.rules.map((r) => ({
+      effect: r.effect,
+      action: r.action,
+      resource: r.resource,
+    })),
+    ownerLocked: l.is_owner,
+  };
+}
+
 export function MembersScreen(_props: ScreenComponentProps) {
   const client = useClient();
   const companyID = useCompanyID();
 
   const [data, setData] = useState<MembersResponse | null>(null);
   const [levels, setLevels] = useState<SecurityLevelView[]>([]);
+  const [vocab, setVocab] = useState<SecurityVocabulary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -65,6 +142,14 @@ export function MembersScreen(_props: ScreenComponentProps) {
   const [levelName, setLevelName] = useState("");
   const [inviting, setInviting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+
+  /** The chosen-but-not-yet-applied level per member row, keyed by user id. */
+  const [pendingLevel, setPendingLevel] = useState<Record<string, string>>({});
+  /** The single destructive action awaiting inline confirmation, if any. */
+  const [confirming, setConfirming] = useState<string | null>(null);
+  /** In-flight write id, so exactly one button shows a busy state. */
+  const [busy, setBusy] = useState<string | null>(null);
+  const [draft, setDraft] = useState<LevelDraft | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -76,6 +161,8 @@ export function MembersScreen(_props: ScreenComponentProps) {
       ]);
       setData(members);
       setLevels(lv.security_levels);
+      setPendingLevel({});
+      setConfirming(null);
       // Default the invite level to the first NON-owner level, so the obvious
       // action is the least-privileged one rather than "make them an Owner".
       setLevelName(
@@ -95,6 +182,48 @@ export function MembersScreen(_props: ScreenComponentProps) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // The rule vocabulary is fetched separately and NON-FATALLY: it is only needed
+  // to open the level editor, so a company whose members list loads must still
+  // render if this one call fails.
+  useEffect(() => {
+    let live = true;
+    client
+      .getSecurityVocabulary(companyID)
+      .then((v) => {
+        if (live) setVocab(v);
+      })
+      .catch(() => {
+        if (live) setVocab(null);
+      });
+    return () => {
+      live = false;
+    };
+  }, [client, companyID]);
+
+  /**
+   * Run one admin write: clear the banners, report the outcome in the user's
+   * language, and re-read from the SERVER rather than patching local state — the
+   * server is the authority on what a write actually did (a rename cascades to
+   * member rows, a revoke changes member_count).
+   */
+  const run = useCallback(
+    async (key: string, what: () => Promise<string>) => {
+      setBusy(key);
+      setError(null);
+      setNotice(null);
+      try {
+        setNotice(await what());
+        await refresh();
+      } catch (e) {
+        setError(explain(e));
+      } finally {
+        setBusy(null);
+        setConfirming(null);
+      }
+    },
+    [refresh],
+  );
 
   const invite = useCallback(async () => {
     const s = subject.trim();
@@ -119,6 +248,48 @@ export function MembersScreen(_props: ScreenComponentProps) {
     }
   }, [subject, levelName, client, companyID, refresh]);
 
+  const saveDraft = useCallback(async () => {
+    if (!draft) return;
+    const creating = draft.levelID === "";
+    await run(creating ? "level-create" : `level-save:${draft.levelID}`, async () => {
+      if (creating) {
+        await client.createSecurityLevel(companyID, {
+          name: draft.name.trim(),
+          default_access: draft.defaultAccess,
+          requires_webauthn: draft.requiresWebauthn,
+          backdated_cutoff: draft.cutoff,
+          rules: draft.rules,
+        });
+        setDraft(null);
+        return `Created security level "${draft.name.trim()}". Nobody holds it until you invite or move somebody to it.`;
+      }
+      // The Owner level accepts ONLY its cutoff; sending anything else is a 422,
+      // so this sends only what that level is allowed to change.
+      const body = draft.ownerLocked
+        ? { backdated_cutoff: draft.cutoff }
+        : {
+            name: draft.name.trim(),
+            default_access: draft.defaultAccess,
+            requires_webauthn: draft.requiresWebauthn,
+            backdated_cutoff: draft.cutoff,
+            rules: draft.rules,
+          };
+      await client.updateSecurityLevel(companyID, draft.levelID, body);
+      setDraft(null);
+      return draft.ownerLocked
+        ? `Updated the Owner level's back-dated cutoff${draft.cutoff ? ` to ${draft.cutoff}` : " (cleared)"}.`
+        : `Updated security level "${draft.name.trim()}". Its holders' access changed immediately.`;
+    });
+  }, [draft, client, companyID, run]);
+
+  const canSaveDraft =
+    !!draft && (draft.ownerLocked || draft.name.trim().length > 0);
+
+  const ownerCount = useMemo(
+    () => (data?.members ?? []).filter((m) => m.is_owner).length,
+    [data],
+  );
+
   return (
     <section className="flex h-full flex-col overflow-auto bg-tally-bg p-4 font-mono text-tally-field">
       <h1 className="mb-2 text-lg font-bold text-tally-title">Users &amp; Roles</h1>
@@ -127,12 +298,12 @@ export function MembersScreen(_props: ScreenComponentProps) {
       </p>
 
       {error ? (
-        <p data-testid="members-error" className="mb-2 max-w-2xl text-sm text-red-400">
+        <p data-testid="members-error" className="mb-2 max-w-3xl text-sm text-red-400">
           {error}
         </p>
       ) : null}
       {notice ? (
-        <p data-testid="members-notice" className="mb-2 max-w-2xl text-sm text-tally-title">
+        <p data-testid="members-notice" className="mb-2 max-w-3xl text-sm text-tally-title">
           {notice}
         </p>
       ) : null}
@@ -143,32 +314,123 @@ export function MembersScreen(_props: ScreenComponentProps) {
         </p>
       ) : data ? (
         <>
-          <div className="mb-4 max-w-2xl bg-tally-panel p-3">
+          <div className="mb-4 max-w-3xl bg-tally-panel p-3">
             <h2 className="mb-1 text-sm text-tally-title">Members</h2>
             <table className="w-full text-sm" data-testid="members-table">
               <thead>
                 <tr className="text-left text-xs uppercase text-tally-title">
                   <th className="pr-4">Subject</th>
                   <th className="pr-4">Security level</th>
-                  <th>Since</th>
+                  <th className="pr-4">Since</th>
+                  <th>Access</th>
                 </tr>
               </thead>
               <tbody>
-                {data.members.map((m) => (
-                  <tr key={m.user_id}>
-                    <td className="pr-4">
-                      {m.subject}
-                      {m.is_self ? " (you)" : ""}
-                    </td>
-                    <td className="pr-4">{m.security_level_name}</td>
-                    <td>{m.created_at.slice(0, 10)}</td>
-                  </tr>
-                ))}
+                {data.members.map((m) => {
+                  const chosen = pendingLevel[m.user_id] ?? m.security_level_name;
+                  const changed = chosen !== m.security_level_name;
+                  // The last Owner cannot be demoted or removed (409). Saying so
+                  // BEFORE the click is kinder than a refusal after it — and the
+                  // server still enforces it either way.
+                  const lastOwner = m.is_owner && ownerCount <= 1;
+                  return (
+                    <tr key={m.user_id} data-testid={`member-row:${m.subject}`}>
+                      <td className="pr-4 align-top">
+                        {m.subject}
+                        {m.is_self ? " (you)" : ""}
+                      </td>
+                      <td className="pr-4 align-top">
+                        <select
+                          aria-label={`Security level for ${m.subject}`}
+                          data-testid={`member-level:${m.subject}`}
+                          className="bg-tally-field px-1 text-tally-fieldText outline-none disabled:opacity-50"
+                          value={chosen}
+                          disabled={lastOwner}
+                          onChange={(e) =>
+                            setPendingLevel((p) => ({
+                              ...p,
+                              [m.user_id]: e.target.value,
+                            }))
+                          }
+                        >
+                          {levels.map((l) => (
+                            <option key={l.id} value={l.name}>
+                              {l.name}
+                            </option>
+                          ))}
+                        </select>
+                        {changed ? (
+                          <button
+                            type="button"
+                            data-testid={`member-apply:${m.subject}`}
+                            disabled={busy !== null}
+                            className="ml-2 bg-tally-active px-2 py-0.5 text-xs text-white disabled:opacity-50"
+                            onClick={() =>
+                              void run(`member-apply:${m.user_id}`, async () => {
+                                await client.updateMember(companyID, m.user_id, {
+                                  security_level_name: chosen,
+                                });
+                                return `${m.subject} is now ${chosen}. Their access changed immediately.`;
+                              })
+                            }
+                          >
+                            {busy === `member-apply:${m.user_id}` ? "Saving…" : "Apply"}
+                          </button>
+                        ) : null}
+                      </td>
+                      <td className="pr-4 align-top">{m.created_at.slice(0, 10)}</td>
+                      <td className="align-top">
+                        {lastOwner ? (
+                          <span
+                            data-testid={`member-lastowner:${m.subject}`}
+                            className="text-xs"
+                          >
+                            last Owner — cannot be demoted or removed
+                          </span>
+                        ) : confirming === `member-remove:${m.user_id}` ? (
+                          <>
+                            <button
+                              type="button"
+                              data-testid={`member-remove-confirm:${m.subject}`}
+                              disabled={busy !== null}
+                              className="bg-red-700 px-2 py-0.5 text-xs text-white disabled:opacity-50"
+                              onClick={() =>
+                                void run(`member-remove:${m.user_id}`, async () => {
+                                  await client.removeMember(companyID, m.user_id);
+                                  return `Revoked ${m.subject}'s access. They can no longer open this company.`;
+                                })
+                              }
+                            >
+                              Confirm revoke
+                            </button>
+                            <button
+                              type="button"
+                              className="ml-2 px-2 py-0.5 text-xs underline"
+                              onClick={() => setConfirming(null)}
+                            >
+                              Cancel
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            type="button"
+                            data-testid={`member-remove:${m.subject}`}
+                            disabled={busy !== null}
+                            className="px-2 py-0.5 text-xs underline disabled:opacity-50"
+                            onClick={() => setConfirming(`member-remove:${m.user_id}`)}
+                          >
+                            Revoke access
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
 
-          <div className="mb-4 max-w-2xl bg-tally-panel p-3">
+          <div className="mb-4 max-w-3xl bg-tally-panel p-3">
             <h2 className="mb-1 text-sm text-tally-title">Pending invites</h2>
             {data.invites.length === 0 ? (
               <p data-testid="invites-empty" className="text-sm">
@@ -179,14 +441,49 @@ export function MembersScreen(_props: ScreenComponentProps) {
               <ul data-testid="invites-list" className="text-sm">
                 {data.invites.map((i) => (
                   <li key={i.id}>
-                    {i.subject} · {i.security_level_name} · pending
+                    {i.subject} · {i.security_level_name} · pending{" "}
+                    {confirming === `invite-revoke:${i.id}` ? (
+                      <>
+                        <button
+                          type="button"
+                          data-testid={`invite-revoke-confirm:${i.subject}`}
+                          disabled={busy !== null}
+                          className="bg-red-700 px-2 py-0.5 text-xs text-white disabled:opacity-50"
+                          onClick={() =>
+                            void run(`invite-revoke:${i.id}`, async () => {
+                              await client.revokeInvite(companyID, i.id);
+                              return `Revoked the invite for ${i.subject}. It can never be claimed now.`;
+                            })
+                          }
+                        >
+                          Confirm revoke
+                        </button>
+                        <button
+                          type="button"
+                          className="ml-2 px-2 py-0.5 text-xs underline"
+                          onClick={() => setConfirming(null)}
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        data-testid={`invite-revoke:${i.subject}`}
+                        disabled={busy !== null}
+                        className="px-2 py-0.5 text-xs underline disabled:opacity-50"
+                        onClick={() => setConfirming(`invite-revoke:${i.id}`)}
+                      >
+                        Revoke invite
+                      </button>
+                    )}
                   </li>
                 ))}
               </ul>
             )}
           </div>
 
-          <div className="mb-4 max-w-2xl bg-tally-panel p-3">
+          <div className="mb-4 max-w-3xl bg-tally-panel p-3">
             <h2 className="mb-1 text-sm text-tally-title">Invite someone</h2>
             <div className="flex flex-wrap items-center gap-2">
               <input
@@ -222,22 +519,323 @@ export function MembersScreen(_props: ScreenComponentProps) {
             </div>
           </div>
 
-          <div className="max-w-2xl bg-tally-panel p-3">
-            <h2 className="mb-1 text-sm text-tally-title">Security levels</h2>
+          <div className="mb-4 max-w-3xl bg-tally-panel p-3">
+            <div className="mb-1 flex items-center justify-between">
+              <h2 className="text-sm text-tally-title">Security levels</h2>
+              <button
+                type="button"
+                data-testid="level-new"
+                disabled={!vocab || busy !== null}
+                className="bg-tally-active px-2 py-0.5 text-xs text-white disabled:opacity-50"
+                onClick={() => setDraft(emptyDraft(vocab))}
+              >
+                New level
+              </button>
+            </div>
+            {!vocab ? (
+              <p data-testid="vocab-unavailable" className="mb-2 text-xs">
+                Rule vocabulary unavailable — levels are read-only until it
+                loads. (Rules are validated against the server's closed
+                vocabulary; this screen will not guess at it.)
+              </p>
+            ) : null}
             <ul data-testid="levels-list" className="text-sm">
               {levels.map((l) => (
-                <li key={l.id}>
+                <li key={l.id} className="mb-1">
                   <span className="text-tally-title">{l.name}</span> ·{" "}
                   {l.member_count} member{l.member_count === 1 ? "" : "s"} ·{" "}
                   {ruleText(l)}
                   {l.requires_webauthn ? " · WebAuthn for writes" : ""}
                   {l.backdated_cutoff
                     ? ` · no writes before ${l.backdated_cutoff}`
-                    : ""}
+                    : ""}{" "}
+                  <button
+                    type="button"
+                    data-testid={`level-edit:${l.name}`}
+                    disabled={!vocab || busy !== null}
+                    className="px-1 text-xs underline disabled:opacity-50"
+                    onClick={() => setDraft(draftOf(l))}
+                  >
+                    Edit
+                  </button>
+                  {l.is_owner ? (
+                    <span
+                      data-testid={`level-owner-note:${l.name}`}
+                      className="text-xs"
+                    >
+                      {" "}
+                      (built-in — only its back-dated cutoff is editable)
+                    </span>
+                  ) : confirming === `level-delete:${l.id}` ? (
+                    <>
+                      <button
+                        type="button"
+                        data-testid={`level-delete-confirm:${l.name}`}
+                        disabled={busy !== null}
+                        className="ml-1 bg-red-700 px-2 py-0.5 text-xs text-white disabled:opacity-50"
+                        onClick={() =>
+                          void run(`level-delete:${l.id}`, async () => {
+                            await client.deleteSecurityLevel(companyID, l.id);
+                            return `Deleted security level "${l.name}".`;
+                          })
+                        }
+                      >
+                        Confirm delete
+                      </button>
+                      <button
+                        type="button"
+                        className="ml-2 px-2 py-0.5 text-xs underline"
+                        onClick={() => setConfirming(null)}
+                      >
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      data-testid={`level-delete:${l.name}`}
+                      disabled={busy !== null}
+                      className="px-1 text-xs underline disabled:opacity-50"
+                      onClick={() => setConfirming(`level-delete:${l.id}`)}
+                    >
+                      Delete
+                    </button>
+                  )}
                 </li>
               ))}
             </ul>
           </div>
+
+          {draft && vocab ? (
+            <div className="mb-4 max-w-3xl bg-tally-panel p-3" data-testid="level-editor">
+              <h2 className="mb-2 text-sm text-tally-title">
+                {draft.levelID === ""
+                  ? "New security level"
+                  : `Edit "${draft.name}"`}
+              </h2>
+              {draft.ownerLocked ? (
+                <p data-testid="level-owner-locked" className="mb-2 text-xs">
+                  The Owner level is built in and immutable — its name, default
+                  access, WebAuthn requirement and rules cannot be changed (the
+                  server answers 422). Only the back-dated cutoff is editable,
+                  and it binds Owners too.
+                </p>
+              ) : null}
+
+              <div className="mb-2 flex flex-wrap items-center gap-2 text-sm">
+                <label>
+                  Name{" "}
+                  <input
+                    aria-label="Level name"
+                    data-testid="level-name"
+                    className="bg-tally-field px-1 text-tally-fieldText outline-none disabled:opacity-50"
+                    value={draft.name}
+                    disabled={draft.ownerLocked}
+                    onChange={(e) =>
+                      setDraft((d) => (d ? { ...d, name: e.target.value } : d))
+                    }
+                  />
+                </label>
+                <label>
+                  Default access{" "}
+                  <select
+                    aria-label="Default access"
+                    data-testid="level-default-access"
+                    className="bg-tally-field px-1 text-tally-fieldText outline-none disabled:opacity-50"
+                    value={draft.defaultAccess}
+                    disabled={draft.ownerLocked}
+                    onChange={(e) =>
+                      setDraft((d) =>
+                        d ? { ...d, defaultAccess: e.target.value } : d,
+                      )
+                    }
+                  >
+                    {vocab.default_accesses.map((da) => (
+                      <option key={da} value={da}>
+                        {da}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    aria-label="Requires WebAuthn"
+                    data-testid="level-webauthn"
+                    checked={draft.requiresWebauthn}
+                    disabled={draft.ownerLocked}
+                    onChange={(e) =>
+                      setDraft((d) =>
+                        d ? { ...d, requiresWebauthn: e.target.checked } : d,
+                      )
+                    }
+                  />{" "}
+                  WebAuthn step-up for writes
+                </label>
+                <label>
+                  No writes before{" "}
+                  <input
+                    aria-label="Back-dated cutoff"
+                    data-testid="level-cutoff"
+                    placeholder="YYYY-MM-DD"
+                    className="bg-tally-field px-1 text-tally-fieldText outline-none"
+                    value={draft.cutoff}
+                    onChange={(e) =>
+                      setDraft((d) => (d ? { ...d, cutoff: e.target.value } : d))
+                    }
+                  />
+                </label>
+              </div>
+
+              <h3 className="mb-1 text-xs uppercase text-tally-title">
+                Rules (evaluated by the server: disallow beats allow at equal
+                specificity; exact beats wildcard)
+              </h3>
+              <ul data-testid="level-rules" className="mb-2 text-sm">
+                {draft.rules.map((r, idx) => (
+                  <li key={idx} className="mb-1 flex flex-wrap items-center gap-1">
+                    <select
+                      aria-label={`Rule ${idx + 1} effect`}
+                      data-testid={`rule-effect:${idx}`}
+                      className="bg-tally-field px-1 text-tally-fieldText outline-none disabled:opacity-50"
+                      value={r.effect}
+                      disabled={draft.ownerLocked}
+                      onChange={(e) =>
+                        setDraft((d) =>
+                          d
+                            ? {
+                                ...d,
+                                rules: d.rules.map((x, i) =>
+                                  i === idx ? { ...x, effect: e.target.value } : x,
+                                ),
+                              }
+                            : d,
+                        )
+                      }
+                    >
+                      {vocab.effects.map((v) => (
+                        <option key={v} value={v}>
+                          {v}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      aria-label={`Rule ${idx + 1} action`}
+                      data-testid={`rule-action:${idx}`}
+                      className="bg-tally-field px-1 text-tally-fieldText outline-none disabled:opacity-50"
+                      value={r.action}
+                      disabled={draft.ownerLocked}
+                      onChange={(e) =>
+                        setDraft((d) =>
+                          d
+                            ? {
+                                ...d,
+                                rules: d.rules.map((x, i) =>
+                                  i === idx ? { ...x, action: e.target.value } : x,
+                                ),
+                              }
+                            : d,
+                        )
+                      }
+                    >
+                      {vocab.actions.map((v) => (
+                        <option key={v} value={v}>
+                          {v}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      aria-label={`Rule ${idx + 1} resource`}
+                      data-testid={`rule-resource:${idx}`}
+                      className="bg-tally-field px-1 text-tally-fieldText outline-none disabled:opacity-50"
+                      value={r.resource}
+                      disabled={draft.ownerLocked}
+                      onChange={(e) =>
+                        setDraft((d) =>
+                          d
+                            ? {
+                                ...d,
+                                rules: d.rules.map((x, i) =>
+                                  i === idx
+                                    ? { ...x, resource: e.target.value }
+                                    : x,
+                                ),
+                              }
+                            : d,
+                        )
+                      }
+                    >
+                      {vocab.resources.map((v) => (
+                        <option key={v} value={v}>
+                          {v}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      data-testid={`rule-remove:${idx}`}
+                      disabled={draft.ownerLocked}
+                      className="px-1 text-xs underline disabled:opacity-50"
+                      onClick={() =>
+                        setDraft((d) =>
+                          d
+                            ? { ...d, rules: d.rules.filter((_, i) => i !== idx) }
+                            : d,
+                        )
+                      }
+                    >
+                      remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              <button
+                type="button"
+                data-testid="rule-add"
+                disabled={draft.ownerLocked}
+                className="mb-2 px-2 py-0.5 text-xs underline disabled:opacity-50"
+                onClick={() =>
+                  setDraft((d) =>
+                    d
+                      ? {
+                          ...d,
+                          rules: [
+                            ...d.rules,
+                            {
+                              effect: vocab.effects[0] ?? "allow",
+                              action: "display",
+                              resource: "report",
+                            },
+                          ],
+                        }
+                      : d,
+                  )
+                }
+              >
+                + Add rule
+              </button>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  data-testid="level-save"
+                  disabled={!canSaveDraft || busy !== null}
+                  className="bg-tally-active px-2 py-1 text-xs text-white disabled:opacity-50"
+                  onClick={() => void saveDraft()}
+                >
+                  {busy?.startsWith("level-") ? "Saving…" : "Save level"}
+                </button>
+                <button
+                  type="button"
+                  data-testid="level-cancel"
+                  className="px-2 py-1 text-xs underline"
+                  onClick={() => setDraft(null)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : null}
         </>
       ) : null}
     </section>

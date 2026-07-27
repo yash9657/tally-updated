@@ -463,6 +463,10 @@ func (s *Server) routes() {
 		r.Put("/members/{userID}", s.handleUpdateMember)
 		r.Delete("/members/{userID}", s.handleRemoveMember)
 		r.Get("/security-levels", s.handleListSecurityLevels)
+		// The CLOSED rule vocabulary, so a browser rule editor offers exactly the
+		// tokens the server will accept instead of a TypeScript copy that drifts.
+		// A literal segment, so it cannot collide with {levelID} (which has no GET).
+		r.Get("/security-levels/vocabulary", s.handleSecurityVocabulary)
 		r.Post("/security-levels", s.handleCreateSecurityLevel)
 		r.Put("/security-levels/{levelID}", s.handleUpdateSecurityLevel)
 		r.Delete("/security-levels/{levelID}", s.handleDeleteSecurityLevel)

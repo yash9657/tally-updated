@@ -45,11 +45,20 @@ import type {
 } from "./types";
 import type { QueryRequest, QueryResult } from "./query";
 import type {
+  CreateSecurityLevelResponse,
+  DeleteSecurityLevelResponse,
   InviteMemberRequest,
   InviteMemberResponse,
   MeResponse,
   MembersResponse,
+  RemoveMemberResponse,
+  RevokeInviteResponse,
+  SecurityLevelRequest,
   SecurityLevelsResponse,
+  SecurityVocabulary,
+  UpdateMemberRequest,
+  UpdateMemberResponse,
+  UpdateSecurityLevelResponse,
 } from "./admin";
 
 export interface CoredClient {
@@ -239,8 +248,53 @@ export interface CoredClient {
     companyID: string,
     req: InviteMemberRequest,
   ): Promise<InviteMemberResponse>;
+  /** Revoke a PENDING invite. Inert afterwards: it can never be claimed. */
+  revokeInvite(
+    companyID: string,
+    inviteID: string,
+  ): Promise<RevokeInviteResponse>;
+  /**
+   * Change a member's security level. Refused with 409 if it would demote the
+   * LAST Owner — a company can never be left unadministrable.
+   */
+  updateMember(
+    companyID: string,
+    userID: string,
+    req: UpdateMemberRequest,
+  ): Promise<UpdateMemberResponse>;
+  /** Revoke a member's access. Same last-Owner guard (409). Takes effect at once. */
+  removeMember(
+    companyID: string,
+    userID: string,
+  ): Promise<RemoveMemberResponse>;
+
   /** The company's security levels with their Disallow/Allow rules and member counts. */
   listSecurityLevels(companyID: string): Promise<SecurityLevelsResponse>;
+  /**
+   * The CLOSED sets a rule may name. Fetched rather than hardcoded so a rule
+   * editor cannot compose a rule the server answers 422 — see
+   * {@link SecurityVocabulary}.
+   */
+  getSecurityVocabulary(companyID: string): Promise<SecurityVocabulary>;
+  /** Create a custom security level. Rules are validated against the vocabulary (422). */
+  createSecurityLevel(
+    companyID: string,
+    req: SecurityLevelRequest,
+  ): Promise<CreateSecurityLevelResponse>;
+  /**
+   * Patch a level; `rules`, when present, REPLACES the whole rule set. The Owner
+   * level is immutable except its back-dated cutoff (422 otherwise).
+   */
+  updateSecurityLevel(
+    companyID: string,
+    levelID: string,
+    req: SecurityLevelRequest,
+  ): Promise<UpdateSecurityLevelResponse>;
+  /** Delete an UNUSED custom level. A level that still has members is 409. */
+  deleteSecurityLevel(
+    companyID: string,
+    levelID: string,
+  ): Promise<DeleteSecurityLevelResponse>;
 
   // Migration import (Tally-XML ingress)
   importTallyXML(

@@ -453,6 +453,58 @@ func parseCutoff(w http.ResponseWriter, s string) (*time.Time, bool, bool) {
 	return &d, false, true
 }
 
+// handleSecurityVocabulary serves the CLOSED sets an acl_rule may name.
+//
+// WHY THIS IS A ROUTE AND NOT A CONSTANT IN THE CLIENT: a rule whose resource is
+// misspelled is not rejected by the PDP — it silently never matches, so for a
+// `disallow` the administrator believes they forbade something the system
+// permits (see internal/authz/vocabulary.go). The admin API therefore validates
+// every rule against this vocabulary and 422s a stranger.
+//
+// A rule editor in the browser must offer exactly those tokens, and a hardcoded
+// TypeScript copy of them would DRIFT: adding a report to KnownReportNames in Go
+// would silently leave the UI unable to name it, and removing one would leave
+// the UI offering a token the server now 422s. Serving the vocabulary makes the
+// drift impossible by construction rather than by a test somebody has to
+// remember to run.
+//
+// It is a GET on the security resource — the same Display/security the level
+// list is — so an operator who may not administer users cannot enumerate the
+// vocabulary either. Read-only, so it never inherits step-up or the cutoff.
+func (s *Server) handleSecurityVocabulary(w http.ResponseWriter, r *http.Request) {
+	if _, _, ok := s.adminCtx(w, r); !ok {
+		return
+	}
+	effects := make([]string, 0, 2)
+	for _, e := range []authz.Effect{authz.Allow, authz.Disallow} {
+		effects = append(effects, string(e))
+	}
+	actions := make([]string, 0, len(authz.KnownActions)+1)
+	for _, a := range authz.KnownActions {
+		actions = append(actions, string(a))
+	}
+	actions = append(actions, authz.Wildcard)
+
+	// Bare resources plus the "report:NAME" forms, already expanded, so the
+	// client renders one flat list and never has to know the ":" grammar. The
+	// wildcard is included on both axes: it is a legal rule token.
+	resources := make([]string, 0, len(authz.KnownResources)+len(authz.KnownReportNames)+1)
+	for _, res := range authz.KnownResources {
+		resources = append(resources, string(res))
+	}
+	for _, n := range authz.KnownReportNames {
+		resources = append(resources, "report:"+n)
+	}
+	resources = append(resources, authz.Wildcard)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"effects":          effects,
+		"actions":          actions,
+		"resources":        resources,
+		"default_accesses": []string{"full", "none"},
+	})
+}
+
 func (s *Server) handleCreateSecurityLevel(w http.ResponseWriter, r *http.Request) {
 	ctx, companyID, ok := s.adminCtx(w, r)
 	if !ok {

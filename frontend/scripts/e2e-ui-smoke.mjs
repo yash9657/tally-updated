@@ -525,6 +525,117 @@ try {
   );
 } catch (e) { rec("Users & Roles opens", false, e.message); }
 
+// ---------------------------------------------------------------------------
+// The admin WRITES, in the browser. Until now the screen could only INVITE;
+// changing a level, revoking access, revoking an invite and creating/deleting a
+// custom security level were API-only. Each of these is a WRITE, so each one
+// also runs the real WebAuthn step-up ceremony through the virtual
+// authenticator installed above.
+//
+// NOTE this company (bootstrapped by this file) has exactly ONE member — the
+// signed-in Owner — so it is the LAST-OWNER case by construction. That is
+// asserted here rather than worked around; a successful level CHANGE needs a
+// second member and is gated live by `pnpm verify:tenancy` §8b instead, with
+// the PDP as its oracle.
+// ---------------------------------------------------------------------------
+try {
+  await navMenu("Users & Roles");
+  await page.getByTestId("members-table").waitFor({ timeout: 5000 });
+  // The sole Owner: the screen must SAY they cannot be demoted or removed,
+  // rather than offering a button the server would answer 409.
+  const note = await page
+    .getByTestId(`member-lastowner:${SUBJECT}`)
+    .innerText()
+    .catch(() => "");
+  const selectDisabled = await page
+    .getByTestId(`member-level:${SUBJECT}`)
+    .isDisabled()
+    .catch(() => false);
+  const noRevoke = (await page.getByTestId(`member-remove:${SUBJECT}`).count()) === 0;
+  rec(
+    "the LAST Owner cannot be demoted or removed, and the screen says why",
+    /last Owner/i.test(note) && selectDisabled && noRevoke,
+    note || "(no note rendered)",
+  );
+} catch (e) { rec("the LAST Owner is protected in the browser", false, e.message); }
+
+const LEVEL = `E2E Auditor ${process.pid}`;
+try {
+  // CREATE a custom security level, composing a rule from the dropdowns — which
+  // are built from the SERVER's closed vocabulary (GET .../security-levels/
+  // vocabulary), so a rule the PDP could never match is unrepresentable here.
+  await page.getByTestId("level-new").click();
+  await page.getByTestId("level-editor").waitFor({ timeout: 5000 });
+  await page.getByTestId("level-name").fill(LEVEL);
+  // A real vocabulary token; picking it PROVES the options came from the server.
+  await page.getByTestId("rule-resource:0").selectOption("report:trial-balance");
+  await page.getByTestId("level-save").click();
+
+  await page.waitForTimeout(1500);
+  const listed = await page.getByTestId("levels-list").innerText();
+  rec(
+    "create a custom security level from the SERVER's rule vocabulary",
+    listed.includes(LEVEL) && listed.includes("report:trial-balance"),
+    listed.includes(LEVEL) ? "listed with its rule" : listed.slice(0, 160),
+  );
+} catch (e) { rec("create a custom security level", false, e.message); }
+
+try {
+  // INVITE at that level, then REVOKE the invite. The two are one flow: an
+  // invite is not a membership, so the screen lists it separately — and a level
+  // with a pending invite against it cannot be deleted (409), which is exactly
+  // why the revoke has to happen before the delete below.
+  const invitee = `e2e-invitee-${process.pid}`;
+  await page.getByTestId("invite-subject").fill(invitee);
+  await page.getByTestId("invite-level").selectOption(LEVEL);
+  await page.getByTestId("invite-submit").click();
+  await page.waitForTimeout(1200);
+  const pending = await page.getByTestId("invites-list").innerText().catch(() => "");
+
+  // Revoke it — INLINE two-step, never window.confirm (a native modal would
+  // block this very CDP channel).
+  await page.getByTestId(`invite-revoke:${invitee}`).click();
+  await page.getByTestId(`invite-revoke-confirm:${invitee}`).click();
+  await page.waitForTimeout(1200);
+  const gone = (await page.getByTestId(`invite-revoke:${invitee}`).count()) === 0;
+  const notice = await page.getByTestId("members-notice").innerText().catch(() => "");
+  rec(
+    "invite someone at that level, then REVOKE the pending invite",
+    pending.includes(invitee) && gone && /never be claimed/i.test(notice),
+    gone ? notice.slice(0, 90) : "invite still listed after revoke",
+  );
+} catch (e) { rec("invite then revoke a pending invite", false, e.message); }
+
+try {
+  // DELETE the now-unused level (same inline two-step). Its pending invite was
+  // revoked above, so the in-use 409 guard does not fire.
+  await page.getByTestId(`level-delete:${LEVEL}`).click();
+  await page.getByTestId(`level-delete-confirm:${LEVEL}`).click();
+  await page.waitForTimeout(1200);
+  const listed = await page.getByTestId("levels-list").innerText();
+  rec(
+    "delete the now-unused custom security level",
+    !listed.includes(LEVEL) && listed.includes("Owner"),
+    listed.includes(LEVEL) ? "still listed" : "gone; the seeded levels remain",
+  );
+} catch (e) { rec("delete a custom security level", false, e.message); }
+
+try {
+  // The built-in Owner level offers NO delete, and its editor locks every field
+  // but the back-dated cutoff — the browser half of the server's 422.
+  const noDelete = (await page.getByTestId("level-delete:Owner").count()) === 0;
+  await page.getByTestId("level-edit:Owner").click();
+  await page.getByTestId("level-owner-locked").waitFor({ timeout: 5000 });
+  const nameLocked = await page.getByTestId("level-name").isDisabled();
+  const cutoffEditable = !(await page.getByTestId("level-cutoff").isDisabled());
+  await page.getByTestId("level-cancel").click();
+  rec(
+    "the built-in Owner level is immutable except its back-dated cutoff",
+    noDelete && nameLocked && cutoffEditable,
+    `noDelete=${noDelete} nameLocked=${nameLocked} cutoffEditable=${cutoffEditable}`,
+  );
+} catch (e) { rec("the Owner level is immutable in the browser", false, e.message); }
+
 await browser.close();
 
 const passed = results.filter((r) => r.ok).length;

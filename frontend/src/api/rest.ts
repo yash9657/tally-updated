@@ -42,11 +42,20 @@ import type {
 } from "./types";
 import type { QueryRequest, QueryResult } from "./query";
 import type {
+  CreateSecurityLevelResponse,
+  DeleteSecurityLevelResponse,
   InviteMemberRequest,
   InviteMemberResponse,
   MeResponse,
   MembersResponse,
+  RemoveMemberResponse,
+  RevokeInviteResponse,
+  SecurityLevelRequest,
   SecurityLevelsResponse,
+  SecurityVocabulary,
+  UpdateMemberRequest,
+  UpdateMemberResponse,
+  UpdateSecurityLevelResponse,
 } from "./admin";
 
 function company(companyID: string): string {
@@ -280,9 +289,48 @@ export function createRestClient(
         req,
       );
     },
+    revokeInvite(companyID, inviteID) {
+      return http.del<RevokeInviteResponse>(
+        `${company(companyID)}/members/invites/${encodeURIComponent(inviteID)}`,
+      );
+    },
+    updateMember(companyID, userID, req: UpdateMemberRequest) {
+      return http.put<UpdateMemberResponse>(
+        `${company(companyID)}/members/${encodeURIComponent(userID)}`,
+        req,
+      );
+    },
+    removeMember(companyID, userID) {
+      return http.del<RemoveMemberResponse>(
+        `${company(companyID)}/members/${encodeURIComponent(userID)}`,
+      );
+    },
+
     listSecurityLevels(companyID) {
       return http.get<SecurityLevelsResponse>(
         `${company(companyID)}/security-levels`,
+      );
+    },
+    getSecurityVocabulary(companyID) {
+      return http.get<SecurityVocabulary>(
+        `${company(companyID)}/security-levels/vocabulary`,
+      );
+    },
+    createSecurityLevel(companyID, req: SecurityLevelRequest) {
+      return http.post<CreateSecurityLevelResponse>(
+        `${company(companyID)}/security-levels`,
+        req,
+      );
+    },
+    updateSecurityLevel(companyID, levelID, req: SecurityLevelRequest) {
+      return http.put<UpdateSecurityLevelResponse>(
+        `${company(companyID)}/security-levels/${encodeURIComponent(levelID)}`,
+        req,
+      );
+    },
+    deleteSecurityLevel(companyID, levelID) {
+      return http.del<DeleteSecurityLevelResponse>(
+        `${company(companyID)}/security-levels/${encodeURIComponent(levelID)}`,
       );
     },
 

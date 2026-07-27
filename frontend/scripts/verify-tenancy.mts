@@ -584,6 +584,226 @@ async function main(): Promise<void> {
   );
 
   // =========================================================================
+  head("8b. ADMIN SURFACE — the writes the BROWSER now performs");
+  // =========================================================================
+  // Gateway > Users & Roles gained change-level, revoke-access, revoke-invite
+  // and create/edit/delete-level. Those paths are exercised above; this section
+  // covers the three the screen depends on that nothing else pinned LIVE: the
+  // served rule vocabulary, the Owner level's immutability, and revoking a
+  // PENDING invite (which the UI lists separately precisely because it is not a
+  // membership).
+
+  // -- The rule vocabulary the browser's rule editor is built from -----------
+  // Hardcoding these tokens in TypeScript would drift from the PDP; a rule with
+  // a drifted resource is not rejected by the PDP, it silently never matches.
+  r = await call("GET", `/v1/companies/${companyA}/security-levels/vocabulary`, ownerA);
+  const vocab = r.status === 200
+    ? (JSON.parse(r.body) as {
+        effects: string[]; actions: string[]; resources: string[]; default_accesses: string[];
+      })
+    : { effects: [], actions: [], resources: [], default_accesses: [] };
+  check(
+    "Owner -> the CLOSED rule vocabulary -> 200 (real tokens present, the typo absent)",
+    r.status === 200 &&
+      vocab.resources.includes("report:trial-balance") &&
+      vocab.resources.includes("security") &&
+      vocab.actions.includes("display") &&
+      vocab.effects.includes("disallow") &&
+      !vocab.resources.includes("report:trail-balance"),
+    `${r.status} ${vocab.resources.length} resources / ${vocab.actions.length} actions`,
+  );
+
+  // Every served token must be WRITABLE, or the editor offers rules the server
+  // 422s. Validation is per-token, so one level carrying each action against a
+  // fixed resource and each resource against a fixed action covers them all.
+  const vocabProbeName = `ACL Vocab Probe ${process.pid}`;
+  r = await call("POST", `/v1/companies/${companyA}/security-levels`, ownerA, {
+    name: vocabProbeName,
+    default_access: "none",
+    rules: [
+      ...vocab.actions.map((a) => ({ effect: "allow", action: a, resource: "report" })),
+      ...vocab.resources.map((res) => ({ effect: "allow", action: "display", resource: res })),
+    ],
+  });
+  const vocabProbeID = r.status === 201
+    ? (JSON.parse(r.body) as { security_level_id: string }).security_level_id
+    : "";
+  check(
+    "a level carrying EVERY served token -> 201 (the editor cannot compose a 422)",
+    r.status === 201,
+    brief(r),
+  );
+  if (vocabProbeID) {
+    r = await call("DELETE", `/v1/companies/${companyA}/security-levels/${vocabProbeID}`, ownerA);
+    check("the vocabulary probe level is cleaned up -> 200", r.status === 200, brief(r));
+  }
+
+  r = await call("GET", `/v1/companies/${companyA}/security-levels/vocabulary`, dataEntryA);
+  check(
+    "Data Entry -> the rule vocabulary -> 403 (same `security` resource as the rest)",
+    r.status === 403,
+    brief(r),
+  );
+
+  // -- The Owner level is immutable except its back-dated cutoff -------------
+  // The browser's level editor disables every other field for it and sends ONLY
+  // the cutoff; this is the server-side half of that contract.
+  r = await call("GET", `/v1/companies/${companyA}/security-levels`, ownerA);
+  const ownerLevelID = r.status === 200
+    ? (JSON.parse(r.body) as { security_levels: { id: string; is_owner: boolean }[] })
+        .security_levels.find((l) => l.is_owner)?.id ?? ""
+    : "";
+  r = await call("PUT", `/v1/companies/${companyA}/security-levels/${ownerLevelID}`, ownerA, {
+    requires_webauthn: false,
+  });
+  check(
+    "turn OFF the Owner level's WebAuthn requirement -> 422 (built-in, immutable)",
+    r.status === 422,
+    brief(r),
+  );
+  r = await call("PUT", `/v1/companies/${companyA}/security-levels/${ownerLevelID}`, ownerA, {
+    name: "Owner Renamed",
+  });
+  check("rename the Owner level -> 422", r.status === 422, brief(r));
+
+  // ...but the cutoff IS settable, and it binds Owners too. Set then CLEAR, so
+  // this check leaves the company exactly as it found it — a stray Owner cutoff
+  // would break every later write in this script and in the browser demo.
+  r = await call("PUT", `/v1/companies/${companyA}/security-levels/${ownerLevelID}`, ownerA, {
+    backdated_cutoff: "2000-01-01",
+  });
+  check("set the Owner level's back-dated cutoff -> 200 (the ONE editable field)", r.status === 200, brief(r));
+  r = await call("PUT", `/v1/companies/${companyA}/security-levels/${ownerLevelID}`, ownerA, {
+    backdated_cutoff: "",
+  });
+  check("clear it again -> 200 (this section leaves no state behind)", r.status === 200, brief(r));
+  r = await call("GET", `/v1/companies/${companyA}/security-levels`, ownerA);
+  const ownerCutoff = r.status === 200
+    ? (JSON.parse(r.body) as { security_levels: { is_owner: boolean; backdated_cutoff: string }[] })
+        .security_levels.find((l) => l.is_owner)?.backdated_cutoff ?? "?"
+    : "?";
+  check(
+    "the Owner level's WebAuthn requirement and cutoff are as they started",
+    ownerCutoff === "",
+    `backdated_cutoff=${JSON.stringify(ownerCutoff)}`,
+  );
+
+  // -- CHANGING a member's level, judged by the PDP -------------------------
+  // §8 proves a demotion is REFUSED (the last-Owner guard). Nothing proved a
+  // permitted change actually takes effect — and the admin API reading back its
+  // own write would be the system echoing itself. So the oracle is a real
+  // business route: the same token must reach a report before the change and be
+  // refused after it, with nothing else altered.
+  // The two levels are deliberately DISJOINT and both narrow — one report each,
+  // named exactly. The seeded Data Entry level would NOT do: its rule is the
+  // BARE `report`, which matches every report by name, so a move away from it
+  // is invisible to a report oracle (the first draft of this check asserted
+  // 403 -> 200 against Data Entry and observed 200 -> 200).
+  const moveSubject = `acl-move-probe-${process.pid}`;
+  const mkLevel = async (suffix: string, report: string): Promise<string> => {
+    const res = await call("POST", `/v1/companies/${companyA}/security-levels`, ownerA, {
+      name: `ACL Move ${suffix} ${process.pid}`,
+      default_access: "none",
+      rules: [{ effect: "allow", action: "display", resource: `report:${report}` }],
+    });
+    check(`create the "${suffix}" probe level (only report:${report}) -> 201`, res.status === 201, brief(res));
+    return res.status === 201
+      ? (JSON.parse(res.body) as { security_level_id: string }).security_level_id
+      : "";
+  };
+  const fromLevelID = await mkLevel("from", "trial-balance");
+  const toLevelID = await mkLevel("to", "balance-sheet");
+
+  r = await call("POST", `/v1/companies/${companyA}/members/invites`, ownerA, {
+    subject: moveSubject,
+    security_level_id: fromLevelID,
+  });
+  check("invite them at the FROM level -> 201", r.status === 201, brief(r));
+  const moveTok = await mint(moveSubject, ["pwd"]);
+  r = await call("GET", "/v1/me", moveTok);
+  check("they claim the invite -> 200", r.status === 200, brief(r));
+
+  const canSee = async (report: string): Promise<number> =>
+    (await call("GET", `/v1/companies/${companyA}/${report}`, moveTok)).status;
+  const moveTbBefore = await canSee("trial-balance");
+  const moveBsBefore = await canSee("balance-sheet");
+  check(
+    "on the FROM level they see the trial balance and NOT the balance sheet",
+    moveTbBefore === 200 && moveBsBefore === 403,
+    `trial-balance=${moveTbBefore} balance-sheet=${moveBsBefore} (want 200 / 403)`,
+  );
+
+  r = await call("GET", `/v1/companies/${companyA}/members`, ownerA);
+  const moveUserID = r.status === 200
+    ? (JSON.parse(r.body) as { members: { user_id: string; subject: string }[] })
+        .members.find((m) => m.subject === moveSubject)?.user_id ?? ""
+    : "";
+  r = await call("PUT", `/v1/companies/${companyA}/members/${moveUserID}`, ownerA, {
+    security_level_id: toLevelID,
+  });
+  check("Owner -> CHANGE their security level -> 200", r.status === 200, brief(r));
+
+  const moveTbAfter = await canSee("trial-balance");
+  const moveBsAfter = await canSee("balance-sheet");
+  check(
+    "the change takes effect at once, and it is a MOVE (both directions flip), judged by the PDP",
+    moveTbAfter === 403 && moveBsAfter === 200,
+    `trial-balance ${moveTbBefore}->${moveTbAfter} (want 200->403), balance-sheet ${moveBsBefore}->${moveBsAfter} (want 403->200)`,
+  );
+
+  r = await call("DELETE", `/v1/companies/${companyA}/members/${moveUserID}`, ownerA);
+  check("the move probe's membership is cleaned up -> 200", r.status === 200, brief(r));
+  for (const [what, lvl] of [["from", fromLevelID], ["to", toLevelID]] as const) {
+    r = await call("DELETE", `/v1/companies/${companyA}/security-levels/${lvl}`, ownerA);
+    check(`the "${what}" probe level is cleaned up -> 200`, r.status === 200, brief(r));
+  }
+
+  // -- Revoking a PENDING invite --------------------------------------------
+  const revokeSubject = `revoke-probe-${process.pid}`;
+  r = await call("POST", `/v1/companies/${companyA}/members/invites`, ownerA, {
+    subject: revokeSubject,
+    security_level_name: "Data Entry",
+  });
+  const revokeInviteID = r.status === 201
+    ? (JSON.parse(r.body) as { invite_id: string }).invite_id
+    : "";
+  check("invite a throwaway subject -> 201", r.status === 201 && !!revokeInviteID, brief(r));
+
+  const pendingSubjects = async (): Promise<string[]> => {
+    const res = await call("GET", `/v1/companies/${companyA}/members`, ownerA);
+    if (res.status !== 200) return [];
+    return (JSON.parse(res.body) as { invites: { subject: string }[] }).invites.map((i) => i.subject);
+  };
+  check(
+    "it is listed as PENDING (an invite is not yet a membership)",
+    (await pendingSubjects()).includes(revokeSubject),
+    revokeSubject,
+  );
+
+  r = await call("DELETE", `/v1/companies/${companyA}/members/invites/${revokeInviteID}`, ownerA);
+  check("Owner -> revoke the pending invite -> 200", r.status === 200, brief(r));
+  check(
+    "it leaves the pending list at once",
+    !(await pendingSubjects()).includes(revokeSubject),
+    `[${(await pendingSubjects()).join(", ")}]`,
+  );
+
+  // The real claim: a revoked invite is INERT. The invitee signs in and gets
+  // nothing — not an error, just no company.
+  const revokeTok = await mint(revokeSubject, ["pwd"]);
+  r = await call("GET", "/v1/me", revokeTok);
+  const revokedMe = r.status === 200
+    ? (JSON.parse(r.body) as { companies: { company_id: string }[] }).companies
+    : [{ company_id: "(call failed)" }];
+  check(
+    "the revoked invitee signs in and is a member of NOTHING (a revoked invite grants nothing)",
+    r.status === 200 && !revokedMe.some((c) => c.company_id === companyA),
+    `${r.status} companies=${revokedMe.length}`,
+  );
+  r = await call("GET", `/v1/companies/${companyA}/trial-balance`, revokeTok);
+  check("...and cannot read company A -> 403", r.status === 403, brief(r));
+
+  // =========================================================================
   head("9. PASSWORD LOGIN — a real first-party credential, not a dev mint");
   // =========================================================================
   // Every token above came from POST /auth/token, which mints for ANY subject:

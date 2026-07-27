@@ -4,14 +4,14 @@
 This one explains *who is allowed to do what, and why* — the SaaS layer.
 
 Every status code below was observed on the running stack. The whole document is
-gated by `pnpm verify:tenancy`, which exercises **72 paths** and fails if any
+gated by `pnpm verify:tenancy`, which exercises **97 paths** and fails if any
 branch changes behaviour.
 
 ```bash
 cd frontend
 pnpm seed:demo -- --insightd        # company A (Demo Traders) — prints its id
 pnpm seed:tenancy <A>               # adds a 2nd user to A, builds company B
-pnpm verify:tenancy <A> <B>         # 72 access-control checks
+pnpm verify:tenancy <A> <B>         # 97 access-control checks
 ```
 
 The verifier is **self-cleaning**: it must write in order to test write
@@ -299,6 +299,7 @@ Why this shape and not "create the user, then grant them a role":
 | `PUT .../members/{userID}` | change a member's security level |
 | `DELETE .../members/{userID}` | revoke a member's access |
 | `GET .../security-levels` | levels, their ACL rules, and member counts |
+| `GET .../security-levels/vocabulary` | the **closed sets** a rule may name (effects, actions, resources, default accesses) |
 | `POST .../security-levels` | create a **custom** level |
 | `PUT .../security-levels/{id}` | patch a level; `rules` replaces the whole set |
 | `DELETE .../security-levels/{id}` | delete an unused custom level |
@@ -397,15 +398,16 @@ Honest list. The engine is multi-tenant; the *product* around it is not yet.
 | **Login: PARTIAL** | **First-party password login SHIPS** (migration 0021 `user_credential`, PBKDF2-HMAC-SHA256 @210k, `POST /auth/login` + `POST /auth/password`, a login screen with logout and a 401 bounce) — see §10. **But it is mounted only where the in-process dev signer is:** `authLoginRoutes()` registers `/auth/login` inside `if s.signer != nil`, and the only production posture `buildAuth()` accepts besides refusing to start is `AUTH_JWKS_URL`+`AUTH_ISSUER`, where the signer is nil. **In that posture `POST /auth/login` is a 404** and identity is the IdP's job. So this closes the gap for the product as it runs today, and SSO/Keycloak remains the production answer — a later swap onto the already-built `JWKSVerifier`. Two residual holes, both tracked: there is **no way for an invited user to set a FIRST password** without a Bearer they cannot yet obtain (an admin-issued one-time set-password token is the required follow-up), and **no password reset**. |
 | ~~No company switching in the UI~~ | **DONE** — `F3` opens the list of companies the signed-in user may open (from `GET /v1/me`), with the level held in each, and re-scopes the session. See §9. |
 | ~~UI is single-identity~~ | **DONE** — the hardcoded `browser-dev-owner` mint is deleted. The browser signs in as whoever types their user name and password, holds the token in `sessionStorage` (per-tab, so a closed tab is a logged-out tab), shows who is signed in, and offers Sign Out. Every allow/disallow path in this document is now reachable *as the right person*. |
-| **Admin screens are read-mostly** | Gateway > **Users & Roles** lists members, pending invites and security levels, and can INVITE. Changing a member's level, revoking access and creating a custom level remain API-only. |
+| ~~Admin screens are read-mostly~~ | **DONE** — Gateway > **Users & Roles** now performs every write the API offers: invite, change a member's level, revoke access, revoke a pending invite, and create / edit / delete a custom security level. The rule editor's tokens are SERVED by the PDP (`GET .../security-levels/vocabulary`) rather than hardcoded, so a rule the PDP could never match is unrepresentable. See §9. |
 | **No email delivery** | An invite is a database row. Nothing notifies the invitee — the flow assumes the administrator tells them out of band. |
 | **Not deployed** | `infra/` holds k8s + terraform for EKS `ap-south-1`; none of it has been applied. |
 
-Suggested ordering from here: the remaining admin writes in the browser (change
-level, revoke, create a level), then invite delivery, then an admin-issued
-one-time set-password token (the missing half of first-party login), and
-finally SSO — a live Keycloak against the built `JWKSVerifier`, plus `aud`
-validation, which is still not performed anywhere.
+Suggested ordering from here: invite delivery (an outbox table plus a
+logged/stubbed sender is honest and testable offline; real SMTP is config, not
+code), then an admin-issued one-time set-password token (the missing half of
+first-party login, and a natural pair with delivery), and finally SSO — a live
+Keycloak against the built `JWKSVerifier`, plus `aud` validation, which is still
+not performed anywhere.
 
 ---
 
@@ -518,16 +520,50 @@ that cannot be hydrated is **not** switched to; the error says so.
 invites listed separately** — an invite is not a membership until the invitee
 signs in and claims it, and hiding that distinction makes a successful invite
 look like a failure — and the security levels with their Allow/Disallow rules.
-Inviting is available here; the level offered by default is the least-privileged
-one, never Owner.
+
+**Every write the API offers is now performed here**, not just inviting: change a
+member's security level, revoke a member's access, revoke a pending invite, and
+create / edit / delete a custom security level. Four details that are decisions,
+not incidentals:
+
+- **The rule editor's dropdowns come from the SERVER**
+  (`GET .../security-levels/vocabulary`), never from a list hardcoded in the
+  client. A misspelled rule is not rejected by the PDP — it silently never
+  matches, so a `disallow` an administrator believes they wrote would *permit*
+  the thing instead. Serving the closed sets makes such a rule unrepresentable
+  in the UI rather than merely 422'd, and it cannot drift from `internal/authz`
+  the way a TypeScript copy would. Gated both ways by
+  `TestAdminVocabularyIsExactlyWhatTheServerAccepts` (every served token
+  survives a real write; nothing writable is missing) and live by
+  `verify:tenancy` §8b.
+- **The guards are explained, not swallowed.** The last Owner's level select is
+  disabled with the reason shown *before* the click, rather than offering an
+  action the server answers `409`; the Owner level's editor locks every field
+  but the back-dated cutoff and sends **only** that field, because a PUT
+  carrying anything else is a `422`; a level still used by a member or a pending
+  invite reports the server's own `409` sentence.
+- **The level offered by default is the least-privileged one**, never Owner, and
+  a newly created level starts at `default_access: none`.
+- **Destructive actions confirm INLINE, never with `window.confirm`.** A native
+  modal blocks the CDP channel the browser e2e drives, so a `confirm()` would
+  make revoke and delete permanently untestable — the wrong trade on an
+  access-control screen.
 
 Both screens treat a **403 as the product working**: a Data Entry operator opening
 Users & Roles is told their level does not permit it, and an Owner without a
-WebAuthn AMR is told the invite needs step-up — rather than being shown an empty
+WebAuthn AMR is told the write needs step-up — rather than being shown an empty
 page that reads as broken.
 
 Verified in a real browser by `pnpm e2e:ui` (headless Chromium, keys sent to the
-document exactly as a keyboard user's are): 24/24 flows, including both screens.
+document exactly as a keyboard user's are): **34/34 flows**, including create →
+invite → revoke-invite → delete on a real custom level, each write running the
+real WebAuthn step-up ceremony through a CDP virtual authenticator.
+
+**Still API-only:** nothing on this surface. **Still missing:** a *successful*
+member level change is not driven in the browser test, because the company that
+file bootstraps has exactly one member (so it is the last-Owner case by
+construction); that path is gated live by `verify:tenancy` §8b instead, with the
+PDP — not the admin API reading its own write — as the oracle.
 
 ---
 
@@ -537,7 +573,7 @@ document exactly as a keyboard user's are): 24/24 flows, including both screens.
 cd frontend
 pnpm seed:demo -- --insightd     # -> company A
 pnpm seed:tenancy <A>            # -> company B + the Data Entry user
-pnpm verify:tenancy <A> <B>      # 72 checks; exits non-zero on any drift
+pnpm verify:tenancy <A> <B>      # 97 checks; exits non-zero on any drift
 pnpm verify:demo <A>             # 18 accounting checks; unaffected by the above
 ```
 

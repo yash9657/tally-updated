@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/khata/cored/internal/authz"
 	"github.com/khata/cored/internal/server"
 )
 
@@ -671,3 +672,183 @@ func TestAdminMemberListDoesNotLeakTheDirectory(t *testing.T) {
 }
 
 func rec500(body map[string]any) string { return fmt.Sprintf("%v", body) }
+
+// ---------------------------------------------------------------------------
+// The served rule vocabulary
+// ---------------------------------------------------------------------------
+
+// TestAdminVocabularyIsExactlyWhatTheServerAccepts guards the reason
+// GET /security-levels/vocabulary exists at all.
+//
+// A rule editor in the browser must offer exactly the tokens POST/PUT
+// /security-levels will accept. Get that wrong in either direction and the
+// failure is silent-ish: offer a token the server 422s and the administrator
+// cannot express a rule they are entitled to; omit one and a resource becomes
+// un-nameable, so only default_access can reach it. A hardcoded TypeScript copy
+// of internal/authz's Known* sets would drift the moment either side changed.
+//
+// The test closes BOTH directions:
+//
+//	SUPERSET — every action and every resource the endpoint serves is carried
+//	into a REAL POST /security-levels. Validation is per-token, so one level
+//	carrying (each action x a fixed resource) + (a fixed action x each resource)
+//	exercises every token served; a single stranger 422s the whole request and
+//	the body names it.
+//
+//	SUBSET — the served lists must CONTAIN every token internal/authz declares
+//	writable. Serving a subset would pass the superset check vacuously.
+//
+// Plus a control: the near-miss spellings TestAdminRuleVocabularyRejectsTypos
+// proves are 422 must be absent from what is served.
+func TestAdminVocabularyIsExactlyWhatTheServerAccepts(t *testing.T) {
+	srv := newServer(t)
+	companyID, ownerTok, _ := newAdminCompany(t, srv)
+
+	rec, body := doRaw(t, srv, http.MethodGet,
+		"/v1/companies/"+companyID+"/security-levels/vocabulary", ownerTok, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET vocabulary = %d, want 200 (%s)", rec.Code, rec500(body))
+	}
+	strs := func(key string) []string {
+		raw, ok := body[key].([]any)
+		if !ok {
+			t.Fatalf("vocabulary has no %q array: %v", key, body)
+		}
+		out := make([]string, 0, len(raw))
+		for _, e := range raw {
+			s, ok := e.(string)
+			if !ok {
+				t.Fatalf("%s element is not a string: %v", key, e)
+			}
+			out = append(out, s)
+		}
+		return out
+	}
+	effects, actions := strs("effects"), strs("actions")
+	resources, defaults := strs("resources"), strs("default_accesses")
+
+	// -- SUPERSET: every served token survives a real write ------------------
+	// "report" and "display" are the fixed partners; both are asserted present
+	// by the subset check below, so this cannot pass by pairing with a stranger.
+	rules := make([]map[string]string, 0, len(actions)+len(resources))
+	for _, a := range actions {
+		rules = append(rules, map[string]string{"effect": "allow", "action": a, "resource": "report"})
+	}
+	for _, res := range resources {
+		rules = append(rules, map[string]string{"effect": "allow", "action": "display", "resource": res})
+	}
+	for _, e := range effects {
+		rules = append(rules, map[string]string{"effect": e, "action": "display", "resource": "report"})
+	}
+	rec, body = doRaw(t, srv, http.MethodPost, "/v1/companies/"+companyID+"/security-levels", ownerTok,
+		map[string]any{
+			"name": "Vocab Probe " + uuid.NewString()[:8], "default_access": "none", "rules": rules,
+		})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("a level carrying EVERY served token = %d, want 201 — the endpoint offers a token the "+
+			"server rejects: %s", rec.Code, rec500(body))
+	}
+
+	// Both default_access values must likewise be writable.
+	for _, da := range defaults {
+		rec, body = doRaw(t, srv, http.MethodPost, "/v1/companies/"+companyID+"/security-levels", ownerTok,
+			map[string]any{"name": "Vocab DA " + uuid.NewString()[:8], "default_access": da, "rules": []any{}})
+		if rec.Code != http.StatusCreated {
+			t.Errorf("served default_access %q = %d, want 201 (%s)", da, rec.Code, rec500(body))
+		}
+	}
+
+	// -- SUBSET: nothing writable is missing from what is served -------------
+	has := func(hay []string, needle string) bool {
+		for _, h := range hay {
+			if h == needle {
+				return true
+			}
+		}
+		return false
+	}
+	for _, a := range authz.KnownActions {
+		if !has(actions, string(a)) {
+			t.Errorf("action %q is writable but not served — no rule editor could name it", a)
+		}
+	}
+	if !has(actions, authz.Wildcard) {
+		t.Errorf("the wildcard action is writable but not served")
+	}
+	for _, res := range authz.KnownResources {
+		if !has(resources, string(res)) {
+			t.Errorf("resource %q is writable but not served", res)
+		}
+	}
+	for _, n := range authz.KnownReportNames {
+		if !has(resources, "report:"+n) {
+			t.Errorf("report %q is writable but report:%s is not served", n, n)
+		}
+	}
+	if !has(resources, authz.Wildcard) {
+		t.Errorf("the wildcard resource is writable but not served")
+	}
+	for _, e := range []string{"allow", "disallow"} {
+		if !has(effects, e) {
+			t.Errorf("effect %q is writable but not served", e)
+		}
+	}
+	for _, da := range []string{"full", "none"} {
+		if !has(defaults, da) {
+			t.Errorf("default_access %q is writable but not served", da)
+		}
+	}
+
+	// -- CONTROL: the proven-422 near-misses are not on offer ----------------
+	for _, typo := range []string{"report:trail-balance", "trial-balance", "sale", "sales:urgent"} {
+		if has(resources, typo) {
+			t.Errorf("the vocabulary offers %q, which POST /security-levels answers 422", typo)
+		}
+	}
+	for _, typo := range []string{"view", "read"} {
+		if has(actions, typo) {
+			t.Errorf("the vocabulary offers action %q, which POST /security-levels answers 422", typo)
+		}
+	}
+}
+
+// TestAdminVocabularyIsPDPGated pins that reading the vocabulary is governed by
+// the same `security` resource as the rest of the surface: an operator who may
+// not administer users may not enumerate the tokens either, and a service
+// principal is refused outright.
+func TestAdminVocabularyIsPDPGated(t *testing.T) {
+	srv := newServer(t)
+	companyID, ownerTok, _ := newAdminCompany(t, srv)
+
+	// A Data-Entry-shaped level: default-deny with no `security` rule.
+	rec, body := doRaw(t, srv, http.MethodPost, "/v1/companies/"+companyID+"/security-levels", ownerTok,
+		map[string]any{
+			"name": "Vocab Operator " + uuid.NewString()[:8], "default_access": "none",
+			"rules": []map[string]string{{"effect": "allow", "action": "create", "resource": "sales"}},
+		})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create operator level = %d (%s)", rec.Code, rec500(body))
+	}
+	levelID, _ := body["security_level_id"].(string)
+
+	operator := "vocab-operator-" + uuid.NewString()[:8]
+	if rec, body = doRaw(t, srv, http.MethodPost, "/v1/companies/"+companyID+"/members/invites", ownerTok,
+		map[string]any{"subject": operator, "security_level_id": levelID}); rec.Code != http.StatusCreated {
+		t.Fatalf("invite operator = %d (%s)", rec.Code, rec500(body))
+	}
+	operatorTok := mintToken(t, srv, operator, "webauthn")
+	if rec, _ = doRaw(t, srv, http.MethodGet, "/v1/me", operatorTok, nil); rec.Code != http.StatusOK {
+		t.Fatalf("operator /v1/me = %d", rec.Code)
+	}
+
+	if rec, _ = doRaw(t, srv, http.MethodGet,
+		"/v1/companies/"+companyID+"/security-levels/vocabulary", operatorTok, nil); rec.Code != http.StatusForbidden {
+		t.Errorf("operator -> vocabulary = %d, want 403", rec.Code)
+	}
+
+	svcTok := mintToken(t, srv, "svc:statutoryd", "webauthn")
+	if rec, _ = doRaw(t, srv, http.MethodGet,
+		"/v1/companies/"+companyID+"/security-levels/vocabulary", svcTok, nil); rec.Code != http.StatusForbidden {
+		t.Errorf("service principal -> vocabulary = %d, want 403", rec.Code)
+	}
+}

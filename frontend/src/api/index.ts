@@ -63,6 +63,15 @@ export type {
   SecurityLevelRule,
   SecurityLevelView,
   SecurityLevelsResponse,
+  SecurityVocabulary,
+  SecurityLevelRequest,
+  CreateSecurityLevelResponse,
+  UpdateSecurityLevelResponse,
+  DeleteSecurityLevelResponse,
+  UpdateMemberRequest,
+  UpdateMemberResponse,
+  RemoveMemberResponse,
+  RevokeInviteResponse,
 } from "./admin";
 export {
   draftBodyToVoucherRequest,

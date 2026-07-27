@@ -53,14 +53,24 @@ import type {
 } from "./types";
 import type { QueryRequest, QueryResult } from "./query";
 import type {
+  CreateSecurityLevelResponse,
+  DeleteSecurityLevelResponse,
   InviteMemberRequest,
   InviteMemberResponse,
   InviteView,
   MeResponse,
   MemberView,
   MembersResponse,
+  RemoveMemberResponse,
+  RevokeInviteResponse,
+  SecurityLevelRequest,
+  SecurityLevelRule,
   SecurityLevelsResponse,
   SecurityLevelView,
+  SecurityVocabulary,
+  UpdateMemberRequest,
+  UpdateMemberResponse,
+  UpdateSecurityLevelResponse,
 } from "./admin";
 import { deriveGstSplit } from "../screens/vouchers/gstDerive";
 
@@ -271,6 +281,141 @@ function seededLevels(companyID: string): SecurityLevelView[] {
       ],
     },
   ];
+}
+
+/**
+ * The closed rule vocabulary, mirroring internal/authz/vocabulary.go.
+ *
+ * THE MOCK'S COPY IS NOT THE PRODUCT'S SOURCE OF TRUTH — the live client fetches
+ * it from GET .../security-levels/vocabulary precisely so no TypeScript copy can
+ * drift from the PDP. This one exists only so hermetic component tests have
+ * something to render, and it is the mock's job to be a faithful stand-in.
+ * If it ever disagrees with the server, the LIVE gates (`verify:tenancy`,
+ * `e2e:ui`) are authoritative — a fake that models a promise the real store
+ * breaks is exactly how this project shipped a lockout bug before.
+ */
+const MOCK_VOCABULARY: SecurityVocabulary = {
+  effects: ["allow", "disallow"],
+  actions: ["create", "alter", "delete", "display", "print", "export", "*"],
+  resources: [
+    "master",
+    "voucher",
+    "report",
+    "company",
+    "import",
+    "sync",
+    "query",
+    "security",
+    "sales",
+    "purchase",
+    "receipt",
+    "payment",
+    "contra",
+    "journal",
+    "credit-note",
+    "debit-note",
+    "report:trial-balance",
+    "report:balance-sheet",
+    "report:profit-and-loss",
+    "report:day-book",
+    "report:outstandings",
+    "report:cash-flow",
+    "report:anomalies",
+    "report:gstr1",
+    "report:gstr3b",
+    "report:reconciliation-queue",
+    "*",
+  ],
+  default_accesses: ["full", "none"],
+};
+
+/** How many Owner-level members a company has (the last-Owner guard's input). */
+function ownerCount(c: MockCompany): number {
+  return c.members.filter((m) => m.is_owner).length;
+}
+
+/** Re-derive each level's member_count after a membership change. */
+function recount(c: MockCompany): void {
+  for (const l of c.levels) {
+    l.member_count = c.members.filter(
+      (m) => m.security_level_id === l.id,
+    ).length;
+  }
+}
+
+/**
+ * Resolve a level by id OR name, mirroring the server's resolveLevel: supplying
+ * both is a 400 (the server refuses to pick one), supplying neither likewise.
+ */
+function resolveLevel(
+  c: MockCompany,
+  levelID?: string,
+  levelName?: string,
+): SecurityLevelView {
+  if (levelID && levelName) {
+    throw new ApiError(
+      400,
+      "supply security_level_id or security_level_name, not both",
+      "supply security_level_id or security_level_name, not both",
+    );
+  }
+  if (!levelID && !levelName) {
+    throw new ApiError(
+      400,
+      "security_level_id or security_level_name is required",
+      "security_level_id or security_level_name is required",
+    );
+  }
+  const level = levelID
+    ? c.levels.find((l) => l.id === levelID)
+    : c.levels.find((l) => l.name === levelName);
+  if (!level) {
+    throw new ApiError(
+      404,
+      "security level not found",
+      "security level not found",
+    );
+  }
+  return level;
+}
+
+/** 422 on a token outside the closed vocabulary, exactly as parseRules does. */
+function validateRule(r: SecurityLevelRule): SecurityLevelRule {
+  const effect = r.effect.trim().toLowerCase();
+  const action = r.action.trim().toLowerCase();
+  const resource = r.resource.trim().toLowerCase();
+  if (!MOCK_VOCABULARY.effects.includes(effect)) {
+    throw new ApiError(
+      422,
+      `invalid effect "${r.effect}": want allow or disallow`,
+      `invalid effect "${r.effect}"`,
+    );
+  }
+  if (!MOCK_VOCABULARY.actions.includes(action)) {
+    throw new ApiError(
+      422,
+      `unknown action "${r.action}"`,
+      `unknown action "${r.action}"`,
+    );
+  }
+  if (!MOCK_VOCABULARY.resources.includes(resource)) {
+    throw new ApiError(
+      422,
+      `unknown resource "${r.resource}"`,
+      `unknown resource "${r.resource}"`,
+    );
+  }
+  return { effect, action, resource };
+}
+
+function validateDefaultAccess(da: string): void {
+  if (!MOCK_VOCABULARY.default_accesses.includes(da)) {
+    throw new ApiError(
+      422,
+      "default_access must be full or none",
+      "default_access must be full or none",
+    );
+  }
 }
 
 export interface MockClientOptions {
@@ -1049,10 +1194,226 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       return { invite_id: invite.id, subject, status: "pending" };
     },
 
+    async revokeInvite(
+      companyID: string,
+      inviteID: string,
+    ): Promise<RevokeInviteResponse> {
+      const c = ensure(companyID);
+      const iv = c.invites.find((i) => i.id === inviteID);
+      if (!iv) {
+        throw new ApiError(404, "invite not found", "invite not found");
+      }
+      // Revoked, never deleted: the audit trail of who was offered access
+      // survives, and listMembers filters to `pending` so it leaves the screen.
+      iv.status = "revoked";
+      return { invite_id: inviteID, status: "revoked" };
+    },
+
+    async updateMember(
+      companyID: string,
+      userID: string,
+      req: UpdateMemberRequest,
+    ): Promise<UpdateMemberResponse> {
+      const c = ensure(companyID);
+      const m = c.members.find((x) => x.user_id === userID);
+      if (!m) {
+        throw new ApiError(404, "membership not found", "membership not found");
+      }
+      const level = resolveLevel(c, req.security_level_id, req.security_level_name);
+      // THE LAST-OWNER GUARD (authz.Store.SetMembershipLevel): demoting the only
+      // Owner would leave the company unadministrable, so it is refused.
+      if (m.is_owner && !level.is_owner && ownerCount(c) <= 1) {
+        throw new ApiError(
+          409,
+          "the last Owner cannot be demoted",
+          "the last Owner cannot be demoted",
+        );
+      }
+      m.security_level_id = level.id;
+      m.security_level_name = level.name;
+      m.is_owner = level.is_owner;
+      recount(c);
+      return { user_id: userID, security_level_id: level.id };
+    },
+
+    async removeMember(
+      companyID: string,
+      userID: string,
+    ): Promise<RemoveMemberResponse> {
+      const c = ensure(companyID);
+      const m = c.members.find((x) => x.user_id === userID);
+      if (!m) {
+        throw new ApiError(404, "membership not found", "membership not found");
+      }
+      if (m.is_owner && ownerCount(c) <= 1) {
+        throw new ApiError(
+          409,
+          "the last Owner cannot be removed",
+          "the last Owner cannot be removed",
+        );
+      }
+      c.members = c.members.filter((x) => x.user_id !== userID);
+      recount(c);
+      return { user_id: userID, status: "removed" };
+    },
+
     async listSecurityLevels(
       companyID: string,
     ): Promise<SecurityLevelsResponse> {
       return { security_levels: [...ensure(companyID).levels] };
+    },
+
+    async getSecurityVocabulary(
+      companyID: string,
+    ): Promise<SecurityVocabulary> {
+      ensure(companyID);
+      return {
+        effects: [...MOCK_VOCABULARY.effects],
+        actions: [...MOCK_VOCABULARY.actions],
+        resources: [...MOCK_VOCABULARY.resources],
+        default_accesses: [...MOCK_VOCABULARY.default_accesses],
+      };
+    },
+
+    async createSecurityLevel(
+      companyID: string,
+      req: SecurityLevelRequest,
+    ): Promise<CreateSecurityLevelResponse> {
+      const c = ensure(companyID);
+      const name = (req.name ?? "").trim();
+      if (!name) {
+        throw new ApiError(400, "name is required", "name is required");
+      }
+      if (c.levels.some((l) => l.name === name)) {
+        throw new ApiError(
+          409,
+          `security level "${name}" already exists`,
+          `security level "${name}" already exists`,
+        );
+      }
+      // Default-DENY for a level created with no explicit default, mirroring
+      // handleCreateSecurityLevel: a new level must not silently grant all.
+      const defaultAccess = req.default_access || "none";
+      validateDefaultAccess(defaultAccess);
+      const rules = (req.rules ?? []).map(validateRule);
+      const level: SecurityLevelView = {
+        id: id("level"),
+        name,
+        is_owner: false,
+        default_access: defaultAccess,
+        requires_webauthn: req.requires_webauthn ?? false,
+        backdated_cutoff: req.backdated_cutoff ?? "",
+        member_count: 0,
+        rules,
+      };
+      c.levels.push(level);
+      return { security_level_id: level.id, name };
+    },
+
+    async updateSecurityLevel(
+      companyID: string,
+      levelID: string,
+      req: SecurityLevelRequest,
+    ): Promise<UpdateSecurityLevelResponse> {
+      const c = ensure(companyID);
+      const level = c.levels.find((l) => l.id === levelID);
+      if (!level) {
+        throw new ApiError(
+          404,
+          "security level not found",
+          "security level not found",
+        );
+      }
+      const touchesMoreThanCutoff =
+        (req.name ?? "").trim() !== "" ||
+        (req.default_access ?? "") !== "" ||
+        req.requires_webauthn !== undefined ||
+        req.rules !== undefined;
+      // THE OWNER LEVEL IS IMMUTABLE except its back-dated cutoff (Tally's own
+      // behaviour, and the cutoff binds Owners too). Rewriting its
+      // requires_webauthn or default_access would silently rewrite the whole
+      // company's security posture.
+      if (level.is_owner && touchesMoreThanCutoff) {
+        throw new ApiError(
+          422,
+          "the Owner level cannot be modified except its back-dated cutoff",
+          "the Owner level cannot be modified except its back-dated cutoff",
+        );
+      }
+      const newName = (req.name ?? "").trim();
+      if (newName && newName !== level.name) {
+        if (c.levels.some((l) => l.name === newName)) {
+          throw new ApiError(
+            409,
+            `security level "${newName}" already exists`,
+            `security level "${newName}" already exists`,
+          );
+        }
+        level.name = newName;
+      }
+      if (req.default_access) {
+        validateDefaultAccess(req.default_access);
+        level.default_access = req.default_access;
+      }
+      if (req.requires_webauthn !== undefined) {
+        level.requires_webauthn = req.requires_webauthn;
+      }
+      if (req.backdated_cutoff !== undefined) {
+        level.backdated_cutoff = req.backdated_cutoff;
+      }
+      // Rules are replaced WHOLESALE when the key is present — a PUT of the
+      // whole set, not a patch. `[]` therefore clears every rule.
+      if (req.rules !== undefined) {
+        level.rules = req.rules.map(validateRule);
+      }
+      // Members carry the level NAME, so a rename must follow through or the
+      // member list would show a level that no longer exists.
+      for (const m of c.members) {
+        if (m.security_level_id === level.id) m.security_level_name = level.name;
+      }
+      for (const iv of c.invites) {
+        if (iv.security_level_id === level.id) iv.security_level_name = level.name;
+      }
+      return { security_level_id: levelID };
+    },
+
+    async deleteSecurityLevel(
+      companyID: string,
+      levelID: string,
+    ): Promise<DeleteSecurityLevelResponse> {
+      const c = ensure(companyID);
+      const level = c.levels.find((l) => l.id === levelID);
+      if (!level) {
+        throw new ApiError(
+          404,
+          "security level not found",
+          "security level not found",
+        );
+      }
+      if (level.is_owner) {
+        throw new ApiError(
+          422,
+          "the Owner level cannot be deleted",
+          "the Owner level cannot be deleted",
+        );
+      }
+      // IN USE counts PENDING INVITES as well as members (authz.Store.DeleteLevel):
+      // deleting a level somebody has been invited at would leave that invite
+      // pointing at nothing.
+      const inUse =
+        c.members.filter((m) => m.security_level_id === levelID).length +
+        c.invites.filter(
+          (i) => i.security_level_id === levelID && i.status === "pending",
+        ).length;
+      if (inUse > 0) {
+        throw new ApiError(
+          409,
+          `${inUse} member(s)/invite(s) still use it`,
+          `${inUse} member(s)/invite(s) still use it`,
+        );
+      }
+      c.levels = c.levels.filter((l) => l.id !== levelID);
+      return { security_level_id: levelID, status: "deleted" };
     },
 
     async importTallyXML(
