@@ -4,14 +4,14 @@
 This one explains *who is allowed to do what, and why* — the SaaS layer.
 
 Every status code below was observed on the running stack. The whole document is
-gated by `pnpm verify:tenancy`, which exercises **105 paths** and fails if any
+gated by `pnpm verify:tenancy`, which exercises **108 paths** and fails if any
 branch changes behaviour.
 
 ```bash
 cd frontend
 pnpm seed:demo -- --insightd        # company A (Demo Traders) — prints its id
 pnpm seed:tenancy <A>               # adds a 2nd user to A, builds company B
-pnpm verify:tenancy <A> <B>         # 105 access-control checks
+pnpm verify:tenancy <A> <B>         # 108 access-control checks
 ```
 
 The verifier is **self-cleaning**: it must write in order to test write
@@ -133,6 +133,7 @@ Every company gets these at creation (`seed_company_auth_defaults`):
 allow create  | alter | display   sales, purchase, receipt, payment,
                                   contra, journal, credit-note, debit-note
 allow display                     report
+allow display                     company, master   (migration 0022)
 ```
 
 Everything absent from that list is denied, because `default_access` is `none`.
@@ -175,6 +176,9 @@ WebAuthn ceremony rather than bouncing the user to a login screen.
 | **Delete a voucher** | `403 "default access: none"` | no `delete` rule anywhere |
 | **Create a ledger master** | `403 "default access: none"` | no `master` rule |
 | **`POST /query`** (ask your books) | `403 "default access: none"` | no `query` rule |
+| Read the **company master** | `200` | `allow display company` (migration 0022) — the client hydrates the home GST state from it, so without this an operator cannot key GST |
+| Read the **chart of accounts** | `200` | `allow display master` — picking an account IS data entry |
+| **ALTER** a master (set an opening balance) | `403` | display is not alter: an operator picks from the accounts a supervisor defined |
 | **Import Tally XML** | `403 "default access: none"` | no `import` rule |
 | **Read the company master** | `403 "default access: none"` | no `company` rule |
 
@@ -574,7 +578,7 @@ PDP — not the admin API reading its own write — as the oracle.
 cd frontend
 pnpm seed:demo -- --insightd     # -> company A
 pnpm seed:tenancy <A>            # -> company B + the Data Entry user
-pnpm verify:tenancy <A> <B>      # 105 checks; exits non-zero on any drift
+pnpm verify:tenancy <A> <B>      # 108 checks; exits non-zero on any drift
 pnpm verify:demo <A>             # 24 accounting checks; unaffected by the above
 ```
 

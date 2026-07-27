@@ -63,6 +63,14 @@ async function seedPersistedCompany(
     base_currency: "INR",
     state_code: stateCode,
   });
+  // The party picker reads the company's REAL chart of accounts (it used to
+  // offer a hardcoded sample list), so the party a test picks has to be an
+  // account this company actually has — as it would be for a real user.
+  await client.createLedger(id, {
+    name: "Bharat Stores",
+    group_name: "Sundry Debtors",
+    state_code: "27",
+  });
   globalThis.localStorage?.setItem("tally.companyId", id);
 }
 
@@ -73,7 +81,7 @@ async function postGstSale(party: string): Promise<void> {
   // Wait for the real voucher screen (not the "Preparing company…" placeholder):
   // the company must be HYDRATED before a GST post can be built.
   await waitFor(() => expect(screen.getByTestId("gst-taxable")).toBeTruthy());
-  fireEvent.mouseDown(screen.getByText(party));
+  fireEvent.mouseDown(await screen.findByText(party));
   fireEvent.change(screen.getByTestId("gst-taxable"), { target: { value: "10000" } });
   fireEvent.change(screen.getByTestId("gst-rate"), { target: { value: "18" } });
   fireEvent.keyDown(app, { key: "a", ctrlKey: true });

@@ -219,10 +219,34 @@ try {
 
 rec("bootstrap: live company created (StrictMode-safe)", (await body()).includes("My Company"));
 
+/**
+ * Post a GST voucher the way a real operator does.
+ *
+ * The party field is an as-you-type selection list over the company's REAL
+ * chart of accounts (it used to be a hardcoded sample list). This file
+ * bootstraps a FRESH company, which by definition has no customers yet — so the
+ * flow is: type the name, then pick it. On the first voucher that resolves to
+ * the "Create …" row and the party is created on accept; on later ones it
+ * resolves to the account that now exists. Both paths land on the same click,
+ * which is exactly the point: the operator does not have to know which case
+ * they are in.
+ */
 async function postGst(fkey, party, taxable, rate) {
   await toGateway();
   await press(fkey, 500);
-  await page.getByRole("option", { name: party, exact: true }).click();
+  // Type into the party combobox. `fill` is right here and does NOT breach the
+  // file's rule: that rule forbids locator.press for KEY EVENTS the app must
+  // handle globally (which is how two shortcut bugs hid), not typing data into
+  // a text field — the taxable/rate fields below are filled the same way. The
+  // combobox is not autofocused on entry, because the field cursor starts on
+  // the voucher date.
+  await page.getByRole("combobox").fill(party);
+  await page.waitForTimeout(250);
+  await page
+    .getByRole("option")
+    .filter({ hasText: party })
+    .first()
+    .click();
   await page.waitForTimeout(200);
   await page.getByTestId("gst-taxable").fill(taxable);
   await page.getByTestId("gst-rate").fill(rate);

@@ -25,7 +25,7 @@ import {
 } from "./vouchers/gstVoucher";
 import { normalizeMoney } from "./vouchers/money";
 import { acceptEditedPurchaseDraft, canRebuildDraft } from "./vouchers/draftAccept";
-import { acceptPurchaseDraft } from "../api";
+import { acceptPurchaseDraft, ApiError } from "../api";
 import type {
   DayBookEntry,
   FieldConfidence,
@@ -38,21 +38,38 @@ import type {
 } from "../api";
 
 /**
- * Sample party ledgers offered in the auto-completing selection list. These are
- * the NAMES shown to the user; the real ledger uuid is resolved on accept via
- * {@link ensureLedger} (create-or-select, idempotent) so postings carry valid
- * uuids — never the name. A couple carry a default GST state code used to seed
- * the place of supply.
+ * The account groups a PARTY field offers. A voucher's party is a debtor, a
+ * creditor, or the cash/bank account being moved — never an income or tax
+ * ledger, and offering those would invite an unbalanced or nonsensical entry.
  */
-const PARTY_LEDGERS: readonly { name: string; group: string; stateCode?: string }[] = [
-  { name: "Acme Traders", group: "Sundry Debtors", stateCode: "29" },
-  { name: "Bharat Stores", group: "Sundry Debtors", stateCode: "27" },
-  { name: "Chandra & Co", group: "Sundry Debtors", stateCode: "29" },
-  { name: "Cash", group: "Cash-in-Hand" },
-  { name: "Bank", group: "Bank Accounts" },
-] as const;
+const PARTY_GROUPS: readonly string[] = [
+  "Sundry Debtors",
+  "Sundry Creditors",
+  "Cash-in-Hand",
+  "Bank Accounts",
+  "Bank OD A/c",
+];
 
-const PARTY_LEDGER_NAMES = PARTY_LEDGERS.map((p) => p.name);
+/**
+ * One selectable party, resolved from the company's REAL chart of accounts.
+ *
+ * This replaced a hardcoded sample list ("Acme Traders", "Bharat Stores",
+ * "Chandra & Co") that existed in no seeded company — so the picker offered
+ * names that were not accounts, and accepting one CREATED a ledger as a side
+ * effect of keying a voucher. Two consequences, both bad: an operator could
+ * silently mint a near-duplicate of a real party by picking the sample with the
+ * similar name, and a Data Entry operator — who may key vouchers but may NOT
+ * create masters — got a 403 from the ledger POST rather than from anything
+ * they meant to do.
+ *
+ * Carrying the real `id` also means accepting a voucher for an existing party
+ * performs NO write to create it.
+ */
+interface PartyOption {
+  id: string;
+  name: string;
+  stateCode: string;
+}
 
 /** The income/expense ledger a GST class credits/debits, by class. */
 const GST_INCOME_LEDGER: Record<string, { name: string; group: string }> = {
@@ -227,6 +244,44 @@ export function VoucherScreen({
   // the FORM is hydrated from GET /vouchers/{id} (real posting uuids + GST
   // attrs), NOT the day-book names. The loaded voucher_id becomes ctx.voucherID
   // so Ctrl+A routes to the per-class ALTER (PUT), not a create.
+  // THE PARTY PICKER'S OPTIONS, from the company's real chart of accounts.
+  // Read once per company: the list is a master, not a transaction, and a
+  // refetch on every keystroke would make the picker feel broken.
+  const [parties, setParties] = useState<PartyOption[]>([]);
+  const [partiesError, setPartiesError] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    client
+      .listLedgers(companyID)
+      .then((res) => {
+        if (!live) return;
+        setParties(
+          res.ledgers
+            .filter((l) => PARTY_GROUPS.includes(l.group_name))
+            .map((l) => ({ id: l.id, name: l.name, stateCode: l.state_code }))
+            .sort((a, b) => a.name.localeCompare(b.name)),
+        );
+        setPartiesError(null);
+      })
+      .catch((e: unknown) => {
+        if (!live) return;
+        // NOT silent. An empty picker with no explanation reads as "this
+        // company has no customers", which is a different and much more
+        // alarming statement than "the list could not be loaded".
+        setPartiesError(
+          e instanceof ApiError
+            ? `Chart of accounts unavailable (${e.status}). ${e.message}`
+            : e instanceof Error
+              ? e.message
+              : String(e),
+        );
+      });
+    return () => {
+      live = false;
+    };
+  }, [client, companyID]);
+  const partyNames = parties.map((p) => p.name);
+
   const loadedEntry = isAlter ? (loaded?.entry ?? null) : null;
   const loadedVoucherID = loadedEntry?.voucher_id ?? null;
   const seedRef = useRef<string | null>(null);
@@ -561,20 +616,25 @@ export function VoucherScreen({
     }
   }
 
-  // Selecting a party from the list fills the form name AND seeds the place of
-  // supply from the party's state code (Tally defaults POS from the party, but
-  // allows an override). The real uuid is resolved on accept.
+  // Selecting a party fills the form name, carries its REAL ledger id, and seeds
+  // the place of supply from that ledger's own state code (Tally defaults POS
+  // from the party, and allows an override).
+  //
+  // Carrying `partyLedgerId` is what stops the accept path creating a ledger for
+  // a party that already exists. A name typed FREE-HAND still falls through to
+  // the create-or-select on accept, which is how a new party is added inline —
+  // and which a Data Entry level is correctly refused.
   function handleSelectParty(item: string) {
-    const spec = PARTY_LEDGERS.find((p) => p.name === item);
+    const party = parties.find((p) => p.name === item);
     setForm((f) => ({
       ...f,
       party: item,
-      partyLedgerId: "",
-      partyStateCode: spec?.stateCode ?? "",
+      partyLedgerId: party?.id ?? "",
+      partyStateCode: party?.stateCode ?? "",
       gst: {
         ...f.gst,
         // Seed POS from the party's state code (only if not already overridden).
-        placeOfSupply: spec?.stateCode ?? f.gst.placeOfSupply,
+        placeOfSupply: party?.stateCode || f.gst.placeOfSupply,
       },
     }));
     onSelect(item);
@@ -624,10 +684,25 @@ export function VoucherScreen({
         <div className={snapshot.field === "party-ledger" ? "" : "opacity-70"}>
           <SelectionList
             label={cfg.partyLabel}
-            options={PARTY_LEDGER_NAMES}
+            options={partyNames}
             onSelect={handleSelectParty}
             autoFocus={snapshot.field === "party-ledger"}
+            // A party the company does not have yet is created on accept — the
+            // only way to key the FIRST voucher of a brand-new company, and
+            // Tally's own behaviour for a master field.
+            allowCreate
           />
+          {partiesError ? (
+            <p data-testid="party-list-error" className="text-xs text-red-400">
+              {partiesError} — type a name to create the party on accept
+              (Alt+C also creates one inline).
+            </p>
+          ) : parties.length === 0 ? (
+            <p data-testid="party-list-empty" className="text-xs">
+              No debtor, creditor, cash or bank accounts in this company yet —
+              type a name to create one on accept.
+            </p>
+          ) : null}
         </div>
         <FieldRow
           name="Narration"

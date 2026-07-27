@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { AppShell } from "../app/AppShell";
 import { CompanyProvider } from "../app/CompanyContext";
-import { createMockClient } from "../api";
+import { createMockClient, ApiError } from "../api";
 import type { CoredClient, GSTRequest, PostingRequest } from "../api";
 import {
   _resetOutputTaxLedgerCache,
@@ -14,6 +14,28 @@ beforeEach(() => {
   _resetOutputTaxLedgerCache();
   _resetLedgerCache();
 });
+
+/**
+ * Give a company the party ledgers a test then PICKS.
+ *
+ * The picker used to offer a hardcoded sample list, so a test could select
+ * "Acme Traders" from a company that had no such account. It now reads the real
+ * chart of accounts, so a test has to set the books up the way a real company
+ * is — which is the more faithful arrangement anyway: the accounts a user picks
+ * from are the accounts that exist.
+ */
+async function seedParties(base: CoredClient): Promise<void> {
+  for (const [name, state] of [
+    ["Acme Traders", "29"], // same state as the home company -> intra-state
+    ["Bharat Stores", "27"], // different state -> inter-state
+  ] as const) {
+    await base.createLedger("co-1", {
+      name,
+      group_name: "Sundry Debtors",
+      state_code: state,
+    });
+  }
+}
 
 function spyClient(base: CoredClient = createMockClient({ seed: false })): {
   client: CoredClient;
@@ -43,13 +65,17 @@ function renderShell(client: CoredClient) {
 
 describe("Sales voucher GST form", () => {
   it("sends a well-formed GSTRequest with the derived intra-state tax lines on Ctrl+A", async () => {
-    const { client, spies } = spyClient();
+    const base = createMockClient({ seed: false });
+    await seedParties(base);
+    const { client, spies } = spyClient(base);
     renderShell(client);
     const app = screen.getByRole("application");
     fireEvent.keyDown(app, { key: "F8" }); // sales voucher (create)
 
     // Choose a party (state 29 -> intra-state vs home 29) and a taxable base+rate.
-    fireEvent.mouseDown(screen.getByText("Acme Traders"));
+    // The option comes from the company's OWN chart of accounts now, so this
+    // also proves the picker actually read it.
+    fireEvent.mouseDown(await screen.findByText("Acme Traders"));
     fireEvent.change(screen.getByTestId("gst-taxable"), {
       target: { value: "10000" },
     });
@@ -85,12 +111,14 @@ describe("Sales voucher GST form", () => {
   });
 
   it("inter-state party emits a single IGST line, no CGST/SGST", async () => {
-    const { client, spies } = spyClient();
+    const base = createMockClient({ seed: false });
+    await seedParties(base);
+    const { client, spies } = spyClient(base);
     renderShell(client);
     const app = screen.getByRole("application");
     fireEvent.keyDown(app, { key: "F8" });
 
-    fireEvent.mouseDown(screen.getByText("Bharat Stores")); // state 27 vs home 29
+    fireEvent.mouseDown(await screen.findByText("Bharat Stores")); // state 27 vs home 29
     fireEvent.change(screen.getByTestId("gst-taxable"), {
       target: { value: "10000" },
     });
@@ -207,5 +235,102 @@ describe("drill-to-alter hydration via getVoucher", () => {
     expect(ids[0]).toBe(debtor.ledger_id);
     // The carried-forward number is unchanged.
     expect((req as { voucher_no?: string }).voucher_no).toBe("INV/0001");
+  });
+});
+
+/**
+ * The PARTY PICKER reads the company's real chart of accounts.
+ *
+ * It used to offer a hardcoded sample list ("Acme Traders", "Bharat Stores",
+ * "Chandra & Co") that existed in no seeded company. Two things went wrong with
+ * that, and these tests pin both fixes:
+ *
+ *  - the names offered were not accounts, so picking one CREATED a ledger as a
+ *    side effect of keying a voucher — a silent way to mint a near-duplicate of
+ *    a real party, and a 403 for a Data Entry operator who may key vouchers but
+ *    may not create masters;
+ *  - and a real company's actual customers were not offered at all.
+ */
+describe("the party picker reads the real chart of accounts", () => {
+  it("offers the company's OWN party accounts, and not other groups", async () => {
+    const base = createMockClient({ seed: false });
+    await base.createLedger("co-1", {
+      name: "Zenith Distributors",
+      group_name: "Sundry Debtors",
+      state_code: "07",
+    });
+    await base.createLedger("co-1", {
+      name: "Kaveri Suppliers",
+      group_name: "Sundry Creditors",
+      state_code: "29",
+    });
+    // NOT a party: an income ledger must never be offered as one, or the entry
+    // would be nonsensical (and, for a sale, unbalanced in a plausible way).
+    await base.createLedger("co-1", {
+      name: "Domestic Sales",
+      group_name: "Sales Accounts",
+    });
+
+    const { client } = spyClient(base);
+    renderShell(client);
+    fireEvent.keyDown(screen.getByRole("application"), { key: "F8" });
+
+    expect(await screen.findByText("Zenith Distributors")).toBeTruthy();
+    expect(screen.getByText("Kaveri Suppliers")).toBeTruthy();
+    expect(screen.queryByText("Domestic Sales")).toBeNull();
+    // ...and the old hardcoded samples are gone for good.
+    expect(screen.queryByText("Chandra & Co")).toBeNull();
+  });
+
+  it("picking an EXISTING party creates no ledger — it carries the real id", async () => {
+    const base = createMockClient({ seed: false });
+    const created = await base.createLedger("co-1", {
+      name: "Zenith Distributors",
+      group_name: "Sundry Debtors",
+      state_code: "29",
+    });
+    const { client, spies } = spyClient(base);
+    renderShell(client);
+    const app = screen.getByRole("application");
+    fireEvent.keyDown(app, { key: "F8" });
+
+    fireEvent.mouseDown(await screen.findByText("Zenith Distributors"));
+    fireEvent.change(screen.getByTestId("gst-taxable"), { target: { value: "10000" } });
+    fireEvent.change(screen.getByTestId("gst-rate"), { target: { value: "18" } });
+    fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+
+    await waitFor(() => expect(spies.postSalesVoucher).toHaveBeenCalledTimes(1));
+    const [, req] = spies.postSalesVoucher!.mock.calls[0]!;
+    const postings = (req as { postings: PostingRequest[] }).postings;
+    // The posting carries the ledger id that already existed.
+    expect(postings.some((p) => p.ledger_id === created.ledger_id)).toBe(true);
+
+    // And NO ledger was created for the party. (The tax/income ledgers are
+    // still ensured, so this asserts the absence of the PARTY create, not the
+    // absence of every create — a blanket "never creates" would be wrong.)
+    const createdNames = spies.createLedger!.mock.calls.map(
+      (c) => (c[1] as { name: string }).name,
+    );
+    expect(createdNames).not.toContain("Zenith Distributors");
+  });
+
+  it("explains a chart-of-accounts failure instead of showing an empty picker", async () => {
+    // An empty list with no message reads as "this company has no customers",
+    // which is a very different — and much more alarming — statement than "the
+    // list could not be loaded".
+    const base = createMockClient({ seed: false });
+    const { client } = spyClient(base);
+    const failing: CoredClient = {
+      ...client,
+      listLedgers: async () => {
+        throw new ApiError(403, "default access: none", "forbidden");
+      },
+    };
+    renderShell(failing);
+    fireEvent.keyDown(screen.getByRole("application"), { key: "F8" });
+
+    const err = await screen.findByTestId("party-list-error");
+    expect(err.textContent).toContain("403");
+    expect(err.textContent).toContain("type a name to create the party");
   });
 });

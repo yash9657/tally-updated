@@ -310,11 +310,45 @@ async function main(): Promise<void> {
     brief(r),
   );
 
-  // Documented consequence of default-deny: the company master read is
-  // Display/"company", which Data Entry has no rule for.
+  // THE OPERATOR CAN OPEN THE PRODUCT (migration 0022). This check used to
+  // assert 403 and was INVERTED deliberately, not fixed to make a suite pass:
+  // the server was correct — nobody had granted the right — but the seeded rule
+  // set was incomplete for the client that exists, so a Data Entry operator
+  // signed in and got a 403 on load. The web client hydrates the home GST state
+  // from exactly this endpoint to derive the intra/inter-state split, so
+  // withholding it did not protect anything; it made the operator compute the
+  // wrong tax.
   r = await call("GET", `/v1/companies/${companyA}`, dataEntryA);
   check(
-    "Data Entry -> read COMPANY master -> 403 (Display/company has no rule)",
+    "Data Entry -> read the COMPANY master -> 200 (they need the home state to key GST)",
+    r.status === 200 && /"state_code"/.test(r.body),
+    brief(r),
+  );
+
+  // ...and the CHART OF ACCOUNTS, because PICKING a ledger is what data entry is.
+  r = await call("GET", `/v1/companies/${companyA}/ledgers`, dataEntryA);
+  check(
+    "Data Entry -> read the chart of accounts -> 200 (picking an account IS data entry)",
+    r.status === 200,
+    brief(r),
+  );
+
+  // THE GRANT IS NARROW, and that is the whole point: READING the chart of
+  // accounts is not CHANGING it. An operator still picks from the accounts a
+  // supervisor defined. (The create-master 403 is asserted above; these pin the
+  // two neighbours a `display master` rule could plausibly have widened.)
+  r = await call("PUT", `/v1/companies/${companyA}/ledgers/${ledA1}/opening`, dataEntryA, {
+    opening_balance: "1.0000",
+    opening_dc: "D",
+  });
+  check(
+    "Data Entry -> ALTER a master (set an opening balance) -> 403 (display is not alter)",
+    r.status === 403,
+    brief(r),
+  );
+  r = await call("GET", `/v1/companies/${companyA}/members`, dataEntryA);
+  check(
+    "Data Entry -> the admin surface is STILL refused -> 403 (reading masters granted nothing else)",
     r.status === 403,
     brief(r),
   );

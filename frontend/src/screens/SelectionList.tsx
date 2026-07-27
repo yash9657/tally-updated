@@ -10,11 +10,23 @@ export function SelectionList({
   options,
   onSelect,
   autoFocus = false,
+  allowCreate = false,
 }: {
   label: string;
   options: readonly string[];
   onSelect: (item: string) => void;
   autoFocus?: boolean;
+  /**
+   * Offer the typed text itself as a final row when it matches nothing —
+   * Tally's "create it as you type" behaviour for master fields.
+   *
+   * WITHOUT THIS THE LIST IS A DEAD END on a company that has no such account
+   * yet, which is EVERY company on its first voucher. The party picker used to
+   * hide that behind a hardcoded sample list; once it read the real chart of
+   * accounts, a brand-new company offered nothing and the field could not be
+   * completed at all. (Found by the live browser e2e, not by a unit test.)
+   */
+  allowCreate?: boolean;
 }) {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -22,8 +34,18 @@ export function SelectionList({
   const matches = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (q.length === 0) return options.slice();
-    return options.filter((o) => o.toLowerCase().includes(q));
-  }, [options, query]);
+    const hits = options.filter((o) => o.toLowerCase().includes(q));
+    // Only offer to create when nothing matches EXACTLY. A substring hit still
+    // lists the real account first, so "Acme" never hides "Acme Traders".
+    if (allowCreate && !options.some((o) => o.toLowerCase() === q)) {
+      hits.push(query.trim());
+    }
+    return hits;
+  }, [options, query, allowCreate]);
+
+  /** True for the synthetic "create this" row (it is not one of the options). */
+  const isNew = (opt: string) =>
+    allowCreate && !options.some((o) => o.toLowerCase() === opt.toLowerCase());
 
   function handleKeyDown(ev: React.KeyboardEvent<HTMLInputElement>) {
     if (ev.key === "ArrowDown") {
@@ -89,7 +111,7 @@ export function SelectionList({
               onSelect(opt);
             }}
           >
-            {opt}
+            {isNew(opt) ? `Create “${opt}”` : opt}
           </li>
         ))}
       </ul>
