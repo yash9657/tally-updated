@@ -22,10 +22,50 @@
  *
  * Exit 0 "ui-smoke OK" when every flow passes; on any failure it prints the
  * flow and exits 1. It does NOT start the servers.
+ *
+ * ===========================================================================
+ * SIGN IN FIRST (the login gate)
+ * ===========================================================================
+ * The app is now behind a real password login: in live mode nothing below the
+ * gate renders until somebody signs in. Every Playwright run gets a FRESH
+ * browser context, so sessionStorage is always empty and the login screen
+ * appears deterministically — there is no "already signed in" branch to handle.
+ *
+ * The identity must already have a password. `pnpm seed:demo` establishes it
+ * (POST /auth/password), so the running order is seed -> e2e. Override with
+ * E2E_SUBJECT / DEMO_PASSWORD.
+ *
+ * ===========================================================================
+ * THEN STEP UP — WITH A REAL, VIRTUAL AUTHENTICATOR
+ * ===========================================================================
+ * A token minted by POST /auth/login carries NO `amr` claim, and every
+ * company's Owner level is seeded requires_webauthn = true (this file
+ * bootstraps its own fresh "My Company", whose creator is the Owner). So the
+ * FIRST write of the session is answered
+ *   403 POST /v1/companies/{id}/ledgers :: {"code":"STEPUP_REQUIRED", ...}
+ * — the F8 screen creates its party/tax ledgers on demand, so the voucher POST
+ * is not even reached.
+ *
+ * The app now handles that itself: App's transport runs the WebAuthn ceremony
+ * (auth/webauthn.ts), swaps in the returned amr token and replays the request.
+ * For that to work headlessly this file installs a CDP VIRTUAL AUTHENTICATOR on
+ * the page's context BEFORE the first navigation, with presence simulated and
+ * the user pre-verified, so navigator.credentials.create/get resolve without a
+ * human. That makes the ceremony REAL end to end — real challenge, real COSE
+ * key, real ES256 signature verified by cored's own verifier — and it is
+ * asserted from OBSERVED NETWORK below ("assert/finish 200"), not inferred from
+ * a screen eventually working.
+ *
+ * (The previous E2E_SIMULATE_STEPUP=1 crutch, which swapped in a dev-minted amr
+ * token, is GONE. It only ever existed to prove the amr gap was the sole
+ * breakage; the ceremony is now performed for real.)
  */
 import { chromium } from "playwright";
 
 const URL = process.env.UI_BASE_URL ?? "http://localhost:5173/";
+/** The identity the browser signs in as. Its password comes from `seed:demo`. */
+const SUBJECT = process.env.E2E_SUBJECT ?? "browser-dev-owner";
+const PASSWORD = process.env.DEMO_PASSWORD ?? "tally-demo-2026";
 const results = [];
 const rec = (name, ok, detail = "") => {
   results.push({ name, ok });
@@ -33,13 +73,40 @@ const rec = (name, ok, detail = "") => {
 };
 
 const browser = await chromium.launch();
-const page = await (await browser.newContext({ acceptDownloads: true })).newPage();
+const context = await browser.newContext({ acceptDownloads: true });
+const page = await context.newPage();
+
+// ---------------------------------------------------------------------------
+// VIRTUAL AUTHENTICATOR. Installed on the SAME context/page every flow uses and
+// BEFORE the first navigation, so the very first write's step-up ceremony finds
+// an authenticator. ctap2 + internal transport + resident keys is what Chromium
+// treats as a platform passkey; automaticPresenceSimulation + isUserVerified
+// stand in for the human touching the sensor.
+// ---------------------------------------------------------------------------
+const cdp = await context.newCDPSession(page);
+await cdp.send("WebAuthn.enable");
+await cdp.send("WebAuthn.addVirtualAuthenticator", {
+  options: {
+    protocol: "ctap2",
+    transport: "internal",
+    hasResidentKey: true,
+    hasUserVerification: true,
+    isUserVerified: true,
+    automaticPresenceSimulation: true,
+  },
+});
+
 const serverErrors = [];
+/** Every ceremony response the BROWSER actually made, by route and status. */
+const ceremony = { registerFinish: [], assertBegin: [], assertFinish: [] };
 page.on("pageerror", (e) => serverErrors.push("pageerror: " + e.message));
 page.on("response", (r) => {
   const u = r.url();
   if (r.status() >= 500 && (u.includes("/v1/") || u.includes("/companies")))
     serverErrors.push(`${r.status()} ${r.request().method()} ${u.replace(URL.replace(/\/$/, ""), "")}`);
+  if (u.includes("/auth/webauthn/assert/begin")) ceremony.assertBegin.push(r.status());
+  if (u.includes("/auth/webauthn/register/finish")) ceremony.registerFinish.push(r.status());
+  if (u.includes("/auth/webauthn/assert/finish")) ceremony.assertFinish.push(r.status());
 });
 
 const body = () => page.locator("body").innerText();
@@ -68,8 +135,88 @@ const navMenu = async (label) => {
   await press("Enter", 800);
 };
 
+// ---------------------------------------------------------------------------
+// FLOW 0 — SIGN IN. Everything else in this file depends on it, so it runs
+// first and inline (not in a try/catch helper): if the gate is broken there is
+// nothing to smoke-test.
+//
+// Keyboard only, per HANDOFF §6. The login screen autofocuses the user-name
+// field, Tab reaches the password field and Enter submits — so `page.keyboard`
+// alone can drive it, and a regression in any of those three affordances fails
+// here instead of silently being papered over by locator.fill().
+// ---------------------------------------------------------------------------
+const onLoginScreen = async () => (await page.getByTestId("login-screen").count()) > 0;
+const focusedField = () =>
+  page.evaluate(() => document.activeElement?.getAttribute("name") ?? "(none)");
+const loginError = async () => {
+  const el = page.getByTestId("login-error");
+  if (!(await el.count())) return null;
+  return { kind: await el.getAttribute("data-failure"), text: await el.innerText() };
+};
+/** Wait until the login screen is gone (a successful sign-in swaps in the shell). */
+const awaitShell = async () => {
+  for (let i = 0; i < 40; i++) {
+    if (!(await onLoginScreen())) return true;
+    await page.waitForTimeout(250);
+  }
+  return false;
+};
+
 await page.goto(URL, { waitUntil: "networkidle" });
-await page.waitForTimeout(1300);
+await page.waitForTimeout(800);
+
+try {
+  const focused = await focusedField();
+  const text = await body();
+  rec(
+    "login: the gate renders FIRST — no shell, no company, focus in the user name",
+    (await onLoginScreen()) &&
+      !(await atGateway()) &&
+      !text.includes("My Company") &&
+      focused === "subject",
+    `autofocus=${focused}`,
+  );
+} catch (e) { rec("login: the gate renders FIRST", false, e.message); }
+
+try {
+  // A WRONG password must be REJECTED, VISIBLY, and must not open the shell.
+  await page.keyboard.type(SUBJECT);
+  await page.keyboard.press("Tab");
+  await page.waitForTimeout(100);
+  await page.keyboard.type("definitely-not-the-password");
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(1200);
+  const err = await loginError();
+  const text = await body();
+  rec(
+    "login: a WRONG password shows a visible error and the Gateway does NOT render",
+    !!err &&
+      err.kind === "invalid" &&
+      (await onLoginScreen()) &&
+      !(await atGateway()) &&
+      !text.includes("My Company"),
+    err ? `data-failure=${err.kind} "${err.text}"` : "(no error rendered)",
+  );
+} catch (e) { rec("login: a WRONG password is rejected", false, e.message); }
+
+try {
+  // Retry the way a real operator does: the password field still holds focus
+  // after the failed submit, so backspace it clear and type the right one. No
+  // reload, no locator.fill — that would test a path no user takes.
+  const focused = await focusedField();
+  for (let i = 0; i < 48; i++) await page.keyboard.press("Backspace");
+  await page.keyboard.type(PASSWORD);
+  await page.keyboard.press("Enter");
+  const entered = await awaitShell();
+  await page.waitForTimeout(1500);
+  const text = await body();
+  rec(
+    "login: the CORRECT password enters the shell, and the chrome says who I am",
+    entered && !(await onLoginScreen()) && text.includes(SUBJECT) && text.includes("Sign Out"),
+    `retry focus=${focused}, signed in as ${SUBJECT}`,
+  );
+} catch (e) { rec("login: the CORRECT password enters the shell", false, e.message); }
+
 rec("bootstrap: live company created (StrictMode-safe)", (await body()).includes("My Company"));
 
 async function postGst(fkey, party, taxable, rate) {
@@ -94,6 +241,36 @@ try { const { no, cgst } = await postGst("F8", "Acme Traders", "10000", "18"); r
 catch (e) { rec("F8 Sales posts", false, e.message); }
 try { const { no, cgst } = await postGst("F9", "Acme Traders", "4000", "18"); rec("F9 Purchase posts", /No:/.test(no), `${no}, CGST ${cgst}`); }
 catch (e) { rec("F9 Purchase posts", false, e.message); }
+
+// ---------------------------------------------------------------------------
+// The writes above could ONLY have succeeded through a real WebAuthn step-up:
+// the login token has no `amr` and the Owner level requires one. Assert that
+// from OBSERVED NETWORK rather than from "F8 eventually worked" — if a future
+// change ever made writes pass some other way (a faked amr, a relaxed default),
+// F8 would stay green and this flow would go red, which is the point.
+// ---------------------------------------------------------------------------
+try {
+  const ok = ceremony.assertFinish.filter((s) => s === 200).length;
+  rec(
+    "WebAuthn step-up really ran in the browser (assert/finish 200)",
+    ok > 0 && ceremony.assertBegin.length > 0,
+    `assert/begin ${ceremony.assertBegin.join(",") || "-"} · register/finish ` +
+      `${ceremony.registerFinish.join(",") || "-"} · assert/finish ` +
+      `${ceremony.assertFinish.join(",") || "-"}`,
+  );
+} catch (e) { rec("WebAuthn step-up really ran in the browser", false, e.message); }
+
+try {
+  // …and it ran ONCE, not once per write: the stepped-up token is kept for the
+  // rest of the session. Two vouchers were posted above; a per-write ceremony
+  // would show several assert/finish calls (and, against cored's single-use
+  // challenge store, would be racy).
+  rec(
+    "the stepped-up token is REUSED (one ceremony, not one per write)",
+    ceremony.assertFinish.filter((s) => s === 200).length === 1,
+    `${ceremony.assertFinish.length} assert/finish call(s)`,
+  );
+} catch (e) { rec("the stepped-up token is REUSED", false, e.message); }
 
 // ---------------------------------------------------------------------------
 // THE regression this file exists for: after drilling into a screen, focus is
@@ -333,13 +510,17 @@ try {
   await navMenu("Users & Roles");
   const h = await heading();
   const text = await body();
+  // The member listed is the subject that SIGNED IN (it created this company on
+  // bootstrap, so it is its Owner). Asserting the live subject rather than a
+  // hardcoded one is what makes this a per-user check now that the browser has
+  // a real login.
   rec(
     "Users & Roles lists members, invites and security levels",
     /Users & Roles/i.test(h) &&
       /Members/.test(text) &&
       /Pending invites/.test(text) &&
       /Security levels/.test(text) &&
-      /browser-dev-owner/.test(text),
+      text.includes(SUBJECT),
     h,
   );
 } catch (e) { rec("Users & Roles opens", false, e.message); }

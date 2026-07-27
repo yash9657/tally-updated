@@ -449,69 +449,14 @@ func TestWebAuthnAssertOnlyLatestChallengeIsLive(t *testing.T) {
 	}
 }
 
-// TestDevLoginLockout proves the account-lockout flow over HTTP:
-//
-//   - a correct password BEFORE the threshold returns 200 with a token;
-//   - five wrong passwords lock the account; the fifth (or the next request)
-//     returns 423 Locked;
-//   - while locked, even the CORRECT password returns 423.
-func TestDevLoginLockout(t *testing.T) {
-	srv := newServer(t)
-
-	// A fresh subject so this run's failures do not collide with prior runs.
-	subject := "lockout-" + uuid.NewString()
-
-	// Correct password before any failures: 200 + token.
-	rec, body := doRaw(t, srv, http.MethodPost, "/auth/login", "", map[string]any{
-		"subject": subject, "password": "dev-password",
-	})
-	if rec.Code != http.StatusOK {
-		t.Fatalf("login (correct) status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
-	}
-	if tok, _ := body["token"].(string); tok == "" {
-		t.Fatalf("login (correct) returned no token (body %s)", rec.Body.String())
-	}
-
-	// Drive failures until the account locks (policy: 5 failures in window). The
-	// RecordSuccess above cleared state, so we count fresh from here.
-	lockedSubject := "lockout-fail-" + uuid.NewString()
-	var got423 bool
-	for i := 0; i < 5; i++ {
-		rec, body = doRaw(t, srv, http.MethodPost, "/auth/login", "", map[string]any{
-			"subject": lockedSubject, "password": "wrong-password",
-		})
-		switch rec.Code {
-		case http.StatusUnauthorized:
-			// invalid credentials, not yet locked.
-			if code, _ := body["error"].(string); code == "" {
-				t.Fatalf("401 must carry an error (body %s)", rec.Body.String())
-			}
-		case http.StatusLocked:
-			got423 = true
-		default:
-			t.Fatalf("failure %d status = %d, want 401 or 423 (body %s)", i+1, rec.Code, rec.Body.String())
-		}
-	}
-	if !got423 {
-		// The fifth failure triggers the lock; if the loop ended without a 423, the
-		// NEXT request must be 423.
-		rec, body = doRaw(t, srv, http.MethodPost, "/auth/login", "", map[string]any{
-			"subject": lockedSubject, "password": "wrong-password",
-		})
-		if rec.Code != http.StatusLocked {
-			t.Fatalf("after %d failures status = %d, want 423 Locked (body %s)", 6, rec.Code, rec.Body.String())
-		}
-		got423 = true
-	}
-
-	// While locked, even the CORRECT password is refused with 423.
-	rec, body = doRaw(t, srv, http.MethodPost, "/auth/login", "", map[string]any{
-		"subject": lockedSubject, "password": "dev-password",
-	})
-	if rec.Code != http.StatusLocked {
-		t.Fatalf("locked-account correct-password status = %d, want 423 Locked (body %s)", rec.Code, rec.Body.String())
-	}
-	if code, _ := body["code"].(string); code != "LOCKED" {
-		t.Fatalf("locked response code = %q, want LOCKED (body %s)", code, rec.Body.String())
-	}
-}
+// NOTE: TestDevLoginLockout USED to live here. It was deleted with
+// handleDevLogin. It could not be ported mechanically: it drove two subjects
+// that DO NOT EXIST ("lockout-<uuid>", "lockout-fail-<uuid>") and depended on
+// handleDevLogin calling CreateUserOnFirstLogin both to make its "correct
+// password -> 200 + token" assertion possible and to give the lock a row to
+// persist to. The real login creates nobody, so its successor lives in
+// auth_login_test.go (TestLoginLockoutIsDurableForRealUser), provisions a REAL
+// user first, and asserts app_user.locked_until over the admin DSN rather than
+// trusting the 423 — because for an UNPROVISIONED subject a 423 is returned by
+// the failure counter alone, with no durable lock (see
+// TestLoginUnknownSubjectLockIsNotDurable).

@@ -33,6 +33,7 @@
 
 import { createRestClient, createInsightdClient } from "../src/api";
 import type { CoredClient, VoucherRequest } from "../src/api";
+import { DEMO_PASSWORD, ensurePassword } from "./auth.mjs";
 
 const baseUrl =
   process.env.CORED_BASE_URL ??
@@ -106,6 +107,24 @@ async function seedAuthHeaders(): Promise<Record<string, string>> {
 async function main(): Promise<void> {
   const headers = await seedAuthHeaders();
   const client: CoredClient = createRestClient({ baseUrl, headers });
+
+  // ---- The Owner gets a REAL PASSWORD ------------------------------------
+  // Until now the browser authenticated as a hardcoded dev subject, so every
+  // session was the same person and the whole roles/levels story was invisible
+  // per-user. The demo is only walkable end-to-end if the Owner can actually
+  // SIGN IN, so the seed establishes the credential the login screen expects.
+  //
+  // Idempotent (see ensurePassword) and self-proving: it logs in afterwards, so
+  // the line printed below can never advertise a password that does not work.
+  //
+  // NOTE the seeder keeps using its /auth/token Owner token for every WRITE
+  // below. A login token carries no `amr`, and the Owner level requires WebAuthn
+  // step-up for writes, so seeding through the login token would 403.
+  const ownerLogin = await ensurePassword(baseUrl, SEED_SUBJECT);
+  console.log(
+    `\n  LOGIN:    ${SEED_SUBJECT} / ${DEMO_PASSWORD}  ` +
+      `(verified: POST /auth/login -> 200, user id ${ownerLogin.user.id})`,
+  );
 
   const stamp = new Date().toISOString().slice(0, 10);
   const company = await client.createCompany({
@@ -924,7 +943,8 @@ async function main(): Promise<void> {
     `  cross-check:   Sundry Debtors ${debtors.amount} == Outstandings ${os.total}  ✓`,
   );
 
-  console.log(`\n  OPEN IT:  ${uiUrl}/?company=${co}\n`);
+  console.log(`\n  OPEN IT:  ${uiUrl}/?company=${co}`);
+  console.log(`  SIGN IN:  user name "${SEED_SUBJECT}", password "${DEMO_PASSWORD}"\n`);
   console.log("  Then try:  F8/F9 post · Day Book → Enter to drill · Alt+G Trial Balance");
   console.log("             F5 group-wise · F12 configure · Ctrl+F filter · Alt+E export");
   console.log("             F1 help · F11 features · Ctrl+N calculator · Esc to go back\n");

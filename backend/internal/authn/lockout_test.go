@@ -22,6 +22,9 @@ type memLockoutStore struct {
 	mu       sync.Mutex
 	attempts map[string][]memAttempt
 	locks    map[string]time.Time
+	// ghosts are subjects with no app_user row, for which SetLock's UPDATE
+	// matches zero rows. Used to exercise the no-enumeration invariant.
+	ghosts map[string]bool
 }
 
 func newMemLockoutStore() *memLockoutStore {
@@ -55,11 +58,19 @@ func (m *memLockoutStore) FailuresInWindow(_ context.Context, subject string, si
 	return n, nil
 }
 
-func (m *memLockoutStore) SetLock(_ context.Context, subject string, until time.Time, _ int) error {
+// SetLock mirrors the PG store: it reports whether a row was actually updated.
+// `ghosts` models subjects with NO app_user row (a login naming an account that
+// does not exist), for which the real UPDATE matches zero rows. A nil/empty
+// ghosts map means every subject exists, which is what every pre-existing test
+// assumes.
+func (m *memLockoutStore) SetLock(_ context.Context, subject string, until time.Time, _ int) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.ghosts[subject] {
+		return false, nil
+	}
 	m.locks[subject] = until
-	return nil
+	return true, nil
 }
 
 func (m *memLockoutStore) ClearLock(_ context.Context, subject string) error {
@@ -324,5 +335,168 @@ func TestLockoutPGStoreThresholdAndReset(t *testing.T) {
 	}
 	if failed != 0 || lockedUntil != nil {
 		t.Fatalf("pg: after success failed_attempts=%d locked_until=%v, want 0/nil", failed, lockedUntil)
+	}
+}
+
+// TestLockoutGhostSubjectIsNeverReportedLocked pins the NO-ENUMERATION
+// invariant: a subject with no app_user row must never be reported as locked,
+// no matter how many failures it accumulates.
+//
+// WHY THIS EXISTS. An adversarial review of the first-party-login increment
+// found that RecordFailure decided `locked` purely from the auth_login_attempt
+// counter — a table with no RLS that is written for ANY subject, existing or
+// not — and ignored whether SetLock had actually updated a row. The result was a
+// byte-observable user-existence oracle needing no timing measurement: from the
+// 6th wrong password onward, a REAL account's 423 carries the STORED
+// locked_until (identical on every subsequent request), while a ghost account's
+// carries a freshly computed now+15m that ADVANCES each time. Watching whether
+// `until` moves separates real subjects from ghosts.
+//
+// REGRESSION SENSITIVITY: revert RecordFailure to ignore SetLock's persisted
+// flag and the 5th-failure assertion below fails immediately (locked=true for a
+// subject that was never stored). The `real` half is the control: it proves the
+// harness genuinely reaches the threshold, so this test cannot pass by simply
+// never locking anything.
+func TestLockoutGhostSubjectIsNeverReportedLocked(t *testing.T) {
+	ctx := context.Background()
+	store := newMemLockoutStore()
+	store.ghosts = map[string]bool{"ghost": true}
+	clk := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
+	memClock = func() time.Time { return clk }
+	defer func() { memClock = func() time.Time { return time.Now() } }()
+
+	l := NewLocker(DefaultLockoutPolicy(), store, func() time.Time { return clk })
+
+	// Well past the threshold: 8 failures against a subject that does not exist.
+	for i := 1; i <= 8; i++ {
+		locked, until, err := l.RecordFailure(ctx, "ghost", "1.2.3.4")
+		if err != nil {
+			t.Fatalf("ghost failure %d: %v", i, err)
+		}
+		if locked {
+			t.Fatalf("ENUMERATION ORACLE: ghost subject reported LOCKED at failure %d "+
+				"— a 423 for a non-existent account reveals that it does not exist", i)
+		}
+		if !until.IsZero() {
+			t.Fatalf("ghost failure %d leaked an `until` (%v); it must be the zero time "+
+				"so no lock expiry is ever rendered for a subject that was not stored", i, until)
+		}
+	}
+	if isLocked, _, _ := l.IsLocked(ctx, "ghost"); isLocked {
+		t.Fatal("IsLocked must stay false for a subject with no app_user row")
+	}
+
+	// CONTROL: the very same harness DOES lock a real subject at the 5th failure,
+	// so the assertions above are not passing merely because nothing ever locks.
+	for i := 1; i <= 4; i++ {
+		if locked, _, _ := l.RecordFailure(ctx, "real", "1.2.3.4"); locked {
+			t.Fatalf("control: real subject locked prematurely at failure %d", i)
+		}
+	}
+	locked, until, err := l.RecordFailure(ctx, "real", "1.2.3.4")
+	if err != nil {
+		t.Fatalf("control 5th failure: %v", err)
+	}
+	if !locked {
+		t.Fatal("control: a REAL subject must lock at the 5th failure — the harness " +
+			"never reached the threshold, so the ghost assertions proved nothing")
+	}
+	if want := clk.Add(15 * time.Minute); !until.Equal(want) {
+		t.Fatalf("control: lock until = %v, want %v", until, want)
+	}
+}
+
+// TestLockoutPGStoreSuccessResetsFailureCounter pins, AGAINST POSTGRES, the
+// promise this package's doc comment has always made: "A successful login resets
+// the failure counter."
+//
+// WHY THIS EXISTS. It was true of the in-memory fake and FALSE of the database.
+// The fake's ClearLock does `m.attempts[subject] = nil`, so every hermetic test
+// above agreed with the doc. The PG store's ClearLock only does
+// `UPDATE app_user SET locked_until = NULL, failed_attempts = 0` — but the number
+// that actually decides locking is FailuresInWindow's count over
+// auth_login_attempt, which ClearLock never touched. Real users would hit a
+// self-inflicted denial of service: four typos, a correct sign-in, then ONE more
+// typo locked the account for 15 minutes, because the four stale failures were
+// still inside the sliding window.
+//
+// This is the shape of bug a fake can never reveal, which is why it is asserted
+// here and not upstairs.
+//
+// REGRESSION SENSITIVITY: drop the "AND at > (last success)" clause from
+// FailuresInWindow and the FIRST post-success failure returns locked=true, so
+// this fails on the very next assertion.
+func TestLockoutPGStoreSuccessResetsFailureCounter(t *testing.T) {
+	if os.Getenv("CORED_SKIP_DB") != "" {
+		t.Skip("db tests skipped (CORED_SKIP_DB set)")
+	}
+	ctx := context.Background()
+
+	admin, err := pgx.Connect(ctx, pgAdminDSN)
+	if err != nil {
+		t.Skipf("admin postgres unavailable: %v", err)
+	}
+	defer admin.Close(ctx)
+	if !tablePresent(ctx, admin, "auth_login_attempt") || !tablePresent(ctx, admin, "app_user") {
+		t.Skip("migration 0011 not present")
+	}
+
+	pool, err := pgxpool.New(ctx, pgAppDSN)
+	if err != nil {
+		t.Skipf("app pool unavailable: %v", err)
+	}
+	defer pool.Close()
+
+	subject := "lockout-reset-" + time.Now().Format("150405.000000")
+	if _, err := admin.Exec(ctx, `
+		INSERT INTO app_user (id, subject, email, display_name)
+		VALUES (gen_random_uuid(), $1, $2, 'Lockout Reset Test')`,
+		subject, subject+"@example.test"); err != nil {
+		t.Fatalf("seed app_user: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = admin.Exec(ctx, `DELETE FROM auth_login_attempt WHERE subject = $1`, subject)
+		_, _ = admin.Exec(ctx, `DELETE FROM app_user WHERE subject = $1`, subject)
+	})
+
+	clk := time.Now()
+	l := NewLocker(DefaultLockoutPolicy(), NewPGLockoutStore(pool), func() time.Time { return clk })
+
+	// Four typos — one short of the threshold.
+	for i := 0; i < 4; i++ {
+		if locked, _, err := l.RecordFailure(ctx, subject, "10.0.0.2"); err != nil || locked {
+			t.Fatalf("failure %d: locked=%v err=%v, want not locked", i, locked, err)
+		}
+	}
+	// The user remembers their password.
+	if err := l.RecordSuccess(ctx, subject, "10.0.0.2"); err != nil {
+		t.Fatalf("success: %v", err)
+	}
+
+	// A single later typo must NOT lock: the pre-success failures are spent.
+	locked, _, err := l.RecordFailure(ctx, subject, "10.0.0.2")
+	if err != nil {
+		t.Fatalf("post-success failure: %v", err)
+	}
+	if locked {
+		t.Fatal("SELF-INFLICTED DoS: one typo after a SUCCESSFUL login locked the " +
+			"account — the failure counter did not reset in the DATABASE, so stale " +
+			"pre-success failures still count toward the threshold")
+	}
+
+	// And the threshold still works from the reset baseline: it should take a
+	// full five NEW failures (one already spent above) to lock.
+	for i := 0; i < 3; i++ {
+		if locked, _, err := l.RecordFailure(ctx, subject, "10.0.0.2"); err != nil || locked {
+			t.Fatalf("post-success failure %d: locked=%v err=%v, want not locked", i+2, locked, err)
+		}
+	}
+	locked, _, err = l.RecordFailure(ctx, subject, "10.0.0.2")
+	if err != nil {
+		t.Fatalf("5th post-success failure: %v", err)
+	}
+	if !locked {
+		t.Fatal("CONTROL FAILED: five failures after the reset must still lock — " +
+			"otherwise the test above proves nothing (lockout could simply be dead)")
 	}
 }

@@ -44,6 +44,7 @@
 
 import { createRestClient } from "../src/api";
 import type { CoredClient, VoucherRequest } from "../src/api";
+import { DEMO_PASSWORD, ensurePassword } from "./auth.mjs";
 
 const baseUrl = process.env.CORED_BASE_URL ?? "http://localhost:8087";
 const uiUrl = process.env.UI_BASE_URL ?? "http://localhost:5173";
@@ -227,11 +228,41 @@ async function main(): Promise<void> {
     console.log(`\n  ${SUBJ_DATA_ENTRY_A} is already a member of A — nothing to invite`);
   }
 
+  // ---- Every identity gets a REAL PASSWORD --------------------------------
+  // The point of this seed is that the SaaS story is per-user. It was not,
+  // in the browser, because the client authenticated as one hardcoded subject.
+  // With a credential on each of the three, you can sign the browser in as any
+  // of them and SEE the difference: the Owner of A gets everything, Data Entry
+  // gets 403s it can read the reason for, and the Owner of B sees a completely
+  // different set of books.
+  //
+  // `seed:demo` already gave browser-dev-owner a password; ensurePassword is
+  // idempotent, so re-establishing it here means `seed:tenancy` also works when
+  // run against a company A that predates the login work.
+  console.log(`\n  PASSWORDS (POST /auth/password, then verified by POST /auth/login)`);
+  for (const subject of [SUBJ_OWNER_A, SUBJ_DATA_ENTRY_A, SUBJ_OWNER_B]) {
+    const login = await ensurePassword(baseUrl, subject);
+    const who = login.user.display_name || login.user.subject;
+    console.log(`    ${subject.padEnd(20)} -> 200, signs in as "${who}"`);
+  }
+
   console.log(
-    `\n  IDENTITIES\n` +
+    `\n  IDENTITIES  (all three sign in with the password "${DEMO_PASSWORD}")\n` +
       `    ${SUBJ_OWNER_A.padEnd(20)} Owner      on A   (full access; requires WebAuthn for writes)\n` +
       `    ${SUBJ_DATA_ENTRY_A.padEnd(20)} Data Entry on A   (may enter vouchers; may NOT delete or create masters)\n` +
       `    ${SUBJ_OWNER_B.padEnd(20)} Owner      on B   (no membership on A at all)`,
+  );
+
+  // The honest caveat, printed where somebody about to sign in will read it:
+  // a password login mints a token with NO webauthn AMR, and every company's
+  // Owner level requires step-up for writes. So a browser session opened with
+  // one of these passwords can READ the books but will be refused on F8/F9
+  // until a browser step-up ceremony exists.
+  console.log(
+    `\n  !! A password login mints a token WITHOUT the webauthn AMR, and the Owner\n` +
+      `     level requires step-up for writes. Signed in with a password you can\n` +
+      `     READ everything, but posting a voucher answers 403 STEPUP_REQUIRED\n` +
+      `     until the browser gains a WebAuthn step-up (tracked in HANDOFF §6).`,
   );
 
   // Prove the memberships landed, reading them back through the admin API —

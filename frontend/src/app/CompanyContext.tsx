@@ -53,8 +53,17 @@ interface CompanyContextValue {
 
 const CompanyContext = createContext<CompanyContextValue | null>(null);
 
-/** localStorage key under which the bootstrapped company id is persisted. */
-const COMPANY_STORAGE_KEY = "tally.companyId";
+/**
+ * localStorage key under which the bootstrapped company id is persisted.
+ *
+ * EXPORTED for the auth layer: signing out must forget this key. It is
+ * localStorage (not sessionStorage), so without the clear the NEXT user to sign
+ * in on the same browser hydrates the PREVIOUS user's company id, cored answers
+ * 403 (not a member), and {@link isUnusablePersistedId} then treats that as a
+ * dead id and silently mints them a brand-new empty company. See
+ * `src/auth/AuthContext.tsx` signOut().
+ */
+export const COMPANY_STORAGE_KEY = "tally.companyId";
 
 /** Default bootstrap parameters for the auto-created demo company. */
 const BOOTSTRAP_COMPANY_NAME = "My Company";
@@ -107,7 +116,8 @@ function readPersistedCompanyId(): string | null {
   }
 }
 
-function clearPersistedCompanyId(): void {
+/** Forget the persisted company id (used on a dead id, and on sign-out). */
+export function clearPersistedCompanyId(): void {
   try {
     globalThis.localStorage?.removeItem(COMPANY_STORAGE_KEY);
   } catch {

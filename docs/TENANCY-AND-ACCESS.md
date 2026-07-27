@@ -4,14 +4,14 @@
 This one explains *who is allowed to do what, and why* — the SaaS layer.
 
 Every status code below was observed on the running stack. The whole document is
-gated by `pnpm verify:tenancy`, which exercises **48 paths** and fails if any
+gated by `pnpm verify:tenancy`, which exercises **72 paths** and fails if any
 branch changes behaviour.
 
 ```bash
 cd frontend
 pnpm seed:demo -- --insightd        # company A (Demo Traders) — prints its id
 pnpm seed:tenancy <A>               # adds a 2nd user to A, builds company B
-pnpm verify:tenancy <A> <B>         # 48 access-control checks
+pnpm verify:tenancy <A> <B>         # 72 access-control checks
 ```
 
 The verifier is **self-cleaning**: it must write in order to test write
@@ -394,16 +394,110 @@ Honest list. The engine is multi-tenant; the *product* around it is not yet.
 |---|---|
 | ~~No admin API for users/roles~~ | **DONE** — §6. Invite, claim, change level, revoke, and custom levels, all over HTTP; `seed-tenancy.mts` no longer touches psql. |
 | ~~No custom security levels~~ | **DONE** — §6. `POST /security-levels` with a vocabulary-validated rule set. |
-| **No login** | `POST /auth/token` mints a token for *any* subject and exists only when a dev signer is configured. There is no password and no session. **This is now the top gap:** the admin API grants access to a *subject*, so until something authenticates that subject, "invite `alice@firm`" is only as trustworthy as the token issuer. Note the two halves are separable — **first-party password login** (a credential on `app_user`, `POST /auth/login` reusing the existing lockout, and a login screen + logout + 401-handling in the client) needs no external service and no new dependency, while **SSO/Keycloak** is a later swap onto the already-built `JWKSVerifier`. |
+| **Login: PARTIAL** | **First-party password login SHIPS** (migration 0021 `user_credential`, PBKDF2-HMAC-SHA256 @210k, `POST /auth/login` + `POST /auth/password`, a login screen with logout and a 401 bounce) — see §10. **But it is mounted only where the in-process dev signer is:** `authLoginRoutes()` registers `/auth/login` inside `if s.signer != nil`, and the only production posture `buildAuth()` accepts besides refusing to start is `AUTH_JWKS_URL`+`AUTH_ISSUER`, where the signer is nil. **In that posture `POST /auth/login` is a 404** and identity is the IdP's job. So this closes the gap for the product as it runs today, and SSO/Keycloak remains the production answer — a later swap onto the already-built `JWKSVerifier`. Two residual holes, both tracked: there is **no way for an invited user to set a FIRST password** without a Bearer they cannot yet obtain (an admin-issued one-time set-password token is the required follow-up), and **no password reset**. |
 | ~~No company switching in the UI~~ | **DONE** — `F3` opens the list of companies the signed-in user may open (from `GET /v1/me`), with the level held in each, and re-scopes the session. See §9. |
-| **UI is single-identity** | The web client still authenticates as one hardcoded dev subject, so the allow/disallow paths are *reachable* in the browser but always as the same person. Fixing this is the login gap above, not a separate one. |
+| ~~UI is single-identity~~ | **DONE** — the hardcoded `browser-dev-owner` mint is deleted. The browser signs in as whoever types their user name and password, holds the token in `sessionStorage` (per-tab, so a closed tab is a logged-out tab), shows who is signed in, and offers Sign Out. Every allow/disallow path in this document is now reachable *as the right person*. |
 | **Admin screens are read-mostly** | Gateway > **Users & Roles** lists members, pending invites and security levels, and can INVITE. Changing a member's level, revoking access and creating a custom level remain API-only. |
 | **No email delivery** | An invite is a database row. Nothing notifies the invitee — the flow assumes the administrator tells them out of band. |
 | **Not deployed** | `infra/` holds k8s + terraform for EKS `ap-south-1`; none of it has been applied. |
 
-Suggested ordering from here: a real login (an IdP that owns subjects), then the
-remaining admin writes in the browser (change level, revoke, create a level),
-then invite delivery.
+Suggested ordering from here: the remaining admin writes in the browser (change
+level, revoke, create a level), then invite delivery, then an admin-issued
+one-time set-password token (the missing half of first-party login), and
+finally SSO — a live Keycloak against the built `JWKSVerifier`, plus `aud`
+validation, which is still not performed anywhere.
+
+---
+
+## 8b. Signing in — first-party password login
+
+Everything above answers *what is this subject allowed to do*. This section
+answers the question that used to have no answer at all: **who says you are that
+subject?**
+
+Until migration 0021 the honest answer was "nobody". `POST /auth/token` minted a
+validly-signed token for any subject you cared to name, and the web client simply
+asked for `browser-dev-owner` on load. Every browser session was the same person,
+so every path in §4 was reachable but never *as the right user*.
+
+### The surface
+
+| Route | Auth | Purpose |
+|---|---|---|
+| `POST /auth/login` | pre-auth | `{subject, password}` → a signed Bearer + the user block |
+| `POST /auth/password` | **Bearer required** | `{current_password, new_password}` → `204`. The **only** writer of a password anywhere. |
+| `POST /auth/token` | none, **dev-gated** | unchanged; still mints for any subject. Scripts and e2e use it. |
+
+Credentials live in **`user_credential`** (migration 0021), keyed by `user_id`,
+storing `algo` / `iterations` / `salt` / `hash` — **PBKDF2-HMAC-SHA256, 210 000
+iterations** (`crypto/pbkdf2`, Go standard library; no new dependency).
+
+**Why a separate table and not columns on `app_user`.** Migration 0020 *widened*
+`app_user`'s RLS `USING` clause so co-members of the company in scope can read one
+another's rows — that is what makes Users & Roles work. A password hash on
+`app_user` would therefore have been readable by every colleague. `user_credential`
+carries a strictly self-only policy (`user_id = app_current_user_id()`, with no
+company clause at all) and is registered in `internal/security`'s
+`authCatalogTables`, so ENABLE+FORCE RLS and an explicit `WITH CHECK` are gated,
+not merely intended.
+
+### Observed
+
+| Attempt | Result |
+|---|---|
+| Correct password | `200 {token, token_type, expires_in, user:{id,subject,display_name,email}}` |
+| Wrong password | `401 {"error":"invalid credentials"}` |
+| Subject that does not exist | `401` — **byte-identical to the line above** |
+| User who has never set a password | `401` — byte-identical |
+| `is_active = false` | `401` — byte-identical |
+| 5 wrong in 15 min | `423 {"error":"account locked","code":"LOCKED","until":…}` |
+| …then the **correct** password | `423` — the lock is real, not a counter |
+| `POST /auth/password`, no Bearer | `401 {"error":"missing bearer token"}` |
+| `new_password` under 10 characters | `400` with the policy reason |
+| `subject`/`user_id` smuggled into the `/auth/password` body | **inert** — the victim's password still works |
+
+**No user enumeration, by construction.** All four failure modes funnel through a
+single `invalidCredentials` constant and one `writeError` call, so the bodies are
+necessarily equal rather than coincidentally equal. Timing is levelled too: when
+there is no stored credential the handler still runs one PBKDF2 derivation against
+a **decoy credential** over 32 random bytes, so "unknown user" costs the same as
+"wrong password".
+
+**A login never mints an identity.** The old dev login called
+`CreateUserOnFirstLogin` so lockout state had somewhere to live. The real one does
+not — a login must never create the account it is failing to authenticate.
+
+### Two things adversarial review changed here
+
+Both were found by trying to *refute* the implementation, and both are now gated:
+
+1. **The `423` used to be an enumeration oracle.** `RecordFailure` decided
+   "locked" purely from the `auth_login_attempt` counter — a table with no RLS,
+   written for any subject — and ignored whether `SetLock` had actually updated a
+   row. A real account's `until` is the *stored* `locked_until` and is identical on
+   every later request; a ghost account's was recomputed as `now+15m` and
+   **advanced** each time. Six wrong passwords and a clock told you whether an
+   account existed. `SetLock` now reports rows-affected and only a persisted lock
+   is ever reported.
+2. **A correct password did not reset the failure counter.** `ClearLock` zeroed
+   `app_user.failed_attempts`, but the number that decides locking is a `count(*)`
+   over `auth_login_attempt`, which it never touched. Four typos, a successful
+   sign-in, then one more typo locked a legitimate user out for 15 minutes.
+   `FailuresInWindow` now counts only failures *since the last success*. The
+   in-memory test fake had always modelled the correct behaviour, which is exactly
+   why no hermetic test caught it.
+
+### Still missing
+
+- **No way to set a FIRST password without a Bearer.** `POST /auth/password`
+  requires one, and the only in-process minter is the dev-gated `/auth/token`. An
+  invited user in a production deployment can never bootstrap. An admin-issued
+  one-time set-password token is the required follow-up.
+- **No password reset**, no email verification, no rate limit beyond lockout.
+- **`AUTH_DEV_TOKEN_ENABLED=true` is now more dangerous than it was.** Combined
+  with `/auth/password`, any caller who can reach the port can *permanently* set
+  any user's password. It was always a full-impersonation oracle; it is now a
+  **persistent** one. Never set it on a reachable host.
 
 ---
 
@@ -443,7 +537,7 @@ document exactly as a keyboard user's are): 24/24 flows, including both screens.
 cd frontend
 pnpm seed:demo -- --insightd     # -> company A
 pnpm seed:tenancy <A>            # -> company B + the Data Entry user
-pnpm verify:tenancy <A> <B>      # 48 checks; exits non-zero on any drift
+pnpm verify:tenancy <A> <B>      # 72 checks; exits non-zero on any drift
 pnpm verify:demo <A>             # 18 accounting checks; unaffected by the above
 ```
 

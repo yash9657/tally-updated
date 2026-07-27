@@ -45,13 +45,33 @@ func (s *PGLockoutStore) RecordAttempt(ctx context.Context, subject string, ok b
 	return nil
 }
 
-// FailuresInWindow counts failed attempts for subject at or after `since`.
+// FailuresInWindow counts failed attempts for subject at or after `since` AND
+// after the subject's most recent SUCCESSFUL login.
+//
+// The "since the last success" clause is what makes the package doc's promise
+// ("a successful login resets the failure counter") true of the DATABASE and not
+// only of the in-memory test fake. Without it, ClearLock's
+// `UPDATE app_user SET failed_attempts = 0` was cosmetic: the number that
+// actually decides locking is this count over auth_login_attempt, which
+// ClearLock never touches. The observable bug was a self-inflicted denial of
+// service — four typos, then a correct sign-in, then ONE more typo would lock a
+// legitimate user out for 15 minutes, because the four old failures were still
+// inside the sliding window.
+//
+// COALESCE(..., '-infinity') keeps the predicate total for a subject that has
+// never succeeded, in which case this degrades to the plain window count.
 func (s *PGLockoutStore) FailuresInWindow(ctx context.Context, subject string, since time.Time) (int, error) {
 	var n int
 	err := s.pool.QueryRow(ctx, `
 		SELECT count(*)
 		FROM auth_login_attempt
-		WHERE subject = $1 AND succeeded = false AND at >= $2`, subject, since).Scan(&n)
+		WHERE subject = $1
+		  AND succeeded = false
+		  AND at >= $2
+		  AND at > COALESCE(
+		      (SELECT max(at) FROM auth_login_attempt
+		        WHERE subject = $1 AND succeeded = true),
+		      '-infinity'::timestamptz)`, subject, since).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("authn: count failures: %w", err)
 	}
@@ -80,18 +100,31 @@ func (s *PGLockoutStore) withSubject(ctx context.Context, subject string, fn fun
 }
 
 // SetLock locks the subject's app_user row until `until` and records the
-// observed failure count on the row.
-func (s *PGLockoutStore) SetLock(ctx context.Context, subject string, until time.Time, failures int) error {
-	return s.withSubject(ctx, subject, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `
+// observed failure count on the row. It reports whether a row was actually
+// updated.
+//
+// persisted=false means the subject has no app_user row — a login naming an
+// account that does not exist. The Locker turns that into "not locked" so the
+// response cannot distinguish a real account from a ghost (see RecordFailure's
+// no-enumeration invariant). Reporting rows-affected here, rather than guessing
+// upstream, keeps the single source of truth at the write itself.
+func (s *PGLockoutStore) SetLock(ctx context.Context, subject string, until time.Time, failures int) (bool, error) {
+	var persisted bool
+	err := s.withSubject(ctx, subject, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `
 			UPDATE app_user
 			SET locked_until = $1, failed_attempts = $2
 			WHERE subject = $3`, until, failures, subject)
 		if err != nil {
 			return fmt.Errorf("authn: set lock: %w", err)
 		}
+		persisted = tag.RowsAffected() > 0
 		return nil
 	})
+	if err != nil {
+		return false, err
+	}
+	return persisted, nil
 }
 
 // ClearLock resets failure state and lock on success.

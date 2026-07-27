@@ -95,12 +95,36 @@ type Server struct {
 	webauthnRPID  string
 	challenges    ChallengeStore
 	lockout       *authn.Locker
+
+	// credentials is the first-party PASSWORD store (WS-A1, migration 0021)
+	// behind POST /auth/login and POST /auth/password. It is a separate interface
+	// from authStore because the two live on opposite sides of the authentication
+	// boundary: authStore is what the middleware consults about an ALREADY
+	// authenticated subject, while credentials is what decides whether a caller is
+	// that subject at all. Same concrete *authz.Store underneath.
+	credentials credentialStore
 }
 
 // authSeeder seeds the Owner security level + membership for a freshly created
 // company. Backed by the 0011 seed_company_auth_defaults() SQL helper.
 type authSeeder interface {
 	SeedCompanyAuthDefaults(ctx context.Context, companyID, userID uuid.UUID) error
+}
+
+// credentialStore is the subset of authz.Store the password routes need.
+// Declared as an interface here for the same reason authStore is: the handlers
+// stay testable without a database, and the composition root stays the only
+// place that names the concrete type.
+type credentialStore interface {
+	// SetPassword upserts the given user's OWN password verifier (self-only RLS).
+	SetPassword(ctx context.Context, userID uuid.UUID, c authn.Credential) error
+	// CredentialBySubject is the PRE-AUTH read: subject -> (user id, verifier,
+	// active, found). found=false covers both "no such user" and "no password
+	// set"; the distinction never reaches the wire.
+	CredentialBySubject(ctx context.Context, subject string) (userID uuid.UUID, c authn.Credential, active bool, found bool, err error)
+	// ProfileByUserID reads the caller's own directory row for the login
+	// response's `user` block.
+	ProfileByUserID(ctx context.Context, userID uuid.UUID) (subject, displayName, email string, err error)
 }
 
 // New constructs a Server backed by the application-DSN connection pool and
@@ -150,6 +174,9 @@ func New(ctx context.Context, appDSN string) (*Server, error) {
 		authStore: authzStore,
 		authzSeed: authzStore,
 		authAdmin: authzStore,
+		// Password login (WS-A1). Same concrete store; a distinct interface
+		// because it operates on the pre-auth side of the boundary.
+		credentials: authzStore,
 
 		webauthn:      waService,
 		webauthnStore: waStore,
@@ -310,11 +337,13 @@ func (s *Server) routes() {
 		r.Post("/auth/token", s.handleDevToken)
 	}
 
-	// WebAuthn step-up ceremony + dev /auth/login lockout flow (WS1 follow-up).
-	// Mounted on this router before it is assigned to s.router. The ceremony
-	// routes are authn-only; /auth/login is pre-auth and gates on the dev signer.
+	// WebAuthn step-up ceremony (WS1 follow-up) + the first-party password login
+	// (WS-A1). Mounted on this router before it is assigned to s.router. The
+	// ceremony routes and POST /auth/password are authn-only; POST /auth/login is
+	// pre-auth and gates on the dev signer, mirroring /auth/token.
 	s.router = r
 	s.authWebAuthnRoutes()
+	s.authLoginRoutes()
 
 	// Company lifecycle (identity). authn-ONLY: verify JWT + resolve user
 	// (create-on-first-login); skip membership/PDP (the company does not exist

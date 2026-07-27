@@ -40,7 +40,13 @@ type LockoutStore interface {
 	FailuresInWindow(ctx context.Context, subject string, since time.Time) (int, error)
 	// SetLock locks the subject's app_user row until `until` and records the
 	// observed failure count.
-	SetLock(ctx context.Context, subject string, until time.Time, failures int) error
+	//
+	// It reports whether the lock was actually PERSISTED. A subject with no
+	// app_user row (a login attempt naming an account that does not exist) has
+	// nothing to lock, so persisted is false. Callers must not report such a
+	// subject as locked — see RecordFailure, where conflating the two is a
+	// user-enumeration oracle.
+	SetLock(ctx context.Context, subject string, until time.Time, failures int) (persisted bool, err error)
 	// ClearLock resets failed_attempts and locked_until on success.
 	ClearLock(ctx context.Context, subject string) error
 	// LockedUntil reports the subject's current lock expiry (zero time if not
@@ -92,6 +98,16 @@ func (l *Locker) RecordSuccess(ctx context.Context, subject, ip string) error {
 // RecordFailure records a failed login. If the number of failures within the
 // window reaches MaxFailures, the subject is locked for Lock. It returns whether
 // the account is now locked and until when.
+//
+// NO-ENUMERATION INVARIANT: a lock is only REPORTED when the store confirms it
+// was persisted. A subject with no app_user row has nothing to lock, and saying
+// "locked" for it would be a user-existence oracle that needs no timing
+// measurement at all — the caller writes 423 with an `until`, and for a
+// non-existent account that `until` would advance on every request (freshly
+// computed each time) while a real account's stays fixed at the stored value.
+// An attacker could separate real subjects from ghosts by sending six wrong
+// passwords and watching whether `until` moves. Gating on `persisted` keeps a
+// ghost subject on the same byte-identical 401 as every other failure.
 func (l *Locker) RecordFailure(ctx context.Context, subject, ip string) (locked bool, until time.Time, err error) {
 	if err := l.store.RecordAttempt(ctx, subject, false, ip); err != nil {
 		return false, time.Time{}, err
@@ -104,8 +120,13 @@ func (l *Locker) RecordFailure(ctx context.Context, subject, ip string) (locked 
 	}
 	if failures >= l.policy.MaxFailures {
 		until = now.Add(l.policy.Lock)
-		if err := l.store.SetLock(ctx, subject, until, failures); err != nil {
+		persisted, err := l.store.SetLock(ctx, subject, until, failures)
+		if err != nil {
 			return false, time.Time{}, err
+		}
+		if !persisted {
+			// Unknown subject: nothing was locked, so report nothing.
+			return false, time.Time{}, nil
 		}
 		return true, until, nil
 	}

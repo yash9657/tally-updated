@@ -27,8 +27,15 @@ var allowedDeps = map[string]map[string]bool{
 	// the same package and may import the db layer for its pg store.
 	"internal/authn": {"internal/platform/db": true},
 	// authz (Task D) is the PDP + catalog store; it reads the auth catalog over
-	// the db layer and nothing else.
-	"internal/authz": {"internal/platform/db": true},
+	// the db layer. Since WS-A1 (first-party password login) it also imports authn
+	// for the authn.Credential value type its user_credential store persists.
+	//
+	// The edge is ONE-WAY BY CONSTRUCTION and this map is what keeps it that way:
+	// authn's own entry above allows ONLY internal/platform/db, so authn can never
+	// import authz back. That matters more than usual here — a cycle would make the
+	// whole auth stack uncompilable, and the tempting mistake (reusing
+	// authz.ErrNotFound inside authn) is exactly what this line forbids.
+	"internal/authz": {"internal/platform/db": true, "internal/authn": true},
 	// webauthn (Task D WS2) is the WebAuthn ceremony + credential store over the
 	// db layer; stdlib crypto only, no other siblings.
 	"internal/webauthn": {"internal/platform/db": true},

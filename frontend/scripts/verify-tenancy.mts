@@ -21,6 +21,14 @@
  *   401  missing / malformed / expired token          (authn)
  *   403  authenticated but not permitted              (membership or PDP)
  *   403 + code STEPUP_REQUIRED  authenticated, permitted, but needs WebAuthn
+ *   423 + code LOCKED           too many failed logins (POST /auth/login only)
+ *
+ * §9 additionally drives the FIRST-PARTY PASSWORD LOGIN end to end — set a
+ * password, sign in, be refused, be locked out, and prove the lock is durable —
+ * against a THROWAWAY `login-probe-<uuid>` identity that it deletes again. That
+ * is a hard requirement, not tidiness: those checks deliberately lock the
+ * account they run against, and locking one of the seeded demo identities would
+ * break every later run.
  */
 
 import { execFileSync } from "node:child_process";
@@ -576,7 +584,329 @@ async function main(): Promise<void> {
   );
 
   // =========================================================================
-  head("9. CLEANUP — leave the books exactly as they were found");
+  head("9. PASSWORD LOGIN — a real first-party credential, not a dev mint");
+  // =========================================================================
+  // Every token above came from POST /auth/token, which mints for ANY subject:
+  // it ASSERTS an identity, it does not AUTHENTICATE one. This section drives
+  // the real thing — POST /auth/login (subject + password) and POST
+  // /auth/password (the only writer of a password anywhere in the system).
+  //
+  // It uses a THROWAWAY identity, `login-probe-<uuid>`, and deletes it again at
+  // the end. That is not tidiness: the lockout checks below deliberately lock
+  // the account they run against, and locking one of the three SEEDED subjects
+  // would break every later run of this script and of the browser demo.
+  const probeLoginSubject = `login-probe-${crypto.randomUUID()}`;
+  const probeLoginPassword = "verify-tenancy-2026"; // >= 10 chars (the policy floor)
+
+  // -- Provision the identity ------------------------------------------------
+  // A subject with no app_user row cannot be meaningfully locked out (SetLock
+  // updates zero rows), so the probe must be a REAL user before the lockout
+  // checks mean anything. GET /v1/me is authn-only and runs
+  // CreateUserOnFirstLogin, which is what materialises the row.
+  const probeDevTok = await mint(probeLoginSubject, ["webauthn"]);
+  r = await call("GET", "/v1/me", probeDevTok);
+  check(
+    "throwaway subject provisioned (GET /v1/me materialises the app_user row)",
+    r.status === 200,
+    brief(r),
+  );
+
+  r = await call("POST", "/auth/password", null, {
+    current_password: "",
+    new_password: probeLoginPassword,
+  });
+  check("POST /auth/password with NO bearer -> 401", r.status === 401, brief(r));
+
+  r = await call("POST", "/auth/password", probeDevTok, {
+    current_password: "",
+    new_password: "short",
+  });
+  check(
+    "POST /auth/password with a too-short password -> 400 (policy, with a reason)",
+    r.status === 400 && /at least 10/.test(r.body),
+    brief(r),
+  );
+
+  r = await call("POST", "/auth/password", probeDevTok, {
+    current_password: "",
+    new_password: probeLoginPassword,
+  });
+  check(
+    "POST /auth/password first-set (no credential yet) -> 204",
+    r.status === 204,
+    brief(r),
+  );
+
+  // The acting user comes from the BEARER, never the body. Sending somebody
+  // else's subject in the body must change NOTHING about them — asserted below
+  // by logging that other subject in with its unchanged password.
+  const probeVictimSubject = `login-probe-victim-${crypto.randomUUID()}`;
+  const victimPassword = "victim-password-2026";
+  const victimDevTok = await mint(probeVictimSubject, ["webauthn"]);
+  await call("GET", "/v1/me", victimDevTok);
+  await call("POST", "/auth/password", victimDevTok, {
+    current_password: "",
+    new_password: victimPassword,
+  });
+  r = await call("POST", "/auth/password", probeDevTok, {
+    subject: probeVictimSubject, // ignored: there is no subject field in the contract
+    user_id: "00000000-0000-0000-0000-000000000000",
+    current_password: probeLoginPassword,
+    new_password: probeLoginPassword,
+  });
+  const victimStillWorks = await call("POST", "/auth/login", null, {
+    subject: probeVictimSubject,
+    password: victimPassword,
+  });
+  check(
+    "a body-supplied `subject` cannot re-point /auth/password at another user",
+    r.status === 204 && victimStillWorks.status === 200,
+    `set=${r.status} victim-login=${victimStillWorks.status}`,
+  );
+
+  // -- The login itself ------------------------------------------------------
+  r = await call("POST", "/auth/login", null, { password: probeLoginPassword });
+  check("login with no subject -> 400", r.status === 400, brief(r));
+
+  r = await call("POST", "/auth/login", null, { subject: probeLoginSubject });
+  check("login with no password -> 400", r.status === 400, brief(r));
+
+  r = await call("POST", "/auth/login", null, {
+    subject: probeLoginSubject,
+    password: probeLoginPassword,
+  });
+  const loginBody = r.status === 200
+    ? (JSON.parse(r.body) as {
+        token: string;
+        token_type: string;
+        expires_in: number;
+        user: { id: string; subject: string };
+      })
+    : null;
+  check(
+    "login with the RIGHT password -> 200 with a Bearer and a `user` block",
+    r.status === 200 &&
+      !!loginBody?.token &&
+      loginBody.token_type === "Bearer" &&
+      loginBody.expires_in > 0 &&
+      loginBody.user.subject === probeLoginSubject,
+    `${r.status} user=${loginBody?.user.subject ?? "(none)"} expires_in=${loginBody?.expires_in ?? 0}`,
+  );
+  const loginTok = loginBody?.token ?? "";
+
+  // NO USER ENUMERATION: a wrong password and a subject that does not exist must
+  // be indistinguishable on the wire. Compared as strings, so a future "user not
+  // found" refinement fails here rather than shipping an oracle.
+  const wrongPw = await call("POST", "/auth/login", null, {
+    subject: probeLoginSubject,
+    password: "definitely-not-the-password",
+  });
+  const unknownSubj = await call("POST", "/auth/login", null, {
+    subject: `no-such-subject-${crypto.randomUUID()}`,
+    password: "definitely-not-the-password",
+  });
+  check(
+    "wrong password -> 401, byte-identical to an UNKNOWN subject (no enumeration)",
+    wrongPw.status === 401 &&
+      unknownSubj.status === 401 &&
+      wrongPw.body === unknownSubj.body,
+    `wrong=${wrongPw.status} ${wrongPw.body} | unknown=${unknownSubj.status} ${unknownSubj.body}`,
+  );
+
+  // -- A login token is a REAL token -----------------------------------------
+  // Not "it parses" — it must pass the whole authn -> membership -> PDP stack on
+  // a company-scoped route. The probe is granted a custom level on company A so
+  // this exercises a real membership, and the level is toggled below to isolate
+  // the step-up variable.
+  const loginLevelName = `Login Probe Level ${process.pid}`;
+  r = await call("POST", `/v1/companies/${companyA}/security-levels`, ownerA, {
+    name: loginLevelName,
+    default_access: "full",
+    requires_webauthn: false,
+    rules: [],
+  });
+  const loginLevelID = r.status === 201
+    ? (JSON.parse(r.body) as { security_level_id: string }).security_level_id
+    : "";
+  check(
+    "Owner -> create a level for the login probe (no step-up) -> 201",
+    r.status === 201 && !!loginLevelID,
+    brief(r),
+  );
+
+  r = await call("POST", `/v1/companies/${companyA}/members/invites`, ownerA, {
+    subject: probeLoginSubject,
+    security_level_id: loginLevelID,
+  });
+  check("Owner -> invite the login probe -> 201", r.status === 201, brief(r));
+
+  // Claimed with the LOGIN token, so the claim itself is evidence the token
+  // authenticates: an unclaimed invite grants nothing, and only an authenticated
+  // call can claim it.
+  r = await call("GET", "/v1/me", loginTok);
+  check(
+    "a token from a REAL LOGIN claims the invite on /v1/me (authn-only route)",
+    r.status === 200 &&
+      (JSON.parse(r.body) as { claimed_invites: unknown[] }).claimed_invites.length === 1,
+    brief(r),
+  );
+
+  r = await call("GET", `/v1/companies/${companyA}/trial-balance`, loginTok);
+  check(
+    "a token from a REAL LOGIN reads a company-scoped report -> 200",
+    r.status === 200,
+    `${r.status}`,
+  );
+
+  r = await probeJournal(loginTok, companyA, ledA1, ledA2, "2026-07-20");
+  check(
+    "a token from a REAL LOGIN writes a voucher -> 201 (level without step-up)",
+    r.status === 201,
+    brief(r),
+  );
+
+  // THE DISCLOSED GAP, pinned so it cannot change silently. A login token
+  // carries NO `amr` (WebAuthn is a separate ceremony), so the moment a level
+  // requires step-up, the SAME token that just wrote is refused. Nothing changes
+  // here except requires_webauthn — that is the whole point of toggling it.
+  r = await call("PUT", `/v1/companies/${companyA}/security-levels/${loginLevelID}`, ownerA, {
+    requires_webauthn: true,
+  });
+  check("Owner -> require WebAuthn step-up on that level -> 200", r.status === 200, brief(r));
+
+  r = await probeJournal(loginTok, companyA, ledA1, ledA2, "2026-07-20");
+  check(
+    "the SAME login token, level now requiring step-up -> 403 STEPUP_REQUIRED " +
+      "(a password login alone cannot write where the level demands WebAuthn)",
+    r.status === 403 && r.code === "STEPUP_REQUIRED",
+    `code=${r.code ?? "(none)"} ${brief(r)}`,
+  );
+
+  r = await call("GET", `/v1/companies/${companyA}/trial-balance`, loginTok);
+  check(
+    "…and that same token still READS 200 (step-up gates writes only)",
+    r.status === 200,
+    `${r.status}`,
+  );
+
+  // -- Lockout ---------------------------------------------------------------
+  // Five wrong passwords in the window lock the account. One wrong attempt was
+  // already spent above, so four more reach the threshold.
+  let lockedAt = 0;
+  let lockUntil = "";
+  for (let i = 2; i <= 6 && lockedAt === 0; i += 1) {
+    const attempt = await call("POST", "/auth/login", null, {
+      subject: probeLoginSubject,
+      password: `wrong-attempt-${i}`,
+    });
+    if (attempt.status === 423) {
+      lockedAt = i;
+      lockUntil = (JSON.parse(attempt.body) as { until?: string; code?: string }).until ?? "";
+      check(
+        "5 wrong passwords -> 423 with code LOCKED and an `until`",
+        attempt.code === "LOCKED" && !!lockUntil,
+        `attempt ${i}: ${brief(attempt)}`,
+      );
+    }
+  }
+  if (lockedAt === 0) check("5 wrong passwords -> 423 LOCKED", false, "never locked");
+
+  // THE non-vacuous half. The 423 above could come from the attempt COUNTER
+  // alone (auth_login_attempt has no RLS and is written for any subject, even
+  // one that does not exist). Only a DURABLE lock — a locked_until on the
+  // app_user row — makes the CORRECT password fail, because that path goes
+  // through Locker.IsLocked before the password is ever touched.
+  r = await call("POST", "/auth/login", null, {
+    subject: probeLoginSubject,
+    password: probeLoginPassword,
+  });
+  check(
+    "the lock is REAL: the CORRECT password is now 423, not 200",
+    r.status === 423,
+    brief(r),
+  );
+
+  const lockedUntilRow = sql(
+    `SELECT locked_until FROM app_user WHERE subject = '${probeLoginSubject}'`,
+  );
+  check(
+    "…and it is DURABLE: app_user.locked_until is set for the probe",
+    lockedUntilRow.trim() !== "",
+    `locked_until=${lockedUntilRow.trim() || "(null)"}`,
+  );
+
+  // NO USER ENUMERATION, pinned as a HARD invariant.
+  //
+  // This check originally asserted the OPPOSITE — that an unknown subject also
+  // reaches 423 on the 5th attempt — and called it a "disclosed asymmetry".
+  // Adversarial review showed it was not an asymmetry to disclose but a
+  // USER-ENUMERATION ORACLE, readable straight off the wire with no timing
+  // measurement: for a REAL account the 423 renders the STORED
+  // app_user.locked_until, so `until` is identical on every later request, while
+  // for a ghost it was recomputed as now+15m and therefore ADVANCED each time.
+  // Six wrong passwords and a clock told you whether an account existed.
+  // Locker.RecordFailure now reports only a lock that SetLock actually
+  // persisted, so a ghost stays on the same 401 forever.
+  const ghost = `login-probe-ghost-${crypto.randomUUID()}`;
+  const ghostStatuses: number[] = [];
+  const ghostBodies: string[] = [];
+  for (let i = 0; i < 6; i += 1) {
+    const attempt = await call("POST", "/auth/login", null, {
+      subject: ghost,
+      password: "wrong",
+    });
+    ghostStatuses.push(attempt.status);
+    ghostBodies.push(JSON.stringify(attempt.body));
+  }
+  const ghostRows = sql(`SELECT count(*) FROM app_user WHERE subject = '${ghost}'`);
+  check(
+    "an UNKNOWN subject NEVER reaches 423 — past the threshold it stays on the same " +
+      "401 as a wrong password (no enumeration), and is never created",
+    ghostStatuses.every((s) => s === 401) &&
+      ghostBodies.every((b) => b === ghostBodies[0]) &&
+      ghostRows.trim() === "0",
+    `statuses=[${ghostStatuses.join(",")}] identical-bodies=${
+      ghostBodies.every((b) => b === ghostBodies[0])
+    } app_user rows=${ghostRows.trim()}`,
+  );
+
+  // -- Self-cleaning ---------------------------------------------------------
+  // Hard requirement: this section locks accounts and grants memberships, so it
+  // must leave nothing behind. Memberships and the level go through the API (the
+  // same endpoints §8 tests); the identities themselves have no delete route, so
+  // they go through SQL in FK order.
+  const loginProbeUserID = loginBody?.user.id ?? "";
+  r = await call("DELETE", `/v1/companies/${companyA}/members/${loginProbeUserID}`, ownerA);
+  check("login probe's membership revoked -> 200", r.status === 200, brief(r));
+
+  r = await call("DELETE", `/v1/companies/${companyA}/security-levels/${loginLevelID}`, ownerA);
+  check("login probe's security level deleted -> 200", r.status === 200, brief(r));
+
+  // FK order: user_credential and company_membership reference app_user.
+  // auth_login_attempt has no FK (it is keyed by subject, and is written for
+  // subjects that never existed), so it is cleaned by subject prefix.
+  sql(
+    `DELETE FROM user_credential WHERE user_id IN
+       (SELECT id FROM app_user WHERE subject LIKE 'login-probe-%')`,
+  );
+  sql(
+    `DELETE FROM company_membership WHERE user_id IN
+       (SELECT id FROM app_user WHERE subject LIKE 'login-probe-%')`,
+  );
+  sql(`DELETE FROM company_invite WHERE subject LIKE 'login-probe-%'`);
+  sql(`DELETE FROM auth_login_attempt WHERE subject LIKE 'login-probe-%'`);
+  sql(`DELETE FROM app_user WHERE subject LIKE 'login-probe-%'`);
+  const leftovers = sql(
+    `SELECT count(*) FROM app_user WHERE subject LIKE 'login-probe-%'`,
+  );
+  check(
+    "SELF-CLEANING: every login-probe identity, credential and attempt is gone",
+    leftovers.trim() === "0",
+    `app_user rows matching 'login-probe-%': ${leftovers.trim()}`,
+  );
+
+  // =========================================================================
+  head("10. CLEANUP — leave the books exactly as they were found");
   // =========================================================================
   // Reversing the probes is itself the last check: only an Owner may delete, and
   // the Trial Balance must return to balance afterwards. The tombstones remain

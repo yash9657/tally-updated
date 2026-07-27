@@ -828,6 +828,18 @@ var authCatalogTables = []string{
 	// writable ONLY under the company GUC — so it is held to the same
 	// ENABLE+FORCE+explicit-WITH-CHECK bar as every other catalog table.
 	"company_invite",
+	// 0021: the PASSWORD VERIFIER store (first-party login). Its policy is
+	// SELF-ONLY — user_id = app_current_user_id(), with no company clause at
+	// all — which is exactly why it is a separate table rather than columns on
+	// app_user: 0020 WIDENED app_user's USING to admit co-members of the company
+	// in scope, so a hash living there would be readable by every colleague.
+	//
+	// This entry is what makes that argument a GATE rather than a comment.
+	// Without it, dropping FORCE, dropping the WITH CHECK half, or dropping the
+	// policy outright from 0021 is caught by nothing in the suite: the
+	// store-level test runs as tally_app (NOBYPASSRLS), so it cannot tell a
+	// self-only policy apart from a missing one.
+	"user_credential",
 }
 
 // TestAuthCatalogTablesForceRLS asserts every new auth catalog table is

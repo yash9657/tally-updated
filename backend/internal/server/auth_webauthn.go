@@ -7,14 +7,15 @@
 //     requires_webauthn gate on writes (the Owner level seeded at company create
 //     sets requires_webauthn=true), so a write that was 403 STEPUP_REQUIRED with
 //     the base token returns 201 with the stepped-up token.
-//   - A real login flow exercising account lockout: POST /auth/login records
-//     failures, locks the subject after the policy threshold (5/15m), and returns
-//     423 Locked while locked.
+//
+// The DEV login that used to live here (handleDevLogin + devLoginPassword, a
+// single shared AUTH_DEV_PASSWORD that authenticated ANY subject) is GONE. The
+// real first-party password login lives in auth_login.go; writeLocked and
+// clientIP stay here because the ceremony code and the login share them.
 //
 // All routes here live OUTSIDE the /v1/companies/{companyID} subtree (they are
-// pre-company / cross-company): the webauthn ceremony routes are guarded by the
-// authn-only middleware (verify token, resolve user, set subject+user GUC in
-// ctx); /auth/login is fully pre-auth (it IS the login).
+// pre-company / cross-company) and are guarded by the authn-only middleware
+// (verify token, resolve user, set subject+user GUC in ctx).
 //
 // The begin->finish challenge handoff goes through the ChallengeStore interface
 // (auth_challenge_store.go). Since WS6 the shipped implementation is Postgres-
@@ -27,7 +28,6 @@ package server
 import (
 	"encoding/base64"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/google/uuid"
@@ -49,22 +49,14 @@ const challengeTTL = 5 * time.Minute
 // stepUpTokenTTLSeconds is the lifetime of a minted stepped-up token (1h).
 const stepUpTokenTTLSeconds = 3600
 
-// devLoginPasswordEnv / devLoginPasswordDefault parameterise the dev /auth/login
-// password check. Production login is performed by the external IdP; this is a
-// dev-only stand-in to exercise the lockout flow.
-const (
-	devLoginPasswordEnv     = "AUTH_DEV_PASSWORD"
-	devLoginPasswordDefault = "dev-password"
-)
-
 // --------------------------------------------------------------------------
 // Route wiring (called from routes())
 // --------------------------------------------------------------------------
 
 // authWebAuthnRoutes mounts the WebAuthn ceremony routes (always — they only
-// need the pool-backed services) and the dev /auth/login route (only when the
-// in-process dev signer is present, mirroring /auth/token). It is invoked by
-// routes() at the top level, outside the company subtree.
+// need the pool-backed services). It is invoked by routes() at the top level,
+// outside the company subtree. The password routes are mounted separately by
+// authLoginRoutes (auth_login.go).
 func (s *Server) authWebAuthnRoutes() {
 	// Ceremony routes: authn-only (verify token + resolve user into ctx). They do
 	// NOT require the signer, except assert/finish which 501s without it.
@@ -72,12 +64,6 @@ func (s *Server) authWebAuthnRoutes() {
 	s.router.With(s.authnOnlyMiddleware).Post("/auth/webauthn/register/finish", s.handleWebAuthnRegisterFinish)
 	s.router.With(s.authnOnlyMiddleware).Post("/auth/webauthn/assert/begin", s.handleWebAuthnAssertBegin)
 	s.router.With(s.authnOnlyMiddleware).Post("/auth/webauthn/assert/finish", s.handleWebAuthnAssertFinish)
-
-	// Dev login (lockout demonstration): pre-auth, mounted only in dev mode where
-	// the signer can mint the resulting token. /auth/token stays unchanged.
-	if s.signer != nil {
-		s.router.Post("/auth/login", s.handleDevLogin)
-	}
 }
 
 // --------------------------------------------------------------------------
@@ -291,101 +277,6 @@ func (s *Server) handleWebAuthnAssertFinish(w http.ResponseWriter, r *http.Reque
 	})
 }
 
-// --------------------------------------------------------------------------
-// Dev login (lockout demonstration)
-// --------------------------------------------------------------------------
-
-// devLoginReq is the dev /auth/login body.
-type devLoginReq struct {
-	Subject  string `json:"subject"`
-	Password string `json:"password"`
-}
-
-// handleDevLogin is the DEV real-login flow that exercises account lockout:
-//
-//  1. IsLocked(subject) -> 423 Locked {error, code:"LOCKED", until}.
-//  2. password check against the dev policy (AUTH_DEV_PASSWORD, default
-//     "dev-password"); wrong -> RecordFailure; if that locks -> 423; else 401.
-//  3. correct -> RecordSuccess + mint+return a token (no webauthn amr — the user
-//     then steps up via the assert ceremony).
-//
-// /auth/token (no-password dev shortcut) stays UNCHANGED so existing tests/e2e
-// keep working.
-func (s *Server) handleDevLogin(w http.ResponseWriter, r *http.Request) {
-	if s.signer == nil { // defense in depth: only mounted in dev mode.
-		writeError(w, http.StatusNotFound, "not found")
-		return
-	}
-	var req devLoginReq
-	if !decodeJSON(w, r, &req) {
-		return
-	}
-	if req.Subject == "" {
-		writeError(w, http.StatusBadRequest, "subject is required")
-		return
-	}
-	ctx := r.Context()
-	ip := clientIP(r)
-
-	// Ensure an app_user row exists for the subject so the lockout state (which
-	// lives on app_user.locked_until/failed_attempts) has a home row to persist
-	// to. A real login provisions the user (create-on-first-login); without the
-	// row, SetLock would UPDATE zero rows and the lock would never stick. This is
-	// idempotent.
-	if _, err := s.authStore.CreateUserOnFirstLogin(ctx, req.Subject, "", ""); err != nil {
-		writeError(w, http.StatusInternalServerError, "resolve user")
-		return
-	}
-
-	// (1) Already locked? 423 before touching the password.
-	locked, until, err := s.lockout.IsLocked(ctx, req.Subject)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "lockout check")
-		return
-	}
-	if locked {
-		writeLocked(w, until)
-		return
-	}
-
-	// (2) Password check.
-	if req.Password != devLoginPassword() {
-		nowLocked, lockUntil, ferr := s.lockout.RecordFailure(ctx, req.Subject, ip)
-		if ferr != nil {
-			writeError(w, http.StatusInternalServerError, "record failure")
-			return
-		}
-		if nowLocked {
-			writeLocked(w, lockUntil)
-			return
-		}
-		writeError(w, http.StatusUnauthorized, "invalid credentials")
-		return
-	}
-
-	// (3) Success: clear lock state + mint a base (no-webauthn) token.
-	if err := s.lockout.RecordSuccess(ctx, req.Subject, ip); err != nil {
-		writeError(w, http.StatusInternalServerError, "record success")
-		return
-	}
-	now := time.Now()
-	tok, err := s.signer.Sign(authn.Claims{
-		Subject:   req.Subject,
-		IssuedAt:  now.Unix(),
-		ExpiresAt: now.Add(stepUpTokenTTLSeconds * time.Second).Unix(),
-		ID:        uuid.NewString(),
-	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "sign token")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"token":      tok,
-		"token_type": "Bearer",
-		"expires_in": stepUpTokenTTLSeconds,
-	})
-}
-
 // writeLocked writes the 423 Locked response carrying the lock expiry.
 func writeLocked(w http.ResponseWriter, until time.Time) {
 	writeJSON(w, http.StatusLocked, map[string]any{
@@ -393,14 +284,6 @@ func writeLocked(w http.ResponseWriter, until time.Time) {
 		"code":  "LOCKED",
 		"until": until.UTC().Format(time.RFC3339),
 	})
-}
-
-// devLoginPassword returns the configured dev login password, or the default.
-func devLoginPassword() string {
-	if p := os.Getenv(devLoginPasswordEnv); p != "" {
-		return p
-	}
-	return devLoginPasswordDefault
 }
 
 // clientIP best-effort extracts the remote IP for the audit trail. It returns ""
