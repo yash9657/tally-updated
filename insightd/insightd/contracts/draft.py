@@ -25,7 +25,13 @@ _FORBID = ConfigDict(extra="forbid")
 # 'ready'              -> every field cleared its floor; Ctrl+A is one keystroke.
 # 'low_confidence_manual' -> open the form blank-but-prefilled for full manual
 #                            review rather than as an accept-ready draft.
-DraftStatus = Literal["ready", "low_confidence_manual"]
+# "processing" is the ENQUEUE-AND-POLL state (WS10 §8.6 item 5). Real OCR takes
+# up to ~45 s on a phone photo, which cannot sit in an HTTP request, so an upload
+# returns immediately with a draft in this state and the client polls until it
+# leaves. With the deterministic fakes the pipeline finishes inside the request
+# and the draft is already terminal on return — ONE response shape either way, so
+# a client never has to know which mode the server is in.
+DraftStatus = Literal["processing", "ready", "low_confidence_manual"]
 
 FieldSource = Literal["ocr", "classifier", "inferencer", "derived", "default"]
 

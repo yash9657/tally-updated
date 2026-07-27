@@ -18,6 +18,7 @@ import { LoadedDraftProvider, useLoadedDraft } from "../app/LoadedDraft";
 import { createMockClient } from "../api";
 import type {
   CoredClient,
+  CreateDraftRequest,
   DraftSummary,
   InsightdClient,
   PurchaseVoucherDraft,
@@ -234,5 +235,117 @@ describe("BillInboxScreen (F9 Bill Inbox)", () => {
     );
     // The list is refreshed after a successful create.
     await waitFor(() => expect(spies.listDrafts).toHaveBeenCalledTimes(2));
+  });
+});
+
+/**
+ * UPLOADING A BILL — the front door of the OCR loop.
+ *
+ * Until now the only way into the inbox was pasting fixture JSON, which is a
+ * developer's tool, not a way to file a supplier invoice. These pin the two
+ * things that make an upload usable rather than merely present: the request
+ * carries the file's real bytes, and a read that takes up to ~45 s (the WS10
+ * spike's measurement for a phone photo) is POLLED rather than assumed
+ * finished.
+ */
+describe("BillInboxScreen — uploading a bill", () => {
+  function upload(name: string, type: string, bytes: number[]) {
+    const file = new File([new Uint8Array(bytes)], name, { type });
+    // jsdom's File has no arrayBuffer() — a gap in the TEST ENVIRONMENT, not in
+    // the component: it is standard in every browser, and `pnpm e2e:ui` drives
+    // the real one in Chromium. Filling it here keeps the component on the
+    // modern API instead of contorting it around a jsdom limitation.
+    Object.defineProperty(file, "arrayBuffer", {
+      value: async () => new Uint8Array(bytes).buffer,
+    });
+    const input = screen.getByTestId("inbox-upload") as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [file] } });
+    return file;
+  }
+
+  it("posts the file's real bytes as base64, with its name and type", async () => {
+    const createDraft = vi.fn(
+      async (_companyID: string, _req: CreateDraftRequest) => ({
+        ...FULL_DRAFT_1,
+        draft_id: "draft-new",
+        status: "ready" as const,
+      }),
+    );
+    const insightd: InsightdClient = {
+      listDrafts: async () => SUMMARIES,
+      getDraft: async () => FULL_DRAFT_1,
+      createDraft,
+    };
+    renderInbox(insightd, () => {}, () => {});
+    await waitFor(() => expect(screen.getByTestId("inbox-upload")).toBeTruthy());
+
+    // "PDF" -> the exact base64 the server must receive back.
+    await act(async () => {
+      upload("bill.pdf", "application/pdf", [0x50, 0x44, 0x46]);
+    });
+
+    await waitFor(() => expect(createDraft).toHaveBeenCalledTimes(1));
+    const [companyID, req] = createDraft.mock.calls[0]!;
+    expect(companyID).toBe("co-1");
+    expect(req.filename).toBe("bill.pdf");
+    expect(req.content_type).toBe("application/pdf");
+    expect(req.content_b64).toBe(btoa("PDF"));
+    // A real upload, not the fixture path.
+    expect(req.fixture).toBeUndefined();
+  });
+
+  it("POLLS while the server is still reading, then says it is ready", async () => {
+    // The claim that matters: with real OCR the create returns a draft in
+    // "processing" and the client must keep asking. A client that assumed the
+    // first response was final would open an empty voucher.
+    //
+    // Real timers, one poll interval: fake timers fight waitFor here, and the
+    // thing under test is that a SECOND request happens at all — not the exact
+    // cadence.
+    const created = { ...FULL_DRAFT_1, draft_id: "draft-slow", status: "processing" as const };
+    const finished = { ...FULL_DRAFT_1, draft_id: "draft-slow", status: "ready" as const };
+    const getDraft = vi.fn(async () => finished);
+    const insightd: InsightdClient = {
+      listDrafts: async () => SUMMARIES,
+      getDraft,
+      createDraft: async () => created,
+    };
+    renderInbox(insightd, () => {}, () => {});
+    await waitFor(() => expect(screen.getByTestId("inbox-upload")).toBeTruthy());
+
+    await act(async () => {
+      upload("photo.jpg", "image/jpeg", [1, 2, 3]);
+    });
+
+    // The create said "processing", so the screen MUST have asked again.
+    await waitFor(() => expect(getDraft).toHaveBeenCalledWith("co-1", "draft-slow"), {
+      timeout: 4000,
+    });
+    await waitFor(
+      () => expect(screen.getByTestId("inbox-notice").textContent).toContain("read"),
+      { timeout: 4000 },
+    );
+  });
+
+  it("explains an upload failure instead of failing silently", async () => {
+    const insightd: InsightdClient = {
+      listDrafts: async () => SUMMARIES,
+      getDraft: async () => FULL_DRAFT_1,
+      createDraft: async () => {
+        throw new Error("insightd unreachable");
+      },
+    };
+    renderInbox(insightd, () => {}, () => {});
+    await waitFor(() => expect(screen.getByTestId("inbox-upload")).toBeTruthy());
+
+    await act(async () => {
+      upload("bill.pdf", "application/pdf", [1]);
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("inbox-error").textContent).toContain(
+        "insightd unreachable",
+      ),
+    );
   });
 });

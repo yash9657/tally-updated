@@ -9,14 +9,22 @@ cored. There is NO route that POST/PUT/PATCH/DELETEs a cored /vouchers path.
 from __future__ import annotations
 
 import base64
+import datetime as _dt
 import json
+import uuid
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 
-from ..contracts.cored_map import Money
-from ..contracts.draft import DraftStatus, PurchaseVoucherDraft
+from ..adapters.ocr_paddle import real_ocr_enabled
+from ..contracts.cored_map import Money, VoucherDraftBody
+from ..contracts.draft import (
+    ConfidenceMap,
+    DraftStatus,
+    PurchaseVoucherDraft,
+    RedactionReportSummary,
+)
 from ..contracts.pipeline import NormalizedDoc, RawUpload, TenantContext
 from ..pipeline import Pipeline
 from .deps import get_draft_store, get_pipeline
@@ -94,6 +102,7 @@ def _summarize(draft: PurchaseVoucherDraft) -> DraftSummary:
 def create_draft(
     company_id: str,
     body: CreateDraftRequest,
+    background: BackgroundTasks,
     pipeline: Pipeline = Depends(get_pipeline),
     store: DraftStore = Depends(get_draft_store),
 ) -> PurchaseVoucherDraft:
@@ -126,9 +135,58 @@ def create_draft(
             source=body.source,  # type: ignore[arg-type]
         )
 
+    # ENQUEUE-AND-POLL when the recogniser is the slow, real one (WS10 §8.6
+    # item 5). The spike measured ~45 s for a 12 MP phone photo, which cannot
+    # sit inside an HTTP request: the client would time out, retry, and OCR the
+    # same bill twice.
+    #
+    # ONE RESPONSE SHAPE EITHER WAY. A placeholder draft is stored and returned
+    # immediately in status "processing" and the pipeline runs in the
+    # background; with the deterministic fakes the run finishes inside the
+    # request and the draft returned is already terminal. So a client always
+    # does the same thing — read the status, poll while it is "processing" — and
+    # never has to know which mode the server is in.
+    if real_ocr_enabled():
+        placeholder = _processing_placeholder(ctx, body.source, body.filename)
+        store.put(placeholder)
+        background.add_task(_run_and_store, pipeline, store, upload, ctx, normalized, placeholder.draft_id)
+        return placeholder
+
     draft = pipeline.run(upload, ctx, normalized=normalized)
     store.put(draft)
     return draft
+
+
+def _run_and_store(
+    pipeline: Pipeline,
+    store: DraftStore,
+    upload: RawUpload,
+    ctx,
+    normalized: NormalizedDoc | None,
+    draft_id: str,
+) -> None:
+    """Run the pipeline off-request and replace the placeholder.
+
+    A FAILURE MUST NOT LEAVE THE DRAFT STUCK IN "processing" — a spinner that
+    never resolves is the worst outcome for a human-in-the-loop queue, because
+    nobody can tell it apart from slow. The placeholder is replaced by a manual
+    draft carrying the reason instead.
+    """
+    try:
+        draft = pipeline.run(upload, ctx, normalized=normalized)
+        draft = draft.model_copy(update={"draft_id": draft_id})
+        store.put(draft)
+    except Exception as exc:  # noqa: BLE001 - the reason must reach the operator
+        failed = _processing_placeholder(ctx, upload.source, upload.filename)
+        store.put(
+            failed.model_copy(
+                update={
+                    "draft_id": draft_id,
+                    "status": "low_confidence_manual",
+                    "unresolved": [f"processing failed: {exc}"],
+                }
+            )
+        )
 
 
 @router.get(
@@ -159,6 +217,29 @@ def get_draft(
         # a non-existent one.
         raise HTTPException(status_code=404, detail="draft not found")
     return draft
+
+
+def _processing_placeholder(ctx, source: str, filename: str) -> PurchaseVoucherDraft:
+    """A draft that exists, is visibly NOT DONE, and cannot be mistaken for one.
+
+    Its body is empty and its status is "processing", so the Bill Inbox can list
+    it (an upload that vanished until OCR finished would look like a failure)
+    while nothing downstream can post it: the F9 accept path needs real ledger
+    ids and there are none.
+    """
+    return PurchaseVoucherDraft(
+        draft_id=str(uuid.uuid4()),
+        company_id=ctx.company_id,
+        created_at=_dt.datetime.now(_dt.timezone.utc).isoformat(),
+        source=source,  # type: ignore[arg-type]
+        status="processing",
+        body=VoucherDraftBody(voucher_class="purchase", postings=[]),
+        confidence=ConfidenceMap(
+            header={}, line_items=[], overall_header=0.0, overall_line_items=0.0, overall=0.0
+        ),
+        redaction=RedactionReportSummary(any_redacted=False, counts_by_type={}, total=0),
+        unresolved=[f"reading {filename or 'the uploaded document'}…"],
+    )
 
 
 def _normalized_from_fixture(

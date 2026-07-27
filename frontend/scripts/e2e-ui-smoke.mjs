@@ -506,6 +506,30 @@ try {
 } catch (e) { rec("Query answers in English", false, e.message); }
 
 try {
+  // UPLOAD A BILL — the OCR loop's front door, in a REAL browser with a REAL
+  // File. The unit test has to fill in jsdom's missing File.arrayBuffer(); this
+  // exercises the browser's own, which is the API the component actually uses.
+  // The fake recogniser runs inside the request, so the draft comes back
+  // terminal and the poll loop exits on its first read — the same code path a
+  // 45-second real-OCR read takes, just faster.
+  await navMenu("Bill Inbox");
+  await page.getByTestId("inbox-upload").setInputFiles({
+    name: "supplier-bill.pdf",
+    mimeType: "application/pdf",
+    buffer: Buffer.from("%PDF-1.4 a supplier bill"),
+  });
+  await page.waitForTimeout(2500);
+  const notice = await page.getByTestId("inbox-notice").innerText().catch(() => "");
+  const err = await page.getByTestId("inbox-error").innerText().catch(() => "");
+  await toGateway();
+  rec(
+    "Bill Inbox accepts a real FILE UPLOAD and reports the outcome",
+    /supplier-bill\.pdf/.test(notice) && err === "",
+    err ? `error: ${err}` : notice || "(no notice)",
+  );
+} catch (e) { rec("Bill Inbox file upload", false, e.message); }
+
+try {
   await navMenu("Bill Inbox");
   const headings = await page.getByRole("heading").allInnerTexts();
   rec("Bill Inbox opens", headings.some((h) => /Bill Inbox|Inbox/i.test(h)) || !(await atGateway()));

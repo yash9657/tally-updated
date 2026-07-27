@@ -70,6 +70,8 @@ export function BillInboxScreen({ onSelect }: ScreenComponentProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [fixtureText, setFixtureText] = useState("");
+  /** Progress/outcome of an upload, shown so a 45-second read is not silence. */
+  const [notice, setNotice] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -159,6 +161,64 @@ export function BillInboxScreen({ onSelect }: ScreenComponentProps) {
     }
   }, [fixtureText, insightd, companyID, refresh]);
 
+  /**
+   * UPLOAD A REAL BILL — the affordance this screen was missing. The "create"
+   * button pasted fixture JSON, which is a developer's tool, not a way to file a
+   * supplier invoice.
+   *
+   * ENQUEUE-AND-POLL, because real OCR takes up to ~45 s on a phone photo (the
+   * WS10 spike measured it). insightd returns a draft immediately — already
+   * terminal when the deterministic fakes are in use, in status "processing"
+   * when the real recogniser is — so this always does the same thing: create,
+   * then poll while the status says processing. A client that assumed one mode
+   * would break the moment the other was switched on.
+   */
+  const uploadBill = useCallback(
+    async (file: File) => {
+      setCreating(true);
+      setError(null);
+      setNotice(`Reading ${file.name}…`);
+      try {
+        const buf = await file.arrayBuffer();
+        // base64 in chunks: a 12 MP photo blows the argument limit of
+        // String.fromCharCode(...bytes) and throws RangeError.
+        const bytes = new Uint8Array(buf);
+        let binary = "";
+        for (let i = 0; i < bytes.length; i += 0x8000) {
+          binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+        }
+        const created = await insightd.createDraft(companyID, {
+          source: "upload",
+          filename: file.name,
+          content_type: file.type || "application/octet-stream",
+          content_b64: btoa(binary),
+          tenant: { company_id: companyID },
+        });
+
+        // Poll while the server is still reading it. Bounded: a spinner that
+        // never resolves is indistinguishable from a hang, so this gives up
+        // with a message the operator can act on.
+        let draft = created;
+        for (let i = 0; i < 60 && draft.status === "processing"; i++) {
+          await new Promise((r) => setTimeout(r, 1000));
+          draft = await insightd.getDraft(companyID, created.draft_id);
+        }
+        setNotice(
+          draft.status === "processing"
+            ? `${file.name} is still being read. It stays in the inbox — reopen this screen to check.`
+            : `${file.name} read. Select it below to review in F9.`,
+        );
+        await refresh();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        setNotice(null);
+      } finally {
+        setCreating(false);
+      }
+    },
+    [insightd, companyID, refresh],
+  );
+
   const rowLabels = useMemo(() => rows.map((r) => r.label), [rows]);
 
   return (
@@ -174,6 +234,38 @@ export function BillInboxScreen({ onSelect }: ScreenComponentProps) {
           {error}
         </p>
       ) : null}
+      {notice ? (
+        <p data-testid="inbox-notice" className="mb-2 text-sm text-tally-title">
+          {notice}
+        </p>
+      ) : null}
+
+      {/* UPLOAD A BILL. The real front door of the OCR loop: until now the only
+          way in was pasting fixture JSON, which is a developer's tool. */}
+      <div className="mb-4 max-w-xl bg-tally-panel p-3">
+        <h2 className="mb-1 text-sm text-tally-title">Upload a bill</h2>
+        <input
+          type="file"
+          aria-label="Upload a bill"
+          data-testid="inbox-upload"
+          accept="image/*,application/pdf"
+          disabled={creating}
+          className="text-sm"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            // Clear the input so the SAME file can be re-uploaded after a
+            // failure — a file picker fires no change event for an unchanged
+            // selection, which would look like the button had stopped working.
+            e.target.value = "";
+            if (file) void uploadBill(file);
+          }}
+        />
+        <p className="mt-1 text-xs">
+          A photo or PDF of a supplier invoice. Reading it can take up to a
+          minute; it appears in the list below when done, and you review it in
+          F9 before anything is posted.
+        </p>
+      </div>
 
       <div className="mb-4 max-w-xl bg-tally-panel p-3">
         {loading ? (
