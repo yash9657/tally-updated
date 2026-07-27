@@ -91,12 +91,21 @@ def validate_fixture(fx: dict) -> None:
     # GST reconciliation against the oracle
     lines = gt.get("line_items", [])
     if lines:
-        supplier_state = pos if not _is_inter(fx) else "27"
-        # the fixture encodes intra vs inter purely via pos vs supplier; use the
-        # inferred place_of_supply and a fixed supplier state of 27 (corpus
-        # convention: all suppliers in MH/27 unless pos differs).
+        # The fixture encodes intra vs inter purely via pos vs supplier: the
+        # corpus convention is that every supplier is in MH/27 unless the place
+        # of supply differs.
+        #
+        # EXCEPT when the supplier was never matched. Then its state is not
+        # known — the ledger that would carry it was not resolved, and the
+        # GSTIN that would encode it is masked before the LLM. Applying the
+        # convention there would hand the oracle a fact the mapper does not
+        # have, and the oracle would "independently" confirm a split nobody can
+        # derive. (It did exactly that: this check passed for as long as the
+        # mapper fell back to supplier_state = place_of_supply, i.e. assumed
+        # intra in order to derive intra.)
+        supplier_state = None if header.get("party_ledger_id") is None else "27"
         res = taxmod.tax_derive(
-            supplier_state_code="27",
+            supplier_state_code=supplier_state,
             place_of_supply_state_code=pos,
             reverse_charge=bool(header.get("reverse_charge", False)),
             lines=[taxmod.TaxLine(Decimal(l["taxable_value"]), Decimal(l["gst_rate_pct"])) for l in lines],

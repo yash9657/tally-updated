@@ -1,6 +1,6 @@
 {
   "id": "adv-missing-gstin",
-  "description": "No GSTIN present; supplier can't be matched -> manual",
+  "description": "No GSTIN present; supplier can't be matched -> manual. GROUND TRUTH CORRECTED: it previously expected cgst 90 / sgst 90 alongside party_ledger_id: null, which contradicts itself \u2014 an unmatched supplier has no known state, so an intra-state split cannot be ground truth. It recorded what a circular fallback produced (supplier_state = place_of_supply). With the state genuinely unknown the derivation reaches no intra conclusion, so the whole tax sits in IGST: the no-conclusion default, not a claim about this vendor.",
   "rulesetVersion": "gst-2024-09",
   "ocr_quality": "clean",
   "input": {
@@ -179,9 +179,13 @@
     ],
     "expected_status": "low_confidence_manual",
     "derived_gst": {
-      "cgst": "90.0000",
-      "sgst": "90.0000",
-      "igst": "0.0000"
-    }
+      "cgst": "0.0000",
+      "sgst": "0.0000",
+      "igst": "180.0000"
+    },
+    "expected_unresolved": [
+      "party",
+      "supplier"
+    ]
   }
 }

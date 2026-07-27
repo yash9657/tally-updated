@@ -107,13 +107,37 @@ class PureVoucherDraftMapper:
             unresolved.append("party")
 
         # --- place of supply & reverse charge -----------------------------
+        #
+        # THE SUPPLIER'S STATE COMES FROM THE MATCHED LEDGER OR FROM NOWHERE.
+        #
+        # This used to fall back to `supplier_state = place_of_supply`, with the
+        # comment "POS == supplier on intra" — which is circular: it ASSUMES an
+        # intra-state supply in order to derive one. The effect was that EVERY
+        # bill whose supplier could not be matched came out as CGST+SGST, an
+        # answer that looks derived and is a coin flip. For an out-of-state
+        # vendor it puts input tax in the wrong two ledgers and misstates GSTR-3B
+        # table 4.
+        #
+        # There is no honest fallback available here: the supplier's GSTIN — the
+        # one field whose first two digits ARE the state code — is masked before
+        # the LLM ever sees it (the PII boundary, working as designed), so
+        # `inferred.supplier_gstin_masked` cannot supply it either.
+        #
+        # So when the supplier is unmatched the state is None, `tax_derive`
+        # cannot conclude intra, and the draft says so via `unresolved`. The tax
+        # AMOUNT is unaffected either way (rate x taxable); what is unasserted is
+        # which ledgers it lands in, and that is now visible rather than implied.
         pos = inferred.place_of_supply_state_code
-        supplier_state = inferred.place_of_supply_state_code  # POS == supplier on intra
-        # supplier state from a matched ledger if available
+        supplier_state: str | None = None
         for led in ctx.ledgers:
             if led.id == party_ledger_id and led.state_code:
                 supplier_state = led.state_code
                 break
+        if supplier_state is None:
+            # Distinct from "party": the party is who to credit, the supplier
+            # state is what splits the tax. A human can resolve one without the
+            # other, so the draft names both.
+            unresolved.append("supplier")
         reverse_charge = inferred.reverse_charge
 
         # --- line items -> GST lines + postings ---------------------------

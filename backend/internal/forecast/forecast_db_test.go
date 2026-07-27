@@ -204,3 +204,120 @@ func TestAnomaliesLoader(t *testing.T) {
 		t.Fatalf("expected a BACKDATED finding for OLD-1; got %+v", findings)
 	}
 }
+
+// TestForecastDoesNotOverCountAlteredOrDeletedBills settles a documented — and,
+// it turns out, STALE — disclosure.
+//
+// `service.go` warned that the projection's amounts come from
+// reporting.Outstandings "which sums bill_allocation across ALL versions (no
+// voucher_head current-version join)", so a bill on an ALTERed voucher was
+// counted twice (old + new) and a DELETED one aged forever. That was true when
+// the forecast was written; the demo-remediation session then fixed
+// reporting.Outstandings itself (it now joins voucher_head on
+// current_version_id with is_deleted = false), which silently fixed the
+// forecast too — and the comment stayed.
+//
+// A stale comment claiming a defect that no longer exists is not harmless: it
+// sends the next engineer to fix working code, or makes them distrust correct
+// numbers. So rather than delete the warning on the strength of a grep, this
+// asserts the property directly — and it will FAIL if anyone reintroduces the
+// all-versions universe.
+func TestForecastDoesNotOverCountAlteredOrDeletedBills(t *testing.T) {
+	pool, ctx, companyID, ids := setup(t)
+	led := ledger.NewService(pool)
+
+	acme, err := ids.CreateLedger(ctx, "Acme Corp", "Sundry Debtors")
+	if err != nil {
+		t.Fatalf("create debtor: %v", err)
+	}
+	sales, err := ids.CreateLedger(ctx, "Domestic Sales", "Sales Accounts")
+	if err != nil {
+		t.Fatalf("create sales: %v", err)
+	}
+	salesVT, err := ids.VoucherTypeID(ctx, "Sales")
+	if err != nil {
+		t.Fatalf("sales vt: %v", err)
+	}
+
+	post := func(no, amount string) uuid.UUID {
+		res, err := led.PostVoucher(ctx, ledger.VoucherInput{
+			Class: ledger.Sales, VoucherTypeID: salesVT, PartyLedgerID: acme,
+			VoucherNo: no, VoucherDate: "2025-05-01", Party: "Acme Corp", CreatedBy: "tester",
+			Postings: []ledger.PostingInput{
+				{LedgerID: acme, DrCr: ledger.Debit, Amount: dec(amount)},
+				{LedgerID: sales, DrCr: ledger.Credit, Amount: dec(amount)},
+			},
+			BillAllocations: []ledger.BillAllocationInput{
+				{LedgerID: acme, RefName: no, RefType: ledger.RefNew,
+					DrCr: ledger.Debit, Amount: dec(amount), DueDate: "2025-05-10"},
+			},
+		})
+		if err != nil {
+			t.Fatalf("post %s: %v", no, err)
+		}
+		return res.VoucherID
+	}
+
+	inflow := func() decimal.Decimal {
+		p, err := forecast.NewService(pool).CashFlow(ctx, companyID, "2025-05-01", 90, "week")
+		if err != nil {
+			t.Fatalf("cashflow: %v", err)
+		}
+		total := p.Beyond.Inflow
+		for _, b := range p.Buckets {
+			total = total.Add(b.Inflow)
+		}
+		return total
+	}
+
+	// ALTERED: 1000 restated to 400. The projection must show 400, NOT 1400.
+	altered := post("INV-A", "1000")
+	if got := inflow(); !got.Equal(dec("1000")) {
+		t.Fatalf("after posting 1000 the projected inflow is %s, want 1000", got)
+	}
+	if _, err := led.AlterVoucher(ctx, altered, ledger.VoucherInput{
+		Class: ledger.Sales, VoucherTypeID: salesVT, PartyLedgerID: acme,
+		VoucherNo: "INV-A", VoucherDate: "2025-05-01", Party: "Acme Corp", CreatedBy: "tester",
+		Postings: []ledger.PostingInput{
+			{LedgerID: acme, DrCr: ledger.Debit, Amount: dec("400")},
+			{LedgerID: sales, DrCr: ledger.Credit, Amount: dec("400")},
+		},
+		BillAllocations: []ledger.BillAllocationInput{
+			{LedgerID: acme, RefName: "INV-A", RefType: ledger.RefNew,
+				DrCr: ledger.Debit, Amount: dec("400"), DueDate: "2025-05-10"},
+		},
+	}); err != nil {
+		t.Fatalf("alter: %v", err)
+	}
+	if got := inflow(); !got.Equal(dec("400")) {
+		t.Fatalf("after restating 1000 -> 400 the projected inflow is %s, want 400 "+
+			"(1400 means both versions were counted — the documented over-count)", got)
+	}
+
+	// DELETED: the bill leaves the projection entirely, rather than ageing forever.
+	deleted := post("INV-B", "250")
+	if got := inflow(); !got.Equal(dec("650")) {
+		t.Fatalf("after adding 250 the projected inflow is %s, want 650", got)
+	}
+	if _, err := led.DeleteVoucher(ctx, deleted, "tester"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if got := inflow(); !got.Equal(dec("400")) {
+		t.Fatalf("after DELETING the 250 bill the projected inflow is %s, want 400 "+
+			"(a deleted voucher must not go on ageing)", got)
+	}
+
+	// The invariance the forecast is built on still holds — the projection and
+	// the Outstandings report agree, now that both use current versions.
+	recv, err := reporting.NewService(pool).Outstandings(
+		ctx, companyID, reporting.Receivables, "2025-05-01", nil)
+	if err != nil {
+		t.Fatalf("outstandings: %v", err)
+	}
+	if !recv.Total.Equal(dec("400")) {
+		t.Fatalf("reporting receivables total = %s, want 400", recv.Total)
+	}
+	if !inflow().Equal(recv.Total) {
+		t.Fatalf("invariance broken: projected %s vs reporting %s", inflow(), recv.Total)
+	}
+}

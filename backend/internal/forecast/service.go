@@ -24,14 +24,22 @@ type Runner interface {
 // the Outstandings report uses — never re-implemented here) and issues its own
 // read-only supplementary queries for the date attributes and opening cash.
 //
-// SEMANTICS DISCLOSURE. The projection's amounts come from
-// reporting.Outstandings, which sums bill_allocation across ALL versions (no
-// voucher_head current-version join), so — like the bare Outstandings report — it
-// OVER-COUNTS bills on vouchers that were later ALTERed. The query-DSL
-// `outstandings` entity is the corrected version; a forecast that mirrored it
-// would diverge from the invariance oracle. v1 deliberately matches the report
-// (the invariance gate is a conservation check against it); the over-count on
-// edited invoices is a tracked follow-up, not a silent choice.
+// SEMANTICS. The projection's amounts come from reporting.Outstandings, and the
+// invariance gate is a conservation check against it: whatever that report
+// considers pending is what the projection distributes over buckets.
+//
+// This block used to disclose an OVER-COUNT — reporting.Outstandings summed
+// bill_allocation across ALL versions with no voucher_head current-version join,
+// so an ALTERed bill was projected at (old + new) and a DELETED one aged
+// forever. That was true when this file was written. The demo-remediation
+// session then fixed the report itself (it now joins voucher_head on
+// current_version_id with is_deleted = false), which fixed the projection with
+// it — and this comment went stale, still warning about a defect that no longer
+// existed.
+//
+// TestForecastDoesNotOverCountAlteredOrDeletedBills now asserts the property
+// directly instead of describing it, and reintroducing the all-versions universe
+// reproduces the old 1400-instead-of-400 exactly.
 type Service struct {
 	runner Runner
 	report *reporting.Service
@@ -124,9 +132,14 @@ func buildBills(o reporting.Outstanding, kind FlowKind, attrs map[billKey]dateAt
 }
 
 // loadDateAttrs reads, per (ledger_id, ref_name), the earliest NEW-allocation
-// voucher date and the party ledger's credit_days. It matches
-// reporting.Outstandings' universe (all versions, no current-version filter) so
-// every amount-bearing bill has a matching date row.
+// voucher date and the party ledger's credit_days.
+//
+// It deliberately scans ALL versions rather than only current ones. That is not
+// the over-count the header used to describe — it carries no AMOUNTS. It is a
+// DATE lookup, and a superset is the safe direction: every bill the (now
+// current-version-only) amount query returns is guaranteed a matching date row,
+// where a narrower scan could leave one dateless and silently fall through to
+// the +30 default.
 func loadDateAttrs(ctx context.Context, tx pgx.Tx) (map[billKey]dateAttr, error) {
 	rows, err := tx.Query(ctx,
 		`SELECT ba.ledger_id, ba.ref_name,
