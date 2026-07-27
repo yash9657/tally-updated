@@ -792,6 +792,73 @@ async function main(): Promise<void> {
     check(`the "${what}" probe level is cleaned up -> 200`, r.status === 200, brief(r));
   }
 
+  // -- INVITE DELIVERY (item C) ---------------------------------------------
+  // An invite used to be a database row that notified nobody. It now enqueues a
+  // notification in the SAME transaction that creates it, and a dispatcher
+  // delivers it. What is checked here is the pair of states an administrator
+  // must be able to tell apart: whether somebody was INVITED, and whether
+  // anybody TOLD them.
+  const notifySubject = `notify-probe-${process.pid}`;
+  r = await call("POST", `/v1/companies/${companyA}/members/invites`, ownerA, {
+    subject: notifySubject,
+    email: `${notifySubject}@example.test`,
+    security_level_name: "Data Entry",
+  });
+  check("invite a subject WITH an email -> 201", r.status === 201, brief(r));
+
+  const deliveryOf = async (subject: string): Promise<string> => {
+    const res = await call("GET", `/v1/companies/${companyA}/members`, ownerA);
+    if (res.status !== 200) return `(members ${res.status})`;
+    const invites = (JSON.parse(res.body) as {
+      invites: { subject: string; notification_status?: string }[];
+    }).invites;
+    return invites.find((i) => i.subject === subject)?.notification_status ?? "(absent)";
+  };
+
+  const queued = await deliveryOf(notifySubject);
+  check(
+    "the invite carries its OWN queued notification (enqueued in the same tx)",
+    queued === "pending" || queued === "sending" || queued === "sent",
+    `notification_status=${queued}`,
+  );
+
+  // cored's dispatcher runs on a 15s ticker; poll rather than sleep blindly so
+  // this check reports what actually happened instead of timing out silently.
+  let delivered = queued;
+  for (let i = 0; i < 20 && delivered !== "sent"; i++) {
+    await new Promise((res) => setTimeout(res, 1000));
+    delivered = await deliveryOf(notifySubject);
+  }
+  check(
+    "the background dispatcher DELIVERS it (status reaches `sent`)",
+    delivered === "sent",
+    `notification_status=${delivered} (the default Sender logs; real SMTP is config, not code)`,
+  );
+
+  // The two states are DISTINCT: notified is not accepted. The invitee has still
+  // never signed in, so the invite itself is pending — a product that conflated
+  // them would report this person as onboarded.
+  r = await call("GET", `/v1/companies/${companyA}/members`, ownerA);
+  const stillPending = r.status === 200 &&
+    (JSON.parse(r.body) as { invites: { subject: string; status: string }[] })
+      .invites.some((i) => i.subject === notifySubject && i.status === "pending");
+  check(
+    "…and being NOTIFIED is not being ACCEPTED — the invite is still pending",
+    stillPending,
+    `delivery=${delivered}, invite status=pending`,
+  );
+
+  // Clean up: revoke the probe invite so later runs start from the same place.
+  r = await call("GET", `/v1/companies/${companyA}/members`, ownerA);
+  const notifyInviteID = r.status === 200
+    ? (JSON.parse(r.body) as { invites: { id: string; subject: string }[] })
+        .invites.find((i) => i.subject === notifySubject)?.id ?? ""
+    : "";
+  if (notifyInviteID) {
+    r = await call("DELETE", `/v1/companies/${companyA}/members/invites/${notifyInviteID}`, ownerA);
+    check("the delivery probe's invite is cleaned up -> 200", r.status === 200, brief(r));
+  }
+
   // -- Revoking a PENDING invite --------------------------------------------
   const revokeSubject = `revoke-probe-${process.pid}`;
   r = await call("POST", `/v1/companies/${companyA}/members/invites`, ownerA, {

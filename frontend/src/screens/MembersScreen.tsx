@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ApiError } from "../api";
 import type {
+  InviteView,
   MembersResponse,
   SecurityLevelRule,
   SecurityLevelView,
@@ -74,6 +75,34 @@ function explain(err: unknown): string {
     return `${err.status}:${detail}`;
   }
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * How the invitation itself is getting to the person — which is NOT the same
+ * question as whether they have accepted it.
+ *
+ * Before the outbox, an invite was a database row that notified nobody and the
+ * flow assumed the administrator would message them out of band. Showing only
+ * "pending" would let a company believe it had onboarded somebody who never
+ * heard about it, so the delivery state is stated in its own words. "not sent"
+ * is deliberately louder than silence.
+ */
+function deliveryText(i: InviteView): string {
+  switch (i.notification_status) {
+    case "sent":
+      return "invitation sent";
+    case "sending":
+      return "invitation sending…";
+    case "pending":
+      return "invitation queued";
+    case "failed":
+      return `invitation NOT delivered after ${i.notification_attempts} attempt${
+        i.notification_attempts === 1 ? "" : "s"
+      }${i.notification_error ? ` (${i.notification_error})` : ""} — tell them yourself`;
+    default:
+      // No notification row at all: an invite created before delivery existed.
+      return "no invitation sent — tell them yourself";
+  }
 }
 
 function ruleText(l: SecurityLevelView): string {
@@ -441,7 +470,10 @@ export function MembersScreen(_props: ScreenComponentProps) {
               <ul data-testid="invites-list" className="text-sm">
                 {data.invites.map((i) => (
                   <li key={i.id}>
-                    {i.subject} · {i.security_level_name} · pending{" "}
+                    {i.subject} · {i.security_level_name} · pending ·{" "}
+                    <span data-testid={`invite-delivery:${i.subject}`}>
+                      {deliveryText(i)}
+                    </span>{" "}
                     {confirming === `invite-revoke:${i.id}` ? (
                       <>
                         <button

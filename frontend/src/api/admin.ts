@@ -60,6 +60,20 @@ export interface InviteView {
   security_level_name: string;
   status: string;
   created_at: string;
+  /**
+   * DELIVERY state of the invitation: "" when nothing was enqueued, else
+   * pending | sending | sent | failed.
+   *
+   * DELIBERATELY SEPARATE FROM `status`. That says whether the invitee has
+   * CLAIMED their access; this says whether anyone TOLD them. A company that
+   * conflated the two would believe it had onboarded somebody who never heard
+   * about it — which was the actual behaviour before the outbox existed, when
+   * an invite was a database row that notified nobody.
+   */
+  notification_status: string;
+  notification_attempts: number;
+  /** The transport's own words when delivery was abandoned. */
+  notification_error?: string;
 }
 
 export interface MembersResponse {

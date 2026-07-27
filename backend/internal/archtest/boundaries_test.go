@@ -35,7 +35,11 @@ var allowedDeps = map[string]map[string]bool{
 	// import authz back. That matters more than usual here — a cycle would make the
 	// whole auth stack uncompilable, and the tempting mistake (reusing
 	// authz.ErrNotFound inside authn) is exactly what this line forbids.
-	"internal/authz": {"internal/platform/db": true, "internal/authn": true},
+	// authz gained internal/notify with item C: an invite ENQUEUES its
+	// notification inside the same transaction that creates it, so the two
+	// cannot exist without each other. The edge is one-way — notify knows
+	// nothing about invites.
+	"internal/authz": {"internal/platform/db": true, "internal/authn": true, "internal/notify": true},
 	// webauthn (Task D WS2) is the WebAuthn ceremony + credential store over the
 	// db layer; stdlib crypto only, no other siblings.
 	"internal/webauthn": {"internal/platform/db": true},
@@ -65,6 +69,12 @@ var allowedDeps = map[string]map[string]bool{
 	// is ONE-WAY by design: query must stay a network-free pure leaf, so query
 	// never imports nlq (TestQueryPackageIsNetworkFree pins that).
 	"internal/nlq": {"internal/query": true},
+	// notify (item C) is the transactional OUTBOX for outbound notifications.
+	// It touches the db layer and nothing else — deliberately: a notifier that
+	// could reach into the ledger or the authz store would be a way for a
+	// delivery concern to acquire domain authority. Callers hand it a rendered
+	// Message; it never looks anything up for itself.
+	"internal/notify": {"internal/platform/db": true},
 	// sync is the OFFLINE cloud-sequencer (Task C WS1): it commits offline node
 	// outbox intents through the ledger, assigning final numbers + resolving
 	// conflicts + reusing the freeze rule. It may import the ledger (the post/
@@ -99,6 +109,7 @@ var allowedDeps = map[string]map[string]bool{
 		"internal/forecast":        true,
 		"internal/query":           true,
 		"internal/nlq":             true,
+		"internal/notify":          true,
 		"internal/identity":        true,
 		"internal/compliance":      true,
 		"internal/compliance/gstr": true,

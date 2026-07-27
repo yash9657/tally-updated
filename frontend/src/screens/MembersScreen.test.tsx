@@ -3,7 +3,12 @@ import { render, screen, cleanup, waitFor, fireEvent } from "@testing-library/re
 import { MembersScreen } from "./MembersScreen";
 import { CompanyProvider } from "../app/CompanyContext";
 import { createMockClient, ApiError } from "../api";
-import type { CoredClient, SecurityLevelView, SecurityVocabulary } from "../api";
+import type {
+  CoredClient,
+  InviteView,
+  SecurityLevelView,
+  SecurityVocabulary,
+} from "../api";
 
 afterEach(cleanup);
 
@@ -219,7 +224,7 @@ function stubClient(over: Partial<CoredClient> = {}) {
     member("second-owner", OWNER_LEVEL),
     member("clerk", ENTRY_LEVEL),
   ];
-  const invites = [
+  const invites: InviteView[] = [
     {
       id: "inv-1",
       subject: "not-yet-signed-in",
@@ -229,6 +234,8 @@ function stubClient(over: Partial<CoredClient> = {}) {
       security_level_name: ENTRY_LEVEL.name,
       status: "pending",
       created_at: "2026-07-02T00:00:00Z",
+      notification_status: "sent",
+      notification_attempts: 1,
     },
   ];
   return {
@@ -515,5 +522,89 @@ describe("MembersScreen — the security level editor", () => {
     await waitFor(() => expect(screen.getByTestId("vocab-unavailable")).toBeTruthy());
     expect(screen.getByTestId("levels-list").textContent).toContain("Data Entry");
     expect((screen.getByTestId("level-new") as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+/**
+ * "Invited" and "NOTIFIED" are different questions (item C).
+ *
+ * Before the outbox an invite was a database row that told nobody, and the flow
+ * assumed the administrator would message them out of band. A screen that showed
+ * only "pending" would let a company believe it had onboarded somebody who never
+ * heard about it — so the delivery state gets its own words, and the states that
+ * need action are LOUDER than the ones that do not.
+ */
+describe("MembersScreen — invitation delivery", () => {
+  const withInvite = (over: Partial<InviteView>): CoredClient => {
+    const base = stubClient();
+    return {
+      ...base,
+      listMembers: async () => ({
+        members: [member("browser-dev-owner", OWNER_LEVEL, true)],
+        invites: [
+          {
+            id: "inv-1",
+            subject: "someone",
+            email: "someone@firm.test",
+            display_name: "",
+            security_level_id: ENTRY_LEVEL.id,
+            security_level_name: ENTRY_LEVEL.name,
+            status: "pending",
+            created_at: "2026-07-02T00:00:00Z",
+            notification_status: "pending",
+            notification_attempts: 0,
+            ...over,
+          },
+        ],
+      }),
+    };
+  };
+
+  it("says the invitation was SENT", async () => {
+    renderMembers(withInvite({ notification_status: "sent", notification_attempts: 1 }));
+    await waitFor(() =>
+      expect(screen.getByTestId("invite-delivery:someone").textContent).toContain(
+        "invitation sent",
+      ),
+    );
+  });
+
+  it("says it is still QUEUED", async () => {
+    renderMembers(withInvite({ notification_status: "pending" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("invite-delivery:someone").textContent).toContain(
+        "invitation queued",
+      ),
+    );
+  });
+
+  it("is LOUD when delivery was abandoned, and says to tell them yourself", async () => {
+    renderMembers(
+      withInvite({
+        notification_status: "failed",
+        notification_attempts: 5,
+        notification_error: "smtp: connection refused",
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("invite-delivery:someone").textContent).toContain(
+        "NOT delivered",
+      ),
+    );
+    const text = screen.getByTestId("invite-delivery:someone").textContent ?? "";
+    expect(text).toContain("5 attempts");
+    // The transport's own words, so an operator can act on it.
+    expect(text).toContain("smtp: connection refused");
+    expect(text).toContain("tell them yourself");
+  });
+
+  it("an invite with NO notification row says so rather than staying silent", async () => {
+    // Invites created before delivery existed. Silence would read as "sent".
+    renderMembers(withInvite({ notification_status: "" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("invite-delivery:someone").textContent).toContain(
+        "no invitation sent",
+      ),
+    );
   });
 });

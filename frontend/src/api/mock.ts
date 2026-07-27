@@ -1324,6 +1324,11 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         security_level_name: level.name,
         status: "pending",
         created_at: "2026-07-26T00:00:00Z",
+        // The mock has no dispatcher, so an invite it creates is enqueued and
+        // never delivered — which is the honest in-memory analogue and keeps a
+        // screen test from asserting a delivery nothing performed.
+        notification_status: "pending",
+        notification_attempts: 0,
       };
       invite.security_level_id = level.id;
       invite.security_level_name = level.name;

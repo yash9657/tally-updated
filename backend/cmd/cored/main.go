@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -89,6 +90,14 @@ func runServe(ctx context.Context) error {
 		return err
 	}
 	defer srv.Close()
+
+	// Drain the notification outbox in the background (item C). Invites are
+	// enqueued transactionally by the admin API; this is what actually delivers
+	// them. Errors are logged inside Run, never fatal — a broken transport must
+	// not take the server down.
+	notifyCtx, stopNotify := context.WithCancel(ctx)
+	defer stopNotify()
+	go srv.RunNotifications(notifyCtx, 15*time.Second)
 
 	addr := ":" + port
 	log.Printf("cored serving on %s", addr)

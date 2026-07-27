@@ -107,6 +107,14 @@ type inviteJSON struct {
 	LevelName   string `json:"security_level_name"`
 	Status      string `json:"status"`
 	CreatedAt   string `json:"created_at"`
+	// DELIVERY state (item C): "" when nothing was enqueued, else
+	// pending | sent | failed. Deliberately separate from Status: that says
+	// whether they have CLAIMED access, this says whether anyone TOLD them.
+	// A company that conflated the two would think it had onboarded somebody
+	// who never heard about it.
+	Notification    string `json:"notification_status"`
+	NotifyAttempts  int    `json:"notification_attempts"`
+	NotifyLastError string `json:"notification_error,omitempty"`
 }
 
 type membersResp struct {
@@ -262,6 +270,8 @@ func (s *Server) handleListMembers(w http.ResponseWriter, r *http.Request) {
 			ID: iv.ID.String(), Subject: iv.Subject, Email: iv.Email,
 			DisplayName: iv.DisplayName, LevelID: iv.LevelID.String(),
 			LevelName: iv.LevelName, Status: iv.Status, CreatedAt: iso(iv.CreatedAt),
+			Notification: iv.Notification, NotifyAttempts: iv.NotifyAttempts,
+			NotifyLastError: iv.NotifyLastError,
 		})
 	}
 	writeJSON(w, http.StatusOK, resp)

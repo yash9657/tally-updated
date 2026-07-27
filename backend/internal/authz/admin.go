@@ -31,6 +31,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/khata/cored/internal/notify"
 	"github.com/khata/cored/internal/platform/db"
 )
 
@@ -72,6 +73,16 @@ type Invite struct {
 	Status      string
 	CreatedAt   time.Time
 	AcceptedAt  *time.Time
+	// Notification is the DELIVERY state of the invite (item C): "" when nothing
+	// was ever enqueued, else pending | sent | failed.
+	//
+	// Deliberately distinct from Status above. Status says whether the invitee
+	// has claimed their access; Notification says whether anyone told them.
+	// Collapsing the two would let a company believe it had onboarded somebody
+	// who never heard about it.
+	Notification    string
+	NotifyAttempts  int
+	NotifyLastError string
 }
 
 // RuleRow is an acl_rule with its id (Rule alone is what the PDP evaluates).
@@ -307,7 +318,7 @@ func (s *Store) CreateInvite(ctx context.Context, companyID uuid.UUID, in Invite
 			}
 			return err
 		}
-		return tx.QueryRow(ctx,
+		if err := tx.QueryRow(ctx,
 			`INSERT INTO company_invite
 			     (id, company_id, subject, email, display_name,
 			      security_level_id, security_level_name, invited_by)
@@ -319,7 +330,34 @@ func (s *Store) CreateInvite(ctx context.Context, companyID uuid.UUID, in Invite
 			               display_name        = EXCLUDED.display_name
 			 RETURNING id`,
 			id, companyID, in.Subject, in.Email, in.DisplayName,
-			in.LevelID, levelName, invitedBy).Scan(&id)
+			in.LevelID, levelName, invitedBy).Scan(&id); err != nil {
+			return err
+		}
+
+		// NOTIFY THE INVITEE — enqueued in THIS transaction, on purpose.
+		//
+		// Before item C an invite was a database row that told nobody: the flow
+		// assumed the administrator would message the person out of band. Sending
+		// from the handler instead would couple this write to a network call, and
+		// both orderings are wrong — send-then-fail-to-commit tells somebody
+		// about access they were not granted, commit-then-fail-to-send grants
+		// access nobody is told about. Enqueuing here means an invite and its
+		// notification are created or rolled back together; a dispatcher delivers
+		// afterwards. Re-inviting a pending subject upserts the invite above and
+		// enqueues a FRESH notification, which is what re-inviting means.
+		var companyName string
+		if err := tx.QueryRow(ctx,
+			`SELECT name FROM company WHERE id = $1`, companyID).Scan(&companyName); err != nil {
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return err
+			}
+			companyName = "this company"
+		}
+		msg := notify.InviteMessage(companyName, in.Subject, in.Email, levelName)
+		msg.CompanyID = companyID
+		msg.RefID = id
+		_, err := notify.Enqueue(ctx, tx, msg)
+		return err
 	})
 	if err != nil {
 		return uuid.Nil, wrapAdmin("create invite", err)
@@ -332,12 +370,24 @@ func (s *Store) ListInvites(ctx context.Context, companyID uuid.UUID, onlyPendin
 	ctx = db.WithCompany(ctx, companyID)
 	out := []Invite{}
 	err := s.pool.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		// LEFT JOIN the newest notification per invite so the caller can tell
+		// "invited" from "notified" (item C). LEFT, not INNER: an invite created
+		// before the outbox existed has no row and must still be listed.
 		rows, err := tx.Query(ctx,
-			`SELECT id, company_id, subject, email, display_name,
-			        security_level_id, security_level_name, status, created_at, accepted_at
-			   FROM company_invite
-			  WHERE company_id = $1 AND ($2 = false OR status = 'pending')
-			  ORDER BY created_at DESC`, companyID, onlyPending)
+			`SELECT i.id, i.company_id, i.subject, i.email, i.display_name,
+			        i.security_level_id, i.security_level_name, i.status,
+			        i.created_at, i.accepted_at,
+			        COALESCE(n.status, ''), COALESCE(n.attempts, 0), COALESCE(n.last_error, '')
+			   FROM company_invite i
+			   LEFT JOIN LATERAL (
+			         SELECT status, attempts, last_error
+			           FROM notification_outbox o
+			          WHERE o.company_id = i.company_id AND o.ref_id = i.id
+			          ORDER BY o.created_at DESC
+			          LIMIT 1
+			   ) n ON true
+			  WHERE i.company_id = $1 AND ($2 = false OR i.status = 'pending')
+			  ORDER BY i.created_at DESC`, companyID, onlyPending)
 		if err != nil {
 			return err
 		}
@@ -346,7 +396,8 @@ func (s *Store) ListInvites(ctx context.Context, companyID uuid.UUID, onlyPendin
 			var iv Invite
 			var levelID *uuid.UUID // NULL once a historic invite's level is deleted
 			if err := rows.Scan(&iv.ID, &iv.CompanyID, &iv.Subject, &iv.Email, &iv.DisplayName,
-				&levelID, &iv.LevelName, &iv.Status, &iv.CreatedAt, &iv.AcceptedAt); err != nil {
+				&levelID, &iv.LevelName, &iv.Status, &iv.CreatedAt, &iv.AcceptedAt,
+				&iv.Notification, &iv.NotifyAttempts, &iv.NotifyLastError); err != nil {
 				return err
 			}
 			if levelID != nil {

@@ -4,14 +4,14 @@
 This one explains *who is allowed to do what, and why* — the SaaS layer.
 
 Every status code below was observed on the running stack. The whole document is
-gated by `pnpm verify:tenancy`, which exercises **108 paths** and fails if any
+gated by `pnpm verify:tenancy`, which exercises **113 paths** and fails if any
 branch changes behaviour.
 
 ```bash
 cd frontend
 pnpm seed:demo -- --insightd        # company A (Demo Traders) — prints its id
 pnpm seed:tenancy <A>               # adds a 2nd user to A, builds company B
-pnpm verify:tenancy <A> <B>         # 108 access-control checks
+pnpm verify:tenancy <A> <B>         # 113 access-control checks
 ```
 
 The verifier is **self-cleaning**: it must write in order to test write
@@ -404,7 +404,7 @@ Honest list. The engine is multi-tenant; the *product* around it is not yet.
 | ~~No company switching in the UI~~ | **DONE** — `F3` opens the list of companies the signed-in user may open (from `GET /v1/me`), with the level held in each, and re-scopes the session. See §9. |
 | ~~UI is single-identity~~ | **DONE** — the hardcoded `browser-dev-owner` mint is deleted. The browser signs in as whoever types their user name and password, holds the token in `sessionStorage` (per-tab, so a closed tab is a logged-out tab), shows who is signed in, and offers Sign Out. Every allow/disallow path in this document is now reachable *as the right person*. |
 | ~~Admin screens are read-mostly~~ | **DONE** — Gateway > **Users & Roles** now performs every write the API offers: invite, change a member's level, revoke access, revoke a pending invite, and create / edit / delete a custom security level. The rule editor's tokens are SERVED by the PDP (`GET .../security-levels/vocabulary`) rather than hardcoded, so a rule the PDP could never match is unrepresentable. See §9. |
-| **No email delivery** | An invite is a database row. Nothing notifies the invitee — the flow assumes the administrator tells them out of band. |
+| ~~No email delivery~~ | **DONE** — a transactional outbox (migration 0023): the notification is enqueued in the SAME transaction as the invite and delivered by a dispatcher, with retry and dead-lettering. Users & Roles reports delivery separately from acceptance. The default Sender LOGS — real SMTP is configuration, not code — so nothing yet claims a message left the building. |
 | **Not deployed** | `infra/` holds k8s + terraform for EKS `ap-south-1`; none of it has been applied. |
 
 Suggested ordering from here: invite delivery (an outbox table plus a
@@ -578,7 +578,7 @@ PDP — not the admin API reading its own write — as the oracle.
 cd frontend
 pnpm seed:demo -- --insightd     # -> company A
 pnpm seed:tenancy <A>            # -> company B + the Data Entry user
-pnpm verify:tenancy <A> <B>      # 108 checks; exits non-zero on any drift
+pnpm verify:tenancy <A> <B>      # 113 checks; exits non-zero on any drift
 pnpm verify:demo <A>             # 24 accounting checks; unaffected by the above
 ```
 

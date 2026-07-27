@@ -43,6 +43,7 @@ import (
 	"github.com/khata/cored/internal/masters"
 	"github.com/khata/cored/internal/migration"
 	"github.com/khata/cored/internal/nlq"
+	"github.com/khata/cored/internal/notify"
 	"github.com/khata/cored/internal/platform/db"
 	"github.com/khata/cored/internal/query"
 	"github.com/khata/cored/internal/reporting"
@@ -104,6 +105,12 @@ type Server struct {
 	// authenticated subject, while credentials is what decides whether a caller is
 	// that subject at all. Same concrete *authz.Store underneath.
 	credentials credentialStore
+
+	// notifier delivers the transactional outbox (item C). An invite ENQUEUES
+	// its notification in the same transaction that creates it; this drains the
+	// queue afterwards. Exposed so tests and an operator can drain on demand
+	// rather than waiting on a ticker.
+	notifier *notify.Dispatcher
 }
 
 // authSeeder seeds the Owner security level + membership for a freshly created
@@ -184,9 +191,39 @@ func New(ctx context.Context, appDSN string) (*Server, error) {
 		webauthnRPID:  rpID,
 		challenges:    newPGChallengeStore(pool.Raw()),
 		lockout:       locker,
+
+		// Invite delivery (item C). The default Sender LOGS: real SMTP is
+		// configuration, not code, and a logger is the honest statement that this
+		// deployment does not send mail. Nothing here claims a message arrived.
+		notifier: notify.NewDispatcher(pool, notify.LogSender{}),
 	}
 	s.routes()
 	return s, nil
+}
+
+// DispatchNotifications drains the notification outbox once and reports how many
+// messages were sent.
+//
+// Exported because a test that had to wait on a background ticker would be slow
+// and flaky, and because an operator wants a way to flush the queue on demand
+// rather than wondering whether the loop is alive.
+func (s *Server) DispatchNotifications(ctx context.Context) (int, error) {
+	return s.notifier.DispatchOnce(ctx)
+}
+
+// WithNotificationSender returns a dispatcher over the SAME outbox but with a
+// different transport. It exists so a test can prove what happens when delivery
+// fails — retry, then dead-letter — without waiting on a real transport to
+// misbehave, and without a production code path that can be pointed at a
+// pretend sender.
+func (s *Server) WithNotificationSender(sender notify.Sender) *notify.Dispatcher {
+	return notify.NewDispatcher(s.pool, sender)
+}
+
+// RunNotifications delivers the outbox on a ticker until ctx is cancelled.
+// Started by `cored serve`; never by tests, which drain deterministically.
+func (s *Server) RunNotifications(ctx context.Context, every time.Duration) {
+	s.notifier.Run(ctx, every)
 }
 
 // envOr returns the value of the named env var, or def when it is unset/empty.
