@@ -1,353 +1,445 @@
-# NEXT SESSION — inventory depth landed; verify it, then continue
+# NEXT SESSION — test-data hygiene, then closing stock, GSTR-2A/2B + IMS, and payroll
 
-> ## ⚠️ READ THIS FIRST
+> ## ⚠️ READ THIS BEFORE YOU TOUCH ANYTHING
 >
-> The 2026-07-27 session added **inventory** — the largest feature since the OCR
-> pipeline. Four commits (`6e42a5a`, `324b45b`, `eacf62e`, `bc84519`) plus the
-> wave-4 slices in the commit that carries this file. Migrations **0025–0031**.
+> **This is accounting software. Real companies will file real returns from its
+> output and pay real people from its payroll.** A wrong number here is not a bug
+> report, it is somebody's tax notice or somebody's short salary. Every wave in
+> §5 therefore ends with a **mandatory adversarial review pass** (§4.3) that has
+> the authority to send work back. Do not skip it because the suite is green — on
+> 2026-07-27 an adversarial pass over eleven "done" commits found **seven** of
+> nine claims wrong, almost always because a test could not fail.
 >
-> **Your first job is not to build.** It is §2 — confirm the baseline — and §2.4,
-> the structural spot-checks that do not depend on any test being honest. Then
-> pick up §4.
+> **Work in parallel wherever the work is genuinely independent.** Use dynamic
+> workflows (§4.1). The three feature tracks in §5 touch disjoint packages by
+> design and can run concurrently. What must NOT be parallelised is listed in
+> §4.2 — get that wrong and you will spend an hour chasing a phantom regression,
+> as this project has done twice.
 >
-> Two things this session had to correct in its own record are in §1.2. **A doc
-> that hides its own errata teaches nothing**, and one of the two ("migrations are
-> not atomic") would have made the next person design around a hazard that does
-> not exist.
+> **Do §5 Track 0 first.** It is small, it unblocks everything else, and until it
+> is done your gates will keep going flaky for reasons that have nothing to do
+> with your code.
 
 ---
 
 ## 1. Where things stand
 
-Branch `master`. `HANDOFF.md` remains the authoritative project runbook —
-architecture, ADRs, the honest-gaps list (**§6, which now opens with a long
-INVENTORY block**), the worklist (§10). This file is the verify-then-continue
-wrapper for one handover.
+Branch `master`, tree clean, HEAD **`aea1936`**. Migrations run to **0031**.
 
-### 1.1 What inventory actually is
+`HANDOFF.md` is the authoritative project runbook — architecture, ADRs, the
+honest-gaps list (§6), the worklist (§10). This file is the
+verify-then-continue wrapper for one handover.
 
-- **Stock value is NEVER stored.** Quantity is posted; value is **derived at
-  report time by replaying the movement ledger** through a pure valuer
-  (`internal/inventory`). Valuation is order-dependent — a back-dated inward
-  re-values every later outward — so a materialised value is wrong the moment a
-  voucher is back-dated or altered. Deriving means ALTER/DELETE correctness comes
-  free from the existing current-version join, with zero reversal code.
-- **Everything rests on ONE non-test `INSERT INTO stock_movement`**
-  (`backend/internal/ledger/stock.go`, inside `ledger.post()`'s transaction). If
-  a future change adds a second write path, every guard in the feature becomes
-  advisory. Check that first (§2.4).
-- An **Item Invoice** derives its GST lines and party leg from its stock lines
-  (0027 ties `SUM(movement.amount) = SUM(gst_line.taxable_value)` by a deferred
-  trigger). **Delivery/Receipt Note, Stock Journal, Physical Stock** move goods
-  and post zero accounting lines; whether a class is an accounting class is a
-  **compile-time closed set in Go**, never a DB flag. **Price lists** are
-  deterministic by an exclusion constraint, and now price a line that omits its
-  rate — inside the posting transaction, before the taxable value is computed.
+### 1.1 What landed last session
 
-### 1.2 Two corrections to the committed record
+Phase-3 **inventory depth**, in five commits plus a test fix:
 
-1. **MIGRATIONS *ARE* ATOMIC.** `eacf62e`'s message and 0028's header claimed
-   `cored migrate` does not wrap a migration in a transaction. It does:
-   `backend/migrations/migrations.go` **`applyOne()` (line 103)** begins a tx,
-   execs the body, inserts the `schema_migrations` row, commits. The unstamped
-   partial rows that prompted the claim came from applying a file **by hand with
-   `psql -f`** during development, which has no such envelope. Keep writing
-   migrations re-runnable (the by-hand path is real); do not design around a
-   partial `cored migrate`.
-2. **`acl_rule` genuinely had no index beyond its primary key** — that part
-   stands, and is now **measured** rather than asserted.
-   `internal/authz/store.go`'s `Rules()` probes it by `security_level_id` on
-   **every authenticated request**. `EXPLAIN (ANALYZE, BUFFERS)` on that probe:
-   **3 buffer hits with `acl_rule_level`; a parallel Gather over two workers
-   without it.** What was wrong in `eacf62e` was the supporting arithmetic — the
-   "13% in 1h57m" figure divided 5,106 (the number of Data Entry *levels*) by
-   38,748 companies, most of which have no Data Entry level. The backfill had
-   completed. The index and 0028's set-based backfill are both still right.
+| Commit | What |
+|---|---|
+| `6e42a5a` | Foundation: `stock_movement` as an immutable versioned child of `voucher_version`; the pure `internal/inventory` valuation leaf; Stock Summary |
+| `324b45b` | Item Invoice — stock lines DERIVE the accounting and GST lines; report depth; frontend item grid |
+| `eacf62e` | Mounted four stock reports; **added the `acl_rule` indexes that had never existed** |
+| `bc84519` | Non-accounting stock vouchers (delivery/receipt note, stock journal, physical stock); price lists |
+| `8eafafa` | Stock voucher SCREENS; price lists applied in the voucher path; one closing-position query |
+| `aea1936` | e2e stability: wait for the company picker instead of sleeping for it |
+
+**The one architectural decision that constrains everything after it: STOCK VALUE
+IS NEVER STORED.** Quantity is posted; value is derived at report time by
+replaying the movement ledger through a pure valuer. Valuation is
+order-dependent — a back-dated inward re-values every later outward — so a
+materialised value is wrong the moment a voucher is back-dated or altered.
+
+**Everything rests on ONE non-test `INSERT INTO stock_movement`**
+(`internal/ledger/stock.go`, inside `ledger.post()`'s transaction). If a change
+adds a second write path, every guard in the feature becomes advisory. §3.2
+check 1 verifies this; run it before you trust anything else.
+
+### 1.2 Already done — do not redo
+
+The previous handoff listed these as next; they shipped in `8eafafa`:
+
+- The optional `rate` on the HTTP voucher path **is wired** (`inventoryLineReq.Rate`
+  is a `*string`, so absent ≠ `"0"`). Price lists ARE reachable from HTTP.
+- The triplicated closing-position query **is hoisted** to `closingPosition()` in
+  `internal/ledger/stock.go`. Two spellings remain overall — that Go function and
+  migration 0025's trigger, which is the authority — and a test pins them.
 
 ---
 
-## 2. CONFIRM THE BASELINE
+## 2. What this session is for
 
-### 2.1 Prerequisites
+Four tracks, in this order. **Track 0 first and alone; then 1, 2 and 3 may run
+concurrently** — they touch disjoint packages.
+
+| Track | Work | Primary package |
+|---|---|---|
+| **0** | Test-data hygiene + harness cleanup | `internal/*_test.go`, seed scripts |
+| **1** | **Closing stock on the Balance Sheet and P&L** | `internal/reporting` |
+| **2** | **GSTR-2A/2B + IMS reconciliation** | `internal/compliance/gstr` (new files) |
+| **3** | **Payroll — Form 24Q, PF ECR, ESI** | `internal/payroll` (new package) |
+
+Full specs in §5.
+
+---
+
+## 3. CONFIRM THE BASELINE (before building anything)
+
+### 3.1 Prerequisites and the gate matrix
 
 Postgres `tally_pg` on **:5433** · cored **:8087** · insightd **:8088** ·
 statutoryd **:8091** · vite **:5173**.
 
 ```bash
+# tally_pg does NOT auto-start after an OrbStack restart:
+docker start tally_pg
+
 # Rebuild cored from the CURRENT tree — a stale binary silently 404s new routes.
 cd backend && go build -o /tmp/cored ./cmd/cored && go run ./cmd/cored migrate
 AUTH_DEV_TOKEN_ENABLED=true PORT=8087 \
   APP_DSN="postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable" /tmp/cored serve &
 
-# insightd MUST carry the DSN or verify:demo drops a check (see §5).
+# insightd MUST carry the DSN or verify:demo drops a check.
 cd insightd && . .venv/bin/activate && \
   INSIGHTD_PII_BOUNDARY_STRICT=1 \
   INSIGHTD_DATABASE_URL="postgres://tally_app:tally_app@localhost:5433/tally" \
   python -m uvicorn insightd.api.app:app --port 8088 &
 ```
 
-### 2.2 The hermetic matrix — expected numbers, and where each came from
+| Gate | Expected at `aea1936` |
+|---|---|
+| `cd backend && go build ./... && go vet ./... && go test ./... -count=1` | exit 0, **25 packages** (19 ok + 6 no-test) |
+| `cd frontend && pnpm exec tsc --noEmit` | clean (covers `scripts/` too) |
+| `cd frontend && pnpm exec vitest run` | **370 tests / 33 files** |
+| `cd frontend && pnpm run build` | ok |
+| `cd insightd && python -m pytest` | **106 passed, 0 skipped** |
+| `python -m insightd.benchmark.validate` / `.report` | 28 fixtures / ALL FLOORS PASSED |
+| `python3 corpora/validate.py` | tax=14 tds=13 tcs=5 keystroke=32 isolation=13 migration=6 forecast=4 inventory=6 |
 
-| Gate | Expected | Provenance |
-|---|---|---|
-| `cd backend && go build ./... && go vet ./...` | exit 0 | build re-run 2026-07-27, clean |
-| `go test ./... -count=1` | **25 packages**, exit 0 | `go list ./...` = 25 (measured); exit-0 from **`bc84519`'s gate block** — the doc session was not permitted to run `./internal/server` unscoped |
-| `cd frontend && pnpm exec tsc --noEmit` | clean — and it **does** cover `frontend/scripts/` | `bc84519`; the `include` list was re-read 2026-07-27 and is now `["src","scripts","vite.config.ts","vitest.config.ts"]`, so `HANDOFF.md` §10.3's "scripts is NOT covered" note is **stale** |
-| `cd frontend && pnpm exec vitest run` | **370 tests / 33 files** | **measured 2026-07-27** with wave 4 in the tree (`bc84519` committed 348/32) |
-| `cd frontend && pnpm run build` | ok | `bc84519` |
-| `cd insightd && python -m pytest` | **106 passed** | **measured 2026-07-27** |
-| `python -m insightd.benchmark.validate` | 28 fixtures valid | `bc84519` |
-| `python -m insightd.benchmark.report` | ALL FLOORS PASSED | `bc84519` |
-| `python3 corpora/validate.py` | `tax=14 tds=13 tcs=5 keystroke=32 isolation=13 migration=6 forecast=4 inventory=6` | **measured 2026-07-27** (`keystroke` 28 → 32: the four `Alt+F7..F10` fixtures are wave 4) |
+Live: `verify:demo` **24/24** · `verify:tenancy` **113/113** · `e2e:ui` **38/38
+twice** · `e2e:edit`/`e2e:numbering`/`e2e:state-code`/`e2e:ocr` OK · statutory
+freeze OK including the durable-restart phase.
 
-Migrations run to **0031** (`ls backend/migrations`, measured).
+> **If `insightd` reports skips instead of 106 passed, the database is down** —
+> `test_pg_store` skips with "postgres unreachable". That is the environment, not
+> your code.
 
-### 2.3 The live sweep
-
-**These three are the ones most likely to have moved with wave 4** (new voucher
-screens, new keymap bindings, new client methods) and are exactly the ones the
-doc session was not permitted to run. Numbers below are from `bc84519`'s gate
-block — **treat them as the previous reading, not as a guarantee.**
+### 3.2 Structural spot-checks — these do not depend on any test being honest
 
 ```bash
-cd frontend
-CORED_BASE_URL=http://localhost:8087 pnpm verify:demo <companyA>          # 24/24
-CORED_BASE_URL=http://localhost:8087 pnpm verify:tenancy <A> <B>          # 113/113
-CORED_BASE_URL=http://localhost:8087 pnpm e2e:ui                          # 38/38 — RUN TWICE
-CORED_BASE_URL=http://localhost:8087 pnpm e2e:edit
-CORED_BASE_URL=http://localhost:8087 pnpm e2e:numbering
-CORED_BASE_URL=http://localhost:8087 pnpm e2e:state-code
-CORED_BASE_URL=http://localhost:8087 INSIGHTD_BASE_URL=http://localhost:8088 pnpm e2e:ocr
-# statutoryd on its narrow role, including the durable-restart phase:
-cd ../backend && go build -o /tmp/statutoryd ./cmd/statutoryd
-SVC=$(curl -s -XPOST localhost:8087/auth/token -H 'Content-Type: application/json' \
-      -d '{"subject":"svc:statutoryd"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
-CORED_BASE_URL=http://localhost:8087 CORED_SERVICE_TOKEN=$SVC PORT=8091 \
-  STATUTORYD_DSN="postgres://tally_statutory:tally_statutory@localhost:5433/tally?sslmode=disable" \
-  /tmp/statutoryd &
-CORED_BASE_URL=http://localhost:8087 STATUTORYD_BASE_URL=http://localhost:8091 \
-  STATUTORYD_BIN=/tmp/statutoryd \
-  STATUTORYD_DSN="postgres://tally_statutory:tally_statutory@localhost:5433/tally?sslmode=disable" \
-  python3 backend/scripts/e2e-statutory-freeze.py
-```
+# 1. EXACTLY ONE non-test writer of stock_movement. The whole design rests on it.
+grep -rn "INSERT INTO stock_movement" backend --include='*.go' | grep -v _test.go
+#    expect exactly one: backend/internal/ledger/stock.go
 
-Seed first: `pnpm seed:demo -- --insightd`, then `pnpm seed:tenancy <A>`.
-Browser sign-in: `browser-dev-owner` / `tally-demo-2026`.
+# 2. NO stored stock value or valuation-rate column anywhere.
+psql "$PG" -c "\d stock_movement"     # qty, rate, discount_pct, amount — all as ENTERED
 
-> **RUN `e2e:ui` TWICE AND BELIEVE ONLY THE SECOND NUMBER**, and **run it with
-> NOTHING ELSE TOUCHING THE DB.** This cost real time on 2026-07-27: run 2 came
-> back 33/38 and looked like a dirty-database regression. It was not — a
-> verification agent was editing Data Entry ACL rules on the live DB at the same
-> moment. Re-run alone: 38/38, twice. **A live gate run concurrently with
-> anything else is not evidence — of a pass or of a failure.**
+# 3. Triggers: immutability IMMEDIATE, negative-stock DEFERRED, and the
+#    negative-stock body joining voucher_head.current_version_id AND is_deleted
+#    (without that an ALTERed voucher double-counts).
+psql "$PG" -c "select tgname, tgdeferrable, tginitdeferred from pg_trigger t
+  join pg_class c on c.oid=t.tgrelid where c.relname='stock_movement' and not tgisinternal;"
 
-### 2.4 Structural spot-checks for the inventory claims
-
-These do not depend on any test being honest. The previous integrator ran each
-of them by hand; re-run them before building on the feature.
-
-```bash
-# 1. EXACTLY ONE non-test INSERT INTO stock_movement (the whole design rests on it):
-grep -rn "INSERT INTO stock_movement" backend --include='*.go' --include='*.sql' | grep -v _test.go
-# expect exactly one line: backend/internal/ledger/stock.go:462 (checked 2026-07-27).
-# The only other writers in the whole tree are two test files.
-
-# 2. NO stored stock value/rate column anywhere on a balance-like table:
-grep -rn "closing_value\|stock_value\|valuation_rate" backend/migrations/*.sql
-
-# 3. Both triggers present with the RIGHT SHAPE — immutability IMMEDIATE,
-#    negative-stock DEFERRED — and the negative-stock body joining
-#    voucher_head.current_version_id and is_deleted (without that an ALTERed
-#    voucher double-counts):
-grep -n "DEFERRABLE\|current_version_id\|is_deleted" backend/migrations/0025_inventory_schema.sql
-# expect 2 DEFERRABLE occurrences and the closing-position query at ~line 380
-# reading "AND vh.current_version_id = sm.voucher_version_id" (checked 2026-07-27).
-
-# 4. The two closing-position spellings must agree: the Go one is
-#    internal/ledger/stock.go:402 closingPosition(); the authority is 0025's
-#    trigger. The test that pins them ALTERS its fixture voucher — on an
-#    unaltered voucher the mutation is invisible. Do not "simplify" that fixture.
-
-# 5. A voucher hashed BEFORE inventory must still verify its chain (the
-#    CanonicalPayload one-way door): open any pre-0025 voucher's Alt+L Edit Log
-#    in the browser, or GET /vouchers/{id}/history and check ok:true.
+# 4. A voucher hashed BEFORE inventory must still verify its chain (the
+#    CanonicalPayload one-way door): GET /vouchers/{id}/history on any pre-0025
+#    voucher must return verification.ok = true.
 ```
 
 ---
 
-## 3. HOW TO WORK
+## 4. HOW TO WORK
 
-Fan verification out to subagents and keep only their conclusions; do not read
-large files into the orchestrator. One agent per claim, each returning a
-structured verdict, is a handful of tool calls instead of thousands of lines.
+### 4.1 Dynamic workflows, and what to parallelise
 
-**Rules that earned their place** (`HANDOFF.md` §3, plus this session):
+Use the `Workflow` tool. Keep the ORCHESTRATOR's context small: agents read
+files and return conclusions; you integrate. The shape that worked:
 
-- **You are the integrator. Verify the TREE, not the agent's summary.** Re-run
-  every gate yourself before committing. Agents die mid-run with their files on
-  disk and their report lost.
-- **A mutation that does NOT bite is a FINDING, not a formality.** Three times
-  this session a briefed mutation failed to bite and the reason mattered more
-  than the mutation: the briefed float-drift fixture (`0.1 × 3 @ 33.33`) gives
-  the same answer in exact decimal and in float, so the test would have passed
-  the bug it existed to catch; the briefed "unbalanced Sales voucher" mutation is
-  refused by a deferred trigger anyway, while the genuinely reachable hole (a
-  Sales voucher with ZERO postings and inventory — `posting_balanced` is a
-  trigger on the posting table and never fires) is worse; and a briefed
-  Receipt-Note mutation aimed at a control the form deliberately does not render.
-- **If a briefed mutation is aimed at the wrong site, say so and build the one
-  that reaches.** Both wave-4 slices did this and both were right to.
-- **If the briefed file list cannot satisfy the briefed acceptance criteria,
-  report BLOCKED before proceeding** — or, if you proceed, enumerate every
-  out-of-list edit explicitly. Wave 4's screen slice was briefed a test file
-  without the screen or keymap it tests.
-- **Give parallel agents DISJOINT file sets.** Two agents mutating one Go package
-  invalidate each other's test runs.
-- **Never let an agent touch shared live state** — a pre-existing company's ACL
-  rules, security levels or members. Make it create its own throwaway tenant.
-  This is what corrupted an `e2e:ui` run above.
-- **Never run `go test ./internal/server` unscoped** while others work: it
+```
+phase('Understand')  → N parallel scouts, one per seam, returning structured notes
+phase('Design')      → 1 architect that must MAKE the hard decisions, not list them
+phase('Build')       → parallel slices on DISJOINT file sets
+phase('Wiring')      → SERIAL, one owner for server.go / auth_middleware.go / vocabulary.go
+phase('Review')      → adversarial, §4.3 — mandatory
+```
+
+**Rules that earned their place:**
+
+- **Slices in one wave must own disjoint files.** Anything touching
+  `server.go`, `auth_middleware.go` or `authz/vocabulary.go` goes in ONE serial
+  wiring slice. Those three cannot be edited in parallel.
+- **Mounting a report is a THREE-touch change** — `routes()` + `reportName()` +
+  `authz.KnownReportNames` — and two tests pin closure in both directions. A
+  slice that owns only one of the three cannot ship a route. Last session four
+  report services were built that no route served, for exactly this reason.
+- **Give each agent its acceptance criteria AND the mutation that must make each
+  one fail.** Agents that were handed mutations found three of them aimed at the
+  wrong site and built better ones. That is the process working.
+- **An agent that stalls has often left work on disk.** Verify the TREE, not the
+  summary. One stalled mid-mutation last session; the code was fine, the proofs
+  were not finished.
+
+### 4.2 What must NOT run concurrently — this has cost hours
+
+- **Live browser gates (`e2e:ui`) run ALONE.** Nothing else may touch the
+  database. A second run came back 33/38 and looked like a dirty-DB regression;
+  it was a verification agent editing ACL rules on the live DB at that moment.
+  Re-run alone: 38/38.
+- **No agent may modify ACL rules, security levels or members of a PRE-EXISTING
+  company.** Make a throwaway company instead.
+- **Never run `go test ./internal/server` unscoped while others work** — it
   contains a test that disables DB triggers globally. Scope with `-run`.
-- **A frontend mock is a FALSE ORACLE until it mirrors the server rule.** The
-  Physical Stock acceptance assertion ("the closing position IS the count") would
-  have passed against a client that sent the count as a movement, because the
-  mock echoed request bodies. `mock.ts` now derives the correction the way
-  `nonaccounting.go` does, and a mutation relaxing that differencing makes the
-  books read 23 where a human counted 13.
-- **Commit only verified-green work, directly to `master`**, stating the gates
-  re-run and every deferral. End with:
-  `Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>`
+- **`go test ./...` under other load will produce false failures.**
+  `internal/sync`'s `TestFuzzPartition` timed out at 600s and later died on
+  `insert voucher_version: unexpected EOF`; it passes alone in 158s and the exact
+  failing seed passes in 0.3s.
+
+### 4.3 THE REVIEW PASS — mandatory, and it can send work back
+
+Every wave ends here. This is the part the user cares most about.
+
+Run reviewers **in parallel, one per lens**, each adversarial and each required
+to produce evidence rather than an opinion:
+
+1. **Correctness-by-mutation.** For every new invariant, apply a mutation that
+   should break it and confirm a NAMED test fails with a message that states the
+   consequence. **A mutation that does not bite is a FINDING**, not a formality.
+   Restore byte-identical and prove it with `shasum -a 256`.
+2. **Arithmetic re-derivation, independently.** For anything that computes money
+   or tax, recompute the expected figure from first principles in a second
+   implementation (a throwaway Python/Go oracle) and compare. Do NOT accept a
+   fixture that was produced by the code under test. Last session a corpus oracle
+   had been edited to agree with the mapper it was supposed to check, making the
+   metric tautological.
+2b. **Float check.** Grep the diff for `float64`, `parseFloat`, `Number(`. Money
+   and quantity are `decimal.Decimal` on the server and scaled integers on the
+   client. A briefed float-drift fixture last session did NOT bite because the
+   chosen numbers happened to agree — pick fixtures that actually diverge and
+   assert that at least one does.
+3. **Edge cases, named explicitly.** Zero, negative, exactly-on-a-boundary,
+   period boundaries (inclusive on BOTH ends — a bound flip survived the whole
+   reporting package until a test placed a voucher ON the bound), empty sets,
+   a single row, rounding at the paisa, back-dated entries, and ALTER/DELETE of
+   anything already reported.
+4. **Tenant isolation.** Every new table: `ENABLE` + `FORCE ROW LEVEL SECURITY`,
+   a policy with USING **and** WITH CHECK, and composite `(company_id, id)` FKs
+   so a cross-tenant reference is refused by the FK rather than resting on RLS.
+5. **Authorization.** Every new route needs its `routeAction` mapping (unmapped
+   paths default-DENY, so a handler without one is a 403 even for an Owner) and
+   a deliberate decision about which levels may reach it. **Statutory outputs and
+   payroll are more sensitive than the cost book** — salaries and PAN/Aadhaar are
+   not "reports an operator may see by inheritance". Note that the seeded
+   `Data Entry` level carries a COARSE `allow display report` from migration 0011
+   that matches EVERY `report:NAME`, so each sensitive report needs an explicit
+   `disallow` at specificity 2, as 0026/0028 do.
+6. **Migration safety.** Re-runnable (a by-hand `psql -f` has no transaction
+   envelope even though `cored migrate` applies each file atomically), set-based
+   backfills — **never a per-company loop**; 0028's header explains why — and
+   indexed for whatever the hot path probes.
+
+**Verdicts must be CONFIRMED / REFUTED / PARTIAL with the command and observed
+output.** "The tests pass" is not evidence unless you also showed they can fail.
+
+### 4.4 Committing
+
+One verified-green commit per increment, directly to `master`. Re-run every gate
+YOURSELF as integrator; never trust an agent's "green". State in the message
+which gates you ran, every deferral, and any correction to the previous record.
+End with:
+`Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>`
 
 ---
 
-## 4. WHAT IS LEFT — priority-ordered
+## 5. THE WORK
 
-Every item below is disclosed in `HANDOFF.md` §6; the INVENTORY block there has
-the full reasoning for 1–9.
+### TRACK 0 — Test-data hygiene (do this FIRST, alone, ~1 wave)
 
-**Do these next, in this order:**
+**The problem, with evidence.** The dev database holds **43,419 companies** and
+~262,000 vouchers, essentially all throwaway. Nothing cleans up. This has now
+caused three failures that looked like code bugs:
 
-1. **Wire the optional `rate` on the HTTP voucher path** (`internal/server`).
-   The price-list resolver ships and is reachable only from Go: the handler must
-   decode an inventory line's `rate` as nullable/optional and set
-   `InventoryLine.RateUnstated` when absent. Until then **no HTTP client can ever
-   produce a line that gets priced.** Smallest slice with the largest unlock.
-   Mind the polarity — `RateUnstated`'s zero value means STATED, so no existing
-   caller starts repricing its free samples.
-2. **Fold CLOSING STOCK into the Balance Sheet and the P&L.** The biggest
-   accounting hole in the feature: `internal/reporting` has no closing-stock term
-   at all, so the BS omits the asset and gross profit ignores the movement in
-   stock. The valuation machinery (replay to a date, per godown/batch) already
-   exists. Expired batches are FLAGGED not excluded precisely so this fold-in
-   cannot make physical stock vanish. Gate it with `verify:demo`.
-3. **Decide the price-provenance one-way door NOW** — migration **0032**
-   (`price_list_id`, `rate_source` on `stock_movement`) plus a field on
-   `CanonicalStockLine`, i.e. a change to the **hashed payload** and `hash.go`.
-   "Why did this invoice go out at the wrong price?" is unanswerable today. The
-   cost of this door only rises with the number of hashed vouchers in the field.
-4. **Inventory in the Tally-XML importer.** `internal/migration/*.go` mentions
-   neither stock nor inventory, so a migrated company reconciles to the rupee
-   **with zero stock** — a real hole in the migration thesis, and it compounds
-   with #2 (a Tally BS showing Closing Stock will not tie to ours).
-5. **Hoist the price lookup into a tx-scoped resolver in `internal/masters`** that
-   both `masters.Service.ResolveRate` and `ledger/pricing.go` share.
-   `TestTheLedgerPriceMatchesTheMastersResolver` currently pins the two spellings
-   against each other; that is a guard, not a fix.
-6. **A godown-create route + `CoredClient.createGodown`.** The mock seeds exactly
-   one named godown, so the stock-journal transfer fixture moves goods out of the
-   UNTRACKED position rather than between two named locations.
-7. **FIFO / LIFO behind the `Valuer` seam** (`internal/inventory/valuation.go:84`)
-   — a new switch arm, fixtures, and widening 0025's
-   `CHECK (valuation_method IN ('WEIGHTED_AVG'))`. `ValuerFor`'s default arm
-   already fails loudly, which is what makes the widening safe.
-8. **A stock entity in the NL-query whitelist.** `internal/query/dsl.go` still
-   exposes four entities. A **quantity-only** entity is the honest first cut —
-   value is derived by replay and the compiler's fixed FROM/JOIN skeleton cannot
-   express it.
-9. **Two small item-invoice edges:** the ALTER over HTTP is not a pure GET→PUT
-   echo (it 422s loudly; needs an item-derived marker on `VoucherView`), and
-   `GET /stock-items` does not serve `hsn`/`gst_rate_pct` so the grid cannot
-   preview the tax the server is about to derive.
-10. **A quantity-only stock report Data Entry may see.** Today the level is
-    denied all five stock reports (0026/0028) because quantity and value share
-    one report, so an operator cannot answer "do we have 10 to sell?".
-    Column-level ACL is not built.
-11. **Housekeeping, before it bites:** the Postgres host volume was at **99%**
-    (4.7 GiB free) and one `go test ./internal/ledger/` run aborted with
-    `SQLSTATE 53100` mid-seed; the rerun passed. Every integration test there
-    creates a company and none clean up. Reclaim the volume, or expect spurious
-    failures that look like regressions.
+1. `e2e:ui` went flaky because the shared `browser-dev-owner` account had
+   accumulated **120 company memberships**, and the F3 picker renders all of them
+   past a fixed sleep (fixed in `aea1936`, but the cause remains).
+2. A migration backfill ran **1h57m** partly because `acl_rule` had no index and
+   the table had grown with the fleet (index added in `eacf62e`).
+3. A `go test ./internal/ledger` run aborted mid-seed with
+   `No space left on device (SQLSTATE 53100)`.
 
-**Larger, decide before starting:** stock groups/categories, compound and
-alternate units, BoM + manufacturing journals, and order processing. Orders are
-absent **deliberately** — an order is a commitment, not a movement, and one that
-moved stock would let a quotation deplete the warehouse; it needs a
-committed-quantity concept the movement ledger does not have.
+`account_group` alone is **592 MB**, because every test company gets a full
+chart-of-accounts tree.
 
-### Carried forward, still true (non-inventory)
+**Do:**
+- Add cleanup to the integration harness so a test company is removed at the end
+  of the test that made it (`t.Cleanup`). Decide deliberately what to do about
+  tests that assert on tombstones and history — those may need to keep their data
+  and say so.
+- Provide a `make reset-dev-db` (drop → `cored migrate` → seed) and document it.
+- **The one-off wipe of the existing 43k companies is DESTRUCTIVE to the owner's
+  dev database. ASK BEFORE DOING IT.** The owner has said they want to be asked.
 
-- After `Alt+C` resolves an OCR draft's party, the tax split is **not re-derived**
-  from the now-known supplier state.
-- insightd's background OCR runner is in-process `BackgroundTasks`: a draft left
-  `processing` by a crash **stays there forever** — no reaper, timeout or requeue.
-- **`InferredInvoice` has nowhere to put** the supplier's state or the invoice's
-  own CGST/SGST-vs-IGST label, both printed in plain text on real bills and both
-  surviving redaction. That, not the PII boundary, blocks the remaining honest
-  fallback for the supplier-state derivation.
-- Invite delivery has **no retry backoff**, and the default Sender only LOGS —
-  `notification_status = 'sent'` means "written to cored's stdout".
-- **No first-password bootstrap** for an invited user and **no password reset** —
-  the biggest remaining hole in the SaaS story.
-- **Grant changes live only in one-shot migrations.** `migrations.Apply` skips an
-  applied version, so widening 0022 on an existing database is a no-op, invisible
-  to every DB-backed test until someone provisions a fresh DB.
-- **Data Entry holds a bare `allow display report`** (from 0011) which matches
-  every `report:NAME`. Each valued stock report needed its own explicit
-  `disallow` (0026, 0028) for exactly this reason. **The next report added will
-  hit it again.** Product decision, not a bug.
-- `status='sending' AND claimed_at IS NULL` is unclaimable forever in the outbox
-  (`NULL < now()-interval` is NULL); a `CHECK` would make the lease invariant
-  structural.
-- Tally's Trial Balance shows opening/transactions/closing columns for a period;
-  this shows the closing position as at a date.
-- The PaddleOCR fake is pinned to **prose** (transcribed from the spike doc), not
-  to bytes. Capture a serialised real 3.x `predict()` response when paddle is
-  next available. `_is_inter` in `insightd/benchmark/validate.py` is dead code.
-
-### Blocked in this environment (do not attempt)
-
-- **Tauri 2 desktop shell** — `cargo`/`rustc` absent (confirmed).
-- **e-way bill / full GSTR filing with ARN** — needs real GSP/NIC access.
-- **Real-OCR accuracy on genuine photographed bills** — every image ever tested
-  against this pipeline was synthetic.
+**Acceptance:** after a full `go test ./...`, the company count grows by less than
+some small bound (state the number); `make reset-dev-db` produces a database on
+which the whole gate matrix passes.
 
 ---
 
-## 5. ENVIRONMENT GOTCHAS
+### TRACK 1 — Closing stock on the Balance Sheet and P&L
 
-- **The Postgres host volume is nearly full.** `SQLSTATE 53100`
-  (`No space left on device`) during company seeding is an environment failure,
-  not a code regression — rerun before you believe it, then reclaim space.
-- **OrbStack's Docker daemon can hang**, taking `tally_pg` with it. Fixed by
-  quitting and relaunching OrbStack, then `docker start tally_pg`. **Ask the user
-  before doing this** — it drops their other containers.
-- **`psql` / `pg_isready` can time out while the DB is fine.** Probe with a real
+**This is the largest accounting hole in the product right now.**
+`internal/reporting` has NO closing-stock term: the Balance Sheet omits the
+asset entirely and gross profit ignores the movement in stock. A company using
+inventory today gets a Balance Sheet that is wrong in a way its accountant will
+notice immediately.
+
+The machinery exists — `stock_summary.go` already values a position at a date by
+replay, per godown and per batch.
+
+**The accounting, state it in the code:**
+- Balance Sheet: Closing Stock is a **current asset** at the same `as_on` date the
+  rest of the position uses.
+- P&L: `Gross Profit = Sales − (Opening Stock + Purchases − Closing Stock)`.
+  Opening stock at the period start, closing at the period end — so a P&L over
+  [d0,d1] uses the position at d0−1 and at d1.
+- **Both must move together.** Adding the asset without the P&L term, or vice
+  versa, unbalances the Balance Sheet — the net-profit line ties them.
+
+**Edge cases the review pass must see:** a date before the books began (no
+opening stock leaks — the accounting reports already had this bug once); an
+ALTERed or DELETEd stock voucher restating a period already reported; expired
+batches (they are FLAGGED not excluded, precisely so this fold-in cannot make
+physical stock vanish); a company with no inventory at all (the term must be
+absent, not a zero row that changes the tree); and P&L **additivity** — two
+disjoint halves must still sum to the whole once stock is in.
+
+**Gate it with `verify:demo`,** which already asserts the Balance Sheet balances
+at every month-end and that the P&L is additive. Those two assertions are what
+will catch a wrong fold-in.
+
+---
+
+### TRACK 2 — GSTR-2A/2B + IMS reconciliation
+
+**Why it matters:** `GET /gstr3b` currently reports ITC as **ALL-ELIGIBLE** — no
+eligibility test, no rule 42/43 apportionment, no reversals, no s.17(5) block, no
+matching against what suppliers actually filed. That is the single biggest
+correctness gap in the compliance surface, and this track is what closes it.
+
+**Scope:**
+- Ingest a GSTR-2A/2B statement (the GSTN JSON shape) into a reconcilable form.
+- Match supplier invoices against posted purchase vouchers. Matching keys:
+  supplier GSTIN + invoice number + date + taxable value, with tolerance rules —
+  and **invoice numbers in the wild are not clean**, so decide and document how
+  near-matches are surfaced rather than silently paired.
+- Classify each row: matched, mismatched (and in which field), missing in books,
+  missing in 2B.
+- **IMS** (Invoice Management System): accept / reject / pending, with the
+  **deemed-accept on the 14th** timer. That date arithmetic is statutory — get the
+  timezone and the boundary right, and test the boundary explicitly.
+- Feed the result into GSTR-3B's ITC tables rather than leaving them all-eligible.
+
+**Judgement calls to make deliberately, not by default:** what happens to ITC on
+an invoice the supplier has not filed; how amendments and credit notes are paired
+with the original; and whether reconciliation writes anything to the books at all
+(it probably should NOT — it is a report over two sources, and a reconciliation
+that silently posts is how books stop matching returns).
+
+**Gate it with a golden corpus** in `corpora/`, following the existing families,
+with the expected classification for every fixture re-derived independently.
+
+---
+
+### TRACK 3 — Payroll: Form 24Q, PF ECR, ESI
+
+**The most safety-critical track. People get paid from this.**
+
+New package `internal/payroll`. Follow `internal/compliance`'s shape: a pure
+engine with a golden corpus, no DB imports in the calculation core.
+
+**Scope:** employee masters; salary structure (earnings/deductions); a pay run
+that posts to the ledger; and three statutory outputs — **Form 24Q** (TDS on
+salary, quarterly, FVU-validatable `.txt`), **PF ECR**, and **ESI**.
+
+**Where the errors will be, and what the review pass must check:**
+- **Statutory rates and ceilings are effective-dated and they change.** PF at 12%
+  on a ₹15,000 wage ceiling, ESI at its own rates on its own ceiling, and the
+  income-tax slabs — every one needs an effective-from date and a corpus fixture
+  citing its source. **Re-verify every rate against current law before release**;
+  the TDS/TCS work already carries this warning and it applies double here.
+- **Rounding is not uniform.** Income tax rounds to the nearest rupee; PF and ESI
+  have their own rules. Do not apply one rounding everywhere.
+- **Thresholds are periodic**, and the existing TDS engine already approximates
+  annual thresholds per-transaction (disclosed, error direction: under-deduction).
+  Payroll's are genuinely annual — do not inherit that approximation silently.
+- **Mid-year joiners and leavers, arrears, and revisions** are where payroll
+  engines are wrong. Test them explicitly.
+- **PII.** Employee PAN, Aadhaar and bank details are the most sensitive data in
+  the product. The redaction boundary in `insightd` exists for exactly this class
+  of data — decide what applies here, and default to NOT exposing salary data to
+  the `Data Entry` level (see §4.3 item 5 on the coarse `allow display report`).
+
+**Gate it against the official validators' expectations** via a golden corpus, as
+the TDS/TCS work did. Note the FVU itself cannot run in this environment — say so
+rather than claiming validation you did not perform.
+
+---
+
+## 6. STANDING BACKLOG (carried forward, still true)
+
+Ranked, from `HANDOFF.md` §6:
+
+1. **Price-provenance is a one-way door — decide it early.** "Why did this invoice
+   go out at the wrong price?" is unanswerable. Needs `price_list_id` +
+   `rate_source` on `stock_movement` **and a field on the hashed payload**. The
+   cost only rises with the number of hashed vouchers in the field.
+2. **Inventory in the Tally-XML importer.** `internal/migration` mentions neither
+   stock nor inventory, so a migrated company reconciles to the rupee **with zero
+   stock** — and this compounds with Track 1 (a Tally BS showing Closing Stock
+   will not tie to ours).
+3. **FIFO/LIFO** behind the `Valuer` seam — a new switch arm plus fixtures plus
+   widening 0025's `CHECK (valuation_method IN ('WEIGHTED_AVG'))`.
+4. **A quantity-only stock report `Data Entry` may see.** All five stock reports
+   are denied to that level because quantity and value share one report, so an
+   operator cannot answer "do we have 10 to sell?".
+5. **A stock entity in the NL-query whitelist** (`internal/query/dsl.go` still has
+   four). Quantity-only is the honest first cut.
+6. **Godown-create route + `CoredClient.createGodown`**; the item-invoice ALTER
+   over HTTP is not a pure GET→PUT echo (it 422s loudly); `GET /stock-items` does
+   not serve `hsn`/`gst_rate_pct` for the grid's tax preview.
+7. Non-inventory: after `Alt+C` resolves an OCR draft's party the tax split is
+   **not re-derived**; insightd's OCR runner is in-process `BackgroundTasks` and a
+   crash leaves a draft `processing` forever; invite delivery has no retry backoff
+   and `LogSender` only logs, so `notification_status = 'sent'` means "written to
+   stdout"; **no first-password bootstrap for an invited user and no password
+   reset** — the biggest remaining hole in the SaaS story.
+
+**Deliberately absent, not oversights:** order processing and BoM (an order is a
+COMMITMENT, not a movement — one that moved stock would let a quotation deplete
+the warehouse), stock groups, compound units.
+
+**Blocked in this environment:** Tauri desktop shell (no Rust toolchain); e-way
+bill and full GSTR filing with ARN (needs GSP/NIC access); real-OCR accuracy on
+genuine bills (every image ever tested was synthetic).
+
+---
+
+## 7. ENVIRONMENT
+
+- **OrbStack can hang**, taking the database with it — `docker ps` stops
+  responding and `:5433` refuses connections. Restarting OrbStack fixes it but
+  **drops the owner's other containers, so ASK.** After a restart,
+  **`docker start tally_pg`** — it does not come back on its own.
+- **Disk was cleared on 2026-07-27**: 10.8 GB of unused Docker images removed,
+  volume 93% → 57%. It is already back to **70%** after one session of gate runs —
+  see Track 0.
+- **`psql` can time out while the DB is fine**, and vice versa. Probe with a real
   `select 1`.
-- **insightd without `INSIGHTD_DATABASE_URL`** silently falls back to an
-  in-memory draft store and `verify:demo` loses a check.
 - **Restart insightd after changing its code** — a stale :8088 makes `e2e:ocr`
   green against code you did not write.
-- **`frontend/scripts/` IS now covered by `pnpm exec tsc --noEmit`** — tsconfig's
-  `include` is `["src","scripts","vite.config.ts","vitest.config.ts"]` (re-read
-  2026-07-27). Keep the `.mts` scripts typechecking clean; older notes saying
-  they are uncovered are stale.
-- **The `tally_app` role is RLS-restricted**, so ad-hoc `psql` queries as
-  `tally_app` return 0 rows and look like missing data. Use the superuser
-  connection for inspection.
-- **The invite POST requires a `webauthn` amr** — a plain dev token gets
-  `403 STEPUP_REQUIRED`. An invite is only claimed when the invitee calls
-  `GET /v1/me`.
-- The DB holds tens of thousands of throwaway test companies. Harmless, but see
-  the volume note above.
-- Key delivery is on the **document**, and e2e keys go through **`page.keyboard`,
-  never `locator.press`** — two shipped bugs hid behind that.
+- **The `tally_app` role is RLS-restricted**, so ad-hoc queries as `tally_app`
+  return 0 rows and look like missing data. Use the superuser connection to
+  inspect.
+- **statutoryd's service token dies when cored restarts** (fresh ephemeral signing
+  key) — re-mint it, or the statutory e2e fails with a 401 that looks like a bug.
+- **The invite POST requires a `webauthn` amr**; an invite is only claimed when
+  the invitee calls `GET /v1/me`.
+- Keys are delivered on the **document**, and e2e drives them with
+  **`page.keyboard`, never `locator.press`** — two shipped bugs hid behind that.
