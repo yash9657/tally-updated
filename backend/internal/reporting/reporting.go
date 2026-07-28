@@ -392,6 +392,13 @@ type groupNode struct {
 	isPL     bool
 	children []uuid.UUID
 	ledgers  []ledgerBalance
+	// computed are derived children that are not ledgers: a figure this group is
+	// worth that no voucher posted to it. Today that is Closing Stock, which this
+	// schema records only in the inventory plane — quantity is posted to
+	// stock_movement and the value is derived by replay at report time, so there
+	// is no ledger under Stock-in-Hand carrying it and never will be (see the
+	// STOCK VALUE IS NEVER STORED note in stock_summary.go).
+	computed []StatementNode
 }
 
 // loadGroupTree reads all groups (with parent links) for tree assembly.
@@ -465,11 +472,88 @@ func buildGroupNode(id uuid.UUID, nodes map[uuid.UUID]*groupNode) (StatementNode
 		total = total.Add(ctotal)
 	}
 
+	// Derived children (today: Closing Stock under Stock-in-Hand). THE DROP TEST
+	// BELOW MUST STAY BELOW THIS LOOP, and the ordering is the whole mechanism:
+	//
+	//   - a company with NO inventory injects nothing, so an empty Stock-in-Hand
+	//     is still dropped exactly as it was before closing stock existed and the
+	//     tree is byte-identical — "absent, not a zero row that changes the tree".
+	//   - a company WITH inventory resurrects Stock-in-Hand and, because `total`
+	//     flows up through the recursion, its `Current Assets` ancestor subtotals
+	//     the stock too. A sheet whose Current Assets excluded the stock while
+	//     Assets.Total included it would foot and still be internally
+	//     inconsistent, which is precisely what an accountant notices first.
+	//
+	// Moving the drop test above this loop would re-introduce both bugs at once,
+	// and neither one can be seen by IsBalanced().
+	for _, c := range gn.computed {
+		node.Children = append(node.Children, c)
+		total = total.Add(c.Amount)
+	}
+
 	node.Amount = total
 	if total.IsZero() && len(node.Children) == 0 {
 		return StatementNode{}, decimal.Zero, false
 	}
 	return node, total, true
+}
+
+// stockInHandGroupName is the seeded Balance-Sheet group closing stock belongs
+// under. It is planted by every company seed (migrations 0003/0005/0018/0025/
+// 0029) as a system group under Current Assets, and it is unique per company.
+//
+// WHAT THE DOUBLE-BOOKING REFUSAL BUILT ON THIS NAME DOES NOT CATCH. The guard
+// is a HEURISTIC keyed on this one English group name, so it catches the common
+// case — a manual stock ledger filed where the seed puts stock — and misses the
+// same double count filed anywhere else. An adversarial review demonstrated both
+// escapes against the live API:
+//
+//	a ledger "Stock on hand" under a new group "Inventory (manual)" beneath
+//	Current Assets, given 60000 Dr, alongside 1000 of derived closing stock:
+//	    GET /balance-sheet -> 200, assets 61000, balanced TRUE
+//	the same books with that ledger under "Stock-in-Hand" -> refused, as intended.
+//
+// A tenant that renames the group, or files stock one level up, gets the silent
+// still-footing double count the refusal exists to prevent. Widening it means
+// deciding what a "stock ledger" is on a chart the tenant controls, and every
+// candidate rule is another name heuristic — which is why this is documented as
+// a known limit rather than papered over with a longer word list. Treat the
+// refusal as catching a common mistake, NOT as a proof that the books state
+// stock once. HANDOFF.md §6 carries this as an open item.
+const stockInHandGroupName = "Stock-in-Hand"
+
+// findStockInHand returns the ASSET, non-P&L group named "Stock-in-Hand", or nil
+// when the tenant runs a custom chart of accounts that has none.
+//
+// It walks `order` (the query's name-sorted id list) rather than ranging the map
+// so the choice is deterministic even if a chart ever grew two same-named
+// groups; RLS scopes the query to one company, where the name is unique.
+func findStockInHand(nodes map[uuid.UUID]*groupNode, order []uuid.UUID) *groupNode {
+	for _, id := range order {
+		gn := nodes[id]
+		if gn.nature == "ASSET" && !gn.isPL && gn.name == stockInHandGroupName {
+			return gn
+		}
+	}
+	return nil
+}
+
+// subtreeLedgerTotal sums the signed closing balance of every ledger under `gn`
+// and under every group beneath it. It exists for the double-booking refusal in
+// BalanceSheet: stock kept as an ordinary ledger may be filed under a sub-group
+// of Stock-in-Hand rather than directly under it, and a check that looked only
+// at the direct ledgers would miss it.
+func subtreeLedgerTotal(gn *groupNode, nodes map[uuid.UUID]*groupNode) decimal.Decimal {
+	total := decimal.Zero
+	for _, lb := range gn.ledgers {
+		total = total.Add(lb.signed())
+	}
+	for _, cid := range gn.children {
+		if c, ok := nodes[cid]; ok {
+			total = total.Add(subtreeLedgerTotal(c, nodes))
+		}
+	}
+	return total
 }
 
 // --------------------------------------------------------------------------
@@ -533,6 +617,78 @@ func (s *Service) ProfitAndLoss(ctx context.Context, companyID uuid.UUID, from, 
 				pl.Expenses.Total = pl.Expenses.Total.Add(total)
 			}
 		}
+
+		// ------------------------------------------------------------------
+		// THE TRADING ACCOUNT: Opening Stock and Closing Stock
+		// ------------------------------------------------------------------
+		//
+		// Gross Profit = Sales - (Opening Stock + Purchases - Closing Stock).
+		// This schema keeps a PERIODIC inventory: a purchase is expensed to
+		// Purchase Accounts when it is bought, and the stock still on hand at the
+		// period end is brought back as the Closing Stock credit. So the two
+		// terms go on Tally's Trading-account sides — Opening Stock on the
+		// debit/expense side, Closing Stock on the credit/income side — and the
+		// EXISTING net-profit line below (left byte-identical) then yields
+		//
+		//     NetProfit = (Sales + Closing) - (Purchases + Opening)
+		//               = Sales - (Opening + Purchases - Closing)
+		//
+		// which is exactly gross profit less the indirect items.
+		//
+		// WHY THESE ARE SECTION-LEVEL APPENDS WHILE THE BALANCE SHEET NESTS.
+		// The Balance Sheet's Closing Stock belongs to a real group that every
+		// seeded chart has (Stock-in-Hand, under Current Assets), so it is nested
+		// there and Current Assets subtotals it. Opening/Closing Stock belong to
+		// a TRADING ACCOUNT, and this chart has no such group. Do not invent one,
+		// and above all do NOT nest these under Direct Expenses / Direct Incomes:
+		// those are real, user-postable groups, and a computed node inside one
+		// would corrupt a subtotal a user can drill into and reconcile.
+		//
+		// THE PERIOD FORM, AND WHY THE OPENING IS TAKEN AT from-1.
+		// S(d0,d1) = CS(d1) - CS(d0-1). Two CONTIGUOUS windows telescope:
+		//     S(d0,d1) + S(d1+1,d2)
+		//   = (CS(d1) - CS(d0-1)) + (CS(d2) - CS(d1))
+		//   = CS(d2) - CS(d0-1) = S(d0,d2),
+		// because CS(d1) appears once positively and once negatively. Taking the
+		// opening at d0 instead of d0-1 breaks the shared boundary value and the
+		// two halves then differ by whatever moved ON d1+1. This holds for
+		// CONTIGUOUS windows only — two disjoint windows do not telescope, and no
+		// test may assert that they do.
+		//
+		// openingStockValue maps an EMPTY `from` to zero rather than to CS(""),
+		// which on this seam means "everything ever posted": passing "" through
+		// would subtract the entire warehouse and understate gross profit by it,
+		// and the P&L would still foot. An absent `from` query param is the
+		// DEFAULT HTTP path, not an edge case.
+		opening, err := openingStockValue(ctx, tx, from)
+		if err != nil {
+			return err
+		}
+		closing, err := closingStockValue(ctx, tx, to)
+		if err != nil {
+			return err
+		}
+		// Section.Total is accumulated by the caller and is NEVER derived from
+		// Nodes anywhere in this file, so every append must add to Total
+		// explicitly or the statement silently understates the side it is on.
+		// Both terms are suppressed when zero: a company with no inventory must
+		// see no row at all, not a zero row that changes the shape of the tree.
+		if !opening.IsZero() {
+			pl.Expenses.Nodes = append(pl.Expenses.Nodes, StatementNode{
+				Kind:   NodeComputed,
+				Name:   "Opening Stock",
+				Amount: opening,
+			})
+			pl.Expenses.Total = pl.Expenses.Total.Add(opening)
+		}
+		if !closing.IsZero() {
+			pl.Income.Nodes = append(pl.Income.Nodes, StatementNode{
+				Kind:   NodeComputed,
+				Name:   "Closing Stock",
+				Amount: closing,
+			})
+			pl.Income.Total = pl.Income.Total.Add(closing)
+		}
 		pl.NetProfit = pl.Income.Total.Sub(pl.Expenses.Total)
 		return nil
 	})
@@ -589,6 +745,99 @@ func (s *Service) BalanceSheet(ctx context.Context, companyID uuid.UUID, asOn st
 		}
 		attachLedgers(nodes, balances)
 
+		// ------------------------------------------------------------------
+		// CLOSING STOCK — the asset this schema records only in the inventory
+		// plane. Derived here, inside the CALLER'S transaction.
+		// ------------------------------------------------------------------
+		//
+		// TX DISCIPLINE. closingStockValue takes `tx`, and must: db.Pool.RunInTx
+		// calls pool.Begin unconditionally and supports no savepoints, so calling
+		// s.StockSummary(...) from in here would hold one pooled connection while
+		// acquiring a second — a hard deadlock at pool-size concurrency — and
+		// would read a SECOND SNAPSHOT, so the accounting side and the stock line
+		// could straddle a concurrent commit and the sheet would fail
+		// IsBalanced() irreproducibly. The outer RunInTx has already set the
+		// company GUC, so RLS and the books-beginning probe resolve with no
+		// extra work.
+		//
+		// AN UNVALUABLE ITEM ABORTS THE WHOLE STATEMENT, DELIBERATELY. A stock
+		// item whose valuation_method has no implemented valuer makes
+		// replayPositions fail (inventory.ValuerFor returns an error rather than
+		// falling back), and that error propagates out of here and kills the
+		// Balance Sheet, accounting side included. There is no `continue`, no
+		// zero fallback and no "unvalued" bucket, for the reason stated in
+		// inventory/valuation.go: a report that cannot render is better than one
+		// that renders a wrong number. It is unreachable today (migration 0025's
+		// CHECK admits only WEIGHTED_AVG) and reachable exactly in the
+		// deployment-skew case where a silently weighted-average "FIFO" Balance
+		// Sheet would be the worst possible output.
+		//
+		// EXPIRED STOCK IS CARRIED AT COST. This path never reads
+		// stock_batch.expiry_date and must not start to: an expired batch is
+		// still physically in the warehouse and still the company's property
+		// until somebody writes it off with a voucher somebody signs. See the
+		// header of stock_batch_summary.go, which anticipated this fold-in by
+		// name.
+		closing, err := closingStockValue(ctx, tx, asOn)
+		if err != nil {
+			return err
+		}
+
+		stockInHand := findStockInHand(nodes, order)
+		if !closing.IsZero() {
+			// THE DOUBLE-BOOKING REFUSAL.
+			//
+			// Some charts of accounts carry stock as an ORDINARY LEDGER under
+			// Stock-in-Hand (corpora/migration/01-opening-trading.xml plants
+			// exactly that: an "Opening Stock" ledger of 60000 Dr). If such a
+			// company ALSO posts stock movements, the same goods are stated
+			// twice — once by the ledger and once by this derivation.
+			//
+			// WHY THIS IS A REFUSAL AND NOT A SILENT NET-OFF OR A DOCUMENTED
+			// LIMITATION. The fold-in adds the same figure S to Assets and to
+			// net profit, so S CANCELS out of Assets - Liabilities: a double
+			// count still FOOTS. bs.IsBalanced() cannot see it, verify-demo's
+			// balance check cannot see it, and no gate that compares two sides
+			// of one number ever will. The output is a statement somebody files.
+			// Netting the ledger balance off the computed node was rejected too:
+			// it silently rewrites the accounting side, and there is no
+			// principled reason the two figures relate. Refusing follows the
+			// precedent inventory.ValuerFor already set.
+			//
+			// It fires only when BOTH are non-zero, so the corpora case above
+			// (a stock ledger with zero stock_movement) still renders — that is
+			// TestAStockLedgerWithNoInventoryIsLeftAlone. There is deliberately
+			// no equivalent check on the P&L: Stock-in-Hand is a Balance-Sheet
+			// group and never appears there.
+			if stockInHand != nil {
+				if manual := subtreeLedgerTotal(stockInHand, nodes); !manual.IsZero() {
+					return fmt.Errorf(
+						"reporting: company books stock twice — ledgers under %q carry %s "+
+							"while the inventory ledger derives a closing stock of %s as at %s; "+
+							"a Balance Sheet cannot state both, and because the same figure is "+
+							"added to assets and to net profit the double count would still "+
+							"balance. Remove the manual stock ledger balance, or stop posting "+
+							"stock movements",
+						stockInHandGroupName, manual.StringFixed(4), closing.StringFixed(4),
+						dateOrEver(asOn))
+				}
+			}
+
+			// NEST IT under the real group rather than appending a top-level
+			// node: Current Assets must subtotal the stock, or the sheet is
+			// internally inconsistent (Assets.Total would include a figure its
+			// own Current Assets line excludes). Injecting into `computed`
+			// rather than appending a finished node also makes zero-suppression
+			// structural — see buildGroupNode.
+			if stockInHand != nil {
+				stockInHand.computed = append(stockInHand.computed, StatementNode{
+					Kind:   NodeComputed,
+					Name:   "Closing Stock",
+					Amount: closing,
+				})
+			}
+		}
+
 		income, expense := decimal.Zero, decimal.Zero
 		for _, id := range order {
 			gn := nodes[id]
@@ -631,7 +880,103 @@ func (s *Service) BalanceSheet(ctx context.Context, companyID uuid.UUID, asOn st
 			}
 		}
 
-		bs.NetProfit = income.Sub(expense)
+		// FALLBACK for a custom chart of accounts with no Stock-in-Hand group at
+		// all: state the asset as a top-level computed node on Assets rather
+		// than dropping it. Both paths add EXACTLY the same amount to
+		// Assets.Total; only the nesting differs, and nesting is preferred
+		// wherever the group exists (see above).
+		if !closing.IsZero() && stockInHand == nil {
+			bs.Assets.Nodes = append(bs.Assets.Nodes, StatementNode{
+				Kind:   NodeComputed,
+				Name:   "Closing Stock",
+				Amount: closing,
+			})
+			bs.Assets.Total = bs.Assets.Total.Add(closing)
+		}
+
+		// ------------------------------------------------------------------
+		// The net-profit line, in its GENERAL PERIOD FORM.
+		// ------------------------------------------------------------------
+		//
+		// The Balance Sheet's implicit P&L period runs from the books' beginning
+		// to `asOn`, so its stock adjustment is the same S = CS(end) - CS(start-1)
+		// that ProfitAndLoss uses, with start-1 = books_beginning_from - 1.
+		//
+		// THAT SECOND TERM IS ZERO BECAUSE THE BALANCE SHEET'S PERIOD HAS NO LOWER
+		// BOUND — not because nothing can be on hand before the books begin.
+		//
+		// The distinction matters, and an earlier version of this comment got it
+		// wrong. It claimed stock_opening is the ONLY record of pre-books stock, so
+		// "nothing can be on hand the day before the books begin". That is FALSE: a
+		// stock MOVEMENT may be dated before books_beginning_from, and
+		// loadStockPositionMovements deliberately carries NO lower bound, because a
+		// position needs the entity's whole history. Goods CAN be on hand then.
+		//
+		// The zero is still correct, for the other reason. Like loadClosingBalances
+		// beside it, this statement is a POSITION AS AT a date: its period runs from
+		// inception — not from books_beginning_from — to `asOn`. CS(inception - 1)
+		// is zero because there is no "before inception". So S = CS(asOn) - 0.
+		//
+		// WHAT THIS MEANS WHEN SOMETHING IS BACK-DATED BEFORE THE BOOKS BEGAN, which
+		// an adversarial review measured and mistook for a defect. Books beginning
+		// 2026-04-01, a NON-ACCOUNTING receipt note back-dated to 2026-03-15 for
+		// 10 @ 700, a second receipt on 2026-05-10 for 5 @ 100:
+		//
+		//     GET /balance-sheet?as_on=2027-03-31                net_profit 7500
+		//     GET /profit-and-loss?from=2026-04-01&to=2027-03-31  net_profit  500
+		//
+		// Those differ by 7000 and BOTH ARE RIGHT: they cover DIFFERENT PERIODS. The
+		// sheet's period includes 2026-03-15 and the P&L's does not, so the goods
+		// that arrived with no counter-entry are a windfall inside the sheet's
+		// period and outside the P&L's. The accounting plane behaves identically —
+		// loadClosingBalances has no lower bound either, so a pre-books JOURNAL
+		// splits the two net profits in exactly the same way, and has always done
+		// so. The stock plane is symmetric with it, which is the property to keep.
+		//
+		// DO NOT "FIX" THIS by deriving the term from books_beginning_from. It was
+		// tried: it subtracts the pre-books stock from the profit side while the
+		// ASSET side still carries the full closing stock, so the two sides stop
+		// moving together and THE SHEET STOPS BALANCING — measured at assets 7500
+		// against liabilities 500 on the scenario above.
+		// TestBackDatedStockKeepsTheSheetBalanced pins that.
+		//
+		// The subtraction is written out in full rather than collapsed to a bare
+		// `.Add(closing)` so that a later reader cannot "restore" a subtraction that
+		// is already there — that mistake would put the sheet out by exactly the
+		// opening-stock value (books begin 2026-04-01, opening 1000, purchases 500,
+		// sales 900, closing 300: correct sheet 700 = 700; with the opening wrongly
+		// forced in, assets 700 against liabilities -300).
+		//
+		// Note what this means and accept it out loud: in a PERIODIC inventory
+		// system, opening stock recorded only in the inventory plane has no
+		// counter-credit anywhere in the accounts, so its whole value flows into
+		// the first period's profit. That is the honest consequence of this
+		// schema, not a defect in this line.
+		//
+		// THE ALGEBRA, AND THE WARNING IT EARNS.
+		// With A = assets, L = liabilities + capital, NP = income - expense taken
+		// cumulatively from inception, double entry gives A = L + NP. The
+		// fold-in makes Assets' = A + closing and Liabilities' = L + (NP +
+		// closing), so Assets' - Liabilities' = A - L - NP = 0: THE TERM CANCELS.
+		//
+		//   *** BECAUSE IT CANCELS, IsBalanced() IS TRUE FOR ANY VALUE OF
+		//   *** `closing`, INCLUDING A COMPLETELY WRONG ONE. Balance proves
+		//   *** SYMMETRY — that the asset and the P&L term moved together at the
+		//   *** same date — and never CORRECTNESS. The number itself is pinned
+		//   *** only by the identity against StockSummary for the same date
+		//   *** (TestClosingStockOnTheBalanceSheetEqualsTheStockSummaryTotal, and
+		//   *** the demo gate). Do not add a check here and believe it proves
+		//   *** more than it does.
+		//
+		// Finally: the Balance Sheet recomputes net profit INDEPENDENTLY (it does
+		// not call ProfitAndLoss), so this and the Trading-account block in
+		// ProfitAndLoss are two code paths that must agree.
+		// internal/migration's oracle cross-checks BS.NetProfit == PL.NetProfit
+		// on every corpus, but only UNBOUNDED — a bound-dependent divergence
+		// would slip straight past it.
+		openingBS := decimal.Zero
+		stockAdj := closing.Sub(openingBS)
+		bs.NetProfit = income.Sub(expense).Add(stockAdj)
 		if !bs.NetProfit.IsZero() {
 			bs.Liabilities.Nodes = append(bs.Liabilities.Nodes, StatementNode{
 				Kind:   NodeComputed,
@@ -646,6 +991,16 @@ func (s *Service) BalanceSheet(ctx context.Context, companyID uuid.UUID, asOn st
 		return BalanceSheet{}, err
 	}
 	return bs, nil
+}
+
+// dateOrEver renders an as-on date for an error message. Empty means "no upper
+// bound at all" on this seam, and a message reading "as at " with nothing after
+// it would send a reader looking for a date that was never supplied.
+func dateOrEver(asOn string) string {
+	if strings.TrimSpace(asOn) == "" {
+		return "the latest date posted"
+	}
+	return strings.TrimSpace(asOn)
 }
 
 // attachLedgers attaches each ledger balance to its group node so the statement

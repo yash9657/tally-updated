@@ -570,30 +570,19 @@ func (s *Service) StockSummary(ctx context.Context, companyID uuid.UUID, asOn st
 	out := StockSummary{AsOn: asOn, TotalValue: decimal.Zero}
 
 	err := s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		names, err := loadStockNames(ctx, tx)
+		// The five steps this used to spell out inline (names, guarded openings,
+		// movements, replay, sorted rows) ARE stockPositionsAsOn, in that order
+		// with those guards. Going through it means this screen and the Balance
+		// Sheet's Closing Stock line share one derivation BY CONSTRUCTION rather
+		// than by two maintainers keeping two copies in step — and closing stock
+		// is order-dependent, so a copy that drifts by one guard prints a
+		// different asset total on two screens with no way to tell which is right.
+		rows, _, err := stockPositionsAsOn(ctx, tx, asOn)
 		if err != nil {
 			return err
 		}
-		openings, err := loadStockOpenings(ctx, tx, asOn)
-		if err != nil {
-			return err
-		}
-		rows, err := loadStockPositionMovements(ctx, tx, asOn)
-		if err != nil {
-			return err
-		}
-		positions, err := replayPositions(openings, movementsOf(rows, true), names)
-		if err != nil {
-			return err
-		}
-
-		for key, pos := range positions {
-			out.Rows = append(out.Rows, stockRowOf(key, pos, names))
-		}
-		sortStockRows(out.Rows)
-		for _, r := range out.Rows {
-			out.TotalValue = out.TotalValue.Add(r.ClosingValue)
-		}
+		out.Rows = rows
+		out.TotalValue = totalClosingValue(out.Rows)
 		out.Items = rollupStockItems(out.Rows)
 		return nil
 	})
