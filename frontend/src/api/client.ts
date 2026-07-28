@@ -28,6 +28,10 @@ import type {
   DayBookQuery,
   DeleteVoucherResponse,
   DayBookResponse,
+  ListGodownsResponse,
+  ListStockBatchesResponse,
+  ListStockItemsResponse,
+  StockSummaryResponse,
   GSTR1Query,
   GSTR1Response,
   ImportTallyXMLQuery,
@@ -111,6 +115,17 @@ export interface CoredClient {
     companyID: string,
     req: CreateStockItemRequest,
   ): Promise<CreateStockItemResponse>;
+
+  // ---- Inventory masters (the READ half) ---------------------------------
+  //
+  // These exist for the same reason listLedgers does: a caller that did not
+  // create a master itself has no way to address it, and a client that cannot
+  // enumerate stock items invents duplicates rather than reusing rows it cannot
+  // name. The item grid cannot offer a location picker against a collection it
+  // cannot list.
+  listStockItems(companyID: string): Promise<ListStockItemsResponse>;
+  listGodowns(companyID: string): Promise<ListGodownsResponse>;
+  listStockBatches(companyID: string): Promise<ListStockBatchesResponse>;
 
   // Vouchers (one per accounting class)
   postSalesVoucher(
@@ -256,6 +271,21 @@ export interface CoredClient {
     companyID: string,
     query?: OutstandingsQuery,
   ): Promise<OutstandingsResponse>;
+  /**
+   * The STOCK SUMMARY as at a date — a POSITION, so it takes `asOn` only, for
+   * the same reason the Trial Balance does: applying a lower bound would drop
+   * the stock the company already owned while still rendering a tidy-looking
+   * table, which is the worst kind of wrong answer.
+   *
+   * It is a Display over `report:stock-summary`, and migration 0026 explicitly
+   * DISALLOWS it to the seeded Data Entry level (the closing valuation rate is
+   * what the business PAID), so a 403 here is a normal, expected answer that
+   * callers must render as a stated reason rather than as an empty table.
+   */
+  getStockSummary(
+    companyID: string,
+    asOn?: string,
+  ): Promise<StockSummaryResponse>;
 
   // GST
   generateGSTR1(companyID: string, query: GSTR1Query): Promise<GSTR1Response>;

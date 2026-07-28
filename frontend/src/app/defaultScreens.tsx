@@ -17,6 +17,7 @@ import {
   OutstandingsScreen,
 } from "../screens/reports/ReportScreens";
 import { ReportDetailScreen } from "../screens/reports/ReportDetailScreen";
+import { StockSummaryScreen } from "../screens/reports/StockSummaryScreen";
 import { REPORT_NAMES } from "../keystroke/types";
 import type { ScreenComponent, ScreenComponentProps } from "./screenRegistry";
 import { ScreenRegistry } from "./screenRegistry";
@@ -51,10 +52,13 @@ const GoToOverlayScreen: ScreenComponent = ({ snapshot, onSelect }) => {
 };
 
 /**
- * Fallback for a report name that has no wired data source (e.g. Stock Summary,
- * which needs inventory vouchers this build does not have). It says so plainly
+ * Fallback for a report name that has no wired data source. It says so plainly
  * — it must NEVER render placeholder rows, because fabricated numbers in an
  * accounting screen are worse than a missing screen.
+ *
+ * Stock Summary USED to land here; it now has a movement ledger behind it and
+ * is registered by name below. What is left on this fallback is any report a
+ * Go To / menu label can name that this build does not serve.
  */
 const UnwiredReportScreen: ScreenComponent = ({ snapshot }) => {
   const name = snapshot.reportName ?? "Report";
@@ -63,12 +67,13 @@ const UnwiredReportScreen: ScreenComponent = ({ snapshot }) => {
       <h1 className="text-lg font-bold text-tally-title">{name}</h1>
       <p className="mt-3 max-w-xl text-sm">
         {name} is not available in this build — there is no data plane behind it
-        yet (it needs the inventory module). Nothing is shown rather than sample
-        rows, because a report that invents numbers is worse than no report.
+        yet. Nothing is shown rather than sample rows, because a report that
+        invents numbers is worse than no report.
       </p>
       <p className="mt-2 text-sm">
         Working reports: Balance Sheet, Profit &amp; Loss A/c, Trial Balance, Day
-        Book, Outstandings — all reachable with Alt+G. Esc goes back.
+        Book, Outstandings, Stock Summary — all reachable with Alt+G. Esc goes
+        back.
       </p>
     </section>
   );
@@ -169,6 +174,11 @@ const HelpAdapter: ScreenComponent = ({ snapshot }: ScreenComponentProps) => (
   <HelpScreen snapshot={snapshot} />
 );
 
+/** Stock Summary adapter: the inventory position (reads snapshot.config.periodTo). */
+const StockSummaryAdapter: ScreenComponent = ({ snapshot }: ScreenComponentProps) => (
+  <StockSummaryScreen snapshot={snapshot} />
+);
+
 /** F11 Company Features adapter. */
 const FeaturesAdapter: ScreenComponent = () => <FeaturesScreen />;
 
@@ -206,5 +216,9 @@ export function createDefaultRegistry(): ScreenRegistry {
     "report:Balance Sheet": BalanceSheetScreen,
     "report:Profit & Loss A/c": ProfitLossScreen,
     "report:Outstandings": OutstandingsScreen,
+    // Inventory: the position as at a date, replayed from the movement ledger.
+    // Denied to Data Entry by migration 0026 (it prints cost prices); the
+    // screen states that refusal rather than rendering an empty table.
+    "report:Stock Summary": StockSummaryAdapter,
   });
 }

@@ -1,0 +1,26 @@
+{
+  "id": "voucher-ctrl-h-sales-offers-item-invoice",
+  "description": "Ctrl+H on F8 Sales OFFERS a real Item Invoice. The label matters as much as the behaviour: for a whole release this picker listed 'Item Invoice — not built', so a case asserting merely that three options appear would have passed against a dead end. Pinned as the exact ordered list, in Tally's own order, with only the genuinely-missing 'As Voucher' still carrying the not-built marker.",
+  "keymapProfile": "tallyprime",
+  "startScreen": "gateway",
+  "events": [
+    {
+      "type": "key",
+      "combo": "F8"
+    },
+    {
+      "type": "key",
+      "combo": "Ctrl+H"
+    }
+  ],
+  "expect": {
+    "screen": "voucher",
+    "voucherType": "sales",
+    "overlay": "change-mode",
+    "overlayOptions": [
+      "Item Invoice",
+      "Accounting Invoice",
+      "As Voucher — not built"
+    ]
+  }
+}

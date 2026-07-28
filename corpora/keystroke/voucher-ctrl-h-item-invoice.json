@@ -1,0 +1,28 @@
+{
+  "id": "voucher-ctrl-h-item-invoice",
+  "description": "Ctrl+H on a Sales voucher offers a REAL 'Item Invoice' (not 'Item Invoice — not built'), and choosing it TAKES EFFECT in one keystroke: the overlay closes and the frame is in item-invoice mode. This is the case that would have caught the two-year-old dead end where the picker rendered three labels and did nothing with any of them — the overlay opening is not evidence that the mode changed, so the case asserts the closed overlay AND the resulting config.",
+  "keymapProfile": "tallyprime",
+  "startScreen": "gateway",
+  "events": [
+    {
+      "type": "key",
+      "combo": "F8"
+    },
+    {
+      "type": "key",
+      "combo": "Ctrl+H"
+    },
+    {
+      "type": "select",
+      "menuItem": "Item Invoice"
+    }
+  ],
+  "expect": {
+    "screen": "voucher",
+    "voucherType": "sales",
+    "overlay": null,
+    "config": {
+      "entryMode": "item-invoice"
+    }
+  }
+}

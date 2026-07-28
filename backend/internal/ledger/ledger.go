@@ -165,13 +165,20 @@ type VoucherInput struct {
 	Class         Class
 	VoucherTypeID uuid.UUID
 	// PartyLedgerID is the principal party (debtor/creditor/cash/bank) for
-	// reporting and bill-wise attribution; optional.
+	// reporting and bill-wise attribution; optional — but REQUIRED on an item
+	// invoice, where it is the ledger the generated party leg is posted to.
 	PartyLedgerID uuid.UUID
-	VoucherNo     string
-	VoucherDate   string // ISO date (YYYY-MM-DD)
-	Narration     string
-	Party         string // party name (denormalised label)
-	CreatedBy     string
+	// ItemLedgerID is the revenue/expense ledger an ITEM INVOICE books the value
+	// of the goods to: the Sales Accounts ledger for F8, the Purchase Accounts
+	// ledger for F9. It is meaningful ONLY on an item invoice (inventory lines +
+	// GST params), where the server generates the postings; every other voucher
+	// states its own postings and leaves this zero. See item_invoice.go.
+	ItemLedgerID uuid.UUID
+	VoucherNo    string
+	VoucherDate  string // ISO date (YYYY-MM-DD)
+	Narration    string
+	Party        string // party name (denormalised label)
+	CreatedBy    string
 	// Postings must balance: SUM(debit) == SUM(credit). The deferred DB trigger
 	// enforces this at commit as a final backstop.
 	Postings []PostingInput
@@ -660,10 +667,22 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 	if !validClasses[in.Class] {
 		return PostResult{}, fmt.Errorf("ledger: invalid voucher class %q", in.Class)
 	}
+	// An ITEM INVOICE (inventory lines + GST params on a GST-bearing class) has
+	// its postings and its GST lines GENERATED from the stock lines inside the
+	// transaction below — see item_invoice.go. There are no postings to validate
+	// yet at this point, so the pre-flight check for one is a different check:
+	// that the client did not ALSO send its own postings/gst lines, which would
+	// mean two independent statements of what the invoice is worth.
+	itemInvoice := isItemInvoice(op, in)
+
 	// A DELETE tombstone carries no postings — it only reverses the prior version
 	// out of ledger_balance. CREATE/ALTER must still be balanced double-entry.
 	if op != OpDelete {
-		if err := validatePostings(in.Postings); err != nil {
+		if itemInvoice {
+			if err := validateItemInvoice(in); err != nil {
+				return PostResult{}, err
+			}
+		} else if err := validatePostings(in.Postings); err != nil {
 			return PostResult{}, err
 		}
 		// Same guard, same reason: a tombstone's body is empty by definition, so
@@ -719,6 +738,38 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 				}
 				in.GST.SupplierStateCode = homeState
 			}
+
+			// THE ITEM INVOICE. Generate the GST lines and the postings from the
+			// stock lines, and pin each movement's amount to the same derived
+			// taxable value the GST line carries. Everything below this point —
+			// the GST verification, the hashed payload, the movement rows, the
+			// posting rows — then reads ONE set of numbers, which is what makes
+			// migration 0027's tie hold structurally instead of hopefully.
+			//
+			// The GSTParams are COPIED, not mutated: the caller still holds the
+			// original, and stamping server-generated Lines onto it would make a
+			// second post of the same input trip the "sent both" refusal.
+			if itemInvoice {
+				built, err := buildItemInvoice(ctx, tx, companyID, in)
+				if err != nil {
+					return err
+				}
+				g := *in.GST
+				g.Lines = built.gstLines
+				in.GST = &g
+				in.Inventory = built.inventory
+				in.Postings = built.postings
+
+				// Validate what WE built. The client had no postings to get wrong,
+				// so this is a check of the generator: an orientation table that
+				// put both legs on the same side, or a tax leg that went missing,
+				// shows up here as a domain error instead of as a deferred trigger
+				// violation at commit with no line number in it.
+				if err := validatePostings(in.Postings); err != nil {
+					return fmt.Errorf("ledger: item invoice generated an invalid voucher: %w", err)
+				}
+			}
+
 			// Derive + verify GST inside the tx, after the state default has been
 			// applied, so a derivation/verification error rolls the whole post back.
 			t, err := deriveAndVerifyGST(in)
@@ -1187,11 +1238,12 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 	return result, nil
 }
 
-// deriveAndVerifyGST runs the pure compliance engine and, when tax-ledger ids
-// are supplied, verifies the posted tax amounts equal the derived split. It
-// returns the derived result for stamping on the version.
-func deriveAndVerifyGST(in VoucherInput) (compliance.TaxResult, error) {
-	g := in.GST
+// deriveGST runs the PURE compliance engine over the params, defaulting the
+// ruleset version. It is split out of deriveAndVerifyGST so the item-invoice
+// generator can obtain the tax it must post BEFORE any postings exist to verify
+// against — the verification half then runs, unchanged, over what the generator
+// built. Pure and cheap, so deriving twice is a self-check, not waste.
+func deriveGST(g *GSTParams) (compliance.TaxResult, error) {
 	version := g.RulesetVersion
 	if version == "" {
 		version = "gst-2024-09"
@@ -1209,6 +1261,25 @@ func deriveAndVerifyGST(in VoucherInput) (compliance.TaxResult, error) {
 	}, rs)
 	if err != nil {
 		return compliance.TaxResult{}, fmt.Errorf("ledger: derive gst: %w", err)
+	}
+	return tax, nil
+}
+
+// deriveAndVerifyGST runs the pure compliance engine and, when tax-ledger ids
+// are supplied, verifies the posted tax amounts equal the derived split. It
+// returns the derived result for stamping on the version.
+//
+// NOTE THE HOLE THIS DOES NOT COVER, because it is the reason item_invoice.go
+// exists: `posted` sums posting amounts WITHOUT looking at dr_cr, so a fully
+// REVERSED voucher verifies here exactly as a correct one does. And nothing
+// here looks at the taxable BASE at all — g.Lines is taken as given. On an item
+// invoice both gaps are closed upstream, by generating the base from the stock
+// lines and the sides from invoiceOrientation.
+func deriveAndVerifyGST(in VoucherInput) (compliance.TaxResult, error) {
+	g := in.GST
+	tax, err := deriveGST(g)
+	if err != nil {
+		return compliance.TaxResult{}, err
 	}
 
 	// Cross-check the posted tax lines against the derived split when the caller

@@ -269,21 +269,28 @@ describe("Ctrl+H Change Mode", () => {
     expect(screen.queryByTestId("change-mode-overlay")).toBeNull();
   });
 
-  it("on a SALES voucher it offers the invoice modes, each marked not built", async () => {
-    // The honest answer, matching the keymap's treatment of unavailable combos:
-    // a key that silently does nothing is what makes a keyboard user distrust
-    // the app. Picking one dismisses the overlay and changes nothing.
+  it("on a SALES voucher it offers the INVOICE modes, not single/double entry", async () => {
+    // Sales/Purchase get Tally's invoice family. Item Invoice and Accounting
+    // Invoice are both real now (INV-I); "As Voucher" is genuinely not built
+    // and still says so — the same honesty the keymap applies to unavailable
+    // combos, because a key that silently does nothing is what makes a keyboard
+    // user distrust the app. Picking the not-built one dismisses and changes
+    // nothing, and single entry is never offered on a class that has no single
+    // side to infer.
     renderShell(spyClient().client);
     const app = screen.getByRole("application");
     fireEvent.keyDown(app, { key: "F8" });
     fireEvent.keyDown(app, { key: "h", ctrlKey: true });
 
     expect(await screen.findByTestId("change-mode-overlay")).toBeTruthy();
-    expect(screen.getByText(/Item Invoice — not built/)).toBeTruthy();
+    expect(screen.getByText(/^Item Invoice$/)).toBeTruthy();
     expect(screen.queryByText(/^Single Entry/)).toBeNull();
 
     fireEvent.mouseDown(screen.getByText(/As Voucher — not built/));
     await waitFor(() => expect(screen.queryByTestId("change-mode-overlay")).toBeNull());
     expect(screen.queryByTestId("single-entry-panel")).toBeNull();
+    // Dismissing a not-built mode leaves the accounting invoice in force.
+    expect(screen.queryByTestId("item-invoice-panel")).toBeNull();
+    expect(screen.getByTestId("gst-panel")).toBeTruthy();
   });
 });

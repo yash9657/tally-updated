@@ -279,6 +279,40 @@ export interface GSTRequest {
   igst_ledger_id?: string;
 }
 
+/**
+ * ONE LINE OF THE ITEM GRID (server.go's `inventoryLineReq`).
+ *
+ * Every numeric field is a fixed-4 decimal STRING for the reason every money
+ * field on this surface is: a JSON number is a float64, and a float quantity
+ * makes a closing stock balance depend on the order the lines were entered.
+ * Quantities are money here.
+ *
+ * `godown_id` / `batch_id` are OPTIONAL: "" means "not tracked on this line"
+ * and is stored as SQL NULL, so a company that never enables multi-location or
+ * batches is not forced to invent master rows.
+ *
+ * There is deliberately NO gst_rate_pct or hsn: the SERVER reads those from the
+ * stock item master. A client that could state a line's tax rate could tax a
+ * sale at whatever it liked.
+ *
+ * `direction` is "IN" or "OUT" and carries the sign; `qty` is always POSITIVE.
+ * `amount` is taken as entered and is never recomputed server-side from
+ * qty × rate, because Tally lets a user override a line total and silently
+ * "correcting" it would make the printed invoice disagree with the stored one.
+ */
+export interface InventoryLineRequest {
+  stock_item_id: string;
+  /** "" when the line is not tracked to a location. */
+  godown_id?: string;
+  /** "" when the line is not tracked to a batch/lot. */
+  batch_id?: string;
+  direction: "IN" | "OUT";
+  qty: Money;
+  rate?: Money;
+  discount_pct?: Money;
+  amount?: Money;
+}
+
 /** The generic voucher body posted to /vouchers/{class}. */
 export interface VoucherRequest {
   voucher_type_id?: string;
@@ -290,6 +324,28 @@ export interface VoucherRequest {
   created_by?: string;
   postings?: PostingRequest[];
   bill_allocations?: BillAllocationRequest[];
+  /**
+   * The ITEM GRID. When it is present ALONGSIDE a `gst` block on a GST-bearing
+   * class, the voucher is an ITEM INVOICE and the server GENERATES both the GST
+   * lines and the accounting postings from these lines plus the stock item
+   * masters. The body must therefore NOT also carry `gst.lines` or `postings`:
+   * either one is a 422, not a merge, because silently preferring one input
+   * over the other is how 100 units of stock get billed as a Rs 1 invoice with
+   * every layer reporting success.
+   *
+   * What the body still carries is what the grid cannot know: the party ledger,
+   * `item_ledger_id`, the place of supply and the three tax ledger ids.
+   */
+  inventory?: InventoryLineRequest[];
+  /**
+   * The revenue/expense ledger an ITEM INVOICE books the value of the goods to
+   * (a Sales Accounts ledger for F8, a Purchase Accounts ledger for F9).
+   *
+   * Meaningful ONLY on an item invoice, where the server generates the
+   * postings and therefore needs to be told which ledger the operator meant.
+   * Every other voucher states its own postings and leaves this unset.
+   */
+  item_ledger_id?: string;
   gst?: GSTRequest | null;
 }
 
@@ -378,6 +434,162 @@ export interface VoucherView {
   igst: Money;
   postings: PostingView[];
   bill_allocations: BillAllocationView[];
+  /**
+   * The item grid as stored. Field names MIRROR {@link InventoryLineRequest}
+   * where they overlap so an ALTER can re-POST what it read; the extra
+   * `item`/`godown`/`batch` names are display-only. THE UUIDS ARE THE
+   * LOAD-BEARING PART — re-resolving an item by name on an alter would silently
+   * drop a line whose item had been renamed, turning an edit of the narration
+   * into an inventory write-off.
+   *
+   * Optional in the type only because vouchers fetched from an older server
+   * (or a fixture written before the grid existed) carry no such array; treat
+   * an absent array as "no stock on this voucher".
+   */
+  inventory?: InventoryLineView[];
+}
+
+/** One stored item-grid line, as returned by GET /vouchers/{id}. */
+export interface InventoryLineView {
+  line_no: number;
+  stock_item_id: string;
+  /** Display name of the stock item. */
+  item: string;
+  /** "" when the line is not tracked to a location. */
+  godown_id: string;
+  godown: string;
+  /** "" when the line is not tracked to a batch/lot. */
+  batch_id: string;
+  batch: string;
+  direction: "IN" | "OUT";
+  qty: Money;
+  rate: Money;
+  discount_pct: Money;
+  amount: Money;
+}
+
+// ---------------------------------------------------------------------------
+// Inventory masters (GET .../stock-items, .../godowns, .../batches)
+// ---------------------------------------------------------------------------
+
+/**
+ * One stock item master. THERE ARE NO OPENING FIGURES HERE and their absence is
+ * the point: an opening position belongs to an (item, godown, batch) triple,
+ * not to the item — the same item legitimately opens with different quantities
+ * at different rates in two locations. Ask the Stock Summary for a position.
+ */
+export interface StockItemListItem {
+  id: string;
+  name: string;
+  /** "" for an item with no unit set. */
+  unit_symbol: string;
+  hsn: string;
+  /** Fixed-4 decimal string. The rate the SERVER taxes this item at. */
+  gst_rate_pct: Money;
+  /** Names the valuer that replays this item's movements, e.g. "WEIGHTED_AVG". */
+  valuation_method: string;
+  is_system: boolean;
+}
+export interface ListStockItemsResponse {
+  stock_items: StockItemListItem[];
+}
+
+/** One stock location. `is_system` marks the seeded 'Main Location'. */
+export interface GodownListItem {
+  id: string;
+  name: string;
+  is_system: boolean;
+}
+export interface ListGodownsResponse {
+  godowns: GodownListItem[];
+}
+
+/**
+ * One batch/lot. Batch names are ITEM-scoped, not company-scoped: two different
+ * items may each carry a batch called 'B-01' and they are unrelated, so the
+ * item id travels with every batch.
+ */
+export interface StockBatchListItem {
+  id: string;
+  stock_item_id: string;
+  stock_item_name: string;
+  name: string;
+  /** ISO date, or "" when the batch carries none. */
+  mfg_date: string;
+  expiry_date: string;
+}
+export interface ListStockBatchesResponse {
+  batches: StockBatchListItem[];
+}
+
+// ---------------------------------------------------------------------------
+// Stock Summary (GET .../stock-summary)
+// ---------------------------------------------------------------------------
+
+/**
+ * The position of one (item, godown, batch) triple as at a date.
+ *
+ * NOTHING HERE IS STORED. Closing quantity is a signed sum over the movement
+ * ledger and closing VALUE is derived by replaying that ledger through the
+ * server's valuer, because valuation is order-dependent — a back-dated purchase
+ * re-prices every issue that already happened after it. `as_on` is a REPLAY
+ * BOUNDARY, not a filter on a balances table.
+ */
+export interface StockPositionRow {
+  stock_item_id: string;
+  item: string;
+  unit: string;
+  /** "" when the dimension is untracked (the server's uuid.Nil). */
+  godown_id: string;
+  godown: string;
+  batch_id: string;
+  batch: string;
+  valuation_method: string;
+  opening_qty: Money;
+  opening_value: Money;
+  inward_qty: Money;
+  inward_value: Money;
+  outward_qty: Money;
+  /** COST CONSUMED, never what the goods sold for. */
+  outward_value: Money;
+  closing_qty: Money;
+  closing_value: Money;
+  /**
+   * PRESENTATION ONLY, 4 dp. Never multiply it back out by the closing quantity
+   * to re-derive the value: the running average carries more precision than the
+   * rounded rate can reproduce.
+   */
+  closing_rate: Money;
+}
+
+/**
+ * One item's total across its locations/batches. There is deliberately no
+ * `closing_rate` on an item total: two godowns of the same item carry two
+ * different average costs, and the average of the averages is not the average.
+ */
+export interface StockSummaryItem {
+  stock_item_id: string;
+  item: string;
+  unit: string;
+  opening_qty: Money;
+  opening_value: Money;
+  inward_qty: Money;
+  inward_value: Money;
+  outward_qty: Money;
+  outward_value: Money;
+  closing_qty: Money;
+  closing_value: Money;
+  positions: StockPositionRow[];
+}
+
+export interface StockSummaryResponse {
+  /** The as-at date the replay stopped at; "" when unbounded. */
+  as_on: string;
+  items: StockSummaryItem[];
+  /** The same positions, flat — the item tree is folded from these. */
+  rows: StockPositionRow[];
+  /** What a Stock-in-Hand line on the Balance Sheet is worth on that date. */
+  total_value: Money;
 }
 
 // ---------------------------------------------------------------------------

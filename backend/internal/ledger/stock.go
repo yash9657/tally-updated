@@ -84,6 +84,39 @@ type InventoryLine struct {
 	Amount decimal.Decimal
 }
 
+// hundredPct is the denominator of every percentage in this package. Named so
+// the discount arithmetic below reads as arithmetic rather than as a magic 100.
+var hundredPct = decimal.NewFromInt(100)
+
+// moneyScale is the number of decimal places money and quantity carry here. It
+// matches the NUMERIC(19,4) columns and compliance's own scale, which is what
+// lets a derived taxable value and the engine's rounding of it agree exactly.
+const moneyScale int32 = 4
+
+// TaxableValue is the line's DERIVED pre-tax value: qty * rate less the line
+// discount, quantized to the money scale.
+//
+// THIS IS NOT Amount. Amount is the line total AS ENTERED and may legitimately
+// be an override on a stock-only document (see the field comment above); this
+// is what the line is WORTH by the numbers on it. On an ITEM INVOICE the two
+// must be the same number, because the taxable base that GST is charged on IS
+// the value of the goods that moved — so item_invoice.go computes this ONCE and
+// writes it to both the movement's amount and the GST line's taxable value,
+// and migration 0027's deferred trigger refuses the commit if anything ever
+// makes them differ.
+//
+// The discount is applied as a percentage of the gross rather than subtracted
+// as an amount because that is what the grid captures (Tally's "Disc %"
+// column). Rounding happens ONCE, at the end: rounding the discount and then
+// the net would drift a paisa on lines like 3 x 333.33 @ 7.5%.
+func (l InventoryLine) TaxableValue() decimal.Decimal {
+	gross := l.Qty.Mul(l.Rate)
+	if l.DiscountPct.IsZero() {
+		return gross.Round(moneyScale)
+	}
+	return gross.Mul(hundredPct.Sub(l.DiscountPct)).Div(hundredPct).Round(moneyScale)
+}
+
 // InventoryLineView is one inventory line of a FETCHED voucher, carrying the
 // REAL item/godown/batch uuids alongside their resolved names.
 //

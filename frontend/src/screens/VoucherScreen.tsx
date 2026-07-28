@@ -27,19 +27,31 @@ import {
   buildGstVoucherRequest,
   type GstFormState,
 } from "./vouchers/gstVoucher";
-import { normalizeMoney } from "./vouchers/money";
+import { addMoney, normalizeMoney } from "./vouchers/money";
+import {
+  buildItemInvoiceRequest,
+  deriveItemInvoiceTax,
+  emptyItemLine,
+  invoiceTaxable,
+  isKeyedLine,
+  lineAmount,
+  type ItemInvoiceLine,
+} from "./vouchers/itemInvoice";
 import { acceptEditedPurchaseDraft, canRebuildDraft } from "./vouchers/draftAccept";
 import { acceptPurchaseDraft, ApiError } from "../api";
 import type {
   DayBookEntry,
   FieldConfidence,
+  GodownListItem,
   PostingRequest,
   PurchaseVoucherDraft,
+  StockItemListItem,
   VoucherDraftBody,
   VoucherRequest,
   VoucherResponse,
   VoucherView,
 } from "../api";
+import type { EntryMode } from "../keystroke/types";
 
 /**
  * The account groups a PARTY field offers. A voucher's party is a debtor, a
@@ -129,6 +141,11 @@ interface VoucherForm {
    * always offer one more line without forcing the user to fill it.
    */
   lines: { ledger: string; amount: string }[];
+  /**
+   * ITEM-INVOICE grid rows (Ctrl+H > Item Invoice on Sales/Purchase). Empty
+   * rows are ignored on accept, so the form can always offer one more line.
+   */
+  items: ItemInvoiceLine[];
 }
 
 function emptyForm(): VoucherForm {
@@ -143,6 +160,7 @@ function emptyForm(): VoucherForm {
     gst: emptyGstFormState(),
     taxableValue: "0.0000",
     lines: [{ ledger: "", amount: "" }],
+    items: [emptyItemLine()],
   };
 }
 
@@ -174,7 +192,34 @@ function formFromView(view: VoucherView): VoucherForm {
     // (a payment credits one bank and debits many expenses), so the rows are
     // whichever side is NOT the class's primary side.
     lines: linesFromPostings(view),
+    // THE ALTER ROUND TRIP FOR STOCK. The stored grid carries the real item /
+    // godown / batch uuids; seeding from it (rather than re-resolving anything
+    // by name) is what lets an edit of the narration re-post the SAME movements
+    // instead of writing the voucher's inventory off to nothing.
+    items: itemsFromView(view),
   };
+}
+
+/**
+ * The stored item grid as editable rows. gstRatePct / hsn / unit are NOT stored
+ * on a movement (the server reads them from the item master), so they are left
+ * empty here and re-joined from the fetched masters when the grid renders — see
+ * `joinMasters`. A voucher with no stock yields one blank row.
+ */
+function itemsFromView(view: VoucherView): ItemInvoiceLine[] {
+  const rows = (view.inventory ?? []).map((l) => ({
+    stockItemId: l.stock_item_id,
+    itemName: l.item,
+    godownId: l.godown_id,
+    batchId: l.batch_id,
+    qty: l.qty,
+    rate: l.rate,
+    discountPct: l.discount_pct,
+    gstRatePct: "",
+    hsn: "",
+    unit: "",
+  }));
+  return rows.length > 0 ? rows : [emptyItemLine()];
 }
 
 /**
@@ -218,6 +263,10 @@ function formFromDraft(draft: PurchaseVoucherDraft): VoucherForm {
     // Draft mode is F9 Purchase, which is a GST (double-entry) form — the
     // single-entry particulars are unused there, but the shape must be whole.
     lines: [{ ledger: "", amount: "" }],
+    // An OCR draft carries no stock: insightd reads a supplier's bill, and the
+    // items on it are the SUPPLIER's descriptions, not this company's stock
+    // masters. Matching them would be a guess, and a guess that moves stock.
+    items: [emptyItemLine()],
   };
 }
 
@@ -324,6 +373,42 @@ export function VoucherScreen({
     };
   }, [client, companyID]);
   const partyNames = parties.map((p) => p.name);
+
+  // THE INVENTORY MASTERS the item grid picks from. Fetched only when this
+  // class can key an item invoice, so a Payment screen never asks a Data Entry
+  // operator's session for stock masters it will not render.
+  //
+  // A failure is SURFACED, never swallowed: an empty item picker with no
+  // explanation reads as "this company sells nothing", which is a different and
+  // much more alarming statement than "the list could not be loaded".
+  const [stockItems, setStockItems] = useState<StockItemListItem[]>([]);
+  const [godowns, setGodowns] = useState<GodownListItem[]>([]);
+  const [stockError, setStockError] = useState<string | null>(null);
+  const wantsStock = cfg.itemInvoice;
+  useEffect(() => {
+    if (!wantsStock) return;
+    let live = true;
+    Promise.all([client.listStockItems(companyID), client.listGodowns(companyID)])
+      .then(([items, gd]) => {
+        if (!live) return;
+        setStockItems(items.stock_items);
+        setGodowns(gd.godowns);
+        setStockError(null);
+      })
+      .catch((e: unknown) => {
+        if (!live) return;
+        setStockError(
+          e instanceof ApiError
+            ? `Stock masters unavailable (${e.status}). ${e.message}`
+            : e instanceof Error
+              ? e.message
+              : String(e),
+        );
+      });
+    return () => {
+      live = false;
+    };
+  }, [client, companyID, wantsStock]);
 
   const loadedEntry = isAlter ? (loaded?.entry ?? null) : null;
   const loadedVoucherID = loadedEntry?.voucher_id ?? null;
@@ -537,6 +622,61 @@ export function VoucherScreen({
     [client, companyID, homeStateCode, type],
   );
 
+  /**
+   * Build the ITEM-INVOICE request: resolve the party ledger, the ITEM ledger
+   * (the sales/purchase account the goods are booked to) and the three tax
+   * ledgers, then hand the grid to {@link buildItemInvoiceRequest}.
+   *
+   * NOTHING here computes an amount. The server generates the GST lines and
+   * every posting from the stock lines and refuses a body that also states them
+   * — so the two ledger CHOICES below are the whole of the client's accounting
+   * responsibility, and both are asserted BY NAME in the tests. Booking a
+   * purchase to Domestic Sales would balance perfectly and report the company's
+   * costs as revenue; no totals check anywhere can catch that.
+   *
+   * The grid rows are still joined to the fetched masters, but only so the
+   * on-screen tax PREVIEW uses each item's real rate. The rate that is charged
+   * comes from the master server-side, never from this request.
+   */
+  const buildItemRequest = useCallback(
+    async (f: VoucherForm): Promise<VoucherRequest> => {
+      const rows = joinMasters(f.items, stockItems);
+      const outputTax = await ensureOutputTaxLedgers(client, companyID);
+      const partyLedgerId =
+        f.partyLedgerId ||
+        (await ensureLedger(client, companyID, {
+          name: f.party,
+          groupName: type === "purchase" ? "Sundry Creditors" : "Sundry Debtors",
+          stateCode: f.partyStateCode || undefined,
+        }));
+      const incomeSpec = GST_INCOME_LEDGER[type] ?? {
+        name: "Domestic Sales",
+        group: "Sales Accounts",
+      };
+      const itemLedgerId = await ensureLedger(client, companyID, {
+        name: incomeSpec.name,
+        groupName: incomeSpec.group,
+      });
+      return buildItemInvoiceRequest({
+        // A sale takes goods OUT of the godown; a purchase brings them IN. The
+        // server refuses the other way round: a sale that ADDED stock would
+        // inflate the P&L and the closing inventory at the same time.
+        direction: type === "purchase" ? "IN" : "OUT",
+        partyLedgerId,
+        itemLedgerId,
+        outputTax,
+        supplierStateCode: homeStateCode,
+        placeOfSupplyStateCode: f.gst.placeOfSupply,
+        lines: rows,
+        voucherNo: f.voucherNo || undefined,
+        voucherDate: f.date,
+        narration: f.narration,
+        party: f.party,
+      });
+    },
+    [client, companyID, homeStateCode, type, stockItems],
+  );
+
   // Ctrl+A Accept: POST (create) or PUT (alter) via editActions, then surface
   // the server-resolved voucher_no AND the server-derived GST split. Runs BEFORE
   // the machine resets the frame.
@@ -598,11 +738,14 @@ export function VoucherScreen({
     // before the request promise resolves, so we must not re-read ctxRef late or
     // an alter would mis-route to a create (POST instead of PUT).
     const ctx = ctxRef.current;
-    const reqPromise = cfg.showGst
-      ? buildGstRequest(f)
-      : entryMode === "single"
-        ? buildSingleEntryRequest(f)
-        : Promise.resolve(buildPlainRequest(f));
+    const reqPromise =
+      entryMode === "item-invoice"
+        ? buildItemRequest(f)
+        : cfg.showGst
+          ? buildGstRequest(f)
+          : entryMode === "single"
+            ? buildSingleEntryRequest(f)
+            : Promise.resolve(buildPlainRequest(f));
     reqPromise
       .then((req) => acceptVoucher(client, companyID, ctx, req))
       .then((res: VoucherResponse) => {
@@ -619,6 +762,7 @@ export function VoucherScreen({
       });
   }, [
     buildGstRequest,
+    buildItemRequest,
     buildPlainRequest,
     cfg.showGst,
     entryMode,
@@ -839,7 +983,18 @@ export function VoucherScreen({
         />
       </div>
 
-      {cfg.showGst ? (
+      {entryMode === "item-invoice" ? (
+        <ItemInvoicePanel
+          form={form}
+          setForm={setForm}
+          stockItems={stockItems}
+          godowns={godowns}
+          stockError={stockError}
+          supplierStateCode={homeStateCode}
+          voucherType={type}
+          tax={taxResult}
+        />
+      ) : cfg.showGst ? (
         <GstPanel
           form={form}
           setForm={setForm}
@@ -1160,9 +1315,11 @@ function DraftPrefillPanel({
  * force, and picking one takes effect immediately — Tally's behaviour, and no
  * confirming Enter.
  *
- * Sales/Purchase keep their invoice-mode labels, each marked "not built": the
- * same honesty the keymap applies to unavailable combos, since a key that
- * silently does nothing is what makes a keyboard user distrust the app.
+ * Sales/Purchase get the INVOICE family: Item Invoice (a stock grid whose lines
+ * generate the accounting and the GST) and Accounting Invoice (a typed taxable
+ * value). "As Voucher" is genuinely not built and still says so — the same
+ * honesty the keymap applies to unavailable combos, since a key that silently
+ * does nothing is what makes a keyboard user distrust the app.
  */
 function ChangeModeOverlay({
   type,
@@ -1170,7 +1327,7 @@ function ChangeModeOverlay({
   onSelect,
 }: {
   type: VoucherType;
-  current: "single" | "double";
+  current: EntryMode;
   onSelect: (item: string) => void;
 }) {
   const options = entryModesFor(type);
@@ -1301,6 +1458,263 @@ function SingleEntryPanel({
       <p className="mt-2" data-testid="single-total">
         {oneSide} {accountLabel}: {total}
       </p>
+    </div>
+  );
+}
+
+/**
+ * Join keyed grid rows to the fetched stock masters.
+ *
+ * The tax RATE, the HSN and the unit live on the item master, never on the
+ * movement — which is deliberate: a wire that let a client state a line's tax
+ * rate would let a client tax a sale at whatever it liked. The server derives
+ * GST from the master, so the client must derive its (verifiable) tax postings
+ * from the same master or the post is refused.
+ *
+ * A row naming an item the master list does not contain keeps its keyed
+ * quantity but carries a ZERO rate here. That is the honest failure: it makes
+ * the derived tax visibly wrong on screen, and the server refuses the post,
+ * rather than the client quietly inventing a rate that would have been accepted.
+ */
+function joinMasters(
+  rows: readonly ItemInvoiceLine[],
+  stockItems: readonly StockItemListItem[],
+): ItemInvoiceLine[] {
+  return rows.map((r) => {
+    const master = stockItems.find((s) => s.id === r.stockItemId);
+    if (!master) return r;
+    return {
+      ...r,
+      itemName: master.name,
+      gstRatePct: master.gst_rate_pct,
+      hsn: master.hsn,
+      unit: master.unit_symbol,
+    };
+  });
+}
+
+/**
+ * THE ITEM INVOICE GRID (Ctrl+H > Item Invoice on F8 / F9).
+ *
+ * One row per item: what, from/into which godown, how many, at what rate, less
+ * what discount. The line amount and the invoice totals are DERIVED from those
+ * and are deliberately not typeable — that is the whole point of the mode, and
+ * an editable amount would let the printed document disagree with the stock
+ * movement it is supposed to describe.
+ *
+ * The tax shown before a save is a PREVIEW derived client-side purely so the
+ * operator can see what they are about to post; the figures displayed AFTER a
+ * save come from the server's response (`tax`), which is the only authority.
+ */
+function ItemInvoicePanel({
+  form,
+  setForm,
+  stockItems,
+  godowns,
+  stockError,
+  supplierStateCode,
+  voucherType,
+  tax,
+}: {
+  form: VoucherForm;
+  setForm: React.Dispatch<React.SetStateAction<VoucherForm>>;
+  stockItems: StockItemListItem[];
+  godowns: GodownListItem[];
+  stockError: string | null;
+  supplierStateCode: string;
+  voucherType: VoucherType;
+  tax: { cgst: string; sgst: string; igst: string } | null;
+}) {
+  const rows = joinMasters(form.items, stockItems);
+  const taxable = invoiceTaxable(rows);
+  const preview = deriveItemInvoiceTax(
+    rows,
+    supplierStateCode,
+    form.gst.placeOfSupply,
+  );
+  // WHICH WAY THE GOODS MOVE, said out loud on the form. The server refuses
+  // the other direction, so this is a statement of what will happen, not a
+  // second implementation of it.
+  const inward = voucherType === "purchase";
+
+  const setRow = (i: number, patch: Partial<ItemInvoiceLine>) =>
+    setForm((f) => ({
+      ...f,
+      items: f.items.map((l, idx) => (idx === i ? { ...l, ...patch } : l)),
+    }));
+
+  return (
+    <div className="mt-3 bg-tally-panel p-3 text-sm" data-testid="item-invoice-panel">
+      <h2 className="mb-1 text-tally-title">Item Invoice</h2>
+      <p className="mb-2 text-xs">
+        Key the GOODS; the SERVER derives the accounting and the GST from them,
+        in the transaction that writes the stock movement — the client sends no
+        amounts at all. Stock moves {inward ? "into" : "out of"} the godown on
+        save. Ctrl+H switches back to the accounting invoice.
+      </p>
+
+      {stockError ? (
+        <p data-testid="stock-masters-error" className="mb-2 text-xs text-red-400">
+          {stockError}
+        </p>
+      ) : stockItems.length === 0 ? (
+        <p data-testid="stock-items-empty" className="mb-2 text-xs">
+          This company has no stock items yet — create one (Alt+C from Gateway
+          &gt; Masters) before keying an item invoice.
+        </p>
+      ) : null}
+
+      <label className="mb-2 flex items-center gap-2 py-0.5">
+        <span className="w-32">Place of Supply</span>
+        <input
+          data-testid="gst-pos"
+          className="bg-tally-field px-2 text-tally-fieldText"
+          value={form.gst.placeOfSupply}
+          onChange={(e) =>
+            setForm((f) => ({
+              ...f,
+              gst: { ...f.gst, placeOfSupply: e.target.value },
+            }))
+          }
+        />
+      </label>
+
+      <table className="w-full max-w-4xl">
+        <thead>
+          <tr className="text-left text-xs text-tally-title">
+            <th className="pr-2">Item</th>
+            <th className="pr-2">Godown</th>
+            <th className="pr-2 text-right">Qty</th>
+            <th className="pr-2 text-right">Rate</th>
+            <th className="pr-2 text-right">Disc %</th>
+            <th className="pr-2 text-right">Amount</th>
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((l, i) => (
+            <tr key={i} className="align-top">
+              <td className="pr-2">
+                <select
+                  aria-label={`Item ${i + 1}`}
+                  data-testid={`item-select:${i}`}
+                  className="bg-tally-field px-1 text-tally-fieldText"
+                  value={l.stockItemId}
+                  onChange={(e) => setRow(i, { stockItemId: e.target.value })}
+                >
+                  <option value="">— select item —</option>
+                  {stockItems.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+                {l.unit ? (
+                  <span className="ml-1 text-xs" data-testid={`item-unit:${i}`}>
+                    {l.unit}
+                  </span>
+                ) : null}
+              </td>
+              <td className="pr-2">
+                {/* "" is a REAL choice, not a missing one: an untracked line
+                    posts a NULL godown, which is what a company that never
+                    enabled multi-location wants. */}
+                <select
+                  aria-label={`Godown ${i + 1}`}
+                  data-testid={`item-godown:${i}`}
+                  className="bg-tally-field px-1 text-tally-fieldText"
+                  value={l.godownId}
+                  onChange={(e) => setRow(i, { godownId: e.target.value })}
+                >
+                  <option value="">— not tracked —</option>
+                  {godowns.map((g) => (
+                    <option key={g.id} value={g.id}>
+                      {g.name}
+                    </option>
+                  ))}
+                </select>
+              </td>
+              <td className="pr-2">
+                <input
+                  aria-label={`Quantity ${i + 1}`}
+                  data-testid={`item-qty:${i}`}
+                  className="w-24 bg-tally-field px-1 text-right text-tally-fieldText outline-none"
+                  value={l.qty}
+                  placeholder="0.0000"
+                  onChange={(e) => setRow(i, { qty: e.target.value })}
+                />
+              </td>
+              <td className="pr-2">
+                <input
+                  aria-label={`Rate ${i + 1}`}
+                  data-testid={`item-rate:${i}`}
+                  className="w-24 bg-tally-field px-1 text-right text-tally-fieldText outline-none"
+                  value={l.rate}
+                  placeholder="0.0000"
+                  onChange={(e) => setRow(i, { rate: e.target.value })}
+                />
+              </td>
+              <td className="pr-2">
+                <input
+                  aria-label={`Discount ${i + 1}`}
+                  data-testid={`item-disc:${i}`}
+                  className="w-16 bg-tally-field px-1 text-right text-tally-fieldText outline-none"
+                  value={l.discountPct}
+                  placeholder="0"
+                  onChange={(e) => setRow(i, { discountPct: e.target.value })}
+                />
+              </td>
+              {/* DERIVED, never typed — see the panel doc comment. */}
+              <td className="pr-2 text-right" data-testid={`item-amount:${i}`}>
+                {isKeyedLine(l) ? lineAmount(l) : "—"}
+              </td>
+              <td>
+                {form.items.length > 1 ? (
+                  <button
+                    type="button"
+                    data-testid={`item-remove:${i}`}
+                    className="px-1 text-xs underline"
+                    onClick={() =>
+                      setForm((f) => ({
+                        ...f,
+                        items: f.items.filter((_, idx) => idx !== i),
+                      }))
+                    }
+                  >
+                    remove
+                  </button>
+                ) : null}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      <button
+        type="button"
+        data-testid="item-add-line"
+        className="mt-1 px-2 py-0.5 text-xs underline"
+        onClick={() =>
+          setForm((f) => ({ ...f, items: [...f.items, emptyItemLine()] }))
+        }
+      >
+        + Add item
+      </button>
+
+      <div className="mt-2 border-t border-tally-field pt-2">
+        <p data-testid="item-taxable">Goods (taxable): {taxable}</p>
+        {tax ? (
+          // AFTER a save: the server's own split, read back from the response.
+          <TaxPanel tax={tax} />
+        ) : (
+          <p className="text-xs" data-testid="item-tax-preview">
+            Tax preview — CGST {preview.cgst} / SGST {preview.sgst} / IGST{" "}
+            {preview.igst}; the party is billed{" "}
+            {addMoney(taxable, preview.total)}. PREVIEW ONLY: every figure on the
+            saved voucher is the server&rsquo;s, derived from the grid above.
+          </p>
+        )}
+      </div>
     </div>
   );
 }

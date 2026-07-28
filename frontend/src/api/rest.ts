@@ -29,9 +29,13 @@ import type {
   GSTR1Response,
   ImportTallyXMLQuery,
   ImportTallyXMLResponse,
+  ListGodownsResponse,
+  ListStockBatchesResponse,
+  ListStockItemsResponse,
   OutstandingsQuery,
   OutstandingsResponse,
   ProfitLossResponse,
+  StockSummaryResponse,
   TrialBalanceResponse,
   VoucherRequest,
   VoucherResponse,
@@ -132,6 +136,17 @@ export function createRestClient(
         `${company(companyID)}/stock-items`,
         req,
       );
+    },
+    listStockItems(companyID) {
+      return http.get<ListStockItemsResponse>(
+        `${company(companyID)}/stock-items`,
+      );
+    },
+    listGodowns(companyID) {
+      return http.get<ListGodownsResponse>(`${company(companyID)}/godowns`);
+    },
+    listStockBatches(companyID) {
+      return http.get<ListStockBatchesResponse>(`${company(companyID)}/batches`);
     },
 
     postSalesVoucher(companyID, req: VoucherRequest) {
@@ -279,6 +294,14 @@ export function createRestClient(
       return http.get<OutstandingsResponse>(
         `${company(companyID)}/outstandings`,
         query,
+      );
+    },
+    getStockSummary(companyID, asOn?: string) {
+      // `as_on` is omitted entirely when absent (not sent as ""), so the server
+      // replays the WHOLE movement ledger — a position has no lower bound.
+      return http.get<StockSummaryResponse>(
+        `${company(companyID)}/stock-summary`,
+        asOn ? { as_on: asOn } : undefined,
       );
     },
 

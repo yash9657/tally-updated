@@ -47,6 +47,19 @@ import type {
   VoucherView,
   PostingView,
   BillAllocationView,
+  GodownListItem,
+  GSTLineRequest,
+  InventoryLineRequest,
+  InventoryLineView,
+  PostingRequest,
+  ListGodownsResponse,
+  ListStockBatchesResponse,
+  ListStockItemsResponse,
+  StockBatchListItem,
+  StockItemListItem,
+  StockPositionRow,
+  StockSummaryItem,
+  StockSummaryResponse,
   ListLedgersResponse,
   SetLedgerOpeningRequest,
   SetLedgerOpeningResponse,
@@ -75,12 +88,239 @@ import type {
   UpdateSecurityLevelResponse,
 } from "./admin";
 import { deriveGstSplit } from "../screens/vouchers/gstDerive";
+import { taxableValueOf } from "../screens/vouchers/itemInvoice";
+
+/**
+ * WHICH SIDE each leg of an item invoice lands on, mirroring
+ * ledger.orientationFor. One row per class, so a reversed purchase is a visible
+ * diff rather than an emergent property of where four literals were typed.
+ * The notes REVERSE their parent document, which is why a credit note reads
+ * like a purchase here and a debit note like a sale.
+ */
+const ITEM_INVOICE_ORIENTATION: Readonly<
+  Record<string, { party: "D" | "C"; goods: "D" | "C"; tax: "D" | "C" }>
+> = {
+  sales: { party: "D", goods: "C", tax: "C" },
+  purchase: { party: "C", goods: "D", tax: "D" },
+  "credit-note": { party: "C", goods: "D", tax: "D" },
+  "debit-note": { party: "D", goods: "C", tax: "C" },
+};
+
+/** Which way the goods physically move, mirroring ledger.expectedStockDirection. */
+const ITEM_INVOICE_DIRECTION: Readonly<Record<string, "IN" | "OUT">> = {
+  sales: "OUT",
+  "debit-note": "OUT",
+  purchase: "IN",
+  "credit-note": "IN",
+};
 
 let idCounter = 0;
 function id(prefix: string): string {
   idCounter += 1;
   // Deterministic, UUID-shaped-enough id for tests.
   return `${prefix}-${idCounter.toString().padStart(12, "0")}`;
+}
+
+/**
+ * The system 'Main Location' every company is seeded with (migration 0025's
+ * seed_inventory_defaults). The id is derived from the company id so it is
+ * stable across calls without a counter.
+ */
+function mainLocation(companyID: string): GodownListItem {
+  return { id: `${companyID}:godown-main`, name: "Main Location", is_system: true };
+}
+
+// ---------------------------------------------------------------------------
+// Stock replay (the mock's GET /stock-summary)
+// ---------------------------------------------------------------------------
+//
+// STOCK VALUE IS NEVER STORED — not on the server and not here. The position is
+// replayed from the movement lines held on the HEAD version of each voucher,
+// which is the mock's equivalent of the server's current_version_id join: an
+// altered voucher restates its view in place and a deleted one is removed from
+// `views`, so neither can double-count.
+//
+// The valuation mirrors internal/inventory.WeightedAverage arm for arm,
+// including the "an issue that empties the position takes the whole remaining
+// value with it" rule — without it a sub-paisa residue survives at zero
+// quantity and the next inward blends it into its cost. It is still a MOCK: it
+// has no stock_opening (nothing here can create one) and the server's valuer
+// stays authoritative. Quantities and values are BigInt-scaled integers, never
+// floats, for the same reason the wire is strings.
+
+/** Scale of a fixed-4 quantity/value, as a BigInt. */
+const QSCALE = 10_000n;
+/** Working precision of the running weighted-average cost rate (inventory.rateScale). */
+const RATE_SCALE = 10n ** 16n;
+
+/** Exact fixed-4 string -> integer ten-thousandths (no Number in the path). */
+function q4(value: string): bigint {
+  const m = /^([+-]?)(\d*)(?:\.(\d*))?$/.exec((value ?? "").trim());
+  if (!m) return 0n;
+  const whole = m[2] ?? "";
+  const frac = (m[3] ?? "").slice(0, 4).padEnd(4, "0");
+  if (whole === "" && (m[3] ?? "") === "") return 0n;
+  return (m[1] === "-" ? -1n : 1n) * BigInt((whole === "" ? "0" : whole) + frac);
+}
+
+/** Integer ten-thousandths -> fixed-4 string. */
+function q4str(units: bigint): string {
+  const neg = units < 0n;
+  const abs = (neg ? -units : units).toString().padStart(5, "0");
+  return `${neg ? "-" : ""}${abs.slice(0, -4)}.${abs.slice(-4)}`;
+}
+
+/** Divide rounding half-away-from-zero (shopspring/decimal's Round). */
+function q4div(n: bigint, d: bigint): bigint {
+  return n >= 0n ? (n + d / 2n) / d : -((-n + d / 2n) / d);
+}
+
+/** One position's running totals during a replay. */
+interface MockPosition {
+  key: { itemID: string; godownID: string; batchID: string };
+  item: string;
+  unit: string;
+  godown: string;
+  batch: string;
+  inwardQty: bigint;
+  inwardValue: bigint;
+  outwardQty: bigint;
+  outwardValue: bigint;
+  qty: bigint;
+  value: bigint;
+}
+
+function replayStock(c: MockCompany, asOn?: string): StockSummaryResponse {
+  // Flatten the head versions into movements, keeping the voucher's date and
+  // number so the replay can be ordered the way the server orders it. Weighted
+  // average is ORDER-DEPENDENT, so an unordered fold would return a different,
+  // equally confident closing value depending on insertion order.
+  const moves: {
+    date: string;
+    no: string;
+    lineNo: number;
+    line: InventoryLineView;
+  }[] = [];
+  for (const v of c.views.values()) {
+    if (asOn && v.voucher_date > asOn) continue;
+    for (const line of v.inventory ?? []) {
+      moves.push({ date: v.voucher_date, no: v.voucher_no, lineNo: line.line_no, line });
+    }
+  }
+  moves.sort(
+    (a, b) =>
+      a.date.localeCompare(b.date) ||
+      a.no.localeCompare(b.no) ||
+      a.lineNo - b.lineNo,
+  );
+
+  const positions = new Map<string, MockPosition>();
+  for (const m of moves) {
+    const l = m.line;
+    const key = `${l.stock_item_id}|${l.godown_id}|${l.batch_id}`;
+    let p = positions.get(key);
+    if (!p) {
+      p = {
+        key: { itemID: l.stock_item_id, godownID: l.godown_id, batchID: l.batch_id },
+        item: l.item,
+        unit: c.stockItems.find((s) => s.id === l.stock_item_id)?.unit_symbol ?? "",
+        godown: l.godown,
+        batch: l.batch,
+        inwardQty: 0n,
+        inwardValue: 0n,
+        outwardQty: 0n,
+        outwardValue: 0n,
+        qty: 0n,
+        value: 0n,
+      };
+      positions.set(key, p);
+    }
+    const qty = q4(l.qty);
+    // The line's value is RECOMPUTED from qty/rate/discount, exactly as
+    // inventory.Movement.Value() does — the stored `amount` is the invoice
+    // figure and the valuer never reads it.
+    const gross = q4div(qty * q4(l.rate), QSCALE);
+    const disc = q4(l.discount_pct);
+    const value = disc === 0n ? gross : q4div(gross * (100n * QSCALE - disc), 100n * QSCALE);
+
+    if (l.direction === "IN") {
+      p.inwardQty += qty;
+      p.inwardValue += value;
+      p.qty += qty;
+      p.value += value;
+      continue;
+    }
+    const nextQty = p.qty - qty;
+    let consumed: bigint;
+    if (nextQty === 0n) {
+      consumed = p.value; // empty the position: take the whole remaining value
+      p.qty = 0n;
+      p.value = 0n;
+    } else {
+      const rate = p.qty === 0n ? 0n : q4div(p.value * RATE_SCALE, p.qty);
+      consumed = q4div(qty * rate, RATE_SCALE);
+      p.qty = nextQty;
+      p.value -= consumed;
+    }
+    p.outwardQty += qty;
+    p.outwardValue += consumed;
+  }
+
+  const rows: StockPositionRow[] = [...positions.values()].map((p) => ({
+    stock_item_id: p.key.itemID,
+    item: p.item,
+    unit: p.unit,
+    godown_id: p.key.godownID,
+    godown: p.godown,
+    batch_id: p.key.batchID,
+    batch: p.batch,
+    valuation_method: "WEIGHTED_AVG",
+    opening_qty: "0.0000",
+    opening_value: "0.0000",
+    inward_qty: q4str(p.inwardQty),
+    inward_value: q4str(p.inwardValue),
+    outward_qty: q4str(p.outwardQty),
+    outward_value: q4str(p.outwardValue),
+    closing_qty: q4str(p.qty),
+    closing_value: q4str(p.value),
+    closing_rate: q4str(p.qty === 0n ? 0n : q4div(p.value * QSCALE, p.qty)),
+  }));
+  rows.sort((a, b) => a.item.localeCompare(b.item) || a.godown.localeCompare(b.godown));
+
+  // Fold the flat rows into the item tree, exactly as the server does — one set
+  // of numbers presented two ways, never two computations that can disagree.
+  const items: StockSummaryItem[] = [];
+  for (const row of rows) {
+    let it = items.find((x) => x.stock_item_id === row.stock_item_id);
+    if (!it) {
+      it = {
+        stock_item_id: row.stock_item_id,
+        item: row.item,
+        unit: row.unit,
+        opening_qty: "0.0000",
+        opening_value: "0.0000",
+        inward_qty: "0.0000",
+        inward_value: "0.0000",
+        outward_qty: "0.0000",
+        outward_value: "0.0000",
+        closing_qty: "0.0000",
+        closing_value: "0.0000",
+        positions: [],
+      };
+      items.push(it);
+    }
+    it.positions.push(row);
+    it.inward_qty = addMoney(it.inward_qty, row.inward_qty);
+    it.inward_value = addMoney(it.inward_value, row.inward_value);
+    it.outward_qty = addMoney(it.outward_qty, row.outward_qty);
+    it.outward_value = addMoney(it.outward_value, row.outward_value);
+    it.closing_qty = addMoney(it.closing_qty, row.closing_qty);
+    it.closing_value = addMoney(it.closing_value, row.closing_value);
+  }
+
+  let total = "0.0000";
+  for (const row of rows) total = addMoney(total, row.closing_value);
+  return { as_on: asOn ?? "", items, rows, total_value: total };
 }
 
 /**
@@ -192,6 +432,15 @@ interface MockCompany {
     isSystem?: boolean;
   }[];
   vouchers: DayBookEntry[];
+  /**
+   * The INVENTORY MASTERS. Held as real rows (not synthesized on read) for the
+   * same reason `ledgers` is: the item grid resolves an item's gst_rate_pct and
+   * unit from this list, so a mock that invented items on demand would let a
+   * screen test pass against a master it never created.
+   */
+  stockItems: StockItemListItem[];
+  godowns: GodownListItem[];
+  batches: StockBatchListItem[];
   /**
    * Head VoucherView per logical voucher_id — the GET /vouchers/{id} source.
    * Unlike the day-book DayBookEntry (which keeps ledger NAMEs for display),
@@ -458,6 +707,13 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         baseCurrency: "INR",
         profile: defaultProfile("2026-04-01"),
         ledgers: [],
+        // Every company is seeded with exactly one system location, mirroring
+        // migration 0025's seed_inventory_defaults. Without it the item grid's
+        // godown picker would be empty on a fresh company and every line would
+        // post untracked — a silent downgrade of a feature that IS available.
+        godowns: [mainLocation(companyID)],
+        stockItems: [],
+        batches: [],
         vouchers: [],
         views: new Map(),
         members: [
@@ -505,6 +761,31 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
           stateCode: "29",
         },
       ],
+      godowns: [mainLocation(demoID)],
+      // Two demo items with DIFFERENT GST rates, so an item invoice keyed
+      // against the seeded company exercises the multi-rate grouping rather
+      // than the single-rate happy path.
+      stockItems: [
+        {
+          id: "stock-widget",
+          name: "Widget",
+          unit_symbol: "Nos",
+          hsn: "8481",
+          gst_rate_pct: "18.0000",
+          valuation_method: "WEIGHTED_AVG",
+          is_system: false,
+        },
+        {
+          id: "stock-gasket",
+          name: "Gasket",
+          unit_symbol: "Nos",
+          hsn: "4016",
+          gst_rate_pct: "12.0000",
+          valuation_method: "WEIGHTED_AVG",
+          is_system: false,
+        },
+      ],
+      batches: [],
       vouchers: [],
       views: new Map(),
       counters: new Map(),
@@ -587,26 +868,180 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     igst: Money;
   } {
     const gst = req.gst;
-    const line = gst?.lines?.[0];
-    if (!gst || !line) {
+    if (!gst) {
       return { taxable: "0.0000", cgst: "0.0000", sgst: "0.0000", igst: "0.0000" };
     }
     const supplierState =
       (gst.supplier_state_code ?? "").trim() !== ""
         ? (gst.supplier_state_code as string)
         : c.stateCode;
-    const split = deriveGstSplit(
-      line.taxable_value,
-      line.gst_rate_pct,
-      supplierState,
-      gst.place_of_supply_state_code ?? "",
-    );
-    return {
-      taxable: parseFloat(line.taxable_value || "0").toFixed(4),
-      cgst: split.cgst,
-      sgst: split.sgst,
-      igst: split.igst,
+    const pos = gst.place_of_supply_state_code ?? "";
+
+    // Sum over EVERY gst line, not just the first. A hand-keyed accounting
+    // invoice has exactly one, but an ITEM INVOICE has one per (rate, HSN)
+    // group — and reading only lines[0] would report the tax on the first
+    // group as the tax on the whole invoice, which for a mixed-rate voucher is
+    // a plausible-looking understatement.
+    let taxable: Money = "0.0000";
+    let cgst: Money = "0.0000";
+    let sgst: Money = "0.0000";
+    let igst: Money = "0.0000";
+    for (const line of gst.lines ?? []) {
+      const split = deriveGstSplit(
+        line.taxable_value,
+        line.gst_rate_pct,
+        supplierState,
+        pos,
+      );
+      taxable = addMoney(taxable, line.taxable_value);
+      cgst = addMoney(cgst, split.cgst);
+      sgst = addMoney(sgst, split.sgst);
+      igst = addMoney(igst, split.igst);
+    }
+    return { taxable, cgst, sgst, igst };
+  }
+
+  /**
+   * THE ITEM INVOICE, GENERATED — the mock's mirror of
+   * internal/ledger/item_invoice.go.
+   *
+   * When a GST-bearing voucher carries stock lines AND a `gst` block, the
+   * SERVER generates the GST lines and every posting from the goods. A mock
+   * that just echoed whatever the client sent would be a false oracle for the
+   * one property this whole feature exists to guarantee: that the books and the
+   * warehouse cannot tell different stories. So this reproduces the real thing,
+   * refusals included —
+   *
+   *   - `gst.lines` or `postings` alongside inventory: 422, NOT a merge.
+   *     Choosing which to believe is how 100 units of stock get billed as a
+   *     Rs 1 invoice with every layer reporting success.
+   *   - a line moving the wrong way for the class: 422. A sale that ADDED stock
+   *     would inflate the P&L and the closing inventory at once.
+   *   - reverse charge: 422 (the self-assessed legs are not generated).
+   *   - a line `amount` that contradicts qty x rate less discount: 422, never a
+   *     silent correction — the printed invoice would then disagree with the
+   *     stored one and neither party would know which is real.
+   *
+   * HSN and the tax RATE come from the item MASTER, never from the request:
+   * they are the tax identity of the goods, and identity belongs to the item,
+   * not to the document that mentions it.
+   *
+   * Returns the request REWRITTEN with the generated gst.lines + postings, or
+   * null when this is not an item invoice (the ordinary path is untouched).
+   */
+  function generateItemInvoice(
+    c: MockCompany,
+    cls: VoucherClass,
+    req: VoucherRequest,
+  ): VoucherRequest | null {
+    const orient = ITEM_INVOICE_ORIENTATION[cls];
+    if (!orient || !req.inventory?.length || !req.gst) return null;
+
+    const refuse = (msg: string): never => {
+      throw new ApiError(422, msg, { error: msg });
     };
+    if (req.gst.lines?.length) {
+      refuse(
+        "an item invoice derives its GST lines from the stock lines; send inventory OR gst.lines, not both",
+      );
+    }
+    if (req.postings?.length) {
+      refuse(
+        "an item invoice derives its postings from the stock lines; do not send postings with inventory + gst",
+      );
+    }
+    if (!req.party_ledger_id) refuse("an item invoice needs a party ledger to bill");
+    if (!req.item_ledger_id) {
+      refuse(
+        "an item invoice needs an item ledger (sales/purchase account) to book the goods to",
+      );
+    }
+    if (req.gst.reverse_charge) {
+      refuse("reverse-charge item invoices are not derived in v1");
+    }
+
+    const wantDirection = ITEM_INVOICE_DIRECTION[cls];
+    const lines: InventoryLineRequest[] = [];
+    const gstLines: GSTLineRequest[] = [];
+    let taxableTotal: Money = "0.0000";
+    for (const [i, l] of req.inventory.entries()) {
+      if (l.direction !== wantDirection) {
+        refuse(
+          `inventory line ${i + 1}: a ${cls} item invoice moves stock ${wantDirection}, not ${l.direction}`,
+        );
+      }
+      const master = c.stockItems.find((s) => s.id === l.stock_item_id);
+      if (!master) {
+        refuse(`item invoice references unknown stock item ${l.stock_item_id}`);
+      }
+      const taxable = taxableValueOf(l.qty, l.rate ?? "0", l.discount_pct ?? "0");
+      if (l.amount && l.amount !== "0.0000" && l.amount !== taxable) {
+        refuse(
+          `inventory line ${i + 1} (${master!.name}): amount ${l.amount} contradicts qty x rate less discount = ${taxable}`,
+        );
+      }
+      lines.push({ ...l, amount: taxable });
+      gstLines.push({
+        taxable_value: taxable,
+        gst_rate_pct: master!.gst_rate_pct,
+        hsn: master!.hsn,
+      });
+      taxableTotal = addMoney(taxableTotal, taxable);
+    }
+
+    const withLines: VoucherRequest = { ...req, gst: { ...req.gst, lines: gstLines } };
+    const tax = deriveGst(c, withLines);
+    const totalTax = addMoney(addMoney(tax.cgst, tax.sgst), tax.igst);
+
+    // Party leg = goods + tax; goods leg = the taxable base ONLY. Booking the
+    // gross to the sales ledger is how a P&L ends up overstated by the whole
+    // GST liability.
+    const postings: PostingRequest[] = [
+      {
+        ledger_id: req.party_ledger_id!,
+        dr_cr: orient.party,
+        amount: addMoney(taxableTotal, totalTax),
+      },
+      { ledger_id: req.item_ledger_id!, dr_cr: orient.goods, amount: taxableTotal },
+    ];
+    // A zero component gets NO posting: an intra-state invoice has no IGST at
+    // all, and a 0.0000 row is noise in every printout of that tax account.
+    const taxLeg = (amount: Money, ledgerID: string | undefined, name: string) => {
+      if (amount === "0.0000") return;
+      if (!ledgerID) refuse(`item invoice derives ${name} of ${amount} but no ${name} ledger was named`);
+      postings.push({ ledger_id: ledgerID!, dr_cr: orient.tax, amount });
+    };
+    taxLeg(tax.cgst, req.gst.cgst_ledger_id, "CGST");
+    taxLeg(tax.sgst, req.gst.sgst_ledger_id, "SGST");
+    taxLeg(tax.igst, req.gst.igst_ledger_id, "IGST");
+
+    return { ...withLines, inventory: lines, postings };
+  }
+
+  /**
+   * Project a posted request's item grid into the stored {@link InventoryLineView}
+   * shape, resolving the master NAMES for display while RETAINING the uuids.
+   * The uuids are what makes an alter round-trip preserve stock: re-resolving an
+   * item by name would silently drop a line whose item had been renamed.
+   */
+  function inventoryViews(
+    c: MockCompany,
+    req: VoucherRequest,
+  ): InventoryLineView[] {
+    return (req.inventory ?? []).map((l, i) => ({
+      line_no: i + 1,
+      stock_item_id: l.stock_item_id,
+      item: c.stockItems.find((s) => s.id === l.stock_item_id)?.name ?? "",
+      godown_id: l.godown_id ?? "",
+      godown: c.godowns.find((g) => g.id === l.godown_id)?.name ?? "",
+      batch_id: l.batch_id ?? "",
+      batch: c.batches.find((b) => b.id === l.batch_id)?.name ?? "",
+      direction: l.direction,
+      qty: l.qty,
+      rate: l.rate ?? "0.0000",
+      discount_pct: l.discount_pct ?? "0.0000",
+      amount: l.amount ?? "0.0000",
+    }));
   }
 
   /** Map a request's bill allocations into BillAllocationViews (canonical D/C). */
@@ -710,6 +1145,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     req: VoucherRequest,
   ): VoucherResponse {
     const c = ensure(companyID);
+    // ITEM INVOICE: the server GENERATES the gst lines and every posting from
+    // the stock lines (or refuses the body). Everything below then works on the
+    // generated request, exactly as cored's post() does.
+    req = generateItemInvoice(c, cls, req) ?? req;
     const { postings, postingViews, debit, credit } = summarize(c, req);
     const gst = deriveGst(c, req);
     const voucherID = id("voucher");
@@ -760,6 +1199,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       igst: gst.igst,
       postings: postingViews,
       bill_allocations: billViews(req),
+      inventory: inventoryViews(c, req),
     });
     return {
       voucher_id: voucherID,
@@ -789,6 +1229,9 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     if (!entry) {
       throw new Error("voucher not found");
     }
+    // An ALTER of an item invoice is a full restatement of the GOODS: resend
+    // inventory + gst + item ledger, never the postings GetVoucher projected.
+    req = generateItemInvoice(c, cls, req) ?? req;
     const { postings, postingViews, debit, credit } = summarize(c, req);
     const gst = deriveGst(c, req);
     const nextVersion = entry.version_no + 1;
@@ -837,6 +1280,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       igst: gst.igst,
       postings: postingViews,
       bill_allocations: billViews(req),
+      inventory: inventoryViews(c, req),
     });
     return {
       voucher_id: voucherID,
@@ -981,10 +1425,53 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       return { unit_id: id("unit") };
     },
     async createStockItem(
-      _c,
-      _req: CreateStockItemRequest,
+      companyID,
+      req: CreateStockItemRequest,
     ): Promise<CreateStockItemResponse> {
-      return { stock_item_id: id("stock") };
+      // STORE it. This used to mint an id and throw the master away, which made
+      // listStockItems impossible and would have let an item-grid test pass
+      // against an item nobody created. Create-or-select by NAME mirrors
+      // masters.EnsureStockItem, so re-creating resolves the same id.
+      const c = ensure(companyID);
+      const existing = c.stockItems.find((s) => s.name === req.name);
+      if (existing) return { stock_item_id: existing.id };
+      const stockItemID = id("stock");
+      c.stockItems.push({
+        id: stockItemID,
+        name: req.name,
+        unit_symbol: req.unit_symbol,
+        hsn: req.hsn ?? "",
+        gst_rate_pct: req.gst_rate_pct ?? "0.0000",
+        valuation_method: "WEIGHTED_AVG",
+        is_system: false,
+      });
+      return { stock_item_id: stockItemID };
+    },
+    async listStockItems(companyID): Promise<ListStockItemsResponse> {
+      return {
+        stock_items: [...ensure(companyID).stockItems].sort((a, b) =>
+          a.name.localeCompare(b.name),
+        ),
+      };
+    },
+    async listGodowns(companyID): Promise<ListGodownsResponse> {
+      return {
+        godowns: [...ensure(companyID).godowns].sort((a, b) =>
+          a.name.localeCompare(b.name),
+        ),
+      };
+    },
+    async listStockBatches(companyID): Promise<ListStockBatchesResponse> {
+      return {
+        batches: [...ensure(companyID).batches].sort(
+          (a, b) =>
+            a.stock_item_name.localeCompare(b.stock_item_name) ||
+            a.name.localeCompare(b.name),
+        ),
+      };
+    },
+    async getStockSummary(companyID, asOn?: string): Promise<StockSummaryResponse> {
+      return replayStock(ensure(companyID), asOn);
     },
 
     async postSalesVoucher(companyID, req) {

@@ -1,6 +1,6 @@
 {
   "id": "voucher-ctrl-h-change-mode",
-  "description": "Inside a Sales voucher, Ctrl+H opens the unified Change Mode picker (TallyPrime replaced ERP9's Alt+I / Ctrl+V two-axis toggles). The invoice modes are offered but each is marked 'not built': this edition implements SINGLE vs DOUBLE entry (Payment / Receipt / Contra) and not the invoice family, and labelling them is the same honesty the keymap applies to unavailable combos \u2014 a key that silently does nothing is what makes a keyboard user distrust the app.",
+  "description": "Inside a Sales voucher, Ctrl+H opens the unified Change Mode picker (TallyPrime replaced ERP9's Alt+I / Ctrl+V two-axis toggles) and offers the INVOICE family, not single/double entry. Item Invoice and Accounting Invoice are both real; 'As Voucher' (keying an invoice as raw Dr/Cr lines) is genuinely not built and is still listed saying so — the same honesty the keymap applies to unavailable combos, because a key that silently does nothing is what makes a keyboard user distrust the app.",
   "keymapProfile": "tallyprime",
   "startScreen": "gateway",
   "events": [
@@ -18,9 +18,9 @@
     "voucherType": "sales",
     "overlay": "change-mode",
     "overlayOptions": [
-      "Item Invoice \u2014 not built",
-      "Accounting Invoice \u2014 not built",
-      "As Voucher \u2014 not built"
+      "Item Invoice",
+      "Accounting Invoice",
+      "As Voucher — not built"
     ]
   }
 }

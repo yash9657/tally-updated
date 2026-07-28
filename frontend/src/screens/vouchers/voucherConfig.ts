@@ -1,5 +1,5 @@
 import type { CoredClient, VoucherRequest, VoucherResponse } from "../../api";
-import type { VoucherType } from "../../keystroke/types";
+import type { EntryMode, VoucherType } from "../../keystroke/types";
 
 /**
  * Per-voucher-type presentation + posting configuration. The six voucher
@@ -45,10 +45,36 @@ export interface VoucherConfig {
   readonly entry: "single" | "double";
   /** Label for the party/primary-ledger field (e.g. "Account", "Party A/c Name"). */
   readonly partyLabel: string;
-  /** The natural Dr/Cr side of the single-entry primary ledger. */
+  /**
+   * The natural Dr/Cr side of this class's PRIMARY ledger.
+   *
+   *  - Single entry (Payment / Receipt / Contra): the side the one named
+   *    account sits on; the particulars sit opposite and sum to it.
+   *  - Invoice classes (Sales / Purchase): the side the GOODS and the TAX sit
+   *    on; the party takes the opposite side for the gross. A sale credits
+   *    sales + output tax and debits the party; a purchase does the exact
+   *    reverse.
+   *
+   * Both orientations BALANCE, so a reversed voucher passes every totals check
+   * the server makes — which is why this is one config value pinned by a
+   * name-resolving test rather than an orientation written out per class.
+   */
   readonly primarySide: "DR" | "CR";
   /** Whether the form surfaces a GST split (Sales / Purchase). */
   readonly showGst: boolean;
+  /**
+   * Whether Ctrl+H offers this class the ITEM INVOICE (a stock grid whose lines
+   * generate the accounting and the GST).
+   *
+   * TRUE for Sales and Purchase only. Credit and Debit Notes are GST vouchers
+   * with a stock effect in Tally, but their accounting REVERSES an invoice
+   * (a credit note debits sales returns and CREDITS the party), and this
+   * build's GST builder posts every showGst class sales-shaped. Offering an
+   * item grid there would move stock correctly and book the reversal backwards,
+   * which balances and is therefore invisible. Not built rather than built
+   * wrong; the entry-mode list says so out loud.
+   */
+  readonly itemInvoice: boolean;
   /** Short guidance shown under the header (Tally's contextual hint). */
   readonly hint: string;
   /** The CoredClient method this voucher type posts through on Ctrl+A. */
@@ -69,6 +95,7 @@ export const VOUCHER_CONFIGS: Readonly<Record<VoucherType, VoucherConfig>> = {
     partyLabel: "Account",
     primarySide: "CR",
     showGst: false,
+    itemInvoice: false,
     hint: "Cash ↔ Bank / Bank ↔ Bank transfers only.",
     post: (c, id, req) => c.postContraVoucher(id, req),
     alter: (c, id, vid, req) => c.alterContraVoucher(id, vid, req),
@@ -80,6 +107,7 @@ export const VOUCHER_CONFIGS: Readonly<Record<VoucherType, VoucherConfig>> = {
     partyLabel: "Account",
     primarySide: "CR", // money out: credit the cash/bank account paid from
     showGst: false,
+    itemInvoice: false,
     hint: "Money out. Credit the bank/cash, debit the expense or party.",
     post: (c, id, req) => c.postPaymentVoucher(id, req),
     alter: (c, id, vid, req) => c.alterPaymentVoucher(id, vid, req),
@@ -91,6 +119,7 @@ export const VOUCHER_CONFIGS: Readonly<Record<VoucherType, VoucherConfig>> = {
     partyLabel: "Account",
     primarySide: "DR", // money in: debit the cash/bank account received into
     showGst: false,
+    itemInvoice: false,
     hint: "Money in. Debit the bank/cash, credit the party or income.",
     post: (c, id, req) => c.postReceiptVoucher(id, req),
     alter: (c, id, vid, req) => c.alterReceiptVoucher(id, vid, req),
@@ -102,6 +131,7 @@ export const VOUCHER_CONFIGS: Readonly<Record<VoucherType, VoucherConfig>> = {
     partyLabel: "Dr/Cr Ledger",
     primarySide: "DR",
     showGst: false,
+    itemInvoice: false,
     hint: "Adjustments / non-cash entries. Debits must equal credits.",
     post: (c, id, req) => c.postJournalVoucher(id, req),
     alter: (c, id, vid, req) => c.alterJournalVoucher(id, vid, req),
@@ -113,6 +143,7 @@ export const VOUCHER_CONFIGS: Readonly<Record<VoucherType, VoucherConfig>> = {
     partyLabel: "Party A/c Name",
     primarySide: "CR",
     showGst: true,
+    itemInvoice: true,
     hint: "Sales invoice. Party debited; sales + GST credited.",
     post: (c, id, req) => c.postSalesVoucher(id, req),
     alter: (c, id, vid, req) => c.alterSalesVoucher(id, vid, req),
@@ -124,6 +155,7 @@ export const VOUCHER_CONFIGS: Readonly<Record<VoucherType, VoucherConfig>> = {
     partyLabel: "Party A/c Name",
     primarySide: "DR",
     showGst: true,
+    itemInvoice: true,
     hint: "Purchase invoice. Party credited; purchase + GST debited.",
     post: (c, id, req) => c.postPurchaseVoucher(id, req),
     alter: (c, id, vid, req) => c.alterPurchaseVoucher(id, vid, req),
@@ -137,6 +169,7 @@ export const VOUCHER_CONFIGS: Readonly<Record<VoucherType, VoucherConfig>> = {
     partyLabel: "Party A/c Name",
     primarySide: "CR",
     showGst: true,
+    itemInvoice: false,
     hint: "Sales return / downward price correction. Its OWN number series — use this instead of altering the original invoice.",
     post: (c, id, req) => c.postCreditNoteVoucher(id, req),
     alter: (c, id, vid, req) => c.alterCreditNoteVoucher(id, vid, req),
@@ -148,6 +181,7 @@ export const VOUCHER_CONFIGS: Readonly<Record<VoucherType, VoucherConfig>> = {
     partyLabel: "Party A/c Name",
     primarySide: "DR",
     showGst: true,
+    itemInvoice: false,
     hint: "Purchase return / price correction raised on a supplier. Reverses the input credit claimed on those goods.",
     post: (c, id, req) => c.postDebitNoteVoucher(id, req),
     alter: (c, id, vid, req) => c.alterDebitNoteVoucher(id, vid, req),
@@ -165,24 +199,32 @@ export function configFor(type: VoucherType): VoucherConfig {
  * RESEARCH.md §"Voucher entry": Ctrl+H (Change Mode) toggles Single Entry
  * (Payment / Receipt / Contra — one account on one side, multiple on the other)
  * against Double Entry (classic Dr/Cr). Sales and Purchase instead toggle the
- * invoice modes, which this edition does not implement — so they are listed
- * with an honest "not built" marker rather than omitted, on the same principle
- * as the keymap's `unavailable` actions: a key that silently does nothing is
- * worse than one that says why.
+ * INVOICE modes: Item Invoice (goods — item, godown, quantity, rate — with the
+ * accounting and the GST derived from them) and Accounting Invoice (a taxable
+ * value keyed straight against a Sales/Purchases ledger, no stock).
+ *
+ * A mode this edition does not implement is still LISTED, with an honest
+ * "not built" marker, on the same principle as the keymap's `unavailable`
+ * actions: a key that silently does nothing is worse than one that says why.
  */
 export interface EntryModeOption {
   label: string;
   /** The FrameConfig.entryMode this option selects, or null when not built. */
-  mode: "single" | "double" | null;
+  mode: EntryMode | null;
 }
 
 export function entryModesFor(type: VoucherType): EntryModeOption[] {
   const cfg = configFor(type);
   if (cfg.showGst) {
-    // Sales / Purchase: Tally's invoice-mode family. None is implemented.
+    // Tally's invoice-mode family, in Tally's order. "As Voucher" (keying an
+    // invoice as raw Dr/Cr lines) is genuinely not built.
     return [
-      { label: "Item Invoice — not built", mode: null },
-      { label: "Accounting Invoice — not built", mode: null },
+      cfg.itemInvoice
+        ? { label: "Item Invoice", mode: "item-invoice" }
+        : // Credit / Debit Notes: see VoucherConfig.itemInvoice — the grid
+          // would move stock correctly and book the reversal backwards.
+          { label: "Item Invoice — not built", mode: null },
+      { label: "Accounting Invoice", mode: "accounting-invoice" },
       { label: "As Voucher — not built", mode: null },
     ];
   }
@@ -200,13 +242,26 @@ export function entryModesFor(type: VoucherType): EntryModeOption[] {
 /**
  * The entry mode in force for a frame: the user's Ctrl+H choice if they made
  * one, else the class default. Single-capable classes default to SINGLE, which
- * is what a Tally operator expects when they press F5.
+ * is what a Tally operator expects when they press F5; the GST classes default
+ * to the ACCOUNTING invoice, which is the form this build has always shown, so
+ * shipping the item grid does not silently change what F8 opens into.
+ *
+ * It also CLAMPS: a mode that this class does not offer is ignored rather than
+ * honoured. Nothing in the UI can put a Payment into "item-invoice", but the
+ * mode is remembered per voucher type and read back from a frame, so a stale or
+ * hand-constructed config must not be able to render a stock grid on a class
+ * whose post path knows nothing about stock.
  */
 export function effectiveEntryMode(
   type: VoucherType,
-  chosen: "single" | "double" | undefined,
-): "single" | "double" {
+  chosen: EntryMode | undefined,
+): EntryMode {
   const cfg = configFor(type);
+  if (cfg.showGst) {
+    if (chosen === "item-invoice" && cfg.itemInvoice) return "item-invoice";
+    return "accounting-invoice";
+  }
   if (cfg.entry === "double") return "double"; // never offer single where Tally does not
-  return chosen ?? cfg.entry;
+  if (chosen === "single" || chosen === "double") return chosen;
+  return cfg.entry;
 }

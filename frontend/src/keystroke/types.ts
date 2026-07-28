@@ -66,6 +66,29 @@ export type FrameOverlay =
   | "calculator";
 
 /**
+ * The data-capture forms Ctrl+H (Change Mode) can put a voucher into.
+ *
+ * It lives HERE rather than in voucherConfig.ts because the pure navigation
+ * machine records the operator's choice ({@link FrameConfig.entryMode}, and
+ * NavContext.entryModeByType) and the machine may not import from `screens/` —
+ * that edge would invert the layering. Which modes a CLASS offers, and what
+ * each one renders, stays voucherConfig's business.
+ *
+ *  - "single" / "double" — the classic entry styles (Payment / Receipt /
+ *    Contra offer both; Journal is double only).
+ *  - "accounting-invoice" — Sales / Purchase keyed as a TAXABLE VALUE against a
+ *    Sales/Purchases ledger. No stock moves.
+ *  - "item-invoice" — Sales / Purchase keyed as GOODS: item, godown, batch,
+ *    quantity, rate. The accounting AND the GST are derived from the grid, and
+ *    stock actually moves. Tally's default for a trading company.
+ */
+export type EntryMode =
+  | "single"
+  | "double"
+  | "accounting-invoice"
+  | "item-invoice";
+
+/**
  * Per-frame VIEW configuration — the state Tally's F12 Configure / Ctrl+H /
  * Alt+F1 / F5 buttons mutate. It lives on the frame (not in a screen's local
  * state) so it survives re-renders, is projected into the snapshot every screen
@@ -73,18 +96,21 @@ export type FrameOverlay =
  */
 export interface FrameConfig {
   /**
-   * Ctrl+H on a voucher: SINGLE- vs DOUBLE-entry data capture.
+   * Ctrl+H on a voucher: which DATA-CAPTURE FORM this voucher is keyed through.
    *
    * Tally defaults Payment / Receipt / Contra to single entry — "one account on
    * one side, multiple on the other" (RESEARCH.md §"Voucher entry") — which is
-   * why bulk cash work is fast there. Undefined means "the class's default"
-   * (voucherConfig.entry), so the config only ever records a DEVIATION the user
-   * chose, and changing a class default does not fight a stale frame.
+   * why bulk cash work is fast there, and offers Sales / Purchase the INVOICE
+   * modes instead. Undefined means "the class's default"
+   * (voucherConfig's `entry`), so the config only ever records a DEVIATION the
+   * user chose, and changing a class default does not fight a stale frame.
    *
    * This is a DATA-ENTRY affordance, not a different accounting model: the
-   * posted voucher is balanced double-entry either way. Only the form differs.
+   * posted voucher is balanced double-entry in every mode. Only the form
+   * differs — and, for an item invoice, what the server derives the accounting
+   * FROM (goods rather than a typed taxable value).
    */
-  entryMode?: "single" | "double";
+  entryMode?: EntryMode;
   /** Alt+F1: expand every level of a statement report. */
   detailed?: boolean;
   /** F5 (Trial Balance): ledger-wise (default) instead of group-wise. */
@@ -132,6 +158,17 @@ export const REPORT_NAMES = [
   "Trial Balance",
   "Day Book",
   "Outstandings",
+  /**
+   * Stock Summary — the inventory position as at a date. It was NOT listed here
+   * while it had no data plane, because a Go To entry that lands on "this is
+   * not built" is worse than an absent one; it is listed now that the movement
+   * ledger exists and the screen reads it.
+   *
+   * Note it is DENIED to the seeded Data Entry level (migration 0026: it prints
+   * the company's own cost prices), so this entry is reachable-but-refused for
+   * some operators. The screen states that reason rather than showing a blank.
+   */
+  "Stock Summary",
 ] as const;
 export type ReportName = (typeof REPORT_NAMES)[number];
 

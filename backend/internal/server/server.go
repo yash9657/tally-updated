@@ -988,8 +988,21 @@ type inventoryLineReq struct {
 }
 
 type voucherReq struct {
-	VoucherTypeID   string              `json:"voucher_type_id"`
-	PartyLedgerID   string              `json:"party_ledger_id"`
+	VoucherTypeID string `json:"voucher_type_id"`
+	PartyLedgerID string `json:"party_ledger_id"`
+	// ItemLedgerID is the revenue/expense ledger an ITEM INVOICE books the goods
+	// to: the Sales Accounts ledger on F8, the Purchase Accounts ledger on F9.
+	// It sits BESIDE party_ledger_id rather than inside the gst block because it
+	// is an accounting fact, not a tax one: a stock-only document (a Delivery
+	// Note) has no item ledger and a service invoice has no goods to book.
+	//
+	// LOAD-BEARING FOR THE WHOLE ITEM-INVOICE FEATURE: ledger.validateItemInvoice
+	// refuses an item invoice whose ItemLedgerID is uuid.Nil, so until this field
+	// existed on the wire EVERY item invoice the F8/F9 grid could send came back
+	// 422 "an item invoice needs an item ledger" — the generator was reachable
+	// only from Go tests. Empty is legal and means "not an item invoice"; the
+	// ledger decides which shape a body is (isItemInvoice), never this struct.
+	ItemLedgerID    string              `json:"item_ledger_id"`
 	VoucherNo       string              `json:"voucher_no"`
 	VoucherDate     string              `json:"voucher_date"`
 	Narration       string              `json:"narration"`
@@ -1250,29 +1263,9 @@ func voucherFullJSON(v ledger.VoucherView) map[string]any {
 			"due_date":  b.DueDate,
 		})
 	}
-	// The item grid. Field names MIRROR inventoryLineReq so a client can fetch a
-	// voucher and re-POST it verbatim on an alter — the round trip
-	// ledger.TestAlterRoundTripPreservesStock pins in the domain layer. The
-	// uuids are the load-bearing part: re-resolving an item by NAME would
-	// silently drop a line whose item was renamed, turning an edit of the
-	// narration into an inventory write-off.
-	inventory := make([]map[string]any, 0, len(v.InventoryLines))
-	for _, l := range v.InventoryLines {
-		inventory = append(inventory, map[string]any{
-			"line_no":       l.LineNo,
-			"stock_item_id": l.StockItemID.String(),
-			"item":          l.ItemName,
-			"godown_id":     uuidOrEmpty(l.GodownID),
-			"godown":        l.GodownName,
-			"batch_id":      uuidOrEmpty(l.BatchID),
-			"batch":         l.BatchName,
-			"direction":     l.Direction,
-			"qty":           l.Qty.StringFixed(4),
-			"rate":          l.Rate.StringFixed(4),
-			"discount_pct":  l.DiscountPct.StringFixed(4),
-			"amount":        l.Amount.StringFixed(4),
-		})
-	}
+	// The item grid. Built by inventoryLinesJSON (handler_voucher_inventory.go),
+	// which is where the reasoning about the round trip lives.
+	inventory := inventoryLinesJSON(v.InventoryLines)
 	return map[string]any{
 		"voucher_id":       v.VoucherID.String(),
 		"voucher_no":       v.VoucherNo,
@@ -1380,6 +1373,17 @@ func buildVoucherInput(w http.ResponseWriter, class ledger.Class, req voucherReq
 	}
 	if in.PartyLedgerID, err = optionalUUID(req.PartyLedgerID); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid party_ledger_id")
+		return in, false
+	}
+	// The item ledger of an ITEM INVOICE (see voucherReq.ItemLedgerID). Parsed
+	// with optionalUUID like every other id on this body: "" is uuid.Nil, which
+	// is what every non-item voucher sends. Whether a Nil here is an ERROR is
+	// the ledger's decision, not this layer's — validateItemInvoice refuses it
+	// only for a body that is actually an item invoice (inventory + gst on a
+	// GST-bearing class), and duplicating that condition here would be a second
+	// copy of the rule that decides what an item invoice IS.
+	if in.ItemLedgerID, err = optionalUUID(req.ItemLedgerID); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid item_ledger_id")
 		return in, false
 	}
 	for _, p := range req.Postings {

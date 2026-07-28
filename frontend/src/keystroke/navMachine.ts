@@ -1,6 +1,7 @@
 import { assign, setup } from "xstate";
 import { LEDGER_WISE_DEFAULT } from "./types";
 import type {
+  EntryMode,
   FrameConfig,
   FrameOverlay,
   KeymapAction,
@@ -134,14 +135,22 @@ export const MORE_REPORTS_LABEL = "Display More Reports";
 export const USERS_ROLES_LABEL = "Users & Roles";
 
 /**
- * The two Ctrl+H Change Mode labels the machine acts on. Kept here (not in the
+ * The Ctrl+H Change Mode labels the machine acts on. Kept here (not in the
  * screen) because the MACHINE owns what a selection does; the screen owns which
  * options a voucher class offers. Any other label — including the "not built"
- * invoice modes — simply dismisses the overlay.
+ * ones — simply dismisses the overlay.
+ *
+ * The machine does NOT check that the chosen mode makes sense for the active
+ * class: a class only ever OFFERS the modes it supports, and
+ * voucherConfig.effectiveEntryMode clamps anything else on the way out. Putting
+ * the per-class table here instead would make the pure machine import from
+ * screens/, inverting the layering.
  */
-const ENTRY_MODE_LABELS: Readonly<Record<string, "single" | "double">> = {
+const ENTRY_MODE_LABELS: Readonly<Record<string, EntryMode>> = {
   "Single Entry": "single",
   "Double Entry": "double",
+  "Item Invoice": "item-invoice",
+  "Accounting Invoice": "accounting-invoice",
 };
 
 /**
@@ -221,7 +230,7 @@ export interface NavContext {
    *
    * Absent key = that type's class default (voucherConfig's `entry`).
    */
-  entryModeByType: Partial<Record<VoucherType, "single" | "double">>;
+  entryModeByType: Partial<Record<VoucherType, EntryMode>>;
 }
 
 /** Events accepted by the machine. Mirrors corpus event shapes. */
@@ -254,7 +263,7 @@ function newVoucherFrame(
    * Omitted leaves the frame with no config, i.e. the class default — which is
    * what a frame built outside any context (rootFrame) must do.
    */
-  entryMode?: "single" | "double",
+  entryMode?: EntryMode,
 ): ScreenFrame {
   return {
     screen: "voucher",

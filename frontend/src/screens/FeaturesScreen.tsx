@@ -49,8 +49,11 @@ const FEATURES: {
       },
       {
         name: "Single-entry mode for Payment / Receipt / Contra",
-        state: "off",
-        note: "DECLARED BUT NOT HONOURED: voucherConfig.ts marks these types entry:\"single\", but no screen reads that flag, so every voucher renders the same explicit Dr/Cr form. Tally defaults these to single-entry (pick one account, the other side is inferred), which is what a Tally user's muscle memory expects. Deliberately deferred — it is a keystroke-flow change to the most fidelity-sensitive screen and needs its own keystroke-corpus cases.",
+        state: "on",
+        // This row said "DECLARED BUT NOT HONOURED" for one release after the
+        // mode actually shipped. An honesty surface that lags the product is
+        // worse than no surface: it teaches people not to trust it.
+        note: "These three open in SINGLE entry the way a Tally operator expects: name one account, list what it moved against, and the account's amount is the derived total (never typed). Ctrl+H switches to explicit Dr/Cr, and the choice is remembered PER VOUCHER TYPE across saves — a bulk-entry mode that reverted after every Ctrl+A would be pointless.",
       },
       {
         name: "Voucher numbering series",
@@ -108,14 +111,44 @@ const FEATURES: {
         note: "Masters exist and can be created.",
       },
       {
-        name: "Inventory vouchers, godowns, batches, order processing, BoM",
-        state: "off",
-        note: "Not built yet — internal/inventory is a module boundary with no transactional surface, which is why Alt+F7/Alt+F8/Alt+F9/F10 report that they are unavailable. Consequence: Stock-in-Hand is always empty and the Balance Sheet can never show closing stock.",
+        name: "Item Invoice (Ctrl+H on F8 Sales / F9 Purchase) — stock actually moves",
+        state: "on",
+        note: "Key the GOODS — item, godown, quantity, rate, discount — and the accounting AND the GST are derived from them SERVER-side, in the same transaction that writes the stock movement. That single derivation is what stops the invoice and the stock ledger disagreeing. Quantities are fixed-4 decimals end to end, never floats. Ctrl+H switches back to the Accounting Invoice (a typed taxable value, no stock).",
       },
       {
-        name: "Stock groups, godowns, compound units (Box of 12)",
+        name: "Godowns / stock locations and batches",
+        state: "on",
+        note: "Every company carries a system 'Main Location'; more can be created, and a line may name a batch/lot. A line may also name NEITHER, which posts as untracked — a company that never enables multi-location is not forced to invent master rows.",
+      },
+      {
+        name: "Stock Summary (closing quantity AND value)",
+        state: "on",
+        note: "Gateway > Stock Summary. NO STOCK VALUE IS EVER STORED: quantity is posted, and value is DERIVED at report time by replaying the movement ledger through a weighted-average valuer. That is why altering an April invoice changes the July closing value with no reversal code anywhere. DENIED to the Data Entry level by default, because the closing valuation rate is what the business PAID — an Owner can lift that in Users & Roles.",
+      },
+      {
+        name: "Negative stock",
+        state: "always",
+        note: "REFUSED by default: a voucher that would take a position below zero is rejected by a deferred database constraint, not merely by the form. A company can opt in per-company. Structural — the check cannot be bypassed by a different write path, because ledger.post is the only one there is.",
+      },
+      {
+        name: "FIFO / LIFO / batch-wise valuation",
+        state: "off",
+        note: "Not built. v1 values everything at WEIGHTED AVERAGE (Tally's default) behind a valuer interface whose state is a strict subset of what FIFO needs, so FIFO is a new arm plus fixtures rather than a schema change. An item whose valuation_method names an unimplemented valuer FAILS LOUDLY rather than being quietly valued at average under a FIFO heading.",
+      },
+      {
+        name: "Inventory vouchers (Stock Journal, Physical Stock, Delivery/Receipt Note), order processing, BoM",
+        state: "off",
+        note: "Not built yet — which is why Alt+F7/Alt+F8/Alt+F9/F10 report that they are unavailable. Stock moves only as a side of a Sales/Purchase item invoice, so a transfer between godowns or a stock-taking adjustment has no voucher to record it in.",
+      },
+      {
+        name: "Stock groups and compound units (Box of 12)",
         state: "off",
         note: "Not modelled. Stock items are flat and units are simple symbols with no conversion.",
+      },
+      {
+        name: "Closing stock on the Balance Sheet",
+        state: "off",
+        note: "NOT WIRED: the Stock Summary knows what the inventory is worth, but the Balance Sheet's Stock-in-Hand group is still fed from ledger postings only, so a company with stock does not yet see it as an asset. The number exists; the statement does not read it.",
       },
     ],
   },

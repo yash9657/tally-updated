@@ -127,6 +127,47 @@ describe("keystroke conformance (golden corpora)", () => {
       assertExpect(snap, c.expect);
     });
   }
+
+  /**
+   * THE RUNNER'S OWN SAFETY CATCH, tested.
+   *
+   * `assertExpect` is a switch over the keys a corpus case may assert, and its
+   * default arm THROWS. That arm is the only thing standing between the corpus
+   * and silent vacuity: a case that asserts `overlayOption` (singular), or
+   * `entryMode` at the top level instead of inside `config`, is a case that
+   * checks NOTHING — and it would go green, forever, looking like coverage.
+   *
+   * The risk is live every time this switch grows, which this slice did (the
+   * invoice modes). So the arm gets its own test rather than being trusted to
+   * survive the next edit.
+   */
+  it("assertExpect THROWS on an expect key it does not recognise", () => {
+    const snap = runCase({
+      id: "unknown-expect-key-probe",
+      events: [{ type: "key", combo: "F8" }],
+      expect: {},
+    });
+    // A plausible TYPO, not gibberish: "overlayOption" is one character from a
+    // key the runner really has, which is exactly the mistake that would slip
+    // through review.
+    expect(() =>
+      assertExpect(snap, { overlayOption: ["Item Invoice"] }),
+    ).toThrow(/Unhandled expect key in corpus/);
+  });
+
+  it("every expect key the corpus actually USES is handled (no vacuous fixture)", () => {
+    // The complement of the test above: the default arm is only useful if no
+    // SHIPPED fixture is silently landing on it. Running every case's expect
+    // block through the assertion is what the loop above already does — this
+    // adds the guarantee that a case with an EMPTY expect block, which would
+    // assert nothing at all and pass, cannot exist.
+    for (const c of cases) {
+      expect(
+        Object.keys(c.expect).length,
+        `corpus case ${c.id} asserts nothing — an empty expect block passes vacuously`,
+      ).toBeGreaterThan(0);
+    }
+  });
 });
 
 describe("navMachine unit semantics", () => {
@@ -190,12 +231,56 @@ describe("navMachine unit semantics", () => {
       { type: "KEY", combo: "Ctrl+H" },
     ]);
     expect(snap.overlay).toBe("change-mode");
-    // Sales gets the invoice-mode family, each disclosed as not built.
+    // Sales gets the invoice-mode family. Two of the three are real; only
+    // "As Voucher" is still disclosed as not built.
     expect(overlayOptions(snap)).toEqual([
-      "Item Invoice — not built",
-      "Accounting Invoice — not built",
+      "Item Invoice",
+      "Accounting Invoice",
       "As Voucher — not built",
     ]);
+  });
+
+  // THE ITEM INVOICE IS THE DEFAULT-CHANGING ONE, so what F8 opens INTO is
+  // pinned separately from what Ctrl+H offers. Shipping the grid must not
+  // silently change the form an operator gets when they press F8 and start
+  // typing — they get the accounting invoice until they ask for goods.
+  it("a fresh Sales frame carries NO chosen mode (the accounting invoice is the default)", () => {
+    const snap = drive([{ type: "KEY", combo: "F8" }]);
+    expect(snap.config?.entryMode).toBeUndefined();
+  });
+
+  it("choosing Item Invoice applies it and closes the overlay in one keystroke", () => {
+    const snap = drive([
+      { type: "KEY", combo: "F8" },
+      { type: "KEY", combo: "Ctrl+H" },
+      { type: "SELECT", menuItem: "Item Invoice" },
+    ]);
+    expect(snap.overlay ?? null).toBeNull();
+    expect(snap.config?.entryMode).toBe("item-invoice");
+  });
+
+  it("the item-invoice choice SURVIVES Ctrl+A and is remembered per type", () => {
+    // Same reasoning as the single/double case below: Ctrl+A replaces the frame
+    // with a fresh form for bulk entry, so a frame-only choice would revert an
+    // operator keying a run of invoices back to the accounting form after EVERY
+    // save. And it is per TYPE — choosing goods entry for Sales says nothing
+    // about how you want to key a Purchase.
+    const sales = drive([
+      { type: "KEY", combo: "F8" },
+      { type: "KEY", combo: "Ctrl+H" },
+      { type: "SELECT", menuItem: "Item Invoice" },
+      { type: "KEY", combo: "Ctrl+A" },
+    ]);
+    expect(sales.config?.entryMode).toBe("item-invoice");
+
+    const purchase = drive([
+      { type: "KEY", combo: "F8" },
+      { type: "KEY", combo: "Ctrl+H" },
+      { type: "SELECT", menuItem: "Item Invoice" },
+      { type: "KEY", combo: "F9" },
+    ]);
+    expect(purchase.voucherType).toBe("purchase");
+    expect(purchase.config?.entryMode).toBeUndefined();
   });
 
   it("Ctrl+H offers SINGLE vs DOUBLE entry on a Payment, not the invoice modes", () => {
