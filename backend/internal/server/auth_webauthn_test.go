@@ -22,6 +22,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+
+	"github.com/khata/cored/internal/platform/testdb"
 )
 
 // b64u is the base64url (no padding) encoding the HTTP wire + JWT use.
@@ -208,6 +210,7 @@ func TestWebAuthnStepUpUnlocksWrite(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create company status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
 	}
+	testdb.Cleanup(t, companyID)
 
 	// Ledgers (Create/master also requires webauthn under the Owner level, so use
 	// a one-shot stepped-up token to set up the fixtures, then re-test the WRITE

@@ -33,6 +33,7 @@ import (
 	"github.com/khata/cored/internal/identity"
 	"github.com/khata/cored/internal/ledger"
 	"github.com/khata/cored/internal/platform/db"
+	"github.com/khata/cored/internal/platform/testdb"
 	"github.com/khata/cored/internal/reporting"
 )
 
@@ -763,6 +764,12 @@ func TestStockSummaryIsTenantScoped(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("create neighbouring company: %v", err)
 	}
+	// The neighbour is minted INLINE here rather than through stockSetup(), so it
+	// needs its own registration. Cross-tenant tests are where cleanup retrofits
+	// reliably go wrong: the shared harness gets tidied, the second company in
+	// each isolation probe does not, and the leak simply halves instead of
+	// stopping.
+	testdb.Cleanup(t, other)
 	s, err := b.rep.StockSummary(octx, other, "")
 	if err != nil {
 		t.Fatalf("neighbour's stock summary: %v", err)

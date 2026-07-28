@@ -16,6 +16,7 @@ import (
 	"github.com/khata/cored/internal/ledger"
 	"github.com/khata/cored/internal/masters"
 	"github.com/khata/cored/internal/platform/db"
+	"github.com/khata/cored/internal/platform/testdb"
 	"github.com/khata/cored/migrations"
 )
 
@@ -66,6 +67,12 @@ func setup(t *testing.T) (*db.Pool, context.Context, uuid.UUID) {
 	}); err != nil {
 		t.Fatalf("create company: %v", err)
 	}
+	// Teardown, registered the moment the company exists. Every test here posts
+	// GST vouchers, so the leak is not just the chart of accounts: voucher_gst_line
+	// is immutable (BEFORE UPDATE OR DELETE trigger) and no ordinary DELETE can
+	// clear it, which is why the teardown runs under replica mode in one
+	// transaction rather than disarming the trigger for the whole database.
+	testdb.Cleanup(t, companyID)
 	return pool, cctx, companyID
 }
 
@@ -443,5 +450,49 @@ func TestGSTR1_ReflectsAlterAndDelete(t *testing.T) {
 	}
 	if len(g.B2B) != 0 {
 		t.Fatalf("after delete: want 0 B2B invoices, got %d parties", len(g.B2B))
+	}
+}
+
+// TestGSTRHarnessRemovesItsCompany is the anti-rot guard on setup()'s teardown:
+// it proves this package's harness still registers it. The failure it guards
+// against is silent — no assertion breaks when a harness stops cleaning up, the
+// run simply buries another company and its whole chart of accounts, which is
+// how the shared dev database reached 43,419 of them.
+//
+// It counts the child tables, not only `company`, because notification_outbox is
+// the ONLY foreign key referencing company(id) and its action is NO ACTION:
+// deleting the parent row alone orphans account_group, ledger, voucher_type and
+// acl_rule with no error, no cascade and no trace.
+func TestGSTRHarnessRemovesItsCompany(t *testing.T) {
+	if os.Getenv("CORED_SKIP_DB") != "" {
+		t.Skip("db tests skipped")
+	}
+	// Cleanups registered on the inner *testing.T have all run by the time t.Run
+	// returns, so the harness has had its chance before the next line.
+	var cid uuid.UUID
+	t.Run("harness", func(t *testing.T) { _, _, cid = setup(t) })
+	if cid == uuid.Nil {
+		t.Skip("harness skipped (no database), nothing to assert about teardown")
+	}
+
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, testdb.AdminDSNValue())
+	if err != nil {
+		t.Skipf("admin postgres unavailable: %v", err)
+	}
+	defer conn.Close(ctx)
+
+	// ADMIN, deliberately: the app role is FORCE-RLS'd to a single company and
+	// would answer 0 for every table whatever survived — a vacuous green.
+	for _, tbl := range []string{"company", "account_group", "ledger", "voucher_type", "acl_rule"} {
+		var n int
+		if err := conn.QueryRow(ctx, "SELECT count(*) FROM "+tbl+" WHERE company_id = $1", cid).Scan(&n); err != nil {
+			t.Fatalf("count %s for company %s: %v", tbl, cid, err)
+		}
+		if n != 0 {
+			t.Errorf("%s still holds %d rows for company %s after the harness cleaned up: "+
+				"the gstr harness leaks them on EVERY run and nothing will ever delete them",
+				tbl, n, cid)
+		}
 	}
 }

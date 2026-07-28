@@ -14,6 +14,7 @@ import (
 	"github.com/khata/cored/internal/ledger"
 	"github.com/khata/cored/internal/masters"
 	"github.com/khata/cored/internal/platform/db"
+	"github.com/khata/cored/internal/platform/testdb"
 	"github.com/khata/cored/migrations"
 )
 
@@ -60,6 +61,11 @@ func setupWithState(t *testing.T, stateCode string) (*db.Pool, context.Context, 
 	}); err != nil {
 		t.Fatalf("create company: %v", err)
 	}
+	// Teardown, registered the moment the company exists. setupWithState is a
+	// SECOND company-minting harness in this same package, parallel to setup();
+	// cleaning up only one of the two would still leak on every run, which is
+	// exactly the sort of partial retrofit this wave is meant to avoid.
+	testdb.Cleanup(t, companyID)
 	return pool, cctx, companyID
 }
 

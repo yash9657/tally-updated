@@ -15,10 +15,31 @@ package server_test
 //
 // Everything this file damages, it repairs, and it works on a company it
 // created itself.
+//
+// HOW THE TRIGGER IS DEFEATED, AND WHY IT CHANGED. This file used to run an
+// `ALTER TABLE voucher_version DISABLE-TRIGGER voucher_version_no_mutate`
+// statement (spelled with a hyphen here on purpose — see the guard at the foot
+// of this file, and the grep that backs it). That statement is a CATALOG
+// change: it is database-wide, it is visible to every other connection
+// instantly, and it SURVIVES the test — a panic or a killed test run between the
+// disable and the re-enable leaves the append-only invariant switched off in the
+// shared development database with nothing to announce it. It is the single
+// reason the runbook forbade `go test ./internal/server` unscoped while any
+// other agent was working.
+//
+// The replacement is `SET LOCAL session_replication_role = replica` inside a
+// short ADMIN transaction. `SET LOCAL` is scoped to the transaction and cannot
+// outlive it — not on COMMIT, not on ROLLBACK, not on a crashed backend — and it
+// affects only the connection that set it, so a concurrent test on another
+// connection still sees the trigger armed. Nothing global is ever touched, and
+// TestServerTestsNeverDisableTriggersGlobally at the bottom of this file keeps
+// the old form from creeping back.
 
 import (
 	"context"
 	"net/http"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -38,33 +59,64 @@ func superuser(t *testing.T) *pgx.Conn {
 	return conn
 }
 
-// appendOnlyTriggers is every guard that has to come off to fake a tamper.
-// posting has its own — discovered by this test failing with "posting is
-// immutable; DELETE is not permitted", which is the invariant working.
-var appendOnlyTriggers = [][2]string{
-	{"voucher_version", "voucher_version_no_mutate"},
-	{"posting", "posting_no_mutate"},
-}
-
-// withTriggerDisabled runs fn with the append-only triggers off, re-enabling
-// them even if fn fails. Leaving one off would silently disarm the invariant for
-// every later test in the run, so the re-enable is a t.Fatalf, not a log line.
-func withTriggerDisabled(t *testing.T, conn *pgx.Conn, fn func()) {
+// mutateAppendOnly runs ONE statement against an append-only table inside an
+// ADMIN transaction with `SET LOCAL session_replication_role = replica`, which
+// suppresses user triggers for that transaction on that connection only.
+//
+// It COMMITS, deliberately. The endpoint under test reads on a different
+// connection out of the app pool, so an uncommitted tamper would be invisible to
+// it and the test would assert nothing. Each tamper and each repair is therefore
+// its own short transaction, and the repair is a separate call rather than a
+// deferred closure — the sequence tamper -> observe -> repair -> observe is what
+// proves the verifier is reading the data rather than answering from a cache.
+//
+// Contrast with the `ALTER TABLE ... DISABLE-TRIGGER` form this replaced: that
+// is a persistent, database-wide catalog change that leaks the disarmed
+// invariant to every other session and survives the process. `SET LOCAL` cannot
+// leak: the transaction is the outer bound of its lifetime, so there is no
+// failure mode in which the immutability guard is left off.
+//
+// Pattern copied from
+// internal/compliance/gstr/alter_voucher_type_regression_test.go:254.
+//
+// It returns the number of rows the statement affected, because a tamper that
+// silently matched zero rows would leave the chain intact and turn the assertion
+// that follows into a test of nothing.
+func mutateAppendOnly(t *testing.T, conn *pgx.Conn, sql string, args ...any) int64 {
 	t.Helper()
 	ctx := context.Background()
-	for _, tg := range appendOnlyTriggers {
-		if _, err := conn.Exec(ctx, `ALTER TABLE `+tg[0]+` DISABLE TRIGGER `+tg[1]); err != nil {
-			t.Fatalf("disable %s: %v", tg[1], err)
-		}
+
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin admin tx: %v", err)
 	}
-	defer func() {
-		for _, tg := range appendOnlyTriggers {
-			if _, err := conn.Exec(ctx, `ALTER TABLE `+tg[0]+` ENABLE TRIGGER `+tg[1]); err != nil {
-				t.Fatalf("RE-ENABLE %s (the invariant is now off!): %v", tg[1], err)
-			}
-		}
-	}()
-	fn()
+	// Any early return below must not leave the transaction open; a rollback
+	// after a successful commit is a harmless no-op.
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
+		t.Fatalf("suppress append-only triggers for this transaction: %v", err)
+	}
+	tag, err := tx.Exec(ctx, sql, args...)
+	if err != nil {
+		t.Fatalf("mutate append-only table: %v\nstatement: %s", err, sql)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit admin mutation (the endpoint reads on another connection, so this MUST commit): %v", err)
+	}
+	return tag.RowsAffected()
+}
+
+// mutateAppendOnlyRows is mutateAppendOnly with the row count asserted. A tamper
+// that matched no rows is not a weaker test, it is a VACUOUS one: the chain
+// stays intact and the "tampering was detected" assertion that follows would be
+// asserting the opposite of what it claims.
+func mutateAppendOnlyRows(t *testing.T, conn *pgx.Conn, want int64, sql string, args ...any) {
+	t.Helper()
+	if got := mutateAppendOnly(t, conn, sql, args...); got != want {
+		t.Fatalf("statement affected %d rows, want %d — the tamper (or its repair) did not happen, "+
+			"so every assertion after this point would be vacuous\nstatement: %s", got, want, sql)
+	}
 }
 
 // editedVoucher posts a sale, alters it, then deletes it — a three-version
@@ -225,14 +277,10 @@ func TestVoucherHistoryDetectsTampering(t *testing.T) {
 	}
 
 	// -- TAMPER 1: edit a stored payload -------------------------------------
-	withTriggerDisabled(t, conn, func() {
-		if _, err := conn.Exec(ctx,
-			`UPDATE voucher_version
-			    SET payload = jsonb_set(payload, '{narration}', '"forged by someone with database access"')
-			  WHERE voucher_id = $1 AND version_no = 2`, voucherID); err != nil {
-			t.Fatalf("tamper: %v", err)
-		}
-	})
+	mutateAppendOnlyRows(t, conn, 1,
+		`UPDATE voucher_version
+		    SET payload = jsonb_set(payload, '{narration}', '"forged by someone with database access"')
+		  WHERE voucher_id = $1 AND version_no = 2`, voucherID)
 	v := verify()
 	if v["ok"] != false {
 		t.Fatalf("an EDITED payload verified as intact: %v", v)
@@ -243,46 +291,28 @@ func TestVoucherHistoryDetectsTampering(t *testing.T) {
 	t.Logf("tamper detected: %v", v["reason"])
 
 	// Restore, and prove the repair is real rather than the verifier being lax.
-	withTriggerDisabled(t, conn, func() {
-		if _, err := conn.Exec(ctx,
-			`UPDATE voucher_version SET payload = $2 WHERE voucher_id = $1 AND version_no = 2`,
-			voucherID, originalPayload); err != nil {
-			t.Fatalf("restore: %v", err)
-		}
-	})
+	mutateAppendOnlyRows(t, conn, 1,
+		`UPDATE voucher_version SET payload = $2 WHERE voucher_id = $1 AND version_no = 2`,
+		voucherID, originalPayload)
 	if v = verify(); v["ok"] != true {
 		t.Fatalf("chain still broken after restoring the original payload: %v", v["reason"])
 	}
 
 	// -- TAMPER 2: an AMOUNT, which is what a tamperer would actually change --
-	withTriggerDisabled(t, conn, func() {
-		if _, err := conn.Exec(ctx,
-			`UPDATE voucher_version
-			    SET payload = jsonb_set(payload, '{postings,0,amount}', '"9999.0000"')
-			  WHERE voucher_id = $1 AND version_no = 1`, voucherID); err != nil {
-			t.Fatalf("tamper amount: %v", err)
-		}
-	})
+	mutateAppendOnlyRows(t, conn, 1,
+		`UPDATE voucher_version
+		    SET payload = jsonb_set(payload, '{postings,0,amount}', '"9999.0000"')
+		  WHERE voucher_id = $1 AND version_no = 1`, voucherID)
 	if v = verify(); v["ok"] != false || v["broken_at_version"] != float64(1) {
 		t.Fatalf("an edited AMOUNT verified as intact or blamed the wrong version: %v", v)
 	}
 
 	// -- TAMPER 3: remove a version entirely ---------------------------------
 	// Restore version 1 first so the only remaining damage is the removal.
-	var v1Payload []byte
-	withTriggerDisabled(t, conn, func() {
-		if err := conn.QueryRow(ctx,
-			`SELECT payload FROM voucher_version WHERE voucher_id = $1 AND version_no = 1`,
-			voucherID).Scan(&v1Payload); err != nil {
-			t.Fatalf("read tampered v1: %v", err)
-		}
-		if _, err := conn.Exec(ctx,
-			`UPDATE voucher_version
-			    SET payload = jsonb_set(payload, '{postings,0,amount}', '"400.0000"')
-			  WHERE voucher_id = $1 AND version_no = 1`, voucherID); err != nil {
-			t.Fatalf("restore amount: %v", err)
-		}
-	})
+	mutateAppendOnlyRows(t, conn, 1,
+		`UPDATE voucher_version
+		    SET payload = jsonb_set(payload, '{postings,0,amount}', '"400.0000"')
+		  WHERE voucher_id = $1 AND version_no = 1`, voucherID)
 	if v = verify(); v["ok"] != true {
 		t.Fatalf("chain not repaired before the removal test: %v", v["reason"])
 	}
@@ -310,17 +340,12 @@ func TestVoucherHistoryDetectsTampering(t *testing.T) {
 		t.Fatalf("read company id: %v", err)
 	}
 
-	withTriggerDisabled(t, conn, func() {
-		if _, err := conn.Exec(ctx, `DELETE FROM bill_allocation WHERE voucher_version_id = $1`, removed.id); err != nil {
-			t.Fatalf("drop bill allocations: %v", err)
-		}
-		if _, err := conn.Exec(ctx, `DELETE FROM posting WHERE voucher_version_id = $1`, removed.id); err != nil {
-			t.Fatalf("drop postings: %v", err)
-		}
-		if _, err := conn.Exec(ctx, `DELETE FROM voucher_version WHERE id = $1`, removed.id); err != nil {
-			t.Fatalf("remove version 2: %v", err)
-		}
-	})
+	// Children first, then the version itself. Three separate transactions is
+	// fine here: each leaves the FK graph consistent, and the endpoint is not
+	// consulted between them.
+	mutateAppendOnly(t, conn, `DELETE FROM bill_allocation WHERE voucher_version_id = $1`, removed.id)
+	mutateAppendOnly(t, conn, `DELETE FROM posting WHERE voucher_version_id = $1`, removed.id)
+	mutateAppendOnlyRows(t, conn, 1, `DELETE FROM voucher_version WHERE id = $1`, removed.id)
 	if v = verify(); v["ok"] != false {
 		t.Fatalf("a chain with version 2 REMOVED verified as intact: %v", v)
 	}
@@ -332,17 +357,85 @@ func TestVoucherHistoryDetectsTampering(t *testing.T) {
 	// Put version 2 back. Its postings are NOT restored (the ledger balances are
 	// derived from voucher_head's current version, which is the tombstone), but
 	// the version row is what the chain is over.
-	withTriggerDisabled(t, conn, func() {
-		if _, err := conn.Exec(ctx,
-			`INSERT INTO voucher_version
-			   (id, company_id, voucher_id, version_no, op, node_id, prev_hash, hash, payload, created_by)
-			 VALUES ($1, $2, $3, 2, $4::voucher_op, $5, $6, $7, $8, $9)`,
-			removed.id, companyID, voucherID, removed.op, removed.nodeID,
-			removed.prevHash, removed.hash, removed.payload, removed.by); err != nil {
-			t.Fatalf("restore version 2: %v", err)
-		}
-	})
+	// voucher_version's immutability trigger is BEFORE UPDATE OR DELETE only, so
+	// this INSERT needs no suppression at all — but it goes through the same
+	// helper so that the row count is asserted and every write in this file is
+	// made on the same, auditable footing.
+	mutateAppendOnlyRows(t, conn, 1,
+		`INSERT INTO voucher_version
+		   (id, company_id, voucher_id, version_no, op, node_id, prev_hash, hash, payload, created_by)
+		 VALUES ($1, $2, $3, 2, $4::voucher_op, $5, $6, $7, $8, $9)`,
+		removed.id, companyID, voucherID, removed.op, removed.nodeID,
+		removed.prevHash, removed.hash, removed.payload, removed.by)
 	if v = verify(); v["ok"] != true {
 		t.Fatalf("chain still broken after restoring version 2: %v", v["reason"])
+	}
+}
+
+// TestServerTestsNeverDisableTriggersGlobally is a source-level guard, and it is
+// here because the thing it forbids is invisible at runtime until it has already
+// done its damage.
+//
+// An `ALTER TABLE <t>` that switches a trigger off is a catalog change. It
+// applies to the whole database, every session sees it immediately, and it
+// persists until something explicitly re-enables it. A test that switches an
+// append-only trigger off and then panics, times out, or is killed leaves the
+// invariant OFF in the shared development database — and the next agent to run
+// the suite gets a green result that proves nothing, because the guard those
+// tests assert on is no longer armed. This package used to contain exactly that,
+// which is why the runbook forbade running it unscoped alongside other work.
+//
+// The sanctioned replacement is `SET LOCAL session_replication_role = replica`
+// inside a transaction (see mutateAppendOnly above): connection-scoped,
+// transaction-scoped, and impossible to leak.
+//
+// This reads the package's own sources from DISK rather than inspecting
+// pg_trigger, deliberately. A runtime check ("no trigger is currently switched
+// off") only fires if the offending test happens to run AND happens to leave the
+// trigger off; it cannot see a disable/enable pair that is balanced today and
+// will be unbalanced the first time the test between them fails.
+//
+// The forbidden phrase is matched as raw text anywhere in the file, INCLUDING
+// comments — which is why the prose above and in the file header spells it with
+// a hyphen, and why the needle below is assembled from two pieces so that this
+// guard's own source does not trip it. That is not squeamishness: it makes this
+// test exactly equivalent to grepping the package sources for the phrase and
+// expecting a count of zero, so the in-suite guard and the runbook's shell check
+// can never disagree about what is allowed. A guard whose rule is narrower than
+// the documented rule is a guard people learn to route around.
+func TestServerTestsNeverDisableTriggersGlobally(t *testing.T) {
+	forbidden := "DISABLE" + " " + "TRIGGER"
+
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read package directory: %v", err)
+	}
+	scanned := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(e.Name())
+		if err != nil {
+			t.Fatalf("read %s: %v", e.Name(), err)
+		}
+		scanned++
+		for i, line := range strings.Split(string(src), "\n") {
+			if !strings.Contains(line, forbidden) {
+				continue
+			}
+			t.Errorf("%s:%d switches a trigger off GLOBALLY:\n\t%s\n"+
+				"That is a database-wide, persistent catalog change: it disarms the append-only "+
+				"invariant for every other connection and survives a crashed test run. Use "+
+				"mutateAppendOnly (SET LOCAL session_replication_role = replica inside a "+
+				"transaction) instead — see voucher_history_test.go.",
+				e.Name(), i+1, strings.TrimSpace(line))
+		}
+	}
+	// A guard that scanned nothing would pass for the wrong reason — e.g. if the
+	// working directory were ever not the package directory. `go test` chdirs
+	// into the package, so the real number here is upwards of twenty.
+	if scanned < 5 {
+		t.Fatalf("scanned only %d _test.go files in this package; the guard is not looking at the sources it claims to", scanned)
 	}
 }

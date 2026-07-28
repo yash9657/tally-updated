@@ -44,7 +44,7 @@ from insightd.contracts.draft import (
     RedactionReportSummary,
 )
 
-from conftest import load_fixture
+from conftest import ENV_DATABASE_URL, load_fixture
 
 PKG = pathlib.Path(__file__).resolve().parent.parent / "insightd"
 
@@ -124,6 +124,38 @@ def test_default_settings_select_the_in_memory_store():
     assert store is get_store()
 
 
+def test_the_harness_hides_the_environments_dsn_from_a_freshly_built_settings():
+    """The autouse ``_in_memory_draft_store_by_default`` fixture pins
+    ``config._settings``, but a pin only covers code that goes through
+    ``get_settings()``. ``insightd/benchmark/harness.py:95`` does NOT — it builds
+    ``Settings()`` directly, and so would any future module that forgets the
+    accessor. For those, the ONLY thing standing between a test run and the shared
+    dev database is the fixture's ``monkeypatch.delenv("INSIGHTD_DATABASE_URL")``.
+
+    This test exists because deleting that delenv line changes NOTHING else that is
+    observable: with the pin still in place the whole suite stays green, so the line
+    was untested defence and would have been "cleaned up" by the first person who
+    read the fixture. Here the deletion fails a NAMED test with a stated consequence.
+
+    Vacuity, stated honestly: when the environment supplies no DSN at all these two
+    assertions are trivially true. They are LIVE in exactly the runs that matter —
+    ``make insightd-test`` exports ``INSIGHTD_DATABASE_URL`` (Makefile:17) and so
+    does CI, which is precisely the configuration in which the leak occurred.
+    """
+    import insightd.config as config_mod
+
+    assert os.environ.get("INSIGHTD_DATABASE_URL") is None, (
+        "the test harness did not remove INSIGHTD_DATABASE_URL from the environment; "
+        "any module that builds Settings() directly (benchmark/harness.py does) will "
+        "connect this test run to the real database named by that DSN and write to it"
+    )
+    assert config_mod.Settings().database_url is None, (
+        "a freshly-constructed Settings picked up a database URL — a test that does "
+        "not go through get_settings() will select the PGDraftStore and persist "
+        "drafts into a shared database instead of the in-memory fake"
+    )
+
+
 # ---------------------------------------------------------------------------
 # 2. Live PG tests — connect-or-skip
 # ---------------------------------------------------------------------------
@@ -134,7 +166,13 @@ def dsn() -> str:
     if os.environ.get("CORED_SKIP_DB") or os.environ.get("INSIGHTD_SKIP_DB"):
         pytest.skip("CORED_SKIP_DB/INSIGHTD_SKIP_DB set")
     psycopg = pytest.importorskip("psycopg", reason="psycopg not installed (requirements-db.txt)")
-    value = os.environ.get("INSIGHTD_DATABASE_URL") or DEFAULT_DSN
+    # conftest's captured value, NOT os.environ: the autouse
+    # `_in_memory_draft_store_by_default` fixture has already deleted
+    # INSIGHTD_DATABASE_URL from the environment by the time this module-scoped
+    # fixture is first built (it is built during the first test that asks for it,
+    # which is inside that fixture's scope). Reading os.environ here would silently
+    # ignore a CI-supplied DSN and fall back to DEFAULT_DSN.
+    value = ENV_DATABASE_URL or DEFAULT_DSN
     try:
         with psycopg.connect(value, connect_timeout=3) as conn:
             with conn.cursor() as cur:

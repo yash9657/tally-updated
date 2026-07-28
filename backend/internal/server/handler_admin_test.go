@@ -18,17 +18,26 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/khata/cored/internal/authz"
+	"github.com/khata/cored/internal/platform/testdb"
 	"github.com/khata/cored/internal/server"
 )
 
 // newAdminCompany creates a company owned by a fresh subject and returns the
 // company id, the Owner's token (WebAuthn AMR, so writes pass step-up) and the
 // Owner's subject.
+//
+// This is the heaviest creation site in the backend — 35 call sites, and the
+// admin surface seeds security levels, ACL rules and memberships on top of the
+// usual chart of accounts. The teardown is registered here, against the CALLING
+// test's `t`, so the several tests that mint two companies to prove cross-tenant
+// refusal tear down BOTH. Those are precisely the sites a per-test-file or
+// per-server teardown misses.
 func newAdminCompany(t *testing.T, srv *server.Server) (companyID, ownerToken, ownerSubject string) {
 	t.Helper()
 	ownerSubject = "admin-owner-" + uuid.NewString()[:8]
 	ownerToken = mintToken(t, srv, ownerSubject, "webauthn")
-	companyID = uuid.NewString()
+	cid := uuid.New()
+	companyID = cid.String()
 	rec, _ := doRaw(t, srv, http.MethodPost, "/v1/companies", ownerToken, map[string]any{
 		"id":            companyID,
 		"name":          "Admin Co " + companyID[:8],
@@ -39,6 +48,7 @@ func newAdminCompany(t *testing.T, srv *server.Server) (companyID, ownerToken, o
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create company = %d, want 201 (%s)", rec.Code, rec.Body.String())
 	}
+	testdb.Cleanup(t, cid)
 	return companyID, ownerToken, ownerSubject
 }
 

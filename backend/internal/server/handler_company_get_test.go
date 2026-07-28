@@ -31,6 +31,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/khata/cored/internal/platform/testdb"
 	"github.com/khata/cored/internal/server"
 )
 
@@ -38,7 +39,8 @@ import (
 // gstin and returns its id. The caller becomes Owner.
 func createCompanyWithState(t *testing.T, srv *server.Server, token, stateCode, gstin string) string {
 	t.Helper()
-	companyID := uuid.NewString()
+	cid := uuid.New()
+	companyID := cid.String()
 	rec, body := doRaw(t, srv, http.MethodPost, "/v1/companies", token, map[string]any{
 		"id":            companyID,
 		"name":          "State Co " + companyID[:8],
@@ -53,6 +55,7 @@ func createCompanyWithState(t *testing.T, srv *server.Server, token, stateCode, 
 	if body["company_id"] != companyID {
 		t.Fatalf("create company returned %v, want %s", body["company_id"], companyID)
 	}
+	testdb.Cleanup(t, cid)
 	return companyID
 }
 

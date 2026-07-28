@@ -35,14 +35,29 @@ dev-db: ## Start local Postgres 16 (docker, port 5433)
 dev-db-down: ## Stop and remove local Postgres
 	docker compose down -v
 
+# cored reads ADMIN_DSN / APP_DSN (cmd/cored/main.go:69,85; hardcoded defaults at
+# :29-31). This Makefile exports ADMIN_DATABASE_URL / DATABASE_URL. Those are
+# DIFFERENT NAMES, so until this line existed `make migrate` ignored the Makefile's
+# own variables entirely and always hit cored's compiled-in defaults. That was
+# harmless only because the two happened to be equal; the moment `reset-dev-db` is
+# parameterised on ADMIN_DATABASE_URL the mismatch drops one database and migrates
+# another, and reports success. Bridge the names here, once.
 migrate: ## Apply backend migrations to local db (uses ADMIN then APP roles)
-	cd backend && go run ./cmd/cored migrate
+	cd backend && ADMIN_DSN="$(ADMIN_DATABASE_URL)" APP_DSN="$(DATABASE_URL)" go run ./cmd/cored migrate
 
 backend-build: ## go build + vet
 	cd backend && go build ./... && go vet ./...
 
 backend-test: ## Backend unit + RLS/isolation integration tests (needs dev-db)
 	cd backend && go test ./... -count=1
+
+# The SAME suite, wrapped in a before/after row-count snapshot of the six tables a
+# leaked test company drags with it. The bound is ZERO. This is what `verify`
+# depends on — it replaces `backend-test` there rather than being added alongside
+# it, so the suite still runs exactly once. `backend-test` stays for anyone who
+# wants the raw run without a database snapshot.
+backend-test-residue: ## Backend suite + PROOF it left no rows in the dev database (bound 0)
+	bash backend/scripts/test_residue.sh
 
 frontend-install: ## Install frontend deps
 	cd frontend && pnpm install --frozen-lockfile || cd frontend && pnpm install
@@ -63,17 +78,26 @@ corpora-verify: ## Independently re-derive the golden tax corpora (no deps beyon
 # that is NOT required to exist (a Go-only contributor must still be able to run
 # `make verify`), so this target SKIPS loudly rather than failing when the venv
 # is absent. CI installs the deps, so CI never takes the skip path.
+#
+# No `-q` here on purpose: pyproject.toml already carries `addopts = "-q"`, so
+# adding a second one makes it `-qq`, which SUPPRESSES the "N passed, M skipped"
+# summary line. Exit 0 is not acceptance for this suite — with Postgres down the
+# whole PG group turns into 13 silent skips and still exits 0 — so the counts have
+# to be visible in the log.
 insightd-test: ## insightd pytest (SKIPS loudly when insightd/.venv is absent)
 	@if [ -x insightd/.venv/bin/python ]; then \
-		cd insightd && .venv/bin/python -m pytest -q; \
+		cd insightd && .venv/bin/python -m pytest; \
 	else \
 		echo "*** SKIP insightd-test: insightd/.venv/bin/python not found."; \
 		echo "***   create it with: python3 -m venv insightd/.venv && insightd/.venv/bin/pip install -r insightd/requirements.txt"; \
 		echo "***   (the insightd plane is therefore NOT verified by this run)"; \
 	fi
 
+# APP_DSN, not DATABASE_URL — see the note on `migrate` above. Without it a
+# customised DATABASE_URL is silently ignored and cored serves the compiled-in
+# default database, which is the same bug one layer down.
 run-cored: ## Run cored locally on :$(CORED_PORT) with dev token minting enabled
-	cd backend && PORT=$(CORED_PORT) AUTH_DEV_TOKEN_ENABLED=true go run ./cmd/cored serve
+	cd backend && PORT=$(CORED_PORT) AUTH_DEV_TOKEN_ENABLED=true APP_DSN="$(DATABASE_URL)" go run ./cmd/cored serve
 
 run-insightd: ## Run insightd on :$(INSIGHTD_PORT) with the DURABLE (Postgres) draft store
 	@if [ ! -x insightd/.venv/bin/python ]; then \
@@ -89,7 +113,68 @@ run-insightd: ## Run insightd on :$(INSIGHTD_PORT) with the DURABLE (Postgres) d
 seed-demo: ## Seed the Demo Traders company (needs cored + insightd running)
 	cd frontend && pnpm seed:demo -- --insightd
 
-verify: dev-db migrate backend-build backend-test frontend-test corpora-verify insightd-test ## Run ALL local gates (Go + frontend + corpora + insightd)
+# Both seeders, in the ONE order that works, with the ids handed between them on
+# disk instead of copy-pasted out of a log line.
+#
+# ORDERING IS NOT COSMETIC. seed-tenancy takes company A as argv[2], so demo must
+# run first. And after a wipe `pnpm e2e:ui` signs in as `browser-dev-owner`, whose
+# password exists ONLY because a seeder called auth.mts's ensurePassword — so
+# seed-all must precede e2e:ui or the browser gate fails at the login screen with
+# a 401 that looks like an auth regression.
+#
+# Kept OUT of reset-dev-db deliberately: seeding drives the REST API, so it needs
+# cored and insightd already listening. reset-dev-db drops the database out from
+# under them, so they have to be restarted in between.
+seed-all: ## Seed demo + tenancy in order (needs cored + insightd running)
+	cd frontend && pnpm seed:demo -- --insightd
+	cd frontend && pnpm seed:tenancy "$$(cat .demo-company-id)"
+	@echo ""
+	@echo "  demo company    (A): $$(cat frontend/.demo-company-id)"
+	@echo "  tenancy company (B): $$(cat frontend/.tenancy-company-id)"
+	@echo ""
+	@echo "  pnpm verify:demo    \$$(cat frontend/.demo-company-id)"
+	@echo "  pnpm verify:tenancy \$$(cat frontend/.demo-company-id) \$$(cat frontend/.tenancy-company-id)"
+
+# DESTRUCTIVE. Drops and recreates the DATABASE (not just the schema) and migrates
+# it from empty. The owner asked to be asked, so it refuses without CONFIRM=WIPE.
+#
+# WHY DROP THE DATABASE rather than the schema: `schema_migrations` goes with it,
+# so migrations replay from 0001 and every per-database GRANT and extension is
+# recreated. A `DROP SCHEMA public CASCADE` leaves schema_migrations' own database
+# objects in an inconsistent half-state.
+#
+# WHY NOT `dev-db-down && dev-db`: that destroys the container the rest of this
+# Makefile and every runbook `docker exec`s BY NAME, and pays for a 2 GB volume
+# delete plus a fresh initdb.
+#
+# `WITH (FORCE)` terminates cored's, insightd's and statutoryd's pooled connections
+# — without it the DROP blocks forever behind an idle pgx pool. `-v ON_ERROR_STOP=1`
+# is what stops the half-working failure mode where the DROP errors, the migrate
+# then "succeeds" against the untouched old data, and this target reports success.
+#
+# NO `DROP ROLE`. Roles are CLUSTER-level, so tally_app survives the drop; 0001 and
+# 0024 are IF NOT EXISTS-guarded and re-normalise it against the new database.
+#
+# The migrate must finish SERIALLY before anything else touches the database:
+# migrations.Apply takes no advisory lock, so a `go test ./...` racing it on a
+# freshly emptied database dies on `type voucher_op already exists`.
+reset-dev-db: dev-db ## DESTRUCTIVE. Drop + recreate the dev database, then migrate. Needs CONFIRM=WIPE.
+	@if [ "$(CONFIRM)" != "WIPE" ]; then \
+		echo "*** reset-dev-db DESTROYS every row in $(ADMIN_DATABASE_URL)."; \
+		echo "*** That includes every seeded demo company and every voucher in it."; \
+		echo "*** Stop cored / insightd / statutoryd first, then run:"; \
+		echo "***     make reset-dev-db CONFIRM=WIPE"; \
+		exit 1; \
+	fi
+	docker compose exec -T db psql -U postgres -d postgres -v ON_ERROR_STOP=1 -c 'DROP DATABASE IF EXISTS tally WITH (FORCE)' -c 'CREATE DATABASE tally'
+	$(MAKE) migrate
+	@echo ""
+	@echo "recreated + migrated. NOW, IN THIS ORDER:"
+	@echo "  1) make run-cored      (background)"
+	@echo "  2) make run-insightd   (background)"
+	@echo "  3) make seed-all"
+
+verify: dev-db migrate backend-build backend-test-residue frontend-test corpora-verify insightd-test ## Run ALL local gates (Go + frontend + corpora + insightd)
 	@echo "\n✅ verification gates passed (see any SKIP lines above for planes not covered)"
 
-.PHONY: help dev-db dev-db-down migrate backend-build backend-test frontend-install frontend-test frontend-build corpora-verify insightd-test run-cored run-insightd seed-demo verify
+.PHONY: help dev-db dev-db-down reset-dev-db migrate backend-build backend-test backend-test-residue frontend-install frontend-test frontend-build corpora-verify insightd-test run-cored run-insightd seed-demo seed-all verify

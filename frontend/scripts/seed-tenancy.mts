@@ -42,6 +42,8 @@
  * the admin API has a hole.
  */
 
+import { writeFileSync } from "node:fs";
+
 import { createRestClient } from "../src/api";
 import type { CoredClient, VoucherRequest } from "../src/api";
 import { DEMO_PASSWORD, ensurePassword } from "./auth.mjs";
@@ -129,6 +131,10 @@ async function main(): Promise<void> {
   });
   const companyB = b.company_id;
   console.log(`  company B: ${companyB} (Sharma Distributors, state 27)`);
+  // Machine-readable, for the same reason seed-demo.mts writes `.demo-company-id`:
+  // `pnpm verify:tenancy` needs BOTH ids (argv[2] = A, argv[3] = B) and `make
+  // seed-all` has to be able to print them without a human reading the log.
+  writeFileSync(new URL("../.tenancy-company-id", import.meta.url), companyB);
 
   // A few vouchers so B's reports are non-empty and OBVIOUSLY different from A's
   // — that difference is what makes a cross-tenant leak visible if one existed.

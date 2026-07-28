@@ -10,6 +10,7 @@ import (
 
 	"github.com/khata/cored/internal/authz"
 	"github.com/khata/cored/internal/platform/db"
+	"github.com/khata/cored/internal/platform/testdb"
 	"github.com/khata/cored/migrations"
 )
 
@@ -62,6 +63,19 @@ func seedCompanyWithOwner(t *testing.T, store *authz.Store, pool *db.Pool, subje
 	}); err != nil {
 		t.Fatalf("insert company: %v", err)
 	}
+	// Registered here even though this company is CHILDLESS at this point — the
+	// raw INSERT deliberately skips seed_company_defaults, so there is no chart of
+	// accounts to orphan. The teardown is still correct and still required: the
+	// SeedCompanyAuthDefaults call below plants a security_level tree, the ACL
+	// rules under it and a company_membership row, all company-scoped, and every
+	// one of them is deleted by company_id. Registering before the seed means a
+	// t.Fatal partway through it still cleans up what was written.
+	//
+	// What deliberately SURVIVES is the app_user row: users are not tenant-scoped
+	// (one login can belong to several companies), so testdb classifies app_user
+	// as not-tenant-scoped and leaves it alone rather than deleting a principal
+	// that another company may still reference.
+	testdb.Cleanup(t, companyID)
 
 	uid, err := store.CreateUserOnFirstLogin(ctx, subject, "", "")
 	if err != nil {
@@ -163,5 +177,61 @@ func TestStoreUserSeesOnlyOwnRow(t *testing.T) {
 	// A subject that was never created is not found.
 	if _, _, found, err := store.LookupUserBySubject(ctx, "never-"+uuid.NewString()); err != nil || found {
 		t.Fatalf("unknown subject must be not-found: found=%v err=%v", found, err)
+	}
+}
+
+// TestAuthzHarnessRemovesItsCompany is the anti-rot guard on
+// seedCompanyWithOwner()'s teardown. Forgetting the registration breaks no
+// assertion in this package — it just buries another company, its security-level
+// tree, its ACL rules and its membership row on every run, which is how the
+// shared dev database reached 43,419 companies.
+//
+// The tables checked here are chosen for THIS harness, not copied blindly from
+// its siblings. seedCompanyWithOwner uses a raw INSERT that deliberately skips
+// seed_company_defaults, so this company never has a chart of accounts;
+// account_group / ledger / voucher_type would be trivially zero whether or not
+// the teardown ran, and asserting on them alone would be vacuous. What this
+// harness actually writes is security_level, acl_rule and company_membership,
+// so those are what must come back empty. They are also the rows that made
+// acl_rule big enough to need an index of its own (added in eacf62e after a
+// backfill ran 1h57m against the accumulated fleet).
+//
+// app_user is deliberately NOT checked: a login is not tenant-scoped — one user
+// can belong to several companies — so testdb classifies app_user as
+// not-tenant-scoped and leaves the principal in place.
+func TestAuthzHarnessRemovesItsCompany(t *testing.T) {
+	if os.Getenv("CORED_SKIP_DB") != "" {
+		t.Skip("db tests skipped (CORED_SKIP_DB set)")
+	}
+	// Cleanups registered on the inner *testing.T have all run by the time t.Run
+	// returns, so the harness has had its chance before the next line.
+	var cid uuid.UUID
+	t.Run("harness", func(t *testing.T) {
+		store, pool := newStore(t)
+		cid, _, _ = seedCompanyWithOwner(t, store, pool, "teardown-probe-"+uuid.NewString())
+	})
+	if cid == uuid.Nil {
+		t.Skip("harness skipped (no database), nothing to assert about teardown")
+	}
+
+	ctx := context.Background()
+	// ADMIN, deliberately: the app role is FORCE-RLS'd to a single company and
+	// would answer 0 for every table whatever survived — a vacuous green.
+	conn, err := pgx.Connect(ctx, testdb.AdminDSNValue())
+	if err != nil {
+		t.Skipf("admin postgres unavailable: %v", err)
+	}
+	defer conn.Close(ctx)
+
+	for _, tbl := range []string{"company", "security_level", "acl_rule", "company_membership"} {
+		var n int
+		if err := conn.QueryRow(ctx, "SELECT count(*) FROM "+tbl+" WHERE company_id = $1", cid).Scan(&n); err != nil {
+			t.Fatalf("count %s for company %s: %v", tbl, cid, err)
+		}
+		if n != 0 {
+			t.Errorf("%s still holds %d rows for company %s after the harness cleaned up: "+
+				"the authz harness leaks them on EVERY run and nothing will ever delete them",
+				tbl, n, cid)
+		}
 	}
 }

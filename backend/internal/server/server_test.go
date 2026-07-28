@@ -25,6 +25,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/khata/cored/internal/authn"
+	"github.com/khata/cored/internal/platform/testdb"
 	"github.com/khata/cored/internal/server"
 	"github.com/khata/cored/migrations"
 )
@@ -380,6 +381,11 @@ func TestPostSaleEndToEnd(t *testing.T) {
 	if body["company_id"] != companyID.String() {
 		t.Fatalf("create company returned %v, want %s", body["company_id"], companyID)
 	}
+	// This is the ONE company in this package minted inline rather than through
+	// newCompany, so it needs its own registration. Every seeded company drags a
+	// 28-node account_group tree behind it; 43,419 of them is how account_group
+	// reached 603 MB and how a ledger test ran out of disk mid-seed.
+	testdb.Cleanup(t, companyID)
 
 	// 2. Create the debtor and a domestic-sales ledger.
 	debtorID := createLedger(t, srv, base, "Acme Corp", "Sundry Debtors")
@@ -436,6 +442,13 @@ func TestPostSaleEndToEnd(t *testing.T) {
 
 // newCompany creates a unique seeded company over HTTP and returns its id and
 // the base path. It fails the test on any non-201.
+//
+// It also registers the teardown. The registration lives HERE rather than at
+// the fifteen call sites for two reasons: one edit cannot be forgotten at a new
+// call site, and because `t` is the CALLING test's `*testing.T`, a test that
+// creates two companies gets two independent cleanups — which is exactly what
+// the deliberate second-tenant isolation probes need and what a package-level
+// or per-server teardown would silently get wrong.
 func newCompany(t *testing.T, srv *server.Server) (string, string) {
 	t.Helper()
 	companyID, err := uuid.NewV7()
@@ -454,6 +467,7 @@ func newCompany(t *testing.T, srv *server.Server) (string, string) {
 	if body["company_id"] != companyID.String() {
 		t.Fatalf("create company returned %v, want %s", body["company_id"], companyID)
 	}
+	testdb.Cleanup(t, companyID)
 	return companyID.String(), base
 }
 

@@ -1,0 +1,9 @@
+# Company ids handed from the SEEDERS to the VERIFIERS on disk.
+#
+# `pnpm seed:demo` writes .demo-company-id and `pnpm seed:tenancy` writes
+# .tenancy-company-id; `make seed-all` chains them and `pnpm verify:demo` /
+# `pnpm verify:tenancy` take the ids as argv. They are per-machine, per-wipe
+# throwaway UUIDs — committing one would point the next person's verify run at a
+# company that does not exist in their database.
+.demo-company-id
+.tenancy-company-id

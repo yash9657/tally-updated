@@ -13,6 +13,7 @@ import (
 	"github.com/khata/cored/internal/identity"
 	"github.com/khata/cored/internal/ledger"
 	"github.com/khata/cored/internal/platform/db"
+	"github.com/khata/cored/internal/platform/testdb"
 	"github.com/khata/cored/internal/reporting"
 	"github.com/khata/cored/migrations"
 )
@@ -60,6 +61,19 @@ func setup(t *testing.T) (*db.Pool, context.Context, uuid.UUID, *identity.Servic
 	}); err != nil {
 		t.Fatalf("create company: %v", err)
 	}
+	// Register the teardown the instant the company exists, and BEFORE any child
+	// master is made, so that a t.Fatal anywhere below still leaves a registered
+	// cleanup behind. t.Cleanup is LIFO, so this runs before the pool.Close above
+	// — which is correct, and in any case testdb dials its own admin pool rather
+	// than borrowing this RLS-restricted one.
+	//
+	// Without this line the run leaks the company AND the ~28 account_group rows
+	// the seed plants under it. Nothing ever collects them: notification_outbox is
+	// the ONLY foreign key that references company(id) and its action is NO ACTION,
+	// so deleting the company row alone orphans the whole chart of accounts without
+	// raising a single error. That is how this dev database reached 43,419
+	// companies and 603 MB of account_group nobody will ever read.
+	testdb.Cleanup(t, companyID)
 	return pool, cctx, companyID, ids
 }
 
@@ -374,5 +388,120 @@ func TestDeleteUnknownVoucherErrors(t *testing.T) {
 		},
 	}); !errors.Is(err, ledger.ErrVoucherNotFound) {
 		t.Fatalf("alter unknown: expected ErrVoucherNotFound, got %v", err)
+	}
+}
+
+// TestLedgerHarnessRemovesItsCompany is the anti-rot guard on setup()'s teardown.
+//
+// It is deliberately NOT a test of testdb — testdb carries its own. It is a test
+// that THIS package's harness still registers the teardown, because forgetting
+// it is a silent failure: every other test in the package goes on passing while
+// each run buries another company and its whole chart of accounts in the shared
+// database. That is not hypothetical; it is the state Track 0 was created to
+// clean up.
+//
+// WHY THE CHILD TABLES ARE CHECKED, NOT JUST `company`
+// ----------------------------------------------------
+// The cleanup this replaced deleted the company row and nothing else, and it
+// LOOKED right. Only notification_outbox references company(id), and its foreign
+// key action is NO ACTION, so Postgres happily removed the parent and orphaned
+// the 28 account_group rows, the seeded ledgers, the voucher types and the ACL
+// rules underneath it — no error, no cascade, no trace. An assertion that
+// counted only `company` would have blessed that bug for a second time, so this
+// one counts the five tables the company seed actually populates.
+//
+// WHY THERE IS A SECOND PHASE
+// ---------------------------
+// A guard that only exercises setup() is exactly half a guard, and the missing
+// half is the dangerous one. This package mints companies at TWO sites: setup(),
+// and an inline `CreateCompany` for tenant B inside TestTenantIsolation. Deleting
+// the teardown at the inline site was tried while this test was being written:
+// the whole package still exited 0, every assertion still passed, and the run
+// quietly left one more company behind. Only a count taken from OUTSIDE the test
+// binary saw it. So the second phase drives TestTenantIsolation and looks for its
+// footprint directly, and the package now fails on its own when either site
+// regresses rather than waiting for a nightly residue script to notice.
+func TestLedgerHarnessRemovesItsCompany(t *testing.T) {
+	if os.Getenv("CORED_SKIP_DB") != "" {
+		t.Skip("db tests skipped")
+	}
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, testdb.AdminDSNValue())
+	if err != nil {
+		t.Skipf("admin postgres unavailable: %v", err)
+	}
+	defer conn.Close(ctx)
+
+	// The app role is FORCE-RLS'd to one company and would report 0 for every
+	// table regardless of what survived, which is exactly the vacuous green this
+	// test exists to prevent. Every count below is taken as the admin (a
+	// superuser bypasses row-level security).
+	childTables := []string{"company", "account_group", "ledger", "voucher_type", "acl_rule"}
+	assertGone := func(id uuid.UUID, site string) {
+		for _, tbl := range childTables {
+			var n int
+			if err := conn.QueryRow(ctx, "SELECT count(*) FROM "+tbl+" WHERE company_id = $1", id).Scan(&n); err != nil {
+				t.Fatalf("count %s for company %s: %v", tbl, id, err)
+			}
+			if n != 0 {
+				t.Errorf("%s still holds %d rows for company %s after %s finished: "+
+					"the ledger package leaks them on EVERY run and nothing will ever delete them",
+					tbl, n, id, site)
+			}
+		}
+	}
+
+	// --- Phase 1: the shared harness, setup(). -----------------------------
+	// Mint the company inside a subtest: every t.Cleanup registered on the inner
+	// *testing.T has already run by the time t.Run returns, so from the next line
+	// onwards the harness has had its full chance to tidy up. Reading the id out
+	// through a closure variable is what lets the parent test see what the child
+	// created.
+	var cid uuid.UUID
+	t.Run("setup", func(t *testing.T) { _, _, cid, _ = setup(t) })
+	if cid == uuid.Nil {
+		t.Skip("harness skipped (no database), nothing to assert about teardown")
+	}
+	assertGone(cid, "setup()")
+
+	// --- Phase 2: the INLINE second tenant inside TestTenantIsolation. ------
+	// This site hands its id to nobody, so there is no id to ask for. What it does
+	// leave is a fingerprint: tenant B is the only company in the schema named
+	// exactly "Company B". Snapshotting that set before and after, and blaming
+	// only ids that are NEW, is what makes this safe on a database that already
+	// holds thousands of "Company B" rows from the years before any teardown
+	// existed — those are pre-existing residue, not this run's doing.
+	//
+	// The one thing this cannot distinguish is a SECOND, concurrent run of this
+	// same package writing its own "Company B" at the same moment. That is the
+	// same limitation the residue script carries, and the project already forbids
+	// running the suite against the shared dev database concurrently for it.
+	tenantBs := func(when string) map[uuid.UUID]bool {
+		rows, err := conn.Query(ctx, `SELECT id FROM company WHERE name = 'Company B'`)
+		if err != nil {
+			t.Fatalf("list tenant-B companies %s: %v", when, err)
+		}
+		defer rows.Close()
+		out := map[uuid.UUID]bool{}
+		for rows.Next() {
+			var id uuid.UUID
+			if err := rows.Scan(&id); err != nil {
+				t.Fatalf("scan tenant-B id %s: %v", when, err)
+			}
+			out[id] = true
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("iterate tenant-B companies %s: %v", when, err)
+		}
+		return out
+	}
+
+	before := tenantBs("before")
+	t.Run("inline second tenant", func(t *testing.T) { TestTenantIsolation(t) })
+	for id := range tenantBs("after") {
+		if before[id] {
+			continue // pre-existing residue from before this teardown existed
+		}
+		assertGone(id, "TestTenantIsolation's inline company B")
 	}
 }

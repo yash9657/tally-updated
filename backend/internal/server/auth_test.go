@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/khata/cored/internal/platform/testdb"
 	"github.com/khata/cored/internal/server"
 )
 
@@ -13,17 +14,29 @@ import (
 // 401 (the unauthenticated contract), distinct from the 403 used for denials.
 func TestNoTokenIs401(t *testing.T) {
 	srv := newServer(t)
-	companyID := uuid.NewString()
+	cid := uuid.New()
+	companyID := cid.String()
 	// doRaw with empty token = no Authorization header.
 	rec, _ := doRaw(t, srv, http.MethodGet, "/v1/companies/"+companyID+"/trial-balance", "", nil)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("no-token request status = %d, want 401 (body %s)", rec.Code, rec.Body.String())
 	}
 	// POST /v1/companies also requires a token.
-	rec, _ = doRaw(t, srv, http.MethodPost, "/v1/companies", "", map[string]any{"name": "X", "fy_start_date": "2025-04-01"})
+	//
+	// The body names an EXPLICIT id — the same one used above — and the teardown
+	// is registered for it even though a 401 means nothing was written. That is
+	// deliberate on both counts: it costs one DELETE that matches no rows, and it
+	// means that if this gate ever regressed from 401 to 201 the test would still
+	// not leak a company into the shared database. A creation site whose teardown
+	// is omitted "because it cannot succeed" is indistinguishable from one whose
+	// teardown was forgotten, and the second kind is how 685 companies per run
+	// accumulated unnoticed.
+	rec, _ = doRaw(t, srv, http.MethodPost, "/v1/companies", "",
+		map[string]any{"id": companyID, "name": "X", "fy_start_date": "2025-04-01"})
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("create company no-token status = %d, want 401 (body %s)", rec.Code, rec.Body.String())
 	}
+	testdb.Cleanup(t, cid)
 }
 
 // TestInvalidTokenIs401 proves a garbage/forged Bearer is 401, not 403.
@@ -128,7 +141,8 @@ func TestServiceTokenBypass(t *testing.T) {
 // id (the caller becomes Owner).
 func createCompanyAs(t *testing.T, srv *server.Server, token string) string {
 	t.Helper()
-	companyID := uuid.NewString()
+	cid := uuid.New()
+	companyID := cid.String()
 	rec, body := doRaw(t, srv, http.MethodPost, "/v1/companies", token, map[string]any{
 		"id":            companyID,
 		"name":          "Auth Co " + companyID[:8],
@@ -140,6 +154,7 @@ func createCompanyAs(t *testing.T, srv *server.Server, token string) string {
 	if body["company_id"] != companyID {
 		t.Fatalf("create company returned %v, want %s", body["company_id"], companyID)
 	}
+	testdb.Cleanup(t, cid)
 	return companyID
 }
 

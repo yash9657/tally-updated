@@ -34,6 +34,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/khata/cored/internal/platform/testdb"
 )
 
 // inventoryTables are the four tenant tables migration 0025 adds. They must be
@@ -657,15 +659,15 @@ func TestSeedCompanyDefaultsCreatesMainLocation(t *testing.T) {
 
 	company := mustV7(t)
 	seedCompany(t, h.admin, company)
-	t.Cleanup(func() {
-		for _, tbl := range []string{"godown", "voucher_type", "ledger", "account_group", "company"} {
-			col := "company_id"
-			if tbl == "company" {
-				col = "id"
-			}
-			_, _ = h.admin.Exec(ctx, `DELETE FROM `+tbl+` WHERE `+col+` = $1`, company)
-		}
-	})
+	// This test seeds a THIRD company (beyond the harness's A and B) and then runs
+	// seed_company_defaults over it, so it plants a full master tree. The
+	// hand-written five-table delete this replaces was the exact failure mode the
+	// hygiene work exists to kill: it named the tables it happened to remember, so
+	// the day seed_company_defaults started creating a sixth kind of row — which is
+	// literally what migration 0025 did when it added the system godown — the extra
+	// rows were orphaned silently. DropNow enumerates the tables from the live
+	// catalogue instead, so it cannot fall behind the schema.
+	t.Cleanup(func() { testdb.DropNow(t, company) })
 	if _, err := h.admin.Exec(ctx, `SELECT seed_company_defaults($1)`, company); err != nil {
 		t.Fatalf("seed_company_defaults: %v", err)
 	}

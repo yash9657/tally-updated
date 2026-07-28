@@ -22,6 +22,7 @@ import (
 
 	"github.com/khata/cored/internal/identity"
 	"github.com/khata/cored/internal/platform/db"
+	"github.com/khata/cored/internal/platform/testdb"
 	"github.com/khata/cored/migrations"
 )
 
@@ -83,6 +84,12 @@ func setupStock(t *testing.T) *stockEnv {
 	}); err != nil {
 		t.Fatalf("create company: %v", err)
 	}
+	// Teardown, registered before the ledgers, items and batches below. This
+	// harness is the heaviest leaker in the package: every stock test writes
+	// stock_movement rows, and stock_movement carries a BEFORE UPDATE OR DELETE
+	// immutability trigger, so nothing short of testdb's replica-mode transaction
+	// can remove them at all.
+	testdb.Cleanup(t, companyID)
 
 	e := &stockEnv{pool: pool, ctx: cctx, company: companyID, led: NewService(pool)}
 	if e.creditor, err = ids.CreateLedger(cctx, "Acme Supplies", "Sundry Creditors"); err != nil {

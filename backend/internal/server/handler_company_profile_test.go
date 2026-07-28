@@ -23,12 +23,29 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/khata/cored/internal/platform/testdb"
 	"github.com/khata/cored/internal/server"
 )
 
 // createCompanyBody POSTs an arbitrary company body and returns the response.
+//
+// It registers the teardown from the id in the REQUEST body rather than from
+// the response, because this helper is deliberately used for bodies that are
+// expected to be REJECTED as well as accepted, and a rejected create has no
+// response id. Registering from the request means the teardown covers the case
+// this helper exists to probe: a validation that was supposed to refuse the row
+// and did not.
 func createCompanyBody(t *testing.T, srv *server.Server, token string, body map[string]any) (int, map[string]any) {
 	t.Helper()
+	if id, ok := body["id"].(string); ok && id != "" {
+		// Parsed rather than MustParse'd: this helper is deliberately handed
+		// malformed bodies to prove the endpoint rejects them, and an unparseable
+		// id means no company could have been created, so there is nothing to
+		// tear down.
+		if cid, err := uuid.Parse(id); err == nil {
+			testdb.Cleanup(t, cid)
+		}
+	}
 	rec, resp := doRaw(t, srv, http.MethodPost, "/v1/companies", token, body)
 	return rec.Code, resp
 }
@@ -140,6 +157,12 @@ func TestBooksBeginningDefaultIsSchemaLevel(t *testing.T) {
 	defer func() { _ = conn.Close(ctx) }()
 
 	companyID := uuid.New()
+	// This company is created on the ADMIN connection, bypassing
+	// identity.CreateCompany — so it has NO seeded chart of accounts and no
+	// members. It is childless, but it is still a company row, and 43,419 of
+	// those is the state this wave exists to end. Registered BEFORE the INSERT so
+	// a failure between the INSERT and the assertion still tears it down.
+	testdb.Cleanup(t, companyID)
 	if _, err := conn.Exec(ctx,
 		`INSERT INTO company (id, company_id, name, fy_start_date)
 		 VALUES ($1, $1, $2, $3)`,
@@ -171,6 +194,12 @@ func TestBooksCannotBeginBeforeFinancialYear(t *testing.T) {
 	defer func() { _ = conn.Close(ctx) }()
 
 	companyID := uuid.New()
+	// The CHECK is expected to refuse this row, so the teardown should have
+	// nothing to do — but it is registered anyway, because the failure this test
+	// guards against is precisely "the constraint is missing and the row landed".
+	// Cleaning up only on the paths we expect to succeed would leak on exactly
+	// the path that matters.
+	testdb.Cleanup(t, companyID)
 	_, err = conn.Exec(ctx,
 		`INSERT INTO company (id, company_id, name, fy_start_date, books_beginning_from)
 		 VALUES ($1, $1, $2, $3, $4)`,

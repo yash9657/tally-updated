@@ -16,6 +16,7 @@ import (
 
 	"github.com/khata/cored/internal/identity"
 	"github.com/khata/cored/internal/platform/db"
+	"github.com/khata/cored/internal/platform/testdb"
 	"github.com/khata/cored/internal/query"
 	"github.com/khata/cored/migrations"
 )
@@ -307,6 +308,12 @@ func TestToQuery_InjectionDBIntact(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("create company: %v", err)
 	}
+	// This package has no company-minting helper: the one company it makes is
+	// made right here, inline, so the teardown is registered right here too. It
+	// runs AFTER the row-count assertion below (t.Cleanup functions run once the
+	// test body has returned), so it cannot make that assertion vacuous — it only
+	// stops the company outliving the test that needed it.
+	testdb.Cleanup(t, companyID)
 
 	before := rawCount(t, "ledger", companyID)
 
@@ -345,4 +352,86 @@ func rawCount(t *testing.T, table string, companyID uuid.UUID) int64 {
 func jsonStr(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
+}
+
+// TestNLQHarnessRemovesItsCompany is the anti-rot guard on the teardown inside
+// TestToQuery_InjectionDBIntact.
+//
+// WHY THIS ONE IS SHAPED DIFFERENTLY FROM ITS EIGHT SIBLINGS
+// ----------------------------------------------------------
+// Every other package in this wave mints its company in a helper that RETURNS
+// the id, so its guard can call the helper and count rows for that id. This
+// package has no such helper — the company is created inline in the middle of
+// the injection test — and extracting one would change a fixture that an
+// adversarial security test depends on. So instead of asking the harness for an
+// id, this test runs the real test function and looks for its FOOTPRINT: the
+// company it creates is the only one in the database named "NLQ Sec …", so any
+// row matching that prefix which exists afterwards and did not exist before is,
+// by construction, a company this package leaked.
+//
+// Taking a before-set rather than a plain count is what makes it safe on a
+// shared dev database: another agent creating unrelated companies concurrently
+// cannot affect the result, because only NEW rows carrying this package's own
+// name prefix are ever reported.
+//
+// The child tables are then counted for each survivor rather than stopping at
+// `company`, for the same reason as everywhere else in this wave:
+// notification_outbox is the ONLY foreign key referencing company(id) and its
+// action is NO ACTION, so a teardown that removed the parent row alone would
+// leave the whole chart of accounts orphaned and look completely clean.
+func TestNLQHarnessRemovesItsCompany(t *testing.T) {
+	if os.Getenv("CORED_SKIP_DB") != "" {
+		t.Skip("db tests skipped")
+	}
+	ctx := context.Background()
+	// ADMIN, deliberately: the app role is FORCE-RLS'd to a single company and
+	// would answer "no rows" for every probe here whatever actually survived.
+	conn, err := pgx.Connect(ctx, testdb.AdminDSNValue())
+	if err != nil {
+		t.Skipf("admin postgres unavailable: %v", err)
+	}
+	defer conn.Close(ctx)
+
+	nlqCompanies := func(when string) map[uuid.UUID]bool {
+		rows, err := conn.Query(ctx, `SELECT id FROM company WHERE name LIKE 'NLQ Sec %'`)
+		if err != nil {
+			t.Fatalf("list NLQ companies %s: %v", when, err)
+		}
+		defer rows.Close()
+		out := map[uuid.UUID]bool{}
+		for rows.Next() {
+			var id uuid.UUID
+			if err := rows.Scan(&id); err != nil {
+				t.Fatalf("scan NLQ company id %s: %v", when, err)
+			}
+			out[id] = true
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("iterate NLQ companies %s: %v", when, err)
+		}
+		return out
+	}
+
+	before := nlqCompanies("before")
+	t.Run("harness", func(t *testing.T) { TestToQuery_InjectionDBIntact(t) })
+	after := nlqCompanies("after")
+
+	for id := range after {
+		if before[id] {
+			// Pre-existing residue from an older run of this package, before the
+			// teardown existed. Not this run's doing, so not this run's failure.
+			continue
+		}
+		for _, tbl := range []string{"company", "account_group", "ledger", "voucher_type", "acl_rule"} {
+			var n int
+			if err := conn.QueryRow(ctx, "SELECT count(*) FROM "+tbl+" WHERE company_id = $1", id).Scan(&n); err != nil {
+				t.Fatalf("count %s for company %s: %v", tbl, id, err)
+			}
+			if n != 0 {
+				t.Errorf("%s still holds %d rows for company %s after TestToQuery_InjectionDBIntact finished: "+
+					"the nlq injection test leaks a company on EVERY run and nothing will ever delete it",
+					tbl, n, id)
+			}
+		}
+	}
 }

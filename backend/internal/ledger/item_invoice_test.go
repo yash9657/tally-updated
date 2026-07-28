@@ -34,6 +34,7 @@ import (
 	"github.com/khata/cored/internal/compliance"
 	"github.com/khata/cored/internal/identity"
 	"github.com/khata/cored/internal/platform/db"
+	"github.com/khata/cored/internal/platform/testdb"
 	"github.com/khata/cored/internal/reporting"
 	"github.com/khata/cored/migrations"
 )
@@ -133,6 +134,11 @@ func setupItemInvoice(t *testing.T) *itemEnv {
 	}); err != nil {
 		t.Fatalf("create company: %v", err)
 	}
+	// Teardown before the item/batch/godown masters below exist, so that a
+	// t.Fatal while building the fixture still cleans up what was made. The
+	// inventory masters (stock_item, stock_batch, godown, unit) are all
+	// company-scoped and all invisible to a company-only delete.
+	testdb.Cleanup(t, companyID)
 
 	e := &itemEnv{
 		pool: pool, ctx: cctx, company: companyID,

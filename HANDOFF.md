@@ -183,6 +183,8 @@ cd backend
 go run ./cmd/cored migrate            # apply embedded migrations (idempotent; 31 files, 0001..0031, each in ONE tx)
 go build ./... && go vet ./...        # must be clean
 go test ./... -count=1                # FULL suite, hits live DB on :5433 (~2-3 min; internal/sync ~130s is the fuzzer)
+# ...or, preferred: the same run PLUS proof it left zero rows behind (see §5.1)
+make backend-test-residue
 # boot cored for live e2e (AUTH IS FAIL-CLOSED: dev mode mounts /auth/token):
 go build -o /tmp/cored ./cmd/cored && \
   AUTH_DEV_TOKEN_ENABLED=true PORT=8087 APP_DSN="postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable" /tmp/cored serve &
@@ -196,8 +198,116 @@ go test ./internal/statutory/... -run Chaos -v       # Task B: no-double-IRN cha
 go test ./internal/inventory/... -count=1                        # weighted-average corpus + replay order
 go test ./internal/ledger -run 'Stock|Inventory|Price|Physical' -v -count=1
 ```
-**⚠️ NEVER run `go test ./internal/server` unscoped** while anything else touches the DB — it contains a test that disables DB triggers globally. Scope it with `-run`.
 (Admin/migrate DSN default: `postgres://postgres:postgres@localhost:5433/tally?sslmode=disable`.)
+
+### 5.1 Test-data hygiene — the ZERO residue bound (Track 0)
+
+**The rule: after a full `go test ./... -count=1`, the dev database must grow by
+ZERO rows.** Not "a small bound" — zero. Every Go test that brings a company into
+existence hands it to `internal/platform/testdb` for teardown.
+
+Why this is a first-class invariant and not housekeeping: before Track 0 a full
+run created **685 net-new companies**, the dev database reached **43,419
+companies / 2010 MB**, and that caused three separate failures that all looked
+like code bugs — `e2e:ui` went flaky because the shared `browser-dev-owner` login
+had accumulated 120 memberships and the F3 picker rendered all of them; a
+migration backfill ran 1h57m; and a `go test ./internal/ledger` run died on
+`No space left on device (SQLSTATE 53100)`.
+
+```bash
+make backend-test-residue        # the suite ONCE + per-table residue, bound 0
+make backend-test-residue RESIDUE_MAX=5   # ONLY when another agent shares the DB
+bash backend/scripts/test_residue.sh ./internal/ledger   # scoped to one package
+cd backend && go test ./internal/testhygiene -count=1     # the static half: NO database needed
+```
+
+`make verify` depends on **`backend-test-residue` instead of `backend-test`**, so
+the suite still runs exactly once. `backend-test` remains for a raw run.
+
+**Two independent enforcement layers, deliberately:**
+
+| Layer | What it is | What it catches that the other cannot |
+|---|---|---|
+| Empirical — `backend/scripts/test_residue.sh` | before/after row counts of `company`, `account_group`, `ledger`, `voucher_type`, `acl_rule`, `voucher_version` | any leak, however it happened, including one no static rule anticipated. Needs a live, **quiescent** database. |
+| Static — `internal/testhygiene` | parses every backend `_test.go`, finds every company-creation site, requires the enclosing function to reference `testdb.` | the 686th creation site **the day it is written**, with no database and no quiescence — so it survives concurrent agents |
+
+The residue script measures the **five child tables, not just `company`**:
+`notification_outbox_company_id_fkey` is the ONLY FK referencing `company(id)` and
+its action is `NO ACTION`, so deleting a company orphans its chart of accounts
+rather than cascading. The cleanup this replaced passed a company-count check
+while orphaning 603 MB of `account_group`. It also refuses to report success
+vacuously — it fails if `CORED_SKIP_DB` is set, if the admin DSN is unreachable,
+or if the log carries no `ok` line for the package being measured.
+
+**Adopting `testdb` in a new package** — from a `_test.go` file only:
+
+```go
+import "github.com/khata/cored/internal/platform/testdb"
+
+companyID := uuid.New()
+// ... create the company by whatever route the test uses ...
+testdb.Cleanup(t, companyID)   // registers a t.Cleanup drop; call it the moment the company exists
+testdb.DropNow(t, companyID)   // or drop immediately, inside your own t.Cleanup(func(){...})
+```
+
+`testdb` imports nothing from `internal/` (its archtest allowed-set is the empty
+set) and talks to Postgres on the ADMIN DSN. Deletes run inside ONE transaction
+under `SET LOCAL session_replication_role = replica`, which is why the six
+`*_no_mutate` immutability triggers do not block them **and** why no other
+connection ever sees immutability disarmed. **`ALTER TABLE … DISABLE TRIGGER` is
+banned** — it is database-wide and persistent; both former sites are deleted and
+`internal/security` carries a source-level test that fails if it returns. That is
+why the old "never run `go test ./internal/server` unscoped" ban is **lifted**.
+
+**A new table is covered automatically if it carries `company_id`.** `testdb`
+enumerates scoped tables from `information_schema` at runtime, so nothing has to
+be added to a list. **A new table whose tenancy is expressed some OTHER way must
+be declared** in `testdb`'s `specialTenancy` registry (today's only entry:
+`statutory_step`, whose tenancy lives in the TEXT primary key
+`irn:<companyID>:<voucherID>`) or in `notTenantScoped` with a reason — otherwise
+`TestEveryTableIsClassifiedForTeardown` fails and names it. That test is the
+anti-rot device: a hardcoded 31-table list would have gone stale the first time
+someone added a table.
+
+**Opt-outs.** `testdb.Keep(t, id, reason)` exists and every call site must be
+declared in `declaredKeeps` in `internal/testhygiene/hygiene_test.go`. **It is
+empty today, and `TestOptOutsAreDeclared` asserts it is empty**: no Go test needs
+its data to survive its own completion (`t.Cleanup` runs after the body; the
+backend has no `TestMain`, no package-level company var and no cross-test data
+dependence). The only long-lived fixtures are the TypeScript live-gate seeds.
+
+### 5.2 Rebuilding the dev database from empty
+
+```bash
+# DESTRUCTIVE — refuses without CONFIRM=WIPE, and prints what it will destroy.
+# Stop cored / insightd / statutoryd FIRST (WITH (FORCE) will terminate them anyway).
+make reset-dev-db CONFIRM=WIPE      # DROP DATABASE … WITH (FORCE); CREATE; make migrate
+make run-cored &                    # then, IN THIS ORDER
+make run-insightd &
+make seed-all                       # seed:demo then seed:tenancy, ids chained on disk
+
+pnpm --dir frontend verify:demo    "$(cat frontend/.demo-company-id)"                                  # 24/24
+pnpm --dir frontend verify:tenancy "$(cat frontend/.demo-company-id)" "$(cat frontend/.tenancy-company-id)"  # 113/113
+cd frontend && node scripts/e2e-ui-smoke.mjs    # 38/38, and it must run ALONE
+```
+
+- The seeders now write `frontend/.demo-company-id` / `.tenancy-company-id`
+  (gitignored) alongside the log lines, so the verify steps stop being grep glue.
+- **`seed-all` must precede `e2e:ui`**: the browser gate signs in as
+  `browser-dev-owner`, whose password only the seeders create (`auth.mts`
+  `ensurePassword`). Skip it and the gate fails at the login screen with a 401
+  that reads like an auth regression.
+- The migrate inside `reset-dev-db` must finish **serially** before any test
+  touches the database — `migrations.Apply` takes no advisory lock, and a
+  parallel `go test ./...` on a freshly emptied database dies on
+  `type voucher_op already exists`.
+- No `DROP ROLE`: roles are cluster-level and survive; `0001`/`0024` are
+  `IF NOT EXISTS`-guarded and re-normalise them against the new database.
+- `make migrate` bridges `ADMIN_DATABASE_URL`/`DATABASE_URL` (this Makefile's
+  names) to `ADMIN_DSN`/`APP_DSN` (what `cored` actually reads). Before that
+  bridge existed, `make migrate` ignored the Makefile's own variables entirely —
+  harmless only while the two happened to be equal, and lethal the moment a reset
+  is parameterised on them.
 **Auth note (Task D):** without `AUTH_DEV_TOKEN_ENABLED=true` (or `CORED_ENV=dev`), `cored serve` **refuses to start fail-open** — this is intentional (the in-process `/auth/token` mints validly-signed tokens for any subject, so it is dev-only; production sets `AUTH_JWKS_URL` for the external IdP, which is not yet built offline). Every `/v1/companies/*` call needs `Authorization: Bearer <jwt>`; mint one via `curl -XPOST :8087/auth/token -d '{"subject":"owner-x","amr":["webauthn"]}'`. WebAuthn step-up routes (`e43d383`): `POST /auth/webauthn/register|assert/{begin,finish}` (authed; assert/finish mints an `amr:["webauthn"]` token). **Login (migration 0021, REAL as of this session):** `POST /auth/login {subject,password}` verifies a PBKDF2-HMAC-SHA256 (210k) credential in `user_credential` and mints the session token; 5 wrong → `423`. `AUTH_DEV_PASSWORD` is GONE. Set a password with `POST /auth/password {current_password,new_password}` (Bearer required, self-only); the seeds do this for you — `pnpm seed:demo` prints `SIGN IN: browser-dev-owner / tally-demo-2026`. NOTE the login token carries NO `amr`, so a write needs the WebAuthn step-up ceremony above. Bill-inbox demo: boot insightd too (`:8088`) and open the Gateway → "Bill Inbox".
 
 **statutoryd (IRN plane) + the freeze e2e:**
@@ -484,10 +594,10 @@ CORED_BASE_URL=http://localhost:8087 pnpm e2e:ui                   # 38/38 — R
 |---|---|---|
 | Migrations | **0031** | `ls backend/migrations` — measured 2026-07-27 |
 | `go build ./...` | exit 0 | run 2026-07-27, clean |
-| `go test ./... -count=1` | **25 packages**, exit 0 | `go list ./...` = 25, measured; the exit-0 claim is from **`bc84519`'s gate block**, NOT re-run in the doc session (`./internal/server` unscoped is unsafe with parallel agents) |
+| `go test ./... -count=1` | **25 packages**, exit 0, **+ Track 0's `internal/platform/testdb` and `internal/testhygiene`** | `go list ./...` = 25, measured; the exit-0 claim is from **`bc84519`'s gate block**. The old caveat "`./internal/server` unscoped is unsafe with parallel agents" is **retired** — see §5.1; both `ALTER TABLE … DISABLE TRIGGER` sites are deleted. Prefer `make backend-test-residue`, which is the same run plus the zero-residue proof. |
 | `pnpm exec vitest run` | **370 tests / 33 files** | **measured 2026-07-27** with the wave-4 slices in the tree (`bc84519` committed 348/32) |
 | `pnpm exec tsc --noEmit`, `pnpm run build` | clean | `bc84519`'s gate block |
-| `python -m pytest` (insightd) | **106 passed** | **measured 2026-07-27** |
+| `python -m pytest` (insightd) | **107 passed, 0 skipped** | **measured 2026-07-28**, run twice with and twice without `INSIGHTD_DATABASE_URL` exported. Was 106; Track 0 added one test and fixed the cross-test store leak that made `make insightd-test` — and therefore `make verify` — RED. Exit 0 alone is **not** acceptance here: with Postgres down the PG group turns into 13 silent skips. |
 | `python3 corpora/validate.py` | `tax=14 tds=13 tcs=5 keystroke=32 isolation=13 migration=6 forecast=4 inventory=6` | **measured 2026-07-27** (`keystroke` was 28 at `bc84519`; the four `Alt+F7..F10` fixtures are wave 4) |
 | `pnpm verify:demo <A>` | **24/24** | `bc84519`'s gate block — **not re-run in the doc session** |
 | `pnpm verify:tenancy <A> <B>` | **113/113** | `bc84519`'s gate block — **not re-run in the doc session** |

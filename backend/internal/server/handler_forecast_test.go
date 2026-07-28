@@ -31,6 +31,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/khata/cored/internal/platform/testdb"
 	"github.com/khata/cored/internal/server"
 )
 
@@ -38,13 +39,15 @@ import (
 // base path.
 func createPlainCompany(t *testing.T, srv *server.Server, token string) string {
 	t.Helper()
-	companyID := uuid.NewString()
+	cid := uuid.New()
+	companyID := cid.String()
 	rec, _ := doRaw(t, srv, http.MethodPost, "/v1/companies", token, map[string]any{
 		"id": companyID, "name": "Forecast Co " + companyID[:8], "fy_start_date": "2025-04-01",
 	})
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create company status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
 	}
+	testdb.Cleanup(t, cid)
 	return "/v1/companies/" + companyID
 }
 

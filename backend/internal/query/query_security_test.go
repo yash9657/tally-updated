@@ -10,6 +10,7 @@ import (
 
 	"github.com/khata/cored/internal/identity"
 	"github.com/khata/cored/internal/platform/db"
+	"github.com/khata/cored/internal/platform/testdb"
 	"github.com/khata/cored/internal/query"
 )
 
@@ -231,6 +232,11 @@ func TestSecurity_CrossTenantIsolation(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("create company B: %v", err)
 	}
+	// Tenant B is minted INLINE, not through setupCompany(), so it carries its own
+	// teardown registration. This is the site a cleanup retrofit reliably misses:
+	// the shared harness gets tidied, the package's teardown test goes green, and
+	// the cross-tenant probes go on leaking one company each, forever.
+	testdb.Cleanup(t, companyB)
 
 	// Query ledger_balances under A, with a (harmless) attempt to reference B by
 	// adding a ledger_name filter for a name only B could have. Since we cannot

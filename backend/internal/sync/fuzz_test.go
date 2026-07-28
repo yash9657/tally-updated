@@ -3,8 +3,12 @@ package sync_test
 import (
 	"context"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"math/rand"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -35,47 +39,81 @@ const (
 
 // fuzzEnv spins up a fresh seeded company and returns the scoped ctx, ledger,
 // sync, and reporting services, plus two ledgers usable for balanced Journal lines.
+//
+// release tears the company back down and closes its pool. It is NOT registered
+// with t.Cleanup by newFuzzEnv, and that is the point: see close().
 type fuzzEnv struct {
-	ctx    context.Context
-	pool   *db.Pool
-	led    *ledger.Service
-	syncS  *syncpkg.Service
-	rep    *reporting.Service
-	cid    uuid.UUID
-	vtID   uuid.UUID
-	dr, cr uuid.UUID
+	ctx     context.Context
+	pool    *db.Pool
+	led     *ledger.Service
+	syncS   *syncpkg.Service
+	rep     *reporting.Service
+	cid     uuid.UUID
+	vtID    uuid.UUID
+	dr, cr  uuid.UUID
+	release func()
 }
 
-// newFuzzEnv builds a fresh seeded company (its own pool + tenant) via the shared
-// setupSync harness, then wires the ledger, sync, and reporting services plus two
-// balanced Journal ledgers.
+// close releases the env's company and pool NOW, rather than at the end of the
+// enclosing test.
+//
+// Why this exists rather than a t.Cleanup inside newFuzzEnv: TestFuzzPartition
+// runs numSeeds (200) seeds, and every seed builds TWO envs — one for the main
+// run and one inside assertSeedDeterminism, which must re-run the identical seed
+// on a company whose voucher-number allocator starts at 1 again. Deferring the
+// teardown to the test would keep 400 seeded companies and 400 pgx pools alive
+// simultaneously; that is where 404 of the backend's 685 leaked companies per
+// full run came from, and the pool count is why this package's DB errors under
+// load looked like "unexpected EOF" rather than "too many connections".
+//
+// Reusing ONE company across seeds is NOT an option and must not be attempted
+// as a "simpler" fix: assertGapFreeSeries, maxJournalNumber and journalNumberSet
+// all assert that the company's Journal series is a gap-free 1..N run. Those
+// oracles are only meaningful because each company's allocator starts at zero.
+// Share a company between seeds and the series becomes 1..N+M with the previous
+// seed's numbers in it, the gap check passes on data it never examined, and the
+// gate quietly stops testing numbering at all. Per-seed teardown keeps the
+// oracle honest AND keeps the residue at zero.
+//
+// close is called via defer, so it still runs when a seed fails through
+// t.Fatalf: Fatalf is runtime.Goexit, which unwinds deferred calls.
+func (e fuzzEnv) close() { e.release() }
+
+// newFuzzEnv builds a fresh seeded company (its own pool + tenant) via
+// newSyncCompany — deliberately NOT setupSync, whose t.Cleanup would defer the
+// teardown to the end of the enclosing test. The caller owns the lifetime and
+// MUST `defer e.close()`.
 func newFuzzEnv(t *testing.T) fuzzEnv {
 	t.Helper()
-	pool, cctx, cid, ids := setupSync(t)
+	pool, cctx, cid, ids, release := newSyncCompany(t)
 
 	vtID, err := ids.VoucherTypeID(cctx, "Journal")
 	if err != nil {
+		release()
 		t.Fatalf("voucher type: %v", err)
 	}
 	dr, err := ids.CreateLedger(cctx, "Fuzz Dr", "Current Assets")
 	if err != nil {
+		release()
 		t.Fatalf("dr ledger: %v", err)
 	}
 	cr, err := ids.CreateLedger(cctx, "Fuzz Cr", "Current Liabilities")
 	if err != nil {
+		release()
 		t.Fatalf("cr ledger: %v", err)
 	}
 	led := ledger.NewService(pool)
 	return fuzzEnv{
-		ctx:   cctx,
-		pool:  pool,
-		led:   led,
-		syncS: syncpkg.NewService(led, pool),
-		rep:   reporting.NewService(pool),
-		cid:   cid,
-		vtID:  vtID,
-		dr:    dr,
-		cr:    cr,
+		ctx:     cctx,
+		pool:    pool,
+		led:     led,
+		syncS:   syncpkg.NewService(led, pool),
+		rep:     reporting.NewService(pool),
+		cid:     cid,
+		vtID:    vtID,
+		dr:      dr,
+		cr:      cr,
+		release: release,
 	}
 }
 
@@ -281,6 +319,11 @@ func buildSchedule(t *testing.T, e fuzzEnv, seed int64) schedule {
 
 func runFuzzSeed(t *testing.T, seed int64) {
 	e := newFuzzEnv(t)
+	// Release this seed's company as soon as the seed finishes — including when
+	// it fails, since t.Fatalf unwinds defers. Combined with the matching defer
+	// in assertSeedDeterminism (which overlaps this env for the length of the
+	// re-run) peak concurrent companies is 2, not 400.
+	defer e.close()
 	sch := buildSchedule(t, e, seed)
 
 	arrival := sch.arrival
@@ -646,6 +689,10 @@ func sortedNumbers(creates []committedCreate) []string {
 func assertSeedDeterminism(t *testing.T, seed int64, wantWinnerHLC syncpkg.HLCTimestamp, wantNumbers []string) {
 	t.Helper()
 	e := newFuzzEnv(t)
+	// The determinism company exists only for the length of this re-run. It is
+	// the SECOND of the two companies each seed mints, so forgetting this defer
+	// costs 200 companies on its own.
+	defer e.close()
 	sch := buildSchedule(t, e, seed)
 
 	outcomes := commitAll(t, e, sch.arrival, seed)
@@ -688,4 +735,300 @@ func assertSeedDeterminism(t *testing.T, seed int64, wantWinnerHLC syncpkg.HLCTi
 	if strings.Join(got, ",") != strings.Join(wantNumbers, ",") {
 		t.Fatalf("seed %d (det): non-deterministic final numbers:\n run1=%v\n run2=%v", seed, wantNumbers, got)
 	}
+}
+
+// TestFuzzEnvReleasesItsCompany is the guard on the whole per-seed-teardown
+// change. It is deliberately NOT a check that "the fuzz passes": the fuzz passed
+// before this change too, while leaving 404 fully seeded companies behind on
+// every run of the backend suite.
+//
+// The shape matters. It builds exactly what a fuzz seed builds, PROVES the
+// company is really there first (a teardown test that never had anything to tear
+// down is the classic vacuous green), calls close(), and then asserts through an
+// INDEPENDENT superuser connection — not the env's own RLS-scoped app pool,
+// which would report 0 rows for a company that still exists simply because the
+// pool is closed or the GUC is gone — that the tenant root AND its master tables
+// are empty.
+//
+// account_group/ledger/voucher_type are checked as well as company because the
+// bug this replaces did delete the company row: the OLD security harness passed
+// a company-count check while orphaning 603 MB of account_group. Only
+// notification_outbox references company(id), and its FK action is NO ACTION, so
+// deleting a company does not cascade to a single master. A company-only
+// assertion here would bless exactly that bug.
+func TestFuzzEnvReleasesItsCompany(t *testing.T) {
+	if os.Getenv("CORED_SKIP_DB") != "" {
+		t.Skip("db tests skipped")
+	}
+	ctx := context.Background()
+
+	admin, err := pgx.Connect(ctx, adminDSN)
+	if err != nil {
+		t.Skipf("admin postgres unavailable: %v", err)
+	}
+	defer func() { _ = admin.Close(ctx) }()
+
+	// The tables a seeded sync company actually populates. company is last so a
+	// failure message reads "the masters leaked" before "the tenant leaked".
+	type scoped struct{ table, col string }
+	tables := []scoped{
+		{"account_group", "company_id"},
+		{"ledger", "company_id"},
+		{"voucher_type", "company_id"},
+		{"company", "id"},
+	}
+	countRows := func(tbl, col string, cid uuid.UUID) int {
+		var n int
+		if err := admin.QueryRow(ctx,
+			`SELECT count(*) FROM `+tbl+` WHERE `+col+` = $1`, cid).Scan(&n); err != nil {
+			t.Fatalf("count %s for %s: %v", tbl, cid, err)
+		}
+		return n
+	}
+
+	e := newFuzzEnv(t)
+	cid := e.cid
+
+	// --- NON-VACUITY: the company and its masters must exist before we release.
+	// Without this the test would still be green if newFuzzEnv silently created
+	// nothing at all, which is how a "cleanup works" test rots into a no-op.
+	for _, s := range tables {
+		if n := countRows(s.table, s.col, cid); n == 0 {
+			t.Fatalf("vacuity: freshly built fuzz env has 0 rows in %s for company %s — "+
+				"this test would prove nothing about teardown", s.table, cid)
+		}
+	}
+
+	e.close()
+
+	var leaked []string
+	for _, s := range tables {
+		if n := countRows(s.table, s.col, cid); n != 0 {
+			leaked = append(leaked, fmt.Sprintf("%s=%d", s.table, n))
+		}
+	}
+	if len(leaked) > 0 {
+		t.Fatalf("fuzzEnv.close() did not release company %s: %s still has rows. "+
+			"TestFuzzPartition builds two such companies per seed across %d seeds, so a leak "+
+			"here means %d abandoned tenants per backend test run — the residue bound is 0.",
+			cid, strings.Join(leaked, " "), numSeeds, numSeeds*2)
+	}
+}
+
+// explicitClosers lists the functions allowed to call e.close() WITHOUT a defer,
+// with the reason. There is exactly one, and it is the guard test above: it has
+// to observe the database on both sides of the release, so the call must happen
+// at a point it chooses rather than when the function returns.
+//
+// Anything else that calls newFuzzEnv must defer, because a non-deferred close
+// is skipped by every t.Fatalf in the function — and the fuzz seeds are full of
+// them. A seed that fails would then ALSO leak its company, which is the worst
+// possible time to start leaking: a red run is the one you re-run repeatedly.
+var explicitClosers = map[string]string{
+	"TestFuzzEnvReleasesItsCompany": "must count rows before and after the release, so it calls close() at a chosen point",
+}
+
+// TestEveryFuzzEnvCallSiteReleasesIt is the guard on the CALL SITES, and it
+// exists because a mutation proved TestFuzzEnvReleasesItsCompany cannot see them.
+//
+// Deleting `defer e.close()` from runFuzzSeed reintroduces 200 abandoned
+// companies per backend run — the single largest source of the 685 this work
+// exists to remove — and TestFuzzEnvReleasesItsCompany still PASSES, because it
+// calls close() itself and therefore only ever proves that close() works, never
+// that anybody calls it. A test that cannot fail for the change it is supposed to
+// guard is worth nothing, so this second, structural test was added: it asserts
+// the SHAPE of every call site instead of the behaviour of the callee.
+//
+// It parses this package's own test sources and, for every function containing a
+// call to newFuzzEnv, requires:
+//
+//   - the result to be bound to a plain identifier (a call whose env is dropped
+//     on the floor can never be released), and
+//   - a `defer <that ident>.close()` in the same function — unless the function
+//     is named in explicitClosers, which must then close it explicitly.
+//
+// Being source-level, it costs no database and cannot be defeated by load, and
+// it covers a call site written tomorrow in a file that does not exist today.
+//
+// A POSITIVE CONTROL runs first over a synthetic source that is missing exactly
+// one defer. Without it, a walker that silently matched nothing — a renamed
+// helper, a shape the AST walk does not reach — would report "no offences"
+// forever and this guard would be decoration, which is precisely the failure it
+// was written to fix.
+func TestEveryFuzzEnvCallSiteReleasesIt(t *testing.T) {
+	control := `package p
+
+func good(t *testing.T) {
+	e := newFuzzEnv(t)
+	defer e.close()
+	_ = e
+}
+
+func bad(t *testing.T) {
+	e := newFuzzEnv(t)
+	_ = e
+}
+
+func discarded(t *testing.T) {
+	_ = newFuzzEnv(t)
+}
+`
+	ctrl, sites := auditFuzzEnvCallSites(t, "control.go", []byte(control))
+	if sites != 3 {
+		t.Fatalf("positive control: walker found %d newFuzzEnv call sites in a source with "+
+			"exactly 3; it is not seeing the code it claims to audit, so every clean result "+
+			"below is meaningless", sites)
+	}
+	if len(ctrl) != 2 {
+		t.Fatalf("positive control: walker reported %d offences in a source with exactly 2 "+
+			"(one missing defer, one discarding the env); the guard is not enforcing. got=%v",
+			len(ctrl), ctrl)
+	}
+
+	files, err := filepath.Glob("*_test.go")
+	if err != nil {
+		t.Fatalf("glob test sources: %v", err)
+	}
+	if len(files) == 0 {
+		t.Fatalf("vacuity: no *_test.go files found in this package's directory")
+	}
+
+	var offences []string
+	total := 0
+	for _, f := range files {
+		src, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("read %s: %v", f, err)
+		}
+		hits, n := auditFuzzEnvCallSites(t, f, src)
+		offences = append(offences, hits...)
+		total += n
+	}
+	if total == 0 {
+		t.Fatalf("vacuity: scanned %d files and found no newFuzzEnv call sites at all. Either the "+
+			"helper was renamed and this guard silently stopped guarding, or the fuzz was deleted; "+
+			"either way do not leave this test asserting nothing", len(files))
+	}
+	if len(offences) > 0 {
+		t.Fatalf("fuzz env(s) never released: %s. Each unreleased env is one fully seeded company "+
+			"(28 account_group rows, its ledgers and voucher types) abandoned in the shared dev "+
+			"database, multiplied by %d seeds — this is exactly how the backend suite came to leak "+
+			"685 companies a run. Add `defer e.close()` at the call site, or, if the release must "+
+			"be explicit, name the function in explicitClosers with the reason.",
+			strings.Join(offences, "; "), numSeeds)
+	}
+}
+
+// auditFuzzEnvCallSites returns one message per offending newFuzzEnv call site in
+// src, plus the total number of call sites it saw (the caller's anti-vacuity
+// signal).
+//
+// The unit of judgement is the ENCLOSING FUNCTION, not the file: `defer` is
+// function-scoped, so "the file contains a close somewhere" would be satisfied by
+// a defer in a neighbouring function that never runs for this env. Matching is on
+// the identifier the env was bound to, so `defer other.close()` does not excuse a
+// leaked `e`.
+func auditFuzzEnvCallSites(t *testing.T, filename string, src []byte) (offences []string, sites int) {
+	t.Helper()
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, filename, src, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", filename, err)
+	}
+
+	// closesIn reports, for one function body, which identifiers it defers a
+	// close() on and which it closes without a defer.
+	closesIn := func(fn ast.Node) (deferred, plain map[string]bool) {
+		deferred, plain = map[string]bool{}, map[string]bool{}
+		recv := func(call *ast.CallExpr) string {
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "close" {
+				return ""
+			}
+			id, ok := sel.X.(*ast.Ident)
+			if !ok {
+				return ""
+			}
+			return id.Name
+		}
+		ast.Inspect(fn, func(n ast.Node) bool {
+			switch s := n.(type) {
+			case *ast.DeferStmt:
+				if name := recv(s.Call); name != "" {
+					deferred[name] = true
+				}
+			case *ast.ExprStmt:
+				if call, ok := s.X.(*ast.CallExpr); ok {
+					if name := recv(call); name != "" {
+						plain[name] = true
+					}
+				}
+			}
+			return true
+		})
+		return deferred, plain
+	}
+
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		deferred, plain := closesIn(fn)
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			// A bare `newFuzzEnv(t)` statement binds nothing at all. It is counted
+			// as a site AND reported, rather than skipped, so that the one way to
+			// build a company this walker cannot see is not also the one way to
+			// evade it.
+			if stmt, ok := n.(*ast.ExprStmt); ok {
+				if call, ok := stmt.X.(*ast.CallExpr); ok {
+					if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "newFuzzEnv" {
+						sites++
+						offences = append(offences, fmt.Sprintf(
+							"%s (%s): newFuzzEnv is called as a bare statement, so its company can never be released",
+							fset.Position(stmt.Pos()).String(), fn.Name.Name))
+					}
+				}
+				return true
+			}
+			assign, ok := n.(*ast.AssignStmt)
+			if !ok || len(assign.Rhs) != 1 {
+				return true
+			}
+			call, ok := assign.Rhs[0].(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			id, ok := call.Fun.(*ast.Ident)
+			if !ok || id.Name != "newFuzzEnv" {
+				return true
+			}
+			sites++
+			where := fset.Position(assign.Pos()).String()
+			lhs, ok := assign.Lhs[0].(*ast.Ident)
+			if !ok || lhs.Name == "_" {
+				offences = append(offences, fmt.Sprintf(
+					"%s (%s): the env returned by newFuzzEnv is discarded, so its company can never be released",
+					where, fn.Name.Name))
+				return true
+			}
+			switch {
+			case deferred[lhs.Name]:
+				// correct
+			case plain[lhs.Name]:
+				if _, allowed := explicitClosers[fn.Name.Name]; !allowed {
+					offences = append(offences, fmt.Sprintf(
+						"%s (%s): %s.close() is called but not DEFERRED, so any t.Fatalf between the two skips it",
+						where, fn.Name.Name, lhs.Name))
+				}
+			default:
+				offences = append(offences, fmt.Sprintf(
+					"%s (%s): no `defer %s.close()`",
+					where, fn.Name.Name, lhs.Name))
+			}
+			return true
+		})
+	}
+	return offences, sites
 }

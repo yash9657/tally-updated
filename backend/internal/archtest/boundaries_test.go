@@ -21,7 +21,7 @@ const modulePath = "github.com/khata/cored"
 // siblings. ledger/reporting/identity may use platform/db only. server is the
 // composition root and may import any module. Anything not listed is forbidden.
 var allowedDeps = map[string]map[string]bool{
-	"internal/compliance":  {},
+	"internal/compliance": {},
 	// authn (Task D) verifies/mints JWTs with the Go stdlib ONLY — no sibling
 	// imports (it is a pure crypto/identity leaf). The lockout half (WS2) lives in
 	// the same package and may import the db layer for its pg store.
@@ -47,19 +47,19 @@ var allowedDeps = map[string]map[string]bool{
 	// db layer. It does not import the parent compliance package.
 	"internal/compliance/gstr": {"internal/platform/db": true},
 	"internal/inventory":       {},
-	"internal/integration": {},
-	"internal/identity":    {"internal/platform/db": true},
+	"internal/integration":     {},
+	"internal/identity":        {"internal/platform/db": true},
 	// ledger derives GST inline during a Sales/Purchase post, so it may import
 	// the pure compliance leaf (no I/O, safe inside the post transaction).
-	"internal/ledger":      {"internal/platform/db": true, "internal/compliance": true},
-	"internal/masters":     {"internal/platform/db": true},
+	"internal/ledger":  {"internal/platform/db": true, "internal/compliance": true},
+	"internal/masters": {"internal/platform/db": true},
 	// reporting gained internal/inventory with the Stock Summary. Stock VALUE is
 	// never stored: the report derives it by replaying the movement ledger through
 	// the pure valuer, so reporting MUST be able to call the leaf. The edge is
 	// one-way by construction — inventory's own entry above is the empty map, so
 	// the valuer can never reach back into a report, a database or a tenant
 	// context, which is the whole reason a valuation is reproducible.
-	"internal/reporting":   {"internal/platform/db": true, "internal/inventory": true},
+	"internal/reporting": {"internal/platform/db": true, "internal/inventory": true},
 	// forecast (wave 2 WS5a) is a read-only projection/anomaly reporter. It reuses
 	// reporting's Outstandings netting (never re-implementing it) and issues its own
 	// supplementary read-only queries over the db layer. Two siblings, nothing else.
@@ -68,7 +68,7 @@ var allowedDeps = map[string]map[string]bool{
 	// a closed DSL to parameterized SQL and executes it via the db layer's
 	// read-only, RLS-scoped tx. It imports the db layer and nothing else (the
 	// translator is a pure leaf; the real-Claude adapter is the documented swap).
-	"internal/query":       {"internal/platform/db": true},
+	"internal/query": {"internal/platform/db": true},
 	// nlq (wave 2 WS1) is the real-Claude NL->DSL adapter — the ONLY query-path
 	// package that touches the network. It depends on query (the Query it emits +
 	// the Catalog it advertises) and NOTHING else (not even platform/db). The edge
@@ -104,8 +104,24 @@ var allowedDeps = map[string]map[string]bool{
 		"internal/platform/db":     true,
 	},
 	"internal/platform/db": {},
+	// testdb is the shared TEST-DATA TEARDOWN harness (internal/platform/testdb).
+	// Its allowed set is the EMPTY SET, and that is the strongest statement in
+	// this map: it imports no sibling at all — not platform/db, not identity — it
+	// talks to Postgres directly over pgx with the admin DSN, and it does not even
+	// import "testing" (it takes a minimal TB interface instead).
+	//
+	// That emptiness is what makes it universally adoptable. Every DB-touching
+	// package's tests import it, and the walker above SKIPS _test.go files, so no
+	// other entry in this map needs to change to let them. Had testdb been allowed
+	// even one sibling edge, that edge would have had to be added to the allowed
+	// set of every adopting package forever — a test harness would end up
+	// dictating the production import graph.
+	//
+	// It is a NON-test package, so it could in principle be linked into cored.
+	// TestNoProductionCodeImportsTestdb below is what forbids that.
+	"internal/platform/testdb": {},
 	"internal/server": {
-		"internal/platform/db": true,
+		"internal/platform/db":     true,
 		"internal/authn":           true,
 		"internal/authz":           true,
 		"internal/webauthn":        true,
@@ -203,6 +219,80 @@ func TestInternalImportBoundaries(t *testing.T) {
 	}
 	if violations == 0 {
 		t.Log("import boundaries clean")
+	}
+}
+
+// testdbPkg is the import path of the test-data teardown harness.
+const testdbPkg = modulePath + "/internal/platform/testdb"
+
+// TestNoProductionCodeImportsTestdb keeps the teardown harness out of every
+// shipped binary.
+//
+// internal/platform/testdb is a NON-test package (it has to be, so that _test.go
+// files in every other package can import it), which means nothing about the Go
+// build system stops `cored` from linking it. What it contains is a hardcoded
+// SUPERUSER DSN and a routine that, in one transaction, disarms every
+// immutability trigger and mass-deletes an entire tenant. That is a perfectly
+// good test harness and an unacceptable thing to ship: a single accidental
+// import — an autocompleted `testdb.Drop` in a handler, a "cleanup" endpoint
+// written in a hurry — would put an unauthenticated tenant-wipe into the server
+// binary, and the immutability guarantee that the whole audit trail rests on
+// would be one function call from being bypassed in production.
+//
+// Code review is not a reliable defence against a single import line, so this is
+// mechanical. The walk covers every non-test .go file in the module, not just
+// internal/, because cmd/ is where a binary would actually pick it up.
+//
+// Mutation check: add `_ "github.com/khata/cored/internal/platform/testdb"` to
+// any non-test file (e.g. backend/cmd/cored/main.go) and this test must go red.
+func TestNoProductionCodeImportsTestdb(t *testing.T) {
+	root := backendRoot(t)
+	fset := token.NewFileSet()
+
+	var scanned, violations int
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			// Nothing to scan inside vendored or hidden trees.
+			base := filepath.Base(path)
+			if base == "vendor" || (strings.HasPrefix(base, ".") && path != root) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		f, perr := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
+		if perr != nil {
+			return perr
+		}
+		scanned++
+		rel, rerr := filepath.Rel(root, path)
+		if rerr != nil {
+			rel = path
+		}
+		for _, imp := range f.Imports {
+			if strings.Trim(imp.Path.Value, `"`) == testdbPkg {
+				violations++
+				t.Errorf("%s is production code and imports the test-data teardown harness %q; "+
+					"testdb holds a superuser DSN and a whole-tenant delete and must never be linked "+
+					"into a shipped binary — import it from _test.go files only",
+					filepath.ToSlash(rel), testdbPkg)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk backend root: %v", err)
+	}
+	if scanned == 0 {
+		t.Fatal("scanned no non-test source files — the walk is vacuous")
+	}
+	if violations == 0 {
+		t.Logf("no production import of testdb across %d source files", scanned)
 	}
 }
 

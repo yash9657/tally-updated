@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/khata/cored/internal/platform/testdb"
 	"github.com/khata/cored/internal/server"
 )
 
@@ -24,7 +25,8 @@ import (
 // path. It is the fixture every query test reuses.
 func seedSalesCompany(t *testing.T, srv *server.Server) string {
 	t.Helper()
-	companyID := uuid.NewString()
+	cid := uuid.New()
+	companyID := cid.String()
 	base := "/v1/companies/" + companyID
 	rec, _ := do(t, srv, http.MethodPost, "/v1/companies", map[string]any{
 		"id":            companyID,
@@ -34,6 +36,7 @@ func seedSalesCompany(t *testing.T, srv *server.Server) string {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create company status = %d, want 201 (body %s)", rec.Code, rec.Body.String())
 	}
+	testdb.Cleanup(t, cid)
 	debtorID := createLedger(t, srv, base, "Acme Corp", "Sundry Debtors")
 	salesID := createLedger(t, srv, base, "Domestic Sales", "Sales Accounts")
 	cgstID := createLedger(t, srv, base, "Output CGST", "Duties & Taxes")

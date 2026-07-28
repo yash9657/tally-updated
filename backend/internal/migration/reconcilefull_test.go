@@ -16,6 +16,7 @@ import (
 	"github.com/khata/cored/internal/masters"
 	"github.com/khata/cored/internal/migration"
 	"github.com/khata/cored/internal/platform/db"
+	"github.com/khata/cored/internal/platform/testdb"
 	"github.com/khata/cored/internal/reporting"
 	migs "github.com/khata/cored/migrations"
 )
@@ -60,6 +61,11 @@ func setupCompanyState(t *testing.T, stateCode string) (*db.Pool, context.Contex
 	}); err != nil {
 		t.Fatalf("create company: %v", err)
 	}
+	// setupCompanyState is the migration package's SECOND company-minting harness,
+	// parallel to setup() in migration_test.go. Registering only one of the two
+	// would leave the package leaking on every run while its teardown test stayed
+	// green — the exact half-done retrofit this wave is guarding against.
+	testdb.Cleanup(t, companyID)
 	return pool, cctx, companyID
 }
 

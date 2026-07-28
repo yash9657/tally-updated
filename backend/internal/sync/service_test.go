@@ -12,6 +12,7 @@ import (
 	"github.com/khata/cored/internal/identity"
 	"github.com/khata/cored/internal/ledger"
 	"github.com/khata/cored/internal/platform/db"
+	"github.com/khata/cored/internal/platform/testdb"
 	syncpkg "github.com/khata/cored/internal/sync"
 	"github.com/khata/cored/migrations"
 )
@@ -21,11 +22,28 @@ const (
 	appDSN   = "postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable"
 )
 
-// setupSync mirrors the ledger harness: it migrates the live DB (idempotent,
-// now including 0010), opens an app-scoped pool, creates a freshly seeded
-// company, and returns the pool, scoped ctx, company id, and identity service.
-// Helpers are package-private to ledger_test, so the shape is copied here.
-func setupSync(t *testing.T) (*db.Pool, context.Context, uuid.UUID, *identity.Service) {
+// newSyncCompany is setupSync without the t.Cleanup registration: callers that
+// create hundreds of companies in a loop must release each one as it finishes
+// rather than accumulating 400 companies and 400 pools until the test ends.
+//
+// This package is the single largest producer of test residue in the backend:
+// TestFuzzPartition runs numSeeds seeds, each seed builds one env, and the
+// determinism re-run inside every seed builds a SECOND one — 2x200 = 400 fully
+// seeded companies (each with its own account_group tree, ledgers and voucher
+// types) surviving to the end of the run, plus 400 open pgx pools. Registering
+// the release on the top-level *testing.T is what made that pile-up invisible:
+// t.Cleanup on a subtest's T runs when the SUBTEST ends, but setupSync was
+// called with whichever T the seed happened to have, and the pool close was the
+// only thing it ever released. Returning an explicit release lets the caller
+// decide the lifetime, and the fuzz loop makes it exactly one seed long.
+//
+// The release is deliberately ordered DropNow-then-Close: the drop runs on
+// testdb's own admin pool and does not use this pool at all, but closing first
+// would leave a window where a caller could still hold *pool while the tenant's
+// rows are gone, which reads as a confusing "0 rows" rather than a use-after-
+// close. Neither half is skipped when the other fails — testdb.DropNow reports
+// through t.Errorf rather than t.Fatalf precisely so the pool still gets closed.
+func newSyncCompany(t *testing.T) (*db.Pool, context.Context, uuid.UUID, *identity.Service, func()) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -43,10 +61,10 @@ func setupSync(t *testing.T) (*db.Pool, context.Context, uuid.UUID, *identity.Se
 	if err != nil {
 		t.Fatalf("app pool: %v", err)
 	}
-	t.Cleanup(pool.Close)
 
 	companyID, err := uuid.NewV7()
 	if err != nil {
+		pool.Close()
 		t.Fatalf("new company id: %v", err)
 	}
 	cctx := db.WithCompany(ctx, companyID)
@@ -57,9 +75,30 @@ func setupSync(t *testing.T) (*db.Pool, context.Context, uuid.UUID, *identity.Se
 		Name:        "Sync Co " + companyID.String()[:8],
 		FYStartDate: "2025-04-01",
 	}); err != nil {
+		pool.Close()
 		t.Fatalf("create company: %v", err)
 	}
-	return pool, cctx, companyID, ids
+
+	release := func() {
+		testdb.DropNow(t, companyID)
+		pool.Close()
+	}
+	return pool, cctx, companyID, ids, release
+}
+
+// setupSync mirrors the ledger harness: it migrates the live DB (idempotent,
+// now including 0010), opens an app-scoped pool, creates a freshly seeded
+// company, and returns the pool, scoped ctx, company id, and identity service.
+// Helpers are package-private to ledger_test, so the shape is copied here.
+//
+// Use this from ordinary one-company tests. Anything that mints companies in a
+// LOOP must call newSyncCompany and release each one itself; see the comment
+// there for why t.Cleanup is the wrong lifetime in that case.
+func setupSync(t *testing.T) (*db.Pool, context.Context, uuid.UUID, *identity.Service) {
+	t.Helper()
+	pool, cctx, cid, ids, release := newSyncCompany(t)
+	t.Cleanup(release)
+	return pool, cctx, cid, ids
 }
 
 // journalFixture seeds a Journal voucher type + two balanced ledgers and returns

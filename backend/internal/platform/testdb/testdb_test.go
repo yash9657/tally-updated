@@ -1,0 +1,828 @@
+package testdb
+
+import (
+	"context"
+	"fmt"
+	"sort"
+	"strings"
+	"testing"
+
+	"github.com/google/uuid"
+)
+
+// requireDB skips when the admin database is unreachable or CORED_SKIP_DB is
+// set. It SKIPS rather than fails so a laptop with no Postgres can still run
+// `go build ./... && go vet ./...` and the pure packages' tests — but note that
+// backend/scripts/test_residue.sh deliberately refuses to accept a run in which
+// these skipped, because "0 leaked companies" is trivially true of a suite that
+// never connected.
+func requireDB(t *testing.T) {
+	t.Helper()
+	if err := Available(context.Background()); err != nil {
+		t.Skipf("testdb: admin database unavailable (%v)", err)
+	}
+}
+
+// newCompanyID mints a time-ordered id, matching how the rest of the backend
+// creates companies.
+func newCompanyID(t *testing.T) uuid.UUID {
+	t.Helper()
+	id, err := uuid.NewV7()
+	if err != nil {
+		t.Fatalf("uuid: %v", err)
+	}
+	return id
+}
+
+// ---------------------------------------------------------------------------
+// 1. Classification — the anti-rot test
+// ---------------------------------------------------------------------------
+
+// TestEveryTableIsClassifiedForTeardown is the test that makes the two
+// hand-maintained registries in plan.go trustworthy.
+//
+// Every base table in `public` must be classified as exactly one of: enumerated
+// by its company_id column, listed in specialTenancy, or listed in
+// notTenantScoped. A migration that adds a tenant table with a company_id is
+// picked up automatically and this test stays green. A migration that adds a
+// tenant table whose tenancy is encoded some other way — as statutory_step's
+// "irn:<companyID>:<voucherID>" primary key is — makes this test RED, by name,
+// on the day it lands. That is the only moment at which somebody still knows how
+// that table's tenancy works.
+//
+// A hardcoded 31-table teardown list cannot do this: it goes stale silently, and
+// silence is the whole problem.
+func TestEveryTableIsClassifiedForTeardown(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+
+	pool, err := adminPool(ctx)
+	if err != nil {
+		t.Fatalf("admin pool: %v", err)
+	}
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	defer conn.Release()
+
+	census, err := queryBaseTables(ctx, conn)
+	if err != nil {
+		t.Fatalf("census: %v", err)
+	}
+	if len(census) == 0 {
+		t.Fatal("census returned no tables — the check would be vacuous; is this the right database?")
+	}
+	scopedTables, err := queryScopedTables(ctx, conn)
+	if err != nil {
+		t.Fatalf("scoped tables: %v", err)
+	}
+
+	inCensus := map[string]bool{}
+	for _, tbl := range census {
+		inCensus[tbl] = true
+	}
+
+	for _, tbl := range census {
+		var classes []string
+		if _, ok := scopedTables[tbl]; ok {
+			classes = append(classes, "company_id column")
+		}
+		if _, ok := specialTenancy[tbl]; ok {
+			classes = append(classes, "specialTenancy")
+		}
+		if _, ok := notTenantScoped[tbl]; ok {
+			classes = append(classes, "notTenantScoped")
+		}
+		switch len(classes) {
+		case 1:
+			// classified exactly once: good.
+		case 0:
+			t.Errorf("table %q is UNCLASSIFIED for teardown: it has no company_id column and appears in "+
+				"neither specialTenancy nor notTenantScoped in internal/platform/testdb/plan.go. "+
+				"Until it is classified, either its rows leak on every test run or a deliberate omission "+
+				"is undocumented. Add it to one of the two registries, with the reason.", tbl)
+		default:
+			t.Errorf("table %q is classified %d ways (%s); exactly one classification is required, "+
+				"or the delete plan and the residue check will disagree about it",
+				tbl, len(classes), strings.Join(classes, " + "))
+		}
+	}
+
+	// A registry entry naming a table that no longer exists is rot in the other
+	// direction: it silently narrows the census check.
+	for tbl := range specialTenancy {
+		if !inCensus[tbl] {
+			t.Errorf("specialTenancy names %q, which is not a base table in public — remove the stale entry", tbl)
+		}
+	}
+	for tbl := range notTenantScoped {
+		if !inCensus[tbl] {
+			t.Errorf("notTenantScoped names %q, which is not a base table in public — remove the stale entry", tbl)
+		}
+	}
+
+	t.Logf("classified %d base tables: %d by company_id, %d specialTenancy, %d notTenantScoped",
+		len(census), len(scopedTables), len(specialTenancy), len(notTenantScoped))
+}
+
+// ---------------------------------------------------------------------------
+// The fixture: one row in EVERY table the plan touches
+// ---------------------------------------------------------------------------
+
+type fixtureRow struct {
+	Table string
+	SQL   string
+	Args  []any
+}
+
+// buildFixture returns one INSERT per table in the delete plan.
+//
+// The set of tables it covers is asserted to EQUAL the plan's table set before
+// it is used (see seedCompany). That equality is the point: if a migration adds
+// a tenant table, the plan grows, the fixture does not, and the test fails
+// telling the author to add a row — instead of quietly proving the teardown
+// works on 31 of 32 tables.
+func buildFixture(cid uuid.UUID) []fixtureRow {
+	id := func() uuid.UUID { return uuid.New() }
+	var (
+		groupID   = id()
+		levelID   = id()
+		userID    = id()
+		unitID    = id()
+		itemID    = id()
+		godownID  = id()
+		batchID   = id()
+		ledgerID  = id()
+		vtypeID   = id()
+		voucherID = id()
+		versionID = id()
+		plistID   = id()
+	)
+	cidText := cid.String()
+
+	return []fixtureRow{
+		// The tenant root. books_beginning_from is supplied explicitly because the
+		// BEFORE INSERT trigger that would default it does not fire under
+		// session_replication_role = replica.
+		{"company", `INSERT INTO company (id, company_id, name, fy_start_date, books_beginning_from)
+			VALUES ($1, $1, 'testdb fixture ' || $2, DATE '2024-04-01', DATE '2024-04-01')`,
+			[]any{cid, cidText[:8]}},
+
+		{"account_group", `INSERT INTO account_group (id, company_id, name, path, nature, is_pl)
+			VALUES ($1, $2, 'Fixture Group', 'fixture'::ltree, 'ASSET', false)`,
+			[]any{groupID, cid}},
+		{"security_level", `INSERT INTO security_level (id, company_id, name) VALUES ($1, $2, 'Fixture Level')`,
+			[]any{levelID, cid}},
+		{"acl_rule", `INSERT INTO acl_rule (id, company_id, security_level_id, effect, action, resource)
+			VALUES ($1, $2, $3, 'allow', 'display', 'report:Fixture')`,
+			[]any{id(), cid, levelID}},
+		{"company_invite", `INSERT INTO company_invite (id, company_id, subject, security_level_id)
+			VALUES ($1, $2, 'fixture-subject-' || $3, $4)`,
+			[]any{id(), cid, cidText, levelID}},
+		{"company_membership", `INSERT INTO company_membership (user_id, company_id, security_level_id)
+			VALUES ($1, $2, $3)`,
+			[]any{userID, cid, levelID}},
+		{"unit", `INSERT INTO unit (id, company_id, symbol) VALUES ($1, $2, 'Nos')`,
+			[]any{unitID, cid}},
+		{"stock_item", `INSERT INTO stock_item (id, company_id, name, unit_id) VALUES ($1, $2, 'Fixture Item', $3)`,
+			[]any{itemID, cid, unitID}},
+		{"godown", `INSERT INTO godown (id, company_id, name) VALUES ($1, $2, 'Fixture Godown')`,
+			[]any{godownID, cid}},
+		{"stock_batch", `INSERT INTO stock_batch (id, company_id, stock_item_id, name)
+			VALUES ($1, $2, $3, 'Fixture Batch')`,
+			[]any{batchID, cid, itemID}},
+		{"stock_opening", `INSERT INTO stock_opening (id, company_id, stock_item_id, godown_id, batch_id, qty, rate)
+			VALUES ($1, $2, $3, $4, $5, 5, 10)`,
+			[]any{id(), cid, itemID, godownID, batchID}},
+		{"ledger", `INSERT INTO ledger (id, company_id, name, group_id) VALUES ($1, $2, 'Fixture Ledger', $3)`,
+			[]any{ledgerID, cid, groupID}},
+		{"ledger_balance", `INSERT INTO ledger_balance (company_id, ledger_id, debit, credit) VALUES ($1, $2, 100, 0)`,
+			[]any{cid, ledgerID}},
+		{"ledger_opening_bill", `INSERT INTO ledger_opening_bill (id, company_id, ledger_id, ref_name, dr_cr, amount)
+			VALUES ($1, $2, $3, 'OB-1', 'D', 100)`,
+			[]any{id(), cid, ledgerID}},
+		{"voucher_type", `INSERT INTO voucher_type (id, company_id, name, parent_class)
+			VALUES ($1, $2, 'Fixture Sales', 'Sales')`,
+			[]any{vtypeID, cid}},
+		{"voucher_number_counter", `INSERT INTO voucher_number_counter (company_id, voucher_type_id, fin_year, next_no)
+			VALUES ($1, $2, 2024, 2)`,
+			[]any{cid, vtypeID}},
+		{"voucher_version", `INSERT INTO voucher_version
+			(id, company_id, voucher_id, version_no, op, hash, payload, created_by, voucher_type_id, party_ledger_id, voucher_date)
+			VALUES ($1, $2, $3, 1, 'CREATE', '\x00'::bytea, '{}'::jsonb, 'testdb', $4, $5, DATE '2024-05-01')`,
+			[]any{versionID, cid, voucherID, vtypeID, ledgerID}},
+		{"voucher_head", `INSERT INTO voucher_head (company_id, voucher_id, current_version_id, version_no, op, voucher_date)
+			VALUES ($1, $2, $3, 1, 'CREATE', DATE '2024-05-01')`,
+			[]any{cid, voucherID, versionID}},
+		{"posting", `INSERT INTO posting (id, company_id, voucher_version_id, ledger_id, dr_cr, amount)
+			VALUES ($1, $2, $3, $4, 'D', 100)`,
+			[]any{id(), cid, versionID, ledgerID}},
+		{"bill_allocation", `INSERT INTO bill_allocation
+			(id, company_id, voucher_version_id, ledger_id, ref_name, ref_type, dr_cr, amount)
+			VALUES ($1, $2, $3, $4, 'BILL-1', 'NEW', 'D', 100)`,
+			[]any{id(), cid, versionID, ledgerID}},
+		{"voucher_gst_line", `INSERT INTO voucher_gst_line
+			(id, company_id, voucher_version_id, line_no, hsn, taxable_value, gst_rate_pct, cgst, sgst, igst)
+			VALUES ($1, $2, $3, 1, '1234', 100, 18, 9, 9, 0)`,
+			[]any{id(), cid, versionID}},
+		{"stock_movement", `INSERT INTO stock_movement
+			(id, company_id, voucher_version_id, line_no, stock_item_id, godown_id, batch_id, direction, qty, rate, amount)
+			VALUES ($1, $2, $3, 1, $4, $5, $6, 'IN', 3, 10, 30)`,
+			[]any{id(), cid, versionID, itemID, godownID, batchID}},
+		{"voucher_external_reference", `INSERT INTO voucher_external_reference
+			(id, company_id, voucher_id, kind, ref_value, pinned_voucher_no)
+			VALUES ($1, $2, $3, 'IRN', 'fixture-irn', 'F/1')`,
+			[]any{id(), cid, voucherID}},
+		{"reconciliation_queue", `INSERT INTO reconciliation_queue
+			(id, company_id, voucher_id, attempted_op, kind, ref_value, frozen_voucher_no)
+			VALUES ($1, $2, $3, 'ALTER', 'IRN', 'fixture-irn', 'F/1')`,
+			[]any{id(), cid, voucherID}},
+		{"sync_applied", `INSERT INTO sync_applied (id, company_id, idempotency_key, client_voucher_id, outcome)
+			VALUES ($1, $2, 'fixture-key', $3, 'APPLIED')`,
+			[]any{id(), cid, voucherID}},
+		{"master_audit", `INSERT INTO master_audit (id, company_id, entity_type, entity_id, op, after_doc, created_by)
+			VALUES ($1, $2, 'ledger', $3, 'CREATE', '{}'::jsonb, 'testdb')`,
+			[]any{id(), cid, ledgerID}},
+		{"notification_outbox", `INSERT INTO notification_outbox
+			(id, company_id, kind, ref_id, recipient, subject_line, body)
+			VALUES ($1, $2, 'invite', $3, 'a@example.com', 'subject', 'body')`,
+			[]any{id(), cid, userID}},
+		{"price_list", `INSERT INTO price_list (id, company_id, name, party_group_id, effective)
+			VALUES ($1, $2, 'Fixture List', $3, daterange(DATE '2024-04-01', DATE '2025-04-01', '[)'))`,
+			[]any{plistID, cid, groupID}},
+		{"price_list_entry", `INSERT INTO price_list_entry
+			(id, company_id, price_list_id, stock_item_id, qty_range, rate, discount_pct)
+			VALUES ($1, $2, $3, $4, numrange(0, NULL, '[)'), 10, 0)`,
+			[]any{id(), cid, plistID, itemID}},
+
+		// TEXT company_id. This is the row that the "AND data_type='uuid'"
+		// mutation orphans, and the reason the enumeration query must not filter
+		// on type.
+		{"insightd_draft", `INSERT INTO insightd_draft (company_id, draft_id, body)
+			VALUES ($1, 'fixture-draft', '{}'::jsonb)`,
+			[]any{cidText}},
+
+		// No company_id at all: tenancy lives in the composite TEXT primary key.
+		{"statutory_step", `INSERT INTO statutory_step (workflow_id, step_name, output)
+			VALUES ('irn:' || $1 || ':' || $2, 'build', '{}'::jsonb)`,
+			[]any{cidText, voucherID.String()}},
+	}
+}
+
+// seedCompany inserts the whole fixture for cid in ONE admin transaction with
+// session_replication_role = replica.
+//
+// Replica mode here does two jobs: it suppresses foreign-key enforcement (so the
+// rows can be inserted in any order, and rows may point at ids that are not
+// themselves fixtures) and it suppresses the four DEFERRED INITIALLY DEFERRED
+// AFTER INSERT triggers — posting_balanced, stock_movement_not_negative,
+// stock_movement_ties_to_gst, voucher_gst_line_ties_to_stock. Those encode real
+// accounting invariants that a deliberately minimal one-row-per-table fixture
+// cannot satisfy; the fixture is not trying to be a valid set of books, it is
+// trying to put exactly one row in every table so the teardown has something to
+// miss.
+func seedCompany(t *testing.T, cid uuid.UUID) {
+	t.Helper()
+	ctx := context.Background()
+
+	pl, err := loadPlan(ctx)
+	if err != nil {
+		t.Fatalf("load plan: %v", err)
+	}
+	rows := buildFixture(cid)
+
+	// The fixture must cover EXACTLY the plan. Anything else and the test proves
+	// less than it claims.
+	planned := map[string]bool{}
+	for _, s := range pl.order {
+		planned[s.Table] = true
+	}
+	for _, s := range pl.special {
+		planned[s.Table] = true
+	}
+	seeded := map[string]bool{}
+	for _, r := range rows {
+		if seeded[r.Table] {
+			t.Fatalf("fixture seeds %q twice", r.Table)
+		}
+		seeded[r.Table] = true
+	}
+	var missing, extra []string
+	for tbl := range planned {
+		if !seeded[tbl] {
+			missing = append(missing, tbl)
+		}
+	}
+	for tbl := range seeded {
+		if !planned[tbl] {
+			extra = append(extra, tbl)
+		}
+	}
+	sort.Strings(missing)
+	sort.Strings(extra)
+	if len(missing) > 0 {
+		t.Fatalf("the delete plan covers %v but the test fixture seeds no row there, so the teardown of "+
+			"those tables would never be exercised; add a row to buildFixture", missing)
+	}
+	if len(extra) > 0 {
+		t.Fatalf("the test fixture seeds %v, which the delete plan does NOT cover — those rows would leak; "+
+			"classify the tables in plan.go", extra)
+	}
+
+	pool, err := adminPool(ctx)
+	if err != nil {
+		t.Fatalf("admin pool: %v", err)
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin fixture tx: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, `SET LOCAL session_replication_role = replica`); err != nil {
+		t.Fatalf("set replica role: %v", err)
+	}
+	for _, r := range rows {
+		if _, err := tx.Exec(ctx, r.SQL, r.Args...); err != nil {
+			t.Fatalf("seed %s: %v", r.Table, err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit fixture: %v", err)
+	}
+}
+
+// countsFor returns the per-table row counts for cid using the SAME residue
+// query the teardown verifies with.
+func countsFor(t *testing.T, cid uuid.UUID) map[string]int64 {
+	t.Helper()
+	ctx := context.Background()
+	pool, err := adminPool(ctx)
+	if err != nil {
+		t.Fatalf("admin pool: %v", err)
+	}
+	pl, err := loadPlan(ctx)
+	if err != nil {
+		t.Fatalf("load plan: %v", err)
+	}
+	counts, err := residue(ctx, pool, pl, cid)
+	if err != nil {
+		t.Fatalf("residue: %v", err)
+	}
+	out := make(map[string]int64, len(counts))
+	for _, c := range counts {
+		out[c.Table] = c.N
+	}
+	return out
+}
+
+// ---------------------------------------------------------------------------
+// 2. The teardown actually removes everything
+// ---------------------------------------------------------------------------
+
+// TestDropCompanyRemovesEveryScopedRow is the load-bearing test of this package:
+// it seeds one row in every table the plan covers, proves each row is really
+// there, tears the company down, and proves every table is back to zero.
+//
+// Both halves matter. Without the "is really there" half the test would pass on
+// an empty database and prove nothing — that vacuity is precisely how the old
+// per-package cleanups stayed green while orphaning 603 MB of account_group.
+func TestDropCompanyRemovesEveryScopedRow(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+
+	cid := newCompanyID(t)
+	seedCompany(t, cid)
+	// Belt and braces: if an assertion below fails the company must still go.
+	defer func() {
+		if err := Drop(ctx, cid); err != nil {
+			t.Logf("post-test cleanup of %s: %v", cid, err)
+		}
+	}()
+
+	before := countsFor(t, cid)
+	var empty []string
+	for tbl, n := range before {
+		if n == 0 {
+			empty = append(empty, tbl)
+		}
+	}
+	sort.Strings(empty)
+	if len(empty) > 0 {
+		t.Fatalf("fixture left %v empty; the teardown of those tables would be untested", empty)
+	}
+	t.Logf("seeded %d tables for company %s", len(before), cid)
+
+	if err := Drop(ctx, cid); err != nil {
+		t.Fatalf("Drop: %v", err)
+	}
+
+	after := countsFor(t, cid)
+	var survivors []string
+	for tbl, n := range after {
+		if n != 0 {
+			survivors = append(survivors, fmt.Sprintf("%s=%d", tbl, n))
+		}
+	}
+	sort.Strings(survivors)
+	if len(survivors) > 0 {
+		t.Fatalf("after Drop(%s), test data SURVIVED and is leaking into the shared dev database: %s",
+			cid, strings.Join(survivors, " "))
+	}
+}
+
+// TestDropCompanyLeavesOtherCompaniesIntact is the missing-WHERE detector. A
+// teardown that deleted `FROM posting` with no predicate would satisfy the test
+// above perfectly while destroying every other tenant's books, including,
+// on a shared dev database, another agent's in-flight test run.
+func TestDropCompanyLeavesOtherCompaniesIntact(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+
+	victim := newCompanyID(t)
+	bystander := newCompanyID(t)
+	seedCompany(t, victim)
+	seedCompany(t, bystander)
+	defer func() {
+		if err := Drop(ctx, bystander); err != nil {
+			t.Errorf("cleanup bystander %s: %v", bystander, err)
+		}
+	}()
+	defer func() {
+		if err := Drop(ctx, victim); err != nil {
+			t.Logf("post-test cleanup of victim %s: %v", victim, err)
+		}
+	}()
+
+	expected := countsFor(t, bystander)
+	if len(expected) == 0 {
+		t.Fatal("bystander has no counts — the plan is empty")
+	}
+
+	if err := Drop(ctx, victim); err != nil {
+		t.Fatalf("Drop victim: %v", err)
+	}
+
+	got := countsFor(t, bystander)
+	var damaged []string
+	for tbl, want := range expected {
+		if got[tbl] != want {
+			damaged = append(damaged, fmt.Sprintf("%s: %d -> %d", tbl, want, got[tbl]))
+		}
+	}
+	sort.Strings(damaged)
+	if len(damaged) > 0 {
+		t.Fatalf("dropping company %s damaged UNRELATED company %s — the teardown is not tenant-scoped: %s",
+			victim, bystander, strings.Join(damaged, "; "))
+	}
+}
+
+// TestResidueCheckCatchesADeleteThatMissedItsRows proves the pre-COMMIT residue
+// check is load-bearing rather than decorative.
+//
+// It exists because of a real gap found while mutation-testing this package. The
+// obvious mutation — filtering the enumeration query on data_type='uuid', which
+// drops insightd_draft from the plan — is caught by
+// TestEveryTableIsClassifiedForTeardown and by seedCompany's fixture/plan
+// equality assertion, but NOT by the residue check: the residue query is
+// generated from the same plan, so a table absent from the plan is absent from
+// the count as well. The residue check's actual job is the other failure mode: a
+// table that IS in the plan whose DELETE removes the wrong rows, or none.
+//
+// So that mode is provoked directly here, by handing dropWithPlan a plan whose
+// statutory_step predicate has been broken (uppercased prefix) while its residue
+// query still counts correctly. Drop must refuse to commit and must name the
+// table and its surviving row count.
+//
+// Under replica mode nothing about this is an error to Postgres: the DELETE
+// reports success having removed zero rows. Without the residue check the
+// teardown would return nil and the row would leak in silence — which is exactly
+// how this database reached 2 GB.
+func TestResidueCheckCatchesADeleteThatMissedItsRows(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+
+	cid := newCompanyID(t)
+	seedCompany(t, cid)
+	defer func() {
+		if err := Drop(ctx, cid); err != nil {
+			t.Errorf("cleanup %s: %v", cid, err)
+		}
+	}()
+
+	good, err := loadPlan(ctx)
+	if err != nil {
+		t.Fatalf("load plan: %v", err)
+	}
+	// A copy of the real plan with ONE broken predicate. verifySQL is untouched,
+	// so the check still knows to look at statutory_step.
+	broken := &plan{verifySQL: good.verifySQL, order: good.order}
+	var patched bool
+	for _, s := range good.special {
+		if s.Table == "statutory_step" {
+			broken.special = append(broken.special, specialStmt{
+				Table: s.Table,
+				// 'IRN:' never matches the lower-case prefix the workflow writes.
+				SQL: `DELETE FROM statutory_step WHERE workflow_id LIKE 'IRN:' || $1 || ':%'`,
+			})
+			patched = true
+			continue
+		}
+		broken.special = append(broken.special, s)
+	}
+	if !patched {
+		t.Fatal("statutory_step is no longer in specialTenancy; this test needs a new subject")
+	}
+
+	err = dropWithPlan(ctx, broken, cid)
+	if err == nil {
+		t.Fatal("a teardown that left rows behind returned nil: the residue check is not running, " +
+			"and every leak it was meant to catch would now be silent")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "statutory_step=1") {
+		t.Errorf("the error must name the table AND its surviving row count so the leak is actionable; got: %v", err)
+	}
+	if !strings.Contains(msg, cid.String()) {
+		t.Errorf("the error must name the company id; got: %v", err)
+	}
+	if !strings.Contains(msg, "NOT fully torn down") {
+		t.Errorf("the error must state the CONSEQUENCE, not just an inequality; got: %v", err)
+	}
+
+	// And the failure must be atomic: because the residue check runs before
+	// COMMIT, the whole teardown rolls back rather than leaving a half-deleted
+	// company that a later run would report differently.
+	counts := countsFor(t, cid)
+	if counts["company"] != 1 {
+		t.Errorf("a failed teardown must roll back entirely; company row count is %d, want 1", counts["company"])
+	}
+	if counts["ledger"] != 1 {
+		t.Errorf("a failed teardown must roll back entirely; ledger row count is %d, want 1", counts["ledger"])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 3. The registration API
+// ---------------------------------------------------------------------------
+
+// TestCleanupRunsAtTestEnd pins the contract every adopting package relies on:
+// registering Cleanup inside a test means the company is gone once that test
+// returns, without the test body doing anything else.
+func TestCleanupRunsAtTestEnd(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+
+	cid := newCompanyID(t)
+	seedCompany(t, cid)
+	defer func() {
+		if err := Drop(ctx, cid); err != nil {
+			t.Logf("belt-and-braces cleanup of %s: %v", cid, err)
+		}
+	}()
+
+	if n := companyRowCount(t, cid); n != 1 {
+		t.Fatalf("fixture: company row count = %d, want 1", n)
+	}
+
+	t.Run("inner", func(t *testing.T) {
+		Cleanup(t, cid)
+		if n := companyRowCount(t, cid); n != 1 {
+			t.Fatalf("inside the subtest the company must still exist; got count %d. "+
+				"Cleanup must defer to the END of the test, or every harness that registers it "+
+				"immediately after creating a company would delete its own fixture.", n)
+		}
+	})
+
+	if n := companyRowCount(t, cid); n != 0 {
+		t.Fatalf("after the subtest returned the company row count is %d, want 0: "+
+			"testdb.Cleanup did not run at test end, so every adopting package would leak", n)
+	}
+}
+
+// companyRowCount reads the company row directly, independently of the plan's
+// residue query, so this test does not depend on the same code path it checks.
+func companyRowCount(t *testing.T, cid uuid.UUID) int64 {
+	t.Helper()
+	ctx := context.Background()
+	pool, err := adminPool(ctx)
+	if err != nil {
+		t.Fatalf("admin pool: %v", err)
+	}
+	var n int64
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM company WHERE id = $1`, cid).Scan(&n); err != nil {
+		t.Fatalf("count company: %v", err)
+	}
+	return n
+}
+
+// ---------------------------------------------------------------------------
+// 4. Properties of the plan itself — these need no database round trip per case
+// ---------------------------------------------------------------------------
+
+// TestDeleteOrderIsReverseTopological checks the derived order against the FK
+// edges: for every edge child -> parent inside the plan, the child must be
+// deleted first. Replica mode makes this non-load-bearing TODAY; it is asserted
+// so that it stays true if replica mode is ever narrowed, and so a partial
+// failure always stops at a comprehensible place.
+func TestDeleteOrderIsReverseTopological(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+
+	pl, err := loadPlan(ctx)
+	if err != nil {
+		t.Fatalf("load plan: %v", err)
+	}
+	pool, err := adminPool(ctx)
+	if err != nil {
+		t.Fatalf("admin pool: %v", err)
+	}
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	defer conn.Release()
+	edges, err := queryFKEdges(ctx, conn)
+	if err != nil {
+		t.Fatalf("fk edges: %v", err)
+	}
+
+	pos := map[string]int{}
+	for i, s := range pl.order {
+		pos[s.Table] = i
+	}
+	for _, e := range edges {
+		ci, cok := pos[e.child]
+		pi, pok := pos[e.parent]
+		if !cok || !pok {
+			continue
+		}
+		if ci > pi {
+			t.Errorf("delete order puts parent %q (position %d) before child %q (position %d); "+
+				"with foreign keys enforced that delete would fail", e.parent, pi, e.child, ci)
+		}
+	}
+	if len(pl.order) == 0 {
+		t.Fatal("plan is empty")
+	}
+	if last := pl.order[len(pl.order)-1].Table; last != tenantRoot {
+		t.Errorf("the tenant root %q must be deleted last, got %q", tenantRoot, last)
+	}
+}
+
+// TestReverseTopoReportsACycle proves the cycle branch is real code and not a
+// comment. A silently-chosen order under a cycle would fail intermittently
+// rather than always, which is the worst possible failure mode for a harness.
+func TestReverseTopoReportsACycle(t *testing.T) {
+	target := map[string]bool{"a": true, "b": true, "c": true}
+	edges := []fkEdge{{child: "a", parent: "b"}, {child: "b", parent: "c"}, {child: "c", parent: "a"}}
+	_, err := reverseTopo(target, edges)
+	if err == nil {
+		t.Fatal("reverseTopo accepted a cycle; it must refuse rather than pick an arbitrary order")
+	}
+	for _, name := range []string{"a", "b", "c"} {
+		if !strings.Contains(err.Error(), name) {
+			t.Errorf("cycle error must name every table in the cycle; %q missing from: %v", name, err)
+		}
+	}
+}
+
+// TestKeepRequiresAReason pins the opt-out contract: an opt-out without a stated
+// reason is indistinguishable from a forgotten cleanup, which is the exact
+// failure this package was written to end.
+func TestKeepRequiresAReason(t *testing.T) {
+	rec := &recordingTB{}
+	Keep(rec, uuid.New(), "   ")
+	if len(rec.errs) != 1 {
+		t.Fatalf("Keep with a blank reason must fail the test; got %d errors", len(rec.errs))
+	}
+	if !strings.Contains(rec.errs[0], "reason is required") {
+		t.Errorf("message should say a reason is required, got %q", rec.errs[0])
+	}
+
+	rec2 := &recordingTB{}
+	id := uuid.New()
+	Keep(rec2, id, "documented in internal/testhygiene declaredKeeps")
+	if len(rec2.errs) != 0 {
+		t.Fatalf("Keep with a reason must not fail: %v", rec2.errs)
+	}
+	var found bool
+	for _, k := range Kept() {
+		if k.ID == id {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("Keep must record the company id so the harness can report what it deliberately left behind")
+	}
+}
+
+// TestDropRefusesTheNilCompany: a zero uuid almost always means an id was never
+// assigned. Running the plan with it would be a no-op that reports success, so
+// the caller would never learn their company id was empty.
+func TestDropRefusesTheNilCompany(t *testing.T) {
+	err := Drop(context.Background(), uuid.Nil)
+	if err == nil {
+		t.Fatal("Drop(uuid.Nil) must refuse")
+	}
+	if !strings.Contains(err.Error(), "nil company") {
+		t.Errorf("message should name the problem, got %v", err)
+	}
+}
+
+// TestTeardownDoesNotLeaveTriggersDisarmed is the guard against the banned
+// mechanism creeping back. `ALTER TABLE ... DISABLE TRIGGER` is database-wide and
+// persistent; if the teardown ever used it, every later test in every package
+// would run with immutability off and nobody would notice. SET LOCAL cannot do
+// that, and this test proves the observable difference.
+func TestTeardownDoesNotLeaveTriggersDisarmed(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+
+	cid := newCompanyID(t)
+	seedCompany(t, cid)
+	if err := Drop(ctx, cid); err != nil {
+		t.Fatalf("Drop: %v", err)
+	}
+
+	pool, err := adminPool(ctx)
+	if err != nil {
+		t.Fatalf("admin pool: %v", err)
+	}
+	var role string
+	if err := pool.QueryRow(ctx, `SHOW session_replication_role`).Scan(&role); err != nil {
+		t.Fatalf("show session_replication_role: %v", err)
+	}
+	if role != "origin" {
+		t.Errorf("session_replication_role is %q on a pooled connection after a teardown, want \"origin\"; "+
+			"the SET must be LOCAL to the teardown transaction", role)
+	}
+	var disarmed int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal AND tgenabled <> 'O'`).Scan(&disarmed); err != nil {
+		t.Fatalf("count disarmed triggers: %v", err)
+	}
+	if disarmed != 0 {
+		t.Errorf("%d user triggers are left disabled in the database after a teardown; "+
+			"the immutability guarantee is off for every other connection", disarmed)
+	}
+
+	// And prove the guarantee is genuinely back on: an ordinary DELETE of an
+	// immutable row must still be refused.
+	other := newCompanyID(t)
+	seedCompany(t, other)
+	defer func() {
+		if err := Drop(ctx, other); err != nil {
+			t.Errorf("cleanup %s: %v", other, err)
+		}
+	}()
+	_, err = pool.Exec(ctx, `DELETE FROM posting WHERE company_id = $1`, other)
+	if err == nil {
+		t.Fatal("posting is supposed to be immutable, but a plain DELETE succeeded — " +
+			"a previous run left the immutability trigger disabled")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "immutable") {
+		t.Errorf("expected an immutability error, got %v", err)
+	}
+}
+
+// recordingTB is a TB that records instead of failing, so the failure paths of
+// this package can themselves be tested.
+type recordingTB struct {
+	errs     []string
+	cleanups []func()
+}
+
+func (r *recordingTB) Helper() {}
+func (r *recordingTB) Errorf(format string, args ...any) {
+	r.errs = append(r.errs, fmt.Sprintf(format, args...))
+}
+func (r *recordingTB) Cleanup(f func()) { r.cleanups = append(r.cleanups, f) }
+
+// TestDropNowReportsFailureAsATestError pins decision A4: a teardown that fails
+// must FAIL THE TEST, not log. The recording TB lets us observe that without
+// failing this test.
+func TestDropNowReportsFailureAsATestError(t *testing.T) {
+	rec := &recordingTB{}
+	DropNow(rec, uuid.Nil) // guaranteed to fail, and requires no database
+	if len(rec.errs) != 1 {
+		t.Fatalf("DropNow must report a teardown failure through Errorf; got %d errors: %v", len(rec.errs), rec.errs)
+	}
+	if !strings.Contains(rec.errs[0], "testdb:") {
+		t.Errorf("the reported error should be the teardown error, got %q", rec.errs[0])
+	}
+}
+
+// TestCleanupDefersRatherThanDropping proves Cleanup registers work instead of
+// doing it, using the recording TB (no database needed).
+func TestCleanupDefersRatherThanDropping(t *testing.T) {
+	rec := &recordingTB{}
+	Cleanup(rec, uuid.New())
+	if len(rec.cleanups) != 1 {
+		t.Fatalf("Cleanup must register exactly one t.Cleanup; got %d", len(rec.cleanups))
+	}
+	if len(rec.errs) != 0 {
+		t.Fatalf("Cleanup must not touch the database at registration time; got %v", rec.errs)
+	}
+}

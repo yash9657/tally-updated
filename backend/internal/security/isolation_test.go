@@ -25,8 +25,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"go/scanner"
+	"go/token"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -34,6 +38,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/khata/cored/internal/platform/testdb"
 	"github.com/khata/cored/migrations"
 )
 
@@ -136,6 +141,16 @@ func seedCompany(t *testing.T, c *pgx.Conn, id uuid.UUID) {
 	if err != nil {
 		t.Fatalf("seed company %s: %v", id, err)
 	}
+	// The teardown is registered HERE, next to the INSERT, not in the callers.
+	// All three of today's callers happen to register one of their own, so this
+	// looks redundant — and a duplicate drop is a no-op that matches no rows. It
+	// is here for the FOURTH caller. A creation site whose cleanup lives in
+	// somebody else's function is one refactor away from leaking, which is what
+	// internal/testhygiene's TestEveryCompanyCreatingTestSiteTearsDown objects to:
+	// it keys on the function that does the creating, deliberately, because a rule
+	// keyed on "some caller cleaned up" cannot be checked without a call graph and
+	// cannot protect a caller that does not exist yet.
+	testdb.Cleanup(t, id)
 }
 
 func seedVoucher(t *testing.T, c *pgx.Conn, company uuid.UUID, no int) uuid.UUID {
@@ -152,17 +167,38 @@ func seedVoucher(t *testing.T, c *pgx.Conn, company uuid.UUID, no int) uuid.UUID
 	return id
 }
 
-// cleanup removes planted rows via the superuser, temporarily lifting the
-// append-only trigger so the immutable log can be tidied between runs.
+// cleanup removes BOTH adversary tenants and everything planted under them.
+//
+// It used to do this by hand, and both halves of that were wrong:
+//
+//  1. It ran `ALTER TABLE voucher_version DISABLE TRIGGER
+//     voucher_version_no_mutate` around the delete. That statement is
+//     DATABASE-WIDE and PERSISTENT, not session-scoped: for as long as it was
+//     lifted, voucher immutability was off for EVERY connection, so any other
+//     test running concurrently that asserts "the append-only trigger rejects
+//     this UPDATE" would have passed while the trigger did nothing. Worse, a
+//     crash or a t.Fatalf between the disable and the re-enable leaves the
+//     production invariant disarmed in the shared dev database with nothing
+//     reporting it. This is the same hazard that made `go test ./internal/server`
+//     unsafe to run unscoped. TestSecurityHarnessNeverDisablesTriggersGlobally
+//     below now fails the build if the statement ever comes back.
+//     testdb performs its deletes under `SET LOCAL session_replication_role =
+//     replica` inside one transaction, which suppresses the trigger for that
+//     transaction only and cannot outlive it.
+//
+//  2. It deleted voucher_version and then `DELETE FROM company`, and stopped.
+//     Nothing cascades from company — only notification_outbox references
+//     company(id) and its FK action is NO ACTION — so every account_group,
+//     ledger, voucher_type, godown, stock_item and security_level this red team
+//     planted stayed in the database forever, orphaned and invisible because the
+//     tenant they belonged to was gone. A company-count check called that clean.
+//     testdb.DropNow enumerates every table carrying company_id (plus the
+//     hand-registered special cases) and reports, by table and row count, if any
+//     row survives.
 func (h *harness) cleanup(t *testing.T) {
 	t.Helper()
-	ctx := context.Background()
-	_, _ = h.admin.Exec(ctx, `ALTER TABLE voucher_version DISABLE TRIGGER voucher_version_no_mutate`)
-	_, _ = h.admin.Exec(ctx, `DELETE FROM voucher_version WHERE company_id = ANY($1)`,
-		[]uuid.UUID{h.companyA, h.companyB})
-	_, _ = h.admin.Exec(ctx, `ALTER TABLE voucher_version ENABLE TRIGGER voucher_version_no_mutate`)
-	_, _ = h.admin.Exec(ctx, `DELETE FROM company WHERE id = ANY($1)`,
-		[]uuid.UUID{h.companyA, h.companyB})
+	testdb.DropNow(t, h.companyA)
+	testdb.DropNow(t, h.companyB)
 }
 
 // asCompany runs fn inside an app-role transaction scoped to companyID via
@@ -925,11 +961,15 @@ func TestMembershipRLSScopedToUser(t *testing.T) {
 		 VALUES ($1, $2, $3)`, userX, company, levelID); err != nil {
 		t.Fatalf("seed membership: %v", err)
 	}
+	// This test seeds a THIRD company on top of the harness's A and B, so it owns
+	// that company's teardown. company_membership and security_level both carry
+	// company_id and are removed by DropNow along with the company row itself;
+	// app_user does NOT (it is user-scoped, deliberately global, and listed in
+	// testdb's notTenantScoped registry), so it is still deleted by hand here.
 	t.Cleanup(func() {
 		_, _ = h.admin.Exec(ctx, `DELETE FROM company_membership WHERE user_id = $1`, userX)
-		_, _ = h.admin.Exec(ctx, `DELETE FROM security_level WHERE id = $1`, levelID)
 		_, _ = h.admin.Exec(ctx, `DELETE FROM app_user WHERE id = $1`, userX)
-		_, _ = h.admin.Exec(ctx, `DELETE FROM company WHERE id = $1`, company)
+		testdb.DropNow(t, company)
 	})
 
 	countMembership := func(t *testing.T, userGUC string) int {
@@ -1047,4 +1087,245 @@ func TestStatutorydRoleReachesOnlyItsOwnTable(t *testing.T) {
 	if bypass || super {
 		t.Fatalf("SECURITY HOLE: tally_statutory bypassrls=%v superuser=%v", bypass, super)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Harness hygiene. These two tests defend the RED TEAM'S OWN harness, which is
+// itself a piece of shared-database machinery and was, until this change, the
+// single worst-behaved one in the backend.
+// ---------------------------------------------------------------------------
+
+// TestHarnessRemovesBothTenants proves setupHarness's t.Cleanup releases BOTH
+// adversary companies, masters included.
+//
+// Two things about the shape are deliberate.
+//
+// First, the harness is built inside a SUBTEST. t.Cleanup fires when the *testing.T
+// it was registered on finishes, so the only way to observe the harness's teardown
+// from inside a test is to let a child T complete and then look. Asserting from
+// the same T would run the assertions BEFORE the cleanup and pass no matter what.
+//
+// Second, it checks account_group, not just company and voucher_version. seedCompany
+// raw-inserts a childless company, so a bare harness has no masters at all and an
+// account_group assertion over it would be vacuously true — which is why the
+// subtest calls seed_company_defaults on company A first and asserts the masters
+// really exist before letting the subtest end. That is the precise bug being
+// guarded: the old cleanup deleted voucher_version and company and left every
+// master behind, and because nothing cascades from company (only
+// notification_outbox references it, NO ACTION) a company-count check reported
+// clean while account_group grew to 603 MB.
+func TestHarnessRemovesBothTenants(t *testing.T) {
+	skipIfNoDB(t)
+	ctx := context.Background()
+
+	// An independent superuser connection. It must NOT be the harness's own
+	// h.admin: that one is closed by the harness cleanup, and a closed connection
+	// cannot distinguish "no rows" from "cannot look".
+	admin, err := pgx.Connect(ctx, adminDSN)
+	if err != nil {
+		t.Skipf("admin postgres unavailable: %v", err)
+	}
+	defer func() { _ = admin.Close(ctx) }()
+
+	countIn := func(tbl, col string, id uuid.UUID) int {
+		t.Helper()
+		var n int
+		if err := admin.QueryRow(ctx,
+			`SELECT count(*) FROM `+tbl+` WHERE `+col+` = $1`, id).Scan(&n); err != nil {
+			t.Fatalf("count %s for %s: %v", tbl, id, err)
+		}
+		return n
+	}
+
+	var a, b uuid.UUID
+	t.Run("inner", func(t *testing.T) {
+		h := setupHarness(t, 2, 2)
+		a, b = h.companyA, h.companyB
+
+		// Give company A a real master tree so the account_group assertion below
+		// has something to be wrong about.
+		if _, err := h.admin.Exec(ctx, `SELECT seed_company_defaults($1)`, a); err != nil {
+			t.Fatalf("seed_company_defaults for A: %v", err)
+		}
+
+		// NON-VACUITY: everything we are about to assert is gone must be present
+		// while the harness is alive.
+		if n := countIn("company", "id", a); n != 1 {
+			t.Fatalf("vacuity: company A not planted (%d rows)", n)
+		}
+		if n := countIn("company", "id", b); n != 1 {
+			t.Fatalf("vacuity: company B not planted (%d rows)", n)
+		}
+		if n := countIn("voucher_version", "company_id", a); n != 2 {
+			t.Fatalf("vacuity: company A has %d seeded voucher_version rows, want 2", n)
+		}
+		if n := countIn("voucher_version", "company_id", b); n != 2 {
+			t.Fatalf("vacuity: company B has %d seeded voucher_version rows, want 2", n)
+		}
+		if n := countIn("account_group", "company_id", a); n == 0 {
+			t.Fatalf("vacuity: seed_company_defaults planted no account_group rows for A")
+		}
+	})
+
+	// The subtest has returned, so its cleanups — including setupHarness's — have run.
+	var leaked []string
+	for _, c := range []struct {
+		label string
+		id    uuid.UUID
+	}{{"A", a}, {"B", b}} {
+		for _, tbl := range []struct{ name, col string }{
+			{"account_group", "company_id"},
+			{"voucher_version", "company_id"},
+			{"company", "id"},
+		} {
+			if n := countIn(tbl.name, tbl.col, c.id); n != 0 {
+				leaked = append(leaked, fmt.Sprintf("company%s(%s).%s=%d", c.label, c.id, tbl.name, n))
+			}
+		}
+	}
+	if len(leaked) > 0 {
+		t.Fatalf("the isolation harness leaked tenant data after its cleanup ran: %s. "+
+			"Every red-team test in this package builds a harness, so a leak here multiplies "+
+			"across the whole file and leaves orphaned masters that no tenant owns.",
+			strings.Join(leaked, ", "))
+	}
+}
+
+// TestSecurityHarnessNeverDisablesTriggersGlobally is a source-level ban.
+//
+// `ALTER TABLE ... DISABLE TRIGGER ...` is not session-scoped and not
+// transaction-scoped. It is a persistent catalogue change: while it is in force,
+// the trigger is off for every connection in the database, and it stays off until
+// something explicitly re-enables it. A harness that used it to tidy up the
+// immutable voucher log was therefore switching voucher immutability off for the
+// whole database, repeatedly, in the middle of a parallel test run — long enough
+// for another package's "the append-only trigger rejects this UPDATE" test to pass
+// without a trigger ever firing, and permanently if the run died in between. That
+// is exactly why `go test ./internal/server` is documented as unsafe to run
+// unscoped, and this package was the second offender.
+//
+// The supported alternative, which testdb uses, is
+// `BEGIN; SET LOCAL session_replication_role = replica; ... COMMIT;` on a
+// superuser connection: SET LOCAL cannot outlive its transaction, so no other
+// connection ever observes immutability disarmed.
+//
+// The check reads this package's own test sources from disk and scans STRING
+// LITERALS ONLY, via the Go scanner. Scanning raw text would be simpler but would
+// also flag the comment a few lines above, and the comments explaining why the
+// statement is banned are the most valuable part of the ban. A literal is what
+// actually reaches the server.
+//
+// Two details that a first attempt got wrong, recorded so they are not
+// re-introduced:
+//
+//   - The needle is ASSEMBLED AT RUNTIME (bannedNeedle) rather than written as one
+//     literal. The checker lives in the very file it scans, so a literal needle —
+//     and the literal in its own failure message — made the test flag ITSELF on
+//     first run. Splitting the words is the whole fix; it does not weaken the ban,
+//     because the thing being defended against is a harness quietly reintroducing a
+//     working SQL statement, not an author deliberately obfuscating one.
+//   - There is a POSITIVE CONTROL. `scanForBanned` is first run over a synthetic
+//     in-memory source that DOES contain the statement and must return exactly one
+//     hit. Without it, a scanner that silently matched nothing — a mis-set token
+//     filter, a needle that normalisation can never produce — would report "no
+//     offences" forever and this ban would be a decoration.
+func TestSecurityHarnessNeverDisablesTriggersGlobally(t *testing.T) {
+	// POSITIVE CONTROL: the matcher must actually find the statement when it is
+	// present, including in the lower-case and line-wrapped spellings.
+	control := "package p\nvar a = `ALTER TABLE voucher_version " + bannedNeedle + " voucher_version_no_mutate`\n" +
+		"var b = \"alter table t\\n  disable\\n  trigger u\"\n" +
+		"// a comment mentioning " + bannedNeedle + " must NOT be flagged\n"
+	hits, lits := scanForBanned(t, "control.go", []byte(control))
+	if len(hits) != 2 {
+		t.Fatalf("positive control: matcher found %d offending literals in a source that contains "+
+			"exactly 2 (one back-quoted, one lower-case and line-wrapped); the ban is not being "+
+			"enforced and every 'no offences' result below is meaningless. hits=%v", len(hits), hits)
+	}
+	if lits < 2 {
+		t.Fatalf("positive control: scanner saw %d string literals, want >= 2", lits)
+	}
+
+	files, err := filepath.Glob("*_test.go")
+	if err != nil {
+		t.Fatalf("glob test sources: %v", err)
+	}
+	if len(files) == 0 {
+		t.Fatalf("vacuity: found no *_test.go files to scan in this package's directory")
+	}
+
+	var offences []string
+	totalLits := 0
+	for _, f := range files {
+		src, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("read %s: %v", f, err)
+		}
+		hits, n := scanForBanned(t, f, src)
+		offences = append(offences, hits...)
+		totalLits += n
+	}
+	if totalLits == 0 {
+		t.Fatalf("vacuity: scanned %d files and found no string literals at all; "+
+			"the scanner is misconfigured and this ban is not being enforced", len(files))
+	}
+	if len(offences) > 0 {
+		t.Fatalf("BANNED STATEMENT: `ALTER TABLE ... %s` appears in a SQL string at %s. "+
+			"That is a database-wide, persistent change: it switches the invariant off for every "+
+			"other connection while it is in force, and leaves it off for good if the process dies "+
+			"before re-enabling it. Use a transaction with `SET LOCAL session_replication_role = "+
+			"replica` (see testdb) instead — it cannot escape its transaction.",
+			bannedNeedle, strings.Join(offences, ", "))
+	}
+}
+
+// bannedNeedle is the SQL fragment this package refuses to contain, assembled
+// from two pieces so that neither this constant nor the failure message that
+// prints it counts as an offence when the checker scans its own source. See
+// TestSecurityHarnessNeverDisablesTriggersGlobally.
+var bannedNeedle = "DISABLE" + " TRIGGER"
+
+// scanForBanned tokenises one Go source and returns the positions of every
+// STRING literal containing the banned statement, plus how many string literals
+// it saw in total (the caller uses that as its anti-vacuity signal).
+//
+// Each literal is UNQUOTED before comparison. That is not cosmetic: the scanner
+// hands back the raw source text, so an interpreted literal written as
+// "... disable\n  trigger ..." arrives with a two-character backslash-n where the
+// newline will be, and a whitespace-collapsing comparison never sees the two words
+// as adjacent. Unquoting turns the escape into the byte Postgres will actually
+// receive, which is the only spelling that matters. This was caught by the
+// positive control below and would otherwise have been a silent hole.
+//
+// Comparison is then on a normalised form — upper-cased with every run of
+// whitespace collapsed to a single space — so `disable trigger`, `DISABLE  TRIGGER`
+// and a statement split across source lines all match. Only token.STRING is
+// considered: comments explaining the ban are not violations of it.
+func scanForBanned(t *testing.T, filename string, src []byte) (hits []string, literals int) {
+	t.Helper()
+	normalise := func(s string) string { return strings.Join(strings.Fields(strings.ToUpper(s)), " ") }
+
+	fset := token.NewFileSet()
+	file := fset.AddFile(filename, fset.Base(), len(src))
+	var s scanner.Scanner
+	s.Init(file, src, func(pos token.Position, msg string) {
+		t.Fatalf("scan %s: %s: %s", filename, pos, msg)
+	}, 0)
+	for {
+		pos, tok, lit := s.Scan()
+		if tok == token.EOF {
+			break
+		}
+		if tok != token.STRING {
+			continue
+		}
+		literals++
+		text := lit
+		if unquoted, err := strconv.Unquote(lit); err == nil {
+			text = unquoted
+		}
+		if strings.Contains(normalise(text), bannedNeedle) {
+			hits = append(hits, fset.Position(pos).String())
+		}
+	}
+	return hits, literals
 }

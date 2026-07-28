@@ -12,6 +12,7 @@ import (
 	"github.com/khata/cored/internal/identity"
 	"github.com/khata/cored/internal/masters"
 	"github.com/khata/cored/internal/platform/db"
+	"github.com/khata/cored/internal/platform/testdb"
 )
 
 // secondCompany creates another tenant on the SAME pool and returns a context
@@ -30,6 +31,11 @@ func secondCompany(t *testing.T, pool *db.Pool) context.Context {
 	}); err != nil {
 		t.Fatalf("create second company: %v", err)
 	}
+	// secondCompany is a SECOND creation site in this package, separate from
+	// setup()'s. Cleaning up only the primary harness would halve the leak and
+	// look finished; the tenant B of every cross-tenant probe needs its own
+	// registration, and this is that registration.
+	testdb.Cleanup(t, companyID)
 	return ctx
 }
 

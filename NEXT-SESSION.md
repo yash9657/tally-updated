@@ -101,17 +101,26 @@ AUTH_DEV_TOKEN_ENABLED=true PORT=8087 \
 # insightd MUST carry the DSN or verify:demo drops a check.
 cd insightd && . .venv/bin/activate && \
   INSIGHTD_PII_BOUNDARY_STRICT=1 \
-  INSIGHTD_DATABASE_URL="postgres://tally_app:tally_app@localhost:5433/tally" \
+  INSIGHTD_DATABASE_URL="postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable" \
   python -m uvicorn insightd.api.app:app --port 8088 &
 ```
 
+> The `?sslmode=disable` on that DSN is **load-bearing for the test suite**, not
+> decoration. `insightd/tests/test_pg_store.py::_schemaless_dsn` derives an
+> unmigrated database with `dsn.replace("/tally?", "/template1?")`; with no `?` in
+> the DSN that rewrite is a no-op, `_schemaless_dsn` skips, and **two tests
+> disappear silently** — including the one that proves a set-but-unmigrated DSN
+> fails loud instead of degrading to the in-memory store.
+
 | Gate | Expected at `aea1936` |
 |---|---|
-| `cd backend && go build ./... && go vet ./... && go test ./... -count=1` | exit 0, **25 packages** (19 ok + 6 no-test) |
+| `cd backend && go build ./... && go vet ./... && go test ./... -count=1` | exit 0, **27 packages** (21 ok + 6 no-test) — was 25 before Track 0 added `internal/platform/testdb` and `internal/testhygiene`. Measured by the integrator on a quiescent, freshly-reset database. |
+| `make backend-test-residue` | the same suite, ONCE, + per-table residue all **0** (this is what `make verify` now runs instead of `backend-test`) |
+| `cd backend && go test ./internal/testhygiene -count=1` | 3 PASS — the DB-free static half of the residue bound |
 | `cd frontend && pnpm exec tsc --noEmit` | clean (covers `scripts/` too) |
 | `cd frontend && pnpm exec vitest run` | **370 tests / 33 files** |
 | `cd frontend && pnpm run build` | ok |
-| `cd insightd && python -m pytest` | **106 passed, 0 skipped** |
+| `cd insightd && python -m pytest` | **107 passed, 0 skipped** (was 106; Track 0 added `test_the_harness_hides_the_environments_dsn_from_a_freshly_built_settings`) |
 | `python -m insightd.benchmark.validate` / `.report` | 28 fixtures / ALL FLOORS PASSED |
 | `python3 corpora/validate.py` | tax=14 tds=13 tcs=5 keystroke=32 isolation=13 migration=6 forecast=4 inventory=6 |
 
@@ -140,8 +149,20 @@ psql "$PG" -c "select tgname, tgdeferrable, tginitdeferred from pg_trigger t
   join pg_class c on c.oid=t.tgrelid where c.relname='stock_movement' and not tgisinternal;"
 
 # 4. A voucher hashed BEFORE inventory must still verify its chain (the
-#    CanonicalPayload one-way door): GET /vouchers/{id}/history on any pre-0025
-#    voucher must return verification.ok = true.
+#    CanonicalPayload one-way door). This used to say "GET
+#    /vouchers/{id}/history on any pre-0025 voucher" — that check is RETIRED,
+#    not skipped: `make reset-dev-db` destroys all 283,066 pre-0025
+#    voucher_version rows and they cannot be regenerated, so on any fresh
+#    database there is no such voucher left to point at.
+#
+#    The replacement reproduces a genuinely pre-inventory row instead of hunting
+#    for one. It inserts, as ADMIN, a voucher_version carrying the PINNED
+#    pre-inventory payload bytes and the PINNED BLAKE3 hash (copied verbatim
+#    from internal/ledger/stock_hash_test.go: preInventoryJSON / preInventoryHash
+#    = ec486146e6...) into a throwaway company, then reads it back over HTTP:
+cd backend && go test ./internal/server -run TestPreInventoryVoucherStillVerifiesItsChain -count=1 -v
+#    plus the DB-free wedge that pins the hash constant itself:
+cd backend && go test ./internal/ledger -run TestExistingVoucherHashesAreUnchanged -count=1 -v
 ```
 
 ---
@@ -185,8 +206,21 @@ phase('Review')      → adversarial, §4.3 — mandatory
   Re-run alone: 38/38.
 - **No agent may modify ACL rules, security levels or members of a PRE-EXISTING
   company.** Make a throwaway company instead.
-- **Never run `go test ./internal/server` unscoped while others work** — it
-  contains a test that disables DB triggers globally. Scope with `-run`.
+- ~~**Never run `go test ./internal/server` unscoped**~~ — **THIS BAN IS LIFTED**
+  (Track 0). It existed because two test harnesses ran `ALTER TABLE … DISABLE
+  TRIGGER` around their cleanup, and that statement is **database-wide and
+  persistent**, not session-scoped: while it was lifted, voucher immutability was
+  off for every connection, so a concurrent test asserting "the append-only
+  trigger rejects this UPDATE" passed while the trigger did nothing — and a
+  `t.Fatalf` between the disable and the re-enable left the invariant disarmed in
+  the shared database with nothing reporting it. Both sites are **deleted**
+  (`internal/security/isolation_test.go`, `internal/server/voucher_history_test.go`).
+  The only remaining mechanism is `internal/platform/testdb`'s **transaction-scoped
+  `SET LOCAL session_replication_role = replica`**, which `SET LOCAL` guarantees
+  cannot outlive its transaction, so no other connection ever observes it.
+  `internal/security` carries a test that fails the build if the banned statement
+  comes back. `make backend-test` (the unscoped `go test ./...`) is therefore
+  trustworthy again — which is what let `verify` depend on `backend-test-residue`.
 - **`go test ./...` under other load will produce false failures.**
   `internal/sync`'s `TestFuzzPartition` timed out at 600s and later died on
   `insert voucher_version: unexpected EOF`; it passes alone in 158s and the exact

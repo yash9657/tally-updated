@@ -31,6 +31,8 @@
  * re-derivation, server numbering).
  */
 
+import { writeFileSync } from "node:fs";
+
 import { createRestClient, createInsightdClient } from "../src/api";
 import type { CoredClient, VoucherRequest } from "../src/api";
 import { DEMO_PASSWORD, ensurePassword } from "./auth.mjs";
@@ -155,6 +157,12 @@ async function main(): Promise<void> {
   });
   const co = company.company_id;
   console.log(`\nDemo Traders  (created ${stamp})\n  company id: ${co}`);
+  // The id in MACHINE-READABLE form as well as in the log line. `pnpm verify:demo`
+  // takes the company as argv[2] and `pnpm seed:tenancy` takes it as argv[2] too,
+  // so until this file existed the only way to chain the steps was to eyeball the
+  // line above and paste it — which is why `make reset-dev-db` could not have a
+  // `make seed-all` sibling. Written next to the script, gitignored.
+  writeFileSync(new URL("../.demo-company-id", import.meta.url), co);
 
   // ---- Masters -------------------------------------------------------------
   const ledger = async (name: string, group: string, stateCode?: string) => {

@@ -16,6 +16,7 @@ import (
 	"github.com/khata/cored/internal/masters"
 	"github.com/khata/cored/internal/migration"
 	"github.com/khata/cored/internal/platform/db"
+	"github.com/khata/cored/internal/platform/testdb"
 	"github.com/khata/cored/internal/reporting"
 	migs "github.com/khata/cored/migrations"
 )
@@ -87,6 +88,11 @@ func setup(t *testing.T) (*db.Pool, context.Context, uuid.UUID) {
 	}); err != nil {
 		t.Fatalf("create company: %v", err)
 	}
+	// Teardown, registered the moment the company exists. An import test is one
+	// of the heaviest leakers in the tree: a single corpus import lands masters,
+	// vouchers, postings, bill allocations and reconciliation_queue rows, and
+	// reconciliation_queue alone accounts for 363 MB of the dev database.
+	testdb.Cleanup(t, companyID)
 	return pool, cctx, companyID
 }
 
@@ -222,5 +228,49 @@ func TestImportRequiresCompanyScope(t *testing.T) {
 	// No company in context: the GUC guard must refuse before posting anything.
 	if _, err := im.ImportFile(context.Background(), xmlPath, "t"); err == nil {
 		t.Fatal("expected import to fail without a company in context")
+	}
+}
+
+// TestMigrationHarnessRemovesItsCompany is the anti-rot guard on setup()'s
+// teardown. A harness that stops cleaning up fails nothing visible — it just
+// buries another imported company on every run, and this package's companies are
+// the fat ones: a corpus import brings masters, vouchers, postings, bill
+// allocations and a reconciliation_queue row along with it.
+//
+// The child tables are counted, not only `company`. Only notification_outbox
+// references company(id), and its foreign-key action is NO ACTION, so removing
+// the parent row alone orphans everything beneath it silently. An assertion that
+// checked `company` on its own would have called that bug fixed.
+func TestMigrationHarnessRemovesItsCompany(t *testing.T) {
+	if os.Getenv("CORED_SKIP_DB") != "" {
+		t.Skip("db tests skipped")
+	}
+	// Cleanups registered on the inner *testing.T have all run by the time t.Run
+	// returns, so the harness has had its chance before the next line.
+	var cid uuid.UUID
+	t.Run("harness", func(t *testing.T) { _, _, cid = setup(t) })
+	if cid == uuid.Nil {
+		t.Skip("harness skipped (no database), nothing to assert about teardown")
+	}
+
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, testdb.AdminDSNValue())
+	if err != nil {
+		t.Skipf("admin postgres unavailable: %v", err)
+	}
+	defer conn.Close(ctx)
+
+	// ADMIN, deliberately: the app role is FORCE-RLS'd to a single company and
+	// would answer 0 for every table whatever survived — a vacuous green.
+	for _, tbl := range []string{"company", "account_group", "ledger", "voucher_type", "acl_rule"} {
+		var n int
+		if err := conn.QueryRow(ctx, "SELECT count(*) FROM "+tbl+" WHERE company_id = $1", cid).Scan(&n); err != nil {
+			t.Fatalf("count %s for company %s: %v", tbl, cid, err)
+		}
+		if n != 0 {
+			t.Errorf("%s still holds %d rows for company %s after the harness cleaned up: "+
+				"the migration harness leaks them on EVERY run and nothing will ever delete them",
+				tbl, n, cid)
+		}
 	}
 }

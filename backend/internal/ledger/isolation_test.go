@@ -11,6 +11,7 @@ import (
 	"github.com/khata/cored/internal/identity"
 	"github.com/khata/cored/internal/ledger"
 	"github.com/khata/cored/internal/platform/db"
+	"github.com/khata/cored/internal/platform/testdb"
 	"github.com/shopspring/decimal"
 )
 
@@ -31,6 +32,12 @@ func TestTenantIsolation(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("create company B: %v", err)
 	}
+	// Company B is minted INLINE, not through setup(), and that is precisely the
+	// kind of site a cleanup retrofit walks straight past: the harness looks tidy,
+	// the package's own teardown test goes green, and half the companies still
+	// leak. Every cross-tenant test in this repo has a second creation site like
+	// this one; each needs its own registration.
+	testdb.Cleanup(t, companyB)
 
 	// Post one sale into A and two into B.
 	post := func(ctx context.Context, ids *identity.Service, no string) {
