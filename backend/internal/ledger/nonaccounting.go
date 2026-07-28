@@ -274,6 +274,21 @@ func validateStockVoucher(in VoucherInput) error {
 	if len(in.Inventory) == 0 {
 		return fmt.Errorf("ledger: a %s exists to record goods moving; it has no inventory lines", in.Class)
 	}
+	// "PRICE IT FOR ME" HAS NO ANSWER ON A DOCUMENT WITH NO MONEY SIDE. A price
+	// list quotes a SELLING or BUYING price, and these vouchers neither sell nor
+	// buy — a Delivery Note ships goods the invoice will price later, and a
+	// Stock Journal moves them between our own shelves at our own cost. Resolving
+	// a sales rate onto a transfer would carry stock at its selling price and
+	// book the margin as inventory. Refused here, naming the class, so the
+	// operator is told which screen they are in; writeStockMovements refuses it
+	// again as the last line of defence for classes this check cannot see.
+	for i, l := range in.Inventory {
+		if l.RateUnstated {
+			return fmt.Errorf(
+				"ledger: inventory line %d: a %s is not priced from a price list (it records goods moving, not a sale); state the rate the goods are carried at",
+				i+1, in.Class)
+		}
+	}
 	if want, fixed := fixedStockDirection(in.Class); fixed {
 		for i, l := range in.Inventory {
 			if l.Direction != want {
@@ -309,49 +324,6 @@ func validatePhysicalCount(cs []PhysicalCountLine) error {
 	return nil
 }
 
-// bookQtyExcludingVoucher returns the closing QUANTITY of one position as the
-// books stand, EXCLUDING the voucher currently being posted:
-//
-//	opening + net movements of every OTHER live voucher's CURRENT version
-//
-// THE EXCLUSION IS WHAT MAKES AN ALTER CORRECT, for the same reason it does in
-// checkNegativeStock: movements are versioned, the superseded version's rows
-// are still in the table and voucher_head has not moved yet at this point in
-// the transaction. Counting them would compute the delta against a book that
-// already contains this voucher's own previous correction, so re-counting the
-// same shelf twice would double the adjustment.
-//
-// THIS QUERY IS DELIBERATELY IDENTICAL to the one inside checkNegativeStock
-// (stock.go) and to check_stock_not_negative's body (migration 0025). The three
-// must agree: this one decides what the correction IS, and the other two decide
-// whether the result is allowed. If they ever diverge, a Physical Stock voucher
-// would compute a delta against one book and be judged against another, and the
-// count would be refused for negative stock it did not create.
-func bookQtyExcludingVoucher(ctx context.Context, tx pgx.Tx, companyID, voucherID uuid.UUID, p stockPosition) (decimal.Decimal, error) {
-	var qty decimal.Decimal
-	if err := tx.QueryRow(ctx,
-		`SELECT COALESCE((SELECT SUM(so.qty) FROM stock_opening so
-		                   WHERE so.company_id    = $1
-		                     AND so.stock_item_id = $2
-		                     AND so.godown_id IS NOT DISTINCT FROM $3
-		                     AND so.batch_id  IS NOT DISTINCT FROM $4), 0)
-		      + COALESCE((SELECT SUM(CASE WHEN sm.direction = 'IN' THEN sm.qty ELSE -sm.qty END)
-		                    FROM stock_movement sm
-		                    JOIN voucher_head vh
-		                      ON vh.company_id         = sm.company_id
-		                     AND vh.current_version_id = sm.voucher_version_id
-		                   WHERE sm.company_id    = $1
-		                     AND sm.stock_item_id = $2
-		                     AND sm.godown_id IS NOT DISTINCT FROM $3
-		                     AND sm.batch_id  IS NOT DISTINCT FROM $4
-		                     AND vh.is_deleted = false
-		                     AND vh.voucher_id <> $5), 0)`,
-		companyID, p.item, nullUUID(p.godown), nullUUID(p.batch), voucherID).Scan(&qty); err != nil {
-		return decimal.Zero, fmt.Errorf("ledger: read book stock position for the physical count: %w", err)
-	}
-	return qty, nil
-}
-
 // buildPhysicalStockDeltas turns counted positions into the movements that make
 // the books agree with the shelf. It runs INSIDE post()'s transaction, because
 // the book position it compares against must be the one the movements are about
@@ -379,7 +351,19 @@ func buildPhysicalStockDeltas(ctx context.Context, tx pgx.Tx, companyID, voucher
 		}
 		seen[p] = true
 
-		book, err := bookQtyExcludingVoucher(ctx, tx, companyID, voucherID, p)
+		// THE BOOK FIGURE THE CORRECTION IS MEASURED AGAINST, read through the
+		// one hoisted spelling of the closing-position query (stock.go) rather
+		// than through a second copy of it. That single-sourcing is load-bearing
+		// and not tidiness: this call decides what the correction IS, and
+		// checkNegativeStock decides whether the result is ALLOWED. Two copies
+		// that drifted would difference the count against one book and judge it
+		// against another, and the count the operator actually made would be
+		// refused for negative stock it did not create.
+		//
+		// voucherID is EXCLUDED because this runs before voucher_head's pointer
+		// moves; see closingPosition's comment for what counting the superseded
+		// version would do to a re-counted shelf.
+		book, err := closingPosition(ctx, tx, companyID, p, voucherID)
 		if err != nil {
 			return nil, err
 		}

@@ -1,0 +1,21 @@
+{
+  "id": "gateway-alt-f10-opens-physical-stock",
+  "description": "From Gateway of Tally, Alt+F10 opens Physical Stock — the operator states the COUNT and the server derives the correction",
+  "keymapProfile": "tallyprime",
+  "startScreen": "gateway",
+  "events": [
+    {
+      "type": "key",
+      "combo": "Alt+F10"
+    }
+  ],
+  "expect": {
+    "screen": "voucher",
+    "voucherType": "physical-stock",
+    "field": "date",
+    "buttonBarContains": [
+      "Alt+F10 Physical Stock",
+      "Ctrl+A Accept"
+    ]
+  }
+}

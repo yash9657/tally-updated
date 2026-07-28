@@ -77,6 +77,29 @@ type InventoryLine struct {
 	Qty         decimal.Decimal
 	Rate        decimal.Decimal
 	DiscountPct decimal.Decimal
+	// RateUnstated marks a line that said NOTHING about price — "price it for
+	// me" — as opposed to one that states a price of zero.
+	//
+	// WHY A FLAG AND NOT "ZERO MEANS ASK THE PRICE LIST". A rate of zero is a
+	// STATED FACT: a free sample, a warranty replacement, a promotional unit.
+	// Repricing it from the price list would put a price on goods the operator
+	// deliberately gave away, and nothing downstream could tell that had
+	// happened — the invoice would simply be wrong, and balanced. Decimal has no
+	// "absent", so the absence has to be carried in its own field.
+	//
+	// THE ZERO VALUE IS "STATED", AND THAT POLARITY IS LOAD-BEARING. Every
+	// caller that predates pricing — the importer, the offline sequencer, the
+	// alter path re-posting a fetched voucher — constructs an InventoryLine
+	// without knowing this field exists, and must keep every rate it sends,
+	// including a zero one. Spelt the other way round ("RateStated"), each of
+	// those callers would silently start asking the price list to reprice its
+	// free samples. See pricing.go.
+	//
+	// It is resolved to a real rate inside the item-invoice generator and is
+	// false by the time a movement is written; writeStockMovements refuses a
+	// line that still carries it, because there is no class other than an item
+	// invoice that knows how to price one.
+	RateUnstated bool
 	// Amount is the line total AS ENTERED. It is deliberately not recomputed
 	// from qty * rate here: Tally lets a user override a line amount, and
 	// silently "correcting" it would make the printed invoice disagree with the
@@ -210,6 +233,25 @@ func validateInventory(ls []InventoryLine) error {
 		if l.Rate.IsNegative() {
 			return fmt.Errorf("ledger: inventory line %d: rate must be non-negative, got %s", i+1, l.Rate.StringFixed(4))
 		}
+		// "Price it for me" and "the price is X" are contradictory statements
+		// about the same line, and there is no reading of the pair that is not a
+		// guess about which one the operator meant.
+		if l.RateUnstated && !l.Rate.IsZero() {
+			return fmt.Errorf(
+				"ledger: inventory line %d: the line asks to be priced from the price list but also states a rate of %s; send one or the other",
+				i+1, l.Rate.StringFixed(4))
+		}
+		// A discount is a modifier OF a price, and a price list quotes the two
+		// together ("1,000.00 less 5%", which migration 0030 stores as two
+		// columns precisely so the invoice can print both). Taking the rate from
+		// the list and the discount from the request would invoice at a net rate
+		// that appears in no price list and in no request, and no later reader
+		// could reconstruct where it came from.
+		if l.RateUnstated && !l.DiscountPct.IsZero() {
+			return fmt.Errorf(
+				"ledger: inventory line %d: the line asks to be priced from the price list but states its own discount of %s%%; the list quotes the rate and the discount together",
+				i+1, l.DiscountPct.String())
+		}
 		if l.Amount.IsNegative() {
 			return fmt.Errorf("ledger: inventory line %d: amount must be non-negative, got %s", i+1, l.Amount.StringFixed(4))
 		}
@@ -293,30 +335,9 @@ func checkNegativeStock(ctx context.Context, tx pgx.Tx, companyID, voucherID uui
 	}
 
 	for _, p := range order {
-		var existing decimal.Decimal
-		// The canonical closing-position query (0025's trigger body), minus this
-		// voucher: opening + the net of every OTHER live voucher's CURRENT
-		// version. IS NOT DISTINCT FROM is required because the dimensions are
-		// nullable and "= NULL" would match nothing.
-		if err := tx.QueryRow(ctx,
-			`SELECT COALESCE((SELECT SUM(so.qty) FROM stock_opening so
-			                   WHERE so.company_id    = $1
-			                     AND so.stock_item_id = $2
-			                     AND so.godown_id IS NOT DISTINCT FROM $3
-			                     AND so.batch_id  IS NOT DISTINCT FROM $4), 0)
-			      + COALESCE((SELECT SUM(CASE WHEN sm.direction = 'IN' THEN sm.qty ELSE -sm.qty END)
-			                    FROM stock_movement sm
-			                    JOIN voucher_head vh
-			                      ON vh.company_id         = sm.company_id
-			                     AND vh.current_version_id = sm.voucher_version_id
-			                   WHERE sm.company_id    = $1
-			                     AND sm.stock_item_id = $2
-			                     AND sm.godown_id IS NOT DISTINCT FROM $3
-			                     AND sm.batch_id  IS NOT DISTINCT FROM $4
-			                     AND vh.is_deleted = false
-			                     AND vh.voucher_id <> $5), 0)`,
-			companyID, p.item, nullUUID(p.godown), nullUUID(p.batch), voucherID).Scan(&existing); err != nil {
-			return fmt.Errorf("ledger: read closing stock position: %w", err)
+		existing, err := closingPosition(ctx, tx, companyID, p, voucherID)
+		if err != nil {
+			return err
 		}
 
 		closing := existing.Add(delta[p])
@@ -346,6 +367,64 @@ func checkNegativeStock(ctx context.Context, tx pgx.Tx, companyID, voucherID uui
 	return nil
 }
 
+// closingPosition is THE ONE GO SPELLING of the closing-quantity-per-position
+// query:
+//
+//	opening
+//	  + net movements of every live voucher's CURRENT version
+//	  (optionally excluding one voucher — see below)
+//
+// THERE WERE THREE COPIES OF THIS, AND THEY MUST ALL AGREE. Migration 0025's
+// check_stock_not_negative trigger body is the third and stays in SQL (it is the
+// authority, and it has to run where a bug in — or a bypass of — this layer
+// cannot reach it). The two GO copies were checkNegativeStock's inline query and
+// nonaccounting.go's bookQtyExcludingVoucher, and they were duplicated because
+// the own-voucher exclusion differs by caller. That duplication was not
+// cosmetic: one of the two decides WHAT a Physical Stock correction IS and the
+// other decides WHETHER the result is allowed, so a drift between them would
+// compute a delta against one book and judge it against another — and the count
+// the operator actually made would be refused for negative stock it did not
+// create. So the exclusion is a PARAMETER and the query is written once.
+//
+// excludeVoucherID = uuid.Nil excludes nothing, which is EXACTLY what the
+// deferred trigger computes at commit (it fires after voucher_head's pointer has
+// moved). Any other value excludes that voucher, which is what a caller running
+// BEFORE the head pointer moves needs: movements are versioned, the superseded
+// version's rows are still in the table and the pointer has not moved yet, so
+// counting them would compare new lines against a balance that already contains
+// the old ones — altering "OUT 10" to "OUT 4" would be refused as if it were an
+// additional withdrawal of 4, and a re-counted shelf would have its correction
+// applied twice.
+//
+// IS NOT DISTINCT FROM is required on both dimensions because they are nullable:
+// "= NULL" is UNKNOWN and would match nothing, so every untracked position would
+// read as a balance of zero.
+func closingPosition(ctx context.Context, tx pgx.Tx, companyID uuid.UUID, p stockPosition, excludeVoucherID uuid.UUID) (decimal.Decimal, error) {
+	var qty decimal.Decimal
+	if err := tx.QueryRow(ctx,
+		`SELECT COALESCE((SELECT SUM(so.qty) FROM stock_opening so
+		                   WHERE so.company_id    = $1
+		                     AND so.stock_item_id = $2
+		                     AND so.godown_id IS NOT DISTINCT FROM $3
+		                     AND so.batch_id  IS NOT DISTINCT FROM $4), 0)
+		      + COALESCE((SELECT SUM(CASE WHEN sm.direction = 'IN' THEN sm.qty ELSE -sm.qty END)
+		                    FROM stock_movement sm
+		                    JOIN voucher_head vh
+		                      ON vh.company_id         = sm.company_id
+		                     AND vh.current_version_id = sm.voucher_version_id
+		                   WHERE sm.company_id    = $1
+		                     AND sm.stock_item_id = $2
+		                     AND sm.godown_id IS NOT DISTINCT FROM $3
+		                     AND sm.batch_id  IS NOT DISTINCT FROM $4
+		                     AND vh.is_deleted = false
+		                     AND ($5::uuid IS NULL OR vh.voucher_id <> $5)), 0)`,
+		companyID, p.item, nullUUID(p.godown), nullUUID(p.batch),
+		nullUUID(excludeVoucherID)).Scan(&qty); err != nil {
+		return decimal.Zero, fmt.Errorf("ledger: read closing stock position: %w", err)
+	}
+	return qty, nil
+}
+
 // writeStockMovements inserts one stock_movement per inventory line on the
 // version being written. It is called from post() ONLY, inside post()'s
 // transaction, immediately after the GST-line loop — so a movement can never
@@ -358,6 +437,23 @@ func checkNegativeStock(ctx context.Context, tx pgx.Tx, companyID, voucherID uui
 // weighted-average replay reproducible.
 func writeStockMovements(ctx context.Context, tx pgx.Tx, companyID, versionID uuid.UUID, lines []InventoryLine) error {
 	for n, l := range lines {
+		// THE BACKSTOP FOR AN UNPRICED LINE, put here because this is the single
+		// non-test INSERT path into stock_movement and therefore the one place
+		// EVERY class funnels through.
+		//
+		// Only the item-invoice generator knows how to resolve a rate from the
+		// price list (pricing.go); a Delivery Note, a Stock Journal, or a plain
+		// Purchase keyed with explicit postings and no GST would each carry a
+		// RateUnstated line straight past it. Without this the line would be
+		// written at a rate of ZERO — which on an inward movement writes the
+		// item's weighted-average cost down and understates closing stock for
+		// every period after it, with nothing anywhere reporting an error. Refuse
+		// instead, naming the line.
+		if l.RateUnstated {
+			return fmt.Errorf(
+				"ledger: inventory line %d reached the movement writer with its price unresolved; only an item invoice (inventory + GST) is priced from a price list, so state the rate on this voucher",
+				n+1)
+		}
 		moveID, err := uuid.NewV7()
 		if err != nil {
 			return fmt.Errorf("ledger: new stock movement id: %w", err)

@@ -136,9 +136,18 @@ const FEATURES: {
         note: "Not built. v1 values everything at WEIGHTED AVERAGE (Tally's default) behind a valuer interface whose state is a strict subset of what FIFO needs, so FIFO is a new arm plus fixtures rather than a schema change. An item whose valuation_method names an unimplemented valuer FAILS LOUDLY rather than being quietly valued at average under a FIFO heading.",
       },
       {
-        name: "Inventory vouchers (Stock Journal, Physical Stock, Delivery/Receipt Note), order processing, BoM",
+        name: "Inventory vouchers (Delivery Note, Receipt Note, Stock Journal, Physical Stock)",
+        state: "on",
+        // This row read "Not built" for one release WITH the server half
+        // shipped, and said so plainly: the operator could not key one. It
+        // flips in the same change that gives them a screen, not the change
+        // that gave them a route.
+        note: "Alt+F8 Delivery Note / Alt+F9 Receipt Note / Alt+F7 Stock Journal / Alt+F10 Physical Stock. Goods move and NOTHING is posted to the ledger — a warehouse ships hours or weeks before the billing department raises the invoice, and a system that can only record a movement by also recording revenue forces the operator to invent an invoice or key nothing. The direction is fixed by the document (a Receipt Note cannot ship goods out); a Stock Journal posts each keyed transfer as a PAIR of movements, so a transfer cannot become a stock write-off; and Physical Stock sends the COUNT — the server derives the correction against the books, so the count can never be a delta measured against a stale read. Physical Stock is REFUSED to the Data Entry level by rule (migration 0031): it is the only document that makes the books agree with a number a human asserts, so it is a supervisor's key, and the screen states that refusal rather than showing a blank form.",
+      },
+      {
+        name: "Order processing (Sales / Purchase Orders) and Bill of Materials",
         state: "off",
-        note: "Not built FOR THE OPERATOR — there is no voucher screen behind Alt+F8/Alt+F9/Alt+F7/Alt+F10 yet, so you cannot key one, which is why this still reads Not built. What DOES exist is the server half: all four post over the API, move stock, and post ZERO accounting lines, restating under ALTER and erasing under DELETE like any other voucher. Physical Stock is additionally REFUSED to the Data Entry level by rule: it is the only document that makes the books agree with a number a human asserts, so it is a supervisor's key. Order processing and BoM are not built at all — an order is a COMMITMENT, not a movement, and one that moved stock would let a quotation deplete the warehouse.",
+        note: "Not built, and not modelled at all rather than modelled wrong. An order is a COMMITTED quantity, not a movement: the stock ledger has exactly one primitive (a positive quantity plus a direction) and every reader SUMS it, so an order recorded as a movement would let a quotation deplete the warehouse and then refuse the real sale for negative stock. It needs its own table, its own fulfilment linkage, and a second pair of columns BESIDE the physical balance in every stock report. Ctrl+F8 / Ctrl+F9 say so when pressed.",
       },
       {
         name: "Stock groups and compound units (Box of 12)",

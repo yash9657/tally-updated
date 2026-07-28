@@ -1,0 +1,21 @@
+{
+  "id": "gateway-alt-f9-opens-receipt-note",
+  "description": "From Gateway of Tally, Alt+F9 opens the Receipt Note — goods IN before the supplier's bill, no accounting entry",
+  "keymapProfile": "tallyprime",
+  "startScreen": "gateway",
+  "events": [
+    {
+      "type": "key",
+      "combo": "Alt+F9"
+    }
+  ],
+  "expect": {
+    "screen": "voucher",
+    "voucherType": "receipt-note",
+    "field": "date",
+    "buttonBarContains": [
+      "Alt+F9 Receipt Note",
+      "Ctrl+A Accept"
+    ]
+  }
+}

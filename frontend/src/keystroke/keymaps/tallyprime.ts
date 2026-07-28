@@ -83,7 +83,7 @@ const RAW_BINDINGS: Record<string, KeymapAction> = {
   F10: {
     kind: "unavailable",
     feature: "Other Vouchers (F10)",
-    note: "Order vouchers are not built. The stock vouchers ARE — Alt+F7/F8/F9/F10 — but have no entry screen yet; F4–F9 cover the six accounting vouchers and Alt+F5/Alt+F6 the debit/credit notes.",
+    note: "Order vouchers are not built — an order is a COMMITMENT, not a movement. The four stock vouchers ARE, screen and all: Alt+F7 Stock Journal, Alt+F8 Delivery Note, Alt+F9 Receipt Note, Alt+F10 Physical Stock. F4–F9 cover the six accounting vouchers and Alt+F5/Alt+F6 the debit/credit notes.",
   },
   // Debit / Credit Note — REAL voucher screens with their own numbering series
   // and their own GSTR-1 treatment (cdnr, table 9B). They were bound as
@@ -93,51 +93,31 @@ const RAW_BINDINGS: Record<string, KeymapAction> = {
   "Alt+F6": { kind: "voucher", voucherType: "credit-note" },
   // ---- The NON-ACCOUNTING STOCK VOUCHERS (Alt+F7/F8/F9/F10).
   //
-  // READ THE NOTES BEFORE CHANGING THEM. These four were `unavailable` because
-  // the SERVER could not record a stock movement without also recording
-  // revenue. That is no longer true: the movement plane, the four voucher
-  // classes and their routes all exist, and migration 0031 decides which
-  // security levels may key them. What is still missing is the ENTRY SCREEN —
-  // a grid with items, godowns, batches and quantities and NO ledger column.
+  // These four were `unavailable` in two stages: first because the SERVER could
+  // not record a stock movement without also recording revenue, and then
+  // because the movement plane existed but there was no ENTRY SCREEN — a
+  // `{ kind: "voucher", voucherType: "delivery-note" }` binding would have
+  // navigated to VoucherScreen, which resolves its layout through
+  // configFor(voucherType), a Readonly<Record<VoucherType, VoucherConfig>> with
+  // no entry for these classes. The key would not have "partly worked"; it
+  // would have taken the operator to an undefined config.
   //
-  // WHY THEY ARE STILL BOUND TO `unavailable` AND NOT TO `voucher`. A
-  // `{ kind: "voucher", voucherType: "delivery-note" }` binding would navigate
-  // to VoucherScreen, which resolves its layout through
-  // configFor(voucherType) — a Readonly<Record<VoucherType, VoucherConfig>>
-  // with no entry for these classes. The key would not "partly work"; it would
-  // take the operator to an undefined config. So the honest binding is the one
-  // that says what is true: the document exists, the screen does not.
-  //
-  // The slice that builds the screen owns keystroke/types.ts (extending
-  // VoucherType), screens/vouchers/voucherConfig.ts (the four configs, each
-  // with post/alter) and the CoredClient methods behind them; it should flip
-  // these four bindings to `voucher` and add the button-bar entries in the same
-  // change. buttons.test.ts REFUSES to let an `unavailable` action be
-  // advertised on a button bar, which is why the bar carries none of them yet:
-  // a button a user can see and press must do something.
-  "Alt+F7": {
-    kind: "unavailable",
-    feature: "Stock Journal (Alt+F7)",
-    note: "The server records stock journals (transfers and manufacture) — the entry screen is not built yet.",
-  },
-  "Alt+F8": {
-    kind: "unavailable",
-    feature: "Delivery Note (Alt+F8)",
-    note: "The server records delivery notes (goods out before the invoice) — the entry screen is not built yet.",
-  },
-  "Alt+F9": {
-    kind: "unavailable",
-    feature: "Receipt Note (Alt+F9)",
-    note: "The server records receipt notes (goods in before the bill) — the entry screen is not built yet.",
-  },
-  // Alt+F10 is TallyPrime's Physical Stock key and it was bound to NOTHING,
-  // which this file's coverage rule calls the worst outcome of all: the user
-  // cannot tell a missing feature from a broken app. It is bound now.
-  "Alt+F10": {
-    kind: "unavailable",
-    feature: "Physical Stock (Alt+F10)",
-    note: "The server records a physical stock count — the entry screen is not built yet, and note that the seeded Data Entry level is deliberately refused this one (migration 0031).",
-  },
+  // BOTH ARE NOW DONE, in the change that flipped these bindings: VoucherType
+  // carries the four classes, VOUCHER_CONFIGS has a real config with a real
+  // post/alter for each, and StockVoucherScreen renders the grid (items,
+  // godowns, quantities and NO ledger column). They are advertised on the
+  // voucher button bar in the same change, which buttons.test.ts permits only
+  // because they no longer resolve to `unavailable`.
+  "Alt+F7": { kind: "voucher", voucherType: "stock-journal" },
+  "Alt+F8": { kind: "voucher", voucherType: "delivery-note" },
+  "Alt+F9": { kind: "voucher", voucherType: "receipt-note" },
+  // Alt+F10 is TallyPrime's Physical Stock key and it was bound to NOTHING at
+  // one point, which this file's coverage rule calls the worst outcome of all:
+  // the user cannot tell a missing feature from a broken app. Note that the
+  // seeded Data Entry level is deliberately REFUSED this class (migration
+  // 0031), so the key opens the screen for everyone and the POST is what
+  // answers 403 — with a stated reason, not a blank form.
+  "Alt+F10": { kind: "voucher", voucherType: "physical-stock" },
   "Ctrl+F4": {
     kind: "unavailable",
     feature: "Payroll voucher (Ctrl+F4)",
@@ -150,7 +130,7 @@ const RAW_BINDINGS: Record<string, KeymapAction> = {
   "Ctrl+F7": {
     kind: "unavailable",
     feature: "Physical Stock (Ctrl+F7 — TallyPrime moved it to Alt+F10)",
-    note: "In this profile the physical stock count is Alt+F10; its entry screen is not built yet either.",
+    note: "In this profile the physical stock count is Alt+F10 — press that instead; it opens the real screen.",
   },
   "Ctrl+F8": {
     kind: "unavailable",

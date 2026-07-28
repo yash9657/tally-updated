@@ -1,0 +1,21 @@
+{
+  "id": "gateway-alt-f8-opens-delivery-note",
+  "description": "From Gateway of Tally, Alt+F8 opens the Delivery Note — goods OUT before the invoice, no accounting entry",
+  "keymapProfile": "tallyprime",
+  "startScreen": "gateway",
+  "events": [
+    {
+      "type": "key",
+      "combo": "Alt+F8"
+    }
+  ],
+  "expect": {
+    "screen": "voucher",
+    "voucherType": "delivery-note",
+    "field": "date",
+    "buttonBarContains": [
+      "Alt+F8 Delivery Note",
+      "Ctrl+A Accept"
+    ]
+  }
+}

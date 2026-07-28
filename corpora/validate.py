@@ -39,6 +39,15 @@ KNOWN_VOUCHER_TYPES = {
     "contra",
     "credit-note",
     "debit-note",
+    # The NON-ACCOUNTING stock vouchers (Alt+F8/F9/F7/F10). They move goods and
+    # post ZERO accounting lines. Added in the same change that gave them an
+    # entry screen — check_vocabulary_matches_typescript() would otherwise
+    # reject a perfectly correct fixture naming one, which is this file's
+    # documented worst failure mode.
+    "delivery-note",
+    "receipt-note",
+    "stock-journal",
+    "physical-stock",
 }
 
 # Mirrors ScreenKind in frontend/src/keystroke/types.ts. It had fallen behind:

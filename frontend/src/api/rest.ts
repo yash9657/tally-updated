@@ -198,6 +198,35 @@ export function createRestClient(
       );
     },
 
+    // The non-accounting stock vouchers. wireVoucher is still applied for
+    // uniformity; it is a no-op here, because a body with no postings and no
+    // bill allocations has no dr_cr to translate — and one of these carrying
+    // either is refused by the server, not silently normalized.
+    postDeliveryNoteVoucher(companyID, req: VoucherRequest) {
+      return http.post<VoucherResponse>(
+        `${company(companyID)}/vouchers/delivery-note`,
+        wireVoucher(req),
+      );
+    },
+    postReceiptNoteVoucher(companyID, req: VoucherRequest) {
+      return http.post<VoucherResponse>(
+        `${company(companyID)}/vouchers/receipt-note`,
+        wireVoucher(req),
+      );
+    },
+    postStockJournalVoucher(companyID, req: VoucherRequest) {
+      return http.post<VoucherResponse>(
+        `${company(companyID)}/vouchers/stock-journal`,
+        wireVoucher(req),
+      );
+    },
+    postPhysicalStockVoucher(companyID, req: VoucherRequest) {
+      return http.post<VoucherResponse>(
+        `${company(companyID)}/vouchers/physical-stock`,
+        wireVoucher(req),
+      );
+    },
+
     alterSalesVoucher(companyID, voucherID, req: VoucherRequest) {
       return http.put<VoucherResponse>(
         `${company(companyID)}/vouchers/sales/${encodeURIComponent(voucherID)}`,
@@ -243,6 +272,30 @@ export function createRestClient(
     alterDebitNoteVoucher(companyID, voucherID, req: VoucherRequest) {
       return http.put<VoucherResponse>(
         `${company(companyID)}/vouchers/debit-note/${encodeURIComponent(voucherID)}`,
+        wireVoucher(req),
+      );
+    },
+    alterDeliveryNoteVoucher(companyID, voucherID, req: VoucherRequest) {
+      return http.put<VoucherResponse>(
+        `${company(companyID)}/vouchers/delivery-note/${encodeURIComponent(voucherID)}`,
+        wireVoucher(req),
+      );
+    },
+    alterReceiptNoteVoucher(companyID, voucherID, req: VoucherRequest) {
+      return http.put<VoucherResponse>(
+        `${company(companyID)}/vouchers/receipt-note/${encodeURIComponent(voucherID)}`,
+        wireVoucher(req),
+      );
+    },
+    alterStockJournalVoucher(companyID, voucherID, req: VoucherRequest) {
+      return http.put<VoucherResponse>(
+        `${company(companyID)}/vouchers/stock-journal/${encodeURIComponent(voucherID)}`,
+        wireVoucher(req),
+      );
+    },
+    alterPhysicalStockVoucher(companyID, voucherID, req: VoucherRequest) {
+      return http.put<VoucherResponse>(
+        `${company(companyID)}/vouchers/physical-stock/${encodeURIComponent(voucherID)}`,
         wireVoucher(req),
       );
     },

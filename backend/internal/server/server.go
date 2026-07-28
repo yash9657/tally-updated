@@ -1059,11 +1059,21 @@ type inventoryLineReq struct {
 	// carries the sign. Validation of the token itself belongs to the ledger
 	// (validateInventory), so an unknown direction is a 422 with a domain
 	// message rather than a 400 from a second, drifting copy of the rule here.
-	Direction   string `json:"direction"`
-	Qty         string `json:"qty"`
-	Rate        string `json:"rate"`
-	DiscountPct string `json:"discount_pct"`
-	Amount      string `json:"amount"`
+	Direction string `json:"direction"`
+	Qty       string `json:"qty"`
+	// Rate is a *string so ABSENT is distinguishable from "0".
+	//
+	// An omitted rate means "price this for me from the effective price list";
+	// a rate of "0" is a STATED fact — a free sample — and must never be
+	// silently repriced. A plain string cannot tell the two apart, because
+	// encoding/json leaves a missing field as "", which is also what a client
+	// sends when it means nothing in particular. Without this pointer no HTTP
+	// caller could ever produce an unpriced line and the price list, which the
+	// ledger already consults inside post()'s transaction, would be reachable
+	// only from Go.
+	Rate        *string `json:"rate"`
+	DiscountPct string  `json:"discount_pct"`
+	Amount      string  `json:"amount"`
 }
 
 // physicalCountLineReq is ONE counted position on a Physical Stock voucher:
@@ -1611,10 +1621,16 @@ func buildInventoryLine(w http.ResponseWriter, lineNo int, l inventoryLineReq) (
 		writeError(w, http.StatusBadRequest, "invalid qty"+where)
 		return out, false
 	}
-	rate, err := optionalDecimal(l.Rate)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid rate"+where)
-		return out, false
+	// A MISSING rate asks the ledger to price the line; a PRESENT one is taken
+	// as stated, including "0".
+	var rate decimal.Decimal
+	rateUnstated := l.Rate == nil
+	if !rateUnstated {
+		rate, err = optionalDecimal(*l.Rate)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid rate"+where)
+			return out, false
+		}
 	}
 	discount, err := optionalDecimal(l.DiscountPct)
 	if err != nil {
@@ -1628,14 +1644,15 @@ func buildInventoryLine(w http.ResponseWriter, lineNo int, l inventoryLineReq) (
 	}
 
 	return ledger.InventoryLine{
-		StockItemID: itemID,
-		GodownID:    godownID,
-		BatchID:     batchID,
-		Direction:   ledger.Direction(l.Direction),
-		Qty:         qty,
-		Rate:        rate,
-		DiscountPct: discount,
-		Amount:      amount,
+		StockItemID:  itemID,
+		GodownID:     godownID,
+		BatchID:      batchID,
+		Direction:    ledger.Direction(l.Direction),
+		Qty:          qty,
+		Rate:         rate,
+		RateUnstated: rateUnstated,
+		DiscountPct:  discount,
+		Amount:       amount,
 	}, true
 }
 

@@ -24,16 +24,14 @@ function item(key: string, label: string): ButtonBarItem {
  * fixed positions are part of the muscle memory contract), plus the universal
  * accept/navigation buttons.
  *
- * WHY THE STOCK VOUCHERS (Alt+F7 Stock Journal, Alt+F8 Delivery Note, Alt+F9
- * Receipt Note, Alt+F10 Physical Stock) ARE NOT ON THIS BAR YET. The server
- * records all four and the ACL decides who may key them, but they have no entry
- * screen, so keymaps/tallyprime.ts still binds them to `unavailable` — and
- * buttons.test.ts fails the build if a bar advertises an `unavailable` action.
- * That rule is deliberate and should not be relaxed to get the buttons on
- * early: a button a user can SEE and PRESS that answers "not built" is worse
- * than no button, because the operator reaches for it by position from then on.
- * Add these entries in the same change that builds the screen and flips those
- * four bindings to `voucher`.
+ * THE STOCK VOUCHERS (Alt+F7 Stock Journal, Alt+F8 Delivery Note, Alt+F9
+ * Receipt Note, Alt+F10 Physical Stock) EARNED THEIR PLACE HERE only once they
+ * had an entry screen. buttons.test.ts fails the build if a bar advertises an
+ * `unavailable` action, and that rule was never relaxed to get them on early: a
+ * button a user can SEE and PRESS that answers "not built" is worse than no
+ * button, because the operator reaches for it by position from then on. They
+ * are listed AFTER the six accounting keys so the fixed positions of F4–F9 —
+ * the part that is muscle memory — do not move.
  */
 const VOUCHER_BAR: readonly ButtonBarItem[] = [
   item("F4", "Contra"),
@@ -42,6 +40,10 @@ const VOUCHER_BAR: readonly ButtonBarItem[] = [
   item("F7", "Journal"),
   item("F8", "Sales"),
   item("F9", "Purchase"),
+  item("Alt+F7", "Stock Journal"),
+  item("Alt+F8", "Delivery Note"),
+  item("Alt+F9", "Receipt Note"),
+  item("Alt+F10", "Physical Stock"),
   item("F2", "Date"),
   item("Alt+C", "Create Master"),
   item("Ctrl+H", "Change Mode"),

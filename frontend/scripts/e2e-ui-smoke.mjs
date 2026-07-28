@@ -460,13 +460,22 @@ try {
 
 try {
   // A key whose FEATURE is not built must say so — never do nothing.
-  // Alt+F7 (Stock Journal) stands in for the old Alt+F6 probe: credit notes are
-  // built now, inventory vouchers are not.
+  //
+  // THIS PROBE HAS MOVED TWICE, and each move is the product getting built:
+  // Alt+F6 (Credit Note) -> Alt+F7 (Stock Journal) -> Ctrl+F8 (Sales Order).
+  // Alt+F7 opens a real Stock Journal screen as of the inventory work, so it
+  // stopped being an example of an unbuilt key and this flow correctly failed.
+  // Sales Order is deliberately NOT built: an order is a COMMITMENT, not a
+  // movement, and one that moved stock would let a quotation deplete the
+  // warehouse — so it needs a committed-quantity concept the movement ledger
+  // does not have. When orders ARE built, move this probe again rather than
+  // deleting it; the invariant it guards (a bound key never silently does
+  // nothing) outlives any particular example.
   await toGateway();
-  await page.keyboard.press("Alt+F7"); // Stock Journal
+  await page.keyboard.press("Control+F8"); // Sales Order
   await page.waitForTimeout(400);
   const msg = await status();
-  rec("A key for an unbuilt feature explains itself", /Stock Journal/.test(msg) && /not built/i.test(msg), msg);
+  rec("A key for an unbuilt feature explains itself", /Sales Order/.test(msg) && /not built/i.test(msg), msg);
 } catch (e) { rec("A key for an unbuilt feature explains itself", false, e.message); }
 
 try {

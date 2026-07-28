@@ -51,6 +51,7 @@ import type {
   GSTLineRequest,
   InventoryLineRequest,
   InventoryLineView,
+  PhysicalCountLineRequest,
   PostingRequest,
   ListGodownsResponse,
   ListStockBatchesResponse,
@@ -112,6 +113,30 @@ const ITEM_INVOICE_DIRECTION: Readonly<Record<string, "IN" | "OUT">> = {
   "debit-note": "OUT",
   purchase: "IN",
   "credit-note": "IN",
+};
+
+/**
+ * The NON-ACCOUNTING classes, mirroring ledger.stockOnlyClasses. Kept as its
+ * own literal set rather than derived from "not in ITEM_INVOICE_ORIENTATION",
+ * for the same reason the Go side does: a class added without being classified
+ * either way must be a visible omission, not a silent grant of the
+ * no-postings-required behaviour.
+ */
+const STOCK_ONLY_CLASSES: Readonly<Record<string, true>> = {
+  "delivery-note": true,
+  "receipt-note": true,
+  "stock-journal": true,
+  "physical-stock": true,
+};
+
+/**
+ * The ONE direction a class's lines must all take, mirroring
+ * ledger.fixedStockDirection. A Stock Journal has none (a transfer is an OUT
+ * and an IN); Physical Stock has none either, because its movement is DERIVED.
+ */
+const STOCK_FIXED_DIRECTION: Readonly<Record<string, "IN" | "OUT">> = {
+  "delivery-note": "OUT",
+  "receipt-note": "IN",
 };
 
 let idCounter = 0;
@@ -363,6 +388,14 @@ const CLASS_NUMBER_FORMATS: Readonly<Record<string, NumberFormat>> = {
   payment: { prefix: "PYMT/", suffix: "", width: null },
   contra: { prefix: "CTRA/", suffix: "", width: null },
   journal: { prefix: "JRNL/", suffix: "", width: null },
+  // The stock vouchers carry their OWN series, as they do in Tally: a delivery
+  // note and the invoice that follows it are two documents and are counted
+  // separately, so a warehouse that ships 40 times a month does not push the
+  // invoice numbers forward by 40.
+  "delivery-note": { prefix: "DN/", suffix: "", width: 4 },
+  "receipt-note": { prefix: "RN/", suffix: "", width: 4 },
+  "stock-journal": { prefix: "SJ/", suffix: "", width: 4 },
+  "physical-stock": { prefix: "PS/", suffix: "", width: 4 },
 };
 
 /** Derive the Indian FY start-year from a YYYY-MM-DD voucher date. */
@@ -1019,6 +1052,194 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
   }
 
   /**
+   * THE NON-ACCOUNTING STOCK VOUCHERS — the mock's mirror of
+   * internal/ledger/nonaccounting.go.
+   *
+   * A mock that merely echoed these bodies back would be a false oracle for the
+   * two properties they exist to guarantee, so it reproduces the refusals:
+   *
+   *   - postings / bill_allocations / gst on ANY of the four: 422. Skipping the
+   *     double-entry check is only safe when paired with this; without it a
+   *     Delivery Note would be the one document permitted to state UNBALANCED
+   *     ledger lines, and posting_balanced (a trigger on the posting TABLE)
+   *     never fires for a voucher that writes no posting rows.
+   *   - a line moving the wrong way for a fixed-direction class: 422. Inward
+   *     goods on a Delivery Note would ADD stock under a document that says
+   *     they left.
+   *   - `inventory` on a Physical Stock, or `physical_count` on anything else:
+   *     422. The two shapes are mutually exclusive per class.
+   *
+   * ...and, critically, it DERIVES THE PHYSICAL STOCK CORRECTION rather than
+   * trusting a delta: see {@link physicalStockDeltas}.
+   *
+   * Returns the request REWRITTEN with the derived movements (Physical Stock)
+   * or unchanged (the other three), or null when this is not a stock class.
+   */
+  function generateStockVoucher(
+    c: MockCompany,
+    cls: VoucherClass,
+    voucherID: string,
+    req: VoucherRequest,
+  ): VoucherRequest | null {
+    if (!STOCK_ONLY_CLASSES[cls]) return null;
+    const refuse = (msg: string): never => {
+      throw new ApiError(422, msg, { error: msg });
+    };
+    if (req.postings?.length) {
+      refuse(
+        `a ${cls} posts no accounting lines at all (it records the movement of goods, not money); remove the ${req.postings.length} posting(s)`,
+      );
+    }
+    if (req.bill_allocations?.length) {
+      refuse(
+        `a ${cls} creates no outstanding bill: there is no party leg for an allocation to reference`,
+      );
+    }
+    if (req.gst) {
+      refuse(
+        `a ${cls} carries no tax: GST is charged by the INVOICE, and deriving it here would file a supply twice`,
+      );
+    }
+
+    if (cls === "physical-stock") {
+      if (req.inventory?.length) {
+        refuse(
+          "a Physical Stock voucher states what was COUNTED, not what moved; send physical_count lines and let the server derive the correction",
+        );
+      }
+      if (!req.physical_count?.length) {
+        refuse("a Physical Stock voucher records at least one counted position");
+      }
+      return { ...req, inventory: physicalStockDeltas(c, voucherID, req.physical_count!, refuse) };
+    }
+
+    if (req.physical_count?.length) {
+      refuse(
+        `only a Physical Stock voucher carries counted quantities; a ${cls} states the movement itself`,
+      );
+    }
+    if (!req.inventory?.length) {
+      refuse(`a ${cls} exists to record goods moving; it has no inventory lines`);
+    }
+    const want = STOCK_FIXED_DIRECTION[cls];
+    if (want) {
+      for (const [i, l] of req.inventory!.entries()) {
+        if (l.direction !== want) {
+          refuse(
+            `inventory line ${i + 1}: a ${cls} moves stock ${want}, not ${l.direction} (goods keyed the wrong way would be added to the warehouse by a document that says they left)`,
+          );
+        }
+      }
+    }
+    return req;
+  }
+
+  /**
+   * The BOOK quantity of one position as the mock's books stand, EXCLUDING the
+   * voucher being posted — the mirror of ledger.bookQtyExcludingVoucher.
+   *
+   * THE EXCLUSION IS WHAT MAKES AN ALTER CORRECT. Without it, re-counting the
+   * same shelf on an existing Physical Stock voucher would difference the count
+   * against a book that already contains that voucher's own previous
+   * correction, and the adjustment would be applied twice.
+   */
+  function bookQtyExcluding(
+    c: MockCompany,
+    voucherID: string,
+    key: { item: string; godown: string; batch: string },
+  ): bigint {
+    let qty = 0n;
+    for (const [vid, v] of c.views.entries()) {
+      if (vid === voucherID) continue;
+      for (const l of v.inventory ?? []) {
+        if (
+          l.stock_item_id !== key.item ||
+          (l.godown_id ?? "") !== key.godown ||
+          (l.batch_id ?? "") !== key.batch
+        ) {
+          continue;
+        }
+        qty += l.direction === "IN" ? q4(l.qty) : -q4(l.qty);
+      }
+    }
+    return qty;
+  }
+
+  /**
+   * Turn counted positions into the movements that make the books agree with
+   * the shelf — counted MINUS book, as ordinary movements.
+   *
+   * A position whose count already agrees with the books produces NO movement:
+   * stock_movement's CHECK (qty > 0) forbids a zero row, and a zero-quantity
+   * correction is not a thing that happened.
+   *
+   * A SURPLUS AT ZERO COST IS REFUSED. The inward is INVENTED here — nobody
+   * keyed a supplier's price for it — so defaulting the rate to zero would
+   * bring units in at no cost and silently write the position's weighted
+   * average DOWN, understating closing stock and overstating the cost of every
+   * later issue. A misstated balance sheet produced BY a stock-take is the
+   * opposite of what a stock-take is for.
+   *
+   * A SHORTAGE IS NOT NEGATIVE STOCK: it posts an outward delta and the
+   * position it leaves behind is exactly the counted quantity, which cannot be
+   * negative. The count is a FACT about the shelf, not a withdrawal request.
+   */
+  function physicalStockDeltas(
+    c: MockCompany,
+    voucherID: string,
+    counts: PhysicalCountLineRequest[],
+    refuse: (msg: string) => never,
+  ): InventoryLineRequest[] {
+    const seen = new Set<string>();
+    const out: InventoryLineRequest[] = [];
+    for (const [i, count] of counts.entries()) {
+      const key = {
+        item: count.stock_item_id,
+        godown: count.godown_id ?? "",
+        batch: count.batch_id ?? "",
+      };
+      const k = `${key.item}|${key.godown}|${key.batch}`;
+      // Two counts of the same shelf would each be differenced against the same
+      // book figure and BOTH deltas written, doubling the correction — and
+      // there is no sane reading of two different answers to "how many are
+      // there".
+      if (seen.has(k)) {
+        refuse(
+          `physical count line ${i + 1}: this (item, godown, batch) position is counted twice on the same voucher; a shelf has one count`,
+        );
+      }
+      seen.add(k);
+      const counted = q4(count.qty);
+      if (counted < 0n) {
+        refuse(
+          `physical count line ${i + 1}: a counted quantity cannot be negative, got ${count.qty} (a count of 0 says the shelf is empty)`,
+        );
+      }
+      const delta = counted - bookQtyExcluding(c, voucherID, key);
+      if (delta === 0n) continue;
+      const rate = q4(count.rate ?? "0");
+      if (delta > 0n && rate === 0n) {
+        const name =
+          c.stockItems.find((s) => s.id === count.stock_item_id)?.name ??
+          count.stock_item_id;
+        refuse(
+          `physical count line ${i + 1} (${name}): the count is ${q4str(delta)} above the books, and bringing a surplus in at zero cost would write the item's weighted-average value down; state the rate the extra units are carried at`,
+        );
+      }
+      out.push({
+        stock_item_id: count.stock_item_id,
+        godown_id: key.godown,
+        batch_id: key.batch,
+        direction: delta > 0n ? "IN" : "OUT",
+        qty: q4str(delta > 0n ? delta : -delta),
+        rate: q4str(rate),
+        amount: q4str(q4div((delta > 0n ? delta : -delta) * rate, QSCALE)),
+      });
+    }
+    return out;
+  }
+
+  /**
    * Project a posted request's item grid into the stored {@link InventoryLineView}
    * shape, resolving the master NAMES for display while RETAINING the uuids.
    * The uuids are what makes an alter round-trip preserve stock: re-resolving an
@@ -1145,13 +1366,17 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     req: VoucherRequest,
   ): VoucherResponse {
     const c = ensure(companyID);
+    const voucherID = id("voucher");
+    // STOCK-ONLY CLASSES first: they are refused a money side outright, and a
+    // Physical Stock has its correction DERIVED here (against the books as they
+    // stand, excluding this voucher) exactly as post()'s transaction does.
+    req = generateStockVoucher(c, cls, voucherID, req) ?? req;
     // ITEM INVOICE: the server GENERATES the gst lines and every posting from
     // the stock lines (or refuses the body). Everything below then works on the
     // generated request, exactly as cored's post() does.
     req = generateItemInvoice(c, cls, req) ?? req;
     const { postings, postingViews, debit, credit } = summarize(c, req);
     const gst = deriveGst(c, req);
-    const voucherID = id("voucher");
     const voucherNo = resolveCreateNumber(c, cls, req);
     const date = req.voucher_date ?? "1970-01-01";
     const entry: DayBookEntry = {
@@ -1229,6 +1454,11 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     if (!entry) {
       throw new Error("voucher not found");
     }
+    // An ALTER of a stock voucher is a full restatement of the GOODS, and a
+    // Physical Stock's correction is re-derived against a book that EXCLUDES
+    // this voucher's own superseded movements — otherwise re-counting the same
+    // shelf would apply the adjustment twice.
+    req = generateStockVoucher(c, cls, voucherID, req) ?? req;
     // An ALTER of an item invoice is a full restatement of the GOODS: resend
     // inventory + gst + item ledger, never the postings GetVoucher projected.
     req = generateItemInvoice(c, cls, req) ?? req;
@@ -1498,6 +1728,18 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     async postDebitNoteVoucher(companyID, req) {
       return recordVoucher(companyID, "debit-note", req);
     },
+    async postDeliveryNoteVoucher(companyID, req) {
+      return recordVoucher(companyID, "delivery-note", req);
+    },
+    async postReceiptNoteVoucher(companyID, req) {
+      return recordVoucher(companyID, "receipt-note", req);
+    },
+    async postStockJournalVoucher(companyID, req) {
+      return recordVoucher(companyID, "stock-journal", req);
+    },
+    async postPhysicalStockVoucher(companyID, req) {
+      return recordVoucher(companyID, "physical-stock", req);
+    },
 
     async alterSalesVoucher(companyID, voucherID, req) {
       return alterVoucher(companyID, "sales", voucherID, req);
@@ -1522,6 +1764,18 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     },
     async alterDebitNoteVoucher(companyID, voucherID, req) {
       return alterVoucher(companyID, "debit-note", voucherID, req);
+    },
+    async alterDeliveryNoteVoucher(companyID, voucherID, req) {
+      return alterVoucher(companyID, "delivery-note", voucherID, req);
+    },
+    async alterReceiptNoteVoucher(companyID, voucherID, req) {
+      return alterVoucher(companyID, "receipt-note", voucherID, req);
+    },
+    async alterStockJournalVoucher(companyID, voucherID, req) {
+      return alterVoucher(companyID, "stock-journal", voucherID, req);
+    },
+    async alterPhysicalStockVoucher(companyID, voucherID, req) {
+      return alterVoucher(companyID, "physical-stock", voucherID, req);
     },
 
     async getVoucher(companyID, voucherID): Promise<VoucherView> {

@@ -14,7 +14,15 @@
 /** A fixed-4 decimal value transported as a string (e.g. "1234.5600"). */
 export type Money = string;
 
-/** The six accounting voucher classes (path segment + F-key mapping). */
+/**
+ * The voucher classes with a POST route (path segment + F-key mapping).
+ *
+ * The first eight are ACCOUNTING classes: they must state balanced double-entry
+ * postings. The last four are the NON-ACCOUNTING STOCK classes — they move
+ * goods and post ZERO accounting lines. That split is a compile-time closed set
+ * in Go (`ledger.accountingClasses`), never a DB flag, and it is a closed union
+ * here for the same reason.
+ */
 export type VoucherClass =
   | "sales"
   | "purchase"
@@ -25,7 +33,15 @@ export type VoucherClass =
   /** Sales return / downward price correction. GSTR-1 table 9B (cdnr). */
   | "credit-note"
   /** Purchase return / upward price correction raised on a supplier. */
-  | "debit-note";
+  | "debit-note"
+  /** Goods out before/without the invoice. Stock only, no postings. */
+  | "delivery-note"
+  /** Goods in before the supplier's bill. Stock only, no postings. */
+  | "receipt-note"
+  /** A transfer between godowns: OUT of one and IN to another. */
+  | "stock-journal"
+  /** The counted figure; the server derives the correction. */
+  | "physical-stock";
 
 /** Debit / Credit marker on a posting or bill allocation. */
 // "D"/"C" are the backend's canonical wire values; "DR"/"CR" are the legible
@@ -313,6 +329,33 @@ export interface InventoryLineRequest {
   amount?: Money;
 }
 
+/**
+ * ONE COUNTED POSITION of a Physical Stock voucher: "there are Qty of this
+ * item, in this godown, from this batch, on the shelf" (server.go's
+ * physicalCountLineReq).
+ *
+ * IT HAS NO `direction` AND THAT IS THE POINT. A count carries no sign — the
+ * sign of the correction is DERIVED server-side by differencing the count
+ * against the book position, inside the transaction that writes the movement.
+ * A client that stated the delta would be differencing against a book it read
+ * earlier, and a stock-take is exactly the moment two readers race.
+ *
+ * `qty` may legitimately be "0" ("the shelf is empty" is a count, and the one
+ * an auditor most wants recorded). `rate` is required (non-zero) only when the
+ * count EXCEEDS the books: a surplus brought in at zero cost writes the item's
+ * weighted average down, so the server refuses it rather than silently
+ * devaluing the warehouse.
+ */
+export interface PhysicalCountLineRequest {
+  stock_item_id: string;
+  /** "" when the count is not tracked to a location. */
+  godown_id?: string;
+  /** "" when the count is not tracked to a batch/lot. */
+  batch_id?: string;
+  qty: Money;
+  rate?: Money;
+}
+
 /** The generic voucher body posted to /vouchers/{class}. */
 export interface VoucherRequest {
   voucher_type_id?: string;
@@ -337,6 +380,17 @@ export interface VoucherRequest {
    * `item_ledger_id`, the place of supply and the three tax ledger ids.
    */
   inventory?: InventoryLineRequest[];
+  /**
+   * The Physical Stock voucher's body: the COUNTED positions, not movements.
+   *
+   * It sits BESIDE `inventory` rather than replacing it because the two are
+   * mutually exclusive per class and the LEDGER owns that rule — a Physical
+   * Stock carrying `inventory` is refused, and any other class carrying
+   * `physical_count` is refused too. Deciding it here as well would be a second
+   * copy of the rule, and the drifted copy always wins for whichever caller
+   * reaches it first.
+   */
+  physical_count?: PhysicalCountLineRequest[];
   /**
    * The revenue/expense ledger an ITEM INVOICE books the value of the goods to
    * (a Sales Accounts ledger for F8, a Purchase Accounts ledger for F9).

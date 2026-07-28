@@ -276,6 +276,19 @@ type builtItemInvoice struct {
 	postings  []PostingInput
 }
 
+// anyLineNeedsPricing reports whether at least one line asked to be priced from
+// the price list. It exists so that an invoice where every rate is stated —
+// which is every invoice this system posted before this slice, and every invoice
+// the importer will ever post — costs no extra query at all.
+func anyLineNeedsPricing(ls []InventoryLine) bool {
+	for _, l := range ls {
+		if l.RateUnstated {
+			return true
+		}
+	}
+	return false
+}
+
 // buildItemInvoice turns the stock lines into the whole rest of the voucher.
 // It runs INSIDE post()'s transaction because it reads the item masters, and
 // the masters it reads must be the ones the movements are about to reference.
@@ -289,6 +302,19 @@ func buildItemInvoice(ctx context.Context, tx pgx.Tx, companyID uuid.UUID, in Vo
 		return builtItemInvoice{}, err
 	}
 
+	// THE PARTY'S ACCOUNT GROUP, read ONCE and only when something actually asks
+	// to be priced. A party-narrowed price list beats the company-wide one, and
+	// the group is the scope it is narrowed on. Read outside the loop because it
+	// is a property of the voucher, not of the line, and an invoice with forty
+	// lines must not resolve it forty times.
+	partyGroup := uuid.Nil
+	if anyLineNeedsPricing(in.Inventory) {
+		partyGroup, err = partyGroupOfLedger(ctx, tx, companyID, in.PartyLedgerID)
+		if err != nil {
+			return builtItemInvoice{}, err
+		}
+	}
+
 	// A FRESH slice. Mutating in.Inventory in place would reach through the
 	// caller's own slice header and rewrite the amounts in the request object
 	// they still hold — which for the sync sequencer (which retries an intent)
@@ -299,6 +325,40 @@ func buildItemInvoice(ctx context.Context, tx pgx.Tx, companyID uuid.UUID, in Vo
 
 	for i, l := range in.Inventory {
 		m := masters[l.StockItemID]
+
+		// PRICE THE LINE THE OPERATOR DID NOT PRICE, before the taxable value is
+		// derived — because that one number becomes the movement's amount, the
+		// GST line's taxable value and the party leg, and migration 0027 ties the
+		// first two together. Resolving after any of them were computed would
+		// leave a movement priced from the list and a tax return that was not.
+		//
+		// A line that STATES a rate is not looked up at all: the override is the
+		// operator's call, and the price list is a default rather than a cage.
+		// See pricing.go for why the variance is not recorded and what recording
+		// it would cost.
+		if l.RateUnstated {
+			q, err := resolvePrice(ctx, tx, companyID, l.StockItemID, partyGroup, in.VoucherDate, l.Qty)
+			if err != nil {
+				// The item is named here and not in resolvePrice because only this
+				// layer has read the master: an operator told "no price list covers
+				// item 018f2c…" cannot act on it, and one told "no price list covers
+				// Bolt M8" can.
+				return builtItemInvoice{}, fmt.Errorf("ledger: inventory line %d (%s): %w", i+1, m.name, err)
+			}
+			// The rate AND the discount, together: they are one price. Taking the
+			// rate from the list and leaving the discount at zero would invoice
+			// "1,000.00" where the list says "1,000.00 less 5%" — a 5% overcharge
+			// with a perfectly consistent set of books behind it. validateInventory
+			// has already refused a line that states its own discount while asking
+			// to be priced, so nothing is being overwritten here.
+			l.Rate = q.rate
+			l.DiscountPct = q.discountPct
+			// The line is now PRICED. Clearing the flag is what lets
+			// writeStockMovements keep its backstop refusal for every other class
+			// without it also firing on the lines this generator just resolved.
+			l.RateUnstated = false
+		}
+
 		taxable := l.TaxableValue()
 
 		// The line amount is DERIVED here, and a conflicting client value is

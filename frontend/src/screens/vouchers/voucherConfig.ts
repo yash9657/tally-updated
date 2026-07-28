@@ -1,5 +1,6 @@
 import type { CoredClient, VoucherRequest, VoucherResponse } from "../../api";
 import type { EntryMode, VoucherType } from "../../keystroke/types";
+import { isStockVoucherType } from "./stockVoucher";
 
 /**
  * Per-voucher-type presentation + posting configuration. The six voucher
@@ -186,6 +187,68 @@ export const VOUCHER_CONFIGS: Readonly<Record<VoucherType, VoucherConfig>> = {
     post: (c, id, req) => c.postDebitNoteVoucher(id, req),
     alter: (c, id, vid, req) => c.alterDebitNoteVoucher(id, vid, req),
   },
+
+  // -------------------------------------------------------------------------
+  // THE NON-ACCOUNTING STOCK VOUCHERS. They move goods and post ZERO
+  // accounting lines, so `primarySide` and `partyLabel` describe the DOCUMENT,
+  // not a posting: nothing on these screens resolves a ledger, and the server
+  // refuses a body that states one.
+  //
+  // primarySide is set to the side the goods would eventually be booked on IF
+  // an invoice followed — it is never read for these classes (StockVoucherScreen
+  // builds the body through stockVoucher.ts, which sends no postings at all) and
+  // is present only because VoucherConfig is one shape for every class. If it
+  // ever starts being read here, that is the bug: a stock voucher with a
+  // posting is a 422 by design.
+  // -------------------------------------------------------------------------
+  "delivery-note": {
+    type: "delivery-note",
+    title: "Delivery Note",
+    entry: "double",
+    partyLabel: "Party A/c Name",
+    primarySide: "CR",
+    showGst: false,
+    itemInvoice: false,
+    hint: "Goods OUT against a customer, before or without the invoice. Stock moves; NOTHING is posted to the ledger — the invoice that follows carries the revenue, the tax and the bill.",
+    post: (c, id, req) => c.postDeliveryNoteVoucher(id, req),
+    alter: (c, id, vid, req) => c.alterDeliveryNoteVoucher(id, vid, req),
+  },
+  "receipt-note": {
+    type: "receipt-note",
+    title: "Receipt Note",
+    entry: "double",
+    partyLabel: "Party A/c Name",
+    primarySide: "DR",
+    showGst: false,
+    itemInvoice: false,
+    hint: "Goods IN from a supplier, before the bill. Stock moves; NOTHING is posted to the ledger — the purchase invoice that follows books the cost and the input credit.",
+    post: (c, id, req) => c.postReceiptNoteVoucher(id, req),
+    alter: (c, id, vid, req) => c.alterReceiptNoteVoucher(id, vid, req),
+  },
+  "stock-journal": {
+    type: "stock-journal",
+    title: "Stock Journal",
+    entry: "double",
+    partyLabel: "Reference",
+    primarySide: "DR",
+    showGst: false,
+    itemInvoice: false,
+    hint: "A transfer: goods leave one godown and arrive in another on the SAME voucher. The company still owns them, so no value moves and nothing is posted.",
+    post: (c, id, req) => c.postStockJournalVoucher(id, req),
+    alter: (c, id, vid, req) => c.alterStockJournalVoucher(id, vid, req),
+  },
+  "physical-stock": {
+    type: "physical-stock",
+    title: "Physical Stock",
+    entry: "double",
+    partyLabel: "Counted by",
+    primarySide: "DR",
+    showGst: false,
+    itemInvoice: false,
+    hint: "State what was COUNTED on the shelf; the SERVER derives the correction against the books. A supervisor's key — the seeded Data Entry level is refused this one (migration 0031).",
+    post: (c, id, req) => c.postPhysicalStockVoucher(id, req),
+    alter: (c, id, vid, req) => c.alterPhysicalStockVoucher(id, vid, req),
+  },
 };
 
 export function configFor(type: VoucherType): VoucherConfig {
@@ -215,6 +278,14 @@ export interface EntryModeOption {
 
 export function entryModesFor(type: VoucherType): EntryModeOption[] {
   const cfg = configFor(type);
+  // A stock voucher has ONE form and no money side. Offering "Single Entry" /
+  // "Double Entry" here would name two modes that both imply ledger lines this
+  // class is REFUSED (validateStockVoucher rejects any posting outright), so
+  // Ctrl+H states the one form that exists instead of listing choices that
+  // would be a 422 if they did anything.
+  if (isStockVoucherType(type)) {
+    return [{ label: "Stock Entry", mode: "stock" }];
+  }
   if (cfg.showGst) {
     // Tally's invoice-mode family, in Tally's order. "As Voucher" (keying an
     // invoice as raw Dr/Cr lines) is genuinely not built.
@@ -257,6 +328,13 @@ export function effectiveEntryMode(
   chosen: EntryMode | undefined,
 ): EntryMode {
   const cfg = configFor(type);
+  // A stock class is ALWAYS "stock", whatever a stale or hand-constructed frame
+  // config says. This is the clamp that matters most: the entry mode is
+  // remembered per voucher type and read back from a frame, so without it a
+  // Ctrl+H choice made on Sales could put a Delivery Note into "item-invoice"
+  // and hand it to a build path that sends a party ledger and a GST block —
+  // both of which this class refuses.
+  if (isStockVoucherType(type)) return "stock";
   if (cfg.showGst) {
     if (chosen === "item-invoice" && cfg.itemInvoice) return "item-invoice";
     return "accounting-invoice";

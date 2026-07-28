@@ -81,12 +81,18 @@ export type FrameOverlay =
  *  - "item-invoice" — Sales / Purchase keyed as GOODS: item, godown, batch,
  *    quantity, rate. The accounting AND the GST are derived from the grid, and
  *    stock actually moves. Tally's default for a trading company.
+ *  - "stock" — the ONLY mode the four non-accounting stock vouchers have: a
+ *    grid of goods with NO ledger column at all, because these documents post
+ *    no accounting lines. It is listed as a mode so Ctrl+H answers honestly on
+ *    those screens (naming the one form that exists) rather than offering
+ *    Single/Double entry, which would imply a money side that does not exist.
  */
 export type EntryMode =
   | "single"
   | "double"
   | "accounting-invoice"
-  | "item-invoice";
+  | "item-invoice"
+  | "stock";
 
 /**
  * Per-frame VIEW configuration — the state Tally's F12 Configure / Ctrl+H /
@@ -172,7 +178,21 @@ export const REPORT_NAMES = [
 ] as const;
 export type ReportName = (typeof REPORT_NAMES)[number];
 
-/** The six core voucher types reproduced in Phase 0 (RESEARCH.md sec 22). */
+/**
+ * The voucher classes an operator can key.
+ *
+ * The first six are Phase 0's core accounting vouchers (RESEARCH.md sec 22);
+ * the notes came with the GST wave. The last four are the NON-ACCOUNTING STOCK
+ * VOUCHERS: they move goods and post ZERO accounting lines (see
+ * internal/ledger/nonaccounting.go and screens/vouchers/stockVoucher.ts).
+ *
+ * GROWING THIS UNION IS DELIBERATELY EXPENSIVE. VOUCHER_CONFIGS is a
+ * `Readonly<Record<VoucherType, VoucherConfig>>`, so tsc refuses to compile
+ * until every new member has a real config with a real post/alter method —
+ * which is what stops a keymap binding reaching a screen with no configuration
+ * behind it. corpora/validate.py's KNOWN_VOUCHER_TYPES is checked against this
+ * union by check_vocabulary_matches_typescript(), for the same reason.
+ */
 export type VoucherType =
   | "contra"
   | "payment"
@@ -183,7 +203,20 @@ export type VoucherType =
   /** Alt+F6 — sales return / downward price correction. */
   | "credit-note"
   /** Alt+F5 — purchase return / price correction raised on a supplier. */
-  | "debit-note";
+  | "debit-note"
+  /** Alt+F8 — goods LEAVE against a customer, before or without the invoice. */
+  | "delivery-note"
+  /** Alt+F9 — goods ARRIVE from a supplier, before the bill. */
+  | "receipt-note"
+  /** Alt+F7 — a transfer between godowns: OUT of one, IN to another. */
+  | "stock-journal"
+  /**
+   * Alt+F10 — the counted figure. The operator states what was COUNTED and the
+   * SERVER derives the correction. Refused to the seeded Data Entry level by
+   * migration 0031: it is the only document that makes the books agree with a
+   * number a human asserts, so it is a supervisor's key.
+   */
+  | "physical-stock";
 
 /** Voucher entry mode (TallyPrime Ctrl+H Change Mode three-state enum). */
 export type VoucherMode = "create" | "alter";

@@ -1,0 +1,21 @@
+{
+  "id": "gateway-alt-f7-opens-stock-journal",
+  "description": "From Gateway of Tally, Alt+F7 opens the Stock Journal — a transfer, OUT of one godown and IN to another",
+  "keymapProfile": "tallyprime",
+  "startScreen": "gateway",
+  "events": [
+    {
+      "type": "key",
+      "combo": "Alt+F7"
+    }
+  ],
+  "expect": {
+    "screen": "voucher",
+    "voucherType": "stock-journal",
+    "field": "date",
+    "buttonBarContains": [
+      "Alt+F7 Stock Journal",
+      "Ctrl+A Accept"
+    ]
+  }
+}

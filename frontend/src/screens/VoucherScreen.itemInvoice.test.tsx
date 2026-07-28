@@ -611,7 +611,11 @@ describe("F11 Company Features tells the truth about inventory", () => {
     // decoration, so the gaps this slice did NOT close are asserted too.
     renderFeatures();
     expect(badgeFor(/^FIFO \/ LIFO/)).toBe("Not built");
-    expect(badgeFor(/^Inventory vouchers \(Stock Journal/)).toBe("Not built");
+    // Was "Inventory vouchers (Stock Journal, ...)" until those four got an
+    // entry screen; the still-missing half of that row is order processing,
+    // which is asserted here and pinned On/Not-built in the stock-voucher
+    // suite's own F11 test.
+    expect(badgeFor(/^Order processing \(Sales \/ Purchase Orders\)/)).toBe("Not built");
     expect(badgeFor(/^Closing stock on the Balance Sheet/)).toBe("Not built");
   });
 });

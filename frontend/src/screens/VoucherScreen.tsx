@@ -38,6 +38,8 @@ import {
   type ItemInvoiceLine,
 } from "./vouchers/itemInvoice";
 import { acceptEditedPurchaseDraft, canRebuildDraft } from "./vouchers/draftAccept";
+import { StockVoucherScreen } from "./vouchers/StockVoucherScreen";
+import { isStockVoucherType } from "./vouchers/stockVoucher";
 import { acceptPurchaseDraft, ApiError } from "../api";
 import type {
   DayBookEntry,
@@ -295,13 +297,43 @@ function draftDirtyFields(seed: VoucherForm | null, form: VoucherForm): Set<Draf
 }
 
 /**
+ * The voucher screen the shell mounts — a two-way ROUTER, not a form.
+ *
+ * The four NON-ACCOUNTING stock classes (Alt+F8 Delivery Note, Alt+F9 Receipt
+ * Note, Alt+F7 Stock Journal, Alt+F10 Physical Stock) get their own component.
+ * They share almost nothing with an accounting voucher: no party ledger, no
+ * particulars, no GST panel, no amount — the server REFUSES every one of those
+ * on those classes (validateStockVoucher). Rendering the accounting form with
+ * its money fields hidden would leave the state that feeds buildGstRequest /
+ * buildSingleEntryRequest alive behind them, one stale frame config away from
+ * being posted on a class that answers 422 to a posting.
+ *
+ * The split is a WRAPPER rather than an early return inside the accounting
+ * component on purpose: an early return before the hooks would change the hook
+ * COUNT of a mounted component whenever an F-key replaces the frame's voucher
+ * type in place, which React refuses at runtime.
+ */
+export function VoucherScreen(props: {
+  snapshot: NavSnapshot;
+  onSelect: (item: string) => void;
+}) {
+  const type = (props.snapshot.voucherType ?? "sales") as VoucherType;
+  // The stock screen takes no `onSelect`: it has no pick-list that feeds the
+  // navigation machine (its party field is free text describing the document,
+  // not a ledger to resolve), and firing a SELECT per keystroke would push the
+  // machine around from a field that names nothing it knows about.
+  if (isStockVoucherType(type)) return <StockVoucherScreen snapshot={props.snapshot} />;
+  return <AccountingVoucherScreen {...props} />;
+}
+
+/**
  * The voucher entry/alteration screen. Holds the real form state, drives the
  * LIVE backend on Ctrl+A (Accept) and Alt+D (Delete) via {@link editActions},
  * and surfaces the server-resolved voucher_no + the server-DERIVED GST split.
  * The XState navMachine stays pure (it only moves the field cursor / screen
  * stack); ALL form state + side effects live here.
  */
-export function VoucherScreen({
+function AccountingVoucherScreen({
   snapshot,
   onSelect,
 }: {

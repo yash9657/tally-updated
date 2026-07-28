@@ -144,10 +144,29 @@ describe("no documented TallyPrime key is silently dead", () => {
     if (cn?.kind === "voucher") expect(cn.voucherType).toBe("credit-note");
   });
 
+  it("the stock voucher keys open the REAL non-accounting screens", () => {
+    // Alt+F7/F8/F9/F10 were `unavailable` while the four classes had no entry
+    // screen. They have one now (StockVoucherScreen), so the keys must reach it
+    // — and they are advertised on the voucher button bar, which the rule above
+    // permits only because they no longer resolve to `unavailable`.
+    const expected: [string, string][] = [
+      ["Alt+F7", "stock-journal"],
+      ["Alt+F8", "delivery-note"],
+      ["Alt+F9", "receipt-note"],
+      ["Alt+F10", "physical-stock"],
+    ];
+    for (const [combo, voucherType] of expected) {
+      const action = resolveAction(keymap, "gateway", combo);
+      expect(action?.kind, `${combo} must open a voucher screen`).toBe("voucher");
+      if (action?.kind === "voucher") expect(action.voucherType).toBe(voucherType);
+    }
+  });
+
   it("keys for features this build lacks say so, with a reason", () => {
-    // Alt+F7 (Stock Journal) stands in for the old Alt+F6 example here: credit
-    // notes ARE built now, inventory vouchers are not.
-    for (const combo of ["Alt+F7", "Ctrl+F4", "F10"]) {
+    // Ctrl+F8 (Sales Order) stands in for the old Alt+F7 example here: the
+    // stock vouchers ARE built now, order processing is not — an order is a
+    // COMMITMENT, not a movement, and the movement ledger cannot express one.
+    for (const combo of ["Ctrl+F8", "Ctrl+F4", "F10"]) {
       const action = resolveAction(keymap, "gateway", combo);
       expect(action?.kind).toBe("unavailable");
       if (action?.kind === "unavailable") {

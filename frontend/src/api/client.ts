@@ -168,6 +168,52 @@ export interface CoredClient {
     req: VoucherRequest,
   ): Promise<VoucherResponse>;
 
+  // ---- The NON-ACCOUNTING stock vouchers -----------------------------------
+  //
+  // These four move goods and post ZERO accounting lines. They are not a
+  // variant of the eight above: a body carrying `postings`, `bill_allocations`,
+  // `gst` or `tds` is REFUSED (422), because skipping the double-entry check is
+  // only safe when paired with a hard refusal of anything that looks like a
+  // money side. Their VoucherResponse carries "0.0000" for every tax head.
+  //
+  // They exist for the reason a warehouse operator needs them: goods leave
+  // hours or weeks before the billing department raises the invoice, and a
+  // system that can only record a movement by also recording revenue forces the
+  // operator to either invent an invoice or key nothing at all.
+
+  /** Delivery Note (Alt+F8) — goods OUT against a customer. Every line Outward. */
+  postDeliveryNoteVoucher(
+    companyID: string,
+    req: VoucherRequest,
+  ): Promise<VoucherResponse>;
+  /** Receipt Note (Alt+F9) — goods IN from a supplier. Every line Inward. */
+  postReceiptNoteVoucher(
+    companyID: string,
+    req: VoucherRequest,
+  ): Promise<VoucherResponse>;
+  /**
+   * Stock Journal (Alt+F7) — a transfer: OUT of one godown and IN to another on
+   * the SAME voucher. The only class that carries both directions at once.
+   */
+  postStockJournalVoucher(
+    companyID: string,
+    req: VoucherRequest,
+  ): Promise<VoucherResponse>;
+  /**
+   * Physical Stock (Alt+F10) — the COUNTED positions (`physical_count`), never
+   * the movements. The server differences the count against the book position
+   * inside the post transaction and writes the correction.
+   *
+   * DENIED to the seeded Data Entry level by migration 0031, so a 403 here is a
+   * normal, expected answer that callers must render as a stated reason rather
+   * than as a blank screen: it is the only document that makes the books agree
+   * with a number a human asserts, so it is a supervisor's key.
+   */
+  postPhysicalStockVoucher(
+    companyID: string,
+    req: VoucherRequest,
+  ): Promise<VoucherResponse>;
+
   // Voucher alteration (PUT /vouchers/{class}/{voucherID}) — a FULL restatement.
   // The class is fixed by the path (one method per class, mirroring the posts);
   // the logical voucher_id is preserved (no new id is minted) and the client
@@ -208,6 +254,35 @@ export interface CoredClient {
     req: VoucherRequest,
   ): Promise<VoucherResponse>;
   alterDebitNoteVoucher(
+    companyID: string,
+    voucherID: string,
+    req: VoucherRequest,
+  ): Promise<VoucherResponse>;
+
+  // The stock classes alter the same way: a FULL restatement of the goods.
+  alterDeliveryNoteVoucher(
+    companyID: string,
+    voucherID: string,
+    req: VoucherRequest,
+  ): Promise<VoucherResponse>;
+  alterReceiptNoteVoucher(
+    companyID: string,
+    voucherID: string,
+    req: VoucherRequest,
+  ): Promise<VoucherResponse>;
+  alterStockJournalVoucher(
+    companyID: string,
+    voucherID: string,
+    req: VoucherRequest,
+  ): Promise<VoucherResponse>;
+  /**
+   * Restate a Physical Stock voucher. Bound for completeness of the class
+   * table, but the SCREEN refuses to drive it from a fetched voucher: GET
+   * projects the DELTA movements, not the count (the count is not stored — the
+   * closing position immediately after the voucher IS the count), so a fetched
+   * body cannot be re-posted verbatim. See `stockAlterRefusal`.
+   */
+  alterPhysicalStockVoucher(
     companyID: string,
     voucherID: string,
     req: VoucherRequest,
