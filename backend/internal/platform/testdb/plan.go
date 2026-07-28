@@ -47,12 +47,15 @@ type scoped struct {
 	IsText bool
 }
 
-// specialStmt is a hand-written DELETE for a table whose tenancy is not a
-// company_id column. The SQL takes the company id as $1 (always TEXT-bound,
-// because these encodings are textual by nature).
+// specialStmt is one table whose tenancy is not a company_id column, carrying
+// BOTH statements generated from its single registered predicate. SQL is the
+// DELETE ($1); Predicate is the raw registered form, still holding idParam, from
+// which the residue query renders its own copy ($2). The company id is always
+// TEXT-bound for these tables, because their encodings are textual by nature.
 type specialStmt struct {
-	Table string
-	SQL   string
+	Table     string
+	SQL       string
+	Predicate string
 }
 
 // plan is the immutable, process-wide teardown plan.
@@ -73,8 +76,33 @@ type plan struct {
 	verifySQL string
 }
 
-// specialTenancy maps a table with NO company_id column to the parameterised
-// DELETE that removes one company's rows from it.
+// idParam is the placeholder a specialTenancy predicate writes where the company
+// id goes. It is substituted with the right positional parameter for whichever
+// statement is being generated — $1 in the DELETE, $2 in the residue query,
+// which binds the id twice (as UUID and as TEXT).
+//
+// A NAMED TOKEN rather than a literal "$1" that gets rewritten: rewriting would
+// mean a textual search for "$1" inside a predicate that may legitimately contain
+// other parameters or the character sequence in a string literal, and the failure
+// would be a silently mis-bound residue query — the exact class of bug this file
+// already carries a warning about.
+const idParam = "{{id}}"
+
+// specialTenancy maps a table with NO company_id column to the WHERE PREDICATE
+// that selects one company's rows in it, written with idParam where the company
+// id belongs.
+//
+// A PREDICATE, NOT A DELETE, AND THIS IS THE WHOLE POINT. Both the DELETE and the
+// residue count are generated from this one string, so they cannot disagree. They
+// used to be able to: the registry held a full DELETE while buildVerifySQL
+// hardcoded statutory_step's `workflow_id LIKE 'irn:' || $2 || ':%'` for EVERY
+// special entry. With only one entry registered that was invisible, but the
+// second entry would have been deleted by its own predicate and then verified by
+// statutory_step's — so a wrong predicate would delete nothing, count nothing,
+// and the teardown would report success while orphaning tenant rows. That is
+// precisely the failure buildVerifySQL's own comment claims it is assembled from
+// the plan to prevent, and TestASecondSpecialTenancyEntryIsVerifiedByItsOwnPredicate
+// is what stops it coming back.
 //
 // statutory_step has no company_id, no foreign key and no RLS policy: it is the
 // statutoryd plane's durable workflow log, and tenancy is encoded in its TEXT
@@ -83,7 +111,13 @@ type plan struct {
 // of that table reveals that it is tenant data, which is exactly why dynamic
 // enumeration cannot find it and why this registry exists.
 var specialTenancy = map[string]string{
-	"statutory_step": `DELETE FROM statutory_step WHERE workflow_id LIKE 'irn:' || $1 || ':%'`,
+	"statutory_step": `workflow_id LIKE 'irn:' || ` + idParam + ` || ':%'`,
+}
+
+// deleteFor renders a specialTenancy predicate as the DELETE issued during
+// teardown, binding the company id as $1.
+func deleteFor(table, predicate string) string {
+	return `DELETE FROM ` + table + ` WHERE ` + strings.ReplaceAll(predicate, idParam, "$1")
 }
 
 // notTenantScoped maps a table that must NOT be deleted along with a company to
@@ -156,7 +190,7 @@ func buildPlan(ctx context.Context) (*plan, error) {
 
 	pl := &plan{}
 	for _, t := range ordered {
-		if sql, ok := specialTenancy[t]; ok {
+		if predicate, ok := specialTenancy[t]; ok {
 			// A specialTenancy table must not participate in FK edges, or moving
 			// it to the front of the batch (see plan.special) could break the
 			// ordering guarantee. Fail loudly rather than reorder silently.
@@ -168,7 +202,11 @@ func buildPlan(ctx context.Context) (*plan, error) {
 						t, e.child, e.parent)
 				}
 			}
-			pl.special = append(pl.special, specialStmt{Table: t, SQL: sql})
+			pl.special = append(pl.special, specialStmt{
+				Table:     t,
+				SQL:       deleteFor(t, predicate),
+				Predicate: predicate,
+			})
 			continue
 		}
 		pl.order = append(pl.order, scoped{Table: t, IsText: scopedTables[t]})
@@ -375,10 +413,14 @@ func buildVerifySQL(pl *plan) string {
 			quoteLiteral(s.Table), s.Table, param))
 	}
 	for _, s := range pl.special {
-		// The residue predicate mirrors the special DELETE, with $2 (TEXT).
+		// The residue predicate is THE REGISTERED PREDICATE, with the id bound as
+		// $2 (TEXT). It is never re-spelled here: a second entry whose tenancy is
+		// encoded differently must be verified by its OWN predicate, not by
+		// whichever one happened to be written first.
 		parts = append(parts, fmt.Sprintf(
-			"SELECT %s AS t, count(*) AS n FROM %s WHERE workflow_id LIKE 'irn:' || $2 || ':%%'",
-			quoteLiteral(s.Table), s.Table))
+			"SELECT %s AS t, count(*) AS n FROM %s WHERE %s",
+			quoteLiteral(s.Table), s.Table,
+			strings.ReplaceAll(s.Predicate, idParam, "$2")))
 	}
 	return strings.Join(parts, "\nUNION ALL ")
 }

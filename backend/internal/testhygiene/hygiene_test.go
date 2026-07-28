@@ -323,8 +323,28 @@ func sitesIn(fset *token.FileSet, fn *ast.FuncDecl) []site {
 	return out
 }
 
-// referencesTestdb reports whether the function body reaches for the teardown
-// package at all — testdb.Cleanup, testdb.DropNow or testdb.Keep.
+// teardownFuncs is the CLOSED set of testdb symbols that actually dispose of a
+// company. A reference to anything else in the package — notably the DSN
+// accessors — proves nothing about cleanup.
+var teardownFuncs = map[string]bool{
+	"Cleanup": true, // register teardown at t.Cleanup
+	"DropNow": true, // drop immediately
+	"Keep":    true, // a DECLARED opt-out; TestOptOutsAreDeclared polices these
+}
+
+// referencesTestdb reports whether the function body CALLS one of the teardown
+// entry points — testdb.Cleanup, testdb.DropNow or testdb.Keep.
+//
+// IT MUST BE A CALL TO ONE OF THOSE THREE, not merely a mention of the package.
+// This used to accept ANY selector on the identifier `testdb`, which meant
+// `testdb.AdminDSN` satisfied the gate while tearing down precisely nothing —
+// and that is not a hypothetical spelling: nine adopting packages already use
+// testdb.AdminDSN/AdminDSNValue to reach the admin connection, so the blessing
+// spelling was already idiomatic in this tree. An adversarial review proved it by
+// replacing internal/forecast's `testdb.Cleanup(t, companyID)` with
+// `_ = testdb.AdminDSN`: this gate stayed GREEN and a real company leaked. The
+// gate could detect deletion of the call but not its substitution, which is the
+// weaker and less likely of the two mistakes.
 //
 // Keying on the ENCLOSING FUNCTION rather than on the Test* function is
 // deliberate. It means a shared setup helper is checked once, where the fix
@@ -340,7 +360,15 @@ func referencesTestdb(fn *ast.FuncDecl) bool {
 		if found {
 			return false
 		}
-		if sel, ok := n.(*ast.SelectorExpr); ok && isIdent(sel.X, "testdb") {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || !isIdent(sel.X, "testdb") {
+			return true
+		}
+		if teardownFuncs[sel.Sel.Name] {
 			found = true
 			return false
 		}

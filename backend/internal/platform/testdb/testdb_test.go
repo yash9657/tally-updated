@@ -826,3 +826,129 @@ func TestCleanupDefersRatherThanDropping(t *testing.T) {
 		t.Fatalf("Cleanup must not touch the database at registration time; got %v", rec.errs)
 	}
 }
+
+// TestASecondSpecialTenancyEntryIsVerifiedByItsOwnPredicate pins the fix for a
+// silent-leak bug that only a SECOND specialTenancy entry could ever expose.
+//
+// WHAT WENT WRONG. specialTenancy used to hold a full DELETE per table, while
+// buildVerifySQL re-spelled the residue predicate itself — and it re-spelled it
+// as statutory_step's, `workflow_id LIKE 'irn:' || $2 || ':%'`, for EVERY entry.
+// With exactly one entry registered, the two happened to agree and nothing could
+// notice. Register a second table whose tenancy is encoded any other way and the
+// registry deletes by that table's predicate while the residue check counts by
+// statutory_step's, which matches nothing in it — so a WRONG predicate deletes
+// nothing, the check counts zero survivors, and Drop returns nil having orphaned
+// every tenant row in the new table. A teardown reporting success while leaking
+// is strictly worse than no teardown, because the bound then passes forever.
+//
+// The predicate is now registered ONCE and both statements are generated from
+// it. This test proves that by registering a second entry with a DELIBERATELY
+// DIFFERENT encoding (a plain equality on a differently-named column, so nothing
+// about statutory_step's LIKE-prefix shape can rescue it) and then breaking its
+// predicate: the residue check must name THAT table, not statutory_step.
+func TestASecondSpecialTenancyEntryIsVerifiedByItsOwnPredicate(t *testing.T) {
+	requireDB(t)
+	ctx := context.Background()
+
+	pool, err := adminPool(ctx)
+	if err != nil {
+		t.Fatalf("admin pool: %v", err)
+	}
+
+	// A throwaway table standing in for "some future table whose tenancy is not a
+	// company_id column, encoded differently from statutory_step".
+	const probe = "zz_second_special_probe"
+	if _, err := pool.Exec(ctx,
+		`CREATE TABLE IF NOT EXISTS `+probe+` (id uuid PRIMARY KEY, owner_key text NOT NULL)`); err != nil {
+		t.Fatalf("create probe table: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := pool.Exec(ctx, `DROP TABLE IF EXISTS `+probe); err != nil {
+			t.Errorf("drop probe table: %v", err)
+		}
+	})
+
+	cid := newCompanyID(t)
+	rowID := newCompanyID(t)
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO `+probe+` (id, owner_key) VALUES ($1, $2)`, rowID, cid.String()); err != nil {
+		t.Fatalf("seed probe row: %v", err)
+	}
+
+	// The real plan's `order` is carried through so the residue query still binds
+	// $1 (the UUID form) somewhere — a plan with no scoped tables leaves $1
+	// unreferenced and Postgres refuses the statement with "could not determine
+	// data type of parameter $1". The company id below never existed, so those
+	// scoped deletes touch nothing; only the special entry is under test.
+	real, err := loadPlan(ctx)
+	if err != nil {
+		t.Fatalf("load plan: %v", err)
+	}
+
+	// A plan carrying ONLY the second entry, with a predicate that is CORRECT.
+	// Equality on owner_key — nothing like statutory_step's prefix LIKE.
+	good := &plan{order: real.order}
+	good.special = append(good.special, specialStmt{
+		Table:     probe,
+		SQL:       deleteFor(probe, `owner_key = `+idParam),
+		Predicate: `owner_key = ` + idParam,
+	})
+	good.verifySQL = buildVerifySQL(good)
+
+	// The residue predicate must be THIS table's, not statutory_step's. If
+	// buildVerifySQL ever re-spells it again, this assertion is what says so
+	// before anything silently leaks.
+	if strings.Contains(good.verifySQL, "workflow_id") {
+		t.Fatalf("the residue query verifies %s with statutory_step's predicate; "+
+			"a second special entry would be deleted by its own predicate and verified by "+
+			"someone else's, so a wrong predicate would leak silently. got: %s", probe, good.verifySQL)
+	}
+	if !strings.Contains(good.verifySQL, "owner_key") {
+		t.Fatalf("the residue query does not mention %s's own column; got: %s", probe, good.verifySQL)
+	}
+
+	// The correct predicate removes the row and the check agrees.
+	if err := dropWithPlan(ctx, good, cid); err != nil {
+		t.Fatalf("teardown with a correct second-entry predicate failed: %v", err)
+	}
+	var n int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM `+probe+` WHERE owner_key = $1`, cid.String()).Scan(&n); err != nil {
+		t.Fatalf("count after good teardown: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("the correct predicate left %d rows in %s", n, probe)
+	}
+
+	// Now the mutation that used to pass silently: a BROKEN predicate on the
+	// second entry. It must be caught, and the error must name THIS table.
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO `+probe+` (id, owner_key) VALUES ($1, $2)`, newCompanyID(t), cid.String()); err != nil {
+		t.Fatalf("re-seed probe row: %v", err)
+	}
+	broken := &plan{order: real.order}
+	broken.special = append(broken.special, specialStmt{
+		Table: probe,
+		// Still binds $1 (the batch always supplies it) but matches nothing: the
+		// prefix makes every comparison fail. This is the realistic shape of the
+		// bug — a predicate that is subtly wrong, not one that is malformed.
+		SQL:       `DELETE FROM ` + probe + ` WHERE owner_key = 'nobody-' || $1`,
+		Predicate: `owner_key = ` + idParam,
+	})
+	broken.verifySQL = buildVerifySQL(broken)
+
+	err = dropWithPlan(ctx, broken, cid)
+	if err == nil {
+		t.Fatal("a second-entry teardown that deleted NOTHING returned nil: the residue check is " +
+			"verifying that table with the wrong predicate, so every row it fails to delete leaks silently")
+	}
+	if !strings.Contains(err.Error(), probe+"=1") {
+		t.Errorf("the error must name the leaking table and its surviving row count so the leak is "+
+			"actionable; got: %v", err)
+	}
+
+	// Leave nothing behind for the next test.
+	if _, err := pool.Exec(ctx, `DELETE FROM `+probe+` WHERE owner_key = $1`, cid.String()); err != nil {
+		t.Errorf("cleanup probe rows: %v", err)
+	}
+}

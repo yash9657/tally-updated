@@ -189,10 +189,88 @@ def dsn() -> str:
     return value
 
 
+# Every synthetic tenant this module mints, so the teardown below can remove
+# exactly what it wrote and nothing else.
+_MINTED_COMPANIES: set[str] = set()
+
+
 def _company() -> str:
     """A fresh tenant per test, so the no-WHERE oracles below only ever see rows
     this test wrote (and the suite is safe to re-run / run in parallel)."""
-    return f"CO-TEST-{uuid.uuid4()}"
+    cid = f"CO-TEST-{uuid.uuid4()}"
+    _MINTED_COMPANIES.add(cid)
+    return cid
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _remove_the_drafts_this_module_wrote():
+    """Delete every insightd_draft row this module created, once the module ends.
+
+    WHY THIS EXISTS. Track 0 set the residue bound for a full test run at ZERO,
+    and enforces it two ways — but BOTH of them are blind here. The Go static gate
+    (``internal/testhygiene``) parses Go only, and the empirical gate
+    (``backend/scripts/test_residue.sh``) counts company, account_group, ledger,
+    voucher_type, acl_rule and voucher_version, none of which this module touches.
+    ``testdb.Drop`` removes insightd_draft rows only for company ids a GO test
+    hands it, and these ids are minted in Python and never seen by Go.
+
+    So this module leaked on every run, invisibly, and ``make verify`` leaked with
+    it: measured at +20 to +30 rows per run, and 160 rows across 80 synthetic
+    tenants had accumulated on a database that had been wiped that same morning.
+    The rows are orphans the moment they are written — ``company_id`` here is a
+    ``CO-TEST-<uuid>`` string with no matching ``company`` row at all.
+
+    Scoped to the MODULE rather than to each test so the live-PG tests still see
+    the isolation oracles behave normally while they run; the no-WHERE oracles
+    assert on rows this module wrote, and removing them mid-module would be a
+    behaviour change rather than a cleanup. Deleting by the recorded id set rather
+    than by a ``LIKE 'CO-TEST-%'`` sweep keeps a parallel or concurrent run from
+    deleting another process's rows out from under it.
+    """
+    yield
+
+    if not _MINTED_COMPANIES:
+        return
+    try:
+        import psycopg
+    except ImportError:  # psycopg optional; the live tests skipped, so nothing to clean
+        return
+    dsn = ENV_DATABASE_URL or DEFAULT_DSN
+    try:
+        conn = psycopg.connect(dsn, connect_timeout=3)
+    except Exception:
+        # Unreachable/unmigrated database means the live group skipped and wrote
+        # nothing. Never fail a green suite because there was nothing to clean.
+        return
+
+    # Past this point the database IS reachable, so a failure is a REAL failure and
+    # must be loud. The first version of this teardown wrapped everything in a bare
+    # `except Exception: return`, which swallowed a genuine error (`SET` does not
+    # take bind parameters) and left the leak in place while reporting nothing —
+    # a silent cleanup failure is indistinguishable from having nothing to clean,
+    # which is precisely the bug class Track 0 exists to remove.
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                # ONE TENANT AT A TIME, because this connects as the RLS-RESTRICTED
+                # app role. insightd_draft is ENABLE + FORCE ROW LEVEL SECURITY with
+                # tenant_isolation USING company_id = current_setting(
+                # 'app.current_company_id') (migration 0014), so a single
+                # `DELETE ... WHERE company_id = ANY(...)` with no GUC set matches
+                # NOTHING and commits happily — it reports success and deletes zero
+                # rows, which is exactly how the first version of this teardown
+                # "passed" while the row count still climbed by 20 a run. The GUC
+                # has to be set per company for the policy to admit the delete.
+                #
+                # set_config(), NOT `SET`: `SET` takes no bind parameters, so
+                # `SET app.current_company_id = %s` raises rather than binding —
+                # which is exactly what the swallowed error above was.
+                for cid in sorted(_MINTED_COMPANIES):
+                    cur.execute("SELECT set_config('app.current_company_id', %s, false)", (cid,))
+                    cur.execute("DELETE FROM insightd_draft WHERE company_id = %s", (cid,))
+                cur.execute("SELECT set_config('app.current_company_id', '', false)")
+    finally:
+        conn.close()
 
 
 def _store(dsn: str):
