@@ -58,6 +58,20 @@ var KnownReportNames = []string{
 	// rate on this report is the company's own cost price, which is
 	// commercially sensitive in a way the chart of accounts is not.
 	"stock-summary",
+	// The four inventory reports the SAME replay produces at other grains
+	// (waves 1 and 2). Each is named INDIVIDUALLY rather than folded into
+	// "stock-summary", because a name is the only thing an administrator can
+	// write a rule against: one shared name would make "an operator may see
+	// what is expiring but not what it cost" impossible to express, and
+	// migration 0028 has to be able to disallow each of them separately.
+	//
+	// EVERY ONE OF THEM CARRIES VALUE — a per-godown closing valuation, a
+	// per-batch one, cost consumed over a period, and (on the item drill) the
+	// rate each PURCHASE was made at, which is the cost price stated outright
+	// rather than averaged into a closing rate. So they carry the Stock
+	// Summary's exposure exactly, and migration 0028 seeds the matching
+	// disallows on the Data Entry level.
+	"stock-movement", "godown-summary", "batch-summary", "stock-item-vouchers",
 }
 
 // ValidAction reports whether a is a legal rule action (Wildcard included).

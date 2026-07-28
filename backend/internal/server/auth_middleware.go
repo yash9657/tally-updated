@@ -242,7 +242,8 @@ func voucherDateFromRequest(r *http.Request, act authz.Action) *time.Time {
 //	POST  .../vouchers/{voucherID}/external-reference        -> svc (handled before this)
 //	GET   .../reconciliation-queue                           -> Display/report:reconciliation-queue
 //	GET   .../trial-balance|balance-sheet|profit-and-loss|day-book|outstandings|gstr1
-//	GET   .../stock-summary                                   -> Display/report:NAME
+//	GET   .../stock-summary|stock-movement|godown-summary
+//	GET   .../batch-summary|stock-item-vouchers               -> Display/report:NAME
 //	POST  .../import/tally-xml                               -> Create/import
 //	POST  .../sync/commit                                    -> Create/sync
 //
@@ -501,6 +502,33 @@ func reportName(rest string) string {
 	// the stock position for the same reason they can read the Trial Balance.
 	case "/stock-summary":
 		return "stock-summary"
+
+	// The rest of the inventory reporting surface (waves 1 and 2). All four are
+	// Displays over report:NAME on the same terms as the Stock Summary above:
+	// read-only, so no back-dated cutoff and no WebAuthn step-up.
+	//
+	// WHY EVERY ONE OF THEM IS A FLAT LITERAL SEGMENT, INCLUDING THE DRILL.
+	// TestReportVocabularyMatchesRouter asserts the converse closure by asking
+	// routeAction for GET /v1/companies/{id}/<name> for every name in
+	// authz.KnownReportNames, so a report whose ROUTE is not exactly its NAME is
+	// a vocabulary entry no route serves — a rule an administrator can write and
+	// that can never match, which for a `disallow` is the silent-wrong-answer
+	// bug internal/authz/vocabulary.go exists to prevent. That is why the item
+	// drill takes its stock_item_id as a QUERY PARAM (like every date on this
+	// seam) instead of the RESTful /stock-items/{id}/vouchers: the tidier path
+	// would either break that closure or force a mapping for a path no route
+	// serves.
+	//
+	// /stock-movement is a PERIOD (from+to); the two summaries are POSITIONS
+	// (as_on); the drill is a period over one item.
+	case "/stock-movement":
+		return "stock-movement"
+	case "/godown-summary":
+		return "godown-summary"
+	case "/batch-summary":
+		return "batch-summary"
+	case "/stock-item-vouchers":
+		return "stock-item-vouchers"
 	}
 	return ""
 }

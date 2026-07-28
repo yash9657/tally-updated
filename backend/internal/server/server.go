@@ -510,6 +510,23 @@ func (s *Server) routes() {
 		// nothing it prints is stored, which is why it sits here beside the
 		// financial statements rather than beside the masters above.
 		r.Get("/stock-summary", s.handleStockSummary)
+		// The rest of the inventory reporting surface (handler_stock_reports.go).
+		// Every one of them is a literal segment whose name IS its report name in
+		// authz.KnownReportNames — TestReportVocabularyMatchesRouter walks the
+		// vocabulary the other way and would fail on any report reached by a path
+		// that does not spell its own name. That is also why the item drill takes
+		// stock_item_id as a query param rather than sitting under
+		// /stock-items/{itemID}: as a literal sibling of the /stock-items
+		// collection it would additionally need registering before any {param}
+		// sibling to avoid a chi collision, and it would still break the closure.
+		//
+		// Three of them are POSITIONS or PERIODS of the same replay the Stock
+		// Summary runs; none of what they print is stored. All four carry VALUE
+		// (cost), which is why migration 0028 disallows all four for Data Entry.
+		r.Get("/stock-movement", s.handleStockMovement)
+		r.Get("/godown-summary", s.handleGodownSummary)
+		r.Get("/batch-summary", s.handleBatchSummary)
+		r.Get("/stock-item-vouchers", s.handleStockItemVouchers)
 
 		// GST.
 		r.Get("/gstr1", s.handleGSTR1)
