@@ -76,12 +76,24 @@ const (
 	DebitNote Class = "Debit Note"
 )
 
-// validClasses is the set of accepted voucher classes.
-var validClasses = map[Class]bool{
-	Contra: true, Payment: true, Receipt: true,
-	Journal: true, Sales: true, Purchase: true,
-	CreditNote: true, DebitNote: true,
-}
+// validClasses is the set of accepted voucher classes: the accounting classes
+// plus the stock-only ones that post no accounting lines at all (Delivery Note,
+// Receipt Note, Stock Journal, Physical Stock — see nonaccounting.go).
+//
+// The two halves are kept as separate sets and UNIONED here rather than listed
+// again, so a class can never be postable while belonging to neither half —
+// which is what would make post()'s double-entry branch fall through to the
+// no-postings-required arm by accident.
+var validClasses = func() map[Class]bool {
+	m := make(map[Class]bool, len(accountingClasses)+len(stockOnlyClasses))
+	for c := range accountingClasses {
+		m[c] = true
+	}
+	for c := range stockOnlyClasses {
+		m[c] = true
+	}
+	return m
+}()
 
 // gstBearing reports whether a class participates in GST derivation. Credit and
 // Debit Notes carry tax exactly as the invoices they adjust do — a credit note
@@ -184,6 +196,13 @@ type VoucherInput struct {
 	Postings []PostingInput
 	// BillAllocations are optional bill-wise references on party ledgers.
 	BillAllocations []BillAllocationInput
+	// PhysicalCount are the COUNTED positions of a Physical Stock voucher —
+	// "there are 13 on this shelf" — and are meaningful ONLY on that class,
+	// where they replace Inventory entirely. The server differences each count
+	// against the book position INSIDE the post transaction and writes the
+	// correction as an ordinary movement; see nonaccounting.go for why the
+	// delta, and not the absolute figure, is what the movement ledger records.
+	PhysicalCount []PhysicalCountLine
 	// Inventory are the stock lines this voucher moves, in KEYED ORDER (the
 	// order is preserved as line_no and is part of the replay ordering key).
 	//
@@ -664,9 +683,21 @@ func salesToVoucher(in SalesVoucherInput) VoucherInput {
 }
 
 func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in VoucherInput) (PostResult, error) {
+	// Orders are refused BEFORE the generic "invalid class" message, because
+	// "invalid voucher class \"Sales Order\"" tells a caller that the name was
+	// wrong when in fact the concept is missing. See ErrOrderVouchersNotModelled.
+	if in.Class == SalesOrder || in.Class == PurchaseOrder {
+		return PostResult{}, ErrOrderVouchersNotModelled
+	}
 	if !validClasses[in.Class] {
 		return PostResult{}, fmt.Errorf("ledger: invalid voucher class %q", in.Class)
 	}
+	// THE ACCOUNTING DECISION, MADE IN EXACTLY ONE PLACE. It reads a
+	// compile-time closed set and NEVER voucher_type.is_accounting: flipping one
+	// row in the database must not be able to turn a Sales invoice into a
+	// voucher that ships goods and posts nothing. nonaccounting.go's header
+	// spells out why the database cannot backstop that one.
+	accounting := postsDoubleEntry(in.Class)
 	// An ITEM INVOICE (inventory lines + GST params on a GST-bearing class) has
 	// its postings and its GST lines GENERATED from the stock lines inside the
 	// transaction below — see item_invoice.go. There are no postings to validate
@@ -678,12 +709,24 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 	// A DELETE tombstone carries no postings — it only reverses the prior version
 	// out of ledger_balance. CREATE/ALTER must still be balanced double-entry.
 	if op != OpDelete {
-		if itemInvoice {
+		switch {
+		case itemInvoice:
 			if err := validateItemInvoice(in); err != nil {
 				return PostResult{}, err
 			}
-		} else if err := validatePostings(in.Postings); err != nil {
-			return PostResult{}, err
+		case !accounting:
+			// A Delivery Note / Receipt Note / Stock Journal / Physical Stock.
+			// validateStockVoucher is validatePostings' counterpart, not its
+			// absence: it refuses postings, bill allocations, GST and TDS
+			// outright, which is what keeps "skip the double-entry check" from
+			// meaning "these are the one document allowed to be unbalanced".
+			if err := validateStockVoucher(in); err != nil {
+				return PostResult{}, err
+			}
+		default:
+			if err := validatePostings(in.Postings); err != nil {
+				return PostResult{}, err
+			}
 		}
 		// Same guard, same reason: a tombstone's body is empty by definition, so
 		// its inventory lines are neither validated nor written.
@@ -786,6 +829,30 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 				return err
 			}
 			tdsRes = r
+		}
+
+		// PHYSICAL STOCK: turn the counted figures into the correction.
+		//
+		// This runs INSIDE the transaction for the same reason the item-invoice
+		// generator does: it reads the book position, and the book it reads must
+		// be the one the movements are about to be written into. After this
+		// assignment a Physical Stock voucher is an ENTIRELY ORDINARY stock
+		// voucher — the hashed payload records the delta lines, the negative-stock
+		// pre-check judges them, an ALTER restates them and a DELETE erases them,
+		// with no further special-casing anywhere.
+		if in.Class == PhysicalStock && op != OpDelete {
+			deltas, err := buildPhysicalStockDeltas(ctx, tx, companyID, voucherID, in.PhysicalCount)
+			if err != nil {
+				return err
+			}
+			// Validate what WE built, exactly as the item-invoice branch does. The
+			// client had no movements to get wrong, so a zero or negative quantity
+			// here is a bug in the differencing, and it should say so rather than
+			// arrive as a CHECK (qty > 0) violation with no line number in it.
+			if err := validateInventory(deltas); err != nil {
+				return fmt.Errorf("ledger: the physical count produced an invalid correction: %w", err)
+			}
+			in.Inventory = deltas
 		}
 
 		var versionNo int

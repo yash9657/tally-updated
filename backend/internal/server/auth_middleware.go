@@ -244,6 +244,8 @@ func voucherDateFromRequest(r *http.Request, act authz.Action) *time.Time {
 //	GET   .../trial-balance|balance-sheet|profit-and-loss|day-book|outstandings|gstr1
 //	GET   .../stock-summary|stock-movement|godown-summary
 //	GET   .../batch-summary|stock-item-vouchers               -> Display/report:NAME
+//	GET   .../price-lists/quote|price-lists/{id}             -> Display/price-list
+//	POST  .../price-lists                                    -> Create/price-list
 //	POST  .../import/tally-xml                               -> Create/import
 //	POST  .../sync/commit                                    -> Create/sync
 //
@@ -374,6 +376,27 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 		}
 		return "", "", "", false
 
+	// Price lists (INV-L, migration 0030). One resource token for the whole
+	// surface, split by METHOD into Display and Create, for the same reason the
+	// master collections are: the read and the write of a thing must emit the
+	// same resource or one ACL rule stops governing both, and the moment they
+	// disagree a `display` grant can start carrying a `create`.
+	//
+	// GET /price-lists/quote is the rate RESOLVER and it is a Display, not a
+	// Create: it runs masters.ResolveRate, which is read-only and writes
+	// nothing, so it must not inherit the back-dated write cutoff or the
+	// WebAuthn step-up (both gate on Action.IsWrite()). An operator keying an
+	// invoice at 9am cannot be asked for a second factor to find out what we
+	// charge for a widget.
+	case isPriceListPath(rest):
+		switch method {
+		case http.MethodGet:
+			return authz.Display, "price-list", "", true
+		case http.MethodPost:
+			return authz.Create, "price-list", "", true
+		}
+		return "", "", "", false
+
 	// Import + sync.
 	case method == http.MethodPost && rest == "/import/tally-xml":
 		return authz.Create, "import", "", true
@@ -462,16 +485,48 @@ func isSecurityLevelsPath(rest string) bool {
 	return len(segs) == 1 || len(segs) == 2
 }
 
+// isVoucherClass matches the path segment that FIXES a voucher class, and its
+// list must stay in step with authz.KnownVoucherClasses —
+// TestEveryCompanyRouteIsMappedAndInVocabulary walks the router and fails on any
+// class the vocabulary would refuse in a rule.
 func isVoucherClass(c string) bool {
 	switch c {
 	case "sales", "purchase", "receipt", "payment", "contra", "journal",
 		// Credit/Debit Notes are first-class voucher classes, not variants of
 		// sales/purchase: they carry their own numbering series and their own
 		// GSTR-1 section (cdnr).
-		"credit-note", "debit-note":
+		"credit-note", "debit-note",
+		// The NON-ACCOUNTING stock vouchers (INV-K). They post no ledger lines
+		// at all, so nothing about them is an accounting authority — but each
+		// one MOVES GOODS, which is an authority of its own, and each therefore
+		// gets its own token so a level can hold one without the others.
+		//
+		// They ride the ordinary /vouchers/{class} shape on purpose: the class
+		// is fixed by the path exactly as it is for Sales, so the PDP mapping,
+		// the back-dated cutoff and the WebAuthn step-up all apply to them
+		// through the SAME code that applies them to an invoice. A parallel
+		// /stock-vouchers/ subtree would have been a second seam to keep in
+		// step, and the one that drifted would be the unguarded one.
+		"delivery-note", "receipt-note", "stock-journal", "physical-stock":
 		return true
 	}
 	return false
+}
+
+// isPriceListPath matches the price-list master routes:
+//
+//	/price-lists  /price-lists/quote  /price-lists/{priceListID}
+//
+// Like isMembersPath it matches the SHAPE and not the id, so a malformed id
+// still resolves to the "price-list" resource and is rejected by the handler
+// with a 400 — rather than falling through to routeAction's default-deny and
+// reporting an authorization failure for what is actually a bad request.
+func isPriceListPath(rest string) bool {
+	segs := splitPath(rest)
+	if len(segs) == 0 || segs[0] != "price-lists" {
+		return false
+	}
+	return len(segs) == 1 || len(segs) == 2
 }
 
 // reportName maps a report GET suffix to its pinned report name, or "" if it is

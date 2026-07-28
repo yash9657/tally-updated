@@ -459,6 +459,31 @@ func (s *Server) routes() {
 		r.Post("/vouchers/credit-note", s.postVoucher(ledger.CreditNote))
 		r.Post("/vouchers/debit-note", s.postVoucher(ledger.DebitNote))
 
+		// The NON-ACCOUNTING stock vouchers (INV-K): goods move, nothing is
+		// posted. A warehouse operator lives in these screens — stock leaves
+		// hours or weeks before the billing department raises the invoice, and
+		// a system that can only record a movement by also recording revenue
+		// forces them to invent an invoice or key nothing.
+		//
+		// They reuse postVoucher/alterVoucher unchanged. That is the whole
+		// point of the class being a compile-time constant: ledger.post()
+		// branches on postsDoubleEntry(class), so the HTTP layer has no idea
+		// these four are different and cannot get the distinction wrong.
+		//
+		// Physical Stock takes `physical_count` rather than `inventory` (see
+		// voucherReq.PhysicalCount); the other three take the ordinary
+		// `inventory` grid. Both arrive on the SAME body, so the sync/commit
+		// path carries them for free.
+		//
+		// Migration 0031 seeds the ACL rules in the same change that mounts
+		// these routes. Without it the seeded 'Data Entry' level (default_access
+		// none) would 403 on every one of them and the feature would ship
+		// reachable only by an Owner.
+		r.Post("/vouchers/delivery-note", s.postVoucher(ledger.DeliveryNote))
+		r.Post("/vouchers/receipt-note", s.postVoucher(ledger.ReceiptNote))
+		r.Post("/vouchers/stock-journal", s.postVoucher(ledger.StockJournal))
+		r.Post("/vouchers/physical-stock", s.postVoucher(ledger.PhysicalStock))
+
 		// Alter: PUT a full restatement of an existing voucher. One Put per literal
 		// type segment keeps the class compile-time fixed, exactly like the Posts.
 		// {voucherID} carries the existing logical voucher id (never reallocated).
@@ -470,6 +495,18 @@ func (s *Server) routes() {
 		r.Put("/vouchers/journal/{voucherID}", s.alterVoucher(ledger.Journal))
 		r.Put("/vouchers/credit-note/{voucherID}", s.alterVoucher(ledger.CreditNote))
 		r.Put("/vouchers/debit-note/{voucherID}", s.alterVoucher(ledger.DebitNote))
+
+		// Alter the stock vouchers. A Physical Stock ALTER restates by resending
+		// `physical_count` — never the movements GET projects — because the
+		// delta is recomputed against a book that EXCLUDES this voucher's
+		// superseded version. Resending the movement would compound the
+		// correction instead of restating the count. Same rule as an item
+		// invoice, which resends `inventory` rather than the postings it
+		// generated.
+		r.Put("/vouchers/delivery-note/{voucherID}", s.alterVoucher(ledger.DeliveryNote))
+		r.Put("/vouchers/receipt-note/{voucherID}", s.alterVoucher(ledger.ReceiptNote))
+		r.Put("/vouchers/stock-journal/{voucherID}", s.alterVoucher(ledger.StockJournal))
+		r.Put("/vouchers/physical-stock/{voucherID}", s.alterVoucher(ledger.PhysicalStock))
 
 		// Fetch the CURRENT (head) version of one logical voucher. A param route
 		// beside the literal POST/PUT /vouchers/sales etc.; the method differs
@@ -531,6 +568,31 @@ func (s *Server) routes() {
 		// GST.
 		r.Get("/gstr1", s.handleGSTR1)
 		r.Get("/gstr3b", s.handleGSTR3B)
+
+		// Price lists (INV-L, migration 0030): handler_price_list.go.
+		//
+		// /price-lists/quote is a LITERAL sibling of the {priceListID} param
+		// route, and it is registered first so a reader meets the specific case
+		// before the general one. BE PRECISE ABOUT WHAT THAT BUYS: it is
+		// documentation, NOT the defence. chi's trie sorts static nodes ahead of
+		// param nodes at MATCH time, so the two resolve correctly in either
+		// order — this was verified by swapping these two lines and watching
+		// TestPriceListRoutesAreOwnTokenAndDataEntryMayReadNotDefine stay green.
+		// (/security-levels/vocabulary carries a similar note; there the
+		// collision could not arise at all, because {levelID} has no GET.)
+		//
+		// What genuinely protects the quote route is that {priceListID} is
+		// parsed as a UUID: a request for a list literally named "quote" is a
+		// 400, not a silent mis-route. The real hazard to watch for is the
+		// opposite one — adding a THIRD literal under /price-lists whose name a
+		// caller might also use as an id.
+		//
+		// The PDP does not care either way: isPriceListPath matches the SHAPE,
+		// so both paths emit (Display, "price-list") and neither can slip
+		// through routeAction's default-deny.
+		r.Get("/price-lists/quote", s.handlePriceQuote)
+		r.Get("/price-lists/{priceListID}", s.handleGetPriceList)
+		r.Post("/price-lists", s.handleCreatePriceList)
 
 		// Migration import (Tally-XML ingress).
 		r.Post("/import/tally-xml", s.handleImportTallyXML)
@@ -1004,6 +1066,28 @@ type inventoryLineReq struct {
 	Amount      string `json:"amount"`
 }
 
+// physicalCountLineReq is ONE counted position on a Physical Stock voucher:
+// "there are Qty of this item, in this godown, from this batch, on the shelf".
+//
+// IT HAS NO `direction` AND THAT IS THE POINT. A count carries no sign — the
+// sign of the correction is DERIVED inside the post transaction by differencing
+// the count against the book position. Offering a direction here would let a
+// client state a delta it had computed itself, against a book it had read
+// earlier, and a stock-take is exactly the moment two readers race.
+//
+// Qty may legitimately be "0": "the shelf is empty" is a count, and it is the
+// one an auditor most wants recorded. Rate is required (non-zero) only when the
+// count EXCEEDS the books — a surplus brought in at zero cost writes the item's
+// weighted average down, so the ledger refuses it with a domain message rather
+// than silently devaluing the warehouse.
+type physicalCountLineReq struct {
+	StockItemID string `json:"stock_item_id"`
+	GodownID    string `json:"godown_id"`
+	BatchID     string `json:"batch_id"`
+	Qty         string `json:"qty"`
+	Rate        string `json:"rate"`
+}
+
 type voucherReq struct {
 	VoucherTypeID string `json:"voucher_type_id"`
 	PartyLedgerID string `json:"party_ledger_id"`
@@ -1037,8 +1121,20 @@ type voucherReq struct {
 	// inventory type on the sync wire would compile, decode and then silently
 	// drop every stock line an offline node ever recorded.
 	Inventory []inventoryLineReq `json:"inventory"`
-	GST       *gstReq            `json:"gst"`
-	TDS       *tdsReq            `json:"tds"`
+	// PhysicalCount is the Physical Stock voucher's body: the COUNTED
+	// positions, not movements. It sits beside Inventory rather than replacing
+	// it because the two are mutually exclusive per class and the LEDGER owns
+	// that rule (validateStockVoucher refuses `inventory` on a Physical Stock
+	// and refuses `physical_count` on anything else). Deciding it here as well
+	// would be a second copy of the rule, and the drifted copy always wins for
+	// whichever caller reaches it first.
+	//
+	// Carried on THIS type, like Inventory, so POST /sync/commit ships a
+	// stock-take from an offline node for free: syncIntentReq.Payload IS a
+	// voucherReq and buildVoucherInput is the single translator.
+	PhysicalCount []physicalCountLineReq `json:"physical_count"`
+	GST           *gstReq                `json:"gst"`
+	TDS           *tdsReq                `json:"tds"`
 }
 
 // postVoucher returns a handler bound to a fixed accounting class. The same
@@ -1447,6 +1543,13 @@ func buildVoucherInput(w http.ResponseWriter, class ledger.Class, req voucherReq
 		}
 		in.Inventory = append(in.Inventory, line)
 	}
+	for i, c := range req.PhysicalCount {
+		line, ok := buildPhysicalCountLine(w, i+1, c)
+		if !ok {
+			return in, false
+		}
+		in.PhysicalCount = append(in.PhysicalCount, line)
+	}
 	if req.GST != nil {
 		gst, ok := buildGST(w, *req.GST)
 		if !ok {
@@ -1533,6 +1636,64 @@ func buildInventoryLine(w http.ResponseWriter, lineNo int, l inventoryLineReq) (
 		Rate:        rate,
 		DiscountPct: discount,
 		Amount:      amount,
+	}, true
+}
+
+// buildPhysicalCountLine converts one wire counted position into a
+// ledger.PhysicalCountLine, writing a 400 naming the 1-based line and the field
+// and returning ok=false on any malformed value.
+//
+// It mirrors buildInventoryLine deliberately, including the decimal parsing: a
+// counted quantity typed by a warehouse hand goes through decimal.NewFromString
+// and never strconv.ParseFloat, because float parsing ACCEPTS "NaN" and "Inf"
+// and the decimal package then PANICS on them — a stock-take fat-finger has to
+// come back as a 400 naming the line, not as an opaque 500 from a recovered
+// panic.
+//
+// qty is parsed STRICTLY ("" is a 400): a Physical Stock line with no quantity
+// is not "count zero", it is a line whose count was never entered, and silently
+// reading it as zero would write the entire position off the books.
+//
+// rate is parsed LENIENTLY ("" is zero) because it is required only for a
+// SURPLUS, and only the ledger — which alone knows the book position inside the
+// post transaction — can tell a surplus from a shortage. Demanding it here
+// would refuse every legitimate shortage line.
+func buildPhysicalCountLine(w http.ResponseWriter, lineNo int, c physicalCountLineReq) (ledger.PhysicalCountLine, bool) {
+	var out ledger.PhysicalCountLine
+	where := fmt.Sprintf(" on physical count line %d", lineNo)
+
+	itemID, err := uuid.Parse(c.StockItemID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid stock_item_id"+where)
+		return out, false
+	}
+	godownID, err := optionalUUID(c.GodownID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid godown_id"+where)
+		return out, false
+	}
+	batchID, err := optionalUUID(c.BatchID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid batch_id"+where)
+		return out, false
+	}
+	qty, err := decimal.NewFromString(c.Qty)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid qty"+where)
+		return out, false
+	}
+	rate, err := optionalDecimal(c.Rate)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid rate"+where)
+		return out, false
+	}
+
+	return ledger.PhysicalCountLine{
+		StockItemID: itemID,
+		GodownID:    godownID,
+		BatchID:     batchID,
+		Qty:         qty,
+		Rate:        rate,
 	}, true
 }
 

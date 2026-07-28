@@ -128,10 +128,15 @@ GRANT EXECUTE ON FUNCTION seed_data_entry_stock_report_rules(UUID) TO tally_app;
 -- rules), so it degrades as the fleet grows rather than with any one tenant's
 -- size. The admin surface's `WHERE company_id = $1` read has the same problem.
 --
--- It was found because the backfill below could not complete: 38,748 companies
--- x 4 names, each probing acl_rule by security_level_id, is 155k sequential
--- scans. The set-based rewrite makes the migration fast, but the missing index
--- is the real defect and it was there before inventory existed.
+-- It was found because the backfill below ran for nearly two hours: 5,106 Data
+-- Entry levels x 4 names, each probing acl_rule by security_level_id, is 20k
+-- probes that the planner served with a PARALLEL SEQUENTIAL SCAN of the whole
+-- table. Measured with EXPLAIN (ANALYZE, BUFFERS) on the same probe: with these
+-- indexes it is a bitmap heap scan touching 3 buffers; with index scans
+-- disabled it is a Gather over two parallel workers. The set-based rewrite
+-- makes the migration fast, but the missing index is the real defect, it was
+-- there before inventory existed, and it is on the authz path of every
+-- authenticated request rather than only on this migration.
 CREATE INDEX IF NOT EXISTS acl_rule_level   ON acl_rule (security_level_id);
 CREATE INDEX IF NOT EXISTS acl_rule_company ON acl_rule (company_id);
 
@@ -139,23 +144,20 @@ CREATE INDEX IF NOT EXISTS acl_rule_company ON acl_rule (company_id);
 --
 -- The obvious shape here — and the shape 0022 and 0026 both used — is
 -- `FOR c IN SELECT company_id ... LOOP PERFORM seed_...(c.company_id) END LOOP`.
--- That is O(companies x names) round trips, each with its own EXISTS probe. It
--- was measured on this project's dev database (38,748 companies, ~165k acl_rule
--- rows): it reached 13% in ONE HOUR AND FIFTY-SEVEN MINUTES before it was
--- killed, and it starved the connection pool while it ran. A tenant fleet does
--- not have to be large for a loop like that to turn a deploy into an outage —
--- and a migration that has to be killed is worse than one that is slow, because
--- (see below) these are not atomic.
+-- That is one round trip per company per name, each carrying its own EXISTS
+-- probe against acl_rule. With the index below now in place it would be
+-- tolerable; without it, it was not. Either way one INSERT ... SELECT does the
+-- same work as a single set operation, and the anti-join on acl_rule is what
+-- makes it idempotent, replacing the per-row EXISTS.
 --
--- One INSERT ... SELECT does the same work as a single set operation. The
--- anti-join on acl_rule is what makes it idempotent, replacing the per-row
--- EXISTS: re-running inserts nothing.
---
--- NOTE FOR WHOEVER WRITES THE NEXT SEED MIGRATION: `cored migrate` does NOT
--- wrap a migration in a transaction, so the killed run above left 5,106 rows
--- per report name behind WITHOUT stamping schema_migrations. Only the
--- idempotence of this statement made that recoverable. Assume a migration can
--- die halfway and write every one of them so re-running is a no-op.
+-- Write every seed migration re-runnable regardless. `cored migrate` DOES apply
+-- each file atomically (migrations.go applyOne wraps the body and the
+-- schema_migrations stamp in one transaction), but that guarantee only covers
+-- that one path: applying a migration by hand with `psql -f` has no such
+-- envelope, and this file's own history is the example — a by-hand apply during
+-- development left its rows committed with nothing stamped, and only the
+-- idempotence of this statement made that recoverable.
+
 INSERT INTO acl_rule (id, company_id, security_level_id, effect, action, resource)
 SELECT gen_random_uuid(), sl.company_id, sl.id, 'disallow', 'display', r.res
   FROM security_level sl

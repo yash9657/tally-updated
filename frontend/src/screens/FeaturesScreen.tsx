@@ -138,7 +138,7 @@ const FEATURES: {
       {
         name: "Inventory vouchers (Stock Journal, Physical Stock, Delivery/Receipt Note), order processing, BoM",
         state: "off",
-        note: "Not built yet — which is why Alt+F7/Alt+F8/Alt+F9/F10 report that they are unavailable. Stock moves only as a side of a Sales/Purchase item invoice, so a transfer between godowns or a stock-taking adjustment has no voucher to record it in.",
+        note: "Not built FOR THE OPERATOR — there is no voucher screen behind Alt+F8/Alt+F9/Alt+F7/Alt+F10 yet, so you cannot key one, which is why this still reads Not built. What DOES exist is the server half: all four post over the API, move stock, and post ZERO accounting lines, restating under ALTER and erasing under DELETE like any other voucher. Physical Stock is additionally REFUSED to the Data Entry level by rule: it is the only document that makes the books agree with a number a human asserts, so it is a supervisor's key. Order processing and BoM are not built at all — an order is a COMMITMENT, not a movement, and one that moved stock would let a quotation deplete the warehouse.",
       },
       {
         name: "Stock groups and compound units (Box of 12)",

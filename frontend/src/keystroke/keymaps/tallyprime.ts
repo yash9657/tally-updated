@@ -83,7 +83,7 @@ const RAW_BINDINGS: Record<string, KeymapAction> = {
   F10: {
     kind: "unavailable",
     feature: "Other Vouchers (F10)",
-    note: "Order, delivery and stock vouchers are not built yet — F4–F9 cover the six accounting vouchers, and Alt+F5/Alt+F6 the debit/credit notes.",
+    note: "Order vouchers are not built. The stock vouchers ARE — Alt+F7/F8/F9/F10 — but have no entry screen yet; F4–F9 cover the six accounting vouchers and Alt+F5/Alt+F6 the debit/credit notes.",
   },
   // Debit / Credit Note — REAL voucher screens with their own numbering series
   // and their own GSTR-1 treatment (cdnr, table 9B). They were bound as
@@ -91,30 +91,66 @@ const RAW_BINDINGS: Record<string, KeymapAction> = {
   // reverse part of an invoice, so they must be reachable by their real keys.
   "Alt+F5": { kind: "voucher", voucherType: "debit-note" },
   "Alt+F6": { kind: "voucher", voucherType: "credit-note" },
+  // ---- The NON-ACCOUNTING STOCK VOUCHERS (Alt+F7/F8/F9/F10).
+  //
+  // READ THE NOTES BEFORE CHANGING THEM. These four were `unavailable` because
+  // the SERVER could not record a stock movement without also recording
+  // revenue. That is no longer true: the movement plane, the four voucher
+  // classes and their routes all exist, and migration 0031 decides which
+  // security levels may key them. What is still missing is the ENTRY SCREEN —
+  // a grid with items, godowns, batches and quantities and NO ledger column.
+  //
+  // WHY THEY ARE STILL BOUND TO `unavailable` AND NOT TO `voucher`. A
+  // `{ kind: "voucher", voucherType: "delivery-note" }` binding would navigate
+  // to VoucherScreen, which resolves its layout through
+  // configFor(voucherType) — a Readonly<Record<VoucherType, VoucherConfig>>
+  // with no entry for these classes. The key would not "partly work"; it would
+  // take the operator to an undefined config. So the honest binding is the one
+  // that says what is true: the document exists, the screen does not.
+  //
+  // The slice that builds the screen owns keystroke/types.ts (extending
+  // VoucherType), screens/vouchers/voucherConfig.ts (the four configs, each
+  // with post/alter) and the CoredClient methods behind them; it should flip
+  // these four bindings to `voucher` and add the button-bar entries in the same
+  // change. buttons.test.ts REFUSES to let an `unavailable` action be
+  // advertised on a button bar, which is why the bar carries none of them yet:
+  // a button a user can see and press must do something.
   "Alt+F7": {
     kind: "unavailable",
     feature: "Stock Journal (Alt+F7)",
-    note: "Inventory vouchers are not built yet (no godown/stock movement plane).",
+    note: "The server records stock journals (transfers and manufacture) — the entry screen is not built yet.",
   },
   "Alt+F8": {
     kind: "unavailable",
     feature: "Delivery Note (Alt+F8)",
-    note: "Order processing / tracking documents are not built yet.",
+    note: "The server records delivery notes (goods out before the invoice) — the entry screen is not built yet.",
   },
   "Alt+F9": {
     kind: "unavailable",
     feature: "Receipt Note (Alt+F9)",
-    note: "Order processing / tracking documents are not built yet.",
+    note: "The server records receipt notes (goods in before the bill) — the entry screen is not built yet.",
+  },
+  // Alt+F10 is TallyPrime's Physical Stock key and it was bound to NOTHING,
+  // which this file's coverage rule calls the worst outcome of all: the user
+  // cannot tell a missing feature from a broken app. It is bound now.
+  "Alt+F10": {
+    kind: "unavailable",
+    feature: "Physical Stock (Alt+F10)",
+    note: "The server records a physical stock count — the entry screen is not built yet, and note that the seeded Data Entry level is deliberately refused this one (migration 0031).",
   },
   "Ctrl+F4": {
     kind: "unavailable",
     feature: "Payroll voucher (Ctrl+F4)",
     note: "The payroll module is not built yet.",
   },
+  // Ctrl+F7 was ERP 9's Physical Stock key. TallyPrime moved it to Alt+F10
+  // (bound above), so this profile keeps Ctrl+F7 bound — an operator with ERP 9
+  // in their fingers WILL press it — but says where the key went rather than
+  // claiming Physical Stock lives here.
   "Ctrl+F7": {
     kind: "unavailable",
-    feature: "Physical Stock (Ctrl+F7)",
-    note: "Inventory vouchers are not built yet.",
+    feature: "Physical Stock (Ctrl+F7 — TallyPrime moved it to Alt+F10)",
+    note: "In this profile the physical stock count is Alt+F10; its entry screen is not built yet either.",
   },
   "Ctrl+F8": {
     kind: "unavailable",

@@ -23,6 +23,17 @@ function item(key: string, label: string): ButtonBarItem {
  * The voucher button bar. The six core voucher F-keys are always present (their
  * fixed positions are part of the muscle memory contract), plus the universal
  * accept/navigation buttons.
+ *
+ * WHY THE STOCK VOUCHERS (Alt+F7 Stock Journal, Alt+F8 Delivery Note, Alt+F9
+ * Receipt Note, Alt+F10 Physical Stock) ARE NOT ON THIS BAR YET. The server
+ * records all four and the ACL decides who may key them, but they have no entry
+ * screen, so keymaps/tallyprime.ts still binds them to `unavailable` — and
+ * buttons.test.ts fails the build if a bar advertises an `unavailable` action.
+ * That rule is deliberate and should not be relaxed to get the buttons on
+ * early: a button a user can SEE and PRESS that answers "not built" is worse
+ * than no button, because the operator reaches for it by position from then on.
+ * Add these entries in the same change that builds the screen and flips those
+ * four bindings to `voucher`.
  */
 const VOUCHER_BAR: readonly ButtonBarItem[] = [
   item("F4", "Contra"),

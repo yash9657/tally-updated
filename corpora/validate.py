@@ -16,6 +16,7 @@ backend's fixed-point contract.
 from __future__ import annotations
 
 import json
+import re
 import sys
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
@@ -44,6 +45,14 @@ KNOWN_VOUCHER_TYPES = {
 # screens that shipped later (help, features, bill-inbox, query, ...) were not
 # added here, so a corpus case naming one FAILED validation even though the
 # screen exists and the case is correct. Keep this set in step with that union.
+#
+# IT HAD DRIFTED AGAIN, and the failure mode is worth naming because it is the
+# opposite of the one a validator is for. A vocabulary that is MISSING a screen
+# does not catch a bad fixture — it rejects a GOOD one, with a message pointing
+# at the case rather than at this list, and the natural fix under time pressure
+# is to change the fixture until the validator stops complaining. That turns a
+# correct golden case into a wrong one. company-select, members and edit-log
+# (the SaaS + audit screens) had shipped in ScreenKind and were absent here.
 KNOWN_SCREENS = {
     "gateway",
     "menu",
@@ -54,6 +63,11 @@ KNOWN_SCREENS = {
     "master-create",
     "bill-inbox",
     "query",
+    # F3 company switching and the Users & Roles surface (the SaaS admin wave).
+    "company-select",
+    "members",
+    # A voucher's hash-chained version history — a pure reader, by design.
+    "edit-log",
     "help",
     "features",
 }
@@ -1127,7 +1141,72 @@ MIN_COUNTS = {
 }
 
 
+def _ts_union_members(source: str, type_name: str) -> set[str] | None:
+    """Extract the string-literal members of `export type <type_name> = ...;`.
+
+    Returns None when the union is not found at all, so a rename in the
+    TypeScript is reported as a missing type rather than as an empty set (an
+    empty set would silently claim EVERY known token had been deleted).
+    """
+    # Strip block comments first: the unions are annotated per-member
+    # (`/** Alt+F6 — sales return */`), and a comment that happened to contain a
+    # quoted word would otherwise be read as a member.
+    stripped = re.sub(r"/\*.*?\*/", "", source, flags=re.DOTALL)
+    m = re.search(
+        r"export type " + re.escape(type_name) + r"\s*=(.*?);", stripped, flags=re.DOTALL
+    )
+    if not m:
+        return None
+    return set(re.findall(r'"([^"]+)"', m.group(1)))
+
+
+def check_vocabulary_matches_typescript() -> None:
+    """Fail if this file's closed vocabularies have drifted from ScreenKind /
+    VoucherType in the frontend.
+
+    WHY THIS IS A CHECK AND NOT A COMMENT ASKING PEOPLE TO REMEMBER. KNOWN_SCREENS
+    has now fallen behind ScreenKind TWICE. Both times the symptom was a VALID
+    fixture being rejected, with a message naming the fixture — so the cheapest
+    apparent fix is to edit the golden case until the validator goes quiet, which
+    replaces a correct expectation with a wrong one. The drift also runs the other
+    way: a token left here after the union dropped it is a fixture nobody can
+    detect is dead.
+
+    The frontend is a sibling of this directory, not a dependency of it, so a
+    checkout or CI image without it SKIPS rather than fails: this validator is
+    documented as stdlib-only and must keep running on the corpora alone.
+    """
+    types_ts = ROOT.parent / "frontend" / "src" / "keystroke" / "types.ts"
+    if not types_ts.is_file():
+        return
+    source = types_ts.read_text(encoding="utf8")
+    for type_name, known, label in (
+        ("ScreenKind", KNOWN_SCREENS, "KNOWN_SCREENS"),
+        ("VoucherType", KNOWN_VOUCHER_TYPES, "KNOWN_VOUCHER_TYPES"),
+    ):
+        members = _ts_union_members(source, type_name)
+        if members is None:
+            _errors.append(
+                f"{label}: could not find `export type {type_name}` in {types_ts} — "
+                f"it was renamed or moved, so this validator has stopped checking it"
+            )
+            continue
+        missing = sorted(members - known)
+        extra = sorted(known - members)
+        if missing:
+            _errors.append(
+                f"{label}: {type_name} has {missing} which this file does not list — "
+                f"a fixture naming one would be rejected even though the screen exists"
+            )
+        if extra:
+            _errors.append(
+                f"{label}: this file lists {extra} which {type_name} no longer has — "
+                f"a fixture naming one would validate and then drive nothing"
+            )
+
+
 def main() -> int:
+    check_vocabulary_matches_typescript()
     counts: dict[str, int] = {k: 0 for k in VALIDATORS}
     for category, validator in VALIDATORS.items():
         directory = ROOT / category

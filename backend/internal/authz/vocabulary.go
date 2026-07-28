@@ -24,10 +24,24 @@ import (
 // KnownActions is every action token an acl_rule may carry (plus Wildcard).
 var KnownActions = []Action{Create, Alter, Delete, Display, Print, Export}
 
-// KnownVoucherClasses are the resource tokens naming an accounting voucher class.
+// KnownVoucherClasses are the resource tokens naming a voucher class — the
+// kebab-case form of ledger.Class, which is also the path segment routeAction
+// derives the token from (POST /vouchers/delivery-note -> "delivery-note").
+//
+// THE LIST IS NOT "THE ACCOUNTING CLASSES". The four stock vouchers below post
+// ZERO accounting lines (internal/ledger/nonaccounting.go), and that is exactly
+// why they need their own tokens rather than borrowing an existing one: moving
+// goods out of a warehouse without an invoice is a distinct authority from
+// raising the invoice, and an administrator who cannot NAME it cannot grant or
+// withhold it. Migration 0031 uses these four names.
 var KnownVoucherClasses = []Resource{
 	"sales", "purchase", "receipt", "payment", "contra", "journal",
 	"credit-note", "debit-note",
+	// The non-accounting stock vouchers (INV-K). Named individually for the
+	// same reason each report is: one shared token would make "an operator may
+	// receive goods but may not restate the count" impossible to express, and
+	// that is precisely the distinction migration 0031 draws.
+	"delivery-note", "receipt-note", "stock-journal", "physical-stock",
 }
 
 // KnownResources is every non-report resource token an acl_rule may carry (plus
@@ -41,6 +55,21 @@ var KnownResources = append([]Resource{
 	"sync",     // offline sync commit
 	"query",    // conversational query
 	"security", // users, memberships and security levels (this admin surface)
+	// Price lists (INV-L, migration 0030): named rates for stock items over a
+	// date window, optionally narrowed to a party group.
+	//
+	// WHY IT IS NOT FOLDED INTO "master". Every other master shares the one
+	// `master` token so that one rule governs the chart of accounts, the
+	// godowns and the items alike — and that is right for them, because the
+	// question "may this level define masters?" has one answer. A price list
+	// asks a SECOND question the `master` token cannot express: may this level
+	// SEE what we charge, and in particular what we charge THIS customer that
+	// we do not charge that one. There is no `master:NAME` narrowing form (only
+	// `report:NAME` exists), so folding price lists into `master` would make
+	// "an operator may pick a godown but must not read the rate card" an
+	// unwritable rule. A separate token costs one line here and buys the
+	// administrator a lever; see migration 0031 for the judgement it enables.
+	"price-list",
 }, KnownVoucherClasses...)
 
 // KnownReportNames is every report a rule may name via the "report:NAME" form.
