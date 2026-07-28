@@ -642,16 +642,32 @@ try {
 // reachable, so these two flows are the browser-visible half of that work.
 // ---------------------------------------------------------------------------
 try {
+  // WAIT FOR THE LIST, DO NOT SLEEP FOR IT. This flow used a flat 900ms and went
+  // flaky once the shared dev account had accumulated 120 companies (one per
+  // seed:demo run): the picker renders every company the user may open, so the
+  // fixed budget that was ample at 3 rows is not at 120, and the failure looked
+  // like a regression in F3 rather than what it was. The same applies to the Esc
+  // return — waiting on the condition is both faster in the common case and
+  // correct in the slow one.
   await toGateway();
-  await press("F3", 900);
+  await page.keyboard.press("F3");
+  const listed = await page
+    .getByText(/List of Companies/i)
+    .first()
+    .waitFor({ state: "visible", timeout: 15000 })
+    .then(() => true, () => false);
   const h = await heading();
-  const listed = (await body()).includes("List of Companies");
   // Esc must leave the picker WITHOUT switching (the session stays put).
-  await press("Escape", 400);
+  await page.keyboard.press("Escape");
+  let back = false;
+  for (let i = 0; i < 30 && !back; i++) {
+    back = await atGateway();
+    if (!back) await page.waitForTimeout(200);
+  }
   rec(
     "F3 opens the company picker (companies this user may open)",
-    /Select Company/i.test(h) && listed && (await atGateway()),
-    h,
+    /Select Company/i.test(h) && listed && back,
+    `${h} | list rendered=${listed} | Esc returned to gateway=${back}`,
   );
 } catch (e) { rec("F3 opens the company picker", false, e.message); }
 
