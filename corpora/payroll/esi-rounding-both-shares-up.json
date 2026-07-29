@@ -1,0 +1,27 @@
+{
+  "id": "esi-rounding-both-shares-up",
+  "description": "ESI (Central) Rules 1950 rule 51: the contribution payable is 'a sum (rounded to the next higher rupee) equal to [X] per cent. of the wages' — and the parenthesis governs the whole formula, so BOTH the employee's and the employer's share are rounded UP, against the practice of several commercial payroll products that ceil only the employee share. This is the ONLY ceiling rounding anywhere in the codebase. Hand derivation: wage month August 2026, period 1 April - 30 September 2026, tested on 1 April 2026 at 20123.0000 which does not exceed 21000.0000, so covered; rule 52 does not apply because 20123.0000 exceeds 176 x 31 = 5456.0000; employee 0.75% of 20123.0000 = 150.9225 -> next higher rupee 151; employer 3.25% of 20123.0000 = 653.9975 -> next higher rupee 654. Half-up rounding would give 151 and 654 as well here, but 162.5000 in esi-low-wage-employee-share-exempt would give 162 or 163 depending on the mode — the ceiling is what makes all of them deterministic.",
+  "rulesetVersion": "ss-2026-07",
+  "input": {
+    "wageMonth": "2026-08",
+    "joinedOn": null,
+    "leftOn": null,
+    "revisions": [
+      {
+        "effectiveFrom": "2026-04-01",
+        "monthlyWages": "20123.0000"
+      }
+    ],
+    "monthWages": "20123.0000",
+    "paidDays": 31
+  },
+  "expected": {
+    "covered": true,
+    "applied": true,
+    "wagesTestedOn": "2026-04-01",
+    "wagesTested": "20123.0000",
+    "lowWageExempt": false,
+    "employeeShare": "151.0000",
+    "employerShare": "654.0000"
+  }
+}

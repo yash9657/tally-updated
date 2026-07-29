@@ -1,0 +1,32 @@
+{
+  "id": "pf-at-ceiling-statutory-only",
+  "description": "EPF & MP Act 1952 s.6 read with EPF Scheme para 29 (employee 12%, employer 12%) and EPS 1995 para 3 (8.33% of the employer's share diverted to the Pension Fund), at the notified wage ceiling of 15000.0000 per month (S.O. 2882(E) w.e.f. 01-09-2014, carried into the EPF/EPS Schemes 2026). Hand derivation: the statutory wage 15000.0000 is AT the ceiling, so EPF wages = EPS wages = EDLI wages = 15000.0000; employee 12% of 15000.0000 = 1800.0000 -> 1800 whole rupees; EPS 8.33% of 15000.0000 = 1249.5000 -> 1250 (the ECR carries whole rupees and each component is rounded separately); the employer's EPF share is the residual 1800 - 1250 = 550. The EDLI contribution and both administrative charges are NOT derived: their 2026-Scheme rates are UNVERIFIED in this build, so they are named deferrals rather than numbers. 'Unverified' is not 'unnotified': an EDLI contribution rate of 0.50% from 29 June 2026 is REPORTED on secondary sources only and is deferred because no primary G.S.R. could be read, while the two administrative charges are genuinely unknown. See pf-edli-contribution-refused-unnotified.",
+  "rulesetVersion": "ss-2026-07",
+  "input": {
+    "wageMonth": "2026-08",
+    "statutoryWage": "15000.0000",
+    "pfBase": "CEILING",
+    "employeeVoluntaryBase": "0.0000",
+    "employerMatchesVoluntary": false,
+    "epsMember": true,
+    "firstMemberOn": "2010-04-01"
+  },
+  "expected": {
+    "epfWages": "15000.0000",
+    "epsWages": "15000.0000",
+    "edliWages": "15000.0000",
+    "employeeStatutory": "1800.0000",
+    "employeeVoluntary": "0.0000",
+    "employerStatutory": "550.0000",
+    "employerVoluntary": "0.0000",
+    "eps": "1250.0000",
+    "employeeEPF": "1800.0000",
+    "employerEPF": "550.0000",
+    "epsMemberApplied": true,
+    "deferredComponents": [
+      "EDLI_CONTRIBUTION",
+      "EDLI_ADMIN_CHARGES",
+      "EPF_ADMIN_CHARGES"
+    ]
+  }
+}

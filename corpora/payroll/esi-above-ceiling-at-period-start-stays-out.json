@@ -1,0 +1,31 @@
+{
+  "id": "esi-above-ceiling-at-period-start-stays-out",
+  "description": "The MIRROR of the s.2(9) second proviso, and the reason coverage is a LATCH and not a monthly test: an employee who is OUTSIDE coverage at the start of a contribution period because the wage exceeded the 21000.0000 limit (G.S.R. 1226(E) w.e.f. 01-01-2017) does not become covered mid-period merely because the wage later falls. This case deliberately cites the PRE-Code ruleset ss-2019-07 (ESI employee 0.75% and employer 3.25% w.e.f. 01-07-2019, G.S.R. 423(E)) so that a re-run of an OLD wage month resolves to the ruleset in force THEN instead of silently borrowing the 2026 rates. Hand derivation: wage month May 2020, so the period is 1 April 2020 - 30 September 2020 and the test date is 1 April 2020; the revision in force that day paid 24000.0000, which exceeds 21000.0000, so the employee is out for the WHOLE period; the drop to 20000.0000 effective 1 May 2020 is irrelevant; employee share 0.0000 and employer share 0.0000.",
+  "rulesetVersion": "ss-2019-07",
+  "input": {
+    "wageMonth": "2020-05",
+    "joinedOn": null,
+    "leftOn": null,
+    "revisions": [
+      {
+        "effectiveFrom": "2019-07-01",
+        "monthlyWages": "24000.0000"
+      },
+      {
+        "effectiveFrom": "2020-05-01",
+        "monthlyWages": "20000.0000"
+      }
+    ],
+    "monthWages": "20000.0000",
+    "paidDays": 31
+  },
+  "expected": {
+    "covered": false,
+    "applied": false,
+    "wagesTestedOn": "2020-04-01",
+    "wagesTested": "24000.0000",
+    "lowWageExempt": false,
+    "employeeShare": "0.0000",
+    "employerShare": "0.0000"
+  }
+}

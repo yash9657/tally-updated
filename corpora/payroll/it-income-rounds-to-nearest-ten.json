@@ -1,0 +1,42 @@
+{
+  "id": "it-income-rounds-to-nearest-ten",
+  "description": "Income-tax Act 2025 s.516 carries forward BOTH ex-s.288A and ex-s.288B, and they have DIFFERENT UNITS: TOTAL INCOME is rounded to the nearest multiple of TEN rupees, and only the tax finally payable is rounded to the nearest RUPEE. Applying the rupee rounding to income is the natural half-implementation and it is wrong. This is a final-month (March) computation so the whole remaining balance is deducted with no division. Hand derivation: 1443755.5000 already paid this year plus 131250.5000 this month = 1575006.0000; less standard deduction 75000.0000 = 1500006.0000 raw, which s.516 rounds UP to 1500010. New-regime slabs: 20000 + 40000 + (1500010-1200000) at 15% = 45001.5000; tax before rebate 105001.5000; no rebate and no rebate marginal relief because income - 1200000 = 300010 exceeds the tax; no surcharge; cess 4% = 4200.0600; total 109201.5600 rounded to the nearest rupee = 109202. Already credited 100000, final month, so the whole balance 9202 is deducted. Rounding the income to the RUPEE instead would give 1500006, tax 105000.9000, cess 4200.0360, annual tax 109201 and a final deduction of 9201 - one rupee short and a Form 130 that does not reconcile.",
+  "rulesetVersion": "it-ty-2026-27",
+  "input": {
+    "taxYearStart": "2026-04-01",
+    "regime": "NEW",
+    "isResident": true,
+    "ageBand": "BELOW_60",
+    "panAvailable": true,
+    "priorEmployerTaxable": "0.0000",
+    "priorEmployerTDS": "0.0000",
+    "ytdTaxableThisEmployer": "1443755.5000",
+    "ytdTDSThisEmployer": "100000.0000",
+    "currentMonthTaxable": "131250.5000",
+    "projectedRemainingTaxable": "0.0000",
+    "monthsRemainingInclusive": 1,
+    "isFinalMonth": true,
+    "housePropertyLoss": "0.0000",
+    "chapterVIA": "0.0000",
+    "otherIncomeDeclared": "0.0000"
+  },
+  "expected": {
+    "regimeApplied": "NEW",
+    "estimatedAnnualTaxable": "1500010.0000",
+    "standardDeduction": "75000.0000",
+    "taxBeforeRebate": "105001.5000",
+    "rebate": "0.0000",
+    "rebateMarginalRelief": "0.0000",
+    "surcharge": "0.0000",
+    "surchargeMarginalRelief": "0.0000",
+    "cess": "4200.0600",
+    "annualTax": "109202.0000",
+    "creditedAlready": "100000.0000",
+    "tdsThisMonth": "9202.0000",
+    "periodBasis": "ANNUAL"
+  },
+  "counterfactual": {
+    "rule": "round-income-to-rupee",
+    "why": "Rounding total income to the nearest RUPEE instead of the nearest TEN gives a taxable figure of 1500006, an annual tax of 109201 and a final deduction of 9201. One rupee per employee per year is invisible until the Form 130 / Form 138 reconciliation refuses to tie."
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "id": "pf-above-ceiling-base-ceiling",
+  "description": "EPF Scheme para 26A(2) proviso: an employer may restrict its contribution to the notified ceiling of 15000.0000 even where the statutory wage is higher. Hand derivation: statutory wage 40000.0000 with base CEILING gives a statutory base of min(40000.0000, 15000.0000) = 15000.0000 and NO above-ceiling excess, so EPF wages 15000.0000; EPS wages are min(statutory wage, pension ceiling) = 15000.0000 and EDLI wages likewise 15000.0000; employee 12% of 15000.0000 = 1800; EPS 8.33% of 15000.0000 = 1249.5000 -> 1250; employer residual 1800 - 1250 = 550. The point of this fixture is that every figure is IDENTICAL to the at-ceiling case even though the wage is 40000.0000 — it is the cap that decides, not the wage.",
+  "rulesetVersion": "ss-2026-07",
+  "input": {
+    "wageMonth": "2026-08",
+    "statutoryWage": "40000.0000",
+    "pfBase": "CEILING",
+    "employeeVoluntaryBase": "0.0000",
+    "employerMatchesVoluntary": false,
+    "epsMember": true,
+    "firstMemberOn": "2010-04-01"
+  },
+  "expected": {
+    "epfWages": "15000.0000",
+    "epsWages": "15000.0000",
+    "edliWages": "15000.0000",
+    "employeeStatutory": "1800.0000",
+    "employeeVoluntary": "0.0000",
+    "employerStatutory": "550.0000",
+    "employerVoluntary": "0.0000",
+    "eps": "1250.0000",
+    "employeeEPF": "1800.0000",
+    "employerEPF": "550.0000",
+    "epsMemberApplied": true,
+    "deferredComponents": [
+      "EDLI_CONTRIBUTION",
+      "EDLI_ADMIN_CHARGES",
+      "EPF_ADMIN_CHARGES"
+    ]
+  }
+}

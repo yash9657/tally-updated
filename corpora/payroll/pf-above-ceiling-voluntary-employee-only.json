@@ -1,0 +1,36 @@
+{
+  "id": "pf-above-ceiling-voluntary-employee-only",
+  "description": "Voluntary Provident Fund under EPF Scheme para 26(6): the MEMBER may contribute above the statutory 12%, and the employer is under NO obligation to match it — para 26(6) requires a separate agreement for a matching contribution. The employer here has also restricted itself to the ceiling under para 26A(2). Hand derivation: statutory wage 40000.0000, base CEILING -> statutory base 15000.0000, no above-ceiling excess, EPF/EPS/EDLI wages 15000.0000; employee statutory 12% of 15000.0000 = 1800; the employee elected a VOLUNTARY base of 25000.0000, so the VPF is 12% of 25000.0000 = 3000 and the employee's total deduction is 4800, which is well under the 50% of wages cap in s.18(2) of the Code on Wages 2019; the employer contributes NOTHING on the voluntary base, so its EPS stays 1250 and its EPF share stays 550.",
+  "rulesetVersion": "ss-2026-07",
+  "input": {
+    "wageMonth": "2026-08",
+    "statutoryWage": "40000.0000",
+    "pfBase": "CEILING",
+    "employeeVoluntaryBase": "25000.0000",
+    "employerMatchesVoluntary": false,
+    "epsMember": true,
+    "firstMemberOn": "2010-04-01"
+  },
+  "expected": {
+    "epfWages": "15000.0000",
+    "epsWages": "15000.0000",
+    "edliWages": "15000.0000",
+    "employeeStatutory": "1800.0000",
+    "employeeVoluntary": "3000.0000",
+    "employerStatutory": "550.0000",
+    "employerVoluntary": "0.0000",
+    "eps": "1250.0000",
+    "employeeEPF": "4800.0000",
+    "employerEPF": "550.0000",
+    "epsMemberApplied": true,
+    "deferredComponents": [
+      "EDLI_CONTRIBUTION",
+      "EDLI_ADMIN_CHARGES",
+      "EPF_ADMIN_CHARGES"
+    ]
+  },
+  "counterfactual": {
+    "rule": "pf-base-actual-with-employer-matching",
+    "why": "If the engine ignored the para 26A(2) restriction and the para 26(6) proviso — computing on ACTUAL wages with the employer matching the VPF — the employer's EPF share would be 6550 instead of 550 and the employee's deduction 7800 instead of 4800. The company would over-remit 6000 every month and the employee would be short-paid 3000."
+  }
+}

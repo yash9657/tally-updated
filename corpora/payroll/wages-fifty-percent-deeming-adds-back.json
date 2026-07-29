@@ -1,0 +1,35 @@
+{
+  "id": "wages-fifty-percent-deeming-adds-back",
+  "description": "Code on Social Security 2020 s.2(88) second proviso: where the payments EXCLUDED from wages (here HRA and conveyance allowance) exceed one-half of ALL REMUNERATION, the excess is DEEMED to be wages. Hand derivation: BASIC 9000.0000 + DA 3000.0000 = included 12000.0000; HRA 12000.0000 + CONVEYANCE_ALLOWANCE 6000.0000 = excluded 18000.0000; total remuneration 30000.0000; the threshold is 50% so the floor is 15000.0000; excluded 18000.0000 exceeds it, so the add-back is 18000.0000 - 15000.0000 = 3000.0000 and the statutory wage is 12000.0000 + 3000.0000 = 15000.0000, exactly one-half of the total. Without the proviso the PF and ESI base would be 12000.0000 and every contribution downstream would be understated by 20%. This leaf is UPSTREAM of both PF and ESI, so an error here is systematic rather than isolated.",
+  "rulesetVersion": "ss-2026-07",
+  "input": {
+    "wageMonth": "2026-08",
+    "components": [
+      {
+        "type": "BASIC",
+        "amount": "9000.0000"
+      },
+      {
+        "type": "DA",
+        "amount": "3000.0000"
+      },
+      {
+        "type": "HRA",
+        "amount": "12000.0000"
+      },
+      {
+        "type": "CONVEYANCE_ALLOWANCE",
+        "amount": "6000.0000"
+      }
+    ]
+  },
+  "expected": {
+    "totalRemuneration": "30000.0000",
+    "includedComponents": "12000.0000",
+    "excludedComponents": "18000.0000",
+    "excludedComponentsInDeemingTest": "18000.0000",
+    "deemingThresholdPct": "50",
+    "deemedAddBack": "3000.0000",
+    "statutoryWage": "15000.0000"
+  }
+}

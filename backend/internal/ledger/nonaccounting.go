@@ -163,10 +163,19 @@ var ErrOrderVouchersNotModelled = errors.New(
 //
 // Adding a class here is a code change, in a diff, with a reviewer. That is the
 // entire point.
+// Payroll is here, and its membership is the load-bearing half of the payroll
+// slice's ledger decision. A pay run is the largest single debit most small
+// companies raise in a month; classified as non-accounting it would take the
+// !postsDoubleEntry branch, validateStockVoucher would REFUSE its postings
+// outright, and a caller that dropped them to satisfy the refusal would commit
+// a voucher with ZERO posting rows — which posting_balanced, being a constraint
+// trigger on the posting TABLE, would never fire on. The trial balance would
+// still balance; it would simply be missing the payroll. See payroll_class.go.
 var accountingClasses = map[Class]bool{
 	Contra: true, Payment: true, Receipt: true,
 	Journal: true, Sales: true, Purchase: true,
 	CreditNote: true, DebitNote: true,
+	Payroll: true,
 }
 
 // postsDoubleEntry reports whether a class must state balanced double-entry

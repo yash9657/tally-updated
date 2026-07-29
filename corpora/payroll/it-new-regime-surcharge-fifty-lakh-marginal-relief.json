@@ -1,0 +1,38 @@
+{
+  "id": "it-new-regime-surcharge-fifty-lakh-marginal-relief",
+  "description": "Finance Act 2026 First Schedule Part III paragraph A: surcharge at 10% where total income exceeds 5000000, with the classic marginal relief that the incremental tax plus surcharge cannot exceed the incremental income over the threshold. Under the s.202 default regime the surcharge is capped at 25% (the 37% slab does not apply). Hand derivation: salary 400000.0000 + 4725000.0000 = 5125000.0000, less standard deduction 75000.0000 = 5050000, already a multiple of ten. Slabs: 20000 + 40000 + 60000 + 80000 + 100000 + (5050000-2400000) at 30% = 795000, so tax before rebate 1095000. No rebate (income far above 1200000) and no rebate marginal relief (income - 1200000 = 3850000 exceeds the tax). Surcharge 10% of 1095000 = 109500. Marginal relief: tax at exactly 5000000 is 20000+40000+60000+80000+100000+(2600000 at 30% = 780000) = 1080000 with NIL surcharge, so the cap is 1080000 + (5050000 - 5000000) = 1130000; actual 1095000 + 109500 = 1204500; relief = 74500. Tax plus surcharge after relief 1130000. Cess 4% = 45200. Annual tax 1175200. 12 months remaining, nothing credited, so TDS this month = 1175200/12 = 97933.3333 -> 97933.",
+  "rulesetVersion": "it-ty-2026-27",
+  "input": {
+    "taxYearStart": "2026-04-01",
+    "regime": "NEW",
+    "isResident": true,
+    "ageBand": "BELOW_60",
+    "panAvailable": true,
+    "priorEmployerTaxable": "0.0000",
+    "priorEmployerTDS": "0.0000",
+    "ytdTaxableThisEmployer": "0.0000",
+    "ytdTDSThisEmployer": "0.0000",
+    "currentMonthTaxable": "400000.0000",
+    "projectedRemainingTaxable": "4725000.0000",
+    "monthsRemainingInclusive": 12,
+    "isFinalMonth": false,
+    "housePropertyLoss": "0.0000",
+    "chapterVIA": "0.0000",
+    "otherIncomeDeclared": "0.0000"
+  },
+  "expected": {
+    "regimeApplied": "NEW",
+    "estimatedAnnualTaxable": "5050000.0000",
+    "standardDeduction": "75000.0000",
+    "taxBeforeRebate": "1095000.0000",
+    "rebate": "0.0000",
+    "rebateMarginalRelief": "0.0000",
+    "surcharge": "109500.0000",
+    "surchargeMarginalRelief": "74500.0000",
+    "cess": "45200.0000",
+    "annualTax": "1175200.0000",
+    "creditedAlready": "0.0000",
+    "tdsThisMonth": "97933.0000",
+    "periodBasis": "ANNUAL"
+  }
+}

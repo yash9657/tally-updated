@@ -1,0 +1,39 @@
+{
+  "id": "wages-terminal-payments-outside-deeming-test",
+  "description": "CLAUSE-RANGE FIXTURE. Proviso 1 to s.2(88) of the Code on Social Security 2020 tests only 'payments made by the employer to the employee UNDER CLAUSES (a) TO (i)' against the one-half floor. The enumeration STOPS AT (i): clause (j) is 'any gratuity payable on the termination of employment' and clause (k) is 'any retrenchment compensation or other retirement benefit payable to the employee or any ex gratia payment made to him on the termination of employment'. Both are excluded from wages AND take no part in the deeming test, so they can never be added back. Hand derivation for a leaver's final payslip: BASIC 30000.0000 is included; HRA 15000.0000 is excluded by clause (f) and IS in the deeming test; GRATUITY 500000.0000 (clause (j)) and RETRENCHMENT_COMPENSATION 200000.0000 (clause (k)) are excluded and are NOT in the deeming test; total remuneration 745000.0000; all exclusions 715000.0000 but the sum tested is only 15000.0000; the threshold is 50% so the floor is 372500.0000; 15000.0000 does NOT exceed 372500.0000, so the add-back is 0.0000 and the statutory wage is 30000.0000. Note the asymmetry the proviso writes: the FLOOR is a share of 'the all remuneration calculated under this clause' — gratuity included — while the sum TESTED is only (a)-(i), so a terminal payment can only ever REDUCE an add-back and never create one. The bug this fixture exists for ran the test over all twelve exclusions and produced a statutory wage of 372500.0000 instead of 30000.0000: the employee's EPF at 12% becomes 44700.0000 instead of 3600.0000, so Rs 41100 comes out of a departing employee's FINAL salary and the employer over-remits the same on money the statute says is not a wage. It fires on every terminal settlement, which is the normal case for a leaver, and the ESI leg is worse in kind because the ESI contribution has no ceiling once the coverage latch is on.",
+  "rulesetVersion": "ss-2025-11",
+  "input": {
+    "wageMonth": "2026-03",
+    "components": [
+      {
+        "type": "BASIC",
+        "amount": "30000.0000"
+      },
+      {
+        "type": "HRA",
+        "amount": "15000.0000"
+      },
+      {
+        "type": "GRATUITY",
+        "amount": "500000.0000"
+      },
+      {
+        "type": "RETRENCHMENT_COMPENSATION",
+        "amount": "200000.0000"
+      }
+    ]
+  },
+  "expected": {
+    "totalRemuneration": "745000.0000",
+    "includedComponents": "30000.0000",
+    "excludedComponents": "715000.0000",
+    "excludedComponentsInDeemingTest": "15000.0000",
+    "deemingThresholdPct": "50",
+    "deemedAddBack": "0.0000",
+    "statutoryWage": "30000.0000"
+  },
+  "counterfactual": {
+    "rule": "deem-all-exclusions",
+    "why": "The naive rule runs the 'exceeds one-half' test over ALL TWELVE exclusions instead of over clauses (a) to (i). On this leaver it makes the tested sum 715000.0000 against a floor of 372500.0000, an add-back of 342500.0000 and a statutory wage of 372500.0000 instead of 30000.0000 — Rs 41100 deducted from a departing employee's final salary and remitted to the EPFO on their own gratuity, plus the matching Rs 41100 of employer money, on every terminal settlement. If this naive derivation ever AGREES with expected, the clause range has stopped being tested and the leaver bug can come back unnoticed."
+  }
+}

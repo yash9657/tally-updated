@@ -1,0 +1,42 @@
+{
+  "id": "it-mid-year-joiner-prior-employer-aggregated",
+  "description": "Income-tax Act 2025 s.392(2) (ex-s.192(2)) read with the Form 12B furnishing rule: where an employee joins mid-year and furnishes particulars of the salary and TDS from the FORMER employer, the new employer must take them into account and deduct on the AGGREGATE. This case also exercises the OLD regime, which the employee has opted for under the s.202(6) election, so the old slabs and the Chapter VI-A deduction apply. Hand derivation: prior employer April-September 900000.0000 with 45000.0000 already deducted; this employer October 180000.0000 plus 900000.0000 projected for November-March; aggregate salary 1980000.0000; less standard deduction 50000.0000 = 1930000.0000; less Chapter VI-A 150000.0000 = 1780000, already a multiple of ten. Old slabs for a resident below 60: 0-250000 nil; 250000-500000 at 5% = 12500; 500000-1000000 at 20% = 100000; above 1000000 at 30% on 780000 = 234000; tax before rebate 346500. No s.156 rebate (income exceeds 500000), no surcharge. Cess 4% of 346500 = 13860. Annual tax 360360. Credited already 45000, so the balance 315360 spread over the 6 months remaining (October to March inclusive) gives 52560 exactly.",
+  "rulesetVersion": "it-ty-2026-27",
+  "input": {
+    "taxYearStart": "2026-04-01",
+    "regime": "OLD",
+    "isResident": true,
+    "ageBand": "BELOW_60",
+    "panAvailable": true,
+    "priorEmployerTaxable": "900000.0000",
+    "priorEmployerTDS": "45000.0000",
+    "ytdTaxableThisEmployer": "0.0000",
+    "ytdTDSThisEmployer": "0.0000",
+    "currentMonthTaxable": "180000.0000",
+    "projectedRemainingTaxable": "900000.0000",
+    "monthsRemainingInclusive": 6,
+    "isFinalMonth": false,
+    "housePropertyLoss": "0.0000",
+    "chapterVIA": "150000.0000",
+    "otherIncomeDeclared": "0.0000"
+  },
+  "expected": {
+    "regimeApplied": "OLD",
+    "estimatedAnnualTaxable": "1780000.0000",
+    "standardDeduction": "50000.0000",
+    "taxBeforeRebate": "346500.0000",
+    "rebate": "0.0000",
+    "rebateMarginalRelief": "0.0000",
+    "surcharge": "0.0000",
+    "surchargeMarginalRelief": "0.0000",
+    "cess": "13860.0000",
+    "annualTax": "360360.0000",
+    "creditedAlready": "45000.0000",
+    "tdsThisMonth": "52560.0000",
+    "periodBasis": "ANNUAL"
+  },
+  "counterfactual": {
+    "rule": "ignore-prior-employer-taxable",
+    "why": "An engine that ignores the former employer's salary computes on 1080000 instead of 1980000: annual tax 92040, balance 47040 after the 45000 already credited, and a monthly TDS of 7840 instead of 52560. The employee then owes about 268320 plus s.423 interest at assessment - the single most common payroll-engine defect and the one Form 12B exists to prevent."
+  }
+}

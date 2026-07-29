@@ -1,0 +1,32 @@
+{
+  "id": "pf-fractional-wage-every-rounder-diverges",
+  "description": "EPF & MP Act 1952 s.6 read with EPF Scheme para 29 (employee 12%, employer 12%) and EPS 1995 para 3 (8.33% of the employer's share diverted to the Pension Fund), on a statutory wage BELOW the notified ceiling of 15000.0000 per month (S.O. 2882(E) w.e.f. 01-09-2014, carried into the EPF/EPS Schemes 2026). THIS FIXTURE EXISTS TO SEPARATE THE ROUNDERS, not to demonstrate a new rule. Every other PF fixture uses a wage on which the s.288B nearest-RUPEE rounding that EPF obeys and the s.288A nearest-TEN rounding that only TOTAL INCOME obeys happen to agree, so replacing one with the other anywhere in the derivation left the whole corpus green. 12345 is chosen because NO figure it produces is a multiple of ten. Hand derivation: the statutory wage 12345.0000 is below the ceiling, so EPF wages = EPS wages = EDLI wages = 12345 whole rupees (nearest ten would print 12350 in three separate ECR columns); employee 12% of 12345 = 1481.4000 -> 1481 (nearest ten gives 1480, a rupee short in the employee's deduction every month); employer 12% of 12345 = 1481.4000 -> 1481; EPS 8.33% of 12345 = 1028.3385 -> 1028 (nearest ten gives 1030); the employer's EPF residual is 1481 - 1028 = 453 (nearest ten anywhere upstream gives 452 or 451). The employee's total deduction of 1481 is far below the 50% of wages cap in s.18(2) of the Code on Wages 2019. The EDLI contribution and both administrative charges are NOT derived: their 2026-Scheme rates are UNVERIFIED in this build, so they are named deferrals rather than numbers. 'Unverified' is not 'unnotified': an EDLI contribution rate of 0.50% from 29 June 2026 is REPORTED on secondary sources only and is deferred because no primary G.S.R. could be read, while the two administrative charges are genuinely unknown. See pf-edli-contribution-refused-unnotified.",
+  "rulesetVersion": "ss-2026-07",
+  "input": {
+    "wageMonth": "2026-08",
+    "statutoryWage": "12345.0000",
+    "pfBase": "CEILING",
+    "employeeVoluntaryBase": "0.0000",
+    "employerMatchesVoluntary": false,
+    "epsMember": true,
+    "firstMemberOn": "2010-04-01"
+  },
+  "expected": {
+    "epfWages": "12345.0000",
+    "epsWages": "12345.0000",
+    "edliWages": "12345.0000",
+    "employeeStatutory": "1481.0000",
+    "employeeVoluntary": "0.0000",
+    "employerStatutory": "453.0000",
+    "employerVoluntary": "0.0000",
+    "eps": "1028.0000",
+    "employeeEPF": "1481.0000",
+    "employerEPF": "453.0000",
+    "epsMemberApplied": true,
+    "deferredComponents": [
+      "EDLI_CONTRIBUTION",
+      "EDLI_ADMIN_CHARGES",
+      "EPF_ADMIN_CHARGES"
+    ]
+  }
+}

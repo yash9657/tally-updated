@@ -1,0 +1,32 @@
+{
+  "id": "pf-fractional-voluntary-base-matched-diverges",
+  "description": "Voluntary Provident Fund under EPF Scheme para 26(6) WITH a matching employer agreement, on a fractional wage and a fractional voluntary base. The para 26(6) agreement is what makes the employer contribute on the member's top-up at all. THIS FIXTURE EXISTS TO SEPARATE THE ROUNDERS on the VOLUNTARY half of the derivation, which pf-fractional-wage-every-rounder-diverges cannot reach because it carries no election: the voluntary base is rounded once as a BASE and the contribution derived from it is rounded again as an AMOUNT, and those are two distinct statutory acts at two distinct call sites. Both are the s.288B nearest-RUPEE rounding EPF obeys, never the s.288A nearest-TEN rounding that belongs to TOTAL INCOME alone. Hand derivation: statutory wage 12345.0000 is below the 15000.0000 ceiling, so EPF/EPS/EDLI wages are 12345; employee statutory 12% of 12345 = 1481.4000 -> 1481; employer 12% of 12345 = 1481.4000 -> 1481; EPS 8.33% of 12345 = 1028.3385 -> 1028; employer residual 1481 - 1028 = 453. The employee elected a VOLUNTARY base of 2345.0000, which is already whole rupees and must survive rounding unchanged (nearest ten would move it to 2350 and hand the member 282 instead of 281); the VPF is 12% of 2345 = 281.4000 -> 281 (nearest ten gives 280), and because the employer has agreed to match, its voluntary share is the same 281. Employee total deduction 1481 + 281 = 1762, well under the 50% of 12345 = 6172.5000 cap in s.18(2) of the Code on Wages 2019; employer total 453 + 281 = 734. The EDLI contribution and both administrative charges remain named deferrals: their 2026-Scheme rates are UNVERIFIED in this build. 'Unverified' is not 'unnotified' — an EDLI contribution rate of 0.50% from 29 June 2026 is REPORTED on secondary sources only and is deferred because no primary G.S.R. could be read, while the two administrative charges are genuinely unknown. See pf-edli-contribution-refused-unnotified.",
+  "rulesetVersion": "ss-2026-07",
+  "input": {
+    "wageMonth": "2026-08",
+    "statutoryWage": "12345.0000",
+    "pfBase": "CEILING",
+    "employeeVoluntaryBase": "2345.0000",
+    "employerMatchesVoluntary": true,
+    "epsMember": true,
+    "firstMemberOn": "2010-04-01"
+  },
+  "expected": {
+    "epfWages": "12345.0000",
+    "epsWages": "12345.0000",
+    "edliWages": "12345.0000",
+    "employeeStatutory": "1481.0000",
+    "employeeVoluntary": "281.0000",
+    "employerStatutory": "453.0000",
+    "employerVoluntary": "281.0000",
+    "eps": "1028.0000",
+    "employeeEPF": "1762.0000",
+    "employerEPF": "734.0000",
+    "epsMemberApplied": true,
+    "deferredComponents": [
+      "EDLI_CONTRIBUTION",
+      "EDLI_ADMIN_CHARGES",
+      "EPF_ADMIN_CHARGES"
+    ]
+  }
+}

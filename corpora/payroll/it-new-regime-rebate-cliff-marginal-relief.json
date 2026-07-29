@@ -1,0 +1,42 @@
+{
+  "id": "it-new-regime-rebate-cliff-marginal-relief",
+  "description": "Income-tax Act 2025 s.156 (ex-s.87A) as substituted by the Finance Act 2025: under the default regime of s.202 (ex-s.115BAC) a resident individual with total income up to 1200000 gets a rebate of up to 60000, and the proviso gives MARGINAL RELIEF just above that cliff so that the tax payable can never exceed the amount by which total income exceeds 1200000. Hand derivation: salary 110000.0000 this month + 1215000.0000 projected = 1325000.0000; less the s.19 standard deduction 75000.0000 = 1250000.0000, rounded to the nearest ten under s.516 (ex-s.288A) = 1250000. Slabs: 0-400000 nil; 400000-800000 at 5% = 20000; 800000-1200000 at 10% = 40000; 1200000-1250000 at 15% = 7500; tax before rebate 67500. Rebate 0 because income exceeds 1200000. Marginal relief: income - 1200000 = 50000 and 67500 > 50000, so relief = 17500 and tax becomes 50000. Surcharge nil. Cess 4% of 50000 = 2000. Annual tax 52000. Nothing credited yet, 12 months remaining, so this month's TDS = 52000/12 = 4333.3333 -> 4333 under s.516 (ex-s.288B).",
+  "rulesetVersion": "it-ty-2026-27",
+  "input": {
+    "taxYearStart": "2026-04-01",
+    "regime": "NEW",
+    "isResident": true,
+    "ageBand": "BELOW_60",
+    "panAvailable": true,
+    "priorEmployerTaxable": "0.0000",
+    "priorEmployerTDS": "0.0000",
+    "ytdTaxableThisEmployer": "0.0000",
+    "ytdTDSThisEmployer": "0.0000",
+    "currentMonthTaxable": "110000.0000",
+    "projectedRemainingTaxable": "1215000.0000",
+    "monthsRemainingInclusive": 12,
+    "isFinalMonth": false,
+    "housePropertyLoss": "0.0000",
+    "chapterVIA": "0.0000",
+    "otherIncomeDeclared": "0.0000"
+  },
+  "expected": {
+    "regimeApplied": "NEW",
+    "estimatedAnnualTaxable": "1250000.0000",
+    "standardDeduction": "75000.0000",
+    "taxBeforeRebate": "67500.0000",
+    "rebate": "0.0000",
+    "rebateMarginalRelief": "17500.0000",
+    "surcharge": "0.0000",
+    "surchargeMarginalRelief": "0.0000",
+    "cess": "2000.0000",
+    "annualTax": "52000.0000",
+    "creditedAlready": "0.0000",
+    "tdsThisMonth": "4333.0000",
+    "periodBasis": "ANNUAL"
+  },
+  "counterfactual": {
+    "rule": "no-rebate-marginal-relief",
+    "why": "An engine that implements only the SURCHARGE marginal relief and drops the s.156 rebate-cliff relief taxes this employee on 67500 instead of 50000: annual tax 70200 and a monthly TDS of 5850 instead of 4333. That over-deducts from every employee in the 1200000-1270589 band, which is a short salary twelve times over."
+  }
+}

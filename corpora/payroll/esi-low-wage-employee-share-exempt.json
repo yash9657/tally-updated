@@ -1,0 +1,27 @@
+{
+  "id": "esi-low-wage-employee-share-exempt",
+  "description": "ESI (Central) Rules 1950 rule 52 (average daily wage limit raised to 176 by G.S.R. 1023(E) w.e.f. 01-01-2017): an employee whose AVERAGE DAILY WAGE does not exceed 176 is EXEMPT from paying the employee's share, but the EMPLOYER's share remains payable IN FULL. The exemption is one-sided, and an engine that zeroes both under-remits and short-changes the corporation. Hand derivation: wage month September 2026, period 1 April - 30 September 2026, tested on 1 April 2026 at 5000.0000 which is far below 21000.0000, so covered; the rule 52 test is done without division as wages <= limit x paid days, i.e. 5000.0000 <= 176 x 30 = 5280.0000, which holds, so the employee share is 0.0000; the employer share is 3.25% of 5000.0000 = 162.5000 rounded UP to 163 under rule 51.",
+  "rulesetVersion": "ss-2026-07",
+  "input": {
+    "wageMonth": "2026-09",
+    "joinedOn": null,
+    "leftOn": null,
+    "revisions": [
+      {
+        "effectiveFrom": "2025-04-01",
+        "monthlyWages": "5000.0000"
+      }
+    ],
+    "monthWages": "5000.0000",
+    "paidDays": 30
+  },
+  "expected": {
+    "covered": true,
+    "applied": true,
+    "wagesTestedOn": "2026-04-01",
+    "wagesTested": "5000.0000",
+    "lowWageExempt": true,
+    "employeeShare": "0.0000",
+    "employerShare": "163.0000"
+  }
+}

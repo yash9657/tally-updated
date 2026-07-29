@@ -1,0 +1,31 @@
+{
+  "id": "wages-code-era-window-opens-november-2025",
+  "description": "EFFECTIVE-DATING FIXTURE. The Code on Social Security 2020 and the Code on Wages 2019 were BROUGHT INTO FORCE on 21 November 2025 by S.O. 5319(E) (e-Gazette CG-DL-E-21112025-267882), which appointed that date for ss.1-14 and therefore for the s.2(88) wage definition. So a DECEMBER 2025 wage month — inside FY 2025-26, and eight months before the EPF/EPS/EDLI Schemes 2026 commenced on 29 June 2026 — is already governed by the Code's 50% deeming proviso, and must resolve to ruleset ss-2025-11 rather than to the pre-Code ss-2019-07. Hand derivation: BASIC 8000.0000 is included; HRA 12000.0000 is excluded by s.2(88); total remuneration 20000.0000; the threshold is 50% so the floor is 10000.0000; excluded 12000.0000 exceeds it, so the add-back is 12000.0000 - 10000.0000 = 2000.0000 and the statutory wage is 8000.0000 + 2000.0000 = 10000.0000. Under the PRE-CODE definition the same structure gives a statutory wage of 8000.0000, and the employee's EPF at 12% is 960.0000 instead of 1200.0000 — Rs 240 short on the employee side and Rs 240 short on the employer side, per employee, for EVERY wage month from Nov-2025 to Jun-2026, plus the matching understatement of the ESI base and s.14B interest and damages on the shortfall. This fixture exists because the first cut of the rate table opened the Code-era window at 1 July 2026 and got exactly that wrong; a unit test on the boundary is not enough, because the date-to-ruleset mapping must be re-derived independently by corpora/validate.py.",
+  "rulesetVersion": "ss-2025-11",
+  "input": {
+    "wageMonth": "2025-12",
+    "components": [
+      {
+        "type": "BASIC",
+        "amount": "8000.0000"
+      },
+      {
+        "type": "HRA",
+        "amount": "12000.0000"
+      }
+    ]
+  },
+  "expected": {
+    "totalRemuneration": "20000.0000",
+    "includedComponents": "8000.0000",
+    "excludedComponents": "12000.0000",
+    "excludedComponentsInDeemingTest": "12000.0000",
+    "deemingThresholdPct": "50",
+    "deemedAddBack": "2000.0000",
+    "statutoryWage": "10000.0000"
+  },
+  "counterfactual": {
+    "rule": "pre-code-no-deeming",
+    "why": "The naive rule is the bug this fixture was written for: apply the PRE-CODE wage definition (no deeming proviso, expressed as a threshold of 100) to a wage month that is already inside the Code era. It yields a statutory wage of 8000.0000 instead of 10000.0000 — a 20% understatement of the base for EPF, EPS, EDLI and ESI on every employee whose pay is structured into allowances, which is the avoidance the proviso exists to stop. If this naive derivation ever AGREES with expected, the fixture has stopped demonstrating the change of law and the boundary is untested."
+  }
+}

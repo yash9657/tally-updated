@@ -1,0 +1,35 @@
+{
+  "id": "esi-covered-mid-period-raise-continues",
+  "description": "ESI Act 1948 s.2(9) second proviso: an employee whose wages EXCEED the notified limit of 21000.0000 AFTER the start of a contribution period continues to be an employee until the END of that period. Contribution periods are 1 April - 30 September and 1 October - 31 March. Hand derivation: the wage month is August 2026, so the period is 1 April 2026 - 30 September 2026 and the ceiling is tested ON 1 April 2026; the revision in force that day paid 18000.0000, which does not exceed 21000.0000, so coverage LATCHED; the raise to 25900.0000 effective 1 August 2026 does not disturb it. Contributions are on the wage ACTUALLY paid because the 21000.0000 limit is an eligibility test and NOT a contribution ceiling: employee 0.75% of 25900.0000 = 194.2500 rounded UP to 195 and employer 3.25% of 25900.0000 = 841.7500 rounded UP to 842, both under rule 51's 'sum rounded to the next higher rupee'. Rule 52 does not apply because 25900.0000 exceeds 176 x 31 = 5456.0000.",
+  "rulesetVersion": "ss-2026-07",
+  "input": {
+    "wageMonth": "2026-08",
+    "joinedOn": null,
+    "leftOn": null,
+    "revisions": [
+      {
+        "effectiveFrom": "2025-04-01",
+        "monthlyWages": "18000.0000"
+      },
+      {
+        "effectiveFrom": "2026-08-01",
+        "monthlyWages": "25900.0000"
+      }
+    ],
+    "monthWages": "25900.0000",
+    "paidDays": 31
+  },
+  "expected": {
+    "covered": true,
+    "applied": true,
+    "wagesTestedOn": "2026-04-01",
+    "wagesTested": "18000.0000",
+    "lowWageExempt": false,
+    "employeeShare": "195.0000",
+    "employerShare": "842.0000"
+  },
+  "counterfactual": {
+    "rule": "esi-monthly-ceiling-test",
+    "why": "If coverage were re-tested MONTHLY against 21000.0000 instead of latching at the contribution-period start, this employee would drop out in August: both shares would be 0, the company would under-remit 1037 for the month, and the employee would lose ESI cover in the middle of a period of treatment."
+  }
+}

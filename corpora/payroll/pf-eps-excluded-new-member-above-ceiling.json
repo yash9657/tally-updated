@@ -1,0 +1,32 @@
+{
+  "id": "pf-eps-excluded-new-member-above-ceiling",
+  "description": "EPS 1995 para 6(a) as amended by G.S.R. 609(E) w.e.f. 01-09-2014: a person who FIRST becomes a provident-fund member on or after 01-09-2014, and whose pay at that date EXCEEDS the pension ceiling of 15000.0000, was never admitted to the Pension Scheme. Hand derivation: the employee first became a member on 2020-06-01, which is on or after the cutoff, and the statutory wage 25000.0000 exceeds 15000.0000, so the exclusion bites: EPF wages 15000.0000 and EDLI wages 15000.0000 as usual, but EPS wages 0.0000 and EPS contribution 0.0000; employee 12% of 15000.0000 = 1800; the employer's WHOLE 12% of 15000.0000 = 1800 stays in the provident fund because there is no pension to divert it to. Diverting 1250 into a pension the member can never draw is the failure this pins.",
+  "rulesetVersion": "ss-2026-07",
+  "input": {
+    "wageMonth": "2026-08",
+    "statutoryWage": "25000.0000",
+    "pfBase": "CEILING",
+    "employeeVoluntaryBase": "0.0000",
+    "employerMatchesVoluntary": false,
+    "epsMember": true,
+    "firstMemberOn": "2020-06-01"
+  },
+  "expected": {
+    "epfWages": "15000.0000",
+    "epsWages": "0.0000",
+    "edliWages": "15000.0000",
+    "employeeStatutory": "1800.0000",
+    "employeeVoluntary": "0.0000",
+    "employerStatutory": "1800.0000",
+    "employerVoluntary": "0.0000",
+    "eps": "0.0000",
+    "employeeEPF": "1800.0000",
+    "employerEPF": "1800.0000",
+    "epsMemberApplied": false,
+    "deferredComponents": [
+      "EDLI_CONTRIBUTION",
+      "EDLI_ADMIN_CHARGES",
+      "EPF_ADMIN_CHARGES"
+    ]
+  }
+}

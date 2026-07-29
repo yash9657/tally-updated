@@ -1,0 +1,32 @@
+{
+  "id": "pf-actual-base-fractional-excess-diverges",
+  "description": "EPF Scheme para 26A(2) proviso: an employer may contribute on the FULL statutory wage rather than restricting itself to the notified ceiling, and where it does, the above-ceiling EXCESS is a para 26(6) voluntary contribution on both sides while the pension diversion stays capped at the pension ceiling (EPS 1995 para 11(1) proviso). THIS FIXTURE EXISTS TO SEPARATE THE ROUNDERS on the above-ceiling EXCESS, which is its own rounding call site and which no other fixture can reach: at the ceiling the excess is zero, and zero rounds identically under every rule. Hand derivation: statutory wage 27345.0000, base ACTUAL, so the statutory base is the ceiling 15000 and the excess is 27345 - 15000 = 12345 whole rupees (nearest ten would print 12350 and an EPF Wages column of 27350 instead of 27345); EPF wages 15000 + 12345 = 27345; EPS wages and EDLI wages are both capped at 15000 and are a DIFFERENT number from EPF wages, which is the whole reason the ECR has three columns. Employee statutory 12% of 15000 = 1800; employer 12% of 15000 = 1800; EPS 8.33% of 15000 = 1249.5000 -> 1250; employer residual 1800 - 1250 = 550. On the excess both sides contribute 12% of 12345 = 1481.4000 -> 1481 (nearest ten gives 1480). Employee total deduction 1800 + 1481 = 3281, under the 50% of 27345 = 13672.5000 cap in s.18(2) of the Code on Wages 2019; employer total 550 + 1481 = 2031. The member first joined the fund on 01-04-2010, before the 01-09-2014 cutoff in EPS 1995 para 6(a) as amended by G.S.R. 609(E), so the high-wage new-member exclusion does not apply and the pension contribution stands. The EDLI contribution and both administrative charges remain named deferrals: their 2026-Scheme rates are UNVERIFIED in this build. 'Unverified' is not 'unnotified' — an EDLI contribution rate of 0.50% from 29 June 2026 is REPORTED on secondary sources only and is deferred because no primary G.S.R. could be read, while the two administrative charges are genuinely unknown. See pf-edli-contribution-refused-unnotified.",
+  "rulesetVersion": "ss-2026-07",
+  "input": {
+    "wageMonth": "2026-08",
+    "statutoryWage": "27345.0000",
+    "pfBase": "ACTUAL",
+    "employeeVoluntaryBase": "0.0000",
+    "employerMatchesVoluntary": false,
+    "epsMember": true,
+    "firstMemberOn": "2010-04-01"
+  },
+  "expected": {
+    "epfWages": "27345.0000",
+    "epsWages": "15000.0000",
+    "edliWages": "15000.0000",
+    "employeeStatutory": "1800.0000",
+    "employeeVoluntary": "1481.0000",
+    "employerStatutory": "550.0000",
+    "employerVoluntary": "1481.0000",
+    "eps": "1250.0000",
+    "employeeEPF": "3281.0000",
+    "employerEPF": "2031.0000",
+    "epsMemberApplied": true,
+    "deferredComponents": [
+      "EDLI_CONTRIBUTION",
+      "EDLI_ADMIN_CHARGES",
+      "EPF_ADMIN_CHARGES"
+    ]
+  }
+}
