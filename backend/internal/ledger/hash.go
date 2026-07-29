@@ -63,6 +63,41 @@ type CanonicalStockLine struct {
 	Amount      string `json:"amount"`
 }
 
+// CanonicalInward is the SUPPLIER's own document identity and the ITC
+// classification for this voucher.
+//
+// It is in the hash because "which supplier document is this input tax credit
+// claimed against" is the question a GST officer asks first. That makes it part
+// of the voucher's AUDIT IDENTITY, not metadata beside it — an unhashed answer
+// is one that anything with UPDATE can change and nobody can defend.
+//
+// EVERY FIELD IS A STRING, for the same reason CanonicalStockLine's are:
+// VerifyChain re-derives the hashed bytes by decoding the stored JSONB back
+// into this struct and re-marshalling it, and that re-derivation is exact only
+// while every value is a string. A date decoded as time.Time would re-marshal
+// with a different layout and declare the whole book tampered with.
+type CanonicalInward struct {
+	// SupplierInvoiceNo is the number the supplier printed, VERBATIM as keyed.
+	// Never normalised here: normalisation lives in exactly one place
+	// (itc.NormalizeDocNo, applied at match time), because a normalisation
+	// stated twice is a normalisation that drifts — and a normalisation baked
+	// into the hash could never be corrected afterwards.
+	SupplierInvoiceNo string `json:"supplier_invoice_no"`
+	// SupplierInvoiceDate is an ISO date (YYYY-MM-DD) or "". Statutory: it fixes
+	// the financial year for section 16(4), and therefore the date this credit
+	// expires.
+	SupplierInvoiceDate string `json:"supplier_invoice_date"`
+	// ITCEligibility is the per-voucher OVERRIDE of the party/expense ledger's
+	// default. "" means "the ledger's default applies" — it is NOT a synonym for
+	// ELIGIBLE written out, because the ledger may say BLOCKED_17_5 and the
+	// empty string must not silently overrule it.
+	ITCEligibility string `json:"itc_eligibility"`
+	// ITCBlockedClause is free text, e.g. "17(5)(a)". Deliberately unconstrained
+	// here and in the schema: the clause list in circulation is secondary
+	// material pending re-verification against the bare Act.
+	ITCBlockedClause string `json:"itc_blocked_clause"`
+}
+
 // CanonicalPayload is the canonical, deterministic representation of a voucher
 // version that is hashed and stored verbatim as the voucher_version.payload
 // JSONB. Field order is fixed by the struct; encoding/json emits object keys in
@@ -98,6 +133,35 @@ type CanonicalPayload struct {
 	// The pinned vector in stock_hash_test.go exists to make a violation of the
 	// first two rules a failing test rather than a corrupted audit log.
 	Inventory []CanonicalStockLine `json:"inventory,omitempty"`
+	// Inward is the supplier's document identity and this voucher's ITC
+	// classification. It obeys the SAME THREE RULES as Inventory above, and each
+	// of them is a failing test rather than a style note:
+	//
+	//   * it is LAST, AFTER Inventory — encoding/json emits keys in
+	//     struct-declaration order, so putting it anywhere else moves every
+	//     following key and changes the bytes of every voucher ever written.
+	//     TestInwardDocIsLastInTheHashAndOmittedWhenEmpty is the ONLY test that
+	//     can see a violation, and that was established by trying it rather than
+	//     by assuming it: stock_hash_test.go's pinned vectors carry neither
+	//     stock lines nor an inward document, and both fields are omitempty, so
+	//     swapping their declaration order leaves those vectors byte-identical
+	//     and TestExistingVoucherHashesAreUnchanged PASSES. Only a vector that
+	//     sets BOTH fields can observe the order at all.
+	//
+	//   * the OUTER POINTER is `omitempty` — a voucher with no inward detail,
+	//     which is every voucher posted before migration 0032 and every sales
+	//     voucher forever, must marshal BYTE-IDENTICALLY to what it marshalled
+	//     to before this field existed. Otherwise VerifyChain retroactively
+	//     reports every book in the field as tampered with, which is
+	//     indistinguishable from an actual attack.
+	//
+	//   * the FOUR INNER FIELDS are plain strings with NO omitempty — once the
+	//     object is present its shape is FIXED and cannot vary with its content.
+	//     With omitempty on the inner fields, a voucher whose clause happened to
+	//     be blank would hash under a different key set from one whose clause was
+	//     "17(5)(a)" and then cleared, so the same recorded facts would produce
+	//     two different signatures depending on their history.
+	Inward *CanonicalInward `json:"inward,omitempty"`
 }
 
 // Marshal returns the canonical JSON encoding of the payload.

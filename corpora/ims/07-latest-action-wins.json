@@ -1,0 +1,48 @@
+{
+  "id": "07-latest-action-wins",
+  "kind": "clock",
+  "description": "ACCEPT, then REJECT, then ACCEPT again on an APPEND-ONLY log: the effective state is a last-write-wins projection evaluated AS OF an instant, so the answer differs at each of the four probes. Without it, an implementation that keeps a single mutable status column looks equivalent — until an auditor asks what the state was on the day the return was filed and the history has been overwritten.",
+  "input": {
+    "period": "012026",
+    "statementGenDate": null,
+    "filedAt": null,
+    "actions": [
+      {
+        "action": "ACCEPT",
+        "actedAt": "2026-02-10T09:00:00+05:30"
+      },
+      {
+        "action": "REJECT",
+        "actedAt": "2026-02-11T09:00:00+05:30"
+      },
+      {
+        "action": "ACCEPT",
+        "actedAt": "2026-02-12T09:00:00+05:30"
+      }
+    ],
+    "probes": [
+      {
+        "asOn": "2026-02-09T12:00:00+05:30"
+      },
+      {
+        "asOn": "2026-02-10T12:00:00+05:30"
+      },
+      {
+        "asOn": "2026-02-11T12:00:00+05:30"
+      },
+      {
+        "asOn": "2026-02-13T12:00:00+05:30"
+      }
+    ]
+  },
+  "expected": {
+    "cutoff": "2026-02-14T00:00:00+05:30",
+    "resolution": "2026-02-14T00:00:00+05:30",
+    "states": [
+      "NO_ACTION",
+      "ACCEPTED",
+      "REJECTED",
+      "ACCEPTED"
+    ]
+  }
+}

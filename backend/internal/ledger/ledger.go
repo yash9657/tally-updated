@@ -74,6 +74,24 @@ const (
 	// DebitNote (Alt+F5): a PURCHASE return / upward price correction raised on a
 	// supplier — Dr the supplier, Cr Purchases, Cr the input-tax heads.
 	DebitNote Class = "Debit Note"
+	// Payroll: the monthly pay run — Dr Salaries & Wages and the employer's PF
+	// and ESI cost, Cr net pay, TDS on salary, PF and ESI payable.
+	//
+	// It is a CLASS OF ITS OWN and not a Journal, and that is not a naming
+	// preference: migration 0011 seeds `allow create|alter|display journal` on
+	// the Data Entry level of EVERY company in the fleet, so posting a pay run
+	// as a Journal would grant every existing operator the right to create and
+	// alter salary vouchers the day the route mounts — retroactively, with no
+	// migration, and with nobody deciding it. A voucher_type named 'Payroll'
+	// parented to JOURNAL does not fix it, because routeAction derives the ACL
+	// token from the CLASS. See payroll_class.go for the full argument, and for
+	// why the class is an ACCOUNTING one (a non-accounting pay run would post
+	// zero rows, and posting_balanced is a trigger on the posting TABLE — a
+	// voucher with no postings never fires it).
+	//
+	// Its system voucher_type is seeded by migration 0034 with
+	// parent_class = 'PAYROLL', the form defaultVoucherTypeID matches.
+	Payroll Class = "Payroll"
 )
 
 // validClasses is the set of accepted voucher classes: the accounting classes
@@ -211,6 +229,23 @@ type VoucherInput struct {
 	// Delivery Note is three inventory lines and no postings at all. A DELETE
 	// tombstone carries none, exactly as it carries no postings.
 	Inventory []InventoryLine
+	// Inward is the SUPPLIER'S own document identity (their invoice number and
+	// date) plus this voucher's ITC classification. See inward_doc.go for why
+	// none of the three columns that look like they already hold this actually
+	// do.
+	//
+	// It is written to voucher_version's four inward columns AND into the hashed
+	// canonical payload, from this ONE source inside ONE transaction. An ALTER
+	// RE-STATES it exactly as it re-states the taxable value: a version says
+	// what the voucher is NOW, so an alter that omits it clears it, and a DELETE
+	// tombstone carries none — the same rule postings, GST lines and stock
+	// movements already follow.
+	//
+	// nil (or a zero InwardDocument) writes nothing at all: no columns, and no
+	// "inward" key in the payload. That is what keeps every voucher posted
+	// before migration 0032, and every sales voucher forever, hashing to exactly
+	// the bytes it always did.
+	Inward *InwardDocument
 	// GST, when non-nil and Class is Sales or Purchase, drives auto-derivation
 	// and verification of the tax lines.
 	GST *GSTParams
@@ -737,6 +772,16 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 	if err := validateBillAllocations(in.BillAllocations); err != nil {
 		return PostResult{}, err
 	}
+	// The supplier's document, checked BEFORE the transaction opens. The schema
+	// would refuse a bad eligibility value anyway, but only at INSERT time —
+	// after the numbering counter has advanced and the postings are written —
+	// and the caller would get a rolled-back transaction naming a constraint
+	// instead of the field they got wrong.
+	if in.Inward != nil {
+		if err := in.Inward.Validate(); err != nil {
+			return PostResult{}, err
+		}
+	}
 
 	// Whether this post carries GST derivation (Sales/Purchase with GST params).
 	gstActive := in.GST != nil && gstBearing(in.Class)
@@ -1062,6 +1107,28 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 			movements = nil
 		}
 
+		// THE SAME DELETE GUARD FOR THE SUPPLIER'S DOCUMENT, single-sourced for
+		// the same reason: the hashed payload and the four version columns are
+		// both derived from this one variable, so they cannot disagree about what
+		// the tombstone carries.
+		//
+		// A tombstone carries NONE. If it restated the supplier's invoice number,
+		// the deleted purchase would keep matching against the 2B forever — the
+		// matcher reads the CURRENT version — and the filer would go on claiming
+		// input tax credit on a bill they had already removed from the books.
+		// That is a claim with no voucher behind it, which is the worst shape an
+		// ITC error can take.
+		//
+		// An ALTER, by contrast, RE-STATES from the new input. A version says
+		// what the voucher is NOW, exactly as it does for the taxable value: an
+		// alter that omits the supplier document clears it, which is the only
+		// reading under which "correct the invoice number I mistyped" works at
+		// all.
+		var inward *InwardDocument
+		if op != OpDelete && in.Inward != nil && !in.Inward.IsZero() {
+			inward = in.Inward
+		}
+
 		payload := CanonicalPayload{
 			VoucherID:     voucherID.String(),
 			VoucherTypeID: in.VoucherTypeID.String(),
@@ -1115,6 +1182,23 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 			payload.Inventory = append(payload.Inventory, cl)
 		}
 
+		// The supplier's document rides in the hashed payload for the same reason
+		// postings and stock lines do: what the edit log SHOWS must be what the
+		// edit log SIGNS. "Which supplier document is this credit claimed
+		// against" is the first question an officer asks, so an unsigned answer
+		// is one nobody can defend.
+		//
+		// The POINTER STAYS NIL when there is no inward detail, and that is
+		// load-bearing rather than tidy: `inward,omitempty` on a nil pointer emits
+		// no key at all, so every voucher without a supplier document — every
+		// sale, and every purchase posted before migration 0032 — marshals to
+		// EXACTLY the bytes it marshalled to before this field existed. Anything
+		// else retroactively invalidates every hash in every customer's database.
+		if inward != nil {
+			c := inward.Canonical()
+			payload.Inward = &c
+		}
+
 		payloadJSON, err := payload.Marshal()
 		if err != nil {
 			return fmt.Errorf("ledger: marshal payload: %w", err)
@@ -1140,6 +1224,25 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 		if in.PartyLedgerID != uuid.Nil {
 			partyID = in.PartyLedgerID
 		}
+		// The supplier's document, as four nullable columns. Derived from the
+		// SAME `inward` variable the hashed payload above was built from — the
+		// column and the signature are two renderings of one value, written in
+		// one transaction, so no code path exists that can set one without the
+		// other. They are columns as WELL as payload because the matcher reads
+		// every purchase of a period by (company, party, supplier_invoice_no) and
+		// cannot do that through a JSONB scan of the whole book.
+		var (
+			supplierNo   any
+			supplierDate any
+			itcElig      any
+			itcClause    any
+		)
+		if inward != nil {
+			supplierNo = nullIfEmpty(inward.SupplierInvoiceNo)
+			supplierDate = nullIfEmpty(inward.SupplierInvoiceDate)
+			itcElig = nullIfEmpty(inward.ITCEligibility)
+			itcClause = nullIfEmpty(inward.ITCBlockedClause)
+		}
 		if gstActive {
 			pos = nullIfEmpty(in.GST.PlaceOfSupplyStateCode)
 			rev = in.GST.ReverseCharge
@@ -1153,12 +1256,15 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 			`INSERT INTO voucher_version
 			   (id, company_id, voucher_id, version_no, op, prev_hash, hash, payload,
 			    created_by, voucher_type_id, party_ledger_id, voucher_no, voucher_date,
-			    place_of_supply, is_reverse_charge, taxable_value, cgst, sgst, igst)
+			    place_of_supply, is_reverse_charge, taxable_value, cgst, sgst, igst,
+			    supplier_invoice_no, supplier_invoice_date,
+			    itc_eligibility, itc_blocked_clause)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-			         $14, $15, $16, $17, $18, $19)`,
+			         $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)`,
 			versionID, companyID, voucherID, versionNo, string(op), prevHash, hash, payloadJSON,
 			in.CreatedBy, vtID, partyID, vNo, vDate,
 			pos, rev, taxable, cgst, sgst, igst,
+			supplierNo, supplierDate, itcElig, itcClause,
 		); err != nil {
 			return fmt.Errorf("ledger: insert voucher_version: %w", err)
 		}

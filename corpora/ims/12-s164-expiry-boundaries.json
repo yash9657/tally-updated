@@ -1,0 +1,65 @@
+{
+  "id": "12-s164-expiry-boundaries",
+  "kind": "s164",
+  "description": "The s.16(4) expiry at every boundary that moves it: 31-March against 01-April (one day apart, one year apart in expiry), a claim ON 30-November against one on 01-December (the date itself is INCLUSIVE), a DEBIT NOTE whose own date fixes its financial year rather than the underlying invoice's (de-linked w.e.f. 01-01-2021), and an annual return filed early, which pulls the expiry forward. Without it, ITC is either claimed after it has died or thrown away while it is still alive — and neither is recoverable once the return is filed.",
+  "input": {
+    "probes": [
+      {
+        "docKind": "INVOICE",
+        "docDate": "2026-03-31",
+        "claimDate": "2026-11-30"
+      },
+      {
+        "docKind": "INVOICE",
+        "docDate": "2026-03-31",
+        "claimDate": "2026-12-01"
+      },
+      {
+        "docKind": "INVOICE",
+        "docDate": "2026-04-01",
+        "claimDate": "2027-11-30"
+      },
+      {
+        "docKind": "DEBIT_NOTE",
+        "docDate": "2026-04-10",
+        "originalInvoiceDate": "2026-01-15",
+        "claimDate": "2027-11-30"
+      },
+      {
+        "docKind": "INVOICE",
+        "docDate": "2026-03-31",
+        "annualReturnFiledOn": "2026-10-15",
+        "claimDate": "2026-10-16"
+      }
+    ]
+  },
+  "expected": {
+    "probes": [
+      {
+        "fyEnd": "2026-03-31",
+        "expiry": "2026-11-30",
+        "barred": false
+      },
+      {
+        "fyEnd": "2026-03-31",
+        "expiry": "2026-11-30",
+        "barred": true
+      },
+      {
+        "fyEnd": "2027-03-31",
+        "expiry": "2027-11-30",
+        "barred": false
+      },
+      {
+        "fyEnd": "2027-03-31",
+        "expiry": "2027-11-30",
+        "barred": false
+      },
+      {
+        "fyEnd": "2026-03-31",
+        "expiry": "2026-10-15",
+        "barred": true
+      }
+    ]
+  }
+}

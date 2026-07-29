@@ -1,0 +1,113 @@
+{
+  "id": "10-rcm-never-reversed",
+  "description": "A reverse-charge purchase: IMS excludes RCM supplies and RCM credit is self-assessed rather than supplier-filed, so this row can NEVER appear in a 2B match. It is NOT_COMPARABLE for reason RCM, lands in the ISRC row of 4(A), and is NEVER reversed for being unmatched. Without it the naive 'unmatched means reverse' rule reverses one hundred per cent of every taxpayer's RCM credit.",
+  "input": {
+    "period": "012026",
+    "books": [
+      {
+        "voucherId": "v1",
+        "voucherNo": "PUR-10",
+        "voucherDate": "2026-01-18",
+        "partyLedger": "Ganga Transport",
+        "partyGstin": "27GGGGG6666G1Z1",
+        "supplierInvoiceNo": "RC-1",
+        "supplierInvoiceDate": "2026-01-18",
+        "docType": "I",
+        "pos": "27",
+        "reverseCharge": true,
+        "itcEligibility": "ELIGIBLE",
+        "taxableValue": "6000.0000",
+        "cgst": "540.0000",
+        "sgst": "540.0000",
+        "igst": "0.0000"
+      }
+    ],
+    "statement": {
+      "kind": "GSTR2B",
+      "returnPeriod": "012026",
+      "documents": [],
+      "genDate": "2026-02-14"
+    }
+  },
+  "expected": {
+    "rejectedStatementRows": [],
+    "findings": [],
+    "lines": [
+      {
+        "status": "NOT_COMPARABLE",
+        "fields": [],
+        "notComparable": "RCM",
+        "books": "v1",
+        "statement": null,
+        "candidates": [],
+        "delta": {
+          "txval": "0.0000",
+          "camt": "0.0000",
+          "samt": "0.0000",
+          "iamt": "0.0000"
+        },
+        "effect": {
+          "avlRow": "ISRC",
+          "avl": {
+            "camt": "540.0000",
+            "samt": "540.0000",
+            "iamt": "0.0000"
+          },
+          "revRul": {
+            "camt": "0.0000",
+            "samt": "0.0000",
+            "iamt": "0.0000"
+          },
+          "revOth": {
+            "camt": "0.0000",
+            "samt": "0.0000",
+            "iamt": "0.0000"
+          },
+          "inelg": {
+            "camt": "0.0000",
+            "samt": "0.0000",
+            "iamt": "0.0000"
+          }
+        },
+        "s164Expiry": "2026-11-30"
+      }
+    ],
+    "totals": {
+      "itcAvlIsrc": {
+        "camt": "540.0000",
+        "samt": "540.0000",
+        "iamt": "0.0000"
+      },
+      "itcAvlOth": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "itcRevRul": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "itcRevOth": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "itcInelgOth": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "itcNet": {
+        "camt": "540.0000",
+        "samt": "540.0000",
+        "iamt": "0.0000"
+      },
+      "postedInputTax": {
+        "camt": "540.0000",
+        "samt": "540.0000",
+        "iamt": "0.0000"
+      }
+    }
+  }
+}

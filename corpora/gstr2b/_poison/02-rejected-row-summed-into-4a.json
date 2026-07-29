@@ -1,0 +1,132 @@
+{
+  "id": "02-rejected-row-summed-into-4a",
+  "description": "POISON. The only statement document came from GSTN's docRejdata and is VIEW-ONLY; this fixture matches our voucher against it and reports the full credit in table 4(A) with no reversal — a filing-grade overclaim. The validator MUST reject it.",
+  "input": {
+    "period": "012026",
+    "books": [
+      {
+        "voucherId": "v1",
+        "voucherNo": "PUR-11",
+        "voucherDate": "2026-01-05",
+        "partyLedger": "Hansa Papers",
+        "partyGstin": "27HHHHH7777H1Z9",
+        "supplierInvoiceNo": "E-1",
+        "supplierInvoiceDate": "2026-01-05",
+        "docType": "I",
+        "pos": "27",
+        "reverseCharge": false,
+        "itcEligibility": "ELIGIBLE",
+        "taxableValue": "2000.0000",
+        "cgst": "180.0000",
+        "sgst": "180.0000",
+        "igst": "0.0000"
+      }
+    ],
+    "statement": {
+      "kind": "GSTR2B",
+      "returnPeriod": "012026",
+      "genDate": "2026-02-14",
+      "documents": [
+        {
+          "docId": "s1",
+          "section": "B2B",
+          "rejected": true,
+          "supplierGstin": "27HHHHH7777H1Z9",
+          "supplierFiledDate": "2026-02-06",
+          "docNo": "E-1",
+          "docDate": "2026-01-05",
+          "docType": "I",
+          "docValue": "2360.0000",
+          "pos": "27",
+          "reverseCharge": false,
+          "itcAvailable": true,
+          "taxableValue": "2000.0000",
+          "cgst": "180.0000",
+          "sgst": "180.0000",
+          "igst": "0.0000"
+        }
+      ]
+    }
+  },
+  "expected": {
+    "rejectedStatementRows": [],
+    "findings": [],
+    "lines": [
+      {
+        "status": "MATCHED",
+        "fields": [],
+        "notComparable": "",
+        "books": "v1",
+        "statement": "s1",
+        "candidates": [],
+        "delta": {
+          "txval": "0.0000",
+          "camt": "0.0000",
+          "samt": "0.0000",
+          "iamt": "0.0000"
+        },
+        "effect": {
+          "avlRow": "OTH",
+          "avl": {
+            "camt": "180.0000",
+            "samt": "180.0000",
+            "iamt": "0.0000"
+          },
+          "revRul": {
+            "camt": "0.0000",
+            "samt": "0.0000",
+            "iamt": "0.0000"
+          },
+          "revOth": {
+            "camt": "0.0000",
+            "samt": "0.0000",
+            "iamt": "0.0000"
+          },
+          "inelg": {
+            "camt": "0.0000",
+            "samt": "0.0000",
+            "iamt": "0.0000"
+          }
+        },
+        "s164Expiry": "2026-11-30"
+      }
+    ],
+    "totals": {
+      "itcAvlIsrc": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "itcAvlOth": {
+        "camt": "180.0000",
+        "samt": "180.0000",
+        "iamt": "0.0000"
+      },
+      "itcRevRul": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "itcRevOth": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "itcInelgOth": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "itcNet": {
+        "camt": "180.0000",
+        "samt": "180.0000",
+        "iamt": "0.0000"
+      },
+      "postedInputTax": {
+        "camt": "180.0000",
+        "samt": "180.0000",
+        "iamt": "0.0000"
+      }
+    }
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "id": "02-utc-server-shifts-the-boundary",
+  "kind": "clock",
+  "description": "POISON. The same two instants written in UTC are given DIFFERENT answers from their IST forms — precisely the symptom of a boundary evaluated in the server's own zone instead of in IST. The validator MUST reject it.",
+  "input": {
+    "period": "012026",
+    "statementGenDate": null,
+    "filedAt": null,
+    "actions": [],
+    "probes": [
+      {
+        "asOn": "2026-02-13T23:59:59.999999999+05:30"
+      },
+      {
+        "asOn": "2026-02-14T00:00:00+05:30"
+      },
+      {
+        "asOn": "2026-02-13T18:29:59.999999999Z"
+      },
+      {
+        "asOn": "2026-02-13T18:30:00Z"
+      }
+    ]
+  },
+  "expected": {
+    "cutoff": "2026-02-14T00:00:00+05:30",
+    "resolution": "2026-02-14T00:00:00+05:30",
+    "states": [
+      "NO_ACTION",
+      "DEEMED_ACCEPTED",
+      "DEEMED_ACCEPTED",
+      "DEEMED_ACCEPTED"
+    ]
+  }
+}

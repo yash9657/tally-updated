@@ -1,0 +1,77 @@
+{
+  "id": "10-ims-not-applicable",
+  "kind": "applicability",
+  "description": "Import (IMPG/IMPGSEZ), ISD (ISD/ISDA) and every reverse-charge row bypass IMS entirely and still reach GSTR-2B, so an accept/reject/pending action on one is an error rather than a no-op. Without it, an action is silently recorded against a document the portal has no action surface for, and the local action log stops describing what IMS actually holds.",
+  "input": {
+    "probes": [
+      {
+        "section": "IMPG",
+        "reverseCharge": false,
+        "action": "ACCEPT"
+      },
+      {
+        "section": "IMPGSEZ",
+        "reverseCharge": false,
+        "action": "ACCEPT"
+      },
+      {
+        "section": "ISD",
+        "reverseCharge": false,
+        "action": "REJECT"
+      },
+      {
+        "section": "ISDA",
+        "reverseCharge": false,
+        "action": "PENDING"
+      },
+      {
+        "section": "B2B",
+        "reverseCharge": true,
+        "action": "REJECT"
+      },
+      {
+        "section": "B2B",
+        "reverseCharge": false,
+        "action": "ACCEPT"
+      },
+      {
+        "section": "CDNR",
+        "reverseCharge": false,
+        "action": "ACCEPT"
+      },
+      {
+        "section": "ECOM",
+        "reverseCharge": false,
+        "action": "PENDING"
+      }
+    ]
+  },
+  "expected": {
+    "probes": [
+      {
+        "error": "ErrIMSNotApplicable"
+      },
+      {
+        "error": "ErrIMSNotApplicable"
+      },
+      {
+        "error": "ErrIMSNotApplicable"
+      },
+      {
+        "error": "ErrIMSNotApplicable"
+      },
+      {
+        "error": "ErrIMSNotApplicable"
+      },
+      {
+        "error": null
+      },
+      {
+        "error": null
+      },
+      {
+        "error": null
+      }
+    ]
+  }
+}

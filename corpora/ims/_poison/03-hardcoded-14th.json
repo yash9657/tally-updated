@@ -1,0 +1,27 @@
+{
+  "id": "03-hardcoded-14th",
+  "kind": "clock",
+  "description": "POISON. December-2024 with an ingested generation date of 16-January-2025, but the expectation resolves on the hard-coded 14th anyway. The validator MUST reject it.",
+  "input": {
+    "period": "122024",
+    "statementGenDate": "2025-01-16",
+    "filedAt": null,
+    "actions": [],
+    "probes": [
+      {
+        "asOn": "2025-01-14T12:00:00+05:30"
+      },
+      {
+        "asOn": "2025-01-16T00:00:00+05:30"
+      }
+    ]
+  },
+  "expected": {
+    "cutoff": "2025-01-14T00:00:00+05:30",
+    "resolution": "2025-01-14T00:00:00+05:30",
+    "states": [
+      "DEEMED_ACCEPTED",
+      "DEEMED_ACCEPTED"
+    ]
+  }
+}

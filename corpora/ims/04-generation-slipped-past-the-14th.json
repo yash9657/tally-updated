@@ -1,0 +1,31 @@
+{
+  "id": "04-generation-slipped-past-the-14th",
+  "kind": "clock",
+  "description": "A real event, not a hypothetical: the December-2024 GSTR-2B was generated on 16-January-2025 because the GSTR-1 due date had been extended, so the INGESTED statement's own generation date is the resolution instant and the computed 14th is not. Without it a hard-coded 14 passes every other clock case here and then deem-accepts two days before the statement that resolves it even exists.",
+  "input": {
+    "period": "122024",
+    "statementGenDate": "2025-01-16",
+    "filedAt": null,
+    "actions": [],
+    "probes": [
+      {
+        "asOn": "2025-01-14T12:00:00+05:30"
+      },
+      {
+        "asOn": "2025-01-15T23:59:59.999999999+05:30"
+      },
+      {
+        "asOn": "2025-01-16T00:00:00+05:30"
+      }
+    ]
+  },
+  "expected": {
+    "cutoff": "2025-01-14T00:00:00+05:30",
+    "resolution": "2025-01-16T00:00:00+05:30",
+    "states": [
+      "NO_ACTION",
+      "NO_ACTION",
+      "DEEMED_ACCEPTED"
+    ]
+  }
+}

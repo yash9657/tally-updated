@@ -1,0 +1,149 @@
+{
+  "id": "03-value-mismatch",
+  "description": "Same document, same date, DIFFERENT money: the supplier reported 9,000 taxable against our 10,000, so the line is MISMATCHED with the three differing fields NAMED and only the EXCESS over the supplier's figure reversed in 4(B)(2) — not the whole credit. It also carries a 20-character document number, so the rule-46(b) DOC_NO_INVALID finding is raised WITHOUT changing the match. Without it, a matcher may reverse the whole invoice for a partial discrepancy, or silently keep credit the supplier never declared.",
+  "input": {
+    "period": "012026",
+    "books": [
+      {
+        "voucherId": "v1",
+        "voucherNo": "PUR-3",
+        "voucherDate": "2026-01-12",
+        "partyLedger": "Alpha Supplies",
+        "partyGstin": "27AAAAA0000A1Z5",
+        "supplierInvoiceNo": "INV/2026/0000000123X",
+        "supplierInvoiceDate": "2026-01-12",
+        "docType": "I",
+        "pos": "27",
+        "reverseCharge": false,
+        "itcEligibility": "ELIGIBLE",
+        "taxableValue": "10000.0000",
+        "cgst": "900.0000",
+        "sgst": "900.0000",
+        "igst": "0.0000"
+      }
+    ],
+    "statement": {
+      "kind": "GSTR2B",
+      "returnPeriod": "012026",
+      "documents": [
+        {
+          "docId": "s1",
+          "section": "B2B",
+          "rejected": false,
+          "supplierGstin": "27AAAAA0000A1Z5",
+          "supplierFiledDate": "2026-02-09",
+          "docNo": "INV/2026/0000000123X",
+          "docDate": "2026-01-12",
+          "docType": "I",
+          "docValue": "10620.0000",
+          "pos": "27",
+          "reverseCharge": false,
+          "itcAvailable": true,
+          "taxableValue": "9000.0000",
+          "cgst": "810.0000",
+          "sgst": "810.0000",
+          "igst": "0.0000"
+        }
+      ],
+      "genDate": "2026-02-14"
+    }
+  },
+  "expected": {
+    "rejectedStatementRows": [],
+    "findings": [
+      {
+        "code": "DOC_NO_INVALID",
+        "ref": "s1",
+        "docNo": "INV/2026/0000000123X",
+        "strictKey": "INV20260000000123X"
+      },
+      {
+        "code": "DOC_NO_INVALID",
+        "ref": "v1",
+        "docNo": "INV/2026/0000000123X",
+        "strictKey": "INV20260000000123X"
+      }
+    ],
+    "lines": [
+      {
+        "status": "MISMATCHED",
+        "fields": [
+          "CGST",
+          "SGST",
+          "TAXABLE_VALUE"
+        ],
+        "notComparable": "",
+        "books": "v1",
+        "statement": "s1",
+        "candidates": [],
+        "delta": {
+          "txval": "1000.0000",
+          "camt": "90.0000",
+          "samt": "90.0000",
+          "iamt": "0.0000"
+        },
+        "effect": {
+          "avlRow": "OTH",
+          "avl": {
+            "camt": "900.0000",
+            "samt": "900.0000",
+            "iamt": "0.0000"
+          },
+          "revRul": {
+            "camt": "0.0000",
+            "samt": "0.0000",
+            "iamt": "0.0000"
+          },
+          "revOth": {
+            "camt": "90.0000",
+            "samt": "90.0000",
+            "iamt": "0.0000"
+          },
+          "inelg": {
+            "camt": "0.0000",
+            "samt": "0.0000",
+            "iamt": "0.0000"
+          }
+        },
+        "s164Expiry": "2026-11-30"
+      }
+    ],
+    "totals": {
+      "itcAvlIsrc": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "itcAvlOth": {
+        "camt": "900.0000",
+        "samt": "900.0000",
+        "iamt": "0.0000"
+      },
+      "itcRevRul": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "itcRevOth": {
+        "camt": "90.0000",
+        "samt": "90.0000",
+        "iamt": "0.0000"
+      },
+      "itcInelgOth": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "itcNet": {
+        "camt": "810.0000",
+        "samt": "810.0000",
+        "iamt": "0.0000"
+      },
+      "postedInputTax": {
+        "camt": "900.0000",
+        "samt": "900.0000",
+        "iamt": "0.0000"
+      }
+    }
+  }
+}

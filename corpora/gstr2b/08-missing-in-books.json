@@ -1,0 +1,115 @@
+{
+  "id": "08-missing-in-books",
+  "description": "A document sits in the 2B that we never posted: it is MISSING_IN_BOOKS and contributes NOTHING to table 4(A). Without it the obvious shortcut — reading 4(A) off the 2B, which is what the portal itself auto-populates — looks correct and silently claims credit for an invoice that is not in our books at all.",
+  "input": {
+    "period": "012026",
+    "books": [],
+    "statement": {
+      "kind": "GSTR2B",
+      "returnPeriod": "012026",
+      "documents": [
+        {
+          "docId": "s1",
+          "section": "B2B",
+          "rejected": false,
+          "supplierGstin": "27EEEEE4444E1Z8",
+          "supplierTradeName": "Gamma Supply Co",
+          "supplierFiledDate": "2026-02-07",
+          "docNo": "G-9",
+          "docDate": "2026-01-08",
+          "docType": "I",
+          "docValue": "4720.0000",
+          "pos": "27",
+          "reverseCharge": false,
+          "itcAvailable": true,
+          "taxableValue": "4000.0000",
+          "cgst": "360.0000",
+          "sgst": "360.0000",
+          "igst": "0.0000"
+        }
+      ],
+      "genDate": "2026-02-14"
+    }
+  },
+  "expected": {
+    "rejectedStatementRows": [],
+    "findings": [],
+    "lines": [
+      {
+        "status": "MISSING_IN_BOOKS",
+        "fields": [],
+        "notComparable": "",
+        "books": null,
+        "statement": "s1",
+        "candidates": [],
+        "delta": {
+          "txval": "0.0000",
+          "camt": "0.0000",
+          "samt": "0.0000",
+          "iamt": "0.0000"
+        },
+        "effect": {
+          "avlRow": "OTH",
+          "avl": {
+            "camt": "0.0000",
+            "samt": "0.0000",
+            "iamt": "0.0000"
+          },
+          "revRul": {
+            "camt": "0.0000",
+            "samt": "0.0000",
+            "iamt": "0.0000"
+          },
+          "revOth": {
+            "camt": "0.0000",
+            "samt": "0.0000",
+            "iamt": "0.0000"
+          },
+          "inelg": {
+            "camt": "0.0000",
+            "samt": "0.0000",
+            "iamt": "0.0000"
+          }
+        },
+        "s164Expiry": "2026-11-30"
+      }
+    ],
+    "totals": {
+      "itcAvlIsrc": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "itcAvlOth": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "itcRevRul": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "itcRevOth": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "itcInelgOth": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "itcNet": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "postedInputTax": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      }
+    }
+  }
+}

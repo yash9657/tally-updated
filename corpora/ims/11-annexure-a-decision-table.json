@@ -1,0 +1,143 @@
+{
+  "id": "11-annexure-a-decision-table",
+  "kind": "annexure",
+  "description": "GSTN's Annexure-A decision table, every row: what each IMS action does to the document in GSTR-2B. GSTN's own disclaimer travels with it — the annexure is explanatory and 'is not a statement of law'. Without the whole table pinned, the one row that matters most (PENDING is DEFERRED, not DENIED) is indistinguishable from REJECTED in any implementation that models only two outcomes.",
+  "input": {
+    "rows": [
+      {
+        "docCategory": "B2B_INVOICE",
+        "action": "ACCEPTED"
+      },
+      {
+        "docCategory": "B2B_INVOICE",
+        "action": "DEEMED_ACCEPTED"
+      },
+      {
+        "docCategory": "B2B_INVOICE",
+        "action": "NO_ACTION"
+      },
+      {
+        "docCategory": "B2B_INVOICE",
+        "action": "REJECTED"
+      },
+      {
+        "docCategory": "B2B_INVOICE",
+        "action": "PENDING"
+      },
+      {
+        "docCategory": "DEBIT_NOTE",
+        "action": "ACCEPTED"
+      },
+      {
+        "docCategory": "DEBIT_NOTE",
+        "action": "DEEMED_ACCEPTED"
+      },
+      {
+        "docCategory": "DEBIT_NOTE",
+        "action": "REJECTED"
+      },
+      {
+        "docCategory": "DEBIT_NOTE",
+        "action": "PENDING"
+      },
+      {
+        "docCategory": "CREDIT_NOTE",
+        "action": "ACCEPTED"
+      },
+      {
+        "docCategory": "CREDIT_NOTE",
+        "action": "DEEMED_ACCEPTED"
+      },
+      {
+        "docCategory": "CREDIT_NOTE",
+        "action": "REJECTED"
+      },
+      {
+        "docCategory": "CREDIT_NOTE",
+        "action": "PENDING"
+      },
+      {
+        "docCategory": "IMPG",
+        "action": "NOT_APPLICABLE"
+      },
+      {
+        "docCategory": "RCM",
+        "action": "NOT_APPLICABLE"
+      },
+      {
+        "docCategory": "ISD",
+        "action": "NOT_APPLICABLE"
+      }
+    ]
+  },
+  "expected": {
+    "citationGrade": "CITED-SECONDARY",
+    "disclaimer": "GSTN: this annexure is explanatory and is not a statement of law",
+    "rows": [
+      {
+        "in2B": "YES",
+        "itc": "AVAILABLE"
+      },
+      {
+        "in2B": "YES",
+        "itc": "AVAILABLE"
+      },
+      {
+        "in2B": "YES",
+        "itc": "AVAILABLE"
+      },
+      {
+        "in2B": "NO",
+        "itc": "NONE"
+      },
+      {
+        "in2B": "NO",
+        "itc": "DEFERRED"
+      },
+      {
+        "in2B": "YES",
+        "itc": "AVAILABLE"
+      },
+      {
+        "in2B": "YES",
+        "itc": "AVAILABLE"
+      },
+      {
+        "in2B": "NO",
+        "itc": "NONE"
+      },
+      {
+        "in2B": "NO",
+        "itc": "DEFERRED"
+      },
+      {
+        "in2B": "YES",
+        "itc": "REDUCTION"
+      },
+      {
+        "in2B": "YES",
+        "itc": "REDUCTION"
+      },
+      {
+        "in2B": "NO",
+        "itc": "NONE"
+      },
+      {
+        "in2B": "NO",
+        "itc": "DEFERRED"
+      },
+      {
+        "in2B": "YES",
+        "itc": "AVAILABLE"
+      },
+      {
+        "in2B": "YES",
+        "itc": "AVAILABLE"
+      },
+      {
+        "in2B": "YES",
+        "itc": "AVAILABLE"
+      }
+    ]
+  }
+}

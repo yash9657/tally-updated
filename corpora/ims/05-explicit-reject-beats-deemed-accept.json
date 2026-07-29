@@ -1,0 +1,40 @@
+{
+  "id": "05-explicit-reject-beats-deemed-accept",
+  "kind": "clock",
+  "description": "The filer rejects the record on the 15th at 10:00 IST, after the deemed-accept instant has already passed: before the action the state is DEEMED_ACCEPTED and from the action onward it is REJECTED. Without it, 'deemed accept is final once the 14th passes' looks reasonable and freezes out every filer who acts on the 15th — which is most of them.",
+  "input": {
+    "period": "012026",
+    "statementGenDate": null,
+    "filedAt": null,
+    "actions": [
+      {
+        "action": "REJECT",
+        "actedAt": "2026-02-15T10:00:00+05:30"
+      }
+    ],
+    "probes": [
+      {
+        "asOn": "2026-02-14T00:00:00+05:30"
+      },
+      {
+        "asOn": "2026-02-15T09:59:59.999999999+05:30"
+      },
+      {
+        "asOn": "2026-02-15T10:00:00+05:30"
+      },
+      {
+        "asOn": "2026-02-28T00:00:00+05:30"
+      }
+    ]
+  },
+  "expected": {
+    "cutoff": "2026-02-14T00:00:00+05:30",
+    "resolution": "2026-02-14T00:00:00+05:30",
+    "states": [
+      "DEEMED_ACCEPTED",
+      "DEEMED_ACCEPTED",
+      "REJECTED",
+      "REJECTED"
+    ]
+  }
+}

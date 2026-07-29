@@ -1,0 +1,27 @@
+{
+  "id": "01-boundary-off-by-one",
+  "kind": "clock",
+  "description": "POISON. Claims the instant one nanosecond BEFORE 14-February 00:00 IST is already DEEMED_ACCEPTED — a half-open boundary written as closed. The validator MUST reject it.",
+  "input": {
+    "period": "012026",
+    "statementGenDate": null,
+    "filedAt": null,
+    "actions": [],
+    "probes": [
+      {
+        "asOn": "2026-02-13T23:59:59.999999999+05:30"
+      },
+      {
+        "asOn": "2026-02-14T00:00:00+05:30"
+      }
+    ]
+  },
+  "expected": {
+    "cutoff": "2026-02-14T00:00:00+05:30",
+    "resolution": "2026-02-14T00:00:00+05:30",
+    "states": [
+      "DEEMED_ACCEPTED",
+      "DEEMED_ACCEPTED"
+    ]
+  }
+}

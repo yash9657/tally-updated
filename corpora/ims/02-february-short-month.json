@@ -1,0 +1,27 @@
+{
+  "id": "02-february-short-month",
+  "kind": "clock",
+  "description": "February as the tax period: the cutoff is 14-March, reached by CALENDAR-month addition. Without it, 'add 30 days' or 'add one month and clamp' looks identical for eleven months of the year and then lands on the wrong day for the one month where the arithmetic actually differs.",
+  "input": {
+    "period": "022026",
+    "statementGenDate": null,
+    "filedAt": null,
+    "actions": [],
+    "probes": [
+      {
+        "asOn": "2026-03-13T23:59:59.999999999+05:30"
+      },
+      {
+        "asOn": "2026-03-14T00:00:00+05:30"
+      }
+    ]
+  },
+  "expected": {
+    "cutoff": "2026-03-14T00:00:00+05:30",
+    "resolution": "2026-03-14T00:00:00+05:30",
+    "states": [
+      "NO_ACTION",
+      "DEEMED_ACCEPTED"
+    ]
+  }
+}

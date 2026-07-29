@@ -1,0 +1,232 @@
+{
+  "id": "06-ambiguous-duplicate-number",
+  "description": "Two purchase vouchers for one supplier carry the SAME document number, date and value, and the 2B carries one such document: nothing is paired and all three rows go AMBIGUOUS, each pointing at the others. Without it a matcher is free to pick one deterministically — which is how ITC gets claimed against the wrong invoice while the report looks tidy.",
+  "input": {
+    "period": "012026",
+    "books": [
+      {
+        "voucherId": "v1",
+        "voucherNo": "PUR-6",
+        "voucherDate": "2026-01-20",
+        "partyLedger": "Chandra Industries",
+        "partyGstin": "29CCCCC2222C1Z5",
+        "supplierInvoiceNo": "B-77",
+        "supplierInvoiceDate": "2026-01-20",
+        "docType": "I",
+        "pos": "27",
+        "reverseCharge": false,
+        "itcEligibility": "ELIGIBLE",
+        "taxableValue": "3000.0000",
+        "cgst": "0.0000",
+        "sgst": "0.0000",
+        "igst": "540.0000"
+      },
+      {
+        "voucherId": "v2",
+        "voucherNo": "PUR-7",
+        "voucherDate": "2026-01-20",
+        "partyLedger": "Chandra Industries",
+        "partyGstin": "29CCCCC2222C1Z5",
+        "supplierInvoiceNo": "B-77",
+        "supplierInvoiceDate": "2026-01-20",
+        "docType": "I",
+        "pos": "27",
+        "reverseCharge": false,
+        "itcEligibility": "ELIGIBLE",
+        "taxableValue": "3000.0000",
+        "cgst": "0.0000",
+        "sgst": "0.0000",
+        "igst": "540.0000"
+      }
+    ],
+    "statement": {
+      "kind": "GSTR2B",
+      "returnPeriod": "012026",
+      "documents": [
+        {
+          "docId": "s1",
+          "section": "B2B",
+          "rejected": false,
+          "supplierGstin": "29CCCCC2222C1Z5",
+          "supplierFiledDate": "2026-02-08",
+          "docNo": "B-77",
+          "docDate": "2026-01-20",
+          "docType": "I",
+          "docValue": "3540.0000",
+          "pos": "27",
+          "reverseCharge": false,
+          "itcAvailable": true,
+          "taxableValue": "3000.0000",
+          "cgst": "0.0000",
+          "sgst": "0.0000",
+          "igst": "540.0000"
+        }
+      ],
+      "genDate": "2026-02-14"
+    }
+  },
+  "expected": {
+    "rejectedStatementRows": [],
+    "findings": [],
+    "lines": [
+      {
+        "status": "AMBIGUOUS",
+        "fields": [],
+        "notComparable": "",
+        "books": "v1",
+        "statement": null,
+        "candidates": [
+          "s1"
+        ],
+        "delta": {
+          "txval": "0.0000",
+          "camt": "0.0000",
+          "samt": "0.0000",
+          "iamt": "0.0000"
+        },
+        "effect": {
+          "avlRow": "OTH",
+          "avl": {
+            "camt": "0.0000",
+            "samt": "0.0000",
+            "iamt": "540.0000"
+          },
+          "revRul": {
+            "camt": "0.0000",
+            "samt": "0.0000",
+            "iamt": "0.0000"
+          },
+          "revOth": {
+            "camt": "0.0000",
+            "samt": "0.0000",
+            "iamt": "540.0000"
+          },
+          "inelg": {
+            "camt": "0.0000",
+            "samt": "0.0000",
+            "iamt": "0.0000"
+          }
+        },
+        "s164Expiry": "2026-11-30"
+      },
+      {
+        "status": "AMBIGUOUS",
+        "fields": [],
+        "notComparable": "",
+        "books": "v2",
+        "statement": null,
+        "candidates": [
+          "s1"
+        ],
+        "delta": {
+          "txval": "0.0000",
+          "camt": "0.0000",
+          "samt": "0.0000",
+          "iamt": "0.0000"
+        },
+        "effect": {
+          "avlRow": "OTH",
+          "avl": {
+            "camt": "0.0000",
+            "samt": "0.0000",
+            "iamt": "540.0000"
+          },
+          "revRul": {
+            "camt": "0.0000",
+            "samt": "0.0000",
+            "iamt": "0.0000"
+          },
+          "revOth": {
+            "camt": "0.0000",
+            "samt": "0.0000",
+            "iamt": "540.0000"
+          },
+          "inelg": {
+            "camt": "0.0000",
+            "samt": "0.0000",
+            "iamt": "0.0000"
+          }
+        },
+        "s164Expiry": "2026-11-30"
+      },
+      {
+        "status": "AMBIGUOUS",
+        "fields": [],
+        "notComparable": "",
+        "books": null,
+        "statement": "s1",
+        "candidates": [
+          "v1",
+          "v2"
+        ],
+        "delta": {
+          "txval": "0.0000",
+          "camt": "0.0000",
+          "samt": "0.0000",
+          "iamt": "0.0000"
+        },
+        "effect": {
+          "avlRow": "OTH",
+          "avl": {
+            "camt": "0.0000",
+            "samt": "0.0000",
+            "iamt": "0.0000"
+          },
+          "revRul": {
+            "camt": "0.0000",
+            "samt": "0.0000",
+            "iamt": "0.0000"
+          },
+          "revOth": {
+            "camt": "0.0000",
+            "samt": "0.0000",
+            "iamt": "0.0000"
+          },
+          "inelg": {
+            "camt": "0.0000",
+            "samt": "0.0000",
+            "iamt": "0.0000"
+          }
+        },
+        "s164Expiry": "2026-11-30"
+      }
+    ],
+    "totals": {
+      "itcAvlIsrc": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "itcAvlOth": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "1080.0000"
+      },
+      "itcRevRul": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "itcRevOth": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "1080.0000"
+      },
+      "itcInelgOth": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "itcNet": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "postedInputTax": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "1080.0000"
+      }
+    }
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "id": "08-pending-forbidden-pre-oct-2025",
+  "kind": "pending",
+  "description": "For a September-2025 tax period PENDING is forbidden on all four restricted categories — an original credit note, an upward CN amendment, a downward CN amendment whose original was rejected, and a downward invoice/DN amendment whose original was accepted and whose 3B was filed — while an ordinary invoice may be kept pending. Without it, the restriction is either forgotten (and the portal refuses an action we recorded as taken) or applied to everything.",
+  "input": {
+    "taxPeriod": "092025",
+    "probes": [
+      {
+        "docCategory": "CREDIT_NOTE_ORIGINAL"
+      },
+      {
+        "docCategory": "CN_AMENDMENT_UPWARD"
+      },
+      {
+        "docCategory": "CN_AMENDMENT_DOWNWARD_ORIGINAL_REJECTED"
+      },
+      {
+        "docCategory": "INV_DN_AMENDMENT_DOWNWARD_ORIGINAL_ACCEPTED_3B_FILED"
+      },
+      {
+        "docCategory": "B2B_INVOICE"
+      }
+    ]
+  },
+  "expected": {
+    "rule": "PRE_OCT_2025",
+    "citationGrade": "CITED-PRIMARY",
+    "probes": [
+      {
+        "pendingAllowed": false,
+        "expiresAt": null
+      },
+      {
+        "pendingAllowed": false,
+        "expiresAt": null
+      },
+      {
+        "pendingAllowed": false,
+        "expiresAt": null
+      },
+      {
+        "pendingAllowed": false,
+        "expiresAt": null
+      },
+      {
+        "pendingAllowed": true,
+        "expiresAt": null
+      }
+    ]
+  }
+}

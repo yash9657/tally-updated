@@ -1,0 +1,27 @@
+{
+  "id": "03-december-year-rollover",
+  "kind": "clock",
+  "description": "December-2025 resolves on 14-January-2026: the month increment carries into the next calendar year. Without it, month arithmetic that forgets to carry produces a cutoff in month 13 of 2025 — which either crashes or silently resolves a year early, at the one boundary that also crosses a financial year.",
+  "input": {
+    "period": "122025",
+    "statementGenDate": null,
+    "filedAt": null,
+    "actions": [],
+    "probes": [
+      {
+        "asOn": "2026-01-13T23:59:59.999999999+05:30"
+      },
+      {
+        "asOn": "2026-01-14T00:00:00+05:30"
+      }
+    ]
+  },
+  "expected": {
+    "cutoff": "2026-01-14T00:00:00+05:30",
+    "resolution": "2026-01-14T00:00:00+05:30",
+    "states": [
+      "NO_ACTION",
+      "DEEMED_ACCEPTED"
+    ]
+  }
+}

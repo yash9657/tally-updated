@@ -1,0 +1,207 @@
+{
+  "id": "17-blocked-17-5-returned",
+  "description": "The section 17(5) blocked purchase of case 14, RETURNED IN FULL in the same period. A blocked purchase is availed in 4(A) and taken straight back out in 4(B)(1), so its net effect on 4(C) is ZERO — the taxpayer never gets the credit. The supplier's credit note posts NEGATIVE input tax, so 4(A) falls by 90,000 per head and the 17(5) reversal must fall by 90,000 per head with it: a NEGATIVE 4(B)(1). Clamping that reversal at zero (positivePart) leaves the invoice's +90,000 standing against the note's -90,000 availment, 4(C) goes to -90,000 per head, and the filer pays Rs 1,80,000 out of the electronic cash ledger on a car they returned and never took credit on. Nothing downstream complains: the partition identity 4(A)+4(D) == posted input tax still holds exactly, because a reversal is not part of it. Paired with TestBlockedPurchaseReturnedNetsToZero (compliance/itc) and TestBlockedPurchaseReturnedNetsToZeroAgreesWithITC (compliance/gstr), which assert the same rupee figures.",
+  "input": {
+    "period": "012026",
+    "books": [
+      {
+        "voucherId": "v1",
+        "voucherNo": "PUR-15",
+        "voucherDate": "2026-01-22",
+        "partyLedger": "Indus Motors",
+        "partyGstin": "27MMMMM1111M1Z8",
+        "supplierInvoiceNo": "I-3",
+        "supplierInvoiceDate": "2026-01-22",
+        "docType": "I",
+        "pos": "27",
+        "reverseCharge": false,
+        "itcEligibility": "BLOCKED_17_5",
+        "itcBlockedClause": "17(5)(a) motor vehicle for passenger transport",
+        "taxableValue": "1000000.0000",
+        "cgst": "90000.0000",
+        "sgst": "90000.0000",
+        "igst": "0.0000"
+      },
+      {
+        "voucherId": "v2",
+        "voucherNo": "DN-15",
+        "voucherDate": "2026-01-28",
+        "partyLedger": "Indus Motors",
+        "partyGstin": "27MMMMM1111M1Z8",
+        "supplierInvoiceNo": "CN-3",
+        "supplierInvoiceDate": "2026-01-28",
+        "docType": "C",
+        "pos": "27",
+        "reverseCharge": false,
+        "itcEligibility": "BLOCKED_17_5",
+        "itcBlockedClause": "17(5)(a) motor vehicle for passenger transport",
+        "taxableValue": "1000000.0000",
+        "cgst": "90000.0000",
+        "sgst": "90000.0000",
+        "igst": "0.0000"
+      }
+    ],
+    "statement": {
+      "kind": "GSTR2B",
+      "returnPeriod": "012026",
+      "documents": [
+        {
+          "docId": "s1",
+          "section": "B2B",
+          "rejected": false,
+          "supplierGstin": "27MMMMM1111M1Z8",
+          "supplierFiledDate": "2026-02-09",
+          "docNo": "I-3",
+          "docDate": "2026-01-22",
+          "docType": "I",
+          "docValue": "1180000.0000",
+          "pos": "27",
+          "reverseCharge": false,
+          "itcAvailable": true,
+          "taxableValue": "1000000.0000",
+          "cgst": "90000.0000",
+          "sgst": "90000.0000",
+          "igst": "0.0000"
+        },
+        {
+          "docId": "s2",
+          "section": "CDNR",
+          "rejected": false,
+          "supplierGstin": "27MMMMM1111M1Z8",
+          "supplierFiledDate": "2026-02-09",
+          "docNo": "CN-3",
+          "docDate": "2026-01-28",
+          "docType": "C",
+          "docValue": "1180000.0000",
+          "pos": "27",
+          "reverseCharge": false,
+          "itcAvailable": true,
+          "taxableValue": "1000000.0000",
+          "cgst": "90000.0000",
+          "sgst": "90000.0000",
+          "igst": "0.0000"
+        }
+      ],
+      "genDate": "2026-02-14"
+    }
+  },
+  "expected": {
+    "rejectedStatementRows": [],
+    "findings": [],
+    "lines": [
+      {
+        "status": "MATCHED",
+        "fields": [],
+        "notComparable": "",
+        "books": "v1",
+        "statement": "s1",
+        "candidates": [],
+        "delta": {
+          "txval": "0.0000",
+          "camt": "0.0000",
+          "samt": "0.0000",
+          "iamt": "0.0000"
+        },
+        "effect": {
+          "avlRow": "OTH",
+          "avl": {
+            "camt": "90000.0000",
+            "samt": "90000.0000",
+            "iamt": "0.0000"
+          },
+          "revRul": {
+            "camt": "90000.0000",
+            "samt": "90000.0000",
+            "iamt": "0.0000"
+          },
+          "revOth": {
+            "camt": "0.0000",
+            "samt": "0.0000",
+            "iamt": "0.0000"
+          },
+          "inelg": {
+            "camt": "0.0000",
+            "samt": "0.0000",
+            "iamt": "0.0000"
+          }
+        },
+        "s164Expiry": "2026-11-30"
+      },
+      {
+        "status": "MATCHED",
+        "fields": [],
+        "notComparable": "",
+        "books": "v2",
+        "statement": "s2",
+        "candidates": [],
+        "delta": {
+          "txval": "0.0000",
+          "camt": "0.0000",
+          "samt": "0.0000",
+          "iamt": "0.0000"
+        },
+        "effect": {
+          "avlRow": "OTH",
+          "avl": {
+            "camt": "-90000.0000",
+            "samt": "-90000.0000",
+            "iamt": "0.0000"
+          },
+          "revRul": {
+            "camt": "-90000.0000",
+            "samt": "-90000.0000",
+            "iamt": "0.0000"
+          },
+          "revOth": {
+            "camt": "0.0000",
+            "samt": "0.0000",
+            "iamt": "0.0000"
+          },
+          "inelg": {
+            "camt": "0.0000",
+            "samt": "0.0000",
+            "iamt": "0.0000"
+          }
+        },
+        "s164Expiry": "2026-11-30"
+      }
+    ],
+    "totals": {
+      "itcAvlIsrc": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "itcAvlOth": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "itcRevRul": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "itcRevOth": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "itcInelgOth": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "itcNet": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "postedInputTax": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      }
+    }
+  }
+}

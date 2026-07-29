@@ -1,0 +1,133 @@
+{
+  "id": "14-blocked-17-5",
+  "description": "A perfectly matched invoice whose LEDGER is classified BLOCKED_17_5: the credit enters 4(A) in full and is reversed in 4(B)(1) — the rule-42/43-and-section-17 row — never in 4(B)(2), and never twice. Without it, s.17(5) is either inferred from the goods (which is wrong: the identical car is blocked for us and fully creditable for a taxi operator) or reversed in the same bucket as an unmatched invoice, which makes the return unexplainable to an officer.",
+  "input": {
+    "period": "012026",
+    "books": [
+      {
+        "voucherId": "v1",
+        "voucherNo": "PUR-15",
+        "voucherDate": "2026-01-22",
+        "partyLedger": "Indus Motors",
+        "partyGstin": "27MMMMM1111M1Z8",
+        "supplierInvoiceNo": "I-3",
+        "supplierInvoiceDate": "2026-01-22",
+        "docType": "I",
+        "pos": "27",
+        "reverseCharge": false,
+        "itcEligibility": "BLOCKED_17_5",
+        "itcBlockedClause": "17(5)(a) motor vehicle for passenger transport",
+        "taxableValue": "9000.0000",
+        "cgst": "810.0000",
+        "sgst": "810.0000",
+        "igst": "0.0000"
+      }
+    ],
+    "statement": {
+      "kind": "GSTR2B",
+      "returnPeriod": "012026",
+      "documents": [
+        {
+          "docId": "s1",
+          "section": "B2B",
+          "rejected": false,
+          "supplierGstin": "27MMMMM1111M1Z8",
+          "supplierFiledDate": "2026-02-09",
+          "docNo": "I-3",
+          "docDate": "2026-01-22",
+          "docType": "I",
+          "docValue": "10620.0000",
+          "pos": "27",
+          "reverseCharge": false,
+          "itcAvailable": true,
+          "taxableValue": "9000.0000",
+          "cgst": "810.0000",
+          "sgst": "810.0000",
+          "igst": "0.0000"
+        }
+      ],
+      "genDate": "2026-02-14"
+    }
+  },
+  "expected": {
+    "rejectedStatementRows": [],
+    "findings": [],
+    "lines": [
+      {
+        "status": "MATCHED",
+        "fields": [],
+        "notComparable": "",
+        "books": "v1",
+        "statement": "s1",
+        "candidates": [],
+        "delta": {
+          "txval": "0.0000",
+          "camt": "0.0000",
+          "samt": "0.0000",
+          "iamt": "0.0000"
+        },
+        "effect": {
+          "avlRow": "OTH",
+          "avl": {
+            "camt": "810.0000",
+            "samt": "810.0000",
+            "iamt": "0.0000"
+          },
+          "revRul": {
+            "camt": "810.0000",
+            "samt": "810.0000",
+            "iamt": "0.0000"
+          },
+          "revOth": {
+            "camt": "0.0000",
+            "samt": "0.0000",
+            "iamt": "0.0000"
+          },
+          "inelg": {
+            "camt": "0.0000",
+            "samt": "0.0000",
+            "iamt": "0.0000"
+          }
+        },
+        "s164Expiry": "2026-11-30"
+      }
+    ],
+    "totals": {
+      "itcAvlIsrc": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "itcAvlOth": {
+        "camt": "810.0000",
+        "samt": "810.0000",
+        "iamt": "0.0000"
+      },
+      "itcRevRul": {
+        "camt": "810.0000",
+        "samt": "810.0000",
+        "iamt": "0.0000"
+      },
+      "itcRevOth": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "itcInelgOth": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "itcNet": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "postedInputTax": {
+        "camt": "810.0000",
+        "samt": "810.0000",
+        "iamt": "0.0000"
+      }
+    }
+  }
+}

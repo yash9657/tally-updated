@@ -1,0 +1,113 @@
+{
+  "id": "07-missing-in-2b",
+  "description": "The supplier did not file at all, so the purchase is MISSING_IN_2B: the posted input tax still enters 4(A) (model (b): 4(A) is what the books posted) and the whole of it is reversed in 4(B)(2), leaving 4(C) at zero while identity (I1) sum(4A) + sum(4D) == posted input tax stays EXACT. Without it there is nothing pinning that the haircut is a return-side line and not a hole in table 4(A).",
+  "input": {
+    "period": "012026",
+    "books": [
+      {
+        "voucherId": "v1",
+        "voucherNo": "PUR-8",
+        "voucherDate": "2026-01-15",
+        "partyLedger": "Deepak Metals",
+        "partyGstin": "27DDDDD3333D1Z1",
+        "supplierInvoiceNo": "INV-777",
+        "supplierInvoiceDate": "2026-01-15",
+        "docType": "I",
+        "pos": "27",
+        "reverseCharge": false,
+        "itcEligibility": "ELIGIBLE",
+        "taxableValue": "8000.0000",
+        "cgst": "720.0000",
+        "sgst": "720.0000",
+        "igst": "0.0000"
+      }
+    ],
+    "statement": {
+      "kind": "GSTR2B",
+      "returnPeriod": "012026",
+      "documents": [],
+      "genDate": "2026-02-14"
+    }
+  },
+  "expected": {
+    "rejectedStatementRows": [],
+    "findings": [],
+    "lines": [
+      {
+        "status": "MISSING_IN_2B",
+        "fields": [],
+        "notComparable": "",
+        "books": "v1",
+        "statement": null,
+        "candidates": [],
+        "delta": {
+          "txval": "0.0000",
+          "camt": "0.0000",
+          "samt": "0.0000",
+          "iamt": "0.0000"
+        },
+        "effect": {
+          "avlRow": "OTH",
+          "avl": {
+            "camt": "720.0000",
+            "samt": "720.0000",
+            "iamt": "0.0000"
+          },
+          "revRul": {
+            "camt": "0.0000",
+            "samt": "0.0000",
+            "iamt": "0.0000"
+          },
+          "revOth": {
+            "camt": "720.0000",
+            "samt": "720.0000",
+            "iamt": "0.0000"
+          },
+          "inelg": {
+            "camt": "0.0000",
+            "samt": "0.0000",
+            "iamt": "0.0000"
+          }
+        },
+        "s164Expiry": "2026-11-30"
+      }
+    ],
+    "totals": {
+      "itcAvlIsrc": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "itcAvlOth": {
+        "camt": "720.0000",
+        "samt": "720.0000",
+        "iamt": "0.0000"
+      },
+      "itcRevRul": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "itcRevOth": {
+        "camt": "720.0000",
+        "samt": "720.0000",
+        "iamt": "0.0000"
+      },
+      "itcInelgOth": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "itcNet": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "postedInputTax": {
+        "camt": "720.0000",
+        "samt": "720.0000",
+        "iamt": "0.0000"
+      }
+    }
+  }
+}

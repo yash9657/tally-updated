@@ -1,0 +1,51 @@
+{
+  "id": "09-pending-allowed-from-oct-2025",
+  "kind": "pending",
+  "description": "From the October-2025 tax period the same four categories MAY be kept pending, for one tax period only, expiring at the GSTR-3B due date of the following period (20-Dec-2025). Without it the restriction is hard-coded as permanent and is WRONG for every period this software actually ships into — the same shape of bug as a hard-coded TDS rate. [CITED-SECONDARY: GSTN Advisory 631 of 08-10-2025; VERIFY BEFORE RELEASE.]",
+  "input": {
+    "taxPeriod": "102025",
+    "probes": [
+      {
+        "docCategory": "CREDIT_NOTE_ORIGINAL"
+      },
+      {
+        "docCategory": "CN_AMENDMENT_UPWARD"
+      },
+      {
+        "docCategory": "CN_AMENDMENT_DOWNWARD_ORIGINAL_REJECTED"
+      },
+      {
+        "docCategory": "INV_DN_AMENDMENT_DOWNWARD_ORIGINAL_ACCEPTED_3B_FILED"
+      },
+      {
+        "docCategory": "B2B_INVOICE"
+      }
+    ]
+  },
+  "expected": {
+    "rule": "OCT_2025_ONWARDS",
+    "citationGrade": "CITED-SECONDARY",
+    "probes": [
+      {
+        "pendingAllowed": true,
+        "expiresAt": "2025-12-20"
+      },
+      {
+        "pendingAllowed": true,
+        "expiresAt": "2025-12-20"
+      },
+      {
+        "pendingAllowed": true,
+        "expiresAt": "2025-12-20"
+      },
+      {
+        "pendingAllowed": true,
+        "expiresAt": "2025-12-20"
+      },
+      {
+        "pendingAllowed": true,
+        "expiresAt": null
+      }
+    ]
+  }
+}

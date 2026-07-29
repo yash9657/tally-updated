@@ -1,0 +1,170 @@
+{
+  "id": "09-credit-note-not-paired-to-invoice",
+  "description": "The supplier's CREDIT NOTE carries the same number, the same date and the same value as our purchase INVOICE — ordinary practice, not pathology. Because doc_type is in every match key the two are never paired, so the result is TWO unpaired lines. Without it, a matcher that keys on (GSTIN, number, date, value) pairs a credit note with the invoice it adjusts, reports a clean MATCH, and leaves the reduction claimed as credit.",
+  "input": {
+    "period": "012026",
+    "books": [
+      {
+        "voucherId": "v1",
+        "voucherNo": "PUR-9",
+        "voucherDate": "2026-01-12",
+        "partyLedger": "Falcon Polymers",
+        "partyGstin": "27FFFFF5555F1Z4",
+        "supplierInvoiceNo": "5001",
+        "supplierInvoiceDate": "2026-01-12",
+        "docType": "I",
+        "pos": "27",
+        "reverseCharge": false,
+        "itcEligibility": "ELIGIBLE",
+        "taxableValue": "15000.0000",
+        "cgst": "1350.0000",
+        "sgst": "1350.0000",
+        "igst": "0.0000"
+      }
+    ],
+    "statement": {
+      "kind": "GSTR2B",
+      "returnPeriod": "012026",
+      "documents": [
+        {
+          "docId": "s1",
+          "section": "CDNR",
+          "rejected": false,
+          "supplierGstin": "27FFFFF5555F1Z4",
+          "supplierFiledDate": "2026-02-09",
+          "docNo": "5001",
+          "docDate": "2026-01-12",
+          "docType": "C",
+          "docValue": "17700.0000",
+          "pos": "27",
+          "reverseCharge": false,
+          "itcAvailable": true,
+          "taxableValue": "15000.0000",
+          "cgst": "1350.0000",
+          "sgst": "1350.0000",
+          "igst": "0.0000"
+        }
+      ],
+      "genDate": "2026-02-14"
+    }
+  },
+  "expected": {
+    "rejectedStatementRows": [],
+    "findings": [],
+    "lines": [
+      {
+        "status": "MISSING_IN_2B",
+        "fields": [],
+        "notComparable": "",
+        "books": "v1",
+        "statement": null,
+        "candidates": [],
+        "delta": {
+          "txval": "0.0000",
+          "camt": "0.0000",
+          "samt": "0.0000",
+          "iamt": "0.0000"
+        },
+        "effect": {
+          "avlRow": "OTH",
+          "avl": {
+            "camt": "1350.0000",
+            "samt": "1350.0000",
+            "iamt": "0.0000"
+          },
+          "revRul": {
+            "camt": "0.0000",
+            "samt": "0.0000",
+            "iamt": "0.0000"
+          },
+          "revOth": {
+            "camt": "1350.0000",
+            "samt": "1350.0000",
+            "iamt": "0.0000"
+          },
+          "inelg": {
+            "camt": "0.0000",
+            "samt": "0.0000",
+            "iamt": "0.0000"
+          }
+        },
+        "s164Expiry": "2026-11-30"
+      },
+      {
+        "status": "MISSING_IN_BOOKS",
+        "fields": [],
+        "notComparable": "",
+        "books": null,
+        "statement": "s1",
+        "candidates": [],
+        "delta": {
+          "txval": "0.0000",
+          "camt": "0.0000",
+          "samt": "0.0000",
+          "iamt": "0.0000"
+        },
+        "effect": {
+          "avlRow": "OTH",
+          "avl": {
+            "camt": "0.0000",
+            "samt": "0.0000",
+            "iamt": "0.0000"
+          },
+          "revRul": {
+            "camt": "0.0000",
+            "samt": "0.0000",
+            "iamt": "0.0000"
+          },
+          "revOth": {
+            "camt": "0.0000",
+            "samt": "0.0000",
+            "iamt": "0.0000"
+          },
+          "inelg": {
+            "camt": "0.0000",
+            "samt": "0.0000",
+            "iamt": "0.0000"
+          }
+        },
+        "s164Expiry": "2026-11-30"
+      }
+    ],
+    "totals": {
+      "itcAvlIsrc": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "itcAvlOth": {
+        "camt": "1350.0000",
+        "samt": "1350.0000",
+        "iamt": "0.0000"
+      },
+      "itcRevRul": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "itcRevOth": {
+        "camt": "1350.0000",
+        "samt": "1350.0000",
+        "iamt": "0.0000"
+      },
+      "itcInelgOth": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "itcNet": {
+        "camt": "0.0000",
+        "samt": "0.0000",
+        "iamt": "0.0000"
+      },
+      "postedInputTax": {
+        "camt": "1350.0000",
+        "samt": "1350.0000",
+        "iamt": "0.0000"
+      }
+    }
+  }
+}
