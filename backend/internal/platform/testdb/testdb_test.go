@@ -158,6 +158,15 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 		voucherID = id()
 		versionID = id()
 		plistID   = id()
+
+		// Track 2 — GSTR-2A/2B inward statement and the IMS worklist.
+		statementID = id()
+		inwardDocID = id()
+
+		// Track 3 — payroll.
+		employeeID = id()
+		payRunID   = id()
+		payslipID  = id()
 	)
 	cidText := cid.String()
 
@@ -255,6 +264,60 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 			(id, company_id, price_list_id, stock_item_id, qty_range, rate, discount_pct)
 			VALUES ($1, $2, $3, $4, numrange(0, NULL, '[)'), 10, 0)`,
 			[]any{id(), cid, plistID, itemID}},
+
+		// ------------------------------------------------------------------
+		// Track 2 — the inward-supply side: a GSTR-2B statement, one document
+		// in it, an IMS action against that document, and the GSTR-3B filing
+		// record whose filed_at freezes the period.
+		// ------------------------------------------------------------------
+		{"gst_inward_statement", `INSERT INTO gst_inward_statement
+			(id, company_id, kind, return_period, filer_gstin, source_sha256, raw, ingested_by)
+			VALUES ($1, $2, 'GSTR2B', '052024', '29ABCDE1234F1Z5', repeat('a', 64), '{}'::jsonb, 'testdb')`,
+			[]any{statementID, cid}},
+		{"gst_inward_document", `INSERT INTO gst_inward_document
+			(id, company_id, statement_id, section, supplier_gstin, doc_no, doc_date, doc_type,
+			 itc_available, taxable_value, cgst, sgst, igst)
+			VALUES ($1, $2, $3, 'B2B', '29ABCDE1234F1Z5', 'FIX/1', DATE '2024-05-01', 'I',
+			        true, 100, 9, 9, 0)`,
+			[]any{inwardDocID, cid, statementID}},
+		{"gst_ims_action", `INSERT INTO gst_ims_action
+			(id, company_id, document_id, action, acted_at, acted_by)
+			VALUES ($1, $2, $3, 'ACCEPT', TIMESTAMPTZ '2024-06-10T00:00:00Z', 'testdb')`,
+			[]any{id(), cid, inwardDocID}},
+		{"gst_return_filing", `INSERT INTO gst_return_filing
+			(id, company_id, form, return_period, filed_at, filed_by)
+			VALUES ($1, $2, 'GSTR3B', '052024', TIMESTAMPTZ '2024-06-20T00:00:00Z', 'testdb')`,
+			[]any{id(), cid}},
+
+		// ------------------------------------------------------------------
+		// Track 3 — payroll: an employee, their salary structure and statutory
+		// elections, and one posted pay run with a payslip and a component.
+		// ------------------------------------------------------------------
+		{"employee", `INSERT INTO employee (id, company_id, code, name, doj, payable_ledger_id)
+			VALUES ($1, $2, 'FIX-EMP-1', 'Fixture Employee', DATE '2024-04-01', $3)`,
+			[]any{employeeID, cid, ledgerID}},
+		{"employee_salary_structure", `INSERT INTO employee_salary_structure
+			(id, company_id, employee_id, effective_from, component_code, component_type, amount)
+			VALUES ($1, $2, $3, DATE '2024-04-01', 'BASIC', 'BASIC', 20000)`,
+			[]any{id(), cid, employeeID}},
+		{"employee_statutory_election", `INSERT INTO employee_statutory_election
+			(id, company_id, employee_id, effective_from, pf_base, tax_regime)
+			VALUES ($1, $2, $3, DATE '2024-04-01', 'CEILING', 'NEW')`,
+			[]any{id(), cid, employeeID}},
+		{"pay_run", `INSERT INTO pay_run
+			(id, company_id, wage_month, status, voucher_id, ss_ruleset_version, it_ruleset_version,
+			 created_by, posted_at)
+			VALUES ($1, $2, DATE '2024-05-01', 'POSTED', $3, 'fixture-ss', 'fixture-it', 'testdb',
+			        TIMESTAMPTZ '2024-06-01T00:00:00Z')`,
+			[]any{payRunID, cid, voucherID}},
+		{"payslip", `INSERT INTO payslip
+			(id, company_id, pay_run_id, employee_id, days_paid, gross_earnings, total_deductions, net_pay)
+			VALUES ($1, $2, $3, $4, 31, 20000, 2400, 17600)`,
+			[]any{payslipID, cid, payRunID, employeeID}},
+		{"payslip_component", `INSERT INTO payslip_component
+			(id, company_id, payslip_id, line_no, component_code, component_type, tag, direction, amount)
+			VALUES ($1, $2, $3, 1, 'BASIC', 'BASIC', 'NA', 'EARNING', 20000)`,
+			[]any{id(), cid, payslipID}},
 
 		// TEXT company_id. This is the row that the "AND data_type='uuid'"
 		// mutation orphans, and the reason the enumeration query must not filter

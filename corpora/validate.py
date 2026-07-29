@@ -18,9 +18,10 @@ from __future__ import annotations
 import json
 import re
 import sys
+import unicodedata
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
-from decimal import ROUND_HALF_UP, Decimal, InvalidOperation, localcontext
+from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal, InvalidOperation, localcontext
 from pathlib import Path
 from typing import Any
 
@@ -1122,6 +1123,2038 @@ def validate_inventory(path: Path, case: dict) -> None:
             )
 
 
+# ---------------------------------------------------------------------------
+# GSTR-2A/2B reconciliation (corpora/gstr2b) and IMS (corpora/ims)
+# ---------------------------------------------------------------------------
+# The reconciliation result is NEVER STORED — it is a function of four versioned
+# inputs (the books, the ingested statement, the IMS action log and the policy)
+# and goes stale the instant any of them moves, exactly like a stock valuation.
+# These fixtures are therefore the ONLY pinned form of that function, and the
+# derivation below is a SECOND, INDEPENDENT implementation of it: written from
+# the written specification (the matching passes, the tolerances, the effect
+# table), NOT transcribed from backend/internal/compliance/itc. Two
+# implementations of one spec disagree when either is wrong; one implementation
+# plus a fixture that restates it agrees with itself forever.
+#
+# THE RULES, IN FULL — this comment is the spec both sides are written from.
+#
+# Normalisation (one place, two keys):
+#   * strict = NFKC, drop every rune outside [0-9A-Za-z], ASCII-uppercase.
+#     ASCII-uppercase and not str.upper(): Unicode/locale casing is
+#     environment-dependent, and a document key that depends on the locale of
+#     the machine that computed it is not a key.
+#   * loose  = strict with leading zeros stripped from every maximal digit run.
+#   * LEADING ZEROS ARE NOT STRIPPED IN THE STRICT KEY. "INV001" and "INV01"
+#     are plausibly two different invoices from a supplier that pads. Stripping
+#     is the commonest source of FALSE PAIRS; not stripping is the commonest
+#     source of false non-matches. Strict decides pairing, loose decides
+#     candidacy, and neither decision is silently made for the other.
+#   * a strict key longer than 16 characters violates rule 46(b) and is a
+#     reported FINDING (DOC_NO_INVALID), never a match failure.
+#
+# Comparability (checked BEFORE matching, precedence in this order):
+#   RCM > IMPORT_OR_ISD > NO_PARTY_GSTIN > NO_SUPPLIER_DOC_NO > NO_GST_PARAMS.
+#   "missing in 2B" and "cannot be compared" are DIFFERENT WORDS and the
+#   difference is the whole point: every purchase posted before migration 0032
+#   carries no supplier document number, and calling those MISSING_IN_2B would
+#   tell the filer their supplier had not filed (a lie) and reverse ITC that is
+#   perfectly good. NOT_COMPARABLE produces ZERO reversal.
+#   RCM comes FIRST because IMS excludes reverse-charge supplies entirely and
+#   RCM ITC is self-assessed, so an RCM row can never appear in a 2B match and
+#   must never be reversed for being unmatched.
+#
+# Three passes over DISJOINT pools; a row consumed by an earlier pass leaves:
+#   pass 1  (gstin, strict, docType, docDate, taxable) -> MATCHED
+#   pass 2  (gstin, strict, docType, docDate)          -> MISMATCHED
+#   pass 3  (gstin, loose,  docType)                   -> NEAR_MATCH
+#   docType IS IN EVERY KEY so a CDNR credit note is never paired with the
+#   invoice it adjusts — in 2B they are separate documents with separate IMS
+#   actions, and a supplier whose note number equals the invoice number is
+#   ordinary, not pathological (fixture 09 is exactly that).
+#
+# A NEAR_MATCH IS NEVER A PAIRING. It emits TWO lines — one carrying the books
+# row, one carrying the statement row — each pointing at the other as a
+# candidate for a human to confirm, and each treated as unmatched by the
+# arithmetic. Silently pairing two invoices that are not the same invoice is
+# worse than reporting them unmatched.
+#
+# AMBIGUITY IS AN ERROR, NOT A TIE-BREAK. If pass 1 or 2 finds more than one
+# candidate on either side, NOTHING is paired and every participant becomes
+# AMBIGUOUS. Deterministic-but-arbitrary picking is how ITC gets claimed
+# against the wrong invoice.
+#
+# Tolerances:
+#   * taxable value: EXACT to the paisa. No band — a percentage band grows with
+#     invoice size, which is precisely where a real error hides.
+#   * tax heads: an ABSOLUTE Decimal("1.00") PER HEAD, and only once taxable is
+#     already exact; within it the status is the DISTINCT MATCHED_ROUNDING,
+#     carrying the delta, never a silent MATCHED. compliance.TaxDerive rounds
+#     PER LINE, so a supplier rounding at invoice level differs by at most half
+#     a paisa per line per head; one rupee covers any realistic invoice.
+#   * date: ZERO DAYS. The common "+/-7 days" fuzz is deliberately rejected:
+#     the invoice date fixes the financial year for s.16(4) and therefore the
+#     expiry of the credit, so a 7-day band pairs a 31-March invoice with a
+#     1-April one — a different FY and a different expiry.
+#   * GSTIN: exact after uppercasing and stripping whitespace. One character is
+#     a different taxpayer.
+#
+# The 2B window is on the SUPPLIER'S FILING DATE, not on the document date, so a
+# prior-FY invoice legitimately appears in a current-period 2B and is NOT a date
+# mismatch (fixture 12).
+#
+# Rejected rows (GSTN's docRejdata) are ingested for VIEWING and NEVER enter
+# matching or ITC. Summing them into table 4(A) is a filing-grade overclaim.
+#
+# The effect table (section F1 of the architecture) is model (b): table 4(A) is
+# what the BOOKS posted and the haircut lands in 4(B)(2), which preserves the
+# one exact invariant in the whole compliance surface —
+#     (I1)  sum(4A) + sum(4D) == the posted input tax, head by head
+#     (I2)  sum(4A) - sum(4B) == 4(C),  and a NEGATIVE 4(C) is legal.
+# Time-barred / never-available ITC is excluded from 4(A) ENTIRELY rather than
+# reversed, because it never was available; that is what keeps (I1) exact.
+# 4(D) is NOT subtracted from 4(C) (post-Notification-14/2022 it is "Other
+# Details" and informational); subtracting it would double-count the haircut.
+# At most ONE 4(B) reversal per voucher and 4(B)(1) wins, so a blocked credit
+# that is also unmatched is reversed once.
+#
+# THE NEGATIVE-TAX RULE: a document whose posted input tax is NEGATIVE (a
+# supplier credit note / purchase return) is NEVER reversed for absence from the
+# statement. Reversing a negative would ADD credit.
+
+ITC_IST = timezone(timedelta(hours=5, minutes=30))
+
+# Absolute per-head rounding tolerance, in rupees. See the derivation above.
+ITC_ROUNDING_TOLERANCE = Decimal("1.00")
+
+# Rule 46(b) caps an invoice number at 16 characters.
+ITC_DOC_NO_MAX = 16
+
+ITC_MONEY_KEYS = {
+    "taxableValue", "cgst", "sgst", "igst", "docValue",
+    "camt", "samt", "iamt", "txval",
+}
+
+ITC_STATUSES = {
+    "MATCHED", "MATCHED_ROUNDING", "MISMATCHED", "NEAR_MATCH", "AMBIGUOUS",
+    "MISSING_IN_BOOKS", "MISSING_IN_2B", "SUPERSEDED", "NOT_COMPARABLE",
+}
+ITC_ELIGIBILITY = {"ELIGIBLE", "BLOCKED_17_5", "CAPITAL_GOODS", "ISD"}
+ITC_SECTIONS = {
+    "B2B", "B2BA", "CDNR", "CDNRA", "IMPG", "IMPGSEZ", "ISD", "ISDA",
+    "ECOM", "ECOMA",
+}
+IMS_STATES = {"NO_ACTION", "ACCEPTED", "REJECTED", "PENDING", "DEEMED_ACCEPTED"}
+IMS_APPLICABLE_SECTIONS = {"B2B", "B2BA", "CDNR", "CDNRA", "ECOM", "ECOMA"}
+
+_ZERO_TAX = {"camt": Decimal("0"), "samt": Decimal("0"), "iamt": Decimal("0")}
+
+
+def _m(value: Decimal) -> str:
+    """Format a Decimal as the corpus's 4dp money string."""
+    return f"{value.quantize(MONEY_DP, rounding=ROUND_HALF_UP):f}"
+
+
+def _tax_str(tax: dict) -> dict:
+    return {k: _m(tax[k]) for k in ("camt", "samt", "iamt")}
+
+
+def _tax_add(a: dict, b: dict) -> dict:
+    return {k: a[k] + b[k] for k in ("camt", "samt", "iamt")}
+
+
+def _itc_strict_key(s: str) -> str:
+    """NFKC, keep [0-9A-Za-z], ASCII-uppercase. See the header."""
+    folded = unicodedata.normalize("NFKC", s or "")
+    kept = [ch for ch in folded if ch.isascii() and (ch.isdigit() or ch.isalpha())]
+    return "".join(chr(ord(c) - 32) if "a" <= c <= "z" else c for c in kept)
+
+
+def _itc_loose_key(strict: str) -> str:
+    """strict, with leading zeros stripped from every maximal digit run."""
+    out: list[str] = []
+    i = 0
+    while i < len(strict):
+        if strict[i].isdigit():
+            j = i
+            while j < len(strict) and strict[j].isdigit():
+                j += 1
+            run = strict[i:j].lstrip("0")
+            out.append(run if run else "0")
+            i = j
+        else:
+            out.append(strict[i])
+            i += 1
+    return "".join(out)
+
+
+def _itc_date(value):
+    """Parse a YYYY-MM-DD string to a date; None/'' -> None."""
+    if not value:
+        return None
+    return datetime.strptime(value, "%Y-%m-%d").date()
+
+
+def _itc_ts(value):
+    """Parse an RFC3339 instant; None/'' -> None.
+
+    Python's datetime is MICROSECOND-resolution and truncates the nanosecond
+    forms the Go boundary test uses (…T23:59:59.999999999+05:30 becomes
+    …999999). That is safe here and only here: every boundary in this corpus is
+    at a whole second, so truncation moves an instant that is already strictly
+    before the boundary to another instant strictly before it. A fixture whose
+    answer turned on a sub-microsecond difference would be untestable from
+    Python and must not be written.
+    """
+    if not value:
+        return None
+    return datetime.fromisoformat(value)
+
+
+def _s164_fy_end(d):
+    """31 March of the financial year that contains *d* (April-March)."""
+    return datetime(d.year + (1 if d.month >= 4 else 0), 3, 31).date()
+
+
+def _s164_expiry(d, annual_return_filed_on=None):
+    """s.16(4): 30 November following the FY end, or the annual-return filing
+    date if that is earlier. INCLUSIVE — a claim ON the expiry date is allowed.
+
+    A DEBIT NOTE'S OWN DATE fixes the FY (de-linked from the original invoice
+    w.e.f. 01-01-2021), which is why this takes a date and not a document.
+    """
+    fy_end = _s164_fy_end(d)
+    expiry = datetime(fy_end.year, 11, 30).date()
+    if annual_return_filed_on and annual_return_filed_on < expiry:
+        return annual_return_filed_on
+    return expiry
+
+
+# --- IMS clock -------------------------------------------------------------
+#
+# TIMEZONE: IST, as a FIXED +05:30 offset. INFERRED, NOT CITED — no GSTN or
+# CBIC document read for this work states a timezone anywhere; Indian statute
+# plus an IST-operated portal make it the only defensible reading. A fixed
+# offset rather than a tzdata lookup because India has had +05:30 with no DST
+# since 1945, and a container without tzdata makes a lookup fail and silently
+# move the boundary. NEVER the local zone: a UTC server computes the boundary
+# 5h30m LATE and deem-accepts records into the wrong period.
+
+
+def _ims_period(period: str):
+    """'MMYYYY' (the GSTN `fp` form) -> (month, year)."""
+    return int(period[:2]), int(period[2:])
+
+
+def _ims_add_months(month: int, year: int, n: int):
+    """CALENDAR-month addition, never day arithmetic."""
+    total = (year * 12) + (month - 1) + n
+    return (total % 12) + 1, total // 12
+
+
+def _ims_cutoff(period: str) -> datetime:
+    """The DEFAULT resolution instant for a monthly filer.
+
+    GSTN 2B Advisory (12-10-2021) Q.2: 2B generation begins after the
+    IFF/GSTR-5/GSTR-6 due date ends at "13th midnight". Encoded as the
+    HALF-OPEN boundary [.., 14th 00:00:00 IST) so there is no ambiguous
+    59-second gap and no half-day fudge about "the afternoon of the 14th".
+    No clamping is ever needed: the 14th exists in every month, February
+    included.
+    """
+    month, year = _ims_period(period)
+    m2, y2 = _ims_add_months(month, year, 1)
+    return datetime(y2, m2, 14, 0, 0, 0, tzinfo=ITC_IST)
+
+
+def _ims_resolution(period: str, gen_date) -> datetime:
+    """The statement's own generation date wins over the computed 14th.
+
+    THE 14th IS NOT STATUTORY AND HAS ALREADY SLIPPED: the December-2024 2B was
+    generated on 16-Jan-2025 because the GSTR-1 due date had been extended to
+    the 13th. A hard-coded 14 is a latent wrong-period bug, and fixture
+    ims/04 is the case that bites it.
+    """
+    if gen_date:
+        d = _itc_date(gen_date)
+        return datetime(d.year, d.month, d.day, 0, 0, 0, tzinfo=ITC_IST)
+    return _ims_cutoff(period)
+
+
+def _ims_effective_action(actions, resolution, freeze, as_on):
+    """The effective IMS state at *as_on*. PURE — never reads a wall clock.
+
+    Last-write-wins projection over an APPEND-ONLY log (GSTN IMS FAQ 12: "the
+    latest action will overwrite the previous action"). Actions after the
+    GSTR-3B filing instant do not count, because filing freezes the action set.
+    FOUR outcomes, not three: NO_ACTION is distinct from ACCEPTED until 2B
+    generation resolves it into DEEMED_ACCEPTED.
+    """
+    horizon = as_on
+    if freeze is not None and freeze < horizon:
+        horizon = freeze
+    seen = [(a["actedAt"], i, a) for i, a in enumerate(actions) if a["actedAt"] <= horizon]
+    if seen:
+        seen.sort(key=lambda t: (t[0], t[1]))
+        latest = seen[-1][2]["action"]
+        if latest != "RESET":
+            return {"ACCEPT": "ACCEPTED", "REJECT": "REJECTED", "PENDING": "PENDING"}[latest]
+        # RESET clears the log back to "no action taken", so the deemed-accept
+        # timer applies again exactly as if nothing had ever been actioned.
+    return "DEEMED_ACCEPTED" if as_on >= resolution else "NO_ACTION"
+
+
+# --- parsing ---------------------------------------------------------------
+
+
+def _itc_parse_books(path: Path, raw: dict, idx: int) -> dict:
+    rid = raw.get("voucherId") or f"books[{idx}]"
+    taxable_raw = raw.get("taxableValue")
+    has_params = taxable_raw is not None
+    taxable = Decimal("0")
+    if has_params:
+        parsed = money(path, f"{rid}.taxableValue", taxable_raw)
+        taxable = parsed if parsed is not None else Decimal("0")
+    tax = {}
+    for key, field in (("camt", "cgst"), ("samt", "sgst"), ("iamt", "igst")):
+        parsed = money(path, f"{rid}.{field}", raw.get(field, "0.0000"))
+        tax[key] = parsed if parsed is not None else Decimal("0")
+    eligibility = raw.get("itcEligibility") or "ELIGIBLE"
+    if eligibility not in ITC_ELIGIBILITY:
+        fail(path, f"{rid}.itcEligibility {eligibility!r} is not one of {sorted(ITC_ELIGIBILITY)}")
+    # THE BOOKS' SIGN CONVENTION. A supplier CREDIT NOTE reduces input tax, and
+    # store.go posts it NEGATIVE; the Go corpus loader applies the same flip to
+    # a fixture that states the note as a positive magnitude. Without it this
+    # oracle re-derives a returned purchase as a SECOND purchase and "confirms"
+    # double the credit. Fixtures state magnitudes because that is how the
+    # portal reports them; the sign is applied here, once.
+    if (raw.get("docType") or "I") == "C" and taxable > 0:
+        taxable = -taxable
+        tax = {h: -v for h, v in tax.items()}
+    strict = _itc_strict_key(raw.get("supplierInvoiceNo") or "")
+    return {
+        "id": rid,
+        "side": "books",
+        "gstin": (raw.get("partyGstin") or "").strip().upper(),
+        "docNo": (raw.get("supplierInvoiceNo") or "").strip(),
+        "docDate": raw.get("supplierInvoiceDate") or "",
+        "docType": raw.get("docType") or "I",
+        "taxable": taxable,
+        "tax": tax,
+        "reverseCharge": bool(raw.get("reverseCharge")),
+        "eligibility": eligibility,
+        "pos": raw.get("pos") or "",
+        "hasParams": has_params,
+        "strict": strict,
+        "loose": _itc_loose_key(strict),
+    }
+
+
+def _itc_stmt_in_books_direction(b: dict, s: dict):
+    """Flip a paired statement row into the direction the BOOKS recorded it.
+
+    GSTR-2B reports MAGNITUDES: a supplier credit note of 400 is filed as 400,
+    not -400. The books carry the sign convention (_itc_parse_books). Comparing
+    the two raw would make every credit note look like a 2x mismatch, and the
+    MISMATCHED excess would be computed off a doubled difference.
+
+    Mirrors pairLine in internal/compliance/itc/match.go, which does the same
+    single flip for the same reason. Returns (taxable, tax_by_head).
+    """
+    sgn = Decimal("-1") if (b.get("docType") or "I") == "C" else Decimal("1")
+    return (
+        abs(s["taxable"]) * sgn,
+        {h: abs(s["tax"][h]) * sgn for h in ("camt", "samt", "iamt")},
+    )
+
+
+def _itc_parse_stmt(path: Path, raw: dict, idx: int) -> dict:
+    rid = raw.get("docId") or f"documents[{idx}]"
+    section = raw.get("section") or "B2B"
+    if section not in ITC_SECTIONS:
+        fail(path, f"{rid}.section {section!r} is not one of {sorted(ITC_SECTIONS)}")
+    parsed = money(path, f"{rid}.taxableValue", raw.get("taxableValue", "0.0000"))
+    taxable = parsed if parsed is not None else Decimal("0")
+    tax = {}
+    for key, field in (("camt", "cgst"), ("samt", "sgst"), ("iamt", "igst")):
+        p = money(path, f"{rid}.{field}", raw.get(field, "0.0000"))
+        tax[key] = p if p is not None else Decimal("0")
+    if "itcAvailable" not in raw:
+        fail(path, f"{rid}: itcAvailable is required — GSTN's own verdict is never inferred")
+    actions = []
+    for a in raw.get("imsActions", []):
+        actions.append({"action": a["action"], "actedAt": _itc_ts(a["actedAt"])})
+    strict = _itc_strict_key(raw.get("docNo") or "")
+    return {
+        "id": rid,
+        "side": "statement",
+        "section": section,
+        "rejected": bool(raw.get("rejected")),
+        "gstin": (raw.get("supplierGstin") or "").strip().upper(),
+        "docNo": (raw.get("docNo") or "").strip(),
+        "docDate": raw.get("docDate") or "",
+        "docType": raw.get("docType") or "I",
+        "taxable": taxable,
+        "tax": tax,
+        "reverseCharge": bool(raw.get("reverseCharge")),
+        "itcAvailable": bool(raw.get("itcAvailable")),
+        "pos": raw.get("pos") or "",
+        "origDocNo": raw.get("origDocNo") or "",
+        "origDocDate": raw.get("origDocDate") or "",
+        "imsActions": actions,
+        "strict": strict,
+        "loose": _itc_loose_key(strict),
+    }
+
+
+def _itc_not_comparable(b: dict) -> str:
+    """Why this books row cannot enter matching at all, or '' if it can."""
+    if b["reverseCharge"]:
+        return "RCM"
+    if b["eligibility"] == "ISD":
+        return "IMPORT_OR_ISD"
+    if not b["gstin"]:
+        return "NO_PARTY_GSTIN"
+    if not b["docNo"] or not b["docDate"]:
+        return "NO_SUPPLIER_DOC_NO"
+    if not b["hasParams"]:
+        return "NO_GST_PARAMS"
+    return ""
+
+
+# --- the derivation --------------------------------------------------------
+
+
+def _derive_gstr2b_expected(path: Path, case: dict) -> dict:
+    """Re-derive the whole classification from `input` ALONE.
+
+    This function must NEVER read case["expected"]. The whole value of this
+    corpus is that two implementations of one written spec are compared; a
+    validator that restates the fixture agrees with it forever and detects
+    nothing. corpora/gstr2b/_poison/ exists to catch exactly that regression —
+    see check_poison().
+    """
+    inp = case["input"]
+    books = [_itc_parse_books(path, r, i) for i, r in enumerate(inp.get("books", []))]
+    stmt_in = inp.get("statement") or {}
+    stmts = [_itc_parse_stmt(path, r, i) for i, r in enumerate(stmt_in.get("documents", []))]
+
+    claim_date = _itc_date(inp.get("claimDate"))
+    as_on = _itc_ts(inp.get("asOn"))
+    freeze = _itc_ts(inp.get("filedAt"))
+    resolution = _ims_resolution(inp.get("period", "012026"), stmt_in.get("genDate"))
+
+    rejected_ids = sorted(s["id"] for s in stmts if s["rejected"])
+    live = [s for s in stmts if not s["rejected"]]
+
+    # An amendment in the SAME statement replaces its original: only the
+    # amended record counts for ITC (GSTN 2B advisory key-point 7 / FAQ 13),
+    # and for credit notes the amendment always prevails (FAQ 14). Superseding
+    # BEFORE the passes also removes what would otherwise look like an
+    # ambiguous duplicate document number.
+    superseded = set()
+    for a in live:
+        if not a["section"].endswith("A") or not a["origDocNo"]:
+            continue
+        okey = _itc_strict_key(a["origDocNo"])
+        for o in live:
+            if o is a or o["section"].endswith("A"):
+                continue
+            if o["gstin"] == a["gstin"] and o["strict"] == okey and o["docDate"] == a["origDocDate"]:
+                superseded.add(o["id"])
+
+    nc_rows = []
+    pool_books = []
+    for b in books:
+        reason = _itc_not_comparable(b)
+        if reason:
+            nc_rows.append((b, reason))
+        else:
+            pool_books.append(b)
+    pool_stmt = [s for s in live if s["id"] not in superseded]
+
+    order = lambda r: (r["docDate"], r["strict"], r["id"])
+    pool_books.sort(key=order)
+    pool_stmt.sort(key=order)
+
+    paired: list[tuple] = []
+    ambiguous: list[dict] = []
+    amb_candidates: dict = {}
+
+    def _run_pass(keyfn, passno):
+        nonlocal pool_books, pool_stmt
+        bmap: dict = {}
+        smap: dict = {}
+        for b in pool_books:
+            bmap.setdefault(keyfn(b), []).append(b)
+        for s in pool_stmt:
+            smap.setdefault(keyfn(s), []).append(s)
+        used_b: set = set()
+        used_s: set = set()
+        for key in sorted(set(bmap) & set(smap)):
+            bs, ss = bmap[key], smap[key]
+            if len(bs) > 1 or len(ss) > 1:
+                # Nothing is paired: every participant keeps a pointer at the
+                # rows it could have been, so a human resolves it instead of
+                # the machine picking one deterministically-but-arbitrarily.
+                for b in bs:
+                    amb_candidates[b["id"]] = sorted(s["id"] for s in ss)
+                for s in ss:
+                    amb_candidates[s["id"]] = sorted(b["id"] for b in bs)
+                ambiguous.extend(bs)
+                ambiguous.extend(ss)
+            else:
+                paired.append((bs[0], ss[0], passno))
+            used_b |= {b["id"] for b in bs}
+            used_s |= {s["id"] for s in ss}
+        pool_books = [b for b in pool_books if b["id"] not in used_b]
+        pool_stmt = [s for s in pool_stmt if s["id"] not in used_s]
+
+    # The taxable value enters the pass-1 key as a MAGNITUDE. The books carry
+    # the sign convention (a credit note is negative) and the statement reports
+    # magnitudes, so comparing them signed would stop a supplier credit note
+    # from ever pairing with its own CDNR row. docType is already in the key, so
+    # dropping the sign here cannot pair a note with an invoice.
+    _run_pass(lambda r: (r["gstin"], r["strict"], r["docType"], r["docDate"], _m(abs(r["taxable"]))), 1)
+    _run_pass(lambda r: (r["gstin"], r["strict"], r["docType"], r["docDate"]), 2)
+
+    # Pass 3 is CANDIDACY, not pairing: it records pointers and leaves both
+    # rows unmatched.
+    near_b: dict = {}
+    near_s: dict = {}
+    b3: dict = {}
+    s3: dict = {}
+    for b in pool_books:
+        b3.setdefault((b["gstin"], b["loose"], b["docType"]), []).append(b)
+    for s in pool_stmt:
+        s3.setdefault((s["gstin"], s["loose"], s["docType"]), []).append(s)
+    for key in sorted(set(b3) & set(s3)):
+        for b in b3[key]:
+            near_b.setdefault(b["id"], []).extend(sorted(s["id"] for s in s3[key]))
+        for s in s3[key]:
+            near_s.setdefault(s["id"], []).extend(sorted(b["id"] for b in b3[key]))
+
+    findings = []
+    for row in books + stmts:
+        if len(row["strict"]) > ITC_DOC_NO_MAX:
+            findings.append({
+                "code": "DOC_NO_INVALID",
+                "ref": row["id"],
+                "docNo": row["docNo"],
+                "strictKey": row["strict"],
+            })
+    findings.sort(key=lambda f: (f["code"], f["ref"]))
+
+    lines = []
+
+    def _emit(status, b=None, s=None, fields=None, nc="", candidates=None, delta=None):
+        lines.append({
+            "status": status,
+            "fields": fields or [],
+            "notComparable": nc,
+            "books": b["id"] if b else None,
+            "statement": s["id"] if s else None,
+            "candidates": candidates or [],
+            "_b": b,
+            "_s": s,
+            "delta": delta,
+        })
+
+    for b, reason in nc_rows:
+        _emit("NOT_COMPARABLE", b=b, nc=reason)
+
+    for b, s, passno in paired:
+        s_taxable, s_tax = _itc_stmt_in_books_direction(b, s)
+        fields = []
+        if b["taxable"] != s_taxable:
+            fields.append("TAXABLE_VALUE")
+        for head, name in (("camt", "CGST"), ("samt", "SGST"), ("iamt", "IGST")):
+            if b["tax"][head] != s_tax[head]:
+                fields.append(name)
+        if b["pos"] and s["pos"] and b["pos"] != s["pos"]:
+            fields.append("POS")
+        if b["reverseCharge"] != s["reverseCharge"]:
+            fields.append("REVERSE_CHARGE")
+        fields.sort()
+        head_deltas = [abs(b["tax"][h] - s_tax[h]) for h in ("camt", "samt", "iamt")]
+        if passno == 1 and not fields:
+            status = "MATCHED"
+        elif (
+            passno == 1
+            and set(fields) <= {"CGST", "SGST", "IGST"}
+            and max(head_deltas) <= ITC_ROUNDING_TOLERANCE
+        ):
+            status = "MATCHED_ROUNDING"
+        else:
+            status = "MISMATCHED"
+        _emit(status, b=b, s=s, fields=fields)
+
+    for row in ambiguous:
+        cands = amb_candidates.get(row["id"], [])
+        if row["side"] == "books":
+            _emit("AMBIGUOUS", b=row, candidates=cands)
+        else:
+            _emit("AMBIGUOUS", s=row, candidates=cands)
+
+    for b in pool_books:
+        if b["id"] in near_b:
+            _emit("NEAR_MATCH", b=b, candidates=sorted(set(near_b[b["id"]])))
+        else:
+            _emit("MISSING_IN_2B", b=b)
+    for s in pool_stmt:
+        if s["id"] in near_s:
+            _emit("NEAR_MATCH", s=s, candidates=sorted(set(near_s[s["id"]])))
+        else:
+            _emit("MISSING_IN_BOOKS", s=s)
+    for s in live:
+        if s["id"] in superseded:
+            _emit("SUPERSEDED", s=s)
+
+    totals = {
+        "itcAvlIsrc": dict(_ZERO_TAX),
+        "itcAvlOth": dict(_ZERO_TAX),
+        "itcRevRul": dict(_ZERO_TAX),
+        "itcRevOth": dict(_ZERO_TAX),
+        "itcInelgOth": dict(_ZERO_TAX),
+    }
+
+    for line in lines:
+        b, s = line["_b"], line["_s"]
+        effect = {
+            "avlRow": "ISRC" if (b and b["reverseCharge"]) else "OTH",
+            "avl": dict(_ZERO_TAX),
+            "revRul": dict(_ZERO_TAX),
+            "revOth": dict(_ZERO_TAX),
+            "inelg": dict(_ZERO_TAX),
+        }
+        delta = dict(_ZERO_TAX)
+        delta["txval"] = Decimal("0")
+        if b and s:
+            s_taxable, s_tax = _itc_stmt_in_books_direction(b, s)
+            delta = {h: b["tax"][h] - s_tax[h] for h in ("camt", "samt", "iamt")}
+            delta["txval"] = b["taxable"] - s_taxable
+
+        expiry = None
+        ref_date = _itc_date(b["docDate"]) if (b and b["docDate"]) else (
+            _itc_date(s["docDate"]) if (s and s["docDate"]) else None
+        )
+        if ref_date is not None:
+            expiry = _s164_expiry(ref_date, _itc_date(inp.get("annualReturnFiledOn")))
+
+        if b is not None:
+            tax = b["tax"]
+            total_tax = tax["camt"] + tax["samt"] + tax["iamt"]
+
+            # 4(D) FIRST: never-available ITC never enters 4(A) at all, which is
+            # what keeps identity (I1) exact. GSTN's own itcavl="N" verdict
+            # overrides our computation, because it is the one the department
+            # will use; our own s.16(4) test only speaks when there is no
+            # statement row to speak for it.
+            never_available = False
+            if s is not None:
+                never_available = not s["itcAvailable"]
+            elif expiry is not None and claim_date is not None and claim_date > expiry:
+                never_available = True
+
+            if never_available:
+                effect["inelg"] = dict(tax)
+            else:
+                effect["avl"] = dict(tax)
+                if b["eligibility"] == "BLOCKED_17_5":
+                    # 4(B)(1) wins; at most one reversal per voucher.
+                    effect["revRul"] = dict(tax)
+                elif line["status"] == "MISMATCHED":
+                    # Only the EXCESS over what the supplier reported, with the
+                    # statement flipped into the books' direction first: a
+                    # supplier note declared LARGER than we booked (-300 against
+                    # -400) yields a POSITIVE 100 correction on a NEGATIVE
+                    # availment, not a zero.
+                    _, s_tax_bd = _itc_stmt_in_books_direction(b, s)
+                    effect["revOth"] = {
+                        h: max(b["tax"][h] - s_tax_bd[h], Decimal("0"))
+                        for h in ("camt", "samt", "iamt")
+                    }
+                elif line["status"] in ("MISSING_IN_2B", "NEAR_MATCH", "AMBIGUOUS"):
+                    if total_tax >= 0:
+                        effect["revOth"] = dict(tax)
+                elif line["status"] in ("MATCHED", "MATCHED_ROUNDING") and s is not None:
+                    state = _ims_effective_action(s["imsActions"], resolution, freeze, as_on) \
+                        if as_on is not None else "NO_ACTION"
+                    if state in ("REJECTED", "PENDING") and total_tax >= 0:
+                        effect["revOth"] = dict(tax)
+
+            row_key = "itcAvlIsrc" if effect["avlRow"] == "ISRC" else "itcAvlOth"
+            totals[row_key] = _tax_add(totals[row_key], effect["avl"])
+            totals["itcRevRul"] = _tax_add(totals["itcRevRul"], effect["revRul"])
+            totals["itcRevOth"] = _tax_add(totals["itcRevOth"], effect["revOth"])
+            totals["itcInelgOth"] = _tax_add(totals["itcInelgOth"], effect["inelg"])
+
+        line["effect"] = effect
+        line["delta"] = delta
+        line["s164Expiry"] = expiry.isoformat() if expiry else None
+
+    posted = dict(_ZERO_TAX)
+    for b in books:
+        posted = _tax_add(posted, b["tax"])
+    avl = _tax_add(totals["itcAvlIsrc"], totals["itcAvlOth"])
+    rev = _tax_add(totals["itcRevRul"], totals["itcRevOth"])
+    net = {h: avl[h] - rev[h] for h in ("camt", "samt", "iamt")}
+
+    # (I1) is asserted HERE, inside the oracle, so a fixture whose books and
+    # effect table disagree fails even if the Go agreed with it.
+    for h in ("camt", "samt", "iamt"):
+        if avl[h] + totals["itcInelgOth"][h] != posted[h]:
+            fail(
+                path,
+                f"identity (I1) broken in the re-derivation for {h}: "
+                f"4A {_m(avl[h])} + 4D {_m(totals['itcInelgOth'][h])} != posted input tax "
+                f"{_m(posted[h])} — every rupee of posted input tax must land in exactly "
+                f"one of table 4(A) or table 4(D)",
+            )
+
+    out_lines = []
+    for line in sorted(lines, key=lambda l: (l["books"] or "~", l["statement"] or "~")):
+        out_lines.append({
+            "status": line["status"],
+            "fields": line["fields"],
+            "notComparable": line["notComparable"],
+            "books": line["books"],
+            "statement": line["statement"],
+            "candidates": line["candidates"],
+            "delta": {
+                "txval": _m(line["delta"]["txval"]),
+                **_tax_str(line["delta"]),
+            },
+            "effect": {
+                "avlRow": line["effect"]["avlRow"],
+                "avl": _tax_str(line["effect"]["avl"]),
+                "revRul": _tax_str(line["effect"]["revRul"]),
+                "revOth": _tax_str(line["effect"]["revOth"]),
+                "inelg": _tax_str(line["effect"]["inelg"]),
+            },
+            "s164Expiry": line["s164Expiry"],
+        })
+
+    return {
+        "rejectedStatementRows": rejected_ids,
+        "findings": findings,
+        "lines": out_lines,
+        "totals": {
+            "itcAvlIsrc": _tax_str(totals["itcAvlIsrc"]),
+            "itcAvlOth": _tax_str(totals["itcAvlOth"]),
+            "itcRevRul": _tax_str(totals["itcRevRul"]),
+            "itcRevOth": _tax_str(totals["itcRevOth"]),
+            "itcInelgOth": _tax_str(totals["itcInelgOth"]),
+            "itcNet": _tax_str(net),
+            "postedInputTax": _tax_str(posted),
+        },
+    }
+
+
+def _itc_canon_expected(path: Path, node, where: str):
+    """Rewrite a fixture's `expected` tree into the derivation's exact form.
+
+    Every money value is pushed through money(), so a JSON NUMBER anywhere in a
+    fixture is a validation failure rather than a silent float.
+    """
+    if isinstance(node, dict):
+        out = {}
+        for key, value in node.items():
+            if key in ITC_MONEY_KEYS and not isinstance(value, (dict, list)):
+                dec = money(path, f"{where}.{key}", value)
+                out[key] = _m(dec) if dec is not None else value
+            else:
+                out[key] = _itc_canon_expected(path, value, f"{where}.{key}")
+        return out
+    if isinstance(node, list):
+        return [_itc_canon_expected(path, v, f"{where}[{i}]") for i, v in enumerate(node)]
+    return node
+
+
+def _itc_diff(path: Path, want, got, where: str) -> None:
+    """Report the first difference at every leaf, with the JSON path."""
+    if isinstance(want, dict) and isinstance(got, dict):
+        for key in sorted(set(want) | set(got)):
+            if key not in got:
+                fail(path, f"{where}.{key}: the re-derivation produces this and the fixture omits it "
+                           f"(derived {want[key]!r})")
+            elif key not in want:
+                fail(path, f"{where}.{key}: the fixture asserts {got[key]!r} but the re-derivation "
+                           f"produces no such field")
+            else:
+                _itc_diff(path, want[key], got[key], f"{where}.{key}")
+        return
+    if isinstance(want, list) and isinstance(got, list):
+        if len(want) != len(got):
+            fail(path, f"{where}: fixture has {len(got)} entries, the re-derivation produces "
+                       f"{len(want)} — derived {want!r}")
+            return
+        for i, (w, g) in enumerate(zip(want, got)):
+            _itc_diff(path, w, g, f"{where}[{i}]")
+        return
+    if want != got:
+        fail(path, f"{where}: fixture says {got!r}, re-deriving from `input` gives {want!r}")
+
+
+def validate_gstr2b(path: Path, case: dict) -> None:
+    """Validate one GSTR-2B reconciliation case and RE-DERIVE its expectation."""
+    if not require(path, case, ["id", "description", "input", "expected"]):
+        return
+    if path.stem != case["id"]:
+        fail(path, f"id {case['id']!r} does not match the filename")
+    if len(case["description"]) < 40:
+        fail(path, "description must state, in a sentence, what would be WRONG if this case "
+                   "were absent — that is what stops a later session deleting it as redundant")
+    inp = case["input"]
+    if not require(path, inp, ["period", "books", "statement"]):
+        return
+    if not re.fullmatch(r"[0-9]{6}", inp["period"] or ""):
+        fail(path, f"input.period must be MMYYYY, got {inp['period']!r}")
+    for line in case["expected"].get("lines", []):
+        if line.get("status") not in ITC_STATUSES:
+            fail(path, f"unknown status {line.get('status')!r}; known: {sorted(ITC_STATUSES)}")
+
+    derived = _derive_gstr2b_expected(path, case)
+    canon = _itc_canon_expected(path, case["expected"], "expected")
+    _itc_diff(path, derived, canon, "expected")
+
+
+# --- IMS -------------------------------------------------------------------
+#
+# GSTN's Annexure-A, as a lookup table. CITATION GRADE: the decision table is
+# reconstructed from the behaviour the IMS advisory and FAQ (22-09-2024)
+# DESCRIBE, not transcribed from the annexure PDF, which is not in this
+# repository — so it is [CITED-SECONDARY] and carries GSTN's own disclaimer
+# that the annexure "is not a statement of law". VERIFY BEFORE RELEASE.
+#
+# The four rows that are not negotiable regardless of wording:
+#   * an ACCEPTED (or DEEMED-ACCEPTED) record flows into 2B as available ITC;
+#   * a REJECTED record does NOT flow into 2B and gives no ITC at all;
+#   * a PENDING record does not flow into THIS period's 2B and is carried
+#     forward — deferred, not denied;
+#   * IMPG / RCM / ISD records are OUTSIDE IMS entirely (FAQ 8 and 18: "RCM
+#     invoices are not part of IMS but will continue to be part of GSTR-2B")
+#     and flow to 2B with no action possible.
+IMS_ANNEXURE_A = {
+    ("B2B_INVOICE", "ACCEPTED"): ("YES", "AVAILABLE"),
+    ("B2B_INVOICE", "DEEMED_ACCEPTED"): ("YES", "AVAILABLE"),
+    ("B2B_INVOICE", "NO_ACTION"): ("YES", "AVAILABLE"),
+    ("B2B_INVOICE", "REJECTED"): ("NO", "NONE"),
+    ("B2B_INVOICE", "PENDING"): ("NO", "DEFERRED"),
+    ("DEBIT_NOTE", "ACCEPTED"): ("YES", "AVAILABLE"),
+    ("DEBIT_NOTE", "DEEMED_ACCEPTED"): ("YES", "AVAILABLE"),
+    ("DEBIT_NOTE", "REJECTED"): ("NO", "NONE"),
+    ("DEBIT_NOTE", "PENDING"): ("NO", "DEFERRED"),
+    ("CREDIT_NOTE", "ACCEPTED"): ("YES", "REDUCTION"),
+    ("CREDIT_NOTE", "DEEMED_ACCEPTED"): ("YES", "REDUCTION"),
+    ("CREDIT_NOTE", "REJECTED"): ("NO", "NONE"),
+    ("CREDIT_NOTE", "PENDING"): ("NO", "DEFERRED"),
+    ("IMPG", "NOT_APPLICABLE"): ("YES", "AVAILABLE"),
+    ("RCM", "NOT_APPLICABLE"): ("YES", "AVAILABLE"),
+    ("ISD", "NOT_APPLICABLE"): ("YES", "AVAILABLE"),
+}
+
+# PENDING is EFFECTIVE-DATED, exactly like the TDS/TCS rate tables, and a
+# hard-coded "pending is never allowed on a credit note" is WRONG for every
+# period this software ships into.
+#
+# Pre-Oct-2025 tax periods [CITED-PRIMARY: GSTN IMS advisory Flow(3) / FAQ 11]:
+# PENDING is forbidden on an original credit note, an upward amendment of a
+# credit note, a downward amendment of a credit note whose original was
+# rejected, and a downward amendment of an invoice/debit note whose original
+# was accepted and whose GSTR-3B was filed.
+#
+# Oct-2025 tax period onward [CITED-SECONDARY: GSTN Advisory 631 of 08-10-2025,
+# read via A2Z Taxcorp / TaxO — VERIFY BEFORE RELEASE]: PENDING is allowed for
+# those four for ONE tax period, expiring at the GSTR-3B due date of period+1.
+IMS_PENDING_RESTRICTED = {
+    "CREDIT_NOTE_ORIGINAL",
+    "CN_AMENDMENT_UPWARD",
+    "CN_AMENDMENT_DOWNWARD_ORIGINAL_REJECTED",
+    "INV_DN_AMENDMENT_DOWNWARD_ORIGINAL_ACCEPTED_3B_FILED",
+}
+
+# The first tax period in which PENDING became available for the restricted
+# categories, as (month, year).
+IMS_PENDING_RELAXED_FROM = (10, 2025)
+
+
+def _ims_pending_rule(period: str) -> str:
+    month, year = _ims_period(period)
+    if (year, month) >= (IMS_PENDING_RELAXED_FROM[1], IMS_PENDING_RELAXED_FROM[0]):
+        return "OCT_2025_ONWARDS"
+    return "PRE_OCT_2025"
+
+
+def _ims_pending_expiry(period: str) -> str:
+    """The GSTR-3B due date of period+1 — the 20th, by CALENDAR-month addition.
+
+    Anchored on the due date and not written as "one month after the pending
+    action" precisely because day arithmetic on a month boundary is the one
+    clamping bug this track can actually make.
+    """
+    month, year = _ims_period(period)
+    m2, y2 = _ims_add_months(month, year, 2)
+    return datetime(y2, m2, 20).date().isoformat()
+
+
+def _validate_ims_clock(path: Path, case: dict) -> None:
+    inp, exp = case["input"], case["expected"]
+    if not require(path, inp, ["period", "probes"]):
+        return
+    cutoff = _ims_cutoff(inp["period"])
+    resolution = _ims_resolution(inp["period"], inp.get("statementGenDate"))
+    freeze = _itc_ts(inp.get("filedAt"))
+    actions = [{"action": a["action"], "actedAt": _itc_ts(a["actedAt"])}
+               for a in inp.get("actions", [])]
+
+    if "cutoff" in exp and _itc_ts(exp["cutoff"]) != cutoff:
+        fail(path, f"expected.cutoff {exp['cutoff']} is WRONG; the 14th-00:00-IST boundary for "
+                   f"period {inp['period']} is {cutoff.isoformat()}")
+    if "resolution" in exp and _itc_ts(exp["resolution"]) != resolution:
+        fail(path, f"expected.resolution {exp['resolution']} is WRONG; re-deriving gives "
+                   f"{resolution.isoformat()} (the statement's own generation date wins over "
+                   f"the computed 14th)")
+
+    want = [_ims_effective_action(actions, resolution, freeze, _itc_ts(p["asOn"]))
+            for p in inp["probes"]]
+    got = exp.get("states", [])
+    if len(want) != len(got):
+        fail(path, f"expected.states has {len(got)} entries for {len(want)} probes")
+        return
+    for probe, w, g in zip(inp["probes"], want, got):
+        if g not in IMS_STATES:
+            fail(path, f"unknown IMS state {g!r}; known: {sorted(IMS_STATES)}")
+        elif w != g:
+            fail(path, f"at asOn={probe['asOn']} the fixture says {g}, but re-deriving the "
+                       f"boundary in IST gives {w} — a filer acting at this instant would be "
+                       f"reported in the wrong GSTR-2B")
+
+
+def _validate_ims_pending(path: Path, case: dict) -> None:
+    inp, exp = case["input"], case["expected"]
+    if not require(path, inp, ["taxPeriod", "probes"]):
+        return
+    rule = _ims_pending_rule(inp["taxPeriod"])
+    if exp.get("rule") != rule:
+        fail(path, f"expected.rule {exp.get('rule')!r} is WRONG; tax period {inp['taxPeriod']} "
+                   f"falls under {rule}")
+    got = exp.get("probes", [])
+    if len(got) != len(inp["probes"]):
+        fail(path, f"expected.probes has {len(got)} entries for {len(inp['probes'])} inputs")
+        return
+    for probe, g in zip(inp["probes"], got):
+        category = probe["docCategory"]
+        restricted = category in IMS_PENDING_RESTRICTED
+        allowed = (not restricted) or rule == "OCT_2025_ONWARDS"
+        expires = _ims_pending_expiry(inp["taxPeriod"]) if (restricted and allowed) else None
+        if g.get("pendingAllowed") != allowed:
+            fail(path, f"{category}: fixture says pendingAllowed={g.get('pendingAllowed')}, the "
+                       f"{rule} rule gives {allowed} — marking a record PENDING that the portal "
+                       f"refuses (or refusing one it accepts) desynchronises IMS from the return")
+        if g.get("expiresAt") != expires:
+            fail(path, f"{category}: fixture says expiresAt={g.get('expiresAt')!r}, the rule gives "
+                       f"{expires!r} (the GSTR-3B due date of the following tax period)")
+
+
+def _validate_ims_applicability(path: Path, case: dict) -> None:
+    inp, exp = case["input"], case["expected"]
+    got = exp.get("probes", [])
+    if len(got) != len(inp.get("probes", [])):
+        fail(path, f"expected.probes has {len(got)} entries for {len(inp.get('probes', []))} inputs")
+        return
+    for probe, g in zip(inp["probes"], got):
+        section = probe["section"]
+        applicable = section in IMS_APPLICABLE_SECTIONS and not probe.get("reverseCharge")
+        want = None if applicable else "ErrIMSNotApplicable"
+        if g.get("error") != want:
+            fail(path, f"section={section} reverseCharge={bool(probe.get('reverseCharge'))}: "
+                       f"fixture says error={g.get('error')!r}, the IMS scope rule gives "
+                       f"{want!r} — IMPG/IMPGSEZ/ISD/ISDA and every reverse-charge row bypass "
+                       f"IMS entirely and still reach GSTR-2B")
+
+
+def _validate_ims_annexure(path: Path, case: dict) -> None:
+    inp, exp = case["input"], case["expected"]
+    got = exp.get("rows", [])
+    if len(got) != len(inp.get("rows", [])):
+        fail(path, f"expected.rows has {len(got)} entries for {len(inp.get('rows', []))} inputs")
+        return
+    for probe, g in zip(inp["rows"], got):
+        key = (probe["docCategory"], probe["action"])
+        if key not in IMS_ANNEXURE_A:
+            fail(path, f"Annexure-A has no row for {key} — this validator's table and the fixture "
+                       f"disagree about what GSTN documents")
+            continue
+        in2b, itc = IMS_ANNEXURE_A[key]
+        if (g.get("in2B"), g.get("itc")) != (in2b, itc):
+            fail(path, f"{key}: fixture says {(g.get('in2B'), g.get('itc'))}, Annexure-A says "
+                       f"{(in2b, itc)}")
+
+
+def _validate_ims_s164(path: Path, case: dict) -> None:
+    inp, exp = case["input"], case["expected"]
+    got = exp.get("probes", [])
+    if len(got) != len(inp.get("probes", [])):
+        fail(path, f"expected.probes has {len(got)} entries for {len(inp.get('probes', []))} inputs")
+        return
+    for probe, g in zip(inp["probes"], got):
+        doc_date = _itc_date(probe["docDate"])
+        filed = _itc_date(probe.get("annualReturnFiledOn"))
+        fy_end = _s164_fy_end(doc_date).isoformat()
+        expiry = _s164_expiry(doc_date, filed)
+        claim = _itc_date(probe["claimDate"])
+        barred = claim > expiry
+        if g.get("fyEnd") != fy_end:
+            fail(path, f"docDate={probe['docDate']}: fixture fyEnd={g.get('fyEnd')!r}, "
+                       f"re-deriving gives {fy_end!r}")
+        if g.get("expiry") != expiry.isoformat():
+            fail(path, f"docDate={probe['docDate']}: fixture expiry={g.get('expiry')!r}, "
+                       f"re-deriving gives {expiry.isoformat()!r} — s.16(4) fixes when the credit "
+                       f"dies, and a wrong expiry either claims dead credit or throws away live "
+                       f"credit")
+        if g.get("barred") != barred:
+            fail(path, f"docDate={probe['docDate']} claimDate={probe['claimDate']}: fixture "
+                       f"barred={g.get('barred')}, re-deriving gives {barred} (the expiry date "
+                       f"itself is INCLUSIVE)")
+
+
+IMS_KINDS = {
+    "clock": _validate_ims_clock,
+    "pending": _validate_ims_pending,
+    "applicability": _validate_ims_applicability,
+    "annexure": _validate_ims_annexure,
+    "s164": _validate_ims_s164,
+}
+
+
+def validate_ims(path: Path, case: dict) -> None:
+    """Validate one IMS case by RE-DERIVING it from the statutory arithmetic."""
+    if not require(path, case, ["id", "kind", "description", "input", "expected"]):
+        return
+    if path.stem != case["id"]:
+        fail(path, f"id {case['id']!r} does not match the filename")
+    if len(case["description"]) < 40:
+        fail(path, "description must state, in a sentence, what would be WRONG if this case "
+                   "were absent")
+    handler = IMS_KINDS.get(case["kind"])
+    if handler is None:
+        fail(path, f"unknown kind {case['kind']!r}; known: {sorted(IMS_KINDS)}")
+        return
+    handler(path, case)
+
+
+# ---------------------------------------------------------------------------
+# PAYROLL (corpora/payroll)
+# ---------------------------------------------------------------------------
+# These fixtures live in their OWN top-level directory and NOT in corpora/tds.
+# Three consumers glob corpora/tds/*.json assuming the withholding case shape
+# (validate_tds above, the Go TestTDSDerive_GoldenCorpus, and the TDS closure
+# check that every shipped section has a fixture); a payroll file dropped in
+# there breaks all three, and it would inflate MIN_COUNTS["tds"] so a DELETED
+# TDS fixture would stop being detected.
+#
+# HOW THIS FAMILY AVOIDS THE TAUTOLOGY. Everything below is an INDEPENDENT
+# RE-DERIVATION written FROM THE STATUTORY CITATION CARRIED IN EACH FIXTURE'S
+# `description`. It is NOT transcribed from backend/internal/payroll: this file
+# never reads Go source, never imports a shared data file and never shells out
+# to the backend. The Go side (TestPayrollDerive_GoldenCorpus) compares its
+# ENGINE's output to `expected`; this side compares its OWN derivation to
+# `expected`. Neither ever sees the other's answer. The FIXTURE is the only
+# meeting point, so a number that is wrong in one implementation fails here.
+#
+# THE DUPLICATION IS THE ORACLE AND MUST NEVER BE "DE-DUPLICATED" into a shared
+# JSON/YAML rate file loaded by both sides. The moment both sides read one
+# table, the gate degrades from "two independent derivations agree" to "one
+# derivation agrees with itself", which is exactly the failure a previous
+# session shipped and an adversarial pass had to find.
+#
+# WHAT THE DUPLICATION CANNOT CATCH: a rate that is wrong in BOTH places. Both
+# tables were curated from the same secondary reading, with no primary text
+# retrievable from this environment. That is what the pre-release statutory
+# spot-check is for — see the RATE PROVENANCE banner in
+# backend/internal/payroll/payroll.go.
+
+PAYROLL_SS_RULESET_VERSIONS = {"ss-2026-07", "ss-2025-11", "ss-2019-07"}
+PAYROLL_IT_RULESET_VERSION = "it-ty-2026-27"
+
+# The naive rules the counterfactual blocks may name. A fixture naming anything
+# else is rejected outright rather than silently re-deriving the CORRECT rule
+# (which would then "agree with expected" and produce a confusing failure about
+# the fixture rather than about the typo).
+PAYROLL_COUNTERFACTUAL_RULES = {
+    "deem-all-exclusions",
+    "esi-monthly-ceiling-test",
+    "ignore-prior-employer-taxable",
+    "no-rebate-marginal-relief",
+    "pf-base-actual-with-employer-matching",
+    "pre-code-no-deeming",
+    "round-income-to-rupee",
+}
+
+# --- closed vocabularies ---------------------------------------------------
+REGIMES = {"NEW", "OLD"}
+PF_BASES = {"CEILING", "ACTUAL"}
+# Spelled exactly as the engine's AgeBand constants are. A vocabulary that has
+# drifted does not catch a bad fixture — it REJECTS A GOOD ONE with a message
+# pointing at the fixture, and the cheapest apparent fix under time pressure is
+# to edit the golden case until the validator goes quiet. That is how a correct
+# expectation becomes a wrong one; see the KNOWN_SCREENS note above.
+AGE_BANDS = {"BELOW_60", "SENIOR", "SUPER_SENIOR"}
+PERIOD_BASES = {"MONTHLY", "ANNUAL", "CONTRIBUTION_PERIOD"}
+
+# --- EPF / EPS / EDLI ------------------------------------------------------
+# EPF & MP Act 1952 s.6 read with EPF Scheme para 29: 12% of basic wages, DA and
+# retaining allowance, matched by the employer. EPS 1995 para 3: 8.33% of the
+# employer's share is diverted to the Pension Fund, on pay capped at the EPS
+# ceiling (para 11(1) proviso). Ceiling 15000/month, S.O. 2882(E) w.e.f.
+# 01-09-2014, carried forward by the EPF/EPS Schemes 2026.
+PF_RATES = {
+    "employeePct": Decimal("12"),
+    "employerPct": Decimal("12"),
+    "epsPct": Decimal("8.33"),
+}
+PF_CEILING = Decimal("15000")
+EPS_CAP = Decimal("15000")
+
+# --- ESI -------------------------------------------------------------------
+# ESI (Central) Rules 1950 rule 51 as substituted by G.S.R. 423(E) w.e.f.
+# 01-07-2019: employee 0.75%, employer 3.25%, each "rounded to the next higher
+# rupee". Coverage wage limit 21000/month, G.S.R. 1226(E) w.e.f. 01-01-2017.
+# Rule 52 exempts an employee whose AVERAGE DAILY WAGE does not exceed 176 from
+# the employee's share only — the employer's share stays payable.
+ESI_RATES = {"employeePct": Decimal("0.75"), "employerPct": Decimal("3.25")}
+ESI_COVERAGE_LIMIT = Decimal("21000")
+ESI_LOW_WAGE_LIMIT = Decimal("176")
+# The share of ALL REMUNERATION the EXCLUDED components may occupy before the
+# excess is deemed back into wages, per ruleset. 100 in the pre-Code window means
+# "no cap", which is how the absence of the proviso before the Code came into
+# force is expressed without a special case in the derivation.
+# ss-2025-11 is the CODE-ERA INTERIM window [21 Nov 2025, 29 Jun 2026): the Code
+# on Social Security 2020 came into force on 21 November 2025 (S.O. 5319(E)), so
+# the 50% proviso already bites, while the 1952/1995/1976 Schemes were still the
+# operative schemes until the 2026 Schemes superseded them on 29 June 2026.
+DEEMING_THRESHOLD_PCT = {
+    "ss-2026-07": Decimal("50"),
+    "ss-2025-11": Decimal("50"),
+    "ss-2019-07": Decimal("100"),
+}
+EDLI_CEILING = Decimal("15000")
+# EPS 1995 para 6(a) as amended by G.S.R. 609(E): a person who FIRST became a
+# provident-fund member on or after this date, whose pay then exceeded the
+# pension ceiling, was never admitted to the Pension Scheme.
+EPS_NEW_MEMBER_CUTOFF = "2014-09-01"
+# Code on Wages 2019 s.18(2): total deductions may not exceed 50% of wages.
+PF_DEDUCTION_CAP_PCT = Decimal("50")
+# Code on Social Security 2020 s.2(88): the EXHAUSTIVE list of exclusions from
+# wages. It is written here as a DENYLIST for the same reason the engine writes
+# it as one - the statute's list is closed, so anything NOT on it IS wages, and
+# an allowlist would silently exclude every component type added later, which is
+# an under-contribution nobody would see.
+EXCLUDED_FROM_WAGES = {
+    "HRA",
+    "CONVEYANCE_ALLOWANCE",
+    "OVERTIME_ALLOWANCE",
+    "COMMISSION",
+    "BONUS",
+    "HOUSE_ACCOMMODATION_VALUE",
+    "SPECIAL_EXPENSES",
+    "AWARD_OR_SETTLEMENT",
+    "EMPLOYER_PF_CONTRIBUTION",
+    "GRATUITY",
+    "RETRENCHMENT_COMPENSATION",
+    "EX_GRATIA",
+}
+# Proviso 1 to s.2(88) tests only "payments made by the employer to the employee
+# UNDER CLAUSES (a) TO (i)" against the one-half floor. The enumeration STOPS at
+# (i): clause (j) is "any gratuity payable on the termination of employment" and
+# clause (k) is "any retrenchment compensation or other retirement benefit
+# payable to the employee or any ex gratia payment made to him on the termination
+# of employment". Those three are excluded from wages AND take no part in the
+# deeming test, so they can never be added back.
+#
+# This set is written out in full rather than as EXCLUDED_FROM_WAGES minus three
+# names, for the same reason the engine writes it out: a derivation would
+# silently re-admit any exclusion a later amendment adds.
+#
+# The bug this constant exists to stop: running the test over ALL twelve
+# exclusions made a leaver's final payslip of Basic 30,000 + HRA 15,000 +
+# GRATUITY 5,00,000 + RETRENCHMENT_COMPENSATION 2,00,000 yield a statutory wage
+# of 3,72,500 instead of 30,000, i.e. Rs 41,100 deducted from a departing
+# employee's last salary on money the statute says is not a wage. It fired on
+# every terminal settlement.
+DEEMING_TEST_CLAUSES_A_TO_I = {
+    "BONUS",  # (a)
+    "HOUSE_ACCOMMODATION_VALUE",  # (b)
+    "EMPLOYER_PF_CONTRIBUTION",  # (c)
+    "CONVEYANCE_ALLOWANCE",  # (d)
+    "SPECIAL_EXPENSES",  # (e)
+    "HRA",  # (f)
+    "AWARD_OR_SETTLEMENT",  # (g)
+    "OVERTIME_ALLOWANCE",  # (h)
+    "COMMISSION",  # (i)
+}
+# The components whose rate the scheme itself says is "to be notified
+# separately", per ruleset. The engine must DEFER these, never number them.
+PF_DEFERRED_COMPONENTS = {
+    "ss-2026-07": ["EDLI_ADMIN_CHARGES", "EDLI_CONTRIBUTION", "EPF_ADMIN_CHARGES"],
+    # Nothing is deferred in the interim window: the saved 1952/1976 Schemes were
+    # still operative, so their EDLI contribution (0.50%) and administrative
+    # charges ARE on record. Deferring them here would refuse a contribution that
+    # was actually payable for eight months.
+    "ss-2025-11": [],
+    "ss-2019-07": [],
+}
+
+# --- income tax, tax year 2026-27 -----------------------------------------
+# Slab boundaries as (upper bound or None for the top open band, rate %).
+# NEW regime = the s.202 (ex-115BAC) default, Finance Act 2025 values carried
+# forward into FY 2026-27. OLD regime = the s.202(6) opt-out.
+IT_SLABS_NEW: list[tuple[Decimal | None, Decimal]] = [
+    (Decimal("400000"), Decimal("0")),
+    (Decimal("800000"), Decimal("5")),
+    (Decimal("1200000"), Decimal("10")),
+    (Decimal("1600000"), Decimal("15")),
+    (Decimal("2000000"), Decimal("20")),
+    (Decimal("2400000"), Decimal("25")),
+    (None, Decimal("30")),
+]
+IT_SLABS_OLD: list[tuple[Decimal | None, Decimal]] = [
+    (Decimal("250000"), Decimal("0")),
+    (Decimal("500000"), Decimal("5")),
+    (Decimal("1000000"), Decimal("20")),
+    (None, Decimal("30")),
+]
+# Old-regime basic exemption by age band (residents only — a non-resident of any
+# age gets the ordinary 250000, s.2(k) of the Finance Act's Part III paragraph A).
+IT_OLD_EXEMPTION = {
+    "BELOW_60": Decimal("250000"),
+    "SENIOR": Decimal("300000"),
+    "SUPER_SENIOR": Decimal("500000"),
+}
+# s.19 (ex-16(ia)) standard deduction against salary.
+STD_DEDUCTION = {"NEW": Decimal("75000"), "OLD": Decimal("50000")}
+# s.156 (ex-87A) rebate. MARGINAL RELIEF exists only on the NEW-regime cliff.
+REBATE = {
+    "NEW": {"limit": Decimal("1200000"), "max": Decimal("60000"), "marginalRelief": True},
+    "OLD": {"limit": Decimal("500000"), "max": Decimal("12500"), "marginalRelief": False},
+}
+# Finance Act First Schedule Part III paragraph A, as (threshold, rate %).
+# The new regime is capped at 25% — the 37% band applies to the old regime only.
+SURCHARGE_BANDS = {
+    "NEW": [
+        (Decimal("5000000"), Decimal("10")),
+        (Decimal("10000000"), Decimal("15")),
+        (Decimal("20000000"), Decimal("25")),
+    ],
+    "OLD": [
+        (Decimal("5000000"), Decimal("10")),
+        (Decimal("10000000"), Decimal("15")),
+        (Decimal("20000000"), Decimal("25")),
+        (Decimal("50000000"), Decimal("37")),
+    ],
+}
+# Health and Education Cess, Finance Act First Schedule.
+CESS = Decimal("4")
+# s.24(b) proviso read with ex-s.71(3A): the loss under the head house property
+# that may be SET OFF against salary is capped at 200000, and under the s.202
+# default regime it may not be set off against salary AT ALL.
+HOUSE_PROPERTY_LOSS_CAP = Decimal("200000")
+
+
+# --- rounding, written from the statute ------------------------------------
+def _round_ten(d: Decimal) -> Decimal:
+    """s.288A / Income-tax Act 2025 s.516: TOTAL INCOME to the nearest ten rupees.
+
+    Written as shift-round-shift rather than a division so no divisor precision
+    is consulted. Half goes UP ("if the last figure is five or more").
+    """
+    return (d / 10).quantize(Decimal("1"), rounding=ROUND_HALF_UP) * 10
+
+
+def _round_rupee(d: Decimal) -> Decimal:
+    """s.288B / s.516: the amount of TAX to the nearest rupee, half up."""
+    return d.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+
+
+def _round_up_rupee(d: Decimal) -> Decimal:
+    """ESI (Central) Rules 1950 rule 51: "rounded to the next higher rupee".
+
+    A ceiling, and the ONLY one in the corpora. It applies to BOTH the
+    employee's and the employer's share — the parenthesis in rule 51 governs the
+    whole contribution formula, not just the employee limb.
+    """
+    return d.quantize(Decimal("1"), rounding=ROUND_CEILING)
+
+
+# --- the re-derivations ----------------------------------------------------
+def _payroll_slab_tax(taxable: Decimal, slabs, exemption: Decimal) -> Decimal:
+    """Walk the slab table from `exemption` upwards. No rounding happens here."""
+    tax = Decimal("0")
+    lower = exemption
+    for upper, rate in slabs:
+        if upper is not None and upper <= exemption:
+            continue
+        top = taxable if upper is None else min(taxable, upper)
+        if top > lower:
+            tax += (top - lower) * rate / 100
+            lower = top
+        if upper is not None and taxable <= upper:
+            break
+    return tax
+
+
+def _payroll_it_slab_config(ci: dict) -> tuple[list, Decimal]:
+    """Return (slab table, basic exemption) for the case's regime and age band."""
+    if ci["regime"] == "NEW":
+        return IT_SLABS_NEW, Decimal("0")
+    exemption = IT_OLD_EXEMPTION["BELOW_60"]
+    if ci["isResident"]:
+        exemption = IT_OLD_EXEMPTION[ci["ageBand"]]
+    return IT_SLABS_OLD, exemption
+
+
+def _payroll_tax_after_rebate(taxable: Decimal, ci: dict, allow_rebate_relief: bool):
+    """Slabs -> rebate -> rebate marginal relief, in that order.
+
+    Returns (taxBeforeRebate, rebate, rebateMarginalRelief). Pulled out as its
+    own function because the SURCHARGE marginal relief has to re-run exactly this
+    computation at the surcharge threshold.
+    """
+    slabs, exemption = _payroll_it_slab_config(ci)
+    before = _payroll_slab_tax(taxable, slabs, exemption)
+    rebate = Decimal("0")
+    relief = Decimal("0")
+    cfg = REBATE[ci["regime"]]
+    if ci["isResident"]:
+        if taxable <= cfg["limit"]:
+            rebate = min(before, cfg["max"])
+        elif cfg["marginalRelief"] and allow_rebate_relief:
+            # s.156 proviso: the tax payable may not exceed the amount by which
+            # total income exceeds the rebate limit.
+            excess = taxable - cfg["limit"]
+            if before > excess:
+                relief = before - excess
+    return before, rebate, relief
+
+
+def _derive_payroll_it(ci: dict, variant: str | None) -> dict[str, Any]:
+    """s.392 (ex-192) annual-base derivation. NO per-transaction threshold exists.
+
+    ORDER OF OPERATIONS, and it is the order that is being pinned:
+      round total income to the nearest TEN -> slabs -> rebate -> REBATE marginal
+      relief -> surcharge -> SURCHARGE marginal relief -> cess -> round the annual
+      tax to the nearest RUPEE -> subtract what is already credited -> divide over
+      the months remaining -> round this month's TDS to the nearest RUPEE.
+    """
+    regime = ci["regime"]
+    salary = (
+        Decimal(ci["ytdTaxableThisEmployer"])
+        + Decimal(ci["currentMonthTaxable"])
+        + Decimal(ci["projectedRemainingTaxable"])
+    )
+    if variant != "ignore-prior-employer-taxable":
+        salary += Decimal(ci["priorEmployerTaxable"])
+
+    std = min(STD_DEDUCTION[regime], salary)
+    if std < 0:
+        std = Decimal("0")
+    net_salary = salary - std
+
+    # Under the s.202 default regime a house-property loss may NOT be set off
+    # against salary; under the old regime it may, capped at 200000.
+    hp = Decimal("0")
+    if regime == "OLD":
+        hp = min(HOUSE_PROPERTY_LOSS_CAP, Decimal(ci["housePropertyLoss"]))
+    chapter_via = Decimal(ci["chapterVIA"]) if regime == "OLD" else Decimal("0")
+
+    total_income = net_salary + Decimal(ci["otherIncomeDeclared"]) - hp - chapter_via
+    if total_income < 0:
+        total_income = Decimal("0")
+
+    if variant == "round-income-to-rupee":
+        taxable = _round_rupee(total_income)
+    else:
+        taxable = _round_ten(total_income)
+
+    before, rebate, rebate_relief = _payroll_tax_after_rebate(
+        taxable, ci, allow_rebate_relief=(variant != "no-rebate-marginal-relief")
+    )
+    after_rebate = before - rebate - rebate_relief
+
+    surcharge = Decimal("0")
+    surcharge_relief = Decimal("0")
+    bands = SURCHARGE_BANDS[regime]
+    idx = -1
+    for i, (threshold, _rate) in enumerate(bands):
+        if taxable > threshold:
+            idx = i
+    if idx >= 0:
+        threshold, rate = bands[idx]
+        surcharge = after_rebate * rate / 100
+        prev_rate = bands[idx - 1][1] if idx > 0 else Decimal("0")
+        at_b, at_reb, at_rel = _payroll_tax_after_rebate(
+            threshold, ci, allow_rebate_relief=(variant != "no-rebate-marginal-relief")
+        )
+        at_threshold = at_b - at_reb - at_rel
+        cap = at_threshold * (1 + prev_rate / 100) + (taxable - threshold)
+        actual = after_rebate + surcharge
+        if actual > cap:
+            surcharge_relief = actual - cap
+
+    net_tax = after_rebate + surcharge - surcharge_relief
+    cess = net_tax * CESS / 100
+    annual = _round_rupee(net_tax + cess)
+
+    credited = Decimal(ci["priorEmployerTDS"]) + Decimal(ci["ytdTDSThisEmployer"])
+    balance = annual - credited
+    if balance < 0:
+        balance = Decimal("0")
+    months = int(ci["monthsRemainingInclusive"])
+    if ci["isFinalMonth"]:
+        tds = _round_rupee(balance)
+    else:
+        tds = _round_rupee(balance / months)
+
+    return {
+        "regimeApplied": regime,
+        "estimatedAnnualTaxable": taxable,
+        "standardDeduction": std,
+        "taxBeforeRebate": before,
+        "rebate": rebate,
+        "rebateMarginalRelief": rebate_relief,
+        "surcharge": surcharge,
+        "surchargeMarginalRelief": surcharge_relief,
+        "cess": cess,
+        "annualTax": annual,
+        "creditedAlready": credited,
+        "tdsThisMonth": tds,
+        "periodBasis": "ANNUAL",
+    }
+
+
+def _pf_first_member_excluded(first_member_on, wage: Decimal) -> bool:
+    """EPS 1995 para 6(a): first membership ON OR AFTER the cutoff AND pay that
+    EXCEEDS the pension ceiling.
+
+    "Exceeds" and "on or after" — somebody exactly at the ceiling IS a member,
+    and somebody first admitted exactly ON the cutoff date IS excluded. Flipping
+    either operator moves a real population of employees into or out of a pension
+    they will draw for the rest of their lives.
+    """
+    if not first_member_on:
+        return False
+    return first_member_on >= EPS_NEW_MEMBER_CUTOFF and wage > EPS_CAP
+
+
+def _derive_payroll_pf(ci: dict, variant: str | None, version: str) -> dict[str, Any]:
+    """EPF / EPS / EDLI. The EDLI CONTRIBUTION is deliberately not derived.
+
+    The statutory base is ALWAYS the wage capped at the ceiling; an ACTUAL-base
+    election adds an above-ceiling EXCESS on top of it rather than replacing it,
+    which is what keeps the statutory and the voluntary halves separable for
+    Form V and for the remittance.
+    """
+    base = ci["pfBase"]
+    matches = bool(ci["employerMatchesVoluntary"])
+    if variant == "pf-base-actual-with-employer-matching":
+        base, matches = "ACTUAL", True
+
+    wage = Decimal(ci["statutoryWage"])
+    statutory_base = min(wage, PF_CEILING)
+    excess = Decimal("0") if base == "CEILING" else wage - statutory_base
+    # EPS wages come off the STATUTORY WAGE against the PENSION ceiling, never
+    # off the EPF wage: reading them off the EPF wage would make an ACTUAL-base
+    # employer divert 8.33% of an uncapped wage into a pension computed on capped
+    # pensionable salary — money the member never gets back.
+    eps_wages = min(wage, EPS_CAP)
+    edli_wages = min(wage, EDLI_CEILING)
+
+    # Whole rupees BEFORE any percentage: the ECR carries integer wage columns.
+    statutory_base = _round_rupee(statutory_base)
+    excess = _round_rupee(excess)
+    eps_wages = _round_rupee(eps_wages)
+    edli_wages = _round_rupee(edli_wages)
+    epf_wages = statutory_base + excess
+
+    eps_applies = bool(ci["epsMember"]) and not _pf_first_member_excluded(
+        ci.get("firstMemberOn"), wage
+    )
+    if not eps_applies:
+        # No pension membership means no EPS WAGES to report at all. Reporting the
+        # wages with a zero contribution would show the ECR an EPS wage with no
+        # EPS against it.
+        eps_wages = Decimal("0")
+
+    employee_statutory = _round_rupee(statutory_base * PF_RATES["employeePct"] / 100)
+    employer_total = _round_rupee(statutory_base * PF_RATES["employerPct"] / 100)
+    eps = _round_rupee(eps_wages * PF_RATES["epsPct"] / 100) if eps_applies else Decimal("0")
+    employer_statutory = employer_total - eps
+
+    voluntary_base = _round_rupee(Decimal(ci["employeeVoluntaryBase"]))
+    employee_voluntary_base = excess + voluntary_base
+    # The employer follows the BASE election (the above-ceiling excess is its own
+    # election and both sides contribute on it) but matches the employee's VPF
+    # top-up only where it has separately agreed to — EPF Scheme para 26(6).
+    employer_voluntary_base = excess + (voluntary_base if matches else Decimal("0"))
+    employee_voluntary = (
+        _round_rupee(employee_voluntary_base * PF_RATES["employeePct"] / 100)
+        if employee_voluntary_base > 0
+        else Decimal("0")
+    )
+    employer_voluntary = (
+        _round_rupee(employer_voluntary_base * PF_RATES["employerPct"] / 100)
+        if employer_voluntary_base > 0
+        else Decimal("0")
+    )
+
+    employee_epf = employee_statutory + employee_voluntary
+    if employee_epf > wage * PF_DEDUCTION_CAP_PCT / 100:
+        raise InvalidOperation("employee PF deduction exceeds the s.18(2) cap")
+
+    return {
+        "epfWages": epf_wages,
+        "epsWages": eps_wages,
+        "edliWages": edli_wages,
+        "employeeStatutory": employee_statutory,
+        "employeeVoluntary": employee_voluntary,
+        "employerStatutory": employer_statutory,
+        "employerVoluntary": employer_voluntary,
+        "eps": eps,
+        "employeeEPF": employee_epf,
+        "employerEPF": employer_statutory + employer_voluntary,
+        "epsMemberApplied": eps_applies,
+    }
+
+
+def _esi_contribution_period(year: int, month: int) -> tuple[str, str]:
+    """ESI (Central) Rules 1950: 1 Apr - 30 Sep and 1 Oct - 31 Mar.
+
+    The October period SPANS A YEAR BOUNDARY, and that is the arithmetic that
+    gets written wrong: for January, February and March the period started in the
+    PREVIOUS calendar year, so a latch that reads the current year's 1 October is
+    testing a date seven months in the future and finds the wrong wage or none.
+    """
+    if 4 <= month <= 9:
+        return f"{year:04d}-04-01", f"{year:04d}-09-30"
+    if month >= 10:
+        return f"{year:04d}-10-01", f"{year + 1:04d}-03-31"
+    return f"{year - 1:04d}-10-01", f"{year:04d}-03-31"
+
+
+def _esi_wage_in_force(revisions: list, on: str) -> Decimal:
+    """The wage under the LATEST revision effective on or before `on`.
+
+    Dates are ISO-8601 strings and compare lexicographically, which for a fixed
+    YYYY-MM-DD width is the calendar order. Raises when no revision covers the
+    date rather than defaulting to the earliest or the latest: a coverage
+    decision made against a wage that was not in force is not a decision.
+    """
+    best = None
+    for r in revisions:
+        if r["effectiveFrom"] <= on and (best is None or r["effectiveFrom"] > best["effectiveFrom"]):
+            best = r
+    if best is None:
+        raise KeyError(f"no wage revision in force on {on}")
+    return Decimal(best["monthlyWages"])
+
+
+def _derive_payroll_esi(ci: dict, variant: str | None, version: str) -> dict[str, Any]:
+    """The ESI coverage LATCH, rule 52's one-sided exemption, rule 51's ceiling."""
+    year, month = (int(x) for x in ci["wageMonth"].split("-"))
+    period_start, _period_end = _esi_contribution_period(year, month)
+    month_start = f"{year:04d}-{month:02d}-01"
+    # Exclusive upper bound of the wage month, computed without a calendar lib.
+    next_year, next_month = (year + 1, 1) if month == 12 else (year, month + 1)
+    month_end_exclusive = f"{next_year:04d}-{next_month:02d}-01"
+
+    joined, left = ci.get("joinedOn"), ci.get("leftOn")
+    # "Not employed" and "above the ceiling" are DIFFERENT FACTS and the ESI
+    # return distinguishes them, so the employment test is separate.
+    employed = True
+    if joined and joined >= month_end_exclusive:
+        employed = False
+    if left and left < month_start:
+        employed = False
+
+    # THE LATCH. The test instant is the PERIOD START, not the wage month; a
+    # mid-period joiner is tested on the day they joined because there were no
+    # wages of theirs in existence at the period start.
+    tested_on = period_start
+    if joined and joined > period_start:
+        tested_on = joined
+    wages_tested = _esi_wage_in_force(ci["revisions"], tested_on)
+
+    # s.2(9): the wage must EXCEED the limit to be out. Somebody on exactly
+    # 21000 IS covered, and flipping the operator drops a real population.
+    covered = employed and wages_tested <= ESI_COVERAGE_LIMIT
+    if variant == "esi-monthly-ceiling-test":
+        covered = employed and Decimal(ci["monthWages"]) <= ESI_COVERAGE_LIMIT
+
+    month_wages = Decimal(ci["monthWages"])
+    paid_days = int(ci["paidDays"])
+    exempt = False
+    employee = Decimal("0")
+    employer = Decimal("0")
+    if covered:
+        # wages <= limit * paidDays, NOT wages / paidDays <= limit. The same
+        # inequality with no division, so there is no working precision to argue
+        # about and no rounding that could push an employee across the boundary.
+        exempt = month_wages <= ESI_LOW_WAGE_LIMIT * paid_days
+        if not exempt:
+            employee = _round_up_rupee(month_wages * ESI_RATES["employeePct"] / 100)
+        # Rule 52 is ONE-SIDED: the employer's share is payable in full even
+        # where the employee's is exempt.
+        employer = _round_up_rupee(month_wages * ESI_RATES["employerPct"] / 100)
+    return {
+        "covered": covered,
+        "applied": covered,
+        "wagesTestedOn": tested_on,
+        "wagesTested": wages_tested,
+        "lowWageExempt": exempt,
+        "employeeShare": employee,
+        "employerShare": employer,
+    }
+
+
+def _derive_payroll_wages(ci: dict, variant: str | None, version: str) -> dict[str, Any]:
+    """Code on Social Security 2020 s.2(88) proviso 1 — the deeming add-back.
+
+    Two sums, not one. `excluded` is every exclusion, clauses (a) to (k), and
+    decides what is not a wage. `in_deeming_test` is clauses (a) to (i) only and
+    is the ONLY sum measured against the one-half floor, because that is the
+    range the proviso names. Gratuity (j) and retrenchment compensation / other
+    retirement benefit / ex gratia (k) are excluded from wages AND take no part
+    in the test.
+    """
+    total = Decimal("0")
+    included = Decimal("0")
+    excluded = Decimal("0")
+    in_deeming_test = Decimal("0")
+    for c in ci["components"]:
+        amount = Decimal(c["amount"])
+        total += amount
+        if c["type"] in EXCLUDED_FROM_WAGES:
+            excluded += amount
+            if c["type"] in DEEMING_TEST_CLAUSES_A_TO_I:
+                in_deeming_test += amount
+        else:
+            included += amount
+    threshold = DEEMING_THRESHOLD_PCT[version]
+    if variant == "deem-all-exclusions":
+        # The naive rule: run the "exceeds one-half" test over ALL twelve
+        # exclusions instead of over clauses (a) to (i). It deems a leaver's
+        # gratuity and retrenchment compensation back into their wages and
+        # deducts PF and ESI from money the statute says is not a wage.
+        in_deeming_test = excluded
+    if variant == "pre-code-no-deeming":
+        # The naive rule: apply the PRE-CODE wage definition (no deeming proviso,
+        # expressed as a threshold of 100, so the excluded share is never capped)
+        # to a wage month that is already inside the Code era. That is the
+        # eight-month boundary error the ss-2025-11 window exists to fix, and a
+        # fixture whose expected numbers AGREE with this derivation is no longer
+        # demonstrating the change of law.
+        threshold = Decimal("100")
+    # The floor is a share of ALL remuneration (gratuity included, because the
+    # proviso says "of the all remuneration calculated under this clause"); the
+    # sum tested against it is only (a)-(i). A terminal payment therefore raises
+    # the floor and can only ever REDUCE the add-back, never create one.
+    floor = total * threshold / 100
+    add_back = in_deeming_test - floor if in_deeming_test > floor else Decimal("0")
+    return {
+        "totalRemuneration": total,
+        "includedComponents": included,
+        "excludedComponents": excluded,
+        "excludedComponentsInDeemingTest": in_deeming_test,
+        "deemingThresholdPct": threshold,
+        "deemedAddBack": add_back,
+        "statutoryWage": included + add_back,
+    }
+
+
+def derive_payroll(
+    case_id: str, case_input: dict, variant: str | None = None, version: str = "ss-2026-07"
+) -> dict[str, Any]:
+    """Reference payroll derivation, dispatched on the fixture id prefix.
+
+    The signature carries the id (and not only the input) because corpora/payroll
+    holds FOUR different computations — statutory wages, PF, ESI and income tax —
+    and dispatching on the id prefix keeps the fixture files free of a redundant
+    "kind" discriminator that could disagree with the filename.
+
+    `variant` selects a NAIVE derivation for the counterfactual blocks. It is not
+    a mode the engine has; it exists only so a fixture can prove it still
+    demonstrates the thing it claims to demonstrate.
+    """
+    if case_id.startswith("it-"):
+        return _derive_payroll_it(case_input, variant)
+    if case_id.startswith("pf-"):
+        return _derive_payroll_pf(case_input, variant, version)
+    if case_id.startswith("esi-"):
+        return _derive_payroll_esi(case_input, variant, version)
+    if case_id.startswith("wages-"):
+        return _derive_payroll_wages(case_input, variant, version)
+    raise KeyError(f"no reference derivation for id prefix of {case_id!r}")
+
+
+# Per-kind input contracts. Keeping them here (rather than inline) means adding a
+# field to a fixture without declaring it is a validation failure rather than a
+# silently ignored key — a fixture with a misspelt input field would otherwise
+# validate, drive the engine with a default, and pin the wrong behaviour.
+_PAYROLL_INPUT_KEYS = {
+    "wages-": ["wageMonth", "components"],
+    "pf-": [
+        "wageMonth",
+        "statutoryWage",
+        "pfBase",
+        "employeeVoluntaryBase",
+        "employerMatchesVoluntary",
+        "epsMember",
+        "firstMemberOn",
+    ],
+    "esi-": ["wageMonth", "joinedOn", "leftOn", "revisions", "monthWages", "paidDays"],
+    "it-": [
+        "taxYearStart",
+        "regime",
+        "isResident",
+        "ageBand",
+        "panAvailable",
+        "priorEmployerTaxable",
+        "priorEmployerTDS",
+        "ytdTaxableThisEmployer",
+        "ytdTDSThisEmployer",
+        "currentMonthTaxable",
+        "projectedRemainingTaxable",
+        "monthsRemainingInclusive",
+        "isFinalMonth",
+        "housePropertyLoss",
+        "chapterVIA",
+        "otherIncomeDeclared",
+    ],
+}
+
+# Expected MONEY fields per kind — each one 4-dp decimal STRINGS, never JSON
+# numbers, so no float ever crosses the language boundary.
+_PAYROLL_MONEY_FIELDS = {
+    "wages-": [
+        "totalRemuneration",
+        "includedComponents",
+        "excludedComponents",
+        # Clauses (a)-(i) only — the sole sum proviso 1 tests against the floor.
+        # Required on EVERY wages fixture, including the ones where it equals
+        # excludedComponents, so that a fixture with a terminal payment cannot be
+        # the only place the distinction is written down.
+        "excludedComponentsInDeemingTest",
+        "deemedAddBack",
+        "statutoryWage",
+    ],
+    "pf-": [
+        "epfWages",
+        "epsWages",
+        "edliWages",
+        "employeeStatutory",
+        "employeeVoluntary",
+        "employerStatutory",
+        "employerVoluntary",
+        "eps",
+        "employeeEPF",
+        "employerEPF",
+    ],
+    "esi-": ["wagesTested", "employeeShare", "employerShare"],
+    "it-": [
+        "estimatedAnnualTaxable",
+        "standardDeduction",
+        "taxBeforeRebate",
+        "rebate",
+        "rebateMarginalRelief",
+        "surcharge",
+        "surchargeMarginalRelief",
+        "cess",
+        "annualTax",
+        "creditedAlready",
+        "tdsThisMonth",
+    ],
+}
+
+# Expected BOOLEAN fields per kind. They are as load-bearing as the money: a
+# coverage flag or a pension-membership flag that is wrong makes every amount
+# beside it wrong too.
+_PAYROLL_BOOL_FIELDS = {
+    "wages-": [],
+    "pf-": ["epsMemberApplied"],
+    "esi-": ["covered", "applied", "lowWageExempt"],
+    "it-": [],
+}
+
+# Input money fields per kind (scalars only; nested lists are checked in place).
+_PAYROLL_INPUT_MONEY = {
+    "wages-": [],
+    "pf-": ["statutoryWage", "employeeVoluntaryBase"],
+    "esi-": ["monthWages"],
+    "it-": [
+        "priorEmployerTaxable",
+        "priorEmployerTDS",
+        "ytdTaxableThisEmployer",
+        "ytdTDSThisEmployer",
+        "currentMonthTaxable",
+        "projectedRemainingTaxable",
+        "housePropertyLoss",
+        "chapterVIA",
+        "otherIncomeDeclared",
+    ],
+}
+
+_ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_WAGE_MONTH = re.compile(r"^\d{4}-\d{2}$")
+
+
+def _payroll_kind(case_id: str) -> str | None:
+    for prefix in _PAYROLL_INPUT_KEYS:
+        if case_id.startswith(prefix):
+            return prefix
+    return None
+
+
+def _payroll_check_input(path: Path, kind: str, ci: dict) -> bool:
+    """Shape-check a fixture's input. Returns False once anything is wrong, so a
+    malformed fixture never reaches the arithmetic and produces a confusing
+    message about a number instead of a clear one about a field."""
+    if not require(path, ci, _PAYROLL_INPUT_KEYS[kind]):
+        return False
+    for key in ci:
+        if key not in _PAYROLL_INPUT_KEYS[kind]:
+            fail(path, f"input.{key} is not part of the {kind}* contract")
+            return False
+    if not _WAGE_MONTH.match(str(ci.get("wageMonth", ""))) and kind != "it-":
+        fail(path, f"input.wageMonth must be YYYY-MM, got {ci.get('wageMonth')!r}")
+        return False
+    for field in _PAYROLL_INPUT_MONEY[kind]:
+        if money(path, f"input.{field}", ci[field]) is None:
+            return False
+
+    if kind == "wages-":
+        if not isinstance(ci["components"], list) or not ci["components"]:
+            fail(path, "input.components must be a non-empty list")
+            return False
+        for i, c in enumerate(ci["components"]):
+            if not require(path, c, ["type", "amount"]):
+                return False
+            if money(path, f"input.components[{i}].amount", c["amount"]) is None:
+                return False
+    if kind == "pf-":
+        if ci["pfBase"] not in PF_BASES:
+            fail(path, f"input.pfBase must be one of {sorted(PF_BASES)}, got {ci['pfBase']!r}")
+            return False
+        for flag in ("employerMatchesVoluntary", "epsMember"):
+            if not isinstance(ci[flag], bool):
+                fail(path, f"input.{flag} must be a boolean")
+                return False
+        if ci["firstMemberOn"] is not None and not _ISO_DATE.match(str(ci["firstMemberOn"])):
+            fail(path, f"input.firstMemberOn must be null or YYYY-MM-DD, got {ci['firstMemberOn']!r}")
+            return False
+    if kind == "esi-":
+        for field in ("joinedOn", "leftOn"):
+            if ci[field] is not None and not _ISO_DATE.match(str(ci[field])):
+                fail(path, f"input.{field} must be null or YYYY-MM-DD, got {ci[field]!r}")
+                return False
+        if not isinstance(ci["revisions"], list) or not ci["revisions"]:
+            # A single current wage cannot implement the LATCH at all — the test
+            # instant is in the past — so the history is required, not optional.
+            fail(path, "input.revisions must be a non-empty effective-dated wage history")
+            return False
+        seen = set()
+        for i, r in enumerate(ci["revisions"]):
+            if not require(path, r, ["effectiveFrom", "monthlyWages"]):
+                return False
+            if not _ISO_DATE.match(str(r["effectiveFrom"])):
+                fail(path, f"input.revisions[{i}].effectiveFrom must be YYYY-MM-DD")
+                return False
+            if r["effectiveFrom"] in seen:
+                fail(path, f"input.revisions has two rows effective {r['effectiveFrom']}")
+                return False
+            seen.add(r["effectiveFrom"])
+            if money(path, f"input.revisions[{i}].monthlyWages", r["monthlyWages"]) is None:
+                return False
+        if not isinstance(ci["paidDays"], int) or not 1 <= ci["paidDays"] <= 31:
+            fail(path, f"input.paidDays must be an int in 1..31, got {ci['paidDays']!r}")
+            return False
+    if kind == "it-":
+        if not _ISO_DATE.match(str(ci["taxYearStart"])) or not ci["taxYearStart"].endswith("-04-01"):
+            fail(path, f"input.taxYearStart must be a 1 April date, got {ci['taxYearStart']!r}")
+            return False
+        if ci["regime"] not in REGIMES:
+            fail(path, f"input.regime must be one of {sorted(REGIMES)}, got {ci['regime']!r}")
+            return False
+        if ci["ageBand"] not in AGE_BANDS:
+            fail(path, f"input.ageBand must be one of {sorted(AGE_BANDS)}, got {ci['ageBand']!r}")
+            return False
+        for flag in ("isResident", "panAvailable", "isFinalMonth"):
+            if not isinstance(ci[flag], bool):
+                fail(path, f"input.{flag} must be a boolean")
+                return False
+        months = ci["monthsRemainingInclusive"]
+        if not isinstance(months, int) or months < 1:
+            # The engine returns ErrMonthsRemaining for this; a fixture asserting
+            # a SUCCESSFUL derivation with fewer than one month is incoherent.
+            fail(path, f"input.monthsRemainingInclusive must be an int >= 1, got {months!r}")
+            return False
+    return True
+
+
+def validate_payroll(path: Path, case: dict) -> None:
+    """Validate a payroll fixture and RE-DERIVE every expected number.
+
+    Shape first, then the field-by-field comparison against an INDEPENDENT
+    derivation, then — where the fixture carries one — the COUNTERFACTUAL: the
+    naive rule is re-derived and the fixture FAILS IF IT AGREES with `expected`.
+    A fixture whose naive and correct derivations have converged no longer
+    demonstrates anything, and this is the only mechanism that notices.
+    """
+    if not require(path, case, ["id", "description", "rulesetVersion", "input", "expected"]):
+        return
+    case_id = case["id"]
+    if case_id != path.stem:
+        fail(path, f"id {case_id!r} must equal the filename stem {path.stem!r}")
+        return
+    kind = _payroll_kind(case_id)
+    if kind is None:
+        fail(path, f"id {case_id!r} has no known prefix (wages-, pf-, esi-, it-)")
+        return
+
+    # A payroll fixture is simultaneously a LEGAL CLAIM and a COMPUTATION, so its
+    # description must carry both the citation and the hand derivation.
+    if not isinstance(case["description"], str) or len(case["description"]) < 40:
+        fail(path, "description must carry the statutory citation AND the hand derivation (>=40 chars)")
+
+    version = case["rulesetVersion"]
+    if kind == "it-":
+        if version != PAYROLL_IT_RULESET_VERSION:
+            fail(path, f"rulesetVersion must be {PAYROLL_IT_RULESET_VERSION!r}, got {version!r}")
+            return
+    elif version not in PAYROLL_SS_RULESET_VERSIONS:
+        fail(path, f"rulesetVersion must be one of {sorted(PAYROLL_SS_RULESET_VERSIONS)}, got {version!r}")
+        return
+
+    ci = case["input"]
+    if not _payroll_check_input(path, kind, ci):
+        return
+
+    exp = case["expected"]
+    declared: dict[str, Any] = {}
+    for field in _PAYROLL_MONEY_FIELDS[kind]:
+        if field not in exp:
+            fail(path, f"missing required field expected.{field!r}")
+            return
+        dec = money(path, f"expected.{field}", exp[field])
+        if dec is None:
+            return
+        declared[field] = dec
+    for field in _PAYROLL_BOOL_FIELDS[kind]:
+        if field not in exp or not isinstance(exp[field], bool):
+            fail(path, f"expected.{field} must be present and a boolean")
+            return
+        declared[field] = exp[field]
+
+    if kind == "wages-":
+        rate = rate_str(path, "expected.deemingThresholdPct", exp.get("deemingThresholdPct"))
+        if rate is None:
+            return
+        declared["deemingThresholdPct"] = rate
+    if kind == "esi-":
+        if not _ISO_DATE.match(str(exp.get("wagesTestedOn", ""))):
+            # Echoing the test INSTANT is what makes the latch auditable: without
+            # it a fixture cannot show that the ceiling was applied at the period
+            # start rather than to this month's wage.
+            fail(path, f"expected.wagesTestedOn must be YYYY-MM-DD, got {exp.get('wagesTestedOn')!r}")
+            return
+        declared["wagesTestedOn"] = exp["wagesTestedOn"]
+    if kind == "it-":
+        for field in ("regimeApplied", "periodBasis"):
+            if field not in exp:
+                fail(path, f"missing required field expected.{field!r}")
+                return
+            declared[field] = exp[field]
+        if declared["regimeApplied"] not in REGIMES:
+            fail(path, f"expected.regimeApplied must be one of {sorted(REGIMES)}")
+            return
+        if declared["periodBasis"] != "ANNUAL":
+            # Salary tax is ANNUAL by statute. Any other basis here would mean the
+            # engine had inherited compliance's per-transaction approximation.
+            fail(path, f"expected.periodBasis must be 'ANNUAL', got {declared['periodBasis']!r}")
+            return
+    if kind == "pf-":
+        deferred = exp.get("deferredComponents")
+        want_deferred = PF_DEFERRED_COMPONENTS[version]
+        if not isinstance(deferred, list) or sorted(deferred) != want_deferred:
+            # Every PF case must declare the FULL deferral set for its ruleset. A
+            # fixture that quietly dropped one would let a future engine invent a
+            # rate for it and nothing would notice.
+            fail(
+                path,
+                f"expected.deferredComponents must be exactly {want_deferred} for ruleset "
+                f"{version!r}, got {deferred!r}",
+            )
+            return
+
+    try:
+        computed = derive_payroll(case_id, ci, version=version)
+    except (KeyError, InvalidOperation, ZeroDivisionError) as exc:
+        fail(path, f"could not re-derive: {exc}")
+        return
+
+    for field, want in computed.items():
+        got = declared.get(field)
+        if got is None and field not in declared:
+            fail(path, f"expected.{field} is missing but the reference derivation produces it")
+            continue
+        if isinstance(want, Decimal):
+            if got != want:
+                fail(path, f"expected.{field}={got:f} is WRONG; reference derivation = {want:f}")
+        elif got != want:
+            fail(path, f"expected.{field}={got!r} is WRONG; reference derivation = {want!r}")
+
+    # A case that does not apply must declare ZERO for its money fields: a stale
+    # amount beside covered=false would be remitted by a caller that trusted the
+    # number instead of the flag.
+    if kind == "esi-":
+        if not declared["covered"]:
+            for field in ("employeeShare", "employerShare"):
+                if declared[field] != 0:
+                    fail(path, f"expected.covered is false but expected.{field} is non-zero")
+        if declared["lowWageExempt"] and declared["employeeShare"] != 0:
+            fail(path, "expected.lowWageExempt is true but expected.employeeShare is non-zero")
+    if kind == "pf-":
+        if not declared["epsMemberApplied"] and (declared["eps"] != 0 or declared["epsWages"] != 0):
+            fail(path, "expected.epsMemberApplied is false but the EPS wages/contribution are non-zero")
+        if exp.get("edliContributionRefused") and "edliContribution" in exp:
+            fail(path, "a refused EDLI contribution must not also carry an amount")
+
+    # --- the counterfactual: prove the fixture still demonstrates its claim ---
+    cf = case.get("counterfactual")
+    if cf is None:
+        return
+    if not require(path, cf, ["rule", "why"]):
+        return
+    if not isinstance(cf["why"], str) or len(cf["why"]) < 40:
+        fail(path, "counterfactual.why must state the CONSEQUENCE of the naive rule (>=40 chars)")
+        return
+    if cf["rule"] not in PAYROLL_COUNTERFACTUAL_RULES:
+        fail(
+            path,
+            f"counterfactual.rule {cf['rule']!r} is not one of {sorted(PAYROLL_COUNTERFACTUAL_RULES)}",
+        )
+        return
+    try:
+        naive = derive_payroll(case_id, ci, variant=cf["rule"], version=version)
+    except (KeyError, InvalidOperation, ZeroDivisionError):
+        # The naive rule blowing up IS a difference, and a loud one.
+        return
+    if naive == computed:
+        fail(
+            path,
+            f"fixture no longer demonstrates {case_id}: the naive derivation now agrees with expected",
+        )
+
+
 VALIDATORS = {
     "tax": validate_tax,
     "tds": validate_tds,
@@ -1131,6 +3164,9 @@ VALIDATORS = {
     "migration": validate_migration,
     "forecast": validate_forecast,
     "inventory": validate_inventory,
+    "gstr2b": validate_gstr2b,
+    "ims": validate_ims,
+    "payroll": validate_payroll,
 }
 
 MIN_COUNTS = {
@@ -1147,7 +3183,66 @@ MIN_COUNTS = {
     # dimension, and an opening folded in. Deleting any of them must fail CI
     # rather than quietly shrink the gate.
     "inventory": 6,
+    # The 2A/2B floor is set to the EXACT number of fixtures, not to a lower
+    # "at least ten", so that deleting ANY one of them fails CI. The
+    # architecture's ">= 10" is the number below which the family stops being a
+    # gate at all; the number below which it stops being THIS gate is 16, and
+    # each of the sixteen exists because it is a specific way to be wrong:
+    # exact match; rounding within the per-head tolerance; a value mismatch
+    # with the fields named; a date mismatch ACROSS the s.16(4) financial-year
+    # boundary; a leading-zero near-match that must NOT pair; a duplicate
+    # document number that must go AMBIGUOUS rather than pick one; missing in
+    # 2B; missing in books; a CREDIT NOTE whose number equals an invoice's,
+    # which is what bites a matcher that left doc_type out of the key; RCM,
+    # which must never be reversed for being unmatched; GSTN's docRejdata rows,
+    # which must never reach table 4(A); a prior-FY invoice arriving in a
+    # current 2B, because the 2B window is on the supplier's FILING date;
+    # an amendment superseding its original; a s.17(5) blocked credit reversed
+    # in 4(B)(1); time-barred ITC excluded from 4(A) and reported in 4(D)(2);
+    # and a legacy purchase with no supplier document number, which is
+    # NOT_COMPARABLE and must never be reported as the supplier not having filed.
+    "gstr2b": 16,
+    # Same reasoning. The IMS floor protects the deemed-accept boundary in IST
+    # (both instants, and the same two instants written in UTC), the short
+    # month, the year rollover, a generation date that SLIPPED past the 14th,
+    # an explicit action beating deemed-accept, an action after the GSTR-3B
+    # filing instant being ignored, latest-action-wins over a log, the
+    # effective-dated PENDING restriction on credit notes before and from the
+    # October-2025 tax period, the sections that bypass IMS entirely, GSTN's
+    # Annexure-A decision table, and the s.16(4) expiry boundaries.
+    "ims": 12,
+    # PAYROLL. The floor is 12 and not the 14 fixtures shipped, so that two
+    # fixtures could be retired in a deliberate, reviewed change without
+    # rewriting the gate — but no more than two, because these twelve behaviours
+    # are what the payslip rests on and deleting one to make a red gate green
+    # must fail CI instead:
+    #   1. the Code on Social Security 2020 s.2(y) 50% deeming add-back, which is
+    #      UPSTREAM of both PF and ESI, so a silent error here is systematic;
+    #   2. EPF/EPS/EDLI at the 15000 ceiling, with EPS rounded to 1250 and the
+    #      employer's EPF share taking the 550 remainder;
+    #   3. the para 26A(2) restriction, where a 40000 wage still contributes on
+    #      15000;
+    #   4. VPF under para 26(6): the member may pay more and the employer is NOT
+    #      obliged to match it;
+    #   5. EPS exclusion for a post-01-09-2014 member above the ceiling, where
+    #      the whole 12% stays in EPF;
+    #   6. the EDLI contribution REFUSED as unnotified rather than invented;
+    #   7. the ESI s.2(9) coverage LATCH surviving a mid-period raise;
+    #   8. its mirror — out at the period start stays out — resolved against the
+    #      PRE-Code ruleset, which is also what proves an old wage month does not
+    #      silently borrow today's rates;
+    #   9. the rule 52 low-wage exemption applying to the EMPLOYEE share only;
+    #  10. rule 51's ceiling rounding on BOTH shares;
+    #  11. the s.156 (ex-87A) REBATE marginal relief, the half of the marginal
+    #      reliefs that engines omit, plus the classic surcharge relief;
+    #  12. the s.392 annual base — a mid-year joiner aggregating the former
+    #      employer's salary, and total income rounded to the nearest TEN while
+    #      the tax is rounded to the nearest RUPEE.
+    "payroll": 12,
 }
+
+# Families that carry a POISONED-FIXTURE TRIPWIRE. See check_poison().
+POISON_FAMILIES = ("gstr2b", "ims")
 
 
 def _ts_union_members(source: str, type_name: str) -> set[str] | None:
@@ -1214,8 +3309,65 @@ def check_vocabulary_matches_typescript() -> None:
             )
 
 
+def check_poison() -> None:
+    """Fail if a DELIBERATELY WRONG fixture validates.
+
+    THIS IS A TEST OF THE VALIDATOR, NOT OF THE DATA, and it is the direct
+    answer to the failure that actually happened: a corpus oracle was "fixed"
+    by editing it to agree with the mapper it was supposed to check, which made
+    the metric tautological and detected nothing thereafter.
+
+    Each `<family>/_poison/*.json` is a VALID-SHAPED case whose `expected` block
+    is wrong in a specific, named way — a near-match recorded as a match, a
+    rejected document summed into table 4(A), a boundary off by one instant.
+    The re-derivation must reject every one of them. The moment anyone rewrites
+    a `_derive_*` function to return `case["expected"]`, or relaxes a
+    comparison until it stops complaining, EVERY poison case starts passing and
+    this check goes red naming all of them.
+
+    The leading underscore keeps `_poison/` out of `directory.glob("*.json")`
+    in main()'s loop and out of the Go corpus loader, so the family counts
+    printed in the summary are honest and a poison case can never be mistaken
+    for a gate.
+    """
+    for family in POISON_FAMILIES:
+        directory = ROOT / family / "_poison"
+        if not directory.is_dir():
+            _errors.append(
+                f"{family}/_poison/: the tripwire directory is missing — without it, a validator "
+                f"that restates its fixtures instead of re-deriving them passes silently"
+            )
+            continue
+        files = sorted(directory.glob("*.json"))
+        if len(files) < 2:
+            _errors.append(
+                f"{family}/_poison/: only {len(files)} poisoned fixtures, at least 2 required"
+            )
+        for path in files:
+            data = load_json(path)
+            if data is None or not isinstance(data, dict):
+                continue
+            # Run the real validator against a SCRATCH error list so a poisoned
+            # case's (expected) failures never reach the report.
+            saved = list(_errors)
+            _errors.clear()
+            try:
+                VALIDATORS[family](path, data)
+            except Exception as exc:  # a crash is a rejection, but a noisy one
+                _errors.append(f"{path.relative_to(ROOT)}: raised {exc!r}")
+            caught = list(_errors)
+            _errors.clear()
+            _errors.extend(saved)
+            if not caught:
+                _errors.append(
+                    f"poisoned fixture {path.relative_to(ROOT)} validated — the oracle has become "
+                    f"tautological; validate.py is restating the fixture instead of re-deriving it"
+                )
+
+
 def main() -> int:
     check_vocabulary_matches_typescript()
+    check_poison()
     counts: dict[str, int] = {k: 0 for k in VALIDATORS}
     for category, validator in VALIDATORS.items():
         directory = ROOT / category

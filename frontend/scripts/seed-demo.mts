@@ -34,7 +34,11 @@
 import { writeFileSync } from "node:fs";
 
 import { createRestClient, createInsightdClient } from "../src/api";
-import type { CoredClient, VoucherRequest } from "../src/api";
+import type {
+  CoredClient,
+  InventoryLineRequest,
+  VoucherRequest,
+} from "../src/api";
 import { DEMO_PASSWORD, ensurePassword } from "./auth.mjs";
 
 const baseUrl =
@@ -60,6 +64,11 @@ const DELHI_STATE = "07";
 const HSN_STEEL_ARTICLES = "7326"; // other articles of iron/steel — 18%
 const HSN_STEEL_KITCHEN = "7323"; // table/kitchen articles of iron/steel — 12%
 const HSN_FLAT_ROLLED = "7208"; // flat-rolled iron/steel — 18% (purchases)
+// Stainless flat-rolled, carried by the Kg-denominated stock item. It is a
+// DIFFERENT chapter heading from HSN_FLAT_ROLLED on purpose: the two stock
+// items must not be distinguishable only by their name, or a report that
+// grouped by HSN would fold them together and nobody would notice.
+const HSN_STAINLESS_FLAT = "7219"; // flat-rolled stainless steel — 18%
 
 /**
  * The filing company's own GSTIN. Synthetic, but STRUCTURALLY correct, because
@@ -767,6 +776,352 @@ async function main(): Promise<void> {
   await client.deleteVoucher(co, mistake.voucher_id);
 
   console.log("  vouchers:   13 live across Apr–Jul 2026 (all 8 types incl. credit/debit note), 1 altered (v2), 1 deleted");
+
+  // ---- INVENTORY: goods that move WITHOUT an accounting entry --------------
+  //
+  // WHY THIS SECTION EXISTS AT ALL. Until it did, `stock_movement` was EMPTY
+  // for every company in the dev database and `seed-demo.mts` contained not one
+  // occurrence of the word "stock". That is not a cosmetic gap: `verify:demo`
+  // asserts that the Balance Sheet balances at every month-end and that the P&L
+  // is additive, and BOTH of those assertions evaluate byte-identically over a
+  // correct closing-stock fold-in, an inverted one, an off-by-one one, and no
+  // fold-in at all, when there is no stock. Gated on a demo with no inventory,
+  // the whole closing-stock feature would ship UNGATED. Every date and quantity
+  // below is chosen so that one specific gate check becomes ABLE TO FAIL.
+  //
+  // WHY STOCK-ONLY VOUCHERS (receipt note / delivery note / stock journal) AND
+  // NOT ITEM INVOICES. These three classes record the movement of GOODS and
+  // post no accounting lines at all — `validateStockVoucher` refuses a posting,
+  // a bill allocation or a GST block on them. Two consequences, both wanted:
+  //
+  //   1. NOTHING ALREADY DOCUMENTED MOVES. The Trial Balance, Sundry Debtors,
+  //      Sundry Creditors, Domestic Sales and every GST figure stay BYTE-
+  //      IDENTICAL to the run before this section existed, so the verify:demo
+  //      checks that pin them keep passing on unchanged numbers and no figure
+  //      quoted in docs/TALLY-FOR-FOUNDERS.md is invalidated by the seed alone.
+  //      An item invoice would have moved sales, purchases, GST and the
+  //      outstandings all at once, and the diff would have been unreadable.
+  //
+  //   2. IT IS A REAL EXERCISE OF THE CASE THE ACCOUNTING DEPENDS ON. Goods
+  //      that arrive and leave with no ledger entry are exactly the
+  //      physical-movement-with-zero-accounting-effect case. In a PERIODIC
+  //      inventory system — which is what this schema is; the value of stock is
+  //      never stored, only replayed — the entire effect of such a movement
+  //      reaches the accounts through the closing-stock term and nowhere else.
+  //      So "stock that appeared without a purchase" is not a data artifact to
+  //      apologise for: it is the demo showing that closing stock, and only
+  //      closing stock, is what carries a physical movement into the profit.
+  //
+  // WHAT WILL CHANGE ONCE THE FOLD-IN LANDS: assets and net profit BOTH rise by
+  // the closing-stock value, by the same amount, which is why the sheet still
+  // balances. That is the honest consequence of a periodic system holding stock
+  // the accounts never paid for.
+  //
+  // NOT CREATED HERE, DELIBERATELY: any ledger under the `Stock-in-Hand` group.
+  // A company that books stock BOTH as an ordinary ledger and as inventory
+  // movement double-counts it on both sides of the sheet — and because the
+  // double count is symmetric the sheet still FOOTS, so no `balanced` check can
+  // ever see it. The Balance Sheet refuses to render in that case. Demo Traders
+  // must therefore keep its stock in exactly one plane: this one.
+  //
+  // EVERY QUANTITY AND RATE BELOW IS A LITERAL FIXED-4 STRING. Nothing here is
+  // computed in JavaScript, because a JSON number is a float64 and a float
+  // quantity makes a closing balance depend on the order the lines were keyed.
+
+  // `Nos` is seeded with every company; `Kg` is not, and the second item is
+  // denominated in it so the demo shows two different units side by side (and
+  // so a report that assumed one unit per company would break here).
+  await client.createUnit(co, {
+    symbol: "Kg",
+    formal_name: "Kilograms",
+    created_by: "seed",
+  });
+
+  // The system godown every company is seeded with. Movements MUST land on the
+  // same (item, godown, batch) key the opening position was written to —
+  // `stock_opening` is keyed by that triple — or the replay would value an
+  // opening at Main Location and a movement somewhere else as two unrelated
+  // positions, and the negative-stock trigger would judge each against the
+  // wrong book.
+  const godowns = await client.listGodowns(co);
+  const mainLocation = godowns.godowns.find((g) => g.name === "Main Location");
+  if (!mainLocation) {
+    throw new Error(
+      "expected the seeded system godown 'Main Location' to exist — did seed_inventory_defaults change?",
+    );
+  }
+
+  // ITEM A — no opening position. It arrives, leaves, is re-priced by a
+  // back-dated purchase, is altered and is partly reversed. It is the item that
+  // exercises the MOVEMENT half of the replay.
+  const itemAngle = (
+    await client.createStockItem(co, {
+      name: "MS Angle 50x50",
+      unit_symbol: "Nos",
+      hsn: HSN_STEEL_ARTICLES,
+      gst_rate_pct: "18.0000",
+      created_by: "seed",
+    })
+  ).stock_item_id;
+
+  // ITEM B — WITH an opening position, and that is mandatory rather than
+  // decorative. `loadStockOpenings` returns nothing for a date before
+  // `books_beginning_from`, which is what stops pre-books stock leaking onto a
+  // Balance Sheet dated 2020 (the accounting side had exactly that bug once).
+  // A gate check that asserts "no closing stock before the books began" is
+  // VACUOUS unless there is an opening position for the cutoff to suppress —
+  // so one exists, at a rate different from every movement rate below.
+  //
+  // 40 Kg at 812.5000 = 32,500.0000 as at 2026-04-01. The opening is written to
+  // Main Location by POST /stock-items.
+  const itemSheet = (
+    await client.createStockItem(co, {
+      name: "SS Sheet 2mm",
+      unit_symbol: "Kg",
+      hsn: HSN_STAINLESS_FLAT,
+      gst_rate_pct: "18.0000",
+      opening_qty: "40.0000",
+      opening_rate: "812.5000",
+      created_by: "seed",
+    })
+  ).stock_item_id;
+
+  /**
+   * POST or PUT a stock-only voucher through the route the UI would use.
+   *
+   * `createRestClient` exposes no method for these three classes yet, and
+   * `frontend/src/api/rest.ts` is not this change's to grow, so the seed speaks
+   * to the endpoint directly — the same raw-fetch shape `seedAuthHeaders` above
+   * already uses for `/auth/token`. It still goes over HTTP, so it inherits
+   * every server-side invariant (the fixed direction per class, the
+   * negative-stock constraint trigger, server numbering, the append-only
+   * version chain); nothing is written to the database behind cored's back.
+   */
+  type StockVoucherClass = "receipt-note" | "delivery-note" | "stock-journal";
+  const companyPath = `${baseUrl.replace(/\/$/, "")}/v1/companies/${encodeURIComponent(co)}`;
+  const stockVoucher = async (
+    method: "POST" | "PUT",
+    cls: StockVoucherClass,
+    body: VoucherRequest,
+    voucherID?: string,
+  ): Promise<string> => {
+    const url =
+      `${companyPath}/vouchers/${cls}` +
+      (voucherID ? `/${encodeURIComponent(voucherID)}` : "");
+    const res = await fetch(url, {
+      method,
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ created_by: "seed", ...body }),
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      throw new Error(
+        `${method} ${cls} dated ${body.voucher_date ?? "?"} -> ${res.status}: ${text}`,
+      );
+    }
+    return (JSON.parse(text) as { voucher_id: string }).voucher_id;
+  };
+
+  /**
+   * One line of the item grid, always at Main Location.
+   *
+   * `rate` is REQUIRED even on an outward line: a stock-only document is not
+   * priced from a price list (it neither sells nor buys), so the ledger refuses
+   * a line that leaves the rate unstated. On an OUTWARD line the figure is
+   * documentary only — the weighted-average valuer consumes at the pool's
+   * running average recomputed at that instant, never at the rate on the line —
+   * which is precisely why a back-dated inward can re-value an outward that was
+   * already reported.
+   */
+  const stockLine = (
+    stockItemID: string,
+    direction: "IN" | "OUT",
+    qty: string,
+    rate: string,
+    amount: string,
+  ): InventoryLineRequest => ({
+    stock_item_id: stockItemID,
+    godown_id: mainLocation.id,
+    direction,
+    qty,
+    rate,
+    amount,
+  });
+
+  const moves: string[] = [];
+
+  // 1. Goods IN. The first purchase of item A, at 25.7500.
+  await stockVoucher("POST", "receipt-note", {
+    voucher_date: "2026-04-10",
+    narration: "Receipt note — MS Angle from Steel Suppliers (bill to follow)",
+    inventory: [stockLine(itemAngle, "IN", "120.0000", "25.7500", "3090.0000")],
+  });
+  moves.push("2026-04-10  RN  MS Angle 50x50   IN  120 @ 25.7500");
+
+  // 2. Goods IN. Item B at 940.0000 — a DIFFERENT rate from its 812.5000
+  //    opening, so the weighted average actually has two prices to average.
+  await stockVoucher("POST", "receipt-note", {
+    voucher_date: "2026-05-20",
+    narration: "Receipt note — SS Sheet from Pune Fabricators",
+    inventory: [stockLine(itemSheet, "IN", "60.0000", "940.0000", "56400.0000")],
+  });
+  moves.push("2026-05-20  RN  SS Sheet 2mm     IN   60 @ 940.0000");
+
+  // 3. Goods OUT, dated exactly ON the UPPER bound of the Apr–Jun window the
+  //    gate's additivity check uses. A period bound that was exclusive on the
+  //    top would silently drop this movement, and a bound flip once survived
+  //    the entire reporting package because no fixture sat ON a bound.
+  await stockVoucher("POST", "delivery-note", {
+    voucher_date: "2026-06-30",
+    narration: "Delivery note — MS Angle to Acme Traders (invoice to follow)",
+    inventory: [stockLine(itemAngle, "OUT", "30.0000", "25.7500", "772.5000")],
+  });
+  moves.push("2026-06-30  DN  MS Angle 50x50   OUT  30   (ON the Apr–Jun upper bound)");
+
+  // 4. Goods IN, dated exactly ON the LOWER bound of the Jul–Mar window.
+  //
+  //    THIS IS THE MOVEMENT THAT MAKES THE OFF-BY-ONE VISIBLE, and it is the
+  //    single most load-bearing date in this section. The P&L's opening-stock
+  //    term must be taken at d0 MINUS ONE, never at d0: taken at d0 it would
+  //    include whatever moved ON d0, the two contiguous halves would no longer
+  //    share a boundary value, and they would differ by exactly this receipt.
+  //    Delete this voucher and the additivity check passes over the bug.
+  await stockVoucher("POST", "receipt-note", {
+    voucher_date: "2026-07-01",
+    narration: "Receipt note — MS Angle, second lot at a higher price",
+    inventory: [stockLine(itemAngle, "IN", "40.0000", "88.0000", "3520.0000")],
+  });
+  moves.push("2026-07-01  RN  MS Angle 50x50   IN   40 @ 88.0000  (ON the Jul–Mar lower bound)");
+
+  // 5. Goods OUT. Item B is issued, so BOTH items have movement in both
+  //    directions and neither closing position is a pure opening.
+  await stockVoucher("POST", "delivery-note", {
+    voucher_date: "2026-08-15",
+    narration: "Delivery note — SS Sheet to Mumbai Metals",
+    inventory: [stockLine(itemSheet, "OUT", "25.0000", "940.0000", "23500.0000")],
+  });
+  moves.push("2026-08-15  DN  SS Sheet 2mm     OUT  25");
+
+  // 6. AN ALTERED STOCK VOUCHER — a period already reported is restated.
+  //    Posted as 20 out, corrected to 35 out. The alter appends version 2; the
+  //    original movement row is retained and superseded, never overwritten, so
+  //    a replay that forgot to follow `voucher_head.current_version_id` would
+  //    consume 55 instead of 35 and every later closing value would be wrong.
+  const dnAlter = await stockVoucher("POST", "delivery-note", {
+    voucher_date: "2026-09-10",
+    narration: "Delivery note — MS Angle to Mumbai Metals",
+    inventory: [stockLine(itemAngle, "OUT", "20.0000", "25.7500", "515.0000")],
+  });
+  await stockVoucher(
+    "PUT",
+    "delivery-note",
+    {
+      voucher_date: "2026-09-10",
+      narration: "Delivery note — MS Angle to Mumbai Metals (quantity corrected)",
+      inventory: [stockLine(itemAngle, "OUT", "35.0000", "25.7500", "901.2500")],
+    },
+    dnAlter,
+  );
+  moves.push("2026-09-10  DN  MS Angle 50x50   OUT  20 -> ALTERED to 35 (version 2)");
+
+  // 7. A DELETED STOCK VOUCHER — a movement already reported is withdrawn.
+  //    A stock journal with a single outward line is a CONSUMPTION (the class
+  //    has no fixed direction precisely so it can express a transfer, an issue
+  //    to production, or a manufacture). Tombstoning it must remove its effect
+  //    from every position at every date, while its versions remain in the
+  //    append-only chain.
+  const sjDeleted = await stockVoucher("POST", "stock-journal", {
+    voucher_date: "2026-10-05",
+    narration: "Stock journal — MS Angle issued to the workshop",
+    inventory: [stockLine(itemAngle, "OUT", "10.0000", "25.7500", "257.5000")],
+  });
+  await client.deleteVoucher(co, sjDeleted, "seed");
+  moves.push("2026-10-05  SJ  MS Angle 50x50   OUT  10 -> DELETED (tombstoned)");
+
+  // 8. POSTED LAST, BACK-DATED TO 2026-05-15. This is the whole argument for
+  //    never storing a stock value.
+  //
+  //    Inserting an older purchase RE-VALUES every outward that follows it: at
+  //    2026-06-30 item A's pool is now 120 @ 25.7500 plus 100 @ 12.5000 =
+  //    4,340.0000 over 220 units = 19.72727272... per unit, deliberately
+  //    NON-TERMINATING so an implementation that rounded early, or that used a
+  //    float, diverges visibly instead of agreeing by luck. A materialised
+  //    closing value written before this voucher arrived would now be wrong,
+  //    and nothing would ever recompute it.
+  await stockVoucher("POST", "receipt-note", {
+    voucher_date: "2026-05-15",
+    narration: "Receipt note — MS Angle, late-entered older purchase",
+    inventory: [stockLine(itemAngle, "IN", "100.0000", "12.5000", "1250.0000")],
+  });
+  moves.push("2026-05-15  RN  MS Angle 50x50   IN  100 @ 12.5000  (BACK-DATED, entered last)");
+
+  // ---- The invariants the gate rests on, asserted rather than assumed ------
+  // A seed that quietly stopped satisfying these would leave verify:demo green
+  // and blind. Each throw below names the gate check it would otherwise make
+  // vacuous.
+  const stockDates = [
+    "2026-04-30",
+    "2026-05-31",
+    "2026-06-30",
+    "2026-07-31",
+    "2027-01-31",
+    "2027-02-28",
+    "2027-03-31",
+  ] as const;
+  const stockValue = new Map<string, string>();
+  for (const d of stockDates) {
+    stockValue.set(d, (await client.getStockSummary(co, d)).total_value);
+  }
+  // "Zero" is matched as a STRING pattern, never by parsing the figure into a
+  // JavaScript number: money is a fixed-4 decimal string end to end here.
+  const isZeroMoney = (v: string): boolean => /^-?0(\.0*)?$/.test(v.trim());
+  for (const [d, v] of stockValue) {
+    if (isZeroMoney(v)) {
+      throw new Error(
+        `stock is worth ${v} at ${d}: the month-end Balance-Sheet loop would be ` +
+          "exercised on an empty position and could not fail on a wrong fold-in",
+      );
+    }
+  }
+  // Nothing moves after 2026-10-05, so two dates in an empty window must agree
+  // EXACTLY. This is what makes the gate's empty-window check able to fail: a
+  // P&L over an empty window whose opening term was dropped would report the
+  // whole warehouse as profit.
+  if (stockValue.get("2027-01-31") !== stockValue.get("2027-02-28")) {
+    throw new Error(
+      `stock moved between 2027-01-31 (${stockValue.get("2027-01-31")}) and ` +
+        `2027-02-28 (${stockValue.get("2027-02-28")}): the empty-window check would be testing a non-empty window`,
+    );
+  }
+  // ...and two dates that straddle the 2026-07-01 receipt must DISAGREE, or the
+  // additivity check has no stock movement to be additive about.
+  if (stockValue.get("2026-06-30") === stockValue.get("2026-07-31")) {
+    throw new Error(
+      "closing stock is unchanged across 2026-06-30 -> 2026-07-31: the P&L " +
+        "additivity check could not fail on an opening term taken at d0 instead of d0-1",
+    );
+  }
+  // The opening POSITION really landed (POST /stock-items writes stock_opening
+  // only when a quantity or a rate is non-zero). Without it, the gate's
+  // "no closing stock before the books began" check has nothing to suppress.
+  const aprSummary = await client.getStockSummary(co, "2026-04-30");
+  const sheetItem = aprSummary.items.find((i) => i.item === "SS Sheet 2mm");
+  if (!sheetItem || isZeroMoney(sheetItem.opening_value)) {
+    throw new Error(
+      "SS Sheet 2mm has no opening position: the before-the-books-began check " +
+        "would pass whether or not the books-beginning cutoff exists",
+    );
+  }
+
+  console.log(
+    `  inventory:  2 stock items (Nos + Kg), 1 opening position ` +
+      `(SS Sheet 2mm ${sheetItem.opening_qty} @ 812.5000), ${moves.length} stock-only vouchers`,
+  );
+  for (const m of moves) console.log(`              ${m}`);
+  console.log(
+    "              closing stock: " +
+      stockDates.map((d) => `${d}=${stockValue.get(d)}`).join("  "),
+  );
 
   // ---- Optional: a pending OCR draft for the Bill Inbox --------------------
   // Uses the SAME benchmark fixture the OCR e2e drives, with its placeholder

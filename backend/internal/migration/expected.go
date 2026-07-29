@@ -149,10 +149,16 @@ type ExpectedB2BParty struct {
 // LIMITATION OF THE MIGRATION-CORPUS ORACLE (structural, not an oversight): the
 // Tally importer builds GSTParams ONLY for Sales vouchers (migration.go:514,
 // :566), so no imported corpus voucher can stamp the PURCHASE-side GST columns.
-// RCMInward and ITC are therefore necessarily all-zero for every corpus. The
-// NON-ZERO ITC/RCM coverage lives in the hermetic
-// backend/internal/compliance/gstr/gstr3b_integration_test.go, which posts
-// purchases directly through ledger.Service.
+// RCMInward, ITC, ITCReversed and ITCIneligible are therefore necessarily
+// all-zero for every corpus, and no amount of new fixtures can change that —
+// the ITC half of table 4 is unreachable from a Tally XML import.
+//
+// The NON-ZERO coverage lives in two places, neither of which is this one:
+//   - backend/internal/compliance/gstr/gstr3b_integration_test.go posts
+//     purchases directly through ledger.Service (RCM, reversals, ineligible
+//     credit, the version guard).
+//   - corpora/gstr2b/ carries the GSTR-2A/2B matching cases, re-derived
+//     independently by corpora/validate.py.
 type ExpectedGSTR3B struct {
 	FP string `json:"fp"` // "MMYYYY"
 	// Outward is table 3.1(a): taxable + the three tax heads.
@@ -161,10 +167,20 @@ type ExpectedGSTR3B struct {
 	RCMInward ExpectedTaxTotals `json:"rcmInward"`
 	// InterUnreg is table 3.2: inter-state supplies to unregistered persons, by POS.
 	InterUnreg []ExpectedInterSup `json:"interUnreg,omitempty"`
-	// ITC is table 4(C): net ITC available (all-eligible v1).
+	// ITC is table 4(C): NET ITC available, i.e. sum(4A) - sum(4B).
 	ITC ExpectedTaxTotals `json:"itc"`
-	// Balanced is gstr.Reconciliation3B.Balanced() — return vs postings on BOTH
-	// the outward and the ITC side.
+	// ITCReversed is table 4(B) and ITCIneligible is table 4(D). Both are
+	// OPTIONAL — a fixture that omits them asserts nothing about them, which is
+	// what every migration corpus does today because none can reach the ITC
+	// half at all. They are pointers rather than values precisely so that
+	// "absent" and "asserted to be zero" stay different claims: a value field
+	// would silently assert zero for every existing fixture and the assertion
+	// would be vacuous rather than deliberate.
+	ITCReversed   *ExpectedTaxTotals `json:"itcReversed,omitempty"`
+	ITCIneligible *ExpectedTaxTotals `json:"itcIneligible,omitempty"`
+	// Balanced is gstr.Reconciliation3B.Balanced() — the outward tie plus the
+	// two ITC invariants: sum(4A) + sum(4D) == input-tax postings, and
+	// sum(4A) - sum(4B) == 4C.
 	Balanced bool `json:"balanced"`
 }
 
@@ -263,7 +279,8 @@ type LedgerResolver interface {
 // PURCHASE-side GST columns. The 3B step here therefore exercises the OUTWARD
 // half (3.1(a), 3.2) with real values; 3.1(d) and table 4 are necessarily zero
 // for every corpus. Non-zero ITC/reverse-charge coverage lives in the hermetic
-// backend/internal/compliance/gstr/gstr3b_integration_test.go.
+// backend/internal/compliance/gstr/gstr3b_integration_test.go and, for the
+// GSTR-2A/2B matching that decides those figures, in corpora/gstr2b/.
 func ReconcileFull(ctx context.Context, rep *reporting.Service, gstrSvc *gstr.Service,
 	res LedgerResolver, companyID uuid.UUID, exp ExpectedReconciliation) error {
 
@@ -589,6 +606,20 @@ func reconcileGSTR3B(ctx context.Context, gstrSvc *gstr.Service, res LedgerResol
 	cmpDecimal(&problems, "GSTR-3B ITC CGST", net.Camt, exp.GSTR3B.ITC.CGST)
 	cmpDecimal(&problems, "GSTR-3B ITC SGST", net.Samt, exp.GSTR3B.ITC.SGST)
 	cmpDecimal(&problems, "GSTR-3B ITC IGST", net.Iamt, exp.GSTR3B.ITC.IGST)
+
+	// Tables 4(B) and 4(D), compared only when the fixture states them. They
+	// are read off the RECONCILIATION rather than re-summed here so that the
+	// figure checked is the same one Balanced() rests on.
+	if want := exp.GSTR3B.ITCReversed; want != nil {
+		cmpDecimal(&problems, "GSTR-3B ITC reversed CGST", recon.ITCReversed.CGST, want.CGST)
+		cmpDecimal(&problems, "GSTR-3B ITC reversed SGST", recon.ITCReversed.SGST, want.SGST)
+		cmpDecimal(&problems, "GSTR-3B ITC reversed IGST", recon.ITCReversed.IGST, want.IGST)
+	}
+	if want := exp.GSTR3B.ITCIneligible; want != nil {
+		cmpDecimal(&problems, "GSTR-3B ITC ineligible CGST", recon.ITCIneligible.CGST, want.CGST)
+		cmpDecimal(&problems, "GSTR-3B ITC ineligible SGST", recon.ITCIneligible.SGST, want.SGST)
+		cmpDecimal(&problems, "GSTR-3B ITC ineligible IGST", recon.ITCIneligible.IGST, want.IGST)
+	}
 
 	return problems
 }

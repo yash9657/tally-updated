@@ -46,9 +46,18 @@ var allowedDeps = map[string]map[string]bool{
 	// gstr is a read-only GST return generator (GSTR-1) over the tenant-scoped
 	// db layer. It does not import the parent compliance package.
 	"internal/compliance/gstr": {"internal/platform/db": true},
-	"internal/inventory":       {},
-	"internal/integration":     {},
-	"internal/identity":        {"internal/platform/db": true},
+	// itc (Track 2) is the GSTR-2B / IMS reconciliation core: a pure matching and
+	// effect engine plus a thin read/write service over the tenant-scoped db
+	// layer, exactly the shape gstr has. One sibling edge, nothing else.
+	//
+	// NOTE FOR THE INTEGRATOR: this entry was added by the Track 3 slice that
+	// owns this file, because internal/compliance/itc appeared mid-run and the
+	// walker fails the build for any package with no declared policy. Track 2
+	// owns the package; if it also wrote this line, take Track 2's wording.
+	"internal/compliance/itc": {"internal/platform/db": true, "internal/compliance/gstr": true},
+	"internal/inventory":      {},
+	"internal/integration":    {},
+	"internal/identity":       {"internal/platform/db": true},
 	// ledger derives GST inline during a Sales/Purchase post, so it may import
 	// the pure compliance leaf (no I/O, safe inside the post transaction).
 	"internal/ledger":  {"internal/platform/db": true, "internal/compliance": true},
@@ -103,7 +112,51 @@ var allowedDeps = map[string]map[string]bool{
 		"internal/compliance/gstr": true,
 		"internal/platform/db":     true,
 	},
-	"internal/platform/db": {},
+	// payroll (Track 3) is the PURE payroll calculation core, and its allowed set
+	// is the EMPTY MAP for a reason that is worth spelling out, because the
+	// tempting edge is to internal/compliance:
+	//
+	// compliance is the other pure tax leaf and it already has a ThresholdBasis,
+	// a PANAvailable flag and a rounding helper. Reusing them would be inheriting
+	// a DIFFERENT COMPUTATION, not sharing a definition. compliance's
+	// sectionRule.PerTxnThreshold carries a disclosed approximation IN ITS NAME:
+	// v1's s.194x engine tests every threshold PER TRANSACTION even where the
+	// statute makes it annual. For a vendor payment that under-deducts and is a
+	// recoverable exposure. For SALARY the statute itself defines the base as
+	// ANNUAL (s.392, ex-192), so a per-payslip threshold test is not an
+	// approximation of the rule — it is a different rule, and it deducts ZERO for
+	// an employee whose monthly pay is under the exemption but whose annual pay is
+	// far over it. That is a short salary in March and a Form 138 that TRACES
+	// cannot reconcile. The empty map makes that inheritance mechanically
+	// impossible; do not grant the edge "for reuse".
+	"internal/payroll": {},
+	// payrolldb is the DB-facing half: it owns all defaulting, gathers the
+	// year-to-date state the pure engine takes as input, and posts the pay run.
+	// It takes the NARROWEST capability rather than a pool (the seam
+	// internal/compliance/gstr established) and reaches exactly four siblings.
+	//
+	// The edge to payrollfile is the one the comment below ASKS FOR: the emitters
+	// may not import the engine, so somebody has to map persisted rows onto each
+	// emitter's file-local row struct, and payrolldb is nominated for it by name.
+	// The direction is what matters — payrolldb -> payrollfile, never the reverse
+	// — because it keeps the file formats downstream of the books. A Q4 format
+	// change rewrites a writer and a mapper; it cannot reach the engine.
+	"internal/payroll/payrolldb": {
+		"internal/platform/db":         true,
+		"internal/ledger":              true,
+		"internal/payroll":             true,
+		"internal/payroll/payrollfile": true,
+	},
+	// payrollfile holds the statutory file emitters (PF ECR, Form 138, the ESI
+	// return) and its allowed set is ALSO the empty map — including no edge to
+	// internal/payroll, which is the load-bearing part. If an emitter could import
+	// the engine, a file format's field list would start dictating engine
+	// semantics: the ECR's "EPF-EPS Diff" column would become a Result field and
+	// the Form 138 record layout would leak into the income-tax result. Each
+	// emitter takes its own file-local row struct and payrolldb does the mapping,
+	// which is what keeps the writers replaceable when the Q4 format is published.
+	"internal/payroll/payrollfile": {},
+	"internal/platform/db":         {},
 	// testdb is the shared TEST-DATA TEARDOWN harness (internal/platform/testdb).
 	// Its allowed set is the EMPTY SET, and that is the strongest statement in
 	// this map: it imports no sibling at all — not platform/db, not identity — it
@@ -135,10 +188,26 @@ var allowedDeps = map[string]map[string]bool{
 		"internal/identity":        true,
 		"internal/compliance":      true,
 		"internal/compliance/gstr": true,
-		"internal/inventory":       true,
-		"internal/integration":     true,
-		"internal/migration":       true,
-		"internal/sync":            true,
+		// The GSTR-2A/2B + IMS surface (Track 2). server holds the handlers for
+		// /itc-reconciliation, /ims-inbox and the three ITC writes, so it needs
+		// the service. Note what this edge does NOT license: itc's own allowed
+		// set (line ~57) is {platform/db, compliance/gstr}, so the reconciliation
+		// engine still cannot reach a handler, a report or the ledger.
+		"internal/compliance/itc": true,
+		// Payroll (Track 3). server needs payrolldb for the handlers, and the
+		// pure internal/payroll for the value types those handlers name in their
+		// signatures — payroll.WageMonth above all, which is how a wage month
+		// crosses the HTTP boundary without the handler re-deriving it.
+		//
+		// Both edges point INWARD only. internal/payroll's allowed set is the
+		// empty map and payrolldb's reaches four siblings, none of them server,
+		// so the engine and the store can never call back out to a request.
+		"internal/payroll":           true,
+		"internal/payroll/payrolldb": true,
+		"internal/inventory":         true,
+		"internal/integration":       true,
+		"internal/migration":         true,
+		"internal/sync":              true,
 	},
 	"internal/archtest": {},
 }

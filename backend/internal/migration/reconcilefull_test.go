@@ -228,8 +228,14 @@ func TestReconcileFull_FailsLoudlyOnGSTR3B(t *testing.T) {
 			// WRONG: the sale is intra-state, so 3.2 must be empty.
 			InterUnreg: []migration.ExpectedInterSup{{Pos: "27", Taxable: "1000.0000", IGST: "180.0000"}},
 			// WRONG: no input-tax ledgers, no purchases -> ITC is zero.
-			ITC:      migration.ExpectedTaxTotals{Taxable: "0.0000", CGST: "77.0000", SGST: "0.0000", IGST: "0.0000"},
-			Balanced: true,
+			ITC: migration.ExpectedTaxTotals{Taxable: "0.0000", CGST: "77.0000", SGST: "0.0000", IGST: "0.0000"},
+			// WRONG, and doctored for the same reason as the rest: the 4(B) and
+			// 4(D) comparisons are OPTIONAL blocks, so an unexercised one is a
+			// comparison that can never fail. Nothing was reversed and nothing
+			// was ineligible in an import with no purchases at all.
+			ITCReversed:   &migration.ExpectedTaxTotals{CGST: "55.0000", SGST: "0.0000", IGST: "0.0000"},
+			ITCIneligible: &migration.ExpectedTaxTotals{CGST: "0.0000", SGST: "0.0000", IGST: "66.0000"},
+			Balanced:      true,
 		},
 	}
 
@@ -243,6 +249,8 @@ func TestReconcileFull_FailsLoudlyOnGSTR3B(t *testing.T) {
 		"GSTR-3B 3.1(d) taxable",
 		"GSTR-3B 3.2 pos 27: missing from return",
 		"GSTR-3B ITC CGST",
+		"GSTR-3B ITC reversed CGST",
+		"GSTR-3B ITC ineligible IGST",
 	} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("error should name %q, got:\n%v", want, msg)
@@ -278,7 +286,13 @@ func TestReconcileFull_PassesOnTrueGSTR3B(t *testing.T) {
 			Outward:   migration.ExpectedTaxTotals{Taxable: "1000.0000", CGST: "90.0000", SGST: "90.0000", IGST: "0.0000"},
 			RCMInward: migration.ExpectedTaxTotals{Taxable: "0.0000", CGST: "0.0000", SGST: "0.0000", IGST: "0.0000"},
 			ITC:       migration.ExpectedTaxTotals{Taxable: "0.0000", CGST: "0.0000", SGST: "0.0000", IGST: "0.0000"},
-			Balanced:  true,
+			// The CORRECT 4(B)/4(D) blocks, stated rather than omitted: this is
+			// the half of the mutation gate that proves the new comparisons can
+			// PASS. Without it, "fails loudly" would be satisfied by a block
+			// that always fails.
+			ITCReversed:   &migration.ExpectedTaxTotals{CGST: "0.0000", SGST: "0.0000", IGST: "0.0000"},
+			ITCIneligible: &migration.ExpectedTaxTotals{CGST: "0.0000", SGST: "0.0000", IGST: "0.0000"},
+			Balanced:      true,
 		},
 	}
 

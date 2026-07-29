@@ -149,3 +149,239 @@ A position is `(stockItem, godown, batch)`; a `null` dimension is the SQL NULL a
 | `04-per-godown-positions` | one item in two godowns is two positions with two costs; blending them changes the money |
 | `05-batch-with-expiry` | batch is part of the position key; the expiry date is master metadata and never enters the arithmetic |
 | `06-opening-folded-in` | `stock_opening` folds in as the first inward, and a recurring average (1400/15) is carried at 16 dp so only the *consumed value* is rounded to 4 dp |
+
+## 6. `gstr2b/` — GSTR-2A/2B reconciliation (consumed by `backend/internal/compliance/itc`)
+
+**The match result is never stored.** It is a function of four versioned inputs — the books, the ingested statement, the IMS action log and the policy — and goes stale the instant any of them moves, exactly like a stock valuation. These fixtures are therefore the only pinned form of that function, and `validate.py` re-derives every one of them from `input` alone through an **independent Python implementation of the matcher** (`_derive_gstr2b_expected`), written from the written specification rather than transcribed from the Go. A fixture whose `expected` is wrong fails here even if the Go agreed with it.
+
+```jsonc
+{
+  "id": "01-exact-match",
+  "description": "... what would be WRONG if this case were absent ...",
+  "input": {
+    "period": "012026",                  // MMYYYY, the GSTN `fp` form
+    "claimDate": "2026-02-20",           // optional; only then is our own s.16(4) test applied
+    "asOn": "2026-02-18T10:00:00+05:30", // optional; required when a document carries imsActions
+    "filedAt": null,                     // the GSTR-3B freeze instant, if filed
+    "books": [{
+      "voucherId": "v1", "voucherNo": "PUR-1", "voucherDate": "2026-01-10",
+      "partyGstin": "27AAAAA0000A1Z5",
+      "supplierInvoiceNo": "INV-001", "supplierInvoiceDate": "2026-01-10",
+      "docType": "I",                    // I invoice | C credit note | D debit note
+      "pos": "27", "reverseCharge": false,
+      "itcEligibility": "ELIGIBLE",      // ELIGIBLE | BLOCKED_17_5 | CAPITAL_GOODS | ISD
+      "taxableValue": "10000.0000", "cgst": "900.0000", "sgst": "900.0000", "igst": "0.0000"
+    }],
+    "statement": {
+      "kind": "GSTR2B", "returnPeriod": "012026", "genDate": "2026-02-14",
+      "documents": [{
+        "docId": "s1", "section": "B2B", "rejected": false,
+        "supplierGstin": "27AAAAA0000A1Z5", "supplierFiledDate": "2026-02-09",
+        "docNo": "INV-001", "docDate": "2026-01-10", "docType": "I",
+        "docValue": "11800.0000", "pos": "27", "reverseCharge": false,
+        "itcAvailable": true,            // GSTN's own itcavl verdict — required, never inferred
+        "taxableValue": "10000.0000", "cgst": "900.0000", "sgst": "900.0000", "igst": "0.0000",
+        "origDocNo": null, "origDocDate": null,     // B2BA/CDNRA only
+        "imsActions": [{ "action": "REJECT", "actedAt": "2026-02-16T09:00:00+05:30" }]
+      }]
+    }
+  },
+  "expected": {
+    "rejectedStatementRows": ["s1"],     // docRejdata rows: VIEW-ONLY, never in matching or ITC
+    "findings": [{ "code": "DOC_NO_INVALID", "ref": "v1", "docNo": "...", "strictKey": "..." }],
+    "lines": [{
+      "status": "MATCHED", "fields": [], "notComparable": "",
+      "books": "v1", "statement": "s1", "candidates": [],
+      "delta": { "txval": "0.0000", "camt": "0.0000", "samt": "0.0000", "iamt": "0.0000" },
+      "effect": { "avlRow": "OTH", "avl": {...}, "revRul": {...}, "revOth": {...}, "inelg": {...} },
+      "s164Expiry": "2026-11-30"
+    }],
+    "totals": { "itcAvlIsrc": {...}, "itcAvlOth": {...}, "itcRevRul": {...},
+                "itcRevOth": {...}, "itcInelgOth": {...}, "itcNet": {...},
+                "postedInputTax": {...} }
+  }
+}
+```
+
+`camt`/`samt`/`iamt` are the GSTN key names for CGST/SGST/IGST already used by `gstr.Table4Row`. **Cess is not modelled** anywhere in this family — the 3B builder emits the `cess-not-modelled` disclosure. `totals` is deliberately a fixed set of zero-filled objects rather than the 3B arrays: mapping them onto `itc_avl` / `itc_rev` / `itc_inelg` rows (and the emit-only-if-non-empty rule) is the return builder's job, not the corpus's.
+
+**Lines are sorted by `(books ?? "~", statement ?? "~")`** so paired and books-only lines come first in voucher order and statement-only lines follow in document order. The order is part of the contract; a matcher whose output depends on database row order is not reproducible.
+
+### 6.1 The rules, and the citation grade of each
+
+| rule | grade |
+| --- | --- |
+| Match key is (supplier GSTIN, normalised doc no, **doc type**, doc date, taxable value) | design decision |
+| Taxable value EXACT; per-head tax tolerance `1.00` absolute, only once taxable is exact, reported as the distinct `MATCHED_ROUNDING` | design decision, derived from per-line rounding in `compliance.TaxDerive` |
+| Date tolerance ZERO days | forced by s.16(4) — a 7-day band crosses a financial year |
+| The 2B window is on the supplier's **filing** date, not the document date | [CITED-PRIMARY] GSTN GSTR-2B Advisory, 12-10-2021, Q.4 |
+| 2B generation begins after "13th midnight" → the half-open `[.., 14th 00:00 IST)` boundary | [CITED-PRIMARY] same advisory, Q.2 |
+| 2B is recomputable without limit; recomputation is mandatory when an action changed | [CITED-PRIMARY] GSTN IMS FAQ 27 + advisory key-point 2 |
+| The action set freezes when GSTR-3B is filed | [CITED-PRIMARY] GSTN IMS FAQ 12 |
+| `docRejdata` rows are view-only | [CITED-PRIMARY] GSTN IMS FAQ 24 |
+| RCM / IMPG / ISD bypass IMS and still reach 2B | [CITED-PRIMARY] GSTN IMS FAQ 8 and 18 |
+| In the same statement only the AMENDED record counts; for credit notes the amendment always prevails | [CITED-PRIMARY] 2B advisory key-point 7 / IMS FAQ 13 and 14 |
+| GSTN marks `itcavl="N"` for s.16(4) and the PoS rule ONLY, and expressly disclaims the rest — **2B does not flag s.17(5)** | [CITED-PRIMARY] 2B advisory |
+| Table 4 shape: 4(D) is "Other Details" and is **not** subtracted from 4(C); s.17(5) is reversed through 4(B)(1) | [CITED-PRIMARY] Notification 14/2022 + Circular 170/02/2022 |
+| Invoice number capped at 16 characters | [CITED-PRIMARY] rule 46(b) |
+| The 2B JSON key names and section codes used here | [CITED-SECONDARY] — public documentation, **not** verified against the GSTN offline utility, which is not in this repo |
+| The s.17(5) clause letters carried in `itcBlockedClause` | [CITED-SECONDARY] free text on purpose, so re-verification is a doc change and not a migration |
+| Every date boundary is evaluated in IST | **INFERRED, NOT CITED** — no GSTN or CBIC document read for this work states a timezone |
+
+### 6.2 What the corpus deliberately does NOT gate
+
+Rate-level (per-HSN, per-rate) matching is **out of scope**: `voucher_gst_line` carries line-grain detail and a 2B document may nest `itms[]`, so a multi-rate invoice whose per-rate split is wrong still passes an invoice-level comparison. Rule 42/43 apportionment is caller-supplied and unexercised here — `E` (exempt supply value) and `F` (total turnover in the state) are not derivable from our own return, and an engine fed `E=0` returns `D1=0` for every taxpayer, which is a confidently wrong zero. The books-side disagreement finding (we say time-barred, the statement says available) is implemented on both sides but has no fixture.
+
+| id | proves |
+| --- | --- |
+| `01-exact-match` | the happy path; without it, reversing everything passes every other case |
+| `02-rounding-within-tolerance` | 50 paisa is `MATCHED_ROUNDING` carrying the delta, and 4(A) takes the BOOKS figure |
+| `03-value-mismatch` | the differing fields are NAMED and only the EXCESS is reversed; also raises `DOC_NO_INVALID` |
+| `04-date-mismatch-fy-boundary` | 31-Mar vs 01-Apr is two s.16(4) expiries — why the date tolerance is zero |
+| `05-leading-zero-near-match` | `INV-001` vs `INV1` is TWO unpaired lines, never a pair |
+| `06-ambiguous-duplicate-number` | more than one candidate pairs NOTHING; all participants go `AMBIGUOUS` |
+| `07-missing-in-2b` | the haircut is a 4(B)(2) line and (I1) stays exact |
+| `08-missing-in-books` | a statement-only document contributes NOTHING to 4(A) |
+| `09-credit-note-not-paired-to-invoice` | doc type is in the key: a CDNR is never paired with the invoice it adjusts |
+| `10-rcm-never-reversed` | RCM is `NOT_COMPARABLE`, lands in ISRC, and is never reversed for being unmatched |
+| `11-rejected-docs-excluded` | GSTN's `docRejdata` and our own IMS REJECT are different things with different effects |
+| `12-prior-fy-invoice-in-current-2b` | the window is on the supplier's filing date |
+| `13-amendment-supersedes-original` | the original contributes nothing and is not an ambiguous duplicate |
+| `14-blocked-17-5` | s.17(5) is a classification input, reversed once, in 4(B)(1) |
+| `15-time-barred-16-4` | never-available ITC is EXCLUDED from 4(A) and reported in 4(D)(2), keeping (I1) exact |
+| `16-legacy-no-supplier-doc-no` | `NOT_COMPARABLE` is not `MISSING_IN_2B`, and produces zero reversal |
+
+## 7. `ims/` — the IMS clock, scope and s.16(4) (consumed by `backend/internal/compliance/itc`)
+
+Each case carries a `kind` that selects the derivation: `clock`, `pending`, `applicability`, `annexure`, `s164`. `validate.py` re-derives all five with `datetime` and `timezone(timedelta(hours=5, minutes=30))` — genuinely independent arithmetic, not a restatement.
+
+```jsonc
+{ "id": "01-deemed-accept-boundary-jan-2026", "kind": "clock", "description": "...",
+  "input": { "period": "012026", "statementGenDate": null, "filedAt": null,
+             "actions": [{ "action": "ACCEPT", "actedAt": "2026-02-10T09:00:00+05:30" }],
+             "probes": [{ "asOn": "2026-02-13T23:59:59.999999999+05:30" }] },
+  "expected": { "cutoff": "2026-02-14T00:00:00+05:30",
+                "resolution": "2026-02-14T00:00:00+05:30",
+                "states": ["NO_ACTION"] } }
+```
+
+**Two instants, not one.** `resolution` is when the 2B is generated — no action resolves to `DEEMED_ACCEPTED` from that instant. `freeze` (`filedAt`) is when GSTR-3B was filed; after it no action counts. Between them the 2B is recomputable without limit. There are **five** states — `NO_ACTION` is distinct from `ACCEPTED` until generation resolves it — and `RESET` clears the log back to no-action so the timer applies again.
+
+`asOn` values are written at nanosecond precision to match the Go boundary test verbatim. Python truncates them to microseconds, which is safe **only** because every boundary here falls on a whole second: a fixture whose answer turned on a sub-microsecond difference would be untestable from Python and must not be written.
+
+| id | proves |
+| --- | --- |
+| `01-deemed-accept-boundary-jan-2026` | the boundary instant before and after, in IST **and** in UTC — the pair that bites a local-zone clock |
+| `02-february-short-month` | calendar-month addition, not "+30 days" |
+| `03-december-year-rollover` | the month increment carries the year |
+| `04-generation-slipped-past-the-14th` | Dec-2024 generated on 16-Jan-2025 — the case that bites a hard-coded 14 |
+| `05-explicit-reject-beats-deemed-accept` | acting on the 15th still counts |
+| `06-action-after-filing-is-ignored` | the freeze instant makes a filed return reproducible |
+| `07-latest-action-wins` | last-write-wins over an append-only log, evaluated as of an instant |
+| `08-pending-forbidden-pre-oct-2025` | the four restricted categories, [CITED-PRIMARY] |
+| `09-pending-allowed-from-oct-2025` | effective-dated relaxation with a one-period expiry, [CITED-SECONDARY] **VERIFY BEFORE RELEASE** |
+| `10-ims-not-applicable` | IMPG/IMPGSEZ/ISD/ISDA and every reverse-charge row bypass IMS |
+| `11-annexure-a-decision-table` | GSTN's decision table in full, carrying GSTN's own "not a statement of law" disclaimer |
+| `12-s164-expiry-boundaries` | 31-Mar vs 01-Apr, 30-Nov vs 01-Dec (inclusive), a de-linked debit note, an early annual return |
+
+The Annexure-A table in `validate.py` is **reconstructed from the behaviour the IMS advisory and FAQ describe**, not transcribed from the annexure PDF, which is not in this repository. It is `[CITED-SECONDARY]` and marked VERIFY BEFORE RELEASE.
+
+## 8. `_poison/` — the poisoned-fixture tripwire
+
+`gstr2b/` and `ims/` each carry a `_poison/` subdirectory. Every file in it is a **valid-shaped case whose `expected` block is deliberately wrong** — a near-match recorded as a match, a `docRejdata` row summed into table 4(A), a credit note paired with the invoice it adjusts, a boundary off by one instant, a UTC instant answered differently from the identical IST instant, a resolution hard-coded to the 14th. `validate.py`'s `check_poison()` walks these directories explicitly and **fails if any poisoned fixture validates**, with the message:
+
+> `poisoned fixture <name> validated — the oracle has become tautological; validate.py is restating the fixture instead of re-deriving it`
+
+**This is a test OF THE VALIDATOR, not of the data.** It exists because it has already happened once: a corpus oracle was "fixed" by editing it to agree with the mapper it was supposed to check, after which the metric agreed with itself forever and detected nothing. The moment a `_derive_*` function is rewritten to `return case["expected"]`, or a comparison is relaxed until it stops complaining, every poison case starts passing and CI goes red naming all of them.
+
+The **leading underscore is load-bearing**: `directory.glob("*.json")` in `main()`'s loop does not recurse, so poison files are invisible to the family counts and to the Go corpus loader. The counts printed in the summary are therefore honest, and `MIN_COUNTS` for these two families is set to the **exact** number of real fixtures (16 and 12) so that deleting any one of them fails CI rather than quietly shrinking the gate.
+
+---
+
+## 8. `payroll/` — Payslip arithmetic (consumed by `backend/internal/payroll` and by `validate.py`)
+
+**People get paid from this.** A wrong number here is somebody's short salary or
+somebody's tax notice, so this family is checked harder than any other.
+
+Four computations share one directory and are dispatched **on the id prefix** —
+there is no `kind` discriminator, because a discriminator can disagree with the
+filename and then two validators pick different code paths for the same file:
+
+| prefix | engine | what it pins |
+| --- | --- | --- |
+| `wages-` | `StatutoryWages` | Code on Social Security 2020 s.2(88), including the **50% deeming add-back**. This leaf is UPSTREAM of both PF and ESI, so an error in it is systematic across a whole workforce |
+| `pf-` | `PFDerive` | EPF / EPS / EDLI. **EPF wages, EPS wages and EDLI wages are three different numbers** with three ECR columns and are never collapsed |
+| `esi-` | `ESICoverage` + `ESIDerive` | the contribution-period **coverage latch**, rule 52's one-sided low-wage exemption, rule 51's ceiling on **both** shares |
+| `it-` | `IncomeTaxDerive` | s.392 (ex-192) on an **annual** base — no per-transaction threshold exists anywhere in it |
+
+```jsonc
+{
+  "id": "it-new-regime-rebate-cliff-marginal-relief",   // == the filename stem
+  "description": "… the statutory citation AND the hand derivation, in full …",
+  "rulesetVersion": "it-ty-2026-27",                    // or "ss-2026-07" / "ss-2019-07"
+  "input":    { /* per-prefix; every extra key is a validation FAILURE */ },
+  "expected": { /* money as 4-dp decimal STRINGS, rates as bare decimal strings */ },
+  "counterfactual": {                                   // five fixtures carry one
+    "rule": "no-rebate-marginal-relief",
+    "why":  "… the CONSEQUENCE of the naive rule, in rupees …"
+  }
+}
+```
+
+A `description` must be **≥ 40 characters and carry both the citation and the
+derivation**, because a payroll fixture is simultaneously a legal claim and a
+computation, and neither half is reviewable without the other.
+
+### Why this family is not tautological
+
+Three independent mechanisms, all of them required:
+
+1. **Two derivations that meet only at the fixture.** `validate.py`'s
+   `derive_payroll` is written from the citations in the fixtures — it never
+   reads Go source, never imports a shared rate file and never shells out to the
+   backend. `TestPayrollDerive_GoldenCorpus` compares the **engine** to
+   `expected`. Neither side ever sees the other's answer. The module-level
+   tables (`PF_RATES`, `IT_SLABS_NEW`, `SURCHARGE_BANDS`, …) are duplicated
+   **on purpose** and must never be "de-duplicated" into a shared data file: the
+   duplication *is* the oracle. It cannot catch a rate that is wrong in **both**
+   places — that is what the pre-release statutory spot-check is for.
+2. **Counterfactuals.** Five fixtures re-derive under the **naive** rule and
+   fail if it **agrees** with `expected`, so a fixture that has stopped
+   demonstrating its claim is detected rather than trusted:
+   `esi-monthly-ceiling-test`, `ignore-prior-employer-taxable`,
+   `no-rebate-marginal-relief`, `pf-base-actual-with-employer-matching`,
+   `round-income-to-rupee`.
+3. **Closure in both directions**, in the Go test: every shipped ruleset version
+   must be cited by a fixture; every slab band in each regime must be reached
+   into by one; and every `ConfUnverified` rate must refuse to be consumed, with
+   the engine's deferral set matching what the fixtures declare — so a rate added
+   to `rates.go` without a fixture fails the build.
+
+Money is compared as **decimals, not strings**: `money()` here is a *max*-4-dp
+check, so `"1234"` is a legal fixture value while Go renders `"1234.0000"`, and a
+string comparison would reject a correct fixture.
+
+### The fourteen fixtures
+
+| id | proves |
+| --- | --- |
+| `wages-fifty-percent-deeming-adds-back` | excluded pay over half of all remuneration is deemed back into wages; without it every PF and ESI figure downstream is understated |
+| `pf-at-ceiling-statutory-only` | 12% / 8.33% at the 15,000 ceiling: 1800, EPS 1250, employer residual 550 |
+| `pf-above-ceiling-base-ceiling` | para 26A(2): a 40,000 wage gives the **identical** answer — the cap decides, not the wage |
+| `pf-above-ceiling-voluntary-employee-only` | para 26(6): the member may pay more and the employer need not match |
+| `pf-eps-excluded-new-member-above-ceiling` | para 6(a): a post-01-09-2014 member above the ceiling was never in the pension scheme, so the whole 12% stays in EPF |
+| `pf-edli-contribution-refused-unnotified` | the EDLI Scheme 2026 rate is "to be notified separately" — the engine emits a **deferral**, not the superseded 1976 figure |
+| `esi-covered-mid-period-raise-continues` | s.2(9): coverage **latches** at the period start and survives a mid-period raise |
+| `esi-above-ceiling-at-period-start-stays-out` | the mirror — and it cites the **pre-Code** ruleset, proving an old wage month resolves to the law in force then |
+| `esi-low-wage-employee-share-exempt` | rule 52 exempts the **employee's** share only; the employer still pays |
+| `esi-rounding-both-shares-up` | rule 51 rounds **both** shares to the next higher rupee — the only ceiling rounding in the codebase |
+| `it-new-regime-rebate-cliff-marginal-relief` | the s.156 rebate-cliff relief engines omit; without it everyone from 12,00,000 to ~12,70,589 is over-taxed |
+| `it-new-regime-surcharge-fifty-lakh-marginal-relief` | the classic surcharge relief, computed against the tax **at** the threshold |
+| `it-mid-year-joiner-prior-employer-aggregated` | ex-s.192(2) / Form 12B: the new employer deducts on the **aggregate**; this case also exercises the old regime and Chapter VI-A |
+| `it-income-rounds-to-nearest-ten` | the **two** roundings with **different units** — total income to the nearest ten, tax to the nearest rupee |
+
+**Not validator-verified.** Nothing in this family has been through the
+NSDL/Protean FVU, the EPFO Unified Portal or the ESIC employer portal; none of
+them can run in this environment. Every rate was curated from secondary sources.
+The corpus is a **substitute** for validation, not evidence of it — see the RATE
+PROVENANCE banner in `backend/internal/payroll/payroll.go`.

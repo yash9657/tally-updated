@@ -207,19 +207,49 @@ func (s *Server) companyAuthMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// voucherDateFromRequest peeks the voucher_date out of a write body so the PDP
-// can apply the back-dated cutoff, WITHOUT consuming the body the handler reads.
-// It rewinds the body via a tee. To keep the body re-readable for the handler,
-// it only inspects writes and restores r.Body. Returns nil when the date is
-// absent/unparseable (the cutoff then does not apply).
+// voucherDateFromRequest peeks a write body's voucher date out so the PDP can
+// apply the back-dated cutoff, WITHOUT consuming the body the handler reads.
+// It snapshots and restores r.Body. Returns nil when the date is absent or
+// unparseable (the cutoff then does not apply).
+//
+// IT IS ROUTE-AWARE FOR ONE ROUTE, AND THAT IS NOT A SPECIAL CASE FOR ITS OWN
+// SAKE. POST /vouchers/payroll is the only voucher write that does NOT carry
+// `voucher_date` on the wire: a pay run is identified by `wage_month` and the
+// voucher is dated the last day of it. Reading only `voucher_date` therefore
+// left the pay run with NO date in the PDP request, and cutoffDeny skips
+// entirely when the date is nil — so the cutoff was inert on the most sensitive
+// voucher in the product. See peekPayrollVoucherDate for why the answer is to
+// derive the date from wage_month rather than to add a second field carrying it.
+//
+// The route is matched on the SUFFIX, exactly as routeAction matches it, so the
+// two cannot disagree about which request is a pay run.
 func voucherDateFromRequest(r *http.Request, act authz.Action) *time.Time {
 	if !act.IsWrite() {
 		return nil
 	}
+	// WHICH REQUEST IS A PAY RUN MUST BE DECIDED THE SAME WAY routeAction
+	// DECIDES IT. routeAction reaches the pay-run handler via splitPath, which
+	// trims surrounding slashes; an exact `routeSuffix(r) == "/vouchers/payroll"`
+	// comparison does not. Today the two agree on every path chi will actually
+	// route. But the moment anything normalises paths — chi's StrictSlash, a
+	// path-cleaning middleware, a reverse proxy collapsing "//" to "/" — a
+	// variant path would still reach handlePayrollRun while THIS test missed it,
+	// and the back-dated cutoff would silently switch off for exactly the
+	// voucher it was just fixed to cover. One notion of route identity.
+	payRunSegs := splitPath(routeSuffix(r))
+	isPayRun := len(payRunSegs) == 2 && payRunSegs[0] == "vouchers" && payRunSegs[1] == "payroll"
 	// Cap and snapshot the body, then restore it so the handler re-reads it.
 	body := drainBody(r)
 	if body == nil {
+		if isPayRun {
+			// No body at all on a pay run: the wage month cannot be determined,
+			// so refuse rather than skip the cutoff. See peekPayrollVoucherDate.
+			return beforeEveryCutoff()
+		}
 		return nil
+	}
+	if isPayRun {
+		return peekPayrollVoucherDate(body)
 	}
 	d := peekVoucherDate(body)
 	if d == nil {
@@ -248,6 +278,16 @@ func voucherDateFromRequest(r *http.Request, act authz.Action) *time.Time {
 //	POST  .../price-lists                                    -> Create/price-list
 //	POST  .../import/tally-xml                               -> Create/import
 //	POST  .../sync/commit                                    -> Create/sync
+//	GET   .../itc-reconciliation|ims-inbox                   -> Display/report:NAME
+//	POST  .../gstr2b-import                                  -> Create/inward-statement
+//	POST  .../ims-actions                                    -> Create/ims-action
+//	POST  .../gst-filings                                    -> Create/gst-filing
+//	GET   .../employees                                      -> Display/employee
+//	POST  .../employees                                      -> Create/employee
+//	POST  .../vouchers/payroll                               -> Create/payroll
+//	GET   .../payroll-register|payroll-payslip
+//	GET   .../payroll-form-138|payroll-pf-ecr
+//	GET   .../payroll-esi-return                             -> Display/report:NAME
 //
 // An unmatched route returns mapped=false (default-deny).
 func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName string, mapped bool) {
@@ -412,6 +452,47 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 	// EVERY POST /query would 403 even for an Owner.
 	case method == http.MethodPost && rest == "/query":
 		return authz.Display, "query", "", true
+
+	// The EMPLOYEE MASTER (Track 3). It is deliberately NOT in isMasterPath: the
+	// seeded Data Entry level holds `allow display master` (migration 0022) so
+	// the F9 party picker works, and folding employees into that token would
+	// hand every operator the PAN, UAN, ESIC IP number and bank IFSC of every
+	// person in the company by inheritance. See authz.KnownResources' "employee"
+	// entry and migration 0035, which disallows create/alter/display on it.
+	//
+	// Read and write emit the SAME resource and differ only by ACTION, for the
+	// reason the master collections do: the moment a read and a write disagree
+	// about which resource they are, one ACL rule stops governing both and a
+	// `display` grant can start carrying a `create`. The POST is a write, so it
+	// correctly inherits the back-dated cutoff and the WebAuthn step-up; the GET
+	// is a Display and inherits neither.
+	case rest == "/employees":
+		switch method {
+		case http.MethodGet:
+			return authz.Display, "employee", "", true
+		case http.MethodPost:
+			return authz.Create, "employee", "", true
+		}
+		return "", "", "", false
+
+	// The three ITC/IMS WRITES (Track 2). Each gets its OWN resource token —
+	// see authz.KnownResources for why three and not one. All three are Creates
+	// (each appends a row: a statement, an IMS action, a filing record), so all
+	// three inherit the back-dated cutoff and the Owner level's WebAuthn
+	// step-up, which is the right side of that line for writes that decide how
+	// much input tax credit is claimed.
+	//
+	// Migration 0033 seeds NO rule for any of them and does not need to: the
+	// seeded Data Entry level's default_access is 'none', so a resource no rule
+	// names is already denied. The coarse `allow display report` leak that forced
+	// 0033 to write two rows applies ONLY to report:NAME, and none of these three
+	// is a report.
+	case method == http.MethodPost && rest == "/gstr2b-import":
+		return authz.Create, "inward-statement", "", true
+	case method == http.MethodPost && rest == "/ims-actions":
+		return authz.Create, "ims-action", "", true
+	case method == http.MethodPost && rest == "/gst-filings":
+		return authz.Create, "gst-filing", "", true
 	}
 	return "", "", "", false
 }
@@ -507,7 +588,30 @@ func isVoucherClass(c string) bool {
 		// through the SAME code that applies them to an invoice. A parallel
 		// /stock-vouchers/ subtree would have been a second seam to keep in
 		// step, and the one that drifted would be the unguarded one.
-		"delivery-note", "receipt-note", "stock-journal", "physical-stock":
+		"delivery-note", "receipt-note", "stock-journal", "physical-stock",
+		// The PAY RUN (Track 3). It rides /vouchers/payroll so the class is
+		// fixed by the path and the PDP mapping and the WebAuthn step-up reach
+		// it through the SAME code that reaches an invoice. A parallel
+		// /payroll-runs subtree would be a second seam to keep in step, and the
+		// one that drifted would be the unguarded one — on the most sensitive
+		// voucher in the product.
+		//
+		// THE BACK-DATED CUTOFF IS THE EXCEPTION, AND THIS COMMENT USED TO CLAIM
+		// OTHERWISE. Sharing the path is NOT enough to inherit it: the cutoff
+		// needs the voucher's DATE, and every other class supplies that as
+		// `voucher_date` on the wire while a pay run supplies `wage_month`. For
+		// a while the PDP therefore saw no date on a pay run and cutoffDeny
+		// skipped it entirely — an owner who closed a filed period still had
+		// salaries posted into it. voucherDateFromRequest now derives the date
+		// from wage_month with payrolldb.LastDayOf, the same rule the posting
+		// uses. Anything else mounted here that dates itself from something
+		// other than `voucher_date` needs the same treatment; the path alone
+		// will not give it.
+		//
+		// There is no PUT /vouchers/payroll/{id} today, so `alter payroll` names
+		// no route yet; migration 0035 disallows it anyway, which is the
+		// fail-closed order.
+		"payroll":
 		return true
 	}
 	return false
@@ -584,6 +688,55 @@ func reportName(rest string) string {
 		return "batch-summary"
 	case "/stock-item-vouchers":
 		return "stock-item-vouchers"
+
+	// ITC reconciliation and the IMS inbox (Track 2, handler_itc.go). Both are
+	// Displays over report:NAME on the same terms as everything above: READ-ONLY,
+	// so neither may inherit the back-dated write cutoff or the WebAuthn step-up
+	// (both gate on Action.IsWrite(), which is false for Display). The person who
+	// signs the return reads the reconciliation all day; asking them for a second
+	// factor to look at it would be as wrong as asking for one to open the Trial
+	// Balance. The three ITC WRITES are mapped separately in routeAction and DO
+	// gate, which is where that distinction belongs.
+	//
+	// Migration 0033 seeds `disallow display report:itc-reconciliation` and
+	// `disallow display report:ims-inbox` on the seeded Data Entry level, and
+	// those rows are the reason these two lines do not silently hand every
+	// operator in every tenant the supplier book: 0011's coarse
+	// `allow display report` matches any report:NAME at specificity 1, and the
+	// seeded disallow beats it at specificity 2.
+	case "/itc-reconciliation":
+		return "itc-reconciliation"
+	case "/ims-inbox":
+		return "ims-inbox"
+
+	// The five PAYROLL reports (Track 3, handler_payroll.go). Read-only, exactly
+	// as above: no back-dated cutoff and no step-up, because Action.IsWrite() is
+	// false for Display. Note that three of the five stream a ZIP rather than
+	// JSON — a statutory file plus its disclosure sidecar — and that changes
+	// nothing here: producing a file is still a Display of what is already in the
+	// books, and it writes nothing.
+	//
+	// EVERY SEGMENT IS A FLAT LITERAL EQUAL TO ITS REPORT NAME, and migration
+	// 0035's header — which writes them as ".../reports/payroll-register" — is
+	// wrong about that. TestReportVocabularyMatchesRouter asks routeAction for
+	// GET /v1/companies/{id}/<name> for every name in authz.KnownReportNames, so
+	// a nested route would leave five vocabulary entries no route serves: five
+	// `disallow` rows an administrator can write that can never match, which for
+	// payroll is the silent-wrong-answer bug at its most expensive.
+	//
+	// Migration 0035 seeds all five disallows for the seeded Data Entry level.
+	// Without them the coarse `allow display report` from 0011 would hand every
+	// operator the whole wage bill the moment these routes mounted.
+	case "/payroll-register":
+		return "payroll-register"
+	case "/payroll-payslip":
+		return "payroll-payslip"
+	case "/payroll-form-138":
+		return "payroll-form-138"
+	case "/payroll-pf-ecr":
+		return "payroll-pf-ecr"
+	case "/payroll-esi-return":
+		return "payroll-esi-return"
 	}
 	return ""
 }

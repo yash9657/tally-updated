@@ -42,6 +42,20 @@ var KnownVoucherClasses = []Resource{
 	// receive goods but may not restate the count" impossible to express, and
 	// that is precisely the distinction migration 0031 draws.
 	"delivery-note", "receipt-note", "stock-journal", "physical-stock",
+	// The PAY RUN (migration 0034/0035, internal/ledger/payroll_class.go). It
+	// rides /vouchers/payroll exactly as an invoice rides /vouchers/sales, and
+	// it posts real balanced double entry — so it is a voucher class and not
+	// something else.
+	//
+	// WHY IT IS NOT FOLDED INTO "journal". A pay run's postings ARE the wage
+	// bill: gross to Salaries & Wages, the PF/ESI/TDS liabilities, the net to
+	// each payable. Borrowing the `journal` token would mean the one rule a
+	// supervisor writes to let an operator key adjustment journals ALSO lets
+	// them create, alter and read what the company pays its staff — and there
+	// is no `journal:NAME` narrowing form with which to take it back. Its own
+	// token is what makes migration 0035's `disallow create|alter|display
+	// payroll` a rule anybody can write at all.
+	"payroll",
 }
 
 // KnownResources is every non-report resource token an acl_rule may carry (plus
@@ -70,6 +84,50 @@ var KnownResources = append([]Resource{
 	// unwritable rule. A separate token costs one line here and buys the
 	// administrator a lever; see migration 0031 for the judgement it enables.
 	"price-list",
+
+	// The EMPLOYEE MASTER (migrations 0034/0035).
+	//
+	// WHY IT IS NOT `master`, WHICH IS THE MISTAKE THIS LINE EXISTS TO PREVENT.
+	// Migration 0022 grants the seeded Data Entry level `allow display master`
+	// so the F9 party picker works at all. Folding employees into that token
+	// would hand every operator in every tenant the PAN, UAN, ESIC IP number,
+	// bank IFSC and account last-4 of every person in the company — by
+	// inheritance, without anybody deciding to, and with no `master:NAME` form
+	// in which to narrow it back afterwards. Unlike a cost price, a leak here is
+	// somebody's identity rather than somebody's margin. Its own token is what
+	// makes migration 0035's `disallow create|alter|display employee` a rule an
+	// administrator can write at all.
+	"employee",
+
+	// The three ITC / IMS WRITES (migrations 0032/0033, handler_itc.go).
+	//
+	// All three are default-DENIED for the seeded Data Entry level already —
+	// that level's default_access is 'none' and no rule names them — which is
+	// exactly why migration 0033 seeds nothing for them and needs no successor.
+	// They are named HERE because routeAction must emit them, and a token the
+	// router emits but the vocabulary rejects is a route no ACL rule can ever
+	// govern: only default_access could reach it, so an owner could never
+	// delegate it and never take it back.
+	//
+	// THEY ARE THREE TOKENS AND NOT ONE, because they are three different
+	// authorities and a single `itc` token would make each separation
+	// unwritable:
+	//
+	//	inward-statement — uploading the monthly GSTR-2A/2B file. Clerical, and
+	//	  the one of the three an owner might plausibly delegate: it asserts
+	//	  nothing, it only makes the portal's own document available to match
+	//	  against. Named for gst_inward_statement, the row it creates.
+	//	ims-action — ACCEPT / REJECT / PENDING on a supplier document. This is
+	//	  what decides whether real input tax credit is claimed: rejecting a
+	//	  genuine invoice forfeits money, and accepting one that should not be
+	//	  accepted claims credit that is not ours, which is the direction that
+	//	  draws a notice and interest. Whoever may upload the file must not get
+	//	  this by the same rule.
+	//	gst-filing — recording that the return was FILED, which stamps the IMS
+	//	  freeze for the period (GSTN IMS FAQ 12): after it, no IMS action counts
+	//	  at all. It is the irreversible one, and it belongs to whoever signs the
+	//	  return.
+	"inward-statement", "ims-action", "gst-filing",
 }, KnownVoucherClasses...)
 
 // KnownReportNames is every report a rule may name via the "report:NAME" form.
@@ -101,6 +159,48 @@ var KnownReportNames = []string{
 	// Summary's exposure exactly, and migration 0028 seeds the matching
 	// disallows on the Data Entry level.
 	"stock-movement", "godown-summary", "batch-summary", "stock-item-vouchers",
+
+	// ITC reconciliation and the IMS inbox (migration 0033, which seeds the
+	// matching `disallow display` rows for the seeded Data Entry level).
+	//
+	// Each is named individually rather than sharing an "itc" report name for
+	// the reason every entry above is: the two are different disclosures and an
+	// owner should be able to hold one without the other.
+	//
+	//	itc-reconciliation — every line carries a NAMED SUPPLIER, their GSTIN,
+	//	  the invoice number and date they issued and the taxable value we paid,
+	//	  for every purchase in the period, with the arithmetic already done. It
+	//	  is the whole supplier book and the purchase prices in one export —
+	//	  strictly a sharper disclosure than the averaged cost the stock reports
+	//	  above leak.
+	//	ims-inbox — the filer's working paper: which supplier documents are
+	//	  unmatched and what we did about each. Naming it separately is what lets
+	//	  an owner grant the worklist to a compliance clerk while withholding the
+	//	  priced reconciliation, or the reverse.
+	"itc-reconciliation", "ims-inbox",
+
+	// PAYROLL: the register, one payslip, and the three STATUTORY FILES
+	// (migration 0035, which seeds `disallow display` for all five).
+	//
+	// These are the least generous defaults in the product and the entries here
+	// are what make that default expressible. Each is named on its own because
+	// the five are five different disclosures at five different grains, and one
+	// shared name would make "the payroll clerk may produce the monthly ECR but
+	// may not open anybody's payslip" an unwritable rule:
+	//
+	//	payroll-register    — every employee's gross, deductions and net.
+	//	payroll-payslip     — ONE employee's, in full, including the components.
+	//	payroll-form-138    — PAN + salary + TDS, per person, per quarter.
+	//	payroll-pf-ecr      — UAN + wages, per person, per month.
+	//	payroll-esi-return  — IP number + wages + last working day, per person.
+	//
+	// Four of the five are statutory OUTPUTS. Statutory output and payroll are
+	// more sensitive than the cost book: salaries and PAN/UAN/IP numbers are not
+	// "reports an operator may see by inheritance", which is precisely what
+	// 0011's coarse `allow display report` would otherwise make them the day
+	// these routes mount.
+	"payroll-register", "payroll-payslip", "payroll-form-138",
+	"payroll-pf-ecr", "payroll-esi-return",
 }
 
 // ValidAction reports whether a is a legal rule action (Wildcard included).

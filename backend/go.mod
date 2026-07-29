@@ -8,6 +8,7 @@ require (
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/shopspring/decimal v1.4.0
 	github.com/zeebo/blake3 v0.2.4
+	golang.org/x/text v0.29.0
 )
 
 require (
@@ -16,5 +17,4 @@ require (
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/klauspost/cpuid/v2 v2.0.12 // indirect
 	golang.org/x/sync v0.17.0 // indirect
-	golang.org/x/text v0.29.0 // indirect
 )

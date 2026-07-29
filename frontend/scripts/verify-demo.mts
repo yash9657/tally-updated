@@ -67,6 +67,55 @@ function findNode(nodes: readonly TreeNode[], name: string): string | null {
   return null;
 }
 
+/**
+ * MONEY IS A SCALED INTEGER HERE, NEVER A FLOAT.
+ *
+ * The project rule is `decimal.Decimal` on the server and scaled integers on
+ * the client, and this gate used to be the one place that broke it: the P&L
+ * additivity check ran `parseFloat` through `Math.round(x * 10000)` and then
+ * compared with a 0.00005 tolerance. That is wrong for two reasons and only one
+ * of them is about drift.
+ *
+ *   1. A tolerance turns an EXACT algebraic identity into an approximate one.
+ *      Additivity is not "these two numbers are close"; the halves sum to the
+ *      whole EXACTLY, because both sides are sums of the same decimal postings.
+ *      A tolerance is headroom for a bug to hide in.
+ *   2. A double carries 53 bits of mantissa, so `x * 10000` is exact only while
+ *      the scaled value stays under 2^53 — about 900 billion rupees. The demo's
+ *      figures are five and six digits, so the float arithmetic HAPPENS to be
+ *      exact today. The headroom shrinks with the size of the books, and a gate
+ *      that is correct only for small companies is not a gate. We remove the
+ *      float because of the RULE, not because we watched it drift.
+ *
+ * Everything cored emits for money is `decimal.StringFixed(4)` — a plain,
+ * optionally-signed decimal with exactly four fraction digits. Ten-thousandths
+ * of a rupee is therefore the natural integer unit, and BigInt has no upper
+ * bound to run out of.
+ */
+function money4(s: string): bigint {
+  const m = /^([+-]?)(\d+)(?:\.(\d*))?$/.exec(s.trim());
+  if (m === null) throw new Error(`money4: unparseable amount ${JSON.stringify(s)}`);
+  const frac = m[3] ?? "";
+  // Pad to exactly four digits. Truncating a NON-ZERO fifth digit would make
+  // this gate silently disagree with the books, so refuse instead: a verifier
+  // that cannot represent a figure must not pretend it checked it.
+  if (frac.length > 4 && /[1-9]/.test(frac.slice(4))) {
+    throw new Error(
+      `money4: ${JSON.stringify(s)} carries more than 4 decimal places; ` +
+        `cored emits StringFixed(4), so this is a contract change, not a rounding question`,
+    );
+  }
+  const scaled = BigInt(m[2]!) * 10000n + BigInt(frac.padEnd(4, "0").slice(0, 4));
+  return m[1] === "-" ? -scaled : scaled;
+}
+
+/** Render a scaled integer back as the 4-dp string the server would have sent. */
+function money4str(n: bigint): string {
+  const neg = n < 0n;
+  const a = neg ? -n : n;
+  return `${neg ? "-" : ""}${a / 10000n}.${(a % 10000n).toString().padStart(4, "0")}`;
+}
+
 /** GET a JSON endpoint on cored that the typed client does not expose. */
 async function getJSON<T>(path: string, headers: Record<string, string>): Promise<T> {
   const res = await fetch(`${baseUrl}${path}`, { headers });
@@ -179,30 +228,110 @@ async function main(): Promise<void> {
       : `leaked: ${leaked.map((p) => p.ctin).join(", ")}`,
   );
 
-  // --- 8. GSTR-3B ITC ties to the input-tax ledgers ----------------------
-  // INDEPENDENT ORACLE: the return's ITC vs the actual balances sitting in the
-  // Input CGST/SGST/IGST ledgers, read from the Trial Balance.
-  // GSTR-3B has no typed client method; fetch it directly.
+  // --- 8. GSTR-3B table 4 ties to the input-tax ledgers -------------------
+  //
+  // THIS CHECK USED TO BE `itc_net == the Input-tax ledger balances`, AND THAT
+  // COMPARISON IS NOW WRONG — not stale, WRONG, in the specific sense that it
+  // goes red on CORRECT behaviour. Once a supplier's failure to file can
+  // produce a table-4(B) reversal, the NET ITC (4C) is deliberately LESS than
+  // what the books posted, and the difference is the right answer. A gate that
+  // reddens on the right answer is worse than no gate: the cheapest way to make
+  // it green again is to stop reversing.
+  //
+  // What replaces it is the pair of identities the return is actually built on,
+  // and between them they are STRICTLY STRONGER than the old single comparison
+  // (which they reduce to exactly when nothing is reversed and nothing is
+  // ineligible):
+  //
+  //   (I1) sum(4A) + sum(4D) == the Input CGST/SGST/IGST ledger balances.
+  //        Every rupee of posted input tax lands in exactly one of "available"
+  //        and "never was available". This is the tie to the BOOKS and it is
+  //        the reason 4(A) reports what we posted rather than what the supplier
+  //        filed — reversals move credit out of 4(C), never out of 4(A).
+  //   (I2) 4C == sum(4A) - sum(4B). 4(D) is NOT subtracted: post-Notification
+  //        14/2022 it is informational, and taking it out twice would
+  //        understate claimable credit.
+  //
+  // Both are exact, head by head, in SCALED INTEGERS — see money4. The old code
+  // in this block parsed the four figures as doubles and compared them at
+  // toFixed(4), against the project's own rule; (I2) is a SUBTRACTION, which is
+  // exactly where that stops being a style point and starts being drift.
   const g3b = await getJSON<{
-    itc_elg: { itc_net: { camt: string; samt: string; iamt: string } };
+    itc_elg: {
+      itc_avl?: { ty: string; camt: string; samt: string; iamt: string }[];
+      itc_rev?: { ty: string; camt: string; samt: string; iamt: string }[];
+      itc_net: { camt: string; samt: string; iamt: string };
+      itc_inelg?: { ty: string; camt: string; samt: string; iamt: string }[];
+    };
+    disclosures?: string[];
   }>(`/v1/companies/${co}/gstr3b?from=${FY.from}&to=${FY.to}`, headers);
-  const ledgerNet = (name: string): string => {
+
+  type Head = "camt" | "samt" | "iamt";
+  const HEADS: { head: Head; ledger: string }[] = [
+    { head: "camt", ledger: "Input CGST" },
+    { head: "samt", ledger: "Input SGST" },
+    { head: "iamt", ledger: "Input IGST" },
+  ];
+  /** Net Dr-Cr balance of a Trial Balance row, as a scaled integer. */
+  const ledgerNet = (name: string): bigint => {
     const row = tb.rows.find((r) => r.ledger === name);
-    if (!row) return "0.0000";
-    return (parseFloat(row.debit) - parseFloat(row.credit)).toFixed(4);
+    if (!row) return 0n;
+    return money4(row.debit) - money4(row.credit);
   };
-  const itc = g3b.itc_elg.itc_net;
-  const itcMatches =
-    parseFloat(itc.camt).toFixed(4) === ledgerNet("Input CGST") &&
-    parseFloat(itc.samt).toFixed(4) === ledgerNet("Input SGST") &&
-    parseFloat(itc.iamt).toFixed(4) === ledgerNet("Input IGST");
-  const itcTotal =
-    parseFloat(itc.camt) + parseFloat(itc.samt) + parseFloat(itc.iamt);
+  /** Sum one tax head across a table-4 row set, as a scaled integer. */
+  const sumHead = (
+    rows: { camt: string; samt: string; iamt: string }[] | undefined,
+    head: Head,
+  ): bigint => (rows ?? []).reduce((a, r) => a + money4(r[head]), 0n);
+
+  const t4 = g3b.itc_elg;
+  const booksBreaks: string[] = [];
+  const internalBreaks: string[] = [];
+  let availTotal = 0n;
+  for (const { head, ledger } of HEADS) {
+    const avl = sumHead(t4.itc_avl, head);
+    const rev = sumHead(t4.itc_rev, head);
+    const inelg = sumHead(t4.itc_inelg, head);
+    availTotal += avl;
+    const posted = ledgerNet(ledger);
+    if (avl + inelg !== posted) {
+      booksBreaks.push(
+        `${ledger}: 4A ${money4str(avl)} + 4D ${money4str(inelg)} = ${money4str(avl + inelg)} vs posted ${money4str(posted)}`,
+      );
+    }
+    if (avl - rev !== money4(t4.itc_net[head])) {
+      internalBreaks.push(
+        `${head}: 4A ${money4str(avl)} - 4B ${money4str(rev)} = ${money4str(avl - rev)} vs 4C ${t4.itc_net[head]}`,
+      );
+    }
+  }
   check(
-    "GSTR-3B ITC == the balance in the Input CGST/SGST/IGST ledgers",
-    itcMatches && itcTotal > 0,
-    `return c=${itc.camt} s=${itc.samt} i=${itc.iamt} (total ${itcTotal.toFixed(2)}) | ` +
-      `ledgers c=${ledgerNet("Input CGST")} s=${ledgerNet("Input SGST")} i=${ledgerNet("Input IGST")}`,
+    "GSTR-3B (I1): sum(4A) + sum(4D) == the Input CGST/SGST/IGST ledger balances",
+    booksBreaks.length === 0 && availTotal > 0n,
+    booksBreaks.length > 0
+      ? booksBreaks.join("; ")
+      : availTotal > 0n
+        ? HEADS.map(
+            ({ head, ledger }) =>
+              `${ledger} ${money4str(ledgerNet(ledger))} = 4A ${money4str(sumHead(t4.itc_avl, head))} + 4D ${money4str(sumHead(t4.itc_inelg, head))}`,
+          ).join(" | ")
+        : "VACUOUS: table 4(A) is entirely zero, so this identity proves nothing",
+  );
+  check(
+    "GSTR-3B (I2): 4C == sum(4A) - sum(4B), and 4(D) is NOT subtracted",
+    internalBreaks.length === 0,
+    internalBreaks.length === 0
+      ? `4C c=${t4.itc_net.camt} s=${t4.itc_net.samt} i=${t4.itc_net.iamt} from ` +
+        `4A c=${money4str(sumHead(t4.itc_avl, "camt"))} less 4B c=${money4str(sumHead(t4.itc_rev, "camt"))}` +
+        ` (4D c=${money4str(sumHead(t4.itc_inelg, "camt"))} deliberately excluded)`
+      : internalBreaks.join("; "),
+  );
+  // The return must be able to SAY it is not filing-ready. A frontend that
+  // cannot read that flag will present an unreconciled 3B as final.
+  check(
+    "GSTR-3B declares its own limitations in `disclosures`",
+    (g3b.disclosures ?? []).includes("not-filing-ready"),
+    `disclosures: ${(g3b.disclosures ?? []).join(", ") || "(none)"}`,
   );
 
   // --- 9. An ALTERED sales voucher stays in the GST returns ---------------
@@ -320,16 +449,64 @@ async function main(): Promise<void> {
   // -------------------------------------------------------------------------
   const asAt = ["2026-04-30", "2026-05-31", "2026-06-30", "2026-07-31", FY.to];
   const unbalanced: string[] = [];
+  const stockMismatch: string[] = [];
+  const stockSeen: string[] = [];
+  let closingStockAtYearEnd: string | null = null;
   for (const d of asAt) {
     const b = await client.getBalanceSheet(co, d);
     if (!b.balanced) unbalanced.push(`${d} (A ${b.assets.total} / L ${b.liabilities.total})`);
     const t = await client.getTrialBalance(co, d);
     if (!t.balanced) unbalanced.push(`TB ${d} (Dr ${t.total_debit} / Cr ${t.total_credit})`);
+
+    // TWO INDEPENDENT PATHS over the stock plane — see the check below for why
+    // the BALANCE check above cannot stand in for this one.
+    const ss = await client.getStockSummary(co, d);
+    const node = findNode(b.assets.nodes as unknown as TreeNode[], "Closing Stock");
+    if (d === FY.to) closingStockAtYearEnd = node;
+    stockSeen.push(`${d} BS=${node ?? "ABSENT"} SS=${ss.total_value}`);
+    if (node === null) {
+      // ABSENT is a distinct outcome from "0.0000" and it is checked on its own:
+      // the demo seed puts stock on hand at every one of these dates, so an
+      // absent node means the fold-in did not happen at all — which the string
+      // comparison below could never report, because there is no string.
+      stockMismatch.push(`${d}: Closing Stock ABSENT from the Balance Sheet while the Stock Summary values the position at ${ss.total_value}`);
+    } else if (node !== ss.total_value) {
+      stockMismatch.push(`${d}: BS ${node} vs Stock Summary ${ss.total_value}`);
+    }
   }
   check(
     "Balance Sheet and Trial Balance BALANCE at every month-end of the year",
     unbalanced.length === 0,
     unbalanced.length === 0 ? `${asAt.length} dates checked, all balanced` : unbalanced.join("; "),
+  );
+
+  // WHY THE CHECK ABOVE IS NOT ENOUGH, AND WHY THIS ONE EXISTS.
+  //
+  // Closing stock folds into the Balance Sheet by adding the SAME amount S to
+  // two places: to Assets, and to the net-profit accumulator that lands in
+  // Liabilities. Write out the difference the `balanced` flag tests:
+  //
+  //     (Assets + S) - (Liabilities + NetProfit + S)  =  Assets - Liabilities - NetProfit
+  //
+  // S cancels. The sheet therefore FOOTS FOR ANY VALUE OF S — the right one, one
+  // off by a factor of ten, one computed at the wrong date, or zero. `balanced`
+  // can catch exactly one bug class, an ASYMMETRIC fold-in (the asset without
+  // the P&L term, or the two terms taken at different dates), and nothing more.
+  // It is structurally incapable of catching a wrong NUMBER. Keep it — it is a
+  // real check of a real property — but never treat it as cover for this one.
+  //
+  // So the number is pinned the way this file pins Debtors and Creditors: by a
+  // SECOND INDEPENDENT PATH. The Balance Sheet's Closing Stock node and the
+  // Stock Summary's total_value both replay the movement ledger, but they are
+  // reached through different report code and different handlers, and both are
+  // rendered with decimal StringFixed(4) — so they must agree to the BYTE. No
+  // tolerance, no parseFloat, no "close enough".
+  check(
+    "Balance Sheet Closing Stock == the Stock Summary at every month-end (TWO INDEPENDENT PATHS)",
+    stockMismatch.length === 0,
+    stockMismatch.length === 0
+      ? `${asAt.length} dates agree exactly: ${stockSeen.join(" | ")}`
+      : stockMismatch.join("; "),
   );
 
   // A position BEFORE the books begin is empty, and an empty position balances.
@@ -338,6 +515,41 @@ async function main(): Promise<void> {
     "a Trial Balance dated before the books begin is empty, not an error",
     preBooks.balanced && parseFloat(preBooks.total_debit) === 0,
     `total_debit ${preBooks.total_debit} balanced=${preBooks.balanced}`,
+  );
+
+  // ...and the same must be true of the BALANCE SHEET, which until now this gate
+  // never fetched at a pre-books date at all — only the Trial Balance above.
+  //
+  // THIS IS A NAMED REGRESSION CLASS, NOT A HYPOTHETICAL. A live verifier once
+  // caught a Trial Balance dated 2020 reporting 520,000 of opening capital on
+  // books that begin in 2026: the opening balances were being folded in
+  // regardless of the as-on date. `queryBalances` suppresses the opening when
+  // `as_on < books_beginning_from` because of that bug. The inventory plane has
+  // its own opening — `stock_opening`, which carries NO date of its own because
+  // it is stated AS AT the books' beginning — and `loadStockOpenings` carries
+  // the matching cutoff. This check is what stops the fold-in reintroducing the
+  // bug on the stock side.
+  //
+  // ABSENT vs 0: `findNode` returns null for a node that is not in the tree and
+  // a string for one that is, so `=== null` distinguishes the two. Comparing
+  // against "0.0000" would pass just as happily on a zero-valued row that had
+  // changed the shape of the statement, which is a different (and also wrong)
+  // outcome. The seed's `stock_opening` row is what makes this non-vacuous: it
+  // is real stock that WOULD leak here if the cutoff were missing.
+  const preBooksBS = await client.getBalanceSheet(co, "2020-01-01");
+  const preBooksStock = findNode(
+    preBooksBS.assets.nodes as unknown as TreeNode[],
+    "Closing Stock",
+  );
+  check(
+    "a Balance Sheet dated before the books begin is empty — no opening stock leaks",
+    preBooksBS.balanced &&
+      preBooksStock === null &&
+      money4(preBooksBS.assets.total) === 0n,
+    `2020-01-01: assets.total ${preBooksBS.assets.total}, balanced=${preBooksBS.balanced}, ` +
+      `Closing Stock ${preBooksStock === null ? "ABSENT" : `PRESENT ${preBooksStock}`} ` +
+      `— while the SAME report at ${FY.to} carries Closing Stock ` +
+      `${closingStockAtYearEnd ?? "ABSENT"} on assets ${bs.assets.total}`,
   );
 
   // ...and a position AS AT the end of the year equals the unbounded one, since
@@ -352,17 +564,57 @@ async function main(): Promise<void> {
   );
 
   // ADDITIVITY: the P&L for two disjoint, exhaustive halves must sum to the year.
+  //
+  // WHAT ADDITIVITY MEANS ONCE STOCK IS IN THE STATEMENT. The stock term of a
+  // P&L over [d0,d1] is S(d0,d1) = ClosingStock(d1) - ClosingStock(d0 MINUS ONE).
+  // For two windows that MEET — [d0,d1] and [d1+1,d2] — the shared boundary
+  // value appears once positively and once negatively:
+  //
+  //     S(d0,d1) + S(d1+1,d2) = (CS(d1) - CS(d0-1)) + (CS(d2) - CS(d1))
+  //                           = CS(d2) - CS(d0-1) = S(d0,d2)
+  //
+  // and it cancels. That telescoping is the WHOLE reason the opening term is
+  // taken at d0 MINUS ONE rather than at d0: take it at d0 and the two halves no
+  // longer share a value, and they differ by whatever moved on d1+1 — which on
+  // these books is a real receipt note, so the identity below has something to
+  // detect. The other way to break it is `from == ""`, which means UNBOUNDED and
+  // must map the opening term to ZERO rather than to CS(""); CS("") is the whole
+  // warehouse, and subtracting it would understate gross profit by every rupee
+  // of inventory while the statement still footed.
+  //
+  // NOTE the identity holds for CONTIGUOUS windows only, which is why both of
+  // these checks split a single span at a seam rather than adding up months
+  // picked out of the year.
   const plYear = await client.getProfitLoss(co, FY.from, FY.to);
   const plH1 = await client.getProfitLoss(co, FY.from, "2026-06-30");
   const plH2 = await client.getProfitLoss(co, "2026-07-01", FY.to);
-  const sum = (
-    Math.round(parseFloat(plH1.net_profit) * 10000) +
-    Math.round(parseFloat(plH2.net_profit) * 10000)
-  ) / 10000;
+  const halvesSum = money4(plH1.net_profit) + money4(plH2.net_profit);
   check(
     "Profit & Loss is ADDITIVE: Apr–Jun + Jul–Mar equals the whole year",
-    Math.abs(sum - parseFloat(plYear.net_profit)) < 0.00005,
-    `${plH1.net_profit} + ${plH2.net_profit} = ${sum.toFixed(4)} vs year ${plYear.net_profit}`,
+    // EXACT, with no tolerance: see money4's header. Both sides are sums of the
+    // same decimal postings, so "close enough" is only ever room for a bug.
+    halvesSum === money4(plYear.net_profit),
+    `${plH1.net_profit} + ${plH2.net_profit} = ${money4str(halvesSum)} vs year ${plYear.net_profit}`,
+  );
+
+  // The same identity again, TIGHTENED ONTO THE SEAM. The split above is a real
+  // check but it is a blunt one: each half spans months of unrelated movement,
+  // so a wrong opening term is one small figure inside two large ones. Here both
+  // windows are a single month and they meet on 2026-07-01, the date the seed
+  // brings goods in — so the boundary position CS(2026-06-30) is non-zero and
+  // the two halves only agree with the whole if the opening stock of July is
+  // taken at 2026-06-30 and not at 2026-07-01. An off-by-one on that one
+  // subtraction moves this sum by exactly the value of the 1 July inward.
+  const plJun = await client.getProfitLoss(co, "2026-06-01", "2026-06-30");
+  const plJul = await client.getProfitLoss(co, "2026-07-01", "2026-07-31");
+  const plJunJul = await client.getProfitLoss(co, "2026-06-01", "2026-07-31");
+  const seamSum = money4(plJun.net_profit) + money4(plJul.net_profit);
+  check(
+    "P&L halves that meet on 2026-07-01 still sum — the opening stock is taken at d0 MINUS ONE",
+    seamSum === money4(plJunJul.net_profit),
+    `Jun ${plJun.net_profit} + Jul ${plJul.net_profit} = ${money4str(seamSum)} ` +
+      `vs Jun–Jul ${plJunJul.net_profit} ` +
+      `(difference ${money4str(seamSum - money4(plJunJul.net_profit))})`,
   );
 
   // A window with nothing in it is zero — not the whole year, which is what a

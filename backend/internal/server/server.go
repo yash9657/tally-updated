@@ -38,12 +38,14 @@ import (
 	"github.com/khata/cored/internal/authz"
 	"github.com/khata/cored/internal/compliance"
 	"github.com/khata/cored/internal/compliance/gstr"
+	"github.com/khata/cored/internal/compliance/itc"
 	"github.com/khata/cored/internal/identity"
 	"github.com/khata/cored/internal/ledger"
 	"github.com/khata/cored/internal/masters"
 	"github.com/khata/cored/internal/migration"
 	"github.com/khata/cored/internal/nlq"
 	"github.com/khata/cored/internal/notify"
+	"github.com/khata/cored/internal/payroll/payrolldb"
 	"github.com/khata/cored/internal/platform/db"
 	"github.com/khata/cored/internal/query"
 	"github.com/khata/cored/internal/reporting"
@@ -71,6 +73,15 @@ type Server struct {
 	sync     *sync.Service
 	query    *query.Service
 	router   chi.Router
+
+	// itc is input-tax-credit reconciliation: the GSTR-2B/2A inward statements
+	// ingested into gst_inward_statement + gst_inward_document (migration 0032),
+	// matched against purchase vouchers to decide what credit is claimable.
+	itc *itc.Service
+	// payroll is the employee master, the pay run and the register/payslip read
+	// models over the tables migration 0034 created. It posts salary vouchers
+	// through the SAME ledger service as everything else — never around it.
+	payroll *payrolldb.Service
 
 	// Auth (Task D, WS1). verifier verifies inbound JWTs; signer mints dev
 	// tokens for POST /auth/token; authStore + the PDP enforce membership and
@@ -176,7 +187,13 @@ func New(ctx context.Context, appDSN string) (*Server, error) {
 		// deterministic, shipped-by-default FakeTranslator. Either way the LLM emits
 		// ONLY the typed DSL; execution runs through the same read-only,
 		// company-GUC-scoped pool as every report, so the safety model is identical.
-		query:     query.NewService(pool, buildTranslator()),
+		query: query.NewService(pool, buildTranslator()),
+		// ITC reconciliation (0032) and payroll (0034). Both take the same
+		// tenant-scoped pool as gstr/query, so their transactions and RLS
+		// semantics are identical; payroll additionally takes the ONE ledger
+		// service l, because a pay run posts real double-entry vouchers.
+		itc:       itc.NewService(pool),
+		payroll:   payrolldb.NewService(pool, l),
 		verifier:  verifier,
 		signer:    signer,
 		authStore: authzStore,
@@ -568,6 +585,61 @@ func (s *Server) routes() {
 		// GST.
 		r.Get("/gstr1", s.handleGSTR1)
 		r.Get("/gstr3b", s.handleGSTR3B)
+
+		// INPUT TAX CREDIT: the books-vs-GSTR-2B reconciliation, the IMS
+		// worklist, and the three writes that feed them (handler_itc.go).
+		//
+		// THE TWO REPORT SEGMENTS ARE FLAT LITERALS SPELLING THEIR OWN REPORT
+		// NAMES, and they have to be: migration 0033 already seeds
+		// `disallow display report:itc-reconciliation` and `report:ims-inbox`
+		// for the seeded Data Entry level, and TestReportVocabularyMatchesRouter
+		// requires GET /v1/companies/{id}/<name> to resolve for every name in
+		// authz.KnownReportNames. A nested or renamed path would leave those two
+		// seeded rows matching nothing — an administrator's `disallow` that
+		// silently never fires, which is the one failure direction the closed
+		// vocabulary exists to prevent. An older handoff naming
+		// /gstr2b-reconciliation and /ims-worklist is wrong for that reason.
+		//
+		// The three POSTs are NOT reports and each carries its own resource
+		// token in routeAction (inward-statement / ims-action / gst-filing).
+		// They need no seeded rule: Data Entry's default_access is 'none', so a
+		// token no rule names is already denied — see migration 0033's header,
+		// which says so explicitly and deliberately seeds only the two reports.
+		r.Get("/itc-reconciliation", s.handleITCReconciliation)
+		r.Get("/ims-inbox", s.handleIMSInbox)
+		r.Post("/gstr2b-import", s.handleGSTR2BImport)
+		r.Post("/ims-actions", s.handleIMSAction)
+		r.Post("/gst-filings", s.handleGSTFiling)
+
+		// PAYROLL (handler_payroll.go, migrations 0034-0036).
+		//
+		// The employee master gets its OWN resource token rather than joining
+		// isMasterPath: Data Entry holds `allow display master` so the party
+		// picker works, and an employee row carries PAN, UAN, ESIC IP number and
+		// bank IFSC. See authz.KnownResources' "employee" entry.
+		//
+		// The pay run rides /vouchers/payroll like any other class, so the PDP
+		// mapping, the back-dated cutoff and the WebAuthn step-up reach it
+		// through the same code that reaches an invoice. It is a literal sibling
+		// of the other /vouchers/{class} POSTs and of GET /vouchers/{voucherID};
+		// chi's trie sorts static nodes ahead of param nodes at match time, and
+		// the methods differ besides, so there is no collision to order around.
+		//
+		// The five reports are flat literals equal to their report names, for
+		// the same reason the two ITC reports are — migration 0035's header
+		// writes them as ".../reports/payroll-register", and that nesting is
+		// illustrative and wrong. 0035 seeds all five `disallow display` rows
+		// plus the six for the two bare tokens, one wave BEFORE these routes, so
+		// the day the surface appears the operator is refused rather than
+		// admitted by 0011's coarse `allow display report`.
+		r.Post("/employees", s.handleCreateEmployee)
+		r.Get("/employees", s.handleListEmployees)
+		r.Post("/vouchers/payroll", s.handlePayrollRun)
+		r.Get("/payroll-register", s.handlePayrollRegister)
+		r.Get("/payroll-payslip", s.handlePayrollPayslip)
+		r.Get("/payroll-form-138", s.handlePayrollForm138)
+		r.Get("/payroll-pf-ecr", s.handlePayrollPFECR)
+		r.Get("/payroll-esi-return", s.handlePayrollESIReturn)
 
 		// Price lists (INV-L, migration 0030): handler_price_list.go.
 		//
@@ -2407,6 +2479,68 @@ func peekVoucherDate(body []byte) *time.Time {
 		return nil
 	}
 	return &d
+}
+
+// peekPayrollVoucherDate derives the PAY RUN's voucher date for the back-dated
+// cutoff check, from the only field that carries it: wage_month.
+//
+// ===========================================================================
+// WHY THE PAY RUN NEEDS ITS OWN PEEK
+// ===========================================================================
+// Every other voucher class puts its date on the wire as `voucher_date`, so
+// peekVoucherDate finds it and the cutoff applies. POST /vouchers/payroll does
+// not: payRunReq carries `wage_month` and the voucher is dated the LAST DAY of
+// that month, derived inside payrolldb. With only peekVoucherDate in the path
+// the PDP saw no date at all, cutoffDeny returned early, and the cutoff — the
+// one control an owner has over a closed period — was INERT on the single most
+// sensitive voucher in the product. A level created to run payroll could post
+// salaries into a wage month whose PF ECR, ESIC return and 24Q are already
+// filed, and the resulting ledger entries would appear in no filed return.
+//
+// ===========================================================================
+// WHY NOT JUST ADD voucher_date TO payRunReq
+// ===========================================================================
+// Because a client could then set it INDEPENDENTLY of wage_month. The posting
+// would still use wage_month while the cutoff judged voucher_date, the two
+// would drift, and the drift would be invisible — nothing compares them. One
+// field on the wire, one rule for the date: payrolldb.LastDayOf, called here
+// and by the posting path, is that one rule.
+//
+// ===========================================================================
+// A MALFORMED OR ABSENT wage_month REFUSES
+// ===========================================================================
+// It returns the ZERO time, which is before every cutoff a company could set,
+// so cutoffDeny denies. Refusing is the safe direction and the alternative is
+// not merely untidy: returning nil ("the cutoff does not apply") would make
+// `{"wage_month": "notamonth"}` a way to walk straight through a closed period.
+// The handler's own 400 for that month is no protection, because authorization
+// runs BEFORE the handler. Where no cutoff is set the zero time changes
+// nothing, and the request reaches the handler and gets its ordinary 400.
+func peekPayrollVoucherDate(body []byte) *time.Time {
+	var probe struct {
+		WageMonth string `json:"wage_month"`
+	}
+	if err := json.Unmarshal(body, &probe); err != nil {
+		return beforeEveryCutoff()
+	}
+	// parseWageMonth is the SAME parse handlePayrollRun applies to this field,
+	// so the PDP and the handler cannot disagree about which month was asked
+	// for — only about whether it is allowed.
+	m, err := parseWageMonth(probe.WageMonth)
+	if err != nil {
+		return beforeEveryCutoff()
+	}
+	d := payrolldb.LastDayOf(m.First())
+	return &d
+}
+
+// beforeEveryCutoff returns a date earlier than any cutoff an administrator
+// could set, so a write whose date could not be determined is REFUSED by
+// cutoffDeny rather than waved through. A fresh value each call: the caller
+// receives a pointer and must not be able to mutate a shared one.
+func beforeEveryCutoff() *time.Time {
+	var zero time.Time
+	return &zero
 }
 
 // optionalDecimal parses a possibly-empty decimal string, returning zero for an
