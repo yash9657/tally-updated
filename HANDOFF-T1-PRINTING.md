@@ -1,5 +1,16 @@
 # HANDOFF — T1 shipped; the road to Tally parity
 
+> ## ⚠️ START AT `HANDOFF-CLOSING-THE-GAP.md` INSTEAD.
+>
+> That file is the current entry point and carries the plan for everything that is left,
+> plus the **tasks that need a human with a browser** (§1 — the tax department blocks
+> automated downloads).
+>
+> **This file remains the authority on two things** and is still worth reading for them:
+> **§3 — the data-model-first procedure** every track must follow, and **§5 — how to work**,
+> including the DB-liveness and stale-process traps that have each invalidated a gate run.
+> Its §6 parity table is superseded by the newer file's §3.
+
 > **§2 IS DONE — T1's live gates ran on 2026-07-30 and every one passed.** See §1.3 for
 > the evidence and §2 for the corrected runbook. T1 is verified; you may build on it.
 >

@@ -85,8 +85,8 @@ const FEATURES: {
       },
       {
         name: "Bank reconciliation",
-        state: "off",
-        note: "Not built. A bank voucher carries no reconciliation date, so there is nowhere to record that a cheque you wrote on the 28th cleared on the 3rd — and without that one date there is no Bank Reconciliation Statement, no un-cleared list and no way to explain why the bank's balance is not the ledger's. The ledger balance you see is the BOOK balance in every case.",
+        state: "server",
+        note: "BUILT ON THE SERVER, NOT REACHABLE FROM THIS APP. Migration 0045 records the date the bank cleared each voucher leg, and GET /bank-reconciliation/{ledgerID} returns a full Bank Reconciliation Statement — balance per books, the un-cleared items with their age, balance per bank, and a difference that must be exactly zero to the paisa. Ticking an item off is PUT on that route. What is missing is the SCREEN: there is no bank-reconciliation key anywhere in this application, so an operator cannot use any of it without calling the server directly. Statement (CSV) import and automatic matching are slice 2 and are not built. Note also that reconciling never touches a voucher — an ALTER after clearing is reported as BROKEN, never silently absorbed.",
       },
       {
         name: "Interest on overdue bills",
