@@ -47,10 +47,64 @@ const (
 	appDSN   = "postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable"
 )
 
-// tenantTables are every table that carries company_id and must be RLS-locked.
+// tenantTables is the ORIGINAL SEVEN — the core ledger tables. It is kept as a
+// hand-written list because other tests below (notably the narrow-role probe)
+// depend on its exact membership rather than on "whatever carries company_id".
+//
+// IT IS NOT THE RLS COVERAGE LIST. Its doc comment used to claim it was "every
+// table that carries company_id", and that had rotted badly: at the time this
+// was corrected the database had 41 such tables and this list named 7, silently
+// omitting employee, payslip, price_list, print_template and more. The two RLS
+// assertions below therefore enumerate the LIVE CATALOGUE instead — see
+// everyCompanyScopedTable. Adding a name here does not extend RLS coverage.
 var tenantTables = []string{
 	"company", "account_group", "ledger", "voucher_type",
 	"voucher_version", "posting", "ledger_balance",
+}
+
+// everyCompanyScopedTable reads the live schema for every base table carrying a
+// company_id, which is what the RLS assertions must actually cover.
+//
+// ANTI-ROT BY CONSTRUCTION, and that is the entire point: a hand-maintained
+// list silently stops covering the table added last Tuesday, and a security
+// test that silently stops testing is worse than one that was never written —
+// it reports green over a hole. internal/platform/testdb derives its teardown
+// plan from this same catalogue for the same reason, so a new tenant table is
+// picked up by both with no registry edit.
+func everyCompanyScopedTable(t *testing.T, conn *pgx.Conn) []string {
+	t.Helper()
+	rows, err := conn.Query(context.Background(), `
+		SELECT c.table_name
+		  FROM information_schema.columns c
+		  JOIN information_schema.tables t
+		    ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+		 WHERE c.table_schema = 'public'
+		   AND c.column_name  = 'company_id'
+		   AND t.table_type   = 'BASE TABLE'
+		 ORDER BY c.table_name`)
+	if err != nil {
+		t.Fatalf("enumerate company-scoped tables: %v", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			t.Fatalf("scan table name: %v", err)
+		}
+		out = append(out, n)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("enumerate company-scoped tables: %v", err)
+	}
+	// A catalogue query that returned nothing would make every assertion below
+	// vacuously pass — the exact failure mode this function exists to prevent.
+	if len(out) < len(tenantTables) {
+		t.Fatalf("catalogue returned %d company-scoped tables, fewer than the %d core ones; "+
+			"the query is wrong and every RLS assertion built on it would be vacuous",
+			len(out), len(tenantTables))
+	}
+	return out
 }
 
 // harness holds the two adversary tenants and both privilege levels.
@@ -263,7 +317,7 @@ func TestAppRoleHasNoBypassRLS(t *testing.T) {
 func TestForceRowLevelSecurity(t *testing.T) {
 	skipIfNoDB(t)
 	h := setupHarness(t, 0, 0)
-	for _, tbl := range tenantTables {
+	for _, tbl := range everyCompanyScopedTable(t, h.admin) {
 		var enabled, forced bool
 		err := h.admin.QueryRow(context.Background(),
 			`SELECT relrowsecurity, relforcerowsecurity
@@ -287,7 +341,7 @@ func TestForceRowLevelSecurity(t *testing.T) {
 func TestEveryTenantTableHasIsolationPolicy(t *testing.T) {
 	skipIfNoDB(t)
 	h := setupHarness(t, 0, 0)
-	for _, tbl := range tenantTables {
+	for _, tbl := range everyCompanyScopedTable(t, h.admin) {
 		var usingExpr, withCheck string
 		err := h.admin.QueryRow(context.Background(),
 			`SELECT pg_get_expr(polqual, polrelid),

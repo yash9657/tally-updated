@@ -1239,8 +1239,11 @@ func TestTheUnimplementedReportsAreStillGovernableAndSaySo(t *testing.T) {
 			t.Errorf("the 501 for report %q does not name the report: %s", name, rec.Body.String())
 		}
 	}
-	if deferred != 14 {
-		t.Errorf("expected 14 deferred report names, saw %d: handler_print_reports.go's header "+
+	// 15 as of T4: the fourteen T1 recorded, plus bank-reconciliation, which is
+	// deferred for a design reason rather than an unwritten layout (the print
+	// route carries no ledger id — see handler_print_reports.go's header).
+	if deferred != 15 {
+		t.Errorf("expected 15 deferred report names, saw %d: handler_print_reports.go's header "+
 			"lists the deferred set explicitly and it is now out of step with "+
 			"authz.KnownReportNames", deferred)
 	}
@@ -1827,7 +1830,7 @@ var printAllowedByMigration0038 = []struct{ resource, cannotHandOver string }{
 		"the delivery note that TRAVELS WITH THE GOODS and that the transporter has to show"},
 }
 
-// printDisallowedByMigration0038 is every resource token 0038 seeds a
+// printDisallowedBySeededMigrations is every resource token 0038 seeds a
 // `disallow print` row for, with what each one discloses if the refusal is not
 // honoured. THIRTEEN rows: twelve report names and the pay run class.
 //
@@ -1835,7 +1838,12 @@ var printAllowedByMigration0038 = []struct{ resource, cannotHandOver string }{
 // this is the independent statement of what the product promises, so deleting a
 // row from 0038 makes a test fail rather than silently widening what an operator
 // can take out of the building.
-var printDisallowedByMigration0038 = []struct{ resource, discloses string }{
+// printDisallowedBySeededMigrations is every `disallow print` row the seeded
+// Data Entry level carries. Most come from migration 0038; the last comes from
+// 0046 (T4). The count is asserted, so a migration that adds or removes one
+// without updating this list fails LOUDLY — which is the point: a disclosure
+// nobody decided on is exactly what this test exists to catch.
+var printDisallowedBySeededMigrations = []struct{ resource, discloses string }{
 	{"report:payroll-register",
 		"every employee's gross, deductions and net pay, in one PDF"},
 	{"report:payroll-payslip",
@@ -1863,6 +1871,9 @@ var printDisallowedByMigration0038 = []struct{ resource, discloses string }{
 		"the rate of each individual purchase, stated outright rather than averaged"},
 	{"payroll",
 		"the pay run voucher itself — the wage bill as double entry"},
+	// From migration 0046 (T4), not 0038 — hence the variable's name below.
+	{"report:bank-reconciliation",
+		"the company's whole bank position: every un-cleared cheque, its age and its counterparty"},
 }
 
 // TestAnOwnerWritingOneConvenientAllowPrintStarStillCannotHandOverTheWageBill is
@@ -1907,17 +1918,17 @@ func TestAnOwnerWritingOneConvenientAllowPrintStarStillCannotHandOverTheWageBill
 	// The seeded rows must BE there. If migration 0038's seed is deleted or
 	// narrowed, this is where it is caught — before the behavioural assertions
 	// below, which would otherwise still pass on the specificity of nothing.
-	for _, d := range printDisallowedByMigration0038 {
+	for _, d := range printDisallowedBySeededMigrations {
 		if !seen.disallowPrint[d.resource] {
-			t.Errorf("migration 0038 seeds no `disallow print %s` row on the Data Entry level. "+
+			t.Errorf("no seeded migration writes a `disallow print %s` row on the Data Entry level. "+
 				"Nothing then stands between one convenient `allow print *` and %s",
 				d.resource, d.discloses)
 		}
 	}
-	if got := len(seen.disallowPrint); got != len(printDisallowedByMigration0038) {
-		t.Errorf("the seeded Data Entry level carries %d `disallow print` rows, want %d: the seed "+
-			"in migration 0038 and the list this test promises are out of step, so one of the two "+
-			"is a disclosure nobody has decided on", got, len(printDisallowedByMigration0038))
+	if got := len(seen.disallowPrint); got != len(printDisallowedBySeededMigrations) {
+		t.Errorf("the seeded Data Entry level carries %d `disallow print` rows, want %d: the seeds "+
+			"in migrations 0038/0046 and the list this test promises are out of step, so one of "+
+			"the two is a disclosure nobody has decided on", got, len(printDisallowedBySeededMigrations))
 	}
 
 	// THE CONVENIENCE RULE. Everything the level already had, plus `allow print *`.
@@ -1941,7 +1952,7 @@ func TestAnOwnerWritingOneConvenientAllowPrintStarStillCannotHandOverTheWageBill
 
 	// AND THE REFUSALS SURVIVE IT. Each of the twelve report names, and the pay run
 	// through its own class route.
-	for _, d := range printDisallowedByMigration0038 {
+	for _, d := range printDisallowedBySeededMigrations {
 		path := f.base + "/print/vouchers/payroll/" + f.payrollID
 		if name, isReport := strings.CutPrefix(d.resource, "report:"); isReport {
 			path = f.base + "/print/reports/" + name

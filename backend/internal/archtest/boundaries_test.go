@@ -62,6 +62,14 @@ var allowedDeps = map[string]map[string]bool{
 	// the pure compliance leaf (no I/O, safe inside the post transaction).
 	"internal/ledger":  {"internal/platform/db": true, "internal/compliance": true},
 	"internal/masters": {"internal/platform/db": true},
+	// banking (T4) is the WRITE side of bank reconciliation. It touches the db
+	// layer and NOTHING else — deliberately, and the empty-but-for-db set is the
+	// enforcement of the feature's central rule: reconciling records a fact about
+	// the BANK, and must never reach the ledger, a voucher or a balance. An edge
+	// to internal/ledger here would be the beginning of "while we are clearing
+	// this, also adjust the books", which is exactly what a reconciliation must
+	// not do. The read side lives in internal/reporting, which stays read-only.
+	"internal/banking": {"internal/platform/db": true},
 	// reporting gained internal/inventory with the Stock Summary. Stock VALUE is
 	// never stored: the report derives it by replaying the movement ledger through
 	// the pure valuer, so reporting MUST be able to call the leaf. The edge is
@@ -236,13 +244,19 @@ var allowedDeps = map[string]map[string]bool{
 	// TestNoProductionCodeImportsTestdb below is what forbids that.
 	"internal/platform/testdb": {},
 	"internal/server": {
-		"internal/platform/db":     true,
-		"internal/authn":           true,
-		"internal/authz":           true,
-		"internal/webauthn":        true,
-		"internal/ledger":          true,
-		"internal/masters":         true,
-		"internal/reporting":       true,
+		"internal/platform/db": true,
+		"internal/authn":       true,
+		"internal/authz":       true,
+		"internal/webauthn":    true,
+		"internal/ledger":      true,
+		"internal/masters":     true,
+		"internal/reporting":   true,
+		// Bank reconciliation (T4) is TWO edges because it is two halves: the
+		// read model lives in reporting (which stays read-only by its package
+		// contract) and the WRITE lives in banking. server is the composition
+		// root that owns both handlers, so it needs both. banking's own allowed
+		// set is {platform/db}, so the writer can never reach the ledger.
+		"internal/banking":         true,
 		"internal/forecast":        true,
 		"internal/query":           true,
 		"internal/nlq":             true,

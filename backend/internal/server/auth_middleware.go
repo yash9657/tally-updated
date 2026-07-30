@@ -499,6 +499,45 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 	case method == http.MethodGet && strings.HasPrefix(rest, "/print/"):
 		return printRouteAction(rest)
 
+	// Bank reconciliation (T4). ONE prefix, TWO authorities, and they are
+	// deliberately different resources rather than one:
+	//
+	//   GET    .../bank-reconciliation/{ledgerID}          -> Display/report:bank-reconciliation
+	//   PUT    .../bank-reconciliation/{ledgerID}/{v}/{n}  -> Alter/bank-reconciliation
+	//   DELETE .../bank-reconciliation/{ledgerID}/{v}/{n}  -> Alter/bank-reconciliation
+	//
+	// WHY THE READ AND THE WRITE DO NOT SHARE A RESOURCE TOKEN, when the masters
+	// arms above go to some trouble to make sure a read and a write DO:
+	//
+	// For a master, read and write are two authorities over the SAME OBJECT, so
+	// one token keeps one ACL rule governing both. Here they are authorities over
+	// DIFFERENT objects. Ticking one cheque off against a statement is clerical
+	// and moves nothing (invariant I-2). Reading the STATEMENT is the company's
+	// entire bank position — every un-cleared cheque and counterparty, the
+	// document a leaver walks out with. A single token would force those two to
+	// be granted together, and the only safe way to resolve that is to refuse the
+	// clerk the ability to reconcile at all, which deletes the feature.
+	//
+	// So: the write is Alter/bank-reconciliation (migration 0046 grants it to
+	// Data Entry) and the read is a REPORT, which 0046 explicitly DISALLOWS at
+	// specificity 2 so 0011's coarse `allow display report` cannot reach it.
+	//
+	// The write is an Alter and therefore IS a write, so it correctly inherits
+	// the back-dated cutoff — a bank date asserted into a closed period is
+	// exactly the kind of back-dating that cutoff exists for. It does not change
+	// a balance, so no separate step-up decision is implied beyond whatever the
+	// level already requires of an Alter.
+	case strings.HasPrefix(rest, "/bank-reconciliation/"):
+		switch method {
+		case http.MethodGet:
+			return authz.Display, "report", "bank-reconciliation", true
+		case http.MethodPut, http.MethodDelete:
+			return authz.Alter, "bank-reconciliation", "", true
+		}
+		// Any other method on this prefix falls through to default-deny rather
+		// than being silently treated as one of the above.
+		return "", "", "", false
+
 	// Reports (and the recon queue / gstr1, modelled as reports).
 	//
 	// reconciliation-queue used to be handled by a case of its own HERE, with
@@ -786,6 +825,25 @@ func reportName(rest string) string {
 	// comment on the reports arm above.
 	case "/reconciliation-queue":
 		return "reconciliation-queue"
+	// The BANK RECONCILIATION STATEMENT (T4).
+	//
+	// It is here for the reason the reconciliation-queue comment above records:
+	// a name in authz.KnownReportNames that this function does not know is a
+	// name some arms serve and others default-deny, and routes() mounts
+	// /print/reports/<name> for EVERY known name — so omitting it would leave a
+	// mounted route that is unreachable for every level including an Owner.
+	//
+	// NOTE THAT THE BARE "/bank-reconciliation" IS NOT A ROUTE. The statement is
+	// per bank ledger, so the live route is /bank-reconciliation/{ledgerID} and
+	// is handled by its own arm above (which matches the trailing slash and so
+	// cannot collide with this exact-match case). This entry exists to make the
+	// PRINT route mappable and to make `disallow print report:bank-reconciliation`
+	// a rule that can match. Printing it still answers 501: the print route
+	// carries no ledger id, so there is no way to say WHICH bank account is being
+	// printed — a layout decision, recorded in docs/design/t4-model.md §1.3
+	// rather than guessed at here.
+	case "/bank-reconciliation":
+		return "bank-reconciliation"
 	case "/trial-balance":
 		return "trial-balance"
 	case "/balance-sheet":

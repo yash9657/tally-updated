@@ -128,6 +128,24 @@ var KnownResources = append([]Resource{
 	//	  at all. It is the irreversible one, and it belongs to whoever signs the
 	//	  return.
 	"inward-statement", "ims-action", "gst-filing",
+
+	// BANK RECONCILIATION (T4) — the WRITE of a bank date onto one voucher leg.
+	//
+	// WHY IT IS ITS OWN TOKEN AND NOT `voucher`. Ticking an item off against a
+	// bank statement changes NO balance and alters NO voucher: it records that
+	// the bank cleared something, alongside the books rather than inside them
+	// (posting is hard-immutable; the reconciliation is a separate row). Folding
+	// it into `voucher` would tie "may reconcile the bank" to "may alter a
+	// voucher", and those are opposite risk profiles — the clerk who ticks off
+	// cheques is precisely the person you do NOT want altering vouchers.
+	//
+	// AND WHY THE *READ* IS NOT THIS TOKEN. The statement itself is a report
+	// (report:bank-reconciliation, below), because it is the company's entire
+	// bank position — every un-cleared cheque and counterparty. One token for
+	// both would force the clerical write and the sensitive read to be granted
+	// together, and the only safe resolution of that is to refuse the clerk the
+	// write, which deletes the feature. Migration 0046 depends on the split.
+	"bank-reconciliation",
 }, KnownVoucherClasses...)
 
 // KnownReportNames is every report a rule may name via the "report:NAME" form.
@@ -137,6 +155,12 @@ var KnownReportNames = []string{
 	"trial-balance", "balance-sheet", "profit-and-loss", "day-book",
 	"outstandings", "cash-flow", "anomalies", "gstr1", "gstr3b",
 	"reconciliation-queue",
+	// The Bank Reconciliation Statement (T4). A report NAME so migration 0046
+	// can write `disallow display report:bank-reconciliation` at specificity 2 —
+	// without which 0011's coarse `allow display report` reaches it at
+	// specificity 1 and every seeded Data Entry operator can read the company's
+	// bank position.
+	"bank-reconciliation",
 	// The Stock Summary is a REPORT, not a master list: its numbers are
 	// DERIVED by replaying the movement ledger through a valuer, and nothing
 	// it prints is stored anywhere. Naming it here is what lets an

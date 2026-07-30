@@ -178,8 +178,16 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 			VALUES ($1, $1, 'testdb fixture ' || $2, DATE '2024-04-01', DATE '2024-04-01')`,
 			[]any{cid, cidText[:8]}},
 
+		// NAMED 'Bank Accounts', not 'Fixture Group', and that is load-bearing
+		// rather than cosmetic: this fixture seeds exactly ONE row per table, so
+		// the single account_group has to double as the bank group that
+		// bank_reconciliation below requires. Migration 0045's trigger refuses a
+		// reconciliation whose ledger is not under a group named 'Bank Accounts'
+		// or 'Bank OD A/c' (matched by ltree ancestry), so a group called
+		// anything else would make that row unseedable and the teardown of
+		// bank_reconciliation would never be exercised.
 		{"account_group", `INSERT INTO account_group (id, company_id, name, path, nature, is_pl)
-			VALUES ($1, $2, 'Fixture Group', 'fixture'::ltree, 'ASSET', false)`,
+			VALUES ($1, $2, 'Bank Accounts', 'fixture'::ltree, 'ASSET', false)`,
 			[]any{groupID, cid}},
 		{"security_level", `INSERT INTO security_level (id, company_id, name) VALUES ($1, $2, 'Fixture Level')`,
 			[]any{levelID, cid}},
@@ -270,6 +278,15 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 		// an explicit empty array so the fixture exercises both of the states
 		// that column distinguishes: NULL = "not overridden", '{}' = "overridden
 		// with nothing".
+		// T4 — one cleared bank leg. It must come AFTER voucher_head and the bank
+		// ledger: 0045's composite FKs point at both, and its trigger reads the
+		// voucher's date to refuse a bank date that precedes it (the fixture
+		// voucher is dated 2024-05-01, so 2024-05-03 is legal).
+		{"bank_reconciliation", `INSERT INTO bank_reconciliation
+			(id, company_id, voucher_id, ledger_id, leg_no, bank_date, cleared_amount, cleared_dr_cr, reconciled_by)
+			VALUES ($1, $2, $3, $4, 0, DATE '2024-05-03', 100, 'D', 'testdb')`,
+			[]any{id(), cid, voucherID, ledgerID}},
+
 		{"print_template", `INSERT INTO print_template
 			(id, company_id, doc_kind, title, header_lines, show_bank_details)
 			VALUES ($1, $2, 'tax-invoice', 'TAX INVOICE', '{}'::text[], false)`,

@@ -13,7 +13,8 @@ package server
 //	cash-flow, anomalies, gstr1, gstr3b, reconciliation-queue,
 //	stock-movement, godown-summary, batch-summary, stock-item-vouchers,
 //	itc-reconciliation, ims-inbox,
-//	payroll-form-138, payroll-pf-ecr, payroll-esi-return
+//	payroll-form-138, payroll-pf-ecr, payroll-esi-return,
+//	bank-reconciliation
 //
 // They stay MAPPED on purpose. A name the router does not emit is a name an
 // administrator's rule can never match (internal/authz/vocabulary.go's whole
@@ -26,6 +27,16 @@ package server
 // handler_payroll.go): "printing" them means a human-readable covering
 // statement, which is a document nobody has specified yet, not a PDF of a
 // pipe-delimited file.
+//
+// bank-reconciliation (T4) is deferred for a DIFFERENT and more interesting
+// reason, and it is a design gap rather than an unwritten layout: the print
+// route is /print/reports/{name} and carries NO LEDGER ID, while a Bank
+// Reconciliation Statement is always FOR ONE BANK ACCOUNT. There is no honest
+// way to print "the" statement for a company with three banks. Closing it means
+// deciding the route shape first — a ledger query parameter, or one printed
+// statement per bank in a single document — which is recorded in
+// docs/design/t4-model.md §1.3 rather than guessed at here. The live JSON
+// statement at GET /bank-reconciliation/{ledgerID} is unaffected.
 //
 // ===========================================================================
 // TWO RULES THAT DECIDE EVERY LINE BELOW

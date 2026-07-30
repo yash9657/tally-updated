@@ -36,6 +36,7 @@ import (
 
 	"github.com/khata/cored/internal/authn"
 	"github.com/khata/cored/internal/authz"
+	"github.com/khata/cored/internal/banking"
 	"github.com/khata/cored/internal/compliance"
 	"github.com/khata/cored/internal/compliance/gstr"
 	"github.com/khata/cored/internal/compliance/itc"
@@ -69,6 +70,10 @@ type Server struct {
 	masters  *masters.Service
 	ledger   *ledger.Service
 	report   *reporting.Service
+	// banking is the WRITE side of bank reconciliation (T4). It is a SEPARATE
+	// service from `report` on purpose: internal/reporting is read-only by its
+	// package contract, and reconciling is a write. See internal/banking's doc.
+	banking  *banking.Service
 	gstr     *gstr.Service
 	importer *migration.Importer
 	sync     *sync.Service
@@ -194,6 +199,7 @@ func New(ctx context.Context, appDSN string) (*Server, error) {
 		masters:  m,
 		ledger:   l,
 		report:   reporting.NewService(pool),
+		banking:  banking.NewService(pool),
 		gstr:     gstr.NewService(pool),
 		importer: migration.NewImporter(m, l),
 		sync:     sync.NewService(l, pool),
@@ -575,6 +581,23 @@ func (s *Server) routes() {
 		r.Get("/profit-and-loss", s.handleProfitAndLoss)
 		r.Get("/day-book", s.handleDayBook)
 		r.Get("/outstandings", s.handleOutstandings)
+
+		// BANK RECONCILIATION (T4). The GET is a report; the PUT/DELETE are an
+		// Alter of "bank-reconciliation" — two DIFFERENT resources, because
+		// ticking one cheque off is clerical while reading the statement is the
+		// company's whole bank position. routeAction maps all three and
+		// migration 0046 writes the rules (allow the write to Data Entry,
+		// explicitly disallow the report at specificity 2 so 0011's coarse
+		// `allow display report` cannot reach it).
+		//
+		// The write is PUT rather than POST because it is idempotent on
+		// (voucher, ledger, leg): re-stating a bank date corrects it. legNo is
+		// in the path rather than the body so the route is a stable identity for
+		// one line of the statement.
+		r.Get("/bank-reconciliation/{ledgerID}", s.handleBankReconciliation)
+		r.Put("/bank-reconciliation/{ledgerID}/{voucherID}/{legNo}", s.handleSetBankDate)
+		r.Delete("/bank-reconciliation/{ledgerID}/{voucherID}/{legNo}", s.handleClearBankDate)
+
 		// Forecast/anomaly reports (wave-2 WS5a).
 		r.Get("/cash-flow", s.handleCashFlow)
 		r.Get("/anomalies", s.handleAnomalies)
