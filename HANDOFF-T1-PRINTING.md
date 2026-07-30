@@ -1,13 +1,12 @@
 # HANDOFF — T1 shipped; the road to Tally parity
 
-> **Two jobs, in this order.**
+> **§2 IS DONE — T1's live gates ran on 2026-07-30 and every one passed.** See §1.3 for
+> the evidence and §2 for the corrected runbook. T1 is verified; you may build on it.
 >
-> 1. **§2 — run T1's live gates.** T1 is committed and its live gates have never run.
->    Do not build on top of unverified work.
-> 2. **§3 — adopt the data-model-first discipline before writing a line of any new
->    track.** T1 took three waves because the engine was right and the *schema* was
->    missing. §3 is the procedure that stops that repeating. **It is not optional and it
->    is not advice — it is a required, committed artefact per track.**
+> **The remaining job is §3 — adopt the data-model-first discipline before writing a line
+> of any new track.** T1 took three waves because the engine was right and the *schema*
+> was missing. §3 is the procedure that stops that repeating. **It is not optional and it
+> is not advice — it is a required, committed artefact per track.**
 >
 > `PLAN-TALLY-PARITY.md` is the catalogue of tracks. This file is how to execute them
 > and what is still open. §6 is the complete parity gap in one place.
@@ -42,18 +41,63 @@ Packages: `internal/printing`, `internal/printing/printingdb`, `internal/gststat
 before **and** after that run, so the 0-skip census is evidence, not an artefact of a
 dead database.
 
-### 1.2 Gates that DID NOT run
+### 1.2 Gates that had not run at `c9e2126`
 
-**`make verify`**, **`make backend-test-residue`**, **`insightd` pytest**, and **every
-live gate**: `verify:demo`, `verify:tenancy`, `e2e:ui`, `e2e:edit`, `e2e:numbering`,
-`e2e:state-code`, `e2e:ocr`, plus the **statutoryd freeze gate** (no Makefile target;
-standing carve-out). Nothing in the commit claims them. Assume nothing.
+`make verify`, `make backend-test-residue`, `insightd` pytest, and every live gate:
+`verify:demo`, `verify:tenancy`, `e2e:ui`, `e2e:edit`, `e2e:numbering`, `e2e:state-code`,
+`e2e:ocr`, plus the statutoryd freeze gate (no Makefile target; standing carve-out).
+**All of them have now run — §1.3.**
+
+### 1.3 THE LIVE GATE RUN — 2026-07-30, at `005edb7` (all green)
+
+Run serially, nothing else touching the database, `cored`/`insightd`/`statutoryd` all
+rebuilt from this tree (three stale processes from previous sessions were killed first —
+an 11-hour-old `cored`, a 1d15h-old system-Python `insightd`, and a 1d15h-old
+`statutoryd`; see §5.7).
+
+| Gate | Result |
+|---|---|
+| `make verify` (migrate → build → residue → frontend → corpora → insightd) | **exit 0** |
+| per-table residue, bound 0 | **every delta +0** across company/account_group/ledger/voucher_type/acl_rule/voucher_version |
+| `go test ./... -count=1 -v` (whole backend) | **1825 PASS / 0 FAIL / 0 SKIP** |
+| `pnpm exec vitest run` | 371 → **372** (the new test in §7.1) |
+| `python3 corpora/validate.py` | identical to baseline, all 11 corpora |
+| insightd pytest | **107 passed** |
+| `verify:demo` | **31/31** — the 29 pre-T1 checks **plus T1's 2 print checks** |
+| `verify:tenancy` | **113/113** |
+| `e2e:ui` (run twice) | **38/38 both times** |
+| `e2e:edit` · `e2e:numbering` · `e2e:state-code` · `e2e:ocr` | all OK |
+| **statutoryd freeze gate** | **OK** — IRN minted, number frozen, alter+delete 409, recon queue surfaced, **including the durable-restart phase** (same IRN after a kill, `generate` row untouched, IRP called exactly once) |
+
+**The skip census is the one worth repeating.** `make verify` runs `go test ./...`
+*without* `-v`, so grepping its log for `--- SKIP` finds nothing whether or not tests
+skipped — a vacuous gate. The 0-SKIP figure above comes from a **separate `-v` run**,
+bracketed by a live `psql` query before and after (08:09:13Z → 08:12:30Z). Do this, not
+the grep on the verify log.
+
+**§2(a) was real and the fix was the documented one.** The demo predated 0039, so
+re-seeding was required; after `make seed-all`, 5 of 26 demo ledgers carry a postal block
+(the 5 parties; the other 21 are system/nominal and correctly have none).
+
+**§2(b) resolved — NOT a regression.** The `svc:` fast-path change is sound in both
+directions, proven live at `005edb7`:
+
+| svc token against | Result |
+|---|---|
+| `print/vouchers/sales/{id}` | 403 `service principals cannot print documents` |
+| `print/reports/trial-balance` | 403 `service principals cannot print documents` |
+| an unmapped `{companyID}` sub-path | 403 `unmapped route: access denied` |
+| `trial-balance` (mapped read the freeze plane needs) | **200** |
+
+The freeze hook, sync and Tally-XML import are untouched, exactly as
+`auth_middleware.go`'s comment claims.
 
 ---
 
-## 2. DO THIS FIRST — T1's live gate run
+## 2. T1's live gate run — DONE 2026-07-30 (kept as the runbook)
 
-Two things will bite if skipped.
+**This section has been executed; §1.3 has the results.** It is kept because it is the
+correct recipe for the next track's live run. Two things will bite if skipped.
 
 **(a) The demo database predates migration 0039, so its parties have no address.** A tax
 invoice without the recipient's address is refused under Rule 46(d) — *correctly*. So
@@ -78,16 +122,27 @@ make backend-test-residue         # require per-table residue 0
 ps -eo pid,etime,comm | grep cored      # a stale process predates the commit; kill it
 make run-cored                          # + make run-insightd in another shell
 
-# 3. re-seed, because of (a)
-npm --prefix frontend run seed:all
+# 3. re-seed, because of (a).
+#    NOT `npm run seed:all` — there is no such script. `make seed-all` is the target,
+#    and it exists because ORDER MATTERS: seed-tenancy takes company A as argv, so the
+#    two seeders hand ids to each other on disk (frontend/.demo-company-id,
+#    frontend/.tenancy-company-id) instead of via a copy-pasted log line.
+make seed-all
 
-# 4. live gates, ONE AT A TIME, nothing else running
-npm --prefix frontend run verify:demo      # 29/29 pre-T1; T1 adds 2 print checks
-npm --prefix frontend run verify:tenancy   # 113/113
-npm --prefix frontend run e2e:ui           # 38/38 — run it TWICE
-# then e2e:edit, e2e:numbering, e2e:state-code, e2e:ocr
+# 4. live gates, ONE AT A TIME, nothing else running. Both verifiers TAKE THE COMPANY
+#    IDS as arguments — run them from frontend/ so the dotfiles resolve.
+cd frontend
+pnpm verify:demo    "$(cat .demo-company-id)"                            # 31/31 (29 + 2 print)
+pnpm verify:tenancy "$(cat .demo-company-id)" "$(cat .tenancy-company-id)"  # 113/113
+pnpm e2e:ui                                                              # 38/38 — run it TWICE
+CORED_BASE_URL=http://localhost:8087 pnpm e2e:edit                       # then numbering,
+CORED_BASE_URL=http://localhost:8087 pnpm e2e:state-code                 # state-code, and
+CORED_BASE_URL=http://localhost:8087 INSIGHTD_BASE_URL=http://localhost:8088 pnpm e2e:ocr
 
-# 5. statutoryd freeze gate (fresh service token after any cored restart)
+# 5. statutoryd freeze gate — the recipe is HANDOFF.md §"statutoryd (IRN plane)".
+#    A fresh service token is REQUIRED after any cored restart (ephemeral signing key),
+#    and pass STATUTORYD_DSN + STATUTORYD_BIN to get the durable-restart phase; without
+#    them that phase silently does not run.
 ```
 
 **If the print check fails, read the response body before touching code.** It is
@@ -413,6 +468,25 @@ your list — report as HANDOFF", and a structured-output schema with `status`, 
 `mutationProof`, `skipCensus`, `handoffs`, `caveats`. Run **one workflow at a time** (8
 cores; each caps at 6 agents). Live gates run **alone**.
 
+### 5.7 A LIVE GATE RUN IS WORTHLESS AGAINST A STALE BINARY
+
+Every one of the three server processes on this machine predated the commit under test:
+`cored` by 11 hours, `insightd` by 1d15h (and running the **system** Python, not
+`insightd/.venv`), `statutoryd` by 1d15h. Each answered `200` on `/healthz`, so nothing
+looked wrong. A gate run against any of them would have measured **the previous
+session's code** and reported it as this commit's evidence.
+
+```bash
+ps -eo pid,etime,comm | grep -E 'cored|statutoryd'      # compare ETIME to `git log -1 --format=%ci`
+lsof -nP -iTCP:8087 -sTCP:LISTEN                        # and 8088, 8091 — a port can be held
+                                                        # by something you did not start
+```
+
+**Age the process against the commit date before believing a single live result.** Kill
+and rebuild all three; `curl /healthz` proves a server is listening, never that it is
+*this* server. Watch for unrelated projects too — a `vite` from another repo held `:8080`
+this session, harmlessly, but it is the same failure shape.
+
 ---
 
 ## 6. THE COMPLETE PARITY GAP
@@ -490,7 +564,7 @@ Ordered by what I would do first. None blocks §2.
 
 | # | Item |
 |---|---|
-| 1 | **`frontend/src/api/types.ts` + `mock.ts` drop the three address fields.** `CreateLedgerRequest` has no `address`/`city`/`pincode` and the mock's `createLedger` silently discards them — a UI test that keys an address and asserts a round-trip would pass against a mock that threw it away. Cheap; do it first. |
+| 1 | ✅ **CLOSED 2026-07-30 — and it was wider than this entry said.** The write side was as described (`CreateLedgerRequest` lacked `address`/`city`/`pincode`; the mock's `createLedger` discarded them). But **the read side never returned them either**: `ledgerListItem`'s own doc comment promises "field names mirror ledgerReq so a client can read a ledger and re-send it", and for the postal block that was **false** — the projection never selected the 0039 columns. So an address was **write-only over HTTP**: the seeder wrote one, `ValidateRule46` read it straight from the database and printed it on a tax invoice, and **no API caller could ever see the value being printed in the company's name**. Fixed on all four surfaces (Go projection + `ledgerListItem`, `types.ts` both directions, `mock.ts` store *and* read-back), pinned by `TestAPartysPostalBlockSurvivesTheRoundTrip` and a mock round-trip test — **each mutation-proven to bite and restored byte-identically**, each with a control arm asserting an address-less party reads `""` rather than null/absent. Verified live: `Pune Fabricators` now returns its block over HTTP; `Cash` returns `""`. This was also the **prerequisite for item 4** — an edit route for a field nothing could read was not worth building. |
 | 2 | **`internal/security/isolation_test.go`'s `tenantTables` is a hardcoded 7-table list.** It misses `print_template` — and already missed `employee`, `payslip`, `price_list`. Should be catalogue-driven like `testdb`'s delete plan, which is anti-rot by construction. |
 | 3 | **Rule 46(e): a ≥Rs 50,000 supply to an unregistered party.** Now that `gststate` exists this may already work — **verify before building.** |
 | 4 | **A party's address cannot be ALTERED.** `POST /ledgers` sets it; nothing changes it. An operator who mistypes must delete and recreate the party, which its posted vouchers forbid. Needs `masters.SetLedgerAddress` + `PUT` route + ACL decision. |

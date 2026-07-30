@@ -45,6 +45,20 @@ type ledgerListItem struct {
 	GSTIN              string `json:"gstin"`
 	StateCode          string `json:"state_code"`
 	RegistrationType   string `json:"registration_type"`
+	// Address / City / Pincode are the party's POSTAL BLOCK (migration 0039),
+	// echoed here because ledgerReq accepts them and this struct's contract is
+	// that a client can read a ledger and re-send it. Without them that
+	// contract was false in the one direction that matters: the seeder wrote an
+	// address, Rule 46(d) printed it, and no HTTP caller could ever see it.
+	//
+	// `address` is a NEWLINE-SEPARATED BLOCK, not a single line — same shape as
+	// the company profile's. Absent reads back as "" (the column is nullable),
+	// which is what a walk-in cash party legitimately has; blank here is NOT a
+	// licence to print a blank on a tax invoice — printing.ValidateRule46 is
+	// still the gate that refuses that.
+	Address string `json:"address"`
+	City    string `json:"city"`
+	Pincode string `json:"pincode"`
 	// IsSystem marks the ledgers seeded with the company, which a client should
 	// prefer to reuse rather than duplicate.
 	IsSystem bool `json:"is_system"`
@@ -81,7 +95,9 @@ func (s *Server) handleListLedgers(w http.ResponseWriter, r *http.Request) {
 			`SELECT l.id, l.name, g.name,
 			        l.opening_balance, l.opening_dc, l.maintain_bill_by_bill,
 			        COALESCE(l.gstin, ''), COALESCE(l.state_code, ''),
-			        l.registration_type::text, l.is_system
+			        l.registration_type::text,
+			        COALESCE(l.address, ''), COALESCE(l.city, ''), COALESCE(l.pincode, ''),
+			        l.is_system
 			   FROM ledger l
 			   JOIN account_group g ON g.id = l.group_id
 			  ORDER BY g.name, l.name`)
@@ -96,7 +112,8 @@ func (s *Server) handleListLedgers(w http.ResponseWriter, r *http.Request) {
 			)
 			if err := rows.Scan(&it.ID, &it.Name, &it.GroupName,
 				&opening, &it.OpeningDC, &it.MaintainBillByBill,
-				&it.GSTIN, &it.StateCode, &it.RegistrationType, &it.IsSystem); err != nil {
+				&it.GSTIN, &it.StateCode, &it.RegistrationType,
+				&it.Address, &it.City, &it.Pincode, &it.IsSystem); err != nil {
 				return err
 			}
 			it.OpeningBalance = opening.StringFixed(4)

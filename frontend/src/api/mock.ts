@@ -462,6 +462,15 @@ interface MockCompany {
     maintainBillByBill?: boolean;
     openingBalance?: Money;
     openingDC?: string;
+    /**
+     * The party's postal block (migration 0039). Held as real fields for the
+     * same reason the rest of this row is: a mock that accepted an address on
+     * create and dropped it would let a round-trip test pass against a store
+     * that never kept it.
+     */
+    address?: string;
+    city?: string;
+    pincode?: string;
     isSystem?: boolean;
   }[];
   vouchers: DayBookEntry[];
@@ -1596,6 +1605,9 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
           gstin: l.gstin ?? "",
           state_code: l.stateCode ?? "",
           registration_type: l.registrationType ?? "UNKNOWN",
+          address: l.address ?? "",
+          city: l.city ?? "",
+          pincode: l.pincode ?? "",
           is_system: l.isSystem ?? false,
         })),
       };
@@ -1641,6 +1653,9 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         maintainBillByBill: req.maintain_bill_by_bill,
         openingBalance: req.opening_balance,
         openingDC: req.opening_dc,
+        address: req.address,
+        city: req.city,
+        pincode: req.pincode,
         isSystem: false,
       });
       return { ledger_id: ledgerID };

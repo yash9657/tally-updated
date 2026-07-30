@@ -162,6 +162,14 @@ export interface LedgerListItem {
   gstin: string;
   state_code: string;
   registration_type: string;
+  /**
+   * The party's POSTAL BLOCK (migration 0039). Absent reads back as "" — the
+   * columns are nullable and a cash party legitimately has none. `address` is
+   * a NEWLINE-SEPARATED BLOCK.
+   */
+  address: string;
+  city: string;
+  pincode: string;
   /** True for ledgers seeded with the company (Cash, Profit & Loss A/c). */
   is_system: boolean;
 }
@@ -198,6 +206,19 @@ export interface CreateLedgerRequest {
   state_code?: string;
   registration_type?: string;
   pan?: string;
+  /**
+   * The party's POSTAL BLOCK (migration 0039). `address` is a
+   * NEWLINE-SEPARATED BLOCK, not a single line — the same shape the company
+   * profile uses, so one form serves both.
+   *
+   * All three are optional here on purpose. Rule 46(d) makes the recipient's
+   * address mandatory ON A TAX INVOICE and that is enforced server-side at
+   * print time, not at master-create time: a walk-in cash customer below the
+   * Rule 46(e) threshold legitimately has no address.
+   */
+  address?: string;
+  city?: string;
+  pincode?: string;
   created_by?: string;
 }
 export interface CreateLedgerResponse {

@@ -76,6 +76,51 @@ describe("mock CoredClient", () => {
     });
     expect(isGSTR1Reconciled(reconciled)).toBe(true);
   });
+
+  // The mock's createLedger used to accept a party's postal block and throw it
+  // away, so a UI test that keyed an address and asserted a round-trip would
+  // have passed against a store that never kept it. That matters more here than
+  // it looks: Rule 46(d) refuses to print a tax invoice without the recipient's
+  // address, so "the address survived" is the difference between a document
+  // that prints and one that is correctly refused.
+  it("keeps a party's postal block through createLedger -> listLedgers", async () => {
+    const client = createMockClient({ seed: false });
+    const { company_id } = await client.createCompany({
+      name: "Acme",
+      fy_start_date: "2026-04-01",
+      base_currency: "INR",
+    });
+    // The newline is deliberate: `address` is a multi-line postal BLOCK.
+    const address = "22 Nariman Point\nBlock C, 3rd Floor";
+    await client.createLedger(company_id, {
+      name: "Addressed Party",
+      group_name: "Sundry Debtors",
+      address,
+      city: "Mumbai",
+      pincode: "400021",
+    });
+    await client.createLedger(company_id, {
+      name: "Walk-in Party",
+      group_name: "Sundry Debtors",
+    });
+
+    const { ledgers } = await client.listLedgers(company_id);
+    const addressed = ledgers.find((l) => l.name === "Addressed Party");
+    expect(addressed).toBeDefined();
+    expect(addressed!.address).toBe(address);
+    expect(addressed!.city).toBe("Mumbai");
+    expect(addressed!.pincode).toBe("400021");
+
+    // CONTROL — an address-less party reads back "" on all three, matching the
+    // server's COALESCE, not undefined. Without this arm the assertions above
+    // would also pass against a mock that echoed whatever it was handed
+    // without ever modelling the absent case.
+    const walkIn = ledgers.find((l) => l.name === "Walk-in Party");
+    expect(walkIn).toBeDefined();
+    expect(walkIn!.address).toBe("");
+    expect(walkIn!.city).toBe("");
+    expect(walkIn!.pincode).toBe("");
+  });
 });
 
 describe("REST CoredClient over a stub fetch", () => {
