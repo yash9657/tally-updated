@@ -44,6 +44,9 @@ import type {
   SetLedgerOpeningRequest,
   SetLedgerOpeningResponse,
   VoucherHistoryResponse,
+  BankReconciliationResponse,
+  SetBankDateRequest,
+  SetBankDateResponse,
 } from "./types";
 import type { QueryRequest, QueryResult } from "./query";
 import type {
@@ -114,6 +117,39 @@ export function createRestClient(
       return http.put<SetLedgerOpeningResponse>(
         `${company(companyID)}/ledgers/${ledgerID}/opening`,
         req,
+      );
+    },
+
+    // ---- Printing (T1). Both answer application/pdf, so they go through
+    // getBlob rather than the JSON path, which would corrupt the document into a
+    // lossy string. Errors on these routes ARE JSON and are surfaced verbatim.
+    printVoucher(companyID, voucherClass, voucherID) {
+      return http.getBlob(
+        `${company(companyID)}/print/vouchers/${voucherClass}/${voucherID}`,
+      );
+    },
+    printReport(companyID, slug) {
+      return http.getBlob(`${company(companyID)}/print/reports/${slug}`);
+    },
+
+    // ---- Bank reconciliation (T4).
+    bankReconciliation(companyID, ledgerID, asOn) {
+      return http.get<BankReconciliationResponse>(
+        `${company(companyID)}/bank-reconciliation/${ledgerID}`,
+        // Omitted rather than sent empty: buildQuery drops "" anyway, and the
+        // server reads a missing as_on as "today".
+        asOn ? { as_on: asOn } : undefined,
+      );
+    },
+    setBankDate(companyID, ledgerID, voucherID, legNo, req: SetBankDateRequest) {
+      return http.put<SetBankDateResponse>(
+        `${company(companyID)}/bank-reconciliation/${ledgerID}/${voucherID}/${legNo}`,
+        req,
+      );
+    },
+    clearBankDate(companyID, ledgerID, voucherID, legNo) {
+      return http.del<SetBankDateResponse>(
+        `${company(companyID)}/bank-reconciliation/${ledgerID}/${voucherID}/${legNo}`,
       );
     },
     createLedger(companyID, req: CreateLedgerRequest) {

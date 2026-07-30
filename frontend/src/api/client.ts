@@ -47,6 +47,9 @@ import type {
   SetLedgerOpeningRequest,
   SetLedgerOpeningResponse,
   VoucherHistoryResponse,
+  BankReconciliationResponse,
+  SetBankDateRequest,
+  SetBankDateResponse,
 } from "./types";
 import type { QueryRequest, QueryResult } from "./query";
 import type {
@@ -94,6 +97,70 @@ export interface CoredClient {
     ledgerID: string,
     req: SetLedgerOpeningRequest,
   ): Promise<SetLedgerOpeningResponse>;
+
+  // ---- PRINTING (T1) and BANK RECONCILIATION (T4).
+  //
+  // Both server halves shipped reachable over HTTP only, with no key anywhere in
+  // this client — the handoff calls that a parity gap rather than a nicety, since
+  // keystroke compatibility is what lets an operator switch without retraining.
+  // These five methods are the client half.
+
+  /**
+   * Fetch one voucher's document as a PDF (GET .../print/vouchers/{class}/{id}).
+   *
+   * `voucherClass` is the kebab-case class and is a LITERAL path segment, so it
+   * must be one of the six the server produces a document for — ask
+   * screens/printTarget.ts, which refuses locally rather than round-tripping to a
+   * 404 the operator cannot explain.
+   *
+   * Rejects with ApiError carrying the SERVER'S message. Do not rewrite it: a
+   * class mismatch answers 404 with a deliberately class-neutral body, and
+   * "helpfully" turning that into "wrong class" would leak the very fact the
+   * refusal protects.
+   */
+  printVoucher(
+    companyID: string,
+    voucherClass: string,
+    voucherID: string,
+  ): Promise<{ blob: Blob; filename: string | null }>;
+  /**
+   * Fetch a report as a PDF (GET .../print/reports/{slug}). Eight slugs print;
+   * every other known report name answers 501 on purpose, which arrives here as
+   * an ApiError to be shown verbatim.
+   */
+  printReport(
+    companyID: string,
+    slug: string,
+  ): Promise<{ blob: Blob; filename: string | null }>;
+
+  /**
+   * The Bank Reconciliation Statement for one bank ledger, as at an optional
+   * date (omitted = today). A non-bank ledger is a 400 that NAMES the problem
+   * rather than an empty statement that reads as "nothing to reconcile".
+   */
+  bankReconciliation(
+    companyID: string,
+    ledgerID: string,
+    asOn?: string,
+  ): Promise<BankReconciliationResponse>;
+  /** Record that the bank cleared one leg. */
+  setBankDate(
+    companyID: string,
+    ledgerID: string,
+    voucherID: string,
+    legNo: number,
+    req: SetBankDateRequest,
+  ): Promise<SetBankDateResponse>;
+  /**
+   * Un-reconcile one leg. IDEMPOTENT by design — clearing an already-unreconciled
+   * leg is a 200, because the caller's intent is satisfied either way.
+   */
+  clearBankDate(
+    companyID: string,
+    ledgerID: string,
+    voucherID: string,
+    legNo: number,
+  ): Promise<SetBankDateResponse>;
 
   createGroup(
     companyID: string,

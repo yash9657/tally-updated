@@ -172,10 +172,90 @@ export interface LedgerListItem {
   pincode: string;
   /** True for ledgers seeded with the company (Cash, Profit & Loss A/c). */
   is_system: boolean;
+  /**
+   * True when a Bank Reconciliation Statement can be drawn for this ledger.
+   *
+   * SERVER-DERIVED, AND DO NOT TRY TO RECOMPUTE IT FROM `group_name`. Bank-ness
+   * is ltree ANCESTRY under 'Bank Accounts' / 'Bank OD A/c'
+   * (reporting.BankLedgerPredicate), while `group_name` is the ledger's
+   * IMMEDIATE group — so a company keeping its accounts in a user-created
+   * "Current Accounts" sub-group reads group_name = "Current Accounts", and a
+   * client filtering on the two seeded names silently drops real bank accounts
+   * from its reconciliation picker. Silently: a shorter list is not an error.
+   *
+   * An OD account is a bank account AND a liability; this says "a statement can
+   * be drawn", not "this is an asset".
+   */
+  is_bank: boolean;
 }
 
 export interface ListLedgersResponse {
   ledgers: LedgerListItem[];
+}
+
+// ---------------------------------------------------------------------------
+// BANK RECONCILIATION (T4). Wire shapes of GET /bank-reconciliation/{ledgerID}.
+// ---------------------------------------------------------------------------
+
+/**
+ * One line of the statement. Money is a fixed-4 decimal STRING — rendered as
+ * received, never parsed into a number (docs/design/t1t4-ui-model.md §3).
+ */
+export interface BankReconLine {
+  voucher_id: string;
+  /** Ordinal of the bank leg; non-zero only when one voucher touches the bank twice. */
+  leg_no: number;
+  voucher_no: string;
+  voucher_date: string;
+  narration: string;
+  party: string;
+  amount: Money;
+  dr_cr: string;
+  /** "" when the item has not cleared AS AT the statement date. */
+  bank_date: string;
+  /** SERVER-derived. Never recomputed here: a clock-skewed browser would disagree. */
+  age_days: number;
+  /**
+   * True when a reconciliation exists for this leg but the voucher's current
+   * version no longer matches what was cleared — i.e. somebody ALTERED a voucher
+   * after reconciling it. The item is treated as un-cleared for the arithmetic
+   * and must be surfaced prominently; it is not a detail.
+   */
+  broken_by_alter: boolean;
+  /** What the reconciliation recorded. Present ONLY when broken — the evidence. */
+  cleared_amount?: Money;
+  cleared_dr_cr?: string;
+}
+
+/** The Bank Reconciliation Statement as at a date. */
+export interface BankReconciliationResponse {
+  ledger_id: string;
+  ledger_name: string;
+  as_on: string;
+  balance_as_per_books: Money;
+  uncleared_net: Money;
+  balance_as_per_bank: Money;
+  difference: Money;
+  /** The SERVER's verdict. Rendered rather than re-derived by comparing strings. */
+  balanced: boolean;
+  /** Non-zero means a voucher was altered after being reconciled. */
+  broken_count: number;
+  uncleared: BankReconLine[];
+  cleared: BankReconLine[];
+}
+
+export interface SetBankDateRequest {
+  /**
+   * ISO yyyy-mm-dd, REQUIRED. There is deliberately no "as of today" default:
+   * a reconciliation is an assertion copied off a bank statement, and defaulting
+   * it would invent the one fact the feature exists to record.
+   */
+  bank_date: string;
+  created_by: string;
+}
+
+export interface SetBankDateResponse {
+  status: string;
 }
 
 /**

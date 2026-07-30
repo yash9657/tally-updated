@@ -65,6 +65,10 @@ import type {
   SetLedgerOpeningRequest,
   SetLedgerOpeningResponse,
   VoucherHistoryResponse,
+  BankReconciliationResponse,
+  BankReconLine,
+  SetBankDateRequest,
+  SetBankDateResponse,
   VoucherVersionView,
 } from "./types";
 import type { QueryRequest, QueryResult } from "./query";
@@ -456,6 +460,18 @@ interface MockCompany {
     id: string;
     name: string;
     group: string;
+    /**
+     * The seeded PRIMARY group this ledger's group descends from, when that is
+     * not `group` itself. The real server decides bank-ness by ltree ancestry
+     * (reporting.BankLedgerPredicate); this mock has no group hierarchy at all,
+     * so this field stands in for the ancestor the ltree would have walked to.
+     *
+     * It exists so the mock can represent the case that matters — a bank account
+     * in a user-created sub-group, whose `group_name` is neither 'Bank Accounts'
+     * nor 'Bank OD A/c' — instead of only the easy case where the immediate group
+     * name happens to be the answer.
+     */
+    bankParentGroup?: string;
     stateCode?: string;
     gstin?: string;
     registrationType?: string;
@@ -474,6 +490,18 @@ interface MockCompany {
     isSystem?: boolean;
   }[];
   vouchers: DayBookEntry[];
+  /**
+   * Bank reconciliations, keyed `${ledgerID}:${voucherID}:${legNo}`.
+   *
+   * OUTSIDE the voucher, exactly as migration 0045 puts it outside the hash
+   * chain: a bank date is a fact about the BANK, not about the voucher. Storing
+   * the amount and side that were cleared is what makes a later alter DETECTABLE
+   * rather than silently absorbed — the whole point of T4's broken-by-alter flag.
+   */
+  bankDates: Map<
+    string,
+    { bankDate: string; clearedAmount: Money; clearedDrCr: string }
+  >;
   /**
    * The INVENTORY MASTERS. Held as real rows (not synthesized on read) for the
    * same reason `ledgers` is: the item grid resolves an item's gst_rate_pct and
@@ -539,6 +567,62 @@ interface CompanyProfile {
  * mock and cored agree on what an omitted field becomes. `booksBeginningFrom`
  * defaults to the company's fy start, never to a hardcoded date.
  */
+/**
+ * The two seeded primary groups that make a ledger a BANK ledger, mirroring
+ * reporting.BankLedgerPredicate. 'Bank OD A/c' is a LIABILITY and still a bank
+ * account — the flag says "a statement can be drawn", not "this is an asset".
+ */
+const BANK_PRIMARY_GROUPS = ["Bank Accounts", "Bank OD A/c"];
+
+/**
+ * The six voucher classes that produce a printable document, mirroring the
+ * server's printingdb.docKindForClass. The mock refuses the other seven for the
+ * same reason it refuses a non-bank ledger: a mock that printed a Contra would
+ * let a broken client-side refusal pass its tests.
+ */
+const MOCK_PRINTABLE_CLASSES = [
+  "sales",
+  "credit-note",
+  "debit-note",
+  "receipt",
+  "payment",
+  "delivery-note",
+];
+
+/** Today as ISO yyyy-mm-dd — the server's default `as_on`. */
+function todayISO(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/**
+ * Whole days from `from` to `to` (both ISO dates). Used only for the mock's
+ * age_days; the REAL age is server-derived, and a client must never recompute it
+ * — a clock-skewed browser would show a different age for the same row.
+ */
+function daysBetween(from: string, to: string): number {
+  const a = Date.parse(`${from}T00:00:00Z`);
+  const b = Date.parse(`${to}T00:00:00Z`);
+  if (Number.isNaN(a) || Number.isNaN(b)) return 0;
+  return Math.max(0, Math.round((b - a) / 86_400_000));
+}
+
+/**
+ * Is this mock ledger a bank ledger?
+ *
+ * The real server walks an ltree: `g.path <@ bg.path` for either seeded primary
+ * group, so a ledger in ANY descendant group qualifies. This mock has no group
+ * hierarchy, so it checks the immediate group name OR the declared
+ * `bankParentGroup` ancestor — which is what lets the mock represent a bank
+ * account in a user-created sub-group, the case a naive group_name filter gets
+ * wrong.
+ */
+function isBankLedger(l: { group: string; bankParentGroup?: string }): boolean {
+  return (
+    BANK_PRIMARY_GROUPS.includes(l.group) ||
+    BANK_PRIMARY_GROUPS.includes(l.bankParentGroup ?? "")
+  );
+}
+
 function defaultProfile(fyStartDate: string): CompanyProfile {
   return {
     mailingName: "",
@@ -757,6 +841,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         stockItems: [],
         batches: [],
         vouchers: [],
+        bankDates: new Map(),
         views: new Map(),
         members: [
           {
@@ -796,6 +881,21 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       ledgers: [
         { id: "ledger-cash", name: "Cash", group: "Cash-in-Hand" },
         { id: "ledger-sales", name: "Sales", group: "Sales Accounts" },
+        // A BANK ledger, so the demo company can actually exercise bank
+        // reconciliation (T4). Without one the reconciliation screen has nothing
+        // to offer and the picker's empty state would be the only path a
+        // developer ever saw.
+        //
+        // It sits in a SUB-GROUP of "Bank Accounts" on purpose: that is the exact
+        // shape that made a client-side group_name filter wrong (a real bank
+        // account whose immediate group is neither seeded name), so the default
+        // demo data exercises the case rather than the easy one.
+        {
+          id: "ledger-hdfc",
+          name: "HDFC Bank",
+          group: "Current Accounts",
+          bankParentGroup: "Bank Accounts",
+        },
         {
           id: "ledger-acme",
           name: "Acme Traders",
@@ -829,6 +929,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       ],
       batches: [],
       vouchers: [],
+      bankDates: new Map(),
       views: new Map(),
       counters: new Map(),
       // The seeded demo tenant carries the same admin defaults every company
@@ -1609,6 +1710,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
           city: l.city ?? "",
           pincode: l.pincode ?? "",
           is_system: l.isSystem ?? false,
+          is_bank: isBankLedger(l),
         })),
       };
     },
@@ -1957,6 +2059,207 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         to: query?.to ?? "",
         entries: c.vouchers.slice(),
       };
+    },
+
+    // ---- PRINTING (T1). The mock cannot generate a PDF — the real writer lives
+    // in the Go backend (base-14 fonts, uncompressed streams so the bytes are
+    // diffable). It returns a clearly-labelled placeholder so a screen's plumbing
+    // is exercisable offline, and it REFUSES the same classes the server refuses,
+    // because a mock that printed a Contra would let a broken refusal pass.
+    async printVoucher(companyID, voucherClass, voucherID) {
+      ensure(companyID);
+      if (!MOCK_PRINTABLE_CLASSES.includes(voucherClass)) {
+        throw new ApiError(
+          404,
+          "no printable voucher with that id in this company",
+        );
+      }
+      return {
+        blob: new Blob(
+          [
+            `MOCK PDF — not a real document.\n` +
+              `${voucherClass} ${voucherID}\n` +
+              `The PDF writer is server-side (internal/printing); this offline ` +
+              `mock only proves the client plumbing.\n`,
+          ],
+          { type: "application/pdf" },
+        ),
+        filename: `mock-${voucherClass}-${voucherID}.pdf`,
+      };
+    },
+    async printReport(companyID, slug) {
+      ensure(companyID);
+      return {
+        blob: new Blob(
+          [`MOCK PDF — not a real document.\nreport: ${slug}\n`],
+          { type: "application/pdf" },
+        ),
+        filename: `mock-${slug}.pdf`,
+      };
+    },
+
+    // ---- BANK RECONCILIATION (T4).
+    async bankReconciliation(
+      companyID,
+      ledgerID,
+      asOn?,
+    ): Promise<BankReconciliationResponse> {
+      const c = ensure(companyID);
+      const ledger = c.ledgers.find((l) => l.id === ledgerID);
+      if (!ledger) {
+        throw new ApiError(400, `reporting: ledger ${ledgerID} not found`);
+      }
+      if (!isBankLedger(ledger)) {
+        // Mirrors the server's diagnostic refusal: NAME the problem rather than
+        // return an empty statement that reads as "nothing to reconcile".
+        throw new ApiError(
+          400,
+          `reporting: ledger "${ledger.name}" is not under a bank group; a bank reconciliation statement needs a bank ledger`,
+        );
+      }
+      const asOnDate = asOn && asOn !== "" ? asOn : todayISO();
+
+      const uncleared: BankReconLine[] = [];
+      const cleared: BankReconLine[] = [];
+      let unclearedNet = 0n;
+      let brokenCount = 0;
+
+      for (const v of c.vouchers) {
+        if (v.date > asOnDate) continue;
+        // One line per POSTING on this bank ledger — leg_no is the ordinal, so a
+        // voucher touching the bank twice yields two independently tickable rows.
+        let legNo = 0;
+        for (const p of v.postings) {
+          if (p.ledger !== ledger.name) continue;
+          const key = `${ledgerID}:${v.voucher_id}:${legNo}`;
+          const rec = c.bankDates.get(key);
+          const signed = p.dr_cr === "D" ? q4(p.amount) : -q4(p.amount);
+
+          // A reconciliation is only in force if it matches what was cleared AND
+          // the bank date is on or before the statement date. An item cleared
+          // LATER is un-cleared as at this date — t4-model.md's first trap.
+          const broken =
+            !!rec && (rec.clearedAmount !== p.amount || rec.clearedDrCr !== p.dr_cr);
+          const inForce = !!rec && !broken && rec.bankDate <= asOnDate;
+
+          const line: BankReconLine = {
+            voucher_id: v.voucher_id,
+            leg_no: legNo,
+            voucher_no: v.voucher_no,
+            voucher_date: v.date,
+            narration: v.narration,
+            party: v.party,
+            amount: p.amount,
+            dr_cr: p.dr_cr,
+            bank_date: inForce ? rec!.bankDate : "",
+            age_days: daysBetween(v.date, asOnDate),
+            broken_by_alter: broken,
+          };
+          if (broken) {
+            brokenCount++;
+            line.cleared_amount = rec!.clearedAmount;
+            line.cleared_dr_cr = rec!.clearedDrCr;
+          }
+
+          if (inForce) {
+            cleared.push(line);
+          } else {
+            uncleared.push(line);
+            unclearedNet += signed;
+          }
+          legNo++;
+        }
+      }
+
+      // Oldest first: an item outstanding for 90+ days is a stale cheque, and
+      // surfacing it is the most useful thing this statement does.
+      uncleared.sort((a, b) => a.voucher_date.localeCompare(b.voucher_date));
+      cleared.sort((a, b) => a.bank_date.localeCompare(b.bank_date));
+
+      // Orientation follows the ledger's NATURE. A Bank OD A/c is a LIABILITY, so
+      // its book balance is a credit — t4-model.md §3.1's sign trap.
+      const isOD = (ledger.bankParentGroup ?? ledger.group) === "Bank OD A/c";
+      let books = 0n;
+      for (const v of c.vouchers) {
+        if (v.date > asOnDate) continue;
+        for (const p of v.postings) {
+          if (p.ledger !== ledger.name) continue;
+          books += p.dr_cr === "D" ? q4(p.amount) : -q4(p.amount);
+        }
+      }
+      if (isOD) {
+        books = -books;
+        unclearedNet = -unclearedNet;
+      }
+      const perBank = books - unclearedNet;
+
+      return {
+        ledger_id: ledgerID,
+        ledger_name: ledger.name,
+        as_on: asOnDate,
+        balance_as_per_books: q4str(books),
+        uncleared_net: q4str(unclearedNet),
+        balance_as_per_bank: q4str(perBank),
+        // Zero by construction: the statement asserts its own arithmetic rather
+        // than assuming it.
+        difference: q4str(books - unclearedNet - perBank),
+        balanced: books - unclearedNet - perBank === 0n,
+        broken_count: brokenCount,
+        uncleared,
+        cleared,
+      };
+    },
+
+    async setBankDate(
+      companyID,
+      ledgerID,
+      voucherID,
+      legNo,
+      req: SetBankDateRequest,
+    ): Promise<SetBankDateResponse> {
+      const c = ensure(companyID);
+      const ledger = c.ledgers.find((l) => l.id === ledgerID);
+      if (!ledger || !isBankLedger(ledger)) {
+        throw new ApiError(400, "banking: not a bank ledger");
+      }
+      if (!req.bank_date) {
+        throw new ApiError(400, "bank_date is required");
+      }
+      const v = c.vouchers.find((e) => e.voucher_id === voucherID);
+      // The leg must be on the voucher's CURRENT version. 404, not 403: a 403
+      // would confirm that some other leg exists.
+      const legs = v?.postings.filter((p) => p.ledger === ledger.name) ?? [];
+      const leg = legs[legNo];
+      if (!v || !leg) {
+        throw new ApiError(404, "banking: leg not found on this voucher version");
+      }
+      // Migration 0045's trigger: the bank cannot clear an item before it exists.
+      if (req.bank_date < v.date) {
+        throw new ApiError(
+          400,
+          `banking: bank_date ${req.bank_date} is before the voucher date ${v.date}`,
+        );
+      }
+      c.bankDates.set(`${ledgerID}:${voucherID}:${legNo}`, {
+        bankDate: req.bank_date,
+        clearedAmount: leg.amount,
+        clearedDrCr: leg.dr_cr,
+      });
+      return { status: "reconciled" };
+    },
+
+    async clearBankDate(
+      companyID,
+      ledgerID,
+      voucherID,
+      legNo,
+    ): Promise<SetBankDateResponse> {
+      const c = ensure(companyID);
+      // IDEMPOTENT: clearing an already-unreconciled leg is a 200. The caller's
+      // intent is satisfied either way, and making a double-click an error is
+      // friction with no safety gain.
+      c.bankDates.delete(`${ledgerID}:${voucherID}:${legNo}`);
+      return { status: "unreconciled" };
     },
 
     async getOutstandings(

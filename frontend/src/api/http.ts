@@ -69,6 +69,51 @@ export interface HttpClient {
     contentType: string,
     query?: QueryParams,
   ): Promise<T>;
+  /**
+   * GET a BINARY response (the print routes answer `application/pdf`).
+   *
+   * It exists because `request` reads every response as text and then tries
+   * JSON.parse — which for a PDF yields a lossy string, not a document. A PDF
+   * must never touch that path.
+   *
+   * Errors still arrive as JSON (`{"error": …}`) on these routes, so this must
+   * distinguish the two: a non-2xx is decoded as text and raised as
+   * {@link ApiError} carrying THE SERVER'S OWN MESSAGE. That matters beyond
+   * tidiness — the print routes answer 404 with a deliberately class-neutral body
+   * for a class mismatch (an escalation refusal: a 403 there would confirm that a
+   * voucher with that id exists), and 501 for a report that does not print. A
+   * client that replaced either message with a guess of its own would either leak
+   * what the 404 protects or hide why nothing printed.
+   */
+  getBlob(
+    path: string,
+    query?: QueryParams,
+  ): Promise<{ blob: Blob; filename: string | null }>;
+}
+
+/**
+ * Pull the download filename out of a Content-Disposition header. The print
+ * handlers set one, and it names the document (invoice number, report + period),
+ * so honouring it is the difference between saving "Invoice-INV-0042.pdf" and
+ * saving "download.pdf".
+ *
+ * Handles the quoted form and RFC 5987's `filename*=UTF-8''…`, preferring the
+ * latter when both are present.
+ */
+export function filenameFromDisposition(header: string | null): string | null {
+  if (!header) return null;
+  const ext = /filename\*\s*=\s*UTF-8''([^;]+)/i.exec(header);
+  if (ext?.[1]) {
+    try {
+      return decodeURIComponent(ext[1].trim());
+    } catch {
+      // A malformed encoding must not lose the download; fall through.
+    }
+  }
+  const quoted = /filename\s*=\s*"([^"]*)"/i.exec(header);
+  if (quoted?.[1]) return quoted[1];
+  const bare = /filename\s*=\s*([^;]+)/i.exec(header);
+  return bare?.[1]?.trim() ?? null;
 }
 
 /** Construct an {@link HttpClient} bound to a base URL + fetch implementation. */
@@ -152,6 +197,37 @@ export function createHttpClient(opts: HttpClientOptions = {}): HttpClient {
       query?: QueryParams,
     ) {
       return request<T>("POST", path, { body, contentType }, query);
+    },
+    async getBlob(path: string, query?: QueryParams) {
+      const url = `${baseUrl}${path}${buildQuery(query)}`;
+      const res = await doFetch(url, { method: "GET", headers: { ...baseHeaders } });
+
+      if (!res.ok) {
+        // The body is JSON here even though the success body is not. Read it as
+        // text and surface the server's own sentence — see getBlob's doc comment
+        // on why we must not substitute our own.
+        const text = await res.text();
+        let parsed: unknown = undefined;
+        if (text.length > 0) {
+          try {
+            parsed = JSON.parse(text);
+          } catch {
+            parsed = text;
+          }
+        }
+        const message =
+          parsed &&
+          typeof parsed === "object" &&
+          "error" in (parsed as Record<string, unknown>)
+            ? String((parsed as Record<string, unknown>).error)
+            : `request failed: ${res.status} ${res.statusText}`;
+        throw new ApiError(res.status, message, parsed);
+      }
+
+      return {
+        blob: await res.blob(),
+        filename: filenameFromDisposition(res.headers.get("Content-Disposition")),
+      };
     },
   };
   return client;
