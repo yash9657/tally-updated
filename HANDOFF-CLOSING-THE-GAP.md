@@ -4,7 +4,11 @@
 > the authority on T1 (printing) and on the *procedures* in its §3 and §5 — read those, they
 > are not repeated here in full. This file is the plan for everything that is left.
 >
-> **HEAD `81dd870` · migrations applied to `0046` · working tree clean · all gates green.**
+> **HEAD `90c9f11` · migrations applied to `0046` · working tree clean · all gates green.**
+>
+> **§3.1 IS DONE — printing and bank reconciliation are now reachable from the keyboard.**
+> `docs/design/t1t4-ui-model.md` is the memo. No migration was needed. See §3.1 below for
+> what shipped, and §7 for the three things the work discovered.
 
 ---
 
@@ -93,13 +97,19 @@ change to the Section 393 rate table is currently unchecked.** The session will 
 against it. This is not believed to be a large risk, but it is unverified and must not be
 described as verified until it is done.
 
-### 1.3 — A PRODUCT DECISION ONLY YOU CAN MAKE (§6.3)
+### 1.3 — A PRODUCT DECISION ONLY YOU CAN MAKE (see also §3.1)
 
 **How should a Bank Reconciliation Statement print, when a company has three bank accounts?**
 The print route is `/print/reports/{name}` and carries no ledger id. Options: a `?ledger_id=`
 parameter (one statement per print), or one document containing every bank account in turn.
 Say which; the session will build it. It currently answers `501` honestly rather than
 guessing.
+
+**Still open, and now more visible than it was.** The screen exists, so an operator will
+press Ctrl+P on it. It refuses with the reason in full — "the print route carries no ledger
+id, so a company with three bank accounts has no way to say which one to print" — rather
+than guessing a layout. `printTarget.ts`'s `bank-reconciliation` branch and invariant I-10
+are what a future well-meaning change has to argue with.
 
 ### 1.4 — THE THING THAT WILL FIND MORE THAN THIS WHOLE FILE
 
@@ -115,19 +125,26 @@ were found that way and they are the single most embarrassing class of gap in th
 
 ### 2.1 The honesty surface
 
-`frontend/src/screens/FeaturesScreen.tsx` — **45 rows: 22 on, 2 structural ("always"), 5
-server-only, 16 off.** It is accurate as of `81dd870` and it is the thing to update
+`frontend/src/screens/FeaturesScreen.tsx` — **45 rows: 25 on, 2 structural ("always"), 3
+server-only, 15 off.** Counted at `90c9f11` (the previous count in this file was one out on
+two of the four buckets — count them, do not copy the number). It is the thing to update
 **in the same commit** as any feature change. A feature marked `on` that is not reachable
 from the app is a lie the product tells its own user.
+
+The three rows that moved off `server`-only in `6de36ae` are printing (voucher), printing
+(reports) and bank reconciliation. **Each kept its remaining gaps disclosed** — that is the
+pattern to copy: a row goes `on` when the key exists, and the note says what the key still
+cannot do.
 
 ### 2.2 The correctness core is done and is genuinely gated
 
 Double-entry, the immutable hash-chained edit log, bill-wise details, credit/debit notes,
 opening balances, numbering series, GST (GSTR-1, 2A/2B, 3B, IMS, ITC), statutory payroll,
 inventory with closing stock feeding the Balance Sheet, e-invoice/IRN with freeze, auth +
-Tally's Disallow/Allow ACL + WebAuthn, offline sync, printed documents, and now bank
-reconciliation on the server. **1839 backend tests, 0 skipped, plus 11 independent corpora
-and seven live end-to-end gates.** This half is not where the risk is.
+Tally's Disallow/Allow ACL + WebAuthn, offline sync, printed documents, and bank
+reconciliation — the last two now with keys that reach them. **1841 backend tests, 0
+skipped, 431 frontend tests, plus 11 independent corpora and seven live end-to-end gates
+(`e2e:ui` is now 45 flows, up from 38).** This half is not where the risk is.
 
 ### 2.3 ⚠️ FIVE PLACES THE TDS ENGINE UNDER-DEDUCTS — this is a correctness issue, not a gap
 
@@ -157,29 +174,45 @@ attribute, and the engine must **refuse** rather than silently return zero.
 
 Ordered by who it stops, not by size. Each track starts with its §3.2 memo (rule 0.1).
 
-### 3.1 FIRST — THE TWO FEATURES WITH NO BUTTON. Small work, and it is embarrassing.
+### 3.1 ~~FIRST — THE TWO FEATURES WITH NO BUTTON~~ — ✅ DONE (`0ce54c6`…`90c9f11`)
 
-**This is the highest value-per-hour work in the whole file and it is not a new feature.**
-Two things are fully built, server-side, tested, and **unreachable by a human**:
+Both are reachable from the keyboard. Memo: `docs/design/t1t4-ui-model.md`.
 
-| Built | Reachable? | What is missing |
-|---|---|---|
-| **Printing** (T1) | ❌ HTTP only | No print key anywhere in `frontend/src`. An operator cannot print the invoice from the screen they keyed it on. |
-| **Bank reconciliation** (T4) | ❌ HTTP only | No bank-reconciliation key. The whole statement and the tick-off loop exist and cannot be used. |
+| Was | Now |
+|---|---|
+| **Printing** (T1) — HTTP only | **Ctrl+P** on a voucher or report, **Alt+P** too. Prints a voucher just saved with Ctrl+A — the case §3.1 was actually about. Six classes print; the other seven refuse with their own reason. |
+| **Bank reconciliation** (T4) — HTTP only | **Gateway > Bank Reconciliation**. **F4** picks the account, **F2** dates the statement, the Bank Date cell ticks an item off. |
 
-For a **keystroke-compatible** product this is a parity gap, not a nicety — keystroke
-compatibility is the actual moat (32 corpus cases) and is what lets an operator switch
-without retraining. **Do not build a third headless feature before fixing these two.**
+**Ctrl+P was not a missing key — it was a WRONG one.** `AppShell` returns early on an
+unresolved combo, so Ctrl+P reached the *browser* and printed a screenshot of the DOM: no
+Rule 46 particulars, no GSTIN, no tax summary. Binding it fixed that as a side effect. It
+was also the only documented TallyPrime combo absent from a keymap whose own header says a
+dead key is worse than an honest refusal.
 
-Shape: a print key on the voucher screen and a reconciliation screen listing a bank ledger's
-postings with an editable Bank Date column (exactly Tally's `F5` view). The server side is
-done; both are UI work against existing routes.
+**No migration.** The whole track was client work plus **one derived server field**
+(`ledger.is_bank`) — which is why it was the best value-per-hour work in the file.
 
-### 3.2 T4 slice 2 — bank statement import + matching  (migration 0047)
-Finish what `81dd870` started. `docs/design/t4-model.md` §1.4 scopes it. **The one rule that
-matters: never auto-clear an ambiguous match** (same amount, same day, two vouchers) —
-surface both and let a human choose. Also add bank account number / IFSC to `ledger`, which
-§2 of that memo deliberately deferred.
+**Still open, and disclosed on `FeaturesScreen`:** the BRS cannot be printed (§1.3 below is
+still unanswered — the route carries no ledger id); statement import and matching are §3.2;
+and there is no print **options** menu, which is why Alt+P says it printed with defaults.
+
+### 3.2 T4 slice 2 — bank statement import + matching  (migration 0047 — **but see §5 item 1**)
+**This is now the next track.** Finish what `81dd870` started; `docs/design/t4-model.md` §1.4
+scopes it. **The one rule that matters: never auto-clear an ambiguous match** (same amount,
+same day, two vouchers) — surface both and let a human choose. Also add bank account number /
+IFSC to `ledger`, which §2 of that memo deliberately deferred.
+
+**The screen is already there to hang it on**, and three things about it are load-bearing:
+
+- The matching keys **are already bound** and answer "not built" (`F8` modify match, `Alt+F8`
+  unlink, `Alt+S` potential matches, `F9` set status — all from `RESEARCH.md:879`). Flip
+  them to real actions in the same change that builds them, exactly as `Alt+F7`–`Alt+F10`
+  were flipped when the stock vouchers got a screen.
+- **`F5` is the amount-view toggle** (deposits/withdrawals as two columns) and is also bound
+  as unavailable. It belongs to this slice.
+- Adding the account number / IFSC means adding the **columns AND the data** together —
+  invariant I-11 of `docs/design/t1t4-ui-model.md` exists because a blank labelled field
+  reads as "this bank has no IFSC".
 
 ### 3.3 T6 — TDS/TCS persistence, register, returns  (migrations 0049–0050)
 **The memo is written and every decision is resolved against the statute:
@@ -233,7 +266,7 @@ Tally has thirty years of surface this file does not list: **POS, job costing, O
 data synchronisation, payroll attendance and leave, manufacturing journals, multi-godown
 transfers with in-transit, price levels per party, reorder levels, and more.**
 `PLAN-TALLY-PARITY.md` §7 says Tier 2 is explicitly not exhaustive, and it is not.
-**"Full Tally parity" is not a near-term goal and probably should not be one** — see §6.
+**"Full Tally parity" is not a near-term goal and probably should not be one** — see §7.
 
 ---
 
@@ -257,6 +290,23 @@ including an Owner:
 3. `authz.KnownReportNames` (if it is a report)
 4. `reportName()` — because `routes()` mounts `/print/reports/<name>` for **every** known
    report name
+
+### 4.2b A new CLIENT SCREEN has its own registration points — learned in §3.1
+A new `ScreenKind` is not one edit either. Missing any of these is either a build failure
+(good) or a silent wrong behaviour (bad):
+1. `keystroke/types.ts` — the `ScreenKind` union
+2. `corpora/validate.py`'s `KNOWN_SCREENS` — **fails `make verify`**, which is the gate that
+   catches you; §4.2's list does not mention it
+3. `app/defaultScreens.tsx` — the registry, or the screen resolves to nothing
+4. `keystroke/buttonBar.ts` — otherwise it falls through `default:` to `GATEWAY_BAR` and
+   silently advertises Go To / Switch To / Calculator (**no test catches this**, see §5 item 11)
+5. `AppShell.tsx`'s `COMPANY_SCOPED_SCREENS` — if it reads company data, or `useCompanyID()`
+   **throws** instead of rendering the "select a company" state
+6. `keymaps/tallyprime.ts` `screenBindings` — **the one that bites.** An unbound key is not
+   inert: F5 globally opens a Payment voucher and F9 a Purchase, so the new screen gets a
+   voucher on top of it. See §6.2.
+7. `buttons.test.ts`'s `SCREEN_PATHS` — or the bar is never asserted at all
+8. `actionLabel()` for any new `KeymapAction`, or F1 Help renders a blank row
 
 ### 4.3 An ACL migration has TWO registration points
 Also learned in T4, and the failure is silent and in the worst direction. You must **both**
@@ -312,13 +362,55 @@ Ports: cored **8087** · insightd **8088** · statutoryd **8091** · vite **5173
 | 4 | **Rule 46(e): a ≥₹50,000 supply to an unregistered party.** May already work now that `gststate` exists — **verify before building**. |
 | 5 | **`handler_print_reports.go` duplicates `printingdb`'s unexported `loadSupplier` verbatim.** Export one and delete the copy or they will drift. |
 | 6 | **The printed Day Book lists voucher VERSIONS**, so an altered voucher contributes twice. It deliberately differs from the JSON one. **A judgement, not a spec — needs a product call.** |
-| 7 | **Data Entry gets no report print at all.** 0038 seeds zero `allow print report:NAME`. Fail-closed and reversible in one row, but unspecified. |
+| 7 | **Data Entry gets no report print at all.** 0038 seeds zero `allow print report:NAME`. Fail-closed and reversible in one row, but unspecified. **Now user-visible**: Ctrl+P exists, so that level sees the server's 403 on every report. The refusal is passed through verbatim rather than reworded. Still needs a product call on which reports that level may print. |
 | 8 | **EDLI premium and EPF/EDLI admin charges unbooked from wage month June 2026** (~₹75 per member per month; rates `ConfUnverified`). **Release blocker. Reading the primary G.S.R. is the fix** — same class of problem as §1.1, and a human with a browser can close it. |
 | 9 | **`internal/security/isolation_test.go`'s RLS assertions are now catalogue-driven** and cover all 41 company-scoped tables. The 7-name `tenantTables` list remains for the narrow-role probe that depends on its exact membership — **do not "tidy" the two into one.** |
+| 10 | **A FIFTH REGISTRATION POINT exists for a new SCREEN, and §4.2 does not mention it: `corpora/validate.py`'s `KNOWN_SCREENS`.** Adding a `ScreenKind` without it fails `make verify` (the cross-language vocabulary check), which is the good outcome — but budget for it. Screens also need `COMPANY_SCOPED_SCREENS` in `AppShell.tsx` if they read company data, or `useCompanyID()` throws instead of rendering the "select a company" state. |
+| 11 | **`buttonBar.ts` has no test that a bar exists for every `ScreenKind`** — it falls back to `GATEWAY_BAR` via `default:`, so a new screen silently advertises Go To / Switch To / Calculator. The decorative-button test only checks the screens listed in its own `SCREEN_PATHS`, so add the new screen there too. Caught by hand this time, not by a gate. |
 
 ---
 
-## 6. WHAT "PARITY" SHOULD MEAN — read before promising a date
+## 6. WHAT §3.1 DISCOVERED — three lessons that generalise
+
+Recorded because each one cost real time and each will recur.
+
+**6.1 — RULE 0.2 APPLIES TO KEYSTROKES, NOT JUST TO TAX RATES.** The §3.1 memo asserted
+two combos from memory and **both were wrong in a plausible direction**:
+
+- It called Alt+P "ERP 9 muscle memory". `RESEARCH.md:2165` disproves it — in TallyPrime
+  Ctrl+P prints the voucher and **Alt+P opens the print MENU**. Different actions, so
+  binding both to one silent print would let an operator believe they had chosen options
+  they never saw.
+- It said reconciliation is reached by **F5 on a bank ledger's report**. That is the
+  **ERP 9** gesture; `RESEARCH.md:873` says Prime uses Alt+G > Banking Activities, and
+  `:879` says F5 *inside* reconciliation is the amount-view toggle. The build shipped the
+  wrong binding and a test caught it: **pressing F5 twice opened a Payment voucher**,
+  because the second press fell through to the global binding.
+
+**`RESEARCH.md` is the citable source for key bindings and it has the answers.** Cite a line
+number in the memo, as `docs/design/t1t4-ui-model.md` §6.1 and §6.2 now do. Keystroke
+fidelity is the moat; "I remembered the combo" is not verification.
+
+**6.2 — AN UNBOUND KEY ON A NEW SCREEN DOES NOT DO NOTHING. IT DOES SOMETHING WRONG.**
+The global table binds F5 to Payment and F9 to Purchase, so any new screen that does not
+override them opens a voucher on top of itself. **Enumerate the keys the real screen has
+(`RESEARCH.md` usually lists them) and bind every one** — to the real action, or to an
+explicit `unavailable`. Only **built** keys may go on a button bar; `buttons.test.ts` fails
+the build otherwise, and rightly, because an operator reaches for a bar button by position
+from then on.
+
+**6.3 — A DECISION WITH NO DELIVERY MECHANISM IS NOT A REFUSAL, IT IS A DEAD KEY.**
+`printTarget.ts` had a fully-reasoned refusal for the BRS from the first commit, and no
+screen registered the print action, so the shell fell through to a generic "does not apply
+on this screen". **430 unit tests missed it** — they all tested the resolver directly. The
+**browser gate caught it**, which is the point of §1.4: over-HTTP gates are exactly how both
+these features became unreachable in the first place. When a track adds a key, add a flow to
+`e2e:ui` that presses it, and assert on the **network** where a status line could not tell a
+real fetch from a browser-printed screenshot.
+
+---
+
+## 7. WHAT "PARITY" SHOULD MEAN — read before promising a date
 
 **The correctness core is strong and roughly done; the daily-workflow surface is about
 60–70% there.** Finishing §3.1 (the two buttons) and §3.2–3.3 (bank statement import, TDS)
