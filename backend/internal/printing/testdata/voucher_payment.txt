@@ -1,0 +1,45 @@
+PAYMENT VOUCHER
+Mehta Trading Co.
+14, Kalbadevi Road
+Opp. Café Excelsior
+Mumbai, Maharashtra - 400002
+GSTIN/UIN: 27AAAPZ1234C1ZS
+PAN: AAAPZ1234C
+Phone: 022 2201 4455   E-Mail: accounts@mehtatrading.example
+No.
+PMT/2026-27/0064
+Dated
+04-Jul-2026
+Page 1 of 1
+PAYMENT VOUCHER PMT/2026-27/0064
+Paid To
+Deshpande Steel Traders
+Plot 22, MIDC Bhosari
+Pune, Maharashtra - 411026
+GSTIN/UIN: 27AABCD9012F1ZK
+Sl
+Particulars
+Against Bill
+Dr/Cr
+Amount
+1
+Deshpande Steel Traders
+DST/PUR/2026/1195
+Dr
+2,12,500.00
+2
+Deshpande Steel Traders
+DST/PUR/2026/1207
+Dr
+62,500.00
+3
+HDFC Bank - CC A/c 4409
+RTGS UTR HDFCR52026070400931
+On Account
+Cr
+2,75,000.00
+Total
+2,75,000.00
+Amount (in words): Rupees Two Lakh Seventy Five Thousand Only
+for Mehta Trading Co.
+Authorised Signatory

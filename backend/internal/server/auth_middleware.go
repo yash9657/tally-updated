@@ -100,8 +100,9 @@ func (s *Server) authnOnlyMiddleware(next http.Handler) http.Handler {
 // flow:
 //
 //  1. verify JWT (401 on missing/invalid) -> claims.
-//  2. service principal? -> full access scoped to {companyID}; set company GUC
-//     and call next (cutoff + webauthn do not apply to svc).
+//  2. service principal? -> routeAction() must MAP the route and must not be a
+//     Print; then full access scoped to {companyID}: set company GUC and call
+//     next (cutoff + webauthn do not apply to svc).
 //  3. set subject GUC -> LookupUserBySubject -> userID (401 if not found/inactive).
 //  4. set user GUC -> Membership(user, pathCompanyID) -> securityLevelID (403).
 //  5. set company GUC (db.WithCompany authorizedID) -> Level + Rules -> Evaluate.
@@ -120,9 +121,66 @@ func (s *Server) companyAuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// (2) Service principal: synthetic full access scoped to the targeted
+		// (2) SERVICE PRINCIPAL: synthetic full access scoped to the targeted
 		// company. No membership/level read, no cutoff, no webauthn.
+		//
+		// WHY THE FAST PATH EXISTS. A "svc:" token is not a person and has no
+		// app_user row, no membership and no security level, so steps (3)-(5)
+		// cannot run for it at all: LookupUserBySubject would find nothing and it
+		// would be refused. Task D created it deliberately for two callers —
+		// statutoryd's freeze hook (GET /vouchers/{id} then POST
+		// /vouchers/{id}/external-reference, pinning an IRN on a voucher in a
+		// company it is not a member of) and the offline/integrator seams (POST
+		// /sync/commit, POST /import/tally-xml). handler_admin.go's adminCtx keeps
+		// the admin surface out of its reach separately, so a compromised side
+		// plane cannot grant itself Owner.
+		//
+		// AND WHY IT IS NO LONGER UNCONDITIONAL. It used to return here BEFORE
+		// routeAction ran, which made it the one caller in the product for whom
+		// two invariants of this subtree did not hold:
+		//
+		//	PRINT. Track T1 mounted GET /print/vouchers/{class}/{id} and GET
+		//	/print/reports/{name} inside {companyID}. Printing is a separate
+		//	authority from Display precisely because a PDF leaves the building —
+		//	that is the whole reason authz.Print exists and the reason migration
+		//	0038 has to grant it explicitly. A service token was handed the
+		//	payroll register and any named employee's payslip as a finished PDF,
+		//	in any company whose UUID it could name, and there was NO rule an
+		//	owner could write to stop it because the PDP never ran. Refused here,
+		//	for every service principal, unconditionally: nothing in the tree
+		//	prints with a svc: token, and no integrator needs paper.
+		//
+		//	DEFAULT-DENY. routeAction default-denies any {companyID} sub-path it
+		//	does not map, which is what makes "a route mounted without a mapping
+		//	is refused, not served unauthorized" a property of this subtree.
+		//	Skipping routeAction exempted service principals from it, so every
+		//	route added after this one was born reachable by them. Now an unmapped
+		//	sub-path is 403 for a svc: token exactly as it is for a person.
+		//
+		// THE BOUNDARY AND ITS LIMIT. Everything routeAction DOES map that is not
+		// a Print still gets Task D's synthetic full access — Create, Alter,
+		// Delete and Display are unchanged, so the freeze hook, sync commit and
+		// Tally-XML import are untouched, as is verify-tenancy.mts's contract that
+		// a svc principal reads company A and its trial balance with no
+		// membership. Giving service principals a REAL ACL identity (a level,
+		// rules, a cutoff, so an owner could write `disallow display
+		// report:payroll-register` against one) is a Task-D-sized change and is
+		// deliberately not attempted here; this closes the document surface and
+		// restores default-deny, nothing more. See auth_print_service_test.go.
+		//
+		// routeAction does not touch the request body, so calling it here cannot
+		// disturb the payload the sync/import handlers read (only
+		// voucherDateFromRequest peeks a body, and that stays on the person path).
 		if claims.IsService() {
+			act, _, _, mapped := routeAction(r)
+			if !mapped {
+				writeError(w, http.StatusForbidden, "unmapped route: access denied")
+				return
+			}
+			if act == authz.Print {
+				writeError(w, http.StatusForbidden, "service principals cannot print documents")
+				return
+			}
 			ctx := db.WithSubject(r.Context(), claims.Subject)
 			ctx = db.WithCompany(ctx, companyID)
 			next.ServeHTTP(w, r.WithContext(ctx))
@@ -269,7 +327,7 @@ func voucherDateFromRequest(r *http.Request, act authz.Action) *time.Time {
 //	PUT   .../vouchers/{class}/{voucherID}                   -> Alter/{class}
 //	GET   .../vouchers/{voucherID}                           -> Display/voucher
 //	DELETE .../vouchers/{voucherID}                          -> Delete/voucher
-//	POST  .../vouchers/{voucherID}/external-reference        -> svc (handled before this)
+//	POST  .../vouchers/{voucherID}/external-reference        -> Alter/voucher
 //	GET   .../reconciliation-queue                           -> Display/report:reconciliation-queue
 //	GET   .../trial-balance|balance-sheet|profit-and-loss|day-book|outstandings|gstr1
 //	GET   .../stock-summary|stock-movement|godown-summary
@@ -288,6 +346,8 @@ func voucherDateFromRequest(r *http.Request, act authz.Action) *time.Time {
 //	GET   .../payroll-register|payroll-payslip
 //	GET   .../payroll-form-138|payroll-pf-ecr
 //	GET   .../payroll-esi-return                             -> Display/report:NAME
+//	GET   .../print/vouchers/{class}/{voucherID}             -> Print/{class}
+//	GET   .../print/reports/{reportName}                     -> Print/report:NAME
 //
 // An unmatched route returns mapped=false (default-deny).
 func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName string, mapped bool) {
@@ -341,9 +401,11 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 		return authz.Create, "sales", "", true
 
 	// External-reference POST (freeze hook): /vouchers/{voucherID}/external-reference.
-	// Logically an Alter on the voucher. Service principals (statutoryd) bypass
-	// the PDP entirely (handled in the middleware before routeAction); an Owner
-	// also passes this as Alter/voucher.
+	// Logically an Alter on the voucher. Service principals (statutoryd) skip the
+	// PDP itself, but they are now routed through THIS function first so that
+	// Print is refused and an unmapped sub-path still default-denies for them —
+	// so this arm has to map, or the freeze hook the fast path exists for would be
+	// refused as unmapped. An Owner passes it as Alter/voucher.
 	case method == http.MethodPost && strings.HasPrefix(rest, "/vouchers/"):
 		segs := splitPath(rest)
 		if len(segs) == 3 && segs[0] == "vouchers" && segs[2] == "external-reference" {
@@ -390,9 +452,65 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 		}
 		return "", "", "", false
 
+	// PRINT (track T1). Two routes, both READS:
+	//
+	//	GET /print/vouchers/{class}/{voucherID} -> (Print, <class>)
+	//	GET /print/reports/{reportName}         -> (Print, report:<name>)
+	//
+	// THE ACTION IS Print AND NOT Display, which is the whole reason this arm
+	// exists rather than folding print into the existing report/voucher arms.
+	// Handing somebody the Trial Balance on a screen and handing them a PDF of it
+	// to take out of the building are different authorities, and Tally has always
+	// modelled them as different actions. Because they are different actions,
+	// SILENCE DENIES PRINT SEPARATELY: migration 0011's coarse `allow display
+	// report` is action=display and does not reach action=print at all, so print
+	// of every report is default-denied for the seeded Data Entry level until an
+	// administrator (or migration 0038) says otherwise.
+	//
+	// THE CLASS COMES FROM THE PATH, exactly as POST /vouchers/{class} derives its
+	// token, and it is validated by the SAME isVoucherClass the POST arm uses. The
+	// report name is validated by the SAME reportName() the JSON report arm uses.
+	// One notion of "which segment is legal" per thing: a class a path can carry
+	// and a class the PDP can name must not be able to drift apart, or a
+	// `disallow print sales` stops matching the route it was written for.
+	//
+	// AN UNKNOWN CLASS OR REPORT NAME RETURNS mapped=false, so the default-DENY
+	// applies. That is the fail-closed direction — a typo'd segment must never
+	// resolve to some other resource token that an administrator's rule happens to
+	// allow.
+	//
+	// PRINT IS NOT A WRITE, so neither route inherits the back-dated write cutoff
+	// (voucherDateFromRequest returns nil when !act.IsWrite()) or the Owner level's
+	// WebAuthn step-up (authz gates the step-up on Action.IsWrite() too, which is
+	// false for Print exactly as it is for Display). This is the same line the
+	// price-list quote and the Stock Summary sit on, and for the same reason: an
+	// operator asked for a second factor to reprint the invoice they keyed five
+	// minutes ago prints it from a spreadsheet instead, and then the paper and the
+	// books disagree. TestAnOwnerWhoHasNotSteppedUpCanStillPrint pins it, with a
+	// control proving the step-up is genuinely armed for that same token on a write.
+	//
+	// AND THE HOLE THIS ARM OPENS, WHICH THE HANDLER CLOSES. The decision is made
+	// from the class in the PATH, before any row is read, so the voucher id is
+	// unchecked here. A level allowed `print sales` and refused `print payroll`
+	// could otherwise ask for /print/vouchers/sales/<a payroll voucher's id> and be
+	// handed the wage bill. handlePrintVoucher therefore reads the STORED class
+	// (printingdb.Store.VoucherClass) and refuses a mismatch with a 404 that is
+	// byte-identical to the one a non-existent id gets — see handler_print.go.
+	case method == http.MethodGet && strings.HasPrefix(rest, "/print/"):
+		return printRouteAction(rest)
+
 	// Reports (and the recon queue / gstr1, modelled as reports).
-	case method == http.MethodGet && rest == "/reconciliation-queue":
-		return authz.Display, "report", "reconciliation-queue", true
+	//
+	// reconciliation-queue used to be handled by a case of its own HERE, with
+	// reportName() not knowing about it, and the two places were not equivalent:
+	// this arm only ever ran for GET "/reconciliation-queue", while everything
+	// that asks reportName() which segments are legal report names — the print
+	// route's printRouteAction, above — refused it. The consequence was that
+	// GET /print/reports/reconciliation-queue was UNMAPPED, i.e. default-denied
+	// for every level including an Owner, and `disallow print
+	// report:reconciliation-queue` was a rule an administrator could write that
+	// could never match. It is now a report name in reportName() like every other
+	// one, which is the only arrangement under which the two arms cannot disagree.
 	case method == http.MethodGet && reportName(rest) != "":
 		return authz.Display, "report", reportName(rest), true
 
@@ -493,6 +611,29 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 		return authz.Create, "ims-action", "", true
 	case method == http.MethodPost && rest == "/gst-filings":
 		return authz.Create, "gst-filing", "", true
+	}
+	return "", "", "", false
+}
+
+// printRouteAction maps the two print paths onto (Print, resource).
+//
+// It is split out of routeAction's switch because it is the one arm with TWO
+// shapes under one prefix, and because the unknown-segment answer must be the
+// same for both: mapped=false, i.e. default-deny. A single `default: return
+// mapped=false` at the bottom is what guarantees that — an arm per shape, each
+// with its own fallthrough, is how one of them would eventually come to return
+// mapped=true for a segment nobody validated.
+func printRouteAction(rest string) (act authz.Action, res authz.Resource, resName string, mapped bool) {
+	segs := splitPath(rest)
+	switch {
+	// /print/vouchers/{class}/{voucherID}
+	case len(segs) == 4 && segs[1] == "vouchers" && isVoucherClass(segs[2]):
+		return authz.Print, authz.Resource(segs[2]), "", true
+	// /print/reports/{reportName}. reportName() takes the leading-slash form
+	// because that is how it is called for the JSON report routes; one function,
+	// one list of legal report segments.
+	case len(segs) == 3 && segs[1] == "reports" && reportName("/"+segs[2]) != "":
+		return authz.Print, "report", segs[2], true
 	}
 	return "", "", "", false
 }
@@ -637,6 +778,14 @@ func isPriceListPath(rest string) bool {
 // not a report route.
 func reportName(rest string) string {
 	switch rest {
+	// The GSTR-1 RECONCILIATION QUEUE. It is a report name in
+	// authz.KnownReportNames, so it has to be one HERE too: reportName() is what
+	// every arm of routeAction asks "is this segment a legal report name?", and a
+	// name known to the vocabulary but not to this function is a name that some
+	// arms serve and others default-deny. It cost exactly that once — see the
+	// comment on the reports arm above.
+	case "/reconciliation-queue":
+		return "reconciliation-queue"
 	case "/trial-balance":
 		return "trial-balance"
 	case "/balance-sheet":

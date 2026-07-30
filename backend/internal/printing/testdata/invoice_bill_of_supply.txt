@@ -1,0 +1,47 @@
+Bill of Supply
+Mehta Trading Co.
+14 Laxmi Industrial Estate
+Pune, Maharashtra - 411004
+GSTIN: 27AAAPZ1234C1ZS
+Bill of Supply No.: BOS/2026-27/0009
+Dated: 18-Apr-2026
+Billed to
+Shreyas Enterprises
+48 Jayanagar 4th Block
+Bengaluru, Karnataka - 560011
+State: Karnataka (29)
+GSTIN: Unregistered
+Shipped to
+Same as billed to
+Sl
+Description of Goods or Services
+HSN/SAC
+Qty
+Unit
+Rate
+Amount
+1
+Handloom cotton dusters
+6307
+150
+NOS
+20.00
+3,000.00
+2
+Jute twine 3 ply
+5607
+30
+KGS
+50.00
+1,500.00
+Value of Supply
+4,500.00
+Total
+4,500.00
+Amount in Words: Rupees Four Thousand Five Hundred Only
+Declaration
+We declare that this bill of supply shows the actual price of the goods described and that
+all particulars are true and correct.
+For Mehta Trading Co.
+Authorised Signatory
+Page 1 of 1

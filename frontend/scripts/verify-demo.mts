@@ -639,6 +639,197 @@ async function main(): Promise<void> {
     `status ${badDate.status}`,
   );
 
+  // -------------------------------------------------------------------------
+  // THE DEMO COMPANY CAN PRINT ITS OWN FIRST INVOICE.
+  //
+  // WHY THE BYTES AND NOT THE STATUS CODE. Every other way of checking a print
+  // route passes on a document that is WRONG: a 200 passes on an empty page, a
+  // content-type passes on somebody else's invoice, and a length passes on a
+  // PDF containing the word "undefined" four times. The one check that cannot be
+  // satisfied by the wrong document is to look for the document's own
+  // identifying strings INSIDE the file — and that is possible here only because
+  // the PDF writer leaves its content streams UNCOMPRESSED on purpose. Deflate
+  // them and this check silently degrades to "some bytes came back", so if a
+  // future change adds compression it must replace these two greps with text
+  // extraction, not delete them.
+  //
+  // AND THAT DEGRADATION IS ITSELF ASSERTED, because a check that can quietly
+  // stop checking is worse than one that was never written: the day somebody
+  // switches on FlateDecode, both greps below would still PASS on a file whose
+  // text they can no longer see, and this gate would go on reporting that the
+  // right document came back. So the invoice half also asserts the PRECONDITION
+  // its greps rest on — a plain `/Length N >>` stream dictionary, and no stream
+  // filter anywhere in the file. That assertion fails LOUDLY on the compression
+  // commit, naming what to do about it, instead of being discovered months later
+  // by a cross-tenant leak this gate was supposed to catch.
+  //
+  // A REFUSAL PRINTS ITS BODY, NOT JUST ITS STATUS. This check now depends on a
+  // chain: the ledger master must hold the party's address, POST /ledgers must
+  // carry it through, the demo seed must set one, and printingdb must put it in
+  // the recipient block — because Rule 46(d) requires the recipient's name AND
+  // address, and the renderer REFUSES an invoice missing a mandatory particular
+  // rather than printing a blank. The refusal names every missing field
+  // (`missing_fields: ["recipient.address1", ...]`), so printing the body turns
+  // "false" into "the demo data has no address" or "the pipeline dropped it" at
+  // a glance. A gate that says only `status 400` costs an hour of bisecting.
+  //
+  // The two strings chosen are the two that identify WHICH document this is and
+  // WHOSE books it came from: the voucher number, and the filer's GSTIN. A
+  // cross-tenant bug in the print handler — the print route reading a voucher
+  // without re-scoping to the company in the path — would come back 200 with a
+  // valid PDF and the WRONG GSTIN, and nothing else in this file would notice.
+  //
+  // A 501 IS NOT TOLERATED HERE. The print track deliberately returns 501 for
+  // the report names it has not implemented, and this check names two it HAS
+  // (a sales voucher and the Trial Balance), so a 501 on either is a regression
+  // and not a disclosure.
+  const pdfChecks = async (): Promise<void> => {
+    const company = await client.getCompany(co);
+    const day = await client.getDayBook(co, { from: FY.from, to: FY.to });
+    // THE CLASS LABEL IS CAPITALISED AND THIS LINE SAID "sales" FOR ONE WAVE.
+    // ledger.Class is `Sales` (internal/ledger/ledger.go:65) and the Day Book
+    // hands back the payload's label verbatim (reporting.DayBook's Class is
+    // "accounting class label from the payload"), so `e.class === "sales"`
+    // matched NOTHING: this gate reported "there is nothing to print" against a
+    // day book holding a Sales voucher, and — because the guard below returns —
+    // it also skipped the Trial-Balance PDF check underneath it. Two assertions
+    // written to close a blocker were dead code, and the gate was red for a
+    // reason that had nothing to do with printing.
+    //
+    // Compared case-INSENSITIVELY on purpose, so this cannot break again if the
+    // label's casing is ever normalised at either end. It is matched against the
+    // Go constant, not against a lowercase guess.
+    const sales = day.entries.find((e) => e.class.toLowerCase() === "sales");
+    if (!sales) {
+      check(
+        "the demo company can PRINT its first sales invoice",
+        false,
+        `no sales voucher in the day book for ${FY.from}..${FY.to}, so there is nothing to print — ` +
+          `${day.entries.length} entries of classes [${[...new Set(day.entries.map((e) => e.class))].join(", ")}]. ` +
+          `If that list DOES contain a sale, this selector is broken again, not the seed`,
+      );
+      return;
+    }
+
+    /**
+     * GET a print route and describe the bytes. Returns the raw body as a
+     * LATIN-1 string: one JavaScript char per byte, so `%PDF-`, `%%EOF` and an
+     * ASCII invoice number can be searched for without a text decoder deciding
+     * that a byte over 0x7f was a broken UTF-8 sequence and replacing it.
+     */
+    const getPDF = async (
+      path: string,
+    ): Promise<{ status: number; ctype: string; bytes: number; text: string }> => {
+      const res = await fetch(`${baseUrl}${path}`, { headers });
+      const buf = Buffer.from(await res.arrayBuffer());
+      return {
+        status: res.status,
+        ctype: (res.headers.get("content-type") ?? "").split(";")[0]!.trim(),
+        bytes: buf.length,
+        text: buf.toString("latin1"),
+      };
+    };
+
+    /**
+     * What went wrong, in the words the server used. A print refusal is JSON
+     * naming every mandatory particular that is absent, so it is the single
+     * most useful thing this gate can put on the operator's screen; a PDF body
+     * is binary and is described rather than dumped. Whitespace is collapsed so
+     * a multi-line error stays on one gate line.
+     */
+    const bodyDiag = (r: { ctype: string; bytes: number; text: string }): string =>
+      r.ctype === "application/pdf"
+        ? `${r.bytes} bytes of PDF`
+        : `body [${r.ctype || "no content-type"}, ${r.bytes} bytes]: ` +
+          (r.text.slice(0, 800).replace(/\s+/g, " ").trim() || "(empty)");
+
+    const invPath = `/v1/companies/${co}/print/vouchers/sales/${sales.voucher_id}`;
+    const inv = await getPDF(invPath);
+    // %%EOF is the last LINE of a PDF, so a trailing newline is legal and
+    // expected; trimming it is not a weakening of the check.
+    const invTail = inv.text.trimEnd();
+    const wantNo = sales.voucher_no;
+    const wantGSTIN = company.gstin;
+    const invBreaks: string[] = [];
+    if (inv.status !== 200) {
+      invBreaks.push(
+        `status ${inv.status}` +
+          (inv.status === 400 || inv.status === 422
+            ? " — the document was REFUSED as incomplete, so read missing_fields below:" +
+              " a Rule 46 particular the demo data does not carry (recipient.address1 means" +
+              " the party master has no address, or POST /ledgers dropped it, or the seed set none)"
+            : "") +
+          ` — ${bodyDiag(inv)}`,
+      );
+    }
+    if (inv.ctype !== "application/pdf") invBreaks.push(`content-type ${inv.ctype || "(absent)"}`);
+    if (!inv.text.startsWith("%PDF-")) invBreaks.push(`does not start with %PDF- (starts ${JSON.stringify(inv.text.slice(0, 8))})`);
+    if (!invTail.endsWith("%%EOF")) invBreaks.push(`does not end with %%EOF (ends ${JSON.stringify(invTail.slice(-16))})`);
+    if (inv.bytes <= 1000) invBreaks.push(`only ${inv.bytes} bytes — an invoice that short is a blank page, not a document`);
+    // THE PRECONDITION THE TWO GREPS BELOW REST ON, asserted before them so a
+    // compressed file is reported as "this gate can no longer see the text"
+    // rather than as "the invoice number is missing". printing/pdf.go writes
+    // every content stream as `<< /Length N >>\nstream\n` with no filter, on
+    // purpose (see its header). Either half of this going wrong makes the greps
+    // vacuous: no plain /Length dict means the file is not shaped the way we
+    // grep it, and any stream filter means the bytes we are grepping are
+    // compressed and the greps prove only that some bytes came back.
+    //
+    // Only asked of a body that IS a PDF: on a refusal the status line above
+    // already carries the whole explanation, and two more sentences about stream
+    // dictionaries would bury it.
+    if (inv.status === 200 && inv.ctype === "application/pdf") {
+      if (!/\/Length \d+ >>\s*stream/.test(inv.text)) {
+        invBreaks.push(
+          "no plain `/Length N >> stream` dictionary in the file, so the two greps below cannot be trusted:" +
+            " they search the RAW bytes and only work while printing/pdf.go writes uncompressed content streams." +
+            " If the PDF writer changed, replace the greps with real text extraction — do not delete them",
+        );
+      }
+      const filterAt = inv.text.search(/\/Filter|FlateDecode/);
+      if (filterAt >= 0) {
+        invBreaks.push(
+          `the PDF now carries a stream filter (${JSON.stringify(inv.text.slice(filterAt, filterAt + 40))} at byte ${filterAt}),` +
+            " so grepping the raw bytes for the invoice number and the GSTIN proves NOTHING — a compressed stream" +
+            " contains neither string even when the document is perfect, and both greps would pass on the wrong" +
+            " document. This gate is telling you it stopped checking: extract the text (or print an uncompressed" +
+            " copy for the gate) before you take the two checks below as evidence again",
+        );
+      }
+    }
+    if (!inv.text.includes(wantNo)) invBreaks.push(`the voucher number ${JSON.stringify(wantNo)} does not appear in the file, so this is not that invoice (or the streams are now compressed, which this check cannot see through)`);
+    if (wantGSTIN === "") {
+      invBreaks.push("the demo company has no GSTIN recorded, so the who-printed-it half of this check is VACUOUS");
+    } else if (!inv.text.includes(wantGSTIN)) {
+      invBreaks.push(`the filer's GSTIN ${wantGSTIN} does not appear in the file — a tax invoice without the supplier's GSTIN is defective under Rule 46(a), and a PDF carrying a DIFFERENT company's GSTIN is a cross-tenant leak`);
+    }
+    check(
+      `the demo company PRINTS its own sales invoice ${wantNo} as a PDF that names itself`,
+      invBreaks.length === 0,
+      invBreaks.length === 0
+        ? `${invPath} -> 200 application/pdf, ${inv.bytes} bytes, %PDF-..%%EOF, uncompressed streams, contains ${wantNo} and ${wantGSTIN}`
+        : invBreaks.join("; "),
+    );
+
+    const tbPath = `/v1/companies/${co}/print/reports/trial-balance`;
+    const tbPDF = await getPDF(tbPath);
+    const tbTail = tbPDF.text.trimEnd();
+    const tbBreaks: string[] = [];
+    if (tbPDF.status !== 200) tbBreaks.push(`status ${tbPDF.status}${tbPDF.status === 501 ? " — the Trial Balance is one of the statements this track DOES print, so 501 is a regression" : ""}`);
+    if (tbPDF.ctype !== "application/pdf") tbBreaks.push(`content-type ${tbPDF.ctype || "(absent)"}`);
+    if (!tbPDF.text.startsWith("%PDF-")) tbBreaks.push(`does not start with %PDF- (starts ${JSON.stringify(tbPDF.text.slice(0, 8))})`);
+    if (!tbTail.endsWith("%%EOF")) tbBreaks.push(`does not end with %%EOF (ends ${JSON.stringify(tbTail.slice(-16))})`);
+    if (tbPDF.bytes <= 1000) tbBreaks.push(`only ${tbPDF.bytes} bytes`);
+    check(
+      "a printed Trial Balance is a PDF",
+      tbBreaks.length === 0,
+      tbBreaks.length === 0
+        ? `${tbPath} -> 200 application/pdf, ${tbPDF.bytes} bytes, %PDF-..%%EOF`
+        : tbBreaks.join("; "),
+    );
+  };
+  await pdfChecks();
+
   console.log(
     `\n${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`}` +
       ` (${checks - failures}/${checks})\n`,

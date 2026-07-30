@@ -1,0 +1,47 @@
+DELIVERY NOTE
+Not a tax invoice. Issued for the movement of goods only; no tax is charged by this document.
+Mehta Trading Co.
+14, Kalbadevi Road
+Opp. Café Excelsior
+Mumbai, Maharashtra - 400002
+GSTIN/UIN: 27AAAPZ1234C1ZS
+PAN: AAAPZ1234C
+Phone: 022 2201 4455   E-Mail: accounts@mehtatrading.example
+No.
+DN/2026-27/0041
+Dated
+12-Jun-2026
+Page 1 of 1
+DELIVERY NOTE DN/2026-27/0041
+Delivery Address (Consignee)
+Kulkarni Hardware Stores
+Shop 3, Laxmi Niwas
+Tilak Road
+Pune, Maharashtra - 411030
+GSTIN/UIN: 27AACCK5678M1Z9
+Sl
+Description of Goods
+HSN/SAC
+Quantity
+Unit
+1
+Galvanised Iron Pipe 25mm (Class "B") \ ISI marked
+73063090
+120
+Nos
+2
+Mild Steel Angle 50x50x6
+72161000
+18.5
+MT
+3
+Brass Ball Valve 15mm
+84818030
+400
+Nos
+Narration: Despatched by Sharma Roadways, LR 88213, vehicle MH-12-AB-4477.
+Declaration: Received the goods described above in good order and condition.
+for Mehta Trading Co.
+Authorised Signatory
+Received by
+Signature / Date

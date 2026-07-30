@@ -202,6 +202,25 @@ async function main(): Promise<void> {
     /** Must begin with `state`; asserted below. */
     gstin: string;
     /**
+     * THE PARTY'S POSTAL ADDRESS, and it is REQUIRED — deliberately not
+     * optional.
+     *
+     * Rule 46(d) of the CGST Rules 2017 makes the recipient's name, ADDRESS and
+     * GSTIN mandatory particulars of a tax invoice, so internal/printing refuses
+     * to render an invoice whose recipient address is blank. Before migration
+     * 0039 the party master had nowhere to keep one, and the consequence was
+     * that THE DEMO COMPANY COULD NOT PRINT A SINGLE ONE OF ITS OWN INVOICES:
+     * every sales voucher this script posts answered 4xx on print.
+     *
+     * Required rather than optional because `satisfies Record<string, Party>`
+     * below then makes it a TYPE ERROR to add a demo party without an address —
+     * i.e. it is impossible to reintroduce the unprintable demo by forgetting a
+     * field. `address` is a NEWLINE-SEPARATED BLOCK (the same shape as the
+     * company's own, so printingdb splits both with one helper), which is why
+     * these are multi-line: a one-line address would not exercise the split.
+     */
+    postal: { address: string; city: string; pincode: string };
+    /**
      * OPENING BALANCE as at books_beginning_from, with its BILL-WISE BREAKUP.
      * In Tally a party's opening balance is never a lump sum: it is the specific
      * unpaid invoices carried in from the old books, each with its own due date.
@@ -222,6 +241,11 @@ async function main(): Promise<void> {
       group: "Sundry Debtors",
       state: HOME_STATE, // 29 Karnataka -> intra-state -> CGST + SGST
       gstin: "29AACCA5678L1Z3",
+      postal: {
+        address: "No. 42, 3rd Cross, Gandhi Bazaar\nBasavanagudi",
+        city: "Bengaluru",
+        pincode: "560004",
+      },
       // Carried in owing two invoices from the previous books.
       opening: {
         amount: 120000,
@@ -237,12 +261,22 @@ async function main(): Promise<void> {
       group: "Sundry Debtors",
       state: OTHER_STATE, // 27 Maharashtra -> inter-state -> IGST
       gstin: "27AACCM9012M1Z7",
+      postal: {
+        address: "Unit 7, Kamala Mills Compound\nSenapati Bapat Marg, Lower Parel",
+        city: "Mumbai",
+        pincode: "400013",
+      },
     },
     steel: {
       name: "Steel Suppliers",
       group: "Sundry Creditors",
       state: HOME_STATE, // 29 Karnataka -> intra-state -> CGST + SGST
       gstin: "29AACCS3456N1Z1",
+      postal: {
+        address: "Shed 11, Peenya Industrial Area\n2nd Stage, Tumkur Road",
+        city: "Bengaluru",
+        pincode: "560058",
+      },
       // We carried in owing this supplier two bills.
       opening: {
         amount: 68000,
@@ -260,6 +294,11 @@ async function main(): Promise<void> {
       // the reason that draft must propose IGST: 27 -> 29 is INTER-state.
       state: OTHER_STATE,
       gstin: "27AACCP2345Q1Z9",
+      postal: {
+        address: "Gat No. 218, Bhosari MIDC\nPimpri-Chinchwad",
+        city: "Pune",
+        pincode: "411026",
+      },
     },
     delhi: {
       name: "Delhi Parts",
@@ -268,6 +307,11 @@ async function main(): Promise<void> {
       // purchase is posted with. Still != 29, so IGST continues to apply.
       state: DELHI_STATE,
       gstin: "07AACCD7890P1Z5",
+      postal: {
+        address: "B-19, Naraina Industrial Area\nPhase I",
+        city: "New Delhi",
+        pincode: "110028",
+      },
     },
   } as const satisfies Record<string, Party>;
 
@@ -284,6 +328,21 @@ async function main(): Promise<void> {
     throw new Error(`company GSTIN ${COMPANY_GSTIN} does not begin with ${HOME_STATE}`);
   }
 
+  // Fail LOUD if any demo party would be seeded WITHOUT an address, because the
+  // consequence is not cosmetic: Rule 46(d) makes the recipient's address a
+  // mandatory particular, internal/printing refuses an invoice without one, and
+  // the demo would ship unable to print any of the invoices this script posts.
+  // The type already requires the field; this catches an empty string in it,
+  // which the type cannot.
+  for (const p of Object.values(PARTIES) as Party[]) {
+    if (!p.postal.address.trim() || !p.postal.city.trim() || !p.postal.pincode.trim()) {
+      throw new Error(
+        `party "${p.name}": no postal address on file, so every tax invoice raised on ` +
+          `them would be refused for want of the Rule 46(d) recipient address`,
+      );
+    }
+  }
+
   /**
    * Create a party ledger with its FULL GST identity.
    *
@@ -294,8 +353,26 @@ async function main(): Promise<void> {
    *   maintain_bill_by_bill: true   — Tally only tracks bill references on a
    *     ledger that says Yes here. The old seed attached bill allocations to
    *     ledgers flagged false, which is self-contradictory data.
+   *   address / city / pincode     — the Rule 46(d) recipient block. WITHOUT
+   *     THESE THE DEMO CANNOT PRINT ANY OF ITS OWN INVOICES: internal/printing
+   *     refuses a tax invoice whose recipient address is blank, so before
+   *     migration 0039 gave the party master somewhere to keep one, every sales
+   *     voucher this script posts answered 4xx on print.
+   *
+   * They are SPREAD rather than written as literal properties on purpose:
+   * CreateLedgerRequest in src/api/types.ts does not declare them yet (that file
+   * belongs to another slice, and the handoff to add them is recorded), and TS
+   * excess-property checking rejects an undeclared property written inline while
+   * a spread passes. The wire body is identical either way — rest.ts posts the
+   * whole object — and this keeps `npm run typecheck` green both before and
+   * after the declaration lands.
    */
   const partyLedger = async (p: Party) => {
+    const postal = {
+      address: p.postal.address,
+      city: p.postal.city,
+      pincode: p.postal.pincode,
+    };
     const res = await client.createLedger(co, {
       name: p.name,
       group_name: p.group,
@@ -303,6 +380,7 @@ async function main(): Promise<void> {
       gstin: p.gstin,
       registration_type: "REGULAR",
       maintain_bill_by_bill: true,
+      ...postal,
       ...(p.opening
         ? {
             opening_balance: money(p.opening.amount),

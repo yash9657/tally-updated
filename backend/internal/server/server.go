@@ -47,6 +47,7 @@ import (
 	"github.com/khata/cored/internal/notify"
 	"github.com/khata/cored/internal/payroll/payrolldb"
 	"github.com/khata/cored/internal/platform/db"
+	"github.com/khata/cored/internal/printing/printingdb"
 	"github.com/khata/cored/internal/query"
 	"github.com/khata/cored/internal/reporting"
 	"github.com/khata/cored/internal/sync"
@@ -82,6 +83,20 @@ type Server struct {
 	// models over the tables migration 0034 created. It posts salary vouchers
 	// through the SAME ledger service as everything else — never around it.
 	payroll *payrolldb.Service
+
+	// printStore is the DB-facing half of printing (track T1): it assembles a
+	// voucher's document from the books and reads a company's template overrides.
+	// The RENDERER (internal/printing) is a pure leaf that this server hands a
+	// document value to — see handler_print.go.
+	//
+	// It takes pool.Raw() rather than the *db.Pool every other service takes,
+	// because that is the seam printingdb was built against. The consequence is
+	// that printingdb sets `app.current_company_id` transaction-locally itself, in
+	// its own inTenantTx, and print_template / voucher_head are FORCE RLS with the
+	// GUC in the USING clause — so a print request with no tenant scope reads
+	// NOTHING rather than everything. Never hand this an admin pool: it would
+	// bypass RLS and the tenant predicate would stop being enforced.
+	printStore *printingdb.Store
 
 	// Auth (Task D, WS1). verifier verifies inbound JWTs; signer mints dev
 	// tokens for POST /auth/token; authStore + the PDP enforce membership and
@@ -192,13 +207,17 @@ func New(ctx context.Context, appDSN string) (*Server, error) {
 		// tenant-scoped pool as gstr/query, so their transactions and RLS
 		// semantics are identical; payroll additionally takes the ONE ledger
 		// service l, because a pay run posts real double-entry vouchers.
-		itc:       itc.NewService(pool),
-		payroll:   payrolldb.NewService(pool, l),
-		verifier:  verifier,
-		signer:    signer,
-		authStore: authzStore,
-		authzSeed: authzStore,
-		authAdmin: authzStore,
+		itc:     itc.NewService(pool),
+		payroll: payrolldb.NewService(pool, l),
+		// Printing (T1). The SAME application-role pool everything else uses, so
+		// the print path is under the same NOBYPASSRLS role and the same
+		// tenant-scoped transactions as every report.
+		printStore: printingdb.NewStore(pool.Raw()),
+		verifier:   verifier,
+		signer:     signer,
+		authStore:  authzStore,
+		authzSeed:  authzStore,
+		authAdmin:  authzStore,
 		// Password login (WS-A1). Same concrete store; a distinct interface
 		// because it operates on the pre-auth side of the boundary.
 		credentials: authzStore,
@@ -693,6 +712,46 @@ func (s *Server) routes() {
 		r.Put("/security-levels/{levelID}", s.handleUpdateSecurityLevel)
 		r.Delete("/security-levels/{levelID}", s.handleDeleteSecurityLevel)
 
+		// PRINT (track T1: handler_print.go, handler_print_reports.go).
+		//
+		//	GET /print/vouchers/{class}/{voucherID} -> (print, <class>)
+		//	GET /print/reports/{reportName}         -> (print, report:<name>)
+		//
+		// EVERY CLASS AND EVERY REPORT NAME IS REGISTERED AS A LITERAL SEGMENT,
+		// drawn from authz.KnownVoucherClasses and authz.KnownReportNames. That is
+		// not verbosity, it is what keeps the closure gates honest:
+		//
+		//   * TestEveryCompanyRouteIsMappedAndInVocabulary walks THIS router and
+		//     substitutes a UUID for every {param}. A route registered as
+		//     /print/vouchers/{class}/{voucherID} would be walked as
+		//     /print/vouchers/<uuid>/<uuid>, routeAction would (correctly) refuse
+		//     to map an unknown class, and the gate would fail on a route that is
+		//     perfectly fine in production — or, worse, would be "fixed" by making
+		//     routeAction map an arbitrary segment, which is the default-deny
+		//     property gone.
+		//   * With literals, the ROUTER ITSELF is the closed vocabulary and the
+		//     walk exercises the REAL (print, sales) ... (print, report:day-book)
+		//     pairs. It is the same thing /vouchers/sales/{voucherID} does.
+		//
+		// EVERY class is registered, including the seven that print no document at
+		// all (Purchase, Contra, Journal, Payroll, Receipt Note, Stock Journal,
+		// Physical Stock). They are mounted so the handler can answer with
+		// printingdb's ErrNoDocumentForClass, which NAMES the class and says why —
+		// "a Purchase is the SUPPLIER's invoice to issue, not ours". An unmounted
+		// path would instead produce a bare 403 from routeAction's default-deny,
+		// which reads as an authorization bug and sends somebody hunting for a
+		// missing ACL rule.
+		//
+		// Print is NOT a write (authz.Print.IsWrite() is false), so neither route
+		// inherits the back-dated write cutoff or the Owner level's WebAuthn
+		// step-up. See routeAction's print arm for why that is deliberate.
+		for _, class := range authz.KnownVoucherClasses {
+			r.Get("/print/vouchers/"+string(class)+"/{voucherID}", s.handlePrintVoucher)
+		}
+		for _, name := range authz.KnownReportNames {
+			r.Get("/print/reports/"+name, s.handlePrintReport)
+		}
+
 		// Conversational query (Phase 3 flagship): ask the books a question in
 		// English (or POST a typed DSL) and get a typed, read-only answer. The
 		// handler runs under companyAuthMiddleware (PDP maps POST /query ->
@@ -905,6 +964,27 @@ type ledgerReq struct {
 	RegistrationType   string `json:"registration_type"`
 	PAN                string `json:"pan"`
 	CreatedBy          string `json:"created_by"`
+
+	// Address / City / Pincode are the party's POSTAL BLOCK, named to match the
+	// company-profile request body (mailing_name / address / city / pincode) so
+	// one client-side form shape serves both. `address` is a NEWLINE-SEPARATED
+	// BLOCK, not a single line.
+	//
+	// These are MASTER FIELDS ON AN EXISTING RESOURCE, deliberately: no new
+	// route, no new ACL action, no renamed field. A party's address is not a
+	// separate thing you can be separately authorised for — whoever may create
+	// the party may state where it is.
+	//
+	// ALL THREE ARE OPTIONAL, and omitting them is not an error here. Rule 46(d)
+	// makes the recipient's address mandatory ON A TAX INVOICE, and that is
+	// where it is enforced (printing.ValidateRule46); a party master with no
+	// address is legal, because a walk-in cash customer below the Rule 46(e)
+	// fifty-thousand threshold has none. Refusing the create instead would make
+	// this endpoint enforce a threshold it cannot see.
+	Address string `json:"address"`
+	City    string `json:"city"`
+	Pincode string `json:"pincode"`
+
 	// OpeningBills is the bill-wise breakup of OpeningBalance. masters.CreateLedger
 	// requires it to SUM to the opening balance when present.
 	OpeningBills []openingBillReq `json:"opening_bills"`
@@ -955,6 +1035,9 @@ func (s *Server) handleCreateLedger(w http.ResponseWriter, r *http.Request) {
 		StateCode:          req.StateCode,
 		RegistrationType:   masters.GSTRegistrationType(req.RegistrationType),
 		PAN:                req.PAN,
+		Address:            req.Address,
+		City:               req.City,
+		PIN:                req.Pincode,
 		OpeningBills:       openingBills,
 	}, req.CreatedBy)
 	if err != nil {
@@ -1964,14 +2047,12 @@ func (s *Server) handleOutstandings(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var kind reporting.OutstandingKind
-	switch r.URL.Query().Get("kind") {
-	case "", "RECEIVABLE", "receivable":
-		kind = reporting.Receivables
-	case "PAYABLE", "payable":
-		kind = reporting.Payables
-	default:
-		writeError(w, http.StatusBadRequest, "invalid kind (RECEIVABLE|PAYABLE)")
+	// The `kind` parser lives in handler_print_reports.go and is SHARED with the
+	// printed ageing. If the two parsed it differently — one defaulting to
+	// payables, one accepting a spelling the other refused — an operator would
+	// chase a customer for what is actually a supplier balance.
+	kind, ok2 := outstandingKindParam(w, r)
+	if !ok2 {
 		return
 	}
 	asOn := r.URL.Query().Get("as_on")

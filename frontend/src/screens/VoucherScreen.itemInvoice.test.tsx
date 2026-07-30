@@ -606,9 +606,27 @@ describe("F11 Company Features tells the truth about inventory", () => {
     expect(badgeFor(/^Godowns \/ stock locations/)).toBe("On");
   });
 
+  it("the closing-stock row reads 'On', because the Balance Sheet now carries the figure", () => {
+    // THIS ASSERTION USED TO LIVE IN THE "not built" TEST BELOW AND SAID
+    // "Not built". Closing stock was wired onto the Balance Sheet through the
+    // same derivation the Stock Summary uses — one function, so the two report
+    // paths cannot disagree — and the row was corrected to "On" while this
+    // assertion was left behind, which turned the honesty gate RED against a
+    // screen that was telling the truth. The claim is still pinned, in the
+    // direction that is now true: if the Balance Sheet's Closing Stock line is
+    // ever unwired, this fails, and if the row is left saying "Not built" after
+    // it was wired, it fails too.
+    renderFeatures();
+    expect(
+      badgeFor(/^Closing stock on the Balance Sheet/),
+      "F11 must say closing stock reaches the Balance Sheet, because it does",
+    ).toBe("On");
+  });
+
   it("still says NOT BUILT for the inventory things that are not built", () => {
     // The other half of honesty. If every row said "On" the screen would be
     // decoration, so the gaps this slice did NOT close are asserted too.
+    // Closing stock is NOT one of them any more — it has its own test above.
     renderFeatures();
     expect(badgeFor(/^FIFO \/ LIFO/)).toBe("Not built");
     // Was "Inventory vouchers (Stock Journal, ...)" until those four got an
@@ -616,6 +634,5 @@ describe("F11 Company Features tells the truth about inventory", () => {
     // which is asserted here and pinned On/Not-built in the stock-voucher
     // suite's own F11 test.
     expect(badgeFor(/^Order processing \(Sales \/ Purchase Orders\)/)).toBe("Not built");
-    expect(badgeFor(/^Closing stock on the Balance Sheet/)).toBe("Not built");
   });
 });

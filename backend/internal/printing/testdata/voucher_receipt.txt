@@ -1,0 +1,48 @@
+RECEIPT VOUCHER
+Mehta Trading Co.
+14, Kalbadevi Road
+Opp. Café Excelsior
+Mumbai, Maharashtra - 400002
+GSTIN/UIN: 27AAAPZ1234C1ZS
+PAN: AAAPZ1234C
+Phone: 022 2201 4455   E-Mail: accounts@mehtatrading.example
+No.
+RCT/2026-27/0117
+Dated
+30-Jun-2026
+Page 1 of 1
+RECEIPT VOUCHER RCT/2026-27/0117
+Received From
+Kulkarni Hardware Stores
+Shop 3, Laxmi Niwas
+Tilak Road
+Pune, Maharashtra - 411030
+GSTIN/UIN: 27AACCK5678M1Z9
+Sl
+Particulars
+Against Bill
+Dr/Cr
+Amount
+1
+Bank of Baroda - Current A/c 0012
+NEFT ref BARBN26061800417
+On Account
+Dr
+50,000.00
+2
+Kulkarni Hardware Stores
+INV/2026-27/0308
+Cr
+31,450.00
+3
+Kulkarni Hardware Stores
+INV/2026-27/0331
+Cr
+18,550.00
+Total
+50,000.00
+Amount (in words): Rupees Fifty Thousand Only
+Narration: Received against outstanding bills as allocated above.
+Declaration: Received subject to realisation of the instrument.
+for Mehta Trading Co.
+Authorised Signatory

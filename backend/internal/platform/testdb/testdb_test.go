@@ -265,6 +265,16 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 			VALUES ($1, $2, $3, $4, numrange(0, NULL, '[)'), 10, 0)`,
 			[]any{id(), cid, plistID, itemID}},
 
+		// One company's print-template OVERRIDES for one document kind
+		// (migration 0037). footer_lines is left NULL and header_lines is given
+		// an explicit empty array so the fixture exercises both of the states
+		// that column distinguishes: NULL = "not overridden", '{}' = "overridden
+		// with nothing".
+		{"print_template", `INSERT INTO print_template
+			(id, company_id, doc_kind, title, header_lines, show_bank_details)
+			VALUES ($1, $2, 'tax-invoice', 'TAX INVOICE', '{}'::text[], false)`,
+			[]any{id(), cid}},
+
 		// ------------------------------------------------------------------
 		// Track 2 — the inward-supply side: a GSTR-2B statement, one document
 		// in it, an IMS action against that document, and the GSTR-3B filing

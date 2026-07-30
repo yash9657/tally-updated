@@ -1,0 +1,33 @@
+Sundaram Traders Private Limited
+Trial Balance
+as on 31-Mar-2027
+Particulars
+Debit
+Credit
+Page 1 of 1
+Capital Account
+Sundaram Capital A/c
+5,00,000.00
+Current Liabilities
+Sundry Creditors
+1,23,456.78
+Duties & Taxes
+Output CGST @ 9%
+9,000.00
+Output SGST @ 9%
+9,000.00
+Fixed Assets
+Plant & Machinery
+3,50,000.00
+Current Assets
+Sundry Debtors
+1,91,456.78
+Cash-in-Hand
+1,00,000.00
+Sales Accounts
+1,00,000.00
+Purchase Accounts
+1,00,000.00
+Grand Total
+7,41,456.78
+7,41,456.78

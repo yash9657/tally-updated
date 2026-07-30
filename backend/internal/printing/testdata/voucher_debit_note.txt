@@ -1,0 +1,43 @@
+DEBIT NOTE
+Issued under section 34 of the CGST Act, 2017
+Mehta Trading Co.
+14, Kalbadevi Road
+Opp. Café Excelsior
+Mumbai, Maharashtra - 400002
+GSTIN/UIN: 27AAAPZ1234C1ZS
+PAN: AAAPZ1234C
+Phone: 022 2201 4455   E-Mail: accounts@mehtatrading.example
+No.
+DN-DR/2026-27/0003
+Dated
+27-Jun-2026
+Page 1 of 1
+DEBIT NOTE DN-DR/2026-27/0003
+To
+Deshpande Steel Traders
+Plot 22, MIDC Bhosari
+Pune, Maharashtra - 411026
+GSTIN/UIN: Unregistered
+Against Invoice No.: DST/PUR/2026/1102   dated 09-Apr-2026
+Reason: Short weight received against the supplier's invoice; value and tax reduced accordingly.
+Sl
+Particulars
+Against Bill
+Dr/Cr
+Amount
+1
+Deshpande Steel Traders
+Short weight on MS angle, 0.42 MT
+DST/PUR/2026/1102
+Dr
+-9,500.00
+Tax adjusted by this document
+IGST @ 18%
+-1,710.00
+Total
+-11,210.00
+Amount (in words): Minus Rupees Eleven Thousand Two Hundred Ten Only
+This document is issued under section 34 of the CGST Act, 2017; the original invoice number and date shown above are required
+particulars of a credit or debit note (CGST Rules, 2017, rule 53(1A)).
+for Mehta Trading Co.
+Authorised Signatory

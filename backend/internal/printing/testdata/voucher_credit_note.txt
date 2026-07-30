@@ -1,0 +1,51 @@
+CREDIT NOTE
+Issued under section 34 of the CGST Act, 2017
+Mehta Trading Co.
+14, Kalbadevi Road
+Opp. Café Excelsior
+Mumbai, Maharashtra - 400002
+GSTIN/UIN: 27AAAPZ1234C1ZS
+PAN: AAAPZ1234C
+Phone: 022 2201 4455   E-Mail: accounts@mehtatrading.example
+No.
+CN/2026-27/0009
+Dated
+18-Jun-2026
+Page 1 of 1
+CREDIT NOTE CN/2026-27/0009
+To
+Kulkarni Hardware Stores
+Shop 3, Laxmi Niwas
+Tilak Road
+Pune, Maharashtra - 411030
+GSTIN/UIN: 27AACCK5678M1Z9
+Against Invoice No.: INV/2026-27/0308   dated 21-May-2026
+Reason: Sales return - 40 valves rejected at the customer's incoming inspection.
+Sl
+Description
+HSN/SAC
+Quantity
+Unit
+Rate
+Taxable Value
+1
+Brass Ball Valve 15mm - returned, threads out
+of gauge
+84818030
+40
+Nos
+310.00
+12,400.00
+Tax adjusted by this document
+CGST @ 9%
+1,116.00
+SGST @ 9%
+1,116.00
+Total
+14,632.00
+Amount (in words): Rupees Fourteen Thousand Six Hundred Thirty Two Only
+Narration: Credit passed to the party ledger; ITC to be reversed by the recipient.
+This document is issued under section 34 of the CGST Act, 2017; the original invoice number and date shown above are required
+particulars of a credit or debit note (CGST Rules, 2017, rule 53(1A)).
+for Mehta Trading Co.
+Authorised Signatory

@@ -1,0 +1,51 @@
+Tax Invoice
+Mehta Trading Co.
+14 Laxmi Industrial Estate
+Pune, Maharashtra - 411004
+GSTIN: 27AAAPZ1234C1ZS
+Invoice No.: INV/2026-27/0043
+Dated: 18-Apr-2026
+Billed to
+Shreyas Enterprises
+48 Jayanagar 4th Block
+Bengaluru, Karnataka - 560011
+State: Karnataka (29)
+GSTIN: 29AABCS9012M1ZK
+Shipped to
+Same as billed to
+Place of Supply: Karnataka (29)
+Tax payable on reverse charge: No
+Sl
+Description of Goods or Services
+HSN/SAC
+Qty
+Unit
+Rate
+Amount
+1
+Widget (Small)
+6109
+24
+NOS
+250.00
+6,000.00
+2
+Galvanised steel bracket 12mm
+7326
+20
+KGS
+200.00
+4,000.00
+Taxable Value
+10,000.00
+IGST @ 18%
+1,800.00
+Total
+11,800.00
+Amount in Words: Rupees Eleven Thousand Eight Hundred Only
+Declaration
+We declare that this invoice shows the actual price of the goods described and that all
+particulars are true and correct.
+For Mehta Trading Co.
+Authorised Signatory
+Page 1 of 1

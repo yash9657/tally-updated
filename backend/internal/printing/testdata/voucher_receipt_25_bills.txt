@@ -1,0 +1,208 @@
+RECEIPT VOUCHER
+Mehta Trading Co.
+14, Kalbadevi Road
+Opp. Café Excelsior
+Mumbai, Maharashtra - 400002
+GSTIN/UIN: 27AAAPZ1234C1ZS
+PAN: AAAPZ1234C
+Phone: 022 2201 4455   E-Mail: accounts@mehtatrading.example
+No.
+RCT/2026-27/0210
+Dated
+15-Jul-2026
+Page 1 of 2
+RECEIPT VOUCHER RCT/2026-27/0210
+Received From
+Kulkarni Hardware Stores
+Shop 3, Laxmi Niwas
+Tilak Road
+Pune, Maharashtra - 411030
+GSTIN/UIN: 27AACCK5678M1Z9
+Sl
+Particulars
+Against Bill
+Dr/Cr
+Amount
+1
+Bank of Baroda - Current A/c 0012
+Cheque 442019, cleared 15-Jul-2026
+On Account
+Dr
+50,000.00
+2
+Kulkarni Hardware Stores
+bill dated 12-Jun-2026, due 01-Jul-2026
+INV/2026-27/0301
+Cr
+2,000.00
+3
+Kulkarni Hardware Stores
+bill dated 12-Jun-2026, due 02-Jul-2026
+INV/2026-27/0302
+Cr
+2,000.00
+4
+Kulkarni Hardware Stores
+bill dated 12-Jun-2026, due 03-Jul-2026
+INV/2026-27/0303
+Cr
+2,000.00
+5
+Kulkarni Hardware Stores
+bill dated 12-Jun-2026, due 04-Jul-2026
+INV/2026-27/0304
+Cr
+2,000.00
+6
+Kulkarni Hardware Stores
+bill dated 12-Jun-2026, due 05-Jul-2026
+INV/2026-27/0305
+Cr
+2,000.00
+7
+Kulkarni Hardware Stores
+bill dated 12-Jun-2026, due 06-Jul-2026
+INV/2026-27/0306
+Cr
+2,000.00
+8
+Kulkarni Hardware Stores
+bill dated 12-Jun-2026, due 07-Jul-2026
+INV/2026-27/0307
+Cr
+2,000.00
+9
+Kulkarni Hardware Stores
+bill dated 12-Jun-2026, due 08-Jul-2026
+INV/2026-27/0308
+Cr
+2,000.00
+10
+Kulkarni Hardware Stores
+bill dated 12-Jun-2026, due 09-Jul-2026
+INV/2026-27/0309
+Cr
+2,000.00
+11
+Kulkarni Hardware Stores
+bill dated 12-Jun-2026, due 10-Jul-2026
+INV/2026-27/0310
+Cr
+2,000.00
+12
+Kulkarni Hardware Stores
+bill dated 12-Jun-2026, due 11-Jul-2026
+INV/2026-27/0311
+Cr
+2,000.00
+13
+Kulkarni Hardware Stores
+bill dated 12-Jun-2026, due 12-Jul-2026
+INV/2026-27/0312
+Cr
+2,000.00
+14
+Kulkarni Hardware Stores
+bill dated 12-Jun-2026, due 13-Jul-2026
+INV/2026-27/0313
+Cr
+2,000.00
+15
+Kulkarni Hardware Stores
+bill dated 12-Jun-2026, due 14-Jul-2026
+INV/2026-27/0314
+Cr
+2,000.00
+16
+Kulkarni Hardware Stores
+bill dated 12-Jun-2026, due 15-Jul-2026
+INV/2026-27/0315
+Cr
+2,000.00
+17
+Kulkarni Hardware Stores
+bill dated 12-Jun-2026, due 16-Jul-2026
+INV/2026-27/0316
+Cr
+2,000.00
+18
+Kulkarni Hardware Stores
+bill dated 12-Jun-2026, due 17-Jul-2026
+INV/2026-27/0317
+Cr
+2,000.00
+19
+Kulkarni Hardware Stores
+bill dated 12-Jun-2026, due 18-Jul-2026
+INV/2026-27/0318
+Cr
+2,000.00
+20
+Kulkarni Hardware Stores
+bill dated 12-Jun-2026, due 19-Jul-2026
+INV/2026-27/0319
+Cr
+2,000.00
+RECEIPT VOUCHER
+(continued)
+Mehta Trading Co.
+14, Kalbadevi Road
+Opp. Café Excelsior
+Mumbai, Maharashtra - 400002
+GSTIN/UIN: 27AAAPZ1234C1ZS
+PAN: AAAPZ1234C
+Phone: 022 2201 4455   E-Mail: accounts@mehtatrading.example
+No.
+RCT/2026-27/0210
+Dated
+15-Jul-2026
+Page 2 of 2
+RECEIPT VOUCHER RCT/2026-27/0210
+Sl
+Particulars
+Against Bill
+Dr/Cr
+Amount
+21
+Kulkarni Hardware Stores
+bill dated 12-Jun-2026, due 20-Jul-2026
+INV/2026-27/0320
+Cr
+2,000.00
+22
+Kulkarni Hardware Stores
+bill dated 12-Jun-2026, due 21-Jul-2026
+INV/2026-27/0321
+Cr
+2,000.00
+23
+Kulkarni Hardware Stores
+bill dated 12-Jun-2026, due 22-Jul-2026
+INV/2026-27/0322
+Cr
+2,000.00
+24
+Kulkarni Hardware Stores
+bill dated 12-Jun-2026, due 23-Jul-2026
+INV/2026-27/0323
+Cr
+2,000.00
+25
+Kulkarni Hardware Stores
+bill dated 12-Jun-2026, due 24-Jul-2026
+INV/2026-27/0324
+Cr
+2,000.00
+26
+Kulkarni Hardware Stores
+bill dated 12-Jun-2026, due 25-Jul-2026
+INV/2026-27/0325
+Cr
+2,000.00
+Total
+50,000.00
+Amount (in words): Rupees Fifty Thousand Only
+Narration: Single cheque allocated across twenty-five open bills.
+Declaration: Received subject to realisation of the instrument.
+for Mehta Trading Co.
+Authorised Signatory

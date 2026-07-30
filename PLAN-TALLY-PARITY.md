@@ -70,6 +70,14 @@ Last session this invalidated an entire wave — five build agents and three
 reviewers all reasoned from a green that proved nothing.
 
 - Start it: `docker start tally_pg`, then `pg_isready -h localhost -p 5433`.
+- **`nc -z localhost 5433` IS NOT A LIVENESS CHECK, and a watchdog built on it lies.**
+  `docker-proxy` holds the port open even when the Postgres backend has stopped answering.
+  During T1 the database was unresponsive for roughly ten minutes — `pg_isready` returned
+  "no response", `psql` never got an answer to an SSLRequest, and `docker ps` itself hung
+  past 120s — while a TCP-connect watchdog logged **nothing** for the whole outage and one
+  agent's entire gate run was invalidated. Check with `pg_isready -t 5` **and** a real
+  query (`psql -tAc "select 1"`). Set `statement_timeout`/`lock_timeout` on any psql work
+  that could collide with a concurrent `migrations.Apply`.
 - Before trusting ANY run:
   `go test <pkg> -count=1 -v 2>&1 | grep -c -- '--- SKIP'` → require **0**.
   Use `-- '--- SKIP'` so indented subtest skips are caught.
@@ -143,22 +151,38 @@ than renumbering.**
 
 | Track | Reserved |
 |---|---|
-| T1 Printing | 0037–0038 |
-| T2 Cost centres | 0039–0040 |
-| T3 Orders + BOM | 0041–0043 |
-| T4 Bank reconciliation | 0044–0045 |
-| T5 e-Way Bill | 0046–0047 |
-| T6 TDS/TCS persistence | 0048–0049 |
-| T8 Multi-currency | 0050–0051 |
-| T9 FIFO/LIFO | 0052 |
-| T10 Stock groups + units | 0053–0054 |
-| T11 Budgets | 0055–0056 |
-| T12 GSTR-9 | 0057 |
-| T13 Interest | 0058 |
-| T14 Backup/restore | 0059 |
+| T1 Printing | 0037–**0039** |
+| T2 Cost centres | 0040–0041 |
+| T3 Orders + BOM | 0042–0044 |
+| T4 Bank reconciliation | 0045–0046 |
+| T5 e-Way Bill | 0047–0048 |
+| T6 TDS/TCS persistence | 0049–0050 |
+| T8 Multi-currency | 0051–0052 |
+| T9 FIFO/LIFO | 0053 |
+| T10 Stock groups + units | 0054–0055 |
+| T11 Budgets | 0056–0057 |
+| T12 GSTR-9 | 0058 |
+| T13 Interest | 0059 |
+| T14 Backup/restore | 0060–0061 |
 
-Whoever adds a migration also adds its entry to `internal/migration/expected.go`
-(**CO-OWNED** — re-read immediately before editing).
+**T1 took a third number and everything below it shifted by one.** 0037 (templates) and
+0038 (ACL) were the reservation; the review then found that no tax invoice could print at
+all, because Rule 46(d) requires the recipient's address and the `ledger` party master had
+no address column — so **0039** models it. Nothing had yet been written against 0040+, so
+renumbering the unstarted blocks cost nothing and keeps the file ordered. **Renumber
+unstarted blocks; never renumber a migration that exists.**
+
+There is **no central list of migrations to update**. `backend/migrations/migrations.go`
+discovers them with `//go:embed *.sql` and applies them in lexical order, so a new file is
+picked up by its name alone. (An earlier draft of this plan said to add an entry to
+`internal/migration/expected.go`; that file is the *balances* oracle for the migration
+reconciler and has nothing to do with the migration list. Do not go looking for it.)
+
+**Migrations are `go:embed`'d and every test's `newServer()` calls `Apply`**, so the moment
+a new `.sql` file exists on disk a concurrent agent's test run can apply it to the dev
+database. Two consequences: a `BEGIN; … ROLLBACK;` dry run may legitimately report zero
+rows because the work is already done, and an idempotence proof run on an already-populated
+database is weaker than one run before first application. Say which you got.
 
 **Every migration must be IDEMPOTENT.** `applyOne` wraps each file in one
 transaction and stamps `schema_migrations` inside it, so a hand-applied file that

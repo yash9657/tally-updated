@@ -100,6 +100,138 @@ func TestCreateLedgerWithGSTAndAudit(t *testing.T) {
 	}
 }
 
+// invoiceAddress is the address of a real registered customer, keyed the way an
+// operator keys one: several lines, because that is what is printed on the
+// document. The newlines are the point — printingdb's splitAddress turns this
+// block into the recipient's address lines, so a store that flattened or
+// truncated it would print a different address from the one on file.
+const invoiceAddress = "Plot 14, 2nd Floor\nIndustrial Suburb, Yeshwanthpur\nOpp. Goods Shed"
+
+// TestAPartyWithNoAddressOnFileIsATaxInvoiceThatCannotBeIssued is the whole
+// reason migration 0039 exists, asserted from the master's side.
+//
+// Rule 46(d) of the CGST Rules 2017 makes the recipient's NAME, ADDRESS and
+// GSTIN mandatory particulars of a tax invoice, and internal/printing refuses to
+// render a document whose recipient address is blank. Until this column existed
+// there was NOWHERE to keep a party's address, so that refusal fired on every
+// sales voucher in every company and this product could not print a single valid
+// tax invoice. If this test fails, the address an operator keyed against a
+// customer is not the address the books hold, and the invoice raised on that
+// customer either cannot be issued or states an address nobody entered.
+func TestAPartyWithNoAddressOnFileIsATaxInvoiceThatCannotBeIssued(t *testing.T) {
+	pool, ctx, _ := setup(t)
+	m := masters.NewService(pool)
+
+	id, err := m.CreateLedger(ctx, masters.Ledger{
+		Name:             "Addressed Customer",
+		GroupName:        "Sundry Debtors",
+		GSTIN:            "29AACCA5678L1Z3",
+		StateCode:        "29",
+		RegistrationType: masters.GSTRegular,
+		Address:          invoiceAddress,
+		City:             "Bengaluru",
+		PIN:              "560022",
+	}, "tester")
+	if err != nil {
+		t.Fatalf("create a customer with the address its invoices must carry: %v", err)
+	}
+
+	got, err := m.LedgerAddressInfo(ctx, id)
+	if err != nil {
+		t.Fatalf("read back the address of the customer just created: %v", err)
+	}
+	if got.Address != invoiceAddress {
+		t.Errorf("the address on file for this customer is %q but %q was keyed against them: "+
+			"a tax invoice raised on this party would be addressed to the wrong place, and "+
+			"Rule 46(d) makes the recipient's address a mandatory particular",
+			got.Address, invoiceAddress)
+	}
+	if got.City != "Bengaluru" || got.PIN != "560022" {
+		t.Errorf("the city and PIN on file are %q / %q but %q / %q were keyed: "+
+			"the invoice would state a different destination from the one the operator entered",
+			got.City, got.PIN, "Bengaluru", "560022")
+	}
+	if !got.OnFile() {
+		t.Errorf("this customer reports NO address on file although one was keyed against them, "+
+			"so every tax invoice raised on them would be refused as missing a "+
+			"mandatory Rule 46(d) particular (address %q)", got.Address)
+	}
+
+	// The GST identity must survive alongside the address. Rule 46(d) names all
+	// three particulars in one breath, and a change that carried the address at
+	// the cost of the GSTIN would have swapped one unprintable invoice for
+	// another.
+	gst, err := m.LedgerGSTInfo(ctx, id)
+	if err != nil {
+		t.Fatalf("read back the GST identity of the customer just created: %v", err)
+	}
+	if gst.GSTIN != "29AACCA5678L1Z3" || gst.StateCode != "29" {
+		t.Errorf("this customer's GSTIN/state came back as %q/%q instead of %q/%q: "+
+			"Rule 46(d) requires the recipient's GSTIN as well as their address, so the "+
+			"invoice is still not issuable", gst.GSTIN, gst.StateCode, "29AACCA5678L1Z3", "29")
+	}
+}
+
+// TestAWalkInCashCustomerWithNoAddressIsStillAValidPartyToSellTo guards the
+// OTHER direction, which is the one a well-meant NOT NULL would break.
+//
+// A cash sale to an unregistered walk-in customer has no address on file, and
+// that is not missing data: Rule 46(e) requires an unregistered recipient's
+// address (with the State and its code) only where the taxable value of the
+// supply is FIFTY THOUSAND RUPEES OR MORE. The threshold belongs to the
+// individual document, which the master cannot see, so the master must accept a
+// party with no address and let the print path refuse the specific invoices that
+// need one. If this test fails, a shop cannot record a counter sale at all.
+func TestAWalkInCashCustomerWithNoAddressIsStillAValidPartyToSellTo(t *testing.T) {
+	pool, ctx, _ := setup(t)
+	m := masters.NewService(pool)
+
+	id, err := m.CreateLedger(ctx, masters.Ledger{
+		Name:             "Counter Sales (Walk-in)",
+		GroupName:        "Sundry Debtors",
+		RegistrationType: masters.GSTUnregistered,
+	}, "tester")
+	if err != nil {
+		t.Fatalf("a walk-in cash customer with no address on file was refused, so a counter "+
+			"sale below the Rule 46(e) fifty-thousand threshold cannot be recorded at all: %v", err)
+	}
+
+	got, err := m.LedgerAddressInfo(ctx, id)
+	if err != nil {
+		t.Fatalf("read back the (absent) address of the walk-in customer: %v", err)
+	}
+	if got.Address != "" || got.City != "" || got.PIN != "" {
+		t.Errorf("a walk-in customer nobody gave an address for reports address %q, city %q, "+
+			"PIN %q — an address that was never keyed would be printed on their invoice",
+			got.Address, got.City, got.PIN)
+	}
+	if got.OnFile() {
+		t.Errorf("a walk-in customer with no address keyed reports an address ON FILE, " +
+			"which would let a fifty-thousand-rupee supply to an unregistered person print " +
+			"without the Rule 46(e) particulars it needs")
+	}
+
+	// Absent must be NULL, not '': every other optional party attribute on
+	// `ledger` (gstin, pan, state_code) is stored that way and masters writes
+	// them through NULLIF. Two spellings of "not on file" in one row is how a
+	// later reader starts treating a blank address as a recorded one.
+	var addrIsNull, cityIsNull, pinIsNull bool
+	err = pool.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT address IS NULL, city IS NULL, pincode IS NULL FROM ledger WHERE id = $1`,
+			id).Scan(&addrIsNull, &cityIsNull, &pinIsNull)
+	})
+	if err != nil {
+		t.Fatalf("inspect the stored address columns of the walk-in customer: %v", err)
+	}
+	if !addrIsNull || !cityIsNull || !pinIsNull {
+		t.Errorf("the walk-in customer's unkeyed address stored as an empty string rather than "+
+			"NULL (address null=%v, city null=%v, pincode null=%v): this row now spells "+
+			"\"no address on file\" differently from how it spells \"no GSTIN on file\"",
+			addrIsNull, cityIsNull, pinIsNull)
+	}
+}
+
 func TestEnsureLedgerIsIdempotent(t *testing.T) {
 	pool, ctx, _ := setup(t)
 	m := masters.NewService(pool)

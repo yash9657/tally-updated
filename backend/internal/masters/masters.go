@@ -201,6 +201,28 @@ type Ledger struct {
 	RegistrationType   GSTRegistrationType
 	PAN                string
 	CreditDays         *int
+
+	// Address is the party's POSTAL ADDRESS as a NEWLINE-SEPARATED BLOCK, and
+	// City / PIN complete it. Migration 0039 stores all three exactly as
+	// migration 0015 stores the company's own, so internal/printing/printingdb
+	// splits the recipient block with the same splitAddress helper it uses on
+	// the supplier block.
+	//
+	// THIS IS WHAT MAKES A TAX INVOICE PRINTABLE. Rule 46(d) of the CGST Rules
+	// 2017 makes the recipient's address a mandatory particular, so
+	// printing.ValidateRule46 refuses a document whose recipient address is
+	// blank. Before these fields existed there was nowhere to keep a party's
+	// address, so that refusal fired on every sale in every company.
+	//
+	// Empty is still LEGAL and is written as NULL: a cash sale to an
+	// unregistered walk-in has no address on file, and Rule 46(e) demands one
+	// only for an unregistered recipient on a supply of fifty thousand rupees or
+	// more. That threshold belongs to the document, not to the master, so
+	// CreateLedger accepts a party with no address and only printing refuses.
+	Address string
+	City    string
+	PIN     string // column `pincode`, matching printing.Party.PIN
+
 	// OpeningBills is the BILL-WISE BREAKUP of OpeningBalance: the individual
 	// unpaid bills that make it up, as at company.books_beginning_from. Tally
 	// requires this for any bill-wise ledger carrying an opening balance, and
@@ -308,17 +330,24 @@ func (s *Service) CreateLedger(ctx context.Context, l Ledger, createdBy string) 
 		if err != nil {
 			return fmt.Errorf("masters: resolve group: %w", err)
 		}
+		// address/city/pincode go in through NULLIF like every other optional
+		// party attribute on this table, so "not supplied" lands as NULL rather
+		// than as an empty string that a later reader would have to treat as a
+		// fourth way of spelling absent. Dropping them from this column list is
+		// what made every tax invoice unprintable — see the Ledger.Address
+		// comment and TestAPartyWithNoAddressOnFileIsATaxInvoiceThatCannotBeIssued.
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO ledger
 			   (id, company_id, name, group_id, opening_balance, opening_dc,
 			    maintain_bill_by_bill, gstin, state_code, registration_type,
-			    pan, credit_days)
+			    pan, credit_days, address, city, pincode)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7,
 			         NULLIF($8,''), NULLIF($9,''), $10::gst_registration_type,
-			         NULLIF($11,''), $12)`,
+			         NULLIF($11,''), $12,
+			         NULLIF($13,''), NULLIF($14,''), NULLIF($15,''))`,
 			id, companyID, l.Name, groupID, l.OpeningBalance, l.OpeningDC,
 			l.MaintainBillByBill, l.GSTIN, l.StateCode, string(l.RegistrationType),
-			l.PAN, l.CreditDays,
+			l.PAN, l.CreditDays, l.Address, l.City, l.PIN,
 		); err != nil {
 			return fmt.Errorf("masters: insert ledger: %w", err)
 		}
@@ -349,6 +378,11 @@ func (s *Service) CreateLedger(ctx context.Context, l Ledger, createdBy string) 
 			"name": l.Name, "group": l.GroupName, "gstin": l.GSTIN,
 			"state_code": l.StateCode, "registration_type": string(l.RegistrationType),
 			"maintain_bill_by_bill": l.MaintainBillByBill,
+			// The address is audited because it is a MANDATORY INVOICE
+			// PARTICULAR (Rule 46(d)): when a customer disputes the address on a
+			// document, the question is what the master said on the day it was
+			// printed, and an unaudited field cannot answer that.
+			"address": l.Address, "city": l.City, "pincode": l.PIN,
 		}
 		return appendAudit(ctx, tx, companyID, "ledger", id, OpCreate, nil, after, createdBy)
 	})
@@ -507,6 +541,64 @@ func (s *Service) LedgerGSTInfo(ctx context.Context, ledgerID uuid.UUID) (Ledger
 	})
 	if err != nil {
 		return LedgerGST{}, err
+	}
+	return out, nil
+}
+
+// LedgerAddress is a party's POSTAL BLOCK: the address a document issued to them
+// is addressed to. Address is NEWLINE-SEPARATED free text, exactly as
+// company.address is, so the two sides of an invoice are split by one helper.
+//
+// It is a separate type from LedgerGST rather than three more fields on it
+// because the two answer different questions: LedgerGST decides the TAX (which
+// heads apply, whether the recipient is registered), and this decides what the
+// PAPER says. The tax engine has no business reading a street name.
+type LedgerAddress struct {
+	Address string
+	City    string
+	PIN     string
+}
+
+// OnFile reports whether an address was ever recorded for this party.
+//
+// It exists so a caller does not have to decide for itself what "no address"
+// looks like. The absence is LEGAL — Rule 46(e) requires an unregistered
+// recipient's address only on a supply of fifty thousand rupees or more — so the
+// answer a caller wants is almost never "is this string empty" but "may I put
+// this party on a tax invoice at all". Rule 46(d) says no when this is false.
+func (a LedgerAddress) OnFile() bool {
+	return a.Address != ""
+}
+
+// LedgerAddressInfo returns the postal block for a ledger by id. Missing fields
+// come back as empty strings, matching LedgerGSTInfo — the column is nullable
+// because a walk-in cash party genuinely has no address on file.
+func (s *Service) LedgerAddressInfo(ctx context.Context, ledgerID uuid.UUID) (LedgerAddress, error) {
+	var out LedgerAddress
+	err := s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		var address, city, pin *string
+		err := tx.QueryRow(ctx,
+			`SELECT address, city, pincode FROM ledger WHERE id = $1`,
+			ledgerID).Scan(&address, &city, &pin)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("masters: %w: ledger %s", ErrNotFound, ledgerID)
+		}
+		if err != nil {
+			return err
+		}
+		if address != nil {
+			out.Address = *address
+		}
+		if city != nil {
+			out.City = *city
+		}
+		if pin != nil {
+			out.PIN = *pin
+		}
+		return nil
+	})
+	if err != nil {
+		return LedgerAddress{}, err
 	}
 	return out, nil
 }

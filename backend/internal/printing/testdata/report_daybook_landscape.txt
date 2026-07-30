@@ -1,0 +1,43 @@
+Sundaram Traders Private Limited
+Day Book
+1-Apr-2026 to 3-Apr-2026
+Date
+Voucher Type
+Voucher No.
+Particulars
+Narration
+Debit
+Credit
+Page 1 of 1
+01-Apr-2026
+Sales
+SL/2026-27/0001
+Bharat Electronics Ltd
+Invoice for 10 switchgear panels ex-Bhiwandi
+1,18,000.00
+01-Apr-2026
+Sales
+SL/2026-27/0001
+Sundry Debtors
+1,18,000.00
+02-Apr-2026
+Purchase
+PU/2026-27/0007
+Kirloskar Brothers Ltd
+Pump spares against PO 44/2026
+59,000.00
+02-Apr-2026
+Receipt
+RC/2026-27/0003
+HDFC Bank - 004411
+NEFT settlement of SL/2026-27/0001
+1,18,000.00
+03-Apr-2026
+Journal
+JV/2026-27/0002
+Rounding Off
+Rounding adjustment on PU/2026-27/0007
+0.22
+Total for the period
+2,95,000.00
+2,36,000.22
