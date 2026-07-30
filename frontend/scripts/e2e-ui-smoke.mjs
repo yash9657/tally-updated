@@ -801,6 +801,187 @@ try {
   );
 } catch (e) { rec("the Owner level is immutable in the browser", false, e.message); }
 
+// ---------------------------------------------------------------------------
+// PRINTING (T1) and BANK RECONCILIATION (T4) IN THE BROWSER.
+//
+// Both shipped server-side reachable over HTTP only, with no key anywhere in the
+// client. Every other gate in this repo tests them over HTTP — which is exactly
+// how they came to be unreachable without anyone noticing. These flows press the
+// keys, which is the only thing that can catch that class of gap.
+// ---------------------------------------------------------------------------
+try {
+  // Ctrl+P ON A REPORT. The load-bearing assertion is the NETWORK one: before the
+  // key was bound, Ctrl+P fell through to the BROWSER's print dialog and printed
+  // a screenshot of the DOM. A passing status line alone would not distinguish
+  // "we fetched the server's PDF" from "the browser printed the screen", so this
+  // watches for the print request and checks its content type.
+  const printReqs = [];
+  const onPrint = (r) => {
+    if (r.url().includes("/print/")) printReqs.push({ url: r.url(), status: r.status(), ct: r.headers()["content-type"] ?? "" });
+  };
+  page.on("response", onPrint);
+
+  // Day Book, NOT Trial Balance: the Trial Balance lives one level in under
+  // "Display More Reports", so navMenu would type a label the Gateway list does
+  // not contain, never drill, and then test Ctrl+P on the GATEWAY. That is what
+  // the first version of this flow did, and its failure looked like a print bug.
+  await navMenu("Day Book");
+  const onReport = /Day Book/i.test(await heading());
+  await press("Control+p", 2500);
+  page.off("response", onPrint);
+
+  const pdf = printReqs.find((r) => r.ct.includes("application/pdf"));
+  const st = await status();
+  rec(
+    "Ctrl+P on a report fetches the SERVER's PDF, not a screenshot of the screen",
+    onReport && !!pdf && pdf.status === 200 && /Printed/i.test(st),
+    pdf
+      ? `${pdf.url.replace(/^.*\/v1/, "/v1")} -> ${pdf.status} ${pdf.ct} | status line: ${st.slice(0, 70)}`
+      : `NO print request was made (requests seen: ${printReqs.length}) — status line: ${st.slice(0, 90)}`,
+  );
+} catch (e) { rec("Ctrl+P prints a report", false, e.message); }
+
+try {
+  // Ctrl+P on a voucher with NOTHING SAVED must refuse, and must not fetch. A
+  // refusal that still hits the network is a 404 in the log and, on the print
+  // routes, indistinguishable from an id probe.
+  const reqs = [];
+  const onReq = (r) => { if (r.url().includes("/print/")) reqs.push(r.url()); };
+  page.on("request", onReq);
+
+  await toGateway();
+  await press("F8", 900); // a fresh Sales voucher, unsaved
+  await press("Control+p", 1200);
+  page.off("request", onReq);
+
+  const st = await status();
+  rec(
+    "Ctrl+P on an UNSAVED voucher refuses and makes no request",
+    reqs.length === 0 && /not been saved/i.test(st) && /Ctrl\+A/i.test(st),
+    reqs.length === 0
+      ? `no request made | ${st.slice(0, 90)}`
+      : `IT FETCHED ANYWAY: ${reqs.join(", ")}`,
+  );
+} catch (e) { rec("Ctrl+P refuses an unsaved voucher", false, e.message); }
+
+try {
+  // A class that prints NOTHING must say why, in its own words. "Printing failed"
+  // sends an operator to support; "a purchase bill is the supplier's document"
+  // tells them they are not missing a feature.
+  await toGateway();
+  await press("F9", 900); // Purchase
+  await press("Control+p", 1200);
+  const st = await status();
+  rec(
+    "Ctrl+P on a Purchase explains that it is the SUPPLIER's document",
+    /supplier/i.test(st) && !/failed/i.test(st),
+    st.slice(0, 120),
+  );
+} catch (e) { rec("Ctrl+P explains a non-printable class", false, e.message); }
+
+try {
+  // BANK RECONCILIATION, reached the way a keyboard user reaches it. The demo
+  // company seeds one bank ledger, so the screen opens straight onto its
+  // statement rather than a picker.
+  await navMenu("Bank Reconciliation");
+  const h = await heading();
+  const text = await body();
+  // The four balance lines are the statement. `Difference` must be present AND
+  // the screen must state the server's balanced verdict.
+  const hasBalances =
+    /Balance as per company books/i.test(text) &&
+    /Balance as per bank/i.test(text) &&
+    /Difference/i.test(text);
+  const balanced = /balanced/i.test(text);
+  // I-11: no account number / IFSC column, because neither is stored yet.
+  const noIfsc = !/IFSC/i.test(text);
+  rec(
+    "Gateway > Bank Reconciliation opens a real statement for a bank ledger",
+    /Bank Reconciliation/i.test(h) && hasBalances && balanced && noIfsc,
+    `${h.slice(0, 60)} | balances=${hasBalances} balanced=${balanced} noIfsc=${noIfsc}`,
+  );
+} catch (e) { rec("Bank Reconciliation opens from the Gateway", false, e.message); }
+
+try {
+  // TICK AN ITEM OFF, and prove it MOVED between the two lists. Asserting only
+  // that the PUT returned 200 would pass against a screen that never re-read the
+  // statement, which is the failure a user would actually notice.
+  // IDEMPOTENT SETUP. This flow reconciles an item, so a second run of the gate
+  // (which HANDOFF §4.5 requires) finds it already cleared. Rather than depend on
+  // a fresh seed, un-tick anything already cleared first — which also exercises
+  // the DELETE path, and is the reason this flow survives being run twice.
+  for (let i = 0; i < 5; i++) {
+    const clearedCell = page
+      .locator('[data-testid="brs-cleared"] [data-testid^="brs-bankdate:"]')
+      .first();
+    if ((await clearedCell.count()) === 0) break;
+    await clearedCell.fill("");
+    await clearedCell.blur();
+    await page.waitForTimeout(1500);
+  }
+
+  const before = await body();
+  // Scope to the UN-CLEARED table: an unscoped .first() can pick a cleared row,
+  // whose date is then set to the value it already has, and nothing moves.
+  const cell = page
+    .locator('[data-testid="brs-uncleared"] [data-testid^="brs-bankdate:"]')
+    .first();
+  const had = (await cell.count()) > 0;
+  let moved = false;
+  let detail = "no un-cleared item to tick";
+  if (had) {
+    const unclearedBefore = (before.match(/Un-cleared \((\d+)\)/) ?? [, "?"])[1];
+    const clearedBefore = (before.match(/Cleared \((\d+)\)/) ?? [, "?"])[1];
+    // A date on/after the voucher date: migration 0045's trigger refuses earlier.
+    await cell.fill("2027-03-31");
+    await cell.blur();
+    await page.waitForTimeout(2000);
+    const after = await body();
+    const unclearedAfter = (after.match(/Un-cleared \((\d+)\)/) ?? [, "?"])[1];
+    const clearedAfter = (after.match(/Cleared \((\d+)\)/) ?? [, "?"])[1];
+    moved =
+      Number(unclearedAfter) === Number(unclearedBefore) - 1 &&
+      Number(clearedAfter) === Number(clearedBefore) + 1;
+    detail = `un-cleared ${unclearedBefore}->${unclearedAfter}, cleared ${clearedBefore}->${clearedAfter}`;
+  }
+  rec(
+    "keying a Bank Date moves the item from Un-cleared to Cleared",
+    had && moved,
+    detail,
+  );
+} catch (e) { rec("keying a Bank Date reconciles the item", false, e.message); }
+
+try {
+  // The statement must NOT be printable, and must say why rather than guessing
+  // which of several bank accounts to put on paper. The server answers 501; this
+  // refusal is local, so it must also make no request.
+  const reqs = [];
+  const onReq = (r) => { if (r.url().includes("/print/")) reqs.push(r.url()); };
+  page.on("request", onReq);
+  await press("Control+p", 1200);
+  page.off("request", onReq);
+  const st = await status();
+  rec(
+    "Ctrl+P on the statement refuses, naming the ledger-id problem",
+    reqs.length === 0 && /ledger id/i.test(st),
+    reqs.length === 0 ? st.slice(0, 120) : `IT FETCHED ANYWAY: ${reqs.join(", ")}`,
+  );
+} catch (e) { rec("Ctrl+P refuses to print a BRS", false, e.message); }
+
+try {
+  // F5 on the statement must NOT open a Payment voucher. F5's global binding IS
+  // the Payment voucher, so without the screen override this key does not do
+  // nothing — it does something wrong, on top of the statement.
+  await press("F5", 900);
+  const h = await heading();
+  const st = await status();
+  rec(
+    "F5 on the statement does not open a Payment voucher",
+    /Bank Reconciliation/i.test(h) && /amount view/i.test(st),
+    `${h.slice(0, 50)} | ${st.slice(0, 90)}`,
+  );
+} catch (e) { rec("F5 on the statement is bound honestly", false, e.message); }
+
 await browser.close();
 
 const passed = results.filter((r) => r.ok).length;

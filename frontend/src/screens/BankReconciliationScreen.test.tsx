@@ -1,7 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { CompanyProvider } from "../app/CompanyContext";
-import { ScreenActionsProvider } from "../app/ScreenActions";
+import {
+  ScreenActionsProvider,
+  useScreenActionDispatcher,
+} from "../app/ScreenActions";
 import { BankReconciliationScreen } from "./BankReconciliationScreen";
 import { createMockClient } from "../api/mock";
 import type { CoredClient } from "../api";
@@ -101,6 +104,43 @@ function renderScreen(
     </CompanyProvider>,
   );
   return { ...utils, client };
+}
+
+/**
+ * Render the screen with access to the screen-action dispatcher, so a test can
+ * fire a KEY's registered handler the way AppShell does. Used to prove the print
+ * key is registered here at all — the bug a browser gate caught.
+ */
+function renderWithDispatcher() {
+  const base = createMockClient({ seed: false });
+  const client = {
+    ...base,
+    listLedgers: async () => ({ ledgers: [ledger({})] }),
+    bankReconciliation: async () => brs(),
+  } as CoredClient;
+  let fireHandler: () => Promise<string | void> = async () => {};
+
+  function Harness() {
+    const dispatch = useScreenActionDispatcher();
+    fireHandler = async () => {
+      const res = dispatch("print", SNAP);
+      if (res.pending) return await res.pending;
+      return res.message;
+    };
+    return <BankReconciliationScreen snapshot={SNAP} onSelect={() => {}} />;
+  }
+
+  render(
+    <CompanyProvider
+      client={client}
+      initialCompany={{ id: "co-1", name: "Test Co", homeStateCode: "29" }}
+    >
+      <ScreenActionsProvider>
+        <Harness />
+      </ScreenActionsProvider>
+    </CompanyProvider>,
+  );
+  return { fireHandler: () => fireHandler() };
 }
 
 describe("choosing the bank account (I-9)", () => {
@@ -356,6 +396,23 @@ describe("the statement date (F2)", () => {
     );
     await waitFor(() => expect(bankReconciliation).toHaveBeenCalled());
     expect(bankReconciliation).toHaveBeenCalledWith("co-1", "l-1", "2026-06-30");
+  });
+});
+
+describe("Ctrl+P on the statement (I-10)", () => {
+  it("registers a print handler that DELIVERS the reasoned refusal", async () => {
+    // REGRESSION. printTarget.ts had the reasoned refusal from the start, but no
+    // screen was wired to deliver it — so the shell fell through to its generic
+    // "Print does not apply on this screen", which reads like a missing feature
+    // rather than a deliberate refusal and says nothing about why.
+    //
+    // No unit test caught it (they all tested the resolver directly); the browser
+    // gate did. This asserts the REGISTRATION, which is the part that was absent.
+    const { fireHandler } = renderWithDispatcher();
+    await screen.findByTestId("brs-as-on");
+    const msg = await fireHandler();
+    expect(msg, "no print handler is registered on the statement").toBeTruthy();
+    expect(String(msg)).toMatch(/ledger id/i);
   });
 });
 

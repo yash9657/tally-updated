@@ -11,6 +11,7 @@ import type {
 } from "../api";
 import { formatMoney } from "./reports/money";
 import { SelectionList } from "./SelectionList";
+import { usePrintAction } from "./usePrint";
 
 /**
  * THE BANK RECONCILIATION STATEMENT (track T4) — Tally's manual reconciliation
@@ -144,6 +145,17 @@ export function BankReconciliationScreen({ snapshot }: ScreenComponentProps) {
   useEffect(() => {
     if (ledgerID) load(ledgerID);
   }, [ledgerID, load]);
+
+  // Ctrl+P. This screen CANNOT print — the print route carries no ledger id, so
+  // a company with three bank accounts has no way to say which one to print
+  // (docs/design/t4-model.md §1.3, an open product decision). But the key must
+  // still be registered, or the shell falls through to its generic "Print does
+  // not apply on this screen", which tells the operator nothing about WHY and
+  // reads like a missing feature rather than a deliberate refusal.
+  //
+  // A browser gate caught exactly that: printTarget.ts had the reasoned refusal
+  // and no screen was wired to deliver it. Invariant I-10.
+  usePrintAction();
 
   // F4 — "select bank ledger" (RESEARCH.md:879).
   useRegisterScreenAction(
