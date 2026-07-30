@@ -291,7 +291,7 @@ category), which is where naive models go wrong: it is not one column on `postin
 - Remember `voucher_version` is immutable and hash-chained: allocations live inside
   the hashed canonical payload, exactly as `inward_doc` does. Follow that precedent.
 
-**Migrations:** 0039 (schema), 0040 (ACL — a cost report exposes departmental
+**Migrations:** 0040 (schema), 0041 (ACL — a cost report exposes departmental
 profitability; decide deliberately).
 
 ---
@@ -315,7 +315,7 @@ they affect *reports* (Order Book, Reorder Status) not *balances*.
   a finished good into components at manufacture time via a Stock Journal, which
   already exists.
 
-**Migrations:** 0041 (orders), 0042 (BOM), 0043 (ACL).
+**Migrations:** 0042 (orders), 0043 (BOM), 0044 (ACL).
 
 ---
 
@@ -334,7 +334,7 @@ they affect *reports* (Order Book, Reorder Status) not *balances*.
 - The reconciliation must not mutate the voucher: it is metadata on the posting, and
   `voucher_version` immutability still holds.
 
-**Migrations:** 0044 (schema), 0045 (ACL — a bank statement is sensitive).
+**Migrations:** 0045 (schema), 0046 (ACL — a bank statement is sensitive).
 
 ---
 
@@ -355,7 +355,7 @@ against edits that would invalidate it.
   `fake.go` provider, keep the schema test, and say plainly in the commit that no
   live NIC call was made.
 
-**Migrations:** 0046 (schema), 0047 (ACL).
+**Migrations:** 0047 (schema), 0048 (ACL).
 
 ---
 
@@ -377,7 +377,8 @@ list: the maths is done and trusted.
   silent empty string** — a blank PAN is a rejected return, not a partial one.
 - **The FVU cannot run here.** Say so; do not claim validation.
 
-**Migrations:** 0048 (schema), 0049 (ACL — these carry PAN per deductee).
+**Migrations:** 0049 (schema), 0050 (ACL — these carry PAN per deductee).
+**Design memo (§3.2 gate):** `docs/design/t6-model.md`.
 
 ---
 

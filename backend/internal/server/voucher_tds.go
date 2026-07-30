@@ -14,14 +14,23 @@ import (
 // cross-checks against compliance.TDSDerive. The server NEVER injects a
 // posting — a voucher whose TDS leg contradicts the engine is refused.
 //
-// DELIBERATELY DEAD CODE AT COMMIT TIME. Go cannot add a field to a struct from
-// another file, so `tds` is unreachable until the integrator applies the
-// two-hunk wiring diff reported by this workstream (a `TDS *tdsReq` field on
-// `voucherReq` and a `buildTDS` call in `buildVoucherInput`). Unused types and
-// funcs compile and vet cleanly, so `go build`/`go vet` stay green meanwhile.
-// Reviewers: this is NOT an untested live path — it is not a live path at all
-// until that diff lands. No new route is created, so §1.5's two-touch rule does
-// not apply and auth_middleware.go needs no routeAction entry.
+// THIS IS A LIVE PATH. It was dead when written — the comment here used to say
+// so, and said it was unreachable until an integrator applied a two-hunk wiring
+// diff. That diff LANDED: `voucherReq` carries `TDS *tdsReq` (server.go) and
+// buildVoucherInput calls buildTDS. Verified end-to-end over HTTP: a Journal
+// carrying a `tds` block returns a derived deduction in the response.
+//
+// The stale comment mattered, because "not a live path at all" is exactly the
+// sentence that stops a reviewer looking. No new route is created, so the
+// two-touch rule still does not apply and auth_middleware.go still needs no
+// routeAction entry of its own.
+//
+// WHAT IS STILL TRUE, AND IS T6's WHOLE PROBLEM: nothing here is PERSISTED. The
+// section, deductee type, PAN-availability, rate and derived amount are used to
+// verify the posted leg and are then discarded — they are in neither a column
+// nor the hashed canonical payload, so a posted TDS voucher leaves behind only
+// an unexplained credit to a TDS ledger and no return can be filed from it.
+// See docs/design/t6-model.md §0.1, where that is measured rather than assumed.
 type tdsReq struct {
 	// Section is the nature-of-payment key, e.g. "194C", "194J-P", "194I-B".
 	Section string `json:"section"`

@@ -581,9 +581,27 @@ Ordered by what I would do first. None blocks §2.
 Per `PLAN-TALLY-PARITY.md` §5, with renumbered blocks. **Each starts with its §3.2 design
 memo.**
 
-1. **T6 TDS/TCS** — migrations **0049–0050**. Engines exist and are corpus-gated. §3.5 has
-   the provenance work already started: section, persisted amount, **and a challan table**.
-   The FVU cannot run here.
+1. **T6 TDS/TCS** — migrations **0049–0050**. ✅ **The §3.2 design memo is WRITTEN and
+   awaiting adversarial review: `docs/design/t6-model.md`. Review it, then build; do not
+   build first.** It measured three things §3.5 had wrong or did not know, each of which
+   changes the design:
+   - **The `tds` request block is LIVE over HTTP**, not dead code as `voucher_tds.go`
+     claimed — proven by posting one and reading the derived deduction back. But the hashed
+     payload of that same voucher holds **no section, rate, base or amount**, so all that
+     survives in the books is an unexplained credit. Comment corrected.
+   - **The corpus gate does not verify the rates.** `validate.py` hardcodes the *same* six
+     rows as `tds.go`, whose own header says they were curated from model knowledge and
+     "NOT read out of a statutory text". It is a second implementation of the *arithmetic*
+     only — a wrong rate yields two agreeing implementations and a green gate. **T6 must
+     not launder an unverified rate into a filed return.**
+   - **The Income-tax Act 2025 renumbers every TDS section w.e.f. 1-Apr-2026** — exactly
+     this ruleset's period (194C → 393(1)[6(i)], 192 → 392(1), …). Whether 26Q for
+     TY 2026-27 quotes the old or new family **could not be established**, and it decides
+     what the `section` column contains. Memo §6.1.
+
+   **21 fields are MIGRATION** (including the deductor's own TAN and PAN — `company` has
+   neither). The FVU cannot run here. **`payslip.tds` already persists salary TDS, so 24Q
+   is closer than 26Q — and is explicitly out of T6's scope.**
 2. **T2 Cost centres** — **0040–0041**. Before Budgets (T11) depends on it. The
    sum-to-posting invariant is a **constraint trigger**, not a form check; allocations live
    inside the hashed payload; parallel allocation per category is not one column on
