@@ -234,6 +234,7 @@ unit on the wire, and it is carried through unchanged.
 | **I-10** | **The BRS print key reports the server's 501; it never renders a guessed layout.** | Test asserting the 501 message reaches the status line. Pins §1.5 against a future well-meaning "just print something". |
 | **I-11** | **Bank account number / IFSC are absent, not blank.** | The screen has no such column until slice 2 adds the columns *and* the data. A blank labelled field reads as "the bank has no IFSC". |
 | **I-12** | **Alt+P discloses that the print OPTIONS menu is not built** (§6.1). Ctrl+P and Alt+P are different Tally actions; binding both to a silent direct print would let an operator think they chose options they never saw. | Test asserting Alt+P's status message names the missing options menu, and that Ctrl+P's does **not** (they must not converge on one message). |
+| **I-13** | **No key on the reconciliation screen opens an unrelated voucher** (§6.2). F5's global binding is a Payment voucher and F9's is a Purchase voucher, so an unbound key there is not inert — it is wrong. | Test asserting F5/F8/F9/Alt+F8/Alt+S all resolve to `unavailable` on that screen, plus one asserting F5 leaves `voucherType` undefined. This is the invariant that caught the ERP 9 mis-binding. |
 
 ---
 
@@ -300,11 +301,46 @@ product's moat is that the keys mean what Tally means, and "I remembered the com
 verification.
 
 Bindings: **Ctrl+P** and **Alt+P** → `print`, distinguished as tabled above.
-Bank reconciliation is reached two ways, mirroring how every other screen is reachable:
-a **Gateway entry** (`"Bank Reconciliation"`, checked *before* the `canonicalReportName`
-fallback in `navMachine.ts:483` — the ordering trap Bill Inbox and Query both document), and
-**F5 on a bank ledger's report**. Note F5 is already `ledgerWise` on report screens
-(`tallyprime.ts:161`); the override is scoped so it does not break the Trial Balance toggle.
+
+### 6.2 ⚠️ HOW RECONCILIATION IS REACHED — a correction, for the same reason as §6.1
+
+The first draft of this memo said the screen should be reached by **F5 on a bank ledger's
+report**, and that is wrong in a way worth recording, because it is wrong *plausibly*.
+
+F5-on-the-bank-ledger IS the reconcile gesture — **in Tally.ERP 9**. This product ships the
+**TallyPrime** profile, and `RESEARCH.md:873` says Prime reaches reconciliation through
+**Alt+G > Banking Activities**, while `RESEARCH.md:879` enumerates the keys that live *inside*
+the reconciliation screen:
+
+> **F4** (select bank ledger), **F5** (amount-view toggle), **Alt+F5** (detailed),
+> **Ctrl+H** (change view), **F9** (set status manually), **F8** (modify match),
+> **Alt+F8** (unlink a mistaken match), **Alt+S** (potential matches),
+> **Ctrl+J** (exception report), **Ctrl+B** (basis of values)
+
+So **F5 inside reconciliation is the amount-view toggle, not the way in**, and binding the
+ERP 9 gesture in the Prime table would have been a keystroke this product *invented*. The
+build had already made that mistake and a test caught it — pressing F5 twice landed the
+operator on a **Payment voucher**, because the second press fell through to the global
+binding. The test's premise was wrong and so was the code.
+
+**The corrected design, every key cited to `:879`:**
+
+| Key | Meaning | Status |
+|---|---|---|
+| Gateway entry / Go To | the way in (Prime's Alt+G > Banking Activities) | built |
+| **F4** | select bank ledger — the account picker | built |
+| **F2** | statement date (a position *as at*, so only "To" applies) | built |
+| **Alt+F5**, **Ctrl+H** | detailed, change view | existing report semantics |
+| **F5**, **F8**, **F9**, **Alt+F8**, **Alt+S** | amount view; the four matching keys | **bound to explicit `unavailable`** — all belong to statement import (T4 slice 2) |
+
+Binding that last row is not politeness. F5's global meaning is a **Payment** voucher and
+F9's is a **Purchase** voucher, so an unbound key there does not do nothing — it opens the
+wrong screen on top of the statement. `report-detail`'s F5 is therefore left exactly as it
+was (`ledgerWise`), and no corpus case or existing test changed.
+
+**Only built keys go on the button bar**, because `buttons.test.ts` fails the build if a bar
+advertises an `unavailable` action — an operator reaches for a bar button by position from
+then on.
 
 **Four registration points** (handoff §4.2) — this track adds **no new server resource**
 (`bank-reconciliation` was registered by 0046 and print by T1), so §4.2 does not apply.

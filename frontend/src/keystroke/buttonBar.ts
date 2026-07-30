@@ -48,6 +48,12 @@ const VOUCHER_BAR: readonly ButtonBarItem[] = [
   item("Alt+C", "Create Master"),
   item("Ctrl+H", "Change Mode"),
   item("Alt+D", "Delete"),
+  // Ctrl+P is TallyPrime's print-this-voucher key (RESEARCH.md:2165). It is on
+  // the bar because the whole point of the change that added it is that an
+  // operator could not print the invoice from the screen they keyed it on. It
+  // prints a SAVED voucher — including one saved a moment ago by Ctrl+A — and
+  // says so when there is nothing to print yet.
+  item("Ctrl+P", "Print"),
   item("Ctrl+A", "Accept"),
   item("Ctrl+Q", "Quit"),
   item("F1", "Help"),
@@ -79,6 +85,32 @@ const REPORT_BAR: readonly ButtonBarItem[] = [
   item("Ctrl+H", "Change View"),
   item("Ctrl+F", "Filter"),
   item("Alt+E", "Export"),
+  item("Ctrl+P", "Print"),
+  item("Alt+G", "Go To"),
+  item("Ctrl+G", "Switch To"),
+  item("F1", "Help"),
+];
+
+/**
+ * The Bank Reconciliation Statement bar, from RESEARCH.md:879's list of the keys
+ * that live inside Tally's reconciliation screen.
+ *
+ * F4 picks the bank account and F2 dates the statement. Only the keys that are
+ * BUILT are advertised: :879 also documents F5 (amount view), F8/Alt+F8 (modify
+ * and unlink a match), F9 (set status) and Alt+S (potential matches), and all of
+ * those belong to statement import — T4 slice 2. They are bound in the keymap so
+ * they answer honestly, but buttons.test.ts fails the build if a BAR advertises
+ * an `unavailable` action, and rightly: an operator reaches for a bar button by
+ * position from then on.
+ *
+ * No Print. The print route carries no ledger id, so printing a BRS is an open
+ * product decision (docs/design/t4-model.md §1.3) and the key could only refuse.
+ */
+const BANK_RECON_BAR: readonly ButtonBarItem[] = [
+  item("F2", "As on"),
+  item("F4", "Bank"),
+  item("Ctrl+A", "Accept"),
+  item("Esc", "Back"),
   item("Alt+G", "Go To"),
   item("Ctrl+G", "Switch To"),
   item("F1", "Help"),
@@ -114,6 +146,8 @@ export function buttonBarFor(
     case "report":
     case "report-detail":
       return REPORT_BAR;
+    case "bank-reconciliation":
+      return BANK_RECON_BAR;
     case "master-create":
       return MASTER_BAR;
     case "gateway":

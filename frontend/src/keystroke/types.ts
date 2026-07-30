@@ -36,6 +36,12 @@
  *                          never drift from what the keys actually do.
  *  - "features"          — F11 Company Features: what this edition has enabled,
  *                          stated honestly (including what is not built yet).
+ *  - "bank-reconciliation" — Tally's F5 view on a bank ledger: the Bank
+ *                          Reconciliation Statement, with the ONE editable
+ *                          column (Bank Date) that ticks an item off against the
+ *                          bank's own statement. Reconciling never touches the
+ *                          voucher, so an ALTER after clearing is reported as
+ *                          BROKEN rather than silently absorbed.
  */
 export type ScreenKind =
   | "gateway"
@@ -51,7 +57,8 @@ export type ScreenKind =
   | "members"
   | "edit-log"
   | "help"
-  | "features";
+  | "features"
+  | "bank-reconciliation";
 
 /**
  * An in-frame overlay: a sub-screen that keeps its parent frame alive and is
@@ -279,6 +286,35 @@ export type KeymapAction =
    * and it is scoped to the voucher screen rather than claimed globally.
    */
   | { kind: "editLog" }
+  /**
+   * Ctrl+P / Alt+P — PRINT the active voucher or report.
+   *
+   * COMBO PROVENANCE (RESEARCH.md:2165, the ERP 9 / TallyPrime comparison table;
+   * corroborated for Prime at :361 and :415): in ERP 9 print is Alt+P, and in
+   * TallyPrime it is "Ctrl+P (voucher) / Alt+P (print menu)". So BOTH are live
+   * TallyPrime bindings and they are NOT the same action — Ctrl+P prints this
+   * voucher, Alt+P opens a print OPTIONS menu.
+   *
+   * We have no options menu. `viaOptionsMenu` records which key was pressed so
+   * Alt+P can say that out loud and state that it printed with defaults. Binding
+   * both silently to one direct print would let an operator believe they had
+   * reached an options screen and chosen settings they never saw — the same class
+   * of quiet wrongness this keymap's coverage rule exists to prevent.
+   *
+   * Note that binding these combos at all is what stops the BROWSER print dialog
+   * opening: AppShell returns early on an unresolved combo, so before this action
+   * existed Ctrl+P printed a screenshot of the DOM — no Rule 46 particulars, no
+   * GSTIN. See docs/design/t1t4-ui-model.md §0.1.
+   */
+  | { kind: "print"; viaOptionsMenu?: boolean }
+  /**
+   * F5 on a bank ledger / the Gateway entry — the BANK RECONCILIATION screen.
+   *
+   * Tally reaches this by pressing F5 inside a bank ledger's voucher report, and
+   * F5 is already `ledgerWise` on report screens, so the override is scoped
+   * rather than global (see the keymap's screenBindings).
+   */
+  | { kind: "bankReconciliation" }
   /**
    * A combo that a real TallyPrime user WILL press but whose feature is not
    * built in this edition (e.g. payroll, order processing). It is bound on

@@ -208,8 +208,13 @@ function PeriodOverlay({
   const cfg = snapshot.config ?? {};
   const [from, setFrom] = useState(cfg.periodFrom ?? "");
   const [to, setTo] = useState(cfg.periodTo ?? "");
-  // Which reports read only the upper bound (they are positions, not periods).
+  // Which screens read only the upper bound (they are positions, not periods).
+  // The Bank Reconciliation Statement is one: it answers "what had cleared AS AT
+  // this date", and an item cleared later is un-cleared as at the statement date
+  // (docs/design/t4-model.md's first trap).
+  const isBankRecon = snapshot.screen === "bank-reconciliation";
   const asAtOnly =
+    isBankRecon ||
     snapshot.reportName === "Trial Balance" ||
     snapshot.reportName === "Balance Sheet" ||
     snapshot.reportName === "Outstandings";
@@ -217,6 +222,9 @@ function PeriodOverlay({
     asAtOnly ||
     snapshot.reportName === "Day Book" ||
     snapshot.reportName === "Profit & Loss A/c";
+  const asAtLabel = isBankRecon
+    ? "The Bank Reconciliation Statement"
+    : snapshot.reportName;
 
   return (
     <OverlayPanel title="Period">
@@ -254,7 +262,7 @@ function PeriodOverlay({
       </label>
       {asAtOnly ? (
         <p data-testid="period-as-at-note" className="mt-2 text-xs">
-          Note: {snapshot.reportName} is a POSITION as at a date, so only “To”
+          Note: {asAtLabel} is a POSITION as at a date, so only “To”
           applies to it. “From” is ignored here on purpose — bounding a position
           below would drop earlier history and still balance.
         </p>

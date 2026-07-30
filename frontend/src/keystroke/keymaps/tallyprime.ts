@@ -54,6 +54,22 @@ const RAW_BINDINGS: Record<string, KeymapAction> = {
   "Alt+F1": { kind: "detailed" }, // Detailed / condensed
   "Ctrl+F": { kind: "filter" }, // Filter rows
   "Alt+E": { kind: "exportScreen" }, // Export the active screen
+  // ---- PRINT. Two combos, two DIFFERENT Tally actions (RESEARCH.md:2165:
+  // ERP 9 Alt+P; TallyPrime "Ctrl+P (voucher) / Alt+P (print menu)").
+  //
+  // Both were MISSING from this table entirely — not bound to a real action and
+  // not bound to `unavailable` — which made Ctrl+P the one documented combo that
+  // fell through to the browser. It opened the BROWSER'S print dialog and printed
+  // a screenshot of this dark-background terminal emulation: no Rule 46
+  // particulars, no GSTIN block, no tax summary. That is a violation of this
+  // file's own coverage rule in its worst form, because the key did not do
+  // nothing — it did something wrong that looked like a document.
+  //
+  // Alt+P carries viaOptionsMenu so it can say that the print OPTIONS menu
+  // (copies, page range, Print Before Save rules) is not built and that it
+  // printed with defaults, rather than silently pretending to be Ctrl+P.
+  "Ctrl+P": { kind: "print" },
+  "Alt+P": { kind: "print", viaOptionsMenu: true },
   "Ctrl+N": { kind: "calculator" }, // Calculator panel
   F1: { kind: "help" }, // Help
   "Ctrl+F1": { kind: "help" }, // Context help
@@ -167,6 +183,66 @@ const RAW_SCREEN_BINDINGS: Partial<
     F5: { kind: "ledgerWise" },
     "Ctrl+H": { kind: "changeView" },
     "Alt+F5": { kind: "detailed" },
+  },
+  // THE BANK RECONCILIATION SCREEN. Every key here is taken from RESEARCH.md:879
+  // ("Key shortcuts inside reconciliation"), which is the only source this repo
+  // has for the screen's own button grammar. Nothing below is inferred.
+  //
+  // A NOTE ON HOW THIS SCREEN IS REACHED, because an earlier draft got it wrong.
+  // It is tempting to bind F5 on a bank ledger's voucher report to "reconcile" —
+  // that IS the gesture, but it is Tally.ERP 9's, and this is the TALLYPRIME
+  // profile. RESEARCH.md:873 says Prime reaches reconciliation through
+  // "Alt+G > Banking Activities", and RESEARCH.md:879 says F5 INSIDE
+  // reconciliation is the amount-view toggle, not the way in. So the way in here
+  // is the Gateway entry / Go To (Prime's own path) and F4 below picks the
+  // account, exactly as :879 describes. Binding the ERP 9 gesture in the Prime
+  // table would have been a keystroke this product invented, which is the one
+  // thing its moat cannot afford.
+  "bank-reconciliation": {
+    // The statement is a POSITION AS AT A DATE, so F2 is the statement date —
+    // the same overlay the Trial Balance and Balance Sheet use, which already
+    // says only "To" applies to a position. Reconciling in arrears (June's
+    // statement in July) is the ORDINARY case, so a screen fixed at today would
+    // be wrong most of the time.
+    F2: { kind: "period" },
+    // F4 — "select bank ledger" (:879). This is the account picker, and it is
+    // why the screen does not need a Gateway sub-menu of its own.
+    F4: { kind: "bankReconciliation" },
+    // F5 — "amount-view toggle" (:879). NOT built. It is bound anyway, and
+    // that is this file's coverage rule doing its job: without an entry here F5
+    // falls through to the GLOBAL binding and opens a PAYMENT VOUCHER on top of
+    // the statement, which is not a missing feature but a wrong one.
+    F5: {
+      kind: "unavailable",
+      feature: "Amount view (F5)",
+      note: "The deposits/withdrawals amount-view toggle is not built. The statement shows one Amount column with its Dr/Cr side.",
+    },
+    "Alt+F5": { kind: "detailed" },
+    "Ctrl+H": { kind: "changeView" },
+    // The matching keys (:879) all belong to STATEMENT IMPORT, which is T4 slice
+    // 2 and deliberately not built (docs/design/t4-model.md §1.4). They are bound
+    // so an operator who reaches for them is told that, rather than finding a
+    // dead key or — worse, in F9's case — a Purchase voucher.
+    F8: {
+      kind: "unavailable",
+      feature: "Modify match (F8)",
+      note: "Bank-statement import and matching are not built yet (T4 slice 2), so there are no matches to modify.",
+    },
+    F9: {
+      kind: "unavailable",
+      feature: "Set status manually (F9)",
+      note: "Statuses come from imported statement matching, which is not built yet (T4 slice 2). Enter a Bank Date against a row instead — that IS the manual reconciliation.",
+    },
+    "Alt+F8": {
+      kind: "unavailable",
+      feature: "Unlink a match (Alt+F8)",
+      note: "Bank-statement import and matching are not built yet (T4 slice 2), so there is nothing to unlink.",
+    },
+    "Alt+S": {
+      kind: "unavailable",
+      feature: "Potential matches (Alt+S)",
+      note: "Automatic matching is T4 slice 2. Note its governing rule when it lands: an AMBIGUOUS match is never auto-cleared.",
+    },
   },
   // Alt+L on a voucher opens its EDIT LOG. RESEARCH sec 6 pins the PLACEMENT
   // (Tally shows the Edit Log from the voucher alteration screen and the Day
@@ -321,6 +397,14 @@ export function actionLabel(action: KeymapAction): string {
       return "Switch Company";
     case "editLog":
       return "Edit Log (every version of this voucher)";
+    case "print":
+      // Two combos reach this action and they must not read identically — Alt+P
+      // is Tally's print OPTIONS menu, which this build does not have.
+      return action.viaOptionsMenu
+        ? "Print (with defaults — no options menu in this build)"
+        : "Print this voucher / report";
+    case "bankReconciliation":
+      return "Bank Reconciliation (tick items off the bank statement)";
     case "createMaster":
       return `Create ${action.masterKind} on the fly`;
     case "unavailable":

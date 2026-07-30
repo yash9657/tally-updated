@@ -135,6 +135,21 @@ export const MORE_REPORTS_LABEL = "Display More Reports";
 export const USERS_ROLES_LABEL = "Users & Roles";
 
 /**
+ * The Gateway entry that opens BANK RECONCILIATION. Same ordering requirement as
+ * BILL_INBOX_LABEL — it must be matched BEFORE the canonicalReportName fallback,
+ * or it pushes a report frame literally named "Bank Reconciliation".
+ *
+ * That trap is not hypothetical here: "bank-reconciliation" IS a real name in
+ * authz.KnownReportNames (migration 0046 needs it so a security level can be
+ * refused the company's bank position), so a fallback-matched frame would look
+ * plausible all the way to a 501 from the print route.
+ *
+ * Reached this way the screen opens in PICKER mode (choose a bank account);
+ * reached by F5 from a ledger drill it opens straight on that ledger.
+ */
+export const BANK_RECON_LABEL = "Bank Reconciliation";
+
+/**
  * The Ctrl+H Change Mode labels the machine acts on. Kept here (not in the
  * screen) because the MACHINE owns what a selection does; the screen owns which
  * options a voucher class offers. Any other label — including the "not built"
@@ -382,10 +397,27 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
   const openOverlay = (overlay: FrameOverlay): Partial<NavContext> =>
     replaceActive({ ...active, overlay });
 
-  /** Push a screen unless it is already the active one (F1 twice = one Help). */
-  const pushOnce = (screen: ScreenKind): Partial<NavContext> => {
-    if (active.screen === screen) return {};
-    stack.push({ screen });
+  /**
+   * Push a screen unless it is already the active one (F1 twice = one Help).
+   *
+   * `extra` carries frame fields the destination needs (e.g. the drilled ledger
+   * for bank reconciliation). It is compared as part of the "already active"
+   * test: pressing F5 on a DIFFERENT ledger must open that ledger's statement,
+   * not be swallowed as a repeat.
+   */
+  const pushOnce = (
+    screen: ScreenKind,
+    extra?: Partial<ScreenFrame>,
+  ): Partial<NavContext> => {
+    if (active.screen === screen) {
+      const same =
+        !extra ||
+        Object.entries(extra).every(
+          ([k, v]) => active[k as keyof ScreenFrame] === v,
+        );
+      if (same) return {};
+    }
+    stack.push({ screen, ...extra });
     return { stack };
   };
 
@@ -513,6 +545,17 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
           stack.push({ screen: "members" });
           return { stack };
         }
+        // "Bank Reconciliation" drills into the T4 reconciliation screen, in
+        // PICKER mode (no ledger chosen yet). Ordering as above: this MUST come
+        // before the canonicalReportName fallback, which would otherwise push a
+        // plausible-looking report frame — "bank-reconciliation" really is a
+        // KnownReportName, so the mistake would survive as far as a 501.
+        if (
+          active.selectedItem?.toLowerCase() === BANK_RECON_LABEL.toLowerCase()
+        ) {
+          stack.push({ screen: "bank-reconciliation" });
+          return { stack };
+        }
         // "Display More Reports" opens the second-level report MENU (Tally's
         // own structure: the Trial Balance and Outstandings live one level in).
         // Checked before the report fallback, which would otherwise push a
@@ -628,8 +671,13 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
     }
 
     case "period": {
-      // F2 (report) / Alt+F2 — the From/To picker. Only reports have a period.
-      if (isReportScreen) return openOverlay("period");
+      // F2 (report) / Alt+F2 — the From/To picker. Reports have a period, and so
+      // does the Bank Reconciliation Statement: it is a position AS AT a date
+      // (only the upper bound applies), and reconciling in arrears is the normal
+      // case rather than an edge one.
+      if (isReportScreen || active.screen === "bank-reconciliation") {
+        return openOverlay("period");
+      }
       return {};
     }
 
@@ -686,9 +734,33 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
 
     case "prevVoucher":
     case "nextVoucher":
-    case "exportScreen": {
+    case "exportScreen":
+    case "print": {
       // Pure side effects owned by the active screen (browse saved vouchers,
-      // write a CSV). The machine deliberately does not move the stack.
+      // write a CSV, fetch a PDF). The machine deliberately does not move the
+      // stack.
+      //
+      // PRINT belongs here and not in a frame transition because printing does
+      // not navigate: an operator who prints an invoice is still on that
+      // invoice. It also keeps the machine PURE — resolving what to print needs
+      // the loaded voucher id, and no voucher id travels through this machine
+      // (the same rule `editLog` established). screens/printTarget.ts decides,
+      // and the screen fires it through the ScreenActions bridge.
+      return {};
+    }
+
+    case "bankReconciliation": {
+      // The Gateway / menu entry opens the statement — TallyPrime's own route to
+      // it is Alt+G > Banking Activities (RESEARCH.md:873), so a Gateway entry
+      // and the Go To picker are the faithful ways in.
+      if (active.screen === "gateway" || active.screen === "menu") {
+        return pushOnce("bank-reconciliation");
+      }
+      // F4 on the statement itself — "select bank ledger" (RESEARCH.md:879).
+      // The machine does NOT move: which accounts exist, and which of them are
+      // bank accounts, is an ltree ancestry fact that lives in the database.
+      // The screen owns the picker and fires it through the ScreenActions
+      // bridge, the same way Alt+E owns its export.
       return {};
     }
 

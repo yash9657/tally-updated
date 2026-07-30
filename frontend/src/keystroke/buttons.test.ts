@@ -71,6 +71,15 @@ const SCREEN_PATHS: { screen: NavSnapshot["screen"]; events: Ev[] }[] = [
       { type: "KEY", combo: "Alt+C" },
     ],
   },
+  // The Bank Reconciliation Statement, reached by the Gateway entry (TallyPrime's
+  // own route is Alt+G > Banking Activities — RESEARCH.md:873).
+  {
+    screen: "bank-reconciliation",
+    events: [
+      { type: "SELECT", menuItem: "Bank Reconciliation" },
+      { type: "KEY", combo: "Enter" },
+    ],
+  },
 ];
 
 describe("no advertised button is decorative", () => {
@@ -97,6 +106,15 @@ describe("no advertised button is decorative", () => {
           "accept",
           "delete",
           "exportScreen",
+          // Print fetches a PDF from the server and hands it to the browser. Like
+          // export it deliberately does NOT move the stack: an operator who
+          // prints an invoice is still on that invoice.
+          "print",
+          // F4 on the reconciliation screen picks the bank account
+          // (RESEARCH.md:879). The screen owns the picker, because which ledgers
+          // are BANK ledgers is an ltree ancestry fact in the database, not
+          // something the pure machine can know.
+          "bankReconciliation",
           "voucher",
           "date",
         ].includes(action?.kind ?? "");
