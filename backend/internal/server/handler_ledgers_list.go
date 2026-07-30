@@ -29,6 +29,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/khata/cored/internal/masters"
+	"github.com/khata/cored/internal/reporting"
 )
 
 // ledgerListItem is one row of the chart of accounts. Field names mirror
@@ -62,6 +63,22 @@ type ledgerListItem struct {
 	// IsSystem marks the ledgers seeded with the company, which a client should
 	// prefer to reuse rather than duplicate.
 	IsSystem bool `json:"is_system"`
+	// IsBank is true when this ledger is a BANK ACCOUNT, i.e. one a Bank
+	// Reconciliation Statement can be drawn for. DERIVED, never stored.
+	//
+	// It is here because a client CANNOT WORK IT OUT FROM GroupName. Bank-ness is
+	// ltree ancestry under 'Bank Accounts' / 'Bank OD A/c'
+	// (reporting.BankLedgerPredicate), while GroupName is the IMMEDIATE group —
+	// so a ledger in a user-created "Current Accounts" sub-group reads
+	// GroupName = "Current Accounts", and a client filtering on the two seeded
+	// names silently drops a real bank account from its reconciliation picker.
+	// Silently is the operative word: a shorter list is not an error, and the
+	// operator concludes the product does not know about their account.
+	//
+	// Note that an OD account is a bank account too, and a LIABILITY — see
+	// docs/design/t4-model.md §3.1 on the sign trap. This flag says "a statement
+	// can be drawn", not "this is an asset".
+	IsBank bool `json:"is_bank"`
 }
 
 type ledgerListResp struct {
@@ -97,7 +114,8 @@ func (s *Server) handleListLedgers(w http.ResponseWriter, r *http.Request) {
 			        COALESCE(l.gstin, ''), COALESCE(l.state_code, ''),
 			        l.registration_type::text,
 			        COALESCE(l.address, ''), COALESCE(l.city, ''), COALESCE(l.pincode, ''),
-			        l.is_system
+			        l.is_system,
+			        `+reporting.BankLedgerPredicate+`
 			   FROM ledger l
 			   JOIN account_group g ON g.id = l.group_id
 			  ORDER BY g.name, l.name`)
@@ -113,7 +131,8 @@ func (s *Server) handleListLedgers(w http.ResponseWriter, r *http.Request) {
 			if err := rows.Scan(&it.ID, &it.Name, &it.GroupName,
 				&opening, &it.OpeningDC, &it.MaintainBillByBill,
 				&it.GSTIN, &it.StateCode, &it.RegistrationType,
-				&it.Address, &it.City, &it.Pincode, &it.IsSystem); err != nil {
+				&it.Address, &it.City, &it.Pincode, &it.IsSystem,
+				&it.IsBank); err != nil {
 				return err
 			}
 			it.OpeningBalance = opening.StringFixed(4)

@@ -72,6 +72,36 @@ type BankReconLine struct {
 	ClearedDrCr   string
 }
 
+// BankLedgerPredicate is THE definition of "this ledger is a bank account", as a
+// SQL boolean expression over an aliased `ledger l` JOIN `account_group g`.
+//
+// IT IS ANCESTRY, NOT A GROUP NAME, AND THAT DISTINCTION IS THE WHOLE REASON
+// THIS CONSTANT EXISTS. A company may keep its accounts in a user-created
+// "Current Accounts" sub-group UNDER the seeded "Bank Accounts" primary —
+// masters.CreateGroup takes a ParentName and account_group.path is an ltree — so
+// such a ledger's IMMEDIATE group name is "Current Accounts" and only `path <@
+// bg.path` recognises it.
+//
+// Two places need the answer: this file (which refuses a non-bank ledger by name)
+// and the GET /ledgers projection (so a reconciliation screen can offer the right
+// accounts). They were a copy-paste apart, and the copy that drifted would have
+// failed in the worse direction — a picker that silently omits a real bank
+// account shows a shorter list, not an error, and the operator concludes the
+// product does not know about their account. So the expression is declared ONCE
+// here and referenced by both; the agreement is pinned from both sides by
+// TestIsBankAgreesWithTheStatementEndpoint (invariant I-9 of
+// docs/design/t1t4-ui-model.md).
+//
+// The bg.company_id correlation is retained even though account_group is FORCE
+// RLS: it costs nothing and keeps the expression correct if it is ever used
+// outside a tenant-scoped transaction.
+const BankLedgerPredicate = `EXISTS (
+	    SELECT 1 FROM account_group bg
+	     WHERE bg.company_id = l.company_id
+	       AND bg.name IN ('Bank Accounts', 'Bank OD A/c')
+	       AND g.path <@ bg.path
+	)`
+
 // BankReconciliation is the Bank Reconciliation Statement as at a date.
 type BankReconciliation struct {
 	LedgerID   uuid.UUID
@@ -177,13 +207,7 @@ func (s *Service) BankReconciliationStatement(
 		// empty statement that looks like "nothing to reconcile".
 		var isBank bool
 		err := tx.QueryRow(ctx, `
-			SELECT l.name, g.nature,
-			       EXISTS (
-			           SELECT 1 FROM account_group bg
-			            WHERE bg.company_id = l.company_id
-			              AND bg.name IN ('Bank Accounts', 'Bank OD A/c')
-			              AND g.path <@ bg.path
-			       )
+			SELECT l.name, g.nature, `+BankLedgerPredicate+`
 			  FROM ledger l
 			  JOIN account_group g ON g.id = l.group_id
 			 WHERE l.id = $1`, ledgerID).Scan(&out.LedgerName, &out.Nature, &isBank)
