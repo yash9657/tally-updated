@@ -18,6 +18,7 @@ import {
 } from "../screens/reports/ReportScreens";
 import { ReportDetailScreen } from "../screens/reports/ReportDetailScreen";
 import { StockSummaryScreen } from "../screens/reports/StockSummaryScreen";
+import { BankReconciliationScreen } from "../screens/BankReconciliationScreen";
 import { REPORT_NAMES } from "../keystroke/types";
 import type { ScreenComponent, ScreenComponentProps } from "./screenRegistry";
 import { ScreenRegistry } from "./screenRegistry";
@@ -206,6 +207,12 @@ export function createDefaultRegistry(): ScreenRegistry {
     members: MembersAdapter,
     // Alt+L on a voucher: the MCA audit trail, made visible.
     "edit-log": EditLogAdapter,
+    // The Bank Reconciliation Statement (T4). Registered as a SCREEN and not as
+    // a report name, even though "bank-reconciliation" is a real name in
+    // authz.KnownReportNames: the statement is per bank ledger, so the frame
+    // carries a ledger rather than a report period, and the print route (which
+    // has no ledger id) answers 501 for it on purpose.
+    "bank-reconciliation": BankReconciliationScreen,
     // F1 Help (keystroke reference, generated from the live keymap) and F11
     // Company Features (the honest capability inventory).
     help: HelpAdapter,

@@ -29,6 +29,10 @@ const COMPANY_SCOPED_SCREENS = new Set<NavSnapshot["screen"]>([
   "report",
   "report-detail",
   "master-create",
+  // The Bank Reconciliation Statement reads a company's bank ledgers, so it
+  // needs a scope. Omitting it here would let the screen mount without one and
+  // useCompanyID() would THROW rather than render the "select a company" state.
+  "bank-reconciliation",
 ]);
 
 /**
@@ -45,6 +49,8 @@ const SCREEN_ACTIONS: Partial<Record<KeymapAction["kind"], ScreenActionKind>> = 
   duplicate: "duplicate",
   prevVoucher: "prevVoucher",
   nextVoucher: "nextVoucher",
+  print: "print",
+  bankReconciliation: "bankReconciliation",
 };
 
 /** How long a status-line message stays up before it fades (ms). */
@@ -167,7 +173,18 @@ function AppShellInner({
 
       // ---- Feedback. Priority: what the screen said > what the key toggled >
       // "this key does nothing here".
-      if (effect.message) {
+      if (effect.pending) {
+        // An in-flight screen action (a print fetch). Await it so the outcome —
+        // and above all a REFUSAL, which is the message that matters most —
+        // reaches the status line rather than being dropped.
+        effect.pending
+          .then((message) => {
+            if (typeof message === "string") showStatus(message);
+          })
+          .catch((err: unknown) => {
+            showStatus(err instanceof Error ? err.message : String(err));
+          });
+      } else if (effect.message) {
         showStatus(effect.message);
       } else if (effect.ran || machineActs) {
         showStatus(toggleMessage(action, snap));

@@ -8,6 +8,7 @@ import {
   useHomeStateCode,
 } from "../app/CompanyContext";
 import { useRegisterScreenAction } from "../app/ScreenActions";
+import { usePrintAction } from "./usePrint";
 import { useLoadedVoucher } from "../app/LoadedVoucher";
 import { useLoadedDraft } from "../app/LoadedDraft";
 import {
@@ -449,6 +450,19 @@ function AccountingVoucherScreen({
   const [form, setForm] = useState<VoucherForm>(emptyForm);
   const [status, setStatus] = useState<string | null>(null);
   const [savedNo, setSavedNo] = useState<string | null>(null);
+  /**
+   * The voucher_id of a voucher JUST SAVED in create mode, so Ctrl+P can print
+   * it. This is the whole of docs/design/t1t4-ui-model.md §2.1: the handoff's
+   * §3.1 complaint is that "an operator cannot print the invoice from the screen
+   * they keyed it on", and requiring an alteration first would have left that
+   * standing. The create response already carries voucher_id — it was simply
+   * being discarded.
+   *
+   * It is CLEARED wherever the form's identity is dropped (Alt+X cancel, Alt+2
+   * duplicate), because a Ctrl+P that printed the previous voucher would be worse
+   * than one that refuses. Invariant I-6 pins that, with a mutation proof.
+   */
+  const [savedVoucherID, setSavedVoucherID] = useState<string | null>(null);
   // The server-derived GST split from the last accept (display-only).
   const [taxResult, setTaxResult] = useState<{
     cgst: string;
@@ -749,6 +763,7 @@ function AccountingVoucherScreen({
       accept
         .then((res: VoucherResponse) => {
           setSavedNo(res.voucher_no);
+          setSavedVoucherID(res.voucher_id);
           setTaxResult({ cgst: res.cgst, sgst: res.sgst, igst: res.igst });
           setStatus("Saved");
           setLoadedDraft(null);
@@ -782,6 +797,7 @@ function AccountingVoucherScreen({
       .then((req) => acceptVoucher(client, companyID, ctx, req))
       .then((res: VoucherResponse) => {
         setSavedNo(res.voucher_no);
+        setSavedVoucherID(res.voucher_id);
         // Display the server-derived split (never the JS-computed one).
         setTaxResult({ cgst: res.cgst, sgst: res.sgst, igst: res.igst });
         setStatus("Saved");
@@ -831,6 +847,7 @@ function AccountingVoucherScreen({
     setForm(emptyForm());
     setStatus(null);
     setSavedNo(null);
+    setSavedVoucherID(null);
     setTaxResult(null);
     return "Voucher cancelled — the form is cleared.";
   }, []);
@@ -846,6 +863,7 @@ function AccountingVoucherScreen({
     }
     setForm((f) => ({ ...f, voucherNo: "" }));
     setSavedNo(null);
+    setSavedVoucherID(null);
     setLoaded(null);
     seedRef.current = null;
     return "Duplicated — same lines, new voucher. Ctrl+A to save it.";
@@ -897,6 +915,16 @@ function AccountingVoucherScreen({
   useRegisterScreenAction("duplicate", onDuplicate);
   useRegisterScreenAction("prevVoucher", () => stepVoucher(-1));
   useRegisterScreenAction("nextVoucher", () => stepVoucher(1));
+  // Ctrl+P / Alt+P. An ALTER frame prints the drilled voucher; a CREATE frame
+  // prints the one just saved (§2.1) and otherwise refuses with "press Ctrl+A
+  // first". The loaded id wins because on an alter frame it IS the voucher on
+  // screen, whereas savedVoucherID may hold something keyed earlier in the
+  // session.
+  usePrintAction({
+    voucher: loadedVoucherID
+      ? { voucherID: loadedVoucherID }
+      : { voucherID: savedVoucherID, justSaved: true },
+  });
 
   // Title comes from the voucher CONFIG, which is the single source of truth for
   // per-type presentation. A second local map here silently fell behind when

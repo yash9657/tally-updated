@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import type { NavSnapshot } from "../../keystroke/navMachine";
 import type { FrameConfig } from "../../keystroke/types";
 import { useRegisterScreenAction } from "../../app/ScreenActions";
+import { usePrintAction } from "../usePrint";
 import type { DrillRow } from "./DrillRows";
 
 /**
@@ -76,6 +77,18 @@ export function useReportView(
       ? `Exported ${visible.length} ${visible.length === 1 ? "row" : "rows"} to ${name}`
       : "Export is not available in this environment.";
   });
+
+  // Ctrl+P / Alt+P. Registered HERE, in the hook every report screen already
+  // calls, rather than once per screen — six registrations would be six chances
+  // to forget one, and a report whose Print key silently did nothing is exactly
+  // the class of gap this change exists to close.
+  //
+  // Note the ASYMMETRY with export above, and that it is deliberate: export
+  // writes the rows on screen (after the F12/Ctrl+F view is applied), while print
+  // asks the SERVER for the statement. So a filtered screen exports the filter and
+  // prints the whole statement. The status line says "the whole statement" on a
+  // drill-down for the same reason.
+  usePrintAction();
 
   return visible;
 }

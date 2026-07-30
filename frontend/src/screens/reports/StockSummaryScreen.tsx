@@ -4,6 +4,7 @@ import { useClient, useCompanyID } from "../../app/CompanyContext";
 import { formatMoney } from "./money";
 import { ApiError } from "../../api";
 import type { StockSummaryResponse } from "../../api";
+import { usePrintAction } from "../usePrint";
 
 /**
  * STOCK SUMMARY — the inventory position as at a date.
@@ -38,6 +39,11 @@ export function StockSummaryScreen({ snapshot }: { snapshot: NavSnapshot }) {
   const companyID = useCompanyID();
   // F2 sets the report period; a POSITION reads only its upper bound.
   const asOn = snapshot.config?.periodTo;
+
+  // Ctrl+P / Alt+P. Registered here rather than inherited, because this screen
+  // does NOT go through useReportView (it renders its own godown/batch grid), so
+  // it would otherwise be the one report whose Print key silently did nothing.
+  usePrintAction();
 
   const [data, setData] = useState<StockSummaryResponse | null>(null);
   const [error, setError] = useState<{ status: number; message: string } | null>(

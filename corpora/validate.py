@@ -80,6 +80,10 @@ KNOWN_SCREENS = {
     "edit-log",
     "help",
     "features",
+    # The Bank Reconciliation Statement (T4): a bank ledger's postings with the
+    # ONE editable column, Bank Date. Reached from the Gateway (TallyPrime's own
+    # route is Alt+G > Banking Activities); F4 picks the account.
+    "bank-reconciliation",
 }
 
 RULESET_VERSION = "gst-2024-09"

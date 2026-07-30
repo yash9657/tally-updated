@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { AppShell } from "../app/AppShell";
 import { CompanyProvider } from "../app/CompanyContext";
+import { ScreenActionsProvider } from "../app/ScreenActions";
 import { createMockClient, ApiError } from "../api";
 import type {
   CoredClient,
@@ -498,12 +499,17 @@ function renderStockSummary(getStockSummary: CoredClient["getStockSummary"]) {
     screenStackDepth: 2,
     canReturnToVoucher: false,
   } as NavSnapshot;
+  // ScreenActionsProvider is required now that the screen registers Ctrl+P
+  // (the print key). The other report-screen tests already wrap in it for the
+  // same reason — Alt+E export has needed it since reportView was introduced.
   return render(
     <CompanyProvider
       client={client}
       initialCompany={{ id: "co-1", name: "Test Co", homeStateCode: "29" }}
     >
-      <StockSummaryScreen snapshot={snapshot} />
+      <ScreenActionsProvider>
+        <StockSummaryScreen snapshot={snapshot} />
+      </ScreenActionsProvider>
     </CompanyProvider>,
   );
 }

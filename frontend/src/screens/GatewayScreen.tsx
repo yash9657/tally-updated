@@ -9,6 +9,11 @@ const GATEWAY_MENU = [
   "Balance Sheet",
   "Profit & Loss A/c",
   "Stock Summary",
+  // Bank Reconciliation (T4). TallyPrime reaches it through Alt+G > Banking
+  // Activities (RESEARCH.md:873); a Gateway entry is the same door. It was built
+  // server-side with no key anywhere in this app, which the handoff calls a
+  // parity gap rather than a nicety.
+  "Bank Reconciliation",
   "Users & Roles",
   "Display More Reports",
 ] as const;

@@ -44,14 +44,36 @@ export type ScreenActionKind =
   | "cancelVoucher"
   | "duplicate"
   | "prevVoucher"
-  | "nextVoucher";
+  | "nextVoucher"
+  /**
+   * Ctrl+P / Alt+P — fetch the active document as a PDF and hand it to the
+   * browser. A screen action rather than a machine transition for two reasons:
+   * printing does not navigate (an operator who prints an invoice is still on
+   * that invoice), and resolving WHAT to print needs the loaded voucher id, which
+   * deliberately never travels through the pure navigation machine.
+   */
+  | "print"
+  /**
+   * F4 on the Bank Reconciliation Statement — "select bank ledger"
+   * (RESEARCH.md:879). The screen owns it because which ledgers are BANK ledgers
+   * is an ltree ancestry fact that lives in the database.
+   */
+  | "bankReconciliation";
 
 /**
  * A handler the active screen registers for a screen action. It may return a
  * short status message ("Exported 42 rows to Day Book.csv"), which the shell
  * shows in its status line — so a key press always produces visible feedback.
+ *
+ * It may also return a PROMISE of one, for an action whose outcome is only known
+ * after a round trip: printing cannot say "Printed Invoice INV-0042" until the
+ * server has answered, and the message that matters most is the REFUSAL (a 403
+ * from the ACL, a 501 for a report that does not print). The shell awaits it and
+ * shows whatever arrives, so an async failure can never be silent.
  */
-export type ScreenActionHandler = (snapshot: NavSnapshot) => void | string;
+export type ScreenActionHandler = (
+  snapshot: NavSnapshot,
+) => void | string | Promise<void | string>;
 
 interface ScreenActionsValue {
   /** Mutable registry of the active screen's action handlers. */
@@ -90,6 +112,12 @@ export interface ScreenActionResult {
   ran: boolean;
   /** Optional message the handler wants shown in the shell's status line. */
   message?: string;
+  /**
+   * Set when the handler is still working. The shell awaits it and shows the
+   * result, so an async refusal (a 403, a 501) reaches the operator instead of
+   * being dropped on the floor.
+   */
+  pending?: Promise<void | string>;
 }
 
 /**
@@ -104,11 +132,15 @@ export function useScreenActionDispatcher(): (
   const { handlers } = useScreenActions();
   return (kind, snapshot) => {
     const fn = handlers.current[kind];
-    if (fn) {
-      const message = fn(snapshot);
-      return typeof message === "string" ? { ran: true, message } : { ran: true };
+    if (!fn) return { ran: false };
+    const out = fn(snapshot);
+    if (typeof out === "string") return { ran: true, message: out };
+    // A thenable means the handler is still working (a print fetch). Hand it back
+    // so the shell can await it rather than reporting "nothing happened".
+    if (out && typeof (out as Promise<void | string>).then === "function") {
+      return { ran: true, pending: out as Promise<void | string> };
     }
-    return { ran: false };
+    return { ran: true };
   };
 }
 
