@@ -128,8 +128,8 @@ export function createRestClient(
         `${company(companyID)}/print/vouchers/${voucherClass}/${voucherID}`,
       );
     },
-    printReport(companyID, slug) {
-      return http.getBlob(`${company(companyID)}/print/reports/${slug}`);
+    printReport(companyID, slug, query) {
+      return http.getBlob(`${company(companyID)}/print/reports/${slug}`, query);
     },
 
     // ---- Bank reconciliation (T4).

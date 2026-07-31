@@ -2087,11 +2087,19 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         filename: `mock-${voucherClass}-${voucherID}.pdf`,
       };
     },
-    async printReport(companyID, slug) {
+    async printReport(companyID, slug, query) {
       ensure(companyID);
+      // The scope goes in the mock body too. A mock that silently drops
+      // ledger_id would let the "which bank account?" bug pass every test that
+      // runs against it, which is the one thing this report must not do.
+      const scope = query
+        ? Object.entries(query)
+            .map(([k, v]) => `${k}: ${v}\n`)
+            .join("")
+        : "";
       return {
         blob: new Blob(
-          [`MOCK PDF — not a real document.\nreport: ${slug}\n`],
+          [`MOCK PDF — not a real document.\nreport: ${slug}\n${scope}`],
           { type: "application/pdf" },
         ),
         filename: `mock-${slug}.pdf`,

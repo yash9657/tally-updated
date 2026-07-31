@@ -124,13 +124,19 @@ export interface CoredClient {
     voucherID: string,
   ): Promise<{ blob: Blob; filename: string | null }>;
   /**
-   * Fetch a report as a PDF (GET .../print/reports/{slug}). Eight slugs print;
+   * Fetch a report as a PDF (GET .../print/reports/{slug}). Nine slugs print;
    * every other known report name answers 501 on purpose, which arrives here as
    * an ApiError to be shown verbatim.
+   *
+   * `query` carries the parameters a report needs to be unambiguous — today
+   * only bank-reconciliation, which takes `ledger_id` or `all` and answers 400
+   * with neither, because a company with three banks has not said which
+   * statement it wants (docs/design/t4-model.md §1.3, decision (c)).
    */
   printReport(
     companyID: string,
     slug: string,
+    query?: Record<string, string>,
   ): Promise<{ blob: Blob; filename: string | null }>;
 
   /**

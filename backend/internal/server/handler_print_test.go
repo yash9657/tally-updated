@@ -1212,6 +1212,11 @@ func TestTheUnimplementedReportsAreStillGovernableAndSaySo(t *testing.T) {
 		"trial-balance": true, "balance-sheet": true, "profit-and-loss": true,
 		"day-book": true, "outstandings": true, "stock-summary": true,
 		"payroll-register": true, "payroll-payslip": true,
+		// bank-reconciliation prints since HANDOFF-PARITY-SPRINT.md §3.4 took the
+		// route-shape decision. It is the ONE implemented report that answers 400
+		// rather than 200 to a bare GET, because it needs ?ledger_id= or ?all=;
+		// the loop below allows for that.
+		"bank-reconciliation": true,
 	}
 	deferred := 0
 	for _, name := range authz.KnownReportNames {
@@ -1239,11 +1244,10 @@ func TestTheUnimplementedReportsAreStillGovernableAndSaySo(t *testing.T) {
 			t.Errorf("the 501 for report %q does not name the report: %s", name, rec.Body.String())
 		}
 	}
-	// 15 as of T4: the fourteen T1 recorded, plus bank-reconciliation, which is
-	// deferred for a design reason rather than an unwritten layout (the print
-	// route carries no ledger id — see handler_print_reports.go's header).
-	if deferred != 15 {
-		t.Errorf("expected 15 deferred report names, saw %d: handler_print_reports.go's header "+
+	// 14: the fourteen T1 recorded. bank-reconciliation was the fifteenth until
+	// §3.4 took the route-shape decision and it moved into `implemented`.
+	if deferred != 14 {
+		t.Errorf("expected 14 deferred report names, saw %d: handler_print_reports.go's header "+
 			"lists the deferred set explicitly and it is now out of step with "+
 			"authz.KnownReportNames", deferred)
 	}

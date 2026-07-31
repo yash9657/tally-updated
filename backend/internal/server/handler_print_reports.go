@@ -2,10 +2,11 @@ package server
 
 // handler_print_reports.go — GET /v1/companies/{companyID}/print/reports/{name}
 //
-// EIGHT reports print for real:
+// NINE reports print for real:
 //
 //	trial-balance   balance-sheet   profit-and-loss   day-book
 //	outstandings    stock-summary   payroll-register  payroll-payslip
+//	bank-reconciliation
 //
 // EVERY OTHER NAME IN authz.KnownReportNames STAYS MAPPED AND ANSWERS 501. The
 // deferred set is, in full:
@@ -13,8 +14,7 @@ package server
 //	cash-flow, anomalies, gstr1, gstr3b, reconciliation-queue,
 //	stock-movement, godown-summary, batch-summary, stock-item-vouchers,
 //	itc-reconciliation, ims-inbox,
-//	payroll-form-138, payroll-pf-ecr, payroll-esi-return,
-//	bank-reconciliation
+//	payroll-form-138, payroll-pf-ecr, payroll-esi-return
 //
 // They stay MAPPED on purpose. A name the router does not emit is a name an
 // administrator's rule can never match (internal/authz/vocabulary.go's whole
@@ -28,15 +28,29 @@ package server
 // statement, which is a document nobody has specified yet, not a PDF of a
 // pipe-delimited file.
 //
-// bank-reconciliation (T4) is deferred for a DIFFERENT and more interesting
-// reason, and it is a design gap rather than an unwritten layout: the print
-// route is /print/reports/{name} and carries NO LEDGER ID, while a Bank
-// Reconciliation Statement is always FOR ONE BANK ACCOUNT. There is no honest
-// way to print "the" statement for a company with three banks. Closing it means
-// deciding the route shape first — a ledger query parameter, or one printed
-// statement per bank in a single document — which is recorded in
-// docs/design/t4-model.md §1.3 rather than guessed at here. The live JSON
-// statement at GET /bank-reconciliation/{ledgerID} is unaffected.
+// bank-reconciliation WAS deferred for a different and more interesting reason
+// than the rest: not an unwritten layout but a design gap. The print route is
+// /print/reports/{name} and carries no ledger id, while a Bank Reconciliation
+// Statement is always FOR ONE BANK ACCOUNT, so there was no honest way to print
+// "the" statement for a company with three banks.
+//
+// THE PRODUCT DECISION IS NOW TAKEN (HANDOFF-PARITY-SPRINT.md §3.4, option (c)):
+//
+//	?ledger_id=<uuid>   print that one account's statement   [the default shape]
+//	?all=true           print every bank account, one section each, in one PDF
+//	neither             400, naming both, because a company with three banks
+//	                    that asked for "the" statement has not said which
+//
+// The two are mutually exclusive and passing both is a 400 rather than a silent
+// precedence rule — an operator who passes both has one of two different
+// documents in mind and the server cannot know which.
+//
+// WHY 400 AND NOT A DEFAULT. Picking "the first bank account" for a bare request
+// is the failure the original refusal existed to prevent: it puts a real
+// statement, correctly rendered, for the WRONG ACCOUNT on paper, and nothing on
+// the page says so. The refusal's reasoning survives as the no-parameter case.
+//
+// The live JSON statement at GET /bank-reconciliation/{ledgerID} is unaffected.
 //
 // ===========================================================================
 // TWO RULES THAT DECIDE EVERY LINE BELOW
@@ -111,6 +125,8 @@ func (s *Server) handlePrintReport(w http.ResponseWriter, r *http.Request) {
 		table, built = s.printPayrollRegister(ctx, w, r)
 	case "payroll-payslip":
 		table, built = s.printPayrollPayslip(ctx, w, r)
+	case "bank-reconciliation":
+		table, built = s.printBankReconciliation(ctx, w, r, companyID)
 	default:
 		// Authorized, and honestly refused. See the file header for the full list
 		// and for why these are 501 rather than absent routes.
@@ -792,6 +808,303 @@ func (s *Server) printPayrollRegister(ctx context.Context, w http.ResponseWriter
 		Rows:   rows,
 		Footer: footer,
 	}, true
+}
+
+// ---------------------------------------------------------------------------
+// 9. Bank Reconciliation Statement
+// ---------------------------------------------------------------------------
+
+// bankReconPrintScope resolves WHICH bank accounts this request is for.
+//
+// Returns the ledger ids to print, in the order they will appear. See the file
+// header for why a bare request is a 400 rather than a default.
+func (s *Server) bankReconPrintScope(
+	ctx context.Context, w http.ResponseWriter, r *http.Request,
+) ([]uuid.UUID, bool) {
+	q := r.URL.Query()
+	rawLedger := strings.TrimSpace(q.Get("ledger_id"))
+	all := q.Get("all") == "true"
+
+	switch {
+	case rawLedger == "" && !all:
+		// The original refusal's reasoning, preserved as the case it was actually
+		// about. It names both ways forward rather than only reporting the fault.
+		writeError(w, http.StatusBadRequest,
+			"a Bank Reconciliation Statement is always for ONE bank account, and this "+
+				"request did not say which: pass ?ledger_id=<uuid> for a single account, "+
+				"or ?all=true to print every bank account in one document. Printing a "+
+				"statement for an account you did not choose would put the wrong account "+
+				"on paper with nothing on the page to say so")
+		return nil, false
+	case rawLedger != "" && all:
+		writeError(w, http.StatusBadRequest,
+			"pass either ?ledger_id=<uuid> or ?all=true, not both: they are two "+
+				"different documents and the server cannot tell which one was meant")
+		return nil, false
+	case rawLedger != "":
+		id, err := uuid.Parse(rawLedger)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "ledger_id must be a uuid")
+			return nil, false
+		}
+		// NOT validated as a bank ledger here. BankReconciliationStatement refuses
+		// a non-bank ledger BY NAME (bankrecon.go's diagnostic-refusal habit), and
+		// duplicating the check would give two different sentences for one fault.
+		return []uuid.UUID{id}, true
+	}
+
+	// ?all=true. The bank-ness test is reporting.BankLedgerPredicate — the SAME
+	// expression the ledger list and the statement endpoint use. It is ltree
+	// ANCESTRY, not the immediate group name: a ledger in a user-created "Current
+	// Accounts" sub-group under the seeded "Bank Accounts" primary is a bank
+	// account, and a name comparison would silently omit it from the document.
+	var ids []uuid.UUID
+	err := s.pool.RunInReadOnlyTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		rows, err := tx.Query(ctx,
+			`SELECT l.id
+			   FROM ledger l
+			   JOIN account_group g ON g.id = l.group_id
+			  WHERE `+reporting.BankLedgerPredicate+`
+			  ORDER BY g.name, l.name`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id uuid.UUID
+			if err := rows.Scan(&id); err != nil {
+				return err
+			}
+			ids = append(ids, id)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list bank ledgers: "+err.Error())
+		return nil, false
+	}
+	if len(ids) == 0 {
+		// An empty PDF headed "Bank Reconciliation Statement" reads as "your banks
+		// reconcile to nothing", which is a different and alarming claim.
+		writeError(w, http.StatusNotFound,
+			"this company has no bank accounts, so there is no Bank Reconciliation "+
+				"Statement to print. A ledger is a bank account when its group sits under "+
+				"'Bank Accounts' or 'Bank OD A/c'")
+		return nil, false
+	}
+	return ids, true
+}
+
+// printBankReconciliation renders one section per requested bank account.
+//
+// THE ARITHMETIC IS NOT RE-DERIVED HERE. Every figure comes from the same
+// reporting.BankReconciliationStatement the screen calls (rule 1 of this file's
+// header), including Difference, which the report computes so it can assert its
+// own identity rather than have a printer assume it.
+func (s *Server) printBankReconciliation(
+	ctx context.Context, w http.ResponseWriter, r *http.Request, companyID uuid.UUID,
+) (printing.ReportTable, bool) {
+	asOn, ok := reportDate(w, r, "as_on")
+	if !ok {
+		return printing.ReportTable{}, false
+	}
+	ledgerIDs, ok := s.bankReconPrintScope(ctx, w, r)
+	if !ok {
+		return printing.ReportTable{}, false
+	}
+
+	var (
+		rows        []printing.Row
+		names       []string
+		anyUnbal    bool
+		totalBroken int
+	)
+	for i, ledgerID := range ledgerIDs {
+		brs, err := s.report.BankReconciliationStatement(ctx, companyID, ledgerID, asOn)
+		if err != nil {
+			// The service's own sentence — it names the ledger and says whether the
+			// fault is "no such ledger" or "not a bank account". 422 matches the
+			// JSON handler for the same input rather than inventing a new status.
+			writeError(w, http.StatusUnprocessableEntity, err.Error())
+			return printing.ReportTable{}, false
+		}
+		names = append(names, brs.LedgerName)
+		if !brs.IsBalanced() {
+			anyUnbal = true
+		}
+		totalBroken += brs.BrokenCount
+		if i > 0 {
+			rows = append(rows, printing.Row{Cells: []string{"", "", "", "", ""}})
+		}
+		rows = append(rows, printBankReconSection(brs)...)
+	}
+
+	// The footer is about the DOCUMENT, so it only earns its place when the
+	// document spans more than one account or something is wrong.
+	//
+	// Every note goes in the PARTICULARS column via bankNote, never in cell 0.
+	// layoutRows confines a cell to its own column — there is no spanning — so a
+	// sentence placed in the 2-wide "Date" column is wrapped to four lines and
+	// then truncated with an ellipsis. The note would still be on the page and
+	// would no longer be readable, which is the worst of both.
+	var footer []printing.Row
+	if len(ledgerIDs) > 1 {
+		footer = append(footer, printing.Row{
+			Cells:     []string{"", "", strconv.Itoa(len(ledgerIDs)) + " bank accounts in this document", "", ""},
+			Bold:      true,
+			RuleAbove: true,
+		})
+		// DELIBERATELY NO GRAND TOTAL ACROSS ACCOUNTS. Summing several banks'
+		// closing balances produces a number that is not on any statement and
+		// ties to nothing an operator can check against a passbook — and if one
+		// account is an OD (a liability) the sum is not even meaningful.
+		footer = append(footer, bankNote(
+			"No combined total is printed: each statement reconciles to its own bank."))
+	}
+	if totalBroken > 0 {
+		footer = append(footer, bankNote(
+			strconv.Itoa(totalBroken)+" cleared item(s) no longer match their voucher and are "+
+				"counted as UN-CLEARED above. Re-clear them against the bank statement."))
+	}
+	if anyUnbal {
+		footer = append(footer, printing.Row{
+			Cells: []string{"", "", "A STATEMENT IN THIS DOCUMENT DOES NOT RECONCILE. Do not sign it.", "", ""},
+			Bold:  true,
+		})
+	}
+
+	title := "Bank Reconciliation Statement"
+	subtitle := printAsOnSubtitle(asOn)
+	if len(names) == 1 {
+		subtitle = names[0] + " — " + subtitle
+	} else {
+		subtitle = "All bank accounts — " + subtitle
+	}
+	return printing.ReportTable{
+		Title:     title,
+		Subtitle:  subtitle,
+		Landscape: true,
+		Columns: []printing.Column{
+			{Header: "Date", Align: printing.AlignLeft, Width: 2},
+			{Header: "Voucher No", Align: printing.AlignLeft, Width: 2},
+			{Header: "Particulars", Align: printing.AlignLeft, Width: 7},
+			{Header: "Days", Align: printing.AlignRight, Width: 1.2},
+			{Header: "Amount", Align: printing.AlignRight, Width: 2.5},
+		},
+		Rows:   rows,
+		Footer: footer,
+	}, true
+}
+
+// bankNote is a note row on the BRS, placed in the PARTICULARS column.
+//
+// It exists instead of printLabelRow because printLabelRow puts its text in
+// cell 0, and on this table cell 0 is the 2-wide "Date" column. There is no
+// column spanning in layoutRows, so a sentence there is wrapped to
+// reportMaxCellLines and then ellipsised — present on the page and unreadable.
+func bankNote(text string) printing.Row {
+	return printing.Row{Cells: []string{"", "", text, "", ""}}
+}
+
+// printBankReconSection is one account's statement, in the order a reader
+// checks it: the book balance, the items the bank has not seen, the bank
+// balance, and the residual.
+func printBankReconSection(brs reporting.BankReconciliation) []printing.Row {
+	out := []printing.Row{{
+		Cells:     []string{brs.LedgerName, "", "", "", ""},
+		Bold:      true,
+		RuleBelow: true,
+	}}
+	out = append(out, printing.Row{
+		Cells: []string{"", "", "Balance as per company books", "", printMoney(brs.BalanceAsPerBooks)},
+		Bold:  true,
+	})
+
+	if len(brs.Uncleared) == 0 {
+		out = append(out, printing.Row{
+			Cells:  []string{"", "", "No items are awaiting clearance.", "", ""},
+			Indent: 1,
+		})
+	} else {
+		out = append(out, printing.Row{
+			Cells:  []string{"", "", "Less: amounts not yet reflected in the bank", "", ""},
+			Indent: 1,
+		})
+		for _, l := range brs.Uncleared {
+			out = append(out, printing.Row{
+				Cells: []string{
+					printISODate(l.VoucherDate), l.VoucherNo,
+					printBankReconParticulars(l),
+					// Age is a COUNT of days: strconv, never FormatMoney, which
+					// would render "45.00 days".
+					strconv.Itoa(l.AgeDays),
+					// Dr/Cr rides in the particulars, not in a sign. Amount is a
+					// magnitude everywhere in this codebase and printing a signed
+					// figure here would contradict every other statement.
+					printMoney(l.Amount),
+				},
+				Indent: 2,
+			})
+		}
+		out = append(out, printing.Row{
+			Cells:     []string{"", "", "Net of items awaiting clearance", "", printMoney(brs.UnclearedNet)},
+			RuleAbove: true,
+		})
+	}
+
+	out = append(out, printing.Row{
+		Cells:     []string{"", "", "Balance as per bank", "", printMoney(brs.BalanceAsPerBank)},
+		Bold:      true,
+		RuleAbove: true,
+	})
+	// The residual is printed even when it is zero, and that is the point: a
+	// reader must see that the statement asserted its own arithmetic rather
+	// than infer it from the absence of a line.
+	out = append(out, printing.Row{
+		Cells: []string{"", "", "Difference", "", printMoney(brs.Difference)},
+		Bold:  !brs.IsBalanced(),
+	})
+	if !brs.IsBalanced() {
+		out = append(out, printing.Row{
+			Cells: []string{"", "", "THIS STATEMENT DOES NOT RECONCILE.", "", ""},
+			Bold:  true,
+		})
+	}
+	return out
+}
+
+// printBankReconParticulars words one un-cleared line.
+//
+// The Dr/Cr is spelled as what it MEANS on a bank account — a debit to the bank
+// ledger is money received — because "Dr" against a bank line is the single
+// most reliably misread abbreviation on a reconciliation.
+func printBankReconParticulars(l reporting.BankReconLine) string {
+	var b strings.Builder
+	if l.DrCr == "DR" {
+		b.WriteString("Received")
+	} else {
+		b.WriteString("Paid")
+	}
+	if l.Party != "" {
+		b.WriteString(" — ")
+		b.WriteString(l.Party)
+	}
+	if l.Narration != "" {
+		b.WriteString(" (")
+		b.WriteString(l.Narration)
+		b.WriteString(")")
+	}
+	if l.BrokenByAlter {
+		// The evidence, on the paper. An item whose voucher was altered after
+		// clearing is counted as un-cleared, and a reader has to be able to see
+		// WHY this line is here when the screen says it was reconciled.
+		b.WriteString("  [BROKEN: cleared as ")
+		b.WriteString(printing.FormatMoney(l.ClearedAmount))
+		b.WriteString(" ")
+		b.WriteString(l.ClearedDrCr)
+		b.WriteString(", voucher since altered]")
+	}
+	return b.String()
 }
 
 // ---------------------------------------------------------------------------

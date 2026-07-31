@@ -93,7 +93,7 @@ export function usePrintAction(options: UsePrintOptions = {}): void {
                 target.voucherClass,
                 target.voucherID,
               )
-            : await client.printReport(company.id, target.slug);
+            : await client.printReport(company.id, target.slug, target.query);
         sink(blob, filename);
         return `Printed ${target.label}${filename ? ` — ${filename}` : ""}`;
       } catch (err) {

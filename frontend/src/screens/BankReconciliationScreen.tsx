@@ -146,16 +146,15 @@ export function BankReconciliationScreen({ snapshot }: ScreenComponentProps) {
     if (ledgerID) load(ledgerID);
   }, [ledgerID, load]);
 
-  // Ctrl+P. This screen CANNOT print — the print route carries no ledger id, so
-  // a company with three bank accounts has no way to say which one to print
-  // (docs/design/t4-model.md §1.3, an open product decision). But the key must
-  // still be registered, or the shell falls through to its generic "Print does
-  // not apply on this screen", which tells the operator nothing about WHY and
-  // reads like a missing feature rather than a deliberate refusal.
+  // Ctrl+P. This screen prints since HANDOFF-PARITY-SPRINT.md §3.4 took the
+  // route-shape decision: /print/reports/bank-reconciliation?ledger_id=<uuid>.
   //
-  // A browser gate caught exactly that: printTarget.ts had the reasoned refusal
-  // and no screen was wired to deliver it. Invariant I-10.
-  usePrintAction();
+  // THE SELECTED LEDGER IS THE WHOLE POINT OF PASSING IT. Without it the target
+  // resolves to a refusal rather than to a guess — a statement for an account
+  // the operator did not choose is a real document, correctly rendered, for the
+  // wrong bank, and nothing on the page says so. Invariant I-10, now closed in
+  // the direction of printing rather than refusing.
+  usePrintAction({ voucher: { voucherID: null, bankLedgerID: ledgerID } });
 
   // F4 — "select bank ledger" (RESEARCH.md:879).
   useRegisterScreenAction(

@@ -111,12 +111,13 @@ function renderScreen(
  * fire a KEY's registered handler the way AppShell does. Used to prove the print
  * key is registered here at all — the bug a browser gate caught.
  */
-function renderWithDispatcher() {
+function renderWithDispatcher(over: Partial<CoredClient> = {}) {
   const base = createMockClient({ seed: false });
   const client = {
     ...base,
     listLedgers: async () => ({ ledgers: [ledger({})] }),
     bankReconciliation: async () => brs(),
+    ...over,
   } as CoredClient;
   let fireHandler: () => Promise<string | void> = async () => {};
 
@@ -400,19 +401,33 @@ describe("the statement date (F2)", () => {
 });
 
 describe("Ctrl+P on the statement (I-10)", () => {
-  it("registers a print handler that DELIVERS the reasoned refusal", async () => {
-    // REGRESSION. printTarget.ts had the reasoned refusal from the start, but no
-    // screen was wired to deliver it — so the shell fell through to its generic
-    // "Print does not apply on this screen", which reads like a missing feature
-    // rather than a deliberate refusal and says nothing about why.
+  it("registers a print handler and sends the SELECTED account", async () => {
+    // REGRESSION, in two layers.
     //
-    // No unit test caught it (they all tested the resolver directly); the browser
-    // gate did. This asserts the REGISTRATION, which is the part that was absent.
-    const { fireHandler } = renderWithDispatcher();
+    // The first is the original one: printTarget.ts had the reasoned refusal
+    // from the start, but no screen was wired to deliver it — so the shell fell
+    // through to its generic "Print does not apply on this screen", which reads
+    // like a missing feature rather than a deliberate refusal. No unit test
+    // caught it (they all tested the resolver directly); the browser gate did.
+    // A falsy message here means the handler is not registered at all.
+    //
+    // The second is new with §3.4: the screen must hand its SELECTED ledger to
+    // the print action. One that registers the key but drops the id gets a 400
+    // and tells an operator to choose an account they already chose.
+    //
+    // The screen auto-selects the only bank account, so the no-selection
+    // refusal is not reachable from here — it is pinned at the resolver in
+    // printTarget.test.ts, which is where the decision actually lives.
+    const printReport = vi.fn(async () => ({ blob: new Blob([]), filename: null }));
+    const { fireHandler } = renderWithDispatcher({ printReport } as Partial<CoredClient>);
     await screen.findByTestId("brs-as-on");
     const msg = await fireHandler();
     expect(msg, "no print handler is registered on the statement").toBeTruthy();
-    expect(String(msg)).toMatch(/ledger id/i);
+    await waitFor(() =>
+      expect(printReport).toHaveBeenCalledWith("co-1", "bank-reconciliation", {
+        ledger_id: "l-1",
+      }),
+    );
   });
 });
 

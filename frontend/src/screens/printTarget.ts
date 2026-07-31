@@ -88,7 +88,17 @@ export type PrintTarget =
       /** A human label for the status line, e.g. "Sales invoice". */
       label: string;
     }
-  | { kind: "report"; slug: string; label: string }
+  | {
+      kind: "report";
+      slug: string;
+      label: string;
+      /**
+       * Query parameters the report needs to be unambiguous. Only
+       * bank-reconciliation uses this today: it identifies WHICH bank account,
+       * and the server answers 400 without it rather than picking one.
+       */
+      query?: Record<string, string>;
+    }
   | { kind: "refusal"; reason: string };
 
 /**
@@ -104,6 +114,15 @@ export interface PrintVoucherContext {
   voucherID: string | null;
   /** True when the id came from a create-accept rather than a drill. */
   justSaved?: boolean;
+  /**
+   * The bank ledger the reconciliation screen currently has selected, if any.
+   *
+   * It lives here rather than on NavSnapshot because it is SCREEN STATE, not
+   * navigation state: the nav machine has no business knowing which of three
+   * bank accounts is on screen, and putting it there would make every screen's
+   * snapshot carry a field only one screen sets.
+   */
+  bankLedgerID?: string | null;
 }
 
 function titleCase(cls: VoucherType): string {
@@ -184,14 +203,27 @@ export function resolvePrintTarget(
   }
 
   if (screen === "bank-reconciliation") {
-    // Memo §1.5 / invariant I-10. The print route carries no ledger id, so
-    // there is no way to say WHICH bank account — a layout decision recorded in
-    // docs/design/t4-model.md §1.3 and NOT guessed at here. The server answers
-    // 501; this refusal says the same thing without a round trip.
+    // Memo §1.5 / invariant I-10, now CLOSED. The route shape was the whole
+    // blocker: /print/reports/{name} carried no ledger id, and a BRS is always
+    // for ONE bank account. HANDOFF-PARITY-SPRINT.md §3.4 took decision (c) —
+    // ?ledger_id= for one account, ?all=true for every account.
+    //
+    // The refusal survives for the case it was actually about. An operator who
+    // has not yet picked an account has not said which statement they want, and
+    // printing "the first one" would put a real, correctly rendered statement
+    // for the WRONG ACCOUNT on paper with nothing on the page saying so.
+    if (!voucher.bankLedgerID) {
+      return {
+        kind: "refusal",
+        reason:
+          "Select a bank account first — a Bank Reconciliation Statement is always for one account, and printing one you did not choose would put the wrong account on paper.",
+      };
+    }
     return {
-      kind: "refusal",
-      reason:
-        "A Bank Reconciliation Statement cannot be printed yet. The print route carries no ledger id, so a company with three bank accounts has no way to say which one to print — the layout is an open product decision (docs/design/t4-model.md §1.3), and guessing it would put the wrong account on paper.",
+      kind: "report",
+      slug: "bank-reconciliation",
+      label: "Bank Reconciliation Statement",
+      query: { ledger_id: voucher.bankLedgerID },
     };
   }
 

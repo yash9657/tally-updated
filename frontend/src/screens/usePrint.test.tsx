@@ -94,15 +94,23 @@ describe("a refusal never touches the network (I-5)", () => {
     expect(printVoucher).not.toHaveBeenCalled();
   });
 
-  it("makes NO request on the reconciliation screen (I-10)", async () => {
+  it("makes NO request on the reconciliation screen with NO account selected (I-10)", async () => {
+    // The BRS prints since §3.4, but only for an account the operator CHOSE.
+    // With none selected this is still a local refusal and still touches no
+    // network — printing "the first bank account" would be a real statement for
+    // the wrong bank.
     const printReport = vi.fn();
-    const { fire } = harness({ printReport } as Partial<CoredClient>, {
-      screen: "bank-reconciliation",
-      screenStackDepth: 2,
-      canReturnToVoucher: false,
-    });
+    const { fire } = harness(
+      { printReport } as Partial<CoredClient>,
+      {
+        screen: "bank-reconciliation",
+        screenStackDepth: 2,
+        canReturnToVoucher: false,
+      },
+      { voucherID: null, bankLedgerID: null },
+    );
     const msg = await fire();
-    expect(msg).toMatch(/ledger id/i);
+    expect(msg).toMatch(/select a bank account/i);
     expect(printReport).not.toHaveBeenCalled();
   });
 });
@@ -150,7 +158,30 @@ describe("printing a document", () => {
       canReturnToVoucher: false,
     });
     await fire();
-    expect(printReport).toHaveBeenCalledWith("co-1", "profit-and-loss");
+    // No query: an ordinary report needs no scope. The third argument is
+    // asserted explicitly so that a report which DOES need one cannot silently
+    // start dropping it.
+    expect(printReport).toHaveBeenCalledWith("co-1", "profit-and-loss", undefined);
+  });
+
+  it("sends the selected bank account with the BRS (§3.4)", async () => {
+    const printReport = vi.fn(async () => ({ blob: new Blob([]), filename: null }));
+    const { fire } = harness(
+      { printReport } as Partial<CoredClient>,
+      {
+        screen: "bank-reconciliation",
+        screenStackDepth: 2,
+        canReturnToVoucher: false,
+      },
+      { voucherID: null, bankLedgerID: "bank-7" },
+    );
+    await fire();
+    // THE LEDGER ID IS THE ASSERTION. A call that reached the server without it
+    // would be answered 400 — but a call that reached it with the WRONG one
+    // would be answered 200, with the wrong account's statement.
+    expect(printReport).toHaveBeenCalledWith("co-1", "bank-reconciliation", {
+      ledger_id: "bank-7",
+    });
   });
 });
 

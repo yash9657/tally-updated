@@ -243,16 +243,43 @@ describe("reports (I-3, and the drill-down rule)", () => {
   });
 });
 
-describe("the Bank Reconciliation Statement does not print (I-10)", () => {
-  // Memo §1.5. The print route carries no ledger id, so a company with three
-  // bank accounts cannot say WHICH to print — an open product decision
-  // (docs/design/t4-model.md §1.3). The refusal exists so a future well-meaning
-  // change cannot quietly start guessing a layout.
-  it("refuses, naming the ledger-id problem rather than guessing", () => {
+describe("the Bank Reconciliation Statement prints, for ONE account (I-10)", () => {
+  // Memo §1.5. The route shape was the blocker — /print/reports/{name} carried
+  // no ledger id and a BRS is always for one bank account. §3.4 took decision
+  // (c): ?ledger_id= for one, ?all=true for every account.
+  //
+  // The refusal survives for the case it was always really about: an operator
+  // who has not chosen an account. It is what stops a future well-meaning change
+  // from quietly defaulting to the first bank.
+  it("refuses when no account is selected, rather than guessing one", () => {
     const target = resolvePrintTarget(snap({ screen: "bank-reconciliation" }));
     expect(target.kind).toBe("refusal");
     if (target.kind !== "refusal") return;
-    expect(target.reason).toMatch(/ledger id/i);
+    expect(target.reason).toMatch(/select a bank account/i);
+  });
+
+  it("resolves to the SELECTED account's statement", () => {
+    const target = resolvePrintTarget(snap({ screen: "bank-reconciliation" }), {
+      voucherID: null,
+      bankLedgerID: "bank-42",
+    });
+    expect(target.kind).toBe("report");
+    if (target.kind !== "report") return;
+    expect(target.slug).toBe("bank-reconciliation");
+    // The scope is the point. A report target for this slug with no query is a
+    // 400 from the server, and one with the wrong id is a 200 for the wrong bank.
+    expect(target.query).toEqual({ ledger_id: "bank-42" });
+  });
+
+  it("carries a DIFFERENT id when a different account is selected", () => {
+    // The control for the test above: asserting one id alone would pass for an
+    // implementation that hard-codes it.
+    const target = resolvePrintTarget(snap({ screen: "bank-reconciliation" }), {
+      voucherID: null,
+      bankLedgerID: "bank-99",
+    });
+    if (target.kind !== "report") throw new Error("expected a report target");
+    expect(target.query).toEqual({ ledger_id: "bank-99" });
   });
 });
 
