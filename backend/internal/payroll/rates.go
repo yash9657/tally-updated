@@ -881,11 +881,25 @@ var ss202511 = SocialSecurityRuleSet{
 // TestPFDerive_EDLIContributionIsDeferredNotGuessed. All four must move
 // together, in a change that cites the G.S.R. number and sets VerifiedOn.
 //
-// The ADMIN-CHARGE rows are a different case and remain genuinely unknown: no
-// administrative-charge rate under the 2026 Schemes could be found at all.
-// Carrying the superseded 1952/1976 Schemes' 0.50% / Rs 500 forward would be
-// INVENTING A RATE and charging an employer real money for it. Do not "fix" a
-// failing test by copying the ss-2019-07 rows up here.
+// The ADMIN-CHARGE rows are a different case and remain deferred, but the reason
+// is now a DOCUMENTED NEGATIVE rather than an unexamined gap: as at 30 July 2026
+// no standalone administrative-charge rate notification has been issued under the
+// 2026 Schemes. The three notifications of 1 July 2026 set contribution rates only.
+//
+// THEY ARE PENDING, NOT ABOLISHED, and the scheme text proves it: EPF Scheme 2026
+// para 29(2) caps a Rs 500/day late-return fee at "a maximum equal to the
+// administrative charges payable by the employer for the relevant month". A cap
+// expressed in terms of the charge presupposes the charge. So the zero must stay a
+// refusal and must never be reasoned into a settled nil.
+//
+// TWO NEAR-MISSES, EITHER OF WHICH WOULD BOOK A WRONG NUMBER:
+//
+//   - S.O. 2701(E) of 29 May 2026 sets INSPECTION charges under s.143(6) for
+//     EXEMPTED establishments (EPF 0.35% min Rs 8,750; EDLI 0.005% min Rs 1,250).
+//     A DIFFERENT LEVY on a different population. It is the likeliest thing to be
+//     mistaken for an administrative charge, because the words are adjacent.
+//   - The superseded 1952/1976 Schemes' 0.50% / Rs 500 / account-22 waiver. Do not
+//     "fix" a failing test by copying the ss-2019-07 rows up here.
 // ---------------------------------------------------------------------------
 var ss202607 = SocialSecurityRuleSet{
 	Version: "ss-2026-07",
@@ -966,24 +980,32 @@ var ss202607 = SocialSecurityRuleSet{
 	},
 	EDLIAdminChargePct: Rate{
 		Value: dec("0"),
-		Citation: "EDLI administrative charges under the EDLI Scheme, 2026: NO RATE OF ANY KIND could be found, neither a charge nor a continuation " +
-			"of the pre-2026 waiver. Unlike the contribution row above, this one is genuinely unknown. The pre-2026 waiver cannot be assumed " +
-			"to survive the scheme it was granted under, so the row is UNVERIFIED and the component is DEFERRED",
+		Citation: "EDLI administrative charges under the EDLI Scheme, 2026: NO STANDALONE RATE NOTIFICATION EXISTS as at 30 July 2026 — a " +
+			"searched-for negative, not an unexamined gap. The charges are PENDING, NOT ABOLISHED: the EPF Scheme 2026 para 29(2) caps a " +
+			"Rs 500/day late-return fee at 'a maximum equal to the administrative charges payable by the employer for the relevant month', " +
+			"and a cap presupposes the charge exists. DO NOT SUBSTITUTE EITHER NEAR-MISS: S.O. 2701(E) of 29 May 2026 is INSPECTION charges " +
+			"under s.143(6) for EXEMPTED establishments only (EDLI 0.005%, min Rs 1,250), a different levy; and the pre-2026 account-22 " +
+			"waiver does not survive the scheme it was granted under. Row stays UNVERIFIED and the component is DEFERRED",
 		From:       dateUTC(2026, time.June, 29),
 		Confidence: ConfUnverified,
 	},
 	EPFAdminChargePct: Rate{
 		Value: dec("0"),
-		Citation: "EPF administrative charges under the EPF Scheme, 2026: NO RATE could be found. The Ministry's notifications of 1 July 2026 set " +
-			"the CONTRIBUTION rates only and said nothing about administrative charges. The superseded 1952 Scheme charged 0.50% of EPF " +
-			"wages and that figure must NOT be assumed to survive — the row is UNVERIFIED and the component is DEFERRED",
+		Citation: "EPF administrative charges under the EPF Scheme, 2026: NO STANDALONE RATE NOTIFICATION EXISTS as at 30 July 2026. The three " +
+			"notifications of 1 July 2026 (S.O. 3580(E)/3581(E)/3582(E)) set the CONTRIBUTION rates only and are silent on administrative " +
+			"charges. PENDING, NOT ABOLISHED — see the EDLI admin row for para 29(2)'s cap, which presupposes the charge. DO NOT SUBSTITUTE: " +
+			"S.O. 2701(E) of 29 May 2026 is INSPECTION charges under s.143(6) for EXEMPTED establishments (EPF 0.35%, min Rs 8,750) and is " +
+			"the likeliest wrong number to be booked here; the superseded 1952 Scheme's 0.50% of EPF wages does not survive either. Row " +
+			"stays UNVERIFIED and the component is DEFERRED",
 		From:       dateUTC(2026, time.June, 29),
 		Confidence: ConfUnverified,
 	},
 	EPFAdminChargeMin: Rate{
 		Value: dec("0"),
-		Citation: "EPF administrative-charge monthly minimum under the EPF Scheme, 2026: NO AMOUNT could be found. The superseded Rs 500 per " +
-			"establishment minimum must not be assumed to survive; the row is UNVERIFIED and the component is DEFERRED",
+		Citation: "EPF administrative-charge monthly minimum under the EPF Scheme, 2026: NO AMOUNT EXISTS as at 30 July 2026, for the same reason " +
+			"as EPFAdminChargePct — the 1 July 2026 notifications set contribution rates only. The superseded Rs 500 per establishment " +
+			"minimum must not be assumed to survive, and S.O. 2701(E)'s inspection-charge minima (Rs 8,750 EPF / Rs 1,250 EDLI) are a " +
+			"DIFFERENT levy on exempted establishments and must not be copied here. Row stays UNVERIFIED and the component is DEFERRED",
 		From:       dateUTC(2026, time.June, 29),
 		Confidence: ConfUnverified,
 	},
