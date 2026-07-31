@@ -293,6 +293,35 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 			[]any{id(), cid}},
 
 		// ------------------------------------------------------------------
+		// Migration 0049 — whether this company must deduct at all, and the
+		// s.394(2) declarations that exempt a buyer from collection.
+		//
+		// The status row is an INDIVIDUAL on purpose: that is the category
+		// subject to the turnover test, so it is the one whose CHECK constraints
+		// (turnover_pair and turnover_required_for_natural_persons) actually
+		// have to be satisfied. A COMPANY row would seed clean while leaving
+		// both constraints unexercised.
+		// ------------------------------------------------------------------
+		{"company_deductor_status", `INSERT INTO company_deductor_status
+			(id, company_id, tax_year_start, entity_category,
+			 prior_year_turnover_rupees, prior_year_activity, recorded_by)
+			VALUES ($1, $2, 2026, 'INDIVIDUAL', 20000000, 'BUSINESS', 'testdb')`,
+			[]any{id(), cid}},
+
+		// The section MUST be 206C(1)-SCRAP: s.394(2) reaches Table Sl. Nos. 1-5
+		// only, and the migration's section_eligible CHECK refuses anything else.
+		// A motor-vehicle row here would be unseedable and this table's teardown
+		// would never be exercised.
+		{"tcs_collection_declaration", `INSERT INTO tcs_collection_declaration
+			(id, company_id, buyer_ledger_id, section, tax_year_start,
+			 declaration_date, received_date, for_manufacturing, not_for_trading,
+			 buyer_is_resident, buyer_pan, recorded_by)
+			VALUES ($1, $2, $3, '206C(1)-SCRAP', 2026,
+			        DATE '2026-05-01', DATE '2026-05-03', true, true, true,
+			        'AAAPZ1234C', 'testdb')`,
+			[]any{id(), cid, ledgerID}},
+
+		// ------------------------------------------------------------------
 		// Track 2 — the inward-supply side: a GSTR-2B statement, one document
 		// in it, an IMS action against that document, and the GSTR-3B filing
 		// record whose filed_at freezes the period.
