@@ -255,10 +255,10 @@ var ErrNoReturnCode = errors.New("compliance: no Form 140 payment code for this 
 //
 //  1. THE CODE IS NOT A FUNCTION OF THE SECTION. 194J-P (professional services)
 //     and 194J-D (directors' remuneration) are BOTH s.393(1) [Table: Sl. No.
-//     6(iii).D(b)] at 10% — same limb, same rate — and carry codes 1027 and
-//     1028. Deriving from the section alone files a director's sitting fee as a
-//     professional fee, under a code the department maps to a different nature
-//     of payment.
+//     6(iii).D(b)] at 10% — same limb, same rate — and carry the codes 1027 and
+//     1028 respectively. Deriving from the section alone files a director's
+//     sitting fee as a professional fee, under a code the department maps to a
+//     different nature of payment.
 //
 //  2. THE CODE IS NOT A FUNCTION OF THE SECTION ALONE EITHER. Contractor
 //     payments split by DEDUCTEE TYPE: 1023 for individual/HUF, 1024 for any

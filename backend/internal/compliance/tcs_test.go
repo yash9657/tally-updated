@@ -271,3 +271,163 @@ func TestTCSDerive_Rejects(t *testing.T) {
 		t.Fatalf("want ErrUnknownRuleset, got %v", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// s.394(2) manufacturing declarations — §3.1 gap 4
+// ---------------------------------------------------------------------------
+
+// validScrapDeclaration is a declaration that meets every condition, so each
+// test below can break exactly one thing and attribute the outcome to it.
+func validScrapDeclaration() *TCSDeclaration {
+	return &TCSDeclaration{
+		Section:          "206C(1)-SCRAP",
+		BuyerIsResident:  true,
+		ForManufacturing: true,
+		NotForTrading:    true,
+		BuyerPANValid:    true,
+	}
+}
+
+// TestValidDeclarationExemptsScrap is the happy path of gap 4.
+func TestValidDeclarationExemptsScrap(t *testing.T) {
+	rs, err := LoadTCSRuleSet("tcs-2026-04")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	// CONTROL FIRST: the same sale with NO declaration collects. Without it, an
+	// engine that never collects on scrap would pass the exemption assertion.
+	base, err := TCSDerive(TCSInput{
+		Section: "206C(1)-SCRAP", PANAvailable: true, TaxableAmount: pct("500000"),
+	}, rs)
+	if err != nil {
+		t.Fatalf("derive control: %v", err)
+	}
+	if !base.Applied || !base.TCS.Equal(pct("10000")) {
+		t.Fatalf("CONTROL: scrap with no declaration collected %s (applied=%v), want 10000 at 2%%",
+			base.TCS, base.Applied)
+	}
+	if base.Declaration != DeclarationNone {
+		t.Errorf("no declaration furnished, but outcome = %q, want NONE", base.Declaration)
+	}
+
+	got, err := TCSDerive(TCSInput{
+		Section: "206C(1)-SCRAP", PANAvailable: true, TaxableAmount: pct("500000"),
+		Declaration: validScrapDeclaration(),
+	}, rs)
+	if err != nil {
+		t.Fatalf("derive with declaration: %v", err)
+	}
+	if got.Applied || !got.TCS.IsZero() {
+		t.Errorf("a valid s.394(2) declaration must exempt the collection entirely; collected %s "+
+			"(applied=%v)", got.TCS, got.Applied)
+	}
+	if got.Declaration != DeclarationExempt {
+		t.Errorf("outcome = %q, want EXEMPT. A zero with outcome NONE is indistinguishable from "+
+			"a below-threshold sale, and the two are different facts in the return", got.Declaration)
+	}
+}
+
+// TestDeclarationWithoutPANTriggersThePenalRate is the coupling that is easy to
+// get half-right, and the one nothing in the gap list records.
+//
+// s.397(2)(f)(i): a declaration without a valid PAN "becomes invalid". (g): the
+// collector then collects per clause (b)(ii) — the PENAL no-PAN rate. So the
+// buyer is WORSE off than if they had never furnished one:
+//
+//	valid declaration      -> 0%
+//	no declaration at all  -> 2%   (the section rate)
+//	invalid declaration    -> 5%   (max(2 x 2%, 5%), capped at 20%)
+//
+// An implementation that treats an invalid declaration as "no declaration"
+// collects 2% and is wrong; one that treats it as "still a declaration"
+// collects nothing and is worse.
+func TestDeclarationWithoutPANTriggersThePenalRate(t *testing.T) {
+	rs, err := LoadTCSRuleSet("tcs-2026-04")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	d := validScrapDeclaration()
+	d.BuyerPANValid = false
+
+	got, err := TCSDerive(TCSInput{
+		// PANAvailable is TRUE on the collectee record on purpose: the ONLY
+		// reason the penal rate applies here is the declaration's own invalidity
+		// under s.397(2)(f)(i). If the engine keyed off PANAvailable alone this
+		// would come out at 2%.
+		Section: "206C(1)-SCRAP", PANAvailable: true, TaxableAmount: pct("500000"),
+		Declaration: d,
+	}, rs)
+	if err != nil {
+		t.Fatalf("derive: %v", err)
+	}
+	if got.Declaration != DeclarationInvalidNoPAN {
+		t.Errorf("outcome = %q, want INVALID_NO_PAN", got.Declaration)
+	}
+	if !got.RatePct.Equal(pct("5")) {
+		t.Errorf("rate = %s%%, want 5%%. s.397(2)(g) sends an invalid declaration down the "+
+			"clause (b)(ii) path: max(2 x 2%%, 5%%) = 5%%. A 2%% here means the invalid "+
+			"declaration was treated as no declaration; a 0%% means it was honoured anyway",
+			got.RatePct)
+	}
+	if !got.TCS.Equal(pct("25000")) {
+		t.Errorf("collected %s, want 25000 (5%% of 5,00,000)", got.TCS)
+	}
+	if !got.Applied {
+		t.Error("an invalid declaration must still COLLECT; applied=false means the exemption " +
+			"was granted to a declaration the statute says is invalid")
+	}
+}
+
+// TestDeclarationRefusedOnMotorVehicles pins the Sl. Nos. 1-5 boundary, which
+// our two shipped sections straddle.
+func TestDeclarationRefusedOnMotorVehicles(t *testing.T) {
+	rs, err := LoadTCSRuleSet("tcs-2026-04")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	d := validScrapDeclaration()
+	d.Section = "206C(1F)-MV"
+
+	_, err = TCSDerive(TCSInput{
+		Section: "206C(1F)-MV", PANAvailable: true, TaxableAmount: pct("1500000"),
+		Declaration: d,
+	}, rs)
+	if !errors.Is(err, ErrDeclarationNotAvailable) {
+		t.Fatalf("a declaration against a MOTOR VEHICLE returned %v, want "+
+			"ErrDeclarationNotAvailable: s.394(2) reaches Table Sl. Nos. 1 to 5 and motor "+
+			"vehicles are Sl. No. 6. Silently exempting would forgo 1%% of every car sold, and "+
+			"silently collecting would contradict a document the operator holds", err)
+	}
+}
+
+// TestDeclarationConditionsAreConjunctive walks each condition of s.394(2) and
+// s.397(2)(f)(i) one at a time.
+func TestDeclarationConditionsAreConjunctive(t *testing.T) {
+	rs, err := LoadTCSRuleSet("tcs-2026-04")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	for _, tc := range []struct {
+		name   string
+		break_ func(*TCSDeclaration)
+	}{
+		{"buyer is not resident", func(d *TCSDeclaration) { d.BuyerIsResident = false }},
+		{"goods not for manufacturing", func(d *TCSDeclaration) { d.ForManufacturing = false }},
+		{"goods also for trading", func(d *TCSDeclaration) { d.NotForTrading = false }},
+		{"furnished for another section", func(d *TCSDeclaration) { d.Section = "206C(1F)-MV" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := validScrapDeclaration()
+			tc.break_(d)
+			_, err := TCSDerive(TCSInput{
+				Section: "206C(1)-SCRAP", PANAvailable: true, TaxableAmount: pct("500000"),
+				Declaration: d,
+			}, rs)
+			if !errors.Is(err, ErrDeclarationNotAvailable) {
+				t.Errorf("%s: got %v, want ErrDeclarationNotAvailable. s.394(2)'s conditions are "+
+					"conjunctive and a declaration failing any one of them exempts nothing",
+					tc.name, err)
+			}
+		})
+	}
+}

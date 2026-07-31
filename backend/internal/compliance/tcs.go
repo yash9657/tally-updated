@@ -52,6 +52,60 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+// ErrDeclarationNotAvailable is returned when a s.394(2) declaration is
+// furnished against a collection it cannot reach, or does not meet the
+// subsection's own conditions.
+//
+// A REFUSAL, not an ignore. An operator who filed a declaration believes their
+// buyer is exempt; silently collecting anyway would contradict a document they
+// hold, and silently exempting would forgo tax that is due.
+var ErrDeclarationNotAvailable = errors.New(
+	"compliance: this s.394(2) declaration does not exempt this collection")
+
+// declarationEligibleSections is the set s.394(2) reaches: "Irrespective of
+// anything contained in sub-section (1) (Table: Sl. Nos. 1 to 5) ...".
+//
+// Of the two sections this build ships, SCRAP is Sl. No. 4 and is reachable;
+// MOTOR VEHICLES are Sl. No. 6 and are NOT. The two fall on opposite sides of
+// the line, which is exactly why this is a set and not an assumption.
+var declarationEligibleSections = map[string]bool{
+	"206C(1)-SCRAP": true,
+}
+
+// DeclarationOutcome records what a furnished declaration actually did.
+//
+// Three values and not a boolean, because the third one is the whole point:
+// a declaration can be furnished and INVALID, which is worse for the buyer than
+// not furnishing one at all.
+type DeclarationOutcome string
+
+const (
+	// DeclarationNone: none was furnished.
+	DeclarationNone DeclarationOutcome = "NONE"
+	// DeclarationExempt: a valid declaration, so no tax is collected.
+	DeclarationExempt DeclarationOutcome = "EXEMPT"
+	// DeclarationInvalidNoPAN: furnished, but the buyer gave no valid PAN, so
+	// s.397(2)(f)(i) makes it invalid and (g) requires the PENAL rate.
+	DeclarationInvalidNoPAN DeclarationOutcome = "INVALID_NO_PAN"
+)
+
+// TCSDeclaration is a s.394(2) manufacturing declaration as the engine sees it —
+// the facts of a migration 0049 tcs_collection_declaration row.
+type TCSDeclaration struct {
+	// Section is what the declaration was furnished against. Compared with the
+	// collection's own section: a declaration for scrap does not exempt a motor
+	// vehicle.
+	Section string
+	// The three conditions of s.394(2), all required.
+	BuyerIsResident  bool
+	ForManufacturing bool
+	NotForTrading    bool
+	// BuyerPANValid is s.397(2)(f)(i)'s condition. False makes the declaration
+	// INVALID, and (g) then requires the penal no-PAN rate — NOT the base rate,
+	// and NOT the exemption.
+	BuyerPANValid bool
+}
+
 // TCSInput is the complete, self-contained input to TCSDerive. Unlike TDS, no
 // in-force TCS section here splits its rate by collectee type, so there is no
 // DeducteeType field (adding one would imply a distinction that does not exist).
@@ -63,6 +117,9 @@ type TCSInput struct {
 	PANAvailable bool
 	// TaxableAmount is the sale consideration the collection applies to.
 	TaxableAmount decimal.Decimal
+	// Declaration is the buyer's s.394(2) declaration, or nil when none was
+	// furnished. nil is the ordinary case and means "collect normally".
+	Declaration *TCSDeclaration
 }
 
 // TCSResult is the derived collection. Money fields are quantized to 4 dp.
@@ -75,8 +132,13 @@ type TCSResult struct {
 	Threshold decimal.Decimal
 	// Basis records how the threshold is statutorily measured.
 	Basis ThresholdBasis
-	// Applied is false when the amount did not exceed the threshold.
+	// Applied is false when the amount did not exceed the threshold, AND when a
+	// valid s.394(2) declaration exempted the collection. Declaration
+	// distinguishes the two — they are the same zero on the voucher and very
+	// different facts in the return.
 	Applied bool
+	// Declaration records what a furnished s.394(2) declaration did.
+	Declaration DeclarationOutcome
 }
 
 // tcsSectionRule is one collection row of a TCSRuleSet.
@@ -174,8 +236,37 @@ func TCSDerive(in TCSInput, rs TCSRuleSet) (TCSResult, error) {
 		return TCSResult{}, fmt.Errorf("%w: %q", ErrUnknownSection, in.Section)
 	}
 
+	// s.394(2), and its coupling to s.397(2)(f)(i)+(g). Evaluated BEFORE the
+	// rate, because an invalid declaration changes which rate applies.
+	outcome, err := declarationOutcome(in)
+	if err != nil {
+		return TCSResult{}, err
+	}
+
+	// A valid declaration removes the collection entirely. Returned here rather
+	// than as a zero at the end so the rate on the result is the section's own —
+	// reporting a rate for tax that was not collected would put a figure in the
+	// return that never applied.
+	if outcome == DeclarationExempt {
+		return TCSResult{
+			TCS:         decimal.Zero,
+			RatePct:     rule.RatePct,
+			Threshold:   rule.Threshold,
+			Basis:       rule.Basis,
+			Applied:     false,
+			Declaration: DeclarationExempt,
+		}, nil
+	}
+
+	// s.397(2)(g): "if any declaration becomes invalid under clause (f)(i), then
+	// the deductor or collector shall deduct or collect tax as per the
+	// provisions of clause (b)(i) or (ii)". So an invalid declaration forces the
+	// no-PAN path REGARDLESS of what PANAvailable says about the collectee — the
+	// missing PAN is the reason the declaration failed in the first place.
+	noPAN := !in.PANAvailable || outcome == DeclarationInvalidNoPAN
+
 	rate := rule.RatePct
-	if !in.PANAvailable {
+	if noPAN {
 		// s.397(2)(b)(ii): higher of twice the rate in force, or 5%. NOT the
 		// deduction side's flat 20% floor.
 		doubled := rate.Mul(rs.NoPANMultiplier)
@@ -194,10 +285,11 @@ func TCSDerive(in TCSInput, rs TCSRuleSet) (TCSResult, error) {
 	}
 
 	res := TCSResult{
-		TCS:       decimal.Zero,
-		RatePct:   rate,
-		Threshold: rule.Threshold,
-		Basis:     rule.Basis,
+		TCS:         decimal.Zero,
+		RatePct:     rate,
+		Threshold:   rule.Threshold,
+		Basis:       rule.Basis,
+		Declaration: outcome,
 	}
 	if !in.TaxableAmount.GreaterThan(rule.Threshold) {
 		return res, nil
@@ -205,4 +297,45 @@ func TCSDerive(in TCSInput, rs TCSRuleSet) (TCSResult, error) {
 	res.Applied = true
 	res.TCS = round(in.TaxableAmount.Mul(rate).Div(hundred))
 	return res, nil
+}
+
+// declarationOutcome applies s.394(2) and s.397(2)(f)(i).
+//
+// It REFUSES on a declaration that cannot exempt this collection rather than
+// ignoring it, for the reason on ErrDeclarationNotAvailable: an operator holding
+// a declaration believes their buyer is exempt, and a silent collection
+// contradicts a document in their hands.
+func declarationOutcome(in TCSInput) (DeclarationOutcome, error) {
+	d := in.Declaration
+	if d == nil {
+		return DeclarationNone, nil
+	}
+	// s.394(2) reaches Table Sl. Nos. 1 to 5 only. Motor vehicles are Sl. No. 6.
+	if !declarationEligibleSections[in.Section] {
+		return "", fmt.Errorf("%w: s.394(2) covers Table Sl. Nos. 1 to 5, and %q is not among "+
+			"them, so no declaration can exempt it", ErrDeclarationNotAvailable, in.Section)
+	}
+	// A declaration furnished for one collection does not exempt another.
+	if d.Section != in.Section {
+		return "", fmt.Errorf("%w: the declaration was furnished for %q, not %q",
+			ErrDeclarationNotAvailable, d.Section, in.Section)
+	}
+	if !d.BuyerIsResident {
+		return "", fmt.Errorf("%w: s.394(2) requires the buyer to be resident in India",
+			ErrDeclarationNotAvailable)
+	}
+	// (a) AND (b), conjunctive: goods for manufacturing that are ALSO for
+	// trading do not qualify.
+	if !d.ForManufacturing || !d.NotForTrading {
+		return "", fmt.Errorf("%w: s.394(2) requires the goods to be for manufacturing, "+
+			"processing, producing or generating power AND not for trading; this declaration "+
+			"states manufacturing=%v, not-for-trading=%v",
+			ErrDeclarationNotAvailable, d.ForManufacturing, d.NotForTrading)
+	}
+	// s.397(2)(f)(i): no valid PAN makes the declaration invalid. NOT an error —
+	// this is a real, reportable state with a defined consequence in (g).
+	if !d.BuyerPANValid {
+		return DeclarationInvalidNoPAN, nil
+	}
+	return DeclarationExempt, nil
 }
