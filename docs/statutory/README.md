@@ -16,7 +16,8 @@ not summaries.
 | `form-140.pdf` | ✅ **here** (2026-07-30) | `https://www.incometaxindia.gov.in/documents/d/guest/fn-140` | The return's statutory anchors and its annexure's field NAMES. **It does NOT contain the four-digit payment codes** — see below. |
 | `form-140-faqs.pdf` | ✅ **here** (2026-07-30) | `https://www.incometaxindia.gov.in/documents/d/guest/form-140-faqs` | Nothing further; it carries no code list either (checked). |
 | `ita-2025-as-amended-fa-2026.pdf` | ✅ **here** (2026-07-30) | `https://www.incometaxindia.gov.in/documents/d/guest/income_tax_act_2025_as_amended_by_fa_act_2026-pdf` | The s.393 rate table **as amended**. This is now the authority to verify §9 against — better than a yes/no on "did FA 2026 change it", because whatever this text says IS current law. |
-| `fvu-file-format.pdf` | ❌ **STILL MISSING** | Protean/TIN or `incometax.gov.in` — "File Format for Quarterly Return", tax year 2026-27 | Column order, **field widths**, the **four-digit payment codes**, and the non/lower/higher-deduction reason codes. **`docs/design/t6-model.md` invariant I-7 still refuses to emit any return file.** |
+| `fvu-file-format.pdf` | ❌ **STILL MISSING — THE ONE BLOCKER** | Protean/TIN, "**File Format for Form Number 140** Q1 to Q4 Version 1.0" (TY 2026-27 onwards) | Form 140's column order, **field widths** and its **Annexure 2 payment-code list**. **`docs/design/t6-model.md` invariant I-7 still refuses to emit a TDS return.** |
+| `form-143-file-format.xlsx` | ✅ **here** (2026-07-31) | Protean/TIN, "File Format for Form Number 143 (27EQ) Q1 to Q4 Version 1.0" | The **TCS** return. Delivered more than expected — see the verified collection codes below. |
 
 ### ⚠️ What Form 140 does NOT contain — checked, not assumed
 
@@ -77,6 +78,68 @@ sections 392, 393, 394, 395, 397 and 516, verbatim from the Gazette text, via IC
 (`resource.cdn.icai.org`). All eight shipped TDS/TCS rates match it. See
 `docs/design/t6-model.md` §9. **The remaining gap is the FILE FORMAT, not the statute and no
 longer the form.**
+
+---
+
+## Form 143 (ex-27EQ) — the TCS return, read from the primary spec
+
+`form-143-file-format.xlsx` is the Income Tax Department's prescribed format, version 1.0,
+TY 2026-27 onwards. It was obtained as the *optional* item and settled more than the blocker
+was expected to.
+
+### ✅ OUR TWO SHIPPED TCS SECTIONS NOW HAVE VERIFIED FOUR-DIGIT CODES
+
+From **Annexure 2** ("Nature of Payment | Section | Section code to be used in the return"):
+
+| Our internal section | Nature of payment (spec wording) | 2025-Act section | **Code** |
+|---|---|---|---|
+| `206C(1)-SCRAP` | Sale of Scrap | 394(1) [Table: Sl. No. 4] | **1073** |
+| `206C(1F)-MV` | Sale consideration exceeding threshold limit in case of sale of motor vehicle | 394(1) [Table: Sl. No. 6.D(a)] | **1075** |
+
+⚠️ **NOTE THE NAMING DRIFT.** Our identifiers still use the repealed 1961-Act nomenclature
+(`206C(1)`, `206C(1F)`) while the return keys off **s.394(1) Table Sl. Nos.** This is the same
+trap `HANDOFF-CLOSING-THE-GAP.md` §3.3 records for TDS — "the old 194-series does not exist
+under the 2025 Act". The codes above are the bridge; the internal names should migrate with the
+T6 work, not before, so the two are changed in one reviewable step.
+
+Other codes in the annexure, recorded so nobody re-derives them: liquor 1068, tendu leaves
+1069, timber under a forest lease 1070, timber otherwise 1071, other forest produce 1072,
+minerals (coal/lignite/iron ore) 1074, wrist watch 1076, art 1077, collectibles 1078, yacht
+etc. 1079, sunglasses 1080, bags 1081, shoes 1082, sportswear 1083, home theatre 1084, horses
+1085, parking lot 1090, toll plaza 1091, mine or quarry 1092.
+
+### ✅ THE FILE'S PHYSICAL FORMAT
+
+Recorded because it is likely — but **NOT PROVEN** — to be shared with Form 140, which is the
+same family at the same version and date. **Do not build Form 140 against this; get its own
+spec.** The codes certainly differ (TCS occupies 1068–1092).
+
+- **ASCII**, extension `.txt`. Every record including the last ends with a newline; line
+  terminator is **CRLF** (hex `0D 0A`).
+- **`^`-delimited, VARIABLE field width.** No leading zeros for numerics, no trailing spaces
+  for character fields. The delimiter count in a record must be exactly *fields − 1*.
+- Constant values (`Record Type`, `Upload Type`, …) in **BLOCK CAPITALS**.
+- **Amounts: 2 decimals** (`1000.50`). **Rate of deduction: 4 decimals** (`2` is written
+  `2.0000`) — which matches this codebase's fixed-4 money convention.
+- **Dates `ddmmyyyy`**, and **no date may be in the future**.
+- Record types: **`FH`** file header, **`BH`** batch header, **`CD`** challan detail,
+  **`DD`** collectee/deductee detail. File type `TC1` for FN 143; uploader type `D`;
+  upload type `R` for a regular statement.
+- A **statement with zero collectee records will not validate** — the FVU rejects it.
+
+### ⚠️ TWO THINGS THAT CONTRADICT EARLIER SECONDARY CLAIMS
+
+1. **The lower/non-collection remark flags are `A`, `B`, `F`, `K`, `Y`, `Z`** — not "A through
+   D". A nil challan or transfer voucher must carry a collectee record flagged with one of
+   them. (Form 140's own set still needs its own spec; do not copy these across.)
+2. **A `.csi` file download is MANDATORY** to validate challan details, and the TAN and TAN
+   name in the statement must match the `.csi`. That is an **external dependency at validation
+   time** which nothing in this build has modelled, and it is fetched from the TIN website
+   (Challan Status Inquiry) — i.e. unreachable from here.
+
+Also newly visible: `Certificate number under section 395(3)` (CHAR 15, conditional) and a
+`s.394(5)` "is the collectee's payment liable to TDS" flag. The s.395 certificate matches the
+identifier Form 140 also names, so it is needed by both returns.
 
 ---
 
