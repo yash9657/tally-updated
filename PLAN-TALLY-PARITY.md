@@ -149,21 +149,37 @@ A collision already happened when two agents were both told "0036 is free". Bloc
 are reserved per track so parallel tracks cannot collide. **Leave gaps unused rather
 than renumbering.**
 
-| Track | Reserved |
-|---|---|
-| T1 Printing | 0037–**0039** |
-| T2 Cost centres | 0040–0041 |
-| T3 Orders + BOM | 0042–0044 |
-| T4 Bank reconciliation | 0045–0046 |
-| T5 e-Way Bill | 0047–0048 |
-| T6 TDS/TCS persistence | 0049–0050 |
-| T8 Multi-currency | 0051–0052 |
-| T9 FIFO/LIFO | 0053 |
-| T10 Stock groups + units | 0054–0055 |
-| T11 Budgets | 0056–0057 |
-| T12 GSTR-9 | 0058 |
-| T13 Interest | 0059 |
-| T14 Backup/restore | 0060–0061 |
+> **⚠️ THIS TABLE IS THE ONLY AUTHORITY. Resolved 2026-07-31.** The Tier-2 table in §7 of
+> this file carried its own migration column that was **stale by one** for T8–T14 (it said
+> T8 0050–0051, T9 0052, T10 0053–0054, T11 0055–0056, T12 0057, T13 0058, T14 0059). Those
+> numbers have been **struck from §7** — a second copy of a reservation table is a collision
+> waiting for two parallel tracks, which is the exact failure this section exists to prevent.
+> If you find a migration number anywhere else in this repo, it is not authoritative; this is.
+
+| Track | Reserved | Status |
+|---|---|---|
+| T1 Printing | 0037–**0039** | consumed |
+| T2 Cost centres | 0040–0041 | free |
+| T3 Orders + BOM | 0042–0044 | free |
+| T4 Bank reconciliation (slice 1) | 0045–0046 | consumed |
+| T5 e-Way Bill | 0047–0048 | free |
+| T6 TDS/TCS persistence | 0049–0050 | free |
+| T8 Multi-currency | 0051–0052 | free |
+| T9 FIFO/LIFO | 0053 | free |
+| T10 Stock groups + units | 0054–0055 | free |
+| T11 Budgets | 0056–0057 | free |
+| T12 GSTR-9 | see §2.5 | free |
+| T13 Interest | see §2.5 | free |
+| T14 Backup/restore | 0060–0061 | free |
+| **T4 slice 2 — statement import + matching** | **0062–0064** | **free (NEW)** |
+| **T15 Export (Excel/CSV/XML) — if it needs an ACL migration** | **0065** | **free (NEW)** |
+| **T16 Per-company print template UI** | **0066** | **free (NEW)** |
+
+**T4 slice 2 does NOT take 0047.** `HANDOFF-CLOSING-THE-GAP.md` §3.2 said "migration 0047",
+which is **T5's reserved block**. Slice 2 gets its own block at the end (0062–0064) instead,
+because 0045–0046 already exist and the rule is *renumber unstarted blocks, never renumber a
+migration that exists* — and because T5 and T4-slice-2 are both live candidates for parallel
+work, so the overlap would have been a real collision rather than a theoretical one.
 
 **T1 took a third number and everything below it shifted by one.** 0037 (templates) and
 0038 (ACL) were the reservation; the review then found that no tax invoice could print at
@@ -406,13 +422,13 @@ by rough value.
 
 | # | Track | The one thing not to get wrong | Migrations |
 |---|---|---|---|
-| **T8** | **Multi-currency** | Only bites exporters, but when it bites it is the whole ledger. A foreign-currency amount, a rate, and the base-currency amount are **three stored values**, not two plus arithmetic. Realised vs unrealised gain/loss are different postings. | 0050–0051 |
-| **T9** | **FIFO / LIFO valuation** | v1 is weighted average (Tally's default) behind a **valuer interface whose state is a strict subset of what FIFO needs** — `ValuerFor` in `internal/inventory`. So FIFO is a NEW ARM plus fixtures, not a schema change. Closing stock now feeds the Balance Sheet, so a valuation change moves the sheet: re-pin `verify:demo`. | 0052 |
-| **T10** | **Stock groups + compound units** ("Box of 12") | Items are flat and units are bare symbols today. A conversion factor turns every quantity in the system into a *unit-qualified* quantity — touch the movement primitive with care, and never store a converted quantity you can re-derive. | 0053–0054 |
-| **T11** | **Budgets** | A budget is a comparison dimension, not a posting. Budget-vs-actual on groups, ledgers and (after T2) cost centres. | 0055–0056 |
-| **T12** | **GSTR-9 annual return** | Builds on GSTR-1 + 3B + the new ITC engine. It is a *reconciliation* of the year's returns to the books; it must state where it disagrees rather than smoothing it. Not filing-ready without portal-schema verification — keep the disclosure discipline. | 0057 |
-| **T13** | **Interest calculation** | On overdue receivables/payables. Simple vs compound, and the day-count basis, are configuration with statutory defaults — cite them. | 0058 |
-| **T14** | **Backup / restore, split company data** | Operationally important and currently absent. Must be tenant-exact: a restore that leaks one company's rows into another is worse than no backup. Reuse the `testdb` delete-plan census — it already knows every tenant-scoped table and is anti-rot by construction. | 0059 |
+| **T8** | **Multi-currency** | Only bites exporters, but when it bites it is the whole ledger. A foreign-currency amount, a rate, and the base-currency amount are **three stored values**, not two plus arithmetic. Realised vs unrealised gain/loss are different postings. | see §2.5 |
+| **T9** | **FIFO / LIFO valuation** | v1 is weighted average (Tally's default) behind a **valuer interface whose state is a strict subset of what FIFO needs** — `ValuerFor` in `internal/inventory`. So FIFO is a NEW ARM plus fixtures, not a schema change. Closing stock now feeds the Balance Sheet, so a valuation change moves the sheet: re-pin `verify:demo`. | see §2.5 |
+| **T10** | **Stock groups + compound units** ("Box of 12") | Items are flat and units are bare symbols today. A conversion factor turns every quantity in the system into a *unit-qualified* quantity — touch the movement primitive with care, and never store a converted quantity you can re-derive. | see §2.5 |
+| **T11** | **Budgets** | A budget is a comparison dimension, not a posting. Budget-vs-actual on groups, ledgers and (after T2) cost centres. | see §2.5 |
+| **T12** | **GSTR-9 annual return** | Builds on GSTR-1 + 3B + the new ITC engine. It is a *reconciliation* of the year's returns to the books; it must state where it disagrees rather than smoothing it. Not filing-ready without portal-schema verification — keep the disclosure discipline. | see §2.5 |
+| **T13** | **Interest calculation** | On overdue receivables/payables. Simple vs compound, and the day-count basis, are configuration with statutory defaults — cite them. | see §2.5 |
+| **T14** | **Backup / restore, split company data** | Operationally important and currently absent. Must be tenant-exact: a restore that leaks one company's rows into another is worse than no backup. Reuse the `testdb` delete-plan census — it already knows every tenant-scoped table and is anti-rot by construction. | see §2.5 |
 
 ---
 
