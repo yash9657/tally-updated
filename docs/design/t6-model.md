@@ -550,6 +550,31 @@ Migration **0050** is the ACL: explicit `disallow display report:` **and**
 RESIDENT" and section 394 Table "TAX COLLECTION AT SOURCE". In force 1 April 2026.**
 Column D of each table carries the rate and the threshold. Quotations are verbatim.
 
+### 9.0 ⛔ CORRECTION, 2026-07-31 — THIS SECTION READ THE WRONG VERSION OF THE ACT
+
+**§9 below was checked against the Act AS ENACTED** (Act 30 of 2025, via the ICAI mirror).
+`docs/statutory/ita-2025-as-amended-fa-2026.pdf` — the Act **as amended by the Finance Act
+2026** — has since been read, and `docs/statutory/README.md` had explicitly flagged it as
+"now the authority to verify §9 against … because whatever this text says IS current law".
+
+**That re-verification changed one shipped rate.** s.394(1) [Table: Sl. No. 4] "Sale of
+scrap" carries footnote 88, *"Substituted for '1%' by the Finance Act, 2026, **w.e.f.
+1-4-2026**"* — the rate is **2%**, not 1%. The engine shipped 1% and **under-collected by
+half on every scrap sale from 1 April 2026** until it was corrected. It is one of a coherent
+block of five FA-2026 TCS rate changes (liquor, tendu leaves, scrap, minerals, LRS).
+
+**So the claim below that "eight of eight shipped rules are right" was true of the enacted
+text and false of current law: it was seven of eight.** The six TDS rates were re-checked
+against the amended text and carry no FA-2026 footnote — those verdicts stand unchanged, as
+does `206C(1F)-MV`.
+
+Corrections applied to the table below in place. Full working:
+**`docs/design/t6-gaps-model.md` §0.**
+
+> **The transferable lesson:** "verified against the Act" is not a durable claim — an Act is
+> amended annually. A verification is only as current as the *edition* it read, so record the
+> edition, and re-read on every Finance Act.
+
 ### 9.1 Every engine rule, checked against the statute
 
 | Engine key | Act reference | Rate — statutory wording | Threshold — statutory wording | Code | Verdict |
@@ -561,12 +586,12 @@ Column D of each table carries the rate and the threshold. Quotations are verbat
 | `194I-A` | s.393(1) **Sl. 2(ii)(a)** | "(a) 2%, for the use of any machinery or plant or equipment" | "Threshold limit [for (a) and (b)]: **₹ 50,000 for a month or part of a month**." | 2%, 50000, MONTHLY | ✅ **CORRECT, including the monthly basis** |
 | `194I-B` | s.393(1) **Sl. 2(ii)(b)** | "(b) 10%, for the use of any land, or building (including factory building), or land appurtenant to a building …, or furniture, or fittings." | as above — **₹ 50,000 for a month or part of a month** | 10%, 50000, MONTHLY | ✅ **CORRECT** |
 | no-PAN floor (TDS) | s.397(2)(b)(i) | "tax shall be deducted at the higher of the following rates:— (A) at the rate specified in the relevant provision …; or (B) at the rate or rates in force; or (C) at the rate of 5% where tax is required to be deducted under section 393(1) [Table: Sl. No. 8(ii) or 8(v)]; **or 20% in any other case**" | — | 20% | ✅ **CORRECT**, and correctly modelled as a **floor**, not a replacement |
-| `206C(1)-SCRAP` | s.394(1) **Sl. 4** | "Sale of scrap. Seller. **1%**" | no threshold column in the s.394 Table | 1%, 0 | ✅ **CORRECT** |
+| `206C(1)-SCRAP` | s.394(1) **Sl. 4** | as enacted: "Sale of scrap. Seller. 1%" — **as amended by FA 2026: `2%`**, fn. 88 "Substituted for '1%' … w.e.f. 1-4-2026" | no threshold column in the s.394 Table | ~~1%~~ **2%**, 0 | ❌ **WAS WRONG — CORRECTED 2026-07-31.** See §9.0 below. |
 | `206C(1F)-MV` | s.394(1) **Sl. 6** | "Sale consideration **exceeding ten lakh rupees** in case of— (a) motor vehicle … **1%**" | ₹10,00,000, in the description | 1%, 1000000 | ✅ **CORRECT** |
-| no-PAN (TCS) | s.397(2)(b)(ii) | "tax shall be collected at the higher of the following rates, **not exceeding 20%**— (A) at **twice the rate** specified …; or (B) at the rate of **5%**" | — | max(2×rate, 5%) | ⚠️ **the 20% CEILING is not modelled** — §9.2.3 |
+| no-PAN (TCS) | s.397(2)(b)(ii) | "tax shall be collected at the higher of the following rates, **not exceeding 20%**— (A) at **twice the rate** specified …; or (B) at the rate of **5%**" | — | min(max(2×rate, 5%), 20%) | ✅ **CORRECT since 2026-07-31** — the ceiling was missing and is now modelled as `NoPANCeilingPct`; ~~§9.2.3~~ |
 | **206C(1H) omitted** | s.394 Table | **There is no entry for sale of goods above ₹50 lakh anywhere in the s.394 Table.** | — | absent | ✅ **the deliberate omission is CORRECT** — this was the code's "single most important item for the release spot-check" |
 
-**Eight of eight shipped rules are right.** The two the code least trusted — 194H's 2%/20,000
+**~~Eight of eight shipped rules are right.~~ SEVEN of eight — see §9.0.** The two the code least trusted — 194H's 2%/20,000
 and 194I's monthly 50,000 — are both confirmed, and the hardest judgement call in the whole
 engine (dropping 206C(1H)) is confirmed too.
 
@@ -591,11 +616,17 @@ explicitly "**(ii) for (c) of Col. B: Nil**" at **10%**. The engine has no such 
 ₹10,000 director's sitting fee is deducted at nothing and should be ₹1,000. **Small
 companies pay directors' fees constantly. This is a likely real-world miss.**
 
-**9.2.3 — the TCS no-PAN ceiling.** `TCSDerive` computes `max(2 × rate, 5%)` with **no
-upper bound**, but s.397(2)(b)(ii) caps it at "**not exceeding 20%**". Latent today — both
-shipped sections are 1%, so the result is 5% — but s.394's own Table has **20% rows**
-(Sl. 7 LRS, Sl. 8 overseas tour packages) where doubling would yield 40%. **Add the cap now,
-with a fixture, while it is a one-line change and not a bug.**
+**9.2.3 — the TCS no-PAN ceiling. ✅ CLOSED 2026-07-31.** `TCSDerive` computed
+`max(2 × rate, 5%)` with **no upper bound**, but s.397(2)(b)(ii) caps it at "**not exceeding
+20%**". Now modelled as `TCSRuleSet.NoPANCeilingPct`, applied after the floor so it bounds
+the result rather than either limb.
+
+It **cannot** be pinned by a corpus fixture — every shipped section is ≤2%, so doubling never
+reaches the ceiling and the shipped table can never exercise it. That is precisely why it was
+missing. `TestTCSNoPANCeiling` uses a synthetic 20% ruleset, as s.394(1) [Sl. No. 7(b)]
+genuinely is, where doubling would yield 40% against a statutory maximum of 20%. A ruleset
+that declares no ceiling keeps the uncapped behaviour rather than collapsing to zero, and
+that fallback is asserted too.
 
 **9.2.4 — s.394(2)'s manufacturing declaration.** For Table Sl. Nos. 1–5 — **which includes
 scrap, one of the two shipped sections** — no tax is collected if the resident buyer

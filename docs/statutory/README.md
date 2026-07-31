@@ -75,9 +75,21 @@ Read from `ita-2025-as-amended-fa-2026.pdf`, s.393 rate table Sl. No. 6:
 
 **A note on what is already verified.** The Income-tax Act 2025 as enacted HAS been read —
 sections 392, 393, 394, 395, 397 and 516, verbatim from the Gazette text, via ICAI's mirror
-(`resource.cdn.icai.org`). All eight shipped TDS/TCS rates match it. See
-`docs/design/t6-model.md` §9. **The remaining gap is the FILE FORMAT, not the statute and no
-longer the form.**
+(`resource.cdn.icai.org`). See `docs/design/t6-model.md` §9. **The remaining gap is the FILE
+FORMAT, not the statute and no longer the form.**
+
+> ⛔ **CORRECTED 2026-07-31.** This paragraph used to read "All eight shipped TDS/TCS rates
+> match it". **It was seven of eight**, and the sentence was measuring against the wrong
+> edition. `ita-2025-as-amended-fa-2026.pdf` — the file this very table describes as "the
+> authority to verify §9 against" — has now been read, and s.394(1) [Table: Sl. No. 4]
+> carries footnote 88: *"Substituted for '1%' by the Finance Act, 2026, **w.e.f. 1-4-2026**"*.
+> **Scrap TCS is 2%.** The engine shipped 1% and under-collected by half on every scrap sale
+> from 1 April 2026. Corrected in `internal/compliance/tcs.go`; full working in
+> `docs/design/t6-gaps-model.md` §0.
+>
+> The six TDS rates and `206C(1F)-MV` were re-checked against the amended text, carry no
+> FA-2026 footnote, and stand. **A rate verified against "the Act" is only as current as the
+> edition that was read — record the edition, and re-read on every Finance Act.**
 
 ---
 

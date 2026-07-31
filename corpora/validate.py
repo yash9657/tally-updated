@@ -274,14 +274,22 @@ TDS_RATES: dict[str, tuple[Decimal, Decimal, Decimal, str]] = {
 TDS_NO_PAN_FLOOR = Decimal("20")
 
 # section -> (rate, threshold, basis). 206C(1H) is deliberately absent: it was
-# omitted w.e.f. 1-Apr-2025 by the Finance Act 2025.
+# omitted w.e.f. 1-Apr-2025 by the Finance Act 2025, and it is confirmed absent
+# from the s.394 Table of the Act as amended by the Finance Act 2026.
+#
+# SCRAP IS 2%, NOT 1%: s.394(1) [Table: Sl. No. 4] footnote 88, "Substituted for
+# '1%' by the Finance Act, 2026, w.e.f. 1-4-2026". It shipped at 1% and
+# under-collected by half until the amended Act was read
+# (docs/design/t6-gaps-model.md section 0).
 TCS_RATES: dict[str, tuple[Decimal, Decimal, str]] = {
-    "206C(1)-SCRAP": (Decimal("1"), Decimal("0"), "PER_TXN"),
+    "206C(1)-SCRAP": (Decimal("2"), Decimal("0"), "PER_TXN"),
     "206C(1F)-MV": (Decimal("1"), Decimal("1000000"), "PER_TXN"),
 }
-# s.206CC (NOT s.206AA): no PAN -> the HIGHER of twice the rate and 5%.
+# s.397(2)(b)(ii) (NOT the deduction side's s.397(2)(b)(i)): no PAN -> the HIGHER
+# of twice the rate and 5%, "not exceeding 20%".
 TCS_NO_PAN_MULTIPLIER = Decimal("2")
 TCS_NO_PAN_FLOOR = Decimal("5")
+TCS_NO_PAN_CEILING = Decimal("20")
 
 DEDUCTEE_TYPES = {"IND_HUF", "OTHER"}
 
@@ -319,12 +327,15 @@ def derive_tds(case_input: dict) -> dict[str, Any]:
 
 
 def derive_tcs(case_input: dict) -> dict[str, Any]:
-    """Reference TCS derivation. s.206CC (2x or 5%) — NOT s.206AA's flat 20%."""
+    """Reference TCS derivation. s.397(2)(b)(ii): max(2x, 5%) capped at 20% —
+    NOT the deduction side's flat 20% floor."""
     rate, threshold, basis = TCS_RATES[case_input["section"]]
     if not case_input["panAvailable"]:
         rate = rate * TCS_NO_PAN_MULTIPLIER
         if TCS_NO_PAN_FLOOR > rate:
             rate = TCS_NO_PAN_FLOOR
+        if rate > TCS_NO_PAN_CEILING:
+            rate = TCS_NO_PAN_CEILING
     amount = Decimal(case_input["taxableAmount"])
     applied = amount > threshold
     tcs = Decimal("0")

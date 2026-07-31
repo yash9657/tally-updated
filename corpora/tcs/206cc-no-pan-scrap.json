@@ -1,6 +1,6 @@
 {
   "id": "206cc-no-pan-scrap",
-  "description": "s.206CC (NOT s.206AA): where the collectee furnishes no PAN, tax is collected at the HIGHER of twice the rate in force and 5%. Scrap rate is 1%; max(2 x 1%, 5%) = 5%. 5,00,000 x 5% = 25,000. Hand-computed. Note this is 5%, NOT the 20% that s.206AA would impose on the deduction side \u2014 the two no-PAN regimes are different and must not be collapsed.",
+  "description": "s.397(2)(b)(ii) (NOT the deduction side's s.397(2)(b)(i)): where the collectee furnishes no PAN, tax is collected at the HIGHER of twice the rate in force and 5%, not exceeding 20%. Scrap is 2% since 1-4-2026; max(2 x 2%, 5%) = 5%, which is under the 20% ceiling. 5,00,000 x 5% = 25,000. Hand-computed. Note this is 5%, NOT the 20% the deduction side would impose \u2014 the two no-PAN regimes differ and must not be collapsed. The expected values here are UNCHANGED by the scrap rate correction because the 5% floor still dominates; only the arithmetic in this description moved.",
   "rulesetVersion": "tcs-2026-04",
   "input": {
     "section": "206C(1)-SCRAP",

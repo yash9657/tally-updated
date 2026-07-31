@@ -1,6 +1,6 @@
 {
   "id": "206c1-scrap-rounding",
-  "description": "Rounding contract on the collection side: 12,345.6789 x 1% = 123.456789, quantized HALF-UP to 4 dp = 123.4568. Hand-computed.",
+  "description": "Rounding contract on the collection side, at the corrected s.394(1) [Table: Sl. No. 4] rate of 2%: 12,345.6789 x 2% = 246.913578, quantized HALF-UP to 4 dp = 246.9136. Hand-computed. The digits past the fourth are '78', which is more than half, so the fourth digit rounds up from 5 to 6.",
   "rulesetVersion": "tcs-2026-04",
   "input": {
     "section": "206C(1)-SCRAP",
@@ -8,8 +8,8 @@
     "taxableAmount": "12345.6789"
   },
   "expected": {
-    "tcs": "123.4568",
-    "ratePct": "1",
+    "tcs": "246.9136",
+    "ratePct": "2",
     "threshold": "0.0000",
     "basis": "PER_TXN",
     "applied": true
