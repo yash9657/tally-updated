@@ -133,8 +133,29 @@ type pfCaseExpected struct {
 	EmployeeEPF             string   `json:"employeeEPF"`
 	EmployerEPF             string   `json:"employerEPF"`
 	EPSMemberApplied        bool     `json:"epsMemberApplied"`
-	EDLIContributionRefused bool     `json:"edliContributionRefused"`
 	DeferredComponents      []string `json:"deferredComponents"`
+	// EDLIContribution is the EXPECTED EDLI premium, as a fixed-4 string.
+	//
+	// It replaced a boolean `edliContributionRefused` when S.O. 3581(E) made the
+	// rate consumable. A boolean could only ever pin "no number was produced";
+	// this pins WHICH number, which is what an employer is actually charged. The
+	// hand derivation is 0.50% of EDLI wages rounded to the nearest rupee, so at
+	// the Rs 15,000 ceiling it is Rs 75 — the figure that was accruing unbooked.
+	//
+	// Empty means "not asserted", for pre-2026 fixtures whose window has its own
+	// EDLI treatment.
+	EDLIContribution string `json:"edliContribution"`
+	// RefusesComponent names a component this fixture asserts is REFUSED — its
+	// rate is ConfUnverified, so the engine must defer it and must NOT produce a
+	// number.
+	//
+	// It is deliberately GENERIC where its predecessor was hardcoded to EDLI. The
+	// corpus needs at least one fixture pinning a refusal, or an engine that
+	// invented an unverified rate would pass every other case; but WHICH rate is
+	// unverified changes as notifications are read, and the last time it changed
+	// this field had to be renamed. Naming the component in the fixture means the
+	// next promotion moves a string, not a schema.
+	RefusesComponent string `json:"refusesComponent"`
 }
 
 type esiCaseInput struct {
@@ -293,7 +314,7 @@ func TestPayrollDerive_GoldenCorpus(t *testing.T) {
 				for _, d := range exp.DeferredComponents {
 					m[d] = true
 				}
-				if exp.EDLIContributionRefused {
+				if exp.RefusesComponent != "" {
 					sawRefusalFixture = true
 				}
 			case strings.HasPrefix(c.ID, "esi-"):
@@ -370,8 +391,10 @@ func TestPayrollDerive_GoldenCorpus(t *testing.T) {
 			"reflect walk has stopped seeing them and this closure check is vacuous")
 	}
 	if !sawRefusalFixture {
-		t.Error("no corpus fixture asserts that an unverified rate is REFUSED (edliContributionRefused). " +
-			"Without one, an engine that invented the EDLI rate would pass every other fixture")
+		t.Error("no corpus fixture asserts that an unverified rate is REFUSED (refusesComponent). " +
+			"Without one, an engine that invented an unverified rate would pass every other fixture. " +
+			"When a rate is promoted, RETARGET this at a rate that is still unverified — the " +
+			"administrative charges, at the time of writing — rather than deleting the assertion")
 	}
 	for version, declared := range deferredByFixture {
 		rs, err := socialSecurityByVersion(version)
@@ -497,10 +520,24 @@ func runPFCase(t *testing.T, c payrollCase) pfCaseExpected {
 	if !reflect.DeepEqual(sortedSet(gotDeferred), sortedSet(wantDeferred)) {
 		t.Errorf("deferrals: engine defers %v, fixture declares %v", sortedSet(gotDeferred), sortedSet(wantDeferred))
 	}
-	if exp.EDLIContributionRefused {
-		if _, err := rs.EDLIContributionPct.Use(); !errors.Is(err, ErrUnverifiedRate) {
-			t.Errorf("the fixture asserts the EDLI contribution is REFUSED, but the rate is consumable: %v. "+
-				"Shipping the superseded 1976 Scheme's 0.50%% would be inventing a rate and charging an employer for it", err)
+	// The EDLI premium, when the fixture pins one. Ceiling-capped at Rs 15,000 of
+	// wages, so the maximum is Rs 75 per member per month — the liability that
+	// accrued unbooked while the rate was unverified.
+	if exp.EDLIContribution != "" {
+		componentEqual(t, got.ComponentByName, ComponentEDLIContribution, exp.EDLIContribution,
+			"the EDLI premium the employer remits; it may NOT be recovered from wages (EDLI Scheme 2026 para 8)")
+	}
+
+	// A fixture may assert that some component is REFUSED rather than computed.
+	if exp.RefusesComponent != "" {
+		if !gotDeferred[exp.RefusesComponent] {
+			t.Errorf("the fixture asserts %s is REFUSED, but the engine did not defer it. "+
+				"Shipping a superseded or invented rate charges a real employer for a number nobody verified",
+				exp.RefusesComponent)
+		}
+		if _, ok := got.ComponentByName(exp.RefusesComponent); ok {
+			t.Errorf("the fixture asserts %s is REFUSED, but the engine produced an amount for it",
+				exp.RefusesComponent)
 		}
 	}
 	return exp

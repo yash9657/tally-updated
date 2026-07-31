@@ -497,17 +497,36 @@ func TestPFDerive_EDLIContributionIsDeferredNotGuessed(t *testing.T) {
 			t.Errorf("deferred component %s ALSO appeared as a number (%s) — that number is invented", name, c.Amount)
 		}
 	}
-	// The EDLI deferral's WORDING is pinned, and what it must NOT say is pinned
-	// harder than what it must. See
-	// TestPFDerive_EDLIDeferralReasonDoesNotRepeatTheRetractedClaim.
+	// The EDLI deferral's WORDING is pinned. NOTE THAT THIS RUNS AGAINST A SYNTHETIC
+	// FIXTURE RULESET (ssFixture), in which EDLIContributionPct is deliberately
+	// unverified — under every SHIPPED ruleset the rate is on record (S.O. 3581(E))
+	// and the premium is computed, so this string is latent there. It is pinned
+	// anyway because EDLI Scheme 2026 para 5(2) has the rate re-notified from time
+	// to time on actuarial valuation, so a future window can legitimately open with
+	// the next rate unread and this is the sentence the employer would then see.
+	//
+	// What it must say is deliberately about the STATE, not a figure. Two earlier
+	// versions of this assertion pinned specifics — "0.50%", "SECONDARY SOURCES
+	// ONLY", "G.S.R." — and both had to be rewritten when the facts moved. A
+	// wording test that pins facts breaks every time the facts change; one that
+	// pins the DUTY does not.
 	if got, ok := res.DeferralFor(ComponentEDLIContribution); !ok {
 		t.Error("no Deferral for EDLI_CONTRIBUTION at all")
 	} else {
-		for _, want := range []string{"0.50%", "SECONDARY SOURCES ONLY", "Rs 75 per member per month", "G.S.R."} {
+		for _, want := range []string{
+			// It must not let the employer conclude nothing is payable...
+			"Do NOT read this as 'no EDLI is payable'",
+			// ...must say the charge is the employer's alone...
+			"employer-funded",
+			// ...must give the ceiling, which bounds the exposure...
+			"ceiling-capped",
+			// ...and must name the action that resolves it.
+			"verify it before the next remittance",
+		} {
 			if !strings.Contains(got.Reason, want) {
 				t.Errorf("EDLI deferral reason does not mention %q. It is the user-facing explanation persisted on "+
-					"every payslip, and it must tell the employer that a rate IS reported and a liability IS "+
-					"accruing. Reason = %q", want, got.Reason)
+					"every payslip, and it must tell the employer that a liability IS accruing and what to do about "+
+					"it. Reason = %q", want, got.Reason)
 			}
 		}
 	}
@@ -1248,30 +1267,34 @@ func roundingCallSitesIn(t *testing.T, file, fn string) []int {
 	return lines
 }
 
-// TestPFDerive_EDLIDeferralReasonDoesNotRepeatTheRetractedClaim pins the half of
-// a deferral that a human actually reads.
+// TestPFDerive_AdminChargeDeferralsAreActionable pins the half of a deferral that
+// a human actually reads.
 //
-// A Deferral has two strings. The Citation is provenance and is read by whoever
-// goes back to the law; the REASON is the sentence that is persisted onto every
-// payslip and shown to the employer. They drifted apart: rates.go RETRACTED, in
-// EDLIContributionPct's citation, the assertion that the EDLI Scheme 2026 rate
-// "is to be notified separately" and had not been notified — a rate IS reported
-// at 0.50% of EDLI wages from 29 June 2026 on secondary sources — but the Reason
-// went on saying the retracted thing.
+// A Deferral has two strings. The Citation is provenance, read by whoever goes
+// back to the law; the REASON is persisted onto every payslip and shown to the
+// employer. They have drifted apart twice, and both times the Reason was the one
+// that was wrong, because it is the one no compiler checks.
 //
-// That is not a cosmetic mismatch. An employer told the rate DOES NOT EXIST has
-// no reason to go and read the G.S.R., and reading the G.S.R. is the one action
-// the deferral exists to provoke. Meanwhile roughly Rs 75 per member per month of
-// EDLI premium accrues unbooked.
+// THIS TEST USED TO WATCH THE EDLI CONTRIBUTION. S.O. 3581(E) of 1 July 2026 put
+// that rate on record, so the EDLI premium is now computed and has no Reason to
+// read — see the negative assertion at the end, which is what stops it silently
+// becoming a deferral again. What is still refused is the two ADMINISTRATIVE
+// CHARGES, so the assertion moved to them rather than being deleted.
 //
-// The two ADMINISTRATIVE-CHARGE reasons are deliberately NOT covered by the
-// negative assertion below: no 2026-Scheme administrative-charge rate of any kind
-// could be found, so for those two "not notified" is the true state of knowledge.
-func TestPFDerive_EDLIDeferralReasonDoesNotRepeatTheRetractedClaim(t *testing.T) {
+// The failure this guards against is specific: an employer told "no rate has been
+// notified" may reasonably conclude nothing is payable and stop looking. For the
+// administrative charges that conclusion is WRONG — they are pending, not
+// abolished, and EPF Scheme 2026 para 29(2) proves it by capping a late-return fee
+// at "the administrative charges payable ... for the relevant month". A cap
+// expressed in terms of the charge presupposes the charge.
+func TestPFDerive_AdminChargeDeferralsAreActionable(t *testing.T) {
 	month := WageMonth{Year: 2026, Month: time.August}
-	ss, err := SocialSecurityForMonth(month)
+	ss, err := SocialSecurityFor(month.Last())
 	if err != nil {
-		t.Fatalf("SocialSecurityForMonth(%s): %v", month, err)
+		t.Fatalf("SocialSecurityFor: %v", err)
+	}
+	if ss.Version != "ss-2026-07" {
+		t.Fatalf("resolved %q, want ss-2026-07", ss.Version)
 	}
 	res, err := PFDerive(PFInput{
 		Month:         month,
@@ -1284,68 +1307,52 @@ func TestPFDerive_EDLIDeferralReasonDoesNotRepeatTheRetractedClaim(t *testing.T)
 		t.Fatalf("PFDerive: %v", err)
 	}
 
-	def, ok := res.DeferralFor(ComponentEDLIContribution)
-	if !ok {
-		t.Fatalf("%s (%s) neither books nor defers the EDLI contribution; this test has nothing to read",
-			month, ss.Version)
-	}
-
-	// (1) IT MUST NOT REPEAT THE RETRACTED CLAIM. Stating as a fact that no rate
-	// exists is what the rate row's own comment calls "an unverified zero dressed
-	// up as a settled nil".
-	for _, retracted := range []string{
-		"to be notified separately",
-		"had not been notified",
-		"has not been notified",
-		"actuarial valuation",
-	} {
-		if strings.Contains(strings.ToLower(def.Reason), strings.ToLower(retracted)) {
-			t.Errorf("the EDLI_CONTRIBUTION deferral reason still says %q. rates.go RETRACTED that claim: a rate IS "+
-				"reported at 0.50%% of EDLI wages from 29 June 2026. An employer who reads this on the payslip is "+
-				"told the rate does not exist, will not go and read the G.S.R., and about Rs 75 per member per "+
-				"month of EDLI premium keeps accruing unbooked. Reason = %q", retracted, def.Reason)
-		}
-	}
-
-	// (2) IT MUST SAY WHAT THE CITATION SAYS. Each of these is a fact the
-	// employer needs in order to act: a rate is reported; only on secondary
-	// sources; the primary text is unread; money is accruing.
-	for _, want := range []string{
-		"0.50%",
-		"29 June 2026",
-		"SECONDARY SOURCES ONLY",
-		"G.S.R.",
-		"Rs 75 per member per month",
-	} {
-		if !strings.Contains(def.Reason, want) {
-			t.Errorf("the EDLI_CONTRIBUTION deferral reason does not mention %q. The Reason is the half of the "+
-				"deferral that reaches the employer, and it must carry what the citation carries. Reason = %q",
-				want, def.Reason)
-		}
-	}
-
-	// (3) AND IT MUST STILL BE A DEFERRAL. The correction is to the WORDING; the
-	// rate stays ConfUnverified and the charge stays uncomputed, because
-	// promoting a rate on a news report would charge an employer real money at a
-	// figure nobody here has verified.
-	if c, present := res.ComponentByName(ComponentEDLIContribution); present {
-		t.Errorf("EDLI_CONTRIBUTION is now booked at Rs %s. Correcting the deferral's WORDING must not promote the "+
-			"rate: no primary G.S.R. has been read and the row is still ConfUnverified", c.Amount)
-	}
-
-	// (4) The two administrative-charge reasons are a different state of
-	// knowledge and are left alone. This is asserted so that a future sweep-edit
-	// of "notified separately" does not quietly rewrite a sentence that is true.
 	for _, name := range []string{ComponentEDLIAdminCharges, ComponentEPFAdminCharges} {
-		adm, ok := res.DeferralFor(name)
+		def, ok := res.DeferralFor(name)
 		if !ok {
-			t.Errorf("no deferral for %s under %s", name, ss.Version)
+			t.Errorf("%s (%s) neither books nor defers %s; this test has nothing to read", month, ss.Version, name)
 			continue
 		}
-		if !strings.Contains(adm.Reason, "notified separately") {
-			t.Errorf("the %s deferral reason no longer says the charge is to be notified separately: %q. For the "+
-				"ADMINISTRATIVE CHARGES that statement is true — no 2026-Scheme rate of any kind could be found — "+
-				"and it must not be rewritten along with the EDLI one", name, adm.Reason)
+
+		// (1) IT MUST NOT LET THE EMPLOYER CONCLUDE NOTHING IS PAYABLE.
+		if !strings.Contains(def.Reason, "PENDING, NOT ABOLISHED") {
+			t.Errorf("the %s deferral reason does not say the charge is PENDING, NOT ABOLISHED. Without that, an "+
+				"employer reads 'no rate notified' as 'nothing to pay' and stops looking, which is how the "+
+				"liability goes unbooked. Reason = %q", name, def.Reason)
 		}
+		if !strings.Contains(def.Reason, "para 29(2)") {
+			t.Errorf("the %s deferral reason does not cite para 29(2), which is the EVIDENCE that the charge still "+
+				"exists: it caps a late-return fee at the administrative charges payable for the month. Reason = %q",
+				name, def.Reason)
+		}
+
+		// (2) IT MUST NAME THE NEAR-MISS. S.O. 2701(E) is the likeliest wrong
+		// number to be booked here, because the words sit next to each other.
+		if !strings.Contains(def.Reason, "2701(E)") {
+			t.Errorf("the %s deferral reason does not warn against S.O. 2701(E). That notification sets INSPECTION "+
+				"charges for EXEMPTED establishments and is the number most likely to be mistaken for this one. "+
+				"Reason = %q", name, def.Reason)
+		}
+
+		// (3) AND IT MUST STILL BE A DEFERRAL, not a number.
+		if c, present := res.ComponentByName(name); present {
+			t.Errorf("%s is booked at Rs %s. No administrative-charge rate has been notified under the 2026 "+
+				"Schemes; a number here is invented and charged to a real employer", name, c.Amount)
+		}
+	}
+
+	// (4) THE OTHER DIRECTION, so this cannot pass against an engine that defers
+	// everything: the EDLI PREMIUM is on record and must be COMPUTED.
+	if _, deferred := res.DeferralFor(ComponentEDLIContribution); deferred {
+		t.Error("the EDLI premium is deferred. S.O. 3581(E) of 1 July 2026 sets it at 0.50% of EDLI wages w.e.f. " +
+			"29 June 2026; deferring it leaves roughly Rs 75 per member per month accruing unbooked")
+	}
+	edli, ok := res.ComponentByName(ComponentEDLIContribution)
+	if !ok {
+		t.Fatal("the EDLI premium is neither booked nor deferred")
+	}
+	if !edli.Amount.Equal(d(t, "75.0000")) {
+		t.Errorf("EDLI premium = Rs %s, want Rs 75 — 0.50%% of the Rs 15,000 ceiling, rounded to the nearest "+
+			"rupee per EDLI Scheme 2026 para 5(3)", edli.Amount)
 	}
 }

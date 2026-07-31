@@ -23,8 +23,8 @@
     "employeeEPF": "1762.0000",
     "employerEPF": "734.0000",
     "epsMemberApplied": true,
+    "edliContribution": "62.0000",
     "deferredComponents": [
-      "EDLI_CONTRIBUTION",
       "EDLI_ADMIN_CHARGES",
       "EPF_ADMIN_CHARGES"
     ]

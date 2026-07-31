@@ -2300,7 +2300,17 @@ DEEMING_TEST_CLAUSES_A_TO_I = {
 # The components whose rate the scheme itself says is "to be notified
 # separately", per ruleset. The engine must DEFER these, never number them.
 PF_DEFERRED_COMPONENTS = {
-    "ss-2026-07": ["EDLI_ADMIN_CHARGES", "EDLI_CONTRIBUTION", "EPF_ADMIN_CHARGES"],
+    # EDLI_CONTRIBUTION left this list when S.O. 3581(E) of 1 July 2026 was
+    # identified: 0.50% of EDLI wages w.e.f. 29 June 2026, ceiling-capped to Rs 75
+    # per member per month. The rate is NOT in the Scheme itself — G.S.R. 526(E)
+    # para 5(1)-(2) leaves it to a separate notification — which is why it looked
+    # unnotified for so long. The two ADMINISTRATIVE CHARGES stay: no standalone
+    # rate notification for them exists as at 30 July 2026, and they are PENDING
+    # rather than abolished (EPF Scheme 2026 para 29(2) caps a late fee at "the
+    # administrative charges payable ... for the relevant month", which
+    # presupposes the charge). Do NOT substitute S.O. 2701(E) — that is INSPECTION
+    # charges for exempted establishments, a different levy.
+    "ss-2026-07": ["EDLI_ADMIN_CHARGES", "EPF_ADMIN_CHARGES"],
     # Nothing is deferred in the interim window: the saved 1952/1976 Schemes were
     # still operative, so their EDLI contribution (0.50%) and administrative
     # charges ARE on record. Deferring them here would refuse a contribution that

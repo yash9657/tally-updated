@@ -135,17 +135,30 @@ func TestComputePayslip_AssemblesEveryLeafAndCarriesDeferrals(t *testing.T) {
 	}
 
 	// The deferrals must travel UP from the leaf. A payslip that dropped them
-	// would show the EDLI contribution as absent-and-unexplained rather than as
-	// deliberately not computed.
+	// would show the charge as absent-and-unexplained rather than as deliberately
+	// not computed.
+	//
+	// This watched the EDLI contribution until S.O. 3581(E) made it computable; it
+	// now watches an ADMINISTRATIVE charge, which is still refused. The assertion is
+	// about the PLUMBING, not about which rate happens to be unverified — so
+	// retarget it at whatever is still deferred rather than deleting it.
 	found := false
 	for _, d := range slip.Deferrals {
-		if d.Component == ComponentEDLIContribution {
+		if d.Component == ComponentEPFAdminCharges {
 			found = true
 		}
 	}
 	if !found {
-		t.Error("the EDLI deferral did not reach the payslip. 'We could not compute this' must travel " +
-			"with the numbers, or it becomes indistinguishable from a zero")
+		t.Error("the EPF administrative-charge deferral did not reach the payslip. 'We could not compute this' " +
+			"must travel with the numbers, or it becomes indistinguishable from a zero")
+	}
+	// The other direction, so this cannot pass against an engine that defers
+	// everything: the EDLI premium is now COMPUTED and must NOT be deferred.
+	for _, d := range slip.Deferrals {
+		if d.Component == ComponentEDLIContribution {
+			t.Error("the EDLI premium is deferred on the payslip, but S.O. 3581(E) put its rate on record. " +
+				"A deferral here is an employer liability going unbooked")
+		}
 	}
 
 	// The versions must be stamped, or a re-run years later cannot resolve the
@@ -230,12 +243,30 @@ func TestAggregateLegs_BalancesOrErrors(t *testing.T) {
 
 	// The identity the double entry rests on, asserted independently of the
 	// implementation: total debits == gross + every employer contribution.
+	//
+	// EMPLOYER CONTRIBUTIONS ARE IN TWO PLACES, and that is why this sum reads the
+	// components rather than just the field. Payslip.EmployerContributions is the
+	// CALLER's figure (EPF + EPS); the employer's other statutory charges live only
+	// as tagged components on the PF result, because PFResult carries no total for
+	// them on purpose. The aggregator debits both. Since S.O. 3581(E) made the EDLI
+	// premium computable, at least one of those charges is now real money in every
+	// pay run, and a sum that ignored them would have this test asserting the wrong
+	// identity — it read Rs 135 short across these two employees before it was fixed.
 	wantDr := decimal.Zero
 	for _, s := range slips {
 		wantDr = wantDr.Add(s.GrossEarnings).Add(s.EmployerContributions)
+		if s.PF == nil {
+			continue
+		}
+		for _, name := range pfEmployerChargeComponents {
+			if c, ok := s.PF.ComponentByName(name); ok {
+				wantDr = wantDr.Add(c.Amount)
+			}
+		}
 	}
 	if !legs.DebitTotal.Equal(wantDr) {
-		t.Errorf("debit total %s, want %s (gross + employer contributions)", legs.DebitTotal, wantDr)
+		t.Errorf("debit total %s, want %s (gross + employer contributions + employer statutory charges)",
+			legs.DebitTotal, wantDr)
 	}
 
 	// Every leg the architecture names must be present and positive, and NO leg
@@ -359,6 +390,20 @@ func TestAggregateLegs_PerEmployeePayableSplitsAndStillBalances(t *testing.T) {
 // credit to PF Payable with no matching debit.
 var pfEmployerChargeComponents = []string{
 	ComponentEDLIContribution,
+	ComponentEDLIAdminCharges,
+	ComponentEPFAdminCharges,
+}
+
+// pfDeferredChargeComponents are the charges still REFUSED under the real
+// ss-2026-07 rates — the two administrative ones.
+//
+// It is a separate list from pfEmployerChargeComponents on purpose. That list is
+// about the LEG-BALANCING shape and is exercised against a synthetic ruleset where
+// all three rates are notified, so it must keep all three. This one is about what
+// the SHIPPED table refuses, and the EDLI contribution left it when S.O. 3581(E)
+// was identified. Collapsing the two would either make the balancing test vacuous
+// or silently re-refuse a rate that is now on record.
+var pfDeferredChargeComponents = []string{
 	ComponentEDLIAdminCharges,
 	ComponentEPFAdminCharges,
 }
@@ -1010,31 +1055,34 @@ func TestAggregateLegs_EPFAdminChargeFloorIsNotChargedPerEmployee(t *testing.T) 
 }
 
 // ---------------------------------------------------------------------------
-// WHAT THIS BUILD BOOKS FROM JUNE 2026 ONWARD: NOTHING
+// WHAT THIS BUILD BOOKS FROM JUNE 2026 ONWARD: THE EDLI PREMIUM, NOT THE
+// ADMINISTRATIVE CHARGES
 // ---------------------------------------------------------------------------
 
-// TestSocialSecurity_FromJune2026NoEDLIOrAdminChargeIsBooked makes a DISCLOSED
-// GAP visible instead of leaving it to be discovered from a source comment.
+// TestSocialSecurity_FromJune2026EDLIIsBookedButAdminChargesAreNot pins the split
+// between a charge that is now on record and two that are not.
 //
 // SocialSecurityFor resolves a wage month on its LAST day, and the ss-2026-07
-// window opens on 29 June 2026. The whole of June 2026 therefore resolves to
-// ss-2026-07 even though the saved 1976 Scheme was operative for 1-28 June and
-// its 0.50% EDLI premium was on record for those days. From June 2026 onward all
-// three employer charges are ConfUnverified and are deferred to nothing.
+// window opens on 29 June 2026, so the whole of June 2026 resolves to ss-2026-07
+// even though the saved 1976 Scheme was operative for 1-28 June. That boundary is
+// a DELIBERATE choice, not an accident of last-day resolution, and this test still
+// pins it.
 //
-// TODAY IS AFTER THAT BOUNDARY, so this is not a corner case: it is every pay run
-// the product will actually post. About Rs 75 per member per month of EDLI
-// premium accrues unbooked and unremitted, plus the whole Rs 500 per
-// establishment per month administrative-charge minimum, with s.14B interest and
-// s.14 damages running on both.
+// WHAT CHANGED. This test used to assert that June booked NOTHING, and its own
+// log called that a release blocker: about Rs 75 per member per month of EDLI
+// premium accruing unbooked, with s.14B interest on top. S.O. 3581(E) of 1 July
+// 2026 (0.50% w.e.f. 29 June 2026) closed it, so the EDLI premium is now BOOKED
+// and this test asserts that instead — which is what stops a later "let's be safe"
+// change from re-opening the liability.
 //
-// THE DEFERRAL IS THE HONEST BEHAVIOUR AND MUST STAY. Inventing a rate to make
-// this test go green would charge an employer real money at a figure nobody here
-// has verified, which is worse. What this test pins is that the mid-month
-// boundary is a DELIBERATE choice and not an accident of last-day resolution,
-// and it will fail the moment somebody changes what June books — in either
-// direction — so the change has to be argued for.
-func TestSocialSecurity_FromJune2026NoEDLIOrAdminChargeIsBooked(t *testing.T) {
+// WHAT DID NOT CHANGE. The two administrative charges are still refused: no
+// standalone rate notification exists for them as at 30 July 2026. That is a
+// DISCLOSED GAP and the deferral is the honest behaviour — inventing a rate would
+// charge a real employer a figure nobody has. Note they are PENDING, not
+// abolished: EPF Scheme 2026 para 29(2) caps a late-return fee at "the
+// administrative charges payable ... for the relevant month", which presupposes
+// the charge exists.
+func TestSocialSecurity_FromJune2026EDLIIsBookedButAdminChargesAreNot(t *testing.T) {
 	wage := prDec(t, "15000")
 	derive := func(m WageMonth) (SocialSecurityRuleSet, PFResult) {
 		t.Helper()
@@ -1086,10 +1134,30 @@ func TestSocialSecurity_FromJune2026NoEDLIOrAdminChargeIsBooked(t *testing.T) {
 			t.Fatalf("%s still resolves to %s. The window boundary this test is about has moved; re-derive the "+
 				"expectations rather than deleting the test", m, ss.Version)
 		}
-		for _, name := range pfEmployerChargeComponents {
+		// THE EDLI PREMIUM IS BOOKED. Rs 75 for a member at the ceiling — the same
+		// figure May books under the superseded Scheme, because S.O. 3581(E)
+		// carried the 1976 rate forward unchanged.
+		edli, present := pf.ComponentByName(ComponentEDLIContribution)
+		if !present {
+			t.Errorf("%s (%s) does not book the EDLI premium. S.O. 3581(E) of 1 July 2026 sets it at 0.50%% of "+
+				"EDLI wages w.e.f. 29 June 2026; refusing it leaves the employer liability accruing unbooked",
+				m, ss.Version)
+		} else if !edli.Amount.Equal(prDec(t, "75")) {
+			t.Errorf("%s (%s) books EDLI = Rs %s, want Rs 75 (0.50%% of the Rs 15,000 ceiling)",
+				m, ss.Version, edli.Amount)
+		}
+		if _, deferred := pf.DeferralFor(ComponentEDLIContribution); deferred {
+			t.Errorf("%s (%s) DEFERS the EDLI premium as well as/instead of booking it. The rate is on record",
+				m, ss.Version)
+		}
+
+		// THE ADMINISTRATIVE CHARGES ARE NOT.
+		for _, name := range pfDeferredChargeComponents {
 			if c, present := pf.ComponentByName(name); present {
-				t.Errorf("%s (%s) books %s = Rs %s. This build has NOT read the primary G.S.R. for any 2026-Scheme "+
-					"charge rate; a number here is an invented rate charged to a real employer", m, ss.Version, name, c.Amount)
+				t.Errorf("%s (%s) books %s = Rs %s. No standalone administrative-charge rate notification exists "+
+					"under the 2026 Schemes; a number here is an invented rate charged to a real employer. Do NOT "+
+					"reach for S.O. 2701(E) — that is inspection charges on exempted establishments",
+					m, ss.Version, name, c.Amount)
 			}
 			def, ok := pf.DeferralFor(name)
 			if !ok {
@@ -1104,9 +1172,11 @@ func TestSocialSecurity_FromJune2026NoEDLIOrAdminChargeIsBooked(t *testing.T) {
 			}
 		}
 
-		// The legs confirm the consequence in money: the employer's PF debit is
-		// its contribution into the member's account and NOTHING ELSE, and the
-		// establishment floor is not reached either.
+		// The legs confirm the consequence in money. EmployerContributions below
+		// is deliberately EmployerEPF + EPS only — the caller's figure — so the
+		// employer's PF debit is the member's account plus whatever tagged
+		// statutory components the aggregator adds, which now includes the EDLI
+		// premium and still excludes both administrative charges.
 		slip := Payslip{
 			EmployeeRef:                  "MEMBER-A",
 			Month:                        m,
@@ -1128,10 +1198,13 @@ func TestSocialSecurity_FromJune2026NoEDLIOrAdminChargeIsBooked(t *testing.T) {
 				employerPF = employerPF.Add(l.Amount)
 			}
 		}
-		wantEmployerPF := pf.EmployerEPF.Add(pf.EPS)
+		// The member's account PLUS the EDLI premium, and nothing else: the two
+		// administrative charges are still deferred, so they add nothing here.
+		wantEmployerPF := pf.EmployerEPF.Add(pf.EPS).Add(prDec(t, "75"))
 		if !employerPF.Equal(wantEmployerPF) {
-			t.Errorf("%s (%s): Employer PF Contribution debit Rs %s, want Rs %s — the member's account and nothing "+
-				"more. Every 2026-Scheme charge is deferred in this window", m, ss.Version, employerPF, wantEmployerPF)
+			t.Errorf("%s (%s): Employer PF Contribution debit Rs %s, want Rs %s — the member's account plus the "+
+				"Rs 75 EDLI premium. Both administrative charges are still deferred and must add nothing",
+				m, ss.Version, employerPF, wantEmployerPF)
 		}
 		if !legs.EPFAdminChargeTopUp.IsZero() {
 			t.Errorf("%s (%s): the run tops the EPF administrative charge up by Rs %s, but no administrative-charge "+
@@ -1140,9 +1213,11 @@ func TestSocialSecurity_FromJune2026NoEDLIOrAdminChargeIsBooked(t *testing.T) {
 		}
 	}
 
-	t.Logf("DISCLOSED GAP, NOT A PASS: from June 2026 (window %s) this build books ZERO EDLI premium and ZERO EPF/EDLI "+
-		"administrative charges. Against the %s figures that is about Rs %s per member per month of EDLI, plus the "+
-		"whole Rs 500 per establishment per month administrative-charge minimum, accruing unbooked and unremitted, "+
-		"with s.14B interest and s.14 damages. Reading the primary G.S.R. is a RELEASE BLOCKER",
-		"ss-2026-07", mayRS.Version, mayEDLI.Amount)
+	t.Logf("PARTIALLY CLOSED: from June 2026 (window %s) this build now books the EDLI premium of Rs %s per member "+
+		"per month, on S.O. 3581(E) of 1 July 2026 — the same figure the superseded %s window books, because the "+
+		"1976 rate was carried forward unchanged. STILL A DISCLOSED GAP: both EPF/EDLI administrative charges are "+
+		"refused, so an amount that was Rs 500 per establishment per month under the superseded Scheme is accruing "+
+		"unbooked, with s.14B interest and s.14 damages. They are PENDING, not abolished — para 29(2) caps a late "+
+		"fee at them. No standalone rate notification existed as at 30 July 2026",
+		"ss-2026-07", mayEDLI.Amount, mayRS.Version)
 }

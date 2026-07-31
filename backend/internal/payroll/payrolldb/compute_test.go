@@ -333,12 +333,26 @@ func TestComputeAndRunPayRunComputesTheMonthFromTheEngine(t *testing.T) {
 	if !debits.Equal(credits) {
 		t.Fatalf("the computed pay run does not balance: debits %s != credits %s", debits.StringFixed(4), credits.StringFixed(4))
 	}
+	// THE EDLI PREMIUM IS IN THE EMPLOYER'S PF FIGURES, and the two employees show
+	// why it is 145 and not 150: it is 0.50% of EDLI WAGES, which are ceiling-capped
+	// per employee rather than flat.
+	//
+	//	employee 1: statutory wage 14,000 (BASIC 12,000 + OTHR 2,000; COMM is
+	//	            excluded by s.2(88)) -> EDLI wages min(14,000, 15,000) = 14,000
+	//	            -> 0.5% = 70
+	//	employee 2: statutory wage 20,000 from 1 Jun -> EDLI wages capped at 15,000
+	//	            -> 0.5% = 75
+	//	                                                        EDLI total = 145
+	//
+	// So employer PF is 3,480 + 145 = 3,625 and PF Payable 6,960 + 145 = 7,105. The
+	// rate is S.O. 3581(E) of 1 July 2026, 0.50% w.e.f. 29 June 2026; both
+	// administrative charges are still deferred and add nothing.
 	for name, want := range map[string][2]string{
 		payrolldb.LedgerSalariesAndWages: {"43000", "0"},
-		payrolldb.LedgerEmployerPF:       {"3480", "0"},
+		payrolldb.LedgerEmployerPF:       {"3625", "0"},
 		payrolldb.LedgerEmployerESI:      {"1398", "0"},
 		payrolldb.LedgerSalaryPayable:    {"0", "39197"},
-		payrolldb.LedgerPFPayable:        {"0", "6960"},
+		payrolldb.LedgerPFPayable:        {"0", "7105"},
 		payrolldb.LedgerESIPayable:       {"0", "1721"},
 	} {
 		got, ok := ps[name]
@@ -355,18 +369,21 @@ func TestComputeAndRunPayRunComputesTheMonthFromTheEngine(t *testing.T) {
 		t.Error("a zero TDS leg was posted; a Trial Balance line for \"TDS on Salary Payable 0.00\" in a month nobody was taxed is a report that looks like a bug")
 	}
 
-	// THE DEFERRALS MUST REACH THE PAYSLIP. Three rates in the 2026 schemes are
-	// expressly "to be notified separately" (the EDLI contribution, EDLI
-	// administrative charges, EPF administrative charges) and the engine refuses
-	// to invent any of them. A payslip that silently showed zero for an
-	// unnotified component would be indistinguishable from one where the
-	// component genuinely does not apply.
+	// THE DEFERRALS MUST REACH THE PAYSLIP. Two rates in the 2026 Schemes have no
+	// notification at all — EDLI administrative charges and EPF administrative
+	// charges — and the engine refuses to invent either. A payslip that silently
+	// showed zero for an unnotified component would be indistinguishable from one
+	// where the component genuinely does not apply.
+	//
+	// It was three until S.O. 3581(E) of 1 July 2026 put the EDLI CONTRIBUTION rate
+	// on record at 0.50% w.e.f. 29 June 2026. That premium is now booked rather
+	// than deferred, which is why the employer PF figures above carry it.
 	view, err := svc.Payslip(ctx, computeMonth, one)
 	if err != nil {
 		t.Fatalf("payslip: %v", err)
 	}
-	if len(view.Deferrals) != 3 {
-		t.Errorf("the computed payslip carries %d deferral(s), want 3 (EDLI contribution, EDLI admin charges, EPF admin charges): %+v",
+	if len(view.Deferrals) != 2 {
+		t.Errorf("the computed payslip carries %d deferral(s), want 2 (EDLI admin charges, EPF admin charges): %+v",
 			len(view.Deferrals), view.Deferrals)
 	}
 	// Five lines: three earnings, EPF employee, ESI employee. TDS is zero and a

@@ -1,0 +1,33 @@
+{
+ "id": "pf-admin-charges-refused-unnotified",
+ "description": "THE ADMINISTRATIVE CHARGES ARE REFUSED WHILE THE EDLI PREMIUM IS NOW COMPUTED — this fixture exists to hold both halves of that distinction in one case, because they were once the same case and collapsing them again would lose the difference. This fixture was previously pf-edli-contribution-refused-unnotified, and its history is the point: the EDLI rate was FIRST described as not notified (asserting a fact that was false), THEN as reported-but-unread and refused (safe, but leaving about Rs 75 per member per month accruing unbooked). It is now COMPUTED: 0.50% of EDLI wages w.e.f. 29 June 2026 under S.O. 3581(E) dated 1 July 2026, at ConfMedium. The rate is NOT in the Scheme — G.S.R. 526(E) para 5(1)-(2) leaves it to a separate notification decided on actuarial valuation, which is why reading the Scheme text found nothing and invited the first mistake. The two ADMINISTRATIVE CHARGES did not move with it, and the difference is evidential, not a matter of degree: no standalone administrative-charge rate notification exists under the 2026 Schemes as at 30 July 2026. They are PENDING, NOT ABOLISHED — EPF Scheme 2026 para 29(2) caps a Rs 500/day late-return fee at 'a maximum equal to the administrative charges payable by the employer for the relevant month', and a cap presupposes the charge. Two near-misses must NOT be substituted: S.O. 2701(E) of 29 May 2026 is INSPECTION charges under s.143(6) for exempted establishments (EPF 0.35% min Rs 8,750), a different levy; and the superseded 1952/1976 figures do not survive. Hand derivation: EDLI WAGES are min(statutory wage 15000.0000, EDLI ceiling 15000.0000) = 15000.0000; the premium is 0.5% of that = 75.0000 exactly, rounded to the nearest rupee per EDLI Scheme 2026 para 5(3). It is employer-funded and may not be recovered from wages (para 8). The engine emits named deferrals for EDLI_ADMIN_CHARGES and EPF_ADMIN_CHARGES and produces no component row for either. Every other figure matches pf-at-ceiling-statutory-only: 1800, 1250 and 550.",
+ "rulesetVersion": "ss-2026-07",
+ "input": {
+  "wageMonth": "2026-08",
+  "statutoryWage": "15000.0000",
+  "pfBase": "CEILING",
+  "employeeVoluntaryBase": "0.0000",
+  "employerMatchesVoluntary": false,
+  "epsMember": true,
+  "firstMemberOn": "2010-04-01"
+ },
+ "expected": {
+  "epfWages": "15000.0000",
+  "epsWages": "15000.0000",
+  "edliWages": "15000.0000",
+  "employeeStatutory": "1800.0000",
+  "employeeVoluntary": "0.0000",
+  "employerStatutory": "550.0000",
+  "employerVoluntary": "0.0000",
+  "eps": "1250.0000",
+  "employeeEPF": "1800.0000",
+  "employerEPF": "550.0000",
+  "epsMemberApplied": true,
+  "refusesComponent": "EPF_ADMIN_CHARGES",
+  "edliContribution": "75.0000",
+  "deferredComponents": [
+   "EDLI_ADMIN_CHARGES",
+   "EPF_ADMIN_CHARGES"
+  ]
+ }
+}

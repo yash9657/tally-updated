@@ -547,31 +547,45 @@ func PFDerive(in PFInput, rs SocialSecurityRuleSet) (PFResult, error) {
 			name:  ComponentEDLIContribution,
 			rate:  rs.EDLIContributionPct,
 			wages: edliWages,
-			// READ rates.go's block on EDLIContributionPct BEFORE CHANGING THIS
-			// STRING. An earlier wording said the 2026 rate "is to be notified
-			// separately" — asserting as a FACT that no rate existed. That claim
-			// has been RETRACTED in the rate row's citation, and this Reason is the
-			// half a human actually reads: it is persisted onto every payslip. An
-			// employer told the rate does not exist will not go and read the
-			// G.S.R., which is the one action the deferral exists to provoke.
-			reason: "EDLI Scheme 2026: a contribution rate of 0.50% of EDLI wages with effect from 29 June 2026 is REPORTED, " +
-				"by legal-press accounts of the Ministry's notification of 1 July 2026 — SECONDARY SOURCES ONLY. This build " +
-				"has NOT read the primary G.S.R., so the charge is DEFERRED and NOT computed; the rate above is unverified " +
-				"and must not be posted on this footing. Do NOT read this deferral as 'no EDLI is payable': an employer " +
-				"liability of roughly Rs 75 per member per month is accruing unbooked, and the G.S.R. must be read and the " +
-				"rate verified before the next remittance",
+			// THIS REASON IS LATENT UNDER EVERY SHIPPED RULESET, and deliberately
+			// kept. EDLIContributionPct is ConfMedium in ss-2026-07 (S.O. 3581(E))
+			// and in both pre-2026 windows, so Use() does not error and this string
+			// is never read today. It stays because the rate is notified "from time
+			// to time ... taking into account the actuarial valuation of the
+			// Insurance Fund" (EDLI Scheme 2026 para 5(2)) — so a future window can
+			// legitimately open with the next rate unread, and this is the sentence
+			// the employer would then see.
+			//
+			// Keep it about the STATE, not about a particular figure: the last two
+			// versions of this string had to be rewritten because they asserted
+			// specifics that changed.
+			reason: "EDLI Scheme 2026 para 5(1)-(2): the employer's contribution rate is not fixed in the Scheme and is " +
+				"notified separately from time to time on actuarial valuation of the Insurance Fund. The rate applicable to " +
+				"this wage month could not be verified from a source this build has, so the premium is DEFERRED rather than " +
+				"computed. Do NOT read this as 'no EDLI is payable' — the charge is employer-funded, ceiling-capped at " +
+				"Rs 15,000 of wages, and was Rs 75 per member per month at 0.50%; find the current rate notification and " +
+				"verify it before the next remittance",
 		},
 		{
-			name:   ComponentEDLIAdminCharges,
-			rate:   rs.EDLIAdminChargePct,
-			wages:  edliWages,
-			reason: "EDLI Scheme 2026 administrative charges are to be notified separately by the Central Government",
+			name:  ComponentEDLIAdminCharges,
+			rate:  rs.EDLIAdminChargePct,
+			wages: edliWages,
+			reason: "EDLI Scheme 2026: NO administrative-charge rate has been notified. This is PENDING, NOT ABOLISHED — " +
+				"EPF Scheme 2026 para 29(2) caps a late-return fee at the administrative charges payable for the month, " +
+				"which presupposes the charge exists — so the charge is DEFERRED and no amount is booked. Do NOT substitute " +
+				"S.O. 2701(E) of 29 May 2026: that sets INSPECTION charges for EXEMPTED establishments, a different levy. " +
+				"The pre-2026 account-22 waiver does not survive the scheme it was granted under either",
 		},
 		{
-			name:   ComponentEPFAdminCharges,
-			rate:   rs.EPFAdminChargePct,
-			wages:  epfWages,
-			reason: "EPF Scheme 2026 administrative charges are to be notified separately by the Central Government",
+			name:  ComponentEPFAdminCharges,
+			rate:  rs.EPFAdminChargePct,
+			wages: epfWages,
+			reason: "EPF Scheme 2026: NO administrative-charge rate has been notified — the notifications of 1 July 2026 set " +
+				"CONTRIBUTION rates only. This is PENDING, NOT ABOLISHED (see para 29(2), which caps a late-return fee at " +
+				"the administrative charges payable for the month), so the charge is DEFERRED and no amount is booked. An " +
+				"amount that was Rs 500 per establishment per month under the superseded 1952 Scheme is therefore accruing " +
+				"unbooked. Do NOT substitute S.O. 2701(E)'s inspection charges (0.35%, min Rs 8,750) — different levy, " +
+				"exempted establishments only",
 		},
 	} {
 		v, err := u.rate.Use()

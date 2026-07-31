@@ -104,18 +104,28 @@ var wageMonth = payroll.WageMonth{Year: 2026, Month: 7}
 // THE VOUCHER FOR A RUN OF BOTH
 //
 //	Dr Salaries & Wages           2,00,000 + 18,000        = 2,18,000
-//	Dr Employer PF Contribution   (550 + 1,250) x 2        =    3,600
+//	Dr Employer PF Contribution   (550 + 1,250 + 75) x 2   =    3,750
 //	Dr Employer ESI Contribution  0 + 585                  =      585
 //	  Cr Salary Payable           1,81,444 + 16,065        = 1,97,509
 //	  Cr TDS on Salary Payable    16,756 + 0               =   16,756
-//	  Cr PF Payable               (1,800 + 550 + 1,250) x 2=    7,200
+//	  Cr PF Payable               (1,800 + 550 + 1,250
+//	                               + 75) x 2               =    7,350
 //	  Cr ESI Payable              0 + (135 + 585)          =      720
-//	                                        2,22,185 = 2,22,185
+//	                                        2,22,335 = 2,22,335
 //
-// The three EPFO CHARGES (the EDLI premium and the two administrative charges)
-// are DEFERRED rather than computed — the 2026 Schemes say each rate is to be
-// notified separately — so they carry no amount into the employer's debit here.
-// Their absence is asserted as three deferrals on the payslip, not as a zero.
+// THE 75 IS THE EDLI PREMIUM, and it is in both the employer's expense and the
+// liability because it is an employer cost: 0.50% of EDLI wages under S.O. 3581(E)
+// dated 1 July 2026, effective 29 June 2026. Both employees are at or above the
+// Rs 15,000 EDLI ceiling, so both pay the capped maximum. It may NOT be recovered
+// from wages (EDLI Scheme 2026 para 8). Note the rate is NOT in the Scheme itself —
+// G.S.R. 526(E) para 5(1)-(2) leaves it to a separate notification — which is why
+// this premium was deferred, and this voucher 150 lighter, until that notification
+// was identified.
+//
+// THE TWO ADMINISTRATIVE CHARGES are still DEFERRED rather than computed: no
+// standalone rate notification exists for either under the 2026 Schemes, so they
+// carry no amount into the employer's debit. Their absence is asserted as two
+// deferrals on the payslip, not as a zero.
 // ---------------------------------------------------------------------------
 
 const (
@@ -303,26 +313,35 @@ func TestPayRunPostsThroughTheLedgerAndBalances(t *testing.T) {
 		t.Fatalf("the pay run does not balance: debits %s != credits %s", debits.StringFixed(4), credits.StringFixed(4))
 	}
 	// Two employees: 2,00,000 + 18,000 gross, employer PF 1,800 each (550 EPF +
-	// 1,250 EPS), employer ESI 585 for the second only — the first is above the
-	// coverage ceiling. See the fixture header for the derivation of each.
-	if want := dec("222185"); !debits.Equal(want) {
-		t.Errorf("total debits = %s, want %s (2,18,000 gross + 3,600 employer PF + 585 employer ESI)",
+	// 1,250 EPS) PLUS a 75 EDLI premium each, employer ESI 585 for the second only
+	// — the first is above the coverage ceiling. See the fixture header for the
+	// derivation of each.
+	//
+	// THE EDLI PREMIUM IS PART OF THE EMPLOYER'S PF COST and was absent from these
+	// figures while its rate was unverified. S.O. 3581(E) of 1 July 2026 put it on
+	// record at 0.50% of EDLI wages; both employees are at or above the Rs 15,000
+	// ceiling, so it is the capped Rs 75 each. The two ADMINISTRATIVE charges are
+	// still deferred and still add nothing.
+	if want := dec("222335"); !debits.Equal(want) {
+		t.Errorf("total debits = %s, want %s (2,18,000 gross + 3,600 employer PF + 150 EDLI + 585 employer ESI)",
 			debits.StringFixed(4), want.StringFixed(4))
 	}
 
 	expect := map[string][2]string{
 		payrolldb.LedgerSalariesAndWages: {"218000", "0"},
-		payrolldb.LedgerEmployerPF:       {"3600", "0"},
-		payrolldb.LedgerEmployerESI:      {"585", "0"},
-		payrolldb.LedgerSalaryPayable:    {"0", "197509"},
+		// 3,600 employer PF + 150 EDLI premium (2 x 75).
+		payrolldb.LedgerEmployerPF:    {"3750", "0"},
+		payrolldb.LedgerEmployerESI:   {"585", "0"},
+		payrolldb.LedgerSalaryPayable: {"0", "197509"},
 		// 16,756 is employee A's s.392 deduction for July and employee B owes
 		// nothing: 1,50,800 of annual tax spread over the nine months remaining
 		// inclusive. It is the largest credit on the entry after net pay, and
 		// this is the only assertion in the package that it reaches the ledger
 		// the return is filed from rather than being netted into Salary Payable.
 		payrolldb.LedgerTDSOnSalaryPayable: {"0", "16756"},
-		payrolldb.LedgerPFPayable:          {"0", "7200"},
-		payrolldb.LedgerESIPayable:         {"0", "720"},
+		// 7,200 contributions (employee 3,600 + employer 3,600) + 150 EDLI premium.
+		payrolldb.LedgerPFPayable:  {"0", "7350"},
+		payrolldb.LedgerESIPayable: {"0", "720"},
 	}
 	for name, want := range expect {
 		got, ok := ps[name]
@@ -337,10 +356,15 @@ func TestPayRunPostsThroughTheLedgerAndBalances(t *testing.T) {
 	}
 
 	// (4) The employee's PF share must NOT appear as an expense. Employer PF
-	// expense is 3,600 (2 x 1,800); PF Payable is 7,200 (employee 3,600 +
-	// employer 3,600). If the employee share had been debited to expense the
-	// first figure would be 7,200 and the wage bill would be overstated.
-	if got := ps[payrolldb.LedgerEmployerPF][0]; !got.Equal(dec("3600")) {
+	// expense is 3,750 (2 x 1,800 contribution + 2 x 75 EDLI premium); PF Payable
+	// is 7,350 (employee 3,600 + employer 3,600 + EDLI 150). If the employee share
+	// had been debited to expense the first figure would be 7,350 and the wage bill
+	// would be overstated by 12% of the PF wage.
+	//
+	// Note the two figures are now 3,750 and 7,350 rather than 3,600 and 7,200: the
+	// EDLI premium is an employer cost, so it lands in BOTH — as expense and as
+	// liability — which is exactly why it does not disturb this comparison.
+	if got := ps[payrolldb.LedgerEmployerPF][0]; !got.Equal(dec("3750")) {
 		t.Errorf("Employer PF Contribution debited %s; the EMPLOYEE's share is not an employer cost — it is part of gross pay that is withheld, "+
 			"and debiting it would overstate the wage bill by 12%% of the PF wage", got.StringFixed(4))
 	}
@@ -791,14 +815,18 @@ func TestPayrollRegisterAndPayslipReadBack(t *testing.T) {
 	}
 	// THE DEFERRALS MUST REACH THE PAYSLIP. A blank where a number should be is
 	// a question the employee will ask, and the honest answer is "the rate has
-	// not been notified", not "zero". Three of the 2026 Schemes' rates are
-	// expressly to be notified separately — the EDLI contribution and the two
-	// administrative charges — and the engine refuses to invent any of them.
+	// not been notified", not "zero".
+	//
+	// TWO, NOT THREE. The EDLI CONTRIBUTION left this set when S.O. 3581(E) of
+	// 1 July 2026 put its rate on record (0.50% w.e.f. 29 June 2026) — it is now
+	// a booked component, and the assertion below that no unexpected deferral
+	// appears is what catches it silently returning here. What remains is the two
+	// ADMINISTRATIVE charges, for which no rate notification exists at all.
 	wantDeferrals := map[string]bool{
-		"EDLI_CONTRIBUTION": true, "EDLI_ADMIN_CHARGES": true, "EPF_ADMIN_CHARGES": true,
+		"EDLI_ADMIN_CHARGES": true, "EPF_ADMIN_CHARGES": true,
 	}
 	if len(slip.Deferrals) != len(wantDeferrals) {
-		t.Errorf("payslip carries %d deferral(s), want %d (EDLI contribution, EDLI admin charges, EPF admin charges) "+
+		t.Errorf("payslip carries %d deferral(s), want %d (EDLI admin charges, EPF admin charges) "+
 			"recorded as deferred rather than silently zero: %+v", len(slip.Deferrals), len(wantDeferrals), slip.Deferrals)
 	}
 	for _, d := range slip.Deferrals {

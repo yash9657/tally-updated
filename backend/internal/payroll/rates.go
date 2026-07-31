@@ -842,44 +842,45 @@ var ss202511 = SocialSecurityRuleSet{
 // superseded 1976/1952 Schemes even though the 2026 Schemes had been in force
 // for two days by then.
 //
-// THE FOUR UNNOTIFIED-RATE ROWS. Four rows here are ConfUnverified WITH A ZERO
+// THE THREE UNNOTIFIED-RATE ROWS. Three rows here are ConfUnverified WITH A ZERO
 // VALUE:
 //
-//	EDLIContributionPct, EDLIAdminChargePct, EPFAdminChargePct, EPFAdminChargeMin
+//	EDLIAdminChargePct, EPFAdminChargePct, EPFAdminChargeMin
 //
 // The zero is not a rate; it is a value that can never be consumed, because
 // Rate.Use refuses a ConfUnverified row and the engine returns ErrUnverifiedRate
-// wrapped with the citation. PFDerive still computes EDLI WAGES —
-// min(statutory wage, ceiling) is arithmetic, not a rate — and emits a
-// Deferral{Component: "EDLI_CONTRIBUTION"} where the number would have gone.
+// wrapped with the citation. PFDerive still computes the WAGE BASES —
+// min(statutory wage, ceiling) is arithmetic, not a rate — and emits a named
+// Deferral where each number would have gone.
 //
-// READ THIS BEFORE TOUCHING EDLIContributionPct. An earlier version of this
-// comment, and of that row's citation, asserted AS A FACT that the EDLI 2026
-// contribution rate was "to be notified separately" and had not been notified.
-// That is NO LONGER TRUE and stating it as fact was itself the defect: an
-// unverified zero dressed up as a settled nil is how a real liability goes
-// unbooked. What is now on record, from SECONDARY SOURCES ONLY (legal-press
-// reporting of the Ministry's notifications of 1 July 2026; no primary G.S.R.
-// text could be read from this environment):
+// EDLIContributionPct WAS THE FOURTH AND IS NOW CONSUMABLE. The history is worth
+// keeping, because the row was wrong in two opposite directions before it was
+// right:
 //
-//   - EDLI employer contribution 0.5% of wages, effective 29 June 2026.
-//   - EPS employer contribution 8.33% of wages, effective 29 June 2026.
-//   - EPF employee and employer contribution 12% of wages, expressed to take
-//     effect from 21 November 2025 (retrospective to the Code's commencement).
+//  1. It first asserted AS A FACT that the 2026 rate was "to be notified
+//     separately" and had not been notified. An unverified zero dressed up as a
+//     settled nil is how a real liability goes unbooked.
+//  2. It was then corrected to say a rate was REPORTED at 0.50% but unread, and
+//     kept refusing — the safe direction, but it left roughly Rs 75 per member
+//     per month accruing unbooked and called that a release blocker.
 //
-// The row below therefore stays ConfUnverified AND ITS CITATION NOW SAYS WHY:
-// not "the rate does not exist" but "a rate is reported at 0.50% and this build
-// has not read the primary text". Refusing to compute is the SAFE direction —
-// it produces no number and forces a human — while promoting the row on the
-// strength of a news report would charge an employer real money at a rate
-// nobody here has verified.
+// It is now 0.50% at ConfMedium, on S.O. 3581(E) of 1 July 2026. THE REASON THE
+// RATE WAS SO HARD TO FIND IS WORTH REMEMBERING: it is not in the Scheme.
+// G.S.R. 526(E) para 5(1)-(2) leaves the rate to a separate notification decided
+// on actuarial valuation, so reading the Scheme text finds nothing and invites
+// exactly mistake (1).
 //
-// PROMOTING IT IS A SCOPED CHANGE, NOT A ONE-LINE EDIT. Making
-// EDLIContributionPct usable also changes the engine's deferral set, and the
-// deferral set is asserted in three other places: the pf- corpus fixtures'
-// deferredComponents, PF_DEFERRED_COMPONENTS in corpora/validate.py, and
-// TestPFDerive_EDLIContributionIsDeferredNotGuessed. All four must move
-// together, in a change that cites the G.S.R. number and sets VerifiedOn.
+// WHY ConfMedium AND NOT ConfHigh, and why consumable at all. ConfMedium's own
+// definition is "believed correct but curated from a secondary source, or carried
+// forward across a law change whose text could not be read here" — and BOTH limbs
+// apply: the notification was read only through secondary reporting, and 0.50% is
+// the superseded 1976 Scheme para 7 rate carried forward unchanged. That is the
+// same footing the EPF 12% and EPS 8.33% rows already stand on. VerifiedOn stays
+// ZERO because no primary Gazette text was read; do not set it to make a test
+// pass. Upgrade to ConfHigh only when somebody reads S.O. 3581(E) itself.
+//
+// The three administrative-charge rows below did NOT move with it, and the
+// difference is evidential rather than a matter of degree — see their block.
 //
 // The ADMIN-CHARGE rows are a different case and remain deferred, but the reason
 // is now a DOCUMENTED NEGATIVE rather than an unexamined gap: as at 30 July 2026
@@ -967,16 +968,20 @@ var ss202607 = SocialSecurityRuleSet{
 		Confidence: ConfMedium,
 	},
 	EDLIContributionPct: Rate{
-		Value: dec("0"),
-		Citation: "EDLI Scheme, 2026 employer contribution: THE RATE IS NOT UNKNOWN AND IS NOT NIL. It is REPORTED at 0.50% of wages with effect " +
-			"from 29 June 2026, by legal-press accounts of the Ministry's notification of 1 July 2026 — SECONDARY SOURCE ONLY; no primary " +
-			"G.S.R. text could be read from this environment. This row is therefore UNVERIFIED and the component is DEFERRED: the zero is " +
-			"NOT a rate, it is a value Rate.Use refuses so that no code path can pick up a plausible number. Do NOT read this zero as 'EDLI " +
-			"is not payable' — a liability of about Rs 75 per member per month is accruing and must be booked once the G.S.R. is read. " +
-			"Promoting this row also requires updating the pf- corpus fixtures, PF_DEFERRED_COMPONENTS in corpora/validate.py and " +
-			"TestPFDerive_EDLIContributionIsDeferredNotGuessed; see the block comment above",
+		Value: dec("0.50"),
+		Citation: "EDLI Scheme, 2026 employer contribution 0.50% of EDLI wages, w.e.f. 29 June 2026 (the Scheme's commencement), by " +
+			"S.O. 3581(E) dated 1 July 2026. THE RATE IS NOT IN THE SCHEME ITSELF: G.S.R. 526(E) para 5(1)-(2) leaves it to be notified " +
+			"separately in consultation with the Central Board on actuarial valuation of the Insurance Fund, which is why looking only at the " +
+			"Scheme text finds no rate. S.O. 3581(E) sits in a same-day sequential block with S.O. 3580(E) (EPS 8.33%) and S.O. 3582(E) " +
+			"(EPF 12%), both independently confirmed and both matching the effective dates this table already held. Employer-funded only; it " +
+			"may not be deducted from or recovered from wages (para 8). Ceiling-capped at Rs 15,000/month, so the maximum is Rs 75 per member " +
+			"per month. SECONDARY SOURCE for the notification — no primary Gazette text could be read here (egazette.gov.in presents a " +
+			"certificate chain automated fetchers reject), so this is ConfMedium and VerifiedOn stays ZERO. It is nonetheless CONSUMABLE, on " +
+			"the same footing as the EPF 12% and EPS 8.33% rows and by ConfMedium's own definition (secondary-sourced, or carried across a " +
+			"law change whose text could not be read): 0.50% is not a new figure, it is the superseded 1976 Scheme para 7 rate carried " +
+			"forward unchanged. See docs/statutory/README.md",
 		From:       dateUTC(2026, time.June, 29),
-		Confidence: ConfUnverified,
+		Confidence: ConfMedium,
 	},
 	EDLIAdminChargePct: Rate{
 		Value: dec("0"),

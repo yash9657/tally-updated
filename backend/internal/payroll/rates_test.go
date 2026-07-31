@@ -604,14 +604,20 @@ func checkRate(t *testing.T, path string, r Rate) {
 	}
 }
 
-// TestUnverifiedRatesAreMarked pins the EDLI blocker in place.
+// TestUnverifiedRatesAreMarked pins the ADMINISTRATIVE-CHARGE blocker in place.
 //
-// The EDLI Scheme 2026 says its contribution rate will be notified separately.
-// It had not been notified when this table was written. The honest handling is a
-// REFUSAL carrying the citation, and the dishonest one — copying the superseded
-// 1976 Scheme's 0.50% up from ss-2019-07 — looks like a one-line fix that makes
-// a failing test pass. This test is what makes that fix fail instead: promoting
-// the row to MEDIUM or HIGH without a real notification breaks the build.
+// It used to pin the EDLI contribution too. That row was promoted once
+// S.O. 3581(E) of 1 July 2026 was identified (0.50% w.e.f. 29 June 2026), so it
+// is asserted the OTHER way now — see the consumable check below, which is what
+// stops a later change quietly demoting it and re-opening the unbooked liability.
+//
+// The three rows that remain: no standalone administrative-charge rate
+// notification exists under the 2026 Schemes as at 30 July 2026. The honest
+// handling is a REFUSAL carrying the citation. The dishonest one has TWO forms
+// now, and both look like a one-line fix that makes a failing test pass —
+// copying the superseded 1952/1976 0.50% / Rs 500 up from ss-2019-07, or copying
+// S.O. 2701(E)'s INSPECTION charges (EPF 0.35% min Rs 8,750), which are a
+// different levy on exempted establishments only. This test makes both fail.
 func TestUnverifiedRatesAreMarked(t *testing.T) {
 	rs, err := SocialSecurityFor(dateUTC(2026, time.July, 1))
 	if err != nil {
@@ -625,18 +631,18 @@ func TestUnverifiedRatesAreMarked(t *testing.T) {
 		name string
 		rate Rate
 	}{
-		{"EDLIContributionPct", rs.EDLIContributionPct},
 		{"EDLIAdminChargePct", rs.EDLIAdminChargePct},
 		{"EPFAdminChargePct", rs.EPFAdminChargePct},
 		{"EPFAdminChargeMin", rs.EPFAdminChargeMin},
 	} {
 		if c.rate.Confidence != ConfUnverified {
-			t.Errorf("ss-2026-07.%s has Confidence %q, want UNVERIFIED. NOTE WHAT THAT DOES AND DOES NOT CLAIM: "+
-				"for the EDLI CONTRIBUTION a rate of 0.50%% from 29 June 2026 IS reported, on secondary sources "+
-				"only, and this build has not read the primary G.S.R.; for the two ADMINISTRATIVE CHARGES and the "+
-				"minimum no rate of any kind could be found. Either way, promoting this row means charging an "+
-				"employer real money at a figure nobody here has verified. Promote it with the G.S.R. number and "+
-				"a VerifiedOn, together with the pf- corpus fixtures and PF_DEFERRED_COMPONENTS, or not at all",
+			t.Errorf("ss-2026-07.%s has Confidence %q, want UNVERIFIED. No standalone administrative-charge rate "+
+				"notification exists under the 2026 Schemes as at 30 July 2026; the three notifications of "+
+				"1 July 2026 set CONTRIBUTION rates only. Promoting this row means charging an employer real money "+
+				"at a figure nobody has. If a notification HAS now been issued, promote it with its number and "+
+				"together with the pf- corpus fixtures and PF_DEFERRED_COMPONENTS — but do NOT reach for "+
+				"S.O. 2701(E) (inspection charges, exempted establishments, a different levy) or the superseded "+
+				"1952/1976 figures",
 				c.name, c.rate.Confidence)
 		}
 		if _, err := c.rate.Use(); !errors.Is(err, ErrUnverifiedRate) {
@@ -647,6 +653,31 @@ func TestUnverifiedRatesAreMarked(t *testing.T) {
 				"hold nothing usable, so that code which bypasses Use() cannot pick up a plausible number",
 				c.name, c.rate.Value)
 		}
+	}
+
+	// THE EDLI CONTRIBUTION MUST STAY CONSUMABLE IN THE 2026 WINDOW.
+	//
+	// This is the opposite assertion from the loop above, and it is here because
+	// this row has been wrong in BOTH directions. It was once an unverified zero
+	// described as a settled nil (a liability silently unbooked); it was then a
+	// correct refusal that still left about Rs 75 per member per month accruing,
+	// which the handoff called a release blocker. Now that S.O. 3581(E) has been
+	// identified it computes — and a change that demoted it back to UNVERIFIED
+	// "to be safe" would re-open the blocker, so it fails here instead.
+	//
+	// VerifiedOn is deliberately NOT asserted non-zero: no primary Gazette text
+	// was read, and setting VerifiedOn to satisfy a test is exactly what the Rate
+	// doc forbids. ConfMedium is the honest level.
+	if rs.EDLIContributionPct.Confidence == ConfUnverified {
+		t.Error("ss-2026-07.EDLIContributionPct is UNVERIFIED again. It is 0.50% of EDLI wages w.e.f. " +
+			"29 June 2026 under S.O. 3581(E) dated 1 July 2026 — note the rate is NOT in G.S.R. 526(E), whose " +
+			"para 5(1)-(2) leaves it to a separate notification. Refusing it does not fail safe: it leaves about " +
+			"Rs 75 per member per month of employer liability accruing unbooked, with s.14B interest on top")
+	}
+	if v, err := rs.EDLIContributionPct.Use(); err != nil {
+		t.Errorf("ss-2026-07.EDLIContributionPct: Use() = %v, want the rate — the premium must be booked", err)
+	} else if v.String() != "0.5" {
+		t.Errorf("ss-2026-07.EDLIContributionPct = %s, want 0.5 (per cent of EDLI wages)", v)
 	}
 
 	// The negative control, on BOTH pre-2026 windows: the EDLI rate IS known
