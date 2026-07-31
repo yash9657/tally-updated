@@ -16,7 +16,7 @@ not summaries.
 | `form-140.pdf` | ✅ **here** (2026-07-30) | `https://www.incometaxindia.gov.in/documents/d/guest/fn-140` | The return's statutory anchors and its annexure's field NAMES. **It does NOT contain the four-digit payment codes** — see below. |
 | `form-140-faqs.pdf` | ✅ **here** (2026-07-30) | `https://www.incometaxindia.gov.in/documents/d/guest/form-140-faqs` | Nothing further; it carries no code list either (checked). |
 | `ita-2025-as-amended-fa-2026.pdf` | ✅ **here** (2026-07-30) | `https://www.incometaxindia.gov.in/documents/d/guest/income_tax_act_2025_as_amended_by_fa_act_2026-pdf` | The s.393 rate table **as amended**. This is now the authority to verify §9 against — better than a yes/no on "did FA 2026 change it", because whatever this text says IS current law. |
-| `fvu-file-format.pdf` | ❌ **STILL MISSING — THE ONE BLOCKER** | Protean/TIN, "**File Format for Form Number 140** Q1 to Q4 Version 1.0" (TY 2026-27 onwards) | Form 140's column order, **field widths** and its **Annexure 2 payment-code list**. **`docs/design/t6-model.md` invariant I-7 still refuses to emit a TDS return.** |
+| `form-140-file-format.xlsx` | ✅ **here** (2026-07-31) | Protean/TIN, "File Format for Form Number 140 (26Q) Q1 to Q4 Version 1.0" | **THE BLOCKER, CLEARED.** Annexure 2's payment codes, the annexure field list, and Annexure 6's reason codes. See below. |
 | `form-143-file-format.xlsx` | ✅ **here** (2026-07-31) | Protean/TIN, "File Format for Form Number 143 (27EQ) Q1 to Q4 Version 1.0" | The **TCS** return. Delivered more than expected — see the verified collection codes below. |
 
 ### ⚠️ What Form 140 does NOT contain — checked, not assumed
@@ -78,6 +78,88 @@ sections 392, 393, 394, 395, 397 and 516, verbatim from the Gazette text, via IC
 (`resource.cdn.icai.org`). All eight shipped TDS/TCS rates match it. See
 `docs/design/t6-model.md` §9. **The remaining gap is the FILE FORMAT, not the statute and no
 longer the form.**
+
+---
+
+## Form 140 (ex-26Q) — the TDS return. **THE BLOCKER IS CLEARED.**
+
+`form-140-file-format.xlsx`, prescribed format version 1.0, TY 2026-27 onwards.
+
+### ✅ THE SEVEN PAYMENT CODES — ALL CONFIRMED, from Annexure 2
+
+`HANDOFF-CLOSING-THE-GAP.md` §1.1 recorded these as **untrusted** because the secondary source
+carrying them got thresholds wrong. **The primary spec confirms all seven.**
+
+| Nature of payment | 2025-Act section | **Code** |
+|---|---|---|
+| Contractor — individual/HUF | 393(1) [Table: Sl. No. 6(i).D(a)] | **1023** |
+| Contractor — other than individual/HUF | 393(1) [Table: Sl. No. 6(i).D(b)] | **1024** |
+| Technical services / cinematographic-film royalty / call-centre operator | 393(1) [Table: Sl. No. 6(iii).D(a)] | **1026** |
+| Professional services, or a sum under s.26(2)(h) | 393(1) [Table: Sl. No. 6(iii).D(b)] | **1027** |
+| Commission or brokerage — **others** | 393(1) [Table: Sl. No. 1(ii)] | **1006** |
+| Rent — **machinery** etc., specified person | 393(1) [Table: Sl. No. 2(ii).D(a)] | **1008** |
+| Rent — **other than machinery**, specified person | 393(1) [Table: Sl. No. 2(ii).D(b)] | **1009** |
+
+**THE LIST BEING RIGHT DOES NOT MEAN THE REFUSAL WAS WASTED.** It means the process worked: the
+codes could not be *known* to be right, and the same source demonstrably got thresholds wrong.
+Had one code been off, an entire quarter's return would have been filed against the wrong
+section. Do not read this outcome as licence to trust the next secondary list.
+
+**Two codes worth having that were not on the ask list:**
+
+- **Directors' fees = `1028`**, at 393(1) [Table: Sl. No. 6(iii).D(b)] — the §2.3 gap 2 row.
+  **Note it shares its statutory limb with professional services (`1027`) but has its own
+  return code.** Same Table Sl. No., different code. An engine that derived the code from the
+  section alone would file directors' fees as professional fees.
+- **Commission/brokerage — INSURANCE = `1005`**, at Sl. No. 1(i), distinct from others (`1006`).
+
+Other codes recorded so nobody re-derives them: accumulated PF balance 1004, s.67(14) agreement
+1011, compensation on compulsory acquisition 1012, mutual-fund/business-trust income 1013–1018,
+interest on securities 1019, interest other than securities (senior citizen) 1020 / (other)
+1021 / 1022, dividend 1029, life-insurance sum 1030, purchase of goods 1031, business
+benefit/perquisite 1033 (in kind, tax pre-paid: 1034), e-commerce operator 1035, virtual digital
+asset 1037/1038, lottery & game winnings 1059, online-game winnings 1060/1061, horse-race
+winnings 1062, lottery-ticket commission 1063, cash withdrawals 1064/1065, s.80CCA(2)(a) 1066,
+**payment to a partner of a firm 1067**.
+
+### ✅ ANNEXURE 6 — the reason codes. **THIRTEEN FLAGS, NOT "A THROUGH D".**
+
+Field 32 of the deductee-detail record, `CHAR 1`, optional: *"Reason for non-deduction / Lower
+deduction / Higher deduction / Threshold / Transporter etc."* Annexure 6 is a **flag ×
+section-code validity matrix** — a flag is legal only against the section codes listed for it,
+which is a validation rule and not merely a lookup.
+
+| Flag | Meaning |
+|---|---|
+| **A** | Lower or no deduction on a **s.395(1) certificate** |
+| **B** | No deduction on a **s.393(6) declaration** |
+| **C** | **Higher rate under s.397(2)** for non-furnishing of PAN |
+| **D** | No/lower deduction per notification under s.194A(5) of the 1961 Act or s.400(1) of the 2025 Act |
+| **E** | Payment to a person in Board Circulars 3/2002, 11/2002 or 18/2017 |
+| **N** | Payment to a person in s.393(4) [Sl. No. 18], or the fifth proviso to s.194N of the 1961 Act |
+| **O** | No deduction per s.393(4) [Sl. No. 5] |
+| **P** | Dividend to a **business trust**, s.393(4) [Sl. No. 10(d)/(e)] |
+| **Q** | Payment to an entity in s.393(4) [Sl. No. 7(c)(v)] |
+| **S** | Tax deductible/collectible under another provision — s.393(1) [Sl. No. 8(ii)] Note 1(a) |
+| **T** | Deductee is a **transporter**; **PAN is mandatory** — s.393(4) [Sl. No. 8] |
+| **Y** | **Payment below the threshold limit** |
+| **Z** | No/lower deduction per notification under **s.400(1)** |
+
+**`Y` is the one the engine will use most** — it is how a sub-threshold payment is reported, and
+it is why §2.3's dual contractor threshold matters for the RETURN and not only for the
+deduction: a payment under ₹30,000 that crosses the ₹1,00,000 aggregate is no longer a `Y`.
+
+⚠️ **Annexure 6's own header reads "Code in FN 139"**, which appears to be a clerical error in
+the spec — this is the Form 140 file format and its Annexure 2 codes are the ones tabulated
+against the flags. Recorded rather than silently corrected.
+
+### The physical format
+
+**Identical in kind to Form 143's** (see below) — ASCII `.txt`, `^`-delimited variable width,
+CRLF, delimiter count = fields − 1, block-capital constants, amounts 2dp, **rate 4dp**, dates
+`ddmmyyyy` and never future, record types `FH`/`BH`/`CD`/`DD`. Form 140 additionally uses
+**Annexure 4** (deductor category), **Annexure 5** (state codes), **Annexure 3** (ministry) and
+**Annexure 7** (challan **minor head**).
 
 ---
 
