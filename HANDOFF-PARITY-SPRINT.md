@@ -7,10 +7,48 @@
 > procedures. `PLAN-TALLY-PARITY.md` §2 is the authority on machine constraints and §2.5 is
 > the **only** authority on migration numbers.
 >
-> **HEAD `53d1d3c` · migrations applied to `0046` · working tree clean · all gates green.**
+> **HEAD `8bfa23c` · migrations applied to `0050` · working tree clean · all gates green.**
+> **Backend 1885 pass / 0 SKIP / 0 FAIL · frontend 434 · `make verify` green.**
 >
 > **GOAL: close the Tally feature gap as fast as correctness allows.** This file is organised
 > around that: §2 is how to go fast, §4 is the wave plan, §5 is the workflow scripts.
+>
+> ### 🆕 WAVE 1 PROGRESS — §3.1 and §3.4 are DONE; §3.2 and §3.3 are NOT
+>
+> | Item | State |
+> |---|---|
+> | §3.4 BRS print | ✅ **shipped** (`ba00847`). `?ledger_id=` / `?all=true`, 400 with neither. |
+> | §3.1 gap 1 — contractor aggregate | ✅ engine + migration 0050 (`8bfa23c`) |
+> | §3.1 gap 2 — directors' fees | ✅ shipped (`eed561e`) |
+> | §3.1 gap 3 — TCS no-PAN 20% cap | ✅ shipped (`47e5afb`) |
+> | §3.1 gap 4 — s.394(2) declaration | ✅ engine + migration 0049 (`48b0633`) |
+> | §3.1 gap 5 — duty to deduct at all | ✅ engine + migration 0049 (`088157a`) |
+> | §3.2 T6 — register and Form 140 return | ❌ **not started.** Persistence exists; nothing reads it. |
+> | §3.3 T4 slice 2 | ❌ **not started.** Memo written: `docs/design/t4-slice2-model.md`. |
+>
+> ### ⛔ AND ONE THING THAT WAS NOT ON ANY LIST
+>
+> **`206C(1)-SCRAP` shipped at 1% and should have been 2% since 1 April 2026** — s.394(1)
+> [Table: Sl. No. 4], footnote 88, *"Substituted for '1%' by the Finance Act, 2026, w.e.f.
+> 1-4-2026"*. The engine under-collected by half on every scrap sale. Fixed in `47e5afb`.
+>
+> `t6-model.md` §9 had marked that row correct and concluded **"eight of eight shipped rules
+> are right"** — it had checked against the Act **as enacted**, and the amended edition was
+> already in `docs/statutory/`, named by that directory's own README as *"the authority to
+> verify §9 against"*. **The re-read had not been done.** It was seven of eight.
+>
+> > **The transferable lesson, now recorded in three places:** "verified against the Act" is
+> > not a durable claim. An Act is amended annually, so a verification is only as current as
+> > the *edition* it read. **Record the edition, and re-read on every Finance Act.**
+>
+> ### ⚠️ THE ENGINES ARE NOT WIRED INTO THE POST PATH
+>
+> Read this before believing the ✅s above. Gaps 1, 4 and 5 are **pure functions plus storage,
+> both proven, and nothing calls them yet**: `ledger.Post` still calls `TDSDerive`, not
+> `TDSDeriveCumulative`; it does not consult `MustDeduct`; and no code writes a `tds_deduction`
+> row. That is the same shape as the deferral `internal/ledger/tds.go` already discloses, and
+> **it must not be reported as a closed gap in production terms.** Wiring it is the first task
+> of the next session and is the precondition for T6's register.
 
 ---
 
@@ -64,10 +102,10 @@ because no single agent sees the whole surface. §5.3 is a workflow that checks 
 
 | | |
 |---|---|
-| HEAD | `53d1d3c` |
-| Migrations applied | `0046` (next free blocks: §2.5 of `PLAN-TALLY-PARITY.md`) |
-| Backend tests | **1841 pass / 0 SKIP / 0 FAIL** under `-v`, psql-bracketed |
-| Frontend tests | **431** |
+| HEAD | `8bfa23c` |
+| Migrations applied | `0050` (next free blocks: §2.5 of `PLAN-TALLY-PARITY.md`) |
+| Backend tests | **1885 pass / 0 SKIP / 0 FAIL** under `-v`, psql-bracketed |
+| Frontend tests | **434** |
 | Corpora | 11 independent corpora; `payroll=19`, `keystroke=32` |
 | `e2e:ui` | **45 flows**, green twice consecutively |
 | Live gates | `verify:demo` 31/31 · `verify:tenancy` 113/113 · `e2e:edit`/`numbering`/`state-code`/`ocr` OK · statutoryd freeze gate incl. durable-restart |

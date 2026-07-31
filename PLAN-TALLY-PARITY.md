@@ -163,7 +163,7 @@ than renumbering.**
 | T3 Orders + BOM | 0042–0044 | free |
 | T4 Bank reconciliation (slice 1) | 0045–0046 | consumed |
 | T5 e-Way Bill | 0047–0048 | free |
-| T6 TDS/TCS persistence | 0049–0050 | free |
+| T6 TDS/TCS persistence | 0049–0050 | **consumed** — 0049 liability + s.394(2) declarations, 0050 `tds_deduction` |
 | T8 Multi-currency | 0051–0052 | free |
 | T9 FIFO/LIFO | 0053 | free |
 | T10 Stock groups + units | 0054–0055 | free |
