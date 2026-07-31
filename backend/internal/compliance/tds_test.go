@@ -253,3 +253,144 @@ func TestTDSRuleSet_DeducteeSplitOnlyWhere194C(t *testing.T) {
 		t.Errorf("194C threshold drifted: %s", rs.Sections["194C"].PerTxnThreshold)
 	}
 }
+
+// TestEveryTDSSectionHasAReturnCode makes the empty-code branch of TDSDerive
+// unreachable for a shipped ruleset.
+//
+// TDSDerive tolerates a missing code — the DEDUCTION is still right, and
+// refusing to compute it would be the wrong remedy for a gap in a static
+// reporting table. This test is what turns that tolerance from a silent hole
+// into a build failure: add a section without adding its Annexure 2 code and
+// the suite says so, rather than a quarter's return going out with a blank
+// field.
+func TestEveryTDSSectionHasAReturnCode(t *testing.T) {
+	rs, err := LoadTDSRuleSet("tds-2026-04")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	for name := range rs.Sections {
+		for _, dt := range []string{DeducteeIndHUF, DeducteeOther} {
+			code, err := TDSReturnCode(name, dt)
+			if err != nil {
+				t.Errorf("section %q (%s) has no Form 140 payment code: %v — a deduction that "+
+					"cannot be reported is one the deductee gets no credit for", name, dt, err)
+				continue
+			}
+			if len(code) != 4 {
+				t.Errorf("section %q (%s) code %q is not four digits; Annexure 2 codes are "+
+					"four-digit", name, dt, code)
+			}
+		}
+	}
+}
+
+// TestDirectorsFeesAndProfessionalFeesShareALimbAndDifferByCode is THE test for
+// §3.1 gap 2, and it is deliberately shaped around the trap rather than around
+// the feature.
+//
+// s.393(1) [Table: Sl. No. 6(iii).D(b)] covers BOTH professional services and a
+// director's remuneration, at the SAME 10%. Everything an engine can derive from
+// the section is therefore identical between them. What differs is the Form 140
+// payment code — 1027 against 1028 — and the threshold, which is ₹50,000 for
+// professional services and Nil for a director.
+//
+// So an implementation that derives the code from the section passes every
+// rate assertion and still files directors' fees as professional fees.
+func TestDirectorsFeesAndProfessionalFeesShareALimbAndDifferByCode(t *testing.T) {
+	rs, err := LoadTDSRuleSet("tds-2026-04")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	// The premise: the two really are the same rate. If this ever fails, the
+	// rest of this test is no longer testing what it claims to.
+	p, d := rs.Sections["194J-P"], rs.Sections["194J-D"]
+	if !p.RateOther.Equal(d.RateOther) {
+		t.Fatalf("PREMISE BROKEN: 194J-P is %s%% and 194J-D is %s%%. They are the same statutory "+
+			"limb 6(iii).D(b) and this test's whole point is that the rate cannot tell them "+
+			"apart", p.RateOther, d.RateOther)
+	}
+
+	// The codes must differ.
+	pc, err := TDSReturnCode("194J-P", DeducteeOther)
+	if err != nil {
+		t.Fatalf("professional code: %v", err)
+	}
+	dc, err := TDSReturnCode("194J-D", DeducteeOther)
+	if err != nil {
+		t.Fatalf("director code: %v", err)
+	}
+	if pc != "1027" {
+		t.Errorf("professional services code = %q, want 1027 (Form 140 Annexure 2)", pc)
+	}
+	if dc != "1028" {
+		t.Errorf("directors' fees code = %q, want 1028 (Form 140 Annexure 2)", dc)
+	}
+	if pc == dc {
+		t.Fatalf("both natures of payment resolved to code %q. The code is being derived from "+
+			"the SECTION, which cannot distinguish them, and every director's fee in the "+
+			"quarter will be filed as a professional fee", pc)
+	}
+
+	// The thresholds must differ, and in the direction that costs money. A
+	// ₹10,000 sitting fee attracts ₹1,000; the same sum as a professional fee
+	// attracts nothing.
+	fee := decimal.RequireFromString("10000")
+	dres, err := TDSDerive(TDSInput{
+		Section: "194J-D", DeducteeType: DeducteeOther, PANAvailable: true, TaxableAmount: fee,
+	}, rs)
+	if err != nil {
+		t.Fatalf("derive director: %v", err)
+	}
+	if !dres.Applied || !dres.TDS.Equal(decimal.RequireFromString("1000")) {
+		t.Errorf("a 10,000 director's fee deducted %s (applied=%v), want 1000: the threshold at "+
+			"Sl. No. 6(iii) col. D '(ii) for (c) of Col. B' is Nil", dres.TDS, dres.Applied)
+	}
+	if dres.ReturnCode != "1028" {
+		t.Errorf("the derived result carries code %q, want 1028", dres.ReturnCode)
+	}
+
+	pres, err := TDSDerive(TDSInput{
+		Section: "194J-P", DeducteeType: DeducteeOther, PANAvailable: true, TaxableAmount: fee,
+	}, rs)
+	if err != nil {
+		t.Fatalf("derive professional: %v", err)
+	}
+	if pres.Applied {
+		t.Errorf("a 10,000 PROFESSIONAL fee deducted %s, want nothing: its threshold is 50,000. "+
+			"If this fires, the Nil threshold has been applied to the wrong row", pres.TDS)
+	}
+}
+
+// TestContractorReturnCodeSplitsByDeducteeType pins the second reason the code
+// table is not a derivation: 194C's code depends on WHO was paid, not only on
+// what for.
+func TestContractorReturnCodeSplitsByDeducteeType(t *testing.T) {
+	ind, err := TDSReturnCode("194C", DeducteeIndHUF)
+	if err != nil {
+		t.Fatalf("ind/HUF: %v", err)
+	}
+	oth, err := TDSReturnCode("194C", DeducteeOther)
+	if err != nil {
+		t.Fatalf("other: %v", err)
+	}
+	if ind != "1023" || oth != "1024" {
+		t.Errorf("194C codes = (%q, %q), want (1023, 1024) per Form 140 Annexure 2", ind, oth)
+	}
+	if ind == oth {
+		t.Error("both deductee types resolved to one contractor code; Annexure 2 splits them and " +
+			"a single code files half the contractor payments under the wrong nature of payment")
+	}
+}
+
+// TestTDSReturnCodeRefusesRatherThanGuessing pins that an unknown section is an
+// error and not a plausible-looking code.
+func TestTDSReturnCodeRefusesRatherThanGuessing(t *testing.T) {
+	if _, err := TDSReturnCode("194Q", DeducteeOther); !errors.Is(err, ErrNoReturnCode) {
+		t.Errorf("an unmodelled section returned %v, want ErrNoReturnCode", err)
+	}
+	if _, err := TDSReturnCode("194C", "PARTNERSHIP"); !errors.Is(err, ErrNoReturnCode) {
+		t.Errorf("an unknown deductee type returned %v, want ErrNoReturnCode: guessing between "+
+			"1023 and 1024 here would file against the wrong nature of payment", err)
+	}
+}

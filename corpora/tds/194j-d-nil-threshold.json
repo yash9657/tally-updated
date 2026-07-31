@@ -1,0 +1,18 @@
+{
+  "id": "194j-d-nil-threshold",
+  "description": "The NIL threshold at s.393(1) [Table: Sl. No. 6(iii)] col. D, '(ii) for (c) of Col. B: Nil.' A director's sitting fee of 1,000 attracts deduction, where the SAME 10% rate under 6(iii)(b) professional services would not until 50,000. This is the fixture that pins the difference between the two codes being a real one: 1,000 x 10% = 100. Hand-computed. A threshold of zero with the strict 'exceeds' test means any positive sum is deducted upon.",
+  "rulesetVersion": "tds-2026-04",
+  "input": {
+    "section": "194J-D",
+    "deducteeType": "IND_HUF",
+    "panAvailable": true,
+    "taxableAmount": "1000.0000"
+  },
+  "expected": {
+    "tds": "100.0000",
+    "ratePct": "10",
+    "threshold": "0.0000",
+    "basis": "NIL",
+    "applied": true
+  }
+}

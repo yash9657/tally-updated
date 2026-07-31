@@ -259,16 +259,38 @@ def validate_tax(path: Path, case: dict) -> None:
 TDS_RULESET_VERSION = "tds-2026-04"
 TCS_RULESET_VERSION = "tcs-2026-04"
 
-THRESHOLD_BASES = {"PER_TXN", "ANNUAL", "MONTHLY"}
+THRESHOLD_BASES = {"PER_TXN", "ANNUAL", "MONTHLY", "NIL"}
 
 # section -> (rate for individual/HUF, rate for others, threshold, basis)
+#
+# 194J-D is directors' remuneration, s.393(1) [Table: Sl. No. 6(iii)(c)], at the
+# 10% of limb (b) and a threshold col. D states as "Nil". Its basis is NIL and
+# not "PER_TXN with a limit of zero": the statute sets no per-payment measure
+# for this row, and a cumulative engine must be able to tell the two apart.
 TDS_RATES: dict[str, tuple[Decimal, Decimal, Decimal, str]] = {
     "194C": (Decimal("1"), Decimal("2"), Decimal("30000"), "PER_TXN"),
     "194J-P": (Decimal("10"), Decimal("10"), Decimal("50000"), "ANNUAL"),
     "194J-T": (Decimal("2"), Decimal("2"), Decimal("50000"), "ANNUAL"),
+    "194J-D": (Decimal("10"), Decimal("10"), Decimal("0"), "NIL"),
     "194H": (Decimal("2"), Decimal("2"), Decimal("20000"), "ANNUAL"),
     "194I-A": (Decimal("2"), Decimal("2"), Decimal("50000"), "MONTHLY"),
     "194I-B": (Decimal("10"), Decimal("10"), Decimal("50000"), "MONTHLY"),
+}
+
+# section -> {deductee type -> Form 140 Annexure 2 payment code}.
+#
+# AN INDEPENDENT RESTATEMENT, like the rate tables above, and for a sharper
+# reason: 194J-P and 194J-D are the SAME statutory limb at the SAME rate and
+# differ only by code, so the rate tables cannot catch a mix-up between them.
+# This is the only oracle that can.
+TDS_RETURN_CODES: dict[str, dict[str, str]] = {
+    "194C": {"IND_HUF": "1023", "OTHER": "1024"},
+    "194J-T": {"IND_HUF": "1026", "OTHER": "1026"},
+    "194J-P": {"IND_HUF": "1027", "OTHER": "1027"},
+    "194J-D": {"IND_HUF": "1028", "OTHER": "1028"},
+    "194H": {"IND_HUF": "1006", "OTHER": "1006"},
+    "194I-A": {"IND_HUF": "1008", "OTHER": "1008"},
+    "194I-B": {"IND_HUF": "1009", "OTHER": "1009"},
 }
 # s.206AA(1): no PAN -> the HIGHER of the rate in force and 20%.
 TDS_NO_PAN_FLOOR = Decimal("20")

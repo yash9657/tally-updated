@@ -1,0 +1,18 @@
+{
+  "id": "194j-d-directors-fees",
+  "description": "s.393(1) [Table: Sl. No. 6(iii)(c)] of the Income-tax Act 2025 as amended by the Finance Act 2026: 'remuneration or fees or commission by whatever name called, other than those on which tax is deductible under section 392, to a director of a company'. Rate limb (b), '10% of such sum in cases other than (a)'. Form 140 Annexure 2 payment code 1028 - NOT 1027, though both share limb 6(iii).D(b). 50,000 x 10% = 5,000. Hand-computed.",
+  "rulesetVersion": "tds-2026-04",
+  "input": {
+    "section": "194J-D",
+    "deducteeType": "OTHER",
+    "panAvailable": true,
+    "taxableAmount": "50000.0000"
+  },
+  "expected": {
+    "tds": "5000.0000",
+    "ratePct": "10",
+    "threshold": "0.0000",
+    "basis": "NIL",
+    "applied": true
+  }
+}

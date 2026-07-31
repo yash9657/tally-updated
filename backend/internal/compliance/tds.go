@@ -7,30 +7,60 @@
 // the atomic voucher-post transaction.
 //
 // ---------------------------------------------------------------------------
-// RATE PROVENANCE — READ BEFORE RELEASE
+// RATE PROVENANCE — VERIFIED AGAINST THE AMENDED ACT
 // ---------------------------------------------------------------------------
-// The section/rate/threshold table below (ruleset "tds-2026-04", FY 2026-27 /
-// AY 2027-28) was curated OFFLINE from model knowledge with a training cutoff
-// of January 2026. It was NOT read out of a statutory text, a gazette, or a
-// live source: this build machine has no network access and RESEARCH.md carries
-// no TDS rate table (it documents only TallyPrime's TDS *setup UI*).
+// The table below (ruleset "tds-2026-04") was originally curated offline from
+// model knowledge. It has since been read against PRIMARY TEXT:
+// docs/statutory/ita-2025-as-amended-fa-2026.pdf — the Income-tax Act 2025 as
+// amended by the Finance Act 2026 — s.393(1) Table "FOR PAYMENTS TO RESIDENT"
+// and s.397(2). Working: docs/design/t6-model.md §9 and t6-gaps-model.md §0.
+//
+// ALL SIX ORIGINAL TDS RATES ARE CONFIRMED, including the two the original
+// annotation trusted least (194H's 2%/20,000 and 194I's monthly 50,000). None
+// of the rows we ship carries a Finance Act 2026 footnote, so the amendment did
+// not move them. The COLLECTION side was not so lucky — scrap TCS was wrong;
+// see tcs.go.
 //
 // Each fixture in corpora/tds/*.json carries the statutory citation in its
-// `description` field. The rates MUST be re-verified against the bare Act /
-// CBDT rate chart before this engine is used on real books. A per-rule
-// confidence annotation is recorded in the tdsRegistry doc comment below;
-// start any review with the MEDIUM-confidence rows.
+// `description` field.
+//
+// ⚠️ A VERIFICATION IS ONLY AS CURRENT AS THE EDITION IT READ. An earlier pass
+// checked these against the Act AS ENACTED and reported "eight of eight rules
+// right"; the Finance Act 2026 had by then changed one. Record the edition, and
+// re-read on every Finance Act.
+//
+// ⚠️ THE SECTION KEYS BELOW NAME A REPEALED ACT. "194C", "194J-P" and the rest
+// are 1961-Act nomenclature; the statute in force is the 2025 Act and the return
+// keys off s.393/394 Table Sl. Nos. The four-digit codes in tdsReturnCodes are
+// the bridge. Renaming is held for T6 so names and codes move in one reviewable
+// step (PLAN-TALLY-PARITY.md open item 10) — do not do it piecemeal here.
 //
 // ---------------------------------------------------------------------------
 // v1 SCOPE / DISCLOSED APPROXIMATION
 // ---------------------------------------------------------------------------
-// v1 applies every threshold PER TRANSACTION. Only s.194C(5)'s 30,000 limit is
-// genuinely a per-single-payment limit. 194J and 194H limits are statutorily
-// ANNUAL aggregates and 194I's is a MONTHLY limit, so v1 UNDER-deducts on a
-// stream of small payments that aggregate past the limit. Annual/monthly
-// cumulation is a disclosed deferral (IMPLEMENTATION_PLAN.md §7.5). The
-// ThresholdBasis field makes the approximation machine-visible so a future
-// cumulative engine has the metadata it needs.
+// v1 applies every threshold PER TRANSACTION, and this UNDER-DEDUCTS.
+//
+// THE APPROXIMATION IS WIDER THAN THIS COMMENT USED TO CLAIM. It said only
+// 194C's limit was genuinely per-payment and the others were annual or monthly.
+// The chapeau of s.393(1)(a) is broader than that: tax is due
+//
+//	"on the ENTIRE amount of such income or sum, where the amount OR AGGREGATE
+//	 OF AMOUNTS exceeds the threshold limit specified in column D"
+//
+// — which makes aggregation the rule for EVERY row of the s.393 Table, not a
+// property of particular ones. Sl. No. 6(i) (contractors) is merely the only row
+// stating TWO limits: ₹30,000 for any single sum AND ₹1,00,000 in the aggregate.
+//
+// Two consequences worth stating plainly, because both cost the deductor money:
+//
+//   - Twenty ₹20,000 contractor bills attract NOTHING here, where the statute
+//     demands deduction once the aggregate passes ₹1,00,000.
+//   - "On the entire amount" means the crossing payment must CATCH UP the
+//     earlier under-deducted base, not merely start deducting prospectively.
+//
+// Cumulation needs stored state (an aggregate per deductee, section and tax
+// year), which is why it is T6 work and not a change to this pure function.
+// ThresholdBasis makes the approximation machine-visible in the meantime.
 //
 // v1 also PERSISTS NOTHING: the ledger derives and verifies a posted TDS leg
 // but no schema records the section / deductee / derived amount, so no report
@@ -72,6 +102,16 @@ const (
 	// BasisMonthly: the limit is per month (194I after Finance Act 2025); v1
 	// approximates it per transaction.
 	BasisMonthly ThresholdBasis = "MONTHLY"
+	// BasisNil: there is NO threshold — s.393(1) Table col. D reads "Nil" — so
+	// any positive sum attracts deduction and no cumulation question arises.
+	//
+	// It is a distinct value rather than "PER_TXN with a limit of zero" because
+	// those two are different statements about the law. PER_TXN asserts that the
+	// statute measures a per-payment limit, which for a Nil-threshold row it does
+	// not; and a future cumulative engine reading Basis must be able to tell
+	// "this row needs no aggregate" from "this row's aggregate is a per-payment
+	// one". Directors' fees (Sl. No. 6(iii)(c)) is the first such row.
+	BasisNil ThresholdBasis = "NIL"
 )
 
 // TDSInput is the complete, self-contained input to TDSDerive.
@@ -100,6 +140,18 @@ type TDSResult struct {
 	Basis ThresholdBasis
 	// Applied is false when the amount did not exceed the threshold.
 	Applied bool
+	// ReturnCode is the Form 140 Annexure 2 payment code for this deduction —
+	// see TDSReturnCode for why it is neither derived from the section nor
+	// derived from the section alone.
+	//
+	// It is carried on the RESULT so that the code and the amount are decided at
+	// the same moment, from the same inputs. A return builder that looked the
+	// code up later, from a stored section, would be re-making a decision this
+	// function already made, and the two could disagree.
+	//
+	// Empty only when the section has no code, which TestEveryTDSSectionHasA
+	// ReturnCode makes unreachable for a shipped ruleset.
+	ReturnCode string
 }
 
 // sectionRule is one nature-of-payment row of a TDSRuleSet.
@@ -157,8 +209,18 @@ func pct(s string) decimal.Decimal { return decimal.RequireFromString(s) }
 //	                                   THRESHOLD: MEDIUM.
 //	194I-B  rent of land/building/     10%, 50,000 per MONTH — s.194I(b). RATE:
 //	        furniture/fittings         HIGH. THRESHOLD: MEDIUM.
+//	194J-D  remuneration, fees or       10%, threshold NIL — s.393(1) [Table:
+//	        commission to a DIRECTOR    Sl. No. 6(iii)(c)], rate limb (b) "10% of
+//	        of a company, other than    such sum in cases other than (a)",
+//	        salary under s.392          threshold "(ii) for (c) of Col. B: Nil."
+//	                                    VERIFIED against the amended Act.
 //
 // s.206AA no-PAN floor 20% — HIGH confidence.
+//
+// ⚠️ 194J-D SHARES ITS STATUTORY LIMB WITH 194J-P. Both are Sl. No. 6(iii).D(b)
+// at 10%, and they differ ONLY in the nature of the payment — but they have
+// DIFFERENT return codes (1028 vs 1027). An engine deriving the code from the
+// section files directors' fees as professional fees. See TDSReturnCode.
 var tdsRegistry = map[string]TDSRuleSet{
 	"tds-2026-04": {
 		Version: "tds-2026-04",
@@ -169,9 +231,78 @@ var tdsRegistry = map[string]TDSRuleSet{
 			"194H":   {RateIndHUF: pct("2"), RateOther: pct("2"), PerTxnThreshold: pct("20000.0000"), Basis: BasisAnnual},
 			"194I-A": {RateIndHUF: pct("2"), RateOther: pct("2"), PerTxnThreshold: pct("50000.0000"), Basis: BasisMonthly},
 			"194I-B": {RateIndHUF: pct("10"), RateOther: pct("10"), PerTxnThreshold: pct("50000.0000"), Basis: BasisMonthly},
+			"194J-D": {RateIndHUF: pct("10"), RateOther: pct("10"), PerTxnThreshold: pct("0.0000"), Basis: BasisNil},
 		},
 		NoPANFloorPct: pct("20"),
 	},
+}
+
+// ErrNoReturnCode is returned when a section has no Form 140 payment code. It is
+// distinct from ErrUnknownSection: "this section is not in the ruleset" and
+// "this section cannot be reported in the return" are different faults, and the
+// second one must never be answered with a plausible-looking code.
+var ErrNoReturnCode = errors.New("compliance: no Form 140 payment code for this section")
+
+// tdsReturnCodes maps a nature of payment to its Form 140 Annexure 2 payment
+// code.
+//
+// SOURCE: docs/statutory/form-140-file-format.xlsx, Annexure 2 ("Nature of
+// Payment | Section | Section code to be used in the return"), prescribed
+// format version 1.0, TY 2026-27 onwards. Tabulated in
+// docs/statutory/README.md. NOT from a secondary list.
+//
+// TWO REASONS THIS IS A TABLE AND NOT A DERIVATION, both load-bearing:
+//
+//  1. THE CODE IS NOT A FUNCTION OF THE SECTION. 194J-P (professional services)
+//     and 194J-D (directors' remuneration) are BOTH s.393(1) [Table: Sl. No.
+//     6(iii).D(b)] at 10% — same limb, same rate — and carry codes 1027 and
+//     1028. Deriving from the section alone files a director's sitting fee as a
+//     professional fee, under a code the department maps to a different nature
+//     of payment.
+//
+//  2. THE CODE IS NOT A FUNCTION OF THE SECTION ALONE EITHER. Contractor
+//     payments split by DEDUCTEE TYPE: 1023 for individual/HUF, 1024 for any
+//     other person. That is the same split the rate already makes, but it has to
+//     be made twice because nothing guarantees the two stay aligned.
+//
+// So the key is (section, deductee type) and the map is keyed on the pair.
+var tdsReturnCodes = map[string]map[string]string{
+	// s.393(1) [Table: Sl. No. 6(i).D(a)] and (b).
+	"194C": {DeducteeIndHUF: "1023", DeducteeOther: "1024"},
+	// Sl. No. 6(iii).D(a) — technical services, cinematographic-film royalty,
+	// call-centre operator.
+	"194J-T": {DeducteeIndHUF: "1026", DeducteeOther: "1026"},
+	// Sl. No. 6(iii).D(b) — professional services, or a sum under s.26(2)(h).
+	"194J-P": {DeducteeIndHUF: "1027", DeducteeOther: "1027"},
+	// Sl. No. 6(iii).D(b) AS WELL — see reason 1 above. Different code.
+	"194J-D": {DeducteeIndHUF: "1028", DeducteeOther: "1028"},
+	// Sl. No. 1(ii) — commission or brokerage, OTHERS. Insurance commission is
+	// Sl. No. 1(i) and code 1005; this engine does not model it, so a 1005
+	// payment must not be routed here.
+	"194H": {DeducteeIndHUF: "1006", DeducteeOther: "1006"},
+	// Sl. No. 2(ii).D(a) — machinery, plant or equipment.
+	"194I-A": {DeducteeIndHUF: "1008", DeducteeOther: "1008"},
+	// Sl. No. 2(ii).D(b) — land, building, furniture or fittings.
+	"194I-B": {DeducteeIndHUF: "1009", DeducteeOther: "1009"},
+}
+
+// TDSReturnCode returns the Form 140 Annexure 2 payment code for a nature of
+// payment and deductee type.
+//
+// It REFUSES rather than guessing. A return filed under a wrong payment code is
+// filed against the wrong nature of payment for every deductee in it, and the
+// deductee's credit is what breaks.
+func TDSReturnCode(section, deducteeType string) (string, error) {
+	byType, ok := tdsReturnCodes[section]
+	if !ok {
+		return "", fmt.Errorf("%w: section %q", ErrNoReturnCode, section)
+	}
+	code, ok := byType[deducteeType]
+	if !ok {
+		return "", fmt.Errorf("%w: section %q has no code for deductee type %q",
+			ErrNoReturnCode, section, deducteeType)
+	}
+	return code, nil
 }
 
 // LoadTDSRuleSet returns the registered TDSRuleSet for the given version, or
@@ -232,11 +363,19 @@ func TDSDerive(in TDSInput, rs TDSRuleSet) (TDSResult, error) {
 		rate = rs.NoPANFloorPct
 	}
 
+	// Best-effort: a section with no code yields an empty string rather than an
+	// error, because the DEDUCTION is still correct and refusing to compute it
+	// would be the wrong remedy for a reporting-table gap. The invariant that
+	// every shipped section HAS a code is pinned by a test instead, which is
+	// where a gap in a static table belongs.
+	code, _ := TDSReturnCode(in.Section, in.DeducteeType)
+
 	res := TDSResult{
-		TDS:       decimal.Zero,
-		RatePct:   rate,
-		Threshold: rule.PerTxnThreshold,
-		Basis:     rule.Basis,
+		TDS:        decimal.Zero,
+		RatePct:    rate,
+		Threshold:  rule.PerTxnThreshold,
+		Basis:      rule.Basis,
+		ReturnCode: code,
 	}
 	if !in.TaxableAmount.GreaterThan(rule.PerTxnThreshold) {
 		return res, nil
