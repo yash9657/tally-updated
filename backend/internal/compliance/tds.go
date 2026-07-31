@@ -152,6 +152,27 @@ type TDSResult struct {
 	// Empty only when the section has no code, which TestEveryTDSSectionHasA
 	// ReturnCode makes unreachable for a shipped ruleset.
 	ReturnCode string
+
+	// ----- Cumulation (aggregate.go). Zero-valued from plain TDSDerive, which
+	// knows nothing about prior payments; populated by TDSDeriveCumulative.
+
+	// AggregateBaseRupees is the cumulative amount paid or credited to this
+	// deductee under this section in this tax year, INCLUDING this payment.
+	AggregateBaseRupees decimal.Decimal
+	// AggregateThresholdRupees is the aggregate limit that was tested. For
+	// contractors this is limb (b)'s ₹1,00,000; for every other row it is the
+	// section's single stated threshold, which the s.393(1)(a) chapeau applies
+	// to "the amount or aggregate of amounts" alike.
+	AggregateThresholdRupees decimal.Decimal
+	// AggregateCrossed is true when THIS payment took the cumulative total past
+	// the aggregate limit — i.e. when a catch-up was charged.
+	//
+	// It matters to the RETURN and not only to the arithmetic: Annexure 6 flag
+	// `Y` means "payment below the threshold limit", and a sub-₹30,000 payment
+	// that crosses the ₹1,00,000 aggregate stops being a Y.
+	AggregateCrossed bool
+	// CatchUpBaseRupees is the EARLIER base this payment reached back to tax.
+	CatchUpBaseRupees decimal.Decimal
 }
 
 // sectionRule is one nature-of-payment row of a TDSRuleSet.

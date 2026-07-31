@@ -321,6 +321,20 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 			        'AAAPZ1234C', 'testdb')`,
 			[]any{id(), cid, ledgerID}},
 
+		// Migration 0050 — one deduction fact. tds_amount_rupees is deliberately
+		// NON-zero here even though a zero row is legitimate: the
+		// amount_within_base CHECK and the four-digit return_code shape are only
+		// exercised by a row that actually carries tax.
+		{"tds_deduction", `INSERT INTO tds_deduction
+			(id, company_id, voucher_id, leg_seq, deductee_ledger_id, section,
+			 deductee_type, tax_year_start, deduction_date, taxable_base_rupees,
+			 rate_pct, tds_amount_rupees, return_code, pan_available,
+			 ruleset_version, recorded_by)
+			VALUES ($1, $2, $3, 0, $4, '194C', 'OTHER', 2026,
+			        DATE '2026-07-10', 50000, 2, 1000, '1024', true,
+			        'tds-2026-04', 'testdb')`,
+			[]any{id(), cid, voucherID, ledgerID}},
+
 		// ------------------------------------------------------------------
 		// Track 2 — the inward-supply side: a GSTR-2B statement, one document
 		// in it, an IMS action against that document, and the GSTR-3B filing
