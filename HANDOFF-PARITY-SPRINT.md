@@ -1,6 +1,17 @@
 # HANDOFF — THE PARITY SPRINT
 
-> **This file is the entry point.** It supersedes `HANDOFF-CLOSING-THE-GAP.md`, whose §3.1 is
+> # ⛔ SUPERSEDED — START AT `HANDOFF-FEATURE-LOCK.md`
+>
+> That file is the plan of record: the goal, the complete gap inventory (including the ~16
+> tracks nobody had ever enumerated), the sequence, and the definition of done that this
+> file's process was not enforcing — **a feature is done when a USER CAN REACH IT**, not when
+> the engine is correct.
+>
+> Keep reading here only for the *reasoning* behind specific decisions (§2.1 machine limits,
+> §2.4 the twelve registration points, §5 the workflow scripts). Its Wave-1 status table is
+> accurate as of `09b37c7`.
+
+> **~~This file is the entry point.~~** It supersedes `HANDOFF-CLOSING-THE-GAP.md`, whose §3.1 is
 > now done. That file remains the authority on the *gap inventory* (its §3.4–3.9) and on the
 > lessons in its §6 — read those; they are not repeated here in full.
 > `HANDOFF-T1-PRINTING.md` §3.2 and §5 remain the authority on the memo shape and the gate
