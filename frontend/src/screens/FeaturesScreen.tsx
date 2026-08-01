@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { useClient, useCompanyContext } from "../app/CompanyContext";
-import type { DeductorStatus } from "../api/types";
+import type { DeductorStatus, TCSDeclaration } from "../api/types";
 
 /**
  * F11 Company Features — the honest inventory of what this edition does.
@@ -139,7 +139,7 @@ const FEATURES: {
         // on the post path at all. Persisting a deduction nobody can read is not
         // a shipped feature — flip this to "on" when the register and the
         // Form 140 exist, not before.
-        note: "PARTLY BUILT. A TDS deduction is derived with the s.393(1) ANNUAL AGGREGATE and catch-up (a run of sub-threshold bills crosses and the crossing bill carries the tax for all of them), refused unless this company's deductor status is recorded — see TDS Deductor Details at the top of this screen, which is where you record it — and stored with the voucher. WHAT IS STILL MISSING is what you would call the feature: there is NO TDS register to look at and NO Form 140 return to file, and TCS is not on the post path at all, so a sale that should collect tax at source collects nothing. Treat as not built until you can see a register.",
+        note: "PARTLY BUILT — BOTH SIDES NOW WORK, AND NEITHER CAN BE REPORTED. TDS: a deduction is derived with the s.393(1) ANNUAL AGGREGATE and catch-up (a run of sub-threshold bills crosses, and the crossing bill carries the tax for all of them), refused unless this company's deductor status is recorded, and stored with the voucher. TCS: a sale of scrap collects 2% (the Finance Act 2026 rate) and a motor-vehicle sale above ten lakh collects 1%, both stored; a buyer's s.394(2) manufacturing declaration exempts their scrap sales, and a declaration with NO PAN triggers the PENAL 5% rather than the exemption — s.397(2)(f)(i) and (g). Both are recorded on this screen, above. WHAT IS STILL MISSING is what you would call the feature: there is NO TDS/TCS register to look at, and NO Form 140 or Form 143 return to file — so the numbers are correct, stored, and go nowhere. Two smaller gaps, disclosed: no seller-liability test is modelled for TCS (s.394(1) says 'every person, being a seller', and that definition has not been read against primary text here), so every company that keys a TCS block collects; and a credit note reversing a sale on which tax was collected is not handled. Treat as not built until you can see a register.",
       },
       {
         name: "Payroll statutory (EPF/EPS/EDLI, ESI, salary TDS, pay run)",
@@ -563,6 +563,265 @@ function DeductorStatusPanel() {
   );
 }
 
+/**
+ * s.394(2) MANUFACTURING DECLARATIONS — the second real control on this screen.
+ *
+ * A resident buyer's written statement that goods are for manufacturing and NOT
+ * for trading exempts collection at source on Table Sl. Nos. 1-5. Filing one
+ * here is what makes the next scrap sale to that buyer collect nothing: the post
+ * path reads this table, and there is deliberately no exemption flag on a
+ * voucher for an operator to tick.
+ *
+ * ⚠️ THE PAN FIELD IS THE ONE THAT NEEDS A WARNING, AND IT GETS ONE ON SCREEN.
+ * Leaving it empty does not merely weaken the declaration — s.397(2)(f)(i) makes
+ * it INVALID and s.397(2)(g) then requires the PENAL rate, so the buyer is
+ * charged 5% instead of 2%. A declaration without a PAN is WORSE for the buyer
+ * than no declaration at all, and an operator transcribing a document has no way
+ * to know that unless the form says so.
+ */
+function TCSDeclarationsPanel() {
+  const client = useClient();
+  const { company } = useCompanyContext();
+  const companyID = company?.id ?? "";
+
+  const [rows, setRows] = useState<TCSDeclaration[]>([]);
+  const [sections, setSections] = useState<string[]>([]);
+  const [buyers, setBuyers] = useState<{ id: string; name: string }[]>([]);
+  const [loadError, setLoadError] = useState("");
+  const [saveError, setSaveError] = useState("");
+  const [saved, setSaved] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const now = new Date();
+  const currentTaxYear =
+    now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+
+  const [buyer, setBuyer] = useState("");
+  const [section, setSection] = useState("");
+  const [taxYear, setTaxYear] = useState(String(currentTaxYear));
+  const [declared, setDeclared] = useState("");
+  const [received, setReceived] = useState("");
+  const [pan, setPan] = useState("");
+
+  async function load() {
+    if (!companyID) return;
+    try {
+      const res = await client.listTCSDeclarations(companyID);
+      setRows(res.tcs_declarations);
+      setSections(res.eligible_sections);
+      // Pre-select when the statute leaves exactly one choice — today scrap is
+      // the only section s.394(2) reaches that this build also collects on.
+      const only = res.eligible_sections[0];
+      if (res.eligible_sections.length === 1 && only !== undefined) {
+        setSection((s) => (s === "" ? only : s));
+      }
+      setLoadError("");
+      const led = await client.listLedgers(companyID);
+      setBuyers(led.ledgers.map((l) => ({ id: l.id, name: l.name })));
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  useEffect(() => {
+    void load();
+  }, [companyID]);
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setSaveError("");
+    setSaved("");
+    try {
+      await client.createTCSDeclaration(companyID, {
+        buyer_ledger_id: buyer,
+        section,
+        tax_year_start: Number(taxYear),
+        declaration_date: declared,
+        received_date: received,
+        buyer_pan: pan,
+        recorded_by: "owner",
+      });
+      setSaved(
+        pan.trim() === ""
+          ? "Filed WITHOUT a PAN — under s.397(2)(f)(i) this declaration is INVALID, and s.397(2)(g) requires the penal rate. This buyer will be charged 5%, not exempted."
+          : "Filed. Sales to this buyer under this section are now exempt.",
+      );
+      await load();
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-4" data-testid="tcs-declarations-panel">
+      <h2 className="font-bold text-tally-title">
+        s.394(2) manufacturing declarations
+      </h2>
+      <p className="mt-1 max-w-3xl text-xs">
+        A resident buyer&apos;s written statement that goods are for
+        manufacturing, processing, producing or generating power AND not for
+        trading. Filing one here EXEMPTS that buyer&apos;s future sales under
+        the section — there is no exemption box on the sales voucher, because
+        the exemption is a document you hold, not a choice made at entry.{" "}
+        <span className="text-tally-title">
+          It reaches Table Sl. Nos. 1&ndash;5 only: scrap is Sl. No. 4 and
+          qualifies, motor vehicles are Sl. No. 6 and do not.
+        </span>
+      </p>
+
+      {loadError !== "" ? (
+        <p className="mt-2 max-w-3xl text-xs text-tally-bar">
+          Cannot read declarations: {loadError}
+        </p>
+      ) : (
+        <>
+          {rows.length === 0 ? (
+            <p className="mt-2 text-xs text-tally-bar">
+              None held — every sale collects at the normal rate.
+            </p>
+          ) : (
+            <table className="mt-2 w-full max-w-4xl text-sm">
+              <tbody>
+                {rows.map((d) => (
+                  <tr
+                    key={`${d.buyer_ledger_id}:${d.section}:${d.tax_year_start}`}
+                    className="align-top"
+                  >
+                    <td className="w-48 py-0.5 pr-3 text-tally-title">
+                      {d.buyer_name}
+                    </td>
+                    <td className="w-32 py-0.5 pr-3">{d.tax_year_label}</td>
+                    <td className="py-0.5 text-xs">
+                      {d.pan_valid ? (
+                        <>exempt · PAN {d.buyer_pan}</>
+                      ) : (
+                        <span className="text-tally-bar">
+                          NO PAN — invalid under s.397(2)(f)(i), so the PENAL
+                          rate applies, not the exemption
+                        </span>
+                      )}
+                      {" · "}
+                      forward a copy to the Commissioner by {
+                        d.forward_due_date
+                      }{" "}
+                      (s.394(3))
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          <form onSubmit={save} className="mt-3 max-w-3xl text-sm">
+            <div className="flex flex-wrap items-end gap-3">
+              <label className="flex flex-col">
+                <span className="text-xs">Buyer</span>
+                <select
+                  aria-label="Buyer"
+                  className="border border-tally-fieldText bg-tally-field px-1"
+                  value={buyer}
+                  onChange={(ev) => setBuyer(ev.target.value)}
+                >
+                  <option value="">— select —</option>
+                  {buyers.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex flex-col">
+                <span className="text-xs">Section</span>
+                <select
+                  aria-label="Section"
+                  className="border border-tally-fieldText bg-tally-field px-1"
+                  value={section}
+                  onChange={(ev) => setSection(ev.target.value)}
+                >
+                  {sections.map((s) => (
+                    <option key={s} value={s}>
+                      {s}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex flex-col">
+                {/* NOT "Tax year beginning" — the deductor-status panel above
+                    uses that, and two identically-labelled year fields on one
+                    screen is exactly the ambiguity this feature cannot afford:
+                    they follow OPPOSITE rules. That one is the year BEFORE the
+                    payments it governs; this one is the year the declaration
+                    covers. */}
+                <span className="text-xs">Tax year covered</span>
+                <input
+                  aria-label="Declaration tax year"
+                  className="w-24 border border-tally-fieldText bg-tally-field px-1"
+                  value={taxYear}
+                  onChange={(ev) => setTaxYear(ev.target.value)}
+                />
+              </label>
+              <label className="flex flex-col">
+                <span className="text-xs">Dated</span>
+                <input
+                  aria-label="Declaration date"
+                  placeholder="yyyy-mm-dd"
+                  className="w-32 border border-tally-fieldText bg-tally-field px-1"
+                  value={declared}
+                  onChange={(ev) => setDeclared(ev.target.value)}
+                />
+              </label>
+              <label className="flex flex-col">
+                <span className="text-xs">Received</span>
+                <input
+                  aria-label="Received date"
+                  placeholder="yyyy-mm-dd"
+                  className="w-32 border border-tally-fieldText bg-tally-field px-1"
+                  value={received}
+                  onChange={(ev) => setReceived(ev.target.value)}
+                />
+              </label>
+              <label className="flex flex-col">
+                <span className="text-xs">Buyer PAN</span>
+                <input
+                  aria-label="Buyer PAN"
+                  className="w-32 border border-tally-fieldText bg-tally-field px-1"
+                  value={pan}
+                  onChange={(ev) => setPan(ev.target.value)}
+                />
+              </label>
+              <button
+                type="submit"
+                disabled={busy || buyer === "" || section === ""}
+                className="border border-tally-title px-2 py-0.5 text-tally-title disabled:opacity-50"
+              >
+                {busy ? "Filing…" : "File"}
+              </button>
+            </div>
+            {/* The warning that has to be visible BEFORE the mistake, not after. */}
+            {pan.trim() === "" && (
+              <p className="mt-2 text-xs text-tally-bar">
+                Leaving the PAN empty does not just weaken this declaration —
+                s.397(2)(f)(i) makes it INVALID and s.397(2)(g) then requires
+                the penal rate, so this buyer would be charged 5% instead of 2%.
+                That is worse for them than filing nothing.
+              </p>
+            )}
+          </form>
+          {saveError !== "" && (
+            <p className="mt-2 max-w-3xl text-xs text-tally-bar">{saveError}</p>
+          )}
+          {saved !== "" && (
+            <p className="mt-2 max-w-3xl text-xs text-tally-title">{saved}</p>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 export function FeaturesScreen() {
   const { company } = useCompanyContext();
   return (
@@ -577,6 +836,7 @@ export function FeaturesScreen() {
         that reaches it), or openly missing. Esc goes back.
       </p>
       <DeductorStatusPanel />
+      <TCSDeclarationsPanel />
       {FEATURES.map((g) => (
         <div key={g.group} className="mt-4">
           <h2 className="font-bold text-tally-title">{g.group}</h2>

@@ -613,6 +613,21 @@ func (s *Server) routes() {
 		r.Get("/deductor-status", s.handleListDeductorStatus)
 		r.Put("/deductor-status/{taxYear}", s.handleSetDeductorStatus)
 
+		// s.394(2) MANUFACTURING DECLARATIONS (Item Zero step 3). A resident
+		// buyer's written statement that goods are for manufacturing and NOT for
+		// trading, which exempts collection on Table Sl. Nos. 1-5.
+		//
+		// The post path READS this table (ledger/tcs.go) rather than taking an
+		// exemption flag off the voucher body, so these two routes are the only
+		// way a sale becomes exempt — which is the point: the exemption is a
+		// signed document the collector holds, not an entry-time opinion.
+		//
+		// POST rather than PUT because the identity is a TRIPLE (buyer, section,
+		// tax year) and carrying it in the body reads better than three path
+		// segments. Still idempotent on that triple.
+		r.Get("/tcs-declarations", s.handleListTCSDeclarations)
+		r.Post("/tcs-declarations", s.handleCreateTCSDeclaration)
+
 		// Forecast/anomaly reports (wave-2 WS5a).
 		r.Get("/cash-flow", s.handleCashFlow)
 		r.Get("/anomalies", s.handleAnomalies)
@@ -1338,6 +1353,10 @@ type voucherReq struct {
 	PhysicalCount []physicalCountLineReq `json:"physical_count"`
 	GST           *gstReq                `json:"gst"`
 	TDS           *tdsReq                `json:"tds"`
+	// TCS is the collection-side mirror, honoured on Sales only. It carries no
+	// exemption flag: a s.394(2) declaration is read from the declarations table
+	// inside the post transaction, never asserted here.
+	TCS *tcsReq `json:"tcs"`
 }
 
 // postVoucher returns a handler bound to a fixed accounting class. The same
@@ -1639,6 +1658,26 @@ func voucherResultJSON(res ledger.PostResult) map[string]any {
 			"applied":   res.TDS.Applied,
 		}
 	}
+	// The collection-side mirror. Gated on Basis for the same reason: a voucher
+	// that carried no `tcs` block gets no `tcs` key, so existing clients see a
+	// byte-identical body.
+	//
+	// `declaration` is the field that is NOT a mirror, and it is why a bare
+	// amount is not enough: a zero with "NONE" is a sale below Sl. No. 6's
+	// limit, a zero with "EXEMPT" rests on a document the department can demand,
+	// and "INVALID_NO_PAN" means the buyer was charged MORE than if they had
+	// furnished nothing. Three different facts a client must be able to tell
+	// apart.
+	if res.TCS.Basis != "" {
+		out["tcs"] = map[string]any{
+			"tcs":         res.TCS.TCS.StringFixed(4),
+			"rate_pct":    res.TCS.RatePct.StringFixed(4),
+			"threshold":   res.TCS.Threshold.StringFixed(4),
+			"basis":       string(res.TCS.Basis),
+			"applied":     res.TCS.Applied,
+			"declaration": string(res.TCS.Declaration),
+		}
+	}
 	return out
 }
 
@@ -1766,6 +1805,13 @@ func buildVoucherInput(w http.ResponseWriter, class ledger.Class, req voucherReq
 			return in, false
 		}
 		in.TDS = tds
+	}
+	if req.TCS != nil {
+		tcs, ok := buildTCS(w, *req.TCS)
+		if !ok {
+			return in, false
+		}
+		in.TCS = tcs
 	}
 	return in, true
 }

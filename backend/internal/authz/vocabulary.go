@@ -182,6 +182,24 @@ var KnownResources = append([]Resource{
 	// whoever signs the return, not to whoever keys the bills.
 	// TestDeductorStatusAuthMatrix pins all three answers.
 	"deductor-status",
+
+	// THE s.394(2) MANUFACTURING DECLARATION (migration 0049, Item Zero step 3).
+	// A resident buyer's written statement that goods are for manufacturing and
+	// not for trading, which exempts collection at source on Table Sl. Nos. 1-5.
+	//
+	// SEPARATE FROM `deductor-status`, though they share a screen. They are
+	// opposite sides of the same statute: the deductor status is a
+	// SELF-ASSESSMENT that decides a year of our own withholding; a declaration
+	// is a document that ARRIVES from a customer and is transcribed, and it
+	// zeroes tax on that customer's sales. An owner may reasonably delegate the
+	// transcription and not the self-assessment, and one token would make that
+	// unwritable.
+	//
+	// Both are default-DENIED for the seeded Data Entry level today (its
+	// default_access is 'none' and no rule names either token), so no ACL
+	// migration accompanies them. The separate token is what makes the
+	// delegation POSSIBLE, not automatic.
+	"tcs-declaration",
 }, KnownVoucherClasses...)
 
 // KnownReportNames is every report a rule may name via the "report:NAME" form.

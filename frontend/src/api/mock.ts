@@ -67,7 +67,11 @@ import type {
   VoucherHistoryResponse,
   BankReconciliationResponse,
   DeductorStatus,
+  TCSDeclaration,
   DeductorStatusListResponse,
+  TCSDeclarationListResponse,
+  CreateTCSDeclarationRequest,
+  CreateTCSDeclarationResponse,
   SetDeductorStatusRequest,
   SetDeductorStatusResponse,
   BankReconLine,
@@ -160,7 +164,11 @@ function id(prefix: string): string {
  * stable across calls without a counter.
  */
 function mainLocation(companyID: string): GodownListItem {
-  return { id: `${companyID}:godown-main`, name: "Main Location", is_system: true };
+  return {
+    id: `${companyID}:godown-main`,
+    name: "Main Location",
+    is_system: true,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -193,7 +201,9 @@ function q4(value: string): bigint {
   const whole = m[2] ?? "";
   const frac = (m[3] ?? "").slice(0, 4).padEnd(4, "0");
   if (whole === "" && (m[3] ?? "") === "") return 0n;
-  return (m[1] === "-" ? -1n : 1n) * BigInt((whole === "" ? "0" : whole) + frac);
+  return (
+    (m[1] === "-" ? -1n : 1n) * BigInt((whole === "" ? "0" : whole) + frac)
+  );
 }
 
 /** Integer ten-thousandths -> fixed-4 string. */
@@ -237,7 +247,12 @@ function replayStock(c: MockCompany, asOn?: string): StockSummaryResponse {
   for (const v of c.views.values()) {
     if (asOn && v.voucher_date > asOn) continue;
     for (const line of v.inventory ?? []) {
-      moves.push({ date: v.voucher_date, no: v.voucher_no, lineNo: line.line_no, line });
+      moves.push({
+        date: v.voucher_date,
+        no: v.voucher_no,
+        lineNo: line.line_no,
+        line,
+      });
     }
   }
   moves.sort(
@@ -254,9 +269,14 @@ function replayStock(c: MockCompany, asOn?: string): StockSummaryResponse {
     let p = positions.get(key);
     if (!p) {
       p = {
-        key: { itemID: l.stock_item_id, godownID: l.godown_id, batchID: l.batch_id },
+        key: {
+          itemID: l.stock_item_id,
+          godownID: l.godown_id,
+          batchID: l.batch_id,
+        },
         item: l.item,
-        unit: c.stockItems.find((s) => s.id === l.stock_item_id)?.unit_symbol ?? "",
+        unit:
+          c.stockItems.find((s) => s.id === l.stock_item_id)?.unit_symbol ?? "",
         godown: l.godown,
         batch: l.batch,
         inwardQty: 0n,
@@ -274,7 +294,10 @@ function replayStock(c: MockCompany, asOn?: string): StockSummaryResponse {
     // figure and the valuer never reads it.
     const gross = q4div(qty * q4(l.rate), QSCALE);
     const disc = q4(l.discount_pct);
-    const value = disc === 0n ? gross : q4div(gross * (100n * QSCALE - disc), 100n * QSCALE);
+    const value =
+      disc === 0n
+        ? gross
+        : q4div(gross * (100n * QSCALE - disc), 100n * QSCALE);
 
     if (l.direction === "IN") {
       p.inwardQty += qty;
@@ -318,7 +341,9 @@ function replayStock(c: MockCompany, asOn?: string): StockSummaryResponse {
     closing_value: q4str(p.value),
     closing_rate: q4str(p.qty === 0n ? 0n : q4div(p.value * QSCALE, p.qty)),
   }));
-  rows.sort((a, b) => a.item.localeCompare(b.item) || a.godown.localeCompare(b.godown));
+  rows.sort(
+    (a, b) => a.item.localeCompare(b.item) || a.godown.localeCompare(b.godown),
+  );
 
   // Fold the flat rows into the item tree, exactly as the server does — one set
   // of numbers presented two ways, never two computations that can disagree.
@@ -441,9 +466,21 @@ function addMoney(a: Money, b: Money): Money {
 // server to ask; the real client renders whatever the API returns, so this list
 // never reaches a real screen.
 const MOCK_ENTITY_CATEGORIES = [
-  "GOVERNMENT", "LOCAL_AUTHORITY", "STATUTORY_CORPORATION", "COMPANY",
-  "COOPERATIVE_SOCIETY", "HOUSING_AUTHORITY", "REGISTERED_SOCIETY", "TRUST",
-  "UNIVERSITY", "FOREIGN_ENTITY", "FIRM", "INDIVIDUAL", "HUF", "AOP", "BOI",
+  "GOVERNMENT",
+  "LOCAL_AUTHORITY",
+  "STATUTORY_CORPORATION",
+  "COMPANY",
+  "COOPERATIVE_SOCIETY",
+  "HOUSING_AUTHORITY",
+  "REGISTERED_SOCIETY",
+  "TRUST",
+  "UNIVERSITY",
+  "FOREIGN_ENTITY",
+  "FIRM",
+  "INDIVIDUAL",
+  "HUF",
+  "AOP",
+  "BOI",
 ];
 
 /** "2025-26" from 2025, mirroring the server's taxYearLabel. */
@@ -530,6 +567,8 @@ interface MockCompany {
    * right against this mock is not evidence the refusal works.
    */
   deductorStatuses: Map<number, DeductorStatus>;
+  /** s.394(2) declarations, keyed `${buyer}:${section}:${taxYear}`. */
+  tcsDeclarations: Map<string, TCSDeclaration>;
   /**
    * The INVENTORY MASTERS. Held as real rows (not synthesized on read) for the
    * same reason `ledgers` is: the item grid resolves an item's gst_rate_pct and
@@ -871,6 +910,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         vouchers: [],
         bankDates: new Map(),
         deductorStatuses: new Map(),
+        tcsDeclarations: new Map(),
         views: new Map(),
         members: [
           {
@@ -960,6 +1000,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       vouchers: [],
       bankDates: new Map(),
       deductorStatuses: new Map(),
+      tcsDeclarations: new Map(),
       views: new Map(),
       counters: new Map(),
       // The seeded demo tenant carries the same admin defaults every company
@@ -989,7 +1030,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
    * Dr/Cr totals AND a parallel set of REAL-ledger_id PostingViews (for the
    * GET /vouchers/{id} hydration path). Canonicalize dr_cr to "D"/"C".
    */
-  function summarize(c: MockCompany, req: VoucherRequest): {
+  function summarize(
+    c: MockCompany,
+    req: VoucherRequest,
+  ): {
     postings: DayBookPosting[];
     postingViews: PostingView[];
     debit: Money;
@@ -1034,7 +1078,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
    * or state-hydrated post would derive IGST here and CGST+SGST on the real
    * server, and the mock would be a false oracle.
    */
-  function deriveGst(c: MockCompany, req: VoucherRequest): {
+  function deriveGst(
+    c: MockCompany,
+    req: VoucherRequest,
+  ): {
     taxable: Money;
     cgst: Money;
     sgst: Money;
@@ -1042,7 +1089,12 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
   } {
     const gst = req.gst;
     if (!gst) {
-      return { taxable: "0.0000", cgst: "0.0000", sgst: "0.0000", igst: "0.0000" };
+      return {
+        taxable: "0.0000",
+        cgst: "0.0000",
+        sgst: "0.0000",
+        igst: "0.0000",
+      };
     }
     const supplierState =
       (gst.supplier_state_code ?? "").trim() !== ""
@@ -1123,7 +1175,8 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         "an item invoice derives its postings from the stock lines; do not send postings with inventory + gst",
       );
     }
-    if (!req.party_ledger_id) refuse("an item invoice needs a party ledger to bill");
+    if (!req.party_ledger_id)
+      refuse("an item invoice needs a party ledger to bill");
     if (!req.item_ledger_id) {
       refuse(
         "an item invoice needs an item ledger (sales/purchase account) to book the goods to",
@@ -1147,7 +1200,11 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       if (!master) {
         refuse(`item invoice references unknown stock item ${l.stock_item_id}`);
       }
-      const taxable = taxableValueOf(l.qty, l.rate ?? "0", l.discount_pct ?? "0");
+      const taxable = taxableValueOf(
+        l.qty,
+        l.rate ?? "0",
+        l.discount_pct ?? "0",
+      );
       if (l.amount && l.amount !== "0.0000" && l.amount !== taxable) {
         refuse(
           `inventory line ${i + 1} (${master!.name}): amount ${l.amount} contradicts qty x rate less discount = ${taxable}`,
@@ -1162,7 +1219,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       taxableTotal = addMoney(taxableTotal, taxable);
     }
 
-    const withLines: VoucherRequest = { ...req, gst: { ...req.gst, lines: gstLines } };
+    const withLines: VoucherRequest = {
+      ...req,
+      gst: { ...req.gst, lines: gstLines },
+    };
     const tax = deriveGst(c, withLines);
     const totalTax = addMoney(addMoney(tax.cgst, tax.sgst), tax.igst);
 
@@ -1175,13 +1235,24 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         dr_cr: orient.party,
         amount: addMoney(taxableTotal, totalTax),
       },
-      { ledger_id: req.item_ledger_id!, dr_cr: orient.goods, amount: taxableTotal },
+      {
+        ledger_id: req.item_ledger_id!,
+        dr_cr: orient.goods,
+        amount: taxableTotal,
+      },
     ];
     // A zero component gets NO posting: an intra-state invoice has no IGST at
     // all, and a 0.0000 row is noise in every printout of that tax account.
-    const taxLeg = (amount: Money, ledgerID: string | undefined, name: string) => {
+    const taxLeg = (
+      amount: Money,
+      ledgerID: string | undefined,
+      name: string,
+    ) => {
       if (amount === "0.0000") return;
-      if (!ledgerID) refuse(`item invoice derives ${name} of ${amount} but no ${name} ledger was named`);
+      if (!ledgerID)
+        refuse(
+          `item invoice derives ${name} of ${amount} but no ${name} ledger was named`,
+        );
       postings.push({ ledger_id: ledgerID!, dr_cr: orient.tax, amount });
     };
     taxLeg(tax.cgst, req.gst.cgst_ledger_id, "CGST");
@@ -1248,9 +1319,19 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         );
       }
       if (!req.physical_count?.length) {
-        refuse("a Physical Stock voucher records at least one counted position");
+        refuse(
+          "a Physical Stock voucher records at least one counted position",
+        );
       }
-      return { ...req, inventory: physicalStockDeltas(c, voucherID, req.physical_count!, refuse) };
+      return {
+        ...req,
+        inventory: physicalStockDeltas(
+          c,
+          voucherID,
+          req.physical_count!,
+          refuse,
+        ),
+      };
     }
 
     if (req.physical_count?.length) {
@@ -1259,7 +1340,9 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       );
     }
     if (!req.inventory?.length) {
-      refuse(`a ${cls} exists to record goods moving; it has no inventory lines`);
+      refuse(
+        `a ${cls} exists to record goods moving; it has no inventory lines`,
+      );
     }
     const want = STOCK_FIXED_DIRECTION[cls];
     if (want) {
@@ -1423,7 +1506,11 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
    * start at 1; concurrent allocations would serialize on the row, so two creates
    * get distinct consecutive numbers — modelled here as a synchronous bump.
    */
-  function allocateNumber(c: MockCompany, cls: string, finYear: number): number {
+  function allocateNumber(
+    c: MockCompany,
+    cls: string,
+    finYear: number,
+  ): number {
     const key = `${cls}:${finYear}`;
     const next = c.counters.get(key) ?? 1;
     c.counters.set(key, next + 1);
@@ -1456,7 +1543,6 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
   function classLabel(cls: VoucherClass): string {
     return cls.charAt(0).toUpperCase() + cls.slice(1);
   }
-
 
   /**
    * Append one entry to a voucher's EDIT LOG. Called on every create, alter and
@@ -1664,7 +1750,9 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
   }
 
   return {
-    async createCompany(req: CreateCompanyRequest): Promise<CreateCompanyResponse> {
+    async createCompany(
+      req: CreateCompanyRequest,
+    ): Promise<CreateCompanyResponse> {
       const companyID = req.id ?? id("company");
       const c = ensure(companyID);
       c.name = req.name;
@@ -1719,7 +1807,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       };
     },
 
-    async createGroup(_c, _req: CreateGroupRequest): Promise<CreateGroupResponse> {
+    async createGroup(
+      _c,
+      _req: CreateGroupRequest,
+    ): Promise<CreateGroupResponse> {
       return { group_id: id("group") };
     },
     async listLedgers(companyID): Promise<ListLedgersResponse> {
@@ -1847,7 +1938,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         ),
       };
     },
-    async getStockSummary(companyID, asOn?: string): Promise<StockSummaryResponse> {
+    async getStockSummary(
+      companyID,
+      asOn?: string,
+    ): Promise<StockSummaryResponse> {
       return replayStock(ensure(companyID), asOn);
     },
 
@@ -1930,7 +2024,9 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       const view = c.views.get(voucherID);
       if (!view) {
         // Mirror the live GET: unknown id OR a deleted head row -> 404.
-        throw new ApiError(404, "voucher not found", { error: "voucher not found" });
+        throw new ApiError(404, "voucher not found", {
+          error: "voucher not found",
+        });
       }
       // Return a structural clone so callers can't mutate the store.
       return {
@@ -2016,7 +2112,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       asOn?: string,
     ): Promise<TrialBalanceResponse> {
       const c = ensure(companyID);
-      const acc = new Map<string, { debit: Money; credit: Money; group: string }>();
+      const acc = new Map<
+        string,
+        { debit: Money; credit: Money; group: string }
+      >();
       for (const l of c.ledgers) {
         acc.set(l.name, { debit: "0.0000", credit: "0.0000", group: l.group });
       }
@@ -2136,6 +2235,73 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       };
     },
 
+    // ---- s.394(2) DECLARATIONS (Item Zero step 3).
+    //
+    // The mock does not derive TCS, so filing one here exempts nothing. It
+    // exists so the F11 panel has somewhere to read and write against, and the
+    // gap is worth naming: a screen that looks right against this mock is not
+    // evidence the exemption works. TestFilingADeclarationExemptsTheNextSale
+    // covers that server-side.
+    async listTCSDeclarations(companyID): Promise<TCSDeclarationListResponse> {
+      const c = ensure(companyID);
+      return {
+        tcs_declarations: [...c.tcsDeclarations.values()].sort((a, b) =>
+          b.received_date.localeCompare(a.received_date),
+        ),
+        eligible_sections: ["206C(1)-SCRAP"],
+      };
+    },
+    async createTCSDeclaration(
+      companyID,
+      req: CreateTCSDeclarationRequest,
+    ): Promise<CreateTCSDeclarationResponse> {
+      const c = ensure(companyID);
+      // s.394(2) reaches Table Sl. Nos. 1-5. Motor vehicles are Sl. No. 6, and
+      // refusing here mirrors the server: an operator who files one believes
+      // their buyer is exempt.
+      if (req.section !== "206C(1)-SCRAP") {
+        throw new ApiError(
+          400,
+          `masters: invalid s.394(2) declaration: s.394(2) reaches only Table Sl. Nos. 1 to 5, and ${JSON.stringify(req.section)} is not one of them`,
+        );
+      }
+      if (req.received_date < req.declaration_date) {
+        throw new ApiError(
+          400,
+          "masters: invalid s.394(2) declaration: received date is before the declaration date",
+        );
+      }
+      const buyer = c.ledgers.find((l) => l.id === req.buyer_ledger_id);
+      const pan = (req.buyer_pan ?? "").trim();
+      const received = new Date(req.received_date + "T00:00:00Z");
+      const due = new Date(
+        Date.UTC(received.getUTCFullYear(), received.getUTCMonth() + 1, 7),
+      );
+      c.tcsDeclarations.set(
+        `${req.buyer_ledger_id}:${req.section}:${req.tax_year_start}`,
+        {
+          buyer_ledger_id: req.buyer_ledger_id,
+          buyer_name: buyer?.name ?? "",
+          section: req.section,
+          tax_year_start: req.tax_year_start,
+          tax_year_label: mockTaxYearLabel(req.tax_year_start),
+          declaration_date: req.declaration_date,
+          received_date: req.received_date,
+          forward_due_date: due.toISOString().slice(0, 10),
+          buyer_pan: pan,
+          // ⚠️ NOT "is there a declaration" — a false here means the penal rate.
+          pan_valid: pan !== "",
+          recorded_by: req.recorded_by,
+        },
+      );
+      return {
+        buyer_ledger_id: req.buyer_ledger_id,
+        section: req.section,
+        tax_year_start: req.tax_year_start,
+        tax_year_label: mockTaxYearLabel(req.tax_year_start),
+      };
+    },
+
     // ---- TDS DEDUCTOR STATUS (Item Zero step 2).
     async listDeductorStatus(companyID): Promise<DeductorStatusListResponse> {
       const c = ensure(companyID);
@@ -2241,7 +2407,8 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
           // the bank date is on or before the statement date. An item cleared
           // LATER is un-cleared as at this date — t4-model.md's first trap.
           const broken =
-            !!rec && (rec.clearedAmount !== p.amount || rec.clearedDrCr !== p.dr_cr);
+            !!rec &&
+            (rec.clearedAmount !== p.amount || rec.clearedDrCr !== p.dr_cr);
           const inForce = !!rec && !broken && rec.bankDate <= asOnDate;
 
           const line: BankReconLine = {
@@ -2333,7 +2500,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       const legs = v?.postings.filter((p) => p.ledger === ledger.name) ?? [];
       const leg = legs[legNo];
       if (!v || !leg) {
-        throw new ApiError(404, "banking: leg not found on this voucher version");
+        throw new ApiError(
+          404,
+          "banking: leg not found on this voucher version",
+        );
       }
       // Migration 0045's trigger: the bank cannot clear an item before it exists.
       if (req.bank_date < v.date) {
@@ -2378,14 +2548,15 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       };
     },
 
-    async generateGSTR1(
-      companyID,
-      query: GSTR1Query,
-    ): Promise<GSTR1Response> {
+    async generateGSTR1(companyID, query: GSTR1Query): Promise<GSTR1Response> {
       ensure(companyID);
       const fp = query.from.slice(0, 7).replace("-", "");
       const base = { gstin: query.gstin, fp, hsn: { data: [] } };
-      if (query.cgst_ledger_id || query.sgst_ledger_id || query.igst_ledger_id) {
+      if (
+        query.cgst_ledger_id ||
+        query.sgst_ledger_id ||
+        query.igst_ledger_id
+      ) {
         return { gstr1: base, reconciliation_ok: true };
       }
       return base;
@@ -2522,7 +2693,11 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       if (!m) {
         throw new ApiError(404, "membership not found", "membership not found");
       }
-      const level = resolveLevel(c, req.security_level_id, req.security_level_name);
+      const level = resolveLevel(
+        c,
+        req.security_level_id,
+        req.security_level_name,
+      );
       // THE LAST-OWNER GUARD (authz.Store.SetMembershipLevel): demoting the only
       // Owner would leave the company unadministrable, so it is refused.
       if (m.is_owner && !level.is_owner && ownerCount(c) <= 1) {
@@ -2672,10 +2847,12 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       // Members carry the level NAME, so a rename must follow through or the
       // member list would show a level that no longer exists.
       for (const m of c.members) {
-        if (m.security_level_id === level.id) m.security_level_name = level.name;
+        if (m.security_level_id === level.id)
+          m.security_level_name = level.name;
       }
       for (const iv of c.invites) {
-        if (iv.security_level_id === level.id) iv.security_level_name = level.name;
+        if (iv.security_level_id === level.id)
+          iv.security_level_name = level.name;
       }
       return { security_level_id: levelID };
     },

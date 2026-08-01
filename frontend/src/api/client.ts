@@ -49,6 +49,9 @@ import type {
   VoucherHistoryResponse,
   BankReconciliationResponse,
   DeductorStatusListResponse,
+  TCSDeclarationListResponse,
+  CreateTCSDeclarationRequest,
+  CreateTCSDeclarationResponse,
   SetDeductorStatusRequest,
   SetDeductorStatusResponse,
   SetBankDateRequest,
@@ -189,6 +192,25 @@ export interface CoredClient {
     taxYearStart: number,
     req: SetDeductorStatusRequest,
   ): Promise<SetDeductorStatusResponse>;
+
+  /**
+   * Every s.394(2) declaration this company holds, plus the sections one may be
+   * filed against. Owner-only, like deductor status.
+   */
+  listTCSDeclarations(
+    companyID: string,
+  ): Promise<TCSDeclarationListResponse>;
+  /**
+   * File (or correct) a buyer's s.394(2) declaration. Idempotent on
+   * (buyer, section, tax year).
+   *
+   * Filing one EXEMPTS that buyer's future sales under the section — the post
+   * path reads this table, so there is no exemption flag on a voucher.
+   */
+  createTCSDeclaration(
+    companyID: string,
+    req: CreateTCSDeclarationRequest,
+  ): Promise<CreateTCSDeclarationResponse>;
 
   createGroup(
     companyID: string,

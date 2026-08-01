@@ -1060,3 +1060,64 @@ export interface SetDeductorStatusResponse {
   governs_payments_in: number;
   governs_payments_in_label: string;
 }
+
+// ---------------------------------------------------------------------------
+// s.394(2) MANUFACTURING DECLARATIONS (Item Zero step 3).
+//
+// A resident buyer's written statement that goods are for manufacturing and NOT
+// for trading, which exempts collection at source on Table Sl. Nos. 1-5. The
+// post path READS these when deriving TCS on a sale, so filing one here is what
+// makes the next sale to that buyer exempt.
+// ---------------------------------------------------------------------------
+
+export interface TCSDeclaration {
+  buyer_ledger_id: string;
+  buyer_name: string;
+  section: string;
+  tax_year_start: number;
+  tax_year_label: string;
+  /** The date ON the document. */
+  declaration_date: string;
+  /** When the collector received it — s.394(3)'s deadline runs off this. */
+  received_date: string;
+  /**
+   * s.394(3): a copy must reach the Commissioner "on or before the seventh day
+   * of the month following the month of receipt". DERIVED by the server and
+   * shown, because storing declarations without surfacing the deadline they
+   * create would build a compliance trap.
+   */
+  forward_due_date: string;
+  /** Empty when none was furnished — a meaningful state, see pan_valid. */
+  buyer_pan: string;
+  /**
+   * ⚠️ FALSE DOES NOT MEAN "NO DECLARATION". s.397(2)(f)(i) makes a PAN-less
+   * declaration INVALID, and (g) then requires the PENAL rate — so the buyer
+   * pays 5% instead of 2%, which is WORSE for them than furnishing nothing.
+   */
+  pan_valid: boolean;
+  recorded_by: string;
+}
+
+export interface TCSDeclarationListResponse {
+  tcs_declarations: TCSDeclaration[];
+  /** The sections s.394(2) reaches. Motor vehicles (Sl. No. 6) are not among them. */
+  eligible_sections: string[];
+}
+
+export interface CreateTCSDeclarationRequest {
+  buyer_ledger_id: string;
+  section: string;
+  tax_year_start: number;
+  declaration_date: string;
+  received_date: string;
+  /** May be EMPTY — that is the s.397(2)(f)(i) invalid state, not a missing field. */
+  buyer_pan?: string;
+  recorded_by: string;
+}
+
+export interface CreateTCSDeclarationResponse {
+  buyer_ledger_id: string;
+  section: string;
+  tax_year_start: number;
+  tax_year_label: string;
+}

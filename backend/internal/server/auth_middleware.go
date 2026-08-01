@@ -572,6 +572,36 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 		// silently treated as one of the above.
 		return "", "", "", false
 
+	// s.394(2) MANUFACTURING DECLARATIONS (Item Zero step 3).
+	//
+	//   GET  .../tcs-declarations -> Display / tcs-declaration
+	//   POST .../tcs-declarations -> Create  / tcs-declaration
+	//
+	// ITS OWN TOKEN, AND SEPARATE FROM deductor-status, though the two sit side
+	// by side on the same screen. They are opposite authorities over opposite
+	// sides of the same statute: the deductor status says what WE must withhold,
+	// and a declaration says what we must NOT collect from a named customer.
+	// Filing one is closer to clerical master-data upkeep — the document arrives
+	// from the buyer and is transcribed — while the deductor status is a
+	// self-assessment that decides a year of withholding. One token would force
+	// an owner to grant both together.
+	//
+	// Both halves are STILL default-denied for the seeded Data Entry level (its
+	// default_access is 'none' and no rule names this token), because a
+	// declaration ZEROES tax on every future sale to that buyer and its absence
+	// is not detectable from the invoice. That is a decision, not an accident,
+	// and TestTCSDeclarationAuthMatrix pins it — an administrator who wants to
+	// delegate transcription can now write the rule, which is the point of the
+	// separate token.
+	case strings.HasPrefix(rest, "/tcs-declarations"):
+		switch method {
+		case http.MethodGet:
+			return authz.Display, "tcs-declaration", "", true
+		case http.MethodPost:
+			return authz.Create, "tcs-declaration", "", true
+		}
+		return "", "", "", false
+
 	// Reports (and the recon queue / gstr1, modelled as reports).
 	//
 	// reconciliation-queue used to be handled by a case of its own HERE, with

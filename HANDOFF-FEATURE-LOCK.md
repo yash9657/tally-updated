@@ -13,9 +13,9 @@
 > `HANDOFF-T1-PRINTING.md` as the entry point.** They remain useful for the *reasoning* behind
 > specific decisions; this file is the plan of record.
 >
-> **State at handoff:** migrations `0050` · backend **1914 pass / 0 SKIP / 0 FAIL** ·
-> frontend **439** · `make verify` green · tree clean. **Item Zero steps 1 and 2 have landed —
-> see §2. Step 3 (TCS on the post path) is the blocker.**
+> **State at handoff:** migrations `0067` · backend **1929 pass / 0 SKIP / 0 FAIL** · frontend **443** ·
+> `make verify` green · tree clean. **Item Zero steps 1–3 have landed — see §2. Step 4 (the
+> register and the returns) is all that is left of the debt.**
 
 ---
 
@@ -65,10 +65,11 @@ Act **as enacted**, while the amended edition sat unread in `docs/statutory/`.
 
 ---
 
-## 2. ⛔ ITEM ZERO — STEP 1 IS DONE. Steps 2–4 remain.
+## 2. ⛔ ITEM ZERO — STEPS 1–3 ARE DONE. Step 4 remains.
 
 Migrations 0049/0050 and three compliance engines existed, were tested, and **nothing called
-them**. Step 1 below has now landed: `ledger.Post` reads liability, cumulates, and persists.
+them**. Steps 1–3 below have now landed: both taxes derive, refuse, persist, and are
+configurable from F11. Nothing can yet be REPORTED, which is step 4.
 
 **✅ Step 1 — the TDS post path (done).** Inside the existing post transaction, in this order:
 deductor status for the **preceding** tax year → `MustDeduct` → refuse when unrecorded
@@ -114,12 +115,44 @@ An operator can now go from "refused" to "posted" without touching the database,
 > calls" this Item Zero exists to pay off. They belong with step 3, where wiring TCS into the
 > post path makes them a complete slice.
 
+**✅ Step 3 — TCS on the post path, with the s.394(2) declaration route and screen (done).**
+`TCSDerive` is called on Sales, the collection is verified and **persisted** (migration
+**0067** `tcs_collection`, the mirror of 0050), and `GET/POST /tcs-declarations` plus a second
+F11 panel make the exemption reachable. `TestFilingADeclarationExemptsTheNextSale` proves the
+pair meets: a scrap sale collects 2%, a declaration is filed, the same sale collects nothing.
+
+> **THREE THINGS ARE DELIBERATELY NOT MIRRORED FROM THE TDS SIDE. Do not "make them
+> consistent" — each asymmetry is the statute, and two of them are traps.**
+>
+> 1. **No aggregate and no catch-up.** Both shipped sections are per-transaction: Sl. No. 4
+>    (scrap) states no threshold, Sl. No. 6 (motor vehicles) tests the single sale. Cumulating
+>    either would collect tax the section does not charge.
+> 2. **The declaration is read for the SALE's OWN tax year**, whereas the deductor status is
+>    read for the year BEFORE the payment. Reusing `deductorStatusTaxYear` here silently
+>    ignores every declaration ever filed — mutation-proved.
+> 3. **A PAN-less declaration is NOT "no declaration".** s.397(2)(f)(i) invalidates it and (g)
+>    then requires the **penal 5%**, not the base 2% and not the exemption. Collapsing NULL PAN
+>    into "absent" in the lookup charges 2% — mutation-proved. `tcs_collection.declaration_outcome`
+>    is three-valued for the same reason.
+>
+> **TWO DISCLOSED GAPS, both in the over-collecting (recoverable) direction:** no
+> seller-liability test is modelled — s.394(1) charges "every person, being a seller" and that
+> definition has not been read against primary text from this environment, so every company
+> that keys a `tcs` block collects; and a **credit note reversing a collected sale is not
+> handled** (it needs a negative collection, which 0067 forbids by CHECK, and a return that
+> files a negative line is a Form 143 question).
+>
+> **No `return_code` column on 0067, unlike 0050 — deliberately.** 0050 needed one because
+> 194J-P and 194J-D share a statutory limb at the same rate and differ only by code. The two
+> TCS sections are distinct rows at distinct rates, so `section` determines the code uniquely
+> and a later migration can backfill it safely. The Form 143 codes have not been sourced, and
+> **inventing one would put a fabricated code in a filed return.**
+
 **What remains:**
 
 | # | Work | Notes |
 |---|---|---|
-| **3** | **Wire TCS into the post path, WITH the s.394(2) declaration route and screen** | Now the blocking item. `TCSInput.Declaration` (the exemption and its penal-rate coupling) and `tcs_collection_declaration` both still have no caller. A sale that should collect tax at source collects nothing. |
-| **4** | T6's register and the Form 140 return | These can finally read something. Until the register exists, the TDS row on `FeaturesScreen` stays **off**. |
+| **4** | **T6's register and the Form 140 / Form 143 returns** | The only Item Zero step left, and now the blocker. Both `tds_deduction` and `tcs_collection` have rows to read. **Needs: the Form 143 payment codes read against primary text** (§7 human task), and the `.csi` challan refusal designed. Until a register exists, the TDS/TCS row on `FeaturesScreen` stays **off** — the numbers are correct, stored, and go nowhere. |
 
 ---
 
@@ -191,7 +224,7 @@ seven layers of §1.
 
 | Order | Work | Why here |
 |---|---|---|
-| **0** | **§2 steps 3–4 — TCS on the post path (with its s.394(2) declaration route), then the register and Form 140** | Steps 1 and 2 are done: TDS derives, refuses, persists, and an operator can record their deductor status on F11. **TCS still collects nothing.** |
+| **0** | **§2 step 4 — the TDS/TCS register and the Form 140 / 143 returns** | Steps 1–3 are done: both taxes derive, refuse, and persist, and both are configurable from F11. **Nothing can be reported yet**, which is the last of the debt. |
 | **1** | **T6** register + returns · **T29** bank import | Finishes Wave 1. Both have memos and storage already. |
 | **2** | **T3** orders + BOM · **T2** cost centres | The two most-used missing features. Disjoint packages. T11/T24 depend on T2. |
 | **3** | **T32 import from Tally** | Moved EARLY on purpose — see the note above. Without it there is no migration path. |

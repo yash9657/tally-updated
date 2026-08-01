@@ -46,6 +46,9 @@ import type {
   VoucherHistoryResponse,
   BankReconciliationResponse,
   DeductorStatusListResponse,
+  TCSDeclarationListResponse,
+  CreateTCSDeclarationRequest,
+  CreateTCSDeclarationResponse,
   SetDeductorStatusRequest,
   SetDeductorStatusResponse,
   SetBankDateRequest,
@@ -170,6 +173,19 @@ export function createRestClient(
       // could disagree with the URL is a question about which one wins.
       return http.put<SetDeductorStatusResponse>(
         `${company(companyID)}/deductor-status/${taxYearStart}`,
+        req,
+      );
+    },
+
+    // ---- s.394(2) declarations (Item Zero step 3).
+    listTCSDeclarations(companyID) {
+      return http.get<TCSDeclarationListResponse>(
+        `${company(companyID)}/tcs-declarations`,
+      );
+    },
+    createTCSDeclaration(companyID, req: CreateTCSDeclarationRequest) {
+      return http.post<CreateTCSDeclarationResponse>(
+        `${company(companyID)}/tcs-declarations`,
         req,
       );
     },

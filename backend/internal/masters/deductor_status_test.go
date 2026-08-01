@@ -22,6 +22,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/khata/cored/internal/compliance"
+	"github.com/khata/cored/internal/masters"
 	"github.com/khata/cored/internal/platform/testdb"
 )
 
@@ -133,6 +134,60 @@ func TestNaturalPersonCategoriesMatchTheMigration(t *testing.T) {
 		if named != expected {
 			t.Errorf("category %q: named in the turnover_required CHECK = %v, but "+
 				"masters treats it as subject to the test = %v", c, named, expected)
+		}
+	}
+}
+
+// TestDeclarationEligibleSectionsMatchTheMigration is the third vocabulary that
+// can drift, and the one where drift is a statutory error rather than a UI bug.
+//
+// s.394(2) reaches Table Sl. Nos. 1 to 5. Scrap is Sl. No. 4 and IS reachable;
+// motor vehicles are Sl. No. 6 and are NOT. If masters and migration 0049
+// disagree about that line, one of two things happens: an operator files a
+// declaration the database refuses with a constraint violation, or masters
+// refuses one the statute allows and the buyer is charged tax they do not owe.
+func TestDeclarationEligibleSectionsMatchTheMigration(t *testing.T) {
+	if os.Getenv("CORED_SKIP_DB") != "" {
+		t.Skip("db tests skipped")
+	}
+	clause := checkClause(t, "tcs_collection_declaration_section_eligible")
+
+	got := masters.TCSDeclarationSections()
+	for _, s := range got {
+		if !strings.Contains(clause, "'"+s+"'") {
+			t.Errorf("masters accepts a declaration against %q but migration 0049's "+
+				"CHECK does not — the operator gets a constraint violation on save", s)
+		}
+	}
+	// The direction that matters more: the migration must not allow a section
+	// masters silently refuses, or a buyer entitled to the exemption is charged.
+	for _, lit := range strings.Split(clause, "'") {
+		if lit == "" || strings.ContainsAny(lit, " (),\n") || !strings.Contains(lit, "206C") {
+			continue
+		}
+		found := false
+		for _, s := range got {
+			if s == lit {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("migration 0049's CHECK allows a declaration against %q but "+
+				"masters refuses one — a buyer entitled to the s.394(2) exemption "+
+				"would be charged", lit)
+		}
+	}
+
+	// ⚠️ MOTOR VEHICLES MUST NOT BE IN EITHER. Sl. No. 6 is outside s.394(2)'s
+	// reach, and this is the specific error V-9 exists to prevent.
+	if strings.Contains(clause, "206C(1F)-MV") {
+		t.Error("migration 0049 allows a declaration against motor vehicles; " +
+			"s.394(2) reaches Table Sl. Nos. 1 to 5 and they are Sl. No. 6")
+	}
+	for _, s := range got {
+		if s == "206C(1F)-MV" {
+			t.Error("masters allows a declaration against motor vehicles; s.394(2) " +
+				"reaches Table Sl. Nos. 1 to 5 and they are Sl. No. 6")
 		}
 	}
 }

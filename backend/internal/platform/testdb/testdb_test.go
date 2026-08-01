@@ -335,6 +335,24 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 			        'tds-2026-04', 'testdb')`,
 			[]any{id(), cid, voucherID, ledgerID}},
 
+		// Migration 0067 — one collection fact, the mirror of the row above.
+		//
+		// declaration_outcome is 'EXEMPT' and the amount is therefore ZERO, which
+		// is the combination that exercises the two CHECKs unique to this table:
+		// only_eligible_sections_exempt (an exemption is legal ONLY against
+		// scrap, because s.394(2) reaches Table Sl. Nos. 1-5 and motor vehicles
+		// are Sl. No. 6) and exempt_collects_nothing. A plain NONE row with tax
+		// on it would satisfy neither.
+		{"tcs_collection", `INSERT INTO tcs_collection
+			(id, company_id, voucher_id, leg_seq, buyer_ledger_id, section,
+			 tax_year_start, collection_date, taxable_base_rupees, rate_pct,
+			 tcs_amount_rupees, pan_available, declaration_outcome,
+			 ruleset_version, recorded_by)
+			VALUES ($1, $2, $3, 0, $4, '206C(1)-SCRAP', 2026,
+			        DATE '2026-07-10', 50000, 2, 0, true, 'EXEMPT',
+			        'tcs-2026-04', 'testdb')`,
+			[]any{id(), cid, voucherID, ledgerID}},
+
 		// ------------------------------------------------------------------
 		// Track 2 — the inward-supply side: a GSTR-2B statement, one document
 		// in it, an IMS action against that document, and the GSTR-3B filing

@@ -63,7 +63,9 @@ describe("F11 TDS Deductor Details", () => {
     // looks like a bug.
     await waitFor(() =>
       expect(
-        screen.getByText(/Recorded for 2025-26 .* governs payments made in 2026-27/),
+        screen.getByText(
+          /Recorded for 2025-26 .* governs payments made in 2026-27/,
+        ),
       ).toBeTruthy(),
     );
     // And it appears in the list with the same statement.
@@ -113,5 +115,89 @@ describe("F11 TDS Deductor Details", () => {
     // the feature shipped, and this screen must not imply that it does.
     expect(await screen.findByText("TDS / TCS")).toBeTruthy();
     expect(screen.getAllByText("Not built").length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * F11 > s.394(2) manufacturing declarations — Item Zero step 3, layer 5.
+ *
+ * Same caveat as above, and it matters more here: the mock does not derive TCS,
+ * so nothing in this file proves a filed declaration actually exempts a sale.
+ * TestFilingADeclarationExemptsTheNextSale does that server-side, over HTTP.
+ * What these tests DO cover is the part that lives only in the client — whether
+ * the operator is told what the missing-PAN case costs their buyer.
+ */
+describe("F11 s.394(2) declarations", () => {
+  it("says none are held, and that every sale therefore collects", async () => {
+    renderFeatures();
+    expect(
+      await screen.findByText(/None held .* collects at the normal rate/),
+    ).toBeTruthy();
+  });
+
+  it("WARNS BEFORE FILING that an empty PAN triggers the penal rate", async () => {
+    renderFeatures();
+    await screen.findByLabelText("Buyer PAN");
+
+    // ⚠️ THE ASSERTION THAT MATTERS ON THIS SCREEN. An operator transcribing a
+    // document has no way to know that leaving the PAN blank charges their
+    // buyer 5% instead of 2% — worse than filing nothing. The warning must be
+    // visible BEFORE the mistake, so it renders on the empty field rather than
+    // in a response.
+    expect(
+      screen.getByText(/s.397\(2\)\(f\)\(i\) makes it INVALID/),
+    ).toBeTruthy();
+    expect(screen.getByText(/worse for them than filing nothing/)).toBeTruthy();
+
+    // ...and it goes away once a PAN is entered.
+    fireEvent.change(screen.getByLabelText("Buyer PAN"), {
+      target: { value: "AAAPZ1234C" },
+    });
+    await waitFor(() =>
+      expect(
+        screen.queryByText(/worse for them than filing nothing/),
+      ).toBeNull(),
+    );
+  });
+
+  it("files a declaration and shows the s.394(3) forwarding deadline", async () => {
+    renderFeatures();
+    const buyerPicker = await screen.findByLabelText("Buyer");
+    // The mock company seeds ledgers; pick whichever debtor it offers.
+    const options = Array.from(
+      buyerPicker.querySelectorAll("option"),
+    ) as HTMLOptionElement[];
+    const buyer = options.find((o) => o.value !== "");
+    if (!buyer) throw new Error("mock company offered no ledgers to pick");
+
+    fireEvent.change(buyerPicker, { target: { value: buyer.value } });
+    fireEvent.change(screen.getByLabelText("Declaration date"), {
+      target: { value: "2026-04-01" },
+    });
+    fireEvent.change(screen.getByLabelText("Received date"), {
+      target: { value: "2026-04-28" },
+    });
+    fireEvent.change(screen.getByLabelText("Buyer PAN"), {
+      target: { value: "AAAPZ1234C" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "File" }));
+
+    // Received 28 April -> a copy is due to the Commissioner by 7 MAY. Storing
+    // the document without surfacing this would build a compliance trap.
+    await waitFor(() => expect(screen.getByText(/by 2026-05-07/)).toBeTruthy());
+    expect(screen.getByText(/now exempt/)).toBeTruthy();
+  });
+
+  it("refuses a declaration against motor vehicles the way the statute does", async () => {
+    renderFeatures();
+    await screen.findByLabelText("Section");
+    // s.394(2) reaches Sl. Nos. 1-5; motor vehicles are Sl. No. 6, so the
+    // picker must not even offer them.
+    const sectionPicker = screen.getByLabelText("Section");
+    const values = Array.from(sectionPicker.querySelectorAll("option")).map(
+      (o) => (o as HTMLOptionElement).value,
+    );
+    expect(values).not.toContain("206C(1F)-MV");
+    expect(values).toContain("206C(1)-SCRAP");
   });
 });

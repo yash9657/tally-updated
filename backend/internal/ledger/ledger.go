@@ -252,6 +252,13 @@ type VoucherInput struct {
 	// TDS, when non-nil and Class is Purchase, Payment or Journal, drives
 	// derivation and verification of the posted TDS leg. See tds.go.
 	TDS *TDSParams
+	// TCS, when non-nil and Class is Sales, drives derivation and verification
+	// of the posted TCS leg — the collection-side mirror. See tcs.go.
+	//
+	// It carries NO declaration field: the s.394(2) exemption is read from
+	// tcs_collection_declaration inside the post transaction, so it cannot be
+	// asserted by a request body.
+	TCS *TCSParams
 	// SourceGUID is the stable external (Tally) GUID this voucher was imported
 	// from, recorded on voucher_head for idempotent re-import. Empty for natively
 	// created vouchers (those never participate in the (company, guid) dedupe).
@@ -288,6 +295,12 @@ type PostResult struct {
 	// read the same numbers this echoes. A company with no duty under the
 	// section leaves this zero and writes no row — see ledger/tds.go.
 	TDS compliance.TDSResult
+	// TCS is the derived collection, populated when TCS derivation ran, and
+	// PERSISTED as a tcs_collection row (migration 0067) in the same
+	// transaction. Its Declaration field records what a s.394(2) declaration
+	// did — NONE, EXEMPT or INVALID_NO_PAN — which is the fact a zero amount
+	// alone cannot express.
+	TCS compliance.TCSResult
 }
 
 // Service is the ledger application service.
@@ -793,6 +806,15 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 	// Receipt. A DELETE tombstone carries no postings and derives nothing.
 	tdsActive := in.TDS != nil && op != OpDelete &&
 		(in.Class == Purchase || in.Class == Payment || in.Class == Journal)
+	// Whether this post carries TCS derivation. Collection is made by the SELLER
+	// out of what the buyer pays, so it is the exact mirror: Sales only, never
+	// Purchase or Payment.
+	//
+	// A Credit Note reversing a sale on which tax was collected is NOT handled —
+	// it would need a negative collection, migration 0067 forbids one by CHECK,
+	// and a return that files a negative line is a question for the Form 143
+	// slice rather than something to improvise here. Disclosed in the handoff.
+	tcsActive := in.TCS != nil && op != OpDelete && in.Class == Sales
 
 	versionID, err := uuid.NewV7()
 	if err != nil {
@@ -819,6 +841,12 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 	// tdsTaxYear is the tax year of the PAYMENT — the aggregate's key, and NOT
 	// the preceding year the deductor-status test reads.
 	var tdsTaxYear int
+	// tcsRes is the derived collection, and tcsTaxYear the tax year of the SALE.
+	// There is no tcsLiable flag to match tdsLiable: no seller-liability test is
+	// modelled (see ledger/tcs.go header, point 2), so a `tcs` block on a Sales
+	// voucher always derives and always records.
+	var tcsRes compliance.TCSResult
+	var tcsTaxYear int
 
 	var result PostResult
 	err = s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
@@ -944,12 +972,50 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 			}
 		}
 
-		// An ALTER or DELETE re-states the voucher, so its prior deduction rows
-		// go first — before the aggregate any LATER post reads, and before this
-		// voucher's own re-insert below. A voucher altered to carry no TDS ends
-		// here with no row at all, which is the point.
+		// TCS — the collection-side mirror, on Sales.
+		//
+		// The s.394(2) declaration is READ HERE, from the same transaction, and
+		// never taken from the request body: it is a signed document the
+		// collector holds and must forward to the Commissioner, not an
+		// entry-time flag an operator can use to zero the tax.
+		if tcsActive {
+			if in.VoucherDate == "" {
+				return ErrTCSDateRequired
+			}
+			saleTaxYear, err := finYearOf(in.VoucherDate)
+			if err != nil {
+				return err
+			}
+			tcsTaxYear = saleTaxYear
+			if in.TCS.BuyerLedgerID == uuid.Nil {
+				return ErrBuyerUnknown
+			}
+			// ⚠️ The SALE's own tax year, not the preceding one. The
+			// deductor-status read above deliberately uses the preceding year
+			// (s.402(37)(b)); a declaration governs the year it was furnished
+			// for. Reusing deductorStatusTaxYear here would ignore every
+			// declaration ever filed.
+			decl, err := readTCSDeclaration(ctx, tx, companyID,
+				in.TCS.BuyerLedgerID, in.TCS.Section, saleTaxYear)
+			if err != nil {
+				return err
+			}
+			r, err := deriveAndVerifyTCS(in, decl)
+			if err != nil {
+				return err
+			}
+			tcsRes = r
+		}
+
+		// An ALTER or DELETE re-states the voucher, so its prior deduction and
+		// collection rows go first — before the aggregate any LATER post reads,
+		// and before this voucher's own re-insert below. A voucher altered to
+		// carry no TDS or TCS ends here with no row at all, which is the point.
 		if op != OpCreate {
 			if err := deleteTDSDeductions(ctx, tx, companyID, voucherID); err != nil {
+				return err
+			}
+			if err := deleteTCSCollections(ctx, tx, companyID, voucherID); err != nil {
 				return err
 			}
 		}
@@ -1486,6 +1552,16 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 				return err
 			}
 		}
+		// The collection row, for the same reason and at the same seam. Written
+		// even when the tax is ZERO: a sale exempted by a s.394(2) declaration is
+		// the one that most needs a record, because the exemption rests on a
+		// document the department can ask to see.
+		if tcsActive {
+			if err := writeTCSCollection(ctx, tx, companyID, voucherID, in, tcsRes,
+				tcsTaxYear, in.VoucherDate, in.CreatedBy); err != nil {
+				return err
+			}
+		}
 
 		result = PostResult{
 			VoucherID:        voucherID,
@@ -1495,6 +1571,7 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 			VoucherNo:        in.VoucherNo,
 			Tax:              tax,
 			TDS:              tdsRes,
+			TCS:              tcsRes,
 		}
 		return nil
 	})
