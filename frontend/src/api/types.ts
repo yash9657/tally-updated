@@ -997,3 +997,66 @@ export interface VoucherHistoryResponse {
   versions: VoucherVersionView[];
   verification: ChainVerification;
 }
+
+// ---------------------------------------------------------------------------
+// TDS DEDUCTOR STATUS (Item Zero step 2). Tally's F11 > Enable TDS >
+// "TDS Deductor Details" (RESEARCH.md:692).
+//
+// Whether this company is required to deduct tax at source, per tax year. The
+// TDS post path REFUSES every voucher for a company with no row, so this is the
+// screen that makes TDS usable at all.
+// ---------------------------------------------------------------------------
+
+/** One recorded tax year's deductor status. */
+export interface DeductorStatus {
+  /** The calendar year the tax year BEGINS in: 2025 = 2025-26. */
+  tax_year_start: number;
+  /** "2025-26" — pre-rendered by the server so the client never does this sum. */
+  tax_year_label: string;
+  /** Tally's "deductor type": one of the s.402(11)(a)-(l) categories. */
+  entity_category: string;
+  /**
+   * ⚠️ THE YEAR THIS ROW ACTUALLY DECIDES, which is NOT tax_year_start.
+   * s.402(37)(b) tests turnover "during the tax year immediately preceding",
+   * so the 2025-26 row governs payments made in 2026-27. The server derives and
+   * sends both so a screen can state it instead of an operator guessing.
+   */
+  governs_payments_in: number;
+  governs_payments_in_label: string;
+  /**
+   * EMPTY when the turnover test does not apply to this category — which is a
+   * different statement from "0". A COMPANY is a specified and designated
+   * person whatever it turned over, so it records no figure at all.
+   */
+  prior_year_turnover_rupees: string;
+  /** "BUSINESS" or "PROFESSION"; empty when not applicable. */
+  prior_year_activity: string;
+  recorded_by: string;
+  recorded_at: string;
+}
+
+export interface DeductorStatusListResponse {
+  deductor_statuses: DeductorStatus[];
+  /**
+   * The category vocabulary, SERVED rather than hard-coded here. A fourth copy
+   * of a closed list the migration owns would drift, and a picker offering a
+   * category the database refuses fails only on save.
+   */
+  entity_categories: string[];
+  prior_year_activity: string[];
+}
+
+export interface SetDeductorStatusRequest {
+  entity_category: string;
+  /** Omit or send "" when the turnover test does not apply. Never "0". */
+  prior_year_turnover_rupees?: string;
+  prior_year_activity?: string;
+  recorded_by: string;
+}
+
+export interface SetDeductorStatusResponse {
+  tax_year_start: number;
+  tax_year_label: string;
+  governs_payments_in: number;
+  governs_payments_in_label: string;
+}

@@ -538,6 +538,40 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 		// than being silently treated as one of the above.
 		return "", "", "", false
 
+	// TDS DEDUCTOR STATUS (Item Zero step 2): whether this company must deduct
+	// at all, per tax year. Tally's F11 > Enable TDS > TDS Deductor Details.
+	//
+	//   GET .../deductor-status            -> Display / deductor-status
+	//   PUT .../deductor-status/{taxYear}  -> Alter   / deductor-status
+	//
+	// ONE TOKEN FOR BOTH, unlike bank-reconciliation above. There, read and write
+	// are authorities over different objects. Here they are two authorities over
+	// the same small object, so one token keeps one rule governing both — the
+	// masters arms' reasoning, not the statement's.
+	//
+	// IT IS NOT `company`, AND THAT IS THE DECISION IN THIS ARM. Folding it in
+	// would make "an accountant may correct our address but must not change our
+	// deductor status" unwritable — and those are not comparable acts: flipping
+	// the category from INDIVIDUAL to COMPANY starts withholding tax out of every
+	// supplier payment for the year. It is not `master` either, because migration
+	// 0022 grants Data Entry `allow display master` for the F9 party picker, and
+	// there is no `master:NAME` form to narrow it back afterwards.
+	//
+	// The PUT is an Alter and therefore a write, so it correctly inherits the
+	// back-dated cutoff and whatever step-up the level requires of an Alter —
+	// restating a prior year's status IS a back-dated act, and it changes what
+	// every payment in the following year should have deducted.
+	case strings.HasPrefix(rest, "/deductor-status"):
+		switch method {
+		case http.MethodGet:
+			return authz.Display, "deductor-status", "", true
+		case http.MethodPut:
+			return authz.Alter, "deductor-status", "", true
+		}
+		// Any other method falls through to default-deny rather than being
+		// silently treated as one of the above.
+		return "", "", "", false
+
 	// Reports (and the recon queue / gstr1, modelled as reports).
 	//
 	// reconciliation-queue used to be handled by a case of its own HERE, with

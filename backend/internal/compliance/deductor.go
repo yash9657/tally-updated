@@ -83,6 +83,32 @@ const (
 	EntityBOI                  = "BOI"                   // (l)
 )
 
+// KnownEntityCategories is every category above, in the statute's order. It is
+// the ONE list a caller should validate against or render a picker from.
+//
+// It exists because there were about to be three copies of this list — this
+// file's constants, migration 0049's CHECK, and a dropdown in the client — and
+// three copies of a closed vocabulary drift. The migration is the authority;
+// TestKnownEntityCategoriesMatchTheMigration asserts this matches it, so a
+// category added to one and not the other fails a test instead of producing a
+// picker option the database refuses.
+var KnownEntityCategories = []string{
+	EntityGovernment, EntityLocalAuthority, EntityStatutoryCorporation,
+	EntityCompany, EntityCooperativeSociety, EntityHousingAuthority,
+	EntityRegisteredSociety, EntityTrust, EntityUniversity, EntityForeign,
+	EntityFirm, EntityIndividual, EntityHUF, EntityAOP, EntityBOI,
+}
+
+// IsKnownEntityCategory reports whether a category is one of s.402(11)(a)–(l).
+func IsKnownEntityCategory(category string) bool {
+	for _, c := range KnownEntityCategories {
+		if c == category {
+			return true
+		}
+	}
+	return false
+}
+
 // Prior-year activity. The two carry DIFFERENT limits, so the activity is
 // stored and never inferred from the turnover.
 const (

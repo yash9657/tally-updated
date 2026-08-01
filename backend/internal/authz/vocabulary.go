@@ -146,6 +146,42 @@ var KnownResources = append([]Resource{
 	// together, and the only safe resolution of that is to refuse the clerk the
 	// write, which deletes the feature. Migration 0046 depends on the split.
 	"bank-reconciliation",
+
+	// THE TDS DEDUCTOR STATUS (migration 0049, Item Zero step 2): whether this
+	// company is a s.402(11) designated person and/or a s.402(37) specified
+	// person, per tax year. Tally keeps it in F11 > Enable TDS > TDS Deductor
+	// Details (RESEARCH.md:692).
+	//
+	// WHY IT IS NOT `company`, WHICH IS THE FOLD A REVIEWER WOULD SUGGEST. The
+	// `company` token governs the company master — its name, address, GSTIN,
+	// home state. Those are facts an accountant corrects. THIS decides whether
+	// tax is withheld out of every supplier payment for a year: flipping the
+	// category from INDIVIDUAL to COMPANY starts deducting on payments that
+	// attracted nothing, and flipping it the other way stops deductions the
+	// company remains liable for, with interest under s.396. "May correct the
+	// address, may not touch the deductor status" is a rule an owner should be
+	// able to write, and one token for both makes it unwritable.
+	//
+	// AND NOT `master` either: migration 0022 grants the seeded Data Entry level
+	// `allow display master` so the F9 party picker works, and there is no
+	// `master:NAME` narrowing form to take it back afterwards — the same trap
+	// the `employee` entry above exists to avoid.
+	//
+	// UNLIKE bank-reconciliation, THE READ AND THE WRITE SHARE THIS TOKEN. It is
+	// one small object (a category and a turnover figure), not a position
+	// statement, so there is no sensitive read to separate out — and one token
+	// keeps one rule governing both, as it does for masters.
+	//
+	// NO ACL MIGRATION ACCOMPANIES IT, deliberately, and that is a decision
+	// rather than an omission: the seeded Data Entry level has
+	// default_access = 'none' and no coarse rule reaches this token (0011's
+	// `allow display report` only reaches report:NAME; 0022's is `master`), so
+	// Data Entry is already refused both halves and the Owner's 'full' already
+	// allows them. That is the intended authority — recording the deductor
+	// status is the act that decides a year of withholding, so it belongs to
+	// whoever signs the return, not to whoever keys the bills.
+	// TestDeductorStatusAuthMatrix pins all three answers.
+	"deductor-status",
 }, KnownVoucherClasses...)
 
 // KnownReportNames is every report a rule may name via the "report:NAME" form.

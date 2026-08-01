@@ -45,6 +45,9 @@ import type {
   SetLedgerOpeningResponse,
   VoucherHistoryResponse,
   BankReconciliationResponse,
+  DeductorStatusListResponse,
+  SetDeductorStatusRequest,
+  SetDeductorStatusResponse,
   SetBankDateRequest,
   SetBankDateResponse,
 } from "./types";
@@ -152,6 +155,25 @@ export function createRestClient(
         `${company(companyID)}/bank-reconciliation/${ledgerID}/${voucherID}/${legNo}`,
       );
     },
+    // ---- TDS deductor status (Item Zero step 2).
+    listDeductorStatus(companyID) {
+      return http.get<DeductorStatusListResponse>(
+        `${company(companyID)}/deductor-status`,
+      );
+    },
+    setDeductorStatus(
+      companyID,
+      taxYearStart: number,
+      req: SetDeductorStatusRequest,
+    ) {
+      // The year is in the PATH because it is the row's identity. A body that
+      // could disagree with the URL is a question about which one wins.
+      return http.put<SetDeductorStatusResponse>(
+        `${company(companyID)}/deductor-status/${taxYearStart}`,
+        req,
+      );
+    },
+
     createLedger(companyID, req: CreateLedgerRequest) {
       return http.post<CreateLedgerResponse>(
         `${company(companyID)}/ledgers`,

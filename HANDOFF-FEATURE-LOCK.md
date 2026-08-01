@@ -13,8 +13,9 @@
 > `HANDOFF-T1-PRINTING.md` as the entry point.** They remain useful for the *reasoning* behind
 > specific decisions; this file is the plan of record.
 >
-> **State at handoff:** migrations `0050` · backend **1902 pass / 0 SKIP / 0 FAIL** ·
-> frontend **434** · `make verify` green · tree clean. **Item Zero step 1 has landed — see §2.**
+> **State at handoff:** migrations `0050` · backend **1914 pass / 0 SKIP / 0 FAIL** ·
+> frontend **439** · `make verify` green · tree clean. **Item Zero steps 1 and 2 have landed —
+> see §2. Step 3 (TCS on the post path) is the blocker.**
 
 ---
 
@@ -91,18 +92,34 @@ block. Five mutation proofs; backend **1902 pass / 0 SKIP / 0 FAIL**.
 > HTTP tests were green while sending an invalid `dr_cr` — every domain refusal on that route is
 > a 422, so **asserting the status code alone proves nothing. Assert the reason.**
 
+**✅ Step 2 — the deductor-status route and screen (done).** `GET /deductor-status` and
+`PUT /deductor-status/{taxYear}`, mapped in `routeAction()`, `deductor-status` added to
+`authz.KnownResources`, and a **TDS Deductor Details** panel on the existing **F11** screen —
+which is where Tally keeps it (`RESEARCH.md:692`: F11 > Enable TDS > TDS Deductor Details).
+An operator can now go from "refused" to "posted" without touching the database, which is what
+`TestRecordingTheStatusUnblocksTDSPosting` asserts end to end over HTTP.
+
+> **NO ACL MIGRATION, AND THAT IS A DECISION.** Data Entry's `default_access` is `none` and no
+> coarse rule reaches this token — 0011's `allow display report` only reaches `report:NAME`,
+> 0022's is `master` — so Data Entry is already refused both halves and Owner's `full` already
+> allows them. That is the intended authority: recording the deductor status decides a year of
+> withholding, so it belongs to whoever signs the return, not whoever keys the bills.
+> `TestDeductorStatusAuthMatrix` pins all four answers on both halves. **No restatement of
+> `seed_company_auth_defaults` was needed, which also avoids that function's serialization
+> trap** — 0046's header explains why that matters.
+>
+> **⛔ TCS DECLARATIONS WERE DELIBERATELY NOT BUILT HERE**, though the original step 2 bundled
+> them. `TCSInput.Declaration` has no caller, so a route and screen for
+> `tcs_collection_declaration` would be a second helping of the exact "correct code nothing
+> calls" this Item Zero exists to pay off. They belong with step 3, where wiring TCS into the
+> post path makes them a complete slice.
+
 **What remains:**
 
 | # | Work | Notes |
 |---|---|---|
-| **2** | `POST/PUT /companies/{id}/deductor-status` and `/tcs-declarations` + ACL + screens | Until this exists, **liability can only be recorded by raw SQL** — so the post path refuses every TDS voucher on a real deployment. This is now the blocking item. |
-| **3** | Wire TCS into the post path at all | Never wired. `TCSInput.Declaration` (s.394(2) + the penal-rate coupling) still has no caller. |
-| **4** | T6's register and the Form 140 return | These can finally read something. |
-
-| Still uncalled | Where |
-|---|---|
-| `TCSInput.Declaration` — s.394(2) exemption + penal rate | `internal/compliance/tcs.go` |
-| `tcs_collection_declaration` | migration 0049 |
+| **3** | **Wire TCS into the post path, WITH the s.394(2) declaration route and screen** | Now the blocking item. `TCSInput.Declaration` (the exemption and its penal-rate coupling) and `tcs_collection_declaration` both still have no caller. A sale that should collect tax at source collects nothing. |
+| **4** | T6's register and the Form 140 return | These can finally read something. Until the register exists, the TDS row on `FeaturesScreen` stays **off**. |
 
 ---
 
@@ -174,7 +191,7 @@ seven layers of §1.
 
 | Order | Work | Why here |
 |---|---|---|
-| **0** | **§2 steps 2–4 — the deductor-status route/screen, then TCS on the post path** | Step 1 is done. **Step 2 is now the blocker: without a route, liability can only be set by raw SQL, so every TDS voucher is refused on a real deployment.** |
+| **0** | **§2 steps 3–4 — TCS on the post path (with its s.394(2) declaration route), then the register and Form 140** | Steps 1 and 2 are done: TDS derives, refuses, persists, and an operator can record their deductor status on F11. **TCS still collects nothing.** |
 | **1** | **T6** register + returns · **T29** bank import | Finishes Wave 1. Both have memos and storage already. |
 | **2** | **T3** orders + BOM · **T2** cost centres | The two most-used missing features. Disjoint packages. T11/T24 depend on T2. |
 | **3** | **T32 import from Tally** | Moved EARLY on purpose — see the note above. Without it there is no migration path. |

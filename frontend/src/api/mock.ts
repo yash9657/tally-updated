@@ -66,6 +66,10 @@ import type {
   SetLedgerOpeningResponse,
   VoucherHistoryResponse,
   BankReconciliationResponse,
+  DeductorStatus,
+  DeductorStatusListResponse,
+  SetDeductorStatusRequest,
+  SetDeductorStatusResponse,
   BankReconLine,
   SetBankDateRequest,
   SetBankDateResponse,
@@ -432,6 +436,21 @@ function addMoney(a: Money, b: Money): Money {
   return ((ai + bi) / scale).toFixed(4);
 }
 
+// The fifteen s.402(11)(a)-(l) categories the server serves from
+// compliance.KnownEntityCategories. Duplicated here ONLY because the mock has no
+// server to ask; the real client renders whatever the API returns, so this list
+// never reaches a real screen.
+const MOCK_ENTITY_CATEGORIES = [
+  "GOVERNMENT", "LOCAL_AUTHORITY", "STATUTORY_CORPORATION", "COMPANY",
+  "COOPERATIVE_SOCIETY", "HOUSING_AUTHORITY", "REGISTERED_SOCIETY", "TRUST",
+  "UNIVERSITY", "FOREIGN_ENTITY", "FIRM", "INDIVIDUAL", "HUF", "AOP", "BOI",
+];
+
+/** "2025-26" from 2025, mirroring the server's taxYearLabel. */
+function mockTaxYearLabel(start: number): string {
+  return `${start}-${String((start + 1) % 100).padStart(2, "0")}`;
+}
+
 interface MockCompany {
   id: string;
   name: string;
@@ -502,6 +521,15 @@ interface MockCompany {
     string,
     { bankDate: string; clearedAmount: Money; clearedDrCr: string }
   >;
+  /**
+   * TDS deductor status, keyed by tax_year_start (Item Zero step 2).
+   *
+   * The mock does not derive TDS at all, so nothing here REFUSES a voucher the
+   * way the real post path does. It exists so the F11 panel has somewhere to
+   * read and write against — and the gap is worth naming: a screen that looks
+   * right against this mock is not evidence the refusal works.
+   */
+  deductorStatuses: Map<number, DeductorStatus>;
   /**
    * The INVENTORY MASTERS. Held as real rows (not synthesized on read) for the
    * same reason `ledgers` is: the item grid resolves an item's gst_rate_pct and
@@ -842,6 +870,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         batches: [],
         vouchers: [],
         bankDates: new Map(),
+        deductorStatuses: new Map(),
         views: new Map(),
         members: [
           {
@@ -930,6 +959,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       batches: [],
       vouchers: [],
       bankDates: new Map(),
+      deductorStatuses: new Map(),
       views: new Map(),
       counters: new Map(),
       // The seeded demo tenant carries the same admin defaults every company
@@ -2103,6 +2133,70 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
           { type: "application/pdf" },
         ),
         filename: `mock-${slug}.pdf`,
+      };
+    },
+
+    // ---- TDS DEDUCTOR STATUS (Item Zero step 2).
+    async listDeductorStatus(companyID): Promise<DeductorStatusListResponse> {
+      const c = ensure(companyID);
+      return {
+        deductor_statuses: [...c.deductorStatuses.values()].sort(
+          (a, b) => b.tax_year_start - a.tax_year_start,
+        ),
+        entity_categories: MOCK_ENTITY_CATEGORIES,
+        prior_year_activity: ["BUSINESS", "PROFESSION"],
+      };
+    },
+    async setDeductorStatus(
+      companyID,
+      taxYearStart: number,
+      req: SetDeductorStatusRequest,
+    ): Promise<SetDeductorStatusResponse> {
+      const c = ensure(companyID);
+      if (!MOCK_ENTITY_CATEGORIES.includes(req.entity_category)) {
+        throw new ApiError(
+          400,
+          `masters: invalid deductor status: ${JSON.stringify(req.entity_category)} is not one of the s.402(11)(a)–(l) deductor categories`,
+        );
+      }
+      // The turnover pair, mirroring masters.validateDeductorStatus. Kept here
+      // rather than skipped because the F11 panel's conditional fields are
+      // exactly what this rule drives, and a mock that accepted anything would
+      // let a broken form pass its own test.
+      const natural = ["INDIVIDUAL", "HUF", "AOP", "BOI"].includes(
+        req.entity_category,
+      );
+      const hasTurnover = (req.prior_year_turnover_rupees ?? "") !== "";
+      if (natural && !hasTurnover) {
+        throw new ApiError(
+          400,
+          `masters: invalid deductor status: ${req.entity_category} is subject to the turnover test, so the prior year's turnover and whether it was business or profession are both required`,
+        );
+      }
+      if (!natural && hasTurnover) {
+        throw new ApiError(
+          400,
+          `masters: invalid deductor status: ${req.entity_category} is a specified and designated person WHATEVER its turnover, so no turnover may be recorded against it`,
+        );
+      }
+      c.deductorStatuses.set(taxYearStart, {
+        tax_year_start: taxYearStart,
+        tax_year_label: mockTaxYearLabel(taxYearStart),
+        entity_category: req.entity_category,
+        governs_payments_in: taxYearStart + 1,
+        governs_payments_in_label: mockTaxYearLabel(taxYearStart + 1),
+        prior_year_turnover_rupees: hasTurnover
+          ? req.prior_year_turnover_rupees!
+          : "",
+        prior_year_activity: hasTurnover ? (req.prior_year_activity ?? "") : "",
+        recorded_by: req.recorded_by,
+        recorded_at: new Date().toISOString(),
+      });
+      return {
+        tax_year_start: taxYearStart,
+        tax_year_label: mockTaxYearLabel(taxYearStart),
+        governs_payments_in: taxYearStart + 1,
+        governs_payments_in_label: mockTaxYearLabel(taxYearStart + 1),
       };
     },
 

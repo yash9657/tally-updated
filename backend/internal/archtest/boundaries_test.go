@@ -60,8 +60,25 @@ var allowedDeps = map[string]map[string]bool{
 	"internal/identity":       {"internal/platform/db": true},
 	// ledger derives GST inline during a Sales/Purchase post, so it may import
 	// the pure compliance leaf (no I/O, safe inside the post transaction).
-	"internal/ledger":  {"internal/platform/db": true, "internal/compliance": true},
-	"internal/masters": {"internal/platform/db": true},
+	"internal/ledger": {"internal/platform/db": true, "internal/compliance": true},
+	// masters holds the TDS DEDUCTOR STATUS (migration 0049), which is a
+	// STATUTORY master: its vocabulary is the s.402(11)(a)–(l) entity categories
+	// and the business/profession distinction, both of which internal/compliance
+	// already defines and reasons about.
+	//
+	// The edge is to the PURE COMPLIANCE LEAF only — the same one the ledger has
+	// above, and for the same reason: no I/O, no siblings of its own, safe to
+	// call from inside a transaction. What it buys is that the category list has
+	// exactly TWO copies (this one and migration 0049's CHECK, pinned against
+	// each other by TestKnownEntityCategoriesMatchTheMigration) instead of three.
+	// A masters-local copy of the fifteen categories would be a third, and a
+	// closed vocabulary in three places drifts.
+	//
+	// IT IS AN EDGE TO COMPLIANCE, NOT THE REVERSE, and that direction is the
+	// constraint worth keeping: compliance must stay a leaf that knows nothing
+	// about storage. If you ever find yourself wanting compliance -> masters,
+	// that is the signal the logic belongs on this side of the line instead.
+	"internal/masters": {"internal/platform/db": true, "internal/compliance": true},
 	// banking (T4) is the WRITE side of bank reconciliation. It touches the db
 	// layer and NOTHING else — deliberately, and the empty-but-for-db set is the
 	// enforcement of the feature's central rule: reconciling records a fact about

@@ -598,6 +598,21 @@ func (s *Server) routes() {
 		r.Put("/bank-reconciliation/{ledgerID}/{voucherID}/{legNo}", s.handleSetBankDate)
 		r.Delete("/bank-reconciliation/{ledgerID}/{voucherID}/{legNo}", s.handleClearBankDate)
 
+		// TDS DEDUCTOR STATUS (Item Zero step 2) — Tally's F11 > Enable TDS >
+		// "TDS Deductor Details" (RESEARCH.md:692). Whether this company is a
+		// s.402(11) designated person / s.402(37) specified person, per tax year.
+		//
+		// WITHOUT THIS ROUTE THE TDS POST PATH IS UNUSABLE: it refuses every
+		// voucher for a company whose status is unrecorded, and nothing else
+		// writes the row. That is why this is step 2 and not a later polish.
+		//
+		// PUT, keyed on the tax year in the path, because there is exactly one
+		// answer per year and re-stating it CORRECTS it. Read and write share the
+		// `deductor-status` resource token — see handler_deductor_status.go for
+		// why that is the opposite call from bank reconciliation above.
+		r.Get("/deductor-status", s.handleListDeductorStatus)
+		r.Put("/deductor-status/{taxYear}", s.handleSetDeductorStatus)
+
 		// Forecast/anomaly reports (wave-2 WS5a).
 		r.Get("/cash-flow", s.handleCashFlow)
 		r.Get("/anomalies", s.handleAnomalies)

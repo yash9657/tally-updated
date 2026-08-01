@@ -1,4 +1,7 @@
-import { useCompanyContext } from "../app/CompanyContext";
+import { useEffect, useState } from "react";
+
+import { useClient, useCompanyContext } from "../app/CompanyContext";
+import type { DeductorStatus } from "../api/types";
 
 /**
  * F11 Company Features — the honest inventory of what this edition does.
@@ -136,7 +139,7 @@ const FEATURES: {
         // on the post path at all. Persisting a deduction nobody can read is not
         // a shipped feature — flip this to "on" when the register and the
         // Form 140 exist, not before.
-        note: "PARTLY BUILT, AND NOT USABLE YET. A TDS deduction is now derived with the annual aggregate and catch-up, refused when the company's deductor status is unrecorded, and persisted with the voucher. But there is still NO TDS register and NO Form 140 return to file, and TCS is not wired into the post path at all. Treat as not built until you can see a register.",
+        note: "PARTLY BUILT. A TDS deduction is derived with the s.393(1) ANNUAL AGGREGATE and catch-up (a run of sub-threshold bills crosses and the crossing bill carries the tax for all of them), refused unless this company's deductor status is recorded — see TDS Deductor Details at the top of this screen, which is where you record it — and stored with the voucher. WHAT IS STILL MISSING is what you would call the feature: there is NO TDS register to look at and NO Form 140 return to file, and TCS is not on the post path at all, so a sale that should collect tax at source collects nothing. Treat as not built until you can see a register.",
       },
       {
         name: "Payroll statutory (EPF/EPS/EDLI, ESI, salary TDS, pay run)",
@@ -339,6 +342,227 @@ const BADGE: Record<State, { text: string; className: string }> = {
   off: { text: "Not built", className: "text-tally-fieldText" },
 };
 
+/**
+ * TDS Deductor Details — the one REAL CONTROL on this screen.
+ *
+ * Tally puts exactly this behind F11 > Enable TDS > "TDS Deductor Details"
+ * (RESEARCH.md:692), which asks for TAN, DEDUCTOR TYPE and the responsible
+ * person. `entity_category` is that deductor type.
+ *
+ * WHY A CONTROL BELONGS ON A SCREEN WHOSE HEADER SAYS IT IS A STATEMENT OF FACT.
+ * The rule that header states is "a toggle that flips a flag with nothing behind
+ * it is worse than no toggle at all". This has everything behind it: until a row
+ * exists here the TDS post path REFUSES every Purchase, Payment and Journal
+ * carrying a `tds` block. It is the opposite of a decorative switch — it is the
+ * switch the rest of the feature was waiting for.
+ *
+ * ⚠️ THE YEAR IS THE CONFUSING PART AND THE UI SAYS SO OUT LOUD. s.402(37)(b)
+ * tests turnover "during the tax year IMMEDIATELY PRECEDING", so the 2025-26 row
+ * is what governs payments made in 2026-27. Every row and the form itself state
+ * the governed year, because an operator who keys the payment's own year gets a
+ * refusal that looks like a bug.
+ */
+function DeductorStatusPanel() {
+  const client = useClient();
+  const { company } = useCompanyContext();
+  const companyID = company?.id ?? "";
+
+  const [rows, setRows] = useState<DeductorStatus[]>([]);
+  const [categories, setCategories] = useState<string[]>([]);
+  const [activities, setActivities] = useState<string[]>([]);
+  const [loadError, setLoadError] = useState("");
+  const [saveError, setSaveError] = useState("");
+  const [saved, setSaved] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  // Default to the year that governs payments in the CURRENT tax year, which is
+  // the year an operator hitting the refusal actually needs.
+  const now = new Date();
+  const currentTaxYear =
+    now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+  const [taxYear, setTaxYear] = useState(String(currentTaxYear - 1));
+  const [category, setCategory] = useState("");
+  const [turnover, setTurnover] = useState("");
+  const [activity, setActivity] = useState("BUSINESS");
+
+  // The four categories s.402(11)(l) / s.402(37)(b) subject to the turnover
+  // test. Everything else is liable unconditionally and must record NO figure —
+  // so the fields are hidden rather than merely optional, because a turnover
+  // typed against a COMPANY is a 400, not a harmless extra.
+  const needsTurnover = ["INDIVIDUAL", "HUF", "AOP", "BOI"].includes(category);
+
+  async function load() {
+    if (!companyID) return;
+    try {
+      const res = await client.listDeductorStatus(companyID);
+      setRows(res.deductor_statuses);
+      setCategories(res.entity_categories);
+      setActivities(res.prior_year_activity);
+      setLoadError("");
+    } catch (e) {
+      // A Data Entry level is REFUSED this route by design, so a 403 here is
+      // correct behaviour and must read as such rather than as a broken screen.
+      setLoadError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  useEffect(() => {
+    void load();
+  }, [companyID]);
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setSaveError("");
+    setSaved("");
+    try {
+      const res = await client.setDeductorStatus(companyID, Number(taxYear), {
+        entity_category: category,
+        // Sent ONLY when the test applies. An empty string means "not
+        // applicable" and is stored as NULL; "0" would assert this company
+        // turned over nothing, which is a different and false claim.
+        prior_year_turnover_rupees: needsTurnover ? turnover : "",
+        prior_year_activity: needsTurnover ? activity : "",
+        recorded_by: "owner",
+      });
+      setSaved(
+        `Recorded for ${res.tax_year_label} — governs payments made in ${res.governs_payments_in_label}.`,
+      );
+      await load();
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-4" data-testid="deductor-status-panel">
+      <h2 className="font-bold text-tally-title">
+        TDS Deductor Details (s.402(11) / s.402(37))
+      </h2>
+      <p className="mt-1 max-w-3xl text-xs">
+        Whether THIS company is required to deduct tax at source. Until it is
+        recorded, every Purchase, Payment or Journal carrying TDS is refused —
+        because &quot;we do not know whether you must deduct&quot; is not
+        &quot;you need not deduct&quot;, and it is the deductor who carries the
+        shortfall plus interest.{" "}
+        <span className="text-tally-title">
+          The turnover test reads the tax year IMMEDIATELY PRECEDING the
+          payment, so the {currentTaxYear - 1}-
+          {String(currentTaxYear % 100).padStart(2, "0")} row is what governs
+          payments you make in {currentTaxYear}-
+          {String((currentTaxYear + 1) % 100).padStart(2, "0")}.
+        </span>
+      </p>
+
+      {loadError !== "" ? (
+        <p className="mt-2 max-w-3xl text-xs text-tally-bar">
+          Cannot read the deductor status: {loadError}
+        </p>
+      ) : (
+        <>
+          {rows.length === 0 ? (
+            <p className="mt-2 text-xs text-tally-bar">
+              Nothing recorded yet — TDS vouchers will be refused.
+            </p>
+          ) : (
+            <table className="mt-2 w-full max-w-4xl text-sm">
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.tax_year_start} className="align-top">
+                    <td className="w-28 whitespace-nowrap py-0.5 pr-3 text-tally-title">
+                      {r.tax_year_label}
+                    </td>
+                    <td className="w-48 py-0.5 pr-3">{r.entity_category}</td>
+                    <td className="py-0.5 text-xs">
+                      governs payments in {r.governs_payments_in_label}
+                      {r.prior_year_turnover_rupees !== ""
+                        ? ` · prior-year turnover ₹${r.prior_year_turnover_rupees} (${r.prior_year_activity})`
+                        : " · liable whatever its turnover"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          <form onSubmit={save} className="mt-3 max-w-3xl text-sm">
+            <div className="flex flex-wrap items-end gap-3">
+              <label className="flex flex-col">
+                <span className="text-xs">Tax year beginning</span>
+                <input
+                  aria-label="Tax year beginning"
+                  className="w-24 border border-tally-fieldText bg-tally-field px-1"
+                  value={taxYear}
+                  onChange={(ev) => setTaxYear(ev.target.value)}
+                />
+              </label>
+              <label className="flex flex-col">
+                <span className="text-xs">Deductor type</span>
+                <select
+                  aria-label="Deductor type"
+                  className="border border-tally-fieldText bg-tally-field px-1"
+                  value={category}
+                  onChange={(ev) => setCategory(ev.target.value)}
+                >
+                  <option value="">— select —</option>
+                  {categories.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {needsTurnover && (
+                <>
+                  <label className="flex flex-col">
+                    <span className="text-xs">Prior-year turnover (₹)</span>
+                    <input
+                      aria-label="Prior-year turnover"
+                      className="w-32 border border-tally-fieldText bg-tally-field px-1"
+                      value={turnover}
+                      onChange={(ev) => setTurnover(ev.target.value)}
+                    />
+                  </label>
+                  <label className="flex flex-col">
+                    <span className="text-xs">Business or profession</span>
+                    <select
+                      aria-label="Business or profession"
+                      className="border border-tally-fieldText bg-tally-field px-1"
+                      value={activity}
+                      onChange={(ev) => setActivity(ev.target.value)}
+                    >
+                      {activities.map((a) => (
+                        <option key={a} value={a}>
+                          {a}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </>
+              )}
+              <button
+                type="submit"
+                disabled={busy || category === ""}
+                className="border border-tally-title px-2 py-0.5 text-tally-title disabled:opacity-50"
+              >
+                {busy ? "Saving…" : "Record"}
+              </button>
+            </div>
+          </form>
+          {saveError !== "" && (
+            <p className="mt-2 max-w-3xl text-xs text-tally-bar">{saveError}</p>
+          )}
+          {saved !== "" && (
+            <p className="mt-2 max-w-3xl text-xs text-tally-title">{saved}</p>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 export function FeaturesScreen() {
   const { company } = useCompanyContext();
   return (
@@ -352,6 +576,7 @@ export function FeaturesScreen() {
         SERVER ONLY (built and reachable over HTTP, with no screen or key here
         that reaches it), or openly missing. Esc goes back.
       </p>
+      <DeductorStatusPanel />
       {FEATURES.map((g) => (
         <div key={g.group} className="mt-4">
           <h2 className="font-bold text-tally-title">{g.group}</h2>

@@ -48,6 +48,9 @@ import type {
   SetLedgerOpeningResponse,
   VoucherHistoryResponse,
   BankReconciliationResponse,
+  DeductorStatusListResponse,
+  SetDeductorStatusRequest,
+  SetDeductorStatusResponse,
   SetBankDateRequest,
   SetBankDateResponse,
 } from "./types";
@@ -167,6 +170,25 @@ export interface CoredClient {
     voucherID: string,
     legNo: number,
   ): Promise<SetBankDateResponse>;
+
+  /**
+   * Every recorded deductor-status year, plus the category vocabulary to render
+   * a picker from. Owner-only: recording it decides a year of withholding, so a
+   * Data Entry token gets 403 on both halves.
+   */
+  listDeductorStatus(companyID: string): Promise<DeductorStatusListResponse>;
+  /**
+   * Record or CORRECT one tax year's status. Idempotent on the year — there is
+   * one answer per year, and re-stating it corrects it.
+   *
+   * ⚠️ `taxYearStart` is the year the TURNOVER TEST reads, which is the year
+   * BEFORE the payments it governs: pass 2025 to make 2026-27 postable.
+   */
+  setDeductorStatus(
+    companyID: string,
+    taxYearStart: number,
+    req: SetDeductorStatusRequest,
+  ): Promise<SetDeductorStatusResponse>;
 
   createGroup(
     companyID: string,
