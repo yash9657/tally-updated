@@ -274,3 +274,86 @@ func TestCumulativeRejectsNegativeState(t *testing.T) {
 			"query and must not silently produce a deduction")
 	}
 }
+
+// TestPerPaymentLimbDoesNotSuppressTheCatchUp is the regression test for a real
+// under-deduction that shipped in TDSDeriveCumulative.
+//
+// The function used to return early whenever the per-payment limb fired, on the
+// reasoning that anything earlier "was either below the aggregate limit or
+// already taxed". That is false for the case below, and it left five bills
+// untaxed for ever.
+//
+//	five ₹20,000 contractor bills   ₹1,00,000 aggregate, nothing deducted:
+//	                                each is under limb (a)'s ₹30,000, and
+//	                                ₹1,00,000 does not EXCEED limb (b)'s ₹1,00,000
+//	a sixth bill of ₹40,000         limb (a) fires
+//
+// s.393(1)(a) charges tax "on the ENTIRE amount ... where the amount OR AGGREGATE
+// OF AMOUNTS exceeds the threshold limit". The aggregate is ₹1,40,000, so ₹2,800
+// is due. The early return collected ₹800.
+//
+// ⚠️ THE NON-MONOTONICITY IS THE TELL. Had the sixth bill been ₹20,000 it would
+// have caught up ₹2,400 — so under the old code a LARGER payment collected LESS
+// tax. The sub-test below pins that comparison directly, because it is the form
+// of the bug that survives someone "simplifying" the fix away again.
+func TestPerPaymentLimbDoesNotSuppressTheCatchUp(t *testing.T) {
+	rs, _ := LoadTDSRuleSet("tds-2026-04")
+	// Five ₹20,000 bills already paid, none deducted upon.
+	prior := AggregateInput{PriorBaseRupees: dec("100000"), PriorTDSRupees: decimal.Zero}
+
+	big, err := TDSDeriveCumulative(
+		TDSInput{Section: "194C", DeducteeType: DeducteeOther, PANAvailable: true,
+			TaxableAmount: dec("40000")},
+		prior, rs,
+	)
+	if err != nil {
+		t.Fatalf("derive: %v", err)
+	}
+	if !big.TDS.Equal(dec("2800")) {
+		t.Errorf("a ₹40,000 bill on top of an untaxed ₹1,00,000 deducted %s, want 2800 "+
+			"— 2%% of the ENTIRE ₹1,40,000 aggregate. Taxing only the payment's own "+
+			"base (800) leaves the first five bills untaxed for ever", big.TDS)
+	}
+	if !big.AggregateCrossed {
+		t.Error("the aggregate went from ₹1,00,000 to ₹1,40,000 and must report as crossed; " +
+			"Annexure 6 flag Y turns on it")
+	}
+
+	// The monotonicity check: a SMALLER payment must never attract MORE tax.
+	small, err := TDSDeriveCumulative(
+		TDSInput{Section: "194C", DeducteeType: DeducteeOther, PANAvailable: true,
+			TaxableAmount: dec("20000")},
+		prior, rs,
+	)
+	if err != nil {
+		t.Fatalf("derive small: %v", err)
+	}
+	if big.TDS.LessThan(small.TDS) {
+		t.Errorf("a ₹40,000 payment attracted %s but a ₹20,000 one attracted %s — a larger "+
+			"payment cannot collect less tax under any reading of s.393(1)", big.TDS, small.TDS)
+	}
+}
+
+// TestCatchUpCreditsTaxAlreadyDeducted is the control for the test above: where
+// the earlier base was ALREADY taxed, the crossing payment must not charge it a
+// second time. Without this arm, an implementation that simply taxed the whole
+// aggregate every time would pass.
+func TestCatchUpCreditsTaxAlreadyDeducted(t *testing.T) {
+	rs, _ := LoadTDSRuleSet("tds-2026-04")
+	// ₹1,00,000 of prior base on which ₹2,000 (the full 2%) has already been taken.
+	res, err := TDSDeriveCumulative(
+		TDSInput{Section: "194C", DeducteeType: DeducteeOther, PANAvailable: true,
+			TaxableAmount: dec("40000")},
+		AggregateInput{PriorBaseRupees: dec("100000"), PriorTDSRupees: dec("2000")},
+		rs,
+	)
+	if err != nil {
+		t.Fatalf("derive: %v", err)
+	}
+	// 2% of ₹1,40,000 = ₹2,800, less the ₹2,000 already taken = ₹800 — which is
+	// exactly this payment's own 2%, as it should be.
+	if !res.TDS.Equal(dec("800")) {
+		t.Errorf("deducted %s, want 800: the ₹2,000 already taken on the earlier base "+
+			"must be credited, not charged again", res.TDS)
+	}
+}

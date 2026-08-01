@@ -282,8 +282,11 @@ type PostResult struct {
 	VoucherNo string
 	// Tax is the derived GST breakup, populated when GST derivation ran.
 	Tax compliance.TaxResult
-	// TDS is the derived deduction, populated when TDS derivation ran. It is
-	// in-process only: nothing about TDS is persisted in v1 (see tds.go).
+	// TDS is the derived deduction, populated when TDS derivation ran AND this
+	// company was liable to deduct. It is also PERSISTED as a tds_deduction row
+	// in the same transaction (migration 0050), so the register and the return
+	// read the same numbers this echoes. A company with no duty under the
+	// section leaves this zero and writes no row — see ledger/tds.go.
 	TDS compliance.TDSResult
 }
 
@@ -807,6 +810,15 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 	// tdsRes is the derived TDS deduction, computed inside the same transaction
 	// so a verification failure rolls the whole post back.
 	var tdsRes compliance.TDSResult
+	// tdsLiable records that the company WAS required to deduct, which is what
+	// decides whether a tds_deduction row is written. It is a separate flag from
+	// tdsRes.Applied on purpose: Applied false means "liable, but this payment
+	// was below the threshold" and MUST still be recorded, because the aggregate
+	// sums amounts paid and Annexure 6 reports sub-threshold payments.
+	var tdsLiable bool
+	// tdsTaxYear is the tax year of the PAYMENT — the aggregate's key, and NOT
+	// the preceding year the deductor-status test reads.
+	var tdsTaxYear int
 
 	var result PostResult
 	err = s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
@@ -866,14 +878,80 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 			}
 			tax = t
 		}
-		// Derive + verify TDS inside the same tx. Like GST this NEVER injects a
-		// posting: it refuses a voucher whose TDS leg contradicts the engine.
+		// LIABILITY, CUMULATION, then verification — in that order, inside the
+		// same tx, so any refusal rolls the whole post back.
+		//
+		// The order is the statute's. s.402(11)/(37) asks whether this company
+		// must deduct AT ALL before s.393(1) asks how much; deriving an amount
+		// for a company with no obligation and only then discovering it was not
+		// owed is how software takes money out of a supplier's payment. And the
+		// aggregate must be read before the derivation that consumes it, from
+		// this same transaction, so a concurrent post cannot slip a payment in
+		// between the sum and the decision it feeds.
+		//
+		// Like GST this NEVER injects a posting: it refuses a voucher whose TDS
+		// leg contradicts the engine.
 		if tdsActive {
-			r, err := deriveAndVerifyTDS(in)
+			// A TDS voucher must be DATED, and is not given today by default the
+			// way an undated voucher is for numbering below. The date is the
+			// statutory fact of s.393(1)(c) ("credited or paid, whichever is
+			// earlier"); it picks the tax year, and the tax year is what the
+			// aggregate resets on and what the return is filed for. Stamping
+			// "today" onto that would silently file a March payment in the wrong
+			// year.
+			if in.VoucherDate == "" {
+				return ErrTDSDateRequired
+			}
+			paymentTaxYear, err := finYearOf(in.VoucherDate)
 			if err != nil {
 				return err
 			}
-			tdsRes = r
+			tdsTaxYear = paymentTaxYear
+
+			status, err := readDeductorStatus(ctx, tx, companyID,
+				deductorStatusTaxYear(paymentTaxYear))
+			if err != nil {
+				return err
+			}
+			must, err := compliance.MustDeduct(in.TDS.Section, status)
+			if err != nil {
+				return err
+			}
+			if !must {
+				// No obligation. Refuse any leg that withheld anyway, record
+				// nothing, and leave tdsRes zero — there is no deduction to
+				// report, and a zero-amount row here would read in the register
+				// as "below threshold", which is a different and false claim.
+				if err := verifyNoTDSLegPosted(in, in.TDS.Section); err != nil {
+					return err
+				}
+				tdsLiable = false
+			} else {
+				if in.TDS.DeducteeLedgerID == uuid.Nil {
+					return ErrDeducteeUnknown
+				}
+				agg, err := readTDSAggregate(ctx, tx, companyID,
+					in.TDS.DeducteeLedgerID, in.TDS.Section, paymentTaxYear, voucherID)
+				if err != nil {
+					return err
+				}
+				r, err := deriveAndVerifyTDS(in, agg)
+				if err != nil {
+					return err
+				}
+				tdsRes = r
+				tdsLiable = true
+			}
+		}
+
+		// An ALTER or DELETE re-states the voucher, so its prior deduction rows
+		// go first — before the aggregate any LATER post reads, and before this
+		// voucher's own re-insert below. A voucher altered to carry no TDS ends
+		// here with no row at all, which is the point.
+		if op != OpCreate {
+			if err := deleteTDSDeductions(ctx, tx, companyID, voucherID); err != nil {
+				return err
+			}
 		}
 
 		// PHYSICAL STOCK: turn the counted figures into the correction.
@@ -1392,6 +1470,21 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 			nullIfEmpty(in.SourceGUID),
 		); err != nil {
 			return fmt.Errorf("ledger: upsert voucher_head: %w", err)
+		}
+
+		// THE DEDUCTION ROW — the thing whose absence made the register and the
+		// return impossible to build.
+		//
+		// It lands AFTER the voucher_head upsert because migration 0050's
+		// composite FK references voucher_head (company_id, voucher_id), and a
+		// CREATE has no head row until the statement above runs. Same
+		// transaction, so a deduction can never exist without its voucher, nor
+		// the voucher commit without its deduction.
+		if tdsLiable {
+			if err := writeTDSDeduction(ctx, tx, companyID, voucherID, in, tdsRes,
+				tdsTaxYear, in.VoucherDate, in.CreatedBy); err != nil {
+				return err
+			}
 		}
 
 		result = PostResult{

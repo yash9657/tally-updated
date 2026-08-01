@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/shopspring/decimal"
 
 	"github.com/khata/cored/internal/compliance"
 	"github.com/khata/cored/internal/ledger"
@@ -47,7 +48,7 @@ func newTDSFixture(t *testing.T) tdsFixture {
 		}
 		return id
 	}
-	return tdsFixture{
+	f := tdsFixture{
 		led:       ledger.NewService(pool),
 		pool:      pool,
 		ctx:       ctx,
@@ -57,6 +58,81 @@ func newTDSFixture(t *testing.T) tdsFixture {
 		tdsPay:    mk("TDS Payable 194J", "Duties & Taxes"),
 		creditor:  mk("Consultant A", "Sundry Creditors"),
 	}
+	// EVERY voucher in this file is dated in 2026-27, and s.402(11)/(37) tests
+	// the tax year IMMEDIATELY PRECEDING — so the status that governs them is
+	// the one recorded for 2025. Recording it here rather than in each test is
+	// safe precisely because its ABSENCE is separately pinned by
+	// TestTDSRefusedWhenDeductorStatusUnrecorded, which builds its own fixture.
+	//
+	// COMPANY is chosen deliberately: s.402(11)(d) and s.402(37)(a) both catch it
+	// unconditionally, so these arithmetic tests are not also silently testing
+	// the turnover limb. The limb has its own tests.
+	recordDeductorStatus(t, pool, ctx, 2025, compliance.EntityCompany)
+	return f
+}
+
+// recordDeductorStatus writes the migration 0049 row that makes a company liable
+// to deduct. Written by raw SQL rather than through a service because at the
+// time this was needed no service existed — see the route added alongside it.
+func recordDeductorStatus(t *testing.T, pool *db.Pool, ctx context.Context, taxYearStart int, category string) {
+	t.Helper()
+	companyID, ok := db.CompanyFromContext(ctx)
+	if !ok {
+		t.Fatal("no company in context")
+	}
+	err := pool.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		_, err := tx.Exec(ctx,
+			`INSERT INTO company_deductor_status
+			   (id, company_id, tax_year_start, entity_category, recorded_by)
+			 VALUES ($1, $2, $3, $4, 'tester')
+			 ON CONFLICT (company_id, tax_year_start) DO NOTHING`,
+			uuid.New(), companyID, taxYearStart, category)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("record deductor status: %v", err)
+	}
+}
+
+// tdsDeductionRows reads back migration 0050's rows for one voucher, so a test
+// can assert what was PERSISTED rather than only what was returned in-process.
+// The two disagreeing is the whole failure mode this table exists to end.
+type tdsDeductionRow struct {
+	Section      string
+	TaxYearStart int
+	Base         decimal.Decimal
+	Rate         decimal.Decimal
+	Amount       decimal.Decimal
+	ReturnCode   string
+	Deductee     uuid.UUID
+}
+
+func tdsDeductionRows(t *testing.T, pool *db.Pool, ctx context.Context, voucherID uuid.UUID) []tdsDeductionRow {
+	t.Helper()
+	var out []tdsDeductionRow
+	err := pool.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		rows, err := tx.Query(ctx,
+			`SELECT section, tax_year_start, taxable_base_rupees, rate_pct,
+			        tds_amount_rupees, return_code, deductee_ledger_id
+			   FROM tds_deduction WHERE voucher_id = $1 ORDER BY leg_seq`, voucherID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var r tdsDeductionRow
+			if err := rows.Scan(&r.Section, &r.TaxYearStart, &r.Base, &r.Rate,
+				&r.Amount, &r.ReturnCode, &r.Deductee); err != nil {
+				return err
+			}
+			out = append(out, r)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		t.Fatalf("read tds_deduction: %v", err)
+	}
+	return out
 }
 
 // versionCount reports how many voucher_version rows exist in the current
@@ -92,12 +168,13 @@ func TestPostPurchaseWithTDSLegVerified(t *testing.T) {
 			{LedgerID: f.creditor, DrCr: ledger.Credit, Amount: dec(t, "180000.0000")},
 		},
 		TDS: &ledger.TDSParams{
-			RulesetVersion: "tds-2026-04",
-			Section:        "194J-P",
-			DeducteeType:   compliance.DeducteeOther,
-			PANAvailable:   true,
-			TaxableAmount:  dec(t, "200000.0000"),
-			TDSLedgerID:    f.tdsPay,
+			RulesetVersion:   "tds-2026-04",
+			Section:          "194J-P",
+			DeducteeLedgerID: f.creditor,
+			DeducteeType:     compliance.DeducteeOther,
+			PANAvailable:     true,
+			TaxableAmount:    dec(t, "200000.0000"),
+			TDSLedgerID:      f.tdsPay,
 		},
 	})
 	if err != nil {
@@ -150,11 +227,12 @@ func TestPostWithMismatchedTDSLegRejected(t *testing.T) {
 			{LedgerID: f.creditor, DrCr: ledger.Credit, Amount: dec(t, "181000.0000")},
 		},
 		TDS: &ledger.TDSParams{
-			Section:       "194J-P",
-			DeducteeType:  compliance.DeducteeOther,
-			PANAvailable:  true,
-			TaxableAmount: dec(t, "200000.0000"),
-			TDSLedgerID:   f.tdsPay,
+			Section:          "194J-P",
+			DeducteeLedgerID: f.creditor,
+			DeducteeType:     compliance.DeducteeOther,
+			PANAvailable:     true,
+			TaxableAmount:    dec(t, "200000.0000"),
+			TDSLedgerID:      f.tdsPay,
 		},
 	})
 	if err == nil {
@@ -189,11 +267,12 @@ func TestPostWithTDSLegOnWrongSideRejected(t *testing.T) {
 			{LedgerID: f.creditor, DrCr: ledger.Credit, Amount: dec(t, "220000.0000")},
 		},
 		TDS: &ledger.TDSParams{
-			Section:       "194J-P",
-			DeducteeType:  compliance.DeducteeOther,
-			PANAvailable:  true,
-			TaxableAmount: dec(t, "200000.0000"),
-			TDSLedgerID:   f.tdsPay,
+			Section:          "194J-P",
+			DeducteeLedgerID: f.creditor,
+			DeducteeType:     compliance.DeducteeOther,
+			PANAvailable:     true,
+			TaxableAmount:    dec(t, "200000.0000"),
+			TDSLedgerID:      f.tdsPay,
 		},
 	})
 	if err == nil {
@@ -219,11 +298,12 @@ func TestPostBelowThresholdDerivesZeroTDS(t *testing.T) {
 
 	params := func() *ledger.TDSParams {
 		return &ledger.TDSParams{
-			Section:       "194J-P",
-			DeducteeType:  compliance.DeducteeOther,
-			PANAvailable:  true,
-			TaxableAmount: dec(t, "25000.0000"),
-			TDSLedgerID:   f.tdsPay,
+			Section:          "194J-P",
+			DeducteeLedgerID: f.creditor,
+			DeducteeType:     compliance.DeducteeOther,
+			PANAvailable:     true,
+			TaxableAmount:    dec(t, "25000.0000"),
+			TDSLedgerID:      f.tdsPay,
 		}
 	}
 
@@ -279,11 +359,12 @@ func TestJournalTDSNoPANAppliesSection206AA(t *testing.T) {
 			{LedgerID: f.creditor, DrCr: ledger.Credit, Amount: dec(t, "80000.0000")},
 		},
 		TDS: &ledger.TDSParams{
-			Section:       "194C",
-			DeducteeType:  compliance.DeducteeOther,
-			PANAvailable:  false,
-			TaxableAmount: dec(t, "100000.0000"),
-			TDSLedgerID:   f.tdsPay,
+			Section:          "194C",
+			DeducteeLedgerID: f.creditor,
+			DeducteeType:     compliance.DeducteeOther,
+			PANAvailable:     false,
+			TaxableAmount:    dec(t, "100000.0000"),
+			TDSLedgerID:      f.tdsPay,
 		},
 	})
 	if err != nil {
@@ -322,10 +403,11 @@ func TestTDSDefaultsPinned(t *testing.T) {
 			{LedgerID: f.creditor, DrCr: ledger.Credit, Amount: dec(t, "98000.0000")},
 		},
 		TDS: &ledger.TDSParams{
-			Section:       "194C",
-			PANAvailable:  true,
-			TaxableAmount: dec(t, "100000.0000"),
-			TDSLedgerID:   f.tdsPay,
+			Section:          "194C",
+			DeducteeLedgerID: f.creditor,
+			PANAvailable:     true,
+			TaxableAmount:    dec(t, "100000.0000"),
+			TDSLedgerID:      f.tdsPay,
 		},
 	})
 	if err != nil {
@@ -348,11 +430,12 @@ func TestTDSDefaultsPinned(t *testing.T) {
 			{LedgerID: f.creditor, DrCr: ledger.Credit, Amount: dec(t, "100000.0000")},
 		},
 		TDS: &ledger.TDSParams{
-			RulesetVersion: "tds-1999-04",
-			Section:        "194C",
-			DeducteeType:   compliance.DeducteeOther,
-			PANAvailable:   true,
-			TaxableAmount:  dec(t, "100000.0000"),
+			RulesetVersion:   "tds-1999-04",
+			Section:          "194C",
+			DeducteeLedgerID: f.creditor,
+			DeducteeType:     compliance.DeducteeOther,
+			PANAvailable:     true,
+			TaxableAmount:    dec(t, "100000.0000"),
 		},
 	})
 	if !errors.Is(err, compliance.ErrUnknownRuleset) {
@@ -381,10 +464,11 @@ func TestTDSDerivesWithoutLedgerIDButDoesNotVerify(t *testing.T) {
 			{LedgerID: f.creditor, DrCr: ledger.Credit, Amount: dec(t, "95000.0000")},
 		},
 		TDS: &ledger.TDSParams{
-			Section:       "194C",
-			DeducteeType:  compliance.DeducteeOther,
-			PANAvailable:  true,
-			TaxableAmount: dec(t, "100000.0000"),
+			Section:          "194C",
+			DeducteeLedgerID: f.creditor,
+			DeducteeType:     compliance.DeducteeOther,
+			PANAvailable:     true,
+			TaxableAmount:    dec(t, "100000.0000"),
 		},
 	})
 	if err != nil {
@@ -424,11 +508,12 @@ func TestPaymentClassIsTDSActive(t *testing.T) {
 			{LedgerID: bank, DrCr: ledger.Credit, Amount: dec(t, "99000.0000")},
 		},
 		TDS: &ledger.TDSParams{
-			Section:       "194C",
-			DeducteeType:  compliance.DeducteeOther,
-			PANAvailable:  true,
-			TaxableAmount: dec(t, "100000.0000"),
-			TDSLedgerID:   f.tdsPay,
+			Section:          "194C",
+			DeducteeLedgerID: f.creditor,
+			DeducteeType:     compliance.DeducteeOther,
+			PANAvailable:     true,
+			TaxableAmount:    dec(t, "100000.0000"),
+			TDSLedgerID:      f.tdsPay,
 		},
 	})
 	if !errors.Is(err, ledger.ErrTDSMismatch) {
@@ -472,11 +557,12 @@ func TestSalesClassIgnoresTDSParams(t *testing.T) {
 		// Deliberately contradictory: no TDS leg exists, so if the Sales class
 		// were TDS-active this post would be rejected.
 		TDS: &ledger.TDSParams{
-			Section:       "194J-P",
-			DeducteeType:  compliance.DeducteeOther,
-			PANAvailable:  true,
-			TaxableAmount: dec(t, "200000.0000"),
-			TDSLedgerID:   f.tdsPay,
+			Section:          "194J-P",
+			DeducteeLedgerID: f.creditor,
+			DeducteeType:     compliance.DeducteeOther,
+			PANAvailable:     true,
+			TaxableAmount:    dec(t, "200000.0000"),
+			TDSLedgerID:      f.tdsPay,
 		},
 	})
 	if err != nil {

@@ -103,16 +103,18 @@ func AggregateApplies(rule sectionRule) bool {
 //
 // The rules, in order:
 //
-//  1. Derive the per-payment result exactly as TDSDerive does. If the single
-//     payment exceeds its own limit, that governs and no catch-up arises — the
-//     earlier bills were already below the aggregate limit or already taxed.
+//  1. Derive the per-payment result exactly as TDSDerive does.
 //
-//  2. Otherwise test the AGGREGATE: prior + this payment against the aggregate
-//     limit.
+//  2. Then test the AGGREGATE — prior + this payment against the aggregate
+//     limit — WHETHER OR NOT the per-payment limb fired. Skipping this step when
+//     it fired is a real under-deduction; see the note in the body.
 //
 //  3. If the aggregate crosses, tax is due "on the ENTIRE amount" — the whole
 //     cumulative base — less whatever was already deducted. That difference is
-//     the catch-up, and it is charged on this payment.
+//     the catch-up, and it is charged on this payment. It dominates the
+//     per-payment figure whenever it applies.
+//
+//  4. If the aggregate has not crossed, the per-payment result stands.
 //
 // The result's TDS can therefore EXCEED this payment's own base × rate, which is
 // correct and is the whole point: the sixth ₹20,000 bill carries the tax for all
@@ -136,12 +138,30 @@ func TDSDeriveCumulative(in TDSInput, agg AggregateInput, rs TDSRuleSet) (TDSRes
 			agg.PriorBaseRupees, agg.PriorTDSRupees)
 	}
 
-	// The per-payment limb already fired: this payment is taxed on its own, and
-	// anything earlier was either below the aggregate limit or already taxed.
-	if res.Applied {
-		return res, nil
-	}
-
+	// ⚠️ THE AGGREGATE LIMB IS EVALUATED EVEN WHEN THE PER-PAYMENT LIMB HAS
+	// ALREADY FIRED. There used to be an early return here, on the reasoning that
+	// "this payment is taxed on its own, and anything earlier was either below the
+	// aggregate limit or already taxed". THE SECOND HALF OF THAT IS FALSE, and it
+	// under-deducted:
+	//
+	//	five ₹20,000 contractor bills   aggregate ₹1,00,000, nothing deducted —
+	//	                                each is under limb (a)'s ₹30,000, and
+	//	                                ₹1,00,000 does not EXCEED limb (b)
+	//	a sixth bill of ₹40,000         limb (a) fires -> ₹800, early return
+	//
+	// The aggregate is now ₹1,40,000, which does exceed limb (b), so s.393(1)(a)
+	// charges tax "on the ENTIRE amount" — ₹2,800. We collected ₹800 and the first
+	// five bills stayed untaxed for ever.
+	//
+	// It was also NON-MONOTONIC, which is the tell: had that sixth bill been
+	// ₹20,000 it would have caught up ₹2,400. A LARGER payment collecting LESS tax
+	// cannot be right under any reading of the section.
+	//
+	// The catch-up formula below always DOMINATES the per-payment one when the
+	// aggregate has crossed — dueOnWhole − priorTDS ≥ this payment × rate, because
+	// dueOnWhole = (prior + this) × rate and priorTDS ≤ prior × rate — so simply
+	// letting it run is both correct and safe. Where the aggregate has NOT
+	// crossed, the per-payment result already in `res` is returned untouched.
 	_, aggregateLimit := AggregateThresholds(in.Section, rule)
 	cumulative := agg.PriorBaseRupees.Add(in.TaxableAmount)
 	res.AggregateBaseRupees = cumulative

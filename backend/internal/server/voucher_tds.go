@@ -25,15 +25,26 @@ import (
 // two-touch rule still does not apply and auth_middleware.go still needs no
 // routeAction entry of its own.
 //
-// WHAT IS STILL TRUE, AND IS T6's WHOLE PROBLEM: nothing here is PERSISTED. The
-// section, deductee type, PAN-availability, rate and derived amount are used to
-// verify the posted leg and are then discarded — they are in neither a column
-// nor the hashed canonical payload, so a posted TDS voucher leaves behind only
-// an unexplained credit to a TDS ledger and no return can be filed from it.
-// See docs/design/t6-model.md §0.1, where that is measured rather than assumed.
+// THAT IS NOW PERSISTED, and the paragraph that used to sit here saying it was
+// not is gone. The section, deductee, deductee type, PAN-availability, rate and
+// derived amount are written to migration 0050's tds_deduction inside the post
+// transaction, so the register and the Form 140 return have something to read.
+// See internal/ledger/tds.go for the order the post path runs them in.
+//
+// ⚠️ TWO CONSEQUENCES FOR A CLIENT OF THIS ENDPOINT, both of them 422s:
+//
+//   - `deductee_ledger_id` is now REQUIRED on a TDS block. Who was paid is half
+//     the key of the s.393(1) aggregate and the whole of the return's deductee
+//     annexure.
+//   - The company must have a `company_deductor_status` row for the tax year
+//     PRECEDING the voucher's, or the post is refused outright — whether there
+//     is a duty to deduct is not a question this software guesses at.
 type tdsReq struct {
 	// Section is the nature-of-payment key, e.g. "194C", "194J-P", "194I-B".
 	Section string `json:"section"`
+	// DeducteeLedgerID is the ledger of the party being paid. REQUIRED: the
+	// aggregate is per deductee and the return is filed per deductee.
+	DeducteeLedgerID string `json:"deductee_ledger_id"`
 	// DeducteeType is "IND_HUF" or "OTHER"; empty defaults to "OTHER" in the
 	// ledger layer.
 	DeducteeType string `json:"deductee_type"`
@@ -66,6 +77,15 @@ func buildTDS(w http.ResponseWriter, t tdsReq) (*ledger.TDSParams, bool) {
 	out.TaxableAmount = amount
 	if out.TDSLedgerID, err = optionalUUID(t.TDSLedgerID); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid tds_ledger_id")
+		return nil, false
+	}
+	// Parsed with optionalUUID like every other id on this body, so a malformed
+	// value is a 400 here and an ABSENT one is left uuid.Nil. Whether Nil is an
+	// error is the ledger's call, not this layer's: it refuses with
+	// ErrDeducteeUnknown, which surfaces as a 422 naming the missing deductee.
+	// Duplicating that decision here would give two places to keep in step.
+	if out.DeducteeLedgerID, err = optionalUUID(t.DeducteeLedgerID); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid tds deductee_ledger_id")
 		return nil, false
 	}
 	return out, true

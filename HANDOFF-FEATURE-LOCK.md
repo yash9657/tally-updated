@@ -13,8 +13,8 @@
 > `HANDOFF-T1-PRINTING.md` as the entry point.** They remain useful for the *reasoning* behind
 > specific decisions; this file is the plan of record.
 >
-> **State at handoff:** HEAD `09b37c7` · migrations `0050` · backend **1885 pass / 0 SKIP /
-> 0 FAIL** · frontend **434** · `make verify` green · tree clean.
+> **State at handoff:** migrations `0050` · backend **1902 pass / 0 SKIP / 0 FAIL** ·
+> frontend **434** · `make verify` green · tree clean. **Item Zero step 1 has landed — see §2.**
 
 ---
 
@@ -64,30 +64,45 @@ Act **as enacted**, while the amended edition sat unread in `docs/statutory/`.
 
 ---
 
-## 2. ⛔ ITEM ZERO — PAY THIS DEBT FIRST. It is half a day and it is blocking.
+## 2. ⛔ ITEM ZERO — STEP 1 IS DONE. Steps 2–4 remain.
 
-Migrations 0049 and 0050 and three compliance engines exist, are tested, and **nothing calls
-them**. `ledger.Post` still calls `TDSDerive`. This is exactly the failure §1 forbids, and it
-is the first thing to fix.
+Migrations 0049/0050 and three compliance engines existed, were tested, and **nothing called
+them**. Step 1 below has now landed: `ledger.Post` reads liability, cumulates, and persists.
 
-| What exists | Where | What is missing |
+**✅ Step 1 — the TDS post path (done).** Inside the existing post transaction, in this order:
+deductor status for the **preceding** tax year → `MustDeduct` → refuse when unrecorded
+(`ErrDeductorStatusUnknown`) and refuse a leg posted with no duty (`ErrNoDutyToDeduct`) → sum
+the aggregate for `(deductee, section, tax year)` → `TDSDeriveCumulative` → verify the posted
+leg → **write the `tds_deduction` row in the same transaction**, including zero-amount rows.
+ALTER re-derives and DELETE removes. `deductee_ledger_id` is now required on the HTTP `tds`
+block. Five mutation proofs; backend **1902 pass / 0 SKIP / 0 FAIL**.
+
+> **⚠️ A REAL UNDER-DEDUCTION WAS FOUND AND FIXED WHILE WIRING THIS, and it is the §1.2 lesson
+> again.** `TDSDeriveCumulative` returned early whenever the per-payment limb fired, so the
+> aggregate limb was never evaluated. Five ₹20,000 contractor bills (₹1,00,000, untaxed)
+> followed by a ₹40,000 bill collected ₹800 instead of the ₹2,800 due on the entire ₹1,40,000 —
+> and the first five bills stayed untaxed for ever. **The tell was non-monotonicity:** had that
+> sixth bill been ₹20,000 it would have caught up ₹2,400, so a *larger* payment collected *less*
+> tax. `TestPerPaymentLimbDoesNotSuppressTheCatchUp` pins both the amount and the monotonicity.
+>
+> Two of the tests written for this slice were **initially vacuous** and only caught by
+> mutation: an alter of ₹80,000→₹90,000 gives the same answer with or without the
+> self-cumulation bug (whenever the prior base is fully taxed, the two formulas agree), and two
+> HTTP tests were green while sending an invalid `dr_cr` — every domain refusal on that route is
+> a 422, so **asserting the status code alone proves nothing. Assert the reason.**
+
+**What remains:**
+
+| # | Work | Notes |
 |---|---|---|
-| `compliance.MustDeduct` — is this company liable at all (s.402(11)/(37)) | `internal/compliance/deductor.go` | Nothing calls it |
-| `compliance.TDSDeriveCumulative` — aggregate threshold + catch-up | `internal/compliance/aggregate.go` | Nothing calls it |
-| `TCSInput.Declaration` — s.394(2) exemption + penal rate | `internal/compliance/tcs.go` | Nothing calls it |
-| `company_deductor_status`, `tcs_collection_declaration` | migration 0049 | No route writes or reads them |
-| `tds_deduction` | migration 0050 | Nothing writes a row |
+| **2** | `POST/PUT /companies/{id}/deductor-status` and `/tcs-declarations` + ACL + screens | Until this exists, **liability can only be recorded by raw SQL** — so the post path refuses every TDS voucher on a real deployment. This is now the blocking item. |
+| **3** | Wire TCS into the post path at all | Never wired. `TCSInput.Declaration` (s.394(2) + the penal-rate coupling) still has no caller. |
+| **4** | T6's register and the Form 140 return | These can finally read something. |
 
-**The work, in order:**
-
-1. `ledger.Post`, inside the existing post transaction: read the company's deductor status →
-   `MustDeduct` → **refuse** the post if the status is unrecorded (`ErrDeductorStatusUnknown`);
-   read the aggregate `SUM(taxable_base_rupees)` for `(deductee, section, tax_year)` →
-   `TDSDeriveCumulative` → verify the posted leg → **write the `tds_deduction` row in the same
-   transaction**.
-2. `POST/PUT /companies/{id}/deductor-status` and `/tcs-declarations` + ACL + screens.
-3. Wire TCS into the post path at all — it has never been wired (`ledger/tds.go` v1 note).
-4. Then T6's register and the Form 140 return can finally read something.
+| Still uncalled | Where |
+|---|---|
+| `TCSInput.Declaration` — s.394(2) exemption + penal rate | `internal/compliance/tcs.go` |
+| `tcs_collection_declaration` | migration 0049 |
 
 ---
 
@@ -159,7 +174,7 @@ seven layers of §1.
 
 | Order | Work | Why here |
 |---|---|---|
-| **0** | **§2 — wire the TDS/TCS engines** | Half a day. Blocks T6 entirely. Pays the existing debt before adding more. |
+| **0** | **§2 steps 2–4 — the deductor-status route/screen, then TCS on the post path** | Step 1 is done. **Step 2 is now the blocker: without a route, liability can only be set by raw SQL, so every TDS voucher is refused on a real deployment.** |
 | **1** | **T6** register + returns · **T29** bank import | Finishes Wave 1. Both have memos and storage already. |
 | **2** | **T3** orders + BOM · **T2** cost centres | The two most-used missing features. Disjoint packages. T11/T24 depend on T2. |
 | **3** | **T32 import from Tally** | Moved EARLY on purpose — see the note above. Without it there is no migration path. |

@@ -126,7 +126,17 @@ const FEATURES: {
       {
         name: "TDS / TCS",
         state: "off",
-        note: "The DERIVATION ENGINES exist and are corpus-gated, and a TDS leg on a Purchase/Payment/Journal is verified against them — but nothing is persisted or reported, so there is no TDS/TCS return or register. Treat as not built until there is.",
+        // STILL off, and deliberately, even though this release moved it a long
+        // way. What changed: a TDS deduction on a Purchase/Payment/Journal is now
+        // derived against the s.393(1) ANNUAL AGGREGATE (so a run of
+        // sub-threshold bills crosses and catches up), refused outright unless
+        // the company's s.402(11)/(37) deductor status is on record, and STORED.
+        // What is still missing is everything a user would call the feature:
+        // there is no register to look at and no return to file, and TCS is not
+        // on the post path at all. Persisting a deduction nobody can read is not
+        // a shipped feature — flip this to "on" when the register and the
+        // Form 140 exist, not before.
+        note: "PARTLY BUILT, AND NOT USABLE YET. A TDS deduction is now derived with the annual aggregate and catch-up, refused when the company's deductor status is unrecorded, and persisted with the voucher. But there is still NO TDS register and NO Form 140 return to file, and TCS is not wired into the post path at all. Treat as not built until you can see a register.",
       },
       {
         name: "Payroll statutory (EPF/EPS/EDLI, ESI, salary TDS, pay run)",
