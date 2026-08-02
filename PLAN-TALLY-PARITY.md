@@ -165,6 +165,7 @@ than renumbering.**
 | T5 e-Way Bill | 0047–0048 | free |
 | T6 TDS/TCS persistence | 0049–0050 | **consumed** — 0049 liability + s.394(2) declarations, 0050 `tds_deduction` |
 | **T6 TCS collection persistence (Item Zero step 3)** | **0067** | **consumed** — `tcs_collection`, the collection-side mirror of 0050 |
+| **T6 register ACL (Item Zero step 4)** | **0068** | **consumed** — `disallow display/print report:tds-register` for Data Entry |
 | T8 Multi-currency | 0051–0052 | free |
 | T9 FIFO/LIFO | 0053 | free |
 | T10 Stock groups + units | 0054–0055 | free |
@@ -181,7 +182,8 @@ reserved on the assumption that TCS needed only the declaration table. It does n
 `TCSDerive` into the post path showed that a *collection* has nowhere to be recorded, so it
 would have been derived, verified and discarded — the exact defect 0050 exists to end on the
 deduction side. Its block was consumed, so per the rule above it gets a new number at the end
-instead. **0067 was the first free number; Group B's blocks now continue from 0068.**
+instead. **0067 was the first free number; the register ACL then took 0068, so Group B's blocks now
+continue from 0069.**
 
 **T4 slice 2 does NOT take 0047.** `HANDOFF-CLOSING-THE-GAP.md` §3.2 said "migration 0047",
 which is **T5's reserved block**. Slice 2 gets its own block at the end (0062–0064) instead,

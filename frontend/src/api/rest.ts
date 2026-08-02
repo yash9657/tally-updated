@@ -6,7 +6,11 @@
  */
 
 import type { CoredClient } from "./client";
-import { createHttpClient, type HttpClient, type HttpClientOptions } from "./http";
+import {
+  createHttpClient,
+  type HttpClient,
+  type HttpClientOptions,
+} from "./http";
 import type {
   BalanceSheetResponse,
   CompanyView,
@@ -46,6 +50,7 @@ import type {
   VoucherHistoryResponse,
   BankReconciliationResponse,
   DeductorStatusListResponse,
+  TDSRegisterResponse,
   TCSDeclarationListResponse,
   CreateTCSDeclarationRequest,
   CreateTCSDeclarationResponse,
@@ -114,7 +119,10 @@ export function createRestClient(
     },
 
     createGroup(companyID, req: CreateGroupRequest) {
-      return http.post<CreateGroupResponse>(`${company(companyID)}/groups`, req);
+      return http.post<CreateGroupResponse>(
+        `${company(companyID)}/groups`,
+        req,
+      );
     },
     listLedgers(companyID) {
       return http.get<ListLedgersResponse>(`${company(companyID)}/ledgers`);
@@ -147,7 +155,13 @@ export function createRestClient(
         asOn ? { as_on: asOn } : undefined,
       );
     },
-    setBankDate(companyID, ledgerID, voucherID, legNo, req: SetBankDateRequest) {
+    setBankDate(
+      companyID,
+      ledgerID,
+      voucherID,
+      legNo,
+      req: SetBankDateRequest,
+    ) {
       return http.put<SetBankDateResponse>(
         `${company(companyID)}/bank-reconciliation/${ledgerID}/${voucherID}/${legNo}`,
         req,
@@ -174,6 +188,14 @@ export function createRestClient(
       return http.put<SetDeductorStatusResponse>(
         `${company(companyID)}/deductor-status/${taxYearStart}`,
         req,
+      );
+    },
+
+    // ---- The TDS/TCS register (Item Zero step 4).
+    tdsRegister(companyID, from: string, to: string) {
+      return http.get<TDSRegisterResponse>(
+        `${company(companyID)}/tds-register`,
+        { from, to },
       );
     },
 
@@ -220,7 +242,9 @@ export function createRestClient(
       return http.get<ListGodownsResponse>(`${company(companyID)}/godowns`);
     },
     listStockBatches(companyID) {
-      return http.get<ListStockBatchesResponse>(`${company(companyID)}/batches`);
+      return http.get<ListStockBatchesResponse>(
+        `${company(companyID)}/batches`,
+      );
     },
 
     postSalesVoucher(companyID, req: VoucherRequest) {

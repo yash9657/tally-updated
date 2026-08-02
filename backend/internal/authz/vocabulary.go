@@ -215,6 +215,13 @@ var KnownReportNames = []string{
 	// specificity 1 and every seeded Data Entry operator can read the company's
 	// bank position.
 	"bank-reconciliation",
+	// THE TDS/TCS REGISTER (Item Zero step 4). A report NAME so migration 0068
+	// can write `disallow display report:tds-register` at specificity 2 —
+	// without which 0011's coarse `allow display report` reaches it at
+	// specificity 1 and every seeded Data Entry operator can read the full list
+	// of suppliers this company pays and customers it collects from, with
+	// amounts. Exactly the bank-statement problem, one table over.
+	"tds-register",
 	// The Stock Summary is a REPORT, not a master list: its numbers are
 	// DERIVED by replaying the movement ledger through a valuer, and nothing
 	// it prints is stored anywhere. Naming it here is what lets an

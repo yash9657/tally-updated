@@ -67,6 +67,7 @@ import type {
   VoucherHistoryResponse,
   BankReconciliationResponse,
   DeductorStatus,
+  TDSRegisterResponse,
   TCSDeclaration,
   DeductorStatusListResponse,
   TCSDeclarationListResponse,
@@ -2232,6 +2233,58 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
           { type: "application/pdf" },
         ),
         filename: `mock-${slug}.pdf`,
+      };
+    },
+
+    // ---- THE TDS/TCS REGISTER (Item Zero step 4).
+    //
+    // The mock derives neither TDS nor TCS, so this is always EMPTY. That is
+    // deliberate and it is stated: a mock that synthesised plausible register
+    // rows would let a screen look finished against data no engine produced —
+    // exactly the "sample rows on an accounting screen" the report screens
+    // refuse. The disclosures and the I-7 refusal ARE returned, because those
+    // are the parts of the response the screen must render correctly whether or
+    // not there are rows.
+    async tdsRegister(
+      companyID,
+      from: string,
+      to: string,
+    ): Promise<TDSRegisterResponse> {
+      ensure(companyID);
+      return {
+        from,
+        to,
+        tax_year_start: 0,
+        deductions: [],
+        collections: [],
+        total_base_deducted: "0.0000",
+        total_tds: "0.0000",
+        total_base_collected: "0.0000",
+        total_tcs: "0.0000",
+        sub_threshold_deductions: 0,
+        exempt_collections: 0,
+        disclosures: [
+          "DEPOSIT IS NOT TRACKED. Every figure here is tax deducted or collected, not tax PAID to the government.",
+          "NO RETURN CAN BE FILED FROM THIS YET. The Form 140 layout and the FVU file format have not been read from a primary source.",
+        ],
+        return_file: {
+          available: false,
+          format_version: "",
+          summary:
+            "NO RETURN FILE IS GENERATED. The layout a return must be written in has not been read from a primary source.",
+          validated: false,
+          validation_note:
+            "Nothing this software produces has been validated by the department's File Validation Utility.",
+          blockers: [
+            {
+              what: "The Form 140 layout (quarterly non-salary TDS return)",
+              where: "incometaxindia.gov.in",
+              why: "It fixes the record order and the field widths.",
+            },
+          ],
+          what_you_can_do_instead:
+            "Use this register to prepare the return in your filing software or with your accountant.",
+        },
       };
     },
 

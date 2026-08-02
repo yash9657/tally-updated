@@ -13,9 +13,9 @@
 > `HANDOFF-T1-PRINTING.md` as the entry point.** They remain useful for the *reasoning* behind
 > specific decisions; this file is the plan of record.
 >
-> **State at handoff:** migrations `0067` · backend **1929 pass / 0 SKIP / 0 FAIL** · frontend **443** ·
-> `make verify` green · tree clean. **Item Zero steps 1–3 have landed — see §2. Step 4 (the
-> register and the returns) is all that is left of the debt.**
+> **State at handoff:** migrations `0068` · backend **1937 pass / 0 SKIP / 0 FAIL** · frontend **448** ·
+> `make verify` green · tree clean. **✅ ITEM ZERO IS PAID (steps 1–4) — see §2. The sequence
+> in §4 resumes at order 1.**
 
 ---
 
@@ -65,11 +65,12 @@ Act **as enacted**, while the amended edition sat unread in `docs/statutory/`.
 
 ---
 
-## 2. ⛔ ITEM ZERO — STEPS 1–3 ARE DONE. Step 4 remains.
+## 2. ✅ ITEM ZERO — PAID IN FULL (steps 1–4). Read §2 step 4 before touching T6.
 
 Migrations 0049/0050 and three compliance engines existed, were tested, and **nothing called
-them**. Steps 1–3 below have now landed: both taxes derive, refuse, persist, and are
-configurable from F11. Nothing can yet be REPORTED, which is step 4.
+them**. All four steps below have now landed: both taxes derive, refuse, persist, are
+configurable from F11, and are visible in a register. The one thing that CANNOT be built
+honestly from this environment — the return file — refuses out loud rather than guessing.
 
 **✅ Step 1 — the TDS post path (done).** Inside the existing post transaction, in this order:
 deductor status for the **preceding** tax year → `MustDeduct` → refuse when unrecorded
@@ -148,11 +149,44 @@ pair meets: a scrap sale collects 2%, a declaration is filed, the same sale coll
 > and a later migration can backfill it safely. The Form 143 codes have not been sourced, and
 > **inventing one would put a fabricated code in a filed return.**
 
-**What remains:**
+**✅ Step 4 — the register, and the return refusal (done).** `GET /tds-register?from=&to=`,
+report name `tds-register`, a **TDS / TCS Register** screen reachable by `Alt+G > TDS`, and
+migration **0068** writing the `disallow display|print report:tds-register` counterweight that
+0011's coarse `allow display report` otherwise defeats. Everything Item Zero built is finally
+visible: every deduction and collection for a period, with party, section, rate, amount and
+the Annexure 2 code.
 
-| # | Work | Notes |
+> **⛔ NO RETURN FILE IS EMITTED, AND THAT IS INVARIANT I-7 BEING HONOURED, NOT A GAP LEFT
+> OPEN.** `t6-model.md` §6.5 records that the Form 140 layout and the Protean file format
+> could not be read — `incometaxindia.gov.in` returns **403 to every automated request** from
+> here. Enough is known from commentary to produce something file-shaped (caret-delimited,
+> `FH`/`BH`/`CD`/`DD`, CRLF, 2dp amounts, 4dp rate, `ddmmyyyy`) and **none of it is trustworthy
+> on the payment-code list** — one of the same sources carried pre-Finance-Act-2025 thresholds
+> the Act text disproves. **A wrong code files a contractor payment as professional fees under
+> a real person's PAN**, discovered by them, months later. So the register carries a structured
+> refusal — `return_file.available:false`, an empty `format_version`, and a named blocker list
+> with where to fetch each one. `validated` is **always** false and always sent: the FVU needs
+> a JRE that does not exist here, so "generated" must never read as "validated".
+>
+> **What a human with a browser can unblock in ten minutes** — §7.3 and the two URLs in
+> `t6-model.md` §6.5. That is now the single highest-value manual task on this track.
+>
+> **ALSO NOT BUILT: the challan register (§1.5).** No `tds_challan` table exists, so the
+> register cannot say what has been **deposited** — and it is the deposit, not the deduction,
+> that stops interest running under s.396. A blank "Challan" column would have read as "not
+> deposited" for every row, which is false, so there is no column and the response says why.
+
+**⛔ ITEM ZERO IS NOW PAID.** Every engine that existed uncalled is called; everything derived
+is persisted; everything persisted is visible; and the one thing that cannot be built honestly
+refuses out loud. **§4's sequence resumes at order 1 (T29 bank import), then order 2.**
+
+**What is left of T6, for whoever picks it up:**
+
+| # | Work | Blocked on |
 |---|---|---|
-| **4** | **T6's register and the Form 140 / Form 143 returns** | The only Item Zero step left, and now the blocker. Both `tds_deduction` and `tcs_collection` have rows to read. **Needs: the Form 143 payment codes read against primary text** (§7 human task), and the `.csi` challan refusal designed. Until a register exists, the TDS/TCS row on `FeaturesScreen` stays **off** — the numbers are correct, stored, and go nowhere. |
+| a | The Form 140 / 143 return file | **A human fetching two documents** (§7.3). Everything else is ready. |
+| b | The challan register + deposit tracking | Nothing — it is a new table and a screen, and it is the biggest remaining hole in the feature. |
+| c | Form 131 (the deductee's certificate) | (a), since it restates what the return filed. |
 
 ---
 
@@ -224,7 +258,7 @@ seven layers of §1.
 
 | Order | Work | Why here |
 |---|---|---|
-| **0** | **§2 step 4 — the TDS/TCS register and the Form 140 / 143 returns** | Steps 1–3 are done: both taxes derive, refuse, and persist, and both are configurable from F11. **Nothing can be reported yet**, which is the last of the debt. |
+| ~~**0**~~ | ~~**§2 — Item Zero**~~ | ✅ **PAID.** Steps 1–4 landed. What remains of T6 is listed in §2 and is blocked on a human fetching two documents. |
 | **1** | **T6** register + returns · **T29** bank import | Finishes Wave 1. Both have memos and storage already. |
 | **2** | **T3** orders + BOM · **T2** cost centres | The two most-used missing features. Disjoint packages. T11/T24 depend on T2. |
 | **3** | **T32 import from Tally** | Moved EARLY on purpose — see the note above. Without it there is no migration path. |

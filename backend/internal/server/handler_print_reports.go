@@ -14,7 +14,8 @@ package server
 //	cash-flow, anomalies, gstr1, gstr3b, reconciliation-queue,
 //	stock-movement, godown-summary, batch-summary, stock-item-vouchers,
 //	itc-reconciliation, ims-inbox,
-//	payroll-form-138, payroll-pf-ecr, payroll-esi-return
+//	payroll-form-138, payroll-pf-ecr, payroll-esi-return,
+//	tds-register
 //
 // They stay MAPPED on purpose. A name the router does not emit is a name an
 // administrator's rule can never match (internal/authz/vocabulary.go's whole

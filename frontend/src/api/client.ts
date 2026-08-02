@@ -49,6 +49,7 @@ import type {
   VoucherHistoryResponse,
   BankReconciliationResponse,
   DeductorStatusListResponse,
+  TDSRegisterResponse,
   TCSDeclarationListResponse,
   CreateTCSDeclarationRequest,
   CreateTCSDeclarationResponse,
@@ -197,9 +198,7 @@ export interface CoredClient {
    * Every s.394(2) declaration this company holds, plus the sections one may be
    * filed against. Owner-only, like deductor status.
    */
-  listTCSDeclarations(
-    companyID: string,
-  ): Promise<TCSDeclarationListResponse>;
+  listTCSDeclarations(companyID: string): Promise<TCSDeclarationListResponse>;
   /**
    * File (or correct) a buyer's s.394(2) declaration. Idempotent on
    * (buyer, section, tax year).
@@ -211,6 +210,17 @@ export interface CoredClient {
     companyID: string,
     req: CreateTCSDeclarationRequest,
   ): Promise<CreateTCSDeclarationResponse>;
+
+  /**
+   * The TDS/TCS register for a period. BOTH dates are required — the server
+   * refuses to default a period, because a correctly rendered register for the
+   * wrong quarter is worse than a refusal.
+   */
+  tdsRegister(
+    companyID: string,
+    from: string,
+    to: string,
+  ): Promise<TDSRegisterResponse>;
 
   createGroup(
     companyID: string,
@@ -455,10 +465,7 @@ export interface CoredClient {
     from?: string,
     to?: string,
   ): Promise<ProfitLossResponse>;
-  getDayBook(
-    companyID: string,
-    query?: DayBookQuery,
-  ): Promise<DayBookResponse>;
+  getDayBook(companyID: string, query?: DayBookQuery): Promise<DayBookResponse>;
   getOutstandings(
     companyID: string,
     query?: OutstandingsQuery,

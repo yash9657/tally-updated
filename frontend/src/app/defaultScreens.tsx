@@ -18,6 +18,7 @@ import {
 } from "../screens/reports/ReportScreens";
 import { ReportDetailScreen } from "../screens/reports/ReportDetailScreen";
 import { StockSummaryScreen } from "../screens/reports/StockSummaryScreen";
+import { TDSRegisterScreen } from "../screens/reports/TDSRegisterScreen";
 import { BankReconciliationScreen } from "../screens/BankReconciliationScreen";
 import { REPORT_NAMES } from "../keystroke/types";
 import type { ScreenComponent, ScreenComponentProps } from "./screenRegistry";
@@ -72,9 +73,9 @@ const UnwiredReportScreen: ScreenComponent = ({ snapshot }) => {
         invents numbers is worse than no report.
       </p>
       <p className="mt-2 text-sm">
-        Working reports: Balance Sheet, Profit &amp; Loss A/c, Trial Balance, Day
-        Book, Outstandings, Stock Summary — all reachable with Alt+G. Esc goes
-        back.
+        Working reports: Balance Sheet, Profit &amp; Loss A/c, Trial Balance,
+        Day Book, Outstandings, Stock Summary — all reachable with Alt+G. Esc
+        goes back.
       </p>
     </section>
   );
@@ -89,9 +90,9 @@ const MasterCreateAdapter: ScreenComponent = ({
 );
 
 /** Gateway adapter: the Phase 0 GatewayScreen only needs onSelect. */
-const GatewayAdapter: ScreenComponent = ({ onSelect }: ScreenComponentProps) => (
-  <GatewayScreen onSelect={onSelect} />
-);
+const GatewayAdapter: ScreenComponent = ({
+  onSelect,
+}: ScreenComponentProps) => <GatewayScreen onSelect={onSelect} />;
 
 /**
  * "Display More Reports" — Tally's second-level report menu, where the Trial
@@ -176,9 +177,9 @@ const HelpAdapter: ScreenComponent = ({ snapshot }: ScreenComponentProps) => (
 );
 
 /** Stock Summary adapter: the inventory position (reads snapshot.config.periodTo). */
-const StockSummaryAdapter: ScreenComponent = ({ snapshot }: ScreenComponentProps) => (
-  <StockSummaryScreen snapshot={snapshot} />
-);
+const StockSummaryAdapter: ScreenComponent = ({
+  snapshot,
+}: ScreenComponentProps) => <StockSummaryScreen snapshot={snapshot} />;
 
 /** F11 Company Features adapter. */
 const FeaturesAdapter: ScreenComponent = () => <FeaturesScreen />;
@@ -227,5 +228,8 @@ export function createDefaultRegistry(): ScreenRegistry {
     // Denied to Data Entry by migration 0026 (it prints cost prices); the
     // screen states that refusal rather than rendering an empty table.
     "report:Stock Summary": StockSummaryAdapter,
+    // The TDS/TCS register (Item Zero step 4). Denied to Data Entry by
+    // migration 0068; the screen renders that refusal as the reason it is.
+    "report:TDS / TCS Register": TDSRegisterScreen,
   });
 }

@@ -628,6 +628,16 @@ func (s *Server) routes() {
 		r.Get("/tcs-declarations", s.handleListTCSDeclarations)
 		r.Post("/tcs-declarations", s.handleCreateTCSDeclaration)
 
+		// THE TDS/TCS REGISTER (Item Zero step 4) — everything deducted and
+		// collected in a period, per deductee and per buyer.
+		//
+		// A FLAT LITERAL path segment equal to the report name, per
+		// PLAN-TALLY-PARITY.md §2.4: TestReportVocabularyMatchesRouter walks
+		// authz.KnownReportNames and asserts this route resolves for every one.
+		// Migration 0068 disallows it for Data Entry at specificity 2 — it lists
+		// every supplier paid and customer collected from, with amounts.
+		r.Get("/tds-register", s.handleTDSRegister)
+
 		// Forecast/anomaly reports (wave-2 WS5a).
 		r.Get("/cash-flow", s.handleCashFlow)
 		r.Get("/anomalies", s.handleAnomalies)

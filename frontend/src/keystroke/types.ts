@@ -66,11 +66,7 @@ export type ScreenKind =
  * calculator and Ctrl+H Change Mode all behave this way).
  */
 export type FrameOverlay =
-  | "change-mode"
-  | "configure"
-  | "period"
-  | "filter"
-  | "calculator";
+  "change-mode" | "configure" | "period" | "filter" | "calculator";
 
 /**
  * The data-capture forms Ctrl+H (Change Mode) can put a voucher into.
@@ -95,11 +91,7 @@ export type FrameOverlay =
  *    Single/Double entry, which would imply a money side that does not exist.
  */
 export type EntryMode =
-  | "single"
-  | "double"
-  | "accounting-invoice"
-  | "item-invoice"
-  | "stock";
+  "single" | "double" | "accounting-invoice" | "item-invoice" | "stock";
 
 /**
  * Per-frame VIEW configuration — the state Tally's F12 Configure / Ctrl+H /
@@ -154,11 +146,7 @@ export const LEDGER_WISE_DEFAULT = true;
  * the backend exposes; the masters agent renders the matching form.
  */
 export type MasterKind =
-  | "ledger"
-  | "group"
-  | "voucher-type"
-  | "unit"
-  | "stock-item";
+  "ledger" | "group" | "voucher-type" | "unit" | "stock-item";
 
 /**
  * The canonical Phase 1 report names. These strings are the `reportName` on a
@@ -182,6 +170,16 @@ export const REPORT_NAMES = [
    * some operators. The screen states that reason rather than showing a blank.
    */
   "Stock Summary",
+  /**
+   * TDS / TCS Register — everything deducted and collected in a period.
+   *
+   * Listed here for the same reason Stock Summary is, and with the same caveat:
+   * it is DENIED to the seeded Data Entry level (migration 0068 — it is every
+   * supplier paid and every customer collected from, with amounts), so this
+   * entry is reachable-but-refused for some operators. The screen states that
+   * reason rather than showing a blank.
+   */
+  "TDS / TCS Register",
 ] as const;
 export type ReportName = (typeof REPORT_NAMES)[number];
 

@@ -908,6 +908,14 @@ func reportName(rest string) string {
 	// rather than guessed at here.
 	case "/bank-reconciliation":
 		return "bank-reconciliation"
+	// THE TDS/TCS REGISTER (Item Zero step 4). Here for the reason the two
+	// entries above record: a name in authz.KnownReportNames that this function
+	// does not know is a name some arms serve and others default-deny, and
+	// routes() mounts /print/reports/<name> for EVERY known name. Printing it
+	// answers 501 — there is no print layout for it yet, and a blank page that
+	// looks like a filed register is worse than a refusal.
+	case "/tds-register":
+		return "tds-register"
 	case "/trial-balance":
 		return "trial-balance"
 	case "/balance-sheet":

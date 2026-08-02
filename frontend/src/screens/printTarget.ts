@@ -62,12 +62,18 @@ const NO_DOCUMENT_REASON: Partial<Record<VoucherType, string>> = {
 };
 
 /**
- * Client report name -> the server's report slug. All six reports this app can
- * display are printable (memo §1.3).
+ * Client report name -> the server's report slug.
  *
  * `payroll-register` and `payroll-payslip` also print server-side but have NO
  * screen in this build (payroll is server-only), so they are deliberately absent
  * rather than mapped to a screen that does not exist.
+ *
+ * ⚠️ NOT EVERY MAPPED REPORT ACTUALLY PRINTS. The slug being here means the
+ * print route is REACHABLE and the ACL rule `print report:<slug>` can match it;
+ * whether the server has a layout is its own answer. The TDS/TCS register is
+ * mapped and answers 501 — there is no printed layout for it yet, and mapping it
+ * is what makes Ctrl+P say so instead of doing nothing. An absent slug would be
+ * indistinguishable from a key that quietly failed.
  */
 const REPORT_SLUGS: Record<ReportName, string> = {
   "Balance Sheet": "balance-sheet",
@@ -76,6 +82,7 @@ const REPORT_SLUGS: Record<ReportName, string> = {
   "Day Book": "day-book",
   Outstandings: "outstandings",
   "Stock Summary": "stock-summary",
+  "TDS / TCS Register": "tds-register",
 };
 
 /** A resolved print destination, or a refusal carrying the reason to display. */
@@ -185,7 +192,10 @@ export function resolvePrintTarget(
     // party's bills and got the whole Outstandings statement should know why.
     const name = reportName ?? parentReportName;
     if (!name) {
-      return { kind: "refusal", reason: "There is no report on this screen to print." };
+      return {
+        kind: "refusal",
+        reason: "There is no report on this screen to print.",
+      };
     }
     const slug = REPORT_SLUGS[name as ReportName];
     if (!slug) {
@@ -198,7 +208,9 @@ export function resolvePrintTarget(
     return {
       kind: "report",
       slug,
-      label: drilled ? `${name} (the whole statement, not this drill-down)` : name,
+      label: drilled
+        ? `${name} (the whole statement, not this drill-down)`
+        : name,
     };
   }
 

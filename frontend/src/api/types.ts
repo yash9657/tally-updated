@@ -1121,3 +1121,83 @@ export interface CreateTCSDeclarationResponse {
   tax_year_start: number;
   tax_year_label: string;
 }
+
+// ---------------------------------------------------------------------------
+// THE TDS / TCS REGISTER (Item Zero step 4). GET /tds-register?from=&to=
+//
+// Everything Item Zero derived, refused and stored was invisible until this.
+// Denied to the seeded Data Entry level by migration 0068 — it is every supplier
+// paid and every customer collected from, with amounts.
+// ---------------------------------------------------------------------------
+
+export interface TDSRegisterDeduction {
+  date: string;
+  voucher_no: string;
+  voucher_id: string;
+  deductee: string;
+  section: string;
+  deductee_type: string;
+  /** Form 140 Annexure 2 payment code, decided at derivation time. */
+  return_code: string;
+  base: Money;
+  rate_pct: string;
+  tds: Money;
+  pan_available: boolean;
+}
+
+export interface TDSRegisterCollection {
+  date: string;
+  voucher_no: string;
+  voucher_id: string;
+  buyer: string;
+  section: string;
+  base: Money;
+  rate_pct: string;
+  tcs: Money;
+  /**
+   * NONE | EXEMPT | INVALID_NO_PAN — the only field that distinguishes the three
+   * different meanings a zero in `tcs` can carry.
+   */
+  declaration: string;
+  pan_available: boolean;
+}
+
+/** One thing that must be obtained before a return file can be emitted. */
+export interface ReturnFileBlocker {
+  what: string;
+  where: string;
+  why: string;
+}
+
+/**
+ * The machine-readable refusal (invariant I-7). A client must branch on
+ * `available`, never on the presence of the other fields.
+ */
+export interface ReturnFileStatus {
+  available: boolean;
+  format_version: string;
+  summary: string;
+  /** ALWAYS false: the FVU needs a JRE that does not exist in this environment. */
+  validated: boolean;
+  validation_note: string;
+  blockers: ReturnFileBlocker[];
+  what_you_can_do_instead: string;
+}
+
+export interface TDSRegisterResponse {
+  from: string;
+  to: string;
+  /** 0 when the period spans two tax years — no single return covers it. */
+  tax_year_start: number;
+  deductions: TDSRegisterDeduction[];
+  collections: TDSRegisterCollection[];
+  total_base_deducted: Money;
+  total_tds: Money;
+  total_base_collected: Money;
+  total_tcs: Money;
+  sub_threshold_deductions: number;
+  exempt_collections: number;
+  /** What this register CANNOT tell you. Rendered, never suppressed. */
+  disclosures: string[];
+  return_file: ReturnFileStatus;
+}

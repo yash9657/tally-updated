@@ -76,6 +76,13 @@ const REPORT_ALIASES: Readonly<Record<string, string>> = {
   "bills outstanding": "Outstandings",
   "bills receivable": "Outstandings",
   "bills payable": "Outstandings",
+  // The register answers to the words an operator actually types. "tds" alone
+  // is the common one; the rest are what a Tally user calls the same screen.
+  "tds / tcs register": "TDS / TCS Register",
+  "tds register": "TDS / TCS Register",
+  "tcs register": "TDS / TCS Register",
+  tds: "TDS / TCS Register",
+  tcs: "TDS / TCS Register",
 };
 
 /**
@@ -561,7 +568,8 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
         // Checked before the report fallback, which would otherwise push a
         // report frame literally named "Display More Reports".
         if (
-          active.selectedItem?.toLowerCase() === MORE_REPORTS_LABEL.toLowerCase()
+          active.selectedItem?.toLowerCase() ===
+          MORE_REPORTS_LABEL.toLowerCase()
         ) {
           stack.push({ screen: "menu" });
           return { stack };
@@ -658,7 +666,8 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
       // broken screen rather than as "there is nothing here". The machine stays
       // PURE — no voucher id travels through it. The screen reads the drilled
       // voucher from LoadedVoucher, exactly as the alter form already does.
-      if (active.screen !== "voucher" || active.voucherMode !== "alter") return {};
+      if (active.screen !== "voucher" || active.voucherMode !== "alter")
+        return {};
       return pushOnce("edit-log");
     }
 
@@ -1092,7 +1101,8 @@ export function projectSnapshot(ctx: NavContext): NavSnapshot {
   if (active.reportName !== undefined) snap.reportName = active.reportName;
   if (active.masterKind !== undefined) snap.masterKind = active.masterKind;
   if (active.detailOf !== undefined) snap.detailOf = active.detailOf;
-  if (active.selectedItem !== undefined) snap.selectedItem = active.selectedItem;
+  if (active.selectedItem !== undefined)
+    snap.selectedItem = active.selectedItem;
   if (active.saved) snap.saved = true;
   if (active.overlay !== undefined) snap.overlay = active.overlay;
   if (active.config !== undefined) snap.config = active.config;

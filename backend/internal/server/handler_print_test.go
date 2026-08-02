@@ -1244,10 +1244,15 @@ func TestTheUnimplementedReportsAreStillGovernableAndSaySo(t *testing.T) {
 			t.Errorf("the 501 for report %q does not name the report: %s", name, rec.Body.String())
 		}
 	}
-	// 14: the fourteen T1 recorded. bank-reconciliation was the fifteenth until
-	// §3.4 took the route-shape decision and it moved into `implemented`.
-	if deferred != 14 {
-		t.Errorf("expected 14 deferred report names, saw %d: handler_print_reports.go's header "+
+	// 15: the fourteen T1 recorded, plus report:tds-register (Item Zero step 4).
+	// bank-reconciliation was once counted here too, until §3.4 took the
+	// route-shape decision and it moved into `implemented`.
+	//
+	// The register is DELIBERATELY in the deferred set rather than implemented:
+	// there is no printed layout for it, and mapping the slug without a layout is
+	// what makes Ctrl+P answer "not built" instead of doing nothing.
+	if deferred != 15 {
+		t.Errorf("expected 15 deferred report names, saw %d: handler_print_reports.go's header "+
 			"lists the deferred set explicitly and it is now out of step with "+
 			"authz.KnownReportNames", deferred)
 	}
@@ -1873,6 +1878,12 @@ var printDisallowedBySeededMigrations = []struct{ resource, discloses string }{
 		"a per-batch closing valuation, i.e. cost again"},
 	{"report:stock-item-vouchers",
 		"the rate of each individual purchase, stated outright rather than averaged"},
+	// Migration 0068 (Item Zero step 4). The TDS/TCS register is the whole
+	// counterparty book on BOTH sides at once, which is what makes it worth its
+	// own refusal rather than leaving it to the coarse grant.
+	{"report:tds-register",
+		"every supplier this company pays and every customer it collects from, " +
+			"by name, with what each was paid and at what rate"},
 	{"payroll",
 		"the pay run voucher itself — the wage bill as double entry"},
 	// From migration 0046 (T4), not 0038 — hence the variable's name below.
