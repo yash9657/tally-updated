@@ -830,6 +830,45 @@ async function main(): Promise<void> {
   };
   await pdfChecks();
 
+  // --- The bank account's own identity, and the statement import ----------
+  //
+  // INVARIANT I-11 (docs/design/t4-slice2-model.md §1.3, B-12): migration 0064's
+  // columns had to ship WITH DATA. A blank labelled field reads as "this bank
+  // has no IFSC" rather than "nobody has typed it yet", so a demo whose bank
+  // shows two empty rows looks like a product that lost the data.
+  //
+  // This is checked HERE rather than in a unit test because it is a property of
+  // THE SEEDED DEMO, which is the thing a human opens to judge the product. A Go
+  // test can prove the column accepts a value; only this can prove the demo
+  // carries one.
+  // `ledgers` is already bound above (check 10); reuse it rather than shadowing.
+  const demoBank = ledgers.find((l) => l.is_bank && !l.is_system);
+  check(
+    "the demo's bank ledger carries an account number AND an IFSC (I-11)",
+    !!demoBank && demoBank.bank_account_number !== "" && demoBank.bank_ifsc !== "",
+    demoBank
+      ? `${demoBank.name}: a/c ${demoBank.bank_account_number || "(BLANK — a labelled blank reads as 'this bank has no account number')"}` +
+          ` ifsc ${demoBank.bank_ifsc || "(BLANK)"}`
+      : "no non-system bank ledger found in the demo company",
+  );
+
+  if (demoBank) {
+    // The imported-statement report answers for a bank account with nothing
+    // imported yet, and SAYS that matching is not built. An empty list plus
+    // silence would read as "none of your bank rows matched", which is a
+    // different and false statement.
+    const stmt = await client.importedStatement(co, demoBank.id);
+    const saysMatchingIsMissing = stmt.disclosures.some((d) =>
+      d.includes("MATCHING IS NOT BUILT YET"),
+    );
+    check(
+      "the imported-statement report discloses that matching is not built",
+      saysMatchingIsMissing && stmt.lines.length === 0,
+      `${stmt.lines.length} lines, ${stmt.disclosures.length} disclosures` +
+        (saysMatchingIsMissing ? "" : " — the matching disclosure is MISSING"),
+    );
+  }
+
   console.log(
     `\n${failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`}` +
       ` (${checks - failures}/${checks})\n`,
