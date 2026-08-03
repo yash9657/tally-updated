@@ -51,6 +51,18 @@ const SCREEN_ACTIONS: Partial<Record<KeymapAction["kind"], ScreenActionKind>> = 
   nextVoucher: "nextVoucher",
   print: "print",
   bankReconciliation: "bankReconciliation",
+  // Alt+O on the reconciliation screen — statement IMPORT (T4 slice 2a).
+  //
+  // ⚠️ THIS MAP IS A REGISTRATION POINT AND IT IS NOT IN §5.2's LIST OF TWELVE.
+  // Everything else can be present — the keymap binding, the ScreenActionKind,
+  // the navMachine case, the button-bar item, and the screen's
+  // useRegisterScreenAction — and the key STILL does nothing, silently, because
+  // the shell never dispatches it. That is exactly how Alt+O shipped: every
+  // unit test passed (they call the dispatcher directly and bypass this map),
+  // buttons.test.ts passed (it checks the ACTION resolves, not that the shell
+  // routes it), and the failure only appeared when the app was driven in a real
+  // browser. Add the entry here whenever you add a screen action.
+  importBankStatement: "importBankStatement",
 };
 
 /** How long a status-line message stays up before it fades (ms). */
