@@ -157,10 +157,37 @@ migration **0068** writing the `disallow display|print report:tds-register` coun
 visible: every deduction and collection for a period, with party, section, rate, amount and
 the Annexure 2 code.
 
-> **⛔ NO RETURN FILE IS EMITTED, AND THAT IS INVARIANT I-7 BEING HONOURED, NOT A GAP LEFT
+> ## ⛔⛔ CORRECTED 2026-08-03 — THE PARAGRAPH BELOW IS STALE. THE RETURN IS **NOT** BLOCKED.
+>
+> **`docs/statutory/form-140-file-format.xlsx` and `form-143-file-format.xlsx` have been in this
+> repository since commit `cfb83ff` (2026-07-31) — nineteen commits before this correction, and
+> BEFORE this file was first written.** `docs/statutory/README.md` records the whole thing:
+> prescribed format **version 1.0, TY 2026-27**, Annexure 2's payment codes, Annexure 6's
+> thirteen reason flags, and the TCS codes (scrap **1073**, motor vehicle **1075**).
+>
+> **All seven shipped TDS payment codes were re-verified against that primary spec on
+> 2026-08-03** — 1023/1024/1026/1027/1006/1008/1009, each against its statutory limb, including
+> the subtle pair where `1027` and `1028` share limb 6(iii).D(b). Every one matches
+> `internal/compliance/tds.go`.
+>
+> **What the Item Zero session got wrong was the SOURCE, not the caution.** `incometaxindia.gov.in`
+> does 403 every automated request — that part is true and still true. But the file format was
+> never on that site: it is Protean/TIN, now at `tinpan.proteantech.in`, which serves it happily.
+> The refusal was correct on 2026-07-30 and had already been overtaken by 2026-07-31.
+>
+> **WHAT IS STILL GENUINELY BLOCKED IS VALIDATION, NOT GENERATION.** The FVU needs a JRE and the
+> RPU zip; the `.csi` challan file needs a TIN portal login. So the return can be **generated
+> with a `format_version` traced to a read primary source** — which is exactly what I-7 asks —
+> and must **never** be described as validated. That is the arrangement `internal/statutory`
+> already uses for IRN.
+>
+> **The historical paragraph is kept below, struck through, because the mistake is instructive:
+> a documented blocker outlived the blocking condition by two days and nobody re-checked.**
+>
+> ~~**NO RETURN FILE IS EMITTED, AND THAT IS INVARIANT I-7 BEING HONOURED, NOT A GAP LEFT
 > OPEN.** `t6-model.md` §6.5 records that the Form 140 layout and the Protean file format
 > could not be read — `incometaxindia.gov.in` returns **403 to every automated request** from
-> here. Enough is known from commentary to produce something file-shaped (caret-delimited,
+> here.~~ Enough is known from commentary to produce something file-shaped (caret-delimited,
 > `FH`/`BH`/`CD`/`DD`, CRLF, 2dp amounts, 4dp rate, `ddmmyyyy`) and **none of it is trustworthy
 > on the payment-code list** — one of the same sources carried pre-Finance-Act-2025 thresholds
 > the Act text disproves. **A wrong code files a contractor payment as professional fees under
@@ -185,7 +212,7 @@ refuses out loud. **§4's sequence resumes at order 1 (T29 bank import), then or
 
 | # | Work | Blocked on |
 |---|---|---|
-| a | The Form 140 / 143 return file | **A human fetching two documents** (§7.3). Everything else is ready. |
+| a | The Form 140 / 143 return file | **NOTHING. See the correction above.** Both specs are in `docs/statutory/`, format version 1.0, codes verified. It cannot be *validated* here (no FVU, no `.csi`) — so generate it and say so on its face, as IRN does. |
 | b | The challan register + deposit tracking | Nothing — it is a new table and a screen, and it is the biggest remaining hole in the feature. |
 | c | Form 131 (the deductee's certificate) | (a), since it restates what the return filed. |
 
@@ -449,7 +476,7 @@ which is the real reason §1's bar matters.
 |---|---|---|
 | **7.1** | **Run one real business day on it.** Key real vouchers, reconcile a real statement, print a real invoice, write down every annoyance. | **HIGHEST ITEM IN THIS FILE.** Everything else was found by reading code, which finds *missing tables* — not what is unpleasant. Two of the most-used buttons in the product were found exactly this way. |
 | **7.2** | **A real Tally backup file** (any version) to build and test T32 against. | Blocks the commercial migration path. |
-| **7.3** | **A JRE + RPU 1.1 zip** (Protean/TIN) so the FVU can actually validate a return. | Stops us saying "generated, not validated". |
+| **7.3** | **A JRE + the RPU zip** (Protean/TIN) so the FVU can actually validate a return. **The FILE FORMAT is no longer part of this ask — it is already in `docs/statutory/`.** This item is now only about validation. | Stops us saying "generated, not validated". |
 | **7.4** | **EPF/EDLI administrative charges** — no standalone rate notification existed as at 2026-07-30. **Do not substitute `S.O. 2701(E)`** (inspection charges, different levy). | ~₹500/establishment/month accruing, correctly refusing. |
 | **7.5** | **Sample Form 140 Q1–Q4 file** to diff our output against. | Optional. |
 
