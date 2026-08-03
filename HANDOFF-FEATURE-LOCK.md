@@ -13,9 +13,10 @@
 > `HANDOFF-T1-PRINTING.md` as the entry point.** They remain useful for the *reasoning* behind
 > specific decisions; this file is the plan of record.
 >
-> **State at handoff:** migrations `0068` · backend **1937 pass / 0 SKIP / 0 FAIL** · frontend **448** ·
-> `make verify` green · tree clean. **✅ ITEM ZERO IS PAID (steps 1–4) — see §2. The sequence
-> in §4 resumes at order 1.**
+> **State at handoff:** migrations `0068` (0062–0064 also applied) · backend **1977 pass / 0 SKIP /
+> 0 FAIL** · frontend **459** · `verify:demo` **33/33** · `make verify` green · tree clean.
+> **✅ ITEM ZERO IS PAID (steps 1–4) — see §2. ✅ T29 SLICE 2a (statement import) IS SHIPPED —
+> see §2.6. §4's order 1 now has one thing left in it: slice 2b, the matching.**
 
 ---
 
@@ -190,6 +191,100 @@ refuses out loud. **§4's sequence resumes at order 1 (T29 bank import), then or
 
 ---
 
+## 2.6 ✅ T29 SLICE 2a — BANK STATEMENT IMPORT IS SHIPPED. Read this before slice 2b.
+
+Commits `633639e` and `262b6d2`. Migrations **0062** (`bank_statement_import` +
+`bank_statement_line`), **0063** (the ACL), **0064** (`ledger.bank_account_number` /
+`bank_ifsc`). All seven layers of §1: `Alt+O` on the Bank Reconciliation screen, cited to
+`RESEARCH.md:361` ("O: Import"), :415, :1221.
+
+`docs/design/t4-slice2-model.md` §8 is new and it settles what §7 of that memo left open. Read
+it before touching this track.
+
+### ⛔ THERE ARE NO BUILT-IN PER-BANK COLUMN LAYOUTS, AND THAT IS §1.1, NOT LAZINESS
+
+**Do not add an "HDFC profile".** A per-bank column layout is the same class of fact as a tax
+rate, and it fails in the same direction — worse, because a wrong rate is at least a wrong
+*number*, whereas a wrong column mapping is a **silently plausible** one. No real HDFC/ICICI/SBI
+export exists in this environment to check a profile against, so any profile would be a layout
+recalled from memory. Wrong by one column, it reads the **running balance as the amount**: every
+figure is then a real number off a real statement that was never a transaction, nothing raises,
+and the operator reconciles against it.
+
+So the mapping is **proposed from the file's own header row** (evidence in front of us),
+**confirmed by a human**, and **stored on the batch verbatim** so "how was this file read?" stays
+answerable months later. That stored mapping is also the only honest way to ever acquire a
+profile table — out of real files an operator confirmed.
+
+**The date layout is refused, not guessed.** If every date in a column fits dd/mm *and* mm/dd,
+the file cannot say which it means, and choosing wrongly moves a whole statement by up to eleven
+months while every amount in it stays plausible.
+
+### ⚠️ DIRECTION IS INVERTED RELATIVE TO THE BANK'S OWN WORDING — the sharpest edge on the track
+
+A **DEPOSIT is stored `'D'`** — our bank asset rose — though the statement calls it a credit,
+because in the **BANK's** books we are a liability. Normalised **once**, at the parser, so the
+matcher can compare directly against a posting's `dr_cr`.
+
+**A comparison that had to remember the inversion would eventually forget, and the result is
+ZERO MATCHES — which reads as "nothing to reconcile" rather than as a bug.** Slice 2b lives or
+dies on this. The screen labels its columns **In / Out** rather than Dr / Cr for the same reason:
+a `D` under a column headed "Dr" would look wrong to every operator holding the paper statement.
+
+### What it checks, and the one thing it admits it cannot
+
+| | |
+|---|---|
+| **B-4** balance walk, to the paisa | A dropped row is **refused NAMING the row**, not imported with a gap |
+| **B-7** zero tolerance | One paisa out is out — a tolerance is how a real error hides for a year |
+| **B-3** re-import, at **both** grains | The same file twice; **and** the overlapping download (1–31 Jan, then 15 Jan–15 Feb) that a per-file hash alone misses entirely |
+| **B-6** all three direction encodings | Two columns / signed / C-D flag all normalise identically |
+| Wrong account | A file whose account number disagrees with the ledger's is refused — importing against the wrong account reconciles nothing and leaves two accounts wrong with every line in both still real |
+
+**The admission:** a file with **no running-balance column CANNOT be walked**, and the import
+reports that the check **DID NOT RUN**. A check that did not run and a check that passed are the
+same shape from outside, and only one of them is safe. The screen renders that case in a
+different WEIGHT, not just different words.
+
+### The ACL is the OPPOSITE answer from 0046, deliberately
+
+0046 **grants** Data Entry the reconciliation write, because ticking one cheque off is clerical.
+**0063 grants this one to nobody.** An imported statement is the bank's own file of every
+counterparty, including the rows no voucher exists for — salaries, drawings, the loan repayment.
+Refusing is the recoverable direction; a file that has been read cannot be un-read.
+
+**Preview is a `Create`, not a `Display`** — it echoes the uploaded file back, and calling it a
+Display would have put it under 0011's coarse `allow display report`. If this is ever revisited,
+**revisit both halves together**: granting the import without the read would let a clerk feed a
+file in and not read it back, which sounds cautious and is merely incoherent, since the import's
+own response *is* the statement.
+
+### ⬜ WHAT SLICE 2b MUST DO — and the trap already waiting for it
+
+`bank_statement_match` takes **a new number at the end** (0062–0064 are consumed; the rule is
+*renumber unstarted blocks, never renumber a migration that exists*). The `internal/bankstatement`
+boundary policy in `archtest` is `{platform/db}` — **the tempting edge is
+`bankstatement → banking`**, so a matched row can write its own clearance. Add it deliberately
+and write down why; memo §2.1 requires a resolved match to land in **0045's** table so there is
+ONE source of "cleared", and `bank_reconciliation` is what carries the BROKEN-BY-ALTER mechanism.
+
+> **§0 OF THE MEMO IS 2b's WHOLE POINT: NEVER AUTO-CLEAR AN AMBIGUOUS MATCH.** Two vouchers,
+> same amount, same day is ORDINARY — two suppliers paid ₹25,000 on the 14th. A matcher that
+> picks one is right half the time and **the half it gets wrong is invisible**: both vouchers
+> exist, both amounts are correct, and the statement reconciles either way. It surfaces only when
+> somebody chases a supplier for a payment the books say cleared. **B-1 belongs to 2b.**
+
+Four keys are still bound to refusals and their notes now name **2b** rather than "slice 2":
+`F8`, `Alt+F8`, `Alt+S`, `F9`. `Ctrl+J` and `Ctrl+B` were bound to refusals in this pass while
+their absence was still harmless (memo §6) — they were inert, and would have silently inherited
+any future global binding for the same combo.
+
+**Also not built, and deliberately out of scope:** auto-creating vouchers from bank rows (memo
+§7 item 3 — it is a write to the books from an external source and needs its own memo), and
+MT940/XLSX (refused by name).
+
+---
+
 ## 3. THE COMPLETE GAP INVENTORY
 
 ### 3.1 Group A — the 15 features the product itself says are OFF
@@ -233,7 +328,7 @@ continue from **0067**.
 | **T26** | **Payroll attendance, leave, production types, gratuity, loans & advances, Form 16** | Every employer. Payroll ships without attendance today. |
 | **T27** | **Cheque printing + cheque book management + payment advice** | Everyone who pays by cheque. `RESEARCH.md:881–885` has the full spec including per-bank formats. |
 | **T28** | **Credit limits + credit-control blocking on sale** | Anyone extending credit |
-| **T29** | **Bank statement import + auto-matching** (T4 slice 2) | Everyone who reconciles. **Memo written: `docs/design/t4-slice2-model.md`.** Migrations 0062–0064. |
+| **T29** | ~~**Bank statement import**~~ ✅ **slice 2a shipped** (§2.6) · **auto-MATCHING is slice 2b** | Everyone who reconciles. Import is real (`Alt+O`); matching is not. Memo `docs/design/t4-slice2-model.md`, whose §8 settles the two open product calls. 0062–0064 consumed. |
 | **T30** | **MIS: ratio analysis, cash flow, funds flow, comparative & multi-period columns** | Every owner and their accountant. Cash Flow is already a *named* report answering 501. |
 | **T31** | **Multi-company / group company consolidation** | Anyone with two entities |
 | **T32** | **Data import FROM Tally** (XML / ODBC) | **EVERY SINGLE PROSPECT.** Nobody switches without their history. |
@@ -259,7 +354,7 @@ seven layers of §1.
 | Order | Work | Why here |
 |---|---|---|
 | ~~**0**~~ | ~~**§2 — Item Zero**~~ | ✅ **PAID.** Steps 1–4 landed. What remains of T6 is listed in §2 and is blocked on a human fetching two documents. |
-| **1** | **T6** register + returns · **T29** bank import | Finishes Wave 1. Both have memos and storage already. |
+| **1** | ~~**T29** bank statement IMPORT~~ ✅ · **T29 slice 2b** the MATCHING · **T6** challan register | Finishes Wave 1. Import shipped (§2.6); matching is what remains, and it is the half that carries §0's rule. T6's own remainder is in §2. |
 | **2** | **T3** orders + BOM · **T2** cost centres | The two most-used missing features. Disjoint packages. T11/T24 depend on T2. |
 | **3** | **T32 import from Tally** | Moved EARLY on purpose — see the note above. Without it there is no migration path. |
 | **4** | **T9** FIFO/LIFO · **T10** stock groups/units · **T21** reorder/ageing · **T22** godowns | One inventory push. **T9 moves the Balance Sheet — re-pin `verify:demo`.** Serialise T9+T10. |
