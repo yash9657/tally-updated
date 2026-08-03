@@ -49,6 +49,11 @@ import type {
   SetLedgerOpeningResponse,
   VoucherHistoryResponse,
   BankReconciliationResponse,
+  ImportedStatementResponse,
+  ImportStatementRequest,
+  ImportStatementResponse,
+  PreviewStatementRequest,
+  PreviewStatementResponse,
   DeductorStatusListResponse,
   TDSRegisterResponse,
   TCSDeclarationListResponse,
@@ -170,6 +175,27 @@ export function createRestClient(
     clearBankDate(companyID, ledgerID, voucherID, legNo) {
       return http.del<SetBankDateResponse>(
         `${company(companyID)}/bank-reconciliation/${ledgerID}/${voucherID}/${legNo}`,
+      );
+    },
+    // ---- Bank statement import (T4 slice 2a).
+    previewBankStatement(companyID, ledgerID, req: PreviewStatementRequest) {
+      return http.post<PreviewStatementResponse>(
+        `${company(companyID)}/bank-statement/${ledgerID}/preview`,
+        req,
+      );
+    },
+    importBankStatement(companyID, ledgerID, req: ImportStatementRequest) {
+      return http.post<ImportStatementResponse>(
+        `${company(companyID)}/bank-statement/${ledgerID}/import`,
+        req,
+      );
+    },
+    importedStatement(companyID, ledgerID, from, to) {
+      return http.get<ImportedStatementResponse>(
+        `${company(companyID)}/bank-statement/${ledgerID}`,
+        // Omitted rather than sent empty; the server reads a missing period as
+        // "everything imported".
+        from || to ? { from: from ?? "", to: to ?? "" } : undefined,
       );
     },
     // ---- TDS deductor status (Item Zero step 2).

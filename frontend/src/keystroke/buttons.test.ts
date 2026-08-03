@@ -115,6 +115,13 @@ describe("no advertised button is decorative", () => {
           // are BANK ledgers is an ltree ancestry fact in the database, not
           // something the pure machine can know.
           "bankReconciliation",
+          // Alt+O on the reconciliation screen opens the statement-IMPORT panel
+          // (T4 slice 2a; RESEARCH.md:361 "O: Import"). A screen-owned side
+          // effect for the same reason F4 above is one: the import belongs to
+          // the SELECTED bank account, and which account that is never travels
+          // through the pure machine. It does not move the stack — importing
+          // does not navigate away from the statement you are reconciling.
+          "importBankStatement",
           "voucher",
           "date",
         ].includes(action?.kind ?? "");

@@ -66,6 +66,15 @@ import type {
   SetLedgerOpeningResponse,
   VoucherHistoryResponse,
   BankReconciliationResponse,
+  BankStatementImport,
+  DrCr,
+  BankStatementLine,
+  ImportedStatementResponse,
+  ImportStatementRequest,
+  ImportStatementResponse,
+  PreviewStatementRequest,
+  PreviewStatementResponse,
+  StatementColumnMapping,
   DeductorStatus,
   TDSRegisterResponse,
   TCSDeclaration,
@@ -544,6 +553,15 @@ interface MockCompany {
     address?: string;
     city?: string;
     pincode?: string;
+    /**
+     * The company's OWN bank account identity (migration 0064). STORED here for
+     * the same reason the address row above is: a mock that accepted them on
+     * create and dropped them would let a round-trip test pass against a store
+     * that never kept them — and the imported-statement report reads them back
+     * to decide whether it can say the account was verified.
+     */
+    bankAccountNumber?: string;
+    bankIFSC?: string;
     isSystem?: boolean;
   }[];
   vouchers: DayBookEntry[];
@@ -568,6 +586,31 @@ interface MockCompany {
    * right against this mock is not evidence the refusal works.
    */
   deductorStatuses: Map<number, DeductorStatus>;
+  /**
+   * Imported bank statements (T4 slice 2a), keyed by bank ledger id.
+   *
+   * ⚠️ WHAT THIS MOCK DOES NOT DO, AND THE GAPS MATTER MORE HERE THAN USUAL.
+   * The real import is a parser with six named refusals; this is a reader that
+   * takes a confirmed mapping at its word. Specifically it does NOT:
+   *
+   *   - walk the running balances (invariant B-4), so a file with a dropped row
+   *     imports cleanly here and is REFUSED by the server;
+   *   - deduplicate by transaction (B-3) — only an identical FILE is caught, so
+   *     an overlapping statement doubles here and does not on the server;
+   *   - number identical transactions by occurrence;
+   *   - check the file's account number against the ledger's.
+   *
+   * So a screen that looks right against this mock is NOT evidence that any of
+   * those refusals work. It exists so the import panel has somewhere to read
+   * and write against, exactly as `deductorStatuses` does for the F11 panel.
+   *
+   * ONE THING IT DOES COPY EXACTLY, because a screen test would otherwise pin
+   * the wrong behaviour: THE DIRECTION INVERSION. A deposit becomes "D".
+   */
+  bankStatements: Map<
+    string,
+    { imports: BankStatementImport[]; lines: BankStatementLine[] }
+  >;
   /** s.394(2) declarations, keyed `${buyer}:${section}:${taxYear}`. */
   tcsDeclarations: Map<string, TCSDeclaration>;
   /**
@@ -689,6 +732,226 @@ function isBankLedger(l: { group: string; bankParentGroup?: string }): boolean {
     BANK_PRIMARY_GROUPS.includes(l.group) ||
     BANK_PRIMARY_GROUPS.includes(l.bankParentGroup ?? "")
   );
+}
+
+// ---------------------------------------------------------------------------
+// BANK STATEMENT IMPORT (T4 slice 2a) — mock helpers.
+//
+// ⚠️ READ THE `bankStatements` COMMENT ON THE COMPANY STATE FIRST. These
+// functions are a READER, not the server's parser: no balance walk, no
+// transaction-level dedup, no occurrence ordinals, no account check. What they
+// DO copy exactly is the direction inversion, because a screen test would
+// otherwise pin the wrong behaviour and pass.
+// ---------------------------------------------------------------------------
+
+/** The layouts the server reads, for the mock's picker. */
+const MOCK_DATE_LAYOUTS = [
+  "dd-Mon-yyyy",
+  "dd-mm-yyyy",
+  "dd/mm/yy",
+  "dd/mm/yyyy",
+  "mm/dd/yyyy",
+  "yyyy-mm-dd",
+];
+
+/** Said on every mock import, so nobody mistakes this for the real thing. */
+const MOCK_IMPORT_DISCLOSURE =
+  "This is the MOCK client: the file was read but NOT balance-walked, NOT " +
+  "deduplicated row by row, and NOT checked against this account's number. " +
+  "The server does all three and refuses files this accepts.";
+
+function mockEmptyMapping(): StatementColumnMapping {
+  return {
+    encoding: "",
+    date_layout: "",
+    value_date: "",
+    txn_date: "",
+    description: "",
+    deposit: "",
+    withdrawal: "",
+    amount: "",
+    direction: "",
+    running_balance: "",
+    bank_reference: "",
+    cheque_number: "",
+  };
+}
+
+/**
+ * Mirrors the server's diagnostic refusal: NAME the ledger rather than hand back
+ * an id or an empty statement that reads as "nothing imported".
+ */
+function mockRequireBankLedger(
+  c: { ledgers: { id: string; name: string; group: string; bankParentGroup?: string; bankAccountNumber?: string; bankIFSC?: string }[] },
+  ledgerID: string,
+) {
+  const ledger = c.ledgers.find((l) => l.id === ledgerID);
+  if (!ledger) {
+    throw new ApiError(400, `reporting: ledger ${ledgerID} not found`);
+  }
+  if (!isBankLedger(ledger)) {
+    throw new ApiError(
+      400,
+      `reporting: ledger "${ledger.name}" is not under a bank group; only a bank account has a statement to import`,
+    );
+  }
+  return ledger;
+}
+
+/** Split a CSV line, honouring double quotes around a field. */
+function mockCSVSplit(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let quoted = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]!;
+    if (quoted) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') {
+          cur += '"';
+          i++;
+        } else quoted = false;
+      } else cur += ch;
+    } else if (ch === '"') quoted = true;
+    else if (ch === ",") {
+      out.push(cur.trim());
+      cur = "";
+    } else cur += ch;
+  }
+  out.push(cur.trim());
+  return out;
+}
+
+function mockCSVRows(content: string): string[][] {
+  return content
+    .split(/\r?\n/)
+    .filter((l) => l.trim() !== "")
+    .map(mockCSVSplit);
+}
+
+function mockCSVHeader(content: string): string[] {
+  return mockCSVRows(content)[0] ?? [];
+}
+
+/** "1,25,000.00" -> 1250000000n (ten-thousandths). NEVER parseFloat. */
+function mockMoneyToUnits(v: Money | string): bigint {
+  const cleaned = (v || "0").replace(/[,\s₹]/g, "");
+  const neg = cleaned.startsWith("-") || /^\(.*\)$/.test(cleaned);
+  const bare = cleaned.replace(/^[-(]|\)$/g, "").replace(/(CR|DR)$/i, "");
+  const [whole = "0", frac = ""] = bare.split(".");
+  const units = BigInt((whole || "0") + frac.padEnd(4, "0").slice(0, 4));
+  return neg ? -units : units;
+}
+
+function mockUnitsToMoney(u: bigint): Money {
+  const neg = u < 0n;
+  const abs = neg ? -u : u;
+  const whole = abs / 10000n;
+  const frac = (abs % 10000n).toString().padStart(4, "0");
+  return `${neg ? "-" : ""}${whole}.${frac}`;
+}
+
+/** Read a date cell under a NAMED layout, to ISO. Unreadable -> a 400. */
+function mockParseDate(raw: string, layout: string): string {
+  const digits = raw.split(/[/\-.]/).map((p) => p.trim());
+  const months = [
+    "jan", "feb", "mar", "apr", "may", "jun",
+    "jul", "aug", "sep", "oct", "nov", "dec",
+  ];
+  const pad = (n: string) => n.padStart(2, "0");
+  const fail = () => {
+    throw new ApiError(
+      400,
+      `bankstatement: date does not match the declared layout: ${raw} is not ${layout}`,
+    );
+  };
+  if (digits.length !== 3) fail();
+  const [a = "", b = "", c = ""] = digits;
+  switch (layout) {
+    case "yyyy-mm-dd":
+      return `${a}-${pad(b)}-${pad(c)}`;
+    case "dd/mm/yyyy":
+    case "dd-mm-yyyy":
+      return `${c}-${pad(b)}-${pad(a)}`;
+    case "mm/dd/yyyy":
+      return `${c}-${pad(a)}-${pad(b)}`;
+    case "dd/mm/yy":
+      return `20${pad(c)}-${pad(b)}-${pad(a)}`;
+    case "dd-Mon-yyyy": {
+      const m = months.indexOf(b.toLowerCase().slice(0, 3));
+      if (m < 0) fail();
+      return `${c}-${pad(String(m + 1))}-${pad(a)}`;
+    }
+    default:
+      return fail() as never;
+  }
+}
+
+/**
+ * Read the rows under a CONFIRMED mapping.
+ *
+ * ⚠️ THE DIRECTION INVERSION IS COPIED EXACTLY FROM THE SERVER and is the one
+ * thing in this file that must not drift: a DEPOSIT becomes "D", because in our
+ * books the bank asset rose, though the bank's own statement calls it a credit.
+ */
+function mockParseStatement(
+  content: string,
+  m: StatementColumnMapping,
+  importID: string,
+): BankStatementLine[] {
+  const rows = mockCSVRows(content);
+  const header = rows[0] ?? [];
+  const at = (name: string) => header.indexOf(name);
+  const cell = (r: string[], name: string) =>
+    name === "" ? "" : (r[at(name)] ?? "").trim();
+
+  const out: BankStatementLine[] = [];
+  rows.slice(1).forEach((r, i) => {
+    let amount = "0";
+    let drCr: DrCr = "D";
+    if (m.encoding === "two-columns") {
+      const dep = cell(r, m.deposit);
+      const wdr = cell(r, m.withdrawal);
+      const depEmpty = dep === "" || mockMoneyToUnits(dep) === 0n;
+      if (!depEmpty) {
+        amount = dep;
+        drCr = "D"; // a DEPOSIT is a DEBIT in our books
+      } else {
+        amount = wdr;
+        drCr = "C";
+      }
+    } else if (m.encoding === "signed-amount") {
+      const raw = cell(r, m.amount);
+      amount = raw;
+      drCr = mockMoneyToUnits(raw) < 0n ? "C" : "D";
+    } else {
+      const raw = cell(r, m.amount);
+      const flag = cell(r, m.direction).toUpperCase();
+      amount = raw;
+      // The bank's C (a credit to us) is OUR debit.
+      drCr = flag.startsWith("C") ? "D" : "C";
+    }
+    const units = mockMoneyToUnits(amount);
+    const bal = cell(r, m.running_balance);
+    const line: BankStatementLine = {
+      id: `${importID}-line-${i + 1}`,
+      import_id: importID,
+      line_no: i + 2,
+      value_date: mockParseDate(cell(r, m.value_date), m.date_layout),
+      txn_date:
+        m.txn_date && cell(r, m.txn_date)
+          ? mockParseDate(cell(r, m.txn_date), m.date_layout)
+          : "",
+      description: cell(r, m.description),
+      amount: mockUnitsToMoney(units < 0n ? -units : units),
+      dr_cr: drCr,
+      bank_reference: cell(r, m.bank_reference),
+      cheque_number: cell(r, m.cheque_number),
+    };
+    if (bal !== "") line.running_balance = mockUnitsToMoney(mockMoneyToUnits(bal));
+    out.push(line);
+  });
+  return out;
 }
 
 function defaultProfile(fyStartDate: string): CompanyProfile {
@@ -911,6 +1174,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         vouchers: [],
         bankDates: new Map(),
         deductorStatuses: new Map(),
+        bankStatements: new Map(),
         tcsDeclarations: new Map(),
         views: new Map(),
         members: [
@@ -1001,6 +1265,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       vouchers: [],
       bankDates: new Map(),
       deductorStatuses: new Map(),
+      bankStatements: new Map(),
       tcsDeclarations: new Map(),
       views: new Map(),
       counters: new Map(),
@@ -1825,6 +2090,11 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
           opening_balance: l.openingBalance ?? "0.0000",
           opening_dc: l.openingDC ?? "D",
           maintain_bill_by_bill: l.maintainBillByBill ?? false,
+          // "" is NOT RECORDED, mirroring the server's COALESCE. The mock must
+          // agree, or a screen test would see `undefined` where the real client
+          // sees "" and the "not recorded" branch would never be exercised.
+          bank_account_number: l.bankAccountNumber ?? "",
+          bank_ifsc: l.bankIFSC ?? "",
           gstin: l.gstin ?? "",
           state_code: l.stateCode ?? "",
           registration_type: l.registrationType ?? "UNKNOWN",
@@ -1880,6 +2150,8 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         address: req.address,
         city: req.city,
         pincode: req.pincode,
+        bankAccountNumber: req.bank_account_number,
+        bankIFSC: req.bank_ifsc,
         isSystem: false,
       });
       return { ledger_id: ledgerID };
@@ -2585,6 +2857,176 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       // friction with no safety gain.
       c.bankDates.delete(`${ledgerID}:${voucherID}:${legNo}`);
       return { status: "unreconciled" };
+    },
+
+    // ---- BANK STATEMENT IMPORT (T4 slice 2a).
+    //
+    // See `bankStatements` on the company state for the list of what this mock
+    // deliberately does NOT check. The short version: it is a reader, not the
+    // parser, and four of the server's refusals do not exist here.
+    async previewBankStatement(
+      companyID,
+      ledgerID,
+      req: PreviewStatementRequest,
+    ): Promise<PreviewStatementResponse> {
+      const c = ensure(companyID);
+      mockRequireBankLedger(c, ledgerID);
+      const header = mockCSVHeader(req.content);
+
+      // ⚠️ THE MOCK PROPOSES NOTHING, ON PURPOSE. The server proposes from a
+      // synonym list; copying that list here would be a second copy free to
+      // drift, and the drift would be invisible — a screen test would pin the
+      // mock's guess and pass while the server proposed something else.
+      //
+      // Returning an EMPTY mapping with an unresolved entry is also the safer
+      // shape for the screen: it exercises the path where the operator must
+      // choose, which is the path the design rests on.
+      return {
+        file_name: req.file_name,
+        header,
+        mapping: mockEmptyMapping(),
+        unresolved: [
+          "the mock does not propose mappings — every column must be chosen here. " +
+            "The server proposes from the file's own header row; see docs/design/t4-slice2-model.md §8.2.",
+        ],
+        notes: [],
+        known_date_layouts: MOCK_DATE_LAYOUTS,
+        known_encodings: ["two-columns", "signed-amount", "amount-and-flag"],
+      };
+    },
+
+    async importBankStatement(
+      companyID,
+      ledgerID,
+      req: ImportStatementRequest,
+    ): Promise<ImportStatementResponse> {
+      const c = ensure(companyID);
+      mockRequireBankLedger(c, ledgerID);
+      const store = c.bankStatements.get(ledgerID) ?? {
+        imports: [],
+        lines: [],
+      };
+      c.bankStatements.set(ledgerID, store);
+
+      // Only an identical FILE is caught, unlike the server, which dedups by
+      // TRANSACTION. Named in the state comment.
+      const already = store.imports.find((i) => i.file_name === req.file_name);
+      if (already) {
+        return {
+          import_id: already.import_id,
+          already_imported: true,
+          lines_in_file: already.line_count,
+          new_lines: 0,
+          duplicate_lines: already.line_count,
+          opening_balance: "0.0000",
+          closing_balance: "0.0000",
+          balance_walked: false,
+          period_from: already.period_from,
+          period_to: already.period_to,
+          disclosures: [MOCK_IMPORT_DISCLOSURE],
+        };
+      }
+
+      const importID = `mock-import-${store.imports.length + 1}`;
+      const parsed = mockParseStatement(req.content, req.mapping, importID);
+      if (parsed.length === 0) {
+        throw new ApiError(
+          400,
+          "bankstatement: the file has no transaction rows: it has a header row and nothing under it",
+        );
+      }
+      store.lines.push(...parsed);
+      const dates = parsed.map((l) => l.value_date).sort();
+      const im: BankStatementImport = {
+        import_id: importID,
+        file_name: req.file_name,
+        imported_by: req.created_by,
+        imported_at: new Date().toISOString(),
+        period_from: dates[0]!,
+        period_to: dates[dates.length - 1]!,
+        line_count: parsed.length,
+        // FALSE ALWAYS: this mock does not walk balances. Reporting true would
+        // make a screen render "checked" over a check that never ran.
+        balance_walked: false,
+      };
+      store.imports.unshift(im);
+
+      return {
+        import_id: importID,
+        already_imported: false,
+        lines_in_file: parsed.length,
+        new_lines: parsed.length,
+        duplicate_lines: 0,
+        opening_balance: "0.0000",
+        closing_balance: "0.0000",
+        balance_walked: false,
+        period_from: im.period_from,
+        period_to: im.period_to,
+        disclosures: [MOCK_IMPORT_DISCLOSURE],
+      };
+    },
+
+    async importedStatement(
+      companyID,
+      ledgerID,
+      from?,
+      to?,
+    ): Promise<ImportedStatementResponse> {
+      const c = ensure(companyID);
+      const ledger = mockRequireBankLedger(c, ledgerID);
+      const store = c.bankStatements.get(ledgerID) ?? {
+        imports: [],
+        lines: [],
+      };
+      const inPeriod = (d: string) =>
+        (!from || d >= from) && (!to || d <= to);
+      const lines = store.lines.filter((l) => inPeriod(l.value_date));
+
+      // Money is summed as PAISE INTEGERS, never parseFloat: every money value
+      // in this product is a fixed-4 decimal string and a float would round.
+      let inPaise = 0n;
+      let outPaise = 0n;
+      for (const l of lines) {
+        const v = mockMoneyToUnits(l.amount);
+        if (l.dr_cr === "D") inPaise += v;
+        else outPaise += v;
+      }
+
+      const disclosures = [
+        "MATCHING IS NOT BUILT YET (T4 slice 2b). These are the bank's own rows; nothing here " +
+          "says whether a row has been matched to a voucher or cleared. Reconciling is still done on the " +
+          "Bank Reconciliation screen by entering a Bank Date against each voucher.",
+      ];
+      for (const im of store.imports) {
+        if (!im.balance_walked) {
+          disclosures.push(
+            `"${im.file_name}" carried no running balance, so its rows were NOT balance-walked: a row dropped or ` +
+              "duplicated by the export would not have been detected.",
+          );
+        }
+      }
+      if (!ledger.bankAccountNumber || !ledger.bankIFSC) {
+        disclosures.push(
+          "This ledger has no account number or IFSC recorded, so imports against it cannot be checked " +
+            "against the file's own account. Record them on the ledger.",
+        );
+      }
+
+      return {
+        ledger_id: ledgerID,
+        ledger_name: ledger.name,
+        bank_account_number: ledger.bankAccountNumber ?? "",
+        bank_ifsc: ledger.bankIFSC ?? "",
+        from: from ?? "",
+        to: to ?? "",
+        imports: store.imports.filter(
+          (i) => inPeriod(i.period_from) || inPeriod(i.period_to),
+        ),
+        lines,
+        total_in: mockUnitsToMoney(inPaise),
+        total_out: mockUnitsToMoney(outPaise),
+        disclosures,
+      };
     },
 
     async getOutstandings(

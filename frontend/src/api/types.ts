@@ -170,6 +170,14 @@ export interface LedgerListItem {
   address: string;
   city: string;
   pincode: string;
+  /**
+   * The company's OWN bank details for this ledger (migration 0064).
+   *
+   * "" MEANS NOT RECORDED — render those words, never an empty field, because a
+   * blank labelled field reads as "this bank has no IFSC" (invariant I-11).
+   */
+  bank_account_number: string;
+  bank_ifsc: string;
   /** True for ledgers seeded with the company (Cash, Profit & Loss A/c). */
   is_system: boolean;
   /**
@@ -258,6 +266,170 @@ export interface SetBankDateResponse {
   status: string;
 }
 
+// ---------------------------------------------------------------------------
+// BANK STATEMENT IMPORT (T4 slice 2a). Wire shapes of the three
+// /bank-statement/{ledgerID} routes.
+//
+// THE PREVIEW STEP IS NOT A CONVENIENCE. This build ships NO built-in per-bank
+// column layouts: a layout recalled from memory that is wrong by one column
+// reads the running balance as the amount, and every figure is then a real
+// number off a real statement that was never a transaction. So the mapping is
+// PROPOSED from the file's own header row and CONFIRMED by the operator.
+// See docs/design/t4-slice2-model.md §8.2.
+// ---------------------------------------------------------------------------
+
+/** How a file says which way money moved. */
+export type StatementDirectionEncoding =
+  | "two-columns"
+  | "signed-amount"
+  | "amount-and-flag";
+
+/**
+ * The operator-confirmed reading of one file. Every field except `encoding` and
+ * `date_layout` is a HEADER NAME as it appears in the file; "" means the file
+ * has no such column.
+ */
+export interface StatementColumnMapping {
+  encoding: StatementDirectionEncoding | "";
+  /** A NAMED layout, e.g. "dd/mm/yyyy" — never a raw format string. */
+  date_layout: string;
+  value_date: string;
+  txn_date: string;
+  description: string;
+  deposit: string;
+  withdrawal: string;
+  amount: string;
+  direction: string;
+  running_balance: string;
+  bank_reference: string;
+  cheque_number: string;
+}
+
+export interface PreviewStatementRequest {
+  file_name: string;
+  /** The file, verbatim. */
+  content: string;
+}
+
+/** What the operator confirms before a single row is stored. */
+export interface PreviewStatementResponse {
+  file_name: string;
+  /** The file's own header row, in order — the list the operator picks from. */
+  header: string[];
+  mapping: StatementColumnMapping;
+  /**
+   * ⚠️ THE POINT OF THE PREVIEW. Each entry is a question only the operator can
+   * answer, and a client MUST show them rather than confirming past them. The
+   * commonest is an ambiguous dd/mm vs mm/dd date column: 03/04/2026 is the 3rd
+   * of April or the 4th of March, the file cannot say which, and choosing
+   * wrongly moves the whole statement by up to eleven months while every amount
+   * in it stays perfectly plausible.
+   */
+  unresolved: string[];
+  /** Observations that do not block — e.g. a column nothing was mapped to. */
+  notes: string[];
+  known_date_layouts: string[];
+  known_encodings: StatementDirectionEncoding[];
+}
+
+export interface ImportStatementRequest {
+  file_name: string;
+  content: string;
+  mapping: StatementColumnMapping;
+  /**
+   * What the FILE says the account is, if the operator read it off the
+   * statement. When this and the ledger's recorded number are both present they
+   * MUST agree or the import is refused — a statement imported against the
+   * wrong ledger reconciles nothing and leaves two accounts wrong, silently,
+   * because every line in it is real and both accounts still balance.
+   */
+  statement_account_number?: string;
+  created_by: string;
+}
+
+export interface ImportStatementResponse {
+  import_id: string;
+  /**
+   * True when this exact file was already imported into this account. A SUCCESS
+   * and a no-op, not an error: the operator's intent is satisfied either way.
+   */
+  already_imported: boolean;
+  lines_in_file: number;
+  new_lines: number;
+  /** Rows already present from an overlapping statement. Ordinary, not an error. */
+  duplicate_lines: number;
+  opening_balance: Money;
+  closing_balance: Money;
+  /**
+   * FALSE MEANS THE DROPPED-ROW CHECK NEVER RAN — the file carried no running
+   * balance. A client must NOT render this the same way as a check that passed:
+   * a check that did not run and a check that succeeded are the same shape from
+   * the outside, and only one of them is safe.
+   */
+  balance_walked: boolean;
+  period_from: string;
+  period_to: string;
+  /** What this import could not verify, in the operator's own words. */
+  disclosures: string[];
+}
+
+/** One transaction as the BANK reported it. */
+export interface BankStatementLine {
+  id: string;
+  import_id: string;
+  /** 1-based position in the file, so a refusal can be found in a spreadsheet. */
+  line_no: number;
+  value_date: string;
+  /** "" when the file carried only one date. NOT defaulted to the value date. */
+  txn_date: string;
+  description: string;
+  amount: Money;
+  /**
+   * Direction IN OUR BOOKS, which INVERTS the word on the statement: a DEPOSIT
+   * is "D" because our bank asset rose, though the bank calls it a credit. Do
+   * not "correct" this when labelling a column — render "D" as money IN.
+   */
+  dr_cr: DrCr;
+  /** Absent when the file carried no balance, so it is distinguishable from zero. */
+  running_balance?: Money;
+  bank_reference: string;
+  cheque_number: string;
+}
+
+/** One imported file, as a header over its lines. */
+export interface BankStatementImport {
+  import_id: string;
+  file_name: string;
+  imported_by: string;
+  imported_at: string;
+  period_from: string;
+  period_to: string;
+  line_count: number;
+  /** False when this file carried no running balance to walk. */
+  balance_walked: boolean;
+}
+
+/** GET /bank-statement/{ledgerID} — what the bank said, over a period. */
+export interface ImportedStatementResponse {
+  ledger_id: string;
+  ledger_name: string;
+  /** "" means NOT RECORDED — render those words, never an empty field (I-11). */
+  bank_account_number: string;
+  bank_ifsc: string;
+  from: string;
+  to: string;
+  imports: BankStatementImport[];
+  lines: BankStatementLine[];
+  total_in: Money;
+  total_out: Money;
+  /**
+   * PART OF THE REPORT, not decoration. The first always says that MATCHING IS
+   * NOT BUILT YET — rows of bank movements with no status column otherwise read
+   * as "none of these matched", which is a different and false statement.
+   */
+  disclosures: string[];
+}
+
 /**
  * One bill of a ledger's BILL-WISE OPENING BREAKUP — the individual unpaid
  * invoices that make up its opening balance, as at `books_beginning_from`.
@@ -299,6 +471,22 @@ export interface CreateLedgerRequest {
   address?: string;
   city?: string;
   pincode?: string;
+  /**
+   * The company's OWN account details for a BANK ledger (migration 0064).
+   *
+   * They ship WITH the columns, not after them — invariant I-11: a blank
+   * labelled field reads as "this bank has no IFSC" rather than "nobody has
+   * typed it yet". They are also how a statement import knows a file belongs to
+   * this account: with both recorded, an import whose file names a different
+   * account is REFUSED instead of quietly reconciling the wrong books.
+   *
+   * `bank_ifsc` is four letters, '0', then six alphanumerics; the server
+   * refuses anything else by CHECK, because the column exists to be compared
+   * against a bank's own file and a typo that merely fails to match produces a
+   * refusal nobody can debug.
+   */
+  bank_account_number?: string;
+  bank_ifsc?: string;
   created_by?: string;
 }
 export interface CreateLedgerResponse {

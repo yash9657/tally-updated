@@ -87,6 +87,24 @@ var allowedDeps = map[string]map[string]bool{
 	// this, also adjust the books", which is exactly what a reconciliation must
 	// not do. The read side lives in internal/reporting, which stays read-only.
 	"internal/banking": {"internal/platform/db": true},
+	// bankstatement (T4 slice 2a) is the WRITE side of bank-statement IMPORT, and
+	// its allowed set is the same one-edge set as banking above, for the same
+	// reason stated one line further: importing records what the BANK said, and
+	// must never reach the ledger, a voucher or a balance.
+	//
+	// THE CONSTRAINT IS SHARPER HERE THAN IT LOOKS. The tempting edge is
+	// bankstatement -> banking, so that a matched row could write its own
+	// bank_reconciliation row. That is slice 2b's work, and when it comes it
+	// belongs on THIS side of the line: memo §2.1 requires a resolved match to
+	// land in 0045's table precisely so there is ONE source of "cleared". Whoever
+	// adds that edge should add it deliberately and write down why, rather than
+	// discovering it compiles.
+	//
+	// Note also what is NOT here: no edge to internal/masters, though the import
+	// reads ledger.bank_account_number. It reads it in SQL, inside its own
+	// transaction, because that column is a fact it compares against a file — not
+	// a master it maintains.
+	"internal/bankstatement": {"internal/platform/db": true},
 	// reporting gained internal/inventory with the Stock Summary. Stock VALUE is
 	// never stored: the report derives it by replaying the movement ledger through
 	// the pure valuer, so reporting MUST be able to call the leaf. The edge is
@@ -273,7 +291,12 @@ var allowedDeps = map[string]map[string]bool{
 		// contract) and the WRITE lives in banking. server is the composition
 		// root that owns both handlers, so it needs both. banking's own allowed
 		// set is {platform/db}, so the writer can never reach the ledger.
-		"internal/banking":         true,
+		"internal/banking": true,
+		// Statement import (T4 slice 2a) splits the same way, for the same reason:
+		// the read model is in reporting and the WRITE is in bankstatement. Its
+		// own allowed set is {platform/db}, so the importer can never reach the
+		// ledger either.
+		"internal/bankstatement":   true,
 		"internal/forecast":        true,
 		"internal/query":           true,
 		"internal/nlq":             true,

@@ -538,6 +538,39 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 		// than being silently treated as one of the above.
 		return "", "", "", false
 
+	// BANK STATEMENT IMPORT (T4 slice 2a). ONE prefix, TWO authorities, split
+	// the same way bank-reconciliation splits — but the ANSWER is different on
+	// the write half, and that difference is the decision:
+	//
+	//   POST .../bank-statement/{ledgerID}/preview -> Create / bank-statement
+	//   POST .../bank-statement/{ledgerID}/import  -> Create / bank-statement
+	//   GET  .../bank-statement/{ledgerID}         -> Display/ report:bank-statement
+	//
+	// 0046 GRANTED Data Entry the reconciliation write, because ticking one
+	// cheque off is clerical. Migration 0063 grants Data Entry NOTHING here, and
+	// the header of that file has the reasoning: an imported statement is the
+	// bank's own file of every counterparty, including the rows that correspond
+	// to no voucher the clerk has ever seen. The refusal is the recoverable
+	// direction — an owner who disagrees writes one allow rule; a file that has
+	// been read cannot be un-read.
+	//
+	// PREVIEW IS A Create AND NOT A Display, though it writes nothing. It is the
+	// first half of an import and it echoes the uploaded file back, so a level
+	// that may not import has no business rehearsing one. Calling it a Display
+	// would put it under 0011's coarse `allow display report` — which is exactly
+	// how a route acquires an authority nobody chose for it.
+	//
+	// Create rather than Alter because an import ADDS a statement; it never
+	// restates one. Re-importing the same file is a no-op, not an update.
+	case strings.HasPrefix(rest, "/bank-statement/"):
+		switch method {
+		case http.MethodGet:
+			return authz.Display, "report", "bank-statement", true
+		case http.MethodPost:
+			return authz.Create, "bank-statement", "", true
+		}
+		return "", "", "", false
+
 	// TDS DEDUCTOR STATUS (Item Zero step 2): whether this company must deduct
 	// at all, per tax year. Tally's F11 > Enable TDS > TDS Deductor Details.
 	//
@@ -908,6 +941,16 @@ func reportName(rest string) string {
 	// rather than guessed at here.
 	case "/bank-reconciliation":
 		return "bank-reconciliation"
+	// THE IMPORTED BANK STATEMENT (T4 slice 2a). Like the entry above, the bare
+	// path is NOT a live route — the statement is per bank ledger, and
+	// /bank-statement/{ledgerID} is handled by its own arm (which matches the
+	// trailing slash and cannot collide with this exact match). This entry makes
+	// the PRINT route mappable and makes `disallow print report:bank-statement`
+	// — which migration 0063 writes — a rule that can match something. Printing
+	// answers 501: there is no layout, and a blank page that looks like a bank
+	// statement is worse than a refusal.
+	case "/bank-statement":
+		return "bank-statement"
 	// THE TDS/TCS REGISTER (Item Zero step 4). Here for the reason the two
 	// entries above record: a name in authz.KnownReportNames that this function
 	// does not know is a name some arms serve and others default-deny, and

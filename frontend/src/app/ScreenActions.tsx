@@ -58,7 +58,14 @@ export type ScreenActionKind =
    * (RESEARCH.md:879). The screen owns it because which ledgers are BANK ledgers
    * is an ltree ancestry fact that lives in the database.
    */
-  | "bankReconciliation";
+  | "bankReconciliation"
+  /**
+   * Alt+O on the Bank Reconciliation Statement — import a bank statement
+   * (T4 slice 2a, RESEARCH.md:361 "O: Import"). A screen action for the same
+   * reason F4 above is one: the import belongs to the SELECTED bank account,
+   * and which account that is never travels through the pure machine.
+   */
+  | "importBankStatement";
 
 /**
  * A handler the active screen registers for a screen action. It may return a

@@ -173,7 +173,8 @@ than renumbering.**
 | T12 GSTR-9 | see §2.5 | free |
 | T13 Interest | see §2.5 | free |
 | T14 Backup/restore | 0060–0061 | free |
-| **T4 slice 2 — statement import + matching** | **0062–0064** | **free (NEW)** |
+| **T4 slice 2a — statement IMPORT** | **0062–0064** | **consumed** — 0062 `bank_statement_import`+`bank_statement_line`, 0063 `bank-statement` ACL, 0064 `ledger.bank_account_number`/`bank_ifsc` |
+| **T4 slice 2b — statement MATCHING** | **a new number at the end** | free — `bank_statement_match`; the block above is consumed, so per the rule it gets a fresh number |
 | **T15 Export (Excel/CSV/XML) — if it needs an ACL migration** | **0065** | **free (NEW)** |
 | **T16 Per-company print template UI** | **0066** | **free (NEW)** |
 
@@ -184,6 +185,12 @@ would have been derived, verified and discarded — the exact defect 0050 exists
 deduction side. Its block was consumed, so per the rule above it gets a new number at the end
 instead. **0067 was the first free number; the register ACL then took 0068, so Group B's blocks now
 continue from 0069.**
+
+**T4 SLICE 2 SPLIT INTO 2a AND 2b, AND THE BLOCK WAS RE-ALLOCATED WITHIN ITSELF.**
+`docs/design/t4-slice2-model.md` §8.3–8.4 records why: the import and the matching are two
+user-visible slices, 2a needs an ACL migration of its own, and the match table is 2b's. So
+0063 became the ACL rather than the match table, and 2b's table takes a new number at the end —
+the same call T6 made when it took 0067. **Group B's blocks still continue from 0069.**
 
 **T4 slice 2 does NOT take 0047.** `HANDOFF-CLOSING-THE-GAP.md` §3.2 said "migration 0047",
 which is **T5's reserved block**. Slice 2 gets its own block at the end (0062–0064) instead,

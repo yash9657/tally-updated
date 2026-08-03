@@ -11,6 +11,7 @@ import type {
 } from "../api";
 import { formatMoney } from "./reports/money";
 import { SelectionList } from "./SelectionList";
+import { BankStatementImportPanel } from "./BankStatementImportPanel";
 import { usePrintAction } from "./usePrint";
 
 /**
@@ -36,13 +37,28 @@ import { usePrintAction } from "./usePrint";
  *  - It does not default a bank date. A reconciliation is an assertion copied off
  *    a bank statement, and defaulting it to today would invent the one fact the
  *    feature exists to record. The server refuses an empty one.
- *  - It does not show a bank account number or IFSC. Those are not stored yet
- *    (docs/design/t4-model.md §2 deferred them to slice 2), and a blank labelled
- *    field reads as "this bank has no IFSC".
+ *  - It does not compute a match. Alt+O imports the bank's own CSV (T4 slice
+ *    2a) and shows what the bank said; MATCHING those rows to vouchers is slice
+ *    2b and is not built, so every tick on this screen is still manual and the
+ *    four matching keys still answer "not built".
+ *
+ * The account number and IFSC ARE shown now — migration 0064 stores them — and
+ * they are rendered as the words "not recorded" when absent, because a blank
+ * labelled field reads as "this bank has no IFSC" (invariant I-11).
  */
 
-/** A ledger the operator may reconcile. */
-type BankLedger = Pick<LedgerListItem, "id" | "name" | "group_name">;
+/**
+ * A ledger the operator may reconcile.
+ *
+ * The bank identity rides along because the import panel needs it to say
+ * whether a file could be checked against this account at all — and because
+ * showing "not recorded" is what stops a blank field reading as "this bank has
+ * no IFSC" (I-11).
+ */
+type BankLedger = Pick<
+  LedgerListItem,
+  "id" | "name" | "group_name" | "bank_account_number" | "bank_ifsc"
+>;
 
 export function BankReconciliationScreen({ snapshot }: ScreenComponentProps) {
   const client = useClient();
@@ -69,6 +85,10 @@ export function BankReconciliationScreen({ snapshot }: ScreenComponentProps) {
   const [banks, setBanks] = useState<BankLedger[] | null>(null);
   const [ledgerID, setLedgerID] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
+  // Alt+O — the import panel. A panel ON this screen rather than a screen of its
+  // own, because slice 2b's matching is inherently a two-column view of
+  // statement rows beside book legs; splitting them would make that slice worse.
+  const [importing, setImporting] = useState(false);
   const [brs, setBrs] = useState<BankReconciliationResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -87,7 +107,13 @@ export function BankReconciliationScreen({ snapshot }: ScreenComponentProps) {
         if (!live) return;
         const found = res.ledgers
           .filter((l) => l.is_bank)
-          .map((l) => ({ id: l.id, name: l.name, group_name: l.group_name }));
+          .map((l) => ({
+            id: l.id,
+            name: l.name,
+            group_name: l.group_name,
+            bank_account_number: l.bank_account_number,
+            bank_ifsc: l.bank_ifsc,
+          }));
         setBanks(found);
         // Resolve the drilled name, or fall through to the picker.
         if (drilledName) {
@@ -171,6 +197,20 @@ export function BankReconciliationScreen({ snapshot }: ScreenComponentProps) {
     }, [banks]),
   );
 
+  // Alt+O — "Import" (RESEARCH.md:361 "O: Import", :415, :1221). Refuses
+  // BEFORE opening rather than opening onto nothing: an import needs an account,
+  // and a panel that opened with no account selected could only ask again.
+  useRegisterScreenAction(
+    "importBankStatement",
+    useCallback((): string => {
+      if (!ledgerID) {
+        return "Select a bank account first (F4) — a statement always belongs to one account, and importing it against the wrong one reconciles nothing.";
+      }
+      setImporting(true);
+      return "Import a bank statement (CSV).";
+    }, [ledgerID]),
+  );
+
   /** Tick an item off, or un-tick it. The ONE write this screen makes. */
   const setBankDate = useCallback(
     (line: BankReconLine, value: string) => {
@@ -203,6 +243,27 @@ export function BankReconciliationScreen({ snapshot }: ScreenComponentProps) {
     },
     [client, companyID, ledgerID, load],
   );
+
+  // ---- The import panel (Alt+O).
+  if (importing && ledgerID) {
+    const bank = banks?.find((b) => b.id === ledgerID);
+    return (
+      <BankStatementImportPanel
+        ledgerID={ledgerID}
+        ledgerName={bank?.name ?? brs?.ledger_name ?? ""}
+        bankAccountNumber={bank?.bank_account_number ?? ""}
+        bankIFSC={bank?.bank_ifsc ?? ""}
+        onClose={() => {
+          setImporting(false);
+          // Re-read the statement on the way out. An import changes nothing on
+          // the BRS today — matching is slice 2b — but it will the day 2b lands,
+          // and a stale statement behind a fresh import is the kind of thing
+          // nobody thinks to re-check.
+          load(ledgerID);
+        }}
+      />
+    );
+  }
 
   // ---- The bank-account picker.
   if (picking && banks && banks.length > 0) {
@@ -362,7 +423,14 @@ export function BankReconciliationScreen({ snapshot }: ScreenComponentProps) {
       <p className="mt-4 max-w-3xl text-xs">
         Reconciling never touches a voucher: the bank date is recorded beside it,
         outside the hash chain, because it is a fact about the bank and not about
-        the voucher. Statement import and automatic matching are not built yet.
+        the voucher.{" "}
+        {/* HALF of statement import has shipped, so this sentence names WHICH
+            half. Saying "import is not built" on a screen with a working Alt+O
+            teaches an operator to distrust every other refusal in the product;
+            saying nothing would imply the ticks below are automatic. */}
+        <strong>Alt+O imports your bank&apos;s CSV statement</strong> and shows
+        what the bank said. Matching those rows to vouchers is not built yet, so
+        every tick in the Bank Date column above is still yours to make.
       </p>
     </section>
   );

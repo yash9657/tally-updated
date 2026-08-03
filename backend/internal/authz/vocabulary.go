@@ -147,6 +147,19 @@ var KnownResources = append([]Resource{
 	// write, which deletes the feature. Migration 0046 depends on the split.
 	"bank-reconciliation",
 
+	// BANK STATEMENT IMPORT (T4 slice 2a). The WRITE half — importing a file,
+	// and previewing how it would be read. The read half is a report
+	// (report:bank-statement, below), split for the same reason
+	// bank-reconciliation is split.
+	//
+	// WHERE IT DIFFERS FROM bank-reconciliation ABOVE, AND THIS IS THE POINT:
+	// 0046 GRANTS the reconciliation write to Data Entry because ticking one
+	// cheque off is clerical. Migration 0063 grants this one to NOBODY beyond
+	// the Owner's `full`, because an imported statement is the bank's own file
+	// of every counterparty — including the rows that match no voucher the clerk
+	// has seen. Same shape, opposite answer, and the reasoning is in 0063.
+	"bank-statement",
+
 	// THE TDS DEDUCTOR STATUS (migration 0049, Item Zero step 2): whether this
 	// company is a s.402(11) designated person and/or a s.402(37) specified
 	// person, per tax year. Tally keeps it in F11 > Enable TDS > TDS Deductor
@@ -215,6 +228,12 @@ var KnownReportNames = []string{
 	// specificity 1 and every seeded Data Entry operator can read the company's
 	// bank position.
 	"bank-reconciliation",
+	// THE IMPORTED BANK STATEMENT (T4 slice 2a). A report NAME so migration
+	// 0063 can write `disallow display report:bank-statement` at specificity 2.
+	// It is the same exposure as the BRS above and then some: the BRS lists the
+	// vouchers WE keyed that have not cleared, while this lists every row the
+	// BANK has, including the ones no voucher exists for yet.
+	"bank-statement",
 	// THE TDS/TCS REGISTER (Item Zero step 4). A report NAME so migration 0068
 	// can write `disallow display report:tds-register` at specificity 2 —
 	// without which 0011's coarse `allow display report` reaches it at

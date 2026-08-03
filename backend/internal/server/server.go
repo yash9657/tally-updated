@@ -37,6 +37,7 @@ import (
 	"github.com/khata/cored/internal/authn"
 	"github.com/khata/cored/internal/authz"
 	"github.com/khata/cored/internal/banking"
+	"github.com/khata/cored/internal/bankstatement"
 	"github.com/khata/cored/internal/compliance"
 	"github.com/khata/cored/internal/compliance/gstr"
 	"github.com/khata/cored/internal/compliance/itc"
@@ -73,7 +74,12 @@ type Server struct {
 	// banking is the WRITE side of bank reconciliation (T4). It is a SEPARATE
 	// service from `report` on purpose: internal/reporting is read-only by its
 	// package contract, and reconciling is a write. See internal/banking's doc.
-	banking  *banking.Service
+	banking *banking.Service
+	// bankstmt is the WRITE side of bank-statement IMPORT (T4 slice 2a), a
+	// third service for the same reason `banking` is a second one: importing is
+	// a write, and internal/reporting is read-only by its package contract. The
+	// READ of what was imported lives in `report`, beside the BRS.
+	bankstmt *bankstatement.Service
 	gstr     *gstr.Service
 	importer *migration.Importer
 	sync     *sync.Service
@@ -200,6 +206,7 @@ func New(ctx context.Context, appDSN string) (*Server, error) {
 		ledger:   l,
 		report:   reporting.NewService(pool),
 		banking:  banking.NewService(pool),
+		bankstmt: bankstatement.NewService(pool),
 		gstr:     gstr.NewService(pool),
 		importer: migration.NewImporter(m, l),
 		sync:     sync.NewService(l, pool),
@@ -597,6 +604,30 @@ func (s *Server) routes() {
 		r.Get("/bank-reconciliation/{ledgerID}", s.handleBankReconciliation)
 		r.Put("/bank-reconciliation/{ledgerID}/{voucherID}/{legNo}", s.handleSetBankDate)
 		r.Delete("/bank-reconciliation/{ledgerID}/{voucherID}/{legNo}", s.handleClearBankDate)
+
+		// BANK STATEMENT IMPORT (T4 slice 2a). Three routes, and the middle one
+		// is the design: the operator CONFIRMS how their file is to be read
+		// before a row of it is stored.
+		//
+		//   POST .../preview  parses nothing into the database and answers with
+		//                     the file's own header, a PROPOSED mapping, and
+		//                     every field the proposal would not commit to.
+		//   POST .../import   takes the confirmed mapping and persists.
+		//   GET  .../         reads back what was imported.
+		//
+		// PREVIEW IS A POST THAT WRITES NOTHING, which is unusual here and is
+		// deliberate: it carries a whole uploaded file, which has no business
+		// in a query string or a server log. It is mapped to the same `create
+		// bank-statement` action as the import — a level that may not import a
+		// statement has no business rehearsing one, and the preview echoes the
+		// file's contents back.
+		//
+		// There are NO built-in per-bank layouts behind any of this; see
+		// docs/design/t4-slice2-model.md §8.2 for why a profile recalled from
+		// memory is the same class of mistake as an invented tax rate.
+		r.Post("/bank-statement/{ledgerID}/preview", s.handlePreviewBankStatement)
+		r.Post("/bank-statement/{ledgerID}/import", s.handleImportBankStatement)
+		r.Get("/bank-statement/{ledgerID}", s.handleImportedStatement)
 
 		// TDS DEDUCTOR STATUS (Item Zero step 2) — Tally's F11 > Enable TDS >
 		// "TDS Deductor Details" (RESEARCH.md:692). Whether this company is a
@@ -1048,6 +1079,23 @@ type ledgerReq struct {
 	City    string `json:"city"`
 	Pincode string `json:"pincode"`
 
+	// BankAccountNumber and BankIFSC are the company's OWN details for a BANK
+	// ledger (migration 0064). Master fields on an existing resource, for the
+	// same reason the address is: whoever may create the bank ledger may state
+	// which account it is.
+	//
+	// THEY SHIP WITH THIS ROUTE RATHER THAN AFTER IT, and that is invariant
+	// I-11 rather than convenience — columns and data together. Adding the
+	// columns with no way to fill them would put two permanently blank fields
+	// on the reconciliation screen, and a blank labelled field reads as "this
+	// bank has no IFSC" rather than "nobody has typed it yet".
+	//
+	// Both optional: a non-bank ledger has neither, and a bank ledger whose
+	// operator has not typed them yet is a legal state the screen reports as
+	// NOT RECORDED.
+	BankAccountNumber string `json:"bank_account_number"`
+	BankIFSC          string `json:"bank_ifsc"`
+
 	// OpeningBills is the bill-wise breakup of OpeningBalance. masters.CreateLedger
 	// requires it to SUM to the opening balance when present.
 	OpeningBills []openingBillReq `json:"opening_bills"`
@@ -1101,6 +1149,8 @@ func (s *Server) handleCreateLedger(w http.ResponseWriter, r *http.Request) {
 		Address:            req.Address,
 		City:               req.City,
 		PIN:                req.Pincode,
+		BankAccountNumber:  req.BankAccountNumber,
+		BankIFSC:           req.BankIFSC,
 		OpeningBills:       openingBills,
 	}, req.CreatedBy)
 	if err != nil {

@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -223,6 +224,25 @@ type Ledger struct {
 	City    string
 	PIN     string // column `pincode`, matching printing.Party.PIN
 
+	// BankAccountNumber and BankIFSC are the company's OWN account details for
+	// a BANK ledger (migration 0064). Empty means NOT RECORDED and is written
+	// as NULL — never as '', which the column's CHECK refuses, because a blank
+	// string would be a second spelling of the same state and readers would
+	// split on which one means what.
+	//
+	// THEY ARE HOW A STATEMENT IMPORT KNOWS WHICH LEDGER A FILE BELONGS TO
+	// (docs/design/t4-slice2-model.md §1.3, invariant I-11). An operator
+	// importing three banks' statements in a morning must not have to remember
+	// which is which, and a file imported against the wrong ledger reconciles
+	// nothing and corrupts two accounts at once — silently, because every line
+	// in it is real and both accounts still balance.
+	//
+	// Nothing stops them being set on a non-bank ledger and nothing needs to:
+	// the import path refuses a non-bank ledger outright, so the worst case is
+	// an unused field rather than a wrong answer.
+	BankAccountNumber string
+	BankIFSC          string
+
 	// OpeningBills is the BILL-WISE BREAKUP of OpeningBalance: the individual
 	// unpaid bills that make it up, as at company.books_beginning_from. Tally
 	// requires this for any bill-wise ledger carrying an opening balance, and
@@ -340,14 +360,17 @@ func (s *Service) CreateLedger(ctx context.Context, l Ledger, createdBy string) 
 			`INSERT INTO ledger
 			   (id, company_id, name, group_id, opening_balance, opening_dc,
 			    maintain_bill_by_bill, gstin, state_code, registration_type,
-			    pan, credit_days, address, city, pincode)
+			    pan, credit_days, address, city, pincode,
+			    bank_account_number, bank_ifsc)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7,
 			         NULLIF($8,''), NULLIF($9,''), $10::gst_registration_type,
 			         NULLIF($11,''), $12,
-			         NULLIF($13,''), NULLIF($14,''), NULLIF($15,''))`,
+			         NULLIF($13,''), NULLIF($14,''), NULLIF($15,''),
+			         NULLIF($16,''), NULLIF($17,''))`,
 			id, companyID, l.Name, groupID, l.OpeningBalance, l.OpeningDC,
 			l.MaintainBillByBill, l.GSTIN, l.StateCode, string(l.RegistrationType),
 			l.PAN, l.CreditDays, l.Address, l.City, l.PIN,
+			l.BankAccountNumber, strings.ToUpper(strings.TrimSpace(l.BankIFSC)),
 		); err != nil {
 			return fmt.Errorf("masters: insert ledger: %w", err)
 		}
@@ -383,6 +406,11 @@ func (s *Service) CreateLedger(ctx context.Context, l Ledger, createdBy string) 
 			// document, the question is what the master said on the day it was
 			// printed, and an unaudited field cannot answer that.
 			"address": l.Address, "city": l.City, "pincode": l.PIN,
+			// The bank details are audited for the same reason the address is:
+			// when an import is refused as "the wrong account", the question is
+			// what the master said at the time, and an unaudited field cannot
+			// answer it.
+			"bank_account_number": l.BankAccountNumber, "bank_ifsc": l.BankIFSC,
 		}
 		return appendAudit(ctx, tx, companyID, "ledger", id, OpCreate, nil, after, createdBy)
 	})

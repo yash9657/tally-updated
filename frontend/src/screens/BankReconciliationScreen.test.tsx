@@ -41,6 +41,11 @@ function ledger(over: Partial<LedgerListItem>): LedgerListItem {
     address: "",
     city: "",
     pincode: "",
+    // NOT RECORDED by default, which is the honest default for a fixture: most
+    // existing bank ledgers have no account number, because migration 0064
+    // deliberately backfills none — an account number cannot be derived.
+    bank_account_number: "",
+    bank_ifsc: "",
     is_system: false,
     is_bank: true,
     ...over,

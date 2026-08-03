@@ -445,6 +445,18 @@ async function main(): Promise<void> {
       group_name: "Bank Accounts",
       opening_balance: money(OPENING_BANK),
       opening_dc: "D",
+      // THE ACCOUNT IDENTITY IS SEEDED WITH THE LEDGER, and that is invariant
+      // I-11 rather than polish: migration 0064 added these columns and a
+      // BLANK LABELLED FIELD READS AS "this bank has no IFSC". A demo whose
+      // bank shows two empty rows looks like a product that lost the data.
+      //
+      // Both values are fictional but WELL-FORMED, and the IFSC is the one
+      // already used by the demo's own OCR fixture further down this file
+      // (`Bank IFSC: HDFC0004321`), so the seeded company agrees with the bill
+      // it is shown scanning. It also satisfies 0064's shape CHECK: four
+      // letters, '0', six alphanumerics.
+      bank_account_number: "50200012345678",
+      bank_ifsc: "HDFC0004321",
     })
     .then((r) => r.ledger_id);
 

@@ -60,6 +60,21 @@ type ledgerListItem struct {
 	Address string `json:"address"`
 	City    string `json:"city"`
 	Pincode string `json:"pincode"`
+	// BankAccountNumber and BankIFSC are the company's OWN details for a bank
+	// ledger (migration 0064), echoed for the same round-trip reason the address
+	// block above is: ledgerReq accepts them, so a client must be able to read
+	// them back.
+	//
+	// "" MEANS NOT RECORDED, and a client must render those WORDS. A blank
+	// labelled field reads as "this bank has no IFSC" — invariant I-11, which is
+	// why these columns were required to ship with data rather than alone.
+	//
+	// This is also how the reconciliation screen's import panel knows whether a
+	// file can be checked against the account at all: with no number recorded
+	// there is nothing to compare, and the import says so rather than implying
+	// it verified something.
+	BankAccountNumber string `json:"bank_account_number"`
+	BankIFSC          string `json:"bank_ifsc"`
 	// IsSystem marks the ledgers seeded with the company, which a client should
 	// prefer to reuse rather than duplicate.
 	IsSystem bool `json:"is_system"`
@@ -114,6 +129,7 @@ func (s *Server) handleListLedgers(w http.ResponseWriter, r *http.Request) {
 			        COALESCE(l.gstin, ''), COALESCE(l.state_code, ''),
 			        l.registration_type::text,
 			        COALESCE(l.address, ''), COALESCE(l.city, ''), COALESCE(l.pincode, ''),
+			        COALESCE(l.bank_account_number, ''), COALESCE(l.bank_ifsc, ''),
 			        l.is_system,
 			        `+reporting.BankLedgerPredicate+`
 			   FROM ledger l
@@ -131,7 +147,8 @@ func (s *Server) handleListLedgers(w http.ResponseWriter, r *http.Request) {
 			if err := rows.Scan(&it.ID, &it.Name, &it.GroupName,
 				&opening, &it.OpeningDC, &it.MaintainBillByBill,
 				&it.GSTIN, &it.StateCode, &it.RegistrationType,
-				&it.Address, &it.City, &it.Pincode, &it.IsSystem,
+				&it.Address, &it.City, &it.Pincode,
+				&it.BankAccountNumber, &it.BankIFSC, &it.IsSystem,
 				&it.IsBank); err != nil {
 				return err
 			}

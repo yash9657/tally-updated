@@ -314,6 +314,22 @@ export type KeymapAction =
    */
   | { kind: "bankReconciliation" }
   /**
+   * Alt+O on the Bank Reconciliation screen — IMPORT A BANK STATEMENT
+   * (T4 slice 2a).
+   *
+   * Alt+O is Tally's Import, from the top horizontal menu ("O: Import"), cited
+   * at RESEARCH.md:361, :415 and :1221 — a documented global, not a combo
+   * recalled from memory. HANDOFF-PARITY-SPRINT.md §0.2 records that two
+   * keystrokes were once invented from memory and both were wrong.
+   *
+   * It is bound PER SCREEN rather than globally because importing is
+   * account-specific: a statement always belongs to one bank account, and the
+   * screen is the only place that knows which is selected. A global Alt+O would
+   * have to guess, and importing against the wrong account reconciles nothing
+   * while leaving two accounts wrong.
+   */
+  | { kind: "importBankStatement" }
+  /**
    * A combo that a real TallyPrime user WILL press but whose feature is not
    * built in this edition (e.g. payroll, order processing). It is bound on
    * purpose: pressing it must say so out loud rather than do nothing, which is

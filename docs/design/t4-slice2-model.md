@@ -229,3 +229,82 @@ which is precisely a matching concept and will otherwise be reached for the week
 | 2 | **Per-bank CSV layouts.** There is no standard: HDFC, ICICI and SBI all differ in column order and date format. | Needs either a mapping UI or a per-bank profile table. **This is the part most likely to make the track a three-wave one**, and it is a data-model risk, not a parser detail. |
 | 3 | **Auto-create vouchers from bank entries.** `RESEARCH.md:879` records Tally offers it. | Deliberately OUT of this slice: creating vouchers from a bank file is a write to the books from an external source, and it needs its own memo. |
 | 4 | **Cheque printing / cheque book management** (`RESEARCH.md:881–885`). | A separate feature that happens to live on the same screen. Not this track. |
+
+> **§7.1 and §7.2 ARE NOW SETTLED — see §8. Items 3 and 4 remain out of scope.**
+
+---
+
+## 8. THE TWO PRODUCT CALLS, SETTLED — and the slice split that follows from them
+
+Added 2026-08-02, when the track was picked up. §7 items 1 and 2 had to be decided before a
+single column could be written, because both change the schema.
+
+### 8.1 CSV ships first, and it is the only format in this track
+
+MT940 is well-specified but rare in Indian retail banking; XLSX needs a reader this build does
+not have and adding one to parse a *bank statement* is the wrong place to take that dependency.
+CSV is what every bank in the country exports.
+
+**The refusal matters as much as the choice.** A file that is not CSV is refused **by name**
+("MT940 is not supported in this build"), never parsed on a best-effort basis. §1.1's field
+list is the intersection of the formats; a half-understood MT940 would populate that intersection
+with plausible values and reconcile to nothing.
+
+### 8.2 ⛔ THERE ARE NO BUILT-IN PER-BANK PROFILES, AND THAT IS THE §1.1 RULE, NOT LAZINESS
+
+`HANDOFF-FEATURE-LOCK.md` §1.1: **"Never invent a rate, threshold, clause letter, code or
+keystroke. Cite it or refuse."** A per-bank column layout is the same class of fact as a rate,
+and it fails in the same direction — worse, actually, because a wrong rate is at least a wrong
+*number*, whereas a wrong column mapping is a **silently plausible** one.
+
+**No real HDFC, ICICI or SBI export exists in this environment to check a profile against.** A
+shipped `hdfc` profile would therefore be a layout recalled from memory. If its column order is
+wrong by one, the parser reads the *running balance* column as the amount: every figure is a
+real number off a real statement, nothing raises, the balance walk (B-4) still passes because
+the balance column also walks — and the operator reconciles against amounts that were never
+transactions. That is `HANDOFF-FEATURE-LOCK.md` §1.2 happening a third time.
+
+So:
+
+| | Decision |
+|---|---|
+| **The mapping is an INPUT to the import**, supplied per file: which column is the value date, the amount, the direction, and so on. | It is data the operator confirms, never a constant the build asserts. |
+| **A mapping may be PROPOSED from the file's own header row** — matching header text against a list of known synonyms ("Value Date", "Txn Date", "Withdrawal Amt.", "Deposit Amt."). | A proposal derived **from the file in front of us** is evidence. A profile recalled from memory is not. The proposal is shown and must be confirmed. |
+| **An unresolvable header is REFUSED, naming the columns it could not place.** | Never a positional guess. "Column 4 is probably the amount" is exactly the silent mis-parse above. |
+| **A confirmed mapping is STORED ON THE IMPORT BATCH**, verbatim. | So a statement can be re-read months later and the question "how was this file interpreted?" has an answer. It is also what a per-bank profile table would be built from later — **out of real files an operator confirmed**, which is the only honest way to acquire one. |
+
+**This is not a worse product than per-bank profiles; it is the same product with its evidence
+visible.** Tally itself asks the user to map columns on first import of a new bank's format.
+
+### 8.3 The slice split — 2a ships the import, 2b ships the matching
+
+§1 of `HANDOFF-FEATURE-LOCK.md` requires all seven layers per pass and says a track that cannot
+reach layer 7 was scoped too big: **split by user-visible slice, never by architectural layer.**
+The seam that satisfies that is the one between *what the bank says* and *what the books say*:
+
+| Slice | The user-visible sentence | Contents |
+|---|---|---|
+| **2a** | *"Import my bank's CSV and show me what the bank says."* | The parser, the batch and line tables, the ledger's account number and IFSC, the import route, the Alt+O key, the lines on screen. Every refusal in §5 that concerns the FILE — the balance walk, the duplicate import, the empty file, the wrong ledger. |
+| **2b** | *"Tick it off against my books."* | The match table, the tier engine, `Alt+S` / `F8` / `Alt+F8` / `F9`, and the resolved match writing a `bank_reconciliation` row (§2.1). **§0's rule — an ambiguous match is never auto-cleared — is 2b's, and B-1 belongs there.** |
+
+**2a is a complete, useful thing on its own**: `RESEARCH.md:873` names *bank-only unreconciled*
+as a real category, and 2a is what makes it visible. It is also honest about what it is not —
+the four matching keys keep answering "not built", with their notes updated from "T4 slice 2" to
+"slice 2b", because a key that says the wrong thing about *why* is worse than one that says
+nothing.
+
+### 8.4 The migration block, re-allocated
+
+§2.2 allocated 0062–0064 as `tables / match+ACL / ledger columns`. The 2a–2b split moves the ACL
+forward, because 2a needs one and the match table is 2b's:
+
+| # | Contents | Slice |
+|---|---|---|
+| **0062** | `bank_statement_import` (batch, incl. the stored mapping — §8.2) + `bank_statement_line` | 2a |
+| **0063** | ACL for the `bank-statement` resource | 2a |
+| **0064** | `ledger.bank_account_number`, `ledger.bank_ifsc` — columns **and** data (I-11) | 2a |
+| **a new number at the end** | `bank_statement_match` | 2b |
+
+**2b's table takes a fresh number rather than renumbering**, following the precedent T6 set when
+it came back for `0067`: `PLAN-TALLY-PARITY.md` §2.5's rule is *renumber unstarted blocks, never
+renumber a migration that exists*, and once 0062–0064 are applied the block is consumed.

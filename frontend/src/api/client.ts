@@ -48,6 +48,11 @@ import type {
   SetLedgerOpeningResponse,
   VoucherHistoryResponse,
   BankReconciliationResponse,
+  ImportedStatementResponse,
+  ImportStatementRequest,
+  ImportStatementResponse,
+  PreviewStatementRequest,
+  PreviewStatementResponse,
   DeductorStatusListResponse,
   TDSRegisterResponse,
   TCSDeclarationListResponse,
@@ -174,6 +179,41 @@ export interface CoredClient {
     voucherID: string,
     legNo: number,
   ): Promise<SetBankDateResponse>;
+
+  /**
+   * Propose how a bank CSV should be read, from the file's own header row.
+   * WRITES NOTHING.
+   *
+   * This exists because the build ships no per-bank column layouts: see
+   * `PreviewStatementResponse.unresolved`, which a caller must show rather than
+   * confirm past. A mapping guessed instead of confirmed does not fail — it
+   * produces real money on real dates that was never a transaction.
+   */
+  previewBankStatement(
+    companyID: string,
+    ledgerID: string,
+    req: PreviewStatementRequest,
+  ): Promise<PreviewStatementResponse>;
+  /**
+   * Import a statement under a CONFIRMED mapping. Re-importing the same file is
+   * a success and a no-op (`already_imported`); overlapping files skip the rows
+   * already present rather than doubling them.
+   */
+  importBankStatement(
+    companyID: string,
+    ledgerID: string,
+    req: ImportStatementRequest,
+  ): Promise<ImportStatementResponse>;
+  /**
+   * What the bank said, over an optional period. Says NOTHING about what has
+   * cleared — matching is slice 2b, and the response's `disclosures` say so.
+   */
+  importedStatement(
+    companyID: string,
+    ledgerID: string,
+    from?: string,
+    to?: string,
+  ): Promise<ImportedStatementResponse>;
 
   /**
    * Every recorded deductor-status year, plus the category vocabulary to render

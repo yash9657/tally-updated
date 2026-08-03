@@ -1244,15 +1244,24 @@ func TestTheUnimplementedReportsAreStillGovernableAndSaySo(t *testing.T) {
 			t.Errorf("the 501 for report %q does not name the report: %s", name, rec.Body.String())
 		}
 	}
-	// 15: the fourteen T1 recorded, plus report:tds-register (Item Zero step 4).
-	// bank-reconciliation was once counted here too, until §3.4 took the
-	// route-shape decision and it moved into `implemented`.
+	// 16: the fourteen T1 recorded, plus report:tds-register (Item Zero step 4)
+	// and report:bank-statement (T4 slice 2a). bank-reconciliation was once
+	// counted here too, until §3.4 took the route-shape decision and it moved
+	// into `implemented`.
 	//
-	// The register is DELIBERATELY in the deferred set rather than implemented:
-	// there is no printed layout for it, and mapping the slug without a layout is
-	// what makes Ctrl+P answer "not built" instead of doing nothing.
-	if deferred != 15 {
-		t.Errorf("expected 15 deferred report names, saw %d: handler_print_reports.go's header "+
+	// Both additions are DELIBERATELY deferred rather than implemented: neither
+	// has a printed layout, and mapping the slug without a layout is what makes
+	// Ctrl+P answer "not built" instead of doing nothing.
+	//
+	// THE IMPORTED STATEMENT WILL NOT SIMPLY ACQUIRE A LAYOUT LATER, and the
+	// reason is worth recording here rather than rediscovering: a printed bank
+	// statement is a document the BANK issues. Ours would be a re-typesetting of
+	// their file, on our stationery, with no way for a reader to tell which. If
+	// it is ever printed it should be printed as evidence of an IMPORT — what
+	// file, read how, by whom — which is a different document from the one this
+	// slug names.
+	if deferred != 16 {
+		t.Errorf("expected 16 deferred report names, saw %d: handler_print_reports.go's header "+
 			"lists the deferred set explicitly and it is now out of step with "+
 			"authz.KnownReportNames", deferred)
 	}
@@ -1839,19 +1848,23 @@ var printAllowedByMigration0038 = []struct{ resource, cannotHandOver string }{
 		"the delivery note that TRAVELS WITH THE GOODS and that the transporter has to show"},
 }
 
-// printDisallowedBySeededMigrations is every resource token 0038 seeds a
-// `disallow print` row for, with what each one discloses if the refusal is not
-// honoured. THIRTEEN rows: twelve report names and the pay run class.
-//
-// The list is written out HERE rather than read from the migration on purpose:
-// this is the independent statement of what the product promises, so deleting a
-// row from 0038 makes a test fail rather than silently widening what an operator
-// can take out of the building.
 // printDisallowedBySeededMigrations is every `disallow print` row the seeded
-// Data Entry level carries. Most come from migration 0038; the last comes from
-// 0046 (T4). The count is asserted, so a migration that adds or removes one
-// without updating this list fails LOUDLY — which is the point: a disclosure
-// nobody decided on is exactly what this test exists to catch.
+// Data Entry level carries, with what each one discloses if the refusal is not
+// honoured. SIXTEEN rows: fifteen report names and the pay run class.
+//
+// Twelve come from migration 0038; the rest from 0046 (bank-reconciliation),
+// 0068 (tds-register) and 0063 (bank-statement).
+//
+// THE LIST IS WRITTEN OUT HERE RATHER THAN READ FROM THE MIGRATIONS on purpose:
+// it is the independent statement of what the product promises, so deleting a
+// row from a migration makes a test fail rather than silently widening what an
+// operator can take out of the building. The count is asserted for the mirror
+// reason — a migration that ADDS one without updating this list fails LOUDLY,
+// because a disclosure nobody decided on is exactly what this test exists to
+// catch.
+//
+// (Two stacked doc comments used to sit here, the first of them claiming
+// THIRTEEN rows while the slice held fifteen. Collapsed into one.)
 var printDisallowedBySeededMigrations = []struct{ resource, discloses string }{
 	{"report:payroll-register",
 		"every employee's gross, deductions and net pay, in one PDF"},
@@ -1889,6 +1902,13 @@ var printDisallowedBySeededMigrations = []struct{ resource, discloses string }{
 	// From migration 0046 (T4), not 0038 — hence the variable's name below.
 	{"report:bank-reconciliation",
 		"the company's whole bank position: every un-cleared cheque, its age and its counterparty"},
+	// From migration 0063 (T4 slice 2a). It is the BRS's exposure and then some:
+	// the BRS lists the vouchers WE keyed that have not cleared, while the
+	// imported statement is the bank's own file — including every row for which
+	// no voucher exists yet.
+	{"report:bank-statement",
+		"the bank's own file of every movement on the account, including the ones " +
+			"no voucher has been keyed for: salaries, drawings, loan repayments"},
 }
 
 // TestAnOwnerWritingOneConvenientAllowPrintStarStillCannotHandOverTheWageBill is

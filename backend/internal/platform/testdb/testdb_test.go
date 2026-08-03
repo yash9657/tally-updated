@@ -163,6 +163,9 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 		statementID = id()
 		inwardDocID = id()
 
+		// T4 slice 2a — the imported bank statement (migration 0062).
+		bankImportID = id()
+
 		// Track 3 — payroll.
 		employeeID = id()
 		payRunID   = id()
@@ -286,6 +289,32 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 			(id, company_id, voucher_id, ledger_id, leg_no, bank_date, cleared_amount, cleared_dr_cr, reconciled_by)
 			VALUES ($1, $2, $3, $4, 0, DATE '2024-05-03', 100, 'D', 'testdb')`,
 			[]any{id(), cid, voucherID, ledgerID}},
+
+		// ------------------------------------------------------------------
+		// Migration 0062 — T4 slice 2a, the imported bank statement.
+		//
+		// These reuse the SAME ledgerID as bank_reconciliation above, and they
+		// have to: 0062's trigger refuses an import whose ledger is not under a
+		// bank group, exactly as 0045's refuses a reconciliation. The fixture's
+		// account_group is named 'Bank Accounts' for that reason (see its
+		// comment), and both tables now depend on it.
+		//
+		// The line's ledger_id is not free either — bank_statement_line_import_fk
+		// is a THREE-column FK, so a line whose ledger disagrees with its
+		// import's is refused by the database rather than by discipline.
+		// ------------------------------------------------------------------
+		{"bank_statement_import", `INSERT INTO bank_statement_import
+			(id, company_id, ledger_id, file_name, file_sha256, format, column_mapping,
+			 period_from, period_to, line_count, imported_by)
+			VALUES ($1, $2, $3, 'fixture.csv', 'fixture-sha-' || $4, 'csv', '{}'::jsonb,
+			        DATE '2024-05-01', DATE '2024-05-31', 1, 'testdb')`,
+			[]any{bankImportID, cid, ledgerID, cidText}},
+		{"bank_statement_line", `INSERT INTO bank_statement_line
+			(id, company_id, import_id, ledger_id, line_no, value_date, description,
+			 amount, dr_cr, raw, line_hash, occurrence)
+			VALUES ($1, $2, $3, $4, 2, DATE '2024-05-03', 'FIXTURE CREDIT',
+			        100, 'D', '{}'::jsonb, 'fixture-hash-' || $5, 0)`,
+			[]any{id(), cid, bankImportID, ledgerID, cidText}},
 
 		{"print_template", `INSERT INTO print_template
 			(id, company_id, doc_kind, title, header_lines, show_bank_details)

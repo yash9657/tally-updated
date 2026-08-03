@@ -758,6 +758,15 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
       return {};
     }
 
+    case "importBankStatement": {
+      // NO NAVIGATION. Importing happens in a panel ON the reconciliation
+      // screen, because slice 2b's matching is inherently a two-column view of
+      // statement rows beside book legs — splitting them across screens would
+      // make that slice worse. The screen owns the panel and fires it through
+      // the ScreenActions bridge, exactly as F4 owns its picker.
+      return {};
+    }
+
     case "bankReconciliation": {
       // The Gateway / menu entry opens the statement — TallyPrime's own route to
       // it is Alt+G > Banking Activities (RESEARCH.md:873), so a Gateway entry

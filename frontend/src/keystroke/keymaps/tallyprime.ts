@@ -219,29 +219,50 @@ const RAW_SCREEN_BINDINGS: Partial<
     },
     "Alt+F5": { kind: "detailed" },
     "Ctrl+H": { kind: "changeView" },
-    // The matching keys (:879) all belong to STATEMENT IMPORT, which is T4 slice
-    // 2 and deliberately not built (docs/design/t4-model.md §1.4). They are bound
-    // so an operator who reaches for them is told that, rather than finding a
-    // dead key or — worse, in F9's case — a Purchase voucher.
+    // Alt+O — IMPORT (RESEARCH.md:361 "O: Import", :415, :1221). Tally's
+    // documented global for import; scoped to this screen because a statement
+    // belongs to ONE bank account and only the screen knows which is selected.
+    "Alt+O": { kind: "importBankStatement" },
+    // The MATCHING keys (:879) belong to slice 2b and are still refusals — but
+    // their notes now name 2b, not "slice 2", because HALF of slice 2 has
+    // shipped: the import is real and only the matching is missing. A key that
+    // says "import is not built" on a screen with a working import teaches an
+    // operator to distrust every other refusal in the product.
     F8: {
       kind: "unavailable",
       feature: "Modify match (F8)",
-      note: "Bank-statement import and matching are not built yet (T4 slice 2), so there are no matches to modify.",
+      note: "Statements now import (Alt+O), but MATCHING them to vouchers is T4 slice 2b and is not built, so there are no matches to modify yet.",
     },
     F9: {
       kind: "unavailable",
       feature: "Set status manually (F9)",
-      note: "Statuses come from imported statement matching, which is not built yet (T4 slice 2). Enter a Bank Date against a row instead — that IS the manual reconciliation.",
+      note: "Statuses come from matching imported rows to vouchers, which is T4 slice 2b and not built. Enter a Bank Date against a row instead — that IS the manual reconciliation.",
     },
     "Alt+F8": {
       kind: "unavailable",
       feature: "Unlink a match (Alt+F8)",
-      note: "Bank-statement import and matching are not built yet (T4 slice 2), so there is nothing to unlink.",
+      note: "Nothing is matched yet: statements import (Alt+O) but matching is T4 slice 2b, so there is nothing to unlink.",
     },
     "Alt+S": {
       kind: "unavailable",
       feature: "Potential matches (Alt+S)",
-      note: "Automatic matching is T4 slice 2. Note its governing rule when it lands: an AMBIGUOUS match is never auto-cleared.",
+      note: "Automatic matching is T4 slice 2b. Note its governing rule when it lands: an AMBIGUOUS match is never auto-cleared — it surfaces BOTH candidates and waits for you.",
+    },
+    // Ctrl+J and Ctrl+B are at RESEARCH.md:879 and are bound to NEITHER an
+    // action nor a refusal anywhere in this file — so they are inert TODAY and
+    // would silently inherit any future global binding for the same combo. The
+    // slice-2 memo §6 asks for them to be bound while their absence is still
+    // harmless, and Ctrl+J especially: an "exception report" is a matching
+    // concept and will be reached for the week matching ships.
+    "Ctrl+J": {
+      kind: "unavailable",
+      feature: "Exception report (Ctrl+J)",
+      note: "The reconciliation exception report is not built. It reports on MATCHING, which is T4 slice 2b.",
+    },
+    "Ctrl+B": {
+      kind: "unavailable",
+      feature: "Basis of values (Ctrl+B)",
+      note: "The basis-of-values panel is not built on this screen. The statement's own arithmetic is on its face: book balance, un-cleared items, bank balance, and a difference that must be exactly zero.",
     },
   },
   // Alt+L on a voucher opens its EDIT LOG. RESEARCH sec 6 pins the PLACEMENT
@@ -405,6 +426,8 @@ export function actionLabel(action: KeymapAction): string {
         : "Print this voucher / report";
     case "bankReconciliation":
       return "Bank Reconciliation (tick items off the bank statement)";
+    case "importBankStatement":
+      return "Import a bank statement (CSV)";
     case "createMaster":
       return `Create ${action.masterKind} on the fly`;
     case "unavailable":

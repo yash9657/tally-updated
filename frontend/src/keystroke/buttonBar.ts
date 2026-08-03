@@ -95,20 +95,33 @@ const REPORT_BAR: readonly ButtonBarItem[] = [
  * The Bank Reconciliation Statement bar, from RESEARCH.md:879's list of the keys
  * that live inside Tally's reconciliation screen.
  *
- * F4 picks the bank account and F2 dates the statement. Only the keys that are
- * BUILT are advertised: :879 also documents F5 (amount view), F8/Alt+F8 (modify
- * and unlink a match), F9 (set status) and Alt+S (potential matches), and all of
- * those belong to statement import — T4 slice 2. They are bound in the keymap so
- * they answer honestly, but buttons.test.ts fails the build if a BAR advertises
- * an `unavailable` action, and rightly: an operator reaches for a bar button by
- * position from then on.
+ * F4 picks the bank account, F2 dates the statement, and Alt+O imports the
+ * bank's own CSV (T4 slice 2a; RESEARCH.md:361 "O: Import").
  *
- * No Print. The print route carries no ledger id, so printing a BRS is an open
- * product decision (docs/design/t4-model.md §1.3) and the key could only refuse.
+ * Only the keys that are BUILT are advertised: :879 also documents F5 (amount
+ * view), F8/Alt+F8 (modify and unlink a match), F9 (set status), Alt+S
+ * (potential matches), Ctrl+J (exception report) and Ctrl+B (basis of values),
+ * and all of those belong to MATCHING — T4 slice 2b. They are bound in the
+ * keymap so they answer honestly, but buttons.test.ts fails the build if a BAR
+ * advertises an `unavailable` action, and rightly: an operator reaches for a bar
+ * button by position from then on.
+ *
+ * Alt+O JOINED THE BAR THE DAY IT BECAME REAL, which is the same rule read from
+ * the other side — an import an operator cannot find is an import that reaches
+ * nobody.
+ *
+ * Ctrl+P is here for that reason too, and it was overdue: this bar carried a
+ * paragraph explaining that a BRS could not be printed because the print route
+ * carried no ledger id. HANDOFF-PARITY-SPRINT.md §3.4 closed that by taking
+ * `?ledger_id=`, and printTarget has resolved this screen ever since — so the
+ * comment was describing a refusal that no longer existed while REPORT_BAR
+ * advertised the same key one screen over.
  */
 const BANK_RECON_BAR: readonly ButtonBarItem[] = [
   item("F2", "As on"),
   item("F4", "Bank"),
+  item("Alt+O", "Import"),
+  item("Ctrl+P", "Print"),
   item("Ctrl+A", "Accept"),
   item("Esc", "Back"),
   item("Alt+G", "Go To"),
