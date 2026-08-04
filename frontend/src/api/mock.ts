@@ -11,6 +11,10 @@
  */
 
 import type { CoredClient } from "./client";
+// GENERATED, NOT AUTHORED. internal/reporting's TestReturnFileStatusGolden emits
+// this from the Go that the real server runs, so the mock cannot drift from it.
+// See the note at the tdsRegister mock below for the two occasions it did.
+import registerProse from "./goldens/tds-register-prose.json";
 import { ApiError } from "./http";
 import type {
   BalanceSheetResponse,
@@ -2535,42 +2539,29 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         total_tcs: "0.0000",
         sub_threshold_deductions: 0,
         exempt_collections: 0,
-        disclosures: [
-          "DEPOSIT IS NOT TRACKED. Every figure here is tax deducted or collected, not tax PAID to the government.",
-          "NO RETURN CAN BE FILED FROM THIS YET. The Form 140 layout is implemented, but nothing here records the challans you have DEPOSITED and this company has no TAN on file.",
-        ],
-        // ⚠️ MIRRORS reporting.ReturnFileRefusal(). It used to say the layout
-        // "has not been read from a primary source", which stopped being true
-        // when the prescribed file format was committed — see
-        // HANDOFF-NEXT-THREE.md §0 on how long a stale blocker can survive. If
-        // the server's wording changes again, this must change with it: a mock
-        // that carries a retired refusal is how a screen gets built against a
-        // claim the product no longer makes.
-        return_file: {
-          available: false,
-          format_version: "1.0",
-          format_source:
-            'Income Tax Department prescribed file format, Form Number 140 (26Q) Q1-Q4, Version 1.0, Tax Year 2026-27 and onwards (docs/statutory/form-140-file-format.xlsx, sheet "File Format_R")',
-          summary:
-            "NO RETURN FILE IS GENERATED YET, BUT THE LAYOUT IS NO LONGER THE REASON. The prescribed file format has been read and is implemented. What is missing is in YOUR BOOKS: nothing here records the challans you have deposited, and this company has no TAN on file.",
-          validated: false,
-          validation_note:
-            "Nothing this software produces has been validated by the department's File Validation Utility.",
-          blockers: [
-            {
-              what: "A CHALLAN REGISTER — what tax you have actually DEPOSITED",
-              where: "Your own bank challans: BSR code, serial number, date of deposit.",
-              why: "Every deductee row of the return points at the challan that paid its tax, so no deductee row can exist without one.",
-            },
-            {
-              what: "This company's TAN, PAN and responsible-person details",
-              where: "Your TAN allotment letter. The TAN is NOT the GSTIN.",
-              why: "The return's header carries all of them and every one is mandatory.",
-            },
-          ],
-          what_you_can_do_instead:
-            "Use this register to prepare the return in your filing software or with your accountant.",
-        },
+        // ⛔ THESE TWO ARE NOT WRITTEN HERE, AND THAT IS THE POINT.
+        //
+        // They used to be hand-retyped from reporting.ReturnFileRefusal(), with
+        // a comment asking whoever changed the server to remember to change them
+        // too. Nobody did, twice: this mock told every screen the Form 140 layout
+        // "has not been read from a primary source" for two days after the format
+        // was committed, and it carried TWO blockers while the server emitted
+        // THREE.
+        //
+        // The failure mode is the worst available. TDSRegisterScreen.test.tsx
+        // renders against createMockClient() and matches strings that live in
+        // THIS FILE — so when the server's wording moves and the mock's does not,
+        // the whole frontend suite stays GREEN against a refusal the product no
+        // longer makes. Every test passes and the screen lies.
+        //
+        // So the prose is now GENERATED from the Go that produces it, by
+        // internal/reporting's TestReturnFileStatusGolden, and imported. There is
+        // no copy here to go stale. If that test fails, the wording changed on
+        // purpose or by accident — read the diff, then regenerate:
+        //   cd backend && UPDATE_GOLDENS=1 go test ./internal/reporting/ \
+        //     -run TestReturnFileStatusGolden
+        disclosures: registerProse.disclosures,
+        return_file: registerProse.return_file,
       };
     },
 

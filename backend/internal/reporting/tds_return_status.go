@@ -90,18 +90,23 @@ type returnBlockerGroup struct {
 	total     int
 }
 
-func (g *returnBlockerGroup) add(err error) {
+// add records one refusal, keeping only the half that names the operator's data.
+//
+// ⚠️ THE SENTINEL IS PASSED IN, AND IT MUST BE. Every refusal is
+// fmt.Errorf("%w: <evidence>", sentinel, …), so the evidence begins exactly
+// after the sentinel's own text — and the ONLY way to strip it exactly is to
+// know which sentinel it was. Cutting at the first ": " instead looks right and
+// is not: the sentinel messages contain colons of their own, so the blocker came
+// out reading "…Record them under Alt+G → TDS Challans. tax was deducted but no
+// challan is recorded against it, so it cannot be reported: voucher P1 …",
+// restating in machine vocabulary the very thing the blocker's own What field
+// already says. That defect was invisible in four passing tests and was caught
+// by reading the generated golden.
+func (g *returnBlockerGroup) add(sentinel, err error) {
 	g.total++
 	if len(g.sentences) < maxNamedExamples {
-		// The sentinel prefix is stripped: it is machine vocabulary ("reporting:
-		// tax was deducted but no challan is recorded against it"), and the
-		// blocker's own What already says which category this is. What the
-		// operator needs is the half that names their voucher.
-		msg := err.Error()
-		if i := strings.Index(msg, ": "); i >= 0 && i+2 < len(msg) {
-			msg = msg[i+2:]
-		}
-		g.sentences = append(g.sentences, msg)
+		g.sentences = append(g.sentences,
+			strings.TrimPrefix(err.Error(), sentinel.Error()+": "))
 	}
 }
 
@@ -184,9 +189,9 @@ func (s *Service) ReturnFileStatusFor(ctx context.Context, companyID uuid.UUID,
 			if err := challanRefusalFor(r); err != nil {
 				switch {
 				case errors.Is(err, ErrTaxNotDeposited):
-					undeposited.add(err)
+					undeposited.add(ErrTaxNotDeposited, err)
 				case errors.Is(err, ErrAllocationBrokenByAlter):
-					brokenByAlter.add(err)
+					brokenByAlter.add(ErrAllocationBrokenByAlter, err)
 				default:
 					return err
 				}
@@ -200,9 +205,10 @@ func (s *Service) ReturnFileStatusFor(ctx context.Context, companyID uuid.UUID,
 			// nobody has recorded) and are counted together deliberately.
 			if _, err := deducteeFor(r); err != nil {
 				switch {
-				case errors.Is(err, form140.ErrNoValidReasonFlag),
-					errors.Is(err, ErrNoReasonDocument):
-					noReasonFlag.add(err)
+				case errors.Is(err, form140.ErrNoValidReasonFlag):
+					noReasonFlag.add(form140.ErrNoValidReasonFlag, err)
+				case errors.Is(err, ErrNoReasonDocument):
+					noReasonFlag.add(ErrNoReasonDocument, err)
 				default:
 					return err
 				}

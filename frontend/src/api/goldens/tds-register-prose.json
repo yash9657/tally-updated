@@ -1,0 +1,27 @@
+{
+  "disclosures": [
+    "DEPOSIT IS NOT SHOWN IN THESE COLUMNS. Every figure in the table is tax deducted or collected, not tax PAID to the government — and it is the deposit, not the deduction, that stops interest running under s.396. Challans are recorded separately (Alt+G → TDS Challans); the filing panel below names any deduction in this period with no challan behind it.",
+    "NO RETURN FILE IS PRODUCED HERE. The Form 140 layout is implemented and pinned to the prescribed format; whether YOUR books can fill it is answered per company in the filing panel below, which names what is outstanding rather than assuming it."
+  ],
+  "return_file": {
+    "available": false,
+    "format_version": "1.0",
+    "format_source": "Income Tax Department prescribed file format, Form Number 140 (26Q) Q1-Q4, Version 1.0, Tax Year 2026-27 and onwards (docs/statutory/form-140-file-format.xlsx, sheet \"File Format_R\")",
+    "summary": "The Income Tax Department's prescribed file format has been read and is implemented — the record layouts, the four-digit payment-code list and the reason codes all come from it. NO RETURN CAN BE FILED YET, and the reason is in YOUR BOOKS rather than in the specification: 1 deduction has no challan recorded against it. Each one is named below.",
+    "validated": false,
+    "validation_note": "Nothing this software produces has been validated by the department's File Validation Utility. The FVU needs a Java runtime that is not available here, so even once a file can be generated it must be validated by you before filing. That stays true after every blocker below is cleared.",
+    "blockers": [
+      {
+        "what": "A CHALLAN for 1 deduction in this period",
+        "where": "Your own bank challans: the BSR code of the receiving branch, the challan serial number, the date of deposit, and the split across tax, interest, fee and penalty. Record them under Alt+G → TDS Challans. voucher P1 deducted 20000 under 194J-P from Chitra Consulting, and no challan is recorded against it. Deposit the tax and record the challan — the return has no way to carry a deduction with no deposit behind it.",
+        "why": "Every deductee row of the return points at the challan that paid its tax, so no deductee row can exist without one — that is structural, not a matter of ordering. It is also the deposit and not the deduction that stops interest running under s.396."
+      },
+      {
+        "what": "The department's File Validation Utility, and the .csi challan file",
+        "where": "Protean/TIN — the FVU needs a Java runtime; the .csi needs a TIN portal login.",
+        "why": "A return is validated AGAINST the challan file: the FVU checks every deposit claimed in the return against what the bank actually reported, and the TAN in the statement must match the one in the .csi. Neither can be reached from here, so a generated file must be validated by you before it is filed."
+      }
+    ],
+    "what_you_can_do_instead": "Use this register to prepare the return in your filing software or with your accountant: it carries every deduction and collection for the period, per deductee, with the section, the four-digit return code the deduction will be filed under, the rate and the amount."
+  }
+}

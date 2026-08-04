@@ -5,7 +5,13 @@ import { TDSRegisterScreen } from "./TDSRegisterScreen";
 import { CompanyProvider } from "../../app/CompanyContext";
 import { createMockClient, ApiError } from "../../api";
 import type { CoredClient } from "../../api";
+import registerProse from "../../api/goldens/tds-register-prose.json";
 import type { NavSnapshot } from "../../keystroke/navMachine";
+
+/** Escapes a golden string so it can be matched as a literal. */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 /**
  * THE TDS/TCS REGISTER SCREEN — Item Zero step 4, layer 5.
@@ -59,9 +65,26 @@ describe("TDS / TCS Register screen", () => {
 
   it("ALWAYS renders the disclosures — they are data, not decoration", async () => {
     renderRegister(snap("2026-04-01", "2026-06-30"));
-    // The one that matters: none of these figures is tax PAID, and it is the
-    // deposit that stops interest running under s.396.
-    expect(await screen.findByText(/DEPOSIT IS NOT TRACKED/)).toBeTruthy();
+    // ⛔ ASSERTED AGAINST THE GENERATED GOLDEN, NOT AGAINST A STRING TYPED HERE.
+    //
+    // This test used to match /DEPOSIT IS NOT TRACKED/, and it FAILED the moment
+    // the mock started serving the server's real prose — because deposit IS
+    // tracked now (migration 0069) and the server had stopped saying that. That
+    // failure is the feature: the old arrangement would have kept this test green
+    // against a sentence the product no longer produced.
+    //
+    // So the expected text comes from the same golden the mock serves. A wording
+    // change on the Go side now moves the assertion and the fixture together,
+    // and the only way to break this test is to stop RENDERING the disclosures —
+    // which is precisely what it exists to catch.
+    for (const line of registerProse.disclosures) {
+      // Matched on a distinctive head of each line rather than the whole
+      // paragraph, because the DOM splits long text across nodes.
+      const head = line.split(".")[0];
+      expect(await screen.findByText(new RegExp(escapeRegExp(head)))).toBeTruthy();
+    }
+    // And the count, so a disclosure silently disappearing is not a pass.
+    expect(registerProse.disclosures.length).toBeGreaterThanOrEqual(2);
   });
 
   it("says a return cannot be filed, and NAMES what is missing", async () => {
