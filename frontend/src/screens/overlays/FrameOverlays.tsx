@@ -191,11 +191,60 @@ function ConfigureOverlay({
  * and the panel says so rather than implying a range that two of them cannot
  * honour:
  *
- *  - Day Book and Profit & Loss are FOR A PERIOD — both bounds apply.
- *  - Trial Balance, Balance Sheet and Outstandings are POSITIONS AS AT a date —
- *    only "To" applies. Bounding a position below would drop the entity's
- *    earlier history and still foot, which is a wrong answer that looks right.
+ *  - Day Book, Profit & Loss and the TDS / TCS Register are FOR A PERIOD — both
+ *    bounds apply.
+ *  - Trial Balance, Balance Sheet, Outstandings and Stock Summary are POSITIONS
+ *    AS AT a date — only "To" applies. Bounding a position below would drop the
+ *    entity's earlier history and still foot, which is a wrong answer that looks
+ *    right.
+ *
+ * ⚠️ THESE ARE TWO ALLOWLISTS, AND A REPORT MISSING FROM BOTH IS TOLD ITS
+ * PERIOD DOES NOTHING. That is the failure mode, and it shipped twice: the TDS /
+ * TCS Register and the Stock Summary both fell through to "has no date dimension
+ * in this build, so a period is not applied to it" while reading the period and
+ * acting on it. On the register it was flatly self-contradictory — the screen
+ * behind the dialog reads "Press F2 to set the period. Both dates are needed",
+ * and the dialog on top of it said the period would be ignored.
+ *
+ * Found by driving the app, not by reading it, and not by any of the 461 tests.
+ * TestEveryPeriodReadingScreenIsClassified is the guard: the CLASSIFICATION is
+ * derived from what each screen actually reads — periodFrom AND periodTo means a
+ * period, periodTo alone means a position — so a new report cannot be silently
+ * told its dates do nothing.
  */
+/**
+ * Reports that are a POSITION AS AT a date — only the upper bound applies.
+ * Each one reads `config.periodTo` and nothing else; that is the test.
+ */
+export const AS_AT_ONLY_REPORTS = [
+  "Trial Balance",
+  "Balance Sheet",
+  "Outstandings",
+  // Closing stock is a position, not a flow: StockSummaryScreen reads
+  // `periodTo` as `asOn` and never reads `periodFrom`. It was in NEITHER list
+  // and was therefore told its period did nothing.
+  "Stock Summary",
+];
+
+/**
+ * Reports that are FOR A PERIOD — both bounds apply. Each one reads
+ * `config.periodFrom` AND `config.periodTo`.
+ */
+export const FULL_PERIOD_REPORTS = [
+  "Day Book",
+  "Profit & Loss A/c",
+  // The register is filed per quarter and refuses to render without BOTH dates
+  // — it is the most period-driven report in the product, and it was the one
+  // being told its period was ignored.
+  "TDS / TCS Register",
+];
+
+/**
+ * Reports that genuinely have no date dimension. Being on THIS list is a
+ * decision; being on no list at all was the bug.
+ */
+export const NO_DATE_DIMENSION_REPORTS: string[] = [];
+
 function PeriodOverlay({
   snapshot,
   onConfig,
@@ -214,14 +263,9 @@ function PeriodOverlay({
   // (docs/design/t4-model.md's first trap).
   const isBankRecon = snapshot.screen === "bank-reconciliation";
   const asAtOnly =
-    isBankRecon ||
-    snapshot.reportName === "Trial Balance" ||
-    snapshot.reportName === "Balance Sheet" ||
-    snapshot.reportName === "Outstandings";
+    isBankRecon || AS_AT_ONLY_REPORTS.includes(snapshot.reportName ?? "");
   const periodAware =
-    asAtOnly ||
-    snapshot.reportName === "Day Book" ||
-    snapshot.reportName === "Profit & Loss A/c";
+    asAtOnly || FULL_PERIOD_REPORTS.includes(snapshot.reportName ?? "");
   const asAtLabel = isBankRecon
     ? "The Bank Reconciliation Statement"
     : snapshot.reportName;
