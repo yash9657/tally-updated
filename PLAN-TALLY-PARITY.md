@@ -168,6 +168,7 @@ than renumbering.**
 | **T6 register ACL (Item Zero step 4)** | **0068** | **consumed** — `disallow display/print report:tds-register` for Data Entry |
 | **T6 challan register (the return's prerequisite)** | **0069** | **consumed** — `tds_challan` + `tds_challan_allocation`. Promoted ahead of the return because Deductee Detail field 5 is a CHALLAN REFERENCE: no deductee row can exist outside a challan |
 | **T6 deductor return profile** | **0070** | **consumed** — `company_tds_profile`: TAN, PAN, Annexure 4 category, statutory address, responsible person. `company` has none of them, and the TAN is not the GSTIN |
+| **⛔ Seeder apply-order repair (was reserved for the T6 write-path ACL)** | **0071** | **consumed — A SECURITY REPAIR, NOT A FEATURE.** `0063_bank_statement_acl` was authored a day after `0068_tds_register_acl`, derived from it correctly, and numbered five LOWER — so `sort.Strings` apply order let 0068's older 10-PERFORM `seed_company_auth_defaults` body overwrite 0063's correct 11-PERFORM one. On a **fresh database** every new company's Data Entry level therefore lacked `disallow display/print report:bank-statement`, and 0011's coarse `allow display report` **granted the imported bank statement**. Measured on a scratch database, not reasoned about. 0071 re-runs the backfill and restates the seeder from 0063's body. **T6's write path needs no ACL rows of its own** — `tds-challan` / `tds-profile` are bare resource tokens and Data Entry's `default_access` is `none`, the same recorded decision as `deductor-status` |
 | T8 Multi-currency | 0051–0052 | free |
 | T9 FIFO/LIFO | 0053 | free |
 | T10 Stock groups + units | 0054–0055 | free |
@@ -186,7 +187,17 @@ reserved on the assumption that TCS needed only the declaration table. It does n
 would have been derived, verified and discarded — the exact defect 0050 exists to end on the
 deduction side. Its block was consumed, so per the rule above it gets a new number at the end
 instead. **0067 was the first free number; the register ACL then took 0068, so Group B's blocks now
-continue from 0071.**
+continue from 0072.**
+
+**⛔ AND THE RULE THAT RESERVED BLOCKS DO NOT SURVIVE CONTACT WITH `seed_company_auth_defaults`.**
+Six migration headers say "derive your restatement from the immediately preceding one", and every
+author obeyed. It broke anyway: **`CREATE OR REPLACE` order is decided by the FILENAME, not by
+authorship**, so 0063 — written later, derived correctly, numbered into its reserved block below
+0068 — lost the race to an older body and silently dropped a refusal. `migrations/seeder_census_test.go`
+now guards this **statically, with no database**, because the defect lives in apply order and is
+therefore invisible on any incrementally-migrated DB (it was green on every developer machine).
+**A seeder restatement may never take a number below an existing restatement, reserved or not:
+leave the gap unused and take a number at the end.**
 
 **T4 SLICE 2 SPLIT INTO 2a AND 2b, AND THE BLOCK WAS RE-ALLOCATED WITHIN ITSELF.**
 `docs/design/t4-slice2-model.md` §8.3–8.4 records why: the import and the matching are two
