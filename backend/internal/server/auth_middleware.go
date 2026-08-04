@@ -309,6 +309,32 @@ func voucherDateFromRequest(r *http.Request, act authz.Action) *time.Time {
 	if isPayRun {
 		return peekPayrollVoucherDate(body)
 	}
+	// A TDS CHALLAN DATES ITSELF WITH `deposit_date`, SO IT WAS THE SECOND ROUTE
+	// THE CUTOFF WAS INERT ON — and it shipped with three comments asserting the
+	// opposite.
+	//
+	// The claim written alongside the route was "recording a deposit dated inside
+	// a closed period IS a back-dated act", which is true, and the control was
+	// simply absent: the body carries no `voucher_date`, peekVoucherDate returns
+	// nil, and cutoffDeny skips entirely when the date is nil. A comment asserting
+	// a control that never runs is worse than a missing control, because nobody
+	// looks again.
+	//
+	// So it is handled here, the same way and for the same reason as the pay run:
+	// one notion of route identity, matched on the segments routeAction itself
+	// matches, so the two cannot disagree about which request is a challan.
+	//
+	// ⚠️ THE DATE THAT MATTERS IS THE DEPOSIT DATE, not the day it is keyed. An
+	// owner who has locked a period has locked what may be ASSERTED about it, and
+	// a deposit is an assertion that money reached the Government on that date.
+	// Recording a genuinely old deposit against a closed period needs the cutoff
+	// moved — deliberately, by whoever owns the lock — which is exactly the
+	// conversation the cutoff exists to force.
+
+	challanSegs := splitPath(routeSuffix(r))
+	if len(challanSegs) == 1 && challanSegs[0] == "tds-challans" {
+		return peekDepositDate(body)
+	}
 	d := peekVoucherDate(body)
 	if d == nil {
 		return nil
@@ -605,6 +631,36 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 		// silently treated as one of the above.
 		return "", "", "", false
 
+	// THE TDS DEDUCTOR RETURN PROFILE (T6, migration 0070): the TAN, the deductor
+	// block the return is filed under, and the individual personally answerable
+	// for the deduction.
+	//
+	//   GET .../tds-profile -> Display / tds-profile
+	//   PUT .../tds-profile -> Alter   / tds-profile
+	//
+	// ONE TOKEN FOR BOTH, and here that is the SAFE call rather than merely the
+	// tidy one. The row carries a NAMED INDIVIDUAL'S PAN, so the read is personal
+	// data — and the shape a reviewer reaches for (a sensitive read modelled as
+	// `report:NAME`, the write on its own token, as bank-statement does) is the
+	// WRONG one here: `report:tds-profile` is reached by migration 0011's coarse
+	// `allow display report` at specificity 1 and would hand that PAN to every
+	// seeded Data Entry operator, needing a 0068-style counterweight migration to
+	// take back. As a bare token both halves are default-DENIED for Data Entry
+	// with no migration at all.
+	//
+	// PUT WITH NO KEY IN THE PATH because the company IS the key
+	// (company_tds_profile.company_id is its whole primary key), and it is an
+	// Alter rather than a Create: restating the block CORRECTS the one row, it
+	// never adds a second.
+	case strings.HasPrefix(rest, "/tds-profile"):
+		switch method {
+		case http.MethodGet:
+			return authz.Display, "tds-profile", "", true
+		case http.MethodPut:
+			return authz.Alter, "tds-profile", "", true
+		}
+		return "", "", "", false
+
 	// s.394(2) MANUFACTURING DECLARATIONS (Item Zero step 3).
 	//
 	//   GET  .../tcs-declarations -> Display / tcs-declaration
@@ -633,6 +689,59 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 		case http.MethodPost:
 			return authz.Create, "tcs-declaration", "", true
 		}
+		return "", "", "", false
+
+	// THE TDS CHALLAN (T6, migration 0069): the deposit slip — what was paid to
+	// the Government, and which deductions it paid for.
+	//
+	//   GET  .../tds-challans?tax_year_start= -> Display / tds-challan
+	//   POST .../tds-challans                 -> Create  / tds-challan
+	//
+	// ONE TOKEN FOR BOTH HALVES, as for /deductor-status above and for the same
+	// reason: they are two authorities over the same small object (this deposit
+	// and what it discharged), so one token keeps one rule governing both. The
+	// read is not separable in any case — the register's whole content is the
+	// allocations the write creates.
+	//
+	// ⛔ A BARE RESOURCE TOKEN, AND DELIBERATELY NOT `report:tds-challan`. A report
+	// name is reached by migration 0011's coarse `allow display report` at
+	// specificity 1 and would therefore be GRANTED to every seeded Data Entry
+	// level — which is exactly why migration 0068 has to exist for
+	// report:tds-register. As a bare token the seeded Data Entry level
+	// (default_access 'none', every rule it carries naming a specific token) is
+	// refused both halves with NO ACL MIGRATION AT ALL; that was measured on a
+	// freshly-migrated database. State the consequence plainly: Data Entry is
+	// refused both routes with no rule written, and an administrator who wants a
+	// clerk recording challans writes an explicit `allow create tds-challan`
+	// through the admin API — a tenant's decision, not a default.
+	//
+	// ⛔ `tds-challan` IS THEREFORE NOT IN authz.KnownReportNames AND MUST NOT BE
+	// ADDED. server.go loops over that list and auto-mounts
+	// GET /print/reports/<name>; a name with no matching reportName() case is a
+	// route routeAction cannot map, i.e. default-DENY for every level including
+	// the Owner. That bug already shipped once for reconciliation-queue — see the
+	// reports arm below.
+	//
+	// The POST is a Create and therefore a write, so it inherits whatever step-up
+	// the level requires of a Create.
+	//
+	// ⛔ AND IT INHERITS THE BACK-DATED CUTOFF ONLY BECAUSE voucherDateFromRequest
+	// WAS TAUGHT TO READ `deposit_date`. This comment originally asserted the
+	// cutoff applied and it did NOT: the cutoff reads `voucher_date`, the challan
+	// body carries `deposit_date`, and cutoffDeny skips entirely on a nil date. So
+	// a deposit could be dated into a period an owner had locked, with the prose
+	// here telling the next reader the control was in place. See peekDepositDate,
+	// and TestAChallanDepositedIntoAClosedPeriodIsRefused, which fails if that
+	// peek is removed.
+	case strings.HasPrefix(rest, "/tds-challans"):
+		switch method {
+		case http.MethodGet:
+			return authz.Display, "tds-challan", "", true
+		case http.MethodPost:
+			return authz.Create, "tds-challan", "", true
+		}
+		// Any other method default-denies rather than being silently treated as
+		// one of the two above.
 		return "", "", "", false
 
 	// Reports (and the recon queue / gstr1, modelled as reports).

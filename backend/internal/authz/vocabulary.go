@@ -213,6 +213,62 @@ var KnownResources = append([]Resource{
 	// migration accompanies them. The separate token is what makes the
 	// delegation POSSIBLE, not automatic.
 	"tcs-declaration",
+
+	// THE TDS CHALLAN (T6, migration 0069): one deposit of tax to the Government
+	// and the deductions it paid for.
+	//
+	// A BARE TOKEN AND NOT A REPORT NAME, which is the decision this entry
+	// records. internal/authz matches a bare `report` rule against ANY
+	// `report:NAME` at specificity 1, so `report:tds-challan` would be GRANTED to
+	// every seeded Data Entry level by migration 0011's `allow display report` — a
+	// rule written years ago for another purpose — and taking it back would need a
+	// counterweight migration. That is exactly why 0068 exists for
+	// report:tds-register. As a bare token, Data Entry's default_access 'none'
+	// refuses both halves and every rule it carries names a specific token, so a
+	// token never mentioned stays denied. MEASURED on a freshly-migrated database;
+	// `deductor-status` above records the identical decision.
+	//
+	// NO ACL MIGRATION ACCOMPANIES IT, and that is the point rather than an
+	// omission. Stated plainly: DATA ENTRY IS REFUSED BOTH THE REGISTER AND THE
+	// ENTRY with no rule written. Recording a deposit asserts to the department
+	// that money reached the Government, and it is the act that makes a deduction
+	// filable at all (Deductee Detail field 5 of the prescribed return is a
+	// challan reference), so the default belongs with whoever signs the return. An
+	// administrator who wants a clerk recording challans writes an explicit
+	// `allow create tds-challan` through the admin API — which is what the
+	// separate token makes POSSIBLE, not automatic. TestTDSChallanAuthMatrix pins
+	// all four answers.
+	//
+	// ⛔ AND IT MUST NEVER BE ADDED TO KnownReportNames BELOW. server.go loops over
+	// that list and auto-mounts GET /print/reports/<name>; a name with no
+	// reportName() case is a route routeAction cannot map, i.e. default-DENY for
+	// every level including the Owner. That bug already shipped once for
+	// reconciliation-queue.
+	"tds-challan",
+
+	// THE TDS DEDUCTOR RETURN PROFILE (T6, migration 0070): the TAN, the deductor
+	// block the return is filed under, and the individual personally answerable
+	// for the deduction — their name, designation, PAN and address.
+	//
+	// THE READ IS PERSONAL DATA ABOUT A NAMED PERSON, so this is the case where
+	// the bank-statement shape (sensitive read as `report:NAME`) looks right and
+	// is wrong: `report:tds-profile` is reached by migration 0011's coarse
+	// `allow display report` at specificity 1 and would hand that PAN to every
+	// seeded Data Entry operator, needing a 0068-style counterweight migration to
+	// take it back. A bare token is default-DENIED for Data Entry with no
+	// migration, which is the authority this row should have.
+	//
+	// NAMED `tds-profile` AND NOT `deductor-profile`, deliberately: sitting next
+	// to `deductor-status` in a rule list, two tokens one word apart governing
+	// different tables is how an administrator grants the wrong one.
+	//
+	// ⛔ NOT a report name, for the same reason as `tds-challan` above. ⚠️ AND IF A
+	// LATER SLICE re-models the read as `report:tds-profile` (to print the
+	// deductor block, say), it MUST ship a 0068-style
+	// `disallow display report:tds-profile` and `disallow print
+	// report:tds-profile` in the same migration. TestTDSProfileAuthMatrix pins the
+	// current answers.
+	"tds-profile",
 }, KnownVoucherClasses...)
 
 // KnownReportNames is every report a rule may name via the "report:NAME" form.

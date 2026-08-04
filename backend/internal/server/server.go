@@ -644,6 +644,23 @@ func (s *Server) routes() {
 		r.Get("/deductor-status", s.handleListDeductorStatus)
 		r.Put("/deductor-status/{taxYear}", s.handleSetDeductorStatus)
 
+		// THE TDS DEDUCTOR RETURN PROFILE (T6, migration 0070) — the TAN, the
+		// deductor block and the person answerable for the deduction.
+		//
+		// reporting's return sourcing refuses a return with ErrNoDeductorProfile
+		// BEFORE it looks at a challan or a deduction, so this is the other half of
+		// "a return can actually be built", and it was seeded by raw SQL until now.
+		//
+		// PUT with no key in the path: company_tds_profile.company_id is the whole
+		// primary key, so the company already in the path prefix IS the key. A
+		// WHOLE ROW rather than a PATCH because migration 0070 carries cross-field
+		// CHECKs (the Annexure 5 state code and the Annexure 3 ministry are each
+		// mandatory for some deductor categories and FORBIDDEN for the rest), so a
+		// partial body is not checkable and could leave a stale conditional value
+		// behind.
+		r.Get("/tds-profile", s.handleGetTDSProfile)
+		r.Put("/tds-profile", s.handleSetTDSProfile)
+
 		// s.394(2) MANUFACTURING DECLARATIONS (Item Zero step 3). A resident
 		// buyer's written statement that goods are for manufacturing and NOT for
 		// trading, which exempts collection on Table Sl. Nos. 1-5.
@@ -658,6 +675,27 @@ func (s *Server) routes() {
 		// segments. Still idempotent on that triple.
 		r.Get("/tcs-declarations", s.handleListTCSDeclarations)
 		r.Post("/tcs-declarations", s.handleCreateTCSDeclaration)
+
+		// THE TDS CHALLAN (T6, migration 0069) — the deposit slip, and which
+		// deductions it paid. Deductee Detail field 5 of the prescribed return is
+		// a challan reference, so WITHOUT THIS ROUTE NO RETURN CAN BE FILED for
+		// any deduction at all: before it the only way to record a deposit was raw
+		// SQL, which is how internal/reporting's tests still seed one.
+		//
+		// POST, and no PUT/PATCH/DELETE: a challan is an EVENT at a bank counter,
+		// not a row an operator maintains. Re-posting one CIN is a 409 and NEVER an
+		// upsert — the second post is either a double entry or a second real
+		// deposit whose serial was mistyped, and overwriting either loses money.
+		//
+		// The GET takes ?tax_year_start= and REFUSES to default it: a deposit made
+		// on 7 April normally belongs to the tax year that ended a week earlier,
+		// which is why migration 0069 STORES the year on the challan instead of
+		// deriving it from the date. Read and write share the `tds-challan`
+		// resource token, which is a BARE token and not a report name — see
+		// handler_tds_challan.go for why that is a safety decision about migration
+		// 0011 rather than a matter of style.
+		r.Get("/tds-challans", s.handleListTDSChallans)
+		r.Post("/tds-challans", s.handleCreateTDSChallan)
 
 		// THE TDS/TCS REGISTER (Item Zero step 4) — everything deducted and
 		// collected in a period, per deductee and per buyer.
@@ -2700,6 +2738,29 @@ func peekVoucherDate(body []byte) *time.Time {
 		return nil
 	}
 	d, err := time.Parse("2006-01-02", probe.VoucherDate)
+	if err != nil {
+		return nil
+	}
+	return &d
+}
+
+// peekDepositDate extracts `deposit_date` from a TDS challan write body.
+//
+// UNLIKE THE PAY RUN, AN ABSENT DATE IS NOT FORCED TO REFUSE. A pay run with no
+// readable wage month returns beforeEveryCutoff() so the cutoff cannot be
+// bypassed by omitting a field. Here the store refuses a challan with no
+// deposit_date outright (it is NOT NULL in migration 0069 and validated in
+// masters), so a body without one never becomes a stored row — the request dies
+// at 400 with a sentence about the missing date rather than at 403 with one about
+// a period lock, which is the more useful answer for the same input.
+func peekDepositDate(body []byte) *time.Time {
+	var probe struct {
+		DepositDate string `json:"deposit_date"`
+	}
+	if err := json.Unmarshal(body, &probe); err != nil || probe.DepositDate == "" {
+		return nil
+	}
+	d, err := time.Parse("2006-01-02", probe.DepositDate)
 	if err != nil {
 		return nil
 	}
