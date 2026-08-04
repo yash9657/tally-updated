@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/khata/cored/internal/compliance/form140"
 	"github.com/khata/cored/internal/platform/testdb"
 )
 
@@ -190,11 +191,14 @@ func TestRegisterDisclosesWhatItCannotTellYou(t *testing.T) {
 // TestRegisterRefusesToEmitAReturnFile is I-7, and it is the point at which this
 // track stops rather than guesses.
 //
-// Enough is known from commentary to produce something file-shaped. What is NOT
-// known is the payment-code list, and a wrong one files a contractor payment as
-// professional fees under a real person's PAN. So the register carries a
-// structured REFUSAL naming every blocker and where to get it — a machine-
-// readable "no", not an absence a client could mistake for "not asked for".
+// ⚠️ WHAT THIS TEST ASSERTS CHANGED ON 2026-08-04, AND THE CHANGE IS THE POINT.
+// It used to require format_version to be EMPTY, because the layout had not been
+// read. The prescribed file format was committed at cfb83ff and is now
+// implemented in internal/compliance/form140, so the version is pinned to "1.0"
+// and the register must say so. The refusal survives — a file still cannot be
+// built from these books — but for schema reasons, not research ones. A test
+// that kept demanding an empty version would have locked in a blocker that had
+// already expired, which is the exact failure HANDOFF-NEXT-THREE.md §0 records.
 func TestRegisterRefusesToEmitAReturnFile(t *testing.T) {
 	s := payrollServer(t)
 	f := newRegisterFixture(t, s)
@@ -207,13 +211,19 @@ func TestRegisterRefusesToEmitAReturnFile(t *testing.T) {
 			"client would misread as 'not requested'")
 	}
 	if rf["available"] != false {
-		t.Fatal("available must be false until a layout is read from a primary source")
+		t.Fatal("available must be false: no challan register and no TAN means there is " +
+			"nothing to write a return from, however well the layout is known")
 	}
-	// I-7 in one field: an empty format_version is exactly what makes it
-	// unavailable.
-	if rf["format_version"] != "" {
-		t.Errorf("format_version = %v, want empty — a pinned version means a READ "+
-			"primary source, and there is none", rf["format_version"])
+	// I-7: a pinned version traced to a READ primary source. Non-empty is now
+	// the requirement, and `available` is what a client branches on instead.
+	if rf["format_version"] != form140.FormatVersion || rf["format_version"] == "" {
+		t.Errorf("format_version = %v, want %q — the prescribed file format has been read",
+			rf["format_version"], form140.FormatVersion)
+	}
+	src, _ := rf["format_source"].(string)
+	if !strings.Contains(src, "form-140-file-format.xlsx") {
+		t.Errorf("format_source = %q; a version number with no document behind it is not "+
+			"a citation", src)
 	}
 	// ALWAYS false, and always present. The FVU needs a JRE that does not exist
 	// here, so "generated" must never be allowed to read as "validated".
@@ -225,15 +235,26 @@ func TestRegisterRefusesToEmitAReturnFile(t *testing.T) {
 		t.Fatalf("the refusal must NAME what is missing and where to get it; got %d blockers",
 			len(blockers))
 	}
-	// The dangerous blocker specifically: the code list.
 	all := ""
 	for _, b := range blockers {
 		m, _ := b.(map[string]any)
 		all += " " + m["what"].(string) + " " + m["why"].(string)
 	}
-	if !strings.Contains(all, "PAYMENT CODE LIST") {
-		t.Errorf("the payment-code list is the blocker that makes a guessed file "+
-			"dangerous rather than merely wrong; it must be named: %q", all)
+	// The two blockers that are now real, both of them schema rather than
+	// research. The challan one is structural: every deductee record in the
+	// return carries a challan reference, so none can exist without one.
+	if !strings.Contains(all, "DEPOSITED") {
+		t.Errorf("the challan register is now the first blocker and must be named: %q", all)
+	}
+	if !strings.Contains(all, "TAN") {
+		t.Errorf("this company has no TAN, without which no return can be filed, and the "+
+			"blocker must say so: %q", all)
+	}
+	// And the claim that must never reappear: the layout is no longer unread.
+	summary, _ := rf["summary"].(string)
+	if !strings.Contains(summary, "LAYOUT IS NO LONGER THE") {
+		t.Errorf("the summary must not leave a reader thinking the format is still "+
+			"unread: %q", summary)
 	}
 }
 

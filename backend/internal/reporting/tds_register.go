@@ -236,11 +236,15 @@ func registerDisclosures(r TDSRegister) []string {
 			"this report cannot tell you what has been deposited, when, or what is " +
 			"still outstanding — and it is the deposit, not the deduction, that " +
 			"stops interest running.",
-		// I-7. The register exists; the return does not, and cannot until a
-		// primary source is read.
-		"NO RETURN CAN BE FILED FROM THIS YET. The Form 140 layout and the FVU " +
-			"file format have not been read from a primary source, so no return " +
-			"file is generated — see the Returns section of F11 Company Features.",
+		// I-7. The register exists; the return does not — but NOT for the reason
+		// this line used to give. The Form 140 file format HAS been read and is
+		// implemented (internal/compliance/form140); what is missing now is a
+		// challan register and this company's TAN. Saying "the layout has not
+		// been read" after it was read is how a blocker outlives its own truth.
+		"NO RETURN CAN BE FILED FROM THIS YET. The Form 140 layout is implemented, " +
+			"but nothing here records the challans you have DEPOSITED and this " +
+			"company has no TAN on file, so there is nothing to write a return " +
+			"from — see the Returns section of F11 Company Features.",
 	}
 	if r.TaxYearStart == 0 {
 		d = append(d, "THIS PERIOD SPANS TWO TAX YEARS. A return is filed per "+

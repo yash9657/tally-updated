@@ -159,6 +159,9 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 		versionID = id()
 		plistID   = id()
 
+		// T6 — the challan the allocation below hangs off (migration 0069).
+		challanID = id()
+
 		// Track 2 — GSTR-2A/2B inward statement and the IMS worklist.
 		statementID = id()
 		inwardDocID = id()
@@ -381,6 +384,48 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 			        DATE '2026-07-10', 50000, 2, 0, true, 'EXEMPT',
 			        'tcs-2026-04', 'testdb')`,
 			[]any{id(), cid, voucherID, ledgerID}},
+
+		// Migration 0069 — one deposit, and the deduction it paid.
+		//
+		// The amounts are WHOLE RUPEES on purpose: tds_challan forbids paise in
+		// all five amount fields ("value 1000.50 will not be allowed"), so a
+		// fractional fixture would fail the CHECK rather than exercise it. The
+		// allocation matches the tds_deduction row above exactly — voucher,
+		// section, leg_seq and amount — because a mismatch is what the reporting
+		// layer reads as BROKEN BY ALTER.
+		{"tds_challan", `INSERT INTO tds_challan
+			(id, company_id, bsr_code, deposit_date, challan_no, tax_rupees,
+			 minor_head, tax_year_start, recorded_by)
+			VALUES ($1, $2, '0004329', DATE '2026-08-07', '05122', 1000,
+			        '200', 2026, 'testdb')`,
+			[]any{challanID, cid}},
+
+		// The link table. It carries NO foreign key to tds_deduction (whose rows
+		// are deleted and re-derived on every voucher alter), so the teardown
+		// has to reach it on its own rather than by cascade — which is exactly
+		// what this fixture row proves.
+		{"tds_challan_allocation", `INSERT INTO tds_challan_allocation
+			(id, company_id, challan_id, voucher_id, section, leg_seq,
+			 allocated_amount_rupees, recorded_by)
+			VALUES ($1, $2, $3, $4, '194C', 0, 1000, 'testdb')`,
+			[]any{id(), cid, challanID, voucherID}},
+
+		// Migration 0070 — the deductor return profile. Category 'K' (Company)
+		// is chosen because it is the branch that forbids BOTH the Annexure 5
+		// state name and the Annexure 3 ministry, so the conditional CHECKs are
+		// satisfied by their empty defaults rather than needing extra columns.
+		{"company_tds_profile", `INSERT INTO company_tds_profile (
+			company_id, tan, pan, deductor_name, deductor_category,
+			address1, state_code, pincode, email, contact_number,
+			responsible_name, responsible_designation, responsible_pan,
+			responsible_address1, responsible_state_code, responsible_pincode,
+			responsible_contact_number, recorded_by)
+			VALUES ($1, 'MUMK12345E', 'AAACK1234M', 'Testdb Traders', 'K',
+			        '14 Marine Lines', '19', '400020',
+			        'accounts@testdb.example', '2226301234',
+			        'Radhika Venkatesan', 'Finance Director', 'AKQPV7821L',
+			        '14 Marine Lines', '19', '400020', '2226301299', 'testdb')`,
+			[]any{cid}},
 
 		// ------------------------------------------------------------------
 		// Track 2 — the inward-supply side: a GSTR-2B statement, one document

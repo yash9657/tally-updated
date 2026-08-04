@@ -2537,21 +2537,35 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         exempt_collections: 0,
         disclosures: [
           "DEPOSIT IS NOT TRACKED. Every figure here is tax deducted or collected, not tax PAID to the government.",
-          "NO RETURN CAN BE FILED FROM THIS YET. The Form 140 layout and the FVU file format have not been read from a primary source.",
+          "NO RETURN CAN BE FILED FROM THIS YET. The Form 140 layout is implemented, but nothing here records the challans you have DEPOSITED and this company has no TAN on file.",
         ],
+        // ⚠️ MIRRORS reporting.ReturnFileRefusal(). It used to say the layout
+        // "has not been read from a primary source", which stopped being true
+        // when the prescribed file format was committed — see
+        // HANDOFF-NEXT-THREE.md §0 on how long a stale blocker can survive. If
+        // the server's wording changes again, this must change with it: a mock
+        // that carries a retired refusal is how a screen gets built against a
+        // claim the product no longer makes.
         return_file: {
           available: false,
-          format_version: "",
+          format_version: "1.0",
+          format_source:
+            'Income Tax Department prescribed file format, Form Number 140 (26Q) Q1-Q4, Version 1.0, Tax Year 2026-27 and onwards (docs/statutory/form-140-file-format.xlsx, sheet "File Format_R")',
           summary:
-            "NO RETURN FILE IS GENERATED. The layout a return must be written in has not been read from a primary source.",
+            "NO RETURN FILE IS GENERATED YET, BUT THE LAYOUT IS NO LONGER THE REASON. The prescribed file format has been read and is implemented. What is missing is in YOUR BOOKS: nothing here records the challans you have deposited, and this company has no TAN on file.",
           validated: false,
           validation_note:
             "Nothing this software produces has been validated by the department's File Validation Utility.",
           blockers: [
             {
-              what: "The Form 140 layout (quarterly non-salary TDS return)",
-              where: "incometaxindia.gov.in",
-              why: "It fixes the record order and the field widths.",
+              what: "A CHALLAN REGISTER — what tax you have actually DEPOSITED",
+              where: "Your own bank challans: BSR code, serial number, date of deposit.",
+              why: "Every deductee row of the return points at the challan that paid its tax, so no deductee row can exist without one.",
+            },
+            {
+              what: "This company's TAN, PAN and responsible-person details",
+              where: "Your TAN allotment letter. The TAN is NOT the GSTIN.",
+              why: "The return's header carries all of them and every one is mandatory.",
             },
           ],
           what_you_can_do_instead:

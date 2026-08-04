@@ -1,0 +1,7 @@
+1^FH^NS1^R^15102026^1^D^MUMK12345E^1^Khata cored^^^^^^^^
+2^BH^1^2^140^^^^^^^^MUMK12345E^^AAACK1234M^202728^202627^Q2^Demo Traders Private Limited^India^14 Marine Lines^Churchgate^^^^19^400020^accounts@demotraders.example^91^2226301234^^K^Radhika Venkatesan^Finance Director^14 Marine Lines^^^^^19^400020^radhika@demotraders.example^India^91^2226301299^^1500.00^^^^^N^^^^^^^AKQPV7821L^^^^^^^^^^27AAACK1234M1Z5^^^
+3^CD^1^1^2^N^^1500.00^0.00^0.00^0.00^1500.00^C^^0004329^^05122^^07082026^^1500.00^1500.00^200^^^^^^^
+4^DD^1^1^1^O^^ABCPK9012Q^Sundar Contracting^^^^^^1024^^^Y^14072026^75000.00^^^^1500.00^1500.00^^14072026^2.0000^^^^^^^^^^^^^^^^^
+5^DD^1^2^1^O^^AAJPT4455N^Nalini Traders^^^^^^1023^^^N^03082026^22000.00^^^^0.00^0.00^^^0.0000^^^^Y^^^^^^^^^^^^^
+6^CD^1^2^1^Y^^0.00^0.00^0.00^0.00^0.00^^^^^^^30092026^^0.00^0.00^^^^^^^^
+7^DD^1^3^2^O^^AGTPS1188D^Meherbai Logistics^^^^^^1024^^^N^12092026^48000.00^^^^0.00^0.00^^^0.0000^^^^T^^^^^^^^^^^^^

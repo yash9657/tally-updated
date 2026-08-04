@@ -72,11 +72,18 @@ describe("TDS / TCS Register screen", () => {
     expect(
       await screen.findByText(/Filing the return — not available/),
     ).toBeTruthy();
-    // Matched on the blocker's own WHY rather than on "Form 140 layout", which
-    // also appears in the disclosures above it — a substring shared by two
-    // elements asserts neither of them.
+    // Matched on the blocker's own WHY rather than on a phrase that also
+    // appears in the disclosures above it — a substring shared by two elements
+    // asserts neither of them.
+    //
+    // ⚠️ THIS ASSERTION CHANGED ON 2026-08-04. It used to match "fixes the
+    // record order and the field widths", the WHY of a blocker that no longer
+    // exists: the prescribed file format has been read and implemented, and the
+    // remaining blockers are a missing challan register and a missing TAN.
     expect(
-      screen.getByText(/fixes the record order and the field widths/),
+      screen.getByText(
+        /no deductee row can exist without one|points at the challan/,
+      ),
     ).toBeTruthy();
     // And it never lets "generated" read as "validated".
     expect(
@@ -84,6 +91,9 @@ describe("TDS / TCS Register screen", () => {
         /has been validated by the department's File Validation Utility/,
       ),
     ).toBeTruthy();
+    // The citation is on the artefact's own face, so the panel cannot be read
+    // as "nobody has looked at the format yet".
+    expect(screen.getByText(/form-140-file-format\.xlsx/)).toBeTruthy();
   });
 
   it("renders a 403 as the DECISION it is, not as a blank screen", async () => {

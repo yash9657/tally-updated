@@ -29,11 +29,17 @@ import type { TDSRegisterResponse } from "../../api";
  *     company pays and every customer it collects from, with amounts. A denial
  *     is a NORMAL answer here, so it is rendered as the reason it is.
  *
- *  4. It NEVER implies a return can be filed. `return_file.available` is false
- *     and will stay false until the Form 140 layout is read from a primary
- *     source; the screen states that, names the blockers, and says what the
- *     operator can do instead. An absent "file return" button would leave them
- *     hunting for a feature that is deliberately not there.
+ *  4. It NEVER implies a return can be filed. `return_file.available` is false;
+ *     the screen states that, names the blockers, and says what the operator can
+ *     do instead. An absent "file return" button would leave them hunting for a
+ *     feature that is deliberately not there.
+ *
+ *     ⚠️ BRANCH ON `available` AND ON NOTHING ELSE. `format_version` used to be
+ *     empty and used to be a second, equivalent signal; the Form 140 file format
+ *     has since been read and implemented, so it is now "1.0" while `available`
+ *     is still false — the remaining blockers are a missing challan register and
+ *     a missing TAN. A screen that keyed off the version would now show a file
+ *     button for a file that cannot be built.
  *
  * ⚠️ A ZERO IN THE TAX COLUMN IS NOT AN ERROR, and the screen says which kind
  * it is. On the deduction side it means a payment below the threshold — kept on
@@ -280,6 +286,19 @@ export function TDSRegisterScreen({ snapshot }: { snapshot: NavSnapshot }) {
               <p className="mt-1 text-xs text-tally-bar">
                 {data.return_file.validation_note}
               </p>
+              {/* The citation, ON THE ARTEFACT'S OWN FACE — the same reason the
+                  missing-QR notice is printed on an e-invoice rather than kept
+                  in a design note. It is also what stops this panel from being
+                  read as "nobody has looked at the format yet". */}
+              {data.return_file.format_version !== "" && (
+                <p className="mt-2 text-xs text-tally-fieldText">
+                  Layout implemented from format version{" "}
+                  <span className="text-tally-title">
+                    {data.return_file.format_version}
+                  </span>{" "}
+                  — {data.return_file.format_source}
+                </p>
+              )}
             </div>
           )}
         </>

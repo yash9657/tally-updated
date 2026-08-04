@@ -55,9 +55,21 @@ var allowedDeps = map[string]map[string]bool{
 	// walker fails the build for any package with no declared policy. Track 2
 	// owns the package; if it also wrote this line, take Track 2's wording.
 	"internal/compliance/itc": {"internal/platform/db": true, "internal/compliance/gstr": true},
-	"internal/inventory":      {},
-	"internal/integration":    {},
-	"internal/identity":       {"internal/platform/db": true},
+	// form140 (T6) emits the prescribed Form 140 TDS return file. It is the
+	// STRICTEST policy in this map — {} — and that is the design, not an
+	// oversight: it has no database edge, unlike gstr and itc, because it takes
+	// a fully-specified Statement and returns bytes.
+	//
+	// The temptation will be to add internal/platform/db so it can read
+	// tds_deduction itself. Resist it. A return file that queries is a return
+	// file whose output depends on when it ran, and its golden test would need
+	// a database to assert a byte sequence transcribed from a spec. Sourcing
+	// the Statement belongs to whatever owns the challan register; emitting it
+	// belongs here.
+	"internal/compliance/form140": {},
+	"internal/inventory":          {},
+	"internal/integration":        {},
+	"internal/identity":           {"internal/platform/db": true},
 	// ledger derives GST inline during a Sales/Purchase post, so it may import
 	// the pure compliance leaf (no I/O, safe inside the post transaction).
 	"internal/ledger": {"internal/platform/db": true, "internal/compliance": true},
@@ -111,7 +123,18 @@ var allowedDeps = map[string]map[string]bool{
 	// one-way by construction — inventory's own entry above is the empty map, so
 	// the valuer can never reach back into a report, a database or a tenant
 	// context, which is the whole reason a valuation is reproducible.
-	"internal/reporting": {"internal/platform/db": true, "internal/inventory": true},
+	// reporting gained internal/compliance/form140 with T6's return-file status.
+	// The edge exists for ONE reason and it is worth stating: the TDS register
+	// tells an operator whether a return can be filed, and the format version it
+	// quotes must be the one the emitter actually implements. Restating "1.0"
+	// here would be a second copy of a citation, and the two would part company
+	// the first time the department issues version 1.1.
+	//
+	// It is one-way and must stay so: form140's own policy is {} — it is a pure
+	// leaf that knows nothing about storage, and reporting is the only sibling
+	// that may reach it.
+	"internal/reporting": {"internal/platform/db": true, "internal/inventory": true,
+		"internal/compliance/form140": true},
 	// forecast (wave 2 WS5a) is a read-only projection/anomaly reporter. It reuses
 	// reporting's Outstandings netting (never re-implementing it) and issues its own
 	// supplementary read-only queries over the db layer. Two siblings, nothing else.

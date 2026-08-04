@@ -1363,7 +1363,18 @@ export interface ReturnFileBlocker {
  */
 export interface ReturnFileStatus {
   available: boolean;
+  /**
+   * The prescribed file-format version, read from a primary source ("1.0").
+   *
+   * ⚠️ ITS MEANING CHANGED. It used to be empty, and its emptiness was I-7 in
+   * one field. The format has since been read and implemented, so an empty
+   * value still means "no primary source" but a non-empty one does NOT mean
+   * "ready to file". Branch on `available`, never on this.
+   */
   format_version: string;
+  /** The document `format_version` was read from — a version with no document
+   * behind it is not a citation. */
+  format_source: string;
   summary: string;
   /** ALWAYS false: the FVU needs a JRE that does not exist in this environment. */
   validated: boolean;
