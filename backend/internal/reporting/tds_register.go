@@ -11,12 +11,21 @@ package reporting
 // WHAT THIS DELIBERATELY DOES NOT SHOW, AND WHY IT IS NOT AN OVERSIGHT
 // ---------------------------------------------------------------------------
 // t6-model.md §1.4 lists "challan reference, deposit status" per deduction, and
-// §1.5 wants a challan register beside this one. NEITHER IS HERE: no
-// `tds_challan` table exists, so there is nothing to join to. Showing an empty
-// "Challan" column would read as "not yet deposited" for every row, which is a
-// FALSE STATEMENT about the one fact that attracts interest under s.396 — so the
-// column is absent and the response says so in `disclosures` rather than
-// rendering a blank the operator has to interpret.
+// §1.5 wants a challan register beside this one.
+//
+// ⚠️ THE REASON GIVEN HERE HAS EXPIRED, AND THE DECISION HAS NOT. This paragraph
+// used to read "no `tds_challan` table exists, so there is nothing to join to".
+// Migration 0069 created it and this slice made it writable, so that sentence is
+// simply false now and is deleted rather than softened.
+//
+// The COLUMN is still absent, for a reason that never depended on the schema:
+// showing a "Challan" column here would put a deposit status on every row, and a
+// blank would read as "not deposited" for a row that is merely below the
+// threshold and has no tax to deposit. That is a false statement about the one
+// fact that attracts interest under s.396. So the deposit question is answered
+// where it can be answered precisely — the return-file panel, which is computed
+// per company and per period and names the vouchers that are actually unpaid —
+// and a challan register of its own lives at Alt+G → TDS Challans.
 //
 // ---------------------------------------------------------------------------
 // I-9: IT READS THE CURRENT VOUCHER VERSION ONLY, AND GETS THAT STRUCTURALLY
@@ -228,23 +237,38 @@ func taxYearOf(t time.Time) int {
 // needs the caveat is the one holding the artefact.
 func registerDisclosures(r TDSRegister) []string {
 	d := []string{
-		// The big one. Everything here is what was DEDUCTED and COLLECTED; none
-		// of it is what was PAID to the government, and it is the deposit that
-		// stops interest running under s.396.
-		"DEPOSIT IS NOT TRACKED. Every figure here is tax deducted or collected, " +
-			"not tax PAID to the government. There is no challan register yet, so " +
-			"this report cannot tell you what has been deposited, when, or what is " +
-			"still outstanding — and it is the deposit, not the deduction, that " +
-			"stops interest running.",
-		// I-7. The register exists; the return does not — but NOT for the reason
-		// this line used to give. The Form 140 file format HAS been read and is
-		// implemented (internal/compliance/form140); what is missing now is a
-		// challan register and this company's TAN. Saying "the layout has not
-		// been read" after it was read is how a blocker outlives its own truth.
-		"NO RETURN CAN BE FILED FROM THIS YET. The Form 140 layout is implemented, " +
-			"but nothing here records the challans you have DEPOSITED and this " +
-			"company has no TAN on file, so there is nothing to write a return " +
-			"from — see the Returns section of F11 Company Features.",
+		// The big one. Everything in THESE COLUMNS is what was DEDUCTED and
+		// COLLECTED; none of it is what was PAID to the government, and it is the
+		// deposit that stops interest running under s.396.
+		//
+		// ⚠️ THIS LINE USED TO SAY "There is no challan register yet". Migration
+		// 0069 shipped one and this slice made it writable, so that clause was
+		// deleted rather than reworded — the claim it made is now false. What
+		// remains true, and is what the disclosure is actually FOR, is narrower:
+		// THIS REPORT does not join deposits to deductions. The return-file panel
+		// below the table does, per voucher, and says which are unpaid.
+		"DEPOSIT IS NOT SHOWN IN THESE COLUMNS. Every figure in the table is tax " +
+			"deducted or collected, not tax PAID to the government — and it is the " +
+			"deposit, not the deduction, that stops interest running under s.396. " +
+			"Challans are recorded separately (Alt+G → TDS Challans); the filing " +
+			"panel below names any deduction in this period with no challan behind it.",
+		// I-7. THE REGISTER EXISTS; THE FILE STILL DOES NOT — AND THIS LINE NO
+		// LONGER GUESSES WHY.
+		//
+		// It has been wrong twice, in both directions. First it said the Form 140
+		// layout "had not been read from a primary source", which stayed on screen
+		// for two days after the format was committed. Then it said "this company
+		// has no TAN on file" — an unconditional assertion about a specific
+		// company, rendered identically for a company that had just recorded one.
+		//
+		// A disclosure is a STATIC caveat and cannot answer a per-company question.
+		// So it no longer tries: the company-specific answer is computed per
+		// request by ReturnFileStatusFor and travels in the same response, and this
+		// line's only job is to point at it. That is the fix for the whole class.
+		"NO RETURN FILE IS PRODUCED HERE. The Form 140 layout is implemented and " +
+			"pinned to the prescribed format; whether YOUR books can fill it is " +
+			"answered per company in the filing panel below, which names what is " +
+			"outstanding rather than assuming it.",
 	}
 	if r.TaxYearStart == 0 {
 		d = append(d, "THIS PERIOD SPANS TWO TAX YEARS. A return is filed per "+

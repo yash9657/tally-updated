@@ -21,37 +21,34 @@ package reporting
 // and traced to the document, which is what I-7 asks for.
 //
 // ---------------------------------------------------------------------------
-// SO WHY IS Available STILL FALSE? BECAUSE A PINNED VERSION IS NECESSARY AND
-// NOT SUFFICIENT — AND THE REMAINING GAPS ARE SCHEMA, NOT RESEARCH.
+// ⛔ AND THEN THE SAME THING HAPPENED AGAIN, ONE LAYER DOWN.
 // ---------------------------------------------------------------------------
-// That is the important change in kind. The old blockers were DOCUMENTS nobody
-// here could fetch. The new ones are TABLES nobody here has written yet, and
-// both are now specified down to the field by form140.Statement:
+// This file used to hold ReturnFileRefusal(), a NILADIC function that returned
+// the same three blockers for every company alive. Two of them said, verbatim,
+// "There is no tds_challan table" and "This company record holds none of them".
+// Migrations 0069 and 0070 falsified the first; the write path over them
+// falsifies the second for any company that fills the form in.
 //
-//  1. NO CHALLAN REGISTER. There is no tds_challan table, so nothing records
-//     what was DEPOSITED. This is not merely the third-ranked item of T6 — the
-//     format makes it a PREREQUISITE: every deductee record carries a challan
-//     reference (DD field 5), so no deductee record can exist outside a
-//     challan, not even under a nil one.
+// THE DEFECT WAS NEVER THE WORDING — IT WAS THE ARITY. A refusal that takes no
+// arguments can only make claims about THE SOFTWARE, and a claim about the
+// software goes stale the moment somebody ships something. A refusal that takes
+// a company and a period can only make claims about THOSE BOOKS, and it is
+// re-answered on every request, so it cannot go stale at all.
 //
-//  2. NO DEDUCTOR RETURN PROFILE. `company` holds gstin, address, city,
-//     pincode and country. The Batch Header needs a TAN, a PAN, an Annexure 4
-//     category, an e-mail and a contact number, plus the name, designation,
-//     address, PAN and contact of the person responsible for deduction — none
-//     of which any table holds. Every one is mandatory, and the TAN is not
-//     derivable from the GSTIN.
+// ReturnFileRefusal() is therefore GONE, not merely corrected — leaving it would
+// leave a caller able to reach the constant version. Service.ReturnFileStatusFor
+// in tds_return_status.go replaces it, and this file keeps only the two types
+// they share.
 //
-// Validated stays false FOREVER, separately from all of the above. The FVU
-// needs a Java runtime that does not exist here, so nothing this software
-// produces has been validated by the department's own tool — and a "generated"
-// return that reads as "validated" is worse than no return at all.
+// Validated stays false FOREVER, separately from every blocker. The FVU needs a
+// Java runtime that does not exist here, so nothing this software produces has
+// been validated by the department's own tool — and a "generated" return that
+// reads as "validated" is worse than no return at all.
 //
 // The status is a VALUE ON THE REGISTER RESPONSE rather than a comment in this
 // file, because the person who needs to know is the operator looking for their
 // return — the same reasoning that puts the missing-QR notice on the face of a
 // printed e-invoice.
-
-import "github.com/khata/cored/internal/compliance/form140"
 
 // ReturnFileBlocker names one thing that must exist before a return file can be
 // emitted, and where it comes from.
@@ -85,63 +82,4 @@ type ReturnFileStatus struct {
 	ValidationNote      string              `json:"validation_note"`
 	Blockers            []ReturnFileBlocker `json:"blockers"`
 	WhatYouCanDoInstead string              `json:"what_you_can_do_instead"`
-}
-
-// ReturnFileRefusal states, in full, why no Form 140 or Form 143 file is
-// produced from these books and what would unblock it.
-func ReturnFileRefusal() ReturnFileStatus {
-	return ReturnFileStatus{
-		Available:     false,
-		FormatVersion: form140.FormatVersion,
-		FormatSource:  form140.FormatSource,
-		Summary: "NO RETURN FILE IS GENERATED YET, BUT THE LAYOUT IS NO LONGER THE " +
-			"REASON. The Income Tax Department's prescribed file format has been read " +
-			"and is implemented — the record layouts, the four-digit PAYMENT CODE " +
-			"LIST and the reason codes all come from it. What is missing is in YOUR " +
-			"BOOKS, not in the specification: nothing here records the challans you " +
-			"have deposited, and this company has no TAN or responsible-person " +
-			"details on file.",
-		Validated: false,
-		ValidationNote: "Nothing this software produces has been validated by the " +
-			"department's File Validation Utility. The FVU needs a Java runtime that " +
-			"is not available here, so even once a file can be generated it must be " +
-			"validated by you before filing. That stays true after every blocker " +
-			"below is cleared.",
-		Blockers: []ReturnFileBlocker{
-			{
-				What: "A CHALLAN REGISTER — what tax you have actually DEPOSITED",
-				Where: "Your own bank challans: the BSR code of the receiving branch, the " +
-					"challan serial number, the date of deposit, and the split of the " +
-					"amount across tax, interest, fee and penalty. Nothing in this " +
-					"software records any of it today.",
-				Why: "Every deductee row of the return points at the challan that paid its " +
-					"tax, so no deductee row can exist without one — that is structural, " +
-					"not a matter of ordering. It is also the deposit and not the " +
-					"deduction that stops interest running under s.396.",
-			},
-			{
-				What: "This company's TAN, PAN and responsible-person details",
-				Where: "Your TAN allotment letter, and whoever signs your returns. The TAN " +
-					"is NOT the GSTIN and cannot be derived from it.",
-				Why: "The return's header carries the deductor's TAN, PAN, deductor " +
-					"category, address, e-mail and telephone, plus the name, designation, " +
-					"address and PAN of the person responsible for deduction. This company " +
-					"record holds none of them, and every one of them is mandatory.",
-			},
-			{
-				What:  "The department's File Validation Utility, and the .csi challan file",
-				Where: "Protean/TIN — the FVU needs a Java runtime; the .csi needs a TIN portal login.",
-				Why: "A return is validated AGAINST the challan file: the FVU checks every " +
-					"deposit claimed in the return against what the bank actually reported, " +
-					"and the TAN in the statement must match the one in the .csi. Neither " +
-					"can be reached from here, so a generated file must be validated by " +
-					"you before it is filed.",
-			},
-		},
-		WhatYouCanDoInstead: "Use this register to prepare the return in your filing " +
-			"software or with your accountant: it carries every deduction and " +
-			"collection for the period, per deductee, with the section, the four-digit " +
-			"return code the deduction will be filed under, the rate and the amount. " +
-			"What it cannot tell you is what has been DEPOSITED.",
-	}
 }

@@ -341,19 +341,8 @@ func groupByChallan(ctx context.Context, tx pgx.Tx, companyID uuid.UUID,
 			continue
 		}
 
-		if r.challanID == nil {
-			return nil, fmt.Errorf("%w: voucher %s deducted %s under %s from %s, and no challan "+
-				"is recorded against it. Deposit the tax and record the challan — the return has "+
-				"no way to carry a deduction with no deposit behind it",
-				ErrTaxNotDeposited, r.voucherNo, r.tax, r.section, r.deducteeNm)
-		}
-		// The 0045 mechanism. See ErrAllocationBrokenByAlter.
-		if !r.allocated.Equal(r.tax) {
-			return nil, fmt.Errorf("%w: voucher %s now shows %s of tax under %s, but %s was "+
-				"deposited against it on challan %s of %s. Re-allocate the deposit, or correct "+
-				"the voucher, before filing",
-				ErrAllocationBrokenByAlter, r.voucherNo, r.tax, r.section, r.allocated,
-				r.challanNo, r.depositDate.Format("2006-01-02"))
+		if err := challanRefusalFor(r); err != nil {
+			return nil, err
 		}
 
 		c, seen := byChallan[*r.challanID]
@@ -393,6 +382,44 @@ func groupByChallan(ctx context.Context, tx pgx.Tx, companyID uuid.UUID,
 		})
 	}
 	return out, nil
+}
+
+// challanRefusalFor is the deposit side of "can this row be filed": the two
+// refusals that are about the CHALLAN behind a deduction rather than about the
+// deduction itself. nil means this row's deposit is in order.
+//
+// ⛔ IT IS A FUNCTION, AND NOT INLINE IN groupByChallan, FOR ONE REASON: THE
+// REGISTER'S STATUS PANEL CALLS IT TOO.
+//
+// ReturnFileStatusFor (tds_return_status.go) tells an operator which of their
+// vouchers are stopping a return. If it re-implemented these two tests, the
+// sentence on the screen and the sentence that refuses at emission could drift
+// apart — and the screen's version would be the one nobody ever proved. Sharing
+// the function means the evidence a screen shows is LITERALLY the refusal the
+// emitter would raise, wording included.
+//
+// The zero-tax short-circuit is load-bearing and mirrors groupByChallan's own
+// ordering: a sub-threshold row has no tax to deposit, so neither refusal can
+// apply to it. It belongs to the synthesised nil challan instead.
+func challanRefusalFor(r *sourcedDeduction) error {
+	if r.tax.IsZero() {
+		return nil
+	}
+	if r.challanID == nil {
+		return fmt.Errorf("%w: voucher %s deducted %s under %s from %s, and no challan "+
+			"is recorded against it. Deposit the tax and record the challan — the return has "+
+			"no way to carry a deduction with no deposit behind it",
+			ErrTaxNotDeposited, r.voucherNo, r.tax, r.section, r.deducteeNm)
+	}
+	// The 0045 mechanism. See ErrAllocationBrokenByAlter.
+	if !r.allocated.Equal(r.tax) {
+		return fmt.Errorf("%w: voucher %s now shows %s of tax under %s, but %s was "+
+			"deposited against it on challan %s of %s. Re-allocate the deposit, or correct "+
+			"the voucher, before filing",
+			ErrAllocationBrokenByAlter, r.voucherNo, r.tax, r.section, r.allocated,
+			r.challanNo, r.depositDate.Format("2006-01-02"))
+	}
+	return nil
 }
 
 // deducteeFor maps one deduction to a DD record, deriving the Annexure 6 flag.

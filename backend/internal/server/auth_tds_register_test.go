@@ -180,11 +180,38 @@ func TestRegisterDisclosesWhatItCannotTellYou(t *testing.T) {
 	for _, d := range disclosures {
 		joined += " " + d.(string)
 	}
-	if !strings.Contains(joined, "DEPOSIT IS NOT TRACKED") {
-		t.Errorf("the register must say it does not track deposit; got %q", joined)
+	// ⚠️ BOTH ASSERTIONS CHANGED ON 2026-08-04, AND THE REASON IS THE POINT.
+	//
+	// The first used to demand "DEPOSIT IS NOT TRACKED". Deposit IS tracked now —
+	// migration 0069 shipped tds_challan and it is writable — so that sentence
+	// became false and the disclosure was narrowed to what stayed true: the
+	// deposit is not shown in THESE COLUMNS.
+	//
+	// The second used to demand "NO RETURN CAN BE FILED", which the disclosure
+	// asserted unconditionally for every company. A static disclosure cannot
+	// answer a per-company question, and it was rendering "this company has no
+	// TAN on file" to companies that had one. The per-company answer now lives in
+	// return_file, computed per request, and the disclosure only points at it —
+	// which is why this test now asserts the POINTER and
+	// TestTheReturnFilePanelNamesTheVoucherThatIsBlockingIt asserts the answer.
+	if !strings.Contains(joined, "DEPOSIT IS NOT SHOWN IN THESE COLUMNS") {
+		t.Errorf("the register must say the table is deductions and not deposits; got %q", joined)
 	}
-	if !strings.Contains(joined, "NO RETURN CAN BE FILED") {
-		t.Errorf("the register must say no return can be filed from it; got %q", joined)
+	if !strings.Contains(joined, "NO RETURN FILE IS PRODUCED HERE") {
+		t.Errorf("the register must say it produces no file and point at the panel that "+
+			"explains this company's position; got %q", joined)
+	}
+	// AND THE CLAIMS THAT MUST NEVER COME BACK. Each one was true when written and
+	// false within days, and a disclosure is the worst place for that because it
+	// renders directly above the panel that contradicts it.
+	for _, gone := range []string{
+		"There is no challan register yet",
+		"has no TAN on file",
+		"could not be read from a primary source",
+	} {
+		if strings.Contains(joined, gone) {
+			t.Errorf("the disclosures carry a retired claim %q: %q", gone, joined)
+		}
 	}
 }
 
@@ -231,30 +258,45 @@ func TestRegisterRefusesToEmitAReturnFile(t *testing.T) {
 		t.Error("validated must be false: the FVU cannot run in this environment")
 	}
 	blockers, _ := rf["blockers"].([]any)
-	if len(blockers) < 3 {
+	// TWO is the floor rather than three, and the change is not a weakening: the
+	// blockers are now derived from this company's data, so the exact count
+	// depends on the fixture. Guaranteed here are the missing profile and the
+	// unconditional FVU; both are asserted BY NAME below, which is stronger than
+	// a count of anonymous entries.
+	if len(blockers) < 2 {
 		t.Fatalf("the refusal must NAME what is missing and where to get it; got %d blockers",
 			len(blockers))
 	}
 	all := ""
 	for _, b := range blockers {
 		m, _ := b.(map[string]any)
-		all += " " + m["what"].(string) + " " + m["why"].(string)
+		all += " " + m["what"].(string) + " " + m["why"].(string) + " " + m["where"].(string)
 	}
-	// The two blockers that are now real, both of them schema rather than
-	// research. The challan one is structural: every deductee record in the
-	// return carries a challan reference, so none can exist without one.
-	if !strings.Contains(all, "DEPOSITED") {
-		t.Errorf("the challan register is now the first blocker and must be named: %q", all)
-	}
+	// This fixture's company has no company_tds_profile row, so the profile
+	// blocker must lead — and it must say so as the reason it hides the others,
+	// because readDeductorProfile is called before any deduction is read.
 	if !strings.Contains(all, "TAN") {
 		t.Errorf("this company has no TAN, without which no return can be filed, and the "+
 			"blocker must say so: %q", all)
 	}
-	// And the claim that must never reappear: the layout is no longer unread.
+	// The permanent one, which no amount of data entry clears.
+	if !strings.Contains(all, "File Validation Utility") {
+		t.Errorf("the FVU blocker is unconditional and must always be present: %q", all)
+	}
+	// ⚠️ THE SUMMARY ASSERTION CHANGED ON 2026-08-04. It used to demand the phrase
+	// "LAYOUT IS NO LONGER THE", which was a fixed string in a niladic function.
+	// The summary is now written per case from this company's actual position, so
+	// the test asserts the PROPERTY that mattered — a reader must not come away
+	// thinking the format is unread — plus the new one: the reason given must be
+	// about the books.
 	summary, _ := rf["summary"].(string)
-	if !strings.Contains(summary, "LAYOUT IS NO LONGER THE") {
+	if !strings.Contains(summary, "has been read and is implemented") {
 		t.Errorf("the summary must not leave a reader thinking the format is still "+
 			"unread: %q", summary)
+	}
+	if !strings.Contains(summary, "no TDS return profile") {
+		t.Errorf("the summary must name THIS company's actual first obstacle rather than a "+
+			"generic one: %q", summary)
 	}
 }
 

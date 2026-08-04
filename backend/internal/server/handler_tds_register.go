@@ -16,11 +16,7 @@ package server
 // 0011's coarse `allow display report`, exactly as 0046 had to for the bank
 // statement.
 
-import (
-	"net/http"
-
-	"github.com/khata/cored/internal/reporting"
-)
+import "net/http"
 
 func (s *Server) handleTDSRegister(w http.ResponseWriter, r *http.Request) {
 	ctx, companyID, ok := s.scopeCtxID(w, r)
@@ -84,6 +80,19 @@ func (s *Server) handleTDSRegister(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// I-7, ON EVERY RESPONSE, AND NOW ABOUT THESE BOOKS RATHER THAN ABOUT THIS
+	// SOFTWARE. It reads the same period the register just read, so the blockers
+	// name the vouchers the operator is looking at.
+	//
+	// A failure here is a 422 like the register's own, NOT a silently omitted
+	// field: a screen that renders a register with no return_file panel would
+	// imply there is nothing to say about filing, which is the opposite of true.
+	returnFile, err := s.report.ReturnFileStatusFor(ctx, companyID, from, to)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"from":                     reg.FromDate,
 		"to":                       reg.ToDate,
@@ -99,8 +108,11 @@ func (s *Server) handleTDSRegister(w http.ResponseWriter, r *http.Request) {
 		// The caveats travel WITH the numbers. A screen may style them; it may
 		// not decide whether to show them.
 		"disclosures": reg.Disclosures,
-		// ⚠️ I-7, ON EVERY RESPONSE. See handler_tds_return.go for why this is a
-		// field and not a comment.
-		"return_file": reporting.ReturnFileRefusal(),
+		// ⚠️ I-7, ON EVERY RESPONSE. It is a FIELD and not a comment because the
+		// person who needs to know is the operator looking for their return — the
+		// same reasoning that prints the missing-QR notice on the face of an
+		// e-invoice rather than filing it in a design note. See
+		// internal/reporting/tds_return_file.go's header.
+		"return_file": returnFile,
 	})
 }
