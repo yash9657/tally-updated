@@ -1,8 +1,14 @@
 # HANDOFF — the three things immediately left, and the whole parity gap in three tiers
 
-> **Written 2026-08-03**, at HEAD `77a1317` + the plan correction. Companion to
-> `HANDOFF-FEATURE-LOCK.md` (the plan of record) and `HANDOFF-SESSION-T29-IMPORT.md` (what the
-> last session did). **Read §0 first — it changes what "immediately left" means.**
+> **Written 2026-08-03**, at HEAD **`d840bef`**. Companion to `HANDOFF-FEATURE-LOCK.md` (the plan
+> of record) and `HANDOFF-SESSION-T29-IMPORT.md` (what the last session did).
+>
+> **State:** migrations `0068` (0062–0064 also applied) · backend **1977 pass / 0 SKIP / 0 FAIL** ·
+> frontend **461** · `verify:demo` **33/33** · `make verify` exit 0 · tree clean.
+>
+> **Read in this order:** §0 (a blocker that was already dead — it changes what "left" means) →
+> §5 (how to RUN it; do this before touching code) → §4.1 (**the trap that will bite slice 2b
+> four times over**) → then §1.
 
 ---
 
@@ -99,6 +105,16 @@ The import shipped 2026-08-03. This is its other half, and it is the half that c
   rather than as a bug. This is the single thing 2b lives or dies on.
 - Flip `F8`, `Alt+F8`, `Alt+S`, `F9` from refusals to real actions **in the same commit**, and
   revisit `Ctrl+J` (exception report) which is a matching concept.
+
+> ### ⛔ AND THIS IS WHERE §4.1 BITES YOU FOUR TIMES
+>
+> Those four keys become **screen actions**, and every one of them needs an entry in
+> **`AppShell.tsx`'s `SCREEN_ACTIONS` map** or it will be **silently dead** — no error, no status
+> line, nothing. That map is a registration point that `HANDOFF-FEATURE-LOCK.md` §5.2 does not
+> list, and `Alt+O` shipped broken through it on 2026-08-03 with 459 tests green.
+>
+> **Read §4.1 before you write the first one.** Then add all four to the map, and add a routing
+> test per key in `AppShell.test.tsx` — the pattern is already there.
 
 ### 1.3 T6 — the challan register
 
@@ -241,3 +257,156 @@ a substitute for a primary one. The seven payment codes turned out to be right �
 secondary source that carried them **got thresholds wrong**, and a shipped rate was half the
 legal rate for four months because a verification was measured against an unamended edition of
 the Act. **Record the edition. Re-read on every Finance Act.**
+
+---
+
+## 4. THE TRAPS THIS SESSION PAID FOR. Do not re-derive these.
+
+### 4.1 ⛔⛔ THE THIRTEENTH REGISTRATION POINT — `AppShell.tsx`'s `SCREEN_ACTIONS`
+
+**`Alt+O` shipped completely dead, in a commit whose 459 tests were all green.** It is the single
+most important mechanical lesson on this track, because **slice 2b adds four more screen actions**
+(§1.2) and will hit it four times.
+
+**What was present and correct — all of it:**
+
+| Registration point | Status when Alt+O was broken |
+|---|---|
+| the keymap binding, screen-scoped, cited to `RESEARCH.md:361` | ✅ present |
+| `ScreenActionKind` in `ScreenActions.tsx` | ✅ present |
+| the `navMachine` case (returns `{}` — importing does not navigate) | ✅ present |
+| the button-bar item in `buttonBar.ts` | ✅ present |
+| the screen's own `useRegisterScreenAction` handler | ✅ present |
+| **`SCREEN_ACTIONS` in `AppShell.tsx`** | ❌ **MISSING** |
+
+Without that last entry the shell resolves the combo, finds no screen action, and forwards the key
+to a machine that deliberately does nothing. **No error. No status line. Nothing.**
+
+**⚠️ WHY EVERY EXISTING TEST MISSED IT — read this before trusting a green suite on a keystroke:**
+
+- **The panel's own 11 tests call the screen-action dispatcher DIRECTLY**, so they bypass the map
+  entirely. They proved the panel works; they proved nothing about anything *reaching* it.
+- **`buttons.test.ts` asserts the combo RESOLVES** to an action and that it is not an
+  `unavailable` placeholder. Both were true.
+- **Nothing rendered the real shell and pressed the real key.**
+
+It was found by driving the app in a browser (§5). The fix ships with the two tests that would
+have caught it, in `AppShell.test.tsx` — they go through the real `AppShell`, each carries a
+control asserting the panel is absent first, and both were mutation-proved by deleting the map
+entry. **Copy that pattern for every new screen action.**
+
+> **The general lesson: a test that calls the dispatcher directly is testing the handler, not the
+> keystroke. If a key is the feature, the test must press the key on the real shell.**
+
+### 4.2 A screen action fires before its data has loaded, and that is CORRECT
+
+Pressing `Alt+O` before the ledger list resolves answers *"select a bank account first"* rather
+than opening a panel with no account to import into. That is the intended refusal, not a bug — but
+it means **a routing test must `await` the load** (`await screen.findByText(/Bank Reconciliation —
+HDFC Bank/)`) or it silently tests the refusal path instead of the route.
+
+### 4.3 `gofmt -w <dir>` reformats files you did not touch
+
+`gofmt -w internal/reporting` quietly reformatted two `closing_stock*` files unrelated to this
+work. They were reverted rather than smuggled into a feature commit. **`gofmt -l` still flags
+those two plus `handler_print_bankrecon_test.go`** — pre-existing drift, nothing gates on it. If
+you want them clean, do it as its own commit. **Format named files, not directories.**
+
+### 4.4 `mock.ts`'s `addMoney` uses `parseFloat` — on a money path
+
+Pre-existing, and `HANDOFF-FEATURE-LOCK.md` §5.1 forbids exactly this. Not touched this session;
+the helpers added to that file use BigInt ten-thousandths instead. Worth a separate fix.
+
+---
+
+## 5. RUN IT — the exact recipe, because rediscovering it costs half an hour
+
+**Do this before touching code on any of §1.** Three of this session's findings came from running
+the app, and none of them from reading it.
+
+### 5.1 The four processes
+
+Postgres runs in Docker and is usually already up. The rest are foreground processes.
+
+```bash
+# 0. Postgres on :5433 — check first, it is normally already running
+docker ps --format '{{.Names}}\t{{.Status}}' | grep tally_pg   # or: make dev-db
+
+# 1. cored (Go API) on :8087
+cd backend && PORT=8087 AUTH_DEV_TOKEN_ENABLED=true \
+  APP_DSN="postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable" \
+  ADMIN_DSN="postgres://postgres:postgres@localhost:5433/tally?sslmode=disable" \
+  go run ./cmd/cored serve
+# or simply: make run-cored
+
+# 2. insightd (FastAPI) on :8088
+cd insightd && INSIGHTD_DATABASE_URL="postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable" \
+  .venv/bin/python -m uvicorn insightd.api.app:app --port 8088
+# or simply: make run-insightd
+
+# 3. the frontend on :5173
+cd frontend && pnpm dev
+```
+
+### 5.2 ⚠️ THE FOUR THINGS THAT WILL WASTE YOUR TIME IF YOU GUESS
+
+| Gotcha | What happens if you miss it |
+|---|---|
+| **`PORT=8087`** | cored's own default is **8080** (`backend/cmd/cored/main.go`, `defaultPort`). The frontend and the seed script both expect 8087, so on the default port everything fails and nothing says why. `make run-cored` sets it from `CORED_PORT ?= 8087` — **prefer the make targets over hand-rolled commands for exactly this reason** |
+| **`AUTH_DEV_TOKEN_ENABLED=true`** | cored **refuses to start** rather than run fail-open: *"no authentication configured … Refusing to start fail-open"*. This is correct behaviour, not a bug |
+| **`INSIGHTD_DATABASE_URL`** | insightd silently falls back to an **in-memory** draft store and every Bill Inbox draft dies with the process — the inbox goes empty on restart with nothing to explain why |
+| **Backgrounding via the agent's task runner** | Harness-tracked background tasks **get reaped**, and the stack dies mid-session. Launch detached instead: `(nohup <cmd> > log 2>&1 & disown)`. That pattern survived a whole session; the tracked one did not |
+
+### 5.3 Seed and open
+
+```bash
+cd frontend && pnpm seed:demo -- --insightd     # needs cored + insightd already up
+pnpm verify:demo "$(cat .demo-company-id)"      # 33/33 expected
+open "http://localhost:5173/?company=$(cat .demo-company-id)"
+```
+
+**Sign in:** user `browser-dev-owner`, password `tally-demo-2026`.
+
+The password is **`DEMO_PASSWORD`-overridable** (`frontend/scripts/auth.mts`, defaulting to
+`tally-demo-2026`; the verifiers and the browser e2e read the same env var so they stay in
+agreement). ⚠️ **If the account already carries a DIFFERENT password the seed answers 401 and says
+so loudly — and there is NO admin reset, by design.** Clear it by hand:
+
+```sql
+DELETE FROM user_credential
+ WHERE user_id = (SELECT id FROM app_user WHERE subject = 'browser-dev-owner');
+```
+
+The seeded company is **Demo Traders**: Trial Balance nets to zero (Dr = Cr = 774,970), Balance
+Sheet balances, one bank ledger (**HDFC Bank**, a/c `50200012345678`, IFSC `HDFC0004321`) with
+four imported statement rows (₹1,40,000 in / ₹25,590 out).
+
+### 5.4 Driving it — it is a KEYSTROKE app, clicks are not enough
+
+A click on a Gateway list item **selects without opening**; you need `Enter` after it. To reach
+the work in §1.2:
+
+```
+Gateway → (click or arrow to) "Bank Reconciliation" → Enter → Alt+O
+```
+
+`Alt+O` should open **"Import Bank Statement — HDFC Bank"** with the account number and IFSC
+under the heading, and the status line should read *"Import a bank statement (CSV)."* **If the key
+does nothing, you have hit §4.1.**
+
+Playwright MCP works against this app. Two notes: `Alt+g` etc. deliver `key: "g"` through
+Playwright (no macOS dead-key transformation, so combos behave), and screenshots must be written
+**inside the repo** — `.playwright-mcp/` is an allowed root, `/tmp` is not.
+
+### 5.5 Known-harmless noise
+
+A `404` for `/favicon.ico` in the browser console. That is the only console error on a clean load;
+do not go hunting for it.
+
+### 5.6 ⚠️ CAPTURE THIS AS A PROJECT SKILL
+
+There is **no `.claude/skills/` directory** in this repo, so every session rediscovers §5.1–5.4.
+The `/run` skill explicitly says a project skill is the repo's verified path and to prefer it.
+**Run `/run-skill-generator` and commit the result** — it turns the above into something a session
+follows verbatim instead of re-deriving, and it is maybe ten minutes of work that pays back on
+every future session.

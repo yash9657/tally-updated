@@ -861,10 +861,19 @@ async function main(): Promise<void> {
     const saysMatchingIsMissing = stmt.disclosures.some((d) =>
       d.includes("MATCHING IS NOT BUILT YET"),
     );
+    // ⚠️ ASSERT THE DISCLOSURE ONLY, NOT THE LINE COUNT. This check first read
+    // `&& stmt.lines.length === 0`, which passed on a fresh seed and then FAILED
+    // the moment anybody imported a statement into the demo — including the
+    // session that wrote the check. A gate whose truth depends on what a
+    // previous session happened to do fails for a reason that has nothing to do
+    // with what it is testing.
+    //
+    // The invariant is that the report ALWAYS says matching is not built,
+    // whether it is showing zero rows or four hundred.
     check(
       "the imported-statement report discloses that matching is not built",
-      saysMatchingIsMissing && stmt.lines.length === 0,
-      `${stmt.lines.length} lines, ${stmt.disclosures.length} disclosures` +
+      saysMatchingIsMissing,
+      `${stmt.lines.length} imported line(s), ${stmt.disclosures.length} disclosure(s)` +
         (saysMatchingIsMissing ? "" : " — the matching disclosure is MISSING"),
     );
   }
