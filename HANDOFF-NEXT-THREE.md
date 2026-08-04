@@ -3,12 +3,32 @@
 > **Written 2026-08-03**, at HEAD **`d840bef`**. Companion to `HANDOFF-FEATURE-LOCK.md` (the plan
 > of record) and `HANDOFF-SESSION-T29-IMPORT.md` (what the last session did).
 >
-> **State:** migrations `0068` (0062–0064 also applied) · backend **1977 pass / 0 SKIP / 0 FAIL** ·
-> frontend **461** · `verify:demo` **33/33** · `make verify` exit 0 · tree clean.
+> **State:** migrations **`0070`** · backend **2014 pass / 0 SKIP / 0 FAIL** ·
+> frontend **464** · `verify:demo` **33/33** · `make verify` exit 0.
 >
 > **Read in this order:** §0 (a blocker that was already dead — it changes what "left" means) →
 > §5 (how to RUN it; do this before touching code) → §4.1 (**the trap that will bite slice 2b
 > four times over**) → then §1.
+>
+> ---
+>
+> ### ✅ UPDATE 2026-08-04 — §1.1's FORMAT WORK IS DONE, AND IT REORDERED §1.3
+>
+> `internal/compliance/form140` now encodes the prescribed file format from the workbook: all
+> four record layouts (**FH 18 · BH 72 · CD 30 · DD 45** fields), every annexure, and a pure
+> emitter with a reviewed golden file. `reporting.ReturnFileRefusal()` no longer claims the
+> layout is unread — `format_version` is `"1.0"` with the document cited on the register's own
+> face. **27 new backend tests, 3 new frontend tests.**
+>
+> **⛔ THE ORDERING IN §1.1 vs §1.3 WAS WRONG, AND THE SPEC SAYS SO.** §1.3 called the challan
+> register "the third thing" that merely *interacts* with the return. It is a **HARD
+> PREREQUISITE**: DD field 5 is a **challan reference**, so **no deductee record can exist
+> outside a challan** — not even under a nil one. See §1.1′ and §1.3′ below.
+>
+> **Migrations `0069`/`0070` then shipped in the same session**, and a Form 140 file now
+> assembles from real books (§1.3′). **What is left to make it usable is a WRITE PATH:** there
+> is no route, no screen and no ACL for entering a challan or a deductor profile, so both are
+> seeded by SQL in tests today. **That is the next slice — see §1.4′.**
 
 ---
 
@@ -65,7 +85,42 @@ challan file needs a TIN portal login. So:
 
 Ordered by value. All three are unblocked.
 
-### 1.1 T6 — the Form 140 / 143 return file (**newly unblocked; do this first**)
+### 1.1′ ✅ DONE 2026-08-04 — the Form 140 format, read and implemented
+
+`internal/compliance/form140`: `doc.go` (provenance) · `layout.go` (the four record tables) ·
+`annexure.go` (Annexures 1–7) · `row.go` (the serialiser) · `build.go` (rules + emitter) ·
+`testdata/q2-2026-27.txt` (the golden file, read line-by-line against the workbook).
+
+**What the primary spec settled that would otherwise have been guessed wrong:**
+
+| Finding | Why it matters |
+|---|---|
+| **Annexure 6 is a flag × code VALIDITY MATRIX, and `Y` is not universal.** It is **not valid against `1008`/`1009` (rent)** or **`1028` (directors' fees)** | Rent *has* a ₹50,000/month threshold, so sub-threshold rent payments are ordinary — and there is **no below-threshold flag available for them**. `1009` admits only A, B, C, E. `Build` returns `ErrNoValidReasonFlag` rather than picking between a blank flag and a forbidden one |
+| **`1028` having no `Y` agrees with the statute independently.** `compliance`'s `194J-D` carries `BasisNil` because s.393(1) Sl. No. 6(iii) states the threshold as "Nil" | Two documents read at different times by different means agree a directors' fee cannot be below a threshold. `TestDirectorsFeesHaveNoBelowThresholdFlagAndTheStatuteAgrees` pins the pair |
+| **Flags A, C and E are valid against ALL 40 Annexure 2 codes** — checked row by row | Lets the transcription express them as the whole domain instead of three 40-line copies that drift |
+| **The spec contradicts itself on the File Header.** General Note 10's prose says "16 fields, 15 delimiters"; the FH table lists **18 rows** | We follow the **table** (the two extras are trailing "not applicable" hash fields). `TestFileHeaderHasEighteenFields` makes changing that a loud edit, and it is **the first thing to try if the FVU rejects the header** |
+| Annexure 6 lists `1045`/`1046` against flag `Z`, and neither is in Annexure 2 | Its header reads "Code in FN 139" — the matrix is shared across the form family. Recorded, not silently dropped |
+| Annexure 4's deductor category is **NOT** `compliance`'s s.402(11) `EntityCategory` | Different vocabularies answering different questions (Annexure 4 splits Govt into Central/State and has "Branch/Division of Company"; the statute has neither). Mapping them is a **decision**, and it belongs to whatever stores the deductor profile |
+
+**Deliberate design points, so nobody "fixes" them:**
+
+- **The archtest policy for `form140` is `{}`** — the strictest in the map, with no `platform/db`
+  edge. A return file that queries is one whose output depends on when it ran, and its golden
+  test would need a database to assert a byte sequence transcribed from a spec.
+- **General Note 10 is structural, not checked.** A record is a fixed ordered table; values are
+  set BY FIELD NUMBER; serialisation joins the whole slice. So delimiters = fields−1 on every
+  branch that will ever exist. **Never add an `append`-style writer here.**
+- **Every total is computed, never accepted** — batch total, challan deposit total, the two
+  annexure totals, all record counts. A supplied total that disagrees with its rows is how a
+  register reconciles to nothing.
+- `row.render()` checks unconditional mandatory fields; `build.go` owns the **conditional**
+  ones. `TestTheConditionalFieldsAreTheDocumentedSet` fails if a `cond` field is added without a
+  rule — a `cond` field with no rule is **a mandatory field nothing checks**.
+
+**Both refusals were mutation-proved:** widening `Y` to 1008/1009 fails 2 tests; dropping FH
+field 18 fails 4.
+
+### 1.1 T6 — the Form 140 / 143 return file (**superseded by §1.1′ — kept for the spec detail**)
 
 Everything upstream is done: both taxes derive, refuse, persist, and are visible in a register.
 `reporting.ReturnFileRefusal()` is the thing to replace.
@@ -116,13 +171,94 @@ The import shipped 2026-08-03. This is its other half, and it is the half that c
 > **Read §4.1 before you write the first one.** Then add all four to the map, and add a routing
 > test per key in `AppShell.test.tsx` — the pattern is already there.
 
-### 1.3 T6 — the challan register
+### 1.3′ ✅ DONE 2026-08-04 — both migrations shipped, and the return sources from the books
+
+**Migrations `0069` (`tds_challan` + `tds_challan_allocation`) and `0070` (`company_tds_profile`)
+are applied**, and `reporting.Form140StatementFor` / `Form140File` assemble a real return from
+real vouchers. **10 new integration tests**, all posting through `internal/ledger` and recording
+real challans; three safety mechanisms mutation-proved.
+
+**The two mechanisms that carry the risk:**
+
+1. **`tds_challan_allocation` has NO foreign key to `tds_deduction`, deliberately.**
+   `ledger/tds.go` does `DELETE FROM tds_deduction WHERE company_id=$1 AND voucher_id=$2` and
+   re-derives on every ALTER. So `ON DELETE CASCADE` would **silently destroy the record of a
+   payment really made to the Government**, and `RESTRICT` would make a voucher unalterable
+   once its tax was deposited. Instead it keys on `(voucher_id, section, leg_seq)` — the
+   identity that survives — and **records what was allocated**, so an alter that moves the
+   amount makes it `ErrAllocationBrokenByAlter` and **visible**. This is 0045's mechanism, and
+   `TestAnAlteredVoucherBreaksItsChallanAllocation` asserts both halves: the allocation
+   survives, and the return then refuses.
+2. **A nil challan is NEVER stored.** It is a return artefact — derivable from the zero-tax
+   deductions, dated by the format to the quarter end, corresponding to no event. `tds_challan`
+   has `CHECK (tax+interest+fee+penalty > 0)` so one cannot be inserted, and the emitter
+   synthesises it. The test asserts `tds_challan` is empty after a sub-threshold-only quarter:
+   the first report to `SUM` that table would otherwise count a fiction.
+
+**A seam worth knowing about, found by a failing test:** `tds_deduction.rate_pct` stores the
+rate **that was tested** (10% on a sub-threshold professional fee) because a deduction must be
+re-checkable against the law as it then stood. **The return must write `0.0000`** — DD field 28,
+"if 'Total tax collected' is 0.00 then rate should be 0.0000". Reporting the stored rate would
+assert a deduction that did not happen. The zeroing is in `deducteeFor` and mutation-proved.
+
+**Four refusals, each naming what the operator must do:** `ErrNoDeductorProfile` ·
+`ErrTaxNotDeposited` (there is no "file it unpaid" option — DD field 5 is a challan reference) ·
+`ErrAllocationBrokenByAlter` · `form140.ErrNoValidReasonFlag`.
+
+**Only two Annexure 6 flags are derived, and that is a disclosed limit.** `Y` (below threshold)
+and `C` (higher no-PAN rate) come from stored facts. **The other eleven all rest on a DOCUMENT
+nobody records** — a s.395 certificate, a s.393(6) declaration, a Board circular, a
+transporter's declaration. Deriving one would be asserting a document exists. **That is the next
+schema gap**, and it is what blocks sub-threshold RENT (§1.1′) from ever being filable.
+
+### 1.3″ — the original gap analysis, kept because it is the migration spec
+
+Both gaps were fully specified by `form140.Statement` — read that type alongside 0069/0070.
+
+1. **`tds_challan` does not exist.** `form140.Challan` is the shape: nil indicator, the four-way
+   split (tax / interest / fee / penalty, **whole rupees — the spec forbids paise in these**),
+   BSR code, challan number, book-entry flag, deposit date, Annexure 7 minor head, and the
+   deductions it covers. **The link is not optional**: DD field 5 is a challan reference.
+2. **No deductor return profile.** `company` has `gstin`, `address`, `city`, `pincode`,
+   `country` — and **no TAN, no PAN, no Annexure 4 category, no e-mail, no contact number, and
+   nothing about the person responsible for deduction** (name, designation, address, state, pin,
+   e-mail, contact, and their *own* PAN). That is BH fields 13, 15, 28–30, 32–45 and 59. **The
+   TAN is not the GSTIN and is not derivable from it.**
+
+Two more things now have somewhere to go, answering the "two identifiers with nowhere to live"
+question in §1.1: the **s.395 certificate number** is `Deductee.CertificateNo395` (15 chars,
+mandatory iff flag `A`) and the **UIN of Form No. 121** is `Deductee.UINForm121` (26 chars,
+optional). Both are DD fields; both belong on `tds_deduction`.
+
+### 1.3 T6 — the challan register (original text)
 
 Still true, still the biggest hole in the feature: **no `tds_challan` table exists, so nothing
 tracks what has been DEPOSITED** — and it is the deposit, not the deduction, that stops interest
 running under s.396. `t6-model.md` §1.5. Needs no unread document. Note it interacts with 1.1:
 the return's `CD` (challan detail) records need exactly this data, so **doing 1.1 first will tell
 you the shape 1.3 must store.**
+
+---
+
+### 1.4′ ▶ NEXT — the write path, and it is what makes T6 usable rather than merely correct
+
+The engine derives, the schema stores, the emitter emits, and **nothing in the product can enter
+a challan.** Both new tables are seeded by SQL in tests. To close it:
+
+- **Routes + ACL.** A new table needs a `routeAction` mapping or it default-DENIES; a new report
+  name must be a **flat literal** matching `authz.KnownReportNames` (§2.4 of
+  `PLAN-TALLY-PARITY.md`). Expect an ACL migration — **it takes `0071`.** Note `company_tds_profile`
+  carries a named individual's PAN, so the Data Entry level should be **disallowed**, exactly as
+  0068 does for the register.
+- **Screens.** Challan entry, and the deductor profile under **F11 Company Features**. Both are
+  new screen actions — **read §4.1 first, and register every key in `AppShell.tsx`'s
+  `SCREEN_ACTIONS`**, plus §4.1b: classify any new report in the F2 period lists.
+- **Make the register's `return_file` status COMPANY-AWARE.** It is currently the static
+  build-level refusal for every company. The sourcing layer already produces the four specific
+  refusals; surfacing them would turn "a challan register is missing" into "voucher P1 deducted
+  ₹20,000 from Chitra Consulting and no challan is recorded against it".
+- **Then run it (§5)** and drive a real quarter end-to-end. Three of the last two sessions'
+  findings came from running the app; none came from reading it.
 
 ---
 
@@ -297,6 +433,65 @@ entry. **Copy that pattern for every new screen action.**
 
 > **The general lesson: a test that calls the dispatcher directly is testing the handler, not the
 > keystroke. If a key is the feature, the test must press the key on the real shell.**
+
+### 4.1a ⛔⛔ A `cored` FROM A PREVIOUS SESSION WAS STILL ON :8087, SERVING DAY-OLD CODE
+
+**This cost half an hour and nearly produced a false "the fix does not work".** After changing
+`reporting`, the browser kept showing the OLD refusal text. Everything looked healthy:
+`curl /healthz` returned 200, `docker ps` was fine, and the page loaded.
+
+`make run-cored` had exited immediately with **`listen tcp :8087: bind: address already in
+use`** — into a log nobody was reading — while a **16-hour-old `cored` from the previous
+session** kept answering. §5.2's advice to launch detached (`nohup … & disown`) is what makes
+this possible: a detached process outlives the session that started it.
+
+> **`ps -eo etime` IS A DURATION, NOT A CLOCK TIME.** `16:51:35` read like "started at 16:51"
+> and actually meant **"running for 16 h 51 m"**. That misreading is what made the stale process
+> look like the one just launched.
+
+**Before trusting anything you see in the browser:**
+
+```bash
+lsof -nP -iTCP:8087 -sTCP:LISTEN          # who actually holds the port
+tail -3 /tmp/cored.log                    # did YOUR process bind, or die?
+ps -eo pid,etime,command | grep cored     # etime is AGE. 16:51:35 = 16 hours.
+```
+
+And when in doubt, confirm the running binary has your change in it:
+
+```bash
+strings "$(lsof -nP -iTCP:8087 -sTCP:LISTEN -Fn | ...)" | grep 'YOUR NEW STRING'
+```
+
+**Kill the old stack before starting a new one.** The failure mode is silent, and it makes
+correct code look broken — which is the direction that wastes the most time, because you go
+looking for a bug that is not there.
+
+### 4.1b ⛔ THE F2 PERIOD DIALOG TOLD TWO REPORTS THEIR DATES DID NOTHING
+
+Found by driving the app (§5), not by reading it, and **not by any of the 461 tests** — the same
+way `Alt+O` was found. Worth reading beside §4.1 because it is the same *class* of defect
+arriving through a different mechanism.
+
+`PeriodOverlay` in `FrameOverlays.tsx` classified reports with two hardcoded allowlists and
+**defaulted anything in neither to a plausible sentence**: *"…has no date dimension in this
+build, so a period is not applied to it."* The **TDS / TCS Register** and the **Stock Summary**
+were in neither list, and both read the period and act on it.
+
+On the register the contradiction was on screen **at the same moment**: the page behind the
+dialog reads *"Press F2 to set the period. Both dates are needed"*, and the dialog on top of it
+said the period would be ignored.
+
+> **THE GENERAL LESSON: a default branch that produces a PLAUSIBLE sentence is invisible to
+> tests, because tests assert the sentences they expect and never the one nobody meant to
+> render.** §4.1's lesson is "test the keystroke, not the handler"; this one is **"remove the
+> default, and make every case an explicit decision"**.
+
+Fixed by making the classification exhaustive — `FULL_PERIOD_REPORTS`, `AS_AT_ONLY_REPORTS`,
+`NO_DATE_DIMENSION_REPORTS` — with `periodClassification.test.ts` asserting **every report
+registered in `defaultScreens.tsx` is in exactly one**, and deriving the right answer from what
+each screen actually reads (`periodFrom` + `periodTo` = a period; `periodTo` alone = a
+position). Mutation-proved. **Add a report screen, and you must classify it.**
 
 ### 4.2 A screen action fires before its data has loaded, and that is CORRECT
 
