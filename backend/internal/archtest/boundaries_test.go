@@ -117,6 +117,37 @@ var allowedDeps = map[string]map[string]bool{
 	// transaction, because that column is a fact it compares against a file — not
 	// a master it maintains.
 	"internal/bankstatement": {"internal/platform/db": true},
+	// orders (T3) is the WRITE side of sales/purchase orders and the bill of
+	// materials. It touches the db layer and NOTHING else, and the
+	// empty-but-for-db set is the ARCHITECTURAL ENFORCEMENT OF THE FEATURE'S
+	// CENTRAL RULE:
+	//
+	//	⛔ AN ORDER IS A COMMITTED QUANTITY, NOT A MOVEMENT.
+	//
+	// The stock ledger has exactly one primitive — a positive quantity plus a
+	// direction — and an order is neither. Nothing has moved when a customer
+	// orders 20 units: the goods are still on our shelf, still ours, and still in
+	// closing stock at full value. An edge to internal/ledger here would be the
+	// beginning of "while we are recording this order, also move the stock", which
+	// would corrupt closing stock and therefore the BALANCE SHEET, compounding
+	// with every open order and reconciling against nothing. The empty map makes
+	// that mechanically impossible rather than merely discouraged — the same
+	// argument internal/banking's entry above makes about never touching a
+	// balance while reconciling.
+	//
+	// THE LINK IN THE OTHER DIRECTION ALREADY EXISTS AND IS NOT THIS EDGE.
+	// internal/ledger owns order_fulfilment (fulfilment.go) because a fulfilment
+	// is written INSIDE the voucher's transaction, from the same in-memory slice
+	// as the hashed payload. So the ledger reaches the ORDER TABLES, and this
+	// package must not reach the ledger; the dependency runs one way and the
+	// order table is the shared vocabulary rather than a call.
+	//
+	// The read side is the order book in internal/reporting, which stays
+	// read-only. Note what is NOT here: no edge to internal/inventory, though an
+	// order line names a stock_item_id. It validates that in SQL, inside its own
+	// transaction, because an item is a master it references and not a valuation
+	// it performs.
+	"internal/orders": {"internal/platform/db": true},
 	// reporting gained internal/inventory with the Stock Summary. Stock VALUE is
 	// never stored: the report derives it by replaying the movement ledger through
 	// the pure valuer, so reporting MUST be able to call the leaf. The edge is
@@ -319,7 +350,21 @@ var allowedDeps = map[string]map[string]bool{
 		// the read model is in reporting and the WRITE is in bankstatement. Its
 		// own allowed set is {platform/db}, so the importer can never reach the
 		// ledger either.
-		"internal/bankstatement":   true,
+		"internal/bankstatement": true,
+		// Orders and the bill of materials (T3) split the SAME way, for the same
+		// reason, and the pattern is now three-for-three: the read model is the two
+		// order books in reporting (read-only by its package contract) and the WRITE
+		// is in orders. server is the composition root that owns both sets of
+		// handlers, so it needs both edges.
+		//
+		// ⛔ WHAT THIS EDGE DOES NOT LICENSE: orders' own allowed set is
+		// {platform/db}, so the order writer can never reach the ledger, a voucher or
+		// a balance — which is the architectural statement of "an order is a
+		// committed quantity, not a movement". The fulfilment LINK goes the other way
+		// (internal/ledger owns order_fulfilment, written inside the voucher's
+		// transaction), so the dependency runs one way and the order table is the
+		// shared vocabulary rather than a call.
+		"internal/orders":          true,
 		"internal/forecast":        true,
 		"internal/query":           true,
 		"internal/nlq":             true,

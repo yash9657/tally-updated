@@ -47,6 +47,7 @@ import (
 	"github.com/khata/cored/internal/migration"
 	"github.com/khata/cored/internal/nlq"
 	"github.com/khata/cored/internal/notify"
+	"github.com/khata/cored/internal/orders"
 	"github.com/khata/cored/internal/payroll/payrolldb"
 	"github.com/khata/cored/internal/platform/db"
 	"github.com/khata/cored/internal/printing/printingdb"
@@ -80,6 +81,16 @@ type Server struct {
 	// a write, and internal/reporting is read-only by its package contract. The
 	// READ of what was imported lives in `report`, beside the BRS.
 	bankstmt *bankstatement.Service
+	// orders is the WRITE side of sales/purchase orders and the bill of materials
+	// (T3). A FOURTH write service, for the same reason `banking` and `bankstmt`
+	// are the second and third: internal/reporting is read-only by its package
+	// contract and creating an order is a write. The READ of what is outstanding
+	// lives in `report` as the two order books.
+	//
+	// ⛔ internal/orders may import NOTHING but the db layer — archtest pins it —
+	// because an order is a committed quantity and not a movement. That is why it
+	// is a sibling of the ledger here rather than a caller of it.
+	orders   *orders.Service
 	gstr     *gstr.Service
 	importer *migration.Importer
 	sync     *sync.Service
@@ -207,6 +218,7 @@ func New(ctx context.Context, appDSN string) (*Server, error) {
 		report:   reporting.NewService(pool),
 		banking:  banking.NewService(pool),
 		bankstmt: bankstatement.NewService(pool),
+		orders:   orders.NewService(pool),
 		gstr:     gstr.NewService(pool),
 		importer: migration.NewImporter(m, l),
 		sync:     sync.NewService(l, pool),
@@ -528,6 +540,34 @@ func (s *Server) routes() {
 		r.Get("/cost-categories", s.handleListCostCategories)
 		r.Post("/cost-categories", s.handleCreateCostCategory)
 		r.Put("/cost-categories/{categoryID}", s.handleRenameCostCategory)
+		// T3 — ORDERS AND THE BILL OF MATERIALS (migrations 0042, 0043).
+		//
+		// ⛔ TWO ROUTE FAMILIES OVER ONE order_head TABLE, and the split is in the
+		// PATH because routeAction sees the path and not the body: `sales-order` and
+		// `purchase-order` are separate authorities (a salesperson keys what
+		// customers want; a purchase clerk commits the company to spending), and a
+		// `direction` body field would let a caller holding one POST the other.
+		//
+		// None of these is a report — an order is a MASTER-like object, and the two
+		// outstanding-position REPORTS are the order books mounted further down. See
+		// handler_orders.go's header.
+		r.Post("/sales-orders", s.postOrder(orders.Sales))
+		r.Get("/sales-orders", s.getOrders(orders.Sales))
+		r.Get("/sales-orders/{orderID}", s.getOrder(orders.Sales))
+		r.Put("/sales-orders/{orderID}/close", s.putOrderClose(orders.Sales))
+		r.Post("/purchase-orders", s.postOrder(orders.Purchase))
+		r.Get("/purchase-orders", s.getOrders(orders.Purchase))
+		r.Get("/purchase-orders/{orderID}", s.getOrder(orders.Purchase))
+		r.Put("/purchase-orders/{orderID}/close", s.putOrderClose(orders.Purchase))
+		// The recipe. `/explode` is a GET because it WRITES NOTHING: it returns what
+		// a Stock Journal's lines would be, and the operator posts that journal
+		// themselves — which is what keeps a manufacture an auditable voucher rather
+		// than a side effect of opening a recipe.
+		r.Post("/boms", s.postBom)
+		r.Get("/boms", s.getBoms)
+		r.Get("/boms/{bomID}", s.getBom)
+		r.Get("/boms/{bomID}/explode", s.getBomExplode)
+
 		r.Get("/cost-centres", s.handleListCostCentres)
 		r.Post("/cost-centres", s.handleCreateCostCentre)
 		r.Put("/cost-centres/{centreID}", s.handleAlterCostCentre)

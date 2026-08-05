@@ -2231,10 +2231,17 @@ export interface CostCategorySummaryResponse {
  */
 export type OrderDirection = 'SALES' | 'PURCHASE';
 
-/** One committed item quantity on an order. */
+/**
+ * One committed item quantity on an order.
+ *
+ * ⛔ NO `line_no`. The SERVER assigns it from the position of this entry in the
+ * `lines` array (the first line is 1), exactly as it does for a voucher's inventory
+ * grid. A client-supplied line number would be a second source of truth for the
+ * same ordinal, and the two would part company the first time a form let an
+ * operator delete a middle line. It comes BACK on {@link OrderLineView}, which is
+ * where a fulfilment or a printed order refers to it.
+ */
 export interface OrderLineInput {
-  /** 1-BASED position within the order, preserving the operator's input order. */
-  line_no: number;
   stock_item_id: string;
   /** fixed-4. The COMMITTED quantity — always positive; the order's direction carries the sense. */
   qty: Money;
@@ -2254,7 +2261,17 @@ export interface OrderLineInput {
 }
 
 export interface CreateOrderRequest {
-  direction: OrderDirection;
+  /**
+   * ⛔ THERE IS NO `direction` FIELD, AND ITS ABSENCE IS LOAD-BEARING. The ROUTE
+   * carries the direction (`/sales-orders` vs `/purchase-orders`), because the
+   * server's PDP reads the PATH to decide whether this request is `sales-order` or
+   * `purchase-order` authority. A body field would let a caller authorised only for
+   * sales orders POST a purchase commitment to the sales route and have it
+   * accepted — the PDP would have said yes to the wrong object.
+   *
+   * Pick the method, not a field: {@link CoredClient.createSalesOrder} or
+   * {@link CoredClient.createPurchaseOrder}.
+   */
   order_no: string;
   order_date: string;
   /** The customer (SALES) or the supplier (PURCHASE). A party LEDGER id. */
@@ -2277,7 +2294,22 @@ export interface CreateOrderRequest {
  */
 export interface OrderLineView extends OrderLineInput {
   order_line_id: string;
+  /**
+   * 1-BASED position within the order, assigned by the server — see
+   * {@link OrderLineInput}. It is what an operator reads off the printed order when
+   * they ask "which line is short".
+   */
+  line_no: number;
   stock_item: string;
+  /**
+   * ⛔ REQUIRED ON THE WAY BACK, though {@link OrderLineInput.rate} is optional on
+   * the way in. The server defaults an omitted rate to zero and always sends a
+   * fixed-4 string, so inheriting the input's optionality would be a type that
+   * LIES ABOUT THE RESPONSE — the exact shape of defect that shipped in T2, where
+   * `rest.ts` typed a response envelope as the flat view it wished existed and
+   * every field read `undefined` at runtime while the code type-checked.
+   */
+  rate: Money;
   fulfilled_qty: Money;
   /** qty - fulfilled_qty. Never negative: over-fulfilment is refused. */
   outstanding_qty: Money;
@@ -2360,10 +2392,20 @@ export interface OrderBookResponse {
  * (wanted / output_qty).
  */
 export interface BomComponentInput {
-  line_no: number;
   stock_item_id: string;
   /** fixed-4. Consumed to yield `output_qty` of the finished good — NOT per unit of it. */
   qty: Money;
+}
+
+/**
+ * A recipe component as READ BACK, carrying the `line_no` the server assigned from
+ * its position — the same asymmetry {@link OrderLineInput} records, and for the same
+ * reason: a client-supplied ordinal would be a second source of truth for the
+ * position, and the two part company the first time a form deletes a middle line.
+ */
+export interface BomComponentView extends BomComponentInput {
+  line_no: number;
+  stock_item: string;
 }
 
 export interface CreateBomRequest {
@@ -2389,7 +2431,7 @@ export interface BomView {
   name: string;
   output_qty: Money;
   is_default: boolean;
-  components: (BomComponentInput & { stock_item: string })[];
+  components: BomComponentView[];
 }
 
 /**
@@ -2475,4 +2517,33 @@ export interface EWayBillResponse {
    * optional — the whole disclosure discipline rests on it reaching the paper.
    */
   disclosures: string[];
+}
+
+/** The order list: heads only, WITHOUT their lines — see {@link OrderView}. */
+export interface OrderListResponse {
+  direction: OrderDirection;
+  orders: Omit<OrderView, 'lines'>[];
+  /**
+   * Echoed so a screen cannot render a filtered list under an unfiltered heading.
+   * "No orders" and "no OPEN orders" are different answers to an operator.
+   */
+  open_only: boolean;
+}
+
+/** The recipe list: heads only, WITHOUT their components. */
+export interface BomListResponse {
+  boms: Omit<BomView, 'components'>[];
+}
+
+/**
+ * ABANDON an order, with a required reason — NOT "mark it fulfilled".
+ *
+ * `is_closed: false` re-opens it and clears the reason together, because the
+ * server refuses a reason on an open order: a reason attached to something that
+ * has not happened is a claim about nothing.
+ */
+export interface CloseOrderRequest {
+  is_closed: boolean;
+  /** Required when closing. Omit (or send empty) when re-opening. */
+  reason?: string;
 }

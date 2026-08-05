@@ -63,6 +63,15 @@ import type {
   CostCategory,
   CostCategoryListResponse,
   CostCategorySummaryResponse,
+  CreateOrderRequest,
+  CloseOrderRequest,
+  OrderListResponse,
+  OrderView,
+  CreateBomRequest,
+  BomListResponse,
+  BomView,
+  BomExplosionResponse,
+  OrderBookResponse,
   CostCentreListResponse,
   CostCentreWriteResponse,
   CostCentreSummaryResponse,
@@ -427,6 +436,143 @@ export interface CoredClient {
     from: string,
     to: string,
   ): Promise<CostCategorySummaryResponse>;
+
+  // ---- T3: sales/purchase orders, the bill of materials, and the order books.
+  //
+  // ⛔ THE ONE RULE THAT GOVERNS EVERY CALLER OF THESE: AN ORDER IS A COMMITTED
+  // QUANTITY, NOT A MOVEMENT. Nothing here affects closing stock, the Profit & Loss
+  // or the Balance Sheet, and an order must never be shown in the Day Book beside
+  // vouchers — it is a promise, not an entry.
+  //
+  // ⚠️ AND THE SECOND RULE, WHICH IS AN AUTHORISATION FACT: sales and purchase
+  // orders are SEPARATE authorities with separate routes and separate report names.
+  // Do not build one screen with a direction toggle — the toggle would be reaching
+  // a resource the operator may be denied, and they would see a 403 they cannot
+  // explain.
+
+  /**
+   * Create an order. The DIRECTION IS THE METHOD, not a field: `direction` is not
+   * on {@link CreateOrderRequest}'s wire body at all, because the server decides
+   * the authority from the path.
+   *
+   * A 409 means the number is taken FOR THAT DIRECTION, matched
+   * case-insensitively — a sales and a purchase order may share a number.
+   */
+  createSalesOrder(
+    companyID: string,
+    req: CreateOrderRequest,
+  ): Promise<{ order_id: string }>;
+  createPurchaseOrder(
+    companyID: string,
+    req: CreateOrderRequest,
+  ): Promise<{ order_id: string }>;
+  /**
+   * List orders in one direction. `openOnly` narrows to orders with something still
+   * outstanding, which is what a fulfilment picker wants.
+   *
+   * ⚠️ The rows carry NO lines: loading every line of every order to render a
+   * picker is how a list of a thousand orders becomes a request that times out.
+   * Call {@link ClientApi.getSalesOrder} for the lines.
+   */
+  listSalesOrders(
+    companyID: string,
+    openOnly?: boolean,
+  ): Promise<OrderListResponse>;
+  listPurchaseOrders(
+    companyID: string,
+    openOnly?: boolean,
+  ): Promise<OrderListResponse>;
+  /**
+   * One order with its lines and their DERIVED fulfilment.
+   *
+   * ⚠️ A 404 here can mean "no such order" OR "that id is an order of the OTHER
+   * direction" — both families read one table and the server refuses to serve one
+   * through the other's route, because a caller authorised only for sales orders
+   * would otherwise read the company's purchase commitments. Do not report a 404
+   * as "deleted".
+   *
+   * ⛔ `fulfilled_qty` and `outstanding_qty` are DERIVED SERVER-SIDE on every read
+   * and are not stored anywhere. Do not cache them across a voucher edit: altering
+   * a delivery note changes them without touching the order.
+   */
+  getSalesOrder(companyID: string, orderID: string): Promise<OrderView>;
+  getPurchaseOrder(companyID: string, orderID: string): Promise<OrderView>;
+  /**
+   * ABANDON an order, with a required reason — NOT "mark it fulfilled". Fulfilment
+   * is derived and can never be asserted; this says the commitment will not be met
+   * and should leave the order book.
+   *
+   * `is_closed: false` re-opens it and clears the reason, which is the only reading
+   * under which "I closed the wrong order" is correctable. Closing with no reason
+   * is a 422: an abandoned commitment with no stated cause cannot be told apart
+   * from a mistake.
+   */
+  closeSalesOrder(
+    companyID: string,
+    orderID: string,
+    req: CloseOrderRequest,
+  ): Promise<{ order_id: string; is_closed: boolean }>;
+  closePurchaseOrder(
+    companyID: string,
+    orderID: string,
+    req: CloseOrderRequest,
+  ): Promise<{ order_id: string; is_closed: boolean }>;
+
+  /**
+   * Create a recipe. ⛔ Send `output_qty` as the YIELD and the components stated
+   * AGAINST it — never pre-divided per unit. A 10kg-makes-3 recipe normalised to
+   * 3.3333/unit truncates and shorts every batch forever; see {@link CreateBomRequest}.
+   *
+   * A 409 means either the recipe NAME is taken on that item, or the item already
+   * has a DEFAULT recipe. The two need different sentences: the first is "pick
+   * another name", the second is "clear the other default or add this as an
+   * alternative".
+   */
+  createBom(companyID: string, req: CreateBomRequest): Promise<{ bom_id: string }>;
+  /**
+   * List recipes, optionally for one item.
+   *
+   * ⚠️ OMIT `stockItemID` to list every recipe — sending the all-zeros uuid is a
+   * 400, not a synonym for "no filter". The rows carry no components, for the
+   * reason the order list carries no lines.
+   */
+  listBoms(companyID: string, stockItemID?: string): Promise<BomListResponse>;
+  getBom(companyID: string, bomID: string): Promise<BomView>;
+  /**
+   * Scale a recipe to a batch size. `qty` is REQUIRED — there is no default,
+   * because guessing 1 would answer a question about a different batch.
+   *
+   * ⛔ IT WRITES NOTHING AND POSTS NOTHING. The response is what a Stock Journal's
+   * lines WOULD be; the operator submits that voucher themselves, which is what
+   * keeps a manufacture an auditable entry rather than a side effect of opening a
+   * recipe. And RENDER `notes` — they state that the explosion is SINGLE-LEVEL, so
+   * a screen does not imply it reached raw materials.
+   */
+  explodeBom(
+    companyID: string,
+    bomID: string,
+    qty: string,
+  ): Promise<BomExplosionResponse>;
+
+  /**
+   * THE ORDER BOOKS — outstanding commitments, per direction, as at a date.
+   *
+   * ⛔ TWO METHODS AND NOT ONE WITH A DIRECTION ARGUMENT, mirroring the two report
+   * names. The PDP decides on the report name, so a caller may hold one and be
+   * denied the other; a single method would hide that behind an argument and
+   * produce a 403 nobody can attribute.
+   *
+   * `asOn` may be omitted, and then the position is from every order ever placed.
+   * The response SAYS SO in `notes` rather than leaving a reader to assume a default.
+   */
+  salesOrderBook(
+    companyID: string,
+    asOn?: string,
+  ): Promise<OrderBookResponse>;
+  purchaseOrderBook(
+    companyID: string,
+    asOn?: string,
+  ): Promise<OrderBookResponse>;
 
   createGroup(
     companyID: string,

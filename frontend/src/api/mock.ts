@@ -95,6 +95,15 @@ import type {
   CostCategory,
   CostCategoryListResponse,
   CostCategorySummaryResponse,
+  CreateOrderRequest,
+  CloseOrderRequest,
+  OrderDirection,
+  OrderListResponse,
+  OrderView,
+  OrderBookRow,
+  OrderBookResponse,
+  CreateBomRequest,
+  BomView,
   CostCentre,
   CostCentreListResponse,
   CostCentreWriteResponse,
@@ -1498,6 +1507,249 @@ function mockAllocationFor(centreID: string): Money {
 
 export function createMockClient(opts: MockClientOptions = {}): CoredClient {
   const companies = new Map<string, MockCompany>();
+
+  // =========================================================================
+  // T3 mock state and helpers
+  // =========================================================================
+  // MockOrder is an OrderView whose closure fields are mutable, because closing is
+  // the one thing about an order a caller can change. Everything else on an order
+  // is immutable here: the mock has no revise-line route because the server's
+  // ReviseLineQty is not exposed over HTTP yet, and inventing one would let a screen
+  // be built against a route that does not exist.
+  type MockOrder = Omit<OrderView, "is_closed" | "closed_reason"> & {
+    is_closed: boolean;
+    closed_reason: string;
+  };
+
+  // Module-scoped arrays, matching how the rest of this file holds mutable mock
+  // state. ⚠️ THE FIXTURE STARTS EMPTY, deliberately: an order book that came
+  // pre-populated would let a screen render rows it never fetched, and the FIRST
+  // thing a T3 screen has to get right is the empty state — "nothing outstanding"
+  // is a real and common answer that reads very differently from "not loaded".
+  const mockOrders: MockOrder[] = [];
+  const mockBoms: BomView[] = [];
+
+  /** fixed4 is how the server sends every quantity and rate. A JSON number is a
+   * float64 and a commitment is not a thing to send through one. */
+  function fixed4(v: string): string {
+    const n = Number(v);
+    return Number.isFinite(n) ? n.toFixed(4) : "0.0000";
+  }
+
+  // ⛔ EVERY ONE OF THESE HELPERS IS `async`, AND THAT IS NOT A STYLE CHOICE.
+  //
+  // A method typed as returning a Promise that THROWS SYNCHRONOUSLY does not
+  // reject — the exception escapes before a promise exists, so `client.create(...)
+  // .catch(h)` never runs `h` and the error surfaces as an unhandled throw at the
+  // call site. The real server always answers with a rejected promise, so a
+  // synchronous throw here is a behavioural difference between the mock and the
+  // wire, of exactly the kind this file's own test suite exists to catch. It DID
+  // catch it: the first run of orders.test.ts failed with the ApiError escaping
+  // `expect(...).rejects`, which is the symptom a screen would see as a crash
+  // rather than a handled 422.
+  async function mockCreateOrder(
+    companyID: string,
+    direction: OrderDirection,
+    req: CreateOrderRequest,
+  ): Promise<{ order_id: string }> {
+    ensure(companyID);
+    const no = (req.order_no ?? "").trim();
+    if (no === "") {
+      throw new ApiError(422, "orders: an order needs a number");
+    }
+    if (!req.order_date) {
+      throw new ApiError(422, "orders: an order needs a date");
+    }
+    if (!req.party_ledger_id) {
+      throw new ApiError(
+        422,
+        `orders: a ${direction.toLowerCase()} order needs a party ledger — without one the order book cannot group by counterparty`,
+      );
+    }
+    if (!req.lines || req.lines.length === 0) {
+      throw new ApiError(
+        422,
+        "orders: an order with no lines commits nothing — there is no quantity to be outstanding",
+      );
+    }
+    for (const l of req.lines) {
+      if (!l.stock_item_id) {
+        throw new ApiError(422, "orders: every line must name a stock item");
+      }
+      if (!l.qty || Number(l.qty) <= 0) {
+        throw new ApiError(
+          422,
+          "orders: the committed quantity must be more than zero — a commitment is a MAGNITUDE and the order's direction carries the sense",
+        );
+      }
+    }
+    // ⛔ UNIQUE PER DIRECTION, CASE-INSENSITIVELY — and a sales and a purchase order
+    // MAY share a number, which is why the filter includes the direction. Matching
+    // company-wide would refuse a legitimate PO-1 beside SO-1.
+    if (
+      mockOrders.some(
+        (o) =>
+          o.direction === direction &&
+          o.order_no.trim().toLowerCase() === no.toLowerCase(),
+      )
+    ) {
+      throw new ApiError(
+        409,
+        `orders: this company already has a ${direction.toLowerCase()} order numbered "${no}" — order numbers are unique per direction and are matched case-insensitively`,
+      );
+    }
+    const orderID = id("order");
+    mockOrders.push({
+      order_id: orderID,
+      direction,
+      order_no: no,
+      order_date: req.order_date,
+      party_ledger_id: req.party_ledger_id,
+      party: req.party_ledger_id,
+      narration: req.narration ?? "",
+      is_closed: false,
+      closed_reason: "",
+      lines: req.lines.map((l, i) => ({
+        order_line_id: id("order-line"),
+        line_no: i + 1,
+        stock_item_id: l.stock_item_id,
+        stock_item: l.stock_item_id,
+        qty: fixed4(l.qty),
+        rate: fixed4(l.rate ?? "0"),
+        due_date: l.due_date,
+        // DERIVED on the server and zero on a fresh order. The mock keeps the pair
+        // rather than one figure, because a screen needs both: 5 outstanding reads
+        // completely differently against a commitment of 6 than against 500.
+        fulfilled_qty: "0.0000",
+        outstanding_qty: fixed4(l.qty),
+      })),
+    });
+    return { order_id: orderID };
+  }
+
+  /** mockFindOrder enforces the DIRECTION GUARD, which is the single most important
+   * behaviour in this block.
+   *
+   * ⛔ A 404 AND NOT A 403. Both directions live in one table on the server and
+   * routeAction admits a caller to /sales-orders/{any-id}, so the handler refuses an
+   * id of the other direction — otherwise a caller holding only `sales-order` reads
+   * the company's purchase commitments. "Forbidden" would confirm the id names
+   * something real; "not found" is the honest answer for this path. A mock that
+   * served it would let a screen be built against a leak. */
+  function mockFindOrder(direction: OrderDirection, orderID: string): MockOrder {
+    const o = mockOrders.find((x) => x.order_id === orderID);
+    if (!o || o.direction !== direction) {
+      throw new ApiError(404, `no such ${direction.toLowerCase()} order`);
+    }
+    return o;
+  }
+
+  async function mockListOrders(
+    companyID: string,
+    direction: OrderDirection,
+    openOnly?: boolean,
+  ): Promise<OrderListResponse> {
+    ensure(companyID);
+    const rows = mockOrders.filter((o) => {
+      if (o.direction !== direction) return false;
+      if (!openOnly) return true;
+      // A closed order is not outstanding however little was delivered, and neither
+      // is a fully delivered one.
+      return (
+        !o.is_closed &&
+        o.lines.some((l) => Number(l.outstanding_qty) > 0)
+      );
+    });
+    return {
+      direction,
+      orders: rows.map(({ lines: _lines, ...head }) => head),
+      open_only: openOnly ?? false,
+    };
+  }
+
+  async function mockGetOrder(
+    companyID: string,
+    direction: OrderDirection,
+    orderID: string,
+  ): Promise<OrderView> {
+    ensure(companyID);
+    return mockFindOrder(direction, orderID);
+  }
+
+  async function mockCloseOrder(
+    companyID: string,
+    direction: OrderDirection,
+    orderID: string,
+    req: CloseOrderRequest,
+  ): Promise<{ order_id: string; is_closed: boolean }> {
+    ensure(companyID);
+    const o = mockFindOrder(direction, orderID);
+    const reason = (req.reason ?? "").trim();
+    if (req.is_closed && reason === "") {
+      // ⛔ The server refuses this (0042 CHECKs it): an abandoned commitment with no
+      // stated cause is the row an auditor asks about, and it cannot be told apart
+      // from a mistake.
+      throw new ApiError(
+        422,
+        "orders: closing an order needs a reason — an abandoned commitment with no stated cause cannot be told apart from a mistake",
+      );
+    }
+    o.is_closed = req.is_closed;
+    // Cleared TOGETHER with the flag, because the server refuses a reason on an open
+    // order: a reason attached to something that has not happened is a claim about
+    // nothing.
+    o.closed_reason = req.is_closed ? reason : "";
+    return { order_id: orderID, is_closed: o.is_closed };
+  }
+
+  async function mockOrderBook(
+    companyID: string,
+    direction: OrderDirection,
+    asOn?: string,
+  ): Promise<OrderBookResponse> {
+    ensure(companyID);
+    const rows: OrderBookRow[] = [];
+    let total = 0;
+    for (const o of mockOrders) {
+      if (o.direction !== direction || o.is_closed) continue;
+      for (const l of o.lines) {
+        const out = Number(l.outstanding_qty);
+        // A line with nothing outstanding is EXCLUDED, matching the server: an order
+        // book is a list of what is still owed, and a delivered line on it is a row
+        // an operator has to read and dismiss.
+        if (out <= 0) continue;
+        const value = out * Number(l.rate);
+        total += value;
+        rows.push({
+          order_id: o.order_id,
+          order_no: o.order_no,
+          order_date: o.order_date,
+          party: o.party,
+          order_line_id: l.order_line_id,
+          stock_item: l.stock_item,
+          qty: l.qty,
+          fulfilled_qty: l.fulfilled_qty,
+          outstanding_qty: l.outstanding_qty,
+          rate: l.rate,
+          outstanding_value: value.toFixed(4),
+          due_date: l.due_date ?? "",
+          // ⚠️ A LINE WITH NO AGREED DUE DATE IS NEVER OVERDUE, however old.
+          // Treating an absent date as today's would invent a commitment the
+          // business never made.
+          is_overdue: Boolean(l.due_date && asOn && l.due_date < asOn),
+        });
+      }
+    }
+    return {
+      direction,
+      as_on: asOn ?? "",
+      rows,
+      total_outstanding_value: total.toFixed(4),
+      notes: [
+        "Outstanding quantities and value at the ORDER's agreed rate. An order is a committed quantity and not a movement, so nothing on this report affects closing stock, the Profit & Loss or the Balance Sheet.",
+      ],
+    };
+  }
 
   function ensure(companyID: string): MockCompany {
     let c = companies.get(companyID);
@@ -4814,6 +5066,195 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         ledgers_ensured: 0,
         posted: [],
       };
+    },
+
+    // =======================================================================
+    // T3 — ORDERS, THE BILL OF MATERIALS, AND THE ORDER BOOKS
+    // =======================================================================
+    // ⛔⛔ THIS MOCK REFUSES WHAT THE SERVER REFUSES, AND ITS RESPONSE SHAPES ARE
+    // THE SERVER'S. That is not tidiness — it is the one rule this file exists to
+    // follow, and it was broken TWICE in the session that built T2: once for a
+    // missing created_by (server 400, mock 201) and once for a response SHAPE (the
+    // server nests a view under `cost_centre` and may send it null; the mock
+    // returned it flat, rest.ts typed the envelope AS the flat view, and every
+    // field read undefined at runtime while the code type-checked).
+    //
+    // 597 green frontend tests sat on top of a create path that could not work in a
+    // browser. So each refusal below is DIFFED AGAINST THE HANDLER, not against the
+    // type I would like to exist:
+    //
+    //	duplicate order number, case-insensitive, PER DIRECTION        -> 409
+    //	closing with no reason                                         -> 422
+    //	an id of the OTHER direction on this direction's route          -> 404
+    //	a second DEFAULT recipe for one item                            -> 409
+    //	a recipe naming its own finished good as a component            -> 422
+    //	an all-zeros stock_item_id filter (uuid.Nil is "absent")        -> 400
+    //	explode with no qty                                             -> 400
+    createSalesOrder(companyID, req: CreateOrderRequest) {
+      return mockCreateOrder(companyID, "SALES", req);
+    },
+    createPurchaseOrder(companyID, req: CreateOrderRequest) {
+      return mockCreateOrder(companyID, "PURCHASE", req);
+    },
+    async listSalesOrders(companyID, openOnly?: boolean) {
+      return mockListOrders(companyID, "SALES", openOnly);
+    },
+    async listPurchaseOrders(companyID, openOnly?: boolean) {
+      return mockListOrders(companyID, "PURCHASE", openOnly);
+    },
+    async getSalesOrder(companyID, orderID: string) {
+      return mockGetOrder(companyID, "SALES", orderID);
+    },
+    async getPurchaseOrder(companyID, orderID: string) {
+      return mockGetOrder(companyID, "PURCHASE", orderID);
+    },
+    async closeSalesOrder(companyID, orderID: string, req: CloseOrderRequest) {
+      return mockCloseOrder(companyID, "SALES", orderID, req);
+    },
+    async closePurchaseOrder(companyID, orderID: string, req: CloseOrderRequest) {
+      return mockCloseOrder(companyID, "PURCHASE", orderID, req);
+    },
+    async createBom(companyID, req: CreateBomRequest) {
+      ensure(companyID);
+      const name = (req.name ?? "").trim();
+      if (!req.stock_item_id) {
+        throw new ApiError(422, "orders: a bill of materials must name the finished good it produces");
+      }
+      if (name === "") {
+        throw new ApiError(422, "orders: a bill of materials needs a name");
+      }
+      if (!req.output_qty || Number(req.output_qty) <= 0) {
+        throw new ApiError(
+          422,
+          "orders: the yield must be more than zero — the explosion scales the components by (wanted / yield)",
+        );
+      }
+      if (!req.components || req.components.length === 0) {
+        throw new ApiError(
+          422,
+          "orders: a recipe with no components consumes nothing — exploding it would produce a finished good out of thin air",
+        );
+      }
+      for (const c of req.components) {
+        if (c.stock_item_id === req.stock_item_id) {
+          throw new ApiError(
+            422,
+            "orders: the finished good cannot also be a component of its own recipe — exploding it would consume the very thing it produces",
+          );
+        }
+      }
+      const seen = new Set<string>();
+      for (const c of req.components) {
+        if (seen.has(c.stock_item_id)) {
+          throw new ApiError(422, "orders: the same item appears twice in this recipe");
+        }
+        seen.add(c.stock_item_id);
+      }
+      if (
+        mockBoms.some(
+          (b) =>
+            b.stock_item_id === req.stock_item_id &&
+            b.name.trim().toLowerCase() === name.toLowerCase(),
+        )
+      ) {
+        throw new ApiError(409, `orders: this item already has a recipe named "${name}"`);
+      }
+      if (req.is_default && mockBoms.some((b) => b.stock_item_id === req.stock_item_id && b.is_default)) {
+        // ⛔ Two defaults is a silent coin flip over which recipe a manufacture used,
+        // and the two consume different materials.
+        throw new ApiError(
+          409,
+          "orders: this item already has a DEFAULT recipe — clear the other default first, or add this one as a non-default alternative",
+        );
+      }
+      const bomID = id("bom");
+      mockBoms.push({
+        bom_id: bomID,
+        stock_item_id: req.stock_item_id,
+        stock_item: req.stock_item_id,
+        name,
+        output_qty: fixed4(req.output_qty),
+        is_default: req.is_default ?? false,
+        components: req.components.map((c, i) => ({
+          line_no: i + 1,
+          stock_item_id: c.stock_item_id,
+          stock_item: c.stock_item_id,
+          qty: fixed4(c.qty),
+        })),
+      });
+      return { bom_id: bomID };
+    },
+    async listBoms(companyID, stockItemID?: string) {
+      ensure(companyID);
+      // ⛔ THE ALL-ZEROS UUID IS REFUSED, not treated as "no filter". uuid.Nil is the
+      // server's absent-sentinel, so an explicit zero would silently return EVERY
+      // recipe with a 200 and a truthful-looking body — the defect that shipped in
+      // T2's cost-centre filter.
+      if (stockItemID === "00000000-0000-0000-0000-000000000000") {
+        throw new ApiError(
+          400,
+          "stock_item_id must be the uuid of a stock item; omit it entirely to list every recipe",
+        );
+      }
+      const rows = stockItemID
+        ? mockBoms.filter((b) => b.stock_item_id === stockItemID)
+        : mockBoms;
+      return {
+        boms: rows.map(({ components: _components, ...head }) => head),
+      };
+    },
+    async getBom(companyID, bomID: string) {
+      ensure(companyID);
+      const b = mockBoms.find((x) => x.bom_id === bomID);
+      if (!b) {
+        throw new ApiError(404, "orders: no such bill of materials in this company");
+      }
+      return b;
+    },
+    async explodeBom(companyID, bomID: string, qty: string) {
+      ensure(companyID);
+      if (!qty || qty.trim() === "") {
+        throw new ApiError(
+          400,
+          "qty is required — there is no sensible default: guessing 1 would quietly answer a question about a different batch size",
+        );
+      }
+      const wanted = Number(qty);
+      if (!Number.isFinite(wanted) || wanted <= 0) {
+        throw new ApiError(422, "orders: the quantity to make must be more than zero");
+      }
+      const b = mockBoms.find((x) => x.bom_id === bomID);
+      if (!b) {
+        throw new ApiError(404, "orders: no such bill of materials in this company");
+      }
+      const output = Number(b.output_qty);
+      return {
+        bom_id: b.bom_id,
+        stock_item: b.stock_item,
+        wanted_qty: fixed4(qty),
+        output_qty: b.output_qty,
+        // ⛔ MULTIPLY THEN DIVIDE, matching orders.ScaleComponent exactly. Computing
+        // the ratio first shorts every non-whole-multiple batch, always downward. The
+        // mock reproducing the server's arithmetic is the point: a screen developed
+        // against a mock that rounded differently would show one number here and
+        // another in production.
+        components: b.components.map((c) => ({
+          stock_item_id: c.stock_item_id,
+          stock_item: c.stock_item,
+          qty: fixed4(String((Number(c.qty) * wanted) / output)),
+        })),
+        notes: [
+          `Scaled from the recipe as written: ${b.output_qty} of ${b.stock_item} yields ${b.output_qty}.`,
+          "SINGLE-LEVEL explosion: a component that has its own bill of materials is NOT exploded further.",
+          "Nothing has moved. This is what a Stock Journal's lines WOULD be.",
+        ],
+      };
+    },
+    async salesOrderBook(companyID, asOn?: string) {
+      return mockOrderBook(companyID, "SALES", asOn);
+    },
+    async purchaseOrderBook(companyID, asOn?: string) {
+      return mockOrderBook(companyID, "PURCHASE", asOn);
     },
   };
 }

@@ -30,17 +30,18 @@ package server_test
 //	GET  /v1/companies/{id}/sales-order-book?as_on=2026-07-31
 //
 // ===========================================================================
-// ⚠️ WHAT THIS TEST DOES *NOT* PROVE, STATED SO NOBODY READS MORE INTO A GREEN
+// ⛔ EVERY STEP IS A REAL HTTP REQUEST, INCLUDING CREATING THE ORDER
 // ===========================================================================
-// THE ORDER ITSELF IS SEEDED BY SQL, because there is no order-creation route
-// yet. So this proves the FULFILMENT wire and the ORDER BOOK are reachable from a
-// client; it does NOT prove a human can create an order from inside the product,
-// because they cannot. That gap is the exact shape of T2's remaining one (its
-// masters and reports shipped and the allocation UI did not), and naming it here
-// is the difference between a known gap and a claim that quietly overstates.
+// An earlier revision of this file seeded the order by SQL, because the
+// order-creation route did not exist yet, and said so in this comment rather than
+// implying otherwise. The route exists now and the caveat is GONE rather than
+// weakened: the order, its line, the delivery note and the read-back are all
+// requests a browser could make. The only SQL left is the opening stock, and that
+// is a fixture concern (a Delivery Note needs something on the shelf) rather than
+// part of the feature under test.
 //
-// When the order routes land, the seedOrderSQL helper below should be replaced by
-// POSTs and this comment deleted — not weakened.
+// That is the standard to hold: a test whose fixture reaches around the API is
+// evidence about the layers under it, not about whether anyone can use the thing.
 
 import (
 	"context"
@@ -102,7 +103,6 @@ func newOrderHTTPFixture(t *testing.T, srv *server.Server) orderHTTPFixture {
 	if err != nil {
 		t.Fatalf("parse stock item id: %v", err)
 	}
-	orderID, orderLineID := uuid.New(), uuid.New()
 	openingID := uuid.New()
 	var partyLedger, godown uuid.UUID
 	if err := pool.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
@@ -120,31 +120,59 @@ func newOrderHTTPFixture(t *testing.T, srv *server.Server) orderHTTPFixture {
 		}
 		// Opening stock, so the delivery does not trip stock_movement_not_negative
 		// before it ever reaches the fulfilment path — that would be a refusal for
-		// the wrong reason, which reads as coverage and is not.
-		if _, err := tx.Exec(ctx,
+		// the wrong reason, which reads as coverage and is not. THE ONLY SQL LEFT IN
+		// THIS FIXTURE, and it is a fixture concern rather than the feature.
+		_, err := tx.Exec(ctx,
 			`INSERT INTO stock_opening (id, company_id, stock_item_id, godown_id, qty, rate)
 			 VALUES ($1, $2, $3, $4, 1000, 100)`,
-			openingID, cid, itemID, godown); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO order_head
-			   (id, company_id, direction, order_no, order_date, party_ledger_id, created_by)
-			 VALUES ($1, $2, 'SALES', $3, DATE '2026-06-01', $4, 'owner')`,
-			orderID, cid, "SO-"+orderID.String()[:8], partyLedger); err != nil {
-			return err
-		}
-		_, err := tx.Exec(ctx,
-			`INSERT INTO order_line
-			   (id, company_id, order_id, line_no, stock_item_id, qty, rate, due_date)
-			 VALUES ($1, $2, $3, 1, $4, 20, 500, DATE '2026-06-30')`,
-			orderLineID, cid, orderID, itemID)
+			openingID, cid, itemID, godown)
 		return err
 	}); err != nil {
-		t.Fatalf("seed the sales order: %v", err)
+		t.Fatalf("seed the opening stock: %v", err)
 	}
 	f.godownID = godown.String()
-	f.orderLineID = orderLineID.String()
+
+	// ⛔ THE ORDER ITSELF, OVER HTTP. This is the step that used to be SQL.
+	orec, obody := doRaw(t, srv, http.MethodPost, f.base+"/sales-orders", ownerTok,
+		map[string]any{
+			"order_no":        "SO-" + uuid.NewString()[:8],
+			"order_date":      "2026-06-01",
+			"party_ledger_id": partyLedger.String(),
+			"created_by":      "owner",
+			"lines": []any{map[string]any{
+				"stock_item_id": f.itemID,
+				"qty":           "20",
+				"rate":          "500",
+				"due_date":      "2026-06-30",
+			}},
+		})
+	if orec.Code != http.StatusCreated && orec.Code != http.StatusOK {
+		t.Fatalf("POST a sales order = %d, want 201 (%s)", orec.Code, orec.Body.String())
+	}
+	orderID, _ := obody["order_id"].(string)
+	if orderID == "" {
+		t.Fatalf("the sales order came back with no order_id: %s", orec.Body.String())
+	}
+
+	// And read the LINE id back out, because a fulfilment names the line and only
+	// the server knows its id. A client does exactly this.
+	grec, gbody := doRaw(t, srv, http.MethodGet, f.base+"/sales-orders/"+orderID, ownerTok, nil)
+	if grec.Code != http.StatusOK {
+		t.Fatalf("GET the sales order back = %d, want 200 (%s)", grec.Code, grec.Body.String())
+	}
+	lines, _ := gbody["lines"].([]any)
+	if len(lines) != 1 {
+		t.Fatalf("the order read back with %d line(s), want 1: %s", len(lines), grec.Body.String())
+	}
+	lm, _ := lines[0].(map[string]any)
+	if f.orderLineID, _ = lm["order_line_id"].(string); f.orderLineID == "" {
+		t.Fatalf("the order line came back with no order_line_id: %s", grec.Body.String())
+	}
+	// A fresh order must read back fully outstanding from its OWN route as well as
+	// from the order book — two independent projections of one derived figure.
+	if got, _ := lm["outstanding_qty"].(string); got != "20.0000" {
+		t.Fatalf("a fresh 20-unit order line reads outstanding_qty=%q from the order route, want 20.0000", got)
+	}
 	return f
 }
 

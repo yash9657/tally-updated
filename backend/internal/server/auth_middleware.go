@@ -642,6 +642,93 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 	// Renaming an axis is not a back-dated act and there is nothing here for the cutoff
 	// to judge. A comment asserting a control that never runs is worse than a missing
 	// control, which is the lesson the /tds-challans arm below records at length.
+	// ===========================================================================
+	// T3 — SALES / PURCHASE ORDERS AND THE BILL OF MATERIALS (migrations 0042, 0043)
+	// ===========================================================================
+	// THREE BARE TOKENS: `sales-order`, `purchase-order`, `bom`. No ACL migration
+	// accompanies any of them, and that is the point rather than an omission — Data
+	// Entry's default_access is 'none' and every rule it carries names a specific
+	// token, so a token never mentioned is denied. State the consequence plainly:
+	// DATA ENTRY CAN NEITHER SEE NOR CREATE ORDERS OR RECIPES until an administrator
+	// writes `allow create sales-order` through the admin API.
+	//
+	// ⛔ TWO ORDER TOKENS AND ONE BOM TOKEN, and the asymmetry is deliberate. Sales
+	// and purchase orders are worked by DIFFERENT PEOPLE — a salesperson keys what
+	// customers want, a purchase clerk commits the company to spending — so "may key
+	// sales orders, may not commit us to paying suppliers" is a rule a business
+	// actually writes. A recipe and its components are ONE object (bom_id is NOT
+	// NULL), so two tokens there would always have to be granted together, which is
+	// a rule an administrator can only get wrong. The test is not "are these things
+	// similar" but "would an administrator ever grant one without the other".
+	//
+	// ⛔ THE DIRECTION IS IN THE PATH, NOT IN THE BODY, PRECISELY SO THIS FUNCTION
+	// CAN SEE IT. routeAction reads the path and nothing else; a `direction` field on
+	// the request body would let a caller holding only `sales-order` POST a purchase
+	// commitment to the sales route, and the PDP would have said yes to the wrong
+	// object. The handlers additionally 404 an id whose direction does not match its
+	// route, because both families read one order_head table.
+	//
+	// ⛔ NONE OF THESE THREE IS IN authz.KnownReportNames AND NONE MAY BE ADDED.
+	// server.go loops over that list and auto-mounts GET /print/reports/<name>; a
+	// name with no reportName() case is a route routeAction cannot map, i.e.
+	// default-DENY for every level including the Owner. That bug already shipped once
+	// for reconciliation-queue. The two order BOOKS
+	// (report:sales-order-book, report:purchase-order-book) ARE report names and are
+	// reached by the reports arm below, not by this one. Sitting in a rule list,
+	// `sales-order` and `report:sales-order-book` are one word apart, which is how an
+	// administrator grants the wrong one.
+	//
+	// ⚠️ THE BACK-DATED CUTOFF IS INERT ON ALL OF THEM, stated rather than left
+	// implied: an order body carries an `order_date`, but voucherDateFromRequest
+	// looks for a `voucher_date` and finds none, so cutoffDeny skips entirely. An
+	// order is not a posting and back-dating one moves no balance — but a comment
+	// asserting a control that never runs is worse than a missing control, so this
+	// says which it is. If orders ever need a back-dated cutoff of their own, it is
+	// new work and not a rename.
+	case strings.HasPrefix(rest, "/sales-orders"):
+		switch method {
+		case http.MethodGet:
+			return authz.Display, "sales-order", "", true
+		case http.MethodPost:
+			return authz.Create, "sales-order", "", true
+		case http.MethodPut:
+			// Closing an order: an Alter, not a Delete. The order stays on the books
+			// with its stated reason, because one that vanished would take the
+			// question "what happened to SO-14" with it.
+			return authz.Alter, "sales-order", "", true
+		}
+		// Any other method default-denies rather than being silently treated as one
+		// of the three above.
+		return "", "", "", false
+
+	case strings.HasPrefix(rest, "/purchase-orders"):
+		switch method {
+		case http.MethodGet:
+			return authz.Display, "purchase-order", "", true
+		case http.MethodPost:
+			return authz.Create, "purchase-order", "", true
+		case http.MethodPut:
+			return authz.Alter, "purchase-order", "", true
+		}
+		return "", "", "", false
+
+	// The recipe, and its explosion. ⚠️ THE EXPLOSION IS A Display AND NOT A Create,
+	// which is worth stating because it returns what a Stock Journal's lines WOULD
+	// be: it writes nothing, posts nothing, and could not post anything (archtest
+	// forbids internal/orders -> internal/ledger). The operator submits the
+	// manufacture as an ordinary Stock Journal, which is governed by the
+	// `stock journal` voucher class as it always was.
+	case strings.HasPrefix(rest, "/boms"):
+		switch method {
+		case http.MethodGet:
+			return authz.Display, "bom", "", true
+		case http.MethodPost:
+			return authz.Create, "bom", "", true
+		case http.MethodPut:
+			return authz.Alter, "bom", "", true
+		}
+		return "", "", "", false
+
 	case strings.HasPrefix(rest, "/cost-categories"):
 		switch method {
 		case http.MethodGet:

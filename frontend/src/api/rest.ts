@@ -64,6 +64,15 @@ import type {
   CostCategory,
   CostCategoryListResponse,
   CostCategorySummaryResponse,
+  CreateOrderRequest,
+  CloseOrderRequest,
+  OrderListResponse,
+  OrderView,
+  CreateBomRequest,
+  BomListResponse,
+  BomView,
+  BomExplosionResponse,
+  OrderBookResponse,
   CostCentreListResponse,
   CostCentreWriteResponse,
   CostCentreSummaryResponse,
@@ -352,6 +361,107 @@ export function createRestClient(
         { from, to },
       );
     },
+
+    // ---- T3: orders, the bill of materials, and the order books.
+    //
+    // ⛔ TWO METHODS PER OPERATION AND NOT ONE WITH A DIRECTION ARGUMENT. The
+    // direction lives in the PATH because routeAction reads the path to decide
+    // whether this is `sales-order` or `purchase-order` authority; a body field or a
+    // query parameter would let a caller holding one reach the other.
+    createSalesOrder(companyID, req: CreateOrderRequest) {
+      return http.post<{ order_id: string }>(
+        `${company(companyID)}/sales-orders`,
+        req,
+      );
+    },
+    createPurchaseOrder(companyID, req: CreateOrderRequest) {
+      return http.post<{ order_id: string }>(
+        `${company(companyID)}/purchase-orders`,
+        req,
+      );
+    },
+    listSalesOrders(companyID, openOnly?: boolean) {
+      // The key is OMITTED rather than sent as "false", so the server's own default
+      // is what answers. Sending open_only=false works identically today and would
+      // pin a default this client does not own.
+      return http.get<OrderListResponse>(
+        `${company(companyID)}/sales-orders`,
+        openOnly ? { open_only: "true" } : undefined,
+      );
+    },
+    listPurchaseOrders(companyID, openOnly?: boolean) {
+      return http.get<OrderListResponse>(
+        `${company(companyID)}/purchase-orders`,
+        openOnly ? { open_only: "true" } : undefined,
+      );
+    },
+    getSalesOrder(companyID, orderID: string) {
+      return http.get<OrderView>(
+        `${company(companyID)}/sales-orders/${encodeURIComponent(orderID)}`,
+      );
+    },
+    getPurchaseOrder(companyID, orderID: string) {
+      return http.get<OrderView>(
+        `${company(companyID)}/purchase-orders/${encodeURIComponent(orderID)}`,
+      );
+    },
+    closeSalesOrder(companyID, orderID: string, req: CloseOrderRequest) {
+      return http.put<{ order_id: string; is_closed: boolean }>(
+        `${company(companyID)}/sales-orders/${encodeURIComponent(orderID)}/close`,
+        req,
+      );
+    },
+    closePurchaseOrder(companyID, orderID: string, req: CloseOrderRequest) {
+      return http.put<{ order_id: string; is_closed: boolean }>(
+        `${company(companyID)}/purchase-orders/${encodeURIComponent(orderID)}/close`,
+        req,
+      );
+    },
+
+    createBom(companyID, req: CreateBomRequest) {
+      return http.post<{ bom_id: string }>(`${company(companyID)}/boms`, req);
+    },
+    listBoms(companyID, stockItemID?: string) {
+      // OMITTED rather than sent empty when absent, for the reason listCostCentres
+      // records: the server refuses an all-zeros or malformed id with a 400, so not
+      // sending the key at all is the only unambiguous way to ask for every recipe.
+      return http.get<BomListResponse>(
+        `${company(companyID)}/boms`,
+        stockItemID ? { stock_item_id: stockItemID } : undefined,
+      );
+    },
+    getBom(companyID, bomID: string) {
+      return http.get<BomView>(
+        `${company(companyID)}/boms/${encodeURIComponent(bomID)}`,
+      );
+    },
+    explodeBom(companyID, bomID: string, qty: string) {
+      // A GET, because it writes nothing. qty is ALWAYS sent: the server has no
+      // default and refuses without one, deliberately — guessing 1 would answer a
+      // question about a different batch size.
+      return http.get<BomExplosionResponse>(
+        `${company(companyID)}/boms/${encodeURIComponent(bomID)}/explode`,
+        { qty },
+      );
+    },
+
+    salesOrderBook(companyID, asOn?: string) {
+      // A FLAT LITERAL PATH spelling the report's own name, with the date as a query
+      // param — the rule every report route follows so routeAction can map it. And
+      // TWO paths rather than one with ?direction=, because the PDP decides on the
+      // report NAME and a query parameter is invisible to it.
+      return http.get<OrderBookResponse>(
+        `${company(companyID)}/sales-order-book`,
+        asOn ? { as_on: asOn } : undefined,
+      );
+    },
+    purchaseOrderBook(companyID, asOn?: string) {
+      return http.get<OrderBookResponse>(
+        `${company(companyID)}/purchase-order-book`,
+        asOn ? { as_on: asOn } : undefined,
+      );
+    },
+
 
     // ---- s.394(2) declarations (Item Zero step 3).
     listTCSDeclarations(companyID) {
