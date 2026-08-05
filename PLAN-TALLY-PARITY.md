@@ -165,6 +165,7 @@ than renumbering.**
 | T5 e-Way Bill | 0047–0048 | free |
 | T6 TDS/TCS persistence | 0049–0050 | **consumed** — 0049 liability + s.394(2) declarations, 0050 `tds_deduction` |
 | **T6 TCS collection persistence (Item Zero step 3)** | **0067** | **consumed** — `tcs_collection`, the collection-side mirror of 0050 |
+| **T6 write path (challan entry + deductor profile)** | **none needed** | **T6 IS COMPLETE AND ITS ROW IS `on`.** `tds-challan` and `tds-profile` are BARE RESOURCE TOKENS, and the seeded Data Entry level's `default_access` is `none` with every rule naming a specific token — so both are refused with no rule written. Measured on a freshly-migrated database. A `report:NAME` would have been the opposite case and MANDATORY (0011's coarse `allow display report` reaches any report name at specificity 1), which is why the shape was chosen deliberately rather than by analogy with the register beside it |
 | **T6 register ACL (Item Zero step 4)** | **0068** | **consumed** — `disallow display/print report:tds-register` for Data Entry |
 | **T6 challan register (the return's prerequisite)** | **0069** | **consumed** — `tds_challan` + `tds_challan_allocation`. Promoted ahead of the return because Deductee Detail field 5 is a CHALLAN REFERENCE: no deductee row can exist outside a challan |
 | **T6 deductor return profile** | **0070** | **consumed** — `company_tds_profile`: TAN, PAN, Annexure 4 category, statutory address, responsible person. `company` has none of them, and the TAN is not the GSTIN |
