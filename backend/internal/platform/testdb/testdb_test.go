@@ -159,6 +159,14 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 		versionID = id()
 		plistID   = id()
 
+		// Captured (rather than inlined as id()) because
+		// posting_cost_allocation below has to hang off this exact posting.
+		postingID = id()
+
+		// T2 — the two cost axes and a centre on one of them (migration 0040).
+		costCategoryID = id()
+		costCentreID   = id()
+
 		// T6 — the challan the allocation below hangs off (migration 0069).
 		challanID = id()
 
@@ -240,11 +248,32 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 			[]any{cid, voucherID, versionID}},
 		{"posting", `INSERT INTO posting (id, company_id, voucher_version_id, ledger_id, dr_cr, amount)
 			VALUES ($1, $2, $3, $4, 'D', 100)`,
-			[]any{id(), cid, versionID, ledgerID}},
+			[]any{postingID, cid, versionID, ledgerID}},
 		{"bill_allocation", `INSERT INTO bill_allocation
 			(id, company_id, voucher_version_id, ledger_id, ref_name, ref_type, dr_cr, amount)
 			VALUES ($1, $2, $3, $4, 'BILL-1', 'NEW', 'D', 100)`,
 			[]any{id(), cid, versionID, ledgerID}},
+
+		// T2 — cost centres (migration 0040). The axis, a position on it, and the
+		// split of the posting above.
+		{"cost_category", `INSERT INTO cost_category (id, company_id, name, created_by)
+			VALUES ($1, $2, 'Department', 'testdb')`,
+			[]any{costCategoryID, cid}},
+		{"cost_centre", `INSERT INTO cost_centre
+			(id, company_id, cost_category_id, name, created_by)
+			VALUES ($1, $2, $3, 'Sales', 'testdb')`,
+			[]any{costCentreID, cid, costCategoryID}},
+		// The amount is 100, matching the posting EXACTLY, because
+		// cost_allocation_sums_to_posting refuses anything else -- to the paisa,
+		// with no tolerance. It happens not to fire here (the fixture runs under
+		// session_replication_role = replica, which disables triggers, the same
+		// reason company's books_beginning_from is supplied explicitly above), but
+		// a fixture row that would be ILLEGAL in production is a teardown test
+		// standing on data the write path could never create.
+		{"posting_cost_allocation", `INSERT INTO posting_cost_allocation
+			(id, company_id, posting_id, cost_category_id, cost_centre_id, amount)
+			VALUES ($1, $2, $3, $4, $5, 100)`,
+			[]any{id(), cid, postingID, costCategoryID, costCentreID}},
 		{"voucher_gst_line", `INSERT INTO voucher_gst_line
 			(id, company_id, voucher_version_id, line_no, hsn, taxable_value, gst_rate_pct, cgst, sgst, igst)
 			VALUES ($1, $2, $3, 1, '1234', 100, 18, 9, 9, 0)`,
