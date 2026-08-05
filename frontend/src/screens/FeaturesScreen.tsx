@@ -149,12 +149,19 @@ const FEATURES: {
         // selectable; and Ctrl+A is routed. The register renders a recorded
         // deposit with its allocations resolved to party names.
         //
-        // ⚠️ A WRITE FROM THE BROWSER NEEDS A PASSKEY, and that is not this row's
-        // gap: the seeded Owner level has requires_webauthn, so Ctrl+A raises the
-        // shell's step-up prompt ("Confirm the passkey prompt"). The write itself
-        // was proved over HTTP end to end — three deductions, one deposit covering
-        // two of them, already_paid flipping, and the register's filing panel
-        // moving from "no TAN on file" to "YOUR BOOKS ARE READY".
+        // AND THE WRITE COMPLETED FROM THE BROWSER, THROUGH THE REAL STEP-UP.
+        // Ctrl+A first answers 403 STEPUP_REQUIRED — the seeded Owner level has
+        // requires_webauthn — and the shell raises "Confirm the passkey prompt".
+        // With an authenticator present the ceremony runs (the app ENROLS this
+        // device when it holds none of the listed credentials, see auth/webauthn.ts)
+        // and the queued write goes through: challan 05123, BSR 0004329, deposited
+        // 2026-07-05, ₹9,000, recorded against the exact deduction ticked in the
+        // picker. The register then lists it, and the TDS/TCS Register's filing
+        // panel moves to "YOUR BOOKS ARE READY: all 3 deductions in this period
+        // have a challan behind them" — because of that deposit.
+        //
+        // The whole loop, in one browser: pick a deduction, record the deposit,
+        // and watch the thing that was blocking the return stop blocking it.
         //
         // WHY "on" AND NOT "server": "server" means built with no key. This has
         // keys. And why not "off": leaving it "Not built" after driving it with the

@@ -141,10 +141,28 @@ Three workflows ran (5 scouts, 4 backend, 4 frontend, 1 fix). What actually happ
   timeout — mine SIGTERM'd the process group and took the server with it.
 - **Every cored restart mints a new ephemeral signing key**, so every saved token dies with it. That
   presents as an unrelated 401.
-- **A browser WRITE needs a passkey.** The seeded Owner level has `requires_webauthn`, so Ctrl+A
-  raises the shell's step-up prompt. Headless Chrome has no authenticator; a CDP virtual
-  authenticator attaches but the user has no registered credential. Prove writes over HTTP with a
-  token minted `amr:["webauthn"]`, and do **not** disable step-up to get around it.
+- **A browser WRITE needs a passkey, and you CAN drive it — do not disable step-up.** The seeded
+  Owner level has `requires_webauthn`, so a write answers 403 `STEPUP_REQUIRED` and the shell raises
+  "Confirm the passkey prompt". Headless Chrome has no authenticator by default, so attach one over
+  CDP:
+
+  ```js
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('WebAuthn.enable', { enableUI: false });
+  await cdp.send('WebAuthn.addVirtualAuthenticator', { options: {
+    protocol: 'ctap2', transport: 'usb', hasResidentKey: true,
+    hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true } });
+  ```
+
+  Then the ceremony completes on its own, because `auth/webauthn.ts`'s `stepUp()` **enrols this
+  device** when it holds none of the credentials the server lists — the branch written for "the user
+  has passkeys but not on THIS device". Two gotchas: Chrome allows only ONE `internal` authenticator
+  per environment (use `transport: 'usb'` for a second), and the authenticator lives on the CDP
+  session, so add it and drive in the SAME session.
+
+  I refused to disable `requires_webauthn` to get around this and the permission classifier refused
+  it too, correctly — it is a security control, and turning it off would have proved the feature
+  works in a configuration no real tenant runs.
 
 ---
 
@@ -162,9 +180,20 @@ Three workflows ran (5 scouts, 4 backend, 4 frontend, 1 fix). What actually happ
 **Migrations:** 0071 consumed by the security repair. T6 needed **no** ACL migration. Next free is
 **0072**, which `HANDOFF-TIER-ONE.md` §3.5 allocates to T17 SSO — still fine, it sorts above 0071.
 
+**The browser drive, in full, because this is the gate that finds what tests do not:**
+Gateway lists `TDS Challans` → Enter opens it with its OWN button bar → **Alt+C opens the form on the
+real shell** (the 13th registration point) → the picker shows already-deposited rows with no checkbox
+and one selectable → **Ctrl+A** → 403 `STEPUP_REQUIRED` → passkey ceremony → **the challan is
+recorded**: 05123, BSR 0004329, 2026-07-05, ₹9,000, against the deduction actually ticked. The
+register then lists it. Then Alt+G → `TDS / TCS Register` → **F2 offers BOTH dates** (the
+period-classification fix, on the screen that used to be told its period did nothing) → and the
+filing panel reads **"YOUR BOOKS ARE READY: all 3 deductions in this period have a challan behind
+them"** — because of the deposit just recorded through the UI. That is the whole loop in one browser.
+
 **Two things I left in the dev database, deliberately:**
 - A company named **`T6 Drive Co`** (`9466b85c-…`) with three TDS deductions, two challans and a
-  deductor profile. It exists so the browser drive did not pollute the demo. Drop it when you like.
+  deductor profile — one of those challans recorded through the UI. It exists so the browser drive
+  did not pollute the demo. Drop it when you like.
 - **The demo company has no TDS data at all** — the seeder creates no TDS vouchers — so both new
   screens render empty against `?company=$(cat .demo-company-id)`. Seeding one deduction and one
   challan into `seed:demo` would make T6 demonstrable; it is a small, real piece of work nobody has
