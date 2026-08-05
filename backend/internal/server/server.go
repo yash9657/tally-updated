@@ -1468,6 +1468,34 @@ type physicalCountLineReq struct {
 	Rate        string `json:"rate"`
 }
 
+// costAllocationReq is ONE cost-centre allocation of ONE posting, on the wire.
+//
+// ⛔⛔ WITHOUT THIS TYPE THE WHOLE COST-CENTRE WRITE PATH IS UNREACHABLE, and that
+// is exactly the defect ItemLedgerID records two fields below: the validation, the
+// hashed payload and the posting_cost_allocation insert all existed, were tested,
+// and could be reached ONLY from a Go test. Every client — the UI, the API, an
+// offline node — could create axes and centres and read both reports, and had no
+// way to allocate anything, so both reports could only ever render empty.
+//
+// ⚠️ posting_seq IS A 0-BASED ORDINAL AND NO SCREEN DISPLAYS IT. It indexes THIS
+// request's own `postings` array, so a client fills it in from the row the operator
+// is already looking at; a human must never type or count it. An ITEM INVOICE
+// refuses allocations outright (its postings are generated inside the transaction
+// and index 0 is the PARTY leg), so this field is only meaningful on a class that
+// states its own postings.
+//
+// Carried on voucherReq, like Inventory and PhysicalCount, so POST /sync/commit
+// ships an allocated voucher from an offline node for free: syncIntentReq.Payload
+// IS a voucherReq and buildVoucherInput is the single translator. A second
+// allocation type on the sync wire would compile, decode, and silently drop every
+// split an offline node ever recorded.
+type costAllocationReq struct {
+	PostingSeq     int    `json:"posting_seq"`
+	CostCategoryID string `json:"cost_category_id"`
+	CostCentreID   string `json:"cost_centre_id"`
+	Amount         string `json:"amount"`
+}
+
 type voucherReq struct {
 	VoucherTypeID string `json:"voucher_type_id"`
 	PartyLedgerID string `json:"party_ledger_id"`
@@ -1513,8 +1541,18 @@ type voucherReq struct {
 	// stock-take from an offline node for free: syncIntentReq.Payload IS a
 	// voucherReq and buildVoucherInput is the single translator.
 	PhysicalCount []physicalCountLineReq `json:"physical_count"`
-	GST           *gstReq                `json:"gst"`
-	TDS           *tdsReq                `json:"tds"`
+	// CostAllocations is how this voucher's postings are split across cost centres
+	// (T2, migration 0040). See costAllocationReq above for why it must exist at all
+	// and why posting_seq is never a human's to supply.
+	//
+	// The SEMANTICS are deliberately not re-checked here — ledger.validateCostAllocations
+	// owns the per-(posting, CATEGORY) sum, the sequence bounds and the duplicate
+	// check, and returns a domain message. A second copy of those rules in the HTTP
+	// layer is a copy that drifts, and the drifted one always wins for whichever
+	// caller reaches it first.
+	CostAllocations []costAllocationReq `json:"cost_allocations"`
+	GST             *gstReq             `json:"gst"`
+	TDS             *tdsReq             `json:"tds"`
 	// TCS is the collection-side mirror, honoured on Sales only. It carries no
 	// exemption flag: a s.394(2) declaration is read from the declarations table
 	// inside the post transaction, never asserted here.
@@ -1953,6 +1991,45 @@ func buildVoucherInput(w http.ResponseWriter, class ledger.Class, req voucherReq
 			return in, false
 		}
 		in.PhysicalCount = append(in.PhysicalCount, line)
+	}
+	for i, a := range req.CostAllocations {
+		// The 1-based position in the request is what a message names, because the
+		// operator's mental model is "the third split I keyed" and posting_seq is an
+		// index into a different array.
+		where := fmt.Sprintf(" on cost allocation %d", i+1)
+		catID, err := uuid.Parse(a.CostCategoryID)
+		if err != nil || catID == uuid.Nil {
+			// ⛔ THE ZERO UUID PARSES. Refused explicitly here as well as in the
+			// masters handlers: an allocation naming the all-zeros axis would reach
+			// the per-category sum as a REAL grouping key, so a split across two
+			// axes where one id failed to serialise would be summed together and
+			// refused for an arithmetic reason that names neither cause.
+			writeError(w, http.StatusBadRequest,
+				"cost_category_id must be the uuid of a cost category (the AXIS the split is drawn on)"+where)
+			return in, false
+		}
+		ctrID, err := uuid.Parse(a.CostCentreID)
+		if err != nil || ctrID == uuid.Nil {
+			writeError(w, http.StatusBadRequest,
+				"cost_centre_id must be the uuid of a cost centre on that axis"+where)
+			return in, false
+		}
+		// decimal.NewFromString, never strconv.ParseFloat: float parsing ACCEPTS
+		// "NaN" and "Inf", which blow up inside the decimal package as a panic the
+		// Recoverer turns into an opaque 500 — and it would silently round a
+		// 19-digit amount, so the split stored would not be the one keyed.
+		amount, err := decimal.NewFromString(a.Amount)
+		if err != nil {
+			writeError(w, http.StatusBadRequest,
+				"amount must be a decimal number"+where)
+			return in, false
+		}
+		in.CostAllocations = append(in.CostAllocations, ledger.CostAllocationInput{
+			PostingSeq:     a.PostingSeq,
+			CostCategoryID: catID,
+			CostCentreID:   ctrID,
+			Amount:         amount,
+		})
 	}
 	if req.GST != nil {
 		gst, ok := buildGST(w, *req.GST)
