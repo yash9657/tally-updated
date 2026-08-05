@@ -159,7 +159,7 @@ than renumbering.**
 | Track | Reserved | Status |
 |---|---|---|
 | T1 Printing | 0037–**0039** | consumed |
-| T2 Cost centres | 0040–0041 | free |
+| T2 Cost centres | 0040, **0041 POISONED** | **consumed — 0040 tables. ⛔ 0041 IS PERMANENTLY UNUSABLE AND LEFT EMPTY.** 0040 is `cost_category` + `cost_centre` + `posting_cost_allocation`, plus a `UNIQUE (company_id, id)` on `posting` so a tenant table can FK to it company-scoped, plus the **per-(posting, category) DEFERRED CONSTRAINT TRIGGER** — the invariant is per AXIS and never posting-wide, because several categories allocate the SAME money in full and in parallel (one Rs 1,00,000 posting across Departments AND again across Branches), so a posting-wide check refuses correct data and no check lets cost go silently unattributed. 0041 was reserved for T2's ACL and **cannot carry one**: the highest-numbered `seed_company_auth_defaults` restatement is the only body that survives, so rules at 0041 are overwritten on every fresh database. **The T2 ACL is 0072 instead.** |
 | T3 Orders + BOM | 0042–0044 | free |
 | T4 Bank reconciliation (slice 1) | 0045–0046 | consumed |
 | T5 e-Way Bill | 0047–0048 | free |
@@ -181,6 +181,7 @@ than renumbering.**
 | **T4 slice 2b — statement MATCHING** | **a new number at the end** | free — `bank_statement_match`; the block above is consumed, so per the rule it gets a fresh number |
 | **T15 Export (Excel/CSV/XML) — if it needs an ACL migration** | **0065** | **free (NEW)** |
 | **T16 Per-company print template UI** | **0066** | **free (NEW)** |
+| **T2 cost-report ACL (taken ABOVE the poisoned block)** | **0072** | **consumed** — `disallow display` **and** `disallow print` for `report:cost-centre-summary` and `report:cost-category-summary`, for Data Entry. Mandatory, not optional: 0011's coarse `allow display report` reaches any `report:NAME` at specificity 1, so a new report is GRANTED the moment it exists and the REFUSAL is what must be written. Both forms, because a report that cannot be displayed but CAN be printed is a leak with a paper trail. Derived verbatim from 0071 (11 -> 12 PERFORMs; comment-stripped diff is exactly one line) and verified on a database migrated from empty with a CONTROL row from an earlier migration to prove nothing was dropped. The cost MASTERS took **no** rows — `cost-centre` is a bare token against a level whose `default_access` is `none`, the same authority T6 shipped `tds-challan` under |
 
 **T6 CAME BACK FOR A THIRD NUMBER, AND TOOK 0067 RATHER THAN RENUMBERING.** 0049–0050 were
 reserved on the assumption that TCS needed only the declaration table. It does not: wiring
@@ -188,7 +189,8 @@ reserved on the assumption that TCS needed only the declaration table. It does n
 would have been derived, verified and discarded — the exact defect 0050 exists to end on the
 deduction side. Its block was consumed, so per the rule above it gets a new number at the end
 instead. **0067 was the first free number; the register ACL then took 0068, so Group B's blocks now
-continue from 0072.**
+continue from 0073** (0069-0070 T6 challan + profile, 0071 the seeder repair, 0072 T2's cost-report
+ACL).
 
 **⛔ AND THE RULE THAT RESERVED BLOCKS DO NOT SURVIVE CONTACT WITH `seed_company_auth_defaults`.**
 Six migration headers say "derive your restatement from the immediately preceding one", and every
@@ -204,7 +206,7 @@ leave the gap unused and take a number at the end.**
 `docs/design/t4-slice2-model.md` §8.3–8.4 records why: the import and the matching are two
 user-visible slices, 2a needs an ACL migration of its own, and the match table is 2b's. So
 0063 became the ACL rather than the match table, and 2b's table takes a new number at the end —
-the same call T6 made when it took 0067. **Group B's blocks now continue from 0072** — 0071 was consumed by the seeder apply-order repair, and see HANDOFF-CLEAR-A-TIER.md §6.1: every reserved block below 0071 is now unusable for an ACL SEEDER change, because the highest-numbered restatement is the only body that survives.
+the same call T6 made when it took 0067. **Group B's blocks now continue from 0073** — 0071 was consumed by the seeder apply-order repair and **0072 by T2's cost-report ACL**, which is now the highest-numbered restatement. See HANDOFF-T2-AND-THE-CONTRACT.md §2: **every reserved block below 0072 is unusable for an ACL SEEDER change**, because the highest-numbered restatement is the only body that survives. T3's 0042-0044, T5's 0047-0048 and all of Tier 2's 0051-0061 are TABLE numbers only; a seeder change in any of those tracks takes a fresh number above 0072.
 
 **T4 slice 2 does NOT take 0047.** `HANDOFF-CLOSING-THE-GAP.md` §3.2 said "migration 0047",
 which is **T5's reserved block**. Slice 2 gets its own block at the end (0062–0064) instead,
