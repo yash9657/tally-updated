@@ -1,4 +1,7 @@
-# HANDOFF — T2 SHIPPED, THE PAYLOAD CONTRACT IS SET, AND T3/T5 ARE UNBLOCKED BUT UNBUILT
+# HANDOFF — NEXT: T3 + T5 IN PARALLEL. T2 IS SHIPPED AND THE CONTRACT T3 NEEDS IS SET.
+
+> ### ⛔ THIS IS THE LIVE HANDOFF. Every other `HANDOFF-*.md` in this repo is SPENT — see §11.
+> ### The executable plan is §3. Start with §9 (run-first), then §1, §2, §3.
 
 > **Written 2026-08-05.** Supersedes `HANDOFF-CLEAR-A-TIER.md` as the plan of record.
 > `PLAN-TALLY-PARITY.md` §2.5 remains the **only** authority on migration numbers — but read
@@ -11,10 +14,44 @@
 > deliberate call taken with the user at the point where the arithmetic became clear (§1), not a
 > discovery at the end.
 >
-> **Read in this order:** §1 (what is true now) → §2 (⛔ migrations: two blocks spent, one poisoned) →
-> §3 (the orchestration result — what the pattern actually bought) → §4 (⛔⛔ the T2 gaps that are
-> real and unfixed) → §5 (T3, and why the hard part is already done) → §6 (T5, and its citation
-> problem, already decided) → §7 (traps, carried and new) → §8 (human-only) → §9 (run-first).
+> **Read in this order:** §9 (run-first — ten minutes, and it has burned every session that skipped it)
+> → §1 (what is true now) → §2 (⛔ migrations: two blocks spent, one poisoned) → **§3 (⛔⛔ THE PARALLEL
+> PLAN — the executable part of this file)** → §4 (the T2 gaps that are real) → §5 (T3) → §6 (T5) →
+> §7 (traps) → §8 (human-only) → §10 (definition of done).
+>
+> **§3 IS THE PART YOU ACT ON.** It is a phase-by-phase parallel plan with the lane map, the file
+> ownership, a copy-paste workflow script, and an explicit list of what does *not* parallelise. It is
+> written to be executed by a clean session with no memory of this one.
+
+---
+
+## 0. THE SCOREBOARD — done, left, and what is merely *reachable*
+
+**Tier 1:** T1 ✅ · T4 ✅ · T6 ✅ · T7 ✅ · **T2 ✅** — remnant **T3, T5**. Tier 1 is **NOT** complete.
+
+| T2 piece | State | Note |
+|---|---|---|
+| Hashed-payload contract (T2 **and T3**) | ✅ committed, mutation-proved | field order fixed **forever**; T3's half is done |
+| Schema + per-category constraint trigger | ✅ 0040, DB-proved from empty, 6 cases w/ controls | parallel allocation accepted; a paisa short refused |
+| ACL counterweight | ✅ 0072, fresh-DB census w/ control | 0041 **permanently poisoned** — §2 |
+| Ledger spine (validate → payload → rows) | ✅ 5 DB tests, all green | all five failed on FIRST run — §3.4 |
+| Masters + both reports (backend) | ✅ | |
+| HTTP reachability (`cost_allocations` on the wire) | ✅ **fixed late** | was unreachable from **every** client — §4.0 |
+| API client + mock | ✅ | mock now refuses what the server refuses |
+| Three screens, 13 registrations each | ✅ 5 mutation proofs | |
+| Browser-proved end to end | ✅ through real WebAuthn step-up | axis + centres created via UI; both reports render |
+| **Allocation UI on voucher entry** | ⬜ **NOT BUILT** | ⛔ **a keyboard-only operator still cannot allocate.** Largest remaining T2 gap — §4.0 |
+| Rename axis / re-parent centre | ⬜ routes exist, no key calls them | §4.3 |
+| Allocations in the **edit log** view | ⬜ signed but not shown | §4.3.4 |
+
+| Track | State | First move |
+|---|---|---|
+| **T3 orders + BOM** | ⬜ nothing exists (`internal/orders` absent, no tables) — **but `CanonicalFulfilment` is committed and frozen** | §3.1 Phase 0, then the 4-lane workflow |
+| **T5 e-Way Bill** | ⬜ nothing exists; IRN precedent is the worked example; **citation approach already decided** | §6 — free parallelism, take it |
+
+⚠️ **"Reachable" is not "usable".** T2's allocation write is reachable over HTTP and has no UI. That
+distinction is the single most expensive thing this session learned — see §4.0 — and it is why the
+FeaturesScreen row leads with what is missing.
 
 ---
 
@@ -101,36 +138,182 @@ Do all three. The second one is the one that catches the real defect:
 
 ---
 
-## 3. THE ORCHESTRATION — what the pattern bought, and the one thing to change
+## 3. ⛔⛔ THE PARALLEL PLAN FOR T3 + T5 — COPY THIS, DO NOT RE-DERIVE IT
 
-`HANDOFF-CLEAR-A-TIER.md` §3 was right and worked. Concretely:
+This section is the executable part of the handoff. It is written for a **clean session** and it
+assumes you have read §1 and §2 and nothing else yet.
 
-**What worked, keep it:**
-- **Review INSIDE the lane** (`pipeline()` of implement → verify). Zero barrier stages. 23 findings
-  came back from the backend workflow — **1 blocker, 8 serious** — and **none was visible to a green
-  test suite**. Do not cut this pass.
-- **Front-loading the shared contract yourself.** The hashed payload and the API types were written
-  and committed *before* any lane started, which is why three backend lanes were genuinely disjoint
-  and why the screens lane never waited on an API phase.
-- **The manifest protocol with per-entry uniqueness re-verified AT APPLY TIME.** 6 entries, no
-  duplicates, because each lane was told explicitly which registrations were *not* its own. Contrast
-  last session's twelve-for-six.
+> ### THE ONE COUNTER-INTUITIVE THING, AND IT IS THE WHOLE LESSON
+> **The speedup did not come from more agents. It came from removing barriers and front-loading the
+> shared contracts.** Last session ran 4 workflows with 3 sequential stages and delivered one track.
+> This session ran 2 workflows with ZERO barrier stages and delivered one track plus a shared contract,
+> on ~25% fewer subagent tokens. The agent count was the same.
+>
+> **PHASE 0 BELOW IS NOT OVERHEAD — IT IS WHAT BUYS THE PARALLELISM.** Every hour spent there converts
+> a sequential dependency into a disjoint lane. Skip it and the lanes collide, the manifests duplicate,
+> and you are back to a barrier chain.
 
-**What to change: the manifest is only worth it when two lanes share a file.** The screens workflow
-was ONE lane, so it owned the 13 registration files directly and there was no manifest to apply at
-all — which removed an entire integration step. **Prefer one lane per shared-file cluster over two
-lanes plus a manifest.**
+### 3.0 THE MEASURED CEILING — do not plan past it
 
-### 3.1 ⛔ THE FINDING THAT JUSTIFIES THE WHOLE SERIAL INTEGRATION PASS
+| Constraint | Value | Consequence |
+|---|---|---|
+| Concurrent agents per workflow | `min(16, cores-2)` = **6** | asking for 20 does not give you 20; excess queues |
+| Workflows at once | **ONE** | 3 concurrent workflows = up to 18 agents each spawning a compiler; that, not the work, turns a track into an afternoon |
+| Postgres | **ONE instance on :5433, shared by every worktree** | ⛔ lanes may NOT run DB-backed tests; concurrent `migrations.Apply` races; the residue check counts rows globally |
+| Heavy commands | auto-queued through `ci-slot` (2 slots) by a PreToolUse hook | **do not wrap anything yourself**; a command that pauses is waiting, not hung. Another project's worktree competed for slots throughout this session |
 
-**All five of the ledger DB tests failed on their first execution.** They were handed over "green"
-having **never run** — lanes share one Postgres and are forbidden from running DB tests — and every
-one died in setup because migration 0034 already seeds a `Salaries & Wages` ledger per company.
+So the real parallelism is **~6 agents on disjoint files, one workflow at a time**, and the serial
+phases below are not compressible.
 
-That is §3.4 exactly: **a lane's green is a CLAIM about untested code.** Budget the serial pass. It is
-not optional and it is where the integrator earns their keep.
+### 3.1 PHASE 0 — SERIAL, YOURS, ~1–2 HOURS. NOTHING PARALLELISES UNTIL THIS EXISTS.
 
----
+Every item here is a file that **two or more lanes would otherwise both edit**. Write them yourself,
+commit them, and the lanes become genuinely disjoint.
+
+| # | What | Why it cannot be a lane |
+|---|---|---|
+| 1 | **Migrations 0042 (orders) + 0043 (BOM)**, DB-proved from empty with controls | Two lanes writing migrations collide on numbers, and the seeder trap (§2) needs one author. Lanes get the `CREATE TABLE` **quoted verbatim** — a paraphrase is what made an agent invent a third copy of a vocabulary |
+| 2 | **`VoucherInput.Fulfilments` + `post()` payload assembly + `order_fulfilment` row writes** | This is `internal/ledger/ledger.go`, the single most contended file. `CanonicalFulfilment` is already committed and frozen — you are only wiring it |
+| 3 | ⛔ **`voucherReq.fulfilments` on the HTTP wire + `buildVoucherInput` translation** | **THE REACHABILITY LESSON (§4.0).** Do this in Phase 0, not as a lane, because it is precisely the step that was forgotten for cost allocations — and forgetting it makes every downstream lane build against a feature no client can reach |
+| 4 | **TS API types** for orders, BOM and e-Way Bill in `frontend/src/api/types.ts` | The screens workflow needs them; writing them first is what let this session's screens lane start immediately instead of waiting on an API phase |
+| 5 | **The ACL SHAPE decision** (§2.1), and migration **0073** only if a `report:NAME` is involved | Three lanes each restating the seeder is the §3.3 duplicate disaster at schema level |
+
+**Then commit Phase 0 on its own.** Each lane prompt quotes the committed DDL and the committed types.
+
+### 3.2 PHASE 1 — ONE WORKFLOW, FOUR LANES, EACH `implement → adversarially verify`
+
+Ownership is **new files in disjoint packages**, which is what makes this safe. Two lanes writing
+different files in the *same* Go package is fine; two lanes writing the *same file* is not.
+
+| Lane | Owns (creates only these) | Shared files |
+|---|---|---|
+| **T3-orders** | `internal/orders/order.go` + `_test` + `_db_test`, `internal/server/handler_orders.go` | manifest only |
+| **T3-bom** | `internal/orders/bom.go` + `_test` + `_db_test`, `internal/server/handler_bom.go` | manifest only |
+| **T3-reports** | `internal/reporting/orderbook.go` + `_test` + `_db_test`, `internal/server/handler_orderbook.go` | manifest only |
+| **T5-eway** | `internal/statutory/ewaybill.go`, its schema JSON, `ewaybill_test.go` | **none** |
+
+> **T5 IS FREE PARALLELISM — TAKE IT.** `internal/archtest/boundaries_test.go` declares
+> `"internal/statutory": {}` — an EMPTY allowed-import set, so the package may import nothing from
+> `internal/` at all. It is a separate deployable that talks to cored only over HTTP. It therefore
+> cannot collide with any T3 lane by construction, and it needs no registration manifest. Run it
+> alongside whatever else is going.
+
+4 lanes × 2 agents = 8, against a cap of 6 — the last two queue, which `pipeline()` handles. **Do not
+add a fifth lane to "use spare capacity": the cap is 6 and the database is shared.** Do not add a
+synthesis agent at the end either; you are the synthesis, and you hold context the agents do not.
+
+```js
+export const meta = {
+  name: 't3-t5-backend',
+  description: 'T3 orders + BOM + order book, and T5 e-Way Bill — each implemented then adversarially verified in its own lane',
+  phases: [{ title: 'Lanes', detail: 'four tracks, each implement -> verify, no barrier between lanes' }],
+}
+
+const LANES = [
+  { key: 'T5', label: 'eway-bill',  prompt: T5_PROMPT },  // fully disjoint — starts immediately
+  { key: 'ORD', label: 'orders',    prompt: ORDERS_PROMPT },
+  { key: 'BOM', label: 'bom',       prompt: BOM_PROMPT },
+  { key: 'RPT', label: 'order-book', prompt: REPORTS_PROMPT },
+]
+
+// pipeline(), NOT parallel(): T5's verifier runs WHILE the reports lane is still
+// implementing. A trailing review phase is a barrier across every lane at once, and
+// that cost the session before this one 58 minutes for ~20 minutes of parallel work.
+const results = await pipeline(
+  LANES,
+  (lane) => agent(CONTRACT + lane.prompt,
+    { label: `impl:${lane.label}`, phase: 'Lanes', schema: MANIFEST }),
+  (built, lane) => built ? agent(REVIEW_PREAMBLE + reviewTask(lane, built),
+    { label: `verify:${lane.label}`, phase: 'Lanes', schema: REVIEW, effort: 'high' })
+      .then((v) => ({ lane: lane.key, built, verdict: v })) : null,
+)
+return results.filter(Boolean)
+```
+
+### 3.3 WHAT EVERY LANE PROMPT MUST CARRY — all six, every time
+
+Copy this list. Each item is here because omitting it cost something real:
+
+1. **The domain contract, QUOTED VERBATIM** — the migration's `CREATE TABLE` with its CHECKs. Agents
+   given the constraints verbatim produced correct validation; the one given a paraphrase invented a
+   third copy of a vocabulary.
+2. **The precedent file to copy, BY PATH.** "Model it on `internal/ledger/cost_allocation.go`" produced
+   structurally correct code first time.
+3. **The decisions ALREADY MADE, as orders, with reasons.** Every decision you leave open comes back as
+   a plausible wrong answer you then have to argue with.
+4. **The forbidden-files list and the manifest schema** (§3.5).
+5. **The traps, each WITH ITS COST.** "A missing `SCREEN_ACTIONS` entry ships the key DEAD with 459
+   green tests" gets obeyed; "be careful with registrations" does not.
+6. **What they may run**: `go build ./...`, `go vet ./<pkg>`, `gofmt -l <NAMED FILES>`, their own no-DB
+   tests, and `go test ./internal/server/ -run TestEveryCompanyRouteIsMappedAndInVocabulary`.
+   ⛔ **Explicitly: NO DB-BACKED TESTS.** They must WRITE them (a required deliverable) and NOT run
+   them, and name them in the report so you can run them serially.
+
+⛔ **AND ADD THIS, WHICH IS NEW AND IS THE MOST EXPENSIVE OMISSION OF THE LAST TWO SESSIONS:**
+
+> **CAN A CLIENT REACH WHAT YOU BUILT?** Name, in your report, the exact HTTP request that exercises
+> your feature end to end. If no wire field carries your input, say so as a BLOCKER rather than
+> assuming someone else added it. T2's entire write path was built, reviewed and covered by unit AND
+> live-Postgres tests while being reachable only from Go — because `voucherReq` had no field for it.
+> Nothing failed. See §4.0.
+
+### 3.4 PHASE 2 — SERIAL INTEGRATION. BUDGET FOR IT; IT IS WHERE THE DEFECTS ARE.
+
+In this order:
+
+1. **Apply the manifests**, re-verifying anchor uniqueness **per entry AT APPLY TIME** — an earlier
+   insert can introduce a second occurrence of a later anchor. ⚠️ **A duplicate chi registration is
+   SILENT** (`node.setEndpoint` overwrites, no panic), so this assertion is the only guard.
+2. **Run the no-DB registration gate**: `go test ./internal/server/ -run TestEveryCompanyRouteIsMappedAndInVocabulary`.
+3. ⛔ **Run every DB-backed test the lanes wrote.** *All five* of this session's ledger DB tests failed
+   on first execution — handed over "green" having never run, every one dying in setup because
+   migration 0034 already seeds a `Salaries & Wages` ledger per company. **A lane's green is a CLAIM
+   about untested code.**
+4. **Triage the review findings.** 28 came back across two workflows this session (1 blocker, 10
+   serious) and **none was visible to a green suite**. Fix correctness and data-loss first, prose rot
+   second, polish last — and write down what you did not fix.
+5. **Full suite, bracketed with a live `psql` before AND after.** A down DB makes every DB test skip
+   and `go test` still exit 0.
+6. **Commit per lane**, staging explicit paths, grepping the staged list for `zz_ scratch probe .bak`.
+
+### 3.5 The manifest protocol — and when NOT to use it
+
+Lane agents must not edit shared registration files. They return a manifest; **you** apply it:
+
+```js
+entries: [{ file, anchor /* verbatim, UNIQUE in the file */, placement: "before"|"after",
+            insert, why }]
+```
+
+```python
+# Re-verify uniqueness AT APPLY TIME, per entry.
+assert s.count(anchor) == 1
+```
+
+**Tell each lane explicitly which registrations are NOT its own.** That instruction is why this
+session got 6 clean entries where the one before got 12 for 6 registrations, one naming a handler that
+did not exist.
+
+> ### ⛔ BUT PREFER ONE LANE PER SHARED-FILE CLUSTER OVER TWO LANES PLUS A MANIFEST.
+> The screens workflow was a SINGLE lane, so it owned all 13 registration files directly and there was
+> no manifest to apply at all — removing an entire integration step. Use a manifest only when two lanes
+> genuinely must touch one file. **If two lanes would fight over a file, that is a signal to
+> restructure the lanes, not to add coordination.**
+
+### 3.6 PHASE 3 — THE SCREENS WORKFLOW, and why it is ONE lane
+
+All 13 registration sites plus `FrameOverlays` are shared by every screen, so **one lane owns them
+all**. Give it the committed TS types, the 13-site table from §9.2, and the mutation-proof requirement.
+Then **you** drive the browser (§7.5) — that is not delegable, and it is where this session found four
+defects that 597 green tests could not see.
+
+### 3.7 What does NOT parallelise, stated so nobody tries
+
+- **Phase 0.** It is the shared contract; two authors means two contracts.
+- **Migrations.** One author, or you get number collisions and the seeder-order trap.
+- **The integration pass.** It is serial by definition and it is where the integrator earns their keep.
+- **The browser drive.** One session, one authenticator, one set of eyes.
+- **`verify:demo`.** Run it **ALONE** — and start insightd on :8088 first (§1).
 
 ## 4. ⛔⛔ T2 — WHAT SHIPPED, AND THE GAPS THAT ARE REAL
 
@@ -515,17 +698,21 @@ is a real deliverable**: `AppShell.test.tsx` renders with `createMockClient()`.
 
 1. **T3 shipped and its FeaturesScreen row `on`** — on **browser evidence**, not a green suite.
 2. `make verify` exit 0 **and** `pnpm exec tsc --noEmit` clean (different gates).
-3. backend **≥2218 pass, 0 SKIP, 0 FAIL** (verbose census); frontend at or above its current count;
-   `verify:demo` green, **run ALONE**, and re-pinned deliberately if T3 moves a figure — it plausibly
-   will, and the change must be explained.
-4. Every new tenant table in `buildFixture` (`internal/platform/testdb/testdb_test.go`) or the teardown
+3. backend **≥2220 pass, 0 SKIP, 0 FAIL** (verbose census); frontend **≥597 / 46 files**;
+   `verify:demo` **33/33 run ALONE** (start insightd on :8088 first), re-pinned deliberately if T3
+   moves a figure — it plausibly will, and the change must be explained.
+4. ⛔ **THE REACHABILITY CHECK, for every new feature: name the exact HTTP request that exercises it
+   end to end, and assert it in a test that reads the result back out through the OUTERMOST surface.**
+   T2 passed every other bar on this list while being unreachable from every client. This item exists
+   because nothing else on the list catches that.
+5. Every new tenant table in `buildFixture` (`internal/platform/testdb/testdb_test.go`) or the teardown
    census fails **by name** — it did this session, exactly as designed.
-5. Every new screen carrying **all 13** registrations including `SCREEN_ACTIONS`, with a real-shell
+6. Every new screen carrying **all 13** registrations including `SCREEN_ACTIONS`, with a real-shell
    keypress test.
-6. `PLAN-TALLY-PARITY.md` §2.5 updated for every consumed block, **and §2 of this file obeyed** for
+7. `PLAN-TALLY-PARITY.md` §2.5 updated for every consumed block, **and §2 of this file obeyed** for
    anything touching the ACL seeder.
-7. Every safety-critical invariant **mutation-proved**, and said so.
-8. A successor handoff — and **fold what is still true into it rather than adding a twelfth file.**
+8. Every safety-critical invariant **mutation-proved**, and said so.
+9. A successor handoff — and **fold what is still true into it rather than adding a twelfth file.**
 
 ---
 
