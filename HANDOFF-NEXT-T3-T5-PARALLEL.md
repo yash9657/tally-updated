@@ -27,22 +27,41 @@ reports, their five registration sites, and the HTTP reachability pin. 0073 seed
 merely untested, it makes the admin API **422 an owner who reads their own level's rules and saves
 them back**. So the report names could not land without routes, and the routes could not be a stub.
 
-**Measured gates at `7b93e39`:** backend **2228 pass / 0 SKIP / 0 FAIL** (baseline 2220, +8 = exactly
-the tests added) · frontend **597 / 46** · `tsc` clean · `make verify` exit 0 · `verify:demo`
-**33/33 run ALONE** — unchanged, and now *measured* rather than reasoned, which closes §4.4 for this
-change.
+**AND THEN, IN THE SAME SESSION, §3.1a ITEMS 1 AND 2 — THE WRITE API:** `internal/orders`
+(order + BOM service), `handler_orders.go` (10 routes), the three bare tokens wired into
+`routeAction`, and the full TS client trio (`client.ts` / `rest.ts` / `mock.ts`).
+**A human can now create an order, close it with a reason, keep a recipe and explode it.**
+The HTTP reachability pin's fixture no longer reaches around the API: it POSTs the order, reads the
+line id back, then delivers against it — the "what this does NOT prove" caveat is **deleted, not
+weakened**.
+
+**Measured gates at `e08b65f`:** backend **2266 pass / 0 SKIP / 0 FAIL** (session baseline 2220) ·
+frontend **614 / 47 files** (baseline 597 / 46) · `tsc` clean · `make verify` exit 0 · `verify:demo`
+**33/33 run ALONE** on a version-checked new build — unchanged, and now *measured* rather than
+reasoned, which closes §4.4 for this change.
+
+**Commits, in order:** `e18830b` the spine · `7b93e39` the order book + ACL · `f7c9469` this handoff ·
+`e08b65f` the order + BOM write API.
 
 ### 0.1.1 ⛔ WHAT IS **NOT** BUILT, STATED FIRST
 
-- **There is NO order-creation API and NO BOM API.** `internal/orders` still does not exist. A human
-  cannot create an order from inside this product — the order in the HTTP test is **seeded by SQL**,
-  and that test's header says so rather than implying otherwise. **This is T2's §4.0 gap in a new
-  place, and it is the highest-value next piece of T3.**
-- **No screens for anything in T3.** No order entry, no BOM entry, no order-book screen, no
-  fulfilment picker on voucher entry.
+- ⛔ **NO SCREENS FOR ANY OF IT.** No order entry, no BOM entry, no order-book screen, and — the
+  largest gap — **no fulfilment picker on voucher entry**. The whole backend and the whole client
+  API exist and are tested; **a keyboard-only operator still cannot link a delivery to an order.**
+  That is precisely T2's §4.0 shape (its masters and reports shipped, its allocation UI did not), and
+  it is now the highest-value next piece of T3. §3.1a items 3 and 4.
+- **`ReviseLineQty` is not on the wire.** `orders.Service` has it and migration 0042's
+  `order_line_still_covers_fulfilments` trigger backs it, but no route calls it, so an order's
+  committed quantity cannot be corrected from a client. The mock says so in its own comment rather
+  than inventing a route.
 - **T5 e-Way Bill: nothing built.** Only the TS types and the recorded citation decision (§6). It is
   still free parallelism.
-- **BOM has tables and nothing else** — no explosion endpoint, no Stock Journal integration.
+- **BOM explosion does not post the Stock Journal**, deliberately — it returns what the lines WOULD
+  be and the operator submits the voucher. Wiring "explode straight into a posted journal" would make
+  a manufacture a side effect of opening a recipe; if it is ever wanted it is a voucher-entry feature,
+  not an orders one.
+- **Nothing seeds T3 into `seed:demo`**, so the order-book screens will render empty against the demo
+  company — the same unclaimed work T2 and T6 left behind (§4.3.5).
 
 ### 0.1.2 THE DECISIONS THIS SESSION TOOK, so they are not re-litigated
 
@@ -67,6 +86,21 @@ change.
 6. **`sales-order` / `purchase-order` are two bare tokens; `bom` is one.** The test recorded in
    `vocabulary.go` is not "are these things similar" but **"would an administrator ever grant one
    without the other"**. No ACL rows for any of the three.
+7. ⛔ **`internal/orders` MAY IMPORT NOTHING BUT `internal/platform/db`**, and `archtest` pins it.
+   That empty-but-for-db set is the architectural enforcement of "an order is not a movement": an edge
+   to `internal/ledger` would be the beginning of "while recording this order, also move the stock".
+   ⚠️ **The dependency runs the OTHER way and already exists** — `internal/ledger` owns
+   `order_fulfilment`, because a fulfilment is written inside the voucher's transaction. The order
+   table is the shared vocabulary, not a call.
+8. **The DIRECTION IS IN THE PATH, never the body.** `orderReq` has no `direction` field and
+   `CreateOrderRequest` does not either. `routeAction` reads the path, so a body field would let a
+   caller holding only `sales-order` POST a purchase commitment to the sales route and be allowed —
+   the PDP would have said yes to the wrong object. **The handlers additionally 404 an id whose
+   direction does not match its route**, because both families read one table; that guard is
+   mutation-proved, and without it the full purchase-order body (party, quantities, agreed rates) is
+   served to a sales-only caller.
+9. **BOM explosion multiplies BEFORE dividing** (`orders.ScaleComponent`), and the mock reproduces the
+   same arithmetic. Computing the ratio first shorts every non-whole-multiple batch, always downward.
 
 ### 0.1.3 NEW TRAPS, each paid for this session
 
@@ -90,6 +124,25 @@ change.
 - ⚠️ **`InventoryLine` HAS NO `LineNo` FIELD** — line numbers come from slice position, so
   `Inventory[0]` is line 1. That is precisely why `FulfilmentInput.LineNo` is 1-based and an array
   index is off by one, and the validator says so in its error text.
+- ⛔ **A MOCK METHOD THAT THROWS SYNCHRONOUSLY DOES NOT REJECT.** A helper typed
+  `Promise<T>` that `throw`s before its first `await` escapes past `.catch()` and past
+  `expect(...).rejects` — so a screen sees a crash where the real server would have handed it a
+  handled 422. Every mock helper must be `async`. **`frontend/src/api/orders.test.ts` caught this on
+  its first run**, which is the whole argument for writing the mock-contract test at the same time as
+  the mock.
+- ⛔ **A `View` TYPE THAT `extends` AN `Input` TYPE INHERITS ITS OPTIONALITY, AND THAT IS A TYPE THAT
+  LIES ABOUT THE RESPONSE.** Three of them landed this session before `tsc` and the mock test found
+  them: `rate?` on the way in is always a fixed-4 string on the way back; `line_no` is *absent* on
+  the way in (the server assigns it from position) and *required* on the way back. This is the same
+  defect class as T2's flat-vs-envelope lie, one layer up — **diff a response type against the
+  handler's JSON, not against the request type it resembles.**
+- ⚠️ `optionalUUID` maps `""` to `uuid.Nil`, so a handler that wants "absent" and a handler that
+  wants "required" both get the same value and the DOMAIN has to distinguish them. Keep the
+  all-zeros refusal wherever `uuid.Nil` is a sentinel (§7.3) — the BOM list filter needed it.
+- ⚠️ **A NEW `internal/` PACKAGE NEEDS *TWO* ARCHTEST ENTRIES, NOT ONE.** Its own allowed-import set,
+  AND an entry in `internal/server`'s set — `server` is the composition root and the walker fails the
+  build for an undeclared edge. Adding only the first passes `go test ./internal/archtest/` when run
+  against the package alone and fails once `server` imports it, which is a full-suite-only failure.
 
 ### 0.1.4 ⛔ THE §4.0 LESSON, NOW WITH A THIRD OCCURRENCE AND A TS COROLLARY
 
@@ -166,8 +219,8 @@ FeaturesScreen row leads with what is missing.
 
 | Gate | Value | Notes |
 |---|---|---|
-| backend `go test ./... -count=1 -v` | **2228 pass / 0 SKIP / 0 FAIL** | 2026-08-05 second session; was 2220 |
-| frontend `pnpm run test:run` | **597 pass / 46 files** | unchanged — T3's frontend work is types only so far |
+| backend `go test ./... -count=1 -v` | **2266 pass / 0 SKIP / 0 FAIL** | 2026-08-05 second session; was 2220 |
+| frontend `pnpm run test:run` | **614 pass / 47 files** | was 597 / 46; the new file is the mock-contract suite |
 | `pnpm exec tsc --noEmit` | clean | ⛔ **a separate gate from `make verify`** |
 | `make verify` | exit 0 | |
 | `verify:demo` | **33/33**, run alone — re-measured after T3, unchanged | ⚠️ it needs **insightd on :8088** as well as cored — a killed insightd makes it die with `TypeError: fetch failed`, which looks like a regression and is not |
@@ -307,17 +360,18 @@ all built and tested against orders that only SQL can create.
 
 | # | Piece | Owns | Notes |
 |---|---|---|---|
-| 1 | **Order CRUD** | `internal/orders/order.go` + tests, `internal/server/handler_orders.go` | `POST/GET/PUT .../sales-orders` and `.../purchase-orders`. **Two routes, two tokens** (`sales-order`, `purchase-order`) — both already in `authz.KnownResources`, so only `routeAction()` needs an arm. ⚠️ `is_closed` needs its own action and a REASON (0042 CHECKs that a closed order has one and an open one does not) |
-| 2 | **BOM CRUD + explosion** | `internal/orders/bom.go` + tests, `internal/server/handler_bom.go` | Token `bom` is already in the vocabulary. The explosion scales by `wanted / output_qty` **once, at full precision** — see `BomExplosionResponse` in `types.ts` and 0043's header for why per-unit storage shorts every batch |
-| 3 | **The fulfilment picker on voucher entry** | the inventory grid | ⛔ The T3 twin of T2's missing allocation UI. It must offer OUTSTANDING order lines for the item on the row — never ask for a `line_no` or an `order_line_id`. Read `FulfilmentInput` in `types.ts` first |
-| 4 | **Order + order-book screens** | one lane, all 13 registration sites each | §3.6 still applies. ⚠️ The order book is **two screens, not one with a toggle** — a toggle would reach a resource the operator may be denied (§0.1.2 item 2) |
-| 5 | **Seed T3 into `seed:demo`** | `frontend/scripts/seed-demo.mts` | Same unclaimed work T2 and T6 left behind (§4.3.5). One order, one partial delivery makes the order book demonstrable |
+| ~~1~~ | ~~Order CRUD~~ | `internal/orders/order.go`, `internal/server/handler_orders.go` | ✅ **DONE.** 10 routes, 7 HTTP tests, the direction guard mutation-proved |
+| ~~2~~ | ~~BOM CRUD + explosion~~ | `internal/orders/bom.go` | ✅ **DONE.** `ScaleComponent` extracted as a pure function and mutation-proved; 8-case table |
+| **3** | ⛔ **The fulfilment picker on voucher entry** | the inventory grid | **THE LARGEST REMAINING T3 GAP — a keyboard-only operator still cannot link a delivery to an order.** It must offer OUTSTANDING order lines for the item on the row (`GET /sales-orders?open_only=true`, then the line ids off `GET /sales-orders/{id}`) and **never ask for a `line_no` or an `order_line_id`**. Read `FulfilmentInput` in `types.ts` first — its `qty` is a LINK and must not be defaulted-and-locked to the line quantity, or an over-delivery cannot be saved at all |
+| **4** | **Order + order-book screens** | one lane, all 13 registration sites each | §3.6 applies. ⚠️ The order book is **two screens, not one with a toggle** — a toggle would reach a resource the operator may be denied (§0.1.2 item 2). The client methods all exist and the mock refuses what the server refuses, so a screen can be built against `createMockClient()` with some confidence for once |
+| **5** | **Seed T3 into `seed:demo`** | `frontend/scripts/seed-demo.mts` | Same unclaimed work T2 and T6 left behind (§4.3.5). One order plus one partial delivery makes both order books demonstrable |
+| 6 | **`ReviseLineQty` on the wire** | `handler_orders.go` | The service method and 0042's trigger exist; no route calls it, so a committed quantity cannot be corrected from a client. Small, and the interesting part (a revision below what is already delivered) is already refused by the database |
 
-**Every one of these must carry §3.3's six items plus the reachability question**, and for pieces 1–3
-the reachability answer is now concrete: **replace the SQL seeding in
-`internal/server/order_fulfilment_http_test.go`'s fixture with real POSTs, and delete that file's
-"what this does NOT prove" caveat.** That is the definition of done for piece 1, and it is a better
-one than a green suite because the caveat is written down and has to be removed by hand.
+**Every one of these must carry §3.3's six items plus the reachability question.** The bar piece 1 was
+held to, and the one to reuse: **its HTTP test's fixture may not reach around the API.**
+`order_fulfilment_http_test.go` now POSTs the order, reads the line id back, and delivers against it;
+the only SQL left is opening stock, which is a fixture concern rather than the feature. When a screen
+lands, the equivalent is that the browser drive (§7.5) creates the order through the UI.
 
 ### 3.2 PHASE 1 — ONE WORKFLOW, FOUR LANES, EACH `implement → adversarially verify`
 
