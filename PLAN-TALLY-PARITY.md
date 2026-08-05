@@ -204,7 +204,7 @@ leave the gap unused and take a number at the end.**
 `docs/design/t4-slice2-model.md` §8.3–8.4 records why: the import and the matching are two
 user-visible slices, 2a needs an ACL migration of its own, and the match table is 2b's. So
 0063 became the ACL rather than the match table, and 2b's table takes a new number at the end —
-the same call T6 made when it took 0067. **Group B's blocks still continue from 0071.**
+the same call T6 made when it took 0067. **Group B's blocks now continue from 0072** — 0071 was consumed by the seeder apply-order repair, and see HANDOFF-CLEAR-A-TIER.md §6.1: every reserved block below 0071 is now unusable for an ACL SEEDER change, because the highest-numbered restatement is the only body that survives.
 
 **T4 slice 2 does NOT take 0047.** `HANDOFF-CLOSING-THE-GAP.md` §3.2 said "migration 0047",
 which is **T5's reserved block**. Slice 2 gets its own block at the end (0062–0064) instead,
