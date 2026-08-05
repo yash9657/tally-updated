@@ -946,3 +946,103 @@ func (s *Service) ListTDSChallans(ctx context.Context, taxYearStart int) ([]TDSC
 	}
 	return out, nil
 }
+
+// ---------------------------------------------------------------------------
+// WHAT CAN BE ALLOCATED — the read that makes the entry form usable at all
+// ---------------------------------------------------------------------------
+
+// AllocatableDeduction is one deduction a new challan could pay for.
+//
+// ⛔ THIS READ EXISTS BECAUSE THE FORM WAS UNUSABLE WITHOUT IT, and the way it
+// was unusable is worth recording. The allocation is keyed on
+// (voucher_id, section, leg_seq) — a UUID and a 0-BASED ORDINAL — because that is
+// tds_deduction's natural key and the only key that survives an ALTER. But NO
+// SCREEN IN THIS PRODUCT DISPLAYS EITHER OF THEM: the TDS/TCS Register renders
+// voucher_no, and its payload carries no leg field at all. So the first version
+// of the entry form asked the operator to type two identifiers they had no way to
+// obtain, and typing the one thing they COULD see ("P1") earned a bare
+// "allocation 1: invalid voucher_id".
+//
+// It passed every test, because the tests keyed mock fixture ids that the real
+// server rejects as non-UUIDs. A challan cannot be filed without an allocation
+// (Deductee Detail field 5 is a challan reference), so the allocation grid IS the
+// feature, and on the real stack a human could not complete it.
+//
+// The fix is not a better error message: it is to stop asking. The screen offers
+// what is allocatable and sends the identifiers it was given.
+type AllocatableDeduction struct {
+	// VoucherID and LegSeq are the identifiers a human must never type. They
+	// travel to the client only so the client can send them back.
+	VoucherID uuid.UUID
+	LegSeq    int
+	// VoucherNo and DeducteeName are what a human actually recognises.
+	VoucherNo     string
+	DeducteeName  string
+	Section       string
+	DeductionDate string
+	// TaxRupees is what was deducted, and therefore EXACTLY what may be
+	// allocated: RecordTDSChallan refuses an amount that is not equal to it. So
+	// the amount is not an input either — the screen sends this figure back.
+	TaxRupees decimal.Decimal
+	// AlreadyPaid means a challan already covers this leg. Such a deduction is
+	// returned rather than filtered out, and flagged: an operator looking for a
+	// deduction that is missing from the list needs to know the difference
+	// between "not deducted in this year" and "already deposited".
+	AlreadyPaid bool
+}
+
+// ListAllocatableDeductions returns every deduction of a tax year that carries
+// tax, with whether a challan already pays it.
+//
+// ZERO-TAX ROWS ARE EXCLUDED, and that is not a convenience. A sub-threshold
+// payment has no tax to deposit and cannot be allocated at all — the return
+// reports it under the SYNTHESISED nil challan, which the emitter builds and
+// nothing stores. Offering one in a picker would invite an operator to allocate
+// against it and collect a refusal for a thing that is not an error.
+func (s *Service) ListAllocatableDeductions(ctx context.Context, taxYearStart int) ([]AllocatableDeduction, error) {
+	if _, ok := db.CompanyFromContext(ctx); !ok {
+		return nil, db.ErrNoCompany
+	}
+	var out []AllocatableDeduction
+	err := s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		out = nil
+		// voucher_no comes off the CURRENT version, the same way the register
+		// reads it: an altered voucher must show the number it now carries.
+		// The LEFT JOIN to the allocation is what answers AlreadyPaid; there is no
+		// foreign key between the two tables by design (0069), so this join is on
+		// the natural key exactly as the write path matches it.
+		rows, err := tx.Query(ctx,
+			`SELECT d.voucher_id, d.leg_seq, COALESCE(vv.voucher_no, ''),
+			        l.name, d.section, to_char(d.deduction_date, 'YYYY-MM-DD'),
+			        d.tds_amount_rupees, (a.id IS NOT NULL)
+			   FROM tds_deduction d
+			   JOIN ledger l           ON l.company_id  = d.company_id AND l.id = d.deductee_ledger_id
+			   JOIN voucher_head vh    ON vh.company_id = d.company_id AND vh.voucher_id = d.voucher_id
+			   JOIN voucher_version vv ON vv.id = vh.current_version_id
+			   LEFT JOIN tds_challan_allocation a
+			          ON a.company_id = d.company_id
+			         AND a.voucher_id = d.voucher_id
+			         AND a.section    = d.section
+			         AND a.leg_seq    = d.leg_seq
+			  WHERE d.tax_year_start = $1
+			    AND d.tds_amount_rupees > 0
+			  ORDER BY d.deduction_date, vv.voucher_no, d.leg_seq`, taxYearStart)
+		if err != nil {
+			return fmt.Errorf("masters: read allocatable deductions: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var a AllocatableDeduction
+			if err := rows.Scan(&a.VoucherID, &a.LegSeq, &a.VoucherNo, &a.DeducteeName,
+				&a.Section, &a.DeductionDate, &a.TaxRupees, &a.AlreadyPaid); err != nil {
+				return fmt.Errorf("masters: scan allocatable deduction: %w", err)
+			}
+			out = append(out, a)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}

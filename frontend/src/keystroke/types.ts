@@ -42,6 +42,19 @@
  *                          bank's own statement. Reconciling never touches the
  *                          voucher, so an ALTER after clearing is reported as
  *                          BROKEN rather than silently absorbed.
+ *  - "tds-challans"      — the TDS CHALLAN register (T6, migration 0069): the
+ *                          deposits made to the Government for one tax year and
+ *                          WHICH DEDUCTIONS each one paid, plus the form that
+ *                          records a new one. A ScreenKind and NOT a
+ *                          "report:NAME": a report name is reached by migration
+ *                          0011's coarse `allow display report`, whereas the
+ *                          server serves this as the bare resource token
+ *                          `tds-challan` (refused to the seeded Data Entry level
+ *                          by default_access 'none'). As a ScreenKind it also
+ *                          needs no FrameOverlays period classification — the F2
+ *                          overlay opens only for report screens, and this
+ *                          screen's dimension is a TAX YEAR asked for on its
+ *                          face, never derived from a deposit date.
  */
 export type ScreenKind =
   | "gateway"
@@ -58,6 +71,7 @@ export type ScreenKind =
   | "edit-log"
   | "help"
   | "features"
+  | "tds-challans"
   | "bank-reconciliation";
 
 /**
@@ -329,6 +343,19 @@ export type KeymapAction =
    * while leaving two accounts wrong.
    */
   | { kind: "importBankStatement" }
+  /**
+   * Alt+C on the TDS Challans screen — RECORD A DEPOSIT (T6).
+   *
+   * THE COMBO is Tally's documented create-inline key (RESEARCH.md:405, "Alt+C =
+   * create a master on the fly from within a field"); the SCOPE is ours, and it
+   * is scoped rather than claimed globally for two reasons. A challan is not a
+   * master, so the global `createMaster` action would push a LEDGER-CREATE frame
+   * over the form; and inside a report Alt+C is Tally's New Column
+   * (RESEARCH.md:771), which this screen is not. Leaving the global binding in
+   * place would be worse than an unbound key: it would navigate away from a
+   * half-keyed counterfoil.
+   */
+  | { kind: "recordTDSChallan" }
   /**
    * A combo that a real TallyPrime user WILL press but whose feature is not
    * built in this edition (e.g. payroll, order processing). It is bound on

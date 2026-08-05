@@ -265,6 +265,91 @@ const RAW_SCREEN_BINDINGS: Partial<
       note: "The basis-of-values panel is not built on this screen. The statement's own arithmetic is on its face: book balance, un-cleared items, bank balance, and a difference that must be exactly zero.",
     },
   },
+  // THE TDS CHALLAN REGISTER (T6). This screen carries an ENTRY FORM, and that
+  // is what every binding below is about: AN UNBOUND KEY HERE IS NOT INERT.
+  // Without these entries the GLOBAL voucher keys fire — F5 opens a Payment
+  // voucher, F9 a Purchase, F8 Sales — on top of a half-keyed counterfoil, and
+  // the frame that held the form is gone with it. That is not a missing feature
+  // but a destructive one, which is the case this file's coverage rule exists
+  // for (see the F5 note on bank-reconciliation above).
+  "tds-challans": {
+    // Alt+C — RECORD A DEPOSIT. Tally's create-inline combo (RESEARCH.md:405)
+    // scoped to this screen; the global `createMaster` would push a
+    // ledger-create frame over the form instead.
+    "Alt+C": { kind: "recordTDSChallan" },
+    // The voucher keys, held back HERE and only here. The feature is built and
+    // is one Esc away — which is what these notes say, rather than pretending
+    // the voucher does not exist.
+    F4: {
+      kind: "unavailable",
+      feature: "Contra voucher (F4) — not from this form",
+      note: "The voucher keys are held back on the challan form: opening a voucher over it would abandon the counterfoil you are keying. Esc leaves the form, then F4 works as it always does.",
+    },
+    F5: {
+      kind: "unavailable",
+      feature: "Payment voucher (F5) — not from this form",
+      note: "The voucher keys are held back on the challan form: opening a voucher over it would abandon the counterfoil you are keying. Esc leaves the form, then F5 works as it always does.",
+    },
+    F6: {
+      kind: "unavailable",
+      feature: "Receipt voucher (F6) — not from this form",
+      note: "The voucher keys are held back on the challan form: opening a voucher over it would abandon the counterfoil you are keying. Esc leaves the form, then F6 works as it always does.",
+    },
+    F7: {
+      kind: "unavailable",
+      feature: "Journal voucher (F7) — not from this form",
+      note: "The voucher keys are held back on the challan form: opening a voucher over it would abandon the counterfoil you are keying. Esc leaves the form, then F7 works as it always does.",
+    },
+    F8: {
+      kind: "unavailable",
+      feature: "Sales voucher (F8) — not from this form",
+      note: "The voucher keys are held back on the challan form: opening a voucher over it would abandon the counterfoil you are keying. Esc leaves the form, then F8 works as it always does.",
+    },
+    F9: {
+      kind: "unavailable",
+      feature: "Purchase voucher (F9) — not from this form",
+      note: "The voucher keys are held back on the challan form: opening a voucher over it would abandon the counterfoil you are keying. Esc leaves the form, then F9 works as it always does.",
+    },
+    "Alt+F5": {
+      kind: "unavailable",
+      feature: "Debit Note (Alt+F5) — not from this form",
+      note: "The voucher keys are held back on the challan form: opening a voucher over it would abandon the counterfoil you are keying. Esc leaves the form, then Alt+F5 works as it always does.",
+    },
+    "Alt+F6": {
+      kind: "unavailable",
+      feature: "Credit Note (Alt+F6) — not from this form",
+      note: "The voucher keys are held back on the challan form: opening a voucher over it would abandon the counterfoil you are keying. Esc leaves the form, then Alt+F6 works as it always does.",
+    },
+    "Alt+F7": {
+      kind: "unavailable",
+      feature: "Stock Journal (Alt+F7) — not from this form",
+      note: "The voucher keys are held back on the challan form: opening a voucher over it would abandon the counterfoil you are keying. Esc leaves the form, then Alt+F7 works as it always does.",
+    },
+    "Alt+F8": {
+      kind: "unavailable",
+      feature: "Delivery Note (Alt+F8) — not from this form",
+      note: "The voucher keys are held back on the challan form: opening a voucher over it would abandon the counterfoil you are keying. Esc leaves the form, then Alt+F8 works as it always does.",
+    },
+    "Alt+F9": {
+      kind: "unavailable",
+      feature: "Receipt Note (Alt+F9) — not from this form",
+      note: "The voucher keys are held back on the challan form: opening a voucher over it would abandon the counterfoil you are keying. Esc leaves the form, then Alt+F9 works as it always does.",
+    },
+    "Alt+F10": {
+      kind: "unavailable",
+      feature: "Physical Stock (Alt+F10) — not from this form",
+      note: "The voucher keys are held back on the challan form: opening a voucher over it would abandon the counterfoil you are keying. Esc leaves the form, then Alt+F10 works as it always does.",
+    },
+    // F2 would otherwise read as "Date" from the global table, on a screen whose
+    // dates are typed into named fields. This register's dimension is a TAX YEAR
+    // and it is asked for ON THE FACE of the screen, because it is never derived
+    // from the deposit date.
+    F2: {
+      kind: "unavailable",
+      feature: "Period (F2)",
+      note: "This register has no period. Its dimension is the TAX YEAR, typed on the screen itself — a challan paid on 7 April 2026 is normally for March of 2025-26, so the year is recorded rather than computed from the deposit date.",
+    },
+  },
   // Alt+L on a voucher opens its EDIT LOG. RESEARCH sec 6 pins the PLACEMENT
   // (Tally shows the Edit Log from the voucher alteration screen and the Day
   // Book) but not the combo, so this is scoped to the voucher screen rather
@@ -428,6 +513,8 @@ export function actionLabel(action: KeymapAction): string {
       return "Bank Reconciliation (tick items off the bank statement)";
     case "importBankStatement":
       return "Import a bank statement (CSV)";
+    case "recordTDSChallan":
+      return "Record a TDS deposit (challan)";
     case "createMaster":
       return `Create ${action.masterKind} on the fly`;
     case "unavailable":

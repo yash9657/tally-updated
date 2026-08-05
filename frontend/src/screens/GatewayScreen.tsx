@@ -14,7 +14,12 @@ const GATEWAY_MENU = [
   // server-side with no key anywhere in this app, which the handoff calls a
   // parity gap rather than a nicety.
   "Bank Reconciliation",
-  "Users & Roles",
+
+  // TDS Challans (T6) — the deposits made to the Government, and the only place
+  // one can be recorded. Built server-side with no key anywhere in this app; a
+  // deduction with no challan behind it cannot be filed at all, so the register
+  // needs a door rather than a route only cURL can reach.
+  "TDS Challans",  "Users & Roles",
   "Display More Reports",
 ] as const;
 

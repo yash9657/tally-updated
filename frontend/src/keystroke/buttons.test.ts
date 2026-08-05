@@ -80,6 +80,14 @@ const SCREEN_PATHS: { screen: NavSnapshot["screen"]; events: Ev[] }[] = [
       { type: "KEY", combo: "Enter" },
     ],
   },
+  // The TDS CHALLAN register (T6), reached by its own Gateway entry.
+  {
+    screen: "tds-challans",
+    events: [
+      { type: "SELECT", menuItem: "TDS Challans" },
+      { type: "KEY", combo: "Enter" },
+    ],
+  },
 ];
 
 describe("no advertised button is decorative", () => {
@@ -122,6 +130,13 @@ describe("no advertised button is decorative", () => {
           // through the pure machine. It does not move the stack — importing
           // does not navigate away from the statement you are reconciling.
           "importBankStatement",
+          // Alt+C on the TDS challan register opens the DEPOSIT FORM. A
+          // screen-owned side effect for the same reason Alt+O is one: the form
+          // state and the client that posts it belong to the screen, and
+          // recording a deposit does not navigate — so the pure machine
+          // deliberately does not move and this rule would otherwise read the
+          // bar button as decorative.
+          "recordTDSChallan",
           "voucher",
           "date",
         ].includes(action?.kind ?? "");

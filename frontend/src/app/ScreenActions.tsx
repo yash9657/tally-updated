@@ -38,6 +38,13 @@ import type { NavSnapshot } from "../keystroke/navMachine";
  * `nextVoucher` browse the saved vouchers around the loaded one (Page Up/Down).
  */
 export type ScreenActionKind =
+  /**
+   * Alt+C on the TDS Challans screen — open the DEPOSIT FORM (T6). A screen
+   * action rather than a machine transition because the form's state (and the
+   * client that posts it) belong to the screen, and recording a deposit does not
+   * navigate: the operator is still looking at the register they are adding to.
+   */
+  | "recordTDSChallan"
   | "accept"
   | "delete"
   | "export"

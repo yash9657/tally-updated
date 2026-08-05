@@ -88,6 +88,17 @@ import type {
   CreateTCSDeclarationResponse,
   SetDeductorStatusRequest,
   SetDeductorStatusResponse,
+  MinorHead,
+  DeductorCategory,
+  TDSChallan,
+  TDSChallanAllocation,
+  TDSChallanListResponse,
+  CreateTDSChallanRequest,
+  CreateTDSChallanResponse,
+  TDSProfile,
+  TDSProfileResponse,
+  SetTDSProfileRequest,
+  SetTDSProfileResponse,
   BankReconLine,
   SetBankDateRequest,
   SetBankDateResponse,
@@ -497,6 +508,232 @@ const MOCK_ENTITY_CATEGORIES = [
   "BOI",
 ];
 
+// ---------------------------------------------------------------------------
+// T6 — THE TDS CHALLAN AND THE DEDUCTOR PROFILE (migrations 0069 / 0070).
+//
+// ⚠️ EVERY SENTENCE THIS MOCK REFUSES WITH IS A HAND COPY OF THE SERVER'S, AND A
+// HAND COPY IS THE THING THAT WENT WRONG ON THE REGISTER (see the tdsRegister
+// mock below, whose prose is now GENERATED because two hand copies went stale for
+// two days while every test stayed green).
+//
+// There is no generator for these yet, so the rule for whoever writes the screen
+// tests is: ASSERT THAT THE MESSAGE THE CLIENT THREW IS THE MESSAGE THAT REACHED
+// THE SCREEN — capture `err.message` from the rejected promise and look for THAT
+// string in the DOM. Never retype one of these sentences into a test as a
+// literal: a retyped sentence pins the mock's wording, and the mock's wording is
+// not the product's.
+// ---------------------------------------------------------------------------
+
+/**
+ * The three Annexure 7 minor heads the server serves from
+ * masters.TDSChallanMinorHeads(), IN THE CHECK'S ORDER.
+ *
+ * Duplicated here ONLY because the mock has no server to ask — exactly as
+ * MOCK_ENTITY_CATEGORIES is. A real client renders whatever
+ * `minor_heads` carries, so this list never reaches a real screen.
+ */
+const MOCK_MINOR_HEADS: MinorHead[] = [
+  { code: "200", description: "tax the deductor pays over of its own motion" },
+  { code: "400", description: "a demand raised on assessment" },
+  { code: "100", description: "advance tax" },
+];
+
+/**
+ * Annexure 4's sixteen deductor categories in the workbook's printed order, with
+ * the two conditional rules attached — the mirror of masters.DeductorCategories().
+ *
+ * The RULES are here because the screen needs them to know that choosing "State
+ * Government" makes the Annexure 5 state code mandatory and that choosing
+ * "Company" FORBIDS it. Same caveat as above: served, never a client's own copy.
+ */
+const MOCK_DEDUCTOR_CATEGORIES: DeductorCategory[] = [
+  { code: "A", description: "Central Government", state_name_code_required: false, ministry_required: true, ministry_allowed: true },
+  { code: "S", description: "State Government", state_name_code_required: true, ministry_required: false, ministry_allowed: false },
+  { code: "D", description: "Statutory body (Central Govt.)", state_name_code_required: false, ministry_required: true, ministry_allowed: true },
+  { code: "E", description: "Statutory body (State Govt.)", state_name_code_required: true, ministry_required: false, ministry_allowed: true },
+  { code: "G", description: "Autonomous body (Central Govt.)", state_name_code_required: false, ministry_required: true, ministry_allowed: true },
+  { code: "H", description: "Autonomous body (State Govt.)", state_name_code_required: true, ministry_required: false, ministry_allowed: true },
+  { code: "L", description: "Local Authority (Central Govt.)", state_name_code_required: false, ministry_required: false, ministry_allowed: true },
+  { code: "N", description: "Local Authority (State Govt.)", state_name_code_required: true, ministry_required: false, ministry_allowed: true },
+  { code: "K", description: "Company", state_name_code_required: false, ministry_required: false, ministry_allowed: false },
+  { code: "M", description: "Branch / Division of Company", state_name_code_required: false, ministry_required: false, ministry_allowed: false },
+  { code: "P", description: "Association of Person (AOP)", state_name_code_required: false, ministry_required: false, ministry_allowed: false },
+  { code: "T", description: "Association of Person (Trust)", state_name_code_required: false, ministry_required: false, ministry_allowed: false },
+  { code: "J", description: "Artificial Juridical Person", state_name_code_required: false, ministry_required: false, ministry_allowed: false },
+  { code: "B", description: "Body of Individuals", state_name_code_required: false, ministry_required: false, ministry_allowed: false },
+  { code: "Q", description: "Individual/HUF", state_name_code_required: false, ministry_required: false, ministry_allowed: false },
+  { code: "F", description: "Firm", state_name_code_required: false, ministry_required: false, ministry_allowed: false },
+];
+
+/** The format's literal for a deductor not required to hold a PAN (masters.PANNotRequired). */
+const MOCK_PAN_NOT_REQUIRED = "PANNOTREQD";
+
+/** Annexure 3's "Other" code, which the ministry_other field exists to expand. */
+const MOCK_MINISTRY_OTHER = "99";
+
+/**
+ * ONE FIXTURE DEDUCTION — the mock's stand-in for a `tds_deduction` row.
+ *
+ * ⛔ THE MOCK DERIVES NO TAX AND KEEPS NO DEDUCTIONS. It cannot: TDS derivation
+ * is a server-side engine and nothing here posts through it. So without a fixture
+ * table an allocation could not be checked against ANYTHING, and the two refusals
+ * that matter most on the challan screen — "that is not what was deducted" and
+ * "another challan already paid that" — would be unreachable, which would teach
+ * the screen that refusals do not happen.
+ *
+ * These rows are therefore FIXTURES, not facts. What follows from that:
+ *
+ *   - They are IDENTICAL IN EVERY MOCK COMPANY, so a screen test does not have
+ *     to seed anything, and there is no company where an allocation is silently
+ *     unrefusable.
+ *   - THEY DO NOT APPEAR IN `tdsRegister`, which serves an empty register. The
+ *     mock's register and its challan path do not agree about what was deducted,
+ *     and nothing here can make them: the register's prose is generated from the
+ *     Go and this table is invented. That does NOT stop the challan screen: these
+ *     rows are served as `allocatable_deductions` on `listTDSChallans`, exactly as
+ *     the server serves its own, so the picker has something to offer.
+ *   - ⛔ THE IDS ARE REAL UUIDS, AND THAT IS A DEFECT THIS FILE ALREADY HAD. They
+ *     used to be the mock's own shape ("voucher-tds-fixture-p1"), and the real
+ *     server refuses a voucher_id that is not a uuid. So the screen tests keyed
+ *     ids that cored rejects with "allocation 1: invalid voucher_id" and passed
+ *     green while the feature was unusable on the real stack. A fixture whose
+ *     shape the server would refuse is not a fixture, it is a way of not testing.
+ */
+export interface MockTDSDeduction {
+  /**
+   * ⚠️ A UUID, because the real server parses it as one. See the note above: the
+   * previous non-uuid ids let every screen test pass against a form no operator
+   * could complete against cored.
+   */
+  voucher_id: string;
+  voucher_no: string;
+  section: string;
+  /** 0-BASED, as the natural key is. */
+  leg_seq: number;
+  deductee_name: string;
+  /** yyyy-mm-dd — the date of the DEDUCTION. Shown in the allocation picker. */
+  deduction_date: string;
+  /** Fixed-point string. NOT whole rupees — see the 3,333.30 row. */
+  tax_rupees: Money;
+  /** The year the deduction belongs to. An allocation across years is refused. */
+  tax_year_start: number;
+}
+
+/**
+ * The four fixture deductions every mock company knows about. Exported so a
+ * screen test (and a developer driving the browser) has real triples to allocate
+ * against — and, deliberately, one of each interesting shape:
+ *
+ *   1. P1 — a plain whole-rupee deduction on LEG 0. The happy path.
+ *   2. P2 — ₹33,333 at 10% = ₹3,333.30, which is NOT whole rupees. A challan's
+ *      tax must be, so paying this one leaves a few paise in
+ *      `unallocated_tax_rupees` — the ordinary case the field exists for, and
+ *      the one a screen must NOT present as an error.
+ *   3. P3 — a SUB-THRESHOLD deduction of zero. Nothing can be allocated to it:
+ *      it is still reported, under the return's derived nil challan. It is
+ *      therefore EXCLUDED from `allocatable_deductions` (as the server excludes
+ *      it) but kept here, so the "no tax was deducted" refusal stays reachable
+ *      for a caller that posts the triple directly.
+ *   4. P4 — LEG 1 WITH TAX ON IT, which exists for one reason: a picker that
+ *      quietly sent leg 0 for every row would still pass on P1, P2 and P3. This
+ *      is the row that fails such a picker.
+ *
+ * ⛔ EVERY voucher_id HERE IS A UUID. See {@link MockTDSDeduction}.
+ */
+export const MOCK_TDS_DEDUCTIONS: MockTDSDeduction[] = [
+  {
+    voucher_id: "3f6b1c2e-0a4d-4c8b-9e11-7a2d5f0b1001",
+    voucher_no: "P1",
+    section: "194J",
+    leg_seq: 0,
+    deductee_name: "Chitra Consulting",
+    deduction_date: "2026-05-05",
+    tax_rupees: "20000.0000",
+    tax_year_start: 2026,
+  },
+  {
+    voucher_id: "3f6b1c2e-0a4d-4c8b-9e11-7a2d5f0b1002",
+    voucher_no: "P2",
+    section: "194C",
+    leg_seq: 0,
+    deductee_name: "Rao Contractors",
+    deduction_date: "2026-06-10",
+    tax_rupees: "3333.3000",
+    tax_year_start: 2026,
+  },
+  {
+    voucher_id: "3f6b1c2e-0a4d-4c8b-9e11-7a2d5f0b1003",
+    voucher_no: "P3",
+    section: "194C",
+    leg_seq: 1,
+    deductee_name: "Rao Contractors",
+    deduction_date: "2026-06-10",
+    tax_rupees: "0.0000",
+    tax_year_start: 2026,
+  },
+  {
+    voucher_id: "3f6b1c2e-0a4d-4c8b-9e11-7a2d5f0b1004",
+    voucher_no: "P4",
+    section: "194H",
+    leg_seq: 1,
+    deductee_name: "Iyer Brokers",
+    deduction_date: "2026-07-01",
+    tax_rupees: "5000.0000",
+    tax_year_start: 2026,
+  },
+];
+
+/** The natural key of a deduction / an allocation: (voucher, section, leg). */
+function allocationTriple(
+  voucherID: string,
+  section: string,
+  legSeq: number,
+): string {
+  return `${voucherID}|${section}|${legSeq}`;
+}
+
+function mockDeductionFixtures(): Map<string, MockTDSDeduction> {
+  return new Map(
+    MOCK_TDS_DEDUCTIONS.map((d) => [
+      allocationTriple(d.voucher_id, d.section, d.leg_seq),
+      d,
+    ]),
+  );
+}
+
+/**
+ * A DEEP copy of a profile, handed out on every read and kept on every write.
+ *
+ * Not tidiness. A profile screen holds the fetched row AS ITS FORM STATE and
+ * edits it in place — so a shallow copy would leave `address` and `responsible`
+ * shared with the mock's store, and keying into the form would "save" the change
+ * with no PUT at all. The next GET would then confirm it, and the screen would
+ * pass a test that proves nothing.
+ */
+function cloneTDSProfile(p: TDSProfile): TDSProfile {
+  return {
+    ...p,
+    address: { ...p.address },
+    responsible: { ...p.responsible, address: { ...p.responsible.address } },
+  };
+}
+
+/** The CIN — (branch, date, serial) — which is how the department identifies a payment. */
+function mockCIN(bsr: string, depositDate: string, challanNo: string): string {
+  return `${bsr}:${depositDate}:${challanNo}`;
+}
+
+/**
+ * A fixed-4 string with its trailing zeros trimmed, for a SENTENCE only.
+ * shopspring's `.String()` renders "20000" where StringFixed(4) renders
+ * "20000.0000", and the server's refusals use the former. Never used on a value
+ * that goes back on the wire.
+ */
+function mockPlainAmount(fixed4: Money): string {
+  if (!fixed4.includes(".")) return fixed4;
+  return fixed4.replace(/\.?0+$/, "") || "0";
+}
+
 /** "2025-26" from 2025, mirroring the server's taxYearLabel. */
 function mockTaxYearLabel(start: number): string {
   return `${start}-${String((start + 1) % 100).padStart(2, "0")}`;
@@ -617,6 +854,36 @@ interface MockCompany {
   >;
   /** s.394(2) declarations, keyed `${buyer}:${section}:${taxYear}`. */
   tcsDeclarations: Map<string, TCSDeclaration>;
+  /**
+   * TDS challans (T6, migration 0069), keyed by CIN — `${bsr}:${date}:${serial}`.
+   *
+   * KEYED BY CIN AND NOT BY ID, because the CIN is what UNIQUENESS is written on:
+   * the department identifies a payment by (branch, date, serial), so keying by
+   * the surrogate id would make the duplicate a mock cannot refuse — and the
+   * duplicate is the refusal an operator meets most.
+   */
+  tdsChallans: Map<string, TDSChallan>;
+  /**
+   * Which challan paid which deduction, keyed by the allocation triple
+   * `${voucher}|${section}|${leg}` -> CIN of the challan that paid it.
+   *
+   * A DEDUCTION IS PAID ONCE. Deductee Detail field 5 is a single challan
+   * reference, so this map is what lets the mock answer 409 with the challan that
+   * already paid — the same shape as the server's unique index.
+   */
+  tdsAllocations: Map<string, string>;
+  /**
+   * The mock's stand-in for `tds_deduction`. See {@link MockTDSDeduction}: these
+   * are FIXTURES, identical in every company, and they are what makes an
+   * allocation checkable at all here.
+   */
+  tdsDeductions: Map<string, MockTDSDeduction>;
+  /**
+   * The deductor return profile (0070). `undefined` is the ORDINARY state of a
+   * company that has not filled the form in, and it is reported as
+   * `profile_recorded: false` on a 200 — never a 404.
+   */
+  tdsProfile?: TDSProfile;
   /**
    * The INVENTORY MASTERS. Held as real rows (not synthesized on read) for the
    * same reason `ledgers` is: the item grid resolves an item's gst_rate_pct and
@@ -1180,6 +1447,11 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         deductorStatuses: new Map(),
         bankStatements: new Map(),
         tcsDeclarations: new Map(),
+        tdsChallans: new Map(),
+        tdsAllocations: new Map(),
+        // The fixture deductions are seeded into EVERY company, not just the demo
+        // one, so there is no company in which an allocation is unrefusable.
+        tdsDeductions: mockDeductionFixtures(),
         views: new Map(),
         members: [
           {
@@ -1271,6 +1543,9 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       deductorStatuses: new Map(),
       bankStatements: new Map(),
       tcsDeclarations: new Map(),
+      tdsChallans: new Map(),
+      tdsAllocations: new Map(),
+      tdsDeductions: mockDeductionFixtures(),
       views: new Map(),
       counters: new Map(),
       // The seeded demo tenant carries the same admin defaults every company
@@ -2694,6 +2969,758 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         governs_payments_in: taxYearStart + 1,
         governs_payments_in_label: mockTaxYearLabel(taxYearStart + 1),
       };
+    },
+
+    // ---- TDS CHALLANS (T6, migration 0069).
+    //
+    // WHAT THIS HALF OF THE MOCK DOES NOT MODEL, stated first because the gaps
+    // decide what a screen test may claim:
+    //
+    //   - IT DERIVES NO TAX AND KEEPS NO DEDUCTIONS. Allocations are checked
+    //     against the FIXTURE table (MOCK_TDS_DEDUCTIONS) and nothing else, so an
+    //     allocation cannot really be checked against a voucher here: the real
+    //     server reads the live `tds_deduction` row inside the write transaction.
+    //   - IT NEVER GOES BROKEN-BY-ALTER. `deduction_on_record` is always true and
+    //     `broken_by_alter` always false, because no voucher in this mock can
+    //     remove a deduction leg. A screen that renders those two flags must be
+    //     tested with a hand-built response, NOT against this mock.
+    //   - IT CANNOT FAIL A READ-BACK, so `challan` is never null and
+    //     `read_back_error` is never set. The 201-with-null-challan branch — the
+    //     one that must NOT be reported to the operator as a failed write — is
+    //     unreachable here and needs its own fixture.
+    //   - IT KNOWS NOTHING ABOUT FORM 140. Minor head 100's extra rules (the
+    //     deposit date must fall inside the quarter being filed) are refused
+    //     MONTHS LATER by the emitter, not here — and not by the server either.
+    async listTDSChallans(
+      companyID,
+      taxYearStart: number,
+    ): Promise<TDSChallanListResponse> {
+      const c = ensure(companyID);
+      // THE YEAR IS REQUIRED AND NOTHING DEFAULTS IT — refused here as well as on
+      // the server, because a screen that forgot to ask would otherwise render a
+      // plausible empty register against this mock and a 400 against cored.
+      //
+      // ⚠️ AND ONLY WHAT THE SERVER ACTUALLY REFUSES. This used to refuse
+      // `taxYearStart === 0` too, with the missing-param sentence — A REFUSAL THE
+      // SERVER DOES NOT MAKE: the handler rejects an EMPTY or non-numeric param,
+      // `strconv.Atoi("0")` succeeds, and ListTDSChallans has no range check at
+      // all (the 2025–2200 rule is on the WRITE path). So a screen that sent 0 for
+      // an unparseable box got an invented 400 here and a 200 with zero rows on
+      // the real stack, which reads as "no deposit has been recorded against
+      // 0-01". A mock that invents a refusal certifies behaviour that does not
+      // exist, and a test pinned to it is worse than no test.
+      if (!Number.isInteger(taxYearStart)) {
+        throw new ApiError(
+          400,
+          "tax_year_start must be the calendar year the tax year begins in, e.g. 2026 for 2026-27",
+        );
+      }
+      return {
+        tax_year_start: taxYearStart,
+        tax_year_label: mockTaxYearLabel(taxYearStart),
+        challans: [...c.tdsChallans.values()]
+          .filter((ch) => ch.tax_year_start === taxYearStart)
+          // The server's ORDER BY deposit_date, challan_no. A register ordered
+          // any other way is a different document.
+          .sort(
+            (a, b) =>
+              a.deposit_date.localeCompare(b.deposit_date) ||
+              a.challan_no.localeCompare(b.challan_no),
+          ),
+        // A COPY, so a caller that sorts the picker in place cannot rewrite the
+        // vocabulary for every later call (masters.TDSChallanMinorHeads copies for
+        // the same reason).
+        minor_heads: MOCK_MINOR_HEADS.map((h) => ({ ...h })),
+        // ---- WHAT CAN BE ALLOCATED, served exactly as the server serves it.
+        //
+        // ⛔ THIS IS WHAT MAKES THE DEPOSIT FORM COMPLETABLE, and its absence was
+        // the blocker: the form asked the operator to TYPE voucher_id (a UUID) and
+        // leg_seq (a 0-based ordinal), and NO SCREEN IN THIS PRODUCT SHOWS EITHER.
+        // Every test passed anyway because they keyed these fixture ids — which,
+        // until this commit, were not uuids and so were refused by cored with
+        // "allocation 1: invalid voucher_id". The ids are uuids now precisely so a
+        // screen test CANNOT pass with an id the real server would reject.
+        //
+        // ZERO-TAX ROWS ARE EXCLUDED, as ListAllocatableDeductions excludes them:
+        // nothing can be deposited against a sub-threshold payment, and offering
+        // one would invite a refusal for a thing that is not an error.
+        // ALREADY-PAID ROWS ARE NOT excluded — an operator who cannot find a
+        // deduction has to be able to tell "not deducted in this year" from
+        // "already deposited".
+        allocatable_deductions: [...c.tdsDeductions.values()]
+          .filter(
+            (d) => d.tax_year_start === taxYearStart && q4(d.tax_rupees) > 0n,
+          )
+          // The server's ORDER BY deduction_date, voucher_no, leg_seq.
+          .sort(
+            (a, b) =>
+              a.deduction_date.localeCompare(b.deduction_date) ||
+              a.voucher_no.localeCompare(b.voucher_no) ||
+              a.leg_seq - b.leg_seq,
+          )
+          .map((d) => ({
+            voucher_id: d.voucher_id,
+            leg_seq: d.leg_seq,
+            voucher_no: d.voucher_no,
+            deductee_name: d.deductee_name,
+            section: d.section,
+            deduction_date: d.deduction_date,
+            tax_rupees: d.tax_rupees,
+            // A fact about this mock's OWN stored challans, so it is modelled
+            // exactly rather than approximated — the same LEFT JOIN the server
+            // does, on the same natural key.
+            already_paid: c.tdsAllocations.has(
+              allocationTriple(d.voucher_id, d.section, d.leg_seq),
+            ),
+          })),
+      };
+    },
+
+    async createTDSChallan(
+      companyID,
+      req: CreateTDSChallanRequest,
+    ): Promise<CreateTDSChallanResponse> {
+      const c = ensure(companyID);
+      const invalid = (why: string) =>
+        new ApiError(400, `masters: invalid TDS challan: ${why}`);
+
+      const bsr = (req.bsr_code ?? "").trim();
+      const challanNo = (req.challan_no ?? "").trim();
+      const depositDate = (req.deposit_date ?? "").trim();
+      const minorHead = (req.minor_head ?? "").trim();
+
+      // ---- The identity fields. LEADING ZEROS ARE PART OF BOTH, which is why
+      // the shape is checked on the STRING and nothing here parses either.
+      if (!/^[0-9]{7}$/.test(bsr)) {
+        const why =
+          bsr.length === 7
+            ? "it is seven characters but not all of them are digits"
+            : `it is ${bsr.length} characters long`;
+        throw invalid(
+          `the BSR code is EXACTLY SEVEN DIGITS and "${bsr}" fails that — ${why}. ` +
+            "It is the code of the bank branch that received the deposit (or, for a book-entry " +
+            "deposit, the seven-digit Form 24G receipt number). LEADING ZEROS ARE PART OF IT: " +
+            "0004329 is a valid code and 4329 is a different branch",
+        );
+      }
+      if (!/^[0-9]{1,5}$/.test(challanNo)) {
+        throw invalid(
+          `the challan serial number is ONE TO FIVE DIGITS and "${challanNo}" is not — ` +
+            "it is the serial the bank printed on the counterfoil. LEADING ZEROS ARE PART OF IT: " +
+            "05122 is not 5122",
+        );
+      }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(depositDate)) {
+        throw invalid(
+          `the deposit date "${depositDate}" is not yyyy-mm-dd. It is the date the tax ` +
+            "was PAID TO THE GOVERNMENT — not the date of the voucher and not the date of the " +
+            "deduction",
+        );
+      }
+
+      // ---- The minor head. NO DEFAULT, and the empty case has its own sentence
+      // because it is the one an operator meets by leaving the picker alone.
+      if (minorHead === "") {
+        throw invalid(
+          "the minor head is required and there is NO DEFAULT. 200 is tax " +
+            "paid over of the deductor's own motion, 400 is a demand raised on assessment, 100 is " +
+            "advance tax. Defaulting to 200 would assert on this company's behalf that the deposit " +
+            "was voluntary rather than demanded, which is a statement about its assessment history " +
+            "that this software has no business making — migration 0069 forbids it explicitly",
+        );
+      }
+      const head = MOCK_MINOR_HEADS.find((h) => h.code === minorHead);
+      if (!head) {
+        throw invalid(
+          `"${minorHead}" is not an Annexure 7 minor head; it is one of 200 (paid of ` +
+            "the deductor's own motion), 400 (a demand raised on assessment) or 100 (advance tax)",
+        );
+      }
+
+      // ---- The tax year. RECORDED, never derived from the deposit date.
+      if (
+        !Number.isInteger(req.tax_year_start) ||
+        req.tax_year_start < 2025 ||
+        req.tax_year_start > 2200
+      ) {
+        throw invalid(
+          `tax year ${req.tax_year_start} is outside 2025–2200. This is the year the DEPOSIT ` +
+            "BELONGS TO, which is not always the year the deposit date falls in — a challan paid on " +
+            "7 April 2026 is normally for March of 2025-26, so it is recorded and never computed " +
+            "from the date",
+        );
+      }
+
+      // ---- The four amounts. STRINGS all the way down: parsed to scaled BigInt
+      // by q4 and rendered back by q4str, never through a float.
+      const amounts: { name: string; raw: Money; units: bigint }[] = [];
+      for (const [name, raw] of [
+        ["tax", req.tax_rupees],
+        ["interest", req.interest_rupees],
+        ["fee", req.fee_rupees],
+        ["penalty", req.penalty_rupees],
+      ] as const) {
+        // "" AND ABSENT ARE BOTH ZERO here — on a challan a blank box and a zero
+        // in it are the same statement. (On /deductor-status's turnover they are
+        // not, which is why that field is checked the opposite way.)
+        const text = (raw ?? "").trim();
+        if (text !== "" && !/^[+-]?(\d+(\.\d*)?|\.\d+)$/.test(text)) {
+          throw new ApiError(
+            400,
+            `invalid ${name}_rupees: money is a fixed-point decimal STRING such as "5000" — ` +
+              "never a JSON number, which cannot carry paise exactly",
+          );
+        }
+        amounts.push({ name, raw: text, units: text === "" ? 0n : q4(text) });
+      }
+      for (const a of amounts) {
+        if (a.units < 0n) {
+          throw invalid(
+            `the ${a.name} on the challan is ${mockPlainAmount(a.raw)}. These are MAGNITUDES — a ` +
+              "deposit is never negative, and a refund is not a challan",
+          );
+        }
+        if (a.units % QSCALE !== 0n) {
+          throw invalid(
+            `the ${a.name} on the challan is ${mockPlainAmount(a.raw)}, and all five challan amount ` +
+              'fields are WHOLE RUPEES: the prescribed format says "no fractional portion is ' +
+              "allowed in this field (value should be integer), i.e. value '1000.50' will not be " +
+              "allowed, whereas value '1000.00' will be considered to be valid value\". The " +
+              "column is NUMERIC(19,4) so the TYPE accepts paise; the rule is on the VALUE",
+          );
+        }
+      }
+      const taxUnits = amounts[0]!.units;
+      const total = amounts.reduce((sum, a) => sum + a.units, 0n);
+      if (total <= 0n) {
+        throw invalid(
+          "nothing was deposited on this challan — tax, interest, fee and " +
+            "penalty are all zero. A challan on which nothing was paid is a NIL challan, and a nil " +
+            "challan is not a deposit: it is how the return carries deductee rows that have no tax, " +
+            "it is derived from those deductions, and the emitter synthesises it. Storing one would " +
+            "put a fiction in the same table as facts and the first report to SUM this table would " +
+            "count it",
+        );
+      }
+
+      // ---- Tax and allocations imply each other, in both directions.
+      const allocations = req.allocations ?? [];
+      if (taxUnits > 0n && allocations.length === 0) {
+        throw invalid(
+          `this challan deposited ${mockPlainAmount(q4str(taxUnits))} of TAX and names no deduction. ` +
+            "Deductee Detail field 5 of the return is a challan reference, so a deduction with no " +
+            "allocation cannot be filed at all — and this slice has no allocate-later route, so a " +
+            "challan stored without its allocations could not be completed afterwards",
+        );
+      }
+      if (taxUnits <= 0n && allocations.length > 0) {
+        throw invalid(
+          "this challan deposited NO TAX (only interest, fee or penalty) " +
+            `but allocates to ${allocations.length} deduction(s). Only the tax component discharges a deduction ` +
+            "liability, so there is nothing here to allocate; record the interest challan on its " +
+            "own",
+        );
+      }
+
+      // ---- PASS 1 over the allocations: the checks that need nothing but the
+      // request itself. Separated from pass 2 so the ORDER OF REFUSALS matches the
+      // server's, which matters for one case in particular: re-posting an
+      // identical slip must answer "this CIN is already recorded" and not "that
+      // deduction is already paid". Both are 409, but only the first names what
+      // the operator is actually holding.
+      const seen = new Set<string>();
+      const parsed: {
+        voucherID: string;
+        section: string;
+        legSeq: number;
+        rawAmount: Money;
+        amountUnits: bigint;
+        triple: string;
+      }[] = [];
+      for (const a of allocations) {
+        const voucherID = (a.voucher_id ?? "").trim();
+        const section = (a.section ?? "").trim();
+        if (voucherID === "") {
+          throw invalid(
+            "an allocation must name the voucher whose deduction was paid",
+          );
+        }
+        if (section === "") {
+          throw invalid(
+            `allocation for voucher ${voucherID} names no section. The deduction ` +
+              "key is (voucher, section, leg) — one voucher can carry deductions under more than " +
+              "one section",
+          );
+        }
+        // 0 IS A REAL LEG, so an absent leg_seq is refused BY NAME and never
+        // defaulted. The type makes it required; a JS caller can still omit it,
+        // and the silent default is exactly what must not happen.
+        if (typeof a.leg_seq !== "number" || !Number.isInteger(a.leg_seq)) {
+          throw new ApiError(
+            400,
+            `allocation ${parsed.length + 1}: leg_seq is required and is NOT defaulted. The deduction key is ` +
+              "(voucher, section, leg) and the leg ordinal is 0-based, so leg 0 is a real " +
+              "leg — an omitted field would silently mean the first one",
+          );
+        }
+        if (a.leg_seq < 0) {
+          throw invalid(
+            `allocation for voucher ${voucherID} under ${section} has leg ${a.leg_seq}; the leg ` +
+              "ordinal is 0-based and never negative",
+          );
+        }
+        const rawAmount = (a.amount_rupees ?? "").trim();
+        if (!/^[+-]?(\d+(\.\d*)?|\.\d+)$/.test(rawAmount)) {
+          throw new ApiError(
+            400,
+            `allocation ${parsed.length + 1}: amount_rupees must be a fixed-point decimal string, and it must be the ` +
+              "tax that was deducted on that leg — it is what makes a later voucher ALTER " +
+              "detectable, so it is stated rather than derived",
+          );
+        }
+        const amountUnits = q4(rawAmount);
+        if (amountUnits < 0n) {
+          throw invalid(
+            `allocation for voucher ${voucherID} under ${section} is ${mockPlainAmount(rawAmount)}. An allocation is ` +
+              "a magnitude",
+          );
+        }
+        const triple = allocationTriple(voucherID, section, a.leg_seq);
+        if (seen.has(triple)) {
+          throw invalid(
+            `voucher ${voucherID} under ${section} leg ${a.leg_seq} appears twice on this challan. ` +
+              "One challan pays a deduction ONCE — Deductee Detail field 5 is a single challan " +
+              "reference, so a deduction split across two lines is not expressible in the return",
+          );
+        }
+        seen.add(triple);
+        parsed.push({
+          voucherID,
+          section,
+          legSeq: a.leg_seq,
+          rawAmount,
+          amountUnits,
+          triple,
+        });
+      }
+
+      // ---- recorded_by, which the server validates in the same pure pass.
+      if ((req.recorded_by ?? "").trim() === "") {
+        throw invalid("recorded_by is required");
+      }
+
+      // ---- THE DUPLICATE CIN, and it is checked BEFORE the allocations because
+      // the server checks it first inside the transaction. That order is the
+      // feature: re-posting an identical slip must answer "this CIN is already
+      // recorded" — not "that deduction is already paid", which would describe the
+      // consequence instead of the thing in the operator's hand.
+      //
+      // NEVER AN UPSERT. The second post of one CIN is either a double entry or a
+      // second real deposit whose serial was mistyped, and overwriting either
+      // loses money.
+      const cin = mockCIN(bsr, depositDate, challanNo);
+      const existing = c.tdsChallans.get(cin);
+      if (existing) {
+        throw new ApiError(
+          409,
+          `masters: challan ${challanNo} of ${depositDate} at BSR branch ${bsr} is already recorded, with ${mockPlainAmount(existing.tax_rupees)} ` +
+            `of tax on it, entered by ${existing.recorded_by} on ${existing.recorded_at.slice(0, 10)}. The CIN (branch, date, serial) is how the ` +
+            "department identifies a payment, so this is the same deposit entered twice — which " +
+            "would over-claim it in the return's batch total and be failed by the FVU against " +
+            "the .csi file at the portal. If the first entry is wrong it must be corrected, not " +
+            "duplicated",
+        );
+      }
+
+      // ---- PASS 2: each allocation against the FIXTURE deduction. On the server
+      // this reads the live row inside the transaction; here it reads a table that
+      // was invented. The REFUSALS are the same shape; the evidence behind them is
+      // not, which is the gap named at the top of this section.
+      const views: TDSChallanAllocation[] = [];
+      let allocatedUnits = 0n;
+      for (const {
+        voucherID,
+        section,
+        legSeq,
+        rawAmount,
+        amountUnits,
+        triple,
+      } of parsed) {
+        const deduction = c.tdsDeductions.get(triple);
+        if (!deduction) {
+          throw new ApiError(
+            400,
+            `masters: nothing was deducted on voucher ${voucherID} under ${section} at leg ${legSeq}, so there is ` +
+              "nothing on it to deposit. Migration 0069 carries no foreign key to tds_deduction (its " +
+              "rows are deleted and re-derived on every voucher ALTER), so nothing in the database " +
+              "would have stopped this — it would have been stored as a deposit against no deduction, " +
+              "visible in no register and reconciling to no deductee",
+          );
+        }
+        const deductionUnits = q4(deduction.tax_rupees);
+        if (deductionUnits === 0n) {
+          throw new ApiError(
+            400,
+            `masters: voucher ${deduction.voucher_no} paid ${deduction.deductee_name} under ${section} and deducted NO tax (the payment is ` +
+              "below the threshold), so no deposit can be allocated to it. It is still reported — " +
+              "under the return's nil challan, which is derived and never stored",
+          );
+        }
+        if (amountUnits !== deductionUnits) {
+          throw new ApiError(
+            400,
+            `masters: voucher ${deduction.voucher_no} deducted ${mockPlainAmount(deduction.tax_rupees)} under ${section} from ` +
+              `${deduction.deductee_name}, but ${mockPlainAmount(rawAmount)} is being allocated ` +
+              "to it. The two must be EQUAL: the amount stored on the allocation is what makes a " +
+              "later voucher ALTER detectable, and reporting treats ANY inequality as an allocation " +
+              "broken by an alter — so a deliberately partial allocation would refuse the entire " +
+              "quarter at filing time with a message about a change nobody made",
+          );
+        }
+        if (deduction.tax_year_start !== req.tax_year_start) {
+          throw new ApiError(
+            400,
+            `masters: the deduction on voucher ${deduction.voucher_no} under ${section} belongs to tax year ${deduction.tax_year_start}, and ` +
+              `this challan is recorded against ${req.tax_year_start}. A challan belongs to ONE tax year — that is why ` +
+              "the year is stored on it rather than computed from the deposit date (a challan paid on " +
+              "7 April is normally for March of the year before). Record the deposit against the year " +
+              "whose tax it paid",
+          );
+        }
+        // ---- ALREADY PAID. This one the mock models exactly, because it is a
+        // fact about ITS OWN stored challans and not about a derivation: 409, and
+        // the sentence NAMES the challan that paid it, because the operator's next
+        // question is "then what is this second slip in my hand".
+        const paidBy = c.tdsAllocations.get(triple);
+        if (paidBy !== undefined) {
+          const other = c.tdsChallans.get(paidBy);
+          throw new ApiError(
+            409,
+            `masters: the ${mockPlainAmount(deduction.tax_rupees)} deducted on voucher ${deduction.voucher_no} under ${section} from ${deduction.deductee_name} was already ` +
+              `deposited on challan ${other?.challan_no ?? ""} of ${other?.deposit_date ?? ""} at BSR branch ${other?.bsr_code ?? ""}. Deductee Detail field 5 is a SINGLE ` +
+              "challan reference, so a deduction cannot be paid by two challans — if this deposit is " +
+              "the right one, the earlier allocation is the thing to correct",
+          );
+        }
+
+        allocatedUnits += amountUnits;
+        views.push({
+          voucher_id: voucherID,
+          voucher_no: deduction.voucher_no,
+          section,
+          leg_seq: legSeq,
+          deductee_name: deduction.deductee_name,
+          allocated_rupees: q4str(amountUnits),
+          // Always true / always false here — see the gap list above.
+          deduction_on_record: true,
+          deduction_tax_rupees: q4str(deductionUnits),
+          broken_by_alter: false,
+        });
+      }
+
+      const challan: TDSChallan = {
+        id: id("tds-challan"),
+        bsr_code: bsr,
+        deposit_date: depositDate,
+        challan_no: challanNo,
+        by_book_entry: req.by_book_entry === true,
+        tax_rupees: q4str(taxUnits),
+        interest_rupees: q4str(amounts[1]!.units),
+        fee_rupees: q4str(amounts[2]!.units),
+        penalty_rupees: q4str(amounts[3]!.units),
+        // DERIVED, never stored — a stored total is a column that disagrees with
+        // its parts after the first correction.
+        total_deposited_rupees: q4str(total),
+        minor_head: head.code,
+        minor_head_description: head.description,
+        tax_year_start: req.tax_year_start,
+        tax_year_label: mockTaxYearLabel(req.tax_year_start),
+        allocation_count: views.length,
+        allocated_total_rupees: q4str(allocatedUnits),
+        // CAN BE NEGATIVE, and a few paise either way is the ordinary case: the
+        // deposit is whole rupees and a deduction is a 4-dp figure. Reported so a
+        // human can read it, never refused on.
+        unallocated_tax_rupees: q4str(taxUnits - allocatedUnits),
+        // The server's ORDER BY voucher_no, section, leg_seq within a challan.
+        allocations: views.sort(
+          (x, y) =>
+            x.voucher_no.localeCompare(y.voucher_no) ||
+            x.section.localeCompare(y.section) ||
+            x.leg_seq - y.leg_seq,
+        ),
+        recorded_by: req.recorded_by,
+        recorded_at: new Date().toISOString(),
+      };
+      c.tdsChallans.set(cin, challan);
+      for (const v of views) {
+        c.tdsAllocations.set(
+          allocationTriple(v.voucher_id, v.section, v.leg_seq),
+          cin,
+        );
+      }
+      return {
+        id: challan.id,
+        tax_year_start: challan.tax_year_start,
+        tax_year_label: challan.tax_year_label,
+        // The mock's read-back cannot fail, so this is never null and
+        // `read_back_error` is never set. See the gap list above.
+        challan,
+      };
+    },
+
+    // ---- THE TDS DEDUCTOR PROFILE (T6, migration 0070).
+    //
+    // WHAT IT DOES NOT MODEL: the Annexure 1 list of 37 STATE CODES, exactly as
+    // the server does not. Both check the two-digit SHAPE only — the list lives in
+    // internal/compliance/form140, which neither masters nor server may import —
+    // so a screen must NOT tell an operator a state code is valid. "Saved" is all
+    // this earns, and whether a return can be built is the register's answer.
+    async getTDSProfile(companyID): Promise<TDSProfileResponse> {
+      const c = ensure(companyID);
+      // A COMPANY WITH NO PROFILE IS 200 WITH A NULL PROFILE, NEVER 404: the
+      // absence of a row is the ordinary state of a company that has not filled
+      // the form in, and the response still has to carry the vocabulary the empty
+      // form is rendered from.
+      return {
+        profile: c.tdsProfile ? cloneTDSProfile(c.tdsProfile) : null,
+        profile_recorded: c.tdsProfile !== undefined,
+        deductor_categories: MOCK_DEDUCTOR_CATEGORIES.map((k) => ({ ...k })),
+        pan_not_required_literal: MOCK_PAN_NOT_REQUIRED,
+      };
+    },
+
+    async setTDSProfile(
+      companyID,
+      req: SetTDSProfileRequest,
+    ): Promise<SetTDSProfileResponse> {
+      const c = ensure(companyID);
+      const invalid = (why: string) =>
+        new ApiError(400, `masters: invalid TDS deductor profile: ${why}`);
+      const up = (s: string | undefined) => (s ?? "").trim().toUpperCase();
+      const tr = (s: string | undefined) => (s ?? "").trim();
+
+      // NORMALISED FIRST, then validated — mirroring the server, so a TAN keyed
+      // in lower case is stored in capitals and the read-back SHOWS that.
+      const tan = up(req.tan);
+      const pan = up(req.pan);
+      const category = up(req.deductor_category);
+      const stateNameCode = tr(req.state_name_code);
+      const ministryCode = tr(req.ministry_code);
+      const ministryOther = tr(req.ministry_other);
+
+      if (!/^[A-Z]{4}[0-9]{5}[A-Z]$/.test(tan)) {
+        throw invalid(
+          `"${tan}" is not a TAN. A Tax Deduction and Collection Account ` +
+            "Number is four letters, five digits and a letter (AAAA99999A) — it is NOT " +
+            "the GSTIN and cannot be derived from it, and a wrong one is rejected against " +
+            "the .csi challan file after the operator believes they have filed",
+        );
+      }
+      const panShape = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+      if (!panShape.test(pan) && pan !== MOCK_PAN_NOT_REQUIRED) {
+        throw invalid(
+          `the deductor's PAN "${pan}" is not five letters, four digits and a ` +
+            `letter (AAAAA9999A). Where a deductor is not required to hold one the format ` +
+            `prescribes the literal ${MOCK_PAN_NOT_REQUIRED} — a real value with a meaning, never a blank`,
+        );
+      }
+      // NO PANNOTREQD ALTERNATIVE for the responsible person: they are a named
+      // human and the constraint gives them no exemption.
+      const responsiblePAN = up(req.responsible?.pan);
+      if (!panShape.test(responsiblePAN)) {
+        throw invalid(
+          `the responsible person's own PAN "${responsiblePAN}" is not five letters, four ` +
+            "digits and a letter. It is a DIFFERENT field from the deductor's PAN (BH field " +
+            `59 against field 15) and ${MOCK_PAN_NOT_REQUIRED} is not accepted for it`,
+        );
+      }
+      const cat = MOCK_DEDUCTOR_CATEGORIES.find((k) => k.code === category);
+      if (!cat) {
+        throw invalid(
+          `"${category}" is not one of Annexure 4's sixteen deductor category codes ` +
+            `(${MOCK_DEDUCTOR_CATEGORIES.map((k) => k.code).join(", ")}). It is a single letter that goes in BH field 32, and it is NOT the ` +
+            "s.402(11) entity category recorded against the tax year — mapping between the " +
+            "two is a decision, not a derivation",
+        );
+      }
+      // "Contains no letter or digit" — the format refuses a name that is only
+      // blanks, dots or special characters, which is a different (and weaker)
+      // test than "is not empty".
+      const alnum = /[A-Za-z0-9]/;
+      for (const [what, value] of [
+        ["the deductor name (BH field 6)", tr(req.deductor_name)],
+        [
+          "the responsible person's name (BH field 33)",
+          tr(req.responsible?.name),
+        ],
+        [
+          "the responsible person's designation (BH field 34)",
+          tr(req.responsible?.designation),
+        ],
+      ] as const) {
+        if (!alnum.test(value)) {
+          throw invalid(
+            `${what} is "${value}", which contains no letter or digit. The format ` +
+              "refuses a name that is only blanks, dots or special characters",
+          );
+        }
+      }
+      for (const [what, value] of [
+        [
+          "the deductor's contact country code (BH field 29)",
+          tr(req.contact_country_code),
+        ],
+        ["the deductor's contact number (BH field 30)", tr(req.contact_number)],
+        [
+          "the responsible person's contact country code (BH field 44)",
+          tr(req.responsible?.contact_country_code),
+        ],
+        [
+          "the responsible person's contact number (BH field 45)",
+          tr(req.responsible?.contact_number),
+        ],
+      ] as const) {
+        if (value === "") {
+          throw invalid(
+            `${what} is mandatory; this format version splits the calling ` +
+              "code from the number, so both are required",
+          );
+        }
+      }
+      // ONE e-mail is enough and NONE is not: the format prints both as mandatory
+      // and then makes each conditional on the other.
+      if (tr(req.email) === "" && tr(req.responsible?.email) === "") {
+        throw invalid(
+          "an e-mail address is required — the format asks for the " +
+            "deductor's (BH field 28) OR the responsible person's (BH field 42), each " +
+            "mandatory only if the other is absent, and neither was given",
+        );
+      }
+      for (const [whose, addr] of [
+        ["the deductor", req.address],
+        ["the responsible person", req.responsible?.address],
+      ] as const) {
+        if (tr(addr?.line1) === "") {
+          throw invalid(
+            `${whose}'s address line 1 is mandatory. The return wants five ` +
+              "separately numbered lines rather than one block of text, and line 1 is the " +
+              "flat/door/block number",
+          );
+        }
+        if (tr(addr?.country) === "") {
+          throw invalid(`${whose}'s country/region is mandatory`);
+        }
+        // SHAPE ONLY — see the note above the method.
+        if (!/^[0-9]{2}$/.test(tr(addr?.state_code))) {
+          throw invalid(
+            `${whose}'s state code "${tr(addr?.state_code)}" is not two digits. The field carries the ` +
+              "two-digit Annexure 1 CODE, not the name of the state",
+          );
+        }
+        if (!/^[0-9]{6}$/.test(tr(addr?.pincode))) {
+          throw invalid(
+            `${whose}'s pincode "${tr(addr?.pincode)}" is not six digits`,
+          );
+        }
+      }
+      // ---- The two CATEGORY-CONDITIONAL rules, and each is conditional in BOTH
+      // directions: a value is mandatory for some categories and FORBIDDEN for the
+      // rest, so emptiness is tested as well as presence. This is the pair a
+      // client that hard-coded the category list would get wrong.
+      if (cat.state_name_code_required) {
+        if (!/^[0-9]{2}$/.test(stateNameCode)) {
+          throw invalid(
+            `deductor category ${cat.code} (${cat.description}) requires the Annexure 5 state ` +
+              `code in BH field 54, and "${stateNameCode}" is not two digits`,
+          );
+        }
+      } else if (stateNameCode !== "") {
+        throw invalid(
+          `BH field 54 (State Name) carries "${stateNameCode}", but the format allows a ` +
+            `value only for the four State-Government categories S, E, H and N — not ${cat.code} ` +
+            `(${cat.description}). Clear it rather than choosing a code that will be refused`,
+        );
+      }
+      if (cat.ministry_required) {
+        if (ministryCode === "") {
+          throw invalid(
+            `deductor category ${cat.code} (${cat.description}) requires an Annexure 3 ministry ` +
+              "code in BH field 57",
+          );
+        }
+      } else if (!cat.ministry_allowed && ministryCode !== "") {
+        throw invalid(
+          `BH field 57 (Ministry Name) carries "${ministryCode}", but the format allows ` +
+            `no ministry for deductor category ${cat.code} (${cat.description})`,
+        );
+      }
+      // An EQUIVALENCE: the code is 99 exactly when field 58 names the ministry.
+      if (ministryCode === MOCK_MINISTRY_OTHER && ministryOther === "") {
+        throw invalid(
+          `ministry code ${MOCK_MINISTRY_OTHER} is "Other", so BH field 58 must name the ministry`,
+        );
+      }
+      if (ministryCode !== MOCK_MINISTRY_OTHER && ministryOther !== "") {
+        throw invalid(
+          `BH field 58 names the ministry "${ministryOther}", but field 57 is "${ministryCode}" rather ` +
+            `than the code ${MOCK_MINISTRY_OTHER} ("Other") that field 58 exists to expand`,
+        );
+      }
+      if (tr(req.recorded_by) === "") {
+        throw invalid("recorded_by is required");
+      }
+
+      const stored: TDSProfile = {
+        tan,
+        pan,
+        deductor_name: tr(req.deductor_name),
+        deductor_category: category,
+        address: {
+          line1: tr(req.address?.line1),
+          line2: tr(req.address?.line2),
+          line3: tr(req.address?.line3),
+          line4: tr(req.address?.line4),
+          line5: tr(req.address?.line5),
+          country: tr(req.address?.country),
+          state_code: tr(req.address?.state_code),
+          pincode: tr(req.address?.pincode),
+        },
+        email: tr(req.email),
+        contact_country_code: tr(req.contact_country_code),
+        contact_number: tr(req.contact_number),
+        state_name_code: stateNameCode,
+        ministry_code: ministryCode,
+        ministry_other: ministryOther,
+        ain: tr(req.ain),
+        gstin: up(req.gstin),
+        responsible: {
+          name: tr(req.responsible?.name),
+          designation: tr(req.responsible?.designation),
+          pan: responsiblePAN,
+          address: {
+            line1: tr(req.responsible?.address?.line1),
+            line2: tr(req.responsible?.address?.line2),
+            line3: tr(req.responsible?.address?.line3),
+            line4: tr(req.responsible?.address?.line4),
+            line5: tr(req.responsible?.address?.line5),
+            country: tr(req.responsible?.address?.country),
+            state_code: tr(req.responsible?.address?.state_code),
+            pincode: tr(req.responsible?.address?.pincode),
+          },
+          email: tr(req.responsible?.email),
+          contact_country_code: tr(req.responsible?.contact_country_code),
+          contact_number: tr(req.responsible?.contact_number),
+        },
+        recorded_by: tr(req.recorded_by),
+        // Set HERE and not taken from the request, exactly as the column is: the
+        // audit timestamp is the database's statement, not the caller's.
+        recorded_at: new Date().toISOString(),
+      };
+      // A WHOLE-ROW UPSERT. There is one profile per company (the company IS the
+      // primary key), so a second PUT restates it and never merges into it —
+      // which is what makes the conditional fields checkable at all.
+      c.tdsProfile = stored;
+      return { profile: cloneTDSProfile(stored), profile_recorded: true };
     },
 
     // ---- BANK RECONCILIATION (T4).

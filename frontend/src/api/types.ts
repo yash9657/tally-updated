@@ -1400,3 +1400,423 @@ export interface TDSRegisterResponse {
   disclosures: string[];
   return_file: ReturnFileStatus;
 }
+
+// ---------------------------------------------------------------------------
+// THE TDS CHALLAN (T6, migration 0069).
+//   GET  /v1/companies/{id}/tds-challans?tax_year_start=2026
+//   POST /v1/companies/{id}/tds-challans
+//
+// The deposit slip: what was paid to the Government, when, through which bank
+// branch, and — the half that makes a return buildable at all — WHICH DEDUCTIONS
+// IT PAID. Deductee Detail field 5 of the prescribed return is a challan
+// reference, so a deduction with no allocation cannot be filed.
+//
+// Denied to the seeded Data Entry level BY DESIGN (`tds-challan` is a bare
+// resource token and that level's default_access is 'none'), so a 403 on either
+// route is a NORMAL answer and must read as the decision it is.
+// ---------------------------------------------------------------------------
+
+/**
+ * One Annexure 7 minor head, SERVED by the GET.
+ *
+ * ⛔ NEVER hard-code the three codes in TypeScript. The list is migration 0069's
+ * CHECK and the server hands it over with its descriptions precisely so no copy
+ * exists here to drift from it — a client copy could offer a fourth value that
+ * fails only on save.
+ */
+export interface MinorHead {
+  /** "200", "400" or "100" — what is stored. */
+  code: string;
+  /**
+   * What the code MEANS. Rendered beside it because the operator has to choose
+   * one and there is NO DEFAULT; a picker of three bare numbers invites
+   * whichever is listed first.
+   */
+  description: string;
+}
+
+/**
+ * One allocation read back, with the LIVE deduction beside it so a screen can
+ * show an allocation the books have outgrown.
+ */
+export interface TDSChallanAllocation {
+  /** The deduction's NATURAL key is (voucher_id, section, leg_seq). */
+  voucher_id: string;
+  voucher_no: string;
+  section: string;
+  /** 0-BASED. Leg 0 is a real leg. */
+  leg_seq: number;
+  /** Empty when `deduction_on_record` is false — the deduction is gone, so there is nobody to name. */
+  deductee_name: string;
+  allocated_rupees: Money;
+  /**
+   * False means an ALTER removed the leg. The allocation SURVIVES that
+   * (migration 0069 carries no foreign key to tds_deduction, by design) and is
+   * shown rather than silently dropped: it records a real payment.
+   */
+  deduction_on_record: boolean;
+  deduction_tax_rupees: Money;
+  /**
+   * ⚠️ ADVISORY ONLY, and sent so the operator meets it before filing day.
+   * `reporting.Form140StatementFor` applies the same test and REFUSES the whole
+   * quarter (ErrAllocationBrokenByAlter); that refusal remains the authority. A
+   * screen must not present a false flag here as "the return is fine".
+   */
+  broken_by_alter: boolean;
+}
+
+/** One challan read back, with what it paid for. */
+export interface TDSChallan {
+  id: string;
+  /**
+   * The seven-digit code of the bank branch that received the deposit (or, for a
+   * book-entry deposit, the seven-digit Form 24G receipt number).
+   *
+   * ⚠️ TEXT, AND LEADING ZEROS ARE PART OF IT: 0004329 is a valid code and 4329
+   * is a different branch. A client that ever holds it in a number type has
+   * already lost the information.
+   */
+  bsr_code: string;
+  /** yyyy-mm-dd: the date the tax was PAID TO THE GOVERNMENT. Not the voucher date. */
+  deposit_date: string;
+  /** The 1-5 digit serial the bank printed on the counterfoil. TEXT: 05122 is not 5122. */
+  challan_no: string;
+  /** Book adjustment (a Government transfer voucher) rather than a bank challan. */
+  by_book_entry: boolean;
+
+  /**
+   * The four amounts as the challan itself splits them — FOUR SEPARATE FACTS,
+   * not a total with a breakdown. Only the TAX component discharges a deduction
+   * liability, which is why an interest-only challan allocates to nothing.
+   *
+   * All four are WHOLE RUPEES (the format forbids paise in a challan box), so
+   * they read "5000.0000".
+   */
+  tax_rupees: Money;
+  interest_rupees: Money;
+  fee_rupees: Money;
+  penalty_rupees: Money;
+  /** DERIVED from the four by the server and never stored. */
+  total_deposited_rupees: Money;
+
+  minor_head: string;
+  /** Travels with the code so a row can read "400 — a demand raised on assessment". */
+  minor_head_description: string;
+  /** The year the DEPOSIT BELONGS TO (2026 = 2026-27). Recorded, never computed from the date. */
+  tax_year_start: number;
+  tax_year_label: string;
+
+  allocation_count: number;
+  allocated_total_rupees: Money;
+  /**
+   * ⚠️ THE ONE FIELD HERE THAT IS NOT WHOLE RUPEES, AND IT CAN BE NEGATIVE.
+   * A deduction's tax is a 4-dp figure (₹33,333 at 10% is ₹3,333.30) while the
+   * deposit against it must be a whole number, so a difference of a few paise
+   * per allocation is the ORDINARY case and not an error. Report it; do not
+   * refuse on it.
+   */
+  unallocated_tax_rupees: Money;
+
+  allocations: TDSChallanAllocation[];
+
+  recorded_by: string;
+  recorded_at: string;
+}
+
+/**
+ * One deduction a new challan could pay for — SERVED with the register, and the
+ * only reason the deposit form is completable by a human at all.
+ *
+ * ⛔ WHY THIS EXISTS (the blocker it fixes). An allocation is keyed on
+ * (voucher_id, section, leg_seq): a UUID and a 0-BASED ORDINAL. NO SCREEN IN THIS
+ * PRODUCT DISPLAYS EITHER — the TDS/TCS Register renders `voucher_no` and its
+ * payload carries no leg field at all. The first deposit form therefore asked the
+ * operator to TYPE two identifiers they had no way to obtain, and typing the one
+ * thing they could see ("P1") earned a bare "allocation 1: invalid voucher_id".
+ * It passed every test, because the tests keyed MOCK fixture ids that the real
+ * server rejects as non-UUIDs.
+ *
+ * The fix is not a better message: it is to STOP ASKING. These rows travel to the
+ * client so it can send the identifiers back, never so a human reads them.
+ */
+export interface AllocatableDeduction {
+  /**
+   * ⚠️ NOT FOR DISPLAY. A UUID on the real server; here only to be sent back
+   * unchanged in {@link CreateTDSChallanAllocation.voucher_id}.
+   */
+  voucher_id: string;
+  /** ⚠️ NOT FOR DISPLAY, and 0-BASED. Sent back unchanged; never defaulted. */
+  leg_seq: number;
+  /** What a human actually recognises. */
+  voucher_no: string;
+  deductee_name: string;
+  section: string;
+  /** yyyy-mm-dd — the date of the DEDUCTION, not of any deposit. */
+  deduction_date: string;
+  /**
+   * What was deducted, and therefore EXACTLY what may be allocated: the write
+   * path refuses an amount that is not equal to it. So the amount is not an input
+   * either — a screen sends this figure back verbatim. 4-dp: ₹33,333 at 10% is
+   * "3333.3000".
+   */
+  tax_rupees: Money;
+  /**
+   * A challan already covers this leg. SERVED RATHER THAN FILTERED, on purpose:
+   * an operator who cannot find a deduction has to be able to tell "not deducted
+   * in this year" from "already deposited". A screen must show such a row and
+   * must NOT let it be selected — the write would be a 409.
+   */
+  already_paid: boolean;
+}
+
+export interface TDSChallanListResponse {
+  tax_year_start: number;
+  tax_year_label: string;
+  /** Ordered by (deposit_date, challan_no) — the server's order, not the client's. */
+  challans: TDSChallan[];
+  /** The vocabulary, SERVED. See {@link MinorHead}. */
+  minor_heads: MinorHead[];
+  /**
+   * What a new challan could pay for, in (deduction_date, voucher_no, leg_seq)
+   * order. ZERO-TAX DEDUCTIONS ARE ALREADY EXCLUDED SERVER-SIDE — nothing can be
+   * allocated to a sub-threshold payment, and offering one would invite a refusal
+   * for a thing that is not an error. An EMPTY array is a statement in itself: no
+   * deduction of this tax year carries tax, so there is nothing a challan could
+   * pay for. See {@link AllocatableDeduction}.
+   */
+  allocatable_deductions: AllocatableDeduction[];
+  /**
+   * Present ONLY when that read failed. It does not fail the request: the
+   * register is still worth showing to an operator who came to look at recorded
+   * deposits, so a screen says the picker is unavailable AND WHY, and renders the
+   * register anyway.
+   */
+  allocatable_error?: string;
+}
+
+/** One deduction this deposit paid. */
+export interface CreateTDSChallanAllocation {
+  /** tds_deduction's NATURAL key — never a surrogate id, which an ALTER regenerates. */
+  voucher_id: string;
+  section: string;
+  /**
+   * ⚠️ REQUIRED AND 0-BASED, AND THE SERVER DOES NOT DEFAULT IT. Leg 0 is a real
+   * leg, so an absent field cannot mean "the first one": it is refused by name.
+   * Never send `undefined` to make the type quiet.
+   */
+  leg_seq: number;
+  /**
+   * The tax the deduction shows, EXACTLY. The server refuses any inequality,
+   * because the stored amount is what makes a later voucher ALTER detectable —
+   * a deliberately partial allocation would surface months later as a refusal of
+   * the entire quarter, blaming a change nobody made.
+   */
+  amount_rupees: Money;
+}
+
+export interface CreateTDSChallanRequest {
+  bsr_code: string;
+  deposit_date: string;
+  challan_no: string;
+  by_book_entry: boolean;
+  /**
+   * Whole rupees as a fixed-point STRING. Positive tax REQUIRES at least one
+   * allocation; zero tax FORBIDS them (only tax discharges a deduction).
+   */
+  tax_rupees: Money;
+  /**
+   * The other three boxes. Omitted or "" is ZERO here — on a challan a blank box
+   * and a zero in it are the same statement. (That is the opposite call from
+   * /deductor-status's turnover, where "" means "the test does not apply".)
+   * A challan on which all four are zero is REFUSED: a nil challan is derived by
+   * the return emitter and never stored.
+   */
+  interest_rupees?: Money;
+  fee_rupees?: Money;
+  penalty_rupees?: Money;
+  /** MANDATORY, with NO DEFAULT. See {@link MinorHead}. */
+  minor_head: string;
+  /**
+   * ASKED FOR, never computed from `deposit_date`: a challan paid 7 April 2026 is
+   * normally for March of 2025-26 and the date alone cannot tell you which.
+   */
+  tax_year_start: number;
+  allocations: CreateTDSChallanAllocation[];
+  recorded_by: string;
+}
+
+export interface CreateTDSChallanResponse {
+  id: string;
+  tax_year_start: number;
+  tax_year_label: string;
+  /**
+   * The challan as stored, read back so the operator meets
+   * `unallocated_tax_rupees` at the moment they record the deposit rather than
+   * on filing day.
+   *
+   * ⚠️ NULL DOES NOT MEAN THE WRITE FAILED. The challan is committed before the
+   * read-back runs, so a failed read is reported in `read_back_error` and the
+   * status stays 201. A screen that treats null as failure will invite the
+   * operator to key the deposit again, and the CIN conflict that follows reads
+   * like a bug.
+   */
+  challan: TDSChallan | null;
+  read_back_error?: string;
+}
+
+// ---------------------------------------------------------------------------
+// THE TDS DEDUCTOR RETURN PROFILE (T6, migration 0070).
+//   GET /v1/companies/{id}/tds-profile
+//   PUT /v1/companies/{id}/tds-profile
+//
+// The deductor block of the return. The sourcing layer refuses a return with
+// ErrNoDeductorProfile before it looks at anything else, so this is what makes a
+// return buildable at all. The row carries A NAMED INDIVIDUAL'S PAN — Data Entry
+// is denied both halves by design, so a 403 here is a normal answer.
+// ---------------------------------------------------------------------------
+
+/**
+ * One statutory address block as the RETURN numbers it: five separately numbered
+ * lines, a country/region, a two-digit Annexure 1 CODE and a pincode.
+ *
+ * It is not `company.address` and it is not a ledger's address — splitting a
+ * free-text blob into numbered lines is a guess, and a guess that truncates a
+ * deductor's address on a statutory filing.
+ */
+export interface TDSAddressBody {
+  /** Mandatory — the flat/door/block number. */
+  line1: string;
+  line2?: string;
+  line3?: string;
+  line4?: string;
+  line5?: string;
+  /** Mandatory. The column's 'India' DEFAULT is unreachable on this path (whole-row upsert). */
+  country: string;
+  /**
+   * ⚠️ THE TWO-DIGIT ANNEXURE 1 CODE, NEVER A STATE NAME.
+   *
+   * And the route checks the SHAPE ONLY: the list of 37 codes lives in
+   * `internal/compliance/form140`, which neither masters nor server may import.
+   * So a screen MUST NOT tell an operator a state code is valid — "saved" is all
+   * this route earns. Whether a return can be built is what the TDS register's
+   * `return_file` status answers.
+   */
+  state_code: string;
+  pincode: string;
+}
+
+/**
+ * The person named on the return as answerable for the deduction. Their PAN is
+ * their OWN — a different field from the deductor's (BH field 59 against 15),
+ * and the PANNOTREQD literal is NOT accepted for it.
+ */
+export interface TDSResponsiblePerson {
+  name: string;
+  designation: string;
+  pan: string;
+  address: TDSAddressBody;
+  /** May be empty IF the deductor's is present: the format makes each conditional on the other. */
+  email?: string;
+  /** This format version SPLITS the calling code from the number; both are mandatory. */
+  contact_country_code: string;
+  contact_number: string;
+}
+
+/**
+ * The whole profile row, in and out.
+ *
+ * THERE IS NOT ONE MONEY FIELD IN IT — the deductor block is identity, address
+ * and contact — so nothing here is a number at all.
+ */
+export interface TDSProfile {
+  /** AAAA99999A. It is NOT the GSTIN and is not derivable from it. Stored upper-cased. */
+  tan: string;
+  /** The DEDUCTOR's own PAN, or the literal served as `pan_not_required_literal`. */
+  pan: string;
+  /** The name held against the TAN, which must match the .csi file from TIN — a different fact from the company's display name. */
+  deductor_name: string;
+  /** An Annexure 4 code. NOT the s.402(11) entity category on /deductor-status. */
+  deductor_category: string;
+  address: TDSAddressBody;
+  email?: string;
+  contact_country_code: string;
+  contact_number: string;
+  /** Annexure 5 code — MANDATORY for the categories flagged `state_name_code_required` and FORBIDDEN for every other. Clear it when the category changes. */
+  state_name_code?: string;
+  /** Annexure 3 code. Mandatory / allowed / forbidden per the category's flags. */
+  ministry_code?: string;
+  /** Names the ministry EXACTLY when `ministry_code` is "99" ("Other") — an equivalence, both ways. */
+  ministry_other?: string;
+  /** Account Office Identification Number — Government deductors paying by book entry only. */
+  ain?: string;
+  /** Optional even though the company holds one: the return's copy is the one that was filed. */
+  gstin?: string;
+  responsible: TDSResponsiblePerson;
+  /** Required on the way in, echoed on the way out. */
+  recorded_by: string;
+  /** Set by the database; IGNORED on input. */
+  recorded_at?: string;
+}
+
+/**
+ * One Annexure 4 deductor category, SERVED with the two conditional rules that
+ * hang off it.
+ *
+ * ⛔ NEVER hard-code these sixteen codes, and never re-derive the rules. A client
+ * copy could offer a letter the CHECK refuses on save, or hide a field the
+ * return makes mandatory and then report a Postgres constraint name to the
+ * operator.
+ */
+export interface DeductorCategory {
+  /** The single letter that goes in BH field 32. */
+  code: string;
+  description: string;
+  /**
+   * True for the State-Government categories. Means BOTH "show the Annexure 5
+   * state code field" AND "for every other category, CLEAR it" — the CHECK is
+   * conditional in both directions.
+   */
+  state_name_code_required: boolean;
+  ministry_required: boolean;
+  /** False means a ministry code is FORBIDDEN, not merely unnecessary. */
+  ministry_allowed: boolean;
+}
+
+export interface TDSProfileResponse {
+  /**
+   * NULL is the ordinary state of a company that has not filled the form in —
+   * and it arrives as 200, NEVER 404. The response still carries the vocabulary
+   * an empty form is rendered from, which is exactly why it is not a 404.
+   */
+  profile: TDSProfile | null;
+  /**
+   * Stated rather than inferred from the null: this is the refusal the return
+   * sourcing layer makes FIRST, before it looks at a challan or a deduction.
+   */
+  profile_recorded: boolean;
+  deductor_categories: DeductorCategory[];
+  /** The prescribed literal for a deductor not required to hold a PAN. Served so no client spells it itself. */
+  pan_not_required_literal: string;
+}
+
+/**
+ * The PUT body: THE WHOLE ROW, and PUT rather than PATCH is not stylistic.
+ * Migration 0070 carries three CROSS-FIELD CHECKs (the Annexure 5 state code and
+ * the Annexure 3 ministry are each mandatory for some categories and FORBIDDEN
+ * for the rest), so a partial body is not checkable and can leave a stale
+ * conditional value behind.
+ *
+ * There is no key in the path because the company IS the key.
+ */
+export type SetTDSProfileRequest = TDSProfile;
+
+/**
+ * The PUT answer. It carries NO vocabulary — the caller already has it from the
+ * GET — and the profile is READ BACK rather than echoed, so it shows the
+ * normalisation (a TAN keyed in lower case comes back in capitals) and the audit
+ * timestamp.
+ */
+export interface SetTDSProfileResponse {
+  profile: TDSProfile;
+  profile_recorded: boolean;
+}

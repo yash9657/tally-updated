@@ -33,6 +33,10 @@ const COMPANY_SCOPED_SCREENS = new Set<NavSnapshot["screen"]>([
   // needs a scope. Omitting it here would let the screen mount without one and
   // useCompanyID() would THROW rather than render the "select a company" state.
   "bank-reconciliation",
+  // The TDS challan register reads and writes ONE company's deposits, so it
+  // needs a scope. Omitting it does not degrade gracefully: useCompanyID()
+  // THROWS, and the screen never gets to render its own "no company" state.
+  "tds-challans",
 ]);
 
 /**
@@ -63,6 +67,14 @@ const SCREEN_ACTIONS: Partial<Record<KeymapAction["kind"], ScreenActionKind>> = 
   // routes it), and the failure only appeared when the app was driven in a real
   // browser. Add the entry here whenever you add a screen action.
   importBankStatement: "importBankStatement",
+  // Alt+C on the TDS challan register — RECORD A DEPOSIT (T6).
+  //
+  // ⛔ THIS IS THE LINE THE COMMENT ABOVE IS ABOUT. Alt+O shipped completely
+  // dead with its keymap binding, its ScreenActionKind, its navMachine case, its
+  // bar item and its screen handler ALL present and correct, because this map had
+  // no entry: the shell resolved the combo, found no screen action and forwarded
+  // the key to a machine that deliberately does nothing. Silently.
+  recordTDSChallan: "recordTDSChallan",
 };
 
 /** How long a status-line message stays up before it fades (ms). */
@@ -363,6 +375,8 @@ function screenTitle(snap: NavSnapshot): string {
       return "Help — Keyboard";
     case "features":
       return "Company Features";
+    case "tds-challans":
+      return "TDS Challans";
     default:
       return "Tally";
   }

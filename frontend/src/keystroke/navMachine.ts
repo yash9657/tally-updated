@@ -157,6 +157,17 @@ export const USERS_ROLES_LABEL = "Users & Roles";
 export const BANK_RECON_LABEL = "Bank Reconciliation";
 
 /**
+ * The Gateway entry that opens the TDS CHALLAN register (T6).
+ *
+ * Same ordering requirement as BILL_INBOX_LABEL and BANK_RECON_LABEL: it MUST be
+ * matched BEFORE the canonicalReportName fallback, which would otherwise push a
+ * report frame literally named "TDS Challans". That mistake would look plausible
+ * for a long time here, because "TDS / TCS Register" IS a real report name and
+ * REPORT_ALIASES already maps four spellings of "tds" onto it.
+ */
+export const TDS_CHALLANS_LABEL = "TDS Challans";
+
+/**
  * The Ctrl+H Change Mode labels the machine acts on. Kept here (not in the
  * screen) because the MACHINE owns what a selection does; the screen owns which
  * options a voucher class offers. Any other label — including the "not built"
@@ -563,6 +574,16 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
           stack.push({ screen: "bank-reconciliation" });
           return { stack };
         }
+        // "TDS Challans" drills into the T6 challan register. Ordering as
+        // above: this MUST be checked BEFORE the canonicalReportName fallback,
+        // which would otherwise push a report frame named "TDS Challans".
+        if (
+          active.selectedItem?.toLowerCase() ===
+          TDS_CHALLANS_LABEL.toLowerCase()
+        ) {
+          stack.push({ screen: "tds-challans" });
+          return { stack };
+        }
         // "Display More Reports" opens the second-level report MENU (Tally's
         // own structure: the Trial Balance and Outstandings live one level in).
         // Checked before the report fallback, which would otherwise push a
@@ -767,6 +788,15 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
       return {};
     }
 
+    case "recordTDSChallan": {
+      // NO NAVIGATION. The deposit form lives ON the challan register, because
+      // the register is the context that says which tax year is being paid for
+      // and what has already been recorded against it. The screen owns the form
+      // and fires it through the ScreenActions bridge, exactly as Alt+O owns its
+      // import panel.
+      return {};
+    }
+
     case "bankReconciliation": {
       // The Gateway / menu entry opens the statement — TallyPrime's own route to
       // it is Alt+G > Banking Activities (RESEARCH.md:873), so a Gateway entry
@@ -952,6 +982,7 @@ function reduceSelect(ctx: NavContext, menuItem: string): Partial<NavContext> {
       menuItem.toLowerCase() === QUERY_LABEL.toLowerCase() ||
       menuItem.toLowerCase() === USERS_ROLES_LABEL.toLowerCase() ||
       menuItem.toLowerCase() === MORE_REPORTS_LABEL.toLowerCase() ||
+      menuItem.toLowerCase() === TDS_CHALLANS_LABEL.toLowerCase() ||
       canonicalReportName(menuItem) !== undefined
     ) {
       active.selectedItem = menuItem;

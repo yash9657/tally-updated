@@ -36,6 +36,10 @@ const ALL_SCREENS: NavSnapshot["screen"][] = [
   "help",
   "features",
   "bank-reconciliation",
+  // No printed layout exists for the challan register, so Ctrl+P resolves to a
+  // SENTENCE and makes no request — but the key must still be BOUND here, which
+  // is what this list checks.
+  "tds-challans",
 ];
 
 /** A bare snapshot for a screen, with only the fields the resolver reads. */

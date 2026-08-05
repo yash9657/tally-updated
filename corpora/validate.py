@@ -84,6 +84,11 @@ KNOWN_SCREENS = {
     # ONE editable column, Bank Date. Reached from the Gateway (TallyPrime's own
     # route is Alt+G > Banking Activities); F4 picks the account.
     "bank-reconciliation",
+    # The TDS CHALLAN register (T6, migration 0069): the deposits made to the
+    # Government for a tax year, and the form that records one. A ScreenKind
+    # rather than a report name — the server serves it as the bare resource
+    # token `tds-challan`.
+    "tds-challans",
 }
 
 RULESET_VERSION = "gst-2024-09"

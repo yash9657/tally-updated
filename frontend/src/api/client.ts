@@ -60,6 +60,12 @@ import type {
   CreateTCSDeclarationResponse,
   SetDeductorStatusRequest,
   SetDeductorStatusResponse,
+  TDSChallanListResponse,
+  CreateTDSChallanRequest,
+  CreateTDSChallanResponse,
+  TDSProfileResponse,
+  SetTDSProfileRequest,
+  SetTDSProfileResponse,
   SetBankDateRequest,
   SetBankDateResponse,
 } from "./types";
@@ -261,6 +267,76 @@ export interface CoredClient {
     from: string,
     to: string,
   ): Promise<TDSRegisterResponse>;
+
+  /**
+   * The challan register for ONE tax year, plus the two things a deposit form
+   * cannot be built without: the minor-head vocabulary, and WHAT CAN BE
+   * ALLOCATED (T6, migration 0069).
+   *
+   * ⛔ `allocatable_deductions` IS NOT A CONVENIENCE. An allocation is keyed on a
+   * UUID and a 0-based leg ordinal, and NO SCREEN IN THIS PRODUCT DISPLAYS
+   * EITHER, so a form that asks a human to type them asks for something they
+   * cannot obtain. The identifiers — and the amount, which must equal the
+   * deduction's tax exactly — travel from this response into the POST without a
+   * human ever seeing them. `allocatable_error` means only that read failed: the
+   * register is still served and still worth rendering.
+   *
+   * ⚠️ `taxYearStart` IS REQUIRED AND THE SERVER DEFAULTS NOTHING. It is the year
+   * the DEPOSIT BELONGS TO, not the year its date falls in: a challan paid on
+   * 7 April 2026 is normally for March of 2025-26, which is why it is stored on
+   * the challan. A correctly rendered list of the wrong year's deposits is worse
+   * than a refusal, because it reads exactly like the answer that was asked for.
+   *
+   * Data Entry is refused this route BY DESIGN (`tds-challan` is a bare resource
+   * token, and that level's default_access is 'none'), so a 403 is a normal
+   * answer that must be rendered as the decision it is — never swallowed.
+   */
+  listTDSChallans(
+    companyID: string,
+    taxYearStart: number,
+  ): Promise<TDSChallanListResponse>;
+  /**
+   * Record ONE deposit and everything it paid for, in one transaction.
+   *
+   * There is no PUT, no PATCH and no DELETE: a challan is an EVENT that happened
+   * at a bank counter, not a row an operator maintains. Re-posting one CIN is a
+   * 409 and NEVER an upsert — the second post is either a double entry or a
+   * second real deposit whose serial was mistyped, and overwriting either loses
+   * money. Re-allocation and correction are not in this slice.
+   *
+   * The refusals a caller must render as sentences: 400 for the operator's input
+   * or an allocation naming a deduction that does not exist / is not that
+   * amount, 409 for a duplicate CIN or a deduction another challan already paid
+   * (RETRYING WOULD BE THE MISTAKE), 403 when the level is not permitted.
+   */
+  createTDSChallan(
+    companyID: string,
+    req: CreateTDSChallanRequest,
+  ): Promise<CreateTDSChallanResponse>;
+
+  /**
+   * The deductor block of the return, plus the sixteen Annexure 4 categories and
+   * the conditional rules that hang off them (T6, migration 0070).
+   *
+   * A company that has not filled the form in answers 200 with
+   * `profile: null, profile_recorded: false` — NEVER 404. The vocabulary the
+   * empty form is drawn from arrives in the same response, which is why.
+   */
+  getTDSProfile(companyID: string): Promise<TDSProfileResponse>;
+  /**
+   * Record or restate the deductor profile. THE WHOLE ROW, every time — the
+   * cross-field rules (state code, ministry) are not checkable on a partial
+   * body and a stale conditional value would survive one.
+   *
+   * ⚠️ "Saved" does NOT mean the return can be filed, and a screen must not say
+   * so: this route checks the SHAPE of a state code and never the Annexure 1
+   * list, which lives in a package it may not import. The register's
+   * `return_file` status is what answers "can this be filed".
+   */
+  setTDSProfile(
+    companyID: string,
+    req: SetTDSProfileRequest,
+  ): Promise<SetTDSProfileResponse>;
 
   createGroup(
     companyID: string,

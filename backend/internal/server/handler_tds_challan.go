@@ -309,12 +309,71 @@ func (s *Server) handleListTDSChallans(w http.ResponseWriter, r *http.Request) {
 	for _, row := range rows {
 		views = append(views, toTDSChallanView(row))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"tax_year_start": taxYear,
-		"tax_year_label": taxYearLabel(taxYear),
-		"challans":       views,
-		"minor_heads":    minorHeadViews(),
-	})
+	// WHAT CAN BE ALLOCATED, served with the register.
+	//
+	// ⛔ IT IS SERVED BECAUSE THE FORM IS UNUSABLE WITHOUT IT. An allocation is
+	// keyed on (voucher_id, section, leg_seq) — a UUID and a 0-based ordinal — and
+	// NO SCREEN IN THIS PRODUCT DISPLAYS EITHER: the TDS/TCS Register renders
+	// voucher_no and its payload has no leg field at all. A form that asks a human
+	// to type them asks for something they cannot obtain, and typing the one thing
+	// they can see ("P1") earns "allocation 1: invalid voucher_id".
+	//
+	// So the identifiers travel to the client and back WITHOUT a human ever seeing
+	// them, and the amount travels too: RecordTDSChallan refuses an allocation that
+	// is not EQUAL to the deduction's tax, so there is nothing to type there
+	// either. The operator picks a deduction by voucher number and party name.
+	//
+	// A read failure here does NOT fail the request: the register itself is still
+	// worth showing, and the screen can say the picker is unavailable. Returning
+	// 422 for the whole page would hide the deposits an operator came to look at.
+	allocatable, allocErr := s.masters.ListAllocatableDeductions(r.Context(), taxYear)
+	body := map[string]any{
+		"tax_year_start":         taxYear,
+		"tax_year_label":         taxYearLabel(taxYear),
+		"challans":               views,
+		"minor_heads":            minorHeadViews(),
+		"allocatable_deductions": allocatableViews(allocatable),
+	}
+	if allocErr != nil {
+		body["allocatable_error"] = allocErr.Error()
+	}
+	writeJSON(w, http.StatusOK, body)
+}
+
+// allocatableDeductionView is one deduction a new challan could pay for.
+type allocatableDeductionView struct {
+	// VoucherID and LegSeq are here so the client can send them back, NOT so a
+	// human can read them. See the note at the call site.
+	VoucherID     string `json:"voucher_id"`
+	LegSeq        int    `json:"leg_seq"`
+	VoucherNo     string `json:"voucher_no"`
+	DeducteeName  string `json:"deductee_name"`
+	Section       string `json:"section"`
+	DeductionDate string `json:"deduction_date"`
+	// TaxRupees is exactly what may be allocated, so the client sends it back
+	// unchanged rather than offering an amount field.
+	TaxRupees string `json:"tax_rupees"`
+	// AlreadyPaid is served rather than filtered so an operator who cannot find a
+	// deduction learns WHICH reason applies: not deducted in this year, or already
+	// deposited.
+	AlreadyPaid bool `json:"already_paid"`
+}
+
+func allocatableViews(in []masters.AllocatableDeduction) []allocatableDeductionView {
+	out := make([]allocatableDeductionView, 0, len(in))
+	for _, a := range in {
+		out = append(out, allocatableDeductionView{
+			VoucherID:     a.VoucherID.String(),
+			LegSeq:        a.LegSeq,
+			VoucherNo:     a.VoucherNo,
+			DeducteeName:  a.DeducteeName,
+			Section:       a.Section,
+			DeductionDate: a.DeductionDate,
+			TaxRupees:     a.TaxRupees.StringFixed(4),
+			AlreadyPaid:   a.AlreadyPaid,
+		})
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------

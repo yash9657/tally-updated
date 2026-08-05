@@ -110,10 +110,24 @@ describe("F11 TDS Deductor Details", () => {
 
   it("still renders the honest feature inventory around the panel", async () => {
     renderFeatures();
-    // The TDS row stays "Not built": there is no register and no Form 140, and
-    // TCS is not on the post path. Recording a deductor status does not make
-    // the feature shipped, and this screen must not imply that it does.
+    // ⚠️ THIS COMMENT WAS STALE AND THE ASSERTION COULD NOT CATCH IT.
+    //
+    // It said 'The TDS row stays "Not built": there is no register and no Form
+    // 140' long after both shipped — and the assertion below is
+    // getAllByText("Not built"), which is not row-specific, so it kept passing
+    // while the comment described a product that no longer existed. It would have
+    // gone on passing after the TDS row flipped to "On", which is the whole
+    // problem: an assertion that cannot fail is a comment with a cost.
+    //
+    // So it now names its row. TDS / TCS is "On" (reachable by key, driven in a
+    // browser), and the row that still carries "Not built" is asserted BY NAME
+    // rather than by counting labels.
     expect(await screen.findByText("TDS / TCS")).toBeTruthy();
+    const tdsRow = screen.getByText("TDS / TCS").closest("tr, li, div");
+    expect(tdsRow?.textContent).toContain("On");
+    expect(tdsRow?.textContent).not.toContain("Not built");
+    // Some row must still be honestly unbuilt, or this screen has stopped being
+    // an inventory and become an advertisement.
     expect(screen.getAllByText("Not built").length).toBeGreaterThan(0);
   });
 });

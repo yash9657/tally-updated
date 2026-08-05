@@ -61,6 +61,12 @@ import type {
   CreateTCSDeclarationResponse,
   SetDeductorStatusRequest,
   SetDeductorStatusResponse,
+  TDSChallanListResponse,
+  CreateTDSChallanRequest,
+  CreateTDSChallanResponse,
+  TDSProfileResponse,
+  SetTDSProfileRequest,
+  SetTDSProfileResponse,
   SetBankDateRequest,
   SetBankDateResponse,
 } from "./types";
@@ -222,6 +228,45 @@ export function createRestClient(
       return http.get<TDSRegisterResponse>(
         `${company(companyID)}/tds-register`,
         { from, to },
+      );
+    },
+
+    // ---- TDS challans (T6, migration 0069).
+    listTDSChallans(companyID, taxYearStart: number) {
+      // The year is a QUERY PARAM and it is always sent. The server has no
+      // default for it and refuses the request without one — see the interface.
+      //
+      // NOTHING IS MAPPED HERE, and that includes `allocatable_deductions` and
+      // `allocatable_error`: the response is handed over as it arrived. The
+      // allocation identifiers (a voucher UUID and a 0-based leg) and the amount
+      // must reach the POST byte-identical, because the write path compares the
+      // amount for EQUALITY with the deduction's tax — so a client-side
+      // normalisation of any of the three would be a bug, not a tidy-up.
+      return http.get<TDSChallanListResponse>(
+        `${company(companyID)}/tds-challans`,
+        { tax_year_start: taxYearStart },
+      );
+    },
+    createTDSChallan(companyID, req: CreateTDSChallanRequest) {
+      // POST and only POST: there is no PUT, PATCH or DELETE on this resource.
+      // The CIN is the identity and re-posting it is a 409, never an upsert.
+      return http.post<CreateTDSChallanResponse>(
+        `${company(companyID)}/tds-challans`,
+        req,
+      );
+    },
+
+    // ---- The TDS deductor return profile (T6, migration 0070).
+    getTDSProfile(companyID) {
+      return http.get<TDSProfileResponse>(`${company(companyID)}/tds-profile`);
+    },
+    setTDSProfile(companyID, req: SetTDSProfileRequest) {
+      // No key in the path — the company IS the key (company_tds_profile's whole
+      // primary key), and it is already in the prefix. PUT with the WHOLE row,
+      // because 0070's cross-field CHECKs are not checkable on a partial body.
+      return http.put<SetTDSProfileResponse>(
+        `${company(companyID)}/tds-profile`,
+        req,
       );
     },
 

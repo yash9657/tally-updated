@@ -129,6 +129,28 @@ const BANK_RECON_BAR: readonly ButtonBarItem[] = [
   item("F1", "Help"),
 ];
 
+/**
+ * The TDS CHALLAN register bar (T6).
+ *
+ * Alt+C RECORDS a deposit (see the KeymapAction comment in keystroke/types.ts
+ * for the combo's provenance and why it is screen-scoped) and Ctrl+A accepts the
+ * form — Tally's own accept key doing exactly what it always does.
+ *
+ * Ctrl+P is deliberately NOT here. There is no printed layout for a challan
+ * register, so the print target resolves to a sentence; this file's rule read
+ * from the other side is that an operator reaches for a bar button by position
+ * from then on, so advertising a key that can only explain itself is worse than
+ * not advertising it. The key stays bound globally and still answers.
+ */
+const TDS_CHALLAN_BAR: readonly ButtonBarItem[] = [
+  item("Alt+C", "Record Challan"),
+  item("Ctrl+A", "Accept"),
+  item("Esc", "Back"),
+  item("Alt+G", "Go To"),
+  item("Ctrl+G", "Switch To"),
+  item("F1", "Help"),
+];
+
 /** Screens that are pure readers (Help, Features): Esc out, nothing to save. */
 const READER_BAR: readonly ButtonBarItem[] = [
   item("Esc", "Back"),
@@ -161,6 +183,11 @@ export function buttonBarFor(
       return REPORT_BAR;
     case "bank-reconciliation":
       return BANK_RECON_BAR;
+    // WITHOUT THIS CASE THE SCREEN FALLS THROUGH TO GATEWAY_BAR AND NO TEST
+    // CATCHES IT: the bar would advertise F3 Company and F11 Features over a
+    // half-keyed challan form and say nothing at all about Alt+C.
+    case "tds-challans":
+      return TDS_CHALLAN_BAR;
     case "master-create":
       return MASTER_BAR;
     case "gateway":

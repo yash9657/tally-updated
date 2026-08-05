@@ -80,7 +80,13 @@ describe("TDS / TCS Register screen", () => {
     for (const line of registerProse.disclosures) {
       // Matched on a distinctive head of each line rather than the whole
       // paragraph, because the DOM splits long text across nodes.
-      const head = line.split(".")[0];
+      //
+      // ⚠️ `?? line` AND NOT `?? ""`. Under noUncheckedIndexedAccess the [0] is
+      // `string | undefined`, and the tempting fallback is the empty string —
+      // which compiles, and turns the pattern into one that matches ANYTHING, so
+      // the disclosure assertion would silently stop asserting. Falling back to
+      // the whole line keeps a real pattern in every branch.
+      const head = line.split(".")[0] ?? line;
       expect(await screen.findByText(new RegExp(escapeRegExp(head)))).toBeTruthy();
     }
     // And the count, so a disclosure silently disappearing is not a pass.

@@ -20,6 +20,7 @@ import { ReportDetailScreen } from "../screens/reports/ReportDetailScreen";
 import { StockSummaryScreen } from "../screens/reports/StockSummaryScreen";
 import { TDSRegisterScreen } from "../screens/reports/TDSRegisterScreen";
 import { BankReconciliationScreen } from "../screens/BankReconciliationScreen";
+import { TDSChallansScreen } from "../screens/TDSChallansScreen";
 import { REPORT_NAMES } from "../keystroke/types";
 import type { ScreenComponent, ScreenComponentProps } from "./screenRegistry";
 import { ScreenRegistry } from "./screenRegistry";
@@ -214,6 +215,12 @@ export function createDefaultRegistry(): ScreenRegistry {
     // carries a ledger rather than a report period, and the print route (which
     // has no ledger id) answers 501 for it on purpose.
     "bank-reconciliation": BankReconciliationScreen,
+    // The TDS CHALLAN register (T6, migration 0069). Registered as a SCREEN and
+    // not as a report name: the server serves it as the bare resource token
+    // `tds-challan`, so a "report:…" key would be reached by migration 0011's
+    // coarse `allow display report` and would need an ACL counterweight. Denied
+    // to Data Entry by design; the screen renders that 403 as the decision it is.
+    "tds-challans": TDSChallansScreen,
     // F1 Help (keystroke reference, generated from the live keymap) and F11
     // Company Features (the honest capability inventory).
     help: HelpAdapter,
