@@ -98,6 +98,93 @@ type CanonicalInward struct {
 	ITCBlockedClause string `json:"itc_blocked_clause"`
 }
 
+// CanonicalCostAllocation is the stable view of ONE cost-centre allocation of
+// ONE posting used for hashing.
+//
+// WHY THIS IS IN THE HASH AT ALL. An allocation is not a report setting; it is
+// the answer to "which department bore this cost", which is the number a
+// manager's budget and a segment disclosure are both computed from. Left
+// unhashed it would be a figure anything with UPDATE could move after the fact,
+// with the chain still certifying the voucher as untouched. Postings are hashed
+// for that reason and this is the same reason.
+//
+// ⛔ PostingSeq, NOT a posting id. `posting` rows are re-created wholesale by
+// every ALTER (see the posting_immutable trigger and HANDOFF §7.5), so a
+// posting id in the hash would be a value that changes on correction — the
+// signed bytes of version 2 would disagree with version 1 about which row a
+// perfectly unchanged allocation belonged to. The 0-based INDEX into this same
+// payload's `postings` array is self-contained: it names a posting inside the
+// very object being signed, so it cannot go stale and needs no lookup to check.
+// It is also why ledger_id is NOT the key — one voucher may legally post twice
+// to the same ledger, and then a ledger_id key is ambiguous.
+//
+// EVERY FIELD IS A STRING, including the sequence number, for the reason
+// CanonicalStockLine records: VerifyChain re-derives the hashed bytes by
+// decoding the stored JSONB back into this struct and re-marshalling it, and
+// that re-derivation is exact only while every value is a string. The sequence
+// could safely be an int, but a mixed struct invites the next author to add a
+// float beside it.
+type CanonicalCostAllocation struct {
+	// PostingSeq is the 0-based index into this payload's Postings slice. See
+	// the type comment for why this and not a posting id.
+	PostingSeq string `json:"posting_seq"`
+	// CostCategoryID is the AXIS this allocation is drawn on. It is NOT optional
+	// and NOT the empty string: a cost centre without its category is the defect
+	// the plan warns about, because two categories may each allocate the SAME
+	// posting in full (parallel allocation) and only the category tells the two
+	// sets apart. An allocation with no category would be summed together with
+	// every other and would break the sum-to-posting invariant for reasons that
+	// look like an arithmetic bug.
+	CostCategoryID string `json:"cost_category_id"`
+	// CostCentreID is the centre within that category that bore the cost.
+	CostCentreID string `json:"cost_centre_id"`
+	// Amount is a fixed-4 string, exactly as CanonicalPosting.Amount is. A
+	// MAGNITUDE, never a sign: the posting's own dr_cr carries the direction, so
+	// an allocation that forgot it reads obviously wrong rather than subtly so.
+	Amount string `json:"amount"`
+}
+
+// CanonicalFulfilment is the stable view of ONE order-line fulfilment used for
+// hashing: "this delivery note line delivers 5 of the 20 that sales order line
+// committed".
+//
+// ⛔⛔ AN ORDER IS A COMMITTED QUANTITY, NOT A MOVEMENT, and this struct is the
+// only place the two shapes touch. It records a LINK, never a stock position:
+// the quantity here says how much of an ORDER this voucher consumed, and the
+// quantity in CanonicalStockLine says how much STOCK actually moved. They are
+// usually equal and they are not the same fact — closing stock is computed from
+// the movement and the order book from this, and nothing in either direction
+// reads the other.
+//
+// WHY IT IS HASHED RATHER THAN A TABLE WRITTEN BESIDE THE VOUCHER. This is
+// OPERATOR-KEYED INPUT — someone chose, at entry, which order this shipment
+// fulfils — which puts it with inward_doc and NOT with bank_reconciliation.
+// The distinction is worth stating because it decides the trap: 0045 and 0069
+// key on voucher_id and store what they matched precisely BECAUSE they are
+// metadata added later, by a different act, and can therefore be left stale by
+// an ALTER they never see. A fulfilment cannot be left stale, because an ALTER
+// RE-STATES it from the new input in the same transaction — so an alter that
+// moves 5 units to a different order line says so in the signed bytes, and the
+// outstanding balance recomputes from the CURRENT version with nothing to
+// detect and nothing to repair.
+//
+// EVERY FIELD IS A STRING, for the reason given on CanonicalCostAllocation.
+type CanonicalFulfilment struct {
+	// LineNo is this voucher's 1-based inventory line, matching
+	// stock_movement.line_no. It ties the fulfilment to the line it came from so
+	// a three-item delivery note against a three-line order is unambiguous.
+	LineNo string `json:"line_no"`
+	// OrderLineID is the order line being consumed. An order line, not an order:
+	// fulfilment is per item, and a delivery note routinely completes one line of
+	// an order and leaves the rest outstanding.
+	OrderLineID string `json:"order_line_id"`
+	// Qty is a fixed-4 string, the quantity of the ORDER consumed by this line.
+	// Partial fulfilment is the normal case, so this is very often less than the
+	// order line's quantity — and it is the whole point of the feature that the
+	// difference is visible.
+	Qty string `json:"qty"`
+}
+
 // CanonicalPayload is the canonical, deterministic representation of a voucher
 // version that is hashed and stored verbatim as the voucher_version.payload
 // JSONB. Field order is fixed by the struct; encoding/json emits object keys in
@@ -162,6 +249,48 @@ type CanonicalPayload struct {
 	//     "17(5)(a)" and then cleared, so the same recorded facts would produce
 	//     two different signatures depending on their history.
 	Inward *CanonicalInward `json:"inward,omitempty"`
+	// CostAllocations is how this voucher's postings were split across cost
+	// centres, and Fulfilments is which order lines its inventory consumed.
+	//
+	// ⛔⛔ THE ORDER OF THESE TWO FIELDS IS FIXED FOREVER AND WAS CHOSEN BEFORE
+	// EITHER FEATURE WAS BUILT. Read this before adding a third.
+	// -----------------------------------------------------------------------
+	// Both of these arrived in the same session, and each independently "had to
+	// be last" under the rule Inward records above. They cannot both be last, so
+	// the tie was broken ONCE, here, and written down: CostAllocations then
+	// Fulfilments, alphabetical, for no better reason than that a rule with an
+	// arbitrary tie-break is still a rule and a rule with none is a coin flip
+	// the next author loses.
+	//
+	// What actually matters is that the decision is made in ONE place at ONE
+	// time. Had the two features been built in separate lanes each appending
+	// "at the end", whichever merged second would have moved the other's key and
+	// silently invalidated every hash written between the two merges — a window
+	// in which real vouchers get signed. There is no test that could have caught
+	// that after the fact, because both fields are omitempty and every existing
+	// pinned vector sets neither.
+	//
+	// Each obeys the same three rules Inward does, and for the same reasons:
+	//   * they are LAST, in the order declared here, and nothing may be inserted
+	//     above them — that would move every following key and change the bytes
+	//     of every voucher ever written;
+	//   * each is `omitempty` — a voucher with no allocations and no fulfilments,
+	//     which is every voucher posted before this session and most vouchers
+	//     forever, must marshal BYTE-IDENTICALLY to what it always did, or
+	//     VerifyChain retroactively reports every book in the field as tampered
+	//     with, which is indistinguishable from an actual attack;
+	//   * their element types are all-strings, so the JSONB -> struct -> bytes
+	//     re-derivation VerifyChain depends on is exact.
+	//
+	// TestTheTwoNewOptionalFieldsAreLastAndInTheirPinnedOrder is the ONLY test
+	// that can observe the third rule, and that is established by having tried
+	// it rather than by assuming: every OTHER pinned vector leaves both fields
+	// empty, so swapping their declaration order keeps those vectors
+	// byte-identical and they all still PASS. Only a vector that sets BOTH can
+	// see the order at all — the same lesson Inward's comment records, applied
+	// one field further along.
+	CostAllocations []CanonicalCostAllocation `json:"cost_allocations,omitempty"`
+	Fulfilments     []CanonicalFulfilment     `json:"fulfilments,omitempty"`
 }
 
 // Marshal returns the canonical JSON encoding of the payload.
