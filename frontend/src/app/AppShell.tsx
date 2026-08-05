@@ -47,6 +47,15 @@ const COMPANY_SCOPED_SCREENS = new Set<NavSnapshot["screen"]>([
   "cost-centres",
   "cost-centre-summary",
   "cost-category-summary",
+  // The three T3 screens. Same failure mode as every screen above: all three read
+  // (and all three write) ONE company's orders or recipes, so omitting one means
+  // useCompanyID() THROWS before the screen can render its own state — including
+  // its 403 panel, which is a NORMAL answer on the two registers (a level may be
+  // allowed to commit us to customers and refused to commit us to suppliers, which
+  // is why they are two authorities in the first place).
+  "sales-orders",
+  "purchase-orders",
+  "boms",
 ]);
 
 /**
@@ -95,6 +104,21 @@ const SCREEN_ACTIONS: Partial<Record<KeymapAction["kind"], ScreenActionKind>> = 
   // Ditto: a Cost Centre Summary with no axis chosen renders a picker, and
   // without this entry F4 could never reopen it.
   selectCostCategory: "selectCostCategory",
+  // ---- THE FOUR T3 SCREEN ACTIONS (Alt+C / Alt+W on the two order registers,
+  // Alt+C / Alt+X on the BOM screen).
+  //
+  // ⛔ THIS IS THE LINE-FOR-LINE REPEAT OF THE Alt+O LESSON ABOVE, four times
+  // over. Every other registration for these keys can be present and correct —
+  // the keymap binding, the KeymapAction, the ScreenActionKind, the navMachine
+  // case, the button-bar item and the screen's own useRegisterScreenAction — and
+  // the key still does NOTHING, silently, because the shell resolves the combo,
+  // finds no screen action, and forwards it to a machine that deliberately does
+  // not move. There is no error and no status line. Unit tests do not catch it
+  // because they call the dispatcher directly and bypass this map.
+  createOrder: "createOrder",
+  closeOrder: "closeOrder",
+  createBom: "createBom",
+  explodeBom: "explodeBom",
 };
 
 /** How long a status-line message stays up before it fades (ms). */
@@ -108,6 +132,12 @@ const STATUS_TTL_MS = 6000;
  */
 const ALWAYS_MEANINGFUL = new Set<KeymapAction["kind"]>([
   "voucher",
+  // Ctrl+F8 / Ctrl+F9 on the register they already open. The machine's pushOnce
+  // deliberately does not stack a second identical frame, so the stack comes out
+  // byte-identical — but the operator asked for the sales order register and is
+  // looking at the sales order register, so "does not apply on this screen" would
+  // be a false statement about a key that did exactly what it says.
+  "orderRegister",
   "date",
   "help",
   "features",
@@ -406,8 +436,16 @@ function screenTitle(snap: NavSnapshot): string {
       return "Cost Categories & Cost Centres";
     case "cost-centre-summary":
       return "Cost Centre Summary";
-    case "cost-category-summary":
-      return "Cost Category Summary";
+    // The T3 screens. Each register NAMES ITS DIRECTION, and that is not
+    // decoration: the two are separate authorities and look nearly identical on
+    // screen, so a title bar reading only "Orders" over a purchase commitment is
+    // how an operator reads a supplier obligation as a customer's promise.
+    case "sales-orders":
+      return "Sales Orders";
+    case "purchase-orders":
+      return "Purchase Orders";
+    case "boms":
+      return "Bills of Materials";
     default:
       return "Tally";
   }
@@ -447,6 +485,27 @@ function hintsFor(snap: NavSnapshot): string[] {
       // No axis picker on purpose: this report IS the list of axes, and Enter on
       // a row opens that axis's Cost Centre Summary.
       return ["F2: Period", "Enter: Open this axis", ...common];
+    // The two order registers. "Alt+W: Pre-close" is spelled Tally's way
+    // (RESEARCH.md:622) and the hint strip has no room to say what it means, so
+    // the key's own label carries that: it ABANDONS an order and is not "mark it
+    // delivered". Nothing here is a period — the outstanding position as at a date
+    // is the order BOOK, which is a report.
+    case "sales-orders":
+    case "purchase-orders":
+      return [
+        "Alt+C: New order",
+        "Alt+W: Pre-close",
+        "Ctrl+A: Accept",
+        "Ctrl+F8 / Ctrl+F9: Sales / Purchase",
+        ...common,
+      ];
+    case "boms":
+      return [
+        "Alt+C: New recipe",
+        "Alt+X: Explode",
+        "Ctrl+A: Accept",
+        ...common,
+      ];
     case "goto-overlay":
       return ["Type to search", "Enter: Open", "Esc: Cancel"];
     case "help":

@@ -171,6 +171,61 @@ describe("the mock order API refuses what the server refuses", () => {
     expect(view.lines[0]!.rate).toBe("500.0000");
   });
 
+  it("⛔ resolves DISPLAY NAMES on the way back, and never echoes the id as the name", async () => {
+    // THE THIRD OCCURRENCE OF T2'S SHAPE DEFECT, caught the same way as the first
+    // two — by building a screen against the mock and looking at it.
+    //
+    // `party` and `stock_item` returned the ID that was sent in. Both fields are
+    // `string`, so tsc is clean and every assertion about quantities and refusals
+    // stays green; what breaks is only visible to an operator, who is shown a UUID
+    // where the register should say "Acme Traders". The server LEFT JOINs the master
+    // and returns COALESCE(name, '') for each (internal/orders/bom.go:242 and the
+    // order queries beside it), so this is what the wire actually does.
+    //
+    // ⚠️ THE CONTROL IS THE SECOND HALF: an id that resolves to NOTHING must come
+    // back as "", not as the id. Falling back to the id would put the UUID on the
+    // screen in exactly the case an operator can least explain, and it would make
+    // the first half of this test pass while the defect survived for unknown
+    // masters.
+    const c = createMockClient();
+    const seeded = "company-demo";
+    const { order_id } = await c.createSalesOrder(seeded, {
+      order_no: "SO-NAMES",
+      order_date: "2026-06-01",
+      party_ledger_id: "ledger-acme",
+      created_by: "owner",
+      lines: [{ stock_item_id: "stock-widget", qty: "2" }],
+    });
+    const view = await c.getSalesOrder(seeded, order_id);
+    expect(view.party).toBe("Acme Traders");
+    expect(view.party).not.toBe("ledger-acme");
+    expect(view.lines[0]!.stock_item).toBe("Widget");
+    expect(view.lines[0]!.stock_item).not.toBe("stock-widget");
+    // The BOM side, same shape, same server join.
+    const { bom_id } = await c.createBom(seeded, {
+      stock_item_id: "stock-widget",
+      name: "Standard",
+      output_qty: "3",
+      components: [{ stock_item_id: "stock-gasket", qty: "10" }],
+      created_by: "owner",
+    });
+    const bom = await c.getBom(seeded, bom_id);
+    expect(bom.stock_item).toBe("Widget");
+    expect(bom.components[0]!.stock_item).toBe("Gasket");
+
+    // THE CONTROL: an unknown master resolves to "", never to the id.
+    const unknown = await c.createSalesOrder(seeded, {
+      order_no: "SO-UNKNOWN",
+      order_date: "2026-06-01",
+      party_ledger_id: "ledger-does-not-exist",
+      created_by: "owner",
+      lines: [{ stock_item_id: "stock-does-not-exist", qty: "1" }],
+    });
+    const orphan = await c.getSalesOrder(seeded, unknown.order_id);
+    expect(orphan.party).toBe("");
+    expect(orphan.lines[0]!.stock_item).toBe("");
+  });
+
   it("drops closed orders from the order book and from open_only, and echoes the filter", async () => {
     const c = createMockClient({ seed: false });
     const cid = await company(c);

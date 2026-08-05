@@ -1552,7 +1552,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     direction: OrderDirection,
     req: CreateOrderRequest,
   ): Promise<{ order_id: string }> {
-    ensure(companyID);
+    const c = ensure(companyID);
     const no = (req.order_no ?? "").trim();
     if (no === "") {
       throw new ApiError(422, "orders: an order needs a number");
@@ -1605,7 +1605,22 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       order_no: no,
       order_date: req.order_date,
       party_ledger_id: req.party_ledger_id,
-      party: req.party_ledger_id,
+      // ⛔ THE DISPLAY NAME, RESOLVED — NOT THE ID AGAIN.
+      //
+      // This returned `req.party_ledger_id` (and `stock_item` returned the item id)
+      // until a screen was actually built against it, and it is the T2 defect
+      // exactly: a SHAPE the mock got wrong, which no type can catch because both
+      // fields are `string`. The server LEFT JOINs the master and returns
+      // COALESCE(name, '') for each — internal/orders/bom.go:242 and the order
+      // queries beside it — so a screen built against the id-returning mock renders
+      // a UUID where the operator expects "Acme Traders", every test stays green,
+      // and the defect only appears in a browser.
+      //
+      // ⚠️ AN UNRESOLVABLE ID READS BACK AS "", matching the server's COALESCE
+      // rather than falling back to the id. The empty string is the honest answer —
+      // it says the join found nothing — and a fallback to the id would put the UUID
+      // back on the screen in exactly the case the operator can least explain.
+      party: c.ledgers.find((l) => l.id === req.party_ledger_id)?.name ?? "",
       narration: req.narration ?? "",
       is_closed: false,
       closed_reason: "",
@@ -1613,7 +1628,8 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         order_line_id: id("order-line"),
         line_no: i + 1,
         stock_item_id: l.stock_item_id,
-        stock_item: l.stock_item_id,
+        stock_item:
+          c.stockItems.find((s) => s.id === l.stock_item_id)?.name ?? "",
         qty: fixed4(l.qty),
         rate: fixed4(l.rate ?? "0"),
         due_date: l.due_date,
@@ -5115,7 +5131,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       return mockCloseOrder(companyID, "PURCHASE", orderID, req);
     },
     async createBom(companyID, req: CreateBomRequest) {
-      ensure(companyID);
+      const co = ensure(companyID);
       const name = (req.name ?? "").trim();
       if (!req.stock_item_id) {
         throw new ApiError(422, "orders: a bill of materials must name the finished good it produces");
@@ -5171,14 +5187,20 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       mockBoms.push({
         bom_id: bomID,
         stock_item_id: req.stock_item_id,
-        stock_item: req.stock_item_id,
+        // THE RESOLVED NAME, not the id — see the note on the order's `party` field.
+        // internal/orders/bom.go:242 LEFT JOINs stock_item and returns
+        // COALESCE(si.name, ''), so "" is the honest answer for an id that resolves
+        // to nothing and the id itself is never a fallback.
+        stock_item:
+          co.stockItems.find((s) => s.id === req.stock_item_id)?.name ?? "",
         name,
         output_qty: fixed4(req.output_qty),
         is_default: req.is_default ?? false,
         components: req.components.map((c, i) => ({
           line_no: i + 1,
           stock_item_id: c.stock_item_id,
-          stock_item: c.stock_item_id,
+          stock_item:
+            co.stockItems.find((s) => s.id === c.stock_item_id)?.name ?? "",
           qty: fixed4(c.qty),
         })),
       });

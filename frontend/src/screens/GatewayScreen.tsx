@@ -38,6 +38,25 @@ const GATEWAY_MENU = [
   "Cost Centre Summary",
   "Cost Category Summary",
 
+  // ---- THE THREE T3 SCREENS (order processing and bills of materials).
+  //
+  // The two REGISTERS also have documented keys — Ctrl+F8 and Ctrl+F9
+  // (RESEARCH.md:400, :614, :616) — so the Gateway is their second door. The BOM
+  // screen's only door is here: RESEARCH pins no key for reaching a bill of
+  // materials, because in Tally it is not a screen at all but a page of the stock
+  // item's own master (RESEARCH.md:626), and inventing a key would be inventing a
+  // keystroke.
+  //
+  // ⚠️ THESE ARE THE REGISTERS AND NOT THE BOOKS. "Sales Orders" is where an order
+  // is created; "Sales Order Book" is what is still outstanding as at a date, and
+  // it is a REPORT name reached through Alt+G or Display More Reports. Both exist,
+  // they are different screens, and the pair is easy to conflate — which is why
+  // Tally's own name for the second one ("Sales Order Outstandings",
+  // RESEARCH.md:622) is worth remembering as what the book actually reports.
+  "Sales Orders",
+  "Purchase Orders",
+  "Bills of Materials",
+
   "Users & Roles",
   "Display More Reports",
 ] as const;

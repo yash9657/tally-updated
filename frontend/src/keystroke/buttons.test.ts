@@ -114,6 +114,32 @@ const SCREEN_PATHS: { screen: NavSnapshot["screen"]; events: Ev[] }[] = [
       { type: "KEY", combo: "Enter" },
     ],
   },
+  // ---- THE THREE T3 SCREENS.
+  //
+  // The two REGISTERS are reached BY THEIR REAL KEYS here rather than through the
+  // Gateway, and that is deliberate: Ctrl+F8 and Ctrl+F9 are documented TallyPrime
+  // combos (RESEARCH.md:400, :614, :616) and the key is the primary door, so driving
+  // the key is what proves the whole chain — the global binding, the `orderRegister`
+  // action, and the machine case that pushes the frame. If any link were missing,
+  // `snap.screen` below would still be "gateway" and the assertion names the screen
+  // that did not open.
+  //
+  // ⛔ AND THE TWO PATHS PROVE THE AUTHORITY SPLIT IS REAL. Ctrl+F8 must reach
+  // `sales-orders` and Ctrl+F9 `purchase-orders`; one screen serving both directions
+  // would make one of these two lines unsatisfiable.
+  { screen: "sales-orders", events: [{ type: "KEY", combo: "Ctrl+F8" }] },
+  { screen: "purchase-orders", events: [{ type: "KEY", combo: "Ctrl+F9" }] },
+  // The BOM screen's only door is the Gateway: RESEARCH pins no key for reaching a
+  // bill of materials, because in Tally it is a page of the stock item's own master
+  // (RESEARCH.md:626) rather than a screen, and inventing a combo would be inventing
+  // a keystroke.
+  {
+    screen: "boms",
+    events: [
+      { type: "SELECT", menuItem: "Bills of Materials" },
+      { type: "KEY", combo: "Enter" },
+    ],
+  },
 ];
 
 describe("no advertised button is decorative", () => {
@@ -170,7 +196,24 @@ describe("no advertised button is decorative", () => {
           // neither navigates, so the pure machine deliberately does not move.
           "createCostMaster",
           "selectCostCategory",
+          // The four T3 screen actions: Alt+C / Alt+W on the two order registers
+          // and Alt+C / Alt+X on the BOM screen. Screen-owned for the same reasons
+          // as the two above — the form state, the served pick-lists and the client
+          // that posts all belong to the screen — plus two of their own: Alt+W acts
+          // on the order HIGHLIGHTED in the list, and Alt+X is a server round-trip
+          // against a bom_id the pure machine has never seen. None of the four
+          // navigates, so the machine deliberately does not move and this rule
+          // would otherwise read all four bar buttons as decorative.
+          "createOrder",
+          "closeOrder",
+          "createBom",
+          "explodeBom",
           "voucher",
+          // Ctrl+F8 / Ctrl+F9 on the register they already opened. pushOnce leaves
+          // the stack byte-identical rather than stacking a duplicate frame, so the
+          // key is meaningful without changing anything — see ALWAYS_MEANINGFUL in
+          // AppShell.
+          "orderRegister",
           "date",
         ].includes(action?.kind ?? "");
         expect(
@@ -235,11 +278,51 @@ describe("no documented TallyPrime key is silently dead", () => {
     }
   });
 
+  it("the order keys open the REAL order registers", () => {
+    // Ctrl+F8 / Ctrl+F9 were `unavailable` ("Order processing is not built yet")
+    // in two stages and for two different reasons — the same two-stage history
+    // the stock voucher keys above have. First the SERVER could not hold a
+    // commitment (the stock ledger's one primitive is a quantity plus a
+    // direction, and an order is neither); then the tables, both books and all
+    // fourteen client methods existed and there was NO SCREEN, so a
+    // keyboard-only operator could not create an order at all.
+    //
+    // ⛔ TWO KEYS AND TWO ACTIONS, NOT ONE WITH A TOGGLE. `sales-order` and
+    // `purchase-order` are separate authorities on separate routes and the PDP
+    // reads the PATH, so a single screen would be reaching a resource the
+    // operator may be denied. This assertion is what stops the two being
+    // "simplified" into one.
+    const expected: [string, string][] = [
+      ["Ctrl+F8", "sales"],
+      ["Ctrl+F9", "purchase"],
+    ];
+    for (const [combo, direction] of expected) {
+      const action = resolveAction(keymap, "gateway", combo);
+      expect(action?.kind, `${combo} must open an order register`).toBe(
+        "orderRegister",
+      );
+      if (action?.kind === "orderRegister") {
+        expect(action.direction).toBe(direction);
+      }
+      // And it must be LABELLED, because an unlabelled action reads as a blank
+      // line in the F1 Help catalog and the status line.
+      expect(actionLabel(action!).length).toBeGreaterThan(0);
+    }
+  });
+
   it("keys for features this build lacks say so, with a reason", () => {
-    // Ctrl+F8 (Sales Order) stands in for the old Alt+F7 example here: the
-    // stock vouchers ARE built now, order processing is not — an order is a
-    // COMMITMENT, not a movement, and the movement ledger cannot express one.
-    for (const combo of ["Ctrl+F8", "Ctrl+F4", "F10"]) {
+    // ⚠️ THE EXAMPLES IN THIS LOOP HAVE NOW BEEN REPLACED TWICE, and that is the
+    // point of the test rather than a nuisance: Alt+F7 was the original stand-in
+    // and the stock vouchers got built, then Ctrl+F8 replaced it and ORDER
+    // PROCESSING got built. Each time, this assertion is what forced the keymap's
+    // "not built yet" note to be corrected instead of left to rot into a lie that
+    // sends an operator looking for a feature they already have.
+    //
+    // What is left here is genuinely absent: the payroll voucher (Ctrl+F4) has no
+    // screen, F10's "Other Vouchers" PICKER does not exist (every voucher it would
+    // list has its own working key, which is what its note now says), and shutting
+    // a company (Ctrl+F3) is not built.
+    for (const combo of ["Ctrl+F4", "F10", "Ctrl+F3"]) {
       const action = resolveAction(keymap, "gateway", combo);
       expect(action?.kind).toBe("unavailable");
       if (action?.kind === "unavailable") {

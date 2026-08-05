@@ -81,6 +81,33 @@
  *                          remainder that is the report's whole purpose. ⛔ It
  *                          has NO grand total and may never grow one.
  *
+ *  - "sales-orders" / "purchase-orders" — THE ORDER REGISTERS (T3, migration
+ *                          0042): the commitments made to customers and to
+ *                          suppliers, the form that records one, and the
+ *                          pre-closure that abandons one. ⛔ TWO ScreenKinds AND
+ *                          NOT ONE WITH A DIRECTION TOGGLE, for the same reason
+ *                          the two order BOOKS are two report names: the server
+ *                          serves them on two routes under two bare tokens
+ *                          (`sales-order`, `purchase-order`), so the PDP decides
+ *                          on the PATH. A toggle would be reaching a resource
+ *                          the operator may be denied — "this salesperson may
+ *                          commit us to customers but may not commit us to
+ *                          suppliers" is a real rule, and one screen makes it
+ *                          unwritable. Tally has two KEYS for the same reason
+ *                          (Ctrl+F8 / Ctrl+F9, RESEARCH.md:400, :614, :616).
+ *                          Neither needs a FrameOverlays classification: an
+ *                          order register is a list of masters with a form on
+ *                          it, and what is OUTSTANDING as at a date is the order
+ *                          book, which is a report and is classified there.
+ *  - "boms"              — BILLS OF MATERIALS (T3, migration 0043): the recipes
+ *                          defined on a finished good, and the explosion that
+ *                          shows what a Stock Journal's lines WOULD be. A master
+ *                          list with a create form, like "cost-centres", and a
+ *                          bare `bom` token on the server rather than a report
+ *                          name. ⚠️ It renders no money and has none: a recipe
+ *                          is quantities, and what those quantities COST is the
+ *                          valuation plane.
+ *
  * ⚠️ Both cost SUMMARIES are ScreenKinds AND report names on the server
  * (`report:cost-centre-summary`, `report:cost-category-summary`, refused to the
  * seeded Data Entry level by migration 0072). They are ScreenKinds here because
@@ -108,6 +135,9 @@ export type ScreenKind =
   | "cost-centres"
   | "cost-centre-summary"
   | "cost-category-summary"
+  | "sales-orders"
+  | "purchase-orders"
+  | "boms"
   | "bank-reconciliation";
 
 /**
@@ -230,6 +260,28 @@ export const REPORT_NAMES = [
    * reason rather than showing a blank.
    */
   "TDS / TCS Register",
+  /**
+   * ---- THE TWO ORDER BOOKS (T3). What is still OUTSTANDING as at a date.
+   *
+   * ⛔⛔ TWO NAMES AND NEVER ONE "Order Book" WITH A DIRECTION TOGGLE, AND THIS
+   * IS AN AUTHORISATION FACT RATHER THAN A REPORTING ONE. The server serves
+   * `report:sales-order-book` and `report:purchase-order-book` as two separate
+   * names because the PDP decides on the report NAME and a query parameter is
+   * INVISIBLE to it. One report with `?direction=` would make "the salesperson
+   * may see our sales pipeline but not what we have committed to pay suppliers"
+   * an unwritable rule, and the toggle would be reaching a resource the operator
+   * may be denied — producing a 403 nobody can attribute. Migration 0073 writes
+   * the refusals, and it writes `disallow display` AND `disallow print` for each:
+   * a report that cannot be displayed but CAN be printed is a leak with a paper
+   * trail.
+   *
+   * Both are POSITIONS AS AT A DATE, not flows, and FrameOverlays classifies
+   * them so — an outstanding commitment either still stands on the date asked
+   * about or it does not, and bounding it below would drop the orders placed
+   * before the window while their deliveries stayed in it.
+   */
+  "Sales Order Book",
+  "Purchase Order Book",
 ] as const;
 export type ReportName = (typeof REPORT_NAMES)[number];
 
@@ -436,6 +488,85 @@ export type KeymapAction =
    * IS the list of axes, and Enter on a row opens that axis here.
    */
   | { kind: "selectCostCategory" }
+  /**
+   * Ctrl+F8 / Ctrl+F9 — THE ORDER REGISTERS (T3). `direction` is what decides
+   * which, and it is on the ACTION rather than being read off the active screen
+   * because these are two authorities, not one screen in two states — see the
+   * "sales-orders" note on {@link ScreenKind}.
+   *
+   * ⚠️ THE COMBOS ARE DOCUMENTED TallyPrime, and they are the two keys ERP 9 used
+   * for Credit and Debit Note — Tally itself re-mapped them onto the freed
+   * Ctrl+F8/F9 slots when it added order vouchers (RESEARCH.md:400 "Ctrl+F8 Sales
+   * Order; Ctrl+F9 Purchase Order (orders are TallyPrime additions)", the voucher
+   * table at :614/:616, and the migration table at :2145-2146 which marks both as
+   * CHANGED). RESEARCH.md:2181 names this as "the single most user-visible
+   * regression risk": an ERP 9 migrant pressing Ctrl+F8 in Prime gets a Sales
+   * Order and not a Credit Note. This profile is the PRIME profile, so it
+   * replicates Prime's mapping — and Credit/Debit Note keep Prime's Alt+F6 /
+   * Alt+F5, which are bound to the real note screens.
+   *
+   * Both combos were `unavailable` ("Order processing is not built yet") until the
+   * screens existed. They are real actions now, which is what buttons.test.ts's
+   * label assertion is checking.
+   */
+  | { kind: "orderRegister"; direction: "sales" | "purchase" }
+  /**
+   * Alt+C on an ORDER REGISTER — record a new order (T3).
+   *
+   * THE COMBO is Tally's documented create-inline key (RESEARCH.md:405), scoped
+   * for the same reason `recordTDSChallan` and `createCostMaster` are: an order is
+   * not a {@link MasterKind}, so the global `createMaster` would push a
+   * LEDGER-CREATE frame over a half-keyed order and take the lines with it.
+   *
+   * ⚠️ IT CARRIES NO DIRECTION. The screen it fires on already is one direction —
+   * that is the whole point of there being two — so a direction here would be a
+   * second source of truth for it, and the two would part company the moment a
+   * screen was reached by a route the key did not set.
+   */
+  | { kind: "createOrder" }
+  /**
+   * Alt+W on an ORDER REGISTER — PRE-CLOSE the highlighted order (T3).
+   *
+   * THE COMBO IS DOCUMENTED: RESEARCH.md:622 — "Alt+W pre-closes outstanding
+   * orders with reason/date". It is one of the few order keys RESEARCH pins
+   * exactly, so it is used rather than invented.
+   *
+   * ⛔ PRE-CLOSING IS ABANDONMENT ("the customer cancelled"), NOT "mark it
+   * delivered", and the label says so. Nothing can compute it — an order nobody
+   * ever delivered and one that was cancelled have identical fulfilment histories,
+   * which is exactly why `is_closed` is the one order field that is STORED while
+   * `fulfilled_qty` is derived on every read. The reason is REQUIRED, because a
+   * closed order that does not say why is a commitment that vanished.
+   */
+  | { kind: "closeOrder" }
+  /**
+   * Alt+C on the BILLS OF MATERIALS screen — define a recipe (T3).
+   *
+   * Same combo, same scoping argument as `createOrder`. A BOM genuinely IS a
+   * master in Tally's vocabulary (it is defined on the stock item's own master,
+   * RESEARCH.md:626), which is why the create key is the create-master key — but
+   * it is still not a {@link MasterKind} here, because MasterCreateScreen renders
+   * a ledger/group/unit/stock-item form and knows nothing about components.
+   */
+  | { kind: "createBom" }
+  /**
+   * Alt+X on the BILLS OF MATERIALS screen — EXPLODE the highlighted recipe for a
+   * wanted quantity (T3).
+   *
+   * ⚠️ THE COMBO IS OURS AND IS SAID SO OUT LOUD. RESEARCH.md:628 documents how
+   * Tally reaches the same arithmetic — a Manufacturing Journal, where "components
+   * auto-fill (BoM qty × finished qty)" — but pins NO key for exploding a recipe
+   * on its own, because in Tally there is nothing to press: the explosion only
+   * ever happens inside that voucher. Alt+X is chosen because the global Alt+X is
+   * `cancelVoucher`, which is meaningless on a master list, so scoping it here
+   * takes nothing away from an operator; it is NOT presented as documented Tally.
+   *
+   * ⛔ THE EXPLOSION IS A PREVIEW AND MOVES NOTHING. It is what a Stock Journal's
+   * lines would be, and it is SINGLE-LEVEL: a component that itself has a recipe
+   * is not exploded recursively (Tally's own default, and what keeps
+   * work-in-progress visible as stock instead of vanishing inside one entry).
+   */
+  | { kind: "explodeBom" }
   /**
    * A combo that a real TallyPrime user WILL press but whose feature is not
    * built in this edition (e.g. payroll, order processing). It is bound on

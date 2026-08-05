@@ -24,6 +24,15 @@ import { TDSChallansScreen } from "../screens/TDSChallansScreen";
 import { CostCentresScreen } from "../screens/masters/CostCentresScreen";
 import { CostCentreSummaryScreen } from "../screens/reports/CostCentreSummaryScreen";
 import { CostCategorySummaryScreen } from "../screens/reports/CostCategorySummaryScreen";
+import {
+  SalesOrdersScreen,
+  PurchaseOrdersScreen,
+} from "../screens/OrderRegisterScreen";
+import { BomsScreen } from "../screens/masters/BomsScreen";
+import {
+  SalesOrderBookScreen,
+  PurchaseOrderBookScreen,
+} from "../screens/reports/OrderBookScreens";
 import { REPORT_NAMES } from "../keystroke/types";
 import type { ScreenComponent, ScreenComponentProps } from "./screenRegistry";
 import { ScreenRegistry } from "./screenRegistry";
@@ -239,6 +248,23 @@ export function createDefaultRegistry(): ScreenRegistry {
     "cost-centres": CostCentresScreen,
     "cost-centre-summary": CostCentreSummaryScreen,
     "cost-category-summary": CostCategorySummaryScreen,
+    // ---- THE THREE T3 SCREENS (order processing and bills of materials).
+    //
+    // ⛔ TWO REGISTER SCREENS AND NOT ONE WITH A DIRECTION TOGGLE. `sales-order` and
+    // `purchase-order` are separate authorities on separate routes and the PDP reads
+    // the PATH, so one screen serving both would be reaching a resource the operator
+    // may be denied. The two entries below are two ADAPTERS over one component whose
+    // direction is fixed HERE, at registration — that is what keeps the authority
+    // split real while the rendering is shared. See the header of
+    // OrderRegisterScreen.tsx.
+    //
+    // All three are SCREENS and not report names: the server serves them under the
+    // bare tokens `sales-order`, `purchase-order` and `bom`, which migration 0011's
+    // coarse `allow display report` can never match — and all three carry a create
+    // form, which no report screen does.
+    "sales-orders": SalesOrdersScreen,
+    "purchase-orders": PurchaseOrdersScreen,
+    boms: BomsScreen,
     // F1 Help (keystroke reference, generated from the live keymap) and F11
     // Company Features (the honest capability inventory).
     help: HelpAdapter,
@@ -256,5 +282,19 @@ export function createDefaultRegistry(): ScreenRegistry {
     // The TDS/TCS register (Item Zero step 4). Denied to Data Entry by
     // migration 0068; the screen renders that refusal as the reason it is.
     "report:TDS / TCS Register": TDSRegisterScreen,
+    // ---- THE TWO ORDER BOOKS (T3). Registered BY NAME, unlike the three screens
+    // above, because both genuinely ARE report names on the server
+    // (`report:sales-order-book`, `report:purchase-order-book`) and both are pure
+    // readers with an as-at date and nothing else — exactly what a `report` frame
+    // is. Registering them by name is what gives them the report keymap, the report
+    // button bar, F2 and a place in Go To and Display More Reports for free.
+    //
+    // ⛔ AND THEY ARE TWO NAMES BECAUSE A QUERY PARAMETER IS INVISIBLE TO THE PDP.
+    // Migration 0073 refuses both to the seeded Data Entry level with `disallow
+    // display` AND `disallow print` for each. Never collapse them into one name with
+    // a ?direction= — that would make "may see the sales pipeline, may not see what
+    // we owe suppliers" an unwritable rule.
+    "report:Sales Order Book": SalesOrderBookScreen,
+    "report:Purchase Order Book": PurchaseOrderBookScreen,
   });
 }

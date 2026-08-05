@@ -224,6 +224,19 @@ export const AS_AT_ONLY_REPORTS = [
   // `periodTo` as `asOn` and never reads `periodFrom`. It was in NEITHER list
   // and was therefore told its period did nothing.
   "Stock Summary",
+  // ---- THE TWO ORDER BOOKS (T3). Both are POSITIONS as at a date.
+  //
+  // An outstanding commitment either still stands on the date asked about or it
+  // does not, so only the upper bound is meaningful and both screens read
+  // `periodTo` alone as `as_on`. Bounding one BELOW would be actively wrong rather
+  // than merely useless: it would drop the orders PLACED before the window while
+  // leaving their deliveries inside it, so a long-open order would read as fully
+  // delivered — the outstanding balance is derived from both halves, and dropping
+  // only one half of a subtraction produces a confident wrong answer. That is the
+  // same trap AS_AT_ONLY_REPORTS exists for ("Bounding a position below would drop
+  // the entity's earlier history and still foot").
+  "Sales Order Book",
+  "Purchase Order Book",
 ];
 
 /**

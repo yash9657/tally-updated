@@ -96,10 +96,17 @@ const RAW_BINDINGS: Record<string, KeymapAction> = {
     feature: "Shut Company (Ctrl+F3)",
     note: "Company shut/close is not built yet.",
   },
+  // F10 is TallyPrime's "Other Vouchers" MENU — the flattened list that Prime
+  // consolidated the order and note vouchers under (RESEARCH.md:641). The MENU is
+  // what is missing here, not the vouchers on it: this note used to say "Order
+  // vouchers are not built", which was true when it was written and is now false in
+  // a way that would send an operator looking for a feature they already have.
+  // Every destination the menu would offer has its own working key, so the note
+  // names them.
   F10: {
     kind: "unavailable",
-    feature: "Other Vouchers (F10)",
-    note: "Order vouchers are not built — an order is a COMMITMENT, not a movement. The four stock vouchers ARE, screen and all: Alt+F7 Stock Journal, Alt+F8 Delivery Note, Alt+F9 Receipt Note, Alt+F10 Physical Stock. F4–F9 cover the six accounting vouchers and Alt+F5/Alt+F6 the debit/credit notes.",
+    feature: "Other Vouchers (F10) — the MENU, not the vouchers on it",
+    note: "This build has no F10 picker; every voucher it would list has its own key. Orders: Ctrl+F8 Sales Order, Ctrl+F9 Purchase Order — an order is a COMMITMENT and not a movement, so those open the order REGISTERS rather than a voucher form. Stock: Alt+F7 Stock Journal, Alt+F8 Delivery Note, Alt+F9 Receipt Note, Alt+F10 Physical Stock. F4–F9 are the six accounting vouchers and Alt+F5/Alt+F6 the debit/credit notes. Rejections In/Out are genuinely not built.",
   },
   // Debit / Credit Note — REAL voucher screens with their own numbering series
   // and their own GSTR-1 treatment (cdnr, table 9B). They were bound as
@@ -148,17 +155,79 @@ const RAW_BINDINGS: Record<string, KeymapAction> = {
     feature: "Physical Stock (Ctrl+F7 — TallyPrime moved it to Alt+F10)",
     note: "In this profile the physical stock count is Alt+F10 — press that instead; it opens the real screen.",
   },
-  "Ctrl+F8": {
-    kind: "unavailable",
-    feature: "Sales Order (Ctrl+F8)",
-    note: "Order processing is not built yet.",
-  },
-  "Ctrl+F9": {
-    kind: "unavailable",
-    feature: "Purchase Order (Ctrl+F9)",
-    note: "Order processing is not built yet.",
-  },
+  // ---- THE ORDER REGISTERS (T3). Both were `unavailable` ("Order processing is
+  // not built yet") for the whole life of the project up to here, in two stages
+  // and for two different reasons — the same two-stage history the four stock
+  // voucher keys above have.
+  //
+  // First the SERVER could not hold a commitment at all: the stock ledger has one
+  // primitive (a positive quantity plus a direction) and an order is neither, so
+  // pushing one through `stock_movement` would have corrupted closing stock — which
+  // now feeds the Balance Sheet. Then the order tables, the fulfilment links, both
+  // books and all fourteen client methods existed and there was NO SCREEN, so a
+  // keyboard-only operator could not create an order at all and the F11 Features
+  // row for T3 said `off` while every test passed.
+  //
+  // ⛔ TWO KEYS AND TWO SCREENS, NOT ONE WITH A TOGGLE. `sales-order` and
+  // `purchase-order` are separate authorities on separate routes and the PDP reads
+  // the PATH, so a single screen with a direction switch would be reaching a
+  // resource the operator may be denied. Tally has two keys for its own reasons and
+  // we need two for this one; they agree.
+  "Ctrl+F8": { kind: "orderRegister", direction: "sales" },
+  "Ctrl+F9": { kind: "orderRegister", direction: "purchase" },
 };
+
+/**
+ * THE TWELVE VOUCHER KEYS, HELD BACK ON A SCREEN THAT CARRIES A FORM.
+ *
+ * ⛔ AN UNBOUND KEY IS NOT INERT ON THESE SCREENS — that is the whole reason this
+ * helper exists. The global table sends F5 to a Payment voucher, F9 to a Purchase
+ * and F8 to a Sales, so a screen with a half-keyed form on it and no override gets
+ * a VOUCHER FORM pushed over that form, and the frame holding the operator's work
+ * is gone with it. That is not a missing feature but a destructive one, which is
+ * the case this file's coverage rule exists for.
+ *
+ * The feature is built and is one Esc away in every case, and that is what each
+ * note says — rather than pretending the voucher does not exist.
+ *
+ * ⚠️ WHY THIS IS A FUNCTION AND THE TWO SCREENS BELOW IT WERE HAND-WRITTEN. It was
+ * ~120 lines of near-identical prose per screen, and the fifth copy is where the
+ * copies start to drift: a paste that keeps the previous screen's noun tells the
+ * operator the voucher keys are held back on a screen they are not on. Naming the
+ * screen ONCE, as data, is what makes the fifth copy safe. `what` completes the
+ * sentence "…would abandon the ___ you are keying".
+ */
+function voucherKeysHeldBack(
+  screen: string,
+  what: string,
+): Record<string, KeymapAction> {
+  const held: [string, string][] = [
+    ["F4", "Contra voucher (F4)"],
+    ["F5", "Payment voucher (F5)"],
+    ["F6", "Receipt voucher (F6)"],
+    ["F7", "Journal voucher (F7)"],
+    ["F8", "Sales voucher (F8)"],
+    ["F9", "Purchase voucher (F9)"],
+    ["Alt+F5", "Debit Note (Alt+F5)"],
+    ["Alt+F6", "Credit Note (Alt+F6)"],
+    ["Alt+F7", "Stock Journal (Alt+F7)"],
+    ["Alt+F8", "Delivery Note (Alt+F8)"],
+    ["Alt+F9", "Receipt Note (Alt+F9)"],
+    ["Alt+F10", "Physical Stock (Alt+F10)"],
+  ];
+  const out: Record<string, KeymapAction> = {};
+  for (const [combo, feature] of held) {
+    out[combo] = {
+      kind: "unavailable",
+      feature: `${feature} — not from ${screen}`,
+      note:
+        `The voucher keys are held back on ${screen}: opening a voucher over it ` +
+        `would abandon the ${what} you are keying. Esc leaves the form, then ` +
+        `${combo} works as it always does.`,
+    };
+  }
+  return out;
+}
 
 /**
  * Per-screen OVERRIDES. Tally re-uses the same physical key for a different
@@ -511,6 +580,63 @@ const RAW_SCREEN_BINDINGS: Partial<
       note: "There is nothing to expand: every row already shows what this axis was measured AGAINST (its allocable base), what it accounts for, and the unallocated remainder. Enter on a row opens that axis's centres.",
     },
   },
+  // ---- THE TWO ORDER REGISTERS (T3). Each carries a create FORM with an item
+  // grid on it, so the voucher keys are held back exactly as they are on the
+  // challan form and the cost masters.
+  //
+  // ⚠️ Ctrl+F8 AND Ctrl+F9 ARE DELIBERATELY *NOT* HELD BACK HERE. They move
+  // between the two registers, which is navigation an operator wants and not a
+  // voucher pushed over a form — and on the register you are already on, the
+  // machine leaves the stack alone rather than stacking a duplicate frame (see
+  // `orderRegister` in navMachine.ts). They are the one pair of function keys on
+  // these screens that stays live.
+  "sales-orders": {
+    // Alt+C — RECORD AN ORDER. Tally's create-inline combo (RESEARCH.md:405);
+    // the global `createMaster` would push a ledger-create frame over the form.
+    "Alt+C": { kind: "createOrder" },
+    // Alt+W — PRE-CLOSE the highlighted order. DOCUMENTED at RESEARCH.md:622,
+    // "Alt+W pre-closes outstanding orders with reason/date".
+    "Alt+W": { kind: "closeOrder" },
+    // F2 would read as "Date" from the global table. An order register has no
+    // period: each order carries its own date, typed on the form, and what is
+    // OUTSTANDING as at a date is the Sales Order Book — a report, with F2 on it.
+    F2: {
+      kind: "unavailable",
+      feature: "Period (F2)",
+      note: "The order register has no period — it lists this company's orders, and each one carries the date it was placed. What is still OUTSTANDING as at a date is the Sales Order Book (Alt+G > Sales Order Book), which is a report and has F2.",
+    },
+    ...voucherKeysHeldBack("the sales order register", "order"),
+  },
+  "purchase-orders": {
+    "Alt+C": { kind: "createOrder" },
+    "Alt+W": { kind: "closeOrder" },
+    F2: {
+      kind: "unavailable",
+      feature: "Period (F2)",
+      note: "The order register has no period — it lists this company's orders, and each one carries the date it was placed. What is still OUTSTANDING as at a date is the Purchase Order Book (Alt+G > Purchase Order Book), which is a report and has F2.",
+    },
+    ...voucherKeysHeldBack("the purchase order register", "order"),
+  },
+  // ---- BILLS OF MATERIALS (T3). A master list with a create form on it.
+  boms: {
+    // Alt+C — DEFINE A RECIPE. A BOM is a master in Tally's own vocabulary (it is
+    // set on the finished good's item master, RESEARCH.md:626), so the
+    // create-a-master key is the right one — but scoped, because
+    // MasterCreateScreen knows nothing about components.
+    "Alt+C": { kind: "createBom" },
+    // Alt+X — EXPLODE the highlighted recipe. OURS, not documented Tally: in
+    // Tally the explosion only ever happens inside a Manufacturing Journal
+    // (RESEARCH.md:628) and there is no key to press on its own. The global Alt+X
+    // is `cancelVoucher`, which is meaningless on a master list, so scoping it
+    // here takes nothing away.
+    "Alt+X": { kind: "explodeBom" },
+    F2: {
+      kind: "unavailable",
+      feature: "Period (F2)",
+      note: "A bill of materials has no period — it is a master, a recipe, and it exists until it is altered. It is not dated and it is not a transaction: nothing moves until the recipe is exploded into a Stock Journal, which is Esc then Alt+F7. Alt+X previews what those lines would be.",
+    },
+    ...voucherKeysHeldBack("the bill of materials screen", "recipe"),
+  },
   // Alt+L on a voucher opens its EDIT LOG. RESEARCH sec 6 pins the PLACEMENT
   // (Tally shows the Edit Log from the voucher alteration screen and the Day
   // Book) but not the combo, so this is scoped to the voucher screen rather
@@ -686,6 +812,27 @@ export function actionLabel(action: KeymapAction): string {
       // read under another's heading, and every figure on that report is scoped
       // to the one it chooses.
       return "Choose the cost category (the axis) this report is for";
+    case "orderRegister":
+      // "Orders" and not "Order voucher": an order is a COMMITMENT, not a
+      // movement, and these keys open a REGISTER rather than a voucher form. An
+      // operator told "Sales Order voucher" would be looking for a voucher.
+      return action.direction === "sales"
+        ? "Sales orders — what customers have committed to buy"
+        : "Purchase orders — what we have committed to buy";
+    case "createOrder":
+      return "Record an order";
+    case "closeOrder":
+      // "Pre-close" is Tally's own word (RESEARCH.md:622) and "abandon" is what it
+      // MEANS. Both are in the label because a key that read "close the order"
+      // would be pressed by an operator who thinks they are marking it delivered —
+      // which is the one thing it does not do.
+      return "Pre-close (abandon) this order, with a reason — NOT 'mark it delivered'";
+    case "createBom":
+      return "Define a bill of materials (a recipe)";
+    case "explodeBom":
+      // "Preview" is load-bearing: exploding moves nothing, and a label that read
+      // "make this" would suggest it had.
+      return "Explode this recipe for a quantity (a preview — nothing moves)";
     case "createMaster":
       return `Create ${action.masterKind} on the fly`;
     case "unavailable":

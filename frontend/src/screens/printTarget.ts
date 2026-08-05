@@ -83,6 +83,22 @@ const REPORT_SLUGS: Record<ReportName, string> = {
   Outstandings: "outstandings",
   "Stock Summary": "stock-summary",
   "TDS / TCS Register": "tds-register",
+  // ---- THE TWO ORDER BOOKS (T3). MAPPED AND DEFERRED, exactly like the TDS/TCS
+  // register above: the server keeps both names mounted and answers 501, so Ctrl+P
+  // SAYS the printed layout does not exist rather than doing nothing.
+  //
+  // The server's reason (handler_print_reports.go) is worth knowing here, because it
+  // is a layout decision and not an oversight: on our own stationery a printed order
+  // book reads as a statement of what the company has contracted to do, but its
+  // figures are outstanding quantities at the ORDER's agreed rate — which the
+  // eventual invoice may lawfully differ from. A page that does not distinguish what
+  // is agreed from what is expected is worse than a refusal.
+  //
+  // ⛔ TWO SLUGS, NEVER ONE WITH A ?direction=. The pair mirrors the two report
+  // names, and mapping them separately is what lets `print report:sales-order-book`
+  // be granted or refused on its own — migration 0073 refuses both.
+  "Sales Order Book": "sales-order-book",
+  "Purchase Order Book": "purchase-order-book",
 };
 
 /** A resolved print destination, or a refusal carrying the reason to display. */

@@ -61,6 +61,42 @@ export type ScreenActionKind =
    * since several axes allocate the same money in parallel.
    */
   | "selectCostCategory"
+  /**
+   * Alt+C on an ORDER REGISTER — open the form that records a new sales or
+   * purchase order (T3). A screen action rather than a machine transition for the
+   * reasons `recordTDSChallan` gives: the form's state and the client that posts it
+   * belong to the screen, and recording an order does not navigate — the operator
+   * is still looking at the register they are adding to, which is the list that
+   * tells them the order number is not already taken.
+   *
+   * ⚠️ IT CARRIES NO DIRECTION, and neither does the keymap action behind it. The
+   * screen IS one direction; a direction on the action would be a second source of
+   * truth for the same fact.
+   */
+  | "createOrder"
+  /**
+   * Alt+W on an ORDER REGISTER — PRE-CLOSE (abandon) the highlighted order, with a
+   * required reason. The screen owns it because the order to close is the one
+   * HIGHLIGHTED in its list, and because re-reading the list afterwards is what
+   * proves the close landed.
+   */
+  | "closeOrder"
+  /**
+   * Alt+C on the BILLS OF MATERIALS screen — open the form that defines a recipe
+   * (T3). Screen-owned for the same reasons as `createOrder`; additionally, the
+   * finished good and every component are PICKED from the served stock-item list,
+   * which the screen holds and the machine cannot.
+   */
+  | "createBom"
+  /**
+   * Alt+X on the BILLS OF MATERIALS screen — explode the highlighted recipe for a
+   * wanted quantity and show what a Stock Journal's lines would be. Screen-owned
+   * because it is a SERVER round-trip against the highlighted bom_id: the scaling
+   * is computed once at full precision server-side, deliberately not in the client
+   * (see BomComponentInput — a pre-divided per-unit figure shorts every batch
+   * forever at fixed-4).
+   */
+  | "explodeBom"
   | "accept"
   | "delete"
   | "export"

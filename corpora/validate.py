@@ -105,6 +105,23 @@ KNOWN_SCREENS = {
     # know, and the category summary is a shape no generic report screen renders.
     "cost-centre-summary",
     "cost-category-summary",
+    # T3 — THE TWO ORDER REGISTERS AND THE BILLS OF MATERIALS (migrations 0042,
+    # 0043). An order is a COMMITTED QUANTITY and not a movement: the stock ledger
+    # has exactly one primitive (a positive quantity plus a direction) and an order
+    # is neither, so nothing on these screens moves stock.
+    #
+    # "sales-orders" and "purchase-orders" are TWO ScreenKinds and not one with a
+    # direction toggle, because the server serves them on two routes under two bare
+    # tokens (`sales-order`, `purchase-order`) and the PDP reads the PATH — the same
+    # reason the two order BOOKS are two report names rather than one with a
+    # ?direction= parameter, which would be invisible to the PDP. Tally has two keys
+    # for it as well (Ctrl+F8 / Ctrl+F9).
+    "sales-orders",
+    "purchase-orders",
+    # A BOM is a recipe and a MASTER: it moves nothing, commits nothing and
+    # balances nothing until it is exploded into a Stock Journal's lines. A
+    # ScreenKind under the bare token `bom`.
+    "boms",
 }
 
 RULESET_VERSION = "gst-2024-09"

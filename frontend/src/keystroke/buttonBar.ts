@@ -216,6 +216,65 @@ const COST_CATEGORY_SUMMARY_BAR: readonly ButtonBarItem[] = [
   item("F1", "Help"),
 ];
 
+/**
+ * THE ORDER REGISTER bar (T3) — one bar, used by BOTH registers.
+ *
+ * ⚠️ ONE BAR AND TWO SCREENS IS NOT THE THING THE ORDER FEATURE MUST NOT DO. The
+ * rule that forces `sales-orders` and `purchase-orders` apart is about AUTHORITY:
+ * the two are separate tokens on separate routes and the PDP reads the path, so a
+ * screen serving both directions, or ONE REPORT NAME serving both, would be
+ * reaching a resource the operator may be denied. A shared BUTTON BAR reaches
+ * nothing — the keys on it (Alt+C, Alt+W, Ctrl+A) mean "create", "pre-close" and
+ * "accept" on whichever register is active, and each register's own screen sends
+ * them to its own route. Sharing the bar is what keeps the two labelled
+ * identically, which is right: the direction is on the TITLE and on the screen's
+ * own heading, where an operator reads it.
+ *
+ * Alt+W is Tally's documented pre-close key (RESEARCH.md:622). It is labelled
+ * "Pre-close" — Tally's own word — and NOT "Close", because "close" reads as "mark
+ * it delivered", which is the one thing it does not do: it ABANDONS the outstanding
+ * balance and demands a reason.
+ *
+ * Ctrl+P is NOT here, for the reason TDS_CHALLAN_BAR gives: neither order book has
+ * a specified printed layout (handler_orderbook.go says so), and a register of
+ * orders has none at all, so the key could only explain itself — and an operator
+ * reaches for a bar button by position from then on. It stays bound globally.
+ */
+const ORDER_REGISTER_BAR: readonly ButtonBarItem[] = [
+  item("Alt+C", "New Order"),
+  item("Alt+W", "Pre-close"),
+  item("Ctrl+A", "Accept"),
+  item("Esc", "Back"),
+  item("Alt+G", "Go To"),
+  item("Ctrl+G", "Switch To"),
+  item("F1", "Help"),
+];
+
+/**
+ * THE BILLS OF MATERIALS bar (T3) — the recipes, and the explosion preview.
+ *
+ * Alt+C defines a recipe; Alt+X explodes the highlighted one for a quantity.
+ * Alt+X's provenance is stated in full on the `explodeBom` action in
+ * keystroke/types.ts: the combo is OURS, because in Tally the explosion only ever
+ * happens inside a Manufacturing Journal (RESEARCH.md:628) and there is no key to
+ * press on its own. It is labelled "Explode" and the key's own label adds that
+ * nothing moves — the explosion is a PREVIEW of what a Stock Journal's lines would
+ * be, and an operator who believed it had produced something would be looking for
+ * stock that is not there.
+ *
+ * F2 is not here (a recipe has no period — it is a master) and neither is Ctrl+P
+ * (no printed layout for a recipe list).
+ */
+const BOM_BAR: readonly ButtonBarItem[] = [
+  item("Alt+C", "New Recipe"),
+  item("Alt+X", "Explode"),
+  item("Ctrl+A", "Accept"),
+  item("Esc", "Back"),
+  item("Alt+G", "Go To"),
+  item("Ctrl+G", "Switch To"),
+  item("F1", "Help"),
+];
+
 /** Screens that are pure readers (Help, Features): Esc out, nothing to save. */
 const READER_BAR: readonly ButtonBarItem[] = [
   item("Esc", "Back"),
@@ -263,6 +322,16 @@ export function buttonBarFor(
       return COST_CENTRE_SUMMARY_BAR;
     case "cost-category-summary":
       return COST_CATEGORY_SUMMARY_BAR;
+    // The three T3 screens, for the reason every case above exists: without them
+    // they fall through to GATEWAY_BAR, WHICH NO TEST CATCHES. The bar would
+    // advertise F3 Company and F11 Features over a half-keyed order and say nothing
+    // at all about Alt+C — or about Alt+W, which is the only way to abandon a
+    // commitment that will otherwise sit in the order book forever.
+    case "sales-orders":
+    case "purchase-orders":
+      return ORDER_REGISTER_BAR;
+    case "boms":
+      return BOM_BAR;
     case "master-create":
       return MASTER_BAR;
     case "gateway":

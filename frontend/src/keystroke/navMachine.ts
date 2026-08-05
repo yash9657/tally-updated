@@ -204,6 +204,23 @@ export const COST_CATEGORY_SUMMARY_LABEL = "Cost Category Summary";
 export const COST_CATEGORY_ROW_PREFIX = "cost-category:";
 
 /**
+ * The Gateway entries that open the two ORDER REGISTERS and the BOM screen (T3).
+ *
+ * ⛔ SAME ORDERING REQUIREMENT AS EVERY LABEL ABOVE — and note that these three
+ * strings are the SAFEST of the set with respect to the report fallback (none of
+ * them is a report name or an alias of one), which is exactly why the ordering has
+ * to be kept anyway: the two names that ARE report-shaped and adjacent to these,
+ * "Sales Order Book" and "Purchase Order Book", genuinely ARE report names and are
+ * reached as `report` frames on purpose. The pair that must not be confused is
+ * REGISTER (a list of orders, a ScreenKind, reached by these labels and by
+ * Ctrl+F8/F9) versus BOOK (what is outstanding as at a date, a report name). One
+ * is where an order is created; the other is where the commitments are read.
+ */
+export const SALES_ORDERS_LABEL = "Sales Orders";
+export const PURCHASE_ORDERS_LABEL = "Purchase Orders";
+export const BOMS_LABEL = "Bills of Materials";
+
+/**
  * The Ctrl+H Change Mode labels the machine acts on. Kept here (not in the
  * screen) because the MACHINE owns what a selection does; the screen owns which
  * options a voucher class offers. Any other label — including the "not built"
@@ -682,6 +699,28 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
           stack.push({ screen: "cost-category-summary" });
           return { stack };
         }
+        // The two ORDER REGISTERS and the BOM screen (T3). Ordering as above.
+        // These are the screens Ctrl+F8 / Ctrl+F9 reach; the Gateway is the other
+        // door, and it is the only door to the BOM screen (RESEARCH pins no key
+        // for reaching a bill of materials — in Tally it is a page of the stock
+        // item's own master).
+        if (
+          active.selectedItem?.toLowerCase() === SALES_ORDERS_LABEL.toLowerCase()
+        ) {
+          stack.push({ screen: "sales-orders" });
+          return { stack };
+        }
+        if (
+          active.selectedItem?.toLowerCase() ===
+          PURCHASE_ORDERS_LABEL.toLowerCase()
+        ) {
+          stack.push({ screen: "purchase-orders" });
+          return { stack };
+        }
+        if (active.selectedItem?.toLowerCase() === BOMS_LABEL.toLowerCase()) {
+          stack.push({ screen: "boms" });
+          return { stack };
+        }
         // "Display More Reports" opens the second-level report MENU (Tally's
         // own structure: the Trial Balance and Outstandings live one level in).
         // Checked before the report fallback, which would otherwise push a
@@ -925,6 +964,52 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
       return {};
     }
 
+    case "orderRegister": {
+      // Ctrl+F8 / Ctrl+F9 — the two order REGISTERS (T3).
+      //
+      // Reachable from ANYWHERE, unlike `bankReconciliation` above which is
+      // gateway-only: these are documented TallyPrime voucher-family keys
+      // (RESEARCH.md:400, :614, :616), and an operator presses a voucher-family
+      // key from wherever they are. That is also why the two registers hold the
+      // twelve OTHER voucher keys back in the keymap but deliberately leave this
+      // pair live — moving between the two registers is the one navigation these
+      // screens should not block.
+      //
+      // pushOnce, so pressing Ctrl+F8 twice on the sales register does not stack a
+      // second identical frame. The key then changes nothing, which is the honest
+      // answer ("you are already here") — and `orderRegister` is in
+      // ALWAYS_MEANINGFUL in AppShell so the shell does not additionally report it
+      // as a key that does not apply on this screen.
+      return pushOnce(
+        action.direction === "sales" ? "sales-orders" : "purchase-orders",
+      );
+    }
+
+    case "createOrder":
+    case "closeOrder":
+    case "createBom":
+    case "explodeBom": {
+      // NO NAVIGATION — the same answer, and for the same reasons, that
+      // `createCostMaster` and `selectCostCategory` give above. All four are
+      // screen-owned side effects fired through the ScreenActions bridge:
+      //
+      //  - the create FORMS live on the register / the BOM list, because the list
+      //    beside them is what tells an operator the order number or the recipe
+      //    name is already taken;
+      //  - Alt+W closes the order HIGHLIGHTED in the list, which is a fact only
+      //    the screen holds;
+      //  - Alt+X explodes the highlighted recipe, which is a server round-trip
+      //    against a bom_id the pure machine has never seen.
+      //
+      // ⚠️ Written out rather than left to a `default: return {}` for the reason
+      // the cost cases give: the shell reports "does not apply on this screen" for
+      // a key that neither ran a screen action nor moved the stack, so a MISSING
+      // SCREEN_ACTIONS entry looks exactly like a key meant to be inert. Writing
+      // the inertness down is what makes the difference reviewable — and this is
+      // the registration point that shipped Alt+O completely dead.
+      return {};
+    }
+
     case "bankReconciliation": {
       // The Gateway / menu entry opens the statement — TallyPrime's own route to
       // it is Alt+G > Banking Activities (RESEARCH.md:873), so a Gateway entry
@@ -1114,6 +1199,9 @@ function reduceSelect(ctx: NavContext, menuItem: string): Partial<NavContext> {
       menuItem.toLowerCase() === COST_CENTRES_LABEL.toLowerCase() ||
       menuItem.toLowerCase() === COST_CENTRE_SUMMARY_LABEL.toLowerCase() ||
       menuItem.toLowerCase() === COST_CATEGORY_SUMMARY_LABEL.toLowerCase() ||
+      menuItem.toLowerCase() === SALES_ORDERS_LABEL.toLowerCase() ||
+      menuItem.toLowerCase() === PURCHASE_ORDERS_LABEL.toLowerCase() ||
+      menuItem.toLowerCase() === BOMS_LABEL.toLowerCase() ||
       canonicalReportName(menuItem) !== undefined
     ) {
       active.selectedItem = menuItem;
