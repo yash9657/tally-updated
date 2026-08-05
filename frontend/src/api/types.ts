@@ -1820,3 +1820,185 @@ export interface SetTDSProfileResponse {
   profile: TDSProfile;
   profile_recorded: boolean;
 }
+
+// ===========================================================================
+// T2 — COST CENTRES AND COST CATEGORIES
+// ===========================================================================
+
+/**
+ * A cost CATEGORY is an AXIS of analysis (Department, Branch, Project); a cost
+ * CENTRE is a POSITION on that axis.
+ *
+ * ⛔⛔ READ THIS BEFORE WRITING ANY COST SCREEN OR ANY COST TOTAL.
+ *
+ * Multiple categories exist in order to allocate the SAME money IN PARALLEL. One
+ * ₹1,00,000 salary posting is allocated in full across Departments (Sales 60,000
+ * / Admin 40,000) AND AGAIN IN FULL across Branches (Mumbai 70,000 / Delhi
+ * 30,000). Both allocations are complete and both are correct — they describe the
+ * same money from two directions.
+ *
+ * Therefore A UI THAT SUMS ACROSS CATEGORIES DOUBLE-COUNTS. There is no
+ * legitimate "total allocated" figure spanning axes: for two axes it is 2× the
+ * cost. Every cost figure a screen renders must be scoped to ONE category, or
+ * grouped by category with no grand total. The backend's per-(posting, category)
+ * constraint trigger guarantees each axis is complete; nothing guarantees — or
+ * should suggest — that axes add up.
+ */
+export interface CostCategory {
+  id: string;
+  name: string;
+  /**
+   * Whether this axis may be used on a balance-sheet ledger as well as a P&L one
+   * (Tally's "Allocate Non-Revenue Items"). Defaults false; departmental analysis
+   * of revenue and expense is the ordinary case.
+   */
+  allocate_non_revenue: boolean;
+}
+
+/**
+ * One position on an axis.
+ *
+ * `cost_category_id` is NEVER absent. A centre with no axis cannot be grouped,
+ * and the per-category invariant would have nothing to group by — which is why
+ * there is no "uncategorised" centre and no implicit default axis. A company that
+ * wants a single axis creates one category, exactly as Tally ships "Primary Cost
+ * Category".
+ */
+export interface CostCentre {
+  id: string;
+  cost_category_id: string;
+  name: string;
+  /** The axis's name, served so a row can read "Mumbai (Branch)" without a join. */
+  cost_category_name: string;
+  /** null for a top-level centre. A parent ALWAYS sits on the same axis. */
+  parent_id: string | null;
+  /**
+   * ⚠️ A CENTRE NAME IS UNIQUE WITHIN ITS AXIS, NOT WITHIN THE COMPANY. "Mumbai"
+   * may legitimately be both a Branch and a Project. A screen that reports "name
+   * already exists" without naming the axis will read as a bug to an operator who
+   * can see the other Mumbai is a different kind of thing.
+   */
+  depth: number;
+}
+
+export interface CostCategoryListResponse {
+  categories: CostCategory[];
+}
+
+export interface CostCentreListResponse {
+  /** Filtered to one axis when the request named one; otherwise every centre. */
+  centres: CostCentre[];
+  /** The axes, SERVED, so a create form never asks an operator to type an id. */
+  categories: CostCategory[];
+}
+
+export interface CreateCostCategoryRequest {
+  name: string;
+  allocate_non_revenue?: boolean;
+}
+
+export interface CreateCostCentreRequest {
+  /** Required. See {@link CostCentre}. */
+  cost_category_id: string;
+  name: string;
+  parent_id?: string | null;
+}
+
+/**
+ * ONE allocation of ONE posting, as the voucher write path accepts it.
+ *
+ * ⛔⛔ `posting_seq` IS A 0-BASED ORDINAL THAT NO SCREEN DISPLAYS, AND THAT IS THE
+ * TRAP THIS FEATURE IS MOST LIKELY TO SHIP.
+ *
+ * This is the same defect T6's challan form shipped and had to be rebuilt for:
+ * it asked the operator to type a voucher UUID and a 0-based leg ordinal —
+ * identifiers no screen in this product renders — and it passed every test,
+ * because the tests keyed mock fixture ids the real server rejects. See
+ * {@link AllocatableDeduction}, which exists solely to stop that being asked.
+ *
+ * The rule that follows: A HUMAN MUST NEVER TYPE OR COUNT A posting_seq. The
+ * allocation UI is attached to a posting ROW the operator is already looking at
+ * (a ledger name and an amount), and the client fills this field in from that
+ * row's index. If a screen ever renders this number, or asks for it, the feature
+ * is not built however green the suite is.
+ */
+export interface CostAllocationInput {
+  /** ⚠️ NOT FOR DISPLAY. The index of the posting in the voucher's own postings array. */
+  posting_seq: number;
+  /** The AXIS. Required — an allocation belongs to both a centre and its category. */
+  cost_category_id: string;
+  cost_centre_id: string;
+  /**
+   * fixed-4 string. ⛔ The allocations for ONE (posting, category) must total the
+   * posting's amount EXACTLY, to the paisa. There is no tolerance: the server
+   * refuses, and the DB's deferred constraint trigger refuses behind it. A screen
+   * should show the running remainder so the operator can see the gap close —
+   * that remainder is the single most useful number on an allocation form.
+   */
+  amount: Money;
+}
+
+/** One centre's figures within one axis, over a period. */
+export interface CostCentreSummaryRow {
+  cost_centre_id: string;
+  cost_centre_name: string;
+  parent_id: string | null;
+  depth: number;
+  debit_rupees: Money;
+  credit_rupees: Money;
+  /** debit − credit. May be negative; render it as the sign convention, not as an error. */
+  net_rupees: Money;
+}
+
+/**
+ * THE COST CENTRE SUMMARY — for ONE axis.
+ *
+ * It takes a cost category and does not have an "all centres" mode, for the
+ * reason {@link CostCategory} gives: centres from different axes describe the same
+ * money and summing them double-counts.
+ */
+export interface CostCentreSummaryResponse {
+  /** Which axis this is. Never absent — the report is meaningless without it. */
+  cost_category_id: string;
+  cost_category_name: string;
+  from_date: string;
+  to_date: string;
+  rows: CostCentreSummaryRow[];
+  /** The axis total. Sums the rows of THIS axis only, and is therefore meaningful. */
+  allocated_total_rupees: Money;
+}
+
+/** One axis's coverage of the period's allocable cost. */
+export interface CostCategorySummaryRow {
+  cost_category_id: string;
+  cost_category_name: string;
+  centre_count: number;
+  allocated_total_rupees: Money;
+  /**
+   * The part of the period's allocable cost this axis says NOTHING about.
+   *
+   * ⛔ THIS IS THE POINT OF THE REPORT, not a footnote. The constraint trigger
+   * guarantees that a posting allocated on an axis is allocated in FULL — but
+   * nothing forces a posting to be allocated on an axis AT ALL. So an axis can be
+   * perfectly consistent and still describe a fraction of the business, and this
+   * figure is the only place that becomes visible. An operator's real question is
+   * "what am I missing", and a screen that renders allocated_total without this
+   * beside it answers a question nobody asked.
+   */
+  unallocated_rupees: Money;
+}
+
+export interface CostCategorySummaryResponse {
+  from_date: string;
+  to_date: string;
+  rows: CostCategorySummaryRow[];
+  /**
+   * The period's total allocable cost — the denominator every row's coverage is
+   * measured against.
+   *
+   * ⚠️ THERE IS DELIBERATELY NO GRAND TOTAL OF `allocated_total_rupees` ACROSS
+   * ROWS, and none must be added. Each axis allocates the same money, so that sum
+   * is a multiple of the truth. Compare each row against THIS figure instead.
+   */
+  allocable_total_rupees: Money;
+}
