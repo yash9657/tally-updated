@@ -16,7 +16,16 @@ package server
 //	itc-reconciliation, ims-inbox,
 //	payroll-form-138, payroll-pf-ecr, payroll-esi-return,
 //	tds-register,
-//	cost-centre-summary, cost-category-summary
+//	cost-centre-summary, cost-category-summary,
+//	sales-order-book, purchase-order-book
+//
+// The two order books (T3) are deferred because a printed order book is a
+// different document from the screen. On paper, on our stationery, it reads as a
+// statement of what the company has contracted to do — but its figures are
+// outstanding quantities at the ORDER's agreed rate, which the eventual invoice
+// may lawfully differ from. A printed version has to distinguish what is agreed
+// from what is expected, and that is a layout decision nobody has taken. A blank
+// or naive page that looks like a commitment schedule is worse than a refusal.
 //
 // The two cost reports (T2) are deferred for the reason bank-reconciliation
 // originally was: the Cost Centre Summary is always for ONE cost category, and

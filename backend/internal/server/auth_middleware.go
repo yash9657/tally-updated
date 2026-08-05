@@ -666,8 +666,7 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 		}
 		return "", "", "", false
 
-	
-// TDS DEDUCTOR STATUS (Item Zero step 2): whether this company must deduct
+		// TDS DEDUCTOR STATUS (Item Zero step 2): whether this company must deduct
 	// at all, per tax year. Tally's F11 > Enable TDS > TDS Deductor Details.
 	//
 	//   GET .../deductor-status            -> Display / deductor-status
@@ -1165,6 +1164,21 @@ func reportName(rest string) string {
 		return "cost-centre-summary"
 	case "/cost-category-summary":
 		return "cost-category-summary"
+	// THE TWO ORDER BOOKS (T3, migration 0042). TWO NAMES AND NOT ONE WITH A
+	// ?direction=, because THIS FUNCTION IS THE PDP'S ONLY VIEW OF THE REQUEST and
+	// it sees the path, not the query string. A single `report:order-book` would
+	// make "the salesperson may see our sales pipeline but not what we have
+	// committed to pay suppliers" an unwritable rule — an ordinary rule an ordinary
+	// business wants, since the two lists belong to two different jobs. Migration
+	// 0073 writes `disallow display` and `disallow print` for each.
+	//
+	// Printing either answers 501: no printed layout has been specified for an
+	// order book, and a blank page that looks like a filed commitment schedule is
+	// worse than a refusal — the same call the cost statements above record.
+	case "/sales-order-book":
+		return "sales-order-book"
+	case "/purchase-order-book":
+		return "purchase-order-book"
 	case "/trial-balance":
 		return "trial-balance"
 	case "/balance-sheet":

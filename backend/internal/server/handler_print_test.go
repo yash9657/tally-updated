@@ -1260,8 +1260,21 @@ func TestTheUnimplementedReportsAreStillGovernableAndSaySo(t *testing.T) {
 	// it is ever printed it should be printed as evidence of an IMPORT — what
 	// file, read how, by whom — which is a different document from the one this
 	// slug names.
-	if deferred != 18 {
-		t.Errorf("expected 18 deferred report names, saw %d: handler_print_reports.go's header "+
+	// 20: the eighteen above plus the two order books (T3, migration 0073). Both
+	// are DELIBERATELY deferred rather than implemented — neither has a printed
+	// layout, and mapping the slug without one is what makes Ctrl+P answer "not
+	// built" instead of doing nothing.
+	//
+	// AN ORDER BOOK WILL NOT SIMPLY ACQUIRE A LAYOUT LATER EITHER, and for a
+	// reason worth recording rather than rediscovering: a printed order book is a
+	// commitment schedule, and the moment it leaves the building on our stationery
+	// it reads as a statement of what we have contracted to do. The figures on it
+	// are outstanding quantities at ORDER rates, which the eventual invoice may
+	// lawfully differ from — so the printed version needs to say which of its
+	// numbers are agreed and which are expected. That is a different document from
+	// the screen this slug names.
+	if deferred != 20 {
+		t.Errorf("expected 20 deferred report names, saw %d: handler_print_reports.go's header "+
 			"lists the deferred set explicitly and it is now out of step with "+
 			"authz.KnownReportNames", deferred)
 	}
@@ -1850,10 +1863,11 @@ var printAllowedByMigration0038 = []struct{ resource, cannotHandOver string }{
 
 // printDisallowedBySeededMigrations is every `disallow print` row the seeded
 // Data Entry level carries, with what each one discloses if the refusal is not
-// honoured. EIGHTEEN rows: seventeen report names and the pay run class.
+// honoured. TWENTY rows: nineteen report names and the pay run class.
 //
 // Twelve come from migration 0038; the rest from 0046 (bank-reconciliation),
-// 0068 (tds-register), 0063 (bank-statement) and 0072 (the two cost reports).
+// 0068 (tds-register), 0063 (bank-statement), 0072 (the two cost reports) and
+// 0073 (the two order books).
 //
 // THE LIST IS WRITTEN OUT HERE RATHER THAN READ FROM THE MIGRATIONS on purpose:
 // it is the independent statement of what the product promises, so deleting a
@@ -1919,6 +1933,22 @@ var printDisallowedBySeededMigrations = []struct{ resource, discloses string }{
 	{"report:cost-category-summary",
 		"which analyses of the business are incomplete, and by how much -- the shape of " +
 			"the management accounts before anyone outside has seen them"},
+	// From migration 0073 (T3). The forward pipeline, and the sharpest disclosure
+	// on this list: every other entry leaks what the company HAS done, these leak
+	// what it is ABOUT to do — which a competitor could still act on.
+	//
+	// TWO ENTRIES AND NOT ONE, because they are two report NAMES, because a query
+	// parameter is invisible to the PDP and "the salesperson may see the sales
+	// pipeline but not the purchase commitments" has to be a writable rule. The
+	// pair (display and print) is refused for each for the reason every entry above
+	// records: a report that cannot be displayed but CAN be printed is a leak with a
+	// paper trail.
+	{"report:sales-order-book",
+		"every customer who has committed to buy, what, how much of it, at what agreed price " +
+			"and by when — the revenue that has not been invoiced yet"},
+	{"report:purchase-order-book",
+		"every supplier the company has committed to pay and on what terms — its cost base " +
+			"and its dependencies, before either shows up in the books"},
 }
 
 // TestAnOwnerWritingOneConvenientAllowPrintStarStillCannotHandOverTheWageBill is

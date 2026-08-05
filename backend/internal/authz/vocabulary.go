@@ -313,6 +313,64 @@ var KnownResources = append([]Resource{
 	// SUMMARIES are report names and are registered as such; this is the MASTERS token
 	// and is not one of them.
 	"cost-centre",
+
+	// THE ORDER MASTERS (T3, migration 0042): sales and purchase orders, their
+	// lines, and the commitments they carry. Tally keeps them behind Alt+F5 /
+	// Alt+F4 as voucher-like entries; here they are their own objects, because an
+	// order is a committed quantity and not a movement.
+	//
+	// ⛔ TWO TOKENS, AND HERE THE SPLIT IS THE OPPOSITE CALL FROM `cost-centre`
+	// ABOVE — worth stating, because the two sit three lines apart and look
+	// inconsistent. The cost masters share ONE token because a centre's category is
+	// NOT NULL, so nobody can use one without the other and two tokens would have
+	// to be granted together — a rule an administrator can only get wrong. Sales
+	// and purchase orders are the reverse: they are worked by DIFFERENT PEOPLE
+	// (a salesperson keys what customers want, a purchase clerk keys what we have
+	// ordered in), so "may key sales orders, may not commit the company to
+	// spending" is a rule a business actually writes. The test is not "are these
+	// two things similar" but "would an administrator ever grant one without the
+	// other".
+	//
+	// BARE TOKENS AND NOT REPORT NAMES, which is the decision these entries record.
+	// internal/authz matches a bare `report` rule against ANY `report:NAME` at
+	// specificity 1, so `report:sales-order` would be GRANTED to every seeded Data
+	// Entry level by migration 0011's `allow display report`, and taking it back
+	// would need a counterweight migration. As bare tokens, Data Entry's
+	// default_access 'none' refuses every order route and every rule it carries
+	// names a specific token, so a token never mentioned stays denied — the same
+	// shape tds-challan, tds-profile and cost-centre ship in, all three with zero
+	// ACL rows.
+	//
+	// ⛔ AND NEITHER MAY BE ADDED TO KnownReportNames BELOW. server.go loops over
+	// that list and auto-mounts GET /print/reports/<name>; a name with no
+	// reportName() case is a route routeAction cannot map, i.e. default-DENY for
+	// everyone including the Owner. That bug already shipped once for
+	// reconciliation-queue. The two order BOOKS are report names and are registered
+	// as such; these are the MASTERS tokens and are not them. Sitting in a rule
+	// list, `sales-order` and `report:sales-order-book` are one word apart, which
+	// is how an administrator grants the wrong one — so they are named as
+	// differently as the objects allow.
+	"sales-order",
+	"purchase-order",
+
+	// THE BILL OF MATERIALS (T3, migration 0043): what a finished good is made of.
+	//
+	// ONE TOKEN FOR THE RECIPE AND ITS COMPONENTS, on the `cost-centre` reasoning
+	// rather than the order reasoning above: a component's bom_id is NOT NULL, so
+	// the head and its lines are one object in practice and nobody can maintain one
+	// without the other.
+	//
+	// A BARE TOKEN, for the reason given above — and this one deserves the default
+	// more than most. A RECIPE IS MANUFACTURING IP: it states exactly what a
+	// competitor would need to reproduce the product and at what material cost.
+	// That is a sharper disclosure than the chart of accounts and it is not
+	// something a data-entry clerk keying invoices needs to read, let alone edit —
+	// an altered recipe silently changes what every future manufacture consumes.
+	//
+	// NAMED `bom` AND NOT `bill-of-materials`, deliberately: `bom` is what the
+	// operator's screen, Tally's own menu and the industry all call it, and a rule
+	// list is read by people who know the short form.
+	"bom",
 }, KnownVoucherClasses...)
 
 // KnownReportNames is every report a rule may name via the "report:NAME" form.
@@ -380,6 +438,42 @@ var KnownReportNames = []string{
 	//	  "a clerk may see WHICH analysis is incomplete but not what each department
 	//	  cost" an unwritable rule.
 	"cost-centre-summary", "cost-category-summary",
+	// THE TWO ORDER BOOKS (T3, migration 0042). Report NAMES, so migration 0073's
+	// counterweight can write `disallow display report:NAME` and `disallow print
+	// report:NAME` at specificity 2 for each — without which migration 0011's
+	// coarse `allow display report` reaches them at specificity 1 and every seeded
+	// Data Entry operator can read the company's entire forward pipeline. Exactly
+	// the bank-statement, tds-register and cost-summary problem, one table over —
+	// and then some: those leak what a company HAS done, this leaks what it is
+	// ABOUT to do.
+	//
+	// ⛔⛔ TWO NAMES AND NOT ONE `order-book` WITH A ?direction= PARAMETER, AND THIS
+	// IS THE DECISION THAT MADE AN ACL MIGRATION NECESSARY AT ALL.
+	//
+	// A QUERY PARAMETER IS INVISIBLE TO THE PDP. routeAction sees the path; the
+	// resource name it emits is what a rule matches against. So one shared name
+	// would make
+	//
+	//	"the salesperson may see our sales pipeline but not what we have committed
+	//	 to pay suppliers"
+	//
+	// an UNWRITABLE RULE, and that is an ordinary rule an ordinary business wants,
+	// because the two lists belong to two different jobs — a salesperson and a
+	// purchase clerk. The cost reports above reached the same conclusion from the
+	// same place: a name is the only thing an administrator can write a rule
+	// against, so anything deserving a separate authority needs a separate name.
+	//
+	// ⚠️ NOTE THIS GOES THE OPPOSITE WAY FROM THE SCHEMA, DELIBERATELY. Migration
+	// 0042 models orders as ONE table with a direction column, because two head
+	// tables mean two copies of every constraint and index and the copy that drifts
+	// wins. The report surface splits, because authorisation is the one thing a
+	// direction column cannot express. Neither is a mistake and neither should be
+	// "made consistent" with the other.
+	//
+	// ⚠️ AND T3'S MASTERS ARE BARE TOKENS, NOT REPORT NAMES — see `sales-order`,
+	// `purchase-order` and `bom` in KnownResources above. Only the `report:NAME`
+	// form arrives pre-granted and needs taking back.
+	"sales-order-book", "purchase-order-book",
 	// The Stock Summary is a REPORT, not a master list: its numbers are
 	// DERIVED by replaying the movement ledger through a valuer, and nothing
 	// it prints is stored anywhere. Naming it here is what lets an
