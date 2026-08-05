@@ -279,6 +279,53 @@ type VoucherInput struct {
 	// NO allocation is legal and stays legal — allocation is optional per
 	// ledger, and most postings in most books will never be allocated.
 	CostAllocations []CostAllocationInput
+	// Fulfilments are which ORDER LINES this voucher's inventory consumed — "of
+	// the 20 Tables sales order SO-14 committed, this delivery note ships 5".
+	// See fulfilment.go.
+	//
+	// ⛔⛔ AN ORDER IS A COMMITTED QUANTITY, NOT A MOVEMENT. A fulfilment records
+	// a LINK and never a stock position: its Qty is how much of an ORDER was
+	// consumed, while InventoryLine.Qty is how much STOCK moved. Closing stock
+	// reads the movement, the order book reads this, and neither reads the other.
+	// The two are usually equal, and the case where they legitimately differ —
+	// shipping 105 against a 100-unit order, linking 100, leaving 5 that consumed
+	// no order — is why over-fulfilment can be refused without preventing anyone
+	// from recording what actually happened.
+	//
+	// Each entry names its inventory line by its 1-BASED LINE NUMBER, which is
+	// also what rides in the hashed payload and what stock_movement.line_no has
+	// carried since migration 0025. ⚠️ NOTE THE ASYMMETRY WITH CostAllocations
+	// ABOVE, whose PostingSeq is 0-BASED: that one indexes a JSON array that has
+	// never been a column, this one names a column that has always been 1-based,
+	// and spelling the same voucher line two ways inside one payload would be
+	// worse than the inconsistency.
+	//
+	// ⚠️ AND UNLIKE CostAllocations, AN ITEM INVOICE MAY CARRY THESE. The reason
+	// allocations are refused there is that an item invoice's POSTINGS are
+	// generated inside the transaction, so the index an allocation names is not
+	// one the client chose. Its INVENTORY is the operator's own grid on every
+	// class, so a line number is a fact the client stated and can be held to.
+	//
+	// It is written to order_fulfilment AND into CanonicalPayload.Fulfilments
+	// from this ONE slice inside ONE transaction, so the rows and the signature
+	// cannot disagree.
+	//
+	// An ALTER RE-STATES them against the NEW stock_movement rows this version
+	// writes, exactly as it re-states the movements themselves: a version says
+	// what the voucher is NOW, so an alter that omits them clears the link and
+	// the order goes back to outstanding — the only reading under which "I keyed
+	// this against the wrong order" is correctable. A DELETE tombstone carries
+	// NONE, the same rule postings, stock movements, GST lines, the inward
+	// document and the cost split already follow: a tombstone that restated the
+	// link would leave an order reporting itself fulfilled by a voucher that had
+	// vanished from the books.
+	//
+	// An empty slice writes nothing at all: no rows, and no "fulfilments" key in
+	// the payload. That is what keeps every voucher posted before migration 0042
+	// hashing to exactly the bytes it always did. A line with NO fulfilment is
+	// legal and stays legal — most stock that moves in most businesses was never
+	// ordered in advance.
+	Fulfilments []FulfilmentInput
 	// GST, when non-nil and Class is Sales or Purchase, drives auto-derivation
 	// and verification of the tax lines.
 	GST *GSTParams
@@ -955,6 +1002,29 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 		}
 	}
 
+	// THE ORDER LINK, checked as early as it can honestly be checked, for exactly
+	// the reasons above: migration 0042's deferred trigger
+	// order_fulfilment_within_commitment is the authority and fires at COMMIT, so
+	// the operator's version of the same refusal has to come from here (and from
+	// the second call inside the transaction below) or a mistyped line number
+	// costs them a rolled-back transaction carrying a plpgsql exception.
+	//
+	// ⚠️ NOT GATED ON !itemInvoice, unlike the cost split immediately above. That
+	// guard exists because an item invoice's POSTINGS are generated inside the
+	// transaction and a client-supplied posting index would name the wrong leg. An
+	// item invoice's INVENTORY is the operator's own grid, so its line numbers are
+	// stated by the client on every class and a fulfilment can be held to them —
+	// which matters because an invoice fulfilling an order directly, with no
+	// separate delivery note, is one of the two ordinary ways an order is closed.
+	//
+	// SKIPPED FOR A DELETE because a tombstone carries no inventory and no
+	// fulfilments — see the guard below where `fulfilments` is derived.
+	if op != OpDelete {
+		if err := validateFulfilments(in.Inventory, in.Fulfilments); err != nil {
+			return PostResult{}, err
+		}
+	}
+
 	// ⛔⛔ AN ITEM INVOICE MAY NOT CARRY COST ALLOCATIONS IN THIS SLICE, AND THE
 	// REASON IS THAT posting_seq WOULD BE A LIE.
 	//
@@ -1471,6 +1541,34 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 			movements = nil
 		}
 
+		// THE DELETE GUARD FOR THE ORDER LINK, single-sourced exactly as
+		// `movements`, `allocations` and `inward` are, so the hashed payload and
+		// the order_fulfilment rows are both derived from THIS ONE variable and
+		// cannot disagree about what the tombstone carries.
+		//
+		// A tombstone carries NONE. Were it to restate the link, the order would
+		// report itself fulfilled forever by a voucher that had vanished from the
+		// books — a salesperson would see nothing outstanding and the customer
+		// would still be waiting, with the two facts held in different tables and
+		// nothing to reconcile them.
+		//
+		// An ALTER RE-STATES from the new input, against the NEW stock_movement
+		// rows this version is about to write (movements are immutable, so an
+		// ALTER always writes fresh ones). An alter that omits the link clears it
+		// and the order returns to outstanding.
+		fulfilments := in.Fulfilments
+		if op == OpDelete {
+			fulfilments = nil
+		}
+		// Re-checked against the FINAL inventory list, which for a Physical Stock
+		// voucher is the one buildPhysicalStockDeltas generated inside this
+		// transaction rather than anything the client sent. The function is pure
+		// and cheap, so checking twice is a self-check rather than waste — the
+		// same argument deriveGST and validateCostAllocations record.
+		if err := validateFulfilments(movements, fulfilments); err != nil {
+			return err
+		}
+
 		// THE SAME DELETE GUARD FOR THE SUPPLIER'S DOCUMENT, single-sourced for
 		// the same reason: the hashed payload and the four version columns are
 		// both derived from this one variable, so they cannot disagree about what
@@ -1597,6 +1695,31 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 		// the test that can see a violation.
 		payload.CostAllocations = canonicalCostAllocations(allocations)
 
+		// The order link rides in the hashed payload because "which promise did
+		// this shipment keep" is an answer somebody CHOSE at entry, not metadata
+		// derived afterwards. Left unsigned it would be a link anything with
+		// UPDATE could move after the fact — re-pointing a delivery at a different
+		// customer's order — with the chain still certifying the voucher as
+		// untouched. It is SIGNED, and therefore tamper-evident.
+		//
+		// ⛔ THE SLICE STAYS NIL WHEN THERE IS NOTHING LINKED, and that is
+		// load-bearing rather than tidy: an empty NON-NIL slice built
+		// unconditionally would emit `"fulfilments":[]` and change the hash of
+		// every voucher it touched while looking perfectly correct at this call
+		// site. Every voucher posted before migration 0042 carries none and must
+		// marshal to EXACTLY the bytes it always did, or VerifyChain retroactively
+		// reports every book in the field as tampered with — which reads to an
+		// operator like an attack. canonicalFulfilments returns nil for an empty
+		// input for precisely this reason.
+		//
+		// ⛔ IT IS ASSIGNED AFTER CostAllocations AND ITS FIELD IS DECLARED AFTER
+		// IT. The order of those two payload keys was fixed permanently before
+		// either feature was built (see CanonicalPayload) because they arrived in
+		// the same session and each independently "had to be last". Nothing may be
+		// inserted above either of them, and a third optional field goes below
+		// this one.
+		payload.Fulfilments = canonicalFulfilments(fulfilments)
+
 		payloadJSON, err := payload.Marshal()
 		if err != nil {
 			return fmt.Errorf("ledger: marshal payload: %w", err)
@@ -1710,6 +1833,30 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 			return err
 		}
 		if err := writeStockMovements(ctx, tx, companyID, versionID, movements); err != nil {
+			return err
+		}
+
+		// THE ORDER LINK ROWS — the second rendering of the very slice the hashed
+		// payload was built from above.
+		//
+		// ⛔ IMMEDIATELY AFTER THE MOVEMENTS, AND THAT ORDER IS REQUIRED.
+		// order_fulfilment_movement_fk references stock_movement
+		// (company_id, voucher_version_id, line_no), so the key does not exist
+		// until writeStockMovements has run. That FK is what makes line_no a
+		// CHECKED fact rather than a number the client asserted — without it a
+		// fulfilment could name line 7 of a three-line delivery note and the order
+		// book would report a delivery that never happened — and it is also what
+		// lets 0042's trigger read the movement's own direction, item and quantity
+		// to enforce the three invariants this layer cannot see.
+		//
+		// Same transaction, so a link can never exist without its movement, nor the
+		// voucher commit without its links — the property that makes the signature
+		// and the rows two renderings of one value rather than two values that
+		// agree today.
+		//
+		// A DELETE writes none: `fulfilments` was set to nil by the guard above, so
+		// the tombstone's payload and its rows are both empty from ONE decision.
+		if err := writeFulfilments(ctx, tx, companyID, versionID, fulfilments); err != nil {
 			return err
 		}
 

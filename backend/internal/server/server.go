@@ -771,6 +771,22 @@ func (s *Server) routes() {
 		r.Get("/cost-centre-summary", s.handleCostCentreSummary)
 		r.Get("/cost-category-summary", s.handleCostCategorySummary)
 
+		// THE TWO ORDER BOOKS (T3, migration 0042). What is still outstanding, per
+		// direction, as at a date.
+		//
+		// TWO FLAT LITERAL ROUTES AND NOT ONE WITH ?direction=, because the PDP
+		// decides on the report NAME and never sees the query string: one shared
+		// name would make "the salesperson may see our sales pipeline but not the
+		// purchase commitments" unwritable. See handler_orderbook.go's header.
+		//
+		// Both are a Display, so neither inherits the back-dated write cutoff or
+		// the WebAuthn step-up (both gate on Action.IsWrite()). Both are governed
+		// at specificity 2 by migration 0073, which disallows display AND print for
+		// the seeded Data Entry level: an order book is every commitment made and
+		// received, by counterparty, with quantities and agreed rates.
+		r.Get("/sales-order-book", s.handleOrderBook(reporting.SalesOrders))
+		r.Get("/purchase-order-book", s.handleOrderBook(reporting.PurchaseOrders))
+
 		// Forecast/anomaly reports (wave-2 WS5a).
 		r.Get("/cash-flow", s.handleCashFlow)
 		r.Get("/anomalies", s.handleAnomalies)
@@ -1496,6 +1512,39 @@ type costAllocationReq struct {
 	Amount         string `json:"amount"`
 }
 
+// fulfilmentReq is ONE inventory line of this voucher consuming ONE order line —
+// "line 1 of this delivery note ships 5 of the 20 sales order SO-14 committed"
+// (T3, migration 0042).
+//
+// ⚠️ line_no IS 1-BASED, WHERE costAllocationReq.posting_seq DIRECTLY ABOVE IS
+// 0-BASED, and the two sit in the same request body. The asymmetry is inherited
+// rather than chosen: stock_movement.line_no has been a 1-based column since
+// migration 0025 and the hashed CanonicalStockLine has carried it as such ever
+// since, while a posting sequence indexes a JSON array that has never been a
+// column. Spelling the same voucher line two ways inside one payload would be
+// worse. ledger.validateFulfilments says so IN THE ERROR MESSAGE, because a
+// client that sends an index here will be exactly one out and the resulting
+// foreign-key violation would name a constraint rather than the mistake.
+//
+// ⚠️ AND UNLIKE A COST ALLOCATION, THIS IS HONOURED ON AN ITEM INVOICE. An
+// allocation is refused there because an item invoice's postings are GENERATED
+// inside the transaction, so a client-supplied posting index names the wrong leg.
+// Its inventory is the operator's own grid on every class, so a line number here
+// is a fact the client stated. That matters: an invoice fulfilling an order
+// directly, with no separate delivery note, is one of the two ordinary ways an
+// order is closed.
+//
+// Carried on voucherReq, like Inventory, PhysicalCount and CostAllocations, so
+// POST /sync/commit ships an order-linked voucher from an offline node for free:
+// syncIntentReq.Payload IS a voucherReq and buildVoucherInput is the single
+// translator. A second fulfilment type on the sync wire would compile, decode,
+// and silently drop every order link an offline node ever recorded.
+type fulfilmentReq struct {
+	LineNo      int    `json:"line_no"`
+	OrderLineID string `json:"order_line_id"`
+	Qty         string `json:"qty"`
+}
+
 type voucherReq struct {
 	VoucherTypeID string `json:"voucher_type_id"`
 	PartyLedgerID string `json:"party_ledger_id"`
@@ -1551,8 +1600,32 @@ type voucherReq struct {
 	// layer is a copy that drifts, and the drifted one always wins for whichever
 	// caller reaches it first.
 	CostAllocations []costAllocationReq `json:"cost_allocations"`
-	GST             *gstReq             `json:"gst"`
-	TDS             *tdsReq             `json:"tds"`
+	// Fulfilments is which order lines this voucher's inventory consumed (T3,
+	// migration 0042). See fulfilmentReq above for why line_no is 1-based while
+	// the cost allocation beside it is 0-based, and why an item invoice honours
+	// this one.
+	//
+	// ⛔ THIS FIELD IS THE WHOLE FEATURE'S REACHABILITY. Until `cost_allocations`
+	// was added directly above, T2's validation, hashed-payload entry and row
+	// inserts were reachable ONLY from Go: no HTTP body could carry an allocation,
+	// both report routes answered 200, and they were CORRECT — accurately
+	// reporting that nothing had been allocated, because nothing could be. Nothing
+	// failed and no test noticed, because every layer under test was fine.
+	// `item_ledger_id` on this same struct carries a comment describing the
+	// identical defect from an earlier feature. It has now happened twice, one
+	// feature apart, and it is why this field was written in the same sitting as
+	// ledger.FulfilmentInput rather than left to whoever built the screens.
+	//
+	// The SEMANTICS are deliberately not re-checked here — ledger.validateFulfilments
+	// owns the line bounds, the duplicate-pair check and the per-line "cannot
+	// discharge more than it moved" sum, and returns a domain message; migration
+	// 0042's deferred trigger owns the three invariants that need a database row
+	// (same item, right direction, cumulative commitment). A second copy of any of
+	// those rules in the HTTP layer is a copy that drifts, and the drifted one
+	// always wins for whichever caller reaches it first.
+	Fulfilments []fulfilmentReq `json:"fulfilments"`
+	GST         *gstReq         `json:"gst"`
+	TDS         *tdsReq         `json:"tds"`
 	// TCS is the collection-side mirror, honoured on Sales only. It carries no
 	// exemption flag: a s.394(2) declaration is read from the declarations table
 	// inside the post transaction, never asserted here.
@@ -2029,6 +2102,38 @@ func buildVoucherInput(w http.ResponseWriter, class ledger.Class, req voucherReq
 			CostCategoryID: catID,
 			CostCentreID:   ctrID,
 			Amount:         amount,
+		})
+	}
+	for i, f := range req.Fulfilments {
+		// The 1-based position in the request is what a message names, because the
+		// operator's mental model is "the second order I keyed against" and line_no
+		// points into a different array.
+		where := fmt.Sprintf(" on fulfilment %d", i+1)
+		olID, err := uuid.Parse(f.OrderLineID)
+		if err != nil || olID == uuid.Nil {
+			// ⛔ THE ZERO UUID PARSES (HANDOFF §7.3). Refused explicitly here as
+			// well as in the ledger: as a real key it would reach the per-line sum
+			// and the foreign key alike, so two links whose ids failed to serialise
+			// would be treated as two claims against one non-existent order line
+			// and refused for a reason naming neither cause.
+			writeError(w, http.StatusBadRequest,
+				"order_line_id must be the uuid of an order LINE (not the order) that this item line fulfils"+where)
+			return in, false
+		}
+		// decimal.NewFromString, never strconv.ParseFloat: float parsing ACCEPTS
+		// "NaN" and "Inf", which blow up inside the decimal package as a panic the
+		// Recoverer turns into an opaque 500 — and it would silently round a
+		// 19-digit quantity, so the link stored would not be the one keyed.
+		qty, err := decimal.NewFromString(f.Qty)
+		if err != nil {
+			writeError(w, http.StatusBadRequest,
+				"qty must be a decimal number — the quantity of the ORDER consumed by this line, which is not necessarily the quantity of stock that moved"+where)
+			return in, false
+		}
+		in.Fulfilments = append(in.Fulfilments, ledger.FulfilmentInput{
+			LineNo:      f.LineNo,
+			OrderLineID: olID,
+			Qty:         qty,
 		})
 	}
 	if req.GST != nil {

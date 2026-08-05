@@ -689,7 +689,81 @@ export interface VoucherRequest {
    * Every other voucher states its own postings and leaves this unset.
    */
   item_ledger_id?: string;
+  /**
+   * HOW THIS VOUCHER'S POSTINGS WERE SPLIT ACROSS COST CENTRES (T2, migration
+   * 0040). See {@link CostAllocationInput} — and read its warning about
+   * `posting_seq` before building any UI that sets this.
+   *
+   * ⛔ THIS FIELD EXISTS BECAUSE ITS ABSENCE WAS THE ENTIRE T2 REACHABILITY
+   * DEFECT, ONE LAYER UP. The Go wire (`voucherReq.cost_allocations`) was fixed
+   * late in the session that built T2, and this type was not — so the server
+   * accepted allocations that no browser could construct, both cost reports
+   * answered 200, and they were CORRECT: they accurately reported that nothing
+   * had been allocated, because nothing could be. `item_ledger_id` above carries
+   * a comment describing the identical defect from an earlier feature. That makes
+   * three occurrences of one shape, so state it as a rule: A FEATURE IS NOT
+   * REACHABLE UNTIL THE FIELD EXISTS ON EVERY WIRE BETWEEN THE OPERATOR AND THE
+   * TABLE — Go struct, TS type, and the form that fills it.
+   *
+   * ⚠️ REFUSED OUTRIGHT ON AN ITEM INVOICE (inventory + gst on a GST-bearing
+   * class): its postings are generated inside the server's transaction and index
+   * 0 is the PARTY leg, so a client-supplied posting number would attribute the
+   * cost to a receivable. Allocate on a Journal, Payment, Receipt or Contra, or
+   * on a voucher with stated postings.
+   */
+  cost_allocations?: CostAllocationInput[];
+  /**
+   * WHICH ORDER LINES THIS VOUCHER'S INVENTORY CONSUMED (T3, migration 0042).
+   * See {@link FulfilmentInput}.
+   *
+   * ⚠️ HONOURED ON AN ITEM INVOICE, unlike `cost_allocations` directly above,
+   * and the asymmetry is worth knowing because it looks like an inconsistency.
+   * An allocation is refused there because the POSTINGS are server-generated; a
+   * fulfilment names an INVENTORY line, which is the operator's own grid on
+   * every class. An invoice that fulfils an order directly, with no separate
+   * delivery note, is one of the two ordinary ways an order is closed.
+   */
+  fulfilments?: FulfilmentInput[];
   gst?: GSTRequest | null;
+}
+
+/**
+ * ONE inventory line of this voucher consuming ONE order line — "line 1 of this
+ * delivery note ships 5 of the 20 that sales order SO-14 committed" (T3,
+ * migration 0042).
+ *
+ * ⛔⛔ `qty` IS A LINK, NOT A MOVEMENT, and this is the one thing a UI here can
+ * get wrong in a way nothing catches. It is how much of the ORDER was consumed;
+ * {@link InventoryLineRequest.qty} is how much STOCK moved. They are usually
+ * equal and they are different facts — closing stock reads the movement, the
+ * order book reads this, and neither reads the other.
+ *
+ * The case where they legitimately differ is the reason the distinction is
+ * written down: shipping 105 against a 100-unit order records a movement of 105
+ * (the goods really left, closing stock is right) and a link of 100. The extra 5
+ * consumed no order, because nobody ordered them. So a form must NOT default this
+ * to the line quantity and lock it — over-fulfilment is refused by the server and
+ * by a deferred DB trigger, and an operator who genuinely over-shipped would be
+ * unable to save at all.
+ *
+ * ⚠️ `line_no` IS 1-BASED, where {@link CostAllocationInput.posting_seq} on the
+ * same request body is 0-BASED. Inherited, not chosen: `stock_movement.line_no`
+ * has been a 1-based column since migration 0025. A client that sends an array
+ * index here will be exactly one out, and the server says so in the error rather
+ * than surfacing a foreign-key name.
+ */
+export interface FulfilmentInput {
+  /** The voucher's own 1-BASED inventory line. Not an array index. */
+  line_no: number;
+  /** The order LINE, never the order: fulfilment is per item. */
+  order_line_id: string;
+  /**
+   * fixed-4 string. How much of the ORDER this line consumed — see the interface
+   * note. Must not exceed what the line moved, and the sum across every order one
+   * line names must not either: forty units of promise cannot be discharged by
+   * twenty units of goods, and no single order would look over-fulfilled.
+   */
+  qty: Money;
 }
 
 export interface VoucherResponse {
@@ -2135,4 +2209,270 @@ export interface CostCategorySummaryResponse {
   rows: CostCategorySummaryRow[];
   reconciles: boolean;
   notes: string[];
+}
+
+// ===========================================================================
+// T3 — SALES / PURCHASE ORDERS AND THE BILL OF MATERIALS (migrations 0042, 0043)
+// ===========================================================================
+
+/**
+ * ⛔⛔ AN ORDER IS A COMMITTED QUANTITY, NOT A MOVEMENT. Read this before writing
+ * any screen in this block.
+ *
+ * Nothing has moved when a customer orders 20 units: the goods are still on our
+ * shelf, still ours, and still in closing stock at full value. Orders therefore
+ * live in their own tables and affect REPORTS (the order book) and never
+ * BALANCES — no stock movement, no posting, no effect on the trial balance,
+ * the P&L or the balance sheet.
+ *
+ * A UI consequence that is easy to miss: an order screen must NOT show or imply a
+ * stock effect, and an order must never appear in the Day Book beside vouchers.
+ * It is a promise, not an entry.
+ */
+export type OrderDirection = 'SALES' | 'PURCHASE';
+
+/** One committed item quantity on an order. */
+export interface OrderLineInput {
+  /** 1-BASED position within the order, preserving the operator's input order. */
+  line_no: number;
+  stock_item_id: string;
+  /** fixed-4. The COMMITTED quantity — always positive; the order's direction carries the sense. */
+  qty: Money;
+  /**
+   * The agreed rate. An INPUT to the order book's value column and never a
+   * valuation: the invoice that fulfils this line may lawfully bill a different
+   * rate (a price revision agreed later), and that difference is a finding to
+   * show — not a disagreement to resolve by overwriting either figure.
+   */
+  rate?: Money;
+  /**
+   * ISO date, or omitted. ⚠️ OMITTED MEANS "NO DATE AGREED", WHICH IS NOT
+   * OVERDUE. A screen that renders a missing due date as today's date, or sorts
+   * it as if it were, invents an overdue commitment.
+   */
+  due_date?: string;
+}
+
+export interface CreateOrderRequest {
+  direction: OrderDirection;
+  order_no: string;
+  order_date: string;
+  /** The customer (SALES) or the supplier (PURCHASE). A party LEDGER id. */
+  party_ledger_id: string;
+  narration?: string;
+  created_by?: string;
+  lines: OrderLineInput[];
+}
+
+/**
+ * One order line as READ BACK, carrying its derived position.
+ *
+ * ⛔ `fulfilled_qty` AND `outstanding_qty` ARE DERIVED SERVER-SIDE AND ARE NOT
+ * STORED ANYWHERE. There is no such column, deliberately: a stored figure goes
+ * stale undetectably the first time a fulfilling voucher is ALTERED, because an
+ * alter writes a NEW voucher version and re-states its links without visiting the
+ * order at all. The server sums `order_fulfilment` across CURRENT, non-deleted
+ * voucher versions on every read. A client must not cache these across a voucher
+ * edit.
+ */
+export interface OrderLineView extends OrderLineInput {
+  order_line_id: string;
+  stock_item: string;
+  fulfilled_qty: Money;
+  /** qty - fulfilled_qty. Never negative: over-fulfilment is refused. */
+  outstanding_qty: Money;
+}
+
+export interface OrderView {
+  order_id: string;
+  direction: OrderDirection;
+  order_no: string;
+  order_date: string;
+  party_ledger_id: string;
+  party: string;
+  narration: string;
+  /**
+   * ⚠️ MANUAL ABANDONMENT ("the customer cancelled"), NOT A FULFILMENT STATE.
+   * Nothing can compute this — an order nobody ever delivered and one that was
+   * cancelled have identical fulfilment histories — which is exactly why it is
+   * the one order field that IS stored. A closed order carries a reason; an open
+   * one must not.
+   */
+  is_closed: boolean;
+  closed_reason: string;
+  lines: OrderLineView[];
+}
+
+/**
+ * THE ORDER BOOK — outstanding commitments, for ONE direction.
+ *
+ * ⛔ ONE DIRECTION PER REPORT, AND THAT IS AN AUTHORISATION FACT RATHER THAN A
+ * REPORTING ONE. The server serves `sales-order-book` and `purchase-order-book`
+ * as two separate report names because the PDP decides on the report NAME and a
+ * query parameter is invisible to it — so a single report with `?direction=` would
+ * make "the salesperson may see our sales pipeline but not what we have committed
+ * to pay suppliers" an unwritable rule. Do not "simplify" the two screens into one
+ * with a toggle: the toggle would be reaching a resource the operator may be
+ * denied.
+ */
+export interface OrderBookRow {
+  order_id: string;
+  order_no: string;
+  order_date: string;
+  party: string;
+  order_line_id: string;
+  stock_item: string;
+  qty: Money;
+  fulfilled_qty: Money;
+  outstanding_qty: Money;
+  rate: Money;
+  /** outstanding_qty * rate, at the ORDER's agreed rate. */
+  outstanding_value: Money;
+  /** "" when no date was agreed — see {@link OrderLineInput.due_date}. */
+  due_date: string;
+  /**
+   * True only when a due date EXISTS and has passed. A line with no agreed date
+   * is never overdue, however old.
+   */
+  is_overdue: boolean;
+}
+
+export interface OrderBookResponse {
+  direction: OrderDirection;
+  as_on: string;
+  rows: OrderBookRow[];
+  total_outstanding_value: Money;
+  notes: string[];
+}
+
+/**
+ * A BILL OF MATERIALS — a recipe, and a MASTER (migration 0043). It moves
+ * nothing, commits nothing and balances nothing; it becomes real only when
+ * EXPLODED into the inventory lines of a Stock Journal.
+ *
+ * ⛔⛔ `output_qty` IS THE YIELD AND THE COMPONENTS ARE STORED AGAINST IT, NEVER
+ * PRE-DIVIDED PER UNIT. Recipes are stated as "10 kg of resin makes 3 mouldings".
+ * A UI that helpfully normalises that to 3.3333 kg per moulding loses material at
+ * fixed-4: exploding it for a batch of 3 gives 9.9999 kg, the consumption is short
+ * by a tenth of a gram every batch forever, and it accumulates in closing stock as
+ * phantom material that reconciles against nothing. Show a per-unit figure if it
+ * helps an operator, but SEND the recipe as written and let the server scale by
+ * (wanted / output_qty).
+ */
+export interface BomComponentInput {
+  line_no: number;
+  stock_item_id: string;
+  /** fixed-4. Consumed to yield `output_qty` of the finished good — NOT per unit of it. */
+  qty: Money;
+}
+
+export interface CreateBomRequest {
+  /** The FINISHED GOOD. ⚠️ May not also appear as a component: the server refuses it. */
+  stock_item_id: string;
+  /**
+   * An item may have several recipes (a standard build and a substitute build),
+   * so a BOM is named and the name is what an operator picks at explosion time.
+   * Unique within its item, case-insensitively.
+   */
+  name: string;
+  output_qty: Money;
+  /** At most one default per item; the server refuses a second. */
+  is_default?: boolean;
+  created_by?: string;
+  components: BomComponentInput[];
+}
+
+export interface BomView {
+  bom_id: string;
+  stock_item_id: string;
+  stock_item: string;
+  name: string;
+  output_qty: Money;
+  is_default: boolean;
+  components: (BomComponentInput & { stock_item: string })[];
+}
+
+/**
+ * The explosion of a BOM for a wanted quantity — what a Stock Journal's lines
+ * would be.
+ *
+ * ⚠️ SINGLE-LEVEL. A component that itself has a BOM is NOT exploded
+ * recursively: a Table explodes to 4 Legs, and if a Leg has its own recipe the
+ * operator issues a second Stock Journal. That is Tally's own default and it is
+ * what keeps work-in-progress visible as stock instead of vanishing inside one
+ * entry. A screen must not imply the explosion is complete to the raw materials.
+ */
+export interface BomExplosionResponse {
+  bom_id: string;
+  stock_item: string;
+  /** What the operator asked to make. */
+  wanted_qty: Money;
+  /** The recipe's own yield, echoed so a screen can show the ratio it scaled by. */
+  output_qty: Money;
+  components: {
+    stock_item_id: string;
+    stock_item: string;
+    /** wanted_qty / output_qty * component qty, computed once at full precision. */
+    qty: Money;
+  }[];
+  notes: string[];
+}
+
+// ===========================================================================
+// T5 — e-WAY BILL (Rule 138)
+// ===========================================================================
+
+/**
+ * ⛔⛔ NOTHING HERE IS A GOVERNMENT-ISSUED e-WAY BILL, AND A SCREEN MUST SAY SO
+ * ON THE ARTEFACT'S OWN FACE.
+ *
+ * The NIC e-Way Bill API is unreachable from this environment, so what this
+ * product generates is the PAYLOAD and a deterministic local number — never a
+ * real EBN. Printing something that looks like a validated e-way bill tells a
+ * driver at a checkpost that the consignment is covered when it is not, which is
+ * a worse outcome than printing nothing. The notice is conditioned on the
+ * artefact being the KIND of thing the gap applies to, following
+ * `invQRNotPrintedNotice` in internal/printing/invoice.go.
+ *
+ * ⚠️ AND THE THRESHOLDS ARE SECONDARY MATERIAL. As of 2026-08-05 CBIC's own rule
+ * repository fails TLS chain verification from here, so the ₹50,000 consignment
+ * value, the under-50 km Part B relaxation and the one-day-per-200-km validity are
+ * corroborated across secondary sources and NOT verified against the bare Rule.
+ * They live in ONE Go location carrying that caveat, deliberately not in a
+ * migration CHECK, so re-verification is a code change rather than a schema
+ * change. A screen must not restate the numbers: read them from the server.
+ */
+export interface EWayBillRequest {
+  voucher_id: string;
+  /** The transporter's GSTIN or enrolment id. */
+  transporter_id?: string;
+  transporter_name?: string;
+  /** Part B. Absent for a movement under the distance threshold the server states. */
+  vehicle_number?: string;
+  transport_mode?: 'ROAD' | 'RAIL' | 'AIR' | 'SHIP';
+  /** Approximate distance in km — drives the validity period the server computes. */
+  distance_km?: number;
+  created_by?: string;
+}
+
+export interface EWayBillResponse {
+  /**
+   * ⛔ A LOCAL, DETERMINISTIC IDENTIFIER — NOT AN EBN. Never label this "e-Way
+   * Bill Number" in the UI.
+   */
+  local_reference: string;
+  /** The exact JSON that WOULD be submitted, for inspection and for a later real submission. */
+  payload: Record<string, unknown>;
+  valid_until: string;
+  /**
+   * Why it is valid until then, in words, including the km-per-day rule applied
+   * and whether over-dimensional cargo rates were used.
+   */
+  validity_basis: string;
+  /**
+   * ⛔ RENDER THIS. It states that no submission was made and that the thresholds
+   * are unverified secondary material. It is not decoration and it is not
+   * optional — the whole disclosure discipline rests on it reaching the paper.
+   */
+  disclosures: string[];
 }

@@ -167,6 +167,19 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 		costCategoryID = id()
 		costCentreID   = id()
 
+		// T3 — a purchase order, its line, and the link from the stock_movement
+		// below (migrations 0042 and 0043).
+		orderID     = id()
+		orderLineID = id()
+		bomID       = id()
+		// The BOM's FINISHED GOOD, which cannot be itemID: migration 0043's
+		// bom_component_not_self refuses an item as its own component, and this
+		// fixture may hold only ONE entry per table (seedCompany fatals on a
+		// second) so a plain second `stock_item` row is not available. It is
+		// created inside the bom_head statement instead. See the row for why that
+		// is preferable to seeding an illegal recipe.
+		finishedItemID = id()
+
 		// T6 — the challan the allocation below hangs off (migration 0069).
 		challanID = id()
 
@@ -282,6 +295,54 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 			(id, company_id, voucher_version_id, line_no, stock_item_id, godown_id, batch_id, direction, qty, rate, amount)
 			VALUES ($1, $2, $3, 1, $4, $5, $6, 'IN', 3, 10, 30)`,
 			[]any{id(), cid, versionID, itemID, godownID, batchID}},
+		// T3 — orders (migration 0042). A PURCHASE order, deliberately: the
+		// stock_movement above moves goods 'IN', and
+		// order_fulfilment_within_commitment refuses a sales order fulfilled by an
+		// inward movement. The line's item is itemID and its qty (5) covers the
+		// movement's 3, so every one of 0042's invariants holds -- same item, right
+		// direction, within commitment, and within what the line moved. The
+		// triggers do not fire here (the fixture runs under
+		// session_replication_role = replica, the same reason company's
+		// books_beginning_from is supplied explicitly above), but a fixture row that
+		// would be ILLEGAL in production is a teardown test standing on data the
+		// write path could never create -- the argument posting_cost_allocation
+		// records above.
+		{"order_head", `INSERT INTO order_head
+			(id, company_id, direction, order_no, order_date, party_ledger_id, created_by)
+			VALUES ($1, $2, 'PURCHASE', 'FIX-PO-1', DATE '2024-05-01', $3, 'testdb')`,
+			[]any{orderID, cid, ledgerID}},
+		{"order_line", `INSERT INTO order_line
+			(id, company_id, order_id, line_no, stock_item_id, qty, rate)
+			VALUES ($1, $2, $3, 1, $4, 5, 10)`,
+			[]any{orderLineID, cid, orderID, itemID}},
+		// qty 3, matching the stock_movement above EXACTLY: a link may be less than
+		// what moved (the over-delivery case) but never more.
+		{"order_fulfilment", `INSERT INTO order_fulfilment
+			(id, company_id, voucher_version_id, line_no, order_line_id, qty)
+			VALUES ($1, $2, $3, 1, $4, 3)`,
+			[]any{id(), cid, versionID, orderLineID}},
+
+		// T3 — the bill of materials (migration 0043). The finished good is created
+		// HERE, in this statement, rather than as a second `stock_item` fixture row:
+		// seedCompany fatals on a table seeded twice, and a recipe whose component
+		// is its own output is refused in production by bom_component_not_self. Of
+		// the two ways to satisfy both, an extra row created inline is strictly
+		// better than an illegal recipe -- the teardown assertions require each
+		// table to go from >0 to 0 and never pin the count at one, and the extra row
+		// is removed by the plan's existing stock_item step, which is the very thing
+		// this test proves.
+		{"bom_head", `WITH fg AS (
+				INSERT INTO stock_item (id, company_id, name, unit_id)
+				VALUES ($3, $2, 'Fixture Finished Good', $4) RETURNING id
+			)
+			INSERT INTO bom_head (id, company_id, stock_item_id, name, output_qty, created_by)
+			SELECT $1, $2, fg.id, 'Standard', 1, 'testdb' FROM fg`,
+			[]any{bomID, cid, finishedItemID, unitID}},
+		{"bom_component", `INSERT INTO bom_component
+			(id, company_id, bom_id, line_no, stock_item_id, qty)
+			VALUES ($1, $2, $3, 1, $4, 4)`,
+			[]any{id(), cid, bomID, itemID}},
+
 		{"voucher_external_reference", `INSERT INTO voucher_external_reference
 			(id, company_id, voucher_id, kind, ref_value, pinned_voucher_no)
 			VALUES ($1, $2, $3, 'IRN', 'fixture-irn', 'F/1')`,
