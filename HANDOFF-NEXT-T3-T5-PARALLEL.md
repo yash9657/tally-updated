@@ -1,7 +1,112 @@
-# HANDOFF — NEXT: T3 + T5 IN PARALLEL. T2 IS SHIPPED AND THE CONTRACT T3 NEEDS IS SET.
+# HANDOFF — NEXT: T3's API + SCREENS, AND T5. PHASE 0 IS BUILT AND THE ORDER SPINE IS REACHABLE.
 
-> ### ⛔ THIS IS THE LIVE HANDOFF. Every other `HANDOFF-*.md` in this repo is SPENT — see §11.
-> ### The executable plan is §3. Start with §9 (run-first), then §1, §2, §3.
+> ### ⛔ THIS IS THE LIVE HANDOFF, UPDATED IN PLACE. Every other `HANDOFF-*.md` in this repo is SPENT — see §11.
+> ### Start with §9 (run-first), then §0.1 (what changed), then §3.1 (what is left of the plan).
+
+---
+
+## 0.1 ⛔ UPDATE, 2026-08-05 (second session): PHASE 0 IS DONE. READ THIS BEFORE §3.
+
+**Commits `e18830b` and `7b93e39`.** This file is updated IN PLACE rather than superseded, because
+§11's own finding is that eleven superseded handoffs each re-derived what the last one knew. Anything
+below that this section contradicts, THIS SECTION WINS.
+
+**§3.1's Phase 0 is built, DB-proved and committed.** All five items:
+
+| Phase 0 item | State |
+|---|---|
+| 1. Migrations 0042 (orders) + 0043 (BOM) | ✅ DB-proved from empty, 56 files apply |
+| 2. `VoucherInput.Fulfilments` + payload assembly + `order_fulfilment` writes | ✅ `internal/ledger/fulfilment.go`, 7 live-Postgres tests **RUN** |
+| 3. ⛔ `voucherReq.fulfilments` + `buildVoucherInput` (the reachability step) | ✅ **and mutation-proved from HTTP** |
+| 4. TS API types for orders, BOM, e-Way Bill | ✅ `frontend/src/api/types.ts` |
+| 5. The ACL SHAPE decision + migration 0073 | ✅ verified three ways with two controls |
+
+**Plus, beyond Phase 0 and not asked for — because migration 0073 forced it:** the two order-book
+reports, their five registration sites, and the HTTP reachability pin. 0073 seeds rules naming
+`report:sales-order-book`; an `acl_rule` row naming a resource the vocabulary does not know is not
+merely untested, it makes the admin API **422 an owner who reads their own level's rules and saves
+them back**. So the report names could not land without routes, and the routes could not be a stub.
+
+**Measured gates at `7b93e39`:** backend **2228 pass / 0 SKIP / 0 FAIL** (baseline 2220, +8 = exactly
+the tests added) · frontend **597 / 46** · `tsc` clean · `make verify` exit 0 · `verify:demo`
+**33/33 run ALONE** — unchanged, and now *measured* rather than reasoned, which closes §4.4 for this
+change.
+
+### 0.1.1 ⛔ WHAT IS **NOT** BUILT, STATED FIRST
+
+- **There is NO order-creation API and NO BOM API.** `internal/orders` still does not exist. A human
+  cannot create an order from inside this product — the order in the HTTP test is **seeded by SQL**,
+  and that test's header says so rather than implying otherwise. **This is T2's §4.0 gap in a new
+  place, and it is the highest-value next piece of T3.**
+- **No screens for anything in T3.** No order entry, no BOM entry, no order-book screen, no
+  fulfilment picker on voucher entry.
+- **T5 e-Way Bill: nothing built.** Only the TS types and the recorded citation decision (§6). It is
+  still free parallelism.
+- **BOM has tables and nothing else** — no explosion endpoint, no Stock Journal integration.
+
+### 0.1.2 THE DECISIONS THIS SESSION TOOK, so they are not re-litigated
+
+1. ⛔ **ONE `order_head` WITH A DIRECTION ENUM, not `sales_order` + `purchase_order`** — a deliberate
+   departure from §2.5's sketch, on 0025's own house pattern ("exactly one primitive: a positive
+   quantity plus a direction"). Two head tables mean two copies of every constraint and index, and a
+   shared `order_line` cannot FK to two parents without a polymorphic key.
+2. ⛔ **BUT TWO REPORT NAMES** (`sales-order-book`, `purchase-order-book`), which is the OPPOSITE call
+   and is the one that made an ACL migration necessary at all. **A query parameter is invisible to the
+   PDP**: `routeAction` decides on the path, so one shared name makes *"the salesperson may see our
+   sales pipeline but not what we have committed to pay suppliers"* an **unwritable rule**.
+   ⚠️ **Neither of these should be "made consistent" with the other** — two tables would duplicate
+   constraints, one report name would destroy an authority. Both files say so at their top.
+3. **NO `fulfilled_qty` AND NO `status` COLUMN, ever.** Derived by summing `order_fulfilment` across
+   CURRENT, non-deleted voucher versions. `is_closed` IS stored, because "abandoned" cannot be
+   computed — an undelivered order and a cancelled one have identical fulfilment histories.
+4. **OVER-FULFILMENT IS REFUSED** (the §T3 decision, taken once, in 0042's header). It costs nothing
+   *because* a fulfilment qty is a LINK and not a movement: ship 105 against a 100-unit order, record
+   a movement of 105 and a link of 100, and the extra 5 correctly consumed no order.
+5. **Fulfilments ARE honoured on an item invoice**, where cost allocations are refused. An invoice's
+   postings are server-generated; its inventory is the operator's own grid.
+6. **`sales-order` / `purchase-order` are two bare tokens; `bom` is one.** The test recorded in
+   `vocabulary.go` is not "are these things similar" but **"would an administrator ever grant one
+   without the other"**. No ACL rows for any of the three.
+
+### 0.1.3 NEW TRAPS, each paid for this session
+
+- ⛔ **AN ACL MIGRATION AND ITS REPORT NAMES ARE ONE COMMIT, NOT TWO.** A `disallow print
+  report:NAME` row whose name is not in `authz.KnownReportNames` breaks `printDisallowedBySeededMigrations`'
+  count assertion AND makes the admin API 422 a round-trip PUT of the level's own rules. And a name IN
+  `KnownReportNames` needs a mapped route (`TestReportVocabularyMatchesRouter`). **So an ACL
+  counterweight cannot be "front-loaded in Phase 0" ahead of the report it governs** — plan them
+  together. This is the one place §3.1's Phase-0 advice is wrong.
+- ⚠️ **`loadPlan` in `internal/platform/testdb` reads the LIVE database**, so new tenant tables fail
+  the census with "the fixture seeds X, which the delete plan does NOT cover" until you `make migrate`.
+  The message points at `plan.go` and the actual fix is a migration run.
+- ⚠️ **The fixture may hold only ONE row per table** (`seedCompany` fatals on a second), which collides
+  with `bom_component_not_self`: a legal recipe needs a finished good that is not the fixture's single
+  item. Resolved by creating it inline in the `bom_head` statement via a CTE — the teardown assertions
+  require >0 → 0 and never pin the count at one.
+- ⚠️ **`gofmt -l` exits 0 while printing a filename**, so `gofmt -l f.go && echo CLEAN` prints CLEAN on
+  a dirty file. Read the output, not the status.
+- ⚠️ `internal/ledger` already declares a package-level `dec()` in `item_invoice_test.go`; a new test
+  file needs its own name.
+- ⚠️ **`InventoryLine` HAS NO `LineNo` FIELD** — line numbers come from slice position, so
+  `Inventory[0]` is line 1. That is precisely why `FulfilmentInput.LineNo` is 1-based and an array
+  index is off by one, and the validator says so in its error text.
+
+### 0.1.4 ⛔ THE §4.0 LESSON, NOW WITH A THIRD OCCURRENCE AND A TS COROLLARY
+
+While adding the TS types this session found that **`VoucherRequest` in `frontend/src/api/types.ts`
+had no `cost_allocations` field either.** T2's Go wire was fixed late in the previous session; its
+TypeScript type never was. So a browser still could not construct an allocation, and every one of the
+597 frontend tests passed.
+
+**That is the same defect at a third layer, and it generalises the rule:** a feature is not reachable
+until the field exists on **EVERY** wire between the operator and the table — Go struct, TS type, and
+the form that fills it. Both `cost_allocations` and `fulfilments` are now on `VoucherRequest`.
+
+**The pin that catches it** is `internal/server/order_fulfilment_http_test.go`, and it is
+mutation-proved in both directions: rename the wire tag and the POST still returns **201** while the
+report reads **0.0000**; drop the `current_version_id` join and the report reads **13.0000** where 8 is
+correct. Copy this shape for every new feature — it is the only test in the project that could have
+caught T2.
 
 > **Written 2026-08-05.** Supersedes `HANDOFF-CLEAR-A-TIER.md` as the plan of record.
 > `PLAN-TALLY-PARITY.md` §2.5 remains the **only** authority on migration numbers — but read
@@ -46,8 +151,10 @@
 
 | Track | State | First move |
 |---|---|---|
-| **T3 orders + BOM** | ⬜ nothing exists (`internal/orders` absent, no tables) — **but `CanonicalFulfilment` is committed and frozen** | §3.1 Phase 0, then the 4-lane workflow |
-| **T5 e-Way Bill** | ⬜ nothing exists; IRN precedent is the worked example; **citation approach already decided** | §6 — free parallelism, take it |
+| **T3 spine** (tables, ledger, wire, order book) | ✅ **BUILT `e18830b`/`7b93e39`** — see §0.1 | — |
+| **T3 order + BOM API** | ⬜ `internal/orders` absent. **A human cannot create an order** | §3.1a — this is the whole remaining backend |
+| **T3 screens** | ⬜ nothing | §3.6, after the API |
+| **T5 e-Way Bill** | ⬜ nothing built; TS types + citation decision only | §6 — still free parallelism, take it |
 
 ⚠️ **"Reachable" is not "usable".** T2's allocation write is reachable over HTTP and has no UI. That
 distinction is the single most expensive thing this session learned — see §4.0 — and it is why the
@@ -59,11 +166,11 @@ FeaturesScreen row leads with what is missing.
 
 | Gate | Value | Notes |
 |---|---|---|
-| backend `go test ./... -count=1 -v` | **2220 pass / 0 SKIP / 0 FAIL** | baseline at session start was 2126 |
-| frontend `pnpm run test:run` | **597 pass / 46 files** | baseline 507 / 43 |
+| backend `go test ./... -count=1 -v` | **2228 pass / 0 SKIP / 0 FAIL** | 2026-08-05 second session; was 2220 |
+| frontend `pnpm run test:run` | **597 pass / 46 files** | unchanged — T3's frontend work is types only so far |
 | `pnpm exec tsc --noEmit` | clean | ⛔ **a separate gate from `make verify`** |
 | `make verify` | exit 0 | |
-| `verify:demo` | **33/33**, run alone | ⚠️ it needs **insightd on :8088** as well as cored — a killed insightd makes it die with `TypeError: fetch failed`, which looks like a regression and is not |
+| `verify:demo` | **33/33**, run alone — re-measured after T3, unchanged | ⚠️ it needs **insightd on :8088** as well as cored — a killed insightd makes it die with `TypeError: fetch failed`, which looks like a regression and is not |
 | `gofmt -l` on every file touched | clean | named files only, never `-w` on a directory |
 | Postgres :5433 | live, bracketed before **and** after every suite run | a down DB makes every DB test skip and `go test` still exit 0 |
 
@@ -86,8 +193,16 @@ one.** Plan for one track per session and treat anything more as upside. The orc
 
 ## 2. ⛔⛔ MIGRATIONS — READ BEFORE TAKING A NUMBER
 
-Consumed this session: **0040** (T2 tables), **0072** (T2 ACL). Highest number in the tree is now
-**0072**.
+Consumed 2026-08-05 (second session): **0042** (orders), **0043** (BOM), **0073** (order-book ACL).
+Highest number in the tree is now **0073**, and **0073 IS THE HIGHEST-NUMBERED RESTATEMENT — DERIVE
+FROM IT** (13 PERFORMs).
+
+> ### ⛔ 0044 IS NOW ALSO PERMANENTLY UNUSABLE, FOR THE IDENTICAL REASON AS 0041.
+> §2.5 reserved it for T3's ACL. **Two tracks have now hit this wall.** Stop treating a reserved ACL
+> number as a number to try: **reserve blocks for TABLES, take the seeder number at the end, every
+> time.** Reserved blocks still free FOR TABLES ONLY: T5's 0047–0048, Tier 2's 0051–0061.
+
+Previously consumed: **0040** (T2 tables), **0072** (T2 ACL).
 
 > ### ⛔ 0041 IS PERMANENTLY UNUSABLE AND MUST BE LEFT EMPTY.
 > §2.5 reserved it for T2's ACL. It cannot carry an ACL rule and neither can any other reserved block
@@ -165,20 +280,44 @@ assumes you have read §1 and §2 and nothing else yet.
 So the real parallelism is **~6 agents on disjoint files, one workflow at a time**, and the serial
 phases below are not compressible.
 
-### 3.1 PHASE 0 — SERIAL, YOURS, ~1–2 HOURS. NOTHING PARALLELISES UNTIL THIS EXISTS.
+### 3.1 ⛔ PHASE 0 IS SPENT — IT IS BUILT AND COMMITTED (§0.1). WHAT FOLLOWS IS WHAT IS LEFT.
 
-Every item here is a file that **two or more lanes would otherwise both edit**. Write them yourself,
-commit them, and the lanes become genuinely disjoint.
+The five Phase-0 items are done, DB-proved and committed at `e18830b` / `7b93e39`. **Do not redo them.**
+The original table is kept below only for its reasoning, struck through in effect:
 
-| # | What | Why it cannot be a lane |
+| # | What | State |
 |---|---|---|
-| 1 | **Migrations 0042 (orders) + 0043 (BOM)**, DB-proved from empty with controls | Two lanes writing migrations collide on numbers, and the seeder trap (§2) needs one author. Lanes get the `CREATE TABLE` **quoted verbatim** — a paraphrase is what made an agent invent a third copy of a vocabulary |
-| 2 | **`VoucherInput.Fulfilments` + `post()` payload assembly + `order_fulfilment` row writes** | This is `internal/ledger/ledger.go`, the single most contended file. `CanonicalFulfilment` is already committed and frozen — you are only wiring it |
-| 3 | ⛔ **`voucherReq.fulfilments` on the HTTP wire + `buildVoucherInput` translation** | **THE REACHABILITY LESSON (§4.0).** Do this in Phase 0, not as a lane, because it is precisely the step that was forgotten for cost allocations — and forgetting it makes every downstream lane build against a feature no client can reach |
-| 4 | **TS API types** for orders, BOM and e-Way Bill in `frontend/src/api/types.ts` | The screens workflow needs them; writing them first is what let this session's screens lane start immediately instead of waiting on an API phase |
-| 5 | **The ACL SHAPE decision** (§2.1), and migration **0073** only if a `report:NAME` is involved | Three lanes each restating the seeder is the §3.3 duplicate disaster at schema level |
+| 1 | Migrations 0042 (orders) + 0043 (BOM) | ✅ done, from-empty proof, controls |
+| 2 | `VoucherInput.Fulfilments` + `post()` payload + `order_fulfilment` writes | ✅ done, 7 DB tests RUN |
+| 3 | `voucherReq.fulfilments` + `buildVoucherInput` | ✅ done, mutation-proved from HTTP |
+| 4 | TS API types for orders, BOM, e-Way Bill | ✅ done |
+| 5 | The ACL shape decision + migration 0073 | ✅ done — **and see §0.1.3: it could NOT have been front-loaded ahead of its report** |
 
-**Then commit Phase 0 on its own.** Each lane prompt quotes the committed DDL and the committed types.
+⚠️ **AND ONE PIECE OF §3.1's ADVICE IS NOW KNOWN WRONG.** Item 5 said to write the ACL migration in
+Phase 0. You cannot: an `acl_rule` row naming a `report:NAME` the vocabulary does not know breaks a
+count tripwire AND 422s an owner round-tripping their own rules, while a name in `KnownReportNames`
+needs a mapped route. **An ACL counterweight ships WITH the report it governs, in one commit.** That is
+why this session delivered the order book as well.
+
+### 3.1a WHAT IS LEFT OF T3, IN THE ORDER THAT DE-RISKS IT
+
+**⛔ START HERE: THE ORDER + BOM WRITE API. Nothing else in T3 is reachable without it.** A human still
+cannot create an order, which is the §4.0 gap in a new place — the spine, the reports and the wire are
+all built and tested against orders that only SQL can create.
+
+| # | Piece | Owns | Notes |
+|---|---|---|---|
+| 1 | **Order CRUD** | `internal/orders/order.go` + tests, `internal/server/handler_orders.go` | `POST/GET/PUT .../sales-orders` and `.../purchase-orders`. **Two routes, two tokens** (`sales-order`, `purchase-order`) — both already in `authz.KnownResources`, so only `routeAction()` needs an arm. ⚠️ `is_closed` needs its own action and a REASON (0042 CHECKs that a closed order has one and an open one does not) |
+| 2 | **BOM CRUD + explosion** | `internal/orders/bom.go` + tests, `internal/server/handler_bom.go` | Token `bom` is already in the vocabulary. The explosion scales by `wanted / output_qty` **once, at full precision** — see `BomExplosionResponse` in `types.ts` and 0043's header for why per-unit storage shorts every batch |
+| 3 | **The fulfilment picker on voucher entry** | the inventory grid | ⛔ The T3 twin of T2's missing allocation UI. It must offer OUTSTANDING order lines for the item on the row — never ask for a `line_no` or an `order_line_id`. Read `FulfilmentInput` in `types.ts` first |
+| 4 | **Order + order-book screens** | one lane, all 13 registration sites each | §3.6 still applies. ⚠️ The order book is **two screens, not one with a toggle** — a toggle would reach a resource the operator may be denied (§0.1.2 item 2) |
+| 5 | **Seed T3 into `seed:demo`** | `frontend/scripts/seed-demo.mts` | Same unclaimed work T2 and T6 left behind (§4.3.5). One order, one partial delivery makes the order book demonstrable |
+
+**Every one of these must carry §3.3's six items plus the reachability question**, and for pieces 1–3
+the reachability answer is now concrete: **replace the SQL seeding in
+`internal/server/order_fulfilment_http_test.go`'s fixture with real POSTs, and delete that file's
+"what this does NOT prove" caveat.** That is the definition of done for piece 1, and it is a better
+one than a green suite because the caveat is written down and has to be removed by hand.
 
 ### 3.2 PHASE 1 — ONE WORKFLOW, FOUR LANES, EACH `implement → adversarially verify`
 
@@ -433,7 +572,11 @@ stock — and therefore the Balance Sheet — is corrupted. **Partial fulfilment
 order is consumed progressively by delivery notes and invoices, and the outstanding balance is the
 entire point.
 
-**What this session already did for T3, so do not redo it:**
+**⛔ THE WHOLE SPINE IS NOW BUILT — see §0.1. `CanonicalFulfilment` is not merely frozen, it is WIRED:**
+`VoucherInput.Fulfilments`, `validateFulfilments`, the payload assembly, the `order_fulfilment` writes,
+the `voucherReq.fulfilments` wire field and both order-book reports all exist and are tested. What is
+left is the WRITE API and the screens (§3.1a). The rest of this section is kept for its reasoning, which
+is still the reasoning the code follows.
 
 `CanonicalFulfilment` is **committed, frozen and in the hashed payload**, declared LAST after
 `CostAllocations`:
@@ -458,13 +601,12 @@ repair.
 `CanonicalStockLine.qty` is how much *stock* moved. Closing stock reads the movement, the order book
 reads this, and neither reads the other.
 
-**Nothing populates it yet.** `VoucherInput` has no `Fulfilments` field and `post()` never sets
-`payload.Fulfilments`. That is the T3 spine and it is the same shape as the cost spine that landed this
-session — read `internal/ledger/cost_allocation.go` and follow it.
+**~~Nothing populates it yet.~~ SUPERSEDED: `internal/ledger/fulfilment.go` populates it, modelled on
+`cost_allocation.go` exactly as this paragraph advised.** Read that file rather than this paragraph.
 
-**Migrations:** 0042 (orders), 0043 (BOM) for **tables**. If T3 wants `report:order-book` it needs an
-ACL counterweight **above 0072** (§2) — and decide the shape first: an order book is the forward sales
-pipeline, which is at least as sensitive as the tds-register's counterparty list.
+**Migrations: ~~0042/0043~~ ALL CONSUMED.** 0042 (orders), 0043 (BOM) and **0073** (the order-book ACL,
+taken above 0072 — **0044 is now permanently empty**, §2). The shape decision was taken: **two report
+names**, because a query parameter is invisible to the PDP (§0.1.2).
 
 ---
 
