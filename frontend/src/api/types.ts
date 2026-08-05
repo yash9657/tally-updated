@@ -1851,45 +1851,67 @@ export interface CostCategory {
    * Whether this axis may be used on a balance-sheet ledger as well as a P&L one
    * (Tally's "Allocate Non-Revenue Items"). Defaults false; departmental analysis
    * of revenue and expense is the ordinary case.
+   *
+   * It also decides the DENOMINATOR of the Cost Category Summary's coverage figure,
+   * so a screen showing coverage must show this beside it.
    */
   allocate_non_revenue: boolean;
+  centre_count: number;
+  created_by: string;
+  created_at: string;
 }
 
-/**
- * One position on an axis.
- *
- * `cost_category_id` is NEVER absent. A centre with no axis cannot be grouped,
- * and the per-category invariant would have nothing to group by — which is why
- * there is no "uncategorised" centre and no implicit default axis. A company that
- * wants a single axis creates one category, exactly as Tally ships "Primary Cost
- * Category".
- */
 export interface CostCentre {
   id: string;
-  cost_category_id: string;
   name: string;
-  /** The axis's name, served so a row can read "Mumbai (Branch)" without a join. */
-  cost_category_name: string;
-  /** null for a top-level centre. A parent ALWAYS sits on the same axis. */
-  parent_id: string | null;
+  cost_category_id: string;
   /**
-   * ⚠️ A CENTRE NAME IS UNIQUE WITHIN ITS AXIS, NOT WITHIN THE COMPANY. "Mumbai"
-   * may legitimately be both a Branch and a Project. A screen that reports "name
-   * already exists" without naming the axis will read as a bug to an operator who
-   * can see the other Mumbai is a different kind of thing.
+   * The axis's name, on EVERY row on purpose: a list of centre names spanning axes
+   * is ambiguous — "Mumbai" may legitimately be both a Branch and a Project — and a
+   * screen rendering the bare name invites an operator to pick the wrong one.
+   */
+  cost_category_name: string;
+  /** "" at the top of the axis, and parent_name is then "" too. Never the nil uuid. */
+  parent_id: string;
+  parent_name: string;
+  /**
+   * DERIVED from the list, never stored. path is "Mumbai / Andheri", so a flat list
+   * renders as a tree without the client walking parent pointers.
+   *
+   * ⚠️ Do NOT indent by depth in the order received: the server orders centres by
+   * (axis name, centre name), not parent-before-child, so indenting the received
+   * order puts children under the wrong parent. Sort by path, or group by axis and
+   * build the tree from parent_id.
    */
   depth: number;
+  path: string;
+  /**
+   * Should never be true. It says the STORED rows contain a parent cycle — which the
+   * write path refuses to create and which no constraint catches beyond a one-hop
+   * self-reference. A client must NOT walk path as a tree when this is set.
+   */
+  ancestry_truncated: boolean;
+  created_by: string;
+  created_at: string;
 }
 
 export interface CostCategoryListResponse {
-  categories: CostCategory[];
+  cost_categories: CostCategory[];
 }
 
 export interface CostCentreListResponse {
   /** Filtered to one axis when the request named one; otherwise every centre. */
-  centres: CostCentre[];
-  /** The axes, SERVED, so a create form never asks an operator to type an id. */
-  categories: CostCategory[];
+  cost_centres: CostCentre[];
+  /**
+   * The axes, SERVED, so a create form never asks an operator to type an id.
+   *
+   * ⚠️ NOT A CONSISTENT SNAPSHOT with cost_centres: the server reads the two in
+   * separate transactions, so an axis created between them yields centres whose
+   * cost_category_id is absent from this array. Tolerate it; do not assume.
+   */
+  cost_categories: CostCategory[];
+  /** Echoed only when the request named an axis. */
+  cost_category_id?: string;
 }
 
 export interface CreateCostCategoryRequest {
@@ -1938,67 +1960,141 @@ export interface CostAllocationInput {
   amount: Money;
 }
 
-/** One centre's figures within one axis, over a period. */
-export interface CostCentreSummaryRow {
+/**
+ * One centre in the Cost Centre Summary tree.
+ *
+ * NESTED, not a flat list with a depth column. The roll-up IS the report, and a
+ * flat list leaves the client to re-derive which figure contains which — the one
+ * derivation most likely to be got wrong twice. (An earlier draft of these types
+ * assumed flat+depth; the server does not order rows parent-before-child, so
+ * indenting a flat list by depth in the order received renders children under the
+ * wrong parent.)
+ */
+export interface CostCentreNode {
   cost_centre_id: string;
-  cost_centre_name: string;
-  parent_id: string | null;
+  name: string;
+  /** "" for a top-level centre — never the nil uuid spelled out. */
+  parent_id: string;
   depth: number;
-  debit_rupees: Money;
-  credit_rupees: Money;
-  /** debit − credit. May be negative; render it as the sign convention, not as an error. */
-  net_rupees: Money;
+  /**
+   * OWN and TOTAL are both served and NEITHER is derivable from the other: a
+   * parent may hold allocations of its own AND have children. Only the pair tells
+   * an operator whether "Sales 60,000" was keyed against Sales itself or against
+   * its sub-teams. Rendering only total is the common mistake.
+   */
+  own_debit: Money;
+  own_credit: Money;
+  own_net: Money;
+  total_debit: Money;
+  total_credit: Money;
+  total_net: Money;
+  children: CostCentreNode[];
 }
 
 /**
  * THE COST CENTRE SUMMARY — for ONE axis.
  *
- * It takes a cost category and does not have an "all centres" mode, for the
- * reason {@link CostCategory} gives: centres from different axes describe the same
- * money and summing them double-counts.
+ * It takes a cost category and has no "all centres" mode, for the reason
+ * {@link CostCategory} gives: centres from different axes describe the same money,
+ * so summing them double-counts. `total_*` here is the total for THIS axis and is
+ * therefore meaningful; it must never be added to another axis's.
  */
 export interface CostCentreSummaryResponse {
-  /** Which axis this is. Never absent — the report is meaningless without it. */
+  /** Echoed so a screen cannot render one axis's numbers under another's heading. */
   cost_category_id: string;
-  cost_category_name: string;
-  from_date: string;
-  to_date: string;
-  rows: CostCentreSummaryRow[];
-  /** The axis total. Sums the rows of THIS axis only, and is therefore meaningful. */
-  allocated_total_rupees: Money;
+  cost_category: string;
+  /** The axis's own rule — what kind of ledger it may carry. */
+  allocate_non_revenue: boolean;
+  from: string;
+  to: string;
+  centres: CostCentreNode[];
+  /**
+   * Centres the roll-up could not place: a parent chain that loops, or one deeper
+   * than the walk's bound, or a parent outside the fact set.
+   *
+   * ⛔ A FIELD, NOT AN OMISSION, and a screen MUST render it when non-empty. A cost
+   * centre that silently vanished from a cost report would take its money with it,
+   * and the totals would still look internally consistent.
+   */
+  unattached: CostCentreNode[];
+  total_debit: Money;
+  total_credit: Money;
+  total_net: Money;
+  unattached_debit: Money;
+  unattached_credit: Money;
+  /** The flat sum of every centre's own figures — the report's independent oracle. */
+  allocated_debit: Money;
+  allocated_credit: Money;
+  /** The residual between the oracle and the roll-up. Published so it cannot be hidden. */
+  difference_debit: Money;
+  difference_credit: Money;
+  reconciles: boolean;
+  /**
+   * Caveats that travel WITH the numbers, including the one saying this total must
+   * never be added to another axis's. A screen may style them; it may not decide
+   * whether to show them.
+   */
+  warnings: string[];
 }
 
 /** One axis's coverage of the period's allocable cost. */
 export interface CostCategorySummaryRow {
   cost_category_id: string;
-  cost_category_name: string;
-  centre_count: number;
-  allocated_total_rupees: Money;
+  cost_category: string;
+  allocate_non_revenue: boolean;
   /**
-   * The part of the period's allocable cost this axis says NOTHING about.
-   *
-   * ⛔ THIS IS THE POINT OF THE REPORT, not a footnote. The constraint trigger
-   * guarantees that a posting allocated on an axis is allocated in FULL — but
-   * nothing forces a posting to be allocated on an axis AT ALL. So an axis can be
-   * perfectly consistent and still describe a fraction of the business, and this
-   * figure is the only place that becomes visible. An operator's real question is
-   * "what am I missing", and a screen that renders allocated_total without this
-   * beside it answers a question nobody asked.
+   * THE DENOMINATOR — which postings this axis was measured against, which depends
+   * on allocate_non_revenue. A coverage figure whose denominator is unstated is a
+   * percentage of nothing in particular, so it is served beside the numerator.
    */
-  unallocated_rupees: Money;
+  allocable_debit: Money;
+  allocable_credit: Money;
+  allocable_postings: number;
+  allocated_debit: Money;
+  allocated_credit: Money;
+  allocated_postings: number;
+  /**
+   * THE GAP — cost that is in the Profit & Loss and attached to nothing on this
+   * axis.
+   *
+   * ⛔ THIS IS WHAT THE REPORT IS FOR, not a footnote. No database constraint can
+   * see it: the sum trigger fires on allocations, and where there are none there is
+   * nothing to fire on. So an axis can be perfectly consistent and still describe a
+   * fraction of the business. A screen rendering allocated_* without this beside it
+   * answers a question nobody asked.
+   */
+  unallocated_debit: Money;
+  unallocated_credit: Money;
+  unallocated_postings: number;
+  fully_allocated: boolean;
+  /**
+   * Two faults that should be impossible and are reported rather than absorbed: a
+   * part-allocated posting (the deferred trigger forbids it, so a non-zero here
+   * means that guarantee is gone) and an allocation on a ledger this axis may not
+   * carry (the database does not enforce allocate_non_revenue; only this report
+   * sees it). Both are non-zero only when something is wrong — render them loudly.
+   */
+  partly_allocated_postings: number;
+  partly_allocated_shortfall: Money;
+  off_axis_debit: Money;
+  off_axis_credit: Money;
+  off_axis_postings: number;
+  difference_debit: Money;
+  difference_credit: Money;
+  reconciles: boolean;
+  notes: string[];
 }
 
 export interface CostCategorySummaryResponse {
-  from_date: string;
-  to_date: string;
-  rows: CostCategorySummaryRow[];
+  from: string;
+  to: string;
   /**
-   * The period's total allocable cost — the denominator every row's coverage is
-   * measured against.
-   *
-   * ⚠️ THERE IS DELIBERATELY NO GRAND TOTAL OF `allocated_total_rupees` ACROSS
-   * ROWS, and none must be added. Each axis allocates the same money, so that sum
-   * is a multiple of the truth. Compare each row against THIS figure instead.
+   * ⛔ `rows` AND NO TOTAL, and none may be added. Each row is a different axis
+   * through the SAME money, so a total across them is a multiple of the cost
+   * actually borne. `notes` carries that statement onto the artefact itself,
+   * because the absence of a field only informs a programmer.
    */
-  allocable_total_rupees: Money;
+  rows: CostCategorySummaryRow[];
+  reconciles: boolean;
+  notes: string[];
 }

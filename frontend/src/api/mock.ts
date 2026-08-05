@@ -92,6 +92,14 @@ import type {
   DeductorCategory,
   TDSChallan,
   TDSChallanAllocation,
+  CostCategory,
+  CostCategoryListResponse,
+  CostCategorySummaryResponse,
+  CostCentre,
+  CostCentreListResponse,
+  CostCentreSummaryResponse,
+  CreateCostCategoryRequest,
+  CreateCostCentreRequest,
   TDSChallanListResponse,
   CreateTDSChallanRequest,
   CreateTDSChallanResponse,
@@ -1417,6 +1425,76 @@ export interface MockClientOptions {
 }
 
 /** Construct a fresh in-memory CoredClient. State is isolated per instance. */
+// ---------------------------------------------------------------------------
+// T2 cost-centre fixtures. TWO AXES over ONE posting — see the note on
+// listCostCategories for why a single-axis fixture cannot express the model.
+// ---------------------------------------------------------------------------
+function mockCostCategories(): CostCategory[] {
+  return [
+    {
+      id: "cost-cat-department",
+      name: "Department",
+      allocate_non_revenue: false,
+      centre_count: 2,
+      created_by: "seed",
+      created_at: "2026-04-01T00:00:00Z",
+    },
+    {
+      id: "cost-cat-branch",
+      name: "Branch",
+      allocate_non_revenue: false,
+      centre_count: 2,
+      created_by: "seed",
+      created_at: "2026-04-01T00:00:00Z",
+    },
+  ];
+}
+
+function mockCostCentres(): CostCentre[] {
+  const on = (
+    id: string,
+    name: string,
+    axisID: string,
+    axisName: string,
+  ): CostCentre => ({
+    id,
+    name,
+    cost_category_id: axisID,
+    cost_category_name: axisName,
+    parent_id: "",
+    parent_name: "",
+    depth: 0,
+    path: name,
+    ancestry_truncated: false,
+    created_by: "seed",
+    created_at: "2026-04-01T00:00:00Z",
+  });
+  return [
+    on("cost-ctr-sales", "Sales", "cost-cat-department", "Department"),
+    on("cost-ctr-admin", "Admin", "cost-cat-department", "Department"),
+    // NOTE "Mumbai" is a Branch here. The same name is legal on another axis —
+    // cost_centre_name_unique is per (company, CATEGORY, name).
+    on("cost-ctr-mumbai", "Mumbai", "cost-cat-branch", "Branch"),
+    on("cost-ctr-delhi", "Delhi", "cost-cat-branch", "Branch"),
+  ];
+}
+
+// Departments 60/40 and Branches 70/30 — each axis totalling the SAME 1,00,000.
+function mockAllocationFor(centreID: string): Money {
+  switch (centreID) {
+    case "cost-ctr-sales":
+      return "60000.0000";
+    case "cost-ctr-admin":
+      return "40000.0000";
+    case "cost-ctr-mumbai":
+      return "70000.0000";
+    case "cost-ctr-delhi":
+      return "30000.0000";
+    default:
+      return "0.0000";
+  }
+}
+
 export function createMockClient(opts: MockClientOptions = {}): CoredClient {
   const companies = new Map<string, MockCompany>();
 
@@ -3486,6 +3564,279 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         profile_recorded: c.tdsProfile !== undefined,
         deductor_categories: MOCK_DEDUCTOR_CATEGORIES.map((k) => ({ ...k })),
         pan_not_required_literal: MOCK_PAN_NOT_REQUIRED,
+      };
+    },
+
+    // ---- T2: cost centres and cost categories.
+    //
+    // ⛔ THE FIXTURE IS DELIBERATELY TWO AXES OVER ONE POSTING, because a
+    // single-axis fixture cannot express the model or catch the defect this feature
+    // is most likely to ship. Rs 1,00,000 of salary is allocated in full across
+    // Departments (Sales 60,000 / Admin 40,000) AND AGAIN in full across Branches
+    // (Mumbai 70,000 / Delhi 30,000). Both are complete and both are correct.
+    //
+    // So a screen that sums across axes reads 2,00,000 against 1,00,000 of cost, and
+    // any test asserting a cross-axis total against THIS fixture will show the wrong
+    // number rather than a plausible one. That is the point of the numbers.
+    async listCostCategories(companyID): Promise<CostCategoryListResponse> {
+      ensure(companyID);
+      return { cost_categories: mockCostCategories() };
+    },
+    async createCostCategory(
+      companyID,
+      req: CreateCostCategoryRequest,
+    ): Promise<CostCategory> {
+      ensure(companyID);
+      const name = (req.name ?? "").trim();
+      if (name === "") {
+        throw new ApiError(400, "masters: invalid cost master: a cost category needs a name");
+      }
+      // Case- AND whitespace-insensitive, matching the server's
+      // lower(btrim(name)) unique index. A Go check that normalised differently
+      // would accept a name the database then rejects.
+      const clash = mockCostCategories().find(
+        (c) => c.name.trim().toLowerCase() === name.toLowerCase(),
+      );
+      if (clash) {
+        throw new ApiError(
+          409,
+          `masters: a cost category called "${clash.name}" already exists for this company; two axes of the same name would split one allocation set in half and both halves would look complete`,
+        );
+      }
+      return {
+        id: `cost-cat-${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+        name,
+        allocate_non_revenue: req.allocate_non_revenue ?? false,
+        centre_count: 0,
+        created_by: "browser-dev-owner",
+        created_at: "2026-08-05T00:00:00Z",
+      };
+    },
+    async renameCostCategory(
+      companyID,
+      categoryID: string,
+      req: CreateCostCategoryRequest,
+    ): Promise<CostCategory> {
+      ensure(companyID);
+      const existing = mockCostCategories().find((c) => c.id === categoryID);
+      if (!existing) {
+        throw new ApiError(404, "masters: there is no cost category with that id for this company");
+      }
+      return { ...existing, name: (req.name ?? "").trim() || existing.name };
+    },
+    async listCostCentres(
+      companyID,
+      costCategoryID?: string,
+    ): Promise<CostCentreListResponse> {
+      ensure(companyID);
+      const cats = mockCostCategories();
+      if (costCategoryID && !cats.some((c) => c.id === costCategoryID)) {
+        // A 404 and NOT an empty list. "There is no such axis" and "this axis has
+        // no centres" are different answers, and a screen that renders them the
+        // same leaves an operator unable to tell a wrong id from unkeyed data.
+        throw new ApiError(
+          404,
+          'masters: there is no cost category with that id for this company, so there are no cost centres to list on it. This is not the same answer as "the axis is empty"',
+        );
+      }
+      const all = mockCostCentres();
+      return {
+        cost_centres: costCategoryID
+          ? all.filter((c) => c.cost_category_id === costCategoryID)
+          : all,
+        cost_categories: cats,
+        ...(costCategoryID ? { cost_category_id: costCategoryID } : {}),
+      };
+    },
+    async createCostCentre(
+      companyID,
+      req: CreateCostCentreRequest,
+    ): Promise<CostCentre> {
+      ensure(companyID);
+      const cats = mockCostCategories();
+      const axis = cats.find((c) => c.id === req.cost_category_id);
+      if (!axis) {
+        throw new ApiError(
+          400,
+          "masters: a cost centre must name the cost category it sits on — there is no uncategorised centre, because a centre with no axis cannot be grouped",
+        );
+      }
+      const name = (req.name ?? "").trim();
+      if (name === "") {
+        throw new ApiError(400, "masters: invalid cost master: a cost centre needs a name");
+      }
+      if (req.parent_id === "00000000-0000-0000-0000-000000000000") {
+        throw new ApiError(
+          400,
+          "parent_id is all zeros, which is not a cost centre: send the field EMPTY to put this centre at the top of its axis",
+        );
+      }
+      // ⛔ UNIQUE WITHIN THE AXIS, NOT THE COMPANY. The same name on a different
+      // axis is legal — "Mumbai" may be both a Branch and a Project — so the
+      // message NAMES THE AXIS. Without that it reads as a bug to an operator who
+      // can see the other Mumbai is a different kind of thing.
+      const clash = mockCostCentres().find(
+        (c) =>
+          c.cost_category_id === req.cost_category_id &&
+          c.name.trim().toLowerCase() === name.toLowerCase(),
+      );
+      if (clash) {
+        throw new ApiError(
+          409,
+          `masters: "${clash.name}" is already a cost centre on the ${axis.name} axis. The same name on a DIFFERENT axis is allowed`,
+        );
+      }
+      const parent = req.parent_id
+        ? mockCostCentres().find((c) => c.id === req.parent_id)
+        : undefined;
+      if (req.parent_id && !parent) {
+        throw new ApiError(404, "masters: there is no cost centre with that id to sit under");
+      }
+      if (parent && parent.cost_category_id !== req.cost_category_id) {
+        throw new ApiError(
+          422,
+          `masters: ${parent.name} sits on the ${parent.cost_category_name} axis, so a ${axis.name} centre cannot sit under it — one axis would roll up into the other and the Category Summary would double-count`,
+        );
+      }
+      return {
+        id: `cost-ctr-${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+        name,
+        cost_category_id: axis.id,
+        cost_category_name: axis.name,
+        parent_id: parent ? parent.id : "",
+        parent_name: parent ? parent.name : "",
+        depth: parent ? parent.depth + 1 : 0,
+        path: parent ? `${parent.path} / ${name}` : name,
+        ancestry_truncated: false,
+        created_by: "browser-dev-owner",
+        created_at: "2026-08-05T00:00:00Z",
+      };
+    },
+    async alterCostCentre(
+      companyID,
+      centreID: string,
+      req: CreateCostCentreRequest,
+    ): Promise<CostCentre> {
+      ensure(companyID);
+      const existing = mockCostCentres().find((c) => c.id === centreID);
+      if (!existing) {
+        throw new ApiError(404, "masters: there is no cost centre with that id for this company");
+      }
+      if (req.parent_id === "00000000-0000-0000-0000-000000000000") {
+        throw new ApiError(
+          400,
+          "parent_id is all zeros, which is not a cost centre: send the field EMPTY to put this centre at the top of its axis — the all-zeros uuid would silently move it to the top and change which totals it rolls into",
+        );
+      }
+      return { ...existing, name: (req.name ?? "").trim() || existing.name };
+    },
+
+    async costCentreSummary(
+      companyID,
+      costCategoryID: string,
+      from: string,
+      to: string,
+    ): Promise<CostCentreSummaryResponse> {
+      ensure(companyID);
+      const axis = mockCostCategories().find((c) => c.id === costCategoryID);
+      if (!costCategoryID) {
+        throw new ApiError(
+          400,
+          "cost_category_id is required: a Cost Centre Summary is always for ONE axis, because centres on different axes describe the same money and summing them double-counts",
+        );
+      }
+      if (!axis) {
+        throw new ApiError(422, "there is no cost category with that id for this company");
+      }
+      const centres = mockCostCentres().filter((c) => c.cost_category_id === costCategoryID);
+      const nodes = centres.map((c) => {
+        const own = mockAllocationFor(c.id);
+        return {
+          cost_centre_id: c.id,
+          name: c.name,
+          parent_id: c.parent_id,
+          depth: c.depth,
+          own_debit: own,
+          own_credit: "0.0000",
+          own_net: own,
+          total_debit: own,
+          total_credit: "0.0000",
+          total_net: own,
+          children: [],
+        };
+      });
+      const total = nodes
+        .reduce((acc, n) => acc + Math.round(Number(n.total_debit) * 10000), 0)
+        .toString();
+      const totalFixed = (Number(total) / 10000).toFixed(4);
+      return {
+        cost_category_id: axis.id,
+        cost_category: axis.name,
+        allocate_non_revenue: axis.allocate_non_revenue,
+        from,
+        to,
+        centres: nodes,
+        unattached: [],
+        total_debit: totalFixed,
+        total_credit: "0.0000",
+        total_net: totalFixed,
+        unattached_debit: "0.0000",
+        unattached_credit: "0.0000",
+        allocated_debit: totalFixed,
+        allocated_credit: "0.0000",
+        difference_debit: "0.0000",
+        difference_credit: "0.0000",
+        reconciles: true,
+        warnings: [
+          `This total is for the ${axis.name} axis only. It must never be added to another axis's total: every axis allocates the SAME money, so a cross-axis sum is a multiple of the cost actually borne.`,
+        ],
+      };
+    },
+    async costCategorySummary(
+      companyID,
+      from: string,
+      to: string,
+    ): Promise<CostCategorySummaryResponse> {
+      ensure(companyID);
+      // Both axes allocate the SAME Rs 1,00,000 in full, and the period's allocable
+      // base is Rs 1,20,000 — so each axis independently leaves Rs 20,000
+      // unallocated. THAT GAP IS THE REPORT'S WHOLE PURPOSE: the sum trigger
+      // guarantees an allocated posting is allocated in full, but nothing forces a
+      // posting to be allocated at all.
+      const rows = mockCostCategories().map((c) => ({
+        cost_category_id: c.id,
+        cost_category: c.name,
+        allocate_non_revenue: c.allocate_non_revenue,
+        allocable_debit: "120000.0000",
+        allocable_credit: "0.0000",
+        allocable_postings: 2,
+        allocated_debit: "100000.0000",
+        allocated_credit: "0.0000",
+        allocated_postings: 1,
+        unallocated_debit: "20000.0000",
+        unallocated_credit: "0.0000",
+        unallocated_postings: 1,
+        fully_allocated: false,
+        partly_allocated_postings: 0,
+        partly_allocated_shortfall: "0.0000",
+        off_axis_debit: "0.0000",
+        off_axis_credit: "0.0000",
+        off_axis_postings: 0,
+        difference_debit: "0.0000",
+        difference_credit: "0.0000",
+        reconciles: true,
+        notes: [
+          `20000.0000 of debit and 0.0000 of credit — 1 of the 2 posting(s) this axis covers — carry NO ${c.name} allocation at all. That money is real cost with no ${c.name} attached to it: it is in the Profit & Loss and it is missing from every ${c.name} report.`,
+        ],
+      }));
+      return {
+        from,
+        to,
+        rows,
+        reconciles: true,
+        notes: [
+          "These rows must NOT be added together. Each is a different axis through the SAME money, so a total across them is a multiple of the cost actually borne.",
+        ],
       };
     },
 

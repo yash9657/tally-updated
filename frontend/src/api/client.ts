@@ -60,6 +60,14 @@ import type {
   CreateTCSDeclarationResponse,
   SetDeductorStatusRequest,
   SetDeductorStatusResponse,
+  CostCategory,
+  CostCategoryListResponse,
+  CostCategorySummaryResponse,
+  CostCentre,
+  CostCentreListResponse,
+  CostCentreSummaryResponse,
+  CreateCostCategoryRequest,
+  CreateCostCentreRequest,
   TDSChallanListResponse,
   CreateTDSChallanRequest,
   CreateTDSChallanResponse,
@@ -337,6 +345,88 @@ export interface CoredClient {
     companyID: string,
     req: SetTDSProfileRequest,
   ): Promise<SetTDSProfileResponse>;
+
+  // ---- T2: cost centres and cost categories.
+  //
+  // ⛔ THE ONE RULE THAT GOVERNS EVERY CALLER OF THESE SIX: cost figures from
+  // different AXES describe the SAME money. One Rs 1,00,000 posting is allocated in
+  // full across Departments AND AGAIN in full across Branches, so any total that
+  // spans axes is a multiple of the cost actually borne. Scope every figure to one
+  // axis, or group by axis with no grand total. See {@link CostCategory}.
+
+  /** The axes. Served by the centres call too, so a create form never asks for an id. */
+  listCostCategories(companyID: string): Promise<CostCategoryListResponse>;
+  createCostCategory(
+    companyID: string,
+    req: CreateCostCategoryRequest,
+  ): Promise<CostCategory>;
+  /**
+   * Rename an axis. The name is unique per company, case- and whitespace-
+   * insensitively, so a 409 here means an axis of that name already exists.
+   */
+  renameCostCategory(
+    companyID: string,
+    categoryID: string,
+    req: CreateCostCategoryRequest,
+  ): Promise<CostCategory>;
+  /**
+   * The centres, optionally narrowed to one axis.
+   *
+   * ⚠️ Passing an axis id that does not exist is a 404, which is NOT the same answer
+   * as an empty axis — a caller must render the two differently or an operator
+   * cannot tell "wrong axis" from "nothing keyed yet".
+   */
+  listCostCentres(
+    companyID: string,
+    costCategoryID?: string,
+  ): Promise<CostCentreListResponse>;
+  /**
+   * Create a centre on an axis.
+   *
+   * cost_category_id is REQUIRED — there is no uncategorised centre. Omit parent_id
+   * (or send it empty) for a centre at the top of its axis; sending the all-zeros
+   * uuid is a 400, not a synonym for "no parent".
+   *
+   * A 409 means the name is taken ON THAT AXIS. The same name on a DIFFERENT axis is
+   * legal, so the message must name the axis or it reads as a bug.
+   */
+  createCostCentre(
+    companyID: string,
+    req: CreateCostCentreRequest,
+  ): Promise<CostCentre>;
+  /** Rename or RE-PARENT a centre. A parent must sit on the same axis (422 if not). */
+  alterCostCentre(
+    companyID: string,
+    centreID: string,
+    req: CreateCostCentreRequest,
+  ): Promise<CostCentre>;
+
+  /**
+   * THE COST CENTRE SUMMARY, for ONE axis over a period.
+   *
+   * costCategoryID is REQUIRED and there is no "all axes" mode: see the rule above.
+   * A missing axis is a 400 whose message names the axes available; an unknown one
+   * is a 422.
+   */
+  costCentreSummary(
+    companyID: string,
+    costCategoryID: string,
+    from: string,
+    to: string,
+  ): Promise<CostCentreSummaryResponse>;
+  /**
+   * THE COST CATEGORY SUMMARY — one row per axis, and the GAP.
+   *
+   * It takes no axis: this report IS the list of axes. Its point is
+   * `unallocated_*` — cost attached to nothing on an axis, which no database
+   * constraint can see because the sum trigger fires on allocations and there are
+   * none to fire on.
+   */
+  costCategorySummary(
+    companyID: string,
+    from: string,
+    to: string,
+  ): Promise<CostCategorySummaryResponse>;
 
   createGroup(
     companyID: string,

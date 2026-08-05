@@ -61,6 +61,14 @@ import type {
   CreateTCSDeclarationResponse,
   SetDeductorStatusRequest,
   SetDeductorStatusResponse,
+  CostCategory,
+  CostCategoryListResponse,
+  CostCategorySummaryResponse,
+  CostCentre,
+  CostCentreListResponse,
+  CostCentreSummaryResponse,
+  CreateCostCategoryRequest,
+  CreateCostCentreRequest,
   TDSChallanListResponse,
   CreateTDSChallanRequest,
   CreateTDSChallanResponse,
@@ -267,6 +275,77 @@ export function createRestClient(
       return http.put<SetTDSProfileResponse>(
         `${company(companyID)}/tds-profile`,
         req,
+      );
+    },
+
+    // ---- T2: cost centres and cost categories.
+    listCostCategories(companyID) {
+      return http.get<CostCategoryListResponse>(
+        `${company(companyID)}/cost-categories`,
+      );
+    },
+    createCostCategory(companyID, req: CreateCostCategoryRequest) {
+      return http.post<CostCategory>(
+        `${company(companyID)}/cost-categories`,
+        req,
+      );
+    },
+    renameCostCategory(
+      companyID,
+      categoryID: string,
+      req: CreateCostCategoryRequest,
+    ) {
+      return http.put<CostCategory>(
+        `${company(companyID)}/cost-categories/${encodeURIComponent(categoryID)}`,
+        req,
+      );
+    },
+    listCostCentres(companyID, costCategoryID?: string) {
+      // The axis is OMITTED rather than sent empty when absent. The server reads a
+      // present-but-blank parameter as "every axis", which is the same answer, but
+      // an all-zeros or empty id is a 400 — so not sending the key at all is the
+      // only unambiguous way to ask for every axis.
+      return http.get<CostCentreListResponse>(
+        `${company(companyID)}/cost-centres`,
+        costCategoryID ? { cost_category_id: costCategoryID } : undefined,
+      );
+    },
+    createCostCentre(companyID, req: CreateCostCentreRequest) {
+      return http.post<CostCentre>(
+        `${company(companyID)}/cost-centres`,
+        req,
+      );
+    },
+    alterCostCentre(companyID, centreID: string, req: CreateCostCentreRequest) {
+      return http.put<CostCentre>(
+        `${company(companyID)}/cost-centres/${encodeURIComponent(centreID)}`,
+        req,
+      );
+    },
+
+    costCentreSummary(
+      companyID,
+      costCategoryID: string,
+      from: string,
+      to: string,
+    ) {
+      // THE AXIS IS ALWAYS SENT. The server has no default and refuses without one,
+      // deliberately: defaulting to "the first axis" would render a real, correct
+      // Department report under a heading the operator chose for Branches.
+      //
+      // A FLAT LITERAL PATH with the axis as a QUERY PARAM, not /cost-categories/
+      // {id}/summary — a report's route must spell its own name so routeAction can
+      // map it, exactly as stock-item-vouchers takes stock_item_id this way.
+      return http.get<CostCentreSummaryResponse>(
+        `${company(companyID)}/cost-centre-summary`,
+        { cost_category_id: costCategoryID, from, to },
+      );
+    },
+    costCategorySummary(companyID, from: string, to: string) {
+      // No axis: this report IS the list of axes.
+      return http.get<CostCategorySummaryResponse>(
+        `${company(companyID)}/cost-category-summary`,
+        { from, to },
       );
     },
 
