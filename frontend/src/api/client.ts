@@ -63,8 +63,8 @@ import type {
   CostCategory,
   CostCategoryListResponse,
   CostCategorySummaryResponse,
-  CostCentre,
   CostCentreListResponse,
+  CostCentreWriteResponse,
   CostCentreSummaryResponse,
   CreateCostCategoryRequest,
   CreateCostCentreRequest,
@@ -393,13 +393,13 @@ export interface CoredClient {
   createCostCentre(
     companyID: string,
     req: CreateCostCentreRequest,
-  ): Promise<CostCentre>;
+  ): Promise<CostCentreWriteResponse>;
   /** Rename or RE-PARENT a centre. A parent must sit on the same axis (422 if not). */
   alterCostCentre(
     companyID: string,
     centreID: string,
     req: CreateCostCentreRequest,
-  ): Promise<CostCentre>;
+  ): Promise<CostCentreWriteResponse>;
 
   /**
    * THE COST CENTRE SUMMARY, for ONE axis over a period.

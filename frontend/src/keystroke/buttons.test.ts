@@ -88,6 +88,32 @@ const SCREEN_PATHS: { screen: NavSnapshot["screen"]; events: Ev[] }[] = [
       { type: "KEY", combo: "Enter" },
     ],
   },
+  // The three T2 COST screens, each by its own Gateway entry. Reaching them
+  // through the Gateway is itself part of what these paths assert: two of the
+  // three labels are real report names on the server, so a missing branch in the
+  // machine would land on a `report` frame instead and `snap.screen` below would
+  // not match.
+  {
+    screen: "cost-centres",
+    events: [
+      { type: "SELECT", menuItem: "Cost Centres" },
+      { type: "KEY", combo: "Enter" },
+    ],
+  },
+  {
+    screen: "cost-centre-summary",
+    events: [
+      { type: "SELECT", menuItem: "Cost Centre Summary" },
+      { type: "KEY", combo: "Enter" },
+    ],
+  },
+  {
+    screen: "cost-category-summary",
+    events: [
+      { type: "SELECT", menuItem: "Cost Category Summary" },
+      { type: "KEY", combo: "Enter" },
+    ],
+  },
 ];
 
 describe("no advertised button is decorative", () => {
@@ -137,6 +163,13 @@ describe("no advertised button is decorative", () => {
           // deliberately does not move and this rule would otherwise read the
           // bar button as decorative.
           "recordTDSChallan",
+          // Alt+C on the cost masters screen opens the CREATE panel, and F4 on
+          // the Cost Centre Summary opens the AXIS picker. Both are screen-owned
+          // for the same reason as the two above — the panel state, the served
+          // list of axes and the client that posts belong to the screen — and
+          // neither navigates, so the pure machine deliberately does not move.
+          "createCostMaster",
+          "selectCostCategory",
           "voucher",
           "date",
         ].includes(action?.kind ?? "");

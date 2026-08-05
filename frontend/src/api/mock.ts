@@ -97,6 +97,7 @@ import type {
   CostCategorySummaryResponse,
   CostCentre,
   CostCentreListResponse,
+  CostCentreWriteResponse,
   CostCentreSummaryResponse,
   CreateCostCategoryRequest,
   CreateCostCentreRequest,
@@ -3591,6 +3592,16 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       if (name === "") {
         throw new ApiError(400, "masters: invalid cost master: a cost category needs a name");
       }
+      // ⛔ THE MOCK MUST REFUSE WHAT THE SERVER REFUSES, and this check exists
+      // because it did not. The screen originally sent no created_by; the server
+      // answered 400, the mock answered 201, and all 597 frontend tests passed
+      // against a create path that could not work in the browser — the failure
+      // surfaced only as a console 400 AFTER a successful WebAuthn step-up, which
+      // reads as "the passkey failed" and is not. A mock more permissive than the
+      // server does not model the server; it hides it.
+      if ((req.created_by ?? "").trim() === "") {
+        throw new ApiError(400, "masters: invalid cost master: created_by is required");
+      }
       // Case- AND whitespace-insensitive, matching the server's
       // lower(btrim(name)) unique index. A Go check that normalised differently
       // would accept a name the database then rejects.
@@ -3651,7 +3662,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     async createCostCentre(
       companyID,
       req: CreateCostCentreRequest,
-    ): Promise<CostCentre> {
+    ): Promise<CostCentreWriteResponse> {
       ensure(companyID);
       const cats = mockCostCategories();
       const axis = cats.find((c) => c.id === req.cost_category_id);
@@ -3664,6 +3675,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       const name = (req.name ?? "").trim();
       if (name === "") {
         throw new ApiError(400, "masters: invalid cost master: a cost centre needs a name");
+      }
+      // See createCostCategory: the mock refuses what the server refuses.
+      if ((req.created_by ?? "").trim() === "") {
+        throw new ApiError(400, "masters: invalid cost master: created_by is required");
       }
       if (req.parent_id === "00000000-0000-0000-0000-000000000000") {
         throw new ApiError(
@@ -3698,25 +3713,35 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
           `masters: ${parent.name} sits on the ${parent.cost_category_name} axis, so a ${axis.name} centre cannot sit under it — one axis would roll up into the other and the Category Summary would double-count`,
         );
       }
+      const id = `cost-ctr-${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+      // ⛔ THE ENVELOPE, because that is what the server sends. This mock used to
+      // return the view FLAT, which typed-checked against a lying declaration and
+      // hid a real defect: the masters screen read created.path and got undefined,
+      // confirming a successful create with "Created undefined on the undefined
+      // axis". 597 tests passed. A mock whose SHAPE differs from the server's does
+      // not model the server, it conceals it.
       return {
-        id: `cost-ctr-${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
-        name,
-        cost_category_id: axis.id,
-        cost_category_name: axis.name,
-        parent_id: parent ? parent.id : "",
-        parent_name: parent ? parent.name : "",
-        depth: parent ? parent.depth + 1 : 0,
-        path: parent ? `${parent.path} / ${name}` : name,
-        ancestry_truncated: false,
-        created_by: "browser-dev-owner",
-        created_at: "2026-08-05T00:00:00Z",
+        id,
+        cost_centre: {
+          id,
+          name,
+          cost_category_id: axis.id,
+          cost_category_name: axis.name,
+          parent_id: parent ? parent.id : "",
+          parent_name: parent ? parent.name : "",
+          depth: parent ? parent.depth + 1 : 0,
+          path: parent ? `${parent.path} / ${name}` : name,
+          ancestry_truncated: false,
+          created_by: "browser-dev-owner",
+          created_at: "2026-08-05T00:00:00Z",
+        },
       };
     },
     async alterCostCentre(
       companyID,
       centreID: string,
       req: CreateCostCentreRequest,
-    ): Promise<CostCentre> {
+    ): Promise<CostCentreWriteResponse> {
       ensure(companyID);
       const existing = mockCostCentres().find((c) => c.id === centreID);
       if (!existing) {
@@ -3728,7 +3753,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
           "parent_id is all zeros, which is not a cost centre: send the field EMPTY to put this centre at the top of its axis — the all-zeros uuid would silently move it to the top and change which totals it rolls into",
         );
       }
-      return { ...existing, name: (req.name ?? "").trim() || existing.name };
+      return {
+        id: existing.id,
+        cost_centre: { ...existing, name: (req.name ?? "").trim() || existing.name },
+      };
     },
 
     async costCentreSummary(

@@ -40,6 +40,14 @@ const ALL_SCREENS: NavSnapshot["screen"][] = [
   // SENTENCE and makes no request — but the key must still be BOUND here, which
   // is what this list checks.
   "tds-challans",
+  // The three T2 cost screens. None of them prints — the two summaries are in
+  // handler_print_reports.go's deferred set and answer 501, and a list of masters
+  // is not a report at all — so Ctrl+P resolves to a SENTENCE on each. The key
+  // must still be BOUND on all three, which is what this list checks; the
+  // sentences themselves are asserted below.
+  "cost-centres",
+  "cost-centre-summary",
+  "cost-category-summary",
 ];
 
 /** A bare snapshot for a screen, with only the fields the resolver reads. */
@@ -284,6 +292,67 @@ describe("the Bank Reconciliation Statement prints, for ONE account (I-10)", () 
     });
     if (target.kind !== "report") throw new Error("expected a report target");
     expect(target.query).toEqual({ ledger_id: "bank-99" });
+  });
+});
+
+describe("the cost screens refuse to print, each for its own reason (I-4)", () => {
+  // The three refusals must not collapse into one sentence with the screen name
+  // interpolated: the centre summary cannot print because the ROUTE cannot carry
+  // an axis, the category summary because the LAYOUT is unwritten, and the masters
+  // screen because it is not a report. Those are three different answers to "will
+  // this ever print", and the middle one is the only one that is just waiting.
+  const COST_SCREENS: NavSnapshot["screen"][] = [
+    "cost-centre-summary",
+    "cost-category-summary",
+    "cost-centres",
+  ];
+
+  for (const screen of COST_SCREENS) {
+    it(`${screen} is refused with a reason specific to it`, () => {
+      const target = resolvePrintTarget(snap({ screen }));
+      expect(target.kind).toBe("refusal");
+      if (target.kind !== "refusal") return;
+      expect(target.reason.length).toBeGreaterThan(60);
+      // Not the generic fallthrough, which says nothing an operator can act on.
+      expect(target.reason).not.toBe("Nothing on this screen can be printed.");
+      expect(target.reason.toLowerCase()).not.toContain("failed");
+    });
+  }
+
+  it("the three reasons are DISTINCT", () => {
+    const reasons = new Set(
+      COST_SCREENS.map((screen) => {
+        const t = resolvePrintTarget(snap({ screen }));
+        return t.kind === "refusal" ? t.reason : "";
+      }),
+    );
+    expect(reasons.size).toBe(3);
+  });
+
+  it("names the 501 for the two reports, and the AXIS for the one that has one", () => {
+    const centre = resolvePrintTarget(snap({ screen: "cost-centre-summary" }));
+    const category = resolvePrintTarget(snap({ screen: "cost-category-summary" }));
+    if (centre.kind !== "refusal" || category.kind !== "refusal") {
+      throw new Error("expected both cost summaries to be refused");
+    }
+    // Both are mapped-and-deferred on the server, so 501 is the honest number to
+    // quote — the same treatment "Cash Flow" gets above.
+    expect(centre.reason).toContain("501");
+    expect(category.reason).toContain("501");
+    // And the centre summary's refusal names the axis problem, which is the reason
+    // it is a refusal here rather than a slug mapped through to the server.
+    expect(centre.reason).toMatch(/ONE cost category/);
+    // The category summary's refusal carries the rule a printed copy would have to
+    // carry: its rows may never be added together.
+    expect(category.reason).toMatch(/NEVER be added together/i);
+  });
+
+  it("no cost screen resolves to a report slug (nothing is fetched)", () => {
+    // I-5 in this feature's direction: a refusal that still hit the network would
+    // be a guaranteed 501 in the server's log for every Ctrl+P.
+    for (const screen of COST_SCREENS) {
+      expect(resolvePrintTarget(snap({ screen })).kind).not.toBe("report");
+    }
   });
 });
 

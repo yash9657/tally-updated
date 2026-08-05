@@ -168,6 +168,42 @@ export const BANK_RECON_LABEL = "Bank Reconciliation";
 export const TDS_CHALLANS_LABEL = "TDS Challans";
 
 /**
+ * The Gateway entries that open the three T2 COST screens.
+ *
+ * ⛔ SAME ORDERING REQUIREMENT AS EVERY LABEL ABOVE, and it bites harder here
+ * than anywhere else: all three of these strings are report-SHAPED, and two of
+ * them ARE real report names on the server (`report:cost-centre-summary` and
+ * `report:cost-category-summary` are in authz.KnownReportNames, refused to the
+ * seeded Data Entry level by migration 0072). So a frame pushed by the
+ * canonicalReportName fallback would be a `report` frame named "Cost Centre
+ * Summary" — which resolves to the UnwiredReportScreen, i.e. a screen politely
+ * announcing that a built, ACL-gated report is "not available in this build".
+ *
+ * WHY THE GATEWAY AND NOT "Display More Reports": Tally files these under Display
+ * More Reports > Statements of Accounts > Cost Centres (RESEARCH.md:810), but this
+ * build's second-level menu is generated from REPORT_NAMES — which these three
+ * deliberately are not, because none of them is reachable as a reportName frame.
+ * A Gateway entry is the same door, and it is the door Bank Reconciliation and the
+ * TDS Challan register already use.
+ */
+export const COST_CENTRES_LABEL = "Cost Centres";
+export const COST_CENTRE_SUMMARY_LABEL = "Cost Centre Summary";
+export const COST_CATEGORY_SUMMARY_LABEL = "Cost Category Summary";
+
+/**
+ * The prefix the Cost CATEGORY Summary puts on the row keys it publishes through
+ * `onSelect`, so Enter can open THAT axis's Cost Centre Summary — "no report is a
+ * dead end" (RESEARCH sec 8), applied to the one drill this pair of reports has.
+ *
+ * ⚠️ IT CARRIES THE AXIS'S NAME AND NEVER ITS ID. The machine stays pure: it has
+ * no database, so it cannot know a cost_category_id, and smuggling one through a
+ * frame would be the first step to a screen asking an operator for a UUID. The
+ * Cost Centre Summary resolves the name against the SERVED list of axes, exactly
+ * as the Bank Reconciliation screen resolves a drilled ledger name.
+ */
+export const COST_CATEGORY_ROW_PREFIX = "cost-category:";
+
+/**
  * The Ctrl+H Change Mode labels the machine acts on. Kept here (not in the
  * screen) because the MACHINE owns what a selection does; the screen owns which
  * options a voucher class offers. Any other label — including the "not built"
@@ -524,6 +560,40 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
         stack.push(newVoucherFrame(DEFAULT_LAST_VOUCHER, "alter"));
         return { stack };
       }
+      if (active.screen === "cost-category-summary") {
+        // ENTER OPENS THE HIGHLIGHTED AXIS — the one drill this pair of reports
+        // has, and the reason the Category Summary is not a dead end: it says
+        // WHICH analysis is incomplete, and this is how you get from that to the
+        // centres on it.
+        //
+        // The row key carries the axis's NAME (see COST_CATEGORY_ROW_PREFIX);
+        // the screen resolves it against the served list. With no row highlighted
+        // Enter is a no-op rather than a frame for "some axis" — the same rule the
+        // statement reports follow for an empty selection.
+        const sel = active.selectedItem ?? "";
+        if (!sel.startsWith(COST_CATEGORY_ROW_PREFIX)) return {};
+        // ⛔ THE PERIOD TRAVELS WITH THE DRILL. Pushing a bare frame discarded it,
+        // so the PRIMARY path into the Cost Centre Summary — read "Department:
+        // 20,000 unallocated", press Enter to see which centres — always landed on
+        // "press F2 to set the period", and the operator had to re-key the range
+        // they had just chosen. Worse, re-keying it slightly differently makes the
+        // two reports disagree about the same axis with nothing on either page
+        // saying why.
+        //
+        // ONLY the period is copied — not the whole config, and not by spreading
+        // `active`. The rest of that frame (its selected row, its own detailOf, its
+        // F12/Ctrl+F toggles) belongs to the report being drilled FROM, and carrying
+        // any of it would make the pushed frame claim state it does not have.
+        stack.push({
+          screen: "cost-centre-summary",
+          detailOf: sel,
+          config: {
+            periodFrom: active.config?.periodFrom,
+            periodTo: active.config?.periodTo,
+          },
+        });
+        return { stack };
+      }
       if (active.screen === "master-create") {
         // Enter advances the master-create field cursor.
         active.field = nextMasterField(active.field);
@@ -582,6 +652,34 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
           TDS_CHALLANS_LABEL.toLowerCase()
         ) {
           stack.push({ screen: "tds-challans" });
+          return { stack };
+        }
+        // The three T2 COST screens. Ordering as above, and load-bearing: two of
+        // these labels ARE report names on the server, so the fallback would push
+        // a `report` frame that renders "not available in this build" over a
+        // built, ACL-gated report. See COST_CENTRES_LABEL.
+        if (
+          active.selectedItem?.toLowerCase() ===
+          COST_CENTRES_LABEL.toLowerCase()
+        ) {
+          stack.push({ screen: "cost-centres" });
+          return { stack };
+        }
+        if (
+          active.selectedItem?.toLowerCase() ===
+          COST_CENTRE_SUMMARY_LABEL.toLowerCase()
+        ) {
+          // No axis on the frame: the screen opens its PICKER (or resolves the
+          // company's only axis), exactly as the reconciliation screen does with
+          // bank accounts. The machine cannot choose an axis — it has no database.
+          stack.push({ screen: "cost-centre-summary" });
+          return { stack };
+        }
+        if (
+          active.selectedItem?.toLowerCase() ===
+          COST_CATEGORY_SUMMARY_LABEL.toLowerCase()
+        ) {
+          stack.push({ screen: "cost-category-summary" });
           return { stack };
         }
         // "Display More Reports" opens the second-level report MENU (Tally's
@@ -705,7 +803,19 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
       // does the Bank Reconciliation Statement: it is a position AS AT a date
       // (only the upper bound applies), and reconciling in arrears is the normal
       // case rather than an edge one.
-      if (isReportScreen || active.screen === "bank-reconciliation") {
+      //
+      // AND SO DO THE TWO COST SUMMARIES, which are ScreenKinds rather than
+      // `report` frames: without them here F2 opens NOTHING on a screen whose
+      // heading asks for a period, and both refuse to render without one. They are
+      // FULL-period reports (a flow between two dates, not a position as at one) —
+      // FrameOverlays' FULL_PERIOD_REPORTS says so, and periodClassification.test
+      // keeps the panel's note and the screens' behaviour from drifting apart.
+      if (
+        isReportScreen ||
+        active.screen === "bank-reconciliation" ||
+        active.screen === "cost-centre-summary" ||
+        active.screen === "cost-category-summary"
+      ) {
         return openOverlay("period");
       }
       return {};
@@ -794,6 +904,24 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
       // and what has already been recorded against it. The screen owns the form
       // and fires it through the ScreenActions bridge, exactly as Alt+O owns its
       // import panel.
+      return {};
+    }
+
+    case "createCostMaster":
+    case "selectCostCategory": {
+      // NO NAVIGATION, for the reason `recordTDSChallan` above gives. The create
+      // panel lives ON the cost masters screen (the list beside it is what tells
+      // an operator the name is not taken, and on which axis it is not taken), and
+      // the axis picker lives ON the Cost Centre Summary (choosing an axis does
+      // not leave the report — it IS the report's subject). Both are screen-owned
+      // side effects fired through the ScreenActions bridge.
+      //
+      // ⚠️ A `default: return {}` below would already produce this answer. The
+      // cases are written out because the shell reports "does not apply on this
+      // screen" for a key that neither ran a screen action nor moved the stack —
+      // so an absent SCREEN_ACTIONS entry is indistinguishable from a key that is
+      // meant to be inert, and writing the inertness down is what makes the
+      // difference reviewable.
       return {};
     }
 
@@ -983,6 +1111,9 @@ function reduceSelect(ctx: NavContext, menuItem: string): Partial<NavContext> {
       menuItem.toLowerCase() === USERS_ROLES_LABEL.toLowerCase() ||
       menuItem.toLowerCase() === MORE_REPORTS_LABEL.toLowerCase() ||
       menuItem.toLowerCase() === TDS_CHALLANS_LABEL.toLowerCase() ||
+      menuItem.toLowerCase() === COST_CENTRES_LABEL.toLowerCase() ||
+      menuItem.toLowerCase() === COST_CENTRE_SUMMARY_LABEL.toLowerCase() ||
+      menuItem.toLowerCase() === COST_CATEGORY_SUMMARY_LABEL.toLowerCase() ||
       canonicalReportName(menuItem) !== undefined
     ) {
       active.selectedItem = menuItem;
@@ -1013,6 +1144,16 @@ function reduceSelect(ctx: NavContext, menuItem: string): Partial<NavContext> {
       return { stack: [stack[0] as ScreenFrame] };
     }
     return {};
+  }
+
+  // The Cost CATEGORY Summary: a selection highlights the AXIS Enter will open.
+  // Its own branch rather than being folded into the report branch below, because
+  // this screen is a ScreenKind — see the ScreenKind doc in keystroke/types.ts for
+  // why neither cost summary is a `report` frame.
+  if (active.screen === "cost-category-summary") {
+    active.selectedItem = menuItem;
+    stack[stack.length - 1] = active;
+    return { stack };
   }
 
   // Inside a report, a selection highlights the row Enter will drill into.

@@ -89,6 +89,22 @@ KNOWN_SCREENS = {
     # rather than a report name — the server serves it as the bare resource
     # token `tds-challan`.
     "tds-challans",
+    # T2 — THE COST SCREENS. A cost CATEGORY is an AXIS (Department, Branch,
+    # Project) and a cost CENTRE is a POSITION on it; several axes allocate the
+    # SAME money in parallel, so no figure on any of these screens spans axes.
+    #
+    # "cost-centres" is the MASTERS screen (the axes and their centres, and the
+    # one form that creates either) — a ScreenKind because the server serves it
+    # under the bare token `cost-centre`, which no `allow display report` rule
+    # can match.
+    "cost-centres",
+    # The two SUMMARIES. Both are also report names on the server
+    # (report:cost-centre-summary / report:cost-category-summary, refused to the
+    # seeded Data Entry level by migration 0072) but neither is reachable as a
+    # reportName frame: the centre summary needs an AXIS the pure machine cannot
+    # know, and the category summary is a shape no generic report screen renders.
+    "cost-centre-summary",
+    "cost-category-summary",
 }
 
 RULESET_VERSION = "gst-2024-09"

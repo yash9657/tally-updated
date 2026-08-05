@@ -21,6 +21,9 @@ import { StockSummaryScreen } from "../screens/reports/StockSummaryScreen";
 import { TDSRegisterScreen } from "../screens/reports/TDSRegisterScreen";
 import { BankReconciliationScreen } from "../screens/BankReconciliationScreen";
 import { TDSChallansScreen } from "../screens/TDSChallansScreen";
+import { CostCentresScreen } from "../screens/masters/CostCentresScreen";
+import { CostCentreSummaryScreen } from "../screens/reports/CostCentreSummaryScreen";
+import { CostCategorySummaryScreen } from "../screens/reports/CostCategorySummaryScreen";
 import { REPORT_NAMES } from "../keystroke/types";
 import type { ScreenComponent, ScreenComponentProps } from "./screenRegistry";
 import { ScreenRegistry } from "./screenRegistry";
@@ -221,6 +224,21 @@ export function createDefaultRegistry(): ScreenRegistry {
     // coarse `allow display report` and would need an ACL counterweight. Denied
     // to Data Entry by design; the screen renders that 403 as the decision it is.
     "tds-challans": TDSChallansScreen,
+    // ---- THE THREE T2 COST SCREENS.
+    //
+    // All three are SCREENS and not report names, and the two summaries are the
+    // interesting case: `cost-centre-summary` and `cost-category-summary` ARE real
+    // names in authz.KnownReportNames (migration 0072 refuses both to the seeded
+    // Data Entry level, which needs a name to refuse). They are still not
+    // "report:…" keys here, because neither is reachable as a reportName frame —
+    // the centre summary needs an AXIS the pure machine cannot know, and both
+    // render a shape the generic report screens do not. Registering them by
+    // ScreenKind is what keeps the Gateway entry from landing on
+    // UnwiredReportScreen, which would announce that a built, ACL-gated report is
+    // "not available in this build".
+    "cost-centres": CostCentresScreen,
+    "cost-centre-summary": CostCentreSummaryScreen,
+    "cost-category-summary": CostCategorySummaryScreen,
     // F1 Help (keystroke reference, generated from the live keymap) and F11
     // Company Features (the honest capability inventory).
     help: HelpAdapter,

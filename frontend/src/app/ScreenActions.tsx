@@ -45,6 +45,22 @@ export type ScreenActionKind =
    * navigate: the operator is still looking at the register they are adding to.
    */
   | "recordTDSChallan"
+  /**
+   * Alt+C on the COST MASTERS screen — open the create panel for a cost CATEGORY
+   * (an axis) or a cost CENTRE (a position on one). A screen action rather than a
+   * machine transition for the same reasons `recordTDSChallan` is: the panel's
+   * state and the client that posts it belong to the screen, and creating a master
+   * here does not navigate — the operator is still looking at the list they are
+   * adding to, which is the list that tells them the name is not taken already.
+   */
+  | "createCostMaster"
+  /**
+   * F4 on the COST CENTRE SUMMARY — choose the AXIS (cost category) the report is
+   * for. The screen owns it because the axes are a SERVED list, and because the
+   * report is meaningless without one: every figure on it is scoped to one axis,
+   * since several axes allocate the same money in parallel.
+   */
+  | "selectCostCategory"
   | "accept"
   | "delete"
   | "export"

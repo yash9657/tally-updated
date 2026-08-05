@@ -237,7 +237,41 @@ export const FULL_PERIOD_REPORTS = [
   // — it is the most period-driven report in the product, and it was the one
   // being told its period was ignored.
   "TDS / TCS Register",
+  // ---- THE TWO T2 COST SUMMARIES.
+  //
+  // Both are FLOWS between two dates and neither is a position: a cost summary
+  // sums the ALLOCATIONS of postings dated in the range, so bounding it below is
+  // not merely allowed but required — "what did Sales cost as at 31 March" is not
+  // a question, and answering it with everything since the company was formed
+  // would look exactly like a year's figure. Both screens read `periodFrom` AND
+  // `periodTo` and refuse to render without both, which is the test
+  // periodClassification.test.ts applies to the source.
+  //
+  // ⚠️ THEY ARE ScreenKinds, NOT `report` FRAMES, so `snapshot.reportName` is
+  // undefined on them and matching these strings needs the screen->label table
+  // below. Without it both would fall into the "has no date dimension in this
+  // build" branch — the exact defect that shipped twice, on screens whose own
+  // headings ask for a period.
+  "Cost Centre Summary",
+  "Cost Category Summary",
 ];
+
+/**
+ * ScreenKind -> the name that screen is classified under above.
+ *
+ * The three allowlists are keyed by REPORT NAME because every report that had a
+ * period was once a `report` frame. The two cost summaries are ScreenKinds (see
+ * the ScreenKind doc in keystroke/types.ts for why), so they would match nothing
+ * and be told their dates do nothing while reading them.
+ *
+ * Exported so periodClassification.test.ts can assert the same closure over
+ * SCREENS that it asserts over registered report names: a period-reading screen
+ * that is in this table but in none of the three lists fails there.
+ */
+export const PERIOD_SCREEN_LABELS: Partial<Record<string, string>> = {
+  "cost-centre-summary": "Cost Centre Summary",
+  "cost-category-summary": "Cost Category Summary",
+};
 
 /**
  * Reports that genuinely have no date dimension. Being on THIS list is a
@@ -262,13 +296,17 @@ function PeriodOverlay({
   // this date", and an item cleared later is un-cleared as at the statement date
   // (docs/design/t4-model.md's first trap).
   const isBankRecon = snapshot.screen === "bank-reconciliation";
-  const asAtOnly =
-    isBankRecon || AS_AT_ONLY_REPORTS.includes(snapshot.reportName ?? "");
-  const periodAware =
-    asAtOnly || FULL_PERIOD_REPORTS.includes(snapshot.reportName ?? "");
+  // A ScreenKind report (the two cost summaries) carries no reportName, so the
+  // name it is CLASSIFIED under comes from the screen. Without this the classifier
+  // sees "" and reports "no date dimension" over a screen that refuses to render
+  // without both dates.
+  const classifiedAs =
+    PERIOD_SCREEN_LABELS[snapshot.screen] ?? snapshot.reportName ?? "";
+  const asAtOnly = isBankRecon || AS_AT_ONLY_REPORTS.includes(classifiedAs);
+  const periodAware = asAtOnly || FULL_PERIOD_REPORTS.includes(classifiedAs);
   const asAtLabel = isBankRecon
     ? "The Bank Reconciliation Statement"
-    : snapshot.reportName;
+    : classifiedAs;
 
   return (
     <OverlayPanel title="Period">
@@ -312,8 +350,8 @@ function PeriodOverlay({
         </p>
       ) : !periodAware ? (
         <p className="mt-2 text-xs">
-          Note: {snapshot.reportName ?? "This report"} has no date dimension in
-          this build, so a period is not applied to it.
+          Note: {classifiedAs === "" ? "This report" : classifiedAs} has no date
+          dimension in this build, so a period is not applied to it.
         </p>
       ) : null}
       <button

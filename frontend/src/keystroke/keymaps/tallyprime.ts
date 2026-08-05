@@ -350,6 +350,167 @@ const RAW_SCREEN_BINDINGS: Partial<
       note: "This register has no period. Its dimension is the TAX YEAR, typed on the screen itself — a challan paid on 7 April 2026 is normally for March of 2025-26, so the year is recorded rather than computed from the deposit date.",
     },
   },
+  // ---- THE COST MASTERS SCREEN (T2). It carries a CREATE PANEL, so every
+  // binding below is the same argument tds-challans makes: AN UNBOUND KEY HERE IS
+  // NOT INERT. Without these entries the global voucher keys fire — F5 a Payment,
+  // F9 a Purchase, F8 a Sales — over a half-keyed cost centre, and the frame that
+  // held the panel goes with it.
+  "cost-centres": {
+    // Alt+C — CREATE an axis (cost category) or a centre. Tally's own route to
+    // these masters is Alt+G > Create Master > Cost Centre (RESEARCH.md:525) and
+    // Alt+C is its create-a-master-on-the-fly key (RESEARCH.md:405). The global
+    // `createMaster` binding would push a LEDGER-create frame over this screen —
+    // cost masters are deliberately not members of the MasterKind union.
+    "Alt+C": { kind: "createCostMaster" },
+    // F2 would read as "Date" from the global table. A master list has no date
+    // dimension at all: the PERIOD belongs to the two cost reports, which is what
+    // this note points at rather than leaving the key to claim it did something
+    // (ALWAYS_MEANINGFUL contains `date`, so an unbound F2 here would produce a
+    // status line for a key that changed nothing).
+    F2: {
+      kind: "unavailable",
+      feature: "Period (F2)",
+      note: "A cost category or centre has no period — it is a master, and it exists until it is altered. The PERIOD belongs to the two cost reports: the Cost Centre Summary (what each centre on one axis cost between two dates) and the Cost Category Summary (how much of the period's cost each axis accounts for). F2 sets it there.",
+    },
+    F4: {
+      kind: "unavailable",
+      feature: "Contra voucher (F4) — not from this screen",
+      note: "The voucher keys are held back on the cost masters screen: opening a voucher over it would abandon the axis or centre you are keying. Esc leaves the panel, then F4 works as it always does.",
+    },
+    F5: {
+      kind: "unavailable",
+      feature: "Payment voucher (F5) — not from this screen",
+      note: "The voucher keys are held back on the cost masters screen: opening a voucher over it would abandon the axis or centre you are keying. Esc leaves the panel, then F5 works as it always does.",
+    },
+    F6: {
+      kind: "unavailable",
+      feature: "Receipt voucher (F6) — not from this screen",
+      note: "The voucher keys are held back on the cost masters screen: opening a voucher over it would abandon the axis or centre you are keying. Esc leaves the panel, then F6 works as it always does.",
+    },
+    F7: {
+      kind: "unavailable",
+      feature: "Journal voucher (F7) — not from this screen",
+      note: "The voucher keys are held back on the cost masters screen: opening a voucher over it would abandon the axis or centre you are keying. Esc leaves the panel, then F7 works as it always does.",
+    },
+    F8: {
+      kind: "unavailable",
+      feature: "Sales voucher (F8) — not from this screen",
+      note: "The voucher keys are held back on the cost masters screen: opening a voucher over it would abandon the axis or centre you are keying. Esc leaves the panel, then F8 works as it always does.",
+    },
+    F9: {
+      kind: "unavailable",
+      feature: "Purchase voucher (F9) — not from this screen",
+      note: "The voucher keys are held back on the cost masters screen: opening a voucher over it would abandon the axis or centre you are keying. Esc leaves the panel, then F9 works as it always does.",
+    },
+    "Alt+F5": {
+      kind: "unavailable",
+      feature: "Debit Note (Alt+F5) — not from this screen",
+      note: "The voucher keys are held back on the cost masters screen: opening a voucher over it would abandon the axis or centre you are keying. Esc leaves the panel, then Alt+F5 works as it always does.",
+    },
+    "Alt+F6": {
+      kind: "unavailable",
+      feature: "Credit Note (Alt+F6) — not from this screen",
+      note: "The voucher keys are held back on the cost masters screen: opening a voucher over it would abandon the axis or centre you are keying. Esc leaves the panel, then Alt+F6 works as it always does.",
+    },
+    "Alt+F7": {
+      kind: "unavailable",
+      feature: "Stock Journal (Alt+F7) — not from this screen",
+      note: "The voucher keys are held back on the cost masters screen: opening a voucher over it would abandon the axis or centre you are keying. Esc leaves the panel, then Alt+F7 works as it always does.",
+    },
+    "Alt+F8": {
+      kind: "unavailable",
+      feature: "Delivery Note (Alt+F8) — not from this screen",
+      note: "The voucher keys are held back on the cost masters screen: opening a voucher over it would abandon the axis or centre you are keying. Esc leaves the panel, then Alt+F8 works as it always does.",
+    },
+    "Alt+F9": {
+      kind: "unavailable",
+      feature: "Receipt Note (Alt+F9) — not from this screen",
+      note: "The voucher keys are held back on the cost masters screen: opening a voucher over it would abandon the axis or centre you are keying. Esc leaves the panel, then Alt+F9 works as it always does.",
+    },
+    "Alt+F10": {
+      kind: "unavailable",
+      feature: "Physical Stock (Alt+F10) — not from this screen",
+      note: "The voucher keys are held back on the cost masters screen: opening a voucher over it would abandon the axis or centre you are keying. Esc leaves the panel, then Alt+F10 works as it always does.",
+    },
+  },
+  // ---- THE COST CENTRE SUMMARY (T2) — ONE axis, over a period.
+  //
+  // These are ScreenKinds and not `report` frames, so NOTHING from the `report`
+  // table above applies to them: every report key they need is bound here or it
+  // falls through to the global voucher keys.
+  "cost-centre-summary": {
+    // F2 — the PERIOD, both bounds. A cost summary is a FLOW over a range, not a
+    // position as at a date, and FrameOverlays classifies it as such so the F2
+    // panel cannot tell this screen its dates do nothing while it reads them.
+    F2: { kind: "period" },
+    // F4 — CHOOSE THE AXIS. See the `selectCostCategory` action comment for the
+    // combo's provenance (ours, placed where RESEARCH.md:879 puts the analogous
+    // account picker, never claimed as documented). Binding it is protective
+    // twice: the global F4 is a Contra voucher.
+    F4: { kind: "selectCostCategory" },
+    // Alt+C inside a report is Tally's NEW COLUMN (RESEARCH.md:771), documented
+    // for this very report at :811 — "Alt+C adds another cost centre column to
+    // compare (e.g. Staff A vs Staff B)". Not built, and bound anyway: the global
+    // Alt+C would push a LEDGER-CREATE frame over the report.
+    "Alt+C": {
+      kind: "unavailable",
+      feature: "New Column (Alt+C)",
+      note: "Comparison columns are not built. In Tally this adds a second cost centre column side by side (RESEARCH.md:811); here one axis at a time is the whole report. Note that a column comparing two AXES would be the one comparison this report must never offer — two axes allocate the same money, so the two columns would not be comparable and their sum would be double the cost.",
+    },
+    // F5 — ledger-wise / group-wise. Meaningless here, and bound because the
+    // global F5 opens a PAYMENT VOUCHER: not a missing feature but a wrong one,
+    // which is what this file's coverage rule exists for.
+    F5: {
+      kind: "unavailable",
+      feature: "Ledger-wise / group-wise (F5)",
+      note: "This report has no ledger/group axis to flip: the COST CATEGORY is the grouping, and F4 chooses it. What each ledger cost within a centre is a break-up this build does not serve.",
+    },
+    // Alt+F1 / Alt+F5 — Detailed. Nothing to expand, and saying so is the point:
+    // every row already carries its OWN figures beside its rolled-up TOTAL, which
+    // is the one pair this report must never collapse.
+    "Alt+F1": {
+      kind: "unavailable",
+      feature: "Detailed (Alt+F1)",
+      note: "There is nothing to expand: every centre already shows its OWN allocations beside the TOTAL rolled up through its children, because neither is derivable from the other — a parent may hold allocations of its own AND have children.",
+    },
+    "Alt+F5": {
+      kind: "unavailable",
+      feature: "Detailed (Alt+F5)",
+      note: "There is nothing to expand: every centre already shows its OWN allocations beside the TOTAL rolled up through its children, because neither is derivable from the other — a parent may hold allocations of its own AND have children.",
+    },
+  },
+  // ---- THE COST CATEGORY SUMMARY (T2) — one row per axis, and the GAP.
+  "cost-category-summary": {
+    F2: { kind: "period" },
+    // F4 — there is no axis picker HERE, and that is worth a sentence rather than
+    // a Contra voucher: an operator who used F4 on the centre summary a moment ago
+    // will press it, and the global binding would open a voucher over the report.
+    F4: {
+      kind: "unavailable",
+      feature: "Cost Category (F4) — not on this report",
+      note: "This report IS the list of cost categories — one row per axis. Press Enter on a row to open that axis's Cost Centre Summary, where F4 switches axes.",
+    },
+    "Alt+C": {
+      kind: "unavailable",
+      feature: "New Column (Alt+C)",
+      note: "Comparison columns are not built (RESEARCH.md:771). Note what a column across axes would mean here: each row is a different axis through the SAME money, so nothing on this report may be added across rows — and a comparison column would invite exactly that.",
+    },
+    F5: {
+      kind: "unavailable",
+      feature: "Ledger-wise / group-wise (F5)",
+      note: "This report has no ledger/group axis to flip: one row per cost category is its whole shape. Press Enter on a row for the centres on that axis.",
+    },
+    "Alt+F1": {
+      kind: "unavailable",
+      feature: "Detailed (Alt+F1)",
+      note: "There is nothing to expand: every row already shows what this axis was measured AGAINST (its allocable base), what it accounts for, and the unallocated remainder. Enter on a row opens that axis's centres.",
+    },
+    "Alt+F5": {
+      kind: "unavailable",
+      feature: "Detailed (Alt+F5)",
+      note: "There is nothing to expand: every row already shows what this axis was measured AGAINST (its allocable base), what it accounts for, and the unallocated remainder. Enter on a row opens that axis's centres.",
+    },
+  },
   // Alt+L on a voucher opens its EDIT LOG. RESEARCH sec 6 pins the PLACEMENT
   // (Tally shows the Edit Log from the voucher alteration screen and the Day
   // Book) but not the combo, so this is scoped to the voucher screen rather
@@ -515,6 +676,16 @@ export function actionLabel(action: KeymapAction): string {
       return "Import a bank statement (CSV)";
     case "recordTDSChallan":
       return "Record a TDS deposit (challan)";
+    case "createCostMaster":
+      // Both, named, because one key creates either and a label saying only
+      // "cost centre" would hide the axis — the master an operator has to create
+      // FIRST, since a centre cannot exist without one.
+      return "Create a cost category (axis) or a cost centre";
+    case "selectCostCategory":
+      // "Axis" is spelled out: this key is what stops one axis's figures being
+      // read under another's heading, and every figure on that report is scoped
+      // to the one it chooses.
+      return "Choose the cost category (the axis) this report is for";
     case "createMaster":
       return `Create ${action.masterKind} on the fly`;
     case "unavailable":

@@ -151,6 +151,71 @@ const TDS_CHALLAN_BAR: readonly ButtonBarItem[] = [
   item("F1", "Help"),
 ];
 
+/**
+ * THE COST MASTERS bar (T2) — the axes of analysis and their centres.
+ *
+ * Alt+C creates either one (see the KeymapAction comment in keystroke/types.ts:
+ * Tally's own route to these masters is Alt+G > Create Master > Cost Centre,
+ * RESEARCH.md:525) and Ctrl+A accepts the panel.
+ *
+ * F2 is NOT here. A master list has no period — the two cost REPORTS do — and the
+ * keymap binds F2 on this screen to a refusal saying exactly that, which
+ * buttons.test.ts would refuse to see advertised anyway.
+ *
+ * Ctrl+P is not here either, for the reason TDS_CHALLAN_BAR gives: there is no
+ * printed layout for a list of cost masters, so the key can only explain itself,
+ * and an operator reaches for a bar button by position from then on.
+ */
+const COST_MASTERS_BAR: readonly ButtonBarItem[] = [
+  item("Alt+C", "Create"),
+  item("Ctrl+A", "Accept"),
+  item("Esc", "Back"),
+  item("Alt+G", "Go To"),
+  item("Ctrl+G", "Switch To"),
+  item("F1", "Help"),
+];
+
+/**
+ * THE COST CENTRE SUMMARY bar (T2) — ONE axis, over a period.
+ *
+ * F2 is the period (both bounds: this is a flow over a range, not a position as
+ * at a date) and F4 chooses the AXIS. F4's provenance is stated in full on the
+ * `selectCostCategory` action in keystroke/types.ts: the combo is OURS, placed
+ * where RESEARCH.md:879 puts the analogous account picker, and never claimed as a
+ * documented TallyPrime binding.
+ *
+ * NOT ADVERTISED, each for a reason rather than an oversight: F5 (ledger-wise) is
+ * meaningless when the AXIS is the grouping; Alt+F1 (detailed) has nothing to
+ * expand, because every row already carries its OWN figures beside its rolled-up
+ * TOTAL; Alt+C is Tally's New Column inside a report (RESEARCH.md:771, and :811
+ * for this very report) and is not built; and Ctrl+P cannot print, because the
+ * print route is a flat literal that carries no axis. All four are BOUND — they
+ * answer — they are simply not sold from the bar.
+ */
+const COST_CENTRE_SUMMARY_BAR: readonly ButtonBarItem[] = [
+  item("F2", "Period"),
+  item("F4", "Cost Category"),
+  item("Esc", "Back"),
+  item("Alt+G", "Go To"),
+  item("Ctrl+G", "Switch To"),
+  item("F1", "Help"),
+];
+
+/**
+ * THE COST CATEGORY SUMMARY bar (T2) — one row per axis, and the GAP.
+ *
+ * There is deliberately no axis picker: this report IS the list of axes, and
+ * Enter on a row opens that axis's Cost Centre Summary (no report is a dead end —
+ * RESEARCH.md sec 8). F2 is the period.
+ */
+const COST_CATEGORY_SUMMARY_BAR: readonly ButtonBarItem[] = [
+  item("F2", "Period"),
+  item("Esc", "Back"),
+  item("Alt+G", "Go To"),
+  item("Ctrl+G", "Switch To"),
+  item("F1", "Help"),
+];
+
 /** Screens that are pure readers (Help, Features): Esc out, nothing to save. */
 const READER_BAR: readonly ButtonBarItem[] = [
   item("Esc", "Back"),
@@ -188,6 +253,16 @@ export function buttonBarFor(
     // half-keyed challan form and say nothing at all about Alt+C.
     case "tds-challans":
       return TDS_CHALLAN_BAR;
+    // The three T2 COST screens, for the same reason: without these cases they
+    // fall through to GATEWAY_BAR, WHICH NO TEST CATCHES. The bar would advertise
+    // F3 Company and F11 Features over a half-keyed cost centre and say nothing
+    // at all about Alt+C, or about F4 on the report that is useless without it.
+    case "cost-centres":
+      return COST_MASTERS_BAR;
+    case "cost-centre-summary":
+      return COST_CENTRE_SUMMARY_BAR;
+    case "cost-category-summary":
+      return COST_CATEGORY_SUMMARY_BAR;
     case "master-create":
       return MASTER_BAR;
     case "gateway":

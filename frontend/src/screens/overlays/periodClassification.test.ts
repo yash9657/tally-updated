@@ -6,6 +6,7 @@ import {
   AS_AT_ONLY_REPORTS,
   FULL_PERIOD_REPORTS,
   NO_DATE_DIMENSION_REPORTS,
+  PERIOD_SCREEN_LABELS,
 } from "./FrameOverlays";
 
 /**
@@ -92,5 +93,100 @@ describe("the F2 period classification", () => {
     expect(stock).toContain("periodTo");
     expect(stock).not.toContain("periodFrom");
     expect(AS_AT_ONLY_REPORTS).toContain("Stock Summary");
+  });
+});
+
+/**
+ * THE SAME BUG, ONE STEP AROUND THE ALLOWLISTS: a report screen that is a
+ * ScreenKind rather than a `report` frame.
+ *
+ * The suite above scans `"report:NAME"` keys out of defaultScreens.tsx, so it
+ * cannot see the two T2 cost summaries at all — they are registered by ScreenKind
+ * (`"cost-centre-summary"`), they carry no `snapshot.reportName`, and the three
+ * allowlists are keyed by report NAME. Left alone, both would have matched nothing
+ * in PeriodOverlay and been told "has no date dimension in this build" over
+ * screens that refuse to render without BOTH dates. That is not a new failure
+ * mode; it is the SAME one, and the regex-based guard is blind to it.
+ *
+ * `PERIOD_SCREEN_LABELS` closes it: a ScreenKind that reads a period declares the
+ * name it is classified under, and this suite asserts the closure — every entry in
+ * that table must be classified exactly once, and its classification must match
+ * what the screen's source actually reads.
+ */
+describe("the F2 period classification for SCREEN-KIND reports", () => {
+  const SCREEN_SOURCES: Record<string, string> = {
+    "cost-centre-summary": join(
+      __dirname,
+      "..",
+      "reports",
+      "CostCentreSummaryScreen.tsx",
+    ),
+    "cost-category-summary": join(
+      __dirname,
+      "..",
+      "reports",
+      "CostCategorySummaryScreen.tsx",
+    ),
+  };
+
+  it("finds the screen-kind report screens (guards the table itself)", () => {
+    // An empty table would make every assertion below pass vacuously — the one
+    // way a source-scanning test lies (see the sibling assertion above).
+    const kinds = Object.keys(PERIOD_SCREEN_LABELS);
+    expect(kinds.length).toBeGreaterThanOrEqual(2);
+    expect(kinds).toContain("cost-centre-summary");
+    expect(kinds).toContain("cost-category-summary");
+  });
+
+  it("classifies EVERY period-reading screen exactly once", () => {
+    const all = [
+      ...FULL_PERIOD_REPORTS,
+      ...AS_AT_ONLY_REPORTS,
+      ...NO_DATE_DIMENSION_REPORTS,
+    ];
+    for (const [kind, label] of Object.entries(PERIOD_SCREEN_LABELS)) {
+      const hits = all.filter((n) => n === label).length;
+      expect(
+        hits,
+        `the "${kind}" screen is classified as "${label}", which appears ` +
+          `${hits} time(s) across FULL_PERIOD_REPORTS, AS_AT_ONLY_REPORTS and ` +
+          `NO_DATE_DIMENSION_REPORTS. A screen in none of them is told its ` +
+          `period does nothing while it reads it.`,
+      ).toBe(1);
+    }
+  });
+
+  it("classifies each one by what its screen actually reads", () => {
+    // Not a preference — a fact about the source. Both cost summaries are FLOWS
+    // between two dates: they sum the allocations of postings dated in the range,
+    // so both bounds are meaningful and both are read.
+    for (const [kind, path] of Object.entries(SCREEN_SOURCES)) {
+      const src = readFileSync(path, "utf8");
+      expect(src, `${kind} must read periodFrom`).toContain("periodFrom");
+      expect(src, `${kind} must read periodTo`).toContain("periodTo");
+      expect(FULL_PERIOD_REPORTS).toContain(PERIOD_SCREEN_LABELS[kind]);
+    }
+  });
+
+  it("every screen in the table is a screen the F2 overlay can be opened on", () => {
+    // The classification is only reachable if the machine opens the overlay for
+    // that screen. A screen classified here and missing from navMachine's `period`
+    // case would be a correct note nobody can ever see, and F2 would silently do
+    // nothing on a screen whose heading asks for a period.
+    const machine = readFileSync(
+      join(__dirname, "..", "..", "keystroke", "navMachine.ts"),
+      "utf8",
+    );
+    const periodCase = machine.slice(
+      machine.indexOf('case "period": {'),
+      machine.indexOf('case "filter": {'),
+    );
+    expect(periodCase.length).toBeGreaterThan(0);
+    for (const kind of Object.keys(PERIOD_SCREEN_LABELS)) {
+      expect(
+        periodCase,
+        `F2 does not open the period overlay on the "${kind}" screen`,
+      ).toContain(`"${kind}"`);
+    }
   });
 });

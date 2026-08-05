@@ -239,6 +239,44 @@ export function resolvePrintTarget(
     };
   }
 
+  // ---- THE THREE T2 COST SCREENS. Each is refused with its OWN reason, and none
+  // of them reaches the network: `report:cost-centre-summary` and
+  // `report:cost-category-summary` are both mapped in authz.KnownReportNames and
+  // both answer 501 from /print/reports/{name} (backend handler_print_reports.go
+  // lists them in the deferred set), so a request could only ever come back as
+  // that 501 — and the refusals below say the same thing without a round trip that
+  // ends in somebody's log.
+  //
+  // WHY NOT MAP THEM TO SLUGS the way the TDS register is mapped: mapping earns an
+  // absent layout the server's own sentence, which is the right trade when the
+  // route CAN express the request. It cannot here. /print/reports/{name} is a flat
+  // literal carrying no axis, and the Cost Centre Summary is always for ONE axis —
+  // the same shape problem the Bank Reconciliation Statement had before
+  // ?ledger_id= (invariant I-10), and the same failure if it were fudged: a real,
+  // correctly rendered Department report on paper for a company whose question was
+  // about Branches, with nothing on the page saying so.
+  if (screen === "cost-centre-summary") {
+    return {
+      kind: "refusal",
+      reason:
+        "The Cost Centre Summary does not print in this build (the server answers 501 for it). A cost summary is always for ONE cost category, and the print route carries no way to say which — printing the first axis would put a real, correctly rendered Department report on paper for a question that was about Branches, with nothing on the page saying so. Alt+E is not built here either; read it on screen.",
+    };
+  }
+  if (screen === "cost-category-summary") {
+    return {
+      kind: "refusal",
+      reason:
+        "The Cost Category Summary does not print in this build (the server answers 501 for it — the layout is unwritten, not the report). Note what a printed copy would have to carry that a screen can enforce: the rows must NEVER be added together, because each is a different axis through the same money.",
+    };
+  }
+  if (screen === "cost-centres") {
+    return {
+      kind: "refusal",
+      reason:
+        "There is nothing to print here — this is a list of masters, and the print route serves REPORTS. What each of these centres COST is the Cost Centre Summary; how much of the period's cost each axis accounts for is the Cost Category Summary. Neither of those prints yet either.",
+    };
+  }
+
   return {
     kind: "refusal",
     reason: "Nothing on this screen can be printed.",

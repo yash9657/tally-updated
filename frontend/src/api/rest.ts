@@ -64,8 +64,8 @@ import type {
   CostCategory,
   CostCategoryListResponse,
   CostCategorySummaryResponse,
-  CostCentre,
   CostCentreListResponse,
+  CostCentreWriteResponse,
   CostCentreSummaryResponse,
   CreateCostCategoryRequest,
   CreateCostCentreRequest,
@@ -311,13 +311,17 @@ export function createRestClient(
       );
     },
     createCostCentre(companyID, req: CreateCostCentreRequest) {
-      return http.post<CostCentre>(
+      // The server nests the view under `cost_centre` and may return it null when the
+      // read-back fails. Handed over AS THE ENVELOPE rather than unwrapped here,
+      // because unwrapping would have to invent something for the null case and the
+      // caller is the only one who can decide what to say about it.
+      return http.post<CostCentreWriteResponse>(
         `${company(companyID)}/cost-centres`,
         req,
       );
     },
     alterCostCentre(companyID, centreID: string, req: CreateCostCentreRequest) {
-      return http.put<CostCentre>(
+      return http.put<CostCentreWriteResponse>(
         `${company(companyID)}/cost-centres/${encodeURIComponent(centreID)}`,
         req,
       );

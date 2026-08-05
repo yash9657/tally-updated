@@ -55,6 +55,39 @@
  *                          overlay opens only for report screens, and this
  *                          screen's dimension is a TAX YEAR asked for on its
  *                          face, never derived from a deposit date.
+ *  - "cost-centres"      — the COST MASTERS (T2): the axes of analysis (cost
+ *                          CATEGORIES — Department, Branch, Project) and the
+ *                          positions on them (cost CENTRES), plus the one form
+ *                          that creates either. Tally reaches the same masters
+ *                          through Alt+G > Create Master > Cost Centre
+ *                          (RESEARCH.md:525). A ScreenKind and not a
+ *                          "report:NAME" for the same reason tds-challans is:
+ *                          the server serves these routes under the BARE token
+ *                          `cost-centre` (internal/authz/vocabulary.go), which a
+ *                          coarse `allow display report` can never match — and
+ *                          because a master list is not a report. It carries a
+ *                          create form and therefore needs NO period, so it is
+ *                          exempt from the FrameOverlays classification (the F2
+ *                          overlay opens only for reports).
+ *  - "cost-centre-summary" — THE COST CENTRE SUMMARY (T2): what each centre on
+ *                          ONE axis cost over a period, rolled up through the
+ *                          centre hierarchy. ⛔ ONE AXIS, ALWAYS: centres on
+ *                          different axes describe the SAME money (see the
+ *                          CostCategory doc in api/types.ts), so the screen
+ *                          takes an axis and has no "all centres" mode.
+ *  - "cost-category-summary" — THE COST CATEGORY SUMMARY (T2): one row per axis
+ *                          over a period — how much of the period's allocable
+ *                          cost each axis accounts for, and the UNALLOCATED
+ *                          remainder that is the report's whole purpose. ⛔ It
+ *                          has NO grand total and may never grow one.
+ *
+ * ⚠️ Both cost SUMMARIES are ScreenKinds AND report names on the server
+ * (`report:cost-centre-summary`, `report:cost-category-summary`, refused to the
+ * seeded Data Entry level by migration 0072). They are ScreenKinds here because
+ * neither is reached by a reportName frame: one needs an AXIS the pure machine
+ * cannot know, and both carry a shape no generic report screen renders. Being
+ * ScreenKinds rather than "report" frames is exactly why each needs its own
+ * FrameOverlays period classification — see FULL_PERIOD_REPORTS.
  */
 export type ScreenKind =
   | "gateway"
@@ -72,6 +105,9 @@ export type ScreenKind =
   | "help"
   | "features"
   | "tds-challans"
+  | "cost-centres"
+  | "cost-centre-summary"
+  | "cost-category-summary"
   | "bank-reconciliation";
 
 /**
@@ -356,6 +392,50 @@ export type KeymapAction =
    * half-keyed counterfoil.
    */
   | { kind: "recordTDSChallan" }
+  /**
+   * Alt+C on the COST MASTERS screen — create a cost CATEGORY (an axis) or a cost
+   * CENTRE (a position on one).
+   *
+   * THE COMBO is Tally's documented create-a-master-on-the-fly key
+   * (RESEARCH.md:405), and it is the right one twice over: RESEARCH.md:525 says a
+   * cost centre is created through "Alt+G > Create Master > Cost Centre", so these
+   * ARE masters in Tally's own vocabulary.
+   *
+   * THE SCOPE is ours. The global `createMaster` action carries a
+   * {@link MasterKind}, and cost masters are deliberately NOT members of that
+   * union: MasterCreateScreen renders a ledger/group/unit/stock-item form, so the
+   * global binding would push a LEDGER-CREATE frame over this screen. Leaving it
+   * in place would be worse than an unbound key — it would navigate away from a
+   * half-keyed centre.
+   *
+   * ⚠️ ONE KEY CREATES BOTH, and that is a decision. RESEARCH pins no second
+   * combo for a cost CATEGORY, and inventing one would be inventing a keystroke;
+   * so the panel Alt+C opens asks WHICH of the two is being created, with the axis
+   * for a centre PICKED from the served list rather than typed.
+   */
+  | { kind: "createCostMaster" }
+  /**
+   * F4 on the COST CENTRE SUMMARY — choose the AXIS (cost category) the report is
+   * for.
+   *
+   * ⚠️ THE COMBO IS OURS, AND IS SAID SO OUT LOUD. RESEARCH.md:810–811 documents
+   * how Tally reaches these reports ("Display More Reports > Statements of
+   * Accounts > Cost Centres", where the cost centre / category is chosen from a
+   * pick-list on the way in) but pins NO key for re-choosing it. So F4 is not
+   * presented as a documented TallyPrime binding: it is placed at F4 for
+   * consistency with the one picker this product already has — RESEARCH.md:879's
+   * "F4 (select bank ledger)" on the reconciliation screen, which is the same
+   * gesture ("pick the thing this report is about"). It is scoped to this screen
+   * and never claimed globally, exactly as `editLog`'s Alt+L is.
+   *
+   * BINDING IT IS ALSO PROTECTIVE: the global F4 is a CONTRA VOUCHER, so an
+   * operator reaching for the picker they used a moment ago on the reconciliation
+   * screen would otherwise open a voucher over the report.
+   *
+   * There is deliberately no such key on the Cost CATEGORY Summary — that report
+   * IS the list of axes, and Enter on a row opens that axis here.
+   */
+  | { kind: "selectCostCategory" }
   /**
    * A combo that a real TallyPrime user WILL press but whose feature is not
    * built in this edition (e.g. payroll, order processing). It is bound on

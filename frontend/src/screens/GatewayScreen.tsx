@@ -19,7 +19,26 @@ const GATEWAY_MENU = [
   // one can be recorded. Built server-side with no key anywhere in this app; a
   // deduction with no challan behind it cannot be filed at all, so the register
   // needs a door rather than a route only cURL can reach.
-  "TDS Challans",  "Users & Roles",
+  "TDS Challans",
+
+  // ---- THE THREE COST SCREENS (T2).
+  //
+  // "Cost Centres" is the MASTERS door — the axes of analysis (Department,
+  // Branch, Project) and the positions on them. It comes FIRST of the three on
+  // purpose: until an axis and a centre exist, nothing can be allocated and both
+  // reports below can only say so.
+  //
+  // Tally files the two reports under Display More Reports > Statements of
+  // Accounts > Cost Centres (RESEARCH.md:810) and creates the masters through
+  // Alt+G > Create Master > Cost Centre (RESEARCH.md:525). They are Gateway
+  // entries here because this build's second-level menu is generated from
+  // REPORT_NAMES, and none of these three is a reportName frame — see
+  // COST_CENTRES_LABEL in navMachine.ts.
+  "Cost Centres",
+  "Cost Centre Summary",
+  "Cost Category Summary",
+
+  "Users & Roles",
   "Display More Reports",
 ] as const;
 

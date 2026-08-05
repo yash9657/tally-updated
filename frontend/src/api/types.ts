@@ -1914,9 +1914,45 @@ export interface CostCentreListResponse {
   cost_category_id?: string;
 }
 
+/**
+ * The create/alter reply for a cost CENTRE.
+ *
+ * ⛔ THE VIEW IS NESTED, and typing this envelope AS a flat CostCentre is a lie the
+ * compiler cannot catch — every field reads `undefined` at runtime while the code
+ * type-checks. That shipped: the masters screen confirmed a successful create with
+ * "Created undefined on the undefined axis, under undefined", with 597 frontend
+ * tests green, because the MOCK returned a flat object and only the real server
+ * returns the envelope.
+ *
+ * `cost_centre` is null when the read-back could not be performed — the row IS
+ * written either way, so a caller must treat null as "created, but I cannot show you
+ * what it became" and never as a failure. read_back_error says why.
+ */
+export interface CostCentreWriteResponse {
+  id: string;
+  cost_centre: CostCentre | null;
+  read_back_error?: string;
+}
+
 export interface CreateCostCategoryRequest {
   name: string;
   allocate_non_revenue?: boolean;
+  /**
+   * ⛔ REQUIRED BY THE SERVER, and omitting it is a 400 — not a defaulted row.
+   *
+   * This field was missing from this type when it was first written, so the masters
+   * screen had no way to know it was needed and every create came back 400 AFTER a
+   * successful WebAuthn step-up. The step-up worked; the retry was malformed. The
+   * only sign was a console 400, because the screen reported the failure as an
+   * ordinary error.
+   *
+   * ⚠️ It is CLIENT-SUPPLIED, which means the audit actor is a value the client
+   * chooses. The rest of this codebase does the same (`created_by: "ui"` in the bank
+   * screens), so this matches the house pattern rather than fixing it — but the
+   * server holds the authenticated subject and ought to be the one deciding. Noted
+   * as a real gap, not endorsed.
+   */
+  created_by: string;
 }
 
 export interface CreateCostCentreRequest {
@@ -1924,6 +1960,8 @@ export interface CreateCostCentreRequest {
   cost_category_id: string;
   name: string;
   parent_id?: string | null;
+  /** ⛔ REQUIRED. See {@link CreateCostCategoryRequest.created_by}. */
+  created_by: string;
 }
 
 /**

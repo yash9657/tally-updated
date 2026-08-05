@@ -37,6 +37,16 @@ const COMPANY_SCOPED_SCREENS = new Set<NavSnapshot["screen"]>([
   // needs a scope. Omitting it does not degrade gracefully: useCompanyID()
   // THROWS, and the screen never gets to render its own "no company" state.
   "tds-challans",
+  // The three T2 COST screens. All three read (and the masters screen writes)
+  // ONE company's cost masters and allocations, so all three need a scope. Same
+  // failure mode as the two above: omit one and useCompanyID() THROWS before the
+  // screen can render its own state — including its 403 panel, which is a NORMAL
+  // answer on every one of them (migration 0072 refuses both reports to the
+  // seeded Data Entry level, and the masters sit behind a bare `cost-centre`
+  // token against a level whose default_access is 'none').
+  "cost-centres",
+  "cost-centre-summary",
+  "cost-category-summary",
 ]);
 
 /**
@@ -75,6 +85,16 @@ const SCREEN_ACTIONS: Partial<Record<KeymapAction["kind"], ScreenActionKind>> = 
   // no entry: the shell resolved the combo, found no screen action and forwarded
   // the key to a machine that deliberately does nothing. Silently.
   recordTDSChallan: "recordTDSChallan",
+  // Alt+C on the COST MASTERS screen — create an axis or a centre (T2). Same
+  // registration point, same failure mode: without this line the panel never
+  // opens and NOTHING says so, while the keymap binding, the ScreenActionKind,
+  // the navMachine case, the bar item and the screen's own handler all look
+  // correct in review.
+  createCostMaster: "createCostMaster",
+  // F4 on the COST CENTRE SUMMARY — choose the axis the report is for (T2).
+  // Ditto: a Cost Centre Summary with no axis chosen renders a picker, and
+  // without this entry F4 could never reopen it.
+  selectCostCategory: "selectCostCategory",
 };
 
 /** How long a status-line message stays up before it fades (ms). */
@@ -377,6 +397,17 @@ function screenTitle(snap: NavSnapshot): string {
       return "Company Features";
     case "tds-challans":
       return "TDS Challans";
+    // The T2 cost screens. The centre summary's title deliberately does NOT name
+    // the axis: the axis is chosen inside the screen (F4) and a stale title bar
+    // naming the previous one, over another axis's figures, is precisely the
+    // confusion the whole feature has to avoid. The screen prints the axis in its
+    // own heading, from the response the numbers came in.
+    case "cost-centres":
+      return "Cost Categories & Cost Centres";
+    case "cost-centre-summary":
+      return "Cost Centre Summary";
+    case "cost-category-summary":
+      return "Cost Category Summary";
     default:
       return "Tally";
   }
@@ -408,6 +439,14 @@ function hintsFor(snap: NavSnapshot): string[] {
       ];
     case "master-create":
       return ["Enter: Next field", "Ctrl+A: Accept", "Esc: Cancel", "F1: Help"];
+    case "cost-centres":
+      return ["Alt+C: Create", "Ctrl+A: Accept", ...common];
+    case "cost-centre-summary":
+      return ["F2: Period", "F4: Cost Category", ...common];
+    case "cost-category-summary":
+      // No axis picker on purpose: this report IS the list of axes, and Enter on
+      // a row opens that axis's Cost Centre Summary.
+      return ["F2: Period", "Enter: Open this axis", ...common];
     case "goto-overlay":
       return ["Type to search", "Enter: Open", "Esc: Cancel"];
     case "help":
