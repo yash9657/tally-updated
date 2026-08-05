@@ -1914,6 +1914,55 @@ func voucherFullJSON(v ledger.VoucherView) map[string]any {
 	// The item grid. Built by inventoryLinesJSON (handler_voucher_inventory.go),
 	// which is where the reasoning about the round trip lives.
 	inventory := inventoryLinesJSON(v.InventoryLines)
+	// ---- THE TWO ROUND-TRIP FIELDS THAT WERE MISSING FROM THIS BODY.
+	//
+	// ⛔⛔ ledger.VoucherView HAS CARRIED CostAllocations SINCE T2 AND THIS FUNCTION
+	// DROPPED THEM. The service layer projected them, its own doc comment explains at
+	// length why omitting them from an alter DESTROYS a departmental split — and then
+	// the HTTP body left them out, so every client rebuilding a voucher from this GET
+	// silently cleared the split on an unrelated edit. The Go struct was right and the
+	// wire was not, which is the same shape as T2's other defect one layer up
+	// (`VoucherRequest` in the TS types lacked `cost_allocations` while the Go struct
+	// had it) — and it is why the rule is EVERY wire between the operator and the
+	// table, not just the nearest one.
+	//
+	// `fulfilments` is the same field one further along, and it was absent from the
+	// service layer too. Both are emitted here now, and both ALWAYS (never omitted
+	// when empty): a client that rebuilds an alter body needs to distinguish "this
+	// voucher has no links" from "this endpoint does not tell me about links", and an
+	// absent key cannot say which. An empty array is the honest answer, and it is the
+	// one an alter can safely restate.
+	allocations := make([]map[string]any, 0, len(v.CostAllocations))
+	for _, a := range v.CostAllocations {
+		allocations = append(allocations, map[string]any{
+			// 0-BASED, and an index into THIS body's `postings` array — see
+			// ledger.CostAllocationView, which re-derives it against the same slice
+			// this read returns. ⚠️ It is 0-based where `fulfilments[].line_no`
+			// below is 1-based. Both are inherited and neither is negotiable.
+			"posting_seq":        a.PostingSeq,
+			"cost_category_id":   a.CostCategoryID.String(),
+			"cost_category_name": a.CostCategoryName,
+			"cost_centre_id":     a.CostCentreID.String(),
+			"cost_centre_name":   a.CostCentreName,
+			"amount":             a.Amount.StringFixed(4),
+		})
+	}
+	fulfilments := make([]map[string]any, 0, len(v.Fulfilments))
+	for _, f := range v.Fulfilments {
+		fulfilments = append(fulfilments, map[string]any{
+			// 1-BASED, indexing `inventory` at line_no-1. STORED, not re-derived:
+			// order_fulfilment.line_no is a real column, unlike a posting's ordinal.
+			"line_no":       f.LineNo,
+			"order_id":      uuidOrEmpty(f.OrderID),
+			"order_line_id": f.OrderLineID.String(),
+			"order_no":      f.OrderNo,
+			"stock_item":    f.StockItem,
+			// How much of the ORDER this line consumed. NOT how much stock moved —
+			// that is the `qty` on the matching `inventory` entry, and the two are
+			// usually equal and are different facts.
+			"qty": f.Qty.StringFixed(4),
+		})
+	}
 	return map[string]any{
 		"voucher_id":       v.VoucherID.String(),
 		"voucher_no":       v.VoucherNo,
@@ -1934,6 +1983,8 @@ func voucherFullJSON(v ledger.VoucherView) map[string]any {
 		"postings":         postings,
 		"bill_allocations": bills,
 		"inventory":        inventory,
+		"cost_allocations": allocations,
+		"fulfilments":      fulfilments,
 	}
 }
 

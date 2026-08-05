@@ -55,6 +55,7 @@ import type {
 import type { OutputTaxLedgers } from "./gstVoucher";
 import { deriveGstSplit } from "./gstDerive";
 import { addMoney } from "./money";
+import { buildFulfilments, type DraftFulfilment } from "./fulfilment";
 
 // ---------------------------------------------------------------------------
 // Exact fixed-4 decimal arithmetic on BigInt-scaled integers
@@ -186,6 +187,21 @@ export interface ItemInvoiceLine {
   hsn: string;
   /** Display only (the master's unit symbol). */
   unit: string;
+  /**
+   * WHICH ORDER LINES THIS LINE'S GOODS DISCHARGED (T3).
+   *
+   * ⛔ IT LIVES ON THE LINE, AND THAT IS THE WHOLE DESIGN. The wire's
+   * `FulfilmentInput.line_no` is the 1-based position of the line in the request's
+   * `inventory` array — which is the KEYED lines, not the grid's rows. Carrying the
+   * links in a parallel structure keyed by grid position would put that number one
+   * out the first time an operator left a blank row above a keyed one, and it would
+   * name either a line that does not exist or one holding different goods. Because
+   * the links travel ON the line, the position they are numbered from is by
+   * construction the position the line is sent at.
+   *
+   * ⚠️ An empty array is the normal case: most invoices discharge no order.
+   */
+  fulfilments: readonly DraftFulfilment[];
 }
 
 /** An empty grid row, ready to key. */
@@ -201,6 +217,7 @@ export function emptyItemLine(): ItemInvoiceLine {
     gstRatePct: "",
     hsn: "",
     unit: "",
+    fulfilments: [],
   };
 }
 
@@ -411,5 +428,14 @@ export function buildItemInvoiceRequest(
     gst,
   };
   if (inputs.voucherNo) req.voucher_no = inputs.voucherNo;
+  // ⛔ FROM `keyed`, THE SAME FILTERED ARRAY `inventory` WAS BUILT FROM, so the
+  // 1-based line_no each link carries is by construction the position its line is
+  // sent at. Passing `inputs.lines` here would be the off-by-one described on
+  // ItemInvoiceLine.fulfilments: a blank row above a keyed one shifts every number.
+  //
+  // ⚠️ OMITTED WHEN EMPTY, not sent as []. Most invoices discharge no order, and an
+  // empty array is a statement where absence is silence.
+  const fulfilments = buildFulfilments(keyed);
+  if (fulfilments.length > 0) req.fulfilments = fulfilments;
   return req;
 }

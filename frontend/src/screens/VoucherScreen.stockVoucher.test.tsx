@@ -403,6 +403,10 @@ describe("Alt+F7 Stock Journal — a transfer, not a creation", () => {
       godownId: "g1",
       toGodownId: "g1",
       batchId: "",
+      // A transfer can carry no order link at all — see fulfilsDirection, and the
+      // guard in buildStockVoucherRequest: one keyed transfer row becomes TWO
+      // movements, so a link's line number could not be derived from the row.
+      fulfilments: [],
       qty: "4",
       rate: "10",
       unit: "Nos",

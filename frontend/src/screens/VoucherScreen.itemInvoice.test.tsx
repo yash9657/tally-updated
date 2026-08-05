@@ -424,6 +424,9 @@ describe("item-invoice arithmetic is exact fixed-4 decimal, never floating point
         itemName: "Widget",
         godownId: "",
         batchId: "",
+        // No order link: lineAmount is pure arithmetic on the goods, and a
+        // fulfilment is a LINK that changes no amount on this line.
+        fulfilments: [],
         qty: "1.005",
         rate: "33.33",
         discountPct: "10",

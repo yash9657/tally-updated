@@ -652,6 +652,51 @@ type VoucherView struct {
 	// This is the third time this shape has bitten: postings had it, InventoryLines
 	// had it and says so, and this is the same bug one field along.
 	CostAllocations []CostAllocationView
+	// Fulfilments are the head version's ORDER LINKS (T3, migration 0042), and they
+	// are here for the FOURTH occurrence of exactly the reason above.
+	//
+	// ⛔ AN ALTER RE-STATES, AND order_fulfilment KEYS ON (voucher_version_id,
+	// line_no). So an alter that omits the links DELETES them — the rows are written
+	// under the new version and the old version's rows stop being current. The
+	// ordinary round trip (open a delivery note, fix a typo in the narration, save)
+	// would read a voucher with no links, rebuild a VoucherInput with none, and
+	// silently RE-OPEN an order that has been delivered. Nothing refuses it: zero
+	// fulfilments is a legal state, so no trigger fires, and the only trace is an
+	// order book that quietly starts reporting a commitment the company already met.
+	//
+	// This field was ABSENT while no client could create a fulfilment, which made the
+	// defect unreachable rather than fixed. The picker on voucher entry is what made
+	// it reachable, so it is projected here in the same change.
+	Fulfilments []FulfilmentView
+}
+
+// FulfilmentView is one order link of the head version, carrying the real order and
+// order-line ids AND the display fields a form needs to re-render the link without
+// re-reading the order.
+//
+// ⚠️ LineNo IS 1-BASED and indexes this same view's InventoryLines slice at
+// LineNo-1. It is the STORED stock_movement.line_no, not a re-derivation: unlike
+// CostAllocationView.PostingSeq, which has to be re-derived because `posting` has no
+// ordinal column, order_fulfilment stores the line number it was keyed against. So
+// the round trip GetVoucher -> rebuild -> AlterVoucher restates the same number
+// against the same line, and a client sends back what it was given.
+//
+// ⚠️ OutstandingQty IS NOT HERE, deliberately. It is a property of the ORDER and is
+// derived across every current voucher version — including ones this voucher knows
+// nothing about — so putting it on a voucher's own view would invite a client to
+// treat a figure that was true at read time as a limit. A form that needs it reads
+// the order.
+type FulfilmentView struct {
+	LineNo      int
+	OrderID     uuid.UUID
+	OrderLineID uuid.UUID
+	// The order's human number, e.g. "SO-14" — what an operator recognises.
+	OrderNo string
+	// The item the ORDER line names. Carried so a form can show it beside the
+	// movement's own item, which is how a mis-linked row becomes visible.
+	StockItem string
+	// How much of the ORDER this line consumed. NOT how much stock moved.
+	Qty decimal.Decimal
 }
 
 // CostAllocationView is one cost-centre allocation of the head version, carrying
@@ -814,6 +859,51 @@ func (s *Service) GetVoucher(ctx context.Context, voucherID uuid.UUID) (VoucherV
 		}
 		if err := arows.Err(); err != nil {
 			return fmt.Errorf("ledger: iterate cost allocations: %w", err)
+		}
+
+		// ORDER LINKS of the current version (T3, migration 0042).
+		//
+		// Keyed on voucher_version_id, exactly as stock_movement and bill_allocation
+		// are, so a superseded version's links stay in the table and are not
+		// projected — the same current-version discipline every reader of this table
+		// owes.
+		//
+		// ⛔ THIS READ IS WHAT STOPS AN ALTER SILENTLY RE-OPENING A DELIVERED ORDER.
+		// An alter re-states the links from its input, so a form that rebuilt a
+		// voucher from a GET which omitted them would send none, and the rows would
+		// simply not be written under the new version. Zero fulfilments is a legal
+		// state, so nothing refuses it and nothing detects it.
+		//
+		// The joins are LEFT and the display fields COALESCE'd for the reason every
+		// other projection here does it: the LINK is the fact, and a missing master
+		// must not make the fact disappear from the round trip.
+		frows, err := tx.Query(ctx,
+			`SELECT f.line_no, COALESCE(ol.order_id, '00000000-0000-0000-0000-000000000000'::uuid),
+			        f.order_line_id, COALESCE(oh.order_no, ''), COALESCE(si.name, ''), f.qty
+			   FROM order_fulfilment f
+			   LEFT JOIN order_line ol
+			     ON ol.company_id = f.company_id AND ol.id = f.order_line_id
+			   LEFT JOIN order_head oh
+			     ON oh.company_id = ol.company_id AND oh.id = ol.order_id
+			   LEFT JOIN stock_item si
+			     ON si.company_id = ol.company_id AND si.id = ol.stock_item_id
+			  WHERE f.company_id = $1 AND f.voucher_version_id = $2
+			  ORDER BY f.line_no, oh.order_no`,
+			companyID, versionID)
+		if err != nil {
+			return fmt.Errorf("ledger: query fulfilments: %w", err)
+		}
+		defer frows.Close()
+		for frows.Next() {
+			var f FulfilmentView
+			if err := frows.Scan(&f.LineNo, &f.OrderID, &f.OrderLineID,
+				&f.OrderNo, &f.StockItem, &f.Qty); err != nil {
+				return fmt.Errorf("ledger: scan fulfilment: %w", err)
+			}
+			v.Fulfilments = append(v.Fulfilments, f)
+		}
+		if err := frows.Err(); err != nil {
+			return fmt.Errorf("ledger: iterate fulfilments: %w", err)
 		}
 
 		// Bill allocations of the current version (keyed by voucher_version_id).

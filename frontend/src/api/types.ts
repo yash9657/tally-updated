@@ -864,6 +864,55 @@ export interface VoucherView {
    * an absent array as "no stock on this voucher".
    */
   inventory?: InventoryLineView[];
+  /**
+   * WHICH ORDER LINES THIS VOUCHER'S INVENTORY DISCHARGED, as stored (T3).
+   *
+   * ⛔⛔ AN ALTER RE-STATES THESE, SO A FORM THAT REBUILDS A VOUCHER WITHOUT THEM
+   * DELETES THEM. `order_fulfilment` keys on (voucher_version_id, line_no): whatever
+   * the alter body carries becomes the current version's links and whatever it omits
+   * is simply not written. So the ordinary round trip — open a delivered delivery
+   * note, fix a typo in the narration, save — silently RE-OPENS the order. Nothing
+   * refuses it, because zero links is a legal state: no trigger fires, no total stops
+   * adding up, and the only trace is an order book that starts reporting a commitment
+   * the company already met.
+   *
+   * This field, its Go counterpart and the `fulfilments` key on the wire were ALL
+   * added together, because that is the rule this defect keeps teaching: a feature is
+   * not reachable — and here, not SAFE — until the field exists on every wire between
+   * the operator and the table.
+   *
+   * ⚠️ ALWAYS PRESENT (possibly empty) from a current server. It is optional in the
+   * type only for a voucher fetched from a build that predates it, where an absent
+   * array and an empty one mean different things: "this endpoint does not tell me
+   * about links" versus "this voucher has none". A form that cannot tell them apart
+   * must not silently restate none.
+   */
+  fulfilments?: FulfilmentView[];
+}
+
+/**
+ * One stored order link, as returned by GET /vouchers/{id}.
+ *
+ * ⚠️ `line_no` IS 1-BASED and indexes {@link VoucherView.inventory} at `line_no - 1`.
+ * Unlike a cost allocation's `posting_seq` — which is 0-based and RE-DERIVED, because
+ * `posting` has no ordinal column — this is the stored `order_fulfilment.line_no`, so
+ * a client sends back exactly the number it was given.
+ */
+export interface FulfilmentView {
+  line_no: number;
+  /** "" when the link's order cannot be resolved (the join is LEFT). */
+  order_id: string;
+  order_line_id: string;
+  /** Display: the order's human number, e.g. "SO-14". */
+  order_no: string;
+  /** Display: the item the ORDER line names, so a mis-link is visible. */
+  stock_item: string;
+  /**
+   * How much of the ORDER this line consumed. ⛔ NOT how much stock moved — that is
+   * the `qty` on the matching `inventory` entry. They are usually equal and they are
+   * different facts: closing stock reads the movement, the order book reads this.
+   */
+  qty: Money;
 }
 
 /** One stored item-grid line, as returned by GET /vouchers/{id}. */

@@ -29,6 +29,8 @@ import {
   type GstFormState,
 } from "./vouchers/gstVoucher";
 import { addMoney, normalizeMoney } from "./vouchers/money";
+import { FulfilmentPicker } from "./vouchers/FulfilmentPicker";
+import { fulfilsDirection } from "./vouchers/fulfilment";
 import {
   buildItemInvoiceRequest,
   deriveItemInvoiceTax,
@@ -221,6 +223,32 @@ function itemsFromView(view: VoucherView): ItemInvoiceLine[] {
     gstRatePct: "",
     hsn: "",
     unit: "",
+    // ⛔⛔ THE ORDER LINKS, RE-HYDRATED — AND OMITTING THIS IS DATA LOSS, NOT A
+    // MISSING FEATURE. An ALTER re-states the links (order_fulfilment keys on
+    // voucher_version_id), so a form that rebuilt this grid without them would send
+    // none and the next save of an unrelated field — a typo in the narration — would
+    // silently RE-OPEN an order this voucher already delivered. Nothing refuses it:
+    // zero links is a legal state, so no trigger fires and the only trace is an order
+    // book reporting a commitment the company has met.
+    //
+    // Matched on the 1-BASED `line_no` against this line's own 1-based position.
+    // `l.line_no` is the STORED number, so the match is against what the server
+    // actually keyed rather than against this array's index — which matters because
+    // the two can only agree if the projection is ordered, and relying on that
+    // silently is how an off-by-one hides.
+    fulfilments: (view.fulfilments ?? [])
+      .filter((f) => f.line_no === l.line_no)
+      .map((f) => ({
+        orderLineId: f.order_line_id,
+        qty: f.qty,
+        orderNo: f.order_no,
+        itemName: f.stock_item,
+        // What the ORDER had outstanding is not on this body and must not be
+        // guessed: it is derived across every current voucher version, so a figure
+        // invented here would be a claim about other vouchers. The picker shows "" and
+        // the operator re-picks if they want to change the link.
+        outstandingAtPick: "",
+      })),
   }));
   return rows.length > 0 ? rows : [emptyItemLine()];
 }
@@ -1596,6 +1624,17 @@ function ItemInvoicePanel({
   // the other direction, so this is a statement of what will happen, not a
   // second implementation of it.
   const inward = voucherType === "purchase";
+  /**
+   * Which order family this CLASS can discharge, or null.
+   *
+   * Non-null for Sales (goods out → a SALES order) and Purchase (goods in → a
+   * PURCHASE order). ⛔ NULL for a Credit or Debit Note, and that is a decision
+   * rather than an omission: goods coming back do not discharge a commitment, they
+   * undo one, and this build has no negative-link path. Un-linking is done by
+   * altering the delivery that made the link. Offering the picker on a return would
+   * produce a link asserting that the return DELIVERED the order.
+   */
+  const fulfilsDir = fulfilsDirection(voucherType);
 
   const setRow = (i: number, patch: Partial<ItemInvoiceLine>) =>
     setForm((f) => ({
@@ -1648,6 +1687,18 @@ function ItemInvoicePanel({
             <th className="pr-2 text-right">Rate</th>
             <th className="pr-2 text-right">Disc %</th>
             <th className="pr-2 text-right">Amount</th>
+            {/* THE ORDER LINK column. An invoice that fulfils an order directly,
+                with no separate delivery note, is ONE OF THE TWO ORDINARY WAYS an
+                order is discharged (RESEARCH.md:622), so it belongs here and not
+                only on the Delivery Note.
+
+                ⚠️ Note the asymmetry with cost_allocations, which an item invoice
+                REFUSES: an allocation names a POSTING, and this class's postings are
+                generated inside the server's transaction (index 0 is the party leg),
+                so a client-supplied posting number would attribute the cost to a
+                receivable. A fulfilment names an INVENTORY line — the operator's own
+                grid, on every class — so it is honoured here. */}
+            {fulfilsDir !== null ? <th className="pr-2">Against order</th> : null}
             <th />
           </tr>
         </thead>
@@ -1728,6 +1779,18 @@ function ItemInvoicePanel({
               <td className="pr-2 text-right" data-testid={`item-amount:${i}`}>
                 {isKeyedLine(l) ? lineAmount(l) : "—"}
               </td>
+              {/* ⛔ ON THE ROW, not in a modal — see FulfilmentPicker's header. */}
+              {fulfilsDir !== null ? (
+                <td className="pr-2">
+                  <FulfilmentPicker
+                    line={l}
+                    lineIndex={i}
+                    direction={fulfilsDir}
+                    testIdPrefix="item"
+                    onChange={(fulfilments) => setRow(i, { fulfilments })}
+                  />
+                </td>
+              ) : null}
               <td>
                 {form.items.length > 1 ? (
                   <button

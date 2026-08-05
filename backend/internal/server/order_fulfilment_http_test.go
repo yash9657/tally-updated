@@ -351,3 +351,134 @@ func TestAClientCanFulfilAnOrderOverHTTPAndSeeTheOrderBookMove(t *testing.T) {
 			"12/8 — the transaction did not roll back cleanly", out, done)
 	}
 }
+
+// TestTheVoucherGETCarriesItsOrderLinksSoAnAlterCannotSilentlyReopenTheOrder is the
+// OTHER half of reachability, and it is the half that was missing.
+//
+// ⛔⛔ THE DEFECT IT PINS. `order_fulfilment` keys on (voucher_version_id, line_no),
+// so an ALTER RE-STATES the links: whatever the alter body carries becomes the
+// current version's links, and whatever it omits is gone. Meanwhile the voucher GET
+// did not return them at all — ledger.VoucherView had no Fulfilments field and
+// voucherFullJSON emitted no `fulfilments` key.
+//
+// Put those two facts together and the ordinary round trip DESTROYS DATA. An
+// operator opens a delivered delivery note, fixes a typo in the narration, saves —
+// and the order silently re-opens, because the client rebuilt the body from a GET
+// that never mentioned the links. Nothing refuses it: zero fulfilments is a legal
+// state, so no trigger fires and no total stops adding up. The only trace is an
+// order book that starts reporting a commitment the company already met, which reads
+// as a warehouse problem rather than a software one.
+//
+// This is the FOURTH occurrence of one shape (postings, InventoryLines,
+// CostAllocations, and now this), which is why the fix is a projection in the service
+// layer AND a key in the HTTP body AND this test, written at the same time.
+//
+// ⚠️ THE CONTROL IS THE SECOND HALF OF THE TEST, and without it the first half is
+// consistent with an alter that does not re-state at all — in which case the order
+// would survive for the wrong reason and this test would be inert. So it alters a
+// second time with the links DELIBERATELY OMITTED and asserts the order DOES re-open.
+// That is the behaviour the first half depends on being dangerous.
+func TestTheVoucherGETCarriesItsOrderLinksSoAnAlterCannotSilentlyReopenTheOrder(t *testing.T) {
+	srv := newServer(t)
+	f := newOrderHTTPFixture(t, srv)
+
+	// Deliver 8 of the 20, linked.
+	rec, body := doRaw(t, srv, http.MethodPost, f.base+"/vouchers/delivery-note", f.ownerTok,
+		deliveryBody(f, "8", []any{map[string]any{
+			"line_no":       1,
+			"order_line_id": f.orderLineID,
+			"qty":           "8",
+		}}))
+	if rec.Code != http.StatusCreated && rec.Code != http.StatusOK {
+		t.Fatalf("POST a linked delivery note = %d, want 201 (%s)", rec.Code, rec.Body.String())
+	}
+	voucherID, _ := body["voucher_id"].(string)
+	if voucherID == "" {
+		t.Fatalf("the delivery note came back with no voucher_id: %s", rec.Body.String())
+	}
+
+	// ---- CONTROL: the link landed and the order book moved.
+	if out, done, _ := salesOrderBook(t, srv, f); out != "12.0000" || done != "8.0000" {
+		t.Fatalf("CONTROL: after a linked delivery of 8/20 the order reads outstanding=%q "+
+			"fulfilled=%q, want 12/8", out, done)
+	}
+
+	// ---- ⛔ THE READ-BACK. This is the assertion that did not exist.
+	grec, gbody := doRaw(t, srv, http.MethodGet, f.base+"/vouchers/"+voucherID, f.ownerTok, nil)
+	if grec.Code != http.StatusOK {
+		t.Fatalf("GET the delivery note back = %d, want 200 (%s)", grec.Code, grec.Body.String())
+	}
+	raw, present := gbody["fulfilments"]
+	if !present {
+		t.Fatalf("GET /vouchers/{id} returned NO `fulfilments` key. A client rebuilding an alter "+
+			"body from this response cannot restate the order links, so the next save of an "+
+			"unrelated field silently re-opens a delivered order. Body: %s", grec.Body.String())
+	}
+	links, _ := raw.([]any)
+	if len(links) != 1 {
+		t.Fatalf("the delivery note read back with %d order link(s), want 1: %s",
+			len(links), grec.Body.String())
+	}
+	lm, _ := links[0].(map[string]any)
+	// ⚠️ 1-BASED, and it indexes `inventory` at line_no-1. It is the STORED
+	// order_fulfilment.line_no, not a re-derivation — and it is 1-based where
+	// `cost_allocations[].posting_seq` on this same body is 0-based.
+	if got, _ := lm["line_no"].(float64); got != 1 {
+		t.Errorf("the link's line_no = %v, want 1 (1-based, indexing `inventory` at line_no-1)", lm["line_no"])
+	}
+	if got, _ := lm["order_line_id"].(string); got != f.orderLineID {
+		t.Errorf("the link's order_line_id = %q, want %q", got, f.orderLineID)
+	}
+	// How much of the ORDER was consumed — not how much stock moved. Here they are
+	// both 8, which is the ordinary case; the fields are distinct regardless.
+	if got, _ := lm["qty"].(string); got != "8.0000" {
+		t.Errorf("the link's qty = %q, want 8.0000", got)
+	}
+	// The DISPLAY fields, so a form can re-render the link without re-reading the
+	// order. Without these a rebuilt form shows an operator a bare uuid.
+	if got, _ := lm["order_no"].(string); got == "" {
+		t.Errorf("the link came back with an empty order_no; a form rebuilt from this body can "+
+			"only show the operator a uuid. Body: %s", grec.Body.String())
+	}
+	if got, _ := lm["stock_item"].(string); got == "" {
+		t.Errorf("the link came back with an empty stock_item, so a mis-linked row cannot be seen")
+	}
+
+	// ---- THE ROUND TRIP: alter using ONLY what the GET gave us, changing one
+	// unrelated field. This is the exact sequence "open it, fix the narration, save".
+	restated := deliveryBody(f, "8", []any{map[string]any{
+		"line_no":       int(lm["line_no"].(float64)),
+		"order_line_id": lm["order_line_id"].(string),
+		"qty":           lm["qty"].(string),
+	}})
+	restated["narration"] = "Part delivery against the order (typo fixed)"
+	arec, _ := doRaw(t, srv, http.MethodPut,
+		f.base+"/vouchers/delivery-note/"+voucherID, f.ownerTok, restated)
+	if arec.Code != http.StatusOK && arec.Code != http.StatusCreated {
+		t.Fatalf("altering the narration = %d, want 200 (%s)", arec.Code, arec.Body.String())
+	}
+	if out, done, _ := salesOrderBook(t, srv, f); out != "12.0000" || done != "8.0000" {
+		t.Errorf("after altering ONLY the narration, the order reads outstanding=%q fulfilled=%q, "+
+			"want 12/8. The links did not survive a round trip through the GET, so every "+
+			"unrelated edit of a delivery note silently re-opens the order it delivered", out, done)
+	}
+
+	// ---- ⛔ THE CONTROL THAT MAKES THE LEG ABOVE MEAN SOMETHING.
+	//
+	// An alter that omitted the links MUST re-open the order. If it did not — if the
+	// links were keyed on voucher_id and survived regardless — the assertion above
+	// would pass no matter what the GET returned, and this whole test would be inert
+	// while reading as a guard. §9.2's rule: a negative assertion needs a positive
+	// one beside it.
+	orec, _ := doRaw(t, srv, http.MethodPut,
+		f.base+"/vouchers/delivery-note/"+voucherID, f.ownerTok,
+		deliveryBody(f, "8", nil))
+	if orec.Code != http.StatusOK && orec.Code != http.StatusCreated {
+		t.Fatalf("CONTROL: altering with no links = %d, want 200 (%s)", orec.Code, orec.Body.String())
+	}
+	if out, done, _ := salesOrderBook(t, srv, f); out != "20.0000" || done != "0.0000" {
+		t.Fatalf("CONTROL: an alter that OMITS the links left the order at outstanding=%q "+
+			"fulfilled=%q, want 20/0. An alter is supposed to RE-STATE, so omitting the links must "+
+			"clear them — if it does not, the round-trip assertion above proves nothing", out, done)
+	}
+}

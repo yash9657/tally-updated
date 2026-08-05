@@ -48,6 +48,7 @@
 import type { InventoryLineRequest, PhysicalCountLineRequest, VoucherRequest } from "../../api";
 import type { VoucherType } from "../../keystroke/types";
 import { formatFixed4, mulFixed4, parseFixed4 } from "./itemInvoice";
+import { buildFulfilments, type DraftFulfilment } from "./fulfilment";
 
 /** The four classes that move goods and post no accounting lines. */
 export type StockVoucherType =
@@ -131,6 +132,17 @@ export interface StockVoucherLine {
   rate: string;
   /** Display only (the master's unit symbol). */
   unit: string;
+  /**
+   * WHICH ORDER LINES THIS LINE'S GOODS DISCHARGED (T3). Populated only on a
+   * Delivery Note or a Receipt Note — see `fulfilsDirection`, and the guard in
+   * {@link buildStockVoucherRequest} explaining why a TRANSFER cannot carry these
+   * even in principle.
+   *
+   * It lives ON the line so that the 1-based `line_no` each link is sent with is by
+   * construction the position the line itself is sent at. See the same field on
+   * ItemInvoiceLine for the off-by-one this avoids.
+   */
+  fulfilments: readonly DraftFulfilment[];
 }
 
 /** An empty grid row, ready to key. */
@@ -144,6 +156,7 @@ export function emptyStockLine(): StockVoucherLine {
     qty: "",
     rate: "",
     unit: "",
+    fulfilments: [],
   };
 }
 
@@ -288,6 +301,24 @@ export function buildStockVoucherRequest(
     });
   }
   req.inventory = inventory;
+  // ---- THE ORDER LINKS (T3).
+  //
+  // ⛔ ONLY FOR A `fixed-direction` CLASS, AND THE GUARD IS LOAD-BEARING ARITHMETIC
+  // RATHER THAN CAUTION. `buildFulfilments` numbers each link from its line's
+  // position in the array it is given, which is only the position that line is SENT
+  // at when the mapping is one keyed row to one inventory line. On a TRANSFER it is
+  // not: one keyed row pushes TWO movements (the OUT and the IN), so row 2 is
+  // inventory line 3 and every link past the first would name the wrong movement.
+  //
+  // Nothing is lost by excluding them, because neither class can discharge a
+  // commitment anyway — `fulfilsDirection` returns null for both, so the picker is
+  // never rendered on either. A transfer moves goods between our own locations, and a
+  // count restates what is on the shelf; neither is a delivery anybody ordered. This
+  // guard is what makes those two facts one fact instead of two that could drift.
+  if (shape.kind === "fixed-direction") {
+    const fulfilments = buildFulfilments(keyed);
+    if (fulfilments.length > 0) req.fulfilments = fulfilments;
+  }
   return refuseWrongWayGoods(inputs.type, req);
 }
 

@@ -54,6 +54,7 @@ import type {
   GodownListItem,
   GSTLineRequest,
   InventoryLineRequest,
+  FulfilmentView,
   InventoryLineView,
   PhysicalCountLineRequest,
   PostingRequest,
@@ -1660,20 +1661,58 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     return o;
   }
 
+  /**
+   * ONE ORDER WITH ITS FULFILMENT DERIVED FRESH, which is the only correct way to
+   * hand an order to a caller.
+   *
+   * ⛔ `fulfilled_qty` AND `outstanding_qty` ARE COMPUTED HERE ON EVERY READ, not
+   * stored on the line. The stored fields exist only as the shape the rest of this
+   * mock was written against; they are OVERWRITTEN by this function and no caller
+   * should ever see them. That is the server's behaviour and migration 0042's header
+   * gives the reason: a stored figure goes stale undetectably the first time a
+   * fulfilling voucher is ALTERED, because an alter writes a NEW version and re-states
+   * its links without ever visiting the order.
+   *
+   * The sum runs over `c.views`, which holds only the CURRENT version of each voucher
+   * — the mock's equivalent of the `voucher_head.current_version_id` join every reader
+   * of order_fulfilment owes. Without it, a delivery corrected from 5 to 8 counts as
+   * 13.
+   */
+  function orderWithDerivedFulfilment(c: MockCompany, o: MockOrder): OrderView {
+    return {
+      ...o,
+      lines: o.lines.map((l) => {
+        const done = fulfilledFor(c, l.order_line_id, null);
+        const ordered = Number.parseFloat(l.qty);
+        return {
+          ...l,
+          fulfilled_qty: done.toFixed(4),
+          // Never negative: over-fulfilment is refused on the way in, so the clamp is
+          // belt-and-braces on a figure an operator reads rather than a licence to
+          // accept a link that would need it.
+          outstanding_qty: Math.max(0, ordered - done).toFixed(4),
+        };
+      }),
+    };
+  }
+
   async function mockListOrders(
     companyID: string,
     direction: OrderDirection,
     openOnly?: boolean,
   ): Promise<OrderListResponse> {
-    ensure(companyID);
+    const c = ensure(companyID);
     const rows = mockOrders.filter((o) => {
       if (o.direction !== direction) return false;
       if (!openOnly) return true;
       // A closed order is not outstanding however little was delivered, and neither
-      // is a fully delivered one.
+      // is a fully delivered one. DERIVED, not read off the line — see
+      // orderWithDerivedFulfilment.
       return (
         !o.is_closed &&
-        o.lines.some((l) => Number(l.outstanding_qty) > 0)
+        orderWithDerivedFulfilment(c, o).lines.some(
+          (l) => Number(l.outstanding_qty) > 0,
+        )
       );
     });
     return {
@@ -1688,8 +1727,9 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     direction: OrderDirection,
     orderID: string,
   ): Promise<OrderView> {
-    ensure(companyID);
-    return mockFindOrder(direction, orderID);
+    const c = ensure(companyID);
+    // DERIVED on every read, never the stored pair — see orderWithDerivedFulfilment.
+    return orderWithDerivedFulfilment(c, mockFindOrder(direction, orderID));
   }
 
   async function mockCloseOrder(
@@ -1723,11 +1763,14 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     direction: OrderDirection,
     asOn?: string,
   ): Promise<OrderBookResponse> {
-    ensure(companyID);
+    const c = ensure(companyID);
     const rows: OrderBookRow[] = [];
     let total = 0;
-    for (const o of mockOrders) {
-      if (o.direction !== direction || o.is_closed) continue;
+    for (const stored of mockOrders) {
+      if (stored.direction !== direction || stored.is_closed) continue;
+      // DERIVED, so the book moves when a delivery is linked and moves BACK when that
+      // delivery is altered — which is the whole behaviour the report exists for.
+      const o = orderWithDerivedFulfilment(c, stored);
       for (const l of o.lines) {
         const out = Number(l.outstanding_qty);
         // A line with nothing outstanding is EXCLUDED, matching the server: an order
@@ -2380,6 +2423,165 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     }));
   }
 
+  /**
+   * VALIDATE AND PROJECT A REQUEST'S ORDER LINKS (T3), the way the server does.
+   *
+   * ⛔⛔ THE MOCK IGNORED `fulfilments` ENTIRELY UNTIL THE PICKER WAS BUILT, and that
+   * is worse than it sounds. It did not reject them — it silently dropped them, so a
+   * screen keyed a delivery against an order, the post returned 201, and the order
+   * book went on reporting the commitment as fully outstanding. A developer driving
+   * the mock would have concluded their own code was broken; a test suite built on it
+   * would have gone green over a feature that did nothing. It is the same shape as the
+   * T2 defect this file's own test suite exists to catch, one field along.
+   *
+   * The refusals below are diffed against internal/ledger/fulfilment.go, NOT against
+   * the shape a screen would prefer:
+   *
+   *  - a `line_no` naming no inventory line is a 422. It is 1-BASED, so 0 is always
+   *    wrong and the message says so — a client sending an array index is exactly one
+   *    out, and that is the single most likely defect on this field.
+   *  - linking MORE of an order than the line MOVED is a 422: forty units of promise
+   *    cannot be discharged by twenty units of goods.
+   *  - linking more than the order still has OUTSTANDING is a 422 — the deferred
+   *    trigger's job on the real thing, and the refusal that keeps an outstanding
+   *    balance from going negative.
+   *  - an unknown order_line_id is a 422 rather than a 404: the voucher is the
+   *    resource being created, and the bad reference is a fact about its body.
+   */
+  function fulfilmentViews(
+    c: MockCompany,
+    req: VoucherRequest,
+    /** The voucher being ALTERED, whose own existing links do not count against it. */
+    alteringVoucherID: string | null,
+  ): FulfilmentView[] {
+    const links = req.fulfilments ?? [];
+    if (links.length === 0) return [];
+    const inventory = req.inventory ?? [];
+    const out: FulfilmentView[] = [];
+    // How much this request links per order line, so the total can be checked
+    // against what the order still wants.
+    const wantedByLine = new Map<string, number>();
+    for (const f of links) {
+      if (!Number.isInteger(f.line_no) || f.line_no < 1) {
+        throw new ApiError(
+          422,
+          `orders: fulfilment line_no ${f.line_no} is not a line number — it is 1-BASED (the first inventory line is 1), and a client sending an array index will be exactly one out`,
+        );
+      }
+      const line = inventory[f.line_no - 1];
+      if (!line) {
+        throw new ApiError(
+          422,
+          `orders: fulfilment names inventory line ${f.line_no}, but this voucher has ${inventory.length} inventory line(s)`,
+        );
+      }
+      const orderLine = mockOrders
+        .flatMap((o) => o.lines.map((l) => ({ order: o, line: l })))
+        .find((x) => x.line.order_line_id === f.order_line_id);
+      if (!orderLine) {
+        throw new ApiError(
+          422,
+          `orders: fulfilment names order line ${f.order_line_id}, which does not exist on this company`,
+        );
+      }
+      // ⛔ THE ITEM MUST MATCH. A link between a delivery of Widgets and an order for
+      // Gaskets would discharge a commitment nobody met.
+      if (orderLine.line.stock_item_id !== line.stock_item_id) {
+        throw new ApiError(
+          422,
+          `orders: inventory line ${f.line_no} moves a different item from the order line it names — a link between goods that are not the same goods would discharge a commitment nobody met`,
+        );
+      }
+      const linkQty = Number.parseFloat(f.qty || "0");
+      if (!(linkQty > 0)) {
+        throw new ApiError(
+          422,
+          "orders: a fulfilment must consume more than zero of the order — a link that discharges nothing is not a link",
+        );
+      }
+      wantedByLine.set(
+        f.order_line_id,
+        (wantedByLine.get(f.order_line_id) ?? 0) + linkQty,
+      );
+      out.push({
+        line_no: f.line_no,
+        order_id: orderLine.order.order_id,
+        order_line_id: f.order_line_id,
+        order_no: orderLine.order.order_no,
+        stock_item: orderLine.line.stock_item,
+        qty: Number.parseFloat(f.qty).toFixed(4),
+      });
+    }
+    // ⛔ THE SUM PER INVENTORY LINE MUST NOT EXCEED WHAT THAT LINE MOVED. Checked per
+    // line and not per link, because one delivery of 30 legitimately discharges a
+    // 20-unit order and 10 of a second.
+    const linkedByLineNo = new Map<number, number>();
+    for (const f of out) {
+      linkedByLineNo.set(
+        f.line_no,
+        (linkedByLineNo.get(f.line_no) ?? 0) + Number.parseFloat(f.qty),
+      );
+    }
+    for (const [lineNo, linked] of linkedByLineNo) {
+      const moved = Number.parseFloat(inventory[lineNo - 1]?.qty ?? "0");
+      if (linked > moved + 1e-9) {
+        throw new ApiError(
+          422,
+          `orders: inventory line ${lineNo} moves ${moved.toFixed(4)} but links ${linked.toFixed(4)} to orders — forty units of promise cannot be discharged by twenty units of goods`,
+        );
+      }
+    }
+    // ⛔ AND NOT MORE THAN THE ORDER STILL HAS OUTSTANDING. This is the deferred
+    // trigger's job on the real thing. `alteringVoucherID` is excluded because an
+    // ALTER RE-STATES: the version being replaced must not count against its own
+    // replacement, or correcting a delivery from 5 to 8 would be refused as though 13
+    // had been delivered.
+    for (const [orderLineID, wanted] of wantedByLine) {
+      const already = fulfilledFor(c, orderLineID, alteringVoucherID);
+      const ordered = Number.parseFloat(
+        mockOrders
+          .flatMap((o) => o.lines)
+          .find((l) => l.order_line_id === orderLineID)?.qty ?? "0",
+      );
+      if (already + wanted > ordered + 1e-9) {
+        throw new ApiError(
+          422,
+          `orders: this would discharge ${(already + wanted).toFixed(4)} of an order line committing only ${ordered.toFixed(4)} — the outstanding balance would go negative, and "the customer owes us -5 units of promise" is not a fact about anything`,
+        );
+      }
+    }
+    return out;
+  }
+
+  /**
+   * How much of ONE order line has been discharged, summed across CURRENT voucher
+   * versions.
+   *
+   * ⛔ DERIVED ON EVERY READ AND STORED NOWHERE, exactly as the server does it and for
+   * the reason migration 0042's header gives: a stored `fulfilled_qty` goes stale
+   * undetectably the first time a fulfilling voucher is ALTERED, because an alter
+   * writes a NEW version and re-states its links without ever visiting the order.
+   *
+   * `c.views` holds only the CURRENT version of each voucher (an alter replaces the
+   * entry and a delete removes it), so summing over it is the mock's equivalent of the
+   * `voucher_head.current_version_id` join every reader of this table owes. Without
+   * that property a delivery corrected from 5 to 8 would count as 13.
+   */
+  function fulfilledFor(
+    c: MockCompany,
+    orderLineID: string,
+    excludeVoucherID: string | null,
+  ): number {
+    let total = 0;
+    for (const [voucherID, view] of c.views) {
+      if (voucherID === excludeVoucherID) continue;
+      for (const f of view.fulfilments ?? []) {
+        if (f.order_line_id === orderLineID) total += Number.parseFloat(f.qty);
+      }
+    }
+    return total;
+  }
+
   /** Map a request's bill allocations into BillAllocationViews (canonical D/C). */
   function billViews(req: VoucherRequest): BillAllocationView[] {
     return (req.bill_allocations ?? []).map((b) => ({
@@ -2543,6 +2745,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       postings: postingViews,
       bill_allocations: billViews(req),
       inventory: inventoryViews(c, req),
+      // The ORDER LINKS. Validated first (fulfilmentViews throws the server's own
+      // refusals), so an over-fulfilment never reaches the store. `null` because a
+      // CREATE has no prior version of itself to exclude.
+      fulfilments: fulfilmentViews(c, req, null),
     });
     return {
       voucher_id: voucherID,
@@ -2629,6 +2835,16 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       postings: postingViews,
       bill_allocations: billViews(req),
       inventory: inventoryViews(c, req),
+      // ⛔ AN ALTER RE-STATES THE LINKS: whatever this body carries becomes the
+      // current version's links, and whatever it omits is GONE. That is why the
+      // voucher GET has to return them (it does) and why a form must send back what
+      // it read — otherwise fixing a typo in the narration silently re-opens a
+      // delivered order.
+      //
+      // `voucherID` is passed as the exclusion so this voucher's OWN superseded links
+      // do not count against its replacement: correcting a delivery from 5 to 8 must
+      // not be refused as though 13 had been delivered.
+      fulfilments: fulfilmentViews(c, req, voucherID),
     });
     return {
       voucher_id: voucherID,

@@ -6,12 +6,15 @@ import { useRegisterScreenAction } from "../../app/ScreenActions";
 import { useLoadedVoucher } from "../../app/LoadedVoucher";
 import { ApiError } from "../../api";
 import type {
+  FulfilmentView,
   GodownListItem,
   StockItemListItem,
   VoucherRequest,
   VoucherResponse,
 } from "../../api";
 import { configFor } from "./voucherConfig";
+import { FulfilmentPicker } from "./FulfilmentPicker";
+import { fulfilsDirection } from "./fulfilment";
 import {
   buildStockVoucherRequest,
   emptyStockLine,
@@ -116,6 +119,18 @@ export function StockVoucherScreen({ snapshot }: { snapshot: NavSnapshot }) {
    */
   const alterRefusal = isAlter ? stockAlterRefusal(type) : null;
 
+  /**
+   * Which order family THIS CLASS can discharge, or null.
+   *
+   * Non-null only for a Delivery Note (goods OUT → a SALES order) and a Receipt Note
+   * (goods IN → a PURCHASE order). A Stock Journal transfers between our own
+   * locations and a Physical Stock voucher is a count, so neither discharges any
+   * commitment — and `buildStockVoucherRequest` refuses to emit links for them for a
+   * second, arithmetic reason as well (a transfer's one keyed row becomes TWO
+   * movements, so a link's line number could not be derived from the row).
+   */
+  const fulfilsDir = fulfilsDirection(type as VoucherType);
+
   const seedRef = useRef<string | null>(null);
   useEffect(() => {
     if (!loadedVoucherID || alterRefusal || seedRef.current === loadedVoucherID) return;
@@ -129,7 +144,9 @@ export function StockVoucherScreen({ snapshot }: { snapshot: NavSnapshot }) {
         setVoucherNo(view.voucher_no);
         setNarration(view.narration);
         setParty(view.party);
-        setLines(linesFromView(view.inventory ?? [], shape.kind));
+        setLines(
+          linesFromView(view.inventory ?? [], shape.kind, view.fulfilments ?? []),
+        );
       })
       .catch((err: unknown) => {
         if (!cancelled) {
@@ -307,6 +324,14 @@ export function StockVoucherScreen({ snapshot }: { snapshot: NavSnapshot }) {
               </th>
               <th className="pr-2 text-right">Rate</th>
               <th className="pr-2 text-right">Value</th>
+              {/* THE ORDER LINK column, on the classes that can discharge a
+                  commitment — a Delivery Note and a Receipt Note. A transfer and a
+                  count can discharge none, so the column is absent rather than
+                  present-and-empty: an empty column invites the question "why can I
+                  not link this?", and the answer is that there is nothing to link. */}
+              {fulfilsDir !== null ? (
+                <th className="pr-2">Against order</th>
+              ) : null}
               <th />
             </tr>
           </thead>
@@ -384,6 +409,22 @@ export function StockVoucherScreen({ snapshot }: { snapshot: NavSnapshot }) {
                 <td className="pr-2 text-right" data-testid={`stock-value:${i}`}>
                   {isKeyedStockLine(l, shape) ? mulFixed4(l.qty, l.rate) : "—"}
                 </td>
+                {/* ⛔ ON THE ROW THE OPERATOR IS ALREADY LOOKING AT, not in a modal.
+                    The link belongs to the goods on this line, and a separate panel
+                    would have to ask the operator to re-identify the line — which
+                    means asking for the line number, the one thing this must never
+                    do. See FulfilmentPicker's header. */}
+                {fulfilsDir !== null ? (
+                  <td className="pr-2">
+                    <FulfilmentPicker
+                      line={l}
+                      lineIndex={i}
+                      direction={fulfilsDir}
+                      testIdPrefix="stock"
+                      onChange={(fulfilments) => setRow(i, { fulfilments })}
+                    />
+                  </td>
+                ) : null}
                 <td>
                   {lines.length > 1 ? (
                     <button
@@ -425,6 +466,8 @@ export function StockVoucherScreen({ snapshot }: { snapshot: NavSnapshot }) {
 /** Seed the grid from a fetched voucher's projected movements. */
 function linesFromView(
   inventory: readonly {
+    /** 1-BASED, and what the order links are matched on. */
+    line_no: number;
     stock_item_id: string;
     item: string;
     godown_id: string;
@@ -434,6 +477,13 @@ function linesFromView(
     rate: string;
   }[],
   kind: "fixed-direction" | "transfer" | "count",
+  /**
+   * The voucher's stored ORDER LINKS. ⛔ REQUIRED FOR CORRECTNESS, NOT DECORATION:
+   * an ALTER re-states them, so rebuilding this grid without them makes the next save
+   * of any unrelated field silently re-open a delivered order. See the same note in
+   * VoucherScreen's itemsFromView.
+   */
+  fulfilments: readonly FulfilmentView[],
 ): StockVoucherLine[] {
   // A TRANSFER's stored movements are PAIRS, and re-pairing them by position
   // would be a guess: two transfers of the same item on one voucher project as
@@ -450,6 +500,20 @@ function linesFromView(
     qty: l.qty,
     rate: l.rate,
     unit: "",
+    // Matched on the STORED 1-based line_no, not on this array's index — see the
+    // parameter's note, and the identical derivation in VoucherScreen.
+    fulfilments: fulfilments
+      .filter((f) => f.line_no === l.line_no)
+      .map((f) => ({
+        orderLineId: f.order_line_id,
+        qty: f.qty,
+        orderNo: f.order_no,
+        itemName: f.stock_item,
+        // Not on this body, and not guessed: the outstanding balance is derived
+        // across every current version, so a number invented here would be a claim
+        // about other vouchers.
+        outstandingAtPick: "",
+      })),
   }));
   return rows.length > 0 ? rows : [emptyStockLine()];
 }
