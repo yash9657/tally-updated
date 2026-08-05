@@ -1,3 +1,15 @@
+# ⛔ SPENT — SUPERSEDED BY `HANDOFF.md` (2026-08-05, at `c4f91e6`).
+
+> **DO NOT WORK FROM THIS FILE.** Everything still true in it has been folded into `HANDOFF.md`,
+> which is one file rather than a twelfth. This is kept only for its reasoning, and it is on the
+> list in `HANDOFF.md` §11 of files to `git rm` when the repo owner agrees.
+>
+> Its scope call was right and its Phase 0 was executed in full. Two things in it are now KNOWN WRONG
+> and are corrected in `HANDOFF.md`: §3.1 item 5 says to front-load the ACL migration in Phase 0
+> (you cannot — it ships with its report), and §0's scoreboard predates T3's backend and T5's core.
+
+---
+
 # HANDOFF — NEXT: T3's API + SCREENS, AND T5. PHASE 0 IS BUILT AND THE ORDER SPINE IS REACHABLE.
 
 > ### ⛔ THIS IS THE LIVE HANDOFF, UPDATED IN PLACE. Every other `HANDOFF-*.md` in this repo is SPENT — see §11.
