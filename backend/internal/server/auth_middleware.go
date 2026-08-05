@@ -597,7 +597,77 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 		}
 		return "", "", "", false
 
-	// TDS DEDUCTOR STATUS (Item Zero step 2): whether this company must deduct
+	// THE COST MASTERS (T2, migration 0040) — the axes of cost analysis and the
+	// positions on them.
+	//
+	//   GET  .../cost-categories                  -> Display / cost-centre
+	//   POST .../cost-categories                  -> Create  / cost-centre
+	//   PUT  .../cost-categories/{categoryID}     -> Alter   / cost-centre
+	//   GET  .../cost-centres[?cost_category_id=] -> Display / cost-centre
+	//   POST .../cost-centres                     -> Create  / cost-centre
+	//   PUT  .../cost-centres/{centreID}          -> Alter   / cost-centre
+	//
+	// ONE TOKEN FOR ALL SIX — both masters, both halves of each — as for
+	// /deductor-status below and for the same reason: they are authorities over the
+	// SAME small object (the shape of this company's cost analysis), so one token keeps
+	// one rule governing all of it. They are not separable in any case: a centre's
+	// cost_category_id is NOT NULL, so a level that may create a centre must be able
+	// to read the axes, and an axis with no centres allocates nothing.
+	//
+	// ⛔ A BARE RESOURCE TOKEN, DELIBERATELY NOT `report:cost-centre`. internal/authz
+	// matches a bare `report` rule against ANY `report:NAME` at specificity 1, so a
+	// report name would be GRANTED to every seeded Data Entry level by migration 0011's
+	// `allow display report` — a rule written years ago for another purpose — and taking
+	// it back would need a counterweight migration, which is exactly why 0068 exists
+	// for report:tds-register. As a bare token, Data Entry (default_access 'none', every
+	// rule it carries naming a specific token) is refused all six routes with NO ACL
+	// MIGRATION AT ALL. State the consequence plainly: DATA ENTRY CAN NEITHER SEE NOR
+	// CREATE COST MASTERS until an administrator writes `allow create cost-centre`
+	// through the admin API. Creating an axis decides how every future allocation is
+	// grouped and a wrong axis is invisible on every voucher that used it, so the
+	// refusal is the recoverable direction and the grant is a tenant's decision.
+	//
+	// ⛔ `cost-centre` IS THEREFORE NOT IN authz.KnownReportNames AND MUST NOT BE ADDED.
+	// server.go loops over that list and auto-mounts GET /print/reports/<name>; a name
+	// with no reportName() case is a route routeAction cannot map, i.e. default-DENY for
+	// every level including the Owner. That bug already shipped once for
+	// reconciliation-queue — see the reports arm below. The two COST REPORTS
+	// (report:cost-centre-summary, report:cost-category-summary) ARE report names and
+	// are reached by that arm, not by this one.
+	//
+	// The POSTs and PUTs are writes and inherit whatever step-up the level requires of
+	// a Create or an Alter. ⚠️ THE BACK-DATED CUTOFF IS INERT ON ALL SIX, AND THAT IS
+	// STATED RATHER THAN LEFT IMPLIED: none of these bodies carries a date,
+	// voucherDateFromRequest finds none, and cutoffDeny skips entirely on a nil date.
+	// Renaming an axis is not a back-dated act and there is nothing here for the cutoff
+	// to judge. A comment asserting a control that never runs is worse than a missing
+	// control, which is the lesson the /tds-challans arm below records at length.
+	case strings.HasPrefix(rest, "/cost-categories"):
+		switch method {
+		case http.MethodGet:
+			return authz.Display, "cost-centre", "", true
+		case http.MethodPost:
+			return authz.Create, "cost-centre", "", true
+		case http.MethodPut:
+			return authz.Alter, "cost-centre", "", true
+		}
+		// Any other method default-denies rather than being silently treated as one
+		// of the three above.
+		return "", "", "", false
+
+	case strings.HasPrefix(rest, "/cost-centres"):
+		switch method {
+		case http.MethodGet:
+			return authz.Display, "cost-centre", "", true
+		case http.MethodPost:
+			return authz.Create, "cost-centre", "", true
+		case http.MethodPut:
+			return authz.Alter, "cost-centre", "", true
+		}
+		return "", "", "", false
+
+	
+// TDS DEDUCTOR STATUS (Item Zero step 2): whether this company must deduct
 	// at all, per tax year. Tally's F11 > Enable TDS > TDS Deductor Details.
 	//
 	//   GET .../deductor-status            -> Display / deductor-status
@@ -1068,6 +1138,33 @@ func reportName(rest string) string {
 	// looks like a filed register is worse than a refusal.
 	case "/tds-register":
 		return "tds-register"
+	// THE TWO COST REPORTS (T2, migration 0040): the Cost Centre Summary for ONE
+	// axis, and the per-axis Cost Category Summary that shows what is NOT
+	// allocated. Here for the reason the three entries above record: a name in
+	// authz.KnownReportNames that this function does not know is a name some arms
+	// serve and others default-deny, and routes() mounts /print/reports/<name> for
+	// EVERY known name — so omitting either would leave a mounted route that is
+	// unreachable for every level INCLUDING the Owner. That bug already shipped
+	// once for reconciliation-queue.
+	//
+	// Both are Displays, so neither inherits the back-dated write cutoff or the
+	// WebAuthn step-up (both gate on Action.IsWrite()).
+	//
+	// ⚠️ NEITHER NEEDS AN ARM OF ITS OWN IN routeAction, and adding one would be a
+	// mistake. Both route paths are flat literals equal to these names, so the
+	// `method == GET && reportName(rest) != ""` arm already maps them — which is
+	// the only arrangement under which the two places cannot disagree. The axis of
+	// the Cost Centre Summary rides in ?cost_category_id= rather than in the path,
+	// for the flat-literal reason the /stock-item-vouchers comment below states at
+	// length.
+	//
+	// Printing either answers 501: no printed layout has been specified for a cost
+	// statement, and a blank page that looks like a filed one is worse than a
+	// refusal — the same call bank-statement and tds-register record above.
+	case "/cost-centre-summary":
+		return "cost-centre-summary"
+	case "/cost-category-summary":
+		return "cost-category-summary"
 	case "/trial-balance":
 		return "trial-balance"
 	case "/balance-sheet":

@@ -15,7 +15,16 @@ package server
 //	stock-movement, godown-summary, batch-summary, stock-item-vouchers,
 //	itc-reconciliation, ims-inbox,
 //	payroll-form-138, payroll-pf-ecr, payroll-esi-return,
-//	tds-register
+//	tds-register,
+//	cost-centre-summary, cost-category-summary
+//
+// The two cost reports (T2) are deferred for the reason bank-reconciliation
+// originally was: the Cost Centre Summary is always for ONE cost category, and
+// the print route is a flat literal carrying no axis. Printing "the first axis"
+// would put a real, correctly rendered Department report on paper for a company
+// whose question was about Branches, with nothing on the page saying so. The
+// selector is a query parameter on the DISPLAY route; giving the print route the
+// same treatment is a layout decision nobody has taken yet.
 //
 // They stay MAPPED on purpose. A name the router does not emit is a name an
 // administrator's rule can never match (internal/authz/vocabulary.go's whole

@@ -1260,8 +1260,8 @@ func TestTheUnimplementedReportsAreStillGovernableAndSaySo(t *testing.T) {
 	// it is ever printed it should be printed as evidence of an IMPORT — what
 	// file, read how, by whom — which is a different document from the one this
 	// slug names.
-	if deferred != 16 {
-		t.Errorf("expected 16 deferred report names, saw %d: handler_print_reports.go's header "+
+	if deferred != 18 {
+		t.Errorf("expected 18 deferred report names, saw %d: handler_print_reports.go's header "+
 			"lists the deferred set explicitly and it is now out of step with "+
 			"authz.KnownReportNames", deferred)
 	}
@@ -1850,10 +1850,10 @@ var printAllowedByMigration0038 = []struct{ resource, cannotHandOver string }{
 
 // printDisallowedBySeededMigrations is every `disallow print` row the seeded
 // Data Entry level carries, with what each one discloses if the refusal is not
-// honoured. SIXTEEN rows: fifteen report names and the pay run class.
+// honoured. EIGHTEEN rows: seventeen report names and the pay run class.
 //
 // Twelve come from migration 0038; the rest from 0046 (bank-reconciliation),
-// 0068 (tds-register) and 0063 (bank-statement).
+// 0068 (tds-register), 0063 (bank-statement) and 0072 (the two cost reports).
 //
 // THE LIST IS WRITTEN OUT HERE RATHER THAN READ FROM THE MIGRATIONS on purpose:
 // it is the independent statement of what the product promises, so deleting a
@@ -1909,6 +1909,16 @@ var printDisallowedBySeededMigrations = []struct{ resource, discloses string }{
 	{"report:bank-statement",
 		"the bank's own file of every movement on the account, including the ones " +
 			"no voucher has been keyed for: salaries, drawings, loan repayments"},
+	// From migration 0072 (T2). Departmental profitability: which part of the
+	// business earns and which loses. It is the tds-register exposure one table
+	// over -- that report leaks who the company trades with, these leak what each
+	// part of it is worth -- and the pair is refused together because a report
+	// that cannot be displayed but CAN be printed is a leak with a paper trail.
+	{"report:cost-centre-summary",
+		"what every department, branch or project cost, rolled up through its own hierarchy"},
+	{"report:cost-category-summary",
+		"which analyses of the business are incomplete, and by how much -- the shape of " +
+			"the management accounts before anyone outside has seen them"},
 }
 
 // TestAnOwnerWritingOneConvenientAllowPrintStarStillCannotHandOverTheWageBill is

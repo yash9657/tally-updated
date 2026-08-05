@@ -269,6 +269,50 @@ var KnownResources = append([]Resource{
 	// report:tds-profile` in the same migration. TestTDSProfileAuthMatrix pins the
 	// current answers.
 	"tds-profile",
+
+	// THE COST MASTERS (T2, migration 0040): the AXES of cost analysis (Department,
+	// Branch, Project) and the POSITIONS on them. Tally keeps them at Gateway >
+	// Accounts Info > Cost Categories / Cost Centres and ships one axis, "Primary Cost
+	// Category", so a company that wants a single axis already has one.
+	//
+	// ONE TOKEN FOR BOTH TABLES AND BOTH HALVES OF EACH. A centre's cost_category_id is
+	// NOT NULL, so the two are one object in practice: nobody can create a centre
+	// without reading the axes, and an axis with no centres allocates nothing.
+	// Splitting them would produce two tokens that must always be granted together,
+	// which is a rule an administrator can only get wrong. This is the masters
+	// reasoning, not bank-reconciliation's — there the read and the write are
+	// authorities over DIFFERENT objects.
+	//
+	// A BARE TOKEN AND NOT A REPORT NAME, which is the decision this entry records —
+	// `tds-profile` above reaches the same answer from the other direction.
+	// internal/authz matches a bare `report` rule against ANY `report:NAME` at
+	// specificity 1, so `report:cost-centre` would be GRANTED to every seeded Data
+	// Entry level by migration 0011's `allow display report`, and taking it back would
+	// need a 0068-style counterweight migration. As a bare token, Data Entry's
+	// default_access 'none' refuses every cost-master route and every rule it carries
+	// names a specific token, so a token never mentioned stays denied.
+	//
+	// NO ACL MIGRATION ACCOMPANIES IT, and that is the point rather than an omission.
+	// Stated plainly: DATA ENTRY CAN NEITHER SEE NOR CREATE COST MASTERS with no rule
+	// written. Creating an axis decides how every future allocation is GROUPED, and a
+	// wrong axis is invisible on every voucher that used it — the allocation still sums
+	// to the posting, it is just filed under the wrong heading — so the default belongs
+	// with whoever owns the chart of analysis. An administrator who wants a clerk
+	// maintaining centres writes an explicit `allow create cost-centre` through the
+	// admin API, which is what the separate token makes POSSIBLE, not automatic.
+	//
+	// NAMED `cost-centre` AND NOT `cost-master` OR `cost-category`, deliberately: it is
+	// the word an operator already knows, and sitting in a rule list beside the two
+	// cost REPORT names (report:cost-centre-summary, report:cost-category-summary) a
+	// token one word away from either is how an administrator grants the wrong one.
+	//
+	// ⛔ AND IT MUST NEVER BE ADDED TO KnownReportNames BELOW. server.go loops over that
+	// list and auto-mounts GET /print/reports/<name>; a name with no reportName() case
+	// is a route routeAction cannot map, i.e. default-DENY for everyone including the
+	// Owner. That bug already shipped once for reconciliation-queue. The two cost
+	// SUMMARIES are report names and are registered as such; this is the MASTERS token
+	// and is not one of them.
+	"cost-centre",
 }, KnownVoucherClasses...)
 
 // KnownReportNames is every report a rule may name via the "report:NAME" form.
@@ -297,6 +341,45 @@ var KnownReportNames = []string{
 	// of suppliers this company pays and customers it collects from, with
 	// amounts. Exactly the bank-statement problem, one table over.
 	"tds-register",
+	// THE TWO COST REPORTS (T2, migration 0040). Report NAMES, so an ACL
+	// counterweight can write `disallow display report:NAME` and
+	// `disallow print report:NAME` at specificity 2 for each — without which
+	// migration 0011's coarse `allow display report` reaches them at specificity 1
+	// and every seeded Data Entry operator can read the company's internal cost
+	// structure. Exactly the bank-statement and tds-register problem, one table
+	// over.
+	//
+	// THE COUNTERWEIGHT IS MIGRATION 0072_cost_report_acl.sql, AND IT IS LIVE. It
+	// writes `disallow display` and `disallow print` for both names below, seeds
+	// them for new companies and backfills existing ones. Measured on a database
+	// migrated from empty and then seeded: all four rows present, 35 report rules
+	// on the level.
+	//
+	// ⚠️ 0072 AND NOT 0041, WHICH PLAN-TALLY-PARITY.md §2.5 ORIGINALLY RESERVED FOR
+	// IT — 0041 is now permanently unused. seed_company_auth_defaults is extended
+	// only by restating its whole plpgsql body, migrations.go applies files in
+	// sort.Strings order, and the highest-numbered restatement is the only body
+	// that survives. Rules written at 0041 would be silently overwritten by
+	// 0071_seeder_order_repair.sql's older body on every fresh database, which is
+	// precisely the defect 0071 exists to repair. Anything that later needs an ACL
+	// rule must derive from the highest-numbered restatement and take a number
+	// above it.
+	//
+	// Each is named on its own rather than sharing one token, because a name is the
+	// only thing an administrator can write a rule against and the two are
+	// different disclosures:
+	//
+	//	cost-centre-summary   — what each department, branch or project COST over a
+	//	  period, rolled up through the centre hierarchy. It is the company's cost
+	//	  structure stated outright — which team is expensive, which branch loses
+	//	  money — and is a sharper disclosure than the Profit & Loss, which shows
+	//	  the same money with the analysis removed.
+	//	cost-category-summary — how much of the period's allocable cost each axis
+	//	  accounts for, and the UNALLOCATED remainder. Chasing that gap is exactly
+	//	  the clerical job an owner would delegate, and one shared name would make
+	//	  "a clerk may see WHICH analysis is incomplete but not what each department
+	//	  cost" an unwritable rule.
+	"cost-centre-summary", "cost-category-summary",
 	// The Stock Summary is a REPORT, not a master list: its numbers are
 	// DERIVED by replaying the movement ledger through a valuer, and nothing
 	// it prints is stored anywhere. Naming it here is what lets an

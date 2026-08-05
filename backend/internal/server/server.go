@@ -494,6 +494,44 @@ func (s *Server) routes() {
 		r.Get("/stock-items", s.handleListStockItems)
 		r.Get("/units", s.handleListUnits)
 
+		// THE COST MASTERS (T2, migration 0040) — the AXES of cost analysis and the
+		// POSITIONS on them. A cost CATEGORY is an axis (Department, Branch, Project);
+		// a cost CENTRE is a position on that axis. Several axes exist in order to
+		// allocate the SAME money in parallel — one salary posting split across
+		// Departments AND again, in full, across Branches — so nothing on these routes
+		// ever totals across them. masters/cost_centre.go has the model.
+		//
+		// WITHOUT THESE ROUTES COST ALLOCATION IS UNUSABLE. cost_centre.cost_category_id
+		// is NOT NULL and nothing else writes either table, so until now an axis could
+		// only be created by raw SQL and the allocation picker was permanently empty —
+		// the same hole /deductor-status below exists to close for TDS.
+		//
+		// ALL SIX CARRY THE BARE RESOURCE TOKEN `cost-centre` — read and write, axes and
+		// centres alike — because they are authorities over ONE small object: the shape
+		// of this company's cost analysis. They are not separable in practice either, a
+		// centre must name an axis, so whoever may create one must be able to read them.
+		// ⛔ NOT a report name: `report:cost-centre` is reached by migration 0011's coarse
+		// `allow display report` at specificity 1 and would be granted to every seeded
+		// Data Entry level. handler_cost_centre.go records the argument in full; it is the
+		// same one tds-challan and tds-profile record.
+		//
+		// The two collections are DISTINCT LITERALS (neither is a prefix of the other),
+		// and each {param} child is registered after its own collection, so there is no
+		// chi literal-vs-parameter collision to order around.
+		//
+		// THE PUTs ARE WHOLE-ROW RESTATEMENTS AND NOT PATCHES, the same call
+		// PUT .../tds-profile makes: a centre's name, parent and axis are validated
+		// AGAINST EACH OTHER (the within-axis uniqueness scope, the same-axis parent rule,
+		// the parent cycle), so a partial body is not checkable. ⚠️ A PUT that omits
+		// parent_id therefore moves the centre to the TOP of its axis; the response echoes
+		// the stored row so that is visible at once rather than on a report a month later.
+		r.Get("/cost-categories", s.handleListCostCategories)
+		r.Post("/cost-categories", s.handleCreateCostCategory)
+		r.Put("/cost-categories/{categoryID}", s.handleRenameCostCategory)
+		r.Get("/cost-centres", s.handleListCostCentres)
+		r.Post("/cost-centres", s.handleCreateCostCentre)
+		r.Put("/cost-centres/{centreID}", s.handleAlterCostCentre)
+
 		// Vouchers: one endpoint per accounting class (F4-F9). The body is the
 		// same generic voucher shape; the path fixes the class.
 		r.Post("/vouchers/sales", s.postVoucher(ledger.Sales))
@@ -706,6 +744,32 @@ func (s *Server) routes() {
 		// Migration 0068 disallows it for Data Entry at specificity 2 — it lists
 		// every supplier paid and customer collected from, with amounts.
 		r.Get("/tds-register", s.handleTDSRegister)
+
+		// THE TWO COST REPORTS (T2, migration 0040) — "which department bore this
+		// cost", and "what am I missing".
+		//
+		// FLAT LITERAL segments equal to their report names, per
+		// PLAN-TALLY-PARITY.md §2.4: TestReportVocabularyMatchesRouter walks
+		// authz.KnownReportNames and asserts GET /v1/companies/{id}/<name>
+		// resolves for every one, so a tidier /cost-categories/{id}/summary would
+		// leave a vocabulary entry no route serves — a `disallow` an administrator
+		// can write that can never match.
+		//
+		// ⛔ THE AXIS IS A QUERY PARAMETER (?cost_category_id=), the way
+		// stock-item-vouchers takes stock_item_id, and it is REQUIRED. A cost
+		// category is an AXIS and the same money is allocated IN FULL on every
+		// axis, so defaulting it would render a real, correctly-footed report for
+		// an axis nobody chose, and summing the axes would report a multiple of
+		// the cost actually borne. The refusal names the axes this company has —
+		// see handler_cost_summary.go.
+		//
+		// Both are a Display, so neither inherits the back-dated write cutoff or
+		// the WebAuthn step-up (both gate on Action.IsWrite()). Both carry the
+		// company's internal cost structure, which is why the ACL counterweight
+		// migration disallows them for the seeded Data Entry level at
+		// specificity 2.
+		r.Get("/cost-centre-summary", s.handleCostCentreSummary)
+		r.Get("/cost-category-summary", s.handleCostCategorySummary)
 
 		// Forecast/anomaly reports (wave-2 WS5a).
 		r.Get("/cash-flow", s.handleCashFlow)

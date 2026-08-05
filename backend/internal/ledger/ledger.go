@@ -246,6 +246,39 @@ type VoucherInput struct {
 	// before migration 0032, and every sales voucher forever, hashing to exactly
 	// the bytes it always did.
 	Inward *InwardDocument
+	// CostAllocations are how this voucher's postings were split across cost
+	// centres — "of the 1,00,000 of salary, Sales bore 60,000 and Admin 40,000".
+	// See cost_allocation.go.
+	//
+	// ⛔⛔ A CATEGORY IS AN AXIS AND A CENTRE IS A POSITION ON IT, so the SAME
+	// posting is allocated IN FULL ONCE PER CATEGORY: the same 1,00,000 is split
+	// across Departments AND, in parallel and also in full, across Branches. Both
+	// sets are complete and both are correct. Every check on this slice therefore
+	// groups by (posting, CATEGORY) and never by posting alone — a posting-wide
+	// total comes to twice the cost for two axes and would refuse correct data.
+	//
+	// Each entry names its posting by its 0-BASED INDEX INTO Postings, which is
+	// also what rides in the hashed payload. It is written to
+	// posting_cost_allocation AND into CanonicalPayload.CostAllocations from this
+	// ONE slice inside ONE transaction, so the rows and the signature cannot
+	// disagree.
+	//
+	// An ALTER RE-STATES the allocations, exactly as it re-states the postings
+	// they split: a version says what the voucher is NOW, so an alter that omits
+	// them clears the split, and — because an ALTER writes NEW posting rows —
+	// they are re-derived against those new postings and never attached to the
+	// superseded ones. A DELETE tombstone carries NONE, the same rule postings,
+	// GST lines, stock movements and the supplier's inward document already
+	// follow: a tombstone that restated the split would leave a deleted cost
+	// sitting on a department's summary forever while the voucher had vanished
+	// from the P&L.
+	//
+	// An empty slice writes nothing at all: no rows, and no "cost_allocations"
+	// key in the payload. That is what keeps every voucher posted before
+	// migration 0040 hashing to exactly the bytes it always did. A posting with
+	// NO allocation is legal and stays legal — allocation is optional per
+	// ledger, and most postings in most books will never be allocated.
+	CostAllocations []CostAllocationInput
 	// GST, when non-nil and Class is Sales or Purchase, drives auto-derivation
 	// and verification of the tax lines.
 	GST *GSTParams
@@ -557,6 +590,45 @@ type VoucherView struct {
 	// GetVoucher -> rebuild VoucherInput -> AlterVoucher — restates the same
 	// movements instead of silently zeroing the stock.
 	InventoryLines []InventoryLineView
+	// CostAllocations are the head version's cost-centre splits, and they are
+	// here for EXACTLY the reason InventoryLines above is.
+	//
+	// ⛔ AN ALTER RE-STATES: a version says what the voucher is NOW, so an alter
+	// that omits the allocations CLEARS them. Without this field the ordinary
+	// round trip — open a voucher, change the narration, save — reads a voucher
+	// that has no allocations, rebuilds a VoucherInput with none, and silently
+	// destroys the departmental split of a cost that is still in the Profit &
+	// Loss. Nothing refuses it: zero allocations is a legal state, so the sum
+	// trigger has nothing to fire on, and the only trace is a Cost Centre Summary
+	// that quietly stops adding up to the P&L.
+	//
+	// This is the third time this shape has bitten: postings had it, InventoryLines
+	// had it and says so, and this is the same bug one field along.
+	CostAllocations []CostAllocationView
+}
+
+// CostAllocationView is one cost-centre allocation of the head version, carrying
+// real uuids AND names.
+//
+// ⚠️ PostingSeq IS AN INDEX INTO THIS VIEW'S OWN Postings SLICE, and it is NOT
+// necessarily the sequence that was signed into the hashed payload. GetVoucher
+// orders postings by (dr_cr DESC, amount DESC) to match the day book's
+// projection, while the payload's order is the order the client stated. The index
+// is therefore RE-DERIVED here against the slice this same read returns, which is
+// what makes GetVoucher -> AlterVoucher self-consistent: the caller sends back the
+// seq that indexes the postings it was just given.
+//
+// Do not "fix" this by trying to recover the original payload sequence. `posting`
+// has no ordinal column, so it is not recoverable from the rows — and it does not
+// need to be, because an ALTER re-states the whole voucher against its own new
+// postings.
+type CostAllocationView struct {
+	PostingSeq       int
+	CostCategoryID   uuid.UUID
+	CostCategoryName string
+	CostCentreID     uuid.UUID
+	CostCentreName   string
+	Amount           decimal.Decimal
 }
 
 // GetVoucher returns the CURRENT (head) version of one logical voucher, with its
@@ -615,8 +687,13 @@ func (s *Service) GetVoucher(ctx context.Context, voucherID uuid.UUID) (VoucherV
 
 		// Postings of the current version, with real ledger ids + names. Same
 		// projection and ordering as the day book's loadPostings.
+		// p.id is selected but NOT projected: it is needed only to index the cost
+		// allocations below against the position each posting occupies in THIS
+		// slice. See CostAllocationView on why that index, and not the signed
+		// payload's, is the correct one to hand back.
+		postingSeqByID := map[uuid.UUID]int{}
 		prows, err := tx.Query(ctx,
-			`SELECT p.ledger_id, COALESCE(l.name, ''), p.dr_cr::text, p.amount
+			`SELECT p.id, p.ledger_id, COALESCE(l.name, ''), p.dr_cr::text, p.amount
 			   FROM posting p
 			   LEFT JOIN ledger l ON l.id = p.ledger_id
 			  WHERE p.company_id = $1 AND p.voucher_version_id = $2
@@ -628,13 +705,68 @@ func (s *Service) GetVoucher(ctx context.Context, voucherID uuid.UUID) (VoucherV
 		defer prows.Close()
 		for prows.Next() {
 			var p PostingView
-			if err := prows.Scan(&p.LedgerID, &p.LedgerName, &p.DrCr, &p.Amount); err != nil {
+			var pid uuid.UUID
+			if err := prows.Scan(&pid, &p.LedgerID, &p.LedgerName, &p.DrCr, &p.Amount); err != nil {
 				return fmt.Errorf("ledger: scan posting: %w", err)
 			}
+			postingSeqByID[pid] = len(v.Postings)
 			v.Postings = append(v.Postings, p)
 		}
 		if err := prows.Err(); err != nil {
 			return fmt.Errorf("ledger: iterate postings: %w", err)
+		}
+
+		// Cost allocations of the current version, with real ids AND names.
+		//
+		// Joined through posting so the current-version keying is the postings'
+		// own — a superseded version's allocations stay in the log and must not be
+		// projected, exactly as its postings must not be.
+		//
+		// Ordered by (posting position, category, centre) via the seq map below
+		// rather than in SQL, because the position is a property of the slice this
+		// read built and not of any column.
+		arows, err := tx.Query(ctx,
+			`SELECT a.posting_id, a.cost_category_id, COALESCE(cat.name, ''),
+			        a.cost_centre_id, COALESCE(ctr.name, ''), a.amount
+			   FROM posting_cost_allocation a
+			   JOIN posting p ON p.company_id = a.company_id AND p.id = a.posting_id
+			   LEFT JOIN cost_category cat
+			     ON cat.company_id = a.company_id AND cat.id = a.cost_category_id
+			   LEFT JOIN cost_centre ctr
+			     ON ctr.company_id = a.company_id AND ctr.id = a.cost_centre_id
+			  WHERE a.company_id = $1 AND p.voucher_version_id = $2
+			  ORDER BY cat.name, ctr.name`,
+			companyID, versionID)
+		if err != nil {
+			return fmt.Errorf("ledger: query cost allocations: %w", err)
+		}
+		defer arows.Close()
+		for arows.Next() {
+			var (
+				a   CostAllocationView
+				pid uuid.UUID
+			)
+			if err := arows.Scan(&pid, &a.CostCategoryID, &a.CostCategoryName,
+				&a.CostCentreID, &a.CostCentreName, &a.Amount); err != nil {
+				return fmt.Errorf("ledger: scan cost allocation: %w", err)
+			}
+			seq, ok := postingSeqByID[pid]
+			if !ok {
+				// The join guarantees the posting belongs to this version, so a
+				// miss here means the postings query and this one disagree about
+				// what the version contains. Refuse rather than default the
+				// sequence: a defaulted 0 would silently re-attach the allocation
+				// to whichever posting happened to sort first, and an alter would
+				// then write that fiction back as fact.
+				return fmt.Errorf(
+					"ledger: cost allocation names posting %s, which is not among the %d postings read for version %s — refusing to project an allocation whose posting cannot be identified",
+					pid, len(v.Postings), versionID)
+			}
+			a.PostingSeq = seq
+			v.CostAllocations = append(v.CostAllocations, a)
+		}
+		if err := arows.Err(); err != nil {
+			return fmt.Errorf("ledger: iterate cost allocations: %w", err)
 		}
 
 		// Bill allocations of the current version (keyed by voucher_version_id).
@@ -797,6 +929,59 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 		if err := in.Inward.Validate(); err != nil {
 			return PostResult{}, err
 		}
+	}
+	// THE COST-CENTRE SPLIT, checked as early as it can honestly be checked.
+	//
+	// The authoritative check is the DEFERRED constraint trigger
+	// cost_allocation_sums_to_posting, which fires at COMMIT. So the operator's
+	// version of the same refusal has to come from here (and from the second call
+	// inside the transaction below), or a mistyped share costs them a rolled-back
+	// transaction carrying a plpgsql exception instead of a sentence naming the
+	// axis that is short.
+	//
+	// ⚠️ IT DOES NOT COST THEM A VOUCHER NUMBER. An earlier version of this comment
+	// said a rollback here leaves "a gap in a statutory voucher series"; it does
+	// not. There is no sequence in this schema — voucher_number_counter is a table
+	// row advanced by INSERT ... ON CONFLICT DO UPDATE on this same transaction
+	// (numbering.go:126), so a rollback gives the number back. Corrected rather
+	// than deleted because the false version is the plausible one and will be
+	// re-invented otherwise.
+	//
+	// SKIPPED FOR A DELETE because a tombstone carries no postings and no
+	// allocations — see the guard below where `allocations` is derived.
+	if op != OpDelete && !itemInvoice {
+		if err := validateCostAllocations(in.Postings, in.CostAllocations); err != nil {
+			return PostResult{}, err
+		}
+	}
+
+	// ⛔⛔ AN ITEM INVOICE MAY NOT CARRY COST ALLOCATIONS IN THIS SLICE, AND THE
+	// REASON IS THAT posting_seq WOULD BE A LIE.
+	//
+	// PostingSeq indexes the voucher's postings. On every other class those are
+	// the postings the CLIENT stated, so the index is a thing the client chose and
+	// can be held to. On an item invoice they are GENERATED inside the transaction
+	// from the stock lines (item_invoice.go), and the order is an internal
+	// implementation detail: index 0 is the PARTY leg, 1 is the goods/expense leg,
+	// then a tax leg per non-zero component — with zero components emitting no
+	// posting at all, so the indices SHIFT with the tax profile of the invoice.
+	//
+	// A client sending PostingSeq 0 means "the cost". It would get the party leg —
+	// a receivable. Allocating the invoice's full party amount to it satisfies the
+	// per-category sum perfectly, so nothing refuses it, and the Cost Centre
+	// Summary then reports a department as having borne a DEBTOR rather than a
+	// cost. Every figure is internally consistent and the report answers a
+	// question nobody asked.
+	//
+	// Refusing is therefore the honest answer for this slice rather than a gap
+	// worth papering over: an item invoice CAN be allocated, but only through a
+	// contract that names the target by something the client actually chose (the
+	// item ledger id), and inventing that contract here — untested, on the class
+	// where the money is largest — is how the silent version ships. The message
+	// says which classes do work, so an operator is not left guessing.
+	if len(in.CostAllocations) > 0 && itemInvoice {
+		return PostResult{}, fmt.Errorf(
+			"ledger: an item invoice cannot carry cost centre allocations in this build — its postings are generated from the stock lines inside the transaction, so the posting number an allocation names would not be the one it meant and the cost would be attributed to the party rather than to the expense; allocate on a Journal, Payment, Receipt or Contra voucher, or record the invoice with stated postings")
 	}
 
 	// Whether this post carries GST derivation (Sales/Purchase with GST params).
@@ -1042,6 +1227,41 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 				return fmt.Errorf("ledger: the physical count produced an invalid correction: %w", err)
 			}
 			in.Inventory = deltas
+		}
+
+		// THE DELETE GUARD FOR THE COST-CENTRE SPLIT, single-sourced exactly as
+		// `movements` and `inward` are further down, so the hashed payload and the
+		// posting_cost_allocation rows are both derived from THIS ONE variable and
+		// cannot disagree about what the tombstone carries.
+		//
+		// A tombstone carries NONE. It reverses the voucher's entire contribution,
+		// so it records zero allocations exactly as it records zero postings —
+		// otherwise the deleted cost would sit on a department's Cost Centre
+		// Summary forever while the voucher itself had vanished from the Profit &
+		// Loss, and the two reports would disagree with nothing to show why.
+		//
+		// An ALTER, by contrast, RE-STATES from the new input, and re-states it
+		// against the NEW posting rows this version is about to insert (`posting`
+		// is hard immutable, so an ALTER always writes fresh ones). An alter that
+		// omits the split clears it — the only reading under which "I put the
+		// 60/40 the wrong way round" is correctable at all.
+		//
+		// ⛔ IT LIVES HERE, ABOVE THE NUMBERING BLOCK, AND NOT BESIDE `movements`.
+		// The validation below must run BEFORE allocateVoucherNo advances the
+		// (company, type, fin-year) counter: a refusal after that point rolls the
+		// transaction back and leaves a hole in a statutory series that somebody
+		// has to explain to an auditor. This is the same reason
+		// InwardDocument.Validate is called before the transaction opens at all.
+		allocations := in.CostAllocations
+		if op == OpDelete {
+			allocations = nil
+		}
+		// Re-checked here against the FINAL posting list, which for an item invoice
+		// is the one the generator above just built rather than anything the client
+		// sent. The function is pure and cheap, so checking twice is a self-check
+		// rather than waste — the same argument deriveGST records.
+		if err := validateCostAllocations(in.Postings, allocations); err != nil {
+			return err
 		}
 
 		var versionNo int
@@ -1343,6 +1563,40 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 			payload.Inward = &c
 		}
 
+		// The cost-centre split rides in the hashed payload because "which
+		// department bore this cost" is the figure a manager's budget and a segment
+		// disclosure are computed from: left unsigned it would be a number anything
+		// with UPDATE could move after the fact, with the chain still certifying
+		// the voucher as untouched. It is SIGNED, and therefore tamper-evident.
+		//
+		// ⚠️ IT IS NOT YET SHOWN. The formula used elsewhere in this function —
+		// "what the edit log SHOWS must be what the edit log SIGNS" — is true of
+		// postings and stock lines and is NOT yet true here: VersionView
+		// (history.go) projects only Postings and BillAllocations, so an auditor
+		// opening the history of an altered pay run to see who moved Rs 20,000 from
+		// Admin to Sales sees two versions that render identically. The signature
+		// catches a change made BEHIND the write path; the history does not yet
+		// display a change made THROUGH it.
+		//
+		// Stated rather than borrowed, because the borrowed sentence was a claim
+		// about software that was false the moment it was written — the failure
+		// mode HANDOFF §7.1 records. Projecting allocations into VersionView is the
+		// fix and is a small, self-contained piece of work; until it lands this is
+		// a known gap and not a property.
+		//
+		// ⛔ THE SLICE STAYS NIL WHEN THERE IS NOTHING TO ALLOCATE, and that is
+		// load-bearing rather than tidy: an empty NON-NIL slice built
+		// unconditionally would emit `"cost_allocations":[]` and change the hash of
+		// every voucher it touched while looking perfectly correct at this call
+		// site. Every voucher posted before migration 0040 carries none and must
+		// marshal to EXACTLY the bytes it always did, or VerifyChain retroactively
+		// reports every book in the field as tampered with — which reads to an
+		// operator like an attack. canonicalCostAllocations returns nil for an
+		// empty input for precisely this reason;
+		// TestAVoucherWithNeitherAllocationsNorFulfilmentsHashesExactlyAsBefore is
+		// the test that can see a violation.
+		payload.CostAllocations = canonicalCostAllocations(allocations)
+
 		payloadJSON, err := payload.Marshal()
 		if err != nil {
 			return fmt.Errorf("ledger: marshal payload: %w", err)
@@ -1468,11 +1722,27 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 		if op == OpDelete {
 			postings = nil
 		}
+		// postingIDs is indexed BY THE PAYLOAD'S POSTING SEQUENCE — postings are
+		// inserted in payload order, so postingIDs[n] is the row the payload's
+		// posting_seq "n" names. This is the entire mapping between the two keys
+		// migration 0040 deliberately made different (the payload names a sequence
+		// because posting ids are re-minted by every ALTER; the table names a
+		// posting_id because its trigger compares against posting.amount and
+		// `posting` has no ordinal column).
+		//
+		// ⛔ CAPTURED HERE, NEVER RE-QUERIED. There is no ORDER BY that recovers
+		// the input order: `posting` has no ordinal column, and a voucher may
+		// legitimately post twice to the SAME ledger for the SAME amount, so two
+		// rows can be indistinguishable in SQL and distinguishable in the request.
+		// A re-query that guessed would attribute one department's cost to another
+		// with nothing anywhere to detect it.
+		postingIDs := make([]uuid.UUID, 0, len(postings))
 		for _, p := range postings {
 			postingID, err := uuid.NewV7()
 			if err != nil {
 				return fmt.Errorf("ledger: new posting id: %w", err)
 			}
+			postingIDs = append(postingIDs, postingID)
 			if _, err := tx.Exec(ctx,
 				`INSERT INTO posting
 				   (id, company_id, voucher_version_id, ledger_id, dr_cr, amount)
@@ -1498,6 +1768,26 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 			); err != nil {
 				return fmt.Errorf("ledger: update ledger_balance: %w", err)
 			}
+		}
+
+		// THE COST-CENTRE SPLIT ROWS — the second rendering of the very slice the
+		// hashed payload was built from a few lines above.
+		//
+		// Immediately after the posting loop because the composite FK
+		// posting_cost_allocation_posting_fk references posting (company_id, id) and
+		// the ids only exist once those INSERTs have run. Same transaction, so an
+		// allocation can never exist without its posting, nor the voucher commit
+		// without its allocations — the property that makes the signature and the
+		// rows two renderings of one value rather than two values that agree today.
+		//
+		// A DELETE writes none: `allocations` was set to nil by the guard above, so
+		// the tombstone's payload and its rows are both empty from ONE decision.
+		//
+		// The deferred trigger cost_allocation_sums_to_posting is the authority and
+		// fires at COMMIT regardless of what validateCostAllocations concluded up
+		// there, exactly as stock_movement_not_negative does for inventory.
+		if err := writeCostAllocations(ctx, tx, companyID, postingIDs, allocations); err != nil {
+			return err
 		}
 
 		// Insert bill-wise allocations (immutable; versioned with the voucher).
