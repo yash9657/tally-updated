@@ -1,0 +1,43 @@
+{
+  "schema": "nic-ewaybill-subset",
+  "version": "1.0.0421",
+  "description": "Recorded subset of the NIC e-Way Bill API schema. Hand-derived golden used by ValidateEWayBill, in the same shape as nic_einvoice_schema.json. Not a full JSON-Schema; the validator in ewaybill_schema.go reads these constants.",
+  "provenance": "SECONDARY. Derived from published API documentation summaries, NOT from a schema document held in this repository and NOT from a live NIC call — the portal is unreachable from this deployment. Contrast nic_einvoice_schema.json, which is the same grade. See rule138.go for the statutory figures and their identical caveat.",
+  "supply_types": ["O", "I"],
+  "sub_supply_types": ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"],
+  "doc_types": ["INV", "BIL", "BOE", "CHL", "CNT", "OTH"],
+  "transport_modes": ["1", "2", "3", "4"],
+  "gstin": {
+    "length": 15,
+    "pattern": "^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$"
+  },
+  "pincode": {
+    "length": 6,
+    "pattern": "^[1-9][0-9]{5}$"
+  },
+  "vehicle_no": {
+    "min": 7,
+    "max": 15,
+    "pattern": "^[A-Z]{2}[0-9]{1,2}[A-Z]{0,3}[0-9]{1,4}$"
+  },
+  "transporter_id": {
+    "length": 15
+  },
+  "decimal_places": 2,
+  "item_list": {
+    "min": 1,
+    "max": 250
+  },
+  "max_lengths": {
+    "docNo": 16,
+    "fromTrdName": 100,
+    "toTrdName": 100,
+    "transporterName": 100,
+    "productName": 100,
+    "hsnCode": 8
+  },
+  "trans_distance": {
+    "min": 1,
+    "max": 4000
+  }
+}

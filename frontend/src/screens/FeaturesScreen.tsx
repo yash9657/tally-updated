@@ -136,7 +136,27 @@ const FEATURES: {
       {
         name: "e-Way Bill",
         state: "off",
-        note: "Not built yet.",
+        note:
+          "STILL OFF, AND DELIBERATELY SO: there is no screen and no route, so nobody can raise one from " +
+          "inside this product. What DOES exist is the whole rules-and-payload core in internal/statutory " +
+          "beside the IRN workflow — the consignment payload, a recorded NIC schema subset with a " +
+          "hand-written validator, and the Rule 138 assessment: whether a bill is required at the " +
+          "consignment-value threshold, whether Part B (the vehicle number) is required, and how long the " +
+          "bill would be valid at one day per 200 km (or per 20 km for over-dimensional cargo, which the " +
+          "operator must ASSERT because assuming ordinary cargo would grant ten times the validity the " +
+          "rule allows). It DECIDES rather than assuming: an unstated distance is a BLOCKER and never a " +
+          "silent one-day validity, because a bill whose expiry the system guessed is a detained vehicle. " +
+          "⛔ AND NOTHING IT PRODUCES IS A GOVERNMENT-ISSUED e-WAY BILL. The NIC portal is unreachable " +
+          "from this deployment, so the identifier is a LOCAL reference (prefixed LOCAL-, never the " +
+          "twelve digits of a real EBN) and every artefact leads with a disclosure saying no submission " +
+          "was made. ⚠️ THE STATUTORY FIGURES ARE SECONDARY MATERIAL: CBIC's own rule repository failed " +
+          "TLS chain verification from here on 2026-08-05, so the threshold, the Part B distance and the " +
+          "validity rates are corroborated across commentaries and are NOT verified against the published " +
+          "rule. They live in ONE Go location that says so, and each carries its citation, its sources and " +
+          "that caveat onto the artefact. WHAT IS MISSING TO TURN THIS ROW ON: a cored-side store for the " +
+          "reference (migrations 0047/0048 are reserved), a route, a screen, and — for it to be a real " +
+          "e-way bill rather than a correct payload — NIC sandbox credentials, which need a GSTIN and are " +
+          "a human-only ask.",
       },
       {
         name: "TDS / TCS",
