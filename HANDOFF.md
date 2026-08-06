@@ -4,16 +4,18 @@
 > files that preceded it (§11 lists them; `ls` confirms eleven). **Every other `HANDOFF-*.md` in this
 > repository is SPENT** — see §11 for the list and for the one thing to do about them.
 >
-> **Read §1 → §2 → §3. Then pick a track from §5, and clear §4 alongside it.** ⚠️ **THE ORDER OF
-> THOSE TWO HAS SWAPPED NOW THAT TIER 1 IS CLOSED:** §4 used to be the work and is now a defect
-> audit plus loose ends; **§5 is the PARITY ROADMAP and is where the next TRACK comes from** —
-> ordered by how much of a business's day each item unblocks, with the reasoning stated so it can be
-> argued with. Everything after §6 is reference you will need exactly when you hit it, not reading
-> for now.
+> ## ⛔⛔ COLD START? READ §1, RUN §2, THEN DO §1.4.
 >
-> ⛔ **TIER 1 IS CLOSED (§1). IF YOU READ ONLY ONE THING BEYOND §1: §5.2.** Three finished engines
-> have no screen, and one of them is statutorily mandatory. They are the cheapest real parity this
-> product can buy, and they are now the top of the list rather than behind a tier.
+> **§1.4 is the concrete plan for the next session** — what to pick up, in what order, what decision
+> has to be made before any code is written, and what already exists so you do not go looking for it.
+> It is a fork: one small certain fix, and one mandatory track that starts with an architecture
+> decision rather than typing.
+>
+> ⚠️ **THE READING ORDER HAS CHANGED NOW THAT TIER 1 IS CLOSED.** §4 used to be the work; it is now a
+> defect audit plus loose ends. **§5 is the PARITY ROADMAP and is where TRACKS come from** — ordered
+> by how much of a real business's day each item unblocks, with the reasoning stated so it can be
+> argued with. §3 is the machine. Everything after §6 is reference you will need exactly when you hit
+> it, not reading for now.
 
 ---
 
@@ -41,9 +43,9 @@ check is a guess.
 | T6 TDS/TCS | | ✅ `on` |
 | T7 Features screen | — | ✅ done |
 
-**So Tier 1 is closed and §5 is now the whole map.** Go to **§5.2** — three finished engines still
-have no screen and one of them is statutorily mandatory. They remain the cheapest real parity this
-product can buy.
+**So Tier 1 is closed and §5 is now the whole map.** ⛔ **The concrete plan for what to do next is
+§1.4** — read it after §2. In one line: three finished engines still have no screen (§5.2), one of
+them is statutorily mandatory, and they remain the cheapest real parity this product can buy.
 
 > ### ⛔ WHAT TIER 1 COST, AND THE ONE SENTENCE WORTH CARRYING FORWARD
 > Five of the seven tracks shipped a complete, tested, reviewed BACKEND before anyone noticed no
@@ -169,6 +171,117 @@ EMPTY allowed-import set that `internal/server` may import. The workflow plane i
 
 ⚠️ **AND A FIFTEENTH REGISTRATION POINT, WHICH §7.2 DOCUMENTS AS FOURTEEN:**
 `corpora/validate.py`'s `KNOWN_SCREENS`. `make verify` caught it by name. It is now fifteen.
+
+---
+
+### 1.4 ⛔⛔ START HERE — WHAT THE NEXT SESSION ACTUALLY DOES
+
+**Run §2 first (ten minutes, and it has burned every session that skipped it). Then this.**
+
+Tier 1 is closed, so there is no longer a queue telling you what is next — §5.3 is the ordered
+roadmap and this is the concrete plan for the top of it.
+
+### THE RECOMMENDATION, AND IT IS A FORK
+
+> **If you have a full session: do B (the IRN screen), and do A first as the warm-up — A is small
+> enough that it will not eat B.**
+> **If you have a short one: do A, and stop. It is a complete, shippable, real fix.**
+
+### A. FIRST, AND IT NEEDS NO DECISION — `bill_allocation` on the item-invoice path
+
+§4.7 item 11. A voucher keyed against a bill-by-bill party creates **no bill reference**, so the
+receivable sits in the Balance Sheet's Sundry Debtors and is **absent from Outstandings**: money that
+never ages and never reaches a statement. Found by keying an item invoice in a browser (§1.3).
+
+> ⛔⛔ **AND THE FIRST DIAGNOSIS WAS WRONG — READ THIS BEFORE YOU START, IT CHANGES THE JOB.**
+> The obvious reading, and the one this file carried for an hour, is "the accounting path writes a
+> `bill_allocation` and the item path does not". **That is false.** `internal/ledger/ledger.go`
+> writes them from `in.BillAllocations` — i.e. **the CLIENT supplies them, on every path** — and
+> `grep -rn "bill_allocations:" frontend/src` finds them constructed in exactly one place:
+> **`frontend/scripts/seed-demo.mts`.** No screen builds one. Not the item invoice, not the
+> accounting-mode GST voucher, not any of them.
+>
+> **So the gap is not an item-invoice gap. NO VOUCHER KEYED IN A BROWSER, ON ANY PATH, HAS EVER
+> CREATED A BILL REFERENCE.** The demo only looks correct because the seed script hand-writes them,
+> which is precisely the "reasoning from what you see on screen" hazard §11 warns about — and it is
+> why every gate stayed green for the whole life of the feature.
+>
+> ⚠️ This is also a fresh instance of §9.1's rule, caught while writing this section: the plausible
+> claim was inferred from DATA (seeded invoices have allocations, mine did not) and was never checked
+> against CODE. Ten minutes of grep changed the size of the job.
+
+Why this first: it is small, it is certain, it needs no architectural decision, and it closes a hole
+behind rows that already read `on` — the exact class §5.5 says nobody has audited.
+
+**The one thing to decide before writing code: what the bill REFERENCE is.** The voucher number is
+the obvious answer and is Tally's own default (`New Ref`). Write down why you chose it.
+
+The shape of the work is CLIENT-side, not server-side: the voucher forms must build
+`bill_allocations` when the party maintains bill-by-bill. ⚠️ `ledger.maintain_bill_by_bill` is on the
+ledger master, so the form can read it from the chart it already loads. Prove it the way §4.1
+requires — POST over HTTP to a bill-by-bill party, then read the figure back out of the
+**Outstandings report** and reconcile it against Sundry Debtors on the Balance Sheet. ⛔ Carry a
+CONTROL: the same voucher to a party that does NOT maintain bill-by-bill must produce no allocation,
+or the test passes by always writing one.
+
+### B. THEN THE e-INVOICE / IRN SCREEN — but the FIRST hour is a DECISION, not typing
+
+§5.2. **Statutorily mandatory**, and the highest-value row left. ⛔ **It does NOT inherit a finished
+path from T5** — read §5.2's correction before estimating anything.
+
+> #### ⛔ THE DECISION TO MAKE BEFORE WRITING A LINE, exactly as T5's was
+>
+> The IRN workflow is NOT pure — it wraps an exactly-once external IRP call in durable, resumable
+> state — so it **must stay in `statutoryd`**, and the T5 split does not help. The open question is
+> the one nobody has answered: **how does a browser trigger it?**
+>
+> | Shape | What it costs | What it buys |
+> |---|---|---|
+> | **cored PROXIES to statutoryd** | cored gains a hard runtime dependency on a second process, and a new failure mode when it is down. ⚠️ **There is no `make run-statutoryd` target and nothing runs it in dev** — that is part of the work | the screen keeps cored's PDP, RLS, step-up and company scoping, and the client contract looks exactly like T5's |
+> | **the browser reaches statutoryd directly** | statutoryd has **no PDP, no RLS, no step-up and no company scoping** — this is only acceptable behind something that adds them, which is most of a second server | no proxy hop |
+>
+> **The first shape is almost certainly right** for the same reason T5's decision went the way it
+> did — an operator-facing write belongs inside the authority stack — but say WHY in the commit,
+> because the next person will ask.
+>
+> ⛔ **AND WRITE THE DECISION DOWN HERE WHEN YOU MAKE IT**, in this section, the way §4.2 now
+> records T5's. A decision that lives in one session's memory is a decision that gets re-litigated.
+
+**What already exists, so you do not go looking:**
+
+- `cmd/statutoryd/main.go` — `handleEInvoice` at
+  `POST /companies/{companyID}/vouchers/{voucherID}/e-invoice`, returning `{irn, ack_no, status,
+  pinned_voucher_no}`. Env: `CORED_BASE_URL`, `CORED_SERVICE_TOKEN`, `PORT` (8091), `STATUTORYD_DSN`.
+- The durable workflow, the retry classification (`IsPermanent` → 422, transient → 503), and the
+  freeze hook `POST /vouchers/{id}/external-reference`. ⚠️ **`voucher_external_reference.kind` is
+  CHECK-constrained to `IRN` / `FILED_GSTR1`** — the IRN needs no new kind, unlike T5, which is why
+  T5 got its own table instead.
+- `statutory_step` is migration **0013**; statutoryd runs no migrations, cored owns all schema.
+
+**What does NOT exist, and is the actual work:**
+
+- ⛔ **NOTHING ON THE CLIENT AT ALL.** Unlike T5 — which found `EWayBillRequest`/`EWayBillResponse`
+  already written speculatively in `api/types.ts` — there are **no IRN types and no client methods**.
+  Checked. Budget for the full fifteen registrations (§7.2) plus three client files.
+- No `make run-statutoryd`, and no dev flow for minting `CORED_SERVICE_TOKEN`. **You cannot
+  browser-verify this row without both**, and §12 item 1 will not accept anything less.
+
+> #### ⚠️ ONE THING T5 LEARNED THAT THIS ROW INHERITS FOR FREE, AND IT IS WORTH REAL TIME
+> `eInvoiceRequest` makes the CALLER supply seller/buyer GSTIN, legal name and state code, because
+> statutoryd cannot read cored's masters. **cored CAN.** `internal/ewaybill`'s `loadConsignment`
+> already resolves exactly those fields from the `company` row and the party `ledger` row, and it is
+> proven against the demo company. A cored-side proxy should fill them the same way rather than
+> making a screen ask an operator to retype their own GSTIN — copy that query.
+
+### ⛔ WHAT NOT TO DO
+
+- **Do not start T18** (the Rule 48(4) QR code). §5.3's box: the payload is signed with the Income
+  Tax Department's private key and it is permanently unshippable from here. If a workflow reports it
+  done, reject it.
+- **Do not treat the IRN as "T5 again".** T5 was pure functions and a table. This is a second
+  deployable, a service token, and a process nothing currently runs.
+- **Do not skip the browser pass to save time.** T5's found three defects, two in code that session
+  never touched (§1.3), and §3.1's fourth observation exists because of it.
 
 ---
 
@@ -432,7 +545,7 @@ re-read immediately before each edit.
 | 7 | The pre-flight allocation refusal names the axis by raw UUID | Strictly *less* usable than the DB trigger message it exists to pre-empt. Resolve names at the in-transaction call site, which already holds the tx |
 | 8 | The two cost reports disagree about an off-axis allocation | The category summary excludes it and reports it separately; the centre summary silently includes it. Neither says so |
 | 9 | Fold `tsc` into `make verify` | ~10 minutes, and it closes a whole class of "green but broken". **Still not done, and it caught a real error this session** — `printTarget.ts`'s exhaustive `Record<ReportName, string>` failed only under `tsc`, never under `make verify` |
-| 11 | ⛔ **AN ITEM INVOICE AGAINST A BILL-BY-BILL PARTY CREATES NO `bill_allocation`** | **Money nobody can chase.** The receivable is in the Balance Sheet's Sundry Debtors and ABSENT from Outstandings, so it never ages and never reaches a statement. Found by keying one in a browser at `2777980`: `verify:demo` went 32/33 with a gap of exactly that invoice. All three seeded ACCOUNTING invoices create one; the ITEM path does not. The demo had never had an item invoice against a bill-by-bill party, which is why no gate had ever seen it. ⚠️ Decide what the bill REFERENCE is (the voucher number is the obvious answer, and Tally's default) BEFORE writing code |
+| 11 | ⛔⛔ **NO SCREEN BUILDS `bill_allocations` — ON ANY VOUCHER PATH** | **Money nobody can chase.** The receivable is in the Balance Sheet's Sundry Debtors and ABSENT from Outstandings, so it never ages and never reaches a statement. Found by keying an item invoice in a browser at `2777980`: `verify:demo` went 32/33 with a gap of exactly that invoice. ⚠️ **THE OBVIOUS DIAGNOSIS IS WRONG** — it is not that the accounting path writes one and the item path does not. `ledger.go` writes them from `in.BillAllocations` (the CLIENT supplies them) and `grep -rn "bill_allocations:" frontend/src` finds them built in ONE place: `seed-demo.mts`. The demo only looks right because the seed script hand-writes them. **The fix is client-side and covers every form.** See §1.4 A |
 | 12 | An e-way bill cannot be raised against a DELIVERY NOTE | §4.2. Real, ordinary, and NIC supports it (docType `CHL`). Needs a decided rule for deriving the consignment value from the movement; `ErrNoTaxLines` refuses by name rather than guessing at a figure the threshold test depends on |
 | 10 | No tracking numbers | RESEARCH.md:622 — Tally stitches Delivery Note ↔ Sales invoice with a **Tracking No.**, and creates "bill pending" entries when goods and bill arrive separately. T3 links a voucher to an ORDER but not to another VOUCHER. The order register states this gap |
 
@@ -491,16 +604,19 @@ project has now shipped four times and which §4.1 exists to stop.
 
 ### 5.3 THE ORDERED LIST, WITH REASONS
 
-1. **The e-Invoice / IRN screen** — §5.2. **Statutorily MANDATORY**, and the highest-value item on
-   this list. ⚠️ It does NOT inherit a finished path from T5 — read the correction above before
-   estimating it, because the browser-to-statutoryd question is still open.
+1. **The e-Invoice / IRN screen** — §5.2, and **§1.4 B has the concrete plan**. **Statutorily
+   MANDATORY**, and the highest-value item on this list. ⚠️ It does NOT inherit a finished path from
+   T5 — read the correction above before estimating it, because the browser-to-statutoryd question
+   is still open and is the first hour's work.
 2. **A double-entry posting grid** — §4.5. A Journal cannot be keyed AT ALL. This is accounting parity,
    not a feature: it is how every adjustment, provision, depreciation and reclass is entered. ⚠️ It is
    also the only known HIDDEN row (§5.1), so it is the one gap whose size is proven rather than
    guessed.
-3. **`bill_allocation` on the item-invoice path** — §4.7 item 11. Small, and it is *money nobody can
-   chase*: an item invoice to a bill-by-bill party never reaches Outstandings. Cheaper than anything
-   else on this list and it fixes a hole in a row that reads `on`.
+3. **`bill_allocation` on the item-invoice path** — §4.7 item 11, and **§1.4 A**. Small, and it is
+   *money nobody can chase*: an item invoice to a bill-by-bill party never reaches Outstandings.
+   ⚠️ **Cheapest thing on this list, needs no architectural decision, and it is out of ORDER here on
+   purpose** — §1.4 recommends it as the warm-up before item 1 precisely because value-ordering and
+   do-it-first-ordering are not the same question.
 4. **T15 Export (Excel / CSV / XML)** — ⚠️ **the most underrated item on this list.** Tally users live
    in Excel; "export this report" is a dozen times a day, and its absence makes every report a dead end.
    `Alt+E` is already bound and already dispatches a screen action, so the plumbing exists.
@@ -823,6 +939,11 @@ The false version is the plausible one and **will be re-invented**. Claims that 
   that stated it could contradict it, and the mock agreed with it. **When a comment asserts what a
   different service does, that assertion needs a test against that service — or it is a guess with
   authority.**
+- ⛔ *"the accounting voucher path writes a `bill_allocation` and the item path does not"* — inferred
+  from DATA (seeded invoices had allocations, a browser-keyed one did not) and **false**. The client
+  supplies them on every path and **no screen builds one at all**; only `seed-demo.mts` does. Caught
+  by a ten-minute grep while writing §1.4, before it shipped as a work plan. **A claim inferred from
+  what the database contains is a claim about the SEED SCRIPT until you have read the code.**
 - ⛔ *"createLedger is idempotent server-side"*, **THE SEQUEL.** `ensureLedger`'s doc comment was
   corrected at `a86283b` and `ensureOutputTaxLedgers` — **forty lines below it in the same file** —
   went on calling `createLedger` unconditionally for another release. **Fixing the reported call site
