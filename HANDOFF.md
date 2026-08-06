@@ -1,11 +1,16 @@
 # HANDOFF — THE LIVE ONE. Start here, from cold.
 
-> **Written 2026-08-05, updated in place at `7e565a3`.** This file replaces the ELEVEN `HANDOFF-*.md`
-> files that preceded it (§11 lists them; `ls` confirms eleven). **Every other `HANDOFF-*.md` in this repository is SPENT** — see §11 for the
-> list and for the one thing to do about them.
+> **Written 2026-08-05, updated in place at `dae078d`.** This file replaces the ELEVEN `HANDOFF-*.md`
+> files that preceded it (§11 lists them; `ls` confirms eleven). **Every other `HANDOFF-*.md` in this
+> repository is SPENT** — see §11 for the list and for the one thing to do about them.
 >
-> **Read §1 → §2 → §3. Then act on §4.** Everything after §6 is reference you will need exactly when
-> you hit it, not reading for now.
+> **Read §1 → §2 → §3. Then act on §4, with §5 in front of you.** §4 is the immediate work; **§5 is the
+> PARITY ROADMAP** — the whole remaining gap with Tally, ordered by how much of a business's day each
+> item unblocks, with the reasoning stated so it can be argued with. Everything after §6 is reference you
+> will need exactly when you hit it, not reading for now.
+>
+> ⛔ **IF YOU READ ONLY ONE THING BEYOND §1: §5.2.** Three finished engines have no screen, and one of
+> them is statutorily mandatory. They are the cheapest real parity this product can buy.
 
 ---
 
@@ -15,8 +20,15 @@
 
 The `FeaturesScreen` (`frontend/src/screens/FeaturesScreen.tsx`) is this project's parity ledger, and
 T7's whole purpose was to make it honest. It is the authority, not this file. Measured at `a86283b`:
-**29 rows `on`, 12 `off`, 5 qualified** (`always`). ⚠️ **There is no longer a single `server` row** —
-the state still exists and is still right to have, but nothing is currently in it.
+**29 rows `on`, 12 `off`, 3 `server`, 2 `always`** — 46 rows in total.
+
+⚠️ **A CORRECTION TO THIS FILE'S OWN PREVIOUS EDIT, left in place as a warning.** The line here used
+to say "there is no longer a single `server` row". **That was false**, and it was produced by a careless
+`grep -c 'state: "always"\|state: "server"'` that returned the COMBINED count and got read as one of
+them. Three rows are still `server`, and they are three of the largest parity gaps in the product —
+§5.2. The lesson is the one §9.1 keeps making: a claim measured by a command you did not check is a
+guess. `python3` pairing each `name:` with its following `state:` is the reliable count, and it is what
+produced the numbers above.
 
 | Tier 1 track | Row | State |
 |---|---|---|
@@ -199,8 +211,13 @@ existing grids, plus a real backend defect the picker exposed. It took a full se
 
 ## 4. ⛔⛔ THE WORK, IN ORDER. THIS IS THE PART YOU ACT ON.
 
-Everything here is Tier 1. **Do not start Tier 2 (§5) until item 1 is done and the T5 FeaturesScreen
-row is `on` on BROWSER evidence.**
+Everything here is Tier 1 or a defect. **§5 is the PARITY ROADMAP** — what to do after this, ordered by
+how much of a business's day it unblocks, and it is worth reading before you pick anything up here
+because two of these items buy things later ones need.
+
+⚠️ **THE ORDER IS NOT ARBITRARY AND IS NOT THE PLAN'S.** Item 1 (T5) settles the browser-to-statutory
+architecture that the MANDATORY e-Invoice screen also needs (§5.2), so doing it first is worth more than
+its own row. Item 2 is a data-loss audit, which is cheap and unbounded in cost if skipped.
 
 ### 4.1 THE BAR, restated because it is the whole point
 
@@ -366,29 +383,116 @@ re-read immediately before each edit.
 | 9 | Fold `tsc` into `make verify` | ~10 minutes, and it closes a whole class of "green but broken". **Still not done, and it caught a real error this session** — `printTarget.ts`'s exhaustive `Record<ReportName, string>` failed only under `tsc`, never under `make verify` |
 | 10 | No tracking numbers | RESEARCH.md:622 — Tally stitches Delivery Note ↔ Sales invoice with a **Tracking No.**, and creates "bill pending" entries when goods and bill arrive separately. T3 links a voucher to an ORDER but not to another VOUCHER. The order register states this gap |
 
-## 5. TIER 2 — WHAT IT IS, AND THE ONE THING NOT TO GET WRONG IN EACH
+## 5. ⛔⛔ THE PARITY GAP WITH TALLY, ORDERED. READ THIS BEFORE PICKING A TRACK.
 
-**Do not start these until §4 item 1 (T5) is done and its row is `on`.** `PLAN-TALLY-PARITY.md` §4 is the authority;
-this is the short form, ordered by rough value.
+`PLAN-TALLY-PARITY.md` §4 is still the authority on WHAT each track is. **This section is the
+ordering, and it deliberately differs from that file's** — the plan was written before Tier 1 existed
+and before the audits below were run, so its sequence (T9 → T10 → T8 → T11 → T12 → T13 → T14) is a
+technical dependency order, not a parity order. What follows is by **how much of a real business's day
+is blocked**, with the reason stated so it can be argued with.
 
-| # | Track | The one thing not to get wrong |
+### 5.1 THE GAP IS NOT WHAT THE `off` ROWS SAY IT IS
+
+Three distinct kinds of gap, and only the first is on the FeaturesScreen as `off`:
+
+| Kind | Count | Where it shows |
+|---|---|---|
+| **`off`** — not built, honestly stated | 12 | F11, and the keymap answers when the key is pressed |
+| **`server`** — built, tested, reachable over HTTP, **NO SCREEN** | **3** | F11, and this is the kind that gets re-bought by an accountant who already owns it |
+| ⛔ **HIDDEN — a row that reads `on` with a hole behind it** | **≥1 known** | nowhere. Found only by driving the app |
+
+**The third kind is the dangerous one and it is why §12's browser-evidence rule exists.** One is known
+(§4.5, the Journal), and it was found by accident while looking for somewhere to put a control. **There
+is no audit that has been run for the others.** See §5.5.
+
+### 5.2 ⛔ THE THREE `server` ROWS — BUILT AND UNREACHABLE. Highest value per unit of work.
+
+These are not missing features. They are **finished engines with no door**, which is the state this
+project has now shipped four times and which §4.1 exists to stop.
+
+| Row | Why it matters | What is actually missing |
+|---|---|---|
+| **e-Invoice / IRN** | ⛔ **Statutorily MANDATORY** in India above a turnover threshold. An accountant who cannot raise an e-invoice cannot use this product as their books at all | A screen, and a way for a browser to trigger generation. The workflow, the freeze-on-pin, the retry classification and `POST /vouchers/{id}/external-reference` all exist |
+| **Payroll statutory** (EPF/EPS/EDLI, ESI, salary TDS, pay run) | Any business with employees. The whole engine, the statutory rates and the file emitters are built | Screens only. ⚠️ **NO refactor needed** — `internal/payroll` and `payrolldb` are already in `internal/server`'s archtest allowed set, so this is pure frontend |
+| **Offline entry with sync** | The differentiator against Tally's LAN-only model, and it is built | A screen, and a decision about how a browser presents queued intents |
+
+> ### ⛔⛔ THE SEQUENCING INSIGHT THAT SAVES A SESSION: T5 AND THE IRN SCREEN SHARE ONE BLOCKER.
+>
+> Both need a browser to trigger generation that lives in `internal/statutory`, and **archtest pins
+> that package to the EMPTY import set** — cored cannot call it (§4.2 has the full analysis and the
+> decision). So the `internal/statutory/rules` split, or whatever shape is chosen instead, **unblocks
+> TWO rows for the price of one**, and one of them is the mandatory one.
+>
+> **Do not do T5's split, ship T5, and then rediscover the same question for the IRN.** Decide the
+> browser-to-statutory path ONCE, in the T5 change, and write down that the IRN screen inherits it.
+
+### 5.3 THE ORDERED LIST, WITH REASONS
+
+1. **T5 e-Way Bill** — §4.2. The last `off` Tier-1 row, and it buys the statutory path (§5.2).
+2. **The e-Invoice / IRN screen** — inherits T5's path. Mandatory, so arguably it outranks T5 on value;
+   T5 goes first only because it is smaller and settles the architecture.
+3. **A double-entry posting grid** — §4.5. A Journal cannot be keyed AT ALL. This is accounting parity,
+   not a feature: it is how every adjustment, provision, depreciation and reclass is entered.
+4. **T15 Export (Excel / CSV / XML)** — ⚠️ **the most underrated item on this list.** Tally users live
+   in Excel; "export this report" is a dozen times a day, and its absence makes every report a dead end.
+   `Alt+E` is already bound and already dispatches a screen action, so the plumbing exists.
+5. **Payroll screens** — §5.2. Pure frontend, no refactor, a whole module currently invisible.
+6. **T14 Backup / restore, split company** — operationally table-stakes; Tally users expect a company
+   to be a file they can carry. Must be tenant-exact: reuse the `testdb` delete-plan census.
+7. **T9 FIFO/LIFO** → **T10 stock groups + compound units** — serialise, both touch inventory.
+8. **T16 Per-company print templates** — a logo and an address block is what makes an invoice *theirs*.
+9. **T8 Multi-currency** → **T11 Budgets** → **T13 Interest** → **T12 GSTR-9**.
+10. **SSO / OIDC** — `off` and in no numbered tier. Enterprise-only; leave it last.
+
+⚠️ **T32 (Tally XML import) IS NOT ON THIS LIST AND IS THE COMMERCIAL BLOCKER.** §10 item 1: a business
+cannot switch if it cannot bring its books, and what exists **has never met a real Tally file.** It is
+not sequenced here because it needs a human to supply an export first — but it outranks everything
+above it commercially, so **ask for the file early** rather than discovering the importer is wrong after
+a customer tries it.
+
+> ### ⛔⛔ T18 (the Rule 48(4) QR code on a printed e-invoice) IS PERMANENTLY UNSHIPPABLE FROM HERE, AND ITS ROW MUST STAY `off`.
+> The payload is signed with the **Income Tax Department's private key**. Anything we generate tells a
+> scanner the invoice was registered when it was not. **If a workflow or a session reports T18 done,
+> reject it** — there is no amount of engineering here that closes it, and a plausible-looking QR code is
+> a forgery rather than a feature.
+>
+> ⚠️ **THIS IS NOT TRUE OF T5 OR OF THE IRN ITSELF, and the three look alike.** An EBN is just an
+> identifier NIC allocates and an IRN is one the IRP allocates, so both become real the day credentials
+> exist **with no change to the payload builder**. T18's QR is a SIGNATURE, and we do not have the key.
+> One of these three gaps is permanent and two are waiting on §10 item 4.
+
+### 5.4 THE ONE THING NOT TO GET WRONG IN EACH TRACK
+
+| # | Track | The one thing |
 |---|---|---|
 | **T8** | Multi-currency | A foreign amount, a rate, and the base amount are **three stored values**, not two plus arithmetic. Realised vs unrealised gain/loss are different postings |
-| **T9** | FIFO / LIFO valuation | Weighted average's replay state is a strict SUBSET of what FIFO needs, so FIFO is a new arm in `ValuerFor` plus fixtures — **not** a schema change. ⚠️ Closing stock now feeds the Balance Sheet, so a valuation change MOVES THE SHEET: re-pin `verify:demo` deliberately |
+| **T9** | FIFO / LIFO valuation | Weighted average's replay state is a strict SUBSET of what FIFO needs, so FIFO is a new arm in `ValuerFor` plus fixtures — **not** a schema change. ⚠️ Closing stock feeds the Balance Sheet, so a valuation change MOVES THE SHEET: re-pin `verify:demo` deliberately |
 | **T10** | Stock groups + compound units | A conversion factor makes every quantity in the system *unit-qualified*. Touch the movement primitive with care and **never store a converted quantity you can re-derive** |
-| **T11** | Budgets | A budget is a comparison dimension, not a posting. ⛔ It inherits T2's axis model — see §8 |
+| **T11** | Budgets | A budget is a comparison dimension, not a posting. ⛔ It inherits T2's axis model — see §8.1, and the per-(posting, AXIS) discipline the allocation UI already implements |
 | **T12** | GSTR-9 annual return | It is a *reconciliation* of the year's returns to the books and must **state where it disagrees** rather than smoothing it |
 | **T13** | Interest on overdue bills | Simple vs compound and the day-count basis are configuration with statutory defaults — **cite them** |
 | **T14** | Backup / restore, split company | Must be tenant-exact. Reuse the `testdb` delete-plan census: it already knows every tenant table and is anti-rot by construction |
-| **T15/T16** | Export (Excel/CSV/XML), per-company print templates | 0065 / 0066 reserved |
+| **T15** | Export | ⚠️ Money is fixed-4 on the wire and Excel will happily eat it as a float. Emit text, not numbers, or a CSV round trip loses paisa |
+| **T16** | Per-company print templates | 0065 / 0066 reserved |
 
-**Also `off` and NOT in a numbered tier:** SSO/OIDC login.
+### 5.5 ⛔ THE AUDIT NOBODY HAS RUN: WHICH `on` ROWS ARE LYING?
 
-> ### ⛔ T18 (the Rule 48(4) QR code) IS PERMANENTLY UNSHIPPABLE FROM HERE, AND ITS ROW MUST STAY OFF.
-> The payload is signed with the Income Tax Department's private key. Anything we generate tells a
-> scanner the invoice was registered when it was not. **If a workflow reports T18 done, reject it.**
-> ⚠️ Note this is NOT true of T5: an EBN is just an identifier NIC allocates, so T5 becomes real the
-> day credentials exist, with no change to the payload builder. The two gaps look alike and are not.
+29 rows say `on`. **One has already been caught with a hole behind it** (the Journal, §4.5), found by
+accident. The method that finds the rest is cheap and nobody has done it:
+
+> **For each `on` row, name the exact keystroke sequence an operator uses, then DO IT in a browser
+> against real cored.** Not a test — the app. The Journal gap survived a full suite, a full
+> `make verify`, and two sessions of browser driving on OTHER screens, because nothing ever pressed F7
+> and tried to save.
+
+Start with the rows whose feature has a WRITE path, because a read-only screen that renders is mostly
+self-evidencing and a write path can be unreachable in a dozen invisible ways. Known-good as of
+`dae078d` — driven end to end, so do not re-audit these first: F5/F6/F4 single entry **with cost
+allocation**, F8/F9 item invoice, Alt+F8/F9 delivery & receipt notes **with order links**, Ctrl+F8/F9
+order registers, the BOM screen, both order books, F11, and the two cost reports.
+
+⚠️ **AND WRITE THE RESULT DOWN HERE**, per row, as it is checked. An audit whose findings live in one
+session's memory is an audit that will be run again from scratch.
 
 ---
 
