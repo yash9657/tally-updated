@@ -1,3 +1,4 @@
+import { buildBillAllocations, type DraftBillRef } from "./billAllocation";
 /**
  * ITEM INVOICE (Ctrl+H > Item Invoice on F8 Sales / F9 Purchase).
  *
@@ -360,6 +361,18 @@ export interface ItemInvoiceInputs {
   voucherDate?: string;
   narration?: string;
   party?: string;
+  /**
+   * The bill-wise references this invoice opens against the PARTY leg. Normally
+   * one unnamed NEW ref for the gross total; the server stamps the number.
+   *
+   * ⚠️ THE AMOUNT IS A CLIENT-SIDE PREVIEW AND THE SERVER IS AUTHORITATIVE. This
+   * path sends NO postings — the generator builds them from the stock MASTERS —
+   * so the gross computed here can differ from the party posting if a master's
+   * rate changed since the grid was drawn. That used to be unknowable; the server
+   * now refuses any reference that does not total its ledger's posting, so the
+   * disagreement is a loud 422 rather than a bill for the wrong money.
+   */
+  billRefs?: readonly DraftBillRef[];
 }
 
 /**
@@ -376,6 +389,27 @@ export interface ItemInvoiceInputs {
  * burn a real voucher number on a document that says nothing, so it is refused
  * in the form rather than sent.
  */
+/**
+ * THE INVOICE GROSS — taxable plus tax, i.e. what the PARTY leg will be posted.
+ *
+ * Exported so the bill-reference panel and {@link buildItemInvoiceRequest} agree
+ * by construction. Two call sites recomputing "taxable plus tax" independently is
+ * exactly how a form comes to show one total and send another.
+ *
+ * ⚠️ A PREVIEW. The server posts what the stock MASTERS say, not what this
+ * returns; it refuses a bill reference that disagrees with the posting, so a
+ * stale rate surfaces as a 422 rather than as a wrong bill.
+ */
+export function itemInvoiceGross(
+  lines: readonly ItemInvoiceLine[],
+  supplierStateCode: string,
+  placeOfSupplyStateCode: string,
+): string {
+  const keyed = lines.filter(isKeyedLine);
+  const tax = deriveItemInvoiceTax(keyed, supplierStateCode, placeOfSupplyStateCode);
+  return addMoney(invoiceTaxable(keyed), tax.total);
+}
+
 export function buildItemInvoiceRequest(
   inputs: ItemInvoiceInputs,
 ): VoucherRequest {
@@ -437,5 +471,30 @@ export function buildItemInvoiceRequest(
   // empty array is a statement where absence is silence.
   const fulfilments = buildFulfilments(keyed);
   if (fulfilments.length > 0) req.fulfilments = fulfilments;
+
+  // ---- THE BILL THIS INVOICE OPENS, against the gross the server will post.
+  //
+  // ⛔ FROM `keyed`, and derived by the same helpers the on-screen preview uses,
+  // so the figure the operator saw is the figure that is referenced. Computing it
+  // any other way here would give the form two different totals for one invoice.
+  const billRefs = inputs.billRefs ?? [];
+  if (billRefs.length > 0) {
+    const gross = itemInvoiceGross(
+      keyed,
+      inputs.supplierStateCode,
+      inputs.placeOfSupplyStateCode,
+    );
+    // A sale DEBITS the debtor; a purchase CREDITS the creditor. Getting this
+    // backwards would net the new bill against the party's existing ones.
+    const billAllocations = buildBillAllocations(
+      {
+        ledgerId: inputs.partyLedgerId,
+        drCr: inputs.direction === "IN" ? "CR" : "DR",
+        amount: gross,
+      },
+      billRefs,
+    );
+    if (billAllocations.length > 0) req.bill_allocations = billAllocations;
+  }
   return req;
 }

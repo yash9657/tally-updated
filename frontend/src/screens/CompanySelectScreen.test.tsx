@@ -102,8 +102,13 @@ describe("CompanySelectScreen (F3)", () => {
     const base = createMockClient({ seed: false });
     renderPicker({ ...base, getMe });
 
-    await waitFor(() => expect(getMe).toHaveBeenCalled());
-    expect(screen.getByText(/Demo Traders · Owner/)).toBeTruthy();
+    // ⚠️ Wait on the RENDERED ROW, not on the spy. `getMe` records its call the
+    // moment it is invoked, so waiting on the spy can return a tick before the
+    // resolved membership list has been committed to the DOM — this test flaked
+    // exactly that way under full-suite worker contention while passing 8/8 in
+    // isolation. The observable the assertions depend on is the only sound wait.
+    await waitFor(() => expect(screen.getByText(/Demo Traders · Owner/)).toBeTruthy());
+    expect(getMe).toHaveBeenCalled();
     expect(screen.getByText(/Sharma Distributors · Data Entry/)).toBeTruthy();
     // The company already open is marked, so switching to it is obviously a no-op.
     expect(screen.getByText(/Demo Traders · Owner · \(current\)/)).toBeTruthy();

@@ -58,7 +58,9 @@ const FEATURES: {
       {
         name: "Bill-wise details (New Ref / Agst Ref / Advance / On Account)",
         state: "on",
-        note: "Stored per posting and rolled up by the Outstandings report. Includes the BILL-WISE OPENING BREAKUP: a party's opening balance is split into the individual unpaid bills carried in, each ageing by its own due date. Outstandings and the Balance Sheet are cross-checked to the paisa.",
+        note:
+          "Keyed on the voucher: a Sales or Purchase to a party that maintains bill-by-bill opens a reference for the invoice total, and a Receipt or Payment settles named open bills chosen from that party's ageing list. The reference that OPENS a bill is named by the server with the voucher number it allocates — the number does not exist while the form is being filled in. Rolled up by the Outstandings report, which nets by (party, reference) and reconciles with Sundry Debtors on the Balance Sheet to the paisa. Includes the BILL-WISE OPENING BREAKUP: a party's opening balance is split into the individual unpaid bills carried in, each ageing by its own due date. " +
+          "This row said `on` for the whole life of the product on the strength of the engine and the report alone, while NO SCREEN ON ANY PATH COULD CREATE A REFERENCE — the demo only looked right because the seed script hand-wrote them. Corrected here rather than deleted, because a row that describes what the server can do is not a row about what an operator can reach.",
       },
       {
         name: "Credit Notes and Debit Notes",

@@ -26,12 +26,23 @@ import {
   ensureLedger,
   ensureOutputTaxLedgers,
   buildGstVoucherRequest,
+  gstVoucherGross,
   type GstFormState,
 } from "./vouchers/gstVoucher";
 import { addMoney, normalizeMoney } from "./vouchers/money";
 import { FulfilmentPicker } from "./vouchers/FulfilmentPicker";
 import { fulfilsDirection } from "./vouchers/fulfilment";
 import { CostAllocationPicker } from "./vouchers/CostAllocationPicker";
+import { BillAllocationPicker } from "./vouchers/BillAllocationPicker";
+import { formatFixed4, itemInvoiceGross, parseFixed4 } from "./vouchers/itemInvoice";
+import {
+  billRefsFromView,
+  buildBillAllocations,
+  defaultNewRef,
+  retrackAutoRef,
+  type BillBearingLeg,
+  type DraftBillRef,
+} from "./vouchers/billAllocation";
 import {
   allocationsFromView,
   buildCostAllocations,
@@ -54,6 +65,7 @@ import type {
   DayBookEntry,
   FieldConfidence,
   GodownListItem,
+  LedgerListItem,
   PostingRequest,
   PurchaseVoucherDraft,
   StockItemListItem,
@@ -164,7 +176,23 @@ interface VoucherForm {
      * attributed to the bank leg instead of the expense.
      */
     allocations: readonly DraftAllocation[];
+    /**
+     * WHICH BILLS THIS PARTICULAR SETTLES (bill-wise references).
+     *
+     * ⛔ IT LIVES ON THE ROW, and for a sharper reason than the cost splits do.
+     * In SINGLE ENTRY the party field is the BANK — `postings[0]` — and the
+     * customer or supplier whose bill is being settled is one of these
+     * particulars. So the bill-bearing leg is a ROW, and attaching a reference
+     * anywhere else would put a receivable settlement on the bank account.
+     */
+    billRefs: readonly DraftBillRef[];
   }[];
+  /**
+   * WHICH BILL THIS INVOICE OPENS — the PARTY leg's references, used by the GST
+   * accounting and item-invoice paths where the bill-bearing leg IS
+   * `partyLedgerId` (the Sundry Debtor or Creditor) rather than a particular.
+   */
+  billRefs: readonly DraftBillRef[];
   /**
    * ITEM-INVOICE grid rows (Ctrl+H > Item Invoice on Sales/Purchase). Empty
    * rows are ignored on accept, so the form can always offer one more line.
@@ -183,7 +211,8 @@ function emptyForm(): VoucherForm {
     voucherNo: "",
     gst: emptyGstFormState(),
     taxableValue: "0.0000",
-    lines: [{ ledger: "", amount: "", allocations: [] }],
+    lines: [{ ledger: "", amount: "", allocations: [], billRefs: [] }],
+    billRefs: [],
     items: [emptyItemLine()],
   };
 }
@@ -215,6 +244,10 @@ function formFromView(view: VoucherView): VoucherForm {
     // voucher that already has lines. Which side is "many" depends on the class
     // (a payment credits one bank and debits many expenses), so the rows are
     // whichever side is NOT the class's primary side.
+    // The PARTY leg's own references (the raise path). `linesFromPostings`
+    // claims the particulars' ones; this is the Sundry Debtor/Creditor leg that
+    // a Sales or Purchase invoice opens its bill on.
+    billRefs: billRefsFromView(view.bill_allocations ?? [], view.party_ledger_id),
     lines: linesFromPostings(view),
     // THE ALTER ROUND TRIP FOR STOCK. The stored grid carries the real item /
     // godown / batch uuids; seeding from it (rather than re-resolving anything
@@ -279,9 +312,19 @@ function itemsFromView(view: VoucherView): ItemInvoiceLine[] {
  */
 function linesFromPostings(
   view: VoucherView,
-): { ledger: string; amount: string; allocations: readonly DraftAllocation[] }[] {
+): {
+  ledger: string;
+  amount: string;
+  allocations: readonly DraftAllocation[];
+  billRefs: readonly DraftBillRef[];
+}[] {
   const cfg = configFor(view.class.toLowerCase() as VoucherType);
   const manySide = cfg.primarySide === "DR" ? "CR" : "DR";
+  // ⚠️ A ledger posted on more than one line would otherwise be given its
+  // references TWICE — once per row — and the rebuilt voucher would claim double
+  // what it settles. The references belong to the LEDGER, not to the row, so the
+  // first row that carries it takes them.
+  const claimed = new Set<string>();
   const rows = view.postings
     // ⛔ THE INDEX IS CAPTURED BEFORE THE FILTER, and that is load-bearing.
     // `cost_allocations[].posting_seq` indexes the response's FULL `postings` array,
@@ -306,8 +349,49 @@ function linesFromPostings(
       // from the rebuilt array, because the response orders postings by
       // (dr_cr DESC, amount DESC) and the request will not.
       allocations: allocationsFromView(view.cost_allocations ?? [], seq),
+      // ⛔⛔ RE-HYDRATED FOR THE SAME REASON, AND THIS ONE WAS LIVE.
+      // `bill_allocation` is keyed on voucher_version_id, so an ALTER RE-STATES.
+      // `voucherFullJSON` has always RETURNED these rows — the read-back audit
+      // ticked them off — but no form ever sent them back, so editing the
+      // narration of any voucher carrying a bill reference DELETED it: the
+      // invoice stayed in Sundry Debtors and vanished from Outstandings. Emitting
+      // on the GET is necessary and NOT sufficient; the round trip closes here.
+      billRefs: (() => {
+        if (claimed.has(p.ledger_id)) return [];
+        claimed.add(p.ledger_id);
+        return billRefsFromView(view.bill_allocations ?? [], p.ledger_id);
+      })(),
     }));
-  return rows.length > 0 ? rows : [{ ledger: "", amount: "", allocations: [] }];
+  return rows.length > 0
+    ? rows
+    : [{ ledger: "", amount: "", allocations: [], billRefs: [] }];
+}
+
+/**
+ * The PARTY leg as a bill-bearing line, read from the form's own postings.
+ *
+ * ⛔ DERIVED, NEVER ASSUMED. The verbatim alter path re-sends `f.postings` as they
+ * were hydrated, so the reference must total whatever the PARTY ledger nets to in
+ * THAT array — not what the class would normally do. A sales voucher whose party
+ * leg was corrected to a different figure must re-reference the corrected one, and
+ * the server refuses any other total to the paisa.
+ *
+ * Signed: debits positive. The side follows the sign, so a party that nets credit
+ * (a purchase, or a sale that was reversed) is referenced on the credit side
+ * without a special case.
+ */
+function partyLeg(f: VoucherForm): BillBearingLeg {
+  let units = 0n;
+  for (const p of f.postings) {
+    if (p.ledger_id !== f.partyLedgerId) continue;
+    const amt = parseFixed4(p.amount);
+    units += p.dr_cr.toUpperCase().startsWith("D") ? amt : -amt;
+  }
+  return {
+    ledgerId: f.partyLedgerId,
+    drCr: units < 0n ? "CR" : "DR",
+    amount: formatFixed4(units < 0n ? -units : units),
+  };
 }
 
 /**
@@ -339,7 +423,8 @@ function formFromDraft(draft: PurchaseVoucherDraft): VoucherForm {
     // ⚠️ No allocations, and that is not an oversight: an item invoice REFUSES
     // cost_allocations outright (its postings are server-generated and index 0 is the
     // party leg), so a draft-prefilled purchase has nowhere to put one.
-    lines: [{ ledger: "", amount: "", allocations: [] }],
+    lines: [{ ledger: "", amount: "", allocations: [], billRefs: [] }],
+    billRefs: [],
     // An OCR draft carries no stock: insightd reads a supplier's bill, and the
     // items on it are the SUPPLIER's descriptions, not this company's stock
     // masters. Matching them would be a guess, and a guess that moves stock.
@@ -448,12 +533,24 @@ function AccountingVoucherScreen({
   // refetch on every keystroke would make the picker feel broken.
   const [parties, setParties] = useState<PartyOption[]>([]);
   const [partiesError, setPartiesError] = useState<string | null>(null);
+  /**
+   * THE WHOLE CHART, kept beside the filtered party list.
+   *
+   * ⛔ `parties` is filtered to PARTY_GROUPS and drops every field but three, and
+   * neither is enough here. Bill-wise references need `maintain_bill_by_bill` and
+   * the GROUP (which decides whether an open bill is a receivable or a payable),
+   * and in SINGLE ENTRY the bill-bearing ledger is a free-typed PARTICULAR that
+   * need not be in PARTY_GROUPS at all. Resolving it by name against the full
+   * chart is the only way the picker can know a row is bill-by-bill.
+   */
+  const [chart, setChart] = useState<LedgerListItem[]>([]);
   useEffect(() => {
     let live = true;
     client
       .listLedgers(companyID)
       .then((res) => {
         if (!live) return;
+        setChart(res.ledgers);
         setParties(
           res.ledgers
             .filter((l) => PARTY_GROUPS.includes(l.group_name))
@@ -700,10 +797,153 @@ function AccountingVoucherScreen({
       // construction — the same discipline the fulfilment links use.
       const allocations = buildCostAllocations(rows, 1);
       if (allocations.length > 0) req.cost_allocations = allocations;
+
+      // ---- THE BILL REFERENCES (what this voucher settles).
+      //
+      // ⛔ THE LEG IS A PARTICULAR, NOT THE PARTY FIELD, and that is the whole
+      // hazard here — the mirror image of the cost-split offset above. In single
+      // entry `postings[0]` is the BANK and `party_ledger_id` names the bank too;
+      // the customer whose invoice is being settled is one of these ROWS. A
+      // reference attached to the party field would credit the bank's own bill.
+      //
+      // ⚠️ The ids come from the SAME `ensureLedger` resolution the postings loop
+      // performed, in the same order, so the reference and the posting it must
+      // total against are the same ledger by construction rather than by lookup.
+      const billAllocations = rows.flatMap((l, idx) =>
+        buildBillAllocations(
+          {
+            ledgerId: postings[idx + 1]!.ledger_id,
+            drCr: manySide,
+            amount: normalizeMoney(l.amount),
+          },
+          l.billRefs,
+        ),
+      );
+      if (billAllocations.length > 0) req.bill_allocations = billAllocations;
       return req;
     },
     [client, companyID, cfg.primarySide, cfg.partyLabel],
   );
+
+  /**
+   * The chart entry for a ledger the operator NAMED, or for a uuid the form holds.
+   *
+   * ⚠️ Resolved by NAME for a single-entry particular because that is all the row
+   * carries until accept — `ensureLedger` mints the uuid at send time. A name
+   * that matches nothing is a ledger about to be CREATED, and a brand-new ledger
+   * is never bill-by-bill, so returning undefined is the right answer rather than
+   * a missing case.
+   */
+  const ledgerByName = useCallback(
+    (name: string): LedgerListItem | undefined =>
+      chart.find((l) => l.name === name.trim()),
+    [chart],
+  );
+  const ledgerById = useCallback(
+    (id: string): LedgerListItem | undefined => chart.find((l) => l.id === id),
+    [chart],
+  );
+
+  /**
+   * Which ageing report a ledger's open bills come from.
+   *
+   * A Sundry Debtor's bills are RECEIVABLE; everything else party-shaped is
+   * treated as PAYABLE. The distinction decides which list the settle picker
+   * offers, and offering the wrong one shows an operator no bills at all.
+   */
+  const kindForGroup = (group: string): "RECEIVABLE" | "PAYABLE" =>
+    group === "Sundry Creditors" ? "PAYABLE" : "RECEIVABLE";
+
+  /**
+   * THE PARTY WHOSE BILL THIS INVOICE OPENS — the raise path only.
+   *
+   * Undefined on every class that does not bill a party (Contra, the stock
+   * vouchers) and on single entry, where the bill-bearing leg is a PARTICULAR and
+   * the panel belongs on the row instead.
+   */
+  const raiseParty =
+    entryMode === "item-invoice" || cfg.showGst
+      ? ledgerById(form.partyLedgerId)
+      : undefined;
+
+  /**
+   * The gross the party will be posted, through the SHARED helpers so the figure
+   * shown here is the figure the builder sends. Never a local sum.
+   */
+  /** The party's net posting in a HYDRATED form, or null on a fresh create. */
+  const partyLegAmountFromPostings = (f: VoucherForm): string | null =>
+    f.postings.some((p) => p.ledger_id === f.partyLedgerId)
+      ? partyLeg(f).amount
+      : null;
+
+  /** The gross a FRESH invoice comes to, through the shared helpers. */
+  const deriveRaiseGross = (): string =>
+    entryMode === "item-invoice"
+      ? itemInvoiceGross(
+          joinMasters(form.items, stockItems),
+          homeStateCode,
+          form.gst.placeOfSupply,
+        )
+      : gstVoucherGross(
+          normalizeMoney(form.taxableValue),
+          form.gst.gstRatePct,
+          homeStateCode,
+          form.gst.placeOfSupply,
+        );
+
+  const raiseLeg: BillBearingLeg = {
+    ledgerId: form.partyLedgerId,
+    // A purchase credits the creditor; everything else debits the debtor.
+    drCr: type === "purchase" ? "CR" : "DR",
+    // ⛔ THE HYDRATED POSTINGS WIN WHEN THERE ARE ANY, AND THAT IS AN ALTER.
+    // A GET returns the voucher's taxable value and its derived tax but NOT the
+    // RATE — the rate is not stored, only what it produced. So re-deriving the
+    // gross on an alter reads the taxable base with no tax on it (10,000 against
+    // an 11,800 invoice) until the operator happens to re-key the rate, and the
+    // panel would tell them a correctly-hydrated reference was over-allocated by
+    // exactly the tax. The party's posting is right there in the response and is
+    // the figure the reference must total, so it is the one to use.
+    amount: partyLegAmountFromPostings(form) ?? deriveRaiseGross(),
+  };
+
+  /**
+   * DEFAULT ONE FULL-VALUE REFERENCE the moment a bill-by-bill party is chosen.
+   *
+   * ⛔ THE ORDINARY INVOICE MUST COST NOTHING. One bill for the whole invoice is
+   * what virtually every sale is; making the operator open a panel and retype the
+   * total to get it is how a feature ends up switched off, and switching it off
+   * means the receivable never reaches Outstandings — which is the entire defect
+   * this track exists to close.
+   *
+   * ⚠️ It fires only when there are NO references yet, so it can never overwrite a
+   * split the operator keyed, and never re-adds one they deliberately removed
+   * within the same edit. On an ALTER the hydrated references are already there,
+   * so this is a no-op — which is what stops it from re-defaulting a voucher whose
+   * real references were something else.
+   */
+  const hasRaiseParty = raiseParty?.maintain_bill_by_bill === true;
+  const raiseLegAmount = raiseLeg.amount;
+  const raiseLegId = raiseLeg.ledgerId;
+  const raiseLegSide = raiseLeg.drCr;
+  useEffect(() => {
+    if (!hasRaiseParty) return;
+    const leg: BillBearingLeg = {
+      ledgerId: raiseLegId,
+      drCr: raiseLegSide,
+      amount: raiseLegAmount,
+    };
+    setForm((f) => {
+      if (f.billRefs.length === 0) return { ...f, billRefs: defaultNewRef(leg) };
+      // ⛔ AND RE-TRACK IT. The party is picked BEFORE the value is keyed, so the
+      // default is created against a total of zero. Without this the form would
+      // refuse every invoice it had itself defaulted — see DraftBillRef.auto.
+      const retracked = retrackAutoRef(f.billRefs, leg);
+      return retracked === null ? f : { ...f, billRefs: retracked };
+    });
+    // The leg object is rebuilt every render; its three FIELDS are the only
+    // things the default depends on, and depending on the object would loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasRaiseParty, raiseLegAmount, raiseLegId, raiseLegSide]);
 
   /** Build a plain (non-GST) request: forward the loaded/seeded postings verbatim. */
   const buildPlainRequest = useCallback((f: VoucherForm): VoucherRequest => {
@@ -715,6 +955,21 @@ function AccountingVoucherScreen({
     };
     if (f.partyLedgerId) req.party_ledger_id = f.partyLedgerId;
     if (f.voucherNo) req.voucher_no = f.voucherNo;
+    // ⛔⛔ RE-SENT, AND OMITTING THIS IS THE DATA LOSS THIS TRACK EXISTS TO FIX.
+    // This is the VERBATIM path a hydrated ALTER takes, and `bill_allocation` is
+    // keyed on voucher_version_id — so a body without them DELETES the voucher's
+    // bill references. Editing a narration would drop an invoice out of
+    // Outstandings while leaving it in Sundry Debtors, and nothing anywhere
+    // refuses it: zero references is a legal state.
+    //
+    // ⚠️ The leg is the PARTY, matching formFromView's hydration. A single-entry
+    // voucher rebuilt through buildSingleEntryRequest carries its particulars'
+    // references instead; the two paths are exclusive.
+    const billAllocations = buildBillAllocations(
+      partyLeg(f),
+      f.billRefs,
+    );
+    if (billAllocations.length > 0) req.bill_allocations = billAllocations;
     return req;
   }, []);
 
@@ -754,6 +1009,7 @@ function AccountingVoucherScreen({
         voucherDate: f.date,
         narration: f.narration,
         party: f.party,
+        billRefs: f.billRefs,
       });
     },
     [client, companyID, homeStateCode, type],
@@ -809,6 +1065,7 @@ function AccountingVoucherScreen({
         voucherDate: f.date,
         narration: f.narration,
         party: f.party,
+        billRefs: f.billRefs,
       });
     },
     [client, companyID, homeStateCode, type, stockItems],
@@ -1158,7 +1415,27 @@ function AccountingVoucherScreen({
           accountLabel={cfg.partyLabel}
           primarySide={cfg.primarySide}
           parties={partyNames}
+          ledgerByName={ledgerByName}
+          kindForGroup={kindForGroup}
         />
+      ) : null}
+
+      {/* ⛔ THE BILL THIS INVOICE OPENS. Rendered only when the chosen party
+          MAINTAINS BILL-BY-BILL — that flag is on the ledger master, so the form
+          reads it from the chart it already loaded rather than asking. A party
+          that does not maintain it has no bills, and showing the panel would
+          invite a reference the report would never use. */}
+      {raiseParty !== undefined && raiseParty.maintain_bill_by_bill ? (
+        <div className="mt-3 max-w-2xl bg-tally-panel p-3 text-sm" data-testid="bill-refs-panel">
+          <BillAllocationPicker
+            leg={raiseLeg}
+            refs={form.billRefs}
+            mode="raise"
+            kind={kindForGroup(raiseParty.group_name)}
+            label={raiseParty.name}
+            onChange={(billRefs) => setForm((f) => ({ ...f, billRefs }))}
+          />
+        </div>
       ) : null}
 
       {isDraftMode ? (
@@ -1517,12 +1794,17 @@ function SingleEntryPanel({
   accountLabel,
   primarySide,
   parties,
+  ledgerByName,
+  kindForGroup,
 }: {
   form: VoucherForm;
   setForm: React.Dispatch<React.SetStateAction<VoucherForm>>;
   accountLabel: string;
   primarySide: "DR" | "CR";
   parties: string[];
+  /** Resolve a free-typed particular against the full chart. */
+  ledgerByName: (name: string) => LedgerListItem | undefined;
+  kindForGroup: (group: string) => "RECEIVABLE" | "PAYABLE";
 }) {
   const rows = form.lines;
   const paise = rows.reduce(
@@ -1539,6 +1821,7 @@ function SingleEntryPanel({
       ledger: string;
       amount: string;
       allocations: readonly DraftAllocation[];
+      billRefs: readonly DraftBillRef[];
     }>,
   ) =>
     setForm((f) => ({
@@ -1603,6 +1886,29 @@ function SingleEntryPanel({
               lineIndex={i}
               onChange={(allocations) => setLine(i, { allocations })}
             />
+            {/* ⛔ THE BILL THIS ROW SETTLES. It hangs off the PARTICULAR and not
+                off the party field, because in single entry the party field is the
+                BANK: `postings[0]` is the account the money moved through, and the
+                customer or supplier being settled is this row. Putting it anywhere
+                else would attach a receivable settlement to a bank account. */}
+            {(() => {
+              const led = ledgerByName(l.ledger);
+              if (led === undefined || !led.maintain_bill_by_bill) return null;
+              return (
+                <BillAllocationPicker
+                  leg={{
+                    ledgerId: led.id,
+                    drCr: manySide === "Dr" ? "DR" : "CR",
+                    amount: normalizeMoney(l.amount),
+                  }}
+                  refs={l.billRefs}
+                  mode="settle"
+                  kind={kindForGroup(led.group_name)}
+                  label={led.name}
+                  onChange={(billRefs) => setLine(i, { billRefs })}
+                />
+              );
+            })()}
           </li>
         ))}
       </ul>
@@ -1621,7 +1927,7 @@ function SingleEntryPanel({
         onClick={() =>
           setForm((f) => ({
             ...f,
-            lines: [...f.lines, { ledger: "", amount: "", allocations: [] }],
+            lines: [...f.lines, { ledger: "", amount: "", allocations: [], billRefs: [] }],
           }))
         }
       >

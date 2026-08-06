@@ -1,3 +1,4 @@
+import { buildBillAllocations, type DraftBillRef } from "./billAllocation";
 /**
  * GST wiring for the Sales/Purchase voucher form (used only when
  * cfg.showGst). Three responsibilities, all in the screen layer (the XState
@@ -277,6 +278,15 @@ export interface GstVoucherInputs {
   voucherDate?: string;
   narration?: string;
   party?: string;
+  /**
+   * The bill-wise references this invoice opens against the PARTY leg. Normally
+   * one unnamed NEW ref for the gross total — the server stamps it with the
+   * voucher number it allocates, because that number does not exist yet.
+   *
+   * Absent/empty for a party that does not maintain bill-by-bill, which is the
+   * majority of ledgers and not an omission.
+   */
+  billRefs?: readonly DraftBillRef[];
 }
 
 /**
@@ -291,6 +301,30 @@ export interface GstVoucherInputs {
  * mirror of the Go engine) ONLY to build verifiable postings; the DISPLAYED tax
  * is read back from VoucherResponse.cgst/sgst/igst, never from this function.
  */
+/**
+ * THE VOUCHER GROSS — taxable plus derived tax, i.e. the PARTY leg's amount.
+ *
+ * Exported for the same reason {@link itemInvoiceGross} is: the bill-reference
+ * panel and the builder must agree on what the invoice comes to, and the only way
+ * to guarantee that is for both to call this.
+ */
+export function gstVoucherGross(
+  taxableValue: string,
+  gstRatePct: string,
+  supplierStateCode: string,
+  placeOfSupplyStateCode: string,
+): string {
+  const split = deriveGstSplit(
+    taxableValue,
+    gstRatePct,
+    supplierStateCode,
+    placeOfSupplyStateCode,
+  );
+  return split.intra
+    ? addMoney(addMoney(taxableValue, split.cgst), split.sgst)
+    : addMoney(taxableValue, split.igst);
+}
+
 export function buildGstVoucherRequest(
   inputs: GstVoucherInputs,
 ): VoucherRequest {
@@ -311,16 +345,21 @@ export function buildGstVoucherRequest(
   );
 
   const taxPostings: PostingRequest[] = [];
-  let total = taxableValue;
   if (split.intra) {
     taxPostings.push({ ledger_id: outputTax.cgstId, dr_cr: "CR", amount: split.cgst });
     taxPostings.push({ ledger_id: outputTax.sgstId, dr_cr: "CR", amount: split.sgst });
-    total = addMoney(total, split.cgst);
-    total = addMoney(total, split.sgst);
   } else {
     taxPostings.push({ ledger_id: outputTax.igstId, dr_cr: "CR", amount: split.igst });
-    total = addMoney(total, split.igst);
   }
+  // ⚠️ THROUGH THE EXPORTED HELPER, not summed again here. The bill-reference
+  // panel shows this same figure, and one definition of "what the invoice comes
+  // to" is the only way the form cannot display one total and post another.
+  const total = gstVoucherGross(
+    taxableValue,
+    gst.gstRatePct,
+    supplierStateCode,
+    gst.placeOfSupply,
+  );
 
   const postings: PostingRequest[] = [
     // Party Dr = gross total (taxable + tax).
@@ -365,5 +404,19 @@ export function buildGstVoucherRequest(
     gst: gstReq,
   };
   if (inputs.voucherNo) req.voucher_no = inputs.voucherNo;
+
+  // ---- THE BILL THIS INVOICE OPENS.
+  //
+  // ⛔ ATTACHED HERE, NOT AT THE CALL SITE, because `total` is computed in THIS
+  // function and the reference must equal the party posting to the paisa — the
+  // server refuses any other total. A caller recomputing "taxable plus tax" would
+  // be a second implementation of the same arithmetic, and the drifted copy is
+  // always the one that reaches production. Single-sourced for the same reason
+  // the postings array above is.
+  const billAllocations = buildBillAllocations(
+    { ledgerId: partyLedgerId, drCr: "DR", amount: total },
+    inputs.billRefs ?? [],
+  );
+  if (billAllocations.length > 0) req.bill_allocations = billAllocations;
   return req;
 }

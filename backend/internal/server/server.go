@@ -2609,10 +2609,17 @@ func (s *Server) handleOutstandings(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 		parties = append(parties, map[string]any{
-			"ledger":  p.LedgerName,
-			"group":   p.GroupName,
-			"pending": p.Pending.StringFixed(4),
-			"bills":   bills,
+			// ⛔ THE ID IS EMITTED BECAUSE A SETTLEMENT IS KEYED AGAINST IT. The
+			// bill-wise picker on a Receipt has to list THIS party's open bills, and
+			// matching the party by NAME would work only by accident of
+			// ledger_company_id_name_key being unique — it would break the moment a
+			// ledger is renamed mid-period, and it would break silently, by showing
+			// an operator no open bills for a customer who has several.
+			"ledger_id": p.LedgerID.String(),
+			"ledger":    p.LedgerName,
+			"group":     p.GroupName,
+			"pending":   p.Pending.StringFixed(4),
+			"bills":     bills,
 		})
 	}
 	slabs := make([]map[string]string, 0, len(out.SlabTotals))

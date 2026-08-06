@@ -1184,6 +1184,12 @@ export interface OutstandingBill {
 }
 
 export interface OutstandingParty {
+  /**
+   * The party ledger's uuid. Present so a bill-wise settlement picker can list
+   * THIS party's open bills without matching on the display name — which would
+   * work only by accident of name uniqueness and would fail silently on a rename.
+   */
+  ledger_id: string;
   ledger: string;
   group: string;
   pending: Money;

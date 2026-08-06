@@ -1,6 +1,6 @@
 # HANDOFF — THE LIVE ONE. Start here, from cold.
 
-> **Written 2026-08-05, updated in place at `2777980`.** This file replaces the ELEVEN `HANDOFF-*.md`
+> **Written 2026-08-05, updated in place at the bill-reference commit (2026-08-06).** This file replaces the ELEVEN `HANDOFF-*.md`
 > files that preceded it (§11 lists them; `ls` confirms eleven). **Every other `HANDOFF-*.md` in this
 > repository is SPENT** — see §11 for the list and for the one thing to do about them.
 >
@@ -46,6 +46,13 @@ check is a guess.
 **So Tier 1 is closed and §5 is now the whole map.** ⛔ **The concrete plan for what to do next is
 §1.4** — read it after §2. In one line: three finished engines still have no screen (§5.2), one of
 them is statutorily mandatory, and they remain the cheapest real parity this product can buy.
+
+> ### ⛔ SINCE THEN: BILL-WISE REFERENCES SHIPPED (§1.5), AND THE BROWSER FOUND A NEW DEFECT.
+> Money keyed in a browser now reaches the Outstandings report and reconciles with the Balance Sheet
+> to the paisa — it never did before, on any path. **Two things came out of it that outrank most of
+> §5.3:** an ALTER was silently destroying bill references (§4.3's audit had cleared that table on
+> half a check), and **drilling into any non-Sales voucher from the Day Book re-classes it as a Sales
+> voucher (§4.8, unfixed).**
 
 > ### ⛔ WHAT TIER 1 COST, AND THE ONE SENTENCE WORTH CARRYING FORWARD
 > Five of the seven tracks shipped a complete, tested, reviewed BACKEND before anyone noticed no
@@ -178,16 +185,35 @@ EMPTY allowed-import set that `internal/server` may import. The workflow plane i
 
 **Run §2 first (ten minutes, and it has burned every session that skipped it). Then this.**
 
-Tier 1 is closed, so there is no longer a queue telling you what is next — §5.3 is the ordered
-roadmap and this is the concrete plan for the top of it.
+> ## ✅ TRACK A IS DONE. BILL REFERENCES ARE REAL, END TO END, ON BROWSER EVIDENCE.
+>
+> The section below is kept for its reasoning; **the work it describes is shipped.** §1.5 records
+> what it actually cost and the three findings it produced. **The next track is §1.4 B (the IRN
+> screen), and its architecture decision is still unmade.**
+>
+> ⛔ **AND A IS NOT WHAT THIS SECTION ESTIMATED.** It called A "small, certain, needs no
+> architectural decision". Two of those were wrong:
+> 1. **It needed a server change.** `allocateVoucherNo` mints the voucher number INSIDE the post
+>    transaction, so a browser cannot name the bill it is opening — the name does not exist when the
+>    request is assembled. "The shape of the work is CLIENT-side, not server-side" was false.
+> 2. **It was two halves, not one.** `Outstandings` nets `NEW` against `AGAINST` by ref_name, so
+>    raising bills without a way to settle them produces a report that lists every invoice as
+>    pending forever. Shipping only the raise half would have replaced an invisible wrong number
+>    with a visible one.
 
 ### THE RECOMMENDATION, AND IT IS A FORK
 
 > **If you have a full session: do B (the IRN screen), and do A first as the warm-up — A is small
 > enough that it will not eat B.**
 > **If you have a short one: do A, and stop. It is a complete, shippable, real fix.**
+>
+> ⚠️ **THIS FORK WAS WRONG ABOUT A, and the correction is the reusable part: A took a full session
+> on its own.** The estimate came from a diagnosis (§4.7 item 11) that had already been corrected
+> once and was still incomplete — the corrected version knew no screen built a reference, but not
+> that no screen COULD, nor that settlement was a second feature. **A diagnosis that has been wrong
+> once is not thereby right; it has been wrong once.**
 
-### A. FIRST, AND IT NEEDS NO DECISION — `bill_allocation` on the item-invoice path
+### A. ✅ DONE — `bill_allocation` on EVERY voucher path (was: "the item-invoice path")
 
 §4.7 item 11. A voucher keyed against a bill-by-bill party creates **no bill reference**, so the
 receivable sits in the Balance Sheet's Sundry Debtors and is **absent from Outstandings**: money that
@@ -223,6 +249,78 @@ requires — POST over HTTP to a bill-by-bill party, then read the figure back o
 **Outstandings report** and reconcile it against Sundry Debtors on the Balance Sheet. ⛔ Carry a
 CONTROL: the same voucher to a party that does NOT maintain bill-by-bill must produce no allocation,
 or the test passes by always writing one.
+
+### 1.5 ⛔ WHAT TRACK A SHIPPED, AND THE THREE THINGS IT FOUND
+
+Closed 2026-08-06. Driven in a real browser against real `cored` with a virtual WebAuthn
+authenticator over CDP (§9.7's recipe, **verified working a fourth time**):
+
+| Keystroke | What actually happened |
+|---|---|
+| `F8`, pick **Acme Traders** (bill-by-bill), 10,000 @ 18% | the bill-wise panel appeared **by itself**, tracking the gross to **11,800.0000 DR** |
+| set due 2026-07-15, `Ctrl+A` | **Sales 5 saved through the passkey** |
+| the database | `ref_name = "5"` — **the SERVER stamped the number it allocated** |
+| `Alt+G` Outstandings | Acme **1,85,480.00**, and drilling showed the new invoice |
+| `F6`, HDFC Bank, particular **Acme Traders** 5,000 | the settle picker appeared **on the ROW**, listing the party's five real open bills with ageing — `5 (11800.0000, 22d overdue)` |
+| pick bill 5, `Ctrl+A` | **Receipt 2 saved** |
+| Outstandings | Acme **1,80,480.00** — bill 5 now **6,800** pending |
+| Balance Sheet | Sundry Debtors **2,60,720.00** = Outstandings total **2,60,720.00** — ⛔ **reconciles to the paisa** |
+
+**The shape of the fix, because the next person will look for it in the wrong place:**
+
+- **The server stamps the reference name.** `validateBillAllocations` now permits an empty `ref_name`
+  for every type EXCEPT `AGAINST`, and `post()` substitutes `in.VoucherNo` after allocation, from a
+  single-sourced `billAllocations` variable with the delete guard its four siblings already had.
+- ⛔ **`AGAINST` MUST NAME ITS BILL, and that asymmetry is the whole design.**
+  `reporting.Outstandings` groups by `(ledger_id, ref_name)` and **ignores `ref_type` entirely** — so
+  a defaulted `AGAINST` would not settle anything, it would open a SECOND bill under its own number,
+  leaving the invoice fully outstanding beside a negative row. Both figures wrong, report still foots.
+- **A new server invariant: references on a ledger must total that ledger's posting**, signed and
+  exact. `BillAllocationInput`'s doc comment had declared this since the beginning and *nothing had
+  ever checked it* ("the engine records what it is given" was true, and was the bug). It is checked
+  INSIDE the transaction against the FINAL postings, because an item invoice's postings do not exist
+  when the request arrives.
+- **The bill-bearing leg is stated by the caller, never inferred** — same discipline as
+  `buildCostAllocations`'s `primaryLegCount`, and for a sharper reason: on a Sales invoice the leg is
+  `party_ledger_id`, but **in SINGLE ENTRY the party field is the BANK** and the customer being
+  settled is a PARTICULAR row.
+
+#### The three findings, and two of them are not Track A's
+
+1. ⛔⛔ **AN ALTER DESTROYED BILL REFERENCES, AND IT WAS LIVE.** `bill_allocation` is keyed on
+   `voucher_version_id`, so an ALTER re-states. Editing the narration of any voucher carrying a
+   reference **deleted it** — the invoice stayed in Sundry Debtors and vanished from Outstandings.
+   > **AND §4.3's AUDIT HAD ALREADY "CHECKED" THIS TABLE.** It verified `voucherFullJSON` EMITS the
+   > rows, ticked them off, and stopped. **Emitting is necessary and NOT SUFFICIENT** — the round
+   > trip closes only when a form rebuilt from that response sends them back, and no form did.
+   > **The audit was half an audit, and the other half is unrun for the four tables it cleared.**
+   > See §4.3, which is corrected.
+2. ⛔⛔ **DRILLING INTO ANY NON-SALES VOUCHER FROM THE DAY BOOK OPENS A *SALES* FRAME — AND SAVING
+   RE-CLASSES THE VOUCHER.** `navMachine.ts` pushes `newVoucherFrame(DEFAULT_LAST_VOUCHER, "alter")`
+   for every voucher-bearing drill, and `acceptVoucher` routes the PUT by that screen type. **Proved:
+   drill a Payment, press `Ctrl+A`, and `alterSalesVoucher` is called** — not `alterPaymentVoucher`.
+   NOT Track A's, NOT fixed, and it is §5.1's third kind (a row reading `on` with a hole behind it)
+   found exactly the way §5.5 says to find them. **It is now §4.8 and it is the cheapest real defect
+   on the board.**
+3. **The settle pre-fill over-allocated every partial payment.** Choosing a bill filled its whole
+   pending, so a 5,000 receipt against an 11,800 invoice greeted the operator with a refusal about
+   money they had not typed. Capped at the line's remainder. Found by driving it, not by review.
+
+⚠️ **AND A TEST THAT COULD NOT FAIL, CAUGHT BY MUTATION AND NOT BY READING.** The first version of
+the alter round-trip test called `alterSalesVoucher` directly rather than driving the form; deleting
+the hydration from `formFromView` left the whole suite green. It now drives the shell. **§9.2's rule
+applies to tests you wrote ten minutes ago.**
+
+⚠️ **THE SINGLE-ENTRY ALTER HYDRATION IS WRITTEN BUT UNVERIFIED**, because finding 2 makes it
+unreachable: you cannot drill into a Receipt. `VoucherScreen.billRefs.test.tsx` says so at the point
+where the test would go, with the exact test to add once the drill is fixed.
+
+⚠️ **NO RESIDUE LEFT, DELIBERATELY** (§11's practice, copied from T5). The browser-keyed Sales 5 and
+Receipt 2 were `Alt+D`-tombstoned through the app: the sale carried **no HSN** (the accounting-mode
+GST form's HSN field was left blank) and took `verify:demo` to 32/33 on the GSTR-1 HSN check.
+⚠️ **That is worth knowing on its own: any accounting-mode GST sale keyed without an HSN breaks that
+gate**, which is a brittleness in the check rather than a product defect — but it will catch the next
+person the same way.
 
 ### B. THEN THE e-INVOICE / IRN SCREEN — but the FIRST hour is a DECISION, not typing
 
@@ -312,12 +410,12 @@ cd ../frontend && pnpm exec tsc --noEmit && pnpm run test:run
 cd .. && make verify
 ```
 
-### 2.1 The gate baseline at `2777980` — re-measure, do not assume
+### 2.1 The gate baseline at the bill-reference commit — re-measure, do not assume
 
 | Gate | Value |
 |---|---|
-| backend `go test ./... -count=1 -v` | **2300 pass / 0 SKIP / 0 FAIL** |
-| frontend `pnpm run test:run` | **728 pass / 54 files** |
+| backend `go test ./... -count=1 -v` | **2307 pass / 0 SKIP / 0 FAIL** |
+| frontend `pnpm run test:run` | **761 pass / 56 files** |
 | `pnpm exec tsc --noEmit` | clean — ⛔ **a SEPARATE gate from `make verify`** |
 | `make verify` | exit 0 |
 | `verify:demo` | **33/33**, run **ALONE**, needs cored **and** insightd up |
@@ -371,9 +469,10 @@ STATUS: `401` means the route exists and needs auth; `404` means you are talking
 | n−2 | T2 + the shared T3 contract | 2, zero barriers | ~1.3M |
 | n−1 | T3 backend end-to-end + T5 core | 0 — solo | 0 |
 | n−1 | T3 frontend end-to-end (5 screens) AND T2's allocation UI — two rows, both browser-verified | 0 — solo | 0 |
-| **n (this one)** | **T5 end-to-end — the architecture decision, the rules split, migration 0047, the store/route/screen, and the row flipped on browser evidence. TIER 1 CLOSED.** | **0 — solo** | **0** |
+| n−1 | **T5 end-to-end — the architecture decision, the rules split, migration 0047, the store/route/screen, and the row flipped on browser evidence. TIER 1 CLOSED.** | 0 — solo | 0 |
+| **n (this one)** | **Bill-wise references end to end — the server stamp, the sum-to-posting invariant, the pure module, the picker, three build paths, the mock's ageing report, and raise→settle→reconcile on browser evidence. Plus one live data-loss fix and one new defect found (§4.8).** | **0 — solo** | **0** |
 
-**Four observations, and the fourth is new.** First: plan for roughly one track per session — the
+**Five observations, and the fifth is new.** First: plan for roughly one track per session — the
 last three delivered exactly one each and all were full. Second: **the last THREE sessions each
 delivered a whole track with no subagents at all**, because each was a long serial chain of decisions
 in contended files; **fan out for genuinely disjoint files, go solo down a dependency chain.** Third:
@@ -382,6 +481,12 @@ session on its own. Fourth, and it is the one to budget for: **the BROWSER PASS 
 AND IT IS NOT FIVE MINUTES.** T5's found three defects (§1.3), two of them in code this session never
 touched, and fixing them was real work with its own tests and mutation proofs. Budget for the pass
 AND for what it finds — a track is not done when the screen renders.
+
+**Fifth, and it is about ESTIMATES rather than throughput: the item this file called "small,
+certain, needs no architectural decision" took a whole session** (§1.5). It was sized from a
+diagnosis that had already been corrected once and was still incomplete. **Re-derive the size from
+the CODE at the start of the track, not from the handoff's own summary of it** — ten minutes of grep
+changed the size of this job twice, and the second time was after it had supposedly been settled.
 
 ---
 
@@ -470,6 +575,27 @@ at length why omitting them destroys a departmental split**, and `voucherFullJSO
 > ✅ **CHECKED SO FAR, so nobody re-derives it:** `posting`, `stock_movement`, `bill_allocation`,
 > `posting_cost_allocation` and `order_fulfilment` are all emitted.
 >
+> ### ⛔⛔ AND THAT TICK WAS HALF A CHECK. IT CLEARED A TABLE THAT WAS LOSING DATA.
+>
+> `bill_allocation` is on the list above because `voucherFullJSON` EMITS it — which it does, and
+> always did. **No form ever sent them back.** So the ordinary round trip (open an invoice, fix the
+> narration, save) DELETED the bill reference: the receivable stayed in Sundry Debtors on the Balance
+> Sheet and vanished from Outstandings, with nothing refusing it because zero references is a legal
+> state. Fixed 2026-08-06 (§1.5), pinned by `TestAnAlterRebuiltFromTheGetKeepsTheBill` WITH the
+> control that an alter omitting them destroys the bill while Sundry Debtors does not move.
+>
+> **THE AUDIT QUESTION WAS WRONG, AND HERE IS THE RIGHT ONE.** "Does `voucherFullJSON` emit it?" is
+> necessary and NOT sufficient. Ask instead:
+>
+> > **Does a form REBUILT FROM THAT RESPONSE send it back?** Prove it by ALTERING through the screen
+> > and reading the table, with the control that an alter omitting it destroys the row.
+>
+> ⛔ **THE OTHER FOUR HAVE NOT BEEN ASKED THE RIGHT QUESTION.** `posting` and `stock_movement` are
+> re-sent by the form (the alter tests cover them). `posting_cost_allocation` and `order_fulfilment`
+> are hydrated by `allocationsFromView` / the fulfilment picker and are *probably* fine — **but
+> "probably" is what this table had too.** Re-run all four against the corrected question and write
+> the result down here.
+>
 > ⛔ **`e_way_bill` (0047) IS NOT IN THIS CLASS AT ALL, and the reason is the useful part.** It keys
 > on the voucher HEAD, not on `voucher_version_id`, and the voucher path never writes it — so an
 > ALTER can neither re-state nor drop it. **But an ALTER still matters there, in a quieter way**: the
@@ -536,6 +662,37 @@ item is more urgent than it was.
 ⚠️ `seed-demo.mts`, `verify-demo.mts` and `corpora/validate.py` are **CO-OWNED**. ADD only, and
 re-read immediately before each edit.
 
+### 4.8 ⛔⛔ NEW AND UNFIXED — DRILLING INTO A NON-SALES VOUCHER RE-CLASSES IT
+
+**Found 2026-08-06 while browser-verifying Track A. It is not Track A's, it is pre-existing, and it
+is the cheapest serious defect currently known.**
+
+`navMachine.ts` (~line 546) pushes `newVoucherFrame(DEFAULT_LAST_VOUCHER, "alter")` for **every**
+voucher-bearing drill, and `DEFAULT_LAST_VOUCHER` is `"sales"`. The machine has only the row key (a
+voucher id) at that point, so it cannot know the class. Then `editActions.acceptVoucher` routes the
+PUT by **`ctx.type`** — the SCREEN's type — not by the loaded voucher's class.
+
+**PROVED against the mock, by driving the shell:** post a Payment, drill it from the Day Book, press
+`Ctrl+A` → **`alterSalesVoucher` is called, `alterPaymentVoucher` is not.** The frame even titles
+itself *"Sales Voucher (Alteration)"* over a voucher numbered `RCPT/1`.
+
+Three consequences, and the first is the one that matters:
+
+- **A Receipt / Payment / Contra / Journal opened from the Day Book and saved is re-classed as a
+  Sales voucher.** That is a corrupted document, not a cosmetic error.
+- The Sales GST form renders over a single-entry voucher, so the particulars are not editable.
+- ⛔ **It makes the single-entry bill-reference hydration unreachable and therefore unverified**
+  (§1.5) — you cannot drill into a Receipt to test it.
+
+> **THE FIX IS A DECISION, NOT A ONE-LINER.** Either the machine learns the class (the drill would
+> have to carry it from the report row, which knows it), or the screen corrects the frame after
+> `getVoucher` resolves, or `acceptVoucher` routes by the LOADED voucher's class and the title
+> follows it. The third is smallest and the first is most honest. ⚠️ Whichever you pick, **the
+> browser pass is the acceptance test**: drill each of Payment / Receipt / Contra and save.
+
+⚠️ **AND WHY NOBODY CAUGHT IT:** §5.5 lists the Day Book as "known-good, driven end to end". It was
+— **with a Sales voucher**, the one class for which the default is accidentally right.
+
 ### 4.7 SMALLER, REAL, AND EACH WORTH DOING
 
 | # | What | Why |
@@ -545,7 +702,7 @@ re-read immediately before each edit.
 | 7 | The pre-flight allocation refusal names the axis by raw UUID | Strictly *less* usable than the DB trigger message it exists to pre-empt. Resolve names at the in-transaction call site, which already holds the tx |
 | 8 | The two cost reports disagree about an off-axis allocation | The category summary excludes it and reports it separately; the centre summary silently includes it. Neither says so |
 | 9 | Fold `tsc` into `make verify` | ~10 minutes, and it closes a whole class of "green but broken". **Still not done, and it caught a real error this session** — `printTarget.ts`'s exhaustive `Record<ReportName, string>` failed only under `tsc`, never under `make verify` |
-| 11 | ⛔⛔ **NO SCREEN BUILDS `bill_allocations` — ON ANY VOUCHER PATH** | **Money nobody can chase.** The receivable is in the Balance Sheet's Sundry Debtors and ABSENT from Outstandings, so it never ages and never reaches a statement. Found by keying an item invoice in a browser at `2777980`: `verify:demo` went 32/33 with a gap of exactly that invoice. ⚠️ **THE OBVIOUS DIAGNOSIS IS WRONG** — it is not that the accounting path writes one and the item path does not. `ledger.go` writes them from `in.BillAllocations` (the CLIENT supplies them) and `grep -rn "bill_allocations:" frontend/src` finds them built in ONE place: `seed-demo.mts`. The demo only looks right because the seed script hand-writes them. **The fix is client-side and covers every form.** See §1.4 A |
+| 11 | ✅ **DONE 2026-08-06 — bill references are built, settled and reconciled** | §1.5. Was: "no screen builds `bill_allocations` on any voucher path", i.e. money nobody can chase. ⚠️ **AND THE DIAGNOSIS IN THIS ROW WAS *STILL* INCOMPLETE after being corrected once** — it said "the fix is client-side", which was false: the voucher number is minted inside the post transaction, so a browser CANNOT name the bill it opens and the server had to stamp it. It also missed that settlement is a second feature. **A claim that has been corrected once is not thereby right.** Left here rather than deleted, per §9.1 |
 | 12 | An e-way bill cannot be raised against a DELIVERY NOTE | §4.2. Real, ordinary, and NIC supports it (docType `CHL`). Needs a decided rule for deriving the consignment value from the movement; `ErrNoTaxLines` refuses by name rather than guessing at a figure the threshold test depends on |
 | 10 | No tracking numbers | RESEARCH.md:622 — Tally stitches Delivery Note ↔ Sales invoice with a **Tracking No.**, and creates "bill pending" entries when goods and bill arrive separately. T3 links a voucher to an ORDER but not to another VOUCHER. The order register states this gap |
 
@@ -612,11 +769,14 @@ project has now shipped four times and which §4.1 exists to stop.
    not a feature: it is how every adjustment, provision, depreciation and reclass is entered. ⚠️ It is
    also the only known HIDDEN row (§5.1), so it is the one gap whose size is proven rather than
    guessed.
-3. **`bill_allocation` on the item-invoice path** — §4.7 item 11, and **§1.4 A**. Small, and it is
-   *money nobody can chase*: an item invoice to a bill-by-bill party never reaches Outstandings.
-   ⚠️ **Cheapest thing on this list, needs no architectural decision, and it is out of ORDER here on
-   purpose** — §1.4 recommends it as the warm-up before item 1 precisely because value-ordering and
-   do-it-first-ordering are not the same question.
+3. ✅ **`bill_allocation` on every voucher path — DONE 2026-08-06** (§1.5). It was billed here as
+   "the cheapest thing on this list, needs no architectural decision" and **it was neither**: it
+   needed a server change (the voucher number is minted inside the post transaction, so a browser
+   cannot name the bill it opens) and it was two features, because a raise without a settle makes
+   Outstandings overstate forever. It took a full session.
+   > ⛔ **REPLACED AT THIS SLOT BY §4.8 — the Day Book drill re-classes any non-Sales voucher it
+   > opens.** Found while browser-verifying this row. It is genuinely small, it is a corrupted
+   > document rather than a cosmetic fault, and it blocks verification of work already written.
 4. **T15 Export (Excel / CSV / XML)** — ⚠️ **the most underrated item on this list.** Tally users live
    in Excel; "export this report" is a dozen times a day, and its absence makes every report a dead end.
    `Alt+E` is already bound and already dispatches a screen action, so the plumbing exists.
@@ -685,6 +845,20 @@ code nobody had changed this session.
 
 ⚠️ **AND WRITE THE RESULT DOWN HERE**, per row, as it is checked. An audit whose findings live in one
 session's memory is an audit that will be run again from scratch.
+
+#### THE LOG. Append to it; do not start a new one.
+
+| Date | Row / keystroke driven | Result |
+|---|---|---|
+| 2026-08-06 | **F8 GST sale to a bill-by-bill party → Outstandings → Balance Sheet** | ✅ after the fix. Bill-wise references now raise, settle and reconcile to the paisa (§1.5). Before the fix this row read `on` and **no browser-keyed receivable had ever reached Outstandings** |
+| 2026-08-06 | **F6 Receipt settling an open bill** | ✅ after the fix. The picker lists real open bills with ageing |
+| 2026-08-06 | **ALTER of a voucher carrying a bill reference** | ⛔ **WAS DESTROYING DATA** — fixed (§1.5 finding 1). §4.3's audit had cleared this table on half a check |
+| 2026-08-06 | **Day Book drill → any non-Sales voucher** | ⛔⛔ **BROKEN, UNFIXED — §4.8.** Opens a Sales frame; saving re-classes the voucher. The Day Book was on the known-good list because it had only ever been driven with a Sales voucher |
+
+⛔ **THE METHOD NOTE THAT CAME OUT OF THIS, and it is worth more than the rows:** driving ONE row
+end to end is not enough when the row covers a CLASS. "The Day Book works" was established with a
+Sales voucher and was false for every other class. **When a screen is parameterised by type, drive
+more than one type — the default is always right for exactly one of them.**
 
 ---
 
@@ -959,6 +1133,21 @@ The false version is the plausible one and **will be re-invented**. Claims that 
   is **overstated for Journal**: F7 renders no posting grid, so a journal cannot be keyed from scratch
   (§4.5). Still uncorrected — correct it when you build the grid.
 
+- ⛔ *"the fix is client-side and covers every form"* — §4.7 item 11's own correction, and **false**.
+  `allocateVoucherNo` mints the voucher number INSIDE the post transaction, so a client physically
+  cannot name the bill it is opening: the name does not exist when the request is built. The server
+  had to learn to stamp it. **This claim had ALREADY been corrected once** (from the even more wrong
+  "the accounting path writes one and the item path does not") and was still wrong — which is the
+  lesson worth keeping: *a diagnosis that has been corrected once is not thereby right; it has been
+  wrong once.*
+- ⛔ *"`bill_allocation` is emitted by `voucherFullJSON`, so the read-back audit can tick it off"* —
+  §4.3's audit, and **true but not sufficient**. Emitting is half the round trip; no form ever sent
+  them back, so an ALTER destroyed them for the whole life of the feature. The audit question is
+  corrected in place at §4.3, and **the other four tables have not been asked the corrected one.**
+- ⛔ *"the Day Book is known-good, driven end to end"* — §5.5's list, and **true only for Sales**.
+  Drilling into any other class opens a Sales frame and saving re-classes the voucher (§4.8). An
+  audit that exercised one member of a class is an audit of that member.
+
 **And prefer a refusal that takes a company and a period over one that takes no arguments** — the
 latter can only make claims about the software, and those go stale silently.
 
@@ -1157,7 +1346,7 @@ has caught something every single time:
 2. `make verify` exit 0 **and** `pnpm exec tsc --noEmit` clean (**different gates** — and each has
    caught a real error the other missed: `tsc` found `printTarget.ts`'s non-exhaustive record,
    `make verify` found `corpora/validate.py`'s `KNOWN_SCREENS`).
-3. backend **≥2300 pass, 0 SKIP, 0 FAIL** (verbose census); frontend **≥728 / 54 files**;
+3. backend **≥2307 pass, 0 SKIP, 0 FAIL** (verbose census); frontend **≥761 / 56 files**;
    `verify:demo` **33/33 run ALONE** with insightd up **and the company id as an argument** (§2.1),
    re-pinned deliberately if a figure moves — and **the change explained**.
 4. ⛔ **THE REACHABILITY CHECK, for every new feature: name the exact HTTP request that exercises it

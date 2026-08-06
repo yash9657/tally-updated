@@ -86,8 +86,11 @@ describe("report screens fetch from the live client on mount", () => {
       ],
     }));
     renderReport(DayBookScreen, { getDayBook });
-    await waitFor(() => expect(getDayBook).toHaveBeenCalledWith("co-1", {}));
-    expect(screen.getByText("INV/0007")).toBeTruthy();
+    // Await the RENDER, not just the call — the same hazard the Outstandings
+    // test below already guards against. A spy records its call on invocation,
+    // so waiting on it can return before the response has been applied to state.
+    await waitFor(() => expect(screen.getByText("INV/0007")).toBeTruthy());
+    expect(getDayBook).toHaveBeenCalledWith("co-1", {});
   });
 
   it("Balance Sheet calls getBalanceSheet(companyID)", async () => {
@@ -123,6 +126,7 @@ describe("report screens fetch from the live client on mount", () => {
       as_on: "",
       parties: [
         {
+          ledger_id: "led-acme",
           ledger: "Acme",
           group: "Sundry Debtors",
           pending: "400.0000",

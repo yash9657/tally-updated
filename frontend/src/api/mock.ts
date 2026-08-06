@@ -41,6 +41,7 @@ import type {
   ImportTallyXMLQuery,
   ImportTallyXMLResponse,
   Money,
+  OutstandingParty,
   OutstandingsQuery,
   OutstandingsResponse,
   ProfitLossResponse,
@@ -2728,16 +2729,79 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     return total;
   }
 
-  /** Map a request's bill allocations into BillAllocationViews (canonical D/C). */
-  function billViews(req: VoucherRequest): BillAllocationView[] {
-    return (req.bill_allocations ?? []).map((b) => ({
-      ledger_id: b.ledger_id,
-      ref_name: b.ref_name,
-      ref_type: b.ref_type,
-      dr_cr: b.dr_cr.trim().toUpperCase().startsWith("D") ? "D" : "C",
-      amount: parseFloat(b.amount || "0").toFixed(4),
-      due_date: b.due_date ?? "",
-    }));
+  /**
+   * Map a request's bill allocations into BillAllocationViews (canonical D/C),
+   * MAKING THE SERVER'S REFUSALS AND THE SERVER'S SUBSTITUTION.
+   *
+   * ⛔ THIS IS §9.4's THIRD KIND OF MOCK DEFECT — the one no test written against
+   * the mock can catch, because a mock that is more PERMISSIVE than the server
+   * simply never fails. Until this function did the three things below it accepted
+   * bodies cored refuses outright and dropped the substitution cored performs, so
+   * a screen could look correct against the mock and be unable to save a voucher
+   * in a browser.
+   *
+   *  1. AN UNNAMED `AGAINST` IS REFUSED. Left to default it would open a SECOND
+   *     bill under this voucher's own number instead of settling the one it meant
+   *     to — both figures wrong, report still footing.
+   *  2. AN UNNAMED REFERENCE OF ANY OTHER TYPE IS STAMPED with the allocated
+   *     voucher number. The client CANNOT do this itself: the number is minted
+   *     inside the post transaction. A mock that stored the blank would make every
+   *     round-trip test assert the wrong name.
+   *  3. THE REFERENCES ON A LEDGER MUST TOTAL WHAT THAT LEDGER POSTS, signed and
+   *     exact to the paisa. Otherwise Outstandings and the Balance Sheet's Sundry
+   *     Debtors disagree, and nothing reconciles them.
+   */
+  function billViews(
+    req: VoucherRequest,
+    voucherNo: string,
+    postings: readonly { ledger_id: string; dr_cr: string; amount: string }[],
+  ): BillAllocationView[] {
+    const bs = req.bill_allocations ?? [];
+    if (bs.length === 0) return [];
+    const canonDC = (dc: string) => (dc.trim().toUpperCase().startsWith("D") ? "D" : "C");
+    // ⚠️ The SHARED scaled-integer helpers, never a local copy and never a float.
+    // The invariant is exact to the paisa, and a second implementation of money
+    // parsing is precisely how two places in one file come to disagree.
+    const units = mockMoneyToUnits;
+    const out: BillAllocationView[] = [];
+    const signedByLedger = new Map<string, bigint>();
+    for (const b of bs) {
+      if (b.ref_name.trim() === "" && b.ref_type === "AGAINST") {
+        throw new ApiError(
+          422,
+          "ledger: an AGAINST bill allocation must name the bill it settles",
+        );
+      }
+      const dc = canonDC(b.dr_cr);
+      const signed = dc === "C" ? -units(b.amount) : units(b.amount);
+      signedByLedger.set(b.ledger_id, (signedByLedger.get(b.ledger_id) ?? 0n) + signed);
+      out.push({
+        ledger_id: b.ledger_id,
+        // THE SUBSTITUTION. An empty name is the normal case for a reference that
+        // OPENS a bill — see the header.
+        ref_name: b.ref_name.trim() === "" ? voucherNo : b.ref_name.trim(),
+        ref_type: b.ref_type,
+        dr_cr: dc,
+        amount: mockUnitsToMoney(units(b.amount)),
+        due_date: b.due_date ?? "",
+      });
+    }
+    const postedByLedger = new Map<string, bigint>();
+    for (const p of postings) {
+      const signed = canonDC(p.dr_cr) === "C" ? -units(p.amount) : units(p.amount);
+      postedByLedger.set(p.ledger_id, (postedByLedger.get(p.ledger_id) ?? 0n) + signed);
+    }
+    for (const [lid, got] of signedByLedger) {
+      const want = postedByLedger.get(lid) ?? 0n;
+      if (got === want) continue;
+      throw new ApiError(
+        422,
+        want === 0n
+          ? `ledger: bill references total ${mockUnitsToMoney(got)} against a ledger this voucher does not post to at all — a bill cannot be raised or settled on a line that is not in the entry`
+          : `ledger: bill references on this ledger total ${mockUnitsToMoney(got)} but it posts ${mockUnitsToMoney(want)} — the difference is ${mockUnitsToMoney(want - got)}, and leaving it would make the Outstandings report disagree with Sundry Debtors on the Balance Sheet`,
+      );
+    }
+    return out;
   }
 
   /**
@@ -2889,7 +2953,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       sgst: gst.sgst,
       igst: gst.igst,
       postings: postingViews,
-      bill_allocations: billViews(req),
+      // ⚠️ Passed the FINAL posting list and the ALLOCATED number, because both
+      // are things only the server knows: an item invoice's postings were
+      // generated here, and the number was minted here.
+      bill_allocations: billViews(req, voucherNo, postingViews),
       inventory: inventoryViews(c, req),
       // The ORDER LINKS. Validated first (fulfilmentViews throws the server's own
       // refusals), so an over-fulfilment never reaches the store. `null` because a
@@ -2981,7 +3048,9 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       sgst: gst.sgst,
       igst: gst.igst,
       postings: postingViews,
-      bill_allocations: billViews(req),
+      // An ALTER keeps the voucher's existing number, so that is what an unnamed
+      // reference is stamped with — never a fresh one.
+      bill_allocations: billViews(req, entry.voucher_no, postingViews),
       inventory: inventoryViews(c, req),
       // ⛔ AN ALTER RE-STATES THE LINKS: whatever this body carries becomes the
       // current version's links, and whatever it omits is GONE. That is why the
@@ -5076,17 +5145,122 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       };
     },
 
+    /**
+     * THE AGEING REPORT, netted from the stored bill references.
+     *
+     * ⛔ THIS USED TO RETURN AN EMPTY PARTY LIST UNCONDITIONALLY, and that is
+     * §9.4's FIRST kind of mock defect: not a wrong answer but a SILENTLY DROPPED
+     * one. The bill-wise settlement picker lists a party's open bills from this
+     * call, so against the old mock it showed "no open bills" for every customer —
+     * and a developer driving the mock would conclude their own picker was broken
+     * rather than that the mock had never implemented the report.
+     *
+     * ⚠️ It nets by **(ledger_id, ref_name)** and ignores `ref_type`, because that
+     * is exactly what reporting.Outstandings does. A settlement matches its bill
+     * by NAME or it does not match at all; a mock that netted by type would hide
+     * the single most likely defect on this path.
+     *
+     * ⚠️ THE SIMPLIFICATION, stated rather than hidden: the server splits
+     * receivable from payable on the account GROUP'S NATURE (ASSET vs LIABILITY),
+     * joined from account_group. This store keeps a group NAME and no nature, so
+     * it classifies on the two seeded party groups. A company whose debtors sit
+     * under a custom group is reported correctly by cored and not by this mock —
+     * which is a fidelity gap in the direction that shows too little, never too
+     * much.
+     */
     async getOutstandings(
       companyID,
       query?: OutstandingsQuery,
     ): Promise<OutstandingsResponse> {
-      ensure(companyID);
+      const c = ensure(companyID);
+      const kind = query?.kind ?? "RECEIVABLE";
+      const wantGroup = kind === "PAYABLE" ? "Sundry Creditors" : "Sundry Debtors";
+      const asOn = query?.as_on || new Date().toISOString().slice(0, 10);
+
+      // Net every reference on a CURRENT, non-deleted voucher. c.views holds
+      // exactly those: an ALTER restates the view in place and a DELETE removes it.
+      const net = new Map<string, { ledgerID: string; ref: string; units: bigint; due: string }>();
+      for (const view of c.views.values()) {
+        for (const b of view.bill_allocations) {
+          const ledger = c.ledgers.find((l) => l.id === b.ledger_id);
+          if (!ledger || ledger.group !== wantGroup) continue;
+          // Positive on the party's natural side: debit for a receivable.
+          const signed =
+            b.dr_cr === "D"
+              ? mockMoneyToUnits(b.amount)
+              : -mockMoneyToUnits(b.amount);
+          const key = `${b.ledger_id} ${b.ref_name}`;
+          const cur = net.get(key) ?? {
+            ledgerID: b.ledger_id,
+            ref: b.ref_name,
+            units: 0n,
+            due: "",
+          };
+          cur.units += kind === "PAYABLE" ? -signed : signed;
+          // The EARLIEST due date on the reference, as the server takes MIN().
+          if (b.due_date && (cur.due === "" || b.due_date < cur.due)) cur.due = b.due_date;
+          net.set(key, cur);
+        }
+      }
+
+      const SLABS: [string, number][] = [
+        ["0-45 days", 45],
+        ["45-90 days", 90],
+        ["90-180 days", 180],
+        ["180+ days", 0],
+      ];
+      const slabTotals = new Map<string, bigint>();
+      const byParty = new Map<string, OutstandingParty>();
+      let total = 0n;
+
+      for (const { ledgerID, ref, units, due } of [...net.values()].sort((a, b) =>
+        a.ref.localeCompare(b.ref),
+      )) {
+        // A fully-settled bill nets to zero and is not outstanding.
+        if (units === 0n) continue;
+        const ledger = c.ledgers.find((l) => l.id === ledgerID);
+        if (!ledger) continue;
+        const overdue =
+          due === ""
+            ? 0
+            : Math.max(
+                0,
+                Math.round(
+                  (Date.parse(asOn) - Date.parse(due)) / 86_400_000,
+                ),
+              );
+        const slab = SLABS.find(([, upto]) => upto !== 0 && overdue <= upto)?.[0] ?? "180+ days";
+        const party =
+          byParty.get(ledgerID) ??
+          ({
+            ledger_id: ledgerID,
+            ledger: ledger.name,
+            group: ledger.group,
+            pending: "0.0000",
+            bills: [],
+          } satisfies OutstandingParty);
+        party.bills.push({
+          ref_name: ref,
+          pending: mockUnitsToMoney(units),
+          due_date: due,
+          overdue_days: overdue,
+          slab,
+        });
+        party.pending = mockUnitsToMoney(mockMoneyToUnits(party.pending) + units);
+        byParty.set(ledgerID, party);
+        slabTotals.set(slab, (slabTotals.get(slab) ?? 0n) + units);
+        total += units;
+      }
+
       return {
-        kind: query?.kind ?? "RECEIVABLE",
-        as_on: query?.as_on ?? "",
-        parties: [],
-        slab_totals: [],
-        total: "0.0000",
+        kind,
+        as_on: asOn,
+        parties: [...byParty.values()].sort((a, b) => a.ledger.localeCompare(b.ledger)),
+        slab_totals: SLABS.filter(([l]) => slabTotals.has(l)).map(([label]) => ({
+          label,
+          amount: mockUnitsToMoney(slabTotals.get(label) ?? 0n),
+        })),
+        total: mockUnitsToMoney(total),
       };
     },
 

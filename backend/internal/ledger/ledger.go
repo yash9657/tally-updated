@@ -1408,10 +1408,21 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 		//
 		// ⛔ IT LIVES HERE, ABOVE THE NUMBERING BLOCK, AND NOT BESIDE `movements`.
 		// The validation below must run BEFORE allocateVoucherNo advances the
-		// (company, type, fin-year) counter: a refusal after that point rolls the
-		// transaction back and leaves a hole in a statutory series that somebody
-		// has to explain to an auditor. This is the same reason
-		// InwardDocument.Validate is called before the transaction opens at all.
+		// (company, type, fin-year) counter, so that a refusal costs the operator
+		// nothing but a re-key. This is the same reason InwardDocument.Validate is
+		// called before the transaction opens at all.
+		//
+		// ⚠️ CORRECTED, NOT DELETED: this comment used to justify itself by saying a
+		// refusal after that point "leaves a hole in a statutory series that
+		// somebody has to explain to an auditor". THAT IS FALSE, and the correct
+		// version is already 200 lines above at the first validateCostAllocations
+		// call — there is no sequence in this schema. voucher_number_counter is an
+		// ordinary table row advanced by INSERT ... ON CONFLICT DO UPDATE on THIS
+		// transaction (numbering.go), so a rollback gives the number back. The claim
+		// is left visible because it is the plausible one — it is what a Postgres
+		// SEQUENCE would do — and it survived here for two releases after being
+		// corrected elsewhere, which is exactly how a dead claim gets re-invented.
+		// The ordering above is still right; only the reason was wrong.
 		allocations := in.CostAllocations
 		if op == OpDelete {
 			allocations = nil
@@ -1619,6 +1630,50 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 			}
 		}
 
+		// THE BILL REFERENCES, single-sourced exactly as `movements`,
+		// `fulfilments`, `allocations` and `inward` are, so the hashed payload and
+		// the bill_allocation rows are both derived from THIS ONE variable and
+		// cannot disagree about what the voucher references.
+		//
+		// ⛔ IT LIVES HERE, BELOW THE NUMBERING BLOCK, AND THAT IS THE POINT.
+		// A reference that OPENS a bill is named after the voucher that opened it
+		// (Tally's `New Ref` default), and `in.VoucherNo` does not hold that name
+		// until allocateVoucherNo has run four lines above. The client cannot
+		// supply it — the number is minted inside this transaction — so a browser
+		// sends the reference unnamed and the stamp happens here or nowhere.
+		//
+		// ⚠️ Placing it below the numbering costs nothing, unlike `allocations`,
+		// which must sit ABOVE it: this loop cannot REFUSE anything.
+		// validateBillAllocations already ran before the transaction opened, and
+		// AGAINST — the one type that may not be defaulted — was rejected there.
+		//
+		// A DELETE carries none, for the same reason it carries no postings: a
+		// tombstone that restated its references would leave the bill outstanding
+		// forever against a voucher that had vanished from the books, with nothing
+		// to reconcile the two. No caller can currently reach post() with OpDelete
+		// AND references (DeleteVoucher builds a fresh VoucherInput), so this guard
+		// is a latch rather than a fix — its four siblings all have one, and the
+		// next delete path to be written will not have to rediscover why.
+		billAllocations := in.BillAllocations
+		if op == OpDelete {
+			billAllocations = nil
+		} else {
+			stamped := make([]BillAllocationInput, len(billAllocations))
+			copy(stamped, billAllocations)
+			for i := range stamped {
+				if stamped[i].RefName == "" {
+					stamped[i].RefName = in.VoucherNo
+				}
+			}
+			billAllocations = stamped
+		}
+		// Checked HERE, not beside validateBillAllocations, because this is the
+		// first point at which in.Postings is FINAL — an item invoice's postings
+		// were generated above from the stock masters. See the function's comment.
+		if err := validateBillAllocationsSumToPosting(in.Postings, billAllocations); err != nil {
+			return err
+		}
+
 		// THE DELETE GUARD FOR STOCK, single-sourced so the hashed payload and
 		// the movement rows can never disagree about what the tombstone carries.
 		// A DELETE reverses the voucher's entire contribution — accounting AND
@@ -1699,7 +1754,7 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 				Amount:   p.Amount.StringFixed(4),
 			})
 		}
-		for _, b := range in.BillAllocations {
+		for _, b := range billAllocations {
 			payload.BillAllocations = append(payload.BillAllocations, CanonicalBillAllocation{
 				LedgerID: b.LedgerID.String(),
 				RefName:  b.RefName,
@@ -2028,7 +2083,9 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 		}
 
 		// Insert bill-wise allocations (immutable; versioned with the voucher).
-		for _, b := range in.BillAllocations {
+		// From the single source derived above — NOT in.BillAllocations, whose
+		// opening references are still unnamed at this point.
+		for _, b := range billAllocations {
 			allocID, err := uuid.NewV7()
 			if err != nil {
 				return fmt.Errorf("ledger: new bill allocation id: %w", err)
@@ -2237,13 +2294,32 @@ func validatePostings(ps []PostingInput) error {
 }
 
 // validateBillAllocations checks each allocation is structurally sound.
+//
+// ⛔ AN EMPTY RefName IS LEGAL FOR EVERY TYPE EXCEPT AGAINST, AND THE ASYMMETRY
+// IS THE WHOLE POINT.
+//
+// The voucher number is allocated by allocateVoucherNo INSIDE the post
+// transaction, so a client keying a sales invoice in a browser CANNOT know it:
+// it does not exist until after this validation has run. A reference that opens
+// a bill therefore leaves the name empty and post() stamps the allocated number
+// on it — Tally's own `New Ref` default. That is the ONLY way a browser-keyed
+// invoice can ever reach the Outstandings report, and for the whole life of this
+// feature it could not, because no client could name the bill.
+//
+// AGAINST is the exception because it is the one type whose name must MATCH
+// something that already exists. reporting.Outstandings groups by
+// (ledger_id, ref_name) and ignores ref_type entirely, so an AGAINST carrying a
+// defaulted name would not settle the bill it meant to settle — it would open a
+// SECOND bill under this voucher's own number, leaving the original fully
+// outstanding and a negative row beside it. Both figures would be wrong and the
+// report would still foot. A settlement must say what it settles.
 func validateBillAllocations(bs []BillAllocationInput) error {
 	for _, b := range bs {
 		if b.LedgerID == uuid.Nil {
 			return errors.New("ledger: bill allocation ledger id is required")
 		}
-		if b.RefName == "" {
-			return errors.New("ledger: bill allocation ref name is required")
+		if b.RefName == "" && b.RefType == RefAgainst {
+			return errors.New("ledger: an AGAINST bill allocation must name the bill it settles")
 		}
 		if !validRefTypes[b.RefType] {
 			return fmt.Errorf("ledger: invalid bill ref type %q", b.RefType)
@@ -2254,6 +2330,72 @@ func validateBillAllocations(bs []BillAllocationInput) error {
 		if b.Amount.IsNegative() {
 			return errors.New("ledger: bill allocation amount must be non-negative")
 		}
+	}
+	return nil
+}
+
+// validateBillAllocationsSumToPosting enforces the invariant BillAllocationInput's
+// own doc comment has always declared and NOTHING has ever checked: the
+// references on a ledger must account for exactly what that ledger posts.
+//
+// ⛔ WHY IT MATTERS MORE THAN IT LOOKS. reporting.Outstandings is built from
+// bill_allocation; the Balance Sheet's Sundry Debtors is built from
+// ledger_balance, which is built from postings. If the two disagree by a paisa
+// the company has two reports over the same books that quietly differ, and
+// NOTHING anywhere reconciles them — the voucher still balances, every total
+// still foots, and the difference surfaces months later as a customer disputing
+// a statement. "The engine records what it is given" was true and was the bug.
+//
+// ⚠️ IT IS CHECKED INSIDE THE TRANSACTION, AGAINST THE FINAL POSTING LIST, for
+// the same reason validateCostAllocations is re-checked there: on an ITEM
+// INVOICE the postings do not exist when the request arrives — the server
+// generates them from the stock masters, and the client's on-screen total is a
+// PREVIEW derived from rates it does not own. A master whose rate changed
+// between the preview and the post is exactly the case that would otherwise
+// write a bill for the wrong money, and it is invisible to every other check.
+//
+// The comparison is SIGNED (Dr positive, Cr negative) on both sides, so a ledger
+// carrying both a settlement and an on-account remainder nets naturally instead
+// of needing a special case. It is exact to the paisa: a tolerance here is how a
+// real error hides for a year.
+func validateBillAllocationsSumToPosting(postings []PostingInput, bs []BillAllocationInput) error {
+	if len(bs) == 0 {
+		return nil
+	}
+	signed := func(dc DrCr, amt decimal.Decimal) decimal.Decimal {
+		if dc == Credit {
+			return amt.Neg()
+		}
+		return amt
+	}
+	allocByLedger := make(map[uuid.UUID]decimal.Decimal)
+	order := make([]uuid.UUID, 0, len(bs))
+	for _, b := range bs {
+		if _, seen := allocByLedger[b.LedgerID]; !seen {
+			order = append(order, b.LedgerID)
+		}
+		allocByLedger[b.LedgerID] = allocByLedger[b.LedgerID].Add(signed(b.DrCr, b.Amount))
+	}
+	postByLedger := make(map[uuid.UUID]decimal.Decimal)
+	for _, p := range postings {
+		postByLedger[p.LedgerID] = postByLedger[p.LedgerID].Add(signed(p.DrCr, p.Amount))
+	}
+	for _, lid := range order {
+		got, want := allocByLedger[lid], postByLedger[lid]
+		if got.Equal(want) {
+			continue
+		}
+		if want.IsZero() {
+			return fmt.Errorf(
+				"ledger: bill references total %s against a ledger this voucher does not post to at all — "+
+					"a bill cannot be raised or settled on a line that is not in the entry",
+				got.StringFixed(4))
+		}
+		return fmt.Errorf(
+			"ledger: bill references on this ledger total %s but it posts %s — "+
+				"the difference is %s, and leaving it would make the Outstandings report "+
+				"disagree with Sundry Debtors on the Balance Sheet",
+			got.StringFixed(4), want.StringFixed(4), want.Sub(got).StringFixed(4))
 	}
 	return nil
 }
