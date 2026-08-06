@@ -11,24 +11,25 @@
 
 ## 1. THE ANSWER TO THE QUESTION YOU ARE ABOUT TO ASK
 
-**Is Tier 1 done? NO — ONE row short now (it was two), and you can see it on the product's own face.**
+**Is Tier 1 done? NO — ONE row short, and it is T5. Everything else on the tier is `on`.**
 
 The `FeaturesScreen` (`frontend/src/screens/FeaturesScreen.tsx`) is this project's parity ledger, and
-T7's whole purpose was to make it honest. It is the authority, not this file. Measured at `7e565a3`:
-**28 rows `on`, 12 `off`, 6 qualified** (`always` / `server`).
+T7's whole purpose was to make it honest. It is the authority, not this file. Measured at `a86283b`:
+**29 rows `on`, 12 `off`, 5 qualified** (`always`). ⚠️ **There is no longer a single `server` row** —
+the state still exists and is still right to have, but nothing is currently in it.
 
 | Tier 1 track | Row | State |
 |---|---|---|
 | T1 Printing | several | ✅ `on` |
 | T2 Cost centres | "Cost centres and cost categories — the masters and both reports" | ✅ `on` |
-| T2 (cont.) | "Cost centre allocation during voucher entry" | ⚠️ `server` — **no UI** |
+| T2 (cont.) | "Cost centre allocation during voucher entry" | ✅ **`on` — browser-verified, see §1.2** |
 | **T3 Orders + BOM** | "Order processing (Sales / Purchase Orders) and Bill of Materials" | ✅ **`on` — browser-verified, see below** |
 | T4 Bank reconciliation | "Bank reconciliation" | ✅ `on` |
 | **T5 e-Way Bill** | "e-Way Bill" | ⛔ **`off` — no route, no UI. THE LAST TIER-1 ROW** |
 | T6 TDS/TCS | "TDS / TCS" | ✅ `on` |
 | T7 Features screen | — | ✅ done |
 
-**So: do NOT start Tier 2.** One row is left, and it is `off` for the reason that has been the most
+**So: do NOT start Tier 2.** ONE row is left, and it is `off` for the reason that has been the most
 expensive lesson in this repository's history:
 
 > ### ⛔⛔ T5's BACKEND IS BUILT, TESTED AND REACHABLE. IT HAS NO SCREEN AND NO ROUTE.
@@ -60,6 +61,45 @@ Alt+O's dead binding, this). **A default branch that produces a plausible-lookin
 to every test that only asserts the sentences it expects.** Worse, and worth naming: **the test I had
 written myself certified the bug** — it asserted `As at ${book.as_on}` and passed on the empty string.
 
+### 1.2 The T2 allocation row, and the live bug it walked into
+
+Closed at `a86283b`, browser-verified the same way: `F5` → HDFC Bank → Electricity
+10,000 → **allocate** → Department/Sales 6,000 showed *"6000.0000 of 10000 — 4000.0000
+left"* plus the short-axis refusal; a second split to Admin via the **rest** button
+filled 4000.0000, the refusal cleared, and `Ctrl+A` saved through the passkey. The Cost
+Centre Summary then read **Admin 44,000 / Sales 66,000** and reconciled.
+
+⛔ **THE OFFSET IS THE HAZARD, AND IT IS PROVED IN THE DATABASE, NOT IN A TEST.** In
+single entry the postings array is `[the account paid from, ...the particulars]`, so the
+particular at row 0 is posting **1**. The allocations landed on **Electricity (Dr
+10,000)** — not on HDFC Bank. With the offset at 0 they would have attached to the bank
+credit leg, on a voucher that balances perfectly and a Cost Centre Summary that foots.
+Nothing downstream can detect that. `buildCostAllocations` therefore takes
+`primaryLegCount` as a REQUIRED parameter with no default.
+
+> ### ⛔⛔ AND THE BUG IT EXPOSED, WHICH WAS LIVE AND WHICH NO TEST COULD SEE
+>
+> `ensureLedger` (`screens/vouchers/gstVoucher.ts`) called `createLedger`
+> **unconditionally**, on an assumption written in its own doc comment: *"createLedger
+> is idempotent server-side (by name within a company)"*. **That was false.**
+> `INSERT INTO ledger` has no `ON CONFLICT` and `ledger_company_id_name_key` is a plain
+> UNIQUE index on `(company_id, name)`, so creating an existing ledger is a raw
+> unique-violation.
+>
+> **On a fresh page load the memo is empty, so keying a Payment / Receipt / Contra
+> against any ledger the company ALREADY HAD — the normal case, and every case after the
+> first day — failed with `masters: insert ledger: ERROR: duplicate key value violates
+> unique constraint`.** It only ever appeared to work when the memo was warm from an
+> earlier post in the same page session.
+>
+> **NOT ONE OF THE 705 TESTS COULD CATCH IT**, because they all run against the mock,
+> whose `createLedger` mints a fresh id per call. That is the lesson to carry: *a mock
+> that is more permissive than the server hides a whole class of defect no amount of
+> coverage reaches.* Fixed to resolve-then-create, pinned by four tests against a client
+> that refuses duplicates the way cored does, and mutation-proved.
+
+---
+
 ---
 
 ## 2. RUN-FIRST CHECKLIST — ten minutes, and it has burned every session that skipped it
@@ -87,12 +127,12 @@ cd ../frontend && pnpm exec tsc --noEmit && pnpm run test:run
 cd .. && make verify
 ```
 
-### 2.1 The gate baseline at `7e565a3` — re-measure, do not assume
+### 2.1 The gate baseline at `a86283b` — re-measure, do not assume
 
 | Gate | Value |
 |---|---|
 | backend `go test ./... -count=1 -v` | **2293 pass / 0 SKIP / 0 FAIL** |
-| frontend `pnpm run test:run` | **682 pass / 51 files** |
+| frontend `pnpm run test:run` | **705 pass / 52 files** |
 | `pnpm exec tsc --noEmit` | clean — ⛔ **a SEPARATE gate from `make verify`** |
 | `make verify` | exit 0 |
 | `verify:demo` | **33/33**, run **ALONE**, needs cored **and** insightd up |
@@ -145,7 +185,7 @@ STATUS: `401` means the route exists and needs auth; `404` means you are talking
 | n−3 | T6 | 4, with 3 sequential barriers | ~1.7M |
 | n−2 | T2 + the shared T3 contract | 2, zero barriers | ~1.3M |
 | n−1 | T3 backend end-to-end + T5 core | 0 — solo | 0 |
-| **n (this one)** | **T3 FRONTEND end-to-end: 5 screens, the fulfilment picker, browser-verified, row `on`** | **0 — solo** | **0** |
+| **n (this one)** | **T3 frontend end-to-end (5 screens + the fulfilment picker) AND T2's allocation UI — two rows flipped, both browser-verified** | **0 — solo** | **0** |
 
 **Three observations now, and the third is new.** First: plan for roughly one track per session — this
 session delivered exactly one and it was full. Second: the last two sessions each delivered a whole
@@ -257,28 +297,51 @@ at length why omitting them destroys a departmental split**, and `voucherFullJSO
 > `internal/server/server.go`'s `voucherFullJSON`. `bill_allocation` is emitted; `stock_movement` is;
 > the two just fixed are. **Verify the rest, and write down which ones you checked.**
 
-### 4.4 ITEM 3 — T2's ALLOCATION UI on voucher entry
+### 4.4 ✅ T2's ALLOCATION UI — DONE at `a86283b`. What is left around it.
 
-The `server` row that has been qualified since T2 shipped. **The fulfilment picker is now the worked
-example to copy** — `frontend/src/screens/vouchers/FulfilmentPicker.tsx` plus its pure half in
-`fulfilment.ts`, and they solve the same problems this needs solved (pick from a served list, never ask
-for an ordinal, warn without refusing).
+The row is `on` (§1.2). Two gaps remain, and both are worth knowing before you touch a
+voucher form:
 
-- ⛔ `posting_seq` is a **0-BASED ordinal no screen displays**, and it is 0-based where the fulfilment
-  `line_no` beside it is **1-based**. Both are inherited, neither is negotiable, and a client that
-  confuses them is off by one. **`fulfilments[].line_no` and `cost_allocations[].posting_seq` are now
-  on the SAME GET body**, one 1-based and one 0-based, so the trap is closer than it was.
-- ⚠️ **`posting_seq` is RE-DERIVED, not stored** (`posting` has no ordinal column), so it indexes the
-  `postings` array of *that same read*. `fulfilments[].line_no` IS stored. Do not treat them alike.
-- An **item invoice refuses allocations outright** — its postings are server-generated and index 0 is
-  the *party* leg. Allocate on a Journal, Payment, Receipt or Contra.
-- The GET now carries `cost_allocations`, so the alter round trip is safe **if you re-hydrate them**.
-  See `itemsFromView` in `VoucherScreen.tsx` for how the fulfilment half does it.
-- ⚠️ `CostCentresScreen.tsx` ends with a paragraph beginning "Creating these masters does not allocate
-  anything. NO SCREEN IN THIS BUILD ALLOCATES A POSTING" — **that prose becomes false the moment you
-  ship this.** Correct it in the same change (§9.1).
+- ⛔ **A JOURNAL CANNOT BE KEYED FROM SCRATCH IN THIS BUILD AT ALL.** `journal` is
+  `entry: "double"`, and VoucherScreen's `double` branch renders **no posting grid** —
+  the form falls through to `null` after Date / No. / Party / Narration.
+  `buildPlainRequest` forwards `f.postings`, which is only ever populated from a LOADED
+  voucher (alter) or an OCR draft. So F7 opens a form that cannot produce a voucher.
+  This is pre-existing, it is not what T2 was blocked on, and it is now stated on the
+  cost masters screen rather than left to be discovered. **It is probably the single
+  biggest remaining hole in accounting parity** — a Journal is how every adjustment,
+  provision and reclass is keyed.
+- Allocation on an ITEM INVOICE is refused outright **and always will be** — its
+  postings are generated inside the server's transaction and index 0 is the party leg.
+  That is a decision, not a gap; the screen says so.
 
-### 4.5 ITEM 4 — SEED T3 AND T2 INTO `seed:demo`
+### 4.5 ⛔ ITEM 3 — A DOUBLE-ENTRY POSTING GRID, SO A JOURNAL CAN BE KEYED AT ALL
+
+**F7 opens a form that cannot produce a voucher.** `journal` is `entry: "double"` and
+VoucherScreen's `double` branch renders no posting grid — after Date / No. / Party /
+Narration the panel chain falls through to `null`. `buildPlainRequest` forwards
+`f.postings`, which is only ever populated by hydrating a LOADED voucher or an OCR
+draft. Nothing on the screen can add a posting.
+
+This was found while looking for somewhere to put the allocation control (§1.2) and it
+is pre-existing, not a regression. It matters more than its size suggests:
+
+- **A Journal is how every adjustment, provision, depreciation and reclass is keyed.**
+  It is the voucher an accountant uses most at period end, and this build cannot key one.
+- The F11 row "Double-entry vouchers (Contra, Payment, Receipt, Journal, Sales,
+  Purchase)" reads `on`, which is **overstated for Journal specifically**. Correct that
+  row in the same change (§9.1) — do not flip it to `off`, because five of the six are
+  genuinely reachable; say which one is not.
+- It also unblocks allocation on a journal, which currently has to arrive over HTTP.
+
+⚠️ **The single-entry panel is NOT the model to copy.** It infers the primary leg and
+puts the SUM on it; a double-entry grid states both sides and must refuse an unbalanced
+body in the form (the server refuses it too, but a 422 does not survive the round trip
+in a shape the operator can act on). ⛔ And `posting_seq` for an allocation on such a
+grid is **0-based with NO offset** — `buildCostAllocations(rows, 0)` — because the rows
+map one-for-one from index 0. That parameter exists for exactly this second call site.
+
+### 4.6 ITEM 4 — SEED T3 AND T2 INTO `seed:demo`
 
 `frontend/scripts/seed-demo.mts`. Nothing seeds cost data, TDS data or orders, so **four screens render
 empty against a fresh demo company** and cannot be demonstrated. One axis, two centres, one allocated
@@ -292,7 +355,7 @@ item is more urgent than it was.
 ⚠️ `seed-demo.mts`, `verify-demo.mts` and `corpora/validate.py` are **CO-OWNED**. ADD only, and
 re-read immediately before each edit.
 
-### 4.6 SMALLER, REAL, AND EACH WORTH DOING
+### 4.7 SMALLER, REAL, AND EACH WORTH DOING
 
 | # | What | Why |
 |---|---|---|
@@ -560,9 +623,18 @@ The false version is the plausible one and **will be re-invented**. Claims that 
 - *"Order vouchers are not built"* — `F10`'s keymap note, and *"Order processing is not built yet"* —
   `Ctrl+F8`/`Ctrl+F9`'s. All three were corrected by one assertion in `buttons.test.ts` that forces
   the claim to be re-pointed when a feature ships.
-- *"NO SCREEN IN THIS BUILD ALLOCATES A POSTING"* — `CostCentresScreen.tsx`'s closing paragraph. **Still
-  true today**, and it becomes false the moment §4.4 ships. It is listed here so it is corrected in the
-  same change rather than discovered later.
+- *"NO SCREEN IN THIS BUILD ALLOCATES A POSTING"* — `CostCentresScreen.tsx`'s closing paragraph.
+  **Corrected at `a86283b`**, in the change that made it false. It now says where allocation happens
+  AND where it still is not reachable (a Journal, and an item invoice by design).
+- ⛔ *"createLedger is idempotent server-side (by name within a company)"* — `ensureLedger`'s own doc
+  comment, and **the whole helper was built on it.** It was never true. This is the most expensive
+  false claim found so far, because it was a claim about ANOTHER LAYER's behaviour: nothing in the file
+  that stated it could contradict it, and the mock agreed with it. **When a comment asserts what a
+  different service does, that assertion needs a test against that service — or it is a guess with
+  authority.**
+- *"Double-entry vouchers (Contra, Payment, Receipt, Journal, Sales, Purchase)"* reads `on` on F11, and
+  is **overstated for Journal**: F7 renders no posting grid, so a journal cannot be keyed from scratch
+  (§4.5). Still uncorrected — correct it when you build the grid.
 
 **And prefer a refusal that takes a company and a period over one that takes no arguments** — the
 latter can only make claims about the software, and those go stale silently.
@@ -595,10 +667,10 @@ is consistent with links being immune to an alter — in which case the test pro
 a second time with the links **deliberately omitted** and asserts the order DOES re-open. The control
 establishes that the behaviour the first half depends on is genuinely dangerous.
 
-### 9.4 ⛔ THE MOCK IS WHERE FIDELITY DEFECTS HIDE, AND THERE ARE TWO KINDS
+### 9.4 ⛔ THE MOCK IS WHERE FIDELITY DEFECTS HIDE, AND THERE ARE THREE KINDS
 
-`api/orders.test.ts` exists because the mock disagreed with the server twice in one session. Two more
-were found this session, and the second kind is the one no type can catch:
+`api/orders.test.ts` exists because the mock disagreed with the server twice in one session. Three more
+have been found since. The second kind is the one no TYPE can catch; the third is the one no TEST can:
 
 1. **A REFUSAL THE MOCK DID NOT MAKE.** The mock ignored `fulfilments` entirely — it did not reject
    them, it **dropped them silently**, so a screen keyed a link, got a 201, and the order book never
@@ -611,6 +683,27 @@ were found this session, and the second kind is the one no type can catch:
 type you wish existed. And include the control the fix needs: an id that resolves to NOTHING must come
 back `""`, never as the id — a fallback to the id would put the UUID back on screen in exactly the case
 an operator can least explain, while making the happy-path assertion pass.
+
+> ### ⛔⛔ AND THE THIRD KIND, WHICH IS THE WORST: A MOCK MORE PERMISSIVE THAN THE SERVER
+>
+> `ensureLedger` called `createLedger` unconditionally for two releases. `INSERT INTO
+> ledger` has no `ON CONFLICT`, so against cored that is a unique-violation — and
+> against the MOCK, whose `createLedger` mints a fresh id per call, it is a success.
+> **Every one of the 705 tests passed while Payment / Receipt / Contra could not save a
+> voucher in a browser** against any ledger the company already had.
+>
+> This is not the "shape" defect or the "missing refusal" defect. Those are about a
+> mock that answers differently. This is about a mock that answers *more generously*,
+> and it is invisible by construction: no test written against it can fail.
+>
+> **The technique that catches it, and it is cheap:** for any client helper whose
+> correctness depends on a server REFUSAL, write the test against a hand-rolled client
+> that makes that refusal — see `gstVoucher.test.ts`'s `strictClient`. Four tests, and
+> they would have caught a bug that shipped and survived a full session's browser
+> driving on other screens.
+>
+> **The smell to grep for:** a helper named `ensure*` / `upsert*` / `getOrCreate*` that
+> only ever calls a CREATE route. If it never reads, it is not an ensure.
 
 ### 9.5 The all-zeros UUID parses, and `uuid.Nil` is everyone's sentinel
 
@@ -715,17 +808,22 @@ the list above is exactly what to remove.
   differential rather than pinned constants; if you ever pin an absolute figure, this residue is baked
   into it. **The honest fix is §4.5 (seed it properly), not deleting it** — a fresh database still has
   none of this, which is the worst of both worlds for anyone reasoning from what is on screen.
-- The demo company still has **no cost data and no TDS data**; none is seeded (§4.5).
+- The demo company **does** now have cost masters (a `Department` axis with `Sales` and `Admin`) and
+  allocated vouchers — including one keyed in a browser at `a86283b` (Electricity 10,000 split
+  6,000/4,000), on top of pre-existing HTTP-posted allocations. The Cost Centre Summary reads Admin
+  44,000 / Sales 66,000 over FY 2026-27 and reconciles. **Still none of it is in the seed script**
+  (§4.6). No TDS data is seeded either.
 
 ---
 
 ## 12. DEFINITION OF DONE — for whoever closes Tier 1
 
-1. **The T5 FeaturesScreen row is `on`**, on **BROWSER evidence**, not a green suite. The T2 allocation
-   row stops saying `server`. (**T3 is DONE — see §1.1 for the keystroke-by-keystroke evidence.**)
+1. **The T5 FeaturesScreen row is `on`**, on **BROWSER evidence**, not a green suite. (**T3 is DONE —
+   §1.1. The T2 allocation row is DONE and no longer says `server` — §1.2. T5 is the only Tier-1 row
+   left.**)
 2. `make verify` exit 0 **and** `pnpm exec tsc --noEmit` clean (**different gates** — and `tsc` is the
    one that caught a real error this session, see §7.2).
-3. backend **≥2293 pass, 0 SKIP, 0 FAIL** (verbose census); frontend **≥682 / 51 files**;
+3. backend **≥2293 pass, 0 SKIP, 0 FAIL** (verbose census); frontend **≥705 / 52 files**;
    `verify:demo` **33/33 run ALONE** with insightd up **and the company id as an argument** (§2.1),
    re-pinned deliberately if a figure moves — and **the change explained**.
 4. ⛔ **THE REACHABILITY CHECK, for every new feature: name the exact HTTP request that exercises it
@@ -746,4 +844,7 @@ the list above is exactly what to remove.
 7. `PLAN-TALLY-PARITY.md` §2.5 updated for every consumed block, **and §6 of this file obeyed** for
    anything touching the ACL seeder.
 8. Every safety-critical invariant **mutation-proved**, and said so in the commit.
+8a. ⛔ **ANY CLIENT HELPER WHOSE CORRECTNESS DEPENDS ON A SERVER REFUSAL is tested against a client
+   that MAKES that refusal**, not against the mock (§9.4's third kind). A mock more permissive than the
+   server cannot be caught by any test written against it.
 9. **This file updated in place** — not a thirteenth handoff.
