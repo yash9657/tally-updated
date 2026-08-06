@@ -649,10 +649,34 @@ describe("F11 Company Features tells the truth about the stock vouchers", () => 
   it("still says NOT BUILT for what this slice did not build", () => {
     // The other half of honesty. If every row said "On" the screen would be
     // decoration.
+    //
+    // ⚠️ ORDER PROCESSING USED TO BE ASSERTED HERE and it has MOVED to the positive
+    // test below. That is this assertion working as intended rather than being
+    // weakened: the row was "Not built" while its whole backend shipped, and it flipped
+    // in the change that finally gave an operator a screen (Ctrl+F8 / Ctrl+F9, the BOM
+    // screen and both order books). Two rows are kept so this cannot pass vacuously.
     renderFeatures();
-    expect(badgeFor(/^Order processing \(Sales \/ Purchase Orders\)/)).toBe(
-      "Not built",
-    );
     expect(badgeFor(/^FIFO \/ LIFO/)).toBe("Not built");
+    expect(badgeFor(/^Stock groups and compound units/)).toBe("Not built");
+  });
+
+  it("says ON for order processing, and ONLY because a human can now reach it", () => {
+    // ⛔ THE RULE THIS PINS, from FeaturesScreen's own doc comment: a row flips in the
+    // change that gives the operator a SCREEN, not the change that gave them a route.
+    // T3's tables, fulfilment links, over-fulfilment trigger, both order books, ACL
+    // migration and fourteen client methods all shipped while this row correctly said
+    // "Not built" — because a keyboard-only operator could not create an order at all.
+    renderFeatures();
+    expect(badgeFor(/^Order processing \(Sales \/ Purchase Orders\)/)).toBe("On");
+    const note =
+      screen
+        .getByText(/^Order processing \(Sales \/ Purchase Orders\)/)
+        .closest("tr")?.textContent ?? "";
+    // The KEYS must be named, or the row claims a feature with no door.
+    expect(note).toMatch(/Ctrl\+F8/);
+    expect(note).toMatch(/Ctrl\+F9/);
+    // And the gaps stay on the row: this is not a victory lap.
+    expect(note).toMatch(/SINGLE-LEVEL/);
+    expect(note).toMatch(/WHAT IS NOT HERE/);
   });
 });

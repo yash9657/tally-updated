@@ -66,6 +66,33 @@ import { usePrintAction } from "../usePrint";
  *     that are already the answer.
  */
 
+/**
+ * How the heading names the date this book was run for.
+ *
+ * Three cases, and the middle one is the one that shipped wrong:
+ *
+ *  - `served` is a date        → say it. This is what the server actually answered for.
+ *  - `served` is ""            → the server was given NO as_on and reports the position
+ *                                from every order ever placed. That is a real answer
+ *                                and it needs a sentence, not a blank: "As at " with
+ *                                nothing after it reads as a field that failed to load.
+ *  - nothing served yet        → fall back to what F2 asked for, clearly marked as the
+ *                                request rather than the answer.
+ *
+ * Exported so a test can pin all three without rendering the screen.
+ */
+export function periodLabel(
+  served: string | undefined,
+  requested: string | undefined,
+): string {
+  if (served !== undefined) {
+    return served === ""
+      ? "Every order ever placed, less every delivery ever recorded — F2 sets an as-at date"
+      : `As at ${served}`;
+  }
+  return requested ? `Loading, as at ${requested}` : "Loading";
+}
+
 /** What a direction is CALLED, in the two places an operator reads it. */
 interface BookCopy {
   /** The report name — must match REPORT_NAMES and the registry key exactly. */
@@ -174,11 +201,18 @@ function OrderBook({
       <h1 className="text-lg font-bold text-tally-title">{copy.title}</h1>
       <p className="mt-1 max-w-4xl text-xs">
         {/* ⛔ THE DATE COMES FROM THE RESPONSE once it has arrived, never from the
-            frame. The server resolves an omitted as_on to its own today, and a
-            heading that said "As at (today)" while the server used a different day
-            would be a report labelled with a date it was not run for. */}
-        {data ? `As at ${data.as_on}` : asOn ? `As at ${asOn}` : "As at today"} ·{" "}
-        {copy.blurb}
+            frame. A heading that said "As at (the date we asked for)" while the
+            server answered for a different day would be a report labelled with a
+            date it was not run for.
+
+            ⚠️ AND `as_on` COMES BACK EMPTY WHEN NONE WAS GIVEN — the server does NOT
+            substitute its own today, it reports the position from every order ever
+            placed and says so in `notes`. Interpolating that blank produced the
+            heading "As at ·", which reads as a value that failed to load. FOUND BY
+            DRIVING THE APP, NOT BY READING IT, and not by any of the 678 tests — the
+            same way the F2 period defect and Alt+O's dead binding were found. So the
+            empty case gets its own sentence rather than an empty slot. */}
+        {periodLabel(data?.as_on, asOn)} · {copy.blurb}
       </p>
 
       <div className="mt-3 bg-tally-panel p-3">

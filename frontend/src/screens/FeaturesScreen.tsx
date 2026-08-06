@@ -264,8 +264,16 @@ const FEATURES: {
       },
       {
         name: "Order processing (Sales / Purchase Orders) and Bill of Materials",
-        state: "off",
-        note: "Not built, and not modelled at all rather than modelled wrong. An order is a COMMITTED quantity, not a movement: the stock ledger has exactly one primitive (a positive quantity plus a direction) and every reader SUMS it, so an order recorded as a movement would let a quotation deplete the warehouse and then refuse the real sale for negative stock. It needs its own table, its own fulfilment linkage, and a second pair of columns BESIDE the physical balance in every stock report. Ctrl+F8 / Ctrl+F9 say so when pressed.",
+        state: "on",
+        // ⚠️ THIS ROW WAS "off" WITH THE ENTIRE BACKEND SHIPPED, and it stayed
+        // "off" on purpose for a whole release: the order tables, the fulfilment
+        // links, the over-fulfilment trigger, both order books, the ACL migration
+        // and all fourteen client methods existed, tested, while no operator could
+        // create an order. Under the doc comment above, a row flips in the change
+        // that gives them a SCREEN — and this is that change. It did NOT pass
+        // through "server" on the way, which in hindsight is the one thing that
+        // would have made the gap visible on this screen's own face sooner.
+        note: "Ctrl+F8 Sales Orders / Ctrl+F9 Purchase Orders, plus Bills of Materials from the Gateway, and both order books under Display More Reports. AN ORDER IS A COMMITTED QUANTITY, NOT A MOVEMENT: it has its own table and never touches the stock ledger, so an order cannot deplete the warehouse and then refuse the real sale for negative stock. Nothing about an order reaches closing stock, the Profit & Loss or the Balance Sheet. THE SALES AND PURCHASE SIDES ARE SEPARATE AUTHORITIES — two routes, two tokens, two report names — so a level can be allowed to commit the company to its customers and refused the power to commit it to its suppliers; with one screen and a direction toggle that rule could not be written at all, because the server's policy decision reads the ROUTE and cannot see a query parameter. FULFILMENT IS DERIVED AND NEVER STORED: the outstanding balance is computed by summing the delivery links across CURRENT voucher versions on every read, so correcting a delivery note from 5 to 8 moves the order book instead of leaving it asserting 13. A delivery is linked to an order line from the inventory grid on the voucher itself (Alt+F8 Delivery Note, or the invoice directly — both are ordinary), and the link quantity is deliberately NOT the movement quantity: shipping 105 against a 100-unit order records a movement of 105 and a link of 100, because nobody ordered the extra 5. Pre-closing an order (Alt+W) ABANDONS its outstanding balance with a required reason — it is not 'mark it delivered', which nothing can assert. WHAT IS NOT HERE: no revision of a committed quantity from any screen (the service method exists and no route calls it, so a mis-keyed order is corrected by pre-closing it and recording the right one); no tracking numbers stitching a delivery note to its later invoice; no component TYPE on a recipe (Tally's Component / Co-Product / By-Product / Scrap with rate-% apportionment), so every BOM line is a plain component and there is no effective-cost calculation; and the BOM explosion is SINGLE-LEVEL, which is Tally's own default — a component that has its own recipe is not exploded through, and the operator issues a second Stock Journal.",
       },
       {
         name: "Stock groups and compound units (Box of 12)",

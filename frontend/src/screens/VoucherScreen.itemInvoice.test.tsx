@@ -638,10 +638,11 @@ describe("F11 Company Features tells the truth about inventory", () => {
     // Closing stock is NOT one of them any more — it has its own test above.
     renderFeatures();
     expect(badgeFor(/^FIFO \/ LIFO/)).toBe("Not built");
-    // Was "Inventory vouchers (Stock Journal, ...)" until those four got an
-    // entry screen; the still-missing half of that row is order processing,
-    // which is asserted here and pinned On/Not-built in the stock-voucher
-    // suite's own F11 test.
-    expect(badgeFor(/^Order processing \(Sales \/ Purchase Orders\)/)).toBe("Not built");
+    // Was "Inventory vouchers (Stock Journal, ...)" until those four got an entry
+    // screen, and then ORDER PROCESSING until that got one too — this assertion has
+    // now been re-pointed twice by features actually shipping, which is what it is
+    // for. What is left is genuinely absent: a conversion factor makes every quantity
+    // in the system unit-qualified, and nothing in this build is.
+    expect(badgeFor(/^Stock groups and compound units/)).toBe("Not built");
   });
 });

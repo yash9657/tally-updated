@@ -10,6 +10,7 @@ import {
   AS_AT_ONLY_REPORTS,
   FULL_PERIOD_REPORTS,
 } from "../overlays/FrameOverlays";
+import { periodLabel } from "./OrderBookScreens";
 
 /**
  * THE TWO ORDER BOOKS (T3) — what is still outstanding, as at a date.
@@ -194,17 +195,47 @@ describe("both books are POSITIONS as at a date, not flows", () => {
     }
   });
 
-  it("labels the heading with the date the SERVER answered for", async () => {
-    // Not the date on the frame. The server resolves an omitted as_on to its own
-    // today, and a heading reading "As at (our today)" over figures computed for a
-    // different day would be a report labelled with a date it was not run for.
+  it("labels the heading from the RESPONSE, not from the frame", async () => {
+    // ⚠️ AND THE RESPONSE'S as_on IS EMPTY HERE, because no F2 period was set and the
+    // server does NOT substitute its own today — it reports the position from every
+    // order ever placed. So the heading must say THAT, not "As at " with a blank after
+    // it. This assertion was originally written the other way round and it CERTIFIED
+    // THE BUG; the screenshot from driving the app is what corrected it.
     const client = createMockClient();
     await seedOrder(client);
     const app = renderShell(client);
     await openBook(app, "Sales Order Book");
     await screen.findByTestId("sales-order-book-table");
     const book = await client.salesOrderBook(COMPANY);
-    expect(screen.getByText(new RegExp(`As at ${book.as_on}`))).toBeTruthy();
+    expect(book.as_on).toBe("");
+    expect(screen.getByText(/Every order ever placed/)).toBeTruthy();
+  });
+});
+
+describe("the heading names the date the SERVER answered for", () => {
+  it("⛔ never renders an EMPTY as-at date as a blank slot", () => {
+    // FOUND BY DRIVING THE APP, NOT BY READING IT. The server does not substitute its
+    // own today when no as_on is given — it returns `as_on: ""` and reports the
+    // position from every order ever placed, saying so in `notes`. Interpolating that
+    // blank produced the heading "As at ·", which reads as a value that failed to
+    // load. None of the 678 tests could see it, because they all assert the sentences
+    // they expect rather than looking at the page.
+    const empty = periodLabel("", undefined);
+    expect(empty).not.toMatch(/As at\s*$/);
+    expect(empty).toMatch(/Every order ever placed/);
+    // And it points at the key that WOULD bound it, so the operator is not stuck.
+    expect(empty).toMatch(/F2/);
+  });
+
+  it("says the date it was actually run for when the server gives one", () => {
+    expect(periodLabel("2026-07-31", "2026-06-30")).toBe("As at 2026-07-31");
+  });
+
+  it("marks the pre-answer state as a REQUEST, not as an answer", () => {
+    // A heading that claimed a date before the figures arrived would label the
+    // previous answer with the new date for as long as the request is in flight.
+    expect(periodLabel(undefined, "2026-07-31")).toMatch(/Loading/);
+    expect(periodLabel(undefined, undefined)).toBe("Loading");
   });
 });
 
