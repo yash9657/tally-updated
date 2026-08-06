@@ -41,6 +41,7 @@ import (
 	"github.com/khata/cored/internal/compliance"
 	"github.com/khata/cored/internal/compliance/gstr"
 	"github.com/khata/cored/internal/compliance/itc"
+	"github.com/khata/cored/internal/ewaybill"
 	"github.com/khata/cored/internal/identity"
 	"github.com/khata/cored/internal/ledger"
 	"github.com/khata/cored/internal/masters"
@@ -90,7 +91,13 @@ type Server struct {
 	// ⛔ internal/orders may import NOTHING but the db layer — archtest pins it —
 	// because an order is a committed quantity and not a movement. That is why it
 	// is a sibling of the ledger here rather than a caller of it.
-	orders   *orders.Service
+	orders *orders.Service
+	// ewaybill (T5) assembles a consignment from the books, runs the pure Rule 138
+	// core over it and stores the result. ⛔ It is a sibling of the ledger and not
+	// a caller of it — archtest pins internal/ewaybill to {platform/db,
+	// statutory/rules}, so it can read a voucher but can never post, alter or
+	// freeze one. An e-way bill is raised AGAINST a voucher; it is not a voucher.
+	ewaybill *ewaybill.Service
 	gstr     *gstr.Service
 	importer *migration.Importer
 	sync     *sync.Service
@@ -219,6 +226,7 @@ func New(ctx context.Context, appDSN string) (*Server, error) {
 		banking:  banking.NewService(pool),
 		bankstmt: bankstatement.NewService(pool),
 		orders:   orders.NewService(pool),
+		ewaybill: ewaybill.NewService(pool),
 		gstr:     gstr.NewService(pool),
 		importer: migration.NewImporter(m, l),
 		sync:     sync.NewService(l, pool),
@@ -567,6 +575,14 @@ func (s *Server) routes() {
 		r.Get("/boms", s.getBoms)
 		r.Get("/boms/{bomID}", s.getBom)
 		r.Get("/boms/{bomID}/explode", s.getBomExplode)
+
+		// T5 — the e-way bill. ⛔ FLAT, NOT /vouchers/{id}/e-way-bill: routeAction
+		// reads everything after "/vouchers/" as the voucher CLASS, so the nested
+		// path would map to a class nothing knows and default-deny the Owner. The
+		// voucher is named in the body on POST and in the path on GET.
+		// See handler_ewaybill.go's header.
+		r.Post("/e-way-bills", s.postEWayBill())
+		r.Get("/e-way-bills/{voucherID}", s.getEWayBill())
 
 		r.Get("/cost-centres", s.handleListCostCentres)
 		r.Post("/cost-centres", s.handleCreateCostCentre)

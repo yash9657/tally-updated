@@ -226,6 +226,26 @@ var allowedDeps = map[string]map[string]bool{
 	// conclusion whose inputs are invisible is exactly what ewaybill.go's
 	// Assessment type was designed to prevent.
 	"internal/statutory/rules": {},
+	// ewaybill (T5) is cored's orchestration half: it assembles a consignment
+	// from the books, runs the pure rules core over it, and stores the result
+	// (migration 0047). Exactly two edges, and the pairing is the point —
+	// db to read the voucher and write the bill, rules to decide what the bill
+	// says.
+	//
+	// ⛔ NOT internal/ledger, AND THAT IS DELIBERATE RATHER THAN UNTIDY. An
+	// e-way bill is raised AGAINST a voucher and never writes one: it must not
+	// be able to post, alter, freeze or delete. It reads the voucher tables
+	// directly for the same reason internal/orders reaches only platform/db —
+	// a package that can call post() is a package that could acquire a second
+	// voucher path, and this one has no business having one.
+	//
+	// ⛔ AND NOT internal/statutory. Only the pure rules leaf. Granting the
+	// parent would put the IRN workflow's external-API machinery inside a cored
+	// request; see the T5 decision at the top of rules/ewaybill.go.
+	"internal/ewaybill": {
+		"internal/platform/db":     true,
+		"internal/statutory/rules": true,
+	},
 	// migration is the Tally-XML importer + reconciliation harness: it parses
 	// via integration, ensures masters, posts through ledger, and reconciles via
 	// reporting. It is an orchestration leaf — nothing imports it except server.
@@ -446,6 +466,11 @@ var allowedDeps = map[string]map[string]bool{
 		// "internal/statutory" here to save that proxy would put an external
 		// government API call inside a request handler — do not.
 		"internal/statutory/rules": true,
+		// ...and the orchestration half that uses it. server holds the two
+		// routes; internal/ewaybill holds the assembly, the refusals and the
+		// store. Its own allowed set is {platform/db, statutory/rules}, so it
+		// can never call back out to a handler or into the ledger.
+		"internal/ewaybill": true,
 	},
 	"internal/archtest": {},
 }

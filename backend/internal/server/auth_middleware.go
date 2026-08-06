@@ -729,6 +729,44 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 		}
 		return "", "", "", false
 
+	// ===========================================================================
+	// T5 — THE e-WAY BILL (migration 0047)
+	// ===========================================================================
+	// ONE BARE TOKEN, `e-way-bill`, with no ACL migration — §6.1's rule, and the
+	// consequence stated plainly as the T3 arm above states its own: DATA ENTRY
+	// CAN NEITHER RAISE NOR SEE AN e-WAY BILL until an administrator writes
+	// `allow create e-way-bill`.
+	//
+	// ⛔ ONE TOKEN AND NOT TWO (a separate read token), applying the T3 test —
+	// "would an administrator ever grant one without the other". They would not:
+	// the operator who raises a consignment's bill is the one who reads it back to
+	// hand the driver a sheet, and a clerk who could raise a bill but not read it
+	// could not check what they had raised.
+	//
+	// ⛔ Create AND NOT Alter ON THE POST, even though a second POST for the same
+	// voucher UPDATEs the row (0047's e_way_bill_one_per_voucher). The act is
+	// "raise an e-way bill for this consignment" both times; the upsert is a
+	// storage decision, not an authority one. Making the regeneration an Alter
+	// would mean an administrator granting `create e-way-bill` had granted the
+	// ability to raise a bill exactly once per voucher and no more, which is not a
+	// rule anybody would write on purpose — and the failure would land on the
+	// operator correcting a typo'd distance.
+	//
+	// ⚠️ THE BACK-DATED CUTOFF IS INERT HERE, stated rather than left implied: the
+	// body carries no `voucher_date`, voucherDateFromRequest finds none, and
+	// cutoffDeny skips entirely. Raising an e-way bill posts nothing and moves no
+	// balance. If that ever changes it is new work, not a rename.
+	case strings.HasPrefix(rest, "/e-way-bills"):
+		switch method {
+		case http.MethodGet:
+			return authz.Display, "e-way-bill", "", true
+		case http.MethodPost:
+			return authz.Create, "e-way-bill", "", true
+		}
+		// Any other method default-denies rather than being silently treated as one
+		// of the two above.
+		return "", "", "", false
+
 	case strings.HasPrefix(rest, "/cost-categories"):
 		switch method {
 		case http.MethodGet:

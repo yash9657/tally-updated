@@ -409,6 +409,39 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 			        100, 'D', '{}'::jsonb, 'fixture-hash-' || $5, 0)`,
 			[]any{id(), cid, bankImportID, ledgerID, cidText}},
 
+		// ------------------------------------------------------------------
+		// Migration 0047 — T5, one raised e-way bill.
+		//
+		// It must come AFTER voucher_head (e_way_bill_voucher_fk is a composite
+		// FK to (company_id, voucher_id)).
+		//
+		// generated_from_version_id is deliberately the SAME versionID the
+		// fixture's voucher_head points at, i.e. this fixture row is NOT stale.
+		// It is not a foreign key — the column records what the payload was
+		// built from and must survive that version being superseded — so the
+		// fixture is free to make it anything, and matching the current version
+		// is the honest default: a fixture that shipped a stale bill would make
+		// every reader of this file wonder whether staleness was the point.
+		//
+		// distance_km is > 0 and valid_until/validity_days are populated because
+		// the schema refuses anything else: Assess never computes a validity
+		// from an unstated distance, so a row that exists is a row whose expiry
+		// was actually computed. See 0047's header.
+		{"e_way_bill", `INSERT INTO e_way_bill
+			(id, company_id, voucher_id, generated_from_version_id, local_reference,
+			 provider, payload, disclosures, assessed_required, part_b_required,
+			 valid_until, validity_days, from_pincode, to_pincode,
+			 from_state_code, to_state_code, vehicle_number, transport_mode,
+			 distance_km, over_dimensional_cargo, generated_at, created_by)
+			VALUES ($1, $2, $3, $4, 'LOCAL-EWB-FIXTURE',
+			        'fake-nic-ewaybill', '{}'::jsonb,
+			        '["⛔ THIS IS NOT A GOVERNMENT-ISSUED e-WAY BILL."]'::jsonb,
+			        true, true,
+			        DATE '2024-05-04', 1, '560001', '560100',
+			        '29', '29', 'KA01AB1234', 'ROAD',
+			        120, false, TIMESTAMPTZ '2024-05-03 10:00:00+00', 'testdb')`,
+			[]any{id(), cid, voucherID, versionID}},
+
 		{"print_template", `INSERT INTO print_template
 			(id, company_id, doc_kind, title, header_lines, show_bank_details)
 			VALUES ($1, $2, 'tax-invoice', 'TAX INVOICE', '{}'::text[], false)`,

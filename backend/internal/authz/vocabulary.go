@@ -371,6 +371,26 @@ var KnownResources = append([]Resource{
 	// operator's screen, Tally's own menu and the industry all call it, and a rule
 	// list is read by people who know the short form.
 	"bom",
+
+	// THE e-WAY BILL (T5, migration 0047): the Rule 138 document that must
+	// accompany a movement of goods over the consignment threshold.
+	//
+	// A BARE TOKEN for the reason the whole block above records, and ⛔ IT MAY NOT
+	// BE ADDED TO KnownReportNames — there is no e-way bill REPORT in this slice,
+	// and a name there with no reportName() case is default-DENY for the Owner
+	// too.
+	//
+	// ONE TOKEN COVERING BOTH RAISING AND READING, on the `bom` reasoning rather
+	// than the order reasoning: the operator who raises a consignment's bill is
+	// the one who reads it back to hand a driver the sheet, so no administrator
+	// would grant one without the other.
+	//
+	// ⚠️ WORTH KNOWING WHAT THIS TOKEN GUARDS, because it is not only a document.
+	// A raised e-way bill names the consignor, the consignee, the goods, the route
+	// and the vehicle — it is a movement schedule, and a reader of one learns what
+	// is worth intercepting and exactly where it will be. Migration 0047's RLS
+	// note says the same thing at the other end of the stack.
+	"e-way-bill",
 }, KnownVoucherClasses...)
 
 // KnownReportNames is every report a rule may name via the "report:NAME" form.
