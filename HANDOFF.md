@@ -4,12 +4,18 @@
 > files that preceded it (§11 lists them; `ls` confirms eleven). **Every other `HANDOFF-*.md` in this
 > repository is SPENT** — see §11 for the list and for the one thing to do about them.
 >
-> ## ⛔⛔ COLD START? READ §1, RUN §2, THEN DO §1.4.
+> ## ⛔⛔ COLD START? READ §1, RUN §2, THEN DO §1.4 B.
 >
-> **§1.4 is the concrete plan for the next session** — what to pick up, in what order, what decision
-> has to be made before any code is written, and what already exists so you do not go looking for it.
-> It is a fork: one small certain fix, and one mandatory track that starts with an architecture
-> decision rather than typing.
+> **§1.4 B is the concrete plan for the next session: the e-Invoice / IRN screen.** Track A
+> (bill-wise references) is DONE — §1.5 records what it shipped and the three things it found.
+>
+> **§1.4 B is unusually well-armed and you should read all of it before writing anything.** The whole
+> statutoryd path was driven end to end on 2026-08-06: B.0 is a **working, verified command recipe**,
+> B.1 is **two real defects the drive found** (one of them permanently bricks a voucher), B.2 settles
+> the architecture question with the fact that was missing, and B.4 is the actual work list.
+>
+> ⚠️ **AND READ §9.1a — the ten mishaps of the last session, in one table.** None is specific to bill
+> references; most are about how this file's own claims and this repo's own audits go wrong.
 >
 > ⚠️ **THE READING ORDER HAS CHANGED NOW THAT TIER 1 IS CLOSED.** §4 used to be the work; it is now a
 > defect audit plus loose ends. **§5 is the PARITY ROADMAP and is where TRACKS come from** — ordered
@@ -24,8 +30,9 @@
 **Is Tier 1 done? YES. T5 was the last row and it is `on`, on BROWSER evidence.**
 
 The `FeaturesScreen` (`frontend/src/screens/FeaturesScreen.tsx`) is this project's parity ledger, and
-it is the authority, not this file. Measured at `2777980`:
-**30 rows `on`, 11 `off`, 3 `server`, 2 `always`** — 46 rows in total.
+it is the authority, not this file. Re-measured 2026-08-06 with the `python3` method below:
+**30 rows `on`, 11 `off`, 3 `server`, 2 `always`** — 46 rows in total, unchanged by the
+bill-reference work (which corrected a row's NOTE, not its state — see §1.5).
 
 ⚠️ **COUNT IT WITH `python3` PAIRING EACH `name:` WITH ITS FOLLOWING `state:`.** A previous edit of
 this file used `grep -c 'state: "always"\|state: "server"'`, read the COMBINED count as one of them,
@@ -322,54 +329,167 @@ GST form's HSN field was left blank) and took `verify:demo` to 32/33 on the GSTR
 gate**, which is a brittleness in the check rather than a product defect — but it will catch the next
 person the same way.
 
-### B. THEN THE e-INVOICE / IRN SCREEN — but the FIRST hour is a DECISION, not typing
+### B. ⛔⛔ THE NEXT TRACK — THE e-INVOICE / IRN SCREEN
 
-§5.2. **Statutorily mandatory**, and the highest-value row left. ⛔ **It does NOT inherit a finished
-path from T5** — read §5.2's correction before estimating anything.
+§5.2. **Statutorily MANDATORY in India above a turnover threshold**, and the highest-value row left:
+an accountant who cannot raise an e-invoice cannot use this product as their books at all.
 
-> #### ⛔ THE DECISION TO MAKE BEFORE WRITING A LINE, exactly as T5's was
+> ## THE GOOD NEWS, AND IT IS BETTER THAN THIS FILE PREVIOUSLY THOUGHT
 >
-> The IRN workflow is NOT pure — it wraps an exactly-once external IRP call in durable, resumable
-> state — so it **must stay in `statutoryd`**, and the T5 split does not help. The open question is
-> the one nobody has answered: **how does a browser trigger it?**
->
-> | Shape | What it costs | What it buys |
-> |---|---|---|
-> | **cored PROXIES to statutoryd** | cored gains a hard runtime dependency on a second process, and a new failure mode when it is down. ⚠️ **There is no `make run-statutoryd` target and nothing runs it in dev** — that is part of the work | the screen keeps cored's PDP, RLS, step-up and company scoping, and the client contract looks exactly like T5's |
-> | **the browser reaches statutoryd directly** | statutoryd has **no PDP, no RLS, no step-up and no company scoping** — this is only acceptable behind something that adds them, which is most of a second server | no proxy hop |
->
-> **The first shape is almost certainly right** for the same reason T5's decision went the way it
-> did — an operator-facing write belongs inside the authority stack — but say WHY in the commit,
-> because the next person will ask.
->
-> ⛔ **AND WRITE THE DECISION DOWN HERE WHEN YOU MAKE IT**, in this section, the way §4.2 now
-> records T5's. A decision that lives in one session's memory is a decision that gets re-litigated.
+> **The whole statutoryd path was driven end to end on 2026-08-06 and IT WORKS.** This section used
+> to say "there is no `make run-statutoryd` and nothing runs it in dev — that is part of the work".
+> The target is still missing, but the *flow* is not unknown any more. Everything below was
+> **executed**, not read. Copy the commands.
 
-**What already exists, so you do not go looking:**
+#### B.0 THE RECIPE THAT WORKS — verified 2026-08-06, copy it verbatim
 
-- `cmd/statutoryd/main.go` — `handleEInvoice` at
-  `POST /companies/{companyID}/vouchers/{voucherID}/e-invoice`, returning `{irn, ack_no, status,
-  pinned_voucher_no}`. Env: `CORED_BASE_URL`, `CORED_SERVICE_TOKEN`, `PORT` (8091), `STATUTORYD_DSN`.
-- The durable workflow, the retry classification (`IsPermanent` → 422, transient → 503), and the
-  freeze hook `POST /vouchers/{id}/external-reference`. ⚠️ **`voucher_external_reference.kind` is
-  CHECK-constrained to `IRN` / `FILED_GSTR1`** — the IRN needs no new kind, unlike T5, which is why
-  T5 got its own table instead.
-- `statutory_step` is migration **0013**; statutoryd runs no migrations, cored owns all schema.
+```bash
+# 1. cored must be up first (statutoryd calls BACK into it).
+make run-cored
 
-**What does NOT exist, and is the actual work:**
+# 2. Mint the service token. The subject MUST be exactly svc:statutoryd — cored's
+#    auth middleware has a "svc:" FAST PATH built for this caller (auth_middleware.go
+#    ~line 125): no app_user row, no membership, no security level, no step-up.
+TOK=$(curl -s -X POST http://localhost:8087/auth/token \
+  -H 'Content-Type: application/json' -d '{"subject":"svc:statutoryd"}' \
+  | python3 -c "import sys,json;print(json.load(sys.stdin)['token'])")
+
+# 3. Boot statutoryd on :8091 with the DURABLE store.
+cd backend && CORED_BASE_URL=http://localhost:8087 CORED_SERVICE_TOKEN="$TOK" PORT=8091 \
+  STATUTORYD_DSN="postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable" \
+  go run ./cmd/statutoryd
+
+# Confirm the log says DURABLE, not the in-memory WARNING:
+#   "statutoryd: DURABLE StepStore on Postgres (table statutory_step)"
+curl -s http://localhost:8091/healthz     # {"service":"statutoryd","status":"ok"}
+```
+
+⚠️ **THE TOKEN EXPIRES IN 3600s AND EVERY `cored` RESTART INVALIDATES IT** (§9.7 — a restart mints a
+new ephemeral signing key). Both present as a bare `401` from a call statutoryd makes, surfaced to
+the caller as `{"error":"statutory: GET voucher: unexpected status 401"}` — **which names neither the
+token nor the expiry.** Re-mint and restart statutoryd whenever you restart cored.
+
+> ### ⛔ AND THE TRAP THAT COST THE MOST TIME HERE — IT IS NOW §2's CHECKLIST ITEM
+> The first attempt failed with that 401 **for a completely different reason**: a **statutoryd from a
+> previous session, SEVEN DAYS OLD, was still listening on 8091** (`/tmp/statutoryd`, not a `go run`
+> child), holding a token signed by a cored key that died a week ago. The new instance never bound.
+> **§2's kill-stale-servers step did not list port 8091** — it does now. `lsof -nP -iTCP:8091`.
+
+#### B.1 ⛔⛔ THE TWO DEFECTS THE END-TO-END DRIVE FOUND. READ BOTH BEFORE DESIGNING THE SCREEN.
+
+**1. `GetVoucher` DOES NOT CARRY LINE ITEMS, AND THE NIC SCHEMA REQUIRES AT LEAST ONE.**
+
+`HTTPCoredClient.GetVoucher` (`internal/statutory/cored_client.go`) maps exactly five fields off
+cored's voucher JSON — `VoucherNo`, `VoucherDate`, `Taxable`, `CGST`, `SGST`, `IGST`. **No lines.**
+So a caller that supplies no `lines` gets:
+
+```
+{"error":"statutory: e-invoice validation failed: [ItemList: 0 items, minimum 1]"}
+```
+
+**Every e-invoice therefore requires the CALLER to supply the item list**, and a browser cannot know
+it either — it comes off the voucher's `inventory`. This is the same shape as the seller/buyer
+identity problem this section already flagged, but harder, and it settles part of the architecture:
+**a cored-side proxy must build `[]rules.SnapshotLine` from the voucher itself.** cored has the
+inventory rows, the stock masters, the HSN and the rate; statutoryd has none of them.
+
+**2. ⛔⛔ A FAILED ATTEMPT PERMANENTLY POISONS THE VOUCHER, AND NOTHING SAYS SO.**
+
+`GenerateIRNWorkflow` is durable and **memoized per step**, keyed on
+`workflowID = "irn:" + companyID + ":" + voucherID`. The `build` step runs FIRST and its output is
+written to `statutory_step` **before `validate` runs**. So:
+
+- attempt 1 with no lines → `build` memoizes a payload with `ItemList: []` → `validate` fails 422;
+- attempt 2 **with correct lines** → the workflow RESUMES from the memoized build → **fails
+  identically**, forever. Proved by inspecting `statutory_step`: the row for the poisoned workflow
+  held `"ItemList": []` and no retry could displace it.
+
+There is **no reset path exposed anywhere** — no endpoint, no flag. The only cure found was
+`DELETE FROM statutory_step WHERE workflow_id = 'irn:<company>:<voucher>'`.
+
+> **THE DISTINCTION THE STEP LIST IS MISSING, and it is the fix:** memoizing `generate` is the entire
+> reason this workflow is durable — it wraps an **exactly-once external IRP call**, and re-running it
+> mints a second IRN against a real government API. Memoizing `build` buys nothing: it is a pure
+> function of the snapshot, cheap, and re-running it is free. **The steps are not the same kind of
+> thing and the runner treats them identically.** Either `build`/`validate` must be re-run every time
+> (memoize from `generate` onward), or a workflow that never reached `generate` must be discardable.
+> ⚠️ **Whichever you choose, the operator-facing consequence is the thing to fix**: today a mistyped
+> first attempt makes an invoice permanently un-invoiceable with an error message that blames the
+> item list.
+
+#### B.2 THE ARCHITECTURE DECISION — still yours to make, but now with facts
+
+The IRN workflow is NOT pure (unlike T5's Rule-138 core), so **it must stay in `statutoryd`**. The
+open question remains: **how does a browser trigger it?**
+
+| Shape | What it costs | What it buys |
+|---|---|---|
+| **cored PROXIES to statutoryd** | a hard runtime dependency on a second process, and a new failure mode when it is down | the screen keeps cored's PDP, RLS, step-up and company scoping; and — **decisive after B.1 item 1** — cored is the only party that can build the line items at all |
+| **the browser reaches statutoryd directly** | statutoryd has **no PDP, no RLS, no step-up, no company scoping**; and the browser would have to assemble the whole NIC line list itself from data it would have to fetch separately | no proxy hop |
+
+**The proxy is now clearly right**, and B.1 item 1 is the argument that was missing: the line items
+have to be built by something holding cored's masters. Say WHY in the commit.
+
+> ### ⚠️ THE RE-ENTRANCY NOBODY HAS THOUGHT ABOUT, AND IT IS THE ONE DESIGN RISK
+> A proxy makes the call graph **cored → statutoryd → cored**: statutoryd's `GetVoucher` and its
+> freeze hook (`POST /vouchers/{id}/external-reference`) both call back into cored while cored's own
+> proxy handler is still waiting.
+>
+> ⛔ **SO THE PROXY HANDLER MUST NOT HOLD A DATABASE TRANSACTION OPEN ACROSS THE CALL.** If it does,
+> the callback contends with — or deadlocks against — the transaction that is waiting for it, and the
+> failure mode is a hung request under concurrency rather than an error in a test. Build the line
+> items, **commit/close**, then call statutoryd.
+>
+> ⚠️ Also give it a **timeout**. statutoryd's transient path answers 503 and is resumable by design;
+> a proxy with no deadline turns a slow IRP into a hung browser tab.
+
+#### B.3 WHAT ALREADY EXISTS, so you do not go looking
+
+- `cmd/statutoryd/main.go` — 247 lines, and **its header comment documents every env var and both
+  endpoints accurately.** Read it first; it is better than this section.
+- `POST /companies/{companyID}/vouchers/{voucherID}/e-invoice` → `{irn, ack_no, status,
+  pinned_voucher_no}`. `handleEInvoice` overlays caller-supplied identity and optional
+  amount/line overrides onto the cored snapshot, then runs the workflow.
+- Retry classification is real: `IsPermanent(err)` → **422**, transient → **503** (resumable).
+- The freeze hook `POST /vouchers/{id}/external-reference` exists and cored routes it as an
+  Alter/voucher action. ⚠️ **`voucher_external_reference.kind` is CHECK-constrained to `IRN` /
+  `FILED_GSTR1`** — the IRN needs **no new kind and no migration**, unlike T5.
+- `statutory_step` is migration **0013**; statutoryd runs **no** migrations (cored owns all schema)
+  and **fails at boot** if the table is missing or ungranted — including a privilege probe, because
+  `to_regclass` ignores GRANTs.
+- The `svc:` auth fast path in `auth_middleware.go` was built for exactly this caller.
+
+#### B.4 WHAT DOES NOT EXIST, AND IS THE ACTUAL WORK
 
 - ⛔ **NOTHING ON THE CLIENT AT ALL.** Unlike T5 — which found `EWayBillRequest`/`EWayBillResponse`
   already written speculatively in `api/types.ts` — there are **no IRN types and no client methods**.
-  Checked. Budget for the full fifteen registrations (§7.2) plus three client files.
-- No `make run-statutoryd`, and no dev flow for minting `CORED_SERVICE_TOKEN`. **You cannot
-  browser-verify this row without both**, and §12 item 1 will not accept anything less.
+  Re-checked 2026-08-06: still true. Budget the full **fifteen** registrations (§7.2) plus three
+  client files.
+- **The cored proxy route itself**, including the line-item builder (B.1 item 1). ⚠️ A new route
+  needs `routeAction()` + `authz.KnownResources` (§7.1). It is an operator-facing WRITE, so it
+  belongs behind step-up like every other write.
+- **`make run-statutoryd`** — B.0 has the working command; it is a ~5-line Makefile target and it
+  should mint the token itself, because a hand-copied token that expires in an hour is the trap
+  documented above.
+- **A fix or a documented guard for the poisoned-workflow defect** (B.1 item 2). Shipping the screen
+  without it means the first operator to mistype anything loses that invoice permanently.
 
 > #### ⚠️ ONE THING T5 LEARNED THAT THIS ROW INHERITS FOR FREE, AND IT IS WORTH REAL TIME
 > `eInvoiceRequest` makes the CALLER supply seller/buyer GSTIN, legal name and state code, because
 > statutoryd cannot read cored's masters. **cored CAN.** `internal/ewaybill`'s `loadConsignment`
 > already resolves exactly those fields from the `company` row and the party `ledger` row, and it is
-> proven against the demo company. A cored-side proxy should fill them the same way rather than
-> making a screen ask an operator to retype their own GSTIN — copy that query.
+> proven against the demo company. **Copy that query** — and extend it to the line items, which
+> B.1 item 1 shows are the same problem one level deeper.
+
+#### B.5 THE ACCEPTANCE TEST, stated up front so it is not negotiated later
+
+§12 item 1 will not accept less: **raise an e-invoice from a browser, against real cored AND real
+statutoryd, with the virtual authenticator (§9.7), and read the IRN back off the voucher.** Then
+prove the two things a test can prove and a demo cannot:
+
+1. the freeze hook actually pinned the voucher number (`voucher_external_reference`, kind `IRN`);
+2. ⛔ **an idempotent re-post returns the SAME IRN** — that is the entire reason this plane is
+   durable, and it is the one property whose failure mints a duplicate against a real government API.
 
 ### ⛔ WHAT NOT TO DO
 
@@ -402,6 +522,12 @@ lsof -nP -iTCP:8087 -sTCP:LISTEN     # -> kill -9 that PID
 ps -eo pid,etime,command | grep "cored serve" | grep -v grep   # etime is AGE; a 28h process predates you
 lsof -nP -iTCP:5173 -sTCP:LISTEN     # a stale vite serves day-old code just as happily
 lsof -nP -iTCP:8088 -sTCP:LISTEN     # insightd (uvicorn). verify:demo needs it UP.
+lsof -nP -iTCP:8091 -sTCP:LISTEN     # ⛔ statutoryd. ADDED 2026-08-06 AFTER IT COST AN HOUR:
+                                     # a SEVEN-DAY-OLD /tmp/statutoryd was still bound here,
+                                     # holding a service token signed by a cored key that had
+                                     # died a week earlier. A fresh instance never bound, and
+                                     # the symptom was a bare 401 from a call it made — which
+                                     # names neither the process, the token, nor the expiry.
 
 # 4. Baseline, and WRITE IT DOWN. Without -v the SKIP census is a lie.
 cd backend && go test ./... -count=1 -v 2>&1 | tee /tmp/base.log | tail -3
@@ -493,10 +619,16 @@ changed the size of this job twice, and the second time was after it had suppose
 ## 4. ⛔⛔ THE WORK, IN ORDER. THIS IS THE PART YOU ACT ON.
 
 **Tier 1 is CLOSED (§1).** What is left here is a defect audit and the loose ends around it.
-⛔ **The next TRACK comes from §5, not from this section** — and §5.2 is where to start.
+⛔ **The next TRACK comes from §5, not from this section** — and §1.4 B is the plan for it.
 
-⚠️ **THE ORDER IS NOT ARBITRARY.** Item 1 is a data-loss audit: cheap, and unbounded in cost if
-skipped. Item 2 is a real money-visibility defect found by driving the app.
+⚠️ **THE ORDER IS NOT ARBITRARY.** §4.3 is a data-loss audit: cheap, and unbounded in cost if
+skipped — **and it has just been shown to have cleared a table that was losing data**, so its
+question is corrected and four tables need re-checking.
+
+⛔ **AND THE NEWEST ITEM IS AT THE BOTTOM RATHER THAN THE TOP, DELIBERATELY: §4.8 is a corrupted-
+document defect** (drilling into a non-Sales voucher re-classes it on save). It is small, it is
+proved, and it blocks verification of code already written — **if you want a warm-up before Track B,
+that is the one**, not another audit.
 
 ### 4.1 THE BAR, restated because it is the whole point
 
@@ -662,6 +794,19 @@ item is more urgent than it was.
 ⚠️ `seed-demo.mts`, `verify-demo.mts` and `corpora/validate.py` are **CO-OWNED**. ADD only, and
 re-read immediately before each edit.
 
+### 4.7 SMALLER, REAL, AND EACH WORTH DOING
+
+| # | What | Why |
+|---|---|---|
+| 5 | `ReviseLineQty` on the wire | The service method and 0042's trigger exist; no route calls it, so a committed quantity cannot be corrected from a client. The order register SAYS SO on its face rather than hiding it |
+| 6 | `VersionView` does not project cost allocations | The edit log SIGNS them but does not SHOW them: an auditor opening an altered pay run sees two versions that render identically. ⚠️ It does not project `fulfilments` either, and that is now the same gap twice |
+| 7 | The pre-flight allocation refusal names the axis by raw UUID | Strictly *less* usable than the DB trigger message it exists to pre-empt. Resolve names at the in-transaction call site, which already holds the tx |
+| 8 | The two cost reports disagree about an off-axis allocation | The category summary excludes it and reports it separately; the centre summary silently includes it. Neither says so |
+| 9 | Fold `tsc` into `make verify` | ~10 minutes, and it closes a whole class of "green but broken". **Still not done, and it caught a real error this session** — `printTarget.ts`'s exhaustive `Record<ReportName, string>` failed only under `tsc`, never under `make verify` |
+| 11 | ✅ **DONE 2026-08-06 — bill references are built, settled and reconciled** | §1.5. Was: "no screen builds `bill_allocations` on any voucher path", i.e. money nobody can chase. ⚠️ **AND THE DIAGNOSIS IN THIS ROW WAS *STILL* INCOMPLETE after being corrected once** — it said "the fix is client-side", which was false: the voucher number is minted inside the post transaction, so a browser CANNOT name the bill it opens and the server had to stamp it. It also missed that settlement is a second feature. **A claim that has been corrected once is not thereby right.** Left here rather than deleted, per §9.1 |
+| 12 | An e-way bill cannot be raised against a DELIVERY NOTE | §4.2. Real, ordinary, and NIC supports it (docType `CHL`). Needs a decided rule for deriving the consignment value from the movement; `ErrNoTaxLines` refuses by name rather than guessing at a figure the threshold test depends on |
+| 10 | No tracking numbers | RESEARCH.md:622 — Tally stitches Delivery Note ↔ Sales invoice with a **Tracking No.**, and creates "bill pending" entries when goods and bill arrive separately. T3 links a voucher to an ORDER but not to another VOUCHER. The order register states this gap |
+
 ### 4.8 ⛔⛔ NEW AND UNFIXED — DRILLING INTO A NON-SALES VOUCHER RE-CLASSES IT
 
 **Found 2026-08-06 while browser-verifying Track A. It is not Track A's, it is pre-existing, and it
@@ -693,19 +838,6 @@ Three consequences, and the first is the one that matters:
 ⚠️ **AND WHY NOBODY CAUGHT IT:** §5.5 lists the Day Book as "known-good, driven end to end". It was
 — **with a Sales voucher**, the one class for which the default is accidentally right.
 
-### 4.7 SMALLER, REAL, AND EACH WORTH DOING
-
-| # | What | Why |
-|---|---|---|
-| 5 | `ReviseLineQty` on the wire | The service method and 0042's trigger exist; no route calls it, so a committed quantity cannot be corrected from a client. The order register SAYS SO on its face rather than hiding it |
-| 6 | `VersionView` does not project cost allocations | The edit log SIGNS them but does not SHOW them: an auditor opening an altered pay run sees two versions that render identically. ⚠️ It does not project `fulfilments` either, and that is now the same gap twice |
-| 7 | The pre-flight allocation refusal names the axis by raw UUID | Strictly *less* usable than the DB trigger message it exists to pre-empt. Resolve names at the in-transaction call site, which already holds the tx |
-| 8 | The two cost reports disagree about an off-axis allocation | The category summary excludes it and reports it separately; the centre summary silently includes it. Neither says so |
-| 9 | Fold `tsc` into `make verify` | ~10 minutes, and it closes a whole class of "green but broken". **Still not done, and it caught a real error this session** — `printTarget.ts`'s exhaustive `Record<ReportName, string>` failed only under `tsc`, never under `make verify` |
-| 11 | ✅ **DONE 2026-08-06 — bill references are built, settled and reconciled** | §1.5. Was: "no screen builds `bill_allocations` on any voucher path", i.e. money nobody can chase. ⚠️ **AND THE DIAGNOSIS IN THIS ROW WAS *STILL* INCOMPLETE after being corrected once** — it said "the fix is client-side", which was false: the voucher number is minted inside the post transaction, so a browser CANNOT name the bill it opens and the server had to stamp it. It also missed that settlement is a second feature. **A claim that has been corrected once is not thereby right.** Left here rather than deleted, per §9.1 |
-| 12 | An e-way bill cannot be raised against a DELIVERY NOTE | §4.2. Real, ordinary, and NIC supports it (docType `CHL`). Needs a decided rule for deriving the consignment value from the movement; `ErrNoTaxLines` refuses by name rather than guessing at a figure the threshold test depends on |
-| 10 | No tracking numbers | RESEARCH.md:622 — Tally stitches Delivery Note ↔ Sales invoice with a **Tracking No.**, and creates "bill pending" entries when goods and bill arrive separately. T3 links a voucher to an ORDER but not to another VOUCHER. The order register states this gap |
-
 ## 5. ⛔⛔ THE PARITY GAP WITH TALLY, ORDERED. READ THIS BEFORE PICKING A TRACK.
 
 `PLAN-TALLY-PARITY.md` §4 is still the authority on WHAT each track is. **This section is the
@@ -735,7 +867,7 @@ project has now shipped four times and which §4.1 exists to stop.
 
 | Row | Why it matters | What is actually missing |
 |---|---|---|
-| **e-Invoice / IRN** | ⛔ **Statutorily MANDATORY** in India above a turnover threshold. An accountant who cannot raise an e-invoice cannot use this product as their books at all | A screen, and — the real blocker — **a decided way for a browser to trigger generation at all**, which T5 did NOT settle (see below). The workflow, the freeze-on-pin, the retry classification and `POST /vouchers/{id}/external-reference` all exist |
+| **e-Invoice / IRN** | ⛔ **Statutorily MANDATORY** in India above a turnover threshold. An accountant who cannot raise an e-invoice cannot use this product as their books at all | A screen, a **cored proxy route that builds the line items** (statutoryd's snapshot has none — §1.4 B.1), `make run-statutoryd`, and a fix for the poisoned-workflow defect. ⚠️ **The path itself is PROVEN and the recipe is in §1.4 B.0** — the workflow, freeze-on-pin, retry classification, the `svc:` auth fast path and `POST /vouchers/{id}/external-reference` all exist and were driven end to end |
 | **Payroll statutory** (EPF/EPS/EDLI, ESI, salary TDS, pay run) | Any business with employees. The whole engine, the statutory rates and the file emitters are built | Screens only. ⚠️ **NO refactor needed** — `internal/payroll` and `payrolldb` are already in `internal/server`'s archtest allowed set, so this is pure frontend |
 | **Offline entry with sync** | The differentiator against Tally's LAN-only model, and it is built | A screen, and a decision about how a browser presents queued intents |
 
@@ -761,10 +893,12 @@ project has now shipped four times and which §4.1 exists to stop.
 
 ### 5.3 THE ORDERED LIST, WITH REASONS
 
-1. **The e-Invoice / IRN screen** — §5.2, and **§1.4 B has the concrete plan**. **Statutorily
-   MANDATORY**, and the highest-value item on this list. ⚠️ It does NOT inherit a finished path from
-   T5 — read the correction above before estimating it, because the browser-to-statutoryd question
-   is still open and is the first hour's work.
+1. **The e-Invoice / IRN screen** — §5.2, and **§1.4 B has the concrete plan, now with a verified
+   end-to-end recipe rather than an open question**. **Statutorily MANDATORY**, and the highest-value
+   item on this list. ⚠️ It still does NOT inherit a finished path from T5 (the IRN core is not pure,
+   so the workflow stays in statutoryd) — but the browser-to-statutoryd question is now effectively
+   settled by §1.4 B.1: only cored can build the line items, so the proxy is right. **Two defects
+   found by driving it must be handled as part of the track**, not discovered again.
 2. **A double-entry posting grid** — §4.5. A Journal cannot be keyed AT ALL. This is accounting parity,
    not a feature: it is how every adjustment, provision, depreciation and reclass is entered. ⚠️ It is
    also the only known HIDDEN row (§5.1), so it is the one gap whose size is proven rather than
@@ -1156,6 +1290,24 @@ latter can only make claims about the software, and those go stale silently.
 test written from the same misunderstanding as the code agrees with it. **The only thing that caught it
 was a screenshot.**
 
+### 9.1a ⛔ THE MISHAPS OF THE BILL-REFERENCE SESSION, IN ONE PLACE
+
+*Every one of these cost real time, and none is specific to bill references. They are here rather
+than scattered through §1.5 because the next track will hit the same shapes.*
+
+| # | What happened | The rule it yields |
+|---|---|---|
+| 1 | **The handoff's own diagnosis was wrong twice.** §4.7 item 11 was corrected once ("no screen builds one") and was STILL wrong ("the fix is client-side") — the voucher number is minted inside the post transaction, so no client can name the bill it opens | **A claim that has been corrected once is not thereby right; it has been wrong once.** Re-derive the size from the CODE at the start of a track, not from this file's summary of it |
+| 2 | **A "small, certain" item took the whole session.** It was two features (raise AND settle), because Outstandings nets NEW against AGAINST — raising without settling makes the report overstate forever | **Before estimating, ask what the feature looks like when it is HALF built.** If the half is a new wrong number, it is not half a feature |
+| 3 | ⛔ **A read-back audit cleared a table that was losing data.** §4.3 checked that `voucherFullJSON` EMITS `bill_allocation` and ticked it off. No form sent them back, so an ALTER destroyed them | **Emitting is necessary and NOT sufficient.** The audit question is "does a form REBUILT FROM THAT RESPONSE send it back?" — and the other four tables have not been asked it |
+| 4 | ⛔ **A test I wrote ten minutes earlier could not fail.** The alter round-trip called the API directly instead of driving the form; deleting the hydration left the suite green | **§9.2 applies to your own new tests.** Mutation-prove the thing the test exists to protect, immediately, not at the end |
+| 5 | **The suite had a pre-existing FLAKE that only fails under load.** `waitFor(() => expect(spy).toHaveBeenCalled())` returns when the spy is *invoked*, not when the resolved data has rendered — 8/8 in isolation, intermittent in the full run | **Wait on the OBSERVABLE the assertions read**, never on a spy, then assert the spy afterwards |
+| 6 | **A defaulted form value went stale the moment it was useful.** The bill reference defaulted when the party was picked — while the invoice total was still 0 — and never re-tracked, so the form refused every invoice it had defaulted itself | **A default captured on event A and consumed after event B must re-track until the operator overrides it.** Ordering beats correctness-at-one-instant |
+| 7 | **Driving ONE member of a class certified the class.** "The Day Book works" was established with a Sales voucher; every other class opens the wrong frame and re-classes on save (§4.8) | **When a screen is parameterised by TYPE, drive more than one type.** The default is accidentally right for exactly one of them |
+| 8 | ⛔ **A seven-day-old dev process on an unchecked port.** A stale `statutoryd` on :8091 held a token signed by a dead cored key; the symptom was a bare 401 from a call it made | **Check every port a track touches, not the three you remember.** §2 now lists 8091 |
+| 9 | **A durable workflow memoized a step that should never have been memoized.** A failed first IRN attempt poisons the voucher permanently, and retrying with correct data resumes from the bad memo (§1.4 B.1) | **In a memoized pipeline, separate "memoize because re-running is DANGEROUS" from "memoize because it is expensive."** Only the first earns it |
+| 10 | **My own browser verification broke a gate.** The keyed sale carried no HSN and took `verify:demo` to 32/33 | **Run the live gate BEFORE handing over, and remove the residue** (§12 item 10). T5 set this practice; it paid again |
+
 ### 9.2 A test that CANNOT FAIL is worse than no test
 
 A guard forbidding a money field asked whether a type satisfied `interface{ Total() any }` — a
@@ -1320,6 +1472,16 @@ the list above is exactly what to remove.
   differential rather than pinned constants; if you ever pin an absolute figure, this residue is baked
   into it. **The honest fix is §4.5 (seed it properly), not deleting it** — a fresh database still has
   none of this, which is the worst of both worlds for anyone reasoning from what is on screen.
+- ⚠️ **THE BILL-REFERENCE SESSION LEFT NO RESIDUE EITHER (2026-08-06), same practice.** Its browser
+  verification keyed a real Sales 5 (10,000 + 18% to Acme Traders, with a bill reference and a due
+  date) and a real Receipt 2 settling 5,000 of it; **both were `Alt+D`-tombstoned through the app**
+  because the sale carried no HSN and took `verify:demo` to 32/33 on the GSTR-1 HSN check.
+  ⚠️ **That check is worth knowing about on its own: ANY accounting-mode GST sale keyed without an
+  HSN breaks it.** That is a brittleness in the gate rather than a product defect — the form does
+  have an HSN field — but it will catch the next person the same way.
+  ⚠️ It also deleted one `statutory_step` row: an IRN workflow **poisoned** by a first attempt with
+  no line items (§1.4 B.1 item 2). Left in place it would have made the demo's sales invoice 1
+  permanently un-invoiceable for whoever tried the IRN screen next, with a misleading error.
 - ⚠️ **T5 LEFT NO RESIDUE, DELIBERATELY, AND THAT IS A CHANGE OF PRACTICE WORTH COPYING.** The
   browser verification keyed a real item invoice (Sales 4, 94,400) and raised a real e-way bill
   against it. Both were then REMOVED — the voucher by `Alt+D` in the app, the `e_way_bill` row by
