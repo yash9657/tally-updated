@@ -192,8 +192,42 @@ export function ensureLedger(
 /**
  * Ensure (create-or-select) the three output-tax ledgers for a company and
  * cache their ids. Idempotent and memoized: the first GST post on a fresh
- * company triggers three createLedger calls; subsequent posts reuse the cached
+ * company creates the three that are missing; subsequent posts reuse the cached
  * ids (no new calls).
+ *
+ * ===========================================================================
+ * ⛔⛔ THIS FUNCTION CALLED createLedger UNCONDITIONALLY FOR TWO RELEASES, AND
+ * IT WAS FOUND BY A BROWSER — AFTER THE "SAME" BUG WAS ALREADY FIXED ABOVE
+ * ===========================================================================
+ * `ensureLedger` above was corrected to resolve-then-create when the duplicate
+ * key defect was found on the Payment / Receipt / Contra path. THIS FUNCTION
+ * WAS NOT, and it is the identical bug one function down: `INSERT INTO ledger`
+ * has no ON CONFLICT and `ledger_company_id_name_key` is a plain UNIQUE index,
+ * so creating an "Output CGST" the company already has is a raw unique
+ * violation.
+ *
+ * The symptom: on a fresh page load the cache is empty, so keying an ITEM
+ * INVOICE (F8/F9, Ctrl+H > Item Invoice) against any company that had already
+ * posted one GST voucher failed with
+ *   `masters: insert ledger: ERROR: duplicate key value violates unique
+ *    constraint "ledger_company_id_name_key"`
+ * — i.e. every company after its first day.
+ *
+ * ⚠️ TWO LESSONS, AND THE SECOND IS THE ONE THAT COST THIS:
+ *
+ *  1. NOT ONE TEST COULD SEE IT. The mock's createLedger mints a fresh id per
+ *     call, so it is MORE PERMISSIVE than the server — HANDOFF §9.4's third
+ *     kind, invisible by construction. 726 frontend tests were green.
+ *
+ *  2. ⛔ FIXING "THE BUG" IS NOT FIXING THE CLASS. The correction at a86283b
+ *     fixed the call site that had been REPORTED and left its neighbour — in
+ *     the same file, forty lines away, with the same name prefix — untouched.
+ *     When a defect is found in an `ensure*` / `upsert*` / `getOrCreate*`
+ *     helper, grep the file for the others before closing it.
+ *
+ * The fix is to go THROUGH ensureLedger rather than to re-implement its
+ * resolve-then-create dance here. A second copy of that logic is a second copy
+ * to correct, which is exactly how this happened.
  */
 export function ensureOutputTaxLedgers(
   client: CoredClient,
@@ -202,25 +236,21 @@ export function ensureOutputTaxLedgers(
   const cached = OUTPUT_TAX_CACHE.get(companyID);
   if (cached) return cached;
   const p = (async (): Promise<OutputTaxLedgers> => {
-    const [cgst, sgst, igst] = await Promise.all([
-      client.createLedger(companyID, {
+    const [cgstId, sgstId, igstId] = await Promise.all([
+      ensureLedger(client, companyID, {
         name: "Output CGST",
-        group_name: OUTPUT_TAX_GROUP,
+        groupName: OUTPUT_TAX_GROUP,
       }),
-      client.createLedger(companyID, {
+      ensureLedger(client, companyID, {
         name: "Output SGST",
-        group_name: OUTPUT_TAX_GROUP,
+        groupName: OUTPUT_TAX_GROUP,
       }),
-      client.createLedger(companyID, {
+      ensureLedger(client, companyID, {
         name: "Output IGST",
-        group_name: OUTPUT_TAX_GROUP,
+        groupName: OUTPUT_TAX_GROUP,
       }),
     ]);
-    return {
-      cgstId: cgst.ledger_id,
-      sgstId: sgst.ledger_id,
-      igstId: igst.ledger_id,
-    };
+    return { cgstId, sgstId, igstId };
   })().catch((err) => {
     // Don't poison the cache on failure — allow a retry on the next post.
     OUTPUT_TAX_CACHE.delete(companyID);

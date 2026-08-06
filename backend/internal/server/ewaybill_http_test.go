@@ -549,6 +549,47 @@ func TestARegenerationIsCountedRatherThanSilent(t *testing.T) {
 	}
 }
 
+// TestADeliveryNoteIsRefusedByNAME, not as a malformed voucher.
+//
+// ⛔ THE POINT IS THE SENTENCE, NOT THE STATUS CODE. A delivery note moves goods
+// and carries no tax, so it lands on the same count mismatch a genuinely broken
+// voucher would — and the first draft reported both as "your tax lines and stock
+// lines do not correspond", which describes a perfectly well-formed document as
+// malformed and sends an operator looking for a defect that is not there.
+//
+// This asserts that the refusal NAMES the real gap and says what to do instead.
+// It is the kind of test HANDOFF §9.1 is about: the plausible wrong message is
+// the one that gets written, and nothing but an assertion on the words stops it.
+func TestADeliveryNoteIsRefusedByName(t *testing.T) {
+	srv := newServer(t)
+	f := newEWBFixture(t, srv)
+
+	rec, body := doRaw(t, srv, http.MethodPost, f.base+"/vouchers/delivery-note", f.ownerTok,
+		map[string]any{"voucher_date": "2026-06-12", "created_by": "owner",
+			"inventory": []any{map[string]any{"stock_item_id": f.itemID, "godown_id": f.godownID,
+				"direction": "OUT", "qty": "10.0000", "rate": "500.0000"}}})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("post a delivery note = %d, want 201 (%s)", rec.Code, rec.Body.String())
+	}
+	voucherID, _ := body["voucher_id"].(string)
+
+	erec, ebody := doRaw(t, srv, http.MethodPost, f.base+"/e-way-bills", f.ownerTok,
+		raiseBody(voucherID, nil))
+	if erec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("raising against a delivery note = %d, want 422 (%s)", erec.Code, erec.Body.String())
+	}
+	msg, _ := ebody["error"].(string)
+	if !strings.Contains(msg, "delivery note") {
+		t.Errorf("the refusal does not NAME the case. A delivery note is well formed and "+
+			"simply carries no tax; telling the operator its lines do not correspond sends "+
+			"them hunting a defect that is not there. Got: %q", msg)
+	}
+	if !strings.Contains(msg, "TAX INVOICE") {
+		t.Errorf("the refusal does not say what to do instead (raise it against the tax "+
+			"invoice for the same goods). Got: %q", msg)
+	}
+}
+
 // TestAVoucherThatMovesNoGoodsIsRefused pins the domain rule.
 func TestAVoucherThatMovesNoGoodsIsRefused(t *testing.T) {
 	srv := newServer(t)

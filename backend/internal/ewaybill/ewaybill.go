@@ -83,6 +83,37 @@ var ErrLineMismatch = errors.New(
 	"ewaybill: this voucher's tax lines and stock lines do not correspond one-for-one, " +
 		"so the goods cannot be matched to their tax rates")
 
+// ErrNoTaxLines refuses a voucher that MOVES GOODS BUT CARRIES NO TAX — a
+// delivery note, a receipt note or a stock journal.
+//
+// ⛔ IT IS A SEPARATE SENTINEL FROM ErrLineMismatch, AND THAT IS THE WHOLE
+// POINT. Both cases arrive at the same place (a stock-line count that does not
+// equal the GST-line count), and the first draft of this package reported both
+// as "your tax lines and stock lines do not correspond" — which is TRUE and
+// USELESS for a delivery note, because it describes the voucher as malformed
+// when it is perfectly well formed and simply carries no tax.
+//
+// ⚠️ AND THE GAP IS REAL RATHER THAN AN OVERSIGHT. Moving goods on a delivery
+// challan without an invoice is an ordinary thing a business does and NIC
+// supports it (docType CHL). It is not built here because the CONSIGNMENT VALUE
+// would have to be derived from the movement rather than read from the invoice,
+// and Assess compares that value against the threshold to decide whether a bill
+// is required at all. Deriving it from stock_movement.amount is plausible and is
+// NOT obviously right — a delivery note's rate may be a transfer price, or zero.
+// Getting it wrong in the permissive direction means a consignment that needed a
+// bill did not get one, which is the exact asymmetry rule138.go's threshold
+// comment refuses to guess at.
+//
+// So this refuses, names the gap, and says what to do instead. A wrong figure on
+// a statutory document is worse than a refusal an operator can read.
+var ErrNoTaxLines = errors.New(
+	"ewaybill: this voucher moves goods but carries no GST lines — it is a delivery note, a " +
+		"receipt note or a stock journal. Raising an e-way bill against one is a real workflow " +
+		"and is NOT built in this version: the consignment value would have to be derived from " +
+		"the movement rather than read from the invoice, and this build will not guess at a " +
+		"figure the threshold test depends on. Raise the bill against the TAX INVOICE for the " +
+		"same goods")
+
 // ErrNotAssessable is returned when the Rule 138 assessment could not compute a
 // validity period — which happens exactly when no distance was stated.
 //
@@ -633,6 +664,12 @@ func loadLines(ctx context.Context, tx pgx.Tx, versionID uuid.UUID) ([]rules.Sna
 	}
 	if stockCount == 0 {
 		return nil, ErrNoGoods
+	}
+	// ⛔ THE ORDER OF THESE TWO MATTERS. A voucher that moves goods and carries
+	// NO tax is a delivery note, and calling that "your lines do not correspond"
+	// describes a well-formed voucher as malformed. Name the real case first.
+	if gstCount == 0 {
+		return nil, ErrNoTaxLines
 	}
 	if stockCount != gstCount || len(out) != stockCount {
 		return nil, ErrLineMismatch

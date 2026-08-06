@@ -284,6 +284,56 @@ describe("ensureLedger resolves an EXISTING ledger instead of re-creating it", (
     expect(creates()).toBe(1);
   });
 
+  // -------------------------------------------------------------------------
+  // ⛔⛔ ensureOutputTaxLedgers — THE SAME BUG, ONE FUNCTION DOWN, FOUND BY A
+  // BROWSER AFTER THE ONE ABOVE WAS ALREADY FIXED.
+  //
+  // The correction that made ensureLedger resolve-then-create left its
+  // neighbour calling createLedger UNCONDITIONALLY for all three tax ledgers.
+  // Against cored that is a unique violation; against the mock, whose
+  // createLedger mints a fresh id per call, it is a success. So keying an ITEM
+  // INVOICE on any company that had already posted one GST voucher failed in a
+  // browser while 726 tests stayed green.
+  //
+  // These two tests are the ones that would have caught it, and they are here
+  // rather than in a new file so the next person fixing an `ensure*` helper
+  // sees BOTH call sites in one place.
+  // -------------------------------------------------------------------------
+  it("⛔ ensureOutputTaxLedgers RESOLVES the three tax ledgers and creates NONE", async () => {
+    _resetLedgerCache();
+    _resetOutputTaxLedgerCache();
+    const { client, creates } = strictClient([
+      { id: "led-cgst", name: "Output CGST" },
+      { id: "led-sgst", name: "Output SGST" },
+      { id: "led-igst", name: "Output IGST" },
+    ]);
+    const got = await ensureOutputTaxLedgers(client, "c1");
+    expect(got).toEqual({
+      cgstId: "led-cgst",
+      sgstId: "led-sgst",
+      igstId: "led-igst",
+    });
+    // THE ASSERTION THAT WOULD HAVE CAUGHT IT: not one create attempt against a
+    // company that already has all three.
+    expect(creates()).toBe(0);
+  });
+
+  it("still creates the tax ledgers a fresh company genuinely lacks", async () => {
+    // The control, and it is the inverse of the assertion above: without it,
+    // "never create" would pass by never working at all.
+    _resetLedgerCache();
+    _resetOutputTaxLedgerCache();
+    const { client, creates } = strictClient([
+      { id: "led-cgst", name: "Output CGST" },
+    ]);
+    const got = await ensureOutputTaxLedgers(client, "c1");
+    expect(got.cgstId).toBe("led-cgst");
+    expect(got.sgstId).toBe("new-Output SGST");
+    expect(got.igstId).toBe("new-Output IGST");
+    // Exactly the two that were missing, and not the one that was not.
+    expect(creates()).toBe(2);
+  });
+
   it("resolves two particulars naming the SAME new ledger to one id, with one create", async () => {
     _resetLedgerCache();
     const { client, creates } = strictClient([]);

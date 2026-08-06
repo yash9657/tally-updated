@@ -140,28 +140,43 @@ const FEATURES: {
       },
       {
         name: "e-Way Bill",
-        state: "off",
+        state: "on",
         note:
-          "STILL OFF, AND DELIBERATELY SO: there is no screen and no route, so nobody can raise one from " +
-          "inside this product. What DOES exist is the whole rules-and-payload core in internal/statutory " +
-          "beside the IRN workflow — the consignment payload, a recorded NIC schema subset with a " +
-          "hand-written validator, and the Rule 138 assessment: whether a bill is required at the " +
-          "consignment-value threshold, whether Part B (the vehicle number) is required, and how long the " +
-          "bill would be valid at one day per 200 km (or per 20 km for over-dimensional cargo, which the " +
-          "operator must ASSERT because assuming ordinary cargo would grant ten times the validity the " +
-          "rule allows). It DECIDES rather than assuming: an unstated distance is a BLOCKER and never a " +
-          "silent one-day validity, because a bill whose expiry the system guessed is a detained vehicle. " +
-          "⛔ AND NOTHING IT PRODUCES IS A GOVERNMENT-ISSUED e-WAY BILL. The NIC portal is unreachable " +
-          "from this deployment, so the identifier is a LOCAL reference (prefixed LOCAL-, never the " +
-          "twelve digits of a real EBN) and every artefact leads with a disclosure saying no submission " +
-          "was made. ⚠️ THE STATUTORY FIGURES ARE SECONDARY MATERIAL: CBIC's own rule repository failed " +
-          "TLS chain verification from here on 2026-08-05, so the threshold, the Part B distance and the " +
-          "validity rates are corroborated across commentaries and are NOT verified against the published " +
-          "rule. They live in ONE Go location that says so, and each carries its citation, its sources and " +
-          "that caveat onto the artefact. WHAT IS MISSING TO TURN THIS ROW ON: a cored-side store for the " +
-          "reference (migrations 0047/0048 are reserved), a route, a screen, and — for it to be a real " +
-          "e-way bill rather than a correct payload — NIC sandbox credentials, which need a GSTIN and are " +
-          "a human-only ask.",
+          "ON, AND BROWSER-VERIFIED. Alt+Z opens the e-Way Bill screen from anywhere: pick the voucher " +
+          "the goods move against, state the movement (distance, vehicle, transporter, mode, cargo " +
+          "class), and Ctrl+A raises it. TallyPrime files the same actions under its Z: Exchange menu " +
+          "and raises the bill FROM the sales voucher; this build has no Exchange menu, and the bill " +
+          "must name a voucher that already EXISTS, so it is raised one key away after the invoice is " +
+          "accepted. " +
+          "⛔ NOTHING IT PRODUCES IS A GOVERNMENT-ISSUED e-WAY BILL, AND THAT IS THE POINT OF THE " +
+          "SCREEN RATHER THAN A FOOTNOTE ON IT. The NIC portal is unreachable from this deployment, so " +
+          "the identifier is a LOCAL reference (prefixed LOCAL-EWB-, deliberately not the twelve digits " +
+          "of a real EBN) and it is never labelled an e-Way Bill Number anywhere — the only place that " +
+          "phrase appears on the screen is the sentence denying it. The full disclosure block renders " +
+          "unconditionally and is never collapsed. " +
+          "WHAT THE ASSESSMENT DECIDES RATHER THAN ASSUMES: whether a bill is required at the " +
+          "consignment-value threshold, whether Part B (the vehicle) is required, and how long it is " +
+          "valid — one day per 200 km, or per 20 km for over-dimensional cargo, which the operator must " +
+          "ASSERT because assuming ordinary cargo would grant ten times the validity the rule allows. " +
+          "An unstated distance is REFUSED (422 carrying the reasoning) and never a silent one-day " +
+          "validity, because a bill whose expiry the system guessed is a detained vehicle. A missing " +
+          "vehicle does NOT refuse — that is the Part A slip, an ordinary thing to raise while the " +
+          "lorry is arranged — and the blocker travels into the disclosures instead. " +
+          "⛔ AND IT DETECTS A STALE BILL: alter the invoice after raising and the screen says so above " +
+          "the identifier, because the stored payload then describes goods the voucher no longer " +
+          "states and nothing else in the system would ever say it. " +
+          "⚠️ THE STATUTORY FIGURES ARE STILL SECONDARY MATERIAL: CBIC's own rule repository failed TLS " +
+          "chain verification from here on 2026-08-05, so the threshold, the Part B distance and the " +
+          "validity rates are corroborated across commentaries and are NOT verified against the " +
+          "published rule. They live in ONE Go location that says so, and each carries its citation, " +
+          "its sources and that caveat onto the artefact. " +
+          "TWO GAPS STATED RATHER THAN HIDDEN: a bill cannot yet be raised against a DELIVERY NOTE " +
+          "(the consignment value would have to be derived from the movement rather than read from the " +
+          "invoice, and this build will not guess at a figure the threshold test depends on — the " +
+          "refusal says so and points at the tax invoice); and it does not PRINT, deliberately, " +
+          "because a printed sheet is exactly what a driver hands to a checkpost. For it to be a real " +
+          "e-way bill rather than a correct payload it needs NIC sandbox credentials, which need a " +
+          "GSTIN and are a human-only ask.",
       },
       {
         name: "TDS / TCS",

@@ -219,7 +219,9 @@ func writeEWayBillError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ewaybill.ErrNotFound):
 		writeError(w, http.StatusNotFound, err.Error())
-	case errors.Is(err, ewaybill.ErrNoGoods), errors.Is(err, ewaybill.ErrLineMismatch):
+	case errors.Is(err, ewaybill.ErrNoGoods),
+		errors.Is(err, ewaybill.ErrNoTaxLines),
+		errors.Is(err, ewaybill.ErrLineMismatch):
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 	case errors.As(err, &notAssessable):
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{

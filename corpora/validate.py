@@ -122,6 +122,19 @@ KNOWN_SCREENS = {
     # balances nothing until it is exploded into a Stock Journal's lines. A
     # ScreenKind under the bare token `bom`.
     "boms",
+    # T5 — THE e-WAY BILL (Rule 138, migration 0047). Alt+Z: pick the voucher the
+    # goods move against, state the movement, Ctrl+A raises the payload NIC would
+    # be sent.
+    #
+    # A ScreenKind under the bare token `e-way-bill`, for the reason
+    # "cost-centres" is one: no `allow display report` rule can match a bare
+    # token, and the screen carries a FORM.
+    #
+    # ⛔ NOTHING IT PRODUCES IS AN EBN. The NIC portal is unreachable from this
+    # deployment, so the identifier is a LOCAL reference and the screen leads
+    # with a disclosure saying no submission was made. A keystroke fixture naming
+    # this screen is describing a payload builder, never a government document.
+    "e-way-bill",
 }
 
 RULESET_VERSION = "gst-2024-09"
