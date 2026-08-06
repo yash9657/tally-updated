@@ -36,7 +36,10 @@ const ENTRY: DayBookEntry = {
   voucher_id: "v-1",
   version_no: 3,
   op: "DELETE",
-  class: "SALES",
+  // The SERVER's label. This fixture said "SALES" because the in-memory mock
+  // wrote `cls.toUpperCase()`; the drill now routes on this field, so an
+  // upper-cased slug is a class no screen can be found for.
+  class: "Sales",
   voucher_type: "sales",
   voucher_no: "INV/0001",
   date: "2026-04-10",

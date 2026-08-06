@@ -339,6 +339,51 @@ export type VoucherType =
    */
   | "physical-stock";
 
+/**
+ * Every member of {@link VoucherType}, as a runtime set.
+ *
+ * ⛔ IT IS A `Readonly<Record<VoucherType, true>>` AND NOT A `readonly
+ * VoucherType[]` ON PURPOSE: the Record is EXHAUSTIVE — tsc refuses to compile
+ * until a newly added member appears here — where an array typed as
+ * `readonly VoucherType[]` would accept eleven of the twelve silently. A guard
+ * that is quietly missing a class does not reject a bad value; it rejects a
+ * GOOD one, which is the failure mode corpora/validate.py's own vocabulary
+ * checks exist because of.
+ *
+ * ⚠️ The union above stays a hand-written `export type` rather than being derived
+ * from these keys, because corpora/validate.py parses the union's members out of
+ * this file textually (`_ts_union_members`) to cross-check KNOWN_VOUCHER_TYPES.
+ * Rewriting it as `(typeof …)[number]` makes that parser return None and the
+ * validator reports that it "has stopped checking" — a green gate that checks
+ * nothing.
+ */
+const VOUCHER_TYPE_MEMBERS: Readonly<Record<VoucherType, true>> = {
+  contra: true,
+  payment: true,
+  receipt: true,
+  journal: true,
+  sales: true,
+  purchase: true,
+  "credit-note": true,
+  "debit-note": true,
+  "delivery-note": true,
+  "receipt-note": true,
+  "stock-journal": true,
+  "physical-stock": true,
+};
+
+/**
+ * Whether an arbitrary string is a {@link VoucherType}.
+ *
+ * ⛔ THIS IS LOAD-BEARING, NOT DEFENSIVE. A voucher frame's `voucherType` is used
+ * as a key into `VOUCHER_CONFIGS` — including by AppShell's `screenTitle`, which
+ * reads `VOUCHER_CONFIGS[t].title` with no guard. An unvalidated slug reaching a
+ * frame is therefore a crash of the whole chrome, not a wrong label.
+ */
+export function isVoucherType(s: string | undefined): s is VoucherType {
+  return s !== undefined && Object.hasOwn(VOUCHER_TYPE_MEMBERS, s);
+}
+
 /** Voucher entry mode (TallyPrime Ctrl+H Change Mode three-state enum). */
 export type VoucherMode = "create" | "alter";
 

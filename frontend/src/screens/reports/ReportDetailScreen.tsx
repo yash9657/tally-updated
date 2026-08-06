@@ -8,6 +8,8 @@ import { useClient, useCompanyID } from "../../app/CompanyContext";
 import { useLoadedVoucher } from "../../app/LoadedVoucher";
 import { ColumnHeader, DrillRows, type DrillRow } from "./DrillRows";
 import { formatMoney } from "./money";
+import { dayBookRowKey } from "../vouchers/voucherClass";
+import { voucherIDFromRowKey } from "../../keystroke/voucherClass";
 import { useReportView } from "./reportView";
 import type {
   DayBookResponse,
@@ -133,7 +135,10 @@ export function ReportDetailScreen({
         const debit = mine.find((p) => p.dr_cr.toUpperCase().startsWith("D"));
         const credit = mine.find((p) => p.dr_cr.toUpperCase().startsWith("C"));
         return {
-          rowKey: e.voucher_id,
+          // The class travels in the key, exactly as it does in the Day Book —
+          // this is the SAME drill (a statement's ledger level is voucher-bearing
+          // too), so it had the same defect: every voucher opened a Sales frame.
+          rowKey: dayBookRowKey(e),
           values: [
             e.date,
             e.voucher_no,
@@ -167,7 +172,10 @@ export function ReportDetailScreen({
    */
   function handleSelect(rowKey: string) {
     if (target.kind === "ledger") {
-      const entry = (dayBook?.entries ?? []).find((e) => e.voucher_id === rowKey);
+      // Decode: the key carries the class, so a whole-key match would find no
+      // entry and leave the loaded slot pointing at the PREVIOUS drill.
+      const id = voucherIDFromRowKey(rowKey);
+      const entry = (dayBook?.entries ?? []).find((e) => e.voucher_id === id);
       if (entry) setLoaded({ entry });
     }
     onSelect(rowKey);

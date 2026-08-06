@@ -11,6 +11,7 @@ import type {
   VoucherType,
 } from "./types";
 import { resolveAction, resolveKeymap } from "./keymaps/tallyprime";
+import { parseVoucherRowKey } from "./voucherClass";
 
 /**
  * navMachine — a deterministic XState v5 model of Tally's SCREEN STACK
@@ -543,7 +544,23 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
         // drills into a report-detail level (a group/ledger expansion), from
         // which a further Enter reaches the voucher.
         if (VOUCHER_DRILL_REPORTS.has(active.reportName ?? "")) {
-          stack.push(newVoucherFrame(DEFAULT_LAST_VOUCHER, "alter"));
+          // ⛔ THE CLASS COMES FROM THE ROW, and a row that does not carry one is
+          // NOT drilled. This branch used to push
+          // `newVoucherFrame(DEFAULT_LAST_VOUCHER, "alter")` unconditionally, and
+          // both halves of that were wrong:
+          //
+          //  - the DEFAULT: every non-Sales voucher opened a SALES frame, and
+          //    `acceptVoucher` routes the PUT by the frame's type, so drilling a
+          //    Receipt and pressing Ctrl+A called `alterSalesVoucher` and
+          //    RE-CLASSED the document. See keystroke/voucherClass.ts.
+          //  - the UNCONDITIONAL: on an empty Day Book `DrillRows` publishes no
+          //    row key at all, so Enter pushed an alteration frame with NO loaded
+          //    voucher — and Ctrl+A on that POSTS a new Sales voucher from a frame
+          //    titled "(Alteration)". A no-op is the same answer the statement
+          //    drill below already gives an empty selection.
+          const row = parseVoucherRowKey(active.selectedItem);
+          if (!row) return {};
+          stack.push(newVoucherFrame(row.voucherType, "alter"));
           return { stack };
         }
         // A statement drill needs a highlighted line to drill INTO. With none
@@ -574,7 +591,13 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
           });
           return { stack };
         }
-        stack.push(newVoucherFrame(DEFAULT_LAST_VOUCHER, "alter"));
+        // The row IS a voucher, and it names its own class — same rule, same
+        // reason, as the Day Book branch above. A statement drill reaches this
+        // level through group > ledger > voucher, so an unprefixed key here is a
+        // voucher whose class has no entry screen; it is not drilled.
+        const row = parseVoucherRowKey(sel);
+        if (!row) return {};
+        stack.push(newVoucherFrame(row.voucherType, "alter"));
         return { stack };
       }
       if (active.screen === "cost-category-summary") {
@@ -1186,6 +1209,39 @@ function reduceSelect(ctx: NavContext, menuItem: string): Partial<NavContext> {
         };
       }
     }
+    stack[stack.length - 1] = active;
+    return { stack };
+  }
+
+  // ⛔ A STANDING ALTERATION FRAME RE-CLASSES ITSELF WHEN THE LOADED VOUCHER
+  // CHANGES UNDER IT.
+  //
+  // Page Up / Page Down browse the SAVED vouchers around the drilled one in Day
+  // Book order — which is chronological and therefore MIXED-CLASS. VoucherScreen's
+  // `stepVoucher` loads the neighbour into the LoadedVoucher slot and publishes
+  // its row key here, exactly as a report row does; without this branch the frame
+  // kept the class it was drilled with, so paging from a Sales alter onto a
+  // Receipt re-classed the Receipt on Ctrl+A with no drill involved at all.
+  //
+  // The screen sets the LoadedVoucher context BEFORE firing, and the voucher id
+  // is NOT smuggled through this event — the screen reads it back out of that
+  // context. Same contract as OPEN_PURCHASE_DRAFT_SENTINEL.
+  //
+  // ⛔ ALTER MODE ONLY. A CREATE frame's class is the operator's own F-key choice
+  // and nothing may overwrite it; there is nothing loaded to page through either.
+  if (
+    active.screen === "voucher" &&
+    active.voucherMode === "alter" &&
+    !active.overlay
+  ) {
+    const row = parseVoucherRowKey(menuItem);
+    if (!row) return {};
+    // The FIELD CURSOR is deliberately reset to the date: the operator is now
+    // looking at a different document, and leaving the cursor on (say) the
+    // fourth particular of the voucher they just left points it at a row this
+    // one may not have.
+    active.voucherType = row.voucherType;
+    active.field = "date";
     stack[stack.length - 1] = active;
     return { stack };
   }

@@ -43,6 +43,45 @@ export type VoucherClass =
   /** The counted figure; the server derives the correction. */
   | "physical-stock";
 
+/**
+ * The `class` LABEL the server stamps into a voucher version's payload, per
+ * class. This is a WIRE FACT, not a display choice: it is the exact string
+ * `payload->>'class'` yields, which is what `DayBookEntry.class` and
+ * `VoucherView.class` carry.
+ *
+ * Recorded from the Go constants, which are the authority:
+ * `backend/internal/ledger/ledger.go` (the eight accounting classes) and
+ * `backend/internal/ledger/nonaccounting.go` (the four stock classes).
+ * `TestClassLabelsAreTheWireContract` pins each one on the Go side and names this
+ * table, so a rename there fails a test rather than silently changing a string
+ * two layers away.
+ *
+ * ⛔⛔ IT IS NOT DERIVABLE FROM THE SLUG, and assuming it was is how the mock
+ * diverged from the server for the whole life of the field. The mock wrote
+ * `cls.toUpperCase()` ("SALES") into the Day Book and a naive title-case
+ * ("Credit-note") into the GET view, where the server writes "Sales" and
+ * "Credit Note". Nothing caught it because no screen RENDERED `class` — until the
+ * Day Book drill began routing on it, at which point a slugify-based guess would
+ * have silently refused to open half the voucher classes.
+ *
+ * The Record is exhaustive over {@link VoucherClass}, so tsc refuses a new class
+ * that does not state its label.
+ */
+export const VOUCHER_CLASS_LABELS: Readonly<Record<VoucherClass, string>> = {
+  sales: "Sales",
+  purchase: "Purchase",
+  receipt: "Receipt",
+  payment: "Payment",
+  contra: "Contra",
+  journal: "Journal",
+  "credit-note": "Credit Note",
+  "debit-note": "Debit Note",
+  "delivery-note": "Delivery Note",
+  "receipt-note": "Receipt Note",
+  "stock-journal": "Stock Journal",
+  "physical-stock": "Physical Stock",
+};
+
 /** Debit / Credit marker on a posting or bill allocation. */
 // "D"/"C" are the backend's canonical wire values; "DR"/"CR" are the legible
 // frontend domain form. The REST adapter normalizes the latter to the former.

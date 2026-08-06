@@ -73,7 +73,9 @@ describe("report screens fetch from the live client on mount", () => {
           voucher_id: "v1",
           version_no: 1,
           op: "CREATE",
-          class: "SALES",
+          // The SERVER's label ("Sales"), not the mock's old upper-cased slug —
+          // the Day Book drill routes on this field.
+          class: "Sales",
           voucher_type: "sales",
           voucher_no: "INV/0007",
           date: "2026-04-10",

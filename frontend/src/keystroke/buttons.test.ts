@@ -3,6 +3,7 @@ import { createActor } from "xstate";
 import { navMachine, projectSnapshot, keyChangesStack } from "./navMachine";
 import type { NavSnapshot } from "./navMachine";
 import { buttonBarLabels } from "./buttonBar";
+import { voucherRowKey } from "./voucherClass";
 import {
   resolveAction,
   resolveKeymap,
@@ -514,6 +515,8 @@ describe("Alt+X cancel and Alt+2 duplicate", () => {
     const snap = drive([
       { type: "SELECT", menuItem: "Day Book" },
       { type: "KEY", combo: "Enter" }, // report
+      // The row publishes its CLASS; the drill refuses a row that names none.
+      { type: "SELECT", menuItem: voucherRowKey("v-1", "receipt") },
       { type: "KEY", combo: "Enter" }, // drill to the voucher (alter)
       { type: "KEY", combo: "Alt+2" },
     ]);

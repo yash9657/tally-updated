@@ -7,10 +7,12 @@
     { "type": "key", "combo": "Alt+G" },
     { "type": "select", "menuItem": "Day Book" },
     { "type": "key", "combo": "Enter" },
+    { "type": "select", "menuItem": "voucher:sales:018f0000-0000-7000-8000-000000000001" },
     { "type": "key", "combo": "Enter" }
   ],
   "expect": {
     "screen": "voucher",
+    "voucherType": "sales",
     "mode": "alter",
     "parentScreen": "report",
     "parentReportName": "Day Book"

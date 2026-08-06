@@ -9,6 +9,8 @@ import { useLoadedVoucher } from "../../app/LoadedVoucher";
 import { DrillRows, ColumnHeader, type DrillRow } from "./DrillRows";
 import { formatMoney } from "./money";
 import { addMoney } from "../vouchers/money";
+import { dayBookRowKey } from "../vouchers/voucherClass";
+import { voucherIDFromRowKey } from "../../keystroke/voucherClass";
 import { useReportView } from "./reportView";
 import { LEDGER_WISE_DEFAULT } from "../../keystroke/types";
 import type {
@@ -123,7 +125,13 @@ export function DayBookScreen({ snapshot, onSelect }: ReportProps) {
 
   const entries = data?.entries ?? [];
   const rows: DrillRow[] = entries.map((e) => ({
-    rowKey: e.voucher_id,
+    // ⛔ THE ROW KEY CARRIES THE CLASS, and it has to: the navigation machine's
+    // only knowledge of a highlighted row is this string, so a bare voucher_id
+    // left it drilling every voucher into a SALES frame — which then re-classed
+    // Receipts, Payments, Contras and Journals on Ctrl+A. A class this build has
+    // no entry screen for (Payroll) publishes the bare id and is not drilled.
+    // See keystroke/voucherClass.ts for why the key and not something nicer.
+    rowKey: dayBookRowKey(e),
     values: [
       e.date,
       e.voucher_no,
@@ -151,7 +159,12 @@ export function DayBookScreen({ snapshot, onSelect }: ReportProps) {
   // (via onSelect). We mirror that into the loaded-voucher store so a subsequent
   // Enter (which pushes the alter frame) finds the right voucher pre-loaded.
   function handleSelect(rowKey: string) {
-    const entry = entries.find((e) => e.voucher_id === rowKey);
+    // The key is `voucher:<class>:<id>` (or a bare id for a class with no entry
+    // screen), so the id has to be decoded rather than compared — matching on the
+    // whole key would find nothing and the loaded slot would stay stale, leaving
+    // the drill to alter whichever voucher was drilled BEFORE this one.
+    const id = voucherIDFromRowKey(rowKey);
+    const entry = entries.find((e) => e.voucher_id === id);
     if (entry) setLoaded({ entry });
     onSelect(rowKey);
   }

@@ -21,6 +21,7 @@ import {
   effectiveEntryMode,
   entryModesFor,
 } from "./vouchers/voucherConfig";
+import { dayBookRowKey, voucherTypeForClass } from "./vouchers/voucherClass";
 import {
   emptyGstFormState,
   ensureLedger,
@@ -472,18 +473,125 @@ function draftDirtyFields(seed: VoucherForm | null, form: VoucherForm): Set<Draf
  * component on purpose: an early return before the hooks would change the hook
  * COUNT of a mounted component whenever an F-key replaces the frame's voucher
  * type in place, which React refuses at runtime.
+ *
+ * ⛔ PAGE UP / PAGE DOWN LIVES HERE, ABOVE THE SPLIT, and that is a fix rather
+ * than tidying — see {@link useVoucherPaging}.
  */
 export function VoucherScreen(props: {
   snapshot: NavSnapshot;
   onSelect: (item: string) => void;
 }) {
   const type = (props.snapshot.voucherType ?? "sales") as VoucherType;
+  // Registered on the ROUTER so both forms have it. Hooks before the branch, so
+  // the hook count is the same whichever component renders.
+  useVoucherPaging(props.snapshot, props.onSelect);
   // The stock screen takes no `onSelect`: it has no pick-list that feeds the
   // navigation machine (its party field is free text describing the document,
   // not a ledger to resolve), and firing a SELECT per keystroke would push the
   // machine around from a field that names nothing it knows about.
   if (isStockVoucherType(type)) return <StockVoucherScreen snapshot={props.snapshot} />;
   return <AccountingVoucherScreen {...props} />;
+}
+
+/**
+ * PAGE UP / PAGE DOWN — browse the SAVED vouchers around the loaded one, in Day
+ * Book order (the same ordering the operator drilled from). The Day Book is
+ * fetched once and cached in a ref; moving loads the neighbour into the
+ * loaded-voucher slot, which re-hydrates the form from GET /vouchers/{id}.
+ *
+ * ⛔⛔ DAY BOOK ORDER IS CHRONOLOGICAL AND THEREFORE MIXED-CLASS, AND THAT WAS A
+ * SECOND LIVE PATH INTO THE RE-CLASSING DEFECT — one with no drill in it at all.
+ * Paging a Sales alteration onto a Receipt left the FRAME saying "sales", so
+ * `acceptVoucher` routed the PUT to `alterSalesVoucher` and re-classed the
+ * receipt. The neighbour's row key is therefore published through `onSelect`,
+ * which re-classes the standing alteration frame (see `reduceSelect`); the loaded
+ * slot is set FIRST, so the frame and the document can never disagree.
+ *
+ * ⛔ AND IT IS ON THE ROUTER RATHER THAN INSIDE THE ACCOUNTING FORM BECAUSE IT WAS
+ * A DEAD END THERE — found by paging in a real browser, not by review. It used to
+ * live in `AccountingVoucherScreen`, which was harmless only while the frame's
+ * class never changed: paging always kept rendering the accounting form. Now that
+ * the frame follows the document, paging onto a Delivery Note correctly mounts
+ * `StockVoucherScreen` — which registered only `accept`, so Page Up and Page Down
+ * both went dead and the operator was STRANDED on that voucher with Esc the only
+ * way out. Browser-verified: Sales → Purchase → Receipt Note, then five presses
+ * that did nothing at all.
+ *
+ * Paging between vouchers is a property of the voucher FRAME, not of either form
+ * — neither reads a single piece of form state to do it — so one registration
+ * above the split is both the smaller fix and the truer place. A second copy
+ * inside the stock screen was the alternative, and §1.3's `ensureLedger` lesson is
+ * that a second copy is exactly how a defect gets fixed once and shipped twice.
+ */
+function useVoucherPaging(
+  snapshot: NavSnapshot,
+  onSelect: (item: string) => void,
+): void {
+  const client = useClient();
+  const companyID = useCompanyID();
+  const { loaded, setLoaded } = useLoadedVoucher();
+  const dayBookRef = useRef<DayBookEntry[] | null>(null);
+  // Only an ALTER frame has a voucher to page from; a create frame has nothing
+  // loaded and must not adopt whatever the previous drill left in the slot.
+  const currentID =
+    snapshot.mode === "alter" ? (loaded?.entry?.voucher_id ?? null) : null;
+
+  const stepVoucher = useCallback(
+    (delta: number): string => {
+      if (!currentID) {
+        return "Page Up / Page Down browse saved vouchers — open one from the Day Book first.";
+      }
+      const apply = (entries: DayBookEntry[]): string => {
+        const idx = entries.findIndex((e) => e.voucher_id === currentID);
+        if (idx < 0) return "This voucher is not in the current Day Book range.";
+        // ⚠️ SKIP CLASSES WITH NO ENTRY SCREEN rather than landing on one. A
+        // Payroll voucher in the Day Book has no voucher form in this build, so
+        // stopping on it would render whatever the frame last was over a pay run
+        // — the exact corruption this change removes. Stepping OVER it keeps
+        // Page Up / Page Down monotonic; refusing to move would strand the
+        // operator at that row with no way past it in either direction.
+        let next: DayBookEntry | undefined;
+        let skipped = 0;
+        for (let i = idx + delta; i >= 0 && i < entries.length; i += delta) {
+          const candidate = entries[i] as DayBookEntry;
+          if (voucherTypeForClass(candidate.class)) {
+            next = candidate;
+            break;
+          }
+          skipped += 1;
+        }
+        if (!next) {
+          return delta < 0
+            ? "Already at the first voucher."
+            : "Already at the last voucher.";
+        }
+        setLoaded({ entry: next });
+        // Re-class the frame from the voucher now loaded. Fires AFTER setLoaded so
+        // the screen never renders a class the loaded document is not.
+        onSelect(dayBookRowKey(next));
+        const note =
+          skipped > 0
+            ? ` — skipped ${skipped} voucher${skipped === 1 ? "" : "s"} with no entry screen`
+            : "";
+        return `Voucher ${next.voucher_no} (${next.date})${note}`;
+      };
+      if (dayBookRef.current) return apply(dayBookRef.current);
+      client
+        .getDayBook(companyID, {})
+        .then((res) => {
+          dayBookRef.current = res.entries;
+          apply(res.entries);
+        })
+        .catch(() => {
+          /* the status line already told the user we are loading */
+        });
+      return "Loading the Day Book to browse vouchers…";
+    },
+    [client, companyID, currentID, setLoaded, onSelect],
+  );
+
+  useRegisterScreenAction("prevVoucher", () => stepVoucher(-1));
+  useRegisterScreenAction("nextVoucher", () => stepVoucher(1));
 }
 
 /**
@@ -1217,52 +1325,10 @@ function AccountingVoucherScreen({
     return "Duplicated — same lines, new voucher. Ctrl+A to save it.";
   }, [setLoaded]);
 
-  /**
-   * Page Up / Page Down — browse the SAVED vouchers around the loaded one, in
-   * Day Book order (the same ordering the user drilled from). The Day Book is
-   * fetched once and cached in a ref; moving loads the neighbour into the
-   * loaded-voucher slot, which re-hydrates this form from GET /vouchers/{id}.
-   */
-  const dayBookRef = useRef<DayBookEntry[] | null>(null);
-  const stepVoucher = useCallback(
-    (delta: number): string => {
-      const currentID = ctxRef.current.voucherID;
-      if (!currentID) {
-        return "Page Up / Page Down browse saved vouchers — open one from the Day Book first.";
-      }
-      const apply = (entries: DayBookEntry[]): string => {
-        const idx = entries.findIndex((e) => e.voucher_id === currentID);
-        if (idx < 0) return "This voucher is not in the current Day Book range.";
-        const next = entries[idx + delta];
-        if (!next) {
-          return delta < 0
-            ? "Already at the first voucher."
-            : "Already at the last voucher.";
-        }
-        setLoaded({ entry: next });
-        return `Voucher ${next.voucher_no} (${next.date})`;
-      };
-      if (dayBookRef.current) return apply(dayBookRef.current);
-      client
-        .getDayBook(companyID, {})
-        .then((res) => {
-          dayBookRef.current = res.entries;
-          apply(res.entries);
-        })
-        .catch(() => {
-          /* the status line already told the user we are loading */
-        });
-      return "Loading the Day Book to browse vouchers…";
-    },
-    [client, companyID, setLoaded],
-  );
-
   useRegisterScreenAction("accept", onAccept);
   useRegisterScreenAction("delete", isAlter ? onDelete : undefined);
   useRegisterScreenAction("cancelVoucher", onCancelVoucher);
   useRegisterScreenAction("duplicate", onDuplicate);
-  useRegisterScreenAction("prevVoucher", () => stepVoucher(-1));
-  useRegisterScreenAction("nextVoucher", () => stepVoucher(1));
   // Ctrl+P / Alt+P. An ALTER frame prints the drilled voucher; a CREATE frame
   // prints the one just saved (§2.1) and otherwise refuses with "press Ctrl+A
   // first". The loaded id wins because on an alter frame it IS the voucher on

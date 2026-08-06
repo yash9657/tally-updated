@@ -127,6 +127,9 @@ import type {
   SetBankDateResponse,
   VoucherVersionView,
 } from "./types";
+// A VALUE, not a type: the recorded `payload.class` labels the server stamps.
+// The mock must agree with them exactly — see classLabel().
+import { VOUCHER_CLASS_LABELS } from "./types";
 import type { QueryRequest, QueryResult } from "./query";
 import type {
   CreateSecurityLevelResponse,
@@ -2843,9 +2846,25 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     return formatVoucherNo(fmt, n);
   }
 
-  /** Title-case class label ("sales" -> "Sales") matching the GET payload. */
+  /**
+   * The `class` label the SERVER stamps, from the recorded wire table.
+   *
+   * ⛔⛔ THIS USED TO BE `cls.charAt(0).toUpperCase() + cls.slice(1)`, AND IT WAS
+   * A §9.4-CLASS FIDELITY DEFECT — a shape the mock got wrong, invisible to every
+   * test written against it because no screen rendered `class`:
+   *
+   *  - it produced "Credit-note" / "Delivery-note" / "Physical-stock" where the
+   *    server writes "Credit Note" / "Delivery Note" / "Physical Stock";
+   *  - and the DAY BOOK entry did not use even that — it wrote
+   *    `cls.toUpperCase()`, i.e. "SALES", so the mock disagreed with the server
+   *    AND with its own GET view.
+   *
+   * The moment the Day Book drill started routing on `class`, a guess would have
+   * quietly refused to open the multiword classes. Pinned by
+   * `mock.classLabel.test.ts` against {@link VOUCHER_CLASS_LABELS}.
+   */
   function classLabel(cls: VoucherClass): string {
-    return cls.charAt(0).toUpperCase() + cls.slice(1);
+    return VOUCHER_CLASS_LABELS[cls];
   }
 
   /**
@@ -2913,7 +2932,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       voucher_id: voucherID,
       version_no: 1,
       op: "CREATE",
-      class: cls.toUpperCase(),
+      // The SERVER's label, not an upper-cased slug — the Day Book drill routes
+      // on this field, so a mock that disagreed here would refuse to open the
+      // very classes the drill exists to get right. See classLabel above.
+      class: classLabel(cls),
       voucher_type: cls,
       voucher_no: voucherNo,
       date,
@@ -3006,7 +3028,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     const nextVersion = entry.version_no + 1;
     entry.version_no = nextVersion;
     entry.op = "ALTER";
-    entry.class = cls.toUpperCase();
+    entry.class = classLabel(cls);
     entry.voucher_type = cls;
     // NO-REALLOC-ON-ALTER: an empty voucher_no carries forward the prior number;
     // a supplied value is honored verbatim. The counter is NEVER touched here.

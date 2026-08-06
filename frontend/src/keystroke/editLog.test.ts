@@ -4,6 +4,7 @@ import { navMachine, projectSnapshot } from "./navMachine";
 import type { NavSnapshot } from "./navMachine";
 import { resolveAction, resolveKeymap, actionLabel } from "./keymaps/tallyprime";
 import { buttonBarLabels } from "./buttonBar";
+import { voucherRowKey } from "./voucherClass";
 
 /**
  * Alt+L — THE EDIT LOG, the navigation half.
@@ -32,10 +33,21 @@ function drive(events: Ev[]): NavSnapshot & { depth: number } {
   return { ...snap, depth: ctx.stack.length };
 }
 
-/** Day Book -> Enter (report) -> Enter (drill) puts a voucher in ALTER mode. */
+/**
+ * Day Book -> Enter (report) -> highlight a row -> Enter (drill) puts a voucher
+ * in ALTER mode.
+ *
+ * ⚠️ THE ROW SELECT IS NOT DECORATION. The drill reads the CLASS out of the row
+ * key, so a row that names none is not drilled at all — which is what an EMPTY
+ * Day Book publishes, and pushing an alteration frame for it used to let Ctrl+A
+ * POST a brand-new Sales voucher. `DrillRows` publishes the first drillable row
+ * on mount, so the live screen always sends this; these tests drive the pure
+ * machine, so they have to send it themselves.
+ */
 const TO_ALTERATION: Ev[] = [
   { type: "SELECT", menuItem: "Day Book" },
   { type: "KEY", combo: "Enter" },
+  { type: "SELECT", menuItem: voucherRowKey("v-1", "sales") },
   { type: "KEY", combo: "Enter" },
 ];
 
