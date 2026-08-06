@@ -68,17 +68,69 @@ export function _resetOutputTaxLedgerCache(): void {
 const OUTPUT_TAX_GROUP = "Duties & Taxes";
 
 /**
- * Per-(company, ledger name) memoized create-or-select. createLedger is
- * idempotent server-side (by name within a company), so re-posting reuses the
- * same id; we memoize the PROMISE per (company,name) so the form resolves a
- * stable ledger uuid for a name without firing duplicate creates (and so the
- * mock, which mints a fresh id per call, stays single-valued per name too).
+ * Per-(company, ledger name) memoized RESOLVE-then-create.
+ *
+ * ⛔⛔ THIS COMMENT USED TO SAY "createLedger is idempotent server-side (by name
+ * within a company), so re-posting reuses the same id". THAT WAS FALSE, and the whole
+ * helper was built on it.
+ *
+ * `INSERT INTO ledger` (internal/masters/masters.go) has NO `ON CONFLICT`, and
+ * `ledger_company_id_name_key` is a plain UNIQUE index on (company_id, name). So
+ * creating a ledger that already exists is not idempotent — it is a raw Postgres
+ * unique-violation, surfaced to the operator as
+ * `masters: insert ledger: ERROR: duplicate key value violates unique constraint`.
+ *
+ * The consequence was severe and entirely invisible to the test suite: on a FRESH PAGE
+ * LOAD the memo below is empty, so keying a Payment / Receipt / Contra against any
+ * ledger the company ALREADY HAS — which is the normal case, and every case after the
+ * first day — failed with that SQL error. It only ever appeared to work because the
+ * memo was warm from an earlier post in the same page session, or because the ledger
+ * genuinely did not exist yet. Found by driving the app.
+ *
+ * So this now RESOLVES FIRST, against the company's own chart of accounts, and creates
+ * only what is genuinely absent. The server stays strict — creating a duplicate
+ * SHOULD be an error on a masters form, and making the INSERT idempotent would let a
+ * real mistake pass silently. It is this helper that wants find-or-create, so it is
+ * this helper that does the finding.
+ *
+ * ⚠️ THE NAME MATCH IS EXACT, mirroring the index. "electricity" and "Electricity" are
+ * two different ledgers to the constraint, so resolving them to one here would make
+ * this helper disagree with the database about what is a duplicate.
  */
 const LEDGER_CACHE = new Map<string, Promise<string>>();
 
-/** Test-only: clear the per-(company,name) ledger memo. */
+/**
+ * The company's chart of accounts, by exact name, fetched ONCE per company.
+ *
+ * The PROMISE is cached, not the value, so several particulars resolving at the same
+ * time share one request instead of racing it.
+ */
+const LEDGER_INDEX_CACHE = new Map<string, Promise<Map<string, string>>>();
+
+function ledgerIndex(
+  client: CoredClient,
+  companyID: string,
+): Promise<Map<string, string>> {
+  const cached = LEDGER_INDEX_CACHE.get(companyID);
+  if (cached) return cached;
+  const p = client
+    .listLedgers(companyID)
+    .then((r) => new Map(r.ledgers.map((l) => [l.name, l.id])))
+    .catch((err) => {
+      // NOT swallowed into an empty index: an empty one would mean "this company has
+      // no ledgers", and the caller would try to CREATE every name it needs and hit
+      // the very constraint violation this function exists to avoid.
+      LEDGER_INDEX_CACHE.delete(companyID);
+      throw err;
+    });
+  LEDGER_INDEX_CACHE.set(companyID, p);
+  return p;
+}
+
+/** Test-only: clear the per-(company,name) ledger memo and the chart index. */
 export function _resetLedgerCache(): void {
   LEDGER_CACHE.clear();
+  LEDGER_INDEX_CACHE.clear();
 }
 
 export interface EnsureLedgerSpec {
@@ -101,17 +153,38 @@ export function ensureLedger(
   const key = `${companyID}::${spec.name}`;
   const cached = LEDGER_CACHE.get(key);
   if (cached) return cached;
-  const p = client
-    .createLedger(companyID, {
-      name: spec.name,
-      group_name: spec.groupName,
-      ...(spec.stateCode ? { state_code: spec.stateCode } : {}),
-    })
-    .then((r) => r.ledger_id)
-    .catch((err) => {
-      LEDGER_CACHE.delete(key);
+  const p = (async (): Promise<string> => {
+    // ---- RESOLVE FIRST. See the note on LEDGER_CACHE: creating a ledger that
+    // already exists is a raw unique-violation, not a no-op.
+    const index = await ledgerIndex(client, companyID);
+    const existing = index.get(spec.name);
+    if (existing !== undefined) return existing;
+    try {
+      const r = await client.createLedger(companyID, {
+        name: spec.name,
+        group_name: spec.groupName,
+        ...(spec.stateCode ? { state_code: spec.stateCode } : {}),
+      });
+      // Remembered, so a second particular naming this same NEW ledger resolves to
+      // the id just minted instead of trying to create it again.
+      index.set(spec.name, r.ledger_id);
+      return r.ledger_id;
+    } catch (err) {
+      // ⚠️ THE RACE THE MEMO CANNOT COVER: another tab, another operator, or a
+      // create that landed between our list and our insert. Re-read the chart and
+      // resolve, because by now the ledger exists and the operator's voucher is
+      // perfectly postable — failing here would refuse a valid voucher for a reason
+      // that has already ceased to be true.
+      LEDGER_INDEX_CACHE.delete(companyID);
+      const fresh = await ledgerIndex(client, companyID).catch(() => null);
+      const found = fresh?.get(spec.name);
+      if (found !== undefined) return found;
       throw err;
-    });
+    }
+  })().catch((err) => {
+    LEDGER_CACHE.delete(key);
+    throw err;
+  });
   LEDGER_CACHE.set(key, p);
   return p;
 }

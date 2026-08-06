@@ -692,13 +692,32 @@ export function CostCentresScreen() {
             against the centre&apos;s ID, so a rename changes what the reports are
             LABELLED and never which money is where.
           </p>
+          {/* ⚠️ THIS PARAGRAPH USED TO SAY "NO SCREEN IN THIS BUILD ALLOCATES A
+              POSTING", which was true when it was written and is now false. It is
+              corrected rather than deleted: the false version is the plausible one and
+              would be re-invented by anyone reading the masters screen and wondering
+              where allocation happens. */}
           <p className="mt-2 max-w-3xl text-xs">
-            Creating these masters does not allocate anything. NO SCREEN IN THIS
-            BUILD ALLOCATES A POSTING — the voucher write path accepts allocations
-            and the database refuses any that do not total the posting exactly, but
-            the entry form for them is not built, so allocations arrive over HTTP.
-            Until that lands, the Cost Category Summary will report this period&apos;s
-            cost as unallocated, which is the truth rather than an error.
+            Creating these masters does not allocate anything by itself — an axis with
+            centres on it is a chart of analysis, not an analysis. COST IS ALLOCATED ON
+            THE VOUCHER: key a Payment, Receipt or Contra (F5 / F6 / F4) in single-entry
+            mode and each particular carries an{" "}
+            <span className="text-tally-title">allocate</span> control that splits that
+            posting across the centres of one or more axes. Each axis must total the
+            posting EXACTLY, to the paisa — the server refuses a partial split and a
+            database trigger refuses behind it — and the form shows the remaining
+            balance per axis as you key it.
+          </p>
+          <p className="mt-2 max-w-3xl text-xs">
+            NOT REACHABLE FROM A SCREEN, and said here rather than left to be
+            discovered: a JOURNAL cannot be keyed from scratch in this build at all (the
+            double-entry form has no posting grid), so a journal&apos;s allocations still
+            arrive over HTTP. Allocation on an ITEM INVOICE is refused outright and
+            always will be — its postings are generated inside the server&apos;s
+            transaction, so a client-supplied posting number would attribute the cost to
+            a receivable. Until a period has allocated vouchers in it, the Cost Category
+            Summary will report that period&apos;s cost as unallocated, which is the
+            truth rather than an error.
           </p>
         </>
       ) : listError === "" ? (

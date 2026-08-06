@@ -54,6 +54,7 @@ import type {
   GodownListItem,
   GSTLineRequest,
   InventoryLineRequest,
+  CostAllocationView,
   FulfilmentView,
   InventoryLineView,
   PhysicalCountLineRequest,
@@ -2448,6 +2449,134 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
    *  - an unknown order_line_id is a 422 rather than a 404: the voucher is the
    *    resource being created, and the bad reference is a fact about its body.
    */
+  /**
+   * VALIDATE AND PROJECT A REQUEST'S COST SPLITS (T2), the way the server does.
+   *
+   * ⛔⛔ THE MOCK IGNORED `cost_allocations` ENTIRELY until the picker was built, which
+   * is the same silent-drop defect `fulfilments` had: a screen keyed a split, the post
+   * returned 201, and both cost reports went on reporting the cost as unallocated.
+   * Every assertion about amounts stayed green.
+   *
+   * The refusals below are diffed against internal/ledger/cost_allocation.go's three
+   * passes, NOT against the shape a screen would prefer:
+   *
+   *  1. per allocation — an out-of-range `posting_seq` (0-BASED), a missing axis, a
+   *     missing centre, a non-positive amount;
+   *  2. the same centre twice on one (posting, axis) — refused because the same share
+   *     keyed twice can only make the axis total correctly by making the other entry
+   *     wrong;
+   *  3. ⛔ THE PER-(POSTING, CATEGORY) SUM, to the paisa, with NO tolerance. Checked
+   *     per AXIS and never per posting: several axes allocate the same money in
+   *     parallel, so a posting-wide total would refuse correct parallel allocation and
+   *     no total at all would let cost go silently unattributed.
+   */
+  function costAllocationViews(
+    req: VoucherRequest,
+  ): CostAllocationView[] {
+    const as = req.cost_allocations ?? [];
+    if (as.length === 0) return [];
+    const postings = req.postings ?? [];
+    // ⛔ REFUSED OUTRIGHT ON AN ITEM INVOICE, before anything else. Its postings are
+    // generated inside the server's transaction and index 0 is the PARTY leg, so a
+    // client-supplied ordinal would attribute a departmental cost to a receivable.
+    if ((req.inventory ?? []).length > 0) {
+      throw new ApiError(
+        422,
+        "ledger: an item invoice generates its own postings inside the write transaction, so a client-supplied posting number cannot be honoured — allocate on a Journal, Payment, Receipt or Contra, or on a voucher with stated postings",
+      );
+    }
+    const cats = mockCostCategories();
+    const centres = mockCostCentres();
+    const out: CostAllocationView[] = [];
+    for (const a of as) {
+      if (!Number.isInteger(a.posting_seq) || a.posting_seq < 0 || a.posting_seq >= postings.length) {
+        throw new ApiError(
+          422,
+          postings.length === 0
+            ? `ledger: a cost allocation names posting ${a.posting_seq} but this voucher posts no accounting lines at all, so there is no cost to attribute to a department`
+            : `ledger: a cost allocation names posting ${a.posting_seq} but this voucher has ${postings.length} posting(s), numbered 0 to ${postings.length - 1} — a cost cannot be attributed to a line that is not being posted`,
+        );
+      }
+      if (!a.cost_category_id) {
+        throw new ApiError(
+          422,
+          `ledger: the cost allocation on posting ${a.posting_seq} names no cost category; without the axis it belongs to it would be added to every other allocation of the same posting, and two axes that each allocate the full amount would come to twice the cost`,
+        );
+      }
+      if (!a.cost_centre_id) {
+        throw new ApiError(
+          422,
+          `ledger: the cost allocation on posting ${a.posting_seq} names cost category ${a.cost_category_id} but no cost centre, so nothing is recorded about which department bore the cost`,
+        );
+      }
+      if (!(Number.parseFloat(a.amount || "0") > 0)) {
+        throw new ApiError(
+          422,
+          `ledger: the cost allocation of ${a.amount} to cost centre ${a.cost_centre_id} on posting ${a.posting_seq} must be more than zero — an allocation is a MAGNITUDE and the posting's own Dr/Cr carries the direction`,
+        );
+      }
+      const centre = centres.find((c) => c.id === a.cost_centre_id);
+      // ⚠️ A CENTRE ON ANOTHER AXIS IS REFUSED. Honouring it would make one axis roll
+      // up into the other and the Category Summary would double-count.
+      if (centre && centre.cost_category_id !== a.cost_category_id) {
+        throw new ApiError(
+          422,
+          `ledger: cost centre ${centre.path} is on the ${centre.cost_category_name} axis, not the one named — one axis would roll up into the other and the Cost Category Summary would double-count`,
+        );
+      }
+      out.push({
+        posting_seq: a.posting_seq,
+        cost_category_id: a.cost_category_id,
+        cost_category_name: cats.find((c) => c.id === a.cost_category_id)?.name ?? "",
+        cost_centre_id: a.cost_centre_id,
+        cost_centre_name: centre?.path ?? "",
+        amount: Number.parseFloat(a.amount).toFixed(4),
+      });
+    }
+    // Pass 2 — the same centre twice on one (posting, axis).
+    const seen = new Set<string>();
+    for (const a of out) {
+      const k = `${a.posting_seq}|${a.cost_category_id}|${a.cost_centre_id}`;
+      if (seen.has(k)) {
+        throw new ApiError(
+          422,
+          `ledger: cost centre ${a.cost_centre_id} appears twice on posting ${a.posting_seq} for cost category ${a.cost_category_id}; the same share keyed twice can only make the axis total correctly by making the other entry wrong`,
+        );
+      }
+      seen.add(k);
+    }
+    // ⛔ Pass 3 — THE PER-(POSTING, CATEGORY) SUM, in integer ten-thousandths so the
+    // comparison is exact. A tolerance is how a real misallocation hides for a year.
+    const totals = new Map<string, { seq: number; cat: string; sum: number }>();
+    const order: string[] = [];
+    for (const a of out) {
+      const k = `${a.posting_seq}|${a.cost_category_id}`;
+      if (!totals.has(k)) {
+        order.push(k);
+        totals.set(k, { seq: a.posting_seq, cat: a.cost_category_id, sum: 0 });
+      }
+      const t = totals.get(k)!;
+      t.sum += Math.round(Number.parseFloat(a.amount) * 10000);
+    }
+    for (const k of order) {
+      const t = totals.get(k)!;
+      const want = Math.round(
+        Number.parseFloat(postings[t.seq]?.amount ?? "0") * 10000,
+      );
+      if (t.sum === want) continue;
+      const allocated = (t.sum / 10000).toFixed(4);
+      const posting = (want / 10000).toFixed(4);
+      const short = (want - t.sum) / 10000;
+      throw new ApiError(
+        422,
+        short < 0
+          ? `ledger: cost allocation on posting ${t.seq} totals ${allocated} on cost category ${t.cat} but the posting is only ${posting} — ${(-short).toFixed(4)} more has been attributed to departments than was actually spent, so the Cost Centre Summary would overstate cost against the Profit & Loss by that amount`
+          : `ledger: cost allocation on posting ${t.seq} totals ${allocated} on cost category ${t.cat} but the posting is ${posting} — ${short.toFixed(4)} is unattributed, so the Cost Centre Summary would disagree with the Profit & Loss by that amount`,
+      );
+    }
+    return out;
+  }
+
   function fulfilmentViews(
     c: MockCompany,
     req: VoucherRequest,
@@ -2749,6 +2878,8 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       // refusals), so an over-fulfilment never reaches the store. `null` because a
       // CREATE has no prior version of itself to exclude.
       fulfilments: fulfilmentViews(c, req, null),
+      // The COST SPLITS. Validated first, so a partial axis never reaches the store.
+      cost_allocations: costAllocationViews(req),
     });
     return {
       voucher_id: voucherID,
@@ -2845,6 +2976,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       // do not count against its replacement: correcting a delivery from 5 to 8 must
       // not be refused as though 13 had been delivered.
       fulfilments: fulfilmentViews(c, req, voucherID),
+      // ⛔ AN ALTER RE-STATES THESE TOO: whatever this body carries becomes the
+      // current version's splits, and whatever it omits is GONE — which is why the
+      // voucher GET has to return them and a form must send back what it read.
+      cost_allocations: costAllocationViews(req),
     });
     return {
       voucher_id: voucherID,

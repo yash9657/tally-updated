@@ -888,6 +888,46 @@ export interface VoucherView {
    * must not silently restate none.
    */
   fulfilments?: FulfilmentView[];
+  /**
+   * HOW THIS VOUCHER'S POSTINGS WERE SPLIT ACROSS COST CENTRES, as stored (T2).
+   *
+   * ⛔⛔ AN ALTER RE-STATES THESE, SO A FORM THAT REBUILDS A VOUCHER WITHOUT THEM
+   * DESTROYS A DEPARTMENTAL SPLIT OF A COST THAT IS STILL IN THE PROFIT & LOSS.
+   * Nothing refuses it, because zero allocations is a legal state: the sum trigger has
+   * nothing to fire on, and the only trace is a Cost Centre Summary that quietly stops
+   * adding up to the P&L. `ledger.VoucherView` has carried this since T2 with a doc
+   * comment saying exactly that — and `voucherFullJSON` DROPPED it, so every client
+   * rebuilding an alter from this response cleared the split on an unrelated edit. The
+   * Go struct was right and the wire was not.
+   *
+   * ⚠️ ALWAYS PRESENT (possibly empty) from a current server; optional in the type
+   * only for a voucher fetched from a build that predates the key, where absent and
+   * empty mean different things.
+   */
+  cost_allocations?: CostAllocationView[];
+}
+
+/**
+ * One stored cost-centre split, as returned by GET /vouchers/{id}.
+ *
+ * ⛔ `posting_seq` IS 0-BASED AND IT INDEXES **THIS RESPONSE'S** `postings` ARRAY — it
+ * is RE-DERIVED on every read, because `posting` has no ordinal column. The response
+ * orders postings by (dr_cr DESC, amount DESC), which is NOT the order a rebuilt
+ * request will send them in, so this number may be used to MATCH a split to a posting
+ * and must never be carried back onto the wire. Recompute it from the new array.
+ *
+ * ⚠️ It is 0-BASED where {@link FulfilmentView.line_no} on this same body is 1-BASED
+ * and STORED. Both are inherited; neither is negotiable.
+ */
+export interface CostAllocationView {
+  /** ⚠️ NOT FOR DISPLAY, and not for sending back. See the interface note. */
+  posting_seq: number;
+  cost_category_id: string;
+  cost_category_name: string;
+  cost_centre_id: string;
+  /** The centre's name as stored. */
+  cost_centre_name: string;
+  amount: Money;
 }
 
 /**

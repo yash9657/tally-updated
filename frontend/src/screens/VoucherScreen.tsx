@@ -31,6 +31,12 @@ import {
 import { addMoney, normalizeMoney } from "./vouchers/money";
 import { FulfilmentPicker } from "./vouchers/FulfilmentPicker";
 import { fulfilsDirection } from "./vouchers/fulfilment";
+import { CostAllocationPicker } from "./vouchers/CostAllocationPicker";
+import {
+  allocationsFromView,
+  buildCostAllocations,
+  type DraftAllocation,
+} from "./vouchers/costAllocation";
 import {
   buildItemInvoiceRequest,
   deriveItemInvoiceTax,
@@ -145,7 +151,20 @@ interface VoucherForm {
    * SUM and is never typed. Empty rows are ignored on accept, so the form can
    * always offer one more line without forcing the user to fill it.
    */
-  lines: { ledger: string; amount: string }[];
+  lines: {
+    ledger: string;
+    amount: string;
+    /**
+     * HOW THIS PARTICULAR'S POSTING IS SPLIT ACROSS COST CENTRES (T2).
+     *
+     * ⛔ IT LIVES ON THE ROW so that the 0-based `posting_seq` it is sent with is
+     * derived from the row's own position at the moment the postings array is
+     * assembled — see buildCostAllocations, which takes the primary-leg offset
+     * explicitly. Carrying the ordinal in a parallel structure is how a split gets
+     * attributed to the bank leg instead of the expense.
+     */
+    allocations: readonly DraftAllocation[];
+  }[];
   /**
    * ITEM-INVOICE grid rows (Ctrl+H > Item Invoice on Sales/Purchase). Empty
    * rows are ignored on accept, so the form can always offer one more line.
@@ -164,7 +183,7 @@ function emptyForm(): VoucherForm {
     voucherNo: "",
     gst: emptyGstFormState(),
     taxableValue: "0.0000",
-    lines: [{ ledger: "", amount: "" }],
+    lines: [{ ledger: "", amount: "", allocations: [] }],
     items: [emptyItemLine()],
   };
 }
@@ -258,13 +277,37 @@ function itemsFromView(view: VoucherView): ItemInvoiceLine[] {
  * the ledger NAME because that is what the picker selects on; the real uuid is
  * resolved on accept exactly as it is for a fresh entry.
  */
-function linesFromPostings(view: VoucherView): { ledger: string; amount: string }[] {
+function linesFromPostings(
+  view: VoucherView,
+): { ledger: string; amount: string; allocations: readonly DraftAllocation[] }[] {
   const cfg = configFor(view.class.toLowerCase() as VoucherType);
   const manySide = cfg.primarySide === "DR" ? "CR" : "DR";
   const rows = view.postings
-    .filter((p) => p.dr_cr.toUpperCase().startsWith(manySide[0]!))
-    .map((p) => ({ ledger: p.ledger, amount: p.amount }));
-  return rows.length > 0 ? rows : [{ ledger: "", amount: "" }];
+    // ⛔ THE INDEX IS CAPTURED BEFORE THE FILTER, and that is load-bearing.
+    // `cost_allocations[].posting_seq` indexes the response's FULL `postings` array,
+    // and this function keeps only the many side — so matching on the position in the
+    // FILTERED list would attach a split to whichever posting happened to land at
+    // that index. Usually that is the row above the right one, and the split would
+    // land on a real ledger with a plausible amount.
+    .map((p, seq) => ({ p, seq }))
+    .filter(({ p }) => p.dr_cr.toUpperCase().startsWith(manySide[0]!))
+    .map(({ p, seq }) => ({
+      ledger: p.ledger,
+      amount: p.amount,
+      // ⛔⛔ RE-HYDRATED, AND OMITTING THIS IS DATA LOSS. An ALTER RE-STATES: a form
+      // that rebuilt this voucher without its splits would send none, and the
+      // ordinary round trip (open a pay run, fix the narration, save) would silently
+      // DESTROY the departmental split of a cost that is still in the Profit & Loss.
+      // Nothing refuses it — zero allocations is a legal state, so the sum trigger
+      // has nothing to fire on and the only trace is a Cost Centre Summary that
+      // quietly stops adding up.
+      //
+      // ⚠️ The seq is used ONLY to match here. buildCostAllocations RECOMPUTES it
+      // from the rebuilt array, because the response orders postings by
+      // (dr_cr DESC, amount DESC) and the request will not.
+      allocations: allocationsFromView(view.cost_allocations ?? [], seq),
+    }));
+  return rows.length > 0 ? rows : [{ ledger: "", amount: "", allocations: [] }];
 }
 
 /**
@@ -293,7 +336,10 @@ function formFromDraft(draft: PurchaseVoucherDraft): VoucherForm {
     taxableValue: line?.taxable_value ?? "0.0000",
     // Draft mode is F9 Purchase, which is a GST (double-entry) form — the
     // single-entry particulars are unused there, but the shape must be whole.
-    lines: [{ ledger: "", amount: "" }],
+    // ⚠️ No allocations, and that is not an oversight: an item invoice REFUSES
+    // cost_allocations outright (its postings are server-generated and index 0 is the
+    // party leg), so a draft-prefilled purchase has nowhere to put one.
+    lines: [{ ledger: "", amount: "", allocations: [] }],
     // An OCR draft carries no stock: insightd reads a supplier's bill, and the
     // items on it are the SUPPLIER's descriptions, not this company's stock
     // masters. Matching them would be a guess, and a guess that moves stock.
@@ -637,6 +683,23 @@ function AccountingVoucherScreen({
       };
       if (f.partyLedgerId) req.party_ledger_id = f.partyLedgerId;
       if (f.voucherNo) req.voucher_no = f.voucherNo;
+      // ---- THE COST SPLITS (T2).
+      //
+      // ⛔ THE OFFSET IS 1, AND IT IS THE WHOLE HAZARD OF THIS FEATURE. `postings`
+      // above is built as [ the account being paid from/into, ...the particulars ],
+      // so the particular the operator sees at row 0 is posting **1**. Passing 0 here
+      // would allocate the BANK leg — a departmental cost attributed to a cash
+      // account, with a voucher that balances and a Cost Centre Summary that foots.
+      // Nothing downstream can detect it.
+      //
+      // It is passed from HERE, next to the array construction, rather than inferred
+      // inside the builder, because this is the only place that knows the shape.
+      //
+      // ⚠️ `rows` is the FILTERED list (keyed particulars only) and it is the same
+      // array the postings loop above iterated, so the positions agree by
+      // construction — the same discipline the fulfilment links use.
+      const allocations = buildCostAllocations(rows, 1);
+      if (allocations.length > 0) req.cost_allocations = allocations;
       return req;
     },
     [client, companyID, cfg.primarySide, cfg.partyLabel],
@@ -1470,7 +1533,14 @@ function SingleEntryPanel({
   const manySide = primarySide === "DR" ? "Cr" : "Dr";
   const oneSide = primarySide === "DR" ? "Dr" : "Cr";
 
-  const setLine = (i: number, patch: Partial<{ ledger: string; amount: string }>) =>
+  const setLine = (
+    i: number,
+    patch: Partial<{
+      ledger: string;
+      amount: string;
+      allocations: readonly DraftAllocation[];
+    }>,
+  ) =>
     setForm((f) => ({
       ...f,
       lines: f.lines.map((l, idx) => (idx === i ? { ...l, ...patch } : l)),
@@ -1522,6 +1592,17 @@ function SingleEntryPanel({
                 remove
               </button>
             ) : null}
+            {/* ⛔ THE COST SPLITS, ON THE ROW THE OPERATOR IS ALREADY LOOKING AT.
+                Not a modal: a separate panel would have to make them re-identify the
+                posting, and the only handle for that is the 0-based ordinal this
+                whole feature refuses to show. The ordinal is computed from this
+                row's position when the postings array is assembled — see
+                buildSingleEntryRequest, which states the primary-leg offset. */}
+            <CostAllocationPicker
+              line={l}
+              lineIndex={i}
+              onChange={(allocations) => setLine(i, { allocations })}
+            />
           </li>
         ))}
       </ul>
@@ -1538,7 +1619,10 @@ function SingleEntryPanel({
         data-testid="single-add-line"
         className="mt-1 px-2 py-0.5 text-xs underline"
         onClick={() =>
-          setForm((f) => ({ ...f, lines: [...f.lines, { ledger: "", amount: "" }] }))
+          setForm((f) => ({
+            ...f,
+            lines: [...f.lines, { ledger: "", amount: "", allocations: [] }],
+          }))
         }
       >
         + Add particular

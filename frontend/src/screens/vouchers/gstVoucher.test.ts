@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { createMockClient } from "../../api";
+import { createMockClient, ApiError } from "../../api";
 import type { CoredClient } from "../../api";
 import {
   buildGstVoucherRequest,
@@ -194,5 +194,121 @@ describe("ensureOutputTaxLedgers memoization", () => {
     // No new createLedger calls — cached ids reused.
     expect(createLedger).toHaveBeenCalledTimes(3);
     expect(second).toEqual(first);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ⛔⛔ ensureLedger AGAINST A LEDGER THAT ALREADY EXISTS.
+//
+// THE BUG THIS PINS, which was live and user-facing. `ensureLedger` called
+// `createLedger` unconditionally, on the stated assumption — written in its own doc
+// comment — that the route was idempotent by name. It is not: `INSERT INTO ledger`
+// has no ON CONFLICT and `ledger_company_id_name_key` is a plain UNIQUE index, so
+// creating an existing ledger is a raw Postgres unique-violation surfaced as
+// "masters: insert ledger: ERROR: duplicate key value violates unique constraint".
+//
+// The consequence: on a FRESH PAGE LOAD the memo is empty, so keying a Payment /
+// Receipt / Contra against any ledger the company already had — the normal case, and
+// every case after the first day — failed with that SQL error. It appeared to work
+// only when the memo was warm from an earlier post in the same session.
+//
+// ⚠️ NOT ONE TEST IN THE SUITE CAUGHT IT, because they all run against the mock,
+// whose createLedger happily mints a fresh id per call. It was found by driving the
+// app. So these tests assert against a client whose createLedger REFUSES a duplicate
+// the way the server does — which is the only shape that could have caught it.
+// ---------------------------------------------------------------------------
+describe("ensureLedger resolves an EXISTING ledger instead of re-creating it", () => {
+  /** A client that refuses a duplicate name, as the server's UNIQUE index does. */
+  function strictClient(existing: { id: string; name: string }[]) {
+    let creates = 0;
+    const rows = [...existing];
+    const client = {
+      ...createMockClient(),
+      async listLedgers() {
+        return {
+          ledgers: rows.map((r) => ({
+            id: r.id,
+            name: r.name,
+            group_name: "Indirect Expenses",
+            opening_balance: "0.0000",
+            opening_dc: "D",
+            maintain_bill_by_bill: false,
+            gstin: "",
+            state_code: "",
+            registration_type: "unregistered",
+          })),
+        } as never;
+      },
+      async createLedger(_cid: string, req: { name: string }) {
+        creates++;
+        if (rows.some((r) => r.name === req.name)) {
+          // EXACTLY what cored does, message and all.
+          throw new ApiError(
+            500,
+            'masters: insert ledger: ERROR: duplicate key value violates unique constraint "ledger_company_id_name_key" (SQLSTATE 23505)',
+          );
+        }
+        const created = { id: `new-${req.name}`, name: req.name };
+        rows.push(created);
+        return { ledger_id: created.id } as never;
+      },
+    } as unknown as CoredClient;
+    return { client, creates: () => creates };
+  }
+
+  it("⛔ returns the existing id and NEVER calls createLedger", async () => {
+    _resetLedgerCache();
+    const { client, creates } = strictClient([
+      { id: "led-electricity", name: "Electricity" },
+    ]);
+    const id = await ensureLedger(client, "c1", {
+      name: "Electricity",
+      groupName: "Indirect Expenses",
+    });
+    expect(id).toBe("led-electricity");
+    // THE ASSERTION THAT WOULD HAVE CAUGHT THE BUG: not one create attempt.
+    expect(creates()).toBe(0);
+  });
+
+  it("still CREATES a ledger the company genuinely does not have", async () => {
+    // The control. Without it, "never create" would pass by never working at all.
+    _resetLedgerCache();
+    const { client, creates } = strictClient([
+      { id: "led-electricity", name: "Electricity" },
+    ]);
+    const id = await ensureLedger(client, "c1", {
+      name: "Stationery",
+      groupName: "Indirect Expenses",
+    });
+    expect(id).toBe("new-Stationery");
+    expect(creates()).toBe(1);
+  });
+
+  it("resolves two particulars naming the SAME new ledger to one id, with one create", async () => {
+    _resetLedgerCache();
+    const { client, creates } = strictClient([]);
+    const a = await ensureLedger(client, "c1", {
+      name: "Courier",
+      groupName: "Indirect Expenses",
+    });
+    const b = await ensureLedger(client, "c1", {
+      name: "Courier",
+      groupName: "Indirect Expenses",
+    });
+    expect(a).toBe(b);
+    expect(creates()).toBe(1);
+  });
+
+  it("matches the name EXACTLY, mirroring the UNIQUE index", async () => {
+    // "electricity" and "Electricity" are two different ledgers to (company_id, name),
+    // so resolving them to one here would make this helper disagree with the database
+    // about what a duplicate is.
+    _resetLedgerCache();
+    const { client } = strictClient([{ id: "led-e", name: "Electricity" }]);
+    const id = await ensureLedger(client, "c1", {
+      name: "electricity",
+      groupName: "Indirect Expenses",
+    });
+    expect(id).toBe("new-electricity");
   });
 });
