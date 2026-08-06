@@ -20,8 +20,16 @@ export INSIGHTD_DATABASE_URL
 # both expect 8087, so it must be set explicitly or `serve` binds the wrong port.
 CORED_PORT    ?= 8087
 INSIGHTD_PORT ?= 8088
+# statutoryd — the IRN e-invoice plane, a SEPARATE deployable that calls BACK
+# into cored. ⛔ Check this port before assuming a fresh instance bound: a
+# seven-day-old /tmp/statutoryd once held it while carrying a service token
+# signed by a cored key that had died a week earlier, and the only symptom was a
+# bare 401 from a call it made — naming neither the process, the token, nor the
+# expiry. `lsof -nP -iTCP:8091`.
+STATUTORYD_PORT ?= 8091
 export CORED_PORT
 export INSIGHTD_PORT
+export STATUTORYD_PORT
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-18s\033[0m %s\n",$$1,$$2}'
@@ -110,6 +118,35 @@ run-insightd: ## Run insightd on :$(INSIGHTD_PORT) with the DURABLE (Postgres) d
 	cd insightd && INSIGHTD_DATABASE_URL="$(INSIGHTD_DATABASE_URL)" \
 		.venv/bin/python -m uvicorn insightd.api.app:app --port $(INSIGHTD_PORT)
 
+run-statutoryd: ## Run statutoryd on :$(STATUTORYD_PORT) with the DURABLE store (needs cored running)
+	@# ⛔ THE TOKEN IS MINTED HERE, NOT PASTED. It expires in 3600s and EVERY cored
+	@# restart invalidates it (a restart mints a new ephemeral signing key), so a
+	@# hand-copied token is a trap: both failures present as a bare 401 from a call
+	@# statutoryd makes, surfaced as `{"error":"statutory: GET voucher: unexpected
+	@# status 401"}` — which names neither the token nor the expiry. Re-run this
+	@# target whenever you restart cored.
+	@#
+	@# The subject MUST be exactly svc:statutoryd: cored's auth middleware has a
+	@# "svc:" FAST PATH built for this caller (auth_middleware.go) — no app_user
+	@# row, no membership, no security level, no step-up.
+	@if ! curl -sf http://localhost:$(CORED_PORT)/healthz >/dev/null; then \
+		echo "*** cored is not answering on :$(CORED_PORT) — statutoryd calls BACK into it."; \
+		echo "*** Start it first: make run-cored"; exit 1; \
+	fi
+	@echo "minting the svc:statutoryd service token from cored on :$(CORED_PORT)…"
+	@TOK=$$(curl -sf -X POST http://localhost:$(CORED_PORT)/auth/token \
+		-H 'Content-Type: application/json' -d '{"subject":"svc:statutoryd"}' \
+		| python3 -c "import sys,json;print(json.load(sys.stdin)['token'])") && \
+	if [ -z "$$TOK" ]; then \
+		echo "*** could not mint a service token — is AUTH_DEV_TOKEN_ENABLED=true set on cored?"; exit 1; \
+	fi && \
+	cd backend && CORED_BASE_URL=http://localhost:$(CORED_PORT) CORED_SERVICE_TOKEN="$$TOK" \
+		PORT=$(STATUTORYD_PORT) STATUTORYD_DSN="$(DATABASE_URL)" go run ./cmd/statutoryd
+	@# Confirm the log says DURABLE, not the in-memory WARNING:
+	@#   "statutoryd: DURABLE StepStore on Postgres (table statutory_step)"
+	@# An in-memory store loses workflow state on restart, and a crash between IRN
+	@# generation and the freeze hook then mints a SECOND IRN.
+
 seed-demo: ## Seed the Demo Traders company (needs cored + insightd running)
 	cd frontend && pnpm seed:demo -- --insightd
 
@@ -177,4 +214,4 @@ reset-dev-db: dev-db ## DESTRUCTIVE. Drop + recreate the dev database, then migr
 verify: dev-db migrate backend-build backend-test-residue frontend-test corpora-verify insightd-test ## Run ALL local gates (Go + frontend + corpora + insightd)
 	@echo "\n✅ verification gates passed (see any SKIP lines above for planes not covered)"
 
-.PHONY: help dev-db dev-db-down reset-dev-db migrate backend-build backend-test backend-test-residue frontend-install frontend-test frontend-build corpora-verify insightd-test run-cored run-insightd seed-demo seed-all verify
+.PHONY: help dev-db dev-db-down reset-dev-db migrate backend-build backend-test backend-test-residue frontend-install frontend-test frontend-build corpora-verify insightd-test run-cored run-insightd run-statutoryd seed-demo seed-all verify

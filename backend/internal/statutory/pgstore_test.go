@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -396,9 +397,15 @@ func TestPGStoreChaosTransientProviderFailuresExactlyOnce(t *testing.T) {
 			if cored.Registered[0].Kind != "IRN" || cored.Registered[0].Ref != res.IRN {
 				t.Fatalf("freeze recorded wrong ref: %+v", cored.Registered[0])
 			}
-			// Independent oracle: all four steps durably recorded, in order.
-			if got := stepNames(t, admin, wf); !reflect.DeepEqual(got, []string{"build", "validate", "generate", "freeze"}) {
-				t.Fatalf("statutory_step holds %v, want [build validate generate freeze]", got)
+			// Independent oracle: the two EFFECTFUL steps durably recorded, in
+			// order — and only those two.
+			//
+			// ⛔ `build` and `validate` are deliberately ABSENT. They are pure
+			// functions of the snapshot and are re-derived on every unsettled
+			// attempt; memoizing them is what made a mistyped first attempt
+			// poison the voucher permanently (see GenerateIRNWorkflow's header).
+			if got := stepNames(t, admin, wf); !reflect.DeepEqual(got, []string{"generate", "freeze"}) {
+				t.Fatalf("statutory_step holds %v, want [generate freeze]", got)
 			}
 
 			// Re-running a now-complete workflow: same IRN, no new external calls.
@@ -415,8 +422,8 @@ func TestPGStoreChaosTransientProviderFailuresExactlyOnce(t *testing.T) {
 			if len(cored.Registered) != 1 {
 				t.Fatalf("freeze called again on resume: %d", len(cored.Registered))
 			}
-			if got := stepCount(t, admin, wf); got != 4 {
-				t.Fatalf("re-run duplicated rows: %d, want 4", got)
+			if got := stepCount(t, admin, wf); got != 2 {
+				t.Fatalf("re-run duplicated rows: %d, want 2", got)
 			}
 		})
 	}
@@ -444,8 +451,8 @@ func TestPGStoreChaosFreezeFailureResumesNoDoubleIRN(t *testing.T) {
 	if cored.Registered[0].Ref != res.IRN {
 		t.Fatalf("frozen ref mismatch")
 	}
-	if got := stepCount(t, admin, wf); got != 4 {
-		t.Fatalf("statutory_step holds %d rows, want 4", got)
+	if got := stepCount(t, admin, wf); got != 2 {
+		t.Fatalf("statutory_step holds %d rows, want 2 (generate, freeze)", got)
 	}
 }
 
@@ -474,10 +481,13 @@ func TestPGStoreChaosPermanentRejectAbortsNoFreeze(t *testing.T) {
 	if chaos.InnerCalls() != 0 {
 		t.Fatalf("inner provider should not be reached, got %d", chaos.InnerCalls())
 	}
-	// The aborted step is NOT persisted: only build+validate are durable, so a
-	// later resume retries `generate` (and nothing downstream ever saw an IRN).
-	if got := stepNames(t, admin, wf); !reflect.DeepEqual(got, []string{"build", "validate"}) {
-		t.Fatalf("statutory_step holds %v, want [build validate]", got)
+	// ⛔ THE TABLE IS COMPLETELY EMPTY, and that is the fix. The aborted step is
+	// not persisted, and the pure prefix is no longer persisted either — so a
+	// permanent reject leaves NOTHING behind that a corrected attempt has to get
+	// past. Previously this left [build validate], and the `build` row was the
+	// poison: a retry resumed from it and could never see new data.
+	if got := stepNames(t, admin, wf); len(got) != 0 {
+		t.Fatalf("statutory_step holds %v, want nothing at all", got)
 	}
 }
 
@@ -509,10 +519,11 @@ func TestPGStoreRestartMidWorkflowGeneratesIRNExactlyOnce(t *testing.T) {
 	if chaos.InnerCalls() != 1 {
 		t.Fatalf("provider must have been called once before the crash, got %d", chaos.InnerCalls())
 	}
-	// Independent oracle: the durable table holds the three completed steps and
-	// NOT the failed freeze.
-	if got := stepNames(t, admin, wf); !reflect.DeepEqual(got, []string{"build", "validate", "generate"}) {
-		t.Fatalf("mid-workflow table state is %v, want [build validate generate]", got)
+	// Independent oracle: the durable table holds the completed `generate` and NOT
+	// the failed freeze. (The pure prefix is never recorded — see
+	// GenerateIRNWorkflow's header.)
+	if got := stepNames(t, admin, wf); !reflect.DeepEqual(got, []string{"generate"}) {
+		t.Fatalf("mid-workflow table state is %v, want [generate]", got)
 	}
 	generateAt := stepCreatedAt(t, admin, wf, "generate")
 
@@ -540,8 +551,8 @@ func TestPGStoreRestartMidWorkflowGeneratesIRNExactlyOnce(t *testing.T) {
 	if cored.Registered[0].Ref != res.IRN {
 		t.Fatalf("frozen ref %q != minted IRN %q", cored.Registered[0].Ref, res.IRN)
 	}
-	if got := stepNames(t, admin, wf); !reflect.DeepEqual(got, []string{"build", "validate", "generate", "freeze"}) {
-		t.Fatalf("post-restart table state is %v, want [build validate generate freeze]", got)
+	if got := stepNames(t, admin, wf); !reflect.DeepEqual(got, []string{"generate", "freeze"}) {
+		t.Fatalf("post-restart table state is %v, want [generate freeze]", got)
 	}
 	// The `generate` row was REUSED, not rewritten: its created_at is untouched.
 	// (An independent way of saying "the external call was not re-executed".)
@@ -567,5 +578,178 @@ func TestPGStoreRestartMidWorkflowGeneratesIRNExactlyOnce(t *testing.T) {
 	if memChaos.InnerCalls() != 2 {
 		t.Fatalf("control is broken: MemStore must LOSE state across a restart and re-call the provider "+
 			"(want 2 calls, got %d) — otherwise the PGStore assertion above is vacuous", memChaos.InnerCalls())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 5. ⛔⛔ THE POISONED WORKFLOW: a failed first attempt must NOT make a voucher
+//    permanently un-invoiceable.
+//
+// THE DEFECT THIS PINS. `build` used to be a durable Step, and it runs BEFORE
+// `validate`. So a first attempt with a bad snapshot recorded a bad payload in
+// statutory_step and THEN failed validation — and every later attempt, including
+// one carrying correct data, resumed from that memo and failed identically.
+// Forever. There was no reset path anywhere; the only cure found in the wild was
+// a hand-written DELETE.
+//
+// The realistic shape is exactly the one that happened: an e-invoice attempted
+// with NO LINE ITEMS (cored's GetVoucher does not carry them), which fails the
+// NIC schema with "[ItemList: 0 items, minimum 1]" — a message that blames the
+// item list while the real obstacle is a memo.
+// ---------------------------------------------------------------------------
+
+func TestPGStoreAFailedFirstAttemptDoesNotPoisonTheVoucher(t *testing.T) {
+	pool, admin := pgHarness(t)
+	cid, vid, wf := freshIDs(t, admin)
+
+	store := NewPGStore(pool)
+	chaos := NewChaosProvider(FakeProvider{})
+	cored := &FakeCoredClient{Snapshot: conformantSnapshot()}
+
+	// --- attempt 1: NO LINE ITEMS. Permanently invalid, by NIC's schema. ------
+	bad := conformantSnapshot()
+	bad.Lines = nil
+	_, err := GenerateIRNWorkflow(context.Background(), store, chaos, cored, cid, vid, bad)
+	if err == nil {
+		t.Fatal("an e-invoice with no line items must fail validation")
+	}
+	if !IsPermanent(err) {
+		t.Fatalf("a schema violation is permanent, not transient: %v", err)
+	}
+	// It fails for the RIGHT reason — otherwise attempt 2 below could be passing
+	// because attempt 1 never reached validation at all (§9.3).
+	var ve *ValidationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("want a ValidationError, got %T: %v", err, err)
+	}
+	if !strings.Contains(strings.Join(ve.Violations, "; "), "ItemList") {
+		t.Fatalf("want an ItemList violation, got %v", ve.Violations)
+	}
+	if chaos.InnerCalls() != 0 {
+		t.Fatalf("an invalid payload must never reach the IRP, got %d calls", chaos.InnerCalls())
+	}
+	// ⛔ AND IT LEFT NOTHING BEHIND. This is the fix: the row that used to sit
+	// here (`build`, holding "ItemList": []) was the poison.
+	if got := stepNames(t, admin, wf); len(got) != 0 {
+		t.Fatalf("a failed attempt persisted %v — a corrected retry would resume from it", got)
+	}
+
+	// --- attempt 2: the SAME voucher, corrected. It must succeed. ------------
+	res, err := GenerateIRNWorkflow(context.Background(), store, chaos, cored, cid, vid, conformantSnapshot())
+	if err != nil {
+		t.Fatalf("the corrected attempt must succeed, got: %v", err)
+	}
+	if res.IRN == "" {
+		t.Fatal("no IRN from the corrected attempt")
+	}
+	if chaos.InnerCalls() != 1 {
+		t.Fatalf("want exactly one IRP call, got %d", chaos.InnerCalls())
+	}
+	if len(cored.Registered) != 1 || cored.Registered[0].Ref != res.IRN {
+		t.Fatalf("freeze did not pin the minted IRN: %+v", cored.Registered)
+	}
+	if got := stepNames(t, admin, wf); !reflect.DeepEqual(got, []string{"generate", "freeze"}) {
+		t.Fatalf("statutory_step holds %v, want [generate freeze]", got)
+	}
+
+	// --- ⛔ NON-VACUITY CONTROL: the OLD step list, run against the same store.
+	// Without this, "attempt 2 succeeded" is equally consistent with the workflow
+	// never having been poisonable — in which case the whole test proves nothing.
+	// This models the pre-fix shape directly: memoize a pure `build` step BEFORE
+	// validating it, on a fresh workflow id.
+	cid2, vid2, wf2 := freshIDs(t, admin)
+	poison := func(snap VoucherSnapshot) error {
+		steps := []Step{
+			{
+				Name: "build",
+				Run: func(_ context.Context, _ map[string]json.RawMessage) (json.RawMessage, error) {
+					return json.Marshal(BuildEInvoice(snap))
+				},
+			},
+			{
+				Name: "validate",
+				Run: func(_ context.Context, prev map[string]json.RawMessage) (json.RawMessage, error) {
+					var p EInvoicePayload
+					if err := json.Unmarshal(prev["build"], &p); err != nil {
+						return nil, err
+					}
+					if v := ValidateEInvoice(p); len(v) > 0 {
+						return nil, &ValidationError{Violations: v}
+					}
+					return json.Marshal(map[string]bool{"ok": true})
+				},
+			},
+		}
+		_, err := Run(context.Background(), store, "irn:"+cid2+":"+vid2, steps)
+		return err
+	}
+	if err := poison(bad); err == nil {
+		t.Fatal("control: the no-lines snapshot must fail validation")
+	}
+	if got := stepNames(t, admin, wf2); !reflect.DeepEqual(got, []string{"build"}) {
+		t.Fatalf("control: the old shape must persist a `build` row, got %v", got)
+	}
+	// THE CONTROL'S POINT: corrected data, and it STILL fails — because `build`
+	// is memoized. If this ever starts passing, the poisoning is not real and the
+	// assertions above are vacuous.
+	if err := poison(conformantSnapshot()); err == nil {
+		t.Fatal("control is broken: a memoized `build` must make the corrected retry fail too — " +
+			"otherwise the voucher was never poisonable and this whole test is vacuous")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 6. ⛔ A SETTLED WORKFLOW RETURNS ITS IRN AND IS NEVER RE-VALIDATED.
+//
+// §12/B.5 item 2: "an idempotent re-post returns the SAME IRN — that is the
+// entire reason this plane is durable, and it is the one property whose failure
+// mints a duplicate against a real government API."
+//
+// The sharp case is a re-post whose snapshot has since become INVALID (the
+// voucher was altered, a line was removed). An IRN is a fact about what was
+// SUBMITTED: it cannot be un-issued, so answering 422 to a voucher that
+// demonstrably holds one is both wrong and unactionable. This is why
+// GenerateIRNWorkflow asks the store whether `generate` is recorded BEFORE it
+// derives or validates anything.
+// ---------------------------------------------------------------------------
+
+func TestPGStoreASettledWorkflowIsNeverRevalidated(t *testing.T) {
+	pool, admin := pgHarness(t)
+	cid, vid, wf := freshIDs(t, admin)
+
+	store := NewPGStore(pool)
+	chaos := NewChaosProvider(FakeProvider{})
+	cored := &FakeCoredClient{Snapshot: conformantSnapshot()}
+
+	first, err := GenerateIRNWorkflow(context.Background(), store, chaos, cored, cid, vid, conformantSnapshot())
+	if err != nil {
+		t.Fatalf("first attempt: %v", err)
+	}
+	if first.IRN == "" {
+		t.Fatal("no IRN")
+	}
+
+	// The voucher has since lost its lines — a snapshot that would be REFUSED as a
+	// first attempt (proved by the poisoning test above, which asserts exactly
+	// this shape fails validation).
+	stale := conformantSnapshot()
+	stale.Lines = nil
+
+	again, err := GenerateIRNWorkflow(context.Background(), store, chaos, cored, cid, vid, stale)
+	if err != nil {
+		t.Fatalf("a re-post of a settled workflow must succeed, got: %v", err)
+	}
+	if again.IRN != first.IRN {
+		t.Fatalf("re-post minted a DIFFERENT IRN: %q then %q", first.IRN, again.IRN)
+	}
+	// And it did so without touching the IRP or the freeze hook again.
+	if got := chaos.InnerCalls(); got != 1 {
+		t.Fatalf("the IRP was called %d times, want exactly 1 — a second call is a duplicate IRN against a real government API", got)
+	}
+	if len(cored.Registered) != 1 {
+		t.Fatalf("freeze called %d times, want 1", len(cored.Registered))
+	}
+	if got := stepNames(t, admin, wf); !reflect.DeepEqual(got, []string{"generate", "freeze"}) {
+		t.Fatalf("statutory_step holds %v, want [generate freeze]", got)
 	}
 }
