@@ -1029,11 +1029,18 @@ Three distinct kinds of gap, and only the first is on the FeaturesScreen as `off
 |---|---|---|
 | **`off`** — not built, honestly stated | 11 | F11, and the keymap answers when the key is pressed |
 | **`server`** — built, tested, reachable over HTTP, **NO SCREEN** | **3** | F11, and this is the kind that gets re-bought by an accountant who already owns it |
-| ⛔ **HIDDEN — a row that reads `on` with a hole behind it** | **≥1 known** | nowhere. Found only by driving the app |
+| ⛔ **HIDDEN — a row that reads `on` with a hole behind it** | **2 found, 1 still open** | nowhere. Found only by driving the app |
 
-**The third kind is the dangerous one and it is why §12's browser-evidence rule exists.** One is known
-(§4.5, the Journal), and it was found by accident while looking for somewhere to put a control. **There
-is no audit that has been run for the others.** See §5.5.
+**The third kind is the dangerous one and it is why §12's browser-evidence rule exists.** Two have now
+been found and NEITHER by looking for them: §4.5 (the Journal) turned up while looking for somewhere to
+put a control, and §4.8 (the Day Book drill) while browser-verifying a different track. §4.8 is fixed;
+**§4.5 is still open and is the oldest known lie on the board.** **There is still no audit that has
+been run for the rest.** See §5.5.
+
+⚠️ **AND THE JOURNAL HOLE IS BIGGER THAN §4.5's WORDING SUGGESTS — measured 2026-08-06 by driving the
+shell.** The F7 form renders **exactly one input, "Dr/Cr Ledger"**: no amount field, no second line, no
+Dr/Cr side selector. It is not "a Journal is awkward to key", it is **a Journal cannot be keyed at
+all**, on a row that reads `on`.
 
 ### 5.2 ⛔ THE THREE `server` ROWS — BUILT AND UNREACHABLE. Highest value per unit of work.
 
@@ -1134,8 +1141,11 @@ a customer tries it.
 
 ### 5.5 ⛔ THE AUDIT NOBODY HAS RUN: WHICH `on` ROWS ARE LYING?
 
-29 rows say `on`. **One has already been caught with a hole behind it** (the Journal, §4.5), found by
-accident. The method that finds the rest is cheap and nobody has done it:
+**30** rows say `on` (re-measured 2026-08-06 with §1's `python3` method; this line said 29, which was
+stale — §1's own count has said 30 since T5 closed). **TWO have now been caught with a hole behind
+them**: the Journal (§4.5, found by accident) and the Day Book drill (§4.8, found by driving Track A's
+verification — now fixed). The method that finds the rest is cheap and nobody has done it
+systematically:
 
 > **For each `on` row, name the exact keystroke sequence an operator uses, then DO IT in a browser
 > against real cored.** Not a test — the app. The Journal gap survived a full suite, a full
