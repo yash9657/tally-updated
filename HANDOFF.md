@@ -1,8 +1,8 @@
 # HANDOFF — THE LIVE ONE. Start here, from cold.
 
-> **Written 2026-08-05, at `c4f91e6`.** This file replaces the twelve `HANDOFF-*.md` files that
-> preceded it. **Every other `HANDOFF-*.md` in this repository is SPENT** — see §11 for the list and
-> for the one thing to do about them.
+> **Written 2026-08-05, updated in place at `7e565a3`.** This file replaces the ELEVEN `HANDOFF-*.md`
+> files that preceded it (§11 lists them; `ls` confirms eleven). **Every other `HANDOFF-*.md` in this repository is SPENT** — see §11 for the
+> list and for the one thing to do about them.
 >
 > **Read §1 → §2 → §3. Then act on §4.** Everything after §6 is reference you will need exactly when
 > you hit it, not reading for now.
@@ -11,29 +11,54 @@
 
 ## 1. THE ANSWER TO THE QUESTION YOU ARE ABOUT TO ASK
 
-**Is Tier 1 done? NO — one row short, and you can see it on the product's own face.**
+**Is Tier 1 done? NO — ONE row short now (it was two), and you can see it on the product's own face.**
 
 The `FeaturesScreen` (`frontend/src/screens/FeaturesScreen.tsx`) is this project's parity ledger, and
-T7's whole purpose was to make it honest. It is the authority, not this file. Measured at `c4f91e6`:
-**27 rows `on`, 13 `off`, 6 qualified** (`always` / `server`).
+T7's whole purpose was to make it honest. It is the authority, not this file. Measured at `7e565a3`:
+**28 rows `on`, 12 `off`, 6 qualified** (`always` / `server`).
 
 | Tier 1 track | Row | State |
 |---|---|---|
 | T1 Printing | several | ✅ `on` |
 | T2 Cost centres | "Cost centres and cost categories — the masters and both reports" | ✅ `on` |
 | T2 (cont.) | "Cost centre allocation during voucher entry" | ⚠️ `server` — **no UI** |
-| **T3 Orders + BOM** | "Order processing (Sales / Purchase Orders) and Bill of Materials" | ⛔ **`off` — no UI** |
+| **T3 Orders + BOM** | "Order processing (Sales / Purchase Orders) and Bill of Materials" | ✅ **`on` — browser-verified, see below** |
 | T4 Bank reconciliation | "Bank reconciliation" | ✅ `on` |
-| **T5 e-Way Bill** | "e-Way Bill" | ⛔ **`off` — no route, no UI** |
+| **T5 e-Way Bill** | "e-Way Bill" | ⛔ **`off` — no route, no UI. THE LAST TIER-1 ROW** |
 | T6 TDS/TCS | "TDS / TCS" | ✅ `on` |
 | T7 Features screen | — | ✅ done |
 
-**So: do NOT start Tier 2.** Two rows are `off` and both are `off` for the SAME reason, which is the
-most expensive lesson in this repository's history:
+**So: do NOT start Tier 2.** One row is left, and it is `off` for the reason that has been the most
+expensive lesson in this repository's history:
 
-> ### ⛔⛔ EVERY BACKEND FOR T3 AND T5 IS BUILT, TESTED AND REACHABLE. NEITHER HAS A SCREEN.
-> A keyboard-only operator cannot create an order, cannot link a delivery to one, and cannot raise an
-> e-way bill. **The remaining Tier-1 work is almost entirely FRONTEND**, and §4 is that work.
+> ### ⛔⛔ T5's BACKEND IS BUILT, TESTED AND REACHABLE. IT HAS NO SCREEN AND NO ROUTE.
+> A keyboard-only operator cannot raise an e-way bill. **The remaining Tier-1 work is a store, a
+> route and a screen**, and §4 is that work — but read §4.2 first, because the architecture is not
+> the one T3's was and the obvious approach is forbidden by archtest.
+
+### 1.1 What the session at `8db0ffd..7e565a3` closed, and how it is known
+
+T3 went from `off` to `on` across three commits, and the row flipped on **BROWSER EVIDENCE** rather
+than a green suite — which §12 requires and which is the only thing that catches the defect class
+this repo keeps re-learning. Driven in a real browser against real `cored`, with a virtual WebAuthn
+authenticator over CDP so the step-up completed (§9.7's recipe, **verified working again**):
+
+| Keystroke | What actually happened |
+|---|---|
+| `Ctrl+F8` | the Sales Orders register opened |
+| `Alt+C`, `Ctrl+A` | **SO-BROWSER-1 recorded through the passkey**, read back with the server-assigned line 1 |
+| `Alt+F9`, `Ctrl+A` | a Receipt Note — and the picker **offered no orders**, because the only open order is a SALES order and a receipt discharges PURCHASE orders |
+| `Alt+F8` + link 8 | a Delivery Note linked to the order; the qty field was **empty after picking** |
+| Sales Order Book | **Ordered 20 / Delivered 8 / Outstanding 12 / ₹6,000** |
+| `Alt+C`, `Alt+X` | a recipe (10 yields 3) exploded for 9 gave **exactly 30.0000** |
+
+⛔ **AND THE BROWSER FOUND A BUG NOTHING ELSE COULD.** The order book heading rendered `As at ·` with
+nothing after it: the server does **not** substitute its own today when no `as_on` is given — it
+returns `as_on: ""` and reports the position from every order ever placed. That is now the third
+defect of this exact shape found by driving the app rather than reading it (the F2 period dialog,
+Alt+O's dead binding, this). **A default branch that produces a plausible-looking string is invisible
+to every test that only asserts the sentences it expects.** Worse, and worth naming: **the test I had
+written myself certified the bug** — it asserted `As at ${book.as_on}` and passed on the empty string.
 
 ---
 
@@ -62,16 +87,20 @@ cd ../frontend && pnpm exec tsc --noEmit && pnpm run test:run
 cd .. && make verify
 ```
 
-### 2.1 The gate baseline at `c4f91e6` — re-measure, do not assume
+### 2.1 The gate baseline at `7e565a3` — re-measure, do not assume
 
 | Gate | Value |
 |---|---|
-| backend `go test ./... -count=1 -v` | **2292 pass / 0 SKIP / 0 FAIL** |
-| frontend `pnpm run test:run` | **614 pass / 47 files** |
+| backend `go test ./... -count=1 -v` | **2293 pass / 0 SKIP / 0 FAIL** |
+| frontend `pnpm run test:run` | **682 pass / 51 files** |
 | `pnpm exec tsc --noEmit` | clean — ⛔ **a SEPARATE gate from `make verify`** |
 | `make verify` | exit 0 |
 | `verify:demo` | **33/33**, run **ALONE**, needs cored **and** insightd up |
 | `gofmt -l` on every file you touch | clean |
+
+⚠️ **`verify:demo` TAKES THE COMPANY ID AS AN ARGUMENT** and prints a usage line without it:
+`pnpm run verify:demo "$(cat frontend/.demo-company-id)"`. Bare `pnpm run verify:demo` exits 2, which
+is easy to misread as a failing gate.
 
 ⚠️ **A DOWN DATABASE MAKES EVERY DB TEST SKIP AND `go test` STILL EXITS 0.** A skip is
 indistinguishable from a pass in the exit code. This has invalidated a whole session's evidence
@@ -113,28 +142,31 @@ STATUS: `401` means the route exists and needs auth; `404` means you are talking
 
 | Session | Delivered | Workflows | Subagent tokens |
 |---|---|---|---|
-| n−2 | T6 | 4, with 3 sequential barriers | ~1.7M |
-| n−1 | T2 + the shared T3 contract | 2, zero barriers | ~1.3M |
-| **n (this one)** | **T3 backend end-to-end + T5 core** | **0 — solo, no subagents** | **0** |
+| n−3 | T6 | 4, with 3 sequential barriers | ~1.7M |
+| n−2 | T2 + the shared T3 contract | 2, zero barriers | ~1.3M |
+| n−1 | T3 backend end-to-end + T5 core | 0 — solo | 0 |
+| **n (this one)** | **T3 FRONTEND end-to-end: 5 screens, the fulfilment picker, browser-verified, row `on`** | **0 — solo** | **0** |
 
-**Two observations, and the second is the surprising one.** First: plan for roughly one track per
-session. Second: this session delivered more than either of the two before it **with no subagents at
-all**, because the work was a long serial chain of decisions in contended files — schema, then the
-ledger, then the wire, then the report, then the API — where a lane split would have spent its
-parallelism on coordination. **Fan out for genuinely disjoint files; go solo down a dependency chain.**
+**Three observations now, and the third is new.** First: plan for roughly one track per session — this
+session delivered exactly one and it was full. Second: the last two sessions each delivered a whole
+track **with no subagents at all**, because both were long serial chains of decisions in contended
+files; **fan out for genuinely disjoint files, go solo down a dependency chain.** Third, and it is the
+one to plan around: **the frontend half of a track is not smaller than the backend half.** T3's
+frontend was five screens × fourteen registration points, plus a picker that had to be wired into two
+existing grids, plus a real backend defect the picker exposed. It took a full session on its own.
 
 ---
 
 ## 4. ⛔⛔ THE WORK, IN ORDER. THIS IS THE PART YOU ACT ON.
 
-Everything here is Tier 1. **Do not start Tier 2 (§5) until items 1–3 are done and their FeaturesScreen
-rows are `on` on BROWSER evidence.**
+Everything here is Tier 1. **Do not start Tier 2 (§5) until item 1 is done and the T5 FeaturesScreen
+row is `on` on BROWSER evidence.**
 
 ### 4.1 THE BAR, restated because it is the whole point
 
 > **A feature is not shipped when its tests pass. It is shipped when a human can reach it.**
 >
-> This has been learned three times, at increasing cost:
+> This has been learned FOUR times now, at increasing cost:
 > 1. `voucherReq.ItemLedgerID` — every item invoice the F8/F9 grid could send came back 422; the
 >    generator was reachable only from Go tests.
 > 2. **T2's cost allocations** — the validation, the hashed payload entry and the row insert were
@@ -144,6 +176,10 @@ rows are `on` on BROWSER evidence.**
 > 3. **T2 again, one layer up** — the Go wire was fixed and `VoucherRequest` in
 >    `frontend/src/api/types.ts` was not. So a browser still could not construct one, and all 597
 >    frontend tests passed.
+> 4. **T3, and this one ran a whole release** — the order tables, the fulfilment links, the
+>    over-fulfilment trigger, both order books, the ACL migration and all fourteen client methods
+>    shipped and were tested while **no screen existed**. The order book reported every commitment as
+>    fully outstanding forever, *correctly*, because nothing could discharge one.
 >
 > **THE RULE: a feature is not reachable until the field exists on EVERY wire between the operator and
 > the table — Go struct, TS type, and the form that fills it.**
@@ -153,90 +189,123 @@ rows are `on` on BROWSER evidence.**
 > wire → ledger → payload → table → report → wire, with nothing stubbed and **no SQL in the fixture
 > that reaches around the API**. It is mutation-proved in both directions. Copy this shape for every
 > new feature.
+>
+> ⚠️ **AND ITS TWIN, WHICH IS NEWER AND WAS MISSING: THE READ-BACK.**
+> `TestTheVoucherGETCarriesItsOrderLinksSoAnAlterCannotSilentlyReopenTheOrder` in the same file. A
+> feature can be perfectly reachable on the way IN and destroy data on the way OUT — see §4.3.
 
-### 4.2 ITEM 1 — ⛔ THE FULFILMENT PICKER ON VOUCHER ENTRY (largest, do it first)
+### 4.2 ⛔⛔ ITEM 1 — T5's STORE, ROUTE AND SCREEN. THE LAST TIER-1 ROW.
 
-**A keyboard-only operator cannot link a delivery note to a sales order.** The entire backend exists:
-`voucherReq.fulfilments` on the wire, `FulfilmentInput` in `types.ts`, over-fulfilment refused by a
-deferred trigger, and both order books reading it back.
+The rules-and-payload core is done and it is good (`internal/statutory/ewaybill.go`, `rule138.go`):
+`Assess` returns the Rule 138 conclusion **with its reasoning**, `BuildEWayBill` emits the NIC payload
+subset, and `EWayBillDisclosures` assembles the block that must reach paper. What is missing is a
+store, a route and a screen.
 
-- It attaches to the **inventory grid**, on a row the operator is already looking at.
-- Fetch candidates with `GET /sales-orders?open_only=true`, then the line ids from
-  `GET /sales-orders/{id}`.
-- ⛔ **NEVER ASK FOR A `line_no` OR AN `order_line_id`.** Both are identifiers no screen displays.
-  `line_no` is the voucher's own 1-based inventory line and the client fills it from the row's
-  position; `order_line_id` comes from the picked order.
-- ⛔ **DO NOT DEFAULT `qty` TO THE LINE QUANTITY AND LOCK IT.** A fulfilment qty is a **LINK, not a
-  movement**: shipping 105 against a 100-unit order records a movement of 105 and a link of 100, and
-  the extra 5 correctly consumed no order. A locked field makes an over-delivery unsaveable.
-- Read `FulfilmentInput` in `frontend/src/api/types.ts` first. It carries all of this.
+> ### ⛔ READ THIS BEFORE YOU TAKE MIGRATION 0047. THE ARCHITECTURE IS NOT T3's.
+>
+> **`internal/archtest` pins `internal/statutory` to the EMPTY allowed-import set**, and the edge runs
+> the way you do not want: **nothing in `internal/` imports `statutory` either** — only
+> `cmd/statutoryd` does. `statutoryd` is a **separate deployable** that talks to cored ONLY over HTTP.
+>
+> So `cored` **cannot call the payload builder**. That is the decision to make first, and there are
+> two honest shapes:
+>
+> 1. **Mirror the e-invoice flow.** `cmd/statutoryd/main.go`'s `handleEInvoice` reads the voucher
+>    snapshot from cored over HTTP, generates, and the result is pinned back to cored via
+>    `POST /vouchers/{id}/external-reference` (migration 0009's `voucher_external_reference`, which is
+>    CHECK-constrained to `IRN`/`FILED_GSTR1` — **so it needs a new kind, or a new table**). Add
+>    `POST .../vouchers/{voucherID}/e-way-bill` to statutoryd beside the e-invoice route. This is the
+>    shape the codebase already has and the one archtest was written for.
+> 2. **Move the payload builder** out of `statutory` into a package cored may import. This is a bigger
+>    change and it fights an architectural decision that was made deliberately — do not do it without
+>    a stated reason.
+>
+> **Item 1 is blocked on choosing between those, not on typing.** Whichever you choose, say why in the
+> commit, because the next person will ask.
 
-**This is the exact twin of T2's missing allocation UI (item 4), so build them the same way once.**
+Then, and only then:
 
-### 4.3 ITEM 2 — THE T3 SCREENS
+- A **cored-side store** for the local reference, the payload and the validity — **0047/0048 are
+  reserved for exactly this and are still free** (they are TABLE numbers only; see §6).
+- A route.
+- A screen that **renders the `disclosures` block**. That block is not decoration: it is the only thing
+  standing between a printed sheet and a driver believing the consignment is covered. `EWayBillResponse`
+  in `frontend/src/api/types.ts` already carries it and says so.
+- ⛔ **NEVER LABEL `local_reference` AS AN "e-Way Bill Number".** It is not an EBN. An EBN is issued by
+  NIC and this deployment cannot reach NIC.
+- ⚠️ **T5 IS NOT T18.** An EBN is just an identifier NIC allocates, so T5 becomes real the day
+  credentials exist with **no change to the payload builder**. T18's QR code is signed with the Income
+  Tax Department's private key and is permanently unshippable (§5). The two gaps look alike and are not.
 
-Order entry, order list, BOM entry, and **two** order-book screens.
+### 4.3 ⛔ ITEM 2 — THE READ-BACK AUDIT. Cheap, and it is a DATA-LOSS class.
 
-- ⛔ **THE ORDER BOOK IS TWO SCREENS, NOT ONE WITH A DIRECTION TOGGLE.** `sales-order-book` and
-  `purchase-order-book` are separate report names because **a query parameter is invisible to the
-  PDP**; a toggle would reach a resource the operator may be denied and produce a 403 nobody can
-  attribute.
-- Every screen needs **all 13 registrations** — see §7.2. ⛔ `AppShell.tsx`'s `SCREEN_ACTIONS` is the
-  one that ships a key **completely dead**, no error and no status line.
-- The client methods all exist (`createSalesOrder`, `listSalesOrders`, `getSalesOrder`,
-  `closeSalesOrder`, `createBom`, `explodeBom`, `salesOrderBook`, …) and **the mock refuses what the
-  server refuses**, pinned by `frontend/src/api/orders.test.ts`. You can build against
-  `createMockClient()` with more confidence than usual.
+**T3 was about to ship a defect that silently un-delivers an order, and the shape generalises.**
+`order_fulfilment` keys on `(voucher_version_id, line_no)`, so **an ALTER RE-STATES**: whatever the
+body omits is gone. Meanwhile `GET /vouchers/{id}` did not return the links at all. Open a delivered
+delivery note, fix a typo in the narration, save → **the order silently re-opens.** Nothing refuses it,
+because zero links is a legal state: no trigger fires, no total stops adding up, and the only trace is
+an order book reporting a commitment the company already met.
 
-### 4.4 ITEM 3 — T5's ROUTE AND SCREEN
+Fixed for fulfilments AND for `cost_allocations` (which answers the old §4.7 item 8 — and the answer
+was worse than feared: `ledger.VoucherView` had carried them since T2 **with a doc comment explaining
+at length why omitting them destroys a departmental split**, and `voucherFullJSON` dropped them).
 
-The rules-and-payload core is done (`internal/statutory/ewaybill.go`, `rule138.go`). What is missing:
+> ### ⛔ THE AUDIT TO RUN, because this is now FOUR occurrences (postings, inventory, cost allocations, fulfilments):
+> **For every table keyed on `voucher_version_id`, ask: does `voucherFullJSON` emit it?** If an ALTER
+> re-states a table and the GET does not return it, the ordinary round trip DELETES it. Grep the
+> migrations for `voucher_version_id` and check each one off against
+> `internal/server/server.go`'s `voucherFullJSON`. `bill_allocation` is emitted; `stock_movement` is;
+> the two just fixed are. **Verify the rest, and write down which ones you checked.**
 
-- A **cored-side store** for the local reference — migrations **0047/0048 are reserved for exactly
-  this** and are still free (they are TABLE numbers only; see §6).
-- A route, and a screen that **renders the `disclosures` block**. That block is not decoration: it is
-  the only thing standing between a printed sheet and a driver believing the consignment is covered.
-- ⚠️ `internal/statutory` may import **nothing** from `internal/` (archtest pins the empty set) — it
-  is a separate deployable that talks to cored over HTTP. Do not "just import the ledger".
+### 4.4 ITEM 3 — T2's ALLOCATION UI on voucher entry
 
-### 4.5 ITEM 4 — T2's ALLOCATION UI on voucher entry
-
-The `server` row that has been qualified since T2 shipped. Same shape as item 1, and both should reuse
-one component.
+The `server` row that has been qualified since T2 shipped. **The fulfilment picker is now the worked
+example to copy** — `frontend/src/screens/vouchers/FulfilmentPicker.tsx` plus its pure half in
+`fulfilment.ts`, and they solve the same problems this needs solved (pick from a served list, never ask
+for an ordinal, warn without refusing).
 
 - ⛔ `posting_seq` is a **0-BASED ordinal no screen displays**, and it is 0-based where the fulfilment
   `line_no` beside it is **1-based**. Both are inherited, neither is negotiable, and a client that
-  confuses them is off by one.
+  confuses them is off by one. **`fulfilments[].line_no` and `cost_allocations[].posting_seq` are now
+  on the SAME GET body**, one 1-based and one 0-based, so the trap is closer than it was.
+- ⚠️ **`posting_seq` is RE-DERIVED, not stored** (`posting` has no ordinal column), so it indexes the
+  `postings` array of *that same read*. `fulfilments[].line_no` IS stored. Do not treat them alike.
 - An **item invoice refuses allocations outright** — its postings are server-generated and index 0 is
   the *party* leg. Allocate on a Journal, Payment, Receipt or Contra.
-- `CostAllocationInput` in `types.ts` carries the warning. Read it first.
+- The GET now carries `cost_allocations`, so the alter round trip is safe **if you re-hydrate them**.
+  See `itemsFromView` in `VoucherScreen.tsx` for how the fulfilment half does it.
+- ⚠️ `CostCentresScreen.tsx` ends with a paragraph beginning "Creating these masters does not allocate
+  anything. NO SCREEN IN THIS BUILD ALLOCATES A POSTING" — **that prose becomes false the moment you
+  ship this.** Correct it in the same change (§9.1).
 
-### 4.6 ITEM 5 — SEED T3 AND T2 INTO `seed:demo`
+### 4.5 ITEM 4 — SEED T3 AND T2 INTO `seed:demo`
 
-`frontend/scripts/seed-demo.mts`. Nothing seeds cost data, TDS data or orders, so **four screens
-render empty against the demo company** and cannot be demonstrated. One axis, two centres, one
-allocated voucher, one order and one partial delivery would fix all of it. Same unclaimed work T2 and
-T6 both left behind.
+`frontend/scripts/seed-demo.mts`. Nothing seeds cost data, TDS data or orders, so **four screens render
+empty against a fresh demo company** and cannot be demonstrated. One axis, two centres, one allocated
+voucher, one order and one partial delivery would fix all of it. Same unclaimed work T2, T3 and T6 all
+left behind.
+
+⚠️ **THE DEV DATABASE NOW HAS SOME OF THIS AND THE SEED SCRIPT STILL DOES NOT** — see §11's residue
+list. That is the worst of both worlds for anyone who reasons from what they see on screen, so this
+item is more urgent than it was.
 
 ⚠️ `seed-demo.mts`, `verify-demo.mts` and `corpora/validate.py` are **CO-OWNED**. ADD only, and
 re-read immediately before each edit.
 
-### 4.7 SMALLER, REAL, AND EACH WORTH DOING
+### 4.6 SMALLER, REAL, AND EACH WORTH DOING
 
 | # | What | Why |
 |---|---|---|
-| 6 | `ReviseLineQty` on the wire | The service method and 0042's trigger exist; no route calls it, so a committed quantity cannot be corrected from a client |
-| 7 | `VersionView` does not project cost allocations | The edit log SIGNS them but does not SHOW them: an auditor opening an altered pay run sees two versions that render identically |
-| 8 | The HTTP voucher GET/PUT may not carry `cost_allocations` | **Unverified.** If it does not, a client that rebuilds a voucher from the GET silently clears the split on an unrelated edit. Same class as §4.1's defect. **Check this before building item 4** |
-| 9 | The pre-flight allocation refusal names the axis by raw UUID | Strictly *less* usable than the DB trigger message it exists to pre-empt. Resolve names at the in-transaction call site, which already holds the tx |
-| 10 | The two cost reports disagree about an off-axis allocation | The category summary excludes it and reports it separately; the centre summary silently includes it. Neither says so |
-| 11 | Fold `tsc` into `make verify` | ~10 minutes, and it closes a whole class of "green but broken" |
-
----
+| 5 | `ReviseLineQty` on the wire | The service method and 0042's trigger exist; no route calls it, so a committed quantity cannot be corrected from a client. The order register SAYS SO on its face rather than hiding it |
+| 6 | `VersionView` does not project cost allocations | The edit log SIGNS them but does not SHOW them: an auditor opening an altered pay run sees two versions that render identically. ⚠️ It does not project `fulfilments` either, and that is now the same gap twice |
+| 7 | The pre-flight allocation refusal names the axis by raw UUID | Strictly *less* usable than the DB trigger message it exists to pre-empt. Resolve names at the in-transaction call site, which already holds the tx |
+| 8 | The two cost reports disagree about an off-axis allocation | The category summary excludes it and reports it separately; the centre summary silently includes it. Neither says so |
+| 9 | Fold `tsc` into `make verify` | ~10 minutes, and it closes a whole class of "green but broken". **Still not done, and it caught a real error this session** — `printTarget.ts`'s exhaustive `Record<ReportName, string>` failed only under `tsc`, never under `make verify` |
+| 10 | No tracking numbers | RESEARCH.md:622 — Tally stitches Delivery Note ↔ Sales invoice with a **Tracking No.**, and creates "bill pending" entries when goods and bill arrive separately. T3 links a voucher to an ORDER but not to another VOUCHER. The order register states this gap |
 
 ## 5. TIER 2 — WHAT IT IS, AND THE ONE THING NOT TO GET WRONG IN EACH
 
-**Do not start these until §4 items 1–3 are done.** `PLAN-TALLY-PARITY.md` §4 is the authority;
+**Do not start these until §4 item 1 (T5) is done and its row is `on`.** `PLAN-TALLY-PARITY.md` §4 is the authority;
 this is the short form, ordered by rough value.
 
 | # | Track | The one thing not to get wrong |
@@ -340,11 +409,28 @@ NAME (that is why there are two order books).
 entry in `internal/server`'s. Only the first passes when run against the package alone; the second
 fails only in the full suite.
 
-### 7.2 A new SCREEN needs 13
+### 7.2 A new SCREEN needs 14 — it was documented as 13, and the 14th was found by `tsc`
 
 The two whose file paths lie: `ScreenKind` is in `frontend/src/keystroke/types.ts` (**not**
 `screenRegistry.tsx`), and `actionLabel()` is in `keystroke/keymaps/tallyprime.ts` (**not**
 `AppShell.tsx`).
+
+⛔ **THE FOURTEENTH: `frontend/src/screens/printTarget.ts` holds `REPORT_SLUGS`, a
+`Record<ReportName, string>`** mapping every report name to its server print slug. Adding a name to
+`REPORT_NAMES` makes that record non-exhaustive and **`tsc` refuses to compile** — which is how it was
+found, and it is a good tripwire rather than a nuisance. ⚠️ **`make verify` DOES NOT RUN `tsc`**
+(§2.1), so this error is invisible to the gate most people run. Map the slug even when the server
+DEFERS the report and answers 501: the TDS register and both order books are mapped-and-deferred on
+purpose, so `Ctrl+P` says the layout does not exist instead of doing nothing. An absent slug is
+indistinguishable from a key that quietly failed.
+
+⚠️ **A `report:NAME` FRAME IS MUCH CHEAPER THAN A `ScreenKind`, and it is the right choice more often
+than the list above suggests.** The two order books are registered as `report:Sales Order Book` /
+`report:Purchase Order Book` and inherit the report keymap, the report button bar, the title, F2 and a
+place in both Go To and Display More Reports **for free**. Pick a ScreenKind only when the screen
+carries a create FORM (which needs its own keymap table to hold the voucher keys back) or renders a
+shape no report screen does. `cost-centres`, `tds-challans`, the two order registers and `boms` are
+ScreenKinds for that reason; the four order/cost REPORTS split on it.
 
 ⛔ **`AppShell.tsx`'s `SCREEN_ACTIONS` is the one that ships the key COMPLETELY DEAD** — no error, no
 status line. ⛔ **An unbound key is NOT inert**: F5 opens a Payment voucher over your form, F9 a
@@ -360,9 +446,30 @@ And **client methods in three files**: `api/client.ts` (declaring it there makes
 > ### ⛔ IF A KEY IS THE FEATURE, THE TEST MUST PRESS THE KEY ON THE REAL SHELL.
 > Render `<AppShell/>`, assert the panel is **ABSENT** as a control, `fireEvent.keyDown`, assert it
 > appears. Then mutation-prove it by deleting the `SCREEN_ACTIONS` entry. The pattern is in
-> `TDSChallansScreen.test.tsx`'s `describe("a screen-owned key is actually ROUTED by the shell")`.
+> `TDSChallansScreen.test.tsx`'s `describe("a screen-owned key is actually ROUTED by the shell")`, and
+> `OrderRegisterScreen.test.tsx` takes it further: **every test in that file** drives the shell and
+> presses a real combo, because there is no other kind worth writing for a feature whose whole failure
+> mode was being unreachable. Deleting `createOrder`/`closeOrder` from `SCREEN_ACTIONS` fails 12 of
+> them **and nothing else in the repo** — that is the mutation proof, and it was run.
 
-### 7.3 ⛔ THE MOCK IS A REAL DELIVERABLE AND MUST REFUSE WHAT THE SERVER REFUSES
+### 7.3 Two things about the keymap that save ~120 lines a screen
+
+- **`voucherKeysHeldBack(screen, what)`** in `keymaps/tallyprime.ts` generates the twelve
+  voucher-key refusals a form-carrying screen needs. It exists because the block was ~120 lines of
+  near-identical prose per screen and **the fifth copy is where copies start to drift** — a paste that
+  keeps the previous screen's noun tells the operator the keys are held back on a screen they are not
+  on. `tds-challans` and `cost-centres` are still hand-written (they predate it) and that asymmetry is
+  documented at the helper; new screens use the helper.
+- ⚠️ **CHECK WHETHER THE KEY YOU WANT IS ALREADY BOUND TO `unavailable` WITH A STALE NOTE.** `Ctrl+F8`
+  and `Ctrl+F9` said "Order processing is not built yet" — they are Tally's real Sales/Purchase Order
+  keys (RESEARCH.md:400, :614, :616, :2145–2146). `buttons.test.ts`'s "features this build lacks" loop
+  is what forces the note to be corrected instead of rotting: its example has now been re-pointed
+  **twice** by features shipping (Alt+F7, then Ctrl+F8). Also correct `F10`'s note — it lists what the
+  "Other Vouchers" menu would contain.
+
+### 7.4 ⛔ THE MOCK IS A REAL DELIVERABLE AND MUST REFUSE WHAT THE SERVER REFUSES
+
+*(§9.4 names the two KINDS of mock-fidelity defect and the control that catches the second.)*
 
 `AppShell.test.tsx` renders with `createMockClient()`, so a lenient mock means a green suite on top of
 a create path that cannot work in a browser. That happened twice in one session — once for a missing
@@ -443,13 +550,27 @@ The false version is the plausible one and **will be re-invented**. Claims that 
   transaction, so a rollback gives the number back. It survived because it is what a Postgres SEQUENCE
   *would* do.
 - *"what the edit log SHOWS must be what the edit log SIGNS"* — true of postings and stock lines, **not**
-  of cost allocations (§4.7 item 7). Borrowing a true sentence into a place where it is false is the
+  of cost allocations (§4.6 item 6). Borrowing a true sentence into a place where it is false is the
   same defect as writing a false one.
 - *"cost_allocations is reachable from a client"* — true of Go, false of TypeScript, for a whole
   feature.
+- *"Order processing is not built, and not modelled at all rather than modelled wrong"* — the F11 note,
+  **false for a whole release** while the tables, both books and fourteen client methods shipped. It
+  read as a considered decision, which is what made it survive.
+- *"Order vouchers are not built"* — `F10`'s keymap note, and *"Order processing is not built yet"* —
+  `Ctrl+F8`/`Ctrl+F9`'s. All three were corrected by one assertion in `buttons.test.ts` that forces
+  the claim to be re-pointed when a feature ships.
+- *"NO SCREEN IN THIS BUILD ALLOCATES A POSTING"* — `CostCentresScreen.tsx`'s closing paragraph. **Still
+  true today**, and it becomes false the moment §4.4 ships. It is listed here so it is corrected in the
+  same change rather than discovered later.
 
 **And prefer a refusal that takes a company and a period over one that takes no arguments** — the
 latter can only make claims about the software, and those go stale silently.
+
+⚠️ **A TEST CAN CERTIFY A BUG, and mine did.** The order book's heading test asserted
+`As at ${book.as_on}` and passed on the empty string, so it locked in a heading reading "As at ·". A
+test written from the same misunderstanding as the code agrees with it. **The only thing that caught it
+was a screenshot.**
 
 ### 9.2 A test that CANNOT FAIL is worse than no test
 
@@ -468,7 +589,30 @@ A refusal that fires **for the wrong reason** reads as coverage and is not. Two 
 tripping a uniqueness constraint before ever reaching the invariant under test. Every refusal test in
 `fulfilment_db_test.go` and `orders_http_test.go` carries the control that proves what it refused.
 
-### 9.4 The all-zeros UUID parses, and `uuid.Nil` is everyone's sentinel
+**The newest example is worth copying because the control is the INVERSE of the assertion.** The
+round-trip test asserts that altering a narration leaves the order's fulfilment intact. On its own that
+is consistent with links being immune to an alter — in which case the test proves nothing. So it alters
+a second time with the links **deliberately omitted** and asserts the order DOES re-open. The control
+establishes that the behaviour the first half depends on is genuinely dangerous.
+
+### 9.4 ⛔ THE MOCK IS WHERE FIDELITY DEFECTS HIDE, AND THERE ARE TWO KINDS
+
+`api/orders.test.ts` exists because the mock disagreed with the server twice in one session. Two more
+were found this session, and the second kind is the one no type can catch:
+
+1. **A REFUSAL THE MOCK DID NOT MAKE.** The mock ignored `fulfilments` entirely — it did not reject
+   them, it **dropped them silently**, so a screen keyed a link, got a 201, and the order book never
+   moved. A developer driving the mock would conclude their own code was broken.
+2. **A SHAPE THE MOCK GOT WRONG.** `party` and `stock_item` returned **the id that was sent in**, where
+   the server LEFT JOINs the master and returns `COALESCE(name, '')`. Both fields are `string`, so
+   `tsc` is clean and every quantity assertion stays green **while the operator is shown a UUID**.
+
+**When you add a mock method, diff its refusals AND its shape against the handler**, not against the
+type you wish existed. And include the control the fix needs: an id that resolves to NOTHING must come
+back `""`, never as the id — a fallback to the id would put the UUID back on screen in exactly the case
+an operator can least explain, while making the happy-path assertion pass.
+
+### 9.5 The all-zeros UUID parses, and `uuid.Nil` is everyone's sentinel
 
 `uuid.Parse("00000000-...-0")` **succeeds**. Two handlers treated it as "absent", so an explicit
 all-zeros `parent_id` **lifted an existing child out of its hierarchy** (with a 200 and a truthful
@@ -477,7 +621,7 @@ read-back) and an all-zeros filter silently returned **every** row.
 **Any handler whose "absent" sentinel is `uuid.Nil` must refuse an explicit zero.** Grep for `uuid.Nil`
 comparisons after a `uuid.Parse`.
 
-### 9.5 Never claim a validation that was not performed
+### 9.6 Never claim a validation that was not performed
 
 Unreachable from here: the **FVU** (no JRE), the **GSTN portal**, the **NIC e-Way Bill API**, the
 **IRP**, the **EPFO/ESIC portals**, the **TIN `.csi`** file, and **CBIC's own rule repository** (TLS
@@ -485,7 +629,7 @@ chain verification failure, 2026-08-05). Ship the deterministic fake plus the re
 **say so on the artefact's face**. `internal/statutory/rule138.go` is the worked example of how:
 citation, grade, sources, caveat, all travelling with the value.
 
-### 9.6 Operational
+### 9.7 Operational
 
 - **A browser WRITE needs a passkey, and you CAN drive it. Do not disable step-up.** Any write answers
   403 `STEPUP_REQUIRED` — including from `curl` with a valid dev token. Attach a virtual authenticator
@@ -535,7 +679,7 @@ citation, grade, sources, caveat, all travelling with the value.
 | 5 | **EPF/EDLI administrative-charge rate notification**, if issued since 2026-07-30 | ~₹500/establishment/month accruing unbooked. **Do NOT substitute `S.O. 2701(E)`** — that is *inspection* charges, a different levy |
 | 6 | **The published text of CGST Rule 138 and 138(10)** into `docs/statutory/` | lets T5's threshold and validity table be **cited** rather than carried as secondary material. CBIC fails TLS verification from here |
 | 7 | **Is a cost report something a data-entry clerk should see?** 0072 says no, deliberately | a one-line ACL decision either way, and a business call rather than a technical one |
-| 8 | **Delete the twelve spent handoffs** (§11) | a handoff nobody can trust costs a session to re-verify |
+| 8 | **Delete the ELEVEN spent handoffs** (§11 — `ls HANDOFF-*.md` says eleven, and this row said twelve) | a handoff nobody can trust costs a session to re-verify |
 
 ---
 
@@ -563,27 +707,42 @@ the list above is exactly what to remove.
 
 - **`T6 Drive Co`** (`9466b85c-…`) — three TDS deductions, two challans, a deductor profile.
 - **`tally_freshproof`** — a scratch *database* predating all of this. Harmless; drop it.
-- The **demo company has no cost data, no TDS data and no orders**; none is seeded (§4.6).
+- ⚠️ **THE DEMO COMPANY NOW HAS T3 DATA, PUT THERE BY A BROWSER AND NOT BY THE SEED SCRIPT.** Measured
+  at `7e565a3` in `71fe4e15-…`: one sales order **`SO-BROWSER-1`** (20 MS Angle @ 500, 8 delivered, 12
+  outstanding), one BOM **`Standard`** (10 MS Angle yields 3 SS Sheet), one `order_fulfilment` link, and
+  a Receipt Note / Delivery Note pair that moved **+50 / −8 MS Angle** — so this residue IS IN CLOSING
+  STOCK, which feeds the Balance Sheet. `verify:demo` still passes **33/33** because its assertions are
+  differential rather than pinned constants; if you ever pin an absolute figure, this residue is baked
+  into it. **The honest fix is §4.5 (seed it properly), not deleting it** — a fresh database still has
+  none of this, which is the worst of both worlds for anyone reasoning from what is on screen.
+- The demo company still has **no cost data and no TDS data**; none is seeded (§4.5).
 
 ---
 
 ## 12. DEFINITION OF DONE — for whoever closes Tier 1
 
-1. **The T3 and T5 FeaturesScreen rows are `on`**, on **BROWSER evidence**, not a green suite. The T2
-   allocation row stops saying `server`.
-2. `make verify` exit 0 **and** `pnpm exec tsc --noEmit` clean (**different gates**).
-3. backend **≥2292 pass, 0 SKIP, 0 FAIL** (verbose census); frontend **≥614 / 47 files**;
-   `verify:demo` **33/33 run ALONE** with insightd up, re-pinned deliberately if a figure moves — and
-   **the change explained**.
+1. **The T5 FeaturesScreen row is `on`**, on **BROWSER evidence**, not a green suite. The T2 allocation
+   row stops saying `server`. (**T3 is DONE — see §1.1 for the keystroke-by-keystroke evidence.**)
+2. `make verify` exit 0 **and** `pnpm exec tsc --noEmit` clean (**different gates** — and `tsc` is the
+   one that caught a real error this session, see §7.2).
+3. backend **≥2293 pass, 0 SKIP, 0 FAIL** (verbose census); frontend **≥682 / 51 files**;
+   `verify:demo` **33/33 run ALONE** with insightd up **and the company id as an argument** (§2.1),
+   re-pinned deliberately if a figure moves — and **the change explained**.
 4. ⛔ **THE REACHABILITY CHECK, for every new feature: name the exact HTTP request that exercises it
    end to end, and assert it in a test that reads the result back out through the OUTERMOST surface,
    with no SQL in the fixture that reaches around the API.** T2 passed every other bar on this list
    while being unreachable from every client. **This item exists because nothing else on the list
    catches that.**
+4a. ⛔ **THE READ-BACK CHECK, and it is NEW because item 4 does not catch it.** For anything keyed on
+   `voucher_version_id`: assert that `GET /vouchers/{id}` returns it, and that an ALTER rebuilt from
+   that response preserves it — **with the control that an alter omitting it DESTROYS it** (§4.3, §9.3).
+   A feature can pass item 4 perfectly on the way in and silently delete data on the way out. T3 was
+   one commit from shipping exactly that, and it would have presented as a warehouse problem.
 5. Every new tenant table in `buildFixture` (`internal/platform/testdb/testdb_test.go`) or the teardown
    census fails **by name**.
-6. Every new screen carrying **all 13** registrations including `SCREEN_ACTIONS`, with a **real-shell
-   keypress test**.
+6. Every new screen carrying **all 14** registrations including `SCREEN_ACTIONS` and
+   `printTarget.ts`'s `REPORT_SLUGS` (§7.2), with a **real-shell keypress test** that is
+   **mutation-proved** against the `SCREEN_ACTIONS` entry.
 7. `PLAN-TALLY-PARITY.md` §2.5 updated for every consumed block, **and §6 of this file obeyed** for
    anything touching the ACL seeder.
 8. Every safety-critical invariant **mutation-proved**, and said so in the commit.
