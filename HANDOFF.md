@@ -65,7 +65,7 @@ them is statutorily mandatory, and they remain the cheapest real parity this pro
 > to the paisa — it never did before, on any path. **Two things came out of it that outrank most of
 > §5.3:** an ALTER was silently destroying bill references (§4.3's audit had cleared that table on
 > half a check), and **drilling into any non-Sales voucher from the Day Book re-classed it as a Sales
-> voucher (§4.8 — now ✅ FIXED at `7bfb165`, see §1.6).**
+> voucher (§4.8 — now ✅ FIXED at `7ca1a3f`, see §1.6).**
 
 > ### ⛔ AND SINCE THAT: §4.8 IS CLOSED AND TRACK B IS HALF-BUILT (§1.6, §1.7).
 > A drilled voucher now opens its OWN class, on browser evidence — Payment, Receipt and Contra were
@@ -320,7 +320,7 @@ authenticator over CDP (§9.7's recipe, **verified working a fourth time**):
    for every voucher-bearing drill, and `acceptVoucher` routes the PUT by that screen type. **Proved:
    drill a Payment, press `Ctrl+A`, and `alterSalesVoucher` is called** — not `alterPaymentVoucher`.
    NOT Track A's, and it is §5.1's third kind (a row reading `on` with a hole behind it) found exactly
-   the way §5.5 says to find them. **It became §4.8 and is now ✅ FIXED at `7bfb165` — see §1.6, which
+   the way §5.5 says to find them. **It became §4.8 and is now ✅ FIXED at `7ca1a3f` — see §1.6, which
    also records a second path (Page Up / Page Down) that this description missed.**
 3. **The settle pre-fill over-allocated every partial payment.** Choosing a bill filled its whole
    pending, so a 5,000 receipt against an 11,800 invoice greeted the operator with a refusal about
@@ -342,7 +342,7 @@ GST form's HSN field was left blank) and took `verify:demo` to 32/33 on the GSTR
 gate**, which is a brittleness in the check rather than a product defect — but it will catch the next
 person the same way.
 
-### 1.6 ✅ §4.8 IS CLOSED — a drilled voucher keeps its own class. Closed at `7bfb165`.
+### 1.6 ✅ §4.8 IS CLOSED — a drilled voucher keeps its own class. Closed at `7ca1a3f`.
 
 Driven in a real browser against real `cored` with a virtual WebAuthn authenticator over CDP
 (§9.7's recipe, **verified working a fifth time**):
@@ -785,7 +785,7 @@ changed the size of this job twice, and the second time was after it had suppose
 skipped — **and it has just been shown to have cleared a table that was losing data**, so its
 question is corrected and four tables need re-checking.
 
-✅ **§4.8 IS CLOSED at `7bfb165`** (drilling into a non-Sales voucher used to re-class it on save).
+✅ **§4.8 IS CLOSED at `7ca1a3f`** (drilling into a non-Sales voucher used to re-class it on save).
 It was recommended here as a warm-up before Track B and it worked as one — small, proved, and it
 unblocked the hydration test §1.5 could not write. **§1.6 records what it actually cost: three
 findings beyond its own description, one of them a dead end the fix itself created.**
@@ -971,7 +971,7 @@ re-read immediately before each edit.
 | 12 | An e-way bill cannot be raised against a DELIVERY NOTE | §4.2. Real, ordinary, and NIC supports it (docType `CHL`). Needs a decided rule for deriving the consignment value from the movement; `ErrNoTaxLines` refuses by name rather than guessing at a figure the threshold test depends on |
 | 10 | No tracking numbers | RESEARCH.md:622 — Tally stitches Delivery Note ↔ Sales invoice with a **Tracking No.**, and creates "bill pending" entries when goods and bill arrive separately. T3 links a voucher to an ORDER but not to another VOUCHER. The order register states this gap |
 
-### 4.8 ✅ FIXED at `7bfb165` — DRILLING INTO A NON-SALES VOUCHER USED TO RE-CLASS IT
+### 4.8 ✅ FIXED at `7ca1a3f` — DRILLING INTO A NON-SALES VOUCHER USED TO RE-CLASS IT
 
 > **⛔ THE WORK IS DONE. §1.6 records what shipped, the browser evidence, and the THREE things this
 > section did not name — including a dead end the fix itself created.** The description below is kept
@@ -1165,7 +1165,7 @@ session's memory is an audit that will be run again from scratch.
 | 2026-08-06 | **F8 GST sale to a bill-by-bill party → Outstandings → Balance Sheet** | ✅ after the fix. Bill-wise references now raise, settle and reconcile to the paisa (§1.5). Before the fix this row read `on` and **no browser-keyed receivable had ever reached Outstandings** |
 | 2026-08-06 | **F6 Receipt settling an open bill** | ✅ after the fix. The picker lists real open bills with ageing |
 | 2026-08-06 | **ALTER of a voucher carrying a bill reference** | ⛔ **WAS DESTROYING DATA** — fixed (§1.5 finding 1). §4.3's audit had cleared this table on half a check |
-| 2026-08-06 | **Day Book drill → any non-Sales voucher** | ⛔⛔ **WAS RE-CLASSING THE DOCUMENT** — ✅ fixed at `7bfb165` (§4.8, §1.6). Opened a Sales frame; saving called `alterSalesVoucher`. The Day Book was on the known-good list because it had only ever been driven with a Sales voucher |
+| 2026-08-06 | **Day Book drill → any non-Sales voucher** | ⛔⛔ **WAS RE-CLASSING THE DOCUMENT** — ✅ fixed at `7ca1a3f` (§4.8, §1.6). Opened a Sales frame; saving called `alterSalesVoucher`. The Day Book was on the known-good list because it had only ever been driven with a Sales voucher |
 | 2026-08-06 | **Day Book drill → Payment / Receipt / Contra, then `Ctrl+A`** | ✅ after the fix, on browser evidence against real cored. Every `voucher_version` v2 row is an `ALTER` of its OWN class; the heading AND the chrome title follow the document; the single-entry form renders with editable particulars |
 | 2026-08-06 | **Page Up / Page Down across a mixed-class Day Book** | ⛔ **TWO defects.** It re-classed the voucher (same root cause, no drill involved) AND — after the fix — **dead-ended on a stock class** because `StockVoucherScreen` registered no paging. Both fixed; §1.6 finding 3 |
 | 2026-08-06 | **ALTER of any voucher: the Account / Party field** | ⚠️ **BLANK, pre-existing, NOT fixed.** Hydration fills the postings, amounts and bill references but not this field (`SelectionList` has no `value` prop). It does not corrupt — the posting is resolved by name and was browser-proved correct — but it reads as data loss. §1.6's closing box |
@@ -1490,7 +1490,7 @@ than scattered through §1.5 because the next track will hit the same shapes.*
 | 9 | **A durable workflow memoized a step that should never have been memoized.** A failed first IRN attempt poisons the voucher permanently, and retrying with correct data resumes from the bad memo (§1.4 B.1) | **In a memoized pipeline, separate "memoize because re-running is DANGEROUS" from "memoize because it is expensive."** Only the first earns it |
 | 10 | **My own browser verification broke a gate.** The keyed sale carried no HSN and took `verify:demo` to 32/33 | **Run the live gate BEFORE handing over, and remove the residue** (§12 item 10). T5 set this practice; it paid again |
 
-#### The five the §4.8 / IRN session added (2026-08-06, `7bfb165`..`cacf8fc`)
+#### The five the §4.8 / IRN session added (2026-08-06, `7ca1a3f`..`cacf8fc`)
 
 | # | What happened | The rule it yields |
 |---|---|---|
