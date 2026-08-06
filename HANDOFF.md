@@ -4,21 +4,26 @@
 > files that preceded it (§11 lists them; `ls` confirms eleven). **Every other `HANDOFF-*.md` in this
 > repository is SPENT** — see §11 for the list and for the one thing to do about them.
 >
-> ## ⛔⛔ COLD START? READ §1, RUN §2, THEN DO §1.4 B — WHICH IS NOW SMALLER THAN IT WAS.
+> ## ⛔⛔ COLD START? READ §1, RUN §2, THEN DO §1.8 — THE DOUBLE-ENTRY POSTING GRID.
 >
-> **§1.4 B is still the plan: the e-Invoice / IRN screen. But two of its four pieces are DONE**, and
-> they were the two that could brick a voucher and waste an hour respectively:
+> **§1.8 is the next session's plan and it is NOT the IRN screen.** The ordering changed on a fact
+> measured on 2026-08-06, and §1.8 states the case both ways so it can be argued with. In one line:
+> **a Journal cannot be keyed at all, on a row that reads `on`, and that blocks every business's
+> period end — while the IRN screen would ship a screen over a FAKE IRN, because nobody has IRP
+> credentials (§10 item 4).**
+>
+> **§1.4 B (the IRN track) is now HALF DONE and is the track AFTER this one.** Two of its four pieces
+> shipped at `cacf8fc`:
 >
 > | B.4 item | State |
 > |---|---|
 > | A fix for the poisoned-workflow defect (B.1 item 2) | ✅ **DONE at `cacf8fc`** — and B.5 items 1 AND 2 are proved over real HTTP |
 > | `make run-statutoryd` | ✅ **DONE at `cacf8fc`** — it mints its own token; run it and read the log |
-> | **The cored proxy route + the line-item builder** (B.1 item 1) | ⛔ **NOT STARTED — this is the next thing to write** |
-> | **The client: types, methods, screen, 15 registrations** | ⛔ **NOT STARTED, and it is the bigger half** |
+> | The cored proxy route + the line-item builder (B.1 item 1) | ⛔ NOT STARTED |
+> | The client: types, methods, screen, 15 registrations | ⛔ NOT STARTED, and it is the bigger half |
 >
-> **So the remaining track is: one cored route, one line-item builder, and a screen.** §1.4 B.4 is the
-> work list and it is now accurate. The architecture decision (B.2) is settled and unchanged: **cored
-> PROXIES**, because cored is the only party that can build the line items at all.
+> The architecture decision (B.2) is settled and unchanged: **cored PROXIES**, because cored is the
+> only party that can build the line items at all.
 >
 > ⚠️ **AND READ §9.1a — the mishaps table, now fifteen rows.** None is specific to any one track; most
 > are about how this file's own claims and this repo's own audits go wrong.
@@ -57,8 +62,9 @@ check is a guess.
 | T7 Features screen | — | ✅ done |
 
 **So Tier 1 is closed and §5 is now the whole map.** ⛔ **The concrete plan for what to do next is
-§1.4** — read it after §2. In one line: three finished engines still have no screen (§5.2), one of
-them is statutorily mandatory, and they remain the cheapest real parity this product can buy.
+§1.8** — read it after §2. In one line: **a Journal cannot be keyed at all on a row that reads `on`**,
+and closing that buys a real accountant real work on day one, where the three screenless engines
+(§5.2) buy either a fake artefact or a screen nobody has asked for yet.
 
 > ### ⛔ SINCE THEN: BILL-WISE REFERENCES SHIPPED (§1.5), AND THE BROWSER FOUND A NEW DEFECT.
 > Money keyed in a browser now reaches the Outstandings report and reconciles with the Balance Sheet
@@ -449,7 +455,94 @@ not answering. **Re-run it whenever you restart cored.**
   did not happen". **Use the `postgres` superuser for DB oracles.** This nearly cost a false
   "the browser did not save it" conclusion.
 
-### B. ⛔⛔ THE REMAINING TRACK — THE e-INVOICE / IRN SCREEN
+### 1.7a ⛔ WHAT THIS SESSION LEFT UNDONE — the complete list, so nothing is rediscovered
+
+*Everything below is deliberate and stated, not forgotten. Nothing here is a broken gate: the tree was
+handed over green (§2.1's table is re-measured), with no residue and no stray processes.*
+
+| # | Left undone | Why, and what it costs |
+|---|---|---|
+| 1 | ⚠️ **The party / Account field is BLANK on every hydrated alteration** | Found by driving the app; PRE-EXISTING (it does it on Sales too, so it is not §4.8's). **It does not corrupt** — the posting is resolved by name and was browser-proved correct — but it reads as data loss. The fix is a `value` prop on `SelectionList`. **§1.8 item 4 folds it into the next track**, because it is the same file and minutes of work |
+| 2 | ⛔ **`handleEInvoice` has NO test.** `cmd/statutoryd/main_test.go` covers only `newStepStore` | So statutoryd's HTTP surface — the identity overlay, and the `IsPermanent`→422 / transient→503 mapping — is proved only by the hand-drive recorded in §1.7. The WORKFLOW beneath it is thoroughly tested against the durable store. ⚠️ **Write this test when you build the cored proxy route**, because the proxy is the thing that will depend on those status codes |
+| 3 | ⛔ **§4.3's read-back audit is still unrun for four tables** | `posting_cost_allocation`, `order_fulfilment`, `posting` and `stock_movement` were cleared on the WRONG question ("does `voucherFullJSON` emit it?"). The right one is "does a form REBUILT FROM THAT RESPONSE send it back?" — and `bill_allocation` was cleared on the wrong question while actively losing data. **This is the oldest unfinished data-loss work on the board** |
+| 4 | **§5.5's audit is still unrun as a whole** | 30 rows read `on`; two have been caught with a hole behind them and **neither by looking**. §1.8's last section starts it opportunistically rather than leaving it for a session that never comes |
+| 5 | **The IRN track's remaining two pieces** | The cored proxy route + line-item builder, and the client/screen. §1.4 B.4 is the accurate work list; B.2's re-entrancy rule is the one design risk |
+| 6 | **§4.6 — nothing seeds T2/T3/T5 data** | Unchanged this session, and it keeps getting worse: the dev database now has cost, order and stock residue that the seed script does not create, so four screens render empty against a FRESH demo company. §11's residue list is the evidence |
+
+⚠️ **AND ONE THING THAT WAS DELIBERATELY NOT DONE, so nobody "fixes" it:** the `build`/`validate` rows
+left in `statutory_step` by workflows poisoned before `cacf8fc` are **inert on purpose** — no step by
+either name is ever looked up again. They need no migration and no cleanup, and writing one would be
+work with no effect.
+
+### 1.8 ⛔⛔ START HERE — THE NEXT SESSION'S PLAN: THE DOUBLE-ENTRY POSTING GRID (§4.5)
+
+**Run §2 first. Then this. It is ONE screen, no new deployable, no service token, no proxy, and no
+re-entrancy hazard — and when it ships, a real accountant can immediately do real work.**
+
+#### Why this and not the IRN screen, which this file ranked #1 for two sessions
+
+§5.3's ordering criterion is *"how much of a real business's day is blocked"*, and on that criterion
+the Journal wins on three counts. The case is laid out here rather than asserted, because §5.3's
+ordering was written **before either fact below was measured**.
+
+| | **Journal grid (§4.5)** | **IRN screen (§1.4 B)** |
+|---|---|---|
+| Who is blocked | ⛔ **Every business, at every period end.** Adjustments, provisions, depreciation, reclasses, opening entries, corrections | Only businesses above the e-invoicing turnover threshold |
+| What shipping it buys **today** | ⛔ **Real accounting an accountant can do on day one** | ⚠️ **A screen over a FAKE IRN.** `FakeProvider` mints it; nobody has IRP credentials (§10 item 4). Correct, honest groundwork — and not usable for a real filing |
+| Honesty of the current row | ⛔⛔ **The row reads `on` AND CANNOT BE USED.** §5.1's hidden kind — worse than an honest `off`, because an evaluator hits it in week one and concludes the product is BROKEN rather than incomplete | Reads `server`, which is accurate and admits the gap |
+| Size | One form + one build path. No second process | A cored route with a line-item builder, a re-entrancy rule to obey, plus 15 registrations and 3 client files |
+
+> ⛔ **THE MEASUREMENT THAT DECIDED IT, taken 2026-08-06 by driving the shell (not by reading).** The
+> F7 Journal form renders **exactly one input — "Dr/Cr Ledger"**. No amount field. No second line. No
+> Dr/Cr side selector. §4.5's wording ("a Journal cannot be keyed at all") is not rhetoric; it is
+> literal, and it is a stronger fact than this file had when it ranked the IRN first.
+>
+> ⚠️ **The counter-argument, stated fairly:** the IRN is *statutorily mandatory* and the Journal is
+> not, and the IRN is half-built so its remaining cost is lower than its full cost. Both are true. The
+> reason they lose is the second row of the table: **mandatory-but-fake does not let anyone file
+> anything**, so the IRN screen's real value arrives with §10 item 4's credentials, not with the
+> screen. If a human supplies IRP sandbox credentials, **re-order immediately** — that changes the
+> second row and the IRN becomes the right next track.
+
+#### What to build
+
+`§4.5` is the spec and it is good; read it. The essentials, plus what this session learned:
+
+1. **A grid of Dr/Cr lines**: ledger, side, amount, per row. It must refuse an unbalanced body **in
+   the form** — a 422 from the server does not survive the round trip in a shape the operator can act
+   on. ⚠️ **The single-entry panel is NOT the model to copy**: it infers the primary leg and puts the
+   SUM on it, which is the opposite of what a Journal states.
+2. **`buildCostAllocations(rows, 0)`** — 0-based, NO offset, because the grid's rows map one-for-one
+   from index 0. That parameter exists for exactly this second call site (§1.2 explains why it has no
+   default: with the wrong offset the allocations attach to the wrong leg on a voucher that balances
+   perfectly and a Cost Centre Summary that foots).
+3. **Correct the F11 row in the same change** (§9.1). Do NOT flip it to `off` — five of the six
+   double-entry classes are genuinely reachable. Say which one was not.
+4. ⚠️ **The party field is BLANK on every alteration** (§1.6's closing box) — pre-existing, on Sales
+   too, and the fix is a `value` prop on `SelectionList`. **Do it here**: it is the same file, it is
+   minutes, and a hydrated Journal with a blank field is the same "reads as data loss" problem.
+
+#### The acceptance test, stated up front
+
+§12 item 1 will not accept less: **key a real Journal in a browser against real `cored` with the
+virtual authenticator (§9.7's recipe, which has now worked five times), and read the postings back out
+of the database.** Then:
+
+- ⛔ **the CONTROL: an unbalanced grid must be refused BY THE FORM**, before any request is made;
+- **drill it from the Day Book and alter it** — §4.8's fix means a Journal now opens a Journal frame,
+  so this path is reachable for the first time and is exactly where a new form's hydration breaks;
+- **allocate one line to a cost centre** and reconcile the Cost Centre Summary, which is the thing
+  `buildCostAllocations(rows, 0)` exists for.
+
+#### ⚠️ AND WHILE THE BROWSER IS OPEN, RUN PART OF §5.5's AUDIT — IT IS NEARLY FREE
+
+**Two of two hidden rows were found by accident, never by looking** (§5.1). You will already have a
+signed-in browser with a working authenticator; drive the neighbouring `on` rows — Credit Note, Debit
+Note, and the Alt+F7/F8/F9/F10 stock vouchers — end to end and **write the result in §5.5's log**.
+§9.1a item 7 is the rule that makes this pay: *when a screen is parameterised by TYPE, drive more than
+one type.* That is precisely how §4.8 was found, and how it would have been found two sessions earlier.
+
+### B. ⛔ THE TRACK AFTER THIS ONE — THE e-INVOICE / IRN SCREEN
 
 §5.2. **Statutorily MANDATORY in India above a turnover threshold**, and the highest-value row left:
 an accountant who cannot raise an e-invoice cannot use this product as their books at all.
@@ -779,7 +872,8 @@ changed the size of this job twice, and the second time was after it had suppose
 ## 4. ⛔⛔ THE WORK, IN ORDER. THIS IS THE PART YOU ACT ON.
 
 **Tier 1 is CLOSED (§1).** What is left here is a defect audit and the loose ends around it.
-⛔ **The next TRACK comes from §5, not from this section** — and §1.4 B is the plan for it.
+⛔ **The next TRACK comes from §5, not from this section** — and **§1.8 is the plan for it: §4.5's
+double-entry posting grid**, which is the one item in this section that IS the next track.
 
 ⚠️ **THE ORDER IS NOT ARBITRARY.** §4.3 is a data-loss audit: cheap, and unbounded in cost if
 skipped — **and it has just been shown to have cleared a table that was losing data**, so its
@@ -918,7 +1012,14 @@ voucher form:
   postings are generated inside the server's transaction and index 0 is the party leg.
   That is a decision, not a gap; the screen says so.
 
-### 4.5 ⛔ ITEM 2 — A DOUBLE-ENTRY POSTING GRID, SO A JOURNAL CAN BE KEYED AT ALL
+### 4.5 ⛔⛔ THIS IS THE NEXT TRACK — A DOUBLE-ENTRY POSTING GRID, SO A JOURNAL CAN BE KEYED AT ALL
+
+> **§1.8 is the plan; this section is the diagnosis and it is accurate.** It was §5.3 item 2 for two
+> sessions and is now item 1 — the swap is argued in §1.8.
+>
+> ⛔ **CONFIRMED BY DRIVING THE SHELL, 2026-08-06:** F7 renders **exactly one input, "Dr/Cr Ledger"**.
+> No amount field, no second line, no Dr/Cr side selector. The analysis below predicted this from the
+> code; measuring it turned "cannot produce a voucher" from an inference into an observation.
 
 **F7 opens a form that cannot produce a voucher.** `journal` is `entry: "double"` and
 VoucherScreen's `double` branch renders no posting grid — after Date / No. / Party /
@@ -1078,16 +1179,24 @@ project has now shipped four times and which §4.1 exists to stop.
 
 ### 5.3 THE ORDERED LIST, WITH REASONS
 
-1. **The e-Invoice / IRN screen** — §5.2, and **§1.4 B has the concrete plan, now with a verified
-   end-to-end recipe rather than an open question**. **Statutorily MANDATORY**, and the highest-value
-   item on this list. ⚠️ It still does NOT inherit a finished path from T5 (the IRN core is not pure,
-   so the workflow stays in statutoryd) — but the browser-to-statutoryd question is now effectively
-   settled by §1.4 B.1: only cored can build the line items, so the proxy is right. **Two defects
-   found by driving it must be handled as part of the track**, not discovered again.
-2. **A double-entry posting grid** — §4.5. A Journal cannot be keyed AT ALL. This is accounting parity,
-   not a feature: it is how every adjustment, provision, depreciation and reclass is entered. ⚠️ It is
-   also the only known HIDDEN row (§5.1), so it is the one gap whose size is proven rather than
-   guessed.
+> ⛔ **ITEMS 1 AND 2 SWAPPED ON 2026-08-06, and the swap is argued in full in §1.8.** In one line: the
+> Journal blocks EVERY business at every period end and reads `on` while being unusable, whereas the
+> IRN screen would ship over a **FAKE** IRN until someone supplies IRP credentials (§10 item 4). ⚠️ **If
+> those credentials arrive, swap them back** — that is the single fact the ordering turns on.
+
+1. **A double-entry posting grid** — §4.5, planned in §1.8. **A Journal cannot be keyed AT ALL**: driving
+   F7 in a browser on 2026-08-06 found **exactly one input, "Dr/Cr Ledger"** — no amount field, no second
+   line, no side selector. This is accounting parity, not a feature: it is how every adjustment,
+   provision, depreciation and reclass is entered. ⚠️ It is also a HIDDEN row (§5.1) — it reads `on` —
+   so it is the one gap whose size is **measured** rather than guessed, and the one an evaluator hits in
+   week one and reads as "broken" rather than "incomplete".
+2. **The e-Invoice / IRN screen** — §5.2, and **§1.4 B is the plan, now HALF BUILT** (`cacf8fc`: the
+   poisoned-workflow fix and `make run-statutoryd`, with B.5 items 1 and 2 proved over real HTTP).
+   **Statutorily MANDATORY** above a turnover threshold. ⚠️ It does NOT inherit a finished path from T5
+   (the IRN core is not pure, so the workflow stays in statutoryd) — but the browser-to-statutoryd
+   question is settled by §1.4 B.1: only cored can build the line items, so the proxy is right.
+   ⚠️ **What it ships until §10 item 4 lands is a screen over `FakeProvider`'s IRN** — honest, correct
+   groundwork, and not a filing.
 3. ✅ **`bill_allocation` on every voucher path — DONE 2026-08-06** (§1.5). It was billed here as
    "the cheapest thing on this list, needs no architectural decision" and **it was neither**: it
    needed a server change (the voucher number is minted inside the post transaction, so a browser
