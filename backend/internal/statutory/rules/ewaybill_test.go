@@ -1,4 +1,4 @@
-package statutory
+package rules
 
 // ewaybill_test.go — T5's rules, its payload, and above all ITS HONESTY.
 //

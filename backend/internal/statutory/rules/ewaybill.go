@@ -1,4 +1,4 @@
-package statutory
+package rules
 
 // ewaybill.go — THE e-WAY BILL (T5), beside einvoice.go and reusing its shape.
 //
@@ -39,11 +39,50 @@ package statutory
 // ===========================================================================
 // WHY THE PACKAGE IMPORTS NOTHING
 // ===========================================================================
-// internal/archtest pins internal/statutory to the EMPTY allowed-import set: it
-// may import no sibling at all. It is a separate deployable (statutoryd) that
-// talks to cored only over HTTP. So the voucher facts arrive as a snapshot the
-// caller assembles — the same contract BuildEInvoice takes — and nothing here
-// reads a database, a ledger or a report.
+// internal/archtest pins internal/statutory/rules to the EMPTY allowed-import
+// set, exactly as it pins its parent: it may import no sibling at all. So the
+// voucher facts arrive as a snapshot the caller assembles — the same contract
+// BuildEInvoice takes — and nothing here reads a database, a ledger or a report.
+//
+// ===========================================================================
+// ⛔⛔ WHY THIS IS A SEPARATE PACKAGE FROM internal/statutory — READ BEFORE
+// MOVING ANYTHING BACK UP
+// ===========================================================================
+// These files used to live in internal/statutory alongside the IRN e-invoice
+// workflow. They were split DOWN into this leaf so that internal/server (cored)
+// may import them, because T5 needs a browser to be able to raise an e-way bill
+// and cored is the only plane a browser can safely reach.
+//
+// The obvious objection is that internal/statutory is a separate deployable ON
+// PURPOSE and this looks like eroding that. It is not, and the distinction is
+// the whole reason the line falls here:
+//
+//	statutoryd exists because the IRN workflow wraps an EXACTLY-ONCE external
+//	IRP call in a durable, resumable, memoized workflow (runner.go, StepStore,
+//	PGStore, the cored freeze hook). A crash between "generate" and "freeze"
+//	would mint a SECOND IRN against a real government API. That is a genuine
+//	reason for a separate plane with its own durable state.
+//
+//	⛔ NONE OF THAT IS TRUE OF THE e-WAY BILL CORE. Assess, BuildEWayBill,
+//	ValidateEWayBill, EWayBillDisclosures and even
+//	FakeEWayBillProvider.GenerateEWayBill take no context.Context, return no
+//	error, and touch no clock, no socket and no store. They are PURE FUNCTIONS
+//	over a snapshot the caller assembles.
+//
+// So routing them through statutoryd would have put four pure function calls
+// behind a second process, a service token and an HTTP hop — and, far worse,
+// OUTSIDE cored's PDP, RLS, step-up and company scoping, none of which
+// statutoryd has. That is inheriting the e-invoice architecture's costs without
+// its reason. The split does not weaken the boundary; it names which part of
+// internal/statutory was ever plane-specific.
+//
+// ⚠️ WHAT THIS DOES *NOT* DO, because the handoff claimed otherwise and the
+// claim is worth correcting where someone will read it: it does NOT by itself
+// unblock the e-invoice/IRN screen. The IRN genuinely needs the durable
+// workflow, so a browser triggering one still needs cored to PROXY to
+// statutoryd (or the browser to reach statutoryd directly, with all the authz
+// consequences above). What that screen inherits from here is the shared
+// snapshot vocabulary in a package cored can name — not a finished path.
 
 import (
 	"fmt"
@@ -339,7 +378,7 @@ func BuildEWayBill(c ConsignmentSnapshot) EWayBillPayload {
 			HSNCode:       ln.HSN,
 			Quantity:      ln.Qty,
 			QtyUnit:       ln.Unit,
-			TaxableAmount: fixed2(ln.Taxable),
+			TaxableAmount: Fixed2(ln.Taxable),
 			// The RATE, not the amount, which is what the e-way bill schema takes
 			// where the e-invoice takes both. Split evenly across CGST/SGST for an
 			// intra-State movement and carried whole on IGST otherwise — decided by
@@ -374,11 +413,11 @@ func BuildEWayBill(c ConsignmentSnapshot) EWayBillPayload {
 
 		ItemList: items,
 
-		TotalValue:  fixed2(inv.Taxable),
-		CgstValue:   fixed2(inv.CGST),
-		SgstValue:   fixed2(inv.SGST),
-		IgstValue:   fixed2(inv.IGST),
-		TotInvValue: fixed2(inv.InvoiceTotal),
+		TotalValue:  Fixed2(inv.Taxable),
+		CgstValue:   Fixed2(inv.CGST),
+		SgstValue:   Fixed2(inv.SGST),
+		IgstValue:   Fixed2(inv.IGST),
+		TotInvValue: Fixed2(inv.InvoiceTotal),
 
 		TransporterID:   c.TransporterID,
 		TransporterName: c.TransporterName,

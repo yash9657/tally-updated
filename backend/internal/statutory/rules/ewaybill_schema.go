@@ -1,4 +1,4 @@
-package statutory
+package rules
 
 // ewaybill_schema.go — the recorded NIC e-way bill schema subset and its
 // validator, in the same shape as schema.go's for the e-invoice.
@@ -23,6 +23,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/shopspring/decimal"
 )
 
 //go:embed nic_ewaybill_schema.json
@@ -314,6 +316,46 @@ func (f FakeEWayBillProvider) GenerateEWayBill(p EWayBillPayload, a Assessment) 
 		Provider:       f.Name(),
 		Disclosures:    EWayBillDisclosures(a, f.Name()),
 	}
+}
+
+// check2dp returns a violation message if s is not exactly the number of decimal
+// places THIS document's recorded schema requires. Empty fields are skipped here
+// (handled elsewhere).
+//
+// ⛔⛔ IT READS loadedEWaySchema, AND THAT IS A BUG FIX, NOT A COPY.
+//
+// Until the T5 split this validator called the e-invoice's check2dp in
+// schema.go, which reads the E-INVOICE schema's decimal_places. So
+// ValidateEWayBill was enforcing a figure recorded in nic_einvoice_schema.json
+// against a payload governed by nic_ewaybill_schema.json. Both files currently
+// say 2, so the defect was LATENT and no test could see it — it would have gone
+// live the moment either schema's figure was corrected on its own, and the
+// symptom would have been an e-way bill validator silently enforcing an
+// e-invoice rule.
+//
+// This is the same discipline rule138.go states for the statutory figures — one
+// figure, one home — applied across two DOCUMENTS rather than two call sites.
+// Two recorded schemas are two sources of truth by design; sharing a validator
+// between them quietly made one of them authoritative for the other.
+//
+// ⚠️ THE STRUCTURAL FIX IS THE PACKAGE BOUNDARY, NOT THIS FUNCTION. This package
+// cannot import internal/statutory, so it can no longer reach the e-invoice
+// schema at all — the defect is now unrepresentable rather than merely fixed.
+// That is worth more than the test it would otherwise need, because a test
+// asserting "2 == 2" would pass either way.
+func check2dp(field, s string) string {
+	if s == "" {
+		return ""
+	}
+	d, err := decimal.NewFromString(s)
+	if err != nil {
+		return field + ": not a valid decimal"
+	}
+	if d.StringFixed(int32(loadedEWaySchema.DecimalPlaces)) != s {
+		return fmt.Sprintf("%s: must have exactly %d decimal places (got %q)",
+			field, loadedEWaySchema.DecimalPlaces, s)
+	}
+	return ""
 }
 
 func nonEmpty(s, fallback string) string {

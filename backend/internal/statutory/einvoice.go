@@ -1,61 +1,31 @@
 package statutory
 
-import "github.com/shopspring/decimal"
+import (
+	"github.com/shopspring/decimal"
 
-// VoucherSnapshot is the input to BuildEInvoice: the amount fields come from
-// cored's voucher GET (fixed-4 strings, re-formatted to fixed-2 here), while the
-// seller/buyer identity is supplied by the trigger/caller (cored's ledger does
-// not carry GSTINs/legal names). InvoiceTotal may be supplied or derived.
-type VoucherSnapshot struct {
-	VoucherNo   string
-	VoucherDate string
+	"github.com/khata/cored/internal/statutory/rules"
+)
 
-	SellerGstin     string
-	SellerLegalName string
-	SellerStateCode string
-
-	BuyerGstin     string
-	BuyerLegalName string
-	BuyerStateCode string
-
-	Lines []SnapshotLine
-
-	Taxable      string
-	CGST         string
-	SGST         string
-	IGST         string
-	InvoiceTotal string
-}
-
-// SnapshotLine is one invoice line. Amounts are strings (any precision in, 2dp
-// out of BuildEInvoice).
-type SnapshotLine struct {
-	Desc       string
-	HSN        string
-	Qty        string
-	Unit       string
-	UnitPrice  string
-	Taxable    string
-	GstRatePct string
-	CGST       string
-	SGST       string
-	IGST       string
-	LineTotal  string
-}
-
-// fixed2 re-formats a decimal string to exactly two decimal places. A blank or
-// unparseable input yields "0.00" so the payload is always well-formed; the
-// validator independently rejects genuinely malformed inputs upstream.
-func fixed2(s string) string {
-	if s == "" {
-		return "0.00"
-	}
-	d, err := decimal.NewFromString(s)
-	if err != nil {
-		return s
-	}
-	return d.StringFixed(2)
-}
+// The voucher-fact vocabulary lives ONE package down, in internal/statutory/rules,
+// and is re-exported here BY ALIAS so this package's API — and therefore
+// cmd/statutoryd and the CoredClient interface — is unchanged by the split.
+//
+// ⛔ THESE ARE ALIASES (`=`), NOT NEW DEFINED TYPES. A defined type would be a
+// SECOND type with the same fields: rules.BuildEWayBill would refuse a
+// statutory.VoucherSnapshot, and the compiler would push whoever hit that into
+// writing a converter — which is a copy, which drifts. An alias is the same type
+// under two names, so a snapshot assembled anywhere satisfies both builders.
+//
+// Why the vocabulary moved down rather than the rules moving up: see the split
+// note at the top of rules/ewaybill.go. In one line — the e-way bill core is
+// PURE (no ctx, no error, no clock, no socket, no store), so it never needed the
+// separate deployable that the exactly-once IRN workflow genuinely does need.
+type (
+	// VoucherSnapshot is the input to BuildEInvoice. See rules.VoucherSnapshot.
+	VoucherSnapshot = rules.VoucherSnapshot
+	// SnapshotLine is one invoice line. See rules.SnapshotLine.
+	SnapshotLine = rules.SnapshotLine
+)
 
 // BuildEInvoice converts a VoucherSnapshot into an NIC EInvoicePayload. It is a
 // PURE function (no I/O). Supply type is inferred from intra/inter-state (seller
@@ -70,14 +40,14 @@ func BuildEInvoice(s VoucherSnapshot) EInvoicePayload {
 			HsnCd:      ln.HSN,
 			Qty:        ln.Qty,
 			Unit:       ln.Unit,
-			UnitPrice:  fixed2(ln.UnitPrice),
-			TotAmt:     fixed2(ln.Taxable),
-			AssAmt:     fixed2(ln.Taxable),
+			UnitPrice:  rules.Fixed2(ln.UnitPrice),
+			TotAmt:     rules.Fixed2(ln.Taxable),
+			AssAmt:     rules.Fixed2(ln.Taxable),
 			GstRt:      ln.GstRatePct,
-			IgstAmt:    fixed2(ln.IGST),
-			CgstAmt:    fixed2(ln.CGST),
-			SgstAmt:    fixed2(ln.SGST),
-			TotItemVal: fixed2(ln.LineTotal),
+			IgstAmt:    rules.Fixed2(ln.IGST),
+			CgstAmt:    rules.Fixed2(ln.CGST),
+			SgstAmt:    rules.Fixed2(ln.SGST),
+			TotItemVal: rules.Fixed2(ln.LineTotal),
 		})
 	}
 
@@ -112,11 +82,11 @@ func BuildEInvoice(s VoucherSnapshot) EInvoicePayload {
 		},
 		ItemList: items,
 		ValDtls: ValDtls{
-			AssVal:    fixed2(s.Taxable),
-			CgstVal:   fixed2(s.CGST),
-			SgstVal:   fixed2(s.SGST),
-			IgstVal:   fixed2(s.IGST),
-			TotInvVal: fixed2(total),
+			AssVal:    rules.Fixed2(s.Taxable),
+			CgstVal:   rules.Fixed2(s.CGST),
+			SgstVal:   rules.Fixed2(s.SGST),
+			IgstVal:   rules.Fixed2(s.IGST),
+			TotInvVal: rules.Fixed2(total),
 		},
 	}
 }

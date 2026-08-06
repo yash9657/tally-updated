@@ -195,8 +195,37 @@ var allowedDeps = map[string]map[string]bool{
 	"internal/sync": {"internal/ledger": true, "internal/platform/db": true},
 	// statutoryd is a separate deployable plane: it generates IRN e-invoices and
 	// talks to cored ONLY over HTTP (the freeze-hook contract). It must NOT import
-	// any sibling internal package — the empty map forbids all of them.
-	"internal/statutory": {},
+	// any sibling internal package — the one entry below is its OWN pure leaf and
+	// nothing else.
+	//
+	// The single allowed edge is to statutory/rules, which holds the voucher-fact
+	// vocabulary (VoucherSnapshot/SnapshotLine/Fixed2) that BOTH statutory
+	// documents are assembled from, plus the pure Rule 138 e-way bill core. That
+	// edge cannot become a route into cored: rules' own allowed set is the EMPTY
+	// map immediately below, so it can reach nothing this package could not
+	// already reach — which is nothing.
+	"internal/statutory": {"internal/statutory/rules": true},
+	// statutory/rules is the PURE statutory leaf, and its empty allowed set is
+	// load-bearing in BOTH directions.
+	//
+	// Outward: it may import no sibling, so a "rule" can never quietly acquire a
+	// database, a ledger or a report — every figure it applies is a function of
+	// its arguments and nothing else. That is what makes rule138.go's provenance
+	// block a complete account of where the numbers come from.
+	//
+	// Inward: internal/server MAY import it (see server's set below), which is the
+	// T5 decision and the reason this package exists at all. cored must be able to
+	// raise an e-way bill for a browser, because cored is the only plane that has
+	// the PDP, RLS, step-up and company scoping a write path needs. That import is
+	// safe precisely BECAUSE of the empty map here: server depends on a leaf that
+	// depends on nothing, so no cycle and no smuggled authority is possible.
+	//
+	// ⛔ DO NOT GRANT THIS PACKAGE AN EDGE "FOR CONVENIENCE". The moment it can
+	// read a voucher for itself, Assess stops being a pure function of a stated
+	// consignment and starts being a claim about the database — and a statutory
+	// conclusion whose inputs are invisible is exactly what ewaybill.go's
+	// Assessment type was designed to prevent.
+	"internal/statutory/rules": {},
 	// migration is the Tally-XML importer + reconciliation harness: it parses
 	// via integration, ensures masters, posts through ledger, and reconciles via
 	// reporting. It is an orchestration leaf — nothing imports it except server.
@@ -404,6 +433,19 @@ var allowedDeps = map[string]map[string]bool{
 		"internal/integration":         true,
 		"internal/migration":           true,
 		"internal/sync":                true,
+		// T5, the e-way bill. server holds POST/GET
+		// /companies/{id}/vouchers/{vid}/e-way-bill, so it assembles a
+		// rules.ConsignmentSnapshot from the ledger and calls the pure core.
+		//
+		// ⛔ NOTE WHICH PACKAGE IS *NOT* HERE: internal/statutory itself. server
+		// may reach the pure rules leaf and NOT the IRN workflow plane, and that
+		// asymmetry is the T5 architecture decision in one line. The e-way bill
+		// core is pure, so cored may hold it; the IRN workflow wraps an
+		// exactly-once external call in durable state, so it stays in statutoryd
+		// and a browser reaching it will need cored to proxy. Granting
+		// "internal/statutory" here to save that proxy would put an external
+		// government API call inside a request handler — do not.
+		"internal/statutory/rules": true,
 	},
 	"internal/archtest": {},
 }
