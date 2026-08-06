@@ -55,6 +55,19 @@
  *                          overlay opens only for report screens, and this
  *                          screen's dimension is a TAX YEAR asked for on its
  *                          face, never derived from a deposit date.
+ *  - "e-way-bill"       — THE e-WAY BILL (T5, Rule 138). Pick the voucher the
+ *                          goods move against, state the movement (distance,
+ *                          vehicle, transporter, cargo class), and Ctrl+A
+ *                          raises the payload NIC would be sent. ⛔ NOTHING IT
+ *                          SHOWS IS AN EBN — the portal is unreachable from
+ *                          this deployment, so the identifier is a LOCAL
+ *                          reference and the screen says so on its face.
+ *                          A ScreenKind and not a "report:NAME" for the reason
+ *                          cost-centres is: the server serves it under the BARE
+ *                          token `e-way-bill`, which a coarse `allow display
+ *                          report` can never match — and it carries a FORM, so
+ *                          it needs no period and is exempt from the
+ *                          FrameOverlays classification.
  *  - "cost-centres"      — the COST MASTERS (T2): the axes of analysis (cost
  *                          CATEGORIES — Department, Branch, Project) and the
  *                          positions on them (cost CENTRES), plus the one form
@@ -138,6 +151,7 @@ export type ScreenKind =
   | "sales-orders"
   | "purchase-orders"
   | "boms"
+  | "e-way-bill"
   | "bank-reconciliation";
 
 /**
@@ -510,6 +524,20 @@ export type KeymapAction =
    * label assertion is checking.
    */
   | { kind: "orderRegister"; direction: "sales" | "purchase" }
+  /**
+   * Alt+Z — THE e-WAY BILL (T5).
+   *
+   * TallyPrime puts e-way bill actions under its "Z: Exchange" menu
+   * (RESEARCH.md:361) and raises the bill FROM the sales voucher
+   * (RESEARCH.md:284). This build has no Exchange MENU, so Alt+Z goes straight
+   * to the one thing that menu would offer here.
+   *
+   * ⛔ IT IS A SCREEN AND NOT A VOUCHER KEY. A bill NAMES a voucher, so the
+   * voucher must already exist — at the moment an operator is keying one it has
+   * no id yet. Tally raises the bill after the voucher is accepted, and so does
+   * this.
+   */
+  | { kind: "eWayBill" }
   /**
    * Alt+C on an ORDER REGISTER — record a new order (T3).
    *

@@ -106,6 +106,8 @@ import type {
   OrderBookResponse,
   CreateBomRequest,
   BomView,
+  EWayBillRequest,
+  EWayBillResponse,
   CostCentre,
   CostCentreListResponse,
   CostCentreWriteResponse,
@@ -920,6 +922,19 @@ interface MockCompany {
    * the alter-hydration path resends valid uuids (the name-as-uuid fix).
    */
   views: Map<string, VoucherView>;
+  /**
+   * Raised e-way bills, keyed by voucher_id — mirroring migration 0047's
+   * UNIQUE (company_id, voucher_id), so the mock can only hold one per voucher
+   * exactly as the table can.
+   *
+   * `generatedFromVersion` is what makes `stale` derivable here as it is on the
+   * server: it is compared to the voucher's CURRENT version_no on every read,
+   * never stored as a flag.
+   */
+  eWayBills: Map<
+    string,
+    { view: EWayBillResponse; generatedFromVersion: number }
+  >;
   /**
    * Per-(class, fin_year) NEXT free number. Mirrors voucher_number_counter:
    * monotonic, advanced ONLY when WE allocate (empty client voucher_no on a
@@ -1844,6 +1859,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         // one, so there is no company in which an allocation is unrefusable.
         tdsDeductions: mockDeductionFixtures(),
         views: new Map(),
+        eWayBills: new Map(),
         members: [
           {
             user_id: MOCK_USER_ID,
@@ -1938,6 +1954,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       tdsAllocations: new Map(),
       tdsDeductions: mockDeductionFixtures(),
       views: new Map(),
+      eWayBills: new Map(),
       counters: new Map(),
       // The seeded demo tenant carries the same admin defaults every company
       // gets: its two seeded levels, and the mock identity as its Owner.
@@ -5621,6 +5638,189 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
           "SINGLE-LEVEL explosion: a component that has its own bill of materials is NOT exploded further.",
           "Nothing has moved. This is what a Stock Journal's lines WOULD be.",
         ],
+      };
+    },
+    // -----------------------------------------------------------------------
+    // T5 — THE e-WAY BILL.
+    //
+    // ⛔ THIS MOCK MAKES THE SERVER'S REFUSALS, AND THAT IS THE WHOLE JOB.
+    // HANDOFF §9.4 names three kinds of mock-fidelity defect and this feature
+    // could carry all three:
+    //   1. a refusal the mock does not make — a screen keys a consignment with
+    //      no distance, gets a 201 against the mock, and 422s in a browser;
+    //   2. a shape the mock gets wrong — `disclosures` absent or empty, so the
+    //      screen renders nothing and looks correct until production;
+    //   3. a mock MORE PERMISSIVE than the server — the ensureLedger class,
+    //      invisible by construction.
+    //
+    // So every refusal below is the server's, in the server's own words, with
+    // the server's status code.
+    //
+    // ⚠️ THE RULE 138 FIGURES ARE NOT RESTATED HERE EITHER. The mock cannot
+    // reach rule138.go, so it applies the same ARITHMETIC over constants that
+    // are declared, once, right beside the code that uses them — and it says
+    // out loud that they are a mirror. If the server's figures are corrected
+    // and these are not, the divergence shows up as a mock and a server
+    // disagreeing about a validity, which is exactly the kind of thing
+    // orders.test.ts exists to catch.
+    async raiseEWayBill(companyID, req: EWayBillRequest) {
+      const co = ensure(companyID);
+      const voucherID = (req.voucher_id ?? "").trim();
+      const view = voucherID ? co.views.get(voucherID) : undefined;
+      if (!view) {
+        throw new ApiError(
+          404,
+          "ewaybill: no such voucher or e-way bill in this company",
+        );
+      }
+
+      // ---- REFUSAL 1: no goods. An e-way bill covers a MOVEMENT OF GOODS.
+      const lines = view.inventory ?? [];
+      if (lines.length === 0) {
+        throw new ApiError(
+          422,
+          "ewaybill: this voucher moves no goods, so no e-way bill can be raised for it — " +
+            "an e-way bill covers a movement of goods, and a voucher with no stock lines is not one",
+        );
+      }
+
+      const distance = req.distance_km ?? 0;
+      const odc = req.over_dimensional_cargo === true;
+      const fromState = (req.from_state_code ?? co.stateCode ?? "").trim();
+      const toState = (req.to_state_code ?? "").trim() || fromState;
+
+      // The three Rule 138 figures, MIRRORED from rule138.go. See the note above.
+      const THRESHOLD = 50000;
+      const PART_B_EXEMPT_KM = 50;
+      const KM_PER_DAY = odc ? 20 : 200;
+
+      const total =
+        Number(view.taxable_value ?? 0) +
+        Number(view.cgst ?? 0) +
+        Number(view.sgst ?? 0) +
+        Number(view.igst ?? 0);
+      const required = total >= THRESHOLD;
+
+      const intraState = fromState !== "" && fromState === toState;
+      const shortHop = distance > 0 && distance <= PART_B_EXEMPT_KM;
+      const partBRequired = !(intraState && shortHop);
+
+      const blockers: string[] = [];
+      if (partBRequired && (req.vehicle_number ?? "").trim() === "") {
+        blockers.push(
+          "Part B is required for this movement and no vehicle number was supplied. " +
+            "The goods may not move on this bill until one is added.",
+        );
+      }
+
+      // ---- REFUSAL 2: no distance. ⛔ AND ONLY THIS ONE REFUSES.
+      //
+      // The Part B blocker above must NOT refuse: raising Part A while the
+      // vehicle is still being arranged is ordinary. Getting this wrong in the
+      // mock would teach a screen author the opposite of the server's rule,
+      // which is worse than no mock at all.
+      if (distance <= 0) {
+        throw new ApiError(
+          422,
+          "ewaybill: the e-way bill cannot be raised as stated: No distance was stated, so " +
+            "the validity period cannot be computed. It is NOT assumed to be one day: a bill " +
+            "whose expiry the system guessed is a bill that expires without warning, and an " +
+            "expired e-way bill on a live consignment is a detained vehicle.",
+        );
+      }
+
+      const validityDays = Math.max(1, Math.ceil(distance / KM_PER_DAY));
+      const generatedAt = new Date();
+      const validUntil = new Date(generatedAt);
+      validUntil.setDate(validUntil.getDate() + validityDays);
+
+      const provider = "fake-nic-ewaybill";
+      const disclosures = [
+        "⛔ THIS IS NOT A GOVERNMENT-ISSUED e-WAY BILL. No submission was made to the NIC " +
+          "e-Way Bill portal, which is unreachable from this deployment. The identifier on " +
+          `this document is a LOCAL REFERENCE generated by "${provider}" and is NOT an EBN. ` +
+          "Presenting it as one would tell a checkpost that this consignment is covered when it is not.",
+        "⚠️ THE e-WAY BILL RULES APPLIED HERE ARE SECONDARY MATERIAL. Not verified against the " +
+          "published rule: CBIC's rule repository failed TLS chain verification from this " +
+          "environment on 2026-08-05.",
+        ...blockers.map((b) => "BLOCKER: " + b),
+        required
+          ? `Consignment value ${total.toFixed(2)} is at or above the Rs ${THRESHOLD} threshold, so an e-way bill is required.`
+          : `Consignment value ${total.toFixed(2)} is below the Rs ${THRESHOLD} threshold, so no e-way bill is required on value alone.`,
+        `Validity ${validityDays} day(s): ${distance} km at one day per ${KM_PER_DAY} km, rounded UP.`,
+      ];
+
+      const existing = co.eWayBills.get(voucherID);
+      const built: EWayBillResponse = {
+        voucher_id: voucherID,
+        voucher_no: view.voucher_no,
+        voucher_date: view.voucher_date,
+        // ⛔ "LOCAL-EWB-" AND NOT 12 DIGITS, matching FakeEWayBillProvider. A mock
+        // that minted an EBN-shaped value would let a screen ship a label the
+        // server's value could never justify.
+        local_reference: `LOCAL-EWB-${view.voucher_no || "NODOC"}-${(view.place_of_supply || "NOGST").slice(0, 6)}`,
+        provider,
+        payload: {
+          version: "1.0.0421",
+          supplyType: "O",
+          subSupplyType: "1",
+          docType: "INV",
+          docNo: view.voucher_no,
+          docDate: view.voucher_date,
+          transDistance: String(distance),
+          totInvValue: total.toFixed(2),
+          itemList: lines.map((l) => ({
+            productName: l.item,
+            hsnCode: "",
+            quantity: l.qty,
+            qtyUnit: "",
+            taxableAmount: Number(l.amount ?? 0).toFixed(2),
+          })),
+        },
+        valid_until: validUntil.toISOString().slice(0, 10),
+        validity_days: validityDays,
+        disclosures,
+        assessed_required: required,
+        part_b_required: partBRequired,
+        blockers,
+        transporter_id: (req.transporter_id ?? "").trim(),
+        transporter_name: (req.transporter_name ?? "").trim(),
+        vehicle_number: (req.vehicle_number ?? "").trim(),
+        transport_mode: (req.transport_mode ?? "").trim(),
+        distance_km: distance,
+        over_dimensional_cargo: odc,
+        from_pincode: (req.from_pincode ?? "").trim(),
+        to_pincode: (req.to_pincode ?? "").trim(),
+        from_state_code: fromState,
+        to_state_code: toState,
+        // Counted, never silent — migration 0047's rule.
+        generation_count: (existing?.view.generation_count ?? 0) + 1,
+        generated_at: generatedAt.toISOString(),
+        stale: false,
+      };
+      co.eWayBills.set(voucherID, {
+        view: built,
+        generatedFromVersion: view.version_no,
+      });
+      return built;
+    },
+    async getEWayBill(companyID, voucherID: string) {
+      const co = ensure(companyID);
+      const held = co.eWayBills.get((voucherID ?? "").trim());
+      if (!held) {
+        throw new ApiError(
+          404,
+          "ewaybill: no such voucher or e-way bill in this company",
+        );
+      }
+      // ⛔ `stale` IS DERIVED ON READ, exactly as the server derives it from
+      // voucher_head.current_version_id. A mock that returned the stored `false`
+      // would let a screen ship with no staleness handling and look correct.
+      const current = co.views.get(voucherID)?.version_no;
+      return {
+        ...held.view,
+        stale:
+          current !== undefined && current !== held.generatedFromVersion,
       };
     },
     async salesOrderBook(companyID, asOn?: string) {

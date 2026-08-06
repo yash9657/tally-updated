@@ -71,6 +71,8 @@ import type {
   BomListResponse,
   BomView,
   BomExplosionResponse,
+  EWayBillRequest,
+  EWayBillResponse,
   OrderBookResponse,
   CostCentreListResponse,
   CostCentreWriteResponse,
@@ -553,6 +555,40 @@ export interface CoredClient {
     bomID: string,
     qty: string,
   ): Promise<BomExplosionResponse>;
+
+  /**
+   * T5 — RAISE THE e-WAY BILL for one voucher.
+   *
+   * ⛔ WHAT COMES BACK IS NOT A GOVERNMENT-ISSUED e-WAY BILL, and a screen must
+   * say so on the artefact's own face. `local_reference` is a LOCAL identifier;
+   * an EBN is issued by NIC, which is unreachable from this deployment. Render
+   * `disclosures` — see {@link EWayBillResponse}.
+   *
+   * A 422 is the interesting failure and there are three kinds, each carrying its
+   * own reasoning rather than a bare sentence:
+   *   - no distance stated → `blockers` + `basis` (the validity is uncomputable)
+   *   - the voucher moves no goods → an e-way bill covers a MOVEMENT of goods
+   *   - the payload departs from the recorded NIC schema → `violations`
+   *
+   * ⚠️ RAISING TWICE FOR ONE VOUCHER IS NOT AN ERROR. It replaces the stored bill
+   * and increments `generation_count`, which is how an operator corrects a
+   * typo'd distance or adds a vehicle to a Part-A slip.
+   */
+  raiseEWayBill(
+    companyID: string,
+    req: EWayBillRequest,
+  ): Promise<EWayBillResponse>;
+  /**
+   * Read the raised e-way bill for a voucher. 404 when none has been raised.
+   *
+   * ⛔ CHECK `stale` ON WHAT COMES BACK. It means the invoice was altered after
+   * the bill was raised, so the payload describes goods the voucher no longer
+   * states. Nothing else in the system will ever say so.
+   */
+  getEWayBill(
+    companyID: string,
+    voucherID: string,
+  ): Promise<EWayBillResponse>;
 
   /**
    * THE ORDER BOOKS — outstanding commitments, per direction, as at a date.

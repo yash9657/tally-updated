@@ -293,6 +293,14 @@ export function resolvePrintTarget(
     };
   }
 
+  if (screen === "e-way-bill") {
+    return {
+      kind: "refusal",
+      reason:
+        "The e-way bill does not print in this build, and that is a DECISION rather than an unwritten layout. A printed sheet is exactly the artefact a driver hands to a checkpost, and what this build can produce is a payload plus a LOCAL reference that no government issued. Printing it would put a document that looks like an e-way bill into the one situation where being wrong is a detained vehicle. The screen shows the payload and the full disclosure block instead; the day real NIC credentials exist (HANDOFF §10 item 4), the printed form is the change to make.",
+    };
+  }
+
   return {
     kind: "refusal",
     reason: "Nothing on this screen can be printed.",

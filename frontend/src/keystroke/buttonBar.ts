@@ -65,6 +65,16 @@ const MASTER_BAR: readonly ButtonBarItem[] = [
   item("F1", "Help"),
 ];
 
+// T5. Ctrl+A is the only screen-owned key here: the consignment form is on the
+// face of the screen rather than behind an Alt+C panel, because there is exactly
+// one thing to key and hiding it behind a key would be a step for its own sake.
+const E_WAY_BILL_BAR: readonly ButtonBarItem[] = [
+  item("F1", "Help"),
+  item("Ctrl+A", "Raise"),
+  item("Alt+G", "Go To"),
+  item("Ctrl+G", "Switch To"),
+];
+
 const GATEWAY_BAR: readonly ButtonBarItem[] = [
   item("F1", "Help"),
   // F3 is Tally's company button. It only earned a place on the bar once a
@@ -316,6 +326,12 @@ export function buttonBarFor(
     // fall through to GATEWAY_BAR, WHICH NO TEST CATCHES. The bar would advertise
     // F3 Company and F11 Features over a half-keyed cost centre and say nothing
     // at all about Alt+C, or about F4 on the report that is useless without it.
+    // T5, for the reason every case here exists: without it the screen falls
+    // through to GATEWAY_BAR, WHICH NO TEST CATCHES. The bar would advertise F3
+    // Company and F11 Features over a half-stated consignment and say nothing at
+    // all about Ctrl+A, which is the only way to raise the bill.
+    case "e-way-bill":
+      return E_WAY_BILL_BAR;
     case "cost-centres":
       return COST_MASTERS_BAR;
     case "cost-centre-summary":

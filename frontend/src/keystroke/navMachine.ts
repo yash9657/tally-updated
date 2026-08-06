@@ -985,6 +985,20 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
       );
     }
 
+    case "eWayBill": {
+      // Alt+Z — the e-WAY BILL screen (T5).
+      //
+      // Reachable from ANYWHERE, like the two order registers above and for the
+      // same reason: it is a statutory act an operator performs immediately after
+      // accepting the invoice, from wherever they happen to be.
+      //
+      // pushOnce, so pressing Alt+Z twice does not stack a second identical
+      // frame — the key then changes nothing, which is the honest answer, and
+      // `eWayBill` is in ALWAYS_MEANINGFUL in AppShell so the shell does not
+      // additionally report it as a key that does not apply here.
+      return pushOnce("e-way-bill");
+    }
+
     case "createOrder":
     case "closeOrder":
     case "createBom":

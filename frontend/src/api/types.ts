@@ -2581,31 +2581,108 @@ export interface EWayBillRequest {
   /** Part B. Absent for a movement under the distance threshold the server states. */
   vehicle_number?: string;
   transport_mode?: 'ROAD' | 'RAIL' | 'AIR' | 'SHIP';
-  /** Approximate distance in km — drives the validity period the server computes. */
+  /**
+   * Approximate distance in km — drives the validity period the server computes.
+   *
+   * ⛔ OMITTING IT (or sending 0) IS A 422, NOT A DEFAULT. The server refuses to
+   * compute a validity from an unstated distance rather than granting the
+   * one-day minimum by accident: a bill whose expiry the system guessed is a
+   * bill that expires without warning, and an expired e-way bill on a live
+   * consignment is a detained vehicle. The refusal carries `blockers` and
+   * `basis` so a screen can show WHY.
+   */
   distance_km?: number;
+  /**
+   * ⛔ ASSERTED BY THE OPERATOR AND NEVER INFERRED. Nothing in a voucher says
+   * whether a consignment is over-dimensional, and assuming ordinary cargo grants
+   * TEN TIMES the validity the rule allows. A screen must offer this as an
+   * explicit choice, never derive it.
+   */
+  over_dimensional_cargo?: boolean;
+  /**
+   * Route overrides. Omit to use the company's and the party's master addresses.
+   *
+   * ⚠️ THE DEFAULT IS OFTEN WRONG AND THE OVERRIDE IS WHY THESE EXIST: NIC keys
+   * the route on where the goods actually start and end, and a consignment
+   * routinely ships from a warehouse that is neither party's registered address.
+   */
+  from_pincode?: string;
+  from_state_code?: string;
+  to_pincode?: string;
+  to_state_code?: string;
   created_by?: string;
 }
 
 export interface EWayBillResponse {
+  voucher_id: string;
+  voucher_no: string;
+  voucher_date: string;
   /**
    * ⛔ A LOCAL, DETERMINISTIC IDENTIFIER — NOT AN EBN. Never label this "e-Way
    * Bill Number" in the UI.
    */
   local_reference: string;
+  /**
+   * Which adapter answered — "fake-nic-ewaybill" in this deployment. Rendered so a
+   * reader learns it was a stand-in; the disclosure block names it too.
+   */
+  provider: string;
   /** The exact JSON that WOULD be submitted, for inspection and for a later real submission. */
   payload: Record<string, unknown>;
   valid_until: string;
+  /** How many days were granted. The REASONING is in `disclosures`, not here. */
+  validity_days: number;
   /**
-   * Why it is valid until then, in words, including the km-per-day rule applied
-   * and whether over-dimensional cargo rates were used.
-   */
-  validity_basis: string;
-  /**
-   * ⛔ RENDER THIS. It states that no submission was made and that the thresholds
-   * are unverified secondary material. It is not decoration and it is not
-   * optional — the whole disclosure discipline rests on it reaching the paper.
+   * ⛔ RENDER THIS. It states that no submission was made, that the thresholds
+   * are unverified secondary material, and — when Part B is outstanding — that
+   * the goods may not move yet. It is not decoration and it is not optional: the
+   * whole disclosure discipline rests on it reaching the paper.
+   *
+   * ⚠️ THE VALIDITY REASONING IS IN HERE, which is why there is no separate
+   * `validity_basis` field. An earlier draft of this interface had one; it was
+   * removed rather than implemented, because the km-per-day rule applied and the
+   * cargo class assumed are already two of the sentences in this array, and a
+   * second copy would be a second thing to keep true.
    */
   disclosures: string[];
+  /** Whether the consignment reached the threshold. False is legal: a bill may be raised anyway. */
+  assessed_required: boolean;
+  /** Whether the vehicle number is required for this movement. */
+  part_b_required: boolean;
+  /**
+   * Statutory problems that do NOT prevent the bill being raised but DO prevent
+   * the goods moving on it — in practice, a missing vehicle on a Part B movement.
+   *
+   * ⚠️ A NON-EMPTY `blockers` ON A RAISED BILL IS THE PART-A SLIP CASE and is
+   * legitimate: an operator raises Part A while the vehicle is still being
+   * arranged. Render it as a warning, not an error. It is also inside
+   * `disclosures`, so it reaches paper either way.
+   */
+  blockers: string[];
+
+  transporter_id: string;
+  transporter_name: string;
+  vehicle_number: string;
+  transport_mode: string;
+  distance_km: number;
+  over_dimensional_cargo: boolean;
+  from_pincode: string;
+  to_pincode: string;
+  from_state_code: string;
+  to_state_code: string;
+
+  /** 1 on the first raise. Above 1 means an earlier generation was replaced. */
+  generation_count: number;
+  generated_at: string;
+  /**
+   * ⛔ THE INVOICE HAS BEEN ALTERED SINCE THIS BILL WAS RAISED, so the stored
+   * payload no longer describes the document it names. Derived on every read from
+   * the voucher's current version, never stored.
+   *
+   * A screen MUST surface this. Nothing else in the system will ever say it, and
+   * the failure mode is a driver carrying a sheet that describes different goods.
+   */
+  stale: boolean;
 }
 
 /** The order list: heads only, WITHOUT their lines — see {@link OrderView}. */

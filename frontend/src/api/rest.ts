@@ -72,6 +72,8 @@ import type {
   BomListResponse,
   BomView,
   BomExplosionResponse,
+  EWayBillRequest,
+  EWayBillResponse,
   OrderBookResponse,
   CostCentreListResponse,
   CostCentreWriteResponse,
@@ -433,6 +435,21 @@ export function createRestClient(
     getBom(companyID, bomID: string) {
       return http.get<BomView>(
         `${company(companyID)}/boms/${encodeURIComponent(bomID)}`,
+      );
+    },
+    raiseEWayBill(companyID, req: EWayBillRequest) {
+      // ⛔ FLAT, not /vouchers/{id}/e-way-bill. cored's routeAction reads
+      // everything after "/vouchers/" as the voucher CLASS, so the nested path
+      // would map to a class nothing knows and default-deny the Owner. The
+      // voucher is named in the BODY. See handler_ewaybill.go's header.
+      return http.post<EWayBillResponse>(
+        `${company(companyID)}/e-way-bills`,
+        req,
+      );
+    },
+    getEWayBill(companyID, voucherID: string) {
+      return http.get<EWayBillResponse>(
+        `${company(companyID)}/e-way-bills/${encodeURIComponent(voucherID)}`,
       );
     },
     explodeBom(companyID, bomID: string, qty: string) {

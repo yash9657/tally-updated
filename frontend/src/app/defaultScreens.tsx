@@ -21,6 +21,7 @@ import { StockSummaryScreen } from "../screens/reports/StockSummaryScreen";
 import { TDSRegisterScreen } from "../screens/reports/TDSRegisterScreen";
 import { BankReconciliationScreen } from "../screens/BankReconciliationScreen";
 import { TDSChallansScreen } from "../screens/TDSChallansScreen";
+import { EWayBillScreen } from "../screens/EWayBillScreen";
 import { CostCentresScreen } from "../screens/masters/CostCentresScreen";
 import { CostCentreSummaryScreen } from "../screens/reports/CostCentreSummaryScreen";
 import { CostCategorySummaryScreen } from "../screens/reports/CostCategorySummaryScreen";
@@ -245,6 +246,11 @@ export function createDefaultRegistry(): ScreenRegistry {
     // ScreenKind is what keeps the Gateway entry from landing on
     // UnwiredReportScreen, which would announce that a built, ACL-gated report is
     // "not available in this build".
+    // T5 — the e-way bill (Rule 138). Registered by ScreenKind and NOT as a
+    // "report:…" key, for the reason the three cost screens above are: the
+    // server serves it under the BARE `e-way-bill` token, which a coarse
+    // `allow display report` can never match, and it carries a FORM.
+    "e-way-bill": EWayBillScreen,
     "cost-centres": CostCentresScreen,
     "cost-centre-summary": CostCentreSummaryScreen,
     "cost-category-summary": CostCategorySummaryScreen,

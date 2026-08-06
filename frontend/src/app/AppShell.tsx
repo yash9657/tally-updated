@@ -56,6 +56,12 @@ const COMPANY_SCOPED_SCREENS = new Set<NavSnapshot["screen"]>([
   "sales-orders",
   "purchase-orders",
   "boms",
+  // T5. The e-way bill screen reads ONE company's vouchers and writes that
+  // company's bills, so it needs a scope. Same failure mode as every screen
+  // above: omit it and useCompanyID() THROWS before the screen can render its
+  // own state — including its 403 panel, which is a NORMAL answer here (the
+  // bare `e-way-bill` token is denied to a level whose default_access is 'none').
+  "e-way-bill",
 ]);
 
 /**
@@ -138,6 +144,10 @@ const ALWAYS_MEANINGFUL = new Set<KeymapAction["kind"]>([
   // looking at the sales order register, so "does not apply on this screen" would
   // be a false statement about a key that did exactly what it says.
   "orderRegister",
+  // Alt+Z on the e-way bill screen it already opens. Same pushOnce reasoning
+  // as orderRegister above: the operator asked for the e-way bill screen and is
+  // looking at it, so "does not apply on this screen" would be a false statement.
+  "eWayBill",
   "date",
   "help",
   "features",
@@ -446,6 +456,11 @@ function screenTitle(snap: NavSnapshot): string {
       return "Purchase Orders";
     case "boms":
       return "Bills of Materials";
+    // ⛔ THE TITLE SAYS "e-Way Bill" AND NOT "e-Way Bill Number" or "EBN". A
+    // title bar is read as a claim about what the screen produces, and what it
+    // produces is a payload and a LOCAL reference — never a government number.
+    case "e-way-bill":
+      return "e-Way Bill";
     default:
       return "Tally";
   }
@@ -479,6 +494,8 @@ function hintsFor(snap: NavSnapshot): string[] {
       return ["Enter: Next field", "Ctrl+A: Accept", "Esc: Cancel", "F1: Help"];
     case "cost-centres":
       return ["Alt+C: Create", "Ctrl+A: Accept", ...common];
+    case "e-way-bill":
+      return ["Ctrl+A: Raise the bill", ...common];
     case "cost-centre-summary":
       return ["F2: Period", "F4: Cost Category", ...common];
     case "cost-category-summary":

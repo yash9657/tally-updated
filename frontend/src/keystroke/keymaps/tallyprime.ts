@@ -173,6 +173,15 @@ const RAW_BINDINGS: Record<string, KeymapAction> = {
   // the PATH, so a single screen with a direction switch would be reaching a
   // resource the operator may be denied. Tally has two keys for its own reasons and
   // we need two for this one; they agree.
+  // ---- THE e-WAY BILL (T5). TallyPrime files e-way bill actions under its
+  // "Z: Exchange" top menu (RESEARCH.md:361) and raises the bill FROM the sales
+  // voucher (RESEARCH.md:284). This build has no Exchange MENU, so Alt+Z goes
+  // straight to the one thing that menu would offer here.
+  //
+  // ⚠️ Alt+Z WAS NOT PREVIOUSLY BOUND TO `unavailable`, so there is no stale note
+  // to correct — checked, because §7.3 is explicit that the key you want is often
+  // already bound with a claim that has rotted.
+  "Alt+Z": { kind: "eWayBill" },
   "Ctrl+F8": { kind: "orderRegister", direction: "sales" },
   "Ctrl+F9": { kind: "orderRegister", direction: "purchase" },
 };
@@ -637,6 +646,32 @@ const RAW_SCREEN_BINDINGS: Partial<
     },
     ...voucherKeysHeldBack("the bill of materials screen", "recipe"),
   },
+  // ---- THE e-WAY BILL (T5). It carries a FORM (the consignment), so every
+  // binding below is the same argument the cost masters and the two order
+  // registers make: AN UNBOUND KEY HERE IS NOT INERT. Without these entries the
+  // global voucher keys fire — F5 a Payment, F9 a Purchase, F8 a Sales — over a
+  // half-stated consignment, and the frame holding it goes with them.
+  "e-way-bill": {
+    // F2 would read as "Date" from the global table. A consignment has no
+    // period: the bill is raised against ONE document on ONE day, and its
+    // VALIDITY is COMPUTED by the server from the distance rather than chosen
+    // by the operator. ALWAYS_MEANINGFUL contains `date`, so an unbound F2 here
+    // would produce a status line for a key that changed nothing.
+    //
+    // ⛔ THE NOTE NAMES NO FIGURE. The km-per-day rates live in rule138.go with
+    // their provenance, and a keymap note quoting them would be a second home
+    // for a number that is explicitly pending re-verification.
+    F2: {
+      kind: "unavailable",
+      feature: "Period (F2)",
+      note: "An e-way bill has no period. It is raised against ONE voucher, and how long it stays valid is COMPUTED by the server from the distance you state and the cargo class you assert — it is not a date you choose. The rule applied, and the caveat on it, travel with the bill in its disclosures.",
+    },
+    // ⚠️ Alt+Z IS DELIBERATELY LEFT LIVE HERE rather than held back, exactly as
+    // the two order registers leave Ctrl+F8 / Ctrl+F9 live on each other:
+    // pressing the key for the screen you are already on is answered by
+    // pushOnce plus ALWAYS_MEANINGFUL, not by a refusal.
+    ...voucherKeysHeldBack("the e-way bill screen", "consignment"),
+  },
   // Alt+L on a voucher opens its EDIT LOG. RESEARCH sec 6 pins the PLACEMENT
   // (Tally shows the Edit Log from the voucher alteration screen and the Day
   // Book) but not the combo, so this is scoped to the voucher screen rather
@@ -758,6 +793,11 @@ export function actionLabel(action: KeymapAction): string {
       return "Previous saved voucher";
     case "nextVoucher":
       return "Next saved voucher";
+    case "eWayBill":
+      // ⛔ "e-Way Bill" AND NOT "e-Way Bill Number". The label appears on the
+      // button bar and in the keyboard help, and a label promising a NUMBER is
+      // how the local reference gets printed as a government one.
+      return "e-Way Bill (Rule 138)";
     case "goto":
       return "Go To (keeps this screen)";
     case "switchTo":
