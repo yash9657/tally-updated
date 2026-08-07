@@ -1,14 +1,120 @@
-# THE PARITY AUDIT — DRIVE ALL 47 ROWS, THEN BUILD THE 13
+# THE PARITY AUDIT — FINISH THE REMAINING 18 ROWS, END TO END
 
 > ## ⛔ THIS IS A WORKSHEET, NOT A RIVAL HANDOFF. `HANDOFF.md` IS STILL THE LIVE ONE.
 >
 > §11 of `HANDOFF.md` records eleven SPENT `HANDOFF-*.md` files and the cost of having them around:
 > *"a handoff nobody can trust costs a session to re-verify."* This file exists only because a
-> 47-row checklist does not belong inside a 2,400-line narrative. It is owned by `HANDOFF.md` §1.11,
-> which points here.
+> 47-row checklist does not belong inside a 2,400-line narrative. It is owned by `HANDOFF.md` §1.11.
 >
 > **WHEN THE AUDIT IS DONE: fold the findings into `HANDOFF.md` §5.5's log and DELETE THIS FILE.**
 > Do not let it become the twelfth.
+
+---
+
+# ⛔⛔ COLD START? THIS SECTION IS THE WHOLE BRIEF. READ IT, THEN §2, THEN GO.
+
+**Written 2026-08-07 at the end of the second audit pass, for a session with an empty context window.**
+Everything needed to finish the job is in THIS file plus `PARITY-RECON-2026-08-07.md`. You should not
+need to read `HANDOFF.md` to start — only to write findings into §5.5 at the end.
+
+## THE MISSION, IN ONE PARAGRAPH
+
+34 rows of `FeaturesScreen` claim to be reachable from the keyboard. **16 have been driven; 18 never
+have.** Of the 16 driven, **11 were lying** — the claim was false and only pressing the key found it.
+Your job is the remaining **18: drive each one end to end in a real browser against real cored, read
+the result back from the place the money actually lands, fix what you find, and log it in §7.**
+
+| | |
+|---|---|
+| **Driven and confirmed** | 16 — rows 1, 2, 4, 6, 7, 8, 11, 14, 15, 16, 20, 21, 22, 23, 26, 36 |
+| ⛔ **YOUR WORK LIST — 18 undriven** | **3, 5, 9, 17, 24, 27, 29, 30, 31, 32, 33, 34, 35, 37, 38, 40, 42, 43** |
+| **Lie rate so far** | **11 in 16.** Budget for FIXING, not for driving |
+
+## ⛔ TWO DEFECTS ARE ALREADY FOUND AND STILL OPEN. THEY ARE YOURS TOO.
+
+| # | What | Where |
+|---|---|---|
+| **Row 20** | ⛔ **CONFIRMED LYING, NOT FIXED.** `Alt+C` renders **"Create ledger"** from the Gateway AND from the item-invoice Item cell. No keystroke, Gateway entry or Go To entry reaches `masterKind` `"stock-item"` or `"unit"` — **a company can never be given a stock item or a unit from the keyboard**, and the item-invoice empty state points at `Gateway > Masters`, which does not exist. It is a FEATURE TO BUILD | §7's row-20 box has the traced route (RESEARCH.md:568 documents it) and the reason the obvious keymap fix cannot work |
+| **LEAD 1b** | `MembersScreen` has the same shape as the step-up defect fixed on both e-* screens. **Traced to line numbers, never driven, deliberately not patched** | §4, LEAD 1b |
+
+## THE ORDER TO WORK IN
+
+1. **§0.1's RUN-FIRST CHECKLIST** (immediately below) — ten minutes, and skipping it has burned sessions.
+2. **Drive rows, cheapest first.** Suggested order, grouped so one browser session covers several:
+   - **Masters / bill-wise:** 5, 3, 9 (all voucher-form work, and row 5 feeds row 3)
+   - **Inventory:** 24, 27, 29
+   - **Statutory:** 17
+   - **AI-native:** 30, 31, 32
+   - **Users & security:** 33, 34, 35, 37, 38 — ⛔ **34 and 38 need a SECOND user**; read their recon entries before starting, they may not be drivable as written
+   - **Output:** 40, 42, 43
+3. **Fix what you find, as you find it.** §0 explains why deferring loses the finding entirely.
+4. **Log every row in §7, pass or fail**, and update the running count.
+
+⚠️ **DO NOT PLAN TO FINISH ALL 18 IN ONE SESSION.** The last pass drove FOUR rows and filled a
+session, because three of them were lying and the fixes were real work with tests and mutation
+proofs. **Every row you drive and log is permanent progress; a row half-driven and unlogged is not.**
+
+## THE TOOL — COMMITTED, NOT DESCRIBED
+
+`frontend/scripts/audit-harness.mjs` signs in, installs a virtual WebAuthn authenticator so the
+step-up completes by itself, records every non-GET as a wire oracle, and carries the three traps that
+cost the last pass an hour. **Import it; do not rewrite it.**
+
+```js
+import { openApp, rec, summary } from "./audit-harness.mjs";
+const app = await openApp({ company: process.env.CO });
+const { page, body, press, toGateway, altMac, openFromGateway, net } = app;
+await toGateway();
+await altMac("g");                     // ⛔ NOT press("Alt+g") — see below
+rec("Go To opened", /Go To/.test(await body()));
+await app.browser.close();
+process.exit(summary() > 0 ? 1 : 0);
+```
+
+```bash
+cd /path/to/tally-updated                                  # ⛔ ABSOLUTE paths
+CO="$(cat frontend/.demo-company-id)" node frontend/scripts/<probe>.mjs
+```
+
+## ⛔⛔ THE FOUR TRAPS THAT HAVE COST REAL TIME. ALL FOUR ARE LIVE FOR YOU.
+
+1. **`press("Alt+g")` IS A LIE ON macOS.** Option COMPOSES: a Mac sends `key: "©"`, never `"g"`.
+   Playwright sends `"g"`, which no operator here can produce. **Every Alt+letter binding in the
+   product was found DEAD on macOS this way, while every browser test passed.** Use `altMac("g")`.
+   The resolver is fixed; the METHOD is what hid it.
+2. **`Alt+G` IS NOT THE ONLY DOOR.** The Go To picker is hard-wired to `["Vouchers", ...REPORT_NAMES]`.
+   Cost Centres, both cost summaries, Bank Reconciliation, TDS Challans, both order registers and the
+   BOM screen are **absent from it and present on the GATEWAY MENU**. Use `openFromGateway(name)`.
+   Two rows in §3 still name the wrong key. **A screen that will not open is not thereby unbuilt.**
+3. **AN EMPTY `?company=` BOOTSTRAPS A FRESH EMPTY TENANT**, and every screen on it looks clean. Two
+   rows were wrongly logged as passing that way. `openApp` now REFUSES an empty id and asserts the
+   chrome names "Demo Traders" — do not remove those guards.
+4. **`verify:demo` NEEDS `pnpm seed:demo --insightd`.** Without the flag no Bill Inbox draft is queued
+   and the gate reports **30/31 with one FAIL**, which reads exactly like a regression.
+
+## ⛔⛔ THE ONE METHOD LESSON THAT OUTRANKS EVERYTHING ELSE HERE
+
+The last pass traced a defect to a line, fixed it there, wrote a regression test that PASSED, and ran
+a mutation proof that FAILED EXACTLY AS PREDICTED. **And the browser was still broken**, because the
+traced cause was not the live one — there were two defects of the same shape on the same key.
+
+> **A mutation proof proves the TEST is real. It does not prove the FIX is sufficient.
+> Re-drive the browser after every fix. It is the only oracle that has never been wrong here.**
+
+That is also why LEAD 1b is left unpatched: fixing it from a code reading would repeat exactly that
+mistake.
+
+## DEFINITION OF DONE, PER ROW
+
+- The exact keystrokes an operator uses were **pressed in a browser against real cored** — not a test.
+- The result was **read back from the oracle in §3's table**, which for anything moving money or goods
+  means `psql` on `posting` / `stock_movement` joined to `ledger.name`. ⛔ **Never assert a total: a
+  reversed voucher balances to the same paisa. Assert SIDES and LEDGER NAMES, and read VALUE as well
+  as quantity.**
+- Anything found is **fixed, mutation-proved (and check the failure is the one you predicted), and
+  RE-DRIVEN in the browser.**
+- The row is **written into §7's log** and the running count updated.
+- **No residue**: re-seed, and leave every gate green. §0.1 has the commands; §8 has the numbers.
 
 ---
 
@@ -44,6 +150,122 @@ the audit will stop at the first one.**
 > it to a measured number, with the liars named, is worth more than two half-built features.
 
 ---
+
+## 0.1 ⛔ RUN FIRST — the whole stack, the seed, and the gates. Ten minutes.
+
+**Everything below is in THIS file on purpose: a cold session should not have to open `HANDOFF.md`
+to get started.**
+
+```bash
+cd /path/to/tally-updated
+git status --porcelain          # commit or stash BEFORE anything
+
+# 1. POSTGRES. ⛔ A TCP CONNECT IS NOT LIVENESS — docker-proxy holds the port open
+#    past a dead backend, and a watchdog built on `nc -z` logged NOTHING through a
+#    ten-minute outage.
+docker ps | grep tally_pg
+pg_isready -h localhost -p 5433 -t 5 && \
+  PGPASSWORD=postgres psql -h localhost -p 5433 -U postgres -d tally -tAc "select 1"
+
+# 2. THE FOUR SERVICES. Kill stale ones BY PID — `pkill -f "cmd/cored serve"`
+#    misses the compiled child, and a SEVEN-DAY-OLD statutoryd on 8091 once cost an
+#    hour (it held a service token signed by a cored key that had died a week
+#    earlier; the symptom was a bare 401 naming neither process, token nor expiry).
+for p in 8087 8088 8091 5173; do printf "%s: " $p; \
+  curl -s -o /dev/null -w "%{http_code}\n" --max-time 3 http://localhost:$p/healthz; done
+```
+
+⛔ **START cored AND statutoryd DETACHED, or they die with your own tool call.** `setsid` does not
+exist on macOS; the subshell-orphan form is what works, and a harness-managed background job gets
+killed at teardown (this happened on 2026-08-07):
+
+```bash
+(nohup make run-cored      > /tmp/cored.log      2>&1 < /dev/null &)
+# wait for :8087, THEN start statutoryd — it mints its token FROM cored, and
+# every cored restart invalidates the previous one.
+(nohup make run-statutoryd > /tmp/statutoryd.log 2>&1 < /dev/null &)
+# insightd :8088 and vite :5173, if not already up:
+#   cd insightd && .venv/bin/python -m uvicorn insightd.api.app:app --port 8088
+#   cd frontend && pnpm dev
+```
+
+```bash
+# 3. SEED, and ⛔ NOTE THE FLAG — without it verify:demo reports 30/31 with one
+#    FAIL that reads exactly like a code regression.
+cd frontend && pnpm seed:demo --insightd
+pnpm run verify:demo "$(cat .demo-company-id)"      # -> ALL CHECKS PASSED (33/33)
+```
+
+⚠️ **`seed:demo` MINTS A NEW COMPANY EVERY RUN** and rewrites `.demo-company-id`. Re-read that file
+after seeding; do not cache the id. It also leaves the previous demo tenants behind — the dev
+database holds a growing pile of them plus ~16 scratch `My Company` rows from the e2e harness, which
+nothing reaps.
+
+```bash
+# 4. THE GATES. ⛔ RUN `make verify` ALONE — see §8; beside other load it fails two
+#    ways that are NOT code, and one of them was reproduced on a STASHED, UNMODIFIED
+#    tree, which is the only reason it was not mistaken for a regression.
+make verify                                        # -> exit 0
+cd frontend && pnpm exec tsc --noEmit              # a SEPARATE gate from make verify
+cd backend && go test ./... -count=1 -v | tee /tmp/base.log | tail -3
+grep -c -- '--- PASS' /tmp/base.log; grep -c -- '--- SKIP' /tmp/base.log   # SKIP MUST BE 0
+```
+
+⚠️ **A DOWN DATABASE MAKES EVERY DB TEST SKIP AND `go test` STILL EXITS 0.** A skip is
+indistinguishable from a pass in the exit code, and this has invalidated a whole session's evidence
+before. **The `0 SKIP` is the load-bearing number** — bracket the run with a live `psql`.
+
+### Signing in, and the DB oracle
+
+The app is at `http://localhost:5173/?company=$(cat frontend/.demo-company-id)`, user
+`browser-dev-owner`, password `tally-demo-2026`. **It is a keystroke app: a click SELECTS, `Enter`
+OPENS.** In practice you drive it with `frontend/scripts/audit-harness.mjs`, not by hand.
+
+⛔ **`psql` AS `tally_app` RETURNS ZERO ROWS FOR EVERY TENANT TABLE.** RLS needs a session GUC a bare
+`psql` does not set, and the symptom is `count(*) = 0` — which reads exactly like "the write did not
+happen" and nearly produced a false "the browser did not save it" conclusion. **Use the `postgres`
+superuser for every DB oracle**, as every command in this file does.
+
+---
+
+## 0.2 THE 18 UNDRIVEN ROWS — where each one's trace lives
+
+`PARITY-RECON-2026-08-07.md` holds an 18-agent read-only trace of every row below: the exact
+keystrokes, the oracle to read back, and falsifiable predictions at file:line. ⛔ **It is READING, and
+this repo flips a row on BROWSER evidence only** — but its measured hit rate is **6 confirmed / 2
+killed out of 8 driven**, which is good enough to prioritise by and not good enough to log a row on.
+
+| Row | What it covers | Trace at |
+|---|---|---|
+| 3 | Bill-wise details — all FOUR reference types | `PARITY-RECON-2026-08-07.md:19` |
+| 5 | Opening balances + a bill-wise opening breakup | `:122` |
+| 9 | Cost allocation during entry across TWO axes | `:709` |
+| 17 | TDS/TCS — record a challan and allocate it | `:635` |
+| 24 | Negative stock — and the FLAG must govern it | `:329` |
+| 27 | Orders (`Ctrl+F8`/`Ctrl+F9`) + BOM (`Alt+X`) | `:791` |
+| 29 | Closing stock on the Balance Sheet at two dates | `:855` |
+| 30 | Bill Inbox — OCR draft into a real voucher | `:906` |
+| 31 | Ask your books (NL query) + a cross-tenant probe | `:940` |
+| 32 | Cash-flow projection / anomalies | `:971` |
+| 33 | Multiple users + security levels | `:999` |
+| 34 | Custom levels — ⛔ **SIGN IN AS THAT LEVEL AND BE REFUSED** | `:1024` |
+| 35 | Switch company (`F3`) — no row of the old company may leak | `:1049` |
+| 37 | Back-dated entry cutoff | `:1102` |
+| 38 | Password login + lockout | `:1127` |
+| 40 | Printed documents (`Ctrl+P`), seven classes | `:1155` |
+| 42 | Printed statements (`Ctrl+P`), per report | `:1207` |
+| 43 | Export (`Alt+E`) — ⛔ WIRE precision, not display strings | `:1242` |
+
+⚠️ **THE HIGHEST-SEVERITY PREDICTIONS AMONG THESE, all `high` confidence** — treat as leads, not facts:
+- **Row 17** — TDS allocation has no route to attach to an existing challan, so **the row may not be
+  drivable as written at all.** Establish that first; it changes what "driving row 17" means.
+- **Row 24** — `allow_negative_stock` has no HTTP route, handler or UI: only half the rule exists.
+- **Row 3** — two New refs on one invoice collapse into ONE bill; Outstandings honours `as_on` for
+  ageing but not for inclusion.
+- **Row 5** — an `Alt+C` party gets `maintain_bill_by_bill = false`, so it can never carry any bill
+  reference. ⚠️ **This interacts with row 20's open defect** — both are `Alt+C` master gaps.
+- **Row 9 / row 22 (rest)** — a BATCH can never be keyed anywhere; `batchId` is hard-wired `""`.
+- **Row 6 (rest, already driven)** — a Contra creates its counter-account under **Indirect Expenses**.
 
 ## 1. WHAT WE ARE MEASURING, AND WHY THE CURRENT NUMBER IS A GUESS
 
