@@ -23,14 +23,13 @@
 > tax where INPUT belongs. Three rows that read `on`, measured in Postgres against seeded controls,
 > and the server answered **201**. ✅ **FIXED — §1.14**, on both the client and the server.
 >
-> ⚠️ **BUT READ §1.14's LAST TABLE BEFORE ANYTHING ELSE.** The container runtime wedged at the end of
-> that session, so **the Credit Note's browser read-back was never completed** and `make verify` /
-> `verify:demo` were not re-run after the change. The Purchase IS browser-verified and the backend
-> suite IS green at **2367 / 0 SKIP / 0 FAIL**. Close those three gaps first; they are ten minutes.
+> Both the Purchase and the Credit Note are browser-verified after the fix, and every gate is green:
+> backend **2367 / 0 SKIP / 0 FAIL**, frontend **961 / 67**, `tsc` clean, `make verify` 0,
+> `verify:demo` **33/33** freshly seeded.
 >
-> **In one line:** run §2 (docker may need a bounce); close §1.14's three outstanding checks; then
-> **keep driving §5.5's audit while the browser is open**, because it has now found a lying `on` row
-> in every single session that has run it.
+> **In one line:** run §2; pick the next track from §1.11 (payroll screens are now #2); and **keep
+> driving §5.5's audit while the browser is open**, because it has now found a lying `on` row in
+> every single session that has run it.
 >
 > ⚠️ **`on` IS AN UPPER BOUND, NOT A MEASUREMENT.** 31 rows say `on`. Every session that has driven
 > them has found one that was false, and never by reading.
@@ -861,7 +860,7 @@ The criterion is unchanged: **how much of a real business's day is blocked.**
 
 | # | Track | Why here | Shape |
 |---|---|---|---|
-| **0** | ✅ **DONE — THE ACCOUNTING-MODE POSTING BUILDER** (§1.14) | Fixed on BOTH sides: a `GST_ORIENTATION` table drives every direction, tax kind, base ledger and party group; and cored now **REFUSES** a reversed party leg (`ErrPartyOrientation`) so the 201 is closed for every caller, not just the browser | ⚠️ **ONE VERIFICATION IS OUTSTANDING — see §1.14.** The PURCHASE is browser-verified end to end; the CREDIT NOTE's read-back was not completed |
+| **0** | ✅ **DONE — THE ACCOUNTING-MODE POSTING BUILDER** (§1.14) | Fixed on BOTH sides: a `GST_ORIENTATION` table drives every direction, tax kind, base ledger and party group; and cored now **REFUSES** a reversed party leg (`ErrPartyOrientation`) so the 201 is closed for every caller, not just the browser | ✅ Purchase AND Credit Note both browser-verified; every gate green. §1.14 carries one loose end worth a look: a blank HSN yields an empty GSTR-1 `hsn_sc` row |
 | **1** | ✅ **DONE — THE IRN SCREEN** (§1.13) | Shipped and browser-verified; the row is `on`. **What is left around it is in §1.13** | — |
 | **2** | **PAYROLL SCREENS** (§5.2) | Any business with employees. The engine, the statutory rates and the file emitters are all built, and `internal/payroll`/`payrolldb` are **already** in `internal/server`'s archtest allow-set — **no refactor, pure frontend** | The biggest module currently invisible: employees, pay heads, pay run, payslips. Budget **2 sessions**, not 1 |
 | **3** | **T9 FIFO/LIFO** → then **T10 stock groups + compound units** | ⛔ **SERIALISE THESE TWO** — both touch the movement primitive. ⚠️ Closing stock feeds the **Balance Sheet**, so a valuation change MOVES THE SHEET: re-pin `verify:demo` deliberately and explain the change | T9 is a new arm in `ValuerFor` + fixtures, **not** a schema change |
@@ -1069,12 +1068,30 @@ company's output-tax liability. Corrected, with the history in the assertion.
 | All four classes post correctly; all four refuse the reversed party | ✅ `TestAccountingModeCorrectOrientationsStillPost`, `TestEveryGSTClassRefusesTheReversedParty` — against the live DB, asserting ledger NAMES |
 | Receipt / Payment / Contra / Journal keep BOTH sides | ✅ `TestNonInvoiceClassesKeepBothSides` — the refusal must not reach the four most-used screens |
 | The server check is load-bearing | ✅ Mutation: deleting the `validatePartyOrientation` call fails 5 tests and nothing else |
-| ⛔ **Alt+F6 Credit Note, browser read-back** | ⛔ **NOT COMPLETED.** The voucher SAVED ("Saved No: 2") but the container runtime wedged before it could be read back — `docker ps`, `psql` and cored's own API all hung. **Do this first next session:** `Alt+F6`, key it, `Ctrl+A`, then read `posting` — expect `Cr <customer> 1180 / Dr Domestic Sales 1000 / Dr Output CGST 90 / Dr Output SGST 90`. The Go test covers this shape; what is unproved is the BROWSER path for that one class |
+| Alt+F6 Credit Note, browser read-back | ✅ **BROWSER-VERIFIED.** `Cr Acme Traders 1180 / Dr Domestic Sales 1000 / Dr Output CGST 90 / Dr Output SGST 90` — the exact mirror of a sale, matching seeded control CN 1 |
 
-⚠️ **AND THE GATES THAT NEED THE DB WERE NOT RE-RUN AFTER THE WEDGE.** `make verify` and
-`verify:demo` were green earlier in the session but BEFORE this change. The backend suite **was** run
-after it — **2367 pass / 0 SKIP / 0 FAIL** — and the **0 SKIP** is what proves the database was live
-for it (§2.1: a down database makes every DB test skip and `go test` still exits 0). Re-run both.
+**ALL GATES GREEN AFTER THE CHANGE**: backend **2367 / 0 SKIP / 0 FAIL** (DB live before *and*
+after), frontend **961 / 67**, `tsc` clean, `make verify` 0, `verify:demo` **33/33** on a freshly
+seeded company.
+
+> ### ⚠️ AND ONE THING FOUND BY ACCIDENT WHILE CLOSING THIS — NOT A REGRESSION, WORTH A LOOK
+> `verify:demo` first came back **32/33**, on *"GSTR-1 hsn_sc fields are non-empty"*:
+>
+> ```
+> 3 HSN rows: (-1000) 7323(26500) 7326(118000)
+>              ^^^^^^ an EMPTY hsn code
+> ```
+>
+> The cause was **this session's own manually-keyed vouchers**, not the change — a freshly seeded
+> company is 33/33, which is how it was isolated. But the underlying behaviour is real and is a
+> §5.5-class hole: **an accounting-mode GST voucher keyed with the HSN field left BLANK produces a
+> GSTR-1 `hsn_sc` row with an empty HSN code**, and the HSN summary is a mandatory table. Nothing on
+> the form requires it and nothing refuses it. The item-invoice path is immune (the HSN comes off the
+> stock master). Worth a cheap refusal or a form-level requirement.
+>
+> ⛔ **AND A PROCESS NOTE: MANUAL BROWSER VOUCHERS POLLUTE `verify:demo`.** The demo company is the
+> gate's fixture. Re-seed (`pnpm seed:demo`) before trusting it after a browser pass, and re-seed
+> again at the end — otherwise a later session inherits a red gate with no idea why.
 
 ### B. ⛔ THE TRACK AFTER THIS ONE — THE e-INVOICE / IRN SCREEN
 
