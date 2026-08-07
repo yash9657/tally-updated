@@ -4,13 +4,31 @@
 > files that preceded it (§11 lists them; `ls` confirms eleven). **Every other `HANDOFF-*.md` in this
 > repository is SPENT** — see §11 for the list and for the one thing to do about them.
 >
-> ## ⛔⛔ COLD START? READ §1, RUN §2, THEN DO §1.8 — THE DOUBLE-ENTRY POSTING GRID.
+> ## ⛔⛔ COLD START? READ §1, RUN §2 — AND §2's FIRST JOB IS NOW `pnpm seed:demo`.
 >
-> **§1.8 is the next session's plan and it is NOT the IRN screen.** The ordering changed on a fact
-> measured on 2026-08-06, and §1.8 states the case both ways so it can be argued with. In one line:
-> **a Journal cannot be keyed at all, on a row that reads `on`, and that blocks every business's
-> period end — while the IRN screen would ship a screen over a FAKE IRN, because nobody has IRP
-> credentials (§10 item 4).**
+> ## ⛔⛔ THE LIVE PLAN IS **§1.11**. THE PARALLELISATION RULES ARE **§1.12**. READ BOTH.
+>
+> §1.8's Journal grid is DONE (§1.9) and four more tracks shipped beside it (§1.10), so **§1.8 and
+> §1.4's recommendations are SPENT** — they are kept for their reasoning only.
+>
+> **In one line:** run §2, whose **first job is now `pnpm seed:demo`** (it grew last session and has
+> never executed against a server — §1.7b item 1); then build **the IRN SCREEN**, the only `server`
+> row whose backend is genuinely finished; and **drive a slice of §5.5's audit while the browser is
+> already open**, because four of the eight `on` rows driven last session were lying.
+>
+> ⚠️ **`on` IS AN UPPER BOUND, NOT A MEASUREMENT.** 31 rows say `on`. Every session that has driven
+> them has found one that was false, and never by reading.
+>
+> ~~**§1.8 is the next session's plan and it is NOT the IRN screen.**~~ ✅ **SPENT — §1.8 SHIPPED
+> (§1.9).** Kept because its ARGUMENT is the reusable part and the ordering criterion still holds:
+> *"a Journal cannot be keyed at all, on a row that reads `on`, and that blocks every business's
+> period end — while the IRN screen would ship over a FAKE IRN, because nobody has IRP credentials
+> (§10 item 4)."* Both halves proved true, and the Journal turned out to be **four classes, not
+> one**.
+>
+> ⚠️ **THE IRN's SECOND ROW OF THAT TABLE STILL APPLIES**: its screen would still show a
+> `FakeProvider` IRN until §10 item 4's credentials arrive. It is next anyway, because its backend
+> is now genuinely finished and every other candidate needs a backend first.
 >
 > **§1.4 B (the IRN track) is now HALF DONE and is the track AFTER this one.** Two of its four pieces
 > shipped at `cacf8fc`:
@@ -25,7 +43,7 @@
 > The architecture decision (B.2) is settled and unchanged: **cored PROXIES**, because cored is the
 > only party that can build the line items at all.
 >
-> ⚠️ **AND READ §9.1a — the mishaps table, now fifteen rows.** None is specific to any one track; most
+> ⚠️ **AND READ §9.1a — the mishaps table, now TWENTY-THREE rows.** None is specific to any one track; most
 > are about how this file's own claims and this repo's own audits go wrong.
 >
 > ⚠️ **THE READING ORDER HAS CHANGED NOW THAT TIER 1 IS CLOSED.** §4 used to be the work; it is now a
@@ -207,7 +225,7 @@ EMPTY allowed-import set that `internal/server` may import. The workflow plane i
 
 ---
 
-### 1.4 ⛔⛔ START HERE — WHAT THE NEXT SESSION ACTUALLY DOES
+### 1.4 ✅ SPENT — WAS: "START HERE, WHAT THE NEXT SESSION DOES". **Both its tracks shipped. The live plan is §1.11.**
 
 **Run §2 first (ten minutes, and it has burned every session that skipped it). Then this.**
 
@@ -455,7 +473,23 @@ not answering. **Re-run it whenever you restart cored.**
   did not happen". **Use the `postgres` superuser for DB oracles.** This nearly cost a false
   "the browser did not save it" conclusion.
 
-### 1.7a ⛔ WHAT THIS SESSION LEFT UNDONE — the complete list, so nothing is rediscovered
+### 1.7b ⛔⛔ WHAT THE 2026-08-06 PARITY SPRINT LEFT UNDONE — read this before picking a track
+
+*Everything here is deliberate and stated. **No gate is red**: backend 2355/0/0, frontend 940/66,
+`tsc` clean, `make verify` exit 0, `verify:demo` 33/33.*
+
+| # | Left undone | Why, and what it costs |
+|---|---|---|
+| 1 | ⛔ **`seed:demo` HAS NEVER BEEN RUN AGAINST A SERVER** | Its new T2/T3 block is ~20 hard-abort assertions placed ABOVE the seed's last side effect. Run it FIRST and read the whole log — see §2.1's box. **This is the highest-risk unknown in the tree** |
+| 2 | ⛔ **§4.6 IS NOT CLOSED — TDS is still unseeded** | `grep -i tds scripts/seed-demo.mts` → zero matches. The TDS Register still renders empty on a fresh company. ⚠️ And **T5 e-way bill is NOT SEEDABLE** without moving every figure `verify:demo` asserts — that is a finding, not a gap |
+| 3 | ⛔ **THE IRN STILL HAS NO SCREEN** | The cored proxy route, the line-item builder and six defect fixes shipped and are tested; the row correctly still reads `server`. **The client half is untouched: no types, no methods, no screen.** §1.4 B.4 is the work list |
+| 4 | ⚠️ **A 4-decimal `UnitPrice` is now refused by the e-invoice validator, and nothing tests it** | `stock_movement.rate` is NUMERIC(19,4) and the public wire accepts four places; NIC's column is decimal(12,3). The narrowing is defensible and **undertested** — the suite named for four decimals uses a rate with three |
+| 5 | ⚠️ **An inventory line POSTed with `amount` omitted stores AND PRINTS zero** | §4.3's residual box. Pre-existing; the fix's own comment now denies it. Derive it, or correct the comment |
+| 6 | ⚠️ **`Alt+D` does not delete after an ALTER** | Found by the browser pass (11/12 in `e2e-journal.mjs`): once the alter's `Ctrl+A` lands, the frame no longer holds a loaded voucher and `onDelete` returns early. Small, real, written down rather than papered over |
+| 7 | ⚠️ **FOURTEEN throwaway `My Company` tenants in the dev database** | The e2e harness bootstraps one per run and nothing reaps them. Worth a `make reap-scratch-companies`; the demo company itself is clean |
+| 8 | ⚠️ **Stale docs name a token that no longer exists** | `docs/design/t6-model.md:374,520` describe `authz.Export`, removed this session. No test guards them |
+
+### 1.7a ⛔ WHAT THE PREVIOUS SESSION LEFT UNDONE — the complete list, so nothing is rediscovered
 
 *Everything below is deliberate and stated, not forgotten. Nothing here is a broken gate: the tree was
 handed over green (§2.1's table is re-measured), with no residue and no stray processes.*
@@ -474,7 +508,9 @@ left in `statutory_step` by workflows poisoned before `cacf8fc` are **inert on p
 either name is ever looked up again. They need no migration and no cleanup, and writing one would be
 work with no effect.
 
-### 1.8 ⛔⛔ START HERE — THE NEXT SESSION'S PLAN: THE DOUBLE-ENTRY POSTING GRID (§4.5)
+### 1.8 ✅ SPENT — WAS: THE NEXT SESSION'S PLAN (THE DOUBLE-ENTRY POSTING GRID). **SHIPPED — see §1.9.**
+
+> **Kept for its reasoning and its ordering argument, both of which held.** ⛔ **The live plan is now §1.11.**
 
 **Run §2 first. Then this. It is ONE screen, no new deployable, no service token, no proxy, and no
 re-entrancy hazard — and when it ships, a real accountant can immediately do real work.**
@@ -541,6 +577,360 @@ signed-in browser with a working authenticator; drive the neighbouring `on` rows
 Note, and the Alt+F7/F8/F9/F10 stock vouchers — end to end and **write the result in §5.5's log**.
 §9.1a item 7 is the rule that makes this pay: *when a screen is parameterised by TYPE, drive more than
 one type.* That is precisely how §4.8 was found, and how it would have been found two sessions earlier.
+
+### 1.9 ✅ THE JOURNAL GRID IS DONE — §4.5 IS CLOSED, AND IT WAS BIGGER THAN §4.5 SAID
+
+**Closed 2026-08-06. Driven in a real browser against real `cored` with a virtual WebAuthn
+authenticator over CDP (§9.7's recipe, verified working a SIXTH time), and read back out of
+Postgres with the `postgres` superuser (§9.1a item 14).**
+
+`frontend/scripts/e2e-journal.mjs` is the acceptance run and it is **committed, not described** —
+re-run it with `node scripts/e2e-journal.mjs`. **11/12 passed**; the twelfth is the tombstone step
+and is explained below.
+
+| Step | What actually happened |
+|---|---|
+| `F7` | the **Dr/Cr GRID** rendered — side selector, ledger and amount per row. It rendered `null` before |
+| key 1250 Dr / **1000** Cr | ⛔ *"Debits exceed credits by 250.0000 — debits total 1250.0000 against credits of 1000.0000"*, **in the form** |
+| `Ctrl+A` ×2 on that | ⛔ **ZERO requests.** No `POST journal`, and ⛔ **no `POST ledger`** — the refusal runs BEFORE `ensureLedger` |
+| correct to 1250 Cr | the refusal cleared; the footer read **balanced** |
+| `Ctrl+A` | **Journal 1 saved through the passkey** — observed `POST ledger 403` (STEPUP), ceremony, `201`, `201`, `POST journal 201` |
+| Day Book → drill | **"Journal Voucher (Alteration)"**, and the **grid came back hydrated on BOTH sides**, balanced |
+| `Ctrl+A` | `PUT journal 200` |
+| the DATABASE, version 2 | ⛔ **`D Depreciation 1250.0000` / `C Accumulated Depreciation 1250.0000`** — the alter preserved the postings, to the paisa |
+
+#### ⛔⛔ THE THREE THINGS THIS TRACK FOUND THAT §1.8 DID NOT NAME
+
+**1. THE HOLE WAS FOUR CLASSES, NOT ONE.** §4.5 named only the Journal, because the Journal is only
+the class that *defaults* to double entry. `effectiveEntryMode` honours a `Ctrl+H` choice of
+`"double"` on **Payment, Receipt and Contra** too, and that branch rendered `null` exactly as F7
+did — so three more classes reached the identical dead end **one keystroke away**. §9.1a item 7
+again: *when a screen is parameterised by TYPE, drive more than one type.* Pinned in
+`doubleEntry.test.ts` and driven on the shell for all three.
+
+**2. ⛔⛔ A LIVE, MONEY-CORRUPTING DEFECT NOBODY HAD SEEN — AND IT IS NOT THIS TRACK'S.**
+`AccountingVoucherScreen` is **not remounted when the frame's voucher type changes** (F8 and F6 are
+the same component instance) and **nothing ever reset `form`**. So `party` / `partyLedgerId`
+SURVIVED from one voucher into the next. Proved by driving the shell:
+
+> `F8`, pick **Acme Traders**, 10,000 @ 18%, `Ctrl+A` → Sales saved.
+> `F6`, key **only** the particular (Electricity 2,500), `Ctrl+A` →
+> ⛔ the RECEIPT posted **`DR Acme Traders 2,500 / CR Electricity 2,500`**.
+
+The receipt debited the previous voucher's **customer** instead of a bank, on a voucher that
+BALANCES and that **no server check can refuse** — `party` is a free string and a debtor is a
+perfectly legal thing to debit. **And the operator could not see it**, because `SelectionList` was
+uncontrolled and the Account field rendered EMPTY over the stale value. *Two invisibilities
+compounding: the state leaked, and the one control that would have shown it was blank.*
+
+> **THE RULE, AND IT IS THE INVERSE OF §9.1a ITEM 12:** *when a fix makes state VISIBLE, re-check
+> what that state was doing while nobody could see it.* This was found **only** because adding the
+> `value` prop (§1.8 item 4) turned three unrelated passing tests red — and they were red for a real
+> reason. The instinct to "fix the tests" would have buried it.
+
+Fixed by resetting the form when a CREATE frame changes class, guarded so a drill / page-step /
+draft prefill (which change `type` while a document loads) keep their hydration.
+
+**3. ⛔ A TEST WAS CERTIFYING THE JOURNAL BUG, AND IT IS THE SECOND RECORDED CASE (§9.1).**
+`app/wiring.test.tsx` asserted that `F7` + `Ctrl+A` on an **untouched form** calls
+`postJournalVoucher` — with a comment blessing it: *"the other classes still accept an empty form,
+which is the pre-existing behaviour."* It was holding the most-cited hidden parity gap on the board
+in place. The first recorded case was the order book's `As at ${book.as_on}` heading passing on an
+empty string.
+
+#### What shipped, and the three design decisions worth carrying
+
+- **`vouchers/doubleEntry.ts`** — the pure half (totals, every refusal, the hydration).
+  **`vouchers/DoubleEntryPanel.tsx`** — the grid. Same split as `costAllocation.ts` / its picker.
+- ⛔ **`buildCostAllocations(rows, 0)` — the second call site that parameter exists for** (§1.2).
+  Pinned by a test that allocates **row 1, not row 0**: with only row 0 allocated, offsets 0 and 1
+  both produce a seq the server accepts, and the wrong one silently moves the cost.
+- ⛔ **VALIDATE BEFORE RESOLVING, and it is a correctness property.** `ensureLedger` *creates*.
+  Validating after resolution would leave a real account in the chart on every refused `Ctrl+A` —
+  press it five times on an entry that is 200 short and the company gains five ledgers and no
+  voucher. Browser-proved: two unbalanced `Ctrl+A`s made **zero** ledger writes.
+- **`drCrLines` is a SEPARATE array from `lines`**, so Ctrl+H between the two modes is lossless in
+  both directions and neither model silently reinterprets the other's rows.
+- ⚠️ **The hydration is the dangerous line.** The grid now OWNS the double-entry send path, so a
+  `formFromView` that failed to hydrate it would make "fix the narration, save" post a version with
+  **no postings at all** — legal, silent, and it reverses the entry out of every balance.
+
+**Mutation proofs run (each failed EXACTLY the test named, all others green):** the exact-money
+import → the paisa test; validate-after-resolve → the no-ledger control; hydration removed → the
+alter round-trip; `value` prop removed → the blank-party test; form reset disabled → the
+party-leak test.
+
+⚠️ **AND ONE TEST WAS DEMOTED FOR HONESTY.** A "CONTROL" for the reset's hydration guard was written
+twice and **still could not fail** — deleting the guard left the suite green, because the reset runs
+first and the async `getVoucher` re-seeds afterwards. It is now named for what it proves (a
+cross-class drill hydrates) and **the guard's own comment says it is defensive and unproven**, so
+nobody later mistakes the test for evidence. §9.2 applies to your own new tests.
+
+⚠️ **RESIDUE: the demo company is UNTOUCHED.** `e2e-journal.mjs` drives the harness's throwaway
+**"My Company"** bootstrap, not the demo — so `verify:demo` cannot be affected by it. The keyed
+Journal 1 and its ALTER remain in company `83a0c5c9-…`, one of **fourteen** identical `My Company`
+scratch tenants that previous e2e runs have left behind. ⛔ **That accumulation is a real hygiene
+problem this session did not create and did not fix** — the e2e harness bootstraps a fresh company
+every run and nothing ever reaps them. Worth a `make reap-scratch-companies`.
+⚠️ The script's Alt+D step failed (11/12): after the alter's `Ctrl+A` the frame no longer holds a
+loaded voucher, so `onDelete` returns early. **That is a real, small defect in the delete path
+after an alter** — not a test artefact. It is written down rather than papered over.
+
+### 1.10 ⛔⛔ FOUR PARALLEL LANES RAN BESIDE THE JOURNAL — AND ADVERSARIAL REVIEW EARNED ITS KEEP
+
+**2026-08-06.** Four disjoint tracks ran as a workflow (build → adversarial verify) while the Journal
+grid was built solo. **~2.0M subagent tokens, 8 agents.** The verify phase was not ceremony: **it
+returned one lane NOT SHIPPABLE with a defect proved by running it**, and caught a value-blind oracle
+in the very audit written to criticise value-blind oracles.
+
+> ⛔ **THE SINGLE MOST IMPORTANT RESULT: `voucher_gst_line` (migration 0016) WAS A SIXTH TABLE IN
+> §4.3's DELETION CLASS, WAS NEVER ON THE LIST AT ALL — AND WAS LOSING DATA.**
+>
+> It keys on `voucher_version_id`, so an ALTER re-states it. And it is the **worst** member of that
+> class, because the field the round trip lost is an **INPUT, not a record**: `taxable_value`,
+> `cgst`, `sgst`, `igst` are what the derivation PRODUCED, and the **rate it was derived AT** lives
+> only here. **No rate is recoverable from the amounts** — an exempt line and a nil-rated line both
+> produce zero tax.
+>
+> So the ordinary round trip on an **accounting-mode GST invoice** — open it, fix the narration,
+> save — **re-derived the tax at 0%**: an 11,800 invoice became 10,000, the version's GST columns
+> went to zero, and the supply left **both the GSTR-1 b2b section and the table-12 HSN summary**.
+> Nothing refused it, because a supply with no tax is a legal state.
+>
+> ⚠️ **An ITEM invoice was never exposed to it** — its lines are generated server-side from the
+> stock master, so its rate is re-derived from something the round trip cannot lose. It is the
+> accounting-mode voucher, where the rate exists nowhere but the request that carried it.
+>
+> ✅ **CLOSED end to end this session**: the GET emits `gst_lines`, the mock derives them per write
+> (never carried forward, so it cannot be kinder than the server), and **`formFromView` hydrates the
+> rate and HSN** — the half that actually matters, and the half §4.3 has now twice been caught
+> skipping. Pinned by `VoucherScreen.gstAlter.test.tsx`, which **drives the shell**, with the
+> control that an alter omitting the rate destroys 1,800 of tax.
+
+#### The four lanes, and what the adversarial pass found in each
+
+| Lane | Verdict | The finding that mattered |
+|---|---|---|
+| **IRN cored proxy** (§1.4 B) | ⛔ **NOT SHIPPABLE** | see below — it mints a government reference against a false document and then freezes it |
+| **T15 Export** | SHIPPABLE WITH FIXES | ⛔ **`Alt+E` was never "bound-but-dead" — it was BOUND, LIVE, AND LOSING PAISA.** It exported `formatMoney` DISPLAY strings, so a CSV round trip lost the paisa it was written to protect |
+| **§4.3 read-back audit** | SHIPPABLE WITH FIXES | the `voucher_gst_line` discovery above — **and** the audit declared `stock_movement` SAFE on a **quantity-only** oracle |
+| **seed:demo** (§4.6) | SHIPPABLE WITH FIXES | ⚠️ **§4.6 IS NOT CLOSED — TDS is still unseeded.** T2 cost and T3 orders are in; T5 e-way bill is **not seedable at all** without moving every figure `verify:demo` asserts |
+
+#### ⛔⛔ THE IRN LANE'S TWO CRITICAL DEFECTS, BOTH PROVED BY RUNNING THEM
+
+**1. A PURCHASE can be e-invoiced, and is then IRREVERSIBLY FROZEN.** `loadInvoice` never reads
+`voucher_type_id`: it refuses receipts and journals, and accepts *anything with GST lines + stock
+lines* — which is Purchase, Credit Note and Debit Note. Proved over the real stack:
+
+```
+RAISE against a PURCHASE = 201  irn=19530fb1…  pinned_voucher_no=1
+SELLER gstin sent = the company's OWN     BUYER gstin sent = its SUPPLIER
+DELETE of the e-invoiced PURCHASE = 409 "voucher frozen by IRN … (no 1)"
+```
+
+The document asserts the company **sold goods to its own vendor**, and the freeze then makes a
+legitimate purchase record un-alterable and un-deletable **with no undo anywhere in the product**.
+
+> ⛔ **AND A DUPLICATE-IRN HAZARD THE FAKE CANNOT SURFACE.** `DocDtls.Typ` is hardcoded `"INV"` and
+> `DocDtls.No` is the voucher number, which is **per class** — so Sales #1, Purchase #1 and Credit
+> Note #1 all go out as `INV`/`"1"`. Real NIC derives `IRN = hash(SupplierGSTIN, DocTyp, DocNo, FY)`
+> and rejects the second as a duplicate. **`FakeProvider` hashes the WHOLE PAYLOAD, so it returns
+> three distinct IRNs.** That is §9.4's third kind at the level of a *government API*: the fake is
+> more permissive than the thing it stands in for, and no test written against it can fail.
+
+**2. A DISCOUNTED line emits an arithmetically inconsistent NIC payload.** `SnapshotLine` has no
+Discount field, `UnitPrice` is the GROSS rate, and `TaxableValue()` is `qty × rate × (1−disc)`. So
+10 units @ 500 with 10% off emits `Qty:10 UnitPrice:500.00 TotAmt:4500.00` — NIC requires
+`TotAmt = Qty × UnitPrice`. **`ValidateEInvoice` checks 2-dp precision and never the item
+arithmetic.**
+
+> ⚠️ **THE LESSON, AND IT IS GENERAL: this track chased a ONE-PAISA divergence and shipped a ₹500
+> one.** It wrote a careful test for four-decimal rounding and **not one of its nine tests posts a
+> discount.** Precision work on the input you thought of is not coverage of the input you did not.
+
+#### ⛔ AND THE ONE THAT IS FUNNIEST AND MOST INSTRUCTIVE
+
+**The read-back audit reproduced the exact blind spot it was written to criticise.** It declared
+`stock_movement` SAFE — on a `closing_qty`-only oracle. The reviewer mutated the GET's
+`"rate": l.Rate.StringFixed(4)` to `"rate": "0.0000"` and the audit's own test **stayed green**:
+
+```
+BEFORE alter: closing_qty=10.0000 closing_value=1000.0000
+PUT rebuilt-from-GET = 200
+AFTER  alter: closing_qty=10.0000 closing_value=0.0000
+```
+
+**1,000 of stock value written off by a narration edit, and the audit says SAFE.** That is verbatim
+the criticism the audit file itself levels at `TestAlterViaHTTPPreservesStock` — *the value oracle
+exists nowhere in this repo* — and **closing stock feeds the Balance Sheet**, so it is a Balance
+Sheet defect, not a warehouse one.
+
+> **THE RULE: an audit inherits the blind spot of its oracle.** Asking the right QUESTION of the
+> wrong MEASURE is how a table gets cleared twice. §4.3's question was corrected once already
+> ("does the GET emit it?" → "does a form rebuilt from it send it back?"); this is the *third*
+> correction, and it is about the measure rather than the question.
+
+#### ✅ AND THE FIX ROUND, WHICH WAS ALSO ADVERSARIALLY RE-REVIEWED
+
+A second workflow repaired every confirmed defect and a second reviewer tried to refute each repair
+over the **real three-party stack** (cored → statutoryd → cored, real Postgres).
+
+| Defect | Outcome |
+|---|---|
+| PURCHASE / CREDIT NOTE / DEBIT NOTE e-invoiceable and then frozen | ✅ **CLOSED** — gated on `voucher_type.parent_class = 'SALES'` **before any line is read**. Reviewer independently confirmed DEBIT NOTE (untested by the fix) is also refused, and that NULL type fails closed on 0 of 618 live vouchers |
+| discounted line's NIC arithmetic | ✅ **CLOSED** — Discount carried and emitted; `ValidateEInvoice` now checks the item arithmetic it never checked |
+| blank mandatory `Unit` | ✅ **CLOSED** — refused by name; **defence in depth proved**: neither the assembler guard nor the validator alone kept the test green |
+| zero-value client `Timeout` → instant failure | ✅ CLOSED |
+| `mentionsUnauthorized` matching `"401"` anywhere | ✅ CLOSED — matches the producer's exact phrase |
+| `stock_movement` value oracle | ✅ CLOSED — `(closing_qty, closing_value)` in all four legs; the server now **refuses** `amount` contradicting `qty × rate`, with a control proving a legitimate DISCOUNTED line still posts |
+| `order_fulfilment` proved on a one-line note | ✅ CLOSED — two-line note, link on line 2 |
+| export refusals false for 5 reports; `authz.Export` a control that lies | ✅ CLOSED — refusals made true; the token **removed** from the vocabulary (checked: no migration or `acl_rule` names it, so §6.1's 422 trap is not triggered) |
+
+> ⛔ **AND THE REPAIR ITSELF INTRODUCED A DEFECT, WHICH IS WHY THE SECOND REVIEW EXISTED.** The
+> discount fix hard-refused a **legitimate, UN-DISCOUNTED** sales invoice — `qty 0.0011 ×
+> rate 10913.6000` — with *"Discount: must not be negative"*, blaming a discount the voucher does
+> not have. Its comment defended this with a three-step proof (`disc ∈ [0,100]`, so `taxable ≤
+> gross`; rounding is monotonic) in which **every step is true and the conclusion is false**,
+> because `taxable_value` had already been rounded to four places by a `NUMERIC(19,4)` column while
+> the gross had not.
+>
+> ⚠️ **AND THE OBVIOUS FIX — round the gross to four places first — DOES NOT WORK.** It was tried;
+> it moves the failure from the `Discount` check to the `TotAmt` check. The two NIC identities
+> (`TotAmt = Qty × UnitPrice` and `AssAmt = TotAmt − Discount`, both at two decimals) are
+> **genuinely unsatisfiable** when the books' four-place figure and the two-place product round in
+> opposite directions. Measured, not argued:
+>
+> ```
+> qty 0.0011 × rate 10913.6000 = 12.00496 exactly
+>   books: round4 -> 12.0050 -> AssAmt 12.01
+>   NIC:   round2 of product -> TotAmt 12.00     => Discount −0.01, and NIC has no surcharge field
+> ```
+>
+> So it is **refused by name** (`ErrPrecisionNotExpressible`), naming the line and BOTH figures. The
+> three alternatives were each worse: a negative discount is a document the IRP rejects; restating
+> `AssAmt` files a taxable value that is not the books'; clamping at zero yields a line whose own
+> three numbers do not foot. **Each would have put a wrong number on a document carrying a
+> government reference number and then frozen the voucher against it.** §9.6.
+>
+> ⚠️ **The test asserts the refusal AND ITS WORDING**, because a bare 422 passes on both of the
+> misleading messages this actually shipped — which is exactly how it shipped.
+
+### 1.11 ⛔⛔ START HERE — THE NEXT SESSION'S PLAN. THIS SUPERSEDES §1.8 AND §1.4.
+
+**Run §2 first. Its FIRST job is now `pnpm seed:demo` (§1.7b item 1), not a feature.**
+
+#### 0. THE TEN-MINUTE PREFLIGHT, AND ITEM 1 IS NOT OPTIONAL
+
+| # | Do this | Why |
+|---|---|---|
+| 0a | `git status --porcelain`, ports **8087 / 8088 / 8091 / 5173**, `pg_isready` | §2 |
+| 0b | ⛔ **`pnpm seed:demo` AND READ THE WHOLE LOG** | It grew T2 cost + T3 orders last session and **has never executed against a server.** ~20 hard-abort assertions sit ABOVE the seed's last side effect, so a failure there leaves a company that *looks* seeded, a `.demo-company-id` already written, and a silent `verify:demo` 32/33 |
+| 0c | Re-measure the four gates against §2.1's table | **2355 / 940-66 / verify 0 / demo 33-33.** Do not assume |
+
+#### THE ORDERED LIST, WITH THE REASON STATED SO IT CAN BE ARGUED WITH
+
+The criterion is unchanged: **how much of a real business's day is blocked.**
+
+| # | Track | Why here | Shape |
+|---|---|---|---|
+| **1** | ⛔ **THE IRN SCREEN** (§1.4 B.4) | **Statutorily MANDATORY** above the turnover threshold, and it is now **the only `server` row whose backend is genuinely finished** — built, defect-fixed and adversarially re-reviewed last session (§1.10). Every other candidate needs a backend first | 15 registrations + 3 client files + one screen. `EWayBillScreen.tsx` is the precedent |
+| **2** | **PAYROLL SCREENS** (§5.2) | Any business with employees. The engine, the statutory rates and the file emitters are all built, and `internal/payroll`/`payrolldb` are **already** in `internal/server`'s archtest allow-set — **no refactor, pure frontend** | The biggest module currently invisible: employees, pay heads, pay run, payslips. Budget **2 sessions**, not 1 |
+| **3** | **T9 FIFO/LIFO** → then **T10 stock groups + compound units** | ⛔ **SERIALISE THESE TWO** — both touch the movement primitive. ⚠️ Closing stock feeds the **Balance Sheet**, so a valuation change MOVES THE SHEET: re-pin `verify:demo` deliberately and explain the change | T9 is a new arm in `ValuerFor` + fixtures, **not** a schema change |
+| **4** | **T14 Backup / restore / split company** | Table stakes: Tally users expect a company to be a file they can carry | Must be tenant-exact. **Reuse the `testdb` delete-plan census** — it already knows every tenant table and is anti-rot by construction |
+| **5** | **OFFLINE ENTRY SCREEN** (§5.2) | The differentiator against Tally's LAN-only model, and it is built | A screen **plus a decision**: how does a browser present queued intents? |
+| **6** | **T8 multi-currency** → **T11 budgets** → **T13 interest** → **T12 GSTR-9** → **T16 print templates** → **SSO/OIDC last** | Ordinary Tier-2 backlog. §5.4 states the one thing not to get wrong in each | |
+
+> ### ⛔⛔ AND THE TWO THINGS THAT ARE NOT TRACKS AND OUTRANK MOST OF THIS LIST
+>
+> **T32 — a real Tally XML export (§10 item 1).** `POST /import/tally-xml` EXISTS and **has never
+> met a real Tally file.** A business cannot switch if it cannot bring its books, so this is the
+> commercial blocker and it is not on the FeaturesScreen at all. **It costs one email.** Ask on day
+> one; do not discover the importer is wrong after a customer tries it.
+>
+> **IRP / GSTN / e-Way Bill sandbox credentials (§10 item 4).** ⛔ **If these arrive, the IRN screen
+> stops being groundwork and becomes a filing** — and the e-way bill becomes real too, **with no
+> change to either payload builder**. That is the whole difference between these and T18. Re-order
+> immediately if a human supplies them.
+
+#### ⛔ AND THE AUDIT THAT IS STILL THE BEST VALUE ON THE BOARD (§5.5)
+
+**31 rows read `on`, and that is an UPPER BOUND, not a measurement.** Last session drove eight of
+them and **four were lying** — the Journal could not be keyed at all, a Receipt posted against the
+previous voucher's customer, altering a GST invoice stripped its tax, and Alt+E was losing paisa.
+
+> **Every session that has driven `on` rows has found one that was false. None was found by
+> reading.** Do a slice of §5.5's audit **while the browser is already open and the authenticator is
+> already attached** — it is nearly free at that point, and it has the best defect-per-minute rate of
+> anything in this file. Write each row into §5.5's log as you check it.
+
+Start with rows that have a **WRITE** path (a read-only screen that renders is mostly
+self-evidencing). Never driven end to end: **Credit Note, Debit Note, Alt+F7 Physical Stock,
+Alt+F10 Stock Journal, the Edit Log, Budgets-adjacent screens.**
+
+---
+
+### 1.12 ⛔ HOW TO PARALLELISE THIS — WHAT WORKED LAST SESSION, AND WHAT MUST NOT BE SPLIT
+
+**Measured, 2026-08-06: 5 tracks in one session, ~3.0M subagent tokens, 14 agents, every gate green.**
+The previous three sessions each delivered ONE track solo. **The difference was not effort; it was
+file disjointness.**
+
+#### THE SHAPE THAT WORKED — copy it
+
+```
+ORCHESTRATOR (you, solo)  ── the CONTENDED file + the browser pass + the gates
+      │
+      └── Workflow: pipeline(lanes, build, adversarialVerify)
+             lane A  backend Go        (disjoint package)
+             lane B  frontend feature  (disjoint screens)
+             lane C  a single script   (seed-demo.mts)
+             lane D  read-only audit   (returns a report + tests in its OWN file)
+```
+
+⛔ **THE VERIFY PHASE IS NOT CEREMONY AND MUST NOT BE DROPPED.** It returned one lane
+**NOT SHIPPABLE** with a defect it had *executed* (a Purchase e-invoiced and frozen forever), caught
+an audit that cleared a table on a value-blind oracle, and caught a repair that introduced a new
+refusal of a valid document. **Every one of those would have shipped without it.**
+Use `pipeline()`, not `parallel()` — a lane should verify the moment IT finishes, not when the
+slowest one does.
+
+#### ⛔ WHAT MUST BE SERIALISED — ONE OWNER, NO EXCEPTIONS
+
+| File | Why |
+|---|---|
+| `frontend/src/screens/VoucherScreen.tsx` | every voucher track touches it; ~2,600 lines |
+| `frontend/src/app/AppShell.tsx` (`SCREEN_ACTIONS`, `hintsFor`) | the registration that ships a key **completely dead** |
+| `frontend/src/screens/FeaturesScreen.tsx` | the parity ledger — **the orchestrator owns it and applies every row edit** |
+| `corpora/validate.py`, `frontend/scripts/seed-demo.mts`, `verify-demo.mts` | **CO-OWNED. ADD only**, re-read immediately before each edit |
+| `HANDOFF.md` | one writer |
+
+**Tell every lane to REPORT the edit it needs in these files rather than make it.** That worked
+exactly: four lanes, zero conflicts, verified by grepping each forbidden file's diff.
+
+⛔ **AND ONLY ONE LANE MAY RUN DB-BACKED Go TESTS.** One Postgres on :5433 shared across worktrees;
+concurrent `migrations.Apply` races and the residue census counts rows globally. Bar every other
+lane from `make verify`, `verify:demo`, `make migrate` and from starting/killing servers — **the
+orchestrator runs those serially at the end.**
+
+#### APPLIED TO THE LIST ABOVE
+
+| Tracks | Parallel? |
+|---|---|
+| **1 IRN screen** + **2 payroll screens** | ⚠️ **NO.** Both are new screens and both touch `AppShell.tsx`, the keymap and `printTarget.ts`. Run ONE as the solo spine; the other's **client types + methods + mock** can be a lane, because those are disjoint files |
+| **4 T14 backup/restore** | ✅ **YES, alongside either screen track.** Pure backend + its own tables |
+| **T32 importer hardening** | ✅ **YES** — its own package, and it needs no screen |
+| **§5.5 audit slices** | ✅ **YES as read-only lanes**, but ⛔ **the browser pass itself is the orchestrator's** — one signed-in browser, one authenticator |
+| **3 T9 → T10** | ⛔ **NO. Serialise even against each other.** Both touch the movement primitive |
+| **6 T8 / T11 / T13 / T12 / T16** | ✅ mostly disjoint; **T11 budgets must follow T2's axis model** (§8.1) |
+
+> ### ⚠️ THE HONEST LIMIT, so nobody plans a session that cannot happen
+> **A track needing a SCREEN is a session.** Its backend half can be sliced and fanned out; the
+> moment a slice needs `AppShell`, the keymap and the 15 registrations, it is one serial owner.
+> §3.1's third observation stands and was re-confirmed: **the frontend half of a track is not
+> smaller than the backend half.**
+>
+> **And budget for what the browser pass FINDS, not just for running it.** Last session's found four
+> live defects, three of them in code the session had never touched.
 
 ### B. ⛔ THE TRACK AFTER THIS ONE — THE e-INVOICE / IRN SCREEN
 
@@ -781,16 +1171,24 @@ cd ../frontend && pnpm exec tsc --noEmit && pnpm run test:run
 cd .. && make verify
 ```
 
-### 2.1 The gate baseline at the IRN-groundwork commit (`cacf8fc`) — re-measure, do not assume
+### 2.1 The gate baseline after the Journal / parity sprint (2026-08-06) — re-measure, do not assume
 
-| Gate | Value |
-|---|---|
-| backend `go test ./... -count=1 -v` | **2310 pass / 0 SKIP / 0 FAIL** |
-| frontend `pnpm run test:run` | **774 pass / 58 files** |
-| `pnpm exec tsc --noEmit` | clean — ⛔ **a SEPARATE gate from `make verify`** |
-| `make verify` | exit 0 |
-| `verify:demo` | **33/33**, run **ALONE**, needs cored **and** insightd up |
-| `gofmt -l` on every file you touch | clean |
+| Gate | Value | was |
+|---|---|---|
+| backend `go test ./... -count=1 -v` | **2355 pass / 0 SKIP / 0 FAIL** | 2310 |
+| frontend `pnpm run test:run` | **940 pass / 66 files** | 774 / 58 |
+| `pnpm exec tsc --noEmit` | clean — ⛔ **a SEPARATE gate from `make verify`** | |
+| `make verify` | exit 0 | |
+| `verify:demo` | **33/33**, run **ALONE**, needs cored **and** insightd up | 33/33 |
+| `gofmt -l` on every file you touch | clean | |
+
+⛔ **`verify:demo` WAS RUN AGAINST THE EXISTING DEMO COMPANY, NOT A FRESHLY SEEDED ONE — AND THAT
+MATTERS THIS TIME.** `seed-demo.mts` grew T2 cost masters and T3 orders this session and **none of
+it has ever executed against a server**: the lane that wrote it was forbidden to run live gates, and
+so was its reviewer. **The first thing the next session should do is run `pnpm seed:demo` and read
+its stdout to completion.** ~20 hard-abort assertions were added ABOVE the seed's last side effect,
+so an abort there yields a company that *looks* seeded, a `.demo-company-id` already written, and a
+`verify:demo` of 32/33 whose real cause has scrolled off the top of the seed log.
 
 ⚠️ **`verify:demo` TAKES THE COMPANY ID AS AN ARGUMENT** and prints a usage line without it:
 `pnpm run verify:demo "$(cat frontend/.demo-company-id)"`. Bare `pnpm run verify:demo` exits 2, which
@@ -980,11 +1378,45 @@ at length why omitting them destroys a departmental split**, and `voucherFullJSO
 > > **Does a form REBUILT FROM THAT RESPONSE send it back?** Prove it by ALTERING through the screen
 > > and reading the table, with the control that an alter omitting it destroys the row.
 >
-> ⛔ **THE OTHER FOUR HAVE NOT BEEN ASKED THE RIGHT QUESTION.** `posting` and `stock_movement` are
-> re-sent by the form (the alter tests cover them). `posting_cost_allocation` and `order_fulfilment`
-> are hydrated by `allocationsFromView` / the fulfilment picker and are *probably* fine — **but
-> "probably" is what this table had too.** Re-run all four against the corrected question and write
-> the result down here.
+> ## ✅ THE AUDIT WAS RUN, 2026-08-06. THE ANSWERS ARE BELOW — AND THE CLASS HAD **SIX** MEMBERS.
+>
+> | Table | Verdict | Evidence |
+> |---|---|---|
+> | `posting` | ✅ SAFE | re-sent by the form; now also `TestReadBackAudit…` + the Journal grid's own alter test |
+> | `bill_allocation` | ✅ SAFE (fixed §1.5) | |
+> | `posting_cost_allocation` | ✅ SAFE | `allocationsFromView` round trip, mutation-proved |
+> | `order_fulfilment` | ✅ SAFE | ⚠️ the first test proved nothing — ONE inventory line makes `line_no` trivially 1 either way. Re-done with a **two-line** note, link on **line 2** |
+> | `stock_movement` | ⚠️ **SAFE ON QUANTITY, AND THE VALUE ORACLE DID NOT EXIST** — see below | |
+> | ⛔ **`voucher_gst_line` (0016)** | ⛔ **WAS LOSING DATA. NEVER ON THE LIST AT ALL.** Fixed | §1.10 |
+>
+> ⛔⛔ **`voucher_gst_line` IS THE FINDING.** It was on neither side of this section's ledger — not
+> cleared, not pending — and it is the **worst** member of the class, because the lost field is an
+> **INPUT and not a record**: the RATE. Altering the narration of an accounting-mode GST invoice
+> re-derived its tax **at 0%**. Full account in §1.10; closed end to end (GET, mock, and the FORM).
+>
+> ⛔ **AND `stock_movement` WAS CLEARED TWICE ON A QUANTITY-ONLY ORACLE.** The audit asserted
+> `closing_qty` and nothing else. Mutating the GET's `"rate"` to `"0.0000"` left it GREEN while
+> **1,000 of stock value was written off by a narration edit** — and closing stock feeds the
+> **Balance Sheet**. Now fixed: the helper returns `(closing_qty, closing_value)` and all four legs
+> assert both; the server also **refuses** a body whose `amount` contradicts `qty × rate`, with a
+> control proving a legitimate DISCOUNTED line (where `amount ≠ qty × rate` on purpose) still posts.
+>
+> > ## ⛔ THE RULE THIS SECTION HAS NOW LEARNED THREE TIMES, AND IT IS DIFFERENT EACH TIME
+> > 1. *"Does the GET emit it?"* — the wrong QUESTION (`bill_allocation`).
+> > 2. *"Does a form rebuilt from it send it back?"* — the right question, asked of the wrong
+> >    **MEASURE** (`stock_movement`: quantity, never value).
+> > 3. *"Which tables are in the class?"* — asked of an incomplete **LIST** (`voucher_gst_line`).
+> >
+> > **An audit inherits the blind spot of its oracle AND of its enumeration.** Before trusting the
+> > next one, re-derive the member list from the migrations with a grep, and ask what the oracle
+> > CANNOT see.
+>
+> ⚠️ **ONE RESIDUAL, LOGGED NOT WAIVED:** an inventory line POSTed with `amount` omitted stores
+> `0.0000` and is **printed** as a zero line total against a non-zero rate (`printing/invoice.go`
+> renders the stored amount with no multiplication). `item_invoice.go` derives it; nothing else
+> does. The comment added this session says zero means "derive it", which is true only inside
+> `item_invoice.go` — **correct the comment or derive it everywhere**, and assert the projected
+> `amount` in the audit's fourth leg so the claim is under test.
 >
 > ⛔ **`e_way_bill` (0047) IS NOT IN THIS CLASS AT ALL, and the reason is the useful part.** It keys
 > on the voucher HEAD, not on `voucher_version_id`, and the voucher path never writes it — so an
@@ -1130,10 +1562,14 @@ Three distinct kinds of gap, and only the first is on the FeaturesScreen as `off
 |---|---|---|
 | **`off`** — not built, honestly stated | 11 | F11, and the keymap answers when the key is pressed |
 | **`server`** — built, tested, reachable over HTTP, **NO SCREEN** | **3** | F11, and this is the kind that gets re-bought by an accountant who already owns it |
-| ⛔ **HIDDEN — a row that reads `on` with a hole behind it** | **2 found, 1 still open** | nowhere. Found only by driving the app |
+| ⛔ **HIDDEN — a row that reads `on` with a hole behind it** | **6 found, 0 known-open** | nowhere. Found only by driving the app — **never once by reading** |
 
-**The third kind is the dangerous one and it is why §12's browser-evidence rule exists.** Two have now
-been found and NEITHER by looking for them: §4.5 (the Journal) turned up while looking for somewhere to
+**The third kind is the dangerous one and it is why §12's browser-evidence rule exists.** ⛔ **SIX have
+now been found and NOT ONE by reading code** — the Journal (§1.9), the Day Book drill (§4.8), the
+cross-class party leak (§1.9), the GST rate strip (§1.10), `Alt+E` exporting display strings (§1.10),
+and a Purchase that could be e-invoiced and frozen (§1.10). The first two were found by accident;
+the last four by DRIVING THE APP and by ADVERSARIALLY REVIEWING work that looked finished.
+Historically: §4.5 (the Journal) turned up while looking for somewhere to
 put a control, and §4.8 (the Day Book drill) while browser-verifying a different track. §4.8 is fixed;
 **§4.5 is still open and is the oldest known lie on the board.** **There is still no audit that has
 been run for the rest.** See §5.5.
@@ -1150,7 +1586,7 @@ project has now shipped four times and which §4.1 exists to stop.
 
 | Row | Why it matters | What is actually missing |
 |---|---|---|
-| **e-Invoice / IRN** | ⛔ **Statutorily MANDATORY** in India above a turnover threshold. An accountant who cannot raise an e-invoice cannot use this product as their books at all | **Two things now: a SCREEN, and a cored proxy route that builds the line items** (statutoryd's snapshot has none — §1.4 B.1 item 1). ✅ `make run-statutoryd` and the poisoned-workflow fix both shipped at `cacf8fc` (§1.7), and **B.5 items 1 and 2 are already proved over real HTTP** — the workflow, freeze-on-pin, retry classification, the `svc:` auth fast path and `POST /vouchers/{id}/external-reference` all exist and were driven end to end |
+| **e-Invoice / IRN** | ⛔ **Statutorily MANDATORY** in India above a turnover threshold. An accountant who cannot raise an e-invoice cannot use this product as their books at all | ✅ **THE BACKEND IS NOW FINISHED (2026-08-06, §1.10).** The cored proxy route, the line-item builder, the class gate, the discount arithmetic and the unit refusal all shipped and were adversarially re-reviewed over the real three-party stack. ⛔ **ONLY THE SCREEN IS LEFT** — 15 registrations + 3 client files. This is the ONE `server` row with nothing but frontend in front of it and no design question open |
 | **Payroll statutory** (EPF/EPS/EDLI, ESI, salary TDS, pay run) | Any business with employees. The whole engine, the statutory rates and the file emitters are built | Screens only. ⚠️ **NO refactor needed** — `internal/payroll` and `payrolldb` are already in `internal/server`'s archtest allowed set, so this is pure frontend |
 | **Offline entry with sync** | The differentiator against Tally's LAN-only model, and it is built | A screen, and a decision about how a browser presents queued intents |
 
@@ -1184,30 +1620,26 @@ project has now shipped four times and which §4.1 exists to stop.
 > IRN screen would ship over a **FAKE** IRN until someone supplies IRP credentials (§10 item 4). ⚠️ **If
 > those credentials arrive, swap them back** — that is the single fact the ordering turns on.
 
-1. **A double-entry posting grid** — §4.5, planned in §1.8. **A Journal cannot be keyed AT ALL**: driving
-   F7 in a browser on 2026-08-06 found **exactly one input, "Dr/Cr Ledger"** — no amount field, no second
-   line, no side selector. This is accounting parity, not a feature: it is how every adjustment,
-   provision, depreciation and reclass is entered. ⚠️ It is also a HIDDEN row (§5.1) — it reads `on` —
-   so it is the one gap whose size is **measured** rather than guessed, and the one an evaluator hits in
-   week one and reads as "broken" rather than "incomplete".
-2. **The e-Invoice / IRN screen** — §5.2, and **§1.4 B is the plan, now HALF BUILT** (`cacf8fc`: the
-   poisoned-workflow fix and `make run-statutoryd`, with B.5 items 1 and 2 proved over real HTTP).
-   **Statutorily MANDATORY** above a turnover threshold. ⚠️ It does NOT inherit a finished path from T5
-   (the IRN core is not pure, so the workflow stays in statutoryd) — but the browser-to-statutoryd
-   question is settled by §1.4 B.1: only cored can build the line items, so the proxy is right.
-   ⚠️ **What it ships until §10 item 4 lands is a screen over `FakeProvider`'s IRN** — honest, correct
-   groundwork, and not a filing.
-3. ✅ **`bill_allocation` on every voucher path — DONE 2026-08-06** (§1.5). It was billed here as
-   "the cheapest thing on this list, needs no architectural decision" and **it was neither**: it
-   needed a server change (the voucher number is minted inside the post transaction, so a browser
-   cannot name the bill it opens) and it was two features, because a raise without a settle makes
-   Outstandings overstate forever. It took a full session.
-   > ⛔ **REPLACED AT THIS SLOT BY §4.8 — the Day Book drill re-classes any non-Sales voucher it
-   > opens.** Found while browser-verifying this row. It is genuinely small, it is a corrupted
-   > document rather than a cosmetic fault, and it blocks verification of work already written.
-4. **T15 Export (Excel / CSV / XML)** — ⚠️ **the most underrated item on this list.** Tally users live
-   in Excel; "export this report" is a dozen times a day, and its absence makes every report a dead end.
-   `Alt+E` is already bound and already dispatches a screen action, so the plumbing exists.
+> ## ⛔ THIS ORDERING IS SUPERSEDED BY §1.11. Kept because the REASONS are still the reasons.
+>
+> ✅ **Item 1 (the double-entry grid) SHIPPED** — §1.9, and it was four voucher classes rather than
+> one. ✅ **Item 4 (T15 Export) SHIPPED** — §1.10, and it turned out `Alt+E` was already bound, live
+> and **losing paisa**, so the row was wrong in the *understating* direction. **Item 2 (the IRN) is
+> now §1.11's item 1 and only its SCREEN is left.**
+
+1. ✅ **DONE — a double-entry posting grid** (§4.5 / §1.9). Was: **a Journal cannot be keyed AT ALL**,
+   on a row reading `on`. Driving F7 found exactly one input, "Dr/Cr Ledger". ⚠️ **And the measurement
+   undercounted it**: `Ctrl+H` > Double Entry reached the same dead end on Payment, Receipt and
+   Contra, so it was FOUR classes. *A gap measured on the class that DEFAULTS into it undercounts
+   every class that can be switched into it.*
+2. **The e-Invoice / IRN SCREEN** — §5.2. ✅ **Its backend is now finished and defect-fixed**
+   (§1.10). **Statutorily MANDATORY** above a turnover threshold. ⚠️ What it ships until §10 item 4's
+   credentials land is a screen over `FakeProvider`'s IRN — honest groundwork, and not a filing.
+3. ✅ **DONE — `bill_allocation` on every voucher path** (§1.5).
+4. ✅ **DONE — T15 Export** (§1.10). ⛔ **It was never "bound-but-dead": `Alt+E` was BOUND, LIVE AND
+   EXPORTING THE FORMATTED DISPLAY STRINGS**, so every CSV round trip lost the paisa the ledger
+   keeps. Now exact wire values, CSV-injection guarded, refusals answered on the key.
+   ⚠️ And `authz.Export` was a **control that lied** — offered to owners, enforced nowhere. Removed.
 5. **Payroll screens** — §5.2. Pure frontend, no refactor, a whole module currently invisible — and
    the ONLY one of the three `server` rows with no architectural question in front of it.
 6. **T14 Backup / restore, split company** — operationally table-stakes; Tally users expect a company
@@ -1289,7 +1721,14 @@ session's memory is an audit that will be run again from scratch.
 | 2026-08-06 | **Page Up / Page Down across a mixed-class Day Book** | ⛔ **TWO defects.** It re-classed the voucher (same root cause, no drill involved) AND — after the fix — **dead-ended on a stock class** because `StockVoucherScreen` registered no paging. Both fixed; §1.6 finding 3 |
 | 2026-08-06 | **ALTER of any voucher: the Account / Party field** | ⚠️ **BLANK, pre-existing, NOT fixed.** Hydration fills the postings, amounts and bill references but not this field (`SelectionList` has no `value` prop). It does not corrupt — the posting is resolved by name and was browser-proved correct — but it reads as data loss. §1.6's closing box |
 | 2026-08-06 | **POST e-invoice → statutoryd → cored freeze hook** (server only, no screen) | ✅ IRN minted, `voucher_external_reference` pinned kind `IRN`, and a re-post returns the SAME IRN (B.5 items 1+2, §1.7). ⛔ **The BROWSER half is unproved — there is still no screen** |
-
+| 2026-08-06 | **F7 Journal → key a balanced Dr/Cr grid → `Ctrl+A`** | ⛔⛔ **WAS UNUSABLE — the row read `on` and the form had ONE input.** ✅ Now saves through the passkey against real cored; postings read back from Postgres exact (§1.9) |
+| 2026-08-06 | **F7 with an UNBALANCED grid** | ✅ refused **by the form**, naming both totals and the difference. **Zero** requests made, **zero** ledgers created |
+| 2026-08-06 | **Day Book drill → Journal → alter → `Ctrl+A`** | ✅ opens a Journal frame, grid hydrated on BOTH sides, `PUT journal 200`, postings survive to the paisa |
+| 2026-08-06 | **`Ctrl+H` > Double Entry on F5 / F6 / F4** | ⛔ **WAS THE SAME DEAD END AS F7** — §4.5 named only the Journal. ✅ Fixed; all three drive the grid |
+| 2026-08-06 | **F8 sale → then F6 receipt, keying ONLY the particular** | ⛔⛔ **WAS POSTING `DR <the sale's customer>` INSTEAD OF A BANK.** The form was never reset between classes and the party field rendered blank over the stale value. ✅ Fixed (§1.9 finding 2) |
+| 2026-08-06 | **ALTER of an accounting-mode GST invoice (narration only)** | ⛔⛔ **WAS STRIPPING THE TAX** — re-derived at 0%, an 11,800 invoice became 10,000 and left GSTR-1. ✅ Fixed (§1.10); a multi-rate voucher is now REFUSED rather than silently collapsed |
+| 2026-08-06 | **`Alt+E` on every report** | ⛔ **WAS BOUND, LIVE, AND LOSING PAISA** — it exported the formatted DISPLAY strings. ✅ Fixed; exact wire values, CSV-injection guarded, refusals answered |
+| 2026-08-06 | **e-invoice raised against a PURCHASE** | ⛔⛔ **WAS 201, AND FROZE THE VOUCHER FOREVER** — seller/buyer inverted. ✅ Refused by name; DELETE works again |
 ⛔ **THE METHOD NOTE THAT CAME OUT OF THIS, and it is worth more than the rows:** driving ONE row
 end to end is not enough when the row covers a CLASS. "The Day Book works" was established with a
 Sales voucher and was false for every other class. **When a screen is parameterised by type, drive
@@ -1564,9 +2003,27 @@ The false version is the plausible one and **will be re-invented**. Claims that 
   deleted, because it is the plausible claim and will be re-invented.
 - *"a new screen needs 14 registrations"* — §7.2, and it is **fifteen**: `corpora/validate.py`'s
   `KNOWN_SCREENS` is outside `frontend/` and was missed by a list that only looked there.
-- *"Double-entry vouchers (Contra, Payment, Receipt, Journal, Sales, Purchase)"* reads `on` on F11, and
-  is **overstated for Journal**: F7 renders no posting grid, so a journal cannot be keyed from scratch
-  (§4.5). Still uncorrected — correct it when you build the grid.
+- *"Double-entry vouchers (Contra, Payment, Receipt, Journal, Sales, Purchase)"* read `on` on F11
+  while **a Journal could not be keyed at all** (§4.5). ✅ **CORRECTED 2026-08-06 in the change that
+  made it true** — and the correction found the claim was wrong by MORE than recorded: it was
+  **four classes, not one**, because Ctrl+H > Double Entry reached the same dead end on Payment,
+  Receipt and Contra. **A gap measured on the class that DEFAULTS into it undercounts every class
+  that can be switched into it.**
+- ⛔ *"Export … Not built. The action token exists in the ACL vocabulary and is UNMAPPED"* — the F11
+  Export row, and **false in the UNDERSTATING direction, which is rarer and just as misleading**.
+  `Alt+E` was bound, live, and writing files — from the FORMATTED DISPLAY STRINGS, so it was losing
+  paisa on every export. A row claiming a key does nothing, while the key did something subtly
+  wrong. ✅ Corrected, and split into two rows so the built half can be honest.
+- ⛔ *"the discount cannot go negative, and that is a property rather than a hope"* — written this
+  session in `internal/einvoice`, with a correct three-step proof, and **false**. The two sides did
+  not descend from the same basis: one had already been rounded to four places by a `NUMERIC(19,4)`
+  column, the other had not. **A proof about exact arithmetic says nothing about two values that
+  took different paths through a NUMERIC column.** ⚠️ And rounding both to four places did NOT fix
+  it — it moved the error to the other identity, because the two NIC identities are genuinely
+  unsatisfiable at that precision. Now refused by name (`ErrPrecisionNotExpressible`).
+- ⛔ *"§4.3's audit cleared `stock_movement`"* — **true of QUANTITY and never asked of VALUE.** The
+  oracle read `closing_qty` and nothing else, so a projection that dropped the rate wrote off 1,000
+  of stock value and the test stayed green. **An audit inherits the blind spot of its oracle.**
 
 - ⛔ *"the fix is client-side and covers every form"* — §4.7 item 11's own correction, and **false**.
   `allocateVoucherNo` mints the voucher number INSIDE the post transaction, so a client physically
@@ -1618,6 +2075,19 @@ than scattered through §1.5 because the next track will hit the same shapes.*
 | 13 | **The defect had a SECOND path nobody had named.** §4.8 described the drill; Page Up / Page Down re-classed a voucher identically with no drill involved, by swapping the loaded document under a standing frame | **When a defect is reached by one gesture, ask what ELSE mutates the same state.** A fix scoped to the reported gesture is a fix for the report, not for the defect (§1.3's "fixing the call site is not fixing the class", one level up) |
 | 14 | ⛔ **`psql` AS `tally_app` RETURNED ZERO ROWS FOR EVERY TENANT TABLE**, and `count(*) = 0` reads exactly like "the browser did not save it". RLS needs a session GUC a bare `psql` never sets | **Use the `postgres` superuser for DB oracles.** And more generally: a zero from a query you have not proved can see anything is not evidence of absence |
 | 15 | **`pg_isready` reported "no response" mid-session while Docker called the container healthy**, and two queries hung for minutes. Load average was 16.8 on 8 cores | **A slow Postgres and a dead one present identically. Re-check liveness before diagnosing your own code**, and bracket long suites with `pg_isready` (§2 already says this for the reverse case) |
+
+#### The eight the JOURNAL / PARITY-SPRINT session added (2026-08-06)
+
+| # | What happened | The rule it yields |
+|---|---|---|
+| 16 | ⛔⛔ **A FIX MADE STATE VISIBLE AND THE STATE TURNED OUT TO BE CORRUPTING MONEY.** Adding a `value` prop so the party field stopped rendering blank turned three passing tests red — and they were red because `form` was never reset between voucher classes, so a Receipt keyed after a Sale posted `DR <the sale's customer>` instead of a bank | **When a fix makes state VISIBLE, re-check what that state was doing while nobody could see it.** The instinct to "fix the tests" would have buried a live money defect. Two invisibilities were compounding: the state leaked, and the one control that would have shown it was blank |
+| 17 | ⛔ **A TEST WAS CERTIFYING THE BUG, WITH A COMMENT BLESSING IT.** `wiring.test.tsx` asserted that F7 + Ctrl+A on an EMPTY form posts a journal — *"the other classes still accept an empty form, which is the pre-existing behaviour"* | **Second recorded case** (the first was `As at ${book.as_on}` passing on ""). **A test that documents why it accepts something is not thereby right** — the comment is where the misunderstanding gets preserved |
+| 18 | ⛔ **I ASSERTED A MUTATION WOULD GO RED AND IT DID NOT — TWICE.** The "money.ts gets 0.1+0.2 wrong" claim was false (its `Math.round` absorbs it up to ~₹9×10¹¹), and a "CONTROL" for a hydration guard could not fail even after being rewritten once | **Run the mutation before writing the comment that claims it.** Both were caught by actually running them; both comments now state the measured truth, and the guard says outright that it is defensive and unproven |
+| 19 | ⛔ **AN AUDIT INHERITED THE BLIND SPOT OF ITS ORACLE.** §4.3's `stock_movement` verdict asked the right question of `closing_qty` and never of `closing_value`; a projection dropping the rate wrote off 1,000 of stock and stayed green | **Ask what your oracle CANNOT see.** And re-derive the member list from the migrations: `voucher_gst_line` was a sixth table in the class that was on neither side of the ledger |
+| 20 | ⛔ **A TRACK CHASED A ONE-PAISA DIVERGENCE AND SHIPPED A ₹500 ONE.** The e-invoice lane wrote a careful four-decimal rounding test; **none of its nine tests posted a discount**, and the discounted line emitted a payload that did not foot | **Precision work on the input you thought of is not coverage of the input you did not.** Ask which ordinary field nobody's fixture sets |
+| 21 | ⛔ **A REPAIR INTRODUCED A NEW REFUSAL OF A VALID DOCUMENT**, defended by a correct-looking proof whose steps were all true | **A refusal too broad is as bad as one too narrow**, and it is what the re-review is for. ⚠️ **And the second fix moved the error rather than closing it** — when two "must-hold" identities fight, check whether they are satisfiable AT ALL before rounding differently |
+| 22 | ⚠️ **A MOCK MORE PERMISSIVE THAN A GOVERNMENT API.** `FakeProvider` hashes the WHOLE PAYLOAD, so Sales #1 and Purchase #1 got distinct IRNs — where real NIC hashes `(GSTIN, DocTyp, DocNo, FY)` and rejects the second as a duplicate | **§9.4's third kind, one level out.** A fake that is more forgiving than the thing it stands in for makes a whole defect class untestable — here, a duplicate-IRN collision that only appears in production |
+| 23 | ⚠️ **THE BROWSER PASS DROVE THE WRONG COMPANY AND THAT WAS FINE — BUT ONLY BY LUCK.** `e2e-journal.mjs` hit the harness's throwaway `My Company` bootstrap, not the demo, so `verify:demo` could not be affected | **Know which tenant your acceptance run writes to before you read the gate.** It also revealed 14 orphaned scratch tenants nothing reaps |
 
 ### 9.2 A test that CANNOT FAIL is worse than no test
 
@@ -1827,7 +2297,7 @@ has caught something every single time:
 2. `make verify` exit 0 **and** `pnpm exec tsc --noEmit` clean (**different gates** — and each has
    caught a real error the other missed: `tsc` found `printTarget.ts`'s non-exhaustive record,
    `make verify` found `corpora/validate.py`'s `KNOWN_SCREENS`).
-3. backend **≥2310 pass, 0 SKIP, 0 FAIL** (verbose census); frontend **≥774 / 58 files**;
+3. backend **≥2355 pass, 0 SKIP, 0 FAIL** (verbose census); frontend **≥940 / 66 files**;
    `verify:demo` **33/33 run ALONE** with insightd up **and the company id as an argument** (§2.1),
    re-pinned deliberately if a figure moves — and **the change explained**.
 4. ⛔ **THE REACHABILITY CHECK, for every new feature: name the exact HTTP request that exercises it
