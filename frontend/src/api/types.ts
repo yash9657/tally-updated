@@ -944,6 +944,64 @@ export interface VoucherView {
    * empty mean different things.
    */
   cost_allocations?: CostAllocationView[];
+  /**
+   * THE PER-LINE GST DETAIL THIS VOUCHER'S TAX WAS DERIVED FROM (migration 0016).
+   *
+   * ⛔⛔ AN ALTER RE-STATES THESE, AND THIS IS THE WORST MEMBER OF THAT CLASS,
+   * BECAUSE THE MISSING FIELD IS AN INPUT AND NOT A RECORD. `taxable_value`,
+   * `cgst`, `sgst` and `igst` above are what the derivation PRODUCED. The RATE it
+   * was derived AT — and the HSN it was stated under — live only here, and no rate
+   * is recoverable from the amounts (an exempt line and a nil-value line both
+   * produce zero tax).
+   *
+   * So while this key did not exist, a form rebuilt from GET /vouchers/{id} had no
+   * rate to put back in its `gst` block, and the ordinary round trip on an
+   * ACCOUNTING-mode GST invoice — open it, fix the narration, save — re-derived the
+   * tax at 0%: the party leg fell by the whole tax (11,800 becomes 10,000), the
+   * version's GST columns went to zero, and the supply left both the GSTR-1 b2b
+   * section and the table-12 HSN summary. Nothing refused it, because a supply
+   * with no tax is a legal state.
+   *
+   * ⚠️ AN ITEM INVOICE IS NOT EXPOSED TO THAT: its lines are generated server-side
+   * from the stock-item master, so the rate is re-derived from something the round
+   * trip cannot lose. It is the accounting-mode voucher — a taxable value and a
+   * typed rate, no stock — where the rate exists nowhere but the request that
+   * carried it.
+   *
+   * ⚠️ FIELD NAMES MIRROR {@link GSTLineRequest} where they overlap
+   * (`taxable_value` / `gst_rate_pct` / `hsn`) so these objects can be lifted
+   * STRAIGHT back into `gst.lines`; the three tax amounts are extra and are
+   * ignored by the server's decoder, which re-derives them. A client that stated
+   * them would be offering a second opinion about the tax.
+   *
+   * ⚠️ ALWAYS PRESENT (possibly empty) from a current server; optional in the type
+   * only for a voucher fetched from a build that predates the key, where absent and
+   * empty mean different things — "this endpoint does not tell me about GST" versus
+   * "this voucher has none", and only the second is safe to restate as nothing.
+   */
+  gst_lines?: GSTLineView[];
+}
+
+/**
+ * One stored `voucher_gst_line` row, as returned by GET /vouchers/{id}: the INPUT
+ * to the tax derivation beside the OUTPUT it produced.
+ *
+ * ⚠️ `line_no` IS 1-BASED and STORED, like {@link FulfilmentView.line_no} and
+ * unlike {@link CostAllocationView.posting_seq}. It indexes nothing else on the
+ * body — an accounting-mode GST voucher has GST lines and no inventory at all, so
+ * pairing the two by position would be a guess.
+ */
+export interface GSTLineView {
+  line_no: number;
+  /** "" when the client stated no code — legal, and it takes the supply out of the GSTR-1 table-12 summary. */
+  hsn: string;
+  taxable_value: Money;
+  /** ⛔ THE FIELD THE ROUND TRIP EXISTED WITHOUT. e.g. "18.0000". */
+  gst_rate_pct: Money;
+  /** Derived, not stated. Present so a form can display the split it read. */
+  cgst: Money;
+  sgst: Money;
+  igst: Money;
 }
 
 /**

@@ -49,6 +49,12 @@ package server
 //     qty x rate less discount. Send a CONTRADICTING one and the post is refused
 //     rather than silently corrected, so a client-side rounding drift surfaces on
 //     the first discounted line instead of as a paisa on every invoice.
+//     ⚠️ THAT LAST RULE IS NO LONGER ITEM-INVOICE-ONLY. ledger.validateInventory
+//     applies it to EVERY class that carries a grid (and to the sync/import doors
+//     with it): a stated amount that contradicts qty x rate less discount is a
+//     422. It has to be — stock VALUE is replayed from qty/rate/discount and the
+//     amount column is read back by nothing, so an inconsistent pair puts one
+//     number on the printed document and a different one on the Balance Sheet.
 //
 // The response is the ordinary voucher result (voucher_id, version_no,
 // voucher_no, cgst/sgst/igst): the tax on it is the SERVER-derived tax, so an
@@ -65,7 +71,7 @@ import "github.com/khata/cored/internal/ledger"
 // (line_no, item, godown, batch names) are ignored by the decoder on the way
 // back in, which is what lets the round trip be a plain echo.
 //
-// TWO THINGS ARE LOAD-BEARING, and each one has cost this codebase a bug in a
+// THREE THINGS ARE LOAD-BEARING, and each one has cost this codebase a bug in a
 // neighbouring layer:
 //
 //  1. THE UUIDS. item/godown/batch are projected as ids, not just names.
@@ -82,6 +88,15 @@ import "github.com/khata/cored/internal/ledger"
 //     entered; the value the report derives would then differ from the value the
 //     invoice printed. Quantities are money here. This is also why the request
 //     side parses them with decimal.NewFromString and not ParseFloat.
+//
+//  3. THE RATE, WHICH IS THE FIELD THE MONEY HANGS ON. Closing stock value is
+//     REPLAYED from qty x rate less discount (internal/inventory's valuer) and is
+//     never read out of stock_movement.amount, so a projection that returns the
+//     grid without a usable price is not a cosmetic loss: the alter rebuilt from
+//     it restates every unit at no cost and closing stock — a BALANCE SHEET line —
+//     falls to zero with the quantity still correct and nothing out of balance.
+//     A quantity-only round-trip test cannot see it; both TestAlterViaHTTPPreserves
+//     Stock and the read-back audit therefore assert closing_value as well.
 func inventoryLinesJSON(lines []ledger.InventoryLineView) []map[string]any {
 	out := make([]map[string]any, 0, len(lines))
 	for _, l := range lines {

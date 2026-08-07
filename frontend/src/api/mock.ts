@@ -126,6 +126,7 @@ import type {
   SetBankDateRequest,
   SetBankDateResponse,
   VoucherVersionView,
+  GSTLineView,
 } from "./types";
 // A VALUE, not a type: the recorded `payload.class` labels the server stamps.
 // The mock must agree with them exactly — see classLabel().
@@ -2084,6 +2085,54 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
   }
 
   /**
+   * The PER-LINE GST detail as GET /vouchers/{id} returns it — the mock's mirror
+   * of `voucher_gst_line` (migration 0016) and of voucherFullJSON's `gst_lines`.
+   *
+   * ⛔⛔ IT IS RE-DERIVED FROM THE REQUEST ON EVERY WRITE, AND THAT IS THE POINT.
+   * The rows key on voucher_version_id server-side, so an ALTER RE-STATES them:
+   * whatever the body carries becomes the current version's lines and whatever it
+   * omits is GONE. A mock that carried the previous version's lines forward would
+   * be MORE FORGIVING THAN THE SERVER (§9.4's first kind) and would hide the exact
+   * defect this projection exists to close — that a form rebuilt from a GET which
+   * had no rate on it re-derived the tax at 0% and silently stripped an invoice of
+   * its GST.
+   *
+   * Derived through the SAME {@link deriveGstSplit} the aggregate above uses, so
+   * the per-line amounts and the voucher total can never disagree here in a way
+   * they could not disagree on the server.
+   */
+  function gstLineViews(c: MockCompany, req: VoucherRequest): GSTLineView[] {
+    const gst = req.gst;
+    if (!gst) return [];
+    const supplierState =
+      (gst.supplier_state_code ?? "").trim() !== ""
+        ? (gst.supplier_state_code as string)
+        : c.stateCode;
+    const pos = gst.place_of_supply_state_code ?? "";
+    return (gst.lines ?? []).map((line, i) => {
+      const split = deriveGstSplit(
+        line.taxable_value,
+        line.gst_rate_pct,
+        supplierState,
+        pos,
+      );
+      return {
+        // 1-BASED and STORED, matching the server's line_no column.
+        line_no: i + 1,
+        hsn: line.hsn ?? "",
+        // Fixed-4 through the shared string adder, never a float format: the
+        // server hands these out as StringFixed(4) and a client that echoes them
+        // straight back into `gst.lines` must be echoing the same characters.
+        taxable_value: addMoney("0.0000", line.taxable_value),
+        gst_rate_pct: addMoney("0.0000", line.gst_rate_pct),
+        cgst: split.cgst,
+        sgst: split.sgst,
+        igst: split.igst,
+      };
+    });
+  }
+
+  /**
    * THE ITEM INVOICE, GENERATED — the mock's mirror of
    * internal/ledger/item_invoice.go.
    *
@@ -2986,6 +3035,11 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       fulfilments: fulfilmentViews(c, req, null),
       // The COST SPLITS. Validated first, so a partial axis never reaches the store.
       cost_allocations: costAllocationViews(req),
+      // ⛔ THE PER-LINE GST DETAIL. RE-STATED from this body, never carried
+      // forward: the rows key on voucher_version_id server-side, so an alter that
+      // omits `gst` must lose them here too or the mock is more forgiving than the
+      // server about the one thing this projection exists to make safe.
+      gst_lines: gstLineViews(c, req),
     });
     return {
       voucher_id: voucherID,
@@ -3088,6 +3142,11 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       // current version's splits, and whatever it omits is GONE — which is why the
       // voucher GET has to return them and a form must send back what it read.
       cost_allocations: costAllocationViews(req),
+      // ⛔ THE PER-LINE GST DETAIL. RE-STATED from this body, never carried
+      // forward: the rows key on voucher_version_id server-side, so an alter that
+      // omits `gst` must lose them here too or the mock is more forgiving than the
+      // server about the one thing this projection exists to make safe.
+      gst_lines: gstLineViews(c, req),
     });
     return {
       voucher_id: voucherID,

@@ -400,11 +400,24 @@ func inventoryOf(view map[string]any) []map[string]any {
 	return out
 }
 
-// closingQty reads the closing quantity of one item off GET /stock-summary.
-// The stock summary is derived by replaying the movement ledger, so it is the
-// honest witness to whether the movements still exist: nothing is stored for it
-// to read stale.
-func closingQty(t *testing.T, srv *server.Server, base, itemID string) string {
+// closingPosition reads the closing QUANTITY AND VALUE of one item off
+// GET /stock-summary. The stock summary is derived by replaying the movement
+// ledger, so it is the honest witness to whether the movements still exist:
+// nothing is stored for it to read stale.
+//
+// ⛔⛔ IT RETURNS THE VALUE BECAUSE A QUANTITY-ONLY ORACLE IS BLIND TO THE
+// EXPENSIVE HALF OF THIS DEFECT CLASS. It used to return the quantity alone, and
+// a projection that handed the grid back WITHOUT THE PRICE — `"rate"` and
+// `"amount"` projected as "0.0000" in inventoryLinesJSON — left
+// TestAlterViaHTTPPreservesStock GREEN while the round trip restated ten units
+// at no cost and wrote 1,000 of stock value off the Balance Sheet. Measured, not
+// reasoned about: that mutation was run, this test passed, and the audit test in
+// voucher_readback_audit_test.go was the only thing that failed.
+//
+// The value is DERIVED from qty x rate less discount by internal/inventory's
+// valuer and never read out of stock_movement.amount, which is why the RATE is
+// the field a lossy projection costs real money on.
+func closingPosition(t *testing.T, srv *server.Server, base, itemID string) (qty, value string) {
 	t.Helper()
 	rec, body := do(t, srv, http.MethodGet, base+"/stock-summary", nil)
 	if rec.Code != http.StatusOK {
@@ -412,11 +425,12 @@ func closingQty(t *testing.T, srv *server.Server, base, itemID string) string {
 	}
 	for _, it := range list(t, body, "items") {
 		if it["stock_item_id"] == itemID {
-			qty, _ := it["closing_qty"].(string)
-			return qty
+			q, _ := it["closing_qty"].(string)
+			v, _ := it["closing_value"].(string)
+			return q, v
 		}
 	}
-	return "" // no position at all: every movement is gone.
+	return "", "" // no position at all: every movement is gone.
 }
 
 // TestAlterViaHTTPPreservesStock is the HTTP expression of the invariant the
@@ -436,8 +450,8 @@ func TestAlterViaHTTPPreservesStock(t *testing.T) {
 	e := newItemWireEnv(t, srv)
 	voucherID := e.stockPurchase(t, srv)
 
-	if got := closingQty(t, srv, e.base, e.itemID); got != "10.0000" {
-		t.Fatalf("closing qty after the purchase = %q, want 10.0000", got)
+	if q, v := closingPosition(t, srv, e.base, e.itemID); q != "10.0000" || v != "1000.0000" {
+		t.Fatalf("after the purchase the shelf reads qty=%q value=%q, want 10.0000 / 1000.0000", q, v)
 	}
 
 	rec, view := do(t, srv, http.MethodGet, e.base+"/vouchers/"+voucherID, nil)
@@ -459,12 +473,20 @@ func TestAlterViaHTTPPreservesStock(t *testing.T) {
 			"not rewrite version 1)", body["version_no"])
 	}
 
-	// THE ASSERTION. Derived by replaying the movement ledger, so a zero here
-	// means the movements are actually gone, not merely mis-reported.
-	if got := closingQty(t, srv, e.base, e.itemID); got != "10.0000" {
-		t.Fatalf("closing qty after a NO-OP alter = %q, want 10.0000 — the round trip "+
-			"GET -> PUT wrote off the stock. Every field the projection omits is a field the "+
-			"next alter deletes, and for stock nothing in the books goes out of balance to show it", got)
+	// THE ASSERTION, IN BOTH DIMENSIONS. Derived by replaying the movement ledger,
+	// so a zero here means the movements are actually gone, not merely
+	// mis-reported.
+	//
+	// ⛔ THE VALUE IS NOT DECORATION ON THE QUANTITY. A projection can hand back a
+	// grid that restates every unit and no PRICE, and then the quantity survives
+	// while the goods land in closing stock — a BALANCE SHEET line — at nothing.
+	// This test was green through exactly that mutation until the value was
+	// asserted here; see closingPosition.
+	if q, v := closingPosition(t, srv, e.base, e.itemID); q != "10.0000" || v != "1000.0000" {
+		t.Fatalf("after a NO-OP alter the shelf reads qty=%q value=%q, want 10.0000 / 1000.0000 — "+
+			"the round trip GET -> PUT wrote the stock off. Every field the projection omits (or "+
+			"zeroes) is a field the next alter deletes, and nothing in the books goes out of "+
+			"balance to show it", q, v)
 	}
 
 	rec, after := do(t, srv, http.MethodGet, e.base+"/vouchers/"+voucherID, nil)
@@ -566,10 +588,10 @@ func TestSyncCommitFromAnOfflineNodeCarriesStock(t *testing.T) {
 	// THE ASSERTION: the goods are in the warehouse, derived by replaying the
 	// movement ledger. A sync path that decoded the intent but dropped the item
 	// grid returns exactly the same 200 COMMITTED as this one.
-	if got := closingQty(t, srv, e.base, e.itemID); got != "7.0000" {
-		t.Fatalf("closing qty after an offline commit = %q, want 7.0000 — the sequencer "+
-			"committed the accounting and threw the stock away. Every voucher door must go "+
-			"through buildVoucherInput, or a field only the HTTP door knows about is a field "+
-			"an offline desk silently loses", got)
+	if q, v := closingPosition(t, srv, e.base, e.itemID); q != "7.0000" || v != "700.0000" {
+		t.Fatalf("after an offline commit the shelf reads qty=%q value=%q, want 7.0000 / "+
+			"700.0000 — the sequencer committed the accounting and threw the stock (or its "+
+			"price) away. Every voucher door must go through buildVoucherInput, or a field only "+
+			"the HTTP door knows about is a field an offline desk silently loses", q, v)
 	}
 }

@@ -101,9 +101,19 @@ type InventoryLine struct {
 	// invoice that knows how to price one.
 	RateUnstated bool
 	// Amount is the line total AS ENTERED. It is deliberately not recomputed
-	// from qty * rate here: Tally lets a user override a line amount, and
-	// silently "correcting" it would make the printed invoice disagree with the
-	// stored one.
+	// from qty * rate here: silently "correcting" it would make the printed
+	// invoice disagree with the stored one.
+	//
+	// ⛔ NOT RECOMPUTED IS NOT THE SAME AS NOT CHECKED, and this field used to
+	// read as though it were. An amount that CONTRADICTS qty x rate less discount
+	// is REFUSED by validateInventory (a zero means "derive it"). It has to be:
+	// the amount column is written, printed and never read back for value —
+	// closing stock is replayed from qty/rate/discount by internal/inventory's
+	// valuer — so a contradicting pair does not "override" anything, it just
+	// makes the document and the Balance Sheet state two different numbers with
+	// nothing out of balance to reveal which is real. Tally's own grid keeps the
+	// triple consistent by back-computing the rate when the amount is typed over;
+	// this layer refuses instead of guessing which of the two the operator meant.
 	Amount decimal.Decimal
 }
 
@@ -258,6 +268,44 @@ func validateInventory(ls []InventoryLine) error {
 		if l.DiscountPct.IsNegative() || l.DiscountPct.GreaterThan(decimal.NewFromInt(100)) {
 			return fmt.Errorf("ledger: inventory line %d: discount must be between 0 and 100, got %s",
 				i+1, l.DiscountPct.StringFixed(4))
+		}
+		// ⛔⛔ THE LINE TOTAL MUST BE THE LINE'S OWN ARITHMETIC, AND THE REASON IS
+		// THE BALANCE SHEET RATHER THAN TIDINESS.
+		//
+		// `amount` IS NOT WHAT STOCK IS VALUED AT. Every report replays qty x rate
+		// less discount through internal/inventory's valuer — Movement.Value(),
+		// whose own comment says "stock_movement.amount MUST equal it" — and NO
+		// reader anywhere reads the amount column back for value. So a line that
+		// states 10 @ 0.0000 with an amount of 1,000.0000 is not a harmless
+		// override: the purchase debits 1,000, the printed line says 1,000, and the
+		// goods land in closing stock — a Balance Sheet line — at ZERO. Nothing is
+		// out of balance afterwards and no report complains, which is precisely why
+		// a read-back audit comparing only QUANTITIES called that round trip SAFE
+		// while it wrote 1,000 of stock value off (see
+		// TestReadBackAuditStockMovementsSurviveAnAlterRebuiltFromTheGet and
+		// TestAnInventoryLineWhoseAmountContradictsItsOwnRateIsRefused).
+		//
+		// ⚠️ IT COMPARES AGAINST TaxableValue(), NOT AGAINST qty x rate. A DISCOUNT
+		// MAKES amount != qty x rate ON PURPOSE — 10 @ 100 less 10% is a line total
+		// of 900 — and a naive equality here would refuse every discounted invoice
+		// in the product. qty x rate x (1 - disc) is both what the line is worth and
+		// what the valuer will carry it at, so the two cannot drift apart.
+		//
+		// ZERO MEANS "YOU COMPUTE IT", exactly as it does in item_invoice.go's
+		// identical check: a grid that captures only qty/rate/disc sends no amount
+		// at all, and a Delivery Note that states no line value sends 0. This is
+		// therefore not a new field requirement — it refuses only a STATED total
+		// that contradicts the STATED price.
+		//
+		// A RateUnstated line is skipped because it has no rate YET: the price list
+		// supplies rate AND discount together inside the transaction, and
+		// item_invoice.go re-runs this same comparison against the resolved pair.
+		// Checking it here would refuse "price it for me, the total is 900" for a
+		// price list that says exactly 900.
+		if !l.RateUnstated && !l.Amount.IsZero() && !l.Amount.Equal(l.TaxableValue()) {
+			return fmt.Errorf(
+				"ledger: inventory line %d: amount %s contradicts qty x rate less discount = %s; stock is VALUED at the derived figure (closing stock is a Balance Sheet line and never reads the stated total), so the two cannot differ — correct the rate, or send 0 and let the line total be derived",
+				i+1, l.Amount.StringFixed(4), l.TaxableValue().StringFixed(4))
 		}
 	}
 	return nil

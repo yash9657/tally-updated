@@ -668,6 +668,60 @@ type VoucherView struct {
 	// defect unreachable rather than fixed. The picker on voucher entry is what made
 	// it reachable, so it is projected here in the same change.
 	Fulfilments []FulfilmentView
+	// GSTLines are the head version's PER-LINE GST detail (migration 0016), and
+	// they are here for the SIXTH occurrence of the reason CostAllocations and
+	// Fulfilments above are — a table `voucher_gst_line` that §4.3's read-back
+	// audit never even listed.
+	//
+	// ⛔ AN ALTER RE-STATES. `voucher_gst_line` keys on voucher_version_id and is
+	// written from `in.GST.Lines` inside post()'s transaction, so an alter whose
+	// body omits the `gst` block writes NO lines — and, worse than the other five,
+	// it also nulls the version's own aggregate taxable_value/cgst/sgst/igst,
+	// because `gstActive` is false and those columns come from the same derivation.
+	//
+	// ⛔⛔ AND THE RATE IS THE PART THAT COULD NOT BE RECOVERED. The aggregate
+	// columns record what the derivation PRODUCED; nothing on the read shape
+	// recorded what it was DERIVED FROM. A client that rebuilt a GST voucher from
+	// GET /vouchers/{id} therefore had no rate and no HSN to send back, so the
+	// ordinary round trip — open an invoice, fix the narration, save — re-derived
+	// the tax at 0%: the invoice stayed on the books at its net value, left the
+	// GSTR-1 b2b section (which reads the aggregate columns) and left the table-12
+	// HSN summary (which reads these rows), with nothing refusing it because a
+	// zero-rated supply is a legal state.
+	//
+	// ⚠️ AN ITEM INVOICE IS NOT EXPOSED TO THAT, and the difference is worth
+	// knowing: its lines are GENERATED server-side from the stock item master
+	// (item_invoice.go), so the rate is re-derived from a master the round trip
+	// cannot lose. It is the ACCOUNTING-mode GST voucher — taxable value + a typed
+	// rate, no stock — where the rate exists nowhere but the request that carried
+	// it. These rows are projected for both, because a read shape that told the
+	// truth only for some vouchers is how the next reader concludes it is safe.
+	GSTLines []GSTLineView
+}
+
+// GSTLineView is one persisted `voucher_gst_line` row of the head version: the
+// INPUT to the tax derivation (hsn, taxable value, rate) beside the OUTPUT it
+// produced (cgst/sgst/igst).
+//
+// ⚠️ LineNo IS 1-BASED and is the STORED column, like FulfilmentView.LineNo and
+// unlike CostAllocationView.PostingSeq. It indexes nothing else on this view: a
+// GST line is not a stock line (an accounting-mode voucher has GST lines and no
+// inventory at all), and pairing the two by position would be a guess.
+type GSTLineView struct {
+	LineNo int
+	// HSN is the harmonised code as stated; "" when the client sent none, which
+	// is legal and is what takes a sale out of the GSTR-1 table-12 HSN summary.
+	HSN string
+	// TaxableValue is the base this line was taxed on.
+	TaxableValue decimal.Decimal
+	// GSTRatePct is the whole-percentage rate, e.g. 18 => "18.0000". ⛔ THIS IS
+	// THE FIELD THE ROUND TRIP EXISTED WITHOUT: it is not recoverable from the
+	// aggregate columns, because an exempt line and a zero-value line produce the
+	// same zero tax.
+	GSTRatePct decimal.Decimal
+	CGST       decimal.Decimal
+	SGST       decimal.Decimal
+	IGST       decimal.Decimal
 }
 
 // FulfilmentView is one order link of the head version, carrying the real order and
@@ -927,6 +981,40 @@ func (s *Service) GetVoucher(ctx context.Context, voucherID uuid.UUID) (VoucherV
 		}
 		if err := brows.Err(); err != nil {
 			return fmt.Errorf("ledger: iterate bill allocations: %w", err)
+		}
+
+		// PER-LINE GST detail of the current version (migration 0016).
+		//
+		// ⛔ THIS READ IS WHAT MAKES A GST VOUCHER SURVIVE AN ALTER AT ALL. The
+		// rows are keyed on voucher_version_id and re-stated from `in.GST.Lines`,
+		// and the RATE they were derived at is stored nowhere else — not on
+		// voucher_version, which keeps only the amounts the derivation produced. So
+		// a form rebuilt from a GET that omitted them had no rate to send back and
+		// re-derived the tax at zero. See the GSTLines field on VoucherView.
+		//
+		// Ordered by the STORED line_no, which is the order post() wrote them in
+		// from the request's own `lines` array — so a client that echoes this slice
+		// sends the lines back in the order it stated them.
+		grows, err := tx.Query(ctx,
+			`SELECT line_no, COALESCE(hsn, ''), taxable_value, gst_rate_pct, cgst, sgst, igst
+			   FROM voucher_gst_line
+			  WHERE company_id = $1 AND voucher_version_id = $2
+			  ORDER BY line_no`,
+			companyID, versionID)
+		if err != nil {
+			return fmt.Errorf("ledger: query gst lines: %w", err)
+		}
+		defer grows.Close()
+		for grows.Next() {
+			var g GSTLineView
+			if err := grows.Scan(&g.LineNo, &g.HSN, &g.TaxableValue,
+				&g.GSTRatePct, &g.CGST, &g.SGST, &g.IGST); err != nil {
+				return fmt.Errorf("ledger: scan gst line: %w", err)
+			}
+			v.GSTLines = append(v.GSTLines, g)
+		}
+		if err := grows.Err(); err != nil {
+			return fmt.Errorf("ledger: iterate gst lines: %w", err)
 		}
 
 		// Inventory lines of the current version, with real ids. Same
