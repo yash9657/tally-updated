@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo } from "react";
 import type { NavSnapshot } from "../../keystroke/navMachine";
 import {
   GROUP_ROW_PREFIX,
@@ -10,7 +10,9 @@ import { ColumnHeader, DrillRows, type DrillRow } from "./DrillRows";
 import { formatMoney } from "./money";
 import { dayBookRowKey } from "../vouchers/voucherClass";
 import { voucherIDFromRowKey } from "../../keystroke/voucherClass";
-import { useReportView } from "./reportView";
+import { useReportFetch, useReportView } from "./reportView";
+import { ReportUnavailable } from "./ReportUnavailable";
+import { exactCell, moneyCell, textCell } from "../../export/sheet";
 import type {
   DayBookResponse,
   StatementNode,
@@ -41,44 +43,42 @@ export function ReportDetailScreen({
   const client = useClient();
   const companyID = useCompanyID();
   const { setLoaded } = useLoadedVoucher();
-  const [tb, setTb] = useState<TrialBalanceResponse | null>(null);
-  const [dayBook, setDayBook] = useState<DayBookResponse | null>(null);
-  /** The statement tree this drill came from (Balance Sheet / P&L), if any. */
-  const [tree, setTree] = useState<StatementNode[] | null>(null);
-
   const target = parseDetailTarget(snapshot.detailOf);
   const reportName = snapshot.reportName;
 
-  useEffect(() => {
-    let cancelled = false;
-    void Promise.all([
-      client.getTrialBalance(companyID),
-      client.getDayBook(companyID, {}),
-      // A group drill expands the SAME tree the parent report drew, which is
-      // where the real hierarchy lives (Current Assets > Sundry Debtors >
-      // ledger). Resolving groups off the flat Trial Balance would only ever
-      // find leaf-level parents and show an empty screen for the outer groups.
-      reportName === "Balance Sheet"
-        ? client.getBalanceSheet(companyID)
-        : reportName === "Profit & Loss A/c"
-          ? client.getProfitLoss(companyID)
-          : Promise.resolve(null),
-    ]).then(([t, d, statement]) => {
-      if (cancelled) return;
-      setTb(t);
-      setDayBook(d);
+  // ⚠️ THE DRILL IS FETCHED, SO THE DRILL CAN BE REFUSED. It asks for the Trial
+  // Balance and the Day Book by name, and a level allowed the statement it
+  // drilled FROM may be denied either of those two — at which point the old
+  // code's bare `.then()` left the screen on "Loading…" forever and Alt+E wrote
+  // an empty answer. Same shared state the parent reports use, same sentence.
+  const { data, availability } = useReportFetch(
+    useCallback(async () => {
+      const [t, d, statement] = await Promise.all([
+        client.getTrialBalance(companyID),
+        client.getDayBook(companyID, {}),
+        // A group drill expands the SAME tree the parent report drew, which is
+        // where the real hierarchy lives (Current Assets > Sundry Debtors >
+        // ledger). Resolving groups off the flat Trial Balance would only ever
+        // find leaf-level parents and show an empty screen for the outer groups.
+        reportName === "Balance Sheet"
+          ? client.getBalanceSheet(companyID)
+          : reportName === "Profit & Loss A/c"
+            ? client.getProfitLoss(companyID)
+            : Promise.resolve(null),
+      ]);
+      let tree: StatementNode[] | null = null;
       if (statement && "assets" in statement) {
-        setTree([...statement.liabilities.nodes, ...statement.assets.nodes]);
+        tree = [...statement.liabilities.nodes, ...statement.assets.nodes];
       } else if (statement && "income" in statement) {
-        setTree([...statement.expenses.nodes, ...statement.income.nodes]);
-      } else {
-        setTree(null);
+        tree = [...statement.expenses.nodes, ...statement.income.nodes];
       }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [client, companyID, reportName]);
+      return { tb: t, dayBook: d, tree };
+    }, [client, companyID, reportName]),
+  );
+  const tb: TrialBalanceResponse | null = data?.tb ?? null;
+  const dayBook: DayBookResponse | null = data?.dayBook ?? null;
+  /** The statement tree this drill came from (Balance Sheet / P&L), if any. */
+  const tree: StatementNode[] | null = data?.tree ?? null;
 
   const columns =
     target.kind === "group"
@@ -91,20 +91,31 @@ export function ReportDetailScreen({
       // from one (it carries the real nesting), else from the Trial Balance's
       // ledger→group map (the group-wise Trial Balance drill).
       const node = tree ? findNode(tree, target.name) : undefined;
-      const children: { name: string; isGroup: boolean; amounts: string[] }[] =
-        node?.children?.length
-          ? node.children.map((c) => ({
-              name: c.name,
-              isGroup: c.kind === "GROUP",
-              amounts: [formatMoney(c.amount), ""],
-            }))
-          : (tb?.rows ?? [])
-              .filter((r) => r.group === target.name)
-              .map((r) => ({
-                name: r.ledger,
-                isGroup: false,
-                amounts: [formatMoney(r.debit), formatMoney(r.credit)],
-              }));
+      // `amounts` is the DISPLAY text and `raw` the wire strings. They are two
+      // arrays because they answer two different questions — what the row shows
+      // and what Alt+E writes — and formatMoney is not invertible (it groups
+      // with commas and truncates to two decimals), so the second cannot be
+      // recovered from the first.
+      const children: {
+        name: string;
+        isGroup: boolean;
+        amounts: string[];
+        raw: string[];
+      }[] = node?.children?.length
+        ? node.children.map((c) => ({
+            name: c.name,
+            isGroup: c.kind === "GROUP",
+            amounts: [formatMoney(c.amount), ""],
+            raw: [c.amount ?? "", ""],
+          }))
+        : (tb?.rows ?? [])
+            .filter((r) => r.group === target.name)
+            .map((r) => ({
+              name: r.ledger,
+              isGroup: false,
+              amounts: [formatMoney(r.debit), formatMoney(r.credit)],
+              raw: [r.debit ?? "", r.credit ?? ""],
+            }));
       return {
         headers: ["Particulars", "Debit", "Credit"],
         empty: `Nothing under ${target.name}.`,
@@ -113,6 +124,11 @@ export function ReportDetailScreen({
           // for a group and to the vouchers for a ledger.
           rowKey: `${c.isGroup ? GROUP_ROW_PREFIX : LEDGER_ROW_PREFIX}${c.name}`,
           values: [c.name, c.amounts[0] ?? "", c.amounts[1] ?? ""],
+          exportCells: [
+            textCell(c.name),
+            moneyCell(c.raw[0] ?? ""),
+            moneyCell(c.raw[1] ?? ""),
+          ],
           cells: (
             <>
               <span>{c.name}</span>
@@ -146,6 +162,13 @@ export function ReportDetailScreen({
             formatMoney(debit?.amount),
             formatMoney(credit?.amount),
           ],
+          exportCells: [
+            exactCell(e.date),
+            exactCell(e.voucher_no),
+            textCell(e.party || e.narration),
+            moneyCell(debit?.amount),
+            moneyCell(credit?.amount),
+          ],
           cells: (
             <>
               <span>{e.date}</span>
@@ -160,9 +183,12 @@ export function ReportDetailScreen({
     };
   }, [dayBook, target.kind, target.name, tb, tree]);
 
+  const detailLabel = `${snapshot.reportName ?? "Report"} — ${target.name}`;
   const visible = useReportView(rows, snapshot, {
     title: `${snapshot.reportName ?? "Report"} - ${target.name}`,
     headers,
+    availability,
+    label: detailLabel,
   });
 
   /**
@@ -192,24 +218,30 @@ export function ReportDetailScreen({
           : "Vouchers that posted to this ledger. Enter opens one for alteration; Esc goes back."}
       </p>
       <div className="mt-3 bg-tally-panel p-3">
-        <ColumnHeader
-          columnsClassName={columns}
-          labels={headers.map((text, i) => ({
-            text,
-            numeric: i >= headers.length - 2,
-          }))}
-        />
-        {visible.length === 0 ? (
-          <p className="px-2 py-1 text-xs" role="status">
-            {tb === null && dayBook === null ? "Loading…" : empty}
-          </p>
+        {availability.kind === "failed" ? (
+          <ReportUnavailable label={detailLabel} availability={availability} />
         ) : (
-          <DrillRows
-            rows={visible}
-            onSelect={handleSelect}
-            ariaLabel={`${target.name} detail rows`}
-            columnsClassName={columns}
-          />
+          <>
+            <ColumnHeader
+              columnsClassName={columns}
+              labels={headers.map((text, i) => ({
+                text,
+                numeric: i >= headers.length - 2,
+              }))}
+            />
+            {visible.length === 0 ? (
+              <p className="px-2 py-1 text-xs" role="status">
+                {tb === null && dayBook === null ? "Loading…" : empty}
+              </p>
+            ) : (
+              <DrillRows
+                rows={visible}
+                onSelect={handleSelect}
+                ariaLabel={`${target.name} detail rows`}
+                columnsClassName={columns}
+              />
+            )}
+          </>
         )}
       </div>
     </section>

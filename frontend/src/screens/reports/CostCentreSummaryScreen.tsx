@@ -11,6 +11,13 @@ import type {
   CostCentreSummaryResponse,
 } from "../../api";
 import { formatMoney } from "./money";
+import { useExportAction } from "../../export/useExportAction";
+import {
+  moneyCell,
+  textCell,
+  type ExportRow,
+  type ExportSheet,
+} from "../../export/sheet";
 import { SelectionList } from "../SelectionList";
 import { usePrintAction } from "../usePrint";
 
@@ -263,6 +270,34 @@ export function CostCentreSummaryScreen({ snapshot }: ScreenComponentProps) {
       setPicking(true);
       return "Choose the cost category (the axis) this report is for.";
     }, [axes, denied]),
+  );
+
+  // Alt+E. This screen owns its own table (the axis-scoped roll-up is a shape no
+  // generic report screen renders), so Export was dead on it.
+  //
+  // ⛔ THE AXIS TRAVELS IN THE TITLE. Several axes allocate the SAME money in
+  // parallel, so a file called "Cost Centre Summary.csv" with no axis on it is
+  // a set of figures whose subject cannot be recovered — and adding two such
+  // files together double-counts the business. The axis name is in the file
+  // name and in the title, not only on the screen it came from.
+  useExportAction(
+    useCallback(() => {
+      if (denied) {
+        return "You are not permitted to read this report (report:cost-centre-summary), so there is nothing to export.";
+      }
+      if (!axisID) {
+        return "Choose the cost category (the axis) with F4 first — every figure on this report is scoped to one axis, so there is nothing to export until one is chosen.";
+      }
+      if (!from || !to) {
+        return "Set the period with F2 first — this report is a flow over a range, so it has no rows until both dates are given.";
+      }
+      if (error !== "") return `Cost Centre Summary unavailable, so there is nothing to export. ${error}`;
+      if (data === null) return "Cost Centre Summary is still loading — nothing to export yet.";
+      if (data.centres.length === 0 && data.unattached.length === 0) {
+        return "This axis has no cost centres with figures in the period, so there is nothing to export.";
+      }
+      return costCentreSummarySheet(data);
+    }, [axisID, data, denied, error, from, to]),
   );
 
   if (denied) {
@@ -659,4 +694,76 @@ export function CostCentreSummaryScreen({ snapshot }: ScreenComponentProps) {
 function isZeroPair(node: CostCentreNode): boolean {
   const zero = (v: string) => /^-?0*(\.0*)?$/.test(v.trim());
   return zero(node.own_debit) && zero(node.own_credit);
+}
+
+/**
+ * The axis's roll-up as a spreadsheet.
+ *
+ * ⛔ OWN AND TOTAL ARE FOUR COLUMNS, NOT TWO, for the same reason the screen
+ * shows four: a parent may hold allocations of its OWN and have children, and
+ * neither pair is derivable from the other. Collapsing them into one "amount"
+ * column would be this report's one fatal simplification, and it would be far
+ * easier to make in a flat file than on a screen.
+ *
+ * ⛔ AND THE UNATTACHED CENTRES ARE EXPORTED, flagged, below the totals. They
+ * are the centres the roll-up could not place; a file that dropped them would
+ * take their money with it and still foot, which is precisely the failure the
+ * response's own comment warns about.
+ */
+export function costCentreSummarySheet(
+  data: CostCentreSummaryResponse,
+): ExportSheet {
+  const rows: ExportRow[] = flatten(data.centres).map(
+    ({ node, depth }): ExportRow => [
+      // The indent is carried as leading spaces, because a flat file has no
+      // other way to say "this centre sits under that one" and the hierarchy is
+      // what makes OWN vs TOTAL readable.
+      textCell(`${"  ".repeat(depth)}${node.name}`),
+      moneyCell(node.own_debit),
+      moneyCell(node.own_credit),
+      moneyCell(node.total_debit),
+      moneyCell(node.total_credit),
+      moneyCell(node.total_net),
+    ],
+  );
+  rows.push([
+    textCell("Total"),
+    textCell(""),
+    textCell(""),
+    moneyCell(data.total_debit),
+    moneyCell(data.total_credit),
+    moneyCell(data.total_net),
+  ]);
+  for (const n of data.unattached) {
+    rows.push([
+      textCell(`UNATTACHED - ${n.name}`),
+      moneyCell(n.own_debit),
+      moneyCell(n.own_credit),
+      textCell(""),
+      textCell(""),
+      textCell(""),
+    ]);
+  }
+  if (data.unattached.length > 0) {
+    rows.push([
+      textCell("UNATTACHED total (NOT included in Total above)"),
+      moneyCell(data.unattached_debit),
+      moneyCell(data.unattached_credit),
+      textCell(""),
+      textCell(""),
+      textCell(""),
+    ]);
+  }
+  return {
+    title: `Cost Centre Summary ${data.cost_category} ${data.from} to ${data.to}`,
+    headers: [
+      "Cost centre",
+      "Own Dr",
+      "Own Cr",
+      "Total Dr",
+      "Total Cr",
+      "Total net",
+    ],
+    rows,
+  };
 }

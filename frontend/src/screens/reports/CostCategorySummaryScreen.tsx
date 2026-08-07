@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import type { ScreenComponentProps } from "../../app/screenRegistry";
 import { useClient, useCompanyID } from "../../app/CompanyContext";
@@ -11,6 +11,14 @@ import type {
 import { formatMoney } from "./money";
 import { DrillRows, type DrillRow } from "./DrillRows";
 import { usePrintAction } from "../usePrint";
+import { useExportAction } from "../../export/useExportAction";
+import {
+  exactCell,
+  moneyCell,
+  textCell,
+  type ExportRow,
+  type ExportSheet,
+} from "../../export/sheet";
 
 /**
  * THE COST CATEGORY SUMMARY (T2) — one row per AXIS, and the GAP.
@@ -116,6 +124,25 @@ export function CostCategorySummaryScreen({
   // Ctrl+P — no printed layout (the server answers 501). Registering the handler
   // is what turns a dead key into that sentence; see printTarget.ts.
   usePrintAction({ voucher: { voucherID: null } });
+
+  // Alt+E — same reason Ctrl+P is registered above: without a handler the key is
+  // silent, and silence is indistinguishable from a broken build.
+  useExportAction(
+    useCallback(() => {
+      if (denied) {
+        return "You are not permitted to read this report (report:cost-category-summary), so there is nothing to export.";
+      }
+      if (!from || !to) {
+        return "Set the period with F2 first — this report measures a period's coverage, so it has no rows until both dates are given.";
+      }
+      if (error !== "") return `Cost Category Summary unavailable, so there is nothing to export. ${error}`;
+      if (data === null) return "Cost Category Summary is still loading — nothing to export yet.";
+      if (data.rows.length === 0) {
+        return "This company has no cost categories, so there is no coverage to export.";
+      }
+      return costCategorySummarySheet(data);
+    }, [data, denied, error, from, to]),
+  );
 
   if (denied) {
     return (
@@ -439,4 +466,52 @@ function AxisDetail({ row: r }: { row: CostCategorySummaryRow }) {
       </p>
     </div>
   );
+}
+
+/**
+ * The coverage report as a spreadsheet.
+ *
+ * ⛔ THERE IS NO TOTAL ROW, AND THE FILE SAYS WHY. Every axis here allocates the
+ * SAME money from a different direction — one salary analysed by Department is
+ * the same rupees analysed by Branch — so a column total is a MULTIPLE of the
+ * cost actually borne. The screen states that in a bordered panel under the
+ * table; a file with no such panel is exactly where somebody would drag a SUM()
+ * across the bottom, so the sentence travels WITH the rows as a final line
+ * rather than being left behind on the screen.
+ */
+export function costCategorySummarySheet(
+  data: CostCategorySummaryResponse,
+): ExportSheet {
+  const rows: ExportRow[] = data.rows.map((r): ExportRow => [
+    textCell(r.cost_category),
+    moneyCell(r.allocable_debit),
+    moneyCell(r.allocated_debit),
+    moneyCell(r.unallocated_debit),
+    exactCell(`${r.allocated_postings}/${r.allocable_postings}`),
+    textCell(r.fully_allocated ? "fully allocated" : "GAP"),
+  ]);
+  rows.push([
+    textCell(
+      "These rows must NOT be added up: every axis allocates the SAME money " +
+        "from a different direction, so a column total is a multiple of the " +
+        "cost actually borne.",
+    ),
+    textCell(""),
+    textCell(""),
+    textCell(""),
+    textCell(""),
+    textCell(""),
+  ]);
+  return {
+    title: `Cost Category Summary ${data.from} to ${data.to}`,
+    headers: [
+      "Cost category (axis)",
+      "Allocable base",
+      "Allocated",
+      "UNALLOCATED",
+      "Coverage (postings)",
+      "Verdict",
+    ],
+    rows,
+  };
 }

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { ExportRow } from "../../export/sheet";
 
 /**
  * A keyboard-navigable list of drillable report rows — the shared interaction
@@ -32,11 +33,27 @@ export interface DrillRow {
   /** The rendered cells, laid out by the parent's column template. */
   readonly cells: React.ReactNode;
   /**
-   * The row's cells as PLAIN TEXT, in column order. Filtering (Ctrl+F), the
-   * zero-balance test (F12) and the CSV export (Alt+E) all read this instead of
-   * trying to parse rendered React nodes — one source of truth per row.
+   * The row's cells as PLAIN TEXT, in column order — the DISPLAY text, exactly
+   * as rendered. Filtering (Ctrl+F) and the zero-balance test (F12) read this
+   * instead of trying to parse rendered React nodes, so an operator filtering on
+   * "12,34,567" matches what their eyes matched.
    */
   readonly values?: readonly string[];
+  /**
+   * The row's cells for EXPORT (Alt+E), in column order.
+   *
+   * ⛔ SEPARATE FROM `values`, AND IT HAS TO BE. `values` is what is on screen:
+   * money in it has been through `formatMoney`, which groups it with commas and
+   * truncates it to two decimals. Writing that into a comma-separated file is
+   * two defects in one cell — a delimiter inside a field, and two lost digits of
+   * a fixed-4 amount, neither recoverable by the reader. `exportCells` carries
+   * the wire values with a declared kind (see export/sheet.ts), so a spreadsheet
+   * gets the exact characters the server sent.
+   *
+   * A row that omits it exports its `values` as plain text. That is correct only
+   * for rows with no figures on them.
+   */
+  readonly exportCells?: ExportRow;
 }
 
 export function DrillRows({

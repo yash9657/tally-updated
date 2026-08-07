@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { NavSnapshot } from "../../keystroke/navMachine";
 import type { FrameConfig } from "../../keystroke/types";
+import { EXPORT_NOT_BUILT_NOTE } from "../../export/useExportAction";
 
 /**
  * The in-frame overlays behind Tally's F12 Configure, F2/Alt+F2 Period, Ctrl+F
@@ -172,7 +173,20 @@ function ConfigureOverlay({
           value={Boolean(cfg.vertical)}
           onToggle={() => onConfig({ vertical: !cfg.vertical })}
         />
+        {/* Alt+E's format. A toggle rather than a picker because there are two
+            formats and only two: see EXPORT_NOT_BUILT_NOTE for the ones Tally
+            offers that this build does not. */}
+        <ToggleRow
+          testId="cfg-export-excel-xml"
+          label="Export (Alt+E) as Excel XML instead of CSV"
+          value={Boolean(cfg.exportExcelXml)}
+          onToggle={() => onConfig({ exportExcelXml: !cfg.exportExcelXml })}
+        />
       </div>
+      <p className="mt-2 text-xs opacity-80" data-testid="cfg-export-note">
+        Alt+E writes the rows on screen, with every amount as TEXT so a
+        spreadsheet cannot round the paisa off it. {EXPORT_NOT_BUILT_NOTE}
+      </p>
       <button
         type="button"
         className="mt-2 bg-tally-active px-2 py-0.5 text-xs text-white"

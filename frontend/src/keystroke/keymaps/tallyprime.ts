@@ -817,7 +817,12 @@ export function actionLabel(action: KeymapAction): string {
     case "filter":
       return "Filter rows";
     case "exportScreen":
-      return "Export this screen (CSV)";
+      // "the rows on screen" and NOT "this report": Alt+E writes what is
+      // displayed AFTER Ctrl+F and F12 have been applied, which is the opposite
+      // of what Ctrl+P does (it asks the server for the whole statement). Both
+      // formats are named because F12 chooses between them, and neither is
+      // e-mail or PDF — see EXPORT_NOT_BUILT_NOTE.
+      return "Export the rows on screen (CSV or Excel XML)";
     case "calculator":
       return "Calculator";
     case "help":

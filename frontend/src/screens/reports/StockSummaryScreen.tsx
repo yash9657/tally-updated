@@ -1,10 +1,17 @@
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import type { NavSnapshot } from "../../keystroke/navMachine";
 import { useClient, useCompanyID } from "../../app/CompanyContext";
 import { formatMoney } from "./money";
 import { ApiError } from "../../api";
 import type { StockSummaryResponse } from "../../api";
 import { usePrintAction } from "../usePrint";
+import { useExportAction } from "../../export/useExportAction";
+import {
+  exactCell,
+  moneyCell,
+  textCell,
+  type ExportRow,
+} from "../../export/sheet";
 
 /**
  * STOCK SUMMARY — the inventory position as at a date.
@@ -50,6 +57,30 @@ export function StockSummaryScreen({ snapshot }: { snapshot: NavSnapshot }) {
     null,
   );
 
+  // Alt+E. Registered for exactly the reason Ctrl+P above is: this screen does
+  // not go through useReportView, so its Export key was DEAD — while the report
+  // button bar over it advertised "Alt+E Export", which is worse than no button,
+  // because an operator reaches for it by position from then on.
+  //
+  // ⚠️ THE REFUSAL AND THE LOADING STATE ARE EXPORT ANSWERS TOO. A 403 here is
+  // the ACL working (migration 0026 denies this report to Data Entry — it prints
+  // cost prices), and an operator who presses Alt+E on it must be told that,
+  // not handed an empty file that looks like "no stock".
+  useExportAction(
+    useCallback(() => {
+      if (error) {
+        return error.status === 403
+          ? "Your security level may not open the Stock Summary, so there is nothing to export."
+          : `Stock Summary unavailable${error.status ? ` (${error.status})` : ""}, so there is nothing to export. ${error.message}`;
+      }
+      if (data === null) return "Stock Summary is still loading — nothing to export yet.";
+      if (stockSummaryIsEmpty(data)) {
+        return "No stock movements in this company yet, so the Stock Summary has nothing to export.";
+      }
+      return stockSummarySheet(data, asOn);
+    }, [asOn, data, error]),
+  );
+
   useEffect(() => {
     let live = true;
     setData(null);
@@ -85,7 +116,7 @@ export function StockSummaryScreen({ snapshot }: { snapshot: NavSnapshot }) {
           <StockSummaryError status={error.status} message={error.message} />
         ) : data === null ? (
           <p data-testid="stock-summary-loading">Loading…</p>
-        ) : data.rows.length === 0 ? (
+        ) : stockSummaryIsEmpty(data) ? (
           <p data-testid="stock-summary-empty">
             No stock movements in this company yet, so there is nothing to
             value. Key an Item Invoice (Ctrl+H on F8 Sales / F9 Purchase) and
@@ -97,6 +128,32 @@ export function StockSummaryScreen({ snapshot }: { snapshot: NavSnapshot }) {
       </div>
     </section>
   );
+}
+
+/**
+ * ⛔ THE ONE EMPTINESS PREDICATE — Alt+E AND THE SCREEN READ IT, AND NOTHING
+ * ELSE DECIDES THE QUESTION.
+ *
+ * The response carries the same positions TWICE: `rows` is the flat list and
+ * `items` is the tree folded from it. Until now the screen showed its "no stock"
+ * line on `rows.length === 0` while Alt+E refused on `items.length === 0`, and
+ * the table itself is drawn from `items`. Two fields, three readers, and the
+ * only thing holding them together was the server folding one from the other.
+ * Any divergence — a fold that drops an item, an item with no positions, a
+ * fixture written with one field filled (`reportSheets.test.ts`'s own stock
+ * fixture has `rows: []` and a populated `items`) — makes Alt+E disagree with
+ * what is on screen, which is the single thing Alt+E promises not to do: the
+ * operator either reads "no stock movements" and gets a file full of stock, or
+ * reads a table of stock and is told there is nothing to export.
+ *
+ * IT IS `&&` AND NOT `||`, DELIBERATELY. "Empty" has to mean "there is nothing
+ * here at all", because the message it gates is a claim about the COMPANY ("no
+ * stock movements in this company yet") and not about a field. If either field
+ * carries something, that claim is false — so the table renders (with whatever
+ * it has) and the export writes the same table.
+ */
+export function stockSummaryIsEmpty(data: StockSummaryResponse): boolean {
+  return data.items.length === 0 && data.rows.length === 0;
 }
 
 /**
@@ -196,4 +253,73 @@ function StockRows({ data }: { data: StockSummaryResponse }) {
       </tbody>
     </table>
   );
+}
+
+/**
+ * The Stock Summary as a spreadsheet: one row per ITEM total, each followed by
+ * its godown/batch positions — the same shape the screen renders, because Alt+E
+ * writes what is on screen.
+ *
+ * ⛔ EVERY FIGURE IS `moneyCell`/`exactCell` AND NONE IS `formatMoney`. Both
+ * quantities and values are fixed-4 wire strings here; a spreadsheet would round
+ * "12.5000" pieces to 12.5 and — worse — re-derive nothing, while `closing_rate`
+ * is a 4-dp presentation figure that must never be multiplied back out (see the
+ * type's own comment). Exported verbatim, it stays a figure to read rather than
+ * one to compute with.
+ */
+export function stockSummarySheet(
+  data: StockSummaryResponse,
+  asOn: string | undefined,
+): { title: string; headers: readonly string[]; rows: readonly ExportRow[] } {
+  const rows: ExportRow[] = [];
+  for (const it of data.items) {
+    rows.push([
+      textCell(it.item),
+      textCell(it.unit),
+      exactCell(it.inward_qty),
+      moneyCell(it.outward_value),
+      exactCell(it.closing_qty),
+      // No rate on an item total: two godowns of the same item carry two
+      // different average costs, and the average of the averages is not the
+      // average. The screen shows an em dash; the file leaves it EMPTY rather
+      // than exporting a punctuation mark into a numeric column.
+      textCell(""),
+      moneyCell(it.closing_value),
+    ]);
+    for (const pos of it.positions) {
+      rows.push([
+        textCell(
+          `${pos.godown || "(no location)"}${pos.batch ? ` \u00b7 ${pos.batch}` : ""}`,
+        ),
+        textCell(pos.unit),
+        exactCell(pos.inward_qty),
+        moneyCell(pos.outward_value),
+        exactCell(pos.closing_qty),
+        moneyCell(pos.closing_rate),
+        moneyCell(pos.closing_value),
+      ]);
+    }
+  }
+  rows.push([
+    textCell("Stock-in-Hand"),
+    textCell(""),
+    textCell(""),
+    textCell(""),
+    textCell(""),
+    textCell(""),
+    moneyCell(data.total_value),
+  ]);
+  return {
+    title: `Stock Summary${asOn ? ` as at ${asOn}` : ""}`,
+    headers: [
+      "Item / Location",
+      "Unit",
+      "Inward",
+      "Outward (at cost)",
+      "Closing Qty",
+      "Rate",
+      "Closing Value",
+    ],
+    rows,
+  };
 }

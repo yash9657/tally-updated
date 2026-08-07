@@ -3,6 +3,7 @@ import { render, screen, cleanup, waitFor } from "@testing-library/react";
 
 import { TDSRegisterScreen } from "./TDSRegisterScreen";
 import { CompanyProvider } from "../../app/CompanyContext";
+import { ScreenActionsProvider } from "../../app/ScreenActions";
 import { createMockClient, ApiError } from "../../api";
 import type { CoredClient } from "../../api";
 import registerProse from "../../api/goldens/tds-register-prose.json";
@@ -37,12 +38,18 @@ function renderRegister(
   snapshot: NavSnapshot,
   client: CoredClient = createMockClient(),
 ) {
+  // ScreenActionsProvider is required now that the register registers Alt+E
+  // (T15). Every other report-screen test wraps in it for the same reason — this
+  // screen was the last one whose keys were all dead, which is exactly why it
+  // did not need the provider before.
   return render(
     <CompanyProvider
       client={client}
       initialCompany={{ id: "company-demo", name: "Demo Traders" }}
     >
-      <TDSRegisterScreen snapshot={snapshot} />
+      <ScreenActionsProvider>
+        <TDSRegisterScreen snapshot={snapshot} />
+      </ScreenActionsProvider>
     </CompanyProvider>,
   );
 }

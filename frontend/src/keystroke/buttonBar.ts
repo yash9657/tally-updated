@@ -205,6 +205,13 @@ const COST_MASTERS_BAR: readonly ButtonBarItem[] = [
 const COST_CENTRE_SUMMARY_BAR: readonly ButtonBarItem[] = [
   item("F2", "Period"),
   item("F4", "Cost Category"),
+  // Alt+E JOINED THIS BAR THE DAY IT BECAME REAL, which is the rule the Alt+O
+  // note on BANK_RECON_BAR states from the other side: a report an operator
+  // cannot get out of the screen is a dead end, and an export nobody can find is
+  // an export that reaches nobody. The screen registers a real handler (T15) and
+  // the axis travels in the file name, so the file cannot be read under the
+  // wrong axis's heading.
+  item("Alt+E", "Export"),
   item("Esc", "Back"),
   item("Alt+G", "Go To"),
   item("Ctrl+G", "Switch To"),
@@ -220,6 +227,11 @@ const COST_CENTRE_SUMMARY_BAR: readonly ButtonBarItem[] = [
  */
 const COST_CATEGORY_SUMMARY_BAR: readonly ButtonBarItem[] = [
   item("F2", "Period"),
+  // T15, for the reason on COST_CENTRE_SUMMARY_BAR above. The exported file
+  // carries the "these rows must not be added up" sentence as a row of its own,
+  // because a flat file has no bordered panel to put it in and a total down any
+  // of these columns is a multiple of the cost actually borne.
+  item("Alt+E", "Export"),
   item("Esc", "Back"),
   item("Alt+G", "Go To"),
   item("Ctrl+G", "Switch To"),

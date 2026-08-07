@@ -222,6 +222,16 @@ export interface FrameConfig {
   showNarration?: boolean;
   /** Ctrl+F: case-insensitive substring filter over the report rows. */
   filterText?: string;
+  /**
+   * F12 (Alt+E export): write Excel 2003 XML (SpreadsheetML) instead of CSV.
+   *
+   * Both formats carry the SAME values — money is exact in both — but they fail
+   * differently in a spreadsheet that surprises us: the CSV forces text with the
+   * `="…"` idiom, while the XML DECLARES `ss:Type="String"`, which is a
+   * standards-level statement rather than a parser trick. The XML is the safer
+   * one; CSV is the default because it is what every other tool can read.
+   */
+  exportExcelXml?: boolean;
   /** F2 / Alt+F2: report period (ISO yyyy-mm-dd). */
   periodFrom?: string;
   periodTo?: string;
@@ -421,7 +431,7 @@ export type KeymapAction =
   | { kind: "detailed" } // Alt+F1 / Alt+F5 — detailed (expand all levels)
   | { kind: "ledgerWise" } // F5 on a report — group-wise <-> ledger-wise
   | { kind: "filter" } // Ctrl+F — filter report rows
-  | { kind: "exportScreen" } // Alt+E — export the active screen (CSV)
+  | { kind: "exportScreen" } // Alt+E — export the rows on screen (CSV / Excel XML)
   | { kind: "calculator" } // Ctrl+N — calculator panel
   | { kind: "help" } // F1 / Ctrl+F1 — Help (the keystroke reference)
   | { kind: "features" } // F11 — Company Features

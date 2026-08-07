@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import type { NavSnapshot } from "../../keystroke/navMachine";
 import { useClient, useCompanyID } from "../../app/CompanyContext";
@@ -6,6 +6,14 @@ import { formatMoney } from "./money";
 import { ApiError } from "../../api";
 import type { OrderBookResponse, OrderDirection } from "../../api";
 import { usePrintAction } from "../usePrint";
+import { useExportAction } from "../../export/useExportAction";
+import {
+  exactCell,
+  moneyCell,
+  textCell,
+  type ExportRow,
+  type ExportSheet,
+} from "../../export/sheet";
 
 /**
  * THE TWO ORDER BOOKS (T3) — what is still OUTSTANDING as at a date.
@@ -195,6 +203,25 @@ function OrderBook({
   }, [client, companyID, asOn, direction]);
 
   const testid = direction === "SALES" ? "sales-order-book" : "purchase-order-book";
+
+  // Alt+E. Registered here rather than inherited: an order book is a `report`
+  // frame — so the report button bar over it ADVERTISES "Alt+E Export" — but it
+  // renders its own table instead of going through useReportView, so the key was
+  // dead on both books.
+  useExportAction(
+    useCallback(() => {
+      if (error) {
+        return error.status === 403
+          ? `Your security level may not open the ${copy.title}, so there is nothing to export.`
+          : `${copy.title} unavailable${error.status ? ` (${error.status})` : ""}, so there is nothing to export. ${error.message}`;
+      }
+      if (data === null) return `${copy.title} is still loading — nothing to export yet.`;
+      if (data.rows.length === 0) {
+        return `Nothing is outstanding in the ${copy.title}, so there is nothing to export.`;
+      }
+      return orderBookSheet(data, copy, asOn);
+    }, [asOn, copy, data, error]),
+  );
 
   return (
     <section className="flex h-full flex-col overflow-auto bg-tally-bg p-4 font-mono text-tally-field">
@@ -409,4 +436,73 @@ export function PurchaseOrderBookScreen({ snapshot }: { snapshot: NavSnapshot })
   return (
     <OrderBook snapshot={snapshot} direction="PURCHASE" copy={PURCHASE_COPY} />
   );
+}
+
+/**
+ * An order book as a spreadsheet.
+ *
+ * ⛔ QUANTITIES ARE `exactCell`, NOT `moneyCell`-formatted AND NOT PLAIN TEXT.
+ * They arrive as fixed-4 strings and the screen prints them raw for the reason
+ * stated on the table itself — a quantity has a unit, not a currency — but a
+ * spreadsheet would still eat "20.0000" and hand back 20. The unit is not
+ * exported as a separate column because the response does not carry one per
+ * line; the item name is the only place it is implied, and inventing a column
+ * would be inventing data.
+ *
+ * ⛔ AND THERE IS NO QUANTITY TOTAL ROW, exactly as there is none on screen: two
+ * lines of different items are in different units, so their sum is not a
+ * quantity. Only the VALUE total is written, and it is the SERVER's figure
+ * rather than a re-addition of the column.
+ */
+export function orderBookSheet(
+  data: OrderBookResponse,
+  copy: BookCopy,
+  asOn: string | undefined,
+): ExportSheet {
+  const rows: ExportRow[] = data.rows.map((row): ExportRow => [
+    exactCell(row.order_no),
+    exactCell(row.order_date),
+    textCell(row.party),
+    textCell(row.stock_item),
+    exactCell(row.qty),
+    exactCell(row.fulfilled_qty),
+    exactCell(row.outstanding_qty),
+    moneyCell(row.rate),
+    moneyCell(row.outstanding_value),
+    // The DUE column carries the server's own overdue verdict, never a
+    // comparison made here: an empty due date is "no date agreed" and is not
+    // overdue however old the line is.
+    exactCell(row.due_date === "" ? "none agreed" : row.due_date),
+    textCell(row.is_overdue ? "OVERDUE" : ""),
+  ]);
+  rows.push([
+    textCell("Total outstanding"),
+    textCell(""),
+    textCell(""),
+    textCell(""),
+    textCell(""),
+    textCell(""),
+    textCell(""),
+    textCell(""),
+    moneyCell(data.total_outstanding_value),
+    textCell(""),
+    textCell(""),
+  ]);
+  return {
+    title: `${copy.title}${asOn ? ` as at ${asOn}` : ""}`,
+    headers: [
+      "Order",
+      "Date",
+      copy.partyHeading,
+      "Item",
+      "Ordered",
+      "Delivered",
+      "Outstanding",
+      "Rate",
+      "Outstanding Value",
+      "Due",
+      "Overdue",
+    ],
+    rows,
+  };
 }

@@ -1,9 +1,17 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import type { NavSnapshot } from "../../keystroke/navMachine";
 import { useClient, useCompanyID } from "../../app/CompanyContext";
 import { ApiError } from "../../api";
 import type { TDSRegisterResponse } from "../../api";
+import { useExportAction } from "../../export/useExportAction";
+import {
+  exactCell,
+  moneyCell,
+  textCell,
+  type ExportRow,
+  type ExportSheet,
+} from "../../export/sheet";
 
 /**
  * THE TDS / TCS REGISTER — Item Zero step 4.
@@ -92,6 +100,31 @@ export function TDSRegisterScreen({ snapshot }: { snapshot: NavSnapshot }) {
       live = false;
     };
   }, [client, companyID, from, to]);
+
+  // Alt+E. This screen renders its own two tables rather than going through
+  // useReportView, so — like the Stock Summary — its Export key was DEAD while
+  // the report button bar over it advertised "Alt+E Export".
+  //
+  // ⚠️ THE PERIOD IS PART OF THE ANSWER. Without F2 there is no register at all
+  // (the server refuses to default either bound, because a defaulted period
+  // answers a question nobody asked while looking like the one they did), so
+  // Alt+E says that rather than writing an empty file that reads as "no tax".
+  useExportAction(
+    useCallback(() => {
+      if (denied) {
+        return "You do not have permission to read the TDS / TCS Register, so there is nothing to export.";
+      }
+      if (!from || !to) {
+        return "Set the period with F2 first — the TDS / TCS Register has no rows until it is told which quarter to cover.";
+      }
+      if (error !== "") return `TDS / TCS Register unavailable, so there is nothing to export. ${error}`;
+      if (data === null) return "TDS / TCS Register is still loading — nothing to export yet.";
+      if (data.deductions.length === 0 && data.collections.length === 0) {
+        return "Nothing was deducted or collected in this period, so the register has nothing to export.";
+      }
+      return tdsRegisterSheet(data);
+    }, [data, denied, error, from, to]),
+  );
 
   if (denied) {
     return (
@@ -305,4 +338,97 @@ export function TDSRegisterScreen({ snapshot }: { snapshot: NavSnapshot }) {
       )}
     </section>
   );
+}
+
+/**
+ * The register as ONE sheet.
+ *
+ * ⛔ TWO TABLES ON SCREEN, ONE TABLE IN THE FILE, AND A `Type` COLUMN IS WHAT
+ * MAKES THAT HONEST. Deductions and collections are different obligations under
+ * different sections and they must never be added together; stacking them with
+ * no discriminator would produce a file whose "Tax" column an operator could
+ * total into a single meaningless figure. The two 5th columns likewise stay
+ * SEPARATE (`Return code` for deductions, `Declaration` for collections)
+ * because they answer different questions — the declaration is the only field
+ * that tells three different zeroes apart, and folding it into the code column
+ * would lose that.
+ *
+ * `rate_pct` is a rate, not prose, and `date` / `voucher_no` are identifiers:
+ * all three are exact cells so a spreadsheet cannot turn 10.00 into 10 or a
+ * voucher number into arithmetic.
+ */
+export function tdsRegisterSheet(data: TDSRegisterResponse): ExportSheet {
+  const rows: ExportRow[] = [];
+  for (const d of data.deductions) {
+    rows.push([
+      textCell("Deduction"),
+      exactCell(d.date),
+      exactCell(d.voucher_no),
+      textCell(d.deductee + (d.pan_available ? "" : " (no PAN)")),
+      exactCell(d.section),
+      exactCell(d.return_code),
+      textCell(""),
+      moneyCell(d.base),
+      exactCell(d.rate_pct),
+      moneyCell(d.tds),
+    ]);
+  }
+  if (data.deductions.length > 0) {
+    rows.push([
+      textCell("Deduction total"),
+      textCell(""),
+      textCell(""),
+      textCell(""),
+      textCell(""),
+      textCell(""),
+      textCell(""),
+      moneyCell(data.total_base_deducted),
+      textCell(""),
+      moneyCell(data.total_tds),
+    ]);
+  }
+  for (const c of data.collections) {
+    rows.push([
+      textCell("Collection"),
+      exactCell(c.date),
+      exactCell(c.voucher_no),
+      textCell(c.buyer + (c.pan_available ? "" : " (no PAN)")),
+      exactCell(c.section),
+      textCell(""),
+      textCell(c.declaration),
+      moneyCell(c.base),
+      exactCell(c.rate_pct),
+      moneyCell(c.tcs),
+    ]);
+  }
+  if (data.collections.length > 0) {
+    rows.push([
+      textCell("Collection total"),
+      textCell(""),
+      textCell(""),
+      textCell(""),
+      textCell(""),
+      textCell(""),
+      textCell(""),
+      moneyCell(data.total_base_collected),
+      textCell(""),
+      moneyCell(data.total_tcs),
+    ]);
+  }
+  return {
+    title: `TDS TCS Register ${data.from} to ${data.to}`,
+    headers: [
+      "Type",
+      "Date",
+      "Voucher",
+      "Party",
+      "Section",
+      "Return code",
+      "Declaration",
+      "Base",
+      "Rate %",
+      "Tax",
+    ],
+    rows,
+  };
 }

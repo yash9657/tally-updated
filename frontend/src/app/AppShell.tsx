@@ -496,12 +496,26 @@ function hintsFor(snap: NavSnapshot): string[] {
       return ["Alt+C: Create", "Ctrl+A: Accept", ...common];
     case "e-way-bill":
       return ["Ctrl+A: Raise the bill", ...common];
+    // ⛔ THE TWO COST SUMMARIES ADVERTISE Alt+E ON BOTH SURFACES OR NEITHER.
+    // buttonBar.ts put "Alt+E Export" on both of these bars the day the screens
+    // registered a real handler (T15); this strip did not, so the same key was
+    // sold at the top of the screen and unmentioned at the bottom. An operator
+    // reads the hint strip as the list of what works here, so a key missing from
+    // it reads as a key that does not — which is how a working export goes
+    // unused. Both surfaces are hand-maintained lists; the shell test in
+    // export/exportKey.test.tsx presses the key on each screen and asserts BOTH
+    // of them name it, which is the only thing that keeps them in step.
     case "cost-centre-summary":
-      return ["F2: Period", "F4: Cost Category", ...common];
+      return ["F2: Period", "F4: Cost Category", "Alt+E: Export", ...common];
     case "cost-category-summary":
       // No axis picker on purpose: this report IS the list of axes, and Enter on
       // a row opens that axis's Cost Centre Summary.
-      return ["F2: Period", "Enter: Open this axis", ...common];
+      return [
+        "F2: Period",
+        "Enter: Open this axis",
+        "Alt+E: Export",
+        ...common,
+      ];
     // The two order registers. "Alt+W: Pre-close" is spelled Tally's way
     // (RESEARCH.md:622) and the hint strip has no room to say what it means, so
     // the key's own label carries that: it ABANDONS an order and is not "mark it

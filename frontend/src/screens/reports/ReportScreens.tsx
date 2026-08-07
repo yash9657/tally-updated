@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback } from "react";
 import type { NavSnapshot } from "../../keystroke/navMachine";
 import {
   GROUP_ROW_PREFIX,
@@ -11,7 +11,13 @@ import { formatMoney } from "./money";
 import { addMoney } from "../vouchers/money";
 import { dayBookRowKey } from "../vouchers/voucherClass";
 import { voucherIDFromRowKey } from "../../keystroke/voucherClass";
-import { useReportView } from "./reportView";
+import {
+  useReportFetch,
+  useReportView,
+  type ReportAvailability,
+} from "./reportView";
+import { ReportUnavailable } from "./ReportUnavailable";
+import { exactCell, moneyCell, textCell } from "../../export/sheet";
 import { LEDGER_WISE_DEFAULT } from "../../keystroke/types";
 import type {
   BalanceSheetResponse,
@@ -45,18 +51,32 @@ type ReportProps = {
 function ReportFrame({
   title,
   snapshot,
+  availability,
   children,
 }: {
   title: string;
   /** When given, the active view settings are shown under the heading. */
   snapshot?: NavSnapshot;
+  /**
+   * Whether the report arrived. A FAILED one replaces the table entirely rather
+   * than rendering beside it: a Trial Balance that was refused still has a total
+   * row to draw, and "Total 0.00" under a refusal notice is the worse of the two
+   * readings on offer. Alt+E answers with the same fact — see reportView.ts.
+   */
+  availability?: ReportAvailability;
   children: React.ReactNode;
 }) {
   return (
     <section className="flex h-full flex-col bg-tally-bg p-4 font-mono text-tally-field">
       <h1 className="text-lg font-bold text-tally-title">{title}</h1>
       {snapshot ? <ViewBanner snapshot={snapshot} /> : null}
-      <div className="mt-3 bg-tally-panel p-3">{children}</div>
+      <div className="mt-3 bg-tally-panel p-3">
+        {availability?.kind === "failed" ? (
+          <ReportUnavailable label={title} availability={availability} />
+        ) : (
+          children
+        )}
+      </div>
     </section>
   );
 }
@@ -103,25 +123,20 @@ export function DayBookScreen({ snapshot, onSelect }: ReportProps) {
   const client = useClient();
   const companyID = useCompanyID();
   const { setLoaded } = useLoadedVoucher();
-  const [data, setData] = useState<DayBookResponse | null>(null);
   // F2 / Alt+F2 period — the Day Book is period-aware SERVER-side, so a change
   // refetches with from/to rather than filtering what was already loaded.
   const from = snapshot.config?.periodFrom;
   const to = snapshot.config?.periodTo;
   const showNarration = Boolean(snapshot.config?.showNarration);
 
-  useEffect(() => {
-    let cancelled = false;
-    const query: { from?: string; to?: string } = {};
-    if (from) query.from = from;
-    if (to) query.to = to;
-    client.getDayBook(companyID, query).then((res) => {
-      if (!cancelled) setData(res);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [client, companyID, from, to]);
+  const { data, availability } = useReportFetch<DayBookResponse>(
+    useCallback(() => {
+      const query: { from?: string; to?: string } = {};
+      if (from) query.from = from;
+      if (to) query.to = to;
+      return client.getDayBook(companyID, query);
+    }, [client, companyID, from, to]),
+  );
 
   const entries = data?.entries ?? [];
   const rows: DrillRow[] = entries.map((e) => ({
@@ -138,6 +153,16 @@ export function DayBookScreen({ snapshot, onSelect }: ReportProps) {
       e.party || e.narration,
       formatMoney(e.debit),
       formatMoney(e.credit),
+    ],
+    // Alt+E. The DATE and the VOUCHER NUMBER are `exactCell` and not text: a
+    // spreadsheet turns "2026-06-01" into a locale-formatted serial date and
+    // "0042" into 42. The two amounts are the WIRE strings, not formatMoney's.
+    exportCells: [
+      exactCell(e.date),
+      exactCell(e.voucher_no),
+      textCell(e.party || e.narration),
+      moneyCell(e.debit),
+      moneyCell(e.credit),
     ],
     cells: (
       <>
@@ -171,10 +196,14 @@ export function DayBookScreen({ snapshot, onSelect }: ReportProps) {
 
   const columns = "grid-cols-[7rem_8rem_1fr_8rem_8rem]";
   const headers = ["Date", "No.", "Particulars", "Debit", "Credit"];
-  const visible = useReportView(rows, snapshot, { title: "Day Book", headers });
+  const visible = useReportView(rows, snapshot, {
+    title: "Day Book",
+    headers,
+    availability,
+  });
 
   return (
-    <ReportFrame title="Day Book" snapshot={snapshot}>
+    <ReportFrame title="Day Book" snapshot={snapshot} availability={availability}>
       <ColumnHeader
         columnsClassName={columns}
         labels={[
@@ -208,22 +237,17 @@ export function DayBookScreen({ snapshot, onSelect }: ReportProps) {
 export function TrialBalanceScreen({ snapshot, onSelect }: ReportProps) {
   const client = useClient();
   const companyID = useCompanyID();
-  const [data, setData] = useState<TrialBalanceResponse | null>(null);
-
   // A Trial Balance is a POSITION, so the F2 period's "To" becomes `as on` and
   // the "From" is deliberately not sent — bounding it below would drop the
   // entity's earlier history and still foot. The banner says "as on <date>" so
   // the screen never claims a range it did not ask for.
   const asOn = snapshot.config?.periodTo;
-  useEffect(() => {
-    let cancelled = false;
-    client.getTrialBalance(companyID, asOn).then((res) => {
-      if (!cancelled) setData(res);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [client, companyID, asOn]);
+  const { data, availability } = useReportFetch<TrialBalanceResponse>(
+    useCallback(
+      () => client.getTrialBalance(companyID, asOn),
+      [client, companyID, asOn],
+    ),
+  );
 
   // F5 — ledger-wise (the default here) ⇄ group-wise, which sums each ledger's
   // debit/credit into its parent group exactly as Tally's group-wise Trial
@@ -239,6 +263,7 @@ export function TrialBalanceScreen({ snapshot, onSelect }: ReportProps) {
     // into the group's ledgers first (Tally's group > ledger > voucher path).
     rowKey: `${ledgerWise ? LEDGER_ROW_PREFIX : GROUP_ROW_PREFIX}${r.label}`,
     values: [r.label, formatMoney(r.debit), formatMoney(r.credit)],
+    exportCells: [textCell(r.label), moneyCell(r.debit), moneyCell(r.credit)],
     cells: (
       <>
         <span>{r.label}</span>
@@ -251,6 +276,11 @@ export function TrialBalanceScreen({ snapshot, onSelect }: ReportProps) {
     rowKey: "__total__",
     drillable: false,
     values: ["Total", formatMoney(data?.total_debit), formatMoney(data?.total_credit)],
+    exportCells: [
+      textCell("Total"),
+      moneyCell(data?.total_debit),
+      moneyCell(data?.total_credit),
+    ],
     cells: (
       <>
         <span>Total</span>
@@ -268,9 +298,14 @@ export function TrialBalanceScreen({ snapshot, onSelect }: ReportProps) {
   const visible = useReportView(rows, snapshot, {
     title: "Trial Balance",
     headers: [ledgerWise ? "Ledger" : "Group", "Debit", "Credit"],
+    availability,
   });
   return (
-    <ReportFrame title="Trial Balance" snapshot={snapshot}>
+    <ReportFrame
+      title="Trial Balance"
+      snapshot={snapshot}
+      availability={availability}
+    >
       <ColumnHeader
         columnsClassName={columns}
         labels={[
@@ -324,6 +359,7 @@ function flattenNodes(nodes: readonly StatementNode[], depth = 0): DrillRow[] {
       depth,
       drillable: n.kind !== "COMPUTED",
       values: [n.name, formatMoney(n.amount)],
+      exportCells: [textCell(n.name), moneyCell(n.amount)],
       cells: (
         <>
           <span>{n.name}</span>
@@ -339,19 +375,14 @@ function flattenNodes(nodes: readonly StatementNode[], depth = 0): DrillRow[] {
 export function BalanceSheetScreen({ snapshot, onSelect }: ReportProps) {
   const client = useClient();
   const companyID = useCompanyID();
-  const [data, setData] = useState<BalanceSheetResponse | null>(null);
-
   // Same as the Trial Balance: a Balance Sheet is a position AS AT a date.
   const asOn = snapshot.config?.periodTo;
-  useEffect(() => {
-    let cancelled = false;
-    client.getBalanceSheet(companyID, asOn).then((res) => {
-      if (!cancelled) setData(res);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [client, companyID, asOn]);
+  const { data, availability } = useReportFetch<BalanceSheetResponse>(
+    useCallback(
+      () => client.getBalanceSheet(companyID, asOn),
+      [client, companyID, asOn],
+    ),
+  );
 
   const columns = "grid-cols-[1fr_10rem]";
   // Ctrl+H Change View: Tally's horizontal Balance Sheet puts Liabilities on
@@ -383,10 +414,15 @@ export function BalanceSheetScreen({ snapshot, onSelect }: ReportProps) {
   const visible = useReportView(rows, snapshot, {
     title: "Balance Sheet",
     headers: ["Particulars", "Amount"],
+    availability,
   });
 
   return (
-    <ReportFrame title="Balance Sheet" snapshot={snapshot}>
+    <ReportFrame
+      title="Balance Sheet"
+      snapshot={snapshot}
+      availability={availability}
+    >
       <ColumnHeader
         columnsClassName={columns}
         labels={[
@@ -415,6 +451,7 @@ function sectionHeaderRow(
     rowKey: key,
     drillable: false,
     values: [title, formatMoney(total)],
+    exportCells: [textCell(title), moneyCell(total)],
     cells: (
       <>
         <span>{title}</span>
@@ -429,21 +466,16 @@ function sectionHeaderRow(
 export function ProfitLossScreen({ snapshot, onSelect }: ReportProps) {
   const client = useClient();
   const companyID = useCompanyID();
-  const [data, setData] = useState<ProfitLossResponse | null>(null);
-
   // The ONE statement of the three for which a lower bound is meaningful: a P&L
   // is a statement FOR A PERIOD, so both F2 bounds are sent.
   const from = snapshot.config?.periodFrom;
   const to = snapshot.config?.periodTo;
-  useEffect(() => {
-    let cancelled = false;
-    client.getProfitLoss(companyID, from, to).then((res) => {
-      if (!cancelled) setData(res);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [client, companyID, from, to]);
+  const { data, availability } = useReportFetch<ProfitLossResponse>(
+    useCallback(
+      () => client.getProfitLoss(companyID, from, to),
+      [client, companyID, from, to],
+    ),
+  );
 
   const columns = "grid-cols-[1fr_10rem]";
   const rows: DrillRow[] = [];
@@ -475,10 +507,19 @@ export function ProfitLossScreen({ snapshot, onSelect }: ReportProps) {
   const visible = useReportView(rows, snapshot, {
     title: "Profit and Loss",
     headers: ["Particulars", "Amount"],
+    availability,
+    // The FILE is "Profit-and-Loss.csv"; the SCREEN is headed "Profit & Loss
+    // A/c". A refusal names the screen, because that is what the operator is
+    // looking at when they read the status line.
+    label: "Profit & Loss A/c",
   });
 
   return (
-    <ReportFrame title="Profit & Loss A/c" snapshot={snapshot}>
+    <ReportFrame
+      title="Profit & Loss A/c"
+      snapshot={snapshot}
+      availability={availability}
+    >
       <ColumnHeader
         columnsClassName={columns}
         labels={[{ text: "Particulars" }, { text: "Amount", numeric: true }]}
@@ -500,27 +541,23 @@ export function ProfitLossScreen({ snapshot, onSelect }: ReportProps) {
 export function OutstandingsScreen({ snapshot, onSelect }: ReportProps) {
   const client = useClient();
   const companyID = useCompanyID();
-  const [data, setData] = useState<OutstandingsResponse | null>(null);
   // F2 period: Outstandings is an AS-ON report, so the period's "To" date is
   // what it honours (server-side as_on) — the From date does not apply to it.
   const asOn = snapshot.config?.periodTo;
 
-  useEffect(() => {
-    let cancelled = false;
-    const query: { as_on?: string } = {};
-    if (asOn) query.as_on = asOn;
-    client.getOutstandings(companyID, query).then((res) => {
-      if (!cancelled) setData(res);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [client, companyID, asOn]);
+  const { data, availability } = useReportFetch<OutstandingsResponse>(
+    useCallback(() => {
+      const query: { as_on?: string } = {};
+      if (asOn) query.as_on = asOn;
+      return client.getOutstandings(companyID, query);
+    }, [client, companyID, asOn]),
+  );
 
   const columns = "grid-cols-[1fr_8rem_8rem]";
   const rows: DrillRow[] = (data?.parties ?? []).map((p) => ({
     rowKey: `${LEDGER_ROW_PREFIX}${p.ledger}`,
     values: [p.ledger, p.group, formatMoney(p.pending)],
+    exportCells: [textCell(p.ledger), textCell(p.group), moneyCell(p.pending)],
     cells: (
       <>
         <span>{p.ledger}</span>
@@ -533,6 +570,7 @@ export function OutstandingsScreen({ snapshot, onSelect }: ReportProps) {
     rowKey: "__total__",
     drillable: false,
     values: ["Total", "", formatMoney(data?.total)],
+    exportCells: [textCell("Total"), textCell(""), moneyCell(data?.total)],
     cells: (
       <>
         <span>Total</span>
@@ -547,10 +585,15 @@ export function OutstandingsScreen({ snapshot, onSelect }: ReportProps) {
   const visible = useReportView(rows, snapshot, {
     title: "Outstandings",
     headers: ["Party", "Group", "Pending"],
+    availability,
   });
 
   return (
-    <ReportFrame title="Outstandings" snapshot={snapshot}>
+    <ReportFrame
+      title="Outstandings"
+      snapshot={snapshot}
+      availability={availability}
+    >
       <ColumnHeader
         columnsClassName={columns}
         labels={[
