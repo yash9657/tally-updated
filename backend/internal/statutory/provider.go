@@ -22,13 +22,13 @@ import (
 // All money values are STRINGS in fixed-2 precision to match NIC, which rejects
 // trailing-zero ambiguity and requires exactly two decimal places.
 type EInvoicePayload struct {
-	Version    string          `json:"Version"`
-	TranDtls   TranDtls        `json:"TranDtls"`
-	DocDtls    DocDtls         `json:"DocDtls"`
-	SellerDtls PartyDtls       `json:"SellerDtls"`
-	BuyerDtls  PartyDtls       `json:"BuyerDtls"`
-	ItemList   []EInvoiceItem  `json:"ItemList"`
-	ValDtls    ValDtls         `json:"ValDtls"`
+	Version    string         `json:"Version"`
+	TranDtls   TranDtls       `json:"TranDtls"`
+	DocDtls    DocDtls        `json:"DocDtls"`
+	SellerDtls PartyDtls      `json:"SellerDtls"`
+	BuyerDtls  PartyDtls      `json:"BuyerDtls"`
+	ItemList   []EInvoiceItem `json:"ItemList"`
+	ValDtls    ValDtls        `json:"ValDtls"`
 }
 
 // TranDtls carries transaction-level flags. TaxSch is always "GST", SupTyp is
@@ -57,15 +57,31 @@ type PartyDtls struct {
 	Stcd  string `json:"Stcd"`
 }
 
-// EInvoiceItem is one line of the ItemList. Money fields are fixed-2 strings.
+// EInvoiceItem is one line of the ItemList. Money fields are fixed-2 strings,
+// with the single exception of UnitPrice — a RATE, which NIC models as
+// decimal(12,3) and which must reproduce TotAmt when multiplied by Qty.
+//
+// ⛔⛔ THE FOUR AMOUNT FIELDS ARE AN ARITHMETIC STATEMENT, NOT FOUR INDEPENDENT
+// NUMBERS, and ValidateEInvoice now checks it:
+//
+//	TotAmt     = Qty x UnitPrice          (the gross value of the goods)
+//	AssAmt     = TotAmt - Discount        (the value GST is charged on)
+//	TotItemVal = AssAmt + Igst + Cgst + Sgst
+//
+// This shipped with Discount ABSENT and TotAmt set equal to AssAmt, so a
+// discounted line declared a gross of 4500.00 for 10 units priced at 500.00 —
+// self-contradictory by ₹500, un-noticed because nothing checked the item
+// arithmetic and no test posted a discount.
 type EInvoiceItem struct {
-	SlNo       string `json:"SlNo"`
-	PrdDesc    string `json:"PrdDesc"`
-	HsnCd      string `json:"HsnCd"`
-	Qty        string `json:"Qty"`
-	Unit       string `json:"Unit"`
-	UnitPrice  string `json:"UnitPrice"`
-	TotAmt     string `json:"TotAmt"`
+	SlNo      string `json:"SlNo"`
+	PrdDesc   string `json:"PrdDesc"`
+	HsnCd     string `json:"HsnCd"`
+	Qty       string `json:"Qty"`
+	Unit      string `json:"Unit"`
+	UnitPrice string `json:"UnitPrice"`
+	TotAmt    string `json:"TotAmt"`
+	// Discount is the line discount in currency. "0.00" when none was given.
+	Discount   string `json:"Discount"`
 	AssAmt     string `json:"AssAmt"`
 	GstRt      string `json:"GstRt"`
 	IgstAmt    string `json:"IgstAmt"`

@@ -41,6 +41,7 @@ import (
 	"github.com/khata/cored/internal/compliance"
 	"github.com/khata/cored/internal/compliance/gstr"
 	"github.com/khata/cored/internal/compliance/itc"
+	"github.com/khata/cored/internal/einvoice"
 	"github.com/khata/cored/internal/ewaybill"
 	"github.com/khata/cored/internal/identity"
 	"github.com/khata/cored/internal/ledger"
@@ -98,6 +99,18 @@ type Server struct {
 	// statutory/rules}, so it can read a voucher but can never post, alter or
 	// freeze one. An e-way bill is raised AGAINST a voucher; it is not a voucher.
 	ewaybill *ewaybill.Service
+	// einvoice is cored's half of the IRN path. It is a PROXY as much as a
+	// service: it builds the NIC snapshot (identity AND item list) from the
+	// books, then hands it to statutoryd over HTTP — because the IRN workflow
+	// wraps an exactly-once external IRP call in durable state and must stay in
+	// its own deployable, while only cored holds the inventory rows, the stock
+	// masters, the HSN and the rate the payload needs. HANDOFF §1.4 B.2.
+	//
+	// ⛔ ITS READ PHASE COMMITS BEFORE IT CALLS OUT. The call graph is
+	// cored -> statutoryd -> cored (GetVoucher, then the freeze hook), so a
+	// transaction held across the call is a connection the callback then cannot
+	// get, and the failure mode is a hung request rather than an error.
+	einvoice *einvoice.Service
 	gstr     *gstr.Service
 	importer *migration.Importer
 	sync     *sync.Service
@@ -227,6 +240,17 @@ func New(ctx context.Context, appDSN string) (*Server, error) {
 		bankstmt: bankstatement.NewService(pool),
 		orders:   orders.NewService(pool),
 		ewaybill: ewaybill.NewService(pool),
+		// The IRN proxy. ⛔ statutoryd's location IS CONFIGURATION and must be,
+		// because it is a second process that is routinely not running: the
+		// default is the dev port from the Makefile, and STATUTORYD_BASE_URL
+		// points cored at a real deployment. The client carries a deadline for
+		// the same reason — statutoryd's transient path answers 503 and is
+		// resumable by design, so a proxy with no timeout converts a slow IRP
+		// into a hung browser tab in exchange for nothing.
+		einvoice: einvoice.NewService(pool,
+			einvoice.NewHTTPStatutorydClient(
+				envOr("STATUTORYD_BASE_URL", einvoice.DefaultStatutorydBaseURL),
+				statutorydTimeout())),
 		gstr:     gstr.NewService(pool),
 		importer: migration.NewImporter(m, l),
 		sync:     sync.NewService(l, pool),
@@ -293,6 +317,30 @@ func (s *Server) WithNotificationSender(sender notify.Sender) *notify.Dispatcher
 // Started by `cored serve`; never by tests, which drain deterministically.
 func (s *Server) RunNotifications(ctx context.Context, every time.Duration) {
 	s.notifier.Run(ctx, every)
+}
+
+// statutorydTimeout reads STATUTORYD_TIMEOUT (a Go duration, e.g. "45s") and
+// falls back to einvoice.DefaultTimeout.
+//
+// ⛔ AN UNPARSEABLE VALUE FALLS BACK RATHER THAN FAILING BOOT, and it says so in
+// the log. The alternative — refusing to start — takes the WHOLE server down
+// because one optional knob for one optional side plane was mistyped, which is
+// a much worse outcome than an e-invoice attempt that gives up after the default
+// deadline. ⛔ But it must not fall back SILENTLY: a deployment that set 5m for
+// a slow IRP and typoed it would otherwise time out at 30s forever with nothing
+// anywhere saying why.
+func statutorydTimeout() time.Duration {
+	raw := os.Getenv("STATUTORYD_TIMEOUT")
+	if raw == "" {
+		return einvoice.DefaultTimeout
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		log.Printf("cored: STATUTORYD_TIMEOUT=%q is not a positive Go duration (e.g. \"45s\"); using %s",
+			raw, einvoice.DefaultTimeout)
+		return einvoice.DefaultTimeout
+	}
+	return d
 }
 
 // envOr returns the value of the named env var, or def when it is unset/empty.
@@ -583,6 +631,13 @@ func (s *Server) routes() {
 		// See handler_ewaybill.go's header.
 		r.Post("/e-way-bills", s.postEWayBill())
 		r.Get("/e-way-bills/{voucherID}", s.getEWayBill())
+
+		// The e-invoice / IRN, and cored's PROXY into statutoryd. ⛔ FLAT for
+		// exactly the reason the e-way bill is: /vouchers/{id}/e-invoice would be
+		// read by routeAction as a voucher CLASS and default-deny the Owner.
+		// See handler_einvoice.go's header.
+		r.Post("/e-invoices", s.postEInvoice())
+		r.Get("/e-invoices/{voucherID}", s.getEInvoice())
 
 		r.Get("/cost-centres", s.handleListCostCentres)
 		r.Post("/cost-centres", s.handleCreateCostCentre)
@@ -1979,6 +2034,48 @@ func voucherFullJSON(v ledger.VoucherView) map[string]any {
 			"qty": f.Qty.StringFixed(4),
 		})
 	}
+	// ---- THE THIRD ROUND-TRIP FIELD, AND THE ONE §4.3's AUDIT NEVER LISTED.
+	//
+	// ⛔⛔ `voucher_gst_line` (migration 0016) IS KEYED ON voucher_version_id AND
+	// WAS ABSENT FROM EVERY READ SHAPE — ledger.VoucherView did not carry it and
+	// this body did not emit it. It is the same class as the five the audit did
+	// list, and it was worse than any of them, because the missing field is an
+	// INPUT and not just a record: the rate a voucher's tax was derived at is
+	// stored ONLY here. `taxable_value`/`cgst`/`sgst`/`igst` above are what the
+	// derivation produced, and you cannot recover a rate from them (an exempt line
+	// and a nil-value line both produce zero).
+	//
+	// So a form rebuilt from this response had no rate to put back in its `gst`
+	// block, and the ordinary round trip on an ACCOUNTING-mode GST invoice — open
+	// it, fix the narration, save — re-derived the tax at 0%: the party leg fell
+	// to the net value, the version's aggregate GST columns went to zero, the
+	// invoice left the GSTR-1 b2b section and the HSN summary, and nothing refused
+	// it because a zero-rated supply is a legal state.
+	//
+	// ALWAYS EMITTED, never omitted when empty, for the reason `cost_allocations`
+	// and `fulfilments` are: an absent key cannot tell a client "this voucher has
+	// no GST" apart from "this endpoint does not tell me about GST", and only one
+	// of those is safe to restate as nothing.
+	gstLines := make([]map[string]any, 0, len(v.GSTLines))
+	for _, g := range v.GSTLines {
+		gstLines = append(gstLines, map[string]any{
+			// 1-BASED and STORED, like `fulfilments[].line_no` and unlike
+			// `cost_allocations[].posting_seq`. It indexes nothing else on this
+			// body — an accounting-mode GST voucher has lines and no inventory.
+			"line_no": g.LineNo,
+			"hsn":     g.HSN,
+			// ⛔ MIRRORS gstLineReq FIELD FOR FIELD (taxable_value / gst_rate_pct /
+			// hsn) so a client can lift these straight back into the `gst.lines` it
+			// sends. The three tax amounts are extra and are ignored by the decoder
+			// on the way in — the server re-derives them, and a client that tried to
+			// state them would be stating a second opinion about the tax.
+			"taxable_value": g.TaxableValue.StringFixed(4),
+			"gst_rate_pct":  g.GSTRatePct.StringFixed(4),
+			"cgst":          g.CGST.StringFixed(4),
+			"sgst":          g.SGST.StringFixed(4),
+			"igst":          g.IGST.StringFixed(4),
+		})
+	}
 	return map[string]any{
 		"voucher_id":       v.VoucherID.String(),
 		"voucher_no":       v.VoucherNo,
@@ -2001,6 +2098,7 @@ func voucherFullJSON(v ledger.VoucherView) map[string]any {
 		"inventory":        inventory,
 		"cost_allocations": allocations,
 		"fulfilments":      fulfilments,
+		"gst_lines":        gstLines,
 	}
 }
 

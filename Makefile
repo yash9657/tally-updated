@@ -104,8 +104,15 @@ insightd-test: ## insightd pytest (SKIPS loudly when insightd/.venv is absent)
 # APP_DSN, not DATABASE_URL — see the note on `migrate` above. Without it a
 # customised DATABASE_URL is silently ignored and cored serves the compiled-in
 # default database, which is the same bug one layer down.
+# STATUTORYD_BASE_URL is passed EXPLICITLY rather than left to cored's compiled-in
+# default, and that is the same class of bug the APP_DSN note above records: cored
+# defaults to http://localhost:8091, so a customised STATUTORYD_PORT would be
+# honoured by `run-statutoryd` and silently ignored by the proxy — and the symptom
+# would be "statutoryd is not answering" while statutoryd is plainly running on
+# the port this Makefile printed.
 run-cored: ## Run cored locally on :$(CORED_PORT) with dev token minting enabled
-	cd backend && PORT=$(CORED_PORT) AUTH_DEV_TOKEN_ENABLED=true APP_DSN="$(DATABASE_URL)" go run ./cmd/cored serve
+	cd backend && PORT=$(CORED_PORT) AUTH_DEV_TOKEN_ENABLED=true APP_DSN="$(DATABASE_URL)" \
+		STATUTORYD_BASE_URL="http://localhost:$(STATUTORYD_PORT)" go run ./cmd/cored serve
 
 run-insightd: ## Run insightd on :$(INSIGHTD_PORT) with the DURABLE (Postgres) draft store
 	@if [ ! -x insightd/.venv/bin/python ]; then \

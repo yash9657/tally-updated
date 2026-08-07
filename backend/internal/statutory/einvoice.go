@@ -34,15 +34,32 @@ type (
 func BuildEInvoice(s VoucherSnapshot) EInvoicePayload {
 	items := make([]EInvoiceItem, 0, len(s.Lines))
 	for i, ln := range s.Lines {
+		// ⛔⛔ TotAmt IS DERIVED, NOT COPIED FROM Taxable. NIC's item block says
+		// AssAmt = TotAmt - Discount, so the gross is the taxable value PLUS the
+		// discount that was taken off it. Setting TotAmt = AssAmt (what this used
+		// to do) is only correct when Discount is zero, and it silently asserted
+		// that a 10%-discounted line had no discount and a gross of 4500.00 for
+		// ten units priced at 500.00.
+		//
+		// Deriving it here rather than carrying a fourth amount on SnapshotLine
+		// keeps ONE of the three figures free: the assembler sends the taxable
+		// value (which must equal the books, because GSTR-1 is filed from the
+		// same number) and the discount it applied, and the gross follows. The
+		// OTHER half of the identity — TotAmt = Qty x UnitPrice — is not derivable
+		// here and is what ValidateEInvoice independently checks.
+		discount := rules.Fixed2(ln.Discount)
+		assAmt := rules.Fixed2(ln.Taxable)
 		items = append(items, EInvoiceItem{
-			SlNo:       itoa(i + 1),
-			PrdDesc:    ln.Desc,
-			HsnCd:      ln.HSN,
-			Qty:        ln.Qty,
-			Unit:       ln.Unit,
-			UnitPrice:  rules.Fixed2(ln.UnitPrice),
-			TotAmt:     rules.Fixed2(ln.Taxable),
-			AssAmt:     rules.Fixed2(ln.Taxable),
+			SlNo:      itoa(i + 1),
+			PrdDesc:   ln.Desc,
+			HsnCd:     ln.HSN,
+			Qty:       ln.Qty,
+			Unit:      ln.Unit,
+			UnitPrice: rules.MoneyAtLeast2(ln.UnitPrice),
+			TotAmt:    addMoney(assAmt, discount),
+			Discount:  discount,
+			AssAmt:    assAmt,
+
 			GstRt:      ln.GstRatePct,
 			IgstAmt:    rules.Fixed2(ln.IGST),
 			CgstAmt:    rules.Fixed2(ln.CGST),
@@ -63,6 +80,27 @@ func BuildEInvoice(s VoucherSnapshot) EInvoicePayload {
 			SupTyp: "B2B",
 			RegRev: "N",
 		},
+		// ⛔⛔ Typ IS HARDCODED "INV", AND THAT IS ONLY SAFE BECAUSE THE ASSEMBLER
+		// REFUSES EVERY OTHER DOCUMENT.
+		//
+		// The real IRP derives IRN = hash(SupplierGSTIN, DocTyp, DocNo, FY). This
+		// codebase numbers vouchers PER CLASS (voucher_number_counter is keyed on
+		// (company, voucher_type, fin_year)), so Sales #1, Purchase #1 and Credit
+		// Note #1 all exist at once — and all three would leave here as
+		// INV/"1"/same FY, i.e. ONE NIC key. The second submission is rejected as a
+		// DUPLICATE by NIC, and FakeProvider cannot show it because it hashes the
+		// whole payload and therefore mints three distinct IRNs for three distinct
+		// documents.
+		//
+		// The classes that would collide are refused at the source, by name:
+		// internal/einvoice's loadInvoice accepts SALES and nothing else (see
+		// ErrNotAnOutwardSalesInvoice). A credit note IS legitimately e-invoiceable
+		// in India as CRN and a debit note as DBN — the recorded schema already
+		// lists all three doc types — but emitting either means modelling the
+		// original-invoice reference block NIC requires with them, which this build
+		// does not. ⛔ IF YOU EVER LET A NON-SALES CLASS THROUGH loadInvoice, THIS
+		// LINE IS THE SECOND HALF OF THE BUG: set the doc type from the class here,
+		// or the document lies about what it is AND collides at the IRP.
 		DocDtls: DocDtls{
 			Typ: "INV",
 			No:  s.VoucherNo,
@@ -90,6 +128,11 @@ func BuildEInvoice(s VoucherSnapshot) EInvoicePayload {
 		},
 	}
 }
+
+// addMoney sums two fixed-2 money strings and prints the result at two places.
+// decimal, never float64 — a float sum of "0.10" and "0.20" is how a paisa goes
+// missing inside a document carrying a government reference number.
+func addMoney(a, b string) string { return dec(a).Add(dec(b)).StringFixed(2) }
 
 func deriveTotal(taxable, cgst, sgst, igst string) string {
 	sum := dec(taxable).Add(dec(cgst)).Add(dec(sgst)).Add(dec(igst))

@@ -22,7 +22,39 @@ import (
 // nobody can write.
 
 // KnownActions is every action token an acl_rule may carry (plus Wildcard).
-var KnownActions = []Action{Create, Alter, Delete, Display, Print, Export}
+//
+// ⛔ `export` IS NOT HERE, AND ITS ABSENCE IS THE CONTROL. It was in this list
+// while nothing on any code path consulted it, which was harmless only for as
+// long as nothing could be exported. T15 built Alt+E — the report screens write
+// a CSV/Excel file of the rows already on screen, entirely in the browser — and
+// at that moment a dormant token became a control that LIES: an owner could type
+// `disallow export report:stock-summary` into Users & Roles, be told by
+// ValidateRule (and by GET /security/vocabulary, which serves this very slice)
+// that it was a valid rule, save it, and watch Alt+E write the file anyway. A
+// security setting that reports success and does nothing is worse than a missing
+// one: the owner stops looking.
+//
+// WHY IT IS DELETED RATHER THAN ENFORCED. There is nothing to enforce it ON. The
+// export is a pure client-side rendering of bytes the server ALREADY delivered
+// and the operator is ALREADY reading: by the time Alt+E is pressed, the PDP has
+// permitted `display report:NAME` and the figures are on the glass. A check
+// inside the renderer would stop the file and not the disclosure — a screenshot,
+// a select-and-copy or the browser's own devtools all reach the same numbers —
+// so it would be a control that looks real to an auditor and is not one. The
+// authority that actually decides who may take a report out of this system is
+// `display` (and, for paper, `print`), and both are enforced server-side on the
+// route that hands over the data. When an export becomes a SERVER route — the
+// e-mail-a-document half of Tally's Alt+E is not built, and that one really does
+// leave the machine — it gets this token back, together with the routeAction
+// entry that makes TestEveryCompanyRouteIsMappedAndInVocabulary hold it.
+//
+// SAFE TO REMOVE, CHECKED RATHER THAN ASSUMED (HANDOFF §6.1 records the failure
+// this could otherwise cause: deleting a vocabulary entry that a live acl_rule
+// row names would 422 an owner who reads their own level's rules and saves them
+// back). No migration inserts an acl_rule with action 'export' — verified with
+// `grep -rn "'export'" backend/migrations/` — and the seeded levels reach it
+// through neither a rule nor a wildcard, since `*` is validated separately.
+var KnownActions = []Action{Create, Alter, Delete, Display, Print}
 
 // KnownVoucherClasses are the resource tokens naming a voucher class — the
 // kebab-case form of ledger.Class, which is also the path segment routeAction
@@ -391,6 +423,30 @@ var KnownResources = append([]Resource{
 	// is worth intercepting and exactly where it will be. Migration 0047's RLS
 	// note says the same thing at the other end of the stack.
 	"e-way-bill",
+
+	// THE e-INVOICE / IRN: the Invoice Reference Number the NIC portal issues
+	// against a B2B tax invoice, statutorily mandatory in India above a turnover
+	// threshold.
+	//
+	// A BARE TOKEN for the reason the whole block above records, and ⛔ IT MAY NOT
+	// BE ADDED TO KnownReportNames — there is no e-invoice REPORT in this slice,
+	// and a name there with no reportName() case is default-DENY for the Owner
+	// too. This one has consumed NO MIGRATION NUMBER at all, exactly as
+	// `e-way-bill` did: Data Entry's default_access is 'none' and no seeded rule
+	// names this token, so it is already denied there.
+	//
+	// ONE TOKEN COVERING BOTH RAISING AND READING, on the `e-way-bill` reasoning:
+	// whoever mints the IRN is whoever reads it back to put it on the invoice.
+	//
+	// ⛔⛔ WHAT THIS TOKEN GUARDS IS NOT A DOCUMENT, IT IS AN IRREVERSIBLE ACT.
+	// Every other Create token in this list makes a row that an Alter can correct
+	// and a Delete can tombstone. This one calls a GOVERNMENT API and then
+	// FREEZES the voucher: the display number is pinned and later alter and
+	// delete are hard-blocked, with no undo anywhere in the product. Granting it
+	// is granting the power to make an invoice permanently final — and, if the
+	// invoice was wrong, to require a credit note rather than an edit. Weigh it
+	// like `delete`, not like `create`.
+	"e-invoice",
 }, KnownVoucherClasses...)
 
 // KnownReportNames is every report a rule may name via the "report:NAME" form.

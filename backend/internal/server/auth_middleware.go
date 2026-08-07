@@ -767,6 +767,43 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 		// of the two above.
 		return "", "", "", false
 
+	// ===========================================================================
+	// THE e-INVOICE / IRN — cored's PROXY into statutoryd
+	// ===========================================================================
+	// ONE BARE TOKEN, `e-invoice`, with no ACL migration — §6.1's rule again, and
+	// the consequence stated plainly: DATA ENTRY CAN NEITHER RAISE NOR SEE AN
+	// e-INVOICE until an administrator writes `allow create e-invoice`.
+	//
+	// ⛔ ONE TOKEN AND NOT TWO, on the same test the e-way bill arm applies:
+	// would an administrator ever grant one without the other? They would not.
+	// The operator who raises the IRN is the one who reads it back to put it on
+	// the invoice, and a clerk who could mint an IRN but not read it could not
+	// tell whether the attempt had succeeded — against an endpoint whose whole
+	// hazard is minting a SECOND one.
+	//
+	// ⛔ Create AND NOT Alter ON THE POST, even though raising an e-invoice
+	// FREEZES the voucher (statutoryd calls the freeze hook, which pins the
+	// display number and hard-blocks later alter/delete). The act being
+	// authorised is "raise the e-invoice for this invoice"; the freeze is that
+	// act's statutory consequence, not a second one. ⚠️ AND THE FREEZE ITSELF IS
+	// SEPARATELY GOVERNED: statutoryd performs it by POSTing
+	// /vouchers/{id}/external-reference back into cored, which maps to
+	// Alter/voucher in its own arm above. So the pin passes through the PDP on
+	// its own terms rather than riding in on this token.
+	//
+	// ⚠️ THE BACK-DATED CUTOFF IS INERT HERE, stated rather than left implied:
+	// the body carries only `voucher_id`, voucherDateFromRequest finds no
+	// voucher_date, and cutoffDeny skips. Raising an e-invoice posts nothing and
+	// moves no balance.
+	case strings.HasPrefix(rest, "/e-invoices"):
+		switch method {
+		case http.MethodGet:
+			return authz.Display, "e-invoice", "", true
+		case http.MethodPost:
+			return authz.Create, "e-invoice", "", true
+		}
+		return "", "", "", false
+
 	case strings.HasPrefix(rest, "/cost-categories"):
 		switch method {
 		case http.MethodGet:

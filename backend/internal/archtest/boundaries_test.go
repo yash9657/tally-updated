@@ -246,6 +246,26 @@ var allowedDeps = map[string]map[string]bool{
 		"internal/platform/db":     true,
 		"internal/statutory/rules": true,
 	},
+	// einvoice is cored's half of the IRN path: it builds the e-invoice snapshot
+	// (identity AND item list) from the books and PROXIES to statutoryd over
+	// HTTP. Exactly the same two edges as ewaybill above, and the fact that it
+	// needs no third one is the architecture holding:
+	//
+	// ⛔ NOT internal/statutory, EVEN THOUGH THIS IS THE IRN PATH. The workflow
+	// wraps an exactly-once external IRP call in durable, resumable state and
+	// stays in its own deployable; cored reaches it over a SOCKET, never by
+	// import. The one thing the two planes must agree on — the request/response
+	// wire shape — lives in the pure rules leaf below, so both name the SAME
+	// struct without either importing the other. See rules/einvoice_wire.go.
+	//
+	// ⛔ AND NOT internal/ledger. An e-invoice is raised AGAINST a voucher and
+	// never writes one. The IRN is pinned by statutoryd calling cored's freeze
+	// hook back over HTTP, which is the ONE seam authorised to freeze a voucher —
+	// giving this package the ledger would create a second, unaudited one.
+	"internal/einvoice": {
+		"internal/platform/db":     true,
+		"internal/statutory/rules": true,
+	},
 	// migration is the Tally-XML importer + reconciliation harness: it parses
 	// via integration, ensures masters, posts through ledger, and reconciles via
 	// reporting. It is an orchestration leaf — nothing imports it except server.
@@ -471,6 +491,19 @@ var allowedDeps = map[string]map[string]bool{
 		// store. Its own allowed set is {platform/db, statutory/rules}, so it
 		// can never call back out to a handler or into the ledger.
 		"internal/ewaybill": true,
+		// The e-invoice / IRN path's cored half. server holds POST /e-invoices
+		// and GET /e-invoices/{voucherID}; internal/einvoice holds the snapshot
+		// assembly, the refusals and the statutoryd client.
+		//
+		// ⛔ THIS ENTRY IS THE SECOND OF TWO (HANDOFF §7.1). A new internal
+		// package needs its OWN allowed-import set AND a line here; only the
+		// first passes when the package is tested alone, and the second fails
+		// only in the full suite — which is how it gets missed.
+		//
+		// ⛔ NOTE, AGAIN, WHICH PACKAGE IS STILL NOT IN server's SET:
+		// internal/statutory. The proxy did not buy cored an import of the IRN
+		// workflow plane; it bought it an HTTP client.
+		"internal/einvoice": true,
 	},
 	"internal/archtest": {},
 }
