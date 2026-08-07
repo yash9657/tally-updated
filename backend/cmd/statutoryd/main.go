@@ -114,99 +114,24 @@ func newStepStore(ctx context.Context, dsn string) (statutory.StepStore, func(),
 	return statutory.NewPGStore(pool), pool.Close, nil
 }
 
-// eInvoiceRequest carries the seller/buyer identity (not held by cored's ledger)
-// plus optional snapshot lines/amount overrides for the e-invoice.
-type eInvoiceRequest struct {
-	SellerGstin     string `json:"seller_gstin"`
-	SellerLegalName string `json:"seller_legal_name"`
-	SellerStateCode string `json:"seller_state_code"`
-	BuyerGstin      string `json:"buyer_gstin"`
-	BuyerLegalName  string `json:"buyer_legal_name"`
-	BuyerStateCode  string `json:"buyer_state_code"`
-
-	Lines []statutory.SnapshotLine `json:"lines,omitempty"`
-
-	// Optional amount overrides; when blank the values fetched from cored are used.
-	Taxable      string `json:"taxable,omitempty"`
-	CGST         string `json:"cgst,omitempty"`
-	SGST         string `json:"sgst,omitempty"`
-	IGST         string `json:"igst,omitempty"`
-	InvoiceTotal string `json:"invoice_total,omitempty"`
-}
-
-type eInvoiceResponse struct {
-	IRN             string `json:"irn"`
-	AckNo           string `json:"ack_no"`
-	Status          string `json:"status"`
-	PinnedVoucherNo string `json:"pinned_voucher_no"`
-}
+// ⛔ THE e-INVOICE HANDLER, ITS REQUEST/RESPONSE TYPES AND THE IDENTITY OVERLAY
+// USED TO LIVE HERE AND HAVE MOVED TO internal/statutory/einvoice_api.go.
+//
+// Not for tidiness. cored now PROXIES to this endpoint, so cored's acceptance
+// test has to drive the REAL handler — and `package main` cannot be imported by
+// anything, so the only way to test it from cored was to hand-roll a look-alike.
+// A look-alike agrees with whatever cored sends by construction and would have
+// gone on passing while the actual daemon ignored a renamed field. The wire
+// contract itself now lives one package further down, in
+// internal/statutory/rules, so BOTH deployables name the same struct.
+//
+// See internal/statutory/einvoice_api.go for the handler and its status mapping,
+// and internal/statutory/einvoice_api_test.go for its tests.
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
-}
-
-func (s *server) handleEInvoice(w http.ResponseWriter, r *http.Request) {
-	companyID := chi.URLParam(r, "companyID")
-	voucherID := chi.URLParam(r, "voucherID")
-
-	var req eInvoiceRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
-		return
-	}
-
-	ctx := r.Context()
-	snap, err := s.cored.GetVoucher(ctx, companyID, voucherID)
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-		return
-	}
-
-	// Overlay caller-supplied identity (and optional amount/line overrides).
-	snap.SellerGstin = req.SellerGstin
-	snap.SellerLegalName = req.SellerLegalName
-	snap.SellerStateCode = req.SellerStateCode
-	snap.BuyerGstin = req.BuyerGstin
-	snap.BuyerLegalName = req.BuyerLegalName
-	snap.BuyerStateCode = req.BuyerStateCode
-	if len(req.Lines) > 0 {
-		snap.Lines = req.Lines
-	}
-	if req.Taxable != "" {
-		snap.Taxable = req.Taxable
-	}
-	if req.CGST != "" {
-		snap.CGST = req.CGST
-	}
-	if req.SGST != "" {
-		snap.SGST = req.SGST
-	}
-	if req.IGST != "" {
-		snap.IGST = req.IGST
-	}
-	if req.InvoiceTotal != "" {
-		snap.InvoiceTotal = req.InvoiceTotal
-	}
-
-	res, err := statutory.GenerateIRNWorkflow(ctx, s.store, s.prov, s.cored, companyID, voucherID, snap)
-	if err != nil {
-		if statutory.IsPermanent(err) {
-			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
-			return
-		}
-		// Transient: the workflow is resumable; surface 503 so the caller retries.
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
-		return
-	}
-
-	writeJSON(w, http.StatusOK, eInvoiceResponse{
-		IRN:             res.IRN,
-		AckNo:           res.AckNo,
-		Status:          res.Status,
-		PinnedVoucherNo: snap.VoucherNo,
-	})
 }
 
 func (s *server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
@@ -236,7 +161,7 @@ func main() {
 
 	r := chi.NewRouter()
 	r.Get("/healthz", s.handleHealthz)
-	r.Post("/companies/{companyID}/vouchers/{voucherID}/e-invoice", s.handleEInvoice)
+	(&statutory.EInvoiceAPI{Store: s.store, Provider: s.prov, Cored: s.cored}).Mount(r)
 
 	addr := ":" + port
 	log.Printf("statutoryd serving on %s (cored=%s)", addr, coredBaseURL)

@@ -123,10 +123,19 @@ func newEWBFixture(t *testing.T, srv *server.Server) ewbFixture {
 
 	// The item carries an HSN and a GST rate, because an item invoice takes BOTH
 	// from the master and never from the request (ledger/item_invoice.go).
+	//
+	// ⛔ AND IT CARRIES A UNIT. It did not, and that made this fixture the case
+	// that exhibited a blank NIC ItemList[].Unit — a MANDATORY field for goods —
+	// on every e-invoice the suite ever built. stock_item.unit_id is nullable and
+	// the e-invoice assembler now REFUSES a line whose master names no unit
+	// (einvoice.ErrNoUnitOfMeasure) rather than minting a blank onto a document
+	// that then freezes the voucher. Every other inventory fixture in this package
+	// already sets unit_symbol; this one was the outlier.
 	irec, ib := doRaw(t, srv, http.MethodPost, f.base+"/stock-items", ownerTok, map[string]any{
 		"name":         "MS Angle " + uuid.NewString()[:8],
 		"hsn":          "7216",
 		"gst_rate_pct": "18",
+		"unit_symbol":  "Nos",
 		"created_by":   ownerSubject,
 	})
 	if irec.Code != http.StatusCreated && irec.Code != http.StatusOK {

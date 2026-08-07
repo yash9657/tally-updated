@@ -37,8 +37,17 @@ import { createRestClient, createInsightdClient } from "../src/api";
 import type {
   CoredClient,
   InventoryLineRequest,
+  PostingRequest,
   VoucherRequest,
 } from "../src/api";
+// ⛔ THE TWO ORDINALS THIS FILE MUST NOT WRITE DOWN. A cost allocation's
+// posting_seq is 0-based, a fulfilment's line_no is 1-based, and both are wrong
+// SILENTLY: the voucher balances, the sum trigger is satisfied and the reports
+// foot either way. costSplitOn derives the sequence from the LEDGER and
+// fulfilmentOn derives the line number from the ITEM, so nothing below counts.
+// See src/seed/demoLinks.ts, whose tests are mutation-proved against the inputs
+// that distinguish the right ordinal from the plausible wrong one.
+import { costSplitOn, fulfilmentOn } from "../src/seed/demoLinks";
 import { DEMO_PASSWORD, ensurePassword } from "./auth.mjs";
 
 const baseUrl =
@@ -493,6 +502,84 @@ async function main(): Promise<void> {
 
   console.log("  masters:    4 parties, 6 tax ledgers, sales/purchase/expense, bank + cash");
 
+  // ---- T2 COST MASTERS: TWO AXES, BECAUSE ONE AXIS TEACHES THE WRONG MODEL --
+  //
+  // WHY THIS SECTION EXISTS AT ALL. Until it did, the Cost Centre Summary and
+  // the Cost Category Summary — two real screens, reachable from the Gateway,
+  // served by real report names the PDP knows about — rendered EMPTY against a
+  // fresh demo company and could not be demonstrated at all. Worse (HANDOFF
+  // §11), the shared dev database HAD cost masters, put there by a browser, so
+  // anyone reasoning from what was on screen believed the seed produced them.
+  //
+  // ⛔⛔ TWO AXES AND NOT ONE, AND THAT IS THE WHOLE POINT OF THE SECTION.
+  // A cost CATEGORY is an AXIS of analysis; a cost CENTRE is a POSITION on it
+  // (HANDOFF §8.1). Several axes allocate THE SAME MONEY IN PARALLEL: the
+  // 45,000 rent below is allocated in full across Departments AND AGAIN in full
+  // across Branches, and both allocations are complete and both are correct.
+  //
+  // A demo with ONE axis cannot show that, and a reader who only ever sees one
+  // will reasonably conclude that cost centres add up — which is the single
+  // error this model is most often built with. With two, the Cost Category
+  // Summary shows 53,600 allocated on Department and 45,000 on Branch over
+  // 53,600 of allocable cost, side by side, WITH NO GRAND TOTAL, and the report
+  // says in its own `notes` why there is none. That is the lesson, on screen,
+  // in the demo data, rather than in a comment nobody reads.
+  //
+  // allocate_non_revenue is left FALSE (the default) on both: departmental
+  // analysis of revenue and expense is the ordinary case, and it is also what
+  // makes the off-axis detector below able to fire — with it TRUE, a split
+  // wrongly attached to the BANK leg would be a legal allocation and the
+  // seed's own cross-check could not see it.
+  const deptAxis = (
+    await client.createCostCategory(co, {
+      name: "Department",
+      allocate_non_revenue: false,
+      created_by: "seed",
+    })
+  ).id;
+  const branchAxis = (
+    await client.createCostCategory(co, {
+      name: "Branch",
+      allocate_non_revenue: false,
+      created_by: "seed",
+    })
+  ).id;
+
+  // ⛔ THE WRITE REPLY IS AN ENVELOPE, NOT THE VIEW. `{ id, cost_centre }`,
+  // where cost_centre is null when the read-back failed — the row IS written
+  // either way. Typing the envelope AS the flat view is a lie the compiler
+  // cannot catch, and it shipped once: the masters screen said "Created
+  // undefined on the undefined axis" with 597 tests green. The id is taken from
+  // the envelope; the view is used only to prove the axis it landed on.
+  const costCentre = async (axisID: string, name: string): Promise<string> => {
+    const res = await client.createCostCentre(co, {
+      cost_category_id: axisID,
+      name,
+      created_by: "seed",
+    });
+    if (res.cost_centre && res.cost_centre.cost_category_id !== axisID) {
+      throw new Error(
+        `cost centre "${name}" was created on axis ${res.cost_centre.cost_category_id}, ` +
+          `not on ${axisID} — a centre on the wrong axis makes every figure ` +
+          `drawn on that axis wrong while both reports still foot`,
+      );
+    }
+    return res.id;
+  };
+
+  const deptSales = await costCentre(deptAxis, "Sales");
+  const deptAdmin = await costCentre(deptAxis, "Admin");
+  // Two branches whose names are DELIBERATELY NOT the department names: a demo
+  // where "Sales" is both a Department and a Branch cannot show that a bare
+  // centre name is ambiguous across axes, which is why CostCentre carries
+  // cost_category_name on every row.
+  const branchBengaluru = await costCentre(branchAxis, "Bengaluru");
+  const branchMumbai = await costCentre(branchAxis, "Mumbai");
+
+  console.log(
+    "  cost:       2 AXES — Department (Sales, Admin) + Branch (Bengaluru, Mumbai)",
+  );
+
   // ---- Helpers -------------------------------------------------------------
   /** A GST sales invoice with a bill-wise NEW reference (so it ages). */
   const salesInvoice = async (opts: {
@@ -702,23 +789,72 @@ async function main(): Promise<void> {
       { ledger_id: steel, ref_name: "SUP-101", ref_type: "AGAINST", dr_cr: "D", amount: money(20000) },
     ],
   });
-  await client.postPaymentVoucher(co, {
+  // ⛔ THE RENT IS THE VOUCHER THAT CARRIES THE COST SPLIT, AND IT CARRIES IT
+  // TWICE — once per axis. Read HANDOFF §8.1 before touching the figures.
+  //
+  //   Department : Sales 27,000 + Admin  18,000 = 45,000
+  //   Branch     : B'luru 31,500 + Mumbai 13,500 = 45,000
+  //
+  // Both total the posting EXACTLY, and neither total may be added to the
+  // other: 90,000 of departmental+branch cost against 45,000 of rent is not a
+  // bigger number, it is the same rent counted from two directions. That is
+  // what the per-(posting, CATEGORY) sum trigger permits and what a naive
+  // "total allocated" figure would get wrong.
+  //
+  // ⛔⛔ AND THE LEG. `rentPostings[0]` is RENT and `[1]` is HDFC BANK. Attach
+  // the split to the bank leg and the voucher still balances, both cost reports
+  // still foot, and the Cost Centre Summary answers a question about a bank
+  // account. costSplitOn is given the LEDGER and derives the sequence, because
+  // the two legs carry THE SAME AMOUNT and nothing but the ledger tells them
+  // apart. The seed then proves it landed right in two independent ways, at the
+  // bottom of this file: by reading the voucher back and naming the ledger the
+  // stored posting_seq points at, and by asserting the Cost Category Summary's
+  // off_axis_postings is zero (HDFC Bank is not a P&L ledger, so a split on it
+  // would be off-axis for an allocate_non_revenue = false axis).
+  const rentPostings: PostingRequest[] = [
+    { ledger_id: rent, dr_cr: "D", amount: money(45000) },
+    { ledger_id: bank, dr_cr: "C", amount: money(45000) },
+  ];
+  const rentVoucher = await client.postPaymentVoucher(co, {
     voucher_date: "2026-06-30",
-    narration: "Office rent — Q1",
-    postings: [
-      { ledger_id: rent, dr_cr: "D", amount: money(45000) },
-      { ledger_id: bank, dr_cr: "C", amount: money(45000) },
+    narration: "Office rent — Q1 (allocated by Department and by Branch)",
+    postings: rentPostings,
+    cost_allocations: [
+      ...costSplitOn(rentPostings, rent, deptAxis, [
+        { costCentreID: deptSales, amount: "27000.0000" },
+        { costCentreID: deptAdmin, amount: "18000.0000" },
+      ]),
+      ...costSplitOn(rentPostings, rent, branchAxis, [
+        { costCentreID: branchBengaluru, amount: "31500.0000" },
+        { costCentreID: branchMumbai, amount: "13500.0000" },
+      ]),
     ],
   });
 
   // 7. F7 Journal — an accrued expense (no cash movement).
+  //
+  // ⛔ ALLOCATED ON THE DEPARTMENT AXIS ONLY, AND THE OMISSION IS THE FEATURE.
+  // The Cost Category Summary exists to make an INCOMPLETE allocation visible:
+  // no database constraint can see one, because the sum trigger fires on the
+  // allocations and where there are none there is nothing to fire on. If every
+  // seeded cost were allocated on every axis, `unallocated_*` would be zero
+  // everywhere, the one column the report is FOR would render as a row of
+  // zeros, and a wrong implementation of it would be indistinguishable from a
+  // right one. So this 8,600 is departmental and is NOT branch-attributed, and
+  // the Branch axis therefore reports a real 8,600 gap that the Department axis
+  // does not — two different, correct answers about the same books.
+  const powerPostings: PostingRequest[] = [
+    { ledger_id: power, dr_cr: "D", amount: money(8600) },
+    { ledger_id: cash, dr_cr: "C", amount: money(8600) },
+  ];
   await client.postJournalVoucher(co, {
     voucher_date: "2026-07-01",
-    narration: "Electricity accrued for June",
-    postings: [
-      { ledger_id: power, dr_cr: "D", amount: money(8600) },
-      { ledger_id: cash, dr_cr: "C", amount: money(8600) },
-    ],
+    narration: "Electricity accrued for June (allocated by Department)",
+    postings: powerPostings,
+    cost_allocations: costSplitOn(powerPostings, power, deptAxis, [
+      { costCentreID: deptSales, amount: "5160.0000" },
+      { costCentreID: deptAdmin, amount: "3440.0000" },
+    ]),
   });
 
   // 8. An ALTERED voucher: INV-003 is corrected from 24,000 to 26,500 @12%.
@@ -976,6 +1112,122 @@ async function main(): Promise<void> {
     })
   ).stock_item_id;
 
+  // ---- T3 ORDERS: A COMMITTED QUANTITY, WHICH IS NOT A MOVEMENT ------------
+  //
+  // WHY THIS SECTION EXISTS. The Order Register and the two order books
+  // rendered EMPTY against a fresh demo company, so T3 — a shipped, tested,
+  // trigger-guarded feature — could not be shown to anybody. The dev database
+  // had a `SO-BROWSER-1` put there by hand (HANDOFF §11); a fresh one had
+  // nothing, which is the worst of both worlds.
+  //
+  // ⛔⛔ NOTHING IN THIS SECTION TOUCHES CLOSING STOCK, AND THAT IS THE MODEL,
+  // NOT AN OMISSION. An order is a PROMISE. When a customer orders 50 units the
+  // goods are still on our shelf, still ours, and still in closing stock at
+  // full value — so orders live in their own tables, affect the ORDER BOOK, and
+  // never the trial balance, the P&L or the balance sheet (migration 0042's
+  // header states the consequence of getting this wrong: closing stock
+  // corrupted by every open order, reconciling against nothing). The two orders
+  // and the two fulfilment links below therefore move NO figure that
+  // `verify:demo` asserts.
+  //
+  // ⛔ PARTIAL FULFILMENT IS THE NORMAL CASE AND THE OUTSTANDING BALANCE IS THE
+  // ENTIRE POINT (HANDOFF §8.2), so both orders below are PART-delivered by
+  // vouchers that already existed in this seed. A fully-delivered order would
+  // demonstrate the feature's least interesting state and would leave both
+  // order books empty, which is exactly the situation this section exists to
+  // end.
+  //
+  // ⛔ THERE IS NO fulfilled_qty AND NO status COLUMN. Every figure quoted in
+  // the assertions at the bottom of this file is DERIVED by the server, on
+  // every read, by summing order_fulfilment across CURRENT, non-deleted voucher
+  // versions. Nothing here writes one, and nothing may cache one across an
+  // alter.
+  const SO_NO = "SO-2026-001";
+  const PO_NO = "PO-2026-001";
+  const salesOrderID = (
+    await client.createSalesOrder(co, {
+      order_no: SO_NO,
+      order_date: "2026-06-15",
+      party_ledger_id: acme,
+      narration: "Customer order — MS Angle for the Basavanagudi site, SS Sheet to follow",
+      created_by: "seed",
+      lines: [
+        // Line 1 is PART-delivered by the 2026-06-30 delivery note below: 30 of
+        // 50 go out, leaving 20 outstanding at the agreed 300.00 = 6,000.00.
+        //
+        // ⚠️ THE AGREED RATE IS NOT A VALUATION. 300.00 is what the customer
+        // agreed to pay; the same item's stock is carried at its weighted
+        // average cost (~19.73 after the back-dated purchase further down), and
+        // the invoice that eventually prices this delivery may lawfully bill a
+        // third figure. Three different, correct numbers for one item — which
+        // is why the order book's value column says "at the ORDER's agreed
+        // rate" and never reconciles itself to stock.
+        {
+          stock_item_id: itemAngle,
+          qty: "50.0000",
+          rate: "300.0000",
+          due_date: "2026-07-15",
+        },
+        // Line 2 is UNTOUCHED, deliberately. Fulfilment is per LINE, not per
+        // order, and an order book that only ever showed part-delivered lines
+        // could not show that a line nobody has shipped against is fully
+        // outstanding rather than absent. 10 @ 1,050.00 = 10,500.00.
+        {
+          stock_item_id: itemSheet,
+          qty: "10.0000",
+          rate: "1050.0000",
+          due_date: "2026-08-15",
+        },
+      ],
+    })
+  ).order_id;
+
+  // THE PURCHASE SIDE IS A SEPARATE OBJECT WITH A SEPARATE AUTHORITY, and it is
+  // seeded separately for that reason rather than for symmetry: `sales-order`
+  // and `purchase-order` are two report names and two PDP decisions, so a demo
+  // that seeded only one could not show "this salesperson may see the pipeline
+  // but not what we have committed to pay suppliers" at all (HANDOFF §8.3).
+  // Note the METHOD carries the direction — there is no `direction` field.
+  //
+  // 200 committed on 5 April; the 10 April receipt note brings 120 in, leaving
+  // 80 outstanding at 25.75 = 2,060.00.
+  const purchaseOrderID = (
+    await client.createPurchaseOrder(co, {
+      order_no: PO_NO,
+      order_date: "2026-04-05",
+      party_ledger_id: steel,
+      narration: "Purchase order — MS Angle, delivered in lots",
+      created_by: "seed",
+      lines: [
+        {
+          stock_item_id: itemAngle,
+          qty: "200.0000",
+          rate: "25.7500",
+          due_date: "2026-05-10",
+        },
+      ],
+    })
+  ).order_id;
+
+  // The order LINE ids, read back, because a fulfilment names the LINE and
+  // never the order — a delivery note routinely completes one line of a
+  // three-line order and leaves the rest outstanding, and an order-level link
+  // could not say which. The server assigns line_no from the position in the
+  // `lines` array above (the first line is 1); it is not client-supplied, so it
+  // has to be read.
+  const soView = await client.getSalesOrder(co, salesOrderID);
+  const poView = await client.getPurchaseOrder(co, purchaseOrderID);
+  const soAngleLine = soView.lines.find((l) => l.stock_item_id === itemAngle);
+  const soSheetLine = soView.lines.find((l) => l.stock_item_id === itemSheet);
+  const poAngleLine = poView.lines.find((l) => l.stock_item_id === itemAngle);
+  if (!soAngleLine || !soSheetLine || !poAngleLine) {
+    throw new Error(
+      `order line read-back is missing an item: ${SO_NO} has ` +
+        `[${soView.lines.map((l) => l.stock_item).join(", ")}] and ${PO_NO} has ` +
+        `[${poView.lines.map((l) => l.stock_item).join(", ")}]`,
+    );
+  }
+
   /**
    * POST or PUT a stock-only voucher through the route the UI would use.
    *
@@ -1041,12 +1293,30 @@ async function main(): Promise<void> {
   const moves: string[] = [];
 
   // 1. Goods IN. The first purchase of item A, at 25.7500.
+  //
+  //    AND IT PART-FULFILS PO-2026-001 — 120 of the 200 committed. The link is
+  //    added to the voucher that ALREADY moved these goods rather than to a new
+  //    one, because a fulfilment is a LINK and not a movement: inventing a
+  //    second receipt to hang it on would have put 120 more units into closing
+  //    stock, and closing stock feeds the Balance Sheet.
+  //
+  //    ⛔ 0042's trigger requires a PURCHASE order to be fulfilled by goods
+  //    coming IN (and a SALES order by goods going OUT), reading the direction
+  //    off the stock_movement row rather than off the voucher class. A receipt
+  //    note is IN, so this is the right way round; the same link on the
+  //    delivery note below would be refused by the database.
+  const rnAngleLines = [stockLine(itemAngle, "IN", "120.0000", "25.7500", "3090.0000")];
   await stockVoucher("POST", "receipt-note", {
     voucher_date: "2026-04-10",
-    narration: "Receipt note — MS Angle from Steel Suppliers (bill to follow)",
-    inventory: [stockLine(itemAngle, "IN", "120.0000", "25.7500", "3090.0000")],
+    narration:
+      "Receipt note — MS Angle from Steel Suppliers, first lot against " +
+      PO_NO + " (bill to follow)",
+    inventory: rnAngleLines,
+    fulfilments: [
+      fulfilmentOn(rnAngleLines, itemAngle, poAngleLine.order_line_id, "120.0000"),
+    ],
   });
-  moves.push("2026-04-10  RN  MS Angle 50x50   IN  120 @ 25.7500");
+  moves.push("2026-04-10  RN  MS Angle 50x50   IN  120 @ 25.7500  (fulfils 120 of " + PO_NO + ")");
 
   // 2. Goods IN. Item B at 940.0000 — a DIFFERENT rate from its 812.5000
   //    opening, so the weighted average actually has two prices to average.
@@ -1061,12 +1331,24 @@ async function main(): Promise<void> {
   //    gate's additivity check uses. A period bound that was exclusive on the
   //    top would silently drop this movement, and a bound flip once survived
   //    the entire reporting package because no fixture sat ON a bound.
-  await stockVoucher("POST", "delivery-note", {
+  //
+  //    AND IT PART-FULFILS SO-2026-001 LINE 1 — 30 of the 50 committed, leaving
+  //    20 outstanding, which is the figure the Sales Order Book exists to show.
+  //    The SS Sheet line of the same order is left untouched: fulfilment is per
+  //    LINE.
+  const dnAngleLines = [stockLine(itemAngle, "OUT", "30.0000", "25.7500", "772.5000")];
+  const dnAngle = await stockVoucher("POST", "delivery-note", {
     voucher_date: "2026-06-30",
-    narration: "Delivery note — MS Angle to Acme Traders (invoice to follow)",
-    inventory: [stockLine(itemAngle, "OUT", "30.0000", "25.7500", "772.5000")],
+    narration: "Delivery note — MS Angle to Acme Traders against " + SO_NO + " (invoice to follow)",
+    inventory: dnAngleLines,
+    fulfilments: [
+      fulfilmentOn(dnAngleLines, itemAngle, soAngleLine.order_line_id, "30.0000"),
+    ],
   });
-  moves.push("2026-06-30  DN  MS Angle 50x50   OUT  30   (ON the Apr–Jun upper bound)");
+  moves.push(
+    "2026-06-30  DN  MS Angle 50x50   OUT  30   (ON the Apr–Jun upper bound; fulfils 30 of " +
+      SO_NO + ")",
+  );
 
   // 4. Goods IN, dated exactly ON the LOWER bound of the Jul–Mar window.
   //
@@ -1211,6 +1493,263 @@ async function main(): Promise<void> {
   console.log(
     "              closing stock: " +
       stockDates.map((d) => `${d}=${stockValue.get(d)}`).join("  "),
+  );
+
+  // ---- T2 + T3: the seeded data PROVED AGAINST THE SERVER'S OWN REPORTS ----
+  //
+  // Every assertion below reads a figure back through the same report a human
+  // opens, because the two defects this section guards against — a cost split
+  // attached to the wrong posting, and a fulfilment counted against a
+  // superseded voucher version — both produce data that balances, foots and
+  // reconciles. Nothing but an independent read can see them.
+  //
+  // ⛔ NOT ONE FIGURE HERE MOVES THE BALANCE SHEET. Cost allocations attach to
+  // postings that already existed and change no amount; orders and fulfilments
+  // live in their own tables and never reach stock_movement. That is stated as
+  // an assertion and not a hope: the closing-stock figures captured above were
+  // taken AFTER every order and link was written.
+  const FY_FROM = "2026-04-01";
+  const FY_TO = "2027-03-31";
+
+  // ⛔⛔ PROOF 1 — THE SPLIT IS ON THE RENT LEG, NOT THE BANK LEG (HANDOFF §1.2).
+  // Both legs of the payment are 45,000, so no arithmetic can tell them apart.
+  // The read-back can: `cost_allocations[].posting_seq` indexes THIS RESPONSE's
+  // own postings array, so the ledger it points at is the ledger the cost was
+  // attributed to. With the offset wrong, every line below would say "HDFC
+  // Bank" and every report would still foot.
+  const rentBack = await client.getVoucher(co, rentVoucher.voucher_id);
+  const rentAllocs = rentBack.cost_allocations ?? [];
+  if (rentAllocs.length !== 4) {
+    throw new Error(
+      `the rent voucher stored ${rentAllocs.length} cost allocations, expected 4 ` +
+        `(2 centres x 2 axes) — an axis that failed to write leaves a report ` +
+        `silently reporting a fraction of the cost`,
+    );
+  }
+  for (const a of rentAllocs) {
+    const leg = rentBack.postings[a.posting_seq];
+    if (!leg || leg.ledger !== "Rent") {
+      throw new Error(
+        `a cost allocation of ${a.amount} to ${a.cost_centre_name} landed on ` +
+          `posting ${a.posting_seq} (${leg ? leg.ledger : "out of range"}), not on Rent. ` +
+          `The voucher still balances and both cost reports still foot; the ` +
+          `Cost Centre Summary is simply answering a question about the wrong ` +
+          `ledger. This is the buildCostAllocations primary-leg offset bug.`,
+      );
+    }
+  }
+
+  // PROOF 2 — the Cost Centre Summary, per axis, reconciles and is non-empty.
+  // ⛔ ONE AXIS PER CALL. There is no "all axes" mode and there must not be:
+  // summing Department and Branch would report 98,600 of cost against 53,600
+  // actually borne.
+  const deptSummary = await client.costCentreSummary(co, deptAxis, FY_FROM, FY_TO);
+  const branchSummary = await client.costCentreSummary(co, branchAxis, FY_FROM, FY_TO);
+  for (const [label, s, wantDebit] of [
+    ["Department", deptSummary, "53600.0000"],
+    ["Branch", branchSummary, "45000.0000"],
+  ] as const) {
+    if (s.centres.length === 0) {
+      throw new Error(
+        `the ${label} Cost Centre Summary renders no centres, so the screen a ` +
+          `human opens is empty and the seed has not fixed what it exists to fix`,
+      );
+    }
+    if (!s.reconciles) {
+      throw new Error(
+        `the ${label} Cost Centre Summary does not reconcile: roll-up ` +
+          `${s.total_debit}/${s.total_credit} vs flat ${s.allocated_debit}/` +
+          `${s.allocated_credit}, difference ${s.difference_debit}/${s.difference_credit}`,
+      );
+    }
+    if (s.unattached.length > 0) {
+      throw new Error(
+        `the ${label} axis has ${s.unattached.length} unattached centre(s), so a ` +
+          `screen that did not render the unattached block would lose their money`,
+      );
+    }
+    if (s.total_debit !== wantDebit) {
+      throw new Error(
+        `the ${label} Cost Centre Summary totals ${s.total_debit} Dr over FY 2026-27, ` +
+          `expected ${wantDebit}`,
+      );
+    }
+  }
+
+  // ⛔⛔ PROOF 3 — THE OFF-AXIS DETECTOR, WHICH IS A SECOND, INDEPENDENT WITNESS
+  // TO THE SAME OFFSET BUG. Both axes are allocate_non_revenue = false, so an
+  // allocation on a ledger that is NOT in the Profit & Loss is off-axis. HDFC
+  // Bank is a Bank Accounts ledger. So a split that had landed on the bank leg
+  // would make off_axis_postings non-zero HERE, computed by the server from the
+  // stored rows, with no help from anything this file believes.
+  //
+  // And the GAP is asserted to be REAL rather than merely present: an axis with
+  // nothing unallocated cannot show what the report is for.
+  const catSummary = await client.costCategorySummary(co, FY_FROM, FY_TO);
+  if (!catSummary.reconciles) {
+    throw new Error(
+      `the Cost Category Summary does not reconcile: ${catSummary.notes.join(" | ")}`,
+    );
+  }
+  if (catSummary.rows.length < 2) {
+    throw new Error(
+      `the Cost Category Summary has ${catSummary.rows.length} row(s); with one axis ` +
+        `the demo cannot show that axes describe the same money in parallel and ` +
+        `must never be added together`,
+    );
+  }
+  for (const row of catSummary.rows) {
+    if (row.off_axis_postings !== 0) {
+      throw new Error(
+        `the ${row.cost_category} axis carries ${row.off_axis_postings} OFF-AXIS ` +
+          `posting(s) worth ${row.off_axis_debit} Dr — a cost split landed on a ` +
+          `ledger this axis may not carry, which on a two-leg payment means it ` +
+          `landed on the bank leg`,
+      );
+    }
+    if (row.partly_allocated_postings !== 0) {
+      throw new Error(
+        `the ${row.cost_category} axis has ${row.partly_allocated_postings} PART-` +
+          `allocated posting(s), short by ${row.partly_allocated_shortfall} — the ` +
+          `deferred sum trigger forbids that, so this means the guarantee is gone`,
+      );
+    }
+    if (!row.reconciles) {
+      throw new Error(
+        `the ${row.cost_category} axis does not reconcile: allocated ` +
+          `${row.allocated_debit} + unallocated ${row.unallocated_debit} != allocable ` +
+          `${row.allocable_debit} (difference ${row.difference_debit})`,
+      );
+    }
+    if (isZeroMoney(row.unallocated_debit) && isZeroMoney(row.unallocated_credit)) {
+      throw new Error(
+        `the ${row.cost_category} axis has NOTHING unallocated, so the one column ` +
+          `the Cost Category Summary exists for renders as a row of zeros and a ` +
+          `wrong implementation of the gap would be indistinguishable from a right one`,
+      );
+    }
+  }
+  const deptRow = catSummary.rows.find((r) => r.cost_category === "Department");
+  const branchRow = catSummary.rows.find((r) => r.cost_category === "Branch");
+  if (!deptRow || !branchRow) {
+    throw new Error(
+      `the Cost Category Summary is missing an axis: ` +
+        `[${catSummary.rows.map((r) => r.cost_category).join(", ")}]`,
+    );
+  }
+  // The two axes MUST disagree about the gap, or the demo teaches that every
+  // axis covers the same ground and the per-axis reading is decorative.
+  if (deptRow.unallocated_debit === branchRow.unallocated_debit) {
+    throw new Error(
+      `Department and Branch report the SAME unallocated debit ` +
+        `(${deptRow.unallocated_debit}); the demo cannot then show that coverage ` +
+        `is a fact about an AXIS rather than about the books`,
+    );
+  }
+
+  console.log(
+    `  cost:       Cost Centre Summary FY 2026-27 — Department ${deptSummary.total_debit} Dr ` +
+      `over ${deptSummary.centres.length} centres, Branch ${branchSummary.total_debit} Dr ` +
+      `over ${branchSummary.centres.length}  (⛔ NOT ADDABLE: the same money on two axes)`,
+  );
+  for (const row of catSummary.rows) {
+    console.log(
+      `              ${row.cost_category.padEnd(11)} allocable ${row.allocable_debit} Dr` +
+        `  allocated ${row.allocated_debit}  GAP ${row.unallocated_debit}` +
+        ` (${row.unallocated_postings} posting(s))`,
+    );
+  }
+  console.log(
+    `              allocation legs verified against the READ-BACK: all 4 splits on "Rent", ` +
+      `0 off-axis postings on either axis`,
+  );
+
+  // PROOF 4 — the order books show a real OUTSTANDING balance, derived.
+  //
+  // ⛔ EVERY FIGURE BELOW IS COMPUTED BY THE SERVER ON THIS READ, by summing
+  // order_fulfilment across CURRENT, non-deleted voucher versions. There is no
+  // fulfilled_qty column to have gone stale, and the seed asserts the derived
+  // figures rather than the ones it sent — which is the only way to notice that
+  // a link was written against a superseded version or not written at all.
+  const soAfter = await client.getSalesOrder(co, salesOrderID);
+  const poAfter = await client.getPurchaseOrder(co, purchaseOrderID);
+  const wantLines: [string, string, string, string][] = [
+    // [order, item, fulfilled, outstanding]
+    [SO_NO, "MS Angle 50x50", "30.0000", "20.0000"],
+    [SO_NO, "SS Sheet 2mm", "0.0000", "10.0000"],
+    [PO_NO, "MS Angle 50x50", "120.0000", "80.0000"],
+  ];
+  for (const [orderNo, item, wantFulfilled, wantOutstanding] of wantLines) {
+    const view = orderNo === SO_NO ? soAfter : poAfter;
+    const line = view.lines.find((l) => l.stock_item === item);
+    if (!line) {
+      throw new Error(`${orderNo} has no line for ${item}`);
+    }
+    if (line.fulfilled_qty !== wantFulfilled || line.outstanding_qty !== wantOutstanding) {
+      throw new Error(
+        `${orderNo} line ${line.line_no} (${item}) is ${line.fulfilled_qty} fulfilled / ` +
+          `${line.outstanding_qty} outstanding, expected ${wantFulfilled} / ` +
+          `${wantOutstanding}. A link written against a superseded voucher version, ` +
+          `or not written at all, looks exactly like this and nothing else reports it.`,
+      );
+    }
+  }
+  // PARTIAL, on both sides. A fully-delivered order leaves the order book EMPTY,
+  // which is the state this whole section exists to end, so it is refused here
+  // rather than discovered on screen.
+  const sob = await client.salesOrderBook(co);
+  const pob = await client.purchaseOrderBook(co);
+  if (sob.total_outstanding_value !== "16500.0000") {
+    throw new Error(
+      `the Sales Order Book totals ${sob.total_outstanding_value} outstanding, ` +
+        `expected 16500.0000 (20 MS Angle @ 300 + 10 SS Sheet @ 1050)`,
+    );
+  }
+  if (pob.total_outstanding_value !== "2060.0000") {
+    throw new Error(
+      `the Purchase Order Book totals ${pob.total_outstanding_value} outstanding, ` +
+        `expected 2060.0000 (80 MS Angle @ 25.75)`,
+    );
+  }
+  if (sob.rows.length === 0 || pob.rows.length === 0) {
+    throw new Error(
+      `an order book renders no rows (sales ${sob.rows.length}, purchase ` +
+        `${pob.rows.length}) — the screen a human opens is still empty`,
+    );
+  }
+  // The FULFILMENT LINK IS STORED ON THE VOUCHER, and a screen that rebuilds an
+  // alter without it would silently re-open the order. Proved by reading it
+  // back off the delivery note rather than off the order.
+  const dnBack = await client.getVoucher(co, dnAngle);
+  const dnLinks = dnBack.fulfilments ?? [];
+  if (dnLinks.length !== 1 || dnLinks[0]!.order_no !== SO_NO || dnLinks[0]!.qty !== "30.0000") {
+    throw new Error(
+      `the delivery note stores ${dnLinks.length} fulfilment link(s) ` +
+        `(${dnLinks.map((f) => `${f.order_no} ${f.qty}`).join(", ")}), expected one ` +
+        `of 30.0000 against ${SO_NO}`,
+    );
+  }
+  // ⛔ line_no is 1-BASED and STORED (unlike a cost allocation's posting_seq,
+  // which is 0-based and re-derived). If it came back 0 the link would point at
+  // no stock_movement row at all.
+  if (dnLinks[0]!.line_no !== 1) {
+    throw new Error(
+      `the delivery note's fulfilment names inventory line ${dnLinks[0]!.line_no}; ` +
+        `stock_movement.line_no is 1-BASED, so a 0 here is an index sent as a line number`,
+    );
+  }
+
+  console.log(
+    `  orders:     ${SO_NO} (Acme, 2 lines) 30/50 MS Angle delivered + 10 SS Sheet untouched ` +
+      `-> ${sob.total_outstanding_value} outstanding`,
+  );
+  console.log(
+    `              ${PO_NO} (Steel Suppliers) 120/200 MS Angle received ` +
+      `-> ${pob.total_outstanding_value} outstanding`,
+  );
+  console.log(
+    "              ⛔ neither order moves closing stock: an order is a PROMISE, " +
+      "not an entry — the figures above are DERIVED on every read",
   );
 
   // ---- Optional: a pending OCR draft for the Bill Inbox --------------------

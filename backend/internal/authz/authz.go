@@ -40,8 +40,17 @@ const (
 	Delete  Action = "delete"
 	Display Action = "display"
 	Print   Action = "print"
-	Export  Action = "export"
 )
+
+// THERE IS DELIBERATELY NO `Export` ACTION. It existed here and in KnownActions
+// while no code path consulted it; the T15 Alt+E export made that dangerous
+// rather than merely dead, because an owner could then be SHOWN a
+// `disallow export report:X` rule as valid and watch the export happen anyway.
+// The full reasoning — including why the client-side export is governed by
+// `display` and what would have to be true to bring the token back — is on
+// KnownActions in vocabulary.go. Migration 0011's column comment still lists
+// `export` among the tokens; migrations are immutable history and that one
+// describes what the vocabulary was when it was written.
 
 // Resource is the object class an Action targets: a voucher class, or one of the
 // coarse resources master/report/import/sync, or the wildcard "*".
