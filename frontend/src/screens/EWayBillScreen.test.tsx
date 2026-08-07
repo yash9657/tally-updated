@@ -10,6 +10,7 @@ import {
 import { AppShell } from "../app/AppShell";
 import { CompanyProvider } from "../app/CompanyContext";
 import { createMockClient } from "../api/mock";
+import { ApiError } from "../api";
 import type { CoredClient } from "../api";
 
 /**
@@ -232,6 +233,233 @@ describe("raising a bill, over the real shell", () => {
       expect(alerts.some((a) => /may not move/i.test(a.textContent ?? ""))).toBe(
         true,
       );
+    });
+  });
+});
+
+describe("⛔ the step-up client swap must not wipe the screen (LEAD 1)", () => {
+  /**
+   * ⛔⛔ CONFIRMED IN A REAL BROWSER AGAINST REAL CORED, 2026-08-07, with the
+   * control that makes it a proof rather than an observation.
+   *
+   * `App.tsx`'s `resolvedClient` memo depends on `session`, and a WebAuthn
+   * step-up REPLACES the session token — so the first write of every session
+   * hands every screen a brand-new `CoredClient` object the instant the passkey
+   * ceremony completes. The load effect here is keyed on `client`, and its
+   * reset was unconditional. Observed:
+   *
+   *   POST .../e-way-bills          -> 403 STEPUP_REQUIRED
+   *   webauthn assert begin/finish  -> 200   (client identity changes HERE)
+   *   POST .../e-way-bills (retry)  -> 422   the refusal is set
+   *   ...the load effect re-runs on the new client...
+   *   -> and its unconditional reset WIPED the refusal
+   *
+   * ⛔ THE CONTROL, DRIVEN: pressing Ctrl+A a SECOND time in the same session
+   * sends the IDENTICAL request and gets the IDENTICAL 422 — and the refusal
+   * renders in full and stays, because no step-up (and hence no client swap)
+   * happens on the second press. Same request, same answer, different outcome:
+   * the swap is the cause.
+   *
+   * ⚠️ THIS SCREEN IS THE SIBLING OF `EInvoiceScreen`, WHICH WAS FIXED TWO
+   * SESSIONS AGO AND WHOSE FIX WAS NEVER COPIED HERE. §1.3's lesson — "fixing
+   * the REPORTED call site is not fixing the CLASS" — applied and was not
+   * applied.
+   */
+  function swapClient(c: CoredClient): CoredClient {
+    // A new object identity, same behaviour: what App.tsx's memo produces when
+    // the session token is replaced.
+    return { ...c };
+  }
+
+  it("a REFUSAL survives the client being swapped underneath it", async () => {
+    const c = await bookedClient();
+    const { rerender } = render(
+      <CompanyProvider
+        client={c}
+        initialCompany={{ id: COMPANY, name: "Demo Traders" }}
+      >
+        <AppShell />
+      </CompanyProvider>,
+    );
+    const app = screen.getByRole("application");
+    await openEWayBill(app);
+
+    fireEvent.click(screen.getAllByRole("radio")[0]!);
+    // DISTANCE LEFT BLANK — the server refuses rather than guessing one, which
+    // is the refusal an operator actually meets on their first raise.
+    fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+
+    const alert = await screen.findByRole("alert");
+    const said = alert.textContent ?? "";
+    expect(said.length, "no refusal rendered at all").toBeGreaterThan(0);
+
+    // Swap the client, exactly as a completed step-up does.
+    rerender(
+      <CompanyProvider
+        client={swapClient(c)}
+        initialCompany={{ id: COMPANY, name: "Demo Traders" }}
+      >
+        <AppShell />
+      </CompanyProvider>,
+    );
+    await new Promise((r) => setTimeout(r, 0));
+
+    // ⛔ STILL THERE. This is where the operator's screen went blank and the
+    // keypress looked like it had done nothing at all.
+    expect(
+      screen.getByRole("alert").textContent ?? "",
+      "the refusal was wiped by the client swap",
+    ).toBe(said);
+  });
+
+  it("⛔ the operator's TYPED consignment survives it too", async () => {
+    // The second, distinct unconditional write in the same effect, and one
+    // `EInvoiceScreen`'s fix could not have covered because it has no form: the
+    // GET's success handler re-fills distance/vehicle/mode/transporter/ODC and
+    // both pincodes from the PREVIOUSLY RAISED bill on every effect re-run. A
+    // client swap mid-correction therefore replaces the operator's new figure
+    // with the old one — and DISTANCE is what the validity period is computed
+    // from, so this silently changes when the bill expires.
+    //
+    // ⚠️ THE FIRST VERSION OF THIS TEST COULD NOT FAIL, and the mutation proof
+    // is the only reason that was noticed: with no bill already raised the GET
+    // 404s, the `.then` never runs, and there is no pre-fill to guard. It now
+    // raises a bill FIRST, so the pre-fill path is genuinely on.
+    const c = await bookedClient();
+    const { entries } = await c.getDayBook(COMPANY);
+    const target = entries[0]!;
+    await c.raiseEWayBill(COMPANY, {
+      voucher_id: target.voucher_id,
+      distance_km: 120,
+      transport_mode: "ROAD",
+      vehicle_number: "KA01AB1234",
+      created_by: "owner",
+    });
+
+    const { rerender } = render(
+      <CompanyProvider
+        client={c}
+        initialCompany={{ id: COMPANY, name: "Demo Traders" }}
+      >
+        <AppShell />
+      </CompanyProvider>,
+    );
+    const app = screen.getByRole("application");
+    await openEWayBill(app);
+    fireEvent.click(screen.getAllByRole("radio")[0]!);
+
+    // The pre-fill must actually have happened, or this proves nothing.
+    const distance = await screen.findByLabelText(/distance/i);
+    await waitFor(() => {
+      expect((distance as HTMLInputElement).value).toBe("120");
+    });
+
+    // The operator CORRECTS it.
+    fireEvent.change(distance, { target: { value: "250" } });
+    expect((distance as HTMLInputElement).value).toBe("250");
+
+    // ...and the step-up swaps the client underneath them.
+    rerender(
+      <CompanyProvider
+        client={swapClient(c)}
+        initialCompany={{ id: COMPANY, name: "Demo Traders" }}
+      >
+        <AppShell />
+      </CompanyProvider>,
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(
+      (screen.getByLabelText(/distance/i) as HTMLInputElement).value,
+      "the client swap overwrote the distance the operator typed with the previously raised one",
+    ).toBe("250");
+  });
+
+  it("⛔⛔ a refusal that arrives while the client is being swapped IS STILL SHOWN", async () => {
+    // ⛔ THIS IS THE ONE THAT WAS ACTUALLY KILLING THE SCREEN, and neither of
+    // the two tests above could see it — both were GREEN in the browser-broken
+    // state, because both swap the client AFTER the raise has already settled.
+    //
+    // The real ordering is the other one. A step-up's retry resolves LATE:
+    //
+    //   Ctrl+A -> raise claims generation N
+    //          -> 403 -> ceremony -> client identity changes
+    //          -> load effect cleanup bumps the generation, the re-run bumps it
+    //             AGAIN
+    //          -> the retry finally answers 422
+    //          -> the raise re-checks its generation, finds it moved, and
+    //             DISCARDS ITS OWN RESULT
+    //
+    // So the refusal never reaches state at all — there is nothing for a reset
+    // guard to protect. The raise now carries its OWN generation (raiseGenRef),
+    // which only a newer raise or a different document may invalidate.
+    //
+    // The test holds the raise open across the swap, which is exactly what the
+    // ceremony does.
+    const c = await bookedClient();
+    let releaseRaise: (e: unknown) => void = () => {};
+    const held = new Promise((_resolve, reject) => {
+      releaseRaise = reject;
+    });
+    const slow: CoredClient = {
+      ...c,
+      raiseEWayBill: () => held as Promise<never>,
+    };
+
+    const { rerender } = render(
+      <CompanyProvider
+        client={slow}
+        initialCompany={{ id: COMPANY, name: "Demo Traders" }}
+      >
+        <AppShell />
+      </CompanyProvider>,
+    );
+    const app = screen.getByRole("application");
+    await openEWayBill(app);
+    fireEvent.click(screen.getAllByRole("radio")[0]!);
+
+    // The raise goes out and does NOT resolve yet.
+    fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+
+    // ...the ceremony completes and the client identity changes UNDER it.
+    rerender(
+      <CompanyProvider
+        client={{ ...slow }}
+        initialCompany={{ id: COMPANY, name: "Demo Traders" }}
+      >
+        <AppShell />
+      </CompanyProvider>,
+    );
+    await new Promise((r) => setTimeout(r, 0));
+
+    // ...and only NOW does the retry answer.
+    releaseRaise(new ApiError(422, "ewaybill: the distance has not been stated"));
+    await new Promise((r) => setTimeout(r, 0));
+
+    const alert = await screen.findByRole("alert");
+    expect(
+      alert.textContent ?? "",
+      "the raise discarded its own refusal because the load effect moved the generation",
+    ).toMatch(/distance has not been stated/i);
+  });
+
+  it("CONTROL: choosing a DIFFERENT document DOES reset the panel", async () => {
+    // Without this arm the guard would pass by never resetting at all, which
+    // would leave one document's refusal showing above another document.
+    const c = await bookedClient();
+    const app = renderShell(c);
+    await openEWayBill(app);
+
+    const radios = screen.getAllByRole("radio");
+    fireEvent.click(radios[0]!);
+    fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    await screen.findByRole("alert");
+
+    if (radios.length < 2) return; // one document seeded; nothing to switch to
+    fireEvent.click(radios[1]!);
+    await waitFor(() => {
+      expect(screen.queryByRole("alert")).toBeNull();
     });
   });
 });

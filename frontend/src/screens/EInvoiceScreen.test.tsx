@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { render, screen, cleanup, fireEvent } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
 
 import { AppShell } from "../app/AppShell";
 import { CompanyProvider } from "../app/CompanyContext";
@@ -498,5 +498,101 @@ describe("the refusals, which the mock must make because the server does", () =>
     // can only ever be refused.
     const radios = screen.getAllByRole("radio");
     expect(radios).toHaveLength(1);
+  });
+});
+
+describe("⛔⛔ the IN-FLIGHT ordering — the one the two tests above cannot see", () => {
+  /**
+   * Both step-up tests above swap the client AFTER the raise has already
+   * settled, so both stay GREEN while the screen is broken in a browser. The
+   * ordering that actually happens is the other one: a step-up's retry resolves
+   * LATE, after the client swap has already re-run the load effect twice.
+   *
+   *   Ctrl+A -> raise claims a generation
+   *          -> 403 -> ceremony -> client identity changes
+   *          -> load effect cleanup bumps the generation, the re-run bumps it again
+   *          -> the retry finally answers
+   *          -> the raise re-checks its generation, finds it moved, and
+   *             DISCARDS ITS OWN RESULT
+   *
+   * ⛔ ON THE SUCCESS PATH THAT DISCARDS THE ACK NUMBER, which exists nowhere
+   * else — not in the schema, not on a later GET. Proved on the sibling
+   * `EWayBillScreen` in a real browser (2026-08-07): the unit suite was green
+   * and the screen was still blank.
+   */
+  it("an IRN that arrives while the client is being swapped IS STILL SHOWN", async () => {
+    const c = createMockClient({ seed: false });
+    const { company_id } = await c.createCompany({
+      id: COMPANY,
+      name: "Demo Traders",
+      fy_start_date: "2026-04-01",
+      base_currency: "INR",
+      state_code: "29",
+    });
+    const { ledger_id: party } = await c.createLedger(company_id, {
+      name: "Acme Buyer",
+      group_name: "Sundry Debtors",
+      created_by: "owner",
+    });
+    await c.postSalesVoucher(company_id, {
+      voucher_date: "2026-06-10",
+      party_ledger_id: party,
+      item_ledger_id: party,
+      gst: {
+        place_of_supply_state_code: "29",
+        lines: [{ taxable_value: "10000.0000", gst_rate_pct: "18", hsn: "7216" }],
+      },
+    });
+
+    let release: (v: unknown) => void = () => {};
+    const held = new Promise((resolve) => {
+      release = resolve;
+    });
+    const slow = { ...c, raiseEInvoice: () => held } as unknown as CoredClient;
+
+    const { rerender } = render(
+      <CompanyProvider
+        client={slow}
+        initialCompany={{ id: COMPANY, name: "Demo Traders" }}
+      >
+        <AppShell />
+      </CompanyProvider>,
+    );
+    const app = screen.getByRole("application");
+    fireEvent.keyDown(app, { key: "i", altKey: true });
+    await screen.findByRole("region", { name: "e-Invoice" });
+    fireEvent.click(screen.getByRole("radio"));
+
+    // The raise goes out and does NOT resolve yet.
+    fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+
+    // ...the ceremony completes and the client identity changes UNDER it.
+    rerender(
+      <CompanyProvider
+        client={{ ...slow }}
+        initialCompany={{ id: COMPANY, name: "Demo Traders" }}
+      >
+        <AppShell />
+      </CompanyProvider>,
+    );
+    await new Promise((r) => setTimeout(r, 0));
+
+    // ...and only NOW does the retry answer, with the IRN.
+    release({
+      irn: "IRN-TEST-0001",
+      ack_no: "241879043",
+      ack_date: "2026-06-10",
+      status: "ACT",
+      disclosures: [],
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+
+    await waitFor(() => {
+      expect(
+        document.body.textContent ?? "",
+        "the raise discarded its own IRN because the load effect moved the generation",
+      ).toMatch(/IRN-TEST-0001/);
+    });
   });
 });

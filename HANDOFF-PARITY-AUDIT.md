@@ -181,7 +181,7 @@ the time on the `—` rows first.
 |---|---|---|---|---|
 | 14 | GST (derivation, GSTR-1, GSTR-3B) | `F8` intra **and** inter-state | CGST/SGST vs IGST split; the supply appears in **GSTR-1 b2b AND the table-12 HSN summary** | PREV (partly) |
 | 15 | e-Invoice / IRN | `Alt+I` → pick → `Ctrl+A` | IRN in `voucher_external_reference`; re-post returns the SAME IRN; ALTER+DELETE both 409 | ✅ 2026-08-06 |
-| 16 | e-Way Bill | `Alt+Z` → state the movement → `Ctrl+A` | `e_way_bill` row; disclosures rendered in full; ⛔ **check the step-up wipe (§4 lead 1)** | PREV |
+| 16 | e-Way Bill | `Alt+Z` → state the movement → `Ctrl+A` | `e_way_bill` row; disclosures rendered in full; ⛔ **check the step-up wipe (§4 lead 1)** | ⛔→✅ 2026-08-07 (**LEAD 1 confirmed with a control; TWO defects, both fixed, on this screen AND `EInvoiceScreen`**) |
 | 17 | TDS / TCS | `Alt+G` → TDS Challans → record + allocate | `tds_deduction` / `tds_challan_allocation`; the challan's unallocated balance falls | — |
 
 ### Inventory
@@ -235,7 +235,7 @@ concrete, falsifiable prediction — confirm or kill it, and log which.
 >
 > | Lead | Verdict | State |
 > |---|---|---|
-> | 1 — step-up wipes the screen | **NOT YET DRIVEN** | ⛔ still the top unverified item; `EWayBillScreen.tsx` still has the unconditional reset |
+> | 1 — step-up wipes the screen | ⛔⛔ **CONFIRMED IN A BROWSER, WITH A CONTROL** | ✅ **FIXED on BOTH screens — and it was TWO defects, not one.** The traced `shownForRef` half was real, fixed and mutation-proved, and the screen was **still blank**; the live cause was the raise discarding its own result on a generation the load effect had moved. See §7's box |
 > | 2 — Stock Journal destroys stock VALUE on a blank Rate | ⛔ **CONFIRMED, exactly as predicted** | ✅ **FIXED** both sides + mutation-proved. 8,890 off the Balance Sheet, quantity untouched |
 > | 3 — Physical Stock counts against the WRONG position | ⛔ **CONFIRMED, exactly as predicted** | ✅ **FIXED** (default godown) + mutation-proved. A stock-take invented 13 units |
 > | 4 — the Edit Log's three chrome holes | ⛔ **CONFIRMED, all four claims** | ✅ **FIXED.** ⛔ **And its `Alt+L` footnote was the biggest find of the session — see below** |
@@ -390,6 +390,9 @@ scratch.** Append; do not start a new table. Fold into `HANDOFF.md` §5.5 at the
 | 2026-08-07 (2nd pass) | **8** | Gateway → `Cost Centre Summary` → axis `Department`; then `Ctrl+F`, `F12` | the screen | ✅ **RECON'S PREDICTION 1 CONFIRMED, PREDICTION 2 KILLED, PREDICTION 3 CONFIRMED BUT NOT A DEFECT.** Neither cost report is in `Alt+G` (it lists Vouchers + 10 report names) — but **both are on the Gateway menu and open correctly from there**. Opened from the Gateway the summary renders `cost-centre-summary-period-prompt` and no table — **and it says exactly why, on its face** ("BOTH dates are needed and neither is defaulted… a defaulted opening date would answer with everything since the company was formed while looking exactly like the year you asked for"). That is a stated design decision, not a lie. `Ctrl+F` and `F12` **both opened an overlay** — prediction 2 is dead |
 | 2026-08-07 (2nd pass) | **11** | Gateway → `Bank Reconciliation`; read the header with no `F2`; count `brs-bankdate:1:0`; `F2` To=2026-06-30 → tick the 2026-06-05 leg with bank date **2026-07-10**; then widen to 2026-08-31; then tick the 2026-05-30 leg with **2026-05-01** | `bank_reconciliation` joined to `posting` + `ledger.name`, plus the screen | ⛔⛔ **LIED, FOUR WAYS — every recon prediction on this row confirmed.** (a) The tick with the LATER bank date returned **200** and wrote `cleared_amount 20000.0000 / C / by ui` — and **the screen was byte-identical**: `Un-cleared (5)`, `per-bank 2,50,000.00`, and the cell still displaying 2026-07-10 on an un-cleared row. Widening `F2` to 2026-08-31 showed it under `Cleared (1)` — proof it was stored all along. (b) `brs-bankdate:1:0` matched **4 elements**: HDFC Bank carries a **Contra 1, a Journal 1, a Receipt 1 and a Payment 1** and the table had **no class column**. (c) With no `F2` the header read **"As at"** with no date while Age showed 127d/79d/69d against today — §1.1's order-book defect, third occurrence. (d) A refused tick (400, *"a cheque cannot clear before it is written"*) left **2026-05-01 in the cell** with nothing stored. ✅ **ALL FOUR FIXED, mutation-proved (5 mutations, 5 predicted failures), and re-driven 7/7 in the browser** |
 
+| 2026-08-07 (2nd pass) | **16** / LEAD 1 | FRESH session → `Alt+Z` → pick a document → **distance left BLANK** → `Ctrl+A`; then `Ctrl+A` a SECOND time | the wire (devtools) beside the screen | ⛔⛔ **LEAD 1 CONFIRMED, WITH THE CONTROL.** First press: `403 STEPUP` → ceremony → retry **422** — and **no `role="alert"` element existed at all**. Second press: the **identical** request, the **identical** 422, and the refusal rendered in full and stayed. Same request, same answer, different outcome — the client swap is the cause. ✅ **FIXED on BOTH `EWayBillScreen` AND `EInvoiceScreen`**, mutation-proved, re-driven — both now show the refusal on the FIRST press |
+
+
 ### The running count — update it, do not assume it
 
 Measured 2026-08-07, end of the SECOND pass. **This is still a PARTIAL audit — 15 of 34 rows are driven.**
@@ -397,11 +400,36 @@ Measured 2026-08-07, end of the SECOND pass. **This is still a PARTIAL audit —
 | | Rows |
 |---|---|
 | Claimed reachable (`on` + `always`) | **34** |
-| **Driven end to end and CONFIRMED** | **15** — rows 1, 2, 4, 6, 7, 8, 11, 14, 15, 20, 21, 22, 23, 26, 36 |
-| **Driven and found LYING** | **10** — rows 2, 11, 14, 20, 21, 22, 26 (`Alt+F7`), 26 (`Alt+F10`), row 1's unkeyable Date/Narration, and **every `Alt`+letter on macOS** |
-| **Fixed and re-driven green** | **9 of 10.** ⛔ **Row 20 is the one found and NOT fixed** — it is a build, not a patch; see the box below |
-| **Still undriven** | **19** — rows 3, 5, 9, 16, 17, 24, 27, 29, 30, 31, 32, 33, 34, 35, 37, 38, 40, 42, 43 |
-| **TRUE reachable number** | ⛔ **STILL UNKNOWN.** 15 of 34 measured. The lie rate across everything ever driven here is now **10 in 15** — do not budget for driving, budget for FIXING |
+| **Driven end to end and CONFIRMED** | **16** — rows 1, 2, 4, 6, 7, 8, 11, 14, 15, 16, 20, 21, 22, 23, 26, 36 |
+| **Driven and found LYING** | **11** — rows 2, 11, 14, 16, 20, 21, 22, 26 (`Alt+F7`), 26 (`Alt+F10`), row 1's unkeyable Date/Narration, and **every `Alt`+letter on macOS** |
+| **Fixed and re-driven green** | **10 of 11.** ⛔ **Row 20 is the one found and NOT fixed** — it is a build, not a patch; see the box below |
+| **Still undriven** | **18** — rows 3, 5, 9, 17, 24, 27, 29, 30, 31, 32, 33, 34, 35, 37, 38, 40, 42, 43 |
+| **TRUE reachable number** | ⛔ **STILL UNKNOWN.** 16 of 34 measured. The lie rate across everything ever driven here is now **11 in 16** — do not budget for driving, budget for FIXING |
+
+> ### ⛔⛔ THE SECOND PASS'S BIGGEST METHOD LESSON: A GREEN UNIT SUITE CERTIFIED A SCREEN THAT WAS STILL BLANK
+>
+> LEAD 1 took **two** fixes, and the first one was wrong in the most instructive way.
+>
+> The traced diagnosis (and `EInvoiceScreen`'s existing fix) said: the load effect's **unconditional
+> reset** wipes the refusal after the client swap. That is real, it was fixed with the `shownForRef`
+> guard, its regression test **passed**, and the mutation proof **failed exactly as predicted**.
+> ⛔ **And the browser was still blank.**
+>
+> The live cause was the *other* half of the same mechanism: `generationRef` is bumped by the load
+> effect AND by its cleanup, so a client swap bumps it twice **while the retry is still in flight** —
+> and the raise then re-checks its generation, finds it moved, and **discards its own result**. There
+> was never anything on screen for a reset to wipe. The raise now owns a separate `raiseGenRef` that
+> only a newer raise or a different document may invalidate.
+>
+> ⚠️ **WHY EVERY EXISTING TEST WAS BLIND TO IT:** both step-up tests — on both screens — swap the
+> client **after** the raise has already settled. The ordering that actually happens is the reverse.
+> A test now holds the raise open across the swap on each screen, and the mutation proof for it is
+> "put the raise back on the shared counter".
+>
+> ⛔ **AND THE `EInvoiceScreen` FIX FROM TWO SESSIONS AGO WAS THEREFORE INCOMPLETE ALL ALONG** — on the
+> screen where the discarded value is the **acknowledgement number, which the schema stores nowhere.**
+> Both screens are now fixed together, which is §1.3's rule ("fixing the reported call site is not
+> fixing the class") applied for the second time to this exact pair.
 
 > ### ⛔⛔ ROW 20 IS FOUND, CONFIRMED, AND DELIBERATELY NOT FIXED — READ THIS BEFORE PICKING IT UP
 >
@@ -491,9 +519,9 @@ Measured 2026-08-07, end of the SECOND pass. **This is still a PARTIAL audit —
 - ⛔ **Every fix carries a MUTATION PROOF, and you must check that what fails is what you predicted
   would fail.** A proof asserted rather than executed is worth less than none, because it reads as
   evidence — this happened on 2026-08-06 and the claim was false.
-- **Re-measure the gates; do not assume them.** Current (2026-08-07, second pass): backend
-  **2372 / 0 SKIP / 0 FAIL**, frontend **991 / 68 files**, `tsc` clean, `make verify` 0,
-  `verify:demo` **33/33** freshly seeded.
+- **Re-measure the gates; do not assume them.** Current (2026-08-07, end of the second pass): backend
+  **2372 / 0 SKIP / 0 FAIL** (verbose census), frontend **996 / 68 files**, `tsc` clean,
+  `make verify` **0**, `verify:demo` **33/33** freshly seeded.
   ⛔ **RUN `make verify` ALONE.** Run beside anything else it fails two ways that are NOT code:
   `internal/sync` hits its **600s timeout** (and the timed-out package then trips the residue
   census), and `EWayBillScreen.test.tsx` fails on a missing `role="radio"` while passing **3/3**

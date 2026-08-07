@@ -31,9 +31,14 @@
 > driving §5.5's audit while the browser is open**, because it has now found a lying `on` row in
 > every single session that has run it.
 >
-> ## ⛔⛔ UPDATED 2026-08-07 (SECOND PASS): **15 of 34 AUDIT ROWS DRIVEN, 10 LYING, 9 FIXED.**
+> ## ⛔⛔ UPDATED 2026-08-07 (SECOND PASS): **16 of 34 AUDIT ROWS DRIVEN, 11 LYING, 10 FIXED.**
 >
-> Rows **8, 11 and 20** were driven. **Row 11 (Bank Reconciliation) was four defects in one screen**
+> ⛔ **AND THE PASS'S BIGGEST FINDING IS ABOUT METHOD, NOT ABOUT A SCREEN: a green unit suite, WITH A
+> PASSING MUTATION PROOF, certified a fix that left the browser exactly as broken as before.** LEAD 1
+> needed two fixes; only driving the app found the second. **A mutation proof proves the TEST is
+> real. It does not prove the FIX is sufficient.** See §5.5.
+>
+> Rows **8, 11, 16 and 20** were driven. **Row 11 (Bank Reconciliation) was four defects in one screen**
 > — including a tick that returned **200**, wrote the row, and changed **nothing on screen** — all
 > fixed, mutation-proved and re-driven 7/7. **Row 20 is confirmed lying and DELIBERATELY LEFT OPEN:
 > `Alt+C` renders "Create ledger" everywhere, so a stock item or a unit can never be created from
@@ -1883,7 +1888,26 @@ a customer tries it.
 > |---|---|
 > | **11** Bank Reconciliation | ⛔⛔ **FOUR defects in one screen, every recon prediction confirmed.** A tick whose bank date is AFTER the statement date returned **200** and wrote the row — and the screen was **byte-identical**, still showing the date on an un-cleared line. `brs-bankdate:1:0` matched **FOUR** elements (a Contra 1, a Journal 1, a Receipt 1 and a Payment 1 on one bank ledger, with no class column). With no `F2` the header read **"As at"** with no date while ageing against today. A refused tick left its refused date in the cell. ✅ **ALL FIXED**, 5 mutations / 5 predicted failures, re-driven **7/7** |
 > | **20** Stock item + unit masters | ⛔ **`Alt+C` renders `Create ledger` from the Gateway AND from the item-invoice Item cell.** No keystroke, Gateway entry or Go To entry in the build reaches `masterKind` `"stock-item"` or `"unit"` — **a company can never be given a stock item or a unit from the keyboard**, and the item-invoice empty state points at `Gateway > Masters`, which does not exist. ⛔ **NOT FIXED: it is a feature to build, not a line to change** |
+> | **16** e-Way Bill / **LEAD 1** | ⛔⛔ **THE TOP UNVERIFIED ITEM ON THE BOARD, CONFIRMED WITH A CONTROL — and it was TWO defects.** First `Ctrl+A` of a session: `403 STEPUP` → passkey → retry **422**, and **no `role="alert"` existed at all**. Second `Ctrl+A`: identical request, identical 422, refusal rendered in full. ✅ **FIXED on `EWayBillScreen` AND `EInvoiceScreen`** |
 > | **8** Cost reports | ⚠️ **HALF the prediction was wrong, and that is the useful half.** Not in `Alt+G` (true) — but **both reports are on the GATEWAY menu and open correctly**. The empty period prompt is a stated design decision that argues its own case on screen. `Ctrl+F`/`F12` were predicted inert and **both opened an overlay** |
+>
+> ### ⛔⛔ THE FINDING THAT OUTRANKS ALL OF THEM: A GREEN UNIT SUITE CERTIFIED A SCREEN THAT WAS STILL BLANK
+>
+> LEAD 1's traced diagnosis — the load effect's unconditional reset wipes the refusal — was **real,
+> was fixed, its regression test passed, and its mutation proof failed exactly as predicted.**
+> ⛔ **And the browser was still blank.** The live cause was the other half of the same mechanism:
+> `generationRef` is bumped by the load effect AND its cleanup, so a client swap bumps it twice while
+> the retry is in flight, and **the raise discards its own result** — there was never anything on
+> screen for a reset to wipe.
+>
+> **Every existing test on both screens was blind to it because they all swap the client AFTER the
+> raise settles, and the real ordering is the reverse.** A test now holds the raise open across the
+> swap. ⛔ **This also means `EInvoiceScreen`'s fix from two sessions ago was incomplete the whole
+> time** — on the screen where the discarded value is the **ack number, which the schema stores
+> nowhere.**
+>
+> **The rule: a mutation proof proves the TEST is real. It does not prove the FIX is sufficient. Only
+> the browser said so.**
 >
 > ⛔ **THE METHOD LESSON OF THE SECOND PASS: `Alt+G` IS NOT THE ONLY DOOR.** Two rows were logged in
 > the worksheet as `Alt+G` and are actually reached from the **Gateway menu**; a probe that only
@@ -1939,8 +1963,8 @@ a customer tries it.
 >
 > **Rows 6, 15, 23, 36 also driven clean.** Every fix carries an EXECUTED mutation proof.
 >
-> ⛔ **19 ROWS REMAIN UNDRIVEN: 3, 5, 9, 16, 17, 24, 27, 29, 30, 31, 32, 33, 34, 35, 37,
-> 38, 40, 42, 43.** (Rows 8, 11 and 20 came off this list on 2026-08-07's second pass.) They are **not unanalysed** — `PARITY-RECON-2026-08-07.md` (new) holds an
+> ⛔ **18 ROWS REMAIN UNDRIVEN: 3, 5, 9, 17, 24, 27, 29, 30, 31, 32, 33, 34, 35, 37,
+> 38, 40, 42, 43.** (Rows 8, 11, 16 and 20 came off this list on 2026-08-07's second pass.) They are **not unanalysed** — `PARITY-RECON-2026-08-07.md` (new) holds an
 > 18-agent read-only trace of all of them: exact keystrokes, the oracle, and falsifiable predictions
 > at file:line. Its measured hit rate is 3 confirmed / 1 killed out of 4 driven. ⚠️ **It is reading,
 > not evidence.** LEAD 1 (`EWayBillScreen` step-up wipe) is still the top unfixed item in it.

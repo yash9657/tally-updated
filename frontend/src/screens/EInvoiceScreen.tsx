@@ -135,6 +135,34 @@ export function EInvoiceScreen() {
    */
   const shownForRef = useRef("");
 
+  /**
+   * The generation of the RAISE — a THIRD question, and the one that survived
+   * this screen's first fix.
+   *
+   * ⛔⛔ `shownForRef` STOPS THE LOAD EFFECT WIPING WHAT THE RAISE SET. It does
+   * NOTHING about the raise never setting it in the first place, which is the
+   * ordering that actually happens: `generationRef` is bumped by the load effect
+   * AND by its cleanup, so a step-up's client swap bumps it twice while the
+   * retry is still in flight — and the raise then re-checks its generation,
+   * finds it moved, and DISCARDS ITS OWN RESULT.
+   *
+   * ⛔ ON THIS SCREEN THAT LOSS IS UNRECOVERABLE. `raised` is the ONLY place the
+   * acknowledgement number ever exists; the schema has no column for it. A
+   * discarded success is an IRN that was minted, charged against the voucher,
+   * and never shown to anybody.
+   *
+   * Confirmed on the SIBLING screen in a browser on 2026-08-07 (`EWayBillScreen`
+   * — same shape, same ordering, refusal invisible on the press that carried the
+   * ceremony and visible on the one that did not), and fixed here at the same
+   * time because §1.3's rule is that fixing the reported call site is not fixing
+   * the class.
+   *
+   * A raise is superseded by a NEWER RAISE or by a DIFFERENT DOCUMENT, and by
+   * nothing else. A re-render caused by the session token changing is not a
+   * change of intent.
+   */
+  const raiseGenRef = useRef(0);
+
   /** The server's refusal, rendered verbatim, plus what the operator can do. */
   const [refusal, setRefusal] = useState("");
   /**
@@ -223,6 +251,9 @@ export function EInvoiceScreen() {
       setWriteDenied(false);
       setRaised(null);
       setPinned(null);
+      // A DIFFERENT document genuinely supersedes an in-flight raise; a client
+      // swap does not. See raiseGenRef.
+      raiseGenRef.current++;
     }
 
     client
@@ -270,17 +301,20 @@ export function EInvoiceScreen() {
       // ⛔ CLAIM THE GENERATION. Any GET issued before this point is now stale
       // and its answer discarded — including the 404 that would otherwise land
       // after this raise and wipe the ack number off the screen.
-      const mine = ++generationRef.current;
+      ++generationRef.current;
+      // ⛔ AND CLAIM THE RAISE GENERATION SEPARATELY — see raiseGenRef. Sharing
+      // one counter is what let the load effect throw away an ack number.
+      const mine = ++raiseGenRef.current;
       void (async () => {
         try {
           const res = await client.raiseEInvoice(companyID, {
             voucher_id: selectedID,
           });
-          if (generationRef.current !== mine) return;
+          if (raiseGenRef.current !== mine) return;
           setRaised(res);
           setPinned(null);
         } catch (e) {
-          if (generationRef.current !== mine) return;
+          if (raiseGenRef.current !== mine) return;
           setRaised(null);
           if (e instanceof ApiError) {
             if (e.status === 403) {

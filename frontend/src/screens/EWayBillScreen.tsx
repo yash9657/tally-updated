@@ -110,6 +110,46 @@ export function EWayBillScreen() {
    */
   const generationRef = useRef(0);
 
+  /**
+   * The selection the panel below is currently SHOWING FOR — the twin of
+   * `generationRef`, answering a different question.
+   *
+   * `generationRef` decides which async answer may be applied. This one decides
+   * whether a re-run of the load effect is a NEW SELECTION (reset the panel) or
+   * THE SAME selection re-read because something upstream changed identity
+   * (keep it). See the long note in the effect.
+   *
+   * ⛔ IT IS THE SAME REF `EInvoiceScreen` ALREADY CARRIES, AND THIS SCREEN
+   * SHOULD HAVE RECEIVED IT AT THE SAME TIME. It did not, and the defect stayed
+   * live here for two sessions while the sibling screen was fixed.
+   */
+  const shownForRef = useRef("");
+
+  /**
+   * The generation of the RAISE, which is a different question again — and the
+   * one that was actually killing the screen.
+   *
+   * ⛔⛔ `generationRef` ABOVE IS BUMPED BY THE LOAD EFFECT AND BY ITS CLEANUP,
+   * so a client swap bumps it TWICE. The raise claimed a generation before its
+   * POST and re-checked it afterwards; by the time a step-up's retry answered,
+   * the generation had moved and **the raise discarded its own result** — the
+   * refusal, and on the success path the bill, were thrown away before ever
+   * reaching state. Guarding the load effect's RESET (see `shownForRef`) does
+   * not touch this: there is nothing to wipe, because nothing was ever set.
+   *
+   * ⛔ AND THAT IS WHY THE `shownForRef` FIX ALONE WAS NOT ENOUGH — proved in a
+   * browser, 2026-08-07: with the reset guarded and the unit tests green, the
+   * screen was STILL blank after the ceremony. Two defects of the same shape sat
+   * on the same key, and fixing the first left the operator-visible symptom
+   * exactly as it was.
+   *
+   * So a raise's outcome is invalidated by a NEWER RAISE or by the operator
+   * choosing a DIFFERENT DOCUMENT — the two things that genuinely mean "I no
+   * longer want this answer" — and by nothing else. A re-render caused by the
+   * session token changing is not a change of intent.
+   */
+  const raiseGenRef = useRef(0);
+
   // ---- The consignment, as the operator states it.
   const [distance, setDistance] = useState("");
   const [vehicle, setVehicle] = useState("");
@@ -198,8 +238,46 @@ export function EWayBillScreen() {
     }
     const mine = ++generationRef.current;
     const current = () => generationRef.current === mine;
-    setRefusal("");
-    setRefusalDetail([]);
+
+    // ⛔⛔ THIS EFFECT RE-RUNS WHEN THE *CLIENT* CHANGES IDENTITY, AND A
+    // WEBAUTHN STEP-UP CHANGES IT. `App.tsx`'s `resolvedClient` memo depends on
+    // the session, and a step-up replaces the session token — so the sequence
+    // an operator actually performs is:
+    //
+    //     Ctrl+A -> 403 STEPUP -> passkey -> retry -> 422 -> effect re-runs
+    //
+    // and an unconditional `setRefusal("")` here throws away the reason the
+    // write was refused, one render after it arrived. The operator sees the key
+    // do NOTHING: no error, no status, nothing to search for. It reproduces on
+    // the FIRST raise of a session — the only one most operators ever do.
+    //
+    // ⛔ AND IT WAS CONFIRMED IN A BROWSER, NOT REASONED ABOUT (2026-08-07,
+    // HANDOFF-PARITY-AUDIT §7 row 16). Two presses of Ctrl+A, the SAME request,
+    // the SAME 422 both times: invisible on the press that carried the ceremony,
+    // rendered in full on the press that did not.
+    //
+    // So the reset is gated on the SELECTION having changed. Re-reading the same
+    // document because the client was swapped is not a new selection and must
+    // not clear what the server just said.
+    //
+    // ⚠️ THE PRE-FILL BELOW IS GATED THE SAME WAY, and for a sharper reason than
+    // the refusal: it overwrites the operator's TYPED consignment — distance,
+    // vehicle, mode, transporter, ODC, both pincodes — from the previously
+    // raised bill. On a re-read of the same document mid-raise that silently
+    // replaces what they keyed with what was raised last time, so a corrected
+    // distance would be sent as the old one. `EInvoiceScreen` has no analogue
+    // because it has no form, which is exactly why copying its fix verbatim
+    // would not have covered this.
+    const selectionChanged = shownForRef.current !== selectedID;
+    shownForRef.current = selectedID;
+    if (selectionChanged) {
+      setRefusal("");
+      setRefusalDetail([]);
+      // A DIFFERENT document genuinely supersedes an in-flight raise: its answer
+      // must not land on the document now on screen. A client swap must not.
+      raiseGenRef.current++;
+    }
+
     client
       .getEWayBill(companyID, selectedID)
       .then((b) => {
@@ -208,6 +286,9 @@ export function EWayBillScreen() {
         // Pre-fill from what was raised, so a REGENERATION starts from the
         // stated consignment rather than from a blank form. Correcting one
         // field should not mean re-keying the other six.
+        //
+        // ONLY on a new selection — see the note above.
+        if (!selectionChanged) return;
         setDistance(String(b.distance_km));
         setVehicle(b.vehicle_number);
         setMode(b.transport_mode || "ROAD");
@@ -249,7 +330,11 @@ export function EWayBillScreen() {
       // ⛔ CLAIM THE GENERATION. Any GET issued before this point is now stale
       // and its answer will be discarded — including the 404 that would
       // otherwise land after this raise and wipe the bill off the screen.
-      const mine = ++generationRef.current;
+      ++generationRef.current;
+      // ⛔ AND CLAIM THE RAISE GENERATION SEPARATELY. See raiseGenRef: the load
+      // effect must not be able to invalidate a raise, or a step-up's own retry
+      // arrives to find its result no longer wanted.
+      const mine = ++raiseGenRef.current;
       void (async () => {
         try {
           const res = await client.raiseEWayBill(companyID, {
@@ -268,14 +353,14 @@ export function EWayBillScreen() {
             to_pincode: toPincode.trim(),
             created_by: "operator",
           });
-          if (generationRef.current !== mine) return;
+          if (raiseGenRef.current !== mine) return;
           setBill(res);
         } catch (e) {
           // A raise superseded by a NEWER raise (the operator pressed Ctrl+A
           // twice) must not report the older attempt's outcome over the newer
           // one's — the same discipline as the load effect, in the other
           // direction.
-          if (generationRef.current !== mine) return;
+          if (raiseGenRef.current !== mine) return;
           setBill(null);
           if (e instanceof ApiError) {
             if (e.status === 403) {
