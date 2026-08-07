@@ -45,7 +45,12 @@
  * and makes a closing stock valuation depend on arithmetic nobody chose.
  */
 
-import type { InventoryLineRequest, PhysicalCountLineRequest, VoucherRequest } from "../../api";
+import type {
+  GodownListItem,
+  InventoryLineRequest,
+  PhysicalCountLineRequest,
+  VoucherRequest,
+} from "../../api";
 import type { VoucherType } from "../../keystroke/types";
 import { formatFixed4, mulFixed4, parseFixed4 } from "./itemInvoice";
 import { buildFulfilments, type DraftFulfilment } from "./fulfilment";
@@ -390,6 +395,43 @@ export function refuseWrongWayGoods(
       }
     }
   }
+
+  // A BLANK RATE COLUMN IS A STATED ZERO BY THE TIME IT REACHES THE WIRE, AND ON
+  // A TRANSFER'S INWARD LEG IT WRITES STOCK VALUE OFF THE BALANCE SHEET.
+  //
+  // `isKeyedStockLine` asks only for a positive quantity, so a row with an empty
+  // Rate is a keyed row; `parseFixed4("")` is 0n; and the line ships
+  // `rate: "0.0000"` — a rate that was STATED, so the server's RateUnstated
+  // backstop cannot fire on it. Measured in a browser on 2026-08-07: a 10-unit
+  // transfer with Rate blank took 8,890 off the sheet while the quantity stayed
+  // put, under a caption that reads "no value moves".
+  //
+  // ⛔ TRANSFERS ONLY, and the scope is the whole point of the rule. The goods on
+  // a transfer came off our own shelf, where the OUT leg values them at the
+  // running weighted average; an IN leg at zero destroys that difference. Goods
+  // arriving from OUTSIDE are a different question — a free sample on a Receipt
+  // Note really does cost 0.0000, and cored accepts it deliberately (see
+  // ledger.validateStockVoucher, and the control in the server's read-back
+  // audit). Refusing it here would make free samples unkeyable in the browser
+  // while the API allowed them, which is the client/server disagreement §7.4
+  // exists to prevent.
+  //
+  // cored refuses the transfer case too, which is what actually closes the hole
+  // for every caller. It is refused HERE as well so the operator is told at the
+  // keyboard, in the vocabulary of the screen they are on, rather than by a 422 —
+  // and because this function is the one check that also runs on the ALTER path,
+  // where the lines came back from stored movements.
+  if (shape.kind === "transfer") {
+    for (const [i, l] of req.inventory.entries()) {
+      // OUTWARD IS EXEMPT: it is consumed at the position's running
+      // weighted-average cost and its stated rate is ignored by the valuer.
+      if (l.direction === "IN" && parseFixed4(l.rate ?? "") === 0n) {
+        throw new Error(
+          `Line ${i + 1}: state the Rate — a ${title} that brings goods IN at zero carries them at no cost and destroys the value the outward leg removed (the quantity would look right and the Balance Sheet would not).`,
+        );
+      }
+    }
+  }
   return req;
 }
 
@@ -428,4 +470,28 @@ export function stockVoucherTitle(type: StockVoucherType): string {
     case "physical-stock":
       return "Physical Stock";
   }
+}
+
+/**
+ * The godown a fresh grid row should start on, or "" when there is nothing to
+ * infer.
+ *
+ * ⛔ IT LIVES HERE, NOT ON A SCREEN, BECAUSE BOTH GRIDS NEED IT AND ONLY ONE HAD
+ * IT. The phantom-position defect was fixed on StockVoucherScreen on 2026-08-07
+ * and the ITEM-INVOICE grid in VoucherScreen was left with the old default —
+ * where the same bug is not silent but fatal: an F8 item sale keyed at
+ * "— not tracked —" is measured for negative stock against the NULL position,
+ * which holds nothing, so cored refuses it with
+ *   "negative stock refused for item MS Angle 50x50 (godown -, batch -):
+ *    closing balance would be -5.0000"
+ * on a company holding 195 of that item at Main Location. Measured in a browser.
+ * A helper that two screens must agree on does not belong to either of them.
+ */
+export function defaultGodownOf(godowns: readonly GodownListItem[]): string {
+  // Every company is seeded with exactly one system godown ('Main Location',
+  // seed_inventory_defaults), and it is where seeded and imported stock lands.
+  const system = godowns.find((g) => g.is_system);
+  if (system) return system.id;
+  const only = godowns.length === 1 ? godowns[0] : undefined;
+  return only ? only.id : "";
 }

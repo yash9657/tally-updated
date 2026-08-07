@@ -69,7 +69,7 @@ import {
 } from "./vouchers/itemInvoice";
 import { acceptEditedPurchaseDraft, canRebuildDraft } from "./vouchers/draftAccept";
 import { StockVoucherScreen } from "./vouchers/StockVoucherScreen";
-import { isStockVoucherType } from "./vouchers/stockVoucher";
+import { defaultGodownOf, isStockVoucherType } from "./vouchers/stockVoucher";
 import { acceptPurchaseDraft, ApiError } from "../api";
 import type {
   DayBookEntry,
@@ -727,7 +727,6 @@ function AccountingVoucherScreen({
   // so Payment / Receipt / Contra open in SINGLE entry the way a Tally operator
   // expects, and a class that has no single form (Journal, and the GST vouchers)
   // is forced to double regardless of what a stale frame config says.
-  const entryMode = effectiveEntryMode(type, snapshot.config?.entryMode);
 
   // On an alter frame, the loaded report row gives us the logical voucher_id;
   // the FORM is hydrated from GET /vouchers/{id} (real posting uuids + GST
@@ -802,6 +801,33 @@ function AccountingVoucherScreen({
         if (!live) return;
         setStockItems(items.stock_items);
         setGodowns(gd.godowns);
+        // ⛔ THE ITEM GRID GETS THE SAME DEFAULT POSITION AS THE STOCK GRIDS, AND
+        // HERE THE OLD DEFAULT WAS NOT SILENT — IT WAS FATAL.
+        //
+        // emptyItemLine() starts godownId "", which posts as SQL NULL: a real
+        // position that, in a company with godowns, holds nothing. The
+        // negative-stock check is per (item, godown, batch), so an F8 item sale
+        // keyed without touching this select is measured against the NULL
+        // position and REFUSED — measured in a browser 2026-08-07:
+        //   "negative stock refused for item MS Angle 50x50 (godown -, batch -):
+        //    closing balance would be -5.0000"
+        // on a company holding 195 of that item at Main Location. An operator
+        // cannot sell stock they own.
+        //
+        // ⚠️ AND ON F9 IT IS SILENT AGAIN: a PURCHASE brings goods IN, so there
+        // is no negative-stock check to refuse it — the units simply land on the
+        // phantom position and the warehouse is split in two.
+        const def = defaultGodownOf(gd.godowns);
+        if (def !== "") {
+          setForm((f) => ({
+            ...f,
+            items: f.items.map((r) =>
+              r.stockItemId === "" && r.qty === "" && r.godownId === ""
+                ? { ...r, godownId: def }
+                : r,
+            ),
+          }));
+        }
         setStockError(null);
       })
       .catch((e: unknown) => {
@@ -824,6 +850,26 @@ function AccountingVoucherScreen({
   const seedRef = useRef<string | null>(null);
   const draftSeedRef = useRef<string | null>(null);
   const [form, setForm] = useState<VoucherForm>(emptyForm);
+  /**
+   * ⛔ DERIVED AFTER `form`, AND FROM THE VOUCHER'S OWN CONTENTS ON AN ALTER.
+   *
+   * A Day Book drill builds its frame with no entryMode, so this used to fall to
+   * "accounting-invoice" on every GST class — the item grid was not rendered and
+   * the accept sent no `inventory`, which on an ALTER means "this voucher moves
+   * no goods" and DROPPED THE MOVEMENT. See effectiveEntryMode's third parameter
+   * for the measurement (190 -> 195 units, silently, on a re-accept).
+   *
+   * `form.items` is hydrated from GET /vouchers/{id} by itemsFromView, so a
+   * keyed row here means the STORED voucher carries stock.
+   */
+  const alterHasStock =
+    isAlter && form.items.some((l) => l.stockItemId.trim() !== "");
+  const entryMode = effectiveEntryMode(
+    type,
+    snapshot.config?.entryMode,
+    alterHasStock,
+  );
+
   const [status, setStatus] = useState<string | null>(null);
   const [savedNo, setSavedNo] = useState<string | null>(null);
   /**
@@ -1751,13 +1797,28 @@ function AccountingVoucherScreen({
       <p className="mb-2 text-xs text-tally-field">{cfg.hint}</p>
 
       <div className="bg-tally-panel p-3">
+        {/*
+          ⛔ ALWAYS EDITABLE. This read `editable={draftRebuildable}`, which is
+          FALSE on every ordinary voucher, so the Date rendered as a read-only
+          <span> on all six classes and the notes: an operator could not date a
+          voucher at all, and every voucher keyed in a browser carried today().
+          Verified in a browser 2026-08-07 — a Sales voucher's only inputs were
+          the party and the GST fields.
+          ⚠️ WHAT THAT COST IS NOT JUST TYPING. A business keys yesterday's
+          invoices; more sharply, TWO PARITY ROWS WERE UNMEASURABLE BECAUSE OF IT
+          — row 7's "the series must RESTART next financial year" (the counter is
+          keyed off the voucher date) and row 37's back-dated-entry cutoff (which
+          needs a voucher BEFORE the cutoff to refuse). Neither could be reached
+          from the keyboard while the only date obtainable was today.
+          The onChange was already wired; only the gate was wrong.
+        */}
         <FieldRow
           name="Date"
           active={snapshot.field === "date"}
           value={form.date}
-          editable={draftRebuildable}
+          editable
           onChange={(v) => setForm((f) => ({ ...f, date: v }))}
-          testId={isDraftMode ? "draft-date" : undefined}
+          testId={isDraftMode ? "draft-date" : "voucher-date"}
         />
         <FieldRow
           name="No."
@@ -1793,13 +1854,21 @@ function AccountingVoucherScreen({
             </p>
           ) : null}
         </div>
+        {/*
+          ⛔ ALWAYS EDITABLE, for the same reason as the Date above: gated on
+          `draftRebuildable`, this was a read-only <span> on every ordinary
+          voucher, so EVERY browser-keyed voucher was posted with narration "".
+          The narration is what a Day Book row shows and what an auditor reads to
+          find out why an entry exists — the seeded vouchers all carry one, which
+          is exactly why nothing looked wrong on screen.
+        */}
         <FieldRow
           name="Narration"
           active={snapshot.field === "narration"}
           value={form.narration}
-          editable={draftRebuildable}
+          editable
           onChange={(v) => setForm((f) => ({ ...f, narration: v }))}
-          testId={isDraftMode ? "draft-narration" : undefined}
+          testId={isDraftMode ? "draft-narration" : "voucher-narration"}
         />
       </div>
 
@@ -1974,6 +2043,28 @@ function GstPanel({
           value={form.gst.placeOfSupply}
           onChange={(e) =>
             setForm((f) => ({ ...f, gst: { ...f.gst, placeOfSupply: e.target.value } }))
+          }
+        />
+      </label>
+      {/*
+        ⛔ HSN — MANDATORY, AND UNTIL 2026-08-07 THERE WAS NO WAY TO KEY IT.
+        `form.gst.hsn` already existed and gstVoucher.ts already put it on the
+        wire; the accounting-mode panel simply had no input, so EVERY GST voucher
+        keyed in a browser produced a GSTR-1 table-12 row with `"hsn_sc": ""`.
+        Measured against real cored on 2026-08-07: two invoices, 50,000 of
+        taxable value, one blank HSN summary row — a return the GSTN portal
+        rejects. The ITEM path was never affected (HSN comes off the stock
+        master), which is exactly why this hid: the demo seed supplies HSN
+        explicitly and verify:demo therefore passed throughout.
+      */}
+      <label className="flex items-center gap-2 py-0.5">
+        <span className="w-32">HSN / SAC</span>
+        <input
+          data-testid="gst-hsn"
+          className="bg-tally-field px-2 text-tally-fieldText"
+          value={form.gst.hsn}
+          onChange={(e) =>
+            setForm((f) => ({ ...f, gst: { ...f.gst, hsn: e.target.value } }))
           }
         />
       </label>
@@ -2635,7 +2726,11 @@ function ItemInvoicePanel({
         data-testid="item-add-line"
         className="mt-1 px-2 py-0.5 text-xs underline"
         onClick={() =>
-          setForm((f) => ({ ...f, items: [...f.items, emptyItemLine()] }))
+          setForm((f) => ({
+            ...f,
+            // The second row needs the default as much as the first.
+            items: [...f.items, { ...emptyItemLine(), godownId: defaultGodownOf(godowns) }],
+          }))
         }
       >
         + Add item

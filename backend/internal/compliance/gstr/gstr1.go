@@ -44,6 +44,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -108,6 +109,20 @@ type GSTR1 struct {
 	CDNR []CDNRParty `json:"cdnr,omitempty"`
 	// HSN is the HSN/rate summary (table 12).
 	HSN HSNSummary `json:"hsn"`
+	// Disclosures names anything about this return that would make a filer's
+	// belief about it WRONG. It is not commentary: a return is an assertion to a
+	// tax authority, and the one failure mode this package must never have is
+	// handing back something that looks complete and is not.
+	//
+	// ⛔ THE FIRST ENTRY IS THE BLANK-HSN CASE, MEASURED IN A BROWSER 2026-08-07.
+	// Table 12 is mandatory, HsnSc may legitimately be blank in this struct when
+	// a supply could not be attributed to a code, and the two facts together mean
+	// a perfectly well-formed JSON return that the GSTN portal REJECTS. It went
+	// unnoticed because the item path takes HSN off the stock master and the demo
+	// seed supplies it explicitly — so every gate was green while an
+	// accounting-mode voucher keyed by hand produced `"hsn_sc": ""` for 50,000 of
+	// taxable value.
+	Disclosures []string `json:"disclosures,omitempty"`
 }
 
 // CDNRParty is one registered counter-party's credit/debit notes (GSTN "cdnr").
@@ -469,10 +484,10 @@ func (s *Service) Generate(ctx context.Context, from, to string, opts Options) (
 // hsnRow is one (hsn, rate) bucket of the table-12 summary, rolled up in SQL
 // from voucher_gst_line.
 type hsnRow struct {
-	hsn                string
-	rate               decimal.Decimal
-	taxable            decimal.Decimal
-	cgst, sgst, igst   decimal.Decimal
+	hsn              string
+	rate             decimal.Decimal
+	taxable          decimal.Decimal
+	cgst, sgst, igst decimal.Decimal
 }
 
 // loadHSNRows builds the GSTR-1 table-12 HSN summary from PER-LINE GST detail
@@ -482,7 +497,7 @@ type hsnRow struct {
 //
 // The WHERE clause mirrors the invoice query exactly -- current version, not
 // deleted, SALES, in period -- so the two sections describe the same set of
-// vouchers. gl.hsn = '' is included rather than skipped: a line with no code
+// vouchers. gl.hsn = ” is included rather than skipped: a line with no code
 // still carries taxable value the summary must report.
 func loadHSNRows(ctx context.Context, tx pgx.Tx, from, to string) ([]hsnRow, error) {
 	// SIGNED by document type: a credit note REDUCES the reported outward value
@@ -741,7 +756,43 @@ func build(period time.Time, invoices []invoice, hsnRows []hsnRow, opts Options)
 	out.B2CS = sortedB2CS(b2csBuckets)
 	out.CDNR = sortedCDNR(cdnrByCTIN)
 	out.HSN = sortedHSN(hsnBuckets)
+	out.Disclosures = discloseBlankHSN(out.HSN)
 	return out
+}
+
+// discloseBlankHSN reports supplies that reached the mandatory table-12 summary
+// with NO HSN/SAC code.
+//
+// ⛔ WHY THIS IS A DISCLOSURE AND NOT A REFUSAL. The books are not wrong — the
+// tax, the sides and the ledgers are all correct, and the supply genuinely
+// happened. What is wrong is the RETURN: table 12 is mandatory and the portal
+// rejects a blank code. Refusing to build the return would leave the filer with
+// nothing at all and no way to see what to fix; refusing the VOUCHER at post
+// time would brick the OCR-draft path for a bill whose HSN did not survive the
+// scan. So the return is produced, and it SAYS what is wrong with it, naming the
+// taxable value at stake so the filer can find the vouchers.
+//
+// The alternative that was rejected outright: dropping the blank row. That would
+// make the summary's total disagree with the invoices for no visible reason,
+// which is the same defect with the evidence removed.
+func discloseBlankHSN(h HSNSummary) []string {
+	blank := decimal.Zero
+	rows := 0
+	for _, it := range h.Data {
+		if strings.TrimSpace(it.HsnSc) == "" {
+			blank = blank.Add(it.Txval)
+			rows++
+		}
+	}
+	if rows == 0 {
+		return nil
+	}
+	return []string{fmt.Sprintf(
+		"table 12 (HSN summary) has %d row(s) with NO HSN/SAC code, covering %s of taxable value. "+
+			"HSN is mandatory and the portal will reject this return: set the HSN on the supplies "+
+			"concerned (an accounting-mode GST voucher takes it from the HSN/SAC field; an item "+
+			"invoice takes it from the stock master) and re-read the return.",
+		rows, blank.StringFixed(4))}
 }
 
 // sortedCDNR renders the cdnr section deterministically: parties by GSTIN, notes
@@ -903,4 +954,3 @@ func isRegistered(regType, gstin string) bool {
 		return false
 	}
 }
-

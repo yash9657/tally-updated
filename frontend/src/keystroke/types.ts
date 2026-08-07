@@ -727,6 +727,26 @@ export interface Keymap {
  */
 export interface KeyEventLike {
   readonly key: string;
+  /**
+   * The PHYSICAL key, independent of keyboard layout and of what the OS composed
+   * (`KeyboardEvent.code`: "KeyL", "Digit2", "F8").
+   *
+   * ⛔ IT IS WHAT MAKES Alt+<letter> WORK ON macOS AT ALL, and its absence was a
+   * live defect until 2026-08-07. Option+L on a Mac does not report `key: "l"` —
+   * the OS composes the character and reports `key: "¬"`, with only `code` still
+   * saying "KeyL". `comboFromEvent` read `key` alone, so EVERY Alt+letter binding
+   * in the product was dead on macOS: Alt+G Go To, Alt+C Create Master, Alt+E
+   * Export, Alt+D Delete, Alt+I e-Invoice, Alt+Z e-Way Bill, Alt+L Edit Log. All
+   * six were verified dead in a browser, and all six were verified live again
+   * once this field was consulted.
+   *
+   * ⚠️ AND NOTHING CAUGHT IT, BECAUSE THE TEST HARNESS CANNOT: Playwright's
+   * `keyboard.press('Alt+l')` synthesises `key: "l"`, which is the value a Mac
+   * never sends. Every driven test passed on a key no operator on this platform
+   * could fire. Optional because the corpora and unit tests construct bare
+   * `{key}` objects, and those must keep resolving by `key`.
+   */
+  readonly code?: string;
   readonly ctrlKey?: boolean;
   readonly altKey?: boolean;
   readonly shiftKey?: boolean;

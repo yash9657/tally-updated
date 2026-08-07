@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -494,5 +495,109 @@ func TestGSTRHarnessRemovesItsCompany(t *testing.T) {
 				"the gstr harness leaks them on EVERY run and nothing will ever delete them",
 				tbl, n, cid)
 		}
+	}
+}
+
+// TestGSTR1DisclosesABlankHSNRatherThanFilingIt is the regression for a defect
+// measured IN A BROWSER on 2026-08-07, and its point is what the return SAYS
+// about itself.
+//
+// ⛔ TABLE 12 IS MANDATORY AND A BLANK CODE IS REJECTED BY THE PORTAL. An
+// accounting-mode GST voucher keyed by hand carried no HSN — the panel had no
+// field for one until that day — and the return came back perfectly well-formed
+// with `"hsn_sc": ""` against 50,000 of taxable value. Every gate was green
+// throughout, because the ITEM path takes HSN off the stock master and the demo
+// seed supplies it explicitly, so nothing that ran regularly ever produced one.
+//
+// The return is still GENERATED (refusing would leave the filer with nothing and
+// no way to see what to fix, and the books themselves are correct), but it must
+// now NAME the problem and the value at stake.
+func TestGSTR1DisclosesABlankHSNRatherThanFilingIt(t *testing.T) {
+	pool, ctx, _ := setup(t)
+	ms := masters.NewService(pool)
+	led := ledger.NewService(pool)
+
+	vtID, err := ms.VoucherTypeID(ctx, "Sales")
+	if err != nil {
+		t.Fatalf("voucher type: %v", err)
+	}
+	cgst, err := ms.EnsureLedger(ctx, "Output CGST", "Duties & Taxes", "tester")
+	if err != nil {
+		t.Fatalf("cgst: %v", err)
+	}
+	sgst, err := ms.EnsureLedger(ctx, "Output SGST", "Duties & Taxes", "tester")
+	if err != nil {
+		t.Fatalf("sgst: %v", err)
+	}
+	igst, err := ms.EnsureLedger(ctx, "Output IGST", "Duties & Taxes", "tester")
+	if err != nil {
+		t.Fatalf("igst: %v", err)
+	}
+	sales, err := ms.EnsureLedger(ctx, "Domestic Sales", "Sales Accounts", "tester")
+	if err != nil {
+		t.Fatalf("sales: %v", err)
+	}
+	party, err := ms.CreateLedger(ctx, masters.Ledger{
+		Name: "HSN Customer", GroupName: "Sundry Debtors",
+		GSTIN: "29ABCDE1234F1Z5", StateCode: "29",
+		RegistrationType: masters.GSTRegular,
+	}, "tester")
+	if err != nil {
+		t.Fatalf("party: %v", err)
+	}
+
+	// The SAME sale twice, differing only in whether the HSN was stated.
+	withHSN := buildIntraSale(vtID, party, sales, cgst, sgst, igst, "H-1", "2026-05-04", "1000")
+	blank := buildIntraSale(vtID, party, sales, cgst, sgst, igst, "H-2", "2026-05-05", "2000")
+	blank.GST.Lines[0].HSN = "" // exactly what the browser sent before the fix
+
+	for _, in := range []ledger.VoucherInput{withHSN, blank} {
+		if _, err := led.PostVoucher(ctx, in); err != nil {
+			t.Fatalf("post %s: %v", in.VoucherNo, err)
+		}
+	}
+
+	got, err := gstr.NewService(pool).Generate(ctx, "2026-05-01", "2026-05-31", gstr.Options{})
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+
+	// The blank row is still THERE — dropping it would make the summary disagree
+	// with the invoices for no visible reason, which is the same defect with the
+	// evidence removed.
+	var blankRows int
+	for _, it := range got.HSN.Data {
+		if it.HsnSc == "" {
+			blankRows++
+		}
+	}
+	if blankRows != 1 {
+		t.Fatalf("table 12 has %d blank-HSN row(s), want exactly 1 (it must not be silently dropped): %+v",
+			blankRows, got.HSN.Data)
+	}
+
+	if len(got.Disclosures) == 0 {
+		t.Fatal("a return carrying a BLANK code on the mandatory HSN summary disclosed NOTHING: " +
+			"the filer is handed a well-formed JSON the portal will reject, with no way to know why")
+	}
+	joined := strings.Join(got.Disclosures, " ")
+	if !strings.Contains(joined, "HSN") {
+		t.Errorf("the disclosure must name HSN, got %q", joined)
+	}
+	// ⛔ IT MUST NAME THE VALUE AT STAKE, not merely that something is wrong — the
+	// filer has to find the vouchers, and 2000 is the blank one, not 3000 (both).
+	if !strings.Contains(joined, "2000") {
+		t.Errorf("the disclosure must state the taxable value carrying no HSN (2000), got %q", joined)
+	}
+
+	// ⛔ THE CONTROL (§9.3): a return whose supplies ALL carry an HSN must disclose
+	// NOTHING. Without this the test passes just as well against a build that
+	// disclosed on every return, which would train the filer to ignore it.
+	clean, err := gstr.NewService(pool).Generate(ctx, "2026-05-04", "2026-05-04", gstr.Options{})
+	if err != nil {
+		t.Fatalf("generate control: %v", err)
+	}
+	if len(clean.Disclosures) != 0 {
+		t.Errorf("a return where every supply carries an HSN disclosed %v, want none", clean.Disclosures)
 	}
 }

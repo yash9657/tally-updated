@@ -13,6 +13,7 @@ import {
   type StockVoucherLine,
 } from "./vouchers/stockVoucher";
 import { configFor } from "./vouchers/voucherConfig";
+import { defaultGodownOf } from "./vouchers/stockVoucher";
 
 afterEach(cleanup);
 
@@ -114,6 +115,26 @@ async function openStockVoucher(
 async function itemID(base: CoredClient, name: string): Promise<string> {
   const { stock_items } = await base.listStockItems("co-1");
   return stock_items.find((s) => s.name === name)!.id;
+}
+
+/**
+ * The seeded system godown ('Main Location'), which is WHERE STOCK ACTUALLY IS.
+ *
+ * ⛔ FIXTURES MUST PUT THEIR OPENING STOCK HERE, and that is not tidiness. Three
+ * tests in this file used to receive their stock with no godown at all — the
+ * NULL position — and then count or despatch through a grid that also defaulted
+ * to NULL. Both sides agreed, so all three passed. The real app disagreed:
+ * seed-demo puts every unit at Main Location while the grid defaulted to
+ * "— not tracked —", so a Physical Stock count differenced against a book of
+ * ZERO and posted a phantom surplus (measured in a browser 2026-08-07: counting
+ * 13 took the item from 195 to 208 and left Main Location untouched).
+ *
+ * A fixture that stores its stock where the product never stores it cannot see
+ * that class of defect at all.
+ */
+async function mainGodown(base: CoredClient): Promise<string> {
+  const { godowns } = await base.listGodowns("co-1");
+  return godowns.find((g) => g.is_system)!.id;
 }
 
 /** Key one grid row (adding it first when it is not row 0). */
@@ -227,20 +248,35 @@ describe("Alt+F8 Delivery Note — goods leave, nothing is posted", () => {
     const base = createMockClient({ seed: false });
     await seedStock(base);
     const widget = await itemID(base, "Widget");
-    // Receive 10 first, so the despatch is not a negative-stock question.
+    const main = await mainGodown(base);
+    // Receive 10 first, so the despatch is not a negative-stock question — AT
+    // MAIN LOCATION, which is where a real company's stock sits (see mainGodown).
     await base.postReceiptNoteVoucher("co-1", {
       voucher_date: "2026-07-01",
       inventory: [
-        { stock_item_id: widget, direction: "IN", qty: "10.0000", rate: "100.0000" },
+        {
+          stock_item_id: widget,
+          godown_id: main,
+          direction: "IN",
+          qty: "10.0000",
+          rate: "100.0000",
+        },
       ],
     });
 
     const app = await openStockVoucher(base, "delivery-note");
+    // The godown is deliberately NOT keyed: the grid must default to the place
+    // the goods are. Despatching from the NULL position instead would be a
+    // negative-stock refusal at best, and at worst a second phantom position.
     await keyRow(0, { item: widget, qty: "4", rate: "100.0000" });
     fireEvent.keyDown(app, { key: "a", ctrlKey: true });
     await screen.findByTestId("voucher-no");
 
-    expect(await closingQty(base, "Widget", "")).toBe("6.0000");
+    expect(await closingQty(base, "Widget", main)).toBe("6.0000");
+    expect(
+      await closingQty(base, "Widget", ""),
+      "the despatch must come off the shelf that held the goods, not open a second untracked position",
+    ).toBe("absent");
   });
 });
 
@@ -415,6 +451,88 @@ describe("Alt+F7 Stock Journal — a transfer, not a creation", () => {
       buildStockVoucherRequest({ type: "stock-journal", lines: [line] }),
     ).toThrow(/From and To godowns are the same/);
   });
+
+  it("refuses a transfer whose Rate was left blank, instead of writing stock value off", () => {
+    // ⛔ THE ROW IS "KEYED": isKeyedStockLine asks only for a positive quantity,
+    // so an empty Rate box is a complete line as far as the grid is concerned,
+    // and parseFixed4("") is 0n — so the wire carries rate "0.0000", a STATED
+    // zero the server's RateUnstated backstop is blind to by design.
+    //
+    // What that cost, measured in a browser on 2026-08-07: transferring 10 units
+    // carried at 889 took 8,890 off the Balance Sheet's Closing Stock line while
+    // the quantity stayed at 75, under a caption reading "no value moves".
+    const line: StockVoucherLine = {
+      stockItemId: "s1",
+      itemName: "Widget",
+      godownId: "g1",
+      toGodownId: "g2",
+      batchId: "",
+      fulfilments: [],
+      qty: "10",
+      rate: "",
+      unit: "Nos",
+    };
+    expect(() =>
+      buildStockVoucherRequest({ type: "stock-journal", lines: [line] }),
+    ).toThrow(/state the Rate/i);
+
+    // THE CONTROL: the same transfer with a rate must build normally, and both
+    // legs must carry it. A check that refused every transfer would pass the
+    // assertion above just as well.
+    const priced = buildStockVoucherRequest({
+      type: "stock-journal",
+      lines: [{ ...line, rate: "889" }],
+    });
+    expect(priced.inventory?.map((l) => [l.direction, l.rate])).toEqual([
+      ["OUT", "889.0000"],
+      ["IN", "889.0000"],
+    ]);
+  });
+
+  it("a free sample on a Receipt Note still arrives at 0.0000 — the rule is about TRANSFERS", () => {
+    // ⛔ THE CONTROL THE SERVER'S READ-BACK AUDIT FORCED. The first draft refused a
+    // zero-rate inward on every stock-only class, which would have made free
+    // samples unkeyable — and cored accepts them deliberately, so the client would
+    // have been refusing what the API allows (§7.4). Goods arriving from OUTSIDE
+    // can genuinely cost nothing; goods coming off our own shelf cannot, because
+    // the outward leg already valued them.
+    const line: StockVoucherLine = {
+      stockItemId: "s1",
+      itemName: "Widget",
+      godownId: "g1",
+      toGodownId: "",
+      batchId: "",
+      fulfilments: [],
+      qty: "4",
+      rate: "",
+      unit: "Nos",
+    };
+    const req = buildStockVoucherRequest({ type: "receipt-note", lines: [line] });
+    expect(req.inventory?.[0]?.direction).toBe("IN");
+    expect(req.inventory?.[0]?.rate).toBe("0.0000");
+  });
+
+  it("a Delivery Note with no rate still ships — an outward's rate is ignored by the valuer", () => {
+    // The mirror of the case above, and it is the reason the refusal is scoped to
+    // INWARD rather than to "any zero". An outward is consumed at the position's
+    // running weighted-average cost; its stated rate moves no figure anybody
+    // reads. Refusing it would block a warehouse from despatching goods it holds
+    // because nobody had priced them yet — which is the entire point of the class.
+    const line: StockVoucherLine = {
+      stockItemId: "s1",
+      itemName: "Widget",
+      godownId: "g1",
+      toGodownId: "",
+      batchId: "",
+      fulfilments: [],
+      qty: "4",
+      rate: "",
+      unit: "Nos",
+    };
+    const req = buildStockVoucherRequest({ type: "delivery-note", lines: [line] });
+    expect(req.inventory).toHaveLength(1);
+    expect(req.inventory?.[0]?.direction).toBe("OUT");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -433,10 +551,17 @@ describe("Alt+F10 Physical Stock — the count is stated, the correction is deri
     const base = createMockClient({ seed: false });
     await seedStock(base);
     const widget = await itemID(base, "Widget");
+    const main = await mainGodown(base);
     await base.postReceiptNoteVoucher("co-1", {
       voucher_date: "2026-07-01",
       inventory: [
-        { stock_item_id: widget, direction: "IN", qty: "10.0000", rate: "100.0000" },
+        {
+          stock_item_id: widget,
+          godown_id: main,
+          direction: "IN",
+          qty: "10.0000",
+          rate: "100.0000",
+        },
       ],
     });
 
@@ -445,6 +570,11 @@ describe("Alt+F10 Physical Stock — the count is stated, the correction is deri
     // "There are 13 on the shelf." The rate is what the three EXTRA units are
     // carried at; a surplus at zero cost is refused, because it would write the
     // item's weighted average down.
+    //
+    // ⛔ THE GODOWN IS LEFT UNTOUCHED ON PURPOSE — that is the defect this test
+    // now also guards. The count must be differenced against the shelf that
+    // holds the 10, not against an empty NULL position that would turn a
+    // stock-take into an invention of 13 new units.
     await keyRow(0, { item: widget, qty: "13", rate: "100.0000" });
     fireEvent.keyDown(app, { key: "a", ctrlKey: true });
 
@@ -468,19 +598,34 @@ describe("Alt+F10 Physical Stock — the count is stated, the correction is deri
       "a Physical Stock voucher states what was COUNTED, not what moved; 13 sent as a movement on top of 10 leaves the books asserting 23",
     ).toBeUndefined();
 
+    // The count must name the position it was made at, or the server differences
+    // it against the wrong shelf.
+    expect(req.physical_count!.map((c) => c.godown_id)).toEqual([main]);
+
     // The consequence, which is what makes the two shapes distinguishable at
     // all: the closing position IS the count, by construction.
-    expect(await closingQty(base, "Widget", "")).toBe("13.0000");
+    expect(await closingQty(base, "Widget", main)).toBe("13.0000");
+    expect(
+      await closingQty(base, "Widget", ""),
+      "a stock-take corrects the shelf it counted; it must not open a phantom untracked position beside it",
+    ).toBe("absent");
   });
 
   it("a shortage is not negative stock: the position becomes exactly the count", async () => {
     const base = createMockClient({ seed: false });
     await seedStock(base);
     const widget = await itemID(base, "Widget");
+    const main = await mainGodown(base);
     await base.postReceiptNoteVoucher("co-1", {
       voucher_date: "2026-07-01",
       inventory: [
-        { stock_item_id: widget, direction: "IN", qty: "10.0000", rate: "100.0000" },
+        {
+          stock_item_id: widget,
+          godown_id: main,
+          direction: "IN",
+          qty: "10.0000",
+          rate: "100.0000",
+        },
       ],
     });
 
@@ -492,9 +637,72 @@ describe("Alt+F10 Physical Stock — the count is stated, the correction is deri
     await screen.findByTestId("voucher-no");
 
     expect(
-      await closingQty(base, "Widget", ""),
+      await closingQty(base, "Widget", main),
       "the count is a FACT about the shelf, not a withdrawal request — it commits, and the position it leaves is the counted quantity",
     ).toBe("6.0000");
+  });
+
+  it("counts against the shelf the stock is ON, not against a phantom untracked position", async () => {
+    // ⛔ THE DEFECT, MEASURED IN A BROWSER 2026-08-07, AND ITS SYMPTOM READS AS
+    // SUCCESS. The Godown select defaulted to "— not tracked —" (NULL) while all
+    // the stock sat at Main Location. Counting 13 without touching it differenced
+    // 13 against a book of ZERO on the NULL position and posted a SURPLUS INWARD
+    // of 13: the item went from 195 to 208, Main Location kept its 195, and the
+    // operator — who counted 13 and now sees 13 — has no way to tell. A
+    // stock-take is the control that makes the books match the shelf; this made
+    // them disagree, and INVENTED stock while doing it.
+    //
+    // The assertion is on the CORRECTION, not on the total: a delta of -187
+    // against 195 is a stock-take, a delta of +13 against 0 is an invention, and
+    // only one of them is a document about the shelf that was counted.
+    const base = createMockClient({ seed: false });
+    await seedStock(base);
+    const widget = await itemID(base, "Widget");
+    const main = await mainGodown(base);
+    await base.postReceiptNoteVoucher("co-1", {
+      voucher_date: "2026-07-01",
+      inventory: [
+        {
+          stock_item_id: widget,
+          godown_id: main,
+          direction: "IN",
+          qty: "195.0000",
+          rate: "31.6008",
+        },
+      ],
+    });
+
+    const app = await openStockVoucher(base, "physical-stock");
+    await keyRow(0, { item: widget, qty: "13", rate: "31.6008" });
+    fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    await screen.findByTestId("voucher-no");
+
+    expect(
+      await closingQty(base, "Widget", main),
+      "the counted shelf must END at the count: 13 is what the human saw",
+    ).toBe("13.0000");
+    expect(
+      await closingQty(base, "Widget", ""),
+      "a phantom position holding the count is the defect itself — the stock-take added 13 units instead of correcting 195 down to 13",
+    ).toBe("absent");
+  });
+
+  it("leaves the operator the untracked position when the company keeps no godowns", () => {
+    // THE CONTROL for the rule above (§9.3). "— not tracked —" is a REAL answer
+    // for a company that never enabled locations, so the fix must default to a
+    // godown only when there is one to default to — never invent a position, and
+    // never force a choice that does not exist.
+    expect(defaultGodownOf([])).toBe("");
+    expect(defaultGodownOf([{ id: "g1", name: "Main Location", is_system: true }])).toBe("g1");
+    expect(defaultGodownOf([{ id: "g9", name: "Shed", is_system: false }])).toBe("g9");
+    // Two user godowns and no system one: there is nothing to infer, and
+    // guessing would put the goods somewhere nobody chose.
+    expect(
+      defaultGodownOf([
+        { id: "g1", name: "Shed", is_system: false },
+        { id: "g2", name: "Yard", is_system: false },
+      ]),
+    ).toBe("");
   });
 
   it("states the REASON when the security level refuses it, rather than a blank form", async () => {

@@ -40,6 +40,15 @@ const VOUCHER_BAR: readonly ButtonBarItem[] = [
   item("F7", "Journal"),
   item("F8", "Sales"),
   item("F9", "Purchase"),
+  // ⛔ THE TWO NOTES WERE BOUND, LIVE, AND INVISIBLE. Alt+F5 and Alt+F6 open the
+  // real Debit and Credit Note screens (keymaps/tallyprime.ts) and always have;
+  // neither this bar nor hintsFor's `voucher` case named them. By this repo's own
+  // standing rule — an operator reads the strip as the list of what works here —
+  // a working feature that nothing advertises is an unreachable one, so the
+  // parity ledger was counting two rows nobody could find. Found by reading on
+  // 2026-08-07; this bar and the hint strip are the whole fix.
+  item("Alt+F5", "Debit Note"),
+  item("Alt+F6", "Credit Note"),
   item("Alt+F7", "Stock Journal"),
   item("Alt+F8", "Delivery Note"),
   item("Alt+F9", "Receipt Note"),

@@ -297,6 +297,43 @@ func validateStockVoucher(in VoucherInput) error {
 				"ledger: inventory line %d: a %s is not priced from a price list (it records goods moving, not a sale); state the rate the goods are carried at",
 				i+1, in.Class)
 		}
+		// A STATED ZERO IS NOT A CHEAPER WAY OF SAYING NOTHING — ⛔ ON A TRANSFER,
+		// AND ONLY ON A TRANSFER.
+		//
+		// RateUnstated above catches the line that said nothing at all. This catches
+		// the one that said "0.0000", which arrives as a perfectly well-formed rate
+		// — the DB CHECK is rate >= 0 — and is exactly what a client sends when an
+		// operator tabs past the Rate column: parsing an empty box yields zero, and
+		// zero is then STATED on the wire, so the backstop above cannot see it.
+		//
+		// ⛔ WHY THE CLASS MATTERS, AND WHY THIS IS NOT "REFUSE EVERY ZERO RATE".
+		// A ReceiptNote brings goods in from OUTSIDE, and a free sample really does
+		// arrive at 0.0000 — a stated fact, not a missing price. Carrying it at
+		// nothing is CORRECT: quantity rises, value does not, and
+		// TestAnInventoryLineWhoseAmountContradictsItsOwnRateIsRefused pins exactly
+		// that as a control. Refusing it would make free samples unkeyable.
+		//
+		// A StockJournal is the opposite case, because the goods came from OUR OWN
+		// shelf. The OUT leg removes them at the position's running weighted-average
+		// cost; if the IN leg carries them back at zero, the difference is simply
+		// DESTROYED. The document says "no value moves"; a blank Rate makes that
+		// false by the full average cost of the goods, while QUANTITY is unchanged —
+		// invisible to any quantity-only check, and closing stock feeds the BALANCE
+		// SHEET. Measured in a browser 2026-08-07: a 10-unit transfer with the Rate
+		// column blank took 8,890 off the sheet.
+		//
+		// This is the same rule buildPhysicalStockDeltas applies to a counted
+		// surplus (a server-INVENTED inward has no supplier price to appeal to
+		// either), and the two now read the same way.
+		//
+		// OUTWARD IS EXEMPT on every class: an outward is consumed at the position's
+		// running weighted-average cost and its own rate is IGNORED by the valuer
+		// (inventory.Movement.Rate), so a zero there changes no figure anybody reads.
+		if in.Class == StockJournal && l.Direction == Inward && l.Rate.IsZero() {
+			return fmt.Errorf(
+				"ledger: inventory line %d: a %s brings goods IN at a rate of zero, which would carry them at no cost and destroy the value the outward leg removed; state the rate the goods are carried at",
+				i+1, in.Class)
+		}
 	}
 	if want, fixed := fixedStockDirection(in.Class); fixed {
 		for i, l := range in.Inventory {

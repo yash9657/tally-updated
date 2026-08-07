@@ -521,6 +521,28 @@ export function buildGstVoucherRequest(
     );
   }
 
+  // ⛔ HSN IS MANDATORY ON GSTR-1 TABLE 12, AND A BLANK ONE IS SILENT — but it is
+  // NOT refused here, and the reason is worth stating so nobody "tightens" it.
+  //
+  // A GST line with no HSN posts happily, balances, appears in GSTR-1 b2b, and
+  // lands in the table-12 summary as `"hsn_sc": ""` — a row the GSTN portal
+  // rejects, on a return the operator believes is complete. Until 2026-08-07 the
+  // accounting-mode panel had no HSN input at all, so EVERY GST voucher keyed in
+  // a browser produced one (measured that day: two invoices, 50,000 of taxable
+  // value, one blank summary row). The panel now has the field.
+  //
+  // ⚠️ THIS BUILDER IS ALSO THE OCR-DRAFT ACCEPT PATH (Bill Inbox) AND THE ALTER
+  // PATH. A hard refusal here would make a scanned bill whose HSN did not survive
+  // OCR unacceptable at all — trading a filing defect for an entry defect, on a
+  // document the operator can still fix afterwards. So the refusal lives where
+  // the artefact is actually produced: the GSTR-1 builder REFUSES to emit a blank
+  // mandatory code and names the vouchers responsible, which is this repo's
+  // standing rule that a report must not quietly present something unfilable.
+  //
+  // ⚠️ THE ITEM PATH IS IMMUNE, and that is why this hid for so long — an item
+  // invoice takes HSN off the stock master, and the demo seed supplies HSN
+  // explicitly, so `verify:demo` was green throughout.
+
   const taxPostings: PostingRequest[] = [];
   if (split.intra) {
     taxPostings.push({ ledger_id: outputTax.cgstId, dr_cr: o.taxSide, amount: split.cgst });

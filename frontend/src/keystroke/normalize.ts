@@ -81,12 +81,54 @@ export function normalizeCombo(combo: string): KeyCombo {
 }
 
 /**
+ * The base key of an event, preferring the PHYSICAL key when Alt is held.
+ *
+ * ===========================================================================
+ * ⛔ WHY THIS EXISTS: EVERY Alt+<letter> IN THE PRODUCT WAS DEAD ON macOS
+ * ===========================================================================
+ * On a Mac, Option is a COMPOSE modifier. Option+L does not report `key: "l"`;
+ * the OS composes a character and reports `key: "¬"`. Option+G reports "©",
+ * Option+C "ç", Option+E "´", Option+D "∂", Option+Z "Ω", Option+I "ˆ".
+ * Reading `key` alone, every one of those assembled a combo — "Alt+¬", "Alt+©"
+ * — that appears in no keymap, so the key did nothing at all.
+ *
+ * Verified in a browser on 2026-08-07: Alt+G (Go To), Alt+C (Create Master),
+ * Alt+E (Export), Alt+D (Delete), Alt+Z (e-Way Bill), Alt+I (e-Invoice) and
+ * Alt+L (Edit Log) ALL failed to fire, on a build whose button bar and hint
+ * strip advertised every one of them.
+ *
+ * ⚠️ AND NO TEST COULD HAVE CAUGHT IT. Playwright's `keyboard.press('Alt+l')`
+ * synthesises `key: "l"` — the value a Mac never produces — so the entire
+ * browser-evidence regime passed on keys a human on this platform cannot press.
+ * That is why the fallback is keyed on `code` and not on a character blacklist:
+ * the composed set is layout-specific (a German or French layout composes a
+ * different one), and `code` is the only layout-independent identity there is.
+ *
+ * SCOPED TO Alt DELIBERATELY. Without a modifier, `key` is exactly right and
+ * must win: an operator typing "ç" into a narration is typing a character, not
+ * pressing a shortcut. Ctrl does not compose, so it needs no help. F-keys and
+ * named keys are untouched — their `code` is neither a `Key` nor a `Digit` form
+ * — so Alt+F5, Alt+F7 and the rest resolve exactly as before.
+ */
+function baseKeyOf(ev: KeyEventLike): string {
+  if (ev.altKey && ev.code) {
+    const letter = /^Key([A-Z])$/.exec(ev.code);
+    if (letter) return letter[1]!;
+    // Alt+2 duplicates a voucher, and Option+2 composes "™" on a Mac just as
+    // readily as Option+L composes "¬".
+    const digit = /^Digit([0-9])$/.exec(ev.code);
+    if (digit) return digit[1]!;
+  }
+  return canonicalKeyName(ev.key);
+}
+
+/**
  * Normalize a DOM-like keyboard event into the canonical `KeyCombo`. Shift is
  * only treated as a modifier for non-printable / function keys, because for
  * printable characters the shifted symbol is already in `event.key`.
  */
 export function comboFromEvent(ev: KeyEventLike): KeyCombo {
-  const base = canonicalKeyName(ev.key);
+  const base = baseKeyOf(ev);
   const ctrl = Boolean(ev.ctrlKey || ev.metaKey);
   const alt = Boolean(ev.altKey);
   const isFnOrNamed = /^F\d{1,2}$/.test(base) || base.length > 1;

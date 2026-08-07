@@ -1857,6 +1857,57 @@ a customer tries it.
 
 ### 5.5 ⛔ THE AUDIT NOBODY HAS RUN: WHICH `on` ROWS ARE LYING?
 
+> ## ⛔⛔ 2026-08-07: THE AUDIT HAS NOW BEEN PARTLY RUN. 6 ROWS DRIVEN, 4 WERE LYING.
+> ## The worksheet is `HANDOFF-PARITY-AUDIT.md` §7 (its log has the per-row detail). **All four are FIXED.**
+>
+> | What was driven | What the oracle said |
+> |---|---|
+> | `Alt+F7` Stock Journal, **Rate left blank** | ⛔ closing stock **72837.1541 → 63947.1541** — **8,890 destroyed**, quantity UNCHANGED, Balance Sheet moved and still said `balanced: true`. LEAD 2 confirmed exactly |
+> | `Alt+F10` Physical Stock, **Godown untouched** | ⛔ the count posted a **surplus of 13 on the NULL position**; Main Location kept its 195; item total **195 → 208**. A stock-take INVENTED stock. LEAD 3 confirmed exactly |
+> | `Alt+L` Edit Log chrome | ⛔ title read **"Tally"**, strip advertised **"Enter: Open"** on a screen with nothing to open, no surface named `Alt+L`. LEAD 4 confirmed, all four claims |
+> | **Every `Alt`+letter, sent as macOS really sends it** | ⛔⛔ **ALL DEAD.** See the box below — this is the session's biggest find |
+>
+> ### ⛔⛔ THE ONE THAT MATTERS MOST: EVERY `Alt`+LETTER WAS DEAD ON macOS
+>
+> `Alt+G` Go To, `Alt+C` Create Master, `Alt+E` Export, `Alt+D` Delete, `Alt+Z` e-Way Bill,
+> `Alt+I` e-Invoice, `Alt+L` Edit Log, `Alt+X`, `Alt+O` — **none of them fired on a Mac.** Option is a
+> COMPOSE modifier: Option+L reports `key: "¬"`, Option+G `"©"`, Option+C `"ç"`. `comboFromEvent` read
+> `ev.key` alone and **both call sites dropped `ev.code`**, so every one assembled a combo
+> (`"Alt+¬"`) that appears in no keymap.
+>
+> ⚠️ **AND THIS IS WHY NO AMOUNT OF DRIVING WOULD HAVE FOUND IT.** Playwright's
+> `keyboard.press('Alt+l')` synthesises `key: "l"` — **a value macOS never sends.** Every browser test
+> this repo has ever run passed on keys no operator on this platform could press. There was also **no
+> unit test for `comboFromEvent` at all**. Fixed in `normalize.ts` (prefer `ev.code` when Alt is held,
+> scoped to Alt so typing "ç" into a narration is still typing) + both call sites, and
+> `src/keystroke/normalize.test.ts` is new and pins the composed character for all nine bound letters.
+>
+> ⛔ **THE METHOD LESSON, AND IT OUTRANKS THE BUG:** §2's "drive it in a browser" is necessary and was
+> **not sufficient** — the driver itself was flattering the product. **Any row driven with an `Alt`
+> key must also be checked with a composed `key`.** The `.playwright-mcp` snapshots of a passing
+> `Alt+…` press are not evidence a human can press it.
+>
+> ### ⛔ THE SESSION CONTINUED. FINAL TALLY: **12 of 34 rows driven, 8 were lying, all 8 FIXED.**
+>
+> | Row | What driving found | State |
+> |---|---|---|
+> | **1** (six classes) | ⛔ **THE DATE AND NARRATION COULD NOT BE KEYED ON ANY CLASS** — `editable={draftRebuildable}`, false outside OCR draft. Every browser voucher was dated today with an empty narration | ✅ FIXED. **This also unblocked rows 7 and 37**, which need a back-dated voucher and were unmeasurable |
+> | **4** (Debit Note) | First ever drive. `Dr supplier / Cr Purchases / Cr INPUT tax` | ✅ clean |
+> | **7** | Now measurable: `Sales\|2025\|2` beside `Sales\|2026\|7` — the series really restarts | ✅ clean |
+> | **14** | ⛔ LEAD 5 confirmed: GSTR-1 table 12 emitted `"hsn_sc": ""` on 50,000 of taxable value — a return the portal rejects. The accounting panel had **no HSN input at all** | ✅ FIXED: field added; GSTR-1 now **discloses** what it cannot file, naming the value |
+> | **21** | ⛔⛔ **SILENT DATA LOSS.** Re-accepting a saved item invoice dropped its movement — v1 `1 movement` → v2 `0`. Stock 190→**195**, the sold units came BACK, customer still billed | ✅ FIXED (`effectiveEntryMode` now reads the STORED voucher) |
+> | **22** | ⛔ the godown-default bug had an **unfixed twin** in the item grid: an item sale was refused outright — *an operator could not sell stock they own* | ✅ FIXED (helper moved to a shared module) |
+> | **26** | `Alt+F7` blank Rate destroyed 8,890 of value; `Alt+F10` count invented 13 units | ✅ FIXED |
+> | **2** | Edit Log chrome: title "Tally", bogus "Enter: Open", `Alt+L` unadvertised | ✅ FIXED |
+>
+> **Rows 6, 15, 23, 36 also driven clean.** Every fix carries an EXECUTED mutation proof.
+>
+> ⛔ **22 ROWS REMAIN UNDRIVEN: 3, 5, 8, 9, 11, 16, 17, 20, 24, 27, 29, 30, 31, 32, 33, 34, 35, 37,
+> 38, 40, 42, 43.** They are **not unanalysed** — `PARITY-RECON-2026-08-07.md` (new) holds an
+> 18-agent read-only trace of all of them: exact keystrokes, the oracle, and falsifiable predictions
+> at file:line. Its measured hit rate is 3 confirmed / 1 killed out of 4 driven. ⚠️ **It is reading,
+> not evidence.** LEAD 1 (`EWayBillScreen` step-up wipe) is still the top unfixed item in it.
+
 **30** rows say `on` (re-measured 2026-08-06 with §1's `python3` method; this line said 29, which was
 stale — §1's own count has said 30 since T5 closed). **TWO have now been caught with a hole behind
 them**: the Journal (§4.5, found by accident) and the Day Book drill (§4.8, found by driving Track A's

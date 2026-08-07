@@ -35,6 +35,9 @@ export function useNavMachine(options: NavMachineOptions = {}): {
     (ev: React.KeyboardEvent | KeyboardEvent) => {
       const combo = comboFromEvent({
         key: ev.key,
+        // See the identical line in AppShell, and KeyEventLike.code: without it
+        // Option+<letter> on macOS resolves to a combo no keymap contains.
+        code: ev.code,
         ctrlKey: ev.ctrlKey,
         altKey: ev.altKey,
         shiftKey: ev.shiftKey,

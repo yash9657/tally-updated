@@ -331,6 +331,31 @@ export function entryModesFor(type: VoucherType): EntryModeOption[] {
 export function effectiveEntryMode(
   type: VoucherType,
   chosen: EntryMode | undefined,
+  /**
+   * Whether the voucher being ALTERED already carries stock lines.
+   *
+   * ⛔ THIS PARAMETER EXISTS BECAUSE OMITTING IT DESTROYED STOCK, SILENTLY.
+   *
+   * A Day Book drill builds its alter frame with NO entryMode, so a GST class
+   * fell to "accounting-invoice" below no matter what the stored voucher
+   * actually was. The item grid was then never rendered, the accept routed to
+   * the accounting builder, and the PUT went up with no `inventory` at all — and
+   * an ALTER RESTATES a voucher, so "no inventory" means "this voucher moves no
+   * goods". The movement was dropped.
+   *
+   * Measured in a browser 2026-08-07 on an item invoice for 5 units:
+   *   v1: 1 movement, 4 postings   ->   v2 (current): 0 movements, 4 postings
+   * Closing stock went 190 -> 195 — the sold units came BACK — while the
+   * customer stayed billed 590 and the sale stayed credited. The invoice says
+   * the goods left; the warehouse says they never did; closing stock feeds the
+   * BALANCE SHEET; and the only thing the operator did was press Ctrl+A on a
+   * voucher they opened to fix a narration.
+   *
+   * ⚠️ IT IS DECIDED FROM THE STORED VOUCHER, NOT FROM A REMEMBERED CHOICE,
+   * because the frame that loses the mode is exactly the frame that has one
+   * (a drill). What a voucher IS cannot depend on how it was opened.
+   */
+  hasStoredStock?: boolean,
 ): EntryMode {
   const cfg = configFor(type);
   // A stock class is ALWAYS "stock", whatever a stale or hand-constructed frame
@@ -341,6 +366,8 @@ export function effectiveEntryMode(
   // both of which this class refuses.
   if (isStockVoucherType(type)) return "stock";
   if (cfg.showGst) {
+    // A voucher that HOLDS stock is an item invoice, whatever the frame forgot.
+    if (hasStoredStock && cfg.itemInvoice) return "item-invoice";
     if (chosen === "item-invoice" && cfg.itemInvoice) return "item-invoice";
     return "accounting-invoice";
   }

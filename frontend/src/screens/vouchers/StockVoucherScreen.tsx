@@ -16,6 +16,7 @@ import { configFor } from "./voucherConfig";
 import { FulfilmentPicker } from "./FulfilmentPicker";
 import { fulfilsDirection } from "./fulfilment";
 import {
+  defaultGodownOf,
   buildStockVoucherRequest,
   emptyStockLine,
   isKeyedStockLine,
@@ -89,6 +90,28 @@ export function StockVoucherScreen({ snapshot }: { snapshot: NavSnapshot }) {
         if (!live) return;
         setStockItems(items.stock_items);
         setGodowns(gd.godowns);
+        // ⛔ THE DEFAULT POSITION IS WHERE THE STOCK IS, NOT "— not tracked —".
+        //
+        // The grid's rows are built by emptyStockLine() before this request comes
+        // back, so godownId starts "" — which posts as SQL NULL, a position that
+        // is REAL but, in a company with godowns, holds nothing. Measured in a
+        // browser on 2026-08-07 on the Physical Stock screen, where it is worst:
+        // counting 13 units without touching this select differenced 13 against a
+        // book of ZERO on the NULL position and posted a SURPLUS INWARD of 13.
+        // Main Location kept its 195 untouched and the item total went to 208 —
+        // a stock-take, the control that is supposed to make the books match the
+        // shelf, INVENTING stock instead.
+        //
+        // ⚠️ AND THE SYMPTOM READS LIKE SUCCESS: the operator counted 13 and the
+        // screen then shows 13 at that position. Nothing looks wrong.
+        //
+        // So a pristine row adopts the company's real position: the seeded system
+        // godown if there is one, else the only godown if there is exactly one.
+        // With two or more user godowns and no system one there is nothing to
+        // guess, and "" stands — the operator must choose, which is the honest
+        // answer. "— not tracked —" REMAINS SELECTABLE for the company that
+        // genuinely holds stock outside any location; it is no longer the default.
+        applyDefaultGodown(setLines, defaultGodownOf(gd.godowns));
         setMastersError(null);
       })
       .catch((e: unknown) => {
@@ -446,7 +469,14 @@ export function StockVoucherScreen({ snapshot }: { snapshot: NavSnapshot }) {
           type="button"
           data-testid="stock-add-line"
           className="mt-1 px-2 py-0.5 text-xs underline"
-          onClick={() => setLines((rows) => [...rows, emptyStockLine()])}
+          onClick={() =>
+            // The SECOND row needs the default as much as the first: by the time
+            // it is added the godowns have loaded, so it is applied directly.
+            setLines((rows) => [
+              ...rows,
+              { ...emptyStockLine(), godownId: defaultGodownOf(godowns) },
+            ])
+          }
         >
           + Add line
         </button>
@@ -460,6 +490,29 @@ export function StockVoucherScreen({ snapshot }: { snapshot: NavSnapshot }) {
         </p>
       </div>
     </section>
+  );
+}
+
+/**
+ * Move PRISTINE rows onto the default position, leaving keyed ones alone.
+ *
+ * A row counts as pristine only if the operator has touched none of it. That
+ * matters in both directions: rows seeded by an ALTER carry the godown the
+ * movement was actually stored at and must never be rewritten, and an operator
+ * who deliberately chose "— not tracked —" has, by then, keyed an item or a
+ * quantity as well — so this can no longer reach the row.
+ */
+function applyDefaultGodown(
+  setLines: (updater: (rows: StockVoucherLine[]) => StockVoucherLine[]) => void,
+  defaultID: string,
+): void {
+  if (defaultID === "") return;
+  setLines((rows) =>
+    rows.map((r) =>
+      r.stockItemId === "" && r.qty === "" && r.rate === "" && r.godownId === ""
+        ? { ...r, godownId: defaultID }
+        : r,
+    ),
   );
 }
 

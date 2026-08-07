@@ -312,6 +312,77 @@ func TestStockJournalMovesBetweenGodownsWithoutChangingTheTotal(t *testing.T) {
 	}
 }
 
+// TestStockJournalRefusesAZeroRateInward covers what the test ABOVE cannot see.
+//
+// ⛔ THE TEST ABOVE SUMS QUANTITY, AND QUANTITY IS EXACTLY WHAT THIS DEFECT
+// LEAVES ALONE. It passed throughout the entire life of the bug. A transfer keyed
+// with the Rate column blank ships `rate: "0.0000"` — a STATED zero, which the
+// RateUnstated backstop cannot see, because that flag means "the line said
+// nothing about price" and this line said something. The inward leg then carries
+// the goods at no cost and writes the position's weighted average DOWN, so
+// company-wide closing stock VALUE falls by the full average cost of the goods
+// moved while every quantity in the system stays put. Closing stock feeds the
+// BALANCE SHEET. Measured in a browser on 2026-08-07: 8,890 off the sheet.
+//
+// This is the same rule buildPhysicalStockDeltas already applies to a counted
+// surplus, and for the identical reason; the two paths are now symmetric.
+func TestStockJournalRefusesAZeroRateInward(t *testing.T) {
+	e := setupStock(t)
+	branch := e.newGodown(t, "Branch Store")
+	e.receive(t, e.godown, "20.0000", "100.0000")
+	before := e.voucherCount(t)
+
+	_, err := e.led.PostVoucher(e.ctx, e.stockVoucher(StockJournal,
+		e.lineAt(e.godown, Outward, "6.0000", "0.0000"),
+		e.lineAt(branch, Inward, "6.0000", "0.0000"),
+	))
+	if err == nil {
+		t.Fatal("a transfer brought 6 units in at a rate of zero: the item's weighted average is now " +
+			"written down and closing stock value has fallen, with the quantity unchanged so that " +
+			"nothing counting units can see it")
+	}
+	if !strings.Contains(err.Error(), "rate") {
+		t.Fatalf("the refusal must tell the operator to state the rate, got %v", err)
+	}
+	if after := e.voucherCount(t); after != before {
+		t.Fatalf("the refused transfer committed anyway: %d -> %d heads", before, after)
+	}
+
+	// ⛔ TWO CONTROLS (§9.3), because there are two ways to make this check wrong:
+	// refuse every transfer, or refuse every zero.
+	//
+	// 1. The same document PRICED must still post.
+	if _, err := e.led.PostVoucher(e.ctx, e.stockVoucher(StockJournal,
+		e.lineAt(e.godown, Outward, "6.0000", "100.0000"),
+		e.lineAt(branch, Inward, "6.0000", "100.0000"),
+	)); err != nil {
+		t.Fatalf("a transfer priced at cost must still post: %v", err)
+	}
+
+	// 2. A zero on an OUTWARD is legitimate and must NOT be refused: an outward is
+	// consumed at the position's running weighted average and its own rate is
+	// IGNORED by the valuer, so no figure anybody reads depends on it.
+	if _, err := e.led.PostVoucher(e.ctx, e.stockVoucher(DeliveryNote,
+		e.lineAt(e.godown, Outward, "2.0000", "0.0000"),
+	)); err != nil {
+		t.Fatalf("a Delivery Note with no rate must still ship (the valuer ignores an outward's rate): %v", err)
+	}
+
+	// 3. ⛔ AND THE CONTROL THAT NEARLY DID NOT EXIST: A FREE SAMPLE STILL POSTS.
+	//
+	// The first draft of this rule refused a zero-rate inward on EVERY stock-only
+	// class, and the server's read-back audit caught it — a Receipt Note at
+	// 0.0000 is a free sample, a stated price rather than a missing one, and
+	// carrying it at nothing is CORRECT (quantity rises, value does not). The
+	// refusal belongs to the TRANSFER alone, because only there did the outward
+	// leg already remove value that the inward has to carry back.
+	if _, err := e.led.PostVoucher(e.ctx, e.stockVoucher(ReceiptNote,
+		e.lineAt(e.godown, Inward, "4.0000", "0.0000"),
+	)); err != nil {
+		t.Fatalf("a free sample really does arrive at 0.0000 and must still post: %v", err)
+	}
+}
+
 // TestDeliveryNoteRespectsNegativeStock. A stock-only voucher is not exempt
 // from the inventory rules just because it is exempt from the accounting ones —
 // a Delivery Note cannot ship goods that are not there.

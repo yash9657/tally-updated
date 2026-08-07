@@ -19,6 +19,7 @@ package server_test
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -200,6 +201,105 @@ func TestStockSummaryValuesTheIssueAtCostNotAtTheSalePrice(t *testing.T) {
 	// different question than the one on screen.
 	if rec, _ := do(t, srv, http.MethodGet, f.base+"/stock-summary?as_on=30-04-2025", nil); rec.Code != http.StatusBadRequest {
 		t.Errorf("GET /stock-summary?as_on=30-04-2025 = %d, want 400", rec.Code)
+	}
+}
+
+// TestStockJournalWithABlankRateDoesNotWriteStockValueOff is the regression for
+// a defect measured IN A BROWSER on 2026-08-07, and its oracle is the whole
+// point of it.
+//
+// ⛔ THE ORACLE IS closing VALUE, NOT closing QUANTITY. There was already a test
+// asserting that a Stock Journal leaves the item total unchanged
+// (ledger.TestStockJournalMovesBetweenGodownsWithoutChangingTheTotal) and it
+// passed throughout: it summed QUANTITY, and quantity is exactly what this
+// defect leaves alone. An operator who tabbed past the Rate column shipped
+// `rate: "0.0000"` — a STATED zero, so the server's RateUnstated backstop could
+// not see it — and the inward leg landed at no cost, writing the position's
+// weighted average down. Company-wide closing stock value fell by the full
+// average cost of the goods moved, on a screen captioned "no value moves and
+// nothing is posted", and closing stock feeds the BALANCE SHEET.
+//
+// Measured before the fix: transferring 10 units carried at 889 took 8,890 off
+// the sheet while the quantity stayed at 75.
+func TestStockJournalWithABlankRateDoesNotWriteStockValueOff(t *testing.T) {
+	srv := newServer(t)
+	f := newStockFixture(t, srv)
+
+	// 10 @ 100 and 10 @ 120: a weighted average of 110, so a transfer priced at
+	// zero would be visibly different from one priced at cost.
+	f.purchase(t, srv, "PUR-1", "2025-04-01", "10", "100", "1000")
+	f.purchase(t, srv, "PUR-2", "2025-04-05", "10", "120", "1200")
+
+	rec, body := do(t, srv, http.MethodPost, f.base+"/godowns", map[string]any{
+		"name": "Branch Store", "created_by": "inv",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create godown = %d, want 201 (%s)", rec.Code, rec.Body.String())
+	}
+	branchID, _ := body["godown_id"].(string)
+	if branchID == "" {
+		t.Fatalf("POST /godowns returned no id: %v", body)
+	}
+
+	totalValue := func(t *testing.T) string {
+		t.Helper()
+		rec, body := do(t, srv, http.MethodGet, f.base+"/stock-summary?as_on=2025-04-30", nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET /stock-summary = %d, want 200 (%s)", rec.Code, rec.Body.String())
+		}
+		v, _ := body["total_value"].(string)
+		return v
+	}
+
+	const wantValue = "2200.0000" // 20 units at the 110 weighted average
+	if got := totalValue(t); got != wantValue {
+		t.Fatalf("opening total_value = %s, want %s", got, wantValue)
+	}
+
+	transfer := func(rate string) (int, string) {
+		rec, _ := do(t, srv, http.MethodPost, f.base+"/vouchers/stock-journal", map[string]any{
+			"voucher_date": "2025-04-20", "created_by": "inv",
+			"inventory": []map[string]any{
+				{"stock_item_id": f.itemID, "godown_id": f.godownID, "batch_id": "",
+					"direction": "OUT", "qty": "10", "rate": rate, "amount": "0"},
+				{"stock_item_id": f.itemID, "godown_id": branchID, "batch_id": "",
+					"direction": "IN", "qty": "10", "rate": rate, "amount": "0"},
+			},
+		})
+		return rec.Code, rec.Body.String()
+	}
+
+	// THE DEFECT. A stated zero on the INWARD leg must be refused, not accepted.
+	code, respBody := transfer("0.0000")
+	if code == http.StatusCreated {
+		t.Fatalf("a Stock Journal bringing 10 units IN at a rate of zero was ACCEPTED (201): "+
+			"closing stock value is now %s against an opening %s, and the quantity is unchanged, "+
+			"so nothing that counts units can see it — this is a Balance Sheet that moved with no "+
+			"document saying so", totalValue(t), wantValue)
+	}
+	if code != http.StatusUnprocessableEntity {
+		t.Fatalf("zero-rate inward = %d, want 422 (%s)", code, respBody)
+	}
+	if !strings.Contains(respBody, "rate") {
+		t.Errorf("the refusal must tell the operator to state the rate, got %s", respBody)
+	}
+
+	// AND THE REFUSAL MUST NOT HAVE COST ANYTHING. A refused voucher that had
+	// already written its movements would be the same defect with an error page.
+	if got := totalValue(t); got != wantValue {
+		t.Fatalf("total_value = %s after the REFUSED transfer, want %s unchanged", got, wantValue)
+	}
+
+	// ⛔ THE CONTROL (§9.3): the same document priced at cost must still post, and
+	// must still leave the company's total value alone. Without this the test
+	// would pass just as happily against a server that refused every transfer.
+	if code, respBody := transfer("110.0000"); code != http.StatusCreated {
+		t.Fatalf("a Stock Journal priced at the weighted-average cost = %d, want 201 (%s) — "+
+			"the fix must refuse a zero rate, not transfers", code, respBody)
+	}
+	if got := totalValue(t); got != wantValue {
+		t.Errorf("total_value = %s after a PRICED transfer between our own godowns, want %s: "+
+			"moving goods between our own shelves neither creates nor destroys value", got, wantValue)
 	}
 }
 

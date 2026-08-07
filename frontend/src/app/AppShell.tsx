@@ -69,6 +69,16 @@ const COMPANY_SCOPED_SCREENS = new Set<NavSnapshot["screen"]>([
   // `e-invoice` token is denied to a level whose default_access is 'none', so
   // Data Entry cannot raise or see one until an administrator grants it).
   "e-invoice",
+  // The EDIT LOG reads ONE company's voucher versions, so it needs a scope for
+  // the same reason as every screen above: omit it and useCompanyID() THROWS
+  // before the screen can render anything, including its own empty state.
+  //
+  // ⚠️ THIS WAS LATENT, NOT BROKEN: the log is reached by Alt+L FROM a voucher,
+  // which is already company-scoped, so the missing entry could not bite while
+  // that was the only route in. It would have bitten the moment the screen got a
+  // second entry point — a Go To row, or a deep link — which is exactly the kind
+  // of change nobody expects to break an unrelated screen.
+  "edit-log",
 ]);
 
 /**
@@ -231,6 +241,10 @@ function AppShellInner({
       const snap = snapshotRef.current;
       const combo = comboFromEvent({
         key: ev.key,
+        // ⛔ `code` IS NOT OPTIONAL IN PRACTICE — dropping it here is what made
+        // every Alt+<letter> dead on macOS, because Option composes the
+        // character and `key` becomes "¬"/"©"/"ç". See KeyEventLike.code.
+        code: ev.code,
         ctrlKey: ev.ctrlKey,
         altKey: ev.altKey,
         shiftKey: ev.shiftKey,
@@ -475,6 +489,14 @@ function screenTitle(snap: NavSnapshot): string {
     // screen produces a government reference number, which this build cannot.
     case "e-invoice":
       return "e-Invoice";
+    // ⛔ WITHOUT THIS CASE THE CHROME READS "Tally" — the `default` below — over a
+    // screen showing a voucher's hash-chained version history. The screen itself
+    // is real and honest (it renders voucher_version with tri-state chain
+    // verification); it was the frame around it that said nothing. A title bar is
+    // read as the name of what you are looking at, and an audit trail that will
+    // not name itself is the one screen where that matters most.
+    case "edit-log":
+      return "Edit Log";
     default:
       return "Tally";
   }
@@ -490,6 +512,12 @@ function hintsFor(snap: NavSnapshot): string[] {
         "Tab / Shift+Tab: Field",
         "Alt+C: Create Master",
         "Ctrl+H: Change Mode",
+        // ⛔ Alt+L IS NAMED HERE BECAUSE THIS IS THE ONLY SCREEN IT EXISTS ON.
+        // It opens the voucher's edit log (navMachine's `editLog`), and until
+        // 2026-08-07 nothing on any surface mentioned it — not this strip, not
+        // the button bar. An audit trail nobody can open is an audit trail the
+        // product does not have, whatever the parity ledger says.
+        "Alt+L: Edit Log",
         "Ctrl+A: Accept",
         "Ctrl+Q: Quit",
         ...common,
@@ -563,6 +591,12 @@ function hintsFor(snap: NavSnapshot): string[] {
     case "help":
       return ["Esc: Back"];
     case "features":
+      return ["Esc: Back", "F1: Help"];
+    // ⛔ WITHOUT THIS CASE THE STRIP FALLS TO `default` AND ADVERTISES
+    // "Enter: Open" ON A SCREEN WITH NOTHING TO OPEN. The edit log is a read-only
+    // list of versions; there is no drill-down behind a row, so the one hint an
+    // operator was given here was the one thing that does not work.
+    case "edit-log":
       return ["Esc: Back", "F1: Help"];
     default:
       return ["Enter: Open", ...common];

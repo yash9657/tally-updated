@@ -325,3 +325,49 @@ describe("doubleEntryLinesFromView — the hydration an ALTER depends on", () =>
     expect(doubleEntryLinesFromView([], () => [], () => [])).toHaveLength(1);
   });
 });
+
+describe("⛔ an ALTER keeps the entry mode the STORED voucher actually has", () => {
+  /**
+   * THE REGRESSION FOR A SILENT STOCK-DESTROYING ALTER, measured in a browser on
+   * 2026-08-07.
+   *
+   * A Day Book drill builds its alter frame with NO entryMode. Every GST class
+   * therefore fell through to "accounting-invoice", the item grid was never
+   * rendered, and Ctrl+A routed to the accounting builder — which sends no
+   * `inventory`. An ALTER RESTATES a voucher, so "no inventory" means "this
+   * voucher moves no goods", and the movement was DROPPED:
+   *
+   *   v1: 1 movement, 4 postings  ->  v2 (current): 0 movements, 4 postings
+   *
+   * Closing stock went 190 -> 195 — the sold units came BACK — while the customer
+   * stayed billed and the sale stayed credited. The invoice said the goods left;
+   * the warehouse said they never did; and closing stock feeds the Balance Sheet.
+   * The operator had only re-accepted a voucher opened to fix a narration.
+   */
+  it("a drilled item invoice alters as an ITEM INVOICE even though the frame forgot", () => {
+    // `undefined` is exactly what a Day Book drill supplies.
+    expect(effectiveEntryMode("sales", undefined, true)).toBe("item-invoice");
+    expect(effectiveEntryMode("purchase", undefined, true)).toBe("item-invoice");
+  });
+
+  it("⛔ CONTROL: a voucher with NO stock still alters as an accounting invoice", () => {
+    // Without this the rule could be "always item-invoice", which would render a
+    // stock grid over a pure accounting-mode GST voucher and invite an operator
+    // to add goods to a document that never had any.
+    expect(effectiveEntryMode("sales", undefined, false)).toBe("accounting-invoice");
+    expect(effectiveEntryMode("sales", undefined)).toBe("accounting-invoice");
+  });
+
+  it("the stored contents WIN over a stale remembered choice", () => {
+    // The frame that loses the mode is precisely the frame that has one, so what
+    // a voucher IS must not depend on how it was opened.
+    expect(effectiveEntryMode("sales", "accounting-invoice", true)).toBe("item-invoice");
+  });
+
+  it("a class that has no item grid is unaffected by the flag", () => {
+    // journal/payment/receipt/contra carry no cfg.itemInvoice, so a stray true
+    // must not conjure a grid they cannot post.
+    expect(effectiveEntryMode("journal", undefined, true)).toBe("double");
+    expect(effectiveEntryMode("payment", undefined, true)).toBe("single");
+  });
+});

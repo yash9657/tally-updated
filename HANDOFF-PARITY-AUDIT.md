@@ -151,7 +151,7 @@ the time on the `—` rows first.
 | # | Row | Keystrokes | ⛔ ORACLE — what to read back | Status |
 |---|---|---|---|---|
 | 1 | Double-entry vouchers (6 classes) | `F4` `F5` `F6` `F7` `F8` `F9`, each → key → `Ctrl+A` | `posting`: sides + ledger NAMES, **per class**. Six documents, not one | PREV (F5/F6/F4 + F7) |
-| 2 | Edit Log / audit trail `always` | Day Book → `Enter` → `Alt+L` | the version list shows v1 **and** v2 with who/when + a before/after diff | — |
+| 2 | Edit Log / audit trail `always` | Day Book → `Enter` → `Alt+L` | the version list shows v1 **and** v2 with who/when + a before/after diff | ⛔→✅ 2026-08-07 (screen real; **all four chrome holes fixed**; `Alt+L` was dead on macOS) |
 | 3 | Bill-wise details (4 ref types) | `F8` sale to a bill-by-bill party → `F6` receipt → settle | Outstandings **reconciles to the Balance Sheet to the paisa**. Drive **all four** ref types | PREV (New + Agst) |
 | 4 | Credit / Debit Notes | `Alt+F6` / `Alt+F5` → key → `Ctrl+A` | `posting` sides. **CN verified 2026-08-07; ⛔ DEBIT NOTE STILL NEVER DRIVEN** | ~ |
 | 5 | Opening balances (with bill-wise breakup) | `Alt+C` create ledger with opening + bills | the opening bill appears in Outstandings and the Balance Sheet opens balanced | — |
@@ -217,6 +217,25 @@ the time on the `—` rows first.
 Read-only recon (2026-08-06) traced these to specific lines. **None is verified.** Each is a
 concrete, falsifiable prediction — confirm or kill it, and log which.
 
+> ## ⛔ STATUS AFTER THE 2026-08-07 PASS — READ THIS BEFORE RE-DERIVING ANY LEAD BELOW
+>
+> | Lead | Verdict | State |
+> |---|---|---|
+> | 1 — step-up wipes the screen | **NOT YET DRIVEN** | ⛔ still the top unverified item; `EWayBillScreen.tsx` still has the unconditional reset |
+> | 2 — Stock Journal destroys stock VALUE on a blank Rate | ⛔ **CONFIRMED, exactly as predicted** | ✅ **FIXED** both sides + mutation-proved. 8,890 off the Balance Sheet, quantity untouched |
+> | 3 — Physical Stock counts against the WRONG position | ⛔ **CONFIRMED, exactly as predicted** | ✅ **FIXED** (default godown) + mutation-proved. A stock-take invented 13 units |
+> | 4 — the Edit Log's three chrome holes | ⛔ **CONFIRMED, all four claims** | ✅ **FIXED.** ⛔ **And its `Alt+L` footnote was the biggest find of the session — see below** |
+> | 5 — blank HSN → empty GSTR-1 `hsn_sc` row | **NOT YET DRIVEN** | ⛔ still open |
+> | 6 — `Alt+F5`/`Alt+F6` advertised nowhere | ⛔ **CONFIRMED by reading and in the browser** | ✅ **FIXED**, plus the guard that should have caught it (`buttons.test.ts` could only ever check the *converse*) |
+>
+> ### ⛔⛔ AND LEAD 4's THROWAWAY WARNING WAS THE REAL DEFECT
+> *"Check `Alt+L` with a real keypress — macOS Option+L emits `¬`. Playwright will pass where a human
+> fails."* It does, and it was not one key: **`Alt+G`, `Alt+C`, `Alt+E`, `Alt+D`, `Alt+Z`, `Alt+I`,
+> `Alt+L`, `Alt+X` and `Alt+O` were ALL dead on macOS** — Go To, Create Master, Export, Delete,
+> e-Way Bill, e-Invoice, Edit Log. `comboFromEvent` read `ev.key` alone and both call sites dropped
+> `ev.code`. Fixed in `normalize.ts` + both call sites, with `normalize.test.ts` (new — there was no
+> test for `comboFromEvent` at all) pinning the composed character for every bound letter.
+
 ### LEAD 1 — the step-up wipes the screen (⛔ CONFIRMED ON ONE SCREEN, UNFIXED ON ANOTHER)
 
 `App.tsx`'s `resolvedClient` memo depends on `session`; a WebAuthn step-up **replaces the session
@@ -263,6 +282,19 @@ either → it advertises *"Enter: Open"* on a screen with nothing to open; and t
 ⚠️ **And check `Alt+L` with a real keypress:** `comboFromEvent` keys off `ev.key`, and macOS
 Option+L natively emits `¬` → `Alt+¬`, missing the binding. **Playwright will pass where a human
 fails.** Same doubt applies to `Alt+F5`/`Alt+F6` and the F-keys (media keys).
+
+### ⚠️ LEAD 2's RESIDUE — WHAT THE FIX DELIBERATELY DID **NOT** CLOSE
+
+The refusal stops a *blank* Rate destroying value. It does **not** make a transfer value-neutral,
+which is what the screen's own caption promises ("no value moves"). An operator who types **any**
+wrong rate still moves value: transferring 10 units carried at 889 but keyed at 1000 *increases*
+company closing stock by 1,110, on a document that says the total holding is unchanged.
+
+**The real fix is for the server to derive a transfer's IN rate from the OUT leg's consumption cost**,
+so the promise is structural rather than a matter of the operator's arithmetic. That was **not** done
+here, deliberately and on this file's own rules: it changes the **movement primitive**, which §5
+requires be serialised with T9 FIFO/LIFO, and it **MOVES THE BALANCE SHEET**, so it needs a deliberate
+`verify:demo` re-pin. ⛔ **Do it as part of T9, not as a patch.**
 
 ### LEAD 5 — a blank HSN silently produces an empty GSTR-1 `hsn_sc` row
 
@@ -328,16 +360,57 @@ scratch.** Append; do not start a new table. Fold into `HANDOFF.md` §5.5 at the
 | 2026-08-06 | 15 | `Alt+I` → pick → `Ctrl+A` | `voucher_external_reference` + re-post + ALTER/DELETE | ✅ IRN minted from a browser; re-post same IRN; both 409 |
 | 2026-08-07 | 4 | `Alt+F6` Credit Note → `Ctrl+A` | `posting` sides + ledger names | ✅ after fix — `Cr party / Dr Sales / Dr Output tax` |
 | 2026-08-07 | 1 (F9) | `F9` Purchase, accounting mode | `posting` sides + ledger names | ✅ after fix — `Cr supplier / Dr Purchases / Dr INPUT tax` |
-| | | | | |
+| 2026-08-07 | 26 (`Alt+F7`) | Stock Journal, item + From godown + qty, **Rate left blank** → `Ctrl+A` | `stock-summary` **`closing_value`** + Balance Sheet Closing Stock | ⛔ **LIED — LEAD 2 CONFIRMED.** Saved 201. Closing stock **72837.1541 → 63947.1541**, a loss of **8890.0000** = 10 × the 889.0000 average. **Quantity unchanged** (75 = 10 + 65). Balance Sheet Closing Stock fell by the same and still reported `balanced: true`. ✅ **FIXED** (server refusal + client refusal); re-driven and refused at the keyboard |
+| 2026-08-07 | 26 (`Alt+F10`) | Physical Stock, item + count 13 + rate, **Godown untouched** → `Ctrl+A` | `stock-summary` per-**position** qty and value | ⛔ **LIED — LEAD 3 CONFIRMED.** The count landed on the NULL position as a **surplus INWARD of 13**; Main Location kept its 195 untouched; item total **195 → 208**, value +410.8104. A stock-take INVENTED stock. ✅ **FIXED** (the grid now defaults to the seeded system godown); re-driven — Main Location corrected 195 → 13 |
+| 2026-08-07 | 2 | Day Book → `Enter` → `Alt+L` | the screen, the chrome, and a **real macOS keydown** | ⛔ **LIED — LEAD 4 CONFIRMED, ALL FOUR PARTS.** The list itself is real, but the title read **"Tally"**, the strip advertised **"Enter: Open"** on a screen with nothing to open, no surface named `Alt+L`, and `edit-log` was absent from `COMPANY_SCOPED_SCREENS`. ✅ **ALL FIXED** — title now "Edit Log", strip now "Esc: Back / F1: Help", `Alt+L: Edit Log` on the voucher strip |
+| 2026-08-07 | — (all `Alt`+letter) | `Alt+G` `Alt+C` `Alt+E` `Alt+D` `Alt+Z` `Alt+I` `Alt+L`, sent as **macOS really sends them** | the screen — did the action fire at all | ⛔⛔ **THE BIGGEST FIND OF THE SESSION.** **Every one was DEAD on macOS.** Option composes (`Alt+L`→`¬`, `Alt+G`→`©`, `Alt+C`→`ç`), `comboFromEvent` read `ev.key` alone, and both call sites dropped `ev.code`. ⚠️ **Playwright sends `key:"l"`, which a Mac never sends — so every driven test passed on keys no operator here could press.** ✅ **FIXED** and re-driven: `©`→Go To, `ç`→Create ledger |
+| 2026-08-07 | 40/43-adjacent | direct `curl` POST with a valid dev token | HTTP status | ✅ step-up held: `403 STEPUP_REQUIRED` on a write from outside the browser (row 36 evidence) |
+| 2026-08-07 | **1** (all six) | `F4` `F5` `F6` `F7` `F8` `F9`, each keyed → `Ctrl+A` | `posting` sides + ledger NAMES, per class | ✅ Contra `Dr HDFC/Cr Cash`; Payment `Dr Rent/Cr HDFC`; Receipt `Dr HDFC/Cr Acme` (the row that once posted `DR <the customer>`); Journal `Dr Electricity/Cr Cash`; Sales & Purchase below. **Six documents, not one** |
+| 2026-08-07 | **4** (Debit Note) | `Alt+F5` → key → `Ctrl+A` | `posting` sides + ledger names | ✅ **FIRST EVER DRIVE.** `Dr Steel Suppliers 11800 / Cr Purchases 10000 / Cr Input CGST 900 / Cr Input SGST 900` — input credit correctly REVERSED. Row 4 now complete |
+| 2026-08-07 | **6** | `F4`/`F5`/`F6` single-entry (the default) | `posting`: one primary leg + N counter-legs | ✅ correct sides on all three; the grid also REFUSED a same-side Journal by name |
+| 2026-08-07 | **7** | back-dated `F8` into FY 2025-26 → `Ctrl+A` | `voucher_number_counter` per (class, FY) | ✅ **AND IT WAS UNMEASURABLE BEFORE TODAY** — see the Date defect below. `Sales\|2025\|2` beside `Sales\|2026\|7`: the series genuinely RESTARTS next FY |
+| 2026-08-07 | **14** | `F8` intra (KA→KA) **and** inter (KA→MH), `F9` | `posting` + GSTR-1 `b2b` + table-12 `hsn` | ✅ intra → CGST+SGST 1800/1800; inter → IGST 5400; purchase → **Input** tax. b2b carries both. ⛔ table 12 was blank — LEAD 5, fixed below |
+| 2026-08-07 | **21** | `F8` → `Ctrl+H` → Item Invoice → key → `Ctrl+A`, then **drill + re-accept** | `stock_movement` qty AND value + `posting` + version diff | ⛔⛔ **LIED, TWICE.** Create was refused outright (godown default); after fixing, the **ALTER SILENTLY DESTROYED THE MOVEMENT** — v1 `1 movement`, v2 `0 movements`, stock 190→**195**, the sold units came BACK while the customer stayed billed. ✅ **BOTH FIXED**, re-driven: v2 keeps its movement |
+| 2026-08-07 | **22** | `F8` item invoice with the Godown left at its default | server refusal / `stock_movement` position | ⛔ **LIED — the godown-default bug had an UNFIXED TWIN in the item grid.** `negative stock refused … (godown -, batch -): closing balance would be -5.0000` on a company holding 195 at Main Location — **an operator could not sell stock they own.** ✅ FIXED (helper moved to shared module, both grids use it) |
 
 ### The running count — update it, do not assume it
+
+Measured 2026-08-07, end of session. **This is still a PARTIAL audit — 12 of 34 rows are driven.**
 
 | | Rows |
 |---|---|
 | Claimed reachable (`on` + `always`) | **34** |
-| Driven end to end and **confirmed** | _fill in_ |
-| Driven and **found lying** | _fill in_ |
-| **TRUE reachable number** | _the answer this file exists to produce_ |
+| **Driven end to end and CONFIRMED** | **12** — rows 1, 2, 4, 6, 7, 14, 15, 21, 22, 23, 26, 36 |
+| **Driven and found LYING** | **8** — rows 2, 14, 21, 22, 26 (`Alt+F7`), 26 (`Alt+F10`), row 1's unkeyable Date/Narration, and **every `Alt`+letter on macOS** |
+| **Fixed and re-driven green** | **8 of 8.** Every defect found this session was fixed, mutation-proved and re-driven in the browser |
+| **Still undriven** | **22** — rows 3, 5, 8, 9, 11, 16, 17, 20, 24, 27, 29, 30, 31, 32, 33, 34, 35, 37, 38, 40, 42, 43 |
+| **TRUE reachable number** | ⛔ **STILL UNKNOWN.** 12 of 34 measured. The lie rate across everything ever driven here is now **8 in 12** — do not budget for driving, budget for FIXING |
+
+> ### ⛔ THE 22 UNDRIVEN ROWS ARE NOT UNANALYSED — SEE `PARITY-RECON-2026-08-07.md`
+> An 18-agent read-only pass traced all of them to file:line and produced exact keystrokes, the
+> oracle to read back, and falsifiable predictions. **Its hit rate is measured, not assumed:** four
+> of its predictions were driven the same day, three confirmed exactly and one killed. It is the
+> single biggest accelerator available to the next session — but ⛔ **it is READING, and this repo
+> flips a row on BROWSER evidence only.**
+>
+> The highest-severity undriven predictions, all `high` confidence:
+> - **Row 20** — `Alt+C` can NEVER open a stock-item or unit form; it always pushes "Create ledger". And a stock item cannot set a unit (hard-coded "Nos").
+> - **Row 17** — TDS allocation has no route to attach to an existing challan, so the row cannot be driven as stated at all.
+> - **Row 8** — neither cost report is reachable from `Alt+G`; both render empty when pushed from the Gateway.
+> - **Row 24** — `allow_negative_stock` has no HTTP route, handler or UI: only half the rule exists.
+> - **Row 22 (rest)** — a BATCH can never be keyed anywhere; `batchId` is hard-wired `""`.
+> - **Row 3** — two New refs on one invoice collapse into ONE bill; Outstandings honours `as_on` for ageing but not for inclusion.
+> - **Row 5** — an `Alt+C` party gets `maintain_bill_by_bill = false`, so it can never carry any bill reference.
+> - **Row 16** — ⛔ **LEAD 1 confirmed unfixed on `EWayBillScreen`** by reading; `MembersScreen` has the same shape.
+> - **Row 11** — a tick with a bank date later than the F2 date persists but is invisible on screen.
+> - **Row 6 (rest)** — a Contra creates its counter-account under **Indirect Expenses**.
+
+> ### ⛔ WHAT THE macOS FINDING DOES TO EVERY EARLIER "✅" IN THIS TABLE
+> Every row above driven with Playwright's `Alt+…` was driven with an event **no operator on this
+> platform can produce**. The actions themselves were fine — the fix was in the resolver, not in any
+> screen — so none of the earlier results is retracted. But the *method* was flattering the product,
+> and any future row driven with an `Alt` key must be checked with a composed `key` as well.
+> `src/keystroke/normalize.test.ts` now carries the composed characters for all nine bound letters.
 
 ---
 

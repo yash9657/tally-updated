@@ -279,6 +279,41 @@ describe("no documented TallyPrime key is silently dead", () => {
     }
   });
 
+  it("every key that opens a VOUCHER is advertised on the voucher bar", () => {
+    // ⛔ THE CONVERSE OF "no advertised button is decorative", AND THE REPO HAD
+    // ONLY ONE HALF OF IT.
+    //
+    // That suite walks the bar and proves each label is bound. It is structurally
+    // incapable of noticing a key that is BOUND AND NOT ADVERTISED, which is
+    // exactly what happened to Alt+F5 and Alt+F6: both opened real Debit and
+    // Credit Note screens, the test above even asserted they resolve, and neither
+    // appeared on the bar or in hintsFor's `voucher` case. Two working documents
+    // that an operator reading the strip had no way to discover — while the
+    // parity ledger counted both rows as reachable.
+    //
+    // This is the assertion that would have caught it, and it fails LOUDLY the
+    // next time a voucher class is bound to a key and nobody touches the bar.
+    const advertised = new Set(
+      buttonBarLabels("voucher", "sales").map((l) => l.split(" ")[0]),
+    );
+    const missing: string[] = [];
+    const combos = new Set([
+      ...Object.keys(keymap.bindings),
+      ...Object.keys(keymap.screenBindings?.voucher ?? {}),
+    ]);
+    for (const combo of combos) {
+      const action = resolveAction(keymap, "voucher", combo);
+      if (action?.kind !== "voucher") continue;
+      if (!advertised.has(combo)) missing.push(`${combo} (${action.voucherType})`);
+    }
+    expect(
+      missing,
+      "these keys open a voucher screen but the voucher button bar never names them — " +
+        "an operator reads the bar and the hint strip as the list of what works here, so a " +
+        "document nothing advertises is one nobody can find",
+    ).toEqual([]);
+  });
+
   it("the order keys open the REAL order registers", () => {
     // Ctrl+F8 / Ctrl+F9 were `unavailable` ("Order processing is not built yet")
     // in two stages and for two different reasons — the same two-stage history
