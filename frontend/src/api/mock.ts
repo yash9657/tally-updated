@@ -4977,6 +4977,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
             voucher_id: v.voucher_id,
             leg_no: legNo,
             voucher_no: v.voucher_no,
+            // The SAME label the Day Book carries (classLabel), because the
+            // server reads both off the same `payload.class`. A second
+            // derivation here is exactly how the mock diverged last time.
+            class: v.class,
             voucher_date: v.date,
             narration: v.narration,
             party: v.party,

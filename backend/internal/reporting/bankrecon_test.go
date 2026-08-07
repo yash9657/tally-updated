@@ -7,6 +7,7 @@ package reporting_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
@@ -461,4 +462,77 @@ func isLegNotFound(err error) bool {
 		e = u.Unwrap()
 	}
 	return false
+}
+
+// TestAnUndatedStatementSTATESTheDateItAgedAgainst is the third instance in this
+// repository of one defect shape: a report that resolves a default INTERNALLY
+// and echoes back the caller's empty parameter.
+//
+// The order book shipped it first (`As at ·` with nothing after it, HANDOFF
+// §1.1); this statement shipped it next. Requested with no as-on, the header
+// rendered "As at " followed by nothing, while every AgeDays on the page was
+// computed against TODAY — a reconciliation that ages every item against a date
+// it refuses to name.
+//
+// ⛔ IT IS INVISIBLE TO ANY TEST THAT ASSERTS THE SENTENCE IT EXPECTS, because
+// the sentence is there and only the date is missing. The order book's own test
+// asserted `As at ${book.as_on}` and passed on the empty string. So this asserts
+// the FIELD, and asserts it against the same clock the ageing uses.
+func TestAnUndatedStatementSTATESTheDateItAgedAgainst(t *testing.T) {
+	pool, ctx, companyID, f := bankSetup(t)
+	rep := reporting.NewService(pool)
+
+	brs, err := rep.BankReconciliationStatement(ctx, companyID, f.bank, "")
+	if err != nil {
+		t.Fatalf("unbounded BRS: %v", err)
+	}
+	if brs.AsOn == "" {
+		t.Fatalf("a statement requested with no as-on echoed an EMPTY as_on; it renders " +
+			"\"As at \" with nothing after it while ageing every item against today")
+	}
+	today := time.Now().UTC().Format("2006-01-02")
+	if brs.AsOn != today {
+		t.Errorf("as_on = %q, want the resolved date %q — the same date AgeDays is measured "+
+			"against, or the statement states one date and ages against another", brs.AsOn, today)
+	}
+
+	// CONTROL: an EXPLICIT as-on is echoed unchanged. Without this arm the fix
+	// would pass by always reporting today, which would be a worse bug.
+	april, err := rep.BankReconciliationStatement(ctx, companyID, f.bank, "2025-04-30")
+	if err != nil {
+		t.Fatalf("april BRS: %v", err)
+	}
+	if april.AsOn != "2025-04-30" {
+		t.Errorf("CONTROL FAILED: an explicit as-on came back as %q, want 2025-04-30", april.AsOn)
+	}
+}
+
+// TestEveryStatementLineCarriesItsVoucherClass exists because VoucherNo is NOT
+// unique on one bank ledger — numbering is per (class, financial year), so a
+// real bank account carries several legs all reading "1". The seeded demo shows
+// FOUR on HDFC Bank.
+//
+// Without the class the screen renders four indistinguishable rows and an
+// operator ticking one cannot know which voucher they cleared. Found by driving
+// the screen (HANDOFF-PARITY-AUDIT §7, row 11), not by any suite: every fixture
+// here numbers its vouchers distinguishably, which is precisely why none of them
+// could see it.
+func TestEveryStatementLineCarriesItsVoucherClass(t *testing.T) {
+	pool, ctx, companyID, f := bankSetup(t)
+	rep := reporting.NewService(pool)
+
+	brs, err := rep.BankReconciliationStatement(ctx, companyID, f.bank, "2025-12-31")
+	if err != nil {
+		t.Fatalf("BRS: %v", err)
+	}
+	lines := append(append([]reporting.BankReconLine{}, brs.Uncleared...), brs.Cleared...)
+	if len(lines) == 0 {
+		t.Fatal("the fixture produced no statement lines, so this proves nothing")
+	}
+	for _, ln := range lines {
+		if ln.Class == "" {
+			t.Errorf("statement line for voucher %q (%s) carries an EMPTY class; the number "+
+				"alone does not identify a voucher on a bank ledger", ln.VoucherNo, ln.VoucherDate)
+		}
+	}
 }

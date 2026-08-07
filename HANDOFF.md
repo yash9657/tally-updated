@@ -31,6 +31,23 @@
 > driving §5.5's audit while the browser is open**, because it has now found a lying `on` row in
 > every single session that has run it.
 >
+> ## ⛔⛔ UPDATED 2026-08-07 (SECOND PASS): **15 of 34 AUDIT ROWS DRIVEN, 10 LYING, 9 FIXED.**
+>
+> Rows **8, 11 and 20** were driven. **Row 11 (Bank Reconciliation) was four defects in one screen**
+> — including a tick that returned **200**, wrote the row, and changed **nothing on screen** — all
+> fixed, mutation-proved and re-driven 7/7. **Row 20 is confirmed lying and DELIBERATELY LEFT OPEN:
+> `Alt+C` renders "Create ledger" everywhere, so a stock item or a unit can never be created from
+> the keyboard.** It is a feature to build, and `HANDOFF-PARITY-AUDIT.md` §7 carries the traced route
+> (RESEARCH.md:568 documents it) plus the reason the obvious keymap fix will not work.
+>
+> ⚠️ **TWO METHOD CORRECTIONS THAT COST TIME AND WILL COST IT AGAIN:**
+> 1. **`Alt+G` is not the only door.** The Go To picker is hard-wired to `["Vouchers", ...REPORT_NAMES]`;
+>    Cost Centres, both cost summaries, Bank Reconciliation, TDS Challans, the order registers and the
+>    BOM screen live on the **Gateway menu** only. Two audit rows name the wrong key.
+> 2. **`verify:demo` needs `pnpm seed:demo --insightd`.** §2.1 below says to run the bare command; the
+>    bare command queues no Bill Inbox draft and the gate reports **30/31 with one FAIL**, which reads
+>    exactly like a regression.
+>
 > ⚠️ **`on` IS AN UPPER BOUND, NOT A MEASUREMENT.** 31 rows say `on`. Every session that has driven
 > them has found one that was false, and never by reading.
 >
@@ -1857,8 +1874,28 @@ a customer tries it.
 
 ### 5.5 ⛔ THE AUDIT NOBODY HAS RUN: WHICH `on` ROWS ARE LYING?
 
-> ## ⛔⛔ 2026-08-07: THE AUDIT HAS NOW BEEN PARTLY RUN. 6 ROWS DRIVEN, 4 WERE LYING.
-> ## The worksheet is `HANDOFF-PARITY-AUDIT.md` §7 (its log has the per-row detail). **All four are FIXED.**
+> ## ⛔⛔ 2026-08-07, SECOND PASS: **15 of 34 ROWS DRIVEN, 10 WERE LYING, 9 FIXED.**
+> ## The worksheet is `HANDOFF-PARITY-AUDIT.md` §7. **One found defect is deliberately NOT fixed — row 20 — and its box in §7 says why.**
+>
+> The second pass drove rows **8, 11 and 20** and did three things worth carrying:
+>
+> | Row | Verdict |
+> |---|---|
+> | **11** Bank Reconciliation | ⛔⛔ **FOUR defects in one screen, every recon prediction confirmed.** A tick whose bank date is AFTER the statement date returned **200** and wrote the row — and the screen was **byte-identical**, still showing the date on an un-cleared line. `brs-bankdate:1:0` matched **FOUR** elements (a Contra 1, a Journal 1, a Receipt 1 and a Payment 1 on one bank ledger, with no class column). With no `F2` the header read **"As at"** with no date while ageing against today. A refused tick left its refused date in the cell. ✅ **ALL FIXED**, 5 mutations / 5 predicted failures, re-driven **7/7** |
+> | **20** Stock item + unit masters | ⛔ **`Alt+C` renders `Create ledger` from the Gateway AND from the item-invoice Item cell.** No keystroke, Gateway entry or Go To entry in the build reaches `masterKind` `"stock-item"` or `"unit"` — **a company can never be given a stock item or a unit from the keyboard**, and the item-invoice empty state points at `Gateway > Masters`, which does not exist. ⛔ **NOT FIXED: it is a feature to build, not a line to change** |
+> | **8** Cost reports | ⚠️ **HALF the prediction was wrong, and that is the useful half.** Not in `Alt+G` (true) — but **both reports are on the GATEWAY menu and open correctly**. The empty period prompt is a stated design decision that argues its own case on screen. `Ctrl+F`/`F12` were predicted inert and **both opened an overlay** |
+>
+> ⛔ **THE METHOD LESSON OF THE SECOND PASS: `Alt+G` IS NOT THE ONLY DOOR.** Two rows were logged in
+> the worksheet as `Alt+G` and are actually reached from the **Gateway menu**; a probe that only
+> pressed `Alt+G` would have reported two built, working reports as unreachable. **Check the other
+> door before logging a defect.**
+>
+> ⚠️ **AND A NEAR-MISS WORTH MORE THAN EITHER:** the first run of the rows-8-and-11 probe came back
+> CLEAN — against a **freshly bootstrapped empty company**, because an empty `?company=` makes the app
+> create one, and a shell `cd` had moved out from under `cat .demo-company-id`. Clean results on an
+> empty company look exactly like clean results. **Assert the company name in the probe.**
+
+> ### ⛔ WAS: 2026-08-07 FIRST PASS — 6 ROWS DRIVEN, 4 WERE LYING. All four FIXED.
 >
 > | What was driven | What the oracle said |
 > |---|---|
@@ -1902,8 +1939,8 @@ a customer tries it.
 >
 > **Rows 6, 15, 23, 36 also driven clean.** Every fix carries an EXECUTED mutation proof.
 >
-> ⛔ **22 ROWS REMAIN UNDRIVEN: 3, 5, 8, 9, 11, 16, 17, 20, 24, 27, 29, 30, 31, 32, 33, 34, 35, 37,
-> 38, 40, 42, 43.** They are **not unanalysed** — `PARITY-RECON-2026-08-07.md` (new) holds an
+> ⛔ **19 ROWS REMAIN UNDRIVEN: 3, 5, 9, 16, 17, 24, 27, 29, 30, 31, 32, 33, 34, 35, 37,
+> 38, 40, 42, 43.** (Rows 8, 11 and 20 came off this list on 2026-08-07's second pass.) They are **not unanalysed** — `PARITY-RECON-2026-08-07.md` (new) holds an
 > 18-agent read-only trace of all of them: exact keystrokes, the oracle, and falsifiable predictions
 > at file:line. Its measured hit rate is 3 confirmed / 1 killed out of 4 driven. ⚠️ **It is reading,
 > not evidence.** LEAD 1 (`EWayBillScreen` step-up wipe) is still the top unfixed item in it.

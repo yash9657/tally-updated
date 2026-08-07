@@ -135,6 +135,20 @@ where si.company_id = '<COMPANY>' order by sm.created_at desc limit 12;
   for exactly one of them.**
 - **A row covering a CLASS is not proved by one member.** Row 26 covers *four* documents; row 1
   covers *six*.
+- ⛔ **`Alt+G` IS NOT THE ONLY DOOR, AND SEVERAL ROWS IN §3 NAME THE WRONG ONE.** The Go To picker
+  is hard-wired to `["Vouchers", ...REPORT_NAMES]`, so Cost Centres, both cost summaries, Bank
+  Reconciliation, TDS Challans, the order registers and the BOM screen are **absent from it and
+  present on the GATEWAY MENU**. Rows 8 and 11 were written as `Alt+G` and are reached by typing the
+  name into the Gateway's search box. **A row that will not open is not thereby unbuilt — check the
+  other door before logging a defect.**
+- ⛔⛔ **CHECK WHAT COMPANY YOU ARE ACTUALLY ON, IN THE BROWSER, BEFORE BELIEVING A RESULT.** On
+  2026-08-07 an empty `?company=` (a shell `cd` had moved out from under `cat .demo-company-id`)
+  made the app **bootstrap a fresh "My Company"**, and rows 8 and 11 both came back "clean" against a
+  company with no bank account and no cost category. The tell is in the title bar: the demo reads
+  **"Demo Traders"**. Assert it in the probe rather than reading it in a dump.
+- ⚠️ **`verify:demo` NEEDS `pnpm seed:demo --insightd`, NOT `pnpm seed:demo`.** Without the flag the
+  Bill Inbox draft is never queued and the gate reports **30/31 with one FAIL** — which reads exactly
+  like a code regression. §2.1 of `HANDOFF.md` says to run the bare command; it is wrong.
 
 ---
 
@@ -157,9 +171,9 @@ the time on the `—` rows first.
 | 5 | Opening balances (with bill-wise breakup) | `Alt+C` create ledger with opening + bills | the opening bill appears in Outstandings and the Balance Sheet opens balanced | — |
 | 6 | Single-entry mode (Payment/Receipt/Contra) | `F5`/`F6`/`F4`, `Ctrl+H` → Single Entry | `posting`: one primary leg + N counter-legs, correct sides | PREV |
 | 7 | Voucher numbering series | key 2 of a class; cross a FY boundary | `voucher_number_counter`: per (class, FY), monotonic, **restarts next FY** | PREV |
-| 8 | Cost centres + both reports | `Alt+G` → Cost Centres; both summaries | per-(posting, **CATEGORY**) sums — ⛔ **NOT per posting**; axes are parallel (§8.1) | PREV |
+| 8 | Cost centres + both reports | ⚠️ **NOT `Alt+G`** — Gateway → Cost Centres; both summaries | per-(posting, **CATEGORY**) sums — ⛔ **NOT per posting**; axes are parallel (§8.1) | ✅ 2026-08-07 (reachable from the GATEWAY; the empty period prompt is deliberate and says why) |
 | 9 | Cost allocation during entry | `F5` → allocate across 2 axes | `posting_cost_allocation`: **both** axes complete and independent | PREV |
-| 11 | Bank reconciliation | `Alt+G` → Bank Reconciliation | a marked line changes the reconciled balance and survives a reload | — |
+| 11 | Bank reconciliation | ⚠️ **NOT `Alt+G`** — Gateway → Bank Reconciliation | a marked line changes the reconciled balance and survives a reload | ⛔→✅ 2026-08-07 (**four defects, all fixed**: silent out-of-window tick, `voucher_no` collides 4 ways, blank `As at`, refused date left on screen) |
 
 ### Statutory
 
@@ -174,7 +188,7 @@ the time on the `—` rows first.
 
 | # | Row | Keystrokes | ⛔ ORACLE | Status |
 |---|---|---|---|---|
-| 20 | Stock items + units (masters) | `Alt+C` → Stock Item | the master persists **with its unit** — a blank unit is what broke every e-invoice line | PREV |
+| 20 | Stock items + units (masters) | `Alt+C` → Stock Item | the master persists **with its unit** — a blank unit is what broke every e-invoice line | ⛔ 2026-08-07 — **LIES. `Alt+C` renders `Create ledger` everywhere; NO key reaches a stock-item or unit form. NOT FIXED — §7's box** |
 | 21 | Item Invoice (`Ctrl+H`) | `F8`/`F9` → Ctrl+H → Item Invoice | `stock_movement` **qty AND value**; server-derived postings | PREV |
 | 22 | Godowns / batches | key a line with a godown **and** a batch | movement lands on the **right position** — ⛔ see §4 lead 3 (the NULL-godown default) | — |
 | 23 | Stock Summary (qty AND value) | `Alt+G` → Stock Summary | ⛔ **`closing_value`, not just `closing_qty`** — this exact oracle gap shipped once | PREV (qty only) |
@@ -372,19 +386,53 @@ scratch.** Append; do not start a new table. Fold into `HANDOFF.md` §5.5 at the
 | 2026-08-07 | **14** | `F8` intra (KA→KA) **and** inter (KA→MH), `F9` | `posting` + GSTR-1 `b2b` + table-12 `hsn` | ✅ intra → CGST+SGST 1800/1800; inter → IGST 5400; purchase → **Input** tax. b2b carries both. ⛔ table 12 was blank — LEAD 5, fixed below |
 | 2026-08-07 | **21** | `F8` → `Ctrl+H` → Item Invoice → key → `Ctrl+A`, then **drill + re-accept** | `stock_movement` qty AND value + `posting` + version diff | ⛔⛔ **LIED, TWICE.** Create was refused outright (godown default); after fixing, the **ALTER SILENTLY DESTROYED THE MOVEMENT** — v1 `1 movement`, v2 `0 movements`, stock 190→**195**, the sold units came BACK while the customer stayed billed. ✅ **BOTH FIXED**, re-driven: v2 keeps its movement |
 | 2026-08-07 | **22** | `F8` item invoice with the Godown left at its default | server refusal / `stock_movement` position | ⛔ **LIED — the godown-default bug had an UNFIXED TWIN in the item grid.** `negative stock refused … (godown -, batch -): closing balance would be -5.0000` on a company holding 195 at Main Location — **an operator could not sell stock they own.** ✅ FIXED (helper moved to shared module, both grids use it) |
+| 2026-08-07 (2nd pass) | **20** | `Alt+C` from the Gateway **and** on the item-invoice Item cell, sent as macOS really sends it; plus the whole `Alt+G` list and the whole Gateway menu | the pushed frame's `<h1>` | ⛔ **LIED — RECON CONFIRMED EXACTLY, ON BOTH PATHS.** Both press-points render **`Create ledger`**. The Gateway menu has no masters entry and `Alt+G` offers only Vouchers + 10 report names. **A stock item or a unit can NEVER be created from the keyboard**, and the item-invoice empty state tells the operator to use `Alt+C from Gateway > Masters` — **a route that does not exist**. `PARENT_OPTIONS["stock-item"]` is `[]`, so even the dead form hard-codes `unit_symbol: "Nos"`. ⛔ **NOT FIXED — see the box below** |
+| 2026-08-07 (2nd pass) | **8** | Gateway → `Cost Centre Summary` → axis `Department`; then `Ctrl+F`, `F12` | the screen | ✅ **RECON'S PREDICTION 1 CONFIRMED, PREDICTION 2 KILLED, PREDICTION 3 CONFIRMED BUT NOT A DEFECT.** Neither cost report is in `Alt+G` (it lists Vouchers + 10 report names) — but **both are on the Gateway menu and open correctly from there**. Opened from the Gateway the summary renders `cost-centre-summary-period-prompt` and no table — **and it says exactly why, on its face** ("BOTH dates are needed and neither is defaulted… a defaulted opening date would answer with everything since the company was formed while looking exactly like the year you asked for"). That is a stated design decision, not a lie. `Ctrl+F` and `F12` **both opened an overlay** — prediction 2 is dead |
+| 2026-08-07 (2nd pass) | **11** | Gateway → `Bank Reconciliation`; read the header with no `F2`; count `brs-bankdate:1:0`; `F2` To=2026-06-30 → tick the 2026-06-05 leg with bank date **2026-07-10**; then widen to 2026-08-31; then tick the 2026-05-30 leg with **2026-05-01** | `bank_reconciliation` joined to `posting` + `ledger.name`, plus the screen | ⛔⛔ **LIED, FOUR WAYS — every recon prediction on this row confirmed.** (a) The tick with the LATER bank date returned **200** and wrote `cleared_amount 20000.0000 / C / by ui` — and **the screen was byte-identical**: `Un-cleared (5)`, `per-bank 2,50,000.00`, and the cell still displaying 2026-07-10 on an un-cleared row. Widening `F2` to 2026-08-31 showed it under `Cleared (1)` — proof it was stored all along. (b) `brs-bankdate:1:0` matched **4 elements**: HDFC Bank carries a **Contra 1, a Journal 1, a Receipt 1 and a Payment 1** and the table had **no class column**. (c) With no `F2` the header read **"As at"** with no date while Age showed 127d/79d/69d against today — §1.1's order-book defect, third occurrence. (d) A refused tick (400, *"a cheque cannot clear before it is written"*) left **2026-05-01 in the cell** with nothing stored. ✅ **ALL FOUR FIXED, mutation-proved (5 mutations, 5 predicted failures), and re-driven 7/7 in the browser** |
 
 ### The running count — update it, do not assume it
 
-Measured 2026-08-07, end of session. **This is still a PARTIAL audit — 12 of 34 rows are driven.**
+Measured 2026-08-07, end of the SECOND pass. **This is still a PARTIAL audit — 15 of 34 rows are driven.**
 
 | | Rows |
 |---|---|
 | Claimed reachable (`on` + `always`) | **34** |
-| **Driven end to end and CONFIRMED** | **12** — rows 1, 2, 4, 6, 7, 14, 15, 21, 22, 23, 26, 36 |
-| **Driven and found LYING** | **8** — rows 2, 14, 21, 22, 26 (`Alt+F7`), 26 (`Alt+F10`), row 1's unkeyable Date/Narration, and **every `Alt`+letter on macOS** |
-| **Fixed and re-driven green** | **8 of 8.** Every defect found this session was fixed, mutation-proved and re-driven in the browser |
-| **Still undriven** | **22** — rows 3, 5, 8, 9, 11, 16, 17, 20, 24, 27, 29, 30, 31, 32, 33, 34, 35, 37, 38, 40, 42, 43 |
-| **TRUE reachable number** | ⛔ **STILL UNKNOWN.** 12 of 34 measured. The lie rate across everything ever driven here is now **8 in 12** — do not budget for driving, budget for FIXING |
+| **Driven end to end and CONFIRMED** | **15** — rows 1, 2, 4, 6, 7, 8, 11, 14, 15, 20, 21, 22, 23, 26, 36 |
+| **Driven and found LYING** | **10** — rows 2, 11, 14, 20, 21, 22, 26 (`Alt+F7`), 26 (`Alt+F10`), row 1's unkeyable Date/Narration, and **every `Alt`+letter on macOS** |
+| **Fixed and re-driven green** | **9 of 10.** ⛔ **Row 20 is the one found and NOT fixed** — it is a build, not a patch; see the box below |
+| **Still undriven** | **19** — rows 3, 5, 9, 16, 17, 24, 27, 29, 30, 31, 32, 33, 34, 35, 37, 38, 40, 42, 43 |
+| **TRUE reachable number** | ⛔ **STILL UNKNOWN.** 15 of 34 measured. The lie rate across everything ever driven here is now **10 in 15** — do not budget for driving, budget for FIXING |
+
+> ### ⛔⛔ ROW 20 IS FOUND, CONFIRMED, AND DELIBERATELY NOT FIXED — READ THIS BEFORE PICKING IT UP
+>
+> It is the only defect either pass has left open, and that is a scoping decision rather than an
+> oversight: **it is a feature to build, not a line to change.** What the browser proved:
+>
+> - `Alt+C` renders **`Create ledger`** from the Gateway AND from the item-invoice Item cell.
+> - The Gateway menu has no masters entry; `Alt+G` offers `["Vouchers", ...REPORT_NAMES]` only.
+> - So **no keystroke in the build reaches `masterKind` `"stock-item"` or `"unit"`.**
+>   `MasterCreateScreen`'s two arms are dead code.
+> - `PARENT_OPTIONS["stock-item"]` and `["unit"]` are `[]`, so the picker never renders and the
+>   create call sends `unit_symbol: p || "Nos"` — **a Kg item is impossible.**
+> - The item-invoice empty state instructs *"Alt+C from Gateway > Masters"* — **that route does not
+>   exist**, so the dead end is also mis-signposted.
+>
+> **THE ROUTE TO BUILD IS DOCUMENTED, NOT INVENTED.** RESEARCH.md:568: *"All are reached via Gateway
+> of Tally > Create (single) or via **Alt+G (Go To) > Create Master / Alter Master**, and during any
+> voucher/master you can create a sub-master on the fly with Alt+C."* So the cheapest honest fix is
+> **Go To entries** routed to a `master-create` frame — `resolveGotoSelection` currently hard-codes
+> `{screen:"report", reportName}`, so it needs a branch there, and **no new `ScreenKind` is needed**
+> because `master-create` is already registered.
+>
+> ⚠️ **AND `Alt+C` CANNOT BE MADE FIELD-SENSITIVE WITHOUT A BIGGER CHANGE.** `resolveAction` is keyed
+> on `ScreenKind` ONLY, and `VOUCHER_FIELDS` is `["date","party-ledger","ledger","amount","narration"]`
+> — **the machine has no notion of the item grid at all**, so there is nothing for a field-scoped
+> binding to key on today. Do not start with the keymap; start with Go To.
+>
+> ⚠️ Server-side, `masters.CreateStockItem` writes `unit_id NULL` for an empty `unit_symbol` with no
+> CHECK and no refusal — the e-invoice builder is the only thing that ever notices
+> (`einvoice.go:711`, `ErrNoUnitOfMeasure`), **by which time the invoice is already posted.** That is
+> the `[medium]` recon prediction and it is still UNDRIVEN.
 
 > ### ⛔ THE 22 UNDRIVEN ROWS ARE NOT UNANALYSED — SEE `PARITY-RECON-2026-08-07.md`
 > An 18-agent read-only pass traced all of them to file:line and produced exact keystrokes, the
@@ -393,17 +441,33 @@ Measured 2026-08-07, end of session. **This is still a PARTIAL audit — 12 of 3
 > single biggest accelerator available to the next session — but ⛔ **it is READING, and this repo
 > flips a row on BROWSER evidence only.**
 >
-> The highest-severity undriven predictions, all `high` confidence:
-> - **Row 20** — `Alt+C` can NEVER open a stock-item or unit form; it always pushes "Create ledger". And a stock item cannot set a unit (hard-coded "Nos").
+> The highest-severity undriven predictions, all `high` confidence. ⚠️ **THREE OF THESE HAVE NOW BEEN
+> DRIVEN — rows 20, 8 and 11 — and their entries below are struck through with the verdict.** The
+> recon's running hit rate is now **6 confirmed / 2 killed out of 8 driven**, which is high enough to
+> trust for PRIORITISING and still not evidence on its own.
+> - ~~**Row 20**~~ — ⛔ **DRIVEN, CONFIRMED EXACTLY** (both press-points render "Create ledger"; unit hard-coded "Nos"). **Still unfixed — see the box above.**
 > - **Row 17** — TDS allocation has no route to attach to an existing challan, so the row cannot be driven as stated at all.
-> - **Row 8** — neither cost report is reachable from `Alt+G`; both render empty when pushed from the Gateway.
+> - ~~**Row 8**~~ — ⚠️ **DRIVEN: HALF RIGHT.** Not in `Alt+G` (true), but **both reports ARE on the Gateway menu and open correctly**; the empty period prompt is a stated design decision, not a lie. `Ctrl+F`/`F12` prediction **KILLED**.
 > - **Row 24** — `allow_negative_stock` has no HTTP route, handler or UI: only half the rule exists.
 > - **Row 22 (rest)** — a BATCH can never be keyed anywhere; `batchId` is hard-wired `""`.
 > - **Row 3** — two New refs on one invoice collapse into ONE bill; Outstandings honours `as_on` for ageing but not for inclusion.
 > - **Row 5** — an `Alt+C` party gets `maintain_bill_by_bill = false`, so it can never carry any bill reference.
-> - **Row 16** — ⛔ **LEAD 1 confirmed unfixed on `EWayBillScreen`** by reading; `MembersScreen` has the same shape.
-> - **Row 11** — a tick with a bank date later than the F2 date persists but is invisible on screen.
+> - **Row 16** — ⛔ **LEAD 1 confirmed unfixed on `EWayBillScreen`** by reading; `MembersScreen` has the same shape. **NOW THE TOP UNDRIVEN ITEM ON THE BOARD.**
+> - ~~**Row 11**~~ — ⛔ **DRIVEN, CONFIRMED, AND IT WAS FOUR DEFECTS RATHER THAN ONE.** ✅ All fixed.
 > - **Row 6 (rest)** — a Contra creates its counter-account under **Indirect Expenses**.
+
+> ### ⚠️ A NEW TRACED LEAD THE ROW-11 FIX TURNED UP, NOT YET DRIVEN
+> The `as_on` echo that made the statement header read **"As at"** with no date is a SHAPE, and
+> `grep -rn "AsOn:\s*asOn\b"` finds **three more reports** that still echo the caller's raw
+> parameter rather than the date they resolved: `reporting/stock_summary.go:570`,
+> `reporting/stock_summary_godown.go:249`, `reporting/stock_batch_summary.go:319`. Whether each is
+> operator-visible depends on whether its screen renders `as_on` — **that is the thing to drive**, and
+> it touches rows 23 and 29.
+>
+> ⛔ **AND THE MOCK WAS RIGHT WHERE THE SERVER WAS WRONG, WHICH IS WHY NO CLIENT TEST COULD SEE IT.**
+> `mock.ts` already returned the RESOLVED date (`as_on: asOnDate`). §9.4's catalogue records mocks
+> that are *more permissive* than the server; this is the inverse and it hides a defect just as
+> completely — **every client test ran against a mock that had already fixed the bug.**
 
 > ### ⛔ WHAT THE macOS FINDING DOES TO EVERY EARLIER "✅" IN THIS TABLE
 > Every row above driven with Playwright's `Alt+…` was driven with an event **no operator on this
@@ -427,8 +491,15 @@ Measured 2026-08-07, end of session. **This is still a PARTIAL audit — 12 of 3
 - ⛔ **Every fix carries a MUTATION PROOF, and you must check that what fails is what you predicted
   would fail.** A proof asserted rather than executed is worth less than none, because it reads as
   evidence — this happened on 2026-08-06 and the claim was false.
-- **Re-measure the gates; do not assume them.** Current: backend **2367 / 0 SKIP / 0 FAIL**,
-  frontend **961 / 67**, `tsc` clean, `make verify` 0, `verify:demo` **33/33** freshly seeded.
+- **Re-measure the gates; do not assume them.** Current (2026-08-07, second pass): backend
+  **2372 / 0 SKIP / 0 FAIL**, frontend **991 / 68 files**, `tsc` clean, `make verify` 0,
+  `verify:demo` **33/33** freshly seeded.
+  ⛔ **RUN `make verify` ALONE.** Run beside anything else it fails two ways that are NOT code:
+  `internal/sync` hits its **600s timeout** (and the timed-out package then trips the residue
+  census), and `EWayBillScreen.test.tsx` fails on a missing `role="radio"` while passing **3/3**
+  standalone. Both were seen on 2026-08-07 — and the timeout was reproduced on a **stashed, unmodified
+  tree**, which is the only reason it was not mistaken for a regression. **Bisect a red `make verify`
+  against a clean tree before believing it.**
   ⚠️ **A down database makes every DB test SKIP and `go test` still exits 0** — the `0 SKIP` is the
   load-bearing number, so bracket the run with a live `psql`.
 - ⚠️ **`docker ps` can wedge while OrbStack reports Running.** It happened on 2026-08-07. `orb stop`

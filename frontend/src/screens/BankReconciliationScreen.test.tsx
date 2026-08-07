@@ -57,6 +57,12 @@ function line(over: Partial<BankReconLine>): BankReconLine {
     voucher_id: "v-1",
     leg_no: 0,
     voucher_no: "PAY-001",
+    // ⚠️ THE FIXTURE'S VOUCHER NUMBERS ARE MORE DISTINGUISHABLE THAN REALITY.
+    // "PAY-001"/"PAY-009" are unique on their face, which is exactly why this
+    // suite never saw the collision that the demo company shows immediately:
+    // numbering is per (class, FY), so a real bank ledger carries several legs
+    // all numbered "1". The class is what tells them apart.
+    class: "Payment",
     voucher_date: "2026-06-01",
     narration: "",
     party: "Acme Traders",
@@ -214,6 +220,7 @@ describe("a voucher altered AFTER being reconciled (I-7)", () => {
   // after clearing. The server flags it; a client that rendered it as an ordinary
   // row would defeat the one invariant T4 exists to protect.
   const broken = line({
+    voucher_id: "v-9",
     voucher_no: "PAY-009",
     amount: "7000.0000",
     dr_cr: "C",
@@ -239,7 +246,7 @@ describe("a voucher altered AFTER being reconciled (I-7)", () => {
       bankReconciliation: async () =>
         brs({ broken_count: 1, uncleared: [broken] }),
     });
-    const row = await screen.findByTestId("brs-broken:PAY-009:0");
+    const row = await screen.findByTestId("brs-broken:v-9:0");
     // Both figures must be present — the whole point is the comparison.
     expect(row.textContent).toContain("5,000");
     expect(row.textContent).toContain("7,000");
@@ -320,7 +327,7 @@ describe("ticking an item off — the one write this screen makes", () => {
         brs({ uncleared: [line({ voucher_id: "v-7", leg_no: 1 })] }),
       setBankDate,
     });
-    const input = await screen.findByTestId("brs-bankdate:PAY-001:1");
+    const input = await screen.findByTestId("brs-bankdate:v-7:1");
     fireEvent.change(input, { target: { value: "2026-06-05" } });
     fireEvent.blur(input);
     await waitFor(() => expect(setBankDate).toHaveBeenCalled());
@@ -342,7 +349,7 @@ describe("ticking an item off — the one write this screen makes", () => {
       setBankDate,
       clearBankDate,
     });
-    const input = await screen.findByTestId("brs-bankdate:PAY-001:0");
+    const input = await screen.findByTestId("brs-bankdate:v-1:0");
     fireEvent.change(input, { target: { value: "" } });
     fireEvent.blur(input);
     await waitFor(() => expect(clearBankDate).toHaveBeenCalled());
@@ -364,11 +371,114 @@ describe("ticking an item off — the one write this screen makes", () => {
         );
       },
     });
-    const input = await screen.findByTestId("brs-bankdate:PAY-001:0");
+    const input = await screen.findByTestId("brs-bankdate:v-1:0");
     fireEvent.change(input, { target: { value: "2026-05-01" } });
     fireEvent.blur(input);
     const err = await screen.findByTestId("brs-row-error");
     expect(err.textContent).toContain("before the voucher date");
+  });
+
+  // ------------------------------------------------------------------ NEW.
+  // Both of these were found by DRIVING the screen against real cored, and
+  // neither was reachable from this suite before, for the same root cause: the
+  // Bank Date cell is an uncontrolled `defaultValue` input, which React applies
+  // at MOUNT only. Whatever the operator typed therefore stayed on screen no
+  // matter what the server did with it.
+
+  it("puts the SERVER's value back after a refusal — the refused date must not linger", async () => {
+    // Driven 2026-08-07: keying 2026-05-01 on a 2026-05-30 voucher returned 400
+    // ("a cheque cannot clear before it is written") and the cell went on
+    // showing 2026-05-01 beside the error. An operator reads a visible date as
+    // a stored one; nothing had been stored.
+    renderScreen({
+      listLedgers: async () => ({ ledgers: [ledger({})] }),
+      bankReconciliation: async () => brs({ uncleared: [line({})] }),
+      setBankDate: async () => {
+        throw new ApiError(
+          400,
+          "banking: bank_date 2026-05-01 precedes the voucher date 2026-06-01",
+        );
+      },
+    });
+    const input = (await screen.findByTestId(
+      "brs-bankdate:v-1:0",
+    )) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "2026-05-01" } });
+    fireEvent.blur(input);
+    await screen.findByTestId("brs-row-error");
+    const after = (await screen.findByTestId(
+      "brs-bankdate:v-1:0",
+    )) as HTMLInputElement;
+    // The server holds NOTHING for this leg, so the cell must hold nothing.
+    expect(after.value, "the refused date is still on screen").toBe("");
+  });
+
+  it("DISCLOSES a tick stored outside this statement's window", async () => {
+    // Driven 2026-08-07 and confirmed in Postgres: ticking a 2026-06-05 leg with
+    // a bank date of 2026-07-10 on a statement as at 2026-06-30 returns 200 and
+    // writes the row — and the screen is byte-identical, because the item is
+    // correctly un-cleared AS AT 2026-06-30 (bankrecon.go trap 1). A confirmed
+    // write that changes nothing on screen is indistinguishable from a lost one.
+    const setBankDate = vi.fn(async () => ({ status: "reconciled" }));
+    renderScreen(
+      {
+        listLedgers: async () => ({ ledgers: [ledger({})] }),
+        bankReconciliation: async () =>
+          brs({ as_on: "2026-06-30", uncleared: [line({})] }),
+        setBankDate,
+      },
+      { ...SNAP, config: { periodTo: "2026-06-30" } },
+    );
+    const input = await screen.findByTestId("brs-bankdate:v-1:0");
+    fireEvent.change(input, { target: { value: "2026-07-10" } });
+    fireEvent.blur(input);
+    await waitFor(() => expect(setBankDate).toHaveBeenCalled());
+    const note = await screen.findByTestId("brs-out-of-window");
+    // It must name the date STORED, the statement date, and the way out.
+    expect(note.textContent).toContain("2026-07-10");
+    expect(note.textContent).toContain("2026-06-30");
+    expect(note.textContent).toMatch(/F2/);
+  });
+
+  it("says NOTHING when the tick lands inside the window (the CONTROL)", async () => {
+    // Without this control the disclosure above passes by always firing.
+    const setBankDate = vi.fn(async () => ({ status: "reconciled" }));
+    renderScreen(
+      {
+        listLedgers: async () => ({ ledgers: [ledger({})] }),
+        bankReconciliation: async () =>
+          brs({ as_on: "2026-06-30", uncleared: [line({})] }),
+        setBankDate,
+      },
+      { ...SNAP, config: { periodTo: "2026-06-30" } },
+    );
+    const input = await screen.findByTestId("brs-bankdate:v-1:0");
+    fireEvent.change(input, { target: { value: "2026-06-20" } });
+    fireEvent.blur(input);
+    await waitFor(() => expect(setBankDate).toHaveBeenCalled());
+    expect(screen.queryByTestId("brs-out-of-window")).toBeNull();
+  });
+
+  it("names the voucher CLASS, because the number alone repeats", async () => {
+    // The demo company shows FOUR legs on HDFC Bank all numbered "1". A row
+    // labelled by number alone cannot be identified by an operator, and its
+    // test id collides four ways for anyone driving the screen.
+    renderScreen({
+      listLedgers: async () => ({ ledgers: [ledger({})] }),
+      bankReconciliation: async () =>
+        brs({
+          uncleared: [
+            line({ voucher_id: "v-1", voucher_no: "1", class: "Receipt" }),
+            line({ voucher_id: "v-2", voucher_no: "1", class: "Contra" }),
+          ],
+        }),
+    });
+    // Two rows sharing voucher_no "1" are each independently addressable...
+    expect(await screen.findByTestId("brs-bankdate:v-1:0")).toBeTruthy();
+    expect(await screen.findByTestId("brs-bankdate:v-2:0")).toBeTruthy();
+    // ...and the class is on screen, which is what a HUMAN tells them apart by.
+    expect(screen.getByText("Receipt")).toBeTruthy();
+    expect(screen.getByText("Contra")).toBeTruthy();
   });
 
   it("does not write when the cell is left unchanged", async () => {
@@ -379,7 +489,7 @@ describe("ticking an item off — the one write this screen makes", () => {
         brs({ cleared: [line({ bank_date: "2026-06-05" })] }),
       setBankDate,
     });
-    const input = await screen.findByTestId("brs-bankdate:PAY-001:0");
+    const input = await screen.findByTestId("brs-bankdate:v-1:0");
     fireEvent.blur(input);
     expect(setBankDate).not.toHaveBeenCalled();
   });

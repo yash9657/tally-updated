@@ -92,6 +92,29 @@ export function BankReconciliationScreen({ snapshot }: ScreenComponentProps) {
   const [brs, setBrs] = useState<BankReconciliationResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /**
+   * Bumped after EVERY completed write attempt, success or failure, and folded
+   * into each Bank Date input's React `key` so the cell remounts and re-reads
+   * the SERVER's value.
+   *
+   * ⛔ THE CELL IS AN UNCONTROLLED `defaultValue` INPUT, WHICH IS MOUNT-ONLY.
+   * Without this the browser keeps showing whatever was typed even when the
+   * server stored nothing, and both failure modes were driven and confirmed:
+   *   - a date the 0045 trigger REFUSED (a cheque cannot clear before it is
+   *     written) stayed in the cell beside the error;
+   *   - a date the server ACCEPTED but which falls after the statement's own
+   *     as-at date came back as un-cleared, and the cell went on displaying it
+   *     on a row filed under "Un-cleared".
+   * Both leave an operator looking at a date the books do not have.
+   */
+  const [writeGen, setWriteGen] = useState(0);
+  /**
+   * Set when a tick SUCCEEDED but the bank date is after the statement date, so
+   * the item is correctly un-cleared IN THIS STATEMENT (trap 1 of bankrecon.go).
+   * Without this the screen is byte-identical after a 200 and the operator has
+   * no way to tell a stored date from a lost one.
+   */
+  const [outOfWindow, setOutOfWindow] = useState<string | null>(null);
 
   // ---- The bank accounts this company has.
   //
@@ -216,7 +239,22 @@ export function BankReconciliationScreen({ snapshot }: ScreenComponentProps) {
     (line: BankReconLine, value: string) => {
       if (!ledgerID) return;
       setBusy(true);
+      setError(null);
+      setOutOfWindow(null);
       const done = () => {
+        // The write landed. If the date the operator entered is AFTER this
+        // statement's as-at date the item is still un-cleared HERE — correct,
+        // and invisible without saying so, because every figure on the page is
+        // unchanged and the line does not move. See outOfWindow's doc.
+        if (value !== "" && asOn && value > asOn) {
+          setOutOfWindow(
+            `Recorded: ${line.class || "voucher"} ${line.voucher_no} cleared on ${value}. ` +
+              `That is AFTER this statement's date of ${asOn}, so it stays under Un-cleared here ` +
+              `and none of the balances above move — a statement as at ${asOn} cannot know about it. ` +
+              `Press F2 and set the date to ${value} or later to see it cleared.`,
+          );
+        }
+        setWriteGen((g) => g + 1);
         load(ledgerID);
       };
       const fail = (err: unknown) => {
@@ -225,6 +263,10 @@ export function BankReconciliationScreen({ snapshot }: ScreenComponentProps) {
         // they are shown as they are.
         setError(err instanceof Error ? err.message : String(err));
         setBusy(false);
+        // ⛔ AND PUT THE SERVER'S VALUE BACK IN THE CELL. Showing the refused
+        // date beside the refusal reads as "stored, with a warning" — the one
+        // reading that is false.
+        setWriteGen((g) => g + 1);
       };
       if (value === "") {
         client
@@ -241,7 +283,7 @@ export function BankReconciliationScreen({ snapshot }: ScreenComponentProps) {
         .then(done)
         .catch(fail);
     },
-    [client, companyID, ledgerID, load],
+    [client, companyID, ledgerID, load, asOn],
   );
 
   // ---- The import panel (Alt+O).
@@ -405,6 +447,7 @@ export function BankReconciliationScreen({ snapshot }: ScreenComponentProps) {
         lines={brs.uncleared}
         testid="brs-uncleared"
         onSetBankDate={setBankDate}
+        writeGen={writeGen}
       />
       <LineTable
         title={`Cleared (${brs.cleared.length})`}
@@ -412,11 +455,26 @@ export function BankReconciliationScreen({ snapshot }: ScreenComponentProps) {
         lines={brs.cleared}
         testid="brs-cleared"
         onSetBankDate={setBankDate}
+        writeGen={writeGen}
       />
 
       {error ? (
         <p data-testid="brs-row-error" className="mt-3 text-sm font-bold">
           {error}
+        </p>
+      ) : null}
+
+      {/* THE STORED-BUT-NOT-HERE DISCLOSURE. A tick whose bank date is after
+          this statement's as-at date is correctly un-cleared in THIS statement
+          (bankrecon.go trap 1) — so the write succeeds and the page does not
+          move by a single paisa. Saying nothing is what made a confirmed 200
+          indistinguishable from a lost keystroke. */}
+      {outOfWindow ? (
+        <p
+          data-testid="brs-out-of-window"
+          className="mt-3 border border-tally-active bg-tally-panel p-2 text-sm"
+        >
+          {outOfWindow}
         </p>
       ) : null}
 
@@ -464,12 +522,15 @@ function LineTable({
   lines,
   testid,
   onSetBankDate,
+  writeGen,
 }: {
   title: string;
   emptyNote: string;
   lines: BankReconLine[];
   testid: string;
   onSetBankDate: (line: BankReconLine, value: string) => void;
+  /** See the parent's `writeGen` doc — it forces the date cells to remount. */
+  writeGen: number;
 }) {
   return (
     <div className="mb-5">
@@ -484,6 +545,11 @@ function LineTable({
             <tr className="border-b border-tally-panel text-left text-xs">
               <th className="py-1 pr-2">Date</th>
               <th className="py-1 pr-2">Particulars</th>
+              {/* CLASS BEFORE NUMBER. Numbering is per (class, FY), so the
+                  number alone repeats down this column — the demo's HDFC Bank
+                  shows four rows numbered "1". Without the class an operator
+                  cannot tell which voucher a row is. */}
+              <th className="py-1 pr-2">Type</th>
               <th className="py-1 pr-2">Vch No</th>
               <th className="py-1 pr-2 text-right">Amount</th>
               <th className="py-1 pr-2">Bank Date</th>
@@ -494,7 +560,7 @@ function LineTable({
             {lines.map((l) => (
               <tr
                 key={`${l.voucher_id}:${l.leg_no}`}
-                data-testid={`brs-line:${l.voucher_no}:${l.leg_no}`}
+                data-testid={`brs-line:${l.voucher_id}:${l.leg_no}`}
                 className={l.broken_by_alter ? "font-bold" : undefined}
               >
                 <td className="py-0.5 pr-2 font-mono">{l.voucher_date}</td>
@@ -503,7 +569,7 @@ function LineTable({
                   {l.broken_by_alter ? (
                     <span
                       className="ml-2 text-xs"
-                      data-testid={`brs-broken:${l.voucher_no}:${l.leg_no}`}
+                      data-testid={`brs-broken:${l.voucher_id}:${l.leg_no}`}
                     >
                       {/* The EVIDENCE of what changed: what was cleared, beside
                           what the voucher now says. */}
@@ -513,6 +579,7 @@ function LineTable({
                     </span>
                   ) : null}
                 </td>
+                <td className="py-0.5 pr-2">{l.class || "—"}</td>
                 <td className="py-0.5 pr-2 font-mono">{l.voucher_no}</td>
                 <td className="py-0.5 pr-2 text-right font-mono">
                   {formatMoney(l.amount)} {l.dr_cr}
@@ -521,9 +588,18 @@ function LineTable({
                   {/* THE ONE EDITABLE CELL. Clearing it un-reconciles (idempotent
                       on the server), which is how a mis-keyed date is undone. */}
                   <input
+                    // ⛔ THE KEY CARRIES THE SERVER'S ANSWER AND THE WRITE
+                    // GENERATION. `defaultValue` is applied at MOUNT only, so
+                    // without a changing key this cell keeps displaying a date
+                    // the server refused — or one it accepted but filtered out
+                    // of this statement's window — on a row filed under
+                    // Un-cleared. Both were driven and confirmed.
+                    key={`${l.bank_date}:${writeGen}`}
                     type="date"
-                    aria-label={`Bank date for voucher ${l.voucher_no}`}
-                    data-testid={`brs-bankdate:${l.voucher_no}:${l.leg_no}`}
+                    // Named by CLASS and DATE, not by number alone: several legs
+                    // on one bank ledger share a voucher number.
+                    aria-label={`Bank date for ${l.class || "voucher"} ${l.voucher_no} dated ${l.voucher_date}`}
+                    data-testid={`brs-bankdate:${l.voucher_id}:${l.leg_no}`}
                     className="bg-tally-field px-1 font-mono text-tally-fieldText outline-none"
                     defaultValue={l.bank_date}
                     min={l.voucher_date}

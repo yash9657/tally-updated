@@ -44,9 +44,18 @@ import (
 // BankReconLine is one bank-ledger posting as the reconciliation screen and the
 // statement see it.
 type BankReconLine struct {
-	VoucherID   uuid.UUID
-	LegNo       int
-	VoucherNo   string
+	VoucherID uuid.UUID
+	LegNo     int
+	VoucherNo string
+	// Class is the voucher class ("Receipt", "Payment", "Contra", …).
+	//
+	// ⛔ IT IS LOAD-BEARING, NOT DECORATION. Voucher numbering is per (class,
+	// financial year), so VoucherNo alone is NOT unique on one bank ledger: the
+	// seeded demo has FOUR legs on HDFC Bank all reading "1". A statement that
+	// renders the number alone shows four indistinguishable rows, and an
+	// operator ticking one has no way to know which voucher they cleared.
+	// Found by driving the screen (HANDOFF-PARITY-AUDIT §7, row 11).
+	Class       string
 	VoucherDate string
 	Narration   string
 	Party       string
@@ -109,7 +118,18 @@ type BankReconciliation struct {
 	// Nature is the bank group's nature. A Bank OD A/c is a LIABILITY, so its
 	// book balance is a credit — see signed().
 	Nature string
-	AsOn   string
+	// AsOn is the date the statement is drawn AS AT — always RESOLVED, never the
+	// caller's raw parameter.
+	//
+	// ⛔ AN EMPTY REQUEST PARAMETER MUST NOT ECHO BACK EMPTY. This field used to
+	// carry `asOn` verbatim, so a statement requested with no date rendered
+	// "As at " with nothing after it while AgeDays was silently computed against
+	// TODAY — a reconciliation that stated no date at all while ageing every
+	// item against one. That is the THIRD time this exact shape has shipped
+	// here (the order book's `As at ·` heading was the first, §1.1), and it is
+	// invisible to any test that asserts the sentence it expects, because the
+	// sentence is there — only the date is missing.
+	AsOn string
 	// BalanceAsPerBooks is the ledger's closing position as at AsOn, oriented by
 	// nature exactly as every other statement orients it.
 	BalanceAsPerBooks decimal.Decimal
@@ -156,6 +176,7 @@ const bankReconSQL = `
 	    SELECT p.id                AS posting_id,
 	           vv.voucher_id       AS voucher_id,
 	           vv.voucher_no       AS voucher_no,
+	           COALESCE(vv.payload->>'class', '')     AS class,
 	           to_char(vv.voucher_date, 'YYYY-MM-DD') AS voucher_date,
 	           COALESCE(vv.payload->>'narration', '') AS narration,
 	           COALESCE(vv.payload->>'party', '')     AS party,
@@ -175,7 +196,7 @@ const bankReconSQL = `
 	       AND p.ledger_id = $1
 	       AND ($2::date IS NULL OR vv.voucher_date <= $2::date)
 	)
-	SELECT l.voucher_id, l.leg_no, l.voucher_no, l.voucher_date,
+	SELECT l.voucher_id, l.leg_no, l.voucher_no, l.class, l.voucher_date,
 	       l.narration, l.party, l.amount, l.dr_cr,
 	       to_char(br.bank_date, 'YYYY-MM-DD'), br.cleared_amount, br.cleared_dr_cr::text
 	  FROM legs l
@@ -250,7 +271,8 @@ func (s *Service) BankReconciliationStatement(
 				clearedAmount *decimal.Decimal
 				clearedDrCr   *string
 			)
-			if err := rows.Scan(&ln.VoucherID, &ln.LegNo, &ln.VoucherNo, &ln.VoucherDate,
+			if err := rows.Scan(&ln.VoucherID, &ln.LegNo, &ln.VoucherNo, &ln.Class,
+				&ln.VoucherDate,
 				&ln.Narration, &ln.Party, &ln.Amount, &ln.DrCr,
 				&bankDate, &clearedAmount, &clearedDrCr); err != nil {
 				return fmt.Errorf("reporting: scan bank leg: %w", err)
@@ -300,6 +322,10 @@ func (s *Service) BankReconciliationStatement(
 	if err != nil {
 		return BankReconciliation{}, err
 	}
+	// Echo the RESOLVED date, not the caller's parameter — see AsOn's doc.
+	// The ageing below is computed against asOnTime, so reporting anything else
+	// here would state one date and age against another.
+	out.AsOn = asOnTime.Format("2006-01-02")
 	for i := range out.Uncleared {
 		ln := &out.Uncleared[i]
 		signed := ln.Amount

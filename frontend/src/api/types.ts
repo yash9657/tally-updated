@@ -253,6 +253,16 @@ export interface BankReconLine {
   /** Ordinal of the bank leg; non-zero only when one voucher touches the bank twice. */
   leg_no: number;
   voucher_no: string;
+  /**
+   * The voucher CLASS ("Receipt", "Payment", "Contra", …).
+   *
+   * ⛔ NOT DECORATION — it is what makes a row identifiable. Numbering is per
+   * (class, financial year), so `voucher_no` alone is NOT unique on one bank
+   * ledger: the seeded demo shows FOUR legs on HDFC Bank all reading "1".
+   * Rendering the number without the class gives an operator four identical
+   * rows and no way to know which voucher they just ticked.
+   */
+  class: string;
   voucher_date: string;
   narration: string;
   party: string;

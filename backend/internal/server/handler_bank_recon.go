@@ -38,6 +38,7 @@ type bankReconLineView struct {
 	VoucherID     string `json:"voucher_id"`
 	LegNo         int    `json:"leg_no"`
 	VoucherNo     string `json:"voucher_no"`
+	Class         string `json:"class"`
 	VoucherDate   string `json:"voucher_date"`
 	Narration     string `json:"narration"`
 	Party         string `json:"party"`
@@ -57,6 +58,7 @@ func viewBankReconLines(in []reporting.BankReconLine) []bankReconLineView {
 			VoucherID:     l.VoucherID.String(),
 			LegNo:         l.LegNo,
 			VoucherNo:     l.VoucherNo,
+			Class:         l.Class,
 			VoucherDate:   l.VoucherDate,
 			Narration:     l.Narration,
 			Party:         l.Party,
