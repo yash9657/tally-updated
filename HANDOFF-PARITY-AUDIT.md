@@ -265,6 +265,34 @@ The operator pressed the key and **saw nothing happen**. Fixed on `EInvoiceScree
 which the schema stores nowhere. **Reproduces on the FIRST write of a session — the only one most
 operators ever do.** Check every screen that shows a result after a write.
 
+### ⛔ LEAD 1b — `MembersScreen` IS THE THIRD SCREEN OF THAT SHAPE, TRACED AND NOT DRIVEN
+
+Verified by READING on 2026-08-07, immediately after LEAD 1 was fixed on both e-* screens, because
+§1.3's rule says the class is the unit of repair and not the call site:
+
+- `MembersScreen.tsx:183-208` — `refresh` is `useCallback(..., [client, companyID])` and opens with an
+  unconditional `setError(null)`;
+- `:211-213` — a bare `useEffect(() => { void refresh(); }, [refresh])`, so a **new `client` identity
+  re-runs it**;
+- `:240-254` — the WRITE path puts its refusal into **the same `error`** via `setError(explain(e))`.
+
+So a write that carries a step-up can have its refusal cleared by the reload the step-up itself
+triggers — the `shownForRef` half of LEAD 1, on a third screen.
+
+⚠️ **IT IS NOT THE WHOLE SHAPE, AND THE DIFFERENCE MATTERS FOR WHOEVER PICKS IT UP.** `MembersScreen`
+has **no generation ref at all**, so the half that was actually killing the e-* screens — a raise
+discarding its own result — cannot occur here. The failure mode, if it reproduces, is the *first*
+one: the refusal is set and then wiped.
+
+⛔ **DELIBERATELY NOT FIXED, AND THE REASON IS THIS SESSION'S OWN LESSON.** LEAD 1 was traced to a
+specific line, fixed there, unit-tested, mutation-proved — **and the browser was still broken,
+because the traced cause was not the live one.** Patching this screen from a code reading would
+repeat exactly that mistake. **Drive it first:** fresh session → Gateway → *Users & Roles* → attempt a
+level change the PDP refuses → does the red banner appear on the FIRST attempt? Repeat in the same
+session as the control (no step-up, so no client swap). The clean screens listed in
+`PARITY-RECON-2026-08-07.md` row 16 are the negative control — they show the refusal on the first
+press.
+
 ### LEAD 2 — Stock Journal destroys stock VALUE on a blank Rate
 
 `isKeyedStockLine` needs only `qty > 0`, so a row with an empty Rate is "keyed". `parseFixed4("")`
@@ -480,7 +508,7 @@ Measured 2026-08-07, end of the SECOND pass. **This is still a PARTIAL audit —
 > - **Row 22 (rest)** — a BATCH can never be keyed anywhere; `batchId` is hard-wired `""`.
 > - **Row 3** — two New refs on one invoice collapse into ONE bill; Outstandings honours `as_on` for ageing but not for inclusion.
 > - **Row 5** — an `Alt+C` party gets `maintain_bill_by_bill = false`, so it can never carry any bill reference.
-> - **Row 16** — ⛔ **LEAD 1 confirmed unfixed on `EWayBillScreen`** by reading; `MembersScreen` has the same shape. **NOW THE TOP UNDRIVEN ITEM ON THE BOARD.**
+> - ~~**Row 16**~~ — ⛔⛔ **DRIVEN, CONFIRMED WITH A CONTROL, AND IT WAS TWO DEFECTS.** ✅ Fixed on `EWayBillScreen` AND `EInvoiceScreen`. ⛔ **`MembersScreen` is the third screen of that shape and is TRACED BUT NOT DRIVEN — see LEAD 1b in §4, and read why it was not patched blind.**
 > - ~~**Row 11**~~ — ⛔ **DRIVEN, CONFIRMED, AND IT WAS FOUR DEFECTS RATHER THAN ONE.** ✅ All fixed.
 > - **Row 6 (rest)** — a Contra creates its counter-account under **Indirect Expenses**.
 
