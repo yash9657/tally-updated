@@ -423,7 +423,7 @@ scratch.** Append; do not start a new table. Fold into `HANDOFF.md` §5.5 at the
 
 ### The running count — update it, do not assume it
 
-Measured 2026-08-07, end of the SECOND pass. **This is still a PARTIAL audit — 15 of 34 rows are driven.**
+Measured 2026-08-07, end of the SECOND pass. **This is still a PARTIAL audit — 16 of 34 rows are driven, and 18 have never been driven at all.**
 
 | | Rows |
 |---|---|
