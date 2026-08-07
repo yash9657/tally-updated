@@ -48,7 +48,18 @@ const FEATURES: {
       {
         name: "Double-entry vouchers (Contra, Payment, Receipt, Journal, Sales, Purchase)",
         state: "on",
-        note: "F4–F9. Every voucher is balanced and posted through the ledger core.",
+        note:
+          "F4–F9. Every voucher is balanced and posted through the ledger core. " +
+          "F7 Journal and Ctrl+H > Double Entry on F4/F5/F6 open a Dr/Cr GRID: each line states " +
+          "its own side and amount, nothing is inferred, and an unbalanced entry is refused by " +
+          "the FORM — naming both totals and the difference — before any request is made. " +
+          "A line may be split across cost centres and may carry a bill reference. " +
+          "⚠️ THIS ROW WAS OVERSTATED UNTIL 2026-08-06 and the correction is worth stating rather " +
+          "than quietly deleting: it read 'on' while a Journal COULD NOT BE KEYED AT ALL. The " +
+          "double-entry branch rendered no posting grid, so F7 showed one input — 'Dr/Cr Ledger' " +
+          "— with no amount field, no second line and no side selector, and Ctrl+H > Double Entry " +
+          "reached the same dead end on the other three classes. Five of the six were genuinely " +
+          "reachable the whole time; the Journal was the one that was not.",
       },
       {
         name: "Edit Log / audit trail",
@@ -400,9 +411,41 @@ const FEATURES: {
         note: "Ctrl+P on the report. Nine statements print; SEVEN of them have a screen here (Trial Balance, Balance Sheet, P&L, Day Book, Outstandings, Stock Summary, Bank Reconciliation) and the two payroll ones are server-only, because there is no payroll screen to press the key on. The Bank Reconciliation Statement is the one that needs to be told WHICH bank account, and it refuses rather than picking one — see the banking group above. EVERY OTHER REPORT NAME RETURNS 501 NOT IMPLEMENTED — Cash Flow, the anomaly list, GSTR-1, GSTR-3B, the reconciliation queue, the four inventory reports at other grains, ITC reconciliation and the IMS inbox are all readable on screen and none of them prints; pressing Ctrl+P on one shows that 501 rather than appearing to work. A 501 is deliberate: a print route that quietly returned an empty page would be worse. TWO THINGS WORTH KNOWING. Printing asks the SERVER for the statement, so a screen you have filtered with Ctrl+F or narrowed with F12 still prints in full — Alt+E export is the one that writes what is on screen; and on a drill-down Ctrl+P prints the PARENT statement, because that is all the route offers, and it says so when it does. Printing is its own ACL action, distinct from displaying, so a level may be allowed to READ a statement and refused permission to PRINT it — the seeded Data Entry level is granted no report-print rule at all, so it is refused every one of them, and the refusal is now visible instead of silent. Because printing is not a write it does NOT inherit the back-dated-entry cutoff or the WebAuthn step-up: reading your own books, even onto paper, never asks for a second factor.",
       },
       {
-        name: "Export (Excel / CSV / XML / e-mail a document)",
+        name: "Export a report (Alt+E — CSV, or Excel XML)",
+        state: "on",
+        note:
+          "Alt+E writes the report ON SCREEN to a file, from the SAME rows the screen rendered — " +
+          "all NINE reports in the Alt+G list, the two cost summaries, the Stock Summary, the " +
+          "TDS/TCS register, both order books, and a drilled-down level. F12 > \"Export (Alt+E) " +
+          "as Excel XML instead of CSV\" switches format. " +
+          "⛔ MONEY IS WRITTEN AS THE EXACT WIRE VALUE, NOT AS THE FORMATTED STRING ON SCREEN, " +
+          "and that is the whole point of the feature: a display string has been rounded for a " +
+          "human, and a CSV round trip through Excel would then lose the paisa the ledger keeps. " +
+          "Cells are also protected against being read as formulas (a value starting =, +, - or @). " +
+          "⚠️ A report your security level may not open exports nothing and SAYS SO — the same " +
+          "refusal the screen shows, on the key. The seeded Data Entry level is denied the Stock " +
+          "Summary, the TDS/TCS register and both order books. " +
+          "⚠️ THIS ROW READ \"off\" WHILE Alt+E WAS ALREADY BOUND AND ALREADY WRITING FILES — " +
+          "and writing them from the DISPLAY strings, so it was losing paisa on every export. " +
+          "The row was wrong in the understating direction, which is rarer than the reverse and " +
+          "just as misleading: it described a key that did nothing, when the key did something " +
+          "subtly wrong. " +
+          "⚠️ AND THE `export` ACTION TOKEN HAS BEEN REMOVED FROM THE ACL VOCABULARY. It was " +
+          "offered to owners in Users & Roles and enforced NOWHERE, so a rule like " +
+          "\"disallow export report:stock-summary\" could be written, shown as valid, saved — and " +
+          "the file still written. A control that lies is worse than an absent one. Export follows " +
+          "the DISPLAY permission: bytes the server has already handed over are already disclosed.",
+      },
+      {
+        name: "Export: e-mail a document, and export to PDF",
         state: "off",
-        note: "Not built. The action token exists in the ACL vocabulary and is UNMAPPED, which means it falls to default-DENY for every level — nothing can be exported by anybody, rather than exports being quietly permitted by whatever rule happened to cover display. Tally XML IMPORT is a separate, built thing; this row is about getting data out.",
+        note:
+          "Not built, and stated separately rather than folded into the row above so that row can " +
+          "be honest. Tally's own Alt+E also mails a document and writes PDF; this build does " +
+          "neither. ⚠️ Ctrl+P DOES produce a server-rendered PDF of a voucher, which is the nearest " +
+          "thing that exists — it is a different key, a different path and a per-document layout, " +
+          "not a report export. Tally XML IMPORT is a separate, built thing; these two rows are " +
+          "about getting data OUT.",
       },
       {
         name: "Per-company print templates (logo, address block, footer, declarations)",

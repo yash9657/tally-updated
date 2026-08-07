@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 /**
  * Tally's as-you-type, substring-matching selection list (RESEARCH.md sec 4).
@@ -11,11 +11,37 @@ export function SelectionList({
   onSelect,
   autoFocus = false,
   allowCreate = false,
+  value = "",
 }: {
   label: string;
   options: readonly string[];
   onSelect: (item: string) => void;
   autoFocus?: boolean;
+  /**
+   * THE CURRENT VALUE, SHOWN UNTIL THE OPERATOR TYPES SOMETHING ELSE.
+   *
+   * ⛔ WHAT IT FIXES: the Account / Party A/c Name field rendered BLANK on
+   * EVERY hydrated alteration. A drilled voucher hydrated its postings, its
+   * amounts, its cost splits and its bill references — and then showed an
+   * empty party field, because this is an uncontrolled type-ahead and nothing
+   * types into it on an alter.
+   *
+   * ⚠️ It never corrupted anything: `buildSingleEntryRequest` sends `f.party`
+   * from the loaded view and `ensureLedger` resolves it by name, so the posting
+   * was correct and was browser-proved correct. **But an operator who opens a
+   * voucher and sees a blank Account reads it as data loss**, and the natural
+   * response — retyping the party — is how a correct voucher gets edited into
+   * a wrong one.
+   *
+   * ⚠️ IT MUST RE-TRACK, AND THAT IS WHY THIS IS NOT `useState(value)`. The
+   * hydration arrives ASYNCHRONOUSLY: the frame mounts, the GET resolves, and
+   * only then does the party name exist. A state initialiser captures "" at
+   * mount and would never see it — the exact "a default captured on event A
+   * and consumed after event B" shape that has already cost this repo a
+   * session. So a CHANGE in `value` re-seeds the query, and only until the
+   * operator types, after which their input wins and is never clobbered.
+   */
+  value?: string;
   /**
    * Offer the typed text itself as a final row when it matches nothing —
    * Tally's "create it as you type" behaviour for master fields.
@@ -28,8 +54,31 @@ export function SelectionList({
    */
   allowCreate?: boolean;
 }) {
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(value);
   const [active, setActive] = useState(0);
+
+  // ---- RE-SEED WHEN THE HYDRATED VALUE ARRIVES.
+  //
+  // React's documented "adjusting state when a prop changes" pattern: compare
+  // against the last value we seeded from and set state DURING render, which
+  // re-renders immediately without committing the stale frame. An effect would
+  // paint the blank field first and then correct it — a visible flicker on
+  // every alter, and one render in which the operator can type into a field
+  // that is about to be overwritten.
+  //
+  // ⛔ `typed` IS WHAT STOPS IT CLOBBERING THE OPERATOR. Once they have typed,
+  // their input owns the field for the rest of the edit even if `value`
+  // changes again underneath (selecting a party updates it, and re-seeding
+  // from that would fight the very keystroke that caused it).
+  const seeded = useRef(value);
+  const typed = useRef(false);
+  if (value !== seeded.current) {
+    seeded.current = value;
+    if (!typed.current) {
+      setQuery(value);
+      setActive(0);
+    }
+  }
 
   const matches = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -84,6 +133,7 @@ export function SelectionList({
           className="ml-2 bg-tally-field px-1 text-tally-fieldText outline-none"
           value={query}
           onChange={(e) => {
+            typed.current = true;
             setQuery(e.target.value);
             setActive(0);
           }}

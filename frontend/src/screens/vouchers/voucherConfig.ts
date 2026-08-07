@@ -129,11 +129,16 @@ export const VOUCHER_CONFIGS: Readonly<Record<VoucherType, VoucherConfig>> = {
     type: "journal",
     title: "Journal",
     entry: "double",
-    partyLabel: "Dr/Cr Ledger",
+    // ⚠️ WAS "Dr/Cr Ledger", WHICH WAS A LIE ABOUT WHAT THE FIELD DOES — and
+    // for as long as the `double` branch rendered nothing it was the ONLY
+    // input on the screen, so it read as "name the ledger here" on a form that
+    // could not post one. A Journal's Dr/Cr ledgers are the GRID's; this field
+    // is Tally's optional party annotation and posts nothing by itself.
+    partyLabel: "Party (optional)",
     primarySide: "DR",
     showGst: false,
     itemInvoice: false,
-    hint: "Adjustments / non-cash entries. Debits must equal credits.",
+    hint: "Adjustments, provisions, depreciation and reclasses. State both sides; debits must equal credits exactly.",
     post: (c, id, req) => c.postJournalVoucher(id, req),
     alter: (c, id, vid, req) => c.alterJournalVoucher(id, vid, req),
   },

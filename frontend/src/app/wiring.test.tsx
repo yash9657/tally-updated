@@ -78,13 +78,32 @@ describe("VoucherScreen Ctrl+A create wiring", () => {
 
   // Payment / Receipt / Contra open in SINGLE-ENTRY mode (Tally's default for
   // those three), which requires an account and at least one particular. They
-  // are filled here the way an operator fills them; the other classes still
-  // accept an empty form, which is the pre-existing behaviour.
+  // are filled here the way an operator fills them.
   const SINGLE_ENTRY: Record<string, boolean> = {
     receipt: true,
     payment: true,
     contra: true,
   };
+
+  // ⛔⛔ AND THE JOURNAL NOW NEEDS ITS GRID FILLED — WHICH IS THE POINT.
+  //
+  // THIS CASE USED TO PASS ON AN EMPTY FORM, AND THAT WAS THE BUG IT CERTIFIED.
+  // F7's `double` branch rendered no posting grid at all, so pressing Ctrl+A on
+  // an untouched Journal called `postJournalVoucher` with `postings: []` — and
+  // this test asserted exactly that as correct behaviour ("the other classes
+  // still accept an empty form, which is the pre-existing behaviour").
+  //
+  // A Journal with no postings is not a voucher. It was the most-cited hidden
+  // parity gap on the board (HANDOFF §4.5 / §5.1: a row reading `on` that could
+  // not be used at all), and the suite was holding it in place. This is
+  // HANDOFF §9.1's "a test can certify a bug" for the second recorded time —
+  // the first was the order book's `As at ${book.as_on}` heading passing on an
+  // empty string.
+  //
+  // The grid now refuses an unbalanced or empty body IN THE FORM, so this case
+  // states a real two-line entry. The refusal itself is covered in
+  // VoucherScreen.doubleEntry.test.tsx.
+  const DOUBLE_ENTRY: Record<string, boolean> = { journal: true };
 
   for (const { fkey, cls, method } of cases) {
     it(`Ctrl+A in a ${cls} voucher calls ${method} with empty voucher_no and shows the returned number`, async () => {
@@ -103,6 +122,29 @@ describe("VoucherScreen Ctrl+A create wiring", () => {
         });
         fireEvent.change(screen.getByTestId("single-amount:0"), {
           target: { value: "2500" },
+        });
+      }
+
+      if (DOUBLE_ENTRY[cls]) {
+        await screen.findByTestId("double-entry-panel");
+        fireEvent.change(screen.getByTestId("de-ledger:0"), {
+          target: { value: "Depreciation" },
+        });
+        fireEvent.change(screen.getByTestId("de-side:0"), {
+          target: { value: "DR" },
+        });
+        fireEvent.change(screen.getByTestId("de-amount:0"), {
+          target: { value: "1250" },
+        });
+        fireEvent.click(screen.getByTestId("de-add-line"));
+        fireEvent.change(screen.getByTestId("de-ledger:1"), {
+          target: { value: "Accumulated Depreciation" },
+        });
+        fireEvent.change(screen.getByTestId("de-side:1"), {
+          target: { value: "CR" },
+        });
+        fireEvent.change(screen.getByTestId("de-amount:1"), {
+          target: { value: "1250" },
         });
       }
 
