@@ -73,6 +73,9 @@ import type {
   BomExplosionResponse,
   EWayBillRequest,
   EWayBillResponse,
+  EInvoiceRaiseRequest,
+  EInvoiceRaised,
+  EInvoicePinned,
   OrderBookResponse,
   CostCentreListResponse,
   CostCentreWriteResponse,
@@ -589,6 +592,51 @@ export interface CoredClient {
     companyID: string,
     voucherID: string,
   ): Promise<EWayBillResponse>;
+
+  /**
+   * RAISE THE e-INVOICE for one voucher, through cored's proxy into statutoryd.
+   *
+   * ⛔⛔ THIS IS THE MOST CONSEQUENTIAL WRITE IN THE PRODUCT AND IT HAS NO UNDO.
+   * On success the voucher is FROZEN: it cannot be altered and cannot be
+   * deleted, ever, by anybody, and there is no reset path anywhere. Everything
+   * else here is correctable. A screen calling this must say so BEFORE the key
+   * is pressed, not on the result panel.
+   *
+   * ⛔ WHAT COMES BACK IS NOT A GOVERNMENT-ISSUED IRN in this deployment — see
+   * {@link EInvoiceRaised}. No IRP credentials exist (HANDOFF §10 item 4).
+   *
+   * ⚠️ RE-RAISING IS SAFE AND RETURNS THE SAME IRN. That is the entire reason
+   * the workflow is durable: its `generate` step is memoized, so a retry after a
+   * transient fault CANNOT mint a second IRN against a real government API.
+   * This is what makes "try again" safe advice for a screen to print — and it is
+   * the OPPOSITE of {@link raiseEWayBill}, which replaces the stored bill and
+   * increments a generation count. Do not copy that screen's re-raise wording.
+   *
+   * The three failure families are kept apart because three different people fix
+   * them, and a screen that collapses them helps none of the three:
+   *   - 422 THE VOUCHER IS WRONG — the accountant fixes it. Includes "this is
+   *     the WRONG VOUCHER": only a Sales invoice is e-invoiceable, and a
+   *     Purchase can be a perfectly good purchase and still be refused. Also a
+   *     stock master with no unit of measure, and an arithmetic the books and
+   *     NIC's two-decimal item block cannot both satisfy. Retrying unchanged
+   *     cannot help.
+   *   - 503 SOMETHING IS DOWN OR SLOW — whoever runs the stack fixes it, and the
+   *     operator should simply try again. statutoryd not answering, its service
+   *     token dead, or a transient IRP fault.
+   *   - 404 no such voucher.
+   */
+  raiseEInvoice(
+    companyID: string,
+    req: EInvoiceRaiseRequest,
+  ): Promise<EInvoiceRaised>;
+  /**
+   * Read the IRN pinned onto a voucher. 404 when none has been raised, which is
+   * the normal answer for almost every voucher and must not surface as an error.
+   *
+   * ⚠️ CARRIES NO `ack_no` — the schema has no column for it. See
+   * {@link EInvoicePinned}.
+   */
+  getEInvoice(companyID: string, voucherID: string): Promise<EInvoicePinned>;
 
   /**
    * THE ORDER BOOKS — outstanding commitments, per direction, as at a date.

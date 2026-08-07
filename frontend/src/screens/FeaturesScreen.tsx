@@ -143,13 +143,24 @@ const FEATURES: {
       },
       {
         name: "e-Invoice / IRN",
-        state: "server",
-        // Was "On". Nothing in this application generates an IRN: there is no
-        // key, no button and no client call — grep the client for "IRN" and the
-        // only hits are this screen and a keymap comment. Under the doc comment
-        // above, "On" means reachable FROM THE KEYBOARD, so "On" was the
-        // flattering-direction error this screen exists to prevent.
-        note: "BUILT, WITH NO KEY THAT REACHES IT. The generation workflow is durable and idempotent — a retried step returns the memoized result, so the provider is hit exactly once per voucher — and pinning an IRN to a voucher (POST .../vouchers/{id}/external-reference) freezes its number and hard-blocks any later alter or delete, which is the invariant that matters: you cannot quietly rewrite an invoice the government has a copy of. WHAT IT TAKES TO ACTUALLY GET ONE, AND WHY IT IS NOT A GOVERNMENT IRN: generation runs in a SEPARATE process (cmd/statutoryd) that calls back into this server, and the provider adapter it is wired with is statutory.FakeProvider — a deterministic stand-in. No Invoice Registration Portal is reachable from this build, so the IRN you can obtain here is a well-shaped fake with the whole workflow, retry classification and freeze behaviour exercised around it, not a registration. The printed invoice also carries no rule 48(4) QR code; see the printing group below.",
+        state: "on",
+        // Was "server", and before that "On" — which was the flattering-direction
+        // error this screen exists to prevent, because nothing reached the
+        // workflow from a keyboard.
+        //
+        // ⛔ IT IS `on` NOW ON BROWSER EVIDENCE, NOT ON A GREEN SUITE. Driven
+        // 2026-08-06 against real cored AND real statutoryd with a virtual
+        // WebAuthn authenticator: Alt+I, pick the invoice, Ctrl+A — IRN
+        // d552699…a25b3c minted, ack 612365224, status ACT, voucher 4 pinned.
+        // `voucher_external_reference` holds one row, kind IRN, created_by
+        // statutoryd. A re-post returned the SAME IRN (twice, 201 both times).
+        // A well-formed ALTER and a DELETE of that voucher both answered 409
+        // naming the IRN.
+        //
+        // ⚠️ `on` MEANS REACHABLE, NOT FILED. What comes back is still a
+        // FakeProvider reference and the screen says so on its face — see the
+        // note. That is the same distinction the e-Way Bill row makes.
+        note: "REACHABLE FROM THE KEYBOARD (Alt+I) — AND WHAT IT PRODUCES IS STILL NOT A GOVERNMENT IRN. The generation workflow is durable and idempotent — a retried step returns the memoized result, so the provider is hit exactly once per voucher — and pinning an IRN to a voucher (POST .../vouchers/{id}/external-reference) freezes its number and hard-blocks any later alter or delete, which is the invariant that matters: you cannot quietly rewrite an invoice the government has a copy of. WHAT IT TAKES TO ACTUALLY GET ONE, AND WHY IT IS NOT A GOVERNMENT IRN: generation runs in a SEPARATE process (cmd/statutoryd) that calls back into this server, and the provider adapter it is wired with is statutory.FakeProvider — a deterministic stand-in. No Invoice Registration Portal is reachable from this build, so the IRN you can obtain here is a well-shaped fake with the whole workflow, retry classification and freeze behaviour exercised around it, not a registration. The printed invoice also carries no rule 48(4) QR code; see the printing group below. HOW AN OPERATOR REACHES IT: Alt+I opens the e-Invoice screen, which lists this period's SALES invoices — only Sales, because an e-invoice is the outward document a seller issues, and a purchase e-invoiced from these books would declare that this company SOLD the goods to its own supplier. Ctrl+A reports the selected one. ⛔ THAT KEYPRESS CANNOT BE UNDONE: it FREEZES the voucher against every later alter and delete, by anyone, with no reset path in the product — so the screen states that above the key rather than on the result panel, and the remedy for a mistake is a credit note rather than a correction. The acknowledgement number is shown once and is never stored, because voucher_external_reference has no column for it. Raising the same invoice twice is SAFE and returns the SAME IRN rather than minting a second one; that idempotence is the whole reason the workflow is durable, and it is what makes 'try again' honest advice after a transient failure.",
       },
       {
         name: "e-Way Bill",

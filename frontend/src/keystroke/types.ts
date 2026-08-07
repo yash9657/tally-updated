@@ -68,6 +68,30 @@
  *                          report` can never match — and it carries a FORM, so
  *                          it needs no period and is exempt from the
  *                          FrameOverlays classification.
+ *  - "e-invoice"        — THE e-INVOICE / IRN (§1.4 B). Pick the sales invoice
+ *                          to report and Ctrl+A raises it through cored's proxy
+ *                          into statutoryd. ⛔ NOTHING IT SHOWS IS A
+ *                          GOVERNMENT-ISSUED IRN — no IRP credentials exist in
+ *                          this deployment, so the reference is minted by a fake
+ *                          provider and the screen says so on its face.
+ *                          ⛔⛔ AND ITS Ctrl+A IS THE ONLY IRREVERSIBLE KEY IN
+ *                          THE PRODUCT: raising an e-invoice FREEZES the
+ *                          voucher against alteration and deletion, with no
+ *                          undo anywhere. The screen states that ABOVE the key
+ *                          rather than on the result panel.
+ *                          The form carries NO operator-stated fields at all,
+ *                          which is what distinguishes it from "e-way-bill":
+ *                          a consignment has facts no ledger holds (which
+ *                          lorry, how far), and an e-invoice has none — it is
+ *                          entirely a restatement of the invoice, so the server
+ *                          derives every figure and there is nothing to
+ *                          mistype onto a document about to be frozen.
+ *                          A ScreenKind and not a "report:NAME" for the reason
+ *                          e-way-bill is: the server serves it under the BARE
+ *                          token `e-invoice`, which a coarse `allow display
+ *                          report` can never match — and it carries a FORM, so
+ *                          it needs no period and is exempt from the
+ *                          FrameOverlays classification.
  *  - "cost-centres"      — the COST MASTERS (T2): the axes of analysis (cost
  *                          CATEGORIES — Department, Branch, Project) and the
  *                          positions on them (cost CENTRES), plus the one form
@@ -152,6 +176,7 @@ export type ScreenKind =
   | "purchase-orders"
   | "boms"
   | "e-way-bill"
+  | "e-invoice"
   | "bank-reconciliation";
 
 /**
@@ -593,6 +618,26 @@ export type KeymapAction =
    * this.
    */
   | { kind: "eWayBill" }
+  /**
+   * Alt+I — THE e-INVOICE / IRN SCREEN.
+   *
+   * TallyPrime files e-invoice actions under its "Z: Exchange" top menu
+   * (RESEARCH.md:698, "Alt+Z (Exchange) > Send for e-Invoicing") — the SAME menu
+   * Alt+Z was bound for on T5's behalf. That menu therefore now has TWO
+   * destinations here and this build still has no Exchange MENU, so rather than
+   * re-purposing a browser-verified key into a picker, the second destination
+   * gets its own combo and Alt+Z's comment names it.
+   *
+   * ⚠️ Alt+I WAS NOT PREVIOUSLY BOUND TO `unavailable` OR TO ANYTHING ELSE, in
+   * the global table or in any screen table — checked, because §7.3 is explicit
+   * that the key you want is often already bound with a claim that has rotted.
+   *
+   * ⛔ IT IS A SCREEN AND NOT A VOUCHER KEY, for the reason eWayBill states and
+   * one more: RESEARCH.md:698 records that TallyPrime 4.x MOVED IRN operations
+   * out of the voucher into an e-Invoice REPORT with a "Pending for IRN
+   * generation" list. Tally arrived at this shape from the other direction.
+   */
+  | { kind: "eInvoice" }
   /**
    * Alt+C on an ORDER REGISTER — record a new order (T3).
    *

@@ -75,6 +75,18 @@ const E_WAY_BILL_BAR: readonly ButtonBarItem[] = [
   item("Ctrl+G", "Switch To"),
 ];
 
+// ⛔ "Report" AND NOT "Raise" OR "Generate IRN". The e-way bill's Ctrl+A is
+// re-raisable and its label can afford to be breezy; this one FREEZES the
+// voucher for good. "Report" is the statutory verb (an invoice is REPORTED to
+// the IRP) and it is the one that does not promise a number this build cannot
+// issue — the bar has no room for the disclosure the screen carries.
+const E_INVOICE_BAR: readonly ButtonBarItem[] = [
+  item("F1", "Help"),
+  item("Ctrl+A", "Report"),
+  item("Alt+G", "Go To"),
+  item("Ctrl+G", "Switch To"),
+];
+
 const GATEWAY_BAR: readonly ButtonBarItem[] = [
   item("F1", "Help"),
   // F3 is Tally's company button. It only earned a place on the bar once a
@@ -344,6 +356,12 @@ export function buttonBarFor(
     // all about Ctrl+A, which is the only way to raise the bill.
     case "e-way-bill":
       return E_WAY_BILL_BAR;
+    // The e-invoice, for the same reason: without this case it falls through to
+    // GATEWAY_BAR, WHICH NO TEST CATCHES — the bar would advertise F3 Company and
+    // F11 Features and say nothing at all about Ctrl+A, which is the only way to
+    // report the invoice.
+    case "e-invoice":
+      return E_INVOICE_BAR;
     case "cost-centres":
       return COST_MASTERS_BAR;
     case "cost-centre-summary":

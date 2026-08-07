@@ -22,6 +22,7 @@ import { TDSRegisterScreen } from "../screens/reports/TDSRegisterScreen";
 import { BankReconciliationScreen } from "../screens/BankReconciliationScreen";
 import { TDSChallansScreen } from "../screens/TDSChallansScreen";
 import { EWayBillScreen } from "../screens/EWayBillScreen";
+import { EInvoiceScreen } from "../screens/EInvoiceScreen";
 import { CostCentresScreen } from "../screens/masters/CostCentresScreen";
 import { CostCentreSummaryScreen } from "../screens/reports/CostCentreSummaryScreen";
 import { CostCategorySummaryScreen } from "../screens/reports/CostCategorySummaryScreen";
@@ -251,6 +252,11 @@ export function createDefaultRegistry(): ScreenRegistry {
     // server serves it under the BARE `e-way-bill` token, which a coarse
     // `allow display report` can never match, and it carries a FORM.
     "e-way-bill": EWayBillScreen,
+    // §1.4 B — the e-invoice / IRN. Registered by ScreenKind and NOT as a
+    // "report:…" key, for the same reason the e-way bill above is: the server
+    // serves it under the BARE `e-invoice` token, which a coarse `allow display
+    // report` can never match, and it carries a FORM.
+    "e-invoice": EInvoiceScreen,
     "cost-centres": CostCentresScreen,
     "cost-centre-summary": CostCentreSummaryScreen,
     "cost-category-summary": CostCategorySummaryScreen,

@@ -11,10 +11,21 @@
 > §1.8's Journal grid is DONE (§1.9) and four more tracks shipped beside it (§1.10), so **§1.8 and
 > §1.4's recommendations are SPENT** — they are kept for their reasoning only.
 >
-> **In one line:** run §2, whose **first job is now `pnpm seed:demo`** (it grew last session and has
-> never executed against a server — §1.7b item 1); then build **the IRN SCREEN**, the only `server`
-> row whose backend is genuinely finished; and **drive a slice of §5.5's audit while the browser is
-> already open**, because four of the eight `on` rows driven last session were lying.
+> ## ⛔⛔ UPDATED 2026-08-06 (LATE): THE IRN SCREEN IS DONE (§1.13) AND THE NEXT TRACK IS #0 IN §1.11.
+>
+> `pnpm seed:demo` ran clean (exit 0), so §1.7b item 1 is closed and `verify:demo` is 33/33 against a
+> **freshly seeded** company for the first time. The IRN screen shipped and its row is **`on` on
+> browser evidence** — an IRN minted from a browser against real cored and real statutoryd, the
+> voucher frozen against both ALTER and DELETE, and a re-post returning the same IRN.
+>
+> **And the §5.5 slice found the biggest live defect on the board: a Purchase, a Credit Note or a
+> Debit Note keyed in a browser is posted AS IF IT WERE A SALES INVOICE** — reversed, with OUTPUT tax
+> where INPUT belongs. Three rows that read `on`, measured in Postgres against seeded controls, and
+> the server answers **201**. It is §1.11's new **#0** and it outranks every screen track.
+>
+> **In one line:** run §2; then fix **the accounting-mode posting builder** (§1.11 #0, §5.5's box);
+> and **keep driving §5.5's audit while the browser is open**, because it has now found a lying `on`
+> row in every single session that has run it.
 >
 > ⚠️ **`on` IS AN UPPER BOUND, NOT A MEASUREMENT.** 31 rows say `on`. Every session that has driven
 > them has found one that was false, and never by reading.
@@ -817,15 +828,27 @@ over the **real three-party stack** (cored → statutoryd → cored, real Postgr
 
 ### 1.11 ⛔⛔ START HERE — THE NEXT SESSION'S PLAN. THIS SUPERSEDES §1.8 AND §1.4.
 
+> ## ⛔⛔ UPDATED 2026-08-06 (LATE). THE IRN SCREEN SHIPPED — §1.13. THE LIST BELOW HAS A NEW #1,
+> ## AND IT IS A MONEY-DIRECTION DEFECT ON THREE ROWS THAT READ `on`.
+>
+> `pnpm seed:demo` (0b) **RAN CLEAN, exit 0** — §1.7b item 1 is CLOSED, and `verify:demo` is 33/33
+> against a **freshly seeded** company for the first time. All four gates matched §2.1 exactly.
+>
+> **The new #1 is the accounting-mode posting builder** (§5.5's box): a Purchase, a Credit Note and a
+> Debit Note keyed in a browser are all posted **as if they were Sales invoices** — reversed, with
+> OUTPUT tax where INPUT belongs. Measured in Postgres against seeded controls. It outranks every
+> screen track below, because a screen nobody has is a missing feature and this is a wrong number in
+> the books that returns 201.
+
 **Run §2 first. Its FIRST job is now `pnpm seed:demo` (§1.7b item 1), not a feature.**
 
 #### 0. THE TEN-MINUTE PREFLIGHT, AND ITEM 1 IS NOT OPTIONAL
 
 | # | Do this | Why |
 |---|---|---|
-| 0a | `git status --porcelain`, ports **8087 / 8088 / 8091 / 5173**, `pg_isready` | §2 |
-| 0b | ⛔ **`pnpm seed:demo` AND READ THE WHOLE LOG** | It grew T2 cost + T3 orders last session and **has never executed against a server.** ~20 hard-abort assertions sit ABOVE the seed's last side effect, so a failure there leaves a company that *looks* seeded, a `.demo-company-id` already written, and a silent `verify:demo` 32/33 |
-| 0c | Re-measure the four gates against §2.1's table | **2355 / 940-66 / verify 0 / demo 33-33.** Do not assume |
+| 0a | `git status --porcelain`, ports **8087 / 8088 / 8091 / 5173**, `pg_isready` | §2. ⛔ **AND CHECK THE AGE OF WHAT IS LISTENING** — a `cored` from the previous session was serving a binary that predated the IRN route, and `/healthz` would have said it was fine |
+| 0b | ✅ **SPENT — `pnpm seed:demo` ran clean (exit 0) 2026-08-06.** Still re-run it; it is cheap and it is the only thing that proves the seed's ~20 hard aborts | It had never executed against a server. It does now, T2 cost + T3 orders included |
+| 0c | Re-measure the four gates against §2.1's table | **2355 / 950-67 / verify 0 / demo 33-33.** Do not assume |
 
 #### THE ORDERED LIST, WITH THE REASON STATED SO IT CAN BE ARGUED WITH
 
@@ -833,7 +856,8 @@ The criterion is unchanged: **how much of a real business's day is blocked.**
 
 | # | Track | Why here | Shape |
 |---|---|---|---|
-| **1** | ⛔ **THE IRN SCREEN** (§1.4 B.4) | **Statutorily MANDATORY** above the turnover threshold, and it is now **the only `server` row whose backend is genuinely finished** — built, defect-fixed and adversarially re-reviewed last session (§1.10). Every other candidate needs a backend first | 15 registrations + 3 client files + one screen. `EWayBillScreen.tsx` is the precedent |
+| **0** | ⛔⛔ **THE ACCOUNTING-MODE POSTING BUILDER** (§5.5's box) | **A wrong number in the books, on three rows that read `on`, returning 201.** A purchase becomes a receivable and declares output tax it does not owe; a sales return increases revenue. Every screen track below is worth less than this | `gstVoucher.ts` takes the voucher type and reads `cfg.primarySide`; INPUT vs OUTPUT tax ledgers per class; the hard-coded `Sundry Debtors` party group. ⛔ **AND A SERVER-SIDE REFUSAL** — a client-only fix leaves the 201 for every other caller |
+| **1** | ✅ **DONE — THE IRN SCREEN** (§1.13) | Shipped and browser-verified; the row is `on`. **What is left around it is in §1.13** | — |
 | **2** | **PAYROLL SCREENS** (§5.2) | Any business with employees. The engine, the statutory rates and the file emitters are all built, and `internal/payroll`/`payrolldb` are **already** in `internal/server`'s archtest allow-set — **no refactor, pure frontend** | The biggest module currently invisible: employees, pay heads, pay run, payslips. Budget **2 sessions**, not 1 |
 | **3** | **T9 FIFO/LIFO** → then **T10 stock groups + compound units** | ⛔ **SERIALISE THESE TWO** — both touch the movement primitive. ⚠️ Closing stock feeds the **Balance Sheet**, so a valuation change MOVES THE SHEET: re-pin `verify:demo` deliberately and explain the change | T9 is a new arm in `ValuerFor` + fixtures, **not** a schema change |
 | **4** | **T14 Backup / restore / split company** | Table stakes: Tally users expect a company to be a file they can carry | Must be tenant-exact. **Reuse the `testdb` delete-plan census** — it already knows every tenant table and is anti-rot by construction |
@@ -931,6 +955,67 @@ orchestrator runs those serially at the end.**
 >
 > **And budget for what the browser pass FINDS, not just for running it.** Last session's found four
 > live defects, three of them in code the session had never touched.
+
+### 1.13 ✅ THE IRN SCREEN SHIPPED — §1.4 B IS CLOSED, AND THE BROWSER PASS FOUND THREE THINGS
+
+**2026-08-06 (late).** Track B's remaining half — the client and the screen — is done, and the
+FeaturesScreen row is **`on` on BROWSER evidence**. B.4's four-row table is now four ✅.
+
+**What was driven, against real cored AND real statutoryd, with the virtual authenticator (§9.7):**
+
+```
+Alt+I -> the screen lists ONLY this period's Sales invoices (3 of the demo's 13 vouchers)
+pick Sales 4, Ctrl+A -> 403 STEPUP -> passkey -> 201
+  IRN d552699569a4a3a835de6e8dfd0364c12163c542efd75eb2d12dfeca74a25b3c
+  ack 612365224   status ACT   pinned voucher_no 4
+voucher_external_reference: 1 row, kind IRN, created_by statutoryd
+re-POST x2        -> 201, 201, the SAME irn and the SAME ack        (B.5 item 2)
+DELETE            -> 409 "voucher frozen by IRN … (no 4)"
+well-formed ALTER -> 409, same message                              (the freeze, proved BOTH ways)
+```
+
+⚠️ **THE FIRST ALTER ATTEMPT ANSWERED 422, NOT 409, AND THAT WAS MY MALFORMED BODY** — posting
+validation runs before the freeze check. A 409 on a *valid* alter is the only proof that means
+anything here; the 422 would have been a false negative recorded as a pass.
+
+#### ⛔ THE THREE THINGS THE BROWSER FOUND, AND ONLY ONE WAS IN THIS TRACK'S CODE
+
+**1. The step-up wipes the screen.** §5.5's log has it in full. `App.tsx`'s `resolvedClient` memo
+depends on `session`; a step-up REPLACES the session token; every screen effect keyed on `client`
+re-runs the moment the passkey ceremony finishes. On the first write of a session — the only one most
+operators ever perform — the refusal that came back was **cleared one render later** and the operator
+saw the key do nothing. ✅ Fixed here (the reset is keyed on the SELECTION changing, not on the effect
+running) and pinned by two tests that both fail without the guard.
+⛔ **`EWayBillScreen.tsx` HAS THE SAME SHAPE AND IS NOT FIXED.** Same unconditional reset, same
+`client` dependency. On the e-way bill the loss is a `bill`; here it was the **acknowledgement
+number**, which the schema stores nowhere and which is therefore unrecoverable.
+
+**2. `voucher_gst_line`'s absent description is a REFUSAL, and the demo company is made of them.**
+All three seeded Sales vouchers are accounting-mode, so every one is refused by
+`ErrLineNotDescribable`. **An item invoice had to be keyed before the track could be demonstrated at
+all.** Worth knowing before the next person concludes the route is broken.
+
+**3. A mutation proof that failed to fail.** This file's header claimed deleting `"e-invoice"` from
+`COMPANY_SCOPED_SCREENS` broke the suite. It was run; it did not — every test supplied an
+`initialCompany`, so the guard was never on their path. The claim was **false and was in a comment
+that reads as evidence**. It is now a test that walks the no-company path, and the mutation re-run
+against it. ⚠️ §9.2's rule needs the sharper form: **run the mutation, and check that what fails is
+what you predicted would fail.**
+
+#### WHAT IS LEFT AROUND THIS ROW
+
+- ⛔ **`EWayBillScreen.tsx`'s copy of the step-up wipe** (finding 1). Small, and it is a real
+  data-loss path on a row that reads `on`.
+- **No print target.** `printTarget.ts` REFUSES it by name, with the reasoning — the invoice itself
+  still prints, only the e-invoice artefact does not. The Rule 48(4) QR is permanently unshippable
+  from here (§5.3) and the refusal says so.
+- **The `Alt+Z` Exchange-menu note was corrected**, not left to rot: that menu now has two
+  destinations (RESEARCH.md:698) and Alt+Z was written when it had one. Alt+Z was **not**
+  re-purposed into a picker — it is browser-verified on the e-way bill and moving it would spend that
+  evidence to save a keystroke.
+- ⚠️ **The duplicate-IRN hazard is still invisible from here** and no test in this stack can surface
+  it: `FakeProvider` hashes the whole payload, so it cannot reject what NIC would. The Sales-only
+  class gate is what stands in for it.
 
 ### B. ⛔ THE TRACK AFTER THIS ONE — THE e-INVOICE / IRN SCREEN
 
@@ -1729,6 +1814,53 @@ session's memory is an audit that will be run again from scratch.
 | 2026-08-06 | **ALTER of an accounting-mode GST invoice (narration only)** | ⛔⛔ **WAS STRIPPING THE TAX** — re-derived at 0%, an 11,800 invoice became 10,000 and left GSTR-1. ✅ Fixed (§1.10); a multi-rate voucher is now REFUSED rather than silently collapsed |
 | 2026-08-06 | **`Alt+E` on every report** | ⛔ **WAS BOUND, LIVE, AND LOSING PAISA** — it exported the formatted DISPLAY strings. ✅ Fixed; exact wire values, CSV-injection guarded, refusals answered |
 | 2026-08-06 | **e-invoice raised against a PURCHASE** | ⛔⛔ **WAS 201, AND FROZE THE VOUCHER FOREVER** — seller/buyer inverted. ✅ Refused by name; DELETE works again |
+| 2026-08-06 | **`Alt+I` e-Invoice → pick a Sales invoice → `Ctrl+A`** | ✅ **`server` → `on`.** IRN `d552699…a25b3c` minted from a BROWSER against real cored **and** real statutoryd through the passkey; ack `612365224`, status ACT, voucher 4 pinned. `voucher_external_reference` = 1 row, kind IRN, `created_by` statutoryd. Re-post returned the **SAME** IRN (201 twice). A well-formed ALTER **and** a DELETE both 409'd naming the IRN. **B.5 items 1 and 2 are now proved from the BROWSER, not just over HTTP** |
+| 2026-08-06 | **`Alt+I` on an ACCOUNTING-mode sale** | ✅ refused 422 by name (`ErrLineNotDescribable`) — the books hold an HSN, value and rate per line but no description/qty/unit, and NIC needs all three. The screen shows the refusal verbatim **and** that the voucher was NOT frozen |
+| 2026-08-06 | **the FIRST write of a session, on any screen that shows a result** | ⛔⛔ **A REFUSAL — OR AN ACK NUMBER — IS WIPED OFF THE SCREEN BY THE STEP-UP.** `App.tsx`'s `resolvedClient` memo depends on `session`, and a WebAuthn step-up REPLACES the session token, so every screen effect keyed on `client` re-runs the instant the ceremony completes. Observed: `POST → 403 STEPUP` → passkey → `POST → 422` → the reset in the load effect cleared it. **The operator pressed the key and saw NOTHING happen.** ✅ Fixed on the e-invoice screen (reset keyed on the SELECTION changing, not on the effect running), pinned by two tests that both fail without the guard. ⛔ **`EWayBillScreen.tsx` HAS THE IDENTICAL SHAPE AND IS NOT FIXED** — same unconditional reset, same `client` dep |
+| 2026-08-06 | **`Alt+F6` Credit Note → key it → `Ctrl+A`** | ⛔⛔ **POSTS THE MONEY BACKWARDS — see the box below.** Row reads `on` |
+| 2026-08-06 | **`F9` Purchase in ACCOUNTING mode → key it → `Ctrl+A`** | ⛔⛔ **SAME DEFECT, AND IT ALSO BOOKS OUTPUT TAX INSTEAD OF INPUT.** Row reads `on` |
+
+> ### ⛔⛔ THE BIGGEST FIND OF THIS PASS, AND IT IS NOT A CREDIT-NOTE BUG
+> **EVERY ACCOUNTING-MODE GST VOUCHER THAT IS NOT A SALES INVOICE IS POSTED AS IF IT WERE ONE.**
+> `buildGstVoucherRequest` (`screens/vouchers/gstVoucher.ts`) takes **no voucher type** and always
+> emits the sales shape — party **DR** the gross, revenue **CR** the base, **OUTPUT** tax **CR** —
+> and every `cfg.showGst` class routes through it. `cfg.primarySide` exists and is **never read** by
+> the builder.
+>
+> **Measured in Postgres, with a seeded CONTROL of the same class in the same table:**
+>
+> ```
+> Credit Note 1 (seeded, CORRECT)   Cr Mumbai Metals 14160 / Dr Domestic Sales 12000
+> Credit Note 2 (BROWSER-KEYED)     Dr Acme Traders   1180 / Cr Domestic Sales  1000 / Cr Output CGST+SGST 180
+> Purchase    1 (seeded, CORRECT)   Cr Steel Suppliers 35400 / Dr Raw Material Purchases 30000 / Dr INPUT CGST
+> Purchase    3 (BROWSER-KEYED)     Dr Steel Suppliers  2360 / Cr Purchases        2000 / Cr OUTPUT CGST+SGST 360
+> ```
+>
+> So: **a sales RETURN increases revenue, output tax and the customer's receivable** by the amount it
+> was raised to reduce them; and **a PURCHASE turns a payable into a receivable and declares output
+> tax the company does not owe while destroying the input credit it could have claimed.** Three rows
+> that all read `on` — F9 Purchase (accounting mode), Alt+F5 Debit Note, Alt+F6 Credit Note.
+>
+> ⛔ **NOTHING REFUSES IT, AND THAT IS BY DESIGN AT EVERY LAYER.** `validatePostings` only checks
+> Dr == Cr, and both orientations balance. `deriveAndVerifyGST`'s own comment says it sums posting
+> amounts **without looking at `dr_cr`**, "so a fully REVERSED voucher verifies here exactly as a
+> correct one does". The server returns **201**.
+>
+> ⚠️ **WHY NO SUITE CAUGHT IT, and it is the §1.10 lesson again one level up:** the seed script posts
+> **explicit postings** and is correct, so every fixture, every report test and `verify:demo` are
+> built on correctly-shaped data. Only the BROWSER path goes through the builder. **The oracle and the
+> defect never meet.**
+>
+> **Item-invoice mode is NOT affected** — its postings are derived server-side from the grid.
+> Accounting mode is where the rate and the direction exist only in the request.
+>
+> ⛔ **NOT FIXED — IT IS THE NEXT SESSION'S TRACK, AND IT IS #1.** It was found with ~no budget left
+> and the fix lands in `VoucherScreen.tsx` + `gstVoucher.ts`, the two most contended files in the
+> repo. It needs: orientation from `cfg.primarySide`; INPUT vs OUTPUT tax ledgers per class; the party
+> group default (`Sundry Debtors` is hard-coded, so a supplier free-typed on a Debit Note is created
+> as a DEBTOR — which drags it into GSTR-1 as an outward supply, `gstr1.go:414`); and a server-side
+> refusal, because a client-only fix leaves the 201 intact for every other caller.
+
 ⛔ **THE METHOD NOTE THAT CAME OUT OF THIS, and it is worth more than the rows:** driving ONE row
 end to end is not enough when the row covers a CLASS. "The Day Book works" was established with a
 Sales voucher and was false for every other class. **When a screen is parameterised by type, drive

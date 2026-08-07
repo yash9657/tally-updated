@@ -293,6 +293,14 @@ export function resolvePrintTarget(
     };
   }
 
+  if (screen === "e-invoice") {
+    return {
+      kind: "refusal",
+      reason:
+        "The e-invoice does not print in this build, and that is a DECISION rather than an unwritten layout — the same one the e-way bill makes, for a sharper reason. A printed tax invoice carrying an IRN is the document a buyer files their input credit against, and what this build can produce is a payload plus a reference minted by a stand-in provider because no IRP credentials exist (HANDOFF §10 item 4). Printing it would hand a buyer a document that looks filed and is not, and the buyer would find out from the department rather than from us. The screen shows the reference and its disclosure instead. ⛔ Note that the INVOICE ITSELF still prints from the voucher — it is only the e-invoice artefact that does not, and that is the right split: the sale is real, the filing is not. The day real IRP credentials exist, the printed form with its Rule 48(4) QR code is the change to make — and the QR code specifically is NOT shippable from here at all, because its payload is signed with the Income Tax Department's private key (HANDOFF §5.3).",
+    };
+  }
+
   if (screen === "e-way-bill") {
     return {
       kind: "refusal",

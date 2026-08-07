@@ -1022,6 +1022,21 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
       return pushOnce("e-way-bill");
     }
 
+    case "eInvoice": {
+      // Alt+I — the e-INVOICE / IRN screen (§1.4 B).
+      //
+      // Reachable from ANYWHERE, for the reason the e-way bill above gives: it
+      // is a statutory act an operator performs immediately after accepting the
+      // invoice, from wherever they happen to be. TallyPrime agrees from the
+      // other direction — RESEARCH.md:698 records that 4.x moved IRN operations
+      // out of the voucher into a standalone e-Invoice report.
+      //
+      // pushOnce, so pressing Alt+I twice does not stack a second identical
+      // frame; `eInvoice` is in ALWAYS_MEANINGFUL in AppShell so the shell does
+      // not additionally report it as a key that does not apply here.
+      return pushOnce("e-invoice");
+    }
+
     case "createOrder":
     case "closeOrder":
     case "createBom":

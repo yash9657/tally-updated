@@ -109,6 +109,8 @@ import type {
   BomView,
   EWayBillRequest,
   EWayBillResponse,
+  EInvoiceRaiseRequest,
+  EInvoiceRaised,
   CostCentre,
   CostCentreListResponse,
   CostCentreWriteResponse,
@@ -940,6 +942,17 @@ interface MockCompany {
     string,
     { view: EWayBillResponse; generatedFromVersion: number }
   >;
+  /**
+   * THE RAISED e-INVOICES, keyed by voucher_id.
+   *
+   * ⛔ THERE IS NO `generatedFromVersion` HERE AND THAT ASYMMETRY WITH
+   * `eWayBills` IS THE WHOLE POINT. An e-way bill can go stale because the
+   * invoice under it can still be ALTERED. An e-invoice cannot: raising one
+   * FREEZES the voucher, so no later version can exist to be compared against.
+   * Staleness is not a state this artefact can reach, and a `stale` field here
+   * would be a field that is always false — which reads as "checked, and fine".
+   */
+  eInvoices: Map<string, EInvoiceRaised>;
   /**
    * Per-(class, fin_year) NEXT free number. Mirrors voucher_number_counter:
    * monotonic, advanced ONLY when WE allocate (empty client voucher_no on a
@@ -1865,6 +1878,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         tdsDeductions: mockDeductionFixtures(),
         views: new Map(),
         eWayBills: new Map(),
+        eInvoices: new Map(),
         members: [
           {
             user_id: MOCK_USER_ID,
@@ -1960,6 +1974,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       tdsDeductions: mockDeductionFixtures(),
       views: new Map(),
       eWayBills: new Map(),
+      eInvoices: new Map(),
       counters: new Map(),
       // The seeded demo tenant carries the same admin defaults every company
       // gets: its two seeded levels, and the mock identity as its Owner.
@@ -3058,6 +3073,29 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
    * stamp op=ALTER so the derived trial balance / day book reflect the NEW
    * amount. The voucher_id is preserved (identity is stable across versions).
    */
+  /**
+   * ⛔⛔ THE FREEZE. A voucher carrying an IRN CANNOT BE ALTERED OR DELETED, by
+   * anybody, ever — there is no undo and no reset path anywhere in the product.
+   *
+   * The server enforces this in the freeze hook's `voucher_external_reference`
+   * row (kind `IRN`) and answers 409. It is modelled here because §7.4's rule is
+   * that the mock must refuse what the server refuses, and because this
+   * particular refusal is the entire risk of the feature: a screen developed
+   * against a lenient mock would offer an Alter that works in every test and
+   * 409s the first time an operator uses it on a real invoice — at which point
+   * the invoice is already frozen and the operator's correction is impossible.
+   */
+  function frozenByIRN(c: MockCompany, voucherID: string): void {
+    const irn = c.eInvoices.get(voucherID);
+    if (!irn) return;
+    throw new ApiError(
+      409,
+      `voucher frozen by IRN ${irn.irn} (no ${irn.pinned_voucher_no}) — an e-invoice has been ` +
+        "reported to the IRP against this document, so it can no longer be altered or deleted. " +
+        "Issue a credit note against it instead",
+    );
+  }
+
   function alterVoucher(
     companyID: string,
     cls: VoucherClass,
@@ -3069,6 +3107,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     if (!entry) {
       throw new Error("voucher not found");
     }
+    frozenByIRN(c, voucherID);
     // An ALTER of a stock voucher is a full restatement of the GOODS, and a
     // Physical Stock's correction is re-derived against a book that EXCLUDES
     // this voucher's own superseded movements — otherwise re-counting the same
@@ -3464,6 +3503,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       if (idx < 0) {
         throw new Error("voucher not found");
       }
+      frozenByIRN(c, voucherID);
       const prior = c.vouchers[idx] as DayBookEntry;
       const nextVersion = prior.version_no + 1;
       // Tombstone: drop the voucher's accounting effect and default day-book
@@ -6076,6 +6116,141 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         ...held.view,
         stale:
           current !== undefined && current !== held.generatedFromVersion,
+      };
+    },
+    /**
+     * RAISE THE e-INVOICE. §7.4: THE MOCK MUST REFUSE WHAT THE SERVER REFUSES,
+     * and here that is not a nicety — every refusal below guards a document that
+     * carries a government reference number and then FREEZES the voucher against
+     * it, with no undo anywhere in the product. A lenient mock would teach a
+     * screen author that these cases do not happen.
+     *
+     * The refusals mirror internal/einvoice's sentinels, in the server's order.
+     */
+    async raiseEInvoice(companyID, req: EInvoiceRaiseRequest) {
+      const co = ensure(companyID);
+      const voucherID = (req.voucher_id ?? "").trim();
+      const view = voucherID ? co.views.get(voucherID) : undefined;
+      if (!view) {
+        throw new ApiError(
+          404,
+          "einvoice: no such voucher, or no e-invoice has been raised for it in this company",
+        );
+      }
+
+      // ---- IDEMPOTENCY, AND IT IS CHECKED BEFORE EVERY REFUSAL BELOW.
+      //
+      // ⛔ THE SAME IRN COMES BACK, NOT A NEW ONE. This is the single property
+      // whose failure mints a DUPLICATE against a real government API, and it is
+      // the entire reason statutoryd's workflow is durable and its `generate`
+      // step memoized. It is checked first because a settled workflow is never
+      // re-validated by the server either: once an IRN exists the voucher is
+      // frozen, so re-deriving the refusals could only ever answer a question
+      // about a document that can no longer change.
+      const settled = co.eInvoices.get(voucherID);
+      if (settled) return settled;
+
+      // ---- REFUSAL 1: THE WRONG DOCUMENT. This is the one that shipped as a
+      // critical defect and was caught only by RUNNING it: a Purchase was
+      // e-invoiced, 201, seller = the company's own GSTIN and buyer = its
+      // SUPPLIER, and the freeze then made a legitimate purchase record
+      // un-alterable and un-deletable forever.
+      //
+      // ⚠️ Credit and Debit notes are LEGITIMATELY e-invoiceable in India as CRN
+      // and DBN. Refusing them is a real gap, not a rule — this build models
+      // neither the document type nor the reference to the original invoice that
+      // NIC requires alongside it, and a credit note submitted as "INV" is a
+      // false document. So they are refused BY NAME with the gap stated.
+      if (view.class !== "Sales") {
+        throw new ApiError(
+          422,
+          "einvoice: an e-invoice is the OUTWARD document a seller issues, so it can only be " +
+            "raised against a SALES invoice. Supported: Sales (NIC document type INV). NOT " +
+            "supported: Purchase, Credit Note and Debit Note — a purchase e-invoiced from these " +
+            "books would declare that this company SOLD the goods to its own supplier, and a " +
+            "credit or debit note is a different NIC document type (CRN/DBN, with a reference to " +
+            "the original invoice) that this version does not build. Nothing else — receipt, " +
+            "payment, contra, journal, delivery note, payroll — is an invoice at all",
+        );
+      }
+
+      // ---- REFUSAL 2: no tax. An e-invoice reports a taxable supply.
+      const tax =
+        Number(view.cgst ?? 0) + Number(view.sgst ?? 0) + Number(view.igst ?? 0);
+      if (Number(view.taxable_value ?? 0) <= 0 && tax <= 0) {
+        throw new ApiError(
+          422,
+          "einvoice: this invoice carries no GST lines, and an e-invoice reports a taxable " +
+            "outward supply — there is nothing to report",
+        );
+      }
+
+      // ---- REFUSAL 3: NIC's ItemList requires at least one item.
+      //
+      // ⛔ THIS IS THE REFUSAL THAT SETTLED THE ARCHITECTURE. statutoryd's own
+      // GetVoucher maps five amount fields and NO LINES, so an e-invoice raised
+      // without a cored-side line-item builder fails "[ItemList: 0 items,
+      // minimum 1]" every time. Only cored holds the inventory rows, the stock
+      // masters, the HSN and the rate — which is why cored proxies rather than
+      // the browser calling statutoryd directly.
+      const lines = view.inventory ?? [];
+      if (lines.length === 0) {
+        throw new ApiError(
+          422,
+          "einvoice: this invoice has no item lines, and NIC's schema requires at least one",
+        );
+      }
+
+      // ⛔ A HASH OF THE PAYLOAD, MATCHING FakeProvider — AND THAT IS ITSELF A
+      // DISCLOSURE. A real IRP derives IRN = hash(SupplierGSTIN, DocType, DocNo,
+      // FY) and REJECTS the second document that hashes the same. FakeProvider
+      // hashes the WHOLE PAYLOAD, so Sales #1, Purchase #1 and Credit Note #1
+      // would all mint DISTINCT IRNs where NIC would reject two of them. No test
+      // written against this fake can fail that way, which is exactly why the
+      // class refusal above is a hard gate rather than something left to the
+      // provider to notice.
+      let h = 0;
+      const seed = `${companyID}:${voucherID}:${view.voucher_no}:${view.version_no}`;
+      for (let i = 0; i < seed.length; i++) {
+        h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+      }
+      const hex = h.toString(16).padStart(8, "0");
+
+      const raised: EInvoiceRaised = {
+        voucher_id: voucherID,
+        voucher_no: view.voucher_no,
+        irn: `${hex}${hex}${hex}${hex}`,
+        ack_no: String(112000000000000 + (h % 1000000)),
+        status: "ACT",
+        // The freeze hook pins the number the IRN refers to. From here the
+        // voucher cannot be altered or deleted — see alterVoucher/deleteVoucher.
+        pinned_voucher_no: view.voucher_no,
+      };
+      co.eInvoices.set(voucherID, raised);
+      return raised;
+    },
+    async getEInvoice(companyID, voucherID: string) {
+      const co = ensure(companyID);
+      const held = co.eInvoices.get((voucherID ?? "").trim());
+      if (!held) {
+        // ⚠️ THE NORMAL ANSWER FOR ALMOST EVERY VOUCHER. A screen must not treat
+        // it as an error.
+        throw new ApiError(
+          404,
+          "einvoice: no such voucher, or no e-invoice has been raised for it in this company",
+        );
+      }
+      // ⛔ NO `ack_no` KEY, matching the server and the schema: there is no
+      // column for it in voucher_external_reference. Spreading `held` here would
+      // hand a screen an ack number the real GET never carries, and the screen
+      // would render it in a panel that is blank against a real server.
+      return {
+        voucher_id: held.voucher_id,
+        voucher_no: held.voucher_no,
+        irn: held.irn,
+        pinned_voucher_no: held.pinned_voucher_no,
+        created_by: MOCK_SUBJECT,
+        created_at: new Date().toISOString(),
       };
     },
     async salesOrderBook(companyID, asOn?: string) {

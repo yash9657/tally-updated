@@ -74,6 +74,9 @@ import type {
   BomExplosionResponse,
   EWayBillRequest,
   EWayBillResponse,
+  EInvoiceRaiseRequest,
+  EInvoiceRaised,
+  EInvoicePinned,
   OrderBookResponse,
   CostCentreListResponse,
   CostCentreWriteResponse,
@@ -450,6 +453,29 @@ export function createRestClient(
     getEWayBill(companyID, voucherID: string) {
       return http.get<EWayBillResponse>(
         `${company(companyID)}/e-way-bills/${encodeURIComponent(voucherID)}`,
+      );
+    },
+    raiseEInvoice(companyID, req: EInvoiceRaiseRequest) {
+      // ⛔ FLAT, not /vouchers/{id}/e-invoice — the same trap the e-way bill
+      // route documents, and it bites identically. cored's routeAction reads
+      // everything after "/vouchers/" as the voucher CLASS, so the nested path
+      // maps to a request to create a voucher of class "{id}/e-invoice" — a
+      // class no vocabulary knows, i.e. default-deny for the OWNER too,
+      // presenting as an unexplained 403. The voucher is named in the BODY.
+      // See handler_einvoice.go's header.
+      //
+      // ⚠️ statutoryd's own endpoint IS nested (POST
+      // /companies/{c}/vouchers/{v}/e-invoice) and that is fine: it has no
+      // routeAction, no PDP and no voucher classes. The two paths differ on
+      // purpose, and this is cored's.
+      return http.post<EInvoiceRaised>(
+        `${company(companyID)}/e-invoices`,
+        req,
+      );
+    },
+    getEInvoice(companyID, voucherID: string) {
+      return http.get<EInvoicePinned>(
+        `${company(companyID)}/e-invoices/${encodeURIComponent(voucherID)}`,
       );
     },
     explodeBom(companyID, bomID: string, qty: string) {

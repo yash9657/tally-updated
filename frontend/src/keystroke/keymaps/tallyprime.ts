@@ -181,7 +181,20 @@ const RAW_BINDINGS: Record<string, KeymapAction> = {
   // ⚠️ Alt+Z WAS NOT PREVIOUSLY BOUND TO `unavailable`, so there is no stale note
   // to correct — checked, because §7.3 is explicit that the key you want is often
   // already bound with a claim that has rotted.
+  //
+  // ⚠️ AND THE "one thing that menu would offer" CLAIM ABOVE HAS SINCE EXPIRED:
+  // the Exchange menu's OTHER destination is "Send for e-Invoicing"
+  // (RESEARCH.md:698), and it now exists too, on Alt+I below. This note is
+  // corrected rather than left to rot for exactly the reason §7.3 gives — a
+  // sentence that was true when written is the kind that sends an operator
+  // looking for a feature they already have. Alt+Z is NOT re-purposed into an
+  // Exchange picker: it is browser-verified on the e-way bill and moving it
+  // would spend that evidence to save one keystroke.
   "Alt+Z": { kind: "eWayBill" },
+  // ---- THE e-INVOICE (§1.4 B). The Exchange menu's second destination. See the
+  // `eInvoice` action in keystroke/types.ts for why it is a SCREEN and not a
+  // voucher key, and why Alt+I rather than a re-used Alt+Z.
+  "Alt+I": { kind: "eInvoice" },
   "Ctrl+F8": { kind: "orderRegister", direction: "sales" },
   "Ctrl+F9": { kind: "orderRegister", direction: "purchase" },
 };
@@ -672,6 +685,29 @@ const RAW_SCREEN_BINDINGS: Partial<
     // pushOnce plus ALWAYS_MEANINGFUL, not by a refusal.
     ...voucherKeysHeldBack("the e-way bill screen", "consignment"),
   },
+  // ---- THE e-INVOICE (§1.4 B). It carries a FORM — a selected invoice and an
+  // irreversible Ctrl+A — so the same argument applies: AN UNBOUND KEY HERE IS
+  // NOT INERT. Without these entries the global voucher keys fire (F5 a Payment,
+  // F9 a Purchase, F8 a Sales) over the screen, and the frame goes with them.
+  //
+  // ⛔ AND THE STAKES ARE HIGHER HERE THAN ON ANY OTHER FORM-CARRYING SCREEN.
+  // Everywhere else a stray voucher key costs the operator their half-keyed
+  // work. Here the screen it destroys is the one showing an ACKNOWLEDGEMENT
+  // NUMBER THAT IS STORED NOWHERE AND CAN NEVER BE READ AGAIN.
+  "e-invoice": {
+    // F2 would read as "Date" from the global table. An e-invoice has no period:
+    // it reports ONE document, and the date on it is the invoice's own. It is
+    // not a range and not a choice.
+    F2: {
+      kind: "unavailable",
+      feature: "Period (F2)",
+      note: "An e-invoice has no period. It reports ONE invoice, on the date that invoice already carries — there is no range to set. Pick the invoice from the list; the list itself is the Day Book's period.",
+    },
+    // ⚠️ Alt+I IS DELIBERATELY LEFT LIVE HERE rather than held back, exactly as
+    // Alt+Z is on the e-way bill screen: pressing the key for the screen you are
+    // already on is answered by pushOnce plus ALWAYS_MEANINGFUL, not a refusal.
+    ...voucherKeysHeldBack("the e-invoice screen", "invoice"),
+  },
   // Alt+L on a voucher opens its EDIT LOG. RESEARCH sec 6 pins the PLACEMENT
   // (Tally shows the Edit Log from the voucher alteration screen and the Day
   // Book) but not the combo, so this is scoped to the voucher screen rather
@@ -798,6 +834,13 @@ export function actionLabel(action: KeymapAction): string {
       // button bar and in the keyboard help, and a label promising a NUMBER is
       // how the local reference gets printed as a government one.
       return "e-Way Bill (Rule 138)";
+    case "eInvoice":
+      // ⛔ "e-Invoice" AND NOT "Generate IRN". Same argument as the label above,
+      // one degree sharper: this deployment cannot reach the IRP at all, and a
+      // label promising an IRN is how a locally-minted reference gets read as a
+      // government one — from the button bar, where there is no room for the
+      // disclosure the screen carries.
+      return "e-Invoice (report to IRP)";
     case "goto":
       return "Go To (keeps this screen)";
     case "switchTo":

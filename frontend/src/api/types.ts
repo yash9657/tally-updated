@@ -2788,6 +2788,84 @@ export interface EWayBillResponse {
   stale: boolean;
 }
 
+/**
+ * THE e-INVOICE / IRN (§1.4 B). cored PROXIES to statutoryd.
+ *
+ * ===========================================================================
+ * ⛔ THE REQUEST CARRIES ONLY THE VOUCHER, AND THAT IS THE WHOLE POINT
+ * ===========================================================================
+ * statutoryd's OWN request demands seller and buyer GSTIN, legal name and state
+ * code plus the entire NIC item list, because statutoryd cannot read cored's
+ * masters. cored CAN — every one of those fields is derived from the `company`
+ * row, the party `ledger` row and the voucher's own GST and stock lines.
+ *
+ * So a browser must NOT be given fields for them. A browser that had to supply
+ * them would be re-typing the books, and a browser that mistyped one would put a
+ * wrong GSTIN on a document carrying a government reference number — which is
+ * then FROZEN and cannot be corrected. Compare {@link EWayBillRequest}, which
+ * legitimately carries seven operator-stated fields because they are facts about
+ * the world (which lorry, how far) that no ledger holds. An e-invoice has none:
+ * it is entirely a restatement of the invoice.
+ */
+export interface EInvoiceRaiseRequest {
+  voucher_id: string;
+}
+
+/**
+ * A raised e-invoice, as the RAISE answers it.
+ *
+ * ⚠️ THIS IS THE ONLY PLACE `ack_no` EVER EXISTS — see {@link EInvoicePinned}.
+ */
+export interface EInvoiceRaised {
+  voucher_id: string;
+  voucher_no: string;
+
+  /**
+   * ⛔ NOT A GOVERNMENT-ISSUED IRN IN THIS DEPLOYMENT, and a screen must say so
+   * on the artefact's own face. No IRP credentials exist here (HANDOFF §10
+   * item 4), so `FakeProvider` mints this from a hash of the payload. A real
+   * IRP derives IRN = hash(SupplierGSTIN, DocType, DocNo, FY) and REJECTS a
+   * duplicate; the fake hashes the whole payload and cannot, which is why no
+   * test in this stack can show a duplicate-IRN defect.
+   */
+  irn: string;
+  /** The NIC acknowledgement number. Available on the raise and NEVER AGAIN. */
+  ack_no: string;
+  /** "ACT" from the fake provider. A real IRP also emits CNL for a cancelled IRN. */
+  status: string;
+
+  /**
+   * ⛔ THE VOUCHER IS NOW FROZEN AND THIS IS THE NUMBER THE IRN REFERS TO.
+   *
+   * The freeze hook has just made this voucher un-alterable and un-deletable,
+   * with NO UNDO ANYWHERE IN THE PRODUCT. A screen that does not show this
+   * leaves the operator to discover the freeze by being refused an edit later,
+   * with nothing connecting the refusal to this action.
+   */
+  pinned_voucher_no: string;
+}
+
+/**
+ * An IRN read back off a voucher. 404 when none has been raised, which is the
+ * NORMAL answer for almost every voucher.
+ *
+ * ⛔ NO `ack_no` KEY, DELIBERATELY, AND ITS ABSENCE IS THE HONEST ANSWER.
+ * `voucher_external_reference` (migration 0009) has no column for the NIC
+ * acknowledgement number — it holds the kind, the ref and the pinned number.
+ * A key carrying "" would read as "this invoice has no ack number", which is a
+ * claim about the IRP rather than about this schema. The ack number is available
+ * on the RAISE and never again, so a screen that wants to show it must show it
+ * then.
+ */
+export interface EInvoicePinned {
+  voucher_id: string;
+  voucher_no: string;
+  irn: string;
+  pinned_voucher_no: string;
+  created_by: string;
+  created_at: string;
+}
+
 /** The order list: heads only, WITHOUT their lines — see {@link OrderView}. */
 export interface OrderListResponse {
   direction: OrderDirection;

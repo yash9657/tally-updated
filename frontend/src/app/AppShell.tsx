@@ -62,6 +62,13 @@ const COMPANY_SCOPED_SCREENS = new Set<NavSnapshot["screen"]>([
   // own state — including its 403 panel, which is a NORMAL answer here (the
   // bare `e-way-bill` token is denied to a level whose default_access is 'none').
   "e-way-bill",
+  // §1.4 B. The e-invoice screen reads ONE company's sales invoices and reports
+  // one of them, so it needs a scope. Identical failure mode to every screen
+  // above: omit it and useCompanyID() THROWS before the screen can render its
+  // own state — including its 403 panel, which is a NORMAL answer here (the bare
+  // `e-invoice` token is denied to a level whose default_access is 'none', so
+  // Data Entry cannot raise or see one until an administrator grants it).
+  "e-invoice",
 ]);
 
 /**
@@ -148,6 +155,8 @@ const ALWAYS_MEANINGFUL = new Set<KeymapAction["kind"]>([
   // as orderRegister above: the operator asked for the e-way bill screen and is
   // looking at it, so "does not apply on this screen" would be a false statement.
   "eWayBill",
+  // Alt+I on the e-invoice screen it already opens — same pushOnce reasoning.
+  "eInvoice",
   "date",
   "help",
   "features",
@@ -461,6 +470,11 @@ function screenTitle(snap: NavSnapshot): string {
     // produces is a payload and a LOCAL reference — never a government number.
     case "e-way-bill":
       return "e-Way Bill";
+    // ⛔ THE TITLE SAYS "e-Invoice" AND NOT "IRN". Same argument as the line
+    // above, and it bites harder: a title bar reading "IRN" is a claim that this
+    // screen produces a government reference number, which this build cannot.
+    case "e-invoice":
+      return "e-Invoice";
     default:
       return "Tally";
   }
@@ -496,6 +510,13 @@ function hintsFor(snap: NavSnapshot): string[] {
       return ["Alt+C: Create", "Ctrl+A: Accept", ...common];
     case "e-way-bill":
       return ["Ctrl+A: Raise the bill", ...common];
+    // ⛔ "Report the invoice (FREEZES it)" AND NOT "Ctrl+A: Raise". The hint
+    // strip is the last surface an operator reads before pressing the key, and
+    // it is the only one of the three (bar, strip, screen) that sits directly
+    // above their hands. The bar has no room for the consequence; this does, and
+    // the consequence is that the voucher can never be altered or deleted again.
+    case "e-invoice":
+      return ["Ctrl+A: Report the invoice (FREEZES it)", ...common];
     // ⛔ THE TWO COST SUMMARIES ADVERTISE Alt+E ON BOTH SURFACES OR NEITHER.
     // buttonBar.ts put "Alt+E Export" on both of these bars the day the screens
     // registered a real handler (T15); this strip did not, so the same key was

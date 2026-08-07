@@ -135,6 +135,22 @@ KNOWN_SCREENS = {
     # with a disclosure saying no submission was made. A keystroke fixture naming
     # this screen is describing a payload builder, never a government document.
     "e-way-bill",
+    # THE e-INVOICE / IRN (HANDOFF §1.4 B). Alt+I: pick the sales invoice to
+    # report, Ctrl+A raises it through cored's proxy into statutoryd.
+    #
+    # A ScreenKind under the bare token `e-invoice`, for the reason "e-way-bill"
+    # above is one: no `allow display report` rule can match a bare token, and
+    # the screen carries a FORM.
+    #
+    # ⛔ NOTHING IT PRODUCES IS A GOVERNMENT-ISSUED IRN. This deployment has no
+    # IRP credentials, so the reference is minted by a fake provider and the
+    # screen leads with a disclosure saying no submission was made. A keystroke
+    # fixture naming this screen is describing a payload builder, never a filing.
+    #
+    # ⛔⛔ AND ITS Ctrl+A IS IRREVERSIBLE — it FREEZES the voucher against
+    # alteration and deletion, with no undo anywhere in the product. A fixture
+    # that keys it is describing a one-way door.
+    "e-invoice",
 }
 
 RULESET_VERSION = "gst-2024-09"
