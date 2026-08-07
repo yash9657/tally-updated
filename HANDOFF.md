@@ -844,6 +844,20 @@ over the **real three-party stack** (cored → statutoryd → cored, real Postgr
 > screen track below, because a screen nobody has is a missing feature and this is a wrong number in
 > the books that returns 201.
 
+> ## ⛔⛔ THE NEXT SESSION'S TRACK IS THE PARITY AUDIT — AND IT HAS ITS OWN WORKSHEET.
+>
+> **`HANDOFF-PARITY-AUDIT.md`** holds the plan: drive all **34** keyboard-reachable rows end to end
+> to produce a TRUE number, fix what that finds, then build the **13** that are not reachable. It is
+> a WORKSHEET owned by this section — **this file is still the live handoff** — and it carries six
+> traced, unverified defect LEADS (§4 there) that are the highest-value starting points in the repo.
+>
+> ⚠️ **IT ALSO SAYS, UP FRONT, THAT THE AUDIT AND THE 13 BUILDS ARE NOT ONE SESSION** — the audit is
+> 1–2 and the builds roughly 6–10, on this file's own §3.1 measured rate. Its phases are ordered so
+> that stopping anywhere still leaves the session valuable.
+>
+> **DELETE IT when the audit is folded into §5.5, so it does not become the twelfth spent handoff
+> (§11).**
+
 **Run §2 first. Its FIRST job is now `pnpm seed:demo` (§1.7b item 1), not a feature.**
 
 #### 0. THE TEN-MINUTE PREFLIGHT, AND ITEM 1 IS NOT OPTIONAL
