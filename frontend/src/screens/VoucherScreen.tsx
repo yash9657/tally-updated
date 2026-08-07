@@ -25,7 +25,8 @@ import { dayBookRowKey, voucherTypeForClass } from "./vouchers/voucherClass";
 import {
   emptyGstFormState,
   ensureLedger,
-  ensureOutputTaxLedgers,
+  ensureGstTaxLedgers,
+  gstOrientationFor,
   buildGstVoucherRequest,
   gstVoucherGross,
   type GstFormState,
@@ -119,11 +120,13 @@ interface PartyOption {
   stateCode: string;
 }
 
-/** The income/expense ledger a GST class credits/debits, by class. */
-const GST_INCOME_LEDGER: Record<string, { name: string; group: string }> = {
-  sales: { name: "Domestic Sales", group: "Sales Accounts" },
-  purchase: { name: "Purchases", group: "Purchase Accounts" },
-};
+// ⛔ `GST_INCOME_LEDGER` LIVED HERE AND IS GONE. It mapped only `sales` and
+// `purchase` and fell back to Domestic Sales for anything else, which is how a
+// Debit Note came to book a purchase return to REVENUE. Its replacement is
+// GST_ORIENTATION in vouchers/gstVoucher.ts, which carries the base ledger
+// alongside the three posting DIRECTIONS and the tax kind — because those four
+// facts are per-class and were being answered by four separate hard-codings,
+// three of which were the sales answer.
 
 /** Today's date as YYYY-MM-DD (server default if the user leaves date empty). */
 function today(): string {
@@ -1382,24 +1385,40 @@ function AccountingVoucherScreen({
             `carries its own rate from the stock master.`,
         );
       }
-      const outputTax = await ensureOutputTaxLedgers(client, companyID);
+      // ⛔⛔ EVERY ONE OF THE FOUR RESOLUTIONS BELOW IS CLASS-DEPENDENT, AND ALL
+      // FOUR USED TO BE HARD-CODED TO THE SALES ANSWER. See GST_ORIENTATION in
+      // gstVoucher.ts for what that cost: a purchase booked as a receivable
+      // carrying output tax the company does not owe.
+      const orientation = gstOrientationFor(type);
+      if (!orientation) {
+        throw new Error(
+          `This build has no posting orientation for a "${type}" GST voucher, ` +
+            `so it will not guess which way the money goes.`,
+        );
+      }
+      const outputTax = await ensureGstTaxLedgers(
+        client,
+        companyID,
+        orientation.taxKind,
+      );
       // Resolve the party uuid: use the hydrated id if present, else ensure by name.
       const partyLedgerId =
         f.partyLedgerId ||
         (await ensureLedger(client, companyID, {
           name: f.party,
-          groupName: "Sundry Debtors",
+          // ⛔ NOT ALWAYS "Sundry Debtors". A supplier created as a DEBTOR is
+          // ASSET-natured, and GSTR-1's note-side discriminator keys on the
+          // party group's NATURE rather than the voucher class — so it would
+          // report a purchase-return debit note as an outward supply.
+          groupName: orientation.partyGroup,
           stateCode: f.partyStateCode || undefined,
         }));
-      const incomeSpec = GST_INCOME_LEDGER[type] ?? {
-        name: "Domestic Sales",
-        group: "Sales Accounts",
-      };
       const incomeLedgerId = await ensureLedger(client, companyID, {
-        name: incomeSpec.name,
-        groupName: incomeSpec.group,
+        name: orientation.baseLedger.name,
+        groupName: orientation.baseLedger.group,
       });
       return buildGstVoucherRequest({
+        voucherType: type,
         partyLedgerId,
         incomeLedgerId,
         taxableValue: normalizeMoney(f.taxableValue),
@@ -1435,21 +1454,38 @@ function AccountingVoucherScreen({
   const buildItemRequest = useCallback(
     async (f: VoucherForm): Promise<VoucherRequest> => {
       const rows = joinMasters(f.items, stockItems);
-      const outputTax = await ensureOutputTaxLedgers(client, companyID);
+      // ⛔ THE TAX KIND IS THE CLASS'S HERE TOO, AND THIS LINE READ
+      // `ensureOutputTaxLedgers` UNCONDITIONALLY. Item mode escaped the
+      // posting-DIRECTION defect — the server derives the postings from the grid
+      // — but not the LEDGER half of it: an item-mode PURCHASE booked its input
+      // credit into "Output CGST", i.e. against the company's output-tax
+      // liability instead of its reclaimable input credit. The direction was
+      // right, the account was wrong, and it balanced.
+      //
+      // ⚠️ This is the "fixing the bug is not fixing the class" lesson that
+      // ensureOutputTaxLedgers' OWN header already tells about itself, one
+      // caller away — so it is repeated here rather than left to be rediscovered.
+      const orientation = gstOrientationFor(type);
+      if (!orientation) {
+        throw new Error(
+          `This build has no posting orientation for a "${type}" item invoice.`,
+        );
+      }
+      const outputTax = await ensureGstTaxLedgers(
+        client,
+        companyID,
+        orientation.taxKind,
+      );
       const partyLedgerId =
         f.partyLedgerId ||
         (await ensureLedger(client, companyID, {
           name: f.party,
-          groupName: type === "purchase" ? "Sundry Creditors" : "Sundry Debtors",
+          groupName: orientation.partyGroup,
           stateCode: f.partyStateCode || undefined,
         }));
-      const incomeSpec = GST_INCOME_LEDGER[type] ?? {
-        name: "Domestic Sales",
-        group: "Sales Accounts",
-      };
       const itemLedgerId = await ensureLedger(client, companyID, {
-        name: incomeSpec.name,
-        groupName: incomeSpec.group,
+        name: orientation.baseLedger.name,
+        groupName: orientation.baseLedger.group,
       });
       return buildItemInvoiceRequest({
         // A sale takes goods OUT of the godown; a purchase brings them IN. The

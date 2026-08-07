@@ -1135,6 +1135,9 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 			if err := validatePostings(in.Postings); err != nil {
 				return PostResult{}, err
 			}
+			if err := validatePartyOrientation(in); err != nil {
+				return PostResult{}, err
+			}
 		}
 		// Same guard, same reason: a tombstone's body is empty by definition, so
 		// its inventory lines are neither validated nor written.
@@ -2379,6 +2382,123 @@ func validatePostings(ps []PostingInput) error {
 			debit.StringFixed(4), credit.StringFixed(4))
 	}
 	return nil
+}
+
+// ErrPartyOrientation refuses an ACCOUNTING-MODE invoice whose party leg is on
+// the wrong side for its class.
+//
+// ===========================================================================
+// ⛔⛔ THIS EXISTS BECAUSE THE SERVER ANSWERED 201 TO A FULLY REVERSED INVOICE,
+// AND EVERY OTHER CHECK IN THIS FILE IS BLIND TO IT BY CONSTRUCTION
+// ===========================================================================
+// Found by keying a Purchase in a browser and reading `posting` in Postgres
+// (HANDOFF §5.5). The client built every GST voucher with the SALES shape, so:
+//
+//	Purchase (BROWSER-KEYED)  Dr supplier / Cr Purchases / Cr OUTPUT tax
+//	Purchase (CORRECT)        Cr supplier / Dr Purchases / Dr INPUT tax
+//
+// A payable became a receivable, and the company declared output tax it does
+// not owe while destroying the input credit it could have claimed.
+//
+// ⛔ NOTHING REFUSED IT, AND NOT BY OVERSIGHT:
+//   - validatePostings only checks SUM(Dr) == SUM(Cr), and BOTH orientations
+//     balance exactly;
+//   - deriveAndVerifyGST sums posting amounts WITHOUT reading dr_cr, and says so
+//     in its own comment ten lines up: "a fully REVERSED voucher verifies here
+//     exactly as a correct one does";
+//   - the deferred DB trigger checks the same balance the first one does.
+//
+// So the orientation was checked NOWHERE for a client-supplied posting set. It
+// was checked for ITEM invoices, because those are generated from
+// orientationFor — which is the same table this now consults. The two paths
+// disagreed about whether the question mattered, and the accounting path was
+// the one a browser actually used.
+//
+// ⚠️ AND WHY THE FIX BELONGS HERE RATHER THAN ONLY IN THE CLIENT: the client is
+// one caller. This is a public HTTP API with an importer, a draft-accept path
+// and a mock behind it, and "the browser sends it correctly now" is not a
+// property of the books. A wrong number that returns 201 is indistinguishable
+// from a right one at every later layer.
+var ErrPartyOrientation = errors.New("ledger: party posting is on the wrong side for this voucher class")
+
+// validatePartyOrientation checks the party leg of an accounting-mode invoice
+// against the class's orientation.
+//
+// ⚠️ IT CHECKS THE PARTY LEG ONLY, AND THAT IS A DELIBERATE FLOOR RATHER THAN A
+// COMPLETE MODEL. The party leg is the one posting an accounting-mode invoice
+// always has, always names (PartyLedgerID), and cannot get right by accident —
+// and its direction alone decides whether the document is a receivable or a
+// payable. Checking the revenue/expense and tax legs too would mean this
+// function deciding which supplied ledger is "the income one", which it cannot
+// know: an accounting-mode voucher may legitimately split across several.
+//
+// ⛔ SO A VOUCHER THAT PASSES THIS IS NOT CERTIFIED CORRECT. It has only been
+// refused the one error that turns a payable into a receivable.
+func validatePartyOrientation(in VoucherInput) error {
+	// Only the four GST-bearing invoice classes have an orientation. Receipts,
+	// payments, contras and journals legitimately put the party on either side —
+	// that is what they are FOR — and orientationFor errors for them.
+	o, err := orientationFor(in.Class)
+	if err != nil {
+		return nil
+	}
+	// No party named: nothing to check against. An accounting-mode invoice
+	// SHOULD name one, but requiring it here would reject documents this
+	// function has no complaint about, and the gap is stated rather than
+	// enforced by a check that is really about something else.
+	if in.PartyLedgerID == uuid.Nil {
+		return nil
+	}
+	for _, p := range in.Postings {
+		if p.LedgerID != in.PartyLedgerID {
+			continue
+		}
+		if p.DrCr != o.party {
+			return fmt.Errorf(
+				"%w: a %s posts the party %s, and this voucher posts it %s. "+
+					"A %s is the document that %s — posting it the other way round "+
+					"turns a %s into a %s, and it BALANCES, so no total will ever "+
+					"disagree with it",
+				ErrPartyOrientation, in.Class, sideWord(o.party), sideWord(p.DrCr),
+				in.Class, classPurpose(in.Class),
+				owedWord(o.party), owedWord(p.DrCr),
+			)
+		}
+		return nil
+	}
+	// The party is named but takes no posting. Legal — a cash sale booked
+	// against a bank ledger names no debtor leg — and not this check's business.
+	return nil
+}
+
+func sideWord(d DrCr) string {
+	if d == Debit {
+		return "Dr"
+	}
+	return "Cr"
+}
+
+// owedWord names what a party leg on this side MEANS, so the refusal says what
+// went wrong in the operator's language rather than in the schema's.
+func owedWord(d DrCr) string {
+	if d == Debit {
+		return "receivable (money owed TO this company)"
+	}
+	return "payable (money this company OWES)"
+}
+
+func classPurpose(c Class) string {
+	switch c {
+	case Sales:
+		return "bills a customer"
+	case Purchase:
+		return "records what a supplier billed us"
+	case CreditNote:
+		return "gives value BACK to a customer"
+	case DebitNote:
+		return "claims value back FROM a supplier"
+	}
+	return "records a trade"
 }
 
 // validateBillAllocations checks each allocation is structurally sound.

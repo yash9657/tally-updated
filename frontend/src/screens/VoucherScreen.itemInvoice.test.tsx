@@ -257,11 +257,27 @@ describe("Item Invoice (Ctrl+H) posts goods, and the accounting derived from the
 
     const res = await spies.postPurchaseVoucher!.mock.results[0]!.value;
     const posted = await storedPostingsByName(base, res.voucher_id);
+    // ⛔⛔ THIS ASSERTION USED TO SAY "Output CGST" / "Output SGST", AND IT WAS
+    // CERTIFYING A DEFECT — on a purchase, in a test whose whole subject is that
+    // a purchase is the MIRROR of a sale.
+    //
+    // Input tax is what the company PAID and may reclaim; output tax is what it
+    // OWES on outward supplies. Booking a purchase's tax to the Output heads
+    // debits the output-tax liability instead of building the reclaimable input
+    // credit — it nets off tax the company owes on its SALES. The voucher still
+    // balances, the direction is still DR, the amounts are still right to the
+    // paisa, and the GST return is wrong in both directions at once.
+    //
+    // ⚠️ NOTE WHAT THIS TEST GOT RIGHT AND STILL MISSED. It reasons explicitly
+    // about orientation, it names the income ledger by hand precisely because
+    // totals cannot catch a mis-booking, and it states its own mutation. It then
+    // pinned the wrong tax ACCOUNT anyway. Thinking hard about one axis of a
+    // defect is not coverage of the other.
     expect(posted).toEqual([
       { name: "Zenith Supplies", side: "CR", amount: "709.1446" },
       { name: "Purchases", side: "DR", amount: "600.9700" },
-      { name: "Output CGST", side: "DR", amount: "54.0873" },
-      { name: "Output SGST", side: "DR", amount: "54.0873" },
+      { name: "Input CGST", side: "DR", amount: "54.0873" },
+      { name: "Input SGST", side: "DR", amount: "54.0873" },
     ]);
     // Totals prove NOTHING about orientation: a reversed purchase balances to
     // the same paisa and has the same two debits and two credits.

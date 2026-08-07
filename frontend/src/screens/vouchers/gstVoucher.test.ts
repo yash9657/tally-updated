@@ -4,6 +4,7 @@ import type { CoredClient } from "../../api";
 import {
   buildGstVoucherRequest,
   ensureOutputTaxLedgers,
+  ensureGstTaxLedgers,
   ensureLedger,
   emptyGstFormState,
   _resetOutputTaxLedgerCache,
@@ -26,6 +27,7 @@ const OUTPUT: OutputTaxLedgers = {
 describe("buildGstVoucherRequest", () => {
   it("intra-state emits party Dr (gross) + income Cr + CGST/SGST Cr, no IGST line", () => {
     const req = buildGstVoucherRequest({
+      voucherType: "sales",
       partyLedgerId: "party-1",
       incomeLedgerId: "income-1",
       taxableValue: "10000.0000",
@@ -61,6 +63,7 @@ describe("buildGstVoucherRequest", () => {
 
   it("inter-state emits a single IGST line, no CGST/SGST", () => {
     const req = buildGstVoucherRequest({
+      voucherType: "sales",
       partyLedgerId: "party-1",
       incomeLedgerId: "income-1",
       taxableValue: "10000.0000",
@@ -84,6 +87,7 @@ describe("buildGstVoucherRequest", () => {
   // the explicit, single source of truth for the supplier state.
   it("omits supplier_state_code entirely when the home state is unknown", () => {
     const req = buildGstVoucherRequest({
+      voucherType: "sales",
       partyLedgerId: "party-1",
       incomeLedgerId: "income-1",
       taxableValue: "10000.0000",
@@ -111,6 +115,7 @@ describe("buildGstVoucherRequest", () => {
 
   it("sends supplier_state_code verbatim when the home state IS known", () => {
     const req = buildGstVoucherRequest({
+      voucherType: "sales",
       partyLedgerId: "party-1",
       incomeLedgerId: "income-1",
       taxableValue: "10000.0000",
@@ -153,6 +158,7 @@ describe("acceptVoucher with a GST request body", () => {
       groupName: "Sales Accounts",
     });
     const req = buildGstVoucherRequest({
+      voucherType: "sales",
       partyLedgerId: party,
       incomeLedgerId: income,
       taxableValue: "10000.0000",
@@ -360,5 +366,141 @@ describe("ensureLedger resolves an EXISTING ledger instead of re-creating it", (
       groupName: "Indirect Expenses",
     });
     expect(id).toBe("new-electricity");
+  });
+});
+
+/**
+ * ⛔⛔ THE ORIENTATION TABLE — WHICH WAY THE MONEY GOES, PER CLASS.
+ *
+ * This file had FIVE tests of `buildGstVoucherRequest` and every one of them
+ * built a SALES voucher, so the builder's total blindness to the voucher class
+ * was invisible here. It was found by keying a purchase in a browser and reading
+ * `posting` in Postgres against the seeded controls (HANDOFF §5.5):
+ *
+ *   Purchase (seeded, CORRECT)  Cr supplier / Dr Purchases      / Dr INPUT tax
+ *   Purchase (BROWSER-KEYED)    Dr supplier / Cr Purchases      / Cr OUTPUT tax
+ *
+ * ⚠️ TOTALS PROVE NOTHING HERE AND NEITHER DOES THE SERVER. Both orientations
+ * balance; `validatePostings` only checks Dr == Cr; `deriveAndVerifyGST` sums
+ * amounts WITHOUT reading `dr_cr` and says so in its own comment. Every
+ * assertion below therefore names the SIDE and the LEDGER, never a sum.
+ */
+describe("⛔ the four GST classes each post their own way", () => {
+  const build = (voucherType: string) =>
+    buildGstVoucherRequest({
+      voucherType,
+      partyLedgerId: "party-1",
+      incomeLedgerId: "base-1",
+      taxableValue: "10000.0000",
+      supplierStateCode: "29",
+      gst: { ...emptyGstFormState(), placeOfSupply: "29", gstRatePct: "18" },
+      outputTax: OUTPUT,
+      voucherDate: "2026-05-10",
+      party: "Acme Corp",
+    });
+
+  const sideOf = (req: ReturnType<typeof build>, ledgerId: string) =>
+    req.postings!.find((p) => p.ledger_id === ledgerId)!.dr_cr;
+
+  // party / base / tax — the three legs, per class. A credit note is the exact
+  // reverse of a sale; a debit note the exact reverse of a purchase.
+  const CASES: [string, "DR" | "CR", "DR" | "CR", "DR" | "CR"][] = [
+    ["sales", "DR", "CR", "CR"],
+    ["purchase", "CR", "DR", "DR"],
+    ["credit-note", "CR", "DR", "DR"],
+    ["debit-note", "DR", "CR", "CR"],
+  ];
+
+  for (const [cls, party, base, tax] of CASES) {
+    it(`${cls}: party ${party} (gross), base ${base}, tax ${tax}`, () => {
+      const req = build(cls);
+      expect(sideOf(req, "party-1"), `${cls}: the PARTY leg`).toBe(party);
+      expect(sideOf(req, "base-1"), `${cls}: the BASE leg`).toBe(base);
+      expect(sideOf(req, "led-cgst"), `${cls}: the TAX legs`).toBe(tax);
+      expect(sideOf(req, "led-sgst"), `${cls}: the TAX legs`).toBe(tax);
+      // The gross is on the party leg and the base on the income leg — a swap
+      // would also balance.
+      const partyLeg = req.postings!.find((p) => p.ledger_id === "party-1")!;
+      const baseLeg = req.postings!.find((p) => p.ledger_id === "base-1")!;
+      expect(partyLeg.amount).toBe("11800.0000");
+      expect(baseLeg.amount).toBe("10000.0000");
+    });
+  }
+
+  it("⛔ a CREDIT NOTE is the exact mirror of the SALE it reverses", () => {
+    // Stated as its own test because this is the operator-visible consequence:
+    // before the fix, raising a sales return INCREASED revenue, output tax and
+    // the customer's receivable by the amount it was raised to reduce them.
+    const sale = build("sales");
+    const note = build("credit-note");
+    for (const id of ["party-1", "base-1", "led-cgst", "led-sgst"]) {
+      expect(sideOf(note, id), `leg ${id} must reverse`).not.toBe(
+        sideOf(sale, id),
+      );
+    }
+  });
+
+  it("⛔ a DEBIT NOTE is the exact mirror of the PURCHASE it reverses", () => {
+    const purchase = build("purchase");
+    const note = build("debit-note");
+    for (const id of ["party-1", "base-1", "led-cgst", "led-sgst"]) {
+      expect(sideOf(note, id), `leg ${id} must reverse`).not.toBe(
+        sideOf(purchase, id),
+      );
+    }
+  });
+
+  it("⛔ the BILL REFERENCE follows the party leg, not a hard-coded DR", () => {
+    // Left hard-coded, a purchase opened a RECEIVABLE against its supplier. The
+    // server's sum-to-posting invariant refuses an allocation whose side
+    // disagrees with the posting it belongs to, so this also 422s in production.
+    const req = buildGstVoucherRequest({
+      voucherType: "purchase",
+      partyLedgerId: "party-1",
+      incomeLedgerId: "base-1",
+      taxableValue: "10000.0000",
+      supplierStateCode: "29",
+      gst: { ...emptyGstFormState(), placeOfSupply: "29", gstRatePct: "18" },
+      outputTax: OUTPUT,
+      voucherDate: "2026-05-10",
+      party: "Acme Corp",
+      billRefs: [
+        { refType: "NEW", refName: "", amount: "11800.0000", dueDate: "" },
+      ],
+    });
+    expect(req.bill_allocations![0]!.dr_cr).toBe("CR");
+  });
+
+  it("⛔ an UNKNOWN class THROWS rather than defaulting to the sales shape", () => {
+    // The defect was a silent fallback. A class with no row is a programming
+    // error and must be loud: guessing books a payable as a receivable, and it
+    // balances, so nothing downstream would ever report it.
+    expect(() => build("receipt")).toThrow(/no posting orientation/i);
+  });
+});
+
+describe("⛔ tax ledgers are resolved per KIND, and the cache does not confuse them", () => {
+  it("output and input resolve to DIFFERENT ledgers on the same company", async () => {
+    const c = createMockClient({ seed: false });
+    const { company_id } = await c.createCompany({
+      name: "Orientation Co",
+      fy_start_date: "2026-04-01",
+      base_currency: "INR",
+      state_code: "29",
+    });
+    // ⛔ THE ORDER MATTERS AND IS THE POINT. The memo was keyed on the company
+    // alone, so whichever kind was asked for FIRST would be handed back for the
+    // other — and Input-for-Output balances perfectly.
+    const input = await ensureGstTaxLedgers(c, company_id, "input");
+    const output = await ensureGstTaxLedgers(c, company_id, "output");
+    expect(output.cgstId).not.toBe(input.cgstId);
+    expect(output.sgstId).not.toBe(input.sgstId);
+    expect(output.igstId).not.toBe(input.igstId);
+
+    const nameOf = async (id: string) =>
+      (await c.listLedgers(company_id)).ledgers.find((l) => l.id === id)
+        ?.name;
+    expect(await nameOf(output.cgstId)).toBe("Output CGST");
+    expect(await nameOf(input.cgstId)).toBe("Input CGST");
   });
 });

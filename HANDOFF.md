@@ -19,13 +19,18 @@
 > voucher frozen against both ALTER and DELETE, and a re-post returning the same IRN.
 >
 > **And the §5.5 slice found the biggest live defect on the board: a Purchase, a Credit Note or a
-> Debit Note keyed in a browser is posted AS IF IT WERE A SALES INVOICE** — reversed, with OUTPUT tax
-> where INPUT belongs. Three rows that read `on`, measured in Postgres against seeded controls, and
-> the server answers **201**. It is §1.11's new **#0** and it outranks every screen track.
+> Debit Note keyed in a browser was posted AS IF IT WERE A SALES INVOICE** — reversed, with OUTPUT
+> tax where INPUT belongs. Three rows that read `on`, measured in Postgres against seeded controls,
+> and the server answered **201**. ✅ **FIXED — §1.14**, on both the client and the server.
 >
-> **In one line:** run §2; then fix **the accounting-mode posting builder** (§1.11 #0, §5.5's box);
-> and **keep driving §5.5's audit while the browser is open**, because it has now found a lying `on`
-> row in every single session that has run it.
+> ⚠️ **BUT READ §1.14's LAST TABLE BEFORE ANYTHING ELSE.** The container runtime wedged at the end of
+> that session, so **the Credit Note's browser read-back was never completed** and `make verify` /
+> `verify:demo` were not re-run after the change. The Purchase IS browser-verified and the backend
+> suite IS green at **2367 / 0 SKIP / 0 FAIL**. Close those three gaps first; they are ten minutes.
+>
+> **In one line:** run §2 (docker may need a bounce); close §1.14's three outstanding checks; then
+> **keep driving §5.5's audit while the browser is open**, because it has now found a lying `on` row
+> in every single session that has run it.
 >
 > ⚠️ **`on` IS AN UPPER BOUND, NOT A MEASUREMENT.** 31 rows say `on`. Every session that has driven
 > them has found one that was false, and never by reading.
@@ -856,7 +861,7 @@ The criterion is unchanged: **how much of a real business's day is blocked.**
 
 | # | Track | Why here | Shape |
 |---|---|---|---|
-| **0** | ⛔⛔ **THE ACCOUNTING-MODE POSTING BUILDER** (§5.5's box) | **A wrong number in the books, on three rows that read `on`, returning 201.** A purchase becomes a receivable and declares output tax it does not owe; a sales return increases revenue. Every screen track below is worth less than this | `gstVoucher.ts` takes the voucher type and reads `cfg.primarySide`; INPUT vs OUTPUT tax ledgers per class; the hard-coded `Sundry Debtors` party group. ⛔ **AND A SERVER-SIDE REFUSAL** — a client-only fix leaves the 201 for every other caller |
+| **0** | ✅ **DONE — THE ACCOUNTING-MODE POSTING BUILDER** (§1.14) | Fixed on BOTH sides: a `GST_ORIENTATION` table drives every direction, tax kind, base ledger and party group; and cored now **REFUSES** a reversed party leg (`ErrPartyOrientation`) so the 201 is closed for every caller, not just the browser | ⚠️ **ONE VERIFICATION IS OUTSTANDING — see §1.14.** The PURCHASE is browser-verified end to end; the CREDIT NOTE's read-back was not completed |
 | **1** | ✅ **DONE — THE IRN SCREEN** (§1.13) | Shipped and browser-verified; the row is `on`. **What is left around it is in §1.13** | — |
 | **2** | **PAYROLL SCREENS** (§5.2) | Any business with employees. The engine, the statutory rates and the file emitters are all built, and `internal/payroll`/`payrolldb` are **already** in `internal/server`'s archtest allow-set — **no refactor, pure frontend** | The biggest module currently invisible: employees, pay heads, pay run, payslips. Budget **2 sessions**, not 1 |
 | **3** | **T9 FIFO/LIFO** → then **T10 stock groups + compound units** | ⛔ **SERIALISE THESE TWO** — both touch the movement primitive. ⚠️ Closing stock feeds the **Balance Sheet**, so a valuation change MOVES THE SHEET: re-pin `verify:demo` deliberately and explain the change | T9 is a new arm in `ValuerFor` + fixtures, **not** a schema change |
@@ -1016,6 +1021,60 @@ what you predicted would fail.**
 - ⚠️ **The duplicate-IRN hazard is still invisible from here** and no test in this stack can surface
   it: `FakeProvider` hashes the whole payload, so it cannot reject what NIC would. The Sales-only
   class gate is what stands in for it.
+
+### 1.14 ✅ THE ACCOUNTING-MODE POSTING BUILDER IS FIXED — ON BOTH SIDES
+
+**2026-08-07.** §1.11 #0 / §5.5's box. The defect: `buildGstVoucherRequest` took no
+voucher type and emitted the SALES shape for every `showGst` class, so a Purchase, a Credit Note and
+a Debit Note keyed in a browser were all posted as sales invoices — reversed, with OUTPUT tax where
+INPUT belonged.
+
+#### WHAT SHIPPED
+
+| Half | What |
+|---|---|
+| **Client** | `GST_ORIENTATION` in `gstVoucher.ts` — four classes × (party side, base side, tax side, tax KIND, base ledger, party group). The builder now **requires** `voucherType` and **THROWS** on an unknown class rather than falling back to the sales shape, which is exactly how three classes came to be wrong |
+| **Client** | `ensureGstTaxLedgers(client, co, kind)` — the memo is keyed on **(company, kind)**. Keyed on the company alone it would hand the Input ledgers back for an Output request whenever a purchase was keyed first, and that substitution BALANCES |
+| **Server** | ⛔ **`ErrPartyOrientation`** in `internal/ledger`. `validatePartyOrientation` checks the party leg against the class's `orientationFor` — the table the ITEM path already used and the accounting path never consulted. Covers CREATE **and** ALTER (both route through `post()`) |
+| **Both** | The hard-coded `Sundry Debtors` party group is now per class, so a supplier is created as a CREDITOR. It was dragging purchase-return debit notes into GSTR-1 as outward supplies (`gstr1.go:414` keys on the party group's NATURE, not the class) |
+
+> ### ⛔ THE SERVER HALF IS THE HALF THAT MATTERS, AND IT IS THE SAME DEFECT TWICE
+> `item_invoice_test.go`'s header already records that this project **"shipped a fully REVERSED
+> purchase once (WS8b)"**. That was fixed on the ITEM path by generating postings from
+> `orientationFor`. It then shipped **again** on the ACCOUNTING path, because a client-supplied
+> posting set was taken as authoritative and nothing re-checked it. Fixing the client alone would
+> have set this up to happen a third time through the importer, the draft-accept path or the mock.
+>
+> **Every pre-existing check is blind to it by construction, and each was verified to still pass on
+> the reversed voucher:** `validatePostings` only asks Dr == Cr (both orientations balance);
+> `deriveAndVerifyGST` sums amounts **without reading `dr_cr`** and says so in its own comment; the
+> deferred DB trigger re-checks the same balance. So the assertions in
+> `internal/ledger/party_orientation_test.go` are about SIDES and LEDGER NAMES, never sums.
+
+#### ⛔ AND A TEST WAS CERTIFYING THE DEFECT
+
+`VoucherScreen.itemInvoice.test.tsx`'s purchase test pinned **`Output CGST` / `Output SGST` on a
+PURCHASE** — in a test whose entire subject is "a purchase is the MIRROR of a sale", which reasons
+explicitly about orientation and names the income ledger by hand *because totals cannot catch a
+mis-booking*. It still pinned the wrong tax ACCOUNT. **Thinking hard about one axis of a defect is
+not coverage of the other.** Item mode escaped the DIRECTION half (the server derives postings from
+the grid) but not the LEDGER half: an item-mode purchase booked its input credit against the
+company's output-tax liability. Corrected, with the history in the assertion.
+
+#### ⚠️ WHAT IS VERIFIED, AND THE ONE THING THAT IS NOT
+
+| Claim | Evidence |
+|---|---|
+| F9 Purchase, accounting mode | ✅ **BROWSER-VERIFIED against real cored.** Keyed and read back from `posting`: `Cr Steel Suppliers 2360 / Dr Purchases 2000 / Dr Input CGST 180 / Dr Input SGST 180` — identical in shape to the seeded controls |
+| All four classes post correctly; all four refuse the reversed party | ✅ `TestAccountingModeCorrectOrientationsStillPost`, `TestEveryGSTClassRefusesTheReversedParty` — against the live DB, asserting ledger NAMES |
+| Receipt / Payment / Contra / Journal keep BOTH sides | ✅ `TestNonInvoiceClassesKeepBothSides` — the refusal must not reach the four most-used screens |
+| The server check is load-bearing | ✅ Mutation: deleting the `validatePartyOrientation` call fails 5 tests and nothing else |
+| ⛔ **Alt+F6 Credit Note, browser read-back** | ⛔ **NOT COMPLETED.** The voucher SAVED ("Saved No: 2") but the container runtime wedged before it could be read back — `docker ps`, `psql` and cored's own API all hung. **Do this first next session:** `Alt+F6`, key it, `Ctrl+A`, then read `posting` — expect `Cr <customer> 1180 / Dr Domestic Sales 1000 / Dr Output CGST 90 / Dr Output SGST 90`. The Go test covers this shape; what is unproved is the BROWSER path for that one class |
+
+⚠️ **AND THE GATES THAT NEED THE DB WERE NOT RE-RUN AFTER THE WEDGE.** `make verify` and
+`verify:demo` were green earlier in the session but BEFORE this change. The backend suite **was** run
+after it — **2367 pass / 0 SKIP / 0 FAIL** — and the **0 SKIP** is what proves the database was live
+for it (§2.1: a down database makes every DB test skip and `go test` still exits 0). Re-run both.
 
 ### B. ⛔ THE TRACK AFTER THIS ONE — THE e-INVOICE / IRN SCREEN
 
@@ -1817,8 +1876,8 @@ session's memory is an audit that will be run again from scratch.
 | 2026-08-06 | **`Alt+I` e-Invoice → pick a Sales invoice → `Ctrl+A`** | ✅ **`server` → `on`.** IRN `d552699…a25b3c` minted from a BROWSER against real cored **and** real statutoryd through the passkey; ack `612365224`, status ACT, voucher 4 pinned. `voucher_external_reference` = 1 row, kind IRN, `created_by` statutoryd. Re-post returned the **SAME** IRN (201 twice). A well-formed ALTER **and** a DELETE both 409'd naming the IRN. **B.5 items 1 and 2 are now proved from the BROWSER, not just over HTTP** |
 | 2026-08-06 | **`Alt+I` on an ACCOUNTING-mode sale** | ✅ refused 422 by name (`ErrLineNotDescribable`) — the books hold an HSN, value and rate per line but no description/qty/unit, and NIC needs all three. The screen shows the refusal verbatim **and** that the voucher was NOT frozen |
 | 2026-08-06 | **the FIRST write of a session, on any screen that shows a result** | ⛔⛔ **A REFUSAL — OR AN ACK NUMBER — IS WIPED OFF THE SCREEN BY THE STEP-UP.** `App.tsx`'s `resolvedClient` memo depends on `session`, and a WebAuthn step-up REPLACES the session token, so every screen effect keyed on `client` re-runs the instant the ceremony completes. Observed: `POST → 403 STEPUP` → passkey → `POST → 422` → the reset in the load effect cleared it. **The operator pressed the key and saw NOTHING happen.** ✅ Fixed on the e-invoice screen (reset keyed on the SELECTION changing, not on the effect running), pinned by two tests that both fail without the guard. ⛔ **`EWayBillScreen.tsx` HAS THE IDENTICAL SHAPE AND IS NOT FIXED** — same unconditional reset, same `client` dep |
-| 2026-08-06 | **`Alt+F6` Credit Note → key it → `Ctrl+A`** | ⛔⛔ **POSTS THE MONEY BACKWARDS — see the box below.** Row reads `on` |
-| 2026-08-06 | **`F9` Purchase in ACCOUNTING mode → key it → `Ctrl+A`** | ⛔⛔ **SAME DEFECT, AND IT ALSO BOOKS OUTPUT TAX INSTEAD OF INPUT.** Row reads `on` |
+| 2026-08-06 | **`Alt+F6` Credit Note → key it → `Ctrl+A`** | ⛔⛔ **POSTED THE MONEY BACKWARDS — see the box below.** ✅ Fixed §1.14. ⚠️ **the browser read-back for THIS class is still outstanding** (§1.14's table) |
+| 2026-08-06 | **`F9` Purchase in ACCOUNTING mode → key it → `Ctrl+A`** | ⛔⛔ **SAME DEFECT, AND IT ALSO BOOKED OUTPUT TAX INSTEAD OF INPUT.** ✅ Fixed §1.14 and **re-driven in a browser**: now `Cr supplier / Dr Purchases / Dr Input CGST+SGST`, matching the seeded controls |
 
 > ### ⛔⛔ THE BIGGEST FIND OF THIS PASS, AND IT IS NOT A CREDIT-NOTE BUG
 > **EVERY ACCOUNTING-MODE GST VOUCHER THAT IS NOT A SALES INVOICE IS POSTED AS IF IT WERE ONE.**
@@ -1854,12 +1913,13 @@ session's memory is an audit that will be run again from scratch.
 > **Item-invoice mode is NOT affected** — its postings are derived server-side from the grid.
 > Accounting mode is where the rate and the direction exist only in the request.
 >
-> ⛔ **NOT FIXED — IT IS THE NEXT SESSION'S TRACK, AND IT IS #1.** It was found with ~no budget left
-> and the fix lands in `VoucherScreen.tsx` + `gstVoucher.ts`, the two most contended files in the
-> repo. It needs: orientation from `cfg.primarySide`; INPUT vs OUTPUT tax ledgers per class; the party
-> group default (`Sundry Debtors` is hard-coded, so a supplier free-typed on a Debit Note is created
-> as a DEBTOR — which drags it into GSTR-1 as an outward supply, `gstr1.go:414`); and a server-side
-> refusal, because a client-only fix leaves the 201 intact for every other caller.
+> ✅ **FIXED 2026-08-07 — §1.14**, on both sides: a `GST_ORIENTATION` table drives every direction,
+> tax kind, base ledger and party group, and cored now REFUSES a reversed party leg
+> (`ErrPartyOrientation`) so the 201 is closed for every caller rather than only for the browser.
+> ⚠️ **`cfg.primarySide` was NOT the right field to derive it from**, which is worth recording since
+> this box originally proposed it: `primarySide` is the side of the single account leg on a
+> single-entry voucher, and it reads `"CR"` for BOTH `sales` and `credit-note` — two classes whose
+> party legs go opposite ways. A separate, explicit table was the answer.
 
 ⛔ **THE METHOD NOTE THAT CAME OUT OF THIS, and it is worth more than the rows:** driving ONE row
 end to end is not enough when the row covers a CLASS. "The Day Book works" was established with a

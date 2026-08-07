@@ -69,6 +69,143 @@ export function _resetOutputTaxLedgerCache(): void {
 const OUTPUT_TAX_GROUP = "Duties & Taxes";
 
 /**
+ * ===========================================================================
+ * ⛔⛔ WHICH WAY THE MONEY GOES, PER CLASS. THIS TABLE IS THE FIX FOR A DEFECT
+ * THAT POSTED PURCHASES AND BOTH NOTES AS IF THEY WERE SALES INVOICES.
+ * ===========================================================================
+ * `buildGstVoucherRequest` took NO voucher type and always emitted the sales
+ * shape — party DR the gross, base CR, OUTPUT tax CR — while every `showGst`
+ * class routed through it. Measured in Postgres against seeded controls of the
+ * same class (HANDOFF §5.5):
+ *
+ *   Purchase    (seeded, CORRECT)  Cr Steel Suppliers / Dr Purchases / Dr INPUT tax
+ *   Purchase    (BROWSER-KEYED)    Dr Steel Suppliers / Cr Purchases / Cr OUTPUT tax
+ *   Credit Note (seeded, CORRECT)  Cr Mumbai Metals   / Dr Domestic Sales
+ *   Credit Note (BROWSER-KEYED)    Dr Acme Traders    / Cr Domestic Sales / Cr OUTPUT tax
+ *
+ * So a purchase turned a payable into a receivable and declared output tax the
+ * company does not owe while destroying the input credit it could have claimed;
+ * and a sales return increased revenue, output tax and the receivable by the
+ * amount it was raised to reduce them.
+ *
+ * ⛔ NOTHING REFUSED IT, AT ANY LAYER, AND THAT IS WHY THIS TABLE IS EXPLICIT.
+ * `validatePostings` only checks Dr == Cr, and BOTH orientations balance.
+ * `deriveAndVerifyGST` sums posting amounts WITHOUT looking at `dr_cr` — its own
+ * comment says "a fully REVERSED voucher verifies here exactly as a correct
+ * one does". The server answered 201.
+ *
+ * ⚠️ AND WHY NO SUITE CAUGHT IT: `seed-demo.mts` posts EXPLICIT postings and is
+ * correct, so every fixture, every report test and `verify:demo` are built on
+ * correctly-shaped data. Only the browser path goes through this builder. The
+ * oracle and the defect never met.
+ *
+ * ===========================================================================
+ * WHY NOT `cfg.primarySide`, WHICH ALREADY EXISTS
+ * ===========================================================================
+ * Because it answers a different question and its value here is ambiguous.
+ * `primarySide` is the side of the SINGLE account leg on a single-entry voucher
+ * (Payment: Cr Bank; Receipt: Dr Bank), and it reads `"CR"` for BOTH `sales` and
+ * `credit-note` — two classes whose party legs go opposite ways. Deriving the
+ * direction of real money from a field that is already overloaded is how the
+ * next reader gets it wrong again. Four classes, four rows, stated.
+ *
+ * ⛔ THE PATTERN, SO A FIFTH ROW IS ADDED CORRECTLY: a credit note is the exact
+ * reverse of a sale and a debit note the exact reverse of a purchase. The tax
+ * KIND follows the trade direction (a note does not change whose tax it is — a
+ * sales return still concerns OUTPUT tax), while the tax SIDE follows the
+ * reversal. Getting `taxKind` wrong is the subtle one: it does not unbalance
+ * the voucher, so nothing will tell you.
+ */
+export interface GstOrientation {
+  /** The party leg: gross (taxable + tax). */
+  partySide: "DR" | "CR";
+  /** The income/expense leg: the taxable base. */
+  baseSide: "DR" | "CR";
+  /** The tax legs. */
+  taxSide: "DR" | "CR";
+  /**
+   * ⛔ WHOSE TAX IT IS. Output = tax this company OWES on an outward supply;
+   * Input = tax it PAID and may claim credit for. Booking one as the other
+   * misstates the GST liability in a way that still balances.
+   */
+  taxKind: "output" | "input";
+  /** The income/expense ledger, created on demand if absent. */
+  baseLedger: { name: string; group: string };
+  /**
+   * The group a FREE-TYPED party is created under.
+   *
+   * ⛔ NOT ALWAYS "Sundry Debtors", WHICH IS WHAT IT USED TO BE FOR EVERY CLASS.
+   * A supplier created as a DEBTOR is ASSET-natured, and `gstr1.go`'s note-side
+   * discriminator keys on the party group's NATURE, not on the voucher class
+   * (`pg.nature = 'ASSET'`). So a purchase-return debit note raised on a
+   * wrongly-grouped supplier is reported as an OUTWARD SUPPLY in GSTR-1 —
+   * precisely the inflation that query exists to prevent.
+   */
+  partyGroup: string;
+}
+
+export const GST_ORIENTATION: Readonly<Record<string, GstOrientation>> = {
+  sales: {
+    partySide: "DR",
+    baseSide: "CR",
+    taxSide: "CR",
+    taxKind: "output",
+    baseLedger: { name: "Domestic Sales", group: "Sales Accounts" },
+    partyGroup: "Sundry Debtors",
+  },
+  purchase: {
+    partySide: "CR",
+    baseSide: "DR",
+    taxSide: "DR",
+    taxKind: "input",
+    baseLedger: { name: "Purchases", group: "Purchase Accounts" },
+    partyGroup: "Sundry Creditors",
+  },
+  // A sales return: Dr Sales (revenue down), Dr Output tax (liability down),
+  // Cr the customer (receivable down). The exact reverse of `sales`, and the
+  // tax stays OUTPUT because it is still tax on an outward supply.
+  "credit-note": {
+    partySide: "CR",
+    baseSide: "DR",
+    taxSide: "DR",
+    taxKind: "output",
+    baseLedger: { name: "Domestic Sales", group: "Sales Accounts" },
+    partyGroup: "Sundry Debtors",
+  },
+  // A purchase return: Dr the supplier (payable down), Cr Purchases (expense
+  // down), Cr Input tax — which REVERSES the input credit claimed on those
+  // goods, the thing this document exists to do.
+  "debit-note": {
+    partySide: "DR",
+    baseSide: "CR",
+    taxSide: "CR",
+    taxKind: "input",
+    baseLedger: { name: "Purchases", group: "Purchase Accounts" },
+    partyGroup: "Sundry Creditors",
+  },
+};
+
+/**
+ * The orientation for a class, or `undefined` if it has none.
+ *
+ * ⛔ NO DEFAULT, DELIBERATELY. The old code fell back to the sales shape for any
+ * unknown class, which is exactly how three classes came to be posted as sales
+ * invoices. A class that reaches here without a row is a programming error and
+ * must fail loudly at the call site rather than silently book a sale.
+ */
+export function gstOrientationFor(
+  voucherType: string,
+): GstOrientation | undefined {
+  return GST_ORIENTATION[voucherType];
+}
+
+/** The three tax ledger names for a kind. */
+function taxLedgerNames(kind: "output" | "input"): [string, string, string] {
+  const p = kind === "output" ? "Output" : "Input";
+  return [`${p} CGST`, `${p} SGST`, `${p} IGST`];
+}
+
+/**
  * Per-(company, ledger name) memoized RESOLVE-then-create.
  *
  * ⛔⛔ THIS COMMENT USED TO SAY "createLedger is idempotent server-side (by name
@@ -234,35 +371,62 @@ export function ensureOutputTaxLedgers(
   client: CoredClient,
   companyID: string,
 ): Promise<OutputTaxLedgers> {
-  const cached = OUTPUT_TAX_CACHE.get(companyID);
+  return ensureGstTaxLedgers(client, companyID, "output");
+}
+
+/**
+ * The three GST tax ledgers for a company and a TAX KIND.
+ *
+ * ⛔ THE CACHE IS KEYED ON (company, kind) AND NOT ON company. Keying it on the
+ * company alone — which is what the output-only version did — would hand the
+ * INPUT ledgers back for an OUTPUT request the moment a purchase was keyed
+ * first, and the two sets are the entire difference between tax this company
+ * owes and tax it may reclaim. That substitution balances, so nothing downstream
+ * would report it.
+ */
+export function ensureGstTaxLedgers(
+  client: CoredClient,
+  companyID: string,
+  kind: "output" | "input",
+): Promise<OutputTaxLedgers> {
+  const key = `${companyID}:${kind}`;
+  const cached = OUTPUT_TAX_CACHE.get(key);
   if (cached) return cached;
+  const [cgst, sgst, igst] = taxLedgerNames(kind);
   const p = (async (): Promise<OutputTaxLedgers> => {
     const [cgstId, sgstId, igstId] = await Promise.all([
       ensureLedger(client, companyID, {
-        name: "Output CGST",
+        name: cgst,
         groupName: OUTPUT_TAX_GROUP,
       }),
       ensureLedger(client, companyID, {
-        name: "Output SGST",
+        name: sgst,
         groupName: OUTPUT_TAX_GROUP,
       }),
       ensureLedger(client, companyID, {
-        name: "Output IGST",
+        name: igst,
         groupName: OUTPUT_TAX_GROUP,
       }),
     ]);
     return { cgstId, sgstId, igstId };
   })().catch((err) => {
     // Don't poison the cache on failure — allow a retry on the next post.
-    OUTPUT_TAX_CACHE.delete(companyID);
+    OUTPUT_TAX_CACHE.delete(key);
     throw err;
   });
-  OUTPUT_TAX_CACHE.set(companyID, p);
+  OUTPUT_TAX_CACHE.set(key, p);
   return p;
 }
 
 /** Inputs needed to assemble a GST sales/purchase request. */
 export interface GstVoucherInputs {
+  /**
+   * ⛔ THE VOUCHER CLASS, AND IT IS REQUIRED. Every posting's DIRECTION comes
+   * from it via {@link GST_ORIENTATION}. This field did not exist, and its
+   * absence is the whole of the defect that posted purchases and both notes as
+   * sales invoices — see that table's comment.
+   */
+  voucherType: string;
   /** Party ledger uuid (debited for the gross total on a sale). */
   partyLedgerId: string;
   /** Income/expense ledger uuid (credited for the taxable base on a sale). */
@@ -344,12 +508,25 @@ export function buildGstVoucherRequest(
     gst.placeOfSupply,
   );
 
+  // ⛔ THE ORIENTATION IS REQUIRED AND HAS NO DEFAULT. See GST_ORIENTATION: the
+  // defect this replaces was precisely a silent fallback to the sales shape.
+  const o = gstOrientationFor(inputs.voucherType);
+  if (!o) {
+    throw new Error(
+      `gstVoucher: no posting orientation is defined for voucher class ` +
+        `"${inputs.voucherType}". Refusing to guess which way the money goes — ` +
+        `a guess here books a payable as a receivable, or output tax the ` +
+        `company does not owe, and it BALANCES either way so nothing downstream ` +
+        `will report it. Add a row to GST_ORIENTATION.`,
+    );
+  }
+
   const taxPostings: PostingRequest[] = [];
   if (split.intra) {
-    taxPostings.push({ ledger_id: outputTax.cgstId, dr_cr: "CR", amount: split.cgst });
-    taxPostings.push({ ledger_id: outputTax.sgstId, dr_cr: "CR", amount: split.sgst });
+    taxPostings.push({ ledger_id: outputTax.cgstId, dr_cr: o.taxSide, amount: split.cgst });
+    taxPostings.push({ ledger_id: outputTax.sgstId, dr_cr: o.taxSide, amount: split.sgst });
   } else {
-    taxPostings.push({ ledger_id: outputTax.igstId, dr_cr: "CR", amount: split.igst });
+    taxPostings.push({ ledger_id: outputTax.igstId, dr_cr: o.taxSide, amount: split.igst });
   }
   // ⚠️ THROUGH THE EXPORTED HELPER, not summed again here. The bill-reference
   // panel shows this same figure, and one definition of "what the invoice comes
@@ -362,10 +539,10 @@ export function buildGstVoucherRequest(
   );
 
   const postings: PostingRequest[] = [
-    // Party Dr = gross total (taxable + tax).
-    { ledger_id: partyLedgerId, dr_cr: "DR", amount: total },
-    // Income Cr = taxable base.
-    { ledger_id: incomeLedgerId, dr_cr: "CR", amount: taxableValue },
+    // The party leg carries the GROSS (taxable + tax); its side is the class's.
+    { ledger_id: partyLedgerId, dr_cr: o.partySide, amount: total },
+    // The income/expense leg carries the taxable BASE.
+    { ledger_id: incomeLedgerId, dr_cr: o.baseSide, amount: taxableValue },
     ...taxPostings,
   ];
 
@@ -413,8 +590,12 @@ export function buildGstVoucherRequest(
   // be a second implementation of the same arithmetic, and the drifted copy is
   // always the one that reaches production. Single-sourced for the same reason
   // the postings array above is.
+  // ⛔ AND THE BILL REFERENCE FOLLOWS THE PARTY LEG, which is the whole point of
+  // the sum-to-posting invariant: the server refuses an allocation whose side or
+  // total disagrees with the posting it belongs to. Left hard-coded "DR" this
+  // would have opened a RECEIVABLE against a supplier on every purchase.
   const billAllocations = buildBillAllocations(
-    { ledgerId: partyLedgerId, drCr: "DR", amount: total },
+    { ledgerId: partyLedgerId, drCr: o.partySide, amount: total },
     inputs.billRefs ?? [],
   );
   if (billAllocations.length > 0) req.bill_allocations = billAllocations;
