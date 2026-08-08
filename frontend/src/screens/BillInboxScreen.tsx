@@ -54,11 +54,31 @@ function formatTotal(grandTotal: string): string {
   return grandTotal === "0.0000" ? "—" : grandTotal;
 }
 
-/** A stable, human-readable row label for a draft summary. */
+/**
+ * A stable, human-readable row label for a draft summary.
+ *
+ * ⛔ AN ACCEPTED DRAFT NAMES THE VOUCHER IT BECAME, AND ITS ABSENCE WAS HALF OF A
+ * DUPLICATED SUPPLIER BILL. insightd sets `accepted_voucher_no` precisely so this
+ * row can say "already posted as …" instead of sitting here looking postable — and
+ * a browser re-drive on 2026-08-08 found the server sent it, the wire returned it
+ * and the TS type declared it, while this label never rendered it: the row read
+ * `Pune Fabricators · 21240.0000 · accepted · 95%`, with the voucher number nowhere
+ * on the screen. An operator who cannot see what happened to a bill re-does it,
+ * which is exactly the duplicate the whole accept lifecycle exists to stop.
+ *
+ * ⚠️ `accepted_voucher_no` may legitimately be "" (cored allocates the number and
+ * an empty string means "posted, number not echoed"), so fall back to saying it is
+ * posted rather than printing an empty gap that reads like "not posted".
+ */
 function rowLabel(s: DraftSummary): string {
   const party = s.party.trim().length > 0 ? s.party : "(unknown supplier)";
   const pct = Math.round((s.confidence ?? 0) * 100);
-  return `${party} · ${formatTotal(s.grand_total)} · ${s.status} · ${pct}%`;
+  const head = `${party} · ${formatTotal(s.grand_total)}`;
+  if (s.status === "accepted") {
+    const no = (s.accepted_voucher_no ?? "").trim();
+    return `${head} · already posted as ${no.length > 0 ? no : "a voucher"} — do not re-enter`;
+  }
+  return `${head} · ${s.status} · ${pct}%`;
 }
 
 export function BillInboxScreen({ onSelect }: ScreenComponentProps) {

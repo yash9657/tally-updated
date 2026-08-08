@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { MeCompany } from "../api";
-import { useClient, useCompanyContext } from "../app/CompanyContext";
+import {
+  rememberChosenCompanyId,
+  useClient,
+  useCompanyContext,
+} from "../app/CompanyContext";
 import { COMPANY_SWITCHED_SENTINEL } from "../keystroke/navMachine";
 import type { ScreenComponentProps } from "../app/screenRegistry";
 import { SelectionList } from "./SelectionList";
@@ -17,15 +21,24 @@ import { SelectionList } from "./SelectionList";
  *   1. re-reads that company's master (getCompany) so `homeStateCode` is the
  *      SERVER's value — hydrating it wrongly would make the browser derive the
  *      wrong intra/inter-state GST split and the server would 422 the post;
- *   2. calls setCompany, which re-scopes every screen (the company id is the
+ *   2. RECORDS the choice (rememberChosenCompanyId) so it survives a page load;
+ *   3. calls setCompany, which re-scopes every screen (the company id is the
  *      tenant scope in every route);
- *   3. fires COMPANY_SWITCHED_SENTINEL, which unwinds the machine to the
+ *   4. fires COMPANY_SWITCHED_SENTINEL, which unwinds the machine to the
  *      Gateway — the frames underneath were rendered against the OLD company's
  *      books, and silently re-pointing them is how an entry lands in the wrong
  *      company.
  *
+ * Step 2 is not bookkeeping. Without it the switch lived only in React state:
+ * a reload (or a fresh tab, or a crash) returned the operator to the previous
+ * company WITHOUT SAYING SO, and the next voucher they keyed was written to it.
+ * The precedence it implements — an F3 switch outranks a stale `?company=` in
+ * the address bar, which outranks localStorage — is documented in full at the
+ * top of `app/CompanyContext.tsx`; read it there before changing this call.
+ *
  * Failure is LOUD and non-destructive: if step 1 fails, the session stays on
- * the current company rather than switching to a half-hydrated one.
+ * the current company rather than switching to a half-hydrated one, and nothing
+ * is recorded.
  */
 export function CompanySelectScreen({ onSelect }: ScreenComponentProps) {
   const client = useClient();
@@ -79,13 +92,20 @@ export function CompanySelectScreen({ onSelect }: ScreenComponentProps) {
       const row = rows.find((r) => r.label === label);
       if (!row) return;
       if (row.id === company?.id) {
-        // Already here: leave the picker without a pointless round trip.
+        // Already here: leave the picker without a pointless round trip. Nothing
+        // to record either — being "already here" means the bootstrap hydrate
+        // (or an earlier switch) already persisted this id.
         onSelect(COMPANY_SWITCHED_SENTINEL);
         return;
       }
       setError(null);
       try {
         const view = await client.getCompany(row.id);
+        // RECORD FIRST, then re-scope. The hydrate has succeeded, so this is the
+        // company the operator is about to work in; persisting before the state
+        // change means even a render that blows up afterwards cannot leave the
+        // next page load pointing at the OLD company's books.
+        rememberChosenCompanyId(view.id || row.id);
         setCompany({
           id: view.id || row.id,
           name: view.name || row.name,

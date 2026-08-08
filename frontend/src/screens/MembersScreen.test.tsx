@@ -607,4 +607,219 @@ describe("MembersScreen — invitation delivery", () => {
       ),
     );
   });
+
+  /**
+   * THE 41-ROW LIE. An invite carrying no email address has the sign-in SUBJECT
+   * as its outbox recipient (notify.InviteMessage's fallback), and a subject is
+   * an identifier, not an address — nothing could be delivered to it. The live
+   * database holds 52 such notifications at status='sent', 41 with no '@' in the
+   * recipient at all, because the log transport reported success after logging
+   * "NO EMAIL ON FILE … nothing was sent". The server no longer records that as
+   * a send, but those rows are still there, so the SCREEN must not repeat their
+   * claim either.
+   */
+  it("will not say SENT for an invite that has no address to send to", async () => {
+    renderMembers(
+      withInvite({
+        subject: "subject-with-no-at-sign",
+        email: "",
+        notification_status: "sent",
+        notification_attempts: 1,
+      }),
+    );
+    const cell = await waitFor(() =>
+      screen.getByTestId("invite-delivery:subject-with-no-at-sign"),
+    );
+    const text = cell.textContent ?? "";
+    expect(text).toContain("no invitation was sent");
+    expect(text).toContain("NO EMAIL ADDRESS");
+    expect(text).toContain("tell them yourself");
+    // And specifically NOT the sentence that made 41 rows a lie.
+    expect(text).not.toContain("invitation sent —");
+    expect(text.startsWith("invitation sent")).toBe(false);
+  });
+
+  it("will not say QUEUED for an addressless invite either", async () => {
+    // 'pending' is not honest here: the queue can only ever dead-letter this
+    // one, so "invitation queued" describes work that will never deliver.
+    renderMembers(
+      withInvite({
+        subject: "subject-with-no-at-sign",
+        email: "",
+        notification_status: "pending",
+        notification_attempts: 0,
+      }),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("invite-delivery:subject-with-no-at-sign").textContent,
+      ).toContain("no invitation was sent"),
+    );
+    expect(
+      screen.getByTestId("invite-delivery:subject-with-no-at-sign").textContent,
+    ).not.toContain("queued");
+  });
+
+  it("renders the server's own no-address outcome in the loud words, not as a transport error", async () => {
+    // What cored writes now: status 'failed' + notify.NoAddressReason as
+    // last_error. It must NOT read as "NOT delivered after 1 attempt", which
+    // suggests a transport that might work next time.
+    renderMembers(
+      withInvite({
+        subject: "someone",
+        email: "",
+        notification_status: "failed",
+        notification_attempts: 1,
+        notification_error: "no email address on file — nothing was sent",
+      }),
+    );
+    const text = await waitFor(
+      () => screen.getByTestId("invite-delivery:someone").textContent ?? "",
+    );
+    expect(text).toContain("no invitation was sent");
+    expect(text).not.toContain("1 attempt");
+  });
+
+  it("still says SENT when an email address was on file", async () => {
+    // The guard above must not swallow real delivery.
+    renderMembers(
+      withInvite({
+        subject: "someone",
+        email: "someone@firm.test",
+        notification_status: "sent",
+        notification_attempts: 1,
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("invite-delivery:someone").textContent).toContain(
+        "invitation sent",
+      ),
+    );
+  });
+
+  it("still says SENT when the SUBJECT is itself an address", async () => {
+    // No email column, but the subject is deliverable — which is what the
+    // server's own fallback delivers to, so this one really was sent.
+    renderMembers(
+      withInvite({
+        subject: "self@firm.test",
+        email: "",
+        notification_status: "sent",
+        notification_attempts: 1,
+      }),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("invite-delivery:self@firm.test").textContent,
+      ).toContain("invitation sent"),
+    );
+  });
+});
+
+/**
+ * The invite form collects the ADDRESS, and the banners are ANNOUNCED.
+ *
+ * The first is what makes delivery possible at all: with no email the outbox's
+ * recipient is the sign-in subject and the invitation reaches nobody. The second
+ * is the difference between a refusal a screen-reader operator hears and one
+ * they do not — the banner is inserted mid-page, above a panel that unmounts and
+ * remounts on the refresh, so nothing but a live region will speak it.
+ */
+describe("MembersScreen — an invitation that can actually arrive, announced", () => {
+  /** stubClient + a SPY on inviteMember, since the claim is about the body sent. */
+  const invitingClient = () =>
+    stubClient({
+      inviteMember: vi.fn(async () => ({
+        invite_id: "inv-2",
+        subject: "newcomer",
+        status: "pending",
+      })),
+    });
+
+  it("sends the email address with the invite", async () => {
+    const client = invitingClient();
+    renderMembers(client);
+    await waitFor(() => expect(screen.getByTestId("invite-submit")).toBeTruthy());
+
+    fireEvent.change(screen.getByTestId("invite-subject"), {
+      target: { value: "newcomer" },
+    });
+    fireEvent.change(screen.getByTestId("invite-email"), {
+      target: { value: "newcomer@firm.test" },
+    });
+    fireEvent.click(screen.getByTestId("invite-submit"));
+
+    await waitFor(() =>
+      expect(client.inviteMember).toHaveBeenCalledWith("co-1", {
+        subject: "newcomer",
+        security_level_name: "Data Entry",
+        email: "newcomer@firm.test",
+      }),
+    );
+    expect(screen.getByTestId("members-notice").textContent).toContain(
+      "queued to newcomer@firm.test",
+    );
+  });
+
+  it("says plainly that an invite with NO email was sent to nobody", async () => {
+    const client = invitingClient();
+    renderMembers(client);
+    await waitFor(() => expect(screen.getByTestId("invite-submit")).toBeTruthy());
+
+    fireEvent.change(screen.getByTestId("invite-subject"), {
+      target: { value: "newcomer" },
+    });
+    fireEvent.click(screen.getByTestId("invite-submit"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("members-notice").textContent).toContain(
+        "NO invitation was sent to anybody",
+      ),
+    );
+    // An empty email is OMITTED, not sent as "": the server distinguishes
+    // "no address on file" from an address.
+    expect(client.inviteMember).toHaveBeenCalledWith("co-1", {
+      subject: "newcomer",
+      security_level_name: "Data Entry",
+    });
+  });
+
+  it("announces a refusal to assistive technology (role=alert)", async () => {
+    const client = stubClient({
+      inviteMember: async () => {
+        throw new ApiError(403, "webauthn step-up required", "STEPUP_REQUIRED");
+      },
+    });
+    renderMembers(client);
+    await waitFor(() => expect(screen.getByTestId("invite-submit")).toBeTruthy());
+    // Nothing is being announced before the refusal.
+    expect(screen.queryAllByRole("alert")).toHaveLength(0);
+
+    fireEvent.change(screen.getByTestId("invite-subject"), {
+      target: { value: "newcomer" },
+    });
+    fireEvent.click(screen.getByTestId("invite-submit"));
+
+    // The BANNER ITSELF is the live region — a probe that found the text but
+    // `[role="alert"] count=0` is exactly the silence this closes.
+    const alert = await waitFor(() => screen.getByRole("alert"));
+    expect(alert).toBe(screen.getByTestId("members-error"));
+    expect(alert.textContent).toContain("WebAuthn step-up required");
+  });
+
+  it("announces the outcome of a write that SUCCEEDED, politely", async () => {
+    const client = invitingClient();
+    renderMembers(client);
+    await waitFor(() => expect(screen.getByTestId("invite-submit")).toBeTruthy());
+
+    fireEvent.change(screen.getByTestId("invite-subject"), {
+      target: { value: "newcomer" },
+    });
+    fireEvent.click(screen.getByTestId("invite-submit"));
+
+    // role="status" (polite), not alert: it confirms what happened rather than
+    // interrupting to report what did not.
+    const status = await waitFor(() => screen.getByRole("status"));
+    expect(status).toBe(screen.getByTestId("members-notice"));
+  });
 });

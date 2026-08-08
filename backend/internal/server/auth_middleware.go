@@ -1,17 +1,31 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/khata/cored/internal/authn"
 	"github.com/khata/cored/internal/authz"
+	// integration is imported for the ROUND-3 GUID peek, not for the import
+	// itself: peekTallyXMLSupersededGUIDs must decide which <VOUCHER> supersedes
+	// an existing one with the SAME parse and the SAME GUIDValue() the importer
+	// uses, or the PDP and the writer could disagree about which voucher is about
+	// to be altered or tombstoned. Same reason server.go imports it for the DATE
+	// peek.
+	"github.com/khata/cored/internal/integration"
 	"github.com/khata/cored/internal/platform/db"
+	// sync is imported for its Op CONSTANTS only, so the op filter in
+	// peekSyncSupersededVoucherIDs cannot drift from the switch in
+	// sync.Service.applyOne that routes those ops to AlterVoucher/DeleteVoucher.
+	"github.com/khata/cored/internal/sync"
 )
 
 // auth_middleware.go is the server-side authn + PDP enforcement seam (Task D,
@@ -238,14 +252,37 @@ func (s *Server) companyAuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		// THE DATE ALREADY IN THE BOOKS (round 3). A write that names an EXISTING
+		// voucher is judged on BOTH ends of the move — see
+		// storedVoucherDateForRequest for the two doors this closes and why
+		// neither of the two earlier rounds could reach them.
+		//
+		// ⛔ THE READ IS GATED ON `level.BackdatedCutoff != nil`, WHICH IS THE
+		// WHOLE ANSWER TO "A DB HIT ON THE HOT PATH". A store read the PDP does
+		// not need is a store read that must not happen: at a company that has
+		// locked no period the cutoff cannot deny anything, so the stored date
+		// changes no decision and no query is issued. Every existing tenant that
+		// has never set a cutoff pays exactly nothing, and the ones that have pay
+		// ONE indexed lookup on (company_id, voucher_id) — and only on the four
+		// routes that name an already-stored voucher. Never on an ordinary create,
+		// never on a read, never on a master write: for those,
+		// existingVouchersNamedByRequest returns no names and no transaction is
+		// opened at all. `level` is already in hand here (it was loaded two
+		// statements ago for the rule evaluation), so the gate itself is free.
+		var storedDate *time.Time
+		if level.BackdatedCutoff != nil {
+			storedDate = s.storedVoucherDateForRequest(r, companyID, act)
+		}
+
 		req := authz.Request{
-			UserID:       userID,
-			CompanyID:    companyID,
-			Action:       act,
-			Resource:     res,
-			ResourceName: resName,
-			VoucherDate:  voucherDateFromRequest(r, act),
-			HasWebAuthn:  claims.HasWebAuthn(),
+			UserID:            userID,
+			CompanyID:         companyID,
+			Action:            act,
+			Resource:          res,
+			ResourceName:      resName,
+			VoucherDate:       voucherDateFromRequest(r, act),
+			StoredVoucherDate: storedDate,
+			HasWebAuthn:       claims.HasWebAuthn(),
 		}
 		decision := authz.Evaluate(level, rules, req)
 		if !decision.Allow {
@@ -340,6 +377,440 @@ func voucherDateFromRequest(r *http.Request, act authz.Action) *time.Time {
 		return nil
 	}
 	return d
+}
+
+// ===========================================================================
+// ROUND 3 — THE DATE THAT IS ALREADY IN THE DATABASE
+// ===========================================================================
+// Everything above judges the date THE REQUEST CARRIES. Round 1 made an
+// unreadable one fail closed; round 2 taught the peek to find one nested at any
+// depth and one inside a Tally envelope. After both shipped, a browser re-drive
+// walked out of a locked period without sending a back-dated date at all —
+// verbatim, on the wire, against a company whose Owner level had
+// BackdatedCutoff = 2026-07-01 and a journal already posted at 2026-05-01:
+//
+//	ALTER   PUT /v1/companies/<C>/vouchers/journal/<id>  voucher_date=2026-08-20
+//	        -> 200 {"version_no":2,...}
+//	DELETE  DELETE /v1/companies/<C>/vouchers/<id>
+//	        -> 200 {"op":"DELETE","version_no":3,...}
+//	CONTROL POST /v1/companies/<C>/vouchers/journal      voucher_date=2026-05-01
+//	        -> 403  (the cutoff was live throughout)
+//
+// NEITHER DOOR IS BODY-SHAPED, WHICH IS WHY TWO ROUNDS OF PEEK-HARDENING COULD
+// NOT SEE THEM. A DELETE has no body: drainBody returns nil, the peek returns
+// nil, and cutoffDeny's `req.VoucherDate == nil` arm returns early. An ALTER has
+// a body, but it only ever states where the voucher is GOING — so naming next
+// month lifts a May voucher clean out of a filed quarter. An operator who cannot
+// POST into a filed period could still empty it one voucher at a time.
+//
+// The date these need is the one the voucher ALREADY carries, and the only place
+// that lives is the database. Hence a store read, gated as tightly as it can be.
+//
+// THE ENUMERATION IS THE POINT OF THIS ROUND. Rounds 1 and 2 each fixed the
+// route they were shown and each was followed by another door. So this walks the
+// class instead: every write that NAMES an already-stored voucher. There are
+// four, and two of them are not the two that were driven —
+//
+//	PUT    /vouchers/{class}/{voucherID}     the ALTER that was driven
+//	DELETE /vouchers/{voucherID}             the DELETE that was driven
+//	POST   /sync/commit  op=ALTER | DELETE   the SAME two acts, by voucher id in
+//	                                         the body (sync.Service.applyOne
+//	                                         calls ledger.AlterVoucher /
+//	                                         DeleteVoucher for those two ops)
+//	POST   /import/tally-xml  ACTION=Alter|Delete
+//	                                         the SAME two acts, by Tally GUID
+//	                                         (migration.Importer resolves the
+//	                                         GUID with VoucherIDBySourceGUID and
+//	                                         calls AlterVoucher / DeleteVoucher)
+//
+// Every other write in the {companyID} subtree either creates something new or
+// touches a document that is not a dated ledger entry; the verdict for each one,
+// including the safe ones, is recorded in auth_stored_date_cutoff_test.go's
+// route ledger so the next reader does not have to re-derive it.
+
+// namedVouchers is the set of ALREADY-STORED vouchers one request restates or
+// removes. The two name kinds are kept apart because their MISSING cases are
+// opposites, and conflating them would either open a door or break an import:
+//
+//	ids   name a voucher DIRECTLY (a path segment, or client_voucher_id on a
+//	      sync ALTER/DELETE intent). The named voucher MUST EXIST: the handler
+//	      would otherwise 404, and a name we cannot resolve is a period we cannot
+//	      rule out, so it fails CLOSED.
+//	guids name a voucher through Tally's source_guid. An UNKNOWN guid is
+//	      ordinary and must NOT refuse: migration.Importer treats ACTION=Delete
+//	      on an unknown guid as a no-op ("skipped", nothing written) and
+//	      ACTION=Alter on an unknown guid as a CREATE — which is dated by the
+//	      envelope's own <DATE> and already judged by peekTallyXMLVoucherDate.
+//	      Failing closed here would refuse every first-time import of an
+//	      Alter-flavoured export at any company with a cutoff.
+type namedVouchers struct {
+	ids   []uuid.UUID
+	guids []string
+}
+
+func (n namedVouchers) empty() bool { return len(n.ids) == 0 && len(n.guids) == 0 }
+
+// deduped removes repeated names, and it is LOAD-BEARING rather than tidiness.
+// storedVoucherDateForRequest refuses when the number of rows it resolved is not
+// the number of ids it asked about — that count check IS the fail-closed door for
+// a voucher that does not exist. A /sync/commit outbox legitimately names the
+// SAME voucher twice (sync.Node emits create, then alter, then delete against one
+// target, which is what its own node_test.go asserts), so without this a perfectly
+// ordinary offline batch would resolve one row for two ids and be refused as
+// unreadable at every company that has locked a period.
+func (n namedVouchers) deduped() namedVouchers {
+	out := namedVouchers{}
+	seenID := make(map[uuid.UUID]struct{}, len(n.ids))
+	for _, id := range n.ids {
+		if _, dup := seenID[id]; dup {
+			continue
+		}
+		seenID[id] = struct{}{}
+		out.ids = append(out.ids, id)
+	}
+	seenGUID := make(map[string]struct{}, len(n.guids))
+	for _, g := range n.guids {
+		if _, dup := seenGUID[g]; dup {
+			continue
+		}
+		seenGUID[g] = struct{}{}
+		out.guids = append(out.guids, g)
+	}
+	return out
+}
+
+// storedVoucherDateForRequest returns the date the books ALREADY hold for the
+// voucher(s) this write names, for authz.Request.StoredVoucherDate. The three
+// answers are the three the peeks above use, which is deliberate — one
+// convention for "readable / no date here / present but unreadable" across the
+// whole cutoff seam:
+//
+//	nil                 this request names no already-stored voucher (every
+//	                    create in the product), so there is no source end to
+//	                    judge and cutoffDeny's stored arm skips.
+//	a date              the EARLIEST date among the vouchers named. Earliest for
+//	                    walkVoucherDates' reason: a batch is only as permitted as
+//	                    its most-refused member, or one allowed intent carries a
+//	                    back-dated one in with it.
+//	beforeEveryCutoff() a voucher was named and its period could NOT be
+//	                    established — it is missing, tombstoned, or the store
+//	                    errored. Fail CLOSED, the pay run's convention: "I could
+//	                    not find out which period this voucher is in" must never
+//	                    be spelled the same way as "it is not in a locked one",
+//	                    because the second is exactly what let the DELETE through.
+//
+// ⚠️ IT IS ONLY EVER CALLED WHEN A CUTOFF IS SET (see companyAuthMiddleware), so
+// the fail-closed answers cost nothing at a company that has locked no period.
+func (s *Server) storedVoucherDateForRequest(r *http.Request, companyID uuid.UUID, act authz.Action) *time.Time {
+	named := existingVouchersNamedByRequest(r, act).deduped()
+	if named.empty() {
+		return nil
+	}
+	if s.pool == nil {
+		// A Server assembled without a pool cannot answer the question, and the
+		// answer it cannot give is the one that would allow the write.
+		return beforeEveryCutoff()
+	}
+
+	// db.WithCompany is what binds RLS for the read. Membership in {companyID}
+	// has ALREADY been confirmed by this point (step 4 of the pinned flow), so
+	// scoping a read to it grants no reach the caller does not have — and the
+	// read is a RunInReadOnlyTx, so a mistake here cannot become a write on the
+	// authorization path.
+	ctx := db.WithCompany(r.Context(), companyID)
+	var (
+		earliest *time.Time
+		bad      bool
+	)
+	err := s.pool.RunInReadOnlyTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		if len(named.ids) > 0 {
+			found, d, unreadable, err := storedDatesByID(ctx, tx, companyID, named.ids)
+			if err != nil {
+				return err
+			}
+			// EVERY directly-named voucher must have resolved. A name that
+			// resolved to nothing is a period we cannot rule out.
+			if found != len(named.ids) {
+				bad = true
+			}
+			bad = bad || unreadable
+			earliest = earlierOf(earliest, d)
+		}
+		if len(named.guids) > 0 {
+			// No count check: an unknown guid is a no-op or a create, per
+			// namedVouchers' doc.
+			_, d, unreadable, err := storedDatesByGUID(ctx, tx, companyID, named.guids)
+			if err != nil {
+				return err
+			}
+			bad = bad || unreadable
+			earliest = earlierOf(earliest, d)
+		}
+		return nil
+	})
+	if err != nil || bad {
+		return beforeEveryCutoff()
+	}
+	return earliest
+}
+
+// storedVoucherDateSQL reads the CURRENT (head) version's date for a set of
+// logical vouchers. It mirrors ledger.GetVoucher's head join EXACTLY —
+// voucher_head.current_version_id, `is_deleted = false` — so the PDP and the
+// writer cannot disagree about WHICH version's date is the voucher's date.
+//
+// ⛔ IT IS NOT ledger.Service.GetVoucher, AND THAT IS THE ONE PERFORMANCE
+// DECISION IN THIS FILE. GetVoucher additionally reads postings, bill
+// allocations, inventory lines and cost allocations — four more queries and a
+// full voucher graph — to answer a question about ONE date. This is a single
+// indexed lookup on (company_id, voucher_id) plus one join on a primary key.
+//
+// `is_deleted = false` matters in the fail-closed direction: a voucher that has
+// already been tombstoned resolves to NO row, so a second DELETE of it is
+// refused under a cutoff rather than waved through on a nil date. Deleting a
+// tombstone writes nothing anyway (ledger.DeleteVoucher 404s), so the cost is a
+// 403 instead of a 404 at companies that have locked a period.
+const storedVoucherDateSQL = `SELECT vh.voucher_id, to_char(vv.voucher_date, 'YYYY-MM-DD')
+	   FROM voucher_head vh
+	   JOIN voucher_version vv ON vv.id = vh.current_version_id
+	  WHERE vh.company_id = $1 AND vh.is_deleted = false AND vh.voucher_id = ANY($2::uuid[])`
+
+// storedVoucherDateByGUIDSQL is the same read keyed by Tally's source_guid — the
+// only handle POST /import/tally-xml has on the voucher it is about to alter or
+// tombstone (see migration.Importer, which resolves it with
+// ledger.VoucherIDBySourceGUID).
+const storedVoucherDateByGUIDSQL = `SELECT vh.voucher_id, to_char(vv.voucher_date, 'YYYY-MM-DD')
+	   FROM voucher_head vh
+	   JOIN voucher_version vv ON vv.id = vh.current_version_id
+	  WHERE vh.company_id = $1 AND vh.is_deleted = false AND vh.source_guid = ANY($2::text[])`
+
+func storedDatesByID(ctx context.Context, tx pgx.Tx, companyID uuid.UUID, ids []uuid.UUID) (
+	found int, earliest *time.Time, unreadable bool, err error) {
+	rows, qerr := tx.Query(ctx, storedVoucherDateSQL, companyID, ids)
+	if qerr != nil {
+		return 0, nil, false, qerr
+	}
+	defer rows.Close()
+	return scanStoredDates(rows)
+}
+
+func storedDatesByGUID(ctx context.Context, tx pgx.Tx, companyID uuid.UUID, guids []string) (
+	found int, earliest *time.Time, unreadable bool, err error) {
+	rows, qerr := tx.Query(ctx, storedVoucherDateByGUIDSQL, companyID, guids)
+	if qerr != nil {
+		return 0, nil, false, qerr
+	}
+	defer rows.Close()
+	return scanStoredDates(rows)
+}
+
+// scanStoredDates reduces the rows to (how many vouchers resolved, the earliest
+// date among them, whether any date was present-but-unreadable).
+//
+// ⚠️ A NULL voucher_date IS NOT UNREADABLE AND IS NOT EARLY. ledger.Post stores
+// an absent date as SQL NULL (nullIfEmpty), so an undated voucher is dated into
+// NO period at all and altering or deleting one takes nothing out of the locked
+// one. It still COUNTS as resolved — the row exists — which is what keeps the
+// count check above from refusing a legitimate write against an undated voucher.
+// Treating NULL as the zero-time sentinel instead would refuse every such write
+// at any company with a cutoff, which is round 1's "an absent date is somebody
+// else's 400" applied to the stored end.
+func scanStoredDates(rows pgx.Rows) (found int, earliest *time.Time, unreadable bool, err error) {
+	seen := make(map[uuid.UUID]struct{})
+	for rows.Next() {
+		var (
+			id      uuid.UUID
+			spelled *string
+		)
+		if serr := rows.Scan(&id, &spelled); serr != nil {
+			return 0, nil, false, serr
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		found++
+		if spelled == nil {
+			continue // SQL NULL: dated into no period. See the doc above.
+		}
+		d, perr := time.Parse("2006-01-02", *spelled)
+		if perr != nil {
+			// to_char produced something this layout cannot read. It should be
+			// impossible from a DATE column, and "impossible" is precisely the
+			// case that must not fail open — round 1's whole lesson.
+			unreadable = true
+			continue
+		}
+		earliest = earlierOf(earliest, &d)
+	}
+	if rerr := rows.Err(); rerr != nil {
+		return 0, nil, false, rerr
+	}
+	return found, earliest, unreadable, nil
+}
+
+// existingVouchersNamedByRequest lists the already-stored vouchers a write
+// RESTATES OR REMOVES. It is the enumeration this round exists for: four route
+// families, matched on the SAME path segments routeAction matches (splitPath of
+// routeSuffix), so the two cannot disagree about which request is which — the
+// rule voucherDateFromRequest states at length for the pay run, applied again.
+//
+// ⚠️ AN UNPARSEABLE ID NAMES NOTHING, AND THAT IS NOT A FAIL-OPEN. It is
+// peekDepositDate's call, not the pay run's: the handler parses the SAME uuid
+// (uuid.Parse in alterVoucher / handleDeleteVoucher / handleSyncCommit) and
+// answers 400 before any row is touched, so no voucher can leave the locked
+// period through a malformed name. A 400 that says "invalid voucher id" is the
+// more useful answer to that request than a 403 about a period lock.
+func existingVouchersNamedByRequest(r *http.Request, act authz.Action) namedVouchers {
+	// Only writes can move or remove anything; a Display or a Print names a
+	// voucher constantly and must never pay for a read here.
+	if !act.IsWrite() {
+		return namedVouchers{}
+	}
+	segs := splitPath(routeSuffix(r))
+	switch {
+	// PUT /vouchers/{class}/{voucherID} — the ALTER that was driven. The class
+	// is validated by isVoucherClass, exactly as routeAction's own PUT arm
+	// validates it, so a path routeAction default-denies is not one this
+	// function tries to read a date for.
+	case r.Method == http.MethodPut && len(segs) == 3 && segs[0] == "vouchers" && isVoucherClass(segs[1]):
+		return namedVouchers{ids: parseVoucherID(segs[2])}
+
+	// DELETE /vouchers/{voucherID} — the DELETE that was driven. THE ONLY DATE
+	// IN THIS REQUEST IS THE STORED ONE: there is no body at all.
+	case r.Method == http.MethodDelete && len(segs) == 2 && segs[0] == "vouchers":
+		return namedVouchers{ids: parseVoucherID(segs[1])}
+
+	// POST /sync/commit — the same two acts, arriving from an offline node.
+	// Round 2 closed this route for CREATE intents (their voucher_date is nested
+	// in intents[].payload, which walkVoucherDates now reaches). An ALTER or
+	// DELETE intent is the round-3 shape: sync.Service.applyOne switches on
+	// Intent.Op and hands OpAlter to ledger.AlterVoucher and OpDelete to
+	// ledger.DeleteVoucher, against the intent's client_voucher_id.
+	case r.Method == http.MethodPost && len(segs) == 2 && segs[0] == "sync" && segs[1] == "commit":
+		return namedVouchers{ids: peekSyncSupersededVoucherIDs(drainBody(r))}
+
+	// POST /import/tally-xml — the same two acts again, and the one route that
+	// names its target by Tally GUID rather than by uuid.
+	case r.Method == http.MethodPost && len(segs) == 2 && segs[0] == "import" && segs[1] == "tally-xml":
+		return namedVouchers{guids: peekTallyXMLSupersededGUIDs(drainBody(r))}
+	}
+	return namedVouchers{}
+}
+
+// parseVoucherID turns one path segment into the (0 or 1)-element id list.
+func parseVoucherID(seg string) []uuid.UUID {
+	id, err := uuid.Parse(seg)
+	if err != nil {
+		return nil // names nothing; the handler's own 400. See the doc above.
+	}
+	return []uuid.UUID{id}
+}
+
+// peekSyncSupersededVoucherIDs lists the client_voucher_ids of the intents in a
+// /sync/commit body that SUPERSEDE an existing voucher.
+//
+// ⛔ THE OP FILTER IS EXACT, AND MUST STAY THE SAME COMPARISON sync MAKES.
+// handleSyncCommit converts the wire string straight to sync.Op with no
+// normalisation, and sync.Service.applyOne switches on it: anything that is not
+// exactly "CREATE", "ALTER" or "DELETE" falls to `unknown op %q` and the whole
+// commit errors with 422 having written nothing. So matching the same two
+// literals here cannot leave a spelling that reaches AlterVoucher while this
+// function looks away — the "one notion of route identity" rule, applied to an op
+// instead of a path.
+//
+// ⛔ A CREATE INTENT IS DELIBERATELY EXCLUDED. Its client_voucher_id is a NEW id
+// the node minted offline (PostVoucherWithID takes a caller-supplied id), so it
+// does not exist yet — and namedVouchers.ids fails closed on an id that does not
+// resolve. Including creates would refuse every offline commit at any company
+// with a cutoff.
+func peekSyncSupersededVoucherIDs(body []byte) []uuid.UUID {
+	if body == nil {
+		return nil
+	}
+	var probe struct {
+		Intents []struct {
+			Op              string `json:"op"`
+			ClientVoucherID string `json:"client_voucher_id"`
+		} `json:"intents"`
+	}
+	// ⛔⛔ DECODED THE WAY handleSyncCommit DECODES, AND THE DIFFERENCE WAS A DRIVEN
+	// BYPASS OF THE BACK-DATED CUTOFF.
+	//
+	// This used `json.Unmarshal`, under the comment "not a decodable sync body:
+	// handleSyncCommit's decodeJSON answers 400 and nothing is written, so there is
+	// no voucher named here to protect." ⚠️ THAT PREMISE IS FALSE. `decodeJSON` uses
+	// `json.NewDecoder().Decode()`, which takes the FIRST JSON value and IGNORES
+	// whatever follows; `json.Unmarshal` REJECTS trailing bytes. So one appended byte
+	// made this peek see "not JSON", return NO ids, and `named.empty()` short-circuit
+	// the STORED-date arm — while the handler decoded the body perfectly and applied
+	// the ALTER. Driven through the real router:
+	//
+	//	CONTROL /sync/commit op=ALTER                -> 403, voucher still 2026-05-02 v1
+	//	ATTACK  /sync/commit op=ALTER + trailing " x" -> 200, voucher now 2026-08-20 v2
+	//
+	// This is the SIXTH door found in this one control, and every one of the six was
+	// a place where an authorization peek re-implemented a decoding rule that lives in
+	// `encoding/json`. ⛔ THE RULE: a peek that decides a write's fate must decode the
+	// body the way the handler decodes it, or the two disagree and the disagreement is
+	// the hole. See peekVoucherDate and peekDepositDate, moved for the same reason.
+	if err := json.NewDecoder(bytes.NewReader(body)).Decode(&probe); err != nil {
+		// Genuinely not JSON at all. The handler's decodeJSON cannot read it either,
+		// so it answers 400 and nothing is written — no voucher is named here.
+		return nil
+	}
+	var ids []uuid.UUID
+	for _, in := range probe.Intents {
+		if in.Op != string(sync.OpAlter) && in.Op != string(sync.OpDelete) {
+			continue
+		}
+		ids = append(ids, parseVoucherID(in.ClientVoucherID)...)
+	}
+	return ids
+}
+
+// peekTallyXMLSupersededGUIDs lists the source GUIDs of the <VOUCHER> messages in
+// a Tally envelope that carry ACTION=Alter or ACTION=Delete — the ones
+// migration.Importer resolves with ledger.VoucherIDBySourceGUID and hands to
+// AlterVoucher / DeleteVoucher.
+//
+// ⛔ IT NORMALISES THE ACTION EXACTLY AS THE IMPORTER DOES
+// (strings.ToUpper(strings.TrimSpace(...)), empty meaning CREATE) and reads the
+// GUID through the importer's own TallyVoucher.GUIDValue, which prefers <GUID>
+// and falls back to <REMOTEID>. Two spellings of "which voucher does this
+// message supersede" is how the PDP and the writer come to disagree.
+//
+// A GUID-LESS Alter or Delete NAMES NOTHING, and neither case is a hole:
+// ACTION=Delete without a GUID is a hard error inside the importer ("requires a
+// GUID") that writes nothing, and ACTION=Alter without one is treated as a
+// CREATE, dated by the envelope's own <DATE> and already judged by
+// peekTallyXMLVoucherDate.
+//
+// A body that is not an envelope, or an envelope that will not parse, returns no
+// names — NOT a refusal — because peekTallyXMLVoucherDate already answers
+// beforeEveryCutoff() for an unparseable envelope on the very same body. One
+// refusal for one cause; a second one here would only make the reason wrong.
+func peekTallyXMLSupersededGUIDs(body []byte) []string {
+	if body == nil || !isTallyEnvelope(body) {
+		return nil
+	}
+	env, err := integration.ParseTallyEnvelope(bytes.NewReader(body))
+	if err != nil {
+		return nil
+	}
+	var guids []string
+	for _, m := range env.Body.Data.Messages {
+		if m.Voucher == nil {
+			continue // a LEDGER master message supersedes no voucher.
+		}
+		switch strings.ToUpper(strings.TrimSpace(m.Voucher.Action)) {
+		case "ALTER", "DELETE":
+			if g := m.Voucher.GUIDValue(); g != "" {
+				guids = append(guids, g)
+			}
+		}
+	}
+	return guids
 }
 
 // routeAction maps the matched chi route to a (action, resource) pair plus an

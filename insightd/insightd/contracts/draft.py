@@ -31,7 +31,25 @@ _FORBID = ConfigDict(extra="forbid")
 # leaves. With the deterministic fakes the pipeline finishes inside the request
 # and the draft is already terminal on return — ONE response shape either way, so
 # a client never has to know which mode the server is in.
-DraftStatus = Literal["processing", "ready", "low_confidence_manual"]
+#
+# ⛔⛔ 'accepted' IS THE TERMINAL, ONCE-ONLY STATE, AND ITS ABSENCE WAS A MONEY
+# DEFECT. Until it existed there was NO state a consumed draft could be moved to:
+# a draft that had already become a cored purchase voucher stayed "ready", stayed
+# in the F9 Bill Inbox, and could be re-opened and accepted again. The frontend
+# grew two client-side guards for that (a page-lifetime memo, and a day-book
+# lookup by supplier invoice number + date), and a BROWSER RE-DRIVE AFTER THAT
+# FIX still produced TWO REAL VOUCHERS for one supplier bill: the draft whose
+# invoice number the OCR never read has nothing for the day-book layer to match
+# on, and a page reload empties the memo. The truth has to live somewhere a reload
+# cannot reach, which means here.
+#
+# insightd RECORDS the acceptance; it never performs one. The voucher is written
+# by the human's own client against cored (that is the whole HITL boundary), and
+# this state plus ``accepted_voucher_id`` / ``accepted_voucher_no`` is insightd
+# remembering WHICH voucher a draft became. That is deliberately a link and not
+# merely a hidden row: an operator who cannot see what happened to a bill re-does
+# it, so the inbox must be able to say "already posted as Purchase 3".
+DraftStatus = Literal["processing", "ready", "low_confidence_manual", "accepted"]
 
 FieldSource = Literal["ocr", "classifier", "inferencer", "derived", "default"]
 
@@ -101,3 +119,55 @@ class PurchaseVoucherDraft(BaseModel):
     redaction: RedactionReportSummary  # counts only; proves PII scrubbed
     unresolved: list[str]  # fields needing human attention (drives F9 focus order)
     derived_gst: GSTAmounts | None = None  # display-only re-derivation
+
+    # --- the acceptance link (set together with status 'accepted') -----------
+    #
+    # WHICH VOUCHER THIS DRAFT BECAME. Recorded, never created, by insightd — see
+    # the DraftStatus comment. All three are None for every non-accepted draft,
+    # and they DEFAULT to None so a row stored before this field existed still
+    # rehydrates under ``extra='forbid'`` (pg_store keeps the whole draft as jsonb
+    # and validates it strictly on the way back out).
+    #
+    # ``accepted_voucher_no`` may legitimately be "" — cored allocates a purchase
+    # voucher number inside the write transaction and a client that could not read
+    # it back must still be able to record the id. It is a DISPLAY string; the id
+    # is the identity.
+    accepted_voucher_id: str | None = None
+    accepted_voucher_no: str | None = None
+    accepted_at: str | None = None  # ISO-8601 UTC, when the acceptance was recorded
+
+    # --- the POSTING CLAIM (a short-lived lease taken BEFORE the voucher POST) --
+    #
+    # ⛔⛔ FIFTH DOOR, DRIVEN IN A BROWSER AFTER FOUR EARLIER FIXES. Everything
+    # above records an acceptance AFTER the fact, and four layers all answered the
+    # same question ("has this draft been accepted?") at the same WRONG MOMENT —
+    # before the voucher was posted, when the honest answer was still "no". TWO
+    # SEPARATE BROWSERS (separate localStorage, no shared session memo) were raced on
+    # ONE numberless draft and BOTH posted:
+    #
+    #   BROWSER A: Saved / No: 11  POST …/vouchers/purchase 201  POST …/accepted 200
+    #   BROWSER B: Saved / No: 12  POST …/vouchers/purchase 201  POST …/accepted 409
+    #
+    # The compare-and-set in the store did exactly what it was built to do — the
+    # SECOND marking was refused — but by then the second voucher was already in the
+    # books: 27000.0000 + 4860.0000 IGST, twice. A check-then-act guard cannot be
+    # fixed by adding a fifth check; the ORDERING has to change. So a poster now
+    # RESERVES the draft first (``claim_for_accept``), posts second, and confirms
+    # third (``mark_accepted``). The loser of the claim is refused BEFORE it posts
+    # anything at all — not even a ledger master.
+    #
+    # WHY A LEASE AND NOT A PERMANENT FLAG. If claiming were permanent, a browser
+    # that died between the claim and the POST would leave a bill NOBODY can ever
+    # post and no route to release — a worse defect than the duplicate it prevents.
+    # So the claim EXPIRES (``claim_expires_at``, CLAIM_TTL_SECONDS in api/store.py),
+    # is released explicitly when the POST fails, and can be renewed by the SAME
+    # ``claim_token`` (a retry from the page that already holds it). A claim is NOT a
+    # status: an unconfirmed claim leaves the draft ``ready`` on purpose, because the
+    # bill really is still unposted and must stay postable.
+    #
+    # All four are None for an unclaimed draft, and they DEFAULT so a row written
+    # before this field existed still rehydrates under ``extra='forbid'``.
+    claim_token: str | None = None
+    claimed_by: str | None = None  # display-only label ("who/what is posting it")
+    claimed_at: str | None = None  # ISO-8601 UTC
+    claim_expires_at: str | None = None  # ISO-8601 UTC; past == no live claim

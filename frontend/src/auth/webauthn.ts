@@ -25,6 +25,8 @@
  *     -> 200 {"credential_id": b64url, "registered": true}
  *   POST /auth/webauthn/assert/begin     Bearer, no body
  *     -> 200 {"challenge": b64url, "rp_id": ..., "allow_credentials": [b64url]}
+ *        allow_credentials is NEWEST FIRST and at most 64 long — see
+ *        {@link MAX_ALLOW_CREDENTIALS} and the server's maxAllowCredentials.
  *   POST /auth/webauthn/assert/finish    Bearer
  *     <- {"credential_id_b64","client_data_json_b64","authenticator_data_b64",
  *         "signature_b64"}
@@ -97,6 +99,30 @@ const PUB_KEY_CRED_PARAMS: PublicKeyCredentialParameters[] = [
   { type: "public-key", alg: -7 },
   { type: "public-key", alg: -8 },
 ];
+
+/**
+ * The HARD ceiling Chromium puts on `allowCredentials`. Hand it more and
+ * `navigator.credentials.get()` throws, before it ever consults an
+ * authenticator:
+ *
+ *   RangeError: The 'allowCredentials' attribute exceeds the maximum allowed
+ *   size (64).
+ *
+ * WHY THIS CONSTANT IS HERE AND NOT ONLY ON THE SERVER. This was measured live:
+ * one dev user had accumulated 65 credentials, assert/begin returned all 65, and
+ * so the FIRST WRITE OF EVERY SESSION died with "PASSKEY STEP-UP FAILED — this
+ * change was not saved", on every device, permanently. The server now caps the
+ * list (backend internal/server/auth_webauthn.go, maxAllowCredentials), which is
+ * the real fix; this is the client refusing to be the thing that explodes when a
+ * server — an older build, a future regression — hands it a list it cannot use.
+ *
+ * The slice keeps the FIRST 64 because the server's contract is NEWEST FIRST
+ * (pinned in the wire contract at the top of this file). If a server ever
+ * violated that ordering the effect is bounded and recoverable: this device
+ * proves none of the offered ids, so stepUp falls through to ENROLMENT, and the
+ * credential it enrols is by definition the newest.
+ */
+export const MAX_ALLOW_CREDENTIALS = 64;
 
 // ---------------------------------------------------------------------------
 // base64url (RawURLEncoding) — the ONE encoder/decoder pair
@@ -210,30 +236,72 @@ function credentialsContainer(): CredentialsContainer {
   return container;
 }
 
+/** The `name` of a thrown DOMException / Error, or "" for anything else. */
+function errName(err: unknown): string {
+  const n =
+    typeof err === "object" && err !== null
+      ? (err as { name?: unknown }).name
+      : undefined;
+  return typeof n === "string" ? n : "";
+}
+
 /**
- * A cancelled prompt rejects with a DOMException (NotAllowedError), and a
- * discoverable-credential mismatch can resolve `null`. Both mean "no assertion",
- * and both must reach the caller as a {@link StepUpFailedError} rather than an
- * opaque DOM error.
+ * Does this `navigator.credentials.get()` rejection mean "THIS DEVICE CANNOT
+ * PROVE ANY OF THE CREDENTIALS IT WAS OFFERED"? Those are recoverable — the
+ * remedy is to ENROL a credential for this device — as opposed to a genuine
+ * transport/programming fault, which must surface.
+ *
+ * Two names qualify, for two different reasons:
+ *
+ *   NotAllowedError — the spec deliberately collapses several outcomes into this
+ *     ONE error so a site cannot enumerate which passkeys a device holds: the
+ *     user refused, the prompt timed out, or — the case that matters here — the
+ *     authenticator holds none of the credentials in allowCredentials. Callers
+ *     therefore cannot tell "wrong device" from "user said no", and must pick a
+ *     remedy that is safe for both.
+ *
+ *   RangeError — the browser refused to even LOOK at the list because it was
+ *     longer than {@link MAX_ALLOW_CREDENTIALS}. This is emphatically not "your
+ *     passkey was refused": it is "the server sent a list this browser cannot
+ *     evaluate", and it used to be turned into a hard StepUpFailedError, which
+ *     made EVERY WRITE IN THE PRODUCT impossible for a user with 65 credentials
+ *     — the defect this branch exists to survive. Enrolling is the correct
+ *     recovery, because the newly-enrolled credential is the newest and a capped
+ *     newest-first list is therefore guaranteed to contain it.
+ *
+ * Note this is name-based, not `instanceof DOMException`-based, on purpose:
+ * RangeError is a plain ECMAScript error, not a DOMException, and jsdom's
+ * DOMException is not the same class as the one a real browser throws.
  */
-// isNotAllowed reports whether a WebAuthn ceremony rejection was NotAllowedError.
-//
-// The spec deliberately collapses several outcomes into this ONE error so a site
-// cannot enumerate which passkeys a device holds: the user refused, the prompt
-// timed out, or — the case that matters here — the authenticator holds none of
-// the credentials in allowCredentials. Callers therefore cannot tell "wrong
-// device" from "user said no", and must pick a remedy that is safe for both.
-function isNotAllowed(err: unknown): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    (err as { name?: unknown }).name === "NotAllowedError"
-  );
+function isDeviceCannotProve(err: unknown): boolean {
+  const name = errName(err);
+  return name === "NotAllowedError" || name === "RangeError";
 }
 
 function ceremonyFailure(what: string, err: unknown): StepUpFailedError {
   const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
   return new StepUpFailedError(`${what} was not completed (${msg})`);
+}
+
+/**
+ * Describe a rejection that was deliberately SWALLOWED so the ceremony could
+ * fall through to enrolment, for use in the terminal failure message.
+ *
+ * This exists because the previous message — a bare "the passkey confirmation
+ * returned no assertion" — threw away the one fact that distinguishes a refused
+ * prompt (NotAllowedError) from an unusable allow list (RangeError). Those need
+ * completely different remedies, and discarding the name cost this project about
+ * 25 minutes and five people re-deriving it from the browser console. NAME THE
+ * ERROR.
+ */
+function describeSwallowed(err: unknown, offered: number): string {
+  const parts = [`${offered} credential(s) were offered`];
+  if (err !== null && err !== undefined) {
+    const name = errName(err) || "unknown";
+    const message = err instanceof Error ? err.message : String(err);
+    parts.push(`the browser's last error was ${name}: ${message}`);
+  }
+  return ` — ${parts.join("; ")}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -333,12 +401,24 @@ async function register(
 export async function stepUp(deps: StepUpDeps): Promise<string> {
   const container = credentialsContainer();
 
+  // The rejection we deliberately swallowed in order to fall through to
+  // enrolment, plus how many ids we offered when it happened. Kept so the
+  // TERMINAL failure can name them — see describeSwallowed.
+  let swallowed: unknown = null;
+  let offered = 0;
+
   // Ask the authenticator to prove one of the credentials the server lists.
   // Returns null when this device holds NONE of them (see enrolment below).
   const tryAssert = async (
     begin: AssertBegin,
   ): Promise<PublicKeyCredential | null> => {
-    const allow = begin.allow_credentials ?? [];
+    // TRUNCATE BEFORE WE ASK. Chromium throws RangeError rather than evaluate
+    // more than MAX_ALLOW_CREDENTIALS entries, so a longer list is not "a big
+    // list", it is a list that cannot be used at all. First 64 == newest 64 per
+    // the server's newest-first contract.
+    const all = begin.allow_credentials ?? [];
+    const allow = all.slice(0, MAX_ALLOW_CREDENTIALS);
+    offered = allow.length;
     try {
       const got = await container.get({
         publicKey: {
@@ -354,16 +434,24 @@ export async function stepUp(deps: StepUpDeps): Promise<string> {
       });
       return (got as PublicKeyCredential | null) ?? null;
     } catch (err) {
-      // A browser does NOT distinguish "you hold none of these credentials" from
-      // "the user refused" — both are NotAllowedError, deliberately, so a site
-      // cannot probe which passkeys you own. The caller decides what to do next.
-      if (isNotAllowed(err)) return null;
+      // Two recoverable shapes, one branch: "this authenticator holds none of
+      // these" (NotAllowedError, which also covers a refusal — the browser
+      // refuses to tell us which) and "this list is too long for me to even
+      // look at" (RangeError). Both mean THIS DEVICE CANNOT PROVE ANY OF THESE,
+      // and for both the remedy is to enrol a credential for this device. Only
+      // a RangeError used to reach the caller as a hard failure, and that is
+      // precisely how a 65-credential user lost the ability to write anything.
+      if (isDeviceCannotProve(err)) {
+        swallowed = err;
+        return null;
+      }
       throw ceremonyFailure("the passkey confirmation", err);
     }
   };
 
   let begin = await assertBegin(deps);
-  let got = (begin.allow_credentials ?? []).length === 0 ? null : await tryAssert(begin);
+  offered = (begin.allow_credentials ?? []).length;
+  let got = offered === 0 ? null : await tryAssert(begin);
 
   if (!got) {
     // ENROL THIS DEVICE. Two different situations arrive here and the remedy is
@@ -371,7 +459,11 @@ export async function stepUp(deps: StepUpDeps): Promise<string> {
     //
     //   (a) the user has no passkey at all (allow_credentials was empty);
     //   (b) the user HAS passkeys, but none of them live on THIS device —
-    //       they enrolled on their laptop and are now signing in on their phone.
+    //       they enrolled on their laptop and are now signing in on their phone;
+    //   (c) the browser refused to evaluate the offered list AT ALL (RangeError
+    //       above MAX_ALLOW_CREDENTIALS). Same remedy for the same reason: the
+    //       credential we enrol is the newest, and a capped newest-first list is
+    //       therefore guaranteed to contain it.
     //
     // (b) is the case that made this a real bug rather than a first-run detail.
     // Skipping enrolment whenever the server listed *some* credential left such a
@@ -396,7 +488,13 @@ export async function stepUp(deps: StepUpDeps): Promise<string> {
   }
 
   if (!got) {
-    throw new StepUpFailedError("the passkey confirmation returned no assertion");
+    // NAME THE BROWSER'S ERROR. This is the last line of the only diagnosis the
+    // next person gets, and "returned no assertion" on its own is indistinguish-
+    // able between a refused prompt and an allow list the browser would not even
+    // read (see describeSwallowed).
+    throw new StepUpFailedError(
+      `the passkey confirmation returned no assertion${describeSwallowed(swallowed, offered)}`,
+    );
   }
   const assertion = got as PublicKeyCredential;
   const response = assertion.response as AuthenticatorAssertionResponse;

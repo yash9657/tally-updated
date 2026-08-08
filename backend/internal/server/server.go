@@ -20,6 +20,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
@@ -44,6 +45,11 @@ import (
 	"github.com/khata/cored/internal/einvoice"
 	"github.com/khata/cored/internal/ewaybill"
 	"github.com/khata/cored/internal/identity"
+	// integration is imported for the Tally-XML PEEK, not for the import itself:
+	// peekTallyXMLVoucherDate must parse the envelope and convert a Tally date with
+	// the SAME two calls migration's importer uses, or the PDP and the writer could
+	// disagree about which date a <VOUCHER> asked for. See peekTallyXMLVoucherDate.
+	"github.com/khata/cored/internal/integration"
 	"github.com/khata/cored/internal/ledger"
 	"github.com/khata/cored/internal/masters"
 	"github.com/khata/cored/internal/migration"
@@ -3166,11 +3172,62 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 // downstream handler can re-read it. Returns the raw bytes, or nil on read
 // failure / empty body. Used by the PDP to peek a write's voucher_date without
 // consuming the body.
+//
+// ⛔⛔ THE CAP IS PER ROUTE, AND A SINGLE CAP HERE SILENTLY TRUNCATED THE ONE
+// ROUTE THAT IS ALLOWED TO BE BIG.
+//
+// This read is not a read-only peek: it REPLACES r.Body with exactly the bytes it
+// managed to read. So whatever it declines to read, the HANDLER never sees either.
+// It capped everything at maxJSONBody (1 MiB) while handleImportTallyXML sets its
+// own maxXMLBody (32 MiB), which meant a Tally XML import over 1 MiB reached the
+// importer TRUNCATED — a parse failure (422) with a cutoff unset, or a fail-closed
+// 403 with one set. Either way a real migration import, which is exactly the case
+// the 32 MiB allowance exists for, could not succeed.
+//
+// ⚠️ Found while auditing the back-dated cutoff on 2026-08-07 and initially
+// misattributed to that work. It is OLDER than the cutoff fixes: `drainBody(r)`
+// has always run for every write, so the truncation predates the peek learning to
+// read XML at all — the cutoff work only made a truncated body ALSO fail closed,
+// which is what surfaced it.
+//
+// ⛔ AND THE CAP IS NOT SIMPLY RAISED TO 32 MiB FOR EVERYTHING. This buffers the
+// whole body in memory on the AUTHORIZATION path, before any handler has agreed to
+// process it, so a blanket 32 MiB would hand every unauthenticated-but-routed write
+// a 32 MiB memory sink. Each route gets the cap its own handler already declares —
+// one cap per route, named in one place.
 func drainBody(r *http.Request) []byte {
+	return drainBodyCapped(r, bodyCapFor(r))
+}
+
+// bodyCapFor returns the byte cap drainBody must use for r, which MUST match the
+// cap the route's own handler declares — if this is smaller, the handler is fed a
+// truncated body; if it is larger, the peek buffers more than the handler would
+// ever accept.
+//
+// ⚠️ Keyed on the same path segments routeAction uses (see routeSuffix/splitPath),
+// because "which route is this" must have ONE definition in this file — the pay-run
+// peek carries the same warning and for the same reason.
+// ⚠️ MATCHED ON THE TRAILING SEGMENTS, not on an exact two-segment suffix.
+// routeSuffix strips `/v1/companies/{companyID}` by asking chi for the URL param,
+// so OUTSIDE a mounted chi route (a bare httptest request, a future middleware
+// ordering change, anything that has not populated the route context yet) the
+// company id is still present in the path and an exact `len(segs) == 2` match
+// silently misses — which would restore the truncation this function exists to fix,
+// and restore it in the direction that FAILS QUIETLY. Anchoring at the tail matches
+// in both cases, and no other route in the product ends in `import/tally-xml`.
+func bodyCapFor(r *http.Request) int64 {
+	segs := splitPath(routeSuffix(r))
+	if n := len(segs); n >= 2 && segs[n-2] == "import" && segs[n-1] == "tally-xml" {
+		return maxXMLBody
+	}
+	return maxJSONBody
+}
+
+func drainBodyCapped(r *http.Request, max int64) []byte {
 	if r.Body == nil {
 		return nil
 	}
-	limited := io.LimitReader(r.Body, maxJSONBody)
+	limited := io.LimitReader(r.Body, max)
 	b, err := io.ReadAll(limited)
 	_ = r.Body.Close()
 	if err != nil {
@@ -3186,20 +3243,478 @@ func drainBody(r *http.Request) []byte {
 }
 
 // peekVoucherDate extracts the voucher_date field from a voucher write body for
-// the back-dated cutoff check. Returns nil when absent/unparseable (the cutoff
-// then does not apply). It tolerates non-voucher bodies (returns nil).
+// the back-dated cutoff check. Returns nil when the field is ABSENT (the cutoff
+// then does not apply) and beforeEveryCutoff() when it is PRESENT AND UNREADABLE
+// (the cutoff then refuses). It tolerates non-voucher bodies (returns nil).
+//
+// ===========================================================================
+// THE CUTOFF WAS BYPASSABLE BY LOOSENING THE SPELLING OF THE DATE
+// ===========================================================================
+// This returned nil for BOTH absent and unparseable, and nil means "the cutoff
+// does not apply" — authz.cutoffDeny opens with `req.VoucherDate == nil ->
+// not blocked`. So the one control an owner has over a closed and already-filed
+// period could be switched off from the wire, by spelling the date differently.
+//
+// IT IS NOT A THEORETICAL PARSE MISMATCH; THE TWO LAYERS GENUINELY DISAGREE.
+// time.Parse here demands exactly "2006-01-02". The same string then travels to
+// Postgres UNPARSED — ledger.Post writes `vDate any = nullIfEmpty(in.VoucherDate)`
+// straight into a DATE column — and Postgres cheerfully accepts "2026-5-31",
+// "2026-05-31T00:00:00Z" and "20260531". A date the PDP could not read was
+// therefore a date the LEDGER could read, and the voucher landed inside the lock,
+// correctly dated, with no trace that a control had been skipped.
+//
+// ===========================================================================
+// SO AN UNREADABLE DATE FAILS CLOSED, LIKE THE PAY RUN'S
+// ===========================================================================
+// The pattern already exists in this file, and peekDepositDate's comment states
+// the reason twenty lines below: "A pay run with no readable wage month returns
+// beforeEveryCutoff() so the cutoff cannot be bypassed by omitting a field." A
+// field the PDP cannot READ is the same hazard as a field it cannot FIND, so it
+// gets the same answer. beforeEveryCutoff() is earlier than any cutoff an
+// administrator can set, so cutoffDeny denies; where no cutoff is set it changes
+// nothing and the request reaches the handler for its ordinary error.
+//
+// ===========================================================================
+// BUT AN ABSENT DATE STILL RETURNS nil, AND THAT IS NOT THE SAME HOLE
+// ===========================================================================
+// Two reasons, and the first is the load-bearing one:
+//
+//  1. THIS PEEK RUNS ON EVERY WRITE IN THE PRODUCT, not only voucher writes.
+//     voucherDateFromRequest calls it for every write that is not a pay run and
+//     not a TDS challan — creating a ledger, a godown, a unit, a cost centre,
+//     uploading a bill — which is why its doc has always said it "tolerates
+//     non-voucher bodies". Failing closed on a body that simply has no
+//     voucher_date would refuse EVERY master create at any company that has set
+//     a cutoff. That is not a tighter control, it is an outage.
+//  2. An absent date cannot BE back-dated: it asserts nothing about the closed
+//     period the cutoff protects. ledger.Post stores it as
+//     nullIfEmpty(in.VoucherDate) — SQL NULL, dated into no period at all — and
+//     on the auto-numbering path it is defaulted to today server-side ("Default
+//     an empty date to today server-side so a number can still be allocated").
+//     Neither outcome puts anything into the locked period.
+//
+// The rule, then: a voucher_date we cannot READ refuses; a voucher_date that is
+// not THERE is somebody else's 400.
+//
+// ===========================================================================
+// ROUND 2: AND THEN A BROWSER RE-DRIVE PUT A VOUCHER INTO THE LOCKED PERIOD
+// ANYWAY, THROUGH A DIFFERENT DOOR — A NESTED BODY
+// ===========================================================================
+// Everything above HOLDS: five loose spellings 403 with nothing written and the
+// refusal names the cutoff. It was not enough, because the peek looked for ONE
+// key at ONE depth. Same company, same level, same cutoff, same strictly-spelled
+// date inside the locked period, on the wire, after the fix above shipped:
+//
+//	SYNC     POST /sync/commit  intents[0].payload.voucher_date=2026-05-01 -> 200
+//	         {"outcomes":[{"detail":"created","final_voucher_no":"6","status":"COMMITTED"}]}
+//	CONTROL  POST /vouchers/journal        voucher_date=2026-05-01         -> 403
+//	         {"error":"voucher date is before the back-dated cutoff of 2026-07-01"}
+//
+// /sync/commit IS routed as a write, so every OTHER control applied to it. But
+// its body is `{"intents":[{"payload":{...a full voucher request...}}]}` —
+// syncIntentReq.Payload literally IS a voucherReq — so the top-level probe found
+// no voucher_date, returned nil, and nil means the cutoff does not apply. An
+// offline node could post into a filed quarter at will, and the committed
+// voucher is in the books with matched Dr/Cr and an allocated final number.
+//
+// SO THE PEEK NO LONGER KNOWS WHICH ROUTES NEST THEIR PAYLOADS. It walks the
+// decoded body and judges EVERY `voucher_date` it carries at ANY depth
+// (walkVoucherDates). That closes /sync/commit and every future forwarder of a
+// nested voucher body — a bulk endpoint, a second sync op, a queue drain —
+// without a route list here that has to be kept in step with the router. Two
+// route-shaped peeks remain (the pay run's wage_month, the challan's
+// deposit_date) because those bodies spell the date with a DIFFERENT KEY; this
+// one is about the same key at another depth.
+//
+// A BATCH IS ONLY AS PERMITTED AS ITS MOST-REFUSED MEMBER. The walk keeps the
+// EARLIEST date it finds and refuses outright if ANY of them is unreadable, so
+// one allowed intent cannot carry a back-dated one in with it. sync.Commit
+// commits its intents together and answers 200 with a per-intent outcome list;
+// there is no partial authorization to express, and "the allowed ones went in"
+// would be indistinguishable to the operator from "all of them did".
+//
+// AND THE OTHER NON-TOP-LEVEL DATE IS NOT EVEN JSON: POST /import/tally-xml
+// posts every VOUCHER in a Tally envelope through ledger.Post, dated by its
+// <DATE> element. The round-1 comment above said a body that is not JSON has
+// "no voucher_date here to loosen, and a voucher write cannot hide in such a
+// body either" — which was true of a multipart upload and FALSE of this route,
+// the one endpoint on the API that ingests thousands of dated vouchers at once.
+// See peekTallyXMLVoucherDate.
+//
+// ===========================================================================
+// ROUND 4: AND THEN A BROWSER RE-DRIVE CHANGED THE CASE OF THE JSON KEY
+// ===========================================================================
+// Everything above HOLDS — and it was STILL not enough, because rounds 1 and 2
+// left this peek as a SECOND, HAND-WRITTEN IMPLEMENTATION OF THE DECODER. It
+// walked the decoded body as a map[string]any and compared `k == "voucher_date"`
+// EXACTLY. Go's encoding/json does not: it binds an object key to a struct field
+// CASE-INSENSITIVELY. So the handler bound the date and dated the voucher while
+// the peek saw no date at all — and a nil date means the cutoff does not apply.
+// Verbatim, on the wire, against a company whose Owner level had
+// BackdatedCutoff = 2026-07-01 and after both fixes above had shipped:
+//
+//	POST /vouchers/journal  {"VOUCHER_DATE":"2026-05-01",...} -> 201 no=6
+//	POST /vouchers/journal  {"Voucher_Date":"2026-05-01",...} -> 201 no=7
+//	POST /vouchers/journal  {"voucher_DATE":"2026-05-01",...} -> 201 no=8
+//	POST /sync/commit  intents[0].payload.Voucher_Date=2026-05-04 -> 200 COMMITTED
+//	CONTROL POST /vouchers/journal {"voucher_date":"2026-05-01"} -> 403
+//
+// Five back-dated vouchers landed inside the locked period and are in the
+// operator's own May 2026 Day Book. One was driven from a real browser session
+// with a real passkey step-up, so it is not a curl-only artefact.
+//
+// ⛔ THE LESSON IS NOT "CASE". ANY DIVERGENCE BETWEEN THE PEEK'S NOTION OF WHAT
+// THE BODY SAYS AND THE HANDLER'S IS A BYPASS. Case was merely the cheapest one
+// to type. The enumeration below is the point of this round, because the three
+// previous rounds each patched the input they were shown:
+//
+//	(1) CASE                `{"VOUCHER_DATE":...}` — encoding/json binds folded.
+//	(2) DUPLICATE KEYS      `{"voucher_date":"2026-09-01","VOUCHER_DATE":
+//	                        "2026-05-01"}` — encoding/json assigns each matching
+//	                        key in turn, so the LAST one wins and the handler
+//	                        stores May. A map keyed on the exact string keeps BOTH
+//	                        and a fold-compare would have picked whichever the
+//	                        random map order handed it first.
+//	(3) ESCAPED KEY FORMS   `{"\u0056OUCHER_DATE":...}` — the key is UNQUOTED
+//	                        before it is matched, so it binds as VOUCHER_DATE and
+//	                        then folds onto the field. An exact byte compare here
+//	                        never sees the key the handler saw.
+//	(4) ESCAPED VALUE FORMS `"2026\u002d05\u002d01"` — the value is unquoted
+//	                        before it is parsed, so this IS 2026-05-01 to both layers.
+//	(5) TRAILING BYTES      `{"voucher_date":"2026-05-01"} <junk>` — ⛔ THE DOOR
+//	                        NOBODY DROVE YET. decodeJSON uses json.NewDecoder().
+//	                        Decode(), which reads the FIRST JSON value and ignores
+//	                        whatever follows; json.Unmarshal REJECTS trailing
+//	                        bytes. So a single space and a brace after the object
+//	                        made the old peek answer "not JSON at all" -> nil ->
+//	                        cutoff does not apply, while the handler decoded and
+//	                        posted the object perfectly. The same divergence made
+//	                        an oversized body a bypass: drainBody TRUNCATES at
+//	                        maxJSONBody with io.LimitReader, so a body padded past
+//	                        1 MiB after a complete first object arrived here as
+//	                        invalid JSON and left with the cutoff switched off.
+//	(6) WRONG-TYPED VALUES  a number/object/array where the string goes: kept as
+//	                        round 1 left it (present and unreadable -> refuse),
+//	                        because authorization runs BEFORE the handler's 400.
+//
+// SO THE PEEK NOW BINDS THE KEY THE WAY THE HANDLER BINDS IT — WITH encoding/json
+// ITSELF. Every object in the body is decoded through voucherDateProbe, whose tag
+// is voucherReq.VoucherDate's tag, by the same Decode call decodeJSON makes. Case,
+// duplicate keys and both escape forms are then not handled HERE at all: they are
+// handled by the one library both layers share, which is why they cannot drift
+// apart again. voucherDateBindingCannotDriftTest pins the tag equality.
+//
+// ⛔ WHY NOT ONE TYPED DECODE OF THE WHOLE BODY (the obvious version of the same
+// idea): because this peek runs BEFORE THE ROUTE IS KNOWN. voucherDateFromRequest
+// calls it for every write that is not a pay run and not a challan — ledgers,
+// godowns, units, cost centres, price lists, bill uploads, /sync/commit, a future
+// bulk endpoint — so there is no single request type to decode into, and round 2
+// deliberately refused to keep a route list here in step with the router. Judging
+// EVERY object with the probe is the shape that needs no route list AND still
+// borrows the handler's binding rule.
+//
+// ⛔ WHY NOT strings.EqualFold ON THE KEY (the cheap patch): it closes case and
+// NOTHING ELSE on the list above — it still keeps both duplicate keys, still picks
+// between them by random map order, and it is still a second implementation of a
+// rule that lives in encoding/json. The next re-drive finds items 2, 3 and 5.
 func peekVoucherDate(body []byte) *time.Time {
-	var probe struct {
-		VoucherDate string `json:"voucher_date"`
+	// ⚠️ DECODED THE WAY decodeJSON DECODES: json.NewDecoder().Decode() takes the
+	// FIRST JSON value and ignores any trailing bytes. json.Unmarshal — what this
+	// used until round 4 — rejects them, and that difference alone was a bypass
+	// (item 5 above). One notion of "what this body is", shared with the handler.
+	//
+	// Decoded into json.RawMessage, not into `any` and not into a probe struct:
+	// the date can be at ANY depth (round 2) so a typed shape cannot reach it,
+	// while `any` — round 2's choice — resolves keys into a map and thereby throws
+	// away the two things binding needs, the DOCUMENT ORDER of duplicate keys and
+	// the ability to hand encoding/json the object bytes again.
+	var root json.RawMessage
+	if err := json.NewDecoder(bytes.NewReader(body)).Decode(&root); err != nil {
+		// Not JSON at all: a multipart preamble, a CSV, junk — or the ONE non-JSON
+		// write body in the product, the Tally XML import, which dates every
+		// voucher it carries and posts them through the ledger.
+		return peekTallyXMLVoucherDate(body)
 	}
-	if err := json.Unmarshal(body, &probe); err != nil || probe.VoucherDate == "" {
-		return nil
+	earliest, unreadable := walkVoucherDates(root, 0)
+	if unreadable {
+		// Any unreadable date anywhere in the body refuses the WHOLE body, even if
+		// some other intent in it carried a perfectly good post-cutoff date.
+		return beforeEveryCutoff()
 	}
-	d, err := time.Parse("2006-01-02", probe.VoucherDate)
+	return earliest
+}
+
+// voucherDatePeekMaxDepth bounds the walk below. Nothing this API accepts nests
+// anywhere near this deep (a sync intent's voucher date sits at depth 3), so the
+// bound only ever fires on a body no handler could decode either.
+const voucherDatePeekMaxDepth = 64
+
+// walkVoucherDates judges every `voucher_date` in a decoded write body, at any
+// depth, and reduces them to the pair cutoffDeny needs: the EARLIEST date found
+// (nil when the body carries none) and whether ANY of them was present and
+// unreadable.
+//
+// ⚠️ EARLIEST, NOT FIRST, AND NOT LAST. The earliest date in a batch is the one
+// the cutoff must judge: it is the most-refused member, and taking any other
+// would let a batch smuggle a back-dated intent in behind an allowed one. Map
+// iteration order in Go is random, so "first" would not even be stable.
+//
+// ⚠️ THE UNREADABLE FLAG IS SEPARATE FROM THE DATE ON PURPOSE. An unreadable
+// date is not "very early" — it is "we do not know", and cutoffDeny says so in
+// its own sentence (the zero-time sentinel branch). Folding it into the date
+// would work today only because the sentinel happens to be earlier than
+// everything, and would silently stop working for a level whose cutoff IS the
+// zero date — the case cutoffDeny's IsZero branch exists to survive.
+//
+// ⚠️ ROUND 4: IT TAKES json.RawMessage, NOT `any`, AND THAT IS THE WHOLE FIX.
+// A body decoded into `any` has already had its keys resolved into a map, and a
+// map has thrown away everything the BINDING depends on: the document order of
+// two keys that fold onto the same field, and the object's own bytes. Keeping the
+// raw bytes lets each object be handed back to encoding/json — the same library,
+// with the same tag, doing the same job it does for voucherReq in the handler —
+// so "which key is the voucher date" is answered in ONE place for both layers.
+// The door this closes was driven in a browser after THREE earlier fixes to this
+// same control, by typing the key as VOUCHER_DATE; the enumeration in the header
+// above (case, duplicate keys, escaped keys, escaped values, trailing bytes) is
+// the point, and not pedantry.
+func walkVoucherDates(node json.RawMessage, depth int) (earliest *time.Time, unreadable bool) {
+	if depth > voucherDatePeekMaxDepth {
+		// Refuse rather than stop looking. "I gave up reading this body" must never
+		// be spelled the same way as "this body carries no date" — that conflation
+		// IS the defect this whole function exists to un-make.
+		return nil, true
+	}
+
+	// WHICH KIND OF NODE THIS IS, DECIDED BY encoding/json AND NOT BY LOOKING AT
+	// THE FIRST BYTE. Peeking for '{' or '[' would be one more hand-written scrap
+	// of decoder, which is exactly the thing that has now failed four times.
+	// A JSON `null` unmarshals into a nil map with NO error, so it lands in the
+	// object arm and iterates nothing — which is the right answer for it.
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(node, &obj); err == nil {
+		if obj == nil {
+			return nil, false // JSON null: a node, but not an object and not a date.
+		}
+		// THE BINDING. voucherDateProbe carries voucherReq.VoucherDate's tag, so
+		// this Unmarshal answers "did the handler see a voucher_date in THIS object,
+		// and which value did it bind" — case-folded, last-duplicate-wins, key and
+		// value escapes already unquoted, all by encoding/json rather than by
+		// anything written here.
+		var probe voucherDateProbe
+		if err := json.Unmarshal(node, &probe); err != nil {
+			// Unreachable for a node that already parsed as an object (the sole field
+			// is a json.RawMessage, which accepts any valid JSON value). Fail CLOSED
+			// anyway: an object whose date we did not manage to look at is an object
+			// whose period we cannot rule out.
+			return nil, true
+		}
+		if probe.VoucherDate != nil {
+			// A pointer field, so ABSENT and JSON-null both arrive as nil — the same
+			// answer the handler reaches for them (the field stays "", ledger.Post
+			// writes nullIfEmpty, and the row is dated into no period at all).
+			d, bad := readVoucherDateValue(*probe.VoucherDate)
+			earliest = earlierOf(earliest, d)
+			unreadable = unreadable || bad
+		}
+		// EVERY value is then descended into, INCLUDING the one the probe just
+		// bound. Round 2 skipped it, reasoning that an object under a voucher_date
+		// key is a wrong-typed date rather than a container of dates. That is still
+		// true and the skip is no longer worth the second key rule it would cost:
+		// a wrong-typed date has ALREADY set `unreadable`, and unreadable refuses
+		// the whole body in peekVoucherDate regardless of what any further date
+		// says, so descending can only ever add refusal and never remove it. A
+		// scalar under that key yields nothing to find.
+		for _, v := range obj {
+			d, bad := walkVoucherDates(v, depth+1)
+			earliest = earlierOf(earliest, d)
+			unreadable = unreadable || bad
+		}
+		return earliest, unreadable
+	}
+
+	var arr []json.RawMessage
+	if err := json.Unmarshal(node, &arr); err == nil {
+		// The `intents` array of a sync commit, and any bulk shape that follows it.
+		for _, v := range arr {
+			d, bad := walkVoucherDates(v, depth+1)
+			earliest = earlierOf(earliest, d)
+			unreadable = unreadable || bad
+		}
+		return earliest, unreadable
+	}
+
+	// Any scalar (a string, a number, a bool) that is not bound to a voucher_date
+	// field carries no voucher date: no date, not unreadable.
+	return nil, false
+}
+
+// voucherDateProbe is how the peek asks encoding/json the ONE question the
+// authorization decision turns on: "what did the handler bind as this object's
+// voucher_date?"
+//
+// ⛔ ITS TAG IS voucherReq.VoucherDate'S TAG AND MUST STAY THAT WAY. voucherReq is
+// the single wire shape that carries a date into ledger.Post over HTTP — the F-key
+// POST, the ALTER PUT, and /sync/commit all decode it (syncIntentReq.Payload IS a
+// voucherReq) — so binding through the same tag with the same library is what makes
+// the PDP and the writer unable to disagree about what the body SAYS. The two are
+// pinned to each other by reflection in TestVoucherDateBindingCannotDriftFromTheHandler.
+//
+// ⚠️ *json.RawMessage, and both halves matter:
+//
+//	the POINTER   distinguishes ABSENT (and JSON null, which the handler also
+//	              treats as no date) from PRESENT — round 1's rule that an absent
+//	              date must return nil, or every master create at a company with a
+//	              cutoff is refused, which is an outage and not a control.
+//	the RAW BYTES keep the wire's own type, so PRESENT-BUT-NOT-A-STRING stays
+//	              distinguishable from PRESENT-AND-READABLE. A `string` field here
+//	              would collapse `{"voucher_date":20260501}` into "" — "no date" —
+//	              and hand the cutoff its nil.
+type voucherDateProbe struct {
+	VoucherDate *json.RawMessage `json:"voucher_date"`
+}
+
+// readVoucherDateValue judges ONE `voucher_date` value as the handler bound it.
+// The three answers are round 1's three answers, unchanged:
+//
+//	(&d,  false) a readable date
+//	(nil, false) a value that asserts NO date: explicit null, or an empty string
+//	(nil, true)  present and unreadable: a loose spelling, or not a string at all
+//
+// ⚠️ ROUND 4: THE VALUE IS UNQUOTED BY encoding/json, NOT BY A TYPE ASSERTION.
+// json.Unmarshal into a string applies the same unescaping the handler's decode
+// of voucherReq applies, so "2026-05-01" is 2026-05-01 to BOTH layers.
+// A hand-rolled `raw[0] == '"'` plus a slice of the middle would read that as
+// junk, refuse a perfectly ordinary date, and be a second decoder again.
+func readVoucherDateValue(raw json.RawMessage) (*time.Time, bool) {
+	var spelled string
+	if err := json.Unmarshal(raw, &spelled); err != nil {
+		// A number, an object, an array, a bool. The handler will reject it too —
+		// but authorization runs BEFORE the handler, so the cutoff must not be the
+		// thing that waves it through on the way there. (Nothing here ever reads the
+		// value; it only decides that this is not a date.)
+		return nil, true
+	}
+	if spelled == "" {
+		// An empty string is how a client sends "no date", and a JSON null decodes
+		// into a string as a no-op leaving "" — the handler's own answer for both.
+		return nil, false
+	}
+	d, err := time.Parse("2006-01-02", spelled)
 	if err != nil {
+		// The round-1 hole: strict here, loose in Postgres. See the header above.
+		return nil, true
+	}
+	return &d, false
+}
+
+// earlierOf returns the earlier of two peeked dates, treating nil as "no date
+// seen here". It is the reduction that makes a batch only as permitted as its
+// most-refused member.
+func earlierOf(a, b *time.Time) *time.Time {
+	switch {
+	case a == nil:
+		return b
+	case b == nil:
+		return a
+	case b.Before(*a):
+		return b
+	default:
+		return a
+	}
+}
+
+// peekTallyXMLVoucherDate derives the back-dated cutoff's date for the ONE write
+// on this API whose body is not JSON: POST /import/tally-xml.
+//
+// ===========================================================================
+// WHY THIS EXISTS — THE SECOND DOOR A BROWSER RE-DRIVE FOUND
+// ===========================================================================
+// The Tally import is not a metadata upload that some later step turns into
+// vouchers. handleImportTallyXML hands the body straight to migration.Importer,
+// which posts EVERY <VOUCHER> in the envelope through ledger.Post, dated by its
+// own <DATE> element — the comment on the route says so: "posts each voucher
+// through the foundation ledger path (the SOLE writer)". peekVoucherDate saw a
+// body that was not JSON, returned nil, and nil means the cutoff does not apply.
+// So the endpoint that writes the MOST vouchers per request was the one the
+// period lock could not see at all: an operator who cannot post one back-dated
+// journal could import ten thousand of them.
+//
+// ===========================================================================
+// IT IS THE SAME LOOSE-SPELLING HAZARD, TOO
+// ===========================================================================
+// integration.TallyDateToISO returns an already-hyphenated value UNCHANGED, so
+// <DATE>2026-5-1</DATE> travels through the importer to ledger.Post and into a
+// Postgres DATE column, which reads it as 1 May 2026. The PDP must therefore
+// hold the date to the SAME strict layout it holds a JSON voucher_date to, and
+// refuse what it cannot read.
+//
+// ===========================================================================
+// THE CONVERSION IS THE IMPORTER'S OWN, AND THE ROOT-ELEMENT CHECK IS WHY A
+// LEDGER-ONLY IMPORT STILL WORKS
+// ===========================================================================
+// integration.TallyDateToISO and integration.ParseTallyEnvelope are the same two
+// calls migration.buildVoucherInput makes, per the pay-run precedent: the PDP and
+// the writer must not be able to disagree about WHICH date was asked for, only
+// about whether it is allowed.
+//
+// A body whose root element is not <ENVELOPE> returns nil — it is a multipart
+// preamble, a CSV, junk, and no voucher can hide in it. An envelope carrying only
+// <LEDGER> masters also returns nil: masters are not dated, so importing a chart
+// of accounts into a company with a cutoff must keep working (this is round 1's
+// "an absent date on a non-voucher body must stay nil", in XML).
+//
+// A body that IS an envelope and does not parse REFUSES, because the importer
+// would have dated something out of it and we cannot see what.
+func peekTallyXMLVoucherDate(body []byte) *time.Time {
+	if !isTallyEnvelope(body) {
 		return nil
 	}
-	return &d
+	env, err := integration.ParseTallyEnvelope(bytes.NewReader(body))
+	if err != nil {
+		return beforeEveryCutoff()
+	}
+	var earliest *time.Time
+	for _, m := range env.Body.Data.Messages {
+		if m.Voucher == nil {
+			continue // a LEDGER master message: nothing dated, nothing to back-date.
+		}
+		iso, err := integration.TallyDateToISO(m.Voucher.Date)
+		if err != nil {
+			return beforeEveryCutoff()
+		}
+		d, err := time.Parse("2006-01-02", iso)
+		if err != nil {
+			return beforeEveryCutoff()
+		}
+		// Earliest voucher in the envelope, for the batch reason in walkVoucherDates:
+		// one post-cutoff voucher must not carry a back-dated one in with it.
+		earliest = earlierOf(earliest, &d)
+	}
+	return earliest
+}
+
+// isTallyEnvelope reports whether the body's ROOT ELEMENT is a Tally <ENVELOPE>.
+//
+// It tokenises rather than searching the bytes for "<ENVELOPE" on purpose. A
+// substring search over a prefix would be bypassable by padding the front of the
+// document with comments or whitespace, and a search over the whole body would
+// match the word inside a CSV cell. The tokeniser skips the XML declaration,
+// comments and whitespace and hands back the first real element — which is the
+// same thing encoding/xml will hand the importer.
+func isTallyEnvelope(body []byte) bool {
+	dec := xml.NewDecoder(bytes.NewReader(body))
+	// Lenient for the same reason ParseTallyEnvelope is: real Tally exports
+	// declare namespace prefixes (xmlns:UDF) that the strict decoder rejects.
+	dec.Strict = false
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return false // no element at all: not XML.
+		}
+		if se, ok := tok.(xml.StartElement); ok {
+			return strings.EqualFold(se.Name.Local, "ENVELOPE")
+		}
+	}
 }
 
 // peekDepositDate extracts `deposit_date` from a TDS challan write body.
@@ -3207,15 +3722,41 @@ func peekVoucherDate(body []byte) *time.Time {
 // UNLIKE THE PAY RUN, AN ABSENT DATE IS NOT FORCED TO REFUSE. A pay run with no
 // readable wage month returns beforeEveryCutoff() so the cutoff cannot be
 // bypassed by omitting a field. Here the store refuses a challan with no
-// deposit_date outright (it is NOT NULL in migration 0069 and validated in
-// masters), so a body without one never becomes a stored row — the request dies
-// at 400 with a sentence about the missing date rather than at 403 with one about
-// a period lock, which is the more useful answer for the same input.
+// deposit_date outright (it is NOT NULL in migration 0069, and
+// masters.validateTDSChallan parses it with exactly "2006-01-02"), so a body
+// without a readable one never becomes a stored row — the request dies at 400
+// with a sentence about the missing date rather than at 403 with one about a
+// period lock, which is the more useful answer for the same input.
+//
+// ===========================================================================
+// ROUND 5, HERE TOO: THE TRAILING-BYTE DOOR WAS OPEN IN THIS PEEK AS WELL
+// ===========================================================================
+// peekVoucherDate's round-4/5 header enumerates the ways a peek can disagree
+// with the handler about what a body SAYS, and item 5 is the decode call itself:
+// decodeJSON uses json.NewDecoder().Decode(), which reads the FIRST JSON value
+// and IGNORES whatever follows, while json.Unmarshal REJECTS trailing bytes.
+// This function used json.Unmarshal. So one junk byte appended to an otherwise
+// perfect challan body made the peek answer "not JSON" -> nil -> THE CUTOFF DOES
+// NOT APPLY, while handleTDSChallan decoded the same body perfectly and recorded
+// the deposit. Measured before the fix:
+//
+//	peekDepositDate(`{"deposit_date":"2026-05-01"}`)          -> 2026-05-01
+//	peekDepositDate(`{"deposit_date":"2026-05-01"} trailing`) -> nil (cutoff off)
+//
+// Unlike the loose-spelling case above, the date here is PERFECTLY READABLE and
+// validateTDSChallan accepts it, so the row lands inside the locked period —
+// which is the whole hazard and not a 400 in disguise. Fixing peekVoucherDate's
+// copy of this divergence and leaving the sibling's is how this control has
+// already been re-opened four times: the door moves one route sideways.
 func peekDepositDate(body []byte) *time.Time {
 	var probe struct {
 		DepositDate string `json:"deposit_date"`
 	}
-	if err := json.Unmarshal(body, &probe); err != nil || probe.DepositDate == "" {
+	// ⚠️ DECODED THE WAY decodeJSON DECODES, for the reason above. Everything else
+	// this call rejects — a truncated object, a CSV, a multipart preamble — still
+	// errors and still returns nil, because the handler's own decode fails on those
+	// too and answers 400 with nothing written.
+	if err := json.NewDecoder(bytes.NewReader(body)).Decode(&probe); err != nil || probe.DepositDate == "" {
 		return nil
 	}
 	d, err := time.Parse("2006-01-02", probe.DepositDate)
@@ -3264,7 +3805,14 @@ func peekPayrollVoucherDate(body []byte) *time.Time {
 	var probe struct {
 		WageMonth string `json:"wage_month"`
 	}
-	if err := json.Unmarshal(body, &probe); err != nil {
+	// ⚠️ DECODED THE WAY handlePayrollRun DECODES — `Decoder.Decode`, not
+	// `json.Unmarshal`. This one was NOT a bypass, because its error branch fails
+	// CLOSED, but it diverged in the other direction: `json.Unmarshal` rejects
+	// trailing bytes that `decodeJSON` accepts, so a pay run the handler would have
+	// run happily was REFUSED as if it were back-dated, naming a cutoff the operator
+	// had not crossed. Aligned with its four siblings after the same divergence was
+	// found to be an actual hole in three of them.
+	if err := json.NewDecoder(bytes.NewReader(body)).Decode(&probe); err != nil {
 		return beforeEveryCutoff()
 	}
 	// parseWageMonth is the SAME parse handlePayrollRun applies to this field,

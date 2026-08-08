@@ -450,6 +450,86 @@ def test_concurrent_operations_from_threads(dsn):
     assert _raw_visible_count(dsn, a) == 8
 
 
+def test_an_acceptance_survives_a_store_restart(dsn):
+    """⛔ THE DURABLE HALF OF THE ONCE-ONLY GUARD.
+
+    A purchase draft that had already become a cored voucher stayed ``ready`` and
+    stayed in the Bill Inbox, and a browser re-drive posted the same supplier bill
+    TWICE — because every copy of "this draft is done" lived in the page, and a
+    reload empties the page. This test is the reason the record is worth having: a
+    BRAND NEW store object (an insightd restart, never mind a page reload) still
+    sees the terminal state and still knows which voucher the draft became.
+
+    The in-memory store fails this by construction, which is stated on its class.
+    """
+    a = _company()
+    writer = _store(dsn)
+    writer.put(_draft("D-ACC", a, party="Pune Fabricators"))
+    res = writer.mark_accepted(a, "D-ACC", "v-3", "3")
+    assert res.outcome == "recorded"
+    del writer
+
+    reader = _store(dsn)  # fresh instance, fresh connection, same DSN
+    loaded = reader.get(a, "D-ACC")
+    assert loaded is not None
+    assert loaded.status == "accepted"
+    assert loaded.accepted_voucher_id == "v-3"
+    assert loaded.accepted_voucher_no == "3"
+    assert loaded.accepted_at
+
+    # A second acceptance — the "reload and press Ctrl+A again" case — is refused
+    # against the DATABASE, and the first voucher is the one that stands.
+    again = reader.mark_accepted(a, "D-ACC", "v-4", "4")
+    assert again.outcome == "already_accepted"
+    assert again.draft is not None
+    assert again.draft.accepted_voucher_id == "v-3"
+    assert reader.get(a, "D-ACC").accepted_voucher_id == "v-3"
+
+
+def test_mark_accepted_is_cross_company_invisible(dsn):
+    """Another tenant cannot terminate this tenant's draft: the row is invisible to
+    it (RLS), so the CAS's ``SELECT … FOR UPDATE`` finds nothing at all."""
+    a, b = _company(), _company()
+    store = _store(dsn)
+    store.put(_draft("D-X", a))
+    assert store.mark_accepted(b, "D-X", "v-9", "9").outcome == "not_found"
+    assert store.get(a, "D-X").status == "low_confidence_manual"
+
+
+def test_only_one_of_many_concurrent_acceptances_can_win(dsn):
+    """COMPARE-AND-SET against a real database, from 8 threads on 8 connections.
+
+    ⛔ MUTATION-SENSITIVE: drop the ``FOR UPDATE`` from
+    ``_SELECT_ONE_FOR_UPDATE_SQL`` (or split mark_accepted into get() + put())
+    and several threads read "ready" from their own snapshots, all write, and all
+    report success — the duplicate voucher, one layer below the client.
+    """
+    a = _company()
+    store = _store(dsn)
+    store.put(_draft("D-RACE", a))
+    outcomes: list[str] = []
+    lock = threading.Lock()
+    start = threading.Barrier(8)
+
+    def attempt(i: int) -> None:
+        start.wait()
+        res = store.mark_accepted(a, "D-RACE", f"v-{i}", str(i))
+        with lock:
+            outcomes.append(res.outcome)
+
+    threads = [threading.Thread(target=attempt, args=(i,)) for i in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert outcomes.count("recorded") == 1, outcomes
+    assert outcomes.count("already_accepted") == 7, outcomes
+    # exactly one row, exactly one recorded voucher
+    assert _raw_visible_count(dsn, a) == 1
+    assert store.get(a, "D-RACE").status == "accepted"
+
+
 def _schemaless_dsn(dsn: str) -> str:
     """A reachable DSN for a database with no insightd_draft table (template1 is
     always present and always empty of app schema). Skips rather than silently

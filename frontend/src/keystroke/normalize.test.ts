@@ -98,3 +98,91 @@ describe("comboFromEvent leaves everything else exactly as it was", () => {
     expect(normalizeCombo("Option+G")).toBe(comboFromEvent({ key: "©", code: "KeyG", altKey: true }));
   });
 });
+
+/**
+ * ⛔ ⌘A MUST NOT POST THE VOUCHER.
+ *
+ * `comboFromEvent` used to read `Boolean(ev.ctrlKey || ev.metaKey)`, so on a Mac
+ * ⌘A — Select All, pressed to select a field's contents before retyping them —
+ * resolved to "Ctrl+A" = `{ kind: "accept" }` and POSTED THE DOCUMENT MID-EDIT.
+ * Confirmed in a browser on 2026-08-07 while editing row 3 of a voucher.
+ *
+ * No test pinned the fold, and nothing in src, docs or RESEARCH.md ever claimed
+ * ⌘ was an intentional macOS spelling of Ctrl — the hint strips advertise
+ * "Ctrl+A" and Tally's documented keys are Ctrl-based. So the fold is removed
+ * rather than narrowed, and Meta becomes a modifier token that nothing binds.
+ */
+describe("Meta (⌘) is not a second spelling of Ctrl", () => {
+  it("⌘A does NOT accept the voucher — it must not produce Ctrl+A", () => {
+    const combo = comboFromEvent({ key: "a", code: "KeyA", metaKey: true });
+    expect(combo, "⌘A must never assemble a Ctrl combo").not.toBe("Ctrl+A");
+    expect(combo).toBe("Meta+A");
+  });
+
+  it("…and no action resolves for it, so the browser still Selects All", () => {
+    // The string being right is not the point. The point is that the keymap
+    // lookup FAILS, because that is what makes AppShell/useNavMachine decline
+    // the event and let the OS shortcut happen. `voucher` is the screen where
+    // this cost real data.
+    const keymap = resolveKeymap("tallyprime");
+    const meta = resolveAction(keymap, "voucher", comboFromEvent({
+      key: "a", code: "KeyA", metaKey: true,
+    }));
+    expect(meta, "⌘A must resolve to NO action").toBeUndefined();
+
+    // The control: the real accept key still accepts on the same screen.
+    const ctrl = resolveAction(keymap, "voucher", comboFromEvent({
+      key: "a", code: "KeyA", ctrlKey: true,
+    }));
+    expect(ctrl?.kind, "Ctrl+A must still Accept").toBe("accept");
+  });
+
+  it("every ⌘+letter the OS owns stays out of the Ctrl namespace", () => {
+    // The fold did not only hit ⌘A. Each of these letters is bound to a real
+    // Ctrl action in tallyprime.ts, so each was reachable by an OS shortcut:
+    // Q quit-without-saving, P print, F filter, G Switch To, H Change Mode,
+    // N calculator, plus B and J.
+    for (const letter of ["A", "B", "F", "G", "H", "J", "N", "P", "Q"]) {
+      const combo = comboFromEvent({
+        key: letter.toLowerCase(), code: `Key${letter}`, metaKey: true,
+      });
+      expect(combo, `⌘${letter} must not be a Ctrl combo`).toBe(`Meta+${letter}`);
+      expect(
+        resolveAction(resolveKeymap("tallyprime"), "voucher", combo),
+        `⌘${letter} must resolve to no action`,
+      ).toBeUndefined();
+    }
+  });
+
+  it("⌘ does not fire a BARE letter binding either", () => {
+    // Why a distinct "Meta+" token instead of just ignoring `metaKey`: ignoring
+    // it makes ⌘A assemble a bare "A", which is unbound today but would fire
+    // the instant any screen binds a plain letter. "Meta+A" cannot collide.
+    expect(comboFromEvent({ key: "a", code: "KeyA", metaKey: true })).not.toBe("A");
+  });
+
+  it("ctrlKey alone still produces Ctrl+…, on a Mac like anywhere else", () => {
+    expect(comboFromEvent({ key: "a", code: "KeyA", ctrlKey: true })).toBe("Ctrl+A");
+    expect(comboFromEvent({ key: "q", code: "KeyQ", ctrlKey: true })).toBe("Ctrl+Q");
+    expect(comboFromEvent({ key: "F4", code: "F4", ctrlKey: true })).toBe("Ctrl+F4");
+  });
+
+  it("the Alt/Option `code` fallback is untouched when Meta is absent", () => {
+    // Guard against this change quietly breaking the previous one: Option still
+    // composes, and `code` still wins for Alt.
+    expect(comboFromEvent({ key: "¬", code: "KeyL", altKey: true })).toBe("Alt+L");
+    expect(comboFromEvent({ key: "©", code: "KeyG", altKey: true })).toBe("Alt+G");
+    expect(comboFromEvent({ key: "™", code: "Digit2", altKey: true })).toBe("Alt+2");
+    expect(comboFromEvent({ key: "F5", code: "F5", altKey: true })).toBe("Alt+F5");
+    // And with no modifier at all, `key` still wins — typing is not a shortcut.
+    expect(comboFromEvent({ key: "ç", code: "KeyC" })).toBe("Ç");
+  });
+
+  it("a ⌘ combo STRING and a ⌘ event still normalize alike", () => {
+    // Same invariant the Alt case has: the two paths must agree, or a corpus row
+    // and a live keypress would look up different rows of the same keymap.
+    expect(normalizeCombo("cmd+a")).toBe(comboFromEvent({ key: "a", code: "KeyA", metaKey: true }));
+    expect(normalizeCombo("Meta+A")).toBe("Meta+A");
+    expect(normalizeCombo("Command+Shift+Esc")).toBe("Shift+Meta+Esc");
+  });
+});

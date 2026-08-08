@@ -14,10 +14,15 @@
 // REAL SMTP IS CONFIGURATION, NOT CODE. Dispatcher takes a Sender; the default
 // writes to the log and says plainly that nothing left the building. Nothing in
 // this package claims a message was received.
+//
+// AND NOTHING IN THIS PACKAGE CALLS "DELIVERED TO NOBODY" A SEND. A notification
+// with no address is settled as a terminal failure carrying NoAddressReason,
+// never as 'sent' — see ErrNoAddress for the bug that cost.
 package notify
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -40,6 +45,36 @@ const KindCompanyInvite Kind = "company_invite"
 // times is not going to succeed on the sixth, and an outbox that retries
 // forever hides a broken transport behind a queue that never drains.
 const MaxAttempts = 5
+
+// NoAddressReason is the exact last_error recorded for a notification that had
+// nowhere to go. It is a CONSTANT because it is read on the other side: the
+// members screen shows this outcome in its own loud words rather than as a
+// transport error, and a reworded string here would silently turn that back into
+// generic "delivery failed" wording.
+const NoAddressReason = "no email address on file — nothing was sent"
+
+// ErrNoAddress is the outcome of a notification whose Recipient is not an
+// address a transport could ever deliver to (see Message.HasAddress).
+//
+// WHY THIS EXISTS. The invite form collected no email, so InviteMessage fell
+// back to the JWT SUBJECT as the recipient, LogSender saw !HasAddress(), logged
+// "NO EMAIL ON FILE ... nothing was sent" and — correctly, because a logger that
+// could fail would manufacture spurious dead letters — returned nil. settle read
+// that nil as success and wrote status='sent'. Measured in the live database:
+// 52 company_invite rows all at 'sent', 41 of them with a recipient containing
+// no '@' — 41 invitations the product reported as sent that could not have
+// reached anybody. That is precisely the outcome the delivery state exists to
+// prevent ("a company that believed it had onboarded somebody who never heard
+// about it"), and HasAddress existed to know it all along: "A subject is an
+// identifier, not an address."
+//
+// WHY THE STORED STATUS IS 'failed' AND NOT A NEW 'undeliverable'.
+// notification_outbox.status is CHECK-constrained to
+// ('pending','sending','sent','failed') by migration 0023, so a new value needs
+// a migration — a schema change, not a fix. 'failed' is already the terminal
+// "nobody was told" state; WHICH terminal reason it is lives in last_error,
+// which is already read back and rendered. The honesty is in the pair.
+var ErrNoAddress = errors.New(NoAddressReason)
 
 // Message is one notification, as stored and as handed to a Sender.
 type Message struct {
@@ -91,6 +126,13 @@ type LogSender struct{}
 
 // Send logs the message. It NEVER fails: a logger that could fail would turn a
 // development convenience into a source of spurious dead letters.
+//
+// The addressless branch below is NOT how that outcome is recorded — the
+// dispatcher settles an addressless message as ErrNoAddress before any Sender
+// sees it, precisely because this method's returning nil (which it must) was
+// being read as a successful send. The branch stays for direct callers, and
+// because logging "nothing was sent" is still the right thing to do if one
+// reaches here.
 func (LogSender) Send(_ context.Context, m Message) error {
 	if !m.HasAddress() {
 		log.Printf("notify: [%s] NO EMAIL ON FILE for subject %q (company %s) — "+
@@ -134,6 +176,11 @@ func nullUUID(id uuid.UUID) any {
 // access yet, and nothing happens until they sign in — the same distinction the
 // Users & Roles screen refuses to hide.
 func InviteMessage(companyName, subject, email, levelName string) Message {
+	// The subject fallback is kept ON PURPOSE: recipient is NOT NULL, and
+	// recording WHO could not be reached is more useful than an empty string.
+	// What it is NOT is an address — the dispatcher settles such a message as
+	// ErrNoAddress ('failed' + NoAddressReason) rather than as 'sent', which is
+	// what this fallback used to be quietly reported as.
 	recipient := email
 	if recipient == "" {
 		recipient = subject
@@ -305,6 +352,21 @@ func (d *Dispatcher) dispatchCompany(ctx context.Context, companyID uuid.UUID) (
 
 	sent := 0
 	for _, m := range claimed {
+		// NO ADDRESS IS NOT A TRANSPORT QUESTION, so no transport gets to answer
+		// it. Handing an addressless message to a Sender is how "delivered to
+		// nobody" came to be recorded as 'sent' (see ErrNoAddress): every honest
+		// Sender either returns nil after logging that there was nowhere to send
+		// it, or invents a per-transport error. Deciding it HERE settles it the
+		// same way for every Sender, exactly once, at the one place that can know.
+		if !m.HasAddress() {
+			log.Printf("notify: [%s] UNDELIVERABLE for subject %q (company %s) — %s; "+
+				"tell them out of band: %s",
+				m.Kind, m.Recipient, m.CompanyID, NoAddressReason, m.SubjectLine)
+			if err := d.settle(ctx, m, ErrNoAddress); err != nil {
+				return sent, err
+			}
+			continue
+		}
 		sendErr := d.sender.Send(ctx, m)
 		if err := d.settle(ctx, m, sendErr); err != nil {
 			return sent, err
@@ -338,7 +400,15 @@ func (d *Dispatcher) settle(ctx context.Context, m Message, sendErr error) error
 			return err
 		}
 		status := "pending"
-		if m.Attempts >= MaxAttempts {
+		switch {
+		case errors.Is(sendErr, ErrNoAddress):
+			// TERMINAL ON THE FIRST PASS, not after MaxAttempts: attempts do not
+			// conjure an address, so retrying would only churn the row four more
+			// times before reaching the same conclusion — and while it churned,
+			// the screen would say "invitation sending…", which is a claim that
+			// something is under way when nothing is or ever will be.
+			status = "failed"
+		case m.Attempts >= MaxAttempts:
 			// Dead-letter rather than retry forever: an outbox that never drains
 			// hides a broken transport behind a queue.
 			status = "failed"

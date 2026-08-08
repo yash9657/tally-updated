@@ -22,8 +22,43 @@ PKG = pathlib.Path(__file__).resolve().parent.parent / "insightd"
 # installed) writes NOTHING — it is a pure read-only computation that uses POST
 # only to carry the history frame in its body; test_forecast_no_cored_write.py
 # separately proves it holds no cored write path.
+#
+# /drafts/{id}/accepted moves a draft to its terminal 'accepted'
+# status and records WHICH cored voucher the human posted from it — it is told an
+# outcome by the client that did the write, and its request model
+# (RecordAcceptRequest) deliberately carries nothing but that voucher's id/no, so
+# there is nothing in it insightd could post even if it wanted to. It exists
+# because its absence let one supplier bill become two vouchers across a page
+# reload; see routes_drafts.accept_draft.
+#
+# /drafts/{id}/claim and /drafts/{id}/claim/release are CONCURRENCY-RESERVATION
+# routes, and they are allowed here for a narrower reason than the two above: they
+# mutate ONLY the claim lease on a draft row (claim_token / claimed_by / claimed_at /
+# claim_expires_at) and cannot touch a posting, an amount or a status. ``accepted``
+# above records an outcome; these two record *who is about to attempt one*. They exist
+# because /accepted — a correct compare-and-set — still let one supplier bill into the
+# books twice: it necessarily runs AFTER the voucher is posted, so two browsers racing
+# on one draft both posted and only the second MARKING was refused. Reserving before
+# the post is the only ordering in which the loser can be stopped before it writes.
+# See routes_drafts.claim_draft.
+#
+# ⚠️ A CLAIM TOKEN AUTHORISES NOTHING — IT IS NOT A CREDENTIAL. insightd has no
+# authentication at all (a separate, known high finding), and adding these routes
+# neither improves nor worsens that: the token is an opaque concurrency value whose
+# only power is to release or renew the claim it already holds. Nothing is readable,
+# writable or postable by virtue of holding one, and ClaimDraftRequest /
+# ReleaseClaimRequest are `extra="forbid"` with no field insightd could act on.
+#
+# ⛔ THIS ALLOWLIST IS NOT A FORMALITY AND MUST NOT BE WIDENED TO SILENCE A FAILURE.
+# It exists so that a route which writes to a cored /vouchers path can never appear in
+# insightd unnoticed — that is the whole HITL boundary. Every entry above is here
+# because someone argued, in writing, that it writes only to the DRAFT store. A new
+# entry with no such argument is a bug, not a config change.
 _ALLOWED_MUTATING_PATHS = {
     "/companies/{company_id}/drafts",
+    "/companies/{company_id}/drafts/{draft_id}/claim",
+    "/companies/{company_id}/drafts/{draft_id}/claim/release",
+    "/companies/{company_id}/drafts/{draft_id}/accepted",
     "/companies/{company_id}/forecast/cashflow",
 }
 

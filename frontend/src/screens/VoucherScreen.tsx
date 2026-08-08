@@ -1581,16 +1581,31 @@ function AccountingVoucherScreen({
       const dirty = draftDirtyFields(seed, f);
       // Only rebuild when the shape is editable; a non-rebuildable draft always
       // posts pristine (the disclosed edit-deferred path), never silently errors.
+      // ⛔ PASS THE DRAFT ID. Without it the accept-once guard has to identify the
+      // draft by EXACT total-body equality, which works but is a heuristic; with it
+      // the guard — and insightd's terminal `accepted` marking — are exact by
+      // construction. Wired 2026-08-07 after a browser re-drive posted the SAME
+      // supplier bill twice: a draft whose invoice number the OCR never read has no
+      // number and no date for the day-book layer to match on, so it was accepted,
+      // the page was reloaded, and it was accepted again — two real vouchers for one
+      // bill (see draftAccept.ts's layer notes).
+      const acceptOpts = draftID ? { draftId: draftID } : {};
       const accept =
         dirty.size > 0 && canRebuildDraft(draftBody)
-          ? acceptEditedPurchaseDraft(client, companyID, draftBody, {
-              voucherDate: f.date,
-              narration: f.narration,
-              taxableValue: f.taxableValue,
-              gstRatePct: f.gst.gstRatePct,
-              placeOfSupply: f.gst.placeOfSupply,
-            })
-          : acceptPurchaseDraft(client, companyID, draftBody);
+          ? acceptEditedPurchaseDraft(
+              client,
+              companyID,
+              draftBody,
+              {
+                voucherDate: f.date,
+                narration: f.narration,
+                taxableValue: f.taxableValue,
+                gstRatePct: f.gst.gstRatePct,
+                placeOfSupply: f.gst.placeOfSupply,
+              },
+              acceptOpts,
+            )
+          : acceptPurchaseDraft(client, companyID, draftBody, acceptOpts);
       accept
         .then((res: VoucherResponse) => {
           setSavedNo(res.voucher_no);

@@ -86,7 +86,51 @@ type Request struct {
 	Resource     Resource
 	ResourceName string     // e.g. a report name, when Resource == "report"
 	VoucherDate  *time.Time // for the back-dated cutoff on writes; nil if unknown
-	HasWebAuthn  bool       // from the token AMR
+	// StoredVoucherDate is the date the document this write NAMES already
+	// carries IN THE DATABASE — the SOURCE of a move, where VoucherDate is its
+	// DESTINATION. nil means the request names no already-stored dated document
+	// (a create), or the cutoff is not set and no read was made.
+	//
+	// ===========================================================================
+	// WHY A SECOND DATE FIELD EXISTS — ROUND 3, DRIVEN ON THE WIRE
+	// ===========================================================================
+	// Two earlier rounds hardened the cutoff against a date the PDP could not
+	// READ (a loose spelling) and against a date it could not FIND (nested one
+	// level down in a /sync/commit payload, or in a Tally XML <DATE> element).
+	// Both rounds judged exactly ONE date: the one the REQUEST carried. A browser
+	// re-drive then walked straight through the lock without sending a back-dated
+	// date at all:
+	//
+	//	ALTER  PUT /v1/companies/<C>/vouchers/journal/<id>  voucher_date=2026-08-20
+	//	       -> 200 {"version_no":2}     (the voucher was dated 2026-05-01, i.e.
+	//	                                   INSIDE the period the cutoff locks)
+	//	DELETE DELETE /v1/companies/<C>/vouchers/<id>
+	//	       -> 200 {"op":"DELETE","version_no":3}   (no body, so NO date at all)
+	//	CONTROL POST /v1/companies/<C>/vouchers/journal    voucher_date=2026-05-01
+	//	       -> 403                     (the cutoff was live the whole time)
+	//
+	// Neither door is body-shaped, which is why neither earlier round could reach
+	// it. The date that decides them is the one ALREADY IN THE BOOKS: a DELETE has
+	// no body to peek, and an ALTER's body only ever states where the voucher is
+	// GOING. An operator who could not post into a filed quarter could still
+	// empty it one voucher at a time, or lift each voucher out of it by restating
+	// it with next month's date. A cutoff you can delete around is not a cutoff.
+	//
+	// ===========================================================================
+	// AND WHY IT IS A SECOND FIELD RATHER THAN FOLDED INTO VoucherDate
+	// ===========================================================================
+	// Arithmetically the middleware COULD hand over min(stored, requested) in the
+	// single field and this control would be exactly as tight: everything the
+	// cutoff asks is `date >= cutoff`, and min(a,b) >= cutoff iff both are. It is
+	// two fields because of what the operator is TOLD. With one field, an ALTER
+	// that moves a May voucher to 20 August is refused with "voucher date is
+	// before the back-dated cutoff of 2026-07-01" — a sentence about a date the
+	// operator did not send, which sends them hunting for a typo in a field that
+	// is correct. That is precisely the lie the IsZero branch of cutoffDeny was
+	// written to avoid, and the same argument applies here. Two fields let the
+	// refusal name WHICH end of the move is inside the lock.
+	StoredVoucherDate *time.Time
+	HasWebAuthn       bool // from the token AMR
 }
 
 // Decision is the PDP verdict.
@@ -262,12 +306,113 @@ func indexColon(s string) int {
 
 // cutoffDeny applies the back-dated cutoff: a write whose voucher date is BEFORE
 // the level's cutoff is denied. Returns (decision, true) when blocked.
+//
+// ⚠️ `req.VoucherDate == nil` MEANS "THE CUTOFF DOES NOT APPLY", AND THAT IS A
+// FAIL-OPEN DOOR THE CALLER OWNS. The PDP cannot tell a write that legitimately
+// has no date (a master create, an upload) from one whose date it simply failed
+// to read, so the caller must not hand nil for the second case. The convention
+// the callers use — see server.beforeEveryCutoff, and peekPayrollVoucherDate for
+// why — is to pass the ZERO TIME when a date was REQUIRED and could not be
+// determined: it is before every cutoff an administrator can set, so it lands on
+// the deny below rather than skipping the control.
+//
+// THE REFUSAL NAMES THE CUTOFF DATE. Decision.Reason is written to the client
+// verbatim (the middleware's writeError puts it in `{"error": ...}`), and a
+// refusal that says only "before the back-dated cutoff" tells an operator that
+// some period is locked without telling them WHERE the boundary is — so the only
+// way to find out is to keep guessing dates. The date is rendered exactly as
+// GET /security-levels renders it (`.UTC().Format("2006-01-02")`), so the
+// refusal and the level's own JSON cannot show two different boundaries. It
+// leaks nothing: it is this caller's own company's cutoff, and the caller can
+// already read it on the Members screen.
+//
+// ⚠️ IT JUDGES BOTH DATES ON THE REQUEST, AND BOTH MUST CLEAR THE CUTOFF.
+// A write that names an existing voucher is a MOVE, and it has two ends:
+//
+//	req.StoredVoucherDate  where the voucher is NOW   (the SOURCE)
+//	req.VoucherDate        where the request puts it  (the DESTINATION)
+//
+// Refusing on the destination alone lets a voucher be lifted OUT of a locked
+// period by restating it with a post-cutoff date. Refusing on the source alone
+// lets one be pushed INTO the lock. A DELETE has only a source, and it is the
+// whole act. So both ends are judged, and the ORDER is deliberate: the stored
+// date is judged FIRST, because when a voucher already sits inside the lock the
+// destination the operator typed is usually perfectly legal and a refusal that
+// talked about it would be describing the wrong end of the problem.
 func cutoffDeny(level Level, req Request) (Decision, bool) {
-	if level.BackdatedCutoff == nil || !req.Action.IsWrite() || req.VoucherDate == nil {
+	if level.BackdatedCutoff == nil || !req.Action.IsWrite() {
 		return Decision{}, false
 	}
+	if d, blocked := storedCutoffDeny(level, req); blocked {
+		return d, true
+	}
+	return requestedCutoffDeny(level, req)
+}
+
+// storedCutoffDeny judges the SOURCE end of the move: the date the named
+// document already carries in the books. nil means the request names no stored
+// dated document (an ordinary create), so there is nothing here to judge and the
+// destination check below is the whole control — that is the pre-round-3
+// behaviour, unchanged, for every create in the product.
+//
+// ⚠️ THE ZERO-TIME SENTINEL MEANS SOMETHING SHARPER HERE THAN IT DOES FOR THE
+// DESTINATION. The middleware hands it over when a voucher this write NAMES
+// could not be read at all — it is missing, tombstoned, or the store errored.
+// That is the fail-closed direction and it is not optional: "I could not find
+// out which period this voucher is in" must never be spelled the same way as
+// "this voucher is not in a locked period", because the second is what lets the
+// delete through. It costs a 403 (rather than the handler's 404) for an operator
+// who names a non-existent voucher at a company that HAS locked a period, which
+// is a small price and leaks nothing they could not already see.
+func storedCutoffDeny(level Level, req Request) (Decision, bool) {
+	if req.StoredVoucherDate == nil {
+		return Decision{}, false
+	}
+	cutoff := level.BackdatedCutoff.UTC().Format("2006-01-02")
+	if req.StoredVoucherDate.IsZero() {
+		// Matched by IDENTITY, for the reason the destination branch below
+		// records: parseCutoff puts no lower bound on a cutoff, so a level whose
+		// cutoff IS 0001-01-01 would make `zero.Before(cutoff)` false and the
+		// fail-closed sentinel would fail OPEN at exactly that one setting.
+		return deny("the stored date of the voucher being changed could not be read, so the " +
+			"back-dated cutoff of " + cutoff + " cannot be cleared"), true
+	}
+	if req.StoredVoucherDate.Before(*level.BackdatedCutoff) {
+		// Name the date the voucher is ON. The operator's own field is fine; what
+		// they need to be told is that the voucher they picked lives inside a
+		// filed period, and where that period starts.
+		return deny("this voucher is dated " + req.StoredVoucherDate.UTC().Format("2006-01-02") +
+			", inside the period closed by the back-dated cutoff of " + cutoff), true
+	}
+	return Decision{}, false
+}
+
+// requestedCutoffDeny judges the DESTINATION end: the date the request itself
+// carries. This is rounds 1 and 2's control, and its two sentences are
+// UNCHANGED — auth_backdated_spelling_test.go, auth_payroll_cutoff_test.go and
+// authz/cutoff_reason_test.go all read them.
+func requestedCutoffDeny(level Level, req Request) (Decision, bool) {
+	if req.VoucherDate == nil {
+		return Decision{}, false
+	}
+	cutoff := level.BackdatedCutoff.UTC().Format("2006-01-02")
+	if req.VoucherDate.IsZero() {
+		// The zero-time sentinel: a date was required and could not be read (a
+		// loosely-spelled voucher_date, an unparseable wage month). Saying "your
+		// voucher date is before the cutoff" here would be a LIE — the date the
+		// caller sent might well be after it — and it would send them hunting for
+		// a period lock instead of fixing the spelling. Refusing is still the only
+		// safe answer, so the refusal says which of the two things happened.
+		//
+		// It is matched by IDENTITY (IsZero) and not left to the Before() below on
+		// purpose. parseCutoff puts no lower bound on a cutoff, so a level whose
+		// cutoff IS 0001-01-01 would make `zero.Before(cutoff)` false and the
+		// fail-closed sentinel would fail OPEN at exactly that one setting.
+		return deny("the voucher date could not be read, so the back-dated cutoff of " +
+			cutoff + " cannot be cleared"), true
+	}
 	if req.VoucherDate.Before(*level.BackdatedCutoff) {
-		return deny("voucher date is before the back-dated cutoff"), true
+		return deny("voucher date is before the back-dated cutoff of " + cutoff), true
 	}
 	return Decision{}, false
 }

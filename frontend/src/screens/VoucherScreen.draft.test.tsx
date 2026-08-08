@@ -20,11 +20,25 @@ import {
   _resetOutputTaxLedgerCache,
   _resetLedgerCache,
 } from "./vouchers/gstVoucher";
+import {
+  _resetAcceptedDraftCache,
+  _resetDurableAcceptRecords,
+} from "./vouchers/draftAccept";
 
 afterEach(cleanup);
 beforeEach(() => {
   _resetOutputTaxLedgerCache();
   _resetLedgerCache();
+  // ⛔ THE ACCEPT-ONCE STATE IS MODULE-LEVEL AND MUST BE RESET BETWEEN CASES.
+  // Every case in this file accepts the SAME fixture draft, so without this the
+  // second case is refused by the duplicate guard — correctly — with "this draft
+  // has already been accepted in this session as voucher STL/2026/044", and the
+  // POST spy is never called. The guard exists because one supplier bill became
+  // TWO vouchers in a browser; it is deliberately durable across a page reload,
+  // which is exactly why a test file that re-accepts one draft has to clear it
+  // rather than work around it.
+  _resetAcceptedDraftCache();
+  _resetDurableAcceptRecords();
 });
 
 /** A vi.fn wrapper over every CoredClient method (mirrors the gst test). */

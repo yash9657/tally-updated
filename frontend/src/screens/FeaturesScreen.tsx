@@ -290,7 +290,7 @@ const FEATURES: {
       {
         name: "Negative stock",
         state: "always",
-        note: "REFUSED by default: a voucher that would take a position below zero is rejected by a deferred database constraint, not merely by the form. A company can opt in per-company. Structural — the check cannot be bypassed by a different write path, because ledger.post is the only one there is.",
+        note: "REFUSED, with no way to opt out: a voucher that would take a position below zero is rejected by a deferred database constraint, not merely by the form. Structural — the check cannot be bypassed by a different write path, because ledger.post is the only one there is. ⛔ THE PER-COMPANY OPT-IN IS NOT BUILT, AND THIS ROW USED TO CLAIM IT WAS (found by driving, 2026-08-07). company.allow_negative_stock exists and BOTH enforcers read it and honour it correctly — but nothing in the product can WRITE it: no HTTP route, no field on the create-company request (which accepts the key and silently discards it, answering 201), no service setter and no control on this screen. So it is permanently false for every tenant and the refusal is absolute. Half a rule that cannot be switched is worse than no rule, because the schema and both enforcers imply a choice the operator does not have.",
       },
       {
         name: "FIFO / LIFO / batch-wise valuation",

@@ -78,6 +78,30 @@ function explain(err: unknown): string {
 }
 
 /**
+ * Could this invitation have reached ANYBODY?
+ *
+ * Mirrors the server's own predicate, notify.Message.HasAddress — "A subject is
+ * an identifier, not an address." The outbox's recipient is `email` when one was
+ * given and otherwise the sign-in SUBJECT (`recipient := email; if recipient ==
+ * "" { recipient = subject }` in notify.InviteMessage), which is exactly the pair
+ * this row already carries.
+ *
+ * WHY THIS IS ASKED HERE AND NOT JUST BELIEVED FROM `notification_status`.
+ * 52 rows in the live outbox say status='sent'; 41 of them have a recipient with
+ * no '@' in it, because the log transport correctly reported "NO EMAIL ON FILE …
+ * nothing was sent" by returning success (a logger that could fail would
+ * manufacture dead letters) and the outcome was then recorded as a send. The
+ * server no longer writes that for NEW notifications, but nothing has restated
+ * the rows already written — a data repair needs a migration or a script, which
+ * is not this screen's to do. Until then this screen must not repeat their claim.
+ */
+function couldReachAnybody(i: InviteView): boolean {
+  const recipient = (i.email || i.subject).trim();
+  const at = recipient.indexOf("@");
+  return at > 0 && at < recipient.length - 1;
+}
+
+/**
  * How the invitation itself is getting to the person — which is NOT the same
  * question as whether they have accepted it.
  *
@@ -88,6 +112,18 @@ function explain(err: unknown): string {
  * is deliberately louder than silence.
  */
 function deliveryText(i: InviteView): string {
+  // NO ADDRESS OUTRANKS EVERY STORED STATUS, including 'sent' and 'pending'.
+  // There is nowhere for this invitation to go, so "invitation sent" is false,
+  // "invitation queued" is false in substance (the queue can only ever
+  // dead-letter it) and silence is the failure the delivery state exists to
+  // prevent: "a company that believed it had onboarded somebody who never heard
+  // about it". As loud as the server's own log line, and it names the remedy.
+  if (
+    !couldReachAnybody(i) ||
+    /no email address on file/i.test(i.notification_error ?? "")
+  ) {
+    return "no invitation was sent — NO EMAIL ADDRESS on file, so nobody could be told; tell them yourself";
+  }
   switch (i.notification_status) {
     case "sent":
       return "invitation sent";
@@ -168,6 +204,14 @@ export function MembersScreen(_props: ScreenComponentProps) {
   const [error, setError] = useState<string | null>(null);
 
   const [subject, setSubject] = useState("");
+  /**
+   * The address the invitation is actually DELIVERED to. Optional on the wire
+   * (`InviteMemberRequest.email`, and the server has never required one) but
+   * without it the outbox's recipient falls back to the sign-in subject, which
+   * no transport can deliver to — so the form asks for it, and says what its
+   * absence costs.
+   */
+  const [email, setEmail] = useState("");
   const [levelName, setLevelName] = useState("");
   const [inviting, setInviting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -256,6 +300,7 @@ export function MembersScreen(_props: ScreenComponentProps) {
 
   const invite = useCallback(async () => {
     const s = subject.trim();
+    const em = email.trim();
     if (!s || !levelName) return;
     setInviting(true);
     setError(null);
@@ -264,10 +309,20 @@ export function MembersScreen(_props: ScreenComponentProps) {
       await client.inviteMember(companyID, {
         subject: s,
         security_level_name: levelName,
+        // Omitted rather than sent as "" when blank: the server distinguishes
+        // "no address on file" from an address, and an empty string is the
+        // former dressed as the latter.
+        ...(em ? { email: em } : {}),
       });
       setSubject("");
+      setEmail("");
       setNotice(
-        `Invited ${s} as ${levelName}. They become a member when they next sign in — until then this is a PENDING invite, not access.`,
+        em
+          ? `Invited ${s} as ${levelName}, and an invitation is queued to ${em}. They become a member when they next sign in — until then this is a PENDING invite, not access.`
+          : // SAID AT THE MOMENT IT IS TRUE. With no address the outbox has
+            // nowhere to deliver to, so the invitation is never sent to anybody —
+            // and an administrator who is not told that here will find out never.
+            `Invited ${s} as ${levelName}, but NO EMAIL ADDRESS was given, so NO invitation was sent to anybody — tell them yourself. They become a member when they next sign in — until then this is a PENDING invite, not access.`,
       );
       await refresh();
     } catch (e) {
@@ -275,7 +330,7 @@ export function MembersScreen(_props: ScreenComponentProps) {
     } finally {
       setInviting(false);
     }
-  }, [subject, levelName, client, companyID, refresh]);
+  }, [subject, email, levelName, client, companyID, refresh]);
 
   const saveDraft = useCallback(async () => {
     if (!draft) return;
@@ -326,13 +381,30 @@ export function MembersScreen(_props: ScreenComponentProps) {
         Who may open this company, and what they may do. Esc to go back.
       </p>
 
+      {/* ANNOUNCED, not merely rendered.
+          A refusal here is inserted mid-page, above a panel that unmounts and
+          remounts on the refresh that follows — so focus is nowhere near it and
+          a screen-reader operator who pressed Invite got silence: the same "I
+          pressed the key and nothing happened" this shell refuses everywhere
+          else (see Chrome's status line and stepup-failed banner, which is where
+          role="alert" / role="status" is used for the same reason). The error is
+          assertive because it means the write did NOT happen; the notice is
+          polite because it only confirms what did. */}
       {error ? (
-        <p data-testid="members-error" className="mb-2 max-w-3xl text-sm text-red-400">
+        <p
+          role="alert"
+          data-testid="members-error"
+          className="mb-2 max-w-3xl text-sm text-red-400"
+        >
           {error}
         </p>
       ) : null}
       {notice ? (
-        <p data-testid="members-notice" className="mb-2 max-w-3xl text-sm text-tally-title">
+        <p
+          role="status"
+          data-testid="members-notice"
+          className="mb-2 max-w-3xl text-sm text-tally-title"
+        >
           {notice}
         </p>
       ) : null}
@@ -525,6 +597,20 @@ export function MembersScreen(_props: ScreenComponentProps) {
                 value={subject}
                 placeholder="their sign-in subject"
                 onChange={(e) => setSubject(e.target.value)}
+              />
+              {/* The address the invitation goes TO. Optional because the server
+                  never required it — but an invite with no email is delivered to
+                  nobody, so the placeholder says so rather than leaving an
+                  administrator to discover it from an invitee who never wrote
+                  back. */}
+              <input
+                aria-label="Email"
+                data-testid="invite-email"
+                type="email"
+                className="bg-tally-field px-1 text-tally-fieldText outline-none"
+                value={email}
+                placeholder="email — without one, nobody is told"
+                onChange={(e) => setEmail(e.target.value)}
               />
               <select
                 aria-label="Security level"

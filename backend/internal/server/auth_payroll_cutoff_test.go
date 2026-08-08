@@ -26,6 +26,7 @@ package server
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -131,10 +132,23 @@ func TestBackDatedCutoffRefusesAPayRunIntoAClosedWageMonth(t *testing.T) {
 			"run has no voucher_date field on the wire and never should (%s)",
 			cutoff, rec.Code, cutoff, landed, rec.Body.String())
 	}
-	if msg, _ := body["error"].(string); msg != "voucher date is before the back-dated cutoff" {
+	// The reason must be the CUTOFF's, and it must NAME THE BOUNDARY. It is
+	// checked as a prefix plus the date rather than by equality because
+	// authz.cutoffDeny appends the cutoff it judged against ("...cutoff of
+	// 2026-07-01"): a refusal that says only that some period is locked leaves the
+	// operator to find the boundary by resubmitting with earlier dates. Equality
+	// here would have to be re-pinned every time the sentence is improved, and
+	// what this test actually cares about is WHICH control refused.
+	msg, _ := body["error"].(string)
+	if !strings.HasPrefix(msg, "voucher date is before the back-dated cutoff") {
 		t.Errorf("refusal reason = %q, want the cutoff reason — a 403 for some other reason (a missing "+
 			"grant, a step-up) would mean the cutoff still does not reach the pay run (%s)",
 			msg, rec.Body.String())
+	}
+	if !strings.Contains(msg, cutoff) {
+		t.Errorf("refusal reason = %q, want it to name the cutoff date %s — an operator told only that a "+
+			"period is locked cannot tell WHERE the lock starts, and a pay run is exactly the write where "+
+			"the date was never typed by hand (%s)", msg, cutoff, rec.Body.String())
 	}
 
 	// ALLOWED. August 2026 is after the cutoff and must still post, or the fix

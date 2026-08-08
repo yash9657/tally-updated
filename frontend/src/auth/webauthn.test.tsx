@@ -20,6 +20,7 @@ import {
   StepUpFailedError,
   toB64URL,
   fromB64URL,
+  MAX_ALLOW_CREDENTIALS,
 } from "./webauthn";
 
 /**
@@ -210,6 +211,19 @@ interface StackOpts {
   needsRegistration?: boolean;
   /** assert/finish answers 501 (no dev signer) instead of minting a token. */
   assertFinish501?: boolean;
+  /**
+   * Make assert/begin return this many credential ids — CRED_ID first, then
+   * filler — to stand in for a user who has accumulated a large set. NEWEST
+   * FIRST, matching the server's contract.
+   */
+  credentialCount?: number;
+}
+
+/** allow_credentials of length n: CRED_ID first (newest), then distinct filler. */
+function manyAllowCredentials(n: number): string[] {
+  const out = [toB64URL(CRED_ID)];
+  for (let i = 1; i < n; i++) out.push(toB64URL(bytes(0xff, i >> 8, i & 0xff)));
+  return out;
 }
 
 function stack(opts: StackOpts = {}) {
@@ -228,7 +242,9 @@ function stack(opts: StackOpts = {}) {
       return respond(200, {
         challenge: toB64URL(bytes(1, 2, 3)),
         rp_id: "localhost",
-        allow_credentials: registered ? [toB64URL(CRED_ID)] : [],
+        allow_credentials: registered
+          ? manyAllowCredentials(opts.credentialCount ?? 1)
+          : [],
       });
     }
     if (url.endsWith("/auth/webauthn/register/begin")) {
@@ -428,6 +444,103 @@ describe("auth/webauthn — the ceremony client", () => {
       "/auth/webauthn/assert/begin",
       "/auth/webauthn/assert/finish",
     ]);
+  });
+
+  it("ENROLS instead of hard-failing when the browser throws RangeError on an oversized allow list", async () => {
+    // THE DEFECT THAT BLOCKED A WHOLE AUDIT FOR ~25 MINUTES. A user reached 65
+    // credentials, assert/begin returned all 65, and Chromium threw
+    //   RangeError: The 'allowCredentials' attribute exceeds the maximum allowed
+    //   size (64).
+    // BEFORE consulting any authenticator. The client only treated
+    // NotAllowedError as recoverable, so a RangeError became a hard
+    // StepUpFailedError and the FIRST WRITE OF EVERY SESSION died with "PASSKEY
+    // STEP-UP FAILED — this change was not saved", on every device, permanently.
+    //
+    // A RangeError does not mean "your passkey was refused"; it means "the server
+    // sent a list this browser cannot even evaluate", and enrolling is exactly
+    // the right recovery — the enrolled credential is the newest, so a capped
+    // newest-first list is guaranteed to contain it.
+    //
+    // NON-VACUOUS: narrow the recoverable set back to NotAllowedError only and
+    // this rejects with StepUpFailedError instead of resolving.
+    let getCalls = 0;
+    const creds = installCredentials();
+    creds.get = vi.fn(async () => {
+      getCalls += 1;
+      if (getCalls === 1) {
+        // A plain ECMAScript RangeError, NOT a DOMException — which is why the
+        // classifier is name-based.
+        throw new RangeError(
+          "The 'allowCredentials' attribute exceeds the maximum allowed size (64).",
+        );
+      }
+      return fakeAssertion();
+    });
+
+    const t = stack();
+    await expect(stepUp(deps(t))).resolves.toBe(STEPPED_TOKEN);
+    expect(creds.create).toHaveBeenCalledTimes(1);
+    expect(t.urls).toEqual([
+      "/auth/webauthn/assert/begin",
+      "/auth/webauthn/register/begin",
+      "/auth/webauthn/register/finish",
+      "/auth/webauthn/assert/begin",
+      "/auth/webauthn/assert/finish",
+    ]);
+  });
+
+  it("never hands the browser more than 64 allowCredentials, keeping the NEWEST", async () => {
+    // Belt and braces to the server-side cap: even if a server (an older build,
+    // a future regression) returns 100 ids, this client must not be the thing
+    // that explodes. It slices to 64 and keeps the FIRST 64, which are the
+    // NEWEST under the server's documented ordering — keeping the LAST 64 would
+    // drop the credential the device in front of the user just enrolled.
+    //
+    // NON-VACUOUS: remove the .slice() and allowCredentials arrives with 100
+    // entries, which is the exact input a real Chromium rejects outright.
+    const creds = installCredentials();
+    const offered = manyAllowCredentials(100);
+    const t = stack({ credentialCount: 100 });
+
+    await expect(stepUp(deps(t))).resolves.toBe(STEPPED_TOKEN);
+
+    const asked = creds.get.mock.calls[0]![0] as CredentialRequestOptions;
+    const ids = (asked.publicKey!.allowCredentials ?? []).map((c) =>
+      toB64URL(c.id as ArrayBuffer),
+    );
+    expect(MAX_ALLOW_CREDENTIALS).toBe(64); // the browser's own ceiling
+    expect(ids).toHaveLength(MAX_ALLOW_CREDENTIALS);
+    expect(ids).toEqual(offered.slice(0, MAX_ALLOW_CREDENTIALS));
+    // Explicitly: the newest (index 0) survived and the oldest were dropped.
+    expect(ids[0]).toBe(toB64URL(CRED_ID));
+    expect(ids).not.toContain(offered[99]);
+  });
+
+  it("NAMES the browser's error when step-up ends with no assertion", async () => {
+    // The old terminal message was a bare "the passkey confirmation returned no
+    // assertion", which is identical whether the user cancelled (NotAllowedError)
+    // or the allow list was unusable (RangeError) — two completely different
+    // problems with two different remedies. Discarding the name is what made five
+    // people re-derive this defect from the browser console.
+    //
+    // NON-VACUOUS: drop the name from the message and both matchers below fail.
+    const creds = installCredentials();
+    creds.get = vi.fn(async () => {
+      throw new RangeError(
+        "The 'allowCredentials' attribute exceeds the maximum allowed size (64).",
+      );
+    });
+    const t = stack();
+    const err = await stepUp(deps(t)).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(StepUpFailedError);
+    expect((err as Error).message).toMatch(/RangeError/);
+    expect((err as Error).message).toMatch(/allowCredentials/);
+    // And it says how many ids it offered, so the reader can tell "the list was
+    // too long" from "the device has nothing".
+    expect((err as Error).message).toMatch(/1 credential\(s\) were offered/);
+    // It really did try to recover first (enrol, then assert again).
+    expect(creds.create).toHaveBeenCalledTimes(1);
+    expect(creds.get).toHaveBeenCalledTimes(2);
   });
 
   it("fails cleanly when even the enrolment prompt is refused, and explains a 501", async () => {

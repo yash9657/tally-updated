@@ -29,7 +29,24 @@ import type { Money } from "./types";
  * already terminal on return — ONE response shape either way, so a client never
  * has to know which mode the server is in.
  */
-export type DraftStatus = "processing" | "ready" | "low_confidence_manual";
+/**
+ * ⛔ `"accepted"` IS THE TERMINAL, ONCE-ONLY STATE AND ITS ABSENCE WAS A MONEY BUG.
+ * Added 2026-08-07 to mirror `insightd/insightd/contracts/draft.py`'s `DraftStatus`
+ * after a browser re-drive posted the SAME supplier bill twice: a successfully
+ * accepted draft stayed `"ready"`, stayed in the F9 Bill Inbox, and could be
+ * re-opened and accepted again. A draft whose invoice number the OCR never read has
+ * no number and no date for the client's day-book duplicate check to match on, so
+ * the reload case was wide open — two real vouchers for one bill.
+ *
+ * ⚠️ THIS TYPE IS A MIRROR, NOT A SOURCE. insightd owns the vocabulary; a value
+ * missing here does not narrow what the server can send, it only hides it from the
+ * type checker — which is exactly how this one went stale.
+ */
+export type DraftStatus =
+  | "processing"
+  | "ready"
+  | "low_confidence_manual"
+  | "accepted";
 
 /** Where a draft field's value came from in the insightd pipeline. */
 export type FieldSource =
@@ -151,6 +168,41 @@ export interface PurchaseVoucherDraft {
   unresolved: string[];
   /** display-only re-derivation */
   derived_gst?: GSTAmounts | null;
+  /**
+   * The acceptance link, set together with `status: "accepted"` — see
+   * {@link DraftStatus}. All three are null/absent for every non-accepted draft.
+   * ⚠️ `accepted_voucher_no` may legitimately be `""`: cored allocates the number,
+   * and an empty string means "posted, number not echoed", NOT "not posted" — the
+   * id is the load-bearing field.
+   */
+  accepted_voucher_id?: string | null;
+  accepted_voucher_no?: string | null;
+  /** ISO-8601 UTC, when the acceptance was recorded. */
+  accepted_at?: string | null;
+
+  /**
+   * ⛔ THE POSTING CLAIM — A SHORT LEASE TAKEN *BEFORE* THE VOUCHER POST, and the
+   * fifth door closed on one duplicated supplier bill. Everything above records an
+   * acceptance AFTER the fact, and four layers all asked the same question ("has this
+   * draft been accepted?") at the same wrong MOMENT — before either racer had posted,
+   * when the honest answer was still "no". Two separate browsers were raced on one
+   * numberless draft and both posted (vouchers 11 and 12, 27000.0000 + 4860.0000 IGST
+   * each); only the second MARKING was refused, after the money had moved. So a poster
+   * now RESERVES first, posts second, confirms third.
+   *
+   * ⚠️ A CLAIM IS A LEASE, NOT A STATUS. `claim_expires_at` in the past means NO live
+   * claim, and a claimed draft deliberately stays `"ready"` — the bill really is still
+   * unposted and must stay postable, because a permanent claim would be a bill nobody
+   * can ever post (worse than the duplicate). All four are null when unclaimed.
+   * `claim_token` is a concurrency value and NOT a credential: it authorises nothing
+   * beyond releasing or renewing the claim it already holds.
+   * Mirrors `insightd/insightd/contracts/draft.py`.
+   */
+  claim_token?: string | null;
+  /** Display-only label ("who/what is posting it"). Never trusted. */
+  claimed_by?: string | null;
+  claimed_at?: string | null;
+  claim_expires_at?: string | null;
 }
 
 /**
@@ -181,6 +233,14 @@ export interface DraftSummary {
   grand_total: Money;
   /** DERIVED: confidence.overall (0.0 .. 1.0). */
   confidence: number;
+  /**
+   * Set together with `status: "accepted"`, so the inbox can render
+   * **"already posted as Purchase 3"** rather than silently dropping the row —
+   * an operator who cannot see what happened to a bill re-does it, which is the
+   * duplicate this lifecycle exists to stop. Null for every unaccepted draft.
+   */
+  accepted_voucher_no?: string | null;
+  accepted_voucher_id?: string | null;
 }
 
 /**

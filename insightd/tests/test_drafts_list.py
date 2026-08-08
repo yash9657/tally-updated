@@ -65,7 +65,14 @@ def test_list_returns_summaries_for_created_drafts():
         "party",
         "grand_total",
         "confidence",
+        # The acceptance link — None until the draft is accepted. It is in the
+        # LIST projection so the inbox can say "already posted as Purchase 3"
+        # rather than dropping the row (see DraftSummary).
+        "accepted_voucher_no",
+        "accepted_voucher_id",
     }
+    assert s1["accepted_voucher_no"] is None
+    assert s1["accepted_voucher_id"] is None
     # direct projections
     assert s1["company_id"] == full1["company_id"]
     assert s1["created_at"] == full1["created_at"]

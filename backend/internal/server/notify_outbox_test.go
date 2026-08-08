@@ -126,11 +126,33 @@ func TestInviteWithoutAnEmailIsStillEnqueuedAndSaysSo(t *testing.T) {
 		t.Fatalf("dispatch: %v", err)
 	}
 	row = inviteRow(t, srv, companyID, ownerTok, subject)
-	// The log sender reports it as handled — it logged that there is nowhere to
-	// send it. What must NOT happen is a silent success with no record at all.
-	if row["notification_status"] != "sent" {
-		t.Errorf("notification_status = %v, want sent (the log sender records the "+
-			"missing address rather than failing)", row["notification_status"])
+	// ⛔ THIS ASSERTION USED TO REQUIRE 'sent', AND IT WAS THE DEFECT WRITTEN DOWN
+	// AS AN EXPECTATION. Changed deliberately on 2026-08-07 after driving row 33
+	// in a browser: an Owner invited a colleague, the screen said "invitation
+	// sent", and cored's own log said "NO EMAIL ON FILE ... nothing was sent" for
+	// the same subject in the same second. The live database held 52 invite rows
+	// at 'sent', 41 of them with a recipient containing no '@' — 41 invitations
+	// the product reported as sent that could never have reached anybody.
+	//
+	// The old comment's INTENT was right and is kept: what must not happen is a
+	// silent success with no record at all. But 'sent' is not the way to record
+	// "there was nowhere to send it" — it is the one word that makes the screen
+	// lie, because deliveryText maps it to "invitation sent". The terminal state
+	// for "nobody was told" is 'failed', and WHICH failure it was lives in
+	// last_error (notify.NoAddressReason). status is CHECK-constrained to
+	// ('pending','sending','sent','failed') by migration 0023, so a distinct
+	// 'undeliverable' would be a schema change rather than a fix — the honesty is
+	// in the pair, not in a new enum value.
+	//
+	// ⚠️ A guard that can only ever confirm the current behaviour is not a guard.
+	// This is the second time this repo has found one (buttons.test.ts could only
+	// ever check the converse), so: if this assertion ever reads 'sent' again,
+	// the screen is lying again.
+	if row["notification_status"] != "failed" {
+		t.Errorf("notification_status = %v, want failed — an invite with no address "+
+			"reached nobody, and recording that as 'sent' is what made the Users & "+
+			"Roles screen tell an Owner \"invitation sent\" about a colleague who "+
+			"was never told anything", row["notification_status"])
 	}
 }
 

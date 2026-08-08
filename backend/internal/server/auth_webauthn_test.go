@@ -24,6 +24,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/khata/cored/internal/platform/testdb"
+	"github.com/khata/cored/internal/server"
+	"github.com/khata/cored/internal/webauthn"
 )
 
 // b64u is the base64url (no padding) encoding the HTTP wire + JWT use.
@@ -450,6 +452,211 @@ func TestWebAuthnAssertOnlyLatestChallengeIsLive(t *testing.T) {
 	if msg, _ := body["error"].(string); !strings.Contains(msg, "no pending assertion challenge") {
 		t.Fatalf("expected a no-pending-challenge error, got %q", msg)
 	}
+}
+
+// --------------------------------------------------------------------------
+// the allow-list cap (the 64-credential browser ceiling)
+// --------------------------------------------------------------------------
+
+// registerCredential runs the full register begin->finish pair for one soft
+// authenticator and fails the test if either leg does not answer 200.
+func registerCredential(t *testing.T, srv *server.Server, tok string, a *softAuthenticator) {
+	t.Helper()
+	rec, body := doRaw(t, srv, http.MethodPost, "/auth/webauthn/register/begin", tok, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("register/begin status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	challenge, _ := body["challenge"].(string)
+	if challenge == "" {
+		t.Fatalf("register/begin returned no challenge (body %s)", rec.Body.String())
+	}
+	a.signCount = 0
+	rec, _ = doRaw(t, srv, http.MethodPost, "/auth/webauthn/register/finish", tok, map[string]any{
+		"credential_id_b64":      b64u.EncodeToString(a.credID),
+		"client_data_json_b64":   b64u.EncodeToString(a.clientData("webauthn.create", challenge)),
+		"authenticator_data_b64": b64u.EncodeToString(a.authData(true)),
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("register/finish status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// registerManyCredentials enrols n independent soft authenticators for one token,
+// returning them OLDEST FIRST (index 0 enrolled first).
+func registerManyCredentials(t *testing.T, srv *server.Server, tok string, n int) []*softAuthenticator {
+	t.Helper()
+	auths := make([]*softAuthenticator, 0, n)
+	for i := 0; i < n; i++ {
+		a := newSoftAuthenticator(t, "localhost", "http://localhost:5173")
+		registerCredential(t, srv, tok, a)
+		auths = append(auths, a)
+	}
+	return auths
+}
+
+// beginAssertAllow returns (challenge, allow_credentials) from assert/begin.
+func beginAssertAllow(t *testing.T, srv *server.Server, tok string) (string, []string) {
+	t.Helper()
+	rec, body := doRaw(t, srv, http.MethodPost, "/auth/webauthn/assert/begin", tok, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("assert/begin status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+	challenge, _ := body["challenge"].(string)
+	if challenge == "" {
+		t.Fatalf("assert/begin returned no challenge (body %s)", rec.Body.String())
+	}
+	raw, _ := body["allow_credentials"].([]any)
+	allow := make([]string, 0, len(raw))
+	for _, v := range raw {
+		s, _ := v.(string)
+		allow = append(allow, s)
+	}
+	return challenge, allow
+}
+
+// assertWith performs assert/finish for one authenticator against a challenge,
+// with signCount 1 (strictly greater than the 0 it registered at).
+func assertWith(t *testing.T, srv *server.Server, tok string, a *softAuthenticator, challenge string) (int, map[string]any) {
+	t.Helper()
+	a.signCount = 1
+	ad := a.authData(false)
+	cd := a.clientData("webauthn.get", challenge)
+	rec, body := doRaw(t, srv, http.MethodPost, "/auth/webauthn/assert/finish", tok, map[string]any{
+		"credential_id_b64":      b64u.EncodeToString(a.credID),
+		"client_data_json_b64":   b64u.EncodeToString(cd),
+		"authenticator_data_b64": b64u.EncodeToString(ad),
+		"signature_b64":          b64u.EncodeToString(a.sign(ad, cd)),
+	})
+	return rec.Code, body
+}
+
+// TestWebAuthnAssertBeginCapsAllowCredentialsNewestFirst is the regression for the
+// defect that blocked a whole audit: assert/begin used to return EVERY credential
+// a user had, and a browser throws
+//
+//	RangeError: The 'allowCredentials' attribute exceeds the maximum allowed size (64)
+//
+// rather than evaluate a longer list — so a user with 65 credentials could not
+// step up on ANY device and therefore could not WRITE ANYTHING.
+//
+// It pins all three properties that matter, because getting only the first one
+// right makes the bug WORSE rather than better:
+//
+//	(1) the list is capped at 64;
+//	(2) it is ordered NEWEST FIRST, so the newest credential — the one the device
+//	    in front of the user just enrolled — is present and first, and the OLDEST
+//	    are the ones dropped (a LIMIT on ByUser's ascending order would have done
+//	    the exact opposite);
+//	(3) a credential OUTSIDE the capped window is still VERIFIABLE, because
+//	    assert/finish resolves it through ByCredentialID, not through the list.
+func TestWebAuthnAssertBeginCapsAllowCredentialsNewestFirst(t *testing.T) {
+	srv := newServer(t)
+
+	baseTok := mintToken(t, srv, "stepup-cap-"+uuid.NewString())
+
+	// 70 > 64, and 70 < webauthn.MaxStoredCredentials (128) so nothing is pruned
+	// here — this test is about the OFFERED window only.
+	const enrolled = 70
+	auths := registerManyCredentials(t, srv, baseTok, enrolled)
+
+	challenge, allow := beginAssertAllow(t, srv, baseTok)
+
+	// (1) capped.
+	if len(allow) > 64 {
+		t.Fatalf("assert/begin returned %d allow_credentials after %d enrolments; a browser refuses more than 64", len(allow), enrolled)
+	}
+	if len(allow) != 64 {
+		t.Fatalf("assert/begin returned %d allow_credentials, want exactly 64 (the cap) after %d enrolments", len(allow), enrolled)
+	}
+
+	// (2) newest first: allow[i] is the (enrolled-1-i)'th enrolment.
+	for i := 0; i < len(allow); i++ {
+		want := b64u.EncodeToString(auths[enrolled-1-i].credID)
+		if allow[i] != want {
+			t.Fatalf("allow_credentials[%d] = %q, want %q (the list must be NEWEST FIRST; enrolment #%d)", i, allow[i], want, enrolled-i)
+		}
+	}
+	// Stated separately because it is THE user-visible symptom: the newest
+	// credential must never be the one truncated away.
+	newest := b64u.EncodeToString(auths[enrolled-1].credID)
+	if allow[0] != newest {
+		t.Fatalf("allow_credentials[0] = %q, want the NEWEST credential %q", allow[0], newest)
+	}
+	// The oldest six are the ones dropped.
+	dropped := map[string]bool{}
+	for _, a := range auths[:enrolled-64] {
+		dropped[b64u.EncodeToString(a.credID)] = true
+	}
+	for i, id := range allow {
+		if dropped[id] {
+			t.Fatalf("allow_credentials[%d] = %q is one of the %d OLDEST credentials; the cap must drop the oldest, not the newest", i, id, enrolled-64)
+		}
+	}
+
+	// (3) a credential outside the window is STILL verifiable. auths[0] is the
+	// very first enrolment and is not in `allow` at all.
+	if code, body := assertWith(t, srv, baseTok, auths[0], challenge); code != http.StatusOK {
+		t.Fatalf("assert/finish for the OLDEST credential (outside the capped window) = %d, want 200 (body %+v)", code, body)
+	} else if tok, _ := body["token"].(string); tok == "" {
+		t.Fatalf("assert/finish for a credential outside the capped window returned no token (body %+v)", body)
+	}
+}
+
+// TestWebAuthnCredentialRetentionCeiling pins the answer to the OTHER half of the
+// defect: the credential set used to grow without limit, because stepUp enrols
+// whenever the current device holds none of the listed credentials and every fresh
+// browser profile (and every CDP virtual authenticator) holds none.
+//
+// The chosen remedy is a retention ceiling of webauthn.MaxStoredCredentials that
+// SILENTLY PRUNES the oldest rather than REFUSING further enrolment; the reasoning
+// and the trade-off are in MaxStoredCredentials' own comment. This test proves the
+// boundary behaviourally rather than by counting rows: after ceiling+3 enrolments
+// the three oldest credentials are gone (assert/finish rejects them), and the
+// oldest RETAINED one still asserts — which also re-proves that retention is
+// deliberately larger than the 64-entry offered window.
+func TestWebAuthnCredentialRetentionCeiling(t *testing.T) {
+	srv := newServer(t)
+
+	baseTok := mintToken(t, srv, "stepup-retain-"+uuid.NewString())
+
+	const over = 3
+	enrolled := webauthn.MaxStoredCredentials + over
+	auths := registerManyCredentials(t, srv, baseTok, enrolled)
+
+	// The three oldest must have been pruned: assert/finish cannot resolve them.
+	for i := 0; i < over; i++ {
+		challenge, _ := beginAssertAllow(t, srv, baseTok)
+		code, body := assertWith(t, srv, baseTok, auths[i], challenge)
+		if code != http.StatusBadRequest {
+			t.Fatalf("assert/finish for pruned credential #%d = %d, want 400 (body %+v)", i+1, code, body)
+		}
+		if msg, _ := body["error"].(string); !strings.Contains(msg, "unknown credential") {
+			t.Fatalf("assert/finish for pruned credential #%d error = %q, want it to mention an unknown credential", i+1, msg)
+		}
+	}
+
+	// The oldest RETAINED credential still asserts, even though it is far outside
+	// the 64-entry offered window (it is enrolment #4 of 131).
+	challenge, allow := beginAssertAllow(t, srv, baseTok)
+	if len(allow) != 64 {
+		t.Fatalf("allow_credentials = %d entries, want 64 after %d enrolments", len(allow), enrolled)
+	}
+	oldestRetained := auths[over]
+	if id := b64u.EncodeToString(oldestRetained.credID); slicesContains(allow, id) {
+		t.Fatalf("the oldest retained credential %q should NOT be in the 64-entry offered window; the test is not exercising the out-of-window path", id)
+	}
+	if code, body := assertWith(t, srv, baseTok, oldestRetained, challenge); code != http.StatusOK {
+		t.Fatalf("assert/finish for the oldest RETAINED credential = %d, want 200 — pruning must not reach inside the retention ceiling (body %+v)", code, body)
+	}
+}
+
+func slicesContains(hay []string, needle string) bool {
+	for _, h := range hay {
+		if h == needle {
+			return true
+		}
+	}
+	return false
 }
 
 // NOTE: TestDevLoginLockout USED to live here. It was deleted with

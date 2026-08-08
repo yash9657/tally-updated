@@ -26,6 +26,7 @@
 package server
 
 import (
+	"context"
 	"encoding/base64"
 	"net/http"
 	"time"
@@ -48,6 +49,77 @@ const challengeTTL = 5 * time.Minute
 
 // stepUpTokenTTLSeconds is the lifetime of a minted stepped-up token (1h).
 const stepUpTokenTTLSeconds = 3600
+
+// maxAllowCredentials caps how many credential ids assert/begin will put in
+// allow_credentials.
+//
+// THIS IS A BROWSER LIMIT, NOT A PREFERENCE. Chromium refuses outright to
+// evaluate a larger list: navigator.credentials.get() throws, BEFORE it ever
+// consults an authenticator,
+//
+//	RangeError: The 'allowCredentials' attribute exceeds the maximum allowed size (64).
+//
+// Measured live today: a dev user had accumulated 65 credentials, this route
+// returned all 65, and so EVERY WRITE IN THE PRODUCT became permanently
+// impossible on EVERY device — the client turned the RangeError into a hard
+// "PASSKEY STEP-UP FAILED — this change was not saved". A sweep against a CDP
+// virtual authenticator put the boundary at 65 for RangeError (and found a
+// NotAllowedError from 32 upward with that authenticator), so 64 is the ceiling
+// and there is no headroom to spend.
+//
+// The list is NEWEST FIRST (see webauthn.PGStore.RecentByUser). That ordering is
+// load-bearing: ByUser orders created_at ASCENDING, so truncating THAT order
+// would have dropped the newest credential — the one the device in front of the
+// user just enrolled — making the user's own current device the one device
+// excluded from its own allow list.
+//
+// A credential outside this window is still VERIFIABLE: assert/finish resolves it
+// through ByCredentialID, which has no limit. Retention is a separate, larger
+// ceiling (webauthn.MaxStoredCredentials) precisely so that stays true.
+const maxAllowCredentials = 64
+
+// recentCredentialLister is the OPTIONAL store capability the allow-list path
+// wants: "the newest N credentials". It is declared here, as a consumer-side
+// interface, rather than added to webauthn.CredentialStore, so that a store which
+// only implements the four-method interface still works (see the fallback in
+// allowCredentialsFor) — the cap does not become a hard dependency of every
+// CredentialStore implementation, including the hermetic test doubles.
+type recentCredentialLister interface {
+	RecentByUser(ctx context.Context, userID uuid.UUID, limit int) ([]webauthn.Credential, error)
+}
+
+// allowCredentialsFor returns the base64url credential ids to offer this user,
+// NEWEST FIRST and never more than maxAllowCredentials of them.
+//
+// The fast path pushes the cap into SQL (ORDER BY created_at DESC LIMIT n). The
+// fallback exists only for a CredentialStore without RecentByUser: it reads
+// ByUser — documented as ALL, OLDEST FIRST — takes the TAIL (the newest) and
+// reverses it. Taking the HEAD would be the bug described above.
+func allowCredentialsFor(ctx context.Context, store webauthn.CredentialStore, userID uuid.UUID) ([]string, error) {
+	if recent, ok := store.(recentCredentialLister); ok {
+		creds, err := recent.RecentByUser(ctx, userID, maxAllowCredentials)
+		if err != nil {
+			return nil, err
+		}
+		allow := make([]string, 0, len(creds))
+		for _, c := range creds {
+			allow = append(allow, b64URL.EncodeToString(c.CredentialID))
+		}
+		return allow, nil
+	}
+	creds, err := store.ByUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if len(creds) > maxAllowCredentials {
+		creds = creds[len(creds)-maxAllowCredentials:]
+	}
+	allow := make([]string, 0, len(creds))
+	for i := len(creds) - 1; i >= 0; i-- { // ascending -> newest first
+		allow = append(allow, b64URL.EncodeToString(creds[i].CredentialID))
+	}
+	return allow, nil
+}
 
 // --------------------------------------------------------------------------
 // Route wiring (called from routes())
@@ -173,14 +245,13 @@ func (s *Server) handleWebAuthnAssertBegin(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "assertion begin: "+err.Error())
 		return
 	}
-	creds, err := s.webauthnStore.ByUser(r.Context(), userID)
+	// CAPPED, NEWEST FIRST. This used to be an unbounded loop over ByUser, which
+	// is what made a 65-credential user unable to write anything, anywhere — see
+	// maxAllowCredentials for the measurement.
+	allow, err := allowCredentialsFor(r.Context(), s.webauthnStore, userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "load credentials: "+err.Error())
 		return
-	}
-	allow := make([]string, 0, len(creds))
-	for _, c := range creds {
-		allow = append(allow, b64URL.EncodeToString(c.CredentialID))
 	}
 	if err := s.challenges.Put(r.Context(), userID, ch); err != nil {
 		writeError(w, http.StatusInternalServerError, "stash challenge: "+err.Error())

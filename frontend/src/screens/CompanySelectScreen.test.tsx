@@ -1,14 +1,25 @@
-import { describe, it, expect, afterEach, vi } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { useEffect } from "react";
 import { render, screen, cleanup, waitFor, fireEvent } from "@testing-library/react";
 import { CompanySelectScreen } from "./CompanySelectScreen";
-import { CompanyProvider, useCompanyContext } from "../app/CompanyContext";
+import {
+  COMPANY_STORAGE_KEY,
+  CompanyProvider,
+  useCompanyContext,
+} from "../app/CompanyContext";
 import { createMockClient, ApiError } from "../api";
 import type { CoredClient, MeResponse } from "../api";
 import type { CompanyInfo } from "../app/CompanyContext";
 import { COMPANY_SWITCHED_SENTINEL } from "../keystroke/navMachine";
 
 afterEach(cleanup);
+
+beforeEach(() => {
+  globalThis.localStorage?.clear();
+  // A leftover ?company= would change which company a remount opens, which is
+  // exactly what the persistence tests below measure.
+  globalThis.history.replaceState({}, "", "/");
+});
 
 /**
  * The F3 company picker. Two properties matter more than the rendering:
@@ -73,6 +84,32 @@ function renderPicker(
       />
     </CompanyProvider>,
   );
+}
+
+/**
+ * Uuid-shaped ids, for the tests that exercise `?company=` — the URL reader
+ * ignores anything that is not a plausible uuid, so "co-1" would be invisible
+ * there and the test would pass vacuously.
+ */
+const UUID_A = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+const UUID_B = "11111111-2222-3333-4444-555555555555";
+
+/** Observes the company the provider settled on (null renders as "none"). */
+function ShowActiveCompany() {
+  const { company } = useCompanyContext();
+  return <div data-testid="active-company">{company ? company.id : "none"}</div>;
+}
+
+/** A getCompany that answers for ANY id, echoing it back as the master. */
+function companyMasterStub(): CoredClient["getCompany"] {
+  return (async (id: string) => ({
+    id,
+    name: id === "co-1" || id === UUID_A ? "Demo Traders" : "Sharma Distributors",
+    fy_start_date: "2026-04-01",
+    base_currency: "INR",
+    state_code: "27",
+    gstin: "",
+  })) as unknown as CoredClient["getCompany"];
 }
 
 /** A client whose /v1/me is fixed and whose getCompany is a spy. */
@@ -196,6 +233,115 @@ describe("CompanySelectScreen (F3)", () => {
         "not a member of any company",
       ),
     );
+  });
+
+  it("PERSISTS the switch, so a remount does not return to the old company", async () => {
+    // The defect: the switch existed only in React state. Any page load returned
+    // the operator to company A without saying so, and the next voucher they
+    // keyed was written to A.
+    globalThis.localStorage?.setItem(COMPANY_STORAGE_KEY, "co-1");
+    const onSelect = vi.fn();
+    const { unmount } = renderPicker(
+      clientWithMe(companyMasterStub()),
+      onSelect,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText(/Sharma Distributors/)).toBeTruthy(),
+    );
+    pick("Sharma");
+    await waitFor(() =>
+      expect(onSelect).toHaveBeenCalledWith(COMPANY_SWITCHED_SENTINEL),
+    );
+
+    // The choice outlives the live session…
+    expect(globalThis.localStorage?.getItem(COMPANY_STORAGE_KEY)).toBe("co-2");
+    unmount();
+
+    // …and a fresh bootstrap (i.e. a reload) opens company B, not company A.
+    render(
+      <CompanyProvider client={clientWithMe(companyMasterStub())} bootstrap>
+        <ShowActiveCompany />
+      </CompanyProvider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("active-company").textContent).toBe("co-2"),
+    );
+  });
+
+  it("makes a stale ?company= in the address bar agree with the switch", async () => {
+    // `?company=` beats localStorage on purpose (it is how every audit probe and
+    // the demo seed open the app), so persisting alone would NOT be enough: the
+    // link that opened the tab would out-rank the operator's later choice on the
+    // next load. The switch rewrites the parameter instead of fighting it.
+    globalThis.history.replaceState({}, "", `/?company=${UUID_A}`);
+    const me: MeResponse = {
+      ...ME,
+      companies: [
+        { ...ME.companies[0]!, company_id: UUID_A },
+        { ...ME.companies[1]!, company_id: UUID_B },
+      ],
+    };
+    const onSelect = vi.fn();
+    const { unmount } = render(
+      <CompanyProvider
+        client={clientWithMe(companyMasterStub(), me)}
+        initialCompany={{ id: UUID_A, name: "Demo Traders", homeStateCode: "29" }}
+      >
+        <CompanySelectScreen
+          snapshot={{
+            screen: "company-select",
+            screenStackDepth: 2,
+            canReturnToVoucher: false,
+          }}
+          onSelect={onSelect}
+        />
+      </CompanyProvider>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText(/Sharma Distributors/)).toBeTruthy(),
+    );
+    pick("Sharma");
+    await waitFor(() =>
+      expect(onSelect).toHaveBeenCalledWith(COMPANY_SWITCHED_SENTINEL),
+    );
+
+    expect(globalThis.location.search).toBe(`?company=${UUID_B}`);
+    unmount();
+
+    // A reload of THIS url now opens company B.
+    render(
+      <CompanyProvider
+        client={clientWithMe(companyMasterStub(), me)}
+        bootstrap
+      >
+        <ShowActiveCompany />
+      </CompanyProvider>,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("active-company").textContent).toBe(UUID_B),
+    );
+  });
+
+  it("records NOTHING when the switch itself failed", async () => {
+    // A refused/failed hydrate must not leave the next page load pointing at a
+    // company this session never actually opened.
+    globalThis.localStorage?.setItem(COMPANY_STORAGE_KEY, "co-1");
+    const getCompany = vi.fn(async () => {
+      throw new ApiError(403, "not a member of this company", "forbidden");
+    }) as unknown as CoredClient["getCompany"];
+    renderPicker(clientWithMe(getCompany));
+
+    await waitFor(() =>
+      expect(screen.getByText(/Sharma Distributors/)).toBeTruthy(),
+    );
+    pick("Sharma");
+
+    await waitFor(() =>
+      expect(screen.getByTestId("company-select-error")).toBeTruthy(),
+    );
+    expect(globalThis.localStorage?.getItem(COMPANY_STORAGE_KEY)).toBe("co-1");
   });
 
   it("surfaces a failed /v1/me instead of rendering an empty list", async () => {
