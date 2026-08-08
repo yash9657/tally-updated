@@ -1,4 +1,4 @@
-# ⛔ THE DEFECT BURNDOWN — 72 OPEN, ALL TRACED. FIX THEM IN PARALLEL.
+# ⛔ THE DEFECT BURNDOWN — 69 OPEN, ALL TRACED. FIX THEM IN PARALLEL.
 
 > ## THIS FILE REPLACES `HANDOFF-PARITY-AUDIT.md` AS THE LIVE DRIVER. IT IS NOT A TWELFTH HANDOFF.
 >
@@ -31,9 +31,16 @@
 The parity audit is **DONE**. All **34** rows that claim to be reachable from the keyboard have been driven
 end to end in a real browser against real cored. ⛔ **Of the 18 driven in the last pass, NOT ONE was
 clean** — 17 were defective and row 32 cannot be reached from the keyboard at all. Driving produced **78
-defects**; fixing them produced **16 more** (the same control kept having another door). **22 are fixed,
-each with an executed mutation proof AND a browser re-drive. 72 REMAIN, every one traced to file:line with
+defects**; fixing them produced **16 more** (the same control kept having another door). **25 are fixed,
+each with an executed mutation proof AND a browser re-drive. 69 REMAIN, every one traced to file:line with
 a proposed fix.** Your job is to burn them down, in parallel, without breaking the 5 green gates.
+
+⚠️ **THE 2026-08-08 SESSION RAN THIS SERIALLY, NOT IN PARALLEL** (its harness had no subagents), and closed
+**L3 entirely** plus **D12, D65 and half of D13** — with two things worth carrying forward. First, the
+gate earned its keep: a targeted package run was green while `make verify` found a REAL regression in
+`internal/forecast`, and the failing assertion turned out to be **trap #7 — a test pinning the defect**.
+Second, §0.1 paid for itself again: the first browser re-drive ran against a **stale binary** and reported
+the fix as not working. **Run the full gate, and verify by symbol.**
 
 | | |
 |---|---|
