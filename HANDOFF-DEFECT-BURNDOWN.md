@@ -38,10 +38,10 @@ a proposed fix.** Your job is to burn them down, in parallel, without breaking t
 | | |
 |---|---|
 | Rows driven | **34 of 34** — the measurement is closed, do not re-drive to "check" |
-| Register defects (`§7.1`) | **78** · closed **11** · ⛔ **open 67** (31 high, 26 medium, 10 low) |
+| Register defects (`§7.1`) | **78** · closed **13** · ⛔ **open 65** (30 high, 25 medium, 10 low) · 1 PARTIAL (D13) |
 | Found while fixing | **16** · closed **12** · ⛔ **open 4** (`§7.3` **B, C, D**) |
-| ⛔ **YOUR WORK LIST** | **71 open defects.** §3 groups them into lanes by FILE OWNERSHIP |
-| Gates, measured 2026-08-08 | backend **2483 / 0 SKIP / 0 FAIL**, frontend **1074 / 69 files**, insightd **137**, `tsc` clean, `make verify` **exit 0**, `verify:demo` **33/33** |
+| ⛔ **YOUR WORK LIST** | **69 open defects.** §3 groups them into lanes by FILE OWNERSHIP |
+| Gates, measured 2026-08-08 | backend **2483 / 0 SKIP / 0 FAIL**, frontend **1076 / 69 files**, insightd **137**, `tsc` clean, `make verify` **exit 0**, `verify:demo` **33/33** |
 
 > ⛔ **L3 IS DONE (§7.3 A, the bank-date cutoff). Do not re-open it.** Its lesson generalises and the next
 > lane should read it: `peekBankDate` could NOT be the "mirror `peekDepositDate`" this file prescribed,
@@ -287,7 +287,7 @@ rows first — they carry the file:line and a proposed fix.**
 
 | Lane | Owns | Rows | ~n | The one thing not to get wrong |
 |---|---|---|---|---|
-| **L1 bill-wise** | `internal/ledger/ledger.go`, `internal/reporting/outstanding.go`, `screens/reports/ReportScreens.tsx` | 3, 5 | 7 | ⛔ **THREE of row 3's four highs collapse into ONE place**: `ledger.go:1754-1756` stamps the voucher number onto every unnamed reference with no uniqueness check, so two NEW refs merge into one bill AND an on-account payment nets against an unrelated invoice whose number happens to match. Fix the stamp, not the symptoms. Then `outstanding.go` honours `as_on` for AGEING but not for INCLUSION |
+| **L1 bill-wise** ⚠️ **PART DONE** | `internal/ledger/ledger.go`, `screens/reports/ReportScreens.tsx`, `screens/vouchers/BillAllocationPicker.tsx` — ⛔ **`internal/reporting/outstanding.go` IS DONE, do not re-open it** | 3, 5 | 4 | ✅ **D12, D65 and half of D13 are closed (§7.4 F8).** ⛔ **WHAT IS LEFT IS THE STAMP (D10/D11), AND THE CLIENT HALF IS THE HARD PART:** `BillAllocationPicker` offers a name field for AGAINST **only**, so a NEW reference CANNOT BE NAMED FROM THE KEYBOARD AT ALL — the server's stamp is the only namer. Any fix that refuses a duplicate is therefore UNREACHABLE (RULE 3) until that input exists. ⛔ **And D13's payable half is a BUILD:** `REPORT_NAMES`' own Order Book note forbids a `?kind=` toggle, because the PDP decides on the report NAME. Original note follows | ⛔ **THREE of row 3's four highs collapse into ONE place**: `ledger.go:1754-1756` stamps the voucher number onto every unnamed reference with no uniqueness check, so two NEW refs merge into one bill AND an on-account payment nets against an unrelated invoice whose number happens to match. Fix the stamp, not the symptoms. Then `outstanding.go` honours `as_on` for AGEING but not for INCLUSION |
 | **L2 wrong tenant + draft residual** | `app/CompanyContext.tsx`, `screens/vouchers/draftAccept.ts` | 33, 30 | 4 | §7.3 **C/D**: a malformed `?company=` silently opens somebody else's books; a ghost uuid wedges forever (cored 403s where the code expects 404). §7.3 **B**: the draft CONFIRM is fire-and-forget, so a network failure after a successful post loses the only durable acceptance record — **one bill, two vouchers, reproduced in a browser** |
 | ~~**L3 cutoff residual**~~ | — | 11 | 0 | ✅ **CLOSED — §7.3 A is fixed and driven on the wire (§7.4 F7).** Both ends judged, the refusal names the operator's own field, and the class now has a structural gate: every date-shaped json key on every wire type in package `server` must be classified, and every "judged" claim is EXECUTED. Read the box at the top of this file before writing another peek |
 | **L4 TDS** | `internal/masters/tds_challan.go`, `internal/server/server.go` (challan routes only), `api/types.ts` | 17 | 6 | ⛔ **Establish the missing allocate-later ROUTE first — it decides everything else in the lane.** Then: nothing compares a challan's allocations against the tax actually deposited, so ₹1 was accepted as having paid ₹27,000; and a TDS/TCS deduction cannot be keyed from the keyboard at all |

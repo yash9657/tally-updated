@@ -78,6 +78,34 @@ type SlabTotal struct {
 	Amount decimal.Decimal
 }
 
+// openingIsInScope reports whether the ledgers' OPENING bill-wise breakup belongs
+// in a report dated asOn. It is queryBalances' guard, applied to the other place
+// an opening position hides.
+//
+// ⚠️ IT MIRRORS THAT QUERY DELIBERATELY, INCLUDING THE FAIL-SAFE. An opening
+// carries no date of its own; it is stated as at company.books_beginning_from
+// (falling back to fy_start_date). Asked for a date BEFORE that, the position did
+// not exist, and reporting it made this report and the Balance Sheet disagree in
+// the one direction neither of them can explain.
+//
+// The company is NAMED rather than picked with LIMIT 1: `company` is FORCE ROW
+// LEVEL SECURITY today, but a caller running without the tenant GUC would
+// otherwise silently take an arbitrary tenant's books-beginning date and mis-date
+// this cutoff on somebody else's ageing. current_setting(…, true) yields NULL when
+// unset, matches no row, and falls through to "leave the opening in" — which is
+// the pre-existing behaviour and therefore the safe direction for a guard.
+func (s *Service) openingIsInScope(ctx context.Context, tx pgx.Tx, asOn time.Time) bool {
+	var begins string
+	err := tx.QueryRow(ctx,
+		`SELECT to_char(COALESCE(books_beginning_from, fy_start_date), 'YYYY-MM-DD')
+		   FROM company
+		  WHERE id = current_setting('app.current_company_id', true)::uuid`).Scan(&begins)
+	if err != nil {
+		return true
+	}
+	return asOn.Format("2006-01-02") >= begins
+}
+
 // Outstandings builds the bill-wise ageing report for receivables or payables as
 // of asOn (ISO date; empty means today). It aggregates references per
 // (ledger, ref_name) from TWO sources — bill_allocation rows belonging to the
@@ -135,6 +163,36 @@ func (s *Service) Outstandings(ctx context.Context, companyID uuid.UUID, kind Ou
 		//
 		// A settlement posted LATER against an opening reference nets against it
 		// naturally, because both sides land in the same (ledger, ref_name) group.
+		//
+		// =====================================================================
+		// ⛔ BOTH SOURCES ARE NOW DATED, AND NEITHER WAS. DRIVEN.
+		// =====================================================================
+		// This report honoured `as_on` for AGEING and not for INCLUSION: the
+		// sub-select carried no date predicate at all, so a bill raised AFTER the
+		// as-on date was reported under a caption asserting the two dates agreed.
+		// Driven in a browser: an os-total of 2,65,720.00 at as-on 2026-04-30
+		// against a Balance Sheet Sundry Debtors of 1,79,000.00 — two reports over
+		// one set of books, differing by 86,720.00, with nothing anywhere to
+		// reconcile them. An operator chasing debtors as at the quarter end was
+		// being shown invoices that did not exist yet.
+		//
+		// The predicate is spelled the way movementSQL spells it, deliberately: a
+		// voucher with a NULL date is dated into NO period, so it is excluded here
+		// exactly as it is excluded from every other as-at report. One convention.
+		//
+		// AND THE OPENING BREAKUP IS DATED TOO — as at books_beginning_from, the
+		// same fact queryBalances states for ledger.opening_balance. It carries no
+		// date column, so folding it in unconditionally reported the entire
+		// opening ageing for a date BEFORE the books existed. Excluding it is
+		// ALL-OR-NOTHING for the same reason it is there: opening references
+		// balance among themselves.
+		openingBranch := `
+			          UNION ALL
+			          SELECT ob.ledger_id, ob.ref_name, ob.dr_cr, ob.amount, ob.due_date
+			            FROM ledger_opening_bill ob`
+		if !s.openingIsInScope(ctx, tx, asOnTime) {
+			openingBranch = ""
+		}
 		rows, err := tx.Query(ctx, fmt.Sprintf(
 			`SELECT ba.ledger_id, l.name, g.name, ba.ref_name,
 			        %s AS pending,
@@ -148,16 +206,14 @@ func (s *Service) Outstandings(ctx context.Context, companyID uuid.UUID, kind Ou
 			             AND vh.voucher_id = vv.voucher_id
 			             AND vh.current_version_id = vv.id
 			           WHERE vh.is_deleted = false
-			          UNION ALL
-			          SELECT ob.ledger_id, ob.ref_name, ob.dr_cr, ob.amount, ob.due_date
-			            FROM ledger_opening_bill ob
+			             AND vv.voucher_date <= $2::date%s
 			        ) ba
 			   JOIN ledger l        ON l.id = ba.ledger_id
 			   JOIN account_group g ON g.id = l.group_id
 			  WHERE g.nature = $1
 			  GROUP BY ba.ledger_id, l.name, g.name, ba.ref_name
-			  ORDER BY l.name, ba.ref_name`, signExpr),
-			natureFilter)
+			  ORDER BY l.name, ba.ref_name`, signExpr, openingBranch),
+			natureFilter, asOnTime.Format("2006-01-02"))
 		if err != nil {
 			return fmt.Errorf("reporting: query outstandings: %w", err)
 		}

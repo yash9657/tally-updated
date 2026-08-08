@@ -554,18 +554,70 @@ export function OutstandingsScreen({ snapshot, onSelect }: ReportProps) {
   );
 
   const columns = "grid-cols-[1fr_8rem_8rem]";
-  const rows: DrillRow[] = (data?.parties ?? []).map((p) => ({
-    rowKey: `${LEDGER_ROW_PREFIX}${p.ledger}`,
-    values: [p.ledger, p.group, formatMoney(p.pending)],
-    exportCells: [textCell(p.ledger), textCell(p.group), moneyCell(p.pending)],
-    cells: (
-      <>
-        <span>{p.ledger}</span>
-        <span>{p.group}</span>
-        <span className="text-right">{formatMoney(p.pending)}</span>
-      </>
-    ),
-  }));
+  // ⛔ THE BILLS ARE THE REPORT. This screen rendered ONE ROW PER PARTY and
+  // dropped `p.bills` on the floor, which made it an ageing report with no
+  // ageing in it: a party's total is the one figure a Balance Sheet already
+  // gives, so nothing on any screen in this product could show WHICH invoice is
+  // open, when it fell due, or how far overdue it is — and therefore nothing
+  // could verify a bill-wise reference at all. The server has always sent the
+  // per-bill array; the client simply never read it.
+  //
+  // ⚠️ DEPTH 1, WHICH IS WHAT KEEPS THEM VISIBLE. reportView's condensed
+  // (default) view keeps rows at depth <= 1 and drops deeper ones, so a bill at
+  // depth 1 shows without an operator having to know about F12 — the mistake the
+  // Balance Sheet's Closing Stock row makes at depth 2.
+  //
+  // The bill row is NOT drillable: its rowKey names no ledger, and DrillRows'
+  // Enter handler would otherwise open whatever the party prefix resolved to.
+  const rows: DrillRow[] = [];
+  for (const p of data?.parties ?? []) {
+    rows.push({
+      rowKey: `${LEDGER_ROW_PREFIX}${p.ledger}`,
+      values: [p.ledger, p.group, formatMoney(p.pending)],
+      exportCells: [textCell(p.ledger), textCell(p.group), moneyCell(p.pending)],
+      cells: (
+        <>
+          <span>{p.ledger}</span>
+          <span>{p.group}</span>
+          <span className="text-right">{formatMoney(p.pending)}</span>
+        </>
+      ),
+    });
+    for (const b of p.bills ?? []) {
+      // The ageing, in the operator's words. "due 2026-05-20 · 47 days overdue"
+      // beats a bare slab label, because the slab is a bucket and the days are
+      // the fact — and a bill with no due date says so rather than reading as
+      // "not overdue", which is what an empty cell would imply.
+      const age =
+        b.overdue_days > 0
+          ? `${b.overdue_days} days overdue`
+          : b.due_date
+            ? "not yet due"
+            : "no due date";
+      const when = b.due_date ? `due ${b.due_date}` : "no due date recorded";
+      rows.push({
+        rowKey: `${LEDGER_ROW_PREFIX}${p.ledger}/${b.ref_name}`,
+        depth: 1,
+        drillable: false,
+        values: [`${b.ref_name} — ${when}`, age, formatMoney(b.pending)],
+        exportCells: [
+          textCell(b.ref_name),
+          textCell(b.due_date),
+          moneyCell(b.pending),
+        ],
+        cells: (
+          <>
+            <span className="pl-4">
+              {b.ref_name}
+              <span className="text-tally-field"> — {when}</span>
+            </span>
+            <span className="text-tally-field">{age}</span>
+            <span className="text-right">{formatMoney(b.pending)}</span>
+          </>
+        ),
+      });
+    }
+  }
   rows.push({
     rowKey: "__total__",
     drillable: false,
@@ -584,7 +636,11 @@ export function OutstandingsScreen({ snapshot, onSelect }: ReportProps) {
 
   const visible = useReportView(rows, snapshot, {
     title: "Outstandings",
-    headers: ["Party", "Group", "Pending"],
+    // ⚠️ THE HEADERS NAME BOTH ROW KINDS, because the sheet now carries both. A
+    // header reading "Group" over a column that holds a due date on every second
+    // row is the Stock Summary export's defect (a quantity under a header the
+    // next column's money contradicts) — declared here instead.
+    headers: ["Party / Bill ref", "Group / Due date", "Pending"],
     availability,
   });
 

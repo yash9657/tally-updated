@@ -112,10 +112,24 @@ func TestCashFlowInvarianceAndCreditDays(t *testing.T) {
 		t.Fatalf("post INV-1: %v", err)
 	}
 
-	// INV-2: receivable 590, NO due date -> credit_days path (voucher 2025-06-01 + 15 = 2025-06-16).
+	// INV-2: receivable 590, NO due date -> credit_days path (voucher 2025-05-01
+	// + 15 = 2025-05-16).
+	//
+	// ⛔ IT WAS DATED 2025-06-01, A MONTH AFTER THE asOn THIS TEST PROJECTS FROM,
+	// AND THAT WAS PINNING A DEFECT RATHER THAN TESTING ONE. reporting.Outstandings
+	// honoured `as_on` for AGEING and not for INCLUSION, so an invoice raised a
+	// month in the FUTURE was part of the receivables position "as at 2025-05-01"
+	// — and this test's sanity line wrote that down as the expectation (1770).
+	//
+	// It matters here more than in most places: this is the CASH-FLOW PROJECTION.
+	// A projection made on 1 May that already knows about an invoice raised on 1
+	// June is not a forecast, it is hindsight — and every figure it produces would
+	// be unreproducible on the day it claims to be about. The invoice is therefore
+	// dated ON the asOn date, which tests the credit_days branch just as well: the
+	// bill has no due date either way, which is the whole point of the branch.
 	if _, err := led.PostVoucher(ctx, ledger.VoucherInput{
 		Class: ledger.Sales, VoucherTypeID: salesVT, PartyLedgerID: acme,
-		VoucherNo: "INV-2", VoucherDate: "2025-06-01", Party: "Acme Corp", CreatedBy: "tester",
+		VoucherNo: "INV-2", VoucherDate: "2025-05-01", Party: "Acme Corp", CreatedBy: "tester",
 		Postings: []ledger.PostingInput{
 			{LedgerID: acme, DrCr: ledger.Debit, Amount: dec("590")},
 			{LedgerID: sales, DrCr: ledger.Credit, Amount: dec("590")},
@@ -147,19 +161,24 @@ func TestCashFlowInvarianceAndCreditDays(t *testing.T) {
 	if !inflowTotal.Equal(recv.Total) {
 		t.Fatalf("invariance: projected inflow total %s != reporting receivables total %s", inflowTotal, recv.Total)
 	}
+	// 1180 + 590, both raised ON the asOn date. See INV-2's note: the 1770 that
+	// stood here was the same figure, but it was reached by including an invoice
+	// dated a month AFTER the date being projected from.
 	if !recv.Total.Equal(dec("1770")) {
 		t.Fatalf("sanity: receivables total = %s, want 1770", recv.Total)
 	}
 
 	// --- credit_days branch is LIVE: INV-2 (no due date, credit_days 15) settles
-	// 2025-06-16 = day 46 from asOn -> bucket 6 (46/7). With the +30 default it
-	// would be 2025-07-01 = day 61 -> bucket 8. Asserting bucket 6 carries the 590
-	// proves credit_days was read, not defaulted.
-	if got := p.Buckets[6].Inflow; !got.Equal(dec("590")) {
-		t.Fatalf("credit_days: bucket 6 inflow = %s, want 590 (credit_days not read?)", got)
+	// 2025-05-16 = day 15 from asOn -> bucket 2 (15/7). With the +30 default it
+	// would be 2025-05-31 = day 30 -> bucket 4. Asserting bucket 2 carries the 590
+	// AND bucket 4 carries nothing proves credit_days was read, not defaulted —
+	// the differential is the test, and it survives the re-dating above unchanged
+	// because both arms move by the same month.
+	if got := p.Buckets[2].Inflow; !got.Equal(dec("590")) {
+		t.Fatalf("credit_days: bucket 2 inflow = %s, want 590 (credit_days not read?)", got)
 	}
-	if got := p.Buckets[8].Inflow; !got.IsZero() {
-		t.Fatalf("credit_days: bucket 8 inflow = %s, want 0 (bill placed by the +30 default?)", got)
+	if got := p.Buckets[4].Inflow; !got.IsZero() {
+		t.Fatalf("credit_days: bucket 4 inflow = %s, want 0 (bill placed by the +30 default?)", got)
 	}
 	// INV-1 (due 2025-05-10 = day 9) -> bucket 1.
 	if got := p.Buckets[1].Inflow; !got.Equal(dec("1180")) {

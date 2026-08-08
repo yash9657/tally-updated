@@ -270,3 +270,104 @@ describe("the F2 period reaches each statement with the RIGHT bounds", () => {
     );
   });
 });
+
+/**
+ * ⛔ THE AGEING REPORT HAD NO AGEING IN IT.
+ *
+ * OutstandingsScreen rendered one row per party and dropped `p.bills` — the
+ * per-bill array the server has always sent. A party's total is the one figure
+ * the Balance Sheet already gives, so with the bills missing NOTHING on ANY
+ * screen in this product could show which invoice is open, when it fell due, or
+ * how overdue it is. That is not a missing nicety: it means no on-screen surface
+ * could verify a bill-wise reference at all, which is why a whole class of
+ * bill-wise defects reached a browser undetected.
+ *
+ * The control is the party row: a change that rendered ONLY bills would satisfy
+ * every assertion about bills and would have deleted the report's own summary.
+ */
+describe("Outstandings shows the BILLS, not just the party totals", () => {
+  const twoBills = () =>
+    vi.fn(async () => ({
+      kind: "RECEIVABLE" as const,
+      as_on: "2026-06-30",
+      parties: [
+        {
+          ledger_id: "led-acme",
+          ledger: "Acme",
+          group: "Sundry Debtors",
+          pending: "11800.0000",
+          bills: [
+            {
+              ref_name: "INV/0007",
+              pending: "5900.0000",
+              due_date: "2026-05-20",
+              overdue_days: 41,
+              slab: "0-45 days",
+            },
+            {
+              ref_name: "INV/0008",
+              pending: "5900.0000",
+              due_date: "2026-07-20",
+              overdue_days: 0,
+              slab: "0-45 days",
+            },
+          ],
+        },
+      ],
+      slab_totals: [],
+      total: "11800.0000",
+    }));
+
+  it("renders each bill with its reference, its due date and its ageing", async () => {
+    renderReport(OutstandingsScreen, { getOutstandings: twoBills() });
+
+    // THE CONTROL FIRST: the party summary is still there.
+    await waitFor(() => expect(screen.getByText("Acme")).toBeTruthy());
+    expect(screen.getByTestId("os-total").textContent).toBe("11,800.00");
+
+    // Both bills, each named. Before the fix the screen showed one row reading
+    // "Acme … 11,800.00" and an operator could not tell it was two invoices.
+    expect(screen.getByText("INV/0007")).toBeTruthy();
+    expect(screen.getByText("INV/0008")).toBeTruthy();
+
+    // The due date is ON the row, and the ageing is stated in days rather than
+    // only as a slab — the slab is a bucket, the days are the fact.
+    expect(screen.getByText(/due 2026-05-20/)).toBeTruthy();
+    expect(screen.getByText("41 days overdue")).toBeTruthy();
+
+    // ⚠️ AND A BILL THAT IS NOT YET DUE SAYS SO. An empty cell here would read
+    // as "not overdue" for a bill with no due date at all, which is a different
+    // fact and the one that hides a bill nobody is chasing.
+    expect(screen.getByText("not yet due")).toBeTruthy();
+  });
+
+  it("says so when a bill carries no due date, rather than leaving it blank", async () => {
+    const getOutstandings = vi.fn(async () => ({
+      kind: "RECEIVABLE" as const,
+      as_on: "2026-06-30",
+      parties: [
+        {
+          ledger_id: "led-x",
+          ledger: "No Terms Ltd",
+          group: "Sundry Debtors",
+          pending: "1000.0000",
+          bills: [
+            {
+              ref_name: "OPEN-1",
+              pending: "1000.0000",
+              due_date: "",
+              overdue_days: 0,
+              slab: "0-45 days",
+            },
+          ],
+        },
+      ],
+      slab_totals: [],
+      total: "1000.0000",
+    }));
+    renderReport(OutstandingsScreen, { getOutstandings });
+    await waitFor(() => expect(screen.getByText("OPEN-1")).toBeTruthy());
+    expect(screen.getByText(/no due date recorded/)).toBeTruthy();
+    expect(screen.getByText("no due date")).toBeTruthy();
+  });
+});
