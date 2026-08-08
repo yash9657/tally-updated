@@ -132,3 +132,78 @@ func TestCutoffDenyRefusesTheZeroDateSentinelAndSaysWhy(t *testing.T) {
 			"dates AFTER it and nobody can enter today's vouchers", d)
 	}
 }
+
+// TestTheRefusalNamesTheFieldTheOperatorTyped covers Request.DateSubject, which
+// exists because the cutoff stopped being only about vouchers.
+//
+// The bank-reconciliation routes assert a `bank_date` ticked off a statement, and
+// that screen has no voucher date on it. Telling the clerk that "voucher date is
+// before the back-dated cutoff" names a field they cannot see and sends them to
+// look at the voucher instead of at the date they typed — the same class of harm
+// as a refusal that does not name the boundary, which is what the tests above
+// exist for.
+//
+// ⛔ THE DEFAULT MUST BE BYTE-IDENTICAL. Every other write in the product leaves
+// DateSubject empty, and three test files plus the client read those four
+// sentences verbatim, so the empty case is asserted here as well as the override.
+func TestTheRefusalNamesTheFieldTheOperatorTyped(t *testing.T) {
+	level := Level{IsOwner: true, DefaultAccess: "full", BackdatedCutoff: date("2026-07-01")}
+	var zero time.Time
+
+	for _, tc := range []struct {
+		name string
+		req  Request
+		want string
+	}{
+		{
+			name: "the voucher's own date is unchanged",
+			req:  Request{Action: Create, Resource: "sales", VoucherDate: date("2026-05-31")},
+			want: "voucher date is before the back-dated cutoff of 2026-07-01",
+		},
+		{
+			name: "the voucher's unreadable date is unchanged",
+			req:  Request{Action: Create, Resource: "sales", VoucherDate: &zero},
+			want: "the voucher date could not be read, so the back-dated cutoff of 2026-07-01 cannot be cleared",
+		},
+		{
+			name: "a stored voucher date is unchanged",
+			req: Request{Action: Alter, Resource: "sales",
+				StoredVoucherDate: date("2026-05-31")},
+			want: "this voucher is dated 2026-05-31, inside the period closed by the back-dated cutoff of 2026-07-01",
+		},
+		{
+			name: "a bank date names itself",
+			req: Request{Action: Alter, Resource: "bank-reconciliation",
+				VoucherDate: date("2026-05-31"), DateSubject: "bank date"},
+			want: "bank date is before the back-dated cutoff of 2026-07-01",
+		},
+		{
+			name: "an unreadable bank date names itself",
+			req: Request{Action: Alter, Resource: "bank-reconciliation",
+				VoucherDate: &zero, DateSubject: "bank date"},
+			want: "the bank date could not be read, so the back-dated cutoff of 2026-07-01 cannot be cleared",
+		},
+		{
+			name: "a STORED bank date names itself, and the date on record",
+			req: Request{Action: Alter, Resource: "bank-reconciliation",
+				StoredVoucherDate: date("2026-05-20"), DateSubject: "bank date"},
+			want: "this bank date of 2026-05-20 is inside the period closed by the back-dated cutoff of 2026-07-01",
+		},
+		{
+			name: "an unreadable STORED bank date names itself",
+			req: Request{Action: Alter, Resource: "bank-reconciliation",
+				StoredVoucherDate: &zero, DateSubject: "bank date"},
+			want: "the stored bank date could not be read, so the back-dated cutoff of 2026-07-01 cannot be cleared",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := Evaluate(level, nil, tc.req)
+			if d.Allow {
+				t.Fatalf("ALLOWED: %+v", d)
+			}
+			if d.Reason != tc.want {
+				t.Errorf("refusal reason =\n  %q\nwant\n  %q", d.Reason, tc.want)
+			}
+		})
+	}
+}

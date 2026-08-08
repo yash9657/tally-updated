@@ -45,6 +45,15 @@ func paramValue(name, companyID string) string {
 	if name == "companyID" {
 		return companyID
 	}
+	// ⚠️ NOT EVERY PARAMETER IS A UUID, and a synthesised path that pretends
+	// otherwise is a path the PDP cannot fully parse — so any check keyed on a
+	// parsed parameter silently reads as "this route is not one of mine" in every
+	// test built on this helper. {legNo} is an ordinal (bankReconPathParams calls
+	// strconv.Atoi on it); handing it a uuid made the bank-reconciliation arm of
+	// voucherDateFromRequest invisible to TestTheCutoffActuallyReadsEveryDateItClaimsToRead.
+	if name == "legNo" {
+		return "0"
+	}
 	return uuid.NewString()
 }
 

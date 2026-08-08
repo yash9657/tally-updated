@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -271,7 +273,7 @@ func (s *Server) companyAuthMiddleware(next http.Handler) http.Handler {
 		// statements ago for the rule evaluation), so the gate itself is free.
 		var storedDate *time.Time
 		if level.BackdatedCutoff != nil {
-			storedDate = s.storedVoucherDateForRequest(r, companyID, act)
+			storedDate = s.storedCutoffDateForRequest(r, companyID, act)
 		}
 
 		req := authz.Request{
@@ -282,6 +284,7 @@ func (s *Server) companyAuthMiddleware(next http.Handler) http.Handler {
 			ResourceName:      resName,
 			VoucherDate:       voucherDateFromRequest(r, act),
 			StoredVoucherDate: storedDate,
+			DateSubject:       cutoffDateSubject(r),
 			HasWebAuthn:       claims.HasWebAuthn(),
 		}
 		decision := authz.Evaluate(level, rules, req)
@@ -371,6 +374,19 @@ func voucherDateFromRequest(r *http.Request, act authz.Action) *time.Time {
 	challanSegs := splitPath(routeSuffix(r))
 	if len(challanSegs) == 1 && challanSegs[0] == "tds-challans" {
 		return peekDepositDate(body)
+	}
+	// THE BANK DATE IS THE THIRD ROUTE OF THIS SHAPE, and it shipped with
+	// routeAction's comment asserting the cutoff already reached it. See
+	// peekBankDate for why it is not a copy of the challan's peek (the store
+	// accepts spellings Go's layout rejects, so an unreadable one fails CLOSED)
+	// and bankReconLeg for why the route is matched the way routeAction matches it.
+	//
+	// ⚠️ ONLY THE PUT CARRIES A DATE. The DELETE un-reconciles and has no body at
+	// all; its whole act is on the STORED bank date, which is judged as the source
+	// end by storedBankDateForRequest — the same both-ends rule round 3 established
+	// for the voucher ALTER and DELETE.
+	if _, ok := bankReconLeg(r); ok && r.Method == http.MethodPut {
+		return peekBankDate(body)
 	}
 	d := peekVoucherDate(body)
 	if d == nil {
@@ -554,6 +570,99 @@ func (s *Server) storedVoucherDateForRequest(r *http.Request, companyID uuid.UUI
 	return earliest
 }
 
+// storedCutoffDateForRequest is the ONE entry point the middleware uses for "the
+// date this write would move or remove". It dispatches on the route, because two
+// different documents are datable here and they live in different tables:
+//
+//	the four voucher routes   the voucher's own date   (voucher_version)
+//	the two bank-recon routes the leg's bank date      (bank_reconciliation)
+//
+// ⛔ THE BANK-RECON ROUTES DELIBERATELY DO NOT JUDGE THE VOUCHER'S OWN DATE, AND
+// THAT IS A DOOR LEFT OPEN ON PURPOSE. Clearing a cheque written in April
+// against a statement that arrives in August is the ordinary work of a
+// reconciliation, and migration 0045's trigger already requires
+// bank_date >= voucher_date, so nearly every leg an operator ticks names a
+// voucher OLDER than the tick. Judging the voucher's date here would refuse the
+// feature at every company that has ever locked a period, while protecting
+// nothing: invariant I-2 is that reconciling moves no ledger figure, so no filed
+// return changes. What the cutoff owns here is the BANK DATE — the assertion the
+// operator is making about when money moved.
+func (s *Server) storedCutoffDateForRequest(r *http.Request, companyID uuid.UUID, act authz.Action) *time.Time {
+	if !act.IsWrite() {
+		return nil
+	}
+	if leg, ok := bankReconLeg(r); ok {
+		return s.storedBankDateForLeg(r, companyID, leg)
+	}
+	return s.storedVoucherDateForRequest(r, companyID, act)
+}
+
+// storedBankDateForLeg returns the bank date the books ALREADY hold for one leg,
+// so the cutoff judges the SOURCE end of a re-tick or an un-tick. The three
+// answers are the three the whole cutoff seam uses:
+//
+//	nil                 this leg is not reconciled yet, so there is no stored
+//	                    assertion to move or withdraw. ⚠️ UNLIKE A NAMED VOUCHER,
+//	                    THIS ABSENCE IS ORDINARY AND MUST NOT REFUSE: a first tick
+//	                    is the common case, and handleClearBankDate is deliberately
+//	                    idempotent, so un-ticking an un-ticked leg is a 200 that
+//	                    withdraws nothing.
+//	a date              the bank date currently on record.
+//	beforeEveryCutoff() the store could not be asked. Fail CLOSED.
+//
+// ⛔ WHY THE SOURCE END IS JUDGED AT ALL, when the destination check already
+// stops a date being asserted into a locked period: the PUT is an UPSERT
+// (banking.SetBankDate's ON CONFLICT ... DO UPDATE), so without this a leg
+// cleared inside a filed quarter could be re-stamped with a post-cutoff date and
+// walk out of the lock, and the DELETE could remove it outright. That is exactly
+// the asymmetry round 3 found on the voucher ALTER and DELETE, one table across.
+func (s *Server) storedBankDateForLeg(r *http.Request, companyID uuid.UUID, leg bankReconLegRef) *time.Time {
+	if s.pool == nil {
+		return beforeEveryCutoff()
+	}
+	// db.WithCompany binds RLS; membership in {companyID} is already confirmed by
+	// this point, and the read is a RunInReadOnlyTx so a mistake here cannot become
+	// a write on the authorization path. Both are storedVoucherDateForRequest's
+	// arguments, unchanged.
+	ctx := db.WithCompany(r.Context(), companyID)
+	var (
+		found   bool
+		spelled *string
+	)
+	err := s.pool.RunInReadOnlyTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		row := tx.QueryRow(ctx, storedBankDateSQL,
+			companyID, leg.voucherID, leg.ledgerID, leg.legNo)
+		switch err := row.Scan(&spelled); {
+		case errors.Is(err, pgx.ErrNoRows):
+			return nil // not reconciled yet: see the doc above.
+		case err != nil:
+			return err
+		}
+		found = true
+		return nil
+	})
+	if err != nil {
+		return beforeEveryCutoff()
+	}
+	if !found || spelled == nil {
+		return nil
+	}
+	d, perr := time.Parse("2006-01-02", *spelled)
+	if perr != nil {
+		// to_char produced something this layout cannot read, from a NOT NULL DATE
+		// column. It should be impossible, and "impossible" is the case that must
+		// not fail open — round 1's whole lesson.
+		return beforeEveryCutoff()
+	}
+	return &d
+}
+
+// storedBankDateSQL reads the bank date one leg currently carries. The key is
+// bank_reconciliation's own uniqueness constraint, so at most one row can match.
+const storedBankDateSQL = `SELECT to_char(bank_date, 'YYYY-MM-DD')
+	   FROM bank_reconciliation
+	  WHERE company_id = $1 AND voucher_id = $2 AND ledger_id = $3 AND leg_no = $4`
+
 // storedVoucherDateSQL reads the CURRENT (head) version's date for a set of
 // logical vouchers. It mirrors ledger.GetVoucher's head join EXACTLY —
 // voucher_head.current_version_id, `is_deleted = false` — so the PDP and the
@@ -696,6 +805,71 @@ func existingVouchersNamedByRequest(r *http.Request, act authz.Action) namedVouc
 		return namedVouchers{guids: peekTallyXMLSupersededGUIDs(drainBody(r))}
 	}
 	return namedVouchers{}
+}
+
+// cutoffDateSubject names the date THIS request asserts, so a refusal can be
+// about the field the operator actually typed. Empty means the voucher's own
+// date, which is every other write in the product and which
+// authz.requestedCutoffDeny renders with its original wording.
+//
+// It exists because the bank-reconciliation routes are the first place where the
+// cutoff judges something an operator would not call a voucher date: telling
+// somebody ticking a cheque off a statement that "voucher date is before the
+// back-dated cutoff" names a field their screen does not have, and sends them to
+// look at the voucher instead of at the date they typed. The pay run and the
+// challan are deliberately NOT given a subject here — `wage_month` IS the
+// voucher's date (payrolldb.LastDayOf of it) and `deposit_date` dates the
+// document the request creates, so "voucher date" is not wrong for either.
+func cutoffDateSubject(r *http.Request) string {
+	if _, ok := bankReconLeg(r); ok {
+		return "bank date"
+	}
+	return ""
+}
+
+// bankReconLegRef names one reconciliation row: the leg of one voucher against
+// one bank ledger. It is the primary key bank_reconciliation is unique on
+// (company_id, voucher_id, ledger_id, leg_no), minus the company.
+type bankReconLegRef struct {
+	ledgerID  uuid.UUID
+	voucherID uuid.UUID
+	legNo     int
+}
+
+// bankReconLeg recognises the two bank-reconciliation WRITE routes and parses the
+// leg they name:
+//
+//	PUT    .../bank-reconciliation/{ledgerID}/{voucherID}/{legNo}   assert a bank date
+//	DELETE .../bank-reconciliation/{ledgerID}/{voucherID}/{legNo}   withdraw one
+//
+// ⛔ THE PREFIX IS THE ONE routeAction MATCHES, for the reason
+// voucherDateFromRequest states at length for the pay run: one notion of route
+// identity, so the PDP's date logic and the PDP's action mapping cannot disagree
+// about which request this is. routeAction maps any method on this prefix and
+// leaves PUT/DELETE as Alter; this narrows that to the shape the router actually
+// mounts, because a leg is what the date question is about.
+//
+// ⚠️ AN UNPARSEABLE PARAMETER RETURNS ok=false, AND THAT IS NOT A FAIL-OPEN. It
+// is parseVoucherID's call: bankReconPathParams parses the SAME three segments
+// with the same calls and answers 400 before banking.SetBankDate touches a row,
+// so no reconciliation can land in a locked period through a malformed name.
+func bankReconLeg(r *http.Request) (bankReconLegRef, bool) {
+	switch r.Method {
+	case http.MethodPut, http.MethodDelete:
+	default:
+		return bankReconLegRef{}, false
+	}
+	segs := splitPath(routeSuffix(r))
+	if len(segs) != 4 || segs[0] != "bank-reconciliation" {
+		return bankReconLegRef{}, false
+	}
+	ledgerID, lerr := uuid.Parse(segs[1])
+	voucherID, verr := uuid.Parse(segs[2])
+	legNo, nerr := strconv.Atoi(segs[3])
+	if lerr != nil || verr != nil || nerr != nil || legNo < 0 {
+		return bankReconLegRef{}, false
+	}
+	return bankReconLegRef{ledgerID: ledgerID, voucherID: voucherID, legNo: legNo}, true
 }
 
 // parseVoucherID turns one path segment into the (0 or 1)-element id list.
@@ -1019,11 +1193,26 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 	// Data Entry) and the read is a REPORT, which 0046 explicitly DISALLOWS at
 	// specificity 2 so 0011's coarse `allow display report` cannot reach it.
 	//
-	// The write is an Alter and therefore IS a write, so it correctly inherits
-	// the back-dated cutoff — a bank date asserted into a closed period is
-	// exactly the kind of back-dating that cutoff exists for. It does not change
-	// a balance, so no separate step-up decision is implied beyond whatever the
-	// level already requires of an Alter.
+	// ⛔ THE CUTOFF, AND THE FOUR LINES THAT USED TO STAND HERE. This comment
+	// said the write "correctly inherits the back-dated cutoff — a bank date
+	// asserted into a closed period is exactly the kind of back-dating that
+	// cutoff exists for". The second half was true and the first half was NOT:
+	// being an Alter is what makes a request a write, and a write is judged on
+	// the date it CARRIES — which the peek looked for under `voucher_date`, while
+	// setBankDateReq spells it `bank_date`. So the PDP had no date, cutoffDeny
+	// skipped, and a bank date could be asserted into a filed period. Byte for
+	// byte the TDS challan's defect, which also shipped with comments asserting
+	// the opposite; found by a browser-driven audit, not hypothetically.
+	//
+	// It is now genuinely judged, on BOTH ends and by the routes' own field:
+	// peekBankDate reads the `bank_date` being asserted (the destination) and
+	// storedBankDateForLeg reads the one already on the leg (the source, since
+	// the PUT is an upsert and the DELETE withdraws). ⚠️ The voucher's OWN date
+	// is deliberately not judged here — see storedCutoffDateForRequest for why
+	// judging it would refuse ordinary reconciliation while protecting nothing.
+	//
+	// It does not change a balance, so no separate step-up decision is implied
+	// beyond whatever the level already requires of an Alter.
 	case strings.HasPrefix(rest, "/bank-reconciliation/"):
 		switch method {
 		case http.MethodGet:

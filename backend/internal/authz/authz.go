@@ -130,7 +130,18 @@ type Request struct {
 	// written to avoid, and the same argument applies here. Two fields let the
 	// refusal name WHICH end of the move is inside the lock.
 	StoredVoucherDate *time.Time
-	HasWebAuthn       bool // from the token AMR
+	// DateSubject names, in the operator's words, WHICH date the two fields above
+	// carry. Empty means the voucher's own date — every write in the product
+	// except the bank-reconciliation routes, whose date is a `bank_date` ticked
+	// off a statement.
+	//
+	// It exists so a refusal cannot name a field the operator's screen does not
+	// have. It changes NO wording when it is empty: the four cutoff sentences are
+	// read verbatim by authz/cutoff_reason_test.go, auth_backdated_spelling_test.go
+	// and auth_payroll_cutoff_test.go, and by the client, which surfaces them
+	// unaltered.
+	DateSubject string
+	HasWebAuthn bool // from the token AMR
 }
 
 // Decision is the PDP verdict.
@@ -374,6 +385,10 @@ func storedCutoffDeny(level Level, req Request) (Decision, bool) {
 		// records: parseCutoff puts no lower bound on a cutoff, so a level whose
 		// cutoff IS 0001-01-01 would make `zero.Before(cutoff)` false and the
 		// fail-closed sentinel would fail OPEN at exactly that one setting.
+		if req.DateSubject != "" {
+			return deny("the stored " + req.DateSubject + " could not be read, so the " +
+				"back-dated cutoff of " + cutoff + " cannot be cleared"), true
+		}
 		return deny("the stored date of the voucher being changed could not be read, so the " +
 			"back-dated cutoff of " + cutoff + " cannot be cleared"), true
 	}
@@ -381,7 +396,12 @@ func storedCutoffDeny(level Level, req Request) (Decision, bool) {
 		// Name the date the voucher is ON. The operator's own field is fine; what
 		// they need to be told is that the voucher they picked lives inside a
 		// filed period, and where that period starts.
-		return deny("this voucher is dated " + req.StoredVoucherDate.UTC().Format("2006-01-02") +
+		stored := req.StoredVoucherDate.UTC().Format("2006-01-02")
+		if req.DateSubject != "" {
+			return deny("this " + req.DateSubject + " of " + stored +
+				" is inside the period closed by the back-dated cutoff of " + cutoff), true
+		}
+		return deny("this voucher is dated " + stored +
 			", inside the period closed by the back-dated cutoff of " + cutoff), true
 	}
 	return Decision{}, false
@@ -408,10 +428,17 @@ func requestedCutoffDeny(level Level, req Request) (Decision, bool) {
 		// purpose. parseCutoff puts no lower bound on a cutoff, so a level whose
 		// cutoff IS 0001-01-01 would make `zero.Before(cutoff)` false and the
 		// fail-closed sentinel would fail OPEN at exactly that one setting.
+		if req.DateSubject != "" {
+			return deny("the " + req.DateSubject + " could not be read, so the back-dated cutoff of " +
+				cutoff + " cannot be cleared"), true
+		}
 		return deny("the voucher date could not be read, so the back-dated cutoff of " +
 			cutoff + " cannot be cleared"), true
 	}
 	if req.VoucherDate.Before(*level.BackdatedCutoff) {
+		if req.DateSubject != "" {
+			return deny(req.DateSubject + " is before the back-dated cutoff of " + cutoff), true
+		}
 		return deny("voucher date is before the back-dated cutoff of " + cutoff), true
 	}
 	return Decision{}, false

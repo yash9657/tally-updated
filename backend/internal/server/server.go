@@ -3766,6 +3766,59 @@ func peekDepositDate(body []byte) *time.Time {
 	return &d
 }
 
+// peekBankDate extracts `bank_date` from a bank-reconciliation write body — the
+// THIRD route whose date is not spelled `voucher_date`, after the pay run's
+// `wage_month` and the challan's `deposit_date`.
+//
+// ⛔ IT SHIPPED WITH routeAction's COMMENT ASSERTING THE CONTROL WAS IN PLACE:
+// "the write is an Alter and therefore IS a write, so it correctly inherits the
+// back-dated cutoff — a bank date asserted into a closed period is exactly the
+// kind of back-dating that cutoff exists for". The claim was right and the
+// control was absent: setBankDateReq carries `bank_date`, the peek looked for
+// `voucher_date`, so the PDP had no date, and cutoffDeny skips entirely when the
+// date is nil. Byte for byte the challan's defect, found the same way — by
+// asking whether the claim was true rather than whether it was plausible.
+//
+// ===========================================================================
+// ⛔ AND IT IS *NOT* A COPY OF peekDepositDate, BECAUSE THE STORE IS DIFFERENT
+// ===========================================================================
+// peekDepositDate returns nil for a date it cannot parse, and the reason is
+// stated there: masters.validateTDSChallan parses `deposit_date` with EXACTLY
+// "2006-01-02", so a loosely-spelled one never becomes a stored row — it dies at
+// 400 naming the field, which is the more useful answer than a 403 about a lock.
+//
+// THAT ARGUMENT DOES NOT HOLD HERE. banking.SetBankDate hands the string
+// STRAIGHT to Postgres as `$6::date`, and Postgres accepts spellings Go's
+// "2006-01-02" layout rejects — `2026-5-20` among them. So a loose spelling
+// REACHES THE TABLE, dated inside the locked period, exactly as round 1's
+// loosely-spelled `voucher_date` did. A present-but-unparseable bank date
+// therefore fails CLOSED (the pay run's convention) rather than returning nil:
+// "I cannot tell which period this asserts about" must never be spelled the same
+// way as "it asserts about no period".
+//
+// An ABSENT or empty bank_date still returns nil, and that one IS peekDepositDate's
+// call: handleSetBankDate refuses it with "bank_date is required" before
+// banking.SetBankDate is reached, so no row can land in the locked period through
+// an omitted field, and a 400 naming the field beats a 403 about a period lock.
+func peekBankDate(body []byte) *time.Time {
+	var probe struct {
+		BankDate string `json:"bank_date"`
+	}
+	// ⚠️ DECODED THE WAY decodeJSON DECODES — `Decoder.Decode`, not
+	// `json.Unmarshal` — which is round 5's trailing-byte door, and binding through
+	// encoding/json is round 4's key-case door. Both are structural here rather
+	// than remembered: the probe is a struct with the handler's own tag, so the two
+	// bind the same key by the same rules.
+	if err := json.NewDecoder(bytes.NewReader(body)).Decode(&probe); err != nil || probe.BankDate == "" {
+		return nil
+	}
+	d, err := time.Parse("2006-01-02", probe.BankDate)
+	if err != nil {
+		return beforeEveryCutoff() // see the header: Postgres would accept it.
+	}
+	return &d
+}
+
 // peekPayrollVoucherDate derives the PAY RUN's voucher date for the back-dated
 // cutoff check, from the only field that carries it: wage_month.
 //

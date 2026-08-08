@@ -750,15 +750,22 @@ var writeRoutesNamingADocumentButNotMovingIt = map[string]string{
 
 	// Ticking a cheque off against a statement. banking.SetBankDate writes only
 	// bank_reconciliation rows (invariant I-2: reconciling moves nothing), so no
-	// ledger figure in the filed period changes and no filed return is affected.
-	// ⚠️ SEPARATELY: the `bank_date` these carry is NOT judged by the cutoff at
-	// all — routeAction's comment on this prefix claims it is, and that claim is
-	// still wrong, because the peek looks for `voucher_date`. That is the
-	// pay-run/TDS-challan class (a date under a DIFFERENT KEY), not this one.
+	// ledger figure in the filed period changes and no filed return is affected —
+	// which is why the VOUCHER's own date is not judged for these two, and must
+	// not be: a cheque written in April and cleared in August is the ordinary
+	// case, and 0045's trigger requires bank_date >= voucher_date, so judging the
+	// voucher would refuse the feature at every company that has locked a period.
+	// See storedCutoffDateForRequest.
+	//
+	// ⚠️ THEIR OWN DATE — the `bank_date` — IS JUDGED, and was not when this entry
+	// was first written: peekBankDate reads the asserted one and
+	// storedBankDateForLeg the stored one, both ends, exactly as the voucher
+	// routes above. That hole is the one routeAction's comment on this prefix
+	// asserted was already closed; see auth_bank_date_cutoff_test.go.
 	"PUT /v1/companies/{companyID}/bank-reconciliation/{ledgerID}/{voucherID}/{legNo}": "" +
-		"writes only bank_reconciliation; no ledger figure moves",
+		"writes only bank_reconciliation; no ledger figure moves (its bank_date is judged separately)",
 	"DELETE /v1/companies/{companyID}/bank-reconciliation/{ledgerID}/{voucherID}/{legNo}": "" +
-		"writes only bank_reconciliation; no ledger figure moves",
+		"writes only bank_reconciliation; no ledger figure moves (its bank_date is judged separately)",
 
 	// Raising an e-way bill / an e-invoice AGAINST a voucher. Both are siblings
 	// of the ledger, not callers of it (archtest pins internal/ewaybill and

@@ -39,9 +39,16 @@ a proposed fix.** Your job is to burn them down, in parallel, without breaking t
 |---|---|
 | Rows driven | **34 of 34** — the measurement is closed, do not re-drive to "check" |
 | Register defects (`§7.1`) | **78** · closed **11** · ⛔ **open 67** (31 high, 26 medium, 10 low) |
-| Found while fixing | **16** · closed **11** · ⛔ **open 5** (`§7.3`) |
-| ⛔ **YOUR WORK LIST** | **72 open defects.** §3 groups them into lanes by FILE OWNERSHIP |
-| Gates, measured 2026-08-08 | backend **2463 / 0 SKIP / 0 FAIL**, frontend **1074 / 69 files**, insightd **137**, `tsc` clean, `make verify` **exit 0**, `verify:demo` **33/33** |
+| Found while fixing | **16** · closed **12** · ⛔ **open 4** (`§7.3` **B, C, D**) |
+| ⛔ **YOUR WORK LIST** | **71 open defects.** §3 groups them into lanes by FILE OWNERSHIP |
+| Gates, measured 2026-08-08 | backend **2483 / 0 SKIP / 0 FAIL**, frontend **1074 / 69 files**, insightd **137**, `tsc` clean, `make verify` **exit 0**, `verify:demo` **33/33** |
+
+> ⛔ **L3 IS DONE (§7.3 A, the bank-date cutoff). Do not re-open it.** Its lesson generalises and the next
+> lane should read it: `peekBankDate` could NOT be the "mirror `peekDepositDate`" this file prescribed,
+> because the two stores disagree about what a date is — `masters.validateTDSChallan` parses strictly and
+> 400s, while `banking.SetBankDate` hands the string to Postgres as `$6::date`, which **accepts `2026-5-20`**.
+> Copying the sibling verbatim would have shipped the round-1 loose-spelling door on a new route.
+> **The peek's fail-open/fail-closed choice belongs to the STORE behind it, not to the sibling beside it.**
 
 ## ⛔ SPEED IS A REQUIREMENT, AND PARALLELISM IS HOW YOU GET IT — BUT ONLY ONE SHAPE WORKS
 
@@ -282,7 +289,7 @@ rows first — they carry the file:line and a proposed fix.**
 |---|---|---|---|---|
 | **L1 bill-wise** | `internal/ledger/ledger.go`, `internal/reporting/outstanding.go`, `screens/reports/ReportScreens.tsx` | 3, 5 | 7 | ⛔ **THREE of row 3's four highs collapse into ONE place**: `ledger.go:1754-1756` stamps the voucher number onto every unnamed reference with no uniqueness check, so two NEW refs merge into one bill AND an on-account payment nets against an unrelated invoice whose number happens to match. Fix the stamp, not the symptoms. Then `outstanding.go` honours `as_on` for AGEING but not for INCLUSION |
 | **L2 wrong tenant + draft residual** | `app/CompanyContext.tsx`, `screens/vouchers/draftAccept.ts` | 33, 30 | 4 | §7.3 **C/D**: a malformed `?company=` silently opens somebody else's books; a ghost uuid wedges forever (cored 403s where the code expects 404). §7.3 **B**: the draft CONFIRM is fire-and-forget, so a network failure after a successful post loses the only durable acceptance record — **one bill, two vouchers, reproduced in a browser** |
-| **L3 cutoff residual** | `internal/server/auth_middleware.go` | 11 | 1 | §7.3 **A**: `bank_date` is **not** covered by the cutoff while `routeAction`'s comment **says it is**. ⛔ Byte-for-byte the TDS-challan defect, which shipped with three comments asserting the opposite. **A comment asserting a control that never runs is worse than a missing control.** Mirror `peekDepositDate`, and read §7.2 first |
+| ~~**L3 cutoff residual**~~ | — | 11 | 0 | ✅ **CLOSED — §7.3 A is fixed and driven on the wire (§7.4 F7).** Both ends judged, the refusal names the operator's own field, and the class now has a structural gate: every date-shaped json key on every wire type in package `server` must be classified, and every "judged" claim is EXECUTED. Read the box at the top of this file before writing another peek |
 | **L4 TDS** | `internal/masters/tds_challan.go`, `internal/server/server.go` (challan routes only), `api/types.ts` | 17 | 6 | ⛔ **Establish the missing allocate-later ROUTE first — it decides everything else in the lane.** Then: nothing compares a challan's allocations against the tax actually deposited, so ₹1 was accepted as having paid ₹27,000; and a TDS/TCS deduction cannot be keyed from the keyboard at all |
 | **L5 NL query** | `internal/query/translate.go`, `internal/query/whitelist.go` | 31 | 4 | Three of the four are in one keyword switch: "last month/quarter/year" silently answer for the CURRENT period; "receivables" misses `ledger_opening_bill` so the answer does not match the report; "total sales" excludes GST and credit notes with no disclosure. ⛔ A cross-tenant question is not refused — it returns the caller's own data silently |
 | **L6 voucher form** | `screens/VoucherScreen.tsx` **(single-owner — this lane owns it alone)** | 9, 17, 40 | 4 | `Ctrl+A` on a refused voucher **creates every ledger the operator named before the server refuses**, leaving orphan masters; printed Receipt/Payment name the BANK as counterparty; a GST invoice saves but cannot print because HSN is never required |
