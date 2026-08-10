@@ -20,6 +20,7 @@ import {
   configFor,
   effectiveEntryMode,
   entryModesFor,
+  type VoucherConfig,
 } from "./vouchers/voucherConfig";
 import { dayBookRowKey, voucherTypeForClass } from "./vouchers/voucherClass";
 import {
@@ -39,6 +40,7 @@ import { BillAllocationPicker } from "./vouchers/BillAllocationPicker";
 import { formatFixed4, itemInvoiceGross, parseFixed4 } from "./vouchers/itemInvoice";
 import {
   billRefsFromView,
+  billRefusal,
   buildBillAllocations,
   defaultNewRef,
   retrackAutoRef,
@@ -46,6 +48,7 @@ import {
   type DraftBillRef,
 } from "./vouchers/billAllocation";
 import {
+  allocationRefusal,
   allocationsFromView,
   buildCostAllocations,
   type DraftAllocation,
@@ -152,6 +155,34 @@ interface VoucherForm {
   date: string;
   party: string;
   partyLedgerId: string;
+  /**
+   * SINGLE ENTRY ONLY: the ONE account (bank / cash) the money moved through —
+   * what the operator keys in the "Account" field on F5 / F6 / F4.
+   *
+   * ⛔⛔ A SEPARATE FIELD FROM `party`, AND SPLITTING THEM IS THE WHOLE OF THE
+   * D59 FIX. The two were one field, so a single-entry voucher shipped the BANK
+   * as `party` / `party_ledger_id` — and printingdb builds the Party block from
+   * `party_ledger_id`, so every printed receipt said "Received From: HDFC Bank"
+   * and every payment "Paid To: HDFC Bank". The bank is not the counterparty; it
+   * is the account the counterparty paid into. The counterparty is a PARTICULAR
+   * (see {@link singleEntryCounterparty}), and the request now carries that.
+   *
+   * ⛔⛔ AND THE SPLIT IS NOT COSMETIC — COLLAPSING IT AGAIN DESTROYS VOUCHERS.
+   * If the request's `party` names the counterparty while the form's Account
+   * field reads `party` back on an ALTER, then hydrating a receipt puts ACME in
+   * the Account field, and the next Ctrl+A posts `Dr Acme (total) / Cr Acme` —
+   * the bank leg vanishes from a voucher that still BALANCES, so no total, no
+   * trigger and no server check disagrees with it. The account is therefore
+   * hydrated from the voucher's OWN primary-side posting
+   * ({@link accountLegFromView}), never from the stored party label.
+   *
+   * ⚠️ Ctrl+H STAYS LOSSLESS, exactly as `lines` / `drCrLines` do: the two modes
+   * keep their own field, so switching to double entry and back returns the form
+   * as it was. A Journal or an invoice never reads this.
+   */
+  account: string;
+  /** The Account field's resolved uuid, when it was PICKED rather than typed. */
+  accountLedgerId: string;
   /** The chosen party's GST state code (seeds place of supply). */
   partyStateCode: string;
   narration: string;
@@ -250,6 +281,8 @@ function emptyForm(): VoucherForm {
     date: today(),
     party: "",
     partyLedgerId: "",
+    account: "",
+    accountLedgerId: "",
     partyStateCode: "",
     narration: "",
     postings: [],
@@ -272,10 +305,19 @@ function emptyForm(): VoucherForm {
  * reverse_charge), and the loaded voucher_no/date preserve numbering.
  */
 function formFromView(view: VoucherView): VoucherForm {
+  const account = accountLegFromView(view);
   return {
     date: view.voucher_date,
     party: view.party,
     partyLedgerId: view.party_ledger_id,
+    // ⛔⛔ THE ACCOUNT COMES FROM THE POSTINGS, NOT FROM THE STORED `party`.
+    // See VoucherForm.account: reading it back from the party label is what
+    // would post `Dr Acme / Cr Acme` and lose the bank leg on the first alter of
+    // a receipt whose party is (correctly) the counterparty. "" when the voucher
+    // has no single primary leg — the single-entry form then refuses rather than
+    // silently merging two bank legs into one, which is what it did before.
+    account: account?.name ?? "",
+    accountLedgerId: account?.id ?? "",
     partyStateCode: "",
     narration: view.narration,
     postings: postingsFromView(view),
@@ -456,6 +498,101 @@ function linesFromPostings(
 }
 
 /**
+ * THE ONE ACCOUNT a single-entry voucher moved money through, read from the
+ * voucher's OWN postings — the bank on a receipt or payment, the source account
+ * on a contra.
+ *
+ * ⛔⛔ THIS EXISTS BECAUSE `view.party` IS NO LONGER THE ACCOUNT. Since D59 the
+ * request's `party` / `party_ledger_id` name the COUNTERPARTY (the customer who
+ * paid, the supplier who was paid), because that is what the printed document
+ * states and what `printingdb` reads. So the Account field can no longer be
+ * hydrated from the party label: doing that would put the counterparty in the
+ * Account field, and the next Ctrl+A would post the counterparty on BOTH sides
+ * and drop the bank from the voucher entirely. It balances, so nothing refuses
+ * it — this repo's signature failure shape (RULE 4).
+ *
+ * ⚠️ NULL UNLESS THERE IS EXACTLY ONE PRIMARY-SIDE POSTING, and that is a
+ * refusal in disguise rather than a missing case. A payment keyed in DOUBLE
+ * entry may credit two banks; single entry cannot represent it (it puts the SUM
+ * on one account), and the old form silently MERGED the two into whichever
+ * ledger the party label named. Returning null blanks the Account field, and
+ * {@link singleEntryRefusal} then refuses the save with a message the operator
+ * can act on.
+ *
+ * ⚠️ Only for classes whose form IS single entry (`cfg.entry === "single"`:
+ * Payment / Receipt / Contra). On a sale the sole primary-side posting is the
+ * income ledger when the invoice bears no tax, and hydrating THAT into the party
+ * field would rewrite the invoice's customer to "Domestic Sales".
+ */
+function accountLegFromView(view: VoucherView): { name: string; id: string } | null {
+  const cfg = configFor(view.class.toLowerCase() as VoucherType);
+  if (cfg === undefined || cfg.entry !== "single") return null;
+  const legs = view.postings.filter((p) =>
+    p.dr_cr.toUpperCase().startsWith(cfg.primarySide[0]!),
+  );
+  if (legs.length !== 1) return null;
+  const leg = legs[0]!;
+  return { name: leg.ledger, id: leg.ledger_id };
+}
+
+/**
+ * WHO THE MONEY CAME FROM / WENT TO on a single-entry voucher — the voucher's
+ * real counterparty, derived from the PARTICULARS.
+ *
+ * ⛔⛔ THE DEFECT THIS CLOSES (D59) WAS ON PAPER, WHICH IS WHERE IT COUNTS. The
+ * form put the BANK in both `party` and `party_ledger_id`, and
+ * `printingdb.loadHead` builds the Party block from `party_ledger_id` (falling
+ * back to the `party` LABEL when there is no master behind it) — so every
+ * receipt this product printed said "Received From: HDFC Bank" and every payment
+ * "Paid To: HDFC Bank". A receipt that names the bank as the payer is not a
+ * receipt: nobody's account can be credited from it, which is exactly the
+ * consequence `vdPartyConsequence` states.
+ *
+ * THE RULE, AND WHY IT REFUSES TO GUESS:
+ *
+ *  1. Exactly ONE distinct party-shaped particular (a debtor, a creditor, or the
+ *     cash/bank account on the other end of a contra — {@link PARTY_GROUPS},
+ *     which is the same list the party PICKER offers) => that is the
+ *     counterparty, name AND uuid. The uuid is what carries the printed block,
+ *     the address and the GSTIN.
+ *  2. No party-shaped particular but exactly ONE particular in all => its NAME
+ *     is the counterparty label and NO uuid is sent. "Paid To: Electricity" is
+ *     the truth about a payment booked straight to an expense head, and
+ *     `party_ledger_id` stays what its contract says it is — a party master, not
+ *     an expense head that some report will later join on and mis-classify.
+ *  3. Anything else (several parties, or several expense heads) => NULL. One
+ *     voucher settling three customers has three counterparties, and naming the
+ *     first would be this file inventing the answer. The document then refuses
+ *     to print, naming the missing particular — which is the honest outcome for
+ *     a document that cannot say who it is for, and is strictly better than the
+ *     confident lie it printed before.
+ *
+ * ⚠️ Rows are deduplicated BY LEDGER, not by name, because the same customer may
+ * legitimately appear on two particulars (two bills settled by one cheque) and
+ * that is one counterparty, not an ambiguity.
+ */
+function singleEntryCounterparty(
+  rows: readonly { name: string; ledgerId: string }[],
+  chart: readonly LedgerListItem[],
+): { name: string; ledgerId: string } | null {
+  const distinct = new Map<string, { name: string; ledgerId: string }>();
+  for (const r of rows) if (!distinct.has(r.ledgerId)) distinct.set(r.ledgerId, r);
+  const all = [...distinct.values()];
+  const partyish = all.filter((r) => {
+    const l = chart.find((c) => c.id === r.ledgerId);
+    return l !== undefined && PARTY_GROUPS.includes(l.group_name);
+  });
+  if (partyish.length === 1) return partyish[0]!;
+  if (partyish.length > 1) return null;
+  // ⚠️ A ledger this accept is about to CREATE is not in the chart (which is read
+  // once per company), so it can never be party-shaped here — and it genuinely is
+  // not: a free-typed particular is created under Indirect Expenses / Direct
+  // Incomes. It falls to rule 2 and contributes a label, which is right.
+  if (all.length === 1) return { name: all[0]!.name, ledgerId: "" };
+  return null;
+}
+
+/**
  * The PARTY leg as a bill-bearing line, read from the form's own postings.
  *
  * ⛔ DERIVED, NEVER ASSUMED. The verbatim alter path re-sends `f.postings` as they
@@ -495,6 +632,12 @@ function formFromDraft(draft: PurchaseVoucherDraft): VoucherForm {
     date: body.voucher_date ?? today(),
     party: body.party ?? "",
     partyLedgerId: body.party_ledger_id ?? "",
+    // A draft is an F9 PURCHASE — a GST form with no single-entry account. Blank
+    // rather than derived, for the same reason `drCrLines` is: the accept POSTs
+    // the ORIGINAL balanced body, so a field seeded here would display something
+    // that is not what gets sent.
+    account: "",
+    accountLedgerId: "",
     partyStateCode: "",
     narration: body.narration ?? "",
     postings: [],
@@ -552,6 +695,343 @@ function draftDirtyFields(seed: VoucherForm | null, form: VoucherForm): Set<Draf
   if (form.gst.gstRatePct !== seed.gst.gstRatePct) dirty.add("gstRatePct");
   if (form.gst.placeOfSupply !== seed.gst.placeOfSupply) dirty.add("placeOfSupply");
   return dirty;
+}
+
+// ===========================================================================
+// ⛔⛔ THE MASTER GATE — "NO LEDGER IS CREATED FOR A DOCUMENT THE CLIENT
+// ALREADY KNOWS WILL BE REFUSED".
+// ===========================================================================
+//
+// THE CLASS, not the two bugs it was reported as. D39 and D41 are the same
+// defect on three different keystrokes:
+//
+//   D39 (DRIVEN, both grids): Ctrl+A on a voucher whose cost split is
+//       incomplete on one axis created EVERY ledger the operator had named —
+//       then the server refused the voucher. The chart of accounts gained
+//       accounts with no voucher behind them, and nothing on screen said so.
+//   D41 (DRIVEN, the alter path): opening a Purchase from the Day Book and
+//       pressing Ctrl+A created a new "Purchases" ledger over the wire and THEN
+//       failed the write with "invalid gst line gst_rate_pct". A REFUSED ALTER
+//       LEFT A MASTER BEHIND.
+//
+// `ensureLedger` and `ensureGstTaxLedgers` CREATE. Every builder in this file
+// used to resolve its ledgers first and validate afterwards (or not at all), so
+// every refusal — client-side or server-side — landed after the writes. Press
+// Ctrl+A five times on a form the server will refuse and the company silently
+// gains five accounts and no voucher.
+//
+// ⛔ THE ORDER IS THE FIX, AND A COMMENT SAYING "VALIDATE FIRST" IS NOT. The
+// Journal builder already carried exactly that comment and was still creating
+// ledgers for a form with a short cost axis, because the check it ran first was
+// only the BALANCE check. So the ordering is now STRUCTURAL: every `ensure*`
+// call in this file sits inside a {@link resolveMasters} closure whose FIRST
+// argument is the refusal, evaluated before the closure can run. A new resolver
+// cannot be added without a refusal argument being written next to it.
+//
+// ⛔ WHAT THIS DOES **NOT** CLOSE, STATED SO IT IS NOT MISTAKEN FOR CLOSED: a
+// refusal only the SERVER can make (a back-dated-period cutoff, an ACL denial, a
+// duplicate voucher number, a negative-stock refusal) still lands after the
+// masters exist, because a posting needs a real uuid and there is no
+// DELETE /ledgers route to compensate with. The client's half is that it never
+// contributes a refusal of its own to that window.
+// ===========================================================================
+
+/**
+ * Run `resolve` ONLY if the form has already been found saveable.
+ *
+ * ⛔ `refusal` IS EVALUATED BY THE CALLER BEFORE THE CLOSURE EXISTS. That is the
+ * whole point: the refusal cannot accidentally be computed from something the
+ * resolver produced, and a reader of any call site sees the check and the writes
+ * in the same expression.
+ */
+async function resolveMasters<T>(
+  refusal: string,
+  resolve: () => Promise<T>,
+): Promise<T> {
+  if (refusal !== "") throw new Error(refusal);
+  return resolve();
+}
+
+/**
+ * The refusals that belong to a ROW of any grid — the two the pickers already
+ * compute for display and that NOTHING consulted on the way to the server.
+ *
+ * ⛔ BOTH ARE SERVER REFUSALS THIS CLIENT CAN MAKE FIRST. `allocationRefusal`
+ * and `billRefusal` were written as refusals ("telling them before the send is
+ * strictly kinder", say both headers) and then wired only into their pickers —
+ * and the cost-centre picker is MOUSE-ONLY on this screen (D38), so on the
+ * keyboard path nothing checked them at all. That is how D39 reached a real
+ * browser: a short axis is refused by the server AND by a deferred DB trigger,
+ * after this file has already created the ledgers.
+ *
+ * The row is named in the message because the grids have no other handle on a
+ * line — `posting_seq` is the 0-based ordinal no screen in this product may
+ * display.
+ */
+function rowRefusal(
+  label: string,
+  row: { amount: string; allocations: readonly DraftAllocation[]; billRefs: readonly DraftBillRef[] },
+  side: "DR" | "CR",
+): string {
+  const alloc = allocationRefusal(row);
+  if (alloc !== "") return `${label}: ${alloc}`;
+  // ⚠️ The leg's LEDGER is not known yet — that is the point of this gate, the
+  // ledger may not exist — and `billRefusal` does not need it: it is arithmetic
+  // against the line's own amount. Passing "" here rather than resolving one is
+  // deliberate.
+  const bill = billRefusal(
+    { ledgerId: "", drCr: side, amount: normalizeMoney(row.amount) },
+    row.billRefs,
+  );
+  return bill === "" ? "" : `${label}: ${bill}`;
+}
+
+/** The keyed particulars of a single-entry form (empty rows are not lines). */
+function keyedParticulars(f: VoucherForm): VoucherForm["lines"] {
+  return f.lines.filter(
+    (l) => l.ledger.trim() !== "" && parseFloat(l.amount || "0") > 0,
+  );
+}
+
+/**
+ * EVERY refusal a SINGLE-ENTRY form can make, computed before anything is
+ * resolved. "" means saveable.
+ */
+function singleEntryRefusal(f: VoucherForm, cfg: VoucherConfig): string {
+  const rows = keyedParticulars(f);
+  if (rows.length === 0) return "Add at least one particular with an amount.";
+  if (f.account.trim() === "") {
+    // ⚠️ ALSO THE MESSAGE A HYDRATION THAT COULD NOT NAME ONE ACCOUNT PRODUCES —
+    // see accountLegFromView. A voucher with two primary legs is not keyable
+    // here, and saying so beats merging them into one behind the operator.
+    return (
+      `${cfg.partyLabel} is required — single entry puts the TOTAL on one ` +
+      `account and lists what it moved against. If this voucher moves money ` +
+      `through more than one bank, key it in double entry (Ctrl+H).`
+    );
+  }
+  const manySide: "DR" | "CR" = cfg.primarySide === "DR" ? "CR" : "DR";
+  for (let i = 0; i < rows.length; i++) {
+    const l = rows[i]!;
+    const r = rowRefusal(`Particular ${i + 1} (${l.ledger.trim()})`, l, manySide);
+    if (r !== "") return r;
+  }
+  return "";
+}
+
+/**
+ * The two grids differ in shape and share this: a row that the server will
+ * refuse must be refused BEFORE `ensureLedger` runs. D39 was reproduced on BOTH.
+ */
+function doubleEntryRowRefusal(
+  rows: readonly { ledger: string; side: "DR" | "CR"; amount: string; allocations: readonly DraftAllocation[]; billRefs: readonly DraftBillRef[] }[],
+): string {
+  for (let i = 0; i < rows.length; i++) {
+    const l = rows[i]!;
+    const r = rowRefusal(`Line ${i + 1} (${l.ledger.trim()})`, l, l.side);
+    if (r !== "") return r;
+  }
+  return "";
+}
+
+/**
+ * Is this what `decimal.NewFromString` on the server will accept?
+ *
+ * ⛔ MIRRORS THE HANDLER, AND THE DIRECTION OF ERROR MATTERS. `buildGST` 400s
+ * with "invalid gst line gst_rate_pct" on anything shortdec cannot parse —
+ * including the EMPTY STRING, which is what an alter hydrates when the stored
+ * voucher has no `gst_lines` (D41's exact wire error). A peek that is LOOSER
+ * than the handler lets the orphan-master window back open; one that is TIGHTER
+ * refuses a voucher the server would have taken. So: a plain optionally-signed
+ * decimal, nothing clever.
+ */
+function isServerDecimal(s: string): boolean {
+  return /^[+-]?(\d+(\.\d*)?|\.\d+)$/.test(s.trim());
+}
+
+/**
+ * WHICH CLASSES MAY NOT BE SAVED WITHOUT AN HSN / SAC (D60).
+ *
+ * ⛔⛔ THE DEFECT WAS A DOCUMENT THAT COULD BE KEYED AND THEN NOT PRINTED. A
+ * Sales invoice keyed through the GST panel saved happily and Ctrl+P answered
+ * 400: `printing.rule46` treats the HSN as a Rule 46(g) MANDATORY PARTICULAR
+ * (`items[0].hsn`) and refuses to render an invoice without one, while this form
+ * left the field optional. So the operator learns at the counter, with the
+ * customer waiting, that the invoice they saved cannot be handed over.
+ *
+ * ⛔ SALES ONLY, AND THE SCOPE IS THE POINT — a refusal that fired on every GST
+ * class would "fix" D60 by making the feature unusable. Reasoned from what the
+ * server actually requires, class by class:
+ *
+ *  - `sales`      → `printingdb` maps it to KindTaxInvoice (or KindBillOfSupply
+ *                   when no tax is charged, where Rule 49 asks for the same
+ *                   particular). Both refuse a blank HSN. REQUIRED HERE.
+ *  - credit/debit note → rendered by `voucherdoc`, whose `validateVoucherDoc`
+ *                   states no HSN requirement. Refusing here would be this file
+ *                   inventing a statutory particular the printing layer does not
+ *                   cite. NOT required.
+ *  - `purchase`   → the supplier's document; `docKindForClass` refuses to print
+ *                   one at all ("a purchase bill is the SUPPLIER'S document").
+ *                   NOT required — and requiring it would also break the Bill
+ *                   Inbox, where a scanned bill whose HSN did not survive OCR
+ *                   must still be acceptable. gstVoucher.ts's own header makes
+ *                   exactly that argument for why the REFUSAL DOES NOT LIVE
+ *                   THERE; this is the screen where it can be scoped.
+ *
+ * ⚠️ THE FILING SIDE IS NOT THIS CHECK'S JOB and is already covered: the GSTR-1
+ * builder refuses to emit a blank mandatory code and names the vouchers
+ * responsible. This one is about the piece of paper.
+ */
+const HSN_REQUIRED_CLASSES: readonly VoucherType[] = ["sales"];
+
+/**
+ * THE INVOICE CLASSES MUST NAME SOMEBODY — and the reason is the master gate,
+ * not tidiness.
+ *
+ * ⛔ THE SIMPLEST KEYSTROKE IN THE PRODUCT USED TO MINT THREE ACCOUNTS AND SAVE
+ * NOTHING: press F8 and Ctrl+A on an untouched form. `f.party` is "" and
+ * `f.partyLedgerId` is "", so the builder ran `ensureGstTaxLedgers` (creating
+ * Output CGST / SGST / IGST) and then `ensureLedger({ name: "" })` — which cored
+ * refuses outright ("masters: ledger name is required", masters.go:297). Three
+ * real accounts, no voucher, and the operator shown one error about a name they
+ * never typed.
+ *
+ * ⚠️ A FREE-TYPED NAME IS STILL FINE. This refuses only the EMPTY field; a party
+ * the company does not have yet is created on accept, which is how the first
+ * voucher of a brand-new company is keyed and is Tally's own behaviour.
+ */
+function partyRefusal(f: VoucherForm, type: VoucherType): string {
+  if (f.partyLedgerId !== "" || f.party.trim() !== "") return "";
+  return (
+    `${configFor(type).partyLabel} is required — an invoice is raised ON ` +
+    `somebody, and the document names them. Pick a party, or type a name to ` +
+    `create one on accept.`
+  );
+}
+
+/**
+ * The PARTY leg a GST (accounting-mode) invoice will reference, computed from
+ * the form alone so the refusal is measured against the body that will be sent.
+ * Mirrors `raiseLeg` in the component — the hydrated postings win on an alter,
+ * because a GET returns the tax but not the RATE it was derived at.
+ */
+function gstBillLeg(
+  f: VoucherForm,
+  type: VoucherType,
+  homeStateCode: string,
+): BillBearingLeg {
+  const amount = f.postings.some((p) => p.ledger_id === f.partyLedgerId)
+    ? partyLeg(f).amount
+    : gstVoucherGross(
+        normalizeMoney(f.taxableValue),
+        f.gst.gstRatePct,
+        homeStateCode,
+        f.gst.placeOfSupply,
+      );
+  return {
+    ledgerId: f.partyLedgerId,
+    drCr: type === "purchase" ? "CR" : "DR",
+    amount,
+  };
+}
+
+/**
+ * EVERY refusal an ACCOUNTING-MODE GST voucher can make, before a single tax
+ * ledger, party or income account is created.
+ *
+ * ⛔ THIS IS WHERE D41 LIVED. Opening a Purchase from the Day Book and pressing
+ * Ctrl+A created a new "Purchases" ledger over the wire and THEN failed with the
+ * server's "invalid gst line gst_rate_pct" — a refused ALTER that left a master
+ * behind. The rate is a FIELD ON THIS FORM: the client can see it is unsendable
+ * without asking anybody, and it hydrates empty whenever the stored voucher
+ * carries no `voucher_gst_line` rows.
+ */
+function gstRefusal(f: VoucherForm, type: VoucherType, homeStateCode: string): string {
+  if (f.gstLineCount > 1) {
+    return (
+      `This voucher has ${f.gstLineCount} GST lines at different rates, and ` +
+      `the accounting-mode form holds only one rate — saving it here would ` +
+      `keep the first line and DELETE the rest, re-deriving the tax from ` +
+      `what was left. Alter it as an Item Invoice (Ctrl+H), where each line ` +
+      `carries its own rate from the stock master.`
+    );
+  }
+  if (!gstOrientationFor(type)) {
+    return (
+      `This build has no posting orientation for a "${type}" GST voucher, ` +
+      `so it will not guess which way the money goes.`
+    );
+  }
+  const partyGap = partyRefusal(f, type);
+  if (partyGap !== "") return partyGap;
+  if (!isServerDecimal(f.gst.gstRatePct)) {
+    return (
+      `GST Rate % is ${f.gst.gstRatePct.trim() === "" ? "empty" : `"${f.gst.gstRatePct.trim()}"`}, ` +
+      `which the server cannot read as a rate — it answers "invalid gst line ` +
+      `gst_rate_pct" and nothing is saved. Key a number; 0 is a real rate and ` +
+      `is what an exempt or nil-rated supply carries. ⚠️ A voucher stored ` +
+      `without GST lines hydrates this field EMPTY, so an alteration has to ` +
+      `re-state the rate it was raised at.`
+    );
+  }
+  if (HSN_REQUIRED_CLASSES.includes(type) && f.gst.hsn.trim() === "") {
+    return (
+      `HSN / SAC is required on a ${configFor(type).title.toLowerCase()} ` +
+      `invoice. It is a MANDATORY particular of a tax invoice (CGST Rules ` +
+      `2017, Rule 46(g)), so an invoice saved without one cannot be printed — ` +
+      `Ctrl+P answers 400 naming items[0].hsn, at the counter, after the ` +
+      `document has been keyed. Key the code for what was supplied.`
+    );
+  }
+  return billRefusal(gstBillLeg(f, type, homeStateCode), f.billRefs);
+}
+
+/**
+ * EVERY refusal an ITEM INVOICE can make, before any account is created.
+ *
+ * ⚠️ `rows` is the grid ALREADY JOINED to the stock masters, because that is
+ * what the builder sends and what the bill reference must total.
+ *
+ * ⛔ THE MISSING HSN IS **NOT** REFUSED HERE, AND THAT IS DELIBERATE (RULE 3).
+ * An item line's HSN comes off the STOCK MASTER, and this build has no keyboard
+ * path to a stock item at all — Alt+C reaches ledgers only. A refusal whose
+ * remedy cannot be reached from the keyboard would make item invoicing
+ * unusable on any company with one incomplete master. It is DISCLOSED on the
+ * panel instead, naming the item, so the operator learns before Ctrl+P rather
+ * than at the counter. See {@link ItemInvoicePanel}.
+ */
+function itemInvoiceRefusal(
+  f: VoucherForm,
+  type: VoucherType,
+  rows: readonly ItemInvoiceLine[],
+  homeStateCode: string,
+): string {
+  if (!gstOrientationFor(type)) {
+    return `This build has no posting orientation for a "${type}" item invoice.`;
+  }
+  // ⚠️ AND HERE THE SERVER AGREES EXPLICITLY: `item_invoice.go:241` refuses an
+  // item invoice with no party at all, because the party leg is one of the
+  // postings it GENERATES. The client would have created four masters first.
+  const partyGap = partyRefusal(f, type);
+  if (partyGap !== "") return partyGap;
+  const keyed = rows.filter(isKeyedLine);
+  if (keyed.length === 0) {
+    return (
+      "Add at least one item line with a quantity and a rate — an item invoice " +
+      "with no goods on it states a total the server will not derive."
+    );
+  }
+  const amount = f.postings.some((p) => p.ledger_id === f.partyLedgerId)
+    ? partyLeg(f).amount
+    : itemInvoiceGross(rows, homeStateCode, f.gst.placeOfSupply);
+  return billRefusal(
+    {
+      ledgerId: f.partyLedgerId,
+      drCr: type === "purchase" ? "CR" : "DR",
+      amount,
+    },
+    f.billRefs,
+  );
 }
 
 /**
@@ -869,6 +1349,13 @@ function AccountingVoucherScreen({
     snapshot.config?.entryMode,
     alterHasStock,
   );
+  /**
+   * Whether the one master field at the top of the form means "the ACCOUNT the
+   * money moved through" (single entry) or "the PARTY this document is for"
+   * (everything else). They are different facts and, since D59, different form
+   * fields — see VoucherForm.account.
+   */
+  const isSingleEntry = entryMode === "single";
 
   const [status, setStatus] = useState<string | null>(null);
   const [savedNo, setSavedNo] = useState<string | null>(null);
@@ -1035,102 +1522,126 @@ function AccountingVoucherScreen({
    */
   const buildSingleEntryRequest = useCallback(
     async (f: VoucherForm): Promise<VoucherRequest> => {
-      const rows = f.lines.filter(
-        (l) => l.ledger.trim() !== "" && parseFloat(l.amount || "0") > 0,
-      );
-      if (rows.length === 0) {
-        throw new Error("Add at least one particular with an amount.");
-      }
-      const accountName = f.party.trim();
-      if (accountName === "") {
-        throw new Error(`${cfg.partyLabel} is required.`);
-      }
-
-      // The single side takes the SUM, computed in paise so a two-line entry
-      // cannot drift by a rounding cent.
-      const paise = rows.reduce(
-        (sum, l) => sum + Math.round(parseFloat(l.amount || "0") * 10000),
-        0,
-      );
-      const total = (paise / 10000).toFixed(4);
-
-      const accountID =
-        f.partyLedgerId ||
-        (await ensureLedger(client, companyID, {
-          name: accountName,
-          groupName: "Bank Accounts",
-        }));
+      const rows = keyedParticulars(f);
+      const accountName = f.account.trim();
       const manySide: "DR" | "CR" = cfg.primarySide === "DR" ? "CR" : "DR";
 
-      const postings: PostingRequest[] = [
-        { ledger_id: accountID, dr_cr: cfg.primarySide, amount: total },
-      ];
-      for (const l of rows) {
-        const id = await ensureLedger(client, companyID, {
-          name: l.ledger.trim(),
-          // A payment's counter-ledgers are usually expenses, a receipt's
-          // usually income. Both are create-or-select: an EXISTING ledger keeps
-          // its own group and this is never consulted.
-          groupName: cfg.primarySide === "CR" ? "Indirect Expenses" : "Direct Incomes",
-        });
-        postings.push({
-          ledger_id: id,
-          dr_cr: manySide,
-          amount: normalizeMoney(l.amount),
-        });
-      }
+      // ⛔⛔ THE MASTER GATE. Nothing below this line may create a ledger for a
+      // form this client already knows the server will refuse — see the gate's
+      // header. D39 was DRIVEN on this grid: a cost axis short by any amount
+      // left one new account per named particular behind, and the operator was
+      // shown only the 422.
+      return resolveMasters(singleEntryRefusal(f, cfg), async () => {
+        // The single side takes the SUM, computed in paise so a two-line entry
+        // cannot drift by a rounding cent.
+        const paise = rows.reduce(
+          (sum, l) => sum + Math.round(parseFloat(l.amount || "0") * 10000),
+          0,
+        );
+        const total = (paise / 10000).toFixed(4);
 
-      const req: VoucherRequest = {
-        voucher_date: f.date,
-        narration: f.narration,
-        party: accountName,
-        postings,
-      };
-      if (f.partyLedgerId) req.party_ledger_id = f.partyLedgerId;
-      if (f.voucherNo) req.voucher_no = f.voucherNo;
-      // ---- THE COST SPLITS (T2).
-      //
-      // ⛔ THE OFFSET IS 1, AND IT IS THE WHOLE HAZARD OF THIS FEATURE. `postings`
-      // above is built as [ the account being paid from/into, ...the particulars ],
-      // so the particular the operator sees at row 0 is posting **1**. Passing 0 here
-      // would allocate the BANK leg — a departmental cost attributed to a cash
-      // account, with a voucher that balances and a Cost Centre Summary that foots.
-      // Nothing downstream can detect it.
-      //
-      // It is passed from HERE, next to the array construction, rather than inferred
-      // inside the builder, because this is the only place that knows the shape.
-      //
-      // ⚠️ `rows` is the FILTERED list (keyed particulars only) and it is the same
-      // array the postings loop above iterated, so the positions agree by
-      // construction — the same discipline the fulfilment links use.
-      const allocations = buildCostAllocations(rows, 1);
-      if (allocations.length > 0) req.cost_allocations = allocations;
+        const accountID =
+          f.accountLedgerId ||
+          (await ensureLedger(client, companyID, {
+            name: accountName,
+            groupName: "Bank Accounts",
+          }));
 
-      // ---- THE BILL REFERENCES (what this voucher settles).
-      //
-      // ⛔ THE LEG IS A PARTICULAR, NOT THE PARTY FIELD, and that is the whole
-      // hazard here — the mirror image of the cost-split offset above. In single
-      // entry `postings[0]` is the BANK and `party_ledger_id` names the bank too;
-      // the customer whose invoice is being settled is one of these ROWS. A
-      // reference attached to the party field would credit the bank's own bill.
-      //
-      // ⚠️ The ids come from the SAME `ensureLedger` resolution the postings loop
-      // performed, in the same order, so the reference and the posting it must
-      // total against are the same ledger by construction rather than by lookup.
-      const billAllocations = rows.flatMap((l, idx) =>
-        buildBillAllocations(
-          {
-            ledgerId: postings[idx + 1]!.ledger_id,
-            drCr: manySide,
+        const postings: PostingRequest[] = [
+          { ledger_id: accountID, dr_cr: cfg.primarySide, amount: total },
+        ];
+        for (const l of rows) {
+          const id = await ensureLedger(client, companyID, {
+            name: l.ledger.trim(),
+            // A payment's counter-ledgers are usually expenses, a receipt's
+            // usually income. Both are create-or-select: an EXISTING ledger keeps
+            // its own group and this is never consulted.
+            groupName: cfg.primarySide === "CR" ? "Indirect Expenses" : "Direct Incomes",
+          });
+          postings.push({
+            ledger_id: id,
+            dr_cr: manySide,
             amount: normalizeMoney(l.amount),
-          },
-          l.billRefs,
-        ),
-      );
-      if (billAllocations.length > 0) req.bill_allocations = billAllocations;
-      return req;
+          });
+        }
+
+        // ---- WHO THE DOCUMENT IS FOR (D59).
+        //
+        // ⛔ NOT THE ACCOUNT FIELD. `party` / `party_ledger_id` are what the
+        // printed receipt and payment name — "Received From" / "Paid To" — and
+        // naming the BANK there made every one of them state that the money came
+        // from, or went to, the operator's own bank. The counterparty is a
+        // PARTICULAR; see singleEntryCounterparty for the three cases and for why
+        // it names nobody rather than guessing between several.
+        //
+        // ⚠️ The ids are the ones the loop above just resolved, in the same order,
+        // so the counterparty is the ledger actually posted rather than a lookup
+        // that could drift from it.
+        const counterparty = singleEntryCounterparty(
+          rows.map((l, idx) => ({
+            name: l.ledger.trim(),
+            ledgerId: postings[idx + 1]!.ledger_id,
+          })),
+          chart,
+        );
+
+        const req: VoucherRequest = {
+          voucher_date: f.date,
+          narration: f.narration,
+          party: counterparty?.name ?? "",
+          postings,
+        };
+        if (counterparty?.ledgerId) req.party_ledger_id = counterparty.ledgerId;
+        if (f.voucherNo) req.voucher_no = f.voucherNo;
+        // ---- THE COST SPLITS (T2).
+        //
+        // ⛔ THE OFFSET IS 1, AND IT IS THE WHOLE HAZARD OF THIS FEATURE. `postings`
+        // above is built as [ the account being paid from/into, ...the particulars ],
+        // so the particular the operator sees at row 0 is posting **1**. Passing 0 here
+        // would allocate the BANK leg — a departmental cost attributed to a cash
+        // account, with a voucher that balances and a Cost Centre Summary that foots.
+        // Nothing downstream can detect it.
+        //
+        // It is passed from HERE, next to the array construction, rather than inferred
+        // inside the builder, because this is the only place that knows the shape.
+        //
+        // ⚠️ `rows` is the FILTERED list (keyed particulars only) and it is the same
+        // array the postings loop above iterated, so the positions agree by
+        // construction — the same discipline the fulfilment links use.
+        //
+        // ⚠️ AND EVERY AXIS ON EVERY ROW HAS ALREADY BEEN FOUND COMPLETE, up in the
+        // gate. `buildCostAllocations` DROPS a half-picked split silently, so a form
+        // that reached here with a short axis would send one the server refuses —
+        // after the ledgers above had been created. That is D39.
+        const allocations = buildCostAllocations(rows, 1);
+        if (allocations.length > 0) req.cost_allocations = allocations;
+
+        // ---- THE BILL REFERENCES (what this voucher settles).
+        //
+        // ⛔ THE LEG IS A PARTICULAR, NOT THE PARTY FIELD, and that is the whole
+        // hazard here — the mirror image of the cost-split offset above. In single
+        // entry `postings[0]` is the BANK; the customer whose invoice is being
+        // settled is one of these ROWS. A reference attached to the account leg
+        // would credit the bank's own bill.
+        //
+        // ⚠️ The ids come from the SAME `ensureLedger` resolution the postings loop
+        // performed, in the same order, so the reference and the posting it must
+        // total against are the same ledger by construction rather than by lookup.
+        const billAllocations = rows.flatMap((l, idx) =>
+          buildBillAllocations(
+            {
+              ledgerId: postings[idx + 1]!.ledger_id,
+              drCr: manySide,
+              amount: normalizeMoney(l.amount),
+            },
+            l.billRefs,
+          ),
+        );
+        if (billAllocations.length > 0) req.bill_allocations = billAllocations;
+        return req;
+      });
     },
-    [client, companyID, cfg.primarySide, cfg.partyLabel],
+    [client, companyID, cfg, chart],
   );
 
   /**
@@ -1154,95 +1665,105 @@ function AccountingVoucherScreen({
    */
   const buildDoubleEntryRequest = useCallback(
     async (f: VoucherForm): Promise<VoucherRequest> => {
-      // ---- REFUSE FIRST. Nothing below this line may run on a bad grid.
-      const refusal = doubleEntryRefusal(f.drCrLines);
-      if (refusal !== "") throw new Error(refusal);
-
-      // ⚠️ THE SAME `keyedLines` THE REFUSAL USED, and the same array the cost
+      // ⚠️ THE SAME `keyedLines` THE REFUSAL USES, and the same array the cost
       // splits are indexed against. Two independently-written filters that
       // agree today are how an allocation lands on the row above the one it
       // was keyed against.
       const rows = keyedLines(f.drCrLines);
 
-      const postings: PostingRequest[] = [];
-      for (const l of rows) {
-        const id = await ensureLedger(client, companyID, {
-          name: l.ledger.trim(),
-          // ⚠️ A GUESS, AND IT ONLY EVER BITES ON A LEDGER THAT DOES NOT EXIST
-          // YET — an EXISTING ledger keeps its own group and this is never
-          // consulted (see `ensureLedger`, which resolves before it creates).
-          // A Journal's counter-account is genuinely unknowable from its side:
-          // a provision debits an expense and credits a LIABILITY, where this
-          // guesses an income. The panel says so, and the honest answer for a
-          // real new account is to create it on the masters screen with its
-          // right group rather than to infer one from a keystroke.
-          groupName: l.side === "DR" ? "Indirect Expenses" : "Indirect Incomes",
-        });
-        postings.push({
-          ledger_id: id,
-          dr_cr: l.side,
-          amount: normalizeMoney(l.amount),
-        });
-      }
-
-      const req: VoucherRequest = {
-        voucher_date: f.date,
-        narration: f.narration,
-        // A Journal names no party — the field is informational and usually
-        // blank. It is forwarded rather than dropped because the three
-        // single-entry classes reach this builder through Ctrl+H and DO name
-        // one, and because an alter must resend what it loaded.
-        party: f.party,
-        postings,
-      };
-      if (f.partyLedgerId) req.party_ledger_id = f.partyLedgerId;
-      if (f.voucherNo) req.voucher_no = f.voucherNo;
-
-      // ---- THE COST SPLITS (T2).
+      // ---- REFUSE FIRST. Nothing inside this closure may run on a bad grid.
       //
-      // ⛔ THE OFFSET IS 0, AND THIS IS THE SECOND CALL SITE THAT PARAMETER WAS
-      // ADDED FOR. `postings` above is exactly `rows`, in order, with no leg
-      // in front of it — so the row the operator sees at index 0 IS posting 0.
-      // Single entry passes 1 because its array is [the account paid from,
-      // ...the particulars]. The two cases differ by one and the wrong one is
-      // SILENT: the split would attach to a real ledger with a plausible
-      // amount, on a voucher that balances perfectly and a Cost Centre Summary
-      // that foots. Nothing downstream can detect it.
-      //
-      // ⚠️ This also closes the gap `CostCentresScreen` documents on its face:
-      // allocating a Journal previously had to arrive over HTTP, because no
-      // screen could key one at all.
-      const allocations = buildCostAllocations(rows, 0);
-      if (allocations.length > 0) req.cost_allocations = allocations;
-
-      // ---- THE BILL REFERENCES.
-      //
-      // ⛔ THE LEG IS A ROW, exactly as in single entry and for the same
-      // reason: a Journal's party field names no ledger, so the debtor being
-      // written off is one of these lines. The side comes from the ROW rather
-      // than from the class, because a Journal has no natural side — that is
-      // what makes it a Journal.
-      //
-      // ⚠️ The ids come from the SAME `ensureLedger` resolution the loop above
-      // performed, in the same order, so a reference and the posting it must
-      // total against are the same ledger by construction rather than by
-      // lookup. The server checks that total to the paisa, inside the
-      // transaction, against the FINAL postings.
-      const billAllocations = rows.flatMap((l, idx) =>
-        buildBillAllocations(
-          {
-            ledgerId: postings[idx]!.ledger_id,
-            drCr: l.side,
+      // ⛔⛔ THE BALANCE CHECK WAS NOT THE WHOLE REFUSAL, AND THIS FILE ALREADY
+      // CLAIMED IT WAS. `doubleEntryRefusal` alone stood here under a comment
+      // saying an `ensure*` must never run before validation — and D39 was still
+      // DRIVEN on this very grid, because a cost axis short by any amount is
+      // refused by the server and by a deferred DB trigger and by NOTHING here.
+      // The row-level refusals are now part of the same gate expression.
+      return resolveMasters(
+        doubleEntryRefusal(f.drCrLines) || doubleEntryRowRefusal(rows),
+        async () => {
+        const postings: PostingRequest[] = [];
+        for (const l of rows) {
+          const id = await ensureLedger(client, companyID, {
+            name: l.ledger.trim(),
+            // ⚠️ A GUESS, AND IT ONLY EVER BITES ON A LEDGER THAT DOES NOT EXIST
+            // YET — an EXISTING ledger keeps its own group and this is never
+            // consulted (see `ensureLedger`, which resolves before it creates).
+            // A Journal's counter-account is genuinely unknowable from its side:
+            // a provision debits an expense and credits a LIABILITY, where this
+            // guesses an income. The panel says so, and the honest answer for a
+            // real new account is to create it on the masters screen with its
+            // right group rather than to infer one from a keystroke.
+            groupName: l.side === "DR" ? "Indirect Expenses" : "Indirect Incomes",
+          });
+          postings.push({
+            ledger_id: id,
+            dr_cr: l.side,
             amount: normalizeMoney(l.amount),
-          },
-          l.billRefs,
-        ),
+          });
+        }
+
+        const req: VoucherRequest = {
+          voucher_date: f.date,
+          narration: f.narration,
+          // A Journal names no party — the field is informational and usually
+          // blank. It is forwarded rather than dropped because the three
+          // single-entry classes reach this builder through Ctrl+H and DO name
+          // one, and because an alter must resend what it loaded.
+          party: f.party,
+          postings,
+        };
+        if (f.partyLedgerId) req.party_ledger_id = f.partyLedgerId;
+        if (f.voucherNo) req.voucher_no = f.voucherNo;
+
+        // ---- THE COST SPLITS (T2).
+        //
+        // ⛔ THE OFFSET IS 0, AND THIS IS THE SECOND CALL SITE THAT PARAMETER WAS
+        // ADDED FOR. `postings` above is exactly `rows`, in order, with no leg
+        // in front of it — so the row the operator sees at index 0 IS posting 0.
+        // Single entry passes 1 because its array is [the account paid from,
+        // ...the particulars]. The two cases differ by one and the wrong one is
+        // SILENT: the split would attach to a real ledger with a plausible
+        // amount, on a voucher that balances perfectly and a Cost Centre Summary
+        // that foots. Nothing downstream can detect it.
+        //
+        // ⚠️ This also closes the gap `CostCentresScreen` documents on its face:
+        // allocating a Journal previously had to arrive over HTTP, because no
+        // screen could key one at all.
+        const allocations = buildCostAllocations(rows, 0);
+        if (allocations.length > 0) req.cost_allocations = allocations;
+
+        // ---- THE BILL REFERENCES.
+        //
+        // ⛔ THE LEG IS A ROW, exactly as in single entry and for the same
+        // reason: a Journal's party field names no ledger, so the debtor being
+        // written off is one of these lines. The side comes from the ROW rather
+        // than from the class, because a Journal has no natural side — that is
+        // what makes it a Journal.
+        //
+        // ⚠️ The ids come from the SAME `ensureLedger` resolution the loop above
+        // performed, in the same order, so a reference and the posting it must
+        // total against are the same ledger by construction rather than by
+        // lookup. The server checks that total to the paisa, inside the
+        // transaction, against the FINAL postings.
+        const billAllocations = rows.flatMap((l, idx) =>
+          buildBillAllocations(
+            {
+              ledgerId: postings[idx]!.ledger_id,
+              drCr: l.side,
+              amount: normalizeMoney(l.amount),
+            },
+            l.billRefs,
+          ),
+        );
+        if (billAllocations.length > 0) req.bill_allocations = billAllocations;
+        return req;
+        },
       );
-      if (billAllocations.length > 0) req.bill_allocations = billAllocations;
-      return req;
     },
     [client, companyID],
   );
+
 
   /**
    * The chart entry for a ledger the operator NAMED, or for a uuid the form holds.
@@ -1400,82 +1921,61 @@ function AccountingVoucherScreen({
    */
   const buildGstRequest = useCallback(
     async (f: VoucherForm): Promise<VoucherRequest> => {
-      // ⛔ REFUSE A VOUCHER THIS FORM CANNOT FAITHFULLY RESTATE.
+      // ⛔⛔ THE MASTER GATE. {@link gstRefusal} holds every refusal this form can
+      // make — the multi-rate voucher it cannot faithfully restate, the missing
+      // orientation, the unsendable rate (D41), the missing Rule 46(g) HSN (D60)
+      // and a short bill reference — and NOTHING below may create an account
+      // until it comes back empty.
       //
-      // The accounting-mode GST form holds ONE taxable value, ONE rate and ONE
-      // HSN, and `buildGstVoucherRequest` sends exactly one `gst.lines` entry.
-      // A loaded voucher with TWO rates therefore cannot survive this form: it
-      // would be rebuilt as a single line at whichever rate was hydrated,
-      // DELETING the others and re-deriving the whole tax from what remained.
-      //
-      // That is the same defect the `gst_lines` hydration above fixes, one
-      // level along — not "the rate is lost" but "every line after the first
-      // is". And it has the same signature: the voucher still balances, the
-      // server still derives a consistent tax, and nothing refuses it, because
-      // a one-line supply is a legal state.
-      //
-      // ⚠️ REFUSING IS THE HONEST ANSWER RATHER THAN THE LAZY ONE. Building a
-      // multi-rate editor here would be a real feature; silently collapsing the
-      // voucher is a data-loss bug wearing a feature's clothes. The message
-      // names the count and points at the mode that CAN hold it.
-      //
-      // ⚠️ It is checked BEFORE `ensureOutputTaxLedgers`, for the reason the
-      // Journal grid states: an `ensure*` helper CREATES, so validating after
-      // it would leave ledgers behind on every refused save.
-      if (f.gstLineCount > 1) {
-        throw new Error(
-          `This voucher has ${f.gstLineCount} GST lines at different rates, and ` +
-            `the accounting-mode form holds only one rate — saving it here would ` +
-            `keep the first line and DELETE the rest, re-deriving the tax from ` +
-            `what was left. Alter it as an Item Invoice (Ctrl+H), where each line ` +
-            `carries its own rate from the stock master.`,
+      // ⚠️ THE MULTI-RATE CHECK ALREADY STOOD FIRST HERE, with a comment saying
+      // exactly why ("an `ensure*` helper CREATES, so validating after it would
+      // leave ledgers behind"), and D41 was STILL DRIVEN in a browser — because
+      // the check that was first was not the check that fired. That is why the
+      // refusals are one function and the resolvers are inside a closure that
+      // cannot run without it.
+      return resolveMasters(gstRefusal(f, type, homeStateCode), async () => {
+        // ⛔⛔ EVERY ONE OF THE FOUR RESOLUTIONS BELOW IS CLASS-DEPENDENT, AND ALL
+        // FOUR USED TO BE HARD-CODED TO THE SALES ANSWER. See GST_ORIENTATION in
+        // gstVoucher.ts for what that cost: a purchase booked as a receivable
+        // carrying output tax the company does not owe.
+        //
+        // ⚠️ Non-null by the gate above, which refuses a class with no orientation.
+        const orientation = gstOrientationFor(type)!;
+        const outputTax = await ensureGstTaxLedgers(
+          client,
+          companyID,
+          orientation.taxKind,
         );
-      }
-      // ⛔⛔ EVERY ONE OF THE FOUR RESOLUTIONS BELOW IS CLASS-DEPENDENT, AND ALL
-      // FOUR USED TO BE HARD-CODED TO THE SALES ANSWER. See GST_ORIENTATION in
-      // gstVoucher.ts for what that cost: a purchase booked as a receivable
-      // carrying output tax the company does not owe.
-      const orientation = gstOrientationFor(type);
-      if (!orientation) {
-        throw new Error(
-          `This build has no posting orientation for a "${type}" GST voucher, ` +
-            `so it will not guess which way the money goes.`,
-        );
-      }
-      const outputTax = await ensureGstTaxLedgers(
-        client,
-        companyID,
-        orientation.taxKind,
-      );
-      // Resolve the party uuid: use the hydrated id if present, else ensure by name.
-      const partyLedgerId =
-        f.partyLedgerId ||
-        (await ensureLedger(client, companyID, {
-          name: f.party,
-          // ⛔ NOT ALWAYS "Sundry Debtors". A supplier created as a DEBTOR is
-          // ASSET-natured, and GSTR-1's note-side discriminator keys on the
-          // party group's NATURE rather than the voucher class — so it would
-          // report a purchase-return debit note as an outward supply.
-          groupName: orientation.partyGroup,
-          stateCode: f.partyStateCode || undefined,
-        }));
-      const incomeLedgerId = await ensureLedger(client, companyID, {
-        name: orientation.baseLedger.name,
-        groupName: orientation.baseLedger.group,
-      });
-      return buildGstVoucherRequest({
-        voucherType: type,
-        partyLedgerId,
-        incomeLedgerId,
-        taxableValue: normalizeMoney(f.taxableValue),
-        supplierStateCode: homeStateCode,
-        gst: f.gst,
-        outputTax,
-        voucherNo: f.voucherNo || undefined,
-        voucherDate: f.date,
-        narration: f.narration,
-        party: f.party,
-        billRefs: f.billRefs,
+        // Resolve the party uuid: use the hydrated id if present, else ensure by name.
+        const partyLedgerId =
+          f.partyLedgerId ||
+          (await ensureLedger(client, companyID, {
+            name: f.party,
+            // ⛔ NOT ALWAYS "Sundry Debtors". A supplier created as a DEBTOR is
+            // ASSET-natured, and GSTR-1's note-side discriminator keys on the
+            // party group's NATURE rather than the voucher class — so it would
+            // report a purchase-return debit note as an outward supply.
+            groupName: orientation.partyGroup,
+            stateCode: f.partyStateCode || undefined,
+          }));
+        const incomeLedgerId = await ensureLedger(client, companyID, {
+          name: orientation.baseLedger.name,
+          groupName: orientation.baseLedger.group,
+        });
+        return buildGstVoucherRequest({
+          voucherType: type,
+          partyLedgerId,
+          incomeLedgerId,
+          taxableValue: normalizeMoney(f.taxableValue),
+          supplierStateCode: homeStateCode,
+          gst: f.gst,
+          outputTax,
+          voucherNo: f.voucherNo || undefined,
+          voucherDate: f.date,
+          narration: f.narration,
+          party: f.party,
+          billRefs: f.billRefs,
+        });
       });
     },
     [client, companyID, homeStateCode, type],
@@ -1500,56 +2000,62 @@ function AccountingVoucherScreen({
   const buildItemRequest = useCallback(
     async (f: VoucherForm): Promise<VoucherRequest> => {
       const rows = joinMasters(f.items, stockItems);
-      // ⛔ THE TAX KIND IS THE CLASS'S HERE TOO, AND THIS LINE READ
-      // `ensureOutputTaxLedgers` UNCONDITIONALLY. Item mode escaped the
-      // posting-DIRECTION defect — the server derives the postings from the grid
-      // — but not the LEDGER half of it: an item-mode PURCHASE booked its input
-      // credit into "Output CGST", i.e. against the company's output-tax
-      // liability instead of its reclaimable input credit. The direction was
-      // right, the account was wrong, and it balanced.
-      //
-      // ⚠️ This is the "fixing the bug is not fixing the class" lesson that
-      // ensureOutputTaxLedgers' OWN header already tells about itself, one
-      // caller away — so it is repeated here rather than left to be rediscovered.
-      const orientation = gstOrientationFor(type);
-      if (!orientation) {
-        throw new Error(
-          `This build has no posting orientation for a "${type}" item invoice.`,
-        );
-      }
-      const outputTax = await ensureGstTaxLedgers(
-        client,
-        companyID,
-        orientation.taxKind,
+      // ⛔⛔ THE MASTER GATE — the same one the other three builders sit behind.
+      // An item invoice ensures FOUR accounts (three tax heads, the party, the
+      // sales/purchase ledger) before it posts, so a body the server refuses used
+      // to leave up to five masters behind on a single Ctrl+A.
+      return resolveMasters(
+        itemInvoiceRefusal(f, type, rows, homeStateCode),
+        async () => {
+          // ⛔ THE TAX KIND IS THE CLASS'S HERE TOO, AND THIS LINE READ
+          // `ensureOutputTaxLedgers` UNCONDITIONALLY. Item mode escaped the
+          // posting-DIRECTION defect — the server derives the postings from the grid
+          // — but not the LEDGER half of it: an item-mode PURCHASE booked its input
+          // credit into "Output CGST", i.e. against the company's output-tax
+          // liability instead of its reclaimable input credit. The direction was
+          // right, the account was wrong, and it balanced.
+          //
+          // ⚠️ This is the "fixing the bug is not fixing the class" lesson that
+          // ensureOutputTaxLedgers' OWN header already tells about itself, one
+          // caller away — so it is repeated here rather than left to be rediscovered.
+          //
+          // ⚠️ Non-null by the gate above, which refuses a class with no orientation.
+          const orientation = gstOrientationFor(type)!;
+          const outputTax = await ensureGstTaxLedgers(
+            client,
+            companyID,
+            orientation.taxKind,
+          );
+          const partyLedgerId =
+            f.partyLedgerId ||
+            (await ensureLedger(client, companyID, {
+              name: f.party,
+              groupName: orientation.partyGroup,
+              stateCode: f.partyStateCode || undefined,
+            }));
+          const itemLedgerId = await ensureLedger(client, companyID, {
+            name: orientation.baseLedger.name,
+            groupName: orientation.baseLedger.group,
+          });
+          return buildItemInvoiceRequest({
+            // A sale takes goods OUT of the godown; a purchase brings them IN. The
+            // server refuses the other way round: a sale that ADDED stock would
+            // inflate the P&L and the closing inventory at the same time.
+            direction: type === "purchase" ? "IN" : "OUT",
+            partyLedgerId,
+            itemLedgerId,
+            outputTax,
+            supplierStateCode: homeStateCode,
+            placeOfSupplyStateCode: f.gst.placeOfSupply,
+            lines: rows,
+            voucherNo: f.voucherNo || undefined,
+            voucherDate: f.date,
+            narration: f.narration,
+            party: f.party,
+            billRefs: f.billRefs,
+          });
+        },
       );
-      const partyLedgerId =
-        f.partyLedgerId ||
-        (await ensureLedger(client, companyID, {
-          name: f.party,
-          groupName: orientation.partyGroup,
-          stateCode: f.partyStateCode || undefined,
-        }));
-      const itemLedgerId = await ensureLedger(client, companyID, {
-        name: orientation.baseLedger.name,
-        groupName: orientation.baseLedger.group,
-      });
-      return buildItemInvoiceRequest({
-        // A sale takes goods OUT of the godown; a purchase brings them IN. The
-        // server refuses the other way round: a sale that ADDED stock would
-        // inflate the P&L and the closing inventory at the same time.
-        direction: type === "purchase" ? "IN" : "OUT",
-        partyLedgerId,
-        itemLedgerId,
-        outputTax,
-        supplierStateCode: homeStateCode,
-        placeOfSupplyStateCode: f.gst.placeOfSupply,
-        lines: rows,
-        voucherNo: f.voucherNo || undefined,
-        voucherDate: f.date,
-        narration: f.narration,
-        party: f.party,
-        billRefs: f.billRefs,
-      });
     },
     [client, companyID, homeStateCode, type, stockItems],
   );
@@ -1771,6 +2277,21 @@ function AccountingVoucherScreen({
   // and which a Data Entry level is correctly refused.
   function handleSelectParty(item: string) {
     const party = parties.find((p) => p.name === item);
+    // ⛔ IN SINGLE ENTRY THIS FIELD IS THE **ACCOUNT**, NOT THE PARTY — the bank
+    // or cash the money moved through — so it fills `account`, and `party` is
+    // DERIVED from the particulars on accept (D59: `party_ledger_id` is what the
+    // printed receipt names, and naming the bank there made every receipt say
+    // "Received From: HDFC Bank"). Writing both from here would put the bank back
+    // on the paper.
+    if (isSingleEntry) {
+      setForm((f) => ({
+        ...f,
+        account: item,
+        accountLedgerId: party?.id ?? "",
+      }));
+      onSelect(item);
+      return;
+    }
     setForm((f) => ({
       ...f,
       party: item,
@@ -1851,7 +2372,14 @@ function AccountingVoucherScreen({
             // Account field over a voucher that has one. Pre-existing on every
             // class — see SelectionList's `value` doc for why it read as data
             // loss without ever being any.
-            value={form.party}
+            //
+            // ⛔ IN SINGLE ENTRY IT IS THE **ACCOUNT**, which on an alter is read
+            // back from the voucher's own primary-side POSTING rather than from
+            // its stored party — see VoucherForm.account and accountLegFromView.
+            // Rendering `form.party` here after D59 would show the customer in
+            // the bank field, and the next Ctrl+A would post the customer on both
+            // sides of a voucher that still balances.
+            value={isSingleEntry ? form.account : form.party}
             // A party the company does not have yet is created on accept — the
             // only way to key the FIRST voucher of a brand-new company, and
             // Tally's own behaviour for a master field.
@@ -2574,6 +3102,33 @@ function ItemInvoicePanel({
         amounts at all. Stock moves {inward ? "into" : "out of"} the godown on
         save. Ctrl+H switches back to the accounting invoice.
       </p>
+
+      {/*
+        ⛔ THE MISSING HSN, DISCLOSED BEFORE THE COUNTER (the item half of D60).
+        The HSN is a MANDATORY particular of a tax invoice (CGST Rules 2017, Rule
+        46(g)) and `printing.rule46` refuses to render one without it — so an
+        item invoice keyed on a stock master that carries no code SAVES and then
+        answers 400 on Ctrl+P, which the operator discovers with the customer
+        waiting. The accounting-mode panel now REFUSES the save instead (see
+        HSN_REQUIRED_CLASSES); this one cannot, because the code lives on the
+        STOCK MASTER and this build has no keyboard path to one (RULE 3: never
+        ship a refusal whose remedy cannot be reached). So it is said out loud,
+        with the item named, and the save is allowed.
+      */}
+      {(() => {
+        const noHsn = rows
+          .filter((l) => isKeyedLine(l) && l.hsn.trim() === "")
+          .map((l) => l.itemName || l.stockItemId);
+        if (noHsn.length === 0) return null;
+        return (
+          <p data-testid="item-hsn-missing" className="mb-2 text-xs" style={AMBER_STYLE}>
+            No HSN / SAC on the stock master for {noHsn.join(", ")}. This invoice
+            will SAVE and then refuse to PRINT — the HSN is a mandatory particular
+            of a tax invoice (Rule 46(g)), and Ctrl+P answers 400 naming the line.
+            Put the code on the item master before you issue the document.
+          </p>
+        );
+      })()}
 
       {stockError ? (
         <p data-testid="stock-masters-error" className="mb-2 text-xs text-red-400">

@@ -370,11 +370,20 @@ func ScaleComponent(qty, wanted, output decimal.Decimal) decimal.Decimal {
 // know from the source. Each is computed from THESE numbers rather than being a
 // claim about the software, which is the distinction HANDOFF §7.1 draws.
 func explosionNotes(b Bom, wanted decimal.Decimal) []string {
+	// ⛔ THE FINISHED GOOD BELONGS ON THE YIELDING SIDE OF "yields", NEVER ON THE
+	// CONSUMING SIDE. This sentence used to read "%s of %s yields %s" with the
+	// recipe's OUTPUT QUANTITY substituted at both ends and the finished good in
+	// the middle, so a 3-yield recipe for SS Sheet 2mm printed "3 of SS Sheet 2mm
+	// yields 3" — which states, on the artefact an operator reviews before issuing
+	// a Stock Journal, that the thing being MADE is being CONSUMED. There is no
+	// component phrase available here to put on the left: a recipe has many
+	// components and they are listed underneath, so the sentence says what the
+	// recipe yields and leaves the consuming side to the table.
 	notes := []string{fmt.Sprintf(
-		"Scaled from the recipe as written: %s of %s yields %s, so this batch of %s multiplies every "+
+		"Scaled from the recipe as written: it yields %s of %s, so this batch of %s multiplies every "+
 			"component by %s/%s. The recipe is never stored per unit — that would truncate at four "+
 			"decimal places and short every batch.",
-		b.OutputQty.String(), b.StockItem, b.OutputQty.String(), wanted.String(),
+		b.OutputQty.String(), b.StockItem, wanted.String(),
 		wanted.String(), b.OutputQty.String())}
 
 	notes = append(notes,

@@ -94,8 +94,22 @@ describe("printing the invoice you just keyed (§2.1)", () => {
     // Fill just enough for the mock to accept: the party and a taxable value.
     const party = await screen.findByLabelText(/party/i);
     fireEvent.change(party, { target: { value: "Acme Traders" } });
+    // ⛔ ENTER, BECAUSE TYPING ALONE SELECTS NOTHING. `SelectionList` is a
+    // type-ahead: the query is local until Enter (or a click) fires onSelect, so
+    // a test that only typed left the form's party EMPTY — and the builder then
+    // called ensureLedger({ name: "" }), which real cored refuses outright
+    // ("masters: ledger name is required"). The screen now refuses first, so the
+    // test presses the key an operator presses.
+    fireEvent.keyDown(party, { key: "Enter" });
     const taxable = screen.getByLabelText(/taxable value/i);
     fireEvent.change(taxable, { target: { value: "1000" } });
+    // ⛔ THE RATE AND THE HSN ARE PART OF "just enough", AND WERE MISSING. The
+    // rate is what `buildGST` 400s on when it cannot read it, and the HSN is a
+    // Rule 46(g) particular WITHOUT WHICH THE SERVER REFUSES TO PRINT (D60) —
+    // so a test that saved without them was pressing Ctrl+P on a document real
+    // cored would not have rendered. The mock is lenient; the printer is not.
+    fireEvent.change(screen.getByLabelText(/GST Rate/i), { target: { value: "18" } });
+    fireEvent.change(screen.getByLabelText(/HSN/i), { target: { value: "7326" } });
 
     fireEvent.keyDown(app(), { key: "a", ctrlKey: true }); // save
     await waitFor(() => expect(screen.getByText(/^Saved$/)).toBeTruthy());
@@ -116,9 +130,19 @@ describe("the stale-print guard (I-6)", () => {
     fireEvent.keyDown(app(), { key: "F8" });
     const party = await screen.findByLabelText(/party/i);
     fireEvent.change(party, { target: { value: "Acme Traders" } });
+    // ⛔ ENTER, BECAUSE TYPING ALONE SELECTS NOTHING. `SelectionList` is a
+    // type-ahead: the query is local until Enter (or a click) fires onSelect, so
+    // a test that only typed left the form's party EMPTY — and the builder then
+    // called ensureLedger({ name: "" }), which real cored refuses outright
+    // ("masters: ledger name is required"). The screen now refuses first, so the
+    // test presses the key an operator presses.
+    fireEvent.keyDown(party, { key: "Enter" });
     fireEvent.change(screen.getByLabelText(/taxable value/i), {
       target: { value: "1000" },
     });
+    // See the note above: a sales invoice does not save without these.
+    fireEvent.change(screen.getByLabelText(/GST Rate/i), { target: { value: "18" } });
+    fireEvent.change(screen.getByLabelText(/HSN/i), { target: { value: "7326" } });
     fireEvent.keyDown(app(), { key: "a", ctrlKey: true });
     await waitFor(() => expect(screen.getByText(/^Saved$/)).toBeTruthy());
 

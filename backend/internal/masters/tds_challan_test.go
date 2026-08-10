@@ -444,3 +444,184 @@ func TestTheAllocationKeyIsTheNaturalKey(t *testing.T) {
 			err)
 	}
 }
+
+// ===========================================================================
+// REGISTER ROW D2 — A DEPOSIT MAY NOT PAY FOR MORE TAX THAN IT CONTAINS
+// ===========================================================================
+// DRIVEN, not imagined: the parity audit recorded a ₹1 deposit accepted as
+// having "paid" ₹27,000.0000 of tax across two deductees. Nothing anywhere
+// compared the sum of the allocations against the tax box. Both deductions were
+// then marked "already deposited", so the REAL deposit could never be allocated
+// to them, and the challan's unallocated balance read -26999.0000 under a
+// caption written for the ordinary paise remainder.
+
+// TestADepositCannotPayForMoreTaxThanItContains is the refusal, with the audit's
+// own numbers.
+func TestADepositCannotPayForMoreTaxThanItContains(t *testing.T) {
+	in := validChallan()
+	in.TaxRupees = d("1")
+	in.Allocations = []TDSChallanAllocationInput{
+		{
+			VoucherID:    uuid.MustParse("11111111-1111-1111-1111-111111111111"),
+			Section:      "194C",
+			LegSeq:       0,
+			AmountRupees: d("15000"),
+		},
+		{
+			VoucherID:    uuid.MustParse("22222222-2222-2222-2222-222222222222"),
+			Section:      "194J-P",
+			LegSeq:       0,
+			AmountRupees: d("12000"),
+		},
+	}
+
+	_, err := validateTDSChallan(in)
+	if err == nil {
+		t.Fatal("₹1 was accepted as having paid ₹27,000 of tax across two deductees. That is a " +
+			"statement to the department that money reached the Government when it did not, and " +
+			"it also marks both deductions as already deposited — so the real deposit can never " +
+			"be allocated to them afterwards")
+	}
+	if !errors.Is(err, ErrChallanOverAllocated) {
+		t.Errorf("wrong sentinel, so the HTTP layer cannot answer 400 deliberately: %v", err)
+	}
+	// The sentence has to carry BOTH figures and the difference, because the
+	// operator's next question is which of the two is wrong.
+	for _, want := range []string{"1", "27000", "26999"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not name %q, so it does not say what disagrees.\ngot: %v",
+				want, err)
+		}
+	}
+}
+
+// TestRoundedDepositsAreNotRefusedAsOverAllocation is the CONTROL, and it is the
+// reason the cap is a tolerance rather than an equality.
+//
+// A challan's five amount boxes are WHOLE RUPEES (the format forbids paise in
+// them) while a deduction is a 4-dp figure — ₹33,333 at 10% is ₹3,333.30 — so a
+// deposit of ₹3,333 against it leaves the allocations 0.30 ABOVE the deposit.
+// That is the ordinary case. A rule that refused it would make legitimate
+// deposits unrecordable, which is the failure the handler's header warns against
+// by name.
+func TestRoundedDepositsAreNotRefusedAsOverAllocation(t *testing.T) {
+	in := validChallan()
+	// Two deductions, each rounded DOWN by the deposit: the worst legitimate
+	// case, and the one nearest the boundary.
+	in.TaxRupees = d("6666")
+	in.Allocations = []TDSChallanAllocationInput{
+		{
+			VoucherID:    uuid.MustParse("11111111-1111-1111-1111-111111111111"),
+			Section:      "194C",
+			LegSeq:       0,
+			AmountRupees: d("3333.3000"),
+		},
+		{
+			VoucherID:    uuid.MustParse("22222222-2222-2222-2222-222222222222"),
+			Section:      "194C",
+			LegSeq:       0,
+			AmountRupees: d("3333.9999"),
+		},
+	}
+	if _, err := validateTDSChallan(in); err != nil {
+		t.Fatalf("a legitimately rounded deposit was refused: %v\nThe allocations exceed the "+
+			"deposit by 1.2999 across TWO lines, which is under the ₹1-per-allocation bound that "+
+			"rounding can produce. Refusing this makes real deposits unrecordable", err)
+	}
+	// And one paisa past the bound is refused, so the boundary is the boundary.
+	in.Allocations[1].AmountRupees = d("3334.7001")
+	if _, err := validateTDSChallan(in); !errors.Is(err, ErrChallanOverAllocated) {
+		t.Errorf("2.0001 over the deposit across two lines is more than rounding can explain and "+
+			"must be refused: %v", err)
+	}
+}
+
+// TestUnderAllocationIsStillLegal pins the other half of the same decision. A
+// deposit whose deductions have not all been attached yet is the ORDINARY state
+// — it is what AllocateToRecordedChallan exists to finish — and it is REPORTED
+// as UnallocatedTaxRupees, never refused.
+func TestUnderAllocationIsStillLegal(t *testing.T) {
+	in := validChallan()
+	in.TaxRupees = d("5000") // the deposit paid four more deductions than it names
+	if _, err := validateTDSChallan(in); err != nil {
+		t.Fatalf("a challan naming fewer deductions than it paid for was refused: %v\nThat state "+
+			"is legal, is what the register's unallocated column is for, and is exactly what the "+
+			"allocate-later route completes", err)
+	}
+}
+
+// ===========================================================================
+// REGISTER ROW D4 — THE COLLECTION SIDE
+// ===========================================================================
+
+// TestAnAllocationNamesWhichSideOfTheStatuteItPays pins the kind vocabulary and
+// its default.
+func TestAnAllocationNamesWhichSideOfTheStatuteItPays(t *testing.T) {
+	in := validChallan()
+	// The DEFAULT. An empty kind is TDS, which keeps every caller written before
+	// the collection side existed correct rather than silently wrong. It is safe
+	// to default HERE and not safe to default leg_seq, because a wrong kind
+	// cannot silently match: the two section vocabularies are disjoint by CHECK,
+	// so the lookup finds nothing and the request is refused by name.
+	out, err := validateTDSChallan(in)
+	if err != nil {
+		t.Fatalf("an allocation with no kind was refused: %v", err)
+	}
+	if out.Allocations[0].Kind != AllocationKindTDS {
+		t.Errorf("an absent kind normalised to %q, want TDS", out.Allocations[0].Kind)
+	}
+
+	// Case and whitespace, because this arrives from a JSON body.
+	in.Allocations[0].Kind = " tcs "
+	in.Allocations[0].Section = "206C(1)-SCRAP"
+	out, err = validateTDSChallan(in)
+	if err != nil {
+		t.Fatalf("a lower-case kind was refused: %v", err)
+	}
+	if out.Allocations[0].Kind != AllocationKindTCS {
+		t.Errorf("kind normalised to %q, want TCS", out.Allocations[0].Kind)
+	}
+
+	// And a third value is refused by name rather than silently treated as one
+	// of the two.
+	in.Allocations[0].Kind = "GST"
+	if _, err := validateTDSChallan(in); !errors.Is(err, ErrInvalidTDSChallan) {
+		t.Errorf("kind GST was not refused as invalid: %v", err)
+	}
+}
+
+// TestOneChallanCannotPayBothADeductionAndACollection is the refusal that keeps
+// the deduction return's batch total honest.
+//
+// reporting/tds_return_source.go reaches a challan THROUGH tds_deduction and
+// files the challan's WHOLE tax_rupees as the Form 140 challan's
+// TaxDeductedRupees (groupByChallan). A challan that had also paid TCS would
+// over-state that total by the collection half — and the FVU fails it against
+// the .csi file at the portal, not here.
+func TestOneChallanCannotPayBothADeductionAndACollection(t *testing.T) {
+	in := validChallan()
+	in.TaxRupees = d("3000")
+	in.Allocations = []TDSChallanAllocationInput{
+		{
+			VoucherID:    uuid.MustParse("11111111-1111-1111-1111-111111111111"),
+			Section:      "194C",
+			LegSeq:       0,
+			Kind:         AllocationKindTDS,
+			AmountRupees: d("1000"),
+		},
+		{
+			VoucherID:    uuid.MustParse("22222222-2222-2222-2222-222222222222"),
+			Section:      "206C(1)-SCRAP",
+			LegSeq:       0,
+			Kind:         AllocationKindTCS,
+			AmountRupees: d("2000"),
+		},
+	}
+	_, err := validateTDSChallan(in)
+	if !errors.Is(err, ErrMixedChallanKinds) {
+		t.Fatalf("one challan was accepted as paying both a deduction and a collection: %v\n"+
+			"The two are filed on separate returns, and reporting files a challan's whole tax as "+
+			"the DEDUCTION return's challan total — so a mixed deposit over-states it by the "+
+			"collection half", err)
+	}
+}

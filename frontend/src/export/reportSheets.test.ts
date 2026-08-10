@@ -99,23 +99,35 @@ describe("stockSummarySheet", () => {
 
   it("writes quantities and the presentation-only rate EXACTLY", () => {
     const g = grid(stockSummarySheet(data, undefined));
+    // ⛔ INDEXED BY HEADER NAME, NEVER BY A LITERAL COLUMN NUMBER. This test
+    // read `item[4]` and `item[5]`, and when the sheet was widened to give
+    // every quantity its VALUE beside it (the inward money figure was written
+    // down nowhere at all), those numbers silently pointed at different
+    // columns. A test that hardcodes a position cannot notice a column moving —
+    // which is the same class of blindness as the defect it is guarding.
+    const at = (row: string[], header: string) => row[g[0]!.indexOf(header)];
     const item = g.find((r) => r[0] === "Widget")!;
-    expect(item[4]).toBe("60.0000"); // closing qty, all four decimals
-    expect(item[5]).toBe(""); // no rate on an item total — see the type's comment
-    expect(item[6]).toBe("2999.4322");
+    expect(at(item, "Closing Qty")).toBe("60.0000"); // all four decimals
+    expect(at(item, "Rate")).toBe(""); // no rate on an item total
+    expect(at(item, "Closing Value")).toBe("2999.4322");
+    // The inward MONEY: returned by the API, and absent from this file until
+    // the columns were widened.
+    expect(at(item, "Inward Value")).toBe("5000.0000");
+    expect(at(item, "Inward Qty")).toBe("100.0000");
 
     const pos = g.find((r) => r[0] === "Main Store")!;
     // `closing_rate` is 4-dp presentation only. Exported verbatim, so nobody can
     // multiply a rounded rate back out and get a value that never existed.
-    expect(pos[5]).toBe("49.9905");
+    expect(at(pos, "Rate")).toBe("49.9905");
 
-    expect(g[g.length - 1]).toEqual([
+    const footer = g[g.length - 1]!;
+    expect(footer[0]).toBe("Stock-in-Hand");
+    expect(at(footer, "Closing Value")).toBe("9999.1234");
+    // Every other cell of the footer is blank: the response carries no
+    // opening/inward/outward totals, and a client-side fold would be this sheet
+    // asserting a figure the server never derived.
+    expect(footer.filter((c) => c !== "")).toEqual([
       "Stock-in-Hand",
-      "",
-      "",
-      "",
-      "",
-      "",
       "9999.1234",
     ]);
   });

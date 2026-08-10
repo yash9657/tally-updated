@@ -36,11 +36,29 @@ func NewPGLockoutStore(pool *pgxpool.Pool) *PGLockoutStore {
 func (s *PGLockoutStore) RecordAttempt(ctx context.Context, subject string, ok bool, ip string) error {
 	// auth_login_attempt.ip is NOT NULL DEFAULT '' in 0011, so pass the empty
 	// string (never NULL) when no client IP is available.
+	outcome := "failure"
+	if ok {
+		outcome = "success"
+	}
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO auth_login_attempt (subject, succeeded, ip)
-		VALUES ($1, $2, $3)`, subject, ok, ip)
+		INSERT INTO auth_login_attempt (subject, succeeded, ip, outcome)
+		VALUES ($1, $2, $3, $4)`, subject, ok, ip, outcome)
 	if err != nil {
 		return fmt.Errorf("authn: record attempt: %w", err)
+	}
+	return nil
+}
+
+// RecordLockedOutAttempt audits a sign-in attempt refused because the account
+// was ALREADY locked (D73). succeeded=false because it certainly did not
+// succeed; outcome='locked' because it was never a password check, and the
+// failure count that decides locking reads `outcome = 'failure'` only.
+func (s *PGLockoutStore) RecordLockedOutAttempt(ctx context.Context, subject, ip string) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO auth_login_attempt (subject, succeeded, ip, outcome)
+		VALUES ($1, false, $2, 'locked')`, subject, ip)
+	if err != nil {
+		return fmt.Errorf("authn: record locked-out attempt: %w", err)
 	}
 	return nil
 }
@@ -60,22 +78,73 @@ func (s *PGLockoutStore) RecordAttempt(ctx context.Context, subject string, ok b
 //
 // COALESCE(..., '-infinity') keeps the predicate total for a subject that has
 // never succeeded, in which case this degrades to the plain window count.
+//
+// ⛔ IT COUNTS outcome='failure', NOT succeeded=false, AND THE RESET POINT IS A
+// SUCCESS **OR AN ADMINISTRATIVE UNLOCK** (migration 0074). Two rows in this
+// table are refusals that must never count toward locking:
+//
+//	'locked'   an attempt made while the account was already locked, refused
+//	           before a password was looked at (D73). Counting it would let a
+//	           brute-forcer renew their victim's lock indefinitely just by
+//	           continuing to knock, and would re-lock an operator who kept
+//	           typing during their fifteen minutes the instant it expired.
+//	'unlocked' an administrator clearing the lock (D55). It is not a login, but
+//	           it IS a reset point: without it, an account unlocked while five
+//	           failures are still inside the sliding window re-locks on the very
+//	           next typo and the remedy looks like it never worked.
+//
+// Migration 0074 backfilled `outcome` from `succeeded`, so for every row that
+// existed before it, this predicate is EXACTLY the one it replaces.
 func (s *PGLockoutStore) FailuresInWindow(ctx context.Context, subject string, since time.Time) (int, error) {
 	var n int
 	err := s.pool.QueryRow(ctx, `
 		SELECT count(*)
 		FROM auth_login_attempt
 		WHERE subject = $1
-		  AND succeeded = false
+		  AND outcome = 'failure'
 		  AND at >= $2
 		  AND at > COALESCE(
 		      (SELECT max(at) FROM auth_login_attempt
-		        WHERE subject = $1 AND succeeded = true),
+		        WHERE subject = $1 AND outcome IN ('success', 'unlocked')),
 		      '-infinity'::timestamptz)`, subject, since).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("authn: count failures: %w", err)
 	}
 	return n, nil
+}
+
+// ConsecutiveLocks counts the locks this subject has collected since their last
+// success or unlock — the exponent for the backoff. It is app_user.lock_count,
+// which SetLock increments and ClearLock (and the admin unlock) reset.
+func (s *PGLockoutStore) ConsecutiveLocks(ctx context.Context, subject string) (int, error) {
+	var n int
+	err := s.withSubject(ctx, subject, func(tx pgx.Tx) error {
+		err := tx.QueryRow(ctx,
+			`SELECT lock_count FROM app_user WHERE subject = $1`, subject).Scan(&n)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil // unknown subject: nothing to back off from.
+		}
+		if err != nil {
+			return fmt.Errorf("authn: read lock count: %w", err)
+		}
+		return nil
+	})
+	return n, err
+}
+
+// SetFailureCount writes the RUNNING failure count (D74). An unknown subject
+// updates no row, which is not an error: a login naming an account that does
+// not exist has nothing to count on, and saying so out loud here would hand
+// back the very existence oracle RecordFailure is careful not to give.
+func (s *PGLockoutStore) SetFailureCount(ctx context.Context, subject string, failures int) error {
+	return s.withSubject(ctx, subject, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+			UPDATE app_user SET failed_attempts = $1 WHERE subject = $2`,
+			failures, subject); err != nil {
+			return fmt.Errorf("authn: set failure count: %w", err)
+		}
+		return nil
+	})
 }
 
 // withSubject runs fn inside a transaction with the subject GUC set
@@ -108,13 +177,30 @@ func (s *PGLockoutStore) withSubject(ctx context.Context, subject string, fn fun
 // response cannot distinguish a real account from a ghost (see RecordFailure's
 // no-enumeration invariant). Reporting rows-affected here, rather than guessing
 // upstream, keeps the single source of truth at the write itself.
-func (s *PGLockoutStore) SetLock(ctx context.Context, subject string, until time.Time, failures int) (bool, error) {
+// ⛔⛔ IT ALSO ADVANCES THE REVOCATION EPOCH, AND THAT IS D56. Before this,
+// locking an account revoked NOTHING it already held: `locked_until` was read on
+// exactly one path (POST /auth/login), so the bearer in the attacker's hand kept
+// working for the full 3600-second TTL and a locked account posted a write and
+// got 201. Setting sessions_invalid_before = the lock instant kills every token
+// minted at or before it, on EVERY authenticated route (see
+// server.Server.sessionRevoked).
+//
+// GREATEST(...) is not decoration: the epoch must only ever move FORWARD.
+// Assigning `at` unconditionally would let a clock skew, a replayed call, or a
+// second lock computed from an earlier `now` REWIND the epoch and resurrect
+// sessions that were already dead — a revocation you can undo by locking
+// somebody again is not a revocation.
+func (s *PGLockoutStore) SetLock(ctx context.Context, subject string, at, until time.Time, failures int) (bool, error) {
 	var persisted bool
 	err := s.withSubject(ctx, subject, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `
 			UPDATE app_user
-			SET locked_until = $1, failed_attempts = $2
-			WHERE subject = $3`, until, failures, subject)
+			SET locked_until = $1,
+			    failed_attempts = $2,
+			    lock_count = lock_count + 1,
+			    sessions_invalid_before =
+			        GREATEST(COALESCE(sessions_invalid_before, $4), $4)
+			WHERE subject = $3`, until, failures, subject, at)
 		if err != nil {
 			return fmt.Errorf("authn: set lock: %w", err)
 		}
@@ -128,17 +214,64 @@ func (s *PGLockoutStore) SetLock(ctx context.Context, subject string, until time
 }
 
 // ClearLock resets failure state and lock on success.
+//
+// ⛔ IT DOES NOT CLEAR sessions_invalid_before, and that asymmetry is the point.
+// The epoch says "every token minted before this instant is dead"; a later
+// successful login mints a token AFTER it, so the person who proved they own
+// the password is let straight back in — while the sessions that were live when
+// the account was locked stay dead for good. Clearing the epoch here would mean
+// an attacker holding a stolen bearer only had to wait for the real owner to
+// sign in successfully, and their session would come back to life.
 func (s *PGLockoutStore) ClearLock(ctx context.Context, subject string) error {
 	return s.withSubject(ctx, subject, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `
 			UPDATE app_user
-			SET locked_until = NULL, failed_attempts = 0
+			SET locked_until = NULL, failed_attempts = 0, lock_count = 0
 			WHERE subject = $1`, subject)
 		if err != nil {
 			return fmt.Errorf("authn: clear lock: %w", err)
 		}
 		return nil
 	})
+}
+
+// SessionState reads (locked_until, sessions_invalid_before) for one subject in
+// ONE round trip, through migration 0074's SECURITY DEFINER
+// auth_session_state().
+//
+// ⛔ WHY IT DOES NOT USE withSubject LIKE EVERYTHING ELSE IN THIS FILE. This is
+// the AUTHENTICATED HOT PATH — Server.authenticate calls it once for every
+// request in the product. withSubject is BEGIN + set_config + the query +
+// COMMIT, four round trips, because app_user's RLS needs a transaction-local
+// GUC before the app role may see even its own row. Paying four round trips per
+// request to read two timestamps would make revocation expensive enough that
+// somebody would eventually cache it, and a cached revocation is a revocation
+// with a window in it. The function is the narrowest possible hole (two
+// timestamps for one named subject, nothing else) and its only caller has
+// already verified the token's signature for that subject — see the migration.
+//
+// An UNKNOWN subject returns no row, i.e. both zero times, i.e. "nothing
+// revoked". That is correct and is not a fail-open: a subject with no app_user
+// row has never been locked, because SetLock's UPDATE would match no row either.
+func (s *PGLockoutStore) SessionState(ctx context.Context, subject string) (time.Time, time.Time, error) {
+	var lockedUntil, invalidBefore *time.Time
+	err := s.pool.QueryRow(ctx,
+		`SELECT locked_until, sessions_invalid_before FROM auth_session_state($1)`,
+		subject).Scan(&lockedUntil, &invalidBefore)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return time.Time{}, time.Time{}, nil
+	}
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("authn: session state: %w", err)
+	}
+	var lu, ib time.Time
+	if lockedUntil != nil {
+		lu = *lockedUntil
+	}
+	if invalidBefore != nil {
+		ib = *invalidBefore
+	}
+	return lu, ib, nil
 }
 
 // LockedUntil returns the subject's lock expiry, or the zero time if the subject

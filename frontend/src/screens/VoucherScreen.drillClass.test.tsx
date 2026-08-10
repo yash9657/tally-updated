@@ -141,6 +141,11 @@ describe("a Day Book drill opens the voucher's OWN class", () => {
           target: { value: "10000" },
         });
         fireEvent.change(screen.getByTestId("gst-rate"), { target: { value: "18" } });
+        // ⛔ THE HSN IS NOW MANDATORY TO SAVE A SALES INVOICE (D60) — it is a Rule
+        // 46(g) particular, and without it the invoice saved and then could not be
+        // PRINTED. Keying it makes every assertion below the CONTROL for that new
+        // refusal: an invoice that DOES carry an HSN still saves, unchanged.
+        fireEvent.change(screen.getByTestId("gst-hsn"), { target: { value: "7326" } });
       } else if (cls === "Contra") {
         // Cash <-> Bank only; an expense ledger is refused on this class.
         await fillSingleEntry(account, "Cash", "2500");
@@ -246,6 +251,11 @@ describe("a Day Book drill opens the voucher's OWN class", () => {
     fireEvent.mouseDown(await screen.findByText("Acme Traders"));
     fireEvent.change(screen.getByTestId("gst-taxable"), { target: { value: "10000" } });
     fireEvent.change(screen.getByTestId("gst-rate"), { target: { value: "18" } });
+    // ⛔ THE HSN IS NOW MANDATORY TO SAVE A SALES INVOICE (D60) — it is a Rule
+    // 46(g) particular, and without it the invoice saved and then could not be
+    // PRINTED. Keying it makes every assertion below the CONTROL for that new
+    // refusal: an invoice that DOES carry an HSN still saves, unchanged.
+    fireEvent.change(screen.getByTestId("gst-hsn"), { target: { value: "7326" } });
     fireEvent.keyDown(app, { key: "a", ctrlKey: true });
     await waitFor(() => expect(spies.postSalesVoucher).toHaveBeenCalledTimes(1));
     const billName: string = (
@@ -334,6 +344,11 @@ describe("Page Up / Page Down re-classes the standing frame", () => {
     fireEvent.mouseDown(await screen.findByText("Acme Traders"));
     fireEvent.change(screen.getByTestId("gst-taxable"), { target: { value: "10000" } });
     fireEvent.change(screen.getByTestId("gst-rate"), { target: { value: "18" } });
+    // ⛔ THE HSN IS NOW MANDATORY TO SAVE A SALES INVOICE (D60) — it is a Rule
+    // 46(g) particular, and without it the invoice saved and then could not be
+    // PRINTED. Keying it makes every assertion below the CONTROL for that new
+    // refusal: an invoice that DOES carry an HSN still saves, unchanged.
+    fireEvent.change(screen.getByTestId("gst-hsn"), { target: { value: "7326" } });
     fireEvent.keyDown(app, { key: "a", ctrlKey: true });
     await waitFor(() => expect(spies.postSalesVoucher).toHaveBeenCalledTimes(1));
     const sale = await spies.postSalesVoucher!.mock.results[0]!.value;

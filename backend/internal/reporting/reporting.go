@@ -979,8 +979,38 @@ func (s *Service) BalanceSheet(ctx context.Context, companyID uuid.UUID, asOn st
 		bs.NetProfit = income.Sub(expense).Add(stockAdj)
 		if !bs.NetProfit.IsZero() {
 			bs.Liabilities.Nodes = append(bs.Liabilities.Nodes, StatementNode{
-				Kind:   NodeComputed,
-				Name:   "Profit & Loss A/c (Current Period)",
+				Kind: NodeComputed,
+				// ⛔ THE LINE NAMES ITS OWN PERIOD, AND IT USED TO NAME THE WRONG
+				// ONE. IT WAS DRIVEN.
+				//
+				// This node was captioned "Profit & Loss A/c (Current Period)".
+				// It is not the current period and never was: everything above
+				// derives it from `loadClosingBalances(asOn)`, which has NO
+				// lower bound, so the figure is cumulative FROM INCEPTION to
+				// `asOn`. The Profit & Loss screen beside it takes BOTH F2
+				// bounds and honours the From date. So with one F2 setting
+				// (From 2026-07-01) a browser showed 1,16,237.15 on the Balance
+				// Sheet against -37,911.02 on the P&L — two statements over one
+				// set of books, differing by every posting before July, and
+				// both captioned as if they covered the same window. An
+				// accountant reconciling them has nothing to reconcile against.
+				//
+				// ⛔ DO NOT "FIX" THIS BY MAKING THE FIGURE HONOUR `from`. Read
+				// the block above: the sheet has no `from` to honour (its API
+				// takes `as_on` only, because a Balance Sheet is a POSITION),
+				// and deriving the opening term from books_beginning_from was
+				// TRIED — it subtracts pre-books stock from the profit side
+				// while the asset side still carries the full closing stock, and
+				// THE SHEET STOPS BALANCING (measured: assets 7500 against
+				// liabilities 500). TestBackDatedStockKeepsTheSheetBalanced pins
+				// that. The two figures SHOULD differ whenever a From date is
+				// set; what was defective is a caption that denied it.
+				//
+				// So the line states the period it actually covers, upper bound
+				// included — which also means this statement now prints a date
+				// somewhere on its face, where before a Balance Sheet drawn with
+				// no period stated none at all.
+				Name:   "Profit & Loss A/c (cumulative to " + dateOrEver(asOn) + ")",
 				Amount: bs.NetProfit,
 			})
 			bs.Liabilities.Total = bs.Liabilities.Total.Add(bs.NetProfit)

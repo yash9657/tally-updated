@@ -36,6 +36,7 @@ import {
   PurchaseOrderBookScreen,
 } from "../screens/reports/OrderBookScreens";
 import { REPORT_NAMES } from "../keystroke/types";
+import { GOTO_ENTRIES } from "../keystroke/navMachine";
 import type { ScreenComponent, ScreenComponentProps } from "./screenRegistry";
 import { ScreenRegistry } from "./screenRegistry";
 
@@ -47,7 +48,18 @@ import { ScreenRegistry } from "./screenRegistry";
  * The Gateway and Voucher screens reuse the existing Phase 0 components.
  */
 
-/** The Alt+G / Ctrl+G Go To picker. Lists the Phase 1 reports plus Vouchers. */
+/**
+ * The Alt+G / Ctrl+G Go To picker.
+ *
+ * ⛔ ITS OPTIONS ARE `GOTO_ENTRIES` AND NOT A LIST WRITTEN HERE. This used to be
+ * `["Vouchers", ...REPORT_NAMES]`, and that literal is the whole of row 20: with
+ * no masters entry in it and none on the Gateway menu, NO keystroke in the
+ * product reached `masterKind` "stock-item" or "unit", so a company could never
+ * be given a stock item or a unit from the keyboard at all. The machine owns the
+ * list because the machine owns what a selection DOES — see MASTER_GOTO_ENTRIES
+ * in navMachine.ts, and `resolveGotoSelection`, which must branch on the same
+ * labels this renders or the entry lands on "not available in this build".
+ */
 const GoToOverlayScreen: ScreenComponent = ({ snapshot, onSelect }) => {
   const verb = "Go To"; // gotoMode is internal to the machine; label stays "Go To"
   return (
@@ -56,7 +68,7 @@ const GoToOverlayScreen: ScreenComponent = ({ snapshot, onSelect }) => {
         <h2 className="mb-2 text-tally-title">{verb}</h2>
         <SelectionList
           label="Search"
-          options={["Vouchers", ...REPORT_NAMES]}
+          options={GOTO_ENTRIES}
           onSelect={onSelect}
           autoFocus
         />

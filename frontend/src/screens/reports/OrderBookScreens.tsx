@@ -107,6 +107,18 @@ interface BookCopy {
   title: string;
   /** The party column's heading. A customer promises us; we promise a supplier. */
   partyHeading: string;
+  /**
+   * What the FULFILLED quantity column is called on this direction.
+   *
+   * ⛔ IT IS NOT "Delivered" ON BOTH, AND HARD-CODING IT WAS THE DEFECT. On the
+   * purchase book the figure counts goods a SUPPLIER owes and has handed over —
+   * the company received them, it delivered nothing — and the purchase register
+   * (OrderRegisterScreen's PURCHASE_COPY.fulfilledNoun) has always called the
+   * identical figure "Received". Two names for one number across two screens an
+   * operator moves between is how a reconciliation question gets asked about a
+   * column that was never different.
+   */
+  fulfilledHeading: string;
   /** The sentence under the heading, saying what these commitments ARE. */
   blurb: string;
   /** The empty state. "No orders" and "nothing outstanding" are different facts. */
@@ -120,6 +132,9 @@ interface BookCopy {
 const SALES_COPY: BookCopy = {
   title: "Sales Order Book",
   partyHeading: "Customer",
+  // We deliver to a customer, so "Delivered" is right here — and it is stated
+  // rather than defaulted, so the purchase book cannot inherit it by accident.
+  fulfilledHeading: "Delivered",
   blurb:
     "What customers have committed to buy and we have not yet delivered. An order is " +
     "a PROMISE, not an entry: nothing here has moved stock or posted to the ledger, " +
@@ -135,6 +150,9 @@ const SALES_COPY: BookCopy = {
 const PURCHASE_COPY: BookCopy = {
   title: "Purchase Order Book",
   partyHeading: "Supplier",
+  // A supplier delivers to US. The company RECEIVES, which is exactly the word
+  // the purchase register uses for the same figure.
+  fulfilledHeading: "Received",
   blurb:
     "What we have committed to buy from suppliers and have not yet received. An " +
     "order is a PROMISE, not an entry: nothing here has moved stock or posted to " +
@@ -348,7 +366,8 @@ function OrderBookRows({
           <th className="pr-3">{copy.partyHeading}</th>
           <th className="pr-3">Item</th>
           <th className="pr-3 text-right">Ordered</th>
-          <th className="pr-3 text-right">Delivered</th>
+          {/* ⛔ FROM THE COPY, NEVER A LITERAL — see BookCopy.fulfilledHeading. */}
+          <th className="pr-3 text-right">{copy.fulfilledHeading}</th>
           <th className="pr-3 text-right">Outstanding</th>
           <th className="pr-3 text-right">Rate</th>
           <th className="pr-3 text-right">Outstanding Value</th>
@@ -456,7 +475,11 @@ export function PurchaseOrderBookScreen({ snapshot }: { snapshot: NavSnapshot })
  */
 export function orderBookSheet(
   data: OrderBookResponse,
-  copy: BookCopy,
+  // ⚠️ ONLY THE THREE HEADINGS, not the whole BookCopy. A function that asks for
+  // more than it uses cannot be called from a test without inventing a blurb, a
+  // 403 sentence and an empty state — and a header assertion that has to invent
+  // four unrelated strings is one nobody writes.
+  copy: Pick<BookCopy, "title" | "partyHeading" | "fulfilledHeading">,
   asOn: string | undefined,
 ): ExportSheet {
   const rows: ExportRow[] = data.rows.map((row): ExportRow => [
@@ -496,7 +519,11 @@ export function orderBookSheet(
       copy.partyHeading,
       "Item",
       "Ordered",
-      "Delivered",
+      // ⛔ THE EXPORT'S HEADER MUST MATCH THE SCREEN'S. A spreadsheet is read
+      // away from the screen that produced it, so a column named "Delivered" in
+      // a file of goods a supplier owes us is the same defect with a longer
+      // half-life: nobody can check it against the report it came from.
+      copy.fulfilledHeading,
       "Outstanding",
       "Rate",
       "Outstanding Value",

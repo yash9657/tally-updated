@@ -849,8 +849,31 @@ func (s *Server) routes() {
 		// resource token, which is a BARE token and not a report name — see
 		// handler_tds_challan.go for why that is a safety decision about migration
 		// 0011 rather than a matter of style.
+		//
+		// ⛔ AND THE SECOND POST IS THE ALLOCATE-LATER (register row D1). It was
+		// missing, and its absence was not a gap in a form: a deposit may
+		// legitimately be recorded naming fewer deductions than it paid for, and
+		// nothing could then attach the rest — the audit drove seven in-browser
+		// doors and six HTTP methods at challan 05130 and its unallocated balance
+		// stayed at exactly 12000.0000, while the return refused the unattached
+		// deduction as undeposited. It is an ADD (POST) and not an edit: it creates
+		// links that were not there, and cannot move, change or remove one.
+		//
+		// It needs NO routeAction arm of its own — that case matches the
+		// `/tds-challans` PREFIX, so read and write of every path under it share
+		// the one `tds-challan` token, which is the arrangement that keeps one ACL
+		// rule governing the whole surface.
+		//
+		// ⚠️ IT DOES NEED THE CUTOFF, and it gets it from the STORED deposit date
+		// of the challan named in the path (storedChallanDepositDate). The body
+		// carries no date at all — see tdsChallanAllocateReq — so the round-1/2
+		// body peeks cannot see this act, and the round-3 rule applies instead:
+		// judge the date the books already hold. Attaching a deduction to a deposit
+		// dated inside a locked period changes what that quarter's return says it
+		// paid for, which is exactly what the lock exists to freeze.
 		r.Get("/tds-challans", s.handleListTDSChallans)
 		r.Post("/tds-challans", s.handleCreateTDSChallan)
+		r.Post("/tds-challans/{challanID}/allocations", s.handleAllocateToTDSChallan)
 
 		// THE TDS/TCS REGISTER (Item Zero step 4) — everything deducted and
 		// collected in a period, per deductee and per buyer.

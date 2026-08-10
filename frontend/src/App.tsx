@@ -1,6 +1,11 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AppShell } from "./app/AppShell";
-import { CompanyProvider, type CompanyInfo } from "./app/CompanyContext";
+import {
+  COMPANY_STORAGE_KEY,
+  CompanyProvider,
+  rememberChosenCompanyId,
+  type CompanyInfo,
+} from "./app/CompanyContext";
 import { createMockClient, createRestClient } from "./api";
 import type { CoredClient } from "./api";
 import { AuthProvider, useAuth } from "./auth/AuthContext";
@@ -138,7 +143,25 @@ function AuthGatedApp({
     session,
   ]);
 
+  // D25 — SIGNING IN MUST CLAIM A PENDING INVITE. Run it BEFORE the company
+  // bootstrap, and gate the shell on it. See claimInvitesOnSignIn.
+  const claimed = useSessionBootstrap(
+    resolvedClient,
+    session?.user.id || session?.user.subject || "",
+  );
+
   if (!session || !resolvedClient) return <LoginScreen />;
+  if (!claimed) {
+    return (
+      <section
+        data-testid="session-bootstrap"
+        aria-label="Opening your companies"
+        className="flex h-full w-full items-center justify-center bg-tally-bg p-4 font-mono text-tally-field"
+      >
+        Opening your companies…
+      </section>
+    );
+  }
 
   return (
     <CompanyProvider
@@ -150,6 +173,116 @@ function AuthGatedApp({
       <AppShell />
     </CompanyProvider>
   );
+}
+
+/**
+ * SESSION BOOTSTRAP — the call that turns an invite into a membership (D25).
+ *
+ * ==========================================================================
+ * THE DEFECT
+ * ==========================================================================
+ * `GET /v1/me` is the ONLY seam in the whole product that converts a pending
+ * invite into a membership: the server never writes another person's identity
+ * row, so `handleMe` claims first and lists second, and the invitee's own next
+ * call is what materialises their access. The browser called it from EXACTLY ONE
+ * place — the F3 Select Company screen — which the invited user has no reason to
+ * open and, worse, would not be helped by if they did.
+ *
+ * What actually happened to somebody who was invited and then signed in: the
+ * invite was never claimed, so `CompanyProvider`'s bootstrap found nothing
+ * persisted, fell through its precedence chain to step 4, and MINTED A BRAND-NEW
+ * COMPANY called "My Company" with them as its Owner. They were invited to a
+ * firm's books and landed in an empty tenant of their own, with no error
+ * anywhere — while the administrator's Users & Roles still showed a pending
+ * invite, because nothing had claimed it.
+ *
+ * ==========================================================================
+ * WHY IT GATES THE SHELL INSTEAD OF FIRING AND FORGETTING
+ * ==========================================================================
+ * ORDERING IS THE WHOLE FIX. The claim and the bootstrap race for the same
+ * question ("which company does this person open?"), and the bootstrap is the
+ * one that MINTS. A fire-and-forget claim would still be in flight when the
+ * provider decided there was nothing to open, and the new company would be
+ * created anyway — the defect, with a network request added. So nothing below
+ * this renders until the claim has settled.
+ *
+ * ⚠️ SETTLED, NOT SUCCEEDED. A failure here must not lock anybody out of an app
+ * they have already authenticated to: on any error we proceed exactly as before,
+ * which is no worse than the behaviour this replaces. (A 401 is separately
+ * handled by bearerFetch, which ends the session.)
+ *
+ * ==========================================================================
+ * AND WHY IT WRITES THE COMPANY ID RATHER THAN SELECTING ONE
+ * ==========================================================================
+ * `CompanyContext` owns the selection precedence — F3 choice, then `?company=`,
+ * then localStorage, then mint — and that story must not grow a fifth rule
+ * here. Instead this fills in the ONE case where the chain had nothing to go on:
+ * when NOTHING is persisted and NOTHING is in the URL, the company the server
+ * says this user may open is a better answer than minting a new one. When
+ * anything IS persisted or asked for, this touches nothing at all: an operator's
+ * own most recent deliberate choice still wins.
+ */
+function useSessionBootstrap(
+  client: CoredClient | null,
+  sessionKey: string,
+): boolean {
+  const [doneFor, setDoneFor] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!client || !sessionKey) return;
+    let live = true;
+    void (async () => {
+      try {
+        const me = await client.getMe();
+        if (!live) return;
+        adoptCompanyIfNoneChosen(me.companies, me.claimed_invites);
+      } catch {
+        // See the doc: settled, not succeeded.
+      } finally {
+        if (live) setDoneFor(sessionKey);
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [client, sessionKey]);
+
+  return doneFor === sessionKey;
+}
+
+/**
+ * Fill in the company only when the operator has expressed no preference at
+ * all. A just-claimed invite wins over an older membership, because it is the
+ * reason this person is signing in today.
+ */
+function adoptCompanyIfNoneChosen(
+  companies: { company_id: string }[],
+  claimedInvites: { company_id: string }[],
+): void {
+  if (companies.length === 0) return;
+  if (readPersistedCompanyId() || readCompanyIdInURL()) return;
+  const target = claimedInvites[0]?.company_id || companies[0]?.company_id;
+  if (target) rememberChosenCompanyId(target);
+}
+
+/** The persisted company id, read through CompanyContext's own storage key. */
+function readPersistedCompanyId(): string {
+  try {
+    return globalThis.localStorage?.getItem(COMPANY_STORAGE_KEY) ?? "";
+  } catch {
+    // Storage can throw (Safari private mode, a disabled origin). Treating that
+    // as "nothing persisted" is the same answer CompanyContext gives.
+    return "";
+  }
+}
+
+/** `?company=<id>` in the address bar, which outranks anything stored. */
+function readCompanyIdInURL(): string {
+  try {
+    return new URL(globalThis.location?.href ?? "").searchParams.get("company") ?? "";
+  } catch {
+    return "";
+  }
 }
 
 /**

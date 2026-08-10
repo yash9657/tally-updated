@@ -294,3 +294,183 @@ describe("Ctrl+H Change Mode", () => {
     expect(screen.getByTestId("gst-panel")).toBeTruthy();
   });
 });
+
+/**
+ * ===========================================================================
+ * ⛔⛔ WHO THE DOCUMENT IS FOR — §7.1 D59, FOUND ON THE PRINTED PAPER.
+ * ===========================================================================
+ *
+ * The printed Receipt and Payment named the BANK as the counterparty —
+ * "Received From: HDFC Bank", "Paid To: HDFC Bank" — because this form put the
+ * bank in BOTH `party` and `party_ledger_id`, and `printingdb` builds the Party
+ * block from `party_ledger_id` (falling back to the `party` LABEL when there is
+ * no master behind it). A receipt that says the money came from your own bank
+ * credits nobody's account; `vdPartyConsequence` states exactly that.
+ *
+ * ⛔ THE ASSERTIONS NAME LEDGERS ON BOTH SIDES, not just the party field. The
+ * fix moves what `party_ledger_id` MEANS on this form, and the way to get that
+ * catastrophically wrong is to also move the ACCOUNT leg — a receipt rebuilt as
+ * `Dr Acme / Cr Acme` balances to the paisa and loses the bank entirely, and no
+ * total, trigger or server check disagrees with it.
+ */
+describe("D59 — the counterparty is a PARTICULAR, never the bank", () => {
+  async function seedBooks(base: CoredClient): Promise<void> {
+    await base.createLedger("co-1", {
+      name: "HDFC Bank",
+      group_name: "Bank Accounts",
+    });
+    await base.createLedger("co-1", {
+      name: "Acme Traders",
+      group_name: "Sundry Debtors",
+      state_code: "29",
+    });
+    await base.createLedger("co-1", {
+      name: "Bharat Stores",
+      group_name: "Sundry Debtors",
+      state_code: "29",
+    });
+  }
+
+  it("a RECEIPT names the CUSTOMER, and still debits the bank", async () => {
+    const base = createMockClient({ seed: false });
+    await seedBooks(base);
+    const { client, spies } = spyClient(base);
+    renderShell(client);
+    const app = screen.getByRole("application");
+    fireEvent.keyDown(app, { key: "F6" });
+
+    await fillSingleEntry("HDFC Bank", [["Acme Traders", "5000"]]);
+    fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    await waitFor(() => expect(spies.postReceiptVoucher).toHaveBeenCalledTimes(1));
+
+    const [, req] = spies.postReceiptVoucher!.mock.calls[0]!;
+    const acme = (await client.listLedgers("co-1")).ledgers.find(
+      (l) => l.name === "Acme Traders",
+    )!;
+    // ⛔ THE PRINTED "Received From". Both the label and the master.
+    expect((req as { party: string }).party).toBe("Acme Traders");
+    expect((req as { party_ledger_id?: string }).party_ledger_id).toBe(acme.id);
+
+    // ⛔ AND THE MONEY STILL MOVED THE SAME WAY. This is the control that makes
+    // the change a re-labelling rather than a re-posting: the bank is debited
+    // the total and the customer credited, exactly as before.
+    const postings = (req as { postings: PostingRequest[] }).postings;
+    const { debits, credits } = await sidesByName(client, postings);
+    expect(debits).toEqual([["HDFC Bank", "5000.0000"]]);
+    expect(credits).toEqual([["Acme Traders", "5000.0000"]]);
+  });
+
+  it("a PAYMENT to an expense head names it as a LABEL and sends no party master", async () => {
+    // ⛔ `party_ledger_id` IS A PARTY MASTER, and "Electricity" is an expense
+    // head. "Paid To: Electricity" is the truth about the document and prints
+    // from the label; pointing the master field at an expense ledger would put
+    // a non-party into a column that gstr1/itc/ewaybill all join on.
+    const base = createMockClient({ seed: false });
+    await seedBooks(base);
+    const { client, spies } = spyClient(base);
+    renderShell(client);
+    const app = screen.getByRole("application");
+    fireEvent.keyDown(app, { key: "F5" });
+
+    await fillSingleEntry("HDFC Bank", [["Electricity", "1500"]]);
+    fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    await waitFor(() => expect(spies.postPaymentVoucher).toHaveBeenCalledTimes(1));
+
+    const [, req] = spies.postPaymentVoucher!.mock.calls[0]!;
+    expect((req as { party: string }).party).toBe("Electricity");
+    expect((req as { party_ledger_id?: string }).party_ledger_id).toBeUndefined();
+    // ⛔ AND NOT THE BANK, which is what it used to be on both fields.
+    expect((req as { party: string }).party).not.toBe("HDFC Bank");
+  });
+
+  it("two customers on one receipt name NOBODY rather than guessing between them", async () => {
+    // A voucher settling two customers has two counterparties. Naming the first
+    // would be this form inventing the answer, and the paper would then credit
+    // one customer for the other's money. The document refuses to print, naming
+    // the particular it lacks — which is the honest outcome.
+    const base = createMockClient({ seed: false });
+    await seedBooks(base);
+    const { client, spies } = spyClient(base);
+    renderShell(client);
+    const app = screen.getByRole("application");
+    fireEvent.keyDown(app, { key: "F6" });
+
+    await fillSingleEntry("HDFC Bank", [
+      ["Acme Traders", "5000"],
+      ["Bharat Stores", "3000"],
+    ]);
+    fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    await waitFor(() => expect(spies.postReceiptVoucher).toHaveBeenCalledTimes(1));
+
+    const [, req] = spies.postReceiptVoucher!.mock.calls[0]!;
+    expect((req as { party: string }).party).toBe("");
+    expect((req as { party_ledger_id?: string }).party_ledger_id).toBeUndefined();
+    // The voucher itself is untouched — 8,000 into the bank, both customers
+    // credited. Only the claim about who it is FOR is withheld.
+    const { debits, credits } = await sidesByName(
+      client,
+      (req as { postings: PostingRequest[] }).postings,
+    );
+    expect(debits).toEqual([["HDFC Bank", "8000.0000"]]);
+    expect(credits).toEqual([
+      ["Acme Traders", "5000.0000"],
+      ["Bharat Stores", "3000.0000"],
+    ]);
+  });
+
+  it("⛔⛔ the ALTER round trip keeps the BANK in the Account field and both legs on the voucher", async () => {
+    // ⛔ THE TEST THAT STOPS THE FIX BECOMING A CATASTROPHE. `party` no longer
+    // names the account, so a form that hydrated its Account field from the
+    // stored party would open this receipt showing "Acme Traders" as the bank
+    // and the next Ctrl+A would post Dr Acme / Cr Acme — the bank silently gone
+    // from a voucher that still balances. The account is read from the
+    // voucher's own primary-side POSTING instead (accountLegFromView).
+    const base = createMockClient({ seed: false });
+    await seedBooks(base);
+    const { client, spies } = spyClient(base);
+    renderShell(client);
+    const app = screen.getByRole("application");
+
+    fireEvent.keyDown(app, { key: "F6" });
+    await fillSingleEntry("HDFC Bank", [["Acme Traders", "5000"]]);
+    fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    await waitFor(() => expect(spies.postReceiptVoucher).toHaveBeenCalledTimes(1));
+    const saved = await spies.postReceiptVoucher!.mock.results[0]!.value;
+
+    // Day Book -> the row -> Enter, the way an operator drills. ⛔ Alt+G is
+    // pressed as the PHYSICAL key with the character a Mac actually sends:
+    // Option composes, so a real Mac emits "©" and never "g".
+    fireEvent.keyDown(app, { key: "Escape" });
+    fireEvent.keyDown(app, { key: "©", code: "KeyG", altKey: true });
+    fireEvent.mouseDown(screen.getByText("Day Book"));
+    fireEvent.keyDown(app, { key: "Enter" });
+    await waitFor(() => expect(screen.getByText(saved.voucher_no)).toBeTruthy());
+    fireEvent.keyDown(app, { key: "Enter" });
+    await waitFor(() => expect(spies.getVoucher).toHaveBeenCalled());
+
+    // ⛔ THE ACCOUNT FIELD SHOWS THE BANK — visible on the form, which is where
+    // an operator would have seen the corruption coming.
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("combobox", { name: "Account" }) as HTMLInputElement).value,
+      ).toBe("HDFC Bank"),
+    );
+
+    fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    await waitFor(() => expect(spies.alterReceiptVoucher).toHaveBeenCalledTimes(1));
+    const [, , req] = spies.alterReceiptVoucher!.mock.calls[0]!;
+    const { debits, credits } = await sidesByName(
+      client,
+      (req as { postings: PostingRequest[] }).postings,
+    );
+    // BOTH LEGS, BY NAME. A merged voucher would read Dr Acme / Cr Acme here
+    // and would balance.
+    expect(debits).toEqual([["HDFC Bank", "5000.0000"]]);
+    expect(credits).toEqual([["Acme Traders", "5000.0000"]]);
+    // ...and the counterparty survives the round trip.
+    const acme = (await client.listLedgers("co-1")).ledgers.find(
+      (l) => l.name === "Acme Traders",
+    )!;
+    expect((req as { party_ledger_id?: string }).party_ledger_id).toBe(acme.id);
+  });
+});

@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -1733,10 +1734,13 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 		// supply it — the number is minted inside this transaction — so a browser
 		// sends the reference unnamed and the stamp happens here or nowhere.
 		//
-		// ⚠️ Placing it below the numbering costs nothing, unlike `allocations`,
-		// which must sit ABOVE it: this loop cannot REFUSE anything.
-		// validateBillAllocations already ran before the transaction opened, and
-		// AGAINST — the one type that may not be defaulted — was rejected there.
+		// ⚠️ IT CAN NOW REFUSE, which the original could not, so its position is no
+		// longer free: `allocations` must sit ABOVE the numbering for that reason
+		// and this must sit BELOW it, because the name it checks does not exist
+		// until the number does. Both refusals abort the same transaction, so
+		// nothing is written either way. validateBillAllocations already ran before
+		// the transaction opened, and AGAINST — the one type that may not be
+		// defaulted — was rejected there.
 		//
 		// A DELETE carries none, for the same reason it carries no postings: a
 		// tombstone that restated its references would leave the bill outstanding
@@ -1745,18 +1749,23 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 		// AND references (DeleteVoucher builds a fresh VoucherInput), so this guard
 		// is a latch rather than a fix — its four siblings all have one, and the
 		// next delete path to be written will not have to rediscover why.
+		//
+		// ⛔⛔ AND THE STAMP IS A NAMING FUNCTION, NOT AN ASSIGNMENT. It used to be
+		// `if RefName == "" { RefName = in.VoucherNo }` on every reference, with no
+		// uniqueness of any kind, and that ONE line was two driven defects — see
+		// stampBillRefNames for the whole argument and the two collisions.
 		billAllocations := in.BillAllocations
 		if op == OpDelete {
 			billAllocations = nil
 		} else {
-			stamped := make([]BillAllocationInput, len(billAllocations))
-			copy(stamped, billAllocations)
-			for i := range stamped {
-				if stamped[i].RefName == "" {
-					stamped[i].RefName = in.VoucherNo
-				}
+			billAllocations = stampBillRefNames(
+				billAllocations, in.Class, in.VoucherNo, in.VoucherDate, voucherID)
+			// Checked AFTER the stamp, because the stamp is what makes the
+			// generated names distinct — the only duplicates that can survive to
+			// here are ones a CALLER wrote down twice.
+			if err := validateDistinctBillOpeners(billAllocations); err != nil {
+				return err
 			}
-			billAllocations = stamped
 		}
 		// Checked HERE, not beside validateBillAllocations, because this is the
 		// first point at which in.Postings is FINAL — an item invoice's postings
@@ -2509,10 +2518,14 @@ func classPurpose(c Class) string {
 // The voucher number is allocated by allocateVoucherNo INSIDE the post
 // transaction, so a client keying a sales invoice in a browser CANNOT know it:
 // it does not exist until after this validation has run. A reference that opens
-// a bill therefore leaves the name empty and post() stamps the allocated number
-// on it — Tally's own `New Ref` default. That is the ONLY way a browser-keyed
+// a bill therefore leaves the name empty and post() names it from the allocated
+// number — Tally's own `New Ref` default. That is the ONLY way a browser-keyed
 // invoice can ever reach the Outstandings report, and for the whole life of this
 // feature it could not, because no client could name the bill.
+//
+// ⚠️ THE GENERATED NAME IS NOT THE BARE NUMBER — see stampBillRefNames. A bare
+// number names one voucher per TYPE per YEAR, so it collided; the name carries
+// the class and the financial year with it.
 //
 // AGAINST is the exception because it is the one type whose name must MATCH
 // something that already exists. reporting.Outstandings groups by
@@ -2538,6 +2551,192 @@ func validateBillAllocations(bs []BillAllocationInput) error {
 		if b.Amount.IsNegative() {
 			return errors.New("ledger: bill allocation amount must be non-negative")
 		}
+	}
+	return nil
+}
+
+// onAccountRefName is the ONE bucket every ON_ACCOUNT reference on a party is
+// filed under, and it is deliberately NOT derived from any voucher number.
+//
+// ⛔ AN ON-ACCOUNT AMOUNT IS BY DEFINITION TIED TO NO BILL. Tally shows it as its
+// own line in a party's bill-wise breakup, not as a bill; naming it after the
+// voucher that carried it invents a bill that the operator never opened and that
+// nothing will ever settle. Every on-account amount on a party therefore nets
+// into this single bucket, which is exactly how the operator reads it: "money
+// from this customer that is not applied to anything".
+const onAccountRefName = "On Account"
+
+// stampBillRefNames names every reference that arrived WITHOUT a name, and it is
+// the whole of the fix for two defects that were driven in a browser.
+//
+// ⛔⛔ WHAT IT REPLACES, AND WHY THE OLD ONE LINE WAS TWO DEFECTS.
+//
+// This used to be `if RefName == "" { RefName = in.VoucherNo }`, applied to every
+// unnamed reference with no uniqueness check of any kind. reporting.Outstandings
+// groups by (ledger_id, ref_name) and IGNORES ref_type — the name IS the bill's
+// identity — so a name that is not unique per party is not a bill reference at
+// all, it is a collision waiting for a party unlucky enough to have two:
+//
+//  1. WITHIN ONE VOUCHER. An 11,800 invoice split 5,900 at 30 days and 5,900 at
+//     60 days sent two unnamed NEW references; both were stamped "7"; the report
+//     grouped them into ONE bill of 11,800 aged at MIN(due_date) — i.e. the whole
+//     invoice aged at the 30-day date, and the 60-day instalment ceased to exist
+//     as a separate thing anybody could chase.
+//
+//  2. ACROSS VOUCHERS. Voucher numbers are allocated by a counter keyed on
+//     (company, voucher_type, financial year) — see numbering.go — so a bare "7"
+//     names one voucher PER TYPE PER YEAR, not one voucher. A Receipt #7 carrying
+//     an ON_ACCOUNT or ADVANCE reference was stamped "7" and silently NETTED
+//     against Sales invoice "7" on the same party: the invoice showed as part
+//     paid, the money showed as applied, and both figures were wrong while the
+//     report still footed. The same collision exists between a Sales #7 and a
+//     Credit Note #7 (the raise-mode picker defaults a note's reference to NEW),
+//     and between Sales #7 of one financial year and Sales #7 of the next — which
+//     printing/printingdb states in its own words: "a serial number repeats every
+//     financial year, so 'INV/0001' names one invoice per year, not one invoice".
+//
+// ⛔ SO THE GENERATED NAME CARRIES EVERY PART OF THE COUNTER'S KEY: the class, the
+// financial year, and the number — "Sales/2026-27/7" — plus an index when ONE
+// voucher opens more than one bill on the SAME ledger. That is unique by
+// construction, which is the only thing that works here: bill_allocation has no
+// unique index to lean on (duplicate voucher numbers are legal by design,
+// numbering.go's "Prevent Duplicates" is a future flag), so a lookup-then-name
+// scheme would still race two concurrent posts into the same bill.
+//
+// ⚠️ IT IS DETERMINISTIC, AND THAT IS LOAD-BEARING RATHER THAN TIDY. An ALTER
+// re-states the references; a client that re-sends them unnamed (the F8 form
+// re-sends the STORED names, but the API accepts unnamed ones) must land on the
+// SAME names, or every edit would open a fresh bill and leave the original
+// outstanding forever. A uuid or a timestamp here would do exactly that.
+//
+// ⚠️ AND THE NAME IS NO LONGER THE VOUCHER NUMBER, which two callers cared about:
+// a Credit Note prints "Against Invoice No.: <ref_name>" (printingdb/document.go),
+// so the ORIGINAL INVOICE's number should be read from the voucher that opened the
+// bill rather than from the bill's name — that lookup already exists there
+// (againstInvoiceDate) and needs to return the number beside the date. It was
+// already wrong for any hand-named bill ("PO-4471/partial"); this makes it common.
+func stampBillRefNames(
+	bs []BillAllocationInput, class Class, voucherNo, voucherDate string, voucherID uuid.UUID,
+) []BillAllocationInput {
+	out := make([]BillAllocationInput, len(bs))
+	copy(out, bs)
+
+	base := billRefBase(class, voucherNo, voucherDate, voucherID)
+
+	// How many bills does this voucher OPEN on each ledger without naming them?
+	// Counted first so the single-bill case — virtually every invoice — keeps the
+	// clean, unsuffixed name and only a genuine split pays for the index.
+	//
+	// AGAINST is never in here: validateBillAllocations refused an unnamed one
+	// before the transaction opened, because a settlement must say what it
+	// settles. ON_ACCOUNT is never in here either: it opens nothing.
+	openers := make(map[uuid.UUID]int)
+	for _, b := range out {
+		if b.RefName == "" && b.RefType != RefOnAccount {
+			openers[b.LedgerID]++
+		}
+	}
+
+	seen := make(map[uuid.UUID]int)
+	for i := range out {
+		if out[i].RefName != "" {
+			continue
+		}
+		if out[i].RefType == RefOnAccount {
+			out[i].RefName = onAccountRefName
+			continue
+		}
+		seen[out[i].LedgerID]++
+		if openers[out[i].LedgerID] > 1 {
+			out[i].RefName = fmt.Sprintf("%s-%d", base, seen[out[i].LedgerID])
+			continue
+		}
+		out[i].RefName = base
+	}
+	return out
+}
+
+// billRefBase builds the part of a generated bill name that identifies the
+// VOUCHER: "<class>/<financial year>/<number>", e.g. "Sales/2026-27/7".
+//
+// Each segment is there because the one inside it is not unique without it — the
+// number is unique only within (voucher type, financial year), which is precisely
+// the key allocateVoucherNo counts on. The class stands in for the voucher type
+// because it is always present on the input (post() validates it for every op,
+// including ALTER, where the type id may only be resolvable from the prior
+// version) and because it is what the operator sees on the screen.
+//
+// ⚠️ THE FALLBACKS ARE NOT DECORATION. A voucher with no date (the column is
+// nullable) has no financial year, and a company with no system voucher type for
+// the class gets NO number at all — defaultVoucherTypeID returns nil without an
+// error and numbering is skipped. The old stamp turned that second case into an
+// EMPTY ref_name, which groups every such reference on a party into one nameless
+// bill. The voucher id closes it: it is unique, it is stable across versions
+// (voucher_head keyed on voucher_id), and it is short enough to read out.
+func billRefBase(class Class, voucherNo, voucherDate string, voucherID uuid.UUID) string {
+	parts := make([]string, 0, 3)
+	if class != "" {
+		parts = append(parts, string(class))
+	}
+	if fy, err := finYearOf(voucherDate); err == nil {
+		parts = append(parts, finYearLabel(fy))
+	}
+	switch {
+	case voucherNo != "":
+		parts = append(parts, voucherNo)
+	default:
+		// No number was ever allocated. Name the bill after the voucher itself so
+		// it is still one identifiable bill rather than a shared blank.
+		parts = append(parts, "#"+voucherID.String()[:8])
+	}
+	return strings.Join(parts, "/")
+}
+
+// finYearLabel renders an Indian financial year from its start year: 2026 ->
+// "2026-27". Same convention as tds.go's messages and as the prefixes Tally
+// stores ("INV/2026-27/").
+func finYearLabel(startYear int) string {
+	return fmt.Sprintf("%d-%02d", startYear, (startYear+1)%100)
+}
+
+// validateDistinctBillOpeners refuses a voucher that OPENS two bills of the same
+// name on one ledger.
+//
+// ⛔ WHY A REFUSAL AND NOT A SILENT MERGE. reporting.Outstandings groups by
+// (ledger_id, ref_name), so two openers sharing a name are not two bills: they
+// are one bill of the summed amount, aged at MIN(due_date), and NOTHING anywhere
+// says so — the voucher balances, the sum-to-posting check passes, and the ageing
+// report quietly loses an instalment. That was defect D10, driven in a browser.
+//
+// ⚠️ IT GUARDS THE DOOR THE STAMP CANNOT REACH. Generated names are distinct by
+// construction (stampBillRefNames indexes them), so this can only fire on names a
+// CALLER supplied — the sync sequencer, the seed script, an API client, or a
+// future form with a name box. The keyboard cannot reach it today, which is why
+// it is a latch rather than the fix; the fix is the stamp.
+//
+// AGAINST and ON_ACCOUNT are deliberately EXCLUDED, and neither is an oversight:
+// two AGAINST rows naming one bill are two part-settlements of it in one voucher,
+// and every ON_ACCOUNT row is meant to land in the same per-party bucket.
+func validateDistinctBillOpeners(bs []BillAllocationInput) error {
+	type opener struct {
+		ledger uuid.UUID
+		name   string
+	}
+	seen := make(map[opener]bool, len(bs))
+	for _, b := range bs {
+		if b.RefType != RefNew && b.RefType != RefAdvance {
+			continue
+		}
+		k := opener{b.LedgerID, b.RefName}
+		if seen[k] {
+			return fmt.Errorf(
+				"ledger: this voucher opens two bills named %q on the same ledger — "+
+					"the Outstandings report identifies a bill by its NAME, so the two would "+
+					"become ONE bill of their summed amount, aged at the EARLIER due date, "+
+					"with the later instalment gone from the report and nothing to say so",
+				b.RefName)
+		}
+		seen[k] = true
 	}
 	return nil
 }

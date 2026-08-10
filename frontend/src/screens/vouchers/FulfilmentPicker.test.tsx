@@ -16,6 +16,7 @@ import {
   fulfilmentWarning,
   fulfilsDirection,
 } from "./fulfilment";
+import { byCommitmentOrder, type Candidate } from "./FulfilmentPicker";
 
 /**
  * THE FULFILMENT PICKER (T3) — can an operator actually link a delivery to an order?
@@ -66,6 +67,88 @@ function line(
     })),
   };
 }
+
+/**
+ * ⛔⛔ "OLDEST COMMITMENT FIRST" — AND IT USED TO OFFER THE NEWEST.
+ *
+ * The candidates were sorted with `a.orderNo.localeCompare(b.orderNo)` under a
+ * comment reading "Oldest commitment first". Two faults, and the cases below are
+ * chosen so that fixing only one of them still fails:
+ *
+ *  1. an order NUMBER is not a date — a series that restarts each year, or is
+ *     prefixed by branch, sorts into an order unrelated to when anything was
+ *     promised;
+ *  2. a RAW STRING compare is not numeric — bare integers with an independent
+ *     counter make "10" sort above "9", the same lexical hazard
+ *     HANDOFF-DEFECT-BURNDOWN §4.1 records for voucher numbers.
+ *
+ * Asserted on the comparator directly rather than through a rendered <select>,
+ * because the numeric case needs nine orders to show itself and a DOM fixture
+ * that seeds nine would be testing the fixture.
+ */
+describe("the fulfilment picker offers the OLDEST commitment first", () => {
+  const cand = (
+    orderNo: string,
+    orderDate: string,
+    orderLineId = `line-${orderNo}`,
+  ): Candidate => ({
+    orderLineId,
+    orderNo,
+    orderDate,
+    itemName: "MS Angle",
+    outstanding: "20.0000",
+    qty: "20.0000",
+    dueDate: "",
+  });
+
+  const sortedNos = (cs: Candidate[]) =>
+    [...cs].sort(byCommitmentOrder).map((c) => c.orderNo);
+
+  it("⛔ orders by the ORDER DATE, so the number's shape cannot decide it", () => {
+    // SO-100 was placed in April; SO-2 in June. The April commitment has been
+    // waiting two months longer and is the one a shipment today discharges.
+    const got = sortedNos([
+      cand("SO-2", "2026-06-01"),
+      cand("SO-100", "2026-04-05"),
+      cand("SO-9", "2026-05-20"),
+    ]);
+    expect(got).toEqual(["SO-100", "SO-9", "SO-2"]);
+    // The specific regression: a plain string sort would have put SO-100 first
+    // here by accident, and SO-2 first if the numbers had been the other way up.
+    expect(got[0]).not.toBe("SO-2");
+  });
+
+  it("⛔ breaks a same-day tie NUMERICALLY, so \"9\" precedes \"10\"", () => {
+    // The lexical trap: as raw strings "SO-10" < "SO-9", so the tenth order would
+    // be offered ahead of the ninth. Every one of these was placed the same day,
+    // which is exactly when the number is all there is to go on.
+    expect(
+      sortedNos([
+        cand("SO-10", "2026-06-01"),
+        cand("SO-9", "2026-06-01"),
+        cand("SO-1", "2026-06-01"),
+        cand("SO-2", "2026-06-01"),
+      ]),
+    ).toEqual(["SO-1", "SO-2", "SO-9", "SO-10"]);
+
+    // And bare integers, which is the shape §4.1 names.
+    expect(
+      sortedNos([cand("10", "2026-06-01"), cand("9", "2026-06-01")]),
+    ).toEqual(["9", "10"]);
+  });
+
+  it("is a TOTAL order — two identical orders never swap between renders", () => {
+    // The final tie-break is the order LINE id, and those are UUIDv7 (minted in
+    // creation order), so it is a stable time ordering rather than a coin toss.
+    // Without it the operator's selection appears to move on its own when the
+    // picker re-renders after an unrelated keystroke.
+    const a = cand("SO-1", "2026-06-01", "0198-aaaa");
+    const b = cand("SO-1", "2026-06-01", "0198-bbbb");
+    expect(byCommitmentOrder(a, b)).toBeLessThan(0);
+    expect(byCommitmentOrder(b, a)).toBeGreaterThan(0);
+    expect(byCommitmentOrder(a, a)).toBe(0);
+  });
+});
 
 describe("buildFulfilments numbers links from the array it is GIVEN", () => {
   it("is 1-BASED, not 0-based", () => {

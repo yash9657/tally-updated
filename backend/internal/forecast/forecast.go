@@ -58,17 +58,56 @@ type ProjBill struct {
 	CreditDays  *int
 }
 
+// DateSource says WHERE a bill's projected settlement date came from, so the
+// response can DISCLOSE how much of the projection is observed and how much is
+// assumed.
+//
+// ⛔⛔ THIS TYPE EXISTS BECAUSE THE PROJECTION INVENTS A SETTLEMENT DATE FOR
+// EVERY UNPAID BILL AND USED TO SAY SO NOWHERE. The wire carried seven keys —
+// as_on, horizon_days, bucket_days, opening_cash, buckets, beyond_horizon,
+// overdue_folded_into_first_bucket — and not one of them contained the words
+// projection, estimate, basis, assumed or method. An operator reading
+// "closing_cash 4,12,300.0000" in a bucket dated three months out has no way to
+// tell that number apart from a ledger balance, and a large part of it can rest
+// on nothing better than "we assume suppliers are paid 30 days after the invoice
+// date" — a constant compiled into this file.
+//
+// Nobody is guessing a date on a bill that HAS a due date; the disclosure is
+// what separates the two, per bill and in money.
+type DateSource string
+
+const (
+	// The bill carried an explicit due date. Observed, not assumed.
+	DateFromDueDate DateSource = "due_date"
+	// No due date; the party's own credit_days was applied to the voucher date.
+	// A tenant-configured assumption.
+	DateFromPartyCreditDays DateSource = "party_credit_days"
+	// No due date and no credit_days on the party: defaultCreditDays. ⛔ This is
+	// the arm that is a CONVENTION of this build and nothing else.
+	DateFromDefault DateSource = "default_credit_days"
+)
+
 // expectedDate is the date the bill is projected to settle: due_date, else
 // voucher_date + credit_days, else voucher_date + 30.
 func (b ProjBill) expectedDate() time.Time {
+	d, _ := b.expectedDateWithSource()
+	return d
+}
+
+// expectedDateWithSource is expectedDate plus WHICH of the three rules produced
+// it. One function, so the disclosure can never drift from the arithmetic: a
+// fourth rule added here reports itself or it does not compile.
+func (b ProjBill) expectedDateWithSource() (time.Time, DateSource) {
 	if b.DueDate != nil {
-		return dateOnly(*b.DueDate)
+		return dateOnly(*b.DueDate), DateFromDueDate
 	}
 	days := defaultCreditDays
+	src := DateFromDefault
 	if b.CreditDays != nil {
 		days = *b.CreditDays
+		src = DateFromPartyCreditDays
 	}
-	return dateOnly(b.VoucherDate).AddDate(0, 0, days)
+	return dateOnly(b.VoucherDate).AddDate(0, 0, days), src
 }
 
 // FlowTotals is an inflow/outflow/nett triple (used for the beyond-horizon
@@ -91,9 +130,51 @@ type Bucket struct {
 	ClosingCash decimal.Decimal
 }
 
+// BasisCount is how many bills — and how much money — one settlement-date rule
+// accounts for. Money is kept as decimal here and rendered fixed-4 on the wire;
+// a COUNT is an int and is not money.
+type BasisCount struct {
+	Bills   int
+	Inflow  decimal.Decimal
+	Outflow decimal.Decimal
+}
+
+func (c *BasisCount) add(b ProjBill) {
+	c.Bills++
+	if b.Kind == Outflow {
+		c.Outflow = c.Outflow.Add(b.Pending)
+		return
+	}
+	c.Inflow = c.Inflow.Add(b.Pending)
+}
+
+// Basis is the projection's DISCLOSURE: what it did, and how much of its answer
+// is observed versus assumed. See DateSource.
+//
+// ⛔ RULE 4 — this reports SIDES (inflow/outflow) per source and not one total.
+// "80% of the projection rests on an assumed date" is a different statement from
+// "80% of the money we expect to RECEIVE rests on one", and only the second tells
+// an operator whether to trust the closing-cash line.
+type Basis struct {
+	// The three settlement-date rules, disjoint and exhaustive over the bills
+	// that were projected (zero-pending bills are skipped and counted nowhere,
+	// exactly as reporting.Outstandings skips them).
+	FromDueDate           BasisCount
+	FromPartyCreditDays   BasisCount
+	FromDefaultCreditDays BasisCount
+	// The constant the third arm applied, published rather than left implicit.
+	DefaultCreditDays int
+	// Bills whose expected date fell before AsOn and were therefore treated as
+	// immediately collectible in the FIRST bucket. Already flagged as a bool by
+	// OverdueFolded; this says how much.
+	Overdue BasisCount
+}
+
 // Projection is the full cash-flow result: rolling buckets from AsOn plus the
 // beyond-horizon remainder. OverdueFolded discloses whether any past-due bill was
-// folded into the first bucket (immediately collectible).
+// folded into the first bucket (immediately collectible). Basis discloses what the
+// projection ASSUMED — see Basis and DateSource; a projected number that does not
+// say it is projected is indistinguishable from a ledger balance on screen.
 type Projection struct {
 	AsOn          time.Time
 	HorizonDays   int
@@ -102,6 +183,7 @@ type Projection struct {
 	Buckets       []Bucket
 	Beyond        FlowTotals
 	OverdueFolded bool
+	Basis         Basis
 }
 
 // Project buckets the open bills into rolling windows of bucketDays starting at
@@ -143,17 +225,37 @@ func Project(bills []ProjBill, opening decimal.Decimal, asOn time.Time, horizonD
 		p.Buckets[k].Outflow = decimal.Zero
 	}
 	p.Beyond = FlowTotals{Inflow: decimal.Zero, Outflow: decimal.Zero, Nett: decimal.Zero}
+	p.Basis = Basis{
+		FromDueDate:           BasisCount{Inflow: decimal.Zero, Outflow: decimal.Zero},
+		FromPartyCreditDays:   BasisCount{Inflow: decimal.Zero, Outflow: decimal.Zero},
+		FromDefaultCreditDays: BasisCount{Inflow: decimal.Zero, Outflow: decimal.Zero},
+		Overdue:               BasisCount{Inflow: decimal.Zero, Outflow: decimal.Zero},
+		DefaultCreditDays:     defaultCreditDays,
+	}
 
 	for _, b := range bills {
 		if b.Pending.IsZero() {
 			continue
 		}
-		dayOff := daysBetween(asOn, b.expectedDate())
+		expected, src := b.expectedDateWithSource()
+		// Accumulate the disclosure from the SAME call that decides the bucket, so
+		// the two cannot disagree. (A separate pass over `bills` would be a second
+		// copy of the rule, and this repo has been burned by a second copy before.)
+		switch src {
+		case DateFromDueDate:
+			p.Basis.FromDueDate.add(b)
+		case DateFromPartyCreditDays:
+			p.Basis.FromPartyCreditDays.add(b)
+		default:
+			p.Basis.FromDefaultCreditDays.add(b)
+		}
+		dayOff := daysBetween(asOn, expected)
 		idx := 0
 		switch {
 		case dayOff < 0:
 			idx = 0 // overdue -> first bucket
 			p.OverdueFolded = true
+			p.Basis.Overdue.add(b)
 		default:
 			idx = dayOff / bucketDays
 		}

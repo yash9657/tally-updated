@@ -513,6 +513,234 @@ describe("the open-only filter, and the heading that must not lie about it", () 
   });
 });
 
+/**
+ * ⛔⛔ WHO MAY BE THE PARTY — D6, and the highest-severity defect on this screen.
+ *
+ * The picker offered the ENTIRE chart of accounts, so a sales order could be
+ * committed to a BANK ledger and a purchase order to a customer, and nothing on
+ * the client, in the server's Validate, or in the database said no. Both order
+ * books GROUP BY COUNTERPARTY to answer "who is owed what", so such an order
+ * names — in a report an operator acts on — an account that can never be invoiced
+ * and can never deliver.
+ *
+ * ⚠️ THE SEEDED DEMO COMPANY IS THE FIXTURE THIS NEEDS AND IT IS NOT AN ACCIDENT:
+ * it carries Cash (Cash-in-Hand), Sales (Sales Accounts), HDFC Bank (a Bank
+ * Accounts SUB-GROUP) and Acme Traders (Sundry Debtors). Exactly one of the four
+ * is a customer.
+ */
+describe("the party is a COUNTERPARTY, not any ledger on the chart", () => {
+  /** The option LABELS the party picker is offering, in order. */
+  function partyOptions(): string[] {
+    const select = screen.getByLabelText(/Customer|Supplier/) as HTMLSelectElement;
+    return [...select.options].map((o) => o.textContent ?? "");
+  }
+
+  it("⛔ a SALES order does not offer the bank, the cash or an income ledger", async () => {
+    const app = renderShell();
+    await openRegister(app, "sales");
+    fireEvent.keyDown(app, { key: "c", altKey: true });
+
+    const offered = partyOptions();
+    // THE CONTROL: the one real customer IS offered. Without it, a picker that
+    // offered nothing at all would pass every assertion below.
+    expect(offered).toContain("Acme Traders");
+    // …and nothing else on the chart is.
+    expect(offered).not.toContain("HDFC Bank");
+    expect(offered).not.toContain("Cash");
+    expect(offered).not.toContain("Sales");
+
+    // The screen SAYS why the list is short, rather than leaving a silently
+    // shorter list — which is not an error and so is never noticed.
+    const note = screen.getByTestId("sales-orders-party-group-note");
+    expect(note.textContent).toMatch(/Sundry Debtors/);
+    expect(note.textContent).toMatch(/groups\s+by counterparty/);
+  });
+
+  it("⛔ a PURCHASE order asks for a SUPPLIER, and this company has none", async () => {
+    // The mirror of the defect: a purchase commitment made to a customer. The
+    // seeded company has no Sundry Creditor at all, so the correct behaviour is an
+    // empty picker WITH A SENTENCE — not a picker quietly offering the debtor.
+    const app = renderShell();
+    await openRegister(app, "purchase");
+    fireEvent.keyDown(app, { key: "c", altKey: true });
+
+    expect(partyOptions()).not.toContain("Acme Traders");
+    const note = screen.getByTestId("purchase-orders-party-group-note");
+    expect(note.textContent).toMatch(/Sundry Creditors/);
+    expect(note.textContent).toMatch(/no ledger under Sundry Creditors yet/);
+  });
+
+  it("offers a supplier once one exists, and still not the customer", async () => {
+    const client = createMockClient();
+    await client.createLedger(COMPANY, {
+      name: "Steel Suppliers",
+      group_name: "Sundry Creditors",
+    });
+    const app = renderShell(client);
+    await openRegister(app, "purchase");
+    fireEvent.keyDown(app, { key: "c", altKey: true });
+
+    const offered = partyOptions();
+    expect(offered).toContain("Steel Suppliers");
+    expect(offered).not.toContain("Acme Traders");
+    expect(offered).not.toContain("HDFC Bank");
+  });
+
+  it("⛔ the way out is DELIBERATE, and narrowing back drops the choice", async () => {
+    // The client filter compares each ledger's IMMEDIATE group_name, while the
+    // server walks ltree ANCESTRY — so a customer kept in a sub-group of Sundry
+    // Debtors is legitimate and invisible here. The escape hatch exists for that
+    // case and defaults to OFF, because the wrong party must be reachable only on
+    // purpose. HDFC Bank stands in for "a ledger this list will not offer".
+    const app = renderShell();
+    await openRegister(app, "sales");
+    fireEvent.keyDown(app, { key: "c", altKey: true });
+
+    const widen = screen.getByLabelText(
+      "Offer every ledger, not only this direction's party group",
+    );
+    fireEvent.click(widen);
+    expect(partyOptions().join("|")).toMatch(/HDFC Bank/);
+
+    // Pick the bank, then narrow back. The request carries the ID, not the picked
+    // option, so a selection left behind would be SENT — and the operator would
+    // meet a 422 naming a party the form no longer shows them.
+    const select = screen.getByLabelText("Customer") as HTMLSelectElement;
+    const bank = [...select.options].find((o) =>
+      (o.textContent ?? "").startsWith("HDFC Bank"),
+    );
+    fireEvent.change(select, { target: { value: bank?.value } });
+    expect(select.value).toBe(bank?.value);
+
+    fireEvent.click(widen);
+    expect(
+      (screen.getByLabelText("Customer") as HTMLSelectElement).value,
+    ).toBe("");
+    expect(partyOptions()).not.toContain("HDFC Bank");
+  });
+
+  it("a customer picked from the narrowed list still records the order", async () => {
+    // ⛔ THE CONTROL FOR THE WHOLE SECTION. Every assertion above is about what is
+    // NOT offered, and all of them would pass on a screen that had stopped being
+    // able to record an order at all.
+    const app = renderShell();
+    await openRegister(app, "sales");
+    fireEvent.keyDown(app, { key: "c", altKey: true });
+    keyAnOrder({ no: "SO-PARTY", qty: "20", rate: "500" });
+    fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+
+    const row = await screen.findByTestId("sales-orders-row:SO-PARTY");
+    // The PARTY and the QUANTITY, never a status code: what an order records is
+    // who it commits us to and how much.
+    expect(row.textContent).toMatch(/Acme Traders/);
+    const line = await screen.findByTestId(
+      "sales-orders-line-row:SO-PARTY:1",
+    );
+    expect(line.textContent).toMatch(/20\.0000/);
+  });
+});
+
+/**
+ * ⛔⛔ D70 — AFTER Alt+W, THE DETAIL PANEL MUST NOT GO ON SAYING "OUTSTANDING".
+ *
+ * Pre-closing drops the order from the open-only list, and the line panel below
+ * that list went on showing its balance under a column headed "Outstanding", with
+ * no pre-closed marker anywhere — while the row it came from had vanished from
+ * the table above. An operator was left reading a live-looking commitment
+ * belonging to an order that no longer appeared to exist, and chasing goods
+ * nobody is going to send.
+ */
+describe("a pre-closed order's detail says so, and stops calling it outstanding", () => {
+  it("marks the panel PRE-CLOSED with its reason, after the row has gone", async () => {
+    const app = renderShell();
+    await openRegister(app, "sales");
+    fireEvent.keyDown(app, { key: "c", altKey: true });
+    keyAnOrder({ no: "SO-ABANDON", qty: "12" });
+    fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    await screen.findByTestId("sales-orders-row:SO-ABANDON");
+
+    // THE CONTROL, BEFORE: the panel calls the balance Outstanding, correctly.
+    const linesBefore = await screen.findByTestId("sales-orders-lines");
+    expect(linesBefore.textContent).toMatch(/Outstanding/);
+    expect(screen.queryByTestId("sales-orders-detail-preclosed")).toBeNull();
+
+    fireEvent.keyDown(app, { key: "w", altKey: true });
+    fireEvent.change(
+      screen.getByLabelText("Reason for pre-closing this order"),
+      { target: { value: "customer cancelled the site" } },
+    );
+    fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+
+    // The row has gone from the open-only list — that part always worked.
+    await waitFor(() =>
+      expect(screen.queryByTestId("sales-orders-row:SO-ABANDON")).toBeNull(),
+    );
+
+    // ⛔ AND THE PANEL BELOW IT NOW SAYS WHAT HAPPENED, with the reason. This is
+    // the assertion that fails on the defect: the heading was just
+    // "SO-ABANDON · Acme Traders", indistinguishable from a live order.
+    const marker = await screen.findByTestId("sales-orders-detail-preclosed");
+    expect(marker.textContent).toMatch(/PRE-CLOSED/);
+    expect(marker.textContent).toMatch(/customer cancelled the site/);
+
+    const note = screen.getByTestId("sales-orders-detail-preclosed-note");
+    expect(note.textContent).toMatch(/ABANDONED, NOT DELIVERED/);
+    // It explains where the row went AND how to get it back — otherwise
+    // re-opening the order is unreachable from the state Alt+W leaves behind.
+    expect(note.textContent).toMatch(/Only orders with something outstanding/);
+
+    // ⛔ THE COLUMN IS RENAMED, AND THE FIGURE IS STILL THERE. The 12 is what was
+    // still owed when the commitment was abandoned — it is the number an auditor
+    // asks about and must not be blanked. What must go is the WORD.
+    const lines = screen.getByTestId("sales-orders-lines");
+    expect(lines.textContent).toMatch(/Abandoned/);
+    expect(lines.textContent).not.toMatch(/Outstanding/);
+    expect(
+      screen.getByTestId("sales-orders-line-row:SO-ABANDON:1").textContent,
+    ).toMatch(/12\.0000/);
+  });
+
+  it("re-opening puts the word Outstanding back — the marker is not sticky", async () => {
+    // The control for the test above. A panel permanently stuck on "Abandoned"
+    // would pass every assertion there and would be a worse defect.
+    const app = renderShell();
+    await openRegister(app, "sales");
+    fireEvent.keyDown(app, { key: "c", altKey: true });
+    keyAnOrder({ no: "SO-BACK", qty: "4" });
+    fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    await screen.findByTestId("sales-orders-row:SO-BACK");
+
+    fireEvent.keyDown(app, { key: "w", altKey: true });
+    fireEvent.change(
+      screen.getByLabelText("Reason for pre-closing this order"),
+      { target: { value: "keyed twice" } },
+    );
+    fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    await screen.findByTestId("sales-orders-detail-preclosed");
+
+    // Untick the filter so the order is back in the list, then Alt+W re-opens it —
+    // the exact route the panel's own sentence points at.
+    fireEvent.click(
+      screen.getByLabelText("Show only orders with something outstanding"),
+    );
+    // ⚠️ AWAITED. Unticking re-reads the list AND drops the highlight (an order
+    // that has just left the list must not stay selected), so the row is not in
+    // the DOM on the next tick and a synchronous getByRole races the reload.
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Select order SO-BACK" }),
+    );
+    fireEvent.keyDown(app, { key: "w", altKey: true });
+    fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("sales-orders-detail-preclosed")).toBeNull(),
+    );
+    expect(screen.getByTestId("sales-orders-lines").textContent).toMatch(
+      /Outstanding/,
+    );
+  });
+});
+
 describe("a 403 on a register is a DECISION, and it names the direction", () => {
   it("says which direction was refused and why the split exists", async () => {
     const client = createMockClient();

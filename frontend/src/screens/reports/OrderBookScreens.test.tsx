@@ -10,7 +10,7 @@ import {
   AS_AT_ONLY_REPORTS,
   FULL_PERIOD_REPORTS,
 } from "../overlays/FrameOverlays";
-import { periodLabel } from "./OrderBookScreens";
+import { orderBookSheet, periodLabel } from "./OrderBookScreens";
 
 /**
  * THE TWO ORDER BOOKS (T3) — what is still outstanding, as at a date.
@@ -173,6 +173,79 @@ describe("the figures, and the four things these screens must not do", () => {
     // The mock does send notes here; if it ever stops, this must not silently pass.
     expect(notes).not.toBeNull();
     expect((notes as HTMLElement).textContent?.length ?? 0).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * ⛔⛔ THE FULFILLED COLUMN IS NOT CALLED THE SAME THING ON BOTH BOOKS.
+ *
+ * It was hard-coded "Delivered", on both — so the Purchase Order Book, whose
+ * figure counts goods a SUPPLIER owes and has handed over, told the operator the
+ * company had DELIVERED them. The purchase REGISTER (Ctrl+F9) has always called
+ * the identical figure "Received", so the same number carried two names on two
+ * screens an operator moves between, which is how a reconciliation question gets
+ * asked about a column that was never different.
+ *
+ * ⚠️ THE SALES LEG IS THE CONTROL. Without it, renaming both columns to "Received"
+ * would pass — and would be the same defect facing the other way.
+ */
+describe("each book names its fulfilled column for its OWN direction", () => {
+  it("the purchase book says Received where the sales book says Delivered", async () => {
+    const client = createMockClient();
+    await seedOrder(client, "SO-COL", "20");
+    await client.createPurchaseOrder(COMPANY, {
+      order_no: "PO-COL",
+      order_date: "2026-04-05",
+      party_ledger_id: "ledger-acme",
+      created_by: "ui",
+      lines: [{ stock_item_id: "stock-widget", qty: "200", rate: "25.75" }],
+    });
+    const app = renderShell(client);
+
+    await openBook(app, "Sales Order Book");
+    const sales = await screen.findByTestId("sales-order-book-table");
+    expect(sales.textContent).toMatch(/Delivered/);
+    expect(sales.textContent).not.toMatch(/Received/);
+
+    fireEvent.keyDown(app, { key: "Escape" });
+    fireEvent.keyDown(app, { key: "Escape" });
+    await openBook(app, "Purchase Order Book");
+    const purchase = await screen.findByTestId("purchase-order-book-table");
+    expect(purchase.textContent).toMatch(/Received/);
+    // ⛔ THE ASSERTION THAT FAILS ON THE DEFECT. A supplier delivers to us; the
+    // company received. Nothing on this book was delivered BY us.
+    expect(purchase.textContent).not.toMatch(/Delivered/);
+  });
+
+  it("⛔ the EXPORT's header matches the screen's, on both books", () => {
+    // A spreadsheet is read away from the screen that produced it, so a column
+    // named "Delivered" in a file of goods a supplier owes us is the same defect
+    // with a longer half-life: nobody can check it against the report it came
+    // from. orderBookSheet is exported so this can be pinned without a download.
+    const empty = {
+      direction: "SALES" as const,
+      as_on: "",
+      rows: [],
+      total_outstanding_value: "0.0000",
+      notes: [],
+    };
+    const sales = orderBookSheet(
+      empty,
+      { title: "Sales Order Book", partyHeading: "Customer", fulfilledHeading: "Delivered" },
+      undefined,
+    );
+    const purchase = orderBookSheet(
+      { ...empty, direction: "PURCHASE" as const },
+      { title: "Purchase Order Book", partyHeading: "Supplier", fulfilledHeading: "Received" },
+      undefined,
+    );
+    expect(sales.headers).toContain("Delivered");
+    expect(sales.headers).not.toContain("Received");
+    expect(purchase.headers).toContain("Received");
+    expect(purchase.headers).not.toContain("Delivered");
+    // The two sheets must otherwise agree column for column — a rename that
+    // dropped or added a column would silently misalign every row.
+    expect(purchase.headers.length).toBe(sales.headers.length);
   });
 });
 

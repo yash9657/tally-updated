@@ -3,18 +3,29 @@ package server
 // handler_forecast.go holds GET /v1/companies/{companyID}/cash-flow and
 // .../anomalies (wave-2 WS5a).
 //
-// WIRING (the two-touch rule, IMPLEMENTATION_PLAN.md sec 1.5): these methods are
-// deliberately NOT registered here. Until the serial wiring stage adds BOTH
+// WIRING (the two-touch rule, IMPLEMENTATION_PLAN.md sec 1.5). ⚠️ THIS COMMENT
+// USED TO SAY THESE METHODS ARE "DELIBERATELY NOT REGISTERED", AND IT WAS STALE:
+// both touches landed long ago and the routes are live. Corrected here because an
+// agent reading it would conclude the server half of the cash-flow feature was
+// unbuilt and build it again. The two touches, for the record:
 //
 //	(a) r.Get("/cash-flow", s.handleCashFlow)  and
-//	    r.Get("/anomalies", s.handleAnomalies)  in server.go routes(), in the
-//	    "// Reports." block next to r.Get("/outstandings", s.handleOutstandings), and
+//	    r.Get("/anomalies", s.handleAnomalies)  in server.go routes() — DONE
+//	    (server.go:908-909), in the "// Reports." block next to
+//	    r.Get("/outstandings", s.handleOutstandings); and
 //	(b) case "/cash-flow": return "cash-flow"  and
-//	    case "/anomalies": return "anomalies"   in reportName() in auth_middleware.go
-//	    (routeAction's generic report arm then maps them to Display/report:<name>),
+//	    case "/anomalies": return "anomalies"   in reportName() in
+//	    auth_middleware.go — DONE (auth_middleware.go:2014-2017); routeAction's
+//	    generic report arm then maps them to Display/report:<name>.
 //
-// the routes do not exist, and adding only (a) would make even an Owner get a 403
-// because routeAction default-denies unmapped {companyID} sub-paths.
+// Doing only (a) would make even an Owner get a 403, because routeAction
+// default-denies unmapped {companyID} sub-paths.
+//
+// ⛔ WHAT IS STILL MISSING IS THE CLIENT, NOT THE ROUTE. No frontend code calls
+// GET /v1/companies/{id}/cash-flow — there is no Gateway entry, no Go To entry
+// and no screen — so this handler is reachable by cURL and by nothing an operator
+// can press. That is a tracked defect (D22) whose remaining half needs a
+// CoredClient method in frontend/src/api, which is another lane's file.
 //
 // The forecast Service is constructed per-request from s.pool (which satisfies
 // both the read-only runner and reporting's tx runner). This diverges from the
@@ -89,6 +100,28 @@ func (s *Server) handleAnomalies(w http.ResponseWriter, r *http.Request) {
 
 // cashFlowJSON renders a Projection to the wire shape. All money is fixed-4
 // strings (paisa-exact, matching handleOutstandings).
+//
+// ⛔⛔ THIS RESPONSE MUST SAY THAT IT IS A PROJECTION AND WHAT IT ASSUMED.
+// It used to carry exactly seven keys — as_on, horizon_days, bucket_days,
+// opening_cash, buckets, beyond_horizon, overdue_folded_into_first_bucket — and
+// not one of them contained the words projection, estimate, basis, assumed or
+// method. Every money value in it is fixed-4 and reads exactly like a posted
+// ledger figure, while the engine INVENTS a settlement date for every unpaid
+// bill: due_date if the bill has one, else the party's credit_days, else a
+// 30-day convention compiled into internal/forecast. A closing_cash of
+// 4,12,300.0000 in a bucket three months out is not a fact, and nothing on the
+// wire said so.
+//
+// So `estimate`, `method` and `basis` are part of the CONTRACT, not decoration.
+// `basis` splits the projected money by WHERE ITS DATE CAME FROM, per side, so a
+// reader can see at a glance how much of the answer is observed (a real due date)
+// and how much is the 30-day convention talking.
+//
+// ⚠️ A DISCLOSURE WITH NO RENDERER IS NOTHING (RULE 3). There is still no client
+// screen calling this route; see the report on D22. This half is the half that
+// belongs to the server, and it is written so that the screen has something true
+// to render the moment it exists — the alternative, shipping the screen first
+// against an undisclosed projection, is how a guess gets printed as a balance.
 func cashFlowJSON(p forecast.Projection) map[string]any {
 	buckets := make([]map[string]any, 0, len(p.Buckets))
 	for _, b := range p.Buckets {
@@ -114,5 +147,48 @@ func cashFlowJSON(p forecast.Projection) map[string]any {
 			"nett":    p.Beyond.Nett.StringFixed(4),
 		},
 		"overdue_folded_into_first_bucket": p.OverdueFolded,
+
+		// ---- THE DISCLOSURE ------------------------------------------------
+		// `estimate` is first and is a plain bool so no client can miss it or
+		// have to parse prose to find out.
+		"estimate": true,
+		"method":   "open-bill settlement projection (deterministic; no statistics, no model)",
+		"basis":    basisJSON(p.Basis),
+	}
+}
+
+// basisJSON renders the projection's disclosure. `opening_cash` is a real ledger
+// position and the BILL AMOUNTS are real pending balances (they come from
+// reporting.Outstandings, the same netting the Outstandings report uses) — what
+// is assumed is WHEN each of them lands, which is what this block reports.
+func basisJSON(b forecast.Basis) map[string]any {
+	count := func(c forecast.BasisCount) map[string]any {
+		return map[string]any{
+			"bills":   c.Bills,
+			"inflow":  c.Inflow.StringFixed(4),
+			"outflow": c.Outflow.StringFixed(4),
+		}
+	}
+	return map[string]any{
+		"what_is_projected": "the DATE each open bill settles, not its amount. " +
+			"Amounts are the pending balances the Outstandings report shows; the " +
+			"bucket a bill falls into is derived.",
+		"assumed_settlement_date": map[string]any{
+			// OBSERVED — the bill carried an explicit due date.
+			"from_due_date": count(b.FromDueDate),
+			// ASSUMED — the party's configured credit period.
+			"from_party_credit_days": count(b.FromPartyCreditDays),
+			// ⛔ ASSUMED, and by a constant in this build rather than by anything
+			// the tenant said.
+			"from_default_credit_days": count(b.FromDefaultCreditDays),
+			"default_credit_days":      b.DefaultCreditDays,
+		},
+		"overdue_folded_into_first_bucket": count(b.Overdue),
+		"not_modelled": []string{
+			"vouchers not yet entered — this reads the books, not the business",
+			"part payments arriving earlier or later than the projected date",
+			"bills raised after as_on",
+			"cash movements with no bill behind them (salaries, rent, taxes, drawings)",
+		},
 	}
 }

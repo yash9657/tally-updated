@@ -51,6 +51,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -115,6 +116,46 @@ func (f *StockFigures) add(p inventory.Position) {
 // The shared derivation
 // --------------------------------------------------------------------------
 
+// resolvedStockAsOn is THE ONE normalisation of an as-on parameter in the stock
+// plane: it returns the boundary the replay will ACTUALLY be bounded at, and
+// "" only when the replay is genuinely UNBOUNDED.
+//
+// ⛔ WHY A REPORT MAY NOT ECHO THE CALLER'S STRING. Three reports here
+// (StockSummary, GodownStockSummary, BatchStockSummary) publish an `AsOn` field
+// that a client renders as a caption over the figures. They all echoed the
+// caller's parameter verbatim, which is the same shape that made the Bank
+// Reconciliation header render "As at " with nothing after it — and it is a
+// caption asserting a fact about the FIGURES, so it must come from the same
+// value the figures did or it is only an assumption in a serif font.
+//
+// AND THE TWO CONSUMERS OF THIS DATE DO NOT AGREE ABOUT WHITESPACE, which is
+// the sharp edge under the cosmetic one:
+//
+//   - loadStockPositionMovements -> nullDate() -> Postgres, which TRIMS.
+//   - loadStockOpenings compares it as a GO STRING against
+//     company.books_beginning_from ("ISO dates compare correctly as strings",
+//     which is true only of well-formed ones).
+//
+// So " 2026-06-30" bounds the MOVEMENTS at 2026-06-30 while making the openings
+// guard read `" 2026-06-30" < "2025-04-01"` — TRUE, because a space sorts below
+// a digit — and the entire opening position is silently dropped. The report
+// still foots, still renders, and is short by exactly the stock the company
+// began with, in QUANTITY AND IN VALUE. Resolving here, once, before either
+// loader runs, is what makes the two consumers structurally incapable of
+// disagreeing.
+//
+// ⚠️ STATED PLAINLY: no HTTP caller can reach that today — `reportDate` in
+// package server trims and then rejects anything time.Parse will not take, so
+// this is defence in depth for in-process callers (closing_stock.go's Balance
+// Sheet fold-in among them) and a guarantee for the echo, not a driven bypass.
+// The ECHO half IS driven: the Stock Summary screen renders this value.
+//
+// It deliberately does NOT default an empty date to today. That would change
+// which vouchers the replay sees, which MOVES THE BALANCE SHEET (the Closing
+// Stock asset comes off this same derivation) and needs a deliberate
+// verify:demo re-pin. "" here means UNBOUNDED and every reader must say so.
+func resolvedStockAsOn(asOn string) string { return strings.TrimSpace(asOn) }
+
 // stockPositionsAsOn is the position of every (item, godown, batch) bucket as at
 // `asOn`, in exactly the form StockSummary builds it: the same names, the same
 // books-beginning-guarded openings, the same movement ledger bounded by one
@@ -125,6 +166,12 @@ func (f *StockFigures) add(p inventory.Position) {
 // drift apart. `asOn` empty means "everything ever posted", as everywhere else
 // on this seam.
 func stockPositionsAsOn(ctx context.Context, tx pgx.Tx, asOn string) ([]StockPositionRow, stockNames, error) {
+	// ⛔ RESOLVE ONCE, HERE, BEFORE ANY LOADER SEES IT. See resolvedStockAsOn:
+	// the two loaders below consume this date in two DIFFERENT ways (one hands
+	// it to Postgres, one compares it as a Go string), and the raw parameter
+	// makes them disagree.
+	asOn = resolvedStockAsOn(asOn)
+
 	names, err := loadStockNames(ctx, tx)
 	if err != nil {
 		return nil, names, err
@@ -221,6 +268,11 @@ func (g GodownTotal) Untracked() bool { return g.GodownID == uuid.Nil }
 // gives — a lower bound would drop the stock the company already owned and
 // still produce a tidy table.
 type GodownStockSummary struct {
+	// AsOn is the boundary the replay was ACTUALLY bounded at — always
+	// RESOLVED, never the caller's parameter (see resolvedStockAsOn). Empty
+	// means UNBOUNDED: every voucher ever posted, INCLUDING ones dated after
+	// today. It does NOT mean "today", and a client that renders it as one is
+	// stating something this report did not do.
 	AsOn string
 
 	// Items are the rows: one per stock item that holds or has ever held stock.
@@ -246,7 +298,10 @@ func (s *Service) GodownStockSummary(ctx context.Context, companyID uuid.UUID, a
 		return GodownStockSummary{}, err
 	}
 
-	out := GodownStockSummary{AsOn: asOn, TotalValue: decimal.Zero}
+	// The echo is the RESOLVED boundary, and it is produced by the same function
+	// stockPositionsAsOn resolves with — so the caption and the figures cannot
+	// come from two different dates.
+	out := GodownStockSummary{AsOn: resolvedStockAsOn(asOn), TotalValue: decimal.Zero}
 
 	err := s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		rows, _, err := stockPositionsAsOn(ctx, tx, asOn)

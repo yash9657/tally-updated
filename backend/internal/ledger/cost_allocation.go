@@ -69,6 +69,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -166,6 +167,110 @@ type costAllocationAxisKey struct {
 	category uuid.UUID
 }
 
+// ===========================================================================
+// ⛔⛔ NOTHING BELOW THIS LINE MAY PUT A UUID OR A `posting_seq` IN A SENTENCE
+// AN OPERATOR READS. TestNoRefusalPrintsAUUIDOrAPostingOrdinal enforces it.
+// ===========================================================================
+// These messages are the 422 body. They are the only thing the person who keyed
+// the voucher ever sees about this feature, and they used to read:
+//
+//	cost allocation on posting 1 totals 60000.0000 on cost category
+//	018f0000-0000-7000-8000-0000000000d1 but the posting is 100000.0000
+//
+// Two separate defects in one sentence, and the comment above it claimed it
+// "names the axis":
+//
+//  1. THE UUID. The operator picked "Department" from a list. They have never
+//     seen that id, cannot look it up from any screen, and the picker offers no
+//     way to search by one. It names the axis to a database, not to a person.
+//  2. `posting 1`. That is `posting_seq`, THE 0-BASED ORDINAL THIS PRODUCT
+//     PROMISES NEVER TO DISPLAY — CostAllocationPicker.tsx states the rule in
+//     its own header, and it is 0-based over `[primary, ...particulars]`, so
+//     "posting 1" is the row the operator sees FIRST. The one number guaranteed
+//     to send them to the wrong line is the number the refusal quoted.
+//
+// A line is therefore named the way the screen names it: by its SIDE and its
+// AMOUNT, both of which are on the form in front of them. An axis cannot be
+// named at all from here — this package holds ids and the names live in
+// cost_category, which validateCostAllocations has no transaction to read (it
+// runs BEFORE the transaction opens, deliberately, so a refusal costs nothing).
+// So the axis is identified by the thing the operator TYPED: its shares. See
+// describeAxisShares. Resolving the real name needs a lookup passed in from
+// ledger.post(); that edit is reported, not made, because this lane does not own
+// ledger.go — and the sentence below is complete and actionable without it.
+
+// ⚠️ `sideWord` IS NOT DECLARED HERE. ledger.go already has one, for the party
+// orientation refusal, and a second copy would be a second spelling of "Dr" that
+// could drift from the one the rest of the package's messages use.
+
+// describePosting names one accounting line by what the operator can SEE of it:
+// its side and its amount.
+//
+// ⚠️ IT DISAMBIGUATES WHEN IT HAS TO. A voucher may legally post twice to the
+// same side for the same amount (two 5,000 Dr expense lines), and then side +
+// amount alone points at both. In that case — and ONLY in that case — the
+// description adds a 1-BASED count among the identical-looking lines, which is
+// something a human can actually do with their eyes. That is not the forbidden
+// ordinal: it counts what is on the screen, not the position in a wire array.
+func describePosting(postings []PostingInput, seq int) string {
+	if seq < 0 || seq >= len(postings) {
+		return "a line this voucher does not post"
+	}
+	p := postings[seq]
+	base := fmt.Sprintf("the %s %s line", sideWord(p.DrCr), p.Amount.StringFixed(4))
+	nth, total := 0, 0
+	for i, q := range postings {
+		if q.DrCr != p.DrCr || !q.Amount.Equal(p.Amount) {
+			continue
+		}
+		total++
+		if i == seq {
+			nth = total
+		}
+	}
+	if total <= 1 {
+		return base
+	}
+	return fmt.Sprintf("%s (the %s of %d lines that read the same)",
+		base, ordinal(nth), total)
+}
+
+// ordinal renders a small counting number as words a person reads off a form.
+func ordinal(n int) string {
+	switch n {
+	case 1:
+		return "first"
+	case 2:
+		return "second"
+	case 3:
+		return "third"
+	}
+	return fmt.Sprintf("%dth", n)
+}
+
+// describeAxisShares lists, in the order they were keyed, the shares belonging to
+// ONE (posting, axis) group.
+//
+// ⛔ THIS IS HOW THE REFUSAL SAYS **WHICH** AXIS WITHOUT A NAME OR AN ID, and it
+// is the part of the message with real work to do: a line analysed on Departments
+// AND Branches in parallel produces two groups, only one of which is wrong, and
+// telling the operator to fix "the cost category" would put them at even odds of
+// correcting the split that was right. The shares are numbers they typed
+// themselves, on rows they are looking at, so "60,000.0000 + 25,000.0000"
+// identifies the Department axis to a person better than its primary key does.
+func describeAxisShares(as []CostAllocationInput, key costAllocationAxisKey) string {
+	parts := make([]string, 0, 4)
+	for _, a := range as {
+		if a.PostingSeq == key.seq && a.CostCategoryID == key.category {
+			parts = append(parts, a.Amount.StringFixed(4))
+		}
+	}
+	if len(parts) == 0 {
+		return "no shares"
+	}
+	return strings.Join(parts, " + ")
+}
+
 // validateCostAllocations refuses a split the database would refuse anyway, but
 // with a sentence naming the consequence in rupees instead of a constraint name
 // after a rollback.
@@ -198,29 +303,35 @@ func validateCostAllocations(postings []PostingInput, as []CostAllocationInput) 
 	// entirely about the form they just filled in.
 	for _, a := range as {
 		if a.PostingSeq < 0 || a.PostingSeq >= len(postings) {
+			// ⚠️ THE ONE PLACE A COUNT SURVIVES, and it is deliberately framed as a
+			// fact about the REQUEST rather than about the form. The index is out of
+			// range, so there is no line to describe by side and amount, and the only
+			// useful thing left to say is how many lines the voucher actually has —
+			// which is a defect in the SENDING PROGRAM (the index is computed from a
+			// row's position; no human types one), so the sentence says that too
+			// rather than sending an operator to hunt for "line 3".
 			if len(postings) == 0 {
 				return fmt.Errorf(
-					"ledger: a cost allocation names posting %d but this voucher posts no accounting lines at all, so there is no cost to attribute to a department",
-					a.PostingSeq)
+					"ledger: a cost allocation was sent for a voucher that posts no accounting lines at all, so there is no cost to attribute to a department")
 			}
 			return fmt.Errorf(
-				"ledger: a cost allocation names posting %d but this voucher has %d posting(s), numbered 0 to %d — a cost cannot be attributed to a line that is not being posted",
-				a.PostingSeq, len(postings), len(postings)-1)
+				"ledger: a cost allocation was sent against an accounting line this voucher does not have — it posts %d line(s). The line is identified by its position in the request, which is computed by the sending program and shown on no screen, so this is a defect in that program rather than something that was keyed",
+				len(postings))
 		}
 		if a.CostCategoryID == uuid.Nil {
 			return fmt.Errorf(
-				"ledger: the cost allocation on posting %d names no cost category; without the axis it belongs to it would be added to every other allocation of the same posting, and two axes that each allocate the full amount would come to twice the cost",
-				a.PostingSeq)
+				"ledger: a cost allocation on %s names no cost category; without the axis it belongs to it would be added to every other allocation of the same line, and two axes that each allocate the full amount would come to twice the cost",
+				describePosting(postings, a.PostingSeq))
 		}
 		if a.CostCentreID == uuid.Nil {
 			return fmt.Errorf(
-				"ledger: the cost allocation on posting %d names cost category %s but no cost centre, so nothing is recorded about which department bore the cost",
-				a.PostingSeq, a.CostCategoryID)
+				"ledger: a cost allocation of %s on %s names a cost category but no cost centre, so nothing is recorded about which department bore the cost",
+				a.Amount.StringFixed(4), describePosting(postings, a.PostingSeq))
 		}
 		if !a.Amount.IsPositive() {
 			return fmt.Errorf(
-				"ledger: the cost allocation of %s to cost centre %s on posting %d must be more than zero — an allocation is a MAGNITUDE and the posting's own Dr/Cr carries the direction, so a zero or negative share either records that a department bore nothing or reverses the cost it did bear",
-				a.Amount.StringFixed(4), a.CostCentreID, a.PostingSeq)
+				"ledger: the cost allocation of %s on %s must be more than zero — an allocation is a MAGNITUDE and the line's own Dr/Cr carries the direction, so a zero or negative share either records that a department bore nothing or reverses the cost it did bear",
+				a.Amount.StringFixed(4), describePosting(postings, a.PostingSeq))
 		}
 	}
 
@@ -240,9 +351,14 @@ func validateCostAllocations(postings []PostingInput, as []CostAllocationInput) 
 			seen[key] = centres
 		}
 		if centres[a.CostCentreID] {
+			// The centre is not named because it cannot be from here (see the header
+			// above the describe* helpers) — but the SHARES on that axis are, and the
+			// duplicate is one of them, so the operator can see which two rows of the
+			// picker point at the same centre.
 			return fmt.Errorf(
-				"ledger: cost centre %s appears twice on posting %d for cost category %s; the same share keyed twice can only make the axis total correctly by making the other entry wrong",
-				a.CostCentreID, a.PostingSeq, a.CostCategoryID)
+				"ledger: one cost centre is allocated TWICE on %s within a single cost category (that axis carries %s); the same share keyed twice can only make the axis total correctly by making the other entry wrong",
+				describePosting(postings, a.PostingSeq),
+				describeAxisShares(as, key))
 		}
 		centres[a.CostCentreID] = true
 	}
@@ -278,21 +394,29 @@ func validateCostAllocations(postings []PostingInput, as []CostAllocationInput) 
 		if allocated.Equal(want) {
 			continue
 		}
-		// The message the operator acts on. It names the axis, both figures, and
-		// the unattributed remainder — because their actual question is "which
-		// axis is short, and by how much". Signed: a NEGATIVE shortfall is an
-		// OVER-allocation, and saying "-15000 is unattributed" would be nonsense,
-		// so the two cases get different sentences.
+		// ⛔ THE MESSAGE THE OPERATOR ACTS ON. Their actual question is "WHICH axis
+		// is short, and by how much" — and this sentence used to answer the first
+		// half with a UUID and locate it with a `posting_seq`, i.e. with the two
+		// values in this whole feature that no screen shows. It now names the line
+		// the way the form does (side + amount) and identifies the axis by the
+		// shares that were keyed on it, so a line analysed on Departments AND
+		// Branches in parallel says which of the two to open. See the block above
+		// costAllocationAxisKey.
+		//
+		// Signed: a NEGATIVE shortfall is an OVER-allocation, and "-15000 is
+		// unattributed" would be nonsense, so the two cases get different sentences.
 		short := want.Sub(allocated)
 		if short.IsNegative() {
 			return fmt.Errorf(
-				"ledger: cost allocation on posting %d totals %s on cost category %s but the posting is only %s — %s more has been attributed to departments than was actually spent, so the Cost Centre Summary would overstate cost against the Profit & Loss by that amount",
-				key.seq, allocated.StringFixed(4), key.category, want.StringFixed(4),
+				"ledger: one cost category on %s totals %s (%s) but the line is only %s — %s more has been attributed to departments than was actually spent, so the Cost Centre Summary would overstate cost against the Profit & Loss by that amount. Any OTHER cost category on that line is complete and must not be changed",
+				describePosting(postings, key.seq), allocated.StringFixed(4),
+				describeAxisShares(as, key), want.StringFixed(4),
 				short.Neg().StringFixed(4))
 		}
 		return fmt.Errorf(
-			"ledger: cost allocation on posting %d totals %s on cost category %s but the posting is %s — %s is unattributed, so the Cost Centre Summary would disagree with the Profit & Loss by that amount",
-			key.seq, allocated.StringFixed(4), key.category, want.StringFixed(4),
+			"ledger: one cost category on %s totals %s (%s) but the line is %s — %s is unattributed, so the Cost Centre Summary would disagree with the Profit & Loss by that amount. Any OTHER cost category on that line is complete and must not be changed",
+			describePosting(postings, key.seq), allocated.StringFixed(4),
+			describeAxisShares(as, key), want.StringFixed(4),
 			short.StringFixed(4))
 	}
 	return nil

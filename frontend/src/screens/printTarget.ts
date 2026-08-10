@@ -1,5 +1,5 @@
 import type { NavSnapshot } from "../keystroke/navMachine";
-import type { ReportName, VoucherType } from "../keystroke/types";
+import type { FrameConfig, ReportName, VoucherType } from "../keystroke/types";
 
 /**
  * WHAT DOES Ctrl+P PRINT? — the pure resolution, with no client and no React.
@@ -101,6 +101,85 @@ const REPORT_SLUGS: Record<ReportName, string> = {
   "Purchase Order Book": "purchase-order-book",
 };
 
+/**
+ * WHICH BOUNDS OF THE F2 PERIOD A REPORT IS PRINTED FOR.
+ *
+ * ⛔ THE DEFECT THIS TABLE EXISTS TO CLOSE. Ctrl+P used to send the slug and
+ * NOTHING ELSE. The server reads `from` / `to` / `as_on` off the query and
+ * treats an absent one as "no bound" — so the paper came back subtitled "For all
+ * dates in the books" or "As at the latest date in the books" while the screen
+ * it was printed from showed one quarter. Every figure on it was real, which is
+ * exactly what made it dangerous: a Trial Balance for the life of the company,
+ * printed from a screen headed "As on 30-Jun-2026", is a document somebody signs.
+ *
+ *  - "as-at"       — a POSITION. Only the upper bound applies, and it is sent as
+ *                    `as_on`. Bounding a position BELOW would drop the entity's
+ *                    earlier history and still foot: a wrong answer that looks
+ *                    right.
+ *  - "full-period" — a FLOW between two dates. Both bounds apply, as `from`/`to`.
+ *
+ * ⛔ IT MUST NOT DRIFT FROM THE F2 OVERLAY'S OWN CLASSIFICATION. The period
+ * dialog (screens/overlays/FrameOverlays.tsx) tells the operator which bounds a
+ * report honours from AS_AT_ONLY_REPORTS / FULL_PERIOD_REPORTS, and each report
+ * SCREEN reads the same fields when it fetches. Three lists that can disagree is
+ * how a report comes to be told its "From" date does nothing while the printed
+ * copy silently applies it — so printTarget.test.ts asserts this table is exactly
+ * those two lists, restricted to the reports that print. This one is kept here,
+ * rather than imported, because this module is pure and total by construction and
+ * must not pull a React component's module graph in behind it.
+ */
+type ReportPeriodShape = "as-at" | "full-period";
+
+const REPORT_PERIOD_SHAPE: Record<ReportName, ReportPeriodShape> = {
+  "Balance Sheet": "as-at",
+  "Profit & Loss A/c": "full-period",
+  "Trial Balance": "as-at",
+  "Day Book": "full-period",
+  Outstandings: "as-at",
+  "Stock Summary": "as-at",
+  "TDS / TCS Register": "full-period",
+  "Sales Order Book": "as-at",
+  "Purchase Order Book": "as-at",
+};
+
+/**
+ * The date query for one report, from the frame's F2 period.
+ *
+ * An UNSET bound is omitted rather than sent empty: the server's `reportDate`
+ * treats a present-but-unparseable date as a 400 and an absent one as "no
+ * bound", so sending `from=` would turn "the operator never set a period" into a
+ * refusal on some routes and an open bound on others. Omitting it says the one
+ * thing that is true.
+ */
+function reportPeriodQuery(
+  name: ReportName,
+  config: FrameConfig | undefined,
+): Record<string, string> {
+  const from = config?.periodFrom?.trim() ?? "";
+  const to = config?.periodTo?.trim() ?? "";
+  const query: Record<string, string> = {};
+  if (REPORT_PERIOD_SHAPE[name] === "as-at") {
+    if (to !== "") query.as_on = to;
+    return query;
+  }
+  if (from !== "") query.from = from;
+  if (to !== "") query.to = to;
+  return query;
+}
+
+/**
+ * How the period reads on the STATUS LINE, so the operator can see what went to
+ * paper without opening the PDF. "" when the frame carries no period at all —
+ * which is itself worth saying, hence the caller's "all dates" wording.
+ */
+function periodLabel(query: Record<string, string>): string {
+  if (query.as_on) return `as on ${query.as_on}`;
+  if (query.from && query.to) return `${query.from} to ${query.to}`;
+  if (query.from) return `from ${query.from}`;
+  if (query.to) return `up to ${query.to}`;
+  return "";
+}
+
 /** A resolved print destination, or a refusal carrying the reason to display. */
 export type PrintTarget =
   | {
@@ -146,6 +225,22 @@ export interface PrintVoucherContext {
    * snapshot carry a field only one screen sets.
    */
   bankLedgerID?: string | null;
+  /**
+   * The NAME of that bank ledger, for the status line.
+   *
+   * It exists because the reconciliation screen AUTO-SELECTS when the company
+   * has exactly one bank account, so the operator can print an account they were
+   * never asked about. Naming it in the confirmation is what keeps that
+   * convenience from being silent — see the bank-reconciliation branch.
+   */
+  bankLedgerName?: string | null;
+  /**
+   * How many bank accounts this company has, when the screen knows.
+   *
+   * ZERO IS NOT THE SAME REFUSAL AS "you have not picked one yet", and only the
+   * screen can tell them apart: `undefined` means the list has not arrived.
+   */
+  bankAccountCount?: number;
 }
 
 function titleCase(cls: VoucherType): string {
@@ -221,12 +316,25 @@ export function resolvePrintTarget(
       };
     }
     const drilled = screen === "report-detail";
+    // THE PERIOD IS PART OF THE REQUEST, NOT DECORATION. See
+    // REPORT_PERIOD_SHAPE: without it the server prints the whole book under the
+    // screen's heading.
+    const query = reportPeriodQuery(name as ReportName, snapshot.config);
+    const period = periodLabel(query);
+    // ⚠️ A DRILL-DOWN FRAME CARRIES NO PERIOD OF ITS OWN. `reduceKey` pushes
+    // report-detail as a bare frame (only the cost-category drill copies the
+    // period), and ReportDetailScreen itself fetches with no dates — so the
+    // level on screen really is all-dates and printing it that way is honest.
+    // The label says which it is either way, because "Printed Day Book" over a
+    // page covering a different span than the screen is the whole defect.
+    const scope = period !== "" ? period : "all dates in the books";
     return {
       kind: "report",
       slug,
       label: drilled
-        ? `${name} (the whole statement, not this drill-down)`
-        : name,
+        ? `${name} (the whole statement, not this drill-down) — ${scope}`
+        : `${name} — ${scope}`,
+      ...(Object.keys(query).length > 0 ? { query } : {}),
     };
   }
 
@@ -241,17 +349,51 @@ export function resolvePrintTarget(
     // printing "the first one" would put a real, correctly rendered statement
     // for the WRONG ACCOUNT on paper with nothing on the page saying so.
     if (!voucher.bankLedgerID) {
+      // ⛔ AND IT SAYS WHICH OF THE TWO SILENCES THIS IS. A company with NO bank
+      // accounts cannot "select one first", and telling its operator to do that
+      // sends them looking for a picker that will never have a row in it — the
+      // server's own answer on that route is a 404 naming the group a ledger has
+      // to sit under, and the key should not be less informative than the wire.
+      if (voucher.bankAccountCount === 0) {
+        return {
+          kind: "refusal",
+          reason:
+            "This company has no bank accounts, so there is no Bank Reconciliation Statement to print. A ledger is a bank account when its group sits under Bank Accounts or Bank OD A/c — create one and its postings appear here.",
+        };
+      }
       return {
         kind: "refusal",
         reason:
-          "Select a bank account first — a Bank Reconciliation Statement is always for one account, and printing one you did not choose would put the wrong account on paper.",
+          "Select a bank account first (F4) — a Bank Reconciliation Statement is always for one account, and printing one you did not choose would put the wrong account on paper.",
       };
     }
+    // ⛔ THE ACCOUNT IS NAMED ON THE STATUS LINE, AND THAT IS THE POINT OF THE
+    // NAME BEING HERE. The refusal above was written to stop a statement for the
+    // WRONG account reaching paper — but the screen auto-selects when the company
+    // has exactly one bank account, so on that (very common) company Ctrl+P as the
+    // FIRST key prints an account the operator never chose. That choice is right —
+    // making somebody pick from a list of one is friction — so the fix is not to
+    // re-arm the refusal but to make the outcome VISIBLE: the operator reads which
+    // account went to paper without opening the PDF, and can tell at once that it
+    // is not the one they meant.
+    //
+    // AND THE DATE. `as_on` is the F2 upper bound, exactly as the screen reads it
+    // (BankReconciliationScreen: `const asOn = snapshot.config?.periodTo`). Without
+    // it the printed statement is "as at the latest date in the books" while the
+    // screen says "As at 30-Jun-2026" — the same defect as every other report, and
+    // worse here, because a BRS is a document a bank manager is shown.
+    const asOn = snapshot.config?.periodTo?.trim() ?? "";
+    const account = voucher.bankLedgerName?.trim();
     return {
       kind: "report",
       slug: "bank-reconciliation",
-      label: "Bank Reconciliation Statement",
-      query: { ledger_id: voucher.bankLedgerID },
+      label:
+        `Bank Reconciliation Statement — ${account && account !== "" ? account : "the selected account"}` +
+        (asOn !== "" ? ` as on ${asOn}` : ""),
+      query: {
+        ledger_id: voucher.bankLedgerID,
+        ...(asOn !== "" ? { as_on: asOn } : {}),
+      },
     };
   }
 
@@ -275,7 +417,14 @@ export function resolvePrintTarget(
     return {
       kind: "refusal",
       reason:
-        "The Cost Centre Summary does not print in this build (the server answers 501 for it). A cost summary is always for ONE cost category, and the print route carries no way to say which — printing the first axis would put a real, correctly rendered Department report on paper for a question that was about Branches, with nothing on the page saying so. Alt+E is not built here either; read it on screen.",
+        // ⛔ THE LAST SENTENCE USED TO READ "Alt+E is not built here either; read
+        // it on screen", AND IT WAS FALSE. Alt+E on this very screen writes
+        // Cost-Centre-Summary-<axis>-<from>-to-<to>.csv immediately, with the
+        // figures at 4dp and the AXIS in the file name — the export was built (T15)
+        // and this sentence was never re-read. A refusal that misstates what the
+        // OTHER key does is worse than a bare refusal: it sends an operator who
+        // needs these figures away from the one way out of the screen that works.
+        "The Cost Centre Summary does not print in this build (the server answers 501 for it). A cost summary is always for ONE cost category, and the print route carries no way to say which — printing the first axis would put a real, correctly rendered Department report on paper for a question that was about Branches, with nothing on the page saying so. Alt+E DOES work here: it writes this axis's figures to a spreadsheet, with the axis in the file name so the file cannot be read under the wrong heading.",
     };
   }
   if (screen === "cost-category-summary") {

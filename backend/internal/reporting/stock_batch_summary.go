@@ -238,6 +238,10 @@ type ExpiryBandRollup struct {
 // StockSummary.TotalValue for the same date, and the bands must sum to it — an
 // expired batch is inside that identity, not outside it.
 type BatchStockSummary struct {
+	// AsOn is the boundary the replay was ACTUALLY bounded at — always
+	// RESOLVED, never the caller's parameter (see resolvedStockAsOn). Unlike
+	// its two siblings this one can never be empty: an ageing band is relative
+	// to a date, so a missing one is ErrAgeingNeedsAsOn.
 	AsOn string
 
 	Rows  []BatchStockRow
@@ -307,6 +311,15 @@ func (s *Service) BatchStockSummary(ctx context.Context, companyID uuid.UUID, as
 	if err := scope(ctx, companyID); err != nil {
 		return BatchStockSummary{}, err
 	}
+	// Resolve BEFORE the two checks below, so the date this report ages
+	// against, the date it bounds the replay at, and the date it echoes are one
+	// value (see resolvedStockAsOn). This report was already the SAFE one of the
+	// three — time.Parse is strict, so a raw parameter that reached the echo had
+	// to be a well-formed ISO date and raw therefore equalled resolved — but it
+	// held by an argument about a parser rather than by construction, and a
+	// whitespace-only date came back as a parse error rather than as the
+	// "this report needs a date" answer that is actually true of it.
+	asOn = resolvedStockAsOn(asOn)
 	if asOn == "" {
 		return BatchStockSummary{}, ErrAgeingNeedsAsOn
 	}

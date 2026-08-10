@@ -127,6 +127,19 @@ type OrderBookRow struct {
 	// DueDate is "" when NO DATE WAS AGREED, which is common and is NOT the same
 	// as overdue. See Overdue.
 	DueDate string
+
+	// OverdueAsOn is THE DATE THIS ROW'S LATENESS IS MEASURED AGAINST, resolved
+	// once by OrderBookFor and carried on every row so that Overdue can answer
+	// without a clock of its own.
+	//
+	// ⛔ IT IS NOT THE SAME FIELD AS OrderBook.AsOn AND MUST NOT BE MERGED WITH IT.
+	// AsOn is what the report was RUN FOR and is "" when the caller gave no bound —
+	// the honest answer "every order ever placed, less every delivery ever
+	// recorded", which the client renders as its own sentence. This one is never
+	// "": with no bound the walk runs up to the present, so the present is what a
+	// promised delivery date is late against. Conflating the two was the defect:
+	// see Overdue.
+	OverdueAsOn string
 }
 
 // Outstanding is what is still to come: committed minus fulfilled.
@@ -156,26 +169,85 @@ func (r OrderBookRow) OutstandingValue() decimal.Decimal {
 // date as "today" (or as the zero time, which is worse — every such line would be
 // overdue by two thousand years) would invent a commitment the business never
 // made, and the salesperson chasing it would be chasing nothing.
+//
+// ⛔⛔ AN EMPTY `asOn` IS NOT "NOTHING IS LATE", AND READING IT THAT WAY WAS THE
+// DEFECT. This method used to short-circuit to false whenever asOn was blank —
+// and blank is the DEFAULT, because F2 sets no period until an operator asks for
+// one. So the view an operator actually opens reported ZERO late deliveries on
+// books full of them, and reported it in the most convincing way available: no
+// red rows, and the "N line(s) are past their agreed due date" note simply absent.
+// An empty date bound does not mean there is no today; it means the walk is
+// unbounded, and an unbounded walk runs up to the present.
+//
+// So a blank argument now falls back to r.OverdueAsOn, the reference OrderBookFor
+// resolved for the whole report. The fallback rather than a plain replacement of
+// the parameter is deliberate: internal/server passes `book.AsOn`, and this way
+// the caller that names a historical position still gets that position while the
+// caller that names nothing gets the present instead of silence. Both reach the
+// same answer whenever AsOn is set, because the row's reference IS AsOn then.
+//
+// If BOTH are empty the answer stays false, which now means "this row was built
+// by hand outside OrderBookFor" rather than "this is the ordinary case".
 func (r OrderBookRow) Overdue(asOn string) bool {
-	if r.DueDate == "" || asOn == "" {
+	ref := strings.TrimSpace(asOn)
+	if ref == "" {
+		ref = r.OverdueAsOn
+	}
+	if r.DueDate == "" || ref == "" {
 		return false
 	}
 	due, err := time.Parse("2006-01-02", r.DueDate)
 	if err != nil {
 		return false
 	}
-	on, err := time.Parse("2006-01-02", asOn)
+	on, err := time.Parse("2006-01-02", ref)
 	if err != nil {
 		return false
 	}
 	return due.Before(on)
 }
 
+// resolveOverdueAsOn is the ONE place this report decides what a delivery
+// promise is late against.
+//
+// Extracted as a pure function of (what was asked for, what time it is) so the
+// decision can be asserted without a database and without waiting for tomorrow —
+// which matters, because the alternative shape is a bare time.Now() buried in the
+// walk, and a clock inside a derivation is exactly what stock_batch_summary.go
+// refuses for its ageing bands.
+//
+// ⚠️ THE TWO SIBLINGS IN THIS PACKAGE POINT OPPOSITE WAYS AND BOTH ARE RIGHT.
+// outstanding.go's resolveAsOn defaults an empty date to today, because a
+// receivables ageing report with no reference date answers nothing.
+// stock_batch_summary.go REFUSES an empty date outright (ErrAgeingNeedsAsOn),
+// because its bands are defined relative to one and a silent default makes the
+// same books print differently on two days with no column saying why. This report
+// needs a third answer, and it is the reason the two halves were split: the ROWS
+// stay genuinely unbounded (every order ever placed — a real answer a client
+// renders its own sentence for), while only the LATENESS gets a default. The
+// reproducibility objection is answered the way stock_batch_summary asks it to
+// be — by putting the resolved date on the artefact, in Notes, rather than
+// leaving it implied.
+func resolveOverdueAsOn(asOn string, now time.Time) string {
+	if on := strings.TrimSpace(asOn); on != "" {
+		return on
+	}
+	return now.UTC().Format("2006-01-02")
+}
+
 // OrderBook is one direction's outstanding position as at a date.
 type OrderBook struct {
 	Direction OrderDirection
-	AsOn      string
-	Rows      []OrderBookRow
+	// AsOn is WHAT THE REPORT WAS RUN FOR, echoed exactly: "" when the caller gave
+	// no bound, which is a real answer ("every order ever placed") and not a
+	// missing value. A client renders that case as its own sentence, so do not be
+	// tempted to fill it in — see OverdueAsOn for the field that IS filled in.
+	AsOn string
+	// OverdueAsOn is what LATENESS is measured against: AsOn when one was given,
+	// otherwise today. Every row carries the same value, and Notes states it, so a
+	// reader can reproduce the overdue count from the artefact alone.
+	OverdueAsOn string
+	Rows        []OrderBookRow
 	// TotalOutstandingValue sums OutstandingValue across the rows. Meaningful
 	// BECAUSE the report is one direction: sales commitments and purchase
 	// commitments are opposite obligations and a total across them would net a
@@ -212,8 +284,13 @@ func (s *Service) OrderBookFor(
 	}
 
 	out := OrderBook{
-		Direction:             direction,
-		AsOn:                  on,
+		Direction: direction,
+		AsOn:      on,
+		// ⛔ RESOLVED ONCE, HERE, FOR THE WHOLE REPORT — never per row and never
+		// inside Overdue. Two rows of one book must not be judged against two
+		// different "todays": a walk that read the clock per row would, across a
+		// midnight, flag one line late and the next not, from the same books.
+		OverdueAsOn:           resolveOverdueAsOn(on, time.Now()),
 		TotalOutstandingValue: decimal.Zero,
 	}
 
@@ -226,6 +303,10 @@ func (s *Service) OrderBookFor(
 			if !r.Outstanding().IsPositive() {
 				continue
 			}
+			// Stamped on the ROW as well as on the book, so Overdue can answer for a
+			// row handed to it on its own — which is exactly how internal/server uses
+			// it, one row at a time inside the JSON projection.
+			r.OverdueAsOn = out.OverdueAsOn
 			out.Rows = append(out.Rows, r)
 			out.TotalOutstandingValue = out.TotalOutstandingValue.Add(r.OutstandingValue())
 		}
@@ -345,18 +426,29 @@ func orderBookNotes(b OrderBook) []string {
 	if b.AsOn != "" {
 		notes = append(notes, fmt.Sprintf(
 			"As at %s: orders placed on or before that date, less deliveries recorded on vouchers "+
-				"dated on or before it.", b.AsOn))
+				"dated on or before it. Lateness below is measured against the same date.", b.AsOn))
 	} else {
-		notes = append(notes,
+		// ⛔ THE SECOND SENTENCE IS NOT DECORATION. With no as-at date the ROWS are
+		// unbounded and LATENESS is measured against today, and those are two
+		// different bounds in one report. Unstated, the reader cannot reproduce the
+		// overdue count — and an unreproducible count on a report about who is late
+		// is worse than none. Naming the date is also what makes the default view
+		// honest rather than merely non-empty.
+		notes = append(notes, fmt.Sprintf(
 			"No as-at date given, so this is the position from every order ever placed, less every "+
-				"delivery ever recorded.")
+				"delivery ever recorded. Lateness is therefore measured against TODAY, %s — F2 sets "+
+				"an as-at date if you want the position, and the lateness, as at some other day.",
+			b.OverdueAsOn))
 	}
 
 	var undated, overdue int
 	for _, r := range b.Rows {
 		if r.DueDate == "" {
 			undated++
-		} else if r.Overdue(b.AsOn) {
+		} else if r.Overdue(b.OverdueAsOn) {
+			// ⛔ b.OverdueAsOn, NEVER b.AsOn. Counting against AsOn is how this note
+			// came to say nothing at all on the default view: AsOn is empty there, and
+			// an empty bound made every line answer "not late".
 			overdue++
 		}
 	}

@@ -172,6 +172,20 @@ const ALWAYS_MEANINGFUL = new Set<KeymapAction["kind"]>([
   "features",
   "configure",
   "calculator",
+  // ⛔ TAB AND SHIFT+TAB, AND THEY ARE HERE FOR A REASON THAT IS NOT THE ONES
+  // ABOVE. The others are keys whose effect the stack signature cannot see. These
+  // two are keys whose effect THIS APP DOES NOT PRODUCE AT ALL: the machine's
+  // nextField/prevField return {} on every screen that is not a voucher — a
+  // report, the Gateway, Users & Roles, the Bill Inbox — while the BROWSER moves
+  // focus perfectly well, because useNavMachine no longer preventDefaults them.
+  //
+  // Without this entry the operator presses Tab, watches the focus ring move, and
+  // is told "Tab — Next field does not apply on this screen". A status line that
+  // contradicts what the screen just did is worse than an empty one: it teaches
+  // the operator to stop believing the status line, which is the only channel a
+  // keystroke product has for saying anything at all.
+  "nextField",
+  "prevField",
 ]);
 
 /**

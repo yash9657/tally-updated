@@ -73,6 +73,17 @@ var ErrConflict = errors.New("orders: conflicts with an existing row")
 // standing against a commitment that no longer covers them.
 var ErrStillFulfilled = errors.New("orders: more is already fulfilled than the revision would commit")
 
+// ErrWrongPartyGroup is returned when the ledger named as the party is not a
+// counterparty of this direction at all — a bank account on a sales order, a
+// customer on a purchase order, an expense head on either.
+//
+// A sentinel for the same reason ErrStillFulfilled is one: the request is
+// well-formed and the BOOKS refuse it, so the HTTP layer answers 422, and a test
+// can assert THIS refusal rather than "some error happened" — which matters here
+// because the neighbouring failure (a party ledger that does not exist at all) is
+// a foreign key and reads almost identically from the outside.
+var ErrWrongPartyGroup = errors.New("orders: the party ledger is not a counterparty of this direction")
+
 // TxRunner is the minimal database capability this package needs.
 type TxRunner interface {
 	RunInTx(ctx context.Context, fn db.TxFunc) error
@@ -102,6 +113,41 @@ const (
 
 // Valid reports whether d is one of the two directions.
 func (d Direction) Valid() bool { return d == Sales || d == Purchase }
+
+// PartyGroup is the account group a direction's counterparty must be kept under.
+//
+// ⛔⛔ THIS IS WHAT MAKES THE PARTY A PARTY. Without it an order's counterparty
+// was picked from the ENTIRE chart of accounts, so a SALES order could be
+// committed to a BANK ledger and a PURCHASE order to a customer — and nothing on
+// the client, in Validate, or in the database said no. That is not a cosmetic
+// slip: the order book GROUPS BY COUNTERPARTY and its whole purpose is "who is
+// owed what", so a commitment filed against HDFC Bank or Rent Paid names, in the
+// party column of a report an operator acts on, an account that can never be
+// invoiced and can never deliver. The two order books then disagree with the
+// Outstandings report about who the company's customers are, and neither is
+// obviously the wrong one.
+//
+// ⚠️ IT RETURNS THE GROUP NAME, NOT A PREDICATE, and the check that uses it walks
+// LTREE ANCESTRY rather than comparing this string to the ledger's immediate
+// group. A company that keeps "Retail Customers" and "Wholesale Customers" as
+// sub-groups of Sundry Debtors has perfectly ordinary customers, and a check on
+// the immediate group name would refuse every one of them. That mistake already
+// has a name in this codebase: LedgerListItem.is_bank is server-derived from
+// ltree ancestry precisely BECAUSE a client filtering on the two seeded group
+// names silently dropped real bank accounts.
+//
+// "" for an unknown direction, which Validate has already refused — returning the
+// sales answer for garbage would make an unvalidated direction quietly commit a
+// receivable.
+func (d Direction) PartyGroup() string {
+	switch d {
+	case Sales:
+		return "Sundry Debtors"
+	case Purchase:
+		return "Sundry Creditors"
+	}
+	return ""
+}
 
 // LineInput is one committed item quantity.
 type LineInput struct {
@@ -182,6 +228,23 @@ func (in Input) Validate() error {
 		if l.Rate.IsNegative() {
 			return fmt.Errorf("orders: the agreed rate cannot be negative%s", where)
 		}
+		// ⛔ A DELIVERY DATE BEFORE THE ORDER DATE IS A COMMITMENT THAT IS OVERDUE
+		// THE INSTANT IT IS RECORDED. The order book flags it the moment it is
+		// saved, so the operator's first sight of their own new order is a late
+		// one — and chasing it is chasing nothing, because the promise was never
+		// made for that day. It is almost always a mis-keyed year.
+		//
+		// An EMPTY due date is untouched: "no date was agreed" is common, is not
+		// overdue however old the order gets, and is the case this whole file
+		// takes care never to invent a date for.
+		if dueBeforeOrder(in.OrderDate, l.DueDate) {
+			return fmt.Errorf(
+				"orders: the delivery date agreed%s is %s, which falls BEFORE the order date %s — a "+
+					"commitment cannot be due before it was made, and an order saved this way is "+
+					"overdue on the order book from the second it exists. It is nearly always a "+
+					"mis-keyed year; leave the date blank if none was agreed, which is not overdue at all",
+				where, l.DueDate, in.OrderDate)
+		}
 	}
 	// The same item twice is LEGAL here, unlike a BOM component: two lines for the
 	// same item at two agreed rates (a hundred at the old price, fifty at the new)
@@ -190,12 +253,47 @@ func (in Input) Validate() error {
 	return nil
 }
 
-func (in Input) counterparty() string {
-	if in.Direction == Purchase {
+// dueBeforeOrder reports whether both dates are CANONICAL yyyy-mm-dd and the
+// agreed delivery date is earlier than the order date.
+//
+// ⛔⛔ IT ANSWERS false WHENEVER EITHER DATE DOES NOT PARSE STRICTLY, AND THAT IS
+// DELIBERATE RATHER THAN LAZY. This validator is NOT the authority on what a date
+// is — Postgres is, because both values reach it as `$n::date`, and Postgres
+// accepts spellings time.Parse rejects ("2026-5-20" among them). A Go-side peek
+// that re-implements another layer's decoding rule is the exact mistake the
+// back-dated cutoff was declared fixed four times over (HANDOFF-PARITY-AUDIT
+// §7.2): every round asserted a list of hostile spellings and the next bypass was
+// always off the list.
+//
+// So the comparison here is the one an OPERATOR meets — the client's date input
+// can only emit yyyy-mm-dd — and it is allowed to be silent on anything else,
+// because Create makes the SAME comparison inside the transaction with Postgres's
+// own parser. Two layers, one rule, and the looser layer is the one that cannot
+// decide rather than the one that lets it through.
+func dueBeforeOrder(orderDate, dueDate string) bool {
+	const iso = "2006-01-02"
+	due, err := time.Parse(iso, strings.TrimSpace(dueDate))
+	if err != nil {
+		return false
+	}
+	on, err := time.Parse(iso, strings.TrimSpace(orderDate))
+	if err != nil {
+		return false
+	}
+	return due.Before(on)
+}
+
+// counterpartyNoun is what a direction's party is CALLED to an operator. On
+// Direction rather than on Input because the party-group refusal is raised inside
+// the transaction, where there is a direction but no longer a whole Input.
+func (d Direction) counterpartyNoun() string {
+	if d == Purchase {
 		return "supplier"
 	}
 	return "customer"
 }
+
+func (in Input) counterparty() string { return in.Direction.counterpartyNoun() }
 
 // Line is one order line read back, with its DERIVED position.
 type Line struct {
@@ -262,6 +360,18 @@ func (s *Service) Create(ctx context.Context, in Input) (uuid.UUID, error) {
 	}
 
 	err = s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		// ⛔ THE TWO CHECKS THAT NEED A ROW, AND WHY THEY ARE HERE RATHER THAN IN
+		// Validate. Validate's header says it does not check what needs a row, and
+		// that stands: a pre-check OUTSIDE the transaction is a second copy of a
+		// fact that can change between the read and the write. Inside the
+		// transaction there is no such gap — the row these read is the row the
+		// insert below commits against, under the same snapshot.
+		if err := checkPartyGroup(ctx, tx, companyID, in.Direction, in.PartyLedgerID); err != nil {
+			return err
+		}
+		if err := checkDueDatesAgainstOrderDate(ctx, tx, in); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO order_head
 			   (id, company_id, direction, order_no, order_date, party_ledger_id,
@@ -293,6 +403,139 @@ func (s *Service) Create(ctx context.Context, in Input) (uuid.UUID, error) {
 		return uuid.Nil, err
 	}
 	return orderID, nil
+}
+
+// ---------------------------------------------------------------------------
+// The two checks that need a row, made INSIDE Create's transaction
+// ---------------------------------------------------------------------------
+
+// checkPartyGroup refuses an order whose party is not a counterparty of this
+// direction: a sales order must commit with a Sundry Debtor and a purchase order
+// with a Sundry Creditor. See Direction.PartyGroup for what it costs to skip.
+//
+// ⛔⛔ ANCESTRY, NOT THE IMMEDIATE GROUP NAME. `path <@ a.path` is "g is a
+// descendant of, or is, a" — so the query collects every group on the ledger's
+// branch up to the primary group, and the decision is made in Go against that
+// list. A company that files customers under "Retail Customers", itself under
+// Sundry Debtors, has ordinary customers, and an equality test on
+// account_group.name would refuse every one of them while looking correct on the
+// seeded chart. That failure mode is not hypothetical here: it is written down on
+// LedgerListItem.is_bank, which is server-derived from this same ltree ancestry
+// BECAUSE a client comparing group names silently dropped real bank accounts.
+//
+// ⚠️ A LEDGER THAT DOES NOT EXIST IS NOT THIS FUNCTION'S REFUSAL. It returns nil,
+// and the order_head_party_fk foreign key — which fires on the very next
+// statement, inside this same transaction — is left as the single authority on
+// existence. Two checks for one fact is how the copy that drifts wins for
+// whichever caller reaches it first, and wrapOrderWrite already turns that
+// constraint into a sentence. Nothing escapes: the insert cannot succeed.
+func checkPartyGroup(
+	ctx context.Context, tx pgx.Tx, companyID uuid.UUID, direction Direction, partyID uuid.UUID,
+) error {
+	want := direction.PartyGroup()
+	if want == "" {
+		// Unreachable: Validate refuses an unknown direction before Create opens a
+		// transaction. Refused rather than defaulted, because defaulting to the
+		// sales answer would let an unvalidated direction commit a receivable.
+		return fmt.Errorf("orders: no counterparty group is defined for direction %q", direction)
+	}
+	var (
+		ledgerName string
+		groupName  string
+		ancestry   []string
+	)
+	err := tx.QueryRow(ctx,
+		`SELECT l.name, g.name,
+		        COALESCE((
+		            SELECT array_agg(a.name)
+		              FROM account_group a
+		             WHERE a.company_id = g.company_id
+		               AND g.path <@ a.path), ARRAY[]::text[])
+		   FROM ledger l
+		   JOIN account_group g
+		     ON g.id = l.group_id AND g.company_id = l.company_id
+		  WHERE l.company_id = $1 AND l.id = $2`,
+		companyID, partyID).Scan(&ledgerName, &groupName, &ancestry)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("orders: read the party ledger's account group: %w", err)
+	}
+	for _, a := range ancestry {
+		if a == want {
+			return nil
+		}
+	}
+	return fmt.Errorf(
+		"%w: %q is kept under %q, and a %s order's party must be a %s — a ledger under %q. This is "+
+			"not a naming preference: both order books GROUP BY COUNTERPARTY and exist to answer "+
+			"\"who is owed what\", so a commitment filed against a bank, a tax head or an expense "+
+			"account names a party that can never be invoiced and can never deliver, and the order "+
+			"book would then disagree with Outstandings about who this company's %ss even are. "+
+			"Either choose the %s you meant, or move %q under %q if it really is one",
+		ErrWrongPartyGroup, ledgerName, groupName,
+		strings.ToLower(string(direction)), direction.counterpartyNoun(), want,
+		direction.counterpartyNoun(), direction.counterpartyNoun(), ledgerName, want)
+}
+
+// checkDueDatesAgainstOrderDate is dueBeforeOrder's FAIL-CLOSED HALF, made by
+// Postgres instead of by Go.
+//
+// ⛔⛔ IT EXISTS BECAUSE THE GO CHECK CANNOT SEE EVERY DATE THIS PACKAGE ACCEPTS.
+// Both dates reach the database as `$n::date`, and Postgres accepts spellings
+// time.Parse rejects — "2026-5-20" is stored happily. So an order dated
+// "2026-5-20" with a line due "2026-1-1" walks straight past Validate and lands
+// in the books already overdue. Rather than teach Go a second copy of Postgres's
+// date grammar (the mistake HANDOFF-PARITY-AUDIT §7.2 records being made four
+// times in a row on the back-dated cutoff), the comparison is handed to the layer
+// that owns the grammar, in the same transaction that will do the insert.
+//
+// One statement for the whole order rather than one per line: the cost of the
+// check should not grow with the size of the commitment.
+func checkDueDatesAgainstOrderDate(ctx context.Context, tx pgx.Tx, in Input) error {
+	dues := make([]string, 0, len(in.Lines))
+	agreed := false
+	for _, l := range in.Lines {
+		d := strings.TrimSpace(l.DueDate)
+		dues = append(dues, d)
+		if d != "" {
+			agreed = true
+		}
+	}
+	if !agreed {
+		// Every line agreed no delivery date, which is ordinary and is NOT overdue.
+		// Skipped rather than run against an array of empty strings, so the common
+		// order costs no round trip at all.
+		return nil
+	}
+	var (
+		lineNo int
+		due    string
+	)
+	err := tx.QueryRow(ctx,
+		`SELECT n, d
+		   FROM unnest($1::text[]) WITH ORDINALITY AS t(d, n)
+		  WHERE d <> '' AND d::date < $2::date
+		  ORDER BY n
+		  LIMIT 1`,
+		dues, in.OrderDate).Scan(&lineNo, &due)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		// An unparseable date reaches here as a Postgres cast error rather than as a
+		// row. It is returned as-is: the insert below would fail on the same cast,
+		// and inventing a friendlier sentence here would be this package deciding
+		// what a date is, which is precisely what it must not do.
+		return fmt.Errorf("orders: compare the agreed delivery dates with the order date: %w", err)
+	}
+	return fmt.Errorf(
+		"orders: the delivery date agreed on line %d is %s, which falls BEFORE the order date %s — a "+
+			"commitment cannot be due before it was made, and an order saved this way is overdue on "+
+			"the order book from the second it exists. It is nearly always a mis-keyed year; leave "+
+			"the date blank if none was agreed, which is not overdue at all",
+		lineNo, due, in.OrderDate)
 }
 
 // Get reads one order with its lines and their derived fulfilment.

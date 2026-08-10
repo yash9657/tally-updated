@@ -14,8 +14,12 @@ package query
 //     non-deleted version of each voucher contributes (no double-counting of
 //     superseded ALTER versions). This is verbatim the daybook.go guard.
 //   - every joined table (ledger, account_group, voucher_type, ledger_balance,
-//     bill_allocation, voucher_version, voucher_head) carries company_id and is
-//     FORCE-RLS, so cross-entity JOINs stay tenant-scoped automatically.
+//     bill_allocation, voucher_version, voucher_head, ledger_opening_bill, and
+//     company itself) carries company_id (or IS the company row) and is
+//     FORCE-RLS, so cross-entity JOINs stay tenant-scoped automatically. The
+//     outstandings skeleton relies on this for its UNION and for the
+//     books-beginning sub-select; do not "fix" either by hand-writing a company
+//     predicate, which would be a second, drifting copy of the scoping rule.
 //
 // PAYLOAD CARVE-OUT (sanctioned). The "never expose voucher_version.payload"
 // rule means: never SELECT the raw JSONB blob, and never accept a user-controlled
@@ -101,6 +105,67 @@ const openingSignedExpr = `CASE WHEN l.opening_dc='D' THEN l.opening_balance ELS
 // every unposted ledger (e.g. Capital, Opening Stock) and breaking the Trial
 // Balance reconciliation. Do not remove them.
 const closingNetExpr = `(` + openingSignedExpr + `) + COALESCE(lb.debit,0) - COALESCE(lb.credit,0)`
+
+// naturalNetExpr is the CONSTANT row-level posting movement signed to the
+// LEDGER'S OWN NATURAL SIDE, and it is a transcription of
+// reporting.ledgerBalance.signed() — assets and expenses are debit-positive,
+// liabilities and income are credit-positive. It is not a convenience: it is the
+// only definition under which a query answer and the Profit & Loss can be the
+// same number.
+//
+// ⛔ WHY THIS EXISTS AT ALL (D51). "total sales" used to be
+// sum(vv.taxable_value) filtered to voucher_type_name='Sales'. That figure
+// matched NO report in the product, because it silently dropped two things: the
+// GST on every invoice (which posts to Duties & Taxes, a different group) and
+// every CREDIT NOTE (a sales return is its own voucher type, so a 12,000.00
+// return never reduced it) — and because vv.taxable_value is NULL unless GST
+// derivation ran, so on a non-GST book it answered 0.0000 for a trading company.
+// Summing signed POSTINGS has none of those failure modes: a credit note debits
+// Sales and therefore subtracts itself, output tax is on another ledger and
+// therefore never enters, and posting.amount is NOT NULL always.
+//
+// Nature is compared as ::text, consistently with every other use of
+// account_group.nature in this file, so the enum's storage never has to be
+// reasoned about at the call site.
+const naturalNetExpr = `CASE WHEN g.nature::text IN ('ASSET','EXPENSE')
+	                            THEN (CASE WHEN p.dr_cr='D' THEN p.amount ELSE -p.amount END)
+	                            ELSE (CASE WHEN p.dr_cr='C' THEN p.amount ELSE -p.amount END) END`
+
+// plRootGroupExpr is the CONSTANT scalar sub-select naming the P&L ROOT group a
+// posting's ledger rolls up into ("Sales Accounts", "Purchase Accounts",
+// "Indirect Expenses", …), or NULL for a balance-sheet ledger.
+//
+// ⛔ IT IS A SUBTREE TEST, AND FILTERING ON `group_name` INSTEAD IS A TRAP.
+// account_group is an ltree hierarchy and a user may perfectly well file export
+// invoices under an "Export Sales" sub-group of Sales Accounts. The P&L rolls
+// that up (buildGroupNode recurses into children); a query filtering
+// g.name = 'Sales Accounts' would not, and the two surfaces would disagree by
+// exactly the sub-group — the same "two reports over one set of books" failure
+// D51 records, re-created by the fix for it.
+//
+// The root is chosen by the P&L's OWN rule, not by parent_id IS NULL: a P&L root
+// is an is_pl group whose parent is not itself is_pl (reporting.ProfitAndLoss).
+// `<@` is ltree "is a descendant of, or equal to", so a ledger directly under the
+// root matches too. account_group is FORCE-RLS, so the sub-select is
+// tenant-scoped without a company predicate, exactly like every other join here.
+const plRootGroupExpr = `(SELECT root.name FROM account_group root
+	                          WHERE g.path <@ root.path
+	                            AND root.is_pl
+	                            AND NOT EXISTS (SELECT 1 FROM account_group par
+	                                             WHERE par.id = root.parent_id AND par.is_pl)
+	                          LIMIT 1)`
+
+// outstandingAsOnExpr is the CONSTANT "as on" date the outstandings entity is
+// answered at: TODAY in UTC.
+//
+// It is spelled `(now() AT TIME ZONE 'UTC')::date` rather than CURRENT_DATE on
+// purpose. reporting.resolveAsOn defaults an empty as-on to time.Now().UTC()
+// truncated to a day; CURRENT_DATE is evaluated in the SESSION time zone, so on
+// a server running in IST the two surfaces would name different days for five
+// and a half hours out of every twenty-four and the mismatch would appear only
+// at night. Matching the report's clock exactly is the whole point of the
+// entity.
+const outstandingAsOnExpr = `(now() AT TIME ZONE 'UTC')::date`
 
 // filterCol describes a whitelisted filter target: the constant SQL identifier,
 // the set of operators it accepts, and the value-type that constrains literals.
@@ -286,10 +351,21 @@ var entities = map[Entity]entityDef{
 			// posting.amount is NOT NULL with CHECK (amount >= 0), so min/max/avg
 			// over it are always defined.
 			"amount": {rawExpr: "p.amount", aggs: numericAggs(), isMoney: true},
+			// natural_net is the movement signed to the LEDGER'S OWN natural side
+			// (see naturalNetExpr). SUM-only, for the same reason outstandings'
+			// pending is: a min/max/avg over one sign-flipped posting line is a
+			// single journal leg, not a position, and reporting it as one would be
+			// a number nobody could reconcile.
+			"natural_net": {rawExpr: naturalNetExpr, aggs: sumOnly(), isMoney: true},
 		},
 		filters: map[string]filterCol{
-			"ledger_name":  {expr: "l.name", ops: nameOps(), valType: valueAny},
-			"group_name":   {expr: "g.name", ops: nameOps(), valType: valueAny},
+			"ledger_name": {expr: "l.name", ops: nameOps(), valType: valueAny},
+			"group_name":  {expr: "g.name", ops: nameOps(), valType: valueAny},
+			// pl_group is the P&L ROOT this posting rolls up into, not the ledger's
+			// immediate group — see plRootGroupExpr. `group_name` above is left
+			// exactly as it was; the two answer different questions and both are
+			// legitimate.
+			"pl_group":     {expr: plRootGroupExpr, ops: nameOps(), valType: valueAny},
 			"dr_cr":        {expr: "p.dr_cr::text", ops: enumOps(), valType: valueDrCr},
 			"nature":       {expr: "g.nature::text", ops: enumOps(), valType: valueNature},
 			"voucher_date": {expr: "vv.voucher_date", ops: dateOps(), valType: valueDate},
@@ -300,21 +376,89 @@ var entities = map[Entity]entityDef{
 	},
 
 	// ---------------------------------------------------------------------
-	// outstandings — bill-wise pending of current, non-deleted versions. The vh
-	// join (the correction vs the bare report) keeps only current versions, so
-	// superseded ALTER allocations do not double-count.
+	// outstandings — bill-wise pending, AS AT TODAY, from the SAME TWO SOURCES
+	// the Outstandings report reads.
 	//
 	// The pending metric is nature-oriented (receivable vs payable sign flip).
 	// The compiler picks the correct FIXED expression keyed off the nature
 	// filter value (default ASSET/receivable), exactly like outstanding.go's
 	// signExpr — the user never picks the sign.
+	//
+	// =====================================================================
+	// ⛔ D20: THE NL ANSWER DID NOT MATCH THE REPORT, AND IT WAS ONE MISSING
+	// UNION. THIS SKELETON NOW MIRRORS reporting.Outstandings, INCLUDING BOTH
+	// OF ITS DATE GUARDS. Read that function before changing a line here.
+	// =====================================================================
+	// The old skeleton read `bill_allocation` and nothing else. Driven in a
+	// browser: "receivables" answered 1,33,920.00 against the Outstandings
+	// report's 2,53,920.00 and "payables" 36,050.00 against 1,04,050.00 —
+	// short, in both cases, by exactly the OPENING bill-wise breakup carried on
+	// the ledger master (`ledger_opening_bill`), which the report unions in and
+	// this did not. Two surfaces over one set of books, each internally
+	// consistent, disagreeing by 1,20,000.00 with nothing to reconcile them.
+	//
+	// Matching the report means matching THREE things, not one:
+	//
+	//  1. THE UNION. ledger_opening_bill is the bill-wise breakup of
+	//     ledger.opening_balance. The Balance Sheet's Sundry Debtors includes
+	//     the opening balance, so a bill-wise view that omits its references is
+	//     short by exactly it. A settlement posted later against an opening ref
+	//     nets naturally: both legs land in the same (ledger, ref_name) group.
+	//
+	//  2. THE AS-ON BOUND ON THE VOUCHER SIDE (`vv.voucher_date <= as-on`). The
+	//     report acquired this in the same pass that produced D20's fix: without
+	//     it a bill raised AFTER the as-on date was reported under a caption
+	//     asserting the two dates agreed. Spelled the way movementSQL spells it
+	//     — a NULL voucher date is dated into NO period and is excluded here
+	//     exactly as it is excluded from every other as-at report.
+	//
+	//  3. THE BOOKS-BEGINNING GUARD ON THE OPENING SIDE. An opening carries no
+	//     date of its own; it is stated as at company.books_beginning_from
+	//     (falling back to fy_start_date). Folding it into a report dated BEFORE
+	//     that reports a position that did not exist yet. This is
+	//     reporting.openingIsInScope, transcribed — INCLUDING ITS FAIL-SAFE:
+	//     when the company row cannot be read the opening stays IN (the
+	//     pre-existing behaviour, and the safe direction for a guard). The Go
+	//     version gets that by returning true on a query error; the SQL gets it
+	//     from COALESCE(..., '-infinity'), because a bare `>= NULL` is NULL,
+	//     which WHERE treats as false and would have silently dropped every
+	//     opening reference the moment the GUC was unset. Do not remove the
+	//     COALESCE.
+	//
+	// AS-ON IS TODAY, AND ONLY TODAY. The DSL has no as-on parameter (the
+	// skeleton is a constant and takes no $N), so this entity answers the
+	// question the NL surface actually asks — "what is outstanding now" — at the
+	// report's own default as-on. The translator REFUSES a period-scoped
+	// outstandings question rather than silently answering today's position for
+	// it (see translate.go's refuseIfPeriodScoped), and QueryScreen prints the
+	// basis above the table. A future as-on would need a bound parameter reaching
+	// inside this sub-select, which is a compiler change, not a whitelist one.
+	//
+	// EVERY TABLE HERE IS FORCE-RLS (bill_allocation, voucher_version,
+	// voucher_head, ledger_opening_bill, ledger, account_group, company), so the
+	// union is tenant-scoped with no company predicate — identical to the report,
+	// and NOT something to "harden" by hand-writing one.
 	// ---------------------------------------------------------------------
 	EntityOutstandings: {
-		skeleton: `bill_allocation ba
-		   JOIN voucher_head vh
-		     ON vh.company_id = ba.company_id
-		    AND vh.current_version_id = ba.voucher_version_id
-		    AND vh.is_deleted = false
+		skeleton: `(
+		            SELECT b.ledger_id, b.ref_name, b.dr_cr, b.amount, b.due_date
+		              FROM bill_allocation b
+		              JOIN voucher_version vv ON vv.id = b.voucher_version_id
+		              JOIN voucher_head    vh
+		                ON vh.company_id = vv.company_id
+		               AND vh.voucher_id = vv.voucher_id
+		               AND vh.current_version_id = vv.id
+		             WHERE vh.is_deleted = false
+		               AND vv.voucher_date <= ` + outstandingAsOnExpr + `
+		             UNION ALL
+		            SELECT ob.ledger_id, ob.ref_name, ob.dr_cr, ob.amount, ob.due_date
+		              FROM ledger_opening_bill ob
+		             WHERE ` + outstandingAsOnExpr + ` >= COALESCE(
+		                     (SELECT COALESCE(c.books_beginning_from, c.fy_start_date)
+		                        FROM company c
+		                       WHERE c.id = app_current_company_id()),
+		                     '-infinity'::date)
+		           ) ba
 		   JOIN ledger l ON l.id = ba.ledger_id
 		   JOIN account_group g ON g.id = l.group_id`,
 		whereGuard: "",

@@ -1736,10 +1736,50 @@ func (s *Store) LoadVoucherDoc(ctx context.Context, companyID, voucherID uuid.UU
 				}
 			}
 		case printing.KindDebitNote:
+			// ⛔ THE COLUMN FIRST, THEN THE BILL-WISE ALLOCATION — AND WITHOUT THE
+			// SECOND HALF NO DEBIT NOTE IN THIS PRODUCT COULD EVER BE PRINTED.
+			//
+			// supplier_invoice_no/date are the identity migration 0032 added for
+			// exactly this, and they are the RIGHT source when they are populated:
+			// they are the supplier's own document number, written from the same
+			// `inward` block the hashed payload carries. But NOTHING WRITES THEM
+			// OVER HTTP. internal/ledger fills them only from a purchase's inward
+			// block, so on a debit note they are always empty — AgainstNumber came
+			// out "", validateVoucherDoc refused a note that names no document, and
+			// every debit note answered 422. A class the client offers to print and
+			// the server can never render is worse than one it refuses.
+			//
+			// So the AGAINST allocation is read as well, exactly as a credit note
+			// reads it. On a debit note it is the reference of the SUPPLIER'S bill:
+			// the purchase opened that bill with the number the operator keyed off
+			// the supplier's invoice, and the note settles against it. That IS the
+			// document being adjusted, which is what Rule 53(1A) requires the note
+			// to name — the column and the allocation are two records of one fact,
+			// and the fallback order says which one is authoritative when both
+			// exist.
+			//
+			// The DATE comes from the voucher that OPENED the bill (againstInvoiceDate),
+			// never from the note's own date — a note dated today does not tell you
+			// when the invoice it adjusts was issued, and a serial number repeats
+			// every financial year, which is why the renderer refuses a number with
+			// no date beside it.
 			doc.AgainstNumber = h.supplierDocNo
 			if h.supplierDate != nil {
 				d := *h.supplierDate
 				doc.AgainstDate = &d
+			}
+			if doc.AgainstNumber == "" {
+				for _, b := range bills {
+					if b.refType != "AGAINST" {
+						continue
+					}
+					doc.AgainstNumber = b.refName
+					if doc.AgainstDate, err = againstInvoiceDate(
+						ctx, tx, companyID, b.ledgerID, b.refName); err != nil {
+						return err
+					}
+					break
+				}
 			}
 		}
 

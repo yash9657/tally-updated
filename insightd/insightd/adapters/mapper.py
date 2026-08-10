@@ -43,6 +43,7 @@ from ..contracts.pipeline import (
     RedactionReport,
     TenantContext,
 )
+from ..redaction.persistence import PersistGuard, assert_body_clean
 from . import tax as taxmod
 
 # --------------------------------------------------------------------------- #
@@ -155,11 +156,24 @@ class PureVoucherDraftMapper:
     ) -> PurchaseVoucherDraft:
         unresolved: list[str] = []
 
+        # ⛔ THE PERSISTENCE BOUNDARY. Everything below that becomes a voucher
+        # field or a LEDGER MASTER NAME goes through this guard first. See
+        # redaction/persistence.py: the cross-border boundary in the pipeline
+        # scrubbed the text handed to the MODEL and nothing scrubbed the values
+        # handed to the BOOKS, so a PAN read as the invoice number was written
+        # verbatim into voucher_version.voucher_no and a raw Aadhaar in a line
+        # description became a permanent master. The books are append-only —
+        # there is no later.
+        guard = PersistGuard()
+
         pcf = inferred.per_field_confidence
 
         # --- supplier -> party --------------------------------------------
         party_ledger_id = cls.supplier_match.ledger_id
-        party_name = cls.supplier_match.name
+        # The supplier's DISPLAY name, and on the Alt+C path this string IS the
+        # master that gets created — so it is scrubbed like every other persisted
+        # free-text value.
+        party_name = guard.clean("party", cls.supplier_match.name)
         supplier_conf = cls.supplier_match.match_confidence
         if party_ledger_id is None:
             # below floor / no match -> Alt+C path, do NOT guess.
@@ -247,17 +261,31 @@ class PureVoucherDraftMapper:
             tv = _fixed4(li.taxable_value) or "0.0000"
             rate = _fixed4(li.gst_rate_pct) or "0.0000"
             gst_lines.append(
-                GSTLineDraft(taxable_value=tv, gst_rate_pct=rate, hsn=li.hsn)
+                GSTLineDraft(
+                    taxable_value=tv,
+                    gst_rate_pct=rate,
+                    hsn=guard.clean(f"line[{idx}].hsn", li.hsn),
+                )
             )
             tax_lines.append(
                 taxmod.TaxLine(taxable_value=_dec(tv), gst_rate_pct=_dec(rate))
             )
 
             guess = li.ledger_guess
+            # ⛔ THIS STRING BECOMES A PERMANENT LEDGER MASTER when the guess has
+            # no id (the Alt+C on-the-fly create path), and it is built out of the
+            # LINE DESCRIPTION — the field a real bill uses for free text, and the
+            # field the driven defect planted a raw Aadhaar in. A master name
+            # cannot be un-created, so it is scrubbed here and the line is named in
+            # `unresolved` so the operator retypes it.
             purchase_debits.append(
                 PostingDraft(
                     ledger_id=guess.ledger_id,
-                    ledger_name=guess.name or li.description or "Purchase",
+                    ledger_name=guard.clean(
+                        f"line[{idx}].ledger_name",
+                        guess.name or li.description or "Purchase",
+                    )
+                    or "Purchase",
                     dr_cr="D",
                     amount=tv,
                 )
@@ -283,34 +311,52 @@ class PureVoucherDraftMapper:
         )
 
         # --- assemble postings (party CREDIT total; GST inputs DEBIT) -----
+        #
+        # ⛔⛔ A DRAFT MUST BALANCE EVEN WHEN THE TENANT CONTEXT IS INCOMPLETE, AND
+        # THIS IS THE FIX FOR A BILL THAT COULD NEVER BE POSTED THROUGH THE
+        # SCREEN'S OWN FRONT DOOR.
+        #
+        # These three legs used to be gated on `... and ctx.<x>_ledger_id`, so a
+        # caller that supplied no tax-ledger ids got a draft with the tax SILENTLY
+        # DROPPED FROM THE DEBITS while the party credit still carried the full
+        # invoice total. Driven in a browser: debits 1000.0000 against a credit of
+        # 1180.0000, unbalanced by exactly the tax, and cored refuses it — after
+        # the operator has reviewed and accepted it. Nothing anywhere said why.
+        #
+        # The party leg has ALWAYS handled the same situation correctly one block
+        # down: `ledger_id=party_ledger_id` may be None, the NAME carries the
+        # human-facing master to create (Alt+C on-the-fly), and "party" goes into
+        # `unresolved`. The tax legs now do exactly that, so the accounting
+        # identity holds unconditionally and the missing thing is the LEDGER ID —
+        # which is a question a human can answer — rather than the MONEY.
+        #
+        # ⚠️ The reachable cause of the empty ids is the caller: BillInboxScreen
+        # sent `tenant: { company_id }` and nothing else. That is fixed there too
+        # (it now sends this company's real chart of accounts). Both halves are
+        # needed: the screen makes the ids present, and this makes their absence
+        # survivable instead of silently destroying a draft.
         postings: list[PostingDraft] = list(purchase_debits)
-        if derived.cgst > 0 and ctx.cgst_ledger_id:
+
+        def add_input_tax(component: str, amount, ledger_id: str | None) -> None:
+            if amount <= 0:
+                return
             postings.append(
                 PostingDraft(
-                    ledger_id=ctx.cgst_ledger_id,
-                    ledger_name="Input CGST",
+                    ledger_id=ledger_id,
+                    ledger_name=f"Input {component.upper()}",
                     dr_cr="D",
-                    amount=taxmod.fixed4(derived.cgst),
+                    amount=taxmod.fixed4(amount),
                 )
             )
-        if derived.sgst > 0 and ctx.sgst_ledger_id:
-            postings.append(
-                PostingDraft(
-                    ledger_id=ctx.sgst_ledger_id,
-                    ledger_name="Input SGST",
-                    dr_cr="D",
-                    amount=taxmod.fixed4(derived.sgst),
-                )
-            )
-        if derived.igst > 0 and ctx.igst_ledger_id:
-            postings.append(
-                PostingDraft(
-                    ledger_id=ctx.igst_ledger_id,
-                    ledger_name="Input IGST",
-                    dr_cr="D",
-                    amount=taxmod.fixed4(derived.igst),
-                )
-            )
+            if ledger_id is None:
+                # Named distinctly per component: an operator told "gst" cannot
+                # tell which of three ledgers this tenant is missing.
+                unresolved.append(f"gst.{component}_ledger")
+
+        add_input_tax("cgst", derived.cgst, ctx.cgst_ledger_id)
+        add_input_tax("sgst", derived.sgst, ctx.sgst_ledger_id)
+        add_input_tax("igst", derived.igst, ctx.igst_ledger_id)
+
         # party credit = invoice total (taxable + tax, unless reverse charge)
         postings.append(
             PostingDraft(
@@ -339,12 +385,30 @@ class PureVoucherDraftMapper:
             voucher_type_id=None,
             party_ledger_id=party_ledger_id,
             party=party_name,
-            voucher_no=inferred.invoice_no,
+            # ⛔ THE DRIVEN CASE. `invoice_no` is OCR/LLM output copied straight
+            # into voucher_version.voucher_no, which is immutable once posted.
+            voucher_no=guard.clean("invoice_no", inferred.invoice_no),
             voucher_date=inferred.invoice_date,
-            narration=None,
+            narration=guard.clean("narration", None),
             postings=postings,
             gst=gst,
         )
+
+        # ⛔ FAIL-CLOSED RE-SCAN, the mirror of Boundary.assert_clean on the other
+        # boundary. The guard above removes PII from the fields we ROUTED through
+        # it; this proves none survived into the assembled body by any other route.
+        # It also CLASSIFIES every field on the way past, so a field added to
+        # cored_map.py without a decision turns this suite red instead of shipping
+        # an unguarded value into the ledger.
+        assert_body_clean(body)
+
+        # A field whose value had to be redacted is a field a human must retype:
+        # a masked voucher number is not a voucher number. Naming them here is
+        # what stops `_decide_status` returning "ready" for a draft that would
+        # post "[PAN REDACTED]" as the supplier's invoice number.
+        for field in guard.fields:
+            if field not in unresolved:
+                unresolved.append(field)
 
         # --- confidence map ----------------------------------------------
         header_cm = self._header_confidence(
@@ -398,10 +462,17 @@ class PureVoucherDraftMapper:
             status=status,
             body=body,
             confidence=confidence,
+            # ⛔ THE PANEL'S CLAIM HAS TO COVER THE VALUES THAT PERSIST.
+            # The F9 draft panel renders this as "PII redacted: N (PAN 1, …)".
+            # It used to count ONLY the cross-border boundary's work, which is why
+            # it could truthfully say "AADHAAR 1" while the same Aadhaar sat
+            # un-redacted in the ledger name the draft proposed. The persistence
+            # guard's counts are folded in, so the number the operator reads is the
+            # number of values actually scrubbed on BOTH paths.
             redaction=RedactionReportSummary(
-                any_redacted=redaction.any_redacted,
-                counts_by_type=dict(redaction.counts_by_type),
-                total=sum(redaction.counts_by_type.values()),
+                any_redacted=redaction.any_redacted or guard.any_redacted,
+                counts_by_type=guard.merged_counts(redaction.counts_by_type),
+                total=sum(guard.merged_counts(redaction.counts_by_type).values()),
             ),
             unresolved=unresolved,
             derived_gst=derived_gst,

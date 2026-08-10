@@ -75,6 +75,13 @@ type tdsChallanFixture struct {
 	// taxRupees is what the ENGINE derived, as it came back over the wire. The
 	// allocation must equal it exactly.
 	taxRupees string
+	// The three ledgers the fixture's voucher posts through, kept so a test can
+	// post ANOTHER deduction on the same books (postAnotherDeduction below).
+	// ⛔ The allocate-later route cannot be tested at all with one deduction: its
+	// whole subject is a deposit that paid for MORE than it names.
+	expenseLedgerID string
+	tdsLedgerID     string
+	partyLedgerID   string
 	// taxYearStart is the year the deduction belongs to. The voucher is dated
 	// 2026-05-10, so it is 2026-27, and the challan must name the SAME year — the
 	// store refuses a challan whose year differs from its deductions', which is
@@ -136,15 +143,58 @@ func newTDSChallanFixture(t *testing.T, s *Server, suffix string) tdsChallanFixt
 		t.Fatalf("the fixture voucher returned no id or no derived tax: %v", body)
 	}
 	return tdsChallanFixture{
-		companyID:    companyID,
-		base:         base,
-		ownerTok:     ownerTok,
-		voucherID:    voucherID,
-		section:      "194J-P",
-		legSeq:       0,
-		taxRupees:    tax,
-		taxYearStart: 2026,
+		companyID:       companyID,
+		base:            base,
+		ownerTok:        ownerTok,
+		voucherID:       voucherID,
+		section:         "194J-P",
+		legSeq:          0,
+		taxRupees:       tax,
+		taxYearStart:    2026,
+		expenseLedgerID: expense,
+		tdsLedgerID:     tdsPay,
+		partyLedgerID:   creditor,
 	}
+}
+
+// postAnotherDeduction posts a SECOND (third, fourth…) TDS voucher on the same
+// books and returns its voucher id and the tax the engine derived.
+//
+// ⛔ THE TAX IS READ BACK OFF THE RESPONSE AND NEVER RESTATED HERE, exactly as
+// the fixture does it: a rate written into a test is a rate that can disagree
+// with the engine, and the allocation must equal what the engine derived or the
+// store refuses it.
+func (f tdsChallanFixture) postAnotherDeduction(t *testing.T, s *Server, date string) (string, string) {
+	t.Helper()
+	rec, body := aclRequest(t, s, http.MethodPost, f.base+"/vouchers/purchase", f.ownerTok,
+		map[string]any{
+			"voucher_date":    date,
+			"party_ledger_id": f.partyLedgerID,
+			"created_by":      "owner",
+			"postings": []any{
+				map[string]any{"ledger_id": f.expenseLedgerID, "dr_cr": "D", "amount": "200000.0000"},
+				map[string]any{"ledger_id": f.tdsLedgerID, "dr_cr": "C", "amount": "20000.0000"},
+				map[string]any{"ledger_id": f.partyLedgerID, "dr_cr": "C", "amount": "180000.0000"},
+			},
+			"tds": map[string]any{
+				"section":            "194J-P",
+				"deductee_ledger_id": f.partyLedgerID,
+				"deductee_type":      "OTHER",
+				"pan_available":      true,
+				"taxable_amount":     "200000.0000",
+				"tds_ledger_id":      f.tdsLedgerID,
+			},
+		})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("post another TDS voucher dated %s = %d, want 201 (%s)", date, rec.Code, rec.Body.String())
+	}
+	voucherID, _ := body["voucher_id"].(string)
+	tds, _ := body["tds"].(map[string]any)
+	tax, _ := tds["tds"].(string)
+	if voucherID == "" || tax == "" {
+		t.Fatalf("the extra voucher returned no id or no derived tax: %v", body)
+	}
+	return voucherID, tax
 }
 
 // challanBody is a full, valid deposit of exactly the tax the fixture deducted.

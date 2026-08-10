@@ -7,12 +7,13 @@ package masters_test
 // actually exists, whether it still shows the amount that was deposited against
 // it, and whether the whole write is atomic when one allocation of five is bad.
 //
-// ⚠️ NOT RUN IN THE AUTHORING SESSION. Every worktree on this machine shares one
-// Postgres on :5433 and another process held it, so these tests were WRITTEN and
-// type-checked (go vet compiles test files) and NOT EXECUTED. They are part of
-// the deliverable and the first session with the database to itself must run
-// them; nothing below has been observed to pass. Treat a failure here as an
-// unverified claim in tds_challan.go, not as flake.
+// ⚠️ THE NOTE THAT USED TO SIT HERE — "written, type-checked and NOT EXECUTED,
+// because another worktree held the shared Postgres on :5433" — IS NO LONGER
+// TRUE, and leaving it would tell the next reader to distrust evidence that now
+// exists. Everything below has been executed against a live database, including
+// the allocate-later and collection tests added for register rows D1, D2 and D4,
+// each with a mutation proof whose observed failure was checked against a
+// prediction. Treat a failure here as a real regression.
 //
 // They reuse setup(t) from masters_test.go, which creates the company and — this
 // is the part internal/testhygiene fails the build over — registers
@@ -819,4 +820,490 @@ func exec(t *testing.T, pool *db.Pool, ctx context.Context, sql string, args ...
 	if err != nil {
 		t.Fatalf("exec %q: %v", sql, err)
 	}
+}
+
+// ===========================================================================
+// REGISTER ROW D1 — THE ALLOCATE-LATER
+// ===========================================================================
+// A challan may legitimately be recorded naming fewer deductions than it paid
+// for: nothing here requires the allocations to COVER the tax. Before
+// AllocateToRecordedChallan the remainder could then never be attached, because
+// the create was the only writer and the CIN cannot be entered twice. The parity
+// audit drove it — seven doors in the browser, six HTTP methods, and challan
+// 05130's unallocated balance stayed at exactly 12000.0000 — while
+// reporting.Form140StatementFor refused the unattached deduction with
+// ErrTaxNotDeposited. Tax that HAD been paid was permanently unfilable.
+
+// TestAllocatingLaterMakesTheUnallocatedBalanceFALL is the row's own oracle, and
+// it is asserted on the BOOKS rather than on a return value: the allocation
+// rows, the deductee each one names, and the balance that could never move.
+func TestAllocatingLaterMakesTheUnallocatedBalanceFALL(t *testing.T) {
+	pool, ctx, _ := setup(t)
+	m := masters.NewService(pool)
+
+	deductee := seedDeductee(t, m, ctx, "Chitra Consulting")
+	// ONE deposit of ₹2,000 that really paid TWO deductions of ₹1,000.
+	v1 := seedDeduction(t, pool, ctx, deductee, oneThousandOn("P/1042"))
+	v2 := seedDeduction(t, pool, ctx, deductee, oneThousandOn("P/1043"))
+
+	in := challanFor(v1, "194C", 0, dec2("1000"))
+	in.TaxRupees = dec2("2000")
+	challanID, err := m.RecordTDSChallan(ctx, in, "tester")
+	if err != nil {
+		t.Fatalf("record challan: %v", err)
+	}
+
+	// The state the audit found and could not leave.
+	before := oneChallan(t, m, ctx, challanID)
+	if !before.UnallocatedTaxRupees.Equal(dec2("1000")) {
+		t.Fatalf("unallocated before = %s, want 1000 — the fixture is not the shape this test is "+
+			"about", before.UnallocatedTaxRupees)
+	}
+
+	taxYear, err := m.AllocateToRecordedChallan(ctx, challanID, []masters.TDSChallanAllocationInput{{
+		VoucherID:    v2,
+		Section:      "194C",
+		LegSeq:       0,
+		AmountRupees: dec2("1000"),
+	}}, "tester")
+	if err != nil {
+		t.Fatalf("allocate later: %v", err)
+	}
+	if taxYear != 2026 {
+		t.Errorf("allocate returned tax year %d, want 2026 — the caller reads the register back "+
+			"with it, and the year is the challan's STORED one and not the caller's guess", taxYear)
+	}
+
+	// ⛔ READ THE BOOKS BACK. A status (or a nil error) that changed nothing is
+	// this repo's signature failure, so assert the LEDGER NAMES and the sides:
+	// which deductions this deposit now covers, and by how much.
+	after := oneChallan(t, m, ctx, challanID)
+	if after.AllocationCount != 2 {
+		t.Fatalf("the challan carries %d allocation(s) after allocating later, want 2",
+			after.AllocationCount)
+	}
+	if !after.AllocatedTotalRupees.Equal(dec2("2000")) {
+		t.Errorf("allocated total = %s, want 2000", after.AllocatedTotalRupees)
+	}
+	if !after.UnallocatedTaxRupees.IsZero() {
+		t.Errorf("unallocated after = %s, want 0 — THIS IS THE ROW'S ORACLE: the balance must "+
+			"FALL. It stayed at 12000.0000 through seven browser doors and six HTTP methods "+
+			"because no route existed to move it", after.UnallocatedTaxRupees)
+	}
+	seenVouchers := map[string]decimal.Decimal{}
+	for _, a := range after.Allocations {
+		seenVouchers[a.VoucherNo] = a.AllocatedRupees
+		if a.DeducteeName != "Chitra Consulting" {
+			t.Errorf("allocation on %s names %q; an operator recognises the supplier, not a UUID",
+				a.VoucherNo, a.DeducteeName)
+		}
+		if a.BrokenByAlter {
+			t.Errorf("allocation on %s reads BROKEN BY ALTER the moment it was made", a.VoucherNo)
+		}
+		if a.Kind != masters.AllocationKindTDS {
+			t.Errorf("allocation on %s reads kind %q, want TDS", a.VoucherNo, a.Kind)
+		}
+	}
+	for _, want := range []string{"P/1042", "P/1043"} {
+		got, ok := seenVouchers[want]
+		if !ok {
+			t.Errorf("the challan does not name voucher %s; the deposit that paid its tax is what "+
+				"Deductee Detail field 5 has to point at", want)
+			continue
+		}
+		if !got.Equal(dec2("1000")) {
+			t.Errorf("voucher %s is allocated %s, want 1000", want, got)
+		}
+	}
+}
+
+// TestAllocatingLaterCannotOverrunTheDeposit is register row D2 on the SECOND
+// write path, and it is the reason the cap is checked inside the transaction
+// rather than only in the pure validator: the sum that matters includes rows
+// that are already stored.
+func TestAllocatingLaterCannotOverrunTheDeposit(t *testing.T) {
+	pool, ctx, _ := setup(t)
+	m := masters.NewService(pool)
+
+	deductee := seedDeductee(t, m, ctx, "Chitra Consulting")
+	v1 := seedDeduction(t, pool, ctx, deductee, oneThousandOn("P/1042"))
+	v2 := seedDeduction(t, pool, ctx, deductee, oneThousandOn("P/1043"))
+
+	// A deposit of exactly ₹1,000, fully allocated at entry.
+	challanID, err := m.RecordTDSChallan(ctx, challanFor(v1, "194C", 0, dec2("1000")), "tester")
+	if err != nil {
+		t.Fatalf("record challan: %v", err)
+	}
+
+	_, err = m.AllocateToRecordedChallan(ctx, challanID, []masters.TDSChallanAllocationInput{{
+		VoucherID:    v2,
+		Section:      "194C",
+		LegSeq:       0,
+		AmountRupees: dec2("1000"),
+	}}, "tester")
+	if err == nil {
+		t.Fatal("a ₹1,000 deposit was allowed to pay ₹2,000 of tax. Both deductions would then " +
+			"read as already deposited, so the REAL second deposit could never be allocated to " +
+			"the second one — which is the trap D2 recorded, reached through the new route")
+	}
+	if !errors.Is(err, masters.ErrChallanOverAllocated) {
+		t.Errorf("wrong sentinel, so the HTTP layer cannot answer 400 deliberately: %v", err)
+	}
+	// ATOMICITY: the refused request left nothing behind.
+	if n := countAllocations(t, pool, ctx); n != 1 {
+		t.Errorf("%d allocations stored after a refused allocate-later, want 1", n)
+	}
+	after := oneChallan(t, m, ctx, challanID)
+	if !after.UnallocatedTaxRupees.IsZero() || after.AllocationCount != 1 {
+		t.Errorf("the challan moved: count %d unallocated %s, want 1 and 0",
+			after.AllocationCount, after.UnallocatedTaxRupees)
+	}
+}
+
+// TestAllocatingToAChallanThatIsNotThereIsANotFound. The request is well formed
+// and names a deposit this company does not have, so it is a 404 and not a 400 —
+// and ⚠️ another tenant's challan is indistinguishable from a missing one, which
+// is the intended answer under RLS: the alternative leaks whether a CIN exists
+// somewhere else.
+func TestAllocatingToAChallanThatIsNotThereIsANotFound(t *testing.T) {
+	pool, ctx, _ := setup(t)
+	m := masters.NewService(pool)
+
+	deductee := seedDeductee(t, m, ctx, "Chitra Consulting")
+	v1 := seedDeduction(t, pool, ctx, deductee, oneThousandOn("P/1042"))
+
+	_, err := m.AllocateToRecordedChallan(ctx, uuid.New(), []masters.TDSChallanAllocationInput{{
+		VoucherID:    v1,
+		Section:      "194C",
+		LegSeq:       0,
+		AmountRupees: dec2("1000"),
+	}}, "tester")
+	if !errors.Is(err, masters.ErrNotFound) {
+		t.Fatalf("allocating to a challan that does not exist = %v, want masters.ErrNotFound so "+
+			"the HTTP layer answers 404", err)
+	}
+	if n := countAllocations(t, pool, ctx); n != 0 {
+		t.Errorf("%d allocations stored against a challan that does not exist", n)
+	}
+}
+
+// TestAllocatingLaterRefusesADeductionAnotherChallanAlreadyPaid. The new route
+// must not become a way around the one-challan-per-deduction rule — Deductee
+// Detail field 5 is a SINGLE challan reference — and the refusal has to NAME the
+// challan that already paid it, because the operator's next question is "then
+// what is this second slip in my hand".
+func TestAllocatingLaterRefusesADeductionAnotherChallanAlreadyPaid(t *testing.T) {
+	pool, ctx, _ := setup(t)
+	m := masters.NewService(pool)
+
+	deductee := seedDeductee(t, m, ctx, "Chitra Consulting")
+	v1 := seedDeduction(t, pool, ctx, deductee, oneThousandOn("P/1042"))
+	v2 := seedDeduction(t, pool, ctx, deductee, oneThousandOn("P/1043"))
+
+	// Challan 05122 pays P/1042.
+	if _, err := m.RecordTDSChallan(ctx, challanFor(v1, "194C", 0, dec2("1000")), "tester"); err != nil {
+		t.Fatalf("record first challan: %v", err)
+	}
+	// A genuinely different deposit slip with ₹1,000 of room on it, paying P/1043.
+	second := challanFor(v2, "194C", 0, dec2("1000"))
+	second.ChallanNo = "05123"
+	second.TaxRupees = dec2("2000")
+	secondID, err := m.RecordTDSChallan(ctx, second, "tester")
+	if err != nil {
+		t.Fatalf("record the second challan: %v", err)
+	}
+
+	_, err = m.AllocateToRecordedChallan(ctx, secondID, []masters.TDSChallanAllocationInput{{
+		VoucherID: v1, Section: "194C", LegSeq: 0, AmountRupees: dec2("1000"),
+	}}, "tester")
+	if !errors.Is(err, masters.ErrDeductionAlreadyPaid) {
+		t.Fatalf("allocate-later paid a deduction a second time = %v, want ErrDeductionAlreadyPaid "+
+			"so the HTTP layer answers 409: a deduction split across two challans is not "+
+			"expressible in the return at all", err)
+	}
+	for _, want := range []string{"05122", "0004329", "P/1042"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not name %q, so the operator cannot find the deposit that "+
+				"already paid it.\ngot: %v", want, err)
+		}
+	}
+	if n := countAllocations(t, pool, ctx); n != 2 {
+		t.Errorf("%d allocations stored, want 2 — the refused request must leave nothing behind", n)
+	}
+}
+
+// TestAllocatingToAnInterestOnlyChallanIsRefused. Only the TAX component
+// discharges a deduction liability (migration 0069 lines 90-96), so an
+// interest-, fee- or penalty-only deposit has nothing on it to allocate. The
+// create path has always refused allocations on such a challan; the new route
+// has to make the same call, or it becomes the door around it.
+func TestAllocatingToAnInterestOnlyChallanIsRefused(t *testing.T) {
+	pool, ctx, _ := setup(t)
+	m := masters.NewService(pool)
+
+	deductee := seedDeductee(t, m, ctx, "Chitra Consulting")
+	v1 := seedDeduction(t, pool, ctx, deductee, oneThousandOn("P/1042"))
+
+	interestOnly := challanFor(v1, "194C", 0, dec2("1000"))
+	interestOnly.ChallanNo = "05130"
+	interestOnly.TaxRupees = decimal.Zero
+	interestOnly.InterestRupees = dec2("500")
+	interestOnly.Allocations = nil // a no-tax challan may allocate to nothing
+	challanID, err := m.RecordTDSChallan(ctx, interestOnly, "tester")
+	if err != nil {
+		t.Fatalf("record the interest-only challan: %v", err)
+	}
+
+	_, err = m.AllocateToRecordedChallan(ctx, challanID, []masters.TDSChallanAllocationInput{{
+		VoucherID: v1, Section: "194C", LegSeq: 0, AmountRupees: dec2("1000"),
+	}}, "tester")
+	if !errors.Is(err, masters.ErrInvalidTDSChallan) {
+		t.Fatalf("allocating to a challan that deposited NO TAX = %v, want ErrInvalidTDSChallan: "+
+			"s.396 interest is paid on the same slip and is not tax, so it discharges nothing", err)
+	}
+	if n := countAllocations(t, pool, ctx); n != 0 {
+		t.Errorf("%d allocations stored against a deposit that paid no tax", n)
+	}
+}
+
+// oneChallan reads one challan back out of the register by id. It goes through
+// ListTDSChallans deliberately: that is the read a screen makes, so a test that
+// used a private read could pass while the register showed something else.
+func oneChallan(t *testing.T, m *masters.Service, ctx context.Context,
+	id uuid.UUID) masters.TDSChallanRecord {
+	t.Helper()
+	rows, err := m.ListTDSChallans(ctx, 2026)
+	if err != nil {
+		t.Fatalf("list challans: %v", err)
+	}
+	for _, r := range rows {
+		if r.ID == id {
+			return r
+		}
+	}
+	t.Fatalf("challan %s is not in the 2026-27 register", id)
+	return masters.TDSChallanRecord{}
+}
+
+// ===========================================================================
+// REGISTER ROW D4 — A COLLECTOR CAN RECORD THAT IT DEPOSITED WHAT IT COLLECTED
+// ===========================================================================
+// tcs_collection (migration 0067) was not part of this mechanism at all. The
+// audit drove it: a live 2000.0000 collection under 206C(1)-SCRAP appeared in NO
+// allocation picker and could be attached to no challan, so the collection side
+// of T6 could record what was collected and never record that it was paid over.
+
+// seedCollection writes one voucher and one TCS collection on it, returning the
+// VOUCHER id — the same identity an allocation keys on, for the same reason:
+// internal/ledger re-derives collection rows with fresh ids on every ALTER.
+//
+// Seeded by SQL for the reason the whole file is (masters may not import
+// internal/ledger). ⚠️ declaration_outcome is 'NONE' and the amount is positive,
+// because 0067's CHECKs make an EXEMPT row collect nothing — and a zero
+// collection is precisely what may NOT be deposited.
+func seedCollection(t *testing.T, pool *db.Pool, ctx context.Context,
+	buyerID uuid.UUID, voucherNo, section string, legSeq int, amount decimal.Decimal) uuid.UUID {
+	t.Helper()
+	companyID, ok := db.CompanyFromContext(ctx)
+	if !ok {
+		t.Fatal("seedCollection needs a company-scoped context")
+	}
+	voucherID := uuid.New()
+	versionID := uuid.New()
+	const date = "2026-07-12"
+
+	err := pool.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO voucher_version
+			   (id, company_id, voucher_id, version_no, op, hash, payload,
+			    created_by, voucher_no, voucher_date)
+			 VALUES ($1, $2, $3, 1, 'CREATE', '\x00'::bytea, '{}'::jsonb,
+			         'tester', $4, $5::date)`,
+			versionID, companyID, voucherID, voucherNo, date); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO voucher_head
+			   (company_id, voucher_id, current_version_id, version_no, op, voucher_date)
+			 VALUES ($1, $2, $3, 1, 'CREATE', $4::date)`,
+			companyID, voucherID, versionID, date); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx,
+			`INSERT INTO tcs_collection
+			   (id, company_id, voucher_id, leg_seq, buyer_ledger_id, section,
+			    tax_year_start, collection_date, taxable_base_rupees, rate_pct,
+			    tcs_amount_rupees, pan_available, declaration_outcome,
+			    ruleset_version, recorded_by)
+			 VALUES ($1, $2, $3, $4, $5, $6, 2026, $7::date, $8, 2, $9, true, 'NONE',
+			         'tcs-2026-04', 'tester')`,
+			uuid.New(), companyID, voucherID, legSeq, buyerID, section, date,
+			amount.Mul(dec2("50")), amount)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("seed collection on voucher %s: %v", voucherNo, err)
+	}
+	return voucherID
+}
+
+// TestACollectionCanBeOfferedAndDeposited is the row's oracle end to end: the
+// collection appears in what a challan could pay for, a deposit can name it, and
+// the register reads it back as a COLLECTION rather than as a deduction broken
+// by an alter.
+func TestACollectionCanBeOfferedAndDeposited(t *testing.T) {
+	pool, ctx, _ := setup(t)
+	m := masters.NewService(pool)
+
+	buyer, err := m.CreateLedger(ctx, masters.Ledger{
+		Name: "Scrap Buyer", GroupName: "Sundry Debtors",
+	}, "tester")
+	if err != nil {
+		t.Fatalf("create buyer: %v", err)
+	}
+	v := seedCollection(t, pool, ctx, buyer, "S/2201", "206C(1)-SCRAP", 0, dec2("2000"))
+
+	// 1. IT IS OFFERED. The audit's exact figure: a live 2000.0000 collection
+	//    under 206C(1)-SCRAP that appeared in no picker.
+	allocatable, err := m.ListAllocatableDeductions(ctx, 2026)
+	if err != nil {
+		t.Fatalf("list allocatable: %v", err)
+	}
+	var found *masters.AllocatableDeduction
+	for i := range allocatable {
+		if allocatable[i].VoucherNo == "S/2201" {
+			found = &allocatable[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("the 2000.0000 collection under 206C(1)-SCRAP is not offered as allocatable, so "+
+			"no deposit can name it and a collector can never record that it paid the tax over. "+
+			"Got %d row(s)", len(allocatable))
+	}
+	if found.Kind != masters.AllocationKindTCS {
+		t.Errorf("the collection is offered as kind %q, want TCS — a screen that captions it as a "+
+			"deduction names the wrong party as the one taxed", found.Kind)
+	}
+	if found.DeducteeName != "Scrap Buyer" {
+		t.Errorf("the collection names %q; on a collection the party is the BUYER it was collected "+
+			"FROM", found.DeducteeName)
+	}
+	if !found.TaxRupees.Equal(dec2("2000")) {
+		t.Errorf("the collection offers %s to allocate, want 2000", found.TaxRupees)
+	}
+	if found.AlreadyPaid {
+		t.Error("a collection with no challan against it reads as already paid")
+	}
+
+	// 2. IT CAN BE DEPOSITED.
+	in := challanFor(v, "206C(1)-SCRAP", 0, dec2("2000"))
+	in.ChallanNo = "05140"
+	in.Allocations[0].Kind = masters.AllocationKindTCS
+	challanID, err := m.RecordTDSChallan(ctx, in, "tester")
+	if err != nil {
+		t.Fatalf("record the collection's deposit: %v", err)
+	}
+
+	// 3. AND IT READS BACK AS A COLLECTION. ⛔ Before the register learned about
+	//    tcs_collection this line came back deduction_on_record=false, i.e.
+	//    BROKEN BY ALTER — telling the operator a voucher change had invalidated
+	//    a deposit that was made minutes ago and never touched since.
+	c := oneChallan(t, m, ctx, challanID)
+	if len(c.Allocations) != 1 {
+		t.Fatalf("the deposit carries %d allocation(s), want 1", len(c.Allocations))
+	}
+	a := c.Allocations[0]
+	if a.Kind != masters.AllocationKindTCS {
+		t.Errorf("the stored allocation reads kind %q, want TCS", a.Kind)
+	}
+	if !a.DeductionOnRecord || a.BrokenByAlter {
+		t.Errorf("a freshly recorded collection deposit reads on_record=%v broken=%v — the "+
+			"register must not tell an operator an alter invalidated a deposit nobody touched",
+			a.DeductionOnRecord, a.BrokenByAlter)
+	}
+	if a.DeducteeName != "Scrap Buyer" || a.VoucherNo != "S/2201" {
+		t.Errorf("the register line reads %q / %q", a.VoucherNo, a.DeducteeName)
+	}
+	if !c.UnallocatedTaxRupees.IsZero() {
+		t.Errorf("unallocated = %s, want 0", c.UnallocatedTaxRupees)
+	}
+
+	// 4. AND THE SAME COLLECTION CANNOT BE DEPOSITED TWICE.
+	if !allocatableSaysPaid(t, m, ctx, "S/2201") {
+		t.Error("the collection is not flagged already_paid after its deposit was recorded, so an " +
+			"operator would tick it again and collect a 409")
+	}
+}
+
+// TestAChallanCannotPayADeductionAndACollection is the mixing refusal against
+// what is ALREADY STORED — the half validateAllocationInputs cannot see.
+//
+// It matters because reporting reaches a challan THROUGH tds_deduction and files
+// the challan's WHOLE tax as the deduction return's challan total, so a mixed
+// deposit over-states that total by the collection half and the FVU fails it at
+// the portal.
+func TestAChallanCannotPayADeductionAndACollection(t *testing.T) {
+	pool, ctx, _ := setup(t)
+	m := masters.NewService(pool)
+
+	deductee := seedDeductee(t, m, ctx, "Chitra Consulting")
+	v1 := seedDeduction(t, pool, ctx, deductee, oneThousandOn("P/1042"))
+	buyer, err := m.CreateLedger(ctx, masters.Ledger{
+		Name: "Scrap Buyer", GroupName: "Sundry Debtors",
+	}, "tester")
+	if err != nil {
+		t.Fatalf("create buyer: %v", err)
+	}
+	v2 := seedCollection(t, pool, ctx, buyer, "S/2201", "206C(1)-SCRAP", 0, dec2("2000"))
+
+	// A deposit of ₹3,000 that names the DEDUCTION, with room left on it.
+	in := challanFor(v1, "194C", 0, dec2("1000"))
+	in.TaxRupees = dec2("3000")
+	challanID, err := m.RecordTDSChallan(ctx, in, "tester")
+	if err != nil {
+		t.Fatalf("record challan: %v", err)
+	}
+
+	_, err = m.AllocateToRecordedChallan(ctx, challanID, []masters.TDSChallanAllocationInput{{
+		VoucherID:    v2,
+		Section:      "206C(1)-SCRAP",
+		LegSeq:       0,
+		Kind:         masters.AllocationKindTCS,
+		AmountRupees: dec2("2000"),
+	}}, "tester")
+	if !errors.Is(err, masters.ErrMixedChallanKinds) {
+		t.Fatalf("a collection was attached to a deposit that pays deductions = %v, want "+
+			"ErrMixedChallanKinds", err)
+	}
+	if n := countAllocations(t, pool, ctx); n != 1 {
+		t.Errorf("%d allocations stored, want 1 — the refused request must leave nothing behind", n)
+	}
+	// The CONTROL: the same deposit still accepts another DEDUCTION, so the rule
+	// refuses mixing rather than refusing everything.
+	v3 := seedDeduction(t, pool, ctx, deductee, oneThousandOn("P/1044"))
+	if _, err := m.AllocateToRecordedChallan(ctx, challanID, []masters.TDSChallanAllocationInput{{
+		VoucherID: v3, Section: "194C", LegSeq: 0, AmountRupees: dec2("1000"),
+	}}, "tester"); err != nil {
+		t.Fatalf("the mixing rule ate the feature: a second DEDUCTION on the same deposit was "+
+			"refused too: %v", err)
+	}
+}
+
+// allocatableSaysPaid answers whether the picker flags one voucher's row as
+// already deposited. SERVED rather than filtered, so an operator who cannot find
+// a row learns WHICH reason applies.
+func allocatableSaysPaid(t *testing.T, m *masters.Service, ctx context.Context,
+	voucherNo string) bool {
+	t.Helper()
+	rows, err := m.ListAllocatableDeductions(ctx, 2026)
+	if err != nil {
+		t.Fatalf("list allocatable: %v", err)
+	}
+	for _, r := range rows {
+		if r.VoucherNo == voucherNo {
+			return r.AlreadyPaid
+		}
+	}
+	t.Fatalf("voucher %s is not offered at all", voucherNo)
+	return false
 }

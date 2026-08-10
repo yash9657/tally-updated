@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   createInsightdClient,
+  type CoredClient,
   type DraftSummary,
   type InsightdClient,
+  type LedgerListItem,
 } from "../api";
-import { useCompanyID } from "../app/CompanyContext";
+import { useClient, useCompanyID, useHomeStateCode } from "../app/CompanyContext";
 import { useLoadedDraft } from "../app/LoadedDraft";
 import { OPEN_PURCHASE_DRAFT_SENTINEL } from "../keystroke/navMachine";
 import type { ScreenComponentProps } from "../app/screenRegistry";
@@ -46,6 +48,174 @@ export function _resetInsightdClientFactory(): void {
 }
 
 /**
+ * ===========================================================================
+ * ⛔⛔ THE TENANT CONTEXT — AND ITS ABSENCE WAS TWO HIGH DEFECTS IN ONE LINE.
+ * ===========================================================================
+ * This screen used to send `tenant: { company_id: companyID }` and nothing else
+ * on BOTH create paths, so insightd's pipeline ran against an EMPTY chart of
+ * accounts. Driven end to end in a browser, one taxed bill filed through this
+ * screen's own front door came out with:
+ *
+ *   1. NO INPUT-TAX POSTING LEGS, unbalanced by exactly the tax — debits
+ *      1000.0000 against a credit of 1180.0000. `ctx.cgst_ledger_id` and its two
+ *      siblings were empty, so the mapper had no ledger to debit and the party
+ *      credit still carried the gross. cored refuses that voucher, so a taxed
+ *      bill filed here could NEVER be posted.
+ *   2. AN INTRA-STATE BILL DERIVED AS IGST. With no ledgers the supplier can
+ *      never be matched, so `supplier_state` stays None, and the tax derivation
+ *      only concludes intra-state when BOTH state codes are known and equal —
+ *      the else branch books the whole tax as IGST. Input tax in the wrong two
+ *      ledgers and a misstated GSTR-3B table 4.
+ *
+ * ⚠️ ONE ROOT, TWO SYMPTOMS, AND IT IS NOT A BUG IN tax.py OR IN THE MAPPER.
+ * Both are correct given what they were told. The fixture's own `input.tenant`
+ * block — which `seed-demo.mts` fills in completely, which is why the SEEDED
+ * draft always looked right — is not what reaches the pipeline: insightd uses
+ * the REQUEST's `tenant`, and this screen supplied a stub. So the demo passed
+ * and the product's front door was broken, which is HANDOFF §9.4's third kind of
+ * invisible defect: the oracle and the defect never met.
+ *
+ * ⛔ AND THE CONTEXT IS BUILT FROM CORED, NEVER FROM THE PASTED FIXTURE. A
+ * fixture is caller-supplied text; treating its embedded ledger ids as authority
+ * would let anything that can paste JSON name ledgers in these books. The ids
+ * below come from `GET .../ledgers` for the ACTIVE company, i.e. from the same
+ * server that will refuse the voucher.
+ *
+ * ⚠️ RAW GSTINs NEVER LEAVE. insightd's LedgerRef.gstin_masked is documented as
+ * "a masked tag, never the raw GSTIN" — insightd's classifier can make a
+ * cross-border call with this context in the prompt. The partial mask below is
+ * the same one seed-demo.mts uses, so the browser and the seed produce identical
+ * tenant contexts; the raw value is never sent, and `state_code` (which is what
+ * the tax split actually needs) is carried in its own field.
+ */
+
+/** insightd's TenantContext.ledgers entry (contracts/pipeline.py: LedgerRef). */
+type TenantLedgerRef = {
+  id: string;
+  name: string;
+  gstin_masked?: string;
+  state_code?: string;
+  kind: "party" | "purchase" | "expense" | "tax" | "other";
+};
+
+/**
+ * insightd's TenantContext (contracts/pipeline.py).
+ *
+ * A `type` and not an `interface` on purpose: `CreateDraftRequest.tenant` is
+ * declared `Record<string, unknown>` (api/draft.ts, another lane's file), and
+ * only a type alias gets the implicit index signature that satisfies it. An
+ * interface here would need a cast at both call sites, and a cast is how a
+ * mistyped tenant block would get through silently.
+ */
+type TenantContext = {
+  company_id: string;
+  ledgers: TenantLedgerRef[];
+  cgst_ledger_id?: string;
+  sgst_ledger_id?: string;
+  igst_ledger_id?: string;
+  home_state_code?: string;
+};
+
+/**
+ * The three INPUT-tax ledger names, matched case-insensitively.
+ *
+ * ⛔ INPUT AND NOT OUTPUT. A purchase reclaims input tax; output tax is what this
+ * company OWES on its sales. The two sets balance identically, so substituting
+ * one for the other would be invisible in every arithmetic check — it is the
+ * entire difference between tax we may reclaim and tax we owe. The names mirror
+ * `taxLedgerNames("input")` in screens/vouchers/gstVoucher.ts, which is what
+ * creates them; keep the two in step.
+ */
+const INPUT_TAX_LEDGER_NAMES = {
+  cgst: "input cgst",
+  sgst: "input sgst",
+  igst: "input igst",
+} as const;
+
+/**
+ * Classify a ledger for insightd. Derived from `group_name` because that is the
+ * only signal the list carries.
+ *
+ * ⚠️ `group_name` is the ledger's IMMEDIATE group, so a company that files its
+ * suppliers under a user-created sub-group of Sundry Creditors reads as "other".
+ * That is acceptable HERE and would not be elsewhere: `kind` is a matching HINT
+ * for the classifier, and a mis-hinted ledger degrades the draft to manual
+ * review. It must never be used to decide money — the tax split is decided by
+ * `state_code`, and the ledger to post to by `id`.
+ */
+function ledgerKind(groupName: string): TenantLedgerRef["kind"] {
+  const g = groupName.trim().toLowerCase();
+  if (g === "sundry creditors" || g === "sundry debtors") return "party";
+  if (g === "purchase accounts") return "purchase";
+  if (g === "duties & taxes") return "tax";
+  if (g === "direct expenses" || g === "indirect expenses") return "expense";
+  return "other";
+}
+
+/**
+ * Mask a GSTIN for the cross-border boundary: the state code, three more
+ * characters, an ellipsis and the last three. Non-reconstructible, and it does
+ * not match insightd's GSTIN recognizer, so `Boundary.assert_clean` stays quiet.
+ * "" for a ledger with no GSTIN (the ordinary case for a cash party).
+ */
+function maskGstin(gstin: string): string | undefined {
+  const g = gstin.trim();
+  if (g.length < 10) return undefined;
+  return `${g.slice(0, 5)}…${g.slice(-3)}`;
+}
+
+/**
+ * Build the tenant context insightd needs from this company's chart of accounts.
+ *
+ * Exported for its own test: this function is the whole of the fix for two HIGH
+ * defects, and it is worth asserting directly rather than only through a render.
+ */
+export function buildTenantContext(
+  companyID: string,
+  homeStateCode: string,
+  ledgers: readonly LedgerListItem[],
+): TenantContext {
+  const byName = new Map<string, string>();
+  for (const l of ledgers) byName.set(l.name.trim().toLowerCase(), l.id);
+  return {
+    company_id: companyID,
+    home_state_code: homeStateCode || undefined,
+    ledgers: ledgers.map((l) => ({
+      id: l.id,
+      name: l.name,
+      gstin_masked: maskGstin(l.gstin),
+      // ⛔ THE FIELD THAT DECIDES CGST+SGST vs IGST. Without it every bill from a
+      // matched supplier is still derived as inter-state.
+      state_code: l.state_code || undefined,
+      kind: ledgerKind(l.group_name),
+    })),
+    cgst_ledger_id: byName.get(INPUT_TAX_LEDGER_NAMES.cgst),
+    sgst_ledger_id: byName.get(INPUT_TAX_LEDGER_NAMES.sgst),
+    igst_ledger_id: byName.get(INPUT_TAX_LEDGER_NAMES.igst),
+  };
+}
+
+/**
+ * Load the chart of accounts and build the context.
+ *
+ * ⛔ IT RESOLVES, IT NEVER CREATES. A company with no "Input CGST" ledger yet
+ * gets a context with those ids absent, and insightd then PROPOSES the tax leg
+ * with a null ledger_id and names `gst.cgst_ledger` in `unresolved` — the same
+ * Alt+C treatment the party leg has always had, so the draft still balances and
+ * the operator is told which master is missing. Creating three Duties & Taxes
+ * masters as a side effect of merely OPENING an inbox is the orphan-master
+ * anti-pattern this codebase already has one defect for.
+ */
+async function loadTenantContext(
+  client: CoredClient,
+  companyID: string,
+  homeStateCode: string,
+): Promise<TenantContext> {
+  const res = await client.listLedgers(companyID);
+  return buildTenantContext(companyID, homeStateCode, res.ledgers ?? []);
+}
+
+/**
  * Format a draft's grand total for display. "0.0000" is the sentinel a
  * low_confidence_manual draft carries when GST was never derived — show it as an
  * explicit "unknown total" rather than a misleading real zero.
@@ -83,6 +253,8 @@ function rowLabel(s: DraftSummary): string {
 
 export function BillInboxScreen({ onSelect }: ScreenComponentProps) {
   const companyID = useCompanyID();
+  const cored = useClient();
+  const homeStateCode = useHomeStateCode();
   const { setLoaded } = useLoadedDraft();
   const insightd = useMemo(() => insightdClientFactory(), []);
 
@@ -167,9 +339,13 @@ export function BillInboxScreen({ onSelect }: ScreenComponentProps) {
     setCreating(true);
     setError(null);
     try {
+      // The context comes from THESE BOOKS, not from the pasted fixture's own
+      // `input.tenant` block — see the tenant-context comment at the top of this
+      // file. A fixture is caller-supplied text and may not name ledgers.
+      const tenant = await loadTenantContext(cored, companyID, homeStateCode);
       await insightd.createDraft(companyID, {
         source: "upload",
-        tenant: { company_id: companyID },
+        tenant,
         fixture,
       });
       setFixtureText("");
@@ -179,7 +355,7 @@ export function BillInboxScreen({ onSelect }: ScreenComponentProps) {
     } finally {
       setCreating(false);
     }
-  }, [fixtureText, insightd, companyID, refresh]);
+  }, [fixtureText, insightd, cored, companyID, homeStateCode, refresh]);
 
   /**
    * UPLOAD A REAL BILL — the affordance this screen was missing. The "create"
@@ -207,12 +383,17 @@ export function BillInboxScreen({ onSelect }: ScreenComponentProps) {
         for (let i = 0; i < bytes.length; i += 0x8000) {
           binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
         }
+        // ⛔ THE REAL FRONT DOOR, AND THE ONE THAT HAS NO FIXTURE TO FALL BACK
+        // ON. A photographed bill carries no tenant block at all, so without
+        // this the pipeline sees an empty chart of accounts every single time:
+        // no supplier match, no state, no tax ledgers, an unbalanced draft.
+        const tenant = await loadTenantContext(cored, companyID, homeStateCode);
         const created = await insightd.createDraft(companyID, {
           source: "upload",
           filename: file.name,
           content_type: file.type || "application/octet-stream",
           content_b64: btoa(binary),
-          tenant: { company_id: companyID },
+          tenant,
         });
 
         // Poll while the server is still reading it. Bounded: a spinner that
@@ -236,7 +417,7 @@ export function BillInboxScreen({ onSelect }: ScreenComponentProps) {
         setCreating(false);
       }
     },
-    [insightd, companyID, refresh],
+    [insightd, cored, companyID, homeStateCode, refresh],
   );
 
   const rowLabels = useMemo(() => rows.map((r) => r.label), [rows]);

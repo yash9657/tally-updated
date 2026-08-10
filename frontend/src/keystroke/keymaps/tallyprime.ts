@@ -275,6 +275,24 @@ const RAW_SCREEN_BINDINGS: Partial<
     "Ctrl+H": { kind: "changeView" },
     "Alt+F5": { kind: "detailed" },
   },
+  // ⛔ THE MASTER CREATE FORM HELD BACK THE VOUCHER KEYS FROM NOBODY, and it was
+  // the only create form in the product that did not. F5 opened a Payment, F8 a
+  // Sales and F9 a Purchase STRAIGHT OVER a half-keyed master, abandoning it with
+  // no warning and nothing written.
+  //
+  // It was always true and it was survivable while the only door was Alt+C from a
+  // voucher field — a form the operator was in for two keystrokes. It stopped
+  // being survivable when Go To gained `Create Ledger`/`Create Stock Item`/…,
+  // because the form an operator now reaches deliberately is one they LINGER on:
+  // an opening balance, an opening Dr/Cr, and a bill-wise breakup keyed row by
+  // row is a minute of work that F5 would silently discard.
+  //
+  // The same held-back set as the order registers, the BOM screen and the e-way
+  // bill screen, through the same helper — so the fifth copy cannot drift into
+  // naming the wrong screen.
+  "master-create": {
+    ...voucherKeysHeldBack("the master create form", "master"),
+  },
   // THE BANK RECONCILIATION SCREEN. Every key here is taken from RESEARCH.md:879
   // ("Key shortcuts inside reconciliation"), which is the only source this repo
   // has for the screen's own button grammar. Nothing below is inferred.

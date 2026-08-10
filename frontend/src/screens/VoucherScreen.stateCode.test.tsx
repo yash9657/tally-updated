@@ -84,6 +84,11 @@ async function postGstSale(party: string): Promise<void> {
   fireEvent.mouseDown(await screen.findByText(party));
   fireEvent.change(screen.getByTestId("gst-taxable"), { target: { value: "10000" } });
   fireEvent.change(screen.getByTestId("gst-rate"), { target: { value: "18" } });
+  // ⛔ THE HSN IS NOW MANDATORY TO SAVE A SALES INVOICE (D60) — it is a Rule
+  // 46(g) particular, and without it the invoice saved and then could not be
+  // PRINTED. Keying it makes every assertion below the CONTROL for that new
+  // refusal: an invoice that DOES carry an HSN still saves, unchanged.
+  fireEvent.change(screen.getByTestId("gst-hsn"), { target: { value: "7326" } });
   fireEvent.keyDown(app, { key: "a", ctrlKey: true });
 }
 

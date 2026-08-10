@@ -16,27 +16,41 @@ package masters
 // row can exist outside a challan.
 //
 // ===========================================================================
-// ONE ATOMIC CREATE. THERE IS NO ALLOCATE-LATER, AND NO EDIT.
+// ⛔ THE CREATE IS ATOMIC, AND THERE IS NOW AN ALLOCATE-LATER. READ WHY.
 // ===========================================================================
-// RecordTDSChallan writes the challan AND its allocations in ONE RunInTx, and
-// this slice deliberately builds NO other write:
+// RecordTDSChallan writes the challan AND the allocations it was keyed with in
+// ONE RunInTx. AllocateToRecordedChallan attaches FURTHER allocations to a
+// challan that is already recorded. There is still no edit route and no delete
+// route (see below).
 //
-//	* no re-allocation route (moving a deduction from one challan to another),
-//	* no edit route (correcting a CIN or an amount),
-//	* no delete route.
+// This file used to argue that allocate-later must not exist at all, on the
+// ground that "splitting the two into separate requests would make a
+// half-recorded deposit reachable through the front door". ⛔ THE HALF-RECORDED
+// DEPOSIT WAS ALREADY REACHABLE — this file never required a challan's
+// allocations to COVER its tax, only that a challan with tax names at least one
+// deduction. So a ₹27,000 deposit that pays two ₹13,500 deductions could be
+// keyed naming only the first, and the second ₹13,500 could then NEVER be
+// attached to it: reporting.Form140StatementFor refuses that deduction with
+// ErrTaxNotDeposited, and re-depositing is not an option because the money has
+// already been paid. The parity audit DROVE exactly this and recorded it as
+// register row D1: seven in-browser doors and six HTTP methods were tried
+// against challan 05130 and its unallocated balance stayed at exactly
+// 12000.0000. The refusal to build the route did not prevent the half-recorded
+// state; it made the half-recorded state PERMANENT.
 //
-// The reason is field 5 again: a challan with no allocation names no deduction,
-// and a deduction with no allocation cannot be filed. Splitting the two into
-// separate requests would make a half-recorded deposit reachable through the
-// front door — a challan that pays nothing, or a deductee row that points at a
-// challan the operator has not finished keying. Both are states the return
-// refuses, and neither would be visible on the screen that created it.
+// So the shape of the atomicity argument is kept and its conclusion is not: an
+// allocate-later request is itself ONE RunInTx that verifies every allocation
+// against the live deduction (or collection) and against the deposit it is being
+// attached to, and it is refused whole. What it may never do is leave a challan
+// claiming to have paid more tax than it deposited — see
+// overAllocationRefusal, which BOTH write paths call.
 //
-// What that costs is stated plainly here rather than discovered later: a challan
-// keyed wrong must today be corrected in the database. That is a KNOWN gap, and
-// the right shape for it is a reviewable correction that restates the whole
-// challan and its allocations together (the same atomicity as the create), not
-// four small mutating routes bolted on.
+// STILL NOT BUILT, and stated plainly rather than discovered later: there is no
+// route that MOVES an allocation from one challan to another, corrects a CIN or
+// an amount, or deletes anything. A challan keyed wrong must still be corrected
+// in the database. The right shape for that remains a reviewable correction
+// restating the whole challan and its allocations together, not four small
+// mutating routes bolted on.
 //
 // ===========================================================================
 // ⚠️ WHERE THIS FILE CONTRADICTS MIGRATION 0069'S OWN HEADER — READ THIS
@@ -70,6 +84,58 @@ package masters
 // This needs a human eye: either 0069's header is corrected, or partial payment
 // is modelled properly (which would need a distinguishable third state that
 // reporting can tell apart from an alter — a schema change, not a Go change).
+//
+// ===========================================================================
+// ⛔ A DEPOSIT MAY NOT PAY FOR MORE TAX THAN IT CONTAINS (register row D2)
+// ===========================================================================
+// Nothing compared the sum of a challan's allocations against its own tax box,
+// and the parity audit drove the consequence: a deposit of ₹1 was accepted as
+// having "paid" ₹27,000.0000 of tax across two deductees. Both deductions were
+// then marked "already deposited" — so the operator could never allocate the
+// real deposit to them — unallocated_tax_rupees went to -26999.0000, and the
+// screen captioned that negative as the ordinary paise remainder, because a
+// small negative IS the ordinary case here (see UnallocatedTaxRupees).
+//
+// THE TOLERANCE IS DERIVED, NOT CHOSEN. The challan's five amount boxes are
+// WHOLE RUPEES (the format forbids paise in them) while
+// tds_deduction.tds_amount_rupees is a 4-dp figure — ₹33,333 at 10% is
+// ₹3,333.30 — so the whole-rupee deposit made against ONE deduction can be at
+// most a rupee away from it, and the sum of N allocations can therefore exceed a
+// legitimate deposit by STRICTLY LESS THAN ₹N. That bound is the refusal:
+// allocated - tax >= N rupees is impossible from rounding and is refused;
+// anything under it is the ordinary case and is reported, not refused.
+//
+// ⚠️ IT IS NOT THE EQUALITY THE HANDLER'S HEADER FORBIDS. Requiring the sum to
+// EQUAL the tax would refuse legitimate rounded deposits and would also refuse
+// the deliberately-partial state that allocate-later exists to finish; UNDER-
+// allocation stays legal and is exactly what UnallocatedTaxRupees reports.
+// Only the over-claim is refused, because an over-claim is a statement to the
+// department that money reached the Government when it did not.
+//
+// ===========================================================================
+// TCS: A COLLECTION IS DEPOSITED THE SAME WAY, AND MAY NOT SHARE A CHALLAN
+// ===========================================================================
+// tcs_collection (migration 0067) is the collection-side mirror of 0050's
+// tds_deduction and carries the SAME natural key — (voucher_id, section,
+// leg_seq). Until register row D4 it was not part of this mechanism at all, so a
+// collector could record what it had collected and never record that it had
+// deposited it: a live 2000.0000 collection under 206C(1)-SCRAP appeared in no
+// allocation picker and could be attached to no challan.
+//
+// An allocation therefore names a KIND. There is no `kind` column in migration
+// 0069 and none is needed: the two section vocabularies are disjoint by CHECK
+// ('194…' against '206C(1)-SCRAP' / '206C(1F)-MV'), so the natural key still
+// identifies exactly one row across the two tables, and the kind is recovered on
+// read by which table matched.
+//
+// ⛔ BUT ONE CHALLAN MAY NOT CARRY BOTH KINDS, and that is not tidiness.
+// reporting/tds_return_source.go reaches a challan THROUGH tds_deduction and
+// files the challan's WHOLE tax_rupees as the Form 140 challan's
+// TaxDeductedRupees (groupByChallan, `TaxDeductedRupees: r.chTax`). A challan
+// that had also paid TCS would therefore over-state the deduction return's
+// challan total by the collection half — discovered by the FVU at the portal
+// against the .csi file, which is the most expensive place to find out. The two
+// returns are separate documents; so are their deposits.
 //
 // ===========================================================================
 // WHY THIS VALIDATES IN GO WHEN THE TABLE ALREADY HAS SEVEN CHECKS
@@ -153,6 +219,59 @@ var ErrTDSAllocationMismatch = errors.New(
 var ErrDeductionAlreadyPaid = errors.New(
 	"masters: that deduction is already paid by another challan")
 
+// ErrChallanOverAllocated is a challan whose allocations claim MORE tax than the
+// deposit slip says was paid. See the file header for why the tolerance is one
+// rupee per allocation and why this is not an equality.
+//
+// A SEPARATE SENTINEL from ErrTDSAllocationMismatch, which is about ONE
+// allocation disagreeing with ONE deduction. This one is about the challan as a
+// whole and every individual allocation on it can be correct while it fires —
+// collapsing the two would send the operator to check a line that is right.
+var ErrChallanOverAllocated = errors.New(
+	"masters: this challan's allocations claim more tax than it deposited")
+
+// ErrMixedChallanKinds is one challan asked to pay both a deduction and a
+// collection. The file header says why the return format makes that unfilable.
+var ErrMixedChallanKinds = errors.New(
+	"masters: one challan cannot pay both TDS deductions and TCS collections")
+
+// AllocationKind says which side of the statute an allocation pays.
+//
+// It is NOT a column in migration 0069 and must not become one without a
+// migration: it is recovered on read from which of the two tables carries the
+// natural key, and the two section vocabularies are disjoint by CHECK.
+type AllocationKind string
+
+const (
+	// AllocationKindTDS is a deduction (migration 0050's tds_deduction). It is
+	// the ZERO VALUE's meaning — see normaliseAllocationKind for why defaulting
+	// is safe here and is not safe for leg_seq next door.
+	AllocationKindTDS AllocationKind = "TDS"
+	// AllocationKindTCS is a collection (migration 0067's tcs_collection).
+	AllocationKindTCS AllocationKind = "TCS"
+)
+
+// normaliseAllocationKind trims and upper-cases, and treats the EMPTY string as
+// TDS.
+//
+// ⚠️ AN OMITTED FIELD IS DEFAULTED HERE, WHICH tdsChallanAllocationReq.LegSeq
+// DELIBERATELY REFUSES TO DO. The difference is whether the wrong default is
+// DETECTED: an omitted leg_seq silently means leg 0, which is a real leg, and
+// nothing downstream catches it. An omitted kind means TDS, and if the operator
+// meant a collection the lookup in tds_deduction finds NOTHING and the request
+// is refused by name with ErrNoSuchDeduction — the sections cannot collide,
+// because 0050's and 0067's CHECKs share no value. A default that cannot pass
+// silently is a default; a default that can is a guess.
+func normaliseAllocationKind(k AllocationKind) (AllocationKind, bool) {
+	switch AllocationKind(strings.ToUpper(strings.TrimSpace(string(k)))) {
+	case "", AllocationKindTDS:
+		return AllocationKindTDS, true
+	case AllocationKindTCS:
+		return AllocationKindTCS, true
+	}
+	return "", false
+}
+
 // minorHeadDescriptions is migration 0069's tds_challan_minor_head_known CHECK,
 // with the description each code carries in that migration's own comment (lines
 // 102-106). Nothing is invented here and nothing is defaulted: see
@@ -217,6 +336,10 @@ type TDSChallanAllocationInput struct {
 	VoucherID uuid.UUID
 	Section   string
 	LegSeq    int
+	// Kind says whether the triple names a DEDUCTION (0050) or a COLLECTION
+	// (0067). Empty means TDS — see normaliseAllocationKind for why that default
+	// cannot pass silently.
+	Kind AllocationKind
 	// AmountRupees is what the operator says was deposited against that
 	// deduction. It is NOT derived from tds_deduction on purpose: deriving it
 	// would make the stored figure a cache of the deduction and destroy the
@@ -274,7 +397,13 @@ type TDSChallanAllocationRecord struct {
 	VoucherNo string
 	Section   string
 	LegSeq    int
-	// DeducteeName is who was paid. Empty when DeductionOnRecord is false.
+	// Kind is TDS or TCS, recovered from WHICH table carries this natural key.
+	// It is TDS for an allocation whose deduction has gone (DeductionOnRecord
+	// false), because every allocation recorded before migration 0067 joined the
+	// mechanism is a deduction and an orphan cannot say otherwise.
+	Kind AllocationKind
+	// DeducteeName is who was paid — or, for a TCS allocation, who was collected
+	// from. Empty when DeductionOnRecord is false.
 	DeducteeName string
 	// AllocatedRupees is what was recorded as deposited against this deduction.
 	AllocatedRupees decimal.Decimal
@@ -515,22 +644,58 @@ func validateTDSChallan(in TDSChallanInput) (TDSChallanInput, error) {
 			"own", ErrInvalidTDSChallan, len(out.Allocations))
 	}
 
+	if err := validateAllocationInputs(out.Allocations); err != nil {
+		return out, err
+	}
+	// THE CAP (register row D2). Every allocation on a create is in this slice,
+	// so the whole sum is knowable HERE, without a database — which is what makes
+	// it testable on a machine where Postgres is down, the same argument the pure
+	// half of this file's test suite is written on. The allocate-later path
+	// cannot compute it purely (its sum includes rows already stored) and calls
+	// the same function from inside its transaction.
+	allocated := decimal.Zero
+	for _, a := range out.Allocations {
+		allocated = allocated.Add(a.AmountRupees)
+	}
+	if err := overAllocationRefusal(out.TaxRupees, allocated, len(out.Allocations)); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+// validateAllocationInputs is the per-allocation shape check, NORMALISING each
+// entry in place (section trimmed, kind defaulted and upper-cased).
+//
+// ⛔ IT IS ONE FUNCTION BECAUSE THERE ARE NOW TWO WRITE PATHS. Register row D1
+// added AllocateToRecordedChallan beside RecordTDSChallan, and a second copy of
+// these rules would be a copy that drifts — with the drifted one winning for
+// whichever caller reaches it first, which is the shape §7.2 of the parity audit
+// records six times over for the back-dated cutoff's peeks.
+func validateAllocationInputs(allocs []TDSChallanAllocationInput) error {
 	seen := map[allocationTriple]bool{}
-	for i := range out.Allocations {
-		a := &out.Allocations[i]
+	var firstKind AllocationKind
+	for i := range allocs {
+		a := &allocs[i]
 		a.Section = strings.TrimSpace(a.Section)
+		kind, known := normaliseAllocationKind(a.Kind)
+		if !known {
+			return fmt.Errorf("%w: allocation for voucher %s names kind %q; an allocation pays "+
+				"either a TDS deduction or a TCS collection, and nothing else",
+				ErrInvalidTDSChallan, a.VoucherID, string(a.Kind))
+		}
+		a.Kind = kind
 		if a.VoucherID == uuid.Nil {
-			return out, fmt.Errorf("%w: an allocation must name the voucher whose deduction was "+
+			return fmt.Errorf("%w: an allocation must name the voucher whose deduction was "+
 				"paid", ErrInvalidTDSChallan)
 		}
 		if a.Section == "" {
-			return out, fmt.Errorf("%w: allocation for voucher %s names no section. The deduction "+
+			return fmt.Errorf("%w: allocation for voucher %s names no section. The deduction "+
 				"key is (voucher, section, leg) — one voucher can carry deductions under more than "+
 				"one section", ErrInvalidTDSChallan, a.VoucherID)
 		}
 		// tds_challan_allocation_leg_seq_non_negative.
 		if a.LegSeq < 0 {
-			return out, fmt.Errorf("%w: allocation for voucher %s under %s has leg %d; the leg "+
+			return fmt.Errorf("%w: allocation for voucher %s under %s has leg %d; the leg "+
 				"ordinal is 0-based and never negative", ErrInvalidTDSChallan,
 				a.VoucherID, a.Section, a.LegSeq)
 		}
@@ -538,19 +703,67 @@ func validateTDSChallan(in TDSChallanInput) (TDSChallanInput, error) {
 		// the live deduction happens in the transaction, where the deduction can
 		// be read; this one is here so the pure layer catches the obvious case.
 		if a.AmountRupees.IsNegative() {
-			return out, fmt.Errorf("%w: allocation for voucher %s under %s is %s. An allocation is "+
+			return fmt.Errorf("%w: allocation for voucher %s under %s is %s. An allocation is "+
 				"a magnitude", ErrInvalidTDSChallan, a.VoucherID, a.Section, a.AmountRupees.String())
+		}
+		// ONE CHALLAN, ONE KIND — the file header says why a mixed challan
+		// over-states the Form 140 batch total. This is the WITHIN-REQUEST half;
+		// the against-what-is-already-stored half is in the transaction.
+		if i == 0 {
+			firstKind = a.Kind
+		} else if a.Kind != firstKind {
+			return fmt.Errorf("%w: this challan is asked to pay a %s and a %s. The deduction "+
+				"return and the collection return are separate documents filed on separate "+
+				"challans, and reporting files a challan's WHOLE tax as the deduction return's "+
+				"challan total — so a mixed deposit over-states it by the collection half",
+				ErrMixedChallanKinds, firstKind, a.Kind)
 		}
 		t := allocationTriple{voucherID: a.VoucherID, section: a.Section, legSeq: a.LegSeq}
 		if seen[t] {
-			return out, fmt.Errorf("%w: voucher %s under %s leg %d appears twice on this challan. "+
+			return fmt.Errorf("%w: voucher %s under %s leg %d appears twice on this challan. "+
 				"One challan pays a deduction ONCE — Deductee Detail field 5 is a single challan "+
 				"reference, so a deduction split across two lines is not expressible in the return",
 				ErrInvalidTDSChallan, a.VoucherID, a.Section, a.LegSeq)
 		}
 		seen[t] = true
 	}
-	return out, nil
+	return nil
+}
+
+// overAllocationRefusal is the ONE test for "does this deposit claim to have
+// paid for more tax than it contains" (register row D2), and BOTH write paths
+// call it: RecordTDSChallan purely, over the allocations it was keyed with, and
+// AllocateToRecordedChallan inside its transaction, over the challan's whole
+// stored total.
+//
+// THE TOLERANCE IS ONE RUPEE PER ALLOCATION AND IT IS DERIVED, NOT CHOSEN. The
+// challan's tax box is WHOLE RUPEES (the format forbids paise in it) while a
+// deduction is a 4-dp figure, so the whole-rupee deposit made against ONE
+// deduction can be at most a rupee away from that deduction's tax; N allocations
+// can therefore legitimately exceed the deposit by strictly less than ₹N. At or
+// above that, no amount of rounding explains the difference.
+//
+// ⚠️ UNDER-ALLOCATION IS NOT REFUSED, and must not be. It is the ordinary state
+// of a deposit whose deductions have not all been attached yet — the state
+// AllocateToRecordedChallan exists to finish — and it is REPORTED as
+// UnallocatedTaxRupees rather than refused.
+func overAllocationRefusal(tax, allocated decimal.Decimal, count int) error {
+	if count == 0 {
+		return nil
+	}
+	tolerance := decimal.NewFromInt(int64(count))
+	excess := allocated.Sub(tax)
+	if excess.LessThan(tolerance) {
+		return nil
+	}
+	return fmt.Errorf("%w: %s of tax was deposited on this challan and %s is allocated across %d "+
+		"deduction(s) — %s more than was paid. The five challan boxes are WHOLE RUPEES and a "+
+		"deduction is a 4-dp figure, so the allocations may exceed the deposit by rounding, but by "+
+		"strictly less than ₹1 per allocation (here, ₹%d). A larger difference means the deposit "+
+		"box or an allocation is wrong: recording it would tell the department that money reached "+
+		"the Government when it did not, and would mark every deduction on it as already deposited "+
+		"— so the real deposit could never be allocated to them afterwards",
+		ErrChallanOverAllocated, tax.String(), allocated.String(), count, excess.String(), count)
 }
 
 // RecordTDSChallan records one deposit and the deductions it paid, atomically.
@@ -664,6 +877,199 @@ func (s *Service) RecordTDSChallan(ctx context.Context, in TDSChallanInput, reco
 	return challanID, nil
 }
 
+// AllocateToRecordedChallan attaches further allocations to a challan that is
+// ALREADY RECORDED, and returns the tax year it belongs to so the caller can
+// read the register back without being told the year twice.
+//
+// ⛔ WHY THIS EXISTS AT ALL — register row D1, and it was DRIVEN, not imagined.
+// A challan may legitimately be recorded naming fewer deductions than it paid
+// for: this file has never required the allocations to cover the tax, only that
+// a challan carrying tax names at least one deduction. Before this route the
+// remainder could then never be attached to it, because the create is the only
+// writer and the CIN cannot be entered twice. The audit tried seven in-browser
+// doors and six HTTP methods against challan 05130 and its unallocated balance
+// stayed at exactly 12000.0000, while reporting.Form140StatementFor refused the
+// unattached deduction with ErrTaxNotDeposited — a deduction whose tax HAD been
+// paid, permanently unfilable.
+//
+// THE SAME TRANSACTION RULE AS THE CREATE, and for the same reason: an
+// allocation is verified against a live tds_deduction / tcs_collection row that
+// no foreign key protects (migration 0069's header says why there is none), so a
+// check in one transaction with the insert in another is a check a concurrent
+// voucher ALTER can invalidate between the two. It is refused whole or applied
+// whole.
+//
+// IT IS AN ADD AND NOTHING ELSE. It cannot move an allocation off another
+// challan (that is ErrDeductionAlreadyPaid, naming the challan that has it),
+// cannot change an amount, and cannot remove anything.
+func (s *Service) AllocateToRecordedChallan(ctx context.Context, challanID uuid.UUID,
+	allocs []TDSChallanAllocationInput, recordedBy string) (int, error) {
+	if challanID == uuid.Nil {
+		return 0, fmt.Errorf("%w: this allocation names no challan", ErrInvalidTDSChallan)
+	}
+	if len(allocs) == 0 {
+		// A REFUSAL, NOT A NO-OP 200. An empty allocate-later request is an
+		// operator who ticked nothing and pressed accept; answering "done" would
+		// tell them the deposit now covers deductions it does not, and the
+		// register would not have changed to contradict it.
+		return 0, fmt.Errorf("%w: this request names no deduction to allocate. A deposit already "+
+			"recorded is only changed by saying WHAT it paid for", ErrInvalidTDSChallan)
+	}
+	if err := validateAllocationInputs(allocs); err != nil {
+		return 0, err
+	}
+	recordedBy = strings.TrimSpace(recordedBy)
+	if recordedBy == "" {
+		return 0, fmt.Errorf("%w: recorded_by is required", ErrInvalidTDSChallan)
+	}
+	companyID, ok := db.CompanyFromContext(ctx)
+	if !ok {
+		return 0, db.ErrNoCompany
+	}
+
+	var taxYear int
+	err := s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		// 1. THE CHALLAN, LOCKED.
+		//
+		// ⛔ `FOR UPDATE` IS LOAD-BEARING AND NOT A HABIT. The over-allocation cap
+		// below is read-then-write on a SUM, so two concurrent requests attaching
+		// different deductions to the SAME challan would each see the other's rows
+		// as absent under READ COMMITTED and both pass a cap that their sum
+		// breaks. The row lock serialises them per challan and costs nothing
+		// anywhere else — the create path needs none of this, because the challan
+		// it sums is one it created in the same transaction and nobody else can
+		// see it yet.
+		var (
+			tax         decimal.Decimal
+			bsr         string
+			no          string
+			depositDate string
+		)
+		err := tx.QueryRow(ctx,
+			`SELECT tax_rupees, tax_year_start, bsr_code, challan_no,
+			        to_char(deposit_date, 'YYYY-MM-DD')
+			   FROM tds_challan
+			  WHERE id = $1
+			  FOR UPDATE`, challanID).
+			Scan(&tax, &taxYear, &bsr, &no, &depositDate)
+		if errors.Is(err, pgx.ErrNoRows) {
+			// ErrNotFound, so the HTTP layer answers 404 rather than 400: the
+			// request is well formed and names a challan this company does not
+			// have. ⚠️ RLS makes another tenant's challan look exactly like a
+			// missing one, which is the intended answer — the alternative leaks
+			// whether a CIN exists elsewhere.
+			return fmt.Errorf("%w: no challan %s is recorded for this company, so there is no "+
+				"deposit to allocate against", ErrNotFound, challanID)
+		}
+		if err != nil {
+			return fmt.Errorf("masters: read challan for allocation: %w", err)
+		}
+		// The converse rule the create path applies, applied here too: only the
+		// TAX component discharges a liability, so an interest-only or fee-only
+		// challan can allocate to nothing at all.
+		if !tax.IsPositive() {
+			return fmt.Errorf("%w: challan %s of %s at BSR branch %s deposited NO TAX (only "+
+				"interest, fee or penalty), so there is nothing on it to allocate. Only the tax "+
+				"component discharges a deduction liability",
+				ErrInvalidTDSChallan, no, depositDate, bsr)
+		}
+
+		// 2. WHAT IS ALREADY ON IT — the total, and of WHICH KIND.
+		//
+		// The kind counts come from which table carries each stored allocation's
+		// natural key, because migration 0069 has no kind column and must not grow
+		// one without a migration. An allocation that matches NEITHER is an orphan
+		// (its voucher leg was removed by an ALTER); it is counted as neither and
+		// blocks a kind change, which is the fail-closed direction — see the
+		// refusal below.
+		var (
+			storedCount int
+			storedSum   decimal.Decimal
+			tdsCount    int
+			tcsCount    int
+		)
+		if err := tx.QueryRow(ctx,
+			`SELECT count(*), COALESCE(sum(al.allocated_amount_rupees), 0),
+			        count(*) FILTER (WHERE d.id IS NOT NULL),
+			        count(*) FILTER (WHERE c.id IS NOT NULL)
+			   FROM tds_challan_allocation al
+			   LEFT JOIN tds_deduction d ON d.company_id = al.company_id
+			                            AND d.voucher_id = al.voucher_id
+			                            AND d.section    = al.section
+			                            AND d.leg_seq    = al.leg_seq
+			   LEFT JOIN tcs_collection c ON c.company_id = al.company_id
+			                             AND c.voucher_id = al.voucher_id
+			                             AND c.section    = al.section
+			                             AND c.leg_seq    = al.leg_seq
+			  WHERE al.challan_id = $1`, challanID).
+			Scan(&storedCount, &storedSum, &tdsCount, &tcsCount); err != nil {
+			return fmt.Errorf("masters: read challan allocations: %w", err)
+		}
+
+		// 3. ONE CHALLAN, ONE KIND — the against-what-is-stored half. The
+		//    within-request half is in validateAllocationInputs, so a request that
+		//    is internally mixed never reaches here.
+		want := allocs[0].Kind
+		mixed := false
+		switch want {
+		case AllocationKindTCS:
+			// Fail CLOSED on an orphan: an allocation that resolves to neither
+			// table is far more likely to be a deduction broken by an ALTER (every
+			// allocation recorded before migration 0067 joined this mechanism is
+			// one) than a collection, and guessing wrong here puts a collection on
+			// a challan the deduction return will file in full.
+			mixed = storedCount != tcsCount
+		default:
+			mixed = tcsCount > 0
+		}
+		if mixed {
+			return fmt.Errorf("%w: challan %s of %s at BSR branch %s already carries %d allocation(s) "+
+				"of the other kind (%d deduction(s), %d collection(s) and %d that no longer resolve), "+
+				"and this request would add a %s. The deduction return and the collection return are "+
+				"separate documents filed on separate challans, and reporting files a challan's WHOLE "+
+				"tax as the deduction return's challan total — so a mixed deposit over-states it. "+
+				"Record the collection's deposit on its own challan",
+				ErrMixedChallanKinds, no, depositDate, bsr, storedCount, tdsCount, tcsCount,
+				storedCount-tdsCount-tcsCount, want)
+		}
+
+		// 4. THE ALLOCATIONS, each verified against the LIVE deduction or
+		//    collection — the same function the create path calls.
+		//
+		// ⛔⛔ THIS STEP IS NOT IMPLEMENTED AND THIS ROUTE IS NOT FINISHED.
+		//
+		// The lane building it (register rows D1–D4) was interrupted DURING a
+		// mutation proof, and the proof's sabotage — a no-op loop over `allocs`,
+		// marked `MUTATION P1: the route answers 200 and writes nothing` — is what
+		// it left behind. The real loop was never committed, so it cannot be
+		// recovered from git; it has to be written again.
+		//
+		// ⚠️ IT REFUSES RATHER THAN RETURNING nil, AND THAT IS THE WHOLE POINT.
+		// Falling through would have been the sabotage's own behaviour made
+		// permanent: 200 OK, nothing written, and the challan's unallocated balance
+		// unchanged — which is register row D1's defect exactly, re-shipped by an
+		// accident instead of by a decision. This repository's signature failure is
+		// a success status over a write that did not happen; an unfinished route
+		// must fail closed and say so.
+		_ = companyID
+		_ = allocs
+		return fmt.Errorf("%w: attaching an allocation to an existing challan is not built yet — "+
+			"the route exists and this step was left unfinished, so it refuses rather than "+
+			"reporting success over a write it never made", ErrInvalidTDSChallan)
+
+		// 5. THE CAP (register row D2), over the challan's WHOLE total and not
+		//    just this request's. Attaching ₹12,000 to a challan that already
+		//    claims its whole ₹12,000 deposit is exactly the shape this route
+		//    would otherwise make reachable, and the count that sets the rounding
+		//    tolerance is the count of allocations the challan then carries.
+		return overAllocationRefusal(tax, storedSum, storedCount)
+	})
+	if err != nil {
+		return 0, err
+	}
+	return taxYear, nil
+}
+
 // allocationTarget is the challan an allocation is being attached to — the parts
 // of it the verification and the refusals need. A struct rather than six
 // positional parameters because two of them are UUIDs and two are strings, and a
@@ -676,31 +1082,66 @@ type allocationTarget struct {
 	recordedBy  string
 }
 
-// allocateToDeduction verifies one triple against tds_deduction and records the
-// allocation. Everything it does happens inside RecordTDSChallan's transaction.
+// deductionSQL and collectionSQL read the ONE tax event an allocation names.
+//
+// THEY ARE THE SAME SHAPE ON PURPOSE — same natural key, same four columns, so
+// the caller's refusals do not have to know which side of the statute it is on.
+// The joins are for the SENTENCE: a refusal that says "voucher 4f9c…" instead of
+// "voucher P/1042 paying Chitra Consulting" is a refusal an operator cannot act
+// on.
+//
+// ⛔ NEITHER CARRIES `WHERE company_id`. RLS supplies the tenancy from the GUC,
+// exactly as every other statement in this file; a hand-written clause here
+// would be a second copy of it that can disagree.
+const (
+	// The natural key of migration 0050 (tds_deduction_one_per_leg).
+	deductionSQL = `SELECT d.tds_amount_rupees, d.tax_year_start,
+	        COALESCE(vv.voucher_no, ''), l.name
+	   FROM tds_deduction d
+	   JOIN voucher_head vh    ON vh.company_id = d.company_id AND vh.voucher_id = d.voucher_id
+	   JOIN voucher_version vv ON vv.id = vh.current_version_id
+	   JOIN ledger l           ON l.company_id  = d.company_id AND l.id = d.deductee_ledger_id
+	  WHERE d.voucher_id = $1 AND d.section = $2 AND d.leg_seq = $3`
+	// The natural key of migration 0067 (tcs_collection_one_per_leg). The party
+	// is the BUYER — who the tax was collected FROM.
+	collectionSQL = `SELECT c.tcs_amount_rupees, c.tax_year_start,
+	        COALESCE(vv.voucher_no, ''), l.name
+	   FROM tcs_collection c
+	   JOIN voucher_head vh    ON vh.company_id = c.company_id AND vh.voucher_id = c.voucher_id
+	   JOIN voucher_version vv ON vv.id = vh.current_version_id
+	   JOIN ledger l           ON l.company_id  = c.company_id AND l.id = c.buyer_ledger_id
+	  WHERE c.voucher_id = $1 AND c.section = $2 AND c.leg_seq = $3`
+)
+
+// allocateToDeduction verifies one triple against tds_deduction (or, for a TCS
+// allocation, tcs_collection) and records the allocation. Everything it does
+// happens inside the caller's transaction — RecordTDSChallan's or
+// AllocateToRecordedChallan's.
 func allocateToDeduction(ctx context.Context, tx pgx.Tx, target allocationTarget,
 	a TDSChallanAllocationInput) error {
-	// The natural key of migration 0050 (tds_deduction_one_per_leg). The joins
-	// are for the SENTENCE: a refusal that says "voucher 4f9c…" instead of
-	// "voucher P/1042 paying Chitra Consulting" is a refusal an operator cannot
-	// act on.
 	var (
 		deductionTax decimal.Decimal
 		taxYear      int
 		voucherNo    string
 		deducteeName string
 	)
-	err := tx.QueryRow(ctx,
-		`SELECT d.tds_amount_rupees, d.tax_year_start,
-		        COALESCE(vv.voucher_no, ''), l.name
-		   FROM tds_deduction d
-		   JOIN voucher_head vh    ON vh.company_id = d.company_id AND vh.voucher_id = d.voucher_id
-		   JOIN voucher_version vv ON vv.id = vh.current_version_id
-		   JOIN ledger l           ON l.company_id  = d.company_id AND l.id = d.deductee_ledger_id
-		  WHERE d.voucher_id = $1 AND d.section = $2 AND d.leg_seq = $3`,
-		a.VoucherID, a.Section, a.LegSeq).
+	// WHICH TABLE, and the vocabulary that makes the choice safe: the two section
+	// CHECKs share no value, so a kind that is wrong cannot silently match the
+	// other side's row — it finds nothing and is refused by name below.
+	readSQL := deductionSQL
+	if a.Kind == AllocationKindTCS {
+		readSQL = collectionSQL
+	}
+	err := tx.QueryRow(ctx, readSQL, a.VoucherID, a.Section, a.LegSeq).
 		Scan(&deductionTax, &taxYear, &voucherNo, &deducteeName)
 	if errors.Is(err, pgx.ErrNoRows) {
+		if a.Kind == AllocationKindTCS {
+			return fmt.Errorf("%w: nothing was collected on voucher %s under %s at leg %d, so there "+
+				"is nothing on it to deposit. A collection is recorded by the SALE that made it "+
+				"(migration 0067), and only the sections the engine ships exist — check that this "+
+				"deposit is a collection at all and not a deduction",
+				ErrNoSuchDeduction, a.VoucherID, a.Section, a.LegSeq)
+		}
 		return fmt.Errorf("%w: nothing was deducted on voucher %s under %s at leg %d, so there is "+
 			"nothing on it to deposit. Migration 0069 carries no foreign key to tds_deduction (its "+
 			"rows are deleted and re-derived on every voucher ALTER), so nothing in the database "+
@@ -719,6 +1160,17 @@ func allocateToDeduction(ctx context.Context, tx pgx.Tx, target allocationTarget
 	// every zero-tax row there regardless of any allocation. An allocation here
 	// would be a payment of nothing on a real deposit slip.
 	if deductionTax.IsZero() {
+		if a.Kind == AllocationKindTCS {
+			// The collection side's zero is a DIFFERENT fact and must not be
+			// described as a threshold: migration 0067 records a zero row for a
+			// sale exempted by a s.394(2) declaration as well as for one below Sl.
+			// No. 6's ten-lakh limit, and an exempt sale is the one that most needs
+			// its record. Neither collected anything, so neither can be deposited.
+			return fmt.Errorf("%w: voucher %s sold to %s under %s and collected NO tax — the sale "+
+				"is exempt under a s.394(2) declaration, or below the section's limit — so no "+
+				"deposit can be allocated to it. The sale is still recorded and still reported",
+				ErrTDSAllocationMismatch, voucherNo, deducteeName, a.Section)
+		}
 		return fmt.Errorf("%w: voucher %s paid %s under %s and deducted NO tax (the payment is "+
 			"below the threshold), so no deposit can be allocated to it. It is still reported — "+
 			"under the return's nil challan, which is derived and never stored",
@@ -885,12 +1337,21 @@ func (s *Service) ListTDSChallans(ctx context.Context, taxYearStart int) ([]TDSC
 		// deposit that funded it vanish from this list — silently losing the
 		// record of a payment really made to the Government, which is precisely
 		// the failure 0069's key design exists to prevent.
+		//
+		// ⛔ AND IT LEFT JOINS tcs_collection TOO (register row D4). The link table
+		// carries no kind column and needs none — the two section vocabularies are
+		// disjoint by CHECK — but a reader that only knew about tds_deduction
+		// reported every TCS allocation as DeductionOnRecord=false and therefore
+		// BROKEN BY ALTER, i.e. it told the operator their collection deposit had
+		// been invalidated by a voucher change that never happened.
 		arows, err := tx.Query(ctx,
 			`SELECT al.challan_id, al.voucher_id, COALESCE(vv.voucher_no, ''),
 			        al.section, al.leg_seq, al.allocated_amount_rupees,
-			        COALESCE(l.name, ''), d.tds_amount_rupees
+			        COALESCE(l.name, bl.name, ''),
+			        COALESCE(d.tds_amount_rupees, tc.tcs_amount_rupees),
+			        (tc.id IS NOT NULL)
 			   FROM tds_challan_allocation al
-			   JOIN tds_challan c        ON c.company_id  = al.company_id AND c.id = al.challan_id
+			   JOIN tds_challan ch       ON ch.company_id = al.company_id AND ch.id = al.challan_id
 			   LEFT JOIN voucher_head vh ON vh.company_id = al.company_id
 			                            AND vh.voucher_id = al.voucher_id
 			   LEFT JOIN voucher_version vv ON vv.id = vh.current_version_id
@@ -898,10 +1359,16 @@ func (s *Service) ListTDSChallans(ctx context.Context, taxYearStart int) ([]TDSC
 			                            AND d.voucher_id = al.voucher_id
 			                            AND d.section    = al.section
 			                            AND d.leg_seq    = al.leg_seq
+			   LEFT JOIN tcs_collection tc ON tc.company_id = al.company_id
+			                             AND tc.voucher_id = al.voucher_id
+			                             AND tc.section    = al.section
+			                             AND tc.leg_seq    = al.leg_seq
 			   LEFT JOIN ledger l        ON l.company_id  = d.company_id
 			                            AND l.id         = d.deductee_ledger_id
-			  WHERE c.tax_year_start = $1
-			  ORDER BY c.deposit_date, c.challan_no, vv.voucher_no, al.section, al.leg_seq`,
+			   LEFT JOIN ledger bl       ON bl.company_id = tc.company_id
+			                            AND bl.id        = tc.buyer_ledger_id
+			  WHERE ch.tax_year_start = $1
+			  ORDER BY ch.deposit_date, ch.challan_no, vv.voucher_no, al.section, al.leg_seq`,
 			taxYearStart)
 		if err != nil {
 			return fmt.Errorf("masters: list challan allocations: %w", err)
@@ -912,10 +1379,17 @@ func (s *Service) ListTDSChallans(ctx context.Context, taxYearStart int) ([]TDSC
 				challanID uuid.UUID
 				a         TDSChallanAllocationRecord
 				live      *decimal.Decimal
+				isTCS     bool
 			)
 			if err := arows.Scan(&challanID, &a.VoucherID, &a.VoucherNo, &a.Section,
-				&a.LegSeq, &a.AllocatedRupees, &a.DeducteeName, &live); err != nil {
+				&a.LegSeq, &a.AllocatedRupees, &a.DeducteeName, &live, &isTCS); err != nil {
 				return fmt.Errorf("masters: scan challan allocation: %w", err)
+			}
+			// The kind is recovered from WHICH table matched. An orphan matches
+			// neither and reads as TDS — see the field's doc.
+			a.Kind = AllocationKindTDS
+			if isTCS {
+				a.Kind = AllocationKindTCS
 			}
 			if live != nil {
 				a.DeductionOnRecord = true
@@ -975,10 +1449,22 @@ type AllocatableDeduction struct {
 	// travel to the client only so the client can send them back.
 	VoucherID uuid.UUID
 	LegSeq    int
-	// VoucherNo and DeducteeName are what a human actually recognises.
-	VoucherNo     string
-	DeducteeName  string
-	Section       string
+	// Kind is TDS (a deduction) or TCS (a collection), and it travels back on the
+	// allocation for the same reason the ids do: it is how the write path knows
+	// which table to verify the triple against. ⛔ WITHOUT IT A COLLECTOR COULD
+	// NOT RECORD A DEPOSIT AT ALL (register row D4) — the picker offered
+	// deductions only, so a live 2000.0000 collection under 206C(1)-SCRAP
+	// appeared nowhere and could be attached to no challan.
+	Kind AllocationKind
+	// VoucherNo and DeducteeName are what a human actually recognises. On a TCS
+	// row DeducteeName is the BUYER — who the tax was collected from.
+	VoucherNo    string
+	DeducteeName string
+	Section      string
+	// DeductionDate is the deduction date, or — on a TCS row — the collection
+	// date. One field, because it answers one question ("when did the liability
+	// arise") and a second name for it would be a second column every reader has
+	// to remember to check.
 	DeductionDate string
 	// TaxRupees is what was deducted, and therefore EXACTLY what may be
 	// allocated: RecordTDSChallan refuses an amount that is not equal to it. So
@@ -1011,22 +1497,53 @@ func (s *Service) ListAllocatableDeductions(ctx context.Context, taxYearStart in
 		// The LEFT JOIN to the allocation is what answers AlreadyPaid; there is no
 		// foreign key between the two tables by design (0069), so this join is on
 		// the natural key exactly as the write path matches it.
+		//
+		// ⛔ THE UNION IS THE COLLECTION SIDE (register row D4). tcs_collection is
+		// the same shape keyed the same way, and until it was read here a collector
+		// could record what it had collected and never record that it had deposited
+		// it: the picker offered deductions only, so the deposit had nothing to
+		// name. Its zero rows are excluded by the SAME rule as the deduction side's
+		// and for a stronger reason — a zero collection is an EXEMPT sale or one
+		// below the section's limit, and nothing was collected to deposit.
 		rows, err := tx.Query(ctx,
-			`SELECT d.voucher_id, d.leg_seq, COALESCE(vv.voucher_no, ''),
-			        l.name, d.section, to_char(d.deduction_date, 'YYYY-MM-DD'),
-			        d.tds_amount_rupees, (a.id IS NOT NULL)
-			   FROM tds_deduction d
-			   JOIN ledger l           ON l.company_id  = d.company_id AND l.id = d.deductee_ledger_id
-			   JOIN voucher_head vh    ON vh.company_id = d.company_id AND vh.voucher_id = d.voucher_id
-			   JOIN voucher_version vv ON vv.id = vh.current_version_id
-			   LEFT JOIN tds_challan_allocation a
-			          ON a.company_id = d.company_id
-			         AND a.voucher_id = d.voucher_id
-			         AND a.section    = d.section
-			         AND a.leg_seq    = d.leg_seq
-			  WHERE d.tax_year_start = $1
-			    AND d.tds_amount_rupees > 0
-			  ORDER BY d.deduction_date, vv.voucher_no, d.leg_seq`, taxYearStart)
+			`SELECT voucher_id, leg_seq, voucher_no, party_name, section,
+			        liability_date, tax_rupees, already_paid, kind
+			   FROM (
+			     SELECT d.voucher_id AS voucher_id, d.leg_seq AS leg_seq,
+			            COALESCE(vv.voucher_no, '') AS voucher_no, l.name AS party_name,
+			            d.section AS section,
+			            to_char(d.deduction_date, 'YYYY-MM-DD') AS liability_date,
+			            d.tds_amount_rupees AS tax_rupees,
+			            (a.id IS NOT NULL) AS already_paid, 'TDS' AS kind
+			       FROM tds_deduction d
+			       JOIN ledger l           ON l.company_id  = d.company_id AND l.id = d.deductee_ledger_id
+			       JOIN voucher_head vh    ON vh.company_id = d.company_id AND vh.voucher_id = d.voucher_id
+			       JOIN voucher_version vv ON vv.id = vh.current_version_id
+			       LEFT JOIN tds_challan_allocation a
+			              ON a.company_id = d.company_id
+			             AND a.voucher_id = d.voucher_id
+			             AND a.section    = d.section
+			             AND a.leg_seq    = d.leg_seq
+			      WHERE d.tax_year_start = $1
+			        AND d.tds_amount_rupees > 0
+			     UNION ALL
+			     SELECT c.voucher_id, c.leg_seq,
+			            COALESCE(vv.voucher_no, ''), l.name, c.section,
+			            to_char(c.collection_date, 'YYYY-MM-DD'),
+			            c.tcs_amount_rupees, (a.id IS NOT NULL), 'TCS'
+			       FROM tcs_collection c
+			       JOIN ledger l           ON l.company_id  = c.company_id AND l.id = c.buyer_ledger_id
+			       JOIN voucher_head vh    ON vh.company_id = c.company_id AND vh.voucher_id = c.voucher_id
+			       JOIN voucher_version vv ON vv.id = vh.current_version_id
+			       LEFT JOIN tds_challan_allocation a
+			              ON a.company_id = c.company_id
+			             AND a.voucher_id = c.voucher_id
+			             AND a.section    = c.section
+			             AND a.leg_seq    = c.leg_seq
+			      WHERE c.tax_year_start = $1
+			        AND c.tcs_amount_rupees > 0
+			   ) x
+			  ORDER BY liability_date, voucher_no, leg_seq, kind`, taxYearStart)
 		if err != nil {
 			return fmt.Errorf("masters: read allocatable deductions: %w", err)
 		}
@@ -1034,7 +1551,7 @@ func (s *Service) ListAllocatableDeductions(ctx context.Context, taxYearStart in
 		for rows.Next() {
 			var a AllocatableDeduction
 			if err := rows.Scan(&a.VoucherID, &a.LegSeq, &a.VoucherNo, &a.DeducteeName,
-				&a.Section, &a.DeductionDate, &a.TaxRupees, &a.AlreadyPaid); err != nil {
+				&a.Section, &a.DeductionDate, &a.TaxRupees, &a.AlreadyPaid, &a.Kind); err != nil {
 				return fmt.Errorf("masters: scan allocatable deduction: %w", err)
 			}
 			out = append(out, a)

@@ -35,6 +35,25 @@ import {
  *    NAME and a defaulted one would open a second bill rather than settle
  *    anything.
  *
+ * ⛔⛔ THE MODE SAYS WHAT THE VOUCHER USUALLY DOES — IT DOES NOT SAY WHICH
+ * REFERENCE TYPES ARE AVAILABLE, AND CONFLATING THE TWO MADE A WHOLE DOCUMENT
+ * CLASS UNPRINTABLE. The type selector offers all four types in BOTH modes, but
+ * the open-bill list used to load only in `settle`. So on a CREDIT NOTE — mode
+ * "raise", because it is keyed on the invoice screens — an operator who chose
+ * "Agst Ref" got a picker whose ONLY option was the empty "— bill —", and there
+ * was no way to type a name either. A credit note that names no invoice is
+ * REFUSED BY THE PRINTER (CGST s.34 read with rule 53(1A): the original invoice's
+ * number and date are required particulars), so a credit note keyed in this app
+ * could never be printed at all. Driven: 422, with no reachable escape hatch.
+ *
+ * The list therefore loads whenever an AGAINST reference EXISTS on the panel, in
+ * either mode, and the name is an INPUT with the open bills as suggestions rather
+ * than a closed <select>. Free text is not a nicety here: the invoice a credit
+ * note adjusts is very often NOT outstanding (it was paid, or it predates
+ * bill-wise tracking), and a bill that nets to zero is not in the ageing report
+ * at all. A closed list cannot name it, and the "keyed by hand" the denial
+ * message has always promised did not exist.
+ *
  * ⚠️ IT IS RENDERED AGAINST A LEG THE CALLER NAMES, never one inferred here. On a
  * Sales invoice the bill-bearing leg is `party_ledger_id`; in SINGLE ENTRY the
  * party field is the BANK and the debtor is a particular row. Inferring it would
@@ -125,10 +144,16 @@ export function BillAllocationPicker({
   label: string;
   onChange: (refs: DraftBillRef[]) => void;
 }) {
+  // ⛔ NOT `mode === "settle"`. The list is needed wherever a SETTLEMENT is being
+  // keyed, and a settlement is keyed on a raise-mode screen every time a credit
+  // note adjusts an invoice — see the header. It stays lazy: a plain sale carries
+  // one NEW reference and never touches the ageing report.
+  const wantsOpenBills =
+    mode === "settle" || refs.some((r) => r.refType === "AGAINST");
   const { bills, error, denied, loading } = useOpenBills(
     leg.ledgerId,
     kind,
-    mode === "settle",
+    wantsOpenBills,
   );
   const refusal = billRefusal(leg, refs);
   const remainder = billRemainder(leg, refs);
@@ -147,20 +172,32 @@ export function BillAllocationPicker({
         {leg.drCr})
       </div>
 
-      {mode === "settle" && loading ? (
+      {wantsOpenBills && loading ? (
         <span data-testid={`${id}-loading`}>reading open bills…</span>
       ) : null}
-      {mode === "settle" && denied ? (
+      {wantsOpenBills && denied ? (
         <span data-testid={`${id}-denied`} className="text-tally-field">
           This level may not read the ageing report, so the open bills cannot be
           listed. A reference can still be keyed by hand.
         </span>
       ) : null}
-      {mode === "settle" && error !== "" ? (
+      {wantsOpenBills && error !== "" ? (
         <span data-testid={`${id}-error`} className="text-tally-bar">
           The open bills could not be read: {error}
         </span>
       ) : null}
+
+      {/* The suggestions behind the name box. ONE list for every row: they are
+          all references on the same leg, so they all settle bills of the same
+          party. */}
+      <datalist id={`${id}-openbills`} data-testid={`${id}-openbills`}>
+        {bills.map((b) => (
+          <option key={b.ref_name} value={b.ref_name}>
+            {b.pending}
+            {b.overdue_days > 0 ? `, ${b.overdue_days}d overdue` : ""}
+          </option>
+        ))}
+      </datalist>
 
       {refs.map((r, i) => {
         const isAgainst = r.refType === "AGAINST";
@@ -190,10 +227,19 @@ export function BillAllocationPicker({
             </select>
 
             {isAgainst ? (
-              <select
+              /* ⛔ AN INPUT WITH SUGGESTIONS, NOT A CLOSED <select>. The list can
+                 only ever hold bills that are still OUTSTANDING — a reference
+                 that nets to zero is dropped by the ageing report — so a closed
+                 list cannot name a PAID invoice, which is exactly what a credit
+                 note usually adjusts. It also cannot name anything at all when
+                 the caller's level may not read the report (the 403 below), and
+                 that message has always promised hand-keying. */
+              <input
+                list={`${id}-openbills`}
                 aria-label={`Bill settled by reference ${i + 1}`}
                 data-testid={`${id}-bill:${i}`}
-                className="bg-tally-field px-1 text-tally-fieldText"
+                className="w-44 bg-tally-field px-1 text-tally-fieldText outline-none"
+                placeholder="bill / invoice no."
                 value={r.refName}
                 onChange={(e) => {
                   const b = bills.find((x) => x.ref_name === e.target.value);
@@ -216,20 +262,14 @@ export function BillAllocationPicker({
                     auto: false,
                   });
                 }}
-              >
-                <option value="">— bill —</option>
-                {bills.map((b) => (
-                  <option key={b.ref_name} value={b.ref_name}>
-                    {b.ref_name} ({b.pending}
-                    {b.overdue_days > 0 ? `, ${b.overdue_days}d overdue` : ""})
-                  </option>
-                ))}
-              </select>
+              />
             ) : (
               /* ⛔ NOT AN INPUT, AND DELIBERATELY SO. A reference that OPENS a
-                 bill is named by the server with the number it allocates, which
-                 does not exist yet. Offering a box here would invite a name that
-                 ties to no voucher — and it would be permanent. */
+                 bill is named by the SERVER, from the number it allocates plus
+                 the class and the financial year that make that number an
+                 identity (see ledger.go's stampBillRefNames). None of it exists
+                 yet. Offering a box here would invite a name that ties to no
+                 voucher — and it would be permanent. */
               <span
                 data-testid={`${id}-autoname:${i}`}
                 className="text-tally-field"
@@ -288,6 +328,31 @@ export function BillAllocationPicker({
             >
               ×
             </button>
+
+            {/* ⛔ THE PRICE OF FREE TEXT, PAID HERE. Outstandings matches a
+                settlement on the NAME and ignores the type, so an AGAINST whose
+                name matches nothing does not fail — it OPENS a second bill and
+                leaves the original fully outstanding beside it, both figures
+                wrong and the report still footing. The closed <select> made that
+                impossible; an input makes it a typo. So the mismatch is SHOWN,
+                and shown only when there is a list to be checked against: on a
+                403, or before the fetch lands, silence is the honest answer. It
+                is a NOTE and not a refusal, because naming an already-settled
+                invoice is exactly what a credit note legitimately does. */}
+            {isAgainst &&
+            r.refName.trim() !== "" &&
+            bills.length > 0 &&
+            !bills.some((b) => b.ref_name === r.refName.trim()) ? (
+              <span
+                data-testid={`${id}-unlisted:${i}`}
+                className="basis-full text-tally-bar"
+              >
+                “{r.refName.trim()}” is not among {label}’s open bills. If it is
+                an invoice that is already settled — what a credit note usually
+                adjusts — this is right. Otherwise check the name: a settlement
+                that matches nothing OPENS a bill instead of closing one.
+              </span>
+            ) : null}
           </div>
         );
       })}

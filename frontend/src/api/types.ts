@@ -634,6 +634,85 @@ export interface GSTRequest {
 }
 
 /**
+ * THE `tds` BLOCK ON A VOUCHER BODY (server.go's `tdsReq`) — tax DEDUCTED from a
+ * payment this company made.
+ *
+ * ⛔ THIS TYPE'S ABSENCE WAS REGISTER ROW D3, AND IT IS THE SAME DEFECT
+ * {@link VoucherRequest.cost_allocations} carries a warning about, for the third
+ * time in this file: the Go wire has carried `tds` and `tcs` since T6 was wired,
+ * the ledger derives and PERSISTS the deduction, the TDS/TCS Register reads it
+ * and the challan mechanism depends on it — and no client type could express it,
+ * so on any books a real operator keyed there were no deductions at all and the
+ * challan's allocation picker was empty. A FEATURE IS NOT REACHABLE UNTIL THE
+ * FIELD EXISTS ON EVERY WIRE BETWEEN THE OPERATOR AND THE TABLE: Go struct, TS
+ * type, AND the form that fills it.
+ *
+ * ⚠️ THE FORM IS STILL MISSING. This type makes the request EXPRESSIBLE; it does
+ * not put a TDS panel on the voucher screen, and until that panel exists a
+ * deduction still cannot be keyed. Do not read the presence of this interface as
+ * the feature being reachable.
+ *
+ * ⚠️ TWO SERVER-SIDE PRECONDITIONS, both 422s, because they are facts about the
+ * company rather than about the body:
+ *   - `deductee_ledger_id` is REQUIRED — who was paid is half the key of the
+ *     statutory aggregate and the whole of the return's deductee annexure;
+ *   - the company must have a deductor status recorded for the tax year
+ *     PRECEDING the voucher's, or the post is refused outright. Whether there is
+ *     a duty to deduct is not a question this software guesses at.
+ */
+export interface TDSRequest {
+  /** The nature-of-payment key, e.g. "194C", "194J-P", "194I-B". */
+  section: string;
+  /** REQUIRED. The ledger of the party being paid. */
+  deductee_ledger_id: string;
+  /** "IND_HUF" or "OTHER"; empty means "OTHER". */
+  deductee_type?: string;
+  /** False triggers the statutory no-PAN floor — it RAISES the rate. */
+  pan_available?: boolean;
+  /** Fixed-point decimal STRING. The amount the deduction applies to. */
+  taxable_amount: Money;
+  /**
+   * OPTIONAL. When given, the server cross-checks the posted TDS leg against the
+   * amount its own engine derives and REFUSES a voucher whose leg contradicts it.
+   * When empty the deduction is still derived and stored; no leg is verified.
+   * ⛔ The server never injects a posting of its own.
+   */
+  tds_ledger_id?: string;
+  /** Selects the effective-dated rate table; empty means the ledger's default. */
+  ruleset_version?: string;
+}
+
+/**
+ * THE `tcs` BLOCK ON A SALES VOUCHER (server.go's `tcsReq`) — tax COLLECTED from
+ * a buyer. The mirror of {@link TDSRequest}, and register row D3's other half.
+ *
+ * ⛔ THERE IS NO EXEMPTION FIELD HERE AND THERE MUST NEVER BE ONE. A s.394(2)
+ * exemption rests on a WRITTEN DECLARATION the collector holds and must forward
+ * to the Commissioner; the post path LOOKS IT UP by (buyer, section, tax year)
+ * from the declarations table. A `declaration: true` flag on this body would make
+ * the exemption an entry-time opinion — an operator could zero the tax on any
+ * sale by typing a boolean, with no document behind it.
+ *
+ * `pan_available` IS here, because that is a fact about the buyer master rather
+ * than a claim about a document, and getting it wrong raises the rate rather than
+ * removing the tax.
+ */
+export interface TCSRequest {
+  /** The collection key: "206C(1)-SCRAP" or "206C(1F)-MV". */
+  section: string;
+  /** REQUIRED. The declaration's lookup key and the return's collectee. */
+  buyer_ledger_id: string;
+  /** False triggers the penal rate — NOT the deduction side's flat floor. */
+  pan_available?: boolean;
+  /** Fixed-point decimal STRING. The sale consideration collected on. */
+  taxable_amount: Money;
+  /** OPTIONAL; when given the posted TCS leg is verified against the engine. */
+  tcs_ledger_id?: string;
+  /** Selects the effective-dated rate table; empty means the ledger's default. */
+  ruleset_version?: string;
+}
+
+/**
  * ONE LINE OF THE ITEM GRID (server.go's `inventoryLineReq`).
  *
  * Every numeric field is a fixed-4 decimal STRING for the reason every money
@@ -774,6 +853,21 @@ export interface VoucherRequest {
    */
   fulfilments?: FulfilmentInput[];
   gst?: GSTRequest | null;
+  /**
+   * TAX DEDUCTED AT SOURCE on this voucher. See {@link TDSRequest} — including
+   * the warning that this field being expressible is NOT the same as a deduction
+   * being keyable, because no screen renders a TDS panel yet.
+   *
+   * Honoured on any class that states its own postings; the deduction is derived,
+   * cross-checked against the leg the body posts, and PERSISTED, which is what
+   * the TDS/TCS Register and the whole challan mechanism read.
+   */
+  tds?: TDSRequest | null;
+  /**
+   * TAX COLLECTED AT SOURCE. Honoured on SALES only — a collection is made by
+   * the seller. See {@link TCSRequest}.
+   */
+  tcs?: TCSRequest | null;
 }
 
 /**
@@ -1722,6 +1816,17 @@ export interface TDSChallanAllocation {
   section: string;
   /** 0-BASED. Leg 0 is a real leg. */
   leg_seq: number;
+  /**
+   * Which side of the statute this line pays: a DEDUCTION (migration 0050) or a
+   * COLLECTION (migration 0067). It changes the caption, not the arithmetic — on
+   * a "TCS" line `deductee_name` is the BUYER the tax was collected FROM, and
+   * calling them a deductee names the wrong side of the transaction.
+   *
+   * ⚠️ OPTIONAL ONLY BECAUSE OF ITS AGE, NOT BECAUSE THE SERVER MAY OMIT IT: the
+   * real server always sends it, and an ABSENT value means "TDS" — the meaning
+   * every allocation recorded before the collection side existed carries.
+   */
+  kind?: TaxAllocationKind;
   /** Empty when `deduction_on_record` is false — the deduction is gone, so there is nobody to name. */
   deductee_name: string;
   allocated_rupees: Money;
@@ -1800,6 +1905,18 @@ export interface TDSChallan {
 }
 
 /**
+ * Which side of the statute an allocation pays.
+ *
+ * "TDS" is tax DEDUCTED from a supplier the company paid; "TCS" is tax COLLECTED
+ * from a buyer the company sold to. ⛔ The server treats an ABSENT kind as "TDS"
+ * so that a client written before the collection side existed stays correct, but
+ * a client that renders a picker must send it: the two are filed on separate
+ * returns and may not share a challan, and a screen that captioned a collection
+ * as a deduction would name the wrong party as the one taxed.
+ */
+export type TaxAllocationKind = "TDS" | "TCS";
+
+/**
  * One deduction a new challan could pay for — SERVED with the register, and the
  * only reason the deposit form is completable by a human at all.
  *
@@ -1823,11 +1940,30 @@ export interface AllocatableDeduction {
   voucher_id: string;
   /** ⚠️ NOT FOR DISPLAY, and 0-BASED. Sent back unchanged; never defaulted. */
   leg_seq: number;
+  /**
+   * DEDUCTION or COLLECTION — sent back unchanged on the allocation, like the
+   * ids, because it is how the server knows which table to verify the triple
+   * against.
+   *
+   * ⛔ ITS ABSENCE WAS THE WHOLE TCS HALF OF THIS FEATURE (register row D4). The
+   * picker offered deductions only, so a live collection under 206C(1)-SCRAP
+   * appeared nowhere and a collector could never record that it had deposited
+   * what it collected. A screen must label the two differently: on a "TCS" row
+   * `deductee_name` is the BUYER.
+   *
+   * ⚠️ OPTIONAL ONLY BECAUSE OF ITS AGE — the real server always sends it, and an
+   * absent value means "TDS". A screen may therefore read `d.kind ?? "TDS"`, but
+   * it must SEND back what it was served rather than that default.
+   */
+  kind?: TaxAllocationKind;
   /** What a human actually recognises. */
   voucher_no: string;
   deductee_name: string;
   section: string;
-  /** yyyy-mm-dd — the date of the DEDUCTION, not of any deposit. */
+  /**
+   * yyyy-mm-dd — the date the liability arose: the DEDUCTION date, or on a "TCS"
+   * row the COLLECTION date. Never the date of any deposit.
+   */
   deduction_date: string;
   /**
    * What was deducted, and therefore EXACTLY what may be allocated: the write
@@ -1882,10 +2018,25 @@ export interface CreateTDSChallanAllocation {
    */
   leg_seq: number;
   /**
+   * Which table the triple names. OPTIONAL, and an absent value means "TDS" — so
+   * every caller written before the collection side existed stays correct. Send
+   * the `kind` the picker served rather than omitting it: a wrong kind cannot
+   * match the other side's row (the two section vocabularies are disjoint) and
+   * is refused by name, but an omitted one on a collection is refused as "nothing
+   * was deducted on that voucher", which reads like the books are wrong.
+   */
+  kind?: TaxAllocationKind;
+  /**
    * The tax the deduction shows, EXACTLY. The server refuses any inequality,
    * because the stored amount is what makes a later voucher ALTER detectable —
    * a deliberately partial allocation would surface months later as a refusal of
    * the entire quarter, blaming a change nobody made.
+   *
+   * ⚠️ AND THE SUM OF A CHALLAN'S ALLOCATIONS MAY NOT EXCEED ITS `tax_rupees` by
+   * a rupee or more per line (register row D2): a ₹1 deposit was once accepted as
+   * having paid ₹27,000 across two deductees, which marked both as deposited and
+   * made the real deposit unallocatable. Under-allocation is still fine — that is
+   * what {@link AllocateToChallanRequest} is for.
    */
   amount_rupees: Money;
 }
@@ -1936,6 +2087,59 @@ export interface CreateTDSChallanResponse {
    * operator to key the deposit again, and the CIN conflict that follows reads
    * like a bug.
    */
+  challan: TDSChallan | null;
+  read_back_error?: string;
+}
+
+/**
+ * ATTACH FURTHER DEDUCTIONS TO A DEPOSIT THAT IS ALREADY RECORDED.
+ *
+ *   POST /v1/companies/{id}/tds-challans/{challanID}/allocations
+ *
+ * ⛔ THIS ROUTE EXISTS BECAUSE ITS ABSENCE WAS A TRAP AN OPERATOR COULD NOT GET
+ * OUT OF (register row D1). A challan may be recorded naming fewer deductions
+ * than it actually paid for — nothing requires the allocations to cover the tax —
+ * and until this route there was NO way to attach the rest: the create is the
+ * only writer and the same CIN cannot be entered twice. The audit tried seven
+ * doors in the browser and six HTTP methods, and challan 05130's unallocated
+ * balance stayed at exactly 12000.0000 while the return refused the unattached
+ * deduction as never deposited.
+ *
+ * ⚠️ IT IS AN ADD, NOT AN EDIT. It cannot move an allocation off another challan
+ * (that is a 409 naming the challan that has it), cannot change an amount and
+ * cannot remove anything.
+ *
+ * ⚠️ AND IT CAN BE REFUSED BY THE BACK-DATED CUTOFF WITH NO DATE IN THE BODY.
+ * The act adopts the challan's own `deposit_date`, so a deposit made inside a
+ * period an Owner has locked cannot have deductions attached to it afterwards —
+ * the refusal names "deposit date" so the sentence is about a field the operator
+ * can see, even though they typed none.
+ */
+export interface AllocateToChallanRequest {
+  /**
+   * The lines to add, taken from
+   * {@link TDSChallanListResponse.allocatable_deductions} exactly as the create
+   * takes them. An EMPTY array is refused rather than treated as a no-op: it
+   * means the operator ticked nothing, and answering "done" would tell them the
+   * deposit now covers deductions it does not.
+   */
+  allocations: CreateTDSChallanAllocation[];
+  recorded_by: string;
+}
+
+/**
+ * The challan after the allocations were attached.
+ *
+ * ⛔ READ `challan.unallocated_tax_rupees` AND SHOW IT. It is the whole oracle of
+ * this route — the number that could never fall — and a screen that reports
+ * success from the status code alone would look identical whether the balance
+ * moved or not.
+ */
+export interface AllocateToChallanResponse {
+  id: string;
+  tax_year_start: number;
+  tax_year_label: string;
+  /** Null ONLY when the read-back failed; the allocations are committed either way. */
   challan: TDSChallan | null;
   read_back_error?: string;
 }

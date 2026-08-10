@@ -50,6 +50,12 @@ the fix as not working. **Run the full gate, and verify by symbol.**
 | ⛔ **YOUR WORK LIST** | **69 open defects.** §3 groups them into lanes by FILE OWNERSHIP |
 | Gates, measured 2026-08-08 | backend **2483 / 0 SKIP / 0 FAIL**, frontend **1076 / 69 files**, insightd **137**, `tsc` clean, `make verify` **exit 0**, `verify:demo` **33/33** |
 
+> ## ⛔⛔ 2026-08-10 — AN 11-LANE EDIT WAVE WAS LAUNCHED AGAINST §3 AND STOPPED MID-FLIGHT.
+> **Three lanes finished (L12, L5, L13); eight were killed with work in the tree. `master` is RED in four
+> backend packages, 12 frontend tests and `tsc`.** Read **`HANDOFF-WAVE-A-RECOVERY.md` FIRST** — it maps
+> every red test to the lane that caused it and gives the exact next action per lane. Do not start from
+> this file's §3 until that one is empty and deleted.
+
 > ⛔ **L3 IS DONE (§7.3 A, the bank-date cutoff). Do not re-open it.** Its lesson generalises and the next
 > lane should read it: `peekBankDate` could NOT be the "mirror `peekDepositDate`" this file prescribed,
 > because the two stores disagree about what a date is — `masters.validateTDSChallan` parses strictly and

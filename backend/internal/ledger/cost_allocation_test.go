@@ -17,6 +17,7 @@ package ledger
 // other; either one alone would pass under a wrong implementation.
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -119,13 +120,31 @@ func TestAShortAxisIsRefused(t *testing.T) {
 		t.Fatal("Departments allocated only 85,000 of a 1,00,000 salary posting and the split was ACCEPTED. 15,000 of real cost is now attributed to no department: the Cost Centre Summary will disagree with the Profit & Loss by 15,000, and nothing in either report says which axis is short.")
 	}
 	msg := err.Error()
-	for _, want := range []string{"85000.0000", "100000.0000", "15000.0000", catDepartment.String()} {
+	// ⛔ THIS ASSERTION USED TO DEMAND `catDepartment.String()` — THE RAW UUID — AND
+	// THAT WAS D66 WRITTEN DOWN AS AN EXPECTATION. The operator picked "Department"
+	// from a list; they have never seen that id and no screen in this product will
+	// show it to them, so a test insisting the refusal quote one was pinning the
+	// defect in place. Identify the axis the way a person can: by the shares THEY
+	// KEYED, which is what describeAxisShares puts in the message.
+	for _, want := range []string{
+		"85000.0000",  // what the Department axis totals
+		"100000.0000", // the line it must total to
+		"15000.0000",  // the unattributed remainder
+		"60000.0000",  // ...and the two shares that say WHICH axis,
+		"25000.0000",  //    because a person recognises what they typed
+		"Dr",          // the line, named the way the voucher form names it
+	} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("the refusal must tell the operator which axis is short and by how much in rupees; %q is missing from: %s", want, msg)
 		}
 	}
-	if strings.Contains(msg, catBranch.String()) {
-		t.Fatalf("the refusal named the BRANCH axis, which is complete and correct. The operator would go and 'fix' a split that was right. Message: %s", msg)
+	// The BRANCH axis is complete and correct, so nothing of it may appear: neither
+	// its id (which is no longer printed at all) nor — the assertion with real teeth
+	// — its SHARES, which are what an operator would recognise and "go and fix".
+	for _, mustNot := range []string{catBranch.String(), "70000.0000", "30000.0000"} {
+		if strings.Contains(msg, mustNot) {
+			t.Fatalf("the refusal pointed at the BRANCH axis (%q), which is complete and correct. The operator would go and 'fix' a split that was right. Message: %s", mustNot, msg)
+		}
 	}
 	// The BRANCH axis on its own must still be accepted, which is what proves the
 	// refusal above was about Departments being short and not about the request
@@ -233,7 +252,12 @@ func TestValidateCostAllocations(t *testing.T) {
 			allocs: []CostAllocationInput{
 				{PostingSeq: 2, CostCategoryID: catDepartment, CostCentreID: ccSales, Amount: money("100000.0000")},
 			},
-			wantErr: "numbered 0 to 1",
+			// ⛔ THE FRAGMENT USED TO BE "numbered 0 to 1" — a refusal that handed the
+			// operator the 0-based range of `posting_seq`, the one number
+			// CostAllocationPicker.tsx promises no screen will ever display. An
+			// out-of-range index is a defect in the SENDING PROGRAM, so the message
+			// now says that instead of inviting a human to count array slots.
+			wantErr: "an accounting line this voucher does not have",
 		},
 		{
 			name:     "a negative posting_seq",
@@ -241,7 +265,7 @@ func TestValidateCostAllocations(t *testing.T) {
 			allocs: []CostAllocationInput{
 				{PostingSeq: -1, CostCategoryID: catDepartment, CostCentreID: ccSales, Amount: money("100000.0000")},
 			},
-			wantErr: "numbered 0 to 1",
+			wantErr: "an accounting line this voucher does not have",
 		},
 		{
 			// A stock-only voucher (Delivery Note, Stock Journal) posts nothing at
@@ -299,7 +323,7 @@ func TestValidateCostAllocations(t *testing.T) {
 				{PostingSeq: 0, CostCategoryID: catDepartment, CostCentreID: ccSales, Amount: money("60000.0000")},
 				{PostingSeq: 0, CostCategoryID: catDepartment, CostCentreID: ccSales, Amount: money("40000.0000")},
 			},
-			wantErr: "appears twice",
+			wantErr: "allocated TWICE",
 		},
 		{
 			// The SAME centre id on two DIFFERENT axes is NOT a duplicate. A
@@ -335,7 +359,11 @@ func TestValidateCostAllocations(t *testing.T) {
 				{PostingSeq: 0, CostCategoryID: catDepartment, CostCentreID: ccSales, Amount: money("100000.0000")},
 				{PostingSeq: 1, CostCategoryID: catDepartment, CostCentreID: ccSales, Amount: money("60000.0000")},
 			},
-			wantErr: "posting 1 totals 60000.0000",
+			// ⛔ WAS "posting 1 totals 60000.0000". `posting 1` is the 0-based ordinal,
+			// and in single entry it is the operator's FIRST particular — so the old
+			// message aimed them at the wrong row by construction. The line is now
+			// named as the form names it: salaryPostings()[1] is the Cr Bank leg.
+			wantErr: "the Cr 100000.0000 line totals 60000.0000",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -462,5 +490,155 @@ func TestPostAssemblesTheSameSliceItValidates(t *testing.T) {
 	// may sum across them.
 	if !total.Equal(money("200000.0000")) {
 		t.Fatalf("the two parallel axes should total 2,00,000 across a 1,00,000 posting (each axis complete in itself); got %s. If this changed, the fixture no longer exercises parallel allocation.", total.StringFixed(4))
+	}
+}
+
+// TestNoRefusalPrintsAUUIDOrAPostingOrdinal is the CLASS test for D66, and it is
+// deliberately a property over EVERY refusal this file can produce rather than a
+// check on the one message the audit happened to read.
+//
+// ⛔⛔ THE TWO VALUES THIS FEATURE PROMISES NEVER TO SHOW A HUMAN.
+//
+//  1. A COST CATEGORY / COST CENTRE **UUID**. The operator picked "Department"
+//     from a list. They have never seen its primary key, no screen renders one,
+//     and the picker cannot be searched by one — so a refusal quoting it names
+//     the axis to a database and to nobody else.
+//  2. **`posting_seq`.** CostAllocationPicker.tsx's header states the rule for
+//     the whole product: it is a 0-based ordinal no screen displays. Worse than
+//     useless — in single entry the postings array is `[primary, ...particulars]`,
+//     so "posting 1" is the row the operator sees FIRST. A refusal quoting it
+//     sends them to the wrong line by construction.
+//
+// Fixing only the sum message would have left four other sentences on this path
+// still printing both (the out-of-range check, the missing-axis check, the
+// missing-centre check, the duplicate check). Every refusal is walked here so a
+// message added later cannot quietly reintroduce either.
+func TestNoRefusalPrintsAUUIDOrAPostingOrdinal(t *testing.T) {
+	// A v4/v7 UUID in any message, and any phrasing that hands over an ordinal.
+	uuidRe := regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
+	ordinalRe := regexp.MustCompile(`(?i)posting[_ ]?(seq|\d|number|index)|line \d+ of|numbered \d`)
+
+	for _, tc := range []struct {
+		name     string
+		postings []PostingInput
+		allocs   []CostAllocationInput
+	}{
+		{
+			name:     "sequence past the end",
+			postings: salaryPostings(),
+			allocs: []CostAllocationInput{
+				{PostingSeq: 7, CostCategoryID: catDepartment, CostCentreID: ccSales, Amount: money("100000.0000")},
+			},
+		},
+		{
+			name:     "no postings at all",
+			postings: nil,
+			allocs: []CostAllocationInput{
+				{PostingSeq: 0, CostCategoryID: catDepartment, CostCentreID: ccSales, Amount: money("100.0000")},
+			},
+		},
+		{
+			name:     "no axis",
+			postings: salaryPostings(),
+			allocs: []CostAllocationInput{
+				{PostingSeq: 0, CostCentreID: ccSales, Amount: money("100000.0000")},
+			},
+		},
+		{
+			name:     "no centre",
+			postings: salaryPostings(),
+			allocs: []CostAllocationInput{
+				{PostingSeq: 0, CostCategoryID: catDepartment, Amount: money("100000.0000")},
+			},
+		},
+		{
+			name:     "a zero share",
+			postings: salaryPostings(),
+			allocs: []CostAllocationInput{
+				{PostingSeq: 0, CostCategoryID: catDepartment, CostCentreID: ccSales, Amount: decimal.Zero},
+			},
+		},
+		{
+			name:     "the same centre twice",
+			postings: salaryPostings(),
+			allocs: []CostAllocationInput{
+				{PostingSeq: 0, CostCategoryID: catDepartment, CostCentreID: ccSales, Amount: money("60000.0000")},
+				{PostingSeq: 0, CostCategoryID: catDepartment, CostCentreID: ccSales, Amount: money("40000.0000")},
+			},
+		},
+		{
+			name:     "a short axis",
+			postings: salaryPostings(),
+			allocs: []CostAllocationInput{
+				{PostingSeq: 0, CostCategoryID: catDepartment, CostCentreID: ccSales, Amount: money("60000.0000")},
+			},
+		},
+		{
+			name:     "an over-allocated axis",
+			postings: salaryPostings(),
+			allocs: []CostAllocationInput{
+				{PostingSeq: 0, CostCategoryID: catDepartment, CostCentreID: ccSales, Amount: money("160000.0000")},
+			},
+		},
+		{
+			// The SECOND posting, so a message that leaked the ordinal would print a
+			// non-zero one — the case a fixture pinned to posting 0 cannot see, since
+			// "0" hides inside amounts like "100000.0000".
+			name:     "a short axis on the second line",
+			postings: salaryPostings(),
+			allocs: []CostAllocationInput{
+				{PostingSeq: 1, CostCategoryID: catBranch, CostCentreID: ccMumbai, Amount: money("60000.0000")},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateCostAllocations(tc.postings, tc.allocs)
+			if err == nil {
+				t.Fatal("this input must be refused; the case proves nothing about the wording of a refusal that never happens")
+			}
+			msg := err.Error()
+			if m := uuidRe.FindString(msg); m != "" {
+				t.Fatalf("the refusal an operator reads quotes a raw UUID (%s). They picked a name from a list and no screen in this product shows an id, so this sentence names the axis to a database and to nobody else.\n  %s", m, msg)
+			}
+			if m := ordinalRe.FindString(msg); m != "" {
+				t.Fatalf("the refusal an operator reads quotes a posting ordinal (%q). posting_seq is 0-based over [primary, ...particulars], so it points at the row BEFORE the one meant — CostAllocationPicker.tsx states that no screen may ever display it.\n  %s", m, msg)
+			}
+		})
+	}
+}
+
+// TestARefusalNamesTheLineTheWayTheFormDoes is the positive half: having taken
+// the ordinal away, the message must still say WHICH line — otherwise D66 has
+// been traded for a refusal nobody can act on at all, which is the failure mode
+// RULE 3 is about.
+func TestARefusalNamesTheLineTheWayTheFormDoes(t *testing.T) {
+	// The Cr leg, so "Dr"/"Cr" actually discriminates.
+	err := validateCostAllocations(salaryPostings(), []CostAllocationInput{
+		{PostingSeq: 1, CostCategoryID: catBranch, CostCentreID: ccMumbai, Amount: money("60000.0000")},
+	})
+	if err == nil {
+		t.Fatal("a 60,000 allocation against a 1,00,000 line was accepted")
+	}
+	if !strings.Contains(err.Error(), "the Cr 100000.0000 line") {
+		t.Fatalf("the refusal must name the line by its SIDE and AMOUNT — both of which are on the form in front of the operator: %s", err.Error())
+	}
+
+	// ⚠️ AND WHEN SIDE + AMOUNT IS AMBIGUOUS IT SAYS SO. Two identical Dr legs are
+	// legal (two 5,000 expense lines), and "the Dr 5000.0000 line" would then point
+	// at both. The disambiguator counts LINES ON THE SCREEN, 1-based, which is
+	// something a person can do with their eyes — it is not the wire ordinal.
+	twins := []PostingInput{
+		{LedgerID: ledSalaries, DrCr: Debit, Amount: money("5000.0000")},
+		{LedgerID: ledSalaries, DrCr: Debit, Amount: money("5000.0000")},
+		{LedgerID: ledBank, DrCr: Credit, Amount: money("10000.0000")},
+	}
+	err = validateCostAllocations(twins, []CostAllocationInput{
+		{PostingSeq: 1, CostCategoryID: catDepartment, CostCentreID: ccSales, Amount: money("2000.0000")},
+	})
+	if err == nil {
+		t.Fatal("a 2,000 allocation against a 5,000 line was accepted")
+	}
+	if !strings.Contains(err.Error(), "the second of 2 lines that read the same") {
+		t.Fatalf("with two identical Dr legs the refusal must say WHICH of them, by counting what is on screen: %s", err.Error())
 	}
 }

@@ -212,6 +212,26 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if locked {
+		// D73 — AUDIT THE KNOCK, NOT ONLY THE BREAK-IN. This branch used to
+		// write the 423 and return, so every attempt made DURING a lock window
+		// left no trace anywhere: an investigator asking "what happened while
+		// that account was locked?" — the exact question a lock makes worth
+		// asking — got silence, and could not distinguish an operator who
+		// mistyped twice more from a campaign that hammered the account for
+		// fifteen minutes.
+		//
+		// ⛔ IT IS NOT RecordFailure. This attempt never reached a password
+		// check, and counting it toward the threshold would let the lock renew
+		// itself off its own refusals (see authn.RecordLockedOutAttempt and
+		// migration 0074's outcome column). Recorded, never counted.
+		//
+		// A store failure here is a 500 rather than a 423, matching every other
+		// lockout-store failure in this handler: the refusal stands either way,
+		// and the two cases only differ when the database is broken.
+		if aerr := s.lockout.RecordLockedOutAttempt(ctx, req.Subject, ip); aerr != nil {
+			writeError(w, http.StatusInternalServerError, "record attempt")
+			return
+		}
 		writeLocked(w, until)
 		return
 	}
@@ -316,10 +336,22 @@ type setPasswordReq struct {
 // budget and appear in the same auth_login_attempt audit trail. Without that
 // this route would be an unthrottled brute-force oracle sitting beside a
 // throttled one. Deliberately asymmetric with /auth/login in two ways:
-// (a) it does NOT call IsLocked up front, because being locked out of
-// /auth/login should not also prevent an already-authenticated user from
-// completing a password change; and (b) it does NOT call RecordSuccess, so
-// changing a password is not a way to clear an active lock.
+// (a) it does NOT call IsLocked up front; and (b) it does NOT call
+// RecordSuccess, so changing a password is not a way to clear an active lock.
+//
+// ⛔ (a) NO LONGER MEANS WHAT IT USED TO SAY, AND THE CORRECTION MATTERS. The
+// original reason was "being locked out of /auth/login should not also prevent
+// an already-authenticated user from completing a password change". That was
+// written when a lock could revoke nothing, and it amounted to letting a STOLEN
+// session set a new password and keep the account — the one thing a lock exists
+// to stop. Since D56 the route is unreachable while locked anyway: it is mounted
+// under authnOnlyMiddleware, whose authenticate() refuses a revoked or
+// currently-locked subject with 401 before this handler is entered (see
+// auth_revocation.go). The absence of an IsLocked call here now says "this
+// handler needs no copy of the check", not "a locked user may change their
+// password". The way back in for a locked account is the administrative unlock
+// (D55, PUT /members/{userID} with `unlock`), not the session the lock was
+// aimed at.
 //
 // The acting identity comes from db.UserFromContext / db.SubjectFromContext,
 // populated by authnOnlyMiddleware from the verified token. The store's write is

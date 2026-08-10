@@ -304,10 +304,72 @@ func printPeriodSubtitle(from, to string) string {
 	}
 }
 
-// printLabelRow is a full-width note row: one cell, the rest padded by the
-// renderer (layoutRows pads a short row and errors only on a LONG one).
+// printLabelRow is a note row: one cell, the rest padded by the renderer
+// (layoutRows pads a short row and errors only on a LONG one).
+//
+// ⚠️ IT IS NOT FULL WIDTH, WHATEVER ITS NAME ONCE SAID. There is no column
+// spanning in layoutRows: a cell is confined to ITS OWN COLUMN, wrapped to at
+// most four lines and then ellipsised. On a table whose first column is the
+// 2-wide "Date", a sentence put here is present on the page and unreadable —
+// which is how the Day Book's footer came to read "20 voucher version(s) in this
+// period. No column total is...". Use printNoteRows for anything longer than a
+// column heading; this stays for the SHORT labels that genuinely fit.
 func printLabelRow(text string) printing.Row {
 	return printing.Row{Cells: []string{text}}
+}
+
+// printNoteRows lays a NOTE into the widest label column of a table, as as many
+// SINGLE-LINE rows as it takes.
+//
+// ⛔ WHY THE WRAPPING IS DONE HERE AND NOT LEFT TO THE RENDERER. layoutRows will
+// wrap a cell, but only to reportMaxCellLines (four) and then it truncates with
+// an ellipsis — and a multi-line FOOTER row also breaks the renderer's footer
+// reserve, which measures footer rows assuming one line each. One line per row
+// keeps both properties true, and it makes the line breaks something this file
+// can be tested on.
+//
+// ⚠️ THE GEOMETRY BELOW MIRRORS internal/printing/report.go (A4 with a half-inch
+// margin, columns divided in their relative weights, reportCellPad each side,
+// Helvetica at reportBodySize). Mirroring is a duplicate that can drift, so it is
+// deliberately CONSERVATIVE — it wraps to 92% of the true width — and it is
+// backed by a test that extracts the text of a rendered PDF and fails if the
+// note is not on the page in full, which is the only assertion that cannot be
+// fooled by the mirror going stale.
+func printNoteRows(cols []printing.Column, landscape bool, text string) []printing.Row {
+	if len(cols) == 0 || strings.TrimSpace(text) == "" {
+		return nil
+	}
+	// The WIDEST LEFT-ALIGNED column: a right-aligned one is a figure column, and
+	// a sentence in it would be refused outright (ErrFigureColumnTooNarrow).
+	idx, best := -1, 0.0
+	total := 0.0
+	for i, c := range cols {
+		total += c.Width
+		if c.Align != printing.AlignRight && c.Width > best {
+			idx, best = i, c.Width
+		}
+	}
+	if idx < 0 || total <= 0 {
+		return []printing.Row{{Cells: []string{text}}}
+	}
+
+	page := printing.A4Portrait
+	if landscape {
+		page = printing.A4Landscape
+	}
+	const margin, cellPad, bodySize = 36.0, 3.0, 8.5
+	avail := ((page.Width-2*margin)*best/total - 2*cellPad) * 0.92
+	if avail <= 0 {
+		return []printing.Row{{Cells: []string{text}}}
+	}
+
+	var out []printing.Row
+	for _, line := range printing.Wrap(printing.Helvetica, bodySize, text, avail) {
+		cells := make([]string, len(cols))
+		cells[idx] = line
+		out = append(out, printing.Row{Cells: cells})
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------
@@ -508,6 +570,24 @@ func (s *Server) printDayBook(ctx context.Context, w http.ResponseWriter, r *htt
 		return printing.ReportTable{}, false
 	}
 
+	// The columns are named here rather than inline in the table literal because
+	// the footer note has to be laid out AGAINST them — see printNoteRows.
+	cols := []printing.Column{
+		{Header: "Date", Align: printing.AlignLeft, Width: 2},
+		{Header: "Voucher No", Align: printing.AlignLeft, Width: 2},
+		{Header: "Type", Align: printing.AlignLeft, Width: 2.5},
+		{Header: "Class", Align: printing.AlignLeft, Width: 2},
+		// THE OPERATION, and it is not padding. Every row is the voucher's CURRENT
+		// version, so this column says whether the document an operator is looking
+		// at is as first keyed (CREATE) or has been RESTATED since (ALTER) — which
+		// is the difference between "this is what was agreed" and "this was changed
+		// after the fact", and the only place on the page it can be read.
+		{Header: "Op", Align: printing.AlignLeft, Width: 1.5},
+		{Header: "Party", Align: printing.AlignLeft, Width: 3},
+		{Header: "Narration", Align: printing.AlignLeft, Width: 5},
+		{Header: "Amount", Align: printing.AlignRight, Width: 2.5},
+	}
+
 	rows := make([]printing.Row, 0, len(dbk.Entries))
 	for _, e := range dbk.Entries {
 		// Debit and Credit are equal by double entry (reporting surfaces both so a
@@ -519,37 +599,45 @@ func (s *Server) printDayBook(ctx context.Context, w http.ResponseWriter, r *htt
 		}})
 	}
 
+	// ⛔ DELIBERATELY NO COLUMN TOTAL, AND THE FOOTER HAD TO SAY SO TRUTHFULLY.
+	//
+	// It used to say "an altered voucher appears as both its original and its
+	// restatement, so a sum of the amounts would count the edit twice", and that
+	// was FALSE FOR THIS BUILD: reporting.DayBook joins voucher_head on
+	// current_version_id and filters is_deleted, so the report is exactly ONE ROW
+	// PER LIVE VOUCHER — no superseded version, no tombstone. A footer explaining
+	// the absence of a total with a reason that does not apply teaches an operator
+	// something wrong about their own Day Book, and it is the only sentence on the
+	// page that explains anything.
+	//
+	// The real reason a total would be meaningless is stronger, not weaker: these
+	// rows are vouchers of every CLASS, so a sale and the receipt that settles it
+	// both appear, and adding them counts the same money twice. That is a fact
+	// about double entry, not about editing.
+	//
+	// ⛔ AND IT IS PLACED WITH printNoteRows RATHER THAN IN CELL 0. The old footer
+	// was one long cell in the 2-wide "Date" column, so the renderer wrapped it to
+	// four lines and cut it off mid-sentence at "No column total is..." — present
+	// on the page, unreadable, and unnoticed because nobody re-reads a footer.
+	footer := []printing.Row{{
+		Cells:     []string{strconv.Itoa(len(dbk.Entries)) + " voucher(s) in this period"},
+		Bold:      true,
+		RuleAbove: true,
+	}}
+	footer = append(footer, printNoteRows(cols, true,
+		"One line per voucher, at its CURRENT version: a voucher altered since it was "+
+			"keyed appears once, restated, and is marked ALTER in the Op column; a deleted "+
+			"voucher does not appear at all. No column total is printed — these rows are "+
+			"vouchers of every class, so a sale and the receipt that settles it both appear "+
+			"here, and adding them would count the same money twice.")...)
+
 	return printing.ReportTable{
 		Title:     "Day Book",
 		Subtitle:  printPeriodSubtitle(dbk.From, dbk.To),
 		Landscape: true,
-		Columns: []printing.Column{
-			{Header: "Date", Align: printing.AlignLeft, Width: 2},
-			{Header: "Voucher No", Align: printing.AlignLeft, Width: 2},
-			{Header: "Type", Align: printing.AlignLeft, Width: 2.5},
-			{Header: "Class", Align: printing.AlignLeft, Width: 2},
-			// The OPERATION, and it is not padding. DayBook lists every posted
-			// VERSION as its own dated event, so an ALTER restatement and a DELETE
-			// tombstone each appear as a line. Without this column an alter reads
-			// as a second, separate voucher for the same number.
-			{Header: "Op", Align: printing.AlignLeft, Width: 1.5},
-			{Header: "Party", Align: printing.AlignLeft, Width: 3},
-			{Header: "Narration", Align: printing.AlignLeft, Width: 5},
-			{Header: "Amount", Align: printing.AlignRight, Width: 2.5},
-		},
-		Rows: rows,
-		// DELIBERATELY NO COLUMN TOTAL. The entries are voucher VERSIONS: an
-		// altered voucher contributes its original and its restatement, and a
-		// deleted one contributes a tombstone. A sum of the amount column would
-		// therefore double-count every edit in the period and print a "total"
-		// that ties to nothing in the ledger. The count is the honest footer.
-		Footer: []printing.Row{{
-			Cells: []string{strconv.Itoa(len(dbk.Entries)) + " voucher version(s) in this period. " +
-				"No column total is printed: an altered voucher appears as both its original " +
-				"and its restatement, so a sum of the amounts would count the edit twice."},
-			Bold:      true,
-			RuleAbove: true,
-		}},
+		Columns:   cols,
+		Rows:      rows,
+		Footer:    footer,
 	}, true
 }
 
@@ -681,6 +769,26 @@ func (s *Server) printStockSummary(ctx context.Context, w http.ResponseWriter, r
 		}
 	}
 
+	// ⛔ TEN COLUMNS, AND EVERY QUANTITY HAS ITS VALUE BESIDE IT. Do not "simplify"
+	// this to match the on-screen Stock Summary, which shows seven and puts a
+	// QUANTITY under "Inward" immediately beside a MONEY figure under "Outward (at
+	// cost)". The paper is the side that is right: a movement report that shows
+	// what came in as units and what went out as rupees cannot be read down either
+	// column, and the reader has no way to see which is which. The screen is the
+	// one that has to change.
+	cols := []printing.Column{
+		{Header: "Item / Location", Align: printing.AlignLeft, Width: 4},
+		{Header: "Unit", Align: printing.AlignLeft, Width: 1},
+		{Header: "Opening Qty", Align: printing.AlignRight, Width: 1.8},
+		{Header: "Opening Value", Align: printing.AlignRight, Width: 2.2},
+		{Header: "Inward Qty", Align: printing.AlignRight, Width: 1.8},
+		{Header: "Inward Value", Align: printing.AlignRight, Width: 2.2},
+		{Header: "Outward Qty", Align: printing.AlignRight, Width: 1.8},
+		{Header: "Outward Value", Align: printing.AlignRight, Width: 2.2},
+		{Header: "Closing Qty", Align: printing.AlignRight, Width: 1.8},
+		{Header: "Closing Value", Align: printing.AlignRight, Width: 2.2},
+	}
+
 	footer := []printing.Row{{
 		Cells: []string{"Closing value of the whole inventory", "", "", "", "", "", "", "", "",
 			printMoney(sum.TotalValue)},
@@ -690,29 +798,23 @@ func (s *Server) printStockSummary(ctx context.Context, w http.ResponseWriter, r
 	// A statement must be able to state its own basis. Nothing on this report is
 	// stored — every figure is a replay of the movement ledger through a valuer —
 	// so a reader who cannot see WHICH valuer ran cannot check any of it.
+	//
+	// Placed with printNoteRows: cell 0 here is the 4-wide "Item / Location"
+	// column, which holds about thirty characters a line, so this sentence was
+	// being cut off with an ellipsis at exactly the point where it names the
+	// valuer's consequence.
 	if b := printSortedKeys(bases); b != "" {
-		footer = append(footer, printLabelRow("Valuation basis: "+b+
-			". Value is never stored; every figure above is a replay of the movement ledger."))
+		footer = append(footer, printNoteRows(cols, true, "Valuation basis: "+b+
+			". Value is never stored; every figure above is a replay of the movement ledger.")...)
 	}
 
 	return printing.ReportTable{
 		Title:     "Stock Summary",
 		Subtitle:  printAsOnSubtitle(sum.AsOn),
 		Landscape: true,
-		Columns: []printing.Column{
-			{Header: "Item / Location", Align: printing.AlignLeft, Width: 4},
-			{Header: "Unit", Align: printing.AlignLeft, Width: 1},
-			{Header: "Opening Qty", Align: printing.AlignRight, Width: 1.8},
-			{Header: "Opening Value", Align: printing.AlignRight, Width: 2.2},
-			{Header: "Inward Qty", Align: printing.AlignRight, Width: 1.8},
-			{Header: "Inward Value", Align: printing.AlignRight, Width: 2.2},
-			{Header: "Outward Qty", Align: printing.AlignRight, Width: 1.8},
-			{Header: "Outward Value", Align: printing.AlignRight, Width: 2.2},
-			{Header: "Closing Qty", Align: printing.AlignRight, Width: 1.8},
-			{Header: "Closing Value", Align: printing.AlignRight, Width: 2.2},
-		},
-		Rows:   rows,
-		Footer: footer,
+		Columns:   cols,
+		Rows:      rows,
+		Footer:    footer,
 	}, true
 }
 
@@ -772,6 +874,22 @@ func (s *Server) printPayrollRegister(ctx context.Context, w http.ResponseWriter
 		return printing.ReportTable{}, false
 	}
 
+	// Hoisted so the footer notes can be laid out against them (printNoteRows).
+	cols := []printing.Column{
+		{Header: "Code", Align: printing.AlignLeft, Width: 2.2},
+		{Header: "Employee", Align: printing.AlignLeft, Width: 4},
+		{Header: "Days", Align: printing.AlignRight, Width: 1.2},
+		{Header: "Gross", Align: printing.AlignRight, Width: 2},
+		{Header: "EPF (empl)", Align: printing.AlignRight, Width: 2},
+		{Header: "ESI (empl)", Align: printing.AlignRight, Width: 2},
+		{Header: "TDS", Align: printing.AlignRight, Width: 2},
+		{Header: "Deductions", Align: printing.AlignRight, Width: 2},
+		{Header: "Net Pay", Align: printing.AlignRight, Width: 2},
+		{Header: "EPF (emplr)", Align: printing.AlignRight, Width: 2},
+		{Header: "EPS (emplr)", Align: printing.AlignRight, Width: 2},
+		{Header: "ESI (emplr)", Align: printing.AlignRight, Width: 2},
+	}
+
 	rows := make([]printing.Row, 0, len(reg.Rows))
 	for _, row := range reg.Rows {
 		rows = append(rows, printing.Row{Cells: []string{
@@ -800,32 +918,26 @@ func (s *Server) printPayrollRegister(ctx context.Context, w http.ResponseWriter
 	// which law produced it cannot be checked by anybody who was not present when
 	// the run happened, and a register is exactly the document somebody checks a
 	// year later.
-	footer = append(footer,
-		printLabelRow("Social-security ruleset: "+reg.SSRuleSetVersion+
-			"   Income-tax ruleset: "+reg.ITRuleSetVersion),
-		printLabelRow("The employer's contributions are NOT part of gross pay and are "+
-			"not included in it: they are a separate cost to the company."))
+	//
+	// ⛔ IN THE WIDE COLUMN, NOT IN CELL 0. Cell 0 here is the 2.2-wide "Code"
+	// column: the second sentence below is 120 characters and was being wrapped to
+	// four short lines and then cut off, so the one statement on the page that
+	// stops an employer contribution being read as part of somebody's pay was
+	// unreadable.
+	footer = append(footer, printNoteRows(cols, true,
+		"Social-security ruleset: "+reg.SSRuleSetVersion+
+			"   Income-tax ruleset: "+reg.ITRuleSetVersion)...)
+	footer = append(footer, printNoteRows(cols, true,
+		"The employer's contributions are NOT part of gross pay and are "+
+			"not included in it: they are a separate cost to the company.")...)
 
 	return printing.ReportTable{
 		Title:     "Payroll Register",
 		Subtitle:  "Wage month " + reg.WageMonth + " — pay run " + reg.Status,
 		Landscape: true,
-		Columns: []printing.Column{
-			{Header: "Code", Align: printing.AlignLeft, Width: 2.2},
-			{Header: "Employee", Align: printing.AlignLeft, Width: 4},
-			{Header: "Days", Align: printing.AlignRight, Width: 1.2},
-			{Header: "Gross", Align: printing.AlignRight, Width: 2},
-			{Header: "EPF (empl)", Align: printing.AlignRight, Width: 2},
-			{Header: "ESI (empl)", Align: printing.AlignRight, Width: 2},
-			{Header: "TDS", Align: printing.AlignRight, Width: 2},
-			{Header: "Deductions", Align: printing.AlignRight, Width: 2},
-			{Header: "Net Pay", Align: printing.AlignRight, Width: 2},
-			{Header: "EPF (emplr)", Align: printing.AlignRight, Width: 2},
-			{Header: "EPS (emplr)", Align: printing.AlignRight, Width: 2},
-			{Header: "ESI (emplr)", Align: printing.AlignRight, Width: 2},
-		},
-		Rows:   rows,
-		Footer: footer,
+		Columns:   cols,
+		Rows:      rows,
+		Footer:    footer,
 	}, true
 }
 

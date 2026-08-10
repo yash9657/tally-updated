@@ -2,8 +2,9 @@ package server
 
 // HTTP surface for the TDS CHALLAN — T6, migration 0069.
 //
-//	GET  .../tds-challans?tax_year_start=2026  -> Display / tds-challan
-//	POST .../tds-challans                     -> Create  / tds-challan
+//	GET  .../tds-challans?tax_year_start=2026        -> Display / tds-challan
+//	POST .../tds-challans                            -> Create  / tds-challan
+//	POST .../tds-challans/{challanID}/allocations    -> Create  / tds-challan
 //
 // This is the deposit slip: what was paid to the Government, when, through which
 // bank branch, and — the half that makes a return buildable at all — WHICH
@@ -44,15 +45,24 @@ package server
 // for reconciliation-queue (auth_middleware.go records it).
 //
 // ---------------------------------------------------------------------------
-// WHY THE WRITE IS A POST AND THERE IS NO PUT, NO PATCH AND NO DELETE
+// WHY EVERY WRITE IS A POST AND THERE IS NO PUT, NO PATCH AND NO DELETE
 // ---------------------------------------------------------------------------
 // A challan is an EVENT that happened at a bank counter, not a row an operator
 // maintains. It has no natural key an operator would restate — the CIN is unique
 // and re-posting the same one is ErrDuplicateTDSChallanCIN and never an upsert,
 // because the second post of one CIN is either a double entry or a second real
 // deposit whose number was mistyped, and silently overwriting either loses money.
-// masters.RecordTDSChallan is a create and nothing else; re-allocation and
-// correction are not in this slice, and its file header says what that costs.
+//
+// ⛔ THE SECOND POST IS AN ADD, NOT AN EDIT (register row D1). A deposit may
+// legitimately be recorded naming fewer deductions than it paid for, and until
+// this route existed the remainder could NEVER be attached to it — the audit
+// drove seven in-browser doors and six HTTP methods at challan 05130 and its
+// unallocated balance stayed at exactly 12000.0000, while the return refused the
+// unattached deduction as undeposited. So .../allocations is a POST because it
+// CREATES allocations that were not there; it cannot move one off another
+// challan, change an amount or remove anything. Correcting a challan still means
+// correcting it in the database, and masters/tds_challan.go's header says what
+// the right shape for that would be.
 //
 // ---------------------------------------------------------------------------
 // MONEY ON THE WIRE
@@ -69,17 +79,29 @@ package server
 // and it CAN BE NEGATIVE. tds_deduction.tds_amount_rupees is rounded to 4 dp
 // (₹33,333 at 10% is ₹3,333.30) while the deposit against it must be a whole
 // number, so a difference of a few paise per allocation is the ordinary case and
-// not an error. The store imposes no relation between the two and neither does
-// this route; the difference is REPORTED so a human can read it. Whether the
-// prescribed format requires a challan's tax total to equal the sum of its
-// deductee "tax deposited" figures is UNVERIFIED — see the store's notes. Do not
-// close that by inventing a refusal here.
+// not an error. The difference is REPORTED so a human can read it, and this
+// route still invents no equality: whether the prescribed format requires a
+// challan's tax total to equal the sum of its deductee "tax deposited" figures
+// is UNVERIFIED, and requiring it would refuse legitimate rounded deposits.
+//
+// ⛔ WHAT DID CHANGE, AND WHY IT IS NOT THAT EQUALITY (register row D2). The
+// store now refuses an allocation total that exceeds the deposit BY A RUPEE OR
+// MORE PER ALLOCATION — the largest difference rounding can produce — because
+// nothing compared the two at all and a ₹1 deposit was accepted as having paid
+// ₹27,000.0000 of tax across two deductees. Both were then marked "already
+// deposited", so the real deposit could never be allocated to them, and
+// unallocated_tax_rupees read -26999.0000 under a caption written for the ordinary
+// paise remainder. UNDER-allocation is still legal and still just reported; only
+// the over-claim is refused. See masters.overAllocationRefusal for the derivation
+// of the tolerance, and do not turn it into an equality.
 
 import (
 	"errors"
 	"net/http"
 	"strconv"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
 	"github.com/khata/cored/internal/masters"
@@ -102,6 +124,19 @@ type tdsChallanAllocationReq struct {
 	// disagree — which it will not when the voucher has one leg under that
 	// section. Refused by name instead.
 	LegSeq *int `json:"leg_seq"`
+	// Kind is "TDS" (a deduction, migration 0050) or "TCS" (a collection,
+	// migration 0067). It is served on every allocatable row and sent back
+	// unchanged, exactly as voucher_id and leg_seq are.
+	//
+	// ⚠️ EMPTY MEANS TDS, which is the OPPOSITE call from LegSeq directly above,
+	// and the difference is whether a wrong default can pass silently. An omitted
+	// leg_seq means leg 0, which is a real leg and would be recorded as paid with
+	// nothing to catch it. An omitted kind means a lookup in tds_deduction, and
+	// the two section vocabularies are disjoint by CHECK — so if the operator
+	// meant a collection, NOTHING matches and the request is refused by name. The
+	// default also keeps every client written before D4 correct rather than
+	// silently wrong.
+	Kind string `json:"kind"`
 	// AmountRupees is a fixed-point string, and it must EQUAL the tax the
 	// deduction shows. The store refuses any inequality and its message says
 	// why: reporting treats an inequality as an allocation broken by an ALTER
@@ -163,6 +198,10 @@ type tdsChallanAllocationView struct {
 	VoucherNo string `json:"voucher_no"`
 	Section   string `json:"section"`
 	LegSeq    int    `json:"leg_seq"`
+	// Kind is "TDS" or "TCS", recovered from which table carries this natural
+	// key. A screen needs it to caption the party correctly: on a TCS row the
+	// name is the BUYER the tax was collected FROM, not a deductee it was paid to.
+	Kind string `json:"kind"`
 	// DeducteeName is empty when DeductionOnRecord is false — the deduction is
 	// gone, so there is nobody to name.
 	DeducteeName    string `json:"deductee_name"`
@@ -225,6 +264,7 @@ func toTDSChallanView(c masters.TDSChallanRecord) tdsChallanView {
 			VoucherNo:          a.VoucherNo,
 			Section:            a.Section,
 			LegSeq:             a.LegSeq,
+			Kind:               string(a.Kind),
 			DeducteeName:       a.DeducteeName,
 			AllocatedRupees:    a.AllocatedRupees.StringFixed(4),
 			DeductionOnRecord:  a.DeductionOnRecord,
@@ -344,8 +384,13 @@ func (s *Server) handleListTDSChallans(w http.ResponseWriter, r *http.Request) {
 type allocatableDeductionView struct {
 	// VoucherID and LegSeq are here so the client can send them back, NOT so a
 	// human can read them. See the note at the call site.
-	VoucherID     string `json:"voucher_id"`
-	LegSeq        int    `json:"leg_seq"`
+	VoucherID string `json:"voucher_id"`
+	LegSeq    int    `json:"leg_seq"`
+	// Kind is "TDS" or "TCS". It travels for the same reason the ids do — the
+	// write path needs it to know which table to verify the triple against — and
+	// a screen needs it to say whether the row is tax DEDUCTED from a supplier or
+	// COLLECTED from a buyer.
+	Kind          string `json:"kind"`
 	VoucherNo     string `json:"voucher_no"`
 	DeducteeName  string `json:"deductee_name"`
 	Section       string `json:"section"`
@@ -365,6 +410,7 @@ func allocatableViews(in []masters.AllocatableDeduction) []allocatableDeductionV
 		out = append(out, allocatableDeductionView{
 			VoucherID:     a.VoucherID.String(),
 			LegSeq:        a.LegSeq,
+			Kind:          string(a.Kind),
 			VoucherNo:     a.VoucherNo,
 			DeducteeName:  a.DeducteeName,
 			Section:       a.Section,
@@ -427,41 +473,11 @@ func (s *Server) handleCreateTDSChallan(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// ---- The allocations. -------------------------------------------------
-	in.Allocations = make([]masters.TDSChallanAllocationInput, 0, len(req.Allocations))
-	for i, a := range req.Allocations {
-		at := "allocation " + strconv.Itoa(i+1)
-		voucherID, verr := optionalUUID(a.VoucherID)
-		if verr != nil {
-			writeError(w, http.StatusBadRequest, at+": invalid voucher_id")
-			return
-		}
-		// 0 IS A REAL LEG, so an absent leg_seq is refused rather than defaulted.
-		// Defaulting would allocate to the first leg of the voucher, and nothing
-		// downstream would catch it whenever that voucher carries a single
-		// deduction under the section — the amount equality would pass and the
-		// wrong leg would be recorded as paid.
-		if a.LegSeq == nil {
-			writeError(w, http.StatusBadRequest,
-				at+": leg_seq is required and is NOT defaulted. The deduction key is "+
-					"(voucher, section, leg) and the leg ordinal is 0-based, so leg 0 is a real "+
-					"leg — an omitted field would silently mean the first one")
-			return
-		}
-		amount, aerr := decimal.NewFromString(a.AmountRupees)
-		if aerr != nil {
-			writeError(w, http.StatusBadRequest,
-				at+": amount_rupees must be a fixed-point decimal string, and it must be the "+
-					"tax that was deducted on that leg — it is what makes a later voucher ALTER "+
-					"detectable, so it is stated rather than derived")
-			return
-		}
-		in.Allocations = append(in.Allocations, masters.TDSChallanAllocationInput{
-			VoucherID:    voucherID,
-			Section:      a.Section,
-			LegSeq:       *a.LegSeq,
-			AmountRupees: amount,
-		})
+	allocations, ok := buildChallanAllocations(w, req.Allocations)
+	if !ok {
+		return
 	}
+	in.Allocations = allocations
 
 	id, err := s.masters.RecordTDSChallan(r.Context(), in, req.RecordedBy)
 	if err != nil {
@@ -501,17 +517,178 @@ func (s *Server) handleCreateTDSChallan(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusCreated, out)
 }
 
+// buildChallanAllocations decodes the allocation grid, writing a 400 and
+// returning ok=false on the first malformed line.
+//
+// ⛔ ONE DECODER FOR BOTH WRITE PATHS. The create and the allocate-later route
+// send the SAME line shape, and a second copy of these three refusals is a copy
+// that drifts — with the drifted one winning for whichever caller reaches it
+// first. That is the shape §7.2 of the parity audit records six times over for
+// the cutoff's peeks, one layer down.
+//
+// The kind is NOT validated here: masters.normaliseAllocationKind owns the
+// vocabulary and refuses an unknown one by name, and a second copy of a closed
+// vocabulary in the HTTP layer is exactly what the minor heads are SERVED to
+// avoid.
+func buildChallanAllocations(w http.ResponseWriter,
+	in []tdsChallanAllocationReq) ([]masters.TDSChallanAllocationInput, bool) {
+	out := make([]masters.TDSChallanAllocationInput, 0, len(in))
+	for i, a := range in {
+		at := "allocation " + strconv.Itoa(i+1)
+		voucherID, verr := optionalUUID(a.VoucherID)
+		if verr != nil {
+			writeError(w, http.StatusBadRequest, at+": invalid voucher_id")
+			return nil, false
+		}
+		// 0 IS A REAL LEG, so an absent leg_seq is refused rather than defaulted.
+		// Defaulting would allocate to the first leg of the voucher, and nothing
+		// downstream would catch it whenever that voucher carries a single
+		// deduction under the section — the amount equality would pass and the
+		// wrong leg would be recorded as paid.
+		if a.LegSeq == nil {
+			writeError(w, http.StatusBadRequest,
+				at+": leg_seq is required and is NOT defaulted. The deduction key is "+
+					"(voucher, section, leg) and the leg ordinal is 0-based, so leg 0 is a real "+
+					"leg — an omitted field would silently mean the first one")
+			return nil, false
+		}
+		amount, aerr := decimal.NewFromString(a.AmountRupees)
+		if aerr != nil {
+			writeError(w, http.StatusBadRequest,
+				at+": amount_rupees must be a fixed-point decimal string, and it must be the "+
+					"tax that was deducted on that leg — it is what makes a later voucher ALTER "+
+					"detectable, so it is stated rather than derived")
+			return nil, false
+		}
+		out = append(out, masters.TDSChallanAllocationInput{
+			VoucherID:    voucherID,
+			Section:      a.Section,
+			LegSeq:       *a.LegSeq,
+			Kind:         masters.AllocationKind(a.Kind),
+			AmountRupees: amount,
+		})
+	}
+	return out, true
+}
+
+// ---------------------------------------------------------------------------
+// POST .../tds-challans/{challanID}/allocations
+// ---------------------------------------------------------------------------
+
+// tdsChallanAllocateReq is the body of POST .../tds-challans/{challanID}/allocations.
+//
+// ⛔ IT CARRIES NO DATE, AND THAT IS DELIBERATE. The deposit is already recorded
+// and its deposit_date is already stored; an allocation adopts it. A date on this
+// body would be a second, unchecked, statement about when money reached the
+// Government — and the back-dated cutoff would then have two dates to reconcile
+// for one act. The cutoff instead reads the STORED deposit date of the challan
+// named in the path (see storedChallanDepositDate in auth_middleware.go), which
+// is the round-3 rule — judge the date the books already hold — applied to the
+// one end this act has.
+type tdsChallanAllocateReq struct {
+	Allocations []tdsChallanAllocationReq `json:"allocations"`
+	RecordedBy  string                    `json:"recorded_by"`
+}
+
+// handleAllocateToTDSChallan attaches further allocations to a challan that is
+// already recorded (register row D1).
+//
+// It answers 200, not 201: the CHALLAN is what this resource is, and it existed
+// before the request. What is created is a link, and the operator's question is
+// "what does this deposit now cover" — which the read-back answers.
+func (s *Server) handleAllocateToTDSChallan(w http.ResponseWriter, r *http.Request) {
+	challanID, ok := parseChallanID(w, r)
+	if !ok {
+		return
+	}
+	var req tdsChallanAllocateReq
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	allocations, ok := buildChallanAllocations(w, req.Allocations)
+	if !ok {
+		return
+	}
+
+	taxYear, err := s.masters.AllocateToRecordedChallan(r.Context(), challanID, allocations, req.RecordedBy)
+	if err != nil {
+		writeChallanError(w, err)
+		return
+	}
+
+	// READ BACK, for the same reason the create does and one more: the whole
+	// point of this route is that a challan's UNALLOCATED balance must FALL, and
+	// the audit's own oracle for register row D1 is that number. Sending it back
+	// means the operator (and any test) reads the result of the write rather than
+	// inferring it from a status code — this repo's signature failure is a 200
+	// that changed nothing, and a 403 that wrote anyway.
+	//
+	// ⚠️ A FAILURE OF THE READ-BACK IS NOT A FAILURE OF THE WRITE. The allocations
+	// are committed by the time we get here; answering 4xx would tell the operator
+	// their deposit is still unallocated and invite them to send it again, which
+	// the one-challan-per-deduction constraint would then refuse in a way that
+	// reads like a bug.
+	out := map[string]any{
+		"id":             challanID.String(),
+		"tax_year_start": taxYear,
+		"tax_year_label": taxYearLabel(taxYear),
+		"challan":        nil,
+	}
+	rows, rerr := s.masters.ListTDSChallans(r.Context(), taxYear)
+	if rerr != nil {
+		out["read_back_error"] = rerr.Error()
+	}
+	for _, row := range rows {
+		if row.ID == challanID {
+			out["challan"] = toTDSChallanView(row)
+			break
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// parseChallanID reads {challanID} out of the path.
+//
+// A malformed uuid is a 400 NAMING THE SEGMENT, never a 404: "not found" would
+// tell the operator the deposit is missing when what is wrong is the link they
+// followed. ⚠️ A well-formed id for a challan this company does not have IS a
+// 404, raised by the store as masters.ErrNotFound — and another tenant's challan
+// is indistinguishable from a missing one, which is the intended answer under
+// RLS.
+func parseChallanID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	raw := chi.URLParam(r, "challanID")
+	id, err := uuid.Parse(raw)
+	if err != nil {
+		writeError(w, http.StatusBadRequest,
+			"the challan id in the path is not a uuid. It is the `id` the register serves for "+
+				"each recorded deposit, and no human is expected to type it")
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
 // writeChallanError maps the store's five sentinels onto two HTTP families.
 //
 // 400 — THE REQUEST IS WRONG AND THE OPERATOR CAN FIX IT BY CHANGING IT:
+//
 //   - ErrInvalidTDSChallan: a shape or self-consistency rule (the BSR code, the
 //     minor head, the tax year, a challan with tax and no allocations).
+//
 //   - ErrNoSuchDeduction: the allocation names a (voucher, section, leg) no
 //     deduction has. NOT a 404: the challan is what is being created and it does
 //     not exist yet, so a 404 would be read as "this route is wrong".
+//
 //   - ErrTDSAllocationMismatch: the amount is not the tax that was deducted, or
 //     the deduction is a sub-threshold zero that belongs to the return's derived
 //     nil challan.
+//
+//   - ErrChallanOverAllocated: the allocations claim more tax than the deposit
+//     contains. 400 and not 409, because the body IS wrong — either the deposit
+//     box or one of the lines — and changing it is exactly what fixes it.
+//
+//   - ErrMixedChallanKinds: one challan asked to pay both a deduction and a
+//     collection. 400 for the same reason: the remedy is to record the
+//     collection's deposit on its own challan, which is a different request.
 //
 // 409 — THE REQUEST IS WELL FORMED AND THE BOOKS ALREADY SAY OTHERWISE. Nothing
 // in the body is wrong; changing a field would not help, and RETRYING WOULD BE
@@ -528,6 +705,8 @@ func writeChallanError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, masters.ErrInvalidTDSChallan),
 		errors.Is(err, masters.ErrNoSuchDeduction),
+		errors.Is(err, masters.ErrChallanOverAllocated),
+		errors.Is(err, masters.ErrMixedChallanKinds),
 		errors.Is(err, masters.ErrTDSAllocationMismatch):
 		writeError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, masters.ErrDuplicateTDSChallanCIN),

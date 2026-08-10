@@ -27,6 +27,7 @@ import {
   type StockVoucherType,
 } from "./stockVoucher";
 import { formatFixed4, mulFixed4, parseFixed4 } from "./itemInvoice";
+import { usePrintAction } from "../usePrint";
 
 /**
  * THE STOCK VOUCHER SCREENS (Alt+F8 Delivery Note, Alt+F9 Receipt Note,
@@ -66,6 +67,13 @@ export function StockVoucherScreen({ snapshot }: { snapshot: NavSnapshot }) {
   const [party, setParty] = useState("");
   const [voucherNo, setVoucherNo] = useState("");
   const [savedNo, setSavedNo] = useState<string | null>(null);
+  /**
+   * The id of the voucher this screen JUST SAVED, so Ctrl+P can print it from
+   * the screen it was keyed on (memo §2.1, and the same contract the accounting
+   * screen has). Separate from `savedNo`: the number is what an operator reads,
+   * the id is what the print route takes, and only one of them is a key.
+   */
+  const [savedID, setSavedID] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   /**
    * A refusal by the server's SECURITY LEVEL, kept separate from `status`.
@@ -231,10 +239,42 @@ export function StockVoucherScreen({ snapshot }: { snapshot: NavSnapshot }) {
     send
       .then((res) => {
         setSavedNo(res.voucher_no);
+        setSavedID(res.voucher_id);
         setStatus("Saved");
       })
       .catch((err: unknown) => {
         if (err instanceof ApiError && err.status === 403) {
+          // ⛔ A 403 IS NOT ALWAYS THE ACL, AND RENDERING IT AS ONE SENDS THE
+          // OPERATOR TO FIX A PERMISSION THEY ALREADY HOLD.
+          //
+          // The PDP refuses a write for TWO unrelated reasons and both arrive
+          // here as 403: the security level may not perform this act, or the
+          // level's BACK-DATED CUTOFF closes the period the voucher is dated in.
+          // The second one was being overwritten with the first — "ask an Owner
+          // to allow create physical-stock on your level" — so an operator with
+          // that permission was told to go and ask for it, and was never told
+          // that the period is locked. The cure is the date field they are
+          // looking at, and nothing on the screen mentioned a date.
+          //
+          // ⛔ IT IS DISTINGUISHED ON THE SERVER'S OWN SENTENCE, NOT ON A CODE
+          // WE INVENT. Every cutoff refusal in internal/authz names the thing:
+          // "voucher date is before the back-dated cutoff of <date>", "this
+          // voucher is dated <date>, inside the period closed by the back-dated
+          // cutoff of <date>", the bank-date variant, and the two fail-closed
+          // "…cannot be cleared" forms. All of them carry "back-dated cutoff",
+          // and none of the ACL denials does. A status code alone cannot tell
+          // them apart, which is why this used to be one branch.
+          //
+          // The server's sentence is shown VERBATIM (it names the cutoff date —
+          // the one fact the operator needs) with the remedy appended, for the
+          // reason usePrint gives about not rewriting the server's message.
+          if (/back-dated cutoff/i.test(err.message)) {
+            setDenied(
+              `${cfg.title} refused: ${err.message}. This is a CLOSED PERIOD, not a missing permission — the date on this voucher falls inside a period your level may no longer write to. Change the date to one after the cutoff, or ask an Owner to move the back-dated cutoff for your level (Users & Roles).`,
+            );
+            setStatus(null);
+            return;
+          }
           setDenied(
             `${cfg.title} is refused to your security level. It is the document that makes the books agree with a number a human asserts, so it is granted to supervisors by default — ask an Owner to allow "create ${type}" on your level (Users & Roles).`,
           );
@@ -249,6 +289,40 @@ export function StockVoucherScreen({ snapshot }: { snapshot: NavSnapshot }) {
   }, [client, companyID, cfg, type]);
 
   useRegisterScreenAction("accept", onAccept);
+
+  /**
+   * ⛔ Ctrl+P, WHICH THIS SCREEN ADVERTISED AND DID NOT HAVE.
+   *
+   * VOUCHER_BAR carries "Ctrl+P Print" on every voucher screen, and printTarget
+   * declares the DELIVERY NOTE one of the six classes that produce a document
+   * (it is the challan the goods travel on, and the server renders it). This
+   * component registered only `accept`, so on all four stock screens the key fell
+   * through to the shell's generic "does not apply on this screen", made NO HTTP
+   * request, and left the operator holding goods with no paper — while the strip
+   * over the screen sold them the key.
+   *
+   * Registered on the SCREEN and not on the router, deliberately: usePrintAction
+   * needs the id of the document on THIS form, and the router (VoucherScreen)
+   * knows only the class.
+   *
+   * WHAT IT PRINTS, PER CLASS — and the other three answering a REASON is the
+   * point, not a consolation. A Receipt Note, a Stock Journal and a Physical
+   * Stock voucher issue nothing to anybody, so printTarget refuses each with its
+   * own sentence ("goods arrived on the SUPPLIER's delivery challan — you
+   * received paper, you did not issue it"). That is a different and better answer
+   * than "this key does nothing here", which is what they said before.
+   *
+   * THE ID COMES FROM TWO PLACES, exactly as on the accounting screen: the drill
+   * (alteration) or the create-accept a moment ago. `justSaved` only changes the
+   * wording, never the route.
+   */
+  usePrintAction({
+    voucher: {
+      voucherID: loadedVoucherID ?? savedID,
+      ...(loadedVoucherID === null && savedID !== null ? { justSaved: true } : {}),
+    },
+  });
+
   // No `delete` handler and no `duplicate`: those belong to the accounting
   // screen's edit actions, and wiring them here without a tested path would be
   // a button that looks live. Alt+D on this screen therefore says nothing ran,

@@ -122,7 +122,10 @@ function renderScreen(
  * fire a KEY's registered handler the way AppShell does. Used to prove the print
  * key is registered here at all — the bug a browser gate caught.
  */
-function renderWithDispatcher(over: Partial<CoredClient> = {}) {
+function renderWithDispatcher(
+  over: Partial<CoredClient> = {},
+  snapshot: NavSnapshot = SNAP,
+) {
   const base = createMockClient({ seed: false });
   const client = {
     ...base,
@@ -135,11 +138,11 @@ function renderWithDispatcher(over: Partial<CoredClient> = {}) {
   function Harness() {
     const dispatch = useScreenActionDispatcher();
     fireHandler = async () => {
-      const res = dispatch("print", SNAP);
+      const res = dispatch("print", snapshot);
       if (res.pending) return await res.pending;
       return res.message;
     };
-    return <BankReconciliationScreen snapshot={SNAP} onSelect={() => {}} />;
+    return <BankReconciliationScreen snapshot={snapshot} onSelect={() => {}} />;
   }
 
   render(
@@ -561,5 +564,54 @@ describe("a non-bank ledger reaching the route anyway", () => {
     });
     const err = await screen.findByTestId("brs-error");
     expect(err.textContent).toContain("not under a bank group");
+  });
+});
+
+describe("Ctrl+P says WHICH account and WHICH date went to paper", () => {
+  /**
+   * ⛔ THE REFUSAL THAT CANNOT FIRE HERE. printTarget refuses to print a
+   * statement for an account nobody chose — but this screen opens the only bank
+   * account on load, so on a one-bank company Ctrl+P as the FIRST key prints an
+   * account the operator was never asked about. That auto-selection is right
+   * (a pick-list of one is friction); doing it silently is not. So the
+   * confirmation names the account, and the operator can see at once that it is
+   * not the one they meant.
+   */
+  it("names the auto-selected account in the confirmation", async () => {
+    const printReport = vi.fn(async () => ({
+      blob: new Blob(["%PDF-1.4"], { type: "application/pdf" }),
+      filename: "bank-reconciliation-20260711.pdf",
+    }));
+    const { fireHandler } = renderWithDispatcher({
+      listLedgers: async () => ({ ledgers: [ledger({ name: "HDFC Bank" })] }),
+      printReport,
+    } as Partial<CoredClient>);
+    await screen.findByTestId("brs-as-on");
+    const msg = String(await fireHandler());
+    expect(msg).toContain("HDFC Bank");
+  });
+
+  it("prints AS AT the F2 date the screen is showing, not the latest date in the books", async () => {
+    // ⛔ THE STATEMENT IS A POSITION. The server treats a missing as_on as "the
+    // latest date in the books", so without this the printed BRS reconciles a
+    // DIFFERENT day from the one on screen — on the one document in the product
+    // a bank manager is shown.
+    const printReport = vi.fn(async () => ({
+      blob: new Blob(["%PDF-1.4"], { type: "application/pdf" }),
+      filename: "bank-reconciliation-20260630.pdf",
+    }));
+    const dated: NavSnapshot = { ...SNAP, config: { periodTo: "2026-06-30" } };
+    const { fireHandler } = renderWithDispatcher(
+      { printReport } as Partial<CoredClient>,
+      dated,
+    );
+    await screen.findByTestId("brs-as-on");
+    await fireHandler();
+    await waitFor(() =>
+      expect(printReport).toHaveBeenCalledWith("co-1", "bank-reconciliation", {
+        ledger_id: "l-1",
+        as_on: "2026-06-30",
+      }),
+    );
   });
 });

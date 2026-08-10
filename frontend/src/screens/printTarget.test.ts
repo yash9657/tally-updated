@@ -4,6 +4,11 @@ import { navMachine, projectSnapshot } from "../keystroke/navMachine";
 import type { NavSnapshot } from "../keystroke/navMachine";
 import { resolveAction, resolveKeymap, actionLabel } from "../keystroke/keymaps/tallyprime";
 import type { VoucherType } from "../keystroke/types";
+import { REPORT_NAMES } from "../keystroke/types";
+import {
+  AS_AT_ONLY_REPORTS,
+  FULL_PERIOD_REPORTS,
+} from "./overlays/FrameOverlays";
 import { resolvePrintTarget, PRINTABLE_VOUCHER_CLASSES } from "./printTarget";
 
 /**
@@ -283,6 +288,38 @@ describe("the Bank Reconciliation Statement prints, for ONE account (I-10)", () 
     expect(target.query).toEqual({ ledger_id: "bank-42" });
   });
 
+  it("NAMES the account it printed, because the screen chose it without asking", () => {
+    // ⛔ THE REFUSAL ABOVE CANNOT BE REACHED ON A ONE-BANK COMPANY: the screen
+    // opens that account on load, so Ctrl+P as the very first key prints a
+    // statement the operator never chose — the exact outcome the refusal was
+    // written to prevent. Auto-selecting from a list of one is right; doing it
+    // SILENTLY is not, so the confirmation carries the account's name and the
+    // operator can see at once that it is not the one they meant.
+    const target = resolvePrintTarget(snap({ screen: "bank-reconciliation" }), {
+      voucherID: null,
+      bankLedgerID: "bank-42",
+      bankLedgerName: "HDFC Current A/c",
+      bankAccountCount: 1,
+    });
+    if (target.kind !== "report") throw new Error("expected a report target");
+    expect(target.label).toContain("HDFC Current A/c");
+  });
+
+  it("a company with NO bank accounts is not told to select one", () => {
+    // "Select a bank account first" is unfollowable advice when there is nothing
+    // to select, and it sends the operator hunting for a picker that can never
+    // have a row in it. The server's own answer on that route names the group a
+    // ledger has to sit under; the key must not be less useful than the wire.
+    const target = resolvePrintTarget(snap({ screen: "bank-reconciliation" }), {
+      voucherID: null,
+      bankLedgerID: null,
+      bankAccountCount: 0,
+    });
+    if (target.kind !== "refusal") throw new Error("expected a refusal");
+    expect(target.reason).toMatch(/no bank accounts/i);
+    expect(target.reason).not.toMatch(/select a bank account first/i);
+  });
+
   it("carries a DIFFERENT id when a different account is selected", () => {
     // The control for the test above: asserting one id alone would pass for an
     // implementation that hard-codes it.
@@ -292,6 +329,122 @@ describe("the Bank Reconciliation Statement prints, for ONE account (I-10)", () 
     });
     if (target.kind !== "report") throw new Error("expected a report target");
     expect(target.query).toEqual({ ledger_id: "bank-99" });
+  });
+});
+
+describe("Ctrl+P prints the PERIOD ON SCREEN, not the whole book", () => {
+  /**
+   * ⛔ THE DEFECT. The report branch used to return { kind, slug, label } and
+   * nothing else. The server reads `from` / `to` / `as_on` off the query and
+   * treats an absent one as NO BOUND, so a Trial Balance printed from a screen
+   * headed "As on 30-Jun-2026" came back subtitled "As at the latest date in the
+   * books" — every figure real, the period somebody else's. That is a document
+   * an accountant signs.
+   *
+   * The oracle here is the QUERY, because the query is the whole request: a
+   * label that says "as on 30-Jun-2026" over a request with no as_on is exactly
+   * the failure being closed, so both are asserted.
+   */
+  const period = { periodFrom: "2026-04-01", periodTo: "2026-06-30" };
+
+  it("sends as_on for a POSITION statement and both bounds for a FLOW", () => {
+    for (const [name, want] of [
+      ["Balance Sheet", { as_on: "2026-06-30" }],
+      ["Trial Balance", { as_on: "2026-06-30" }],
+      ["Outstandings", { as_on: "2026-06-30" }],
+      ["Stock Summary", { as_on: "2026-06-30" }],
+      ["Sales Order Book", { as_on: "2026-06-30" }],
+      ["Purchase Order Book", { as_on: "2026-06-30" }],
+      ["Day Book", { from: "2026-04-01", to: "2026-06-30" }],
+      ["Profit & Loss A/c", { from: "2026-04-01", to: "2026-06-30" }],
+      ["TDS / TCS Register", { from: "2026-04-01", to: "2026-06-30" }],
+    ] as const) {
+      const target = resolvePrintTarget(
+        snap({ screen: "report", reportName: name, config: period }),
+      );
+      if (target.kind !== "report") throw new Error(`${name} did not resolve`);
+      expect(target.query, `${name} printed for the wrong span`).toEqual(want);
+    }
+  });
+
+  it("a POSITION statement is never bounded BELOW, even when From is set", () => {
+    // Bounding a position below drops the entity's earlier history and still
+    // foots: a wrong answer that looks right. The F2 dialog says so; the print
+    // route must agree with it.
+    const target = resolvePrintTarget(
+      snap({ screen: "report", reportName: "Balance Sheet", config: period }),
+    );
+    if (target.kind !== "report") throw new Error("expected a report target");
+    expect(target.query).not.toHaveProperty("from");
+  });
+
+  it("names the span on the status line, so the paper can be checked without opening it", () => {
+    const target = resolvePrintTarget(
+      snap({ screen: "report", reportName: "Day Book", config: period }),
+    );
+    if (target.kind !== "report") throw new Error("expected a report target");
+    expect(target.label).toContain("2026-04-01");
+    expect(target.label).toContain("2026-06-30");
+  });
+
+  it("omits an unset bound rather than sending it empty, and SAYS it is all dates", () => {
+    // An empty `from=` is a 400 on the routes that validate it and an open bound
+    // on the ones that do not; omitting it says the one thing that is true. And
+    // the label must not imply a period the frame does not have.
+    const target = resolvePrintTarget(
+      snap({ screen: "report", reportName: "Day Book" }),
+    );
+    if (target.kind !== "report") throw new Error("expected a report target");
+    expect(target.query).toBeUndefined();
+    expect(target.label.toLowerCase()).toContain("all dates");
+  });
+
+  it("the Bank Reconciliation Statement carries the F2 date as well as the account", () => {
+    const target = resolvePrintTarget(
+      snap({ screen: "bank-reconciliation", config: { periodTo: "2026-06-30" } }),
+      { voucherID: null, bankLedgerID: "bank-42", bankLedgerName: "HDFC Current" },
+    );
+    if (target.kind !== "report") throw new Error("expected a report target");
+    expect(target.query).toEqual({ ledger_id: "bank-42", as_on: "2026-06-30" });
+  });
+});
+
+describe("the classification cannot drift from the F2 dialog's own", () => {
+  /**
+   * Three lists read the same two frame fields: the period OVERLAY (which tells
+   * the operator which bounds a report honours), each report SCREEN (which
+   * fetches with them), and REPORT_PERIOD_SHAPE in printTarget (which prints
+   * with them). Two of them agreeing while the third does not is how a report
+   * comes to be told its From date does nothing while the printed copy applies
+   * it. This is the closure over the two that are lists.
+   */
+  it("every report that prints is classified the same way the period dialog classifies it", () => {
+    for (const name of REPORT_NAMES) {
+      const target = resolvePrintTarget(
+        snap({
+          screen: "report",
+          reportName: name,
+          config: { periodFrom: "2026-04-01", periodTo: "2026-06-30" },
+        }),
+      );
+      if (target.kind !== "report") continue; // not printable in this build
+      const asAt = AS_AT_ONLY_REPORTS.includes(name);
+      const full = FULL_PERIOD_REPORTS.includes(name);
+      expect(
+        asAt || full,
+        `${name} prints but the F2 dialog classifies it as having no date dimension`,
+      ).toBe(true);
+      if (asAt) {
+        expect(target.query, `${name} is a position but printed for a range`).toEqual({
+          as_on: "2026-06-30",
+        });
+      } else {
+        expect(target.query, `${name} is a flow but printed as at one date`).toEqual({
+          from: "2026-04-01",
+          to: "2026-06-30",
+        });
+      }
+    }
   });
 });
 
@@ -345,6 +498,18 @@ describe("the cost screens refuse to print, each for its own reason (I-4)", () =
     // The category summary's refusal carries the rule a printed copy would have to
     // carry: its rows may never be added together.
     expect(category.reason).toMatch(/NEVER be added together/i);
+  });
+
+  it("does not tell the operator that Alt+E is unbuilt, because Alt+E writes a file", () => {
+    // ⛔ THE REFUSAL USED TO END "Alt+E is not built here either; read it on
+    // screen", AND IT WAS FALSE — CostCentreSummaryScreen registers a real export
+    // handler (T15) and Alt+E writes the axis's figures at 4dp immediately. A
+    // refusal that misstates what the OTHER key does sends an operator who needs
+    // these figures away from the one way out of the screen that works.
+    const centre = resolvePrintTarget(snap({ screen: "cost-centre-summary" }));
+    if (centre.kind !== "refusal") throw new Error("expected a refusal");
+    expect(centre.reason).not.toMatch(/Alt\+E is not built/i);
+    expect(centre.reason).toMatch(/Alt\+E/);
   });
 
   it("no cost screen resolves to a report slug (nothing is fetched)", () => {

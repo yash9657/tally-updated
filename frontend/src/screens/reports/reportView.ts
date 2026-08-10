@@ -158,7 +158,7 @@ export function applyReportView(
   // Condensed (the default) shows the top levels of a statement tree; Detailed
   // expands every level. Flat reports (depth undefined) are unaffected.
   if (!cfg.detailed) {
-    out = out.filter((r) => (r.depth ?? 0) <= 1);
+    out = condense(out);
   }
 
   if (cfg.hideZeroBalances) {
@@ -174,6 +174,68 @@ export function applyReportView(
     );
   }
   return out;
+}
+
+/**
+ * The condensed (default) view of a statement tree.
+ *
+ * ⛔ THE RULE IS NOT "DEPTH <= 1". IT IS "ONLY HIDE WHAT THE OPERATOR CAN STILL
+ * REACH ANOTHER WAY" — AND THE DIFFERENCE WAS DRIVEN IN A BROWSER.
+ *
+ * This used to be a bare `filter((r) => (r.depth ?? 0) <= 1)`, and on the
+ * Balance Sheet that made the **Closing Stock** line — the single largest asset
+ * a trading company owns — INVISIBLE in the view every operator gets by
+ * default, and (because Alt+E writes the rows on screen) ABSENT from the export
+ * as well. Measured on 2026-08-07: a sheet whose Current Assets subtotal
+ * included 72,837.15 of stock that appeared on no line of the statement or of
+ * its CSV, while the row with the SAME NAME on the Profit & Loss — where the
+ * Trading-account terms are appended at section level, i.e. depth 1 — was
+ * always visible. One figure, two statements, one of them silently short a row.
+ *
+ * TWO PROPERTIES, AND THE SECOND IS THE ONE THAT WAS MISSING.
+ *
+ *  1. A row is REACHABLE if it can be drilled to. A group or a ledger at depth
+ *     2 is hidden here and still reachable: Enter on its parent pushes a detail
+ *     screen that lists it. Hiding it condenses the statement — which is what
+ *     Tally's Condensed/Detailed pair is FOR.
+ *  2. A row with `drillable === false` is a COMPUTED or TOTAL line. Nothing
+ *     drills to it, no detail screen lists it, and no other screen states it. If
+ *     the condensed view drops it, it exists NOWHERE in the product for an
+ *     operator who never presses Alt+F1 — a figure inside a subtotal with no
+ *     line of its own. So a non-drillable row is kept at EVERY depth.
+ *
+ * Note that the other two filters below already carve out exactly this case
+ * ("totals always stay"): this one was written without it, which is the whole
+ * defect.
+ *
+ * ANCESTORS COME BACK WITH IT. A kept deep row is re-parented onto its chain of
+ * enclosing groups, so the tree stays well formed — "Closing Stock" prints under
+ * "Stock-in-Hand" under "Current Assets", and the subtotal that contains it is
+ * on screen next to it. Without that the row appears indented beneath a group
+ * that is NOT its parent, which reads as a mis-stated statement, and the export
+ * writes a child whose parent is missing.
+ */
+function condense(rows: readonly DrillRow[]): DrillRow[] {
+  const keep = rows.map(() => false);
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]!;
+    const depth = row.depth ?? 0;
+    if (depth > 1 && row.drillable !== false) continue;
+    keep[i] = true;
+    // Walk BACK to the enclosing groups: the nearest preceding row that is
+    // shallower than the level we are looking for is this row's parent, and so
+    // on up to the section. Rows arrive in tree order (flattenNodes emits a
+    // node then its children), which is what makes this correct.
+    let wanted = depth;
+    for (let j = i - 1; j >= 0 && wanted > 0; j--) {
+      const above = rows[j]!.depth ?? 0;
+      if (above < wanted) {
+        keep[j] = true;
+        wanted = above;
+      }
+    }
+  }
+  return rows.filter((_, i) => keep[i]!);
 }
 
 /** True when every numeric value on the row is zero (and there is at least one). */

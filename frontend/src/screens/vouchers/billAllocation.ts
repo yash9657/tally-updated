@@ -27,12 +27,21 @@ import { formatFixed4, parseFixed4 } from "./itemInvoice";
  *
  * ⛔ AND A NEW REFERENCE IS DELIBERATELY LEFT UNNAMED HERE. The voucher number is
  * allocated by `allocateVoucherNo` INSIDE the post transaction, so at the moment
- * this code runs the name Tally would use does not exist yet. `post()` stamps the
- * allocated number onto any reference that arrives unnamed — Tally's own
- * `New Ref` default — and REFUSES an unnamed AGAINST for the reason above. Do not
- * "fix" the blank by inventing a name here: a client-side guess (a timestamp, a
- * uuid, the party name) would be a reference no human can tie to a voucher, and
- * it would be permanent.
+ * this code runs the name Tally would use does not exist yet. `post()` names any
+ * reference that arrives unnamed — Tally's own `New Ref` default — and REFUSES an
+ * unnamed AGAINST for the reason above. Do not "fix" the blank by inventing a
+ * name here: a client-side guess (a timestamp, a uuid, the party name) would be a
+ * reference no human can tie to a voucher, and it would be permanent.
+ *
+ * ⚠️ THE NAME THE SERVER GENERATES IS NOT THE BARE VOUCHER NUMBER, and no client
+ * may assume it is. Every voucher type has its OWN number series per financial
+ * year, so "7" names one voucher per type per year — a Receipt "7" once netted
+ * against a Sales invoice "7" on the same party. `ledger.go`'s `stampBillRefNames`
+ * therefore builds "<class>/<financial year>/<number>", with an index when one
+ * voucher opens several bills on one ledger, and files ON_ACCOUNT money in a
+ * single per-party "On Account" bucket instead of naming it after a voucher at
+ * all. READ THE NAME BACK — from the GET, or from the open-bills list — and never
+ * reconstruct it.
  */
 
 /** One reference an operator has keyed (or the form has defaulted). */
@@ -44,7 +53,8 @@ export interface DraftBillRef {
   refType: RefType;
   /**
    * ⛔ "" IS LEGAL AND IS THE NORMAL CASE for NEW / ADVANCE / ON_ACCOUNT — the
-   * server stamps the voucher number it allocates. It is NEVER legal for AGAINST.
+   * server names it (see the header: NOT with the bare voucher number). It is
+   * NEVER legal for AGAINST, which must match a name that already exists.
    */
   refName: string;
   /** fixed-4 on the wire; free-typed here. */

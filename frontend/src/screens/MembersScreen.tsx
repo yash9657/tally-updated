@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ApiError } from "../api";
 import type {
   InviteView,
+  MemberView,
   MembersResponse,
   SecurityLevelRule,
   SecurityLevelView,
   SecurityVocabulary,
+  UpdateMemberRequest,
 } from "../api";
 import { useClient, useCompanyID } from "../app/CompanyContext";
 import type { ScreenComponentProps } from "../app/screenRegistry";
@@ -50,6 +52,58 @@ import type { ScreenComponentProps } from "../app/screenRegistry";
  *     confirm() here would make revoke/delete permanently untestable — and an
  *     untested revoke path on an access-control screen is the wrong trade.
  */
+
+/**
+ * ACCOUNT-LOCK STATE, and the ONE remedy for it (D55).
+ *
+ * ⛔ THESE TWO TYPES BELONG IN `api/admin.ts` BESIDE `MemberView` /
+ * `UpdateMemberRequest`, AND THEY ARE DECLARED HERE ON PURPOSE. `api/*.ts` is
+ * shared surface that more than one workstream is editing, so this lane states
+ * the shape it needs locally and REPORTS the two-field edit rather than making
+ * it. The server (handler_admin.go's memberJSON / memberLevelReq) is the
+ * authority for both; when the edit lands upstream these aliases collapse into
+ * plain imports and nothing else here changes.
+ *
+ * The defect they exist for: a locked-out account was INVISIBLE. Users & Roles
+ * is the only member-admin surface in the product and it rendered no lock state
+ * at all — so the administrator's screen reported that somebody had access while
+ * that person could not sign in, and there was no route, no key and no screen
+ * anywhere that could free them.
+ */
+type MemberLockView = MemberView & {
+  /** RFC3339 UTC, absent when not locked. */
+  locked_until?: string;
+  /** The RUNNING count of failed sign-ins since the last success (D74). */
+  failed_attempts?: number;
+};
+
+/** `{"unlock": true}` clears the account lockout; see handleUpdateMember. */
+type UnlockMemberRequest = UpdateMemberRequest & { unlock?: boolean };
+
+/**
+ * When the lock lifts, in the ADMINISTRATOR's clock and in plain words.
+ *
+ * The server sends a UTC instant. This audience is on IST, where a UTC instant
+ * after 18:30 local names YESTERDAY'S DATE — which reads as a lock that expired
+ * long ago and would send an administrator away without pressing Unlock. The
+ * zone is the browser's own (a CA in London must be told London time), and it is
+ * NAMED, so the sentence cannot be misread as some other clock.
+ */
+function lockText(m: MemberLockView): string {
+  const raw = m.locked_until ?? "";
+  const ms = Date.parse(raw);
+  if (!Number.isFinite(ms)) return `locked (until ${raw})`;
+  const when = new Intl.DateTimeFormat(undefined, {
+    day: "numeric",
+    month: "short",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+  }).format(new Date(ms));
+  const mins = Math.ceil((ms - Date.now()) / 60000);
+  if (mins <= 0) return `lock lapsing (ran to ${when})`;
+  return `LOCKED OUT until ${when} (${mins} min)`;
+}
 
 /** Human explanation for the status codes this screen can legitimately receive. */
 function explain(err: unknown): string {
@@ -423,13 +477,19 @@ export function MembersScreen(_props: ScreenComponentProps) {
                   <th className="pr-4">Subject</th>
                   <th className="pr-4">Security level</th>
                   <th className="pr-4">Since</th>
+                  {/* SIGN-IN, not "Access": the two are different questions and
+                      conflating them is the defect. A member can hold Owner and
+                      still be unable to get in. */}
+                  <th className="pr-4">Sign-in</th>
                   <th>Access</th>
                 </tr>
               </thead>
               <tbody>
-                {data.members.map((m) => {
+                {(data.members as MemberLockView[]).map((m) => {
                   const chosen = pendingLevel[m.user_id] ?? m.security_level_name;
                   const changed = chosen !== m.security_level_name;
+                  const locked = !!m.locked_until;
+                  const failed = m.failed_attempts ?? 0;
                   // The last Owner cannot be demoted or removed (409). Saying so
                   // BEFORE the click is kinder than a refusal after it — and the
                   // server still enforces it either way.
@@ -480,6 +540,61 @@ export function MembersScreen(_props: ScreenComponentProps) {
                         ) : null}
                       </td>
                       <td className="pr-4 align-top">{m.created_at.slice(0, 10)}</td>
+                      {/* SIGN-IN STATE + THE ONLY REMEDY (D55).
+                          A locked account had no way out anywhere in the
+                          product: the failure counter resets on a SUCCESSFUL
+                          login, which a locked account cannot perform. Unlock
+                          is a write on the `security` resource, so it inherits
+                          the Owner level's WebAuthn step-up exactly as granting
+                          access does — freeing an account is at least as
+                          sensitive as granting one. */}
+                      <td className="pr-4 align-top">
+                        {locked ? (
+                          <>
+                            <span
+                              data-testid={`member-lock:${m.subject}`}
+                              className="text-xs text-red-400"
+                            >
+                              {lockText(m)}
+                            </span>{" "}
+                            <button
+                              type="button"
+                              data-testid={`member-unlock:${m.subject}`}
+                              disabled={busy !== null}
+                              className="bg-tally-active px-2 py-0.5 text-xs text-white disabled:opacity-50"
+                              onClick={() =>
+                                void run(`member-unlock:${m.user_id}`, async () => {
+                                  await client.updateMember(companyID, m.user_id, {
+                                    unlock: true,
+                                  } as UnlockMemberRequest);
+                                  // Said in full, because the half that is NOT
+                                  // true is the half an administrator would
+                                  // otherwise assume: unlocking lets them sign
+                                  // in again, it does not revive the sessions
+                                  // the lock killed.
+                                  return `Unlocked ${m.subject}. They can sign in again now — but any session they held when the account was locked stays revoked, so they must sign in afresh.`;
+                                })
+                              }
+                            >
+                              {busy === `member-unlock:${m.user_id}`
+                                ? "Unlocking…"
+                                : "Unlock"}
+                            </button>
+                          </>
+                        ) : failed > 0 ? (
+                          // PARTWAY THERE (D74). The running counter is what
+                          // makes an attack visible BEFORE the lock, which is
+                          // the only time anyone can do anything about it.
+                          <span
+                            data-testid={`member-failed:${m.subject}`}
+                            className="text-xs"
+                          >
+                            {failed} failed sign-in{failed === 1 ? "" : "s"}
+                          </span>
+                        ) : (
+                          <span className="text-xs">ok</span>
+                        )}
+                      </td>
                       <td className="align-top">
                         {lastOwner ? (
                           <span

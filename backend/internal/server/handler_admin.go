@@ -47,12 +47,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/khata/cored/internal/authn"
 	"github.com/khata/cored/internal/authz"
@@ -96,6 +98,19 @@ type memberJSON struct {
 	IsOwner     bool   `json:"is_owner"`
 	IsSelf      bool   `json:"is_self"`
 	CreatedAt   string `json:"created_at"`
+	// SIGN-IN STATE (D55/D74). Users & Roles is the ONLY member-admin surface in
+	// the product and it rendered no lock state at all, so an account that was
+	// locked out was invisible here: the administrator's screen said the person
+	// had access, and the person could not sign in. Nobody could even see it,
+	// let alone fix it.
+	//
+	// LockedUntil is RFC3339 UTC and "" when not locked — the client renders it
+	// in local time, because the audience is on IST and a UTC instant is not an
+	// answer to "when can they get back in?" (D58, the same defect one screen
+	// over). FailedAttempts is the RUNNING count (D74), so an account four
+	// fifths of the way to being locked is visible BEFORE it locks.
+	LockedUntil    string `json:"locked_until,omitempty"`
+	FailedAttempts int    `json:"failed_attempts"`
 }
 
 type inviteJSON struct {
@@ -132,9 +147,20 @@ type inviteReq struct {
 	SecurityLevelNam string `json:"security_level_name"`
 }
 
+// memberLevelReq is the PUT /members/{userID} body. It carries the two ways of
+// naming a level AND the administrative unlock, deliberately on the SAME route
+// rather than on a new one: see handleUpdateMember for why a new route would
+// have been a fix nobody could reach.
 type memberLevelReq struct {
 	SecurityLevelID  string `json:"security_level_id"`
 	SecurityLevelNam string `json:"security_level_name"`
+	// Unlock clears this member's account lockout (D55). A POINTER because
+	// absent must not mean false: `{"security_level_name":"Data Entry"}` is a
+	// level change that says nothing about the lock, and reading a missing key
+	// as "do not unlock" happens to be right while reading it as an explicit
+	// false would invite a future `"unlock": false` meaning "re-lock", which
+	// this route does not offer and must not appear to.
+	Unlock *bool `json:"unlock"`
 }
 
 type ruleJSON struct {
@@ -236,6 +262,96 @@ func (s *Server) resolveLevel(w http.ResponseWriter, ctx context.Context, compan
 func iso(t time.Time) string { return t.UTC().Format(time.RFC3339) }
 
 // ---------------------------------------------------------------------------
+// Account-lock state: the half of "who may open this company" that lived in the
+// database and appeared on no screen (D55/D74)
+// ---------------------------------------------------------------------------
+
+// memberLock is one member's sign-in state.
+type memberLock struct {
+	lockedUntil    *time.Time
+	failedAttempts int
+}
+
+// memberLockState reads the lock columns for every member of one company.
+//
+// ⛔ WHY THE QUERY IS HERE AND NOT ON adminStore. The lock columns live on
+// app_user, which is authn/lockout's table, not authz's — internal/authz's
+// admin store models MEMBERSHIP, and widening authz.Member to carry lockout
+// state would put one table's state behind two packages' interfaces. It is
+// also, bluntly, a read this lane could add without touching a package another
+// lane is editing this pass. If a second caller ever needs it, that is the
+// moment to promote it to the store.
+//
+// RLS DOES THE SCOPING, NOT THE WHERE CLAUSE — the WHERE clause is the join.
+// app_user's policy (0011 §3, widened by 0020 §3) admits a row when it is the
+// caller's own OR when its owner is a member of the company in the GUC, and
+// db.WithCompany has set that GUC before this runs. So a caller who somehow
+// asked about a company they do not administer would read nothing rather than
+// somebody else's directory. RunInReadOnlyTx additionally means a mistake here
+// cannot become a write.
+func (s *Server) memberLockState(ctx context.Context, companyID uuid.UUID) (map[uuid.UUID]memberLock, error) {
+	if s.pool == nil {
+		return nil, nil // no store to ask; the caller degrades to no lock column.
+	}
+	out := map[uuid.UUID]memberLock{}
+	err := s.pool.RunInReadOnlyTx(db.WithCompany(ctx, companyID), func(ctx context.Context, tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			SELECT u.id, u.locked_until, u.failed_attempts
+			  FROM app_user u
+			  JOIN company_membership m ON m.user_id = u.id
+			 WHERE m.company_id = $1`, companyID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var (
+				id    uuid.UUID
+				until *time.Time
+				n     int
+			)
+			if err := rows.Scan(&id, &until, &n); err != nil {
+				return err
+			}
+			out[id] = memberLock{lockedUntil: until, failedAttempts: n}
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, fmt.Errorf("server: member lock state: %w", err)
+	}
+	return out, nil
+}
+
+// clearMemberLock is the administrative unlock (D55). It reports whether a lock
+// was actually cleared; false means the store refused because the actor or the
+// target is not a member of this company.
+//
+// ⛔ IT GOES THROUGH auth_admin_clear_lock() RATHER THAN AN UPDATE, and that is
+// not indirection for its own sake: app_user's RLS WITH CHECK forbids the app
+// role from writing ANY row but the caller's own, which is a rule worth keeping
+// (an admin must not be able to rewrite a colleague's subject or email). The
+// SECURITY DEFINER function writes the lock columns and nothing else, and
+// re-derives both memberships for itself rather than trusting this handler —
+// see migration 0074.
+//
+// ⛔ IT DOES NOT REVIVE THE SESSIONS THE LOCK KILLED. The function leaves
+// sessions_invalid_before alone on purpose: unlocking means "you may sign in
+// again", not "the bearer somebody stole from you is valid again" (D56).
+func (s *Server) clearMemberLock(ctx context.Context, companyID, actorID, userID uuid.UUID) (bool, error) {
+	if s.pool == nil {
+		return false, fmt.Errorf("server: clear lock: no store")
+	}
+	var cleared bool
+	err := s.pool.Raw().QueryRow(ctx,
+		`SELECT auth_admin_clear_lock($1, $2, $3)`, companyID, actorID, userID).Scan(&cleared)
+	if err != nil {
+		return false, fmt.Errorf("server: clear lock: %w", err)
+	}
+	return cleared, nil
+}
+
+// ---------------------------------------------------------------------------
 // Members
 // ---------------------------------------------------------------------------
 
@@ -255,15 +371,35 @@ func (s *Server) handleListMembers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	self, _ := db.UserFromContext(r.Context())
+	// Lock state per member (D55/D74). A failure is NOT fatal: it costs the
+	// screen its lock column, and refusing to render the members list because
+	// one supplementary read failed would be a worse answer to "who may open
+	// this company?" than an incomplete one. locks is nil in that case and the
+	// loop below simply finds nothing.
+	locks, lerr := s.memberLockState(ctx, companyID)
+	if lerr != nil {
+		locks = nil
+	}
 
 	resp := membersResp{Members: []memberJSON{}, Invites: []inviteJSON{}}
 	for _, m := range members {
-		resp.Members = append(resp.Members, memberJSON{
+		mj := memberJSON{
 			UserID: m.UserID.String(), Subject: m.Subject, Email: m.Email,
 			DisplayName: m.DisplayName, LevelID: m.LevelID.String(),
 			LevelName: m.LevelName, IsOwner: m.IsOwner,
 			IsSelf: m.UserID == self, CreatedAt: iso(m.CreatedAt),
-		})
+		}
+		if st, ok := locks[m.UserID]; ok {
+			mj.FailedAttempts = st.failedAttempts
+			// Only a lock that is still in the FUTURE is a lock. An expired
+			// locked_until is a historical fact, and reporting it as current
+			// would send an administrator to unlock somebody who can already
+			// sign in — the same rule authn.Locker.IsLocked applies.
+			if st.lockedUntil != nil && st.lockedUntil.After(time.Now()) {
+				mj.LockedUntil = iso(*st.lockedUntil)
+			}
+		}
+		resp.Members = append(resp.Members, mj)
 	}
 	for _, iv := range invites {
 		resp.Invites = append(resp.Invites, inviteJSON{
@@ -349,6 +485,27 @@ func (s *Server) handleRevokeInvite(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"invite_id": inviteID.String(), "status": "revoked"})
 }
 
+// handleUpdateMember changes a member's security level AND is the ONLY remedy
+// for a locked-out account (D55).
+//
+// ⛔ WHY THE UNLOCK IS A FIELD ON THIS ROUTE AND NOT A ROUTE OF ITS OWN. There
+// was NO way to unlock an account anywhere in the product — no route, no key,
+// no screen — and the standing rule about that class of fix is that a route
+// nobody can reach is worse than no route at all. This route is already
+// mounted, already mapped by routeAction (Alter/security, so it already
+// inherits the Owner level's WebAuthn step-up: freeing an account is at least as
+// sensitive as granting one), already called by Users & Roles, and its
+// {userID} already names exactly the person who is locked out. A new
+// POST /members/{userID}/unlock would have needed a route registration in
+// server.go and a mapping in routeAction — both owned elsewhere this pass — and
+// would have shipped as dead code if either were missed. One field on a live
+// route is reachable the moment the button exists.
+//
+// The two acts are INDEPENDENT and either may be omitted: `{"unlock":true}`
+// alone frees the account without touching their level, and a level change
+// alone says nothing about the lock. Asking for neither is a 400 — an
+// administrator who sent an empty body meant something, and guessing is worse
+// than saying so.
 func (s *Server) handleUpdateMember(w http.ResponseWriter, r *http.Request) {
 	ctx, companyID, ok := s.adminCtx(w, r)
 	if !ok {
@@ -363,18 +520,52 @@ func (s *Server) handleUpdateMember(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	levelID, ok := s.resolveLevel(w, ctx, companyID, req.SecurityLevelID, req.SecurityLevelNam)
-	if !ok {
+
+	unlockRequested := req.Unlock != nil && *req.Unlock
+	levelNamed := req.SecurityLevelID != "" || req.SecurityLevelNam != ""
+	if !unlockRequested && !levelNamed {
+		writeError(w, http.StatusBadRequest,
+			"security_level_id, security_level_name or unlock is required")
 		return
 	}
-	if err := s.authAdmin.SetMembershipLevel(ctx, companyID, userID, levelID); err != nil {
-		writeAdminError(w, err)
-		return
+
+	out := map[string]string{"user_id": userID.String()}
+
+	if unlockRequested {
+		actor, aok := db.UserFromContext(r.Context())
+		if !aok {
+			writeError(w, http.StatusInternalServerError, "resolve user")
+			return
+		}
+		cleared, uerr := s.clearMemberLock(ctx, companyID, actor, userID)
+		if uerr != nil {
+			writeError(w, http.StatusInternalServerError, "clear lock")
+			return
+		}
+		if !cleared {
+			// The store refused: the target is not a member of this company (or
+			// the actor is not). 404 rather than 403 — from an administrator's
+			// point of view there is no such member HERE, and it is the same
+			// answer authz.ErrNotFound gets everywhere else on this surface.
+			writeError(w, http.StatusNotFound, "no such member in this company")
+			return
+		}
+		out["lock"] = "cleared"
 	}
-	writeJSON(w, http.StatusOK, map[string]string{
-		"user_id":           userID.String(),
-		"security_level_id": levelID.String(),
-	})
+
+	if levelNamed {
+		levelID, lok := s.resolveLevel(w, ctx, companyID, req.SecurityLevelID, req.SecurityLevelNam)
+		if !lok {
+			return
+		}
+		if err := s.authAdmin.SetMembershipLevel(ctx, companyID, userID, levelID); err != nil {
+			writeAdminError(w, err)
+			return
+		}
+		out["security_level_id"] = levelID.String()
+	}
+
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) handleRemoveMember(w http.ResponseWriter, r *http.Request) {

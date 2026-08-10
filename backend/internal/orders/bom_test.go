@@ -204,6 +204,14 @@ func TestOrderInputValidateRefusesTheOrdersThatCannotWork(t *testing.T) {
 		{"a negative quantity", func(o *Input) { o.Lines[0].Qty = d("-5") }, "more than zero"},
 		{"a negative rate", func(o *Input) { o.Lines[0].Rate = d("-1") }, "cannot be negative"},
 		{"no stock item", func(o *Input) { o.Lines[0].StockItemID = uuid.Nil }, "stock item"},
+		{
+			// ⛔ A COMMITMENT CANNOT BE DUE BEFORE IT WAS MADE. Accepted, this order
+			// is overdue on the order book the instant it is saved, and the operator's
+			// first sight of their own new order is a late one to chase.
+			name:   "a delivery date BEFORE the order date",
+			mutate: func(o *Input) { o.Lines[0].DueDate = "2026-05-31" }, // ordered 2026-06-01
+			want:   "falls BEFORE the order date",
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -217,6 +225,93 @@ func TestOrderInputValidateRefusesTheOrdersThatCannotWork(t *testing.T) {
 				t.Errorf("the refusal for %s does not say why (want %q): %v", c.name, c.want, err)
 			}
 		})
+	}
+}
+
+// ⛔ THE DUE-DATE CHECK MUST NOT SWALLOW THE THREE CASES THAT ARE LEGAL, and this
+// is the control leg of the case added to the table above.
+//
+// A refusal that also refused these would be worse than the defect it replaces:
+// "no date agreed" is the ordinary shape of an order (and is explicitly NOT
+// overdue however old it gets), same-day delivery is real, and a date Postgres
+// accepts but time.Parse does not is decided by Postgres — never by a second copy
+// of a date grammar living in this file. See dueBeforeOrder.
+func TestADueDateIsRefusedONLYWhenItPrecedesTheOrderDate(t *testing.T) {
+	party, item := uuid.New(), uuid.New()
+	order := func(orderDate, due string) Input {
+		return Input{
+			Direction: Sales, OrderNo: "SO-3", OrderDate: orderDate, PartyLedgerID: party,
+			Lines: []LineInput{{StockItemID: item, Qty: d("20"), Rate: d("500"), DueDate: due}},
+		}
+	}
+	legal := []struct{ name, orderDate, due string }{
+		{"no date agreed at all — the ordinary case, and never overdue", "2026-06-01", ""},
+		{"delivery agreed for the SAME day the order was placed", "2026-06-01", "2026-06-01"},
+		{"delivery agreed for the day after", "2026-06-01", "2026-06-02"},
+		{
+			// ⛔ NOT REFUSED HERE, AND THAT IS THE DESIGN. Postgres accepts this
+			// spelling and time.Parse does not, so Go declines to decide and
+			// checkDueDatesAgainstOrderDate makes the same comparison inside the
+			// transaction using Postgres's own parser. A Go-side peek that guessed
+			// would be the §7.2 mistake: a decoding rule re-implemented one layer
+			// away from the layer that owns it.
+			name:      "a loose spelling Postgres accepts — Go must DECLINE, not guess",
+			orderDate: "2026-6-1", due: "2026-5-31",
+		},
+	}
+	for _, c := range legal {
+		t.Run(c.name, func(t *testing.T) {
+			if err := order(c.orderDate, c.due).Validate(); err != nil {
+				t.Errorf("Validate REFUSED a legal order (%s): %v", c.name, err)
+			}
+		})
+	}
+}
+
+// ⛔ THE FINISHED GOOD BELONGS ON THE YIELDING SIDE OF "yields".
+//
+// The first explosion note used to read "%s of %s yields %s" with the recipe's
+// OUTPUT QUANTITY substituted at BOTH ends, so a 3-yield recipe for SS Sheet 2mm
+// printed "3 of SS Sheet 2mm yields 3" — which states, on the artefact an
+// operator reviews before issuing a Stock Journal, that the item being MADE is
+// being CONSUMED. The assertion is about ORDER and not merely about the words:
+// the finished good must appear AFTER "yields", never before it.
+func TestTheExplosionNoteNamesTheFinishedGoodOnTheYieldingSide(t *testing.T) {
+	b := Bom{
+		StockItem: "SS Sheet 2mm",
+		OutputQty: d("3"),
+		Components: []Component{
+			{LineNo: 1, StockItemID: uuid.New(), StockItem: "SS Coil", Qty: d("10")},
+		},
+	}
+	notes := explosionNotes(b, d("7"))
+	if len(notes) == 0 {
+		t.Fatal("an explosion must carry notes: they are what tells the operator nothing has moved")
+	}
+	first := notes[0]
+
+	yields := strings.Index(first, "yields")
+	good := strings.Index(first, "SS Sheet 2mm")
+	if yields < 0 || good < 0 {
+		t.Fatalf("the first note must name the finished good and what the recipe yields: %q", first)
+	}
+	if good < yields {
+		t.Errorf(
+			"the first explosion note names the finished good BEFORE \"yields\", on the CONSUMING "+
+				"side: %q. The recipe makes SS Sheet 2mm; it does not consume it. An operator reading "+
+				"this before issuing a Stock Journal is being told the opposite of the recipe",
+			first)
+	}
+	// The yield and the finished good must arrive TOGETHER, on the yielding side —
+	// the arrangement the broken version split across "yields" in both directions.
+	if !strings.Contains(first, "yields 3 of SS Sheet 2mm") {
+		t.Errorf("the note must state what the recipe yields as \"yields <qty> of <finished good>\": %q",
+			first)
+	}
+	// The ratio it actually scales by is still stated, because that is the number
+	// an operator checks when 7 units consume 23.3333 kg.
+	if !strings.Contains(first, "7/3") {
+		t.Errorf("the first note must state the ratio it scaled by (7/3): %q", first)
 	}
 }
 

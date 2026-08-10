@@ -166,13 +166,21 @@ describe("axisRemainders — PER AXIS, and never combined", () => {
     expect(axisRemainders(line("100"))).toEqual([]);
   });
 
-  it("counts a split whose CENTRE is unpicked, so the axis cannot read complete", () => {
-    // Money the operator has committed to the axis. Hiding it from the remainder
-    // would show the axis as done while it cannot be sent.
+  it("⛔ does NOT count a split whose CENTRE is unpicked — that was D67", () => {
+    // ⛔ THIS TEST USED TO PIN THE DEFECT. It asserted `allocated === "100.0000"`
+    // under the title "so the axis cannot read complete" — and 100.0000 against a
+    // posting of 100 is EXACTLY what made the axis read complete. The name said one
+    // thing, the assertion pinned the opposite, and the picker rendered "allocated
+    // in full" over a split buildCostAllocations was about to drop.
+    //
+    // The remainder describes the WIRE: only sendable splits are allocated.
     const rs = axisRemainders(
       line("100", [{ axis: "dept", centre: "", amount: "100" }]),
     );
-    expect(rs[0]!.allocated).toBe("100.0000");
+    expect(rs[0]!.allocated).toBe("0.0000");
+    expect(rs[0]!.unassigned).toBe("100.0000");
+    expect(rs[0]!.remainder).toBe("100.0000");
+    expect(rs[0]!.complete).toBe(false);
   });
 
   it("is exact to the paisa — no tolerance, matching the trigger", () => {
@@ -221,13 +229,17 @@ describe("allocationRefusal — a REFUSAL, not a warning", () => {
   });
 
   it("catches the split that has an amount but NO centre", () => {
-    // The axis arithmetic reads COMPLETE here (the sum includes it), so without this
-    // check the form would look saveable and the server would refuse it.
+    // ⛔ THE ASSERTION `/looks complete/` WAS PART OF D67. It pinned the sentence
+    // that described the bug ("it is counted in that axis's total, so the axis looks
+    // complete") instead of the sentence that fixes it. The axis no longer looks
+    // complete — it reports 0.0000 of 100 — and the refusal now says the thing the
+    // operator cannot see: the split is DROPPED on the way to the server.
     const r = allocationRefusal(
       line("100", [{ axis: "d", centre: "", amount: "100", axisName: "Department" }]),
     );
-    expect(r).toMatch(/amount but no cost\s+centre/);
-    expect(r).toMatch(/looks complete/);
+    expect(r).toMatch(/Department/);
+    expect(r).toMatch(/100\.0000 against no cost centre/);
+    expect(r).toMatch(/NOT SENT/);
   });
 });
 

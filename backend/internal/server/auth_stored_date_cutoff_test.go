@@ -767,6 +767,29 @@ var writeRoutesNamingADocumentButNotMovingIt = map[string]string{
 	"DELETE /v1/companies/{companyID}/bank-reconciliation/{ledgerID}/{voucherID}/{legNo}": "" +
 		"writes only bank_reconciliation; no ledger figure moves (its bank_date is judged separately)",
 
+	// Attaching further deductions to a deposit that is already recorded
+	// (register row D1). masters.AllocateToRecordedChallan writes only
+	// tds_challan_allocation rows: no voucher_version, no posting, no ledger
+	// figure moves, and it cannot take any voucher into or out of a locked
+	// period — which is why it is here rather than in
+	// existingVouchersNamedByRequest.
+	//
+	// ⚠️ IT IS NOT UNJUDGED. Its own date — the STORED deposit_date of the challan
+	// in the path — IS read and judged, by storedChallanDepositDate, exactly as
+	// the bank-recon routes' bank_date is. The entry says "not moving a voucher",
+	// never "no cutoff applies"; auth_tds_challan_allocate_test.go drives the
+	// refusal and its control.
+	//
+	// ⛔ AND THE DEDUCTION'S OWN DATE IS DELIBERATELY NOT JUDGED, for the reason
+	// storedCutoffDateForRequest gives for the bank leg: tax is DEDUCTED before it
+	// is DEPOSITED, always, so every allocation names a voucher older than the
+	// deposit. Judging it would refuse the feature at every company that has
+	// locked a filed month while protecting nothing — the voucher is not restated
+	// and no figure of its period moves.
+	"POST /v1/companies/{companyID}/tds-challans/{challanID}/allocations": "" +
+		"writes only tds_challan_allocation; no voucher is restated (its stored deposit_date is " +
+		"judged separately, by storedChallanDepositDate)",
+
 	// Raising an e-way bill / an e-invoice AGAINST a voucher. Both are siblings
 	// of the ledger, not callers of it (archtest pins internal/ewaybill and
 	// internal/einvoice away from posting), so neither can restate or remove a

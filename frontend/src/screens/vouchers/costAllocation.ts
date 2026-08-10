@@ -103,6 +103,14 @@ export function emptyAllocation(): DraftAllocation {
  * Half-picked splits are dropped (no axis or no centre chosen is an operator who
  * changed their mind, not a split to nowhere), and so are zero amounts — the server
  * refuses a zero allocation, and a split that moves nothing is not a split.
+ *
+ * ⛔⛔ THE `continue` BELOW IS HALF OF A PAIR. {@link axisRemainders} MAKES THE SAME
+ * TEST and must go on making it: what the picker calls "allocated" has to be what
+ * this function actually sends, or the screen reports an axis complete while the
+ * request is short of it. The two drifted apart once — axisRemainders counted a
+ * centre-less split and this one dropped it — and the result was a form showing
+ * "allocated in full" over a 422. If you change what is dropped here, change what
+ * is counted there in the same edit.
  */
 export function buildCostAllocations(
   lines: readonly AllocatableLine[],
@@ -130,11 +138,36 @@ export function buildCostAllocations(
 export interface AxisRemainder {
   costCategoryId: string;
   categoryName: string;
-  /** What this axis has been allocated so far, fixed-4. */
+  /**
+   * What this axis has been allocated so far, fixed-4.
+   *
+   * ⛔ COUNTED FROM THE SPLITS THAT WILL ACTUALLY BE SENT, i.e. exactly the ones
+   * {@link buildCostAllocations} keeps. See {@link unassigned}.
+   */
   allocated: string;
   /** posting amount − allocated, fixed-4. Zero means this axis is complete. */
   remainder: string;
-  /** True when the axis totals the posting exactly — the only saveable state. */
+  /**
+   * Money keyed against this axis on a split with NO cost centre chosen, fixed-4.
+   * Normally "0.0000".
+   *
+   * ⛔ THIS FIELD EXISTS BECAUSE THE NUMBER IT HOLDS IS INVISIBLE EVERYWHERE ELSE.
+   * {@link buildCostAllocations} DROPS a centre-less split, so it is typed, shown
+   * on its own row, and then silently absent from the request. Reporting it here
+   * is what lets {@link allocationRefusal} say so before Ctrl+A rather than
+   * letting the server say it afterwards, in a sentence about a posting ordinal.
+   */
+  unassigned: string;
+  /**
+   * True when the axis totals the posting exactly AND every one of its splits is
+   * sendable — the only saveable state.
+   *
+   * ⛔ `unassigned` MUST BE ZERO FOR THIS TO BE TRUE, and that is not implied by
+   * the arithmetic. A posting of 1000 with a centre-picked 1000 AND a centre-less
+   * 400 beside it sums to exactly 1000 on the wire: the server would take it, and
+   * the 400 the operator keyed would simply cease to exist with nothing anywhere
+   * saying so.
+   */
   complete: boolean;
 }
 
@@ -150,30 +183,70 @@ export interface AxisRemainder {
  * 100% outstanding: not allocating a posting on an axis is the normal case (most
  * postings are analysed on no axis at all), and listing every axis as incomplete
  * would make the one axis that IS incomplete invisible.
+ *
+ * ============================================================================
+ * ⛔⛔ THE REMAINDER DESCRIBES THE **WIRE**, NOT THE FORM. THAT IS THE INVARIANT.
+ * ============================================================================
+ * `allocated` counts EXACTLY the splits {@link buildCostAllocations} will send,
+ * and nothing else. The two functions are one statement made twice, and the
+ * property that ties them together is:
+ *
+ *     remainder === posting − (what buildCostAllocations sends for this axis)
+ *
+ * This line used to add a centre-less split into `sum`, defending it with "money
+ * the operator has committed to this axis, and hiding it from the remainder would
+ * show the axis as complete while it cannot be sent". ⛔ IT PRODUCED THE EXACT
+ * OUTCOME IT CLAIMED TO PREVENT. A posting of 1,000 with one split carrying 1,000
+ * and no centre read `allocated 1000.0000 / remainder 0.0000 / complete`, the
+ * picker rendered **"allocated in full"**, `buildCostAllocations` then dropped the
+ * split, and Ctrl+A sent an axis with NO allocations at all — or, with a second
+ * centre-picked split beside it, a SHORT axis, which the server refuses with a 422
+ * that costs the operator the whole form. The screen and the request disagreed
+ * about what had been allocated, and the screen was the flattering one.
+ *
+ * Counting only sendable splits makes the shortfall VISIBLE on the remainder row
+ * (600.0000 of 1000 — 400.0000 left) instead of hiding it behind a green "in
+ * full", and the 400 that will not be sent is reported separately as
+ * {@link AxisRemainder.unassigned} so {@link allocationRefusal} can name it.
  */
 export function axisRemainders(line: AllocatableLine): AxisRemainder[] {
   const posting = parseFixed4(line.amount);
-  const byAxis = new Map<string, { name: string; sum: bigint }>();
+  const byAxis = new Map<
+    string,
+    { name: string; sum: bigint; unassigned: bigint }
+  >();
   for (const a of line.allocations) {
     if (a.costCategoryId.trim() === "") continue;
-    const cur = byAxis.get(a.costCategoryId) ?? { name: a.categoryName, sum: 0n };
+    const cur = byAxis.get(a.costCategoryId) ?? {
+      name: a.categoryName,
+      sum: 0n,
+      unassigned: 0n,
+    };
     // The NAME is taken from whichever split carries one, so a row picked before the
     // masters loaded does not blank an axis heading that another split can name.
     cur.name = cur.name || a.categoryName;
-    // ⚠️ SUMMED EVEN WHEN THE CENTRE IS UNPICKED. A half-keyed split with an amount
-    // is money the operator has committed to this axis, and hiding it from the
-    // remainder would show the axis as complete while it cannot be sent.
-    cur.sum += parseFixed4(a.amount);
+    const amount = parseFixed4(a.amount);
+    // ⛔ THE SAME TEST buildCostAllocations MAKES, and it must stay the same test.
+    // A centre-less split is not sent, so it is not allocated; it is set aside as
+    // `unassigned` so that the one thing nothing else can see — money typed into a
+    // row that will evaporate — has somewhere to be reported from.
+    if (a.costCentreId.trim() === "") cur.unassigned += amount;
+    else cur.sum += amount;
     byAxis.set(a.costCategoryId, cur);
   }
   const out: AxisRemainder[] = [];
-  for (const [id, { name, sum }] of byAxis) {
+  for (const [id, { name, sum, unassigned }] of byAxis) {
     out.push({
       costCategoryId: id,
       categoryName: name,
       allocated: formatFixed4(sum),
       remainder: formatFixed4(posting - sum),
-      complete: sum === posting && posting !== 0n,
+      unassigned: formatFixed4(unassigned),
+      // ⛔ `unassigned === 0n` IS NOT REDUNDANT. It is the over-keyed case: a
+      // sendable 1000 against a posting of 1000 with a centre-less 400 beside it
+      // sums correctly, and without this guard the form reads saveable while 400
+      // of the operator's typing is discarded in silence.
+      complete: sum === posting && posting !== 0n && unassigned === 0n,
     });
   }
   // Stable, by axis name, so two renders of one posting do not reorder.
@@ -192,33 +265,45 @@ export function axisRemainders(line: AllocatableLine): AxisRemainder[] {
  * them before the send is strictly kinder.
  *
  * ⚠️ AN AXIS WITH NO SPLITS IS NOT AN ERROR. Only a PARTIAL axis is.
+ *
+ * ⛔ THE UNASSIGNED SPLIT IS REPORTED **BEFORE** THE SHORTFALL, and the order is
+ * load-bearing rather than stylistic. Both sentences can be true of one axis at
+ * once (400 keyed with no centre, 300 short as well), and the shortfall is ALREADY
+ * on screen — it is the remainder row, in the alarm colour, one line above. The
+ * unassigned amount is on screen too but reads as allocated, so it is the fact the
+ * operator cannot deduce; saying "short by 700" first would send them to add
+ * another split when the fix is to finish the one they have.
+ *
+ * ⚠️ AND IT IS WHY THIS LOOP CANNOT SIMPLY TRUST `complete`. With `unassigned`
+ * non-zero and the sendable splits totalling the posting exactly, the axis is NOT
+ * complete and its remainder is `0.0000` — so the generic branch would emit "short
+ * by 0.0000", a sentence that is arithmetically consistent and completely useless.
  */
 export function allocationRefusal(line: AllocatableLine): string {
+  const posting = formatFixed4(parseFixed4(line.amount));
   for (const r of axisRemainders(line)) {
     if (r.complete) continue;
-    const over = parseFixed4(r.remainder) < 0n;
-    return over
-      ? `The ${r.categoryName || "chosen"} axis is over-allocated by ` +
-          `${formatFixed4(-parseFixed4(r.remainder))} — its splits total ` +
-          `${r.allocated} against a posting of ${formatFixed4(parseFixed4(line.amount))}. ` +
-          `An axis must total the posting EXACTLY, to the paisa; there is no tolerance.`
-      : `The ${r.categoryName || "chosen"} axis is short by ${r.remainder} — its ` +
-          `splits total ${r.allocated} against a posting of ` +
-          `${formatFixed4(parseFixed4(line.amount))}. An axis is complete or it is ` +
-          `not: a partial split is refused by the server AND by the database, so ` +
-          `nothing would be saved. Allocate the remainder, or remove the axis.`;
-  }
-  // A split with an amount but no centre chosen cannot be sent either, and the axis
-  // arithmetic above cannot see it — the sum includes it, so the axis reads complete.
-  for (const a of line.allocations) {
-    if (a.costCategoryId.trim() === "") continue;
-    if (a.costCentreId.trim() === "" && parseFixed4(a.amount) !== 0n) {
+    const axis = r.categoryName || "chosen";
+    if (parseFixed4(r.unassigned) !== 0n) {
       return (
-        `A split on the ${a.categoryName || "chosen"} axis has an amount but no cost ` +
-        `centre. It is counted in that axis's total, so the axis looks complete while ` +
-        `the split cannot be sent — choose a centre, or clear the amount.`
+        `A split on the ${axis} axis has ${r.unassigned} against no cost centre. ` +
+        `A split with no centre is NOT SENT — it is dropped on the way to the ` +
+        `server — so of the ${formatFixed4(parseFixed4(r.allocated) + parseFixed4(r.unassigned))} ` +
+        `keyed on this axis only ${r.allocated} would reach the books, against a ` +
+        `posting of ${posting}. Choose a centre, or clear the amount.`
       );
     }
+    const over = parseFixed4(r.remainder) < 0n;
+    return over
+      ? `The ${axis} axis is over-allocated by ` +
+          `${formatFixed4(-parseFixed4(r.remainder))} — its splits total ` +
+          `${r.allocated} against a posting of ${posting}. ` +
+          `An axis must total the posting EXACTLY, to the paisa; there is no tolerance.`
+      : `The ${axis} axis is short by ${r.remainder} — its ` +
+          `splits total ${r.allocated} against a posting of ` +
+          `${posting}. An axis is complete or it is ` +
+          `not: a partial split is refused by the server AND by the database, so ` +
+          `nothing would be saved. Allocate the remainder, or remove the axis.`;
   }
   return "";
 }

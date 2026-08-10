@@ -846,7 +846,12 @@ describe("Alt+E agrees with the Stock Summary screen about emptiness", () => {
     expect(downloads).toHaveLength(1);
     const g = lastCsvGrid();
     expect(g.map((r) => r[0])).toContain("Widget");
-    expect(g.find((r) => r[0] === "Widget")![6]).toBe("2999.4322");
+    // Indexed by HEADER NAME: the sheet was widened to put a Value beside every
+    // Qty (the inward money figure had no column at all), and a hardcoded 6
+    // would silently follow the shift onto a different column.
+    expect(
+      g.find((r) => r[0] === "Widget")![g[0]!.indexOf("Closing Value")],
+    ).toBe("2999.4322");
   });
 
   it("ROWS but no ITEMS: the table is still on screen, so the key still writes it", async () => {
@@ -873,7 +878,7 @@ describe("Alt+E agrees with the Stock Summary screen about emptiness", () => {
     // exactly what the file carries — agreement is the assertion, not the count.
     const g = lastCsvGrid();
     expect(g.map((r) => r[0])).toEqual(["Item / Location", "Stock-in-Hand"]);
-    expect(g[1]![6]).toBe("2999.4322");
+    expect(g[1]![g[0]!.indexOf("Closing Value")]).toBe("2999.4322");
   });
 
   it("CONTROL: genuinely empty — BOTH fields empty — still refuses, in the screen's words", async () => {

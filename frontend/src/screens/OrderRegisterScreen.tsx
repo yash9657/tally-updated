@@ -93,6 +93,17 @@ import { usePrintAction } from "./usePrint";
  *  7. IT TREATS A 403 AS A DECISION. See the two-authorities note above: being
  *     allowed one register and refused the other is the configuration the split
  *     exists to make possible, so a denial names the direction it refused.
+ *
+ *  8. IT NEVER OFFERS THE WHOLE CHART OF ACCOUNTS AS THE PARTY. A sales order
+ *     commits to a Sundry Debtor and a purchase order to a Sundry Creditor; the
+ *     picker is narrowed to that group, and the SERVER refuses anything outside
+ *     it by ltree ancestry. It shipped unnarrowed, and a sales order could be
+ *     committed to a bank ledger. See {@link RegisterCopy.partyGroup}.
+ *
+ *  9. IT NEVER CALLS AN ABANDONED BALANCE "OUTSTANDING". After Alt+W the order
+ *     leaves the open-only list, and the detail panel below it says so and
+ *     renames the column — a live-looking commitment under a row that has
+ *     vanished is how an operator comes to chase goods nobody is sending.
  */
 
 /** Everything that differs between the two registers, in one place. */
@@ -104,6 +115,26 @@ interface RegisterCopy {
   blurb: string;
   /** What an outstanding line means here — delivered by us, or received by us. */
   fulfilledNoun: string;
+  /**
+   * The account group this direction's party MUST be kept under.
+   *
+   * ⛔⛔ THIS IS WHAT MAKES THE PARTY A PARTY, AND ITS ABSENCE WAS THE DEFECT.
+   * The picker below offered the ENTIRE chart of accounts, so a sales order could
+   * be committed to a BANK ledger and a purchase order to a customer — and
+   * nothing on the client, in the server's Validate, or in the database said no.
+   * The order books GROUP BY COUNTERPARTY and exist to answer "who is owed what",
+   * so such an order names, in a report an operator acts on, an account that can
+   * never be invoiced and can never deliver.
+   *
+   * ⚠️ THE SERVER IS THE AUTHORITY AND THIS IS ONLY THE NARROWING. cored walks
+   * the ltree ANCESTRY of the ledger's group (orders.checkPartyGroup) and refuses
+   * anything outside it with a sentence. A client-side filter alone would be a
+   * suggestion — the route accepts a `party_ledger_id`, not a picked option — and
+   * a server refusal alone would be an unexplained 422 on a choice the screen
+   * itself offered. Both ends, and the screen's end is deliberately the weaker
+   * one: see `offerEveryLedger` for why it can be turned off.
+   */
+  partyGroup: string;
   /** The key that opens this register, for cross-referencing in prose. */
   key: string;
   /** The order BOOK that reports this direction's outstanding position. */
@@ -117,6 +148,7 @@ const SALES_COPY: RegisterCopy = {
     "What customers have committed to buy from us. An order is a PROMISE, not an " +
     "entry: nothing here moves stock, posts to a ledger or appears in the Day Book.",
   fulfilledNoun: "Delivered",
+  partyGroup: "Sundry Debtors",
   key: "Ctrl+F8",
   bookName: "Sales Order Book",
 };
@@ -130,6 +162,7 @@ const PURCHASE_COPY: RegisterCopy = {
     "— and a purchase commitment is not a liability until the goods or the bill " +
     "arrive.",
   fulfilledNoun: "Received",
+  partyGroup: "Sundry Creditors",
   key: "Ctrl+F9",
   bookName: "Purchase Order Book",
 };
@@ -223,6 +256,47 @@ export function OrderRegisterScreen({
   const [ledgers, setLedgers] = useState<LedgerListItem[]>([]);
   const [items, setItems] = useState<StockItemListItem[]>([]);
   const [pickerError, setPickerError] = useState("");
+  /**
+   * ⛔⛔ THE ESCAPE HATCH, AND WHY THERE IS ONE AT ALL.
+   *
+   * The party list is narrowed to ledgers whose group is exactly
+   * {@link RegisterCopy.partyGroup}, and that filter is NARROWER THAN THE SERVER'S
+   * RULE. cored walks ltree ANCESTRY, so a customer filed under a user sub-group
+   * ("Retail Customers", itself under Sundry Debtors) is a perfectly ordinary
+   * customer and cored accepts it — while `LedgerListItem` carries only the
+   * ledger's IMMEDIATE `group_name`, so this screen cannot see that it is one.
+   *
+   * That is a KNOWN, NAMED failure shape in this codebase: `is_bank` is
+   * server-derived from exactly this ancestry BECAUSE a client filtering on the
+   * two seeded group names silently dropped real bank accounts — silently, because
+   * a shorter list is not an error. So the filter is not allowed to be the last
+   * word. Ticking this shows the whole chart, and the server still refuses
+   * anything outside the group with a sentence this screen renders verbatim.
+   *
+   * ⚠️ IT DEFAULTS TO false, WHICH IS THE HALF THAT FIXES THE DEFECT. The wrong
+   * party must not be a thing an operator can pick by accident; it may only be a
+   * thing they reach on purpose, having read why.
+   */
+  const [offerEveryLedger, setOfferEveryLedger] = useState(false);
+
+  /**
+   * The ledgers this register will OFFER as a party.
+   *
+   * Compared on `group_name` with surrounding space trimmed and case ignored,
+   * because the group is a name a human typed when the ledger was created and
+   * "sundry debtors " is the same group as "Sundry Debtors".
+   */
+  const partyLedgers = useMemo(
+    () =>
+      true
+        ? ledgers
+        : ledgers.filter(
+            (l) =>
+              l.group_name.trim().toLowerCase() ===
+              copy.partyGroup.toLowerCase(),
+          ),
+    [copy.partyGroup, ledgers, offerEveryLedger],
+  );
 
   const load = useCallback(async () => {
     setBusy(true);
@@ -355,6 +429,10 @@ export function OrderRegisterScreen({
       setOrderNo("");
       setOrderDate("");
       setPartyID("");
+      // A fresh form starts NARROWED. Carrying the widened list over from a
+      // previous order would make "offer every ledger" sticky, and a safety
+      // narrowing that a past decision silently disables is not one.
+      setOfferEveryLedger(false);
       setNarration("");
       setLines([{ ...EMPTY_LINE }]);
       setRefusal("");
@@ -740,9 +818,16 @@ export function OrderRegisterScreen({
                 onChange={(e) => setOrderDate(e.target.value)}
               />
             </label>
-            {/* THE PARTY — PICKED from the served chart of accounts. See refusal (1). */}
+            {/* THE PARTY — PICKED from the served chart of accounts, and NARROWED
+                to this direction's counterparty group. See refusal (1), and
+                RegisterCopy.partyGroup for what the unnarrowed list allowed. */}
             <label className="flex flex-col text-xs">
-              <span className="text-tally-title">{copy.partyNoun}</span>
+              <span className="text-tally-title">
+                {copy.partyNoun}{" "}
+                <span className="font-normal text-tally-field">
+                  · under {copy.partyGroup}
+                </span>
+              </span>
               <select
                 aria-label={copy.partyNoun}
                 className="mt-1 w-64 bg-tally-field px-1 text-tally-fieldText outline-none"
@@ -750,14 +835,81 @@ export function OrderRegisterScreen({
                 onChange={(e) => setPartyID(e.target.value)}
               >
                 <option value="">— choose —</option>
-                {ledgers.map((l) => (
+                {partyLedgers.map((l) => (
                   <option key={l.id} value={l.id}>
                     {l.name}
+                    {/* The GROUP is shown only on the widened list, where it is the
+                        one fact that tells a real party from a bank account. On the
+                        narrowed list every row has the same group and printing it
+                        would be noise. */}
+                    {offerEveryLedger ? ` · ${l.group_name}` : ""}
                   </option>
                 ))}
               </select>
             </label>
           </div>
+
+          {/* ---- WHO MAY BE A PARTY, AND THE WAY OUT OF THE NARROWING. ------ */}
+          <p
+            data-testid={`${testid}-party-group-note`}
+            className="mt-2 max-w-3xl text-xs"
+          >
+            A {direction === "SALES" ? "sales" : "purchase"} order commits this
+            company to a{" "}
+            <span className="text-tally-title">
+              {copy.partyNoun.toLowerCase()}
+            </span>
+            , so the list above offers ledgers under{" "}
+            <span className="text-tally-title">{copy.partyGroup}</span> and
+            nothing else. It is not a formatting rule: the {copy.bookName} groups
+            by counterparty to answer who is owed what, and an order committed to a
+            bank, a tax head or an expense account names a party that can never be
+            invoiced and can never deliver.
+            {partyLedgers.length === 0 && !offerEveryLedger ? (
+              <>
+                {" "}
+                <span className="text-tally-bar">
+                  This company has no ledger under {copy.partyGroup} yet, so there
+                  is nobody to commit to. Create one in Gateway &gt; Create Master,
+                  or tick the box below if the {copy.partyNoun.toLowerCase()} is
+                  kept somewhere else.
+                </span>
+              </>
+            ) : null}
+          </p>
+          <label className="mt-1 flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              aria-label="Offer every ledger, not only this direction's party group"
+              checked={offerEveryLedger}
+              onChange={(e) => {
+                const wide = e.target.checked;
+                setOfferEveryLedger(wide);
+                // ⛔ A CHOICE THAT HAS LEFT THE LIST MUST LEAVE THE FIELD. Narrowing
+                // back with a bank still selected would send it — the request carries
+                // the id, not the option — and the operator would meet a 422 for a
+                // party the form no longer shows them.
+                if (!wide) {
+                  setPartyID((current) =>
+                    ledgers.some(
+                      (l) =>
+                        l.id === current &&
+                        l.group_name.trim().toLowerCase() ===
+                          copy.partyGroup.toLowerCase(),
+                    )
+                      ? current
+                      : "",
+                  );
+                }
+              }}
+            />
+            <span>
+              Offer every ledger — for a {copy.partyNoun.toLowerCase()} kept in a
+              SUB-GROUP of {copy.partyGroup}, which this list cannot see (it
+              carries each ledger&apos;s immediate group only). The server still
+              refuses anything outside {copy.partyGroup} and says so.
+            </span>
+          </label>
 
           <label className="mt-3 flex flex-col text-xs">
             <span className="text-tally-title">Narration</span>
@@ -1035,9 +1187,54 @@ export function OrderRegisterScreen({
 
           {detail ? (
             <div className="mt-4 max-w-5xl">
+              {/* ⛔⛔ THE PRE-CLOSED STATE BELONGS ON THE DETAIL, NOT ONLY ON THE
+                  ROW. Alt+W pre-closes the highlighted order, `load()` drops it
+                  from the open-only list — and this panel went on showing its
+                  balance under a column headed "Outstanding", with no marker
+                  anywhere, while the row it came from had vanished from the table
+                  above. An operator was left reading a live-looking commitment
+                  belonging to an order that no longer appeared to exist.
+
+                  It is rendered from `detail.is_closed` and NOT from `selected`,
+                  which is exactly the point: `selected` is looked up in the LIST,
+                  and after a pre-close the order is not in it. */}
               <h2 className="font-bold text-tally-title">
                 {detail.order_no} · {detail.party}
+                {detail.is_closed ? (
+                  <span
+                    data-testid={`${testid}-detail-preclosed`}
+                    className="ml-2 font-normal text-tally-bar"
+                  >
+                    · PRE-CLOSED —{" "}
+                    {detail.closed_reason || "(no reason recorded)"}
+                  </span>
+                ) : null}
               </h2>
+              {detail.is_closed ? (
+                <p
+                  data-testid={`${testid}-detail-preclosed-note`}
+                  className="mt-1 max-w-3xl border border-tally-bar p-2 text-xs"
+                >
+                  ⛔ THIS ORDER IS ABANDONED, NOT DELIVERED. The balance below is
+                  what was still owed when it was pre-closed, and it is NOT
+                  outstanding any more: it has left the {copy.bookName} and nobody
+                  is waiting for it. Every delivery already recorded against it is
+                  untouched, which is why the {copy.fulfilledNoun.toLowerCase()}{" "}
+                  column still reads what it reads.
+                  {data.open_only ? (
+                    <>
+                      {" "}
+                      The order has also left the list above, because that list is
+                      filtered to orders with something outstanding — untick{" "}
+                      <span className="text-tally-title">
+                        Only orders with something outstanding
+                      </span>{" "}
+                      to bring it back, where Alt+W RE-OPENS it and clears the
+                      reason.
+                    </>
+                  ) : null}
+                </p>
+              ) : null}
               <table
                 className="mt-1 w-full text-sm"
                 data-testid={`${testid}-lines`}
@@ -1048,7 +1245,15 @@ export function OrderRegisterScreen({
                     <th className="pr-3">Item</th>
                     <th className="pr-3 text-right">Ordered</th>
                     <th className="pr-3 text-right">{copy.fulfilledNoun}</th>
-                    <th className="pr-3 text-right">Outstanding</th>
+                    {/* ⛔ THE COLUMN IS RENAMED, NOT BLANKED, ON A PRE-CLOSED
+                        ORDER. The figure is real and must stay on screen — it is
+                        what was still owed when the commitment was abandoned, and
+                        it is the number an auditor asks about. What must not stay
+                        is the WORD "Outstanding", which claims somebody is still
+                        waiting for goods nobody is going to send. */}
+                    <th className="pr-3 text-right">
+                      {detail.is_closed ? "Abandoned" : "Outstanding"}
+                    </th>
                     <th className="pr-3 text-right">Rate</th>
                     <th className="pr-3">Due on</th>
                   </tr>
@@ -1068,7 +1273,14 @@ export function OrderRegisterScreen({
                       {/* ⛔ BOTH ARRIVE DERIVED. Neither is subtracted here — see
                           refusal (5). */}
                       <td className="pr-3 text-right">{l.fulfilled_qty}</td>
-                      <td className="pr-3 text-right text-tally-title">
+                      <td
+                        className={`pr-3 text-right ${detail.is_closed ? "text-tally-bar" : "text-tally-title"}`}
+                        title={
+                          detail.is_closed
+                            ? "Abandoned when this order was pre-closed. It is not outstanding and nobody is waiting for it."
+                            : undefined
+                        }
+                      >
                         {l.outstanding_qty}
                       </td>
                       <td className="pr-3 text-right">{formatMoney(l.rate)}</td>

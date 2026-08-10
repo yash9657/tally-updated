@@ -53,14 +53,67 @@ import {
  * things that can.
  */
 
-/** One candidate: an open order line of the right item, with its order's number. */
-interface Candidate {
+/**
+ * One candidate: an open order line of the right item, with its order's number.
+ *
+ * Exported with {@link byCommitmentOrder} so the ordering can be pinned directly,
+ * without a rendered picker: a sort assertion made through the DOM can only see
+ * the two or three orders a fixture bothers to seed, and the cases that tell a
+ * numeric compare from a lexical one need nine.
+ */
+export interface Candidate {
   orderLineId: string;
   orderNo: string;
+  /**
+   * THE DAY THE COMMITMENT WAS MADE — and the ONLY thing on this record that
+   * actually orders the candidates. See {@link byCommitmentOrder}.
+   */
+  orderDate: string;
   itemName: string;
   outstanding: string;
   qty: string;
   dueDate: string;
+}
+
+/**
+ * Oldest commitment FIRST — the order that has been waiting longest is the one an
+ * operator shipping today means to discharge.
+ *
+ * ⛔⛔ THIS USED TO BE `a.orderNo.localeCompare(b.orderNo)` UNDER THIS EXACT
+ * COMMENT, AND IT PUT THE NEWEST ORDER AT THE TOP. Two separate faults, and the
+ * second survives fixing only the first:
+ *
+ *  1. AN ORDER NUMBER IS NOT A DATE. It is a label a business chooses, and
+ *     nothing makes it ascend with time: a company that restarts its series each
+ *     financial year, or prefixes by branch ("BLR-1", "MUM-1"), has numbers that
+ *     sort into an order with no relation at all to when anything was promised.
+ *     So the commitment order is the ORDER DATE, which is the recorded fact about
+ *     when the promise was made.
+ *
+ *  2. A RAW STRING COMPARE IS NOT NUMERIC. Order numbers here are commonly bare
+ *     integers with an independent counter, so lexically "10" < "9" and the tenth
+ *     order sorts above the ninth. That is the same hazard
+ *     HANDOFF-DEFECT-BURNDOWN §4.1 records for voucher numbers in
+ *     inventory/valuation.go, where it costs a mis-valued issue rather than a
+ *     mis-ordered picker. `localeCompare(…, undefined, { numeric: true })` is what
+ *     makes "SO-9" precede "SO-10"; it is used only as the TIE-BREAK, for two
+ *     orders placed on one day, which have no other ordering between them.
+ *
+ * The final tie-break is the order LINE id, and it is not arbitrary: those ids
+ * are UUIDv7, minted in creation order, so it is a stable time ordering rather
+ * than a coin toss. Without it two identically-dated, identically-numbered lines
+ * could swap places between renders and the operator's selection would appear to
+ * move on its own.
+ */
+export function byCommitmentOrder(a: Candidate, b: Candidate): number {
+  // ISO yyyy-mm-dd sorts correctly as a string BECAUSE it is fixed-width and
+  // zero-padded — the one date format for which a lexical compare is a date
+  // compare. Every date on this wire is that format (the server formats with
+  // "2006-01-02"), so this is a property of the format, not a hope.
+  if (a.orderDate !== b.orderDate) return a.orderDate < b.orderDate ? -1 : 1;
+  const byNo = a.orderNo.localeCompare(b.orderNo, undefined, { numeric: true });
+  if (byNo !== 0) return byNo;
+  return a.orderLineId.localeCompare(b.orderLineId);
 }
 
 /**
@@ -142,6 +195,7 @@ function useCandidates(direction: OrderDirection | null): {
         list.push({
           orderLineId: l.order_line_id,
           orderNo: o.order_no,
+          orderDate: o.order_date,
           itemName: l.stock_item,
           outstanding: l.outstanding_qty,
           qty: l.qty,
@@ -150,10 +204,11 @@ function useCandidates(direction: OrderDirection | null): {
         m.set(l.stock_item_id, list);
       }
     }
-    // Oldest commitment first: the order that has been waiting longest is the one an
-    // operator shipping today means to discharge.
+    // ⛔ OLDEST COMMITMENT FIRST — see byCommitmentOrder for why that is the ORDER
+    // DATE and not the order number, and for what sorting a bare integer as a
+    // string does to a series that has passed nine.
     for (const list of m.values()) {
-      list.sort((a, b) => a.orderNo.localeCompare(b.orderNo));
+      list.sort(byCommitmentOrder);
     }
     return m;
   }, [orders]);
@@ -271,9 +326,15 @@ export function FulfilmentPicker({
             }}
           >
             <option value="">— choose an order —</option>
+            {/* ⛔ THE ORDER DATE IS ON THE OPTION BECAUSE IT IS WHAT THE LIST IS
+                SORTED BY. A list ordered by a fact it does not display looks
+                unordered, and an operator who cannot see why the top entry is the
+                top entry has no reason to trust that it is the oldest commitment
+                — which is the entire affordance. */}
             {candidates.map((c) => (
               <option key={c.orderLineId} value={c.orderLineId}>
-                {c.orderNo} · {c.itemName} · {c.outstanding} outstanding
+                {c.orderNo} · ordered {c.orderDate} · {c.itemName} ·{" "}
+                {c.outstanding} outstanding
                 {c.dueDate === "" ? "" : ` · due ${c.dueDate}`}
               </option>
             ))}

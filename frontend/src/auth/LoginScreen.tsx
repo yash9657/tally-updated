@@ -33,14 +33,71 @@ function classify(err: unknown): Failure {
   };
 }
 
+/**
+ * When the lock lifts, IN THE OPERATOR'S OWN CLOCK (D58).
+ *
+ * The server answers 423 with a raw UTC RFC3339 instant —
+ * `"until":"2026-08-07T23:09:07Z"` — and this screen used to interpolate it
+ * verbatim: "Try again after 2026-08-07T23:09:07Z". For this product's audience,
+ * accountants in India on IST (UTC+5:30), that string is wrong twice over. It is
+ * not a time they recognise (it is five and a half hours behind their wall
+ * clock, and after 18:30 local it names YESTERDAY'S DATE, which reads as a lock
+ * that expired long ago), and it does not answer the only question being asked,
+ * which is "how long am I locked out for?".
+ *
+ * So both are given: the local instant with its zone named, and the wait.
+ *
+ * ⚠️ THE ZONE IS THE BROWSER'S, NOT A HARDCODED "IST". A CA working from London
+ * must be told London time, and hardcoding +5:30 would put them out by five and
+ * a half hours with a confident-looking label. Intl resolves the machine's zone
+ * and names it, so the sentence is true wherever it is read.
+ */
+function lockedUntilText(untilISO: string): string {
+  const ms = Date.parse(untilISO);
+  if (!Number.isFinite(ms)) {
+    // An `until` we cannot parse is still worth showing verbatim: an
+    // unrecognised instant is more use to whoever is being telephoned about
+    // this than silence, and it is the server's own words.
+    return `Try again after ${untilISO}.`;
+  }
+  const local = new Intl.DateTimeFormat(undefined, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+  }).format(new Date(ms));
+
+  const remainingMs = ms - Date.now();
+  if (remainingMs <= 0) {
+    // The lock has already lapsed while this message was on screen. Saying "try
+    // again in 0 minutes" would be absurd; saying nothing would leave an
+    // operator waiting for a lock that is over.
+    return `The lock has now lifted (it ran to ${local}) — try again.`;
+  }
+  const minutes = Math.ceil(remainingMs / 60000);
+  const wait =
+    minutes >= 120
+      ? `about ${Math.round(minutes / 60)} hours`
+      : minutes >= 60
+        ? `about an hour`
+        : minutes === 1
+          ? `about a minute`
+          : `about ${minutes} minutes`;
+  return `Try again after ${local} — that is ${wait} from now.`;
+}
+
 function failureText(f: Failure): string {
   switch (f.kind) {
     case "invalid":
       return "Invalid credentials — check the user name and password.";
     case "locked":
       return f.until
-        ? `ACCOUNT LOCKED — too many failed attempts. Try again after ${f.until}.`
-        : "ACCOUNT LOCKED — too many failed attempts.";
+        ? `ACCOUNT LOCKED — too many failed attempts. ${lockedUntilText(f.until)} If you need in sooner, an Owner of your company can unlock you from Users & Roles.`
+        : // No `until` at all: still name the remedy, because "locked" with no
+          // way out is the state D55 was about.
+          "ACCOUNT LOCKED — too many failed attempts. An Owner of your company can unlock you from Users & Roles.";
     case "error":
       return `Could not sign in — ${f.message}`;
   }

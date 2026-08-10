@@ -1,5 +1,5 @@
 import { assign, setup } from "xstate";
-import { LEDGER_WISE_DEFAULT } from "./types";
+import { LEDGER_WISE_DEFAULT, REPORT_NAMES } from "./types";
 import type {
   EntryMode,
   FrameConfig,
@@ -100,6 +100,85 @@ function canonicalReportName(label: string | undefined): string | undefined {
 
 /** How a Go To-style overlay resolves when its selection is confirmed. */
 export type GotoMode = "goto" | "switchTo";
+
+/**
+ * ⛔⛔ THE MASTER-CREATE ENTRIES OF THE Alt+G / Ctrl+G PICKER — the door row 20
+ * proved did not exist anywhere in the build.
+ *
+ * DRIVEN IN A BROWSER 2026-08-07, and this is what it found: `Alt+C` renders
+ * "Create ledger" from the Gateway AND from the item-invoice Item cell; the
+ * Gateway menu carries no masters entry; and this picker offered exactly
+ * `["Vouchers", ...REPORT_NAMES]`. So NO keystroke in the product reached
+ * `masterKind` "stock-item" or "unit" — **a company could never be given a stock
+ * item or a unit from the keyboard at all** — and MasterCreateScreen's two arms
+ * were dead code that every unit test exercised by calling the component
+ * directly.
+ *
+ * ⛔ THE ROUTE IS DOCUMENTED, NOT INVENTED. RESEARCH.md:568: *"All are reached
+ * via Gateway of Tally > Create (single) or via **Alt+G (Go To) > Create Master /
+ * Alter Master**, and during any voucher/master you can create a sub-master on
+ * the fly with Alt+C."* A Go To entry is the cheapest faithful door, and it needs
+ * NO new ScreenKind: `master-create` is already carried by all fifteen
+ * registration points (HANDOFF.md §7.2), including `corpora/validate.py`'s
+ * `KNOWN_SCREENS` outside `frontend/` — which is why this fix touches neither.
+ *
+ * ⚠️ AND THE KEYMAP IS THE WRONG PLACE TO START, which is why `Alt+C` is
+ * deliberately left alone above. `resolveAction` is keyed on `ScreenKind` ONLY,
+ * and `VOUCHER_FIELDS` is `["date","party-ledger","ledger","amount","narration"]`
+ * — the machine has no notion of the item grid, so a field-scoped `Alt+C` has
+ * nothing to key on today. Alt+C stays "create a LEDGER inline, on the fly";
+ * these five entries are how every kind, including ledger, is reached
+ * STANDALONE.
+ *
+ * ⚠️ THE LABELS ARE Tally's OWN `Gateway > Create <X>` NAMES, because the picker
+ * is a substring type-ahead: typing "create" narrows to all five, typing "stock"
+ * reaches the stock item, and typing "unit" reaches the unit. A label of the form
+ * "Stock Item" alone would be indistinguishable from a report name to a reader of
+ * the list, which is the confusion the "Sales Orders" / "Sales Order Book" pair
+ * already costs this build once.
+ */
+export const MASTER_GOTO_ENTRIES: Readonly<Record<string, MasterKind>> = {
+  "Create Ledger": "ledger",
+  "Create Group": "group",
+  "Create Stock Item": "stock-item",
+  "Create Unit": "unit",
+  "Create Voucher Type": "voucher-type",
+};
+
+/**
+ * Everything the Alt+G / Ctrl+G picker offers, in the order it offers it.
+ *
+ * ⛔ IT LIVES HERE, NOT IN THE PICKER COMPONENT, for the reason every
+ * `*_LABEL` above lives here: the MACHINE owns what a selection DOES, so the
+ * machine must own the list of what can be selected. A component-local list is
+ * how the five master entries could be added to the picker while
+ * `resolveGotoSelection` still routed them to `{screen:"report"}` — a Go To entry
+ * that lands on "not available in this build" is worse than an absent one.
+ */
+export const GOTO_ENTRIES: readonly string[] = [
+  "Vouchers",
+  ...Object.keys(MASTER_GOTO_ENTRIES),
+  ...REPORT_NAMES,
+];
+
+/** Case-insensitive index of {@link MASTER_GOTO_ENTRIES}, built once. */
+const MASTER_GOTO_BY_LABEL: ReadonlyMap<string, MasterKind> = new Map(
+  Object.entries(MASTER_GOTO_ENTRIES).map(([label, kind]) => [
+    label.toLowerCase(),
+    kind,
+  ]),
+);
+
+/**
+ * The {@link MasterKind} a Go To label creates, or undefined for anything else.
+ * Matched case-insensitively, exactly as every Gateway label above is.
+ */
+export function masterKindForGotoLabel(
+  label: string | undefined,
+): MasterKind | undefined {
+  if (!label) return undefined;
+  return MASTER_GOTO_BY_LABEL.get(label.trim().toLowerCase());
+}
 
 /**
  * The Gateway entry label that drills into the F9 Bill Inbox. Matched
@@ -430,6 +509,29 @@ function resolveGotoSelection(
   baseFrame: ScreenFrame,
   overlay: ScreenFrame,
 ): ScreenFrame[] {
+  // ⛔ THE MASTER ENTRIES ARE MATCHED FIRST, AND THE ORDER IS LOAD-BEARING —
+  // the same ordering rule every Gateway label in this file carries, for the
+  // same reason. `canonicalReportName` FALLS BACK TO THE RAW LABEL for anything
+  // it does not recognise, so "Create Stock Item" reaching the line below would
+  // push `{screen:"report", reportName:"Create Stock Item"}` — a frame that
+  // renders `UnwiredReportScreen`, i.e. a screen politely announcing that the
+  // thing the operator just asked to create "is not available in this build".
+  // That is exactly the shape of failure the three cost screens' labels were
+  // written up to prevent.
+  const masterKind = masterKindForGotoLabel(overlay.selectedItem);
+  if (masterKind) {
+    // `field: "name"` because the create form's cursor starts on the name, the
+    // same way a fresh voucher frame starts on the date. Without it the screen
+    // mounts with nothing focused and the operator's first keystroke goes
+    // nowhere — a keystroke product's version of a dead screen.
+    const create: ScreenFrame = {
+      screen: "master-create",
+      masterKind,
+      field: "name",
+    };
+    if (overlay.gotoMode === "switchTo") create.replaced = true;
+    return [baseFrame, create];
+  }
   const reportName =
     canonicalReportName(overlay.selectedItem) ?? overlay.selectedItem ?? "";
   const report: ScreenFrame = { screen: "report", reportName };
@@ -1087,7 +1189,21 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
         const parent = { ...top(stack) };
         // Surface the just-created master as the parent's pending selection so
         // the voucher screen can pre-fill the field that triggered the create.
-        if (active.detailOf) parent.selectedItem = active.detailOf;
+        //
+        // ⛔ ONLY ONTO A VOUCHER, and that guard ships WITH the Go To route
+        // above rather than after it. `selectedItem` means something DIFFERENT
+        // on every other frame: on the Gateway and on a report it is the row
+        // Enter drills into. Stamping a freshly created master's name there
+        // made the Gateway's pending selection "Acme Traders", and the very next
+        // Enter pushed `{screen:"report", reportName:"Acme Traders"}` —
+        // `canonicalReportName` falls back to the raw label — so accepting a
+        // ledger left the operator one keypress away from a report that does not
+        // exist. Harmless-looking before this commit because the ONLY door to a
+        // master-create was Alt+C from a voucher; the Go To entries make the
+        // Gateway the PRIMARY parent, so the guard is part of the same fix.
+        if (active.detailOf && parent.screen === "voucher") {
+          parent.selectedItem = active.detailOf;
+        }
         stack[stack.length - 1] = parent;
         return { stack };
       }

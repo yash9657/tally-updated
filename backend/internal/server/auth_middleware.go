@@ -82,6 +82,30 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (*authn.Cl
 		writeError(w, http.StatusUnauthorized, "invalid token")
 		return nil, false
 	}
+	// A VALID SIGNATURE IS NOT A LIVE SESSION (D56). Locking an account used to
+	// revoke nothing it already held — the bearer in an attacker's hand kept
+	// working for the full 3600-second TTL and posted writes that returned 201,
+	// because `locked_until` was read on POST /auth/login and nowhere else.
+	// EVERY authenticated route in the product funnels through this function,
+	// which is why the check lives here and not in the handlers: see
+	// auth_revocation.go for the property, the door-by-door enumeration
+	// (including the safe ones) and the two clauses.
+	//
+	// 401, not 403: this is "your session is over", the same class as an expired
+	// token, and it is what makes the browser's bearerFetch call onUnauthorized()
+	// and return the operator to the sign-in screen instead of leaving the shell
+	// rendering empty screens against a dead session.
+	revoked, rerr := s.sessionRevoked(r.Context(), claims)
+	if rerr != nil {
+		// Could not find out. A revocation check that fails must refuse, never
+		// admit — the whole file above it is one long argument for that.
+		writeError(w, http.StatusUnauthorized, "session state unavailable")
+		return nil, false
+	}
+	if revoked {
+		writeError(w, http.StatusUnauthorized, "session revoked: this account was locked")
+		return nil, false
+	}
 	return claims, true
 }
 
@@ -587,6 +611,16 @@ func (s *Server) storedVoucherDateForRequest(r *http.Request, companyID uuid.UUI
 // nothing: invariant I-2 is that reconciling moves no ledger figure, so no filed
 // return changes. What the cutoff owns here is the BANK DATE — the assertion the
 // operator is making about when money moved.
+//
+// ⛔ THE THIRD DATABLE DOCUMENT IS THE CHALLAN, and it arrived with the
+// allocate-later route (register row D1). POST .../tds-challans/{id}/allocations
+// carries NO date on the wire — the deposit is already recorded and an
+// allocation adopts its date — so every body peek in this file is blind to it,
+// and the create route's `deposit_date` arm cannot see it either. That is
+// precisely round 3's shape: the date that decides the act is the one the books
+// already hold. Attaching a deduction to a deposit dated inside a locked period
+// changes what that quarter's filed return says the deposit paid for, which is
+// what the lock exists to freeze.
 func (s *Server) storedCutoffDateForRequest(r *http.Request, companyID uuid.UUID, act authz.Action) *time.Time {
 	if !act.IsWrite() {
 		return nil
@@ -594,8 +628,90 @@ func (s *Server) storedCutoffDateForRequest(r *http.Request, companyID uuid.UUID
 	if leg, ok := bankReconLeg(r); ok {
 		return s.storedBankDateForLeg(r, companyID, leg)
 	}
+	if challanID, ok := challanAllocationTarget(r); ok {
+		return s.storedChallanDepositDate(r, companyID, challanID)
+	}
 	return s.storedVoucherDateForRequest(r, companyID, act)
 }
+
+// challanAllocationTarget recognises the allocate-later route and parses the
+// challan it names:
+//
+//	POST .../tds-challans/{challanID}/allocations
+//
+// ⛔ THE SEGMENTS ARE SPLIT THE WAY routeAction SPLITS THEM, for the reason
+// voucherDateFromRequest states at length for the pay run: ONE notion of route
+// identity, so the PDP's date logic and the PDP's action mapping cannot disagree
+// about which request this is. routeAction maps this path by the `/tds-challans`
+// PREFIX; this narrows that to the one shape the router mounts.
+//
+// ⚠️ AN UNPARSEABLE {challanID} RETURNS ok=false, AND THAT IS NOT A FAIL-OPEN:
+// parseChallanID parses the same segment with the same call and answers 400
+// before masters is reached, so nothing can be allocated through a malformed
+// name. It is bankReconLeg's call, made the same way.
+func challanAllocationTarget(r *http.Request) (uuid.UUID, bool) {
+	if r.Method != http.MethodPost {
+		return uuid.Nil, false
+	}
+	segs := splitPath(routeSuffix(r))
+	if len(segs) != 3 || segs[0] != "tds-challans" || segs[2] != "allocations" {
+		return uuid.Nil, false
+	}
+	id, err := uuid.Parse(segs[1])
+	if err != nil {
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
+// storedChallanDepositDate returns the deposit date the books ALREADY hold for
+// one challan, so the cutoff judges the only end this act has.
+//
+//	a date              the deposit date on record.
+//	beforeEveryCutoff() the challan could not be read — it does not exist, it
+//	                    belongs to another tenant (RLS makes those the same
+//	                    answer), or the store errored. FAIL CLOSED.
+//
+// ⛔ THERE IS NO nil ARM, AND THAT IS THE DIFFERENCE FROM storedBankDateForLeg.
+// An unreconciled leg is the ORDINARY case there, so a missing row must not
+// refuse. Here the named challan must exist — the handler would otherwise 404 —
+// so a name that resolves to nothing is a period we cannot rule out, which is
+// storedVoucherDateForRequest's rule for a directly-named document and round 1's
+// whole lesson: "I could not find out which period this is in" must never be
+// spelled the same way as "it is not in a locked one". The cost of the strict
+// answer is a 403 instead of a 404, and only at companies that have locked a
+// period.
+func (s *Server) storedChallanDepositDate(r *http.Request, companyID, challanID uuid.UUID) *time.Time {
+	if s.pool == nil {
+		return beforeEveryCutoff()
+	}
+	// db.WithCompany binds RLS; membership in {companyID} is already confirmed by
+	// this point, and the read is a RunInReadOnlyTx so a mistake here cannot
+	// become a write on the authorization path. Both are storedBankDateForLeg's
+	// arguments, unchanged.
+	ctx := db.WithCompany(r.Context(), companyID)
+	var spelled *string
+	err := s.pool.RunInReadOnlyTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		return tx.QueryRow(ctx, storedChallanDepositDateSQL, companyID, challanID).Scan(&spelled)
+	})
+	if err != nil || spelled == nil {
+		return beforeEveryCutoff()
+	}
+	d, perr := time.Parse("2006-01-02", *spelled)
+	if perr != nil {
+		// to_char produced something this layout cannot read, from a NOT NULL DATE
+		// column. It should be impossible, and "impossible" is the case that must
+		// not fail open.
+		return beforeEveryCutoff()
+	}
+	return &d
+}
+
+// storedChallanDepositDateSQL reads one challan's deposit date. company_id is
+// stated as well as bound by RLS, exactly as storedBankDateSQL states it.
+const storedChallanDepositDateSQL = `SELECT to_char(deposit_date, 'YYYY-MM-DD')
+	   FROM tds_challan
+	  WHERE company_id = $1 AND id = $2`
 
 // storedBankDateForLeg returns the bank date the books ALREADY hold for one leg,
 // so the cutoff judges the SOURCE end of a re-tick or an un-tick. The three
@@ -823,6 +939,15 @@ func existingVouchersNamedByRequest(r *http.Request, act authz.Action) namedVouc
 func cutoffDateSubject(r *http.Request) string {
 	if _, ok := bankReconLeg(r); ok {
 		return "bank date"
+	}
+	// The allocate-later route is the second place, and the more extreme one: the
+	// operator typed NO date at all. They ticked deductions against a deposit that
+	// is already on file, so "this voucher is dated …" names neither a field nor a
+	// document they touched. What refuses them is the DEPOSIT's own date, and
+	// saying so is the difference between a refusal they can act on (move the
+	// cutoff, or allocate against a later deposit) and one they can only appeal.
+	if _, ok := challanAllocationTarget(r); ok {
+		return "deposit date"
 	}
 	return ""
 }

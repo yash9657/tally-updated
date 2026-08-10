@@ -5,6 +5,7 @@ import { useClient, useCompanyID } from "../../app/CompanyContext";
 import { ApiError } from "../../api";
 import type { TDSRegisterResponse } from "../../api";
 import { useExportAction } from "../../export/useExportAction";
+import { usePrintAction } from "../usePrint";
 import {
   exactCell,
   moneyCell,
@@ -125,6 +126,25 @@ export function TDSRegisterScreen({ snapshot }: { snapshot: NavSnapshot }) {
       return tdsRegisterSheet(data);
     }, [data, denied, error, from, to]),
   );
+
+  // Ctrl+P. THE REPORT BAR OVER THIS SCREEN ADVERTISES "Ctrl+P Print" — it is
+  // REPORT_BAR, shared by every `report` frame — and this screen registered no
+  // print handler, so the key fell through to the shell's generic "does not
+  // apply on this screen". That is the worst of the three possible answers: the
+  // register HAS a mapped slug (printTarget's REPORT_SLUGS), the server answers
+  // 501 for it with a sentence saying the ACL rule is honoured and no layout has
+  // been written, and mapping it was done precisely so Ctrl+P could say THAT
+  // instead of nothing. An operator who reads "does not apply here" concludes the
+  // key is wrong for this screen; one who reads the 501 knows the report is real
+  // and the paper is not.
+  //
+  // Registered like every other report screen — no voucher, so the target
+  // resolves from the frame — and, like them, it now carries the F2 period, so
+  // the day a layout is written the printed quarter is the quarter on screen.
+  //
+  // ⚠️ It goes BEFORE the `denied` early return, because a hook may not be
+  // called conditionally: a 403 must not change this component's hook count.
+  usePrintAction();
 
   if (denied) {
     return (

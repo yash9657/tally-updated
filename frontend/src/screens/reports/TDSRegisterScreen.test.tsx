@@ -3,7 +3,10 @@ import { render, screen, cleanup, waitFor } from "@testing-library/react";
 
 import { TDSRegisterScreen } from "./TDSRegisterScreen";
 import { CompanyProvider } from "../../app/CompanyContext";
-import { ScreenActionsProvider } from "../../app/ScreenActions";
+import {
+  ScreenActionsProvider,
+  useScreenActionDispatcher,
+} from "../../app/ScreenActions";
 import { createMockClient, ApiError } from "../../api";
 import type { CoredClient } from "../../api";
 import registerProse from "../../api/goldens/tds-register-prose.json";
@@ -148,5 +151,109 @@ describe("TDS / TCS Register screen", () => {
       ).toBeTruthy(),
     );
     expect(screen.getByText(/allow display report:tds-register/)).toBeTruthy();
+  });
+});
+
+/**
+ * Ctrl+P ON THE REGISTER — the key the report button bar sells on this screen.
+ *
+ * ⛔ IT WAS DEAD. REPORT_BAR carries "Ctrl+P Print" over every `report` frame and
+ * this screen registered no print handler, so the key fell through to the shell's
+ * generic "does not apply on this screen": no request, and an answer that tells
+ * the operator the KEY is wrong rather than that the PAPER does not exist. The
+ * register IS mapped to a slug precisely so the server's own 501 — "the ACL rule
+ * for print report:tds-register is honoured, but no printed layout has been
+ * specified" — is what they read instead.
+ */
+function renderWithPrint(
+  snapshot: NavSnapshot,
+  clientOver: Partial<CoredClient>,
+) {
+  const client = { ...createMockClient(), ...clientOver } as CoredClient;
+  let fire: () => Promise<string | void> = async () => {};
+  function Harness() {
+    const dispatch = useScreenActionDispatcher();
+    fire = async () => {
+      const res = dispatch("print", snapshot);
+      return res.pending ? await res.pending : res.message;
+    };
+    return <TDSRegisterScreen snapshot={snapshot} />;
+  }
+  render(
+    <CompanyProvider
+      client={client}
+      initialCompany={{ id: "company-demo", name: "Demo Traders" }}
+    >
+      <ScreenActionsProvider>
+        <Harness />
+      </ScreenActionsProvider>
+    </CompanyProvider>,
+  );
+  return { fire: () => fire() };
+}
+
+describe("Ctrl+P on the TDS / TCS Register", () => {
+  it("asks the server for the register's slug — the key is not dead", async () => {
+    // Typed with the real signature, so the assertions below can read the slug
+    // and the query the screen actually asked for.
+    const printReport = vi.fn(
+      async (
+        _companyID: string,
+        _slug: string,
+        _query?: Record<string, string>,
+      ) => ({
+        blob: new Blob(["%PDF-1.4"], { type: "application/pdf" }),
+        filename: "tds-register.pdf",
+      }),
+    );
+    const { fire } = renderWithPrint(snap("2026-04-01", "2026-06-30"), {
+      printReport,
+    } as Partial<CoredClient>);
+    await fire();
+    expect(printReport).toHaveBeenCalled();
+    expect(printReport.mock.calls[0]![1]).toBe("tds-register");
+  });
+
+  it("carries the F2 QUARTER, because a register is filed per quarter", async () => {
+    // ⛔ A REGISTER PRINTED FOR THE WRONG SPAN IS THE DEFECT, NOT THE PRINT. The
+    // server treats a missing date as "no filter", so without these the paper
+    // would cover the whole book under a heading naming one quarter.
+    // Typed with the real signature, so the assertions below can read the slug
+    // and the query the screen actually asked for.
+    const printReport = vi.fn(
+      async (
+        _companyID: string,
+        _slug: string,
+        _query?: Record<string, string>,
+      ) => ({
+        blob: new Blob(["%PDF-1.4"], { type: "application/pdf" }),
+        filename: "tds-register.pdf",
+      }),
+    );
+    const { fire } = renderWithPrint(snap("2026-04-01", "2026-06-30"), {
+      printReport,
+    } as Partial<CoredClient>);
+    await fire();
+    expect(printReport.mock.calls[0]![2]).toEqual({
+      from: "2026-04-01",
+      to: "2026-06-30",
+    });
+  });
+
+  it("shows the SERVER'S 501 sentence, not a rewritten one", async () => {
+    const printReport = vi.fn().mockRejectedValue(
+      new ApiError(
+        501,
+        "printing the tds-register report is not implemented yet: the ACL rule for print report:tds-register is honoured, but no printed layout has been specified for it",
+      ),
+    );
+    const { fire } = renderWithPrint(snap("2026-04-01", "2026-06-30"), {
+      printReport,
+    } as Partial<CoredClient>);
+    const msg = await fire();
+    expect(String(msg)).toContain("no printed layout has been specified");
+    // And never the shell's "this key does not apply here", which was the whole
+    // defect: it is a statement about the KEY where the truth is about the paper.
+    expect(String(msg)).not.toMatch(/does not apply/i);
   });
 });

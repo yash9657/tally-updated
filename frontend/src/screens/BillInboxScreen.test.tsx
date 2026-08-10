@@ -226,15 +226,190 @@ describe("BillInboxScreen (F9 Bill Inbox)", () => {
       fireEvent.click(screen.getByTestId("inbox-create"));
     });
 
-    await waitFor(() =>
-      expect(spies.createDraft).toHaveBeenCalledWith("co-1", {
-        source: "upload",
-        tenant: { company_id: "co-1" },
-        fixture: { invoice_no: "X-1" },
-      }),
-    );
+    // ⛔ THIS ASSERTION USED TO READ `tenant: { company_id: "co-1" }` AND IT WAS
+    // PART OF THE DEFECT (trap #7 — a test that pins a bug). That stub tenant is
+    // exactly what made insightd run against an empty chart of accounts: no
+    // supplier match, no supplier state (so an INTRA-state bill came back as
+    // IGST), and no input-tax ledger ids (so the draft was unbalanced by exactly
+    // the tax and could never be posted). See the tenant-context comment in
+    // BillInboxScreen.tsx. The full assertions live in the describe block below.
+    await waitFor(() => expect(spies.createDraft).toHaveBeenCalledTimes(1));
+    const [co, req] = spies.createDraft.mock.calls[0]!;
+    expect(co).toBe("co-1");
+    expect(req.fixture).toEqual({ invoice_no: "X-1" });
+    expect(req.tenant.company_id).toBe("co-1");
+    expect(Array.isArray(req.tenant.ledgers)).toBe(true);
     // The list is refreshed after a successful create.
     await waitFor(() => expect(spies.listDrafts).toHaveBeenCalledTimes(2));
+  });
+});
+
+/**
+ * ===========================================================================
+ * THE TENANT CONTEXT — two HIGH defects that shared one line.
+ * ===========================================================================
+ * Driven in a browser: a taxed bill filed through this screen's own front door
+ * came back with NO input-tax posting legs (debits 1000.0000 against a credit of
+ * 1180.0000 — unbalanced by exactly the tax, so cored refuses it) AND with an
+ * INTRA-state bill derived as IGST. Both because the screen sent
+ * `tenant: { company_id }` and nothing else, so insightd's pipeline had no
+ * ledgers to match a supplier against, no supplier state to compare with the
+ * place of supply, and no tax-ledger ids to debit.
+ *
+ * ⚠️ The seeded demo draft always looked right, because seed-demo.mts builds a
+ * complete tenant block itself. The oracle and the defect never met.
+ */
+describe("BillInboxScreen — the tenant context sent to insightd", () => {
+  /** A cored client whose chart of accounts is this company's real one. */
+  async function coredWithChart(): Promise<CoredClient> {
+    const client = createMockClient({ seed: false });
+    await client.createCompany({
+      id: "co-1",
+      name: "Test Co",
+      fy_start_date: "2026-04-01",
+    });
+    await client.createLedger("co-1", {
+      name: "Pune Fabricators",
+      group_name: "Sundry Creditors",
+      gstin: "27AABCP1234R1Z5",
+      state_code: "27",
+    });
+    await client.createLedger("co-1", {
+      name: "Raw Material Purchases",
+      group_name: "Purchase Accounts",
+    });
+    for (const n of ["Input CGST", "Input SGST", "Input IGST"]) {
+      await client.createLedger("co-1", { name: n, group_name: "Duties & Taxes" });
+    }
+    // ⛔ The OUTPUT set exists too, and must never be picked for a purchase.
+    for (const n of ["Output CGST", "Output SGST", "Output IGST"]) {
+      await client.createLedger("co-1", { name: n, group_name: "Duties & Taxes" });
+    }
+    return client;
+  }
+
+  async function capturedTenant(): Promise<Record<string, unknown>> {
+    const { client, spies } = fakeInsightd();
+    renderInbox(client, () => {}, () => {}, await coredWithChart());
+    await waitFor(() => expect(spies.listDrafts).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("inbox-fixture"), {
+        target: { value: "{}" },
+      });
+      fireEvent.click(screen.getByTestId("inbox-create"));
+    });
+    await waitFor(() => expect(spies.createDraft).toHaveBeenCalledTimes(1));
+    return spies.createDraft.mock.calls[0]![1].tenant as Record<string, unknown>;
+  }
+
+  it("sends the company's REAL chart of accounts, not a bare company id", async () => {
+    const tenant = await capturedTenant();
+    const ledgers = tenant.ledgers as { name: string; kind: string }[];
+    expect(ledgers.length).toBeGreaterThan(0);
+    const supplier = ledgers.find((l) => l.name === "Pune Fabricators");
+    expect(supplier).toBeTruthy();
+    // Without this the classifier can never match a supplier at all.
+    expect(supplier!.kind).toBe("party");
+  });
+
+  it("carries each party's STATE CODE — the field that decides CGST+SGST vs IGST", async () => {
+    const tenant = await capturedTenant();
+    const ledgers = tenant.ledgers as { name: string; state_code?: string }[];
+    const supplier = ledgers.find((l) => l.name === "Pune Fabricators")!;
+    expect(supplier.state_code).toBe("27");
+    expect(tenant.home_state_code).toBe("29");
+  });
+
+  it("resolves the three INPUT tax ledgers and never the OUTPUT ones", async () => {
+    // ⛔ RULE 4. Input and output tax balance identically, so substituting one
+    // for the other is invisible to every arithmetic check — and it is the whole
+    // difference between tax this company may reclaim and tax it owes. Assert the
+    // resolved ids by NAME, not merely that three ids are present.
+    const tenant = await capturedTenant();
+    const ledgers = tenant.ledgers as { id: string; name: string }[];
+    const nameOf = (id: unknown) =>
+      ledgers.find((l) => l.id === id)?.name ?? "(unresolved)";
+    expect(nameOf(tenant.cgst_ledger_id)).toBe("Input CGST");
+    expect(nameOf(tenant.sgst_ledger_id)).toBe("Input SGST");
+    expect(nameOf(tenant.igst_ledger_id)).toBe("Input IGST");
+  });
+
+  it("NEVER sends a raw GSTIN across the boundary", async () => {
+    // insightd's LedgerRef documents gstin_masked as "a masked tag, never the raw
+    // GSTIN" — this context can end up in a cross-border classifier prompt.
+    const tenant = await capturedTenant();
+    const serialised = JSON.stringify(tenant);
+    expect(serialised).not.toContain("27AABCP1234R1Z5");
+    const ledgers = tenant.ledgers as { name: string; gstin_masked?: string }[];
+    const supplier = ledgers.find((l) => l.name === "Pune Fabricators")!;
+    expect(supplier.gstin_masked).toBe("27AAB…1Z5");
+  });
+
+  it("sends the same context on the UPLOAD path, which has no fixture to fall back on", async () => {
+    // The real front door: a photographed bill carries no tenant block at all.
+    const createDraft = vi.fn(
+      async (_companyID: string, _req: CreateDraftRequest) => FULL_DRAFT_1,
+    );
+    const insightd: InsightdClient = {
+      listDrafts: async () => SUMMARIES,
+      getDraft: async () => FULL_DRAFT_1,
+      createDraft,
+    };
+    renderInbox(insightd, () => {}, () => {}, await coredWithChart());
+    await waitFor(() => expect(screen.getByTestId("inbox-upload")).toBeTruthy());
+
+    await act(async () => {
+      const file = new File([new Uint8Array([0x50, 0x44, 0x46])], "bill.pdf", {
+        type: "application/pdf",
+      });
+      Object.defineProperty(file, "arrayBuffer", {
+        value: async () => new Uint8Array([0x50, 0x44, 0x46]).buffer,
+      });
+      fireEvent.change(screen.getByTestId("inbox-upload") as HTMLInputElement, {
+        target: { files: [file] },
+      });
+    });
+
+    await waitFor(() => expect(createDraft).toHaveBeenCalledTimes(1));
+    const tenant = createDraft.mock.calls[0]![1].tenant as {
+      ledgers: { name: string }[];
+      cgst_ledger_id?: string;
+    };
+    expect(tenant.ledgers.some((l) => l.name === "Pune Fabricators")).toBe(true);
+    expect(tenant.cgst_ledger_id).toBeTruthy();
+  });
+
+  it("RESOLVES the tax ledgers and never CREATES them", async () => {
+    // Opening an inbox must not write masters. A company that has never keyed a
+    // GST voucher simply gets those ids absent, and insightd then proposes the
+    // tax leg with a null ledger_id and names it in `unresolved` — the draft
+    // still balances. Creating three Duties & Taxes ledgers as a side effect of a
+    // READ is the orphan-master anti-pattern this codebase already has a defect
+    // for.
+    const client = createMockClient({ seed: false });
+    await client.createCompany({
+      id: "co-1",
+      name: "Test Co",
+      fy_start_date: "2026-04-01",
+    });
+    const before = (await client.listLedgers("co-1")).ledgers.length;
+
+    const { client: insightd, spies } = fakeInsightd();
+    renderInbox(insightd, () => {}, () => {}, client);
+    await waitFor(() => expect(spies.listDrafts).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("inbox-fixture"), {
+        target: { value: "{}" },
+      });
+      fireEvent.click(screen.getByTestId("inbox-create"));
+    });
+    await waitFor(() => expect(spies.createDraft).toHaveBeenCalledTimes(1));
+
+    expect((await client.listLedgers("co-1")).ledgers.length).toBe(before);
+    const tenant = spies.createDraft.mock.calls[0]![1].tenant as {
+      cgst_ledger_id?: string;
+    };
+    expect(tenant.cgst_ledger_id).toBeUndefined();
   });
 });
 

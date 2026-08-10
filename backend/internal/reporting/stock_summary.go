@@ -129,6 +129,13 @@ type StockItemRollup struct {
 // TotalValue is what a Stock-in-Hand line on the Balance Sheet is worth on that
 // date. It is a sum of already-replayed closing values, not a re-derivation.
 type StockSummary struct {
+	// AsOn is the boundary the replay was ACTUALLY bounded at — always
+	// RESOLVED, never the caller's parameter (see resolvedStockAsOn). Empty
+	// means UNBOUNDED: every voucher ever posted, INCLUDING ones dated after
+	// today. It does NOT mean "today". The Stock Summary screen renders this
+	// value, and it used to print "As at today (everything posted)" over an
+	// unbounded report — 72,837.15 under that caption where the position as at
+	// that day was 96,168.18.
 	AsOn       string
 	Items      []StockItemRollup
 	Rows       []StockPositionRow
@@ -567,7 +574,10 @@ func (s *Service) StockSummary(ctx context.Context, companyID uuid.UUID, asOn st
 		return StockSummary{}, err
 	}
 
-	out := StockSummary{AsOn: asOn, TotalValue: decimal.Zero}
+	// The echo is the RESOLVED boundary, produced by the same function
+	// stockPositionsAsOn resolves with, so the caption a screen prints and the
+	// figures under it cannot come from two different dates.
+	out := StockSummary{AsOn: resolvedStockAsOn(asOn), TotalValue: decimal.Zero}
 
 	err := s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		// The five steps this used to spell out inline (names, guarded openings,

@@ -203,7 +203,23 @@ export function BankReconciliationScreen({ snapshot }: ScreenComponentProps) {
   // the operator did not choose is a real document, correctly rendered, for the
   // wrong bank, and nothing on the page says so. Invariant I-10, now closed in
   // the direction of printing rather than refusing.
-  usePrintAction({ voucher: { voucherID: null, bankLedgerID: ledgerID } });
+  //
+  // ⛔ AND THE ACCOUNT'S NAME AND THE ACCOUNT COUNT TRAVEL WITH IT. The refusal
+  // above cannot be reached on a company with exactly ONE bank account, because
+  // the effect above opens it without asking — which is the right call (a
+  // pick-list of one is friction) and also means Ctrl+P as the very first key on
+  // this screen prints an account the operator never chose. So the confirmation
+  // NAMES the account: the convenience stays, and it stops being silent. The
+  // count is what lets "you have no bank accounts" be a different sentence from
+  // "you have not chosen one yet" — the first cannot be fixed by choosing.
+  usePrintAction({
+    voucher: {
+      voucherID: null,
+      bankLedgerID: ledgerID,
+      bankLedgerName: banks?.find((b) => b.id === ledgerID)?.name ?? null,
+      ...(banks ? { bankAccountCount: banks.length } : {}),
+    },
+  });
 
   // F4 — "select bank ledger" (RESEARCH.md:879).
   useRegisterScreenAction(
