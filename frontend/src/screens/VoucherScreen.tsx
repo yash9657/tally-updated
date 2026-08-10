@@ -2267,6 +2267,43 @@ function AccountingVoucherScreen({
     }
   }
 
+  // =========================================================================
+  // ⛔⛔ THE FIELD HIGHLIGHT FOLLOWS **REAL FOCUS**, NOT THE MACHINE'S CURSOR.
+  //
+  // Tab is a browser primitive again (useNavMachine no longer preventDefaults
+  // it — its removal note is the long version of this comment). The key is
+  // still sent to the machine, so `snapshot.field` still walks the five strings
+  // of VOUCHER_FIELDS; but the FORM is not five fields. One particulars row
+  // alone carries a ledger box, an amount box, a remove button, the cost-split
+  // picker and the bill-reference picker, so after four presses the machine's
+  // cursor SATURATES on `narration` while the focus ring walks on into the
+  // grid. Nothing is unreachable — the ring is the truth — but a decoration
+  // that contradicts the ring is worse than no decoration: it tells the
+  // operator their keystrokes are landing somewhere they are not.
+  //
+  // So the highlight is derived from what is actually focused (`e.target` in a
+  // capture-phase focus handler IS `document.activeElement` at that instant,
+  // without the timing hazard of reading the global), and the machine's cursor
+  // is used ONLY while nothing inside the form has focus — the state a fresh
+  // F8 frame is in before the operator has touched anything.
+  //
+  // THREE STATES, and the middle one is the point:
+  //   null → nothing in this form has focus; the machine's cursor decorates.
+  //   ""   → focus is INSIDE the form but on a control that is none of the five
+  //          (a cost-centre select, "+ Add particular", a bill-ref row). Then
+  //          NOTHING is highlighted, which is the honest statement — better
+  //          than painting `narration` while the operator is in the grid.
+  //   name → that field is focused, and it is the one painted.
+  //
+  // ⚠️ `data-vfield` IS TAGGED ONLY WHERE THE MAPPING IS REAL. The panels in
+  // other files (the Dr/Cr grid, the pickers) are untagged and land in the ""
+  // case on purpose; inventing a mapping for them here would put the decoration
+  // back to guessing, which is the defect.
+  // =========================================================================
+  const [focusField, setFocusField] = useState<string | null>(null);
+  const fieldActive = (name: string): boolean =>
+    focusField === null ? snapshot.field === name : focusField === name;
+
   // Selecting a party fills the form name, carries its REAL ledger id, and seeds
   // the place of supply from that ledger's own state code (Tally defaults POS
   // from the party, and allows an override).
@@ -2307,7 +2344,25 @@ function AccountingVoucherScreen({
   }
 
   return (
-    <section className="flex h-full flex-col bg-tally-bg p-4 font-mono text-tally-field">
+    <section
+      className="flex h-full flex-col bg-tally-bg p-4 font-mono text-tally-field"
+      // CAPTURE phase: focus/blur do not bubble, so the section only hears them
+      // this way — and hearing them at the section is what lets one handler
+      // cover every control the form renders, including the ones in the panels
+      // it composes from other files.
+      onFocusCapture={(e) => {
+        const owner = (e.target as HTMLElement).closest("[data-vfield]");
+        setFocusField(owner?.getAttribute("data-vfield") ?? "");
+      }}
+      onBlurCapture={(e) => {
+        // Only when focus leaves the FORM. Moving between two fields fires this
+        // first, and clearing to the machine's cursor in between would make the
+        // highlight flicker back to a field the operator has already left.
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+          setFocusField(null);
+        }
+      }}
+    >
       <header className="mb-3 flex items-center justify-between">
         <h1 className="text-lg font-bold text-tally-title">
           {title} Voucher{isAlter ? " (Alteration)" : ""}
@@ -2350,7 +2405,8 @@ function AccountingVoucherScreen({
         */}
         <FieldRow
           name="Date"
-          active={snapshot.field === "date"}
+          field="date"
+          active={fieldActive("date")}
           value={form.date}
           editable
           onChange={(v) => setForm((f) => ({ ...f, date: v }))}
@@ -2362,7 +2418,10 @@ function AccountingVoucherScreen({
           value={displayNo || "auto"}
           testId="voucher-no-field"
         />
-        <div className={snapshot.field === "party-ledger" ? "" : "opacity-70"}>
+        <div
+          data-vfield="party-ledger"
+          className={fieldActive("party-ledger") ? "" : "opacity-70"}
+        >
           <SelectionList
             label={cfg.partyLabel}
             options={partyNames}
@@ -2407,7 +2466,8 @@ function AccountingVoucherScreen({
         */}
         <FieldRow
           name="Narration"
-          active={snapshot.field === "narration"}
+          field="narration"
+          active={fieldActive("narration")}
           value={form.narration}
           editable
           onChange={(v) => setForm((f) => ({ ...f, narration: v }))}
@@ -2494,6 +2554,7 @@ function AccountingVoucherScreen({
 
 function FieldRow({
   name,
+  field,
   active,
   value,
   testId,
@@ -2501,6 +2562,13 @@ function FieldRow({
   onChange,
 }: {
   name: string;
+  /**
+   * WHICH of `VOUCHER_FIELDS` this row IS, so the highlight can follow real
+   * focus — see the `fieldActive` note in AccountingVoucherScreen. Omitted on a
+   * row that is not one of the five (the read-only "No."), which is exactly the
+   * case that must NOT light up when focus passes over it.
+   */
+  field?: string;
   active: boolean;
   value: string;
   testId?: string;
@@ -2509,7 +2577,7 @@ function FieldRow({
   onChange?: (v: string) => void;
 }) {
   return (
-    <div className="flex items-center gap-2 py-0.5">
+    <div data-vfield={field} className="flex items-center gap-2 py-0.5">
       <span className="w-32">{name}</span>
       {editable ? (
         <input
@@ -2904,9 +2972,15 @@ function SingleEntryPanel({
         {rows.map((l, i) => (
           <li key={i} className="mb-1 flex flex-wrap items-center gap-2">
             <span className="w-6">{manySide}</span>
+            {/* ⛔ `data-vfield` — THE TWO GRID BOXES THAT REALLY ARE TWO OF THE
+                MACHINE'S FIVE FIELDS. RESEARCH sec 4's cursor is date → party →
+                LEDGER → AMOUNT → narration, and in single entry these are that
+                ledger and that amount. Tagging them is what makes the highlight
+                keep up with the focus ring once Tab walks past the header. */}
             <input
               aria-label={`Particular ${i + 1} ledger`}
               data-testid={`single-ledger:${i}`}
+              data-vfield="ledger"
               list="single-entry-ledgers"
               className="bg-tally-field px-1 text-tally-fieldText outline-none"
               value={l.ledger}
@@ -2916,6 +2990,7 @@ function SingleEntryPanel({
             <input
               aria-label={`Particular ${i + 1} amount`}
               data-testid={`single-amount:${i}`}
+              data-vfield="amount"
               className="w-32 bg-tally-field px-1 text-right text-tally-fieldText outline-none"
               value={l.amount}
               placeholder="0.0000"
@@ -3135,9 +3210,20 @@ function ItemInvoicePanel({
           {stockError}
         </p>
       ) : stockItems.length === 0 ? (
+        /* ⛔ THE ROUTE THIS NAMES MUST BE ONE THAT EXISTS. It used to read
+           "Alt+C from Gateway > Masters", and BOTH halves were wrong: Alt+C on
+           this screen creates a LEDGER inline (it has never reached a stock item
+           — `resolveAction` is keyed on ScreenKind and has no notion of the item
+           grid), and there is no `Gateway > Masters` menu in this product at
+           all. So the one empty state an operator meets on their first item
+           invoice sent them to a door that is not there. The real route was
+           built since: `MASTER_GOTO_ENTRIES` puts all five master kinds in the
+           Go To picker, so Alt+G, type "stock", Enter reaches the create form.
+           ⚠️ Alt+G on macOS is the PHYSICAL KeyG with Alt held — Option composes,
+           so a real Mac sends key:"©". `comboFromEvent` reads `code`. */
         <p data-testid="stock-items-empty" className="mb-2 text-xs">
-          This company has no stock items yet — create one (Alt+C from Gateway
-          &gt; Masters) before keying an item invoice.
+          This company has no stock items yet — create one with Alt+G &gt; Create
+          Stock Item before keying an item invoice.
         </p>
       ) : null}
 

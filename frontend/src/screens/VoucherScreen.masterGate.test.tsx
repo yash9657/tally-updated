@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { AppShell } from "../app/AppShell";
@@ -104,6 +106,102 @@ function createdLedgerNames(spies: Record<string, ReturnType<typeof vi.fn>>): st
     (c) => (c[1] as { name: string }).name,
   );
 }
+
+/**
+ * ===========================================================================
+ * ⛔⛔ THE STRUCTURAL HALF: A **NEW** BUILDER MUST NOT BE ABLE TO RE-OPEN THIS.
+ * ===========================================================================
+ *
+ * Every test in this file drives one keystroke on one form, and four green
+ * builders is not the same statement as "the class is closed". This repo has
+ * paid for that difference more than once: the back-dated cutoff was declared
+ * fixed FOUR times, each round asserting a LIST of hostile inputs, and the next
+ * bypass was always off-list — what finally held was asserting the PROPERTY plus
+ * a walk that fails when something new goes unaccounted for.
+ *
+ * So this is the walk. It reads VoucherScreen.tsx and asserts the ORDERING that
+ * the gate is: inside every `build*Request`, the refusal comes before the first
+ * `ensure*`. A fifth builder added tomorrow, or a new `ensureLedger` pasted at
+ * the top of an existing one, fails HERE — with a message naming the line —
+ * rather than in a browser six weeks later, as an account with no voucher
+ * behind it.
+ *
+ * ⚠️ WHAT IT DOES NOT PROVE, SAID PLAINLY SO NOBODY LEANS ON IT FOR MORE: it is
+ * a LINE-ORDER check, not a scope check. It catches an `ensure*` that runs
+ * before the gate — the shape D39 and D41 actually were — and it would not
+ * catch one placed after the gate's closure has already returned. The behaviour
+ * tests above are what cover that; this covers the ones nobody has written yet.
+ */
+describe("⛔ the master gate is STRUCTURAL, not four remembered call sites", () => {
+  /** Comment and doc lines mention these helpers constantly; only CODE counts. */
+  function isCode(line: string): boolean {
+    const t = line.trim();
+    return !(t.startsWith("*") || t.startsWith("//") || t.startsWith("/*"));
+  }
+
+  it("every build*Request refuses BEFORE its first ensure*, and none stands outside one", () => {
+    const src = readFileSync(join(__dirname, "VoucherScreen.tsx"), "utf8");
+    const lines = src.split("\n");
+
+    const BUILDER = /^\s*const (build\w+) = useCallback\(/;
+    // Where the last builder ends: the accept handler that dispatches to them.
+    const END = /^\s*const onAccept = useCallback\(/;
+    const ENSURE = /\bensure(Ledger|GstTaxLedgers)\(/;
+    const GATE = /\bresolveMasters\(/;
+
+    type Region = { name: string; start: number; end: number };
+    const regions: Region[] = [];
+    lines.forEach((line, i) => {
+      const m = BUILDER.exec(line);
+      if (m) regions.push({ name: m[1]!, start: i, end: lines.length });
+      if (END.test(line) && regions.length > 0) {
+        const last = regions[regions.length - 1]!;
+        if (last.end === lines.length) last.end = i;
+      }
+    });
+    for (let r = 0; r < regions.length - 1; r++) {
+      regions[r]!.end = Math.min(regions[r]!.end, regions[r + 1]!.start);
+    }
+    // The premise: if this file is ever restructured so the builders are not
+    // found, the walk must FAIL rather than pass vacuously — the exact way a
+    // structural gate stops being one.
+    expect(regions.map((r) => r.name).sort()).toEqual([
+      "buildDoubleEntryRequest",
+      "buildGstRequest",
+      "buildItemRequest",
+      "buildPlainRequest",
+      "buildSingleEntryRequest",
+    ]);
+
+    // ⛔ NO `ensure*` MAY STAND OUTSIDE A BUILDER AT ALL. One in an effect, a
+    // handler or a field's onChange would create a master with no write behind
+    // it even pending — a strictly worse version of the same defect.
+    const inside = (i: number) =>
+      regions.some((r) => i >= r.start && i < r.end);
+    const strays = lines
+      .map((line, i) => ({ line, i }))
+      .filter(({ line, i }) => isCode(line) && ENSURE.test(line) && !inside(i))
+      .map(({ i }) => `VoucherScreen.tsx:${i + 1}`);
+    expect(strays).toEqual([]);
+
+    // ⛔ AND INSIDE EACH ONE, THE REFUSAL COMES FIRST. Reported per builder, by
+    // NAME and LINE, because "false" would send the next reader hunting.
+    const ungated: string[] = [];
+    for (const r of regions) {
+      const body = lines.slice(r.start, r.end);
+      const firstEnsure = body.findIndex((l) => isCode(l) && ENSURE.test(l));
+      if (firstEnsure === -1) continue; // buildPlainRequest creates nothing.
+      const firstGate = body.findIndex((l) => isCode(l) && GATE.test(l));
+      if (firstGate === -1 || firstGate > firstEnsure) {
+        ungated.push(
+          `${r.name}: ensure* at VoucherScreen.tsx:${r.start + firstEnsure + 1} ` +
+            `is not behind resolveMasters`,
+        );
+      }
+    }
+    expect(ungated).toEqual([]);
+  });
+});
 
 describe("⛔ the master gate: single entry (D39, DRIVEN)", () => {
   it("a cost axis short by any amount creates NO ledger and posts nothing", async () => {
