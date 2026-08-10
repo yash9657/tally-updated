@@ -288,7 +288,7 @@ export function OrderRegisterScreen({
    */
   const partyLedgers = useMemo(
     () =>
-      true
+      offerEveryLedger
         ? ledgers
         : ledgers.filter(
             (l) =>

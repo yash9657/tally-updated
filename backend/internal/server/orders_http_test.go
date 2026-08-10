@@ -26,14 +26,26 @@ import (
 	"github.com/khata/cored/internal/server"
 )
 
-// ordersFixture is a company with two stock items and a party ledger, all created
-// over HTTP where a route exists.
+// ordersFixture is a company with two stock items and ONE PARTY PER DIRECTION,
+// all created over HTTP where a route exists.
+//
+// ⛔ TWO PARTIES, NOT ONE, AND THE SECOND IS NOT SYMMETRY. A sales order commits
+// to a Sundry Debtor and a purchase order to a Sundry Creditor, and cored refuses
+// anything else by ltree ancestry (orders.checkPartyGroup, register row D6). This
+// fixture carried a single debtor and handed it to both directions, so every
+// purchase order it posted was the defect D6 names — a purchase commitment made
+// to a customer. The tests below are about the direction guard and about order
+// numbering; neither says anything about the party, and neither should have to
+// think about it, which is what a fixture that gets it right buys them.
 type ordersFixture struct {
 	base     string
 	ownerTok string
 	table    string
 	leg      string
-	party    string
+	// customer is a Sundry Debtor: who a SALES order commits us to.
+	party string
+	// supplier is a Sundry Creditor: who a PURCHASE order commits us to.
+	supplier string
 }
 
 func newOrdersFixture(t *testing.T, srv *server.Server) ordersFixture {
@@ -59,26 +71,50 @@ func newOrdersFixture(t *testing.T, srv *server.Server) ordersFixture {
 	f.table = mkItem("Table")
 	f.leg = mkItem("Leg")
 
-	rec, body := doRaw(t, srv, http.MethodPost, f.base+"/ledgers", ownerTok,
-		map[string]any{"name": "Acme Retail " + uuid.NewString()[:8],
-			"group_name": "Sundry Debtors", "created_by": "owner"})
-	if rec.Code != http.StatusCreated && rec.Code != http.StatusOK {
-		t.Fatalf("create party ledger = %d (%s)", rec.Code, rec.Body.String())
+	mkParty := func(label, group string) string {
+		rec, body := doRaw(t, srv, http.MethodPost, f.base+"/ledgers", ownerTok,
+			map[string]any{"name": label + " " + uuid.NewString()[:8],
+				"group_name": group, "created_by": "owner"})
+		if rec.Code != http.StatusCreated && rec.Code != http.StatusOK {
+			t.Fatalf("create the %s ledger = %d (%s)", group, rec.Code, rec.Body.String())
+		}
+		id, _ := body["ledger_id"].(string)
+		if id == "" {
+			id, _ = body["id"].(string)
+		}
+		if id == "" {
+			t.Fatalf("the %s ledger came back with no id: %s", group, rec.Body.String())
+		}
+		return id
 	}
-	if f.party, _ = body["ledger_id"].(string); f.party == "" {
-		f.party, _ = body["id"].(string)
-	}
-	if f.party == "" {
-		t.Fatalf("the party ledger came back with no id: %s", rec.Body.String())
-	}
+	f.party = mkParty("Acme Retail", "Sundry Debtors")
+	f.supplier = mkParty("Steel Suppliers", "Sundry Creditors")
 	return f
 }
 
+// orderBody is a SALES order's body: the party is the debtor. See purchaseBody.
 func (f ordersFixture) orderBody(no, item, qty string) map[string]any {
+	return f.bodyFor(f.party, no, item, qty)
+}
+
+// purchaseBody is the same order keyed against the SUPPLIER.
+//
+// ⚠️ A SEPARATE HELPER RATHER THAN A `direction` ARGUMENT, on purpose. The whole
+// design of these routes is that the direction is never a parameter — two
+// authorities, two paths — and a fixture that took one would be the only place in
+// the test suite modelling them as one thing with a switch. Reading
+// `f.purchaseBody(...)` beside `POST /purchase-orders` also makes a mismatched
+// pair visible at the call site, which is the mistake that produced D6's shape
+// here in the first place.
+func (f ordersFixture) purchaseBody(no, item, qty string) map[string]any {
+	return f.bodyFor(f.supplier, no, item, qty)
+}
+
+func (f ordersFixture) bodyFor(party, no, item, qty string) map[string]any {
 	return map[string]any{
 		"order_no":        no,
 		"order_date":      "2026-06-01",
-		"party_ledger_id": f.party,
+		"party_ledger_id": party,
 		"created_by":      "owner",
 		"lines": []any{map[string]any{
 			"stock_item_id": item, "qty": qty, "rate": "500", "due_date": "2026-06-30",
@@ -109,7 +145,7 @@ func TestASalesOrderRouteWillNotServeAPurchaseOrder(t *testing.T) {
 	f := newOrdersFixture(t, srv)
 
 	salesID := postOrderOK(t, srv, f, "/sales-orders", f.orderBody("SO-1", f.table, "20"))
-	purchID := postOrderOK(t, srv, f, "/purchase-orders", f.orderBody("PO-1", f.leg, "50"))
+	purchID := postOrderOK(t, srv, f, "/purchase-orders", f.purchaseBody("PO-1", f.leg, "50"))
 
 	// THE CONTROLS: each id is readable from its OWN route. Without these, the 404s
 	// below are consistent with the routes being broken for everything.
@@ -206,7 +242,7 @@ func TestAnOrderRoundTripsAndItsNumberIsUniquePerDirection(t *testing.T) {
 	// BUT a PURCHASE order MAY share the number: a business numbers its own sales
 	// orders and receives supplier numbers it does not control.
 	rec, _ = doRaw(t, srv, http.MethodPost, f.base+"/purchase-orders", f.ownerTok,
-		f.orderBody("SO-7", f.leg, "5"))
+		f.purchaseBody("SO-7", f.leg, "5"))
 	if rec.Code != http.StatusCreated && rec.Code != http.StatusOK {
 		t.Errorf("a PURCHASE order numbered SO-7 = %d, want 201 — uniqueness is per direction, and "+
 			"SO-1 colliding with PO-1 is not a collision an operator would accept being told about (%s)",

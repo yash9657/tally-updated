@@ -88,6 +88,35 @@ func newOrderHTTPFixture(t *testing.T, srv *server.Server) orderHTTPFixture {
 		t.Fatalf("the stock item came back with no id: %s", rec.Body.String())
 	}
 
+	// ⛔ THE PARTY IS A CUSTOMER, AND IT IS CREATED HERE RATHER THAN FOUND.
+	//
+	// This fixture used to take whatever `SELECT id FROM ledger ORDER BY name
+	// LIMIT 1` returned — "Cash" on a fresh company — under a comment saying "any
+	// ledger will do as the counterparty: what is under test is the fulfilment
+	// link, not the party". That was true when it was written and is not true now:
+	// a sales order commits to a Sundry Debtor and cored refuses anything else by
+	// ltree ancestry (orders.checkPartyGroup, register row D6). The old line was
+	// therefore not a neutral shortcut but a fixture that reached for the ONE
+	// branch the books now refuse, and it took three tests about fulfilment down
+	// with it.
+	//
+	// Created over HTTP, like the stock item above, so the fixture builds what a
+	// client could build. The COUNTERPARTY still is not what these tests are
+	// about — which is exactly why it must be an ordinary one.
+	lrec, lbody := doRaw(t, srv, http.MethodPost, f.base+"/ledgers", ownerTok,
+		map[string]any{"name": "Acme Retail " + uuid.NewString()[:8],
+			"group_name": "Sundry Debtors", "created_by": "owner"})
+	if lrec.Code != http.StatusCreated && lrec.Code != http.StatusOK {
+		t.Fatalf("create the customer ledger = %d, want 201 (%s)", lrec.Code, lrec.Body.String())
+	}
+	partyLedgerID, _ := lbody["ledger_id"].(string)
+	if partyLedgerID == "" {
+		partyLedgerID, _ = lbody["id"].(string)
+	}
+	if partyLedgerID == "" {
+		t.Fatalf("the customer ledger came back with no id: %s", lrec.Body.String())
+	}
+
 	cid, err := uuid.Parse(companyID)
 	if err != nil {
 		t.Fatalf("parse company id: %v", err)
@@ -104,18 +133,11 @@ func newOrderHTTPFixture(t *testing.T, srv *server.Server) orderHTTPFixture {
 		t.Fatalf("parse stock item id: %v", err)
 	}
 	openingID := uuid.New()
-	var partyLedger, godown uuid.UUID
+	var godown uuid.UUID
 	if err := pool.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx,
 			`SELECT id FROM godown WHERE company_id = $1 AND name = 'Main Location'`,
 			cid).Scan(&godown); err != nil {
-			return err
-		}
-		// Any ledger will do as the counterparty: what is under test is the
-		// fulfilment link, not the party.
-		if err := tx.QueryRow(ctx,
-			`SELECT id FROM ledger WHERE company_id = $1 ORDER BY name LIMIT 1`,
-			cid).Scan(&partyLedger); err != nil {
 			return err
 		}
 		// Opening stock, so the delivery does not trip stock_movement_not_negative
@@ -137,7 +159,7 @@ func newOrderHTTPFixture(t *testing.T, srv *server.Server) orderHTTPFixture {
 		map[string]any{
 			"order_no":        "SO-" + uuid.NewString()[:8],
 			"order_date":      "2026-06-01",
-			"party_ledger_id": partyLedger.String(),
+			"party_ledger_id": partyLedgerID,
 			"created_by":      "owner",
 			"lines": []any{map[string]any{
 				"stock_item_id": f.itemID,

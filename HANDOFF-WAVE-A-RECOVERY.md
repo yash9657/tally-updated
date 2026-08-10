@@ -39,6 +39,13 @@ grep below is clean.
 lane can leave code that reports success over a write it never made, and that is indistinguishable from a
 working route until somebody reads the books back.
 
+> ⛔⛔ **AND THE GREP IS NOT ENOUGH — THIS WAS LEARNED THE HARD WAY ON 2026-08-10.** A lane disabled a
+> live control with `true ? ledgers : ledgers.filter(…)` and **no marker at all**. The grep below was
+> clean while the defect was fully live and four tests were red. **Sweep for tautologies too:**
+> ```bash
+> grep -rnE "\btrue \?|if \(true\)|\|\| true\b|&& false\b" backend/internal frontend/src insightd/insightd
+> ```
+>
 > ⛔ **BEFORE YOU BELIEVE ANY PART OF THIS TREE, RUN:**
 > ```bash
 > grep -rn "MUTATION\|SABOTAGE" backend/internal frontend/src insightd/insightd \
@@ -108,7 +115,7 @@ the browser proves the FIX. Do not mark any §7.1 row closed on the strength of 
 |---|---|---|---|
 | ~~**L4** TDS~~ | D1–D4 | ✅ **SERVER SIDE DONE (2026-08-10).** The missing allocation loop is written and routes through `allocateToDeduction` — the SAME function the create path calls, so both write paths share one verifier and one cap. `grep INSERT|UPDATE|DELETE` on `tds_challan_allocation` returns exactly one non-test hit. **`internal/masters` is fully green** (was 4 red) and the 6 TDS wire tests pass. The sabotage is GONE. 3 proofs executed, incl. one that reproduced D2 verbatim on the new path (a ₹1,000 deposit paying ₹2,000 of tax, `unallocated_tax_rupees:"-20000.0000"` behind a 200) | ⛔⛔ **D1 IS STILL UNREACHABLE FROM THE BROWSER — DO NOT MARK IT CLOSED.** Nothing in the client can call the route: `allocateToChallan` exists in neither `client.ts`, `rest.ts` nor `mock.ts`, and `TDSChallansScreen` renders no affordance. See §4 items 8–11. **D3 is likewise unbuilt**: `VoucherRequest.tds/.tcs` are expressible but NO screen constructs either block, so a deduction still cannot be keyed and the picker stays empty on real books |
 | ~~**L1r** bill-wise~~ | D10, D11, D32 | ✅ **DONE (2026-08-10).** The redesign was kept and FINISHED — and its own doc comment was wrong: it claimed `Sales/2026-27/7` is *"unique by construction"*, which it is not. The counter's key is (company, **voucher type**, FY) while the name carries the **class**, and two paths collide on it — ⛔ **one of them a KEYSTROKE, not a theory:** `numbering.go` honours a client-supplied `voucher_no` verbatim without bumping the counter, and `VoucherScreen.tsx:1595` sends that field, so an operator typing `1` into the No. box merged 16,800 into one bill. Also closed: a generated name landing on `ledger_opening_bill` (18,800 merged into the carried-in balance), and the unnumbered fallback — `voucherID.String()[:8]` on a **uuid v7** is the top 32 bits of a millisecond clock, so the escape hatch against merging *was* a merge for every voucher minted in the same ~65s. ⛔ **All five red tests PINNED the defect**; their arcs were kept and the assertions made STRONGER (the receipt now reads the bill name back off `Outstandings`, which is where the settle picker gets it). 7 proofs executed | ⛔ Not browser-driven. See §4 item 13 |
-| **L8** orders + BOM | D6, D7, D44, D68–D71 | party-group restriction at both ends, the fulfilment sort, overdue defaults | ⛔ **5 `server` order tests + 4 `OrderRegisterScreen` tests red.** The party restriction changed what the register offers and the round-trip tests have not caught up. Preserve the invariant **an order moves no stock** |
+| ~~**L8** orders + BOM~~ | D6, D7, D44, D68–D71 | ✅ **DONE (2026-08-10).** ⛔⛔ **IT FOUND AN UNMARKED LIVE SABOTAGE THE GREP CANNOT SEE:** `OrderRegisterScreen.tsx:291` read `true ? ledgers : ledgers.filter(…)` — D6's client filter disabled by a **tautology**, with no `MUTATION` marker. The prescribed grep was clean while the defect was fully live. See §6. ⛔ **And NONE of the nine red tests pinned a defect** — five were **ROTTED FIXTURES** (`ordersFixture` had one debtor and handed it to both directions, so every purchase order it posted *was* D6; another picked `ORDER BY name LIMIT 1` → "Cash" under a comment saying "any ledger will do"), and four were correct tests against sabotaged source. It also asserted the **no-stock invariant**, which four comments stated and nothing checked. 11 proofs, each restored to a verified sha256 | ⛔ `api/mock.ts` needs three mirrors — §4 item 14 |
 | ~~**L9** users + security~~ | D25, D55–D58, D73, D74 | ✅ **DONE (2026-08-10).** The killed lane's work was re-read and RE-PROVED rather than assumed. D56 is asserted as a PROPERTY at `Server.authenticate` — the one funnel all three call sites go through — so a route mounted tomorrow inherits it. ⛔ **The door that would have re-opened everything:** `/auth/webauthn/assert/*` MINTS a write-capable token, so a revoked session must not be able to trade up; closed, with the register/`auth/password`/`POST /v1/companies` doors, each with a **DB read-back** rather than a status code. `internal/authn` + `internal/testhygiene` green; 9 proofs executed | ⛔ **D55's SECOND CLAUSE IS STILL OPEN — see §4 item 12.** `POST /auth/password` has a client function and NO CALLER, so a user still cannot change their own password |
 | **L6** voucher form | D39, D41, D59, D60 | the master-before-write gate, `VoucherScreen.masterGate.test.tsx` | ⛔ **3 `wiring.test.tsx` tests red** (`Ctrl+A … calls postSalesVoucher`, purchase, and the alter path) — the Ctrl+A path was mid-rewrite. **This is the single-owner file; nobody else may touch it** |
 | ~~**L11** AI-native~~ | D16, D18, D19, D22, D23, D49, D72 | ✅ **DONE (2026-08-10)** for D16/D18/D19/D23/D72; the `tsc` errors are fixed. D16 is closed as a PROPERTY: `persistence.py` classifies **every string-bearing field of the draft body** and a field it cannot classify is a hard runtime error, so a field added to `cored_map.py` tomorrow turns the suite red instead of shipping an unguarded master name. ⚠️ **Its other half matters as much:** money/dates/uuids are classified STRUCTURED and never scrubbed, because `AADHAAR_RE` is `\b\d{12}\b` and a fixed-4 amount like `180000000000.0000` contains a 12-digit run — scrubbing everything would one day eat money. D18+D19 fixed at BOTH ends. 8 proofs; insightd **160 passed** | ⛔ **D22 IS A BUILD, NOT BUILT — see §5 item 6 for the cheap route.** D49 is a RECOMMENDATION only — see §5 item 7 |
@@ -191,6 +198,16 @@ mechanism unwired earlier in this project.
     Invoice No.: `<ref_name>`"*, which now reads `Sales/2026-27/7` instead of `7`. `againstInvoiceDate`
     already looks up the voucher that opened the bill — it should return the **number** beside the date and
     print that. Pre-existing for any hand-named bill (`PO-4471/partial`); L1r's fix makes it common.
+    ⛔ **THIS IS NOW FIRING FOR REAL:** `printingdb`'s `TestACreditNoteCannotBePrintedAtAll` went red the
+    moment L1r landed.
+
+14. **`frontend/src/api/mock.ts` needs three mirrors, and one of them REPRODUCES A DEFECT THE SERVER NO
+    LONGER HAS.** (a) `:1832` is D44 verbatim — `is_overdue: Boolean(l.due_date && asOn && l.due_date <
+    asOn)` — so in dev mode and in every screen test the default no-as-at order book **still reports zero
+    late deliveries**. (b) `mockCreateOrder` does not check the party GROUP, so against the mock an
+    operator can tick the escape hatch and pick HDFC Bank and it succeeds, while cored 422s — D6's "a
+    client filter alone is a suggestion" half, live in dev. (c) it does not refuse a due date before the
+    order date (D69). **The mock must refuse what the server refuses.**
 
 ---
 

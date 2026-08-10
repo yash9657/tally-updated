@@ -296,6 +296,74 @@ func TestAPartyInASubGroupOfSundryDebtorsIsAcceptedOnASalesOrder(t *testing.T) {
 	}
 }
 
+// ⛔⛔ AN ACCEPTED ORDER MOVES NO STOCK AND POSTS NOTHING — THE INVARIANT THIS
+// WHOLE PACKAGE EXISTS UNDER, ASSERTED RATHER THAN ASSERTED-IN-A-COMMENT.
+//
+// Every other file here STATES it (order.go's header, this file's, the screen's)
+// and the archtest pins the package's IMPORTS to the db layer, which is a real
+// guard and is not this one: an import graph cannot see a raw `tx.Exec` writing
+// stock_movement through the pool this package already holds. The rule is about
+// the four TABLES, so the assertion is about the four tables, read back after a
+// write that SUCCEEDED.
+//
+// ⚠️ AND IT IS THE ACCEPTED ORDER, NOT THE REFUSED ONE. A refusal that leaves the
+// books untouched proves nothing here — a Create that did nothing at all would
+// pass it. The interesting claim is that the write which DID happen wrote only
+// order_head and order_line: the commitment is recorded, and closing stock, the
+// Day Book, the Profit & Loss and the Balance Sheet are all exactly where they
+// were. That matters more since closing stock began feeding the Balance Sheet —
+// a stray movement per open order would compound and reconcile against nothing.
+//
+// The CONTROL is the count of order_line: without it, "no rows anywhere" is
+// consistent with a Create that quietly wrote nothing while returning an id.
+func TestAnAcceptedOrderMovesNoStockAndPostsNothing(t *testing.T) {
+	e := setupParty(t)
+
+	if _, err := e.svc.Create(e.ctx, e.order(Sales, e.debtor, "SO-INVARIANT")); err != nil {
+		t.Fatalf("the control order was refused, so this test can see nothing: %v", err)
+	}
+
+	counts := map[string]int{}
+	if err := e.pool.RunInTx(e.ctx, func(ctx context.Context, tx pgx.Tx) error {
+		for _, table := range []string{
+			// THE CONTROL — this one must be 1.
+			"order_line",
+			// And these must all be 0. Named individually rather than swept from
+			// information_schema so that a table added tomorrow does not silently
+			// join the safe list.
+			"stock_movement", "posting", "voucher_head", "voucher_version",
+			"stock_opening", "order_fulfilment",
+		} {
+			var n int
+			if err := tx.QueryRow(ctx,
+				`SELECT count(*) FROM `+table+` WHERE company_id = $1`, e.company).Scan(&n); err != nil {
+				return err
+			}
+			counts[table] = n
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("read the books back: %v", err)
+	}
+
+	if counts["order_line"] != 1 {
+		t.Fatalf("CONTROL: the accepted order left %d order_line row(s), want 1. Every zero below "+
+			"is meaningless if the order was never written", counts["order_line"])
+	}
+	for _, table := range []string{
+		"stock_movement", "posting", "voucher_head", "voucher_version",
+		"stock_opening", "order_fulfilment",
+	} {
+		if counts[table] != 0 {
+			t.Errorf("recording an ORDER wrote %d row(s) into %s. An order is a committed QUANTITY "+
+				"and never a movement: the stock ledger's only primitive is a positive quantity plus "+
+				"a direction, and an order is neither. A movement per open order corrupts closing "+
+				"stock, which now feeds the Balance Sheet, and the error compounds with every order "+
+				"and reconciles against nothing", counts[table], table)
+		}
+	}
+}
+
 // ⛔ A REFUSED ORDER LEAVES NOTHING BEHIND, and this is why the check lives
 // INSIDE Create's transaction rather than in Validate.
 //
