@@ -268,6 +268,22 @@ function stack(opts: StackOpts = {}) {
         expires_in: 3600,
       });
     }
+    // GET /v1/me — the session bootstrap's invite claim (D25), which every
+    // gated composition now makes before anything else renders. Answered with a
+    // well-formed EMPTY MeResponse: this stack's subject holds no company and
+    // has no invite to claim, so the company bootstrap below still runs and the
+    // POST it makes is still the write that trips the step-up. Before this arm
+    // existed the route fell through to `respond(200, {})`, whose missing
+    // `companies` key made the claim throw and be swallowed — the cases still
+    // passed, for the wrong reason.
+    if (url.endsWith("/v1/me")) {
+      return respond(200, {
+        user_id: "3f1d0a2e-0000-4000-8000-000000000001",
+        subject: OWNER.subject,
+        companies: [],
+        claimed_invites: [],
+      });
+    }
     // Everything cored-side: WRITES need amr, reads do not.
     const write = call.method !== "GET";
     if (write && call.auth !== `Bearer ${STEPPED_TOKEN}`) {
@@ -820,6 +836,21 @@ describe("the 403 STEPUP_REQUIRED retry", () => {
           user: OWNER,
         });
       }
+      // ⚠️ /v1/me IS ANSWERED, AND THAT IS WHAT KEEPS THIS CASE HONEST. D25 put
+      // the invite-claiming GET /v1/me in front of everything else and gates the
+      // shell on it, so a blanket 401 would end the session on the session's
+      // FIRST call — the shell would never render and this would stop testing
+      // "a MID-session 401 survives the step-up rewrite", which is its whole
+      // job. (The first-call 401, which is what a REVOKED session now gets, is
+      // pinned separately in auth.test.tsx.)
+      if (call.url.endsWith("/v1/me")) {
+        return respond(200, {
+          user_id: OWNER.id,
+          subject: OWNER.subject,
+          companies: [],
+          claimed_invites: [],
+        });
+      }
       return respond(401, { error: "unauthorized" });
     });
     render(<App auth={gate(t)} />);
@@ -831,6 +862,11 @@ describe("the 403 STEPUP_REQUIRED retry", () => {
     // would keep rendering against a dead session and this never resolves.
     await waitFor(() => expect(screen.getByTestId("login-screen")).toBeTruthy());
     expect(globalThis.sessionStorage?.getItem(AUTH_STORAGE_KEY)).toBeNull();
+    // ⛔ AND NO PASSKEY PROMPT. A 401 must be returned BEFORE the step-up sniff,
+    // or a revoked session would prompt an operator for a passkey it can do
+    // nothing with — and, worse, would spend a single-use server challenge on a
+    // session the server has already killed.
     expect(creds.get).not.toHaveBeenCalled();
+    expect(t.of("/auth/webauthn")).toHaveLength(0);
   });
 });

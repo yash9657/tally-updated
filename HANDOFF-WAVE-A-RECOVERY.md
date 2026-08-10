@@ -76,8 +76,8 @@ including the two that have each cost this project a session:
 | Gate | State |
 |---|---|
 | `go build ./...` | ✅ passes |
-| backend `go test ./...` | ⛔ **FAIL** — ~~`masters`~~ (✅ fixed by the L4 recovery), `reporting`, `server`, `testhygiene` |
-| frontend `pnpm vitest run` | ⛔ **12 failed / 1211 passed**, 4 files |
+| backend `go test ./...` | ⛔ **FAIL** — ~~`masters`~~ ✅ L4 · ~~`testhygiene`~~ ✅ L9 · ~~`reporting`~~ ✅ · `server` (**5 left, all L8 orders**) |
+| frontend `pnpm vitest run` | ⛔ **7 failed / 1225 passed** — 3 `wiring.test.tsx` (**L6**), 4 `OrderRegisterScreen` (**L8**). Was 12/1211 |
 | `pnpm exec tsc --noEmit` | ⛔ **2 errors**, both in `BillInboxScreen.test.tsx` |
 | insightd `pytest` | ✅ **green** |
 | `make verify` / `verify:demo` | not run — meaningless until the above is resolved |
@@ -109,7 +109,7 @@ the browser proves the FIX. Do not mark any §7.1 row closed on the strength of 
 | ~~**L4** TDS~~ | D1–D4 | ✅ **SERVER SIDE DONE (2026-08-10).** The missing allocation loop is written and routes through `allocateToDeduction` — the SAME function the create path calls, so both write paths share one verifier and one cap. `grep INSERT|UPDATE|DELETE` on `tds_challan_allocation` returns exactly one non-test hit. **`internal/masters` is fully green** (was 4 red) and the 6 TDS wire tests pass. The sabotage is GONE. 3 proofs executed, incl. one that reproduced D2 verbatim on the new path (a ₹1,000 deposit paying ₹2,000 of tax, `unallocated_tax_rupees:"-20000.0000"` behind a 200) | ⛔⛔ **D1 IS STILL UNREACHABLE FROM THE BROWSER — DO NOT MARK IT CLOSED.** Nothing in the client can call the route: `allocateToChallan` exists in neither `client.ts`, `rest.ts` nor `mock.ts`, and `TDSChallansScreen` renders no affordance. See §4 items 8–11. **D3 is likewise unbuilt**: `VoucherRequest.tds/.tcs` are expressible but NO screen constructs either block, so a deduction still cannot be keyed and the picker stays empty on real books |
 | **L1r** bill-wise | D10, D11, D32 | a redesign of the unnamed-reference stamp in `ledger.go`, `bill_ref_naming_test.go`, `outstanding_ref_collision_test.go` | ⛔ **It broke two EXISTING tests it has not reconciled:** `TestUnnamedNewRefIsStampedWithTheAllocatedVoucherNo` and `TestReceiptAgainstTheStampedRefSettlesIt`, plus 3 in `server`. **Decide whether those tests pin the old defect (trap #7) or whether the redesign is wrong, and say which in the commit.** ⚠️ Read the blocker first: `BillAllocationPicker` has a name field for AGAINST **only**, so a NEW reference cannot be named from the keyboard — a "refuse the duplicate" fix is unreachable without that input |
 | **L8** orders + BOM | D6, D7, D44, D68–D71 | party-group restriction at both ends, the fulfilment sort, overdue defaults | ⛔ **5 `server` order tests + 4 `OrderRegisterScreen` tests red.** The party restriction changed what the register offers and the round-trip tests have not caught up. Preserve the invariant **an order moves no stock** |
-| **L9** users + security | D25, D55–D58, D73, D74 | `auth_revocation.go` (**WIRED** — `auth_middleware.go:98` calls `sessionRevoked`), migration **0074**, unlock route, `MembersScreen` lock state | ⛔ **4 `auth.test.tsx` + 1 `webauthn.test.tsx` red** — session revocation changed login/session behaviour and those tests describe the old contract. ⛔ **AND A HYGIENE FAILURE:** `auth_session_revocation_test.go:237` creates a company at line 262 and never tears it down (`testhygiene` is red). Add `testdb.Cleanup(t, companyID)`. ⚠️ **Lockout is keyed on SUBJECT: never submit a wrong password for `browser-dev-owner`** |
+| ~~**L9** users + security~~ | D25, D55–D58, D73, D74 | ✅ **DONE (2026-08-10).** The killed lane's work was re-read and RE-PROVED rather than assumed. D56 is asserted as a PROPERTY at `Server.authenticate` — the one funnel all three call sites go through — so a route mounted tomorrow inherits it. ⛔ **The door that would have re-opened everything:** `/auth/webauthn/assert/*` MINTS a write-capable token, so a revoked session must not be able to trade up; closed, with the register/`auth/password`/`POST /v1/companies` doors, each with a **DB read-back** rather than a status code. `internal/authn` + `internal/testhygiene` green; 9 proofs executed | ⛔ **D55's SECOND CLAUSE IS STILL OPEN — see §4 item 12.** `POST /auth/password` has a client function and NO CALLER, so a user still cannot change their own password |
 | **L6** voucher form | D39, D41, D59, D60 | the master-before-write gate, `VoucherScreen.masterGate.test.tsx` | ⛔ **3 `wiring.test.tsx` tests red** (`Ctrl+A … calls postSalesVoucher`, purchase, and the alter path) — the Ctrl+A path was mid-rewrite. **This is the single-owner file; nobody else may touch it** |
 | **L11** AI-native | D16, D18, D19, D22, D23, D49, D72 | `insightd/redaction/persistence.py`, forecast disclosure, tenant context | ⛔ **`tsc` is red here** — `BillInboxScreen.test.tsx` builds a company without `base_currency` (required at HEAD, not a new contract). insightd's own suite is GREEN. ⛔ **D49 was framed as a DECISION, not a patch — see §5** |
 | **L7** printing | D29–D35, D61–D63, D75, D76 | `printTarget`, print handlers, `printingdb`, `DrillRows` | ⚠️ **No red tests attributable to it**, which means only that its own tests pass — it was killed before reporting, so **nothing about it is proved**. Re-run its packages, read its diff, finish the rows it did not reach. Oracle: a real PDF (`%PDF`…`%%EOF`) that NAMES ITSELF |
@@ -178,6 +178,14 @@ mechanism unwired earlier in this project.
     ⛔ **It must render `unallocated_tax_rupees` from the response.** The falling balance is row 17's entire
     oracle, and a screen that reports success from the status code alone looks identical whether the
     balance moved or not — which is how D1 survived seven in-browser doors.
+
+12. ⛔ **`frontend/src/auth/AuthContext.tsx` — the reachable half of D55's second clause.** `POST
+    /auth/password` has a client function (`api/auth.setPassword`, exported and re-exported) and **no
+    caller anywhere but tests**, so a user cannot change their own password. It was left unbuilt rather
+    than half-built: the affordance needs the bearer and base URL, which live on `AuthContextValue`.
+    **Add `changePassword(current, next)` to the context** — better than exposing `baseUrl`, so no screen
+    handles a raw token. With that, the reachable half fits on `MembersScreen`'s `is_self` row: Gateway →
+    Users & Roles, no new `ScreenKind`, no `navMachine`/`AppShell`/`validate.py` edit.
 
 ---
 

@@ -23,6 +23,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/khata/cored/internal/platform/testdb"
 	"github.com/khata/cored/internal/server"
 )
 
@@ -247,6 +248,18 @@ func TestLockingRevokesEveryTokenDoorNotOnlyTheCompanySubtree(t *testing.T) {
 
 	lockByFailedLogins(t, srv, subject)
 
+	// ⛔ THE COMPANY DOOR'S ID IS HOISTED AND REGISTERED FOR TEARDOWN, AND THAT
+	// IS NOT TIDINESS. The POST below MUST be refused, so on a green run this
+	// company is never created and the drop is a no-op. It is registered for the
+	// RED run: the day revocation regresses on authnOnlyMiddleware, this test
+	// fails AND leaves a real tenant behind in the SHARED dev database — which is
+	// how that database reached 43,419 companies and 2010 MB, made a migration
+	// backfill run 1h57m, and ended a ledger run with "No space left on device".
+	// A regression must cost one red test, not a tenant per run forever.
+	// internal/testhygiene's static gate fails this file without it.
+	ghostCompanyID := uuid.New()
+	testdb.Cleanup(t, ghostCompanyID)
+
 	// Every authn-only door, including the two that MINT or REPLACE credentials.
 	for _, door := range []struct {
 		name, method, path string
@@ -260,7 +273,7 @@ func TestLockingRevokesEveryTokenDoorNotOnlyTheCompanySubtree(t *testing.T) {
 		{"POST /auth/webauthn/register/begin", http.MethodPost, "/auth/webauthn/register/begin",
 			map[string]any{}},
 		{"POST /v1/companies", http.MethodPost, "/v1/companies", map[string]any{
-			"id": uuid.NewString(), "name": "Should Never Exist", "fy_start_date": "2025-04-01",
+			"id": ghostCompanyID.String(), "name": "Should Never Exist", "fy_start_date": "2025-04-01",
 		}},
 	} {
 		rec, _ := doRaw(t, srv, door.method, door.path, tok, door.body)
@@ -280,6 +293,22 @@ func TestLockingRevokesEveryTokenDoorNotOnlyTheCompanySubtree(t *testing.T) {
 		t.Skipf("admin postgres unavailable: %v", err)
 	}
 	defer func() { _ = conn.Close(ctx) }()
+
+	// ⛔ AND SO DOES THE COMPANY DOOR. A 401 that still WROTE is this repo's
+	// signature failure, so the refusal is checked against the DATABASE and not
+	// against the number on the wire: `company` is read back over the admin DSN
+	// (as tally_app under RLS it would answer 0 rows whether or not the row
+	// exists, which reads exactly like a working refusal).
+	var ghosts int
+	if err := conn.QueryRow(ctx,
+		`SELECT count(*) FROM company WHERE id = $1`, ghostCompanyID).Scan(&ghosts); err != nil {
+		t.Fatalf("count company: %v", err)
+	}
+	if ghosts != 0 {
+		t.Fatal("⛔ THE REFUSED POST /v1/companies STILL CREATED THE COMPANY: a revoked " +
+			"session minted a tenant and the 401 said otherwise")
+	}
+
 	var creds int
 	if err := conn.QueryRow(ctx, `SELECT count(*) FROM user_credential c
 		JOIN app_user u ON u.id = c.user_id WHERE u.subject = $1`, subject).Scan(&creds); err != nil {

@@ -256,12 +256,19 @@ function useSessionBootstrap(
  * reason this person is signing in today.
  */
 function adoptCompanyIfNoneChosen(
-  companies: { company_id: string }[],
-  claimedInvites: { company_id: string }[],
+  companies: { company_id: string }[] | null | undefined,
+  claimedInvites: { company_id: string }[] | null | undefined,
 ): void {
-  if (companies.length === 0) return;
+  // ⚠️ TOTAL OVER A MALFORMED BODY, NOT MERELY GUARDED BY THE CALLER'S catch.
+  // A proxy that answers 200 with something that is not a MeResponse would
+  // otherwise throw here, and the catch upstream would log the claim as
+  // "settled" — silently reverting to the D25 defect on exactly the deployment
+  // where it is hardest to notice.
+  const mine = companies ?? [];
+  const claimed = claimedInvites ?? [];
+  if (mine.length === 0) return;
   if (readPersistedCompanyId() || readCompanyIdInURL()) return;
-  const target = claimedInvites[0]?.company_id || companies[0]?.company_id;
+  const target = claimed[0]?.company_id || mine[0]?.company_id;
   if (target) rememberChosenCompanyId(target);
 }
 

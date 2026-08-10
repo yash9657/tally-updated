@@ -113,11 +113,20 @@ function signIn(subject: string, password: string) {
 
 const COMPANY = { id: "co-x", name: "Explicit Co" };
 
-function spyClient(): {
+/**
+ * Wrap a client in per-method spies.
+ *
+ * `base` is injectable so a test can SEED the mock before the spies start
+ * counting: the mock's `getCompany` 404s an id it has never issued (faithfully —
+ * so a hydrate against a stale id is observable), which means a test naming a
+ * company that only exists in its own fixture would watch CompanyContext
+ * correctly discard the dead id and mint instead. Seeding through the bare base
+ * keeps that setup out of the call counts the assertions read.
+ */
+function spyClient(base: CoredClient = createMockClient({ seed: false })): {
   client: CoredClient;
   spies: Record<string, ReturnType<typeof vi.fn>>;
 } {
-  const base = createMockClient({ seed: false });
   const spies: Record<string, ReturnType<typeof vi.fn>> = {};
   const client = {} as Record<string, unknown>;
   for (const key of Object.keys(base) as (keyof CoredClient)[]) {
@@ -289,14 +298,30 @@ describe("the auth gate", () => {
     expect(globalThis.sessionStorage?.getItem(AUTH_STORAGE_KEY)).toBeNull();
   });
 
-  it("a 423 shows ACCOUNT LOCKED with the until instant", async () => {
+  /**
+   * ⛔ THIS CASE USED TO ASSERT THE DEFECT, AND THE ASSERTION WAS DELETED ON
+   * PURPOSE (D58, trap #7).
+   *
+   * It read `expect(err.textContent).toContain("2026-07-26T11:30:00Z")` — i.e.
+   * it REQUIRED the screen to hand the operator the server's raw UTC RFC3339
+   * instant, which is exactly what D58 files as the defect. For this product's
+   * audience, accountants in India on IST, that string is five and a half hours
+   * behind their wall clock and after 18:30 local it names YESTERDAY'S DATE, so
+   * it reads as a lock that expired long ago. A test that pins the defect is
+   * part of the defect; this now pins the contract instead.
+   *
+   * ⚠️ AND THE FIXTURE'S INSTANT IS RELATIVE, NOT A LITERAL. The old one was a
+   * hardcoded `2026-07-26T11:30:00Z`, which is now in the PAST, so the screen
+   * quite correctly rendered "the lock has now lifted" and the case would have
+   * silently stopped exercising the wait-remaining branch it exists for — a
+   * date-shaped fixture that rots into vacuity. Both branches are driven below,
+   * each from `Date.now()`.
+   */
+  it("a 423 shows ACCOUNT LOCKED in the OPERATOR's clock and how long, never a raw UTC instant", async () => {
+    const untilISO = new Date(Date.now() + 12 * 60_000).toISOString();
     const t = transport(() => ({
       status: 423,
-      body: {
-        error: "account locked",
-        code: "LOCKED",
-        until: "2026-07-26T11:30:00Z",
-      },
+      body: { error: "account locked", code: "LOCKED", until: untilISO },
     }));
     render(<App auth={gate(t)} client={createMockClient({ seed: false })} company={COMPANY} />);
     signIn("browser-dev-owner", "whatever");
@@ -305,8 +330,55 @@ describe("the auth gate", () => {
     const err = screen.getByTestId("login-error");
     expect(err.getAttribute("data-failure")).toBe("locked");
     expect(err.textContent).toMatch(/ACCOUNT LOCKED/);
-    expect(err.textContent).toContain("2026-07-26T11:30:00Z");
+
+    // THE DEFECT, ASSERTED AS ABSENT. Revert lockedUntilText() to interpolating
+    // `f.until` and this line fails.
+    expect(err.textContent).not.toContain(untilISO);
+    // …replaced by the two things the operator actually asked: when, in a clock
+    // they recognise (with the zone NAMED so it cannot be misread), and how long.
+    expect(err.textContent).toMatch(/about 12 minutes/);
+    expect(err.textContent).toMatch(/\b(AM|PM|GMT|UTC)\b/);
+    // …and the remedy, because "locked" with no way out is the state D55 was
+    // about. Users & Roles is where the Unlock button lives.
+    expect(err.textContent).toMatch(/Users & Roles/);
     expect(screen.queryByText("Gateway of Tally")).toBeNull();
+  });
+
+  it("a 423 whose lock has ALREADY lapsed says so, rather than 'try again in 0 minutes'", async () => {
+    // The window between cored computing `until` and the operator reading the
+    // sentence is real, and a lock that lapsed while the message was on screen
+    // must not tell somebody to keep waiting.
+    const untilISO = new Date(Date.now() - 60_000).toISOString();
+    const t = transport(() => ({
+      status: 423,
+      body: { error: "account locked", code: "LOCKED", until: untilISO },
+    }));
+    render(<App auth={gate(t)} client={createMockClient({ seed: false })} company={COMPANY} />);
+    signIn("browser-dev-owner", "whatever");
+
+    await waitFor(() => expect(screen.getByTestId("login-error")).toBeTruthy());
+    const err = screen.getByTestId("login-error");
+    expect(err.textContent).toMatch(/lock has now lifted/i);
+    expect(err.textContent).not.toMatch(/about 0 minutes/);
+  });
+
+  it("a 423 with NO until still names the remedy instead of leaving a dead end", async () => {
+    // The server always sends one today, but "locked, and nothing about what to
+    // do" is precisely the state D55 describes. NON-VACUOUS: delete the
+    // no-`until` arm of failureText and this renders "undefined".
+    const t = transport(() => ({
+      status: 423,
+      body: { error: "account locked", code: "LOCKED" },
+    }));
+    render(<App auth={gate(t)} client={createMockClient({ seed: false })} company={COMPANY} />);
+    signIn("browser-dev-owner", "whatever");
+
+    await waitFor(() => expect(screen.getByTestId("login-error")).toBeTruthy());
+    const err = screen.getByTestId("login-error");
+    expect(err.getAttribute("data-failure")).toBe("locked");
+    expect(err.textContent).toMatch(/ACCOUNT LOCKED/);
+    expect(err.textContent).toMatch(/Users & Roles/);
+    expect(err.textContent).not.toMatch(/undefined|NaN|Invalid Date/);
   });
 
   it("a network/server failure is reported, never a blank screen", async () => {
@@ -342,11 +414,22 @@ describe("the session", () => {
     expect(stored.user.subject).toBe("browser-dev-owner");
     cleanup();
 
-    // A remount with that entry in place goes STRAIGHT to the shell: no login
-    // screen and — the non-vacuous half — no second /auth/login round trip.
+    // A remount with that entry in place NEVER SHOWS THE LOGIN SCREEN again,
+    // and — the non-vacuous half — makes no second /auth/login round trip.
+    //
+    // ⚠️ THE SHELL ASSERTION IS NOW AWAITED, AND THE await IS THE POINT. It used
+    // to be synchronous, which was only true while the gate rendered the shell
+    // in the same tick as the session. D25 put ONE await in front of it: the
+    // session bootstrap (GET /v1/me, the only seam that claims a pending invite)
+    // must SETTLE before anything below it renders, or the company bootstrap
+    // races it and mints "My Company" while the invite is still in flight. So
+    // the shell arrives a microtask later. It must still arrive, and the login
+    // screen must never come back in between — which is what the two
+    // assertions below say together.
     const t2 = loginTransport("pw");
     render(<App auth={gate(t2)} client={createMockClient({ seed: false })} company={COMPANY} />);
-    expect(screen.getByText("Gateway of Tally")).toBeTruthy();
+    expect(screen.queryByTestId("login-screen")).toBeNull();
+    await waitFor(() => expect(screen.getByText("Gateway of Tally")).toBeTruthy());
     expect(screen.queryByTestId("login-screen")).toBeNull();
     expect(t2.urls).toEqual([]);
   });
@@ -357,9 +440,26 @@ describe("the session", () => {
     expect(screen.getByTestId("login-screen")).toBeTruthy();
   });
 
+  /** An empty, well-formed GET /v1/me: a session with no company and no invite. */
+  const EMPTY_ME = {
+    user_id: OWNER.id,
+    subject: OWNER.subject,
+    companies: [] as unknown[],
+    claimed_invites: [] as unknown[],
+  };
+
   it("a 401 from a mid-session API call returns the user to the login screen", async () => {
     // No `client` prop: the REST client over the stub transport is what the
     // live app uses, so this exercises the real bearer wrapper.
+    //
+    // ⚠️ /v1/me IS ROUTED 200 AND THAT IS DELIBERATE, NOT A CONVENIENCE. D25 put
+    // the invite-claiming GET /v1/me in front of everything else, so with a
+    // blanket 401 this case would bounce on the FIRST call of the session and
+    // never test a MID-session 401 at all — it would still be green while
+    // asserting something weaker than its own name. Answering /v1/me lets the
+    // shell render, exactly as it did before D25, and the company bootstrap's
+    // POST /v1/companies is once again the call that dies. The first-call case
+    // is worth having too, and has its own test below.
     const t = transport((url) => {
       if (url.endsWith("/auth/login")) {
         return {
@@ -372,7 +472,8 @@ describe("the session", () => {
           },
         };
       }
-      // Everything cored-side rejects the (expired) token.
+      if (url.endsWith("/v1/me")) return { status: 200, body: EMPTY_ME };
+      // Everything else cored-side rejects the (expired) token.
       return { status: 401, body: { error: "unauthorized" } };
     });
     render(<App auth={gate(t)} />);
@@ -391,8 +492,86 @@ describe("the session", () => {
     expect(globalThis.sessionStorage?.getItem(AUTH_STORAGE_KEY)).toBeNull();
   });
 
+  /**
+   * ⛔ THE DOOR D56 MADE REACHABLE, AND THE DECISION IT FORCED.
+   *
+   * Session revocation changed what a 401 MEANS. Before it, a mid-session 401
+   * was an expired token; now it is also "the account behind this bearer was
+   * LOCKED, and every session it held is dead" — and, because a lock revokes
+   * retroactively, that verdict arrives on the very FIRST authenticated call the
+   * browser makes after signing in, which since D25 is GET /v1/me.
+   *
+   * The decision, stated so the next reader does not have to re-derive it: a
+   * revoked session's 401 must STILL bounce to the login screen, on the first
+   * call as much as on the hundredth. The alternative — treating the bootstrap
+   * call as special and swallowing its 401 — leaves a locked operator's browser
+   * sitting on "Opening your companies…" or on an empty shell with a dead
+   * bearer, which is a WORSE outcome than the defect: they are neither signed in
+   * nor signed out, and the screen tells them nothing. Signing them out is the
+   * honest answer, and the login screen is where the ACCOUNT LOCKED message they
+   * need is rendered (see the 423 cases above).
+   *
+   * NON-VACUOUS: this is the ONE 401 that App.tsx's session bootstrap catches
+   * and swallows on its own (`catch {}` — settled, not succeeded). It works only
+   * because bearerFetch reports the 401 to the auth layer BEFORE the promise
+   * rejects. Move the `onUnauthorized()` call below the rejection, or make the
+   * bootstrap use a raw fetch, and this hangs on "Opening your companies…".
+   */
+  it("a 401 on the session's FIRST call (a revoked session) also returns to the login screen", async () => {
+    const t = transport((url) => {
+      if (url.endsWith("/auth/login")) {
+        return {
+          status: 200,
+          body: {
+            token: "token-a",
+            token_type: "Bearer",
+            expires_in: 3600,
+            user: OWNER,
+          },
+        };
+      }
+      // What a LOCKED subject's bearer gets from every authenticated route:
+      // 401 "session revoked: this account was locked" (auth_middleware.go).
+      return {
+        status: 401,
+        body: { error: "session revoked: this account was locked" },
+      };
+    });
+    render(<App auth={gate(t)} />);
+    signIn("browser-dev-owner", "pw");
+
+    // The claim seam ran and carried the bearer — so the 401 below is a real
+    // refusal of a real request, not a call that never happened.
+    await waitFor(() => expect(t.urls.some((u) => u.endsWith("/v1/me"))).toBe(true));
+    expect(t.auths.some((a) => a === "Bearer token-a")).toBe(true);
+
+    await waitFor(() => expect(screen.getByTestId("login-screen")).toBeTruthy());
+    expect(screen.queryByTestId("session-bootstrap")).toBeNull();
+    expect(screen.queryByText("Gateway of Tally")).toBeNull();
+    expect(globalThis.sessionStorage?.getItem(AUTH_STORAGE_KEY)).toBeNull();
+    // And it did NOT go on to mint a company for a session that is dead.
+    expect(t.urls.some((u) => u.includes("/v1/companies"))).toBe(false);
+  });
+
   it("signing out forgets the session AND the previous user's company", async () => {
     const { client, spies } = spyClient();
+
+    // ⛔ THE MOCK CLIENT HAS EXACTLY ONE IDENTITY, AND D25 MADE THAT MATTER.
+    // createMockClient's getMe answers "every company MOCK_USER_ID belongs to",
+    // which after user A's bootstrap is A's company — for EVERY caller, because
+    // the mock cannot tell A from B. The session bootstrap would then hand user
+    // B user A's company id and this case would fail for a reason that exists
+    // only in the fixture: against a real cored, /v1/me is scoped to the bearer
+    // and returns B's memberships, which are none. Modelling that here is what
+    // keeps the assertions below about SIGN-OUT rather than about the mock.
+    let signedIn = OWNER.subject;
+    (client as unknown as Record<string, unknown>).getMe = vi.fn(async () => ({
+      user_id: signedIn,
+      subject: signedIn,
+      companies: [],
+      claimed_invites: [],
+    }));
+
     const t = loginTransport("pw");
     render(<App auth={gate(t)} client={client} />);
 
@@ -411,6 +590,7 @@ describe("the session", () => {
     // real cored that is a 403, and CompanyContext then mints B a brand-new
     // empty company. It must never reach for A's books at all.
     cleanup();
+    signedIn = "sharma-owner";
     const t2 = loginTransport("pw", {
       id: "user-b",
       subject: "sharma-owner",
@@ -421,5 +601,120 @@ describe("the session", () => {
     signIn("sharma-owner", "pw");
     await waitFor(() => expect(spies.createCompany).toHaveBeenCalledTimes(2));
     expect(spies.getCompany).not.toHaveBeenCalled();
+  });
+
+  /**
+   * D25 — SIGNING IN CLAIMS A PENDING INVITE, AND LANDS IN THE COMPANY IT WAS
+   * FOR.
+   *
+   * The defect, driven: `GET /v1/me` is the ONLY seam that converts an invite
+   * into a membership (the server never writes another person's identity row),
+   * and the browser called it from exactly ONE place — the F3 Select Company
+   * screen, which an invited user has no reason to open. So an invitee signed
+   * in, nothing claimed the invite, `CompanyProvider`'s precedence chain found
+   * nothing persisted, fell through to its last rule and MINTED "My Company":
+   * they were invited to a firm's books and landed in an empty tenant of their
+   * own, with no error anywhere, while the administrator's Users & Roles still
+   * showed the invite as pending.
+   *
+   * NON-VACUOUS, twice over:
+   *  - `createCompany` NOT being called is the whole defect stated as an
+   *    assertion — before the fix it was called exactly once, every time;
+   *  - the ORDER matters as much as the call. Make the claim fire-and-forget
+   *    instead of gating the shell and the bootstrap wins the race, mints, and
+   *    `createCompany` is called again — the defect with a network request
+   *    added. That is why the shell is gated on it.
+   */
+  it("signing in CLAIMS a pending invite and opens that company instead of minting one", async () => {
+    const INVITED_CO = "co-invited-0001";
+    // The firm's books already exist — the invitee is being let INTO them, not
+    // given new ones. Seeded on the bare mock so it costs no spy call.
+    const base = createMockClient({ seed: false });
+    await base.createCompany({
+      id: INVITED_CO,
+      name: "Sharma & Co",
+      fy_start_date: "2026-04-01",
+      base_currency: "INR",
+    });
+    const { client, spies } = spyClient(base);
+    const getMe = vi.fn(async () => ({
+      user_id: "user-invitee",
+      subject: "new-accountant",
+      // handleMe claims FIRST and lists SECOND, so the just-claimed company is
+      // in both. `claimed_invites` is what says "this is why they signed in".
+      companies: [
+        {
+          company_id: INVITED_CO,
+          name: "Sharma & Co",
+          security_level_id: "lvl-1",
+          security_level_name: "Data Entry",
+          is_owner: false,
+        },
+      ],
+      claimed_invites: [{ invite_id: "inv-1", company_id: INVITED_CO }],
+    }));
+    (client as unknown as Record<string, unknown>).getMe = getMe;
+
+    const t = loginTransport("pw", {
+      id: "user-invitee",
+      subject: "new-accountant",
+      display_name: "",
+      email: "",
+    });
+    render(<App auth={gate(t)} client={client} />);
+    signIn("new-accountant", "pw");
+
+    await waitFor(() => expect(getMe).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(globalThis.localStorage?.getItem("tally.companyId")).toBe(INVITED_CO),
+    );
+    // The shell opened the company they were invited to…
+    await waitFor(() => expect(spies.getCompany).toHaveBeenCalled());
+    expect(spies.getCompany!.mock.calls[0]![0]).toBe(INVITED_CO);
+    // …and did NOT mint them an empty tenant of their own.
+    expect(spies.createCompany).not.toHaveBeenCalled();
+  });
+
+  /**
+   * …AND THE CONTROL FOR IT. The claim must not become a fifth rule in
+   * CompanyContext's selection precedence: an operator's own most recent
+   * deliberate choice still wins over whatever /v1/me happens to list first.
+   * Without this, D25's fix would silently override the F3 company switcher.
+   */
+  it("a company already chosen by the operator OUTRANKS the one /v1/me lists", async () => {
+    const base = createMockClient({ seed: false });
+    for (const id of ["co-chosen-by-me", "co-listed-first"]) {
+      await base.createCompany({
+        id,
+        name: id,
+        fy_start_date: "2026-04-01",
+        base_currency: "INR",
+      });
+    }
+    const { client, spies } = spyClient(base);
+    globalThis.localStorage?.setItem("tally.companyId", "co-chosen-by-me");
+    const getMe = vi.fn(async () => ({
+      user_id: "user-invitee",
+      subject: "new-accountant",
+      companies: [
+        {
+          company_id: "co-listed-first",
+          name: "Some Other Books",
+          security_level_id: "lvl-1",
+          security_level_name: "Data Entry",
+          is_owner: false,
+        },
+      ],
+      claimed_invites: [],
+    }));
+    (client as unknown as Record<string, unknown>).getMe = getMe;
+
+    const t = loginTransport("pw");
+    render(<App auth={gate(t)} client={client} />);
+    signIn("browser-dev-owner", "pw");
+
+    await waitFor(() => expect(spies.getCompany).toHaveBeenCalled());
+    expect(globalThis.localStorage?.getItem("tally.companyId")).toBe("co-chosen-by-me");
+    expect(spies.getCompany!.mock.calls[0]![0]).toBe("co-chosen-by-me");
   });
 });

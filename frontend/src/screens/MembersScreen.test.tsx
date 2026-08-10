@@ -823,3 +823,129 @@ describe("MembersScreen — an invitation that can actually arrive, announced", 
     expect(status).toBe(screen.getByTestId("members-notice"));
   });
 });
+
+// ---------------------------------------------------------------------------
+// D55 / D74 — THE LOCK IS VISIBLE HERE, AND THIS IS THE ONLY PLACE IT CAN BE
+// CLEARED.
+//
+// The defect, driven: locking an account was a one-way door. `ClearLock` is
+// reachable ONLY from a SUCCESSFUL login, which a locked account cannot
+// perform; there was no route, no key and no screen that could free anybody;
+// and Users & Roles — the only member-admin surface in the product — rendered
+// no lock state at all, so the administrator's screen reported that somebody
+// had access while that person could not sign in. POST /auth/password, the one
+// route that might have been a remedy, has no caller anywhere in the app and
+// needs a Bearer the locked user no longer has.
+//
+// ⛔ THESE CASES ARE THE REACHABLE HALF OF THE FIX. The route exists
+// (PUT /members/{userID} {"unlock":true}) and the server side is pinned by
+// internal/server/auth_unlock_test.go. A route with no affordance in this
+// screen would be dead code — worse than no route — so what is asserted here is
+// the AFFORDANCE: that the lock is stated, that a control exists, that pressing
+// it sends the unlock, and that the notice does not overclaim what unlocking
+// did.
+//
+// THE KEYSTROKE: Gateway menu > Users & Roles (this screen is absent from the
+// Alt+G Go To picker — see the burndown's trap #2), then Tab to the row's
+// "Unlock" button and Enter. It is a native <button> in the document order of
+// the members table, exactly like the "Apply" control beside it.
+// ---------------------------------------------------------------------------
+
+/** stubClient's members, with `clerk` locked and part-way to a second lock. */
+function lockedClerkClient(over: Partial<CoredClient> = {}) {
+  const client = stubClient(over);
+  const untilISO = new Date(Date.now() + 9 * 60_000).toISOString();
+  const members = [
+    member("browser-dev-owner", OWNER_LEVEL, true),
+    member("second-owner", OWNER_LEVEL),
+    { ...member("clerk", ENTRY_LEVEL), locked_until: untilISO, failed_attempts: 5 },
+  ];
+  (client as unknown as Record<string, unknown>).listMembers = vi.fn(async () => ({
+    members,
+    invites: [],
+  }));
+  return { client, untilISO };
+}
+
+describe("MembersScreen — a locked account (D55/D74)", () => {
+  it("states the lock in the administrator's own clock, and offers the remedy", async () => {
+    const { client, untilISO } = lockedClerkClient();
+    renderMembers(client);
+
+    await waitFor(() => expect(screen.getByTestId("member-lock:clerk")).toBeTruthy());
+    const lock = screen.getByTestId("member-lock:clerk");
+    expect(lock.textContent).toMatch(/LOCKED OUT/);
+    // ⛔ NOT THE RAW UTC INSTANT (the same defect D58 files against the login
+    // screen). A UTC instant after 18:30 IST names YESTERDAY'S DATE, which
+    // reads as a lock that expired long ago and sends the administrator away
+    // without pressing Unlock.
+    expect(lock.textContent).not.toContain(untilISO);
+    expect(lock.textContent).toMatch(/9 min/);
+    // The remedy is ON the row, not somewhere else.
+    expect(screen.getByTestId("member-unlock:clerk")).toBeTruthy();
+  });
+
+  it("an account that is NOT locked shows no lock and no Unlock button", async () => {
+    // NON-VACUITY for the case above: a screen that rendered the control
+    // unconditionally would pass it while telling every administrator that
+    // everybody is locked.
+    const client = stubClient();
+    renderMembers(client);
+    await waitFor(() => expect(screen.getByTestId("members-table")).toBeTruthy());
+    expect(screen.queryByTestId("member-lock:clerk")).toBeNull();
+    expect(screen.queryByTestId("member-unlock:clerk")).toBeNull();
+  });
+
+  it("pressing Unlock sends {unlock:true} for THAT member and says what it did NOT do", async () => {
+    const { client } = lockedClerkClient();
+    renderMembers(client);
+    await waitFor(() => expect(screen.getByTestId("member-unlock:clerk")).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId("member-unlock:clerk"));
+
+    await waitFor(() =>
+      expect(client.updateMember).toHaveBeenCalledWith("co-1", "user-clerk", {
+        unlock: true,
+      }),
+    );
+    // ⛔ THE LEVEL IS UNTOUCHED. Freeing an account must not silently re-grade
+    // it: the two acts are independent on the wire and must be here too.
+    const sent = (client.updateMember as unknown as ReturnType<typeof vi.fn>).mock
+      .calls[0]![2] as Record<string, unknown>;
+    expect(sent.security_level_id).toBeUndefined();
+    expect(sent.security_level_name).toBeUndefined();
+
+    // The notice tells the WHOLE truth. The half an administrator would
+    // otherwise assume is the dangerous one: unlocking lets the person sign in
+    // again, it does NOT revive the sessions the lock revoked (D56).
+    await waitFor(() =>
+      expect(screen.getByTestId("members-notice").textContent).toContain("Unlocked clerk"),
+    );
+    expect(screen.getByTestId("members-notice").textContent).toMatch(
+      /stays revoked|sign in afresh/,
+    );
+  });
+
+  it("a refused unlock is EXPLAINED, and the lock is still shown", async () => {
+    // Unlock is a write on `security`, so the Owner level's WebAuthn step-up
+    // applies exactly as it does to granting access. A refusal that cleared the
+    // lock from the screen would be the worst outcome: the administrator would
+    // believe the person was freed.
+    const { client } = lockedClerkClient({
+      updateMember: vi.fn(async () => {
+        throw new ApiError(403, "webauthn step-up required", "STEPUP_REQUIRED");
+      }),
+    });
+    renderMembers(client);
+    await waitFor(() => expect(screen.getByTestId("member-unlock:clerk")).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId("member-unlock:clerk"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("members-error").textContent).toContain(
+        "WebAuthn step-up required",
+      ),
+    );
+    expect(screen.getByTestId("member-lock:clerk")).toBeTruthy();
+  });
+});
