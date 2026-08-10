@@ -13,12 +13,24 @@ package reporting_test
 // transaction, so at the moment a browser assembles its request the name Tally
 // would use ("New Ref" defaults to the voucher number) does not exist yet.
 //
-// So post() stamps it. An opening reference may arrive unnamed and is named
+// So post() names it. An opening reference may arrive unnamed and is named
 // after the voucher that opened it. AGAINST may NOT, because
 // reporting.Outstandings groups by (ledger_id, ref_name) and ignores ref_type
 // entirely — a defaulted AGAINST would open a second bill under its own number
 // instead of settling the one it meant to, leaving both figures wrong and the
 // report still footing.
+//
+// ⛔⛔ THESE TWO TESTS USED TO ASSERT `ref_name == the bare voucher number`, AND
+// THAT ASSERTION WAS DEFECTS D10 AND D11 WRITTEN DOWN AS AN EXPECTATION. A bare
+// number is allocated per (voucher TYPE, financial year), so "7" names one voucher
+// per type per year and not one voucher: a Receipt 7's on-account amount netted
+// against Sales invoice 7 on the same party, and an invoice split into two
+// instalments became one bill because both instalments were stamped "7". The tests
+// were right about the ARC — unnamed goes in, the report shows it, a receipt
+// settles it — and wrong about the NAME, so the arc is kept and the name is
+// asserted as a PROPERTY: it identifies the voucher (it carries its number) and it
+// is read back rather than reconstructed. See ledger.go's stampBillRefNames, and
+// outstanding_ref_collision_test.go for the collisions themselves.
 //
 // These tests drive the WHOLE arc a real business does: raise, part-settle,
 // age. Each asserts against the INDEPENDENT ORACLE (the Balance Sheet's Sundry
@@ -75,10 +87,15 @@ func unnamedSale(t *testing.T, led *ledger.Service, ctx context.Context,
 	return res.VoucherNo
 }
 
-// TestUnnamedNewRefIsStampedWithTheAllocatedVoucherNo is the reachability proof:
-// a reference a browser CAN build reaches the Outstandings report under the
-// number the operator sees on the voucher.
-func TestUnnamedNewRefIsStampedWithTheAllocatedVoucherNo(t *testing.T) {
+// TestUnnamedNewRefReachesTheReportNamedAfterItsVoucher is the reachability
+// proof: a reference a browser CAN build reaches the Outstandings report under a
+// name that ties it back to the voucher the operator keyed.
+//
+// ⚠️ IT ASSERTS THE PROPERTY, NOT THE STRING. This test previously demanded the
+// BARE allocated number and that demand was the defect — see the header. What the
+// operator needs is a name that (a) exists, (b) contains the number printed on the
+// document, and (c) says which document, because the number alone does not.
+func TestUnnamedNewRefReachesTheReportNamedAfterItsVoucher(t *testing.T) {
 	pool, ctx, companyID, _ := setup(t)
 	led := ledger.NewService(pool)
 	svc := reporting.NewService(pool)
@@ -94,10 +111,29 @@ func TestUnnamedNewRefIsStampedWithTheAllocatedVoucherNo(t *testing.T) {
 		t.Fatalf("want exactly one party with one bill, got %+v", os.Parties)
 	}
 	bill := os.Parties[0].Bills[0]
-	// THE POINT: the bill is named after the voucher, not left blank and not
-	// named something only the server could explain.
-	if bill.RefName != no {
-		t.Fatalf("bill ref name = %q, want the allocated voucher no %q", bill.RefName, no)
+
+	// (a) NOT BLANK. The old stamp wrote "" whenever no number was allocated, and
+	//     every such reference on a party then merged into one nameless bill.
+	if bill.RefName == "" {
+		t.Fatal("the bill reached the report nameless, so nothing can ever settle it")
+	}
+	// (b) IT CARRIES THE NUMBER THE OPERATOR SEES. Without this the name could be
+	//     a uuid and this test would still pass.
+	if !strings.Contains(bill.RefName, no) {
+		t.Fatalf("bill ref name %q does not contain the voucher number %q — "+
+			"nobody can tie the bill on the ageing report to the invoice in their hand",
+			bill.RefName, no)
+	}
+	// (c) AND IT IS NOT THE BARE NUMBER. That is the whole of D11: the number is
+	//     allocated per (voucher type, financial year), so "7" is not an identity.
+	//     The name must also say WHICH document and WHICH year.
+	if bill.RefName == no {
+		t.Fatalf("the bill is named %q, the bare voucher number — every voucher "+
+			"TYPE has its own counter per financial year, so a Receipt %q or next "+
+			"year's Sales %q would be the same bill on this party", bill.RefName, no, no)
+	}
+	if want := "Sales/"; !strings.HasPrefix(bill.RefName, want) {
+		t.Fatalf("bill ref name %q does not name the class that numbered it", bill.RefName)
 	}
 	if want := dec("94400"); !bill.Pending.Equal(want) {
 		t.Fatalf("pending = %s, want %s", bill.Pending, want)
@@ -117,6 +153,12 @@ func TestUnnamedNewRefIsStampedWithTheAllocatedVoucherNo(t *testing.T) {
 // name it produces a SECOND bill rather than a settlement — which is the exact
 // silent-wrong-number failure validateBillAllocations refuses, and without this
 // half the first half is consistent with "any receipt reduces any bill".
+// ⛔ AND THE NAME IS READ BACK, NEVER RECONSTRUCTED. This test used to settle by
+// the bare voucher number, which was only ever going to work while the name WAS
+// the bare number. A real client does what this now does: it reads the party's
+// open bills (the same reporting.Outstandings call the settle picker's list is
+// built from) and settles the one it was shown. Reconstructing a server-minted
+// name on the client is the mistake billAllocation.ts's header now warns about.
 func TestReceiptAgainstTheStampedRefSettlesIt(t *testing.T) {
 	pool, ctx, companyID, _ := setup(t)
 	led := ledger.NewService(pool)
@@ -126,8 +168,19 @@ func TestReceiptAgainstTheStampedRefSettlesIt(t *testing.T) {
 
 	no := unnamedSale(t, led, ctx, party, sales, "2026-06-19", "94400.0000")
 
+	// What the picker would offer: the party's open bills, by the name the report
+	// identifies each one by.
+	open, err := svc.Outstandings(ctx, companyID, reporting.Receivables, "", nil)
+	if err != nil {
+		t.Fatalf("outstandings: %v", err)
+	}
+	if len(open.Parties) != 1 || len(open.Parties[0].Bills) != 1 {
+		t.Fatalf("want one open bill to settle, got %+v", open.Parties)
+	}
+	ref := open.Parties[0].Bills[0].RefName
+
 	// The receipt NAMES the bill it settles — the one thing a client must supply.
-	if _, err := led.PostVoucher(ctx, receiptAgainst(party, bank, no, "2026-07-02", "50000.0000")); err != nil {
+	if _, err := led.PostVoucher(ctx, receiptAgainst(party, bank, ref, "2026-07-02", "50000.0000")); err != nil {
 		t.Fatalf("post receipt: %v", err)
 	}
 
@@ -140,8 +193,8 @@ func TestReceiptAgainstTheStampedRefSettlesIt(t *testing.T) {
 			"opened its own reference instead of settling the invoice", os.Parties)
 	}
 	bill := os.Parties[0].Bills[0]
-	if bill.RefName != no {
-		t.Fatalf("netted bill ref = %q, want %q", bill.RefName, no)
+	if bill.RefName != ref {
+		t.Fatalf("netted bill ref = %q, want %q", bill.RefName, ref)
 	}
 	if want := dec("44400"); !bill.Pending.Equal(want) {
 		t.Fatalf("pending after part settlement = %s, want %s", bill.Pending, want)
@@ -164,7 +217,7 @@ func TestReceiptAgainstTheStampedRefSettlesIt(t *testing.T) {
 	var settled, other bool
 	for _, b := range os2.Parties[0].Bills {
 		switch b.RefName {
-		case no:
+		case ref:
 			settled = true
 			if want := dec("44400"); !b.Pending.Equal(want) {
 				t.Fatalf("the invoice moved to %s when a DIFFERENT bill was settled; "+
@@ -176,6 +229,30 @@ func TestReceiptAgainstTheStampedRefSettlesIt(t *testing.T) {
 	}
 	if !settled || !other {
 		t.Fatalf("want the invoice AND a separate unapplied credit, got %+v", os2.Parties[0].Bills)
+	}
+
+	// ── THE SECOND CONTROL, AND IT IS THE PRICE OF THE FIX ─────────────────────
+	// ⛔ THE BARE VOUCHER NUMBER IS NOT THE BILL'S NAME ANY MORE, so a client that
+	// GUESSES it does not settle anything — it opens a third reference. That is
+	// the operator-visible cost of D11 being closed, and it is stated here rather
+	// than discovered later: it is why the settle picker offers the names off this
+	// very report, and why BillAllocationPicker warns when a hand-typed AGAINST
+	// matches nothing in the party's open bills.
+	if _, err := led.PostVoucher(ctx, receiptAgainst(party, bank, no, "2026-07-04", "500.0000")); err != nil {
+		t.Fatalf("post bare-number receipt: %v", err)
+	}
+	os3, err := svc.Outstandings(ctx, companyID, reporting.Receivables, "", nil)
+	if err != nil {
+		t.Fatalf("outstandings after the bare-number receipt: %v", err)
+	}
+	for _, b := range os3.Parties[0].Bills {
+		if b.RefName != ref {
+			continue
+		}
+		if want := dec("44400"); !b.Pending.Equal(want) {
+			t.Fatalf("a receipt naming the BARE number %q moved the invoice to %s; "+
+				"the bill is called %q and nothing else may net against it", no, b.Pending, ref)
+		}
 	}
 }
 

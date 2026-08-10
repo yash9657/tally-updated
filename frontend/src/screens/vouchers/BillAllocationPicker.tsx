@@ -273,9 +273,16 @@ export function BillAllocationPicker({
               <span
                 data-testid={`${id}-autoname:${i}`}
                 className="text-tally-field"
-                title="Named with this voucher's number when it is saved — the number is allocated by the server, so it does not exist yet."
+                /* ⛔ THE TOOLTIP USED TO PROMISE "this voucher's number", and
+                   that promise is now false in a way that matters: the server
+                   names the bill "<class>/<financial year>/<number>", because a
+                   bare number is allocated per voucher TYPE per YEAR and so
+                   named one bill per party per year rather than one bill. An
+                   operator told to expect "7" and shown "Sales/2026-27/7" on the
+                   ageing report has been misled by this form. */
+                title="Named on save after the voucher that opens it — class, financial year and number, e.g. Sales/2026-27/7. The number is allocated by the server, so none of it exists yet."
               >
-                (numbered on save)
+                (named on save)
               </span>
             )}
 

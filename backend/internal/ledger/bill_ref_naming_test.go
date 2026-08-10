@@ -29,6 +29,15 @@ import (
 
 func stampFixture(refs ...BillAllocationInput) []BillAllocationInput { return refs }
 
+// stamp is stampBillRefNames' named references alone. The function returns a
+// record (the invented names have to be told apart from the supplied ones before
+// they can be resolved against the DB); these tests are about the names.
+func stamp(
+	bs []BillAllocationInput, class Class, voucherNo, voucherDate string, voucherID uuid.UUID,
+) []BillAllocationInput {
+	return stampBillRefNames(bs, class, voucherNo, voucherDate, voucherID).refs
+}
+
 // vid is a stable voucher id for the fallback case.
 var vid = uuid.MustParse("018f1234-5678-7abc-8def-0123456789ab")
 
@@ -40,7 +49,7 @@ func TestStampNamesTwoUnnamedOpenersDIFFERENTLY(t *testing.T) {
 		BillAllocationInput{LedgerID: party, RefType: RefNew, DrCr: Debit, Amount: amt("5900"), DueDate: "2026-07-19"},
 		BillAllocationInput{LedgerID: party, RefType: RefNew, DrCr: Debit, Amount: amt("5900"), DueDate: "2026-08-18"},
 	)
-	got := stampBillRefNames(in, Sales, "7", "2026-06-19", vid)
+	got := stamp(in, Sales, "7", "2026-06-19", vid)
 
 	if got[0].RefName == got[1].RefName {
 		t.Fatalf("both instalments were named %q — the Outstandings report groups by "+
@@ -66,7 +75,7 @@ func TestStampNamesTwoUnnamedOpenersDIFFERENTLY(t *testing.T) {
 // every ordinary invoice would carry a "-1" nobody asked for.
 func TestStampDoesNotSuffixOpenersOnDifferentLedgers(t *testing.T) {
 	a, b := uuid.New(), uuid.New()
-	got := stampBillRefNames(stampFixture(
+	got := stamp(stampFixture(
 		BillAllocationInput{LedgerID: a, RefType: RefNew, DrCr: Debit, Amount: amt("100")},
 		BillAllocationInput{LedgerID: b, RefType: RefNew, DrCr: Debit, Amount: amt("100")},
 	), Sales, "7", "2026-06-19", vid)
@@ -85,7 +94,7 @@ func TestStampDoesNotSuffixOpenersOnDifferentLedgers(t *testing.T) {
 // DEFINITION applied to no bill, so it may not be named after a voucher.
 func TestStampNeverNamesOnAccountAfterTheVoucher(t *testing.T) {
 	party := uuid.New()
-	got := stampBillRefNames(stampFixture(
+	got := stamp(stampFixture(
 		BillAllocationInput{LedgerID: party, RefType: RefOnAccount, DrCr: Credit, Amount: amt("50000")},
 	), Receipt, "7", "2026-07-02", vid)
 
@@ -93,7 +102,7 @@ func TestStampNeverNamesOnAccountAfterTheVoucher(t *testing.T) {
 		t.Fatalf("on-account reference named %q, want the %q bucket", got[0].RefName, onAccountRefName)
 	}
 	// And the sale it must not touch: the same number, a different class.
-	sale := stampBillRefNames(stampFixture(
+	sale := stamp(stampFixture(
 		BillAllocationInput{LedgerID: party, RefType: RefNew, DrCr: Debit, Amount: amt("94400")},
 	), Sales, "7", "2026-06-19", vid)
 	if sale[0].RefName == got[0].RefName {
@@ -108,14 +117,14 @@ func TestStampNeverNamesOnAccountAfterTheVoucher(t *testing.T) {
 func TestStampSeparatesLikeNumberedVouchersOfOtherTypesAndYears(t *testing.T) {
 	party := uuid.New()
 	one := func(class Class, date string) string {
-		return stampBillRefNames(stampFixture(
+		return stamp(stampFixture(
 			BillAllocationInput{LedgerID: party, RefType: RefNew, DrCr: Debit, Amount: amt("100")},
 		), class, "7", date, vid)[0].RefName
 	}
 	sale := one(Sales, "2026-06-19")
-	note := one(CreditNote, "2026-06-19")      // its own counter — also "7"
-	nextYr := one(Sales, "2027-06-19")         // the series restarts every 1 April
-	advance := stampBillRefNames(stampFixture( // an advance on a receipt, also "7"
+	note := one(CreditNote, "2026-06-19") // its own counter — also "7"
+	nextYr := one(Sales, "2027-06-19")    // the series restarts every 1 April
+	advance := stamp(stampFixture(        // an advance on a receipt, also "7"
 		BillAllocationInput{LedgerID: party, RefType: RefAdvance, DrCr: Credit, Amount: amt("100")},
 	), Receipt, "7", "2026-07-02", vid)[0].RefName
 
@@ -147,8 +156,8 @@ func TestStampIsDeterministic(t *testing.T) {
 			BillAllocationInput{LedgerID: party, RefType: RefNew, DrCr: Debit, Amount: amt("5900")},
 		)
 	}
-	first := stampBillRefNames(body(), Sales, "7", "2026-06-19", vid)
-	again := stampBillRefNames(body(), Sales, "7", "2026-06-19", vid)
+	first := stamp(body(), Sales, "7", "2026-06-19", vid)
+	again := stamp(body(), Sales, "7", "2026-06-19", vid)
 	for i := range first {
 		if first[i].RefName != again[i].RefName {
 			t.Fatalf("reference %d was named %q and then %q — an alter would open a "+
@@ -162,7 +171,7 @@ func TestStampIsDeterministic(t *testing.T) {
 // settlement depend on it.
 func TestStampLeavesSuppliedNamesAlone(t *testing.T) {
 	party := uuid.New()
-	got := stampBillRefNames(stampFixture(
+	got := stamp(stampFixture(
 		BillAllocationInput{LedgerID: party, RefName: "OB/ACME/24-25/07", RefType: RefAgainst,
 			DrCr: Credit, Amount: amt("100")},
 		BillAllocationInput{LedgerID: party, RefName: "PO-4471/partial", RefType: RefNew,
@@ -181,23 +190,59 @@ func TestStampLeavesSuppliedNamesAlone(t *testing.T) {
 // on a party into one nameless bill.
 func TestStampFallsBackToTheVoucherIdWhenThereIsNoNumber(t *testing.T) {
 	party := uuid.New()
-	got := stampBillRefNames(stampFixture(
+	got := stamp(stampFixture(
 		BillAllocationInput{LedgerID: party, RefType: RefNew, DrCr: Debit, Amount: amt("100")},
 	), Sales, "", "2026-06-19", vid)
 
 	if got[0].RefName == "" {
 		t.Fatal("an unnumbered voucher's bill was left nameless")
 	}
-	if want := "Sales/2026-27/#018f1234"; got[0].RefName != want {
+	if want := "Sales/2026-27/#456789ab"; got[0].RefName != want {
 		t.Fatalf("unnumbered bill = %q, want %q", got[0].RefName, want)
 	}
 	// A voucher with no date either: the FY segment drops out rather than
 	// blocking the post.
-	undated := stampBillRefNames(stampFixture(
+	undated := stamp(stampFixture(
 		BillAllocationInput{LedgerID: party, RefType: RefNew, DrCr: Debit, Amount: amt("100")},
 	), Sales, "7", "", vid)
 	if want := "Sales/7"; undated[0].RefName != want {
 		t.Fatalf("undated bill = %q, want %q", undated[0].RefName, want)
+	}
+}
+
+// ⛔⛔ THE FALLBACK ABOVE WAS ITSELF A COLLISION FOR A WHOLE MINUTE AT A TIME, and
+// this is the test that says so. It was `voucherID.String()[:8]`, and voucher ids
+// are uuid **v7** — the leading 48 bits are a millisecond clock, so the first
+// eight hex characters are the TOP 32 BITS OF THAT CLOCK and only advance once per
+// 2^16 ms ≈ 65 seconds. Two unnumbered vouchers keyed on one party inside the same
+// minute were therefore both named "Sales/2026-27/#018f1234": the exact merge the
+// naming exists to prevent, reintroduced by the escape hatch meant to prevent it.
+//
+// The two ids below share their whole timestamp and differ only in v7's random
+// tail, which is what two vouchers created in the same millisecond actually look
+// like. The assertion is on the PROPERTY (the names differ), with the head
+// equality asserted beside it so the test cannot quietly stop reproducing the
+// hazard if the ids are ever edited.
+func TestTheUnnumberedFallbackSeparatesVouchersMintedInTheSameMillisecond(t *testing.T) {
+	party := uuid.New()
+	a := uuid.MustParse("018f1234-5678-7abc-8def-0123456789ab")
+	b := uuid.MustParse("018f1234-5678-7abc-8def-0123ffff0042")
+
+	if a.String()[:8] != b.String()[:8] {
+		t.Fatalf("the fixture no longer reproduces the hazard: %q vs %q "+
+			"— two v7 ids from one millisecond must share their leading bytes",
+			a.String()[:8], b.String()[:8])
+	}
+
+	name := func(id uuid.UUID) string {
+		return stamp(stampFixture(
+			BillAllocationInput{LedgerID: party, RefType: RefNew, DrCr: Debit, Amount: amt("100")},
+		), Sales, "", "2026-06-19", id)[0].RefName
+	}
+	if name(a) == name(b) {
+		t.Fatalf("two unnumbered vouchers on one party were both named %q — the "+
+			"report groups by (ledger, ref_name), so they are ONE bill of the summed "+
+			"amount aged at the earlier due date", name(a))
 	}
 }
 

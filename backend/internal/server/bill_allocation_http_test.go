@@ -40,6 +40,24 @@ package server_test
 //
 // TestAnAlterRebuiltFromTheGetKeepsTheBill below is the item-4a pairing, WITH the
 // control that an alter omitting the references destroys them (§9.3).
+//
+// ===========================================================================
+// ⛔⛔ THESE THREE TESTS ONCE ASSERTED `ref_name == voucher_no`, AND THAT WAS D11
+// ===========================================================================
+// A voucher number is allocated per (company, VOUCHER TYPE, financial year), so
+// the bare "1" names one voucher per type per year and not one voucher: a Receipt
+// 1's on-account amount netted against Sales invoice 1 on the same party, and both
+// figures were wrong while the report still footed. The server now names an
+// unnamed opener "<class>/<financial year>/<number>" — see ledger.go's
+// stampBillRefNames — so an assertion that the report shows the BARE number was
+// pinning the defect rather than the feature.
+//
+// The arc these tests describe is untouched, because the arc was never wrong: a
+// body a browser can build reaches the ageing report, a receipt settles it, and a
+// form rebuilt from the GET keeps it. What changed is that the NAME IS READ BACK
+// — off the report, or off the GET — instead of being reconstructed from the
+// voucher number, which is exactly what a real client has to do and what
+// billAllocation.ts's header now tells clients to do.
 
 import (
 	"net/http"
@@ -182,8 +200,8 @@ func (f billFixture) sundryDebtors(t *testing.T, srv *server.Server) string {
 }
 
 // TestAnUnnamedBillReferenceReachesTheAgeingReport is the reachability proof: a
-// body a BROWSER can build reaches Outstandings under the number the operator
-// sees, and the ageing report ties to the Balance Sheet.
+// body a BROWSER can build reaches Outstandings under a name that ties back to the
+// voucher the operator keyed, and the ageing report ties to the Balance Sheet.
 func TestAnUnnamedBillReferenceReachesTheAgeingReport(t *testing.T) {
 	srv := newServer(t)
 	f := newBillFixture(t, srv)
@@ -194,8 +212,23 @@ func TestAnUnnamedBillReferenceReachesTheAgeingReport(t *testing.T) {
 	if len(bills) != 1 {
 		t.Fatalf("want exactly one open bill, got %+v", bills)
 	}
-	if got, _ := bills[0]["ref_name"].(string); got != no {
-		t.Fatalf("bill ref_name = %q, want the allocated voucher no %q", got, no)
+	// ⛔ THE PROPERTY, NOT THE STRING — see the header. The name must exist, must
+	// carry the number printed on the document, and must NOT be that number alone,
+	// because a bare number names one voucher per type per year.
+	got, _ := bills[0]["ref_name"].(string)
+	if got == "" {
+		t.Fatal("the bill reached the report nameless; nothing can ever settle it")
+	}
+	if !strings.Contains(got, no) {
+		t.Fatalf("bill ref_name %q does not carry the voucher number %q — the "+
+			"operator cannot tie the aged bill to the invoice in their hand", got, no)
+	}
+	if got == no {
+		t.Fatalf("the bill is named %q, the bare voucher number: a Receipt %q or "+
+			"next year's Sales %q would be the same bill on this party", got, no, no)
+	}
+	if !strings.HasPrefix(got, "Sales/") {
+		t.Fatalf("bill ref_name %q does not name the class whose counter numbered it", got)
 	}
 	if got, _ := bills[0]["pending"].(string); got != "94400.0000" {
 		t.Fatalf("pending = %q, want 94400.0000", got)
@@ -231,11 +264,20 @@ func TestAnUnnamedBillReferenceReachesTheAgeingReport(t *testing.T) {
 
 // TestAReceiptSettlesTheBillItNames drives the whole arc a business does, over
 // HTTP: raise 94,400, receive 50,000 against it, watch 44,400 age.
+//
+// ⛔ THE NAME COMES OFF THE AGEING REPORT, which is where the settle picker's
+// open-bill list comes from too. Guessing it from the voucher number is what this
+// test used to do and is what no client may do — see the header.
 func TestAReceiptSettlesTheBillItNames(t *testing.T) {
 	srv := newServer(t)
 	f := newBillFixture(t, srv)
 
 	_, no := f.postSale(t, srv, f.partyID, "94400.0000", "2026-06-30")
+	open := f.outstandingBills(t, srv, f.partyID)
+	if len(open) != 1 {
+		t.Fatalf("want one open bill to settle, got %+v", open)
+	}
+	ref, _ := open[0]["ref_name"].(string)
 
 	receipt := func(ref, amount string) (int, string) {
 		rec, _ := doRaw(t, srv, http.MethodPost, f.base+"/vouchers/receipt", f.ownerTok,
@@ -256,7 +298,7 @@ func TestAReceiptSettlesTheBillItNames(t *testing.T) {
 		return rec.Code, rec.Body.String()
 	}
 
-	if code, body := receipt(no, "50000.0000"); code != http.StatusCreated {
+	if code, body := receipt(ref, "50000.0000"); code != http.StatusCreated {
 		t.Fatalf("receipt = %d, want 201 (%s)", code, body)
 	}
 
@@ -270,6 +312,28 @@ func TestAReceiptSettlesTheBillItNames(t *testing.T) {
 	}
 	if debtors := f.sundryDebtors(t, srv); debtors != "44400.0000" {
 		t.Fatalf("Sundry Debtors %q != the 44400.0000 that is ageing", debtors)
+	}
+
+	// ⛔ AND THE CONTROL THAT NAMES THE COST OF THE FIX. A receipt naming the BARE
+	// voucher number settles NOTHING — it opens its own reference beside the
+	// invoice. That is deliberate (the bare number is not an identity) and it is
+	// why the picker offers names off this report and warns about a hand-typed
+	// AGAINST that matches none of them.
+	if code, body := receipt(no, "500.0000"); code != http.StatusCreated {
+		t.Fatalf("bare-number receipt = %d, want 201 (%s)", code, body)
+	}
+	after := f.outstandingBills(t, srv, f.partyID)
+	if len(after) != 2 {
+		t.Fatalf("want the invoice AND an unapplied credit, got %+v", after)
+	}
+	for _, b := range after {
+		if n, _ := b["ref_name"].(string); n != ref {
+			continue
+		}
+		if p, _ := b["pending"].(string); p != "44400.0000" {
+			t.Fatalf("a receipt naming the bare number %q moved the invoice to %q; "+
+				"the bill is called %q and nothing else may net against it", no, p, ref)
+		}
 	}
 
 	// ⛔ AND THE REFUSAL THAT MAKES THE NAME MEAN SOMETHING. An unnamed AGAINST is
@@ -292,7 +356,7 @@ func TestAnAlterRebuiltFromTheGetKeepsTheBill(t *testing.T) {
 	srv := newServer(t)
 	f := newBillFixture(t, srv)
 
-	vID, no := f.postSale(t, srv, f.partyID, "94400.0000", "2026-06-30")
+	vID, _ := f.postSale(t, srv, f.partyID, "94400.0000", "2026-06-30")
 
 	// Read the voucher back the way a form does.
 	grec, got := doRaw(t, srv, http.MethodGet, f.base+"/vouchers/"+vID, f.ownerTok, nil)
@@ -302,6 +366,14 @@ func TestAnAlterRebuiltFromTheGetKeepsTheBill(t *testing.T) {
 	bills, _ := got["bill_allocations"].([]any)
 	if len(bills) != 1 {
 		t.Fatalf("the GET does not return the bill references: %s", grec.Body.String())
+	}
+	// ⛔ THE NAME THE FORM WILL RE-SEND, TAKEN FROM THE GET. This is the whole
+	// point of item 4a: the client does not know what the server called the bill
+	// and must not try to work it out — it echoes back what it was given.
+	bm, _ := bills[0].(map[string]any)
+	no, _ := bm["ref_name"].(string)
+	if no == "" {
+		t.Fatalf("the GET returns a nameless bill reference: %s", grec.Body.String())
 	}
 	postings, _ := got["postings"].([]any)
 

@@ -1758,8 +1758,18 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 		if op == OpDelete {
 			billAllocations = nil
 		} else {
-			billAllocations = stampBillRefNames(
+			stamped := stampBillRefNames(
 				billAllocations, in.Class, in.VoucherNo, in.VoucherDate, voucherID)
+			// ⛔ AND THE NAMES IT INVENTED ARE RESOLVED AGAINST THE PARTY'S EXISTING
+			// BILLS. The stem is unique only if (class, financial year, number)
+			// names one voucher, and a manually-typed number or a second voucher
+			// type of the same class breaks that — see resolveGeneratedBillRefNames.
+			// It runs INSIDE the transaction because it reads bill_allocation, and
+			// its refusal aborts the same transaction every other refusal here does.
+			if err := resolveGeneratedBillRefNames(ctx, tx, companyID, voucherID, stamped); err != nil {
+				return err
+			}
+			billAllocations = stamped.refs
 			// Checked AFTER the stamp, because the stamp is what makes the
 			// generated names distinct — the only duplicates that can survive to
 			// here are ones a CALLER wrote down twice.
@@ -2597,11 +2607,27 @@ const onAccountRefName = "On Account"
 //
 // ⛔ SO THE GENERATED NAME CARRIES EVERY PART OF THE COUNTER'S KEY: the class, the
 // financial year, and the number — "Sales/2026-27/7" — plus an index when ONE
-// voucher opens more than one bill on the SAME ledger. That is unique by
-// construction, which is the only thing that works here: bill_allocation has no
-// unique index to lean on (duplicate voucher numbers are legal by design,
-// numbering.go's "Prevent Duplicates" is a future flag), so a lookup-then-name
-// scheme would still race two concurrent posts into the same bill.
+// voucher opens more than one bill on the SAME ledger.
+//
+// ⚠️ THAT IS NOT, ON ITS OWN, UNIQUE — AND BELIEVING IT WAS LEFT THE THIRD DOOR OF
+// THE SAME CLASS OPEN. The counter's key is (company, VOUCHER TYPE, fin year) and
+// the name carries the CLASS, which is not the same thing, and two separate paths
+// put two vouchers of one class and year on the same number:
+//
+//   - MANUAL OVERRIDE. numbering.go honours a client-supplied voucher_no verbatim
+//     and deliberately does NOT bump the counter, so an operator who types "7"
+//     into the No. field collides with the auto series when it reaches 7. The F8
+//     form sends that field (`if (f.voucherNo) req.voucher_no = f.voucherNo`), so
+//     this is a KEYSTROKE, not a theory.
+//   - TWO VOUCHER TYPES OF ONE CLASS. `voucher_type_id` is on the wire
+//     (server.go's voucherReq), each type has its OWN counter, and both render as
+//     class "Sales".
+//
+// So the generated names are RESOLVED against what the party's bills are already
+// called before they are written — see resolveGeneratedBillRefNames. Only names
+// this server INVENTED are resolved; a name a caller supplied is left exactly as
+// supplied, because a caller repeating a name across two vouchers is Tally's way
+// of saying "the same bill" and the Tally XML importer relies on it.
 //
 // ⚠️ IT IS DETERMINISTIC, AND THAT IS LOAD-BEARING RATHER THAN TIDY. An ALTER
 // re-states the references; a client that re-sends them unnamed (the F8 form
@@ -2617,11 +2643,13 @@ const onAccountRefName = "On Account"
 // already wrong for any hand-named bill ("PO-4471/partial"); this makes it common.
 func stampBillRefNames(
 	bs []BillAllocationInput, class Class, voucherNo, voucherDate string, voucherID uuid.UUID,
-) []BillAllocationInput {
-	out := make([]BillAllocationInput, len(bs))
-	copy(out, bs)
-
-	base := billRefBase(class, voucherNo, voucherDate, voucherID)
+) stampedBillRefs {
+	st := stampedBillRefs{
+		refs:    make([]BillAllocationInput, len(bs)),
+		base:    billRefBase(class, voucherNo, voucherDate, voucherID),
+		openers: make(map[uuid.UUID]int),
+	}
+	copy(st.refs, bs)
 
 	// How many bills does this voucher OPEN on each ledger without naming them?
 	// Counted first so the single-bill case — virtually every invoice — keeps the
@@ -2630,30 +2658,55 @@ func stampBillRefNames(
 	// AGAINST is never in here: validateBillAllocations refused an unnamed one
 	// before the transaction opened, because a settlement must say what it
 	// settles. ON_ACCOUNT is never in here either: it opens nothing.
-	openers := make(map[uuid.UUID]int)
-	for _, b := range out {
+	for _, b := range st.refs {
 		if b.RefName == "" && b.RefType != RefOnAccount {
-			openers[b.LedgerID]++
+			st.openers[b.LedgerID]++
 		}
 	}
 
 	seen := make(map[uuid.UUID]int)
-	for i := range out {
-		if out[i].RefName != "" {
+	for i := range st.refs {
+		if st.refs[i].RefName != "" {
 			continue
 		}
-		if out[i].RefType == RefOnAccount {
-			out[i].RefName = onAccountRefName
+		if st.refs[i].RefType == RefOnAccount {
+			st.refs[i].RefName = onAccountRefName
 			continue
 		}
-		seen[out[i].LedgerID]++
-		if openers[out[i].LedgerID] > 1 {
-			out[i].RefName = fmt.Sprintf("%s-%d", base, seen[out[i].LedgerID])
-			continue
-		}
-		out[i].RefName = base
+		seen[st.refs[i].LedgerID]++
+		st.refs[i].RefName = generatedBillRefName(
+			st.base, seen[st.refs[i].LedgerID], st.openers[st.refs[i].LedgerID])
+		st.generated = append(st.generated, i)
 	}
-	return out
+	return st
+}
+
+// stampedBillRefs is what stampBillRefNames produces. It is a record rather than
+// a bare slice because the names this server INVENTED must be told apart from the
+// ones a caller SUPPLIED: only the invented ones may be renamed to dodge a
+// collision (see resolveGeneratedBillRefNames), and only the invented ones can be
+// rebuilt from a different stem without contradicting something a human wrote.
+type stampedBillRefs struct {
+	refs []BillAllocationInput
+	// generated holds the indexes into refs that stampBillRefNames named itself.
+	// ON_ACCOUNT is NOT among them: its bucket name is fixed and shared on purpose.
+	generated []int
+	// base is the voucher-identifying stem the generated names were built from.
+	base string
+	// openers counts, per ledger, how many bills this voucher opens unnamed — the
+	// number that decides whether an instalment index is appended.
+	openers map[uuid.UUID]int
+}
+
+// generatedBillRefName assembles one invented name: the stem alone when the
+// voucher opens a single bill on that ledger, stem-1 / stem-2 … when it opens a
+// split. The index is per LEDGER, so an invoice that opens one bill each on two
+// parties leaves both of them unsuffixed.
+func generatedBillRefName(base string, seq, onThisLedger int) string {
+	if onThisLedger > 1 {
+		return fmt.Sprintf("%s-%d", base, seq)
+	}
+	return base
 }
 
 // billRefBase builds the part of a generated bill name that identifies the
@@ -2687,9 +2740,30 @@ func billRefBase(class Class, voucherNo, voucherDate string, voucherID uuid.UUID
 	default:
 		// No number was ever allocated. Name the bill after the voucher itself so
 		// it is still one identifiable bill rather than a shared blank.
-		parts = append(parts, "#"+voucherID.String()[:8])
+		parts = append(parts, "#"+billRefDiscriminator(voucherID))
 	}
 	return strings.Join(parts, "/")
+}
+
+// billRefDiscriminator is the part of a generated bill name that stands for THIS
+// VOUCHER and nothing else. It is used twice: as the number's stand-in when a
+// voucher never got one, and as the tie-break when two vouchers of one class,
+// year and number would otherwise open bills of the same name on one party.
+//
+// ⛔⛔ IT IS THE RANDOM TAIL OF THE UUID, NOT THE HEAD, AND THE DIFFERENCE IS A
+// WHOLE MINUTE OF COLLISIONS. Voucher ids here are uuid **v7** (`uuid.NewV7`, and
+// the same for every other id in this package), whose leading 48 bits are a
+// MILLISECOND CLOCK. `id.String()[:8]` is therefore the top 32 bits of that clock:
+// it changes once per 2^16 ms — about 65 seconds — so EVERY voucher created inside
+// the same minute shares it. A discriminator that is constant for a minute is not
+// a discriminator, and two unnumbered vouchers keyed back to back on one party
+// would have landed in one bill: precisely the merge this naming exists to stop,
+// reintroduced by the escape hatch meant to prevent it. The last 12 hex characters
+// are v7's `rand_b` field, 48 bits of randomness; eight of them are 32 bits, which
+// is far more separation than a single party's bill list will ever need.
+func billRefDiscriminator(voucherID uuid.UUID) string {
+	s := voucherID.String()
+	return s[len(s)-8:]
 }
 
 // finYearLabel renders an Indian financial year from its start year: 2026 ->
@@ -2739,6 +2813,174 @@ func validateDistinctBillOpeners(bs []BillAllocationInput) error {
 		seen[k] = true
 	}
 	return nil
+}
+
+// resolveGeneratedBillRefNames is the THIRD door of the ref-collision class, and
+// the only one the pure stamp cannot see: a name this server invented that some
+// OTHER voucher's bill on the same party is already called.
+//
+// ⛔⛔ WHY THE STAMP IS NOT ENOUGH ON ITS OWN. "Sales/2026-27/7" is unique only if
+// "Sales", "2026-27" and "7" together name one voucher, and they do not:
+//
+//   - numbering.go honours a CLIENT-SUPPLIED voucher_no verbatim and deliberately
+//     does not advance the counter ("MANUAL OVERRIDE DOES NOT BUMP THE COUNTER"),
+//     so an operator who types 7 into the No. field collides with the auto series
+//     the moment it reaches 7. VoucherScreen sends that field, so the door is a
+//     KEYSTROKE — two invoices to one customer, both numbered 7, one bill of the
+//     summed amount aged at the earlier due date, and nothing anywhere says so.
+//   - `voucher_type_id` is on the wire, and each voucher TYPE has its own counter.
+//     Two types of class Sales both mint a 7 and both render as "Sales".
+//
+// ⛔ ONLY GENERATED NAMES ARE RESOLVED. A name a CALLER supplied is left exactly as
+// supplied even when it collides, and that is a decision rather than an omission:
+// repeating a reference name across vouchers is how Tally itself adds to an
+// existing bill, and internal/migration hands through whatever the Tally XML says.
+// Refusing it would make this product reject books Tally accepts. What must never
+// happen is the SERVER inventing a name that silently merges two vouchers nobody
+// said were related.
+//
+// ⚠️ "ALREADY CALLED" IS EVER, NOT CURRENTLY, and that is what keeps the name
+// stable. bill_allocation is append-only and keyed on voucher_version_id, so
+// looking only at CURRENT versions would free a name when the voucher holding it
+// was deleted or altered — and this voucher's next alter would then rename its own
+// bill, orphaning every settlement made against the old name. Asking "has any
+// other voucher ever called a bill this on this ledger?" only ever grows, so each
+// voucher's answer is fixed on the day it is created. ledger_opening_bill is in
+// the same union because Outstandings unions it into the same (ledger, ref_name)
+// space; a generated name landing on an opening reference would net an invoice
+// against the party's brought-forward balance.
+//
+// ⚠️ AND THE RACE IS REAL BUT NARROW, so it is named rather than hidden: two
+// CONCURRENT posts, both with the same manually-typed number, on the same party,
+// each committing after the other's check, still both write the base name. Closing
+// that needs a unique index bill_allocation cannot carry (duplicate names are
+// legal for AGAINST and for ON_ACCOUNT, and legal for openers a caller named), or
+// a lock on a row that does not exist. The sequential case — which is what an
+// operator produces — is closed.
+//
+// It RENAMES IN PLACE, through st.refs' backing array, so post() goes on reading
+// one variable for both the hashed payload and the bill_allocation rows — the
+// single-sourcing every other list in that transaction observes.
+func resolveGeneratedBillRefNames(
+	ctx context.Context, tx pgx.Tx, companyID, voucherID uuid.UUID, st stampedBillRefs,
+) error {
+	if len(st.generated) == 0 {
+		return nil
+	}
+	taken, err := billRefNamesTakenElsewhere(ctx, tx, companyID, voucherID, st.refs, st.generated)
+	if err != nil {
+		return err
+	}
+	if len(taken) == 0 {
+		return nil
+	}
+
+	// Rename by LEDGER, not by reference: an invoice split into instalments must
+	// keep its instalments under one stem, or "Sales/2026-27/7" and
+	// "Sales/2026-27/7 (a1b2c3d4)-2" would read as two unrelated bills.
+	collided := make(map[uuid.UUID]bool)
+	for _, i := range st.generated {
+		if taken[billRefKey{st.refs[i].LedgerID, st.refs[i].RefName}] {
+			collided[st.refs[i].LedgerID] = true
+		}
+	}
+	stem := fmt.Sprintf("%s (%s)", st.base, billRefDiscriminator(voucherID))
+	seq := make(map[uuid.UUID]int)
+	renamed := make([]int, 0, len(st.generated))
+	for _, i := range st.generated {
+		led := st.refs[i].LedgerID
+		if !collided[led] {
+			continue
+		}
+		seq[led]++
+		st.refs[i].RefName = generatedBillRefName(stem, seq[led], st.openers[led])
+		renamed = append(renamed, i)
+	}
+
+	// ⛔ CHECKED AGAIN, AND A SECOND HIT IS A REFUSAL. The discriminated stem
+	// carries 32 random bits of this voucher's id, so reaching here means another
+	// voucher of the same class, year and number ALSO ends in those eight
+	// characters. It should never happen; if it does, refusing is the only honest
+	// answer, because writing the name anyway is the silent merge this whole
+	// function exists to prevent and the operator would have no way to see it.
+	taken2, err := billRefNamesTakenElsewhere(ctx, tx, companyID, voucherID, st.refs, renamed)
+	if err != nil {
+		return err
+	}
+	for _, i := range renamed {
+		if taken2[billRefKey{st.refs[i].LedgerID, st.refs[i].RefName}] {
+			return fmt.Errorf(
+				"ledger: cannot name the bill this voucher opens — %q is already another "+
+					"voucher's bill on the same ledger, and so is the disambiguated %q. "+
+					"Give the voucher a number that is not already used on this party",
+				st.base, st.refs[i].RefName)
+		}
+	}
+	return nil
+}
+
+// billRefKey is one bill's identity as reporting.Outstandings computes it:
+// (ledger, name). ref_type is deliberately absent, because that report ignores it.
+type billRefKey struct {
+	ledger uuid.UUID
+	name   string
+}
+
+// billRefNamesTakenElsewhere answers, for each candidate (ledger, name), whether
+// ANY voucher other than voucherID — in any version, current or superseded — or
+// the ledger's OPENING bill-wise breakup already uses it. It is one round trip for
+// the whole voucher and rides the (company_id, ledger_id, ref_name) index that
+// migration 0005 created.
+func billRefNamesTakenElsewhere(
+	ctx context.Context, tx pgx.Tx, companyID, voucherID uuid.UUID,
+	refs []BillAllocationInput, idx []int,
+) (map[billRefKey]bool, error) {
+	if len(idx) == 0 {
+		return nil, nil
+	}
+	ledgers := make([]uuid.UUID, 0, len(idx))
+	names := make([]string, 0, len(idx))
+	for _, i := range idx {
+		ledgers = append(ledgers, refs[i].LedgerID)
+		names = append(names, refs[i].RefName)
+	}
+	rows, err := tx.Query(ctx,
+		`WITH want(ledger_id, ref_name) AS (
+		        SELECT * FROM unnest($3::uuid[], $4::text[])
+		 )
+		 SELECT w.ledger_id, w.ref_name
+		   FROM want w
+		  WHERE EXISTS (
+		          SELECT 1
+		            FROM bill_allocation b
+		            JOIN voucher_version vv ON vv.id = b.voucher_version_id
+		           WHERE b.company_id = $1
+		             AND b.ledger_id  = w.ledger_id
+		             AND b.ref_name   = w.ref_name
+		             AND vv.voucher_id <> $2)
+		     OR EXISTS (
+		          SELECT 1
+		            FROM ledger_opening_bill ob
+		           WHERE ob.company_id = $1
+		             AND ob.ledger_id  = w.ledger_id
+		             AND ob.ref_name   = w.ref_name)`,
+		companyID, voucherID, ledgers, names)
+	if err != nil {
+		return nil, fmt.Errorf("ledger: check generated bill reference names: %w", err)
+	}
+	defer rows.Close()
+	taken := make(map[billRefKey]bool)
+	for rows.Next() {
+		var k billRefKey
+		if err := rows.Scan(&k.ledger, &k.name); err != nil {
+			return nil, fmt.Errorf("ledger: scan taken bill reference name: %w", err)
+		}
+		taken[k] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("ledger: iterate taken bill reference names: %w", err)
+	}
+	return taken, nil
 }
 
 // validateBillAllocationsSumToPosting enforces the invariant BillAllocationInput's
