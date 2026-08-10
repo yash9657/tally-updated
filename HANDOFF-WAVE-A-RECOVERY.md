@@ -111,7 +111,7 @@ the browser proves the FIX. Do not mark any §7.1 row closed on the strength of 
 | **L8** orders + BOM | D6, D7, D44, D68–D71 | party-group restriction at both ends, the fulfilment sort, overdue defaults | ⛔ **5 `server` order tests + 4 `OrderRegisterScreen` tests red.** The party restriction changed what the register offers and the round-trip tests have not caught up. Preserve the invariant **an order moves no stock** |
 | ~~**L9** users + security~~ | D25, D55–D58, D73, D74 | ✅ **DONE (2026-08-10).** The killed lane's work was re-read and RE-PROVED rather than assumed. D56 is asserted as a PROPERTY at `Server.authenticate` — the one funnel all three call sites go through — so a route mounted tomorrow inherits it. ⛔ **The door that would have re-opened everything:** `/auth/webauthn/assert/*` MINTS a write-capable token, so a revoked session must not be able to trade up; closed, with the register/`auth/password`/`POST /v1/companies` doors, each with a **DB read-back** rather than a status code. `internal/authn` + `internal/testhygiene` green; 9 proofs executed | ⛔ **D55's SECOND CLAUSE IS STILL OPEN — see §4 item 12.** `POST /auth/password` has a client function and NO CALLER, so a user still cannot change their own password |
 | **L6** voucher form | D39, D41, D59, D60 | the master-before-write gate, `VoucherScreen.masterGate.test.tsx` | ⛔ **3 `wiring.test.tsx` tests red** (`Ctrl+A … calls postSalesVoucher`, purchase, and the alter path) — the Ctrl+A path was mid-rewrite. **This is the single-owner file; nobody else may touch it** |
-| **L11** AI-native | D16, D18, D19, D22, D23, D49, D72 | `insightd/redaction/persistence.py`, forecast disclosure, tenant context | ⛔ **`tsc` is red here** — `BillInboxScreen.test.tsx` builds a company without `base_currency` (required at HEAD, not a new contract). insightd's own suite is GREEN. ⛔ **D49 was framed as a DECISION, not a patch — see §5** |
+| ~~**L11** AI-native~~ | D16, D18, D19, D22, D23, D49, D72 | ✅ **DONE (2026-08-10)** for D16/D18/D19/D23/D72; the `tsc` errors are fixed. D16 is closed as a PROPERTY: `persistence.py` classifies **every string-bearing field of the draft body** and a field it cannot classify is a hard runtime error, so a field added to `cored_map.py` tomorrow turns the suite red instead of shipping an unguarded master name. ⚠️ **Its other half matters as much:** money/dates/uuids are classified STRUCTURED and never scrubbed, because `AADHAAR_RE` is `\b\d{12}\b` and a fixed-4 amount like `180000000000.0000` contains a 12-digit run — scrubbing everything would one day eat money. D18+D19 fixed at BOTH ends. 8 proofs; insightd **160 passed** | ⛔ **D22 IS A BUILD, NOT BUILT — see §5 item 6 for the cheap route.** D49 is a RECOMMENDATION only — see §5 item 7 |
 | **L7** printing | D29–D35, D61–D63, D75, D76 | `printTarget`, print handlers, `printingdb`, `DrillRows` | ⚠️ **No red tests attributable to it**, which means only that its own tests pass — it was killed before reporting, so **nothing about it is proved**. Re-run its packages, read its diff, finish the rows it did not reach. Oracle: a real PDF (`%PDF`…`%%EOF`) that NAMES ITSELF |
 | **L10** stock + statements | D9, D45, D46, D53, D64 | `reportView` depth fix, as-on resolution, the 403 text | ⚠️ Same as L7 — no attributable red, nothing proved. ⛔ **DO NOT TOUCH `inventory/valuation.go`** (§4.1 of the burndown). ⚠️ If a change moves a demo figure, `verify:demo` needs a deliberate re-pin |
 | **L14** negative stock | D5, D43 | **NOTHING — never launched** | Held back because it needs `server.go`, which L4 held. **Launch it once L4 settles** |
@@ -212,6 +212,33 @@ mechanism unwired earlier in this project.
 4. **D40 was deliberately NOT given to a lane.** Non-existent challan sub-routes answer 403 rather than
    404/405, which makes "never built" indistinguishable from "not permitted". Changing it is a **default-deny
    decision in the PDP**, not a lane's call.
+6. ⛔ **D22 — the cash-flow screen is a BUILD, and there is a cheap route that avoids most of it.** Make it
+   a **`report:NAME` frame, NOT a `ScreenKind`.** It then inherits Alt+G Go To, Display More Reports, the
+   report keymap, the button bar and F2 **for free**, and needs no Gateway entry at all. Files:
+   `keystroke/types.ts` (`REPORT_NAMES`), `screens/printTarget.ts` (`REPORT_SLUGS` — omit it and `tsc`
+   breaks; map it even though the print route 501s), `FrameOverlays.tsx` (`AS_AT_ONLY_REPORTS` — a
+   projection is a position as at a date), `api/{client,rest,mock}.ts`, and a new
+   `screens/reports/CashFlowScreen.tsx`. ✅ **NOTHING IS NEEDED SERVER-SIDE:** the route, `reportName()`
+   and the PDP tokens `report:cash-flow` / `report:anomalies` **already exist** (`authz/vocabulary.go:457`).
+   ⛔ Do NOT ship a Gateway entry alone — with no screen behind it, `canonicalReportName` falls through to
+   the raw label and pushes the Unwired screen, which is the `Alt+G > Vouchers` defect built on purpose.
+7. ⛔ **D49 — the recommendation is OPTION B: cored proxies insightd.** Reasoning, from the lane that
+   traced it: insightd sets the RLS GUC **from the same path parameter it is scoping by**, so RLS is the
+   first layer restated, not a second one. **Option A (insightd verifies a cored token) is bigger than it
+   looks** — cored mints an ephemeral Ed25519 dev key and **publishes no JWKS** (`AUTH_JWKS_URL` is for an
+   IdP cored *consumes*), and verifying a signature proves *who*, not *which company*, so insightd would
+   need a SECOND COPY of cored's PDP decision in another language. This repo has been burned by exactly
+   that shape. Option B costs plumbing: `/v1/companies/{id}/drafts…` routes, `routeAction`/`reportName`
+   entries (default-deny makes this mandatory), a forwarding client, a base-URL change in
+   `api/insightd.ts`, dropping the `/companies` proxy from `vite.config.ts`. **It touches `server.go` and
+   `auth_middleware.go`, so it is A LANE OF ITS OWN.**
+8. **`FeaturesScreen.tsx` (permanently single-owner) has TWO falsehoods, and fixing only the first leaves
+   the second standing 70 lines below it.** (a) `:351-354` claims cash-flow/anomaly detection is state
+   `"on"` with a note naming no door — the file's own vocabulary already has the right word, `"server"`,
+   meaning *built with no key*. (b) `:422` says Cash Flow and the anomaly list "are all readable on
+   screen" — **they are not readable at all; there is no screen.** The full replacement note is in the
+   L11 report.
+
 5. ⚠️ **`api/mock.ts` and the real client can drift** — see §4 item 6. Worth a structural gate, like the two
    the cutoff now has.
 

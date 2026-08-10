@@ -267,6 +267,7 @@ describe("BillInboxScreen — the tenant context sent to insightd", () => {
       id: "co-1",
       name: "Test Co",
       fy_start_date: "2026-04-01",
+      base_currency: "INR",
     });
     await client.createLedger("co-1", {
       name: "Pune Fabricators",
@@ -391,6 +392,7 @@ describe("BillInboxScreen — the tenant context sent to insightd", () => {
       id: "co-1",
       name: "Test Co",
       fy_start_date: "2026-04-01",
+      base_currency: "INR",
     });
     const before = (await client.listLedgers("co-1")).ledgers.length;
 

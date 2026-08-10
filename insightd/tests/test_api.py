@@ -37,6 +37,30 @@ def test_healthz_reports_adapter_set():
     assert data["cored_relationship"] == "read-only"
 
 
+def test_healthz_DISCLOSES_that_there_is_no_authentication():
+    """The posture a deployer cannot otherwise read off this process.
+
+    ⛔ THIS TEST PINS A KNOWN-BAD STATE ON PURPOSE, WHICH IS UNUSUAL AND
+    DELIBERATE. insightd scopes every draft route by the caller-supplied
+    ``company_id`` and authenticates nobody (register row D49). Two sibling keys
+    on this same response report SAFE properties — ``cored_relationship:
+    read-only`` and ``pii_boundary_strict`` — and a reader who got both would
+    reasonably assume the third was safe too. So the unsafe one is stated.
+
+    ⚠️ IT IS A DISCLOSURE, NOT A FIX, and this assertion is where the fix has to
+    announce itself: whoever makes insightd validate a cored-minted bearer (or
+    puts it behind cored entirely) will find this test red, and that is the point
+    — the value may only change together with the mechanism that makes it true.
+    """
+    client, _ = _client()
+    data = client.get("/healthz").json()
+    assert data["authentication"] == "none", (
+        "if this changed, insightd now authenticates somebody — update the D49 "
+        "row and this test together, and say what a token is checked AGAINST"
+    )
+    assert data["tenant_scope"] == "caller-supplied company_id in the path"
+
+
 def test_post_draft_returns_201_and_ready():
     client, _ = _client()
     r = _post_fixture(client, "intra-state-18-1line-clean")

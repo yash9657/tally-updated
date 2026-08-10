@@ -7,6 +7,24 @@ Endpoints:
   GET  /benchmark/last                   (read-only accuracy report)
 
 There is NO route that writes to the cored ledger.
+
+⛔⛔ AND THERE IS NO AUTHENTICATION ON ANY OF THEM. Every route above is scoped by
+the caller-supplied ``company_id`` in the PATH and by nothing else, so any caller
+who can reach this process can list and fully hydrate any tenant's drafts —
+supplier names, invoice numbers, dates, posting ledger names, amounts and GST
+state codes. The Postgres RLS in ``pg_store`` does not help: it pins the row
+filter to a GUC that this process sets FROM THAT SAME PATH PARAMETER, so it
+enforces whichever scope the caller chose.
+
+⚠️ ``/healthz`` says so, in ``authentication`` below. That is a DISCLOSURE and
+NOT A FIX — it exists for the same reason the cash-flow projection now carries
+``estimate: true``: a surface whose posture cannot be read off the wire gets
+assumed to be the safe one. Closing it is a design decision about how insightd is
+REACHED (validate a cored-minted bearer here, or make cored the only door and
+never expose this process to a browser), not a token bolted onto these routes —
+see the D49 recommendation. Do not "fix" this by adding a shared secret: a secret
+the browser holds is not a credential, and it would still not say WHICH company
+the caller may read.
 """
 
 from __future__ import annotations
@@ -50,6 +68,17 @@ def create_app() -> FastAPI:
             "pii_boundary_strict": settings.pii_boundary_strict,
             # cored relationship is read-only; we report it but hold no write client
             "cored_relationship": "read-only",
+            # ⛔ THE POSTURE THAT WAS ONLY EVER WRITTEN IN A DOCSTRING. Two of the
+            # three lines above report a SAFE property of this process; a reader
+            # who got both would reasonably assume the third. It is stated here so
+            # that "insightd is unauthenticated" is a fact on the wire — checkable
+            # by a deployer, by the seed script, and by whoever eventually closes
+            # D49 — rather than a sentence in a file nobody reads before exposing
+            # a port. It is a constant on purpose: the day it can say anything
+            # else, that is because the decision was made and implemented, and the
+            # test that pins this value is where the change has to be argued.
+            "authentication": "none",
+            "tenant_scope": "caller-supplied company_id in the path",
         }
 
     @app.get("/benchmark/last")
