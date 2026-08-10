@@ -27,21 +27,26 @@
 every failure to the lane that caused it, and each one is *unfinished work*, not a regression in shipped
 code. ⛔ **Do not start by "fixing the red". Start by picking a lane in §2 and finishing or reverting it.**
 
-## ⛔ THE THING THAT WILL BITE YOU FIRST
+## ⛔ THE THING THAT WILL BITE YOU FIRST — ✅ NOW RESOLVED, BUT READ IT ANYWAY
 
 A killed lane left a **live mutation-proof sabotage** in `internal/masters/tds_challan.go` — a no-op loop
 where the allocation write belongs, marked `MUTATION P1: the route answers 200 and writes nothing`. The
-original code was never committed, **so git cannot restore it**. It has been replaced with an explicit
-**fail-closed refusal** naming itself, because falling through would have re-shipped register row D1's own
-defect (a success status over a write that never happened) by accident instead of by decision.
+original code was never committed, so git could not restore it; it was first replaced with a fail-closed
+refusal, and the **L4 recovery has now written the real loop** (§2). `internal/masters` is green and the
+grep below is clean.
+
+⚠️ **It is left documented here because the LESSON is the durable part, not the incident:** an interrupted
+lane can leave code that reports success over a write it never made, and that is indistinguishable from a
+working route until somebody reads the books back.
 
 > ⛔ **BEFORE YOU BELIEVE ANY PART OF THIS TREE, RUN:**
 > ```bash
 > grep -rn "MUTATION\|SABOTAGE" backend/internal frontend/src insightd/insightd \
 >   | grep -viE "mutation proof|mutation-proof|mutation_proof|a mutation|the mutation|mutation test"
 > ```
-> One hit is expected and is documented at `tds_challan.go` (the comment block, not live code). **Any other
-> hit is live sabotage from a killed lane. Treat it as a P0.**
+> As of the L4 recovery the only hit is `handler_stock_reports_test.go:562` — pre-existing prose describing
+> a mutation to perform, not live code. **Any other hit is live sabotage from a killed lane. Treat it as a
+> P0.**
 
 ## WHAT WAS ACTUALLY FINISHED, AND IS SAFE
 
@@ -71,7 +76,7 @@ including the two that have each cost this project a session:
 | Gate | State |
 |---|---|
 | `go build ./...` | ✅ passes |
-| backend `go test ./...` | ⛔ **FAIL** — `masters`, `reporting`, `server`, `testhygiene` |
+| backend `go test ./...` | ⛔ **FAIL** — ~~`masters`~~ (✅ fixed by the L4 recovery), `reporting`, `server`, `testhygiene` |
 | frontend `pnpm vitest run` | ⛔ **12 failed / 1211 passed**, 4 files |
 | `pnpm exec tsc --noEmit` | ⛔ **2 errors**, both in `BillInboxScreen.test.tsx` |
 | insightd `pytest` | ✅ **green** |
@@ -101,7 +106,7 @@ the browser proves the FIX. Do not mark any §7.1 row closed on the strength of 
 
 | Lane | Rows | What is in the tree | ⛔ The exact next action |
 |---|---|---|---|
-| **L4** TDS | D1–D4 | the allocate-later route, its wire tests, `api/types.ts` changes. **1,257 lines in `masters` alone** | ⛔ **THE SABOTAGE IS HERE.** Step 4 of the allocation transaction is a fail-closed stub. **Write the loop that verifies each allocation against the live deduction/collection and writes it.** 4 `masters` + 4 `server` tests are red and they are L4's OWN tests — they describe what to build. `TestAllocatingLaterMakesTheUnallocatedBalanceFALL` is the row's own oracle |
+| ~~**L4** TDS~~ | D1–D4 | ✅ **SERVER SIDE DONE (2026-08-10).** The missing allocation loop is written and routes through `allocateToDeduction` — the SAME function the create path calls, so both write paths share one verifier and one cap. `grep INSERT|UPDATE|DELETE` on `tds_challan_allocation` returns exactly one non-test hit. **`internal/masters` is fully green** (was 4 red) and the 6 TDS wire tests pass. The sabotage is GONE. 3 proofs executed, incl. one that reproduced D2 verbatim on the new path (a ₹1,000 deposit paying ₹2,000 of tax, `unallocated_tax_rupees:"-20000.0000"` behind a 200) | ⛔⛔ **D1 IS STILL UNREACHABLE FROM THE BROWSER — DO NOT MARK IT CLOSED.** Nothing in the client can call the route: `allocateToChallan` exists in neither `client.ts`, `rest.ts` nor `mock.ts`, and `TDSChallansScreen` renders no affordance. See §4 items 8–11. **D3 is likewise unbuilt**: `VoucherRequest.tds/.tcs` are expressible but NO screen constructs either block, so a deduction still cannot be keyed and the picker stays empty on real books |
 | **L1r** bill-wise | D10, D11, D32 | a redesign of the unnamed-reference stamp in `ledger.go`, `bill_ref_naming_test.go`, `outstanding_ref_collision_test.go` | ⛔ **It broke two EXISTING tests it has not reconciled:** `TestUnnamedNewRefIsStampedWithTheAllocatedVoucherNo` and `TestReceiptAgainstTheStampedRefSettlesIt`, plus 3 in `server`. **Decide whether those tests pin the old defect (trap #7) or whether the redesign is wrong, and say which in the commit.** ⚠️ Read the blocker first: `BillAllocationPicker` has a name field for AGAINST **only**, so a NEW reference cannot be named from the keyboard — a "refuse the duplicate" fix is unreachable without that input |
 | **L8** orders + BOM | D6, D7, D44, D68–D71 | party-group restriction at both ends, the fulfilment sort, overdue defaults | ⛔ **5 `server` order tests + 4 `OrderRegisterScreen` tests red.** The party restriction changed what the register offers and the round-trip tests have not caught up. Preserve the invariant **an order moves no stock** |
 | **L9** users + security | D25, D55–D58, D73, D74 | `auth_revocation.go` (**WIRED** — `auth_middleware.go:98` calls `sessionRevoked`), migration **0074**, unlock route, `MembersScreen` lock state | ⛔ **4 `auth.test.tsx` + 1 `webauthn.test.tsx` red** — session revocation changed login/session behaviour and those tests describe the old contract. ⛔ **AND A HYGIENE FAILURE:** `auth_session_revocation_test.go:237` creates a company at line 262 and never tears it down (`testhygiene` is red). Add `testdb.Cleanup(t, companyID)`. ⚠️ **Lockout is keyed on SUBJECT: never submit a wrong password for `browser-dev-owner`** |
@@ -156,6 +161,24 @@ Lanes were told to REPORT edits in files they did not own rather than make them.
 7. `internal/ledger/ledger.go` comments at ~1170 and ~1509 still claim the refusal *"names the axis"*. It
    names it by its SHARES now. Prose only.
 
+⛔⛔ **8–11 ARE ONE JOB: THE REACHABLE HALF OF D1.** The server side is finished and correct, and until
+these land it is dead code — the exact shape RULE 3 forbids and the exact shape that left an insightd
+mechanism unwired earlier in this project.
+
+8. `frontend/src/api/client.ts` — add `allocateToChallan(companyID, challanID, req): Promise<...>`. **Both
+   types already exist** at `types.ts:2118/2138`.
+9. `frontend/src/api/rest.ts` — `POST ${company(id)}/tds-challans/${challanID}/allocations`. ⚠️ **403 is a
+   NORMAL answer on this route** (bare `tds-challan` token; Data Entry denied by design) and so is a
+   **cutoff 403 on a body carrying no date** — that refusal names the *deposit date* and must be surfaced,
+   not flattened into an ACL message. This is register row D29's mistake on another screen.
+10. `frontend/src/api/mock.ts` — the mock must refuse what the server refuses: over-allocation, mixed
+    TDS/TCS kinds, already-paid, interest-only, empty array. Same drift as item 6.
+11. `frontend/src/screens/TDSChallansScreen.tsx` — an "attach to this deposit" affordance on any register
+    row whose `unallocated_tax_rupees != "0.0000"`, reusing the existing `allocatable_deductions` picker.
+    ⛔ **It must render `unallocated_tax_rupees` from the response.** The falling balance is row 17's entire
+    oracle, and a screen that reports success from the status code alone looks identical whether the
+    balance moved or not — which is how D1 survived seven in-browser doors.
+
 ---
 
 ## 5. ⛔ NEW FINDINGS FROM THIS WAVE — NOT IN §7.1 YET. ADD THEM.
@@ -190,6 +213,11 @@ Lanes were told to REPORT edits in files they did not own rather than make them.
 - **§2.3, AGENTS DIE** — this whole file is that rule being cashed in. A killed lane left a live sabotage,
   another left a company-leaking test, a third left `tsc` red. **After any wave: `git status`, the sabotage
   grep above, `go build`, `tsc`, and the FULL suites — a green targeted run is not enough.**
+
+⚠️ **AND A PROCESS FINDING FROM THE RECOVERY, WORTH MORE THAN IT LOOKS.** Disjoint FILE ownership is not
+disjoint BUILD ownership: an L4 recovery run was blocked mid-session by `go build` failing in
+`internal/ledger/ledger.go` — another lane's in-flight edit, in a package L4 merely depends on. Go lanes
+can stall each other even when no file is shared. Expect it, wait, re-run; do not diagnose it as your own.
 
 > ### ⛔ AND THE LAST WORD
 > Eleven lanes were launched and three came back. That is not an argument against fanning out — it is an

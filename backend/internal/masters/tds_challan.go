@@ -622,15 +622,30 @@ func validateTDSChallan(in TDSChallanInput) (TDSChallanInput, error) {
 	}
 
 	// ---- The allocations ---------------------------------------------------
-	// A challan that deposited TAX must say which deductions it paid, because
-	// there is no allocate-later route in this slice (see the file header):
-	// storing the challan alone would leave it permanently unusable and every
-	// deduction it paid permanently unfilable, with no route to repair either.
+	// A challan that deposited TAX must name at least one deduction AT ENTRY.
+	//
+	// ⚠️ THIS IS NOW A POLICY AND NO LONGER A NECESSITY, and the distinction is
+	// written down because the sentence that used to justify it has stopped being
+	// true. Before AllocateToRecordedChallan existed (register row D1) the create
+	// was the ONLY writer and the CIN cannot be entered twice, so a challan stored
+	// naming nothing was permanently unusable and this refusal was the only thing
+	// between an operator and that trap. The allocate-later route now attaches to a
+	// challan carrying any number of allocations, zero included, so the trap is
+	// gone — and a refusal whose stated reason has evaporated is a refusal the next
+	// reader deletes.
+	//
+	// IT IS KEPT FOR A DIFFERENT AND SMALLER REASON: the operator is holding the
+	// deposit slip and the deductions it paid at THIS moment. Deductee Detail field
+	// 5 of the return is a challan reference, so until something names it the
+	// deposit discharges no liability and every deduction it really paid still
+	// reports as never deposited (reporting's ErrTaxNotDeposited). One tick now
+	// against a whole quarter refused on filing day.
 	if out.TaxRupees.IsPositive() && len(out.Allocations) == 0 {
 		return out, fmt.Errorf("%w: this challan deposited %s of TAX and names no deduction. "+
 			"Deductee Detail field 5 of the return is a challan reference, so a deduction with no "+
-			"allocation cannot be filed at all — and this slice has no allocate-later route, so a "+
-			"challan stored without its allocations could not be completed afterwards",
+			"allocation cannot be filed at all, and a deposit that names none discharges nothing — "+
+			"every deduction it really paid would still report as never deposited. Name the "+
+			"deductions in front of you now; the allocate-later route attaches the rest afterwards",
 			ErrInvalidTDSChallan, out.TaxRupees.String())
 	}
 	// The converse. An interest-only or fee-only challan is legitimate — the
@@ -1034,34 +1049,63 @@ func (s *Service) AllocateToRecordedChallan(ctx context.Context, challanID uuid.
 		}
 
 		// 4. THE ALLOCATIONS, each verified against the LIVE deduction or
-		//    collection — the same function the create path calls.
+		//    collection — the SAME function the create path calls.
 		//
-		// ⛔⛔ THIS STEP IS NOT IMPLEMENTED AND THIS ROUTE IS NOT FINISHED.
+		// ⛔ IT IS allocateToDeduction AND NOT A SECOND COPY OF ITS RULES, and that
+		// is the one decision in this step. Six refusals live in that function —
+		// the triple must match a live row, a zero-tax leg has nothing to deposit,
+		// the amount must EQUAL the tax (0069's alter-detection mechanism), the
+		// deduction's tax year must be the challan's, no other challan may already
+		// have paid it, and the unique constraint catches the concurrent case. A
+		// second copy here would be a copy that DRIFTS, with the drifted one
+		// winning for whichever caller reaches it first — the exact shape §7.2 of
+		// the parity audit records six times over for the back-dated cutoff's
+		// peeks. Every one of those rules exists because breaking it puts a
+		// statement in front of the department that is not true, and the operator
+		// must not be able to choose which write path enforces them by choosing
+		// which route to use.
 		//
-		// The lane building it (register rows D1–D4) was interrupted DURING a
-		// mutation proof, and the proof's sabotage — a no-op loop over `allocs`,
-		// marked `MUTATION P1: the route answers 200 and writes nothing` — is what
-		// it left behind. The real loop was never committed, so it cannot be
-		// recovered from git; it has to be written again.
+		// THE YEAR COMES FROM THE CHALLAN THAT IS ON RECORD (`taxYear`, scanned
+		// under the row lock in step 1) and never from the request: this route is
+		// told nothing about the year, and the caller is HANDED it back precisely
+		// so it can read the register without guessing.
 		//
-		// ⚠️ IT REFUSES RATHER THAN RETURNING nil, AND THAT IS THE WHOLE POINT.
-		// Falling through would have been the sabotage's own behaviour made
-		// permanent: 200 OK, nothing written, and the challan's unallocated balance
-		// unchanged — which is register row D1's defect exactly, re-shipped by an
-		// accident instead of by a decision. This repository's signature failure is
-		// a success status over a write that did not happen; an unfinished route
-		// must fail closed and say so.
-		_ = companyID
-		_ = allocs
-		return fmt.Errorf("%w: attaching an allocation to an existing challan is not built yet — "+
-			"the route exists and this step was left unfinished, so it refuses rather than "+
-			"reporting success over a write it never made", ErrInvalidTDSChallan)
+		// ⚠️ AND THE RUNNING TOTALS ARE CARRIED FORWARD INTO THE CAP BELOW. Each
+		// call either inserts exactly one allocation row or returns an error that
+		// rolls the whole transaction back, so `storedSum`/`storedCount` — read in
+		// step 2 as what the challan already carried — become what it carries
+		// AFTER this request. Leaving them at their pre-insert values would leave
+		// step 5 measuring the deposit against a total that predates the rows it
+		// is supposed to be capping, which is the D2 hole reopened on the second
+		// write path: a fully-allocated ₹1,000 challan would quietly accept
+		// another ₹1,000.
+		for _, a := range allocs {
+			if err := allocateToDeduction(ctx, tx, allocationTarget{
+				challanID:   challanID,
+				companyID:   companyID,
+				challanYear: taxYear,
+				recordedBy:  recordedBy,
+			}, a); err != nil {
+				return err
+			}
+			storedCount++
+			storedSum = storedSum.Add(a.AmountRupees)
+		}
 
 		// 5. THE CAP (register row D2), over the challan's WHOLE total and not
 		//    just this request's. Attaching ₹12,000 to a challan that already
 		//    claims its whole ₹12,000 deposit is exactly the shape this route
 		//    would otherwise make reachable, and the count that sets the rounding
 		//    tolerance is the count of allocations the challan then carries.
+		//
+		// ⛔ AFTER THE INSERTS, NOT BEFORE, AND IT IS NOT A LOOSE END. The refusal
+		// is returned from inside RunInTx, so the rows written above are ROLLED
+		// BACK with it — refused whole, exactly as the create path is. Checking
+		// before would mean re-implementing "what would the total become", i.e. the
+		// same arithmetic in a second place; checking after asks the transaction
+		// what it now holds. The tests assert both halves: the sentinel, and that a
+		// refused request left the allocation count and the unallocated balance
+		// exactly where they were.
 		return overAllocationRefusal(tax, storedSum, storedCount)
 	})
 	if err != nil {
