@@ -134,6 +134,7 @@ function renderWithDispatcher(
     ...over,
   } as CoredClient;
   let fireHandler: () => Promise<string | void> = async () => {};
+  let fireAccept: () => { ran: boolean; message?: string } = () => ({ ran: false });
 
   function Harness() {
     const dispatch = useScreenActionDispatcher();
@@ -141,6 +142,10 @@ function renderWithDispatcher(
       const res = dispatch("print", snapshot);
       if (res.pending) return await res.pending;
       return res.message;
+    };
+    fireAccept = () => {
+      const res = dispatch("accept", snapshot);
+      return { ran: res.ran, message: res.message };
     };
     return <BankReconciliationScreen snapshot={snapshot} onSelect={() => {}} />;
   }
@@ -155,7 +160,7 @@ function renderWithDispatcher(
       </ScreenActionsProvider>
     </CompanyProvider>,
   );
-  return { fireHandler: () => fireHandler() };
+  return { fireHandler: () => fireHandler(), fireAccept: () => fireAccept() };
 }
 
 describe("choosing the bank account (I-9)", () => {
@@ -549,6 +554,55 @@ describe("Ctrl+P on the statement (I-10)", () => {
   });
 });
 
+describe("Ctrl+A on the statement — the bar sells it, so it must answer", () => {
+  /**
+   * ⛔ THE SAME CLASS AS THE DEAD Ctrl+P, ON THE KEY NEXT TO IT. BANK_RECON_BAR
+   * carries "Ctrl+A Accept", this screen registered no `accept` handler, and the
+   * pure machine does not move on Ctrl+A from this frame — so the key answered
+   * the shell's generic "Ctrl+A — Accept does not apply on this screen" while the
+   * strip above the screen advertised it. Measured by walking every frame whose
+   * bar sells a screen-owned key (screens/printTarget.screens.test.tsx).
+   *
+   * ⚠️ AND WHAT IT SAYS MATTERS MORE THAN THAT IT ANSWERS. There is no save on
+   * this screen: each bank date is written as it is typed. An operator who
+   * believes Ctrl+A commits their ticks would leave the screen assuming the work
+   * was saved by a key that never saved anything.
+   */
+  it("answers, and says the ticks were already saved", async () => {
+    const { fireAccept } = renderWithDispatcher();
+    await screen.findByTestId("brs-as-on");
+    const res = fireAccept();
+    expect(
+      res.ran,
+      'BANK_RECON_BAR advertises "Ctrl+A Accept" and no handler is registered, so the key ' +
+        "answers the shell's generic \"does not apply on this screen\"",
+    ).toBe(true);
+    expect(res.message).toMatch(/saved the moment it was typed/);
+    // It names the account, so the sentence is about the statement in front of
+    // the operator rather than about the screen in general.
+    expect(res.message).toContain("HDFC Bank");
+    // A BALANCED statement says so. The verdict is the SERVER'S `balanced`, never
+    // a comparison done here — the same rule the Difference row follows.
+    expect(res.message).toMatch(/balances/);
+  });
+
+  it("an UNBALANCED statement is not reported as accepted", async () => {
+    // The control. "Nothing to accept" on its own would read as "all is well" on
+    // the one screen where a non-zero difference is the whole point.
+    const { fireAccept } = renderWithDispatcher({
+      bankReconciliation: async () =>
+        brs({ difference: "-1250.5000", balanced: false }),
+    } as Partial<CoredClient>);
+    await screen.findByTestId("brs-as-on");
+    const res = fireAccept();
+    expect(res.ran).toBe(true);
+    expect(res.message).toMatch(/does NOT balance/);
+    // The figure is the server's string, formatted for display and never
+    // recomputed here.
+    expect(res.message).toContain("1,250.50");
+  });
+});
+
 describe("a non-bank ledger reaching the route anyway", () => {
   it("shows the server's refusal rather than an empty statement", async () => {
     // Defence in depth: the picker should make this unreachable, but the refusal
@@ -577,6 +631,33 @@ describe("Ctrl+P says WHICH account and WHICH date went to paper", () => {
    * confirmation names the account, and the operator can see at once that it is
    * not the one they meant.
    */
+  it("on a TWO-bank company the refusal IS reached, and makes no request", async () => {
+    // ⛔ THE OTHER HALF OF THE SAME ROW, AND IT IS WHAT KEEPS THE REFUSAL HONEST.
+    // The register said the "select a bank account first" refusal is unreachable
+    // because the screen auto-selects — true only for a company with exactly ONE
+    // bank account. With two, the screen opens the PICKER and chooses nothing, so
+    // Ctrl+P before choosing must refuse rather than print "the first one": a
+    // real, correctly rendered statement for the wrong bank, with nothing on the
+    // page saying so.
+    const printReport = vi.fn(async () => ({ blob: new Blob([]), filename: null }));
+    const { fireHandler } = renderWithDispatcher({
+      listLedgers: async () => ({
+        ledgers: [
+          ledger({ id: "l-1", name: "HDFC Bank" }),
+          ledger({ id: "l-2", name: "ICICI Current" }),
+        ],
+      }),
+      printReport,
+    } as Partial<CoredClient>);
+    // The picker, not a statement: nothing was chosen for the operator.
+    await screen.findByText(/HDFC Bank/);
+    const msg = String(await fireHandler());
+    expect(msg).toContain("Select a bank account first");
+    // A refusal that still hits the network is a 400 in somebody's log — and on
+    // this route it would be a request for a statement nobody asked for.
+    expect(printReport).not.toHaveBeenCalled();
+  });
+
   it("names the auto-selected account in the confirmation", async () => {
     const printReport = vi.fn(async () => ({
       blob: new Blob(["%PDF-1.4"], { type: "application/pdf" }),

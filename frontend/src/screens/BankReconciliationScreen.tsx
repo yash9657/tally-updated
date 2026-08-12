@@ -221,6 +221,44 @@ export function BankReconciliationScreen({ snapshot }: ScreenComponentProps) {
     },
   });
 
+  /**
+   * ⛔ Ctrl+A — ADVERTISED ON THIS BAR AND OWNED BY NOTHING, until now.
+   *
+   * BANK_RECON_BAR carries "Ctrl+A Accept", this component registered no
+   * `accept` handler, and the pure machine does not move on Ctrl+A from a
+   * bank-reconciliation frame (measured) — so the key answered the shell's
+   * generic "Ctrl+A — Accept does not apply on this screen". That is the same
+   * class as the four stock screens' dead Ctrl+P: the strip sells a key, the key
+   * says the strip is wrong, and the operator stops believing the strip.
+   *
+   * ⚠️ AND THE HONEST ANSWER IS NOT A SAVE. There is nothing here to accept.
+   * Every tick in the Bank Date column is written the moment it is typed (the
+   * cell PUTs, and clearing it DELETEs) — deliberately, because a reconciliation
+   * half-done and lost on a page change is worse than one done a row at a time.
+   * An operator who believes Ctrl+A is what commits their work would leave the
+   * screen ASSUMING the ticks were saved on some other key, and on the day one
+   * of those PUTs was refused they would never find out.
+   *
+   * So it states what is already true, and states the SERVER'S verdict on the
+   * difference rather than comparing figures here — the same rule the Difference
+   * row follows.
+   */
+  useRegisterScreenAction(
+    "accept",
+    useCallback((): string => {
+      if (!ledgerID || !brs) {
+        return "Nothing to accept — select a bank account first (F4). Bank dates are saved as you type them; this screen has no separate save.";
+      }
+      const account = banks?.find((b) => b.id === ledgerID)?.name ?? "this account";
+      return (
+        `Nothing to accept — every bank date on ${account} was saved the moment it was typed. ` +
+        (brs.balanced
+          ? "The statement balances: the difference is zero to the paisa."
+          : `The statement does NOT balance — the difference is ${formatMoney(brs.difference)}. Ctrl+A cannot close that; an un-cleared item or a missing voucher can.`)
+      );
+    }, [banks, brs, ledgerID]),
+  );
+
   // F4 — "select bank ledger" (RESEARCH.md:879).
   useRegisterScreenAction(
     "bankReconciliation",

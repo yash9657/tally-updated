@@ -123,6 +123,45 @@ describe("the published row is the highlighted row", () => {
   });
 });
 
+describe("the publish reacts to the REPORT, not only to the cursor", () => {
+  it("re-publishes when the row SET changes under an unmoved cursor", async () => {
+    // ⛔ THE SECOND HALF OF THE FIX, AND IT HAD NO TEST OF ITS OWN — a deliberate
+    // mutation that reverted the effect's dependencies to [activeKey] left the
+    // whole file GREEN, because the Enter re-publish below masks it on every
+    // path those cases take.
+    //
+    // What this asserts is the effect's own contract: the highlighted row is
+    // published whenever the LIST it indexes into changes, not merely when the
+    // key at the cursor does. The two come apart on a refetch that returns a
+    // different report with the same row at the top (F2 narrows the Day Book,
+    // Ctrl+F filters it, the shell re-uses this instance under a freshly pushed
+    // frame) — at which point the frame underneath is new, its `selectedItem` is
+    // empty, and nothing has told it what is highlighted.
+    const onSelect = vi.fn();
+    const { rerender } = renderRows(rowsFor("v1", "v2", "v3"), onSelect);
+    expect(onSelect).toHaveBeenLastCalledWith("v1");
+
+    onSelect.mockClear();
+    // A DIFFERENT report — same key at the cursor, different rows behind it.
+    rerender(
+      <DrillRows
+        rows={rowsFor("v1", "v9")}
+        onSelect={onSelect}
+        ariaLabel="Day Book rows"
+        columnsClassName="grid-cols-2"
+      />,
+    );
+    expect(highlighted()).toBe("v1");
+    expect(
+      onSelect.mock.calls.length,
+      "the report under the cursor changed and nothing was published, so the frame's " +
+        "selectedItem is whatever the PREVIOUS view left there — and Enter (and the Ctrl+P " +
+        "on the frame it pushes) then acts on a voucher this screen is no longer showing",
+    ).toBeGreaterThan(0);
+    expect(onSelect).toHaveBeenLastCalledWith("v1");
+  });
+});
+
 describe("Enter publishes the row it drills, whatever the frame's history", () => {
   it("re-publishes the highlighted row even when nothing about the list changed", () => {
     // ⛔ THE RE-OPEN PATH. The same component instance can be re-used under a

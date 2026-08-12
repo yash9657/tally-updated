@@ -1865,7 +1865,7 @@ func TestACreditNoteCannotBePrintedAtAll(t *testing.T) {
 	)
 
 	// The invoice the note will adjust, opening a bill by that reference.
-	if _, err := e.led.PostVoucher(e.ctx, ledger.VoucherInput{
+	invoice, err := e.led.PostVoucher(e.ctx, ledger.VoucherInput{
 		Class:         ledger.Sales,
 		PartyLedgerID: e.customer,
 		VoucherDate:   invoiceDate,
@@ -1879,9 +1879,13 @@ func TestACreditNoteCannotBePrintedAtAll(t *testing.T) {
 			LedgerID: e.customer, RefName: billRef, RefType: ledger.RefNew,
 			DrCr: ledger.Debit, Amount: decimal.RequireFromString("1740"),
 		}},
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("post the invoice the note adjusts: %v", err)
 	}
+	// What the INVOICE's own face says it is called. The note has to agree with
+	// this string and with nothing else — see the assertion below.
+	invoiceNo := e.storedVoucherNo(t, invoice.VoucherID)
 
 	note, err := e.led.PostVoucher(e.ctx, ledger.VoucherInput{
 		Class:         ledger.CreditNote,
@@ -1910,9 +1914,18 @@ func TestACreditNoteCannotBePrintedAtAll(t *testing.T) {
 	if doc.Kind != printing.KindCreditNote {
 		t.Fatalf("a Credit Note voucher was assembled as %q", doc.Kind)
 	}
-	if doc.AgainstNumber != billRef {
-		t.Errorf("the note says it adjusts %q, but it is allocated against %q: a note nobody can "+
-			"match to an invoice cannot be applied to one", doc.AgainstNumber, billRef)
+	// ⛔ THE INVOICE'S NUMBER, NOT THE BILL REFERENCE — AND THIS ASSERTION USED TO
+	// SAY THE OPPOSITE, which made it part of register row §4.13 rather than a
+	// check on it. The old line required doc.AgainstNumber == billRef, i.e.
+	// "INV/2026/0031": a name this operator gave the bill in OUR books. The
+	// customer holds an invoice whose face carries `invoiceNo`, and a note citing
+	// anything else names a document they cannot find. The reference is what
+	// LOCATES the bill; the invoice says what it is called, and the two coincide
+	// only by luck.
+	if doc.AgainstNumber != invoiceNo {
+		t.Errorf("the note says it adjusts %q; the bill it is allocated against (%q) was opened "+
+			"by the invoice numbered %q, which is the string printed on the customer's copy",
+			doc.AgainstNumber, billRef, invoiceNo)
 	}
 	if doc.AgainstDate == nil {
 		t.Fatalf("the note names invoice %q and no date for it: an invoice serial number repeats "+

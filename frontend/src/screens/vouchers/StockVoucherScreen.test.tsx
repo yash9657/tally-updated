@@ -205,9 +205,27 @@ describe("a back-dated-cutoff refusal is not rendered as an ACL refusal", () => 
    * why this used to be one branch.
    */
   const CUTOFF_SENTENCES = [
+    // The DESTINATION end — the date the request itself carries.
     "voucher date is before the back-dated cutoff of 2026-07-01",
+    // The STORED end — the date of the voucher being altered.
     "this voucher is dated 2026-05-04, inside the period closed by the back-dated cutoff of 2026-07-01",
+    // The two FAIL-CLOSED sentinels, where a date was required and could not be
+    // read at all. They are 403s carrying no date the operator typed, and they
+    // are the shape most easily mistaken for a permission problem.
     "the voucher date could not be read, so the back-dated cutoff of 2026-07-01 cannot be cleared",
+    "the stored date of the voucher being changed could not be read, so the back-dated cutoff of 2026-07-01 cannot be cleared",
+    // ⛔ AND THE SUBJECTS THIS SCREEN CANNOT ITSELF RAISE, ON PURPOSE. The PDP
+    // words the same refusal about a `bank date` or a `deposit date` when the
+    // route is a bank-reconciliation tick or a challan allocation
+    // (cutoffDateSubject). A stock voucher can produce neither — and that is
+    // exactly why they belong here: the client's rule must key on the ONE phrase
+    // every cutoff refusal carries and never on a sentence shape, or the next
+    // route wired to a screen re-opens this defect with a wording nobody
+    // enumerated. Rounds 1-4 of the cutoff fix each asserted a LIST and the next
+    // bypass was always off-list.
+    "bank date is before the back-dated cutoff of 2026-07-01",
+    "this bank date of 2026-05-04 is inside the period closed by the back-dated cutoff of 2026-07-01",
+    "deposit date is before the back-dated cutoff of 2026-07-01",
   ];
 
   for (const sentence of CUTOFF_SENTENCES) {

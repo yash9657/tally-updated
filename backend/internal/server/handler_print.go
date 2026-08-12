@@ -114,7 +114,25 @@ func (s *Server) handlePrintVoucher(w http.ResponseWriter, r *http.Request) {
 		writePrintError(w, err)
 		return
 	}
-	writePDF(w, pdfFilename(pathClass, number, voucherID.String()), pdf)
+	// THE CLASS, THEN THE ONE IDENTITY THAT NAMES THE DOCUMENT.
+	//
+	// ⛔ THE UUID IS A FALLBACK, NOT A SUFFIX, and it was being appended to every
+	// filename — "Sales-INV-2026-0041-0f0b4c31-....pdf". pdfFilename JOINS the
+	// parts it is given (that is right: the report route wants both its name and
+	// its date), so the falling-back is the CALLER'S job and it was never done.
+	// The consequence is not cosmetic: an operator filing a folder of invoices
+	// reads the number, and 36 characters of machine identity after it push the
+	// number out of every truncated column a file manager, a mail client and an
+	// accountant's inbox render it in.
+	//
+	// The id is still there for the voucher that has NO number — an unnumbered
+	// voucher would otherwise download as "Sales.pdf", and the second one would
+	// silently overwrite the first in the download folder.
+	name := number
+	if strings.TrimSpace(name) == "" {
+		name = voucherID.String()
+	}
+	writePDF(w, pdfFilename(pathClass, name), pdf)
 }
 
 // sameVoucherClass compares the kebab-case PATH segment against the STORED,
@@ -266,8 +284,15 @@ func writePDF(w http.ResponseWriter, filename string, body []byte) {
 	_, _ = w.Write(body)
 }
 
-// pdfFilename builds the download name from the parts given, using the FIRST
-// non-empty ones and falling back through them.
+// pdfFilename JOINS the parts given, in order, skipping any that is empty.
+//
+// ⚠️ IT DOES NOT FALL BACK BETWEEN THEM, whatever this comment once said — it
+// said "the FIRST non-empty ones", and a reader who believed it wrote
+// pdfFilename(class, number, voucherID) expecting the id to be used only when
+// the number was missing. Every printed voucher then carried 36 characters of
+// UUID after its number. Joining is the RIGHT behaviour for the report route,
+// which wants its name AND its date; a caller that wants a fallback picks the
+// part first (see handlePrintVoucher).
 //
 // THE SANITISATION IS LOAD-BEARING AND NOT COSMETIC. A voucher number is user
 // text: Tally invoice series routinely contain '/' ("INV/2026/0041"), and a

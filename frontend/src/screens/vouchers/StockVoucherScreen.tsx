@@ -380,9 +380,21 @@ export function StockVoucherScreen({ snapshot }: { snapshot: NavSnapshot }) {
           {mastersError}
         </p>
       ) : stockItems.length === 0 ? (
+        /* ⛔ THE ROUTE THIS NAMES MUST BE ONE THAT EXISTS. It read "Gateway >
+           Masters", and there is no such menu in this product — so the one empty
+           state an operator meets on a company with no items sent them to a door
+           that is not there, on the four screens that cannot be keyed WITHOUT an
+           item. The real route was built since: MASTER_GOTO_ENTRIES puts all five
+           master kinds in the Go To picker, so Alt+G, type "stock", Enter reaches
+           the create form. The accounting screen's empty state says the same
+           sentence (VoucherScreen.tsx), deliberately: two screens sending an
+           operator to two different doors for one master is how a door comes to
+           be believed missing.
+           ⚠️ Alt+G on macOS is the PHYSICAL KeyG with Alt held — Option composes,
+           so a real Mac sends key:"©". `comboFromEvent` reads `code`. */
         <p className="mb-2 text-xs" data-testid="stock-items-empty">
-          This company has no stock items yet — create one (Gateway &gt; Masters)
-          before keying a {cfg.title.toLowerCase()}.
+          This company has no stock items yet — create one with Alt+G &gt; Create
+          Stock Item before keying a {cfg.title.toLowerCase()}.
         </p>
       ) : null}
 

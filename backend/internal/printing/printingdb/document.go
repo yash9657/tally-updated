@@ -922,23 +922,53 @@ func loadBills(ctx context.Context, tx pgx.Tx, companyID, versionID uuid.UUID) (
 	return out, nil
 }
 
-// againstInvoiceDate finds the DATE of the document a credit note adjusts, given
-// the bill reference the note is allocated AGAINST.
+// openerRow is the IDENTITY of the voucher that OPENED a bill reference — the
+// document a credit or debit note adjusts.
 //
-// WHY A LOOKUP AND NOT A DERIVATION. Rule 53(1A) requires a credit note to carry
-// the number AND the date of the invoice it adjusts, and a serial number repeats
+// It carries BOTH identities that voucher has, because the two notes need
+// different ones and neither may be substituted for the other:
+//
+//   - number/date are OUR document: the voucher number this company issued and
+//     the date it issued it. That is what a CREDIT note must name, because the
+//     invoice it adjusts is ours and the recipient is holding a copy of it.
+//   - supplierNo/supplierDate are the SUPPLIER'S document, recorded on the
+//     purchase from their own invoice (migration 0032). That is what a DEBIT
+//     note must name. ⛔ Our purchase number must NEVER be printed there: the
+//     supplier has never seen it, so a note citing it names a document that does
+//     not exist on the side that has to act on it.
+type openerRow struct {
+	number       string
+	date         *time.Time
+	supplierNo   string
+	supplierDate *time.Time
+}
+
+// billOpener finds the voucher that OPENED a bill reference, given the reference
+// a note is allocated AGAINST.
+//
+// WHY A LOOKUP AND NOT A DERIVATION. Rule 53(1A) requires a note to carry the
+// number AND the date of the document it adjusts, and a serial number repeats
 // every financial year — "INV/0001" names one invoice per year, not one invoice.
-// The date is therefore load-bearing, and the only honest source for it is the
+// The date is therefore load-bearing, and the only honest source for both is the
 // voucher that ISSUED that bill. Taking the note's own date, or today's, would
 // print a date on which no invoice was ever issued.
+//
+// ⛔ AND IT RETURNS THE NUMBER, NOT ONLY THE DATE — WHICH IS THE DEFECT THIS
+// SIGNATURE EXISTS TO CLOSE. The callers used to print the bill REFERENCE as the
+// invoice number. A reference is not a number: an operator may name a bill
+// anything they like ("PO-4471/partial"), and since bill names were made unique
+// an UNNAMED bill is opened as `Sales/2026-27/7` — an internal name, on the one
+// line of the page where the recipient looks for the invoice they are holding.
+// The reference is what LOCATES the document; the document says what it is
+// called.
 //
 // TWO PLACES ARE TRIED, IN THIS ORDER, because a bill reference is not always the
 // voucher number:
 //
 //  1. the bill_allocation row that OPENED the reference (ref_type = 'NEW') on the
-//     same party ledger. That IS the bill the credit is applied to, so its
-//     voucher's date is the right one even when the operator named the bill
-//     something of their own ("PO-4471/partial").
+//     same party ledger. That IS the bill the note is applied to, so its
+//     voucher's identity is the right one even when the operator named the bill
+//     something of their own.
 //  2. failing that, a voucher whose NUMBER is the reference — which is what a
 //     note names when the invoice was billed without bill-wise tracking on.
 //
@@ -948,16 +978,18 @@ func loadBills(ctx context.Context, tx pgx.Tx, companyID, versionID uuid.UUID) (
 // no date and be refused, not quietly cite a tombstone.
 //
 // nil, nil is a legitimate answer (the reference matches nothing on file). The
-// refusal then comes from printing.validateVoucherDoc, which names the particular.
-func againstInvoiceDate(ctx context.Context, tx pgx.Tx, companyID, ledgerID uuid.UUID, refName string) (*time.Time, error) {
+// caller then falls back to the reference itself with no date, and the refusal
+// comes from printing.validateVoucherDoc, which names the particular.
+func billOpener(ctx context.Context, tx pgx.Tx, companyID, ledgerID uuid.UUID, refName string) (*openerRow, error) {
 	if strings.TrimSpace(refName) == "" {
 		return nil, nil
 	}
 
-	var d *time.Time
+	var o openerRow
 	if ledgerID != uuid.Nil {
 		err := tx.QueryRow(ctx,
-			`SELECT vv.voucher_date
+			`SELECT COALESCE(vv.voucher_no, ''), vv.voucher_date,
+			        COALESCE(vv.supplier_invoice_no, ''), vv.supplier_invoice_date
 			   FROM bill_allocation ba
 			   JOIN voucher_head vh
 			     ON vh.company_id = ba.company_id AND vh.current_version_id = ba.voucher_version_id
@@ -967,31 +999,34 @@ func againstInvoiceDate(ctx context.Context, tx pgx.Tx, companyID, ledgerID uuid
 			    AND ba.ref_type = 'NEW' AND vh.is_deleted = false
 			  ORDER BY vv.voucher_date
 			  LIMIT 1`,
-			companyID, ledgerID, refName).Scan(&d)
+			companyID, ledgerID, refName).Scan(
+			&o.number, &o.date, &o.supplierNo, &o.supplierDate)
 		switch {
 		case err == nil:
-			return d, nil
+			return &o, nil
 		case !errors.Is(err, pgx.ErrNoRows):
-			return nil, fmt.Errorf("printingdb: read the date of the bill %q: %w", refName, err)
+			return nil, fmt.Errorf("printingdb: read the bill %q: %w", refName, err)
 		}
 	}
 
 	err := tx.QueryRow(ctx,
-		`SELECT vv.voucher_date
+		`SELECT COALESCE(vv.voucher_no, ''), vv.voucher_date,
+		        COALESCE(vv.supplier_invoice_no, ''), vv.supplier_invoice_date
 		   FROM voucher_version vv
 		   JOIN voucher_head vh
 		     ON vh.company_id = vv.company_id AND vh.current_version_id = vv.id
 		  WHERE vv.company_id = $1 AND vv.voucher_no = $2 AND vh.is_deleted = false
 		  ORDER BY vv.voucher_date
 		  LIMIT 1`,
-		companyID, refName).Scan(&d)
+		companyID, refName).Scan(
+		&o.number, &o.date, &o.supplierNo, &o.supplierDate)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		return nil, nil
 	case err != nil:
-		return nil, fmt.Errorf("printingdb: read the date of the invoice numbered %q: %w", refName, err)
+		return nil, fmt.Errorf("printingdb: read the invoice numbered %q: %w", refName, err)
 	}
-	return d, nil
+	return &o, nil
 }
 
 // loadIRN returns the e-invoice reference registered against this voucher, or ""
@@ -1721,16 +1756,38 @@ func (s *Store) LoadVoucherDoc(ctx context.Context, companyID, voucherID uuid.UU
 		case printing.KindCreditNote:
 			for _, b := range bills {
 				if b.refType == "AGAINST" {
-					doc.AgainstNumber = b.refName
+					// ⛔ THE INVOICE'S OWN NUMBER, NOT THE BILL REFERENCE, and the
+					// difference is the whole line. The reference LOCATES the
+					// bill in our books; the invoice the customer is holding says
+					// what it is called. They coincide only when nobody named the
+					// bill — and since bill names were made unique they no longer
+					// coincide even then, because an unnamed bill is opened as
+					// `Sales/2026-27/7`. Printing that under "Against Invoice No."
+					// puts an internal name on the one line the recipient uses to
+					// match the credit to a supply.
+					//
 					// AND ITS DATE, which the note is unprintable without: an
 					// invoice serial number repeats every financial year, so
 					// printing.validateVoucherDoc refuses a note that names a
-					// number and no date. It is READ from the voucher that OPENED
-					// that bill — never derived from the note's own date, which
-					// would put a date on the paper that no invoice was issued on.
-					if doc.AgainstDate, err = againstInvoiceDate(
-						ctx, tx, companyID, b.ledgerID, b.refName); err != nil {
+					// number and no date. Both are READ from the voucher that
+					// OPENED that bill — never derived from the note's own date,
+					// which would put a date on the paper that no invoice was
+					// issued on.
+					//
+					// The reference SURVIVES as the fallback: when nothing on file
+					// opened it, naming what the operator keyed is more use to the
+					// recipient than naming nothing, and the missing date is what
+					// makes the renderer refuse rather than print a half-identity.
+					doc.AgainstNumber = b.refName
+					opener, err := billOpener(ctx, tx, companyID, b.ledgerID, b.refName)
+					if err != nil {
 						return err
+					}
+					if opener != nil {
+						if opener.number != "" {
+							doc.AgainstNumber = opener.number
+						}
+						doc.AgainstDate = opener.date
 					}
 					break
 				}
@@ -1758,11 +1815,23 @@ func (s *Store) LoadVoucherDoc(ctx context.Context, companyID, voucherID uuid.UU
 			// and the fallback order says which one is authoritative when both
 			// exist.
 			//
-			// The DATE comes from the voucher that OPENED the bill (againstInvoiceDate),
+			// The DATE comes from the voucher that OPENED the bill (billOpener),
 			// never from the note's own date — a note dated today does not tell you
 			// when the invoice it adjusts was issued, and a serial number repeats
 			// every financial year, which is why the renderer refuses a number with
 			// no date beside it.
+			//
+			// ⛔⛔ AND THE MIRROR OF THE CREDIT NOTE'S RULE IS NOT THE SAME RULE.
+			// The credit note above prints the OPENING VOUCHER'S NUMBER because
+			// that invoice is OURS. Here the opening voucher is a PURCHASE, and its
+			// number is ours too — which is exactly why it must not be printed:
+			// the supplier has never seen our purchase number, so a debit note
+			// citing it names a document that does not exist on the side that has
+			// to act on it. What the supplier can match is their OWN invoice
+			// number, which the purchase records in supplier_invoice_no, and
+			// failing that the bill reference the operator keyed off that very
+			// invoice. Hence three sources in falling order of authority and NOT
+			// the opening voucher's number at any point.
 			doc.AgainstNumber = h.supplierDocNo
 			if h.supplierDate != nil {
 				d := *h.supplierDate
@@ -1774,9 +1843,22 @@ func (s *Store) LoadVoucherDoc(ctx context.Context, companyID, voucherID uuid.UU
 						continue
 					}
 					doc.AgainstNumber = b.refName
-					if doc.AgainstDate, err = againstInvoiceDate(
-						ctx, tx, companyID, b.ledgerID, b.refName); err != nil {
+					opener, err := billOpener(ctx, tx, companyID, b.ledgerID, b.refName)
+					if err != nil {
 						return err
+					}
+					if opener != nil {
+						if opener.supplierNo != "" {
+							doc.AgainstNumber = opener.supplierNo
+						}
+						// The supplier's own invoice date where the purchase
+						// recorded one; otherwise the date we booked the purchase,
+						// which is the nearest fact the books hold about when that
+						// document was issued.
+						doc.AgainstDate = opener.date
+						if opener.supplierDate != nil {
+							doc.AgainstDate = opener.supplierDate
+						}
 					}
 					break
 				}
