@@ -320,6 +320,53 @@ async function openDeliveryNote(app: HTMLElement, qty: string) {
   });
 }
 
+/**
+ * ⛔⛔ THE COMPARATOR IS PINNED; ITS USE SITE WAS NOT — FOUND BY AN EXECUTED
+ * MUTATION PROOF.
+ *
+ * The tests below sort with `byCommitmentOrder` DIRECTLY, which is the right way
+ * to cover the nine cases that tell a numeric compare from a lexical one. But
+ * replacing the PICKER's own `list.sort(byCommitmentOrder)` with
+ * `a.orderNo.localeCompare(b.orderNo)` — D7 exactly, the defect as it shipped —
+ * left every test in this repository GREEN. Only the browser drive caught it.
+ *
+ * So this renders the real picker over orders whose LEXICAL and CHRONOLOGICAL
+ * orders disagree, and asserts what the operator is actually offered first.
+ */
+describe("⛔ the rendered picker offers the OLDEST commitment first (D7's use site)", () => {
+  it("offers an older order whose number sorts LAST alphabetically", async () => {
+    const client = createMockClient();
+    // ZZ-OLDEST is the oldest commitment AND sorts last as a string; SO-100 and
+    // SO-9 are the lexical hazard ("100" < "9") on top of it.
+    await client.createSalesOrder(COMPANY, {
+      order_no: "SO-100", order_date: "2026-06-10", party_ledger_id: "ledger-acme",
+      created_by: "ui", lines: [{ stock_item_id: "stock-widget", qty: "5", rate: "500" }],
+    });
+    await client.createSalesOrder(COMPANY, {
+      order_no: "ZZ-OLDEST", order_date: "2026-04-01", party_ledger_id: "ledger-acme",
+      created_by: "ui", lines: [{ stock_item_id: "stock-widget", qty: "7", rate: "500" }],
+    });
+    await client.createSalesOrder(COMPANY, {
+      order_no: "SO-9", order_date: "2026-05-01", party_ledger_id: "ledger-acme",
+      created_by: "ui", lines: [{ stock_item_id: "stock-widget", qty: "9", rate: "500" }],
+    });
+
+    const app = renderShell(client);
+    await openDeliveryNote(app, "3");
+    fireEvent.click(await screen.findByLabelText("Link line 1 to an order"));
+
+    const options = await screen.findAllByRole("option");
+    const offered = options
+      .map((o) => (o.textContent ?? "").trim())
+      .filter((t) => /ordered \d{4}-\d{2}-\d{2}/.test(t));
+    expect(offered.length).toBe(3);
+    // ⛔ OLDEST FIRST, whatever the numbers say.
+    expect(offered[0]).toMatch(/ZZ-OLDEST/);
+    expect(offered[1]).toMatch(/SO-9/);
+    expect(offered[2]).toMatch(/SO-100/);
+  });
+});
+
 describe("an operator can link a delivery note to a sales order", () => {
   it("the picker offers the OPEN order for the same item, by NUMBER not by id", async () => {
     const client = createMockClient();

@@ -834,8 +834,8 @@ WORK"** — not "hard to fix".
 | D3 | 17 | HIGH | A TDS or TCS deduction cannot be keyed from the keyboard anywhere in this product: the client's VoucherRequest type has no tds/tcs field at all, so row 17's precondition is unreachable and the challan picker is empty on any books a real operator built. | frontend/src/api/types.ts:698 | ⛔ OPEN |
 | D4 | 17 | HIGH | The TCS half of row 17 does not exist: tcs_collection is not part of the challan mechanism, so a collector can never record that it deposited what it collected. A live 2000.0000 collection under 206C(1)-SCRAP never appears in the allocation picker. | backend/internal/masters/tds_challan.go:1014 | ⛔ OPEN |
 | D5 | 24 | HIGH | `allow_negative_stock` has no writer anywhere in the product: no HTTP route, no request field, no service setter, no UI control. Both enforcers read it and honour it correctly, but it is permanently false for every tenant, so the "allowed per the company's flag" arm of Tally's rule can only be reached by a hand-written psql UPDA … | backend/internal/server/server.go:1161 (companyReq, field absent) + backend/internal/server/server.go:515-524 (no Put/Patch on /v1 … | ⛔ OPEN |
-| D6 | 27 | HIGH | An order's party is picked from the ENTIRE chart of accounts — a sales order can be committed to a bank ledger and a purchase order to a customer. Nothing on the client, in Validate, or in the DB restricts it to Sundry Debtors / Sundry Creditors. | frontend/src/screens/OrderRegisterScreen.tsx:753 (and the unfiltered load at :258) / backend/internal/orders/order.go:156 | ⛔ OPEN |
-| D7 | 27 | HIGH | The fulfilment picker sorts candidate orders by order_no as a raw string while its own comment claims "Oldest commitment first", so the order offered first is the NEWEST one. | frontend/src/screens/vouchers/FulfilmentPicker.tsx:156 | ⛔ OPEN |
+| D6 | 27 | HIGH | An order's party is picked from the ENTIRE chart of accounts — a sales order can be committed to a bank ledger and a purchase order to a customer. Nothing on the client, in Validate, or in the DB restricts it to Sundry Debtors / Sundry Creditors. | frontend/src/screens/OrderRegisterScreen.tsx:753 (and the unfiltered load at :258) / backend/internal/orders/order.go:156 | ✅ **FIXED (L8) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
+| D7 | 27 | HIGH | The fulfilment picker sorts candidate orders by order_no as a raw string while its own comment claims "Oldest commitment first", so the order offered first is the NEWEST one. | frontend/src/screens/vouchers/FulfilmentPicker.tsx:156 | ✅ **FIXED (L8) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D8 | 29 | HIGH | Closing stock VALUE is replayed in LEXICAL voucher_no order across independent numbering series, so an issue keyed after a receipt on the same date is costed at the pre-receipt average. Confirmed to the paisa in the browser: Closing Stock 25,909.3478 for MS Angle where entry order gives 25,307.8797 — 601.4681 too high, with quan … | backend/internal/inventory/valuation.go:155-170 (func less; `if a.VoucherNo != b.VoucherNo { return a.VoucherNo < b.VoucherNo }`) | ⛔ OPEN |
 | D9 | 29 | HIGH | On the Balance Sheet the Closing Stock row (and its Stock-in-Hand group) is invisible in the default condensed view and is likewise absent from the Alt+E export, while the identically named row on the P&L is always visible. | frontend/src/screens/reports/reportView.ts:158-162 (`if (!cfg.detailed) out = out.filter((r) => (r.depth ?? 0) <= 1)`), with backe … | ✅ **FIXED (L10) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D10 | 3 | HIGH | Two NEW references on one invoice collapse into a SINGLE bill: post() stamps the allocated voucher number onto EVERY unnamed reference with no uniqueness check, and Outstandings groups by (ledger_id, ref_name) taking MIN(due_date). An 11,800 invoice split 5,900@30d / 5,900@60d ages entirely at the 30-day date, and the 60-day ins … | backend/internal/ledger/ledger.go:1754-1756 (stamp); backend/internal/reporting/outstanding.go:141,158 (MIN(due_date) + GROUP BY r … | ⛔ OPEN |
@@ -872,7 +872,7 @@ WORK"** — not "hard to fix".
 | D41 | 17 | MEDIUM | LEAD, not row 17: opening an existing Purchase voucher for alteration from the Day Book and pressing Ctrl+A created a new ledger ("Purchases") over the wire and then failed the voucher write with "Error: invalid gst line gst_rate_pct". A refused alter left a master behind. | frontend/src/screens/VoucherScreen.tsx:1462 | ✅ **FIXED (L6) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D42 | 24 | MEDIUM | F11 Features asserts a capability the build does not have: the "Negative stock" row is labelled "Always on" and its note says "A company can opt in per-company", while the screen offers no toggle and nothing on it can write the flag. The product's own statement of what is switchable is false. | frontend/src/screens/FeaturesScreen.tsx:291-293 (state "always" renders as "Always on" via the map at FeaturesScreen.tsx:486; the … | ✅ FIXED (own) |
 | D43 | 24 | MEDIUM | POST /v1/companies accepts `"allow_negative_stock": true` with 201 Created and silently discards it — the caller gets a success for a setting that was never applied. | backend/internal/server/server.go:1188-1240 (handleCreateCompany / decodeJSON tolerates the unknown field) with backend/internal/s … | ⛔ OPEN |
-| D44 | 27 | MEDIUM | The Sales/Purchase Order Book flags NOTHING as overdue in its default (no as-at) state, because Overdue() short-circuits to false when asOn is empty — so the view an operator actually opens reports zero late deliveries. | backend/internal/reporting/orderbook.go:159 (the `// asOn == ""` guard at :160) | ⛔ OPEN |
+| D44 | 27 | MEDIUM | The Sales/Purchase Order Book flags NOTHING as overdue in its default (no as-at) state, because Overdue() short-circuits to false when asOn is empty — so the view an operator actually opens reports zero late deliveries. | backend/internal/reporting/orderbook.go:159 (the `// asOn == ""` guard at :160) | ✅ **FIXED (L8) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D45 | 29 | MEDIUM | With no period set, the Stock Summary prints "As at today (everything posted)" over a report that is actually unbounded — it includes post-dated vouchers. On 2026-08-07 the screen showed 72,837.15 under that label where the real as-at-today position is 96,168.18. The Balance Sheet has the same behaviour and prints no date at all … | frontend/src/screens/reports/StockSummaryScreen.tsx:110 (`{asOn ? `As at ${asOn}` : "As at today (everything posted)"}`); the Bala … | ✅ **FIXED (L10) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D46 | 29 | MEDIUM | The Balance Sheet's "Profit & Loss A/c (Current Period)" line ignores F2's From date while the P&L honours it, so the same F2 setting yields 1,16,237.15 on one statement and -37,911.02 on the other, and the Balance Sheet's caption still says "(Current Period)". | backend/internal/reporting/reporting.go:975-977 (`openingBS := decimal.Zero; stockAdj := closing.Sub(openingBS); bs.NetProfit = in … | ✅ **FIXED (L10) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D47 | 29 | MEDIUM | A master creation that the server refuses is reported into a screen that has already been unmounted: Ctrl+A on Create ledger returned the operator to the Gateway with no message while POST /ledgers answered 403 and nothing was created. | frontend/src/screens/masters/MasterCreateScreen.tsx:103-120 (onAccept calls onSelect(n) synchronously, then `create(n, p).catch((e … | ⛔ OPEN |
@@ -896,10 +896,10 @@ WORK"** — not "hard to fix".
 | D65 | 5 | MEDIUM | Outstandings folds in ledger_opening_bill unconditionally, with none of the books-beginning-from guard the Balance Sheet applies to ledger.opening_balance. Asked for a date before the books began, Outstandings reports the entire opening ageing (Acme 1,85,480.00 incl. OB/ACME/24-25/07 and /11; Steel Suppliers 80,450.00 incl. OB/S … | backend/internal/reporting/outstanding.go:151-153 — the `UNION ALL SELECT ob.ledger_id, ob.ref_name, ob.dr_cr, ob.amount, ob.due_d … | ✅ **FIXED (F8)** — the opening breakup is `queryBalances`-guarded, so a date before the books began reports nothing on EITHER report |
 | D66 | 9 | MEDIUM | The 422 the operator actually reads names the cost category by RAW UUID and prints the 0-based `posting_seq` — the one number CostAllocationPicker.tsx:28-33 declares no screen in this product may ever display. The server code's own comment claims it 'names the axis'. | backend/internal/ledger/cost_allocation.go:294 | ✅ **FIXED (L12) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D67 | 9 | MEDIUM | The picker reports an axis as "allocated in full" when one of its splits has an amount but no cost centre chosen; `buildCostAllocations` then drops that split, and Ctrl+A sends a short axis to the server. Recon prediction 3 CONFIRMED exactly. | frontend/src/screens/vouchers/costAllocation.ts:163 | ✅ **FIXED (L12) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
-| D68 | 27 | LOW | The Alt+X explosion's first note prints the recipe's YIELD where the component phrase belongs, so it reads "3 of SS Sheet 2mm yields 3" — the finished good is named on the consuming side of "yields". | backend/internal/orders/bom.go:374 (args at :377-378) | ⛔ OPEN |
-| D69 | 27 | LOW | An order line's due date is accepted when it falls BEFORE the order date, creating a commitment that is overdue the instant it is recorded. | backend/internal/orders/order.go:171 (the per-line loop validates StockItemID, Qty and Rate and never looks at DueDate) | ⛔ OPEN |
-| D70 | 27 | LOW | After Alt+W pre-closes an order, the register's line panel keeps showing that order's balance as Outstanding with no pre-closed marker, while the row itself has vanished from the list above it. | frontend/src/screens/OrderRegisterScreen.tsx:1039 (the detail heading) and :1069-1073 (the Outstanding cell) | ⛔ OPEN |
-| D71 | 27 | LOW | The Purchase Order Book's quantity column is hard-coded "Delivered" for goods a supplier owes the company, while the purchase register calls the identical figure "Received". | frontend/src/screens/reports/OrderBookScreens.tsx:351 (and the export header at :499) | ⛔ OPEN |
+| D68 | 27 | LOW | The Alt+X explosion's first note prints the recipe's YIELD where the component phrase belongs, so it reads "3 of SS Sheet 2mm yields 3" — the finished good is named on the consuming side of "yields". | backend/internal/orders/bom.go:374 (args at :377-378) | ✅ **FIXED (L8) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
+| D69 | 27 | LOW | An order line's due date is accepted when it falls BEFORE the order date, creating a commitment that is overdue the instant it is recorded. | backend/internal/orders/order.go:171 (the per-line loop validates StockItemID, Qty and Rate and never looks at DueDate) | ✅ **FIXED (L8) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
+| D70 | 27 | LOW | After Alt+W pre-closes an order, the register's line panel keeps showing that order's balance as Outstanding with no pre-closed marker, while the row itself has vanished from the list above it. | frontend/src/screens/OrderRegisterScreen.tsx:1039 (the detail heading) and :1069-1073 (the Outstanding cell) | ✅ **FIXED (L8) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
+| D71 | 27 | LOW | The Purchase Order Book's quantity column is hard-coded "Delivered" for goods a supplier owes the company, while the purchase register calls the identical figure "Received". | frontend/src/screens/reports/OrderBookScreens.tsx:351 (and the export header at :499) | ✅ **FIXED (L8) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D72 | 32 | LOW | The optional statistical forecast in insightd is unreachable from the client and carries money as JSON floats rather than the fixed-4 strings the rest of the system pins, so wiring it as-is would reintroduce paisa loss. It does at least declare estimate:true and its method — the disclosure cored's own projection lacks. | insightd/insightd/api/routes_forecast.py:29-36 (weekly_net_cash: list[float], daybook: list[tuple[str, float]]) and :13-16; no cal … | ⛔ OPEN |
 | D73 | 38 | LOW | Sign-in attempts made while an account is locked are never audited: handleLogin returns 423 from the IsLocked branch without calling RecordAttempt, so the traffic during the lock window — the exact period an investigator cares about — leaves no trace. | backend/internal/server/auth_login.go:209-217 — the IsLocked branch writes writeLocked and returns; RecordAttempt is reached only … | ⛔ OPEN |
 | D74 | 38 | LOW | app_user.failed_attempts is not a running counter: it stays 0 through failures 1-4 and is written only at the instant the lock trips, so nothing can observe that an account is partway to being locked. | backend/internal/authn/lockout_store.go:113-118 — failed_attempts is written ONLY inside SetLock (`UPDATE app_user SET locked_unti … | ⛔ OPEN |
@@ -1264,6 +1264,58 @@ be worked and counted: **D79** (fixed above), **D80** `Alt+G > Vouchers` pushes 
 **D81** a SERVER-side refusal still leaves masters behind (the form-side half is closed and driven),
 **D82** the HSN refusal on the alter path (a judgement, not a bug), **D83** concurrent duplicate manual
 bill numbers, **D84** `api/mock.ts` is looser than cored and is a source of false green.
+
+### ✅ L8 — ORDERS + BOM. D6, D7, D44, D68, D69, D70, D71. CLOSED 2026-08-20.
+
+**Mutation proofs — six, and TWO OF THEM EXPOSED AN ORACLE GAP OR A BAD MUTATION:**
+
+| Mutation | Anchor put back | Result |
+|---|---|---|
+| M18 (D7) | picker sorts `orderNo.localeCompare` | ⛔ **STILL GREEN.** See below |
+| M18b (D7) | the same, against the NEW use-site test | RED, by name |
+| M19 (D44) | `Overdue()` returns false when the caller sent no `as_on` | `TestTheDefaultOrderBookStateStillFlagsAnOverdueLine` + `TestTheDefaultOrderBookReportsItsLateLines` RED |
+| M20 (D71) | *(a comment-only edit — a NO-OP mutation, my error)* | ⛔ green, and it proved nothing |
+| M20b (D71) | `PURCHASE_COPY.fulfilledHeading = "Delivered"` | RED, by name |
+| M21b (D69) | `if dueBeforeOrder(...)` → `if false` | `TestOrderInputValidateRefusesTheOrdersThatCannotWork/a_delivery_date_BEFORE_the_order_date` RED |
+| M22 (D68) | the finished good back on the consuming side of "yields" | `TestTheExplosionNoteNamesTheFinishedGoodOnTheYieldingSide` RED |
+| M23 (D6) | `Direction.PartyGroup()` returns `""` for both directions | `TestAnOrderMayOnlyBeCommittedToACounterpartyOfItsDirection` + 2 more RED |
+
+⛔⛔ **M18 IS D38's LESSON AGAIN, IN A DIFFERENT FILE.** `byCommitmentOrder` is exported *specifically* so
+the ordering can be pinned without a rendered picker, and it is pinned — nine cases, including the `"100" <
+"9"` hazard. **But nothing pinned the PICKER USING IT.** Replacing `list.sort(byCommitmentOrder)` with the
+exact defect (`orderNo.localeCompare`) left **every test in the repository green**; only the browser drive
+saw it. A test now renders the real picker over orders whose lexical and chronological orders disagree, and
+M18b turns it red. **When a fix is "call the right comparator", the comparator's test is not the fix's
+test.**
+
+⚠️ **AND M20 IS A WARNING ABOUT MUTATION QUALITY**: the first attempt only added a comment, so it could
+not fail. **A mutation that cannot change behaviour is not a proof** — it is a green tick with nothing
+behind it, which is the same failure as a weak assertion.
+
+**The drives — `drive-l8-orders.mjs` 12/12, `drive-l8-fulfil.mjs` 4/4, `drive-l8-preclose.mjs` 5/5:**
+
+- **D6** ✅ Alt+C's **Customer** field is a `<select>` labelled *"Customer · under Sundry Debtors"* offering
+  exactly `Acme Traders, Mumbai Metals` — no bank, tax, capital or nominal head — and the screen states
+  WHY. ⛔ **And the escape hatch was driven, because that is where D6 could have come back with a checkbox
+  in front of it:** ticking *"Offer every ledger"* widens the list **2 → 26**, and committing a sales order
+  to **HDFC Bank** is then refused on the wire — **403 (step-up) → 422**, nothing created. The screen's own
+  promise ("the server still refuses anything outside Sundry Debtors and says so") holds.
+- **D7** ✅ Driven over a fixture built to tell the two sorts apart: `ZZ-OLDEST-001` (2026-04-01) sorts
+  **last** alphabetically and is offered **first**, ahead of two same-day orders.
+- **D44** ✅ The order book's **default** (no `as_on`) state flags **2 of 2** dated lines overdue, and an
+  explicit `as_on=2027-03-31` agrees rather than contradicting it. ⚠️ The route is
+  `/v1/companies/{co}/sales-order-book` — **NOT** under `/reports`, which answers 403 and reads exactly
+  like a permission problem (D40's shape).
+- **D68** ✅ Driven by creating a real BOM over the API (10 of MS Angle yields 3 of SS Sheet): the note
+  reads *"it **yields 3 of SS Sheet 2mm**"*, with the consuming side left to the component table.
+  ⚠️ **`seed:demo` CREATES NO BOM**, so Alt+X cannot be exercised on the demo books at all — the same
+  class of seed gap as the party-less delivery notes, and worth closing when T3's seed is next touched.
+- **D69** ✅ On the wire: a due date of `2026-05-01` on an order dated `2026-06-15` is refused **422** —
+  *"a commitment cannot be due before it was made … It is nearly always a mis-keyed year"* — and the
+  **CONTROL** (due `2026-07-01`) is **201**.
+- **D70** ✅ Alt+W pre-closes with a reason (403 → step-up → **200**), the order leaves the outstanding
+  list (3 → 2), and the panel below no longer asserts an unmarked "Outstanding".
+- **D71** ✅ The Purchase Order Book says **Received**; "Delivered" appears nowhere on it.
 
 ## 8. RULES THAT MUST NOT BE BROKEN DURING THIS WORK
 
