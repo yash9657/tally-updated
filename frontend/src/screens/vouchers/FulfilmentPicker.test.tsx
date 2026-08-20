@@ -310,6 +310,14 @@ async function openDeliveryNote(app: HTMLElement, qty: string) {
   fireEvent.change(screen.getByLabelText("Rate 1"), {
     target: { value: "500" },
   });
+  // ⛔ A DELIVERY NOTE NOW REQUIRES A CONSIGNEE — see buildStockVoucherRequest.
+  // Keyed in the HELPER because it is a precondition of keying this class at
+  // all, and is the subject of no test in this file (they are about the ORDER LINK).
+  // Found by driving D30: printing refuses any printable voucher with no other
+  // party, so a delivery note saved without one could never be printed.
+  fireEvent.change(screen.getByTestId("stock-party"), {
+    target: { value: "Acme Traders" },
+  });
 }
 
 describe("an operator can link a delivery note to a sales order", () => {

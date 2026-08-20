@@ -233,6 +233,48 @@ export function buildStockVoucherRequest(
     );
   }
 
+  // ⛔⛔ A DELIVERY NOTE MAY NOT BE SAVED WITHOUT A CONSIGNEE — FOUND BY DRIVING
+  // D30, AND IT IS D60'S CLASS ON ANOTHER SCREEN.
+  //
+  // D30 gave this screen its Ctrl+P back. The key then reached the server and
+  // came back **422** on every delivery note in the demo books, because
+  // `validateVoucherDoc` (printing/voucherdoc.go) requires "the other party" on
+  // every printable kind and NOTHING required it here: not this builder, not the
+  // screen, not the wire. All four seeded delivery notes carried a NULL party,
+  // so the class D30 had just made printable could not print one document.
+  //
+  // That is exactly D60 — a document that can be keyed and then not printed,
+  // learned at the counter with the customer waiting — so it is fixed the way
+  // D60 was: a refusal on THIS form, scoped by what the printing layer actually
+  // requires, class by class.
+  //
+  //  - `delivery-note` → the ONE stock class in PRINTABLE_VOUCHER_CLASSES.
+  //    KindDeliveryNote needs a party to print AND the goods are physically
+  //    going to someone: "a delivery note with no delivery address cannot be
+  //    delivered, and the goods in transit have no consignee". REQUIRED HERE.
+  //  - `receipt-note` → NOT printable (it is the supplier's despatch document),
+  //    so requiring a party would invent a rule the printing layer does not
+  //    state, and would block recording goods that arrived from a supplier not
+  //    yet keyed as a ledger.
+  //  - `stock-journal` → an INTERNAL transfer between two of the company's own
+  //    locations. There is no other party by construction, and a field asking
+  //    for one is a question with no answer.
+  //  - `physical-stock` → a stock take. Nobody is on the other side of it.
+  //
+  // ⚠️ `party` IS OPTIONAL ON THIS TYPE, so it is coalesced — a bare
+  // `inputs.party.trim()` is a TypeError on every existing call site that omits
+  // it, which is most of them.
+  if (inputs.type === "delivery-note" && (inputs.party ?? "").trim() === "") {
+    throw new Error(
+      "A Delivery Note needs the party the goods are going to. Without a " +
+        "consignee the note cannot be printed at all (the server refuses it: " +
+        '"a delivery note with no delivery address cannot be delivered, and ' +
+        'the goods in transit have no consignee"), so it would be saved and ' +
+        "then be unusable as the document that travels with the goods. Key the " +
+        "customer in Party A/c Name.",
+    );
+  }
+
   const req: VoucherRequest = {
     voucher_date: inputs.voucherDate,
     narration: inputs.narration,

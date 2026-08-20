@@ -857,13 +857,13 @@ WORK"** — not "hard to fix".
 | D26 | 33 | HIGH | When ?company=<id> is refused by the server, the app SILENTLY creates a brand-new company and makes the user its Owner, reporting the substitution only to the devtools console. A user who was invited as a restricted level lands on an empty tenant with FULL access, and every screen looks correct. | frontend/src/app/CompanyContext.tsx:129-140 isUnusablePersistedId() treats 403 as 'unusable'; CompanyContext.tsx:188-245 the boots … | ✅ FIXED (F4) |
 | D27 | 35 | HIGH | F3 Switch Company changes the session but is NEVER persisted, so any page load silently returns the operator to the PREVIOUS company — and the next voucher they key lands in it. Proved in both directions and confirmed in the DB: a Sales voucher keyed after F3->BETA35 + a reload was written to ALPHA35. | frontend/src/screens/CompanySelectScreen.tsx:88-96 (calls client.getCompany + setCompany + COMPANY_SWITCHED_SENTINEL, and never pe … | ✅ FIXED (F4) |
 | D28 | 37 | HIGH | The back-dated cutoff is bypassed outright by loosening the SPELLING of the date, whenever the body also carries an explicit voucher_no. The PDP's date peek fails OPEN, and the only strict re-parse in the write path lives inside the auto-numbering branch, which an explicit voucher_no skips. | backend/internal/server/server.go:3191-3203 (peekVoucherDate returns nil on any non-"2006-01-02" spelling) + backend/internal/auth … | ✅ FIXED (F3) |
-| D29 | 37 | HIGH | On the four stock-only voucher screens a back-dated-cutoff refusal is rendered as an ACL refusal: every 403 is replaced with "...is refused to your security level — ask an Owner to allow 'create <type>' on your level", so the operator is sent to fix a permission they already hold and is never told a period is locked. | frontend/src/screens/vouchers/StockVoucherScreen.tsx:237-243 | ⛔ OPEN |
-| D30 | 40 | HIGH | The Delivery Note — one of the six classes printTarget.ts declares printable — has no Ctrl+P at all: StockVoucherScreen registers only "accept", so the key falls through to the shell's generic "does not apply on this screen" and makes NO HTTP request, while the voucher bar on that very screen advertises "Ctrl+P Print". | frontend/src/screens/vouchers/StockVoucherScreen.tsx:251 (only useRegisterScreenAction("accept", …); no usePrintAction import at : … | ⛔ OPEN |
-| D31 | 40 | HIGH | A Debit Note can NEVER be printed by this product. printingdb reads a debit note's against-invoice number only from voucher_version.supplier_invoice_no, and no HTTP request can set that column, so every debit note — including a seeded one that carries a bill_allocation AGAINST SUP-101 — answers 422. | backend/internal/printing/printingdb/document.go:1738-1743 (doc.AgainstNumber = h.supplierDocNo) and backend/internal/printing/vou … | ⛔ OPEN |
+| D29 | 37 | HIGH | On the four stock-only voucher screens a back-dated-cutoff refusal is rendered as an ACL refusal: every 403 is replaced with "...is refused to your security level — ask an Owner to allow 'create <type>' on your level", so the operator is sent to fix a permission they already hold and is never told a period is locked. | frontend/src/screens/vouchers/StockVoucherScreen.tsx:237-243 | ✅ **FIXED (L7) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
+| D30 | 40 | HIGH | The Delivery Note — one of the six classes printTarget.ts declares printable — has no Ctrl+P at all: StockVoucherScreen registers only "accept", so the key falls through to the shell's generic "does not apply on this screen" and makes NO HTTP request, while the voucher bar on that very screen advertises "Ctrl+P Print". | frontend/src/screens/vouchers/StockVoucherScreen.tsx:251 (only useRegisterScreenAction("accept", …); no usePrintAction import at : … | ✅ **FIXED (L7) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
+| D31 | 40 | HIGH | A Debit Note can NEVER be printed by this product. printingdb reads a debit note's against-invoice number only from voucher_version.supplier_invoice_no, and no HTTP request can set that column, so every debit note — including a seeded one that carries a bill_allocation AGAINST SUP-101 — answers 422. | backend/internal/printing/printingdb/document.go:1738-1743 (doc.AgainstNumber = h.supplierDocNo) and backend/internal/printing/vou … | ✅ **FIXED (L7) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D32 | 40 | HIGH | A Credit Note keyed in this app can never print either, and the escape hatch the code assumes does not exist: the bill picker's "Agst Ref" row is a <select> whose options come from useOpenBills, which only fetches when mode==="settle" — so on a credit note (mode="raise") the only option is the empty "— bill —", there is no free- … | frontend/src/screens/vouchers/BillAllocationPicker.tsx:128-131 (useOpenBills(..., mode === "settle")) and :191-200 (the AGAINST va … | ⛔ OPEN |
-| D33 | 40 | HIGH | Re-opening the Day Book after any drill in the same session makes Enter open a DIFFERENT voucher than the highlighted row — the drill target freezes at one stale id — so Ctrl+P from the alter path prints or refuses the wrong document. | frontend/src/screens/reports/DrillRows.tsx:92-100 (the publish effect is keyed ONLY on [activeKey], so a freshly pushed report fra … | ⛔ OPEN |
-| D34 | 42 | HIGH | Ctrl+P ignores the F2 period on EVERY report: the print target carries no from/to/as_on (only bank-reconciliation gets a query, and even that one carries ledger_id without a date), the server treats a missing date as "no filter", and the paper is subtitled "For all dates in the books" / "As at the latest date in the books" while … | frontend/src/screens/printTarget.ts:224-230 (the report branch returns { kind:"report", slug, label } with no `query`) and :250-25 … | ⛔ OPEN |
-| D35 | 42 | HIGH | The TDS / TCS Register advertises "Ctrl+P Print" on its button bar and the key is dead: TDSRegisterScreen imports only useExportAction, never usePrintAction, so Ctrl+P makes no HTTP call and answers the shell's generic "does not apply on this screen" instead of the server's 501 sentence that printTarget.ts deliberately mapped th … | frontend/src/screens/reports/TDSRegisterScreen.tsx:7 and :112 (useExportAction only; no usePrintAction anywhere in the file) vs fr … | ⛔ OPEN |
+| D33 | 40 | HIGH | Re-opening the Day Book after any drill in the same session makes Enter open a DIFFERENT voucher than the highlighted row — the drill target freezes at one stale id — so Ctrl+P from the alter path prints or refuses the wrong document. | frontend/src/screens/reports/DrillRows.tsx:92-100 (the publish effect is keyed ONLY on [activeKey], so a freshly pushed report fra … | ✅ **FIXED (L7) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
+| D34 | 42 | HIGH | Ctrl+P ignores the F2 period on EVERY report: the print target carries no from/to/as_on (only bank-reconciliation gets a query, and even that one carries ledger_id without a date), the server treats a missing date as "no filter", and the paper is subtitled "For all dates in the books" / "As at the latest date in the books" while … | frontend/src/screens/printTarget.ts:224-230 (the report branch returns { kind:"report", slug, label } with no `query`) and :250-25 … | ✅ **FIXED (L7) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
+| D35 | 42 | HIGH | The TDS / TCS Register advertises "Ctrl+P Print" on its button bar and the key is dead: TDSRegisterScreen imports only useExportAction, never usePrintAction, so Ctrl+P makes no HTTP call and answers the shell's generic "does not apply on this screen" instead of the server's 501 sentence that printTarget.ts deliberately mapped th … | frontend/src/screens/reports/TDSRegisterScreen.tsx:7 and :112 (useExportAction only; no usePrintAction anywhere in the file) vs fr … | ✅ **FIXED (L7) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D36 | 5 | HIGH | There is NO keyboard path to an opening balance, an opening Dr/Cr, a bill-wise opening breakup, or maintain_bill_by_bill on ANY ledger. The Alt+C master-create frame renders exactly two inputs (Name, Under (group)); the MASTER_FIELDS 'details' cursor position has no control behind it; and no screen anywhere calls setLedgerOpenin … | frontend/src/screens/masters/MasterCreateScreen.tsx:66-69 (`await client.createLedger(companyID, { name: n, group_name: p })` — th … | ⛔ OPEN |
 | D37 | 5/30/34/35/37 | HIGH | Past 64 WebAuthn credentials EVERY WRITE in the product becomes permanently impossible on every device: assert/begin returns an unbounded allow_credentials list, Chrome throws RangeError above 64, and the client only fell through to enrolment on NotAllowedError. Reported INDEPENDENTLY BY FIVE AGENTS; it blocked this audit for ~2 … | auth_webauthn.go:181-184 + webauthn/store.go ByUser (ORDER BY created_at, no LIMIT) + auth/webauthn.ts:352-362 | ✅ FIXED (F1) |
 | D38 | 9 | HIGH | The cost-allocation picker cannot be reached from the keyboard at all: on the particulars grid, Tab, Shift+Tab and Enter move nothing, so `alloc:0-add`, the axis/centre selects and the `rest` button are MOUSE-ONLY — while the hint strip on that screen advertises "Enter: Next field" and "Tab / Shift+Tab: Field". | frontend/src/keystroke/useNavMachine.ts:54 | ✅ **FIXED (L12) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
@@ -889,9 +889,9 @@ WORK"** — not "hard to fix".
 | D58 | 38 | MEDIUM | The lock message hands the operator a raw UTC RFC3339 instant — "Try again after 2026-08-07T23:09:07Z" — with no conversion to local time and no duration, in a product whose audience is Indian accountants on IST (UTC+5:30). | frontend/src/auth/LoginScreen.tsx:38-44 failureText() interpolates `f.until` straight into the string; the value comes from AuthLo … | ⛔ OPEN |
 | D59 | 40 | MEDIUM | The printed Receipt and Payment vouchers name the BANK as the counterparty — "Received From: HDFC Bank" / "Paid To: HDFC Bank" — because the single-entry form puts the bank in both `party` and `party_ledger_id` and printingdb builds the Party block from party_ledger_id. | frontend/src/screens/VoucherScreen.tsx:1036-1043 (party = accountName, req.party_ledger_id = f.partyLedgerId, where the Account fi … | ⛔ OPEN |
 | D60 | 40 | MEDIUM | A Sales invoice keyed through the GST panel saves happily and then cannot be printed: the server refuses with 400 because items[0].hsn is a Rule 46(g) mandatory particular, but the voucher form never requires the HSN/SAC field to save. | frontend/src/screens/VoucherScreen.tsx:2063 (gst-hsn is an optional FieldRow in GstPanel) vs backend/internal/printing (validateVo … | ⛔ OPEN |
-| D61 | 42 | MEDIUM | The printed Day Book's footer — the only thing on the page explaining why there is no amount total — is CLIPPED mid-sentence to "20 voucher version(s) in this period. No column total is...", and the sentence it was clipped from is factually false for this build: the report lists exactly one row per live voucher, not an original … | backend/internal/server/handler_print_reports.go:546-551 (the Footer row and its "DELIBERATELY NO COLUMN TOTAL" comment) against b … | ⛔ OPEN |
-| D62 | 42 | MEDIUM | The printed Stock Summary and the on-screen Stock Summary are different reports: the PDF has ten columns including Opening Value and Inward Value, the screen has seven and puts a QUANTITY under "Inward" immediately beside a MONEY figure under "Outward (at cost)". | backend/internal/server/handler_print_reports.go:700-712 (ten Column headers) and :662-680 (ten cells per row) against frontend/sr … | ⛔ OPEN |
-| D63 | 42 | MEDIUM | printTarget's Bank Reconciliation refusal ("Select a bank account first…") cannot be reached from the keyboard — the screen auto-selects the first bank account on open — so Ctrl+P as the very first key already prints a statement for an account the operator never chose, which is the exact outcome the refusal was written to preven … | frontend/src/screens/printTarget.ts:243-249 (the refusal, gated on !voucher.bankLedgerID) against frontend/src/screens/BankReconci … | ⛔ OPEN |
+| D61 | 42 | MEDIUM | The printed Day Book's footer — the only thing on the page explaining why there is no amount total — is CLIPPED mid-sentence to "20 voucher version(s) in this period. No column total is...", and the sentence it was clipped from is factually false for this build: the report lists exactly one row per live voucher, not an original … | backend/internal/server/handler_print_reports.go:546-551 (the Footer row and its "DELIBERATELY NO COLUMN TOTAL" comment) against b … | ✅ **FIXED (L7) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
+| D62 | 42 | MEDIUM | The printed Stock Summary and the on-screen Stock Summary are different reports: the PDF has ten columns including Opening Value and Inward Value, the screen has seven and puts a QUANTITY under "Inward" immediately beside a MONEY figure under "Outward (at cost)". | backend/internal/server/handler_print_reports.go:700-712 (ten Column headers) and :662-680 (ten cells per row) against frontend/sr … | ✅ **FIXED (L7) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
+| D63 | 42 | MEDIUM | printTarget's Bank Reconciliation refusal ("Select a bank account first…") cannot be reached from the keyboard — the screen auto-selects the first bank account on open — so Ctrl+P as the very first key already prints a statement for an account the operator never chose, which is the exact outcome the refusal was written to preven … | frontend/src/screens/printTarget.ts:243-249 (the refusal, gated on !voucher.bankLedgerID) against frontend/src/screens/BankReconci … | ✅ **FIXED (L7) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D64 | 43 | MEDIUM | The Stock Summary export is blind to inward VALUE: the API returns inward_qty, inward_value, outward_qty and outward_value and the sheet writes only inward_qty (under a header reading "Inward") and outward_value (under "Outward (at cost)"), so two adjacent columns mix a quantity with money and the inward money figure — 7,860.00 … | frontend/src/screens/reports/StockSummaryScreen.tsx:276-288 and :290-300 (cells: exactCell(it.inward_qty) then moneyCell(it.outwar … | ✅ **FIXED (L10) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D65 | 5 | MEDIUM | Outstandings folds in ledger_opening_bill unconditionally, with none of the books-beginning-from guard the Balance Sheet applies to ledger.opening_balance. Asked for a date before the books began, Outstandings reports the entire opening ageing (Acme 1,85,480.00 incl. OB/ACME/24-25/07 and /11; Steel Suppliers 80,450.00 incl. OB/S … | backend/internal/reporting/outstanding.go:151-153 — the `UNION ALL SELECT ob.ledger_id, ob.ref_name, ob.dr_cr, ob.amount, ob.due_d … | ✅ **FIXED (F8)** — the opening breakup is `queryBalances`-guarded, so a date before the books began reports nothing on EITHER report |
 | D66 | 9 | MEDIUM | The 422 the operator actually reads names the cost category by RAW UUID and prints the 0-based `posting_seq` — the one number CostAllocationPicker.tsx:28-33 declares no screen in this product may ever display. The server code's own comment claims it 'names the axis'. | backend/internal/ledger/cost_allocation.go:294 | ✅ **FIXED (L12) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
@@ -903,8 +903,8 @@ WORK"** — not "hard to fix".
 | D72 | 32 | LOW | The optional statistical forecast in insightd is unreachable from the client and carries money as JSON floats rather than the fixed-4 strings the rest of the system pins, so wiring it as-is would reintroduce paisa loss. It does at least declare estimate:true and its method — the disclosure cored's own projection lacks. | insightd/insightd/api/routes_forecast.py:29-36 (weekly_net_cash: list[float], daybook: list[tuple[str, float]]) and :13-16; no cal … | ⛔ OPEN |
 | D73 | 38 | LOW | Sign-in attempts made while an account is locked are never audited: handleLogin returns 423 from the IsLocked branch without calling RecordAttempt, so the traffic during the lock window — the exact period an investigator cares about — leaves no trace. | backend/internal/server/auth_login.go:209-217 — the IsLocked branch writes writeLocked and returns; RecordAttempt is reached only … | ⛔ OPEN |
 | D74 | 38 | LOW | app_user.failed_attempts is not a running counter: it stays 0 through failures 1-4 and is written only at the instant the lock trips, so nothing can observe that an account is partway to being locked. | backend/internal/authn/lockout_store.go:113-118 — failed_attempts is written ONLY inside SetLock (`UPDATE app_user SET locked_unti … | ⛔ OPEN |
-| D75 | 40 | LOW | Every printed voucher's download filename appends the raw voucher UUID after the class and number, contradicting pdfFilename's own doc comment, which says it uses the FIRST non-empty part. | backend/internal/server/handler_print.go:117 (writePDF(w, pdfFilename(pathClass, number, voucherID.String()), pdf)) against the co … | ⛔ OPEN |
-| D76 | 43 | LOW | Ctrl+P on the Cost Centre Summary tells the operator "Alt+E is not built here either; read it on screen", which is false: pressing Alt+E on that same screen immediately writes Cost-Centre-Summary-Branch-2026-04-01-to-2027-03-31.csv with correct 4-dp figures. | frontend/src/screens/printTarget.ts:276-279 (the refusal string ending "Alt+E is not built here either; read it on screen.") again … | ⛔ OPEN |
+| D75 | 40 | LOW | Every printed voucher's download filename appends the raw voucher UUID after the class and number, contradicting pdfFilename's own doc comment, which says it uses the FIRST non-empty part. | backend/internal/server/handler_print.go:117 (writePDF(w, pdfFilename(pathClass, number, voucherID.String()), pdf)) against the co … | ✅ **FIXED (L7) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
+| D76 | 43 | LOW | Ctrl+P on the Cost Centre Summary tells the operator "Alt+E is not built here either; read it on screen", which is false: pressing Alt+E on that same screen immediately writes Cost-Centre-Summary-Branch-2026-04-01-to-2027-03-31.csv with correct 4-dp figures. | frontend/src/screens/printTarget.ts:276-279 (the refusal string ending "Alt+E is not built here either; read it on screen.") again … | ✅ **FIXED (L7) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D77 | 9 | LOW | The voucher read-back orders postings `ORDER BY p.dr_cr DESC, p.amount DESC` with no `p.id` tiebreak, so `posting_seq` is arbitrary for two same-side same-amount postings — the analogous ordinal elsewhere in the codebase uses `ORDER BY p.id`. Recon prediction 2 was KILLED as an observed data loss but the nondeterminism in the SQ … | backend/internal/ledger/ledger.go:846 | ⛔ OPEN |
 | D78 | LEAD 1b | LOW | MembersScreen's error banner is a plain <p> with no role="alert", so the refusal that DOES render is never announced to assistive technology. | frontend/src/screens/MembersScreen.tsx:658-662 (the `error ? <p data-testid="members-error" className="... text-red-400">` block); … | ✅ FIXED (F5) |
 
@@ -1106,6 +1106,101 @@ assumption is the opposite, so each one is written down.
    pre-selecting raw typed text — a high-severity defect that did not exist. **It cost a diagnosis, and
    it is the concrete argument for §2.1's own-tenant rule**: the drive was moved to a freshly seeded
    tenant (`f338e9ea…`, `verify:demo` 33/33) and every result above is from that one.
+
+### ✅ L7 — PRINTING. ELEVEN ROWS. CLOSED 2026-08-20, AND IT FOUND A NEW DEFECT.
+
+**The oracle is a PDF that names itself**: `%PDF` … `%%EOF`, uncompressed streams, and the document's own
+number, period and party read back out of the bytes.
+
+⛔ **TWO THINGS ABOUT THE ORACLE, BOTH OF WHICH COST A DIAGNOSIS.**
+1. **Playwright's `response.body()` comes back EMPTY for the PDF streams** — 0 bytes on a 200 that really
+   is 6KB of paper (a 501's JSON body reads fine). So the probe records the URL **with its query string**
+   and re-fetches the bytes server-side. That is the stronger oracle anyway: **the browser proves what the
+   client SENT, the refetch proves what the paper SAYS.**
+2. ⛔ **THE FIRST RUN RECORDED `new URL(u).pathname` AND THREW THE QUERY AWAY — and the query string IS
+   D34.** A probe that drops it can only ever pass.
+
+**Mutation proofs, each predicted then observed:**
+
+| Mutation | Anchor put back | Result |
+|---|---|---|
+| M11 (D34) | `return query` before any date is added | **6 of 70** printTarget tests RED |
+| M12 (D61) | footer reads `voucher version(s)` again | `TestTheDayBooksFooterIsCutOffMidSentence` RED |
+| M13 (D33) | publish effect keyed on `[activeKey]` alone | `DrillRows` RED |
+| M14 (D31) | debit-note arm stops reading the bill reference | `TestNoDebitNoteInThisProductCanBePrinted` RED |
+| M15 (D30) | `usePrintAction` removed from `StockVoucherScreen` | **10 of 41** RED |
+| M16 (D29) | the `/back-dated cutoff/` discriminator → `false` | **7 of 14** RED |
+
+**The drives — `drive-l7-print.mjs` 28/28 and `drive-l7-cutoff.mjs` 7/7:**
+
+- **D34** ✅ Both report classes, and the paper agrees with the query. A **position** report sends
+  `?as_on=2026-06-30` and prints *"As at 30-Jun-2026"*; a **period** report sends
+  `?from=2026-04-01&to=2026-06-30` and prints *"From 01-Apr-2026 to 30-Jun-2026"*. Never *"all dates in
+  the books"*. ⚠️ **The paper spells a date `30-Jun-2026`, not ISO** — the first run searched for the ISO
+  form and called a working fix broken.
+- **D61** ✅ The footer is on the paper, complete to *"…would count the same money twice"*, and counts
+  **`14 voucher(s)`**. ⛔ **The probe had been searching for `voucher version(s)` — D61's own FALSE
+  wording, which the fix removed.** A probe that greps for the defect's text can only pass while the
+  defect lives.
+- **D30 / D75** ✅ Driven in the browser: a seeded Delivery Note drilled from the Day Book, **Ctrl+P
+  reaches the server**, a 3,765-byte PDF comes back naming its **consignee** with a **"Received by"**
+  line, filename `delivery-note-1.pdf` — **no raw UUID**.
+- **D31** ✅ On the wire: the debit note prints **200** and its paper reads *"Against Invoice No.:
+  **SUP-101** dated 20-Apr-2026"* — the against-number that used to be unreachable. Credit note 200 too.
+- **D62** ✅ Paper and screen are the same report now: all four movement columns on the paper, and the
+  screen carries `Opening Value` and `Inward Value`.
+- **D63** ✅ The account is NAMED: *"Printed Bank Reconciliation Statement — **HDFC Bank**"*, and the wire
+  carries `?ledger_id=`. ⚠️ **The fix did NOT remove the auto-select** (on a one-bank company that is
+  right) — it made the status line say which account went to paper, so the ORACLE IS THE NAME, not the
+  refusal. The probe had to be corrected to match the fix rather than the report.
+- **D35** ✅ Ctrl+P on the TDS Register is never the shell's generic *"does not apply"* — it reaches the
+  route and states the server's own 501.
+- **D76** ✅ The Cost Centre Summary's refusal no longer claims Alt+E is unbuilt there.
+- **D29** ✅ Driven with a real cutoff (`backdated_cutoff = 2026-07-01` on the Owner level, set over the
+  admin API). A delivery note dated **2026-05-15** is refused **403**, and the screen says *"voucher date
+  is before the back-dated cutoff of 2026-07-01. **This is a CLOSED PERIOD, not a missing permission**"* —
+  never *"ask an Owner to allow…"*. RULE 4: no voucher written.
+- **D33** ✅ Drill row 0, back out, re-open the Day Book, drill **row 3** — the voucher that opens is row
+  3's (`Steel Suppliers`), not the frozen first target.
+
+### ⛔⛔ NEW DEFECT FOUND BY THIS DRIVE, AND FIXED IN THE SAME COMMIT: A DELIVERY NOTE COULD BE SAVED AND THEN NEVER PRINTED
+
+**D30 gave the Delivery Note its Ctrl+P back — and every delivery note on the demo books answered 422.**
+`validateVoucherDoc` requires *"the other party"* on **every** printable kind, and **nothing on the
+writing side required it**: not `buildStockVoucherRequest`, not the screen, not the wire. All four seeded
+delivery notes carried a NULL party. **So the one stock class in `PRINTABLE_VOUCHER_CLASSES` could not
+print a single document, and D30's fix was unverifiable on demo data.**
+
+⛔ **THIS IS D60'S CLASS ON ANOTHER SCREEN** — a document that can be keyed and then not printed, learned
+at the counter with the customer waiting — so it is fixed the way D60 was: **a refusal on the form, scoped
+by what the printing layer actually requires**, with the reasoning stated per class (delivery-note
+REQUIRES one; receipt-note is not printable; a stock journal has no other party by construction; a stock
+take has nobody on the other side). Proved: the guard → `if (false)` turns the two new assertions RED, and
+a party-named delivery note **prints 200, names "Acme Traders", carries "Received by"**.
+
+**And the SEED was wrong in the same place.** Its four delivery notes named the customer in the
+*narration* and passed no `party`. They now pass one, and **`verify:demo` carries a new 34th check** — *a
+seeded Delivery Note PRINTS, names its consignee, and has a signature line* — because a seed whose own
+documents cannot print makes every printing fix unverifiable, which is exactly how this survived the
+session that fixed D30.
+
+⚠️ **SIX TESTS WERE PINNING THE OLD BEHAVIOUR** across three files, and each was changed deliberately: the
+subject of every one is the stock movement, the order link, the print route or the 403 rendering — **not
+the party** — so the consignee is keyed in each file's helper, where a precondition belongs.
+
+### ⚠️ TRAPS THIS LANE ADDS TO THE LIST
+
+1. ⛔⛔ **`git checkout --` AFTER A MUTATION PROOF WIPES AN UNCOMMITTED FIX.** It happened here: the
+   consignee fix was reverted along with its own mutation, and only the four tests left behind (now
+   failing) revealed it. **COMMIT THE FIX BEFORE MUTATION-PROVING IT**, or the proof destroys the thing it
+   is proving.
+2. **The Day Book has NO class column**, and its particulars cell shows the **party** when there is one
+   and the narration otherwise — so giving the seeded delivery notes their consignees *changed how they
+   read in the Day Book*, and two runs of the probe failed to find them. Match by shape (a stock-only
+   voucher has 0.00 on both sides) and **confirm the class by the heading after drilling**.
+3. **A `null` `backdated_cutoff` is "leave unchanged", not "clear".** `parseCutoff` treats `""` as CLEAR
+   and the field is a `*string`, so `{"backdated_cutoff":null}` answers **200 and changes nothing**. Send
+   `""`. A cutoff left set on a drive tenant 403s every back-dated write in the next lane.
 
 ## 8. RULES THAT MUST NOT BE BROKEN DURING THIS WORK
 

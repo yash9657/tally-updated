@@ -84,6 +84,16 @@ async function openStock(client: CoredClient, type: keyof typeof OPEN_KEY) {
   fireEvent.keyDown(app(), OPEN_KEY[type]);
   await screen.findByTestId("stock-voucher-screen");
   await waitFor(() => expect(screen.getByTestId("stock-item:0")).toBeTruthy());
+  // ⛔ A DELIVERY NOTE NOW REQUIRES A CONSIGNEE — see buildStockVoucherRequest.
+  // Keyed in the HELPER because it is a precondition of keying this class at
+  // all, and is the subject of no test in this file (they are about the print route and how a 403 is rendered).
+  // Found by driving D30: printing refuses any printable voucher with no other
+  // party, so a delivery note saved without one could never be printed.
+  if (type === "delivery-note") {
+    fireEvent.change(screen.getByTestId("stock-party"), {
+      target: { value: "Acme Traders" },
+    });
+  }
 }
 
 /** Key row 0 and save it with Ctrl+A. */

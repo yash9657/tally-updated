@@ -108,6 +108,17 @@ async function openStockVoucher(
   await screen.findByTestId("stock-voucher-screen");
   // The masters load asynchronously; the item picker is useless until they do.
   await waitFor(() => expect(screen.getByTestId("stock-item:0")).toBeTruthy());
+  // ⛔ A DELIVERY NOTE NOW REQUIRES A CONSIGNEE (see buildStockVoucherRequest).
+  // Keyed here rather than in each test because it is a PRECONDITION of keying
+  // this class at all, not the subject of any test below — those are about where
+  // the stock went. Without it the form refuses before any request is made, and
+  // three tests whose subject is the movement failed on a rule they never meant
+  // to exercise.
+  if (type === "delivery-note") {
+    fireEvent.change(screen.getByTestId("stock-party"), {
+      target: { value: "Acme Traders" },
+    });
+  }
   return app;
 }
 
@@ -452,6 +463,77 @@ describe("Alt+F7 Stock Journal — a transfer, not a creation", () => {
     ).toThrow(/From and To godowns are the same/);
   });
 
+  /**
+   * ⛔ A DELIVERY NOTE WITH NO CONSIGNEE — FOUND BY DRIVING D30, AND IT IS D60'S
+   * CLASS ON THIS SCREEN.
+   *
+   * D30 restored Ctrl+P here. The key then reached the server and answered 422
+   * on every delivery note in the demo books: `validateVoucherDoc` requires "the
+   * other party" on every printable kind, and nothing on this side required it —
+   * so the class D30 had just made printable could not print one document. All
+   * four seeded delivery notes carry a NULL party_ledger_id.
+   *
+   * The refusal is scoped to `delivery-note` deliberately. Receipt Note, Stock
+   * Journal and Physical Stock are NOT printable, and a stock journal has no
+   * other party by construction — requiring one there would be this form
+   * inventing a rule the printing layer does not state.
+   */
+  const deliverableLine = (): StockVoucherLine => ({
+    stockItemId: "s1",
+    itemName: "Widget",
+    godownId: "g1",
+    toGodownId: "",
+    batchId: "",
+    fulfilments: [],
+    qty: "5",
+    rate: "10",
+    unit: "Nos",
+  });
+
+  it("⛔ refuses a Delivery Note with no consignee — it could never be printed", () => {
+    expect(() =>
+      buildStockVoucherRequest({ type: "delivery-note", lines: [deliverableLine()] }),
+    ).toThrow(/consignee/i);
+    expect(() =>
+      buildStockVoucherRequest({ type: "delivery-note", lines: [deliverableLine()], party: "   " }),
+    ).toThrow(/consignee/i);
+  });
+
+  it("names the CONSEQUENCE and quotes the server, so the refusal is actionable", () => {
+    let msg = "";
+    try {
+      buildStockVoucherRequest({ type: "delivery-note", lines: [deliverableLine()] });
+    } catch (e) {
+      msg = e instanceof Error ? e.message : String(e);
+    }
+    expect(msg).toMatch(/cannot be printed at all/);
+    expect(msg).toMatch(/goods in transit have no consignee/);
+    expect(msg).toMatch(/Party A\/c Name/);
+  });
+
+  it("⛔ CONTROL: a Delivery Note WITH a consignee is built, and carries it", () => {
+    const req = buildStockVoucherRequest({
+      type: "delivery-note",
+      lines: [deliverableLine()],
+      party: "Acme Traders",
+    });
+    expect(req.party).toBe("Acme Traders");
+    expect(req.inventory).toHaveLength(1);
+  });
+
+  it("⛔ CONTROL: the three NON-printable classes still need no party", () => {
+    // A stock journal has no other party by construction; a receipt note is the
+    // supplier's despatch document; a physical stock count has nobody on the
+    // other side. If any of these starts throwing, the scope has leaked.
+    const transfer: StockVoucherLine = { ...deliverableLine(), toGodownId: "g2" };
+    expect(() =>
+      buildStockVoucherRequest({ type: "stock-journal", lines: [transfer] }),
+    ).not.toThrow();
+    expect(() =>
+      buildStockVoucherRequest({ type: "receipt-note", lines: [deliverableLine()] }),
+    ).not.toThrow();
+  });
+
   it("refuses a transfer whose Rate was left blank, instead of writing stock value off", () => {
     // ⛔ THE ROW IS "KEYED": isKeyedStockLine asks only for a positive quantity,
     // so an empty Rate box is a complete line as far as the grid is concerned,
@@ -529,7 +611,14 @@ describe("Alt+F7 Stock Journal — a transfer, not a creation", () => {
       rate: "",
       unit: "Nos",
     };
-    const req = buildStockVoucherRequest({ type: "delivery-note", lines: [line] });
+    // ⚠️ `party` IS A PRECONDITION OF THIS CLASS NOW, not part of this test's
+    // subject — which is that a blank RATE on an outward still ships, because
+    // the valuer ignores an outward's rate.
+    const req = buildStockVoucherRequest({
+      type: "delivery-note",
+      lines: [line],
+      party: "Acme Traders",
+    });
     expect(req.inventory).toHaveLength(1);
     expect(req.inventory?.[0]?.direction).toBe("OUT");
   });

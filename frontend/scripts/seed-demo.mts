@@ -1339,6 +1339,14 @@ async function main(): Promise<void> {
   const dnAngleLines = [stockLine(itemAngle, "OUT", "30.0000", "25.7500", "772.5000")];
   const dnAngle = await stockVoucher("POST", "delivery-note", {
     voucher_date: "2026-06-30",
+    // ⛔ THE CONSIGNEE, AND IT IS NOT DECORATION. `validateVoucherDoc` refuses to
+    // render ANY printable voucher with no other party, so a delivery note seeded
+    // without one answers 422 on Ctrl+P — "a delivery note with no delivery
+    // address cannot be delivered, and the goods in transit have no consignee".
+    // Every seeded DN used to omit it, which made the class D30 had just made
+    // printable unprintable on the demo books: the drive found four 422s. The
+    // narration already named the customer; now the DOCUMENT does.
+    party: "Acme Traders",
     narration: "Delivery note — MS Angle to Acme Traders against " + SO_NO + " (invoice to follow)",
     inventory: dnAngleLines,
     fulfilments: [
@@ -1369,6 +1377,7 @@ async function main(): Promise<void> {
   //    directions and neither closing position is a pure opening.
   await stockVoucher("POST", "delivery-note", {
     voucher_date: "2026-08-15",
+    party: "Mumbai Metals",     // see dnAngle above: no consignee, no printable note
     narration: "Delivery note — SS Sheet to Mumbai Metals",
     inventory: [stockLine(itemSheet, "OUT", "25.0000", "940.0000", "23500.0000")],
   });
@@ -1381,6 +1390,7 @@ async function main(): Promise<void> {
   //    consume 55 instead of 35 and every later closing value would be wrong.
   const dnAlter = await stockVoucher("POST", "delivery-note", {
     voucher_date: "2026-09-10",
+    party: "Mumbai Metals",
     narration: "Delivery note — MS Angle to Mumbai Metals",
     inventory: [stockLine(itemAngle, "OUT", "20.0000", "25.7500", "515.0000")],
   });
@@ -1389,6 +1399,9 @@ async function main(): Promise<void> {
     "delivery-note",
     {
       voucher_date: "2026-09-10",
+      // ⚠️ AN ALTER RESTATES THE WHOLE VOUCHER, so the consignee has to be
+      // re-stated with it or version 2 loses the party version 1 carried.
+      party: "Mumbai Metals",
       narration: "Delivery note — MS Angle to Mumbai Metals (quantity corrected)",
       inventory: [stockLine(itemAngle, "OUT", "35.0000", "25.7500", "901.2500")],
     },

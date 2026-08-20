@@ -811,6 +811,50 @@ async function main(): Promise<void> {
         : invBreaks.join("; "),
     );
 
+    // ⛔ A SEEDED DELIVERY NOTE MUST PRINT, AND IT USED NOT TO.
+    //
+    // Every DN this seed wrote omitted `party`, and `validateVoucherDoc` refuses
+    // any printable voucher with no other party — so all four answered 422 on
+    // Ctrl+P, and the ONE stock class in PRINTABLE_VOUCHER_CLASSES could not
+    // produce a single document on the demo books. Found by DRIVING D30: the key
+    // reached the server and the server said no. A seed whose own documents
+    // cannot print makes every printing fix unverifiable on demo data, which is
+    // exactly how this survived the session that fixed D30.
+    const dn0 = day.entries.find((e) => e.class.toLowerCase().replace(/[\s_]/g, "-") === "delivery-note");
+    if (!dn0) {
+      check("a seeded Delivery Note is in the Day Book at all", false, "the Day Book lists no delivery-note entry");
+    } else {
+      const dnPath = `/v1/companies/${co}/print/vouchers/delivery-note/${dn0.voucher_id}`;
+      const dn = await getPDF(dnPath);
+      const dnBreaks: string[] = [];
+      if (dn.status !== 200) {
+        dnBreaks.push(
+          `status ${dn.status}` +
+            (dn.status === 422
+              ? " — a delivery note with no consignee cannot be rendered, so the seed must pass `party`: " + bodyDiag(dn)
+              : ": " + bodyDiag(dn)),
+        );
+      } else {
+        if (!dn.text.startsWith("%PDF-")) dnBreaks.push("does not start with %PDF-");
+        if (!dn.text.trimEnd().endsWith("%%EOF")) dnBreaks.push("does not end with %%EOF");
+        // ⛔ THE CONSIGNEE BY NAME. A 200 alone would pass over a note addressed
+        // to nobody, which is the whole defect this check exists for.
+        if (!/Acme Traders|Mumbai Metals/.test(dn.text)) {
+          dnBreaks.push("the paper names no consignee — the party never reached the document");
+        }
+        if (!dn.text.includes("Received by")) {
+          dnBreaks.push("no signature line — a delivery note nobody signed for proves no delivery");
+        }
+      }
+      check(
+        "a seeded Delivery Note PRINTS, names its consignee, and has a signature line",
+        dnBreaks.length === 0,
+        dnBreaks.length === 0
+          ? `${dnPath} -> 200 application/pdf, ${dn.bytes} bytes, names its consignee`
+          : dnBreaks.join("; "),
+      );
+    }
+
     const tbPath = `/v1/companies/${co}/print/reports/trial-balance`;
     const tbPDF = await getPDF(tbPath);
     const tbTail = tbPDF.text.trimEnd();
