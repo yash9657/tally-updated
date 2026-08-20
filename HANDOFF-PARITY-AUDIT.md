@@ -867,9 +867,9 @@ WORK"** — not "hard to fix".
 | D36 | 5 | HIGH | There is NO keyboard path to an opening balance, an opening Dr/Cr, a bill-wise opening breakup, or maintain_bill_by_bill on ANY ledger. The Alt+C master-create frame renders exactly two inputs (Name, Under (group)); the MASTER_FIELDS 'details' cursor position has no control behind it; and no screen anywhere calls setLedgerOpenin … | frontend/src/screens/masters/MasterCreateScreen.tsx:66-69 (`await client.createLedger(companyID, { name: n, group_name: p })` — th … | ⛔ OPEN |
 | D37 | 5/30/34/35/37 | HIGH | Past 64 WebAuthn credentials EVERY WRITE in the product becomes permanently impossible on every device: assert/begin returns an unbounded allow_credentials list, Chrome throws RangeError above 64, and the client only fell through to enrolment on NotAllowedError. Reported INDEPENDENTLY BY FIVE AGENTS; it blocked this audit for ~2 … | auth_webauthn.go:181-184 + webauthn/store.go ByUser (ORDER BY created_at, no LIMIT) + auth/webauthn.ts:352-362 | ✅ FIXED (F1) |
 | D38 | 9 | HIGH | The cost-allocation picker cannot be reached from the keyboard at all: on the particulars grid, Tab, Shift+Tab and Enter move nothing, so `alloc:0-add`, the axis/centre selects and the `rest` button are MOUSE-ONLY — while the hint strip on that screen advertises "Enter: Next field" and "Tab / Shift+Tab: Field". | frontend/src/keystroke/useNavMachine.ts:54 | ✅ **FIXED (L12) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
-| D39 | 9 | HIGH | Ctrl+A on a voucher whose cost split is INCOMPLETE on one axis creates every ledger the operator named BEFORE the server refuses, leaving an orphan account in the chart of accounts with no voucher behind it. Reproduced on BOTH grids (single entry and the Journal's double entry). Recon prediction 1 CONFIRMED. | frontend/src/screens/VoucherScreen.tsx:1057 | ⛔ OPEN |
+| D39 | 9 | HIGH | Ctrl+A on a voucher whose cost split is INCOMPLETE on one axis creates every ledger the operator named BEFORE the server refuses, leaving an orphan account in the chart of accounts with no voucher behind it. Reproduced on BOTH grids (single entry and the Journal's double entry). Recon prediction 1 CONFIRMED. | frontend/src/screens/VoucherScreen.tsx:1057 | ✅ **FIXED (L6) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D40 | 17 | MEDIUM | Non-existent challan sub-routes answer 403 "unmapped route: access denied" rather than 404/405, so "this route was never built" is indistinguishable from "your level is not permitted". This KILLS the recon's literal proof that PATCH returns 405. | backend/internal/server/auth_middleware.go:967 | ⛔ OPEN |
-| D41 | 17 | MEDIUM | LEAD, not row 17: opening an existing Purchase voucher for alteration from the Day Book and pressing Ctrl+A created a new ledger ("Purchases") over the wire and then failed the voucher write with "Error: invalid gst line gst_rate_pct". A refused alter left a master behind. | frontend/src/screens/VoucherScreen.tsx:1462 | ⛔ OPEN |
+| D41 | 17 | MEDIUM | LEAD, not row 17: opening an existing Purchase voucher for alteration from the Day Book and pressing Ctrl+A created a new ledger ("Purchases") over the wire and then failed the voucher write with "Error: invalid gst line gst_rate_pct". A refused alter left a master behind. | frontend/src/screens/VoucherScreen.tsx:1462 | ✅ **FIXED (L6) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D42 | 24 | MEDIUM | F11 Features asserts a capability the build does not have: the "Negative stock" row is labelled "Always on" and its note says "A company can opt in per-company", while the screen offers no toggle and nothing on it can write the flag. The product's own statement of what is switchable is false. | frontend/src/screens/FeaturesScreen.tsx:291-293 (state "always" renders as "Always on" via the map at FeaturesScreen.tsx:486; the … | ✅ FIXED (own) |
 | D43 | 24 | MEDIUM | POST /v1/companies accepts `"allow_negative_stock": true` with 201 Created and silently discards it — the caller gets a success for a setting that was never applied. | backend/internal/server/server.go:1188-1240 (handleCreateCompany / decodeJSON tolerates the unknown field) with backend/internal/s … | ⛔ OPEN |
 | D44 | 27 | MEDIUM | The Sales/Purchase Order Book flags NOTHING as overdue in its default (no as-at) state, because Overdue() short-circuits to false when asOn is empty — so the view an operator actually opens reports zero late deliveries. | backend/internal/reporting/orderbook.go:159 (the `// asOn == ""` guard at :160) | ⛔ OPEN |
@@ -887,8 +887,8 @@ WORK"** — not "hard to fix".
 | D56 | 38 | MEDIUM | Locking an account does not revoke the sessions it already holds: a locked subject's existing bearer keeps working for the full 3600-second token TTL, including authenticated WRITES. | backend/internal/server/auth_login.go:206-217 (IsLocked is consulted only on POST /auth/login) and loginTokenTTLSeconds (the 200 b … | ⛔ OPEN |
 | D57 | 38 | MEDIUM | The lockout threshold, window and duration are hardcoded constants with no configuration path at all, so "N is the configured N" cannot be satisfied — N is a compile-time 5, and there is no per-deployment or per-company setting, nor the exponential backoff the project's own design docs promise. | backend/internal/server/server.go:231 (authn.NewLocker(authn.DefaultLockoutPolicy(), …) — the policy is constructed inline from a … | ⛔ OPEN |
 | D58 | 38 | MEDIUM | The lock message hands the operator a raw UTC RFC3339 instant — "Try again after 2026-08-07T23:09:07Z" — with no conversion to local time and no duration, in a product whose audience is Indian accountants on IST (UTC+5:30). | frontend/src/auth/LoginScreen.tsx:38-44 failureText() interpolates `f.until` straight into the string; the value comes from AuthLo … | ⛔ OPEN |
-| D59 | 40 | MEDIUM | The printed Receipt and Payment vouchers name the BANK as the counterparty — "Received From: HDFC Bank" / "Paid To: HDFC Bank" — because the single-entry form puts the bank in both `party` and `party_ledger_id` and printingdb builds the Party block from party_ledger_id. | frontend/src/screens/VoucherScreen.tsx:1036-1043 (party = accountName, req.party_ledger_id = f.partyLedgerId, where the Account fi … | ⛔ OPEN |
-| D60 | 40 | MEDIUM | A Sales invoice keyed through the GST panel saves happily and then cannot be printed: the server refuses with 400 because items[0].hsn is a Rule 46(g) mandatory particular, but the voucher form never requires the HSN/SAC field to save. | frontend/src/screens/VoucherScreen.tsx:2063 (gst-hsn is an optional FieldRow in GstPanel) vs backend/internal/printing (validateVo … | ⛔ OPEN |
+| D59 | 40 | MEDIUM | The printed Receipt and Payment vouchers name the BANK as the counterparty — "Received From: HDFC Bank" / "Paid To: HDFC Bank" — because the single-entry form puts the bank in both `party` and `party_ledger_id` and printingdb builds the Party block from party_ledger_id. | frontend/src/screens/VoucherScreen.tsx:1036-1043 (party = accountName, req.party_ledger_id = f.partyLedgerId, where the Account fi … | ✅ **FIXED (L6) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
+| D60 | 40 | MEDIUM | A Sales invoice keyed through the GST panel saves happily and then cannot be printed: the server refuses with 400 because items[0].hsn is a Rule 46(g) mandatory particular, but the voucher form never requires the HSN/SAC field to save. | frontend/src/screens/VoucherScreen.tsx:2063 (gst-hsn is an optional FieldRow in GstPanel) vs backend/internal/printing (validateVo … | ✅ **FIXED (L6) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D61 | 42 | MEDIUM | The printed Day Book's footer — the only thing on the page explaining why there is no amount total — is CLIPPED mid-sentence to "20 voucher version(s) in this period. No column total is...", and the sentence it was clipped from is factually false for this build: the report lists exactly one row per live voucher, not an original … | backend/internal/server/handler_print_reports.go:546-551 (the Footer row and its "DELIBERATELY NO COLUMN TOTAL" comment) against b … | ✅ **FIXED (L7) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D62 | 42 | MEDIUM | The printed Stock Summary and the on-screen Stock Summary are different reports: the PDF has ten columns including Opening Value and Inward Value, the screen has seven and puts a QUANTITY under "Inward" immediately beside a MONEY figure under "Outward (at cost)". | backend/internal/server/handler_print_reports.go:700-712 (ten Column headers) and :662-680 (ten cells per row) against frontend/sr … | ✅ **FIXED (L7) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D63 | 42 | MEDIUM | printTarget's Bank Reconciliation refusal ("Select a bank account first…") cannot be reached from the keyboard — the screen auto-selects the first bank account on open — so Ctrl+P as the very first key already prints a statement for an account the operator never chose, which is the exact outcome the refusal was written to preven … | frontend/src/screens/printTarget.ts:243-249 (the refusal, gated on !voucher.bankLedgerID) against frontend/src/screens/BankReconci … | ✅ **FIXED (L7) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
@@ -907,6 +907,12 @@ WORK"** — not "hard to fix".
 | D76 | 43 | LOW | Ctrl+P on the Cost Centre Summary tells the operator "Alt+E is not built here either; read it on screen", which is false: pressing Alt+E on that same screen immediately writes Cost-Centre-Summary-Branch-2026-04-01-to-2027-03-31.csv with correct 4-dp figures. | frontend/src/screens/printTarget.ts:276-279 (the refusal string ending "Alt+E is not built here either; read it on screen.") again … | ✅ **FIXED (L7) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D77 | 9 | LOW | The voucher read-back orders postings `ORDER BY p.dr_cr DESC, p.amount DESC` with no `p.id` tiebreak, so `posting_seq` is arbitrary for two same-side same-amount postings — the analogous ordinal elsewhere in the codebase uses `ORDER BY p.id`. Recon prediction 2 was KILLED as an observed data loss but the nondeterminism in the SQ … | backend/internal/ledger/ledger.go:846 | ⛔ OPEN |
 | D78 | LEAD 1b | LOW | MembersScreen's error banner is a plain <p> with no role="alert", so the refusal that DOES render is never announced to assistive technology. | frontend/src/screens/MembersScreen.tsx:658-662 (the `error ? <p data-testid="members-error" className="... text-red-400">` block); … | ✅ FIXED (F5) |
+| **D79** | 17 | HIGH | ⛔ **An accounting-mode ALTER RE-POINTED THE VOUCHER'S INCOME/EXPENSE HEAD — DATA LOSS, not an orphan master.** `buildGstRequest` always `ensureLedger`d the orientation's canonical base, so altering a purchase booked to any other head silently moved it. Driven: `Dr Raw Material Purchases 30000` became `Dr Purchases 30000` on an alter that edited NOTHING, and a `Purchases` ledger was minted to receive it. The voucher still balances and the tax is unchanged, so no trigger, total or server check disagrees — the company's expense analysis simply changes because somebody LOOKED at a voucher | `frontend/src/screens/VoucherScreen.tsx` `buildGstRequest` (the unconditional `ensureLedger(orientation.baseLedger)`) | ✅ **FIXED (L6) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** `baseLegFromView` hydrates the head; the canonical base is now the fresh-create fallback only. See §7.5 |
+| **D80** | 9 | MEDIUM | `Alt+G > Vouchers` is broken and always has been: `canonicalReportName("Vouchers")` returns undefined, the `??` falls back to the raw label, and the Go To pushes the **Unwired** screen | `frontend/src/screens/reports/*` + `resolveGotoSelection` | ⛔ OPEN — found by the 11-lane wave, registered here 2026-08-20 |
+| **D81** | 17 | MEDIUM | A server-only refusal (cutoff, ACL, duplicate number, negative stock) still leaves **masters** behind on the voucher path: a posting needs a real uuid and cored has no `DELETE /ledgers`. The DRAFT path discloses its orphans via `DraftAcceptFailedError`; the voucher path does not | `frontend/src/screens/VoucherScreen.tsx` (resolveMasters) | ⛔ OPEN — registered 2026-08-20. ⚠️ The FORM-side refusals are closed (L6/L12 drives prove Ctrl+A mints nothing when the form refuses); this is the SERVER-refusal half |
+| **D82** | 17 | LOW | The HSN refusal bites the ALTER path: an old sales invoice stored without an HSN cannot be re-saved without keying one. Arguably correct (it cannot be printed either way) but it is a new refusal on existing data | `frontend/src/screens/VoucherScreen.tsx` `HSN_REQUIRED_CLASSES` | ⛔ OPEN — registered 2026-08-20, and it is a JUDGEMENT rather than a bug |
+| **D83** | 5 | LOW | Two SIMULTANEOUS posts with the same hand-typed bill number on one party can both pass the uniqueness check. Needs an index `bill_allocation` cannot carry, because duplicate names are legal for AGAINST/ON_ACCOUNT/caller-named openers. ⚠️ **The sequential case — what an operator actually produces — is closed** | `backend/internal/ledger/` bill uniqueness | ⛔ OPEN — registered 2026-08-20 |
+| **D84** | — | MEDIUM | ⛔ **`api/mock.ts` IS LOOSER THAN CORED AND IS A SOURCE OF FALSE GREEN — three lanes hit it.** It accepts an empty ledger name and an unparseable `gst_rate_pct` that `server.go` 400s on, reproduces D44 verbatim, skips D6's party-group and D69's due-date checks, and does not mirror `createLedger`'s opening-breakup refusal. Needs a STRUCTURAL mock-vs-server gate, not three patches | `frontend/src/api/mock.ts` | ⛔ OPEN — registered 2026-08-20 |
 
 ### ⛔⛔ §7.2 — THE BACK-DATED CUTOFF TOOK **SIX** DOORS TO CLOSE, AND THAT IS THE SESSION'S MAIN LESSON
 
@@ -1201,6 +1207,63 @@ the party** — so the consignee is keyed in each file's helper, where a precond
 3. **A `null` `backdated_cutoff` is "leave unchanged", not "clear".** `parseCutoff` treats `""` as CLEAR
    and the field is a `*string`, so `{"backdated_cutoff":null}` answers **200 and changes nothing**. Send
    `""`. A cutoff left set on a drive tenant 403s every back-dated write in the next lane.
+
+### ✅ L6 — THE VOUCHER FORM. D39, D41, D59, D60. CLOSED 2026-08-20, AND D41'S DRIVE FOUND **D79**.
+
+**Mutation proofs:** M17 (`f.baseLedgerId ||` → `"" ||`) turns the two new alter tests RED with the
+CONTROL green. D39/D41's form-side controls are proved by the L12 wire assertions (Ctrl+A on a refused
+form makes **no request and mints no ledger**) and by M9/M16.
+
+**The drives — `drive-l6-form.mjs` 11/11, `drive-l6-alter.mjs` 5/5:**
+
+- **D59** ✅ Driven on a payment **keyed through the single-entry form**, not a seeded one — which is where
+  the defect lived. Account `HDFC Bank`, particular `Office Rent 1750`, saved through the passkey, and the
+  paper reads **"Paid To Office Rent"**. Never the bank. Read back as `postgres`:
+  `Cr HDFC Bank 1750.0000 / Dr Office Rent 1750.0000`, and **`party_ledger_id` is NULL with the party TEXT
+  = "Office Rent"** — the bank is no longer in both fields, which was the root cause.
+  ⚠️ The seeded receipt and payment print *"Received From Acme Traders"* / *"Paid To Steel Suppliers"*
+  too, but those were never the defect: the seed always passed a real party.
+- **D60** ✅ A Sales invoice with no HSN is refused **by the form, before the wire** — no voucher POST and
+  **no ledger POST** — citing *"a MANDATORY particular of a tax invoice (CGST Rules 2017, Rule 46(g)), so
+  an invoice saved without one cannot be printed"*.
+- **D41** ✅ A seeded Purchase drilled from the Day Book opens as `Purchase Voucher (Alteration)`, Ctrl+A
+  saves (403 → step-up → **200**), and **the chart of accounts is the same size afterwards (26 → 26)**.
+
+### ⛔⛔ D79 — WHAT THE D41 DRIVE ACTUALLY FOUND, AND IT IS THE WORST DEFECT THIS SESSION HAS SEEN
+
+D41's own assertions passed. **The ledger COUNT did not: 26 → 27.** Reading the books back:
+
+```
+version 1:  Dr Raw Material Purchases  30000.0000
+version 2:  Dr Purchases               30000.0000     <- an alter that edited NOTHING
+```
+
+`buildGstRequest` ensured the ORIENTATION'S CANONICAL base on every accept, so **any accounting-mode GST
+voucher booked to a head other than "Domestic Sales" / "Purchases" was silently re-pointed the first time
+anyone opened it and pressed Ctrl+A**, and a canonical ledger was minted to receive it. This was predicted
+in `HANDOFF-WAVE-A-RECOVERY.md` §6 item 1 and had never been registered or fixed; it is now **D79**.
+
+⛔ **IT IS WORSE THAN AN ORPHAN MASTER.** An orphan is visible in the chart of accounts. This restates the
+**Profit & Loss** — the voucher still balances, the tax is unchanged, and no trigger, total or server check
+disagrees. The only visible symptom is that a company's expense analysis changes because somebody LOOKED
+at a voucher.
+
+**The fix** is §6's own prescription: `baseLegFromView` reads the head off the stored postings (base side,
+minus the party leg by uuid, minus the three tax legs by name) and the builder prefers it; the canonical
+base survives as the **fresh-create fallback only**. Re-driven on a fresh tenant: **5/5**, ledgers
+**26 → 26**, version 2 keeps `Raw Material Purchases`, and **no `Purchases` ledger exists**.
+
+⚠️ **A CONTROL SHIPPED WITH IT**: a voucher booked to the canonical head still alters cleanly. Without it,
+"preserve whatever was hydrated" would be satisfied by a builder that had stopped resolving a base ledger
+at all.
+
+### 📋 THE WAVE'S SIX FINDINGS ARE NOW REGISTERED AS **D79–D84**
+
+`HANDOFF-WAVE-A-RECOVERY.md` §6 said *"ADD THESE TO §7.1"* and nobody had. They are rows now, so they can
+be worked and counted: **D79** (fixed above), **D80** `Alt+G > Vouchers` pushes the Unwired screen,
+**D81** a SERVER-side refusal still leaves masters behind (the form-side half is closed and driven),
+**D82** the HSN refusal on the alter path (a judgement, not a bug), **D83** concurrent duplicate manual
+bill numbers, **D84** `api/mock.ts` is looser than cored and is a source of false green.
 
 ## 8. RULES THAT MUST NOT BE BROKEN DURING THIS WORK
 

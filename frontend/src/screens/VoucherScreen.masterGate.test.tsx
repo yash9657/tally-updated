@@ -492,12 +492,30 @@ describe("⛔ the master gate: the ALTER path (D41, DRIVEN)", () => {
     expect((req as { gst?: GSTRequest }).gst?.lines?.[0]?.gst_rate_pct).toBe("18");
     // A PURCHASE, so the tax ledgers are the INPUT ones — the class's, never
     // "Output CGST" (which would book a reclaimable credit against a liability).
+    //
+    // ⛔⛔ THIS EXPECTATION USED TO INCLUDE "Purchases", AND IT WAS PINNING D79.
+    // `storePlainPurchase` books its expense to **Consumables**, and the builder
+    // ensured the orientation's CANONICAL base on every accept — so this alter
+    // minted a "Purchases" ledger and RE-POINTED the voucher's expense head to
+    // it. The test wrote that down as the expected outcome. Driving D41 in a
+    // browser found the same thing in real books (`Dr Raw Material Purchases`
+    // became `Dr Purchases` on an alter that edited nothing), and the fix
+    // hydrates the stored head instead. So the canonical base is NOT created
+    // here any more, and that is the point.
     expect(createdLedgerNames(spies).sort()).toEqual([
       "Input CGST",
       "Input IGST",
       "Input SGST",
-      "Purchases",
     ]);
+    // ⛔ AND THE HEAD THE VOUCHER WAS BOOKED TO IS THE ONE IT KEEPS.
+    const debitLedgers = (req as { postings: PostingRequest[] }).postings
+      .filter((p) => p.dr_cr === "DR")
+      .map((p) => p.ledger_id);
+    const consumables = (await base.listLedgers("co-1")).ledgers.find(
+      (l) => l.name === "Consumables",
+    );
+    expect(consumables).toBeTruthy();
+    expect(debitLedgers).toContain(consumables!.id);
   });
 });
 
