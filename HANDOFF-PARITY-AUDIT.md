@@ -710,6 +710,7 @@ have now been driven end to end in a real browser against real cored.**
 | **NOT DRIVABLE AT ALL** | **1** — row **32** (cash-flow projection / anomalies): four doors tried, no keystroke reaches it and the mandated disclosure has no renderer |
 | **Predicted defects KILLED** | **1** — **LEAD 1b** on `MembersScreen`, driven with a control AND at 20× CPU throttle. It was deliberately left unpatched for exactly this reason, and that call is now vindicated |
 | **DEFECTS FOUND** | ⛔ **78** (after merging duplicate reports of one shared defect) — **39 high, 28 medium, 11 low.** Register in §7.1 |
+| ⚠️ **Superseded — this table is the 2026-08-07 snapshot** | The register has since grown to **85** (D79–D84 registered from the wave's §6 findings; **D85** found by the L11 drive) and **32 are still open.** ⛔ **§7.1's own header is the live count — read it, not this row.** |
 | **FIXED this pass** | **9 fully + 3 partial**, every one carrying a unit test and an EXECUTED mutation proof whose failure was checked against the prediction. §7.1 marks them |
 | **STILL OPEN** | ⛔ **66.** This is now a BACKLOG, not an unknown — every one is traced to file:line with a proposed fix |
 | **TRUE reachable number** | ⛔ **The honest answer is that "reachable" was the wrong question.** All 34 rows do OPEN from the keyboard — **but only 5 of the 34 have ever been driven and found clean**, all five in earlier passes. **29 of 34 carry at least one defect an operator would hit** (28 defective + row 32, which opens nowhere at all) |
@@ -814,7 +815,7 @@ have now been driven end to end in a real browser against real cored.**
 
 ---
 
-## 7.1 ⛔ THE DEFECT REGISTER — 78 DEFECTS, 66 STILL OPEN
+## 7.1 ⛔ THE DEFECT REGISTER — 85 DEFECTS, 32 STILL OPEN
 
 **This is the audit's actual product.** Every row below was found by DRIVING, is traced to file:line, and
 carries a proposed fix in the source material. ⛔ **Do not re-derive these from scratch** — that is the
@@ -844,14 +845,14 @@ WORK"** — not "hard to fix".
 | D13 | 3 | HIGH | The Outstandings screen can never show the PAYABLE side and never shows the per-bill breakdown, so no on-screen surface can verify any bill-wise reference on a supplier. The server serves both (kind=PAYABLE returns 200; the response already carries a per-bill `bills` array) — the client never sends `kind` and never reads `.bills … | frontend/src/screens/reports/ReportScreens.tsx:550-551 (`const query: { as_on?: string } = {}` — `kind` is never a member and neve … | ⚠️ **PARTIAL (F8)** — the per-bill breakdown is on screen and exported (that half is DONE and driven). ⛔ **The PAYABLE side is deliberately NOT a `?kind=` toggle:** `REPORT_NAMES`' own Order Book note settles it — two directions must be two report NAMES, because the PDP decides on the report name and a query parameter is INVISIBLE to it, so a toggle would make "may see debtors, not creditors" an unwritable rule. It needs the Order Book's treatment: a `Payables` report name + a server resource + a migration. **A BUILD, not a patch** |
 | D14 | 3 | HIGH | BONUS, found by driving: normalize.ts folds the Meta (Command) key into Ctrl, so macOS's universal Cmd+A Select All resolves to Ctrl+A = ACCEPT. Selecting the contents of a voucher field to retype it POSTS THE VOUCHER. | frontend/src/keystroke/normalize.ts:132 — `const ctrl = Boolean(ev.ctrlKey // ev.metaKey);` | ✅ FIXED (F2) |
 | D15 | 30 | HIGH | Accepting the same OCR draft twice posts a SECOND, identical purchase voucher. The draft never leaves status "ready" and stays in the inbox after a successful accept, so nothing on screen or on the server stops the operator (or a double keypress) from filing the same supplier invoice again. The one guard that exists — UNIQUE (co … | frontend/src/screens/vouchers/draftAccept.ts:326-338 (acceptPurchaseDraft: POSTs and returns; never marks the draft consumed) + fr … | ⚠️ PARTIAL (F6) |
-| D16 | 30 | HIGH | PII is not redacted on the values that BECOME the voucher. A PAN placed in the OCR-inferred invoice number is written verbatim into voucher_version.voucher_no, and a raw Aadhaar in a line description becomes a PERMANENT ledger master name — while the draft panel tells the operator "PII redacted: 4 (PAN 1, IFSC 1, GSTIN 1, AADHAA … | insightd/insightd/pipeline.py:69-71 (fixture is extracted from the RAW doc, then stashed) + insightd/insightd/adapters/fakes.py:25 … | ⛔ OPEN |
+| D16 | 30 | HIGH | PII is not redacted on the values that BECOME the voucher. A PAN placed in the OCR-inferred invoice number is written verbatim into voucher_version.voucher_no, and a raw Aadhaar in a line description becomes a PERMANENT ledger master name — while the draft panel tells the operator "PII redacted: 4 (PAN 1, IFSC 1, GSTIN 1, AADHAA … | insightd/insightd/pipeline.py:69-71 (fixture is extracted from the RAW doc, then stashed) + insightd/insightd/adapters/fakes.py:25 … | ✅ **FIXED (L11) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D17 | 30 | HIGH | The bill-wise references the draft panel renders — and explicitly certifies as "referenced in full (21240.0000)" — are silently dropped. draftBodyToVoucherRequest builds no bill_allocations key, so the accepted purchase writes zero bill_allocation rows, while a normal keyboard F9 purchase does send them. | frontend/src/screens/vouchers/draftAccept.ts:42-88 (draftBodyToVoucherRequest: postings + header scalars + gst only; no bill_alloc … | ⚠️ PARTIAL (F6) |
-| D18 | 30 | HIGH | A draft created through the Bill Inbox screen carries NO input-tax posting legs and is unbalanced by exactly the tax (debits 1000.0000 vs credit 1180.0000), so a taxed bill filed through the screen's own front door can never post. The screen sends tenant: { company_id } only, the fixture's own tenant block is ignored, so ctx.cgs … | frontend/src/screens/BillInboxScreen.tsx:150-154 and :190-196 (tenant: { company_id: companyID }) + insightd/insightd/api/routes_d … | ⛔ OPEN |
-| D19 | 30 | HIGH | An INTRA-state bill is derived as IGST. Because the screen supplies no tenant ledgers, the supplier can never be matched, supplier_state stays None, and tax.py only concludes intra-state when BOTH state codes are non-None and equal — so the else branch books the whole tax as IGST for a fixture whose OCR says supplier state 27 an … | insightd/insightd/adapters/mapper.py:194-199 and :229-237 (supplier_state resolved only from ctx.ledgers) + insightd/insightd/adap … | ⛔ OPEN |
+| D18 | 30 | HIGH | A draft created through the Bill Inbox screen carries NO input-tax posting legs and is unbalanced by exactly the tax (debits 1000.0000 vs credit 1180.0000), so a taxed bill filed through the screen's own front door can never post. The screen sends tenant: { company_id } only, the fixture's own tenant block is ignored, so ctx.cgs … | frontend/src/screens/BillInboxScreen.tsx:150-154 and :190-196 (tenant: { company_id: companyID }) + insightd/insightd/api/routes_d … | ✅ **FIXED (L11) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
+| D19 | 30 | HIGH | An INTRA-state bill is derived as IGST. Because the screen supplies no tenant ledgers, the supplier can never be matched, supplier_state stays None, and tax.py only concludes intra-state when BOTH state codes are non-None and equal — so the else branch books the whole tax as IGST for a fixture whose OCR says supplier state 27 an … | insightd/insightd/adapters/mapper.py:194-199 and :229-237 (supplier_state resolved only from ctx.ledgers) + insightd/insightd/adap … | ✅ **FIXED (L11) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D20 | 31 | HIGH | The NL answer does not match the report. "receivables" / "top debtors" reports 133920.0000 against the Outstandings report's 253920.0000 (short by 120000.0000) and "payables" reports 36050.0000 against 104050.0000 (short by 68000.0000). The DSL's outstandings entity reads bill_allocation only and never unions ledger_opening_bill … | backend/internal/query/whitelist.go:312-341 (EntityOutstandings skeleton = `bill_allocation ba JOIN voucher_head ... JOIN ledger . … | ⛔ OPEN |
 | D21 | 31 | HIGH | "sales last month", "sales last quarter" and "sales last year" silently answer for the CURRENT period. relativeRange has no last/previous branch; the substring "month" in "last month" matches the first case, so the window becomes the 1st..last of TODAY's month. The DSL that would reveal it is behind a collapsed-by-default panel. | backend/internal/query/translate.go:196-210 (relativeRange: only `this month/month`, `this quarter/quarter`, `this year/year`) rea … | ⛔ OPEN |
 | D22 | 32 | HIGH | The row's requirement fails at the first hurdle: there is no way to reach a cash-flow projection or the anomaly list from the keyboard, so the mandated disclosure cannot be rendered because there is no renderer. Four doors tried and closed: the 18-entry Gateway menu has no such entry; Alt+G Go To offers none of "Cash Flow"/"Cash … | frontend/src/screens/GatewayScreen.tsx:4-60 (GATEWAY_MENU — no cash-flow/anomaly entry) + frontend/src/keystroke/navMachine.ts:650 … | ⛔ OPEN |
-| D23 | 32 | HIGH | The cash-flow response carries no disclosure that it is a projection and no statement of its basis. The complete key set is as_on, horizon_days, bucket_days, opening_cash, buckets, beyond_horizon, overdue_folded_into_first_bucket — seven keys, none containing projection/estimate/basis/assumed/method. Yet the engine invents a set … | backend/internal/server/handler_forecast.go:105-118 (cashFlowJSON — the complete key set) + backend/internal/forecast/forecast.go: … | ⛔ OPEN |
+| D23 | 32 | HIGH | The cash-flow response carries no disclosure that it is a projection and no statement of its basis. The complete key set is as_on, horizon_days, bucket_days, opening_cash, buckets, beyond_horizon, overdue_folded_into_first_bucket — seven keys, none containing projection/estimate/basis/assumed/method. Yet the engine invents a set … | backend/internal/server/handler_forecast.go:105-118 (cashFlowJSON — the complete key set) + backend/internal/forecast/forecast.go: … | ✅ **FIXED (L11) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D24 | 33 | HIGH | Every invite is delivered to NOBODY and the screen then tells the operator "invitation sent". The invite form collects no email address, notify falls back to the SUBJECT as the recipient, LogSender sees no '@', logs NO EMAIL ON FILE and returns nil, so settle() records status='sent' and deliveryText renders that as "invitation s … | frontend/src/screens/MembersScreen.tsx:264-267 posts only {subject, security_level_name} (the InviteMemberRequest.email field at f … | ✅ FIXED (F5) |
 | D25 | 33 | HIGH | Signing in never claims a pending invite. GET /v1/me is the only seam that converts an invite into a membership, and the frontend calls it from exactly ONE place -- the F3 Select Company screen. An invited user who signs in therefore does not land in the company they were invited to. | backend/internal/server/handler_admin.go:660-690 (handleMe is the claim seam: 'claim first, then list'); the ONLY frontend caller … | ⛔ OPEN |
 | D26 | 33 | HIGH | When ?company=<id> is refused by the server, the app SILENTLY creates a brand-new company and makes the user its Owner, reporting the substitution only to the devtools console. A user who was invited as a restricted level lands on an empty tenant with FULL access, and every screen looks correct. | frontend/src/app/CompanyContext.tsx:129-140 isUnusablePersistedId() treats 403 as 'unusable'; CompanyContext.tsx:188-245 the boots … | ✅ FIXED (F4) |
@@ -913,6 +914,7 @@ WORK"** — not "hard to fix".
 | **D82** | 17 | LOW | The HSN refusal bites the ALTER path: an old sales invoice stored without an HSN cannot be re-saved without keying one. Arguably correct (it cannot be printed either way) but it is a new refusal on existing data | `frontend/src/screens/VoucherScreen.tsx` `HSN_REQUIRED_CLASSES` | ⛔ OPEN — registered 2026-08-20, and it is a JUDGEMENT rather than a bug |
 | **D83** | 5 | LOW | Two SIMULTANEOUS posts with the same hand-typed bill number on one party can both pass the uniqueness check. Needs an index `bill_allocation` cannot carry, because duplicate names are legal for AGAINST/ON_ACCOUNT/caller-named openers. ⚠️ **The sequential case — what an operator actually produces — is closed** | `backend/internal/ledger/` bill uniqueness | ⛔ OPEN — registered 2026-08-20 |
 | **D84** | — | MEDIUM | ⛔ **`api/mock.ts` IS LOOSER THAN CORED AND IS A SOURCE OF FALSE GREEN — three lanes hit it.** It accepts an empty ledger name and an unparseable `gst_rate_pct` that `server.go` 400s on, reproduces D44 verbatim, skips D6's party-group and D69's due-date checks, and does not mirror `createLedger`'s opening-breakup refusal. Needs a STRUCTURAL mock-vs-server gate, not three patches | `frontend/src/api/mock.ts` | ⛔ OPEN — registered 2026-08-20 |
+| **D85** | 30 | MEDIUM | ⛔ **The duplicate-supplier-bill guard keys on the POST-REDACTION `voucher_no`, so every PII-shaped invoice number collapses to ONE key and a legitimate second bill is refused.** `assertNotAlreadyOnTheBooks` matches on `body.voucher_no`, which for a bill whose invoice number is a PAN/GSTIN/Aadhaar is the constant token `[PAN REDACTED]` — not the supplier's number. Two DIFFERENT PAN-shaped invoice numbers from one supplier on one date are therefore the same bill as far as this check is concerned, and the second accept is refused. Its own error text advises *"If this is genuinely a second bill, key its own supplier invoice number"* — **which cannot work**, because any number that redacts lands on the same token. Found by driving, not by reading: the L11 probe randomised its PAN to become re-runnable and was still refused. | `frontend/src/screens/vouchers/draftAccept.ts:1526-1545` (`assertNotAlreadyOnTheBooks` — `no = body.voucher_no`, compared to `e.voucher_no`) + `insightd/insightd/pipeline.py:65` (redaction happens BEFORE the value ever reaches the client) | ⛔ OPEN |
 
 ### ⛔⛔ §7.2 — THE BACK-DATED CUTOFF TOOK **SIX** DOORS TO CLOSE, AND THAT IS THE SESSION'S MAIN LESSON
 
@@ -1353,6 +1355,106 @@ note is not) → `BillAllocationPicker` RED by name.
    route: access denied"** — D40's shape, and **the third route this session** where a 404-shaped
    condition arrives as a permission refusal. `/reports/sales-order-book` and `/reports/outstanding` did
    the same. **This is the concrete argument for fixing D40.**
+
+### ✅ L11 — AI-NATIVE. D16, D18, D19, D23. CLOSED 2026-08-20. **D72 STAYS OPEN.**
+
+⛔ **The probe that reported 13/13 in the session that wrote it scored 9/11 here on a fresh seed, and
+all three differences were the PROBE.** That is gotcha #2 — "suspect the probe first" — for the
+eighth time in this audit, and it is the reason this entry leads with the probe rather than the
+product. See `f1e252d`, which commits the probe BEFORE its proofs ran (f48e353's lesson).
+
+1. **It hardcoded two ledger UUIDs.** That pinned it to the one tenant it was authored against.
+   After a reseed those ids belong to a **different company**, so insightd matched no supplier,
+   `supplier_state` stayed `None`, and `tax.py` fell back to IGST with no input-tax legs — **the
+   probe reproduced D18 AND D19 itself and blamed the product.** It now reads `/ledgers` and
+   **asserts Steel Suppliers really is in state 29** rather than trusting the comment that says so.
+2. **It selected its draft by `hasText: "Steel Suppliers"` + `.first()`.** The row label is
+   `party · total · status · pct` and `BillInboxScreen` appends `· #id` **only on a collision**, so
+   the second run silently measured the FIRST run's stale draft — same `draft_id` in the wire log
+   two runs apart was the tell. It now diffs insightd's own draft list and clicks **by index**
+   (the render order is the API order; `BillInboxScreen` does not sort).
+3. ⛔ **It read `/reports/day-book`, which does not exist.** That answers **403**
+   `{"error":"unmapped route: access denied"}`, and the substring assertion then reported *"no Input
+   CGST in the books"* — **a permission error wearing a missing-tax-leg costume**, which is gotcha
+   #5's fourth appearance. The route is **`/day-book`**. The status is now asserted before the body
+   is believed, and the legs are matched **by side and by ledger name** (RULE 4), not by substring.
+
+**Mutation proofs — all four RED, and what failed is what was predicted:**
+- **M23 (D16)** keeps the redaction *report* but hands the **unredacted** `ocr` downstream
+  (`insightd/insightd/pipeline.py:65`) — i.e. the panel still claims redaction while the values go
+  through verbatim, which is the defect exactly → `test_pii_boundary.py` RED by name on
+  `test_no_raw_pii_reaches_the_faked_cross_border_call`, `test_masked_placeholders_are_present` and
+  `test_redaction_report_recall_matches_planted`.
+- **M24a (D18/D19)** the **fixture door** sends `{ company_id }` alone, as shipped →
+  `BillInboxScreen.test.tsx` RED on four named cases, including *"carries each party's STATE CODE —
+  the field that decides CGST+SGST vs IGST"*.
+- **M24b (D18/D19)** ⛔ **the OTHER door, asked separately.** The fix touched **two call sites** in
+  one file, and the upload path is the one with **no fixture to fall back on** — a photographed bill
+  carries no tenant block at all. Mutated alone → RED on *"sends the same context on the UPLOAD
+  path, which has no fixture to fall back on"*. **This is D7's lesson applied before it could bite:
+  when a fix touches two sites, prove EACH.**
+- **M25 (D23)** removes the `estimate` / `method` / `basis` keys from `cashFlowJSON` →
+  `TestCashFlowResponseSaysItIsAnEstimate` and `TestCashFlowResponseNamesTheINVENTEDSettlementDates`
+  RED. ⚠️ The first attempt replaced them with `_ = basisJSON(p.Basis),` inside a map literal, which
+  is a **syntax error** — the package did not build, and a tree that does not compile proves nothing
+  about coverage (gotcha #9). The runner now separates "did not build" from "RED".
+
+**The drive — `drive-l11-ai.mjs`, 14/14, and re-runnable:**
+
+- **D16** ✅ A fixture whose invoice number is a **PAN** and whose line description carries an
+  **Aadhaar** was created through the Bill Inbox and accepted. The panel prefills
+  `voucher_no = "[PAN REDACTED]"`, states the redaction, and **neither the PAN nor the Aadhaar
+  appears anywhere in the day book** — swept across every field of every voucher in the window, not
+  just my own voucher's legs.
+- **D19** ✅ An **intra-state** bill (Steel Suppliers, state **29** — read from `/ledgers` and
+  asserted, the company's own) derives **CGST 90.0000 / SGST 90.0000 / IGST 0.0000** on 1000.0000
+  @ 18%. The seeded draft cannot test this: its supplier is in 27, where IGST is *correct*.
+- **D18** ✅ The accept chain runs **claim 200 → POST purchase 403 (step-up) → 201 → accepted 200**,
+  and ⛔ **the books read back by side and name**:
+  `C:Steel Suppliers:1180.0000 | D:Raw Material Purchases:1000.0000 | D:Input CGST:90.0000 |
+  D:Input SGST:90.0000`, **with no IGST leg anywhere**. Those are the input-tax legs the unbalanced
+  draft lacked — and cored's deferred `debit = credit` trigger is why this defect showed up as a
+  *refused* accept rather than a bad voucher.
+- **D23** ✅ `GET /v1/companies/{co}/cash-flow` answers 200 with
+  `as_on, basis, beyond_horizon, bucket_days, buckets, estimate, horizon_days, method, opening_cash,
+  overdue_folded_into_first_bucket` — it now discloses `estimate`, `method` and `basis`.
+- ⛔ **D72 IS NOT DRIVEN AND STAYS OPEN.** insightd's optional statistical forecast is still
+  unreachable from the client and still carries money as JSON floats. **Nothing was keyed for it** —
+  it is not part of this closure.
+
+### ⛔ NEW DEFECT FOUND BY THIS DRIVE, REGISTERED AS **D85** (not fixed)
+
+Making the probe re-runnable is what found it. Varying the PAN **did not work**: the run with a
+freshly randomised PAN was still refused with *"This supplier bill is already on the books: purchase
+**[PAN REDACTED]** dated …"*. The reason is that `assertNotAlreadyOnTheBooks` keys on
+`body.voucher_no` — the **post-redaction** value — so **every PII-shaped invoice number collapses to
+the same constant token**. Two genuinely different bills from one supplier on one date are then "the
+same bill", and the refusal's own advice ("key its own supplier invoice number") **cannot be
+followed**, because any number that redacts lands on the same token.
+
+It is registered rather than fixed because the fix is a judgement about what the dedup key should be
+(the draft id? the pre-redaction hash? the redacted number plus a line-total?) and that check's
+comment block is explicit that **tightening or loosening it trades a missed duplicate for a refused
+first accept**. ⚠️ It is also a *class*: any value the redactor rewrites to a fixed token is unsafe
+as an identity key, wherever else that pattern appears.
+
+**The probe is now keyed on the invoice DATE** — it picks an August day no Steel Suppliers purchase
+holds yet — and passed **14/14 twice consecutively on an already-dirty tenant**.
+
+### ⚠️ TRAPS THIS LANE ADDS TO THE LIST
+
+1. ⛔⛔ **A PROBE THAT HARDCODES A TENANT'S UUIDs IS A TIME BOMB, AND IT DETONATES AS A PRODUCT
+   DEFECT.** Every drive here is told to reseed between lanes (gotcha #3), which *guarantees* those
+   ids go stale — and the failure is not "ledger not found", it is a plausible, on-message
+   *IGST-instead-of-CGST* result that matches the defect being tested. **Resolve masters by NAME at
+   run time, and assert the property the test depends on** (here: the supplier's state code).
+2. **`.first()` on a text locator is residue-blind.** Any probe that creates a row and then finds it
+   by party name will re-measure its own earlier run the moment it runs twice. Diff a server-side
+   list and select by index.
+3. **A re-runnable probe is worth building.** Two of this lane's four "product failures" only
+   appeared because the probe could not run twice, and the third only appeared because it could not
+   run on a different tenant. **The probe that survives a reseed and a re-run is the one whose green
+   means something.**
 
 ## 8. RULES THAT MUST NOT BE BROKEN DURING THIS WORK
 
