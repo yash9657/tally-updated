@@ -866,7 +866,7 @@ WORK"** — not "hard to fix".
 | D35 | 42 | HIGH | The TDS / TCS Register advertises "Ctrl+P Print" on its button bar and the key is dead: TDSRegisterScreen imports only useExportAction, never usePrintAction, so Ctrl+P makes no HTTP call and answers the shell's generic "does not apply on this screen" instead of the server's 501 sentence that printTarget.ts deliberately mapped th … | frontend/src/screens/reports/TDSRegisterScreen.tsx:7 and :112 (useExportAction only; no usePrintAction anywhere in the file) vs fr … | ⛔ OPEN |
 | D36 | 5 | HIGH | There is NO keyboard path to an opening balance, an opening Dr/Cr, a bill-wise opening breakup, or maintain_bill_by_bill on ANY ledger. The Alt+C master-create frame renders exactly two inputs (Name, Under (group)); the MASTER_FIELDS 'details' cursor position has no control behind it; and no screen anywhere calls setLedgerOpenin … | frontend/src/screens/masters/MasterCreateScreen.tsx:66-69 (`await client.createLedger(companyID, { name: n, group_name: p })` — th … | ⛔ OPEN |
 | D37 | 5/30/34/35/37 | HIGH | Past 64 WebAuthn credentials EVERY WRITE in the product becomes permanently impossible on every device: assert/begin returns an unbounded allow_credentials list, Chrome throws RangeError above 64, and the client only fell through to enrolment on NotAllowedError. Reported INDEPENDENTLY BY FIVE AGENTS; it blocked this audit for ~2 … | auth_webauthn.go:181-184 + webauthn/store.go ByUser (ORDER BY created_at, no LIMIT) + auth/webauthn.ts:352-362 | ✅ FIXED (F1) |
-| D38 | 9 | HIGH | The cost-allocation picker cannot be reached from the keyboard at all: on the particulars grid, Tab, Shift+Tab and Enter move nothing, so `alloc:0-add`, the axis/centre selects and the `rest` button are MOUSE-ONLY — while the hint strip on that screen advertises "Enter: Next field" and "Tab / Shift+Tab: Field". | frontend/src/keystroke/useNavMachine.ts:54 | ⛔ OPEN |
+| D38 | 9 | HIGH | The cost-allocation picker cannot be reached from the keyboard at all: on the particulars grid, Tab, Shift+Tab and Enter move nothing, so `alloc:0-add`, the axis/centre selects and the `rest` button are MOUSE-ONLY — while the hint strip on that screen advertises "Enter: Next field" and "Tab / Shift+Tab: Field". | frontend/src/keystroke/useNavMachine.ts:54 | ✅ **FIXED (L12) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D39 | 9 | HIGH | Ctrl+A on a voucher whose cost split is INCOMPLETE on one axis creates every ledger the operator named BEFORE the server refuses, leaving an orphan account in the chart of accounts with no voucher behind it. Reproduced on BOTH grids (single entry and the Journal's double entry). Recon prediction 1 CONFIRMED. | frontend/src/screens/VoucherScreen.tsx:1057 | ⛔ OPEN |
 | D40 | 17 | MEDIUM | Non-existent challan sub-routes answer 403 "unmapped route: access denied" rather than 404/405, so "this route was never built" is indistinguishable from "your level is not permitted". This KILLS the recon's literal proof that PATCH returns 405. | backend/internal/server/auth_middleware.go:967 | ⛔ OPEN |
 | D41 | 17 | MEDIUM | LEAD, not row 17: opening an existing Purchase voucher for alteration from the Day Book and pressing Ctrl+A created a new ledger ("Purchases") over the wire and then failed the voucher write with "Error: invalid gst line gst_rate_pct". A refused alter left a master behind. | frontend/src/screens/VoucherScreen.tsx:1462 | ⛔ OPEN |
@@ -894,8 +894,8 @@ WORK"** — not "hard to fix".
 | D63 | 42 | MEDIUM | printTarget's Bank Reconciliation refusal ("Select a bank account first…") cannot be reached from the keyboard — the screen auto-selects the first bank account on open — so Ctrl+P as the very first key already prints a statement for an account the operator never chose, which is the exact outcome the refusal was written to preven … | frontend/src/screens/printTarget.ts:243-249 (the refusal, gated on !voucher.bankLedgerID) against frontend/src/screens/BankReconci … | ⛔ OPEN |
 | D64 | 43 | MEDIUM | The Stock Summary export is blind to inward VALUE: the API returns inward_qty, inward_value, outward_qty and outward_value and the sheet writes only inward_qty (under a header reading "Inward") and outward_value (under "Outward (at cost)"), so two adjacent columns mix a quantity with money and the inward money figure — 7,860.00 … | frontend/src/screens/reports/StockSummaryScreen.tsx:276-288 and :290-300 (cells: exactCell(it.inward_qty) then moneyCell(it.outwar … | ✅ **FIXED (L10) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D65 | 5 | MEDIUM | Outstandings folds in ledger_opening_bill unconditionally, with none of the books-beginning-from guard the Balance Sheet applies to ledger.opening_balance. Asked for a date before the books began, Outstandings reports the entire opening ageing (Acme 1,85,480.00 incl. OB/ACME/24-25/07 and /11; Steel Suppliers 80,450.00 incl. OB/S … | backend/internal/reporting/outstanding.go:151-153 — the `UNION ALL SELECT ob.ledger_id, ob.ref_name, ob.dr_cr, ob.amount, ob.due_d … | ✅ **FIXED (F8)** — the opening breakup is `queryBalances`-guarded, so a date before the books began reports nothing on EITHER report |
-| D66 | 9 | MEDIUM | The 422 the operator actually reads names the cost category by RAW UUID and prints the 0-based `posting_seq` — the one number CostAllocationPicker.tsx:28-33 declares no screen in this product may ever display. The server code's own comment claims it 'names the axis'. | backend/internal/ledger/cost_allocation.go:294 | ⛔ OPEN |
-| D67 | 9 | MEDIUM | The picker reports an axis as "allocated in full" when one of its splits has an amount but no cost centre chosen; `buildCostAllocations` then drops that split, and Ctrl+A sends a short axis to the server. Recon prediction 3 CONFIRMED exactly. | frontend/src/screens/vouchers/costAllocation.ts:163 | ⛔ OPEN |
+| D66 | 9 | MEDIUM | The 422 the operator actually reads names the cost category by RAW UUID and prints the 0-based `posting_seq` — the one number CostAllocationPicker.tsx:28-33 declares no screen in this product may ever display. The server code's own comment claims it 'names the axis'. | backend/internal/ledger/cost_allocation.go:294 | ✅ **FIXED (L12) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
+| D67 | 9 | MEDIUM | The picker reports an axis as "allocated in full" when one of its splits has an amount but no cost centre chosen; `buildCostAllocations` then drops that split, and Ctrl+A sends a short axis to the server. Recon prediction 3 CONFIRMED exactly. | frontend/src/screens/vouchers/costAllocation.ts:163 | ✅ **FIXED (L12) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D68 | 27 | LOW | The Alt+X explosion's first note prints the recipe's YIELD where the component phrase belongs, so it reads "3 of SS Sheet 2mm yields 3" — the finished good is named on the consuming side of "yields". | backend/internal/orders/bom.go:374 (args at :377-378) | ⛔ OPEN |
 | D69 | 27 | LOW | An order line's due date is accepted when it falls BEFORE the order date, creating a commitment that is overdue the instant it is recorded. | backend/internal/orders/order.go:171 (the per-line loop validates StockItemID, Qty and Rate and never looks at DueDate) | ⛔ OPEN |
 | D70 | 27 | LOW | After Alt+W pre-closes an order, the register's line panel keeps showing that order's balance as Outstanding with no pre-closed marker, while the row itself has vanished from the list above it. | frontend/src/screens/OrderRegisterScreen.tsx:1039 (the detail heading) and :1069-1073 (the Outstanding cell) | ⛔ OPEN |
@@ -1038,6 +1038,74 @@ sound.** Six mutation proofs, each predicted then observed:
 F2 focuses **`period-from`**, and only `To` bounds a position report — *the dialog says so on its face*.
 The probe had typed the date into the focused field. **The screen was right and the probe was wrong**,
 which is the mirror image of this audit's usual finding and worth the same suspicion.
+
+### ✅ L12 — D38, D66, D67. CLOSED 2026-08-20. **D38 WAS TWO DEFECTS AND ONLY ONE HAD A TEST.**
+
+**Mutation proofs, each predicted then observed:**
+
+| Mutation | Anchor put back | Result |
+|---|---|---|
+| M7 (D38a) | `combo === "Tab" \|\| combo === "Shift+Tab"` back into `useNavMachine`'s preventDefault | **3 of 195** keystroke tests RED, by name |
+| M8 (D38b) | drop `"nextField"`/`"prevField"` from `ALWAYS_MEANINGFUL` | ⛔ **GREEN. EVERY SUITE.** See below |
+| M9 (D67) | count a centre-less split toward the axis total | **6 of 12** RED |
+| M10 (D66) | name the line `posting_seq %d` again | `TestAShortAxisIsRefused`, `TestValidateCostAllocations`, `TestNoRefusalPrintsAUUIDOrAPostingOrdinal`, `TestARefusalNamesTheLineTheWayTheFormDoes` RED |
+
+⛔⛔ **M8 IS THE FINDING OF THIS LANE.** D38 was **two** defects under one number: the machine
+swallowing Tab (fixed, and pinned by three tests) **and the shell reporting the key it had just let
+through as inapplicable**. Removing the two strings that fix the second left **36 app tests, 195
+keystroke tests, and every suite in the repo that so much as mentions the phrase GREEN** — while the
+operator was told *"Tab — Next field does not apply on this screen"* as the focus ring visibly moved.
+**The fix had no oracle.** Four tests now stand in `AppShell.test.tsx`, and M8 re-run against them turns
+**3 red with the CONTROL still green** (Alt+D on the Gateway *is* still reported — so the assertions
+cannot be satisfied by silencing the status line, which is how this class of test usually rots).
+
+⚠️ **THE GENERAL LESSON, AND IT IS NOT ABOUT TAB.** A defect whose two halves live in two files gets
+one test. The half with the test is safe; the other half is one refactor from returning, and the suite
+will not say a word. **When a fix touches two files, ask which file the test is in.**
+
+**The drive — `frontend/scripts/drive-l12-tab.mjs`, 21/21:** D38 was reported on the cost picker but was
+bound GLOBALLY, so it was driven on **five** screens. On the **Gateway**, a **report** (Trial Balance),
+**Users & Roles** and the **Bill Inbox**: Tab and Shift+Tab both move `document.activeElement`, and the
+status line never denies it. On the **Payment particulars grid**: `alloc:0-add` takes focus after **8 Tab
+presses** and Enter adds a split; choosing an axis enables the centre and renders the *rest* button, and
+**centre, amount and rest are then all Tab-reachable**.
+
+**`drive-l12-alloc.mjs`, 10/10 (D67):** a split carrying `1000.0000` against **no centre** is NOT
+reported as allocated in full — the picker says *"A split on the Department axis has 1000.0000 against no
+cost centre … only 0.0000 would reach the books"*. ⛔ **Both controls hold: Ctrl+A makes NO request at
+all** (so the 422 never has to happen) **and mints NO ledger** on the way to being refused — D39's class.
+Choosing a centre clears the refusal, and ⛔ **the completed voucher then SAVES** through the passkey, so
+"refuses everything" cannot pass as "refuses the right thing". Read back as `postgres`:
+`Cr HDFC Bank 1000.0000` / `Dr Office Rent 1000.0000` with **exactly one** allocation row,
+`Admin / Department / 1000.0000`.
+
+**D66 on the wire** (a client that refuses first can never show the server's message): a short axis
+POSTed directly answers **422** — *"one cost category on **the Dr 1000.0000 line** totals 400.0000 …
+600.0000 is unattributed"*. **No raw UUID, no `posting_seq`**, asserted by regex, and RULE 4 holds —
+zero `voucher_version` and zero `posting_cost_allocation` rows for `created_by='d66-wire'`.
+
+### ⚠️ THREE PROBE BUGS AND ONE PIECE OF RESIDUE — RECORDED BECAUSE EACH LOOKED LIKE A DEFECT
+
+The screen was right and the probe was wrong **four** times in two lanes. This audit's standing
+assumption is the opposite, so each one is written down.
+
+1. **`ArrowDown` is inert on a native `<select>` in HEADLESS Chromium** (there is no popup to walk), so
+   the axis read `value=""` and three assertions failed. **Type the option's name instead** — which is
+   also what an operator does.
+2. **A disabled control is not Tab-reachable, correctly.** `alloc:0-centre:0` carries
+   `disabled={a.costCategoryId === ""}` and the *rest* button is **not rendered** until an axis is
+   chosen. The probe walked past both and logged a defect. **Choose the axis first.**
+3. ⛔⛔ **A LEDGER FIELD IS A COMBOBOX AND `.fill()` DOES NOT CHOOSE FROM IT.** Filling sets the visible
+   text and binds no ledger id, so Ctrl+A answers *"Account is required"* over a box that plainly reads
+   "HDFC Bank". **And do not press `ArrowDown` "to be safe": existing matches come FIRST and
+   `Create "<what you typed>"` LAST**, so one ArrowDown past a single match lands on **CREATE**. That is
+   how the first run **minted a junk ledger called "HDFC" beside the real "HDFC Bank" and posted a live
+   payment to it.**
+4. ⛔ **AND THAT RESIDUE THEN POISONED THE NEXT DIAGNOSIS.** With a ledger named "HDFC" now in the books,
+   the combobox's top match for "HDFC" became the junk ledger, and the re-probe read that as the product
+   pre-selecting raw typed text — a high-severity defect that did not exist. **It cost a diagnosis, and
+   it is the concrete argument for §2.1's own-tenant rule**: the drive was moved to a freshly seeded
+   tenant (`f338e9ea…`, `verify:demo` 33/33) and every result above is from that one.
 
 ## 8. RULES THAT MUST NOT BE BROKEN DURING THIS WORK
 

@@ -19,6 +19,60 @@ function renderShell(registry = createDefaultRegistry()) {
   );
 }
 
+/**
+ * ⛔ D38's SECOND HALF, AND IT HAD NO TEST — FOUND BY AN EXECUTED MUTATION PROOF.
+ *
+ * D38 was two defects wearing one number. `useNavMachine` used to
+ * preventDefault Tab (fixed, and pinned by three tests in
+ * useNavMachine.test.tsx), and the SHELL used to report the key it had just let
+ * through as inapplicable. Removing `"nextField"`/`"prevField"` from
+ * ALWAYS_MEANINGFUL left every suite in this repository GREEN — 36 app tests,
+ * 195 keystroke tests, the TDS/buttons/export suites that mention the phrase —
+ * while the operator was told "Tab — Next field does not apply on this screen"
+ * as the focus ring visibly moved.
+ *
+ * `nextField` returns `{}` off a voucher, so `effect.ran` is false and
+ * `machineActs` is false, and the else-branch fires. ALWAYS_MEANINGFUL is what
+ * makes `machineActs` true. That is the whole mechanism, and this is the test
+ * that would have caught its removal.
+ */
+describe("⛔ the status line may not deny a key the browser just honoured (D38)", () => {
+  const statusOf = () => screen.getByTestId("status-line").textContent ?? "";
+
+  it("says nothing about Tab NOT APPLYING on the Gateway", () => {
+    renderShell();
+    const app = screen.getByRole("application");
+    fireEvent.keyDown(app, { key: "Tab" });
+    expect(statusOf()).not.toMatch(/does not apply/i);
+  });
+
+  it("nor about Shift+Tab", () => {
+    renderShell();
+    const app = screen.getByRole("application");
+    fireEvent.keyDown(app, { key: "Tab", shiftKey: true });
+    expect(statusOf()).not.toMatch(/does not apply/i);
+  });
+
+  it("nor on a REPORT, where nextField genuinely returns {}", () => {
+    renderShell();
+    const app = screen.getByRole("application");
+    // Alt+G > Trial Balance: a report frame, not a voucher.
+    fireEvent.keyDown(app, { key: "F1", altKey: true });
+    fireEvent.keyDown(app, { key: "Tab" });
+    expect(statusOf()).not.toMatch(/does not apply/i);
+  });
+
+  it("⛔ CONTROL: a key that really does nothing here IS still reported", () => {
+    renderShell();
+    const app = screen.getByRole("application");
+    // Alt+D Delete on the Gateway — no voucher to delete, and the shell must
+    // still say so. Without this control the assertions above would pass just as
+    // well over a status line that had been silenced altogether.
+    fireEvent.keyDown(app, { key: "d", altKey: true });
+    expect(statusOf()).toMatch(/does not apply/i);
+  });
+});
+
 describe("AppShell routing + chrome", () => {
   it("renders the company in the top bar and the gateway body", () => {
     renderShell();
