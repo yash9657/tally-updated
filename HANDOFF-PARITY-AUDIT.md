@@ -710,7 +710,7 @@ have now been driven end to end in a real browser against real cored.**
 | **NOT DRIVABLE AT ALL** | **1** — row **32** (cash-flow projection / anomalies): four doors tried, no keystroke reaches it and the mandated disclosure has no renderer |
 | **Predicted defects KILLED** | **1** — **LEAD 1b** on `MembersScreen`, driven with a control AND at 20× CPU throttle. It was deliberately left unpatched for exactly this reason, and that call is now vindicated |
 | **DEFECTS FOUND** | ⛔ **78** (after merging duplicate reports of one shared defect) — **39 high, 28 medium, 11 low.** Register in §7.1 |
-| ⚠️ **Superseded — this table is the 2026-08-07 snapshot** | The register has since grown to **85** (D79–D84 registered from the wave's §6 findings; **D85** found by the L11 drive) and **32 are still open.** ⛔ **§7.1's own header is the live count — read it, not this row.** |
+| ⚠️ **Superseded — this table is the 2026-08-07 snapshot** | The register has since grown to **86** (D79–D84 registered from the wave's §6 findings; **D85** and **D86** found by the L11 drive) and **32 are still open.** ⛔ **§7.1's own header is the live count — read it, not this row.** |
 | **FIXED this pass** | **9 fully + 3 partial**, every one carrying a unit test and an EXECUTED mutation proof whose failure was checked against the prediction. §7.1 marks them |
 | **STILL OPEN** | ⛔ **66.** This is now a BACKLOG, not an unknown — every one is traced to file:line with a proposed fix |
 | **TRUE reachable number** | ⛔ **The honest answer is that "reachable" was the wrong question.** All 34 rows do OPEN from the keyboard — **but only 5 of the 34 have ever been driven and found clean**, all five in earlier passes. **29 of 34 carry at least one defect an operator would hit** (28 defective + row 32, which opens nowhere at all) |
@@ -815,7 +815,7 @@ have now been driven end to end in a real browser against real cored.**
 
 ---
 
-## 7.1 ⛔ THE DEFECT REGISTER — 85 DEFECTS, 32 STILL OPEN
+## 7.1 ⛔ THE DEFECT REGISTER — 86 DEFECTS, 32 STILL OPEN
 
 **This is the audit's actual product.** Every row below was found by DRIVING, is traced to file:line, and
 carries a proposed fix in the source material. ⛔ **Do not re-derive these from scratch** — that is the
@@ -869,7 +869,7 @@ WORK"** — not "hard to fix".
 | D37 | 5/30/34/35/37 | HIGH | Past 64 WebAuthn credentials EVERY WRITE in the product becomes permanently impossible on every device: assert/begin returns an unbounded allow_credentials list, Chrome throws RangeError above 64, and the client only fell through to enrolment on NotAllowedError. Reported INDEPENDENTLY BY FIVE AGENTS; it blocked this audit for ~2 … | auth_webauthn.go:181-184 + webauthn/store.go ByUser (ORDER BY created_at, no LIMIT) + auth/webauthn.ts:352-362 | ✅ FIXED (F1) |
 | D38 | 9 | HIGH | The cost-allocation picker cannot be reached from the keyboard at all: on the particulars grid, Tab, Shift+Tab and Enter move nothing, so `alloc:0-add`, the axis/centre selects and the `rest` button are MOUSE-ONLY — while the hint strip on that screen advertises "Enter: Next field" and "Tab / Shift+Tab: Field". | frontend/src/keystroke/useNavMachine.ts:54 | ✅ **FIXED (L12) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D39 | 9 | HIGH | Ctrl+A on a voucher whose cost split is INCOMPLETE on one axis creates every ledger the operator named BEFORE the server refuses, leaving an orphan account in the chart of accounts with no voucher behind it. Reproduced on BOTH grids (single entry and the Journal's double entry). Recon prediction 1 CONFIRMED. | frontend/src/screens/VoucherScreen.tsx:1057 | ✅ **FIXED (L6) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
-| D40 | 17 | MEDIUM | Non-existent challan sub-routes answer 403 "unmapped route: access denied" rather than 404/405, so "this route was never built" is indistinguishable from "your level is not permitted". This KILLS the recon's literal proof that PATCH returns 405. | backend/internal/server/auth_middleware.go:967 | ⛔ OPEN |
+| D40 | 17 | MEDIUM | Non-existent challan sub-routes answer 403 "unmapped route: access denied" rather than 404/405, so "this route was never built" is indistinguishable from "your level is not permitted". This KILLS the recon's literal proof that PATCH returns 405. | backend/internal/server/auth_middleware.go:967 | ✅ **FIXED 2026-08-20 — MUTATION-PROVED (3 ways, incl. the DANGEROUS direction) *AND* DRIVEN ON THE WIRE.** Authorized by the user. See §7.5 |
 | D41 | 17 | MEDIUM | LEAD, not row 17: opening an existing Purchase voucher for alteration from the Day Book and pressing Ctrl+A created a new ledger ("Purchases") over the wire and then failed the voucher write with "Error: invalid gst line gst_rate_pct". A refused alter left a master behind. | frontend/src/screens/VoucherScreen.tsx:1462 | ✅ **FIXED (L6) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D42 | 24 | MEDIUM | F11 Features asserts a capability the build does not have: the "Negative stock" row is labelled "Always on" and its note says "A company can opt in per-company", while the screen offers no toggle and nothing on it can write the flag. The product's own statement of what is switchable is false. | frontend/src/screens/FeaturesScreen.tsx:291-293 (state "always" renders as "Always on" via the map at FeaturesScreen.tsx:486; the … | ✅ FIXED (own) |
 | D43 | 24 | MEDIUM | POST /v1/companies accepts `"allow_negative_stock": true` with 201 Created and silently discards it — the caller gets a success for a setting that was never applied. | backend/internal/server/server.go:1188-1240 (handleCreateCompany / decodeJSON tolerates the unknown field) with backend/internal/s … | ⛔ OPEN |
@@ -915,6 +915,7 @@ WORK"** — not "hard to fix".
 | **D83** | 5 | LOW | Two SIMULTANEOUS posts with the same hand-typed bill number on one party can both pass the uniqueness check. Needs an index `bill_allocation` cannot carry, because duplicate names are legal for AGAINST/ON_ACCOUNT/caller-named openers. ⚠️ **The sequential case — what an operator actually produces — is closed** | `backend/internal/ledger/` bill uniqueness | ⛔ OPEN — registered 2026-08-20 |
 | **D84** | — | MEDIUM | ⛔ **`api/mock.ts` IS LOOSER THAN CORED AND IS A SOURCE OF FALSE GREEN — three lanes hit it.** It accepts an empty ledger name and an unparseable `gst_rate_pct` that `server.go` 400s on, reproduces D44 verbatim, skips D6's party-group and D69's due-date checks, and does not mirror `createLedger`'s opening-breakup refusal. Needs a STRUCTURAL mock-vs-server gate, not three patches | `frontend/src/api/mock.ts` | ⛔ OPEN — registered 2026-08-20 |
 | **D85** | 30 | MEDIUM | ⛔ **The duplicate-supplier-bill guard keys on the POST-REDACTION `voucher_no`, so every PII-shaped invoice number collapses to ONE key and a legitimate second bill is refused.** `assertNotAlreadyOnTheBooks` matches on `body.voucher_no`, which for a bill whose invoice number is a PAN/GSTIN/Aadhaar is the constant token `[PAN REDACTED]` — not the supplier's number. Two DIFFERENT PAN-shaped invoice numbers from one supplier on one date are therefore the same bill as far as this check is concerned, and the second accept is refused. Its own error text advises *"If this is genuinely a second bill, key its own supplier invoice number"* — **which cannot work**, because any number that redacts lands on the same token. Found by driving, not by reading: the L11 probe randomised its PAN to become re-runnable and was still refused. | `frontend/src/screens/vouchers/draftAccept.ts:1526-1545` (`assertNotAlreadyOnTheBooks` — `no = body.voucher_no`, compared to `e.voucher_no`) + `insightd/insightd/pipeline.py:65` (redaction happens BEFORE the value ever reaches the client) | ⛔ OPEN |
+| **D86** | 3 | MEDIUM | ⛔ **Sundry Creditors on the Balance Sheet and the payables Outstandings DISAGREE the moment any voucher is dated after today, and the repo's own gate asserts they agree EXACTLY.** With no `as_on`, Outstandings bounds at today and drops a future-dated bill; the Balance Sheet does not bound and includes it. Measured: one bill dated 2026-08-27 with today at 2026-08-20 gave BS **109950.0000** vs Outstandings **108770.0000** — short by exactly that bill's 1180.0000 — while `?as_on=2026-09-30` returned **109950.0000** and agreed. Nothing refuses a future-dated purchase (cored answers 201), so an operator who post-dates one bill sees the ageing disagree with the balance sheet with no explanation. ⚠️ `verify:demo`'s check passes today only because the seeded demo data happens to carry no future dates — it calls **neither** report with an `as_on`, and its own comment says the two paths "must agree exactly". | `frontend/scripts/verify-demo.mts:154-168` (both calls omit `as_on`) + the default-`as_on` divergence between the Outstandings and Balance Sheet handlers | ⛔ OPEN |
 
 ### ⛔⛔ §7.2 — THE BACK-DATED CUTOFF TOOK **SIX** DOORS TO CLOSE, AND THAT IS THE SESSION'S MAIN LESSON
 
@@ -1455,6 +1456,111 @@ holds yet — and passed **14/14 twice consecutively on an already-dirty tenant*
    appeared because the probe could not run twice, and the third only appeared because it could not
    run on a different tenant. **The probe that survives a reseed and a re-run is the one whose green
    means something.**
+
+### ✅ D40 — WHAT AN UNROUTED PATH ANSWERS. FIXED 2026-08-20, **ON THE USER'S EXPLICIT AUTHORIZATION.**
+
+This one had been deferred three times as "not a lane's call" because it changes
+security-visible behaviour. The user was asked directly this session and said fix it.
+
+**What it was.** The PDP refused everything `routeAction` could not map with a flat 403
+`unmapped route: access denied`, so **"this route was never built" was indistinguishable from
+"your level is not permitted"**. The bill was paid four times: `/reports/sales-order-book`,
+`/reports/outstanding`, `/outstanding` and (this session, in the L11 probe)
+`/reports/day-book` are all *misspellings of real routes*, every one answered 403, and every
+one was first diagnosed as a permission defect. In L11 it was worse than lost time — the 403
+body was fed to a substring assertion that then reported *"no Input CGST in the books"*, so a
+routing typo presented as a **missing tax leg**.
+
+**The fix.** `denyUnmappedRoute` asks the **router** — `chi.Mux.Match` on the same radix tree
+`ServeHTTP` walks, given a fresh route context so it cannot disturb the live one — and splits
+three cases that used to share an answer:
+
+| condition | answer |
+|---|---|
+| the router serves nothing at this path | **404** `no such route` |
+| the router serves the path, not this method | **405** + `Allow` |
+| the router serves it and the PDP cannot map it | **403**, ⛔ **UNCHANGED — fail CLOSED** |
+
+⛔⛔ **THE THIRD ROW IS THE WHOLE POINT AND IT DID NOT MOVE.** A mounted route no rule governs
+must never be served. `TestEveryCompanyRouteIsMappedAndInVocabulary` walks the router and fails
+on any mounted company route the PDP cannot map, so in a healthy tree that arm is
+**unreachable** — which is precisely why it now has a test that reaches it *deliberately*
+rather than being reasoned away as impossible. A nil router also fails closed: **not knowing
+whether a route exists must never become "it does not exist."**
+
+⛔ **THE ROUTER IS THE ORACLE, NOT A SECOND TABLE.** A hand-kept list of "routes that exist"
+would drift the first time somebody mounted something, and the drift would surface as this
+function lying about a real route.
+
+**Mutation proofs — three, and one of them is the DANGEROUS direction:**
+- **M26** puts the flat 403 back → `TestANeverBuiltRouteAnswers404AndNot403` and
+  `TestAWrongMethodOnARealRouteAnswers405WithAllow` RED.
+- **M27** ⛔ **opens the fail-closed arm** (mounted-but-unmapped → 404) →
+  `TestAMountedButUnmappedRouteStillFailsClosed` RED. **This is the proof that matters.** A fix
+  in this area can fail in two directions and only one of them looks like a bug; the direction
+  that *widens access* is the one that must have its own oracle.
+- **M28** makes a nil router report "askable" → `TestRouteMethodsFailsClosedWithNoRouter` RED.
+
+**Driven on the wire** against a cored **verified fresh by symbol** (`no such route` and
+`method not allowed on this route` both present in the running binary):
+
+```
+CONTROL — real routes still serve:   /day-book 200 · /outstandings 200 ·
+                                     /sales-order-book 200 · /trial-balance 200
+the four misspellings + nonsense:    404 {"error":"no such route"}  (all five)
+PATCH /tds-challans:                 405  Allow: GET, POST
+UNAUTHENTICATED /no-such-thing:      401
+NON-MEMBER      /no-such-thing:      403 {"error":"not authorized for this company"}
+```
+
+The last two are the disclosure controls and they are the reason this is safe: **the shape
+answer lives behind authentication AND behind the membership gate.** A stranger gets 401 and a
+foreign tenant gets "not authorized" — neither can map this company's API surface. What an
+authenticated *member* learns is the static shape of the API, which is identical for every
+tenant and carries no tenant data. The `Allow: GET, POST` line is also, exactly, the recon
+proof D40's row said the flat 403 had killed.
+
+⚠️ **ONE TEST WAS PINNING D40 ALONGSIDE ITS OWN PROPERTY.**
+`TestAPathNobodyMappedIsRefusedForASyncCredentialExactlyAsForAPerson` asserted a literal 403 on
+three paths the router mounts nothing at — so it *demanded* the confusion D40 removed. It now
+asserts what it was always about: **PARITY** between the service credential and the person,
+plus **not served**. That is strictly stronger — the bug it exists for was an *asymmetry* (svc
+served where a person was refused), and parity catches that while a literal status code merely
+correlated with it. ⛔ **M26 leaves the rewritten test GREEN, which is the evidence that it no
+longer pins the defect.** That makes **five** tests found pinning the defects they covered.
+
+**Gates:** `internal/server` **325 passed / 0 FAILED / 0 SKIP**; full backend **35 packages ok**,
+bracketed by a live `psql` before AND after (the `0 SKIP` is the load-bearing number — a down
+database makes every DB test skip and `go test` still exits 0). Frontend **1286/1286**,
+`verify:demo` **34/34** on a fresh seed.
+
+### ⛔ SECOND NEW DEFECT FOUND THIS SESSION, REGISTERED AS **D86** (not fixed)
+
+A `verify:demo` run came back **33/34** — *"BS Sundry Creditors == Outstandings (payable): BS
+109950.0000 vs Outstandings 108770.0000"* — immediately after the D40 work, which is exactly
+when a regression would look most convincing. **It was not D40** (a 404-vs-403 on routes that do
+not exist cannot move a balance), and the decisive check was a **fresh seed: 34/34**.
+
+The residue was the tell. The gap was **exactly 1180.0000** — one L11 bill — and the cause is
+real: **Outstandings with no `as_on` bounds at today; the Balance Sheet with no `as_on` does
+not.** My probe had picked a free August date that happened to fall *after* today (2026-08-27
+vs 2026-08-20), cored accepted the future-dated purchase **201**, and the two reports parted
+company by that bill. `?as_on=2026-09-30` returned **109950.0000** and agreed exactly.
+
+`verify:demo` calls **neither** report with an `as_on` while its own comment says the two
+independent paths *"must agree exactly"* — so that check passes today only because the seeded
+data happens to carry no future dates. Registered as **D86**, not fixed: which default is wrong
+is a judgement, and changing the Balance Sheet's bound moves the Balance Sheet, which the audit
+already requires a deliberate `verify:demo` re-pin for (see D8/T9).
+
+⚠️ **THE PROBE WAS FIXED, THOUGH — a probe must not leave the tenant failing the repo's own
+gate.** `drive-l11-ai.mjs` now clamps its date to today or earlier; it passes 14/14 and
+`verify:demo` stays **34/34 after the probe has run**.
+
+⚠️ **AND THE TRAP WORTH KEEPING:** *a gate that fails right after your change is not evidence
+your change broke it.* Two of this session's three false alarms were residue from earlier runs
+on the same tenant. **Reseed before believing a red gate** — it costs one minute and it has now
+overturned the obvious diagnosis twice.
 
 ## 8. RULES THAT MUST NOT BE BROKEN DURING THIS WORK
 

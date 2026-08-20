@@ -45,11 +45,21 @@ const INVOICE_DATE = await (async () => {
       .filter((e) => e.party === "Steel Suppliers" && e.class === "Purchase")
       .map((e) => e.date),
   );
+  // \u26d4 AND NOT AFTER TODAY. A probe must not leave the tenant failing the
+  // repo's own gate: `verify:demo` asserts BS Sundry Creditors == Outstandings
+  // (payable) EXACTLY, and Outstandings with no `as_on` bounds at today while the
+  // Balance Sheet does not \u2014 so one future-dated bill breaks that check by
+  // exactly its own amount. That divergence is a real defect (registered as D86);
+  // this clamp is so THIS probe stops manufacturing it.
+  const today = new Date().toISOString().slice(0, 10);
   for (let d = 1; d <= 28; d++) {
     const date = `2026-08-${String(d).padStart(2, "0")}`;
+    if (date > today) break;
     if (!taken.has(date)) return date;
   }
-  throw new Error("every August date already carries a Steel Suppliers purchase \u2014 reseed");
+  throw new Error(
+    "no August date on or before today is free of a Steel Suppliers purchase \u2014 reseed",
+  );
 })();
 
 /**
