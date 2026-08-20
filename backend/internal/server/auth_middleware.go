@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -214,7 +215,7 @@ func (s *Server) companyAuthMiddleware(next http.Handler) http.Handler {
 		if claims.IsService() {
 			act, _, _, mapped := routeAction(r)
 			if !mapped {
-				writeError(w, http.StatusForbidden, "unmapped route: access denied")
+				s.denyUnmappedRoute(w, r)
 				return
 			}
 			if act == authz.Print {
@@ -262,7 +263,7 @@ func (s *Server) companyAuthMiddleware(next http.Handler) http.Handler {
 		// {companyID} default-DENIES (never allow).
 		act, res, resName, mapped := routeAction(r)
 		if !mapped {
-			writeError(w, http.StatusForbidden, "unmapped route: access denied")
+			s.denyUnmappedRoute(w, r)
 			return
 		}
 
@@ -327,6 +328,96 @@ func (s *Server) companyAuthMiddleware(next http.Handler) http.Handler {
 		ctx = db.WithCompany(ctx, companyID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// denyUnmappedRoute answers a request routeAction could not map to an
+// (action, resource) pair — D40.
+//
+// ⛔ IT USED TO BE A FLAT 403 "unmapped route: access denied", AND THAT MADE
+// "THIS ROUTE WAS NEVER BUILT" INDISTINGUISHABLE FROM "YOUR LEVEL IS NOT
+// PERMITTED". The cost was not theoretical: `/reports/sales-order-book`,
+// `/reports/outstanding`, `/outstanding` and `/reports/day-book` are all
+// misspellings of real routes, every one of them answered 403, and every one was
+// diagnosed as a permission defect before somebody re-read the router. It also
+// destroyed the recon's literal proof that PATCH on a challan returns 405.
+//
+// ⛔⛔ THE SECURITY PROPERTY IS PRESERVED EXACTLY, AND THIS IS THE WHOLE DESIGN.
+// The question "does the PDP know this route?" and the question "does the router
+// serve this path?" have different answers, and only ONE of them may disclose
+// anything:
+//
+//	router serves it, PDP cannot map it -> 403, UNCHANGED. This is a PDP GAP —
+//	    a route was mounted and nobody gave it an (action, resource). It MUST
+//	    fail closed, because the alternative is serving a route no rule governs.
+//	router serves the path, not this method -> 405 + Allow. The path's existence
+//	    is already disclosed by the methods that do work.
+//	router serves nothing here -> 404. Nothing to protect: there is no resource.
+//
+// TestEveryCompanyRouteIsMappedAndInVocabulary walks the router and fails on any
+// mounted company route the PDP cannot map, so in a healthy tree the 403 arm is
+// UNREACHABLE and this change cannot widen anything. That test is the reason the
+// arm can be kept as a pure fail-closed backstop rather than being reasoned away.
+//
+// ⚠️ AND IT DISCLOSES NOTHING A CALLER DID NOT ALREADY HAVE. Both call sites are
+// past authentication, and the person path is past the membership gate as well —
+// a non-member is still refused with "not a member of this company" and can
+// enumerate nothing. What is disclosed to an authenticated member of the company
+// is the shape of the static API surface, which is identical for every tenant and
+// carries no tenant data.
+func (s *Server) denyUnmappedRoute(w http.ResponseWriter, r *http.Request) {
+	served, canAsk := s.routeMethods(r)
+	switch {
+	case !canAsk:
+		// The router could not be consulted. Fail CLOSED — an inability to tell
+		// the cases apart is exactly the situation the old behaviour was for.
+		writeError(w, http.StatusForbidden, "unmapped route: access denied")
+	case len(served) == 0:
+		writeError(w, http.StatusNotFound, "no such route")
+	case !slices.Contains(served, r.Method):
+		// RFC 9110 requires Allow on a 405, and it is also the disclosure D40
+		// asked for: the recon can now prove which methods a route really has.
+		w.Header().Set("Allow", strings.Join(served, ", "))
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed on this route")
+	default:
+		// The router WOULD serve this exact request and the PDP has no mapping
+		// for it: a PDP gap, not a missing route. Fail closed.
+		writeError(w, http.StatusForbidden, "unmapped route: access denied")
+	}
+}
+
+// probeMethods is the method set routeMethods asks the router about. CONNECT and
+// TRACE are omitted deliberately: nothing in this product mounts either, so
+// probing them could only ever pad an Allow header with methods no route has.
+var probeMethods = []string{
+	http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut,
+	http.MethodPatch, http.MethodDelete, http.MethodOptions,
+}
+
+// routeMethods asks the ROUTER — the same tree that will or will not serve this
+// request — which methods it actually mounts at this request's path. `canAsk` is
+// false when the router is not available, and the caller then fails closed.
+//
+// ⛔ THE ROUTER IS THE ORACLE, NOT A SECOND TABLE. A hand-maintained list of
+// "routes that exist" would drift from the router the first time somebody mounted
+// something, and the drift would show up as this function lying about a real
+// route. chi.Mux.Match walks the same radix tree ServeHTTP walks; it runs no
+// handler and no middleware, and it is given a FRESH route context so it cannot
+// disturb the one this request is being routed with (chi mutates the context it
+// is handed — see the note on Mux.Match).
+//
+// The FULL original path is used, not routeSuffix: chi does not rewrite
+// r.URL.Path (it tracks progress in the route context), so this is the same
+// string the top-level router matched, asked of the top-level router.
+func (s *Server) routeMethods(r *http.Request) (served []string, canAsk bool) {
+	if s.router == nil {
+		return nil, false
+	}
+	for _, m := range probeMethods {
+		if s.router.Match(chi.NewRouteContext(), m, r.URL.Path) {
+			served = append(served, m)
+		}
+	}
+	return served, true
 }
 
 // voucherDateFromRequest peeks a write body's voucher date out so the PDP can

@@ -201,6 +201,25 @@ func TestASyncCredentialCouldTakeTheCompanysInvoicesOutOfTheBuildingAsPdfs(t *te
 // The svc fast path never called routeAction, so a service principal was the one
 // caller for whom that guarantee did not hold — every future route would be born
 // reachable by it.
+//
+// ⛔ THIS TEST ASSERTED THE LITERAL 403 AND WAS PINNING D40 ALONGSIDE ITS OWN
+// PROPERTY. D40's fix makes a path the router mounts NOTHING at answer 404 (a
+// path it mounts under another method, 405), and all three paths below are of
+// that kind — so a literal 403 here demanded the very confusion D40 removed:
+// "never built" reading as "not permitted".
+//
+// It now asserts what it was always ABOUT, which is strictly stronger than the
+// old check and cannot be satisfied by the regression it was built to catch:
+//
+//	(1) PARITY — the service credential gets the SAME answer as the Owner. The
+//	    bug was an ASYMMETRY (svc served where a person was refused), so parity
+//	    is the property, not the number it happens to be.
+//	(2) NOT SERVED — neither principal gets a 2xx. A svc token that started
+//	    being served here would break parity AND this clause together.
+//
+// The 403 arm itself has not gone anywhere and is pinned on its own, over a path
+// the router really does mount, in
+// TestAMountedButUnmappedRouteStillFailsClosed (auth_unmapped_route_shape_test.go).
 func TestAPathNobodyMappedIsRefusedForASyncCredentialExactlyAsForAPerson(t *testing.T) {
 	s := payrollServer(t)
 	companyID, ownerTok := aclOwnerCompany(t, s)
@@ -212,20 +231,28 @@ func TestAPathNobodyMappedIsRefusedForASyncCredentialExactlyAsForAPerson(t *test
 		base + "/print/reports/not-a-report",
 		base + "/print/vouchers/not-a-class/" + uuid.NewString(),
 	} {
-		// The control: a real Owner is refused with 403 on the same path, which is
-		// what makes "403" the right answer rather than an accident of routing.
+		// The control: a real Owner is not served this path either. That is what
+		// makes the svc leg below a statement about the credential rather than
+		// about the route.
 		recOwner := svcGet(t, s, path, ownerTok)
-		if recOwner.Code != http.StatusForbidden {
-			t.Fatalf("control: an Owner on the unmapped path %s = %d, want 403 — the "+
+		if recOwner.Code < 400 {
+			t.Fatalf("control: an Owner on the unmapped path %s = %d, want a refusal — the "+
 				"default-deny this test compares against is not in force, so the svc leg "+
 				"below would prove nothing", path, recOwner.Code)
 		}
 		rec := svcGet(t, s, path, svc)
-		if rec.Code != http.StatusForbidden {
-			t.Errorf("an unmapped sub-path %s served to a service credential = %d, want 403; "+
-				"a route nobody mapped must default-deny for a sync credential exactly as it "+
-				"does for a person, or every route added after this one is born reachable by it "+
-				"(body %.200s)", path, rec.Code, rec.Body.String())
+		if rec.Code < 400 {
+			t.Errorf("an unmapped sub-path %s SERVED to a service credential = %d; a route nobody "+
+				"mapped must be refused for a sync credential exactly as it is for a person, or "+
+				"every route added after this one is born reachable by it (body %.200s)",
+				path, rec.Code, rec.Body.String())
+			continue
+		}
+		if rec.Code != recOwner.Code {
+			t.Errorf("an unmapped sub-path %s answers %d for a service credential but %d for an "+
+				"Owner. The refusal must not DEPEND on the credential: an asymmetry here is the "+
+				"exact shape of the bug this test exists for (svc body %.200s)",
+				path, rec.Code, recOwner.Code, rec.Body.String())
 		}
 	}
 }
