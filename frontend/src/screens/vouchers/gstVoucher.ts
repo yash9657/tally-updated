@@ -199,6 +199,17 @@ export function gstOrientationFor(
   return GST_ORIENTATION[voucherType];
 }
 
+/**
+ * The three tax ledger names for a kind, EXPORTED so a caller can tell a tax leg
+ * from a base leg when reading a stored voucher back (see baseLegFromView in
+ * VoucherScreen.tsx).
+ */
+export function gstTaxLedgerNames(
+  kind: "output" | "input",
+): [string, string, string] {
+  return taxLedgerNames(kind);
+}
+
 /** The three tax ledger names for a kind. */
 function taxLedgerNames(kind: "output" | "input"): [string, string, string] {
   const p = kind === "output" ? "Output" : "Input";

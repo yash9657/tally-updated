@@ -254,6 +254,117 @@ describe("drill-to-alter hydration via getVoucher", () => {
 });
 
 /**
+ * ⛔⛔ AN ALTER MAY NOT MOVE THE VOUCHER'S INCOME / EXPENSE HEAD.
+ *
+ * FOUND BY DRIVING D41 IN A BROWSER, and it is data loss rather than an orphan
+ * master. `buildGstRequest` always ensured the ORIENTATION'S CANONICAL base
+ * ("Domestic Sales" / "Purchases"), so opening any accounting-mode GST voucher
+ * booked to a different head and pressing Ctrl+A silently re-pointed it. On the
+ * demo books, with nothing edited:
+ *
+ *     version 1:  Dr Raw Material Purchases  30000.0000
+ *     version 2:  Dr Purchases               30000.0000
+ *
+ * A "Purchases" ledger was created to receive it, the voucher still balanced,
+ * the tax was unchanged — and the company's expense analysis had changed
+ * because somebody LOOKED at a voucher. No totals check anywhere can see it.
+ */
+describe("⛔ an alter preserves the head the voucher is booked to", () => {
+  const seedPurchase = async (baseName: string) => {
+    const base = createMockClient({ seed: false });
+    const creditor = await base.createLedger("co-1", {
+      name: "Steel Suppliers",
+      group_name: "Sundry Creditors",
+      state_code: "29",
+    });
+    const head = await base.createLedger("co-1", {
+      name: baseName,
+      group_name: "Purchase Accounts",
+    });
+    const cgst = await base.createLedger("co-1", { name: "Input CGST", group_name: "Duties & Taxes" });
+    const sgst = await base.createLedger("co-1", { name: "Input SGST", group_name: "Duties & Taxes" });
+    const igst = await base.createLedger("co-1", { name: "Input IGST", group_name: "Duties & Taxes" });
+    const posted = await base.postPurchaseVoucher("co-1", {
+      voucher_no: "PUR/0001",
+      voucher_date: "2025-05-10",
+      party: "Steel Suppliers",
+      party_ledger_id: creditor.ledger_id,
+      postings: [
+        { ledger_id: creditor.ledger_id, dr_cr: "CR", amount: "11800.0000" },
+        { ledger_id: head.ledger_id, dr_cr: "DR", amount: "10000.0000" },
+        { ledger_id: cgst.ledger_id, dr_cr: "DR", amount: "900.0000" },
+        { ledger_id: sgst.ledger_id, dr_cr: "DR", amount: "900.0000" },
+      ],
+      gst: {
+        supplier_state_code: "29",
+        place_of_supply_state_code: "29",
+        lines: [{ taxable_value: "10000.0000", gst_rate_pct: "18" }],
+        cgst_ledger_id: cgst.ledger_id,
+        sgst_ledger_id: sgst.ledger_id,
+        igst_ledger_id: igst.ledger_id,
+      },
+    });
+    return { base, posted, head, creditor };
+  };
+
+  const drillAndAccept = async (client: CoredClient) => {
+    renderShell(client);
+    const app = screen.getByRole("application");
+    fireEvent.keyDown(app, { key: "g", altKey: true });
+    fireEvent.mouseDown(screen.getByText("Day Book"));
+    fireEvent.keyDown(app, { key: "Enter" });
+    await waitFor(() => expect(screen.getByText("PUR/0001")).toBeTruthy());
+    fireEvent.keyDown(app, { key: "Enter" });
+    await waitFor(() =>
+      expect(screen.getByText(/Purchase Voucher \(Alteration\)/)).toBeTruthy(),
+    );
+    fireEvent.change(screen.getByTestId("gst-rate"), { target: { value: "18" } });
+    fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    return app;
+  };
+
+  it("keeps a NON-canonical expense head on the altered voucher", async () => {
+    const { base, posted, head } = await seedPurchase("Raw Material Purchases");
+    const { client, spies } = spyClient(base);
+    await drillAndAccept(client);
+
+    await waitFor(() => expect(spies.alterPurchaseVoucher).toHaveBeenCalledTimes(1));
+    const [, voucherID, req] = spies.alterPurchaseVoucher!.mock.calls[0]!;
+    expect(voucherID).toBe(posted.voucher_id);
+    const postings = (req as { postings: PostingRequest[] }).postings;
+    const debits = postings.filter((p) => p.dr_cr === "DR").map((p) => p.ledger_id);
+    // ⛔ THE HEAD IS STILL THE ONE THE VOUCHER WAS BOOKED TO.
+    expect(debits).toContain(head.ledger_id);
+  });
+
+  it("⛔ and mints NO 'Purchases' ledger on the way", async () => {
+    const { base } = await seedPurchase("Raw Material Purchases");
+    const before = (await base.listLedgers("co-1")).ledgers.length;
+    const { client } = spyClient(base);
+    await drillAndAccept(client);
+    await waitFor(async () =>
+      expect((await base.listLedgers("co-1")).ledgers.length).toBe(before),
+    );
+    const names = (await base.listLedgers("co-1")).ledgers.map((l) => l.name);
+    expect(names).not.toContain("Purchases");
+  });
+
+  it("⛔ CONTROL: a voucher booked to the CANONICAL head still alters cleanly", async () => {
+    // Without this control, "preserve whatever was hydrated" could be satisfied
+    // by a builder that had stopped resolving a base ledger at all.
+    const { base, head } = await seedPurchase("Purchases");
+    const { client, spies } = spyClient(base);
+    await drillAndAccept(client);
+    await waitFor(() => expect(spies.alterPurchaseVoucher).toHaveBeenCalledTimes(1));
+    const [, , req] = spies.alterPurchaseVoucher!.mock.calls[0]!;
+    const debits = (req as { postings: PostingRequest[] }).postings
+      .filter((p) => p.dr_cr === "DR")
+      .map((p) => p.ledger_id);
+    expect(debits).toContain(head.ledger_id);
+  });
+});
+
+/**
  * The PARTY PICKER reads the company's real chart of accounts.
  *
  * It used to offer a hardcoded sample list ("Acme Traders", "Bharat Stores",

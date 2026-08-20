@@ -28,6 +28,7 @@ import {
   ensureLedger,
   ensureGstTaxLedgers,
   gstOrientationFor,
+  gstTaxLedgerNames,
   buildGstVoucherRequest,
   gstVoucherGross,
   type GstFormState,
@@ -183,6 +184,14 @@ interface VoucherForm {
   account: string;
   /** The Account field's resolved uuid, when it was PICKED rather than typed. */
   accountLedgerId: string;
+  /**
+   * ACCOUNTING-MODE GST ONLY: the income/expense head a HYDRATED voucher is
+   * already booked to, so an alter preserves it instead of re-pointing the
+   * voucher at the orientation's canonical base. "" on a fresh create, and ""
+   * when the voucher has no single identifiable base leg — see
+   * {@link baseLegFromView}, which explains the data loss this prevents.
+   */
+  baseLedgerId: string;
   /** The chosen party's GST state code (seeds place of supply). */
   partyStateCode: string;
   narration: string;
@@ -283,6 +292,8 @@ function emptyForm(): VoucherForm {
     partyLedgerId: "",
     account: "",
     accountLedgerId: "",
+    // "" => a fresh voucher is booked to the orientation's canonical base.
+    baseLedgerId: "",
     partyStateCode: "",
     narration: "",
     postings: [],
@@ -318,6 +329,9 @@ function formFromView(view: VoucherView): VoucherForm {
     // silently merging two bank legs into one, which is what it did before.
     account: account?.name ?? "",
     accountLedgerId: account?.id ?? "",
+    // ⛔ THE HEAD THIS VOUCHER IS BOOKED TO, carried so an alter cannot re-point
+    // it to the orientation's canonical base. See baseLegFromView.
+    baseLedgerId: baseLegFromView(view),
     partyStateCode: "",
     narration: view.narration,
     postings: postingsFromView(view),
@@ -536,6 +550,56 @@ function accountLegFromView(view: VoucherView): { name: string; id: string } | n
 }
 
 /**
+ * THE INCOME / EXPENSE HEAD A STORED GST VOUCHER IS ACTUALLY BOOKED TO.
+ *
+ * ⛔⛔ THE DEFECT THIS CLOSES IS DATA LOSS ON EVERY ALTER, AND IT WAS DRIVEN.
+ *
+ * `buildGstRequest` always `ensureLedger`d the ORIENTATION'S CANONICAL base —
+ * "Domestic Sales" for a sale, "Purchases" for a purchase — so opening ANY
+ * accounting-mode GST voucher booked to some other head and pressing Ctrl+A
+ * silently MOVED it. Driven on the demo books:
+ *
+ *     version 1:  Dr Raw Material Purchases  30000.0000
+ *     version 2:  Dr Purchases               30000.0000     <- nothing was edited
+ *
+ * A "Purchases" ledger was created to receive it. The voucher still balances,
+ * the tax is unchanged, every trigger and every totals check passes — and the
+ * company's expense analysis has quietly changed, on a voucher somebody merely
+ * LOOKED at. That is worse than an orphan master: an orphan is visible in the
+ * chart of accounts, this is a restated P&L.
+ *
+ * THE RULE, and it refuses to guess for the same reason
+ * {@link singleEntryCounterparty} does:
+ *
+ *  1. Take the legs on the orientation's BASE SIDE.
+ *  2. Drop the party leg (by uuid) and the three tax legs (by NAME — they are
+ *     the names `ensureGstTaxLedgers` creates, and the only three this form can
+ *     ever have produced on that side).
+ *  3. Exactly ONE left => that is the head this voucher is booked to, by uuid.
+ *  4. Anything else => null, and the builder falls back to the canonical base.
+ *     A multi-head voucher cannot be restated by a form holding one taxable
+ *     value anyway, and the multi-rate guard already refuses those.
+ *
+ * ⚠️ ON A FRESH CREATE THERE IS NO VIEW, so the canonical base is still what a
+ * new voucher gets. This changes only what an ALTER preserves.
+ */
+function baseLegFromView(view: VoucherView): string {
+  const cls = view.class.toLowerCase();
+  const orientation = gstOrientationFor(cls);
+  if (orientation === undefined) return "";
+  const taxNames = new Set<string>(
+    gstTaxLedgerNames(orientation.taxKind).map((n) => n.toLowerCase()),
+  );
+  const legs = view.postings.filter(
+    (p) =>
+      p.dr_cr.toUpperCase().startsWith(orientation.baseSide[0]!) &&
+      p.ledger_id !== view.party_ledger_id &&
+      !taxNames.has(p.ledger.toLowerCase()),
+  );
+  return legs.length === 1 ? legs[0]!.ledger_id : "";
+}
+
+/**
  * WHO THE MONEY CAME FROM / WENT TO on a single-entry voucher — the voucher's
  * real counterparty, derived from the PARTICULARS.
  *
@@ -632,6 +696,11 @@ function formFromDraft(draft: PurchaseVoucherDraft): VoucherForm {
     date: body.voucher_date ?? today(),
     party: body.party ?? "",
     partyLedgerId: body.party_ledger_id ?? "",
+    // ⚠️ "" DELIBERATELY. A draft is a NEW purchase, not an alteration of a
+    // stored one, so there is no already-booked head to preserve — the
+    // orientation's canonical base is the right answer here. (The accept POSTs
+    // the original balanced body anyway; see this function's own note.)
+    baseLedgerId: "",
     // A draft is an F9 PURCHASE — a GST form with no single-entry account. Blank
     // rather than derived, for the same reason `drCrLines` is: the accept POSTs
     // the ORIGINAL balanced body, so a field seeded here would display something
@@ -1958,10 +2027,16 @@ function AccountingVoucherScreen({
             groupName: orientation.partyGroup,
             stateCode: f.partyStateCode || undefined,
           }));
-        const incomeLedgerId = await ensureLedger(client, companyID, {
-          name: orientation.baseLedger.name,
-          groupName: orientation.baseLedger.group,
-        });
+        // ⛔⛔ THE HYDRATED HEAD WINS. Ensuring the canonical base here on every
+        // accept is what silently moved `Raw Material Purchases` to `Purchases`
+        // on an alter that edited nothing — see baseLegFromView. A fresh create
+        // has no hydrated head and still gets the canonical one.
+        const incomeLedgerId =
+          f.baseLedgerId ||
+          (await ensureLedger(client, companyID, {
+            name: orientation.baseLedger.name,
+            groupName: orientation.baseLedger.group,
+          }));
         return buildGstVoucherRequest({
           voucherType: type,
           partyLedgerId,
