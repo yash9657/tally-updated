@@ -18,6 +18,7 @@ import {
 import { createMockClient, MOCK_TDS_DEDUCTIONS } from "../api/mock";
 import { ApiError } from "../api";
 import type {
+  AllocateToChallanRequest,
   AllocatableDeduction,
   CoredClient,
   CreateTDSChallanRequest,
@@ -159,10 +160,10 @@ function listView(
  * AppShell would — which also proves the actions are registered at all, and
  * nothing more than that (see the header).
  */
+type FireKind = "recordTDSChallan" | "allocateTDSChallan" | "accept";
+
 function renderScreen(client: CoredClient) {
-  let fire: (
-    kind: "recordTDSChallan" | "accept",
-  ) => Promise<string | void> = async () => {};
+  let fire: (kind: FireKind) => Promise<string | void> = async () => {};
   function Harness() {
     const dispatch = useScreenActionDispatcher();
     fire = async (kind) => {
@@ -185,8 +186,9 @@ function renderScreen(client: CoredClient) {
   );
   return {
     record: () => act(async () => void (await fire("recordTDSChallan"))),
+    allocate: () => act(async () => void (await fire("allocateTDSChallan"))),
     accept: () => act(async () => void (await fire("accept"))),
-    lastMessage: async (kind: "recordTDSChallan" | "accept") => {
+    lastMessage: async (kind: FireKind) => {
       let out: string | void = undefined;
       await act(async () => {
         out = await fire(kind);
@@ -1048,5 +1050,230 @@ describe("a screen-owned key is actually ROUTED by the shell", () => {
     expect(screen.queryByText(/Payment Voucher/)).toBeNull();
     // Still on the form, with what was keyed still on screen.
     expect(screen.getByTestId("tds-challan-form")).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ⛔ D1 — ATTACHING TO A DEPOSIT THAT IS ALREADY RECORDED.
+//
+// The route has existed since the audit traced this row; NOTHING IN THIS PRODUCT
+// COULD CALL IT, so a challan recorded naming fewer deductions than it paid for
+// was a trap with no way out — the audit tried seven doors in a browser and six
+// HTTP methods and 05130's unallocated balance stayed at exactly 12000.0000.
+//
+// ⛔ EVERY ASSERTION BELOW IS ON THE FALLING BALANCE, NEVER ON THE CALL. A screen
+// that reported success off the 200 would look identical whether it moved
+// anything or not, which is this repo's signature failure; so these tests read
+// `unallocated_tax_rupees` out of the rendered register, not out of a spy.
+// ---------------------------------------------------------------------------
+
+/** Record a challan that deliberately pays for LESS than its tax box. */
+async function recordShortChallan(app: ReturnType<typeof renderScreen>) {
+  await askYear();
+  await app.record();
+  // 25,000 of tax, but only P1's 20,000 ticked: 5,000 will stay unallocated,
+  // which is exactly the state D1 says could never be corrected.
+  fillForm({ tax: "25000", pay: [P1] });
+  await app.accept();
+  await screen.findByTestId("tds-challan:05122");
+}
+
+/** The unallocated figure the REGISTER is currently showing for a challan. */
+function unallocatedOnScreen(challanNo: string): string {
+  return screen.getByTestId(`tds-challan-unallocated:${challanNo}`).textContent ?? "";
+}
+
+describe("⛔ D1: a deposit already recorded can be told what else it paid for", () => {
+  it("THE UNALLOCATED BALANCE FALLS — the number that could never move", async () => {
+    const app = renderScreen(createMockClient({ seed: false }));
+    await recordShortChallan(app);
+    expect(unallocatedOnScreen("05122")).toBe("5000.0000");
+
+    await app.allocate();
+    expect(screen.getByTestId("tds-allocate-form")).toBeTruthy();
+    // The BEFORE figure is on screen, named as such: an operator cannot see a
+    // number fall unless they were shown where it started.
+    expect(screen.getByTestId("tds-allocate-before").textContent).toContain(
+      "5000.0000",
+    );
+
+    tick(P4); // 5000.0000 under 194H, leg 1 — the non-zero leg
+    fireEvent.change(screen.getByLabelText("Attached by"), {
+      target: { value: "asha" },
+    });
+    await app.accept();
+
+    // THE ORACLE. Not "the client was called"; the register, re-read, says the
+    // deposit now covers it.
+    await screen.findByTestId("tds-challan:05122");
+    expect(unallocatedOnScreen("05122")).toBe("0.0000");
+    expect(
+      screen.getByTestId(`tds-allocation:${P4.voucher_no}:${P4.section}:${P4.leg_seq}`),
+    ).toBeTruthy();
+  });
+
+  it("says what the deposit now covers, on the status line, with the balance in it", async () => {
+    const app = renderScreen(createMockClient({ seed: false }));
+    await recordShortChallan(app);
+    await app.allocate();
+    tick(P4);
+    fireEvent.change(screen.getByLabelText("Attached by"), {
+      target: { value: "asha" },
+    });
+    const msg = await app.lastMessage("accept");
+    expect(msg).toContain("2 deduction(s)");
+    expect(msg).toContain("0.0000 of tax still unallocated");
+  });
+
+  it("⛔ sends the identifiers EXACTLY as they were served — never anything typed", async () => {
+    const inner = createMockClient({ seed: false });
+    const spy = vi.fn(inner.allocateToTDSChallan.bind(inner));
+    const app = renderScreen({ ...inner, allocateToTDSChallan: spy } as unknown as CoredClient);
+    await recordShortChallan(app);
+    await app.allocate();
+    tick(P4);
+    fireEvent.change(screen.getByLabelText("Attached by"), {
+      target: { value: "asha" },
+    });
+    await app.accept();
+
+    const [, challanID, req] = spy.mock.calls[0] as [string, string, AllocateToChallanRequest];
+    // The challan id is a UUID the operator never saw and never typed.
+    expect(challanID).toMatch(/^[0-9a-z-]+$/);
+    expect(req.allocations).toEqual([
+      {
+        voucher_id: P4.voucher_id,
+        section: P4.section,
+        leg_seq: P4.leg_seq,
+        amount_rupees: P4.tax_rupees,
+      },
+    ]);
+  });
+
+  it("⛔ does not OFFER a deduction another challan already paid — so the 409 is unreachable from the keyboard", async () => {
+    const app = renderScreen(createMockClient({ seed: false }));
+    await recordShortChallan(app); // 05122 pays P1
+    await app.allocate();
+    // P1 is on the list — an operator who cannot find a deduction has to be able
+    // to tell "not deducted this year" from "already deposited" — but it carries
+    // no checkbox, so it cannot travel.
+    expect(screen.getByText(/already deposited/)).toBeTruthy();
+    expect(screen.queryByLabelText(payLabel(P1))).toBeNull();
+  });
+
+  it("…and the CLIENT still refuses it, naming the challan that paid it (the mock is not looser than cored)", async () => {
+    // ⛔ DRIVEN THROUGH THE CLIENT, NOT THE SCREEN, because the screen makes this
+    // unreachable (above) — and D84 records that a mock looser than cored is a
+    // source of false green, so the refusal has to be pinned somewhere. A stale
+    // tick surviving a re-read is the real-world path to it.
+    const client = createMockClient({ seed: false });
+    const created = await client.createTDSChallan(COMPANY, requestFor({ tax_rupees: "25000" }));
+    const second = await client.createTDSChallan(
+      COMPANY,
+      requestFor({
+        challan_no: "05123",
+        tax_rupees: "5000",
+        allocations: [
+          {
+            voucher_id: P4.voucher_id,
+            section: P4.section,
+            leg_seq: P4.leg_seq,
+            amount_rupees: P4.tax_rupees,
+          },
+        ],
+      }),
+    );
+    await expect(
+      client.allocateToTDSChallan(COMPANY, second.id, {
+        allocations: [
+          {
+            voucher_id: P1.voucher_id,
+            section: P1.section,
+            leg_seq: P1.leg_seq,
+            amount_rupees: P1.tax_rupees,
+          },
+        ],
+        recorded_by: "asha",
+      }),
+    ).rejects.toThrow(/already/);
+    expect(created.challan?.challan_no).toBe("05122");
+  });
+
+  it("⛔ D2 applies HERE TOO: attaching one at a time is not a way past the cap", async () => {
+    const app = renderScreen(createMockClient({ seed: false }));
+    await askYear();
+    await app.record();
+    // ONE rupee of tax, and it pays P2's 3333.3000 — allowed on the create, and
+    // the challan is then already over-allocated within the create's own
+    // tolerance. Attaching P1's 20000 on top must be refused, or the whole
+    // over-allocation rule would be bypassable one deduction at a time.
+    fillForm({ tax: "3333", pay: [P2] });
+    await app.accept();
+    await screen.findByTestId("tds-challan:05122");
+
+    await app.allocate();
+    tick(P1);
+    fireEvent.change(screen.getByLabelText("Attached by"), {
+      target: { value: "asha" },
+    });
+    await app.accept();
+    expect(screen.getByTestId("tds-allocate-refusal").textContent).toContain(
+      "claim more tax than it deposited",
+    );
+    // AND THE BOOKS AGREE: the register still shows the pre-request figure.
+    expect(unallocatedOnScreen("05122")).toBe("-0.3000");
+  });
+
+  it("refuses an empty tick — a recorded deposit is only changed by saying WHAT it paid for", async () => {
+    const app = renderScreen(createMockClient({ seed: false }));
+    await recordShortChallan(app);
+    await app.allocate();
+    fireEvent.change(screen.getByLabelText("Attached by"), {
+      target: { value: "asha" },
+    });
+    await app.accept();
+    expect(screen.getByTestId("tds-allocate-refusal").textContent).toContain(
+      "names no deduction to allocate",
+    );
+    expect(unallocatedOnScreen("05122")).toBe("5000.0000");
+  });
+
+  it("Alt+A explains itself rather than opening over no register", async () => {
+    const app = renderScreen(createMockClient({ seed: false }));
+    const msg = await app.lastMessage("allocateTDSChallan");
+    expect(msg).toContain("no register on screen");
+    expect(screen.queryByTestId("tds-allocate-form")).toBeNull();
+  });
+
+  it("Alt+A on a year with no deposit says so instead of opening an empty panel", async () => {
+    const app = renderScreen(createMockClient({ seed: false }));
+    await askYear();
+    const msg = await app.lastMessage("allocateTDSChallan");
+    expect(msg).toContain("No deposit is recorded");
+    expect(screen.queryByTestId("tds-allocate-form")).toBeNull();
+  });
+
+  it("changing the target deposit CLEARS the ticks", async () => {
+    const app = renderScreen(createMockClient({ seed: false }));
+    await recordShortChallan(app);
+    await app.record();
+    fillForm({ serial: "05123", tax: "5000", pay: [P4] });
+    await app.accept();
+    await screen.findByTestId("tds-challan:05123");
+
+    await app.allocate();
+    tick(P2);
+    expect(screen.getByTestId("tds-allocation-chosen").textContent).toContain(
+      "1 deduction(s) ticked",
+    );
+    const options = screen
+      .getByTestId("tds-allocate-challan")
+      .querySelectorAll("option");
+    fireEvent.change(screen.getByTestId("tds-allocate-challan"), {
+      target: { value: options[1]!.getAttribute("value")! },
+    });
+    expect(screen.getByTestId("tds-allocation-chosen").textContent).toContain(
+      "Nothing ticked",
+    );
   });
 });

@@ -386,6 +386,11 @@ const RAW_SCREEN_BINDINGS: Partial<
     // scoped to this screen; the global `createMaster` would push a
     // ledger-create frame over the form instead.
     "Alt+C": { kind: "recordTDSChallan" },
+    // Alt+A — ATTACH deductions to a deposit ALREADY RECORDED (D1). A different
+    // verb from Alt+C above: that one is refused outright for a CIN on file, and
+    // before this key there was no other writer, so a challan recorded naming
+    // fewer deductions than it paid for could never be completed.
+    "Alt+A": { kind: "allocateTDSChallan" },
     // The voucher keys, held back HERE and only here. The feature is built and
     // is one Esc away — which is what these notes say, rather than pretending
     // the voucher does not exist.
@@ -908,6 +913,11 @@ export function actionLabel(action: KeymapAction): string {
       return "Import a bank statement (CSV)";
     case "recordTDSChallan":
       return "Record a TDS deposit (challan)";
+    case "allocateTDSChallan":
+      // Named as the VERB and not as "allocate", which is the wire's word: what
+      // the operator is doing is saying which further deductions a deposit they
+      // already recorded actually paid for.
+      return "Say what an already-recorded deposit also paid for";
     case "createCostMaster":
       // Both, named, because one key creates either and a label saying only
       // "cost centre" would hide the axis — the master an operator has to create

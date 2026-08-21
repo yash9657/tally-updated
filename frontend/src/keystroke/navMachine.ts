@@ -1062,6 +1062,7 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
       return {};
     }
 
+    case "allocateTDSChallan":
     case "recordTDSChallan": {
       // NO NAVIGATION. The deposit form lives ON the challan register, because
       // the register is the context that says which tax year is being paid for

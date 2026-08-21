@@ -175,6 +175,11 @@ const BANK_RECON_BAR: readonly ButtonBarItem[] = [
  */
 const TDS_CHALLAN_BAR: readonly ButtonBarItem[] = [
   item("Alt+C", "Record Challan"),
+  // ⛔ ADVERTISED, because a key nobody can find is the same as no key. D1's whole
+  // subject is that an operator could not complete a challan recorded with too
+  // few allocations; a fix reachable only by someone who read the keymap would
+  // leave them exactly where they were.
+  item("Alt+A", "Allocate More"),
   item("Ctrl+A", "Accept"),
   item("Esc", "Back"),
   item("Alt+G", "Go To"),

@@ -46,6 +46,13 @@ export type ScreenActionKind =
    */
   | "recordTDSChallan"
   /**
+   * Alt+A on the TDS Challans screen — ATTACH deductions to a deposit already
+   * recorded (D1). A screen action for the same reason `recordTDSChallan` is,
+   * and one more: the challan being added to is one the operator picked out of
+   * the register that is on screen, so the action has no meaning off it.
+   */
+  | "allocateTDSChallan"
+  /**
    * Alt+C on the COST MASTERS screen — open the create panel for a cost CATEGORY
    * (an axis) or a cost CENTRE (a position on one). A screen action rather than a
    * machine transition for the same reasons `recordTDSChallan` is: the panel's

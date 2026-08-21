@@ -113,6 +113,27 @@ function allocationKey(d: AllocatableDeduction): string {
 }
 
 /**
+ * Is this fixed-point money string STRICTLY POSITIVE?
+ *
+ * ⛔ IT PARSES NOTHING AND COMPUTES NOTHING, and that is deliberate: rule (1) in
+ * the header says this file never touches a number, and `Number("3333.3000") > 0`
+ * would be the first crack in it — on a screen whose whole subject is 4-dp
+ * figures compared for EQUALITY by the server. The sign and the zero-ness of a
+ * decimal string are readable off the CHARACTERS: a leading "-" is negative, and
+ * a value is zero exactly when every digit in it is "0". Nothing else about the
+ * number is inferred, and no total is derived from it.
+ *
+ * It is used for two navigation questions only — "can this challan take an
+ * allocation at all" (the server refuses an interest-only one by name) and
+ * "which challan should the panel open on" — never to decide an amount.
+ */
+function q4Positive(money: string): boolean {
+  const t = (money ?? "").trim();
+  if (t.startsWith("-")) return false;
+  return /[1-9]/.test(t);
+}
+
+/**
  * THE SCREEN'S OWN REFUSAL of a tax year — see (8) in the header for why this one
  * cannot be left to the server.
  *
@@ -193,6 +214,25 @@ export function TDSChallansScreen() {
    */
   const [formLostWithRegister, setFormLostWithRegister] = useState(false);
 
+  // ---- ALT+A — ATTACH TO A DEPOSIT ALREADY RECORDED (register row D1).
+  //
+  // ⛔ THIS IS THE HALF THAT MAKES THE ROUTE REACHABLE. The server has answered
+  // `POST /tds-challans/{id}/allocations` since the audit pass that traced D1;
+  // nothing in this product could call it, so the row stayed open and a challan
+  // recorded naming too few deductions was a trap with no way out — the audit
+  // tried seven doors in a browser and six HTTP methods and 05130's unallocated
+  // stayed at exactly 12000.0000.
+  //
+  // ⚠️ `attachTo` IS THE CHALLAN'S UUID AND IT IS NEVER TYPED. It comes from the
+  // register on screen, exactly as the allocation identifiers do (see (7)) — a
+  // challan id is another thing no screen in this product displays.
+  const [attachTo, setAttachTo] = useState<string | null>(null);
+  /** Ticked keys for the ATTACH picker. Kept apart from `chosen` on purpose: a
+      tick left over from a half-abandoned deposit form must not travel to a
+      different challan. */
+  const [attachChosen, setAttachChosen] = useState<string[]>([]);
+  const [attachBy, setAttachBy] = useState("");
+
   /**
    * ⚠️ THE ONE PLACE `data` BECOMES NULL, and it exists so that two states cannot
    * disagree.
@@ -209,10 +249,19 @@ export function TDSChallansScreen() {
   useEffect(() => {
     recordingRef.current = recording;
   }, [recording]);
+  const attachingRef = useRef(false);
+  useEffect(() => {
+    attachingRef.current = attachTo !== null;
+  }, [attachTo]);
   const dropRegister = useCallback(() => {
     setData(null);
-    setFormLostWithRegister(recordingRef.current);
+    setFormLostWithRegister(recordingRef.current || attachingRef.current);
     setRecording(false);
+    // The attach panel is anchored to a challan IN THE REGISTER. When the
+    // register goes, the anchor goes with it; leaving the panel up would let an
+    // operator tick rows from a list that is no longer on screen.
+    setAttachTo(null);
+    setAttachChosen([]);
   }, []);
 
   const load = useCallback(
@@ -432,7 +481,149 @@ export function TDSChallansScreen() {
     tax,
   ]);
 
-  useRegisterScreenAction("accept", submit);
+  // ---- Alt+A — ATTACH TO A DEPOSIT ALREADY RECORDED (D1).
+  //
+  // It opens on the FIRST challan of the register that still has unallocated tax,
+  // and says which one it chose. Choosing for the operator is safe here in a way
+  // it is not for a minor head: this is a NAVIGATION default over a list they are
+  // looking at, not an assertion about their assessment history, and the panel
+  // names the challan and offers the others. Opening with nothing chosen would
+  // make the commonest case (one deposit, keyed short) take an extra decision.
+  useRegisterScreenAction(
+    "allocateTDSChallan",
+    useCallback((): string => {
+      if (denied) {
+        return "You are not permitted to record a deposit on this company.";
+      }
+      // THE PANEL'S RENDER CONDITION, VERBATIM — the lesson dropRegister records.
+      if (data === null) {
+        return (
+          "There is no register on screen. Ask for the tax year first: this key " +
+          "adds deductions to a deposit that is already recorded, so there has to " +
+          "be one in front of you."
+        );
+      }
+      if (recording) {
+        return (
+          "The deposit form is open. Esc closes it — Alt+A adds to a deposit that " +
+          "is ALREADY recorded, which is a different act from recording a new one."
+        );
+      }
+      if (attachTo !== null) {
+        return "The allocate panel is already open. Ctrl+A sends it.";
+      }
+      if (data.challans.length === 0) {
+        return (
+          `No deposit is recorded against ${data.tax_year_label}, so there is nothing to add to. ` +
+          "Alt+C records one."
+        );
+      }
+      // ⚠️ ONLY A CHALLAN WITH TAX ON IT can take an allocation at all — the
+      // server refuses an interest-only challan by name, and offering one here
+      // would be this screen inviting a refusal.
+      const open = data.challans.filter((ch) => q4Positive(ch.tax_rupees));
+      if (open.length === 0) {
+        return (
+          `Every deposit recorded against ${data.tax_year_label} is interest, fee or penalty only. ` +
+          "Only the TAX component discharges a deduction liability, so there is nothing to allocate."
+        );
+      }
+      const first = open.find((ch) => q4Positive(ch.unallocated_tax_rupees)) ?? open[0]!;
+      setAttachTo(first.id);
+      setAttachChosen([]);
+      setRefusal("");
+      setCreateDenied(false);
+      setNotice("");
+      return (
+        `Adding to challan ${first.challan_no} of ${first.deposit_date} — ${first.unallocated_tax_rupees} of its tax is ` +
+        "unallocated. Tick what it also paid for; Ctrl+A sends it."
+      );
+    }, [attachTo, data, denied, recording]),
+  );
+
+  // ---- Ctrl+A while the ATTACH panel is open.
+  //
+  // ⛔ IT RENDERS `unallocated_tax_rupees` FROM THE RESPONSE, and that is the
+  // whole point of the row. The falling balance is D1's only oracle: a screen
+  // that said "attached" off the 200 would look IDENTICAL whether it moved
+  // anything or not, which is this repo's signature failure. The handler
+  // re-reads the challan precisely so nothing here has to infer it.
+  const submitAttach = useCallback(async (): Promise<string> => {
+    if (data === null || attachTo === null) {
+      return "The register is no longer on screen, so there is nothing to add to. Nothing was sent.";
+    }
+    setRefusal("");
+    setCreateDenied(false);
+    setNotice("");
+    setBusy(true);
+    try {
+      // Identifiers and amounts travel exactly as served — see (7). An
+      // already-paid row cannot be ticked and is filtered again here, so a stale
+      // tick from a re-read cannot be sent (that would be a 409).
+      const wire: CreateTDSChallanAllocation[] = data.allocatable_deductions
+        .filter((d) => !d.already_paid && attachChosen.includes(allocationKey(d)))
+        .map((d) => ({
+          voucher_id: d.voucher_id,
+          section: d.section,
+          leg_seq: d.leg_seq,
+          amount_rupees: d.tax_rupees,
+        }));
+      // NOT REFUSED HERE. An empty list is refused by the ROUTE, with a sentence
+      // about what a recorded deposit is changed by — and letting the server say
+      // it keeps this screen from being a second, drifting copy of the rule.
+      const res = await client.allocateToTDSChallan(companyID, attachTo, {
+        allocations: wire,
+        recorded_by: attachBy.trim(),
+      });
+      setAttachTo(null);
+      setAttachChosen([]);
+      setAttachBy("");
+      // Re-read the year the SERVER says the challan belongs to, not the one on
+      // screen: the two can differ, and the register that comes back is the
+      // evidence the balance moved.
+      setYearText(String(res.tax_year_start));
+      void load(res.tax_year_start);
+
+      if (res.challan === null) {
+        // ⚠️ NOT A FAILED WRITE. The allocations are committed before the
+        // read-back runs; reporting this as a failure would invite the operator
+        // to send them again, and the one-challan-per-deduction constraint would
+        // then refuse it in a way that reads like a bug.
+        const why = res.read_back_error ?? "";
+        const message =
+          "The deductions were attached; the challan could not be read back" +
+          (why === "" ? "" : `: ${why}`) +
+          ". They ARE stored — do not send them again, or they will be refused as already deposited.";
+        setNotice(message);
+        return message;
+      }
+      const ch = res.challan;
+      const message =
+        `Challan ${ch.challan_no} of ${ch.deposit_date} now pays ${ch.allocation_count} deduction(s) — ` +
+        `${ch.allocated_total_rupees} allocated, ${ch.unallocated_tax_rupees} of tax still unallocated.`;
+      setNotice(message);
+      return message;
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setRefusal(message);
+      setCreateDenied(e instanceof ApiError && e.status === 403);
+      return message;
+    } finally {
+      setBusy(false);
+    }
+  }, [attachBy, attachChosen, attachTo, client, companyID, data, load]);
+
+  // ⛔ ONE ACCEPT KEY, TWO PANELS. Ctrl+A is registered ONCE and dispatches on
+  // which panel is open. Registering it twice would leave whichever effect ran
+  // last owning the key, and the loser would be a Ctrl+A that silently did the
+  // other thing.
+  useRegisterScreenAction(
+    "accept",
+    useCallback(
+      (): string | Promise<string> => (attachTo !== null ? submitAttach() : submit()),
+      [attachTo, submit, submitAttach],
+    ),
+  );
 
   // Autofocus the first field when the form opens, so Alt+C leaves the operator
   // keying rather than reaching for a mouse.
@@ -773,14 +964,156 @@ export function TDSChallansScreen() {
         </form>
       ) : null}
 
+      {/* ---- THE ALLOCATE PANEL (Alt+A) — register row D1. ------------------
+
+          It is a SEPARATE panel from the deposit form above and not a mode of
+          it, because the two are different acts: Alt+C keys a counterfoil that
+          is not yet on file (and is refused outright for a CIN that is), while
+          this one changes what a deposit ALREADY on file says it paid for. The
+          only thing they share is the picker, which is the same served list. */}
+      {attachTo !== null && data !== null ? (
+        (() => {
+          const target = data.challans.find((ch) => ch.id === attachTo);
+          if (!target) {
+            // The register was re-read and the challan is not in it — the year
+            // was changed under the panel. Said out loud rather than rendering an
+            // anonymous form.
+            return (
+              <p data-testid="tds-allocate-lost" className="mt-4 max-w-3xl text-sm">
+                The deposit this panel was adding to is not in the register on
+                screen any more. Nothing was sent. Alt+A starts again on the
+                register you are looking at.
+              </p>
+            );
+          }
+          return (
+            <form
+              data-testid="tds-allocate-form"
+              className="mt-4 max-w-4xl border border-tally-fieldText p-3 text-sm"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void submitAttach();
+              }}
+            >
+              <h2 className="font-bold text-tally-title">
+                Say what an already-recorded deposit also paid for
+              </h2>
+              <p className="mt-1 max-w-3xl text-xs">
+                This ADDS to a deposit; it cannot move an allocation off another
+                challan, change an amount or remove anything. A deduction already
+                paid by a different challan is refused — Deductee Detail field 5
+                of the return is a single challan reference.
+              </p>
+
+              {/* WHICH CHALLAN. A picker over the register, because a challan id
+                  is a UUID and no screen in this product displays one — the same
+                  rule the allocation identifiers follow (see (7)). */}
+              <label className="mt-3 block text-xs">
+                <span className="text-tally-title">Deposit</span>{" "}
+                <select
+                  aria-label="Deposit to add to"
+                  data-testid="tds-allocate-challan"
+                  className="bg-tally-field px-1 text-tally-fieldText"
+                  value={attachTo}
+                  onChange={(e) => {
+                    setAttachTo(e.target.value);
+                    // ⛔ THE TICKS DO NOT FOLLOW THE CHALLAN. Carrying them over
+                    // would send deductions an operator ticked for one deposit to
+                    // a different one, which the server would either accept (if
+                    // they fit) or refuse for a reason that names neither.
+                    setAttachChosen([]);
+                  }}
+                >
+                  {data.challans
+                    .filter((ch) => q4Positive(ch.tax_rupees))
+                    .map((ch) => (
+                      <option key={ch.id} value={ch.id}>
+                        {`${ch.challan_no} of ${ch.deposit_date} (BSR ${ch.bsr_code}) — ${ch.unallocated_tax_rupees} unallocated`}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              {/* ⛔ THE BEFORE FIGURE, ON SCREEN, NAMED AS SUCH. D1's oracle is
+                  that this number FALLS, and an operator cannot see it fall
+                  unless they were shown where it started. */}
+              <p className="mt-1 text-xs" data-testid="tds-allocate-before">
+                Before this: {target.allocated_total_rupees} allocated across{" "}
+                {target.allocation_count} deduction(s), and{" "}
+                {target.unallocated_tax_rupees} of its{" "}
+                {formatMoney(target.tax_rupees)} of tax unallocated.
+              </p>
+
+              <h3 className="mt-4 text-xs font-bold text-tally-title">
+                What this deposit ALSO paid
+              </h3>
+              <AllocationPicker
+                rows={data.allocatable_deductions}
+                unavailable={data.allocatable_error !== undefined}
+                taxYearLabel={data.tax_year_label}
+                chosen={attachChosen}
+                onToggle={(key) =>
+                  setAttachChosen((keys) =>
+                    keys.includes(key)
+                      ? keys.filter((k) => k !== key)
+                      : [...keys, key],
+                  )
+                }
+              />
+
+              <div className="mt-3 flex items-center gap-3">
+                <Field
+                  label="Recorded by"
+                  ariaLabel="Attached by"
+                  value={attachBy}
+                  onChange={setAttachBy}
+                  width="w-40"
+                />
+                <button
+                  type="submit"
+                  className="border border-tally-fieldText px-2 py-0.5 text-xs"
+                >
+                  Ctrl+A — Accept
+                </button>
+                <button
+                  type="button"
+                  className="border border-tally-fieldText px-2 py-0.5 text-xs"
+                  onClick={() => {
+                    setAttachTo(null);
+                    setAttachChosen([]);
+                    setRefusal("");
+                    setCreateDenied(false);
+                  }}
+                >
+                  Close the panel
+                </button>
+                {busy ? <span className="text-xs">working…</span> : null}
+              </div>
+
+              {refusal !== "" ? (
+                <p
+                  data-testid="tds-allocate-refusal"
+                  className="mt-3 max-w-3xl text-sm text-tally-title"
+                >
+                  {refusal}
+                </p>
+              ) : null}
+            </form>
+          );
+        })()
+      ) : null}
+
       {/* ---- THE REGISTER. ------------------------------------------------- */}
       {data !== null ? (
         <>
           <h2 className="mt-5 font-bold text-tally-title">
             Deposits recorded for {data.tax_year_label}
           </h2>
-          {!recording ? (
-            <p className="mt-1 text-xs">Alt+C records a deposit.</p>
+          {!recording && attachTo === null ? (
+            <p className="mt-1 text-xs">
+              Alt+C records a deposit. Alt+A says what a deposit already recorded
+              also paid for — a challan keyed with too few allocations is
+              completed that way, and not by entering the CIN again.
+            </p>
           ) : null}
           {data.challans.length === 0 ? (
             <p data-testid="tds-challans-empty" className="mt-1 text-sm">

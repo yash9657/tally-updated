@@ -118,6 +118,8 @@ import type {
   CreateCostCategoryRequest,
   CreateCostCentreRequest,
   TDSChallanListResponse,
+  AllocateToChallanRequest,
+  AllocateToChallanResponse,
   CreateTDSChallanRequest,
   CreateTDSChallanResponse,
   TDSProfile,
@@ -4114,8 +4116,9 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         throw invalid(
           `this challan deposited ${mockPlainAmount(q4str(taxUnits))} of TAX and names no deduction. ` +
             "Deductee Detail field 5 of the return is a challan reference, so a deduction with no " +
-            "allocation cannot be filed at all — and this slice has no allocate-later route, so a " +
-            "challan stored without its allocations could not be completed afterwards",
+            "allocation cannot be filed at all. (An allocate-later route DOES exist now — see " +
+            "allocateToTDSChallan — but it can only ADD to a challan that is already correct in " +
+            "every other respect, so a tax deposit is still refused here if it names nothing)",
         );
       }
       if (taxUnits <= 0n && allocations.length > 0) {
@@ -4370,6 +4373,246 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         // The mock's read-back cannot fail, so this is never null and
         // `read_back_error` is never set. See the gap list above.
         challan,
+      };
+    },
+
+    // ---- ATTACH FURTHER DEDUCTIONS TO A RECORDED CHALLAN (D1).
+    //
+    // ⛔ THIS MOCK MUST NOT BE LOOSER THAN CORED. D84 records that `api/mock.ts`
+    // being looser than the server is a SOURCE OF FALSE GREEN and that three
+    // lanes hit it, so every refusal `AllocateToRecordedChallan` makes is made
+    // here, in the SERVER'S ORDER — the order is the feature, exactly as it is on
+    // the create path: a request that trips two rules must name the same one the
+    // real stack names, or a screen test certifies a sentence no operator will
+    // ever see.
+    //
+    // WHAT IT CANNOT MODEL, stated rather than approximated: the server takes
+    // `FOR UPDATE` on the challan so two concurrent attaches cannot each pass an
+    // over-allocation cap their sum breaks. There is no concurrency here, so that
+    // guard is untestable against this mock and must be driven on the wire.
+    async allocateToTDSChallan(
+      companyID,
+      challanID: string,
+      req: AllocateToChallanRequest,
+    ): Promise<AllocateToChallanResponse> {
+      const c = ensure(companyID);
+      const invalid = (why: string) =>
+        new ApiError(400, `masters: invalid TDS challan: ${why}`);
+
+      if ((challanID ?? "").trim() === "") {
+        throw invalid("this allocation names no challan");
+      }
+      const allocations = req.allocations ?? [];
+      if (allocations.length === 0) {
+        // A REFUSAL, NOT A NO-OP 200. An operator who ticked nothing and pressed
+        // accept must not be told the deposit now covers deductions it does not —
+        // and the register would not have changed to contradict it.
+        throw invalid(
+          "this request names no deduction to allocate. A deposit already recorded is only " +
+            "changed by saying WHAT it paid for",
+        );
+      }
+      if ((req.recorded_by ?? "").trim() === "") {
+        throw invalid("recorded_by is required");
+      }
+
+      // ---- PASS 1, the request alone. Same shape checks the create makes, and
+      // the same reasons: 0 is a real leg, the amount is a string, a triple may
+      // not repeat.
+      const seen = new Set<string>();
+      const parsed: {
+        voucherID: string;
+        section: string;
+        legSeq: number;
+        rawAmount: Money;
+        amountUnits: bigint;
+        triple: string;
+      }[] = [];
+      for (const a of allocations) {
+        const voucherID = (a.voucher_id ?? "").trim();
+        const section = (a.section ?? "").trim();
+        if (voucherID === "") {
+          throw invalid("an allocation must name the voucher whose deduction was paid");
+        }
+        if (section === "") {
+          throw invalid(
+            `allocation for voucher ${voucherID} names no section. The deduction key is ` +
+              "(voucher, section, leg) — one voucher can carry deductions under more than one section",
+          );
+        }
+        if (typeof a.leg_seq !== "number" || !Number.isInteger(a.leg_seq)) {
+          throw new ApiError(
+            400,
+            `allocation ${parsed.length + 1}: leg_seq is required and is NOT defaulted. The deduction key is ` +
+              "(voucher, section, leg) and the leg ordinal is 0-based, so leg 0 is a real " +
+              "leg — an omitted field would silently mean the first one",
+          );
+        }
+        if (a.leg_seq < 0) {
+          throw invalid(
+            `allocation for voucher ${voucherID} under ${section} has leg ${a.leg_seq}; the leg ` +
+              "ordinal is 0-based and never negative",
+          );
+        }
+        const rawAmount = (a.amount_rupees ?? "").trim();
+        if (!/^[+-]?(\d+(\.\d*)?|\.\d+)$/.test(rawAmount)) {
+          throw new ApiError(
+            400,
+            `allocation ${parsed.length + 1}: amount_rupees must be a fixed-point decimal string, and it must be the ` +
+              "tax that was deducted on that leg — it is what makes a later voucher ALTER " +
+              "detectable, so it is stated rather than derived",
+          );
+        }
+        const amountUnits = q4(rawAmount);
+        if (amountUnits < 0n) {
+          throw invalid(
+            `allocation for voucher ${voucherID} under ${section} is ${mockPlainAmount(rawAmount)}. An allocation is a magnitude`,
+          );
+        }
+        const triple = allocationTriple(voucherID, section, a.leg_seq);
+        if (seen.has(triple)) {
+          throw invalid(
+            `voucher ${voucherID} under ${section} leg ${a.leg_seq} appears twice on this request. ` +
+              "One challan pays a deduction ONCE",
+          );
+        }
+        seen.add(triple);
+        parsed.push({ voucherID, section, legSeq: a.leg_seq, rawAmount, amountUnits, triple });
+      }
+
+      // ---- THE CHALLAN. 404 and not 400: the request is well formed and names a
+      // challan this company does not have. ⚠️ RLS makes ANOTHER TENANT'S challan
+      // look exactly like a missing one on the real server, and that is the
+      // intended answer — the alternative discloses whether a CIN exists
+      // elsewhere. This mock has no tenants to confuse, so it simply must not
+      // answer anything friendlier.
+      let cin = "";
+      let challan: TDSChallan | undefined;
+      for (const [key, ch] of c.tdsChallans) {
+        if (ch.id === challanID) {
+          cin = key;
+          challan = ch;
+          break;
+        }
+      }
+      if (!challan) {
+        throw new ApiError(
+          404,
+          `masters: not found: no challan ${challanID} is recorded for this company, so there is ` +
+            "no deposit to allocate against",
+        );
+      }
+      const taxUnits = q4(challan.tax_rupees);
+      if (taxUnits <= 0n) {
+        throw invalid(
+          `challan ${challan.challan_no} of ${challan.deposit_date} at BSR branch ${challan.bsr_code} deposited NO TAX ` +
+            "(only interest, fee or penalty), so there is nothing on it to allocate. Only the tax " +
+            "component discharges a deduction liability",
+        );
+      }
+
+      // ---- PASS 2, each allocation against the deduction it names.
+      const added: TDSChallanAllocation[] = [];
+      let addedUnits = 0n;
+      for (const { voucherID, section, legSeq, rawAmount, amountUnits, triple } of parsed) {
+        const deduction = c.tdsDeductions.get(triple);
+        if (!deduction) {
+          throw new ApiError(
+            400,
+            `masters: nothing was deducted on voucher ${voucherID} under ${section} at leg ${legSeq}, so there is ` +
+              "nothing on it to deposit",
+          );
+        }
+        const deductionUnits = q4(deduction.tax_rupees);
+        if (deductionUnits === 0n) {
+          throw new ApiError(
+            400,
+            `masters: voucher ${deduction.voucher_no} paid ${deduction.deductee_name} under ${section} and deducted NO tax (the payment is ` +
+              "below the threshold), so no deposit can be allocated to it",
+          );
+        }
+        if (amountUnits !== deductionUnits) {
+          throw new ApiError(
+            400,
+            `masters: voucher ${deduction.voucher_no} deducted ${mockPlainAmount(deduction.tax_rupees)} under ${section} from ` +
+              `${deduction.deductee_name}, but ${mockPlainAmount(rawAmount)} is being allocated to it. The two must be EQUAL`,
+          );
+        }
+        if (deduction.tax_year_start !== challan.tax_year_start) {
+          throw new ApiError(
+            400,
+            `masters: the deduction on voucher ${deduction.voucher_no} under ${section} belongs to tax year ${deduction.tax_year_start}, and ` +
+              `this challan is recorded against ${challan.tax_year_start}. A challan belongs to ONE tax year`,
+          );
+        }
+        const paidBy = c.tdsAllocations.get(triple);
+        if (paidBy !== undefined) {
+          const other = c.tdsChallans.get(paidBy);
+          throw new ApiError(
+            409,
+            `masters: the ${mockPlainAmount(deduction.tax_rupees)} deducted on voucher ${deduction.voucher_no} under ${section} from ${deduction.deductee_name} was already ` +
+              `deposited on challan ${other?.challan_no ?? ""} of ${other?.deposit_date ?? ""} at BSR branch ${other?.bsr_code ?? ""}. Deductee Detail field 5 is a SINGLE ` +
+              "challan reference, so a deduction cannot be paid by two challans",
+          );
+        }
+        addedUnits += amountUnits;
+        added.push({
+          voucher_id: voucherID,
+          voucher_no: deduction.voucher_no,
+          section,
+          leg_seq: legSeq,
+          deductee_name: deduction.deductee_name,
+          allocated_rupees: q4str(amountUnits),
+          deduction_on_record: true,
+          deduction_tax_rupees: q4str(deductionUnits),
+          broken_by_alter: false,
+        });
+      }
+
+      // ---- THE OVER-ALLOCATION CAP (D2), which this route needs as much as the
+      // create does: attaching one deduction at a time must not be a way past a
+      // rule the create enforces in one shot. The tolerance is ONE RUPEE PER
+      // ALLOCATION, not an equality — a deposit is whole rupees and a deduction is
+      // a 4-dp figure, so a few paise either way is the ordinary case.
+      const storedUnits = q4(challan.allocated_total_rupees);
+      const totalAfter = storedUnits + addedUnits;
+      const count = BigInt(challan.allocation_count + added.length);
+      if (totalAfter - taxUnits >= count * QSCALE) {
+        throw new ApiError(
+          409,
+          `masters: this challan's allocations claim more tax than it deposited: challan ` +
+            `${challan.challan_no} of ${challan.deposit_date} at BSR branch ${challan.bsr_code} deposited ${mockPlainAmount(challan.tax_rupees)} of tax, and after ` +
+            `this request its allocations would claim ${q4str(totalAfter)} across ${count} deduction(s)`,
+        );
+      }
+
+      // ---- COMMIT. The stored challan is REPLACED by a new object rather than
+      // mutated: `listTDSChallans` hands out the stored rows themselves, so
+      // mutating in place would rewrite a response a caller may still be holding.
+      const merged = [...challan.allocations, ...added].sort(
+        (x, y) =>
+          x.voucher_no.localeCompare(y.voucher_no) ||
+          x.section.localeCompare(y.section) ||
+          x.leg_seq - y.leg_seq,
+      );
+      const updated: TDSChallan = {
+        ...challan,
+        allocation_count: merged.length,
+        allocated_total_rupees: q4str(totalAfter),
+        // ⛔ THE ORACLE OF THIS WHOLE ROUTE. It must FALL.
+        unallocated_tax_rupees: q4str(taxUnits - totalAfter),
+        allocations: merged,
+      };
+      c.tdsChallans.set(cin, updated);
+      for (const v of added) {
+        c.tdsAllocations.set(allocationTriple(v.voucher_id, v.section, v.leg_seq), cin);
+      }
+      return {
+        id: updated.id,
+        tax_year_start: updated.tax_year_start,
+        tax_year_label: updated.tax_year_label,
+        // The mock's read-back cannot fail, so this is never null.
+        challan: updated,
       };
     },
 

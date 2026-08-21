@@ -539,6 +539,25 @@ export type KeymapAction =
    */
   | { kind: "recordTDSChallan" }
   /**
+   * Alt+A on the TDS CHALLAN REGISTER — ATTACH further deductions to a deposit
+   * that is ALREADY RECORDED (register row D1).
+   *
+   * ⛔ IT IS A SECOND KEY ON ONE SCREEN AND THAT IS NOT DUPLICATION. Alt+C
+   * records a NEW deposit and is refused for a CIN already on file; this key
+   * changes what an EXISTING deposit says it paid for. Before it existed there
+   * was no way to do the second thing at all: a challan recorded naming fewer
+   * deductions than it paid for could never be completed, its unallocated
+   * balance could never fall, and the return refused the unattached deduction
+   * as never deposited.
+   *
+   * THE COMBO is Alt+A because Tally uses Alt+A for "add" inside a report
+   * (RESEARCH.md's column keys), and because the two keys on this screen must
+   * read as different verbs. It is SCOPED to this screen: globally Alt+A is
+   * unbound, and an unbound key here is not inert — the global voucher keys
+   * would fire over a half-keyed form.
+   */
+  | { kind: "allocateTDSChallan" }
+  /**
    * Alt+C on the COST MASTERS screen — create a cost CATEGORY (an axis) or a cost
    * CENTRE (a position on one).
    *

@@ -190,6 +190,11 @@ describe("no advertised button is decorative", () => {
           // deliberately does not move and this rule would otherwise read the
           // bar button as decorative.
           "recordTDSChallan",
+          // Alt+A on the SAME register attaches deductions to a deposit that is
+          // already recorded (D1). Screen-owned for the reason above and one
+          // more: the challan being added to is one the operator picked out of
+          // the register on screen, so the pure machine has never seen its id.
+          "allocateTDSChallan",
           // Alt+C on the cost masters screen opens the CREATE panel, and F4 on
           // the Cost Centre Summary opens the AXIS picker. Both are screen-owned
           // for the same reason as the two above — the panel state, the served

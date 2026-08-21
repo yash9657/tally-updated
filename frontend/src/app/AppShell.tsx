@@ -117,6 +117,11 @@ const SCREEN_ACTIONS: Partial<Record<KeymapAction["kind"], ScreenActionKind>> = 
   // no entry: the shell resolved the combo, found no screen action and forwarded
   // the key to a machine that deliberately does nothing. Silently.
   recordTDSChallan: "recordTDSChallan",
+  // Alt+A on the same register — ATTACH to a deposit already recorded (D1).
+  // Same registration point and the same silent failure mode as the line above:
+  // without this entry the key resolves, finds no screen action, and is
+  // forwarded to a machine case that deliberately does nothing.
+  allocateTDSChallan: "allocateTDSChallan",
   // Alt+C on the COST MASTERS screen — create an axis or a centre (T2). Same
   // registration point, same failure mode: without this line the panel never
   // opens and NOTHING says so, while the keymap binding, the ScreenActionKind,

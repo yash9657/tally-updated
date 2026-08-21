@@ -85,6 +85,8 @@ import type {
   TDSChallanListResponse,
   CreateTDSChallanRequest,
   CreateTDSChallanResponse,
+  AllocateToChallanRequest,
+  AllocateToChallanResponse,
   TDSProfileResponse,
   SetTDSProfileRequest,
   SetTDSProfileResponse,
@@ -335,6 +337,43 @@ export interface CoredClient {
     companyID: string,
     req: CreateTDSChallanRequest,
   ): Promise<CreateTDSChallanResponse>;
+
+  /**
+   * ATTACH FURTHER DEDUCTIONS TO A DEPOSIT THAT IS ALREADY RECORDED (D1).
+   *
+   * ⛔ ITS ABSENCE WAS A TRAP AN OPERATOR COULD NOT GET OUT OF. A challan may be
+   * recorded naming fewer deductions than it actually paid for — nothing
+   * requires the allocations to cover the tax — and the create is the only other
+   * writer, so the same CIN cannot be entered again. The audit tried seven doors
+   * in a browser and six HTTP methods and challan 05130's unallocated balance
+   * stayed at exactly 12000.0000 while the return refused the unattached
+   * deduction as never deposited. The ROUTE has existed since that pass; this
+   * method is the half that makes it reachable from the product.
+   *
+   * ⛔ THE CALLER MUST RENDER `challan.unallocated_tax_rupees`. It is the whole
+   * oracle of this route — the number that could never fall — and a screen that
+   * reports success from the 200 alone looks IDENTICAL whether it moved anything
+   * or not. The handler re-reads the challan for exactly this reason, so nothing
+   * has to be inferred.
+   *
+   * ⚠️ IT IS AN ADD, NOT AN EDIT: it cannot move an allocation off another
+   * challan (409, naming the challan that has it), cannot change an amount and
+   * cannot remove anything. The refusals a caller must render as sentences:
+   * 400 for an empty list / an amount that is not the deduction's tax / a
+   * deduction of another tax year, 404 for a challan this company does not have
+   * (RLS makes another tenant's look exactly like a missing one, deliberately),
+   * 409 for a deduction another challan already paid or an allocation total that
+   * would exceed the deposit, 403 when the level is not permitted.
+   *
+   * ⚠️ AND IT CAN BE REFUSED BY THE BACK-DATED CUTOFF WITH NO DATE IN THE BODY —
+   * the act adopts the challan's own `deposit_date`. The refusal names "deposit
+   * date" so the sentence is about a field the operator can see.
+   */
+  allocateToTDSChallan(
+    companyID: string,
+    challanID: string,
+    req: AllocateToChallanRequest,
+  ): Promise<AllocateToChallanResponse>;
 
   /**
    * The deductor block of the return, plus the sixteen Annexure 4 categories and

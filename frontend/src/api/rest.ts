@@ -86,6 +86,8 @@ import type {
   TDSChallanListResponse,
   CreateTDSChallanRequest,
   CreateTDSChallanResponse,
+  AllocateToChallanRequest,
+  AllocateToChallanResponse,
   TDSProfileResponse,
   SetTDSProfileRequest,
   SetTDSProfileResponse,
@@ -274,6 +276,27 @@ export function createRestClient(
       // The CIN is the identity and re-posting it is a 409, never an upsert.
       return http.post<CreateTDSChallanResponse>(
         `${company(companyID)}/tds-challans`,
+        req,
+      );
+    },
+    allocateToTDSChallan(
+      companyID,
+      challanID: string,
+      req: AllocateToChallanRequest,
+    ) {
+      // POST to a SUB-RESOURCE of the challan, not a PUT on the challan: what is
+      // created is a link, and the challan existed before the request. That is
+      // why the server answers 200 and not 201.
+      //
+      // NOTHING IS MAPPED, for the reason listTDSChallans states: the three
+      // identifier/amount fields must reach the server byte-identical to the way
+      // `allocatable_deductions` served them, because the amount is compared for
+      // EQUALITY with the deduction's tax.
+      //
+      // The challan id goes in the PATH, not the body. It is not the operator's
+      // to type — it comes from the register they are looking at.
+      return http.post<AllocateToChallanResponse>(
+        `${company(companyID)}/tds-challans/${encodeURIComponent(challanID)}/allocations`,
         req,
       );
     },
