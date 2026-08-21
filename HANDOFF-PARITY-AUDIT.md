@@ -815,7 +815,7 @@ have now been driven end to end in a real browser against real cored.**
 
 ---
 
-## 7.1 ⛔ THE DEFECT REGISTER — 88 DEFECTS, 21 STILL OPEN
+## 7.1 ⛔ THE DEFECT REGISTER — 88 DEFECTS, 19 STILL OPEN
 
 **This is the audit's actual product.** Every row below was found by DRIVING, is traced to file:line, and
 carries a proposed fix in the source material. ⛔ **Do not re-derive these from scratch** — that is the
@@ -830,9 +830,9 @@ WORK"** — not "hard to fix".
 
 | # | Row | Sev | Defect | Where | Status |
 |---|---|---|---|---|---|
-| D1 | 17 | HIGH | There is no route to attach an allocation to an EXISTING TDS challan, so the row's own oracle — the challan's unallocated balance must FALL — can never be satisfied after the challan is recorded. Seven in-browser doors and six HTTP methods were tried; 05130's unallocated stayed at exactly 12000.0000. | backend/internal/server/server.go:846 | ⛔ OPEN |
-| D2 | 17 | HIGH | Nothing compares the sum of a challan's allocations against its tax box, so a 1-rupee deposit was accepted as having "paid" 27,000.0000 of tax across two deductees. unallocated went to -26999.0000, both deductions were marked "already deposited", and the screen captions the negative as the ordinary paise remainder. | backend/internal/masters/tds_challan.go:495 | ⛔ OPEN |
-| D3 | 17 | HIGH | A TDS or TCS deduction cannot be keyed from the keyboard anywhere in this product: the client's VoucherRequest type has no tds/tcs field at all, so row 17's precondition is unreachable and the challan picker is empty on any books a real operator built. | frontend/src/api/types.ts:698 | ⛔ OPEN |
+| D1 | 17 | HIGH | There is no route to attach an allocation to an EXISTING TDS challan, so the row's own oracle — the challan's unallocated balance must FALL — can never be satisfied after the challan is recorded. Seven in-browser doors and six HTTP methods were tried; 05130's unallocated stayed at exactly 12000.0000. | backend/internal/server/server.go:846 | ✅ **FIXED (L4) — MUTATION-PROVED *AND* DRIVEN 2026-08-21.** `POST /tds-challans/{id}/allocations` + an `Alt+A` panel. ⛔ The oracle is the UNALLOCATED FIGURE ON THE REGISTER FALLING **5000.0000 → 0.0000**, never the 200. See §7.5 |
+| D2 | 17 | HIGH | Nothing compares the sum of a challan's allocations against its tax box, so a 1-rupee deposit was accepted as having "paid" 27,000.0000 of tax across two deductees. unallocated went to -26999.0000, both deductions were marked "already deposited", and the screen captions the negative as the ordinary paise remainder. | backend/internal/masters/tds_challan.go:495 | ✅ **FIXED (L4) — MUTATION-PROVED *AND* DRIVEN 2026-08-21.** `ErrChallanOverAllocated`, on BOTH write paths, tolerance one rupee PER ALLOCATION. Driven: a third deduction attached one at a time to a full challan is refused naming **25000 / 26000 / 1000 more**. See §7.5 |
+| D3 | 17 | HIGH | A TDS or TCS deduction cannot be keyed from the keyboard anywhere in this product: the client's VoucherRequest type has no tds/tcs field at all, so row 17's precondition is unreachable and the challan picker is empty on any books a real operator built. | frontend/src/api/types.ts:698 | ⚠️ **HALF DONE — the TDS half is MUTATION-PROVED *AND* DRIVEN 2026-08-21** (`TaxDeductionPanel` on the Dr/Cr grid; a deduction keyed on F7 reaches the challan picker and the books). ⛔ **STILL OPEN for TCS**, which needs a keyed charge line on the GST invoice — the user's decision, §4 of `HANDOFF-CLOSE-THE-REGISTER.md`. See §7.5 |
 | D4 | 17 | HIGH | The TCS half of row 17 does not exist: tcs_collection is not part of the challan mechanism, so a collector can never record that it deposited what it collected. A live 2000.0000 collection under 206C(1)-SCRAP never appears in the allocation picker. | backend/internal/masters/tds_challan.go:1014 | ⛔ OPEN |
 | D5 | 24 | HIGH | `allow_negative_stock` has no writer anywhere in the product: no HTTP route, no request field, no service setter, no UI control. Both enforcers read it and honour it correctly, but it is permanently false for every tenant, so the "allowed per the company's flag" arm of Tally's rule can only be reached by a hand-written psql UPDA … | backend/internal/server/server.go:1161 (companyReq, field absent) + backend/internal/server/server.go:515-524 (no Put/Patch on /v1 … | ⛔ OPEN |
 | D6 | 27 | HIGH | An order's party is picked from the ENTIRE chart of accounts — a sales order can be committed to a bank ledger and a purchase order to a customer. Nothing on the client, in Validate, or in the DB restricts it to Sundry Debtors / Sundry Creditors. | frontend/src/screens/OrderRegisterScreen.tsx:753 (and the unfiltered load at :258) / backend/internal/orders/order.go:156 | ✅ **FIXED (L8) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
@@ -1900,6 +1900,81 @@ every case. A proof runner that mutates a probe with side effects needs its own 
 
 **Gates:** backend **35 packages ok / 0 FAIL**, frontend vitest and `tsc` clean, `verify:demo`
 **34/34** before and after the drive.
+
+### ✅ L4 — TDS. D1, D2, and D3's TDS HALF. CLOSED 2026-08-21. **38/38.**
+
+**Probe:** `frontend/scripts/drive-l4-tds.mjs`. **Proof runners:** `/tmp/proofs-l4.py` (11
+unit-level mutations) and `/tmp/proofs-l4-e2e.py` (5 mutations that re-run the browser probe; the
+three Go ones rebuild and restart cored). Binary verified fresh by symbol:
+`allocatable_deductions` = 1, `one challan cannot pay both` = 1.
+
+⛔ **D3 IS NOT CLOSED. Its TCS half remains** — see the row, and §4 of
+`HANDOFF-CLOSE-THE-REGISTER.md` for the shape the user chose.
+
+#### THE ORACLE IS THE FALLING NUMBER, AND IT IS NEVER THE STATUS CODE
+
+D1's whole point is that a challan's unallocated balance must MOVE. A screen that reported
+"attached" off the 200 would look identical whether it wrote anything or not, so the probe captures
+the panel's BEFORE figure (`tds-allocate-before`) and then reads
+`tds-challan-unallocated:{serial}` off the register the screen re-read for itself:
+**5000.0000 → 0.0000.** Mutation **E1** is exactly that failure — the re-read is removed, the wire
+still shows `POST …/allocations 200`, the notice still quotes the server's own sentence, the two
+allocation rows really are in Postgres, and the number on screen never moves. One assertion goes
+red: the oracle. That is the proof the oracle is load-bearing.
+
+#### THE PRECONDITION NOTHING ON A VOUCHER SCREEN ASKS FOR
+
+A TDS post is refused outright unless the company has a `company_deductor_status` row for the tax
+year **PRECEDING** the payment's, and `seed:demo` writes none. The probe drives it from **F11 > TDS
+Deductor Details** rather than setting it up on the wire, because getting out of that refusal is
+half of what D3 is. ⚠️ `COMPANY` is a specified person WHATEVER its turnover, so the turnover boxes
+are HIDDEN for it — a figure against one is a 400, not a harmless extra — and the probe asserts
+their **absence**, then reads `entity_category`/`prior_year_turnover_rupees` back as
+`COMPANY|(null)`.
+
+#### THE FIFTEEN MUTATIONS, EACH PREDICTED THEN OBSERVED
+
+| Mutation | What was broken | Result |
+|---|---|---|
+| **M1** (D1) | the allocate transaction stores nothing, still answers 200 | 5 Go tests RED incl. `TestAllocatingLaterMakesTheUnallocatedBalanceFALL` |
+| **M2** (D1/D2) | the running totals stop being carried into the cap | `TestAllocatingLaterCannotOverrunTheDeposit` (+ its wire twin) RED |
+| **M3** (D1) | the ticked deductions never reach the wire | 4 `TDSChallansScreen` tests RED |
+| **M4** (D1) | an already-paid deduction becomes tickable | 2 RED — the 409 stops being unreachable from the keyboard |
+| **M5** (D2) | the cap comes off the ALLOCATE path only | 2 RED — precisely the hole the row describes |
+| **M6** (D2) | tolerance becomes per-CHALLAN, not per-ALLOCATION | 3 RED incl. `TestRoundedDepositsAreNotRefusedAsOverAllocation` |
+| **M7** (D2) | the cap becomes an EQUALITY (the opposite error) | 5 RED incl. `TestUnderAllocationIsStillLegal` |
+| **M8** (D3) | `tds_ledger_id` never leaves the form | 2 RED — the server's cross-check would pass over nothing |
+| **M9** (D3) | an off-grid liability line stops being refused | `⛔ a named leg that is NOT on the grid is REFUSED` RED |
+| **M10** (D3) | the unposted-leg DISCLOSURE goes silent | 2 RED — the state stays legal, the operator stops being told |
+| **M11** (D3) | the block's kind is inferred from `primarySide` again | 5 RED — a tax-**COLLECTED** panel on the Journal |
+| **E1** (D1) | the register is not re-read (success off the 200) | the ORACLE alone RED, everything else green |
+| **E2** (D1) | the route stores nothing | 14 RED incl. the oracle, the notice (`now pays 1 deduction(s)`) and the books |
+| **E3** (D2) | the cap comes off the allocate path | 4 RED; the books read back `3\|26000.0000` |
+| **E4** (D3) | the `tds` block never leaves the form | the voucher still POSTS 201; `THE RETURN` and the picker RED |
+| **E5** (D3) | no class offers a statutory block (the defect as shipped) | `the Journal offers a TDS block` RED |
+
+⚠️ **E4 IS THE ONE TO NOTICE.** The screen is untouched: the panel is still there, still keyed,
+still echoing the rate. The voucher still posts 201. Only `tds_deduction` is empty and only a
+reader outside the form can tell — which is why D3's assertions read the BOOKS (postings by SIDE
+and ledger NAME, then the deduction row's section, amount and deductee) and not the form.
+
+#### WHAT DRIVING FOUND THAT READING COULD NOT
+
+Nothing new broke — but the wire log records the shape of the write path for the next lane:
+`PUT /deductor-status/2025` **403**, then the WebAuthn register/assert ceremony, then the same PUT
+**200**. The step-up fires on the FIRST write of a session and the probe must not mistake that 403
+for a permission defect.
+
+#### WHAT THE PROBE LEAVES BEHIND, AND WHY IT IS NOT L13's MISTAKE
+
+Three real Journals and one real deposit. The Journals are **balanced** (Dr the expense in full, Cr
+the bank NET, Cr the TDS liability), so unlike L13's one-sided opening they leave the books level:
+the probe asserts the Trial Balance reports itself `balanced` at the bottom, and `verify:demo`
+answered **34/34** on the tenant afterwards. Nothing is torn down on purpose — deleting a voucher
+while keeping its deduction (or the reverse) would leave the books and the return disagreeing,
+which is worse residue than the entries. ⛔ **The challan serial is stamped per run**, because a CIN
+already on file is a 409 and a fixed serial would make the SECOND run fail inside D1's arm and read
+as a regression.
 
 ## 8. RULES THAT MUST NOT BE BROKEN DURING THIS WORK
 
