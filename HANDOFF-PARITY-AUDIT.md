@@ -815,7 +815,7 @@ have now been driven end to end in a real browser against real cored.**
 
 ---
 
-## 7.1 ⛔ THE DEFECT REGISTER — 86 DEFECTS, 25 STILL OPEN
+## 7.1 ⛔ THE DEFECT REGISTER — 86 DEFECTS, 21 STILL OPEN
 
 **This is the audit's actual product.** Every row below was found by DRIVING, is traced to file:line, and
 carries a proposed fix in the source material. ⛔ **Do not re-derive these from scratch** — that is the
@@ -849,8 +849,8 @@ WORK"** — not "hard to fix".
 | D17 | 30 | HIGH | The bill-wise references the draft panel renders — and explicitly certifies as "referenced in full (21240.0000)" — are silently dropped. draftBodyToVoucherRequest builds no bill_allocations key, so the accepted purchase writes zero bill_allocation rows, while a normal keyboard F9 purchase does send them. | frontend/src/screens/vouchers/draftAccept.ts:42-88 (draftBodyToVoucherRequest: postings + header scalars + gst only; no bill_alloc … | ⚠️ PARTIAL (F6) |
 | D18 | 30 | HIGH | A draft created through the Bill Inbox screen carries NO input-tax posting legs and is unbalanced by exactly the tax (debits 1000.0000 vs credit 1180.0000), so a taxed bill filed through the screen's own front door can never post. The screen sends tenant: { company_id } only, the fixture's own tenant block is ignored, so ctx.cgs … | frontend/src/screens/BillInboxScreen.tsx:150-154 and :190-196 (tenant: { company_id: companyID }) + insightd/insightd/api/routes_d … | ✅ **FIXED (L11) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D19 | 30 | HIGH | An INTRA-state bill is derived as IGST. Because the screen supplies no tenant ledgers, the supplier can never be matched, supplier_state stays None, and tax.py only concludes intra-state when BOTH state codes are non-None and equal — so the else branch books the whole tax as IGST for a fixture whose OCR says supplier state 27 an … | insightd/insightd/adapters/mapper.py:194-199 and :229-237 (supplier_state resolved only from ctx.ledgers) + insightd/insightd/adap … | ✅ **FIXED (L11) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
-| D20 | 31 | HIGH | The NL answer does not match the report. "receivables" / "top debtors" reports 133920.0000 against the Outstandings report's 253920.0000 (short by 120000.0000) and "payables" reports 36050.0000 against 104050.0000 (short by 68000.0000). The DSL's outstandings entity reads bill_allocation only and never unions ledger_opening_bill … | backend/internal/query/whitelist.go:312-341 (EntityOutstandings skeleton = `bill_allocation ba JOIN voucher_head ... JOIN ledger . … | ⛔ OPEN |
-| D21 | 31 | HIGH | "sales last month", "sales last quarter" and "sales last year" silently answer for the CURRENT period. relativeRange has no last/previous branch; the substring "month" in "last month" matches the first case, so the window becomes the 1st..last of TODAY's month. The DSL that would reveal it is behind a collapsed-by-default panel. | backend/internal/query/translate.go:196-210 (relativeRange: only `this month/month`, `this quarter/quarter`, `this year/year`) rea … | ⛔ OPEN |
+| D20 | 31 | HIGH | The NL answer does not match the report. "receivables" / "top debtors" reports 133920.0000 against the Outstandings report's 253920.0000 (short by 120000.0000) and "payables" reports 36050.0000 against 104050.0000 (short by 68000.0000). The DSL's outstandings entity reads bill_allocation only and never unions ledger_opening_bill … | backend/internal/query/whitelist.go:312-341 (EntityOutstandings skeleton = `bill_allocation ba JOIN voucher_head ... JOIN ledger . … | ✅ **FIXED (L5) — MUTATION-PROVED *AND* DRIVEN 2026-08-21.** The union was already in the skeleton; reverting it live reproduced **133920 vs 253920** and **36050 vs 104050** — this row's own numbers. See §7.5 |
+| D21 | 31 | HIGH | "sales last month", "sales last quarter" and "sales last year" silently answer for the CURRENT period. relativeRange has no last/previous branch; the substring "month" in "last month" matches the first case, so the window becomes the 1st..last of TODAY's month. The DSL that would reveal it is behind a collapsed-by-default panel. | backend/internal/query/translate.go:196-210 (relativeRange: only `this month/month`, `this quarter/quarter`, `this year/year`) rea … | ✅ **FIXED (L5) — MUTATION-PROVED *AND* DRIVEN 2026-08-21.** All six windows driven against the P&L for the window the SCREEN disclosed. The LLM prompt gave the model no clock at all and is fixed too. See §7.5 |
 | D22 | 32 | HIGH | The row's requirement fails at the first hurdle: there is no way to reach a cash-flow projection or the anomaly list from the keyboard, so the mandated disclosure cannot be rendered because there is no renderer. Four doors tried and closed: the 18-entry Gateway menu has no such entry; Alt+G Go To offers none of "Cash Flow"/"Cash … | frontend/src/screens/GatewayScreen.tsx:4-60 (GATEWAY_MENU — no cash-flow/anomaly entry) + frontend/src/keystroke/navMachine.ts:650 … | ⛔ OPEN |
 | D23 | 32 | HIGH | The cash-flow response carries no disclosure that it is a projection and no statement of its basis. The complete key set is as_on, horizon_days, bucket_days, opening_cash, buckets, beyond_horizon, overdue_folded_into_first_bucket — seven keys, none containing projection/estimate/basis/assumed/method. Yet the engine invents a set … | backend/internal/server/handler_forecast.go:105-118 (cashFlowJSON — the complete key set) + backend/internal/forecast/forecast.go: … | ✅ **FIXED (L11) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D24 | 33 | HIGH | Every invite is delivered to NOBODY and the screen then tells the operator "invitation sent". The invite form collects no email address, notify falls back to the SUBJECT as the recipient, LogSender sees no '@', logs NO EMAIL ON FILE and returns nil, so settle() records status='sent' and deliveryText renders that as "invitation s … | frontend/src/screens/MembersScreen.tsx:264-267 posts only {subject, security_level_name} (the InviteMemberRequest.email field at f … | ✅ FIXED (F5) |
@@ -879,8 +879,8 @@ WORK"** — not "hard to fix".
 | D47 | 29 | MEDIUM | A master creation that the server refuses is reported into a screen that has already been unmounted: Ctrl+A on Create ledger returned the operator to the Gateway with no message while POST /ledgers answered 403 and nothing was created. | frontend/src/screens/masters/MasterCreateScreen.tsx:103-120 (onAccept calls onSelect(n) synchronously, then `create(n, p).catch((e … | ⛔ OPEN |
 | D48 | 30 | MEDIUM | A FAILED Ctrl+A still writes to the chart of accounts. resolveDraftLedgers ensures the party ledger and every null posting ledger via real POST /ledgers calls BEFORE the voucher POST is attempted, so an accept the server then rejects leaves an orphan master behind — here 'Sundry Creditor' under 'Sundry Creditors'. | frontend/src/screens/vouchers/draftAccept.ts:274-320 (resolveDraftLedgers: ensureLedger for the party, then each posting) then :33 … | ⚠️ PARTIAL (F6) |
 | D49 | 30 | MEDIUM | insightd has no authentication and scopes OCR drafts by the caller-supplied company_id alone, and vite proxies it same-origin at /companies/*. Any company_id lists and fully hydrates another tenant's drafts — supplier names, invoice numbers, dates, posting ledger names, amounts and GST state codes. | insightd/insightd/api/routes_drafts.py:192-219 (list/get keyed only on the path company_id; no auth dependency) + frontend/src/api … | ⛔ OPEN |
-| D50 | 31 | MEDIUM | A cross-tenant question is not refused. Naming another company by name, by UUID, or asking for "every company" / "all tenants" all return 200 with the caller's OWN table and no statement that the named tenant was ignored. The data is genuinely safe — the compiled SQL carries no company predicate and scoping rests on FORCE RLS pl … | backend/internal/query/translate.go:113-183 (keyword switch; no entity/party/company recognition and no refusal branch — the fallt … | ⛔ OPEN |
-| D51 | 31 | MEDIUM | "total sales" sums vv.taxable_value only. It excludes the GST component of every invoice and excludes credit notes entirely, and the screen discloses neither — so the figure matches no report: 156500.0000 answered, against a net sales-ledger position of 144500.0000 (after a 12000.0000 credit note) and an invoice total of 183080. … | backend/internal/query/translate.go:148-159 (metric sum(taxable_value), filter voucher_type_name = 'Sales' — Credit Note is a sepa … | ⛔ OPEN |
+| D50 | 31 | MEDIUM | A cross-tenant question is not refused. Naming another company by name, by UUID, or asking for "every company" / "all tenants" all return 200 with the caller's OWN table and no statement that the named tenant was ignored. The data is genuinely safe — the compiled SQL carries no company predicate and scoping rests on FORCE RLS pl … | backend/internal/query/translate.go:113-183 (keyword switch; no entity/party/company recognition and no refusal branch — the fallt … | ✅ **FIXED (L5) — MUTATION-PROVED *AND* DRIVEN 2026-08-21.** ⚠️ Three arms refuse (every/all-tenants/UUID); a company named by an UNENUMERATED NAME is still ANSWERED, under the unconditional scope caption — by design, see §7.5 |
+| D51 | 31 | MEDIUM | "total sales" sums vv.taxable_value only. It excludes the GST component of every invoice and excludes credit notes entirely, and the screen discloses neither — so the figure matches no report: 156500.0000 answered, against a net sales-ledger position of 144500.0000 (after a 12000.0000 credit note) and an invoice total of 183080. … | backend/internal/query/translate.go:148-159 (metric sum(taxable_value), filter voucher_type_name = 'Sales' — Credit Note is a sepa … | ✅ **FIXED (L5) — MUTATION-PROVED *AND* DRIVEN 2026-08-21.** 144500 = the P&L Sales line, against 156500 for the old taxable-value shape. See §7.5 |
 | D52 | 32 | MEDIUM | FeaturesScreen advertises "Cash-flow projection and anomaly detection" as state "on" with a note that names no door, while the two AI-native rows immediately above it in the same group name theirs ("Gateway > Bill Inbox", "Gateway > Query"). The capability list overstates what an operator can reach. | frontend/src/screens/FeaturesScreen.tsx:340-354 — :342 note "Gateway > Bill Inbox", :347 note "Gateway > Query", :353 note "Determ … | ⛔ OPEN |
 | D53 | 34 | MEDIUM | The Stock Summary refusal hardcodes the words 'the Data Entry level', so a holder of any OTHER level is told a level they do not hold is the one denying them, and is pointed at the wrong level's rules. | frontend/src/screens/reports/StockSummaryScreen.tsx:175-183 (the status===403 branch of StockSummaryError): the literal 'so the Da … | ✅ **FIXED (L10) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D54 | 37 | MEDIUM | The refusal names the rule but never the cutoff DATE, so the operator learns a period is locked without learning where the boundary is. | backend/internal/authz/authz.go:270 (`deny("voucher date is before the back-dated cutoff")`), surfaced verbatim at frontend/src/sc … | ✅ FIXED (F3) |
@@ -1647,6 +1647,136 @@ existed for (an empty `?company=` mints a clean empty "My Company") is closed by
 0 FAIL** bracketed by a live `psql`. Verified after the run: cored fresh **by symbol**, **no
 `AUTH_LOCKOUT_*` in its environment**, and `browser-dev-owner` at **failed_attempts 0, signing
 in 200**.
+
+### ✅ L5 — NL QUERY. D20, D21, D50, D51. CLOSED 2026-08-21. **41/41.**
+
+**Probe:** `frontend/scripts/drive-l5-nlq.mjs` (41 assertions: 8 on the wire, 33 in a browser).
+**Proof runners:** `/tmp/proofs-l5.py` (9 unit-level mutations) and `/tmp/proofs-l5-e2e.py`
+(2 mutations that **rebuild and restart cored and re-run the browser probe**).
+Binary verified fresh by symbol before every run: `asks for another company` = 1,
+`RESOLVED PERIOD WINDOWS` = 2.
+
+#### ⛔ THE BLOCKER THE PREVIOUS HANDOFF NAMED WAS REAL, AND IT WAS BIGGER THAN THE EXAMPLE
+
+`server.go`'s `buildTranslator` swaps `FakeTranslator` for `nlq.ClaudeTranslator` the moment
+`ANTHROPIC_API_KEY` is set, so **the system prompt IS the production translator's behaviour**.
+The compiler downstream rejects ILLEGAL queries; it cannot reject a legal query that measures the
+wrong thing. Three of this lane's four rows were still live on that path:
+
+| Row | What the prompt was still doing |
+|---|---|
+| D51 | its only worked sales/purchase example was `sum(taxable_value)` over voucher type `Sales` — the defect verbatim |
+| D21 | the model was given **no clock at all** and one hard-coded quarter, so every relative phrase was a guess. Worse than answering the current period: an arbitrary one |
+| D50 | `namesAnotherScope` lives in `FakeTranslator`; `ClaudeTranslator` never runs it, so **the model is the only thing that can refuse** — and nothing told it to |
+
+Fixed in `f7ec380`. The resolved windows now come from `query.NamedWindows`, which resolves each
+phrase **by running `FakeTranslator.relativeRange` itself**, so the two translators cannot name
+different periods for one question, and the worked example interpolates the **live** "this
+quarter" window rather than freezing one. The nlq tests parse the **rendered prompt**, decode each
+worked example with the production decoder (`DisallowUnknownFields`) and run it through `Compile`.
+
+#### FOUND BY DRIVING, FIXED IN THE SAME LANE: the refusal that never said why
+
+`handleQuery` routed the translator's typed `ErrCrossTenantScope` through the **generic**
+untranslatable arm, so "total sales for every company" was refused with *"could not understand the
+question"*. That is the same non-statement D50 records — an operator who asks for every company's
+sales and is shown one company's sales has nothing to tell the two apart. Now worded; the test
+pins the **contrast** (gibberish must keep the generic message) so a blanket message fails it.
+
+#### ⚠️ D50: THREE ARMS REFUSE, THE FOURTH DISCLOSES — AND THAT IS DELIBERATE
+
+The previous handoff expected **all** cross-tenant arms to be refused. Driven, three are:
+`every company`, `across all tenants`, and a bare UUID → **422** naming the reason. The fourth —
+naming a real other tenant by its real name — is **answered 200 with this company's figures**,
+under the unconditional scope caption. The probe creates a **second real tenant** and asks for it
+by name, so this is measured rather than assumed.
+
+It is left that way on purpose, and `namesAnotherScope`'s own header argues it: no tenant data
+ever enters the prompt, so the translator cannot tell *"Zenith Exports"* the tenant from *"Zenith
+Exports"* the customer — and refusing every proper noun would break `sales to <customer>`, which
+is a question about your own books. The durable guard is the caption `QueryScreen` renders on
+**every** answer and **every** refusal ("Scope: Demo Traders, and only this company"), asserted
+here on both. **A judgement for the user; see the handoff's open questions.**
+
+#### THE ORACLES — never the NL answer's own plausibility
+
+Every money assertion re-fetches the report the answer claims to agree with, and compares in
+**integer paisa** (`parseFloat` on a rupee would pass on a rounding a ledger would not):
+
+| Question | Oracle | Measured |
+|---|---|---|
+| `total sales` | P&L `Sales Accounts`, FY window | **144500.0000 = 144500.0000** |
+| … and NOT the old shape | `sum(taxable_value)` over Sales vouchers, via the typed-DSL door | **144500 ≠ 156500** |
+| `total purchases` | P&L `Purchase Accounts` | **47500.0000 = 47500.0000** |
+| `top debtors` | Outstandings `?kind=RECEIVABLE` | **253920.0000**, and Acme 173680 / Mumbai Metals 80240 by NAME |
+| `payables` | Outstandings `?kind=PAYABLE` | **104050.0000**, and Steel Suppliers 80450 / Delhi Parts 23600 by NAME |
+
+The second row is load-bearing: without it D51 could pass on a book where the two figures happen
+to coincide.
+
+#### D21 — THE PROBE OWNS THE CALENDAR, AND THAT IS WHAT MAKES IT AN ORACLE
+
+The probe computes each expected window itself from `new Date()`, asserts the screen **discloses**
+that window above the table, and **then fetches the P&L for the window the screen named**. A wrong
+period fails on the disclosure; a caption describing a window the answer did not use fails on the
+figure. All six drove green:
+
+| Phrase | Disclosed window | Screen | P&L |
+|---|---|---|---|
+| this month | 2026-08-01..2026-08-31 | *No rows.* | 0.0000 |
+| last month | 2026-07-01..2026-07-31 | -12000.0000 | -12000.0000 |
+| this quarter | 2026-07-01..2026-09-30 | -12000.0000 | -12000.0000 |
+| last quarter | 2026-04-01..2026-06-30 | **156500.0000** | 156500.0000 |
+| this year | 2026-04-01..2027-03-31 | 144500.0000 | 144500.0000 |
+| last year | 2025-04-01..2026-03-31 | *No rows.* | 0.0000 |
+
+156500 for last quarter is the very figure the register says the old code answered "No rows." for.
+A **vacuity guard** asserts last-quarter ≠ this-quarter in the books, so the pair cannot both pass
+by coincidence. Also driven: `sales at headquarters` → **ALL DATES** (substrings are not words),
+`monthly sales` → **ALL DATES** and equal to the all-dates total (an unqualified period word names
+no window), and `last 6 months` / `last month and this year` / `receivables last quarter` →
+**refused**, not answered for one period.
+
+#### THE MUTATIONS — 9 unit-level, all RED
+
+| # | Mutation | Caught by |
+|---|---|---|
+| M1 | sales measured on `taxable_value` again | `TestFakeTranslatorSalesThisMonth`, `TestExecute_NetSalesMatchesProfitAndLoss`, `…FollowsASubGroup` |
+| M2 | the **prompt's** example teaches `taxable_value` | `TestSystemPromptTeachesThePLMeasure` |
+| M3 | `last` stops selecting the previous window | 4 tests incl. `TestFakeTranslatorPreviousPeriods`, `…QualifierBeatsArmOrder` |
+| M4 | the **prompt** stops carrying the resolved windows | `TestSystemPromptWindowsMatchTheTranslator` |
+| M5 | outstandings drops the opening-bill UNION | `TestExecute_OutstandingsMatchesTheOutstandingsReport`, `…ExcludesTheFutureDatedBill` |
+| M6 | the translator stops recognising another scope | `TestFakeTranslatorCrossTenantScopeRefused` |
+| M7 | the scope refusal loses its reason | `TestQueryCrossTenantQuestionIsRefusedInWords` |
+| M8 | the screen stops stating the period | `QueryScreen.test.tsx` ×2 (D21) |
+| M9 | the screen stops saying what was measured | `QueryScreen.test.tsx` (D51) |
+
+#### ⛔ AND TWO MUTATIONS AGAINST THE PROBE ITSELF — REBUILT, RESTARTED, RE-DRIVEN
+
+A probe that goes **41/41 on its first run** is exactly the one gotcha #2 says to distrust, so the
+product was reverted, **cored rebuilt and restarted** (a Go edit is invisible to a running binary)
+and the browser probe asked whether it noticed. Both reproduced this register's own numbers:
+
+| # | Mutation | What the PROBE saw |
+|---|---|---|
+| E1 | sales back on `taxable_value` | 14 red. `total sales` **156500 vs P&L 144500**; the not-a-coincidence arm went red too (**156500 = 156500**); the measure caption changed to *"stamped on the voucher by GST derivation"*. Purchases stayed **green** — the mutation is discriminating |
+| E2 | outstandings drops the UNION | 8 red. receivables **133920 vs 253920**, payables **36050 vs 104050** — **character-for-character the figures in rows D20** |
+
+#### TRAPS THIS LANE ADDS
+
+1. **A REPORT ROUTE'S JSON SHAPE IS NOT GUESSABLE.** `profit-and-loss` returns
+   `{income:{nodes:[…],total},expenses:{…}}` — the sections are OBJECTS with a `nodes` array, not
+   arrays. Two oracle attempts died on `'str' object has no attribute 'get'` before the shape was
+   read. `outstandings` takes `?kind=RECEIVABLE|PAYABLE` and reports one orientation per call.
+2. **`set -- $r` DOES NOT WORD-SPLIT IN ZSH.** A loop over `"from to"` pairs silently passed the
+   whole string as `$1` and an empty `$2`, and the reports 400'd. Use a shell function with two
+   arguments.
+3. **THE PROBE CREATES A SECOND TENANT AND MUST NEVER SIGN INTO IT.** It exists only to be named
+   by name. It is never posted to, so `verify:demo` on the drive tenant is unaffected — re-run
+   after the drive: **34/34**.
+
+**Gates:** backend **35 packages ok / 0 FAIL** bracketed by a live `psql`; frontend vitest and
+`tsc` clean; `verify:demo` **34/34** on the drive tenant both before and after.
 
 ## 8. RULES THAT MUST NOT BE BROKEN DURING THIS WORK
 
