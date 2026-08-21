@@ -85,7 +85,48 @@ export const MAC_OPTION_CHAR = {
  * Chrome allows only ONE `internal` authenticator per environment; use
  * `transport: "usb"` if you ever need a second.
  */
-export async function openApp({ company, headless = true, expectCompany = EXPECTED_COMPANY } = {}) {
+export async function openApp({
+  company,
+  headless = true,
+  expectCompany = EXPECTED_COMPANY,
+  /**
+   * \u26d4 OPT IN TO SIGNING IN WITH **NO** `?company=`, AND ONLY FOR D25.
+   *
+   * The refusal below exists because an empty `?company=` makes the app
+   * bootstrap a fresh empty tenant called "My Company", and every screen on it
+   * looks clean — two audit rows were wrongly logged as passing that way.
+   *
+   * But D25 CANNOT be driven any other way. Its fix (App.useSessionBootstrap)
+   * adopts the invited company only when the operator has expressed no
+   * preference at all, i.e. when nothing is persisted AND nothing is in the URL
+   * — so a probe that passes `?company=` disables the very code it is testing
+   * and would report the defect as fixed no matter what.
+   *
+   * The trap it re-opens is closed by `expectCompany`, which is REQUIRED here:
+   * landing in a minted "My Company" is exactly what the assertion catches, so
+   * this option makes the tenant check load-bearing instead of optional.
+   */
+  allowNoCompany = false,
+  /**
+   * \u26d4 WHO TO SIGN IN AS. Defaults to the demo owner, which is what every
+   * probe before L9 wanted — but L9 MUST NOT use it: lockout is keyed on
+   * SUBJECT, so one wrong password for `browser-dev-owner` locks the account
+   * every other probe here signs in as. Without this option a probe that means
+   * to drive a throwaway user silently drives the owner instead, which (a) makes
+   * its assertions vacuous, because the owner is already a member of everything,
+   * and (b) aims the owner's own lockout budget at whatever the probe types.
+   * Both happened on the first L9 run.
+   */
+  subject = SUBJECT,
+  password = PASSWORD,
+} = {}) {
+  if (allowNoCompany && !expectCompany) {
+    throw new Error(
+      "openApp: allowNoCompany REQUIRES expectCompany \u2014 without it, landing in a " +
+        'freshly minted empty "My Company" is indistinguishable from landing in the ' +
+        "company the invite was for, which is the whole assertion.",
+    );
+  }
   const browser = await chromium.launch({ headless });
   const context = await browser.newContext();
   const page = await context.newPage();
@@ -116,7 +157,7 @@ export async function openApp({ company, headless = true, expectCompany = EXPECT
     if (m.type() === "error") consoleErrors.push(m.text());
   });
 
-  if (!company) {
+  if (!company && !allowNoCompany) {
     throw new Error(
       "openApp: no company id. An EMPTY ?company= makes the app BOOTSTRAP a fresh " +
         'empty tenant called "My Company", and every screen on it looks clean — ' +
@@ -125,12 +166,14 @@ export async function openApp({ company, headless = true, expectCompany = EXPECT
     );
   }
 
-  await page.goto(`${URL_BASE}?company=${company}`, { waitUntil: "networkidle" });
+  await page.goto(company ? `${URL_BASE}?company=${company}` : URL_BASE, {
+    waitUntil: "networkidle",
+  });
   await page.waitForTimeout(800);
-  await page.keyboard.type(SUBJECT);
+  await page.keyboard.type(subject);
   await page.keyboard.press("Tab");
   await page.waitForTimeout(100);
-  await page.keyboard.type(PASSWORD);
+  await page.keyboard.type(password);
   await page.keyboard.press("Enter");
 
   let signedIn = false;
@@ -142,8 +185,15 @@ export async function openApp({ company, headless = true, expectCompany = EXPECT
     await page.waitForTimeout(250);
   }
   if (!signedIn) {
+    const shownErr = await page
+      .locator('[data-testid="login-error"]')
+      .innerText()
+      .catch(() => "");
     await browser.close();
-    throw new Error("openApp: could not sign in");
+    throw new Error(
+      `openApp: could not sign in as "${subject}"` +
+        (shownErr ? ` — the screen says: ${shownErr.replace(/\n/g, " ")}` : ""),
+    );
   }
   await page.waitForTimeout(600);
 
