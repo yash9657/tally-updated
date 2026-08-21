@@ -3023,6 +3023,17 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusServiceUnavailable, "translator unavailable; retry or POST a typed dsl")
 				return
 			}
+			// ⛔ THE SCOPE REFUSAL MUST BE WORDED, NOT SWALLOWED (D50). A question
+			// naming another company is refused by the translator with a typed
+			// error carrying the REASON; routing it through the generic arm below
+			// told the operator "could not understand the question", which is the
+			// same non-statement D50 records — the caller still never learns that
+			// the company they named was not read. It WRAPS ErrUntranslatable, so
+			// this branch must precede the fallthrough or it is dead code.
+			if errors.Is(err, query.ErrCrossTenantScope) {
+				writeQueryCrossTenant(w)
+				return
+			}
 			// Untranslatable (or any other translator error): 422 with examples. Do
 			// not leak internal error text — the message is fixed and helpful.
 			writeQueryUntranslatable(w)
@@ -3068,6 +3079,30 @@ func queryColumnsJSON(cols []query.ColumnMeta) []map[string]string {
 		out = append(out, map[string]string{"name": c.Name, "type": c.Type})
 	}
 	return out
+}
+
+// writeQueryCrossTenant writes the 422 for a question that tried to select a
+// scope other than the signed-in company (another company by name or UUID,
+// "every company", "all tenants").
+//
+// It is a 422 and not a 403: nothing was denied and nothing leaked — the
+// compiled SQL carries no company predicate at all and tenant isolation rests
+// on FORCE RLS (query_security_test.go's TestSecurity_CrossTenantIsolation
+// proves a forged widening returns zero foreign rows). What the caller needs is
+// the REASON, which is the half D50 records as missing: before this the same
+// question got "could not understand the question", so an operator who asked
+// for every company's sales and was shown one company's sales had nothing to
+// tell the two apart.
+//
+// The examples are echoed exactly as the generic arm echoes them, so the screen
+// renders one shape of 422 and not two.
+func writeQueryCrossTenant(w http.ResponseWriter) {
+	writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+		"error": "this question asks for another company's books, which this screen cannot read; " +
+			"every answer is scoped to the signed-in company, so nothing was answered rather than " +
+			"answering it for this company",
+		"examples": query.ExampleQuestions,
+	})
 }
 
 // writeQueryUntranslatable writes the 422 for a question the translator could

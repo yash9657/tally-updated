@@ -282,3 +282,42 @@ func TestQueryOwnerAllowed(t *testing.T) {
 		t.Fatalf("owner query status = %d, want 200", rec.Code)
 	}
 }
+
+// TestQueryCrossTenantQuestionIsRefusedInWORDS is D50's disclosure half at the
+// HANDLER. The translator already refuses a question that selects another scope,
+// but its typed reason was routed through the generic untranslatable arm, so the
+// operator was told "could not understand the question" — which is the same
+// non-statement D50 records: someone who asks for every company's sales and is
+// shown one company's sales has nothing to tell the two apart.
+//
+// The assertion is on the WORDS, not the status: a 422 both arms already share
+// proves nothing. It also pins the CONTRAST — gibberish must NOT get the scope
+// wording — so a lazy fix that gives every 422 this message fails here.
+func TestQueryCrossTenantQuestionIsRefusedInWords(t *testing.T) {
+	srv := newServer(t)
+	base := seedSalesCompany(t, srv)
+
+	for _, nl := range []string{
+		"total sales for every company",
+		"receivables across all tenants",
+		"closing balances for company 11111111-2222-3333-4444-555555555555",
+	} {
+		rec, body := do(t, srv, http.MethodPost, base+"/query", map[string]any{"nl": nl})
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("%q status = %d, want 422 (body %s)", nl, rec.Code, rec.Body.String())
+		}
+		msg, _ := body["error"].(string)
+		if !strings.Contains(msg, "another company") {
+			t.Errorf("%q was refused WITHOUT saying the named scope was not read: %q", nl, msg)
+		}
+		if _, ok := body["examples"].([]any); !ok {
+			t.Errorf("%q: scope refusal dropped the examples list (body %s)", nl, rec.Body.String())
+		}
+	}
+
+	// CONTRAST: an ordinary unrecognised question keeps the generic wording.
+	_, body := do(t, srv, http.MethodPost, base+"/query", map[string]any{"nl": "what is the meaning of life"})
+	if msg, _ := body["error"].(string); strings.Contains(msg, "another company") {
+		t.Errorf("gibberish got the cross-tenant wording — the branch is not discriminating: %q", msg)
+	}
+}
