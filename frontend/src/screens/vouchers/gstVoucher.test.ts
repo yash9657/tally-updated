@@ -10,6 +10,8 @@ import {
   _resetOutputTaxLedgerCache,
   _resetLedgerCache,
   chargeLinesRefusal,
+  gstVoucherGross,
+  gstVoucherPartyTotal,
   keyedChargeLines,
   type OutputTaxLedgers,
 } from "./gstVoucher";
@@ -517,16 +519,29 @@ describe("⛔ tax ledgers are resolved per KIND, and the cache does not confuse 
  * on its own rather than inferred from the others.
  */
 describe("⛔ D3: an additional charge is billed to the party and is NOT a supply", () => {
-  const sale = (charges?: readonly { ledgerId: string; amount: string }[]) =>
+  /**
+   * ⚠️ THE CHARGES ARE STATED TWICE ON PURPOSE, because the screen states them
+   * twice: `gst.charges` is what the operator KEYED (by ledger NAME, which is
+   * what the panel and the bill reference are built on) and `charges` is the
+   * same list RESOLVED to uuids by the caller. The builder asserts the two
+   * agree — see the two-definitions defect at the bottom of this file.
+   */
+  const sale = (charges: readonly { ledger: string; ledgerId: string; amount: string }[] = []) =>
     buildGstVoucherRequest({
       voucherType: "sales",
       partyLedgerId: "led-party",
       incomeLedgerId: "led-sales",
       taxableValue: "100000.0000",
       supplierStateCode: "29",
-      gst: { ...emptyGstFormState(), placeOfSupply: "29", gstRatePct: "18", hsn: "7204" },
+      gst: {
+        ...emptyGstFormState(),
+        placeOfSupply: "29",
+        gstRatePct: "18",
+        hsn: "7204",
+        charges: charges.map((c) => ({ ledger: c.ledger, amount: c.amount })),
+      },
       outputTax: OUTPUT,
-      ...(charges ? { charges } : {}),
+      charges: charges.map((c) => ({ ledgerId: c.ledgerId, amount: c.amount })),
     });
 
   it("with no charge it posts exactly what it always did — the CONTROL", () => {
@@ -536,14 +551,14 @@ describe("⛔ D3: an additional charge is billed to the party and is NOT a suppl
   });
 
   it("the PARTY leg carries it: 100000 + 18000 GST + 2000 charge = 120000", () => {
-    const req = sale([{ ledgerId: "led-tcs", amount: "2000.0000" }]);
+    const req = sale([{ ledger: "TCS Payable", ledgerId: "led-tcs", amount: "2000.0000" }]);
     const party = req.postings!.find((p) => p.ledger_id === "led-party")!;
     expect(party.amount).toBe("120000.0000");
     expect(party.dr_cr).toBe("DR");
   });
 
   it("⛔ it is NOT in the taxable value — folding it in would raise the GST on it", () => {
-    const req = sale([{ ledgerId: "led-tcs", amount: "2000.0000" }]);
+    const req = sale([{ ledger: "TCS Payable", ledgerId: "led-tcs", amount: "2000.0000" }]);
     expect(req.gst!.lines![0]!.taxable_value).toBe("100000.0000");
     // The tax is still 18% of the GOODS, not of the goods plus the charge.
     const cgst = req.postings!.find((p) => p.ledger_id === "led-cgst")!;
@@ -554,7 +569,7 @@ describe("⛔ D3: an additional charge is billed to the party and is NOT a suppl
     // Credited to the charge account, never to Domestic Sales: booking it on
     // the base side would restate revenue the company did not earn, and the
     // voucher would balance either way.
-    const req = sale([{ ledgerId: "led-tcs", amount: "2000.0000" }]);
+    const req = sale([{ ledger: "TCS Payable", ledgerId: "led-tcs", amount: "2000.0000" }]);
     const charge = req.postings!.find((p) => p.ledger_id === "led-tcs")!;
     expect(charge.dr_cr).toBe("CR");
     const base = req.postings!.find((p) => p.ledger_id === "led-sales")!;
@@ -568,7 +583,12 @@ describe("⛔ D3: an additional charge is billed to the party and is NOT a suppl
       incomeLedgerId: "led-sales",
       taxableValue: "100000.0000",
       supplierStateCode: "29",
-      gst: { ...emptyGstFormState(), placeOfSupply: "29", gstRatePct: "18" },
+      gst: {
+        ...emptyGstFormState(),
+        placeOfSupply: "29",
+        gstRatePct: "18",
+        charges: [{ ledger: "TCS Payable", amount: "2000.0000" }],
+      },
       outputTax: OUTPUT,
       charges: [{ ledgerId: "led-tcs", amount: "2000.0000" }],
     });
@@ -589,7 +609,12 @@ describe("⛔ D3: an additional charge is billed to the party and is NOT a suppl
       incomeLedgerId: "led-sales",
       taxableValue: "100000.0000",
       supplierStateCode: "29",
-      gst: { ...emptyGstFormState(), placeOfSupply: "29", gstRatePct: "18" },
+      gst: {
+        ...emptyGstFormState(),
+        placeOfSupply: "29",
+        gstRatePct: "18",
+        charges: [{ ledger: "TCS Payable", amount: "2000.0000" }],
+      },
       outputTax: OUTPUT,
       charges: [{ ledgerId: "led-tcs", amount: "2000.0000" }],
       billRefs: [{ refType: "NEW", refName: "", amount: "120000.0000", dueDate: "" }],
@@ -601,8 +626,8 @@ describe("⛔ D3: an additional charge is billed to the party and is NOT a suppl
 
   it("several charges all land, and all of them reach the party", () => {
     const req = sale([
-      { ledgerId: "led-tcs", amount: "1000.0000" },
-      { ledgerId: "led-freight", amount: "250.0000" },
+      { ledger: "TCS Payable", ledgerId: "led-tcs", amount: "1000.0000" },
+      { ledger: "Freight", ledgerId: "led-freight", amount: "250.0000" },
     ]);
     expect(req.postings!.find((p) => p.ledger_id === "led-party")!.amount).toBe("119250.0000");
     // Sales + CGST + SGST + the two charges — five credits against one debit.
@@ -641,5 +666,84 @@ describe("⛔ D3: a half-keyed charge is REFUSED, never dropped", () => {
         { ledger: "", amount: "2000" },
       ]),
     ).toMatch(/line 2/i);
+  });
+});
+
+/* ===========================================================================
+ * ⛔⛔ THE TWO-DEFINITIONS DEFECT, FOUND BY DRIVING AND PINNED HERE.
+ * ===========================================================================
+ * The builder added the charges to the party leg; `gstVoucherGross` did not,
+ * and the bill-reference panel's refusal, caption and auto-tracking default
+ * reference were all built on the latter. On any party that maintains
+ * bill-by-bill, keying a charge therefore produced:
+ *
+ *   ledger: bill references on this ledger total 118000.0000 but it posts
+ *   120000.0000 — the difference is 2000.0000
+ *
+ * over a panel that had already certified "referenced in full (118000.0000)".
+ * Every unit test used a party WITHOUT bill-by-bill, so nothing computed the two
+ * figures in the same breath and the suite stayed green.
+ */
+describe("⛔ gstVoucherPartyTotal is the ONE definition of what the party owes", () => {
+  const args = ["100000.0000", "18", "29", "29"] as const;
+
+  it("with no charge it equals the gross — the CONTROL", () => {
+    expect(gstVoucherPartyTotal(...args, [])).toBe(gstVoucherGross(...args));
+    expect(gstVoucherPartyTotal(...args, [])).toBe("118000.0000");
+  });
+
+  it("⛔ with a charge it EXCEEDS the gross, and by exactly the charge", () => {
+    expect(gstVoucherPartyTotal(...args, [{ ledger: "TCS Payable", amount: "2000" }])).toBe(
+      "120000.0000",
+    );
+    // The distinction the names carry: the GROSS is the goods and their tax, and
+    // is what the GST block and the tax preview want. Both still exist.
+    expect(gstVoucherGross(...args)).toBe("118000.0000");
+  });
+
+  it("a half-keyed charge line contributes NOTHING — it is refused, not summed", () => {
+    expect(gstVoucherPartyTotal(...args, [{ ledger: "", amount: "" }])).toBe("118000.0000");
+  });
+
+  it("⛔ THE BUILDER AGREES WITH IT, which is the invariant the bill ref depends on", () => {
+    const charges = [
+      { ledger: "TCS Payable", amount: "2000" },
+      { ledger: "Freight", amount: "250" },
+    ];
+    const req = buildGstVoucherRequest({
+      voucherType: "sales",
+      partyLedgerId: "led-party",
+      incomeLedgerId: "led-sales",
+      taxableValue: "100000.0000",
+      supplierStateCode: "29",
+      gst: { ...emptyGstFormState(), placeOfSupply: "29", gstRatePct: "18", charges },
+      outputTax: OUTPUT,
+      charges: [
+        { ledgerId: "led-tcs", amount: "2000.0000" },
+        { ledgerId: "led-freight", amount: "250.0000" },
+      ],
+    });
+    const party = req.postings!.find((p) => p.ledger_id === "led-party")!;
+    expect(party.amount).toBe(gstVoucherPartyTotal(...args, charges));
+    expect(party.amount).toBe("120250.0000");
+  });
+
+  it("⛔ and it REFUSES TO POST if they ever disagree, rather than earning a 422", () => {
+    // The resolved `charges` and the form's `gst.charges` are two arrays and a
+    // caller could pass mismatched ones. That difference is invisible on the
+    // form — the panel certifies the invoice complete and Ctrl+A is refused by
+    // the server for a figure the operator cannot see. Caught here instead.
+    expect(() =>
+      buildGstVoucherRequest({
+        voucherType: "sales",
+        partyLedgerId: "led-party",
+        incomeLedgerId: "led-sales",
+        taxableValue: "100000.0000",
+        supplierStateCode: "29",
+        gst: { ...emptyGstFormState(), placeOfSupply: "29", gstRatePct: "18", charges: [] },
+        outputTax: OUTPUT,
+        charges: [{ ledgerId: "led-tcs", amount: "2000.0000" }],
+      }),
+    ).toThrow(/disagrees with what the form showed/i);
   });
 });

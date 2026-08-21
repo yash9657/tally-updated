@@ -403,3 +403,68 @@ describe("⛔ D3/D88: an alter RE-STATES the charge instead of deleting it", () 
     expect(req.gst!.lines![0]!.taxable_value).toBe("100000.0000");
   });
 });
+
+/**
+ * ===========================================================================
+ * ⛔⛔ THE DEFECT DRIVING FOUND AND THE UNIT SUITE DID NOT.
+ * ===========================================================================
+ * Every test above uses a party WITHOUT bill-by-bill, so the bill-reference
+ * panel never renders and nothing computes "what the party owes" twice in the
+ * same breath. On a party that DOES maintain it, the panel's auto-tracking
+ * default reference was built on the pre-charge gross while the party leg
+ * carried the charge — so a real invoice was certified "referenced in full
+ * (118000.0000)" on screen and then refused by the server:
+ *
+ *   ledger: bill references on this ledger total 118000.0000 but it posts
+ *   120000.0000 — the difference is 2000.0000
+ *
+ * with no way for the operator to see why. Seen in a browser on 2026-08-21.
+ */
+describe("⛔ a bill-by-bill party: the reference tracks the CHARGE too", () => {
+  it("the panel's own caption and its default reference both carry the charge", async () => {
+    const base = createMockClient({ seed: false });
+    await base.createLedger("co-1", {
+      name: "Bill By Bill Buyer",
+      group_name: "Sundry Debtors",
+      state_code: "29",
+      // ⛔ THE WHOLE POINT OF THIS FIXTURE. Without it the panel never renders
+      // and the test is the one above with a longer name.
+      maintain_bill_by_bill: true,
+    });
+    const spies: Record<string, ReturnType<typeof vi.fn>> = {};
+    const client = {} as Record<string, unknown>;
+    for (const key of Object.keys(base) as (keyof CoredClient)[]) {
+      const orig = base[key] as unknown as (...a: unknown[]) => unknown;
+      spies[key] = vi.fn((...args: unknown[]) => orig.apply(base, args));
+      client[key] = spies[key];
+    }
+    renderShell(client as unknown as CoredClient);
+    await openAccountingSale();
+    fireEvent.mouseDown(await screen.findByText("Bill By Bill Buyer"));
+    fireEvent.change(screen.getByTestId("gst-taxable"), { target: { value: "100000" } });
+    fireEvent.change(screen.getByTestId("gst-rate"), { target: { value: "18" } });
+    fireEvent.change(screen.getByTestId("gst-hsn"), { target: { value: "7204" } });
+    await screen.findByTestId("bill-refs-panel");
+    keyTheCharge();
+    await waitFor(() =>
+      // The caption names the leg the server will check against. 118000 here is
+      // the defect, verbatim.
+      expect(screen.getByTestId("bill-refs-panel").textContent).toMatch(/120000\.0000/),
+    );
+    expect(screen.getByTestId("bill-refs-panel").textContent).not.toMatch(/118000\.0000/);
+
+    accept();
+    await waitFor(() => expect(spies.postSalesVoucher).toHaveBeenCalledTimes(1));
+    const req = spies.postSalesVoucher!.mock.calls[0]![1] as VoucherRequest;
+    // ⛔ THE INVARIANT THE SERVER CHECKS TO THE PAISA: the reference totals to
+    // the party posting. Asserted as an EQUALITY between the two, not against a
+    // literal, so it stays true if the fixture's figures ever change.
+    const party = req.postings!.find((p) => p.ledger_id === req.party_ledger_id)!;
+    const referenced = req.bill_allocations!.reduce(
+      (acc, b) => acc + Number(b.amount),
+      0,
+    );
+    expect(referenced.toFixed(4)).toBe(Number(party.amount).toFixed(4));
+    expect(party.amount).toBe("120000.0000");
+  });
+});

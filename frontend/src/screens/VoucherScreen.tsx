@@ -30,7 +30,7 @@ import {
   gstOrientationFor,
   gstTaxLedgerNames,
   buildGstVoucherRequest,
-  gstVoucherGross,
+  gstVoucherPartyTotal,
   chargeLinesRefusal,
   keyedChargeLines,
   type GstChargeLine,
@@ -1129,13 +1129,19 @@ function gstBillLeg(
   type: VoucherType,
   homeStateCode: string,
 ): BillBearingLeg {
+  // ⛔ THE PARTY TOTAL, NOT THE GROSS. A charge is money the party owes, and the
+  // server checks the bill reference against the party POSTING to the paisa —
+  // so measuring the refusal against the pre-charge figure certified an invoice
+  // as referenced in full and then had it refused at Ctrl+A. See
+  // gstVoucherPartyTotal, which is the one definition all three surfaces share.
   const amount = f.postings.some((p) => p.ledger_id === f.partyLedgerId)
     ? partyLeg(f).amount
-    : gstVoucherGross(
+    : gstVoucherPartyTotal(
         normalizeMoney(f.taxableValue),
         f.gst.gstRatePct,
         homeStateCode,
         f.gst.placeOfSupply,
+        f.gst.charges,
       );
   return {
     ledgerId: f.partyLedgerId,
@@ -2105,11 +2111,15 @@ function AccountingVoucherScreen({
           homeStateCode,
           form.gst.placeOfSupply,
         )
-      : gstVoucherGross(
+      : // The DEFAULT reference tracks what the party owes, charges included —
+        // the same definition the refusal above uses. An operator who keys a
+        // charge must not have to notice that the reference stopped matching.
+        gstVoucherPartyTotal(
           normalizeMoney(form.taxableValue),
           form.gst.gstRatePct,
           homeStateCode,
           form.gst.placeOfSupply,
+          form.gst.charges,
         );
 
   const raiseLeg: BillBearingLeg = {

@@ -27,7 +27,7 @@ import type {
   PostingRequest,
   VoucherRequest,
 } from "../../api";
-import { addMoney } from "./money";
+import { addMoney, normalizeMoney } from "./money";
 import { deriveGstSplit } from "./gstDerive";
 
 /** The three resolved Duties & Taxes output-tax ledger ids for a company. */
@@ -607,6 +607,43 @@ export function gstVoucherGross(
     : addMoney(taxableValue, split.igst);
 }
 
+/**
+ * WHAT THE PARTY REALLY OWES — the goods, the tax, AND every additional charge.
+ *
+ * ⛔⛔ THIS IS THE ONE DEFINITION, AND IT EXISTS BECAUSE THERE WERE TWO. The
+ * builder added the charges to the party leg; {@link gstVoucherGross} did not,
+ * and the bill-reference panel (its refusal, its caption and its auto-tracking
+ * default reference) is built on the latter. So on any party that maintains
+ * bill-by-bill, keying a charge produced a voucher the server REFUSED:
+ *
+ *   ledger: bill references on this ledger total 118000.0000 but it posts
+ *   120000.0000 — the difference is 2000.0000
+ *
+ * and the panel had already certified "referenced in full (118000.0000)" over a
+ * leg that posts 2000 more. FOUND BY DRIVING, not by review: every unit test
+ * used a party with no bill-by-bill, so nothing computed the two figures in the
+ * same breath. The builder's own comment says the reference must equal the
+ * party posting to the paisa and that a caller recomputing it would be a second
+ * implementation whose drifted copy always wins — this is that comment enforced
+ * rather than restated.
+ *
+ * ⚠️ `gstVoucherGross` STILL MEANS WHAT IT SAYS — the goods and their tax — and
+ * it is what the GST block and the tax preview want. Use THIS one wherever the
+ * question is "what does the party owe".
+ */
+export function gstVoucherPartyTotal(
+  taxableValue: string,
+  gstRatePct: string,
+  supplierStateCode: string,
+  placeOfSupplyStateCode: string,
+  charges: readonly GstChargeLine[],
+): string {
+  return keyedChargeLines(charges).reduce(
+    (acc, c) => addMoney(acc, normalizeMoney(c.amount)),
+    gstVoucherGross(taxableValue, gstRatePct, supplierStateCode, placeOfSupplyStateCode),
+  );
+}
+
 export function buildGstVoucherRequest(
   inputs: GstVoucherInputs,
 ): VoucherRequest {
@@ -704,6 +741,22 @@ export function buildGstVoucherRequest(
     (acc, c) => addMoney(acc, c.amount),
     total,
   );
+  // ⛔ AND IT MUST AGREE WITH WHAT THE FORM SHOWED. `gstVoucherPartyTotal` is the
+  // definition the bill-reference panel, its refusal and its auto-tracking
+  // default reference are all built on; if this sum ever differed from it the
+  // server would refuse the voucher for a difference the operator cannot see.
+  // Asserted rather than trusted, because the failure is a 422 at Ctrl+A on a
+  // form that certified itself complete.
+  if (partyTotal !== gstVoucherPartyTotal(
+    taxableValue, gst.gstRatePct, supplierStateCode, gst.placeOfSupply, gst.charges,
+  )) {
+    throw new Error(
+      `gstVoucher: the party leg (${partyTotal}) disagrees with what the form ` +
+        "showed the party owed. Refusing to post: the bill reference is checked " +
+        "against this leg to the paisa, so the server would refuse it anyway — " +
+        "and the panel would already have certified the invoice as referenced in full.",
+    );
+  }
 
   const postings: PostingRequest[] = [
     // The party leg carries the GROSS (taxable + tax + any charge); its side is
