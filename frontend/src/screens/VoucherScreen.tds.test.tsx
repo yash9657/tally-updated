@@ -412,6 +412,20 @@ describe("⛔ D88: an alter RE-STATES the deduction instead of deleting it", () 
         /194J-P/,
       ),
     );
+    // ⛔ AND IT NAMES THE DEDUCTEE, NOT "(nobody)". `taxDeductionFromView` is
+    // pure and runs before the chart has loaded, so it resolves the party from
+    // the VOUCHER'S OWN POSTINGS — and a deductee is very often not a leg at all
+    // (a rent withholding debits Rent and credits the bank; the landlord appears
+    // nowhere). The panel repairs the name once the chart arrives. Seen reading
+    // "on (nobody)" over a real party in a browser on 2026-08-21.
+    await waitFor(() =>
+      expect(screen.getByTestId("tax-tds-collapsed").textContent).toMatch(
+        /Chitra Consulting/,
+      ),
+    );
+    expect(screen.getByTestId("tax-tds-collapsed").textContent).not.toMatch(
+      /nobody/,
+    );
 
     // The ordinary round trip: change nothing, save.
     fireEvent.keyDown(app, { key: "a", ctrlKey: true });

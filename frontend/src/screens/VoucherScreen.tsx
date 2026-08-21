@@ -2860,6 +2860,7 @@ function AccountingVoucherScreen({
                 onChange={(tax) => setForm((f) => ({ ...f, tax }))}
                 parties={partyNames}
                 ledgerIdByName={(name) => ledgerByName(name)?.id ?? ""}
+                ledgerNameByID={(id) => ledgerById(id)?.name ?? ""}
                 gridLedgers={keyedChargeLines(form.gst.charges).map((c) =>
                   c.ledger.trim(),
                 )}
@@ -2912,6 +2913,7 @@ function AccountingVoucherScreen({
               onChange={(tax) => setForm((f) => ({ ...f, tax }))}
               parties={partyNames}
               ledgerIdByName={(name) => ledgerByName(name)?.id ?? ""}
+              ledgerNameByID={(id) => ledgerById(id)?.name ?? ""}
               gridLedgers={form.drCrLines
                 .map((l) => l.ledger.trim())
                 .filter((l) => l !== "")}

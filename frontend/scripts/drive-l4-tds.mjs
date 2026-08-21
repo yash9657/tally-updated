@@ -614,12 +614,18 @@ rec("D88: …and the register still names the deductee rather than 'no longer on
 // D4 — THE TCS HALF OF THE CHALLAN MECHANISM.
 // ===========================================================================
 console.log(`\n── D4: a collection reaches the deposit, and one challan cannot pay both ──`);
+await altMac("c", 900);
+rec("D4: Alt+C opens a second deposit form", await seen("tds-challan-form"));
+// ⚠️ THE PICKER LIVES INSIDE THE FORM, NOT ON THE BARE REGISTER. The first run of
+// this probe asserted it one line too early and reported the collection as
+// missing while it was there — gotcha #2, the probe is wrong more often than the
+// screen.
 rec("D4: the collection keyed on F8 is in the allocation picker",
     await seen(`tds-allocatable:${saleNo}:206C(1)-SCRAP:0`),
     (await text("tds-allocatable-empty")) || `sale ${saleNo} offered`);
-
-await altMac("c", 900);
-rec("D4: Alt+C opens a second deposit form", await seen("tds-challan-form"));
+rec("D4: …and it is labelled COLLECTED, not deducted — they are opposite acts",
+    (await text(`tds-allocatable-kind:${saleNo}:206C(1)-SCRAP:0`)) === "collected",
+    await text(`tds-allocatable-kind:${saleNo}:206C(1)-SCRAP:0`));
 await fillByLabel("Deposit date", "2026-08-21");
 await fillByLabel("BSR code", "0004329");
 await fillByLabel("Challan serial number", SERIAL2);
