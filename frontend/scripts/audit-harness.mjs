@@ -201,14 +201,29 @@ export async function openApp({
 
   // ⛔ ASSERT THE TENANT. See the empty-company trap above: clean results on an
   // empty company are indistinguishable from clean results on a seeded one.
+  //
+  // ⚠️ IT POLLS, AND IT DID NOT USED TO. The chrome renders "Opening your
+  // companies…" until the company list resolves, and that read is O(tenants) —
+  // so on a database with several seeded drive tenants the fixed 600ms wait
+  // above expires first and the assertion fires against a LOADING SCREEN. It
+  // then reports "signed in to the WRONG COMPANY", which sends the next session
+  // looking for a tenancy bug that is not there (2026-08-21, and it cost a
+  // diagnosis). A fixed sleep in front of an assertion is a flake; the failure
+  // message below is unchanged, so a REAL wrong tenant still reads the same.
   if (expectCompany) {
-    const shown = await body();
+    let shown = "";
+    for (let i = 0; i < 60; i++) {
+      shown = await body();
+      if (shown.includes(expectCompany)) break;
+      await page.waitForTimeout(250);
+    }
     if (!shown.includes(expectCompany)) {
       await browser.close();
       throw new Error(
         `openApp: signed in to the WRONG COMPANY — expected the chrome to name ` +
           `"${expectCompany}". A probe run against the wrong tenant proves nothing. ` +
-          `Set EXPECTED_COMPANY if the demo has been renamed.`,
+          `Set EXPECTED_COMPANY if the demo has been renamed. The chrome says: ` +
+          `${shown.replace(/\s+/g, " ").slice(0, 120)}`,
       );
     }
   }
