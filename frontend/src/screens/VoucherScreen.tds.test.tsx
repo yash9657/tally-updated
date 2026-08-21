@@ -349,3 +349,77 @@ describe("⛔ D3: the figures shown are the SERVER'S, and the gaps are disclosed
     expect((await screen.findByTestId("tax-tds-collapsed")).textContent).toContain("194J-P");
   });
 });
+
+/**
+ * ===========================================================================
+ * ⛔⛔ REGISTER ROW D88 — ALTERING A VOUCHER SILENTLY DELETED ITS DEDUCTION.
+ * ===========================================================================
+ * `deleteTDSDeductions` runs on EVERY alter and the row is re-derived from the
+ * body — correct on its own terms: a voucher altered to carry no TDS at all must
+ * lose its deduction rather than keep a stale one. What was missing was the READ
+ * path, so the form could not restate what it had loaded.
+ *
+ * ⛔ AND THE LOSS IS INVISIBLE ON THE BOOKS. The withheld credit is a posting and
+ * the postings are restated, so the entry is byte-identical afterwards. Only the
+ * return changed — and the challan that paid the deduction kept an allocation
+ * whose natural key now matches no row (migration 0069 carries no FK by design).
+ * That is why this test asserts the BLOCK on the wire and not the postings.
+ */
+describe("⛔ D88: an alter RE-STATES the deduction instead of deleting it", () => {
+  it("the block comes back on the form and goes back up on the next Ctrl+A", async () => {
+    const base = createMockClient({ seed: false });
+    await seedDeductee(base);
+    const spies: Record<string, ReturnType<typeof vi.fn>> = {};
+    const client = {} as Record<string, unknown>;
+    for (const key of Object.keys(base) as (keyof CoredClient)[]) {
+      const orig = base[key] as unknown as (...a: unknown[]) => unknown;
+      spies[key] = vi.fn((...args: unknown[]) => orig.apply(base, args));
+      client[key] = spies[key];
+    }
+    render(
+      <CompanyProvider
+        client={client as unknown as CoredClient}
+        initialCompany={{ id: "co-1", name: "Test Co", homeStateCode: "29" }}
+      >
+        <AppShell />
+      </CompanyProvider>,
+    );
+    const app = screen.getByRole("application");
+
+    fireEvent.keyDown(app, { key: "F7" });
+    await screen.findByTestId("double-entry-panel");
+    keyTheWithholdingEntry();
+    await openTaxPanel();
+    await keyTheDeduction();
+    fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    await waitFor(() => expect(spies.postJournalVoucher).toHaveBeenCalledTimes(1));
+    const posted = await spies.postJournalVoucher!.mock.results[0]!.value;
+
+    // Drill in from the Day Book, the way an operator opens a voucher to fix it.
+    fireEvent.keyDown(app, { key: "Escape" });
+    fireEvent.keyDown(app, { key: "g", altKey: true });
+    fireEvent.mouseDown(screen.getByText("Day Book"));
+    fireEvent.keyDown(app, { key: "Enter" });
+    await waitFor(() => expect(screen.getByText(posted.voucher_no)).toBeTruthy());
+    fireEvent.keyDown(app, { key: "Enter" });
+    await waitFor(() => expect(spies.getVoucher).toHaveBeenCalled());
+
+    // ⛔ VISIBLE ON THE FORM. The collapsed block SAYS the voucher carries a
+    // deduction — an alter that will post one while nothing on screen mentions
+    // it is the undisclosed-figure defect, and this is the surface that stops it.
+    await waitFor(() =>
+      expect(screen.getByTestId("tax-tds-collapsed").textContent).toMatch(
+        /194J-P/,
+      ),
+    );
+
+    // The ordinary round trip: change nothing, save.
+    fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    await waitFor(() => expect(spies.alterJournalVoucher).toHaveBeenCalledTimes(1));
+    const req = spies.alterJournalVoucher!.mock.calls[0]![2] as VoucherRequest;
+    expect(req.tds).toBeDefined();
+    expect(req.tds!.section).toBe("194J-P");
+    expect(req.tds!.taxable_amount).toBe("200000.0000");
+    expect(req.tds!.deductee_ledger_id).toBeTruthy();
+  });
+});

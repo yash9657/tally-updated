@@ -133,6 +133,10 @@ import type {
   SetBankDateResponse,
   VoucherVersionView,
   GSTLineView,
+  TDSRequest,
+  TCSRequest,
+  TDSDeductionView,
+  TCSCollectionView,
 } from "./types";
 // A VALUE, not a type: the recorded `payload.class` labels the server stamps.
 // The mock must agree with them exactly — see classLabel().
@@ -2140,6 +2144,52 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
    * the per-line amounts and the voucher total can never disagree here in a way
    * they could not disagree on the server.
    */
+  /**
+   * Project a request's `tds`/`tcs` block onto the voucher view (register row
+   * D88) — echoing what the OPERATOR stated and deriving nothing.
+   *
+   * ⛔⛔ THE DERIVED FIGURES ARE OMITTED ON PURPOSE, AND THIS IS ONE PLACE THIS
+   * MOCK IS DELIBERATELY LESS CAPABLE THAN THE SERVER RATHER THAN MORE
+   * FORGIVING. Deriving `rate_pct` and the amount would put a second copy of
+   * `internal/compliance`'s effective-dated tables and its two no-PAN rules in
+   * the browser bundle, and the copy that drifts always wins for whichever
+   * caller reaches it first. Omitting them makes a test that reads one fail on
+   * `undefined` instead of quietly agreeing with a plausible zero.
+   *
+   * ⚠️ WHAT IT DOES MIRROR IS THE PART A ROUND TRIP DEPENDS ON: the operator's
+   * own statements come back out unchanged, so a form rebuilt from this view
+   * sends the same block the server would have stored.
+   */
+  function tdsView(
+    block: TDSRequest | null | undefined,
+  ): TDSDeductionView | null {
+    if (!block) return null;
+    return {
+      leg_seq: 0,
+      section: block.section,
+      deductee_ledger_id: block.deductee_ledger_id,
+      deductee_type: block.deductee_type ?? "OTHER",
+      // ⚠️ ABSENT MEANS FALSE, which is what the Go decoder does with a missing
+      // bool — and getting it the other way would hand back a PAN-on-record
+      // claim the request never made, which LOWERS the rate.
+      pan_available: block.pan_available ?? false,
+      taxable_amount: block.taxable_amount,
+    };
+  }
+
+  function tcsView(
+    block: TCSRequest | null | undefined,
+  ): TCSCollectionView | null {
+    if (!block) return null;
+    return {
+      leg_seq: 0,
+      section: block.section,
+      buyer_ledger_id: block.buyer_ledger_id,
+      pan_available: block.pan_available ?? false,
+      taxable_amount: block.taxable_amount,
+    };
+  }
+
   function gstLineViews(c: MockCompany, req: VoucherRequest): GSTLineView[] {
     const gst = req.gst;
     if (!gst) return [];
@@ -3079,6 +3129,13 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       // omits `gst` must lose them here too or the mock is more forgiving than the
       // server about the one thing this projection exists to make safe.
       gst_lines: gstLineViews(c, req),
+      // ⛔ THE STATUTORY BLOCK, RE-STATED FROM THIS BODY (register row D88). Not
+      // carried forward: `tds_deduction` is deleted and re-derived on every
+      // alter server-side, so a mock that kept a stale one would be MORE
+      // forgiving than the server about the exact thing this projection exists
+      // to make safe.
+      tds: tdsView(req.tds),
+      tcs: tcsView(req.tcs),
     });
     return {
       voucher_id: voucherID,
@@ -3210,6 +3267,13 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       // omits `gst` must lose them here too or the mock is more forgiving than the
       // server about the one thing this projection exists to make safe.
       gst_lines: gstLineViews(c, req),
+      // ⛔ THE STATUTORY BLOCK, RE-STATED FROM THIS BODY (register row D88). Not
+      // carried forward: `tds_deduction` is deleted and re-derived on every
+      // alter server-side, so a mock that kept a stale one would be MORE
+      // forgiving than the server about the exact thing this projection exists
+      // to make safe.
+      tds: tdsView(req.tds),
+      tcs: tcsView(req.tcs),
     });
     return {
       voucher_id: voucherID,

@@ -363,3 +363,74 @@ func writeTDSDeduction(
 	}
 	return nil
 }
+
+// loadStatutoryTax projects a voucher's stored TDS deduction and TCS collection
+// onto its read view — register row D88.
+//
+// ⛔ IT IS WHAT LETS AN ALTER RE-STATE THEM. `deleteTDSDeductions` (and its TCS
+// twin) run on every alter and the rows are re-derived from the request body, so
+// a client that could not read them back could not send them back, and the
+// ordinary round trip — open a voucher that withheld tax, fix the narration,
+// save — deleted the deduction while leaving the withheld credit posted. The
+// return then disagrees with the books, and the challan that paid the deduction
+// keeps an allocation matching no row (0069 carries no FK by design).
+//
+// ⚠️ AT MOST ONE OF EACH TODAY. `VoucherInput` carries one TDS block and one TCS
+// block, so `leg_seq` is always 0 — migration 0050 models more (a consolidated
+// contractor payment can carry two of one nature) and exercising that needs
+// TDSParams to become a slice. `ORDER BY leg_seq` + first row is therefore exact
+// rather than arbitrary, and stays correct if a second leg ever arrives: the
+// caller would then need the slice, and this would be the function to change.
+func loadStatutoryTax(
+	ctx context.Context,
+	tx pgx.Tx,
+	companyID, voucherID uuid.UUID,
+	v *VoucherView,
+) error {
+	var d TDSDeductionView
+	err := tx.QueryRow(ctx,
+		`SELECT leg_seq, section, deductee_ledger_id, deductee_type, pan_available,
+		        taxable_base_rupees, rate_pct, tds_amount_rupees,
+		        to_char(deduction_date, 'YYYY-MM-DD'), tax_year_start, return_code
+		   FROM tds_deduction
+		  WHERE company_id = $1 AND voucher_id = $2
+		  ORDER BY leg_seq
+		  LIMIT 1`,
+		companyID, voucherID).Scan(
+		&d.LegSeq, &d.Section, &d.DeducteeLedgerID, &d.DeducteeType, &d.PANAvailable,
+		&d.TaxableBase, &d.RatePct, &d.TDSAmount,
+		&d.DeductionDate, &d.TaxYearStart, &d.ReturnCode)
+	switch {
+	case err == nil:
+		v.TDS = &d
+	case errors.Is(err, pgx.ErrNoRows):
+		// Most vouchers withhold nothing. Not an error and not a zero struct —
+		// nil is the only value that means "this voucher recorded no deduction",
+		// and a zero-valued block would be sent back as a deduction of nothing
+		// under an empty section.
+	default:
+		return fmt.Errorf("ledger: query tds deduction: %w", err)
+	}
+
+	var c TCSCollectionView
+	err = tx.QueryRow(ctx,
+		`SELECT leg_seq, section, buyer_ledger_id, pan_available,
+		        taxable_base_rupees, rate_pct, tcs_amount_rupees,
+		        to_char(collection_date, 'YYYY-MM-DD'), tax_year_start, COALESCE(declaration_outcome, '')
+		   FROM tcs_collection
+		  WHERE company_id = $1 AND voucher_id = $2
+		  ORDER BY leg_seq
+		  LIMIT 1`,
+		companyID, voucherID).Scan(
+		&c.LegSeq, &c.Section, &c.BuyerLedgerID, &c.PANAvailable,
+		&c.TaxableBase, &c.RatePct, &c.TCSAmount,
+		&c.CollectionDate, &c.TaxYearStart, &c.DeclarationOutcome)
+	switch {
+	case err == nil:
+		v.TCS = &c
+	case errors.Is(err, pgx.ErrNoRows):
+	default:
+		return fmt.Errorf("ledger: query tcs collection: %w", err)
+	}
+	return nil
+}

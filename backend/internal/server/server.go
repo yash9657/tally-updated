@@ -2127,6 +2127,54 @@ func voucherFullJSON(v ledger.VoucherView) map[string]any {
 			"igst":          g.IGST.StringFixed(4),
 		})
 	}
+	// ---- THE STATUTORY DEDUCTION / COLLECTION (register row D88).
+	//
+	// ⛔ SHAPED LIKE THE REQUEST BLOCK IT WILL BE SENT BACK AS, field for field,
+	// because that is the whole job: an alter RE-STATES, and the deduction is
+	// deleted and re-derived from the body on every one. A body that omits it
+	// removes the deduction while leaving the withheld credit posted — the books
+	// then say the full sum was paid and the return says a fifth was withheld.
+	//
+	// ⚠️ THE DERIVED FIGURES RIDE ALONG AND ARE NOT PART OF THE REQUEST. `rate_pct`
+	// and the amount are here so a screen can SHOW what was derived without
+	// re-deriving it; the decoder ignores them on the way back in, exactly as it
+	// ignores the GST lines' cgst/sgst/igst. A client that resent them would be
+	// stating a second opinion about a rate table the server owns.
+	//
+	// ⚠️ AND NEITHER CARRIES A LIABILITY LEG, because neither row stores one —
+	// `tds_ledger_id` is an INPUT to the server's cross-check. A client re-stating
+	// a deduction finds the leg among the postings in this same body, and sending
+	// none is legal and disclosed. See ledger.VoucherView.TDS.
+	var tdsJSON, tcsJSON any
+	if d := v.TDS; d != nil {
+		tdsJSON = map[string]any{
+			"leg_seq":            d.LegSeq,
+			"section":            d.Section,
+			"deductee_ledger_id": uuidOrEmpty(d.DeducteeLedgerID),
+			"deductee_type":      d.DeducteeType,
+			"pan_available":      d.PANAvailable,
+			"taxable_amount":     d.TaxableBase.StringFixed(4),
+			"rate_pct":           d.RatePct.StringFixed(4),
+			"tds_amount":         d.TDSAmount.StringFixed(4),
+			"deduction_date":     d.DeductionDate,
+			"tax_year_start":     d.TaxYearStart,
+			"return_code":        d.ReturnCode,
+		}
+	}
+	if c := v.TCS; c != nil {
+		tcsJSON = map[string]any{
+			"leg_seq":             c.LegSeq,
+			"section":             c.Section,
+			"buyer_ledger_id":     uuidOrEmpty(c.BuyerLedgerID),
+			"pan_available":       c.PANAvailable,
+			"taxable_amount":      c.TaxableBase.StringFixed(4),
+			"rate_pct":            c.RatePct.StringFixed(4),
+			"tcs_amount":          c.TCSAmount.StringFixed(4),
+			"collection_date":     c.CollectionDate,
+			"tax_year_start":      c.TaxYearStart,
+			"declaration_outcome": c.DeclarationOutcome,
+		}
+	}
 	return map[string]any{
 		"voucher_id":       v.VoucherID.String(),
 		"voucher_no":       v.VoucherNo,
@@ -2150,6 +2198,11 @@ func voucherFullJSON(v ledger.VoucherView) map[string]any {
 		"cost_allocations": allocations,
 		"fulfilments":      fulfilments,
 		"gst_lines":        gstLines,
+		// ⛔ NULL, NOT AN EMPTY OBJECT. "This voucher recorded no deduction" and
+		// "a deduction of nothing under no section" are different statements, and
+		// a client echoing the second back would post a malformed block.
+		"tds": tdsJSON,
+		"tcs": tcsJSON,
 	}
 }
 

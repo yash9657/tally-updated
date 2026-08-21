@@ -1084,6 +1084,80 @@ export interface VoucherView {
    * "this voucher has none", and only the second is safe to restate as nothing.
    */
   gst_lines?: GSTLineView[];
+  /**
+   * THE STATUTORY DEDUCTION / COLLECTION THIS VOUCHER RECORDED — register row
+   * D88. `null` (or absent) when it carried neither.
+   *
+   * ⛔⛔ IT IS HERE SO AN ALTER CAN RE-STATE IT. `tds_deduction` is deleted and
+   * re-derived from the request body on EVERY alter, so a form that cannot read
+   * the block cannot send it back — and the ordinary round trip (open a voucher
+   * that withheld tax, fix the narration, save) DELETES the deduction while the
+   * withheld credit stays posted. The books look untouched; the return has lost
+   * it, and the challan that paid it keeps an allocation matching no row.
+   *
+   * ⚠️ `null` AND `undefined` MEAN DIFFERENT THINGS here, as they do for
+   * `gst_lines` above: null is "this voucher recorded none", undefined is "this
+   * source does not tell me". Only the first is safe to restate as nothing.
+   */
+  tds?: TDSDeductionView | null;
+  tcs?: TCSCollectionView | null;
+}
+
+/**
+ * The stored deduction, shaped so a client can send it straight back as the
+ * request's `tds` block.
+ *
+ * ⛔ THE DERIVED FIELDS ARE FOR READING, NEVER FOR RESENDING. `rate_pct` and
+ * `tds_amount` are what the SERVER's rate table produced; echoing them into a
+ * request would state a second opinion about a table the client does not own,
+ * and the decoder ignores them anyway.
+ *
+ * ⚠️ THEY ARE OPTIONAL BECAUSE THE MOCK DOES NOT DERIVE THEM. `api/mock.ts`
+ * echoes what the operator stated and omits the derivation rather than
+ * implementing a second copy of `internal/compliance` — so a test that asserts a
+ * rate against the mock fails LOUDLY on `undefined` instead of quietly reading a
+ * plausible zero. That looseness is deliberate and is named here rather than
+ * left to be discovered (cf. register row D84).
+ *
+ * ⚠️ AND THERE IS NO LIABILITY LEG. `tds_ledger_id` is an INPUT to the server's
+ * cross-check and is not stored — a client re-stating a deduction finds the leg
+ * among the postings in this same response, and sending none is legal and is
+ * DISCLOSED rather than refused.
+ */
+export interface TDSDeductionView {
+  leg_seq: number;
+  section: string;
+  deductee_ledger_id: string;
+  deductee_type: string;
+  pan_available: boolean;
+  /** The base the deduction applied to — an OPERATOR-stated fact, so resendable. */
+  taxable_amount: Money;
+  rate_pct?: Money;
+  tds_amount?: Money;
+  deduction_date?: string;
+  tax_year_start?: number;
+  return_code?: string;
+}
+
+/** The collection-side mirror. See {@link TDSDeductionView} for every caveat. */
+export interface TCSCollectionView {
+  leg_seq: number;
+  section: string;
+  buyer_ledger_id: string;
+  pan_available: boolean;
+  taxable_amount: Money;
+  rate_pct?: Money;
+  tcs_amount?: Money;
+  collection_date?: string;
+  tax_year_start?: number;
+  /**
+   * What the s.394(2) declaration lookup CONCLUDED at post time.
+   *
+   * ⛔ DELIBERATELY NOT PART OF THE REQUEST BLOCK. An exemption rests on a
+   * document the collector holds; letting a client send the outcome back would
+   * make it an entry-time opinion. The post path looks it up again.
+   */
+  declaration_outcome?: string;
 }
 
 /**

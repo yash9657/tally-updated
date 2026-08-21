@@ -698,6 +698,75 @@ type VoucherView struct {
 	// it. These rows are projected for both, because a read shape that told the
 	// truth only for some vouchers is how the next reader concludes it is safe.
 	GSTLines []GSTLineView
+	// TDS is the statutory DEDUCTION this voucher recorded (migration 0050), and
+	// TCS the COLLECTION (0067). Nil when the voucher carried neither.
+	//
+	// ⛔⛔ THE SEVENTH OCCURRENCE OF THE REASON EVERY FIELD ABOVE IS HERE, AND IT
+	// IS REGISTER ROW D88. `deleteTDSDeductions` runs on EVERY alter and the row
+	// is re-derived from the body — correct on its own terms, because a voucher
+	// altered to carry no TDS at all must lose its deduction rather than keep a
+	// stale one. But nothing on the read shape carried it, so a form rebuilt from
+	// this view could not RE-STATE it: hydrate a voucher that withheld tax, edit
+	// its narration, save, and the deduction is GONE. The books still show the
+	// withheld credit (the postings ARE re-stated), so the entry looks untouched
+	// — while the return has lost the deduction and the challan that paid it
+	// keeps an allocation whose natural key now matches no row. Migration 0069
+	// carries no foreign key by design, so nothing in the database refuses it,
+	// and the only trace is the challan register quietly reporting
+	// `deduction_on_record: false`.
+	//
+	// ⚠️ NEITHER ROW STORES THE LIABILITY LEG. `tds_ledger_id` is an INPUT to the
+	// server's cross-check (does the posted credit equal what I derived?) and was
+	// never persisted, because the answer to that question is the voucher itself.
+	// A client re-stating a deduction therefore has to find the leg among the
+	// postings it also loaded — and if it cannot, sending no leg is LEGAL and is
+	// disclosed rather than refused. Adding a column would be the tidier answer
+	// and is deliberately not done here: it would make the read shape assert
+	// which posting carries the tax, which is a fact the postings already state.
+	TDS *TDSDeductionView
+	TCS *TCSCollectionView
+}
+
+// TDSDeductionView is the stored `tds_deduction` row of a voucher, shaped so a
+// client can send it straight back as the request's `tds` block.
+//
+// ⛔ THE DERIVED FIGURES (RatePct, TDSAmount) ARE HERE TO BE READ, NEVER RESENT.
+// The request block carries only what the OPERATOR stated — section, deductee,
+// type, PAN, taxable base — and the server re-derives the rest inside the post
+// transaction. A client that echoed the rate back would be stating a second
+// opinion about a tax table it does not own.
+type TDSDeductionView struct {
+	LegSeq           int
+	Section          string
+	DeducteeLedgerID uuid.UUID
+	DeducteeType     string
+	PANAvailable     bool
+	TaxableBase      decimal.Decimal
+	RatePct          decimal.Decimal
+	TDSAmount        decimal.Decimal
+	DeductionDate    string
+	TaxYearStart     int
+	ReturnCode       string
+}
+
+// TCSCollectionView is the stored `tcs_collection` row — the collection-side
+// mirror, with the same read-not-resend rule on its derived figures.
+//
+// ⚠️ `DeclarationOutcome` records what the s.394(2) lookup CONCLUDED at post
+// time and is deliberately not part of the request block: an exemption rests on
+// a document the collector holds, and letting a client send the outcome back
+// would make it an entry-time opinion. The post path looks it up again.
+type TCSCollectionView struct {
+	LegSeq             int
+	Section            string
+	BuyerLedgerID      uuid.UUID
+	PANAvailable       bool
+	TaxableBase        decimal.Decimal
+	RatePct            decimal.Decimal
+	TCSAmount          decimal.Decimal
+	CollectionDate     string
+	TaxYearStart       int
+	DeclarationOutcome string
 }
 
 // GSTLineView is one persisted `voucher_gst_line` row of the head version: the
@@ -1016,6 +1085,17 @@ func (s *Service) GetVoucher(ctx context.Context, voucherID uuid.UUID) (VoucherV
 		}
 		if err := grows.Err(); err != nil {
 			return fmt.Errorf("ledger: iterate gst lines: %w", err)
+		}
+
+		// THE STATUTORY DEDUCTION / COLLECTION (register row D88).
+		//
+		// ⛔ KEYED ON THE VOUCHER, NOT THE VERSION, and that is not an
+		// inconsistency with everything above it: `tds_deduction` and
+		// `tcs_collection` carry `voucher_id` because a deduction is a fact about
+		// the PAYMENT, which survives the voucher being re-worded. The alter path
+		// deletes and re-derives them rather than versioning them.
+		if err := loadStatutoryTax(ctx, tx, companyID, voucherID, &v); err != nil {
+			return err
 		}
 
 		// Inventory lines of the current version, with real ids. Same

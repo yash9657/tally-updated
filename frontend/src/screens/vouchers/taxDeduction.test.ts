@@ -6,6 +6,7 @@ import {
   emptyTaxDeductionForm,
   isTaxDeductionKeyed,
   sectionSummary,
+  taxDeductionFromView,
   taxDeductionRefusal,
   taxLegRefusal,
   unpostedTaxLegNotice,
@@ -265,5 +266,136 @@ describe("⛔ D3: the withheld tax is a real posting, and the server is told whi
     const f = emptyTaxDeductionForm();
     expect(taxLegRefusal(f, "TDS", [])).toBe("");
     expect(unpostedTaxLegNotice(f, "TDS")).toBe("");
+  });
+});
+
+/* ===========================================================================
+ * ⛔⛔ REGISTER ROW D88 — RE-STATING A STORED DEDUCTION.
+ * ===========================================================================
+ * `tds_deduction` is deleted and re-derived from the request body on EVERY
+ * alter, so a form that cannot restate the block sends none and the server
+ * obliges. What makes it QUIET is that nothing an operator looks at moves: the
+ * withheld credit is a posting and the postings ARE restated, so the books are
+ * identical and only the return has changed.
+ */
+describe("⛔ D88: taxDeductionFromView re-states what the server stored", () => {
+  const postings = [
+    { ledger_id: "led-fees", ledger: "Professional Fees", dr_cr: "DR", amount: "200000.0000" },
+    { ledger_id: "led-bank", ledger: "HDFC Bank", dr_cr: "CR", amount: "180000.0000" },
+    { ledger_id: "led-tds", ledger: "TDS Payable", dr_cr: "CR", amount: "20000.0000" },
+  ];
+  const names = (id: string) =>
+    ({ "led-consultant": "Chitra Consulting" })[id] ?? "";
+  const stored = {
+    section: "194J-P",
+    deductee_ledger_id: "led-consultant",
+    deductee_type: "OTHER",
+    pan_available: true,
+    taxable_amount: "200000.0000",
+    rate_pct: "10.0000",
+    tds_amount: "20000.0000",
+  };
+
+  it("nothing stored hydrates an EMPTY block, not a deduction of zero", () => {
+    // ⛔ null and a zero-valued block are different statements, and the second
+    // would be posted back as a deduction under no section.
+    expect(taxDeductionFromView(null, postings, names)).toEqual(
+      emptyTaxDeductionForm(),
+    );
+    expect(isTaxDeductionKeyed(taxDeductionFromView(undefined, postings, names))).toBe(
+      false,
+    );
+  });
+
+  it("the operator's own statements come back exactly, and the block is KEYED", () => {
+    const f = taxDeductionFromView(stored, postings, names);
+    expect(f.section).toBe("194J-P");
+    expect(f.partyLedgerId).toBe("led-consultant");
+    expect(f.partyName).toBe("Chitra Consulting");
+    expect(f.taxableAmount).toBe("200000.0000");
+    expect(f.deducteeType).toBe("OTHER");
+    expect(f.panAvailable).toBe(true);
+    expect(isTaxDeductionKeyed(f)).toBe(true);
+  });
+
+  it("⛔ THE ROUND TRIP CLOSES: what it hydrates rebuilds the same request", () => {
+    const f = taxDeductionFromView(stored, postings, names);
+    const req = buildTDSRequest(f, (name) =>
+      postings.find((p) => p.ledger === name)?.ledger_id ?? "",
+    );
+    expect(req).toEqual({
+      section: "194J-P",
+      deductee_ledger_id: "led-consultant",
+      deductee_type: "OTHER",
+      pan_available: true,
+      taxable_amount: "200000.0000",
+      tds_ledger_id: "led-tds",
+    });
+  });
+
+  it("⛔ THE LEG IS RECOVERED FROM THE POSTINGS — nothing stores it", () => {
+    // `tds_ledger_id` is an INPUT to the server's cross-check and is not
+    // persisted. The one CREDIT of exactly the derived tax is the leg.
+    expect(taxDeductionFromView(stored, postings, names).taxLegLedger).toBe(
+      "TDS Payable",
+    );
+  });
+
+  it("⛔ A DEBIT OF THE SAME AMOUNT IS NOT A CANDIDATE", () => {
+    // The server refuses a leg on the debit side BY NAME even when the
+    // magnitude matches, so naming one would send an id it will reject.
+    const flipped = postings.map((p) =>
+      p.ledger_id === "led-tds" ? { ...p, dr_cr: "DR" } : p,
+    );
+    expect(taxDeductionFromView(stored, flipped, names).taxLegLedger).toBe("");
+  });
+
+  it("⛔ TWO CREDITS OF THE SAME AMOUNT NAME NOTHING — it will not guess", () => {
+    // A guess sends an id matching the WRONG posting, and the server then
+    // compares its derived tax against a credit that has nothing to do with it.
+    // Empty is legal and is DISCLOSED, which is strictly better.
+    const ambiguous = [
+      ...postings,
+      { ledger_id: "led-other", ledger: "Retention", dr_cr: "CR", amount: "20000.0000" },
+    ];
+    const f = taxDeductionFromView(stored, ambiguous, names);
+    expect(f.taxLegLedger).toBe("");
+    expect(unpostedTaxLegNotice(f, "TDS")).toMatch(/recorded for the return/i);
+  });
+
+  it("a source that serves no derived amount names nothing, and says so", () => {
+    // The mock is exactly this source: it echoes what the operator stated and
+    // deliberately does not re-implement internal/compliance. The block still
+    // survives the round trip — only the leg is left for the operator to name.
+    const { tds_amount, rate_pct, ...withoutDerived } = stored;
+    void tds_amount;
+    void rate_pct;
+    const f = taxDeductionFromView(withoutDerived, postings, names);
+    expect(f.section).toBe("194J-P");
+    expect(f.taxLegLedger).toBe("");
+    expect(unpostedTaxLegNotice(f, "TDS")).not.toBe("");
+  });
+
+  it("a COLLECTION hydrates from buyer_ledger_id, and its leg the same way", () => {
+    const sale = [
+      { ledger_id: "led-party", ledger: "Vikram Scrap", dr_cr: "DR", amount: "120000.0000" },
+      { ledger_id: "led-sales", ledger: "Domestic Sales", dr_cr: "CR", amount: "100000.0000" },
+      { ledger_id: "led-tcs", ledger: "TCS Payable", dr_cr: "CR", amount: "2000.0000" },
+    ];
+    const f = taxDeductionFromView(
+      {
+        section: "206C(1)-SCRAP",
+        buyer_ledger_id: "led-party",
+        pan_available: true,
+        taxable_amount: "100000.0000",
+        tcs_amount: "2000.0000",
+      },
+      sale,
+      (id) => sale.find((p) => p.ledger_id === id)?.ledger ?? "",
+    );
+    expect(f.partyLedgerId).toBe("led-party");
+    expect(f.partyName).toBe("Vikram Scrap");
+    expect(f.taxLegLedger).toBe("TCS Payable");
+    expect(buildTCSRequest(f, () => "led-tcs")!.tcs_ledger_id).toBe("led-tcs");
   });
 });

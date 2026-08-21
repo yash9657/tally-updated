@@ -301,3 +301,74 @@ export function sectionSummary(
       : ` NO PAN on record: the rate becomes ${noPan.multiplier}× ${rate}%, at least ${noPan.floorPct}% and at most ${noPan.ceilingPct}%.`;
   return `${doc.section}: ${rate}% — ${threshold}.${basisNote}${panNote} The server derives the tax; this is its own rate table, echoed.`;
 }
+
+/**
+ * Re-state a STORED deduction or collection onto the form — register row D88.
+ *
+ * ⛔⛔ WITHOUT THIS, THE ORDINARY ROUND TRIP DELETES THE DEDUCTION. `tds_deduction`
+ * is dropped and re-derived from the request body on EVERY alter, so a form that
+ * cannot restate the block sends none — and the server obliges. The books do not
+ * move (the withheld credit is still a posting, and the postings ARE restated),
+ * so nothing an operator looks at changes: the return silently loses the
+ * deduction and the challan that paid it keeps an allocation matching no row.
+ *
+ * ⛔ THE LIABILITY LEG IS RECOVERED FROM THE POSTINGS, BECAUSE NOTHING STORES IT.
+ * `tds_ledger_id` is an INPUT to the server's cross-check — "does the posted
+ * credit equal what I derived?" — and was never persisted, on the grounds that
+ * the postings already say which line carries the tax. So this finds it: the ONE
+ * credit of exactly the derived amount.
+ *
+ * ⚠️ AND WHEN IT CANNOT TELL, IT NAMES NOTHING — which is legal and DISCLOSED
+ * (see {@link unpostedTaxLegNotice}), never guessed. Two credits of the same
+ * amount, or a source that does not serve the derived figure (the mock does
+ * not), leave the field empty: the panel then says the deduction is recorded for
+ * the return while the books show the full sum as paid, and the operator names
+ * the line. A guess here would send an id matching the WRONG posting, and the
+ * server's verification would compare the derived tax against a credit that has
+ * nothing to do with it.
+ *
+ * ⚠️ THE DERIVED FIGURES ARE NEVER COPIED ONTO THE FORM. Only what the operator
+ * stated comes back: section, party, type, PAN, taxable base. `rate_pct` is the
+ * server's, and a form that carried it would resend a second opinion about a
+ * rate table it does not own.
+ */
+export function taxDeductionFromView(
+  stored:
+    | {
+        section: string;
+        pan_available: boolean;
+        taxable_amount: string;
+        deductee_ledger_id?: string;
+        deductee_type?: string;
+        buyer_ledger_id?: string;
+        rate_pct?: string;
+        tds_amount?: string;
+        tcs_amount?: string;
+      }
+    | null
+    | undefined,
+  postings: readonly { ledger_id: string; ledger: string; dr_cr: string; amount: string }[],
+  ledgerNameByID: (id: string) => string,
+): TaxDeductionForm {
+  if (!stored) return emptyTaxDeductionForm();
+  const partyID = stored.deductee_ledger_id ?? stored.buyer_ledger_id ?? "";
+  const derived = stored.tds_amount ?? stored.tcs_amount ?? "";
+  // ⛔ CREDITS ONLY. A withholding and a collection are both credits, and the
+  // server refuses a leg on the debit side by name even when the magnitude
+  // matches — so a debit of the same amount is not a candidate.
+  const credits = postings.filter(
+    (p) =>
+      p.dr_cr.toUpperCase().startsWith("C") &&
+      derived !== "" &&
+      normalizeMoney(p.amount) === normalizeMoney(derived),
+  );
+  return {
+    section: stored.section,
+    partyLedgerId: partyID,
+    partyName: ledgerNameByID(partyID),
+    taxableAmount: normalizeMoney(stored.taxable_amount),
+    taxLegLedger: credits.length === 1 ? credits[0]!.ledger : "",
+    deducteeType: stored.deductee_type === "IND_HUF" ? "IND_HUF" : "OTHER",
+    panAvailable: stored.pan_available,
+  };
+}

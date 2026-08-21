@@ -1201,3 +1201,195 @@ func TestReadBackAuditGSTLinesSurviveAnAlterRebuiltFromTheGet(t *testing.T) {
 		t.Fatalf("after restating the gst block the HSN summary reports %v, want [998311]", codes)
 	}
 }
+
+// ===========================================================================
+// ⛔⛔ THE SEVENTH TABLE — `tds_deduction`, REGISTER ROW D88.
+// ===========================================================================
+// It was not on §4.3's list either, and it fails DIFFERENTLY from the six above:
+// it is not keyed on `voucher_version_id` at all. `deleteTDSDeductions` runs on
+// every alter and re-derives the row from the request body, so the same
+// omit-and-lose shape applies through a different mechanism — and the loss is
+// quieter, because the WITHHELD CREDIT IS STILL POSTED. The books look untouched.
+// The return has lost the deduction, and the challan that paid it keeps an
+// allocation whose natural key now matches no row (0069 carries no FK by design).
+//
+// The two arms below are the audit's own question and its inverse control:
+//
+//	positive — a PUT REBUILT FROM THE GET keeps the deduction. This is what the
+//	           GET carrying `tds` is FOR; before it, no client could rebuild one.
+//	control  — a PUT that echoes the postings and OMITS `tds` is ACCEPTED (201/200,
+//	           not a refusal) and DELETES the deduction. Without this arm,
+//	           "it survived" is equally consistent with the row being immune to an
+//	           alter, and the test would read as a guard while proving nothing.
+
+// tdsReadBackFixture posts one purchase that withholds tax and returns its id.
+func tdsReadBackFixture(t *testing.T, srv *server.Server) (f tdsHTTPFixture, voucherID string) {
+	t.Helper()
+	f = newTDSHTTPFixture(t, srv)
+	rec, body := doRaw(t, srv, http.MethodPost, f.base+"/vouchers/purchase", f.tok,
+		map[string]any{
+			"voucher_date":    "2026-05-10",
+			"party_ledger_id": f.creditor,
+			"created_by":      "owner",
+			"narration":       "consultancy, April",
+			"postings": []any{
+				map[string]any{"ledger_id": f.expense, "dr_cr": "D", "amount": "200000.0000"},
+				map[string]any{"ledger_id": f.tdsPay, "dr_cr": "C", "amount": "20000.0000"},
+				map[string]any{"ledger_id": f.creditor, "dr_cr": "C", "amount": "180000.0000"},
+			},
+			"tds": map[string]any{
+				"section":            "194J-P",
+				"deductee_ledger_id": f.creditor,
+				"deductee_type":      "OTHER",
+				"pan_available":      true,
+				"taxable_amount":     "200000.0000",
+				"tds_ledger_id":      f.tdsPay,
+			},
+		})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("seed purchase with tds = %d, want 201 (%s)", rec.Code, rec.Body.String())
+	}
+	id, _ := body["voucher_id"].(string)
+	if id == "" {
+		t.Fatalf("seed purchase returned no voucher_id: %v", body)
+	}
+	return f, id
+}
+
+// postingsFromGET echoes a GET response's postings as a PUT body's would-be
+// `postings` array — the same rebuild every other arm of this file performs.
+func postingsFromGET(t *testing.T, got map[string]any) []any {
+	t.Helper()
+	raw, ok := got["postings"].([]any)
+	if !ok || len(raw) == 0 {
+		t.Fatalf("GET carries no postings: %v", got)
+	}
+	out := make([]any, 0, len(raw))
+	for _, p := range raw {
+		m := p.(map[string]any)
+		out = append(out, map[string]any{
+			"ledger_id": m["ledger_id"],
+			"dr_cr":     m["dr_cr"],
+			"amount":    m["amount"],
+		})
+	}
+	return out
+}
+
+func TestReadBackAudit_TDSDeductionSurvivesAnAlterRebuiltFromTheGET(t *testing.T) {
+	srv := newServer(t)
+	f, voucherID := tdsReadBackFixture(t, srv)
+
+	rec, got := doRaw(t, srv, http.MethodGet, f.base+"/vouchers/"+voucherID, f.tok, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET voucher = %d (%s)", rec.Code, rec.Body.String())
+	}
+
+	// ⛔ THE FIELD THIS ROW IS ABOUT. Without it there is nothing to rebuild
+	// from, and every assertion below is unreachable.
+	tds, ok := got["tds"].(map[string]any)
+	if !ok {
+		t.Fatalf("the GET carries no `tds` block, so no client can re-state the "+
+			"deduction and every alter deletes it — that is register row D88: %v", got)
+	}
+	if tds["section"] != "194J-P" {
+		t.Errorf("served section = %v, want 194J-P", tds["section"])
+	}
+	if tds["deductee_ledger_id"] != f.creditor {
+		t.Errorf("served deductee = %v, want the creditor %s", tds["deductee_ledger_id"], f.creditor)
+	}
+	if tds["taxable_amount"] != "200000.0000" {
+		t.Errorf("served taxable_amount = %v, want 200000.0000", tds["taxable_amount"])
+	}
+	// The DERIVED figures ride along to be shown, never to be resent.
+	if tds["tds_amount"] != "20000.0000" {
+		t.Errorf("served tds_amount = %v, want 20000.0000", tds["tds_amount"])
+	}
+	if tds["rate_pct"] != "10.0000" {
+		t.Errorf("served rate_pct = %v, want 10.0000", tds["rate_pct"])
+	}
+
+	// ---- REBUILD THE PUT FROM THE RESPONSE. Nothing here is taken from the
+	// fixture except the ledger the leg is on, which the postings also carry —
+	// the point is that a client holding only this GET can do it.
+	rec, _ = doRaw(t, srv, http.MethodPut, f.base+"/vouchers/purchase/"+voucherID, f.tok,
+		map[string]any{
+			"voucher_date":    got["voucher_date"],
+			"voucher_no":      got["voucher_no"],
+			"party_ledger_id": got["party_ledger_id"],
+			"created_by":      "owner",
+			"narration":       "consultancy, April (corrected)",
+			"postings":        postingsFromGET(t, got),
+			"tds": map[string]any{
+				"section":            tds["section"],
+				"deductee_ledger_id": tds["deductee_ledger_id"],
+				"deductee_type":      tds["deductee_type"],
+				"pan_available":      tds["pan_available"],
+				"taxable_amount":     tds["taxable_amount"],
+				"tds_ledger_id":      f.tdsPay,
+			},
+		})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT rebuilt from the GET = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+
+	rec, after := doRaw(t, srv, http.MethodGet, f.base+"/vouchers/"+voucherID, f.tok, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET after alter = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if after["narration"] != "consultancy, April (corrected)" {
+		t.Fatalf("the alter did not take: narration = %v", after["narration"])
+	}
+	kept, ok := after["tds"].(map[string]any)
+	if !ok {
+		t.Fatalf("the deduction was DELETED by an alter that re-stated it: %v", after)
+	}
+	if kept["section"] != "194J-P" || kept["tds_amount"] != "20000.0000" {
+		t.Errorf("the deduction came back changed: %v", kept)
+	}
+}
+
+// ⛔ THE INVERSE CONTROL (§9.3). Without it the arm above is equally consistent
+// with `tds_deduction` being immune to an alter.
+func TestReadBackAudit_AnAlterOmittingTDSIsACCEPTEDAndDeletesIt(t *testing.T) {
+	srv := newServer(t)
+	f, voucherID := tdsReadBackFixture(t, srv)
+
+	_, got := doRaw(t, srv, http.MethodGet, f.base+"/vouchers/"+voucherID, f.tok, nil)
+	// EVERYTHING the happy path sends, except the `tds` block. The postings are
+	// echoed verbatim, so the withheld credit is STILL POSTED after this — which
+	// is what makes the loss invisible on the books.
+	rec, _ := doRaw(t, srv, http.MethodPut, f.base+"/vouchers/purchase/"+voucherID, f.tok,
+		map[string]any{
+			"voucher_date":    got["voucher_date"],
+			"voucher_no":      got["voucher_no"],
+			"party_ledger_id": got["party_ledger_id"],
+			"created_by":      "owner",
+			"narration":       "narration fixed, nothing else",
+			"postings":        postingsFromGET(t, got),
+		})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("an alter omitting `tds` = %d, want 200 — it must be ACCEPTED, "+
+			"which is exactly why the loss is silent (%s)", rec.Code, rec.Body.String())
+	}
+
+	_, after := doRaw(t, srv, http.MethodGet, f.base+"/vouchers/"+voucherID, f.tok, nil)
+	if after["tds"] != nil {
+		t.Fatalf("expected the deduction to be GONE after an alter that omitted "+
+			"it — if it survives, the positive arm above proves nothing: %v", after["tds"])
+	}
+	// ⛔ AND THE BOOKS ARE UNCHANGED. This is the whole reason the defect is
+	// quiet: the credit to the TDS liability is still posted, so nothing an
+	// operator looks at has moved.
+	stillPosted := false
+	for _, p := range after["postings"].([]any) {
+		m := p.(map[string]any)
+		if m["ledger_id"] == f.tdsPay && m["amount"] == "20000.0000" {
+			stillPosted = true
+		}
+	}
+	if !stillPosted {
+		t.Fatalf("the withheld credit went too — then the loss would not be "+
+			"silent, and D88 would be a different (easier) defect: %v", after["postings"])
+	}
+}

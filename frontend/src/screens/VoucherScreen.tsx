@@ -63,6 +63,7 @@ import {
   buildTCSRequest,
   buildTDSRequest,
   emptyTaxDeductionForm,
+  taxDeductionFromView,
   taxDeductionRefusal,
   taxLegRefusal,
   type TaxDeductionForm,
@@ -354,6 +355,14 @@ function emptyForm(): VoucherForm {
 function formFromView(view: VoucherView): VoucherForm {
   const account = accountLegFromView(view);
   const legs = gstLegsFromView(view);
+  // ⛔ THE NAME COMES FROM THIS VOUCHER'S OWN POSTINGS, not from the chart. The
+  // party of a deduction is usually a leg of the entry, and resolving it here
+  // keeps `formFromView` pure — the chart is loaded asynchronously and is not
+  // available at hydration time. When it is NOT a leg (a deductee paid through
+  // a control account) the name is left blank and the panel shows the block with
+  // an empty party, which the refusal then names rather than posting silently.
+  const nameByID = (id: string): string =>
+    view.postings.find((p) => p.ledger_id === id)?.ledger ?? "";
   return {
     gstLegsAmbiguous: legs.ambiguous,
     date: view.voucher_date,
@@ -441,13 +450,20 @@ function formFromView(view: VoucherView): VoucherForm {
     // by name) is what lets an edit of the narration re-post the SAME movements
     // instead of writing the voucher's inventory off to nothing.
     items: itemsFromView(view),
-    // ⛔ EMPTY ON AN ALTER, AND THAT IS A KNOWN GAP (D88), not an oversight. The
-    // voucher READ path serves no `tds`/`tcs`, so there is nothing to hydrate
-    // from — and the ledger DELETES and re-derives tds_deduction on every alter,
-    // so re-posting this form without the block DROPS the deduction. The panel
-    // says so on any voucher being altered; the fix is a server read-path
-    // change, registered rather than guessed at here.
-    tax: emptyTaxDeductionForm(),
+    // ⛔ RE-STATED FROM THE STORED ROW (register row D88, CLOSED). `tds_deduction`
+    // is deleted and re-derived from the body on EVERY alter, so a form that
+    // could not restate the block sent none and the server obliged — the
+    // ordinary round trip (open a voucher that withheld tax, fix the narration,
+    // save) DELETED the deduction. Nothing an operator looks at moved: the
+    // withheld credit is a posting and the postings are restated, so only the
+    // return changed, and the challan that paid it kept an allocation matching
+    // no row. The voucher GET now serves the block; this is the half that sends
+    // it back.
+    //
+    // ⚠️ AT MOST ONE OF THE TWO. A voucher cannot both withhold and collect —
+    // the classes that offer each are disjoint — so whichever the server served
+    // is the one to restate.
+    tax: taxDeductionFromView(view.tds ?? view.tcs, view.postings, nameByID),
   };
 }
 
