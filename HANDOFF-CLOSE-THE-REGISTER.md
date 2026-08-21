@@ -58,7 +58,7 @@ removes exactly what it created, by name, after reading it back, and then assert
 |---|---|---|
 | **1 — L4, TDS/TCS** | D1, D2, D3, D4, D88 | **Already built this session.** Highest value per unit of work; four of the five converge on ONE design step, so splitting them costs more than doing them together |
 | **2 — the cheap honest builds** | D5+D43, D22+D52, D80 | Each is small, each has a clean oracle, and each pairs a capability with a screen that currently lies about it. Do them as three commits, not five |
-| **3 — the judgement rows** | D82, D85, D86, D87 | ⛔ **BLOCKED on §3's four decisions.** Each fix is a choice about the product, not about the code. Ask first; they are quick once answered |
+| **3 — the judgement rows** | D82, D85, D86, D87 | ✅ **ALL FOUR DECIDED 2026-08-21 — unblocked.** §4 records the decisions and what each one costs |
 | **4 — the structural ones** | D84, D49, D81, D83 | Each needs a GATE or an architecture, not a patch. D84 first — it is a source of false green for every lane after it |
 | **5 — the numbers-moving and the low-value** | D8, D77, D72 | D8 **moves the Balance Sheet** and must be serialised with T9. D77 and D72 are LOW and are honest last |
 
@@ -239,56 +239,86 @@ explains why order is load-bearing here; add to it rather than restating it.**
 
 ---
 
-## 4. WAVE 3 — ⛔ BLOCKED: four decisions only the user can make
+## 4. WAVE 3 — the judgement rows. ✅ **ALL FOUR DECIDED BY THE USER 2026-08-21. UNBLOCKED.**
 
-**Ask all four in one message before starting this wave.** Each row is quick once answered and
-unclosable until it is.
+The four were put to the user as options with a recommendation each; **all four came back as the
+recommended option.** The decisions are recorded here because they are the AUTHORITY for what the
+code should do — a later session that disagrees with one of these is disagreeing with the user, not
+with a previous session's guess, and must ask again rather than re-decide.
 
-### Decision 1 — D82: is the HSN refusal on the ALTER path a bug or working-as-intended?
+### D82 — ✅ DECIDED: the HSN refusal on the ALTER path is WORKING AS INTENDED
 
-An old sales invoice stored without an HSN cannot be re-saved without keying one. The register
-itself flags it *"arguably correct"* — it cannot be printed either way (Rule 46(g)) — **but it is a
-new refusal on existing data**, so an operator who only wants to fix a narration is blocked by a
-field they never had to fill in.
+An old sales invoice stored without an HSN cannot be re-saved without keying one. **Close the row
+as correct**, and make the refusal say WHY: the invoice is unprintable without an HSN (Rule 46(g)),
+so keying it is the fix rather than a hoop.
 
-*Options:* (a) close as working-as-intended, and say so in the refusal; (b) let an ALTER that does
-not touch the GST block through, refusing only on print. **(a) is defensible and free.**
+**The work is one sentence, not a behaviour change.** `HSN_REQUIRED_CLASSES` in
+`VoucherScreen.tsx` stays exactly as it is. Mark §7.1 as working-as-intended with the user's
+decision named, and pin the SENTENCE in a test so a later session cannot quietly relax the refusal
+believing it was never wanted.
 
-### Decision 2 — D85: what should the duplicate-supplier-bill key be?
+⚠️ It still needs a drive: the refusal has to REACH the operator on an alter, and be readable.
+
+### D85 — ✅ DECIDED: key the duplicate-bill guard on a PRE-REDACTION HASH
 
 `draftAccept.ts` `assertNotAlreadyOnTheBooks` keys on the **post-redaction** `voucher_no`, so every
-PII-shaped invoice number collapses to the constant token `[PAN REDACTED]`. Two genuinely different
-bills from one supplier on one date are then "the same bill" — and the refusal's own advice ("key
-its own supplier invoice number") **cannot be followed**.
+PII-shaped invoice number collapses to `[PAN REDACTED]` and two genuinely different bills from one
+supplier on one date read as the same bill.
 
-*Options:* the draft id? a pre-redaction hash? the redacted number plus a line total?
-⚠️ That check's comment is explicit that tightening it trades a missed duplicate for a refused first
-accept, which is why this is a decision and not a fix.
+**Hash the invoice number BEFORE redaction and key on the hash.** Genuinely different bills stay
+distinct, and no PII is stored — a hash is not reversible to a PAN.
 
-### Decision 3 — D86: which report should change its default bound?
+⛔ **THE HASH MUST BE TAKEN ON THE PII BOUNDARY'S OWN INPUT, NOT RE-DERIVED DOWNSTREAM.**
+`insightd/insightd/pipeline.py` is where the raw OCR still exists (`self.pii.redact(ocr)`); anything
+after it has only the redacted text. So the hash travels WITH the draft as a field, and the
+frontend never sees the raw number. ⚠️ That makes this a change to the insightd wire shape, not a
+one-line client edit — and `pii_boundary_strict` plus the M23 mutation proof
+(`/tmp/proofs-l11.py`) both guard that boundary. Re-read them before touching it.
 
-Sundry Creditors on the Balance Sheet and the payables Outstandings **disagree the moment any
-voucher is dated after today**, and `verify:demo` asserts they agree *exactly* while passing neither
-report an `as_on`. Measured: BS **109950.0000** vs Outstandings **108770.0000**, short by exactly
-one 1180.0000 bill dated 2026-08-27 with today at 2026-08-20; `?as_on=2026-09-30` returned
-109950.0000 and agreed. cored accepts the future-dated purchase **201**, so nothing warns anyone.
+⚠️ And the refusal's advice must change with the key: "key its own supplier invoice number" is only
+followable once the number is what is actually compared.
 
-*Options:* (a) Outstandings stops bounding at today; (b) the Balance Sheet starts bounding.
-⛔ **(b) MOVES THE BALANCE SHEET** and needs a deliberate `verify:demo` re-pin — the same constraint
-D8/T9 carries.
+### D86 — ✅ DECIDED: OUTSTANDINGS stops bounding at today
 
-### Decision 4 — D87: how much of the party master should the ledger form expose?
+Measured: BS **109950.0000** vs Outstandings **108770.0000**, short by exactly one 1180.0000 bill
+dated 2026-08-27 with today at 2026-08-20.
 
-**VERIFIED by driving on 2026-08-21:** the form renders no GSTIN, no state code and no registration
-type, so every party keyed from the keyboard reads back `(null)|(null)|UNKNOWN` — and `state_code`
-NULL is the exact input that made D19 derive an intra-state bill as IGST. `verify:demo`'s own party
-checks fail on it.
+**Include future-dated bills in Outstandings so the two agree.** ⛔ **This deliberately does NOT
+move the Balance Sheet, so no `verify:demo` re-pin** — which is the whole reason it was preferred
+over bounding the Balance Sheet (that carries D8/T9's constraint).
 
-*Two questions:* (a) should `state_code` become **MANDATORY** under Sundry Debtors/Creditors,
-refusing creations that succeed today? (b) GSTIN/state/registration alone, or the address block,
-PAN, credit days and bank details too? (`CreateLedgerRequest` already carries all of them.)
+⛔ **THREE PLACES MOVE TOGETHER, and missing one re-opens D20:**
+1. `internal/reporting`'s Outstandings — the `vv.voucher_date <= as-on` guard;
+2. **`internal/query/whitelist.go`'s `EntityOutstandings` skeleton**, which was made to MIRROR the
+   report in D20's fix and carries the same bound (`outstandingAsOnExpr`) plus the books-beginning
+   guard on the opening side. **If the report changes and the DSL does not, the NL answer and the
+   report disagree again — which IS D20.** `drive-l5-nlq.mjs` will catch it;
+3. the caption. The ageing report now shows bills that are not due yet, and
+   `QueryScreen`'s `measureBasis` currently states "Bills dated in the future are not outstanding
+   yet and are excluded" — a sentence that becomes FALSE the moment this lands.
 
----
+⚠️ `verify:demo`'s own check passes both reports NO `as_on` and asserts they agree exactly; it
+should keep doing so, and it becomes a real gate for this fix rather than a coincidence of a seed
+with no future dates.
+
+### D87 — ✅ DECIDED: GSTIN + state code + registration type, and **state_code is MANDATORY under party groups**
+
+**VERIFIED by driving 2026-08-21:** the form renders none of the three, so every party keyed from
+the keyboard reads back `(null)|(null)|UNKNOWN` — the exact input that made D19 derive an
+intra-state bill as IGST — and `verify:demo`'s party checks fail on it.
+
+**Add the three fields to the ledger master form, and REFUSE a create under Sundry Debtors /
+Sundry Creditors with no state code.** The address block, PAN, credit days and bank details stay
+out for now (`CreateLedgerRequest` carries them; the form does not have to).
+
+⚠️ **THIS REFUSES CREATIONS THAT SUCCEED TODAY, deliberately and on the user's instruction.** Two
+consequences to handle rather than discover:
+- the refusal must fire **client-side, while the figures are on screen** — the same rule the
+  opening-breakup check follows, because `masters.CreateLedger` creates before it can be refused;
+- ⛔ **`Alt+C` FROM A VOUCHER FIELD reaches this form**, so a party created inline now needs a state
+  code too. That is the D19 path and is the point — but it means the inline create can now be
+  refused where it never was, and D47's disclosure (the field names a master that does not exist)
+  is what carries that. Drive both doors.
 
 ## 5. WAVE 4 — the structural ones
 
