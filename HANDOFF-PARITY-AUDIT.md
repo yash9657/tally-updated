@@ -815,7 +815,7 @@ have now been driven end to end in a real browser against real cored.**
 
 ---
 
-## 7.1 ⛔ THE DEFECT REGISTER — 88 DEFECTS, 19 STILL OPEN
+## 7.1 ⛔ THE DEFECT REGISTER — 88 DEFECTS, 16 STILL OPEN
 
 **This is the audit's actual product.** Every row below was found by DRIVING, is traced to file:line, and
 carries a proposed fix in the source material. ⛔ **Do not re-derive these from scratch** — that is the
@@ -832,8 +832,8 @@ WORK"** — not "hard to fix".
 |---|---|---|---|---|---|
 | D1 | 17 | HIGH | There is no route to attach an allocation to an EXISTING TDS challan, so the row's own oracle — the challan's unallocated balance must FALL — can never be satisfied after the challan is recorded. Seven in-browser doors and six HTTP methods were tried; 05130's unallocated stayed at exactly 12000.0000. | backend/internal/server/server.go:846 | ✅ **FIXED (L4) — MUTATION-PROVED *AND* DRIVEN 2026-08-21.** `POST /tds-challans/{id}/allocations` + an `Alt+A` panel. ⛔ The oracle is the UNALLOCATED FIGURE ON THE REGISTER FALLING **5000.0000 → 0.0000**, never the 200. See §7.5 |
 | D2 | 17 | HIGH | Nothing compares the sum of a challan's allocations against its tax box, so a 1-rupee deposit was accepted as having "paid" 27,000.0000 of tax across two deductees. unallocated went to -26999.0000, both deductions were marked "already deposited", and the screen captions the negative as the ordinary paise remainder. | backend/internal/masters/tds_challan.go:495 | ✅ **FIXED (L4) — MUTATION-PROVED *AND* DRIVEN 2026-08-21.** `ErrChallanOverAllocated`, on BOTH write paths, tolerance one rupee PER ALLOCATION. Driven: a third deduction attached one at a time to a full challan is refused naming **25000 / 26000 / 1000 more**. See §7.5 |
-| D3 | 17 | HIGH | A TDS or TCS deduction cannot be keyed from the keyboard anywhere in this product: the client's VoucherRequest type has no tds/tcs field at all, so row 17's precondition is unreachable and the challan picker is empty on any books a real operator built. | frontend/src/api/types.ts:698 | ⚠️ **HALF DONE — the TDS half is MUTATION-PROVED *AND* DRIVEN 2026-08-21** (`TaxDeductionPanel` on the Dr/Cr grid; a deduction keyed on F7 reaches the challan picker and the books). ⛔ **STILL OPEN for TCS**, which needs a keyed charge line on the GST invoice — the user's decision, §4 of `HANDOFF-CLOSE-THE-REGISTER.md`. See §7.5 |
-| D4 | 17 | HIGH | The TCS half of row 17 does not exist: tcs_collection is not part of the challan mechanism, so a collector can never record that it deposited what it collected. A live 2000.0000 collection under 206C(1)-SCRAP never appears in the allocation picker. | backend/internal/masters/tds_challan.go:1014 | ⛔ OPEN |
+| D3 | 17 | HIGH | A TDS or TCS deduction cannot be keyed from the keyboard anywhere in this product: the client's VoucherRequest type has no tds/tcs field at all, so row 17's precondition is unreachable and the challan picker is empty on any books a real operator built. | frontend/src/api/types.ts:698 | ✅ **FIXED (L4) — MUTATION-PROVED *AND* DRIVEN 2026-08-21, BOTH HALVES.** TDS on the Dr/Cr grid (F7); TCS on the accounting-mode Sales invoice, charged to the buyer through a **keyed additional-charge line** — the user's decision, taken because deriving it in `buildGstVoucherRequest` makes the browser the author of an amount the server owns. See §7.5 |
+| D4 | 17 | HIGH | The TCS half of row 17 does not exist: tcs_collection is not part of the challan mechanism, so a collector can never record that it deposited what it collected. A live 2000.0000 collection under 206C(1)-SCRAP never appears in the allocation picker. | backend/internal/masters/tds_challan.go:1014 | ✅ **FIXED (L4) — MUTATION-PROVED *AND* DRIVEN 2026-08-21.** The server half was done; **driving found the client half was not** — both wire mappings DROPPED the row's `kind`, so every collection was refused as "nothing was deducted". A challan paying a collection is recorded, and one paying both is refused. See §7.5 |
 | D5 | 24 | HIGH | `allow_negative_stock` has no writer anywhere in the product: no HTTP route, no request field, no service setter, no UI control. Both enforcers read it and honour it correctly, but it is permanently false for every tenant, so the "allowed per the company's flag" arm of Tally's rule can only be reached by a hand-written psql UPDA … | backend/internal/server/server.go:1161 (companyReq, field absent) + backend/internal/server/server.go:515-524 (no Put/Patch on /v1 … | ⛔ OPEN |
 | D6 | 27 | HIGH | An order's party is picked from the ENTIRE chart of accounts — a sales order can be committed to a bank ledger and a purchase order to a customer. Nothing on the client, in Validate, or in the DB restricts it to Sundry Debtors / Sundry Creditors. | frontend/src/screens/OrderRegisterScreen.tsx:753 (and the unfiltered load at :258) / backend/internal/orders/order.go:156 | ✅ **FIXED (L8) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D7 | 27 | HIGH | The fulfilment picker sorts candidate orders by order_no as a raw string while its own comment claims "Oldest commitment first", so the order offered first is the NEWEST one. | frontend/src/screens/vouchers/FulfilmentPicker.tsx:156 | ✅ **FIXED (L8) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
@@ -917,7 +917,7 @@ WORK"** — not "hard to fix".
 | **D85** | 30 | MEDIUM | ⛔ **The duplicate-supplier-bill guard keys on the POST-REDACTION `voucher_no`, so every PII-shaped invoice number collapses to ONE key and a legitimate second bill is refused.** `assertNotAlreadyOnTheBooks` matches on `body.voucher_no`, which for a bill whose invoice number is a PAN/GSTIN/Aadhaar is the constant token `[PAN REDACTED]` — not the supplier's number. Two DIFFERENT PAN-shaped invoice numbers from one supplier on one date are therefore the same bill as far as this check is concerned, and the second accept is refused. Its own error text advises *"If this is genuinely a second bill, key its own supplier invoice number"* — **which cannot work**, because any number that redacts lands on the same token. Found by driving, not by reading: the L11 probe randomised its PAN to become re-runnable and was still refused. | `frontend/src/screens/vouchers/draftAccept.ts:1526-1545` (`assertNotAlreadyOnTheBooks` — `no = body.voucher_no`, compared to `e.voucher_no`) + `insightd/insightd/pipeline.py:65` (redaction happens BEFORE the value ever reaches the client) | ⛔ OPEN |
 | **D86** | 3 | MEDIUM | ⛔ **Sundry Creditors on the Balance Sheet and the payables Outstandings DISAGREE the moment any voucher is dated after today, and the repo's own gate asserts they agree EXACTLY.** With no `as_on`, Outstandings bounds at today and drops a future-dated bill; the Balance Sheet does not bound and includes it. Measured: one bill dated 2026-08-27 with today at 2026-08-20 gave BS **109950.0000** vs Outstandings **108770.0000** — short by exactly that bill's 1180.0000 — while `?as_on=2026-09-30` returned **109950.0000** and agreed. Nothing refuses a future-dated purchase (cored answers 201), so an operator who post-dates one bill sees the ageing disagree with the balance sheet with no explanation. ⚠️ `verify:demo`'s check passes today only because the seeded demo data happens to carry no future dates — it calls **neither** report with an `as_on`, and its own comment says the two paths "must agree exactly". | `frontend/scripts/verify-demo.mts:154-168` (both calls omit `as_on`) + the default-`as_on` divergence between the Outstandings and Balance Sheet handlers | ⛔ OPEN |
 | **D87** | 5 | MEDIUM | ⛔ **A PARTY CREATED FROM THE KEYBOARD HAS NO GSTIN, NO STATE CODE AND NO REGISTRATION TYPE — and state_code NULL is the exact input that made D19 derive an intra-state bill as IGST.** `masters.CreateLedger` and `CreateLedgerRequest` have accepted all three since they were written; the master-create form renders no field for any of them, so every Sundry Debtor/Creditor keyed by an operator lands with `gstin` NULL, `state_code` NULL and `registration_type` UNKNOWN. Driven in a browser while closing D36: the form's text contains no "GSTIN", no "State code" and no "Registration type", and the ledger it created read back `(null)|(null)|UNKNOWN`. The repo's OWN gate flags it — `verify:demo`'s "Every party's GSTIN prefix == its state_code" and "Every party is registration_type REGULAR" both fail on a keyed party, which is how it was found. ⚠️ NOT FIXED: it is the same class of build as D36 (fields the form does not render) but it carries a judgement D36 did not — whether `state_code` becomes MANDATORY under Sundry Debtors/Creditors, which would refuse creations that succeed today, and how many of the party's ten-odd optional columns (address block, PAN, credit days, bank details) the form should expose alongside it. | `frontend/src/screens/masters/MasterCreateScreen.tsx` (the ledger `Draft` has no gstin/state/registration field; `build`'s `CreateLedgerRequest` therefore sends none) vs `backend/internal/masters/masters.go` `CreateLedger`, which stores all three | ⛔ OPEN |
-| **D88** | 17 | HIGH | ⛔ **ALTERING A VOUCHER SILENTLY DELETES ITS TDS DEDUCTION, and any challan allocation against it is orphaned.** `internal/ledger`'s `deleteTDSDeductions` runs on EVERY alter and the row is re-derived from the body — which is correct on its own terms ("a voucher altered to carry no TDS at all must lose its deduction row rather than keep a stale one"). But the voucher READ path serves no `tds`/`tcs` block, so the form CANNOT re-state what it loaded: hydrate a voucher that carried a deduction, edit its narration, press Ctrl+A, and the deduction is gone — while the challan that paid it keeps an allocation whose natural key now matches no deduction row (migration 0069 carries no foreign key by design, so nothing in the database refuses it). The register then shows the allocation with `deduction_on_record: false`, which is the state that panel already renders and calls out. Found while building D3's form, which is the first thing in the product that can create the precondition. ⚠️ NOT FIXED: the fix is a SERVER READ-PATH change (serve the stored deduction on `GET /vouchers/{id}`) plus hydration in `formFromView`, and it should land with D3's remaining TCS half rather than ahead of it. `formFromView` states the gap at the field today. | `backend/internal/ledger/tds.go` `deleteTDSDeductions` + the voucher GET (`VoucherView` has no tds/tcs) vs `frontend/src/screens/VoucherScreen.tsx` `formFromView` | ⛔ OPEN |
+| **D88** | 17 | HIGH | ⛔ **ALTERING A VOUCHER SILENTLY DELETES ITS TDS DEDUCTION, and any challan allocation against it is orphaned.** `internal/ledger`'s `deleteTDSDeductions` runs on EVERY alter and the row is re-derived from the body — which is correct on its own terms ("a voucher altered to carry no TDS at all must lose its deduction row rather than keep a stale one"). But the voucher READ path serves no `tds`/`tcs` block, so the form CANNOT re-state what it loaded: hydrate a voucher that carried a deduction, edit its narration, press Ctrl+A, and the deduction is gone — while the challan that paid it keeps an allocation whose natural key now matches no deduction row (migration 0069 carries no foreign key by design, so nothing in the database refuses it). The register then shows the allocation with `deduction_on_record: false`, which is the state that panel already renders and calls out. Found while building D3's form, which is the first thing in the product that can create the precondition. ⚠️ NOT FIXED: the fix is a SERVER READ-PATH change (serve the stored deduction on `GET /vouchers/{id}`) plus hydration in `formFromView`, and it should land with D3's remaining TCS half rather than ahead of it. `formFromView` states the gap at the field today. | `backend/internal/ledger/tds.go` `deleteTDSDeductions` + the voucher GET (`VoucherView` has no tds/tcs) vs `frontend/src/screens/VoucherScreen.tsx` `formFromView` | ✅ **FIXED (L4) — MUTATION-PROVED *AND* DRIVEN 2026-08-21.** The GET serves the stored block and `formFromView` re-states it. Oracle: alter the narration, the `tds_deduction` row SURVIVES and the challan register stops reading "deduction no longer on record". Pinned with its INVERSE CONTROL — an alter that OMITS the block is accepted and deletes it. See §7.5 |
 
 ### ⛔⛔ §7.2 — THE BACK-DATED CUTOFF TOOK **SIX** DOORS TO CLOSE, AND THAT IS THE SESSION'S MAIN LESSON
 
@@ -1901,15 +1901,17 @@ every case. A proof runner that mutates a probe with side effects needs its own 
 **Gates:** backend **35 packages ok / 0 FAIL**, frontend vitest and `tsc` clean, `verify:demo`
 **34/34** before and after the drive.
 
-### ✅ L4 — TDS. D1, D2, and D3's TDS HALF. CLOSED 2026-08-21. **38/38.**
+### ✅ L4 — TDS/TCS. D1, D2, D3, D4, D88. CLOSED 2026-08-21. **67/67.**
 
-**Probe:** `frontend/scripts/drive-l4-tds.mjs`. **Proof runners:** `/tmp/proofs-l4.py` (11
-unit-level mutations) and `/tmp/proofs-l4-e2e.py` (5 mutations that re-run the browser probe; the
-three Go ones rebuild and restart cored). Binary verified fresh by symbol:
-`allocatable_deductions` = 1, `one challan cannot pay both` = 1.
+**Probe:** `frontend/scripts/drive-l4-tds.mjs`, **67/67**. **Proof runners:** `/tmp/proofs-l4.py`
++ `/tmp/proofs-l4b.py` (**26** unit-level mutations) and `/tmp/proofs-l4-e2e.py` +
+`/tmp/proofs-l4b-e2e.py` (**9** mutations that re-run the browser probe; the Go ones rebuild and
+restart cored). **35 mutations, every one predicted then observed.** Binary verified fresh by
+symbol: `allocatable_deductions` = 1, `one challan cannot pay both` = 1, `query tds deduction` = 1.
 
-⛔ **D3 IS NOT CLOSED. Its TCS half remains** — see the row, and §4 of
-`HANDOFF-CLOSE-THE-REGISTER.md` for the shape the user chose.
+⛔⛔ **THE WHOLE LANE IS CLOSED, AND THREE OF THE FIVE ROWS ONLY CLOSED BECAUSE OF WHAT DRIVING
+FOUND.** D1 and D2 really were built-and-never-driven, as the plan predicted. D3's collection half,
+D4's client half and two live defects underneath them were NOT — see "what driving found" below.
 
 #### THE ORACLE IS THE FALLING NUMBER, AND IT IS NEVER THE STATUS CODE
 
@@ -1952,18 +1954,96 @@ their **absence**, then reads `entity_category`/`prior_year_turnover_rupees` bac
 | **E3** (D2) | the cap comes off the allocate path | 4 RED; the books read back `3\|26000.0000` |
 | **E4** (D3) | the `tds` block never leaves the form | the voucher still POSTS 201; `THE RETURN` and the picker RED |
 | **E5** (D3) | no class offers a statutory block (the defect as shipped) | `the Journal offers a TDS block` RED |
+| **M12–M18** (D3 TCS) | the class offers no block · the charge is never posted · it enters the taxable value · the leg picker reads the chart · a half-keyed charge is dropped · the bill ref tracks the pre-charge gross | RED, each |
+| **M14a / M14b** (D3) | the charge posts on the wrong SIDE · it is booked to the base ACCOUNT | RED (M14 itself was vacuous — see below) |
+| **M19 / M20** (D4) | the create path drops `kind` · the allocate-later path drops it | RED **separately** — the fix touched two doors (D7's lesson) |
+| **M21** (D4) | the picker labels a collection as a deduction | RED |
+| **M22–M24** (D88) | the alter stops re-stating the block · the leg is GUESSED · a DEBIT becomes a candidate | RED, each |
+| **M25 / M26** (D88, Go) | the GET stops serving the block · the loader never populates it | `TestReadBackAudit_TDSDeductionSurvives…` RED |
+| **E6** (D3) | Sales offers no statutory block | `the sale offers a TCS block` RED |
+| **E7** (D3) | the charge is never posted | the sale still posts 201; `THE BOOKS — the buyer is DEBITED 120000` RED |
+| **E8** (D4) | the create path drops the kind | `a deposit against a COLLECTION is recorded` RED — 400 on the wire |
+| **E9** (D88, Go) | the GET stops serving the block | the ORACLE RED, and the register reads **"deduction no longer on record"** — the row's registered symptom, verbatim |
 
 ⚠️ **E4 IS THE ONE TO NOTICE.** The screen is untouched: the panel is still there, still keyed,
 still echoing the rate. The voucher still posts 201. Only `tds_deduction` is empty and only a
 reader outside the form can tell — which is why D3's assertions read the BOOKS (postings by SIDE
 and ledger NAME, then the deduction row's section, amount and deductee) and not the form.
 
-#### WHAT DRIVING FOUND THAT READING COULD NOT
+#### D3's COLLECTION HALF — a keyed charge line, and why not the other way
 
-Nothing new broke — but the wire log records the shape of the write path for the next lane:
+A collection has to be **CHARGED TO THE BUYER**, and the GST invoice form SYNTHESISES its postings
+rather than taking a Dr/Cr grid — so until this lane there was no line for the block to name, and
+`statutoryTax` was `null` on Sales for exactly that reason. A `tcs` block alone records the
+collection for the return and **posts nothing**: the invoice would charge the goods and the GST
+while the return says a further 2% was collected, which is money the company must deposit and never
+billed.
+
+**The user chose the explicit keyed charge line**; deriving it inside `buildGstVoucherRequest` was
+put to them and rejected, because it makes the browser the author of an amount the server owns. So
+`GstFormState.charges` is a list the operator keys — a statutory collection, freight, insurance,
+packing — and each one enters the PARTY leg and the BILL REFERENCE, posts on the class's tax side,
+and is **absent from `taxable_value`** (GST is charged on the supply; folding a charge in would
+raise the tax on it). The item invoice carries none and **says why on its face**: its postings are
+generated server-side, so there is no line to name.
+
+#### ⛔⛔ WHAT DRIVING FOUND THAT READING COULD NOT — FOUR THINGS, AND THE SUITE WAS GREEN FOR ALL FOUR
+
+**1. THE BILL REFERENCE TRACKED THE PRE-CHARGE TOTAL.** The builder added the charges to the party
+leg; `gstVoucherGross` did not — and the bill-reference panel's refusal, its caption and its
+auto-tracking default reference were all built on the latter. On any party that maintains
+bill-by-bill, keying a charge produced
+
+> `ledger: bill references on this ledger total 118000.0000 but it posts 120000.0000 — the
+> difference is 2000.0000`
+
+over a panel that had already certified *"referenced in full (118000.0000)"*. **The 25 tests that
+landed with the feature all used a party WITHOUT bill-by-bill**, so the panel never rendered and
+nothing computed "what the party owes" twice in the same breath. `gstVoucherPartyTotal` is now the
+ONE definition, and the builder ASSERTS the two agree rather than earning a 422 at Ctrl+A.
+
+**2. THE SCREEN DROPPED THE ALLOCATION'S `kind` — D4's client half.** The server side was done
+(`AllocationKindTCS`, `ErrMixedChallanKinds`, the LEFT JOIN). Both of `TDSChallansScreen`'s wire
+mappings omitted `kind`, and an omitted kind means **TDS**, so a live collection was looked up in
+`tds_deduction`, found nothing, and came back as *"nothing was deducted on voucher &lt;uuid&gt; under
+206C(1)-SCRAP at leg 0"* — which reads like the BOOKS are wrong rather than like the request is.
+The wire type already said *"SEND back what it was served rather than that default"*. **Forty
+`TDSChallansScreen` tests were green throughout, because every fixture in `api/mock.ts` was a
+DEDUCTION** — so no test ever sent an allocation whose kind mattered, and the mock never served the
+field at all. That is **register row D84's shape**, and it was fixed at the source: a collection
+fixture, `kind` on every served row, and the two refusals the mock did NOT mirror (the wrong/absent
+kind, and `ErrMixedChallanKinds`, which the mock **accepted**).
+
+**3. THE PICKER PRESENTED A COLLECTION AS A DEDUCTION** — one "Deductee" column and an aria-label
+reading *"deducted"* over a party the company had in fact CHARGED. They are opposite acts.
+
+**4. A RE-STATED DEDUCTION SAID "(nobody)".** `taxDeductionFromView` is pure and runs before the
+chart loads, so it resolves the deductee from the VOUCHER'S OWN POSTINGS — and a deductee very often
+is not a leg (a rent withholding debits Rent and credits the bank; the landlord appears nowhere).
+The block read *"will carry TDS under 194I-B on (nobody)"* over a real party. A disclosure saying
+the wrong thing is worse than a terse one.
+
+⚠️ **AND ONE HARNESS FLAKE, FIXED SO IT IS NOT RE-FOUND.** `openApp` waited 600ms and then read the
+chrome ONCE for its tenant assertion. The chrome shows *"Opening your companies…"* until the list
+resolves, and that read is O(tenants) — so on a database carrying several seeded drive tenants the
+assertion fired against a LOADING SCREEN and reported **"signed in to the WRONG COMPANY"**. It cost
+a diagnosis mid-proof-run, where it read as four mutations crashing the probe. It polls now.
+
+#### THE STEP-UP, FOR THE NEXT LANE
+
+The wire log records the shape of the first write of a session:
 `PUT /deductor-status/2025` **403**, then the WebAuthn register/assert ceremony, then the same PUT
-**200**. The step-up fires on the FIRST write of a session and the probe must not mistake that 403
-for a permission defect.
+**200**. A probe must not mistake that 403 for a permission defect.
+
+#### ⚠️ ONE MUTATION WAS VACUOUS, AND IT IS RECORDED RATHER THAN DELETED
+
+M14 swapped the charge posting's `o.taxSide` for `o.baseSide` and was **STILL GREEN** — correctly
+so: every row of `GST_ORIENTATION` gives the two the SAME value, so the mutation cannot change
+behaviour and proves nothing (gotcha #11). It also caught a **false comment** of this session's own
+making, claiming the swap "would credit it to the SALES account" — it would not; only the LEDGER
+decides that. The comment is corrected, the field choice is kept (a charge belongs with the tax, and
+a fifth orientation whose sides differ must carry it there), and the real claims are proved by
+**M14a** (wrong side of the entry) and **M14b** (booked to the base account).
 
 #### WHAT THE PROBE LEAVES BEHIND, AND WHY IT IS NOT L13's MISTAKE
 
