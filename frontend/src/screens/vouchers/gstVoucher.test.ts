@@ -9,6 +9,8 @@ import {
   emptyGstFormState,
   _resetOutputTaxLedgerCache,
   _resetLedgerCache,
+  chargeLinesRefusal,
+  keyedChargeLines,
   type OutputTaxLedgers,
 } from "./gstVoucher";
 import { acceptVoucher } from "./editActions";
@@ -502,5 +504,142 @@ describe("⛔ tax ledgers are resolved per KIND, and the cache does not confuse 
         ?.name;
     expect(await nameOf(output.cgstId)).toBe("Output CGST");
     expect(await nameOf(input.cgstId)).toBe("Input CGST");
+  });
+});
+
+/* ===========================================================================
+ * ⛔ THE ADDITIONAL CHARGE LINE — register row D3's collection half.
+ * ===========================================================================
+ * The invariant every test below defends is one sentence: A CHARGE IS MONEY THE
+ * PARTY OWES AND IS NOT A SUPPLY. So it enters the party leg and the bill
+ * reference, sits on the tax SIDE, and is absent from `taxable_value` — and
+ * getting any one of those wrong still BALANCES, which is why each is asserted
+ * on its own rather than inferred from the others.
+ */
+describe("⛔ D3: an additional charge is billed to the party and is NOT a supply", () => {
+  const sale = (charges?: readonly { ledgerId: string; amount: string }[]) =>
+    buildGstVoucherRequest({
+      voucherType: "sales",
+      partyLedgerId: "led-party",
+      incomeLedgerId: "led-sales",
+      taxableValue: "100000.0000",
+      supplierStateCode: "29",
+      gst: { ...emptyGstFormState(), placeOfSupply: "29", gstRatePct: "18", hsn: "7204" },
+      outputTax: OUTPUT,
+      ...(charges ? { charges } : {}),
+    });
+
+  it("with no charge it posts exactly what it always did — the CONTROL", () => {
+    const req = sale();
+    expect(req.postings!).toHaveLength(4);
+    expect(req.postings![0]!.amount).toBe("118000.0000");
+  });
+
+  it("the PARTY leg carries it: 100000 + 18000 GST + 2000 charge = 120000", () => {
+    const req = sale([{ ledgerId: "led-tcs", amount: "2000.0000" }]);
+    const party = req.postings!.find((p) => p.ledger_id === "led-party")!;
+    expect(party.amount).toBe("120000.0000");
+    expect(party.dr_cr).toBe("DR");
+  });
+
+  it("⛔ it is NOT in the taxable value — folding it in would raise the GST on it", () => {
+    const req = sale([{ ledgerId: "led-tcs", amount: "2000.0000" }]);
+    expect(req.gst!.lines![0]!.taxable_value).toBe("100000.0000");
+    // The tax is still 18% of the GOODS, not of the goods plus the charge.
+    const cgst = req.postings!.find((p) => p.ledger_id === "led-cgst")!;
+    expect(cgst.amount).toBe("9000.0000");
+  });
+
+  it("⛔ it sits on the TAX side, not the BASE side — it is not revenue", () => {
+    // Credited to the charge account, never to Domestic Sales: booking it on
+    // the base side would restate revenue the company did not earn, and the
+    // voucher would balance either way.
+    const req = sale([{ ledgerId: "led-tcs", amount: "2000.0000" }]);
+    const charge = req.postings!.find((p) => p.ledger_id === "led-tcs")!;
+    expect(charge.dr_cr).toBe("CR");
+    const base = req.postings!.find((p) => p.ledger_id === "led-sales")!;
+    expect(base.amount).toBe("100000.0000");
+  });
+
+  it("⛔ THE SIDE IS THE CLASS'S: a credit note REVERSES the charge with everything else", () => {
+    const req = buildGstVoucherRequest({
+      voucherType: "credit-note",
+      partyLedgerId: "led-party",
+      incomeLedgerId: "led-sales",
+      taxableValue: "100000.0000",
+      supplierStateCode: "29",
+      gst: { ...emptyGstFormState(), placeOfSupply: "29", gstRatePct: "18" },
+      outputTax: OUTPUT,
+      charges: [{ ledgerId: "led-tcs", amount: "2000.0000" }],
+    });
+    // A sales return: the customer is CREDITED the whole 120000 back, and the
+    // charge account is DEBITED — the exact reverse of the invoice.
+    expect(req.postings!.find((p) => p.ledger_id === "led-party")!.dr_cr).toBe("CR");
+    expect(req.postings!.find((p) => p.ledger_id === "led-party")!.amount).toBe("120000.0000");
+    expect(req.postings!.find((p) => p.ledger_id === "led-tcs")!.dr_cr).toBe("DR");
+  });
+
+  it("⛔ THE BILL REFERENCE FOLLOWS THE PARTY LEG, charge included", () => {
+    // The server refuses an allocation whose total disagrees with the posting it
+    // belongs to, to the paisa — so referencing the PRE-charge figure would make
+    // every bill-by-bill invoice carrying a charge unpostable.
+    const req = buildGstVoucherRequest({
+      voucherType: "sales",
+      partyLedgerId: "led-party",
+      incomeLedgerId: "led-sales",
+      taxableValue: "100000.0000",
+      supplierStateCode: "29",
+      gst: { ...emptyGstFormState(), placeOfSupply: "29", gstRatePct: "18" },
+      outputTax: OUTPUT,
+      charges: [{ ledgerId: "led-tcs", amount: "2000.0000" }],
+      billRefs: [{ refType: "NEW", refName: "", amount: "120000.0000", dueDate: "" }],
+    });
+    expect(req.bill_allocations).toHaveLength(1);
+    expect(req.bill_allocations![0]!.amount).toBe("120000.0000");
+    expect(req.bill_allocations![0]!.dr_cr).toBe("DR");
+  });
+
+  it("several charges all land, and all of them reach the party", () => {
+    const req = sale([
+      { ledgerId: "led-tcs", amount: "1000.0000" },
+      { ledgerId: "led-freight", amount: "250.0000" },
+    ]);
+    expect(req.postings!.find((p) => p.ledger_id === "led-party")!.amount).toBe("119250.0000");
+    // Sales + CGST + SGST + the two charges — five credits against one debit.
+    expect(req.postings!.filter((p) => p.dr_cr === "CR")).toHaveLength(5);
+  });
+});
+
+describe("⛔ D3: a half-keyed charge is REFUSED, never dropped", () => {
+  const line = (ledger: string, amount: string) => [{ ledger, amount }];
+  it("an untouched line is not a charge at all", () => {
+    expect(chargeLinesRefusal(line("", ""))).toBe("");
+    expect(keyedChargeLines(line("", ""))).toEqual([]);
+  });
+  it("an amount with no ledger has nowhere to be booked", () => {
+    expect(chargeLinesRefusal(line("", "2000"))).toMatch(/names no ledger/i);
+  });
+  it("a ledger with no amount is refused rather than posted as zero", () => {
+    expect(chargeLinesRefusal(line("TCS Payable", ""))).toMatch(/is empty/i);
+  });
+  it("a non-numeric amount is refused before it can reach the server", () => {
+    expect(chargeLinesRefusal(line("TCS Payable", "two thousand"))).toMatch(
+      /not a figure/i,
+    );
+  });
+  it("⛔ a charge of ZERO is refused — a line saying the party owes nothing extra", () => {
+    expect(chargeLinesRefusal(line("TCS Payable", "0"))).toMatch(/charges 0/i);
+  });
+  it("a complete line is accepted and survives keyedChargeLines", () => {
+    expect(chargeLinesRefusal(line("TCS Payable", "2000"))).toBe("");
+    expect(keyedChargeLines(line("TCS Payable", "2000"))).toHaveLength(1);
+  });
+  it("the refusal NAMES the line, because an operator with three charges must know which", () => {
+    expect(
+      chargeLinesRefusal([
+        { ledger: "Freight", amount: "500" },
+        { ledger: "", amount: "2000" },
+      ]),
+    ).toMatch(/line 2/i);
   });
 });

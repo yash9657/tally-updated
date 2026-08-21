@@ -31,6 +31,9 @@ import {
   gstTaxLedgerNames,
   buildGstVoucherRequest,
   gstVoucherGross,
+  chargeLinesRefusal,
+  keyedChargeLines,
+  type GstChargeLine,
   type GstFormState,
 } from "./vouchers/gstVoucher";
 import { addMoney, normalizeMoney } from "./vouchers/money";
@@ -306,6 +309,13 @@ interface VoucherForm {
    * rows are ignored on accept, so the form can always offer one more line.
    */
   items: ItemInvoiceLine[];
+  /**
+   * TRUE when the LOADED voucher's credit legs could not be told apart — see
+   * {@link gstLegsFromView}. It is a fact about what was hydrated, not a
+   * validation result, which is why it lives on the form rather than being
+   * recomputed in the refusal: the view is gone by the time Ctrl+A runs.
+   */
+  gstLegsAmbiguous: boolean;
 }
 
 function emptyForm(): VoucherForm {
@@ -330,6 +340,8 @@ function emptyForm(): VoucherForm {
     billRefs: [],
     items: [emptyItemLine()],
     tax: emptyTaxDeductionForm(),
+    // A fresh voucher was hydrated from nothing, so nothing was ambiguous.
+    gstLegsAmbiguous: false,
   };
 }
 
@@ -341,7 +353,9 @@ function emptyForm(): VoucherForm {
  */
 function formFromView(view: VoucherView): VoucherForm {
   const account = accountLegFromView(view);
+  const legs = gstLegsFromView(view);
   return {
+    gstLegsAmbiguous: legs.ambiguous,
     date: view.voucher_date,
     party: view.party,
     partyLedgerId: view.party_ledger_id,
@@ -383,6 +397,11 @@ function formFromView(view: VoucherView): VoucherForm {
       gstRatePct: view.gst_lines?.[0]?.gst_rate_pct ?? "",
       reverseCharge: view.reverse_charge,
       hsn: view.gst_lines?.[0]?.hsn ?? "",
+      // ⛔ RE-STATED, NOT REBUILT. An alter POSTs the whole voucher, so a charge
+      // this form does not carry is a charge DELETED — the buyer's total falls
+      // by it and, on a TCS invoice, the collected tax stops being posted while
+      // the return still says it was collected. See gstLegsFromView.
+      charges: legs.charges,
     },
     // ⚠️ `?? 0` MEANS "THIS SERVER DOES NOT TELL ME", NOT "THIS VOUCHER HAS
     // NONE", and the two must not be conflated in the refusing direction: a
@@ -615,9 +634,52 @@ function accountLegFromView(view: VoucherView): { name: string; id: string } | n
  * new voucher gets. This changes only what an ALTER preserves.
  */
 function baseLegFromView(view: VoucherView): string {
-  const cls = view.class.toLowerCase();
-  const orientation = gstOrientationFor(cls);
-  if (orientation === undefined) return "";
+  return gstLegsFromView(view).baseLedgerId;
+}
+
+/**
+ * THE BASE LEG AND THE ADDITIONAL CHARGES, told apart on the way back in.
+ *
+ * ⛔⛔ THIS EXISTS BECAUSE A CHARGE LINE SITS ON THE **SAME SIDE** AS THE BASE.
+ * On a sale both are credits, so the moment `GstFormState.charges` was added the
+ * old one-leg rule (`legs.length === 1`) stopped matching any invoice carrying a
+ * charge — it returned "" and the alter re-pointed the goods to the canonical
+ * `Domestic Sales`, which is precisely the defect `baseLegFromView`'s own
+ * comment records having fixed once already.
+ *
+ * ⛔ AND THE CHARGES MUST COME BACK OUT, or the ordinary round trip — open the
+ * invoice, fix the narration, Ctrl+A — REBUILDS it without them: the buyer's
+ * total silently falls by the charge, and on a TCS invoice the collected tax
+ * stops being posted while the return still says it was collected. That is
+ * register row D88's shape exactly, one field over.
+ *
+ * THE DISCRIMINATOR IS THE TAXABLE VALUE, and it is the only honest one
+ * available: `PostingView` carries no group, so nothing on the wire says which
+ * credit is the sale. The base leg is the one posted for `view.taxable_value`.
+ *
+ * ⚠️ WHEN IT CANNOT TELL — no leg matches the taxable value, or several do — it
+ * says so (`ambiguous`) and names NOTHING, and `gstRefusal` then refuses the
+ * ALTER rather than guessing. Guessing here has exactly two outcomes and both
+ * are silent: the goods booked to a charge account, or a charge dropped off the
+ * invoice. A refusal that names the remedy is strictly better than either.
+ */
+export interface GstLegsFromView {
+  /** The ledger the GOODS are booked to; "" when it could not be told. */
+  baseLedgerId: string;
+  /** The additional charges, as the form keys them. */
+  charges: GstChargeLine[];
+  /** True when the credit legs could not be told apart — see above. */
+  ambiguous: boolean;
+}
+
+export function gstLegsFromView(view: VoucherView): GstLegsFromView {
+  const empty: GstLegsFromView = {
+    baseLedgerId: "",
+    charges: [],
+    ambiguous: false,
+  };
+  const orientation = gstOrientationFor(view.class.toLowerCase());
+  if (orientation === undefined) return empty;
   const taxNames = new Set<string>(
     gstTaxLedgerNames(orientation.taxKind).map((n) => n.toLowerCase()),
   );
@@ -627,7 +689,27 @@ function baseLegFromView(view: VoucherView): string {
       p.ledger_id !== view.party_ledger_id &&
       !taxNames.has(p.ledger.toLowerCase()),
   );
-  return legs.length === 1 ? legs[0]!.ledger_id : "";
+  // The overwhelmingly common shape, and UNCHANGED: one credit, it is the sale.
+  // ⚠️ Matched WITHOUT consulting the taxable value on purpose — a voucher
+  // stored before `voucher_gst_line` existed hydrates `taxable_value` as
+  // "0.0000", and requiring the match here would refuse every alter of one.
+  if (legs.length <= 1) {
+    return { ...empty, baseLedgerId: legs.length === 1 ? legs[0]!.ledger_id : "" };
+  }
+  const base = legs.filter((p) => sameMoney(p.amount, view.taxable_value));
+  if (base.length !== 1) return { ...empty, ambiguous: true };
+  return {
+    baseLedgerId: base[0]!.ledger_id,
+    charges: legs
+      .filter((p) => p !== base[0])
+      .map((p) => ({ ledger: p.ledger, amount: p.amount })),
+    ambiguous: false,
+  };
+}
+
+/** Two fixed-point money strings, compared as VALUES ("100" == "100.0000"). */
+function sameMoney(a: string, b: string): boolean {
+  return normalizeMoney(a) === normalizeMoney(b);
 }
 
 /**
@@ -724,6 +806,9 @@ function formFromDraft(draft: PurchaseVoucherDraft): VoucherForm {
   const body = draft.body;
   const line = body.gst?.lines[0];
   return {
+    // A draft is built by insightd from the bill, not hydrated from a stored
+    // voucher, so there are no legs to have been ambiguous.
+    gstLegsAmbiguous: false,
     date: body.voucher_date ?? today(),
     party: body.party ?? "",
     partyLedgerId: body.party_ledger_id ?? "",
@@ -747,6 +832,10 @@ function formFromDraft(draft: PurchaseVoucherDraft): VoucherForm {
       gstRatePct: line?.gst_rate_pct ?? "",
       reverseCharge: body.gst?.reverse_charge ?? false,
       hsn: line?.hsn ?? "",
+      // An OCR draft is a PURCHASE and carries no additional charge: insightd
+      // derives postings from the bill, and a charge is something the operator
+      // decides to bill, not something a scan can infer.
+      charges: [],
     },
     // An OCR draft is a CREATE, never an alter — there is no stored voucher
     // behind it and so no stored GST line to be lost.
@@ -1086,6 +1175,40 @@ function gstRefusal(f: VoucherForm, type: VoucherType, homeStateCode: string): s
       `Ctrl+P answers 400 naming items[0].hsn, at the counter, after the ` +
       `document has been keyed. Key the code for what was supplied.`
     );
+  }
+  // ⛔ THE AMBIGUOUS ALTER, REFUSED RATHER THAN GUESSED. See gstLegsFromView: a
+  // stored voucher whose credit legs cannot be told apart would be rebuilt
+  // either with the goods booked to a charge account or with the charge dropped,
+  // and BOTH balance, so nothing downstream would report it.
+  if (f.gstLegsAmbiguous) {
+    return (
+      "This voucher has more than one credit besides the party and the tax " +
+      "heads, and none of them is for its taxable value — so this form cannot " +
+      "tell the goods from the additional charges, and it will not guess: " +
+      "booking the goods to a charge account and dropping a charge off the " +
+      "invoice both BALANCE, so nothing would report either. Nothing was sent. " +
+      "Alter it as an Item Invoice (Ctrl+H), where each line names itself."
+    );
+  }
+  // ⛔ THE CHARGE LINES ARE PART OF THIS GATE, not checked later, for the reason
+  // the whole function exists: the resolvers below CREATE accounts, so a refusal
+  // after them leaves the charge's ledger behind on a voucher that never posted
+  // (D39/D81).
+  const chargeGap = chargeLinesRefusal(f.gst.charges);
+  if (chargeGap !== "") return chargeGap;
+  // ⛔ AND THE STATUTORY BLOCK, exactly as the Dr/Cr grid gates it (D3). The
+  // leg it may name is a CHARGE LINE — that is the whole design: a collection
+  // the buyer is really charged, named by the operator, verified by the server.
+  const cfg = configFor(type);
+  if (cfg.statutoryTax !== null) {
+    const taxGap =
+      taxDeductionRefusal(f.tax, cfg.statutoryTax) ||
+      taxLegRefusal(
+        f.tax,
+        cfg.statutoryTax,
+        keyedChargeLines(f.gst.charges).map((c) => c.ledger),
+      );
+    if (taxGap !== "") return taxGap;
   }
   return billRefusal(gstBillLeg(f, type, homeStateCode), f.billRefs);
 }
@@ -2110,7 +2233,29 @@ function AccountingVoucherScreen({
             name: orientation.baseLedger.name,
             groupName: orientation.baseLedger.group,
           }));
-        return buildGstVoucherRequest({
+        // ---- THE ADDITIONAL CHARGES (register row D3's collection half).
+        //
+        // ⛔ RESOLVED HERE AND PASSED IN BY ID, because `buildGstVoucherRequest`
+        // is pure and creates nothing — the same contract `partyLedgerId` and
+        // `incomeLedgerId` above are held to.
+        //
+        // ⚠️ THE GROUP IS A GUESS AND IT ONLY BITES ON A LEDGER THAT DOES NOT
+        // EXIST YET (`ensureLedger` resolves before it creates). "Duties &
+        // Taxes" is right for the case this field was built for — a TCS
+        // liability — and wrong for a freight recovery, which is an income. The
+        // panel says so, and the honest answer for a real new account is the
+        // masters screen. It is the same call the Journal's grid makes, stated
+        // in the same words.
+        const charges = keyedChargeLines(f.gst.charges);
+        const chargeIDs = await Promise.all(
+          charges.map((c) =>
+            ensureLedger(client, companyID, {
+              name: c.ledger.trim(),
+              groupName: "Duties & Taxes",
+            }),
+          ),
+        );
+        const req = buildGstVoucherRequest({
           voucherType: type,
           partyLedgerId,
           incomeLedgerId,
@@ -2123,7 +2268,37 @@ function AccountingVoucherScreen({
           narration: f.narration,
           party: f.party,
           billRefs: f.billRefs,
+          charges: charges.map((c, i) => ({
+            ledgerId: chargeIDs[i]!,
+            amount: normalizeMoney(c.amount),
+          })),
         });
+
+        // ---- THE STATUTORY COLLECTION (D3's TCS half).
+        //
+        // ⛔ THE LEG ID COMES FROM THE ARRAY JUST RESOLVED, BY POSITION — the
+        // identical discipline the Dr/Cr grid's `legIDForRow` follows. The
+        // server compares `tcs_ledger_id` against the POSTED legs and requires
+        // the leg to be a CREDIT of exactly the collection it derives; an id
+        // from a second lookup would match no posting, and the verification loop
+        // would sum zero and compare it against a positive derived figure.
+        //
+        // ⛔ A CLASS THAT CANNOT CARRY ONE SENDS NOTHING. Only `sales` sets
+        // `statutoryTax: "TCS"` — a purchase does not collect tax from its own
+        // supplier, and a credit note reversing a collection is a case this
+        // build does not handle (FeaturesScreen says so).
+        const cfg = configFor(type);
+        if (cfg.statutoryTax === "TCS") {
+          const tcs = buildTCSRequest(f.tax, (ledgerName) => {
+            const idx = charges.findIndex(
+              (c) =>
+                c.ledger.trim().toLowerCase() === ledgerName.trim().toLowerCase(),
+            );
+            return idx < 0 ? "" : chargeIDs[idx]!;
+          });
+          if (tcs) req.tcs = tcs;
+        }
+        return req;
       });
     },
     [client, companyID, homeStateCode, type],
@@ -2635,11 +2810,37 @@ function AccountingVoucherScreen({
           tax={taxResult}
         />
       ) : cfg.showGst ? (
-        <GstPanel
-          form={form}
-          setForm={setForm}
-          tax={taxResult}
-        />
+        <>
+          <GstPanel
+            form={form}
+            setForm={setForm}
+            tax={taxResult}
+          />
+          {/* ⛔ THE STATUTORY BLOCK ON THE INVOICE (register row D3's collection
+              half), and it is HERE — the ACCOUNTING-mode GST form — for the same
+              reason the deduction block is on the Dr/Cr grid and not on single
+              entry: it needs a line the operator keyed for it to NAME. That line
+              is the additional charge above.
+
+              ⚠️ THE LEG PICKER READS THE CHARGE LINES, not the chart. A leg the
+              server cannot find among the postings is a verification that
+              silently does not happen, so a name that is not on the invoice is
+              REFUSED rather than sent. */}
+          {cfg.statutoryTax !== null ? (
+            <div className="mt-2 max-w-3xl">
+              <TaxDeductionPanel
+                kind={cfg.statutoryTax}
+                value={form.tax}
+                onChange={(tax) => setForm((f) => ({ ...f, tax }))}
+                parties={partyNames}
+                ledgerIdByName={(name) => ledgerByName(name)?.id ?? ""}
+                gridLedgers={keyedChargeLines(form.gst.charges).map((c) =>
+                  c.ledger.trim(),
+                )}
+              />
+            </div>
+          ) : null}
+        </>
       ) : entryMode === "single" ? (
         <SingleEntryPanel
           form={form}
@@ -2854,7 +3055,108 @@ function GstPanel({
           }
         />
       </label>
+      <ChargeLines form={form} setForm={setForm} />
       {tax ? <TaxPanel tax={tax} /> : null}
+    </div>
+  );
+}
+
+/**
+ * THE ADDITIONAL CHARGES — what the buyer is billed BEYOND the goods.
+ *
+ * ⛔⛔ THIS IS WHAT MAKES A TCS COLLECTION REAL (register row D3's collection
+ * half). A `tcs` block on its own records the collection for the return and
+ * POSTS NOTHING — the invoice would then charge the buyer for the goods and the
+ * GST while the return says a further 1% was collected from them, which is money
+ * the company must deposit and never billed. The panel below is the line that
+ * charges it, and the TCS block underneath NAMES this line so the server can
+ * verify the posting against its own derivation.
+ *
+ * ⚠️ IT IS NOT A TCS-ONLY FIELD. Freight, insurance and packing recovered from
+ * the buyer are the same accounting act; the statutory block simply points at
+ * one of these lines. Naming it "TCS" would have been the smaller lie.
+ *
+ * ⛔ IT IS NOT PART OF THE TAXABLE VALUE and the caption says so, because that
+ * is the one mistake an operator can make here that the server cannot catch:
+ * folding the charge into `Taxable Value` above raises the GST on it, and the
+ * server's re-derivation would then agree with the client about a figure both
+ * of them have wrong.
+ */
+function ChargeLines({
+  form,
+  setForm,
+}: {
+  form: VoucherForm;
+  setForm: React.Dispatch<React.SetStateAction<VoucherForm>>;
+}) {
+  const rows: readonly GstChargeLine[] =
+    form.gst.charges.length > 0 ? form.gst.charges : [{ ledger: "", amount: "" }];
+  const setRows = (next: (prev: readonly GstChargeLine[]) => GstChargeLine[]) =>
+    setForm((f) => ({ ...f, gst: { ...f.gst, charges: next(rows) } }));
+  return (
+    <div className="mt-3 border-t border-tally-field pt-2" data-testid="gst-charges">
+      <h3 className="text-tally-title">Additional charges (billed to the party)</h3>
+      <p className="mt-1 max-w-2xl text-xs">
+        A line the party is charged that is NOT the goods — a statutory
+        collection, freight, insurance, packing. It is added to what the party
+        owes and is <span className="text-tally-title">not</span> part of the
+        Taxable Value above: GST is charged on the supply, so folding a charge
+        into the base would raise the tax on it.
+      </p>
+      <ul className="mt-2">
+        {rows.map((c, i) => (
+          <li key={i} className="mb-1 flex flex-wrap items-center gap-2 text-sm">
+            <input
+              aria-label={`Charge ${i + 1} ledger`}
+              data-testid={`charge-ledger:${i}`}
+              className="bg-tally-field px-1 text-tally-fieldText outline-none"
+              placeholder="ledger (e.g. TCS Payable)"
+              value={c.ledger}
+              onChange={(e) =>
+                setRows((prev) =>
+                  prev.map((r, idx) =>
+                    idx === i ? { ...r, ledger: e.target.value } : r,
+                  ),
+                )
+              }
+            />
+            <input
+              aria-label={`Charge ${i + 1} amount`}
+              data-testid={`charge-amount:${i}`}
+              className="w-32 bg-tally-field px-1 text-right text-tally-fieldText outline-none"
+              placeholder="0.0000"
+              value={c.amount}
+              onChange={(e) =>
+                setRows((prev) =>
+                  prev.map((r, idx) =>
+                    idx === i ? { ...r, amount: e.target.value } : r,
+                  ),
+                )
+              }
+            />
+            {rows.length > 1 ? (
+              <button
+                type="button"
+                data-testid={`charge-remove:${i}`}
+                className="px-1 text-xs underline"
+                onClick={() =>
+                  setRows((prev) => prev.filter((_, idx) => idx !== i))
+                }
+              >
+                remove
+              </button>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+      <button
+        type="button"
+        data-testid="charge-add-line"
+        className="mt-1 px-2 py-0.5 text-xs underline"
+        onClick={() => setRows((prev) => [...prev, { ledger: "", amount: "" }])}
+      >
+        + another charge
+      </button>
     </div>
   );
 }
@@ -3379,6 +3681,24 @@ function ItemInvoicePanel({
           </p>
         );
       })()}
+
+      {/* ⛔ WHY THERE IS NO TCS BLOCK HERE, SAID OUT LOUD (register row D3).
+          An item invoice's postings are GENERATED SERVER-SIDE from this grid and
+          the server refuses a body that also states them — so there is no line
+          an operator could key and no leg the collection could name. Offering a
+          block that could only record-without-posting would produce an invoice
+          that under-charges the buyer while the return says otherwise, which is
+          exactly the state the charge line exists to prevent. A silent absence
+          would read as "this build has no TCS"; it has one, one Ctrl+H away. */}
+      {configFor(voucherType).statutoryTax !== null ? (
+        <p data-testid="item-statutory-unavailable" className="mb-2 text-xs">
+          Tax collected at source cannot be keyed on an item invoice: its
+          postings are generated by the server from the lines below, so there is
+          no charge line for the collection to be booked to. Ctrl+H &gt;
+          Accounting Invoice keys the same document with an additional-charge
+          line, and the TCS block is there.
+        </p>
+      ) : null}
 
       {stockError ? (
         <p data-testid="stock-masters-error" className="mb-2 text-xs text-red-400">

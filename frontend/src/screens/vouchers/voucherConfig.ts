@@ -74,12 +74,26 @@ export interface VoucherConfig {
    * voucher class where a deduction is most often keyed.
    *
    * `null` means the class cannot carry one, and that is the honest answer for
-   * most of them. ⚠️ IT IS null ON SALES TODAY, and that is register row D3's
-   * remaining half: a collection has to be CHARGED to the buyer, so the invoice
-   * needs a TCS line before the block can be offered there — and the GST
-   * invoice form synthesises its postings rather than taking a grid. Offering a
-   * block that can only record-without-posting would produce invoices that
-   * under-charge the buyer while the return says otherwise.
+   * most of them.
+   *
+   * ⛔ SALES CARRIES "TCS", AND WHAT MADE THAT POSSIBLE IS THE CHARGE LINE, not
+   * this field. A collection has to be CHARGED to the buyer, and the GST invoice
+   * form synthesises its postings rather than taking a Dr/Cr grid — so until
+   * `GstFormState.charges` existed there was no line for the operator to name,
+   * and offering the block would have produced invoices that under-charge the
+   * buyer while the return says otherwise. The alternative — deriving the line
+   * inside `buildGstVoucherRequest` — was put to the user and REJECTED: it makes
+   * the browser the author of an amount the server owns.
+   *
+   * ⚠️ ONLY IN ACCOUNTING MODE (Ctrl+H). An ITEM INVOICE's postings are
+   * GENERATED SERVER-SIDE from the stock grid and the server refuses a body that
+   * also states them, so there is no charge line to name there. The item panel
+   * says so on its face rather than silently offering nothing.
+   *
+   * ⚠️ AND NOT ON A CREDIT NOTE. Reversing a collected sale is a case this build
+   * does not handle at all (FeaturesScreen's own note says so), and a block that
+   * recorded a NEGATIVE collection nothing downstream understands would be worse
+   * than the absence.
    */
   readonly statutoryTax: "TDS" | "TCS" | null;
   /**
@@ -179,7 +193,10 @@ export const VOUCHER_CONFIGS: Readonly<Record<VoucherType, VoucherConfig>> = {
     partyLabel: "Party A/c Name",
     primarySide: "CR",
     showGst: true,
-    statutoryTax: null,
+    // ⛔ TCS, NOT TDS, AND NOT FROM `primarySide` (which reads "CR" here and
+    // ALSO on the credit note, whose party leg goes the other way). A seller
+    // COLLECTS tax from its buyer; it does not withhold from itself.
+    statutoryTax: "TCS",
     itemInvoice: true,
     hint: "Sales invoice. Party debited; sales + GST credited.",
     post: (c, id, req) => c.postSalesVoucher(id, req),

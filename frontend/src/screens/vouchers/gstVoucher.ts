@@ -37,6 +37,34 @@ export interface OutputTaxLedgers {
   igstId: string;
 }
 
+/**
+ * ONE ADDITIONAL CHARGE ON THE INVOICE, KEYED BY THE OPERATOR.
+ *
+ * ⛔⛔ THIS EXISTS SO A TCS COLLECTION IS REALLY CHARGED TO THE BUYER (register
+ * row D3's collection half), AND THE OPERATOR KEYS IT RATHER THAN THE CLIENT
+ * DERIVING IT. That was a decision, not an oversight, and the alternative was
+ * considered and rejected: `buildGstVoucherRequest` could emit a TCS line from
+ * the derived collection exactly as it emits the three tax ledgers — but that
+ * makes the BROWSER the author of an amount the SERVER owns, which is the thing
+ * this codebase refuses everywhere else. The server derives the collection from
+ * its own effective-dated rate table and REFUSES the voucher when the posted leg
+ * disagrees (`ErrTCSMismatch`, naming both figures), so a mis-keyed charge is
+ * caught by the authority rather than rubber-stamped by a second copy of its
+ * arithmetic.
+ *
+ * ⚠️ IT IS NOT A TCS-ONLY FIELD, and naming it "TCS" would have been the smaller
+ * lie. A freight, an insurance recovery or a packing charge is the same
+ * accounting act — a line the buyer is charged that is not the goods — and the
+ * TCS panel simply NAMES one of these lines as the one that carries the
+ * collected tax, exactly as the Dr/Cr grid's panel names one of its rows.
+ */
+export interface GstChargeLine {
+  /** The ledger the charge is booked to, free-typed (e.g. "TCS Payable"). */
+  ledger: string;
+  /** The amount, as a free-typed string. */
+  amount: string;
+}
+
 /** The extra GST inputs the Sales/Purchase form collects (cfg.showGst only). */
 export interface GstFormState {
   /** 2-digit place-of-supply state code; defaulted from the party's state code. */
@@ -46,10 +74,77 @@ export interface GstFormState {
   reverseCharge: boolean;
   /** Optional HSN/SAC text. */
   hsn: string;
+  /**
+   * Charges the buyer is billed BEYOND the goods — see {@link GstChargeLine}.
+   *
+   * ⛔ THEY ARE **NOT** PART OF `taxable_value`. GST is charged on the supply;
+   * a statutory collection is charged on the consideration and is not itself a
+   * supply, so folding a charge into the taxable base would raise the GST on it
+   * and the server's own re-derivation would refuse the voucher. They enter the
+   * PARTY leg (the buyer really owes them) and nothing else.
+   */
+  charges: readonly GstChargeLine[];
 }
 
 export function emptyGstFormState(): GstFormState {
-  return { placeOfSupply: "", gstRatePct: "", reverseCharge: false, hsn: "" };
+  return {
+    placeOfSupply: "",
+    gstRatePct: "",
+    reverseCharge: false,
+    hsn: "",
+    charges: [],
+  };
+}
+
+/** A charge line the operator has begun to key — either half counts. */
+export function isKeyedChargeLine(c: GstChargeLine): boolean {
+  return c.ledger.trim() !== "" || c.amount.trim() !== "";
+}
+
+/**
+ * The refusal for a half-keyed charge line, or "".
+ *
+ * ⛔ A HALF-KEYED LINE IS REFUSED AND NOT DROPPED. Dropping it would post an
+ * invoice for less than the operator keyed while the screen showed the charge —
+ * the undisclosed-figure shape. And it must be refused BEFORE any `ensureLedger`
+ * runs, or a refused Ctrl+A leaves the charge's account behind (D39/D81).
+ */
+export function chargeLinesRefusal(
+  charges: readonly GstChargeLine[],
+): string {
+  for (const [i, c] of charges.entries()) {
+    if (!isKeyedChargeLine(c)) continue;
+    const where = `Additional charge line ${i + 1}`;
+    if (c.ledger.trim() === "") {
+      return (
+        `${where} is for ${c.amount.trim()} but names no ledger, so there is ` +
+        "nowhere to book it. Name the account the charge is credited to, or " +
+        "clear the amount. Nothing was sent."
+      );
+    }
+    if (!/^\d+(\.\d+)?$/.test(c.amount.trim())) {
+      return (
+        `${where} names "${c.ledger.trim()}" but its amount is ` +
+        `${c.amount.trim() === "" ? "empty" : `"${c.amount.trim()}"`}, which is ` +
+        "not a figure this form can charge the buyer. Nothing was sent."
+      );
+    }
+    if (Number(c.amount.trim()) === 0) {
+      return (
+        `${where} names "${c.ledger.trim()}" and charges 0. A charge of nothing ` +
+        "is a line on the invoice that says the buyer owes nothing extra — " +
+        "clear the line instead. Nothing was sent."
+      );
+    }
+  }
+  return "";
+}
+
+/** The charge lines that will really post, in order. */
+export function keyedChargeLines(
+  charges: readonly GstChargeLine[],
+): readonly GstChargeLine[] {
+  return charges.filter(isKeyedChargeLine);
 }
 
 /**
@@ -462,6 +557,18 @@ export interface GstVoucherInputs {
    * majority of ledgers and not an omission.
    */
   billRefs?: readonly DraftBillRef[];
+  /**
+   * The additional charges, ALREADY RESOLVED to ledger uuids by the caller —
+   * the same discipline `partyLedgerId` and `incomeLedgerId` follow, and for the
+   * same reason: this function is pure and creates nothing.
+   *
+   * ⛔ THE ORDER IS LOAD-BEARING. `buildTCSRequest`'s `resolveLegId` closure maps
+   * the operator's NAMED line onto the id the POSTING was built with, by
+   * position over this array. An id from a second lookup could resolve to a
+   * different ledger, and the server's cross-check would then sum zero over a
+   * posting that is not there — a verification that silently does not happen.
+   */
+  charges?: readonly { ledgerId: string; amount: string }[];
 }
 
 /**
@@ -571,12 +678,41 @@ export function buildGstVoucherRequest(
     gst.placeOfSupply,
   );
 
+  // ---- THE ADDITIONAL CHARGES (register row D3's collection half).
+  //
+  // ⛔ THEY SIT ON THE **TAX** SIDE, NOT THE BASE SIDE, AND THE DIFFERENCE IS
+  // REAL. A charge is money the buyer owes that is not the goods — on a sale it
+  // is CREDITED (a liability or an income), exactly as the output tax is, and
+  // the party is debited for it. Booking it on the base side would credit it to
+  // the SALES account, restating revenue the company did not earn, and the
+  // voucher would balance either way. `o.taxSide` is the class's own answer, so
+  // a credit note reverses the charge with everything else.
+  //
+  // ⚠️ AND THEY ARE ABSENT FROM `gstReq.lines`. See GstFormState.charges: GST is
+  // charged on the SUPPLY. Folding a charge into `taxable_value` would raise the
+  // GST on it, and the server's re-derivation would then refuse the voucher for
+  // a mismatch the operator did not create.
+  const chargePostings: PostingRequest[] = (inputs.charges ?? []).map((c) => ({
+    ledger_id: c.ledgerId,
+    dr_cr: o.taxSide,
+    amount: c.amount,
+  }));
+  // ⛔ THE PARTY LEG CARRIES THEM. If it did not, the voucher would not balance
+  // and the server would refuse it — which is the safe failure. The one that is
+  // NOT safe is the bill reference below, which must total to this same figure.
+  const partyTotal = chargePostings.reduce(
+    (acc, c) => addMoney(acc, c.amount),
+    total,
+  );
+
   const postings: PostingRequest[] = [
-    // The party leg carries the GROSS (taxable + tax); its side is the class's.
-    { ledger_id: partyLedgerId, dr_cr: o.partySide, amount: total },
+    // The party leg carries the GROSS (taxable + tax + any charge); its side is
+    // the class's.
+    { ledger_id: partyLedgerId, dr_cr: o.partySide, amount: partyTotal },
     // The income/expense leg carries the taxable BASE.
     { ledger_id: incomeLedgerId, dr_cr: o.baseSide, amount: taxableValue },
     ...taxPostings,
+    ...chargePostings,
   ];
 
   const gstReq: GSTRequest = {
@@ -627,8 +763,12 @@ export function buildGstVoucherRequest(
   // the sum-to-posting invariant: the server refuses an allocation whose side or
   // total disagrees with the posting it belongs to. Left hard-coded "DR" this
   // would have opened a RECEIVABLE against a supplier on every purchase.
+  // ⛔ `partyTotal`, NOT `total` — the charges are on the party leg and the
+  // server refuses an allocation whose total disagrees with the posting it
+  // belongs to, to the paisa. Referencing the pre-charge figure would make every
+  // bill-by-bill invoice carrying a charge unpostable.
   const billAllocations = buildBillAllocations(
-    { ledgerId: partyLedgerId, drCr: o.partySide, amount: total },
+    { ledgerId: partyLedgerId, drCr: o.partySide, amount: partyTotal },
     inputs.billRefs ?? [],
   );
   if (billAllocations.length > 0) req.bill_allocations = billAllocations;
