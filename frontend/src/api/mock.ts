@@ -135,6 +135,7 @@ import type {
   GSTLineView,
   TDSRequest,
   TCSRequest,
+  TaxAllocationKind,
   TDSDeductionView,
   TCSCollectionView,
 } from "./types";
@@ -654,6 +655,20 @@ export interface MockTDSDeduction {
   tax_rupees: Money;
   /** The year the deduction belongs to. An allocation across years is refused. */
   tax_year_start: number;
+  /**
+   * DEDUCTION ("TDS") or COLLECTION ("TCS"). Absent means TDS, mirroring the
+   * wire.
+   *
+   * ⛔⛔ ITS ABSENCE HERE IS WHY 40 GREEN SCREEN TESTS MISSED REGISTER ROW D4.
+   * Every fixture was a deduction, so no test ever sent an allocation whose kind
+   * mattered — and the screen's two wire mappings both DROPPED the field. On the
+   * real server that means "look this triple up in tds_deduction", so a live
+   * collection came back as "nothing was deducted on voucher <uuid> under
+   * 206C(1)-SCRAP at leg 0", which reads like the books are wrong rather than
+   * like the request is. Found in a browser on 2026-08-21; the collection
+   * fixture below is what would have caught it here.
+   */
+  kind?: TaxAllocationKind;
 }
 
 /**
@@ -737,6 +752,27 @@ export const MOCK_TDS_DEDUCTIONS: MockTDSDeduction[] = [
     deduction_date: "2026-07-01",
     tax_rupees: "5000.0000",
     tax_year_start: 2026,
+  },
+  /**
+   * 5. C1 — A COLLECTION, and the row this table existed four fixtures without.
+   *
+   * ⛔ Its section is from the TCS vocabulary, which is DISJOINT from the TDS one
+   * by a database CHECK — that disjointness is exactly what makes a dropped
+   * `kind` refusable rather than silently wrong, and it is why one fixture of
+   * this shape is enough. `deductee_name` is the BUYER on a collection: the two
+   * are opposite acts and a picker that labels them alike says the company
+   * withheld from someone it in fact charged.
+   */
+  {
+    voucher_id: "3f6b1c2e-0a4d-4c8b-9e11-7a2d5f0b1005",
+    voucher_no: "S1",
+    section: "206C(1)-SCRAP",
+    leg_seq: 0,
+    deductee_name: "Vikram Scrap Traders",
+    deduction_date: "2026-07-15",
+    tax_rupees: "2000.0000",
+    tax_year_start: 2026,
+    kind: "TCS",
   },
 ];
 
@@ -4054,6 +4090,9 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
           .map((d) => ({
             voucher_id: d.voucher_id,
             leg_seq: d.leg_seq,
+            // Served on EVERY row, as the server serves it — including on a
+            // deduction, so a client cannot pass by only ever seeing it absent.
+            kind: d.kind ?? ("TDS" as TaxAllocationKind),
             voucher_no: d.voucher_no,
             deductee_name: d.deductee_name,
             section: d.section,
@@ -4230,6 +4269,8 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         rawAmount: Money;
         amountUnits: bigint;
         triple: string;
+        /** The kind AS SENT — `undefined` means the caller named none. */
+        sentKind?: TaxAllocationKind;
       }[] = [];
       for (const a of allocations) {
         const voucherID = (a.voucher_id ?? "").trim();
@@ -4288,6 +4329,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
           );
         }
         seen.add(triple);
+        // ⛔ THE KIND AS SENT — never defaulted here. The DEFAULT (absent means
+        // TDS) is applied at the comparison, so a request that named NO kind can
+        // be told apart from one that named the WRONG kind and the refusal can
+        // say which mistake was made.
         parsed.push({
           voucherID,
           section,
@@ -4295,6 +4340,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
           rawAmount,
           amountUnits,
           triple,
+          sentKind: a.kind,
         });
       }
 
@@ -4332,6 +4378,8 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       // not, which is the gap named at the top of this section.
       const views: TDSChallanAllocation[] = [];
       let allocatedUnits = 0n;
+      /** Which kinds this challan ends up paying. See the refusal below. */
+      const kindsOnThisChallan = new Set<TaxAllocationKind>();
       for (const {
         voucherID,
         section,
@@ -4339,6 +4387,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         rawAmount,
         amountUnits,
         triple,
+        sentKind,
       } of parsed) {
         const deduction = c.tdsDeductions.get(triple);
         if (!deduction) {
@@ -4351,6 +4400,37 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
               "visible in no register and reconciling to no deductee",
           );
         }
+        // ⛔ THE KIND DECIDES WHICH TABLE THE TRIPLE IS LOOKED UP IN, and an ABSENT
+        // kind means TDS — so a collection sent without one finds no deduction on
+        // the server and comes back as "nothing was deducted", which reads like
+        // the books are wrong rather than like the request is. That is register
+        // row D4's client half, and it shipped green past 40 screen tests because
+        // every fixture in this file was a deduction.
+        const wantKind: TaxAllocationKind = deduction.kind ?? "TDS";
+        if ((sentKind ?? "TDS") !== wantKind) {
+          throw new ApiError(
+            400,
+            `masters: nothing was ${wantKind === "TCS" ? "deducted" : "collected"} on voucher ${voucherID} under ` +
+              `${section} at leg ${legSeq}. That triple is a ${wantKind === "TCS" ? "COLLECTION" : "DEDUCTION"}, and this ` +
+              `allocation ${sentKind ? `says it is a ${sentKind}` : "names no kind at all, which means TDS"}. The two ` +
+              "section vocabularies are disjoint, so send back the `kind` the picker served",
+          );
+        }
+        // ⛔⛔ ONE CHALLAN CANNOT PAY BOTH — the return files a deduction and a
+        // collection as different statements, so a challan naming both is
+        // UNFILABLE. The server refuses it by name (ErrMixedChallanKinds); this
+        // mock ACCEPTED it, which is exactly the class of divergence register row
+        // D84 is about — the looser side is the one every screen test measures.
+        if (kindsOnThisChallan.size > 0 && !kindsOnThisChallan.has(wantKind)) {
+          throw new ApiError(
+            400,
+            "masters: one challan cannot pay both TDS deductions and TCS collections. " +
+              `This deposit already pays ${[...kindsOnThisChallan].join(" and ")} and voucher ${voucherID} under ` +
+              `${section} is a ${wantKind}. The return reports them as different statements, so a ` +
+              "challan naming both cannot be filed — record the collection's deposit on its own challan",
+          );
+        }
+        kindsOnThisChallan.add(wantKind);
         const deductionUnits = q4(deduction.tax_rupees);
         if (deductionUnits === 0n) {
           throw new ApiError(
@@ -4513,6 +4593,8 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         rawAmount: Money;
         amountUnits: bigint;
         triple: string;
+        /** The kind AS SENT — `undefined` means the caller named none. */
+        sentKind?: TaxAllocationKind;
       }[] = [];
       for (const a of allocations) {
         const voucherID = (a.voucher_id ?? "").trim();
@@ -4563,7 +4645,14 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
           );
         }
         seen.add(triple);
-        parsed.push({ voucherID, section, legSeq: a.leg_seq, rawAmount, amountUnits, triple });
+        // ⛔ THE KIND AS SENT — never defaulted here. The DEFAULT (absent means
+        // TDS) is applied at the comparison, so a request that named NO kind can
+        // be told apart from one that named the WRONG kind and the refusal can
+        // say which mistake was made.
+        parsed.push({
+          voucherID, section, legSeq: a.leg_seq, rawAmount, amountUnits, triple,
+          sentKind: a.kind,
+        });
       }
 
       // ---- THE CHALLAN. 404 and not 400: the request is well formed and names a
@@ -4600,7 +4689,17 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       // ---- PASS 2, each allocation against the deduction it names.
       const added: TDSChallanAllocation[] = [];
       let addedUnits = 0n;
-      for (const { voucherID, section, legSeq, rawAmount, amountUnits, triple } of parsed) {
+      // ⛔ SEEDED FROM WHAT THE CHALLAN ALREADY PAYS, not from this request. The
+      // mixed pair is assembled ACROSS two requests — a deposit recorded against
+      // a collection, then a deduction attached later — and checking only within
+      // the request would let exactly that through, which is the whole reason
+      // the allocate-later route needed its own cap for D2 as well.
+      const kindsOnThisChallan = new Set<TaxAllocationKind>(
+        (challan.allocations ?? []).map(
+          (a) => c.tdsDeductions.get(allocationTriple(a.voucher_id, a.section, a.leg_seq))?.kind ?? "TDS",
+        ),
+      );
+      for (const { voucherID, section, legSeq, rawAmount, amountUnits, triple, sentKind } of parsed) {
         const deduction = c.tdsDeductions.get(triple);
         if (!deduction) {
           throw new ApiError(
@@ -4609,6 +4708,37 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
               "nothing on it to deposit",
           );
         }
+        // ⛔ THE KIND DECIDES WHICH TABLE THE TRIPLE IS LOOKED UP IN, and an ABSENT
+        // kind means TDS — so a collection sent without one finds no deduction on
+        // the server and comes back as "nothing was deducted", which reads like
+        // the books are wrong rather than like the request is. That is register
+        // row D4's client half, and it shipped green past 40 screen tests because
+        // every fixture in this file was a deduction.
+        const wantKind: TaxAllocationKind = deduction.kind ?? "TDS";
+        if ((sentKind ?? "TDS") !== wantKind) {
+          throw new ApiError(
+            400,
+            `masters: nothing was ${wantKind === "TCS" ? "deducted" : "collected"} on voucher ${voucherID} under ` +
+              `${section} at leg ${legSeq}. That triple is a ${wantKind === "TCS" ? "COLLECTION" : "DEDUCTION"}, and this ` +
+              `allocation ${sentKind ? `says it is a ${sentKind}` : "names no kind at all, which means TDS"}. The two ` +
+              "section vocabularies are disjoint, so send back the `kind` the picker served",
+          );
+        }
+        // ⛔⛔ ONE CHALLAN CANNOT PAY BOTH — the return files a deduction and a
+        // collection as different statements, so a challan naming both is
+        // UNFILABLE. The server refuses it by name (ErrMixedChallanKinds); this
+        // mock ACCEPTED it, which is exactly the class of divergence register row
+        // D84 is about — the looser side is the one every screen test measures.
+        if (kindsOnThisChallan.size > 0 && !kindsOnThisChallan.has(wantKind)) {
+          throw new ApiError(
+            400,
+            "masters: one challan cannot pay both TDS deductions and TCS collections. " +
+              `This deposit already pays ${[...kindsOnThisChallan].join(" and ")} and voucher ${voucherID} under ` +
+              `${section} is a ${wantKind}. The return reports them as different statements, so a ` +
+              "challan naming both cannot be filed — record the collection's deposit on its own challan",
+          );
+        }
+        kindsOnThisChallan.add(wantKind);
         const deductionUnits = q4(deduction.tax_rupees);
         if (deductionUnits === 0n) {
           throw new ApiError(

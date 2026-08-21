@@ -388,6 +388,15 @@ export function TDSChallansScreen() {
           voucher_id: d.voucher_id,
           section: d.section,
           leg_seq: d.leg_seq,
+          // ⛔⛔ THE KIND, SENT BACK AS SERVED — register row D4, and it was the
+          // whole of the collection half being unreachable from this screen.
+          // An OMITTED kind means TDS to the server, so a collection was looked
+          // up in `tds_deduction`, found nothing, and came back as "nothing was
+          // deducted on voucher <uuid> under 206C(1)-SCRAP at leg 0" — which
+          // reads like the books are wrong rather than like the request is.
+          // Omitted (not defaulted) when the server did not serve one, so a
+          // response from a build predating the field still means TDS.
+          ...(d.kind ? { kind: d.kind } : {}),
           amount_rupees: d.tax_rupees,
         }));
       // NOTHING IS REFUSED HERE FOR AN EMPTY SELECTION. A challan with tax on it
@@ -566,6 +575,15 @@ export function TDSChallansScreen() {
           voucher_id: d.voucher_id,
           section: d.section,
           leg_seq: d.leg_seq,
+          // ⛔⛔ THE KIND, SENT BACK AS SERVED — register row D4, and it was the
+          // whole of the collection half being unreachable from this screen.
+          // An OMITTED kind means TDS to the server, so a collection was looked
+          // up in `tds_deduction`, found nothing, and came back as "nothing was
+          // deducted on voucher <uuid> under 206C(1)-SCRAP at leg 0" — which
+          // reads like the books are wrong rather than like the request is.
+          // Omitted (not defaulted) when the server did not serve one, so a
+          // response from a build predating the field still means TDS.
+          ...(d.kind ? { kind: d.kind } : {}),
           amount_rupees: d.tax_rupees,
         }));
       // NOT REFUSED HERE. An empty list is refused by the ROUTE, with a sentence
@@ -1203,13 +1221,20 @@ function AllocationPicker({
       </p>
       <table className="mt-2 w-full text-xs">
         <thead>
+          {/* ⛔ THE HEADINGS SAY "OR", because one table holds both and the two
+              are opposite acts: a deduction is tax WITHHELD FROM a payee, a
+              collection is tax CHARGED TO a buyer. A single "Deductee" column
+              over a collection names the buyer as the party the company withheld
+              from, which is backwards — and the per-row `kind` cell below is
+              what tells the operator which they are looking at. */}
           <tr className="text-left text-tally-title">
             <th className="pr-2 font-normal">Pay?</th>
             <th className="pr-2 font-normal">Voucher</th>
-            <th className="pr-2 font-normal">Deducted on</th>
-            <th className="pr-2 font-normal">Deductee</th>
+            <th className="pr-2 font-normal">Which</th>
+            <th className="pr-2 font-normal">Dated</th>
+            <th className="pr-2 font-normal">Deductee / Buyer</th>
             <th className="pr-2 font-normal">Section</th>
-            <th className="pr-2 text-right font-normal">Tax deducted</th>
+            <th className="pr-2 text-right font-normal">Tax</th>
           </tr>
         </thead>
         <tbody>
@@ -1242,13 +1267,27 @@ function AllocationPicker({
                        showing an identifier no other screen shows. */
                     <input
                       type="checkbox"
-                      aria-label={`Pay the ${d.tax_rupees} deducted on voucher ${d.voucher_no} under ${d.section} from ${d.deductee_name} on ${d.deduction_date}`}
+                      aria-label={
+                        d.kind === "TCS"
+                          ? `Pay the ${d.tax_rupees} collected on voucher ${d.voucher_no} under ${d.section} from ${d.deductee_name} on ${d.deduction_date}`
+                          : `Pay the ${d.tax_rupees} deducted on voucher ${d.voucher_no} under ${d.section} from ${d.deductee_name} on ${d.deduction_date}`
+                      }
                       checked={chosen.includes(key)}
                       onChange={() => onToggle(key)}
                     />
                   )}
                 </td>
                 <td className="pr-2">{d.voucher_no}</td>
+                {/* ⚠️ `?? "TDS"` MIRRORS THE WIRE CONTRACT, not a guess: the
+                    field is optional only because it postdates the endpoint, and
+                    an absent value means a deduction. The SEND path deliberately
+                    does NOT apply this default — it echoes what it was served. */}
+                <td
+                  className="pr-2"
+                  data-testid={`tds-allocatable-kind:${id}`}
+                >
+                  {(d.kind ?? "TDS") === "TCS" ? "collected" : "deducted"}
+                </td>
                 <td className="pr-2">{d.deduction_date}</td>
                 <td className="pr-2">{d.deductee_name}</td>
                 <td className="pr-2">{d.section}</td>

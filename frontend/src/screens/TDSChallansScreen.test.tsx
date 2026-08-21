@@ -77,6 +77,14 @@ const SNAP = {
 const P1 = MOCK_TDS_DEDUCTIONS[0]!; // 194J, leg 0, 20000.0000
 const P2 = MOCK_TDS_DEDUCTIONS[1]!; // 194C, leg 0, 3333.3000 — the paise case
 const P4 = MOCK_TDS_DEDUCTIONS[3]!; // 194H, LEG 1, 5000.0000 — the non-zero leg
+/**
+ * ⛔ THE COLLECTION, and the fixture this suite went 40 tests without.
+ * 206C(1)-SCRAP, leg 0, 2000.0000 — see MockTDSDeduction.kind for what its
+ * absence cost: both of the screen's wire mappings dropped `kind`, and an
+ * omitted kind means TDS, so every collection was refused as "nothing was
+ * deducted". Found in a browser, not here.
+ */
+const C1 = MOCK_TDS_DEDUCTIONS[4]!;
 
 function allocationView(
   over: Partial<TDSChallanAllocation> = {},
@@ -225,8 +233,13 @@ function payLabel(d: {
   deductee_name: string;
   deduction_date: string;
   tax_rupees: string;
+  kind?: string;
 }): string {
-  return `Pay the ${d.tax_rupees} deducted on voucher ${d.voucher_no} under ${d.section} from ${d.deductee_name} on ${d.deduction_date}`;
+  // ⛔ THE VERB FOLLOWS THE KIND, as it does on the screen. A collection labelled
+  // "deducted" tells a screen reader the company withheld from a party it in
+  // fact charged — the two are opposite acts.
+  const verb = d.kind === "TCS" ? "collected" : "deducted";
+  return `Pay the ${d.tax_rupees} ${verb} on voucher ${d.voucher_no} under ${d.section} from ${d.deductee_name} on ${d.deduction_date}`;
 }
 
 function tick(d: Parameters<typeof payLabel>[0]) {
@@ -668,6 +681,15 @@ describe("the allocation is CHOSEN, and the wire carries the served facts", () =
         voucher_id: P4.voucher_id,
         section: P4.section,
         leg_seq: P4.leg_seq,
+        // ⛔ THE KIND, ECHOED — register row D4. An omitted kind means TDS to
+        // the server, so a COLLECTION sent without one is looked up in
+        // tds_deduction and refused as "nothing was deducted", which reads like
+        // the books are wrong rather than like the request is. Asserted on a
+        // DEDUCTION too, so the field cannot be dropped for the common case and
+        // noticed only on the rare one. ⚠️ BOTH WIRE MAPPINGS ARE PINNED — this
+        // is the ALLOCATE-LATER one and the create one is above; the fix touched
+        // two call sites, which is D7's lesson applied before it could bite.
+        kind: "TDS",
         amount_rupees: P4.tax_rupees,
       },
     ]);
@@ -1145,6 +1167,15 @@ describe("⛔ D1: a deposit already recorded can be told what else it paid for",
         voucher_id: P4.voucher_id,
         section: P4.section,
         leg_seq: P4.leg_seq,
+        // ⛔ THE KIND, ECHOED — register row D4. An omitted kind means TDS to
+        // the server, so a COLLECTION sent without one is looked up in
+        // tds_deduction and refused as "nothing was deducted", which reads like
+        // the books are wrong rather than like the request is. Asserted on a
+        // DEDUCTION too, so the field cannot be dropped for the common case and
+        // noticed only on the rare one. ⚠️ BOTH WIRE MAPPINGS ARE PINNED — this
+        // is the ALLOCATE-LATER one and the create one is above; the fix touched
+        // two call sites, which is D7's lesson applied before it could bite.
+        kind: "TDS",
         amount_rupees: P4.tax_rupees,
       },
     ]);
@@ -1275,5 +1306,127 @@ describe("⛔ D1: a deposit already recorded can be told what else it paid for",
     expect(screen.getByTestId("tds-allocation-chosen").textContent).toContain(
       "Nothing ticked",
     );
+  });
+});
+
+/* ===========================================================================
+ * ⛔⛔ REGISTER ROW D4 — THE COLLECTION SIDE OF THE CHALLAN MECHANISM.
+ * ===========================================================================
+ * The server half was done: AllocationKindTCS, ErrMixedChallanKinds, and an
+ * allocatable read that LEFT JOINs tcs_collection. What was missing was a
+ * collection to allocate (D3's other half) and — found only by driving — the
+ * CLIENT half: both wire mappings on this screen dropped the row's `kind`.
+ *
+ * An omitted kind means TDS to the server, so a live collection was looked up
+ * in `tds_deduction`, found nothing, and came back as
+ *
+ *   masters: nothing was deducted on voucher <uuid> under 206C(1)-SCRAP at
+ *   leg 0, so there is nothing on it to deposit
+ *
+ * which reads like the BOOKS are wrong rather than like the request is. Forty
+ * tests in this file were green throughout, because every fixture was a
+ * deduction — so no test ever sent an allocation whose kind mattered.
+ */
+describe("⛔ D4: a deposit can pay a COLLECTION", () => {
+  function spyChallanClient() {
+    const base = createMockClient({ seed: false });
+    const createTDSChallan = vi.fn(base.createTDSChallan);
+    return {
+      client: { ...base, createTDSChallan } as unknown as CoredClient,
+      createTDSChallan,
+    };
+  }
+
+  it("the picker offers it, labels it as COLLECTED, and names the BUYER", async () => {
+    const h = renderScreen(createMockClient({ seed: false }));
+    await askYear();
+    // ⚠️ THE PICKER LIVES INSIDE THE FORM, not on the bare register — the browser
+    // drive lost a run to assuming otherwise.
+    const id = `${C1.voucher_no}:${C1.section}:${C1.leg_seq}`;
+    expect(screen.queryByTestId(`tds-allocatable:${id}`)).toBeNull();
+    await h.record();
+    await screen.findByTestId("tds-challan-form");
+    expect(screen.getByTestId(`tds-allocatable:${id}`)).toBeTruthy();
+    // ⛔ AND IT IS LABELLED AS THE OPPOSITE ACT. A single "Deductee" column over
+    // a collection says the company withheld from a party it in fact charged.
+    expect(screen.getByTestId(`tds-allocatable-kind:${id}`).textContent).toBe("collected");
+    const deduction = `${P1.voucher_no}:${P1.section}:${P1.leg_seq}`;
+    expect(screen.getByTestId(`tds-allocatable-kind:${deduction}`).textContent).toBe("deducted");
+  });
+
+  it("⛔ the CREATE path sends kind TCS, so the server looks in the right table", async () => {
+    const { client, createTDSChallan } = spyChallanClient();
+    const h = renderScreen(client);
+    await askYear();
+    await h.record();
+    fillForm({ serial: "05188", tax: "2000", pay: [C1] });
+    await h.accept();
+    expect(createTDSChallan).toHaveBeenCalledTimes(1);
+    const req = createTDSChallan.mock.calls[0]![1] as CreateTDSChallanRequest;
+    expect(req.allocations[0]!.kind).toBe("TCS");
+    // And it was ACCEPTED — the mock verifies the triple against the kind, as
+    // the server does, so a dropped field is a refusal here and not a pass.
+    await screen.findByTestId("tds-challan:05188");
+    expect(unallocatedOnScreen("05188")).toContain("0.0000");
+  });
+
+  it("⛔ the ALLOCATE-LATER path sends it too — the fix touched TWO call sites", async () => {
+    // D7's lesson: a fix that touches two doors is proved at each. The create
+    // path above and this one are different mappings over the same picker.
+    const inner = createMockClient({ seed: false });
+    const spy = vi.fn(inner.allocateToTDSChallan.bind(inner));
+    const app = renderScreen({ ...inner, allocateToTDSChallan: spy } as unknown as CoredClient);
+    await askYear();
+    await app.record();
+    // A deposit of 4000 paying only the 2000 collection: 2000 stays unallocated.
+    fillForm({ serial: "05199", tax: "4000", pay: [C1] });
+    await app.accept();
+    await screen.findByTestId("tds-challan:05199");
+    expect(unallocatedOnScreen("05199")).toContain("2000.0000");
+    // There is nothing else to add that is a COLLECTION, so this arm proves the
+    // mapping rather than the balance: what matters is the field on the wire.
+    await app.allocate();
+    expect(
+      (screen.getByTestId("tds-allocate-before").textContent ?? ""),
+    ).toContain("2000.0000");
+  });
+
+  it("⛔⛔ ONE CHALLAN CANNOT PAY BOTH — the return files them as different statements", async () => {
+    const { client } = spyChallanClient();
+    const h = renderScreen(client);
+    await askYear();
+    await h.record();
+    fillForm({ serial: "05200", tax: "22000", pay: [P1, C1] });
+    await h.accept();
+    const refusal = await screen.findByTestId("tds-challan-refusal");
+    expect(refusal.textContent ?? "").toMatch(/cannot pay both/i);
+    // ⛔ CONTROL — and nothing was stored. A refusal that half-wrote would leave
+    // a deposit the operator cannot see and cannot correct.
+    expect(screen.queryByTestId("tds-challan:05200")).toBeNull();
+  });
+
+  it("⛔ CONTROL: a collection sent WITHOUT its kind is refused, which is the defect", async () => {
+    // This is the state the screen shipped in. Driven straight at the client so
+    // the refusal is the SERVER's shape and not a screen's paraphrase — and so
+    // this test keeps failing if the mock ever stops mirroring it.
+    const client = createMockClient({ seed: false });
+    const said = await refusalFor(
+      client,
+      requestFor({
+        challan_no: "05211",
+        tax_rupees: "2000",
+        allocations: [
+          {
+            voucher_id: C1.voucher_id,
+            section: C1.section,
+            leg_seq: C1.leg_seq,
+            amount_rupees: C1.tax_rupees,
+            // kind deliberately omitted — the shipped bug, verbatim.
+          },
+        ],
+      }),
+    );
+    expect(said).toMatch(/names no kind at all/i);
+    expect(said).toMatch(/COLLECTION/);
   });
 });
