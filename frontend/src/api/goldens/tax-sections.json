@@ -1,0 +1,76 @@
+{
+  "tds_ruleset_version": "tds-2026-04",
+  "tcs_ruleset_version": "tcs-2026-04",
+  "tds_sections": [
+    {
+      "section": "194C",
+      "rate_ind_huf_pct": "1",
+      "rate_other_pct": "2",
+      "threshold_rupees": "30000.0000",
+      "basis": "PER_TXN"
+    },
+    {
+      "section": "194H",
+      "rate_ind_huf_pct": "2",
+      "rate_other_pct": "2",
+      "threshold_rupees": "20000.0000",
+      "basis": "ANNUAL"
+    },
+    {
+      "section": "194I-A",
+      "rate_ind_huf_pct": "2",
+      "rate_other_pct": "2",
+      "threshold_rupees": "50000.0000",
+      "basis": "MONTHLY"
+    },
+    {
+      "section": "194I-B",
+      "rate_ind_huf_pct": "10",
+      "rate_other_pct": "10",
+      "threshold_rupees": "50000.0000",
+      "basis": "MONTHLY"
+    },
+    {
+      "section": "194J-D",
+      "rate_ind_huf_pct": "10",
+      "rate_other_pct": "10",
+      "threshold_rupees": "0.0000",
+      "basis": "NIL"
+    },
+    {
+      "section": "194J-P",
+      "rate_ind_huf_pct": "10",
+      "rate_other_pct": "10",
+      "threshold_rupees": "50000.0000",
+      "basis": "ANNUAL"
+    },
+    {
+      "section": "194J-T",
+      "rate_ind_huf_pct": "2",
+      "rate_other_pct": "2",
+      "threshold_rupees": "50000.0000",
+      "basis": "ANNUAL"
+    }
+  ],
+  "tcs_sections": [
+    {
+      "section": "206C(1)-SCRAP",
+      "rate_ind_huf_pct": "2",
+      "rate_other_pct": "2",
+      "threshold_rupees": "0.0000",
+      "basis": "PER_TXN"
+    },
+    {
+      "section": "206C(1F)-MV",
+      "rate_ind_huf_pct": "1",
+      "rate_other_pct": "1",
+      "threshold_rupees": "1000000.0000",
+      "basis": "PER_TXN"
+    }
+  ],
+  "tds_no_pan_floor_pct": "20",
+  "tcs_no_pan_multiplier": "2",
+  "tcs_no_pan_floor_pct": "5",
+  "tcs_no_pan_ceiling_pct": "20",
+  "threshold_basis_is_approximated": true
+}

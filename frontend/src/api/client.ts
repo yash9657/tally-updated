@@ -87,6 +87,7 @@ import type {
   CreateTDSChallanResponse,
   AllocateToChallanRequest,
   AllocateToChallanResponse,
+  TaxSectionsResponse,
   TDSProfileResponse,
   SetTDSProfileRequest,
   SetTDSProfileResponse,
@@ -374,6 +375,22 @@ export interface CoredClient {
     challanID: string,
     req: AllocateToChallanRequest,
   ): Promise<AllocateToChallanResponse>;
+
+  /**
+   * THE STATUTORY SECTION VOCABULARY a voucher's `tds` / `tcs` block may name
+   * (register row D3), with the rate and threshold attached.
+   *
+   * ⛔ IT IS A MASTER-LEVEL READ, NOT A REPORT, and that is the access decision:
+   * the DATA ENTRY level keys the vouchers that carry a deduction and is denied
+   * `report:tds-register` by design (that register is every supplier paid, with
+   * amounts). This list names no party and no amount — it is the Finance Act's
+   * rate table — so it reads on the same terms as `listLedgers`.
+   *
+   * ⚠️ THE RESPONSE STATES ITS OWN RULESET VERSION. A form that offered sections
+   * from one ruleset while the post applied another would show rates the post
+   * does not use.
+   */
+  taxSections(companyID: string): Promise<TaxSectionsResponse>;
 
   /**
    * The deductor block of the return, plus the sixteen Annexure 4 categories and

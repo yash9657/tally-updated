@@ -55,6 +55,15 @@ import {
   type DraftAllocation,
 } from "./vouchers/costAllocation";
 import { DoubleEntryPanel } from "./vouchers/DoubleEntryPanel";
+import { TaxDeductionPanel } from "./vouchers/TaxDeductionPanel";
+import {
+  buildTCSRequest,
+  buildTDSRequest,
+  emptyTaxDeductionForm,
+  taxDeductionRefusal,
+  taxLegRefusal,
+  type TaxDeductionForm,
+} from "./vouchers/taxDeduction";
 import {
   doubleEntryLinesFromView,
   doubleEntryRefusal,
@@ -273,6 +282,20 @@ interface VoucherForm {
    */
   drCrLines: DoubleEntryLine[];
   /**
+   * THE STATUTORY TDS / TCS BLOCK (register row D3).
+   *
+   * ⛔ IT LIVES ON THE DOUBLE-ENTRY FORM AND NOWHERE ELSE, and that is an
+   * ACCOUNTING fact, not a layout choice. Withholding tax means the payment
+   * splits three ways — Dr the expense in full, Cr the bank NET, Cr the TDS
+   * liability — and single entry cannot express it: it puts the SUM of the
+   * particulars on ONE account, so the withheld portion has nowhere to go but a
+   * negative particular. Ctrl+H reaches this form from F5/F6/F4, and F7 is it.
+   *
+   * ⚠️ IT IS NOT HYDRATED ON AN ALTER, because the voucher READ path does not
+   * serve it — registered as D88. See the notice the panel renders.
+   */
+  tax: TaxDeductionForm;
+  /**
    * WHICH BILL THIS INVOICE OPENS — the PARTY leg's references, used by the GST
    * accounting and item-invoice paths where the bill-bearing leg IS
    * `partyLedgerId` (the Sundry Debtor or Creditor) rather than a particular.
@@ -306,6 +329,7 @@ function emptyForm(): VoucherForm {
     drCrLines: [emptyDoubleEntryLine()],
     billRefs: [],
     items: [emptyItemLine()],
+    tax: emptyTaxDeductionForm(),
   };
 }
 
@@ -398,6 +422,13 @@ function formFromView(view: VoucherView): VoucherForm {
     // by name) is what lets an edit of the narration re-post the SAME movements
     // instead of writing the voucher's inventory off to nothing.
     items: itemsFromView(view),
+    // ⛔ EMPTY ON AN ALTER, AND THAT IS A KNOWN GAP (D88), not an oversight. The
+    // voucher READ path serves no `tds`/`tcs`, so there is nothing to hydrate
+    // from — and the ledger DELETES and re-derives tds_deduction on every alter,
+    // so re-posting this form without the block DROPS the deduction. The panel
+    // says so on any voucher being altered; the fix is a server read-path
+    // change, registered rather than guessed at here.
+    tax: emptyTaxDeductionForm(),
   };
 }
 
@@ -739,6 +770,10 @@ function formFromDraft(draft: PurchaseVoucherDraft): VoucherForm {
     // items on it are the SUPPLIER's descriptions, not this company's stock
     // masters. Matching them would be a guess, and a guess that moves stock.
     items: [emptyItemLine()],
+    // A draft carries no statutory deduction either: insightd reads a supplier's
+    // bill, and whether this company had a duty to deduct on it is not on the
+    // paper.
+    tax: emptyTaxDeductionForm(),
   };
 }
 
@@ -1749,7 +1784,17 @@ function AccountingVoucherScreen({
       // refused by the server and by a deferred DB trigger and by NOTHING here.
       // The row-level refusals are now part of the same gate expression.
       return resolveMasters(
-        doubleEntryRefusal(f.drCrLines) || doubleEntryRowRefusal(rows),
+        doubleEntryRefusal(f.drCrLines) ||
+          doubleEntryRowRefusal(rows) ||
+          // ⛔ THE STATUTORY BLOCK IS PART OF THE SAME GATE (D3). A half-keyed
+          // deduction is refused by the server AFTER `ensureLedger` has created
+          // every named account — which is D39's shape exactly, and the reason
+          // every refusal on this form lives in one expression rather than in
+          // whichever check happened to be written first.
+          (cfg.statutoryTax === null
+            ? ""
+            : taxDeductionRefusal(f.tax, cfg.statutoryTax) ||
+              taxLegRefusal(f.tax, cfg.statutoryTax, rows.map((l) => l.ledger))),
         async () => {
         const postings: PostingRequest[] = [];
         for (const l of rows) {
@@ -1784,6 +1829,34 @@ function AccountingVoucherScreen({
         };
         if (f.partyLedgerId) req.party_ledger_id = f.partyLedgerId;
         if (f.voucherNo) req.voucher_no = f.voucherNo;
+
+        // ---- THE STATUTORY DEDUCTION / COLLECTION (D3).
+        //
+        // ⛔ THE LEG ID COMES FROM THE ARRAY JUST BUILT, BY POSITION — the same
+        // discipline the cost-split offset follows, and for the same reason. The
+        // server compares `tds_ledger_id` against the POSTED legs; an id from a
+        // second lookup that resolved differently would match no posting, and
+        // the verification loop would then sum zero and compare it against the
+        // derived tax — a mismatch nobody can explain, or a silent pass that
+        // verified nothing.
+        const legIDForRow = (ledgerName: string): string => {
+          const idx = rows.findIndex(
+            (l) => l.ledger.trim().toLowerCase() === ledgerName.trim().toLowerCase(),
+          );
+          return idx < 0 ? "" : postings[idx]!.ledger_id;
+        };
+        // ⛔ A CLASS THAT CANNOT CARRY ONE SENDS NOTHING, even if the form state
+        // somehow holds a block (a Ctrl+H between classes, a hydration). The
+        // panel is not rendered for such a class, so a block reaching here would
+        // be one nobody could see — and an invisible statutory declaration is
+        // the undisclosed-figure defect, not a convenience.
+        if (cfg.statutoryTax === "TDS") {
+          const tds = buildTDSRequest(f.tax, legIDForRow);
+          if (tds) req.tds = tds;
+        } else if (cfg.statutoryTax === "TCS") {
+          const tcs = buildTCSRequest(f.tax, legIDForRow);
+          if (tcs) req.tcs = tcs;
+        }
 
         // ---- THE COST SPLITS (T2).
         //
@@ -2583,15 +2656,42 @@ function AccountingVoucherScreen({
            amount field, no second line, no side selector — on a FeaturesScreen
            row that read `on`. Ctrl+H > Double Entry on F5/F6/F4 reached the
            same dead end. See doubleEntry.ts's header. */
-        <DoubleEntryPanel
-          lines={form.drCrLines}
-          setLines={(next) =>
-            setForm((f) => ({ ...f, drCrLines: next(f.drCrLines) }))
-          }
-          parties={partyNames}
-          ledgerByName={ledgerByName}
-          kindForGroup={kindForGroup}
-        />
+        <>
+          <DoubleEntryPanel
+            lines={form.drCrLines}
+            setLines={(next) =>
+              setForm((f) => ({ ...f, drCrLines: next(f.drCrLines) }))
+            }
+            parties={partyNames}
+            ledgerByName={ledgerByName}
+            kindForGroup={kindForGroup}
+          />
+          {/* ⛔ THE STATUTORY BLOCK (register row D3), and it is HERE and not on
+              the single-entry form because withholding splits the payment three
+              ways — Dr the expense in full, Cr the bank NET, Cr the liability —
+              and single entry puts the SUM of the particulars on ONE account,
+              which leaves the withheld portion nowhere to go but a negative
+              particular. Ctrl+H reaches this grid from F5/F6/F4.
+
+              ⚠️ THE LEG PICKER READS THE GRID ABOVE IT, so the operator names the
+              line they just keyed rather than a ledger from the whole chart —
+              and so a leg the server cannot find is refused rather than posted
+              as a verification that never runs. */}
+          {cfg.statutoryTax !== null ? (
+          <div className="mt-2 max-w-3xl">
+            <TaxDeductionPanel
+              kind={cfg.statutoryTax}
+              value={form.tax}
+              onChange={(tax) => setForm((f) => ({ ...f, tax }))}
+              parties={partyNames}
+              ledgerIdByName={(name) => ledgerByName(name)?.id ?? ""}
+              gridLedgers={form.drCrLines
+                .map((l) => l.ledger.trim())
+                .filter((l) => l !== "")}
+            />
+          </div>
+          ) : null}
+        </>
       ) : null}
 
       {/* ⛔ THE BILL THIS INVOICE OPENS. Rendered only when the chosen party

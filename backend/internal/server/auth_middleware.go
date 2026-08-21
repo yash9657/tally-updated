@@ -2020,7 +2020,18 @@ func splitPath(rest string) []string {
 func isMasterPath(rest string) bool {
 	switch rest {
 	case "/groups", "/ledgers", "/voucher-types", "/units", "/stock-items",
-		"/godowns", "/batches":
+		"/godowns", "/batches",
+		// THE STATUTORY TDS/TCS SECTION VOCABULARY (D3). A master list in the
+		// only sense that matters to the PDP: it names no party, no amount and
+		// nothing about this company — it is the Finance Act's rate table — so it
+		// reads on the same terms as /ledgers and /units, which the operator
+		// keying the deduction already reads. ⛔ NOT a report: report:tds-register
+		// is denied to Data Entry by migration 0068 because it lists every
+		// supplier paid WITH AMOUNTS, and mapping this list the same way would
+		// deny the picker to the one level that keys the vouchers, leaving D3
+		// open behind a different error. GET only; there is no POST route, so a
+		// POST answers 404 rather than being authorised into nothing.
+		"/tds-sections":
 		return true
 	}
 	return false

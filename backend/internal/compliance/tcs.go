@@ -48,6 +48,7 @@ package compliance
 import (
 	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/shopspring/decimal"
 )
@@ -209,6 +210,38 @@ func LoadTCSRuleSet(version string) (TCSRuleSet, error) {
 		return TCSRuleSet{}, fmt.Errorf("%w: %q", ErrUnknownRuleset, version)
 	}
 	return rs, nil
+}
+
+// TCSSectionCatalog describes every collection section in a ruleset, in key
+// order, for the entry form's picker — the mirror of TDSSectionCatalog and for
+// the same reason (register row D3: a collection cannot be keyed at all, and the
+// form that fixes it must not carry a copy of this table).
+//
+// A collection rate does not split by collectee type, so BOTH rate fields carry
+// the SAME figure rather than one being left blank: a blank reads as "no rate for
+// this kind of collectee", which is a different and untrue statement.
+func TCSSectionCatalog(rs TCSRuleSet) []SectionDoc {
+	out := make([]SectionDoc, 0, len(rs.Sections))
+	for k, r := range rs.Sections {
+		out = append(out, SectionDoc{
+			Section:         k,
+			RateIndHUFPct:   r.RatePct.String(),
+			RateOtherPct:    r.RatePct.String(),
+			ThresholdRupees: r.Threshold.StringFixed(4),
+			Basis:           string(r.Basis),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Section < out[j].Section })
+	return out
+}
+
+// TCSNoPANPct describes the s.397(2)(b)(ii) no-PAN rule in the three figures it
+// is actually made of. ⛔ IT IS NOT A FLOOR LIKE THE DEDUCTION SIDE'S. The
+// deduction side applies max(rate, 20%); this side applies
+// min(max(2 × rate, 5%), 20%), so a caller that reused the TDS shape here would
+// tell an operator 20% where the answer is 5%.
+func TCSNoPANPct(rs TCSRuleSet) (multiplier, floor, ceiling string) {
+	return rs.NoPANMultiplier.String(), rs.NoPANFloorPct.String(), rs.NoPANCeilingPct.String()
 }
 
 // TCSDerive derives the collection for input under the supplied ruleset. It is

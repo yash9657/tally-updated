@@ -2092,6 +2092,59 @@ export interface CreateTDSChallanResponse {
 }
 
 /**
+ * ONE STATUTORY SECTION, as the server describes it — GET
+ * `/v1/companies/{id}/tds-sections`.
+ *
+ * ⛔ THE LIST IS SERVED SO NO CLIENT COPIES THE FINANCE ACT. Register row D3 is
+ * that a deduction cannot be keyed at all; the form that fixes it has to offer
+ * the sections, and a TypeScript array of "194C", "194J-P", … would be a second
+ * copy of a table that changes with every Finance Act — the drift bug the challan
+ * screen's rule (3) records for three minor heads, on a list with rates attached.
+ *
+ * Rates and the threshold are STRINGS at the engine's own precision: a JSON
+ * number is a float64.
+ */
+export interface TaxSectionDoc {
+  /** "194C", "194J-P", "206C(1)-SCRAP". */
+  section: string;
+  /** Only 194C splits by deductee type in the shipped ruleset; both always carry. */
+  rate_ind_huf_pct: string;
+  rate_other_pct: string;
+  /**
+   * The limit the amount must EXCEED — an amount exactly equal to it attracts
+   * NO deduction ("exceeding" in the statute).
+   */
+  threshold_rupees: Money;
+  /** "PER_TXN" | "ANNUAL" | "MONTHLY" | "NIL". See the disclosure below. */
+  basis: string;
+}
+
+/**
+ * The statutory vocabulary a voucher's `tds` / `tcs` block may name.
+ *
+ * ⛔ THE TWO NO-PAN RULES ARE DIFFERENT SHAPES, and a caller that assumed
+ * otherwise would print 20% where the answer is 5%:
+ *   deduction — max(rate, `tds_no_pan_floor_pct`)
+ *   collection — min(max(`tcs_no_pan_multiplier` × rate, `tcs_no_pan_floor_pct`),
+ *                    `tcs_no_pan_ceiling_pct`)
+ *
+ * ⚠️ `threshold_basis_is_approximated` IS NOT DECORATION. v1 applies EVERY basis
+ * per transaction, so an ANNUAL or MONTHLY limit under-deducts when a payment is
+ * split. A screen showing a threshold must not present it as the law.
+ */
+export interface TaxSectionsResponse {
+  tds_ruleset_version: string;
+  tcs_ruleset_version: string;
+  tds_sections: TaxSectionDoc[];
+  tcs_sections: TaxSectionDoc[];
+  tds_no_pan_floor_pct: string;
+  tcs_no_pan_multiplier: string;
+  tcs_no_pan_floor_pct: string;
+  tcs_no_pan_ceiling_pct: string;
+  threshold_basis_is_approximated: boolean;
+}
+
+/**
  * ATTACH FURTHER DEDUCTIONS TO A DEPOSIT THAT IS ALREADY RECORDED.
  *
  *   POST /v1/companies/{id}/tds-challans/{challanID}/allocations

@@ -70,6 +70,7 @@ package compliance
 import (
 	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/shopspring/decimal"
 )
@@ -345,6 +346,61 @@ func TDSSections(rs TDSRuleSet) []string {
 	}
 	return out
 }
+
+// SectionDoc is ONE section of a ruleset, described in NAMES AND FIGURES ONLY —
+// no rule object, no SQL, nothing a caller could evaluate for itself.
+//
+// ⛔ IT EXISTS SO NO CLIENT EVER COPIES THIS TABLE. Register row D3 is that a
+// deduction cannot be keyed at all; the form that fixes it has to offer the
+// sections, and a TypeScript array of "194C", "194J-P", … would be a second copy
+// of a statutory table that changes with every Finance Act — the drift bug the
+// TDS challan screen's rule (3) records for the minor heads, on a list ten times
+// the size and with rates attached. The rate and threshold travel WITH the key
+// because an operator choosing between 194J-P and 194J-T is choosing between 10%
+// and 2%, and a bare key makes that invisible.
+//
+// The figures are STRINGS, fixed to the precision the engine holds them at, for
+// the reason every money and rate on this seam is a string: a JSON number is a
+// float64.
+type SectionDoc struct {
+	Section string `json:"section"`
+	// RateIndHUFPct / RateOtherPct differ only on 194C in the shipped ruleset;
+	// both are carried always, so a caller never has to know which sections split
+	// by deductee type.
+	RateIndHUFPct string `json:"rate_ind_huf_pct"`
+	RateOtherPct  string `json:"rate_other_pct"`
+	// ThresholdRupees is the limit the AMOUNT MUST EXCEED — an amount exactly
+	// equal to it attracts NO deduction (the statutes read "exceeding").
+	ThresholdRupees string `json:"threshold_rupees"`
+	// Basis is what the threshold is statutorily measured over. ⚠️ v1 applies
+	// EVERY basis per transaction, so a caller that displays this is displaying an
+	// approximation it must not describe as the law — see the package note.
+	Basis string `json:"basis"`
+}
+
+// TDSSectionCatalog describes every section in a ruleset, in KEY ORDER, for the
+// entry form's picker. Sorted so the served list is deterministic: an
+// unspecified order would reshuffle a picker between requests.
+func TDSSectionCatalog(rs TDSRuleSet) []SectionDoc {
+	out := make([]SectionDoc, 0, len(rs.Sections))
+	for k, r := range rs.Sections {
+		out = append(out, SectionDoc{
+			Section:         k,
+			RateIndHUFPct:   r.RateIndHUF.String(),
+			RateOtherPct:    r.RateOther.String(),
+			ThresholdRupees: r.PerTxnThreshold.StringFixed(4),
+			Basis:           string(r.Basis),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Section < out[j].Section })
+	return out
+}
+
+// TDSNoPANFloorPct is the s.206AA floor a ruleset applies when no PAN is on
+// record. Served alongside the catalog because it CHANGES THE RATE the operator
+// is looking at — a form that shows 2% for 194C and then posts 20% has told them
+// something untrue.
+func TDSNoPANFloorPct(rs TDSRuleSet) string { return rs.NoPANFloorPct.String() }
 
 // TDSDerive derives the deduction for input under the supplied ruleset. It is
 // pure and deterministic.

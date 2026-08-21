@@ -104,6 +104,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
+	"github.com/khata/cored/internal/compliance"
+	"github.com/khata/cored/internal/ledger"
 	"github.com/khata/cored/internal/masters"
 )
 
@@ -721,4 +723,62 @@ func writeChallanError(w http.ResponseWriter, err error) {
 		// processing, which invites a retry that cannot succeed.
 		writeMastersError(w, err)
 	}
+}
+
+// handleTDSSections serves the statutory section vocabulary a voucher's `tds` /
+// `tcs` block may name, with the rate and threshold attached (register row D3).
+//
+// ⛔ IT EXISTS SO NO CLIENT COPIES THE FINANCE ACT. D3 is that a deduction
+// cannot be keyed from the keyboard anywhere; the form that closes it has to
+// offer the sections, and a TypeScript array of "194C", "194J-P", … would be a
+// second copy of a table that changes with every Finance Act — the drift bug the
+// challan screen's rule (3) already records for the three minor heads, on a list
+// with rates attached. The rates travel WITH the keys because choosing between
+// 194J-P and 194J-T is choosing between 10% and 2%, and a bare key hides that.
+//
+// IT READS NOTHING FROM THE TENANT and takes no scope beyond the company the
+// middleware already established, so there is no company id in the body: two
+// companies on one deployment get the same answer, and saying otherwise would
+// imply a per-tenant rate table that does not exist.
+//
+// THE RULESET VERSIONS ARE THE LEDGER'S DEFAULTS, named in the response. A
+// voucher may override with `ruleset_version`; a form that offered sections from
+// one ruleset while the post used another would show rates the post does not
+// apply, so the version it described is stated rather than implied.
+func (s *Server) handleTDSSections(w http.ResponseWriter, r *http.Request) {
+	if _, _, ok := s.scopeCtxID(w, r); !ok {
+		return
+	}
+	tdsRules, err := compliance.LoadTDSRuleSet(ledger.DefaultTDSRulesetVersion)
+	if err != nil {
+		// Unreachable while the default is a registered version, and a 500 rather
+		// than an empty list on purpose: an empty picker would read as "this
+		// build deducts under no section", which is a statement about the law.
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	tcsRules, err := compliance.LoadTCSRuleSet(ledger.DefaultTCSRulesetVersion)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	tcsMul, tcsFloor, tcsCeil := compliance.TCSNoPANPct(tcsRules)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"tds_ruleset_version": tdsRules.Version,
+		"tcs_ruleset_version": tcsRules.Version,
+		"tds_sections":        compliance.TDSSectionCatalog(tdsRules),
+		"tcs_sections":        compliance.TCSSectionCatalog(tcsRules),
+		// ⛔ THE NO-PAN RULES ARE NOT THE SAME SHAPE ON THE TWO SIDES, and a
+		// client that assumed they were would print 20% where the answer is 5%.
+		// Deduction: max(rate, floor). Collection: min(max(mul × rate, floor),
+		// ceiling).
+		"tds_no_pan_floor_pct":   compliance.TDSNoPANFloorPct(tdsRules),
+		"tcs_no_pan_multiplier":  tcsMul,
+		"tcs_no_pan_floor_pct":   tcsFloor,
+		"tcs_no_pan_ceiling_pct": tcsCeil,
+		// ⚠️ DISCLOSED, because the form will show a threshold and an operator
+		// will read it as the law. v1 applies EVERY basis per transaction, so an
+		// ANNUAL or MONTHLY limit under-deducts when a payment is split.
+		"threshold_basis_is_approximated": true,
+	})
 }

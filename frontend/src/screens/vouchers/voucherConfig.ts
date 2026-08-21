@@ -64,6 +64,25 @@ export interface VoucherConfig {
   /** Whether the form surfaces a GST split (Sales / Purchase). */
   readonly showGst: boolean;
   /**
+   * WHICH statutory withholding block this class can key — register row D3.
+   *
+   * ⛔ IT IS STATED PER CLASS AND NOT INFERRED FROM `primarySide`, and that was
+   * a real bug caught by driving: a Journal is `primarySide: "DR"` for reasons
+   * that have nothing to do with the direction of money (its party field posts
+   * nothing at all — see the note on the journal entry), so a rule reading
+   * "DR means money in, therefore TCS" put a tax-COLLECTED panel on the one
+   * voucher class where a deduction is most often keyed.
+   *
+   * `null` means the class cannot carry one, and that is the honest answer for
+   * most of them. ⚠️ IT IS null ON SALES TODAY, and that is register row D3's
+   * remaining half: a collection has to be CHARGED to the buyer, so the invoice
+   * needs a TCS line before the block can be offered there — and the GST
+   * invoice form synthesises its postings rather than taking a grid. Offering a
+   * block that can only record-without-posting would produce invoices that
+   * under-charge the buyer while the return says otherwise.
+   */
+  readonly statutoryTax: "TDS" | "TCS" | null;
+  /**
    * Whether Ctrl+H offers this class the ITEM INVOICE (a stock grid whose lines
    * generate the accounting and the GST).
    *
@@ -96,6 +115,7 @@ export const VOUCHER_CONFIGS: Readonly<Record<VoucherType, VoucherConfig>> = {
     partyLabel: "Account",
     primarySide: "CR",
     showGst: false,
+    statutoryTax: null,
     itemInvoice: false,
     hint: "Cash ↔ Bank / Bank ↔ Bank transfers only.",
     post: (c, id, req) => c.postContraVoucher(id, req),
@@ -108,6 +128,11 @@ export const VOUCHER_CONFIGS: Readonly<Record<VoucherType, VoucherConfig>> = {
     partyLabel: "Account",
     primarySide: "CR", // money out: credit the cash/bank account paid from
     showGst: false,
+    // TDS is keyed on the DOUBLE-ENTRY grid this class reaches with Ctrl+H —
+    // withholding splits the payment three ways and single entry puts the SUM
+    // of the particulars on one account, which leaves the withheld portion
+    // nowhere to go. See TaxDeductionPanel.
+    statutoryTax: "TDS",
     itemInvoice: false,
     hint: "Money out. Credit the bank/cash, debit the expense or party.",
     post: (c, id, req) => c.postPaymentVoucher(id, req),
@@ -120,6 +145,7 @@ export const VOUCHER_CONFIGS: Readonly<Record<VoucherType, VoucherConfig>> = {
     partyLabel: "Account",
     primarySide: "DR", // money in: debit the cash/bank account received into
     showGst: false,
+    statutoryTax: null,
     itemInvoice: false,
     hint: "Money in. Debit the bank/cash, credit the party or income.",
     post: (c, id, req) => c.postReceiptVoucher(id, req),
@@ -137,6 +163,10 @@ export const VOUCHER_CONFIGS: Readonly<Record<VoucherType, VoucherConfig>> = {
     partyLabel: "Party (optional)",
     primarySide: "DR",
     showGst: false,
+    // A provision for professional fees is where a deduction is most often
+    // keyed, and the Journal is the only class that DEFAULTS to the grid it
+    // needs. ⛔ `primarySide` above is NOT what decides this — see the field.
+    statutoryTax: "TDS",
     itemInvoice: false,
     hint: "Adjustments, provisions, depreciation and reclasses. State both sides; debits must equal credits exactly.",
     post: (c, id, req) => c.postJournalVoucher(id, req),
@@ -149,6 +179,7 @@ export const VOUCHER_CONFIGS: Readonly<Record<VoucherType, VoucherConfig>> = {
     partyLabel: "Party A/c Name",
     primarySide: "CR",
     showGst: true,
+    statutoryTax: null,
     itemInvoice: true,
     hint: "Sales invoice. Party debited; sales + GST credited.",
     post: (c, id, req) => c.postSalesVoucher(id, req),
@@ -161,6 +192,7 @@ export const VOUCHER_CONFIGS: Readonly<Record<VoucherType, VoucherConfig>> = {
     partyLabel: "Party A/c Name",
     primarySide: "DR",
     showGst: true,
+    statutoryTax: null,
     itemInvoice: true,
     hint: "Purchase invoice. Party credited; purchase + GST debited.",
     post: (c, id, req) => c.postPurchaseVoucher(id, req),
@@ -175,6 +207,7 @@ export const VOUCHER_CONFIGS: Readonly<Record<VoucherType, VoucherConfig>> = {
     partyLabel: "Party A/c Name",
     primarySide: "CR",
     showGst: true,
+    statutoryTax: null,
     itemInvoice: false,
     hint: "Sales return / downward price correction. Its OWN number series — use this instead of altering the original invoice.",
     post: (c, id, req) => c.postCreditNoteVoucher(id, req),
@@ -187,6 +220,7 @@ export const VOUCHER_CONFIGS: Readonly<Record<VoucherType, VoucherConfig>> = {
     partyLabel: "Party A/c Name",
     primarySide: "DR",
     showGst: true,
+    statutoryTax: null,
     itemInvoice: false,
     hint: "Purchase return / price correction raised on a supplier. Reverses the input credit claimed on those goods.",
     post: (c, id, req) => c.postDebitNoteVoucher(id, req),
@@ -213,6 +247,7 @@ export const VOUCHER_CONFIGS: Readonly<Record<VoucherType, VoucherConfig>> = {
     partyLabel: "Party A/c Name",
     primarySide: "CR",
     showGst: false,
+    statutoryTax: null,
     itemInvoice: false,
     hint: "Goods OUT against a customer, before or without the invoice. Stock moves; NOTHING is posted to the ledger — the invoice that follows carries the revenue, the tax and the bill.",
     post: (c, id, req) => c.postDeliveryNoteVoucher(id, req),
@@ -225,6 +260,7 @@ export const VOUCHER_CONFIGS: Readonly<Record<VoucherType, VoucherConfig>> = {
     partyLabel: "Party A/c Name",
     primarySide: "DR",
     showGst: false,
+    statutoryTax: null,
     itemInvoice: false,
     hint: "Goods IN from a supplier, before the bill. Stock moves; NOTHING is posted to the ledger — the purchase invoice that follows books the cost and the input credit.",
     post: (c, id, req) => c.postReceiptNoteVoucher(id, req),
@@ -237,6 +273,7 @@ export const VOUCHER_CONFIGS: Readonly<Record<VoucherType, VoucherConfig>> = {
     partyLabel: "Reference",
     primarySide: "DR",
     showGst: false,
+    statutoryTax: null,
     itemInvoice: false,
     hint: "A transfer: goods leave one godown and arrive in another on the SAME voucher. The company still owns them, so no value moves and nothing is posted.",
     post: (c, id, req) => c.postStockJournalVoucher(id, req),
@@ -249,6 +286,7 @@ export const VOUCHER_CONFIGS: Readonly<Record<VoucherType, VoucherConfig>> = {
     partyLabel: "Counted by",
     primarySide: "DR",
     showGst: false,
+    statutoryTax: null,
     itemInvoice: false,
     hint: "State what was COUNTED on the shelf; the SERVER derives the correction against the books. A supervisor's key — the seeded Data Entry level is refused this one (migration 0031).",
     post: (c, id, req) => c.postPhysicalStockVoucher(id, req),

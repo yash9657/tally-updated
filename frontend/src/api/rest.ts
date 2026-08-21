@@ -88,6 +88,7 @@ import type {
   CreateTDSChallanResponse,
   AllocateToChallanRequest,
   AllocateToChallanResponse,
+  TaxSectionsResponse,
   TDSProfileResponse,
   SetTDSProfileRequest,
   SetTDSProfileResponse,
@@ -299,6 +300,14 @@ export function createRestClient(
         `${company(companyID)}/tds-challans/${encodeURIComponent(challanID)}/allocations`,
         req,
       );
+    },
+
+    taxSections(companyID) {
+      // No parameters at all: the table is the Finance Act's, not the tenant's,
+      // and two companies on one deployment get the same answer. A company id in
+      // the path only because every route on this seam is company-scoped by the
+      // middleware that authorises it.
+      return http.get<TaxSectionsResponse>(`${company(companyID)}/tds-sections`);
     },
 
     // ---- The TDS deductor return profile (T6, migration 0070).

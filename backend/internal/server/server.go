@@ -879,6 +879,24 @@ func (s *Server) routes() {
 		r.Post("/tds-challans", s.handleCreateTDSChallan)
 		r.Post("/tds-challans/{challanID}/allocations", s.handleAllocateToTDSChallan)
 
+		// THE STATUTORY SECTION VOCABULARY (register row D3). What a voucher's
+		// `tds` / `tcs` block may name, with the rate and threshold attached.
+		//
+		// ⛔ IT IS MAPPED AS A MASTER (isMasterPath), NOT AS A REPORT, and that
+		// is the whole access decision: the DATA ENTRY level keys the vouchers
+		// that carry a deduction, and it is DENIED report:tds-register by
+		// migration 0068 for a good reason (that register is every supplier paid,
+		// with amounts). Mapping this list as a report would deny the picker to
+		// exactly the operator who needs it and leave D3 open under a different
+		// error. A statutory rate table is a master list — it names no party, no
+		// amount and nothing about this company — so it reads on the same terms
+		// as /ledgers and /units, which the same operator already reads to key
+		// the voucher this list belongs to.
+		//
+		// GET ONLY. There is no POST: the table is the Finance Act's, not the
+		// tenant's, and an unmounted POST answers 404 "no such route" (D40).
+		r.Get("/tds-sections", s.handleTDSSections)
+
 		// THE TDS/TCS REGISTER (Item Zero step 4) — everything deducted and
 		// collected in a period, per deductee and per buyer.
 		//

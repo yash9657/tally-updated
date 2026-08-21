@@ -120,6 +120,8 @@ import type {
   TDSChallanListResponse,
   AllocateToChallanRequest,
   AllocateToChallanResponse,
+  TaxSectionDoc,
+  TaxSectionsResponse,
   CreateTDSChallanRequest,
   CreateTDSChallanResponse,
   TDSProfile,
@@ -671,6 +673,26 @@ export interface MockTDSDeduction {
  *
  * ⛔ EVERY voucher_id HERE IS A UUID. See {@link MockTDSDeduction}.
  */
+/**
+ * The shipped `tds-2026-04` / `tcs-2026-04` section tables, copied from
+ * internal/compliance. THE ONLY COPY OF THEM OUTSIDE GO, and pinned against the
+ * server's own catalog by a test — see the note on `taxSections`.
+ */
+export const MOCK_TDS_SECTIONS: TaxSectionDoc[] = [
+  { section: "194C", rate_ind_huf_pct: "1", rate_other_pct: "2", threshold_rupees: "30000.0000", basis: "PER_TXN" },
+  { section: "194H", rate_ind_huf_pct: "2", rate_other_pct: "2", threshold_rupees: "20000.0000", basis: "ANNUAL" },
+  { section: "194I-A", rate_ind_huf_pct: "2", rate_other_pct: "2", threshold_rupees: "50000.0000", basis: "MONTHLY" },
+  { section: "194I-B", rate_ind_huf_pct: "10", rate_other_pct: "10", threshold_rupees: "50000.0000", basis: "MONTHLY" },
+  { section: "194J-D", rate_ind_huf_pct: "10", rate_other_pct: "10", threshold_rupees: "0.0000", basis: "NIL" },
+  { section: "194J-P", rate_ind_huf_pct: "10", rate_other_pct: "10", threshold_rupees: "50000.0000", basis: "ANNUAL" },
+  { section: "194J-T", rate_ind_huf_pct: "2", rate_other_pct: "2", threshold_rupees: "50000.0000", basis: "ANNUAL" },
+];
+
+export const MOCK_TCS_SECTIONS: TaxSectionDoc[] = [
+  { section: "206C(1)-SCRAP", rate_ind_huf_pct: "2", rate_other_pct: "2", threshold_rupees: "0.0000", basis: "PER_TXN" },
+  { section: "206C(1F)-MV", rate_ind_huf_pct: "1", rate_other_pct: "1", threshold_rupees: "1000000.0000", basis: "PER_TXN" },
+];
+
 export const MOCK_TDS_DEDUCTIONS: MockTDSDeduction[] = [
   {
     voucher_id: "3f6b1c2e-0a4d-4c8b-9e11-7a2d5f0b1001",
@@ -4613,6 +4635,31 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         tax_year_label: updated.tax_year_label,
         // The mock's read-back cannot fail, so this is never null.
         challan: updated,
+      };
+    },
+
+    // ---- THE STATUTORY SECTION VOCABULARY (D3).
+    //
+    // ⛔ THE FIGURES BELOW ARE A HAND COPY OF internal/compliance's ruleset, and
+    // that is exactly the drift this route exists to prevent everywhere ELSE.
+    // It is tolerable HERE and nowhere else because a mock has no server to ask,
+    // and it is bounded: these two tables are the only copy in this codebase
+    // outside Go, and a test compares them against what cored's own catalog
+    // serves. ⚠️ IF A SECTION IS ADDED TO THE RULESET AND NOT HERE, that test
+    // fails — the fix is to add it here, never to relax the test.
+    async taxSections(companyID): Promise<TaxSectionsResponse> {
+      ensure(companyID);
+      return {
+        tds_ruleset_version: "tds-2026-04",
+        tcs_ruleset_version: "tcs-2026-04",
+        tds_sections: MOCK_TDS_SECTIONS.map((r) => ({ ...r })),
+        tcs_sections: MOCK_TCS_SECTIONS.map((r) => ({ ...r })),
+        tds_no_pan_floor_pct: "20",
+        // ⛔ NOT THE SAME SHAPE as the line above — see TaxSectionsResponse.
+        tcs_no_pan_multiplier: "2",
+        tcs_no_pan_floor_pct: "5",
+        tcs_no_pan_ceiling_pct: "20",
+        threshold_basis_is_approximated: true,
       };
     },
 

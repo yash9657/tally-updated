@@ -136,3 +136,52 @@ describe("the TDS/TCS wire contract", () => {
     expect(Object.keys(req)).not.toContain("deposit_date");
   });
 });
+
+// ---------------------------------------------------------------------------
+// ⛔ THE MOCK'S SECTION TABLES ARE THE ONLY COPY OF THE FINANCE ACT OUTSIDE GO.
+//
+// The entry form that closes register row D3 offers these sections, and its
+// mock has no server to ask — so a hand-kept copy exists, and a hand-kept copy
+// of a table that changes with every Finance Act is the drift bug the TDS
+// challan screen's rule (3) records for three minor heads. Here it is pinned
+// against the GOLDEN that internal/compliance emits from the ruleset itself
+// (TestTaxSectionsGolden), so a section added in Go and forgotten here fails
+// with a diff rather than shipping a picker that is missing a section.
+// ---------------------------------------------------------------------------
+import taxSectionsGolden from "./goldens/tax-sections.json";
+import { createMockClient, MOCK_TDS_SECTIONS, MOCK_TCS_SECTIONS } from "./mock";
+
+describe("⛔ D3: the served section vocabulary cannot drift from the ruleset", () => {
+  it("the mock's TDS table IS the ruleset's, row for row", () => {
+    expect(MOCK_TDS_SECTIONS).toEqual(taxSectionsGolden.tds_sections);
+  });
+
+  it("the mock's TCS table IS the ruleset's, row for row", () => {
+    expect(MOCK_TCS_SECTIONS).toEqual(taxSectionsGolden.tcs_sections);
+  });
+
+  it("serves the whole response the wire serves — versions and both no-PAN rules", async () => {
+    const res = await createMockClient({ seed: false }).taxSections("company-demo");
+    expect(res).toEqual(taxSectionsGolden);
+  });
+
+  it("⛔ the two no-PAN rules are DIFFERENT SHAPES, and both are served", async () => {
+    // Deduction: max(rate, floor). Collection: min(max(mul × rate, floor), ceiling).
+    // A client that reused the deduction shape here would print 20% where the
+    // answer for a 2% scrap collection with no PAN is 5%… — the reason both
+    // sets of figures travel rather than one.
+    const res = await createMockClient({ seed: false }).taxSections("company-demo");
+    expect(res.tds_no_pan_floor_pct).toBe("20");
+    expect(res.tcs_no_pan_multiplier).toBe("2");
+    expect(res.tcs_no_pan_floor_pct).toBe("5");
+    expect(res.tcs_no_pan_ceiling_pct).toBe("20");
+  });
+
+  it("discloses that v1 applies EVERY threshold basis per transaction", async () => {
+    // The form shows a threshold and an operator reads it as the law. An ANNUAL
+    // or MONTHLY limit applied per transaction under-deducts on a split payment.
+    const res = await createMockClient({ seed: false }).taxSections("company-demo");
+    expect(res.threshold_basis_is_approximated).toBe(true);
+    expect(res.tds_sections.map((s) => s.basis)).toContain("ANNUAL");
+  });
+});
