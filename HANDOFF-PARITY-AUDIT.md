@@ -710,7 +710,7 @@ have now been driven end to end in a real browser against real cored.**
 | **NOT DRIVABLE AT ALL** | **1** — row **32** (cash-flow projection / anomalies): four doors tried, no keystroke reaches it and the mandated disclosure has no renderer |
 | **Predicted defects KILLED** | **1** — **LEAD 1b** on `MembersScreen`, driven with a control AND at 20× CPU throttle. It was deliberately left unpatched for exactly this reason, and that call is now vindicated |
 | **DEFECTS FOUND** | ⛔ **78** (after merging duplicate reports of one shared defect) — **39 high, 28 medium, 11 low.** Register in §7.1 |
-| ⚠️ **Superseded — this table is the 2026-08-07 snapshot** | The register has since grown to **86** (D79–D84 registered from the wave's §6 findings; **D85** and **D86** found by the L11 drive) and **32 are still open.** ⛔ **§7.1's own header is the live count — read it, not this row.** |
+| ⚠️ **Superseded — this table is the 2026-08-07 snapshot** | The register has since grown to **86** (D79–D84 registered from the wave's §6 findings; **D85** and **D86** found by the L11 drive) and **25 are still open.** ⛔ **§7.1's own header is the live count — read it, not this row.** |
 | **FIXED this pass** | **9 fully + 3 partial**, every one carrying a unit test and an EXECUTED mutation proof whose failure was checked against the prediction. §7.1 marks them |
 | **STILL OPEN** | ⛔ **66.** This is now a BACKLOG, not an unknown — every one is traced to file:line with a proposed fix |
 | **TRUE reachable number** | ⛔ **The honest answer is that "reachable" was the wrong question.** All 34 rows do OPEN from the keyboard — **but only 5 of the 34 have ever been driven and found clean**, all five in earlier passes. **29 of 34 carry at least one defect an operator would hit** (28 defective + row 32, which opens nowhere at all) |
@@ -815,7 +815,7 @@ have now been driven end to end in a real browser against real cored.**
 
 ---
 
-## 7.1 ⛔ THE DEFECT REGISTER — 86 DEFECTS, 32 STILL OPEN
+## 7.1 ⛔ THE DEFECT REGISTER — 86 DEFECTS, 25 STILL OPEN
 
 **This is the audit's actual product.** Every row below was found by DRIVING, is traced to file:line, and
 carries a proposed fix in the source material. ⛔ **Do not re-derive these from scratch** — that is the
@@ -854,7 +854,7 @@ WORK"** — not "hard to fix".
 | D22 | 32 | HIGH | The row's requirement fails at the first hurdle: there is no way to reach a cash-flow projection or the anomaly list from the keyboard, so the mandated disclosure cannot be rendered because there is no renderer. Four doors tried and closed: the 18-entry Gateway menu has no such entry; Alt+G Go To offers none of "Cash Flow"/"Cash … | frontend/src/screens/GatewayScreen.tsx:4-60 (GATEWAY_MENU — no cash-flow/anomaly entry) + frontend/src/keystroke/navMachine.ts:650 … | ⛔ OPEN |
 | D23 | 32 | HIGH | The cash-flow response carries no disclosure that it is a projection and no statement of its basis. The complete key set is as_on, horizon_days, bucket_days, opening_cash, buckets, beyond_horizon, overdue_folded_into_first_bucket — seven keys, none containing projection/estimate/basis/assumed/method. Yet the engine invents a set … | backend/internal/server/handler_forecast.go:105-118 (cashFlowJSON — the complete key set) + backend/internal/forecast/forecast.go: … | ✅ **FIXED (L11) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D24 | 33 | HIGH | Every invite is delivered to NOBODY and the screen then tells the operator "invitation sent". The invite form collects no email address, notify falls back to the SUBJECT as the recipient, LogSender sees no '@', logs NO EMAIL ON FILE and returns nil, so settle() records status='sent' and deliveryText renders that as "invitation s … | frontend/src/screens/MembersScreen.tsx:264-267 posts only {subject, security_level_name} (the InviteMemberRequest.email field at f … | ✅ FIXED (F5) |
-| D25 | 33 | HIGH | Signing in never claims a pending invite. GET /v1/me is the only seam that converts an invite into a membership, and the frontend calls it from exactly ONE place -- the F3 Select Company screen. An invited user who signs in therefore does not land in the company they were invited to. | backend/internal/server/handler_admin.go:660-690 (handleMe is the claim seam: 'claim first, then list'); the ONLY frontend caller … | ⛔ OPEN |
+| D25 | 33 | HIGH | Signing in never claims a pending invite. GET /v1/me is the only seam that converts an invite into a membership, and the frontend calls it from exactly ONE place -- the F3 Select Company screen. An invited user who signs in therefore does not land in the company they were invited to. | backend/internal/server/handler_admin.go:660-690 (handleMe is the claim seam: 'claim first, then list'); the ONLY frontend caller … | ✅ **FIXED (L9) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D26 | 33 | HIGH | When ?company=<id> is refused by the server, the app SILENTLY creates a brand-new company and makes the user its Owner, reporting the substitution only to the devtools console. A user who was invited as a restricted level lands on an empty tenant with FULL access, and every screen looks correct. | frontend/src/app/CompanyContext.tsx:129-140 isUnusablePersistedId() treats 403 as 'unusable'; CompanyContext.tsx:188-245 the boots … | ✅ FIXED (F4) |
 | D27 | 35 | HIGH | F3 Switch Company changes the session but is NEVER persisted, so any page load silently returns the operator to the PREVIOUS company — and the next voucher they key lands in it. Proved in both directions and confirmed in the DB: a Sales voucher keyed after F3->BETA35 + a reload was written to ALPHA35. | frontend/src/screens/CompanySelectScreen.tsx:88-96 (calls client.getCompany + setCompany + COMPANY_SWITCHED_SENTINEL, and never pe … | ✅ FIXED (F4) |
 | D28 | 37 | HIGH | The back-dated cutoff is bypassed outright by loosening the SPELLING of the date, whenever the body also carries an explicit voucher_no. The PDP's date peek fails OPEN, and the only strict re-parse in the write path lives inside the auto-numbering branch, which an explicit voucher_no skips. | backend/internal/server/server.go:3191-3203 (peekVoucherDate returns nil on any non-"2006-01-02" spelling) + backend/internal/auth … | ✅ FIXED (F3) |
@@ -884,10 +884,10 @@ WORK"** — not "hard to fix".
 | D52 | 32 | MEDIUM | FeaturesScreen advertises "Cash-flow projection and anomaly detection" as state "on" with a note that names no door, while the two AI-native rows immediately above it in the same group name theirs ("Gateway > Bill Inbox", "Gateway > Query"). The capability list overstates what an operator can reach. | frontend/src/screens/FeaturesScreen.tsx:340-354 — :342 note "Gateway > Bill Inbox", :347 note "Gateway > Query", :353 note "Determ … | ⛔ OPEN |
 | D53 | 34 | MEDIUM | The Stock Summary refusal hardcodes the words 'the Data Entry level', so a holder of any OTHER level is told a level they do not hold is the one denying them, and is pointed at the wrong level's rules. | frontend/src/screens/reports/StockSummaryScreen.tsx:175-183 (the status===403 branch of StockSummaryError): the literal 'so the Da … | ✅ **FIXED (L10) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D54 | 37 | MEDIUM | The refusal names the rule but never the cutoff DATE, so the operator learns a period is locked without learning where the boundary is. | backend/internal/authz/authz.go:270 (`deny("voucher date is before the back-dated cutoff")`), surfaced verbatim at frontend/src/sc … | ✅ FIXED (F3) |
-| D55 | 38 | MEDIUM | There is no way to unlock a locked account: no HTTP route, no key, no screen. The only member-admin surface (Users & Roles) renders no lock state at all, and the one route that could plausibly be a remedy (POST /auth/password) has no caller anywhere in the app, so a user cannot even change their own password. | backend/internal/authn/lockout.go:91-96 (RecordSuccess is the sole ClearLock caller); backend/internal/server/auth_login.go:206-21 … | ⛔ OPEN |
-| D56 | 38 | MEDIUM | Locking an account does not revoke the sessions it already holds: a locked subject's existing bearer keeps working for the full 3600-second token TTL, including authenticated WRITES. | backend/internal/server/auth_login.go:206-217 (IsLocked is consulted only on POST /auth/login) and loginTokenTTLSeconds (the 200 b … | ⛔ OPEN |
-| D57 | 38 | MEDIUM | The lockout threshold, window and duration are hardcoded constants with no configuration path at all, so "N is the configured N" cannot be satisfied — N is a compile-time 5, and there is no per-deployment or per-company setting, nor the exponential backoff the project's own design docs promise. | backend/internal/server/server.go:231 (authn.NewLocker(authn.DefaultLockoutPolicy(), …) — the policy is constructed inline from a … | ⛔ OPEN |
-| D58 | 38 | MEDIUM | The lock message hands the operator a raw UTC RFC3339 instant — "Try again after 2026-08-07T23:09:07Z" — with no conversion to local time and no duration, in a product whose audience is Indian accountants on IST (UTC+5:30). | frontend/src/auth/LoginScreen.tsx:38-44 failureText() interpolates `f.until` straight into the string; the value comes from AuthLo … | ⛔ OPEN |
+| D55 | 38 | MEDIUM | There is no way to unlock a locked account: no HTTP route, no key, no screen. The only member-admin surface (Users & Roles) renders no lock state at all, and the one route that could plausibly be a remedy (POST /auth/password) has no caller anywhere in the app, so a user cannot even change their own password. | backend/internal/authn/lockout.go:91-96 (RecordSuccess is the sole ClearLock caller); backend/internal/server/auth_login.go:206-21 … | ✅ **FIXED (L9) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
+| D56 | 38 | MEDIUM | Locking an account does not revoke the sessions it already holds: a locked subject's existing bearer keeps working for the full 3600-second token TTL, including authenticated WRITES. | backend/internal/server/auth_login.go:206-217 (IsLocked is consulted only on POST /auth/login) and loginTokenTTLSeconds (the 200 b … | ✅ **FIXED (L9) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
+| D57 | 38 | MEDIUM | The lockout threshold, window and duration are hardcoded constants with no configuration path at all, so "N is the configured N" cannot be satisfied — N is a compile-time 5, and there is no per-deployment or per-company setting, nor the exponential backoff the project's own design docs promise. | backend/internal/server/server.go:231 (authn.NewLocker(authn.DefaultLockoutPolicy(), …) — the policy is constructed inline from a … | ✅ **FIXED (L9) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
+| D58 | 38 | MEDIUM | The lock message hands the operator a raw UTC RFC3339 instant — "Try again after 2026-08-07T23:09:07Z" — with no conversion to local time and no duration, in a product whose audience is Indian accountants on IST (UTC+5:30). | frontend/src/auth/LoginScreen.tsx:38-44 failureText() interpolates `f.until` straight into the string; the value comes from AuthLo … | ✅ **FIXED (L9) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D59 | 40 | MEDIUM | The printed Receipt and Payment vouchers name the BANK as the counterparty — "Received From: HDFC Bank" / "Paid To: HDFC Bank" — because the single-entry form puts the bank in both `party` and `party_ledger_id` and printingdb builds the Party block from party_ledger_id. | frontend/src/screens/VoucherScreen.tsx:1036-1043 (party = accountName, req.party_ledger_id = f.partyLedgerId, where the Account fi … | ✅ **FIXED (L6) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D60 | 40 | MEDIUM | A Sales invoice keyed through the GST panel saves happily and then cannot be printed: the server refuses with 400 because items[0].hsn is a Rule 46(g) mandatory particular, but the voucher form never requires the HSN/SAC field to save. | frontend/src/screens/VoucherScreen.tsx:2063 (gst-hsn is an optional FieldRow in GstPanel) vs backend/internal/printing (validateVo … | ✅ **FIXED (L6) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D61 | 42 | MEDIUM | The printed Day Book's footer — the only thing on the page explaining why there is no amount total — is CLIPPED mid-sentence to "20 voucher version(s) in this period. No column total is...", and the sentence it was clipped from is factually false for this build: the report lists exactly one row per live voucher, not an original … | backend/internal/server/handler_print_reports.go:546-551 (the Footer row and its "DELIBERATELY NO COLUMN TOTAL" comment) against b … | ✅ **FIXED (L7) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
@@ -902,8 +902,8 @@ WORK"** — not "hard to fix".
 | D70 | 27 | LOW | After Alt+W pre-closes an order, the register's line panel keeps showing that order's balance as Outstanding with no pre-closed marker, while the row itself has vanished from the list above it. | frontend/src/screens/OrderRegisterScreen.tsx:1039 (the detail heading) and :1069-1073 (the Outstanding cell) | ✅ **FIXED (L8) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D71 | 27 | LOW | The Purchase Order Book's quantity column is hard-coded "Delivered" for goods a supplier owes the company, while the purchase register calls the identical figure "Received". | frontend/src/screens/reports/OrderBookScreens.tsx:351 (and the export header at :499) | ✅ **FIXED (L8) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D72 | 32 | LOW | The optional statistical forecast in insightd is unreachable from the client and carries money as JSON floats rather than the fixed-4 strings the rest of the system pins, so wiring it as-is would reintroduce paisa loss. It does at least declare estimate:true and its method — the disclosure cored's own projection lacks. | insightd/insightd/api/routes_forecast.py:29-36 (weekly_net_cash: list[float], daybook: list[tuple[str, float]]) and :13-16; no cal … | ⛔ OPEN |
-| D73 | 38 | LOW | Sign-in attempts made while an account is locked are never audited: handleLogin returns 423 from the IsLocked branch without calling RecordAttempt, so the traffic during the lock window — the exact period an investigator cares about — leaves no trace. | backend/internal/server/auth_login.go:209-217 — the IsLocked branch writes writeLocked and returns; RecordAttempt is reached only … | ⛔ OPEN |
-| D74 | 38 | LOW | app_user.failed_attempts is not a running counter: it stays 0 through failures 1-4 and is written only at the instant the lock trips, so nothing can observe that an account is partway to being locked. | backend/internal/authn/lockout_store.go:113-118 — failed_attempts is written ONLY inside SetLock (`UPDATE app_user SET locked_unti … | ⛔ OPEN |
+| D73 | 38 | LOW | Sign-in attempts made while an account is locked are never audited: handleLogin returns 423 from the IsLocked branch without calling RecordAttempt, so the traffic during the lock window — the exact period an investigator cares about — leaves no trace. | backend/internal/server/auth_login.go:209-217 — the IsLocked branch writes writeLocked and returns; RecordAttempt is reached only … | ✅ **FIXED (L9) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
+| D74 | 38 | LOW | app_user.failed_attempts is not a running counter: it stays 0 through failures 1-4 and is written only at the instant the lock trips, so nothing can observe that an account is partway to being locked. | backend/internal/authn/lockout_store.go:113-118 — failed_attempts is written ONLY inside SetLock (`UPDATE app_user SET locked_unti … | ✅ **FIXED (L9) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D75 | 40 | LOW | Every printed voucher's download filename appends the raw voucher UUID after the class and number, contradicting pdfFilename's own doc comment, which says it uses the FIRST non-empty part. | backend/internal/server/handler_print.go:117 (writePDF(w, pdfFilename(pathClass, number, voucherID.String()), pdf)) against the co … | ✅ **FIXED (L7) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D76 | 43 | LOW | Ctrl+P on the Cost Centre Summary tells the operator "Alt+E is not built here either; read it on screen", which is false: pressing Alt+E on that same screen immediately writes Cost-Centre-Summary-Branch-2026-04-01-to-2027-03-31.csv with correct 4-dp figures. | frontend/src/screens/printTarget.ts:276-279 (the refusal string ending "Alt+E is not built here either; read it on screen.") again … | ✅ **FIXED (L7) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D77 | 9 | LOW | The voucher read-back orders postings `ORDER BY p.dr_cr DESC, p.amount DESC` with no `p.id` tiebreak, so `posting_seq` is arbitrary for two same-side same-amount postings — the analogous ordinal elsewhere in the codebase uses `ORDER BY p.id`. Recon prediction 2 was KILLED as an observed data loss but the nondeterminism in the SQ … | backend/internal/ledger/ledger.go:846 | ⛔ OPEN |
@@ -1561,6 +1561,92 @@ gate.** `drive-l11-ai.mjs` now clamps its date to today or earlier; it passes 14
 your change broke it.* Two of this session's three false alarms were residue from earlier runs
 on the same tenant. **Reseed before believing a red gate** — it costs one minute and it has now
 overturned the obvious diagnosis twice.
+
+### ✅ L9 — USERS + SECURITY. D25, D55, D56, D57, D58, D73, D74. CLOSED 2026-08-20. **25/25.**
+
+⛔⛔ **THE FIRST RUN OF THIS PROBE AIMED THE DEMO OWNER'S OWN LOCKOUT BUDGET AT ITSELF, AND
+THAT IS THE LESSON OF THE LANE.** `openApp` had no way to say who to sign in as, so a probe
+written to drive a throwaway user silently drove `browser-dev-owner`. Bad twice over: every
+assertion went **vacuous** (the owner is already a member of every company, so *"an invited user
+lands in the invited company"* passed while testing nothing), and the change-password form sends
+a `current_password` — a wrong one is a **password guess** — so the probe was hammering the
+account every other probe in the directory signs in as. It survived only because a later
+successful sign-in happened to reset the counter. `openApp` now takes `subject`/`password`, and
+its sign-in failure quotes what the login screen actually said.
+
+**Two throwaway subjects per run, kept apart deliberately:** `U_PW` never sees a wrong password;
+`U_LOCK` is the one that gets locked. Mixing them drops a lock into the middle of the
+password-change drive and the 423 reads as a broken form.
+
+**`allowNoCompany`, and only D25 may use it.** D25's fix adopts the invited company ONLY when
+nothing is persisted and nothing is in the URL, so a probe passing `?company=` **disables the
+code it is testing** and reports the defect fixed whatever the app does. The trap that refusal
+existed for (an empty `?company=` mints a clean empty "My Company") is closed by making
+`expectCompany` **required** with the option.
+
+**Mutation proofs — eight, all RED with the predicted case named:**
+- **M29 (D25)** the bootstrap adopts nothing while still claiming → *"signing in CLAIMS a pending
+  invite and opens that company instead of minting one"* RED.
+- **M30 (D55)** `changePassword` sends nothing while the form still reports success → 4 RED.
+- **M31 (D55)** the confirmation is no longer compared → *"a MISTYPED confirmation never reaches
+  the server"* RED.
+- **M32 (D56)** ⛔ **the dangerous direction** — revocation removed from the authenticate funnel
+  → `TestLockingAnAccountRevokesTheSessionsItAlreadyHolds` and
+  `TestLockingRevokesEveryTokenDoorNotOnlyTheCompanySubtree` RED.
+- **M33 (D57)** the policy back to compile-time constants → `TestLockoutPolicyIsConfigurableFromTheEnvironment` RED.
+- **M34 (D58)** the raw UTC instant restored → 2 RED, including the already-lapsed case.
+- **M35 (D73)** the knock unaudited → `TestAttemptsDuringALockAreAuditedAndDoNotExtendIt` RED.
+- **M36 (D74)** the running counter removed → `TestFailedAttemptsIsARunningCounter` RED.
+
+**The drive — `drive-l9-users.mjs`, 25/25:**
+
+- **D25** ✅ An **invited** user signing in with **no company in the URL** lands in **Demo
+  Traders**, not a minted "My Company" — and `company_membership` gains exactly **1** row for
+  that subject, so the invite really converted.
+- **D55** ✅ *(own password)* The chrome offers the form, the browser reaches
+  **`POST /auth/password 204`**, and the session **survives**. ⛔ The oracle is not the 204: the
+  **old password is then refused 401 and the new one signs in 200**. A screen reporting success
+  from a status code looks identical whether it changed anything or not.
+- **D55** ✅ *(administrative unlock)* Users & Roles **shows** `locked_until`,
+  `PUT /members/{userID} {"unlock":true}` answers **200 `{"lock":"cleared"}`**, the account
+  **signs in again 200**, and the unlock itself is **audited** (`outcome=unlocked`).
+- **D56** ✅ With a **CONTROL first** — the bearer answers 200 *before* the lock, so the refusal
+  after it cannot be a token that was never valid. After the lock the **same** bearer is refused
+  **401 `session revoked: this account was locked`** on a **read** and on a **write** (the write
+  used to answer 201). ⛔ And it stays dead **after the unlock** — otherwise a lock is a pause
+  button and a stolen bearer simply waits.
+- **D57** ✅ Driven by **restarting cored with `AUTH_LOCKOUT_MAX_FAILURES=3`**: the lock trips on
+  the **3rd** failure where the default deployment took **5**. A configuration knob cannot be
+  driven without changing the configuration, and reading the constant out of the source is not
+  driving it. ⛔ The probe **puts the deployment back** and asserts it did — a three-strike
+  lockout left running would make the next lane's first typo lock an account.
+- **D58** ✅ The login screen says *"ACCOUNT LOCKED — too many failed attempts. Try again after
+  **Aug 20, 2026, 5:22 PM PDT** — that is about **15 minutes** from now."* No RFC3339 instant
+  anywhere, a named zone, and the duration — the only question actually being asked. It refuses
+  even the **correct** password, which is the lock doing its job.
+- **D73** ✅ The attempt refused **during** the lock window is audited with its own
+  `outcome=locked`, and there are **exactly 5** `outcome=failure` rows — the five real password
+  guesses. A lock must not renew itself off its own refusals.
+- **D74** ✅ `failed_attempts` read **between** attempts: **fa=1, 2, 3, 4** then the lock at 5.
+  It used to sit at 0 until the instant the lock tripped, so nothing could observe an account
+  partway to being locked.
+
+⚠️ **THREE PROBE LESSONS, every one of which read correct behaviour as a defect:**
+1. ⛔ **AN INVITE IS NOT A MEMBERSHIP.** `GET /v1/me` is the only seam that converts one — **that
+   IS D25** — so a throwaway subject that never calls it is refused **403 "not a member"** by
+   every company route. The probe read those 403s as a broken D56 control and a missing member
+   row. `U_LOCK` now claims in setup; `U_PW` deliberately does not, because D25's assertion is
+   that *signing in* claims it.
+2. **THE LOCK TRIPS *ON* THE Nth FAILURE, AND THAT SAME RESPONSE IS THE 423** — not "N failures,
+   then an N+1th attempt refused". The probe predicted 6 (and 4 for the configured-3 case) and
+   called the correct behaviour broken. Twice, in one file.
+3. **openApp asserts it got PAST the login screen**, so the D58 leg — whose whole point is to be
+   **refused at it** — is the one place raw Playwright is right. It says so in the file.
+
+**Gates:** frontend **1293/1293** (up 7 for D55's build), `tsc` clean, backend **35 packages ok /
+0 FAIL** bracketed by a live `psql`. Verified after the run: cored fresh **by symbol**, **no
+`AUTH_LOCKOUT_*` in its environment**, and `browser-dev-owner` at **failed_attempts 0, signing
+in 200**.
 
 ## 8. RULES THAT MUST NOT BE BROKEN DURING THIS WORK
 
