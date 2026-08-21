@@ -7,7 +7,11 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { login as loginRequest, type AuthUser } from "../api/auth";
+import {
+  login as loginRequest,
+  setPassword as setPasswordRequest,
+  type AuthUser,
+} from "../api/auth";
 import { clearPersistedCompanyId } from "../app/CompanyContext";
 import { stepUp as runStepUp } from "./webauthn";
 
@@ -40,6 +44,25 @@ export interface AuthContextValue {
   signIn(subject: string, password: string): Promise<void>;
   /** Explicit sign-out: drops the session AND the persisted company id. */
   signOut(): void;
+  /**
+   * Change the SIGNED-IN user's own password (D55's second half).
+   *
+   * `POST /auth/password` had a client function and NO CALLER anywhere in the
+   * app, so nobody could change their own password — which also meant the D55
+   * administrative unlock had no companion: an operator whose password is
+   * compromised could be unlocked but never re-secured.
+   *
+   * Resolves on 204. REJECTS with AuthInvalidError (the current password did
+   * not verify), AuthLockedError (⛔ the account is now LOCKED — this route
+   * shares POST /auth/login's lockout budget on purpose, so a wrong current
+   * password is a password guess like any other), or a plain Error whose
+   * message is the server's password-policy refusal on 400.
+   *
+   * ⛔ THE SESSION SURVIVES. cored answers 204 without revoking the caller's
+   * own bearer, so this does NOT sign the operator out — asserted by the
+   * "keeps working afterwards" test rather than assumed.
+   */
+  changePassword(currentPassword: string, newPassword: string): Promise<void>;
   /** A 401 from any mid-session API call: drop the session, show the login. */
   onUnauthorized(): void;
   /**
@@ -168,6 +191,29 @@ export function AuthProvider({
     [commit],
   );
 
+  const changePassword = useCallback(
+    async (currentPassword: string, newPassword: string) => {
+      // \u26d4 THE LIVE BEARER, NOT `session.token`. Immediately after a
+      // step-up ceremony the React state still holds the OLD token for a
+      // microtask, and this is exactly the kind of call an operator makes right
+      // after one. sessionRef is the same source stepUp's retry reads.
+      const token = sessionRef.current?.token;
+      if (!token) throw new Error("cannot change a password: nobody is signed in");
+      await setPasswordRequest(
+        baseUrlRef.current,
+        token,
+        currentPassword,
+        newPassword,
+        fetchRef.current,
+      );
+      // Deliberately NO commit(): cored does not revoke the caller's session on
+      // a password change (handleSetPassword answers 204 and touches no token
+      // state), so dropping the session here would sign the operator out of a
+      // successful change and read as a failure.
+    },
+    [],
+  );
+
   const onUnauthorized = useCallback(() => {
     // Session only. The persisted COMPANY is intentionally KEPT: a 401 is
     // usually an expired token for the SAME person, and dropping their company
@@ -231,6 +277,7 @@ export function AuthProvider({
       session,
       signIn,
       signOut,
+      changePassword,
       onUnauthorized,
       stepUp,
       stepUpState,
@@ -240,6 +287,7 @@ export function AuthProvider({
       session,
       signIn,
       signOut,
+      changePassword,
       onUnauthorized,
       stepUp,
       stepUpState,

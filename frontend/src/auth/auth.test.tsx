@@ -718,3 +718,176 @@ describe("the session", () => {
     expect(spies.getCompany!.mock.calls[0]![0]).toBe("co-chosen-by-me");
   });
 });
+
+// ---------------------------------------------------------------------------
+// D55's SECOND HALF — SELF-SERVICE PASSWORD CHANGE.
+//
+// `POST /auth/password` shipped with a client function (`setPassword`, pinned
+// above) and NO CALLER anywhere in the app, so nobody could change their own
+// password. The client-level tests above therefore proved nothing about the
+// product: they exercised the function the app never reached.
+//
+// ⛔ THAT IS D7's LESSON IN A THIRD FILE. `byCommitmentOrder` was pinned nine
+// ways while nothing pinned the picker CALLING it, and the same shape held here.
+// So these tests drive the CHROME — Tab-reachable buttons, a real transport —
+// and assert what went on the WIRE, not what a helper would have sent.
+// ---------------------------------------------------------------------------
+
+/**
+ * A transport that signs one password in and answers /auth/password according
+ * to `onChange`, so each test states its own server outcome.
+ */
+function passwordTransport(
+  loginPassword: string,
+  onChange: (body: { current_password: string; new_password: string }) => Reply,
+): Transport {
+  return transport((url, init) => {
+    if (url.endsWith("/auth/login")) {
+      const body = JSON.parse(String(init.body)) as { password: string };
+      if (body.password !== loginPassword) {
+        return { status: 401, body: { error: "invalid credentials" } };
+      }
+      return {
+        status: 200,
+        body: { token: "token-a", token_type: "Bearer", expires_in: 3600, user: OWNER },
+      };
+    }
+    if (url.endsWith("/auth/password")) {
+      return onChange(
+        JSON.parse(String(init.body)) as {
+          current_password: string;
+          new_password: string;
+        },
+      );
+    }
+    return { status: 500, body: { error: `unrouted ${url}` } };
+  });
+}
+
+async function signInAndOpenChangePassword(t: Transport) {
+  render(<App auth={gate(t)} client={createMockClient({ seed: false })} company={COMPANY} />);
+  signIn("browser-dev-owner", "old-password-1");
+  await waitFor(() => expect(screen.getByTestId("change-password-open")).toBeTruthy());
+  fireEvent.click(screen.getByTestId("change-password-open"));
+  await waitFor(() => expect(screen.getByTestId("change-password-form")).toBeTruthy());
+}
+
+function fillChange(current: string, next: string, confirm: string) {
+  fireEvent.change(screen.getByTestId("change-password-current"), {
+    target: { value: current },
+  });
+  fireEvent.change(screen.getByTestId("change-password-new"), {
+    target: { value: next },
+  });
+  fireEvent.change(screen.getByTestId("change-password-confirm"), {
+    target: { value: confirm },
+  });
+}
+
+describe("D55 — a signed-in user can change their own password", () => {
+  it("⛔ the app REACHES POST /auth/password, with the bearer and the typed values", async () => {
+    const seen: { current_password: string; new_password: string }[] = [];
+    const t = passwordTransport("old-password-1", (body) => {
+      seen.push(body);
+      return { status: 204 };
+    });
+    await signInAndOpenChangePassword(t);
+    fillChange("old-password-1", "new-password-2", "new-password-2");
+    fireEvent.click(screen.getByTestId("change-password-submit"));
+
+    await waitFor(() => expect(screen.getByTestId("change-password-done")).toBeTruthy());
+    // The WIRE is the oracle: the route was hit, once, with the bearer.
+    expect(t.urls.filter((u) => u.endsWith("/auth/password"))).toHaveLength(1);
+    expect(seen).toEqual([
+      { current_password: "old-password-1", new_password: "new-password-2" },
+    ]);
+    const idx = t.urls.findIndex((u) => u.endsWith("/auth/password"));
+    expect(t.auths[idx]).toBe("Bearer token-a");
+  });
+
+  it("⛔ the session SURVIVES a successful change — cored does not revoke it", async () => {
+    const t = passwordTransport("old-password-1", () => ({ status: 204 }));
+    await signInAndOpenChangePassword(t);
+    fillChange("old-password-1", "new-password-2", "new-password-2");
+    fireEvent.click(screen.getByTestId("change-password-submit"));
+
+    await waitFor(() => expect(screen.getByTestId("change-password-done")).toBeTruthy());
+    // Still signed in: the login screen must NOT be back, and the chrome must
+    // still name the user. A change that signed the operator out would read as
+    // a failure of the very thing that just succeeded.
+    expect(screen.queryByTestId("login-screen")).toBeNull();
+    expect(screen.getByTestId("signed-in-as")).toBeTruthy();
+  });
+
+  it("a WRONG current password shows the refusal and does not report success", async () => {
+    const t = passwordTransport("old-password-1", () => ({
+      status: 401,
+      body: { error: "invalid credentials" },
+    }));
+    await signInAndOpenChangePassword(t);
+    fillChange("wrong-one", "new-password-2", "new-password-2");
+    fireEvent.click(screen.getByTestId("change-password-submit"));
+
+    await waitFor(() => expect(screen.getByTestId("change-password-error")).toBeTruthy());
+    expect(screen.queryByTestId("change-password-done")).toBeNull();
+    // AND the session is untouched — a 401 from THIS route must not be mistaken
+    // for an expired session and sign the operator out.
+    expect(screen.queryByTestId("login-screen")).toBeNull();
+  });
+
+  it("⛔ the server's PASSWORD POLICY refusal is shown verbatim, not paraphrased", async () => {
+    const t = passwordTransport("old-password-1", () => ({
+      status: 400,
+      body: { error: "password must be at least 12 characters" },
+    }));
+    await signInAndOpenChangePassword(t);
+    fillChange("old-password-1", "short", "short");
+    fireEvent.click(screen.getByTestId("change-password-submit"));
+
+    await waitFor(() => expect(screen.getByTestId("change-password-error")).toBeTruthy());
+    // The policy is the SERVER'S to state. A generic "invalid password" would
+    // leave the operator guessing which rule they broke.
+    expect(screen.getByTestId("change-password-error").textContent).toContain(
+      "at least 12 characters",
+    );
+  });
+
+  it("⛔ a 423 from THIS route is surfaced — the change route shares the login lockout", async () => {
+    const t = passwordTransport("old-password-1", () => ({
+      status: 423,
+      body: { error: "account locked", code: "LOCKED", until: "2026-08-20T18:30:00Z" },
+    }));
+    await signInAndOpenChangePassword(t);
+    fillChange("wrong-again", "new-password-2", "new-password-2");
+    fireEvent.click(screen.getByTestId("change-password-submit"));
+
+    // cored routes a wrong current_password through POST /auth/login's lockout
+    // budget on purpose, so this form CAN lock the account it is being used
+    // from. Swallowing the 423 would make that look like the product breaking.
+    await waitFor(() => expect(screen.getByTestId("change-password-error")).toBeTruthy());
+    expect(screen.queryByTestId("change-password-done")).toBeNull();
+  });
+
+  it("⛔ a MISTYPED confirmation never reaches the server", async () => {
+    const t = passwordTransport("old-password-1", () => ({ status: 204 }));
+    await signInAndOpenChangePassword(t);
+    fillChange("old-password-1", "new-password-2", "new-password-3");
+    fireEvent.click(screen.getByTestId("change-password-submit"));
+
+    await waitFor(() => expect(screen.getByTestId("change-password-error")).toBeTruthy());
+    // The server has no second field to compare against, so a mistyped new
+    // password would be SAVED and lock the operator out at the next sign-in.
+    expect(t.urls.filter((u) => u.endsWith("/auth/password"))).toHaveLength(0);
+  });
+
+  it("the form is reachable by keyboard alone (no invented keystroke)", async () => {
+    const t = passwordTransport("old-password-1", () => ({ status: 204 }));
+    await signInAndOpenChangePassword(t);
+    // TopBar's own reasoning: there is no TallyPrime-documented key for this, so
+    // it is a <button>. Being natively focusable is what keeps a
+    // page.keyboard-only drive able to reach it.
+    const submit = screen.getByTestId("change-password-submit");
+    submit.focus();
+    expect(document.activeElement).toBe(submit);
+  });
+});
