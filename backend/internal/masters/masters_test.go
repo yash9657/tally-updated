@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -370,6 +371,91 @@ func TestMastersHarnessRemovesItsCompany(t *testing.T) {
 			t.Errorf("%s still holds %d rows for company %s after the harness cleaned up: "+
 				"the masters harness leaks them on EVERY run and nothing will ever delete them",
 				tbl, n, cid)
+		}
+	}
+}
+
+// TestADuplicateMasterNameIsARefusalTheOperatorCanREAD is the L13 finding pinned
+// on all five kinds the master-create form can build.
+//
+// ⛔ THE ASSERTION IS ON THE SENTENCE, NOT ON THE FAILURE. Every one of these
+// already failed before the fix — with the raw Postgres text
+// `duplicate key value violates unique constraint "ledger_company_id_name_key"
+// (SQLSTATE 23505)`, which is what D47's status line actually showed an
+// accountant, and which hands out the schema's constraint names as well. So the
+// test requires the typed sentinel AND requires the raw text to be GONE; a
+// wrapping that merely prefixed a friendly sentence onto the pg error would
+// still fail here.
+func TestADuplicateMasterNameIsARefusalTheOperatorCanRead(t *testing.T) {
+	pool, ctx, _ := setup(t)
+	svc := masters.NewService(pool)
+
+	if _, err := svc.CreateGroup(ctx, masters.Group{
+		Name: "Dup Group", ParentName: "", Nature: "ASSET",
+	}, "test"); err != nil {
+		t.Fatalf("first group: %v", err)
+	}
+	if _, err := svc.CreateUnit(ctx, masters.Unit{Symbol: "DupU"}, "test"); err != nil {
+		t.Fatalf("first unit: %v", err)
+	}
+	if _, err := svc.CreateLedger(ctx, masters.Ledger{
+		Name: "Dup Ledger", GroupName: "Dup Group",
+	}, "test"); err != nil {
+		t.Fatalf("first ledger: %v", err)
+	}
+	if _, err := svc.CreateStockItem(ctx, masters.StockItem{
+		Name: "Dup Item", UnitSymbol: "DupU",
+	}, "test"); err != nil {
+		t.Fatalf("first stock item: %v", err)
+	}
+	if _, err := svc.CreateVoucherType(ctx, masters.VoucherType{
+		Name: "Dup VT", ParentClass: "Sales",
+	}, "test"); err != nil {
+		t.Fatalf("first voucher type: %v", err)
+	}
+
+	cases := []struct {
+		kind  string
+		again func() error
+	}{
+		{"group", func() error {
+			_, err := svc.CreateGroup(ctx, masters.Group{Name: "Dup Group", Nature: "ASSET"}, "test")
+			return err
+		}},
+		{"unit", func() error {
+			_, err := svc.CreateUnit(ctx, masters.Unit{Symbol: "DupU"}, "test")
+			return err
+		}},
+		{"ledger", func() error {
+			_, err := svc.CreateLedger(ctx, masters.Ledger{Name: "Dup Ledger", GroupName: "Dup Group"}, "test")
+			return err
+		}},
+		{"stock item", func() error {
+			_, err := svc.CreateStockItem(ctx, masters.StockItem{Name: "Dup Item", UnitSymbol: "DupU"}, "test")
+			return err
+		}},
+		{"voucher type", func() error {
+			_, err := svc.CreateVoucherType(ctx, masters.VoucherType{Name: "Dup VT", ParentClass: "Sales"}, "test")
+			return err
+		}},
+	}
+	for _, c := range cases {
+		err := c.again()
+		if err == nil {
+			t.Errorf("%s: a duplicate name was ACCEPTED", c.kind)
+			continue
+		}
+		if !errors.Is(err, masters.ErrMasterNameTaken) {
+			t.Errorf("%s: not ErrMasterNameTaken: %v", c.kind, err)
+		}
+		msg := err.Error()
+		for _, leak := range []string{"SQLSTATE", "unique constraint", "duplicate key"} {
+			if strings.Contains(msg, leak) {
+				t.Errorf("%s: the refusal still shows the operator %q: %v", c.kind, leak, err)
+			}
+		}
+		if !strings.Contains(msg, c.kind) {
+			t.Errorf("%s: the refusal does not name what was refused: %v", c.kind, err)
 		}
 	}
 }

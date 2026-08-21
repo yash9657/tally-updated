@@ -153,7 +153,7 @@ func (s *Service) CreateGroup(ctx context.Context, g Group, createdBy string) (u
 			id, companyID, g.Name, parentID, string(nature), isPL,
 			g.BehavesAsSubledger, g.NettBalances, g.UsedForCalc, path,
 		); err != nil {
-			return fmt.Errorf("masters: insert group: %w", err)
+			return nameTaken(err, "account_group_company_id_name_key", "group", g.Name, "insert group")
 		}
 		after := map[string]any{
 			"name": g.Name, "parent": g.ParentName, "nature": string(nature),
@@ -290,6 +290,54 @@ func (s *Service) EnsureLedgerWithOpening(ctx context.Context, l Ledger, created
 	return s.CreateLedger(ctx, l, createdBy)
 }
 
+// ErrMasterNameTaken is a master whose name (or, for a unit, symbol) the company
+// already uses.
+//
+// ⛔ IT EXISTS BECAUSE THE REFUSAL REACHED THE OPERATOR AS A POSTGRES ERROR.
+// Driving L13's D47 arm — the row that made a refused create reach the shell's
+// status line at all — showed what actually arrived there:
+//
+//	Could not create ledger "Acme": masters: insert ledger: ERROR: duplicate key
+//	value violates unique constraint "ledger_company_id_name_key" (SQLSTATE 23505)
+//
+// A refusal an accountant cannot read is only marginally better than the silence
+// D47 records, and it hands out the schema's constraint names for free. Every
+// name/symbol collision on the five kinds the master-create form can build is
+// mapped here instead. It is deliberately ONE sentinel and not five: the caller
+// (writeMastersError -> 422) treats them identically, and the sentence names the
+// kind, so five sentinels would be five copies of one rule.
+var ErrMasterNameTaken = errors.New("masters: that name is already in use")
+
+// MasterNameTaken is the error actually returned, so the operator reads ONE
+// sentence naming the kind and the name. It matches ErrMasterNameTaken under
+// errors.Is (via Is below) without wrapping it, because a wrap would print both
+// sentences and they say the same thing twice.
+type MasterNameTaken struct {
+	Kind string // "ledger", "group", "unit", "stock item", "voucher type"
+	Name string
+}
+
+func (e *MasterNameTaken) Error() string {
+	return fmt.Sprintf("masters: this company already has a %s named %q", e.Kind, e.Name)
+}
+
+// Is makes errors.Is(err, ErrMasterNameTaken) true for every kind, so the HTTP
+// layer keeps one branch (writeMastersError -> 422) rather than five.
+func (e *MasterNameTaken) Is(target error) bool { return target == ErrMasterNameTaken }
+
+// nameTaken maps a Postgres unique violation on `constraint` to a
+// MasterNameTaken; any other error passes through wrapped by `context`. A BARE
+// 23505 test would be wrong — a master insert can violate other unique
+// constraints (the company-scope keys) and those are bugs, not name collisions,
+// so the constraint is named explicitly exactly as isUniqueViolationOn's own
+// header requires.
+func nameTaken(err error, constraint, kind, name, context string) error {
+	if isUniqueViolationOn(err, constraint) {
+		return &MasterNameTaken{Kind: kind, Name: name}
+	}
+	return fmt.Errorf("masters: %s: %w", context, err)
+}
+
 // CreateLedger creates a ledger under the named group and appends a
 // master_audit CREATE row. GST fields are optional.
 func (s *Service) CreateLedger(ctx context.Context, l Ledger, createdBy string) (uuid.UUID, error) {
@@ -372,7 +420,7 @@ func (s *Service) CreateLedger(ctx context.Context, l Ledger, createdBy string) 
 			l.PAN, l.CreditDays, l.Address, l.City, l.PIN,
 			l.BankAccountNumber, strings.ToUpper(strings.TrimSpace(l.BankIFSC)),
 		); err != nil {
-			return fmt.Errorf("masters: insert ledger: %w", err)
+			return nameTaken(err, "ledger_company_id_name_key", "ledger", l.Name, "insert ledger")
 		}
 		for _, b := range l.OpeningBills {
 			billID, err := uuid.NewV7()
@@ -670,7 +718,7 @@ func (s *Service) CreateVoucherType(ctx context.Context, vt VoucherType, created
 			id, companyID, vt.Name, vt.ParentClass, vt.NumberingMethod,
 			vt.AffectsStock, vt.IsAccounting,
 		); err != nil {
-			return fmt.Errorf("masters: insert voucher type: %w", err)
+			return nameTaken(err, "voucher_type_company_id_name_key", "voucher type", vt.Name, "insert voucher type")
 		}
 		after := map[string]any{"name": vt.Name, "parent_class": vt.ParentClass}
 		return appendAudit(ctx, tx, companyID, "voucher_type", id, OpCreate, nil, after, createdBy)
@@ -720,7 +768,7 @@ func (s *Service) CreateUnit(ctx context.Context, u Unit, createdBy string) (uui
 			 VALUES ($1, $2, $3, $4, $5)`,
 			id, companyID, u.Symbol, u.FormalName, u.DecimalPlaces,
 		); err != nil {
-			return fmt.Errorf("masters: insert unit: %w", err)
+			return nameTaken(err, "unit_company_id_symbol_key", "unit", u.Symbol, "insert unit")
 		}
 		after := map[string]any{"symbol": u.Symbol, "formal_name": u.FormalName}
 		return appendAudit(ctx, tx, companyID, "unit", id, OpCreate, nil, after, createdBy)
@@ -815,7 +863,7 @@ func (s *Service) CreateStockItem(ctx context.Context, si StockItem, createdBy s
 			 VALUES ($1, $2, $3, $4, NULLIF($5,''), $6)`,
 			id, companyID, si.Name, unitID, si.HSN, si.GSTRatePct,
 		); err != nil {
-			return fmt.Errorf("masters: insert stock item: %w", err)
+			return nameTaken(err, "stock_item_company_id_name_key", "stock item", si.Name, "insert stock item")
 		}
 		after := map[string]any{
 			"name": si.Name, "unit": si.UnitSymbol, "hsn": si.HSN,
