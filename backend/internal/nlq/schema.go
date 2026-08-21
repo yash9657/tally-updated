@@ -3,6 +3,7 @@ package nlq
 import (
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/khata/cored/internal/query"
 )
@@ -85,16 +86,44 @@ const emitQuerySchema = `{
 
 // systemPrompt builds the NL->DSL system prompt from query.Catalog() at runtime,
 // so a whitelist widening automatically reaches the model. It carries NAMES ONLY
-// (never SQL) plus the four compiler traps and three few-shot NL->DSL pairs. NO
-// tenant data (company id, ledger/party names) ever appears here — the catalog is
-// the fixed server-authored surface, and the caller's question is the only
-// per-request input, carried in the user message, never interpolated here.
-func systemPrompt() string {
+// (never SQL) plus the compiler traps, the resolved period windows and the
+// few-shot NL->DSL pairs. NO tenant data (company id, ledger/party names) ever
+// appears here — the catalog is the fixed server-authored surface, and the
+// caller's question is the only per-request input, carried in the user message,
+// never interpolated here.
+//
+// ⛔ THE PROMPT IS PART OF THE PRODUCT, NOT DOCUMENTATION FOR IT (L5). Whatever
+// this file teaches IS what a real deployment answers: server.go swaps
+// FakeTranslator for ClaudeTranslator the moment ANTHROPIC_API_KEY is set, and
+// the compiler downstream only rejects ILLEGAL queries — it cannot reject a
+// legal query that measures the wrong thing. Three of L5's four defects are
+// therefore restated here as rules the model must obey, because fixing them in
+// FakeTranslator alone would leave the production path wrong:
+//
+//   - D51: the worked example used to be sum(taxable_value) over voucher type
+//     "Sales" — the exact figure that matched no report. Rule 6 now forbids it
+//     and the example emits the postings/natural_net/pl_group shape instead.
+//   - D21: the example used to carry a HARD-CODED quarter and the model was
+//     given no clock at all, so every relative phrase was a guess. The resolved
+//     windows below come from query.NamedWindows — the same parser
+//     FakeTranslator answers with — and rule 7 says to copy them verbatim.
+//   - D50: rule R1 refuses a question that names another company's books.
+//
+// now/fyStartMonth are the request clock and the company financial-year start;
+// they are calendar facts, not tenant data.
+func systemPrompt(now time.Time, fyStartMonth int) string {
+	// Resolved ONCE, from query's own parser, and used by BOTH the window table
+	// and the worked example — so the example can never teach a window the table
+	// contradicts.
+	windows := query.NamedWindows(func() time.Time { return now }, fyStartMonth)
+	thisQuarter := windowFor(windows, "this quarter")
+
 	var b strings.Builder
 	b.WriteString("You translate an accountant's natural-language question about their books ")
 	b.WriteString("into a single typed query by calling the emit_query tool. You NEVER write SQL. ")
 	b.WriteString("You may ONLY use the entities, dimensions, metrics, filters and date columns listed below. ")
-	b.WriteString("If the question cannot be answered from this catalog, call emit_query with entity \"\" (empty string).\n\n")
+	b.WriteString("If the question cannot be answered from this catalog, or if any REFUSE rule applies, ")
+	b.WriteString("call emit_query with entity \"\" (empty string).\n\n")
 	b.WriteString("CATALOG (names only):\n")
 	for _, e := range query.Catalog() {
 		b.WriteString("- entity ")
@@ -116,19 +145,61 @@ func systemPrompt() string {
 RULES (the compiler rejects violations; obey them so the query is answerable):
 1. Aliases (a metric's "as", and any order_by column) must be lowercase snake_case, and an order_by column must spell an emitted dimension or metric alias IDENTICALLY.
 2. ledger_balances accepts NO date_range. Only vouchers/postings (voucher_date) and outstandings (due_date) do.
-3. The metrics "net" and "pending" accept only func "sum". count uses column "*".
+3. The metrics "net", "natural_net" and "pending" accept only func "sum". count uses column "*".
 4. On vouchers, filter by party name using the filter column "party", but GROUP BY the dimension "party_name" — they are different keys.
 5. outstandings "nature" accepts only op "eq" (values ASSET for receivables, LIABILITY for payables).
+6. A SALES OR PURCHASE TOTAL IS MEASURED ON postings, NEVER ON vouchers. Use entity "postings", metric sum(natural_net), and filter pl_group eq "Sales Accounts" (or "Purchase Accounts"); that is the figure the Profit & Loss prints, for the same books. The vouchers metric taxable_value is the GST TAXABLE BASE of the invoice register: it EXCLUDES the GST charged on every invoice, EXCLUDES credit notes and debit notes (a sales return is a voucher of a different type, so it would never reduce the total), and is EMPTY on a book where no GST was derived. Summing it for a "total sales" question answers a number that agrees with no report in the product. Use taxable_value only when the question explicitly asks for taxable value or the GST base.
+7. PERIODS: copy a window from RESOLVED PERIOD WINDOWS below, VERBATIM. Never compute one yourself and never carry one over from an example. A period word with NO this/last qualifier ("sales by month", "monthly sales") names no window at all: emit NO date_range and group by the month dimension instead. A period the user states in full ("April 2026", "1 April 2026 to 30 June 2026") may be emitted directly.
+8. outstandings is an AS-AT-TODAY position, always. Its due_date range filters WHEN BILLS FALL DUE; it does not move the as-on date, and there is no way to ask it for a past position.
 
+REFUSE — call emit_query with entity "" (and empty metrics/dimensions/filters/order_by, null date_range, limit 0) when:
+R1. The question names a scope other than the signed-in company: another company/tenant/organisation/firm by name, "all companies", "every tenant", "across all books", or a raw company UUID. Every answer is scoped to the signed-in company by the server and no other scope is reachable. Answering such a question with this company's figures would put the caller's own number under someone else's question, which is worse than a refusal.
+R2. The question names a multi-period window ("last 6 months", "past 3 years") or two different windows at once ("last month and this year"). One date_range expresses neither, and answering for one of the periods is a wrong answer that looks like a right one.
+R3. The question asks for an outstandings position at a past or future date ("receivables as at March", "what was overdue last quarter") — see rule 8.
+R4. The catalog cannot express the question at all.
+
+TODAY IS ` + iso(now) + `. The financial year starts in ` + query.FYStartMonth(fyStartMonth).String() + `; "year"/"annum"/"fy" mean that financial year, while "quarter" means the CALENDAR quarter.
+
+RESOLVED PERIOD WINDOWS (inclusive, on voucher_date — copy these dates exactly):
+`)
+	for _, w := range windows {
+		b.WriteString("- \"")
+		b.WriteString(w.Phrase)
+		b.WriteString("\": ")
+		b.WriteString(w.From)
+		b.WriteString(" .. ")
+		b.WriteString(w.To)
+		b.WriteString("\n")
+	}
+	b.WriteString(`
 EXAMPLES:
 Q: "trial balance"
 -> emit_query {"entity":"ledger_balances","metrics":[{"func":"sum","column":"debit","as":"debit"},{"func":"sum","column":"credit","as":"credit"}],"dimensions":["group_name"],"filters":[],"date_range":null,"order_by":[{"column":"group_name","desc":false}],"limit":100}
 Q: "total purchases this quarter"
--> emit_query {"entity":"vouchers","metrics":[{"func":"sum","column":"taxable_value","as":"total_purchases"}],"dimensions":["month"],"filters":[{"column":"voucher_type_name","op":"eq","values":["Purchase"]}],"date_range":{"column":"voucher_date","from":"2026-01-01","to":"2026-03-31"},"order_by":[{"column":"month","desc":false}],"limit":100}
+-> emit_query {"entity":"postings","metrics":[{"func":"sum","column":"natural_net","as":"net_purchases"}],"dimensions":["month"],"filters":[{"column":"pl_group","op":"eq","values":["Purchase Accounts"]}],"date_range":{"column":"voucher_date","from":"` + thisQuarter.From + `","to":"` + thisQuarter.To + `"},"order_by":[{"column":"month","desc":false}],"limit":100}
 Q: "who owes us the most"
 -> emit_query {"entity":"outstandings","metrics":[{"func":"sum","column":"pending","as":"pending"}],"dimensions":["ledger_name"],"filters":[{"column":"nature","op":"eq","values":["ASSET"]}],"date_range":null,"order_by":[{"column":"pending","desc":true}],"limit":100}
+Q: "total sales for every company"
+-> emit_query {"entity":"","metrics":[],"dimensions":[],"filters":[],"date_range":null,"order_by":[],"limit":0}
 `)
 	return b.String()
+}
+
+// iso formats a date the way every date in the DSL is spelled (YYYY-MM-DD), so
+// the "TODAY IS" line and the resolved windows cannot disagree in format.
+func iso(t time.Time) string { return t.Format("2006-01-02") }
+
+// windowFor returns the resolved window for one phrase, or a zero NamedWindow if
+// the parser produced none. The examples interpolate a LIVE window rather than a
+// hard-coded one: a frozen example window is what taught the model to answer
+// "this quarter" with a quarter three years gone (D21).
+func windowFor(windows []query.NamedWindow, phrase string) query.NamedWindow {
+	for _, w := range windows {
+		if w.Phrase == phrase {
+			return w
+		}
+	}
+	return query.NamedWindow{}
 }
 
 func metricLines(e query.EntityDoc) []string {

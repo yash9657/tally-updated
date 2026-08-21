@@ -513,3 +513,38 @@ func TestProducedQueriesCompile(t *testing.T) {
 		}
 	}
 }
+
+// TestNamedWindowsCoversEveryPhrase pins that NamedWindows resolves EVERY phrase
+// it advertises. It drops a phrase the parser cannot resolve rather than printing
+// a guessed window (see its header); this is the test that turns that silent drop
+// into a failure, so a parser change cannot quietly shrink the table the LLM
+// prompt is built from.
+func TestNamedWindowsCoversEveryPhrase(t *testing.T) {
+	now := func() time.Time { return time.Date(2026, 8, 21, 0, 0, 0, 0, time.UTC) }
+	got := NamedWindows(now, 0)
+	if len(got) != len(relativePeriodPhrases) {
+		t.Fatalf("NamedWindows resolved %d of %d phrases: %+v", len(got), len(relativePeriodPhrases), got)
+	}
+	for i, w := range got {
+		if w.Phrase != relativePeriodPhrases[i] {
+			t.Errorf("window %d: phrase %q, want %q", i, w.Phrase, relativePeriodPhrases[i])
+		}
+		if w.From == "" || w.To == "" || w.From > w.To {
+			t.Errorf("window %q is not a forward-ordered range: %s .. %s", w.Phrase, w.From, w.To)
+		}
+	}
+}
+
+// TestFYStartMonthDefaultsToApril pins the exported normaliser against the same
+// Indian default FakeTranslator applies, so the prompt naming the month and the
+// windows computing it cannot disagree.
+func TestFYStartMonthDefaultsToApril(t *testing.T) {
+	for _, in := range []int{0, -1, 13, 99} {
+		if got := FYStartMonth(in); got != time.April {
+			t.Errorf("FYStartMonth(%d) = %v, want April", in, got)
+		}
+	}
+	if got := FYStartMonth(1); got != time.January {
+		t.Errorf("FYStartMonth(1) = %v, want January", got)
+	}
+}

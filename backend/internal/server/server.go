@@ -375,10 +375,14 @@ func buildTranslator() query.Translator {
 	if key == "" {
 		return query.FakeTranslator{Now: time.Now}
 	}
+	// Now is wired for the SAME reason FakeTranslator gets one: the prompt's
+	// resolved period windows are built from it, and a translator with no clock
+	// guesses what "last quarter" means (D21).
 	return &nlq.ClaudeTranslator{
 		APIKey:  key,
 		Model:   envOr("QUERY_TRANSLATOR_MODEL", nlq.DefaultModel),
 		BaseURL: envOr("QUERY_TRANSLATOR_BASE_URL", nlq.DefaultBaseURL),
+		Now:     time.Now,
 	}
 }
 

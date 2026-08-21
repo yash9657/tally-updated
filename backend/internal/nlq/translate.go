@@ -62,6 +62,24 @@ type ClaudeTranslator struct {
 	Model   string       // QUERY_TRANSLATOR_MODEL; "" -> DefaultModel
 	BaseURL string       // "" -> DefaultBaseURL; QUERY_TRANSLATOR_BASE_URL overrides FOR TESTS/proxies
 	Client  *http.Client // "" -> a 15s-timeout client
+
+	// Now is the injected clock the PROMPT's resolved period windows are built
+	// from; nil falls back to time.Now. ⛔ IT IS NOT OPTIONAL DECORATION: a
+	// translator with no clock has to guess what "last quarter" means, which is
+	// D21 on the production path. Tests freeze it so the prompt is reproducible.
+	Now func() time.Time
+	// FYStartMonth is the company financial-year start month (1-12); zero means
+	// the Indian default of April, resolved by query.FYStartMonth so this
+	// package never re-states the default.
+	FYStartMonth int
+}
+
+// now returns the injected clock instant, or time.Now() when Now is nil.
+func (c *ClaudeTranslator) now() time.Time {
+	if c.Now != nil {
+		return c.Now()
+	}
+	return time.Now()
 }
 
 // compile-time assertion that ClaudeTranslator satisfies the query.Translator
@@ -145,7 +163,7 @@ func (c *ClaudeTranslator) ToQuery(ctx context.Context, _ uuid.UUID, nl string) 
 	reqBody := messagesRequest{
 		Model:     c.model(),
 		MaxTokens: 1024,
-		System:    systemPrompt(),
+		System:    systemPrompt(c.now(), c.FYStartMonth),
 		Tools: []toolDef{{
 			Name:        "emit_query",
 			Description: "Emit the single typed query that answers the user's question. Use entity \"\" if the catalog cannot answer it.",

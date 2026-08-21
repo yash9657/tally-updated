@@ -678,3 +678,57 @@ func (s *Service) Preview(q Query) (string, error) {
 	}
 	return sql, nil
 }
+
+// --------------------------------------------------------------------------
+// Resolved period windows — the ONE definition, shared with the LLM prompt.
+// --------------------------------------------------------------------------
+
+// NamedWindow is one qualified period phrase and the inclusive voucher_date
+// window it resolves to for a given clock.
+type NamedWindow struct {
+	Phrase string
+	From   string
+	To     string
+}
+
+// relativePeriodPhrases is the CLOSED, ordered list of qualified period phrases
+// the DSL can express exactly. It is the surface NamedWindows resolves; a phrase
+// absent from it (a count, an unqualified period word) has no window by design.
+var relativePeriodPhrases = []string{
+	"this month", "last month",
+	"this quarter", "last quarter",
+	"this year", "last year",
+}
+
+// NamedWindows resolves every phrase in relativePeriodPhrases against the given
+// clock and financial-year start, BY RUNNING relativeRange ITSELF.
+//
+// ⛔ IT EXISTS SO THE LLM PROMPT CANNOT DRIFT FROM THE PARSER (D21). The
+// real-Claude translator has no clock and no calendar; before this it was left
+// to compute "last quarter" unaided from a prompt whose only worked example
+// carried a hard-coded window, which is D21's silent-wrong-window defect
+// reproduced on the production path. The prompt now carries these resolved
+// dates and instructs the model to copy them verbatim — and because they are
+// produced by the same function FakeTranslator answers with, the two translators
+// cannot name different windows for the same phrase.
+//
+// A phrase that failed to resolve is DROPPED rather than printed with a guessed
+// window; TestNamedWindowsCoversEveryPhrase pins that none ever is.
+func NamedWindows(now func() time.Time, fyStartMonth int) []NamedWindow {
+	f := FakeTranslator{Now: now, FYStartMonth: fyStartMonth}
+	out := make([]NamedWindow, 0, len(relativePeriodPhrases))
+	for _, phrase := range relativePeriodPhrases {
+		dr, err := f.relativeRange(phrase)
+		if err != nil || dr == nil {
+			continue
+		}
+		out = append(out, NamedWindow{Phrase: phrase, From: dr.From, To: dr.To})
+	}
+	return out
+}
+
+// FYStartMonth normalises a company financial-year start month (1-12) to the
+// month the translator will actually use, applying the same Indian default
+// (April) FakeTranslator applies. Exported so the prompt can NAME the month it
+// is resolving against without re-stating the default.
+func FYStartMonth(m int) time.Month { return FakeTranslator{FYStartMonth: m}.fyStartMonth() }
