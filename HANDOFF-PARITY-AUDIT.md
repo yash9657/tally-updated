@@ -445,7 +445,7 @@ the time on the `—` rows first.
 
 | # | Row | Keystrokes | ⛔ ORACLE | Status |
 |---|---|---|---|---|
-| 20 | Stock items + units (masters) | `Alt+C` → Stock Item | the master persists **with its unit** — a blank unit is what broke every e-invoice line | ⛔ 2026-08-07 — **LIES. `Alt+C` renders `Create ledger` everywhere; NO key reaches a stock-item or unit form. NOT FIXED — §7's box** |
+| 20 | Stock items + units (masters) | `Alt+C` → Stock Item | the master persists **with its unit** — a blank unit is what broke every e-invoice line | ✅ **CLOSED (L13) 2026-08-21 — MUTATION-PROVED *AND* DRIVEN.** `Alt+G > Create Unit` / `Create Stock Item` reach `masterKind` "unit"/"stock-item"; a **Kg** item was created from the keyboard and read back from the books as `Kg`, not the silent "Nos". See §7.5 |
 | 21 | Item Invoice (`Ctrl+H`) | `F8`/`F9` → Ctrl+H → Item Invoice | `stock_movement` **qty AND value**; server-derived postings | PREV |
 | 22 | Godowns / batches | key a line with a godown **and** a batch | movement lands on the **right position** — ⛔ see §4 lead 3 (the NULL-godown default) | — |
 | 23 | Stock Summary (qty AND value) | `Alt+G` → Stock Summary | ⛔ **`closing_value`, not just `closing_qty`** — this exact oracle gap shipped once | PREV (qty only) |
@@ -815,7 +815,7 @@ have now been driven end to end in a real browser against real cored.**
 
 ---
 
-## 7.1 ⛔ THE DEFECT REGISTER — 86 DEFECTS, 21 STILL OPEN
+## 7.1 ⛔ THE DEFECT REGISTER — 87 DEFECTS, 20 STILL OPEN
 
 **This is the audit's actual product.** Every row below was found by DRIVING, is traced to file:line, and
 carries a proposed fix in the source material. ⛔ **Do not re-derive these from scratch** — that is the
@@ -865,7 +865,7 @@ WORK"** — not "hard to fix".
 | D33 | 40 | HIGH | Re-opening the Day Book after any drill in the same session makes Enter open a DIFFERENT voucher than the highlighted row — the drill target freezes at one stale id — so Ctrl+P from the alter path prints or refuses the wrong document. | frontend/src/screens/reports/DrillRows.tsx:92-100 (the publish effect is keyed ONLY on [activeKey], so a freshly pushed report fra … | ✅ **FIXED (L7) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D34 | 42 | HIGH | Ctrl+P ignores the F2 period on EVERY report: the print target carries no from/to/as_on (only bank-reconciliation gets a query, and even that one carries ledger_id without a date), the server treats a missing date as "no filter", and the paper is subtitled "For all dates in the books" / "As at the latest date in the books" while … | frontend/src/screens/printTarget.ts:224-230 (the report branch returns { kind:"report", slug, label } with no `query`) and :250-25 … | ✅ **FIXED (L7) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D35 | 42 | HIGH | The TDS / TCS Register advertises "Ctrl+P Print" on its button bar and the key is dead: TDSRegisterScreen imports only useExportAction, never usePrintAction, so Ctrl+P makes no HTTP call and answers the shell's generic "does not apply on this screen" instead of the server's 501 sentence that printTarget.ts deliberately mapped th … | frontend/src/screens/reports/TDSRegisterScreen.tsx:7 and :112 (useExportAction only; no usePrintAction anywhere in the file) vs fr … | ✅ **FIXED (L7) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
-| D36 | 5 | HIGH | There is NO keyboard path to an opening balance, an opening Dr/Cr, a bill-wise opening breakup, or maintain_bill_by_bill on ANY ledger. The Alt+C master-create frame renders exactly two inputs (Name, Under (group)); the MASTER_FIELDS 'details' cursor position has no control behind it; and no screen anywhere calls setLedgerOpenin … | frontend/src/screens/masters/MasterCreateScreen.tsx:66-69 (`await client.createLedger(companyID, { name: n, group_name: p })` — th … | ⛔ OPEN |
+| D36 | 5 | HIGH | There is NO keyboard path to an opening balance, an opening Dr/Cr, a bill-wise opening breakup, or maintain_bill_by_bill on ANY ledger. The Alt+C master-create frame renders exactly two inputs (Name, Under (group)); the MASTER_FIELDS 'details' cursor position has no control behind it; and no screen anywhere calls setLedgerOpenin … | frontend/src/screens/masters/MasterCreateScreen.tsx:66-69 (`await client.createLedger(companyID, { name: n, group_name: p })` — th … | ✅ **FIXED (L13) — MUTATION-PROVED *AND* DRIVEN 2026-08-21.** All four keyed from the keyboard and read back through the OUTSTANDINGS REPORT, the product's own reader of `ledger_opening_bill`. See §7.5 |
 | D37 | 5/30/34/35/37 | HIGH | Past 64 WebAuthn credentials EVERY WRITE in the product becomes permanently impossible on every device: assert/begin returns an unbounded allow_credentials list, Chrome throws RangeError above 64, and the client only fell through to enrolment on NotAllowedError. Reported INDEPENDENTLY BY FIVE AGENTS; it blocked this audit for ~2 … | auth_webauthn.go:181-184 + webauthn/store.go ByUser (ORDER BY created_at, no LIMIT) + auth/webauthn.ts:352-362 | ✅ FIXED (F1) |
 | D38 | 9 | HIGH | The cost-allocation picker cannot be reached from the keyboard at all: on the particulars grid, Tab, Shift+Tab and Enter move nothing, so `alloc:0-add`, the axis/centre selects and the `rest` button are MOUSE-ONLY — while the hint strip on that screen advertises "Enter: Next field" and "Tab / Shift+Tab: Field". | frontend/src/keystroke/useNavMachine.ts:54 | ✅ **FIXED (L12) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D39 | 9 | HIGH | Ctrl+A on a voucher whose cost split is INCOMPLETE on one axis creates every ledger the operator named BEFORE the server refuses, leaving an orphan account in the chart of accounts with no voucher behind it. Reproduced on BOTH grids (single entry and the Journal's double entry). Recon prediction 1 CONFIRMED. | frontend/src/screens/VoucherScreen.tsx:1057 | ✅ **FIXED (L6) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
@@ -876,7 +876,7 @@ WORK"** — not "hard to fix".
 | D44 | 27 | MEDIUM | The Sales/Purchase Order Book flags NOTHING as overdue in its default (no as-at) state, because Overdue() short-circuits to false when asOn is empty — so the view an operator actually opens reports zero late deliveries. | backend/internal/reporting/orderbook.go:159 (the `// asOn == ""` guard at :160) | ✅ **FIXED (L8) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D45 | 29 | MEDIUM | With no period set, the Stock Summary prints "As at today (everything posted)" over a report that is actually unbounded — it includes post-dated vouchers. On 2026-08-07 the screen showed 72,837.15 under that label where the real as-at-today position is 96,168.18. The Balance Sheet has the same behaviour and prints no date at all … | frontend/src/screens/reports/StockSummaryScreen.tsx:110 (`{asOn ? `As at ${asOn}` : "As at today (everything posted)"}`); the Bala … | ✅ **FIXED (L10) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D46 | 29 | MEDIUM | The Balance Sheet's "Profit & Loss A/c (Current Period)" line ignores F2's From date while the P&L honours it, so the same F2 setting yields 1,16,237.15 on one statement and -37,911.02 on the other, and the Balance Sheet's caption still says "(Current Period)". | backend/internal/reporting/reporting.go:975-977 (`openingBS := decimal.Zero; stockAdj := closing.Sub(openingBS); bs.NetProfit = in … | ✅ **FIXED (L10) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
-| D47 | 29 | MEDIUM | A master creation that the server refuses is reported into a screen that has already been unmounted: Ctrl+A on Create ledger returned the operator to the Gateway with no message while POST /ledgers answered 403 and nothing was created. | frontend/src/screens/masters/MasterCreateScreen.tsx:103-120 (onAccept calls onSelect(n) synchronously, then `create(n, p).catch((e … | ⛔ OPEN |
+| D47 | 29 | MEDIUM | A master creation that the server refuses is reported into a screen that has already been unmounted: Ctrl+A on Create ledger returned the operator to the Gateway with no message while POST /ledgers answered 403 and nothing was created. | frontend/src/screens/masters/MasterCreateScreen.tsx:103-120 (onAccept calls onSelect(n) synchronously, then `create(n, p).catch((e … | ✅ **FIXED (L13) — MUTATION-PROVED *AND* DRIVEN 2026-08-21.** Server refusal, client refusal and the inline `Alt+C` refusal all reach the shell's status line after the frame pops. ⚠️ Driving found the refusal was a RAW POSTGRES ERROR; fixed in the same lane. See §7.5 |
 | D48 | 30 | MEDIUM | A FAILED Ctrl+A still writes to the chart of accounts. resolveDraftLedgers ensures the party ledger and every null posting ledger via real POST /ledgers calls BEFORE the voucher POST is attempted, so an accept the server then rejects leaves an orphan master behind — here 'Sundry Creditor' under 'Sundry Creditors'. | frontend/src/screens/vouchers/draftAccept.ts:274-320 (resolveDraftLedgers: ensureLedger for the party, then each posting) then :33 … | ⚠️ PARTIAL (F6) |
 | D49 | 30 | MEDIUM | insightd has no authentication and scopes OCR drafts by the caller-supplied company_id alone, and vite proxies it same-origin at /companies/*. Any company_id lists and fully hydrates another tenant's drafts — supplier names, invoice numbers, dates, posting ledger names, amounts and GST state codes. | insightd/insightd/api/routes_drafts.py:192-219 (list/get keyed only on the path company_id; no auth dependency) + frontend/src/api … | ⛔ OPEN |
 | D50 | 31 | MEDIUM | A cross-tenant question is not refused. Naming another company by name, by UUID, or asking for "every company" / "all tenants" all return 200 with the caller's OWN table and no statement that the named tenant was ignored. The data is genuinely safe — the compiled SQL carries no company predicate and scoping rests on FORCE RLS pl … | backend/internal/query/translate.go:113-183 (keyword switch; no entity/party/company recognition and no refusal branch — the fallt … | ✅ **FIXED (L5) — MUTATION-PROVED *AND* DRIVEN 2026-08-21.** ⚠️ Three arms refuse (every/all-tenants/UUID); a company named by an UNENUMERATED NAME is still ANSWERED, under the unconditional scope caption — by design, see §7.5 |
@@ -916,6 +916,7 @@ WORK"** — not "hard to fix".
 | **D84** | — | MEDIUM | ⛔ **`api/mock.ts` IS LOOSER THAN CORED AND IS A SOURCE OF FALSE GREEN — three lanes hit it.** It accepts an empty ledger name and an unparseable `gst_rate_pct` that `server.go` 400s on, reproduces D44 verbatim, skips D6's party-group and D69's due-date checks, and does not mirror `createLedger`'s opening-breakup refusal. Needs a STRUCTURAL mock-vs-server gate, not three patches | `frontend/src/api/mock.ts` | ⛔ OPEN — registered 2026-08-20 |
 | **D85** | 30 | MEDIUM | ⛔ **The duplicate-supplier-bill guard keys on the POST-REDACTION `voucher_no`, so every PII-shaped invoice number collapses to ONE key and a legitimate second bill is refused.** `assertNotAlreadyOnTheBooks` matches on `body.voucher_no`, which for a bill whose invoice number is a PAN/GSTIN/Aadhaar is the constant token `[PAN REDACTED]` — not the supplier's number. Two DIFFERENT PAN-shaped invoice numbers from one supplier on one date are therefore the same bill as far as this check is concerned, and the second accept is refused. Its own error text advises *"If this is genuinely a second bill, key its own supplier invoice number"* — **which cannot work**, because any number that redacts lands on the same token. Found by driving, not by reading: the L11 probe randomised its PAN to become re-runnable and was still refused. | `frontend/src/screens/vouchers/draftAccept.ts:1526-1545` (`assertNotAlreadyOnTheBooks` — `no = body.voucher_no`, compared to `e.voucher_no`) + `insightd/insightd/pipeline.py:65` (redaction happens BEFORE the value ever reaches the client) | ⛔ OPEN |
 | **D86** | 3 | MEDIUM | ⛔ **Sundry Creditors on the Balance Sheet and the payables Outstandings DISAGREE the moment any voucher is dated after today, and the repo's own gate asserts they agree EXACTLY.** With no `as_on`, Outstandings bounds at today and drops a future-dated bill; the Balance Sheet does not bound and includes it. Measured: one bill dated 2026-08-27 with today at 2026-08-20 gave BS **109950.0000** vs Outstandings **108770.0000** — short by exactly that bill's 1180.0000 — while `?as_on=2026-09-30` returned **109950.0000** and agreed. Nothing refuses a future-dated purchase (cored answers 201), so an operator who post-dates one bill sees the ageing disagree with the balance sheet with no explanation. ⚠️ `verify:demo`'s check passes today only because the seeded demo data happens to carry no future dates — it calls **neither** report with an `as_on`, and its own comment says the two paths "must agree exactly". | `frontend/scripts/verify-demo.mts:154-168` (both calls omit `as_on`) + the default-`as_on` divergence between the Outstandings and Balance Sheet handlers | ⛔ OPEN |
+| **D87** | 5 | MEDIUM | ⛔ **A PARTY CREATED FROM THE KEYBOARD HAS NO GSTIN, NO STATE CODE AND NO REGISTRATION TYPE — and state_code NULL is the exact input that made D19 derive an intra-state bill as IGST.** `masters.CreateLedger` and `CreateLedgerRequest` have accepted all three since they were written; the master-create form renders no field for any of them, so every Sundry Debtor/Creditor keyed by an operator lands with `gstin` NULL, `state_code` NULL and `registration_type` UNKNOWN. Driven in a browser while closing D36: the form's text contains no "GSTIN", no "State code" and no "Registration type", and the ledger it created read back `(null)|(null)|UNKNOWN`. The repo's OWN gate flags it — `verify:demo`'s "Every party's GSTIN prefix == its state_code" and "Every party is registration_type REGULAR" both fail on a keyed party, which is how it was found. ⚠️ NOT FIXED: it is the same class of build as D36 (fields the form does not render) but it carries a judgement D36 did not — whether `state_code` becomes MANDATORY under Sundry Debtors/Creditors, which would refuse creations that succeed today, and how many of the party's ten-odd optional columns (address block, PAN, credit days, bank details) the form should expose alongside it. | `frontend/src/screens/masters/MasterCreateScreen.tsx` (the ledger `Draft` has no gstin/state/registration field; `build`'s `CreateLedgerRequest` therefore sends none) vs `backend/internal/masters/masters.go` `CreateLedger`, which stores all three | ⛔ OPEN |
 
 ### ⛔⛔ §7.2 — THE BACK-DATED CUTOFF TOOK **SIX** DOORS TO CLOSE, AND THAT IS THE SESSION'S MAIN LESSON
 
@@ -990,7 +991,7 @@ the summary.
    which §5 requires be serialised with T9 FIFO/LIFO, and it **MOVES THE BALANCE SHEET**, so it needs a
    deliberate `verify:demo` re-pin. Same call the second pass made about the value-neutral transfer. **Do
    it as part of T9.**
-2. **Row 20's masters gap** — still open, still a BUILD and not a patch. See §7's row-20 box.
+2. ~~**Row 20's masters gap**~~ — ✅ **CLOSED (L13) 2026-08-21.** It was a build, and the build had landed; it had never been driven. See §7.5.
 3. **Row 24's `allow_negative_stock` writer** — the flag is read and honoured by both enforcers and can
    be written by NOTHING (no route, no request field, no setter, no UI). Building the writer is a small
    feature; ⚠️ **what WAS fixed is F11's claim**, which asserted the per-company opt-in already existed.
@@ -1777,6 +1778,127 @@ and the browser probe asked whether it noticed. Both reproduced this register's 
 
 **Gates:** backend **35 packages ok / 0 FAIL** bracketed by a live `psql`; frontend vitest and
 `tsc` clean; `verify:demo` **34/34** on the drive tenant both before and after.
+
+### ✅ L13 — MASTERS. D36, D47, and row 20's masters gap. CLOSED 2026-08-21. **33/33.**
+
+**Probe:** `frontend/scripts/drive-l13-masters.mjs`. **Proof runners:** `/tmp/proofs-l13.py` (6
+unit-level mutations) and `/tmp/proofs-l13-e2e.py` (3 mutations that re-run the browser probe;
+the backend one rebuilds and restarts cored). Binary verified fresh by symbol:
+`this company already has a %s named` = 1.
+
+#### ALL THREE ROWS WERE BUILT AND HAD NEVER BEEN DRIVEN — the L5 pattern again
+
+The register still described the shipped code. `MasterCreateScreen` renders the whole details
+block; `MASTER_GOTO_ENTRIES` routes all five kinds; `onAccept` already returns its outcome to the
+shell. What was missing was the proof, and driving found two things reading the code would not.
+
+#### THE ORACLE IS A SURFACE THE FORM DOES NOT OWN
+
+A master form that reports success from a status line looks identical whether it persisted D36's
+four fields or discarded them — that is `allow_negative_stock`'s shape exactly (D5/D43: accepted at
+201, thrown away). So each field is read back from Postgres AND from the **Outstandings report**,
+which is the product's own reader of `ledger_opening_bill`:
+
+| Keyed on screen | Read back |
+|---|---|
+| opening 5000.0000, side **Dr**, bill-by-bill on | `ledger` row = `5000.0000 \| D \| true` |
+| two references, 3000 + 2000, with due dates | `L13/OB/…/1 D 3000.0000 2026-09-30` and `…/2 D 2000.0000 2026-10-31` |
+| — | Outstandings report: the party at **5000.0000**, both refs by name |
+| — | the Outstandings **screen** names the party |
+
+The **cursor** is asserted, not the field's existence: D36's traced cause was that `MASTER_FIELDS`'
+`"details"` position had no control behind it, so the probe reads `document.activeElement`'s testid
+after Enter. A form with the fields and no cursor is the half-built state the row describes.
+
+**Row 20** is driven on its own words — *"a Kg item is impossible"*. `Alt+G > Create Unit` and
+`> Create Stock Item` open the frames, and the item is created **in Kg by name**, read back from
+`stock_item ⋈ unit` as `Kg`, not the silent "Nos" the old empty picker produced.
+
+**D47** is driven on all three refusal paths: the SERVER's (a duplicate name), the CLIENT's (a
+breakup that does not add up, refused before any request), and the INLINE `Alt+C`-from-a-voucher
+path — which additionally has to warn that the voucher field now names a master that does not
+exist. Each is asserted on the shell's `status-line`, which survives the frame pop, together with
+the fact that the frame really did pop (else a screen-local message would have been enough).
+
+#### ⛔ FOUND BY DRIVING, FIXED IN THE LANE: the refusal was a Postgres error
+
+D47's fix delivered the refusal. What it delivered was:
+
+```
+Could not create ledger "Acme": masters: insert ledger: ERROR: duplicate key value
+violates unique constraint "ledger_company_id_name_key" (SQLSTATE 23505)
+```
+
+A refusal an accountant cannot read is barely better than the silence D47 records, and it hands
+out the schema's constraint names. All five kinds the form can build now map their name collision
+through `nameTaken` to `masters.MasterNameTaken` — a typed error whose `Is` matches the
+`ErrMasterNameTaken` sentinel, so `writeMastersError` keeps ONE branch (422) instead of five, and
+whose `Error()` is the single sentence *"masters: this company already has a ledger named …"*. The
+test asserts the sentence AND asserts `SQLSTATE` / `unique constraint` / `duplicate key` are gone,
+so a friendly prefix on the pg error would still fail it. A bare 23505 test would have been wrong:
+these tables also carry company-scope unique keys, and a violation of one of those is a bug, not a
+name collision — the constraint is named explicitly, exactly as `isUniqueViolationOn`'s own header
+requires.
+
+#### ⛔ FOUND BY DRIVING, REGISTERED AS **D87**, NOT FIXED
+
+The form can key an opening balance now and still cannot key a **party's GSTIN, state code or
+registration type** — all three of which `CreateLedger` has stored since it was written. Every
+party keyed from the keyboard therefore lands with `state_code` NULL, which is the exact input that
+made D19 derive an intra-state bill as IGST. `verify:demo`'s own party checks fail on it, which is
+how it surfaced. Left open because the fix carries a judgement D36's did not: whether `state_code`
+becomes MANDATORY under Sundry Debtors/Creditors (refusing creations that succeed today), and how
+much of the party master the form should expose.
+
+#### ⛔ THE PROBE HAD TO LEARN GOTCHA #4 THE HARD WAY
+
+A 5000.0000 opening **Dr** keyed on one ledger is a ONE-SIDED opening. After three runs the Trial
+Balance was 15000.0000 out and `verify:demo` read **29/34** — Trial Balance, Balance Sheet, the
+month-end balance check, and both party checks (the new debtors have no GSTIN, i.e. D87). None of
+that is a product defect: Tally itself carries a *difference in opening balances* until every
+opening is keyed. It is residue, and to the next lane it reads as a broken Balance Sheet.
+
+Masters cannot be deleted from the keyboard, so the probe now **tears itself down**: after every
+assertion has read the books back, it removes exactly the rows it created, by name, and then
+asserts the Trial Balance **reports itself `balanced`** again. That last assertion is what gotcha #4
+should always have been — a probe that checks its own residue instead of a handoff note asking the
+next session to remember.
+
+#### THE MUTATIONS — 6 unit-level, all RED
+
+| # | Mutation | Caught by |
+|---|---|---|
+| M1 | the ledger request drops the four opening fields (form unchanged) | `MasterCreateScreen.test.tsx` ×2 |
+| M2 | the `"details"` cursor has no control behind it | `…the 'details' cursor position actually LANDS on a control` |
+| M3 | an unbalanced opening breakup is accepted | `…a breakup that does not ADD UP is refused, and NOTHING is sent` |
+| M4 | Create Stock Item / Create Unit leave the Go To list | `masterGoto.test.ts` ×3 + `MasterCreateScreen.test.tsx` |
+| M5 | `onAccept` stops returning its outcome | 5 tests, incl. both D47 status-line tests |
+| M6 | the duplicate refusal is a Postgres error again | `TestADuplicateMasterNameIsARefusalTheOperatorCanRead` |
+
+#### AND 3 AGAINST THE PROBE — RE-DRIVEN LIVE
+
+| # | Mutation | What the PROBE saw |
+|---|---|---|
+| E1 | the request drops the opening fields | 8 red. `ledger` row `0.0000\|D\|false`, **no opening bills**, the party **absent from Outstandings** — while the screen still showed every field and still reported success |
+| E2 | the two kinds leave Go To | the probe could not open the unit frame at all |
+| E3 | the duplicate refusal reverts to raw pg | the "it is a SENTENCE" arm went red; **"the refusal reaches the status line" stayed GREEN** — the two assertions really do measure different things |
+
+⚠️ E2's mutation makes the probe **crash before its own tally** (it types into a frame that never
+opened) and therefore before its teardown, so `/tmp/proofs-l13-e2e.py` scrubs `L13 %` masters after
+every case. A proof runner that mutates a probe with side effects needs its own cleanup.
+
+#### TRAPS THIS LANE ADDS
+
+1. ⛔ **`psql -tAc` RENDERS A BOOLEAN AS `true`/`false`, NOT `t`/`f`.** (`t`/`f` is the *aligned*
+   table format.) The first run failed on its own expectation while the product was correct —
+   gotcha #2, once more.
+2. **A frontend mutation needs no rebuild** (vite serves from source) but **does** need a beat for
+   HMR before the probe launches; a Go mutation needs a rebuild AND a restart.
+3. **A one-sided opening balance unbalances the tenant.** Any probe keying an opening must either
+   key its contra or remove what it made.
+
+**Gates:** backend **35 packages ok / 0 FAIL**, frontend vitest and `tsc` clean, `verify:demo`
+**34/34** before and after the drive.
 
 ## 8. RULES THAT MUST NOT BE BROKEN DURING THIS WORK
 
