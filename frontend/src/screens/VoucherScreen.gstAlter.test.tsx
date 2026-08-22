@@ -436,3 +436,118 @@ describe("⛔ D82: the HSN refusal on an ALTER — working as intended, pinned",
     await waitFor(() => expect(spies.alterPurchaseVoucher).toHaveBeenCalledTimes(1));
   });
 });
+
+/**
+ * ===========================================================================
+ * ⛔⛔ REGISTER ROW D89 — THE SEQUENCE THE D82 SUITE ABOVE NEVER PRESSED:
+ * **CTRL+A TWICE.**
+ * ===========================================================================
+ *
+ * Every test in the D82 block above presses Ctrl+A exactly ONCE. One of them
+ * proves the refusal reaches the operator; another proves that keying the code
+ * lets the alter through. Neither does BOTH, in one frame, in the order an
+ * operator actually meets them — and that gap is the whole defect:
+ *
+ *   Ctrl+A -> refused CLIENT-SIDE (nothing sent) -> key the HSN the refusal
+ *   asked for -> Ctrl+A -> **postSalesVoucher**, a SECOND invoice on the books,
+ *   status line "Saved", and the original's `hsn` still empty.
+ *
+ * `navMachine`'s `accept` reducer replaced the alter frame with a fresh CREATE
+ * frame on every Ctrl+A — it is pure, so it cannot know the write was refused —
+ * which dropped the loaded `voucher_id` that routes the PUT while the form kept
+ * the loaded voucher's values on screen. See the D89 block in
+ * `keystroke/phase1.test.ts` for the reducer half and the reasoning.
+ *
+ * ⛔ THIS IS THE LESSON, NOT JUST THE FIX. The D82 suite went green on its
+ * first run, and it was green *through* this defect, because all three of its
+ * tests share one shape: a single accept on a freshly drilled frame. Found by
+ * DRIVING it in a browser (L14), which is the only place the second Ctrl+A ever
+ * got pressed.
+ */
+describe("⛔ D89: the refusal's own remedy must not mint a second invoice", () => {
+  const statusText = () =>
+    screen.getAllByRole("status").map((e) => e.textContent ?? "").join(" | ");
+
+  async function seedBlankHsnInvoice(base: CoredClient) {
+    return await base.postSalesVoucher("co-1", {
+      voucher_date: "2026-06-01",
+      narration: "legacy invoice, imported without an HSN",
+      party: "Acme Traders",
+      postings: [],
+      gst: {
+        place_of_supply_state_code: "29",
+        reverse_charge: false,
+        lines: [{ taxable_value: "10000.0000", gst_rate_pct: "18", hsn: "" }],
+      },
+    } as VoucherRequest);
+  }
+
+  it("⛔ refuse, key the code the refusal asked for, accept: it ALTERS — it does not POST a twin", async () => {
+    const base = createMockClient({ seed: false });
+    await seedParty(base);
+    const { client, spies } = spyClient(base);
+    const posted = await seedBlankHsnInvoice(base);
+    const postsBefore = spies.postSalesVoucher!.mock.calls.length;
+
+    renderShell(client);
+    const app = screen.getByRole("application");
+    await drill(app, posted.voucher_no);
+    await waitFor(() => expect(spies.getVoucher).toHaveBeenCalled());
+
+    // ---- 1. the refusal, exactly as D82 pins it
+    fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    await waitFor(() => expect(statusText()).toMatch(/HSN \/ SAC is required/));
+    expect(spies.alterSalesVoucher).not.toHaveBeenCalled();
+
+    // ---- 2. ⛔ THE FRAME MUST STILL BE THE ONE IT WAS ALTERING. This is the
+    // assertion the defect failed, and it is checked on the SCREEN's own
+    // heading rather than on the machine, because the heading is the only thing
+    // that told an operator anything: the form kept showing the loaded
+    // voucher's 10,000, so a frame that had silently become a create was
+    // indistinguishable from the alter it replaced.
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toMatch(
+      /\(Alteration\)/,
+    );
+
+    // ---- 3. the remedy the refusal prescribed
+    const hsn = screen.getByTestId("gst-hsn") as HTMLInputElement;
+    fireEvent.change(hsn, { target: { value: "7326" } });
+    fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+
+    // ---- 4. ⛔ IT WENT THROUGH AS AN ALTER, AND NOTHING WAS CREATED.
+    await waitFor(() =>
+      expect(spies.alterSalesVoucher).toHaveBeenCalledTimes(1),
+    );
+    expect(spies.postSalesVoucher!.mock.calls.length).toBe(postsBefore);
+    expect(spies.alterSalesVoucher!.mock.calls[0]![1]).toBe(posted.voucher_id);
+
+    // ---- 5. ⛔ THE BOOKS. The ORIGINAL invoice carries the code now — read
+    // back through the store, not off the screen, because the screen was the
+    // thing that said "Saved" while the books held two invoices and neither had
+    // an HSN.
+    const kept = await base.getVoucher("co-1", posted.voucher_id);
+    expect(kept.gst_lines?.[0]?.hsn).toBe("7326");
+    expect(kept.gst_lines?.[0]?.gst_rate_pct).toBe("18.0000");
+  });
+
+  it("⛔ CONTROL: two accepts on a CREATE frame really do key two invoices", async () => {
+    // The fix must not turn bulk entry into a re-save loop. Tally's F8 is
+    // key-invoice-Ctrl+A-key-the-next, and a guard written as "never accept the
+    // same frame twice" would satisfy the test above and break exactly that.
+    const base = createMockClient({ seed: false });
+    await seedParty(base);
+    const { client, spies } = spyClient(base);
+    renderShell(client);
+    const app = screen.getByRole("application");
+
+    await keySale(app, "10000", "18", "7326");
+    await waitFor(() =>
+      expect(spies.postSalesVoucher).toHaveBeenCalledTimes(1),
+    );
+    await keySale(app, "20000", "18", "7326");
+    await waitFor(() =>
+      expect(spies.postSalesVoucher).toHaveBeenCalledTimes(2),
+    );
+    expect(spies.alterSalesVoucher).not.toHaveBeenCalled();
+  });
+});

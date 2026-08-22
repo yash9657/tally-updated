@@ -1209,6 +1209,33 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
         return { stack };
       }
       // Ctrl+A accepts the voucher and re-opens a fresh form for bulk entry.
+      //
+      // ⛔⛔ ONLY A **CREATE** FRAME RE-OPENS FRESH. AN **ALTER** FRAME KEEPS ITS
+      // IDENTITY, AND THAT IS A DUPLICATE-INVOICE GUARD, NOT A NAVIGATION
+      // PREFERENCE (D89, found by the D82 drive).
+      //
+      // This reducer is pure, so it cannot know whether the write it is
+      // reacting to SUCCEEDED — the screen's onAccept fires first (the
+      // ScreenActions bridge) and its request resolves long after. Replacing an
+      // alter frame with a fresh `create` frame therefore dropped the loaded
+      // `voucher_id` on a REFUSED alter too, while the form kept the loaded
+      // voucher's values on screen and nothing said the frame had changed
+      // class. Driven in a browser: a legacy sales invoice with no HSN was
+      // drilled from the Day Book, Ctrl+A was refused CLIENT-SIDE by
+      // `gstRefusal` (nothing sent), the operator keyed the HSN the refusal
+      // asked for, pressed Ctrl+A again — and the screen POSTed a **new**
+      // voucher (201), said "Saved", and left the original invoice's `hsn`
+      // empty. One tax invoice in, two on the books, and the remedy the refusal
+      // itself prescribed is what minted the second.
+      //
+      // Staying put is what `delete` below already does for an alter frame
+      // (it pops, because the voucher it was altering is gone). Here the
+      // voucher still exists, so the frame that names it must survive: a second
+      // Ctrl+A re-PUTs the same `voucher_id` (harmless) instead of POSTing a
+      // twin, and Esc returns to the report the operator drilled from.
+      if (active.screen === "voucher" && active.voucherMode === "alter") {
+        return {};
+      }
       if (active.screen === "voucher") {
         const type = active.voucherType ?? DEFAULT_LAST_VOUCHER;
         const fresh = newVoucherFrame(
