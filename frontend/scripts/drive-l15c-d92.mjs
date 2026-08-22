@@ -19,11 +19,38 @@
  * create-and-return. An arm that only proved "the frame stays" would pass just
  * as well against a build that had broken the accept path outright.
  *
+ * ⛔⛔ IT REAPS THE PARTY IT CREATES, AND THAT IS NOT TIDINESS — IT IS D91.
+ * This probe must actually CREATE a ledger (the success control is the arm that
+ * matters), and it must do it in the DEMO tenant, because the shell will not
+ * open on a company `openApp` cannot assert. A party left behind has no
+ * `state_code`, no GSTIN and no bill-by-bill, so it fails three of
+ * `verify:demo`'s party checks BY CONSTRUCTION — which is the exact defect D91
+ * was registered and closed for, one lane earlier. The first run of this file
+ * did leave one, and `verify:demo` went 34/34 -> 31/34.
+ *
+ * cored has no `DELETE /ledgers`, so the reap is raw SQL. Safe here and nowhere
+ * near general: this ledger is seconds old and has never been posted to, so
+ * nothing references it. ⛔ Do NOT copy this into a probe whose master HAS
+ * postings — deleting one of those silently rewrites the books.
+ *
  * RUN:  CO="$(cat /tmp/drive-company-id)" node frontend/scripts/drive-l15c-d92.mjs
  */
+import { execFileSync } from "node:child_process";
+
 import { openApp, rec, summary } from "./audit-harness.mjs";
 
-const app = await openApp({ company: process.env.CO, headless: true });
+const CO = process.env.CO;
+if (!CO) throw new Error("drive-l15c-d92: CO is required (the seeded company id)");
+
+/** The party this probe creates. Named so the reap below cannot match anything else. */
+const PARTY = "D92 Probe Party";
+
+const psql = (sql) =>
+  execFileSync("psql", [
+    "-h", "localhost", "-p", "5433", "-U", "postgres", "-d", "tally", "-tAc", sql,
+  ], { env: { ...process.env, PGPASSWORD: "postgres" }, encoding: "utf8" }).trim();
+
+const app = await openApp({ company: CO, headless: true });
 const { page, press, altMac, toGateway } = app;
 
 const openCreateLedger = async () => {
@@ -109,6 +136,29 @@ try {
   );
 } finally {
   await app.browser.close();
+
+  // ⛔ THE REAP, AND IT IS ASSERTED RATHER THAN ASSUMED. A cleanup that
+  // silently failed would leave the same landmine while the run looked clean —
+  // which is how D91 accumulated across three sessions in the first place.
+  const posted = psql(
+    `SELECT count(*) FROM posting p JOIN ledger l ON l.id = p.ledger_id
+      WHERE l.company_id = '${CO}' AND l.name = '${PARTY}'`,
+  );
+  if (posted !== "0") {
+    throw new Error(
+      `refusing to reap "${PARTY}": it has ${posted} posting(s). Deleting a ` +
+        `master that has been posted to rewrites the books.`,
+    );
+  }
+  psql(`DELETE FROM ledger WHERE company_id = '${CO}' AND name = '${PARTY}'`);
+  const left = psql(
+    `SELECT count(*) FROM ledger WHERE company_id = '${CO}' AND name = '${PARTY}'`,
+  );
+  rec(
+    "cleanup (D91): the probe's own party is gone from the demo tenant",
+    left === "0",
+    `${left} left — a party with no state_code fails verify:demo's checks by construction`,
+  );
 }
 
 summary();
