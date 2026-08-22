@@ -2592,3 +2592,56 @@ damage accumulates one run at a time and the next session will read it as a regr
 it happens to be working on. ⚠️ **Either point `contract:cored` at its own throwaway tenant, or have
 it reap what it creates** — cored has no `DELETE /ledgers`, so it is the former. Registered below as
 **D91**.
+
+### ✅ L15b — D91, the gate that broke the other gate. CLOSED 2026-08-22. **34/34 → 11/11 → 34/34.**
+
+Found while measuring L15's gates, by **re-seeding instead of assuming**. `verify:demo` read 27/34 on
+the tenant seeded 2026-08-21 and 34/34 on a fresh one, so the failures were residue — and six of the
+seven named `CT Control *` / `CT Dup *` parties, which are the **D84 contract runner's own fixtures**.
+
+`contract-mock-vs-cored.mts` took its company from `CO`, and every session hands it the DEMO company.
+Its fixture parties have no `state_code`, no GSTIN and no bill-by-bill, so they fail three of
+`verify-demo.mts:357-375`'s party checks **by construction**, and cored has no `DELETE /ledgers`.
+So one gate permanently broke the other on the same tenant, a run at a time.
+
+⛔ **THE COST WAS NEVER THE FAILING CHECK — IT WAS MISATTRIBUTION.** A session that did not re-seed
+read seven failures, two of them MONEY failures, as a regression in whatever lane it was in.
+
+**THE FIX:** the runner creates its own tenant through the product's own route. That is all it ever
+needed — `seed_company_defaults` gives it the 28 groups (so `Sundry Debtors` resolves) and the `Nos`
+unit (so the two stock-item rows have one), which is the whole fixture surface the corpus touches;
+nothing here reads a figure. The subject flips from `browser-dev-owner` to a fresh random one, which
+**reverses what the file used to say and is right because what it does changed**: minting for the
+seeded owner was correct while the script was HANDED a tenant, and is wrong now that it CREATES one.
+
+#### THE ORACLE — one tenant, one sitting, three commands
+```
+verify:demo      34/34
+contract:cored   11/11   own tenant "CT Contract fkji8"
+verify:demo      34/34   <- the point
+```
+And the fixtures landed where they should: **2 CT ledgers in the throwaway tenant, 0 in the demo one.**
+
+#### THE MUTATION PROOF — and it took TWO attempts, which is the finding
+
+| # | Mutation | Predicted | Observed |
+|---|---|---|---|
+| M7a | `companyID` reads `CO` again (company only) | reproduce the poisoning | ❌ **it could not** — every row `403 not a member of this company` |
+| M7 | `CO` **and** the `browser-dev-owner` subject restored | 34/34 → **31/34**, exactly the three PARTY checks, **not** the money ones | ✅ exactly that |
+
+⛔ **M7a IS THE MORE INTERESTING RESULT AND IT WAS NOT PREDICTED.** Changing the SUBJECT gave the fix
+a **second, independent layer**: even if a future caller re-points this gate at a tenant by setting
+`CO`, the fresh identity is not a member of it and every row fails loudly with `403` instead of
+quietly writing fixtures into somebody's books. The company change makes the poisoning stop; the
+subject change makes re-introducing it **impossible to do silently**. That was a side effect of
+correcting the identity, not a design goal, and it is worth keeping in mind for the next gate that
+borrows a tenant.
+
+M7 also confirmed the **diagnosis**, not just the fix: it moved exactly the three party checks and
+left the two money checks (BS vs Outstandings, GSTR-1 vs Domestic Sales) alone. Those were a
+**different** residue — L14's deliberately-left probe fixtures — and this row never claimed them.
+
+⚠️ **THE RUNNER STILL LEAVES ITS COMPANY BEHIND**, and that is the deliberate trade, stated rather
+than discovered: no company-delete route, and `company` has 14 non-cascading FKs, so reaping needs a
+script that does not exist. One more unreaped tenant among 112+ costs a little `GET /v1/me` latency;
+poisoning the demo tenant cost a lane. They are named `CT Contract <stamp>` so a reaper can find them.
