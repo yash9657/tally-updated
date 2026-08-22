@@ -90,8 +90,8 @@ Cost-ordered, continuing the previous driver's reasoning. **D5+D43 is next.**
 | # | Row(s) | Sev | Why here |
 |---|---|---|---|
 | 1 | **D5 + D43** | HIGH | **ONE commit** — D43 is D5's symptom and disappears when the field is honoured. First because D84's gate now exists to measure the mock arm honestly. |
-| 2 | **D87** | MED | ⛔ needs a **scope decision from the user** before code is written — ask early, it blocks nothing else |
-| 3 | **D90** | MED | ⛔ needs a **decision** too, and it is the cheapest row in the wave once decided. Ask in the same breath as D87. |
+| 2 | **D87** | MED | ✅ scope DECIDED 2026-08-22 (§6.2): the three + PAN + credit days. Unblocked. |
+| 3 | **D90** | MED | ✅ DECIDED 2026-08-22 (§6.3): refuse now. Cheapest row in the wave. |
 | 4 | **D22 + D52** | HIGH | **ONE commit** — a door without the sentence, or the sentence without the door, is each worse than today |
 | 5 | **D81** | MED | after the VoucherScreen churn from 1 and 4 settles |
 | 6 | **D49** | MED | largest scope of the wave. **Before D85**, so D85 lands on the final transport |
@@ -101,7 +101,8 @@ Cost-ordered, continuing the previous driver's reasoning. **D5+D43 is next.**
 | 10 | **D83** | LOW | ⛔ the register's proposed index **WILL NOT WORK.** Last |
 
 **Must be ONE commit:** D5+D43, D22+D52. **Must be ALONE:** D85, D8, D86, D83.
-**Must be ASKED before code:** D87, D90 (§6).
+~~**Must be ASKED before code:** D87, D90~~ — ✅ **both answered 2026-08-22, see §6. Nothing in the wave is
+waiting on the user any more.**
 
 ---
 
@@ -130,7 +131,8 @@ needs hand-checking.
 MANDATORY under Sundry Debtors/Creditors**. The server has accepted all three since it was written;
 the form renders none, so every keyed party lands `(null)|(null)|UNREGISTERED` — and `state_code` NULL
 is the exact input that made D19 derive an intra-state bill as IGST.
-⛔ **ASK THE USER FIRST (§6.2):** how many of the party's ten-odd other optional columns.
+✅ **ANSWERED (§6.2): the three + `pan` + `credit_days`. FIVE fields, one mandatory.** Address block,
+ITC eligibility, blocked clause and bank details stay out.
 ⚠️ **This REFUSES creations that succeed today, on purpose**, and the refusal must fire
 **CLIENT-SIDE** — the server creates before it can refuse.
 ⛔ **TWO DOORS:** the masters screen AND `Alt+C` from a voucher field. **Drive both.**
@@ -147,9 +149,9 @@ on half the history.
 ⚠️ **The mock does the OPPOSITE** (create-or-select returns the existing id), so no vitest can see
 this. It is recorded as a **declared divergence** in `corpora/mock-vs-cored/masters.json` rather than
 mirrored — mirroring cored here would spread the more suspicious of the two behaviours.
-⛔ **ASK THE USER FIRST (§6.3).** Tally allows same-named items under different stock GROUPS, and this
-build has no stock groups yet (that is feature T10), so "refuse duplicates" may be right now and wrong
-after T10.
+✅ **ANSWERED (§6.3): REFUSE NOW, naming the existing item.** The T10 relaxation
+(`UNIQUE (company_id, name)` → `UNIQUE (company_id, group_id, name)`) is a WIDENING migration that
+cannot fail on existing data — cheap later; un-splitting half-costed valuation history is not.
 **ORACLE:** on the wire, two items named the same → one succeeds, one is refused naming the existing
 item; and the item picker shows ONE row. ⚠️ Then the corpus's `deliberate_divergence` entry must be
 **deleted and replaced by a real row**, or the gate still certifies the old behaviour.
@@ -393,15 +395,35 @@ build.
 
 ---
 
-## 6. QUESTIONS THAT NEED THE USER — ASK ALL FOUR IN THE FIRST MESSAGE
+## 6. QUESTIONS THAT NEEDED THE USER — ✅ ALL FOUR ANSWERED 2026-08-22 (L15). DO NOT RE-ASK.
 
-1. **T32:** a real Tally XML export from a live install. ⛔ **THE COMMERCIAL BLOCKER**, and nothing in
-   the repo substitutes for it. It has never met a real Tally file.
-2. **D87's scope:** how many of the party's optional columns (address block, PAN, credit days, bank
-   details) the ledger form should carry alongside the three the decision makes near-mandatory.
-3. **D90:** should a duplicate STOCK ITEM name be refused? Tally allows same-named items under
-   different stock GROUPS, and this build has none yet (feature T10) — so refusing may be right now and
-   wrong later. Ask whether to refuse now, or to defer D90 into T10.
+1. **T32:** ✅ **ANSWERED — the user has no real Tally file on hand and asked whether one can be
+   obtained.** Searched 2026-08-22. **There is no public corpus of genuine full exports from a live
+   install.** What GitHub carries (`TallyConnector`, `nodejs-tally-integration`,
+   `PHP-to-tally-integration`, `tally-prime-api-docs`) is **hand-authored REQUEST envelopes** — the
+   import direction, written by integrators, not dumped by Tally. Those are worth reading for tag
+   spelling and **worthless as a fidelity oracle**, because they were never produced by the program
+   whose output T32 must parse. ⛔ **Do not let one into the repo as a fixture** — it would imply
+   coverage that does not exist, which is the exact failure §0 exists to prevent.
+   ✅ **THE REAL PATH: TallyPrime Educational is a free, unlicensed, indefinite download, and it
+   exports XML.** Install it, key a handful of masters and vouchers, `Export > Masters` and
+   `Export > Day Book` in XML — that is a genuine export from a live install, legally obtained,
+   no licence. ⚠️ **Its one distortion to know before building fixtures on it:** in Educational mode
+   voucher DATES are restricted to the **1st, 2nd and 31st** of a month. Masters are unaffected;
+   a voucher corpus built from it will have a degenerate date distribution, so **do not pin
+   date-ordering or period-boundary behaviour on it** — build those from cored's own fixtures and use
+   the Tally file for SHAPE. Also: Educational cannot print, and stamps a watermark; irrelevant to XML.
+   ⛔ **STILL THE COMMERCIAL BLOCKER until a file actually exists in the repo.** The user asked; this
+   is the answer; **nobody has done the install yet.** Raise it again with this paragraph attached,
+   not as an open question.
+2. **D87's scope:** ✅ **ANSWERED: the three + PAN + CREDIT DAYS.** Five new fields on the ledger
+   form, one of them (`state_code`) mandatory under party groups. Address block, ITC eligibility,
+   blocked clause and bank details stay OUT. Recorded as an amendment in
+   `HANDOFF-CLOSE-THE-REGISTER.md` §4 D87 — that section is the authority; this line is the pointer.
+3. **D90:** ✅ **ANSWERED: REFUSE NOW**, naming the existing item; do NOT defer into T10. The T10
+   relaxation is `UNIQUE (company_id, name)` → `UNIQUE (company_id, group_id, name)`, a **widening**
+   migration that cannot fail on existing data — cheap later, whereas un-splitting a year of
+   half-costed valuation history is not. Recorded in `HANDOFF-CLOSE-THE-REGISTER.md` §4 D90.
 4. **D50's fourth arm** stays answered-with-disclosure. Raise again only if the user asks for a
    refusal — the only honest way puts the caller's own party names in the prompt, reversing the current
    safety posture.

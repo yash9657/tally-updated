@@ -308,8 +308,13 @@ the keyboard reads back `(null)|(null)|UNKNOWN` — the exact input that made D1
 intra-state bill as IGST — and `verify:demo`'s party checks fail on it.
 
 **Add the three fields to the ledger master form, and REFUSE a create under Sundry Debtors /
-Sundry Creditors with no state code.** The address block, PAN, credit days and bank details stay
-out for now (`CreateLedgerRequest` carries them; the form does not have to).
+Sundry Creditors with no state code.** ~~The address block, PAN, credit days and bank details stay
+out for now~~ — **AMENDED BY THE USER 2026-08-22 (L15): the form also carries PAN and CREDIT DAYS**,
+both optional. PAN because it is statutory identity and sits beside GSTIN; credit days because it
+drives Outstandings ageing, which is blind on every hand-keyed party without it. **The address
+block, ITC eligibility, blocked clause and bank details STILL stay out** (`CreateLedgerRequest`
+carries all of them; the form does not have to). So the form's scope is exactly FIVE new fields:
+`gstin`, `state_code`, `registration_type`, `pan`, `credit_days` — one of them mandatory.
 
 ⚠️ **THIS REFUSES CREATIONS THAT SUCCEED TODAY, deliberately and on the user's instruction.** Two
 consequences to handle rather than discover:
@@ -319,6 +324,23 @@ consequences to handle rather than discover:
   code too. That is the D19 path and is the point — but it means the inline create can now be
   refused where it never was, and D47's disclosure (the field names a master that does not exist)
   is what carries that. Drive both doors.
+
+### D90 — ✅ DECIDED 2026-08-22 (L15): REFUSE a duplicate STOCK ITEM name **NOW**, naming the existing item
+
+The user was asked whether to refuse now or defer into T10 (stock groups), given that Tally allows
+same-named items under different stock GROUPS and this build has none. **They chose to refuse now.**
+
+**The reasoning that was put to them and accepted:** with no stock groups, a duplicate name is a pure
+data defect — two indistinguishable rows in every item picker, and one item's movements and valuation
+split across two masters, each weighted-average costed on half the history. The relaxation T10 needs
+later is `UNIQUE (company_id, name)` → `UNIQUE (company_id, group_id, name)`, which is a **widening**
+migration: it admits rows the narrow constraint refused and can never fail on existing data. Widening
+later is cheap; de-duplicating a year of split valuation history is not.
+
+⚠️ **The mock does the OPPOSITE today** (create-or-select returns the existing id), and that is
+recorded as a `deliberate_divergence` in `corpora/mock-vs-cored/masters.json`. When cored refuses,
+**that entry must be DELETED and replaced by a real expectation row**, or the D84 gate keeps
+certifying the behaviour this decision overturns.
 
 ## 5. WAVE 4 — the structural ones
 
