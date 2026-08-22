@@ -3,7 +3,7 @@
 Written 2026-08-22, after L4 (TDS/TCS) closed the whole lane and a 13-agent read-only fan-out
 re-verified every remaining row against the code as it is.
 
-**88 defects registered. 73 closed. 15 open.** This file is the DRIVER: what to do next, in what
+**89 defects registered. 75 closed. 14 open.** (D82 closed and D89 found+fixed on 2026-08-22.) This file is the DRIVER: what to do next, in what
 order, what proves it, and what will go wrong. It is meant to be executed top to bottom.
 
 ## THE THREE FILES, AND WHICH ONE WINS
@@ -60,12 +60,12 @@ leaving the 200, the success notice and the stored rows intact.
 
 ## 1. THE ORDER
 
-Cost-ordered, with a reason per position. Positions 1–2 are done.
+Cost-ordered, with a reason per position. **Positions 1–2 are done; D77 (position 3) is next.**
 
 | # | Row(s) | State | Why here |
 |---|---|---|---|
 | ~~1~~ | ~~D72~~ | ✅ **CLOSED** | was stale — the money half was already fixed and gated |
-| 2 | **D82** | ⚠️ **PINNED, DRIVE UNFINISHED** | test-only. Finish the drive and it closes |
+| ~~2~~ | ~~D82~~ | ✅ **CLOSED 2026-08-22, 12/12** | working-as-intended per the user. ⛔ **its drive found D89 — a refused alter minted a DUPLICATE invoice — now fixed** |
 | 3 | **D77** | open | three tokens, three sites, no number moves. **Must precede D8** — both are replay-order determinism |
 | 4 | **D80** | open | one arm in one reducer. **Before D22/D52** — Alt+G is their oracle surface, so make the picker honest first |
 | 5 | **D84** | open | ⛔ **the false-green root.** Every vitest after it is measured through the mock. **ALONE.** |
@@ -89,13 +89,19 @@ Cost-ordered, with a reason per position. Positions 1–2 are done.
 jump to the line: HEAD moved three times during that recon and rows 6–9 will churn
 `VoucherScreen.tsx` further.
 
-### 2 · D82 — the HSN refusal on the ALTER path · RECON §3.2
+### ~~2 · D82 — the HSN refusal on the ALTER path~~ · ✅ CLOSED 2026-08-22 · RECON §3.2
 **✅ WORKING AS INTENDED — the user's decision, 2026-08-21.** `HSN_REQUIRED_CLASSES` stays exactly
 as it is. **Done:** three tests pin the SENTENCE (`VoucherScreen.gstAlter.test.tsx`), mutation-proved
 — disabling the condition turns this pin AND `masterGate.test.tsx`'s D60 arm red.
-**Left:** `frontend/scripts/drive-l14-cheap.mjs` exists and its D82 arm reached the refusal before
-the machine fell over. Finish it, then mark §7.1 working-as-intended **naming the user's decision**,
-so a later session cannot quietly relax a refusal it thinks nobody wanted.
+**✅ DONE 2026-08-22:** `drive-l14-cheap.mjs` runs **12/12**, §7.1 is marked working-as-intended
+naming the user's decision, and §7.5 carries the lane.
+⛔⛔ **AND THE DRIVE FOUND D89, A HIGH-SEVERITY DUPLICATE-INVOICE DEFECT — NOW FIXED.** Pressing
+Ctrl+A **twice** — refused, then again after keying the code the refusal asked for — POSTed a
+**second invoice** (201, "Saved") and left the original's `hsn` empty. `navMachine`'s `accept`
+reducer replaced any voucher frame with a fresh `create` frame, so a refused alter silently became a
+create. Fixed: an alter frame stays put. ⛔ **THE LESSON FOR EVERY ROW BELOW: no test in this repo
+had ever pressed the accept key twice on one frame.** All three D82 pins press it once. Ask what a
+second press does.
 **ORACLE:** on the alter the status line carries *"Rule 46(g)"* **and** *"cannot be printed"* while
 the HSN field sits empty and keyable **on the same screen**; key the code, Ctrl+A, it goes through;
 `alterSalesVoucher` was never called on the refused attempt.
@@ -291,7 +297,7 @@ CO="$(cat /tmp/drive-company-id)" node frontend/scripts/drive-l4-tds.mjs      # 
 ```
 
 ### Gates, measured at this handoff
-`pnpm vitest run` **1394 / 85 files** · `pnpm exec tsc --noEmit` **clean** (a SEPARATE gate) ·
+`pnpm vitest run` **1399 / 85 files** · `pnpm exec tsc --noEmit` **clean** (a SEPARATE gate) ·
 `go test ./... -count=1` **0 FAIL** (bracket with a live `psql` — ⚠️ a down database makes every DB
 test SKIP and `go test` still exits 0, so the `0 SKIP` count is the load-bearing number) ·
 `make verify` **run ALONE** (beside anything else `internal/sync` hits its 600s timeout and
@@ -342,6 +348,18 @@ a sales invoice's narration finds nothing; match `"<date> | <no> | <party>"`. **
 tests, because every test used the one fixture shape that could not expose them (a party without
 bill-by-bill; a mock fixture that was always a deduction). When a row's tests pass first try, ask what
 shape they all share.
+
+**6. ⛔⛔ NOTHING IN THIS REPO HAD EVER PRESSED THE ACCEPT KEY TWICE ON ONE FRAME.** That is how D89 —
+a refused alter POSTing a duplicate invoice — survived a green suite and eleven closed rows on the
+same screen. Every D82 pin presses Ctrl+A once; the defect lived in the seam between the refusal and
+the retry. *Check:* for every row below whose oracle is a REFUSAL, drive the operator's next
+keystroke too. The refusal is not the end of the story — the remedy is.
+
+**7. ⛔ FOR A CLIENT-SIDE MUTATION, VERIFY **VITE**, NOT THE BINARY.** §3's symbol check proves what
+cored is running and says nothing about a refusal that never leaves the browser. Curl the module out
+of vite and count the mutated construct — and ⚠️ **calibrate the count against `git show HEAD:`**,
+because a construct that also appears elsewhere in the same file never reaches zero and the wait
+loop then blames HMR for a grep that was wrong.
 
 ---
 

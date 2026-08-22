@@ -815,7 +815,7 @@ have now been driven end to end in a real browser against real cored.**
 
 ---
 
-## 7.1 ⛔ THE DEFECT REGISTER — 88 DEFECTS, 15 STILL OPEN
+## 7.1 ⛔ THE DEFECT REGISTER — 89 DEFECTS, 14 STILL OPEN
 
 **This is the audit's actual product.** Every row below was found by DRIVING, is traced to file:line, and
 carries a proposed fix in the source material. ⛔ **Do not re-derive these from scratch** — that is the
@@ -911,13 +911,14 @@ WORK"** — not "hard to fix".
 | **D79** | 17 | HIGH | ⛔ **An accounting-mode ALTER RE-POINTED THE VOUCHER'S INCOME/EXPENSE HEAD — DATA LOSS, not an orphan master.** `buildGstRequest` always `ensureLedger`d the orientation's canonical base, so altering a purchase booked to any other head silently moved it. Driven: `Dr Raw Material Purchases 30000` became `Dr Purchases 30000` on an alter that edited NOTHING, and a `Purchases` ledger was minted to receive it. The voucher still balances and the tax is unchanged, so no trigger, total or server check disagrees — the company's expense analysis simply changes because somebody LOOKED at a voucher | `frontend/src/screens/VoucherScreen.tsx` `buildGstRequest` (the unconditional `ensureLedger(orientation.baseLedger)`) | ✅ **FIXED (L6) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** `baseLegFromView` hydrates the head; the canonical base is now the fresh-create fallback only. See §7.5 |
 | **D80** | 9 | MEDIUM | `Alt+G > Vouchers` is broken and always has been: `canonicalReportName("Vouchers")` returns undefined, the `??` falls back to the raw label, and the Go To pushes the **Unwired** screen | `frontend/src/screens/reports/*` + `resolveGotoSelection` | ⛔ OPEN — found by the 11-lane wave, registered here 2026-08-20 |
 | **D81** | 17 | MEDIUM | A server-only refusal (cutoff, ACL, duplicate number, negative stock) still leaves **masters** behind on the voucher path: a posting needs a real uuid and cored has no `DELETE /ledgers`. The DRAFT path discloses its orphans via `DraftAcceptFailedError`; the voucher path does not | `frontend/src/screens/VoucherScreen.tsx` (resolveMasters) | ⛔ OPEN — registered 2026-08-20. ⚠️ The FORM-side refusals are closed (L6/L12 drives prove Ctrl+A mints nothing when the form refuses); this is the SERVER-refusal half |
-| **D82** | 17 | LOW | The HSN refusal bites the ALTER path: an old sales invoice stored without an HSN cannot be re-saved without keying one. Arguably correct (it cannot be printed either way) but it is a new refusal on existing data | `frontend/src/screens/VoucherScreen.tsx` `HSN_REQUIRED_CLASSES` | ⛔ OPEN — registered 2026-08-20, and it is a JUDGEMENT rather than a bug |
+| **D82** | 17 | LOW | The HSN refusal bites the ALTER path: an old sales invoice stored without an HSN cannot be re-saved without keying one. Arguably correct (it cannot be printed either way) but it is a new refusal on existing data | `frontend/src/screens/VoucherScreen.tsx` `HSN_REQUIRED_CLASSES` | ✅ **WORKING AS INTENDED — THE USER'S DECISION, 2026-08-21. `HSN_REQUIRED_CLASSES` STAYS AS IT IS.** The invoice is unprintable without an HSN (CGST Rules 2017, Rule 46(g)), so keying the code is the FIX rather than a hoop. ⛔ A later session that finds this row and "fixes" it is REVERSING A USER DECISION — the SENTENCE is pinned, not just the behaviour (`VoucherScreen.gstAlter.test.tsx`, mutation-proved: disabling the condition turns this pin AND `masterGate.test.tsx`'s D60 arm red). **Driven (L14) 2026-08-22, 12/12:** the refusal reaches the operator on the alter naming Rule 46(g) and "cannot be printed", the HSN field sits empty and keyable on the SAME screen, nothing is sent, and keying the code lets the same alter through as a PUT. ⛔ **AND THE DRIVE FOUND D89** — the remedy this refusal prescribes was minting a duplicate invoice. See §7.5 |
 | **D83** | 5 | LOW | Two SIMULTANEOUS posts with the same hand-typed bill number on one party can both pass the uniqueness check. Needs an index `bill_allocation` cannot carry, because duplicate names are legal for AGAINST/ON_ACCOUNT/caller-named openers. ⚠️ **The sequential case — what an operator actually produces — is closed** | `backend/internal/ledger/` bill uniqueness | ⛔ OPEN — registered 2026-08-20 |
 | **D84** | — | MEDIUM | ⛔ **`api/mock.ts` IS LOOSER THAN CORED AND IS A SOURCE OF FALSE GREEN — three lanes hit it.** It accepts an empty ledger name and an unparseable `gst_rate_pct` that `server.go` 400s on, reproduces D44 verbatim, skips D6's party-group and D69's due-date checks, and does not mirror `createLedger`'s opening-breakup refusal. Needs a STRUCTURAL mock-vs-server gate, not three patches | `frontend/src/api/mock.ts` | ⛔ OPEN — registered 2026-08-20 |
 | **D85** | 30 | MEDIUM | ⛔ **The duplicate-supplier-bill guard keys on the POST-REDACTION `voucher_no`, so every PII-shaped invoice number collapses to ONE key and a legitimate second bill is refused.** `assertNotAlreadyOnTheBooks` matches on `body.voucher_no`, which for a bill whose invoice number is a PAN/GSTIN/Aadhaar is the constant token `[PAN REDACTED]` — not the supplier's number. Two DIFFERENT PAN-shaped invoice numbers from one supplier on one date are therefore the same bill as far as this check is concerned, and the second accept is refused. Its own error text advises *"If this is genuinely a second bill, key its own supplier invoice number"* — **which cannot work**, because any number that redacts lands on the same token. Found by driving, not by reading: the L11 probe randomised its PAN to become re-runnable and was still refused. | `frontend/src/screens/vouchers/draftAccept.ts:1526-1545` (`assertNotAlreadyOnTheBooks` — `no = body.voucher_no`, compared to `e.voucher_no`) + `insightd/insightd/pipeline.py:65` (redaction happens BEFORE the value ever reaches the client) | ⛔ OPEN |
 | **D86** | 3 | MEDIUM | ⛔ **Sundry Creditors on the Balance Sheet and the payables Outstandings DISAGREE the moment any voucher is dated after today, and the repo's own gate asserts they agree EXACTLY.** With no `as_on`, Outstandings bounds at today and drops a future-dated bill; the Balance Sheet does not bound and includes it. Measured: one bill dated 2026-08-27 with today at 2026-08-20 gave BS **109950.0000** vs Outstandings **108770.0000** — short by exactly that bill's 1180.0000 — while `?as_on=2026-09-30` returned **109950.0000** and agreed. Nothing refuses a future-dated purchase (cored answers 201), so an operator who post-dates one bill sees the ageing disagree with the balance sheet with no explanation. ⚠️ `verify:demo`'s check passes today only because the seeded demo data happens to carry no future dates — it calls **neither** report with an `as_on`, and its own comment says the two paths "must agree exactly". | `frontend/scripts/verify-demo.mts:154-168` (both calls omit `as_on`) + the default-`as_on` divergence between the Outstandings and Balance Sheet handlers | ⛔ OPEN |
 | **D87** | 5 | MEDIUM | ⛔ **A PARTY CREATED FROM THE KEYBOARD HAS NO GSTIN, NO STATE CODE AND NO REGISTRATION TYPE — and state_code NULL is the exact input that made D19 derive an intra-state bill as IGST.** `masters.CreateLedger` and `CreateLedgerRequest` have accepted all three since they were written; the master-create form renders no field for any of them, so every Sundry Debtor/Creditor keyed by an operator lands with `gstin` NULL, `state_code` NULL and `registration_type` UNKNOWN. Driven in a browser while closing D36: the form's text contains no "GSTIN", no "State code" and no "Registration type", and the ledger it created read back `(null)|(null)|UNKNOWN`. The repo's OWN gate flags it — `verify:demo`'s "Every party's GSTIN prefix == its state_code" and "Every party is registration_type REGULAR" both fail on a keyed party, which is how it was found. ⚠️ NOT FIXED: it is the same class of build as D36 (fields the form does not render) but it carries a judgement D36 did not — whether `state_code` becomes MANDATORY under Sundry Debtors/Creditors, which would refuse creations that succeed today, and how many of the party's ten-odd optional columns (address block, PAN, credit days, bank details) the form should expose alongside it. | `frontend/src/screens/masters/MasterCreateScreen.tsx` (the ledger `Draft` has no gstin/state/registration field; `build`'s `CreateLedgerRequest` therefore sends none) vs `backend/internal/masters/masters.go` `CreateLedger`, which stores all three | ⛔ OPEN |
 | **D88** | 17 | HIGH | ⛔ **ALTERING A VOUCHER SILENTLY DELETES ITS TDS DEDUCTION, and any challan allocation against it is orphaned.** `internal/ledger`'s `deleteTDSDeductions` runs on EVERY alter and the row is re-derived from the body — which is correct on its own terms ("a voucher altered to carry no TDS at all must lose its deduction row rather than keep a stale one"). But the voucher READ path serves no `tds`/`tcs` block, so the form CANNOT re-state what it loaded: hydrate a voucher that carried a deduction, edit its narration, press Ctrl+A, and the deduction is gone — while the challan that paid it keeps an allocation whose natural key now matches no deduction row (migration 0069 carries no foreign key by design, so nothing in the database refuses it). The register then shows the allocation with `deduction_on_record: false`, which is the state that panel already renders and calls out. Found while building D3's form, which is the first thing in the product that can create the precondition. ⚠️ NOT FIXED: the fix is a SERVER READ-PATH change (serve the stored deduction on `GET /vouchers/{id}`) plus hydration in `formFromView`, and it should land with D3's remaining TCS half rather than ahead of it. `formFromView` states the gap at the field today. | `backend/internal/ledger/tds.go` `deleteTDSDeductions` + the voucher GET (`VoucherView` has no tds/tcs) vs `frontend/src/screens/VoucherScreen.tsx` `formFromView` | ✅ **FIXED (L4) — MUTATION-PROVED *AND* DRIVEN 2026-08-21.** The GET serves the stored block and `formFromView` re-states it. Oracle: alter the narration, the `tds_deduction` row SURVIVES and the challan register stops reading "deduction no longer on record". Pinned with its INVERSE CONTROL — an alter that OMITS the block is accepted and deletes it. See §7.5 |
+| **D89** | 17 | HIGH | ⛔⛔ **A REFUSED ALTER SILENTLY BECAME A CREATE, SO THE REMEDY THE REFUSAL PRESCRIBED MINTED A SECOND INVOICE.** `navMachine`'s `accept` reducer replaced ANY voucher frame with a fresh `create` frame on every Ctrl+A. It is pure, so it can never learn that the write was refused — least of all here, where the refusal was CLIENT-SIDE and not one byte left the browser. That dropped the loaded `voucher_id` which routes the PUT, while the form kept the loaded voucher's values on screen: the heading was the only thing that changed, by thirteen characters, at the bottom of a refusal the operator is reading. Driven in a browser: drill a legacy no-HSN sales invoice out of the Day Book, Ctrl+A → refused by `gstRefusal`, key the HSN the refusal asked for, Ctrl+A → **`POST /vouchers/sales` 201**, status line "Saved", and the original invoice's `hsn` still empty. **One tax invoice keyed, two on the books.** ⚠️ NOT GST-SPECIFIC: any refusal on an alter had this shape, client- or server-side. ⚠️ The class was already known on the DRILL side — `phase1.test.ts`'s CONTROL "a row naming no class does not open a voucher frame" closes the same failure reached the other way; that guarded the door IN, nothing guarded the door THROUGH. | `frontend/src/keystroke/navMachine.ts`, the `accept` reducer's voucher arm | ✅ **FIXED (L14) — MUTATION-PROVED *AND* DRIVEN 2026-08-22.** An alter frame stays put; a second Ctrl+A re-PUTs the same `voucher_id` and Esc still returns to the report it was drilled from — which is what `delete` directly below already did. Oracle: the Day Book entry count over the date is UNCHANGED and the voucher reads `op=ALTER`, not a second `CREATE`. Pinned with both CONTROLs (a CREATE frame still re-opens fresh for bulk entry; two accepts on a create really do key two invoices) so neither "never re-open a fresh form" nor "never accept a frame twice" can pass in place of the fix. See §7.5 |
 
 ### ⛔⛔ §7.2 — THE BACK-DATED CUTOFF TOOK **SIX** DOORS TO CLOSE, AND THAT IS THE SESSION'S MAIN LESSON
 
@@ -2055,6 +2056,113 @@ while keeping its deduction (or the reverse) would leave the books and the retur
 which is worse residue than the entries. ⛔ **The challan serial is stamped per run**, because a CIN
 already on file is a 409 and a fixed serial would make the SECOND run fail inside D1's arm and read
 as a regression.
+
+### ✅ L14 — THE CHEAP HONEST ROWS. D82 CLOSED 2026-08-22, **12/12 — AND THE DRIVE FOUND D89.**
+
+**Probe:** `frontend/scripts/drive-l14-cheap.mjs`. Ran against a cored verified fresh by symbol
+(`query tds deduction`, `one challan cannot pay both`, `no such route` = 1 each). ⚠️ D82's own
+refusal is CLIENT-SIDE, so the load-bearing freshness check for this lane is **vite's**, not the
+binary's — see the mutation note below.
+
+#### D82 IS WORKING AS INTENDED, AND WHAT WAS DRIVEN IS THAT IT READS AS A REASON
+
+The user decided on 2026-08-21 that the refusal is correct: the invoice is unprintable without an
+HSN, so keying the code is the fix rather than a hoop. So the drive does not test a behaviour
+change — it tests that the refusal **reaches an operator**, **says why**, and has its **remedy on
+the same screen**: Rule 46(g) and "cannot be printed" in the status line while the HSN field sits
+empty and keyable, nothing sent, and keying the code lets the same alter through as a PUT. The
+legacy invoice is seeded OVER THE WIRE because the form refuses to create one (that is D60), which
+is exactly how a real one arrives — an import, or a build predating the refusal.
+
+#### ⛔⛔ AND THEN THE REMEDY MINTED A SECOND INVOICE — D89
+
+The drive pressed Ctrl+A **twice**: once to be refused, once after keying the code the refusal
+asked for. That is the operator's actual order, and nothing in the product had ever done it.
+
+```
+drill a legacy no-HSN sales invoice   ->  h1 "Sales Voucher (Alteration)"
+Ctrl+A                                ->  refused CLIENT-SIDE, "(no non-GET traffic)"
+                                          h1 "Sales Voucher"          <- thirteen characters
+key the HSN the refusal asked for
+Ctrl+A                                ->  POST /vouchers/sales 201, status line "Saved"
+GET the original voucher              ->  hsn: ""
+```
+
+One tax invoice keyed, two on the books, and the remedy the product itself prescribed is what
+minted the second. `navMachine`'s `accept` reducer replaced ANY voucher frame with a fresh `create`
+frame — it is pure, so it can never learn the write was refused — dropping the loaded `voucher_id`
+that routes the PUT while the form kept showing the loaded voucher's 10,000. Registered and fixed
+as **D89**; an alter frame now stays put, which is what `delete` directly below it already did.
+
+#### THE ORACLE IS THE DAY BOOK, AND IT IS A ROW **NOT** APPEARING
+
+A status line reading "Saved" is identical in both worlds — that is the whole defect. So the oracle
+is read back through a surface neither the form nor the reducer owns: the Day Book over the date
+must hold the **same number of entries**, and the invoice must read **`op=ALTER`** rather than a
+second `CREATE`. ⛔ `op` is the part a count alone would miss: a twin plus a deleted original also
+leaves the count flat. (Verified on the wire first that the Day Book lists one entry per VOUCHER,
+latest version — a per-version listing would have made the count assertion wrong.)
+
+#### MUTATION PROOF — PREDICTED, THEN OBSERVED
+
+Removing the reducer's alter arm, with the failure predicted **before** running:
+
+| Gate | Predicted | Observed |
+|---|---|---|
+| `phase1.test.ts` D89 arm 1 | red, `mode` = "create" | ✅ `expected 'create' to be 'alter'` |
+| `phase1.test.ts` D89 arm 2 (Esc) | **green** — the fresh frame replaces the alter in place, so the parent is untouched | ✅ green |
+| both CONTROLs | green | ✅ green |
+| `gstAlter` D89 | red at the HEADING, step 2 | ✅ `expected 'Sales Voucher' to match /\(Alteration\)/` |
+| the drive | 6 red: the four D89 arms **plus** the two D82 arms that depend on alter routing (PUT, and the stored `hsn`) | ✅ **6/12, exactly those six** |
+
+Reverted → 12/12 again. Gates: vitest **1399/1399 in 85 files** (1394 before, +5 new), tsc clean.
+
+#### ⚠️ TRAPS THIS LANE ADDS TO THE LIST
+
+1. ⛔⛔ **A GREEN SUITE THAT NEVER PRESSES THE KEY TWICE.** All three D82 pins press Ctrl+A exactly
+   ONCE — one proves the refusal reaches the operator, another proves keying the code lets the alter
+   through, and **neither does both in one frame**. The defect lived precisely in the seam. This is
+   §4.5's rule ("when a row's tests pass first try, ask what shape they all share") paying out for
+   the fifth time. **Ask what a second press does.**
+2. ⛔ **`gst-panel` IS NOT A MODE ORACLE — THE HEADING IS.** A create frame has a gst-panel too, so
+   the drill's original assertion passed on either. `VoucherScreen` renders
+   `{title} Voucher{isAlter ? " (Alteration)" : ""}`, and that suffix is the only thing on screen
+   that tells the two apart.
+3. ⛔⛔ **AN EVIDENCE STRING SLICED TOO SHORT MADE A REAL DEFECT READ AS A PROBE BUG.** The arm
+   printed `.slice(0, 80)` of the body, which cut " (Alteration)" off the end — so the first reading
+   of the failure was "the drill never opened an alteration", and half an hour went into the drill
+   before the screen. **Print the field you are asserting on, not a prefix of the page.**
+4. ⚠️ **4 SECONDS DOES NOT FIT THE STEP-UP CEREMONY.** The first write of a session goes
+   `PUT 403 → assert/begin → register/begin → register/finish → assert/begin → assert/finish → PUT 200`.
+   At 4000ms the probe cut it off mid-assert and reported the **403** as the outcome — which reads
+   exactly like an ACL defect. 9000ms held.
+5. ⚠️ **THE DRILL'S WAITS WERE TOO SHORT UNDER LOAD.** At 700/400/2200 it intermittently found
+   **zero** Day Book rows, which reads as "the voucher is not on the books". 1200/800/4000 held.
+   Load average was 80+ throughout, from OTHER repos — see 6.
+6. ⛔ **VERIFY **VITE**, NOT ONLY THE BINARY, FOR A FRONTEND MUTATION.** The symbol check in §0.1
+   proves what cored is running; it says nothing about a client-side refusal. Curl the module out of
+   vite and count the mutated construct: `curl -s localhost:5173/src/keystroke/navMachine.ts | grep -c
+   '<the construct>'`. ⚠️ **AND CALIBRATE THE COUNT AGAINST `git show HEAD:`** — the first attempt
+   grepped a string that also matches a PRE-EXISTING arm elsewhere in the same file, expected 0, and
+   would have looped forever concluding HMR was stale when it had already updated (4 at HEAD, 3
+   mutated — never 0).
+7. ⚠️ **`ci-slot` NAMES A STALE HOLDER, AND DEAD PIDS DO NOT MEAN A WEDGED QUEUE.** The
+   "queuing behind [pid=…]" line is printed ONCE, so by the time it is read the named processes are
+   often gone. The semaphore is an `flock`, which the OS releases on death — it **cannot** wedge on a
+   dead holder. Check `~/.claude/machine-health/ci-slots/*.owner` for the current pair before
+   concluding anything.
+8. ⚠️ **ONE FULL-SUITE FAILURE ON THIS LANE WAS A LOAD FLAKE, AND WAS CHECKED RATHER THAN ASSUMED.**
+   `VoucherScreen.draft.test.tsx` timed out on a `waitFor` at load 80+; it dispatches the accept
+   handler DIRECTLY and never touches `navMachine`, it passes standalone, and the full suite is green
+   on a re-run. **Structural argument first, then the standalone run, then the re-run** — the handoff
+   already lists two members of this class (`internal/sync`, `EWayBillScreen`).
+
+#### ⛔ THE REST OF L14 IS STILL OPEN
+
+D77 and D80 were scoped into this probe and **not driven** — the lane stopped when D82's drive turned
+up a HIGH-severity duplicate-invoice defect. They remain at positions 3 and 4 of
+`HANDOFF-FINISH-THE-REGISTER.md` §1, unchanged.
+
 
 ## 8. RULES THAT MUST NOT BE BROKEN DURING THIS WORK
 
