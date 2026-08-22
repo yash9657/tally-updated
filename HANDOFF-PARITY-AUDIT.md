@@ -815,7 +815,7 @@ have now been driven end to end in a real browser against real cored.**
 
 ---
 
-## 7.1 ⛔ THE DEFECT REGISTER — 89 DEFECTS, 14 STILL OPEN
+## 7.1 ⛔ THE DEFECT REGISTER — 89 DEFECTS, 13 STILL OPEN
 
 **This is the audit's actual product.** Every row below was found by DRIVING, is traced to file:line, and
 carries a proposed fix in the source material. ⛔ **Do not re-derive these from scratch** — that is the
@@ -906,7 +906,7 @@ WORK"** — not "hard to fix".
 | D74 | 38 | LOW | app_user.failed_attempts is not a running counter: it stays 0 through failures 1-4 and is written only at the instant the lock trips, so nothing can observe that an account is partway to being locked. | backend/internal/authn/lockout_store.go:113-118 — failed_attempts is written ONLY inside SetLock (`UPDATE app_user SET locked_unti … | ✅ **FIXED (L9) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D75 | 40 | LOW | Every printed voucher's download filename appends the raw voucher UUID after the class and number, contradicting pdfFilename's own doc comment, which says it uses the FIRST non-empty part. | backend/internal/server/handler_print.go:117 (writePDF(w, pdfFilename(pathClass, number, voucherID.String()), pdf)) against the co … | ✅ **FIXED (L7) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D76 | 43 | LOW | Ctrl+P on the Cost Centre Summary tells the operator "Alt+E is not built here either; read it on screen", which is false: pressing Alt+E on that same screen immediately writes Cost-Centre-Summary-Branch-2026-04-01-to-2027-03-31.csv with correct 4-dp figures. | frontend/src/screens/printTarget.ts:276-279 (the refusal string ending "Alt+E is not built here either; read it on screen.") again … | ✅ **FIXED (L7) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
-| D77 | 9 | LOW | The voucher read-back orders postings `ORDER BY p.dr_cr DESC, p.amount DESC` with no `p.id` tiebreak, so `posting_seq` is arbitrary for two same-side same-amount postings — the analogous ordinal elsewhere in the codebase uses `ORDER BY p.id`. Recon prediction 2 was KILLED as an observed data loss but the nondeterminism in the SQ … | backend/internal/ledger/ledger.go:846 | ⛔ OPEN |
+| D77 | 9 | LOW | The voucher read-back orders postings `ORDER BY p.dr_cr DESC, p.amount DESC` with no `p.id` tiebreak, so two legs on the same SIDE for the same AMOUNT come back in an arbitrary order — the analogous ordinal elsewhere in the codebase uses `ORDER BY p.id`. ⛔ **NOT SYNTHETIC: the CGST and SGST legs of every intra-state supply tie** (18% on 10,000 is 900 credit and 900 credit), so the exposure is the ordinary shape of the most common document in the product. **THREE sites share the projection.** | `backend/internal/ledger/ledger.go` GetVoucher's postings + `internal/reporting/daybook.go` loadPostings + `internal/printing/printingdb/document.go` loadLegs | ✅ **FIXED (L14b) — MUTATION-PROVED *AND* DRIVEN ON THE WIRE 2026-08-22, 8/8.** `, p.id` at all three: GetVoucher's comment promises "same projection and ordering as the day book's loadPostings", so tie-breaking one and not the other would make a STATED invariant false. **Oracle: a HEAP REWRITE** — plan toggles, `work_mem` and `VACUUM ANALYZE` all leave the untied order alone (the read is an index scan, so ties come back in physical order and the sort preserves it), but `CLUSTER` / `pg_repack` — routine maintenance — moves it. The probe runs the OLD query itself as raw SQL in both heap states and REQUIRES them to differ, because whether a rewrite reorders a given pair is a coin toss and without that precondition every arm passes on a broken build. ⛔⛔ **AND IT IS A PRESENTATION-ORDER DEFECT, NOT A MONEY ONE — the mutation proof KILLED the claim that it misattributes a cost split.** `posting_seq` looked positional, but `GetVoucher` builds `postingSeqByID[pid]` while walking the same read and joins allocations by POSTING_ID, so the seq is re-derived to name the same posting however the array is ordered: with the fix reverted and the array demonstrably reordered, the split arm stayed GREEN. Kept as a labelled CONTROL. ⚠️ **`document.go` is the honest exception** — its ORDER BY already carried the ledger NAME, and a leg tying on side+amount+name also ties on ledger_id and group (names are unique per company), so the rows are identical in every projected column and no byte can move; `p.id` makes its "chosen to be total" comment TRUE (it was FALSE for legs to the same ledger) and changes no output. ⚠️ Buys DETERMINISM, not the input order: no ordinal column, and `uuid.NewV7` is not monotonic within a millisecond. See §7.5 |
 | D78 | LEAD 1b | LOW | MembersScreen's error banner is a plain <p> with no role="alert", so the refusal that DOES render is never announced to assistive technology. | frontend/src/screens/MembersScreen.tsx:658-662 (the `error ? <p data-testid="members-error" className="... text-red-400">` block); … | ✅ FIXED (F5) |
 | **D79** | 17 | HIGH | ⛔ **An accounting-mode ALTER RE-POINTED THE VOUCHER'S INCOME/EXPENSE HEAD — DATA LOSS, not an orphan master.** `buildGstRequest` always `ensureLedger`d the orientation's canonical base, so altering a purchase booked to any other head silently moved it. Driven: `Dr Raw Material Purchases 30000` became `Dr Purchases 30000` on an alter that edited NOTHING, and a `Purchases` ledger was minted to receive it. The voucher still balances and the tax is unchanged, so no trigger, total or server check disagrees — the company's expense analysis simply changes because somebody LOOKED at a voucher | `frontend/src/screens/VoucherScreen.tsx` `buildGstRequest` (the unconditional `ensureLedger(orientation.baseLedger)`) | ✅ **FIXED (L6) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** `baseLegFromView` hydrates the head; the canonical base is now the fresh-create fallback only. See §7.5 |
 | **D80** | 9 | MEDIUM | `Alt+G > Vouchers` is broken and always has been: `canonicalReportName("Vouchers")` returns undefined, the `??` falls back to the raw label, and the Go To pushes the **Unwired** screen | `frontend/src/screens/reports/*` + `resolveGotoSelection` | ⛔ OPEN — found by the 11-lane wave, registered here 2026-08-20 |
@@ -2157,11 +2157,83 @@ Reverted → 12/12 again. Gates: vitest **1399/1399 in 85 files** (1394 before, 
    on a re-run. **Structural argument first, then the standalone run, then the re-run** — the handoff
    already lists two members of this class (`internal/sync`, `EWayBillScreen`).
 
-#### ⛔ THE REST OF L14 IS STILL OPEN
+#### ⛔ THE REST OF L14
 
-D77 and D80 were scoped into this probe and **not driven** — the lane stopped when D82's drive turned
-up a HIGH-severity duplicate-invoice defect. They remain at positions 3 and 4 of
-`HANDOFF-FINISH-THE-REGISTER.md` §1, unchanged.
+**D77 is CLOSED — see L14b below.** D80 was scoped into this probe and is **not driven**; it remains
+at position 4 of `HANDOFF-FINISH-THE-REGISTER.md` §1, unchanged.
+
+### ✅ L14b — D77, THE NON-TOTAL POSTING ORDER. CLOSED 2026-08-22, **8/8 on the wire.**
+
+**Probe:** `frontend/scripts/drive-l14b-d77.mjs`. A WIRE probe, not a browser one: the defect is three
+SQL strings, and the surfaces it reaches (the voucher GET, the day book, the printed document) are all
+readable on the wire. Binary verified fresh BY SYMBOL in BOTH directions — 3 tie-breaks with the fix,
+**0 while mutated** — because a Go edit is invisible to a running binary and this proof depends on
+which SQL is actually executing.
+
+#### THE FIXTURE IS THE MOST COMMON DOCUMENT IN THE PRODUCT
+
+The tie needs two legs sharing a side and an amount. **The CGST and SGST legs of every intra-state
+supply do**: 18% on 10,000 is 900 credit and 900 credit. Nothing had to be contrived.
+
+#### ⛔⛔ THE ORACLE IS A HEAP REWRITE — AND FOUR CHEAPER MECHANISMS WERE TRIED FIRST AND FAILED
+
+`enable_seqscan` / `enable_indexscan` / `enable_bitmapscan` / `enable_sort` toggles, `work_mem` down to
+64kB, and `VACUUM ANALYZE` **all leave the untied order untouched.** The read is an index scan over
+`posting_version`, so tied rows come back in physical heap order and the sort preserves it. That matters
+methodologically: **the recon's proposed oracle — "GET, VACUUM ANALYZE, GET again" — does not work**, and
+a probe built on it would have gone green against a broken build and closed the row falsely.
+
+What does move it is rewriting the heap: `CLUSTER`, i.e. what `pg_repack` does as routine production
+maintenance. Proved in raw SQL before a line of Go changed — cluster by `posting_ledger` and the untied
+query's output changes while the tied one does not.
+
+⚠️ **THE TWO CLUSTERS ARE ORDERED DELIBERATELY:** `posting_pkey` first, `posting_ledger` second. Ending
+on `posting_pkey` would leave the heap in `p.id` order — the very order the fix imposes — so the untied
+query would come out accidentally correct.
+
+#### ⛔ THE PRECONDITION ARM, AND WHY A PROBE LIKE THIS NEEDS ONE
+
+Whether a rewrite reorders a *given* tied pair is a coin toss: `posting_pkey` orders the heap by posting
+id, `posting_ledger` by ledger id, and for any one pair those agree about half the time. A run where
+neither fixture reordered would pass every arm on a broken build. So the probe runs **the old untied
+query itself, as raw SQL, in both heap states, and requires them to DIFFER.** It earned its place on the
+first run: *"invoice untied: UNCHANGED · journal untied: CHANGED"* — and the mutation run then went red
+on exactly the journal's two arms and green on the invoice's.
+
+#### ⛔⛔ THE MUTATION PROOF KILLED THIS ROW'S HEADLINE CLAIM
+
+The probe was built around a "money" arm: `cost_allocations[].posting_seq` indexes the postings array, so
+a tied swap should point a cost split at a different ledger — invisibly, because both legs are equal and
+every per-category total still foots. **That is wrong.** `GetVoucher` builds `postingSeqByID[pid]` while
+walking the same ordered read and joins allocations by **posting_id**, so the seq is re-derived to name
+the SAME posting however the array is ordered. With the fix reverted and the array demonstrably reordered
+(that arm red), the split arm stayed **GREEN**.
+
+So D77 is a PRESENTATION-order defect and the register now says so. The arm is kept, relabelled as a
+CONTROL, so the next reader who derives the same hypothesis finds it already tested. **This is the
+clearest example in the whole register of a mutation proof correcting the fixer rather than the code** —
+the first draft of the commit message asserted the money claim, and the proof retracted it.
+
+#### ⚠️ AND ONE SITE IS AN HONEST NON-FIX
+
+`document.go` already tie-broke on the ledger NAME, and a leg that ties on side+amount+name also ties on
+ledger_id and group (ledger names are unique per company), so the two rows are identical in every
+projected column and swapping them cannot change a byte. Its `p.id` makes the comment's *"chosen to be
+total (the name breaks every remaining tie)"* claim TRUE — it was FALSE for two legs to the same ledger —
+and changes no output. Predicted to stay green under mutation, and it did.
+
+#### ⚠️ TRAPS THIS LANE ADDS TO THE LIST
+
+1. ⛔⛔ **A PROBE THAT READS THE WRONG FIELD NAME PASSES VACUOUSLY AND LOOKS LIKE COVERAGE.** The first
+   run of this probe read `p.ledger_name`; the wire field is `p.ledger`. Every leg projected
+   `undefined`, so "the array is element-identical" compared SIDE AND AMOUNT ONLY — the two things that
+   are equal BY CONSTRUCTION in a tie — and dropped the one thing a swap changes. **7/7, asserting
+   nothing.** The probe now THROWS on an `undefined` projection and on an out-of-range `posting_seq`
+   rather than comparing them.
+2. ⚠️ **`ps -o command= -p $PID` WITH AN EMPTY PID PRINTS A USAGE ERROR AND THE SYMBOL CHECK THEN
+   COUNTS ZERO** — which looks exactly like "stale binary". Poll for the port BEFORE resolving the pid.
+3. ⚠️ **`make run-cored` COMING UP IN "1s" IS NORMAL, NOT SUSPICIOUS** — the build is cached. Judge the
+   binary by its build directory and its symbols, never by how fast the port opened.
 
 
 ## 8. RULES THAT MUST NOT BE BROKEN DURING THIS WORK

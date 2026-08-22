@@ -3,7 +3,7 @@
 Written 2026-08-22, after L4 (TDS/TCS) closed the whole lane and a 13-agent read-only fan-out
 re-verified every remaining row against the code as it is.
 
-**89 defects registered. 75 closed. 14 open.** (D82 closed and D89 found+fixed on 2026-08-22.) This file is the DRIVER: what to do next, in what
+**89 defects registered. 76 closed. 13 open.** (2026-08-22: D82 closed, D89 found+fixed, D77 closed.) This file is the DRIVER: what to do next, in what
 order, what proves it, and what will go wrong. It is meant to be executed top to bottom.
 
 ## THE THREE FILES, AND WHICH ONE WINS
@@ -60,13 +60,13 @@ leaving the 200, the success notice and the stored rows intact.
 
 ## 1. THE ORDER
 
-Cost-ordered, with a reason per position. **Positions 1–2 are done; D77 (position 3) is next.**
+Cost-ordered, with a reason per position. **Positions 1–3 are done; D80 (position 4) is next.**
 
 | # | Row(s) | State | Why here |
 |---|---|---|---|
 | ~~1~~ | ~~D72~~ | ✅ **CLOSED** | was stale — the money half was already fixed and gated |
 | ~~2~~ | ~~D82~~ | ✅ **CLOSED 2026-08-22, 12/12** | working-as-intended per the user. ⛔ **its drive found D89 — a refused alter minted a DUPLICATE invoice — now fixed** |
-| 3 | **D77** | open | three tokens, three sites, no number moves. **Must precede D8** — both are replay-order determinism |
+| ~~3~~ | ~~D77~~ | ✅ **CLOSED 2026-08-22, 8/8** | all three sites carry `, p.id`. ⛔ **the recon's proposed oracle (VACUUM ANALYZE) DOES NOT WORK — it takes a HEAP REWRITE**; and the mutation proof KILLED the cost-split claim |
 | 4 | **D80** | open | one arm in one reducer. **Before D22/D52** — Alt+G is their oracle surface, so make the picker honest first |
 | 5 | **D84** | open | ⛔ **the false-green root.** Every vitest after it is measured through the mock. **ALONE.** |
 | 6 | **D5 + D43** | open | **ONE commit** — D43 is D5's symptom and disappears when the field is honoured |
@@ -108,12 +108,20 @@ the HSN field sits empty and keyable **on the same screen**; key the code, Ctrl+
 **Traps:** two `role="status"` spans exist — a bare `getByRole("status")` throws. The create path
 refuses a blank-HSN sale (that is D60), so the legacy invoice must be **seeded over the wire**.
 
-### 3 · D77 — non-total posting order at three sites · RECON §3.3
+### ~~3 · D77 — non-total posting order at three sites~~ · ✅ CLOSED 2026-08-22 · RECON §3.3
 `ORDER BY p.dr_cr DESC, p.amount DESC` is not a total order, so two legs of equal amount on the same
 side come back in an arbitrary order. **Determinism, not data loss.**
-**ORACLE:** the same voucher read twice returns its legs in the same order, and a voucher with two
-equal same-side legs is the case that can fail. **All three sites**, proved separately.
-**Traps:** it must precede D8 — D8's drive reads reports whose posting order should already be stable.
+**✅ DONE 2026-08-22, 8/8** — `frontend/scripts/drive-l14b-d77.mjs`, one arm per site, on the wire.
+⛔⛔ **TWO THINGS HERE THAT THE NEXT ROWS SHOULD INHERIT:**
+1. **The stated oracle does not work.** "GET, `VACUUM ANALYZE`, GET again" leaves the untied order
+   untouched, as do all four plan toggles and `work_mem=64kB` — the read is an index scan, so ties come
+   back in physical heap order and the sort preserves it. It takes a **HEAP REWRITE** (`CLUSTER` /
+   `pg_repack`). A probe built on the stated oracle would have gone green on a broken build.
+2. **The mutation proof killed the row's headline claim.** `posting_seq` looked positional, so a tied
+   swap "should" misattribute a cost split. It does not: `GetVoucher` joins allocations by POSTING_ID
+   and re-derives the seq per read. D77 is a PRESENTATION-order defect. `document.go` is an honest
+   non-fix (its name key already made a full tie indistinguishable in every printed column).
+**Traps that still apply:** D8's drive reads reports whose posting order should now be stable — it is.
 
 ### 4 · D80 — `Alt+G > Vouchers` pushes the Unwired screen · RECON §3.4
 `canonicalReportName("Vouchers")` returns undefined, the `??` falls back to the raw label, and the
