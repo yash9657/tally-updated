@@ -7,9 +7,12 @@ Execute it top to bottom.
 
 ## ⛔ THE COUNT, RE-DERIVED BY PARSING §7.1 — NOT COPIED FROM A HEADER
 
-**91 registered · 77 CLOSED · 10 OPEN · 4 PARTIAL.** `77 + 4 + 10 = 91`.
+**93 registered · 80 CLOSED · 9 OPEN · 4 PARTIAL.** `80 + 4 + 9 = 93`.
 
-⚠️ **L15 closed TWO (D5 + D43) and registered ONE (D91), so the open count fell by only one.** The
+⚠️ **L15 closed SIX (D5, D43, D87, D91, D92, D93) and registered THREE of them itself.**
+The OPEN count fell from 12 to 10 while CLOSED rose by five, because half the lane's work was rows
+nobody had written down yet. **That is the normal shape of this phase, not an anomaly:** every row so
+far has been found by measuring, and measuring finds more than it closes. The
 count before L15 was 90 registered · 74 CLOSED · 12 OPEN · 4 PARTIAL — and that header itself had
 been wrong twice: **D90 was registered and never counted**, and **four `PARTIAL` rows have been
 counted as closed by every session since F6/F8**. Re-parse the table; never restate this from
@@ -27,7 +30,9 @@ for l in s[a:b]:
 PY
 ```
 
-**OPEN (10):** D8 · D22 · D49 · D52 · D81 · D83 · D85 · D86 · D87 · D90
+**OPEN (9):** D8 · D22 · D49 · D52 · D81 · D83 · D85 · D86 · D90
+~~D5 · D43 · D87~~ — ✅ CLOSED L15. ~~D91 · D92 · D93~~ — registered AND closed in L15; the register is a
+record, not a to-do list.
 ~~D91~~ — registered AND closed in L15b the same day; kept in §7.1 because the register is a record, not a to-do list.
 **PARTIAL (4), status genuinely ambiguous:** D13 · D15 · D17 · D48 — see §5.
 ~~D5 · D43~~ — ✅ **CLOSED L15 2026-08-22**, one commit (`766af00`), 22/22 wire + browser.
@@ -95,7 +100,7 @@ Cost-ordered, continuing the previous driver's reasoning. **D5+D43 is next.**
 |---|---|---|---|
 | ~~1~~ | ~~**D5 + D43**~~ | HIGH | ✅ **DONE L15 2026-08-22** — `766af00`, 22/22. See §7.5's L15 section. |
 | ~~0~~ | ~~**D91**~~ | MED | ✅ **DONE L15b 2026-08-22** — `0676e7e`. The gate now makes its own tenant. `verify:demo` stays 34/34 across a `contract:cored` run. |
-| 2 | **D87** | MED | ✅ scope DECIDED 2026-08-22 (§6.2): the three + PAN + credit days. Unblocked. |
+| ~~2~~ | ~~**D87**~~ | MED | ✅ **DONE L15d 2026-08-22** — `040457e`, 13/13 both doors. Pulled in **D92** (prerequisite) and **D93** (found by its mutation proof). |
 | 3 | **D90** | MED | ✅ DECIDED 2026-08-22 (§6.3): refuse now. Cheapest row in the wave. |
 | 4 | **D22 + D52** | HIGH | **ONE commit** — a door without the sentence, or the sentence without the door, is each worse than today |
 | 5 | **D81** | MED | after the VoucherScreen churn from 1 and 4 settles |
