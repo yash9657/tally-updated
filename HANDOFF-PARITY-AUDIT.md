@@ -844,7 +844,7 @@ WORK"** — not "hard to fix".
 | D2 | 17 | HIGH | Nothing compares the sum of a challan's allocations against its tax box, so a 1-rupee deposit was accepted as having "paid" 27,000.0000 of tax across two deductees. unallocated went to -26999.0000, both deductions were marked "already deposited", and the screen captions the negative as the ordinary paise remainder. | backend/internal/masters/tds_challan.go:495 | ✅ **FIXED (L4) — MUTATION-PROVED *AND* DRIVEN 2026-08-21.** `ErrChallanOverAllocated`, on BOTH write paths, tolerance one rupee PER ALLOCATION. Driven: a third deduction attached one at a time to a full challan is refused naming **25000 / 26000 / 1000 more**. See §7.5 |
 | D3 | 17 | HIGH | A TDS or TCS deduction cannot be keyed from the keyboard anywhere in this product: the client's VoucherRequest type has no tds/tcs field at all, so row 17's precondition is unreachable and the challan picker is empty on any books a real operator built. | frontend/src/api/types.ts:698 | ✅ **FIXED (L4) — MUTATION-PROVED *AND* DRIVEN 2026-08-21, BOTH HALVES.** TDS on the Dr/Cr grid (F7); TCS on the accounting-mode Sales invoice, charged to the buyer through a **keyed additional-charge line** — the user's decision, taken because deriving it in `buildGstVoucherRequest` makes the browser the author of an amount the server owns. See §7.5 |
 | D4 | 17 | HIGH | The TCS half of row 17 does not exist: tcs_collection is not part of the challan mechanism, so a collector can never record that it deposited what it collected. A live 2000.0000 collection under 206C(1)-SCRAP never appears in the allocation picker. | backend/internal/masters/tds_challan.go:1014 | ✅ **FIXED (L4) — MUTATION-PROVED *AND* DRIVEN 2026-08-21.** The server half was done; **driving found the client half was not** — both wire mappings DROPPED the row's `kind`, so every collection was refused as "nothing was deducted". A challan paying a collection is recorded, and one paying both is refused. See §7.5 |
-| D5 | 24 | HIGH | `allow_negative_stock` has no writer anywhere in the product: no HTTP route, no request field, no service setter, no UI control. Both enforcers read it and honour it correctly, but it is permanently false for every tenant, so the "allowed per the company's flag" arm of Tally's rule can only be reached by a hand-written psql UPDA … | backend/internal/server/server.go:1161 (companyReq, field absent) + backend/internal/server/server.go:515-524 (no Put/Patch on /v1 … | ⛔ OPEN |
+| D5 | 24 | HIGH | `allow_negative_stock` has no writer anywhere in the product: no HTTP route, no request field, no service setter, no UI control. Both enforcers read it and honour it correctly, but it is permanently false for every tenant, so the "allowed per the company's flag" arm of Tally's rule can only be reached by a hand-written psql UPDA … | backend/internal/server/server.go:1161 (companyReq, field absent) + backend/internal/server/server.go:515-524 (no Put/Patch on /v1 … | ✅ CLOSED L15 2026-08-22 |
 | D6 | 27 | HIGH | An order's party is picked from the ENTIRE chart of accounts — a sales order can be committed to a bank ledger and a purchase order to a customer. Nothing on the client, in Validate, or in the DB restricts it to Sundry Debtors / Sundry Creditors. | frontend/src/screens/OrderRegisterScreen.tsx:753 (and the unfiltered load at :258) / backend/internal/orders/order.go:156 | ✅ **FIXED (L8) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D7 | 27 | HIGH | The fulfilment picker sorts candidate orders by order_no as a raw string while its own comment claims "Oldest commitment first", so the order offered first is the NEWEST one. | frontend/src/screens/vouchers/FulfilmentPicker.tsx:156 | ✅ **FIXED (L8) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D8 | 29 | HIGH | Closing stock VALUE is replayed in LEXICAL voucher_no order across independent numbering series, so an issue keyed after a receipt on the same date is costed at the pre-receipt average. Confirmed to the paisa in the browser: Closing Stock 25,909.3478 for MS Angle where entry order gives 25,307.8797 — 601.4681 too high, with quan … | backend/internal/inventory/valuation.go:155-170 (func less; `if a.VoucherNo != b.VoucherNo { return a.VoucherNo < b.VoucherNo }`) | ⛔ OPEN |
@@ -882,7 +882,7 @@ WORK"** — not "hard to fix".
 | D40 | 17 | MEDIUM | Non-existent challan sub-routes answer 403 "unmapped route: access denied" rather than 404/405, so "this route was never built" is indistinguishable from "your level is not permitted". This KILLS the recon's literal proof that PATCH returns 405. | backend/internal/server/auth_middleware.go:967 | ✅ **FIXED 2026-08-20 — MUTATION-PROVED (3 ways, incl. the DANGEROUS direction) *AND* DRIVEN ON THE WIRE.** Authorized by the user. See §7.5 |
 | D41 | 17 | MEDIUM | LEAD, not row 17: opening an existing Purchase voucher for alteration from the Day Book and pressing Ctrl+A created a new ledger ("Purchases") over the wire and then failed the voucher write with "Error: invalid gst line gst_rate_pct". A refused alter left a master behind. | frontend/src/screens/VoucherScreen.tsx:1462 | ✅ **FIXED (L6) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D42 | 24 | MEDIUM | F11 Features asserts a capability the build does not have: the "Negative stock" row is labelled "Always on" and its note says "A company can opt in per-company", while the screen offers no toggle and nothing on it can write the flag. The product's own statement of what is switchable is false. | frontend/src/screens/FeaturesScreen.tsx:291-293 (state "always" renders as "Always on" via the map at FeaturesScreen.tsx:486; the … | ✅ FIXED (own) |
-| D43 | 24 | MEDIUM | POST /v1/companies accepts `"allow_negative_stock": true` with 201 Created and silently discards it — the caller gets a success for a setting that was never applied. | backend/internal/server/server.go:1188-1240 (handleCreateCompany / decodeJSON tolerates the unknown field) with backend/internal/s … | ⛔ OPEN |
+| D43 | 24 | MEDIUM | POST /v1/companies accepts `"allow_negative_stock": true` with 201 Created and silently discards it — the caller gets a success for a setting that was never applied. | backend/internal/server/server.go:1188-1240 (handleCreateCompany / decodeJSON tolerates the unknown field) with backend/internal/s … | ✅ CLOSED L15 2026-08-22 |
 | D44 | 27 | MEDIUM | The Sales/Purchase Order Book flags NOTHING as overdue in its default (no as-at) state, because Overdue() short-circuits to false when asOn is empty — so the view an operator actually opens reports zero late deliveries. | backend/internal/reporting/orderbook.go:159 (the `// asOn == ""` guard at :160) | ✅ **FIXED (L8) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D45 | 29 | MEDIUM | With no period set, the Stock Summary prints "As at today (everything posted)" over a report that is actually unbounded — it includes post-dated vouchers. On 2026-08-07 the screen showed 72,837.15 under that label where the real as-at-today position is 96,168.18. The Balance Sheet has the same behaviour and prints no date at all … | frontend/src/screens/reports/StockSummaryScreen.tsx:110 (`{asOn ? `As at ${asOn}` : "As at today (everything posted)"}`); the Bala … | ✅ **FIXED (L10) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D46 | 29 | MEDIUM | The Balance Sheet's "Profit & Loss A/c (Current Period)" line ignores F2's From date while the P&L honours it, so the same F2 setting yields 1,16,237.15 on one statement and -37,911.02 on the other, and the Balance Sheet's caption still says "(Current Period)". | backend/internal/reporting/reporting.go:975-977 (`openingBS := decimal.Zero; stockAdj := closing.Sub(openingBS); bs.NetProfit = in … | ✅ **FIXED (L10) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
@@ -930,6 +930,7 @@ WORK"** — not "hard to fix".
 | **D88** | 17 | HIGH | ⛔ **ALTERING A VOUCHER SILENTLY DELETES ITS TDS DEDUCTION, and any challan allocation against it is orphaned.** `internal/ledger`'s `deleteTDSDeductions` runs on EVERY alter and the row is re-derived from the body — which is correct on its own terms ("a voucher altered to carry no TDS at all must lose its deduction row rather than keep a stale one"). But the voucher READ path serves no `tds`/`tcs` block, so the form CANNOT re-state what it loaded: hydrate a voucher that carried a deduction, edit its narration, press Ctrl+A, and the deduction is gone — while the challan that paid it keeps an allocation whose natural key now matches no deduction row (migration 0069 carries no foreign key by design, so nothing in the database refuses it). The register then shows the allocation with `deduction_on_record: false`, which is the state that panel already renders and calls out. Found while building D3's form, which is the first thing in the product that can create the precondition. ⚠️ NOT FIXED: the fix is a SERVER READ-PATH change (serve the stored deduction on `GET /vouchers/{id}`) plus hydration in `formFromView`, and it should land with D3's remaining TCS half rather than ahead of it. `formFromView` states the gap at the field today. | `backend/internal/ledger/tds.go` `deleteTDSDeductions` + the voucher GET (`VoucherView` has no tds/tcs) vs `frontend/src/screens/VoucherScreen.tsx` `formFromView` | ✅ **FIXED (L4) — MUTATION-PROVED *AND* DRIVEN 2026-08-21.** The GET serves the stored block and `formFromView` re-states it. Oracle: alter the narration, the `tds_deduction` row SURVIVES and the challan register stops reading "deduction no longer on record". Pinned with its INVERSE CONTROL — an alter that OMITS the block is accepted and deletes it. See §7.5 |
 | **D89** | 17 | HIGH | ⛔⛔ **A REFUSED ALTER SILENTLY BECAME A CREATE, SO THE REMEDY THE REFUSAL PRESCRIBED MINTED A SECOND INVOICE.** `navMachine`'s `accept` reducer replaced ANY voucher frame with a fresh `create` frame on every Ctrl+A. It is pure, so it can never learn that the write was refused — least of all here, where the refusal was CLIENT-SIDE and not one byte left the browser. That dropped the loaded `voucher_id` which routes the PUT, while the form kept the loaded voucher's values on screen: the heading was the only thing that changed, by thirteen characters, at the bottom of a refusal the operator is reading. Driven in a browser: drill a legacy no-HSN sales invoice out of the Day Book, Ctrl+A → refused by `gstRefusal`, key the HSN the refusal asked for, Ctrl+A → **`POST /vouchers/sales` 201**, status line "Saved", and the original invoice's `hsn` still empty. **One tax invoice keyed, two on the books.** ⚠️ NOT GST-SPECIFIC: any refusal on an alter had this shape, client- or server-side. ⚠️ The class was already known on the DRILL side — `phase1.test.ts`'s CONTROL "a row naming no class does not open a voucher frame" closes the same failure reached the other way; that guarded the door IN, nothing guarded the door THROUGH. | `frontend/src/keystroke/navMachine.ts`, the `accept` reducer's voucher arm | ✅ **FIXED (L14) — MUTATION-PROVED *AND* DRIVEN 2026-08-22.** An alter frame stays put; a second Ctrl+A re-PUTs the same `voucher_id` and Esc still returns to the report it was drilled from — which is what `delete` directly below already did. Oracle: the Day Book entry count over the date is UNCHANGED and the voucher reads `op=ALTER`, not a second `CREATE`. Pinned with both CONTROLs (a CREATE frame still re-opens fresh for bulk entry; two accepts on a create really do key two invoices) so neither "never re-open a fresh form" nor "never accept a frame twice" can pass in place of the fix. See §7.5 |
 | **D90** | — | MEDIUM | ⚠️ **A DUPLICATE STOCK ITEM NAME IS ACCEPTED (201, a NEW id) WHILE A DUPLICATE LEDGER NAME IS REFUSED (422).** Found by D84's wire discovery, which measured the recon's claim instead of trusting it: the recon said the route "only ever reaches `CreateStockItem`, which 422s" — cored actually mints a second item with the same name. Consequence: two identical rows in every item picker with nothing to tell them apart, and one item's movements and valuation split across two masters, each weighted-average costed on half the history. ⚠️ **The mock does the OPPOSITE** (create-or-select returns the existing id), so no test can see this — it is recorded as a declared divergence in `corpora/mock-vs-cored/masters.json` rather than mirrored, because mirroring cored here would spread the more suspicious of the two behaviours. ⛔ NOT FIXED: whether a duplicate item name should be refused is a judgement (Tally allows same-named items under different stock GROUPS, which this build does not have yet — that is T10), so it needs deciding before code moves. | `backend/internal/masters/masters.go` CreateStockItem vs CreateLedger's uniqueness check | ⛔ OPEN — registered 2026-08-22 |
+| **D91** | — | MEDIUM | ⚠️ **`pnpm contract:cored` PERMANENTLY BREAKS `pnpm verify:demo` ON WHATEVER TENANT IT IS POINTED AT.** The D84 contract runner creates its fixture parties (`CT Ledger *`, `CT Control *`, `CT Dup *`) in the company named by `CO`, which every session hands it the DEMO company. Those parties have no `state_code`, no GSTIN and no bill-by-bill, so they fail three of `verify:demo`'s party checks BY CONSTRUCTION, and cored has no `DELETE /ledgers` to undo them. The damage accumulates one run at a time: fixture ledgers dated 20:33 and 20:44 (L14d) and 22:59 (L15) took the demo tenant from 34/34 to 27/34, and a fresh seed reads 34/34. ⛔ **THE REAL COST IS MISATTRIBUTION** — the next session runs `verify:demo`, sees seven failures including two money ones, and spends the lane debugging its own change. Found 2026-08-22 while measuring L15's gates, by re-seeding instead of assuming. **FIX: give `contract:cored` its own throwaway tenant** (it already creates everything it needs; only the company is borrowed). Reaping is not the alternative — there is no delete route, and `company` has 14 non-cascading FKs. ⚠️ Note the two MONEY failures on the stale tenant (BS vs Outstandings, GSTR-1 vs Domestic Sales) are a DIFFERENT residue — L14's deliberately-left probe fixtures — and are not this row. | `frontend/scripts/contract-mock-vs-cored.mts` (the runner, takes `CO`) vs `frontend/scripts/verify-demo.mts:357-375` (the party checks) | ⛔ OPEN |
 
 ### ⛔⛔ §7.2 — THE BACK-DATED CUTOFF TOOK **SIX** DOORS TO CLOSE, AND THAT IS THE SESSION'S MAIN LESSON
 
@@ -2466,3 +2467,128 @@ Reverted → 1418/1418.
 - ⚠️ **`docker ps` can wedge while OrbStack reports Running.** It happened on 2026-08-07. `orb stop`
   then `orb start` clears it — but it bounces **every** container on the machine, and `tally_pg` does
   **not** come back on its own (`docker start tally_pg`).
+
+### ✅ L15 — D5 + D43, `allow_negative_stock`. CLOSED 2026-08-22. **22/22, wire + browser.**
+
+ONE COMMIT (`766af00`) because they were one defect seen from two ends. Migration 0025 shipped the
+column and TWO enforcers that read it — `ledger.checkNegativeStock` inside the post transaction, and
+the deferred `check_stock_not_negative()` constraint trigger. Both honoured it correctly. **Nothing
+could write it**: no field on the create body, no route, no service setter, no control. It was false
+for every tenant that has ever existed.
+
+#### ⛔ THE PREMISE WAS MEASURED, NOT READ — §4.1 APPLIED BEFORE A LINE WAS WRITTEN
+
+```
+POST /v1/companies {"allow_negative_stock": true}      -> 201
+SELECT allow_negative_stock FROM company WHERE id=...  -> f
+PUT  /v1/companies/{id}                                -> 403 (no writer existed)
+```
+
+That is D43 reproduced on the wire in under a minute. The recon was right here — but D84 had just
+overturned 2 of 11 recon claims, so it was fired at the server rather than trusted.
+
+#### WHAT MOVED
+
+| Layer | Change |
+|---|---|
+| `internal/identity` | `AllowNegativeStock *bool` on `Company` + the INSERT column (**that alone closes D43**); `SetCompanyFeatures` + `CompanyFeatures`, both cross-checking the RLS scope |
+| `internal/server` | the key on `companyReq`; `PUT /v1/companies/{companyID}` beside the GET; the column on the GET |
+| `auth_middleware.go` | ⛔ **the SECOND TOUCH** — `PUT ""`/`"/"` → `(authz.Alter, "company")` |
+| frontend | types on create + view, `CompanyFeaturesRequest`/`Response`, `setCompanyFeatures` on the client, the rest and mock arms, and the F11 control |
+
+#### ⛔ THE TOKEN CHOICE IS WHY THIS NEEDED NO MIGRATION
+
+`company` was already in authz's vocabulary; migration 0022 seeds Data Entry `allow display company`
+and nothing wider, and that level's `default_access` is `'none'`. So `alter company` is
+default-DENIED for every seeded non-Owner level **the day the route appears**, while the read keeps
+working. Anything reached by 0011's coarse `allow display report` would have handed the inventory
+escape hatch to every operator.
+
+#### THE DRIVE — `frontend/scripts/drive-l15-d5.mjs`, 22/22
+
+⛔ **Every setting assertion is `SELECT allow_negative_stock FROM company` over a direct psql
+connection.** Never a status code, never a response body: a 201 is exactly what D43 handed callers
+while the column stayed false. The accept/refuse pair is the oracle and **no single arm of it
+counts** — the accept means something only because the identical body was refused before it and is
+refused after it, with only the setting moving:
+
+```
+setting OFF -> the issue is REFUSED   "closing balance would be -5.0000"
+PUT true    -> column reads t out of Postgres
+IDENTICAL body                        -> 201
+Stock Summary                         -> closing_qty -5.0000, closing_value 0.0000
+PUT false   -> column reads f
+IDENTICAL body                        -> REFUSED "closing balance would be -10.0000"
+```
+
+**The `-10` in the second refusal is the accept arm's five units being counted back by an enforcer
+that has no idea a probe is running.** That is the arm that makes the pair a measurement rather than
+a pair of status codes.
+
+§4.4's next keystroke is driven too: the remedy the refusal invites (turn it on, retry) works, and
+`voucher_head` holds **exactly 2 rows for 4 attempts** — the refusals wrote no ghosts.
+
+Browser arm: F11 carries a control that **reads its state from the company row**, and both clicks
+move the column, read back out of Postgres. It restores the tenant's setting in a `finally`.
+
+#### ⚠️ TWO PROBE BUGS, NEITHER OF THEM CODE BUGS — recorded because §4.6 says to
+
+1. The first run sent `dr_cr: "DR"`. **The REST client normalises that (`rest.ts`'s `wireDrCr`);
+   raw cored does not**, so every voucher arm came back `422 invalid dr_cr "DR"`. It FAILED rather
+   than passing **only because each arm matches the refusal's SENTENCE, not its status code.** An
+   arm written as `status >= 400` would have gone green on a completely different refusal.
+2. The summary row was matched on `stock_item_name ?? name`; **the wire field is `item`**. Every row
+   projected `undefined`, `.includes()` ran on `""`, nothing matched. It now matches on
+   `stock_item_id` and **THROWS on a missing projection rather than comparing one** — had the
+   fallback been a number instead of a string it would have compared `0 < 0` and read as a clean,
+   meaningless false.
+
+#### THE MUTATION PROOF — six mutations, predictions written down FIRST
+
+| # | Mutation | Predicted | Observed |
+|---|---|---|---|
+| M1 | create drops the field (D43 reverted) | only `explicit_true` fails | ✅ exactly that — the `false` and `omitted` arms stayed green |
+| M2 | `SetCompanyFeatures` no-ops | **both** the response and the column assertion fail | ✅ both |
+| M2b | M2 **plus** the handler echoes the request | column fails, **response now PASSES** | ✅ — **D43 rebuilt on purpose** |
+| M3 | the routeAction arm deleted | the compile-time gate fails, then 403s | ✅ `TestEveryCompanyRouteIsMappedAndInVocabulary` + 403 `unmapped route` |
+| M4 | `authz.Alter` → `authz.Display` | **the structural gate stays GREEN**, only the ACL test fails | ✅ Data Entry PUT = **200** |
+| M5 | `*bool` → `bool` | the omitted-field test fails | ✅ `{}` reset the setting |
+| M6 | the mock echoes instead of storing | two vitest cases fail, one on `undefined` | ✅ exactly, including the `undefined` |
+
+⛔ **M2b IS THE ONE WORTH KEEPING.** It is the read-back-not-echo discipline earning its place:
+with the echo restored, a caller is told `true` while the column holds `false`, the response
+assertion goes green, and **only an out-of-band oracle can see the difference.** That is D43's exact
+mechanism, and it is one line away at all times.
+
+⛔ **M4 IS THE ONE THAT WOULD HAVE SHIPPED.** M3 fails loudly — the structural gate catches an
+unmapped route. M4 keeps the route mapped, keeps every Owner test green, keeps
+`TestEveryCompanyRouteIsMappedAndInVocabulary` green, and hands a clerk the inventory escape hatch.
+A one-token slip is invisible to the gate built to catch route mistakes. §4.5's lesson, generalised:
+**read what the guard COMPARES.**
+
+#### THE MOCK ROUND-TRIPS THE SETTING AND SWITCHES NOTHING — declared, not hidden
+
+The mock has **no negative-stock enforcement at all** (its `post` never computes a closing position),
+so an outward move below zero is accepted whichever way the flag is set. Not expressible as a
+mock-vs-cored `row` — that corpus is refusal-shaped, and this is a value that round-trips plus an
+**absent refusal** — so it is a `deliberate_divergence`, and the last case in
+`src/api/companyFeatures.test.ts` is what asserts the gap is still open.
+
+#### GATES
+`go test ./... -count=1` **0 FAIL / 0 SKIP** (bracketed with a live `psql`) · `pnpm vitest run`
+**1425 / 87 files** (was 1418/86; +7 in one new file) · `pnpm exec tsc --noEmit` clean ·
+`pnpm contract:cored` **11/11** · `pnpm verify:demo` **34/34 ON A FRESH SEED**.
+
+#### ⛔⛔ A GATE INTERACTION FOUND WHILE MEASURING, AND IT IS NOT THIS ROW
+
+`verify:demo` read **27/34** on the tenant seeded 2026-08-21, and **none of it was this change** —
+a fresh seed is 34/34. Six of the seven failures name `CT Control *` / `CT Dup *` parties. Those are
+**fixtures the D84 contract runner leaves in whatever tenant it is pointed at**, and they have no
+state code, no GSTIN and no bill-by-bill — so they fail D87's party checks by construction.
+
+**Running `pnpm contract:cored` against the demo company BREAKS `pnpm verify:demo` on it,
+permanently.** The fixture ledgers are dated 20:33 and 20:44 (L14d) and 22:59 (this session), so the
+damage accumulates one run at a time and the next session will read it as a regression in whatever
+it happens to be working on. ⚠️ **Either point `contract:cored` at its own throwaway tenant, or have
+it reap what it creates** — cored has no `DELETE /ledgers`, so it is the former. Registered below as
+**D91**.

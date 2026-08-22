@@ -7,11 +7,13 @@ Execute it top to bottom.
 
 ## ⛔ THE COUNT, RE-DERIVED BY PARSING §7.1 — NOT COPIED FROM A HEADER
 
-**90 registered · 74 CLOSED · 12 OPEN · 4 PARTIAL.** `74 + 4 + 12 = 90`.
+**91 registered · 76 CLOSED · 11 OPEN · 4 PARTIAL.** `76 + 4 + 11 = 91`.
 
-The previous header said "11 open" and was wrong twice: **D90 was registered and never counted**, and
-**four `PARTIAL` rows have been counted as closed by every session since F6/F8**. Re-parse the table;
-never restate this from memory. The one-liner that did it:
+⚠️ **L15 closed TWO (D5 + D43) and registered ONE (D91), so the open count fell by only one.** The
+count before L15 was 90 registered · 74 CLOSED · 12 OPEN · 4 PARTIAL — and that header itself had
+been wrong twice: **D90 was registered and never counted**, and **four `PARTIAL` rows have been
+counted as closed by every session since F6/F8**. Re-parse the table; never restate this from
+memory. The one-liner that did it:
 
 ```bash
 python3 - <<'PY'
@@ -25,8 +27,9 @@ for l in s[a:b]:
 PY
 ```
 
-**OPEN (12):** D5 · D8 · D22 · D43 · D49 · D52 · D81 · D83 · D85 · D86 · D87 · D90
+**OPEN (11):** D8 · D22 · D49 · D52 · D81 · D83 · D85 · D86 · D87 · D90 · **D91 (new, L15)**
 **PARTIAL (4), status genuinely ambiguous:** D13 · D15 · D17 · D48 — see §5.
+~~D5 · D43~~ — ✅ **CLOSED L15 2026-08-22**, one commit (`766af00`), 22/22 wire + browser.
 
 ---
 
@@ -89,7 +92,8 @@ Cost-ordered, continuing the previous driver's reasoning. **D5+D43 is next.**
 
 | # | Row(s) | Sev | Why here |
 |---|---|---|---|
-| 1 | **D5 + D43** | HIGH | **ONE commit** — D43 is D5's symptom and disappears when the field is honoured. First because D84's gate now exists to measure the mock arm honestly. |
+| ~~1~~ | ~~**D5 + D43**~~ | HIGH | ✅ **DONE L15 2026-08-22** — `766af00`, 22/22. See §7.5's L15 section. |
+| **0** | **D91** | MED | ⛔ **DO THIS FIRST, IT IS ~20 MINUTES AND IT PROTECTS EVERY LANE BELOW IT.** `contract:cored` poisons the demo tenant's `verify:demo`, so every remaining row's gate reads dirty and the next session debugs its own change. Found by L15. |
 | 2 | **D87** | MED | ✅ scope DECIDED 2026-08-22 (§6.2): the three + PAN + credit days. Unblocked. |
 | 3 | **D90** | MED | ✅ DECIDED 2026-08-22 (§6.3): refuse now. Cheapest row in the wave. |
 | 4 | **D22 + D52** | HIGH | **ONE commit** — a door without the sentence, or the sentence without the door, is each worse than today |
@@ -114,7 +118,34 @@ SYMBOL, never jump to the line: HEAD moved five times in L14 alone, and rows 1/4
 ⛔ **And use `/usr/bin/grep`** — the shell's `grep` is aliased to ugrep and returns **silently empty**
 on `frontend/src/api/mock.ts`. It has cost four searches across three sessions.
 
-### 1 · D5 + D43 — `allow_negative_stock` · RECON §3.6 · ONE COMMIT
+### 0 · D91 — `contract:cored` breaks `verify:demo` on the tenant it is given · NEW, L15
+The D84 runner creates its `CT Ledger *` / `CT Control *` / `CT Dup *` parties in the company named
+by `CO` — which every session hands it the DEMO company. Those parties carry no `state_code`, no
+GSTIN and no bill-by-bill, so they fail three of `verify-demo.mts:357-375`'s party checks **by
+construction**, and there is no `DELETE /ledgers` to undo them.
+⛔ **THE COST IS MISATTRIBUTION, NOT THE FAILING CHECK.** L15 measured `verify:demo` at **27/34** on
+the 2026-08-21 tenant and **34/34 on a fresh seed** — the difference was residue, none of it L15's.
+A session that does not re-seed will read seven failures as a regression in its own lane.
+⚠️ Two of those seven are a DIFFERENT residue (L14's deliberately-left probe fixtures moving the
+Balance Sheet and GSTR-1) and are not D91.
+**THE FIX:** give `contract:cored` its own throwaway tenant. It already creates every master it
+needs; only the company is borrowed. Reaping is not the alternative — no delete route, and `company`
+has 14 non-cascading FKs.
+**ORACLE:** run `contract:cored`, then `verify:demo` on the demo tenant, and see 34/34.
+⛔ **First, because it is cheap and every row below it reads a dirtier gate until it is done.**
+
+### ~~1 · D5 + D43 — `allow_negative_stock`~~ ✅ CLOSED L15 2026-08-22 · `766af00` · 22/22
+Kept only for what it teaches; the work is done and recorded in §7.5's L15 section.
+⛔ **TWO MUTATIONS FROM IT ARE WORTH CARRYING FORWARD:**
+- **M2b** — restoring the ECHO (answer from the request, not from a re-read of the row) turned the
+  response assertion GREEN while the column stayed wrong. That is D43's exact mechanism, one line
+  away at all times, and **only an out-of-band oracle sees it.** Every remaining row that writes a
+  setting owes this check.
+- **M4** — mapping the new route to `authz.Display` instead of `authz.Alter` kept
+  `TestEveryCompanyRouteIsMappedAndInVocabulary` **GREEN** and handed a Data Entry clerk the write.
+  The structural gate catches an UNMAPPED route and is blind to a MIS-mapped one. §4.5, generalised.
+
+### ~~1b~~ · the original row text, for reference — `allow_negative_stock` · RECON §3.6 · ONE COMMIT
 Both stock enforcers read the flag and honour it. **Nothing writes it** — no field, no route, no
 setter, no control. And `POST /v1/companies` **accepts the key and discards it at 201** (D43), so the
 caller is told a setting was applied that never was.
@@ -276,8 +307,16 @@ pnpm run verify:demo "$(cat /tmp/drive-company-id)"     # -> ALL CHECKS PASSED
 # DRIVE — always from the REPO ROOT; the harness resolves against frontend/
 CO="$(cat /tmp/drive-company-id)" node frontend/scripts/drive-l14-cheap.mjs    # 17/17 (D82/D89/D80)
 CO="$(cat /tmp/drive-company-id)" node frontend/scripts/drive-l14b-d77.mjs     # 8/8   (D77)
+CO="$(cat /tmp/drive-company-id)" node frontend/scripts/drive-l15-d5.mjs      # 22/22 (D5/D43)
 cd frontend && CO="$(cat /tmp/drive-company-id)" pnpm contract:cored           # 11/11 (D84)
 ```
+
+### ⛔⛔ RE-SEED BEFORE JUDGING `verify:demo`, AND RUN `contract:cored` LAST
+`contract:cored` leaves `CT Ledger *` / `CT Control *` / `CT Dup *` parties in the tenant `CO` names,
+and they fail three of `verify:demo`'s party checks **by construction** — that is register row **D91**
+(§2 row 0). L15 measured **27/34** on the 2026-08-21 tenant and **34/34 on a fresh seed**; the
+difference was residue and none of it was L15's change. ⚠️ **Seven failures on a stale tenant is the
+NORMAL state, not a regression.** Re-seed, then judge.
 
 ### Gates, measured at this handoff
 `pnpm vitest run` **1418 / 86 files** · `pnpm exec tsc --noEmit` **clean** (a SEPARATE gate) ·
