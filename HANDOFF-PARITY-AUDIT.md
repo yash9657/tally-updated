@@ -815,7 +815,7 @@ have now been driven end to end in a real browser against real cored.**
 
 ---
 
-## 7.1 ⛔ THE DEFECT REGISTER — 89 DEFECTS, 13 STILL OPEN
+## 7.1 ⛔ THE DEFECT REGISTER — 89 DEFECTS, 12 STILL OPEN
 
 **This is the audit's actual product.** Every row below was found by DRIVING, is traced to file:line, and
 carries a proposed fix in the source material. ⛔ **Do not re-derive these from scratch** — that is the
@@ -909,7 +909,7 @@ WORK"** — not "hard to fix".
 | D77 | 9 | LOW | The voucher read-back orders postings `ORDER BY p.dr_cr DESC, p.amount DESC` with no `p.id` tiebreak, so two legs on the same SIDE for the same AMOUNT come back in an arbitrary order — the analogous ordinal elsewhere in the codebase uses `ORDER BY p.id`. ⛔ **NOT SYNTHETIC: the CGST and SGST legs of every intra-state supply tie** (18% on 10,000 is 900 credit and 900 credit), so the exposure is the ordinary shape of the most common document in the product. **THREE sites share the projection.** | `backend/internal/ledger/ledger.go` GetVoucher's postings + `internal/reporting/daybook.go` loadPostings + `internal/printing/printingdb/document.go` loadLegs | ✅ **FIXED (L14b) — MUTATION-PROVED *AND* DRIVEN ON THE WIRE 2026-08-22, 8/8.** `, p.id` at all three: GetVoucher's comment promises "same projection and ordering as the day book's loadPostings", so tie-breaking one and not the other would make a STATED invariant false. **Oracle: a HEAP REWRITE** — plan toggles, `work_mem` and `VACUUM ANALYZE` all leave the untied order alone (the read is an index scan, so ties come back in physical order and the sort preserves it), but `CLUSTER` / `pg_repack` — routine maintenance — moves it. The probe runs the OLD query itself as raw SQL in both heap states and REQUIRES them to differ, because whether a rewrite reorders a given pair is a coin toss and without that precondition every arm passes on a broken build. ⛔⛔ **AND IT IS A PRESENTATION-ORDER DEFECT, NOT A MONEY ONE — the mutation proof KILLED the claim that it misattributes a cost split.** `posting_seq` looked positional, but `GetVoucher` builds `postingSeqByID[pid]` while walking the same read and joins allocations by POSTING_ID, so the seq is re-derived to name the same posting however the array is ordered: with the fix reverted and the array demonstrably reordered, the split arm stayed GREEN. Kept as a labelled CONTROL. ⚠️ **`document.go` is the honest exception** — its ORDER BY already carried the ledger NAME, and a leg tying on side+amount+name also ties on ledger_id and group (names are unique per company), so the rows are identical in every projected column and no byte can move; `p.id` makes its "chosen to be total" comment TRUE (it was FALSE for legs to the same ledger) and changes no output. ⚠️ Buys DETERMINISM, not the input order: no ordinal column, and `uuid.NewV7` is not monotonic within a millisecond. See §7.5 |
 | D78 | LEAD 1b | LOW | MembersScreen's error banner is a plain <p> with no role="alert", so the refusal that DOES render is never announced to assistive technology. | frontend/src/screens/MembersScreen.tsx:658-662 (the `error ? <p data-testid="members-error" className="... text-red-400">` block); … | ✅ FIXED (F5) |
 | **D79** | 17 | HIGH | ⛔ **An accounting-mode ALTER RE-POINTED THE VOUCHER'S INCOME/EXPENSE HEAD — DATA LOSS, not an orphan master.** `buildGstRequest` always `ensureLedger`d the orientation's canonical base, so altering a purchase booked to any other head silently moved it. Driven: `Dr Raw Material Purchases 30000` became `Dr Purchases 30000` on an alter that edited NOTHING, and a `Purchases` ledger was minted to receive it. The voucher still balances and the tax is unchanged, so no trigger, total or server check disagrees — the company's expense analysis simply changes because somebody LOOKED at a voucher | `frontend/src/screens/VoucherScreen.tsx` `buildGstRequest` (the unconditional `ensureLedger(orientation.baseLedger)`) | ✅ **FIXED (L6) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** `baseLegFromView` hydrates the head; the canonical base is now the fresh-create fallback only. See §7.5 |
-| **D80** | 9 | MEDIUM | `Alt+G > Vouchers` is broken and always has been: `canonicalReportName("Vouchers")` returns undefined, the `??` falls back to the raw label, and the Go To pushes the **Unwired** screen | `frontend/src/screens/reports/*` + `resolveGotoSelection` | ⛔ OPEN — found by the 11-lane wave, registered here 2026-08-20 |
+| **D80** | 9 | MEDIUM | `Alt+G > Vouchers` is broken and always has been: `canonicalReportName("Vouchers")` returns undefined, the `??` falls back to the raw label, and the Go To pushes the **Unwired** screen. ⛔ **It is the FIRST entry `GOTO_ENTRIES` offers** (`["Vouchers", ...masters, ...REPORT_NAMES]`) and the only one that never worked — invisible because the Gateway's own drill has always been correct for the identical label. | `frontend/src/keystroke/navMachine.ts` `resolveGotoSelection` | ✅ **FIXED (L14c) — MUTATION-PROVED *AND* DRIVEN IN A BROWSER 2026-08-22, 17/17.** One arm before the report fallback, mirroring the gateway arm exactly. Destination is DOCUMENTED not chosen: `RESEARCH.md:903` — *"Alt+G > **Create Voucher** > Ctrl+F4"* — a create-voucher FORM, not the Day Book. **Oracle: the ABSENCE of "is not available in this build" PLUS a real form, and the Alt+G door landing on the SAME SCREEN as the Gateway door** (a fix that invented a different voucher frame would pass every other arm). ⛔⛔ **THE GUARD WRITTEN TO MAKE REACHABILITY STRUCTURAL IS WHAT LET IT SHIP:** `masterGoto.test.ts`'s "GOTO_ENTRIES offers exactly what the machine can route" contained `entry === "Vouchers" ||` — a STRING COMPARISON against labels believed routable, not a check that the machine routes them, so the one dead entry was certified reachable by the test whose whole purpose was to prevent that. Now every entry outside the machine's own routing tables is DRIVEN. ⚠️ `replaced` is deliberately NOT set and that is PINNED as a decision (drive Ctrl+G > Vouchers > Alt+C: `canReturnToVoucher` must be true AND Esc must really return) — on the depth-2 stack the flag is unobservable, so an assertion there would be vacuous. See §7.5 |
 | **D81** | 17 | MEDIUM | A server-only refusal (cutoff, ACL, duplicate number, negative stock) still leaves **masters** behind on the voucher path: a posting needs a real uuid and cored has no `DELETE /ledgers`. The DRAFT path discloses its orphans via `DraftAcceptFailedError`; the voucher path does not | `frontend/src/screens/VoucherScreen.tsx` (resolveMasters) | ⛔ OPEN — registered 2026-08-20. ⚠️ The FORM-side refusals are closed (L6/L12 drives prove Ctrl+A mints nothing when the form refuses); this is the SERVER-refusal half |
 | **D82** | 17 | LOW | The HSN refusal bites the ALTER path: an old sales invoice stored without an HSN cannot be re-saved without keying one. Arguably correct (it cannot be printed either way) but it is a new refusal on existing data | `frontend/src/screens/VoucherScreen.tsx` `HSN_REQUIRED_CLASSES` | ✅ **WORKING AS INTENDED — THE USER'S DECISION, 2026-08-21. `HSN_REQUIRED_CLASSES` STAYS AS IT IS.** The invoice is unprintable without an HSN (CGST Rules 2017, Rule 46(g)), so keying the code is the FIX rather than a hoop. ⛔ A later session that finds this row and "fixes" it is REVERSING A USER DECISION — the SENTENCE is pinned, not just the behaviour (`VoucherScreen.gstAlter.test.tsx`, mutation-proved: disabling the condition turns this pin AND `masterGate.test.tsx`'s D60 arm red). **Driven (L14) 2026-08-22, 12/12:** the refusal reaches the operator on the alter naming Rule 46(g) and "cannot be printed", the HSN field sits empty and keyable on the SAME screen, nothing is sent, and keying the code lets the same alter through as a PUT. ⛔ **AND THE DRIVE FOUND D89** — the remedy this refusal prescribes was minting a duplicate invoice. See §7.5 |
 | **D83** | 5 | LOW | Two SIMULTANEOUS posts with the same hand-typed bill number on one party can both pass the uniqueness check. Needs an index `bill_allocation` cannot carry, because duplicate names are legal for AGAINST/ON_ACCOUNT/caller-named openers. ⚠️ **The sequential case — what an operator actually produces — is closed** | `backend/internal/ledger/` bill uniqueness | ⛔ OPEN — registered 2026-08-20 |
@@ -2235,6 +2235,85 @@ and changes no output. Predicted to stay green under mutation, and it did.
 3. ⚠️ **`make run-cored` COMING UP IN "1s" IS NORMAL, NOT SUSPICIOUS** — the build is cached. Judge the
    binary by its build directory and its symbols, never by how fast the port opened.
 
+
+### ✅ L14c — D80, THE PICKER'S FIRST ENTRY. CLOSED 2026-08-22, **17/17 in a browser.**
+
+**Probe:** `frontend/scripts/drive-l14-cheap.mjs` (the lane's own probe, now 17 arms: 12 for D82/D89, 5 for D80).
+
+#### THE ENTRY AT THE TOP OF THE LIST WAS THE ONE THAT DID NOT WORK
+
+`GOTO_ENTRIES` is literally `["Vouchers", ...masters, ...REPORT_NAMES]`. `canonicalReportName` returns
+undefined for "Vouchers" **on purpose** — a voucher is not a report — and `resolveGotoSelection`'s `??`
+then fell back to the RAW LABEL, so the operator landed on `{screen:"report", reportName:"Vouchers"}`
+and `UnwiredReportScreen` announced that vouchers are *"not available in this build"*.
+
+It stayed invisible because **the door most people use was always right**: the Gateway's own drill has
+pushed `newVoucherFrame(DEFAULT_LAST_VOUCHER)` for the identical label since the beginning. The fix
+mirrors that arm exactly, because a Go To and a Gateway drill on one label must land on one frame.
+
+⛔ **THE DESTINATION WAS LOOKED UP, NOT DECIDED.** The driver said to ask the user only if `RESEARCH.md`
+did not say. It says: `:903`, *"Payroll voucher: **Alt+G > Create Voucher** > Ctrl+F4 (Payroll)"* — a
+create-voucher form. No question needed.
+
+#### ⛔⛔ THE TEST WRITTEN TO MAKE REACHABILITY STRUCTURAL IS WHAT LET THIS SHIP
+
+`masterGoto.test.ts` carries a guard called *"GOTO_ENTRIES offers exactly what the machine can route"*,
+added by row 20 precisely so no picker entry could land on "not available in this build". It contained:
+
+```js
+const routed = entry === "Vouchers" || masterKindForGotoLabel(entry) !== undefined || REPORT_NAMES.includes(entry);
+```
+
+`masterKindForGotoLabel` and `REPORT_NAMES` are the machine's OWN routing tables, so those two clauses
+are real. `entry === "Vouchers"` is a **string comparison against a label believed routable** — and it
+certified the single dead entry in the product as reachable. The clause is gone: anything outside the
+two real tables is now DRIVEN through the machine and must not land on a report frame. That one-line
+change is what turns this from a fix into a fix that cannot come back.
+
+#### THE ORACLE IS AN ABSENCE PLUS A PRESENCE PLUS AN EQUIVALENCE
+
+Asserting `h1 === "Sales Voucher"` alone would pass on a build that rendered both the heading and the
+refusal. Asserting the refusal's absence alone would pass on a blank screen. So: the sentence is
+**absent**, the form's own fields (`Party A/c Name`, `Narration`) are **present**, and — the arm that
+actually proves the fix's claim — **the Alt+G door lands on the same screen as the Gateway door**. A fix
+that invented a *different* voucher frame (wrong class, wrong mode) satisfies everything else and fails
+that one.
+
+#### THE `replaced` DECISION IS PINNED, NOT COMMENTED
+
+Every other arm of `resolveGotoSelection` sets `replaced` under a Switch To, so its absence here would
+read as an oversight. It is read in exactly ONE place — `canReturnToVoucher`, over the frames BELOW the
+top — so on the depth-2 stack the picker produces it is **unobservable, and an assertion there would be
+vacuous** (the recon's skeptic overturned its reader on exactly this). Push a master-create over it with
+Alt+C, the real keystroke, and it becomes observable: with `replaced` set, the projection reports "you
+cannot Esc back to a voucher" while Esc pops unconditionally and does. The test drives
+Ctrl+G > Vouchers > Alt+C and asserts BOTH `canReturnToVoucher === true` and that Esc really returns.
+
+#### MUTATION PROOF — PREDICTED, THEN OBSERVED
+
+| Gate | Predicted | Observed |
+|---|---|---|
+| the de-vacuumed routing guard | red, naming Vouchers | ✅ *"Vouchers is offered but routed nowhere"* |
+| D80 landing test | red, `report` for `voucher` | ✅ exactly that |
+| the `replaced` decision | red on `canReturnToVoucher` | ✅ `expected false to be true` |
+| `canonicalReportName` control | red | ✅ exactly that |
+| Esc arm · report-entry control | **green** — a report frame also pops to the Gateway | ✅ both green |
+| the drive | 4 red, Esc green, all 12 D82/D89 arms untouched | ✅ **13/17, exactly those** |
+
+Reverted → 17/17. Gates: vitest **1404/1404 in 85 files** (1399 before, +5), tsc clean.
+
+#### ⚠️ TRAPS THIS LANE ADDS TO THE LIST
+
+1. ⛔ **A "CURSOR IS ON THE DATE FIELD" ARM ASSERTED SOMETHING THE PRODUCT NEVER DOES.** `activeElement`
+   is always AppShell's ROOT DIV (`h-full w-full outline-none`) — it pulls focus there on every screen
+   change **on purpose**, so no field is ever the DOM's focus and the "cursor" is a rendered highlight.
+   Caught by driving the Gateway door and the Alt+G door side by side and finding them byte-equal on it:
+   **compare the new door against the door that already worked before believing either is broken.**
+   `field: "date"` is a MACHINE-level fact and belongs in the machine's test, where it now lives.
+2. ⛔ **L14b's vite-freshness trap fired again, in the same session, and the calibration is the fix.**
+   The mutated construct also appears in COMMENTS, so the count to wait for was **2**, not 0 — and 3 at
+   HEAD, not 1. Waiting for 0 would have looped forever concluding HMR was stale. **Always
+   `git show HEAD:<file> | grep -c` first and derive the target from the diff.**
 
 ## 8. RULES THAT MUST NOT BE BROKEN DURING THIS WORK
 

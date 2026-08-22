@@ -3,7 +3,7 @@
 Written 2026-08-22, after L4 (TDS/TCS) closed the whole lane and a 13-agent read-only fan-out
 re-verified every remaining row against the code as it is.
 
-**89 defects registered. 76 closed. 13 open.** (2026-08-22: D82 closed, D89 found+fixed, D77 closed.) This file is the DRIVER: what to do next, in what
+**89 defects registered. 77 closed. 12 open.** (2026-08-22: D82 closed, D89 found+fixed, D77 and D80 closed.) This file is the DRIVER: what to do next, in what
 order, what proves it, and what will go wrong. It is meant to be executed top to bottom.
 
 ## THE THREE FILES, AND WHICH ONE WINS
@@ -60,14 +60,14 @@ leaving the 200, the success notice and the stored rows intact.
 
 ## 1. THE ORDER
 
-Cost-ordered, with a reason per position. **Positions 1–3 are done; D80 (position 4) is next.**
+Cost-ordered, with a reason per position. **Positions 1–4 are done; D84 (position 5) is next — and it must go ALONE.**
 
 | # | Row(s) | State | Why here |
 |---|---|---|---|
 | ~~1~~ | ~~D72~~ | ✅ **CLOSED** | was stale — the money half was already fixed and gated |
 | ~~2~~ | ~~D82~~ | ✅ **CLOSED 2026-08-22, 12/12** | working-as-intended per the user. ⛔ **its drive found D89 — a refused alter minted a DUPLICATE invoice — now fixed** |
 | ~~3~~ | ~~D77~~ | ✅ **CLOSED 2026-08-22, 8/8** | all three sites carry `, p.id`. ⛔ **the recon's proposed oracle (VACUUM ANALYZE) DOES NOT WORK — it takes a HEAP REWRITE**; and the mutation proof KILLED the cost-split claim |
-| 4 | **D80** | open | one arm in one reducer. **Before D22/D52** — Alt+G is their oracle surface, so make the picker honest first |
+| ~~4~~ | ~~D80~~ | ✅ **CLOSED 2026-08-22, 17/17** | one arm, mirroring the gateway's. ⛔ **the guard written to make reachability structural is what let it ship** — a string comparison, now a drive |
 | 5 | **D84** | open | ⛔ **the false-green root.** Every vitest after it is measured through the mock. **ALONE.** |
 | 6 | **D5 + D43** | open | **ONE commit** — D43 is D5's symptom and disappears when the field is honoured |
 | 7 | **D87** | open | ⛔ needs a **scope decision from the user** before code is written |
@@ -123,7 +123,7 @@ side come back in an arbitrary order. **Determinism, not data loss.**
    non-fix (its name key already made a full tie indistinguishable in every printed column).
 **Traps that still apply:** D8's drive reads reports whose posting order should now be stable — it is.
 
-### 4 · D80 — `Alt+G > Vouchers` pushes the Unwired screen · RECON §3.4
+### ~~4 · D80 — `Alt+G > Vouchers` pushes the Unwired screen~~ · ✅ CLOSED 2026-08-22 · RECON §3.4
 `canonicalReportName("Vouchers")` returns undefined, the `??` falls back to the raw label, and the
 Go To pushes a report frame named "Vouchers". **The one entry that has been in that picker since the
 beginning is the one that does not work.** Add an arm to `resolveGotoSelection` before the report
@@ -132,8 +132,15 @@ fallback, like the master-kind arm above it.
 ⚠️ **The recon's skeptic overturned the reader on the `replaced` flag** — marking a *voucher* frame
 `replaced` makes the projection lie while Esc still returns. Do NOT set it; record that as a
 deliberate decision.
-**ORACLE:** Alt+G → "Vouchers" → Enter lands on a real frame in a browser, and Esc returns to where
-it came from.
+**✅ DONE 2026-08-22, 17/17** in a browser. `RESEARCH.md:903` answered the question — *"Alt+G >
+**Create Voucher** > Ctrl+F4"* — so it pushes the VOUCHER frame; the user did not need asking. `replaced`
+is NOT set, pinned by driving Ctrl+G > Vouchers > Alt+C (on the depth-2 stack the flag is unobservable,
+so an assertion there would have been vacuous — the recon's skeptic was right).
+⛔⛔ **THE LESSON THAT APPLIES TO EVERY ROW LEFT: the guard written to make reachability STRUCTURAL is
+what let this ship.** `masterGoto.test.ts` asserted `entry === "Vouchers" || …` — a string comparison
+against labels *believed* routable — so the single dead entry in the product was certified reachable by
+the test whose entire purpose was to prevent that. **When a row has a structural guard, read what the
+guard actually compares.**
 
 ### 5 · D84 — the mock is looser than cored · RECON §3.5 · ⛔ ALONE
 **This is the false-green root.** `frontend/src/api/mock.ts` accepts bodies cored refuses, and 61
@@ -305,7 +312,7 @@ CO="$(cat /tmp/drive-company-id)" node frontend/scripts/drive-l4-tds.mjs      # 
 ```
 
 ### Gates, measured at this handoff
-`pnpm vitest run` **1399 / 85 files** · `pnpm exec tsc --noEmit` **clean** (a SEPARATE gate) ·
+`pnpm vitest run` **1404 / 85 files** · `pnpm exec tsc --noEmit` **clean** (a SEPARATE gate) ·
 `go test ./... -count=1` **0 FAIL** (bracket with a live `psql` — ⚠️ a down database makes every DB
 test SKIP and `go test` still exits 0, so the `0 SKIP` count is the load-bearing number) ·
 `make verify` **run ALONE** (beside anything else `internal/sync` hits its 600s timeout and

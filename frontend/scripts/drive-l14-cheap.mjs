@@ -223,6 +223,68 @@ rec("it opens for ALTERATION from the Day Book — and the HEADING says so",
       `${mine.length} entry/entries for stamp ${STAMP}: ${mine.map((e) => e.op).join(",") || "(none)"}`);
 }
 
+// ===========================================================================
+// D80 — Alt+G > Vouchers. The FIRST entry the picker ever offered, and the only
+// one that landed on `UnwiredReportScreen`: `canonicalReportName("Vouchers")`
+// returns undefined on purpose, the `??` fell back to the raw label, and the
+// operator got a report frame named "Vouchers".
+//
+// ⛔ THE ORACLE IS THE **ABSENCE** OF A SENTENCE PLUS THE PRESENCE OF A FORM.
+// Asserting only `h1 === "Sales Voucher"` would pass on a build that rendered
+// both; asserting only the absence of the refusal would pass on a blank screen.
+// ===========================================================================
+console.log(`\n── D80: Alt+G > Vouchers reaches a real voucher form ─────────`);
+{
+  await toGateway();
+  await altMac("g", 1200);
+  await page.keyboard.type("Vouchers");
+  await page.waitForTimeout(800);
+  await press("Enter", 3000);
+
+  const h = await heading();
+  const seenBody = (await body()).replace(/\s+/g, " ");
+  rec("D80: ⛔ Alt+G → \"Vouchers\" → Enter lands on the SALES VOUCHER form",
+      h === "Sales Voucher", `h1="${h}"`);
+  rec("D80: ⛔ and NOT on \"is not available in this build\"",
+      !/is not available in this build/.test(seenBody),
+      (seenBody.match(/.{0,60}not available in this build.{0,20}/) ?? ["(absent)"])[0]);
+  // ⛔ AND IT IS A REAL FORM, not a heading over nothing.
+  rec("D80: …and the entry form is actually there (party + narration fields)",
+      /Party A\/c Name/.test(seenBody) && /Narration/.test(seenBody),
+      seenBody.slice(0, 120));
+
+  // ⛔⛔ THE ARM THAT ACTUALLY PROVES THE FIX'S CLAIM: the Alt+G door and the
+  // GATEWAY door — the one that has always worked for this identical label —
+  // must land on the SAME FRAME. That is what "mirrors the gateway arm" means,
+  // and it is a stronger statement than any single assertion about the Alt+G
+  // door on its own: a fix that invented a *different* voucher frame (wrong
+  // class, wrong mode, no entry config) would satisfy every arm above.
+  //
+  // ⚠️ THIS REPLACED A "CURSOR IS ON THE DATE FIELD" ARM THAT WAS ASSERTING
+  // SOMETHING THE PRODUCT NEVER DOES. `activeElement` is AppShell's ROOT DIV
+  // (`h-full w-full outline-none`) — it pulls focus there on every screen change
+  // on purpose, so no field is ever the DOM's focus and the "cursor" is a
+  // rendered highlight. Driven both doors side by side and they were byte-equal
+  // on that, which is how the probe was caught rather than the fix. `field:
+  // "date"` is a MACHINE-level fact and is pinned at that level, in
+  // `masterGoto.test.ts`.
+  const viaGoto = seenBody;
+  await toGateway();
+  await page.keyboard.type("Vouchers");
+  await page.waitForTimeout(500);
+  await press("Enter", 3000);
+  const viaGateway = (await body()).replace(/\s+/g, " ");
+  rec("D80: ⛔ the Alt+G door lands on the SAME SCREEN as the Gateway door",
+      viaGoto === viaGateway,
+      viaGoto === viaGateway
+        ? `both: "${viaGateway.slice(0, 70)}…"`
+        : `goto:    "${viaGoto.slice(0, 90)}"\n         gateway: "${viaGateway.slice(0, 90)}"`);
+
+  await press("Escape", 1500);
+  rec("D80: ⛔ and Esc returns to where it came from",
+      (await heading()) === "Gateway of Tally", `h1="${await heading()}"`);
+}
+
 console.log(`\n(stamp ${STAMP})`);
 await app.browser.close();
 process.exit(summary() > 0 ? 1 : 0);
