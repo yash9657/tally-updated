@@ -518,6 +518,15 @@ function resolveGotoSelection(
   // thing the operator just asked to create "is not available in this build".
   // That is exactly the shape of failure the three cost screens' labels were
   // written up to prevent.
+  //
+  // ⛔ AND "VOUCHERS" IS THE SAME CLAUSE (D80). It was the FIRST entry this
+  // picker ever offered and the only one that never worked: `canonicalReportName`
+  // returns undefined for it *on purpose* (see the `key === "vouchers"` line),
+  // the `??` below then falls back to the RAW LABEL, and the operator lands on
+  // `{screen:"report", reportName:"Vouchers"}` — `UnwiredReportScreen`, politely
+  // announcing that vouchers are "not available in this build". The Gateway's own
+  // drill has always done the right thing for the identical label; this arm
+  // mirrors it, so the two doors land on the same frame.
   const masterKind = masterKindForGotoLabel(overlay.selectedItem);
   if (masterKind) {
     // `field: "name"` because the create form's cursor starts on the name, the
@@ -531,6 +540,26 @@ function resolveGotoSelection(
     };
     if (overlay.gotoMode === "switchTo") create.replaced = true;
     return [baseFrame, create];
+  }
+  // ⛔ THE VOUCHER DOOR. `RESEARCH.md:903` names it: *"Alt+G > **Create
+  // Voucher** > Ctrl+F4 (Payroll)"* — Tally's Alt+G voucher entry is a
+  // CREATE-VOUCHER FORM, not the Day Book. Mirrors the gateway arm exactly
+  // (`newVoucherFrame(DEFAULT_LAST_VOUCHER)`, no entry mode, so the class
+  // default applies) because a Go To and a Gateway drill on one label must land
+  // on one frame.
+  //
+  // ⛔⛔ `replaced` IS DELIBERATELY **NOT** SET HERE, AND THAT IS A DECISION.
+  // Every other arm in this function sets it under `switchTo`, so its absence
+  // would otherwise read as an oversight. The flag is read in exactly one place
+  // — `canReturnToVoucher`, which asks whether any frame BELOW the top is a
+  // voucher that a Switch To destroyed. A voucher frame this arm creates is not
+  // a destroyed voucher; it is the one the operator just asked for. Marking it
+  // `replaced` is invisible while it is the top frame, and becomes a LIE the
+  // moment anything is pushed over it (Alt+C from a voucher field): the
+  // projection would report `canReturnToVoucher: false` while Esc pops
+  // unconditionally and really does return to it. Pinned in masterGoto.test.ts.
+  if (overlay.selectedItem?.trim().toLowerCase() === "vouchers") {
+    return [baseFrame, newVoucherFrame(DEFAULT_LAST_VOUCHER)];
   }
   const reportName =
     canonicalReportName(overlay.selectedItem) ?? overlay.selectedItem ?? "";

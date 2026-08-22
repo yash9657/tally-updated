@@ -53,8 +53,13 @@ import type { CoredClient } from "../api";
  *
  *  1. ⛔ `app/defaultScreens.tsx` maps the bare `report` key to
  *     `UnwiredReportScreen` — every report name a menu or the Go To picker can
- *     produce that has no data plane (Cash Flow, GSTR-1, the anomaly list, and
- *     `Alt+G > Vouchers`, which lands there by accident). It registers NOTHING:
+ *     produce that has no data plane (Cash Flow, GSTR-1, the anomaly list).
+ *     ⚠️ **`Alt+G > Vouchers` USED TO LAND HERE BY ACCIDENT AND NO LONGER DOES**
+ *     — that was register row D80, fixed 2026-08-22 with an arm in
+ *     `resolveGotoSelection`; the clause is corrected rather than deleted so the
+ *     next reader of this census knows the list shrank by a fix and not by
+ *     someone trimming an inconvenient example. THE HOLE ITSELF IS UNCHANGED and
+ *     is still not this lane's file. It registers NOTHING:
  *     REPORT_BAR sells both Ctrl+P and Alt+E over it and neither moves the
  *     machine, so both answer "does not apply on this screen" — while printTarget
  *     already holds the right sentence ("…cannot be printed in this build — it is

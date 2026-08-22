@@ -183,12 +183,31 @@ describe("⛔ every MasterKind is reachable from the keyboard (audit row 20)", (
     expect(GOTO_ENTRIES).toContain("Vouchers");
     // Nothing in the list is a dead end: it is either Vouchers, a master entry
     // or a report name.
+    // ⛔⛔ THIS LOOP USED TO CONTAIN `entry === "Vouchers" ||`, AND THAT STRING
+    // COMPARISON IS WHAT LET D80 SHIP. It asserted that the label was on a list
+    // of things believed routable — not that the MACHINE routes it — so the one
+    // entry in the picker that landed on "not available in this build" was
+    // certified as reachable by the very test written to make reachability
+    // structural. `masterKindForGotoLabel` and `REPORT_NAMES` are the same shape
+    // of claim, but those two really are the machine's own routing tables; the
+    // Vouchers arm had no table, so it needed a DRIVE, and now it has one.
     for (const entry of GOTO_ENTRIES) {
       const routed =
-        entry === "Vouchers" ||
         masterKindForGotoLabel(entry) !== undefined ||
         (REPORT_NAMES as readonly string[]).includes(entry);
-      expect(routed, `${entry} is offered but routed nowhere`).toBe(true);
+      if (routed) continue;
+      // Not in either table: the machine must be DRIVEN to prove it lands
+      // somewhere real. "Somewhere real" excludes a report frame, because that
+      // is precisely the accidental landing this row was about.
+      const snap = drive([
+        { type: "KEY", combo: "Alt+G" },
+        { type: "SELECT", menuItem: entry },
+        { type: "KEY", combo: "Enter" },
+      ]);
+      expect(snap.screen, `${entry} is offered but routed nowhere`).not.toBe(
+        "report",
+      );
+      expect(snap.reportName, `${entry} landed on a report frame`).toBeUndefined();
     }
   });
 });
@@ -231,5 +250,113 @@ describe("Ctrl+A after a STANDALONE create returns to where it came from", () =>
       { type: "KEY", combo: "Esc" },
     ]);
     expect(snap.screen).toBe("gateway");
+  });
+});
+
+/**
+ * ===========================================================================
+ * ⛔⛔ REGISTER ROW D80 — `Alt+G > Vouchers` PUSHED THE **UNWIRED** SCREEN, AND
+ * IT IS THE FIRST ENTRY THE PICKER EVER OFFERED.
+ * ===========================================================================
+ *
+ * `GOTO_ENTRIES` is literally `["Vouchers", ...masters, ...REPORT_NAMES]`, so
+ * "Vouchers" has been at the top of that list since the picker existed — and it
+ * was the only entry that did not work. `canonicalReportName` returns undefined
+ * for it ON PURPOSE (a voucher is not a report), the `??` in
+ * `resolveGotoSelection` then fell back to the RAW LABEL, and the operator got
+ * `{screen:"report", reportName:"Vouchers"}` — which `defaultScreens` maps to
+ * `UnwiredReportScreen`, a screen that politely announces vouchers are "not
+ * available in this build".
+ *
+ * ⛔ THE GATEWAY'S OWN DRILL HAS ALWAYS BEEN CORRECT for the identical label
+ * (`newVoucherFrame(DEFAULT_LAST_VOUCHER)`), which is why this never looked like
+ * a missing feature: the door most people use worked.
+ *
+ * ⛔ THE DESTINATION IS DOCUMENTED, NOT CHOSEN. `RESEARCH.md:903` — *"Payroll
+ * voucher: Alt+G > **Create Voucher** > Ctrl+F4"* — so Alt+G's voucher door is a
+ * create-voucher FORM, not the Day Book.
+ */
+describe("⛔ D80: Alt+G > Vouchers opens a voucher, not the Unwired screen", () => {
+  const openVouchers = (combo: "Alt+G" | "Ctrl+G") => [
+    { type: "KEY", combo } as const,
+    { type: "SELECT", menuItem: "Vouchers" } as const,
+    { type: "KEY", combo: "Enter" } as const,
+  ];
+
+  it("⛔ lands on a real Sales voucher entry form with the cursor on Date", () => {
+    const snap = drive([...openVouchers("Alt+G")]);
+    expect(snap.screen).toBe("voucher");
+    expect(snap.voucherType).toBe("sales");
+    expect(snap.mode).toBe("create");
+    // The cursor has to be somewhere, or the operator's first keystroke goes
+    // nowhere — the same reason the master arm above sets `field: "name"`.
+    expect(snap.field).toBe("date");
+    // ⛔ LOAD-BEARING. A report frame named "Vouchers" is exactly what existed
+    // before, and `screen === "voucher"` alone would not have caught a build
+    // that pushed BOTH.
+    expect(snap.reportName).toBeUndefined();
+  });
+
+  it("⛔ and Esc returns to where it came from", () => {
+    const snap = drive([...openVouchers("Alt+G"), { type: "KEY", combo: "Esc" }]);
+    expect(snap.screen).toBe("gateway");
+  });
+
+  it("⛔ THE `replaced` DECISION: Ctrl+G > Vouchers stays returnable once anything is pushed over it", () => {
+    // Every other arm of `resolveGotoSelection` sets `replaced` under a Switch
+    // To. This one deliberately does not, and THIS is the assertion that makes
+    // that a decision rather than an oversight.
+    //
+    // `replaced` is read in exactly one place — `canReturnToVoucher`, over the
+    // frames BELOW the top. So on the depth-2 stack the picker produces it is
+    // unobservable, and an assertion there would be vacuous. Push a
+    // master-create over the voucher (Alt+C, the real keystroke) and it becomes
+    // observable: with `replaced` set, the projection reports "you cannot Esc
+    // back to a voucher" while Esc pops unconditionally and does exactly that.
+    const snap = drive([
+      ...openVouchers("Ctrl+G"),
+      { type: "KEY", combo: "Alt+C" },
+    ]);
+    expect(snap.screen).toBe("master-create");
+    expect(snap.canReturnToVoucher).toBe(true);
+
+    // …and the projection is telling the truth: Esc really does return.
+    const back = drive([
+      ...openVouchers("Ctrl+G"),
+      { type: "KEY", combo: "Alt+C" },
+      { type: "KEY", combo: "Esc" },
+    ]);
+    expect(back.screen).toBe("voucher");
+    expect(back.voucherType).toBe("sales");
+  });
+
+  it("⛔ CONTROL: a REPORT entry still resolves to a report frame", () => {
+    // Without this, an arm that swallowed every label into a voucher frame would
+    // pass every assertion above and break the whole picker.
+    const snap = drive([
+      { type: "KEY", combo: "Alt+G" },
+      { type: "SELECT", menuItem: "Balance Sheet" },
+      { type: "KEY", combo: "Enter" },
+    ]);
+    expect(snap.screen).toBe("report");
+    expect(snap.reportName).toBe("Balance Sheet");
+  });
+
+  it("⛔ CONTROL: `canonicalReportName`'s undefined arm for \"vouchers\" is UNTOUCHED", () => {
+    // The fix must not be made by teaching canonicalReportName to return a
+    // report name for "Vouchers" — that would put the voucher door back on the
+    // report path with a nicer label. The proof is that the raw-label fallback
+    // is no longer reachable for it: nothing named "Vouchers" resolves to a
+    // report, in either picker mode.
+    for (const combo of ["Alt+G", "Ctrl+G"] as const) {
+      for (const label of ["Vouchers", "vouchers", "  VOUCHERS  "]) {
+        const snap = drive([
+          { type: "KEY", combo },
+          { type: "SELECT", menuItem: label },
+          { type: "KEY", combo: "Enter" },
+        ]);
+        expect(snap.screen, `${combo} + ${JSON.stringify(label)}`).toBe("voucher");
+      }
+    }
   });
 });
