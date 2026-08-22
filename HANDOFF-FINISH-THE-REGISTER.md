@@ -1,3 +1,11 @@
+# ⛔ SUPERSEDED — see `HANDOFF-THE-LAST-TWELVE.md`
+
+**Positions 1–5 are DONE (D72, D82, D77, D80, D84).** This file is kept only for its §2 per-row detail
+on rows that are still open. **The ORDER, the COUNT and the TRAPS here are stale** — the count in
+particular said "11 open" and the table held 12. Use `HANDOFF-THE-LAST-TWELVE.md`.
+
+---
+
 # HANDOFF — FINISH THE REGISTER: the last 15 defects, in order, with the oracle for each
 
 Written 2026-08-22, after L4 (TDS/TCS) closed the whole lane and a 13-agent read-only fan-out

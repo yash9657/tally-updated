@@ -815,7 +815,17 @@ have now been driven end to end in a real browser against real cored.**
 
 ---
 
-## 7.1 ⛔ THE DEFECT REGISTER — 90 DEFECTS, 11 STILL OPEN
+## 7.1 ⛔ THE DEFECT REGISTER — 90 DEFECTS · 74 CLOSED · 12 OPEN · 4 PARTIAL
+
+⛔⛔ **THE COUNT WAS RE-DERIVED BY PARSING THIS TABLE ON 2026-08-22, AND IT DID NOT MATCH THE HEADER.**
+Two errors, both of the kind §7's own rule warns about (*"update it, do not assume it"*):
+
+1. **D90 was registered and never added to the open count** — the header said 11 open when the table
+   held 12. A row can be written and still not counted.
+2. **FOUR ROWS ARE `PARTIAL`, NOT CLOSED, AND EVERY PREVIOUS SESSION COUNTED THEM AS CLOSED** —
+   D13 (F8), D15, D17, D48 (all F6). That is where the old "73 closed" came from.
+
+`74 + 4 + 12 = 90`. **Do not restate this header from memory — re-parse the table.**
 
 **This is the audit's actual product.** Every row below was found by DRIVING, is traced to file:line, and
 carries a proposed fix in the source material. ⛔ **Do not re-derive these from scratch** — that is the
