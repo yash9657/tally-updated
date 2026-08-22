@@ -908,12 +908,24 @@ func (s *Service) GetVoucher(ctx context.Context, voucherID uuid.UUID) (VoucherV
 		// slice. See CostAllocationView on why that index, and not the signed
 		// payload's, is the correct one to hand back.
 		postingSeqByID := map[uuid.UUID]int{}
+		// ⛔ `, p.id` MAKES THIS ORDER TOTAL (D77). Without it two legs on the same
+		// SIDE for the same AMOUNT tie on every key, so Postgres may return them
+		// in either order on two reads of the same rows — see ledger.go's insert
+		// loop, which spells out that a voucher may legitimately post twice to the
+		// same ledger for the same amount. Precedent: bankrecon.go's and
+		// banking.go's `ORDER BY p.id`, which MUST agree leg-for-leg between a
+		// reader and a writer for the same reason.
+		//
+		// ⚠️ THIS BUYS DETERMINISM, NOT THE INPUT ORDER. `posting` has no ordinal
+		// column and `uuid.NewV7` is not monotonic within a millisecond, so p.id
+		// is a STABLE tie-break and nothing more — it does not recover the
+		// sequence the payload stated, and nothing here should pretend it does.
 		prows, err := tx.Query(ctx,
 			`SELECT p.id, p.ledger_id, COALESCE(l.name, ''), p.dr_cr::text, p.amount
 			   FROM posting p
 			   LEFT JOIN ledger l ON l.id = p.ledger_id
 			  WHERE p.company_id = $1 AND p.voucher_version_id = $2
-			  ORDER BY p.dr_cr DESC, p.amount DESC`,
+			  ORDER BY p.dr_cr DESC, p.amount DESC, p.id`,
 			companyID, versionID)
 		if err != nil {
 			return fmt.Errorf("ledger: query postings: %w", err)

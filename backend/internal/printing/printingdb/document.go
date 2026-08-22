@@ -851,13 +851,23 @@ type legRow struct {
 const dutiesAndTaxesGroup = "Duties & Taxes"
 
 func loadLegs(ctx context.Context, tx pgx.Tx, companyID, versionID uuid.UUID) ([]legRow, error) {
-	// ORDER BY dr_cr DESC ('D' before 'C'), then descending amount, then name.
+	// ORDER BY dr_cr DESC ('D' before 'C'), then descending amount, then name,
+	// then p.id.
 	//
 	// A posting carries NO line number — the table has none — so there is no
 	// keyed order to recover. This is therefore a canonical PRESENTATION order,
-	// chosen to be total (the name breaks every remaining tie) so that printing
-	// the same voucher twice produces byte-identical output. It is the same
-	// ordering ledger.GetVoucher projects, plus the tie-break.
+	// chosen to be TOTAL so that printing the same voucher twice produces
+	// byte-identical output. It is the same ordering ledger.GetVoucher projects,
+	// plus the tie-breaks.
+	//
+	// ⛔ THE NAME DID **NOT** BREAK EVERY REMAINING TIE, AND THIS COMMENT USED TO
+	// CLAIM IT DID (D77). Two legs on the same SIDE, for the same AMOUNT, to the
+	// SAME LEDGER tie on all three of dr_cr/amount/name — and that is a legal
+	// voucher, as ledger.go's insert loop says in as many words. The byte-identical
+	// guarantee this comment asserted was therefore not held by the code beneath
+	// it; `p.id` is what actually makes the order total. ⚠️ It buys DETERMINISM,
+	// not the input order: `uuid.NewV7` is not monotonic within a millisecond, so
+	// it is a stable tie-break and nothing more.
 	rows, err := tx.Query(ctx,
 		`SELECT p.ledger_id, COALESCE(l.name, ''), COALESCE(g.name, ''),
 		        p.dr_cr::text, p.amount
@@ -865,7 +875,7 @@ func loadLegs(ctx context.Context, tx pgx.Tx, companyID, versionID uuid.UUID) ([
 		   LEFT JOIN ledger l        ON l.company_id = p.company_id AND l.id = p.ledger_id
 		   LEFT JOIN account_group g ON g.company_id = l.company_id AND g.id = l.group_id
 		  WHERE p.company_id = $1 AND p.voucher_version_id = $2
-		  ORDER BY p.dr_cr DESC, p.amount DESC, COALESCE(l.name, '')`,
+		  ORDER BY p.dr_cr DESC, p.amount DESC, COALESCE(l.name, ''), p.id`,
 		companyID, versionID)
 	if err != nil {
 		return nil, fmt.Errorf("printingdb: query postings: %w", err)

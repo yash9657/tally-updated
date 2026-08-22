@@ -126,12 +126,17 @@ func (s *Service) DayBook(ctx context.Context, companyID uuid.UUID, from, to str
 // loadPostings reads the postings of one voucher version (with ledger names) and
 // returns them plus the debit and credit totals.
 func loadPostings(ctx context.Context, tx pgx.Tx, versionID uuid.UUID) ([]VoucherPosting, decimal.Decimal, decimal.Decimal, error) {
+	// ⛔ `, p.id` MAKES THIS ORDER TOTAL (D77), and it is appended at ALL THREE
+	// sites that share this projection or none: ledger.GetVoucher promises "same
+	// projection and ordering as the day book's loadPostings", so tying the
+	// break here and not there would make that stated invariant FALSE — a new
+	// inconsistency in place of the old one. See ledger.go's copy of this note.
 	rows, err := tx.Query(ctx,
 		`SELECT p.ledger_id, COALESCE(l.name, ''), p.dr_cr::text, p.amount
 		   FROM posting p
 		   LEFT JOIN ledger l ON l.id = p.ledger_id
 		  WHERE p.voucher_version_id = $1
-		  ORDER BY p.dr_cr DESC, p.amount DESC`,
+		  ORDER BY p.dr_cr DESC, p.amount DESC, p.id`,
 		versionID)
 	if err != nil {
 		return nil, decimal.Zero, decimal.Zero, fmt.Errorf("reporting: query postings: %w", err)
