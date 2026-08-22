@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/google/uuid"
@@ -189,6 +190,36 @@ const (
 	GSTUnknown      GSTRegistrationType = "UNKNOWN"
 )
 
+// ifscRE mirrors the ledger_bank_ifsc_shape CHECK constraint exactly. Kept
+// beside the validation that uses it rather than in the schema alone, because a
+// constraint an operator can trip must have a SENTENCE, and a constraint has
+// none (register row D93).
+var ifscRE = regexp.MustCompile(`^[A-Z]{4}0[A-Z0-9]{6}$`)
+
+// valid reports whether this is a registration type the enum will accept.
+//
+// ⛔ GSTUnknown IS VALID HERE and is deliberately still not offerable from the
+// ledger FORM. They are different questions: the column's default is UNKNOWN, so
+// a body that omits the field must keep working, while an operator choosing
+// "I did not say" is not a statement about a party (see D87 and
+// frontend/src/screens/masters/gst.ts).
+func (t GSTRegistrationType) valid() bool {
+	switch t {
+	case GSTUnregistered, GSTRegular, GSTComposition, GSTConsumer, GSTSEZ, GSTUnknown:
+		return true
+	}
+	return false
+}
+
+// knownRegistrationTypes lists the enum for a refusal message. A caller told
+// only "that is invalid" has to go and read the schema.
+func knownRegistrationTypes() []string {
+	return []string{
+		string(GSTUnregistered), string(GSTRegular), string(GSTComposition),
+		string(GSTConsumer), string(GSTSEZ), string(GSTUnknown),
+	}
+}
+
 // Ledger is a posting account under a group, with optional GST master fields.
 type Ledger struct {
 	ID                 uuid.UUID
@@ -355,6 +386,39 @@ func (s *Service) CreateLedger(ctx context.Context, l Ledger, createdBy string) 
 	}
 	if l.RegistrationType == "" {
 		l.RegistrationType = GSTUnknown
+	}
+	// ⛔ VALIDATED HERE, NOT LEFT TO THE ENUM CAST — register row D93.
+	// `registration_type` is a Postgres ENUM, so an unrecognised value did not
+	// pass silently: it failed the cast inside the INSERT and the raw driver
+	// error went to the caller verbatim, SQLSTATE and all —
+	//
+	//   masters: insert ledger: ERROR: invalid input value for enum
+	//   gst_registration_type: "Regular" (SQLSTATE 22P02)
+	//
+	// which names an internal type, quotes a SQLSTATE, and tells an operator
+	// nothing about what they may type instead. `drive-l13-masters.mjs` already
+	// asserts `!/SQLSTATE/` on a refusal message from THIS ROUTE, so the
+	// expectation was pinned on one path and unenforced on three others.
+	//
+	// Found by a MUTATION PROOF, and by the prediction being WRONG: sending the
+	// display label "Regular" instead of "REGULAR" was expected to be silently
+	// coerced to the UNKNOWN default. It is not — the refusal is correct and
+	// only its SENTENCE was wrong. See §4.2.
+	if !l.RegistrationType.valid() {
+		return uuid.Nil, fmt.Errorf(
+			"masters: %q is not a GST registration type (want one of %s)",
+			l.RegistrationType, strings.Join(knownRegistrationTypes(), ", "))
+	}
+	// The same treatment for the two CHECK constraints an HTTP caller can
+	// reach. Both leaked the constraint NAME as well as the SQLSTATE.
+	if l.BankIFSC != "" && !ifscRE.MatchString(l.BankIFSC) {
+		return uuid.Nil, fmt.Errorf(
+			"masters: %q is not an IFSC (four letters, then 0, then six letters or digits)",
+			l.BankIFSC)
+	}
+	if l.BankAccountNumber != "" && strings.TrimSpace(l.BankAccountNumber) == "" {
+		return uuid.Nil, errors.New(
+			"masters: a bank account number cannot be only spaces — leave it empty if it is not recorded")
 	}
 	// A bill-wise opening breakup must ACCOUNT FOR the whole opening balance.
 	// Tally refuses a breakup with a difference, and so do we: a breakup that
