@@ -1373,7 +1373,23 @@ type ledgerReq struct {
 	StateCode          string `json:"state_code"`
 	RegistrationType   string `json:"registration_type"`
 	PAN                string `json:"pan"`
-	CreatedBy          string `json:"created_by"`
+
+	// CreditDays is the party's agreed payment term, and it is what makes an
+	// Outstandings ageing bucket mean anything for a bill with no explicit due
+	// date. A POINTER because the column is NULLABLE and NULL is a real,
+	// distinct state — "no term agreed" is not "due immediately", and a plain
+	// int would make every party that never stated one look like a cash party.
+	//
+	// ⛔ THE MASTERS LAYER HAS CARRIED THIS SINCE IT WAS WRITTEN AND THE WIRE
+	// DROPPED IT — measured 2026-08-22, not inferred: POST a ledger with
+	// `"credit_days": 45`, get 201, and `SELECT credit_days` reads NULL.
+	// masters.Ledger.CreditDays existed and the INSERT bound it; there was
+	// simply no field here to fill it from, so it was nil on every create. That
+	// is D43's shape on a second route, and it is why D87's form could not have
+	// carried the field honestly without this line.
+	CreditDays *int `json:"credit_days"`
+
+	CreatedBy string `json:"created_by"`
 
 	// Address / City / Pincode are the party's POSTAL BLOCK, named to match the
 	// company-profile request body (mailing_name / address / city / pincode) so
@@ -1462,6 +1478,7 @@ func (s *Server) handleCreateLedger(w http.ResponseWriter, r *http.Request) {
 		StateCode:          req.StateCode,
 		RegistrationType:   masters.GSTRegistrationType(req.RegistrationType),
 		PAN:                req.PAN,
+		CreditDays:         req.CreditDays,
 		Address:            req.Address,
 		City:               req.City,
 		PIN:                req.Pincode,

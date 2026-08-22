@@ -21,6 +21,23 @@ import {
   GROUP_NATURES,
   type GroupNature,
 } from "./groups";
+// ⛔ IMPORTED, NOT RE-DERIVED. `./gst` shipped with ZERO importers — the GSTIN
+// validator, the state-code-from-GSTIN helper and the registration vocabulary
+// were all written, tested and dead. Re-deriving any of them here would have
+// left the dead copy in place to drift.
+import {
+  GST_REGISTRATION_TYPES,
+  GST_REGISTRATION_WIRE,
+  STATE_CODES,
+  isKnownStateCode,
+  isValidGstin,
+  isValidPan,
+  panFromGstin,
+  requiresGstin,
+  stateCodeFromGstin,
+  stateNameForCode,
+  type GstRegistrationType,
+} from "./gst";
 import { moneyEq, normalizeMoney, subMoney, sumMoney } from "../vouchers/money";
 
 /**
@@ -204,6 +221,23 @@ interface Draft {
   openingDC: "D" | "C";
   maintainBillByBill: boolean;
   openingBills: BillDraft[];
+  /**
+   * The party block (register row D87). The server has accepted `gstin`,
+   * `state_code`, `registration_type` and `pan` since they were written, and
+   * this form rendered NONE of them — so every party keyed from the keyboard
+   * landed `(null)|(null)|UNKNOWN`, which is the exact input that made D19
+   * derive an intra-state bill as IGST.
+   *
+   * ⚠️ `creditDays` is a STRING here because it is what an input holds. It is
+   * parsed once, in `build()`, and "" means NOT STATED — sent as an absent key
+   * rather than 0, because "no term agreed" and "due immediately" are different
+   * facts about a party.
+   */
+  gstin: string;
+  stateCode: string;
+  registrationType: GstRegistrationType;
+  pan: string;
+  creditDays: string;
   // ---- group
   nature: GroupNature | "";
   // ---- unit
@@ -230,6 +264,18 @@ function emptyDraft(): Draft {
     openingDC: "D",
     maintainBillByBill: false,
     openingBills: [emptyBill()],
+    gstin: "",
+    stateCode: "",
+    // ⛔ "Unregistered", NOT the server's UNKNOWN default. UNKNOWN means
+    // "nobody said", and it is exactly what D87 is about: it is a legitimate
+    // state for a party nobody has looked at, and an ILLEGITIMATE one for a
+    // party somebody just sat down and keyed. Defaulting to a real answer means
+    // a keyed party always carries a statement — and Unregistered is the right
+    // default because it is the one that charges tax normally and claims
+    // nothing, so getting it wrong is the least costly way to be wrong.
+    registrationType: "Unregistered",
+    pan: "",
+    creditDays: "",
     nature: "",
     formalName: "",
     decimalPlaces: "2",
@@ -239,6 +285,20 @@ function emptyDraft(): Draft {
     openingRate: "",
   };
 }
+
+/**
+ * The groups whose ledgers are PARTIES, and therefore the groups a state code is
+ * mandatory under (register row D87, the user's decision 2026-08-21).
+ *
+ * ⛔ NOT EVERY LEDGER NEEDS ONE, and that is why this is a set rather than a
+ * blanket rule. A bank account, a sales account and an expense head have no
+ * place of supply; demanding a state code on those would refuse most of the
+ * chart of accounts to protect a rule that does not apply to it.
+ */
+const PARTY_GROUPS: ReadonlySet<string> = new Set([
+  "Sundry Debtors",
+  "Sundry Creditors",
+]);
 
 /** The bills actually worth sending (a blank spare row is not a bill). */
 function keyedBills(d: Draft): BillDraft[] {
@@ -354,6 +414,88 @@ export function MasterCreateScreen({
             amount: normalizeMoney(b.amount),
             ...(b.dueDate ? { due_date: b.dueDate } : {}),
           }));
+          // ---- THE PARTY BLOCK (register row D87) -----------------------
+          // ⛔ EVERY REFUSAL BELOW FIRES CLIENT-SIDE, BEFORE ANY REQUEST.
+          // `masters.CreateLedger` CREATES the ledger and then has nothing to
+          // refuse with — it accepts a null state code happily — so a
+          // server-side check is not available, and a check that ran after the
+          // POST would be refusing a party that already exists.
+          const gstin = d.gstin.trim().toUpperCase();
+          const stateCode = d.stateCode.trim();
+          const pan = d.pan.trim().toUpperCase();
+          const regWire = GST_REGISTRATION_WIRE[d.registrationType];
+
+          if (PARTY_GROUPS.has(p) && stateCode === "") {
+            // ⛔ THE USER'S DECISION, AND THE ONE THAT CLOSES D19's INPUT.
+            // A party with no state code makes the server fall back to the
+            // COMPANY's state, so an intra-state supply from a Maharashtra
+            // supplier to a Maharashtra buyer was derived as IGST for a
+            // Karnataka company. It is refused here rather than defaulted,
+            // because a default would be a guess about where somebody trades.
+            return (
+              `A party under ${p} needs a STATE CODE — it decides CGST+SGST ` +
+              `versus IGST on every bill, and with none the split is derived ` +
+              `from the company's own state instead. Nothing was created.`
+            );
+          }
+          if (stateCode !== "" && !isKnownStateCode(stateCode)) {
+            return (
+              `“${stateCode}” is not a GST state code. Nothing was created.`
+            );
+          }
+          if (requiresGstin(d.registrationType) && gstin === "") {
+            // A Regular or Composition party BY DEFINITION holds a
+            // registration, so the number is not optional once that claim is
+            // made. Unregistered / Consumer / SEZ are untouched by this.
+            return (
+              `A ${d.registrationType} party has a GSTIN by definition — ` +
+              `state it, or set the registration type to Unregistered. ` +
+              `Nothing was created.`
+            );
+          }
+          if (gstin !== "" && !isValidGstin(gstin)) {
+            return (
+              `“${gstin}” is not a valid GSTIN (15 characters: 2-digit state, ` +
+              `10-character PAN, entity digit, “Z”, checksum). Nothing was created.`
+            );
+          }
+          if (gstin !== "" && stateCode !== "" && stateCodeFromGstin(gstin) !== stateCode) {
+            // ⛔ THE TWO MUST AGREE OR ONE OF THEM IS WRONG, and after the
+            // master is saved nothing ever looks again. This is the exact
+            // relationship `verify:demo` checks across the whole book.
+            return (
+              `The GSTIN begins ${stateCodeFromGstin(gstin)} ` +
+              `(${stateNameForCode(stateCodeFromGstin(gstin)) || "unknown state"}) ` +
+              `but the state code says ${stateCode} ` +
+              `(${stateNameForCode(stateCode) || "unknown state"}) — one of them ` +
+              `is wrong. Nothing was created.`
+            );
+          }
+          if (pan !== "" && !isValidPan(pan)) {
+            return `“${pan}” is not a valid PAN (5 letters, 4 digits, 1 letter). Nothing was created.`;
+          }
+          if (pan !== "" && gstin !== "" && panFromGstin(gstin) !== pan) {
+            // A GSTIN is BUILT from the PAN, so when both are stated they
+            // cannot disagree.
+            return (
+              `The GSTIN contains PAN ${panFromGstin(gstin)} but the PAN field ` +
+              `says ${pan} — a GSTIN is built from the PAN, so one of them is ` +
+              `wrong. Nothing was created.`
+            );
+          }
+          // ⚠️ "" IS NOT STATED AND IS SENT AS AN ABSENT KEY, not as 0.
+          // "No term agreed" and "due immediately" are different facts, and the
+          // ageing report reads them differently.
+          const creditRaw = d.creditDays.trim();
+          let creditDays: number | undefined;
+          if (creditRaw !== "") {
+            const parsed = Number(creditRaw);
+            if (!Number.isInteger(parsed) || parsed < 0) {
+              return `Credit days must be a whole number of days (or blank for “no term agreed”) — “${creditRaw}” is not. Nothing was created.`;
+            }
+            creditDays = parsed;
+          }
+
           const req: CreateLedgerRequest = {
             name: n,
             group_name: p,
@@ -361,6 +503,14 @@ export function MasterCreateScreen({
             opening_dc: d.openingDC,
             maintain_bill_by_bill: d.maintainBillByBill,
             ...(opening_bills.length > 0 ? { opening_bills } : {}),
+            // Sent only when stated. An empty string would OVERWRITE nothing
+            // today (this is a create) but would read back as "" rather than
+            // NULL, which is a different claim.
+            ...(gstin !== "" ? { gstin } : {}),
+            ...(stateCode !== "" ? { state_code: stateCode } : {}),
+            registration_type: regWire,
+            ...(pan !== "" ? { pan } : {}),
+            ...(creditDays !== undefined ? { credit_days: creditDays } : {}),
           };
           const ob = normalizeMoney(d.openingBalance);
           const summary =
@@ -661,6 +811,126 @@ export function MasterCreateScreen({
                 </label>
               ))}
             </fieldset>
+            {/* ---- THE PARTY BLOCK (register row D87) ----------------------
+                ⛔ IT SITS AFTER THE OPENING BALANCE, NOT BEFORE IT. `DETAIL_FOCUS`
+                lands the "details" cursor on `master-opening-balance`, and
+                putting these fields ahead of it would move where that cursor
+                arrives — which is D36's whole lesson, arrived at from the other
+                direction. The opening balance is also what the operator is most
+                often here for; the party block is the thing they fill in once.
+
+                ⚠️ IT RENDERS FOR EVERY LEDGER KIND, not only parties. A GSTIN on
+                a bank ledger is meaningless but harmless, whereas hiding the
+                block unless the group is a party group would mean the fields
+                vanish and reappear as the operator moves the group cursor — and
+                anything already keyed would be lost with them. Only the
+                REFUSAL is party-specific. */}
+            <div className="mt-3 border-t border-tally-field/30 pt-2" data-testid="master-party-block">
+              <p className="text-xs">
+                GST identity —{" "}
+                <span className="text-tally-title">
+                  a state code is REQUIRED under Sundry Debtors and Sundry
+                  Creditors
+                </span>
+                : it decides CGST+SGST versus IGST on every bill, and with none
+                the split is derived from this company&apos;s own state instead.
+              </p>
+              <label className="mt-2 block text-xs">
+                State code
+                <select
+                  aria-label="State code"
+                  data-testid="master-state-code"
+                  className="ml-2 bg-tally-field px-1 text-tally-fieldText outline-none"
+                  value={draft.stateCode}
+                  onChange={(e) => {
+                    patch({ stateCode: e.target.value });
+                  }}
+                >
+                  {/* "" is offered so a NON-party ledger can leave it unset —
+                      the refusal, not the control, is what makes it mandatory
+                      where it is mandatory. */}
+                  <option value="">— not stated —</option>
+                  {STATE_CODES.map((st) => (
+                    <option key={st.code} value={st.code}>
+                      {st.code} {st.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="mt-2 block text-xs">
+                Registration type
+                <select
+                  aria-label="Registration type"
+                  data-testid="master-registration-type"
+                  className="ml-2 bg-tally-field px-1 text-tally-fieldText outline-none"
+                  value={draft.registrationType}
+                  onChange={(e) => {
+                    patch({
+                      registrationType: e.target.value as GstRegistrationType,
+                    });
+                  }}
+                >
+                  {/* ⛔ FIVE, AND `SEZ` IS THE FIFTH. The vocabulary this reads
+                      from carried four for its whole life while the server's
+                      enum had six, so a picker built from it made SEZ
+                      unreachable — and a supply to an SEZ unit is ZERO-RATED,
+                      so an SEZ party keyed Regular is charged tax it does not
+                      owe. `UNKNOWN` is deliberately absent: it is the absence
+                      of a statement, not one an operator can make. */}
+                  {GST_REGISTRATION_TYPES.map((rt) => (
+                    <option key={rt} value={rt}>
+                      {rt}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="mt-2 block text-xs">
+                GSTIN
+                <input
+                  aria-label="GSTIN"
+                  data-testid="master-gstin"
+                  className="ml-2 w-48 bg-tally-field px-1 uppercase text-tally-fieldText outline-none"
+                  value={draft.gstin}
+                  placeholder="29AACCA5678L1Z3"
+                  onChange={(e) => {
+                    patch({ gstin: e.target.value });
+                  }}
+                />
+              </label>
+              <label className="mt-2 block text-xs">
+                PAN
+                <input
+                  aria-label="PAN"
+                  data-testid="master-pan"
+                  className="ml-2 w-32 bg-tally-field px-1 uppercase text-tally-fieldText outline-none"
+                  value={draft.pan}
+                  placeholder="AACCA5678L"
+                  onChange={(e) => {
+                    patch({ pan: e.target.value });
+                  }}
+                />
+              </label>
+              <label className="mt-2 block text-xs">
+                Credit days
+                <input
+                  aria-label="Credit days"
+                  data-testid="master-credit-days"
+                  inputMode="numeric"
+                  className="ml-2 w-20 bg-tally-field px-1 text-right text-tally-fieldText outline-none"
+                  value={draft.creditDays}
+                  placeholder="blank"
+                  onChange={(e) => {
+                    patch({ creditDays: e.target.value });
+                  }}
+                />
+                {/* ⚠️ BLANK IS A REAL ANSWER AND IT IS NOT ZERO. "No term
+                    agreed" and "due immediately" age differently. */}
+                <span className="ml-2 text-tally-bar">
+                  blank = no term agreed (not “due immediately”)
+                </span>
+              </label>
+            </div>
+
             <label className="mt-2 block text-xs">
               <input
                 type="checkbox"

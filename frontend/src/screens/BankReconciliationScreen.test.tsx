@@ -38,6 +38,9 @@ function ledger(over: Partial<LedgerListItem>): LedgerListItem {
     gstin: "",
     state_code: "",
     registration_type: "UNKNOWN",
+    pan: "",
+    // null, not 0: "no term agreed" is not "due immediately".
+    credit_days: null,
     address: "",
     city: "",
     pincode: "",

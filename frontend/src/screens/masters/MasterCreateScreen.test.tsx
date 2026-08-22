@@ -164,6 +164,13 @@ describe("⛔ D36: a ledger can be given an opening balance from the keyboard", 
 
     type("master-name", "Acme Traders");
     fireEvent.mouseDown(screen.getByText("Sundry Debtors"));
+    // ⛔ D87: a party now needs a STATE CODE or the form refuses client-side
+    // and sends nothing. Stated here rather than the refusal being weakened:
+    // a party with no place of supply is the input that made D19 derive an
+    // intra-state bill as IGST.
+    fireEvent.change(screen.getByTestId("master-state-code"), {
+      target: { value: "29" },
+    });
     type("master-opening-balance", "15000");
     // ⛔ THE SIDE IS ASSERTED, NOT THE TOTAL. A debtor opened on the CREDIT side
     // balances to the same paisa and reverses the Balance Sheet.
@@ -205,6 +212,13 @@ describe("⛔ D36: a ledger can be given an opening balance from the keyboard", 
     goTo(app, "Create Ledger");
     type("master-name", "Bharat Supplies");
     fireEvent.mouseDown(screen.getByText("Sundry Creditors"));
+    // ⛔ D87: a party now needs a STATE CODE or the form refuses client-side
+    // and sends nothing. Stated here rather than the refusal being weakened:
+    // a party with no place of supply is the input that made D19 derive an
+    // intra-state bill as IGST.
+    fireEvent.change(screen.getByTestId("master-state-code"), {
+      target: { value: "29" },
+    });
     type("master-opening-balance", "8000.50");
     fireEvent.click(screen.getByTestId("master-opening-dc-C"));
 
@@ -242,6 +256,13 @@ describe("⛔ D36: a ledger can be given an opening balance from the keyboard", 
     goTo(app, "Create Ledger");
     type("master-name", "Short Breakup Ltd");
     fireEvent.mouseDown(screen.getByText("Sundry Debtors"));
+    // ⛔ D87: a party now needs a STATE CODE or the form refuses client-side
+    // and sends nothing. Stated here rather than the refusal being weakened:
+    // a party with no place of supply is the input that made D19 derive an
+    // intra-state bill as IGST.
+    fireEvent.change(screen.getByTestId("master-state-code"), {
+      target: { value: "29" },
+    });
     type("master-opening-balance", "15000");
     fireEvent.click(screen.getByTestId("master-billwise"));
     type("master-bill-0-ref", "INV-001");
@@ -357,6 +378,13 @@ describe("⛔ D47: a REFUSED master create is reported, not swallowed", () => {
     goTo(app, "Create Ledger");
     type("master-name", "Refused Ltd");
     fireEvent.mouseDown(screen.getByText("Sundry Debtors"));
+    // ⛔ D87: a party now needs a STATE CODE or the form refuses client-side
+    // and sends nothing. Stated here rather than the refusal being weakened:
+    // a party with no place of supply is the input that made D19 derive an
+    // intra-state bill as IGST.
+    fireEvent.change(screen.getByTestId("master-state-code"), {
+      target: { value: "29" },
+    });
 
     await act(async () => {
       fireEvent.keyDown(app, { key: "a", ctrlKey: true });
@@ -383,6 +411,13 @@ describe("⛔ D47: a REFUSED master create is reported, not swallowed", () => {
     fireEvent.keyDown(app, altMac("c"));
     type("master-name", "Ghost Party");
     fireEvent.mouseDown(screen.getByText("Sundry Debtors"));
+    // ⛔ D87: a party now needs a STATE CODE or the form refuses client-side
+    // and sends nothing. Stated here rather than the refusal being weakened:
+    // a party with no place of supply is the input that made D19 derive an
+    // intra-state bill as IGST.
+    fireEvent.change(screen.getByTestId("master-state-code"), {
+      target: { value: "29" },
+    });
 
     await act(async () => {
       fireEvent.keyDown(app, { key: "a", ctrlKey: true });
@@ -401,6 +436,13 @@ describe("⛔ D47: a REFUSED master create is reported, not swallowed", () => {
     goTo(app, "Create Ledger");
     type("master-name", "Accepted Ltd");
     fireEvent.mouseDown(screen.getByText("Sundry Debtors"));
+    // ⛔ D87: a party now needs a STATE CODE or the form refuses client-side
+    // and sends nothing. Stated here rather than the refusal being weakened:
+    // a party with no place of supply is the input that made D19 derive an
+    // intra-state bill as IGST.
+    fireEvent.change(screen.getByTestId("master-state-code"), {
+      target: { value: "29" },
+    });
 
     await act(async () => {
       fireEvent.keyDown(app, { key: "a", ctrlKey: true });
@@ -546,6 +588,13 @@ describe("⛔ D92: a refused Ctrl+A keeps the form, the keying and the cursor", 
 
     type("master-name", "Breakup Party");
     fireEvent.mouseDown(screen.getByText("Sundry Debtors"));
+    // ⛔ D87: a party now needs a STATE CODE or the form refuses client-side
+    // and sends nothing. Stated here rather than the refusal being weakened:
+    // a party with no place of supply is the input that made D19 derive an
+    // intra-state bill as IGST.
+    fireEvent.change(screen.getByTestId("master-state-code"), {
+      target: { value: "29" },
+    });
     type("master-opening-balance", "15000");
     fireEvent.click(screen.getByTestId("master-billwise"));
     type("master-bill-0-ref", "INV-001");
@@ -578,6 +627,13 @@ describe("⛔ D92: a refused Ctrl+A keeps the form, the keying and the cursor", 
 
     type("master-name", "Good Party");
     fireEvent.mouseDown(screen.getByText("Sundry Debtors"));
+    // ⛔ D87: a party now needs a STATE CODE or the form refuses client-side
+    // and sends nothing. Stated here rather than the refusal being weakened:
+    // a party with no place of supply is the input that made D19 derive an
+    // intra-state bill as IGST.
+    fireEvent.change(screen.getByTestId("master-state-code"), {
+      target: { value: "29" },
+    });
 
     await act(async () => {
       fireEvent.keyDown(app, { key: "a", ctrlKey: true });
@@ -587,5 +643,220 @@ describe("⛔ D92: a refused Ctrl+A keeps the form, the keying and the cursor", 
     await waitFor(() => {
       expect(screen.queryByTestId("master-opening-balance")).toBeNull();
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// D87 — a keyed party had no GSTIN, no state code and no registration type.
+// ---------------------------------------------------------------------------
+describe("⛔ D87: the party block reaches the wire, and a party without a state code is refused", () => {
+  function spyClient(): {
+    client: CoredClient;
+    calls: CreateLedgerRequest[];
+  } {
+    const base = createMockClient();
+    const calls: CreateLedgerRequest[] = [];
+    const client: CoredClient = {
+      ...base,
+      createLedger: vi.fn(async (c: string, req: CreateLedgerRequest) => {
+        calls.push(req);
+        return base.createLedger(c, req);
+      }),
+    };
+    return { client, calls };
+  }
+
+  function openLedger(client: CoredClient) {
+    const app = renderShell(client);
+    goTo(app, "Create Ledger");
+    return app;
+  }
+
+  const ctrlA = async (app: HTMLElement) => {
+    await act(async () => {
+      fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    });
+  };
+
+  it("carries all five fields onto CreateLedgerRequest", async () => {
+    const { client, calls } = spyClient();
+    const app = openLedger(client);
+
+    type("master-name", "Mumbai Metals");
+    fireEvent.mouseDown(screen.getByText("Sundry Creditors"));
+    fireEvent.change(screen.getByTestId("master-state-code"), {
+      target: { value: "27" },
+    });
+    fireEvent.change(screen.getByTestId("master-registration-type"), {
+      target: { value: "Regular" },
+    });
+    type("master-gstin", "27AACCM9012M1Z7");
+    type("master-pan", "AACCM9012M");
+    type("master-credit-days", "45");
+
+    await ctrlA(app);
+
+    expect(calls).toHaveLength(1);
+    const req = calls[0]!;
+    expect(req.state_code).toBe("27");
+    // ⛔ THE WIRE VALUE, NOT THE LABEL. The server's enum is SCREAMING_SNAKE;
+    // sending "Regular" would be silently coerced to the UNKNOWN default and
+    // the party would land in exactly the state D87 is about.
+    expect(req.registration_type).toBe("REGULAR");
+    expect(req.gstin).toBe("27AACCM9012M1Z7");
+    expect(req.pan).toBe("AACCM9012M");
+    expect(req.credit_days).toBe(45);
+  });
+
+  it("REFUSES a party under Sundry Debtors with no state code, client-side", async () => {
+    const { client, calls } = spyClient();
+    const app = openLedger(client);
+
+    type("master-name", "Stateless Party");
+    fireEvent.mouseDown(screen.getByText("Sundry Debtors"));
+    // No state code.
+
+    await ctrlA(app);
+
+    // ⛔ ZERO CALLS IS THE ASSERTION. The server would answer 201 to this exact
+    // body — masters.CreateLedger creates and then has nothing left to refuse
+    // with — so a refusal that let the request go would be refusing a party
+    // that already exists.
+    expect(calls).toHaveLength(0);
+    expect(statusLine()).toMatch(/needs a STATE CODE/i);
+    // And D92: the form is still up with the keying intact.
+    expect(
+      (screen.getByTestId("master-name") as HTMLInputElement).value,
+    ).toBe("Stateless Party");
+  });
+
+  it("does NOT demand a state code on a non-party ledger", async () => {
+    // ⛔ THE COUNTER-CASE, and it is what keeps the rule from being a blanket
+    // one. A bank account, a sales account and an expense head have no place of
+    // supply; demanding a state code on those would refuse most of the chart of
+    // accounts to protect a rule that does not apply to it.
+    const { client, calls } = spyClient();
+    const app = openLedger(client);
+
+    type("master-name", "HDFC Current");
+    fireEvent.mouseDown(screen.getByText("Bank Accounts"));
+
+    await ctrlA(app);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.state_code).toBeUndefined();
+  });
+
+  it("refuses a GSTIN whose state prefix disagrees with the state code", async () => {
+    const { client, calls } = spyClient();
+    const app = openLedger(client);
+
+    type("master-name", "Mismatch Co");
+    fireEvent.mouseDown(screen.getByText("Sundry Debtors"));
+    fireEvent.change(screen.getByTestId("master-state-code"), {
+      target: { value: "29" },
+    });
+    type("master-gstin", "27AACCM9012M1Z7"); // Maharashtra GSTIN, Karnataka code
+
+    await ctrlA(app);
+
+    expect(calls).toHaveLength(0);
+    // The message must NAME BOTH STATES. "They disagree" is not actionable;
+    // "Maharashtra vs Karnataka" tells the operator which one they mistyped.
+    expect(statusLine()).toMatch(/Maharashtra/);
+    expect(statusLine()).toMatch(/Karnataka/);
+  });
+
+  it("refuses a Regular party with no GSTIN — the claim implies the number", async () => {
+    const { client, calls } = spyClient();
+    const app = openLedger(client);
+
+    type("master-name", "Claims Regular");
+    fireEvent.mouseDown(screen.getByText("Sundry Debtors"));
+    fireEvent.change(screen.getByTestId("master-state-code"), {
+      target: { value: "29" },
+    });
+    fireEvent.change(screen.getByTestId("master-registration-type"), {
+      target: { value: "Regular" },
+    });
+
+    await ctrlA(app);
+
+    expect(calls).toHaveLength(0);
+    expect(statusLine()).toMatch(/has a GSTIN by definition/i);
+  });
+
+  it("refuses a PAN that disagrees with the PAN inside the GSTIN", async () => {
+    const { client, calls } = spyClient();
+    const app = openLedger(client);
+
+    type("master-name", "Pan Mismatch");
+    fireEvent.mouseDown(screen.getByText("Sundry Debtors"));
+    fireEvent.change(screen.getByTestId("master-state-code"), {
+      target: { value: "27" },
+    });
+    type("master-gstin", "27AACCM9012M1Z7"); // carries PAN AACCM9012M
+    type("master-pan", "AAACA1111A");
+
+    await ctrlA(app);
+
+    expect(calls).toHaveLength(0);
+    expect(statusLine()).toMatch(/built from the PAN/i);
+  });
+
+  it("sends NO credit_days when the field is blank — not 0", async () => {
+    // ⛔ "No term agreed" and "due immediately" are different facts and they
+    // age differently. A 0 here would make every party nobody stated a term for
+    // look like a cash party.
+    const { client, calls } = spyClient();
+    const app = openLedger(client);
+
+    type("master-name", "No Terms Co");
+    fireEvent.mouseDown(screen.getByText("Sundry Debtors"));
+    fireEvent.change(screen.getByTestId("master-state-code"), {
+      target: { value: "29" },
+    });
+
+    await ctrlA(app);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.credit_days).toBeUndefined();
+    expect("credit_days" in calls[0]!).toBe(false);
+  });
+
+  it("offers SEZ in the picker — the vocabulary was two short of the server's enum", async () => {
+    // ⛔ THIS IS AN ABSENCE, WHICH IS WHY IT NEEDS ITS OWN TEST. `gst.ts` listed
+    // four types while masters.go has six, and a missing option cannot fail:
+    // the picker renders, the form works, and SEZ is simply unreachable. A
+    // supply to an SEZ unit is ZERO-RATED, so an SEZ party keyed Regular is
+    // charged tax it does not owe.
+    const { client } = spyClient();
+    openLedger(client);
+    const options = Array.from(
+      screen.getByTestId("master-registration-type").querySelectorAll("option"),
+    ).map((o) => o.textContent);
+    expect(options).toContain("SEZ");
+    // ...and UNKNOWN is NOT offered: it is the absence of a statement, not one
+    // an operator can make. Every keyed party landing on it is D87 itself.
+    expect(options).not.toContain("Unknown");
+    expect(options).not.toContain("UNKNOWN");
+  });
+
+  it("defaults a keyed party to a REAL statement, never to UNKNOWN", async () => {
+    const { client, calls } = spyClient();
+    const app = openLedger(client);
+
+    type("master-name", "Default Party");
+    fireEvent.mouseDown(screen.getByText("Sundry Debtors"));
+    fireEvent.change(screen.getByTestId("master-state-code"), {
+      target: { value: "29" },
+    });
+
+    await ctrlA(app);
+
+    expect(calls).toHaveLength(1);
+    // Before D87 this request carried no registration_type at all and the
+    // column default made it UNKNOWN.
+    expect(calls[0]!.registration_type).toBe("UNREGISTERED");
   });
 });

@@ -46,6 +46,19 @@ type ledgerListItem struct {
 	GSTIN              string `json:"gstin"`
 	StateCode          string `json:"state_code"`
 	RegistrationType   string `json:"registration_type"`
+	// PAN and CreditDays complete the read side of this struct's own contract —
+	// "a client can read a ledger and re-send it". `ledgerReq` has accepted
+	// `pan` since it was written and now accepts `credit_days`, and NEITHER was
+	// readable back, so the contract was false in the direction that matters:
+	// a party's PAN could be written and never seen again through HTTP, which
+	// is how D87 could report `(null)` for fields that were in fact stored.
+	//
+	// ⛔ CreditDays IS A POINTER and stays one. NULL means "no term agreed",
+	// which is genuinely different from 0 ("due immediately") — collapsing them
+	// would make every party that never stated a term look like a cash party in
+	// an ageing report.
+	PAN        string `json:"pan"`
+	CreditDays *int   `json:"credit_days"`
 	// Address / City / Pincode are the party's POSTAL BLOCK (migration 0039),
 	// echoed here because ledgerReq accepts them and this struct's contract is
 	// that a client can read a ledger and re-send it. Without them that
@@ -128,6 +141,7 @@ func (s *Server) handleListLedgers(w http.ResponseWriter, r *http.Request) {
 			        l.opening_balance, l.opening_dc, l.maintain_bill_by_bill,
 			        COALESCE(l.gstin, ''), COALESCE(l.state_code, ''),
 			        l.registration_type::text,
+			        COALESCE(l.pan, ''), l.credit_days,
 			        COALESCE(l.address, ''), COALESCE(l.city, ''), COALESCE(l.pincode, ''),
 			        COALESCE(l.bank_account_number, ''), COALESCE(l.bank_ifsc, ''),
 			        l.is_system,
@@ -147,6 +161,7 @@ func (s *Server) handleListLedgers(w http.ResponseWriter, r *http.Request) {
 			if err := rows.Scan(&it.ID, &it.Name, &it.GroupName,
 				&opening, &it.OpeningDC, &it.MaintainBillByBill,
 				&it.GSTIN, &it.StateCode, &it.RegistrationType,
+				&it.PAN, &it.CreditDays,
 				&it.Address, &it.City, &it.Pincode,
 				&it.BankAccountNumber, &it.BankIFSC, &it.IsSystem,
 				&it.IsBank); err != nil {

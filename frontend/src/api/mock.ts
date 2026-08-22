@@ -891,6 +891,9 @@ interface MockCompany {
     stateCode?: string;
     gstin?: string;
     registrationType?: string;
+    pan?: string;
+    /** `undefined` is "no term agreed" — distinct from 0, "due immediately". */
+    creditDays?: number;
     maintainBillByBill?: boolean;
     openingBalance?: Money;
     openingDC?: string;
@@ -3458,6 +3461,12 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
           gstin: l.gstin ?? "",
           state_code: l.stateCode ?? "",
           registration_type: l.registrationType ?? "UNKNOWN",
+          pan: l.pan ?? "",
+          // ⛔ `?? null`, NEVER `?? 0`. NULL is "no term agreed" and 0 is "due
+          // immediately" — two different facts, and collapsing them here would
+          // let a screen test pass against a mock that cannot represent the
+          // distinction the ageing report depends on.
+          credit_days: l.creditDays ?? null,
           address: l.address ?? "",
           city: l.city ?? "",
           pincode: l.pincode ?? "",
@@ -3537,6 +3546,8 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         stateCode: req.state_code,
         gstin: req.gstin,
         registrationType: req.registration_type,
+        pan: req.pan,
+        creditDays: req.credit_days,
         maintainBillByBill: req.maintain_bill_by_bill,
         openingBalance: req.opening_balance,
         openingDC: req.opening_dc,

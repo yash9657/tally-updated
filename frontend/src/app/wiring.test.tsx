@@ -445,6 +445,13 @@ describe("MasterCreate Alt+C wiring", () => {
       target: { value: "New Debtor" },
     });
     fireEvent.mouseDown(screen.getByText("Sundry Debtors"));
+    // ⛔ D87: a party now needs a STATE CODE or the form refuses client-side
+    // and sends nothing. Stated here rather than the refusal being weakened:
+    // a party with no place of supply is the input that made D19 derive an
+    // intra-state bill as IGST.
+    fireEvent.change(screen.getByTestId("master-state-code"), {
+      target: { value: "29" },
+    });
     fireEvent.keyDown(app, { key: "a", ctrlKey: true });
 
     await waitFor(() => expect(spies.createLedger).toHaveBeenCalledTimes(1));

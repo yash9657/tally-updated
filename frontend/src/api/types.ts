@@ -254,6 +254,15 @@ export interface LedgerListItem {
   state_code: string;
   registration_type: string;
   /**
+   * PAN and credit days, completing this type's own contract — "a client can
+   * read a ledger and re-send it". Both were WRITABLE and NOT READABLE until
+   * 2026-08-22, so a party's PAN could be stated and never seen again through
+   * HTTP. `credit_days` is `null` when no term was agreed, which is genuinely
+   * different from `0` ("due immediately").
+   */
+  pan: string;
+  credit_days: number | null;
+  /**
    * The party's POSTAL BLOCK (migration 0039). Absent reads back as "" — the
    * columns are nullable and a cash party legitimately has none. `address` is
    * a NEWLINE-SEPARATED BLOCK.
@@ -559,6 +568,21 @@ export interface CreateLedgerRequest {
   state_code?: string;
   registration_type?: string;
   pan?: string;
+  /**
+   * The party's agreed payment term in days — what makes an Outstandings
+   * ageing bucket mean anything for a bill with no explicit due date.
+   *
+   * OPTIONAL, and `undefined` is a REAL state distinct from `0`: "no term
+   * agreed" is not "due immediately", and collapsing them would make every
+   * party that never stated a term look like a cash party.
+   *
+   * ⛔ THE WIRE ACCEPTED THIS KEY AND DISCARDED IT until 2026-08-22 — D43's
+   * shape on a second route. `masters.Ledger.CreditDays` existed and the INSERT
+   * bound it, but `ledgerReq` had no field to fill it from, so it was nil on
+   * every create. Measured, not inferred: POST with `credit_days: 45` -> 201,
+   * `SELECT credit_days` -> NULL.
+   */
+  credit_days?: number;
   /**
    * The party's POSTAL BLOCK (migration 0039). `address` is a
    * NEWLINE-SEPARATED BLOCK, not a single line — the same shape the company
