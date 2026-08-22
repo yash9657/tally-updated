@@ -3382,8 +3382,12 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
 
     async createGroup(
       _c,
-      _req: CreateGroupRequest,
+      req: CreateGroupRequest,
     ): Promise<CreateGroupResponse> {
+      // D84: mirrors masters.CreateGroup's required-name refusal.
+      if ((req.name ?? "").trim() === "") {
+        throw new ApiError(422, "masters: group name is required");
+      }
       return { group_id: id("group") };
     },
     async listLedgers(companyID): Promise<ListLedgersResponse> {
@@ -3443,8 +3447,41 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       companyID,
       req: CreateLedgerRequest,
     ): Promise<CreateLedgerResponse> {
+      // ⛔⛔ D84 — THESE REFUSALS MIRROR `masters.CreateLedger`, SENTENCE FOR
+      // SENTENCE, AND THE SENTENCES ARE THE POINT. This method used to validate
+      // NOTHING: 61 test files build their masters through this mock, and
+      // App.tsx's dev-client switch hands it to a real operator, so every one of
+      // them was measured against an engine that accepted bodies cored answers
+      // 422 to. Pinned by `corpora/mock-vs-cored/masters.json` and its two
+      // runners — the sentence, not just the status, because a status-code-only
+      // gate is never an oracle.
+      const c = ensure(companyID);
+      if ((req.name ?? "").trim() === "") {
+        throw new ApiError(422, "masters: ledger name is required");
+      }
+      if ((req.group_name ?? "").trim() === "") {
+        throw new ApiError(422, "masters: ledger group is required");
+      }
+      // ⚠️ EMPTY DEFAULTS TO "D" BEFORE THE CHECK, exactly as masters.go:350-353
+      // does. Refusing "" here would refuse the commonest body in the product.
+      const openingDC = (req.opening_dc ?? "") === "" ? "D" : req.opening_dc;
+      if (openingDC !== "D" && openingDC !== "C") {
+        throw new ApiError(
+          422,
+          `masters: invalid opening dr/cr ${JSON.stringify(openingDC)}`,
+        );
+      }
+      // ⛔ THE DUPLICATE RULE IS CASE-SENSITIVE HERE because that is what the
+      // wire showed: cored answered 422 for the exact name and this mirrors the
+      // observed behaviour rather than a guessed collation.
+      if (c.ledgers.some((l) => l.name === req.name)) {
+        throw new ApiError(
+          422,
+          `masters: this company already has a ledger named ${JSON.stringify(req.name)}`,
+        );
+      }
       const ledgerID = id("ledger");
-      ensure(companyID).ledgers.push({
+      c.ledgers.push({
         id: ledgerID,
         name: req.name,
         group: req.group_name,
@@ -3469,7 +3506,11 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     ): Promise<CreateVoucherTypeResponse> {
       return { voucher_type_id: id("vtype") };
     },
-    async createUnit(_c, _req: CreateUnitRequest): Promise<CreateUnitResponse> {
+    async createUnit(_c, req: CreateUnitRequest): Promise<CreateUnitResponse> {
+      // D84: mirrors masters.CreateUnit's required-symbol refusal.
+      if ((req.symbol ?? "").trim() === "") {
+        throw new ApiError(422, "masters: unit symbol is required");
+      }
       return { unit_id: id("unit") };
     },
     async createStockItem(
@@ -3481,6 +3522,21 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       // against an item nobody created. Create-or-select by NAME mirrors
       // masters.EnsureStockItem, so re-creating resolves the same id.
       const c = ensure(companyID);
+      // D84: mirrors masters.CreateStockItem's required-name refusal…
+      if ((req.name ?? "").trim() === "") {
+        throw new ApiError(422, "masters: stock item name is required");
+      }
+      // …and the HTTP layer's decimal bind, which answers 400 (NOT 422) because
+      // it fails before `masters` is reached. Measured on the wire; the two
+      // status codes on one call are why the corpus records a status per row
+      // instead of a single "refused" class.
+      if (
+        req.gst_rate_pct !== undefined &&
+        req.gst_rate_pct !== "" &&
+        !/^-?\d+(\.\d+)?$/.test(String(req.gst_rate_pct).trim())
+      ) {
+        throw new ApiError(400, "invalid gst_rate_pct");
+      }
       const existing = c.stockItems.find((s) => s.name === req.name);
       if (existing) return { stock_item_id: existing.id };
       const stockItemID = id("stock");

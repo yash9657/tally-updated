@@ -20,7 +20,8 @@
     "seed:demo": "tsx scripts/seed-demo.mts",
     "verify:demo": "tsx scripts/verify-demo.mts",
     "seed:tenancy": "tsx scripts/seed-tenancy.mts",
-    "verify:tenancy": "tsx scripts/verify-tenancy.mts"
+    "verify:tenancy": "tsx scripts/verify-tenancy.mts",
+    "contract:cored": "tsx scripts/contract-mock-vs-cored.mts"
   },
   "dependencies": {
     "@xstate/react": "^4.1.3",

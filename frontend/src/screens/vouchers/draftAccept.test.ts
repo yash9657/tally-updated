@@ -262,21 +262,49 @@ async function realDraftBody(
   client: CoredClient,
   billByBill: boolean,
 ): Promise<VoucherDraftBody> {
-  const party = await client.createLedger(COMPANY, {
+  /**
+   * ⛔⛔ RESOLVE-OR-CREATE, NOT CREATE. THIS HELPER CALLED `createLedger`
+   * UNCONDITIONALLY AND D84's TIGHTENED MOCK IS WHAT EXPOSED IT.
+   *
+   * A test calls this twice in one company whenever it builds two draft bodies
+   * (the "genuinely different bill from the same supplier" cases do exactly
+   * that), and the second call re-created "Acme Traders". The old mock accepted
+   * it and pushed a SECOND ledger row with the same name; cored answers
+   * `422 masters: this company already has a ledger named "Acme Traders"`.
+   *
+   * ⚠️ SO FIVE TESTS IN THIS FILE COULD NEVER HAVE RUN AGAINST THE REAL SERVER,
+   * and the ones that "passed" were measuring a chart of accounts with DUPLICATE
+   * party ledgers in it — the exact state the product's own `ensureLedger` was
+   * fixed TWICE to avoid (see gstVoucher.ts). The helper now does what the
+   * product does: resolve first, create only if absent.
+   */
+  const ensure = async (req: {
+    name: string;
+    group_name: string;
+    state_code?: string;
+    maintain_bill_by_bill?: boolean;
+  }): Promise<{ ledger_id: string }> => {
+    const existing = (await client.listLedgers(COMPANY)).ledgers.find(
+      (l) => l.name === req.name,
+    );
+    if (existing) return { ledger_id: existing.id };
+    return await client.createLedger(COMPANY, req as never);
+  };
+  const party = await ensure({
     name: "Acme Traders",
     group_name: "Sundry Creditors",
     state_code: "29",
     maintain_bill_by_bill: billByBill,
   });
-  const purchases = await client.createLedger(COMPANY, {
+  const purchases = await ensure({
     name: "Purchases",
     group_name: "Purchase Accounts",
   });
-  const cgst = await client.createLedger(COMPANY, {
+  const cgst = await ensure({
     name: "Input CGST",
     group_name: "Duties & Taxes",
   });
-  const sgst = await client.createLedger(COMPANY, {
+  const sgst = await ensure({
     name: "Input SGST",
     group_name: "Duties & Taxes",
   });

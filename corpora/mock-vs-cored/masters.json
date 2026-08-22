@@ -1,0 +1,157 @@
+{
+  "$why": [
+    "D84. `frontend/src/api/mock.ts` is LOOSER THAN CORED, and 61 test files build",
+    "their masters through it — plus the dev browser itself, because App.tsx's",
+    "dev-client switch hands the same mock to a real operator. Every one of those",
+    "tests is therefore measured against an engine that enforces less than the",
+    "server does, which is how three separate lanes shipped a green suite over a",
+    "body cored refuses.",
+    "",
+    "This corpus is the ONE place that says what cored actually does. Two runners",
+    "read it: a vitest one over createMockClient() (`api/contract/`), and a script",
+    "one over live cored (`scripts/contract-mock-vs-cored.mts`). When they disagree,",
+    "the mock is wrong until this file says otherwise."
+  ],
+  "$shape": [
+    "REFUSAL-SHAPED, NEVER VALUE-SHAPED. A row says which bodies are turned away",
+    "and with what sentence — not what a figure computes to. Value equality between",
+    "a mock and a server is a much bigger promise than this gate can keep, and a",
+    "gate that overpromises gets deleted by the first person it inconveniences.",
+    "",
+    "⚠️ THE ONE VALUE DIVERGENCE THAT MATTERS CANNOT BE EXPRESSED HERE and is a",
+    "hand-written scenario in BOTH runners instead: an order book with NO as-on,",
+    "over a passed due date, gives mock `is_overdue:false` and cored `true`. It is",
+    "called out at the scenario, not hidden in a format that cannot hold it."
+  ],
+  "$provenance": [
+    "EVERY `expect` BELOW WAS OBSERVED ON THE WIRE against a cored verified fresh",
+    "by symbol on 2026-08-22 — not read off a handoff. Two of them contradict what",
+    "the recon predicted, which is exactly why they were measured:",
+    "",
+    "  - an unknown group answers 404, not 422;",
+    "  - a DUPLICATE STOCK ITEM NAME IS ACCEPTED (201, a new id). The recon said",
+    "    `masters.EnsureStockItem` does not exist so the route 'only ever reaches",
+    "    CreateStockItem, which 422s'. The first half is true and the conclusion is",
+    "    not. See `stock-item-duplicate-name` for what that means."
+  ],
+  "mock_gaps": [
+    {
+      "row": "ledger-unknown-group",
+      "current": "the mock ACCEPTS a ledger under a group that does not exist",
+      "why": [
+        "NOT a decision — a GAP, pinned so closing it has to be deliberate and so it",
+        "cannot be quietly forgotten. cored resolves the group and answers 404; the",
+        "mock cannot, because `createGroup` STORES NOTHING and the mock models no",
+        "chart of accounts at all. Refusing on 'this group was never created here'",
+        "would refuse essentially every ledger every one of the 61 test files makes,",
+        "because cored SEEDS 28 standard groups on company create (migration 0003)",
+        "and tests reasonably rely on 'Sundry Debtors' existing.",
+        "",
+        "The cheap fix is to give the mock that seeded list. NOT taken here because",
+        "the list would be a silent copy of the SQL with nothing to detect drift:",
+        "the client has no `listGroups`, so neither runner can compare the mock's",
+        "list to cored's. Closing this row properly means adding that read method",
+        "first, and that is a bigger change than this row.",
+        "",
+        "⛔ RUNNER A ASSERTS THE GAP IS STILL THERE. When someone closes it that",
+        "assertion fails and they delete this entry — the only way a known gap",
+        "leaves this file on purpose rather than by accident."
+      ]
+    }
+  ],
+  "deliberate_divergence": [
+    {
+      "what": "TDSDeductionView's derived figures are omitted by the mock",
+      "where": "frontend/src/api/types.ts, declared at the type",
+      "why": "Deriving them in the browser would put a second copy of internal/compliance in the bundle. Declared at the type rather than discovered by a reader."
+    },
+    {
+      "what": "createStockItem with a duplicate name: mock returns the EXISTING id, cored mints a NEW item",
+      "where": "mock.ts createStockItem (create-or-select) vs cored, observed 201 + new id",
+      "why": "NOT a divergence the mock should close by copying cored. Both sides 'succeed', so no refusal row can express it, and cored's behaviour is the more suspicious of the two — duplicate ledger names are refused (422) while duplicate STOCK ITEM names are accepted, which leaves two identical rows in every item picker and splits an item's valuation across them. Recorded here rather than silently mirrored, and raised as a candidate register row."
+    }
+  ],
+  "rows": [
+    {
+      "name": "ledger-empty-name",
+      "call": "createLedger",
+      "body": { "name": "", "group_name": "Sundry Debtors" },
+      "expect": { "status": 422, "sentence": "ledger name is required" }
+    },
+    {
+      "name": "ledger-empty-group",
+      "call": "createLedger",
+      "body": { "name": "CT Ledger {STAMP}", "group_name": "" },
+      "expect": { "status": 422, "sentence": "ledger group is required" }
+    },
+    {
+      "name": "ledger-unknown-group",
+      "call": "createLedger",
+      "body": { "name": "CT Ledger {STAMP}", "group_name": "No Such Group {STAMP}" },
+      "expect": { "status": 404, "sentence": "not found: group" },
+      "note": "404, NOT 422 — the recon predicted 422. Measured."
+    },
+    {
+      "name": "ledger-bad-opening-dc",
+      "call": "createLedger",
+      "body": {
+        "name": "CT Ledger {STAMP}",
+        "group_name": "Sundry Debtors",
+        "opening_balance": "100",
+        "opening_dc": "X"
+      },
+      "expect": { "status": 422, "sentence": "invalid opening dr/cr" }
+    },
+    {
+      "name": "ledger-duplicate-name",
+      "setup": [
+        {
+          "call": "createLedger",
+          "body": { "name": "CT Dup {STAMP}", "group_name": "Sundry Debtors" }
+        }
+      ],
+      "call": "createLedger",
+      "body": { "name": "CT Dup {STAMP}", "group_name": "Sundry Debtors" },
+      "expect": { "status": 422, "sentence": "already has a ledger named" }
+    },
+    {
+      "name": "group-empty-name",
+      "call": "createGroup",
+      "body": { "name": "", "parent_name": "Primary" },
+      "expect": { "status": 422, "sentence": "group name is required" }
+    },
+    {
+      "name": "unit-empty-symbol",
+      "call": "createUnit",
+      "body": { "symbol": "", "formal_name": "Numbers" },
+      "expect": { "status": 422, "sentence": "unit symbol is required" }
+    },
+    {
+      "name": "stock-item-empty-name",
+      "call": "createStockItem",
+      "body": { "name": "", "unit_symbol": "Nos" },
+      "expect": { "status": 422, "sentence": "stock item name is required" }
+    },
+    {
+      "name": "stock-item-unparseable-gst-rate",
+      "call": "createStockItem",
+      "body": { "name": "CT Item {STAMP}", "unit_symbol": "Nos", "gst_rate_pct": "abc" },
+      "expect": { "status": 400, "sentence": "invalid gst_rate_pct" },
+      "note": "400, not 422 — this one is bound by the HTTP layer, not by masters."
+    },
+    {
+      "name": "ledger-valid-is-still-accepted",
+      "call": "createLedger",
+      "body": { "name": "CT Control {STAMP}", "group_name": "Sundry Debtors" },
+      "expect": { "accepted": true },
+      "note": "⛔ THE CONTROL. Without it, a mock that refused EVERYTHING would satisfy every row above."
+    },
+    {
+      "name": "stock-item-valid-is-still-accepted",
+      "call": "createStockItem",
+      "body": { "name": "CT Control Item {STAMP}", "unit_symbol": "Nos" },
+      "expect": { "accepted": true },
+      "note": "⛔ THE SECOND CONTROL, for the other master this corpus tightens."
+    }
+  ]
+}
