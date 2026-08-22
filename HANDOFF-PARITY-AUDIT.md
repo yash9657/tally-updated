@@ -2693,3 +2693,81 @@ typed name and reported it LOST against the FIXED build, while vitest said it su
 field, so a missing field can never read as an empty one. The three instances this session (D77's
 `p.ledger_name`, D5's `stock_item_name`, this one) were all the same shape: **a projection that does
 not exist, compared instead of thrown on.**
+
+### ✅ L15d/e — D87 (the party block) and D93 (the leaked SQLSTATE). CLOSED 2026-08-22. **13/13, both doors.**
+
+The form rendered NONE of the fields the server had accepted all along, so every keyed party landed
+`(null)|(null)|UNKNOWN` — the exact input that made D19 derive an intra-state bill as IGST. Five
+fields per the user's decision: `gstin`, `state_code`, `registration_type`, `pan`, `credit_days`,
+with `state_code` MANDATORY under Sundry Debtors/Creditors.
+
+#### ⛔⛔ FIRING THE WIRE FIRST (§4.1) OVERTURNED THE PLAN TWICE, AND NEITHER WAS A CLIENT PROBLEM
+
+The recon says *"the server has accepted all three since it was written"*. True for three of five:
+
+1. **`credit_days` was ACCEPTED AT 201 AND DISCARDED.** `masters.Ledger.CreditDays` existed and the
+   INSERT bound it; `ledgerReq` had no field to fill it from, so it was nil on every create. **D43's
+   shape on a second route** — and a form field for it would have been a lie.
+2. **`pan` and `credit_days` were NOT READABLE BACK.** `GET /ledgers` omitted both, so a party's PAN
+   could be written and never seen again through HTTP. That is also how D87 could report `(null)` for
+   a field that was in fact stored.
+
+**Two of five, on a row whose server side the recon called done.** This is the third time this session
+that ten minutes of `curl` overturned a documented claim.
+
+#### THE PICKER'S VOCABULARY WAS TWO SHORT OF THE SERVER'S ENUM
+`gst.ts` listed FOUR registration types; `masters.go` has SIX. A picker built from it makes **`SEZ`
+unreachable — silently, because a missing option cannot fail** — and a supply to an SEZ unit is
+ZERO-RATED, so an SEZ party keyed Regular is charged tax it does not owe. `SEZ` is now offered;
+`UNKNOWN` deliberately is not (it is the ABSENCE of a statement, and every keyed party landing on it
+is D87 itself). A keyed party defaults to **Unregistered — a real claim**.
+
+⚠️ `gst.ts` had **zero importers**: its GSTIN validator, state-code helper and vocabulary were
+written, tested and dead. Imported, not re-derived, so the dead copy cannot drift.
+
+#### THE DRIVE — `drive-l15d-d87.mjs`, 13/13, BOTH DOORS
+`Alt+G > Create Ledger` **and** `Alt+C` from a voucher's party field — the D19 path, and the door
+where a new refusal is most disruptive because the operator is mid-invoice.
+
+⛔ **THE REFUSAL'S ORACLE IS ZERO `POST /ledgers` ON THE WIRE, NOT A MESSAGE.** The server answers
+**201** to a party with no state code — `masters.CreateLedger` creates it and then has nothing left to
+refuse with — so a refusal that let the request go would be refusing a party that already exists. The
+probe counts the requests.
+
+Seven existing tests began failing on the new refusal, **exactly as the recon predicted**. They were
+creating parties the way the product used to allow; each now states a state code. **The refusal was
+not weakened.**
+
+#### THE MUTATIONS
+
+| # | Mutation | Predicted | Observed |
+|---|---|---|---|
+| M10 | `credit_days` discarded again | only the credit_days assertions fail; the other four fields and the "omitted is NULL" subtest pass | ✅ exactly |
+| M11 | the state-code refusal deleted | the refusal test fails; **the non-party counter-case passes** | ✅ — the counter-case is insensitive by construction, which is what makes it one |
+| M12 | `SEZ` dropped from the picker | **only** the SEZ test fails | ✅ — every other test picks Regular or the default, which is exactly why the ABSENCE needed its own test |
+| M13 | send the LABEL, not the wire value | two tests fail; **and the server silently coerces to UNKNOWN** | ⛔ **HALF WRONG — see below** |
+| M14 | blank credit days sent as 0 | only the "not 0" test fails | ✅ exactly |
+
+#### ⛔⛔ M13 CORRECTED ME, NOT THE CODE — §4.2, and it produced D93
+
+The prediction was that cored would **silently coerce** `"Regular"` to the UNKNOWN default, making the
+label→wire mapping table load-bearing. **It does not.** The INSERT fails the enum cast and the request
+is refused, so the mapping is belt-and-braces and the wire is safer than the commit claimed.
+
+What is **not** safe is the sentence. Three fields an HTTP caller can reach were failing at the
+DATABASE and leaking the driver error verbatim:
+
+```
+masters: insert ledger: ERROR: invalid input value for enum gst_registration_type: "Regular" (SQLSTATE 22P02)
+violates check constraint "ledger_bank_ifsc_shape" (SQLSTATE 23514)
+violates check constraint "ledger_bank_account_number_not_blank" (SQLSTATE 23514)
+```
+
+⛔ **AND THE EXPECTATION WAS ALREADY PINNED — ON ONE PATH.** `drive-l13-masters.mjs` asserts
+`!/SQLSTATE/` on a refusal from THIS ROUTE (the duplicate-name arm). Three sibling refusals sat
+unenforced beside one that was. **That is D80's shape (§4.5) in a new place: a guard exists, and what
+it COMPARES is narrower than what it appears to cover.**
+
+Registered as **D93** and fixed in the same wave. **The control is the test that matters:** all six
+enum members still get through, including `UNKNOWN` — without it, "refuse everything" passes the
+refusal test.
