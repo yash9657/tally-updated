@@ -289,6 +289,25 @@ function AppShellInner({
         ? dispatchScreenAction(screenActionKind, snap)
         : { ran: false as const };
 
+      // ⛔ A REFUSED ACTION DOES NOT REACH THE MACHINE (register row D92).
+      // The machine's `accept` reducer pops a master-create frame
+      // unconditionally — it was written when the only way to reach that
+      // reducer was a successful create — so a refusal used to throw the
+      // operator back to the Gateway and DISCARD everything they had keyed,
+      // then explain why on a screen they could no longer act on. Measured in
+      // a browser before this line existed: name a ledger, leave the group
+      // blank, Ctrl+A, and the form is gone along with the name.
+      //
+      // The key is still CONSUMED (preventDefault below) — this is not "the
+      // key did nothing", it is "the screen answered and the answer was no".
+      // Only a handler that returns `screenRefusal(...)` takes this path, so
+      // every other action behaves exactly as it did.
+      if (effect.refused) {
+        ev.preventDefault();
+        if (effect.message) showStatus(effect.message);
+        return;
+      }
+
       // Did the key move the machine? Measured across the send against the
       // machine's LIVE stack (not the rendered snapshot, which is a tick behind
       // when a SelectionList fires SELECT and KEY in the same keypress).

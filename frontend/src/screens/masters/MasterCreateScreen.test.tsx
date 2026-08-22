@@ -476,3 +476,116 @@ describe("⛔ Create Group: 'Primary' means NO PARENT, plus a nature", () => {
     expect(statusLine()).toContain("needs a nature");
   });
 });
+
+// ---------------------------------------------------------------------------
+// D92 — a REFUSAL must not cost the operator their work.
+// ---------------------------------------------------------------------------
+describe("⛔ D92: a refused Ctrl+A keeps the form, the keying and the cursor", () => {
+  // A local copy: the D36 block's helper is scoped to that describe.
+  function spyClient(): {
+    client: CoredClient;
+    calls: CreateLedgerRequest[];
+  } {
+    const base = createMockClient();
+    const calls: CreateLedgerRequest[] = [];
+    const client: CoredClient = {
+      ...base,
+      createLedger: vi.fn(async (c: string, req: CreateLedgerRequest) => {
+        calls.push(req);
+        return base.createLedger(c, req);
+      }),
+    };
+    return { client, calls };
+  }
+
+  /**
+   * THE DEFECT, MEASURED IN A BROWSER BEFORE THE FIX: name a ledger, leave the
+   * group blank, press Ctrl+A — and the form is gone, the name with it, with
+   * the reason shown on the Gateway.
+   *
+   * The cause is that `accept` in the navMachine pops a master-create frame
+   * UNCONDITIONALLY. That reducer was written when the only way to reach it was
+   * a successful create, and the shell could not tell a refusal from a success
+   * because both returned a plain string.
+   *
+   * ⚠️ IT WAS SURVIVABLE ONLY BECAUSE THE REFUSALS WERE RARE. D87 makes one of
+   * them common — every party keyed without a state code — which is why this is
+   * fixed first and on its own.
+   */
+  it("keeps the form up when build() refuses, and sends nothing", async () => {
+    const { client, calls } = spyClient();
+    const app = renderShell(client);
+    goTo(app, "Create Ledger");
+
+    type("master-name", "Pop Probe Party");
+    // No group chosen -> the ledger arm of build() refuses.
+
+    await act(async () => {
+      fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    });
+
+    // ⛔ THE FORM IS STILL THERE. Asserted on a control that exists ONLY on this
+    // frame, not on the absence of the Gateway — "the Gateway is not showing"
+    // is true of several screens and would pass for the wrong reason.
+    expect(screen.queryByTestId("master-opening-balance")).not.toBeNull();
+    // ⛔ AND THE KEYING SURVIVED. This is the assertion the operator cares
+    // about; the frame being up is worth nothing if it came back empty.
+    expect(
+      (screen.getByTestId("master-name") as HTMLInputElement).value,
+    ).toBe("Pop Probe Party");
+    // Nothing was sent — a refusal that also POSTs is D89's shape.
+    expect(calls).toHaveLength(0);
+    // The reason reached the operator, on the screen they can still act on.
+    expect(statusLine()).toMatch(/must be filed under a group/i);
+  });
+
+  it("keeps the form up when the bill-wise breakup does not add up", async () => {
+    const { client, calls } = spyClient();
+    const app = renderShell(client);
+    goTo(app, "Create Ledger");
+
+    type("master-name", "Breakup Party");
+    fireEvent.mouseDown(screen.getByText("Sundry Debtors"));
+    type("master-opening-balance", "15000");
+    fireEvent.click(screen.getByTestId("master-billwise"));
+    type("master-bill-0-ref", "INV-001");
+    type("master-bill-0-amount", "9000"); // deliberately short of 15000
+
+    await act(async () => {
+      fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    });
+
+    expect(calls).toHaveLength(0);
+    expect(statusLine()).toMatch(/sums to/i);
+    // ⛔ THE FIGURES ARE STILL ON SCREEN. This refusal's own comment in
+    // MasterCreateScreen already claimed the operator "learns it while the
+    // figures are still in front of them" — until D92 that was not true.
+    expect(
+      (screen.getByTestId("master-opening-balance") as HTMLInputElement).value,
+    ).toBe("15000");
+    expect(
+      (screen.getByTestId("master-bill-0-amount") as HTMLInputElement).value,
+    ).toBe("9000");
+  });
+
+  it("still POPS on a SUCCESS — the fix must not break the create-and-return flow", async () => {
+    // THE CONTROL, and it is the one that matters: suppressing the machine on a
+    // refusal is only correct if a success still navigates. Alt+C's whole point
+    // is create-and-return.
+    const { client, calls } = spyClient();
+    const app = renderShell(client);
+    goTo(app, "Create Ledger");
+
+    type("master-name", "Good Party");
+    fireEvent.mouseDown(screen.getByText("Sundry Debtors"));
+
+    await act(async () => {
+      fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    });
+
+    expect(calls).toHaveLength(1);
+    await waitFor(() => {
+      expect(screen.queryByTestId("master-opening-balance")).toBeNull();
+    });
+  });
+});

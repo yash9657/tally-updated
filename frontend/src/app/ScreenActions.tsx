@@ -146,7 +146,7 @@ export type ScreenActionKind =
  */
 export type ScreenActionHandler = (
   snapshot: NavSnapshot,
-) => void | string | Promise<void | string>;
+) => void | string | ScreenRefusal | Promise<void | string>;
 
 interface ScreenActionsValue {
   /** Mutable registry of the active screen's action handlers. */
@@ -191,6 +191,55 @@ export interface ScreenActionResult {
    * being dropped on the floor.
    */
   pending?: Promise<void | string>;
+  /**
+   * Set when the handler REFUSED the action outright — the operator's input was
+   * rejected and nothing was done. The shell then shows the message and does
+   * NOT forward the key to the navigation machine (register row D92).
+   *
+   * ⛔ WHY THIS EXISTS. The machine's `accept` reducer POPS a master-create
+   * frame unconditionally, because for its whole life the only way to reach it
+   * was a successful create. A `build()` refusal — no group, a bill-wise
+   * breakup that does not add up — therefore threw the operator back to the
+   * Gateway and DISCARDED EVERYTHING THEY HAD KEYED, then showed them the
+   * reason on a screen they could no longer act on. Measured in a browser
+   * 2026-08-22: name a ledger, leave the group blank, Ctrl+A, and the form is
+   * gone along with the name.
+   *
+   * That was survivable while the refusals were rare. D87 makes one of them
+   * COMMON — every party keyed without a state code — so a refusal that costs
+   * the operator their work would make that change a net harm.
+   *
+   * ⚠️ IT IS NOT A GENERAL "SWALLOW THE KEY". Only a handler that returns
+   * {@link screenRefusal} sets it, so every existing handler is untouched and
+   * the machine still moves for every action that is not an outright refusal.
+   */
+  refused?: boolean;
+}
+
+/**
+ * The value a screen handler returns to say "I refused this; do not navigate".
+ *
+ * A branded object rather than a thrown error or a magic string: a throw would
+ * have to be caught by every dispatch site and would be indistinguishable from
+ * a genuine bug, and a string is what a SUCCESS already returns.
+ */
+export interface ScreenRefusal {
+  readonly __screenRefusal: true;
+  readonly message: string;
+}
+
+/** Build the refusal marker a handler returns instead of a plain message. */
+export function screenRefusal(message: string): ScreenRefusal {
+  return { __screenRefusal: true, message };
+}
+
+/** Narrow a handler's return value to a refusal. */
+export function isScreenRefusal(v: unknown): v is ScreenRefusal {
+  return (
+    typeof v === "object" &&
+    v !== null &&
+    (v as ScreenRefusal).__screenRefusal === true
+  );
 }
 
 /**
@@ -207,6 +256,11 @@ export function useScreenActionDispatcher(): (
     const fn = handlers.current[kind];
     if (!fn) return { ran: false };
     const out = fn(snapshot);
+    // A REFUSAL, checked before the string arm: it carries a message too, but
+    // it must also stop the machine from moving. See ScreenActionResult.refused.
+    if (isScreenRefusal(out)) {
+      return { ran: true, message: out.message, refused: true };
+    }
     if (typeof out === "string") return { ran: true, message: out };
     // A thenable means the handler is still working (a print fetch). Hand it back
     // so the shell can await it rather than reporting "nothing happened".

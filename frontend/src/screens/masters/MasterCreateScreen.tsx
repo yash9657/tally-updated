@@ -10,7 +10,11 @@ import type {
   RefType,
 } from "../../api";
 import { useClient, useCompanyID } from "../../app/CompanyContext";
-import { useRegisterScreenAction } from "../../app/ScreenActions";
+import {
+  screenRefusal,
+  useRegisterScreenAction,
+  type ScreenRefusal,
+} from "../../app/ScreenActions";
 import {
   LEDGER_PARENT_GROUPS,
   GROUP_PARENT_OPTIONS,
@@ -517,12 +521,24 @@ export function MasterCreateScreen({
    * master that does not exist. The message says so, in those words, and only
    * when the parent really is a voucher.
    */
-  const onAccept = useCallback((): string | Promise<string> => {
+  const onAccept = useCallback((): ScreenRefusal | Promise<string> => {
     const d = draftRef.current;
     const noun = NOUN[kind];
-    const refuse = (message: string): string => {
+    // ⛔ A REFUSAL RETURNS A MARKER, NOT A MESSAGE STRING — register row D92.
+    // A plain string is what a SUCCESS returns, so the shell could not tell the
+    // two apart and forwarded the key to the machine either way. The machine's
+    // `accept` reducer pops this frame unconditionally, so a refusal used to
+    // throw the operator back to the Gateway and DISCARD everything they had
+    // keyed, then show the reason on a screen they could no longer act on.
+    //
+    // Every refusal below is now non-destructive: the form stays, the figures
+    // stay, the cursor stays, and the status line says what is wrong. That is
+    // what the breakup refusal's own comment already CLAIMED ("so the operator
+    // learns it while the figures are still in front of them") and, until this,
+    // was not true of.
+    const refuse = (message: string): ScreenRefusal => {
       setStatus(message);
-      return message;
+      return screenRefusal(message);
     };
 
     const n = d.name.trim();
