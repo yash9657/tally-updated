@@ -18,6 +18,8 @@ import registerProse from "./goldens/tds-register-prose.json";
 import { ApiError } from "./http";
 import type {
   BalanceSheetResponse,
+  CompanyFeaturesRequest,
+  CompanyFeaturesResponse,
   CompanyView,
   CreateCompanyRequest,
   CreateCompanyResponse,
@@ -847,6 +849,20 @@ interface MockCompany {
   stateCode: string;
   /** The company's own GSTIN ("" when unset), mirroring `company.gstin`. */
   gstin: string;
+  /**
+   * Mirrors `company.allow_negative_stock`. STORED, not synthesized, for the
+   * reason the address row below is stored: a mock that accepted the key on
+   * create and dropped it would let a round-trip test pass against a store that
+   * never kept it — which is D43 re-created inside the mock.
+   *
+   * ⚠️ AND IT SWITCHES NOTHING HERE, WHICH IS THE HONEST STATE. This mock has
+   * no negative-stock enforcement at all: `post` never computes a closing
+   * position, so there is no refusal for the flag to lift. It round-trips and
+   * that is the whole of its behaviour. A screen that looks right against this
+   * mock is NOT evidence the escape hatch works — see the `company-features`
+   * entry in `corpora/mock-vs-cored/masters.json`.
+   */
+  allowNegativeStock: boolean;
   fyStartDate: string;
   baseCurrency: string;
   /**
@@ -1919,6 +1935,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         // exactly as cored would for a company with no registered state.
         stateCode: "",
         gstin: "",
+        // Mirrors the column default. FALSE is "refuse", and a mock whose
+        // default were the permissive one would make the escape hatch look like
+        // the shipped behaviour.
+        allowNegativeStock: false,
         fyStartDate: "2026-04-01",
         baseCurrency: "INR",
         profile: defaultProfile("2026-04-01"),
@@ -1975,6 +1995,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       // corpora / e2e fixtures (party "Acme Traders" is also state 29).
       stateCode: "29",
       gstin: "",
+      // The demo tenant REFUSES negative stock, matching a freshly created
+      // cored company. The seed must not hand the browser a permissive
+      // default that no real tenant starts with.
+      allowNegativeStock: false,
       fyStartDate: "2026-04-01",
       baseCurrency: "INR",
       profile: defaultProfile("2026-04-01"),
@@ -3336,6 +3360,9 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       if (req.base_currency) c.baseCurrency = req.base_currency;
       c.stateCode = req.state_code ?? "";
       c.gstin = req.gstin ?? "";
+      // ?? not ||: `false` is a real choice, not an absence — and cored takes
+      // the column default (false) for an omitted key, so the two agree.
+      c.allowNegativeStock = req.allow_negative_stock ?? false;
       // 0015 profile. Start from the defaults for THIS company's fy start so an
       // omitted books_beginning_from tracks fy_start_date, as cored does.
       const p = defaultProfile(c.fyStartDate);
@@ -3377,7 +3404,29 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         currency_symbol: c.profile.currencySymbol,
         currency_formal_name: c.profile.currencyFormalName,
         decimal_places: c.profile.decimalPlaces,
+        allow_negative_stock: c.allowNegativeStock,
       };
+    },
+
+    async setCompanyFeatures(
+      companyID: string,
+      req: CompanyFeaturesRequest,
+    ): Promise<CompanyFeaturesResponse> {
+      // 404 on an unknown id, like getCompany and like the live route. `ensure`
+      // would materialise a blank company and hand back a cheerful 200 for a
+      // tenant that does not exist.
+      const c = companies.get(companyID);
+      if (!c) {
+        throw new ApiError(404, "company not found", "company not found");
+      }
+      // An ABSENT field leaves the setting alone; it is not a full restatement.
+      if (req.allow_negative_stock !== undefined) {
+        c.allowNegativeStock = req.allow_negative_stock;
+      }
+      // Answer from the STORE, never from `req`. The same discipline the server
+      // follows, and for the same reason: an echo cannot tell "applied" from
+      // "accepted and discarded", which is exactly what D43 was.
+      return { id: c.id, allow_negative_stock: c.allowNegativeStock };
     },
 
     async createGroup(

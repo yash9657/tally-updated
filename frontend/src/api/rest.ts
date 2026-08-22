@@ -13,6 +13,8 @@ import {
 } from "./http";
 import type {
   BalanceSheetResponse,
+  CompanyFeaturesRequest,
+  CompanyFeaturesResponse,
   CompanyView,
   CreateCompanyRequest,
   CreateCompanyResponse,
@@ -152,6 +154,12 @@ export function createRestClient(
     },
     getCompany(companyID: string) {
       return http.get<CompanyView>(company(companyID));
+    },
+    setCompanyFeatures(companyID: string, req: CompanyFeaturesRequest) {
+      // PUT on the company ROOT — the same path getCompany reads, which is why
+      // routeAction maps both to the `company` resource token: one resource,
+      // one token, so no ACL rule can govern the read and miss the write.
+      return http.put<CompanyFeaturesResponse>(company(companyID), req);
     },
 
     createGroup(companyID, req: CreateGroupRequest) {

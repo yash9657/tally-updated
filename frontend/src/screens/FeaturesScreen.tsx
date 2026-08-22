@@ -289,8 +289,8 @@ const FEATURES: {
       },
       {
         name: "Negative stock",
-        state: "always",
-        note: "REFUSED, with no way to opt out: a voucher that would take a position below zero is rejected by a deferred database constraint, not merely by the form. Structural — the check cannot be bypassed by a different write path, because ledger.post is the only one there is. ⛔ THE PER-COMPANY OPT-IN IS NOT BUILT, AND THIS ROW USED TO CLAIM IT WAS (found by driving, 2026-08-07). company.allow_negative_stock exists and BOTH enforcers read it and honour it correctly — but nothing in the product can WRITE it: no HTTP route, no field on the create-company request (which accepts the key and silently discards it, answering 201), no service setter and no control on this screen. So it is permanently false for every tenant and the refusal is absolute. Half a rule that cannot be switched is worse than no rule, because the schema and both enforcers imply a choice the operator does not have.",
+        state: "on",
+        note: "REFUSED BY DEFAULT, and now switchable per company — the control is the ALLOW NEGATIVE STOCK panel at the top of this screen. A voucher that would take a position below zero is rejected by a deferred database CONSTRAINT as well as by an in-transaction pre-check, so with the setting off the refusal cannot be bypassed by a different write path. ⛔ THIS ROW READ \"Always on\" AND SAID THE OPT-IN WAS NOT BUILT, AND BOTH WERE TRUE UNTIL 2026-08-22 (register rows D5 + D43). company.allow_negative_stock had existed since migration 0025 and BOTH enforcers read it and honoured it correctly, but nothing in the product could WRITE it: no route, no field on the create-company body (which accepted the key and discarded it at 201 — measured on the wire, not inferred), no service setter, no control. It was therefore permanently false for every tenant, and half a rule that cannot be switched is worse than no rule, because the schema and both enforcers implied a choice the operator did not have. ⚠️ TURNING IT ON DOES NOT MAKE A NEGATIVE POSITION HARMLESS: an issue with no stock to consume has NO COST to consume either, so the valuer refuses to invent one from the sale rate and the position carries zero value until a receipt arrives to price it.",
       },
       {
         name: "FIFO / LIFO / batch-wise valuation",
@@ -509,6 +509,160 @@ const BADGE: Record<State, { text: string; className: string }> = {
  * the governed year, because an operator who keys the payment's own year gets a
  * refusal that looks like a bug.
  */
+/**
+ * ALLOW NEGATIVE STOCK — the one real Yes/No switch on this screen.
+ *
+ * WHY THIS IS A SWITCH WHEN THE FILE'S DOCTRINE SAYS THEY ARE NOT.
+ * The doctrine at the top of this file is "a toggle that flips a flag with
+ * nothing behind it is worse than no toggle at all". This toggle is the exact
+ * inverse case: the flag has had TWO ENFORCERS BEHIND IT since migration 0025
+ * -- ledger.checkNegativeStock inside the post transaction, and the deferred
+ * check_stock_not_negative() constraint trigger at commit -- and both read it
+ * and honour it correctly. What was missing was the flag's WRITE side, all of
+ * it (register row D5). So this is not a decorative switch being added to a
+ * screen of facts; it is the missing half of a rule the database has been
+ * enforcing on every tenant since the day inventory shipped.
+ *
+ * ⛔ IT READS ITS STATE BACK FROM THE COMPANY ROW, AND NEVER FROM THE CALL
+ * THAT SET IT. `setCompanyFeatures` answers with the stored value rather than
+ * an echo of the request, and this panel renders THAT. The reason is register
+ * row D43, which lived next door for the whole life of POST /v1/companies:
+ * that route accepted `allow_negative_stock` and dropped it, answering 201, so
+ * every caller who trusted the response believed a setting had been applied
+ * that never was. A control which reported success from its own request would
+ * reproduce that defect on the screen -- and would be UNABLE to detect it,
+ * because a resolved promise looks identical either way.
+ *
+ * A 403 here is CORRECT BEHAVIOUR, not a broken screen. The PUT maps to
+ * (alter, company) and migration 0022 grants a Data Entry level `display
+ * company` and nothing wider, so a non-Owner can read this state and cannot
+ * change it. The Owner level additionally requires WebAuthn on writes, so the
+ * save is a step-up path.
+ */
+function NegativeStockPanel() {
+  const client = useClient();
+  const { company } = useCompanyContext();
+  const companyID = company?.id ?? "";
+
+  // `null` is "not read yet" and is distinct from both true and false: this is
+  // a tri-state, and rendering an unread setting as "No" would state a policy
+  // the screen has not actually looked up.
+  const [allow, setAllow] = useState<boolean | null>(null);
+  const [loadError, setLoadError] = useState("");
+  const [saveError, setSaveError] = useState("");
+  const [saved, setSaved] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function load() {
+    if (!companyID) return;
+    try {
+      const view = await client.getCompany(companyID);
+      setAllow(view.allow_negative_stock);
+      setLoadError("");
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  useEffect(() => {
+    void load();
+  }, [companyID]);
+
+  async function set(next: boolean) {
+    setBusy(true);
+    setSaveError("");
+    setSaved("");
+    try {
+      const res = await client.setCompanyFeatures(companyID, {
+        allow_negative_stock: next,
+      });
+      // THE ROW, not `next`. If the server stored something other than what was
+      // asked for, this is the only place that can show it.
+      setAllow(res.allow_negative_stock);
+      setSaved(
+        res.allow_negative_stock
+          ? "Negative stock is now ALLOWED for this company. An outward voucher may take a position below zero."
+          : "Negative stock is now REFUSED for this company. An outward voucher that would take a position below zero is rejected.",
+      );
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 403) {
+        setSaveError(
+          "Refused: changing company features needs an Owner. A Data Entry level can read this setting and not change it. " +
+            err.message,
+        );
+      } else {
+        setSaveError(err instanceof Error ? err.message : String(err));
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-4" data-testid="negative-stock-panel">
+      <h2 className="font-bold text-tally-title">Allow Negative Stock</h2>
+      <p className="mt-1 max-w-3xl text-xs">
+        Whether an outward voucher may take a stock position (item, godown,
+        batch) below zero. <b>Off is the default and the safe answer</b>: a
+        negative position means the books disagree with the shelf, and the
+        usual cause is a missing purchase rather than a sale that should be
+        allowed.{" "}
+        <span className="text-tally-title">
+          Turning it ON does not make the position harmless. An issue with no
+          stock to consume has no COST to consume either, so it carries zero
+          value until a receipt arrives to price it, and closing valuation
+          stays wrong until then.
+        </span>
+      </p>
+      {loadError ? (
+        <p className="mt-2 max-w-3xl text-xs text-tally-bar" data-testid="negative-stock-load-error">
+          Cannot read this setting: {loadError}
+        </p>
+      ) : null}
+      <p className="mt-2 text-sm" data-testid="negative-stock-state">
+        Current setting:{" "}
+        <b className="text-tally-title">
+          {allow === null
+            ? "not read"
+            : allow
+              ? "ALLOWED (below zero is accepted)"
+              : "REFUSED (below zero is rejected)"}
+        </b>
+      </p>
+      <div className="mt-2 flex gap-2">
+        <button
+          type="button"
+          className="border border-tally-title px-2 py-0.5 text-sm text-tally-title disabled:opacity-50"
+          disabled={busy || !companyID || allow === true}
+          data-testid="negative-stock-allow"
+          onClick={() => void set(true)}
+        >
+          Allow negative stock
+        </button>
+        <button
+          type="button"
+          className="border border-tally-title px-2 py-0.5 text-sm text-tally-title disabled:opacity-50"
+          disabled={busy || !companyID || allow === false}
+          data-testid="negative-stock-refuse"
+          onClick={() => void set(false)}
+        >
+          Refuse negative stock
+        </button>
+      </div>
+      {saveError ? (
+        <p className="mt-2 max-w-3xl text-xs text-tally-bar" data-testid="negative-stock-save-error">
+          {saveError}
+        </p>
+      ) : null}
+      {saved ? (
+        <p className="mt-2 max-w-3xl text-xs text-tally-title" data-testid="negative-stock-saved">
+          {saved}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function DeductorStatusPanel() {
   const client = useClient();
   const { company } = useCompanyContext();
@@ -1753,6 +1907,7 @@ export function FeaturesScreen() {
           company deduct", the second "who is filing the return". They are
           different tables with different vocabularies — see each panel's own
           comment — and nothing derives one from the other. */}
+      <NegativeStockPanel />
       <DeductorStatusPanel />
       <TDSReturnProfilePanel />
       <TCSDeclarationsPanel />

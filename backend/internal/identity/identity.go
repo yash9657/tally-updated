@@ -60,6 +60,23 @@ type Company struct {
 	// DecimalPlaces is a pointer so "unset" (nil) is distinguishable from an
 	// explicit 0, which is a legitimate choice for whole-rupee books.
 	DecimalPlaces *int
+
+	// --- Inventory policy (migration 0025) ---------------------------------
+	// AllowNegativeStock is the per-company opt-in escape hatch read by BOTH
+	// stock enforcers -- ledger.checkNegativeStock (the in-transaction
+	// pre-check) and the deferred check_stock_not_negative() constraint
+	// trigger. It had been readable by both and writable by NOTHING since 0025
+	// shipped: no field on this struct, no column in the INSERT below, no
+	// route, no setter, no control. So it was permanently false for every
+	// tenant and the refusal was absolute, while the schema and both enforcers
+	// implied a choice the operator did not have (register row D5).
+	//
+	// A POINTER, not a bool, for the same reason DecimalPlaces is one: the
+	// zero value here is a MEANINGFUL setting (refuse), so "the caller omitted
+	// the key" and "the caller asked for false" must stay distinguishable. nil
+	// takes the column default, which is false -- refuse. That default is
+	// deliberate and stays: an escape hatch nobody asked for must be shut.
+	AllowNegativeStock *bool
 }
 
 // Service is the identity application service.
@@ -110,6 +127,14 @@ func (s *Service) CreateCompany(ctx context.Context, c Company) (uuid.UUID, erro
 	if c.DecimalPlaces != nil {
 		decimals = *c.DecimalPlaces
 	}
+	// Same treatment as decimals, and the default is the RESTRICTIVE one. Until
+	// this line existed the key was accepted on the wire and dropped on the
+	// floor at 201 (register row D43): the caller was told a setting had been
+	// applied that never was.
+	allowNegativeStock := false
+	if c.AllowNegativeStock != nil {
+		allowNegativeStock = *c.AllowNegativeStock
+	}
 
 	scoped, ok := db.CompanyFromContext(ctx)
 	if !ok {
@@ -125,15 +150,18 @@ func (s *Service) CreateCompany(ctx context.Context, c Company) (uuid.UUID, erro
 			   (id, company_id, name, fy_start_date, base_currency, state_code, gstin,
 			    mailing_name, address, city, pincode, country,
 			    books_beginning_from,
-			    currency_symbol, currency_formal_name, decimal_places)
+			    currency_symbol, currency_formal_name, decimal_places,
+			    allow_negative_stock)
 			 VALUES ($1, $1, $2, $3, $4, $5, $6,
 			         $7, $8, $9, $10, $11,
 			         $12,
-			         $13, $14, $15)`,
+			         $13, $14, $15,
+			         $16)`,
 			c.ID, c.Name, c.FYStartDate, c.BaseCurrency, c.StateCode, c.GSTIN,
 			c.MailingName, c.Address, c.City, c.Pincode, c.Country,
 			c.BooksBeginningFrom,
 			c.CurrencySymbol, c.CurrencyFormalName, decimals,
+			allowNegativeStock,
 		); err != nil {
 			return fmt.Errorf("identity: insert company: %w", err)
 		}
@@ -146,6 +174,70 @@ func (s *Service) CreateCompany(ctx context.Context, c Company) (uuid.UUID, erro
 		return uuid.Nil, err
 	}
 	return c.ID, nil
+}
+
+// ErrCompanyNotFound is returned by SetCompanyFeatures when the UPDATE matches
+// no row. Under RLS that is indistinguishable from "the company exists and this
+// session cannot see it", and both are the same answer to the caller: 404.
+var ErrCompanyNotFound = errors.New("identity: company not found")
+
+// SetCompanyFeatures writes the per-company inventory policy.
+//
+// It exists because company.allow_negative_stock was readable by both stock
+// enforcers and writable by nothing (register row D5). This is the whole write
+// side, deliberately narrow: it is NOT a general company editor. The name, the
+// financial year, the state code and the currency block are all identity a
+// posted book depends on -- moving fy_start_date under existing vouchers would
+// re-file them into a different year -- so nothing in this function touches
+// them, and a future setting belongs beside allow_negative_stock rather than in
+// a widened UPDATE over the whole row.
+//
+// The context MUST already be scoped to the company (RLS binds
+// app.current_company_id inside RunInTx), and companyID is cross-checked
+// against that scope for the same reason CreateCompany cross-checks it: the
+// UPDATE is subject to RLS, so a mis-scoped session would silently match zero
+// rows and look exactly like a missing company.
+func (s *Service) SetCompanyFeatures(ctx context.Context, companyID uuid.UUID, allowNegativeStock bool) error {
+	scoped, ok := db.CompanyFromContext(ctx)
+	if !ok {
+		return db.ErrNoCompany
+	}
+	if scoped != companyID {
+		return fmt.Errorf("identity: context company %s != target company %s", scoped, companyID)
+	}
+	return s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx,
+			`UPDATE company SET allow_negative_stock = $2 WHERE id = $1`,
+			companyID, allowNegativeStock)
+		if err != nil {
+			return fmt.Errorf("identity: set company features: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrCompanyNotFound
+		}
+		return nil
+	})
+}
+
+// CompanyFeatures reads the per-company inventory policy back out of the row.
+//
+// The write path calls this AFTER the UPDATE and answers with what it returns,
+// never with an echo of the request body. That is not ceremony: echoing the
+// request is precisely the defect D43 was -- a caller told a setting was applied
+// when the column never moved -- and an echo cannot tell the two apart.
+func (s *Service) CompanyFeatures(ctx context.Context, companyID uuid.UUID) (allowNegativeStock bool, err error) {
+	err = s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		switch err := tx.QueryRow(ctx,
+			`SELECT allow_negative_stock FROM company WHERE id = $1`, companyID).
+			Scan(&allowNegativeStock); {
+		case errors.Is(err, pgx.ErrNoRows):
+			return ErrCompanyNotFound
+		case err != nil:
+			return fmt.Errorf("identity: read company features: %w", err)
+		}
+		return nil
+	})
+	return allowNegativeStock, err
 }
 
 // LedgerID resolves a ledger's id by name within the company in context.

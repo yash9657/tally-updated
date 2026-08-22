@@ -31,6 +31,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/khata/cored/internal/identity"
 )
 
 // companyViewResp is the JSON body of GET /v1/companies/{companyID}. The field
@@ -60,6 +62,14 @@ type companyViewResp struct {
 	CurrencySymbol     string `json:"currency_symbol"`
 	CurrencyFormalName string `json:"currency_formal_name"`
 	DecimalPlaces      int    `json:"decimal_places"`
+
+	// AllowNegativeStock is the inventory escape hatch (migration 0025). It is
+	// on the READ for a reason beyond symmetry: until PUT / existed there was
+	// no way for a client to learn the value of a setting BOTH stock enforcers
+	// were already acting on, so a screen could only ever guess at it -- and
+	// FeaturesScreen guessed, correctly, that it was permanently false. A
+	// control that cannot read its own state back is the D43 shape again.
+	AllowNegativeStock bool `json:"allow_negative_stock"`
 }
 
 // handleGetCompany returns the company master for the authorized company.
@@ -86,19 +96,23 @@ func (s *Server) handleGetCompany(w http.ResponseWriter, r *http.Request) {
 		currencySymbol     string
 		currencyFormalName string
 		decimalPlaces      int
+
+		allowNegativeStock bool
 	)
 	err := s.pool.RunInReadOnlyTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		return tx.QueryRow(ctx,
 			`SELECT name, fy_start_date, base_currency, state_code, gstin,
 			        mailing_name, address, city, pincode, country,
 			        books_beginning_from,
-			        currency_symbol, currency_formal_name, decimal_places
+			        currency_symbol, currency_formal_name, decimal_places,
+			        allow_negative_stock
 			   FROM company
 			  WHERE id = $1`, companyID).
 			Scan(&name, &fyStart, &baseCurrency, &stateCode, &gstin,
 				&mailingName, &address, &city, &pincode, &country,
 				&booksFrom,
-				&currencySymbol, &currencyFormalName, &decimalPlaces)
+				&currencySymbol, &currencyFormalName, &decimalPlaces,
+				&allowNegativeStock)
 	})
 	if err != nil {
 		// No row = either the company does not exist or RLS hid it. Both are a
@@ -131,5 +145,77 @@ func (s *Server) handleGetCompany(w http.ResponseWriter, r *http.Request) {
 		CurrencySymbol:     currencySymbol,
 		CurrencyFormalName: currencyFormalName,
 		DecimalPlaces:      decimalPlaces,
+
+		AllowNegativeStock: allowNegativeStock,
 	})
+}
+
+// --------------------------------------------------------------------------
+// PUT /v1/companies/{companyID} — write the company FEATURE settings (D5).
+// --------------------------------------------------------------------------
+
+// companyFeaturesReq is the PUT body. One field today, and the shape is chosen
+// so a second can be added without breaking a client: every field is a POINTER,
+// and an omitted field LEAVES THE SETTING ALONE rather than resetting it to a
+// zero value. A settings PUT that silently reverted the settings it was not
+// told about would be a worse defect than the one this route closes.
+type companyFeaturesReq struct {
+	AllowNegativeStock *bool `json:"allow_negative_stock"`
+}
+
+// handleUpdateCompany serves PUT /v1/companies/{companyID}.
+//
+// ⛔ IT ANSWERS WITH THE ROW, NEVER WITH THE REQUEST. Echoing the body back is
+// exactly what POST /v1/companies did with this same key for the whole life of
+// that route (register row D43): the caller was told a setting had been applied
+// while the column never moved, and an echo is structurally incapable of telling
+// those two outcomes apart. The read-back here is the same discipline
+// handleSetTDSProfile follows for the same reason.
+func (s *Server) handleUpdateCompany(w http.ResponseWriter, r *http.Request) {
+	ctx, companyID, ok := s.scopeCtxID(w, r)
+	if !ok {
+		return
+	}
+	var req companyFeaturesReq
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+
+	// Absent field => leave it as it is. That needs the CURRENT value, so read
+	// before writing rather than defaulting to false.
+	current, err := s.identity.CompanyFeatures(ctx, companyID)
+	if err != nil {
+		writeCompanyFeaturesError(w, err)
+		return
+	}
+	desired := current
+	if req.AllowNegativeStock != nil {
+		desired = *req.AllowNegativeStock
+	}
+
+	if err := s.identity.SetCompanyFeatures(ctx, companyID, desired); err != nil {
+		writeCompanyFeaturesError(w, err)
+		return
+	}
+
+	stored, err := s.identity.CompanyFeatures(ctx, companyID)
+	if err != nil {
+		writeCompanyFeaturesError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":                   companyID.String(),
+		"allow_negative_stock": stored,
+	})
+}
+
+// writeCompanyFeaturesError maps identity's errors onto the same status codes
+// handleGetCompany uses, so a missing/RLS-hidden company reads 404 on both
+// halves of the route rather than 404 on the read and 500 on the write.
+func writeCompanyFeaturesError(w http.ResponseWriter, err error) {
+	if errors.Is(err, identity.ErrCompanyNotFound) {
+		writeError(w, http.StatusNotFound, "company not found")
+		return
+	}
+	writeError(w, http.StatusInternalServerError, "company features: "+err.Error())
 }

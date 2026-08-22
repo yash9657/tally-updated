@@ -533,6 +533,27 @@ func (s *Server) routes() {
 		// /v1/companies/{id} and /v1/companies/{id}/ to this route.
 		r.Get("/", s.handleGetCompany)
 
+		// Company FEATURE settings (register row D5). Narrow by design: the
+		// only thing this writes is company.allow_negative_stock, which both
+		// stock enforcers have read since migration 0025 and nothing could
+		// write. It is deliberately NOT a general company editor -- the name,
+		// the financial year, the state code and the currency block are
+		// identity that posted books depend on.
+		//
+		// TWO-TOUCH RULE: this line is inert without the matching
+		// `PUT ""`/`PUT "/"` -> (authz.Alter, "company") arm in routeAction().
+		// TestEveryCompanyRouteIsMappedAndInVocabulary walks THIS router and
+		// turns the suite red if the arm is missing, so the gap cannot ship.
+		//
+		// An ALTER, not a Create: it corrects the one company row, it never
+		// adds a second -- the same reading that made PUT .../tds-profile an
+		// Alter. Being a write it inherits the Owner level's WebAuthn step-up
+		// (Action.IsWrite()); it does NOT inherit the back-dated cutoff,
+		// because a settings change carries no date and
+		// voucherDateFromRequest returns nil for a route with none, which is
+		// correct: a policy switch is not a dated document.
+		r.Put("/", s.handleUpdateCompany)
+
 		// Masters.
 		r.Post("/groups", s.handleCreateGroup)
 		r.Post("/ledgers", s.handleCreateLedger)
@@ -1234,6 +1255,19 @@ type companyReq struct {
 	CurrencySymbol     string `json:"currency_symbol"`
 	CurrencyFormalName string `json:"currency_formal_name"`
 	DecimalPlaces      *int   `json:"decimal_places"`
+
+	// AllowNegativeStock is the inventory escape hatch. A POINTER for the same
+	// reason DecimalPlaces is one -- false is a meaningful setting, not an
+	// absence -- and omitted means "take the column default", which is false.
+	//
+	// ⛔ THIS KEY WAS ACCEPTED AND DISCARDED FOR THE WHOLE LIFE OF THE ROUTE
+	// (register row D43). decodeJSON does not set DisallowUnknownFields (it is
+	// shared by ~40 handlers, so turning it on here is not a local change), so
+	// an unknown key is silently dropped and the caller still gets a 201. That
+	// made the company create answer "applied" to a setting it had thrown away,
+	// measured on the wire 2026-08-22: POST with allow_negative_stock:true ->
+	// 201, and `SELECT allow_negative_stock FROM company` -> f.
+	AllowNegativeStock *bool `json:"allow_negative_stock"`
 }
 
 func (s *Server) handleCreateCompany(w http.ResponseWriter, r *http.Request) {
@@ -1272,6 +1306,8 @@ func (s *Server) handleCreateCompany(w http.ResponseWriter, r *http.Request) {
 		CurrencySymbol:     req.CurrencySymbol,
 		CurrencyFormalName: req.CurrencyFormalName,
 		DecimalPlaces:      req.DecimalPlaces,
+
+		AllowNegativeStock: req.AllowNegativeStock,
 	})
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())

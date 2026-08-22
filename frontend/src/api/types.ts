@@ -138,10 +138,55 @@ export interface CreateCompanyRequest {
   currency_formal_name?: string;
   /** Digits after the decimal point, 0-4. Defaults to 2. Display only. */
   decimal_places?: number;
+
+  /**
+   * Allow a voucher to drive a stock position BELOW ZERO (`company.allow_
+   * negative_stock`, migration 0025). Defaults to `false` — refuse — when
+   * omitted, and that default is deliberate: an escape hatch nobody asked for
+   * must be shut.
+   *
+   * ⛔ THIS KEY WAS ACCEPTED AND SILENTLY DISCARDED BY THE LIVE ROUTE until
+   * register row D43 was closed. `decodeJSON` server-side does not reject
+   * unknown fields, so a create that asked for `true` still answered 201 while
+   * the column stayed `false` — the caller was told a setting had been applied
+   * that never was. Do not assert this from the 201; read it back through
+   * {@link CoredClient.getCompany}.
+   */
+  allow_negative_stock?: boolean;
 }
 
 export interface CreateCompanyResponse {
   company_id: string;
+}
+
+/**
+ * The body of PUT /v1/companies/{companyID} — the company FEATURE settings.
+ *
+ * Every field is OPTIONAL and an omitted field LEAVES THE SETTING ALONE. It is
+ * not a full restatement of the company: a PUT that reset the settings it was
+ * not told about would be a worse defect than the one this route closes.
+ *
+ * Narrow by design. The name, the financial year, the state code and the
+ * currency block are identity that posted books depend on and are NOT writable
+ * here — moving `fy_start_date` under existing vouchers would re-file them into
+ * a different year.
+ */
+export interface CompanyFeaturesRequest {
+  /** See {@link CreateCompanyRequest.allow_negative_stock}. */
+  allow_negative_stock?: boolean;
+}
+
+/**
+ * The 200 body of PUT /v1/companies/{companyID}.
+ *
+ * ⛔ THIS IS THE ROW, NOT AN ECHO OF THE REQUEST. The server re-reads the
+ * column after the UPDATE and answers with what it holds, because an echo is
+ * structurally incapable of distinguishing "applied" from "accepted and thrown
+ * away" — which is precisely what D43 was.
+ */
+export interface CompanyFeaturesResponse {
+  id: string;
+  allow_negative_stock: boolean;
 }
 
 /**
@@ -171,6 +216,13 @@ export interface CompanyView {
   currency_symbol: string;
   currency_formal_name: string;
   decimal_places: number;
+  /**
+   * See {@link CreateCompanyRequest.allow_negative_stock}. On the READ so a
+   * control can show its own current state: both stock enforcers have acted on
+   * this column since migration 0025, and until it appeared here no client
+   * could learn the value of a setting it was already subject to.
+   */
+  allow_negative_stock: boolean;
 }
 
 // ---------------------------------------------------------------------------

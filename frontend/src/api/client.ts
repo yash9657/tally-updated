@@ -12,6 +12,8 @@
 
 import type {
   BalanceSheetResponse,
+  CompanyFeaturesRequest,
+  CompanyFeaturesResponse,
   CompanyView,
   CreateCompanyRequest,
   CreateCompanyResponse,
@@ -122,6 +124,28 @@ export interface CoredClient {
    * derived the wrong intra/inter-state split in the browser.
    */
   getCompany(companyID: string): Promise<CompanyView>;
+  /**
+   * Write the company FEATURE settings (PUT /v1/companies/{companyID}).
+   *
+   * Today that is exactly one setting: `allow_negative_stock`. It exists
+   * because that column was READ by both stock enforcers — the in-transaction
+   * pre-check and the deferred constraint trigger — and WRITABLE BY NOTHING
+   * since migration 0025 shipped (register row D5), so the refusal it gates was
+   * absolute for every tenant while the schema implied a choice the operator
+   * did not have.
+   *
+   * ⛔ THE RESPONSE IS THE ROW, NOT AN ECHO. Assert against the returned
+   * `allow_negative_stock`, never against the fact that the call resolved — a
+   * resolved promise is what D43 handed callers for a whole route's lifetime.
+   *
+   * An omitted field leaves that setting unchanged; it is not a full
+   * restatement of the company, and it cannot write the company's identity
+   * (name, financial year, state code, currency).
+   */
+  setCompanyFeatures(
+    companyID: string,
+    req: CompanyFeaturesRequest,
+  ): Promise<CompanyFeaturesResponse>;
 
   // Masters (all company-scoped)
   /**

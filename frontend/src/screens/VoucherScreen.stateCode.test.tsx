@@ -218,6 +218,10 @@ describe("home state code end-to-end (WS8a)", () => {
       currency_symbol: "₹",
       currency_formal_name: "Indian Rupees",
       decimal_places: 2,
+      // The inventory escape hatch (D5/D43). FALSE is the column default and
+      // the restrictive answer; an omitted key must land here rather than
+      // opening the hatch.
+      allow_negative_stock: false,
     });
   });
 });

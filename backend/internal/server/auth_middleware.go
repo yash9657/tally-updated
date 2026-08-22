@@ -1252,6 +1252,25 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 	case method == http.MethodGet && (rest == "" || rest == "/"):
 		return authz.Display, "company", "", true
 
+	// PUT the company master: the FEATURE settings write (register row D5).
+	// Alter over the SAME `company` token the GET above uses, for the reason
+	// spelled out on the master read/write pair below -- one resource, one
+	// token, so an ACL rule cannot govern the read and miss the write.
+	//
+	// THE TOKEN CHOICE IS WHAT KEEPS THIS SAFE WITH NO MIGRATION.
+	// `company` is already in authz's vocabulary, migration 0022 seeds Data
+	// Entry `allow display company` and nothing wider, and that level's
+	// default_access is 'none' -- so `alter company` is default-DENIED for
+	// every seeded non-Owner level the day this route appears. Modelling it as
+	// anything reached by 0011's coarse `allow display report` would have
+	// handed the inventory escape hatch to every Data Entry operator.
+	//
+	// Being a write it DOES take the Owner level's WebAuthn step-up, and does
+	// NOT take the back-dated cutoff (voucherDateFromRequest returns nil: the
+	// body carries no date, and a policy switch is not a dated document).
+	case method == http.MethodPut && (rest == "" || rest == "/"):
+		return authz.Alter, "company", "", true
+
 	// Masters.
 	case method == http.MethodPost && isMasterPath(rest):
 		return authz.Create, "master", "", true
