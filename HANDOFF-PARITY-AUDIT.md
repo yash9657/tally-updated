@@ -815,7 +815,7 @@ have now been driven end to end in a real browser against real cored.**
 
 ---
 
-## 7.1 ⛔ THE DEFECT REGISTER — 89 DEFECTS, 12 STILL OPEN
+## 7.1 ⛔ THE DEFECT REGISTER — 90 DEFECTS, 11 STILL OPEN
 
 **This is the audit's actual product.** Every row below was found by DRIVING, is traced to file:line, and
 carries a proposed fix in the source material. ⛔ **Do not re-derive these from scratch** — that is the
@@ -913,12 +913,13 @@ WORK"** — not "hard to fix".
 | **D81** | 17 | MEDIUM | A server-only refusal (cutoff, ACL, duplicate number, negative stock) still leaves **masters** behind on the voucher path: a posting needs a real uuid and cored has no `DELETE /ledgers`. The DRAFT path discloses its orphans via `DraftAcceptFailedError`; the voucher path does not | `frontend/src/screens/VoucherScreen.tsx` (resolveMasters) | ⛔ OPEN — registered 2026-08-20. ⚠️ The FORM-side refusals are closed (L6/L12 drives prove Ctrl+A mints nothing when the form refuses); this is the SERVER-refusal half |
 | **D82** | 17 | LOW | The HSN refusal bites the ALTER path: an old sales invoice stored without an HSN cannot be re-saved without keying one. Arguably correct (it cannot be printed either way) but it is a new refusal on existing data | `frontend/src/screens/VoucherScreen.tsx` `HSN_REQUIRED_CLASSES` | ✅ **WORKING AS INTENDED — THE USER'S DECISION, 2026-08-21. `HSN_REQUIRED_CLASSES` STAYS AS IT IS.** The invoice is unprintable without an HSN (CGST Rules 2017, Rule 46(g)), so keying the code is the FIX rather than a hoop. ⛔ A later session that finds this row and "fixes" it is REVERSING A USER DECISION — the SENTENCE is pinned, not just the behaviour (`VoucherScreen.gstAlter.test.tsx`, mutation-proved: disabling the condition turns this pin AND `masterGate.test.tsx`'s D60 arm red). **Driven (L14) 2026-08-22, 12/12:** the refusal reaches the operator on the alter naming Rule 46(g) and "cannot be printed", the HSN field sits empty and keyable on the SAME screen, nothing is sent, and keying the code lets the same alter through as a PUT. ⛔ **AND THE DRIVE FOUND D89** — the remedy this refusal prescribes was minting a duplicate invoice. See §7.5 |
 | **D83** | 5 | LOW | Two SIMULTANEOUS posts with the same hand-typed bill number on one party can both pass the uniqueness check. Needs an index `bill_allocation` cannot carry, because duplicate names are legal for AGAINST/ON_ACCOUNT/caller-named openers. ⚠️ **The sequential case — what an operator actually produces — is closed** | `backend/internal/ledger/` bill uniqueness | ⛔ OPEN — registered 2026-08-20 |
-| **D84** | — | MEDIUM | ⛔ **`api/mock.ts` IS LOOSER THAN CORED AND IS A SOURCE OF FALSE GREEN — three lanes hit it.** It accepts an empty ledger name and an unparseable `gst_rate_pct` that `server.go` 400s on, reproduces D44 verbatim, skips D6's party-group and D69's due-date checks, and does not mirror `createLedger`'s opening-breakup refusal. Needs a STRUCTURAL mock-vs-server gate, not three patches | `frontend/src/api/mock.ts` | ⛔ OPEN — registered 2026-08-20 |
+| **D84** | — | MEDIUM | ⛔ **`api/mock.ts` IS LOOSER THAN CORED AND IS A SOURCE OF FALSE GREEN — three lanes hit it.** 61 test files build their masters through it, and `App.tsx`'s dev-client switch hands the same mock to a real operator in the dev browser, so all of them were measured against an engine that enforces less than the server. Needs a STRUCTURAL mock-vs-server gate, not three patches | `frontend/src/api/mock.ts` + `corpora/mock-vs-cored/` | ✅ **FIXED (L14d) — MUTATION-PROVED 2026-08-22. Runner A 14/14 in vitest, runner B 11/11 against live cored.** The instrument: `corpora/mock-vs-cored/masters.json` (refusal-shaped rows), `src/api/contract/corpus.ts` (ONE reader, so the two runners cannot drift on what a row means), runner A in vitest over `createMockClient()`, runner B as `pnpm contract:cored` over live cored. **Ran as the row prescribed — both runners BEFORE any fix, divergences printed side by side: 9 rows where the mock ACCEPTED a body cored refuses.** Eight closed, mirroring cored's SENTENCES not just its statuses. ⛔⛔ **EVERY EXPECTATION WAS MEASURED ON THE WIRE AND TWO CONTRADICTED THE RECON:** an unknown group answers **404** (not 422), and **a duplicate STOCK ITEM name is ACCEPTED** (201, new id) — the recon's `EnsureStockItem`-does-not-exist premise is true but its conclusion was not. ⛔ **THE TIGHTENING FOUND FIVE TESTS THAT COULD NEVER HAVE RUN AGAINST CORED:** `draftAccept.test.ts`'s `realDraftBody` called `createLedger` unconditionally, so the passing tests were measuring a chart of accounts with DUPLICATE party ledgers — the exact state the product's `ensureLedger` was fixed TWICE to avoid. ⚠️ **BLAST RADIUS MEASURED, NOT FEARED:** the split criterion was ">~10 files from one arm"; the first arm broke **ZERO** and all eight broke **ONE** file. Not split — but the premise ("tightening turns green tests red — that is the deliverable") only half held: most of the value is preventing FUTURE false green. ⚠️ **ONE ROW IS A PINNED GAP, NOT A FIX** — `ledger-unknown-group`, because the mock models no chart of accounts and copying cored's 28 seeded groups would be an undetectable duplicate (no `listGroups` for either runner to compare). Runner A asserts the gap is STILL OPEN so closing it is deliberate. See §7.5 |
 | **D85** | 30 | MEDIUM | ⛔ **The duplicate-supplier-bill guard keys on the POST-REDACTION `voucher_no`, so every PII-shaped invoice number collapses to ONE key and a legitimate second bill is refused.** `assertNotAlreadyOnTheBooks` matches on `body.voucher_no`, which for a bill whose invoice number is a PAN/GSTIN/Aadhaar is the constant token `[PAN REDACTED]` — not the supplier's number. Two DIFFERENT PAN-shaped invoice numbers from one supplier on one date are therefore the same bill as far as this check is concerned, and the second accept is refused. Its own error text advises *"If this is genuinely a second bill, key its own supplier invoice number"* — **which cannot work**, because any number that redacts lands on the same token. Found by driving, not by reading: the L11 probe randomised its PAN to become re-runnable and was still refused. | `frontend/src/screens/vouchers/draftAccept.ts:1526-1545` (`assertNotAlreadyOnTheBooks` — `no = body.voucher_no`, compared to `e.voucher_no`) + `insightd/insightd/pipeline.py:65` (redaction happens BEFORE the value ever reaches the client) | ⛔ OPEN |
 | **D86** | 3 | MEDIUM | ⛔ **Sundry Creditors on the Balance Sheet and the payables Outstandings DISAGREE the moment any voucher is dated after today, and the repo's own gate asserts they agree EXACTLY.** With no `as_on`, Outstandings bounds at today and drops a future-dated bill; the Balance Sheet does not bound and includes it. Measured: one bill dated 2026-08-27 with today at 2026-08-20 gave BS **109950.0000** vs Outstandings **108770.0000** — short by exactly that bill's 1180.0000 — while `?as_on=2026-09-30` returned **109950.0000** and agreed. Nothing refuses a future-dated purchase (cored answers 201), so an operator who post-dates one bill sees the ageing disagree with the balance sheet with no explanation. ⚠️ `verify:demo`'s check passes today only because the seeded demo data happens to carry no future dates — it calls **neither** report with an `as_on`, and its own comment says the two paths "must agree exactly". | `frontend/scripts/verify-demo.mts:154-168` (both calls omit `as_on`) + the default-`as_on` divergence between the Outstandings and Balance Sheet handlers | ⛔ OPEN |
 | **D87** | 5 | MEDIUM | ⛔ **A PARTY CREATED FROM THE KEYBOARD HAS NO GSTIN, NO STATE CODE AND NO REGISTRATION TYPE — and state_code NULL is the exact input that made D19 derive an intra-state bill as IGST.** `masters.CreateLedger` and `CreateLedgerRequest` have accepted all three since they were written; the master-create form renders no field for any of them, so every Sundry Debtor/Creditor keyed by an operator lands with `gstin` NULL, `state_code` NULL and `registration_type` UNKNOWN. Driven in a browser while closing D36: the form's text contains no "GSTIN", no "State code" and no "Registration type", and the ledger it created read back `(null)|(null)|UNKNOWN`. The repo's OWN gate flags it — `verify:demo`'s "Every party's GSTIN prefix == its state_code" and "Every party is registration_type REGULAR" both fail on a keyed party, which is how it was found. ⚠️ NOT FIXED: it is the same class of build as D36 (fields the form does not render) but it carries a judgement D36 did not — whether `state_code` becomes MANDATORY under Sundry Debtors/Creditors, which would refuse creations that succeed today, and how many of the party's ten-odd optional columns (address block, PAN, credit days, bank details) the form should expose alongside it. | `frontend/src/screens/masters/MasterCreateScreen.tsx` (the ledger `Draft` has no gstin/state/registration field; `build`'s `CreateLedgerRequest` therefore sends none) vs `backend/internal/masters/masters.go` `CreateLedger`, which stores all three | ⛔ OPEN |
 | **D88** | 17 | HIGH | ⛔ **ALTERING A VOUCHER SILENTLY DELETES ITS TDS DEDUCTION, and any challan allocation against it is orphaned.** `internal/ledger`'s `deleteTDSDeductions` runs on EVERY alter and the row is re-derived from the body — which is correct on its own terms ("a voucher altered to carry no TDS at all must lose its deduction row rather than keep a stale one"). But the voucher READ path serves no `tds`/`tcs` block, so the form CANNOT re-state what it loaded: hydrate a voucher that carried a deduction, edit its narration, press Ctrl+A, and the deduction is gone — while the challan that paid it keeps an allocation whose natural key now matches no deduction row (migration 0069 carries no foreign key by design, so nothing in the database refuses it). The register then shows the allocation with `deduction_on_record: false`, which is the state that panel already renders and calls out. Found while building D3's form, which is the first thing in the product that can create the precondition. ⚠️ NOT FIXED: the fix is a SERVER READ-PATH change (serve the stored deduction on `GET /vouchers/{id}`) plus hydration in `formFromView`, and it should land with D3's remaining TCS half rather than ahead of it. `formFromView` states the gap at the field today. | `backend/internal/ledger/tds.go` `deleteTDSDeductions` + the voucher GET (`VoucherView` has no tds/tcs) vs `frontend/src/screens/VoucherScreen.tsx` `formFromView` | ✅ **FIXED (L4) — MUTATION-PROVED *AND* DRIVEN 2026-08-21.** The GET serves the stored block and `formFromView` re-states it. Oracle: alter the narration, the `tds_deduction` row SURVIVES and the challan register stops reading "deduction no longer on record". Pinned with its INVERSE CONTROL — an alter that OMITS the block is accepted and deletes it. See §7.5 |
 | **D89** | 17 | HIGH | ⛔⛔ **A REFUSED ALTER SILENTLY BECAME A CREATE, SO THE REMEDY THE REFUSAL PRESCRIBED MINTED A SECOND INVOICE.** `navMachine`'s `accept` reducer replaced ANY voucher frame with a fresh `create` frame on every Ctrl+A. It is pure, so it can never learn that the write was refused — least of all here, where the refusal was CLIENT-SIDE and not one byte left the browser. That dropped the loaded `voucher_id` which routes the PUT, while the form kept the loaded voucher's values on screen: the heading was the only thing that changed, by thirteen characters, at the bottom of a refusal the operator is reading. Driven in a browser: drill a legacy no-HSN sales invoice out of the Day Book, Ctrl+A → refused by `gstRefusal`, key the HSN the refusal asked for, Ctrl+A → **`POST /vouchers/sales` 201**, status line "Saved", and the original invoice's `hsn` still empty. **One tax invoice keyed, two on the books.** ⚠️ NOT GST-SPECIFIC: any refusal on an alter had this shape, client- or server-side. ⚠️ The class was already known on the DRILL side — `phase1.test.ts`'s CONTROL "a row naming no class does not open a voucher frame" closes the same failure reached the other way; that guarded the door IN, nothing guarded the door THROUGH. | `frontend/src/keystroke/navMachine.ts`, the `accept` reducer's voucher arm | ✅ **FIXED (L14) — MUTATION-PROVED *AND* DRIVEN 2026-08-22.** An alter frame stays put; a second Ctrl+A re-PUTs the same `voucher_id` and Esc still returns to the report it was drilled from — which is what `delete` directly below already did. Oracle: the Day Book entry count over the date is UNCHANGED and the voucher reads `op=ALTER`, not a second `CREATE`. Pinned with both CONTROLs (a CREATE frame still re-opens fresh for bulk entry; two accepts on a create really do key two invoices) so neither "never re-open a fresh form" nor "never accept a frame twice" can pass in place of the fix. See §7.5 |
+| **D90** | — | MEDIUM | ⚠️ **A DUPLICATE STOCK ITEM NAME IS ACCEPTED (201, a NEW id) WHILE A DUPLICATE LEDGER NAME IS REFUSED (422).** Found by D84's wire discovery, which measured the recon's claim instead of trusting it: the recon said the route "only ever reaches `CreateStockItem`, which 422s" — cored actually mints a second item with the same name. Consequence: two identical rows in every item picker with nothing to tell them apart, and one item's movements and valuation split across two masters, each weighted-average costed on half the history. ⚠️ **The mock does the OPPOSITE** (create-or-select returns the existing id), so no test can see this — it is recorded as a declared divergence in `corpora/mock-vs-cored/masters.json` rather than mirrored, because mirroring cored here would spread the more suspicious of the two behaviours. ⛔ NOT FIXED: whether a duplicate item name should be refused is a judgement (Tally allows same-named items under different stock GROUPS, which this build does not have yet — that is T10), so it needs deciding before code moves. | `backend/internal/masters/masters.go` CreateStockItem vs CreateLedger's uniqueness check | ⛔ OPEN — registered 2026-08-22 |
 
 ### ⛔⛔ §7.2 — THE BACK-DATED CUTOFF TOOK **SIX** DOORS TO CLOSE, AND THAT IS THE SESSION'S MAIN LESSON
 
@@ -2314,6 +2315,110 @@ Reverted → 17/17. Gates: vitest **1404/1404 in 85 files** (1399 before, +5), t
    The mutated construct also appears in COMMENTS, so the count to wait for was **2**, not 0 — and 3 at
    HEAD, not 1. Waiting for 0 would have looped forever concluding HMR was stale. **Always
    `git show HEAD:<file> | grep -c` first and derive the target from the diff.**
+
+### ✅ L14d — D84, THE FALSE-GREEN ROOT. CLOSED 2026-08-22. **Runner A 14/14 · runner B 11/11.**
+
+**The instrument** (this is the part later rows depend on):
+
+| | |
+|---|---|
+| `corpora/mock-vs-cored/masters.json` | the ONE place that says what cored does. Refusal-shaped rows, never value-shaped |
+| `frontend/src/api/contract/corpus.ts` | ONE reader, so the two runners cannot drift on what a row MEANS |
+| `src/api/contract/mockVsCored.contract.test.ts` | runner A — over `createMockClient()`, in `pnpm vitest` |
+| `frontend/scripts/contract-mock-vs-cored.mts` | runner B — over LIVE cored, as `pnpm contract:cored` |
+
+**Why two runners and not one:** A alone lets the corpus drift away from the server it claims to
+describe (it becomes a second, prettier mock). B alone never runs often enough to stop the mock
+loosening again. A is the gate; B is what detects that cored moved.
+
+#### THE ORACLE RAN AS PRESCRIBED — BOTH RUNNERS BEFORE ANY FIX
+
+Runner A's first run printed **9 rows where the mock ACCEPTED a body cored refuses**, side by side
+with what cored answers. Runner B: **11/11, the corpus describes cored.** Then eight tightenings, and
+both agree.
+
+⛔ **THE SENTENCES ARE MIRRORED, NOT JUST THE STATUS CODES** — `masters: ledger name is required`, not
+"422" — because §2's rule is that a status code is never an oracle. A corpus row with no sentence is
+rejected by the gate's own meta-test.
+
+#### ⛔⛔ EVERY EXPECTATION WAS MEASURED ON THE WIRE, AND TWO CONTRADICTED THE RECON
+
+The recon's anchors were used to find the call sites and **not** to fill in the expectations. Two
+would have been encoded wrong:
+
+- an unknown group answers **404**, not 422;
+- **a duplicate STOCK ITEM name is ACCEPTED** — 201, a new id. The recon said `masters.EnsureStockItem`
+  does not exist so the route "only ever reaches `CreateStockItem`, which 422s". The premise is true;
+  the conclusion is false. That is now register row **D90**, and it is recorded in the corpus as a
+  DECLARED divergence rather than mirrored — because the mock does the opposite (create-or-select) and
+  copying cored here would spread the more suspicious of the two behaviours.
+
+**The lesson:** a recon is for finding the code, never for filling in the expected value. Ten minutes
+of `curl` overturned two of eleven claims.
+
+#### ⛔ THE TIGHTENING FOUND FIVE TESTS THAT COULD NEVER HAVE RUN AGAINST CORED
+
+`draftAccept.test.ts`'s `realDraftBody` helper called `createLedger` **unconditionally**, so any test
+building a second draft body in one company re-created "Acme Traders". The old mock accepted it and
+pushed a second ledger row with the same name — so the tests that *passed* were measuring a chart of
+accounts with **duplicate party ledgers in it**, which is the exact state the product's own
+`ensureLedger` was fixed TWICE to avoid (see `gstVoucher.ts`). The helper now resolves-then-creates,
+like the product. **This is the false green the row was written about, and it was in the fixtures.**
+
+#### ⚠️ BLAST RADIUS: MEASURED, NOT FEARED — AND THE ROW'S PREMISE ONLY HALF HELD
+
+The split criterion was "if one tightened arm breaks more than ~10 files, split the row". Measured:
+
+| | files broken |
+|---|---|
+| `createLedger` empty name alone (the prescribed cheapest check) | **0** |
+| all eight tightenings together | **1** (5 tests) |
+
+So the row was **not** split. But the premise — *"tightening turns green tests red, that is the
+deliverable"* — only half held: one file's worth of existing false green, and eight refusals whose real
+value is preventing the NEXT one. Worth knowing before scoping a row on that assumption again.
+
+#### ⚠️ ONE ROW IS A PINNED GAP, AND PINNED IS NOT SKIPPED
+
+`ledger-unknown-group` stays open: cored resolves the group and 404s; the mock cannot, because
+`createGroup` **stores nothing** and the mock models no chart of accounts. Refusing on "this group was
+never created here" would refuse essentially every ledger every one of the 61 files makes, because
+cored **seeds 28 standard groups** on company create (migration 0003) and tests reasonably rely on
+"Sundry Debtors" existing.
+
+The cheap fix — copy that list into the mock — was **deliberately declined**: it would be a silent copy
+of the SQL with nothing to detect drift, because the client has no `listGroups` for either runner to
+compare against. Closing it properly means adding that read method first.
+
+⛔ **So runner A asserts the gap is STILL OPEN.** Whoever closes it gets a red test telling them to
+delete the `mock_gaps` entry. A `.skip` would have made the gate green and the gap invisible — the same
+reasoning as D82's pin, and the opposite of what D80's string-equality guard did.
+
+#### MUTATION PROOF — PREDICTED, THEN OBSERVED
+
+Re-loosened **one** check (`createLedger`'s duplicate-name refusal). Predicted: exactly one red test,
+naming exactly that row; runner B unchanged.
+
+Observed: **1 failed / 1417 passed**, `ledger-duplicate-name is refused 422 "already has a ledger
+named"`, with `DIVERGES ACCEPTED a body cored refuses with 422` printed beneath it. Runner B **11/11**.
+Reverted → 1418/1418.
+
+#### ⚠️ TRAPS THIS LANE ADDS TO THE LIST
+
+1. ⛔ **`createRestClient`'s auth option is `headers`, NOT `getAuthHeaders`, AND A WRONG KEY IS SILENTLY
+   IGNORED.** `HttpClientOptions` merges a STATIC header map; there is no per-request hook. tsc did not
+   catch the wrong key (the options type is a union), and every row came back `401 missing bearer
+   token`. ⚠️ The runner reported that correctly — *"the CORPUS does not describe cored"* — which is
+   what a 401 on every row actually means, so the shape of the error is worth trusting.
+2. ⚠️ **`auth.mts`'s `authHeaders()` MINTS FOR A FRESH RANDOM SUBJECT** (`e2e-owner-<uuid>`), which is
+   right for a script that creates its own company and wrong for one handed an EXISTING tenant — a
+   stranger is not a member of it. Mint for `browser-dev-owner`, once per run.
+3. ⚠️ **READ THE CORPUS WITH `node:fs`, DO NOT `import` IT.** It lives outside `frontend/`, so a static
+   import needs `resolveJsonModule` plus a vite `fs.allow` entry, and the test runner and the script
+   runner would each need a different one. Both execute in node; reading the file works identically.
+4. ⛔ **THE DISPATCH IS EXPLICIT, NOT `(client as any)[call]`.** A typo'd `call` would be `undefined`,
+   throw a TypeError, and the row would report as "the engine refused" — a corpus typo that reads as a
+   passing refusal is the precise failure mode this whole row exists to stop.
 
 ## 8. RULES THAT MUST NOT BE BROKEN DURING THIS WORK
 
