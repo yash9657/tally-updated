@@ -299,3 +299,140 @@ describe("a MULTI-RATE voucher is refused rather than silently collapsed", () =>
     );
   });
 });
+
+/**
+ * ===========================================================================
+ * ⛔⛔ REGISTER ROW D82 — THE HSN REFUSAL ON THE ALTER PATH IS **WORKING AS
+ * INTENDED**, AND THIS SUITE EXISTS SO NOBODY QUIETLY RELAXES IT.
+ * ===========================================================================
+ *
+ * The row was registered as a defect: an old sales invoice stored WITHOUT an
+ * HSN cannot be re-saved without keying one, and that is a new refusal biting
+ * existing data. It was put to the user on 2026-08-21 with a recommendation,
+ * and the user's decision is that it is CORRECT:
+ *
+ *   the invoice is UNPRINTABLE without an HSN (CGST Rules 2017, Rule 46(g)),
+ *   so keying the code is the FIX rather than a hoop.
+ *
+ * ⛔ SO THE WORK HERE IS A PIN, NOT A CHANGE. `HSN_REQUIRED_CLASSES` stays
+ * exactly as it is. What this file adds is the thing that was missing: nothing
+ * asserted the refusal REACHES an operator on an ALTER, and nothing asserted it
+ * READS as a reason. A later session finding this row in the register and
+ * "fixing" it would be reversing a decision the user made — so the SENTENCE is
+ * pinned, not just the behaviour.
+ *
+ * ⚠️ THE ALTER PATH IS THE ONLY WAY TO GET HERE. A blank-HSN sale cannot be
+ * CREATED through this form at all — the same refusal fires (that is D60) — so
+ * the legacy invoice below is seeded through the client, which is exactly how a
+ * real one arrives: an import, or a build that predates the refusal.
+ */
+describe("⛔ D82: the HSN refusal on an ALTER — working as intended, pinned", () => {
+  /** A sales invoice on the books with NO HSN. Unreachable through the form. */
+  async function seedBlankHsnInvoice(base: CoredClient) {
+    return await base.postSalesVoucher("co-1", {
+      voucher_date: "2026-06-01",
+      narration: "legacy invoice, imported without an HSN",
+      party: "Acme Traders",
+      postings: [],
+      gst: {
+        place_of_supply_state_code: "29",
+        reverse_charge: false,
+        lines: [{ taxable_value: "10000.0000", gst_rate_pct: "18", hsn: "" }],
+      },
+    } as VoucherRequest);
+  }
+
+  /**
+   * ⚠️ SCOPED. There are TWO `role="status"` spans on this screen, and a bare
+   * getByRole("status") can throw on the ambiguity rather than fail on the text.
+   */
+  const statusText = () =>
+    screen.getAllByRole("status").map((e) => e.textContent ?? "").join(" | ");
+
+  it("the refusal REACHES the operator on the alter, and says WHY", async () => {
+    const base = createMockClient({ seed: false });
+    await seedParty(base);
+    const { client, spies } = spyClient(base);
+    const posted = await seedBlankHsnInvoice(base);
+
+    renderShell(client);
+    const app = screen.getByRole("application");
+    await drill(app, posted.voucher_no);
+    await waitFor(() => expect(spies.getVoucher).toHaveBeenCalled());
+
+    fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    await waitFor(() => expect(statusText()).toMatch(/HSN \/ SAC is required/));
+    // ⛔ THE THREE THINGS THE USER'S DECISION IS ABOUT. Not "invalid input" —
+    // the operator has to learn that the document is UNPRINTABLE and that the
+    // remedy is to key the code, or the refusal reads as an arbitrary hoop.
+    const said = statusText();
+    expect(said).toMatch(/Rule 46\(g\)/);
+    expect(said).toMatch(/cannot be printed/);
+    expect(said).toMatch(/Key the code for what was supplied/);
+
+    // ⛔ AND NOTHING WAS SENT. A refusal that still posts is not a refusal.
+    expect(spies.alterSalesVoucher).not.toHaveBeenCalled();
+    const kept = await base.getVoucher("co-1", posted.voucher_id);
+    expect(kept.gst_lines?.[0]?.hsn).toBe("");
+  });
+
+  it("⛔ THE REMEDY IS ON THE SAME SCREEN — the field is there, empty and keyable", async () => {
+    // A refusal whose remedy is not reachable from the keyboard would make this
+    // a real defect rather than a decision. It is the item-invoice path that has
+    // that shape (its HSN lives on the stock master), and that one is DISCLOSED
+    // instead of refused — see item-hsn-missing.
+    const base = createMockClient({ seed: false });
+    await seedParty(base);
+    const { client, spies } = spyClient(base);
+    const posted = await seedBlankHsnInvoice(base);
+    renderShell(client);
+    const app = screen.getByRole("application");
+    await drill(app, posted.voucher_no);
+    await waitFor(() => expect(spies.getVoucher).toHaveBeenCalled());
+
+    const hsn = screen.getByTestId("gst-hsn") as HTMLInputElement;
+    expect(hsn.value).toBe("");
+    fireEvent.change(hsn, { target: { value: "7326" } });
+    fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+
+    await waitFor(() => expect(spies.alterSalesVoucher).toHaveBeenCalledTimes(1));
+    const kept = await base.getVoucher("co-1", posted.voucher_id);
+    expect(kept.gst_lines?.[0]?.hsn).toBe("7326");
+    // ⛔ AND THE RATE SURVIVED THE ROUND TRIP TOO, so this control cannot pass
+    // by re-deriving the invoice at 0% — the defect this whole file was written
+    // for.
+    expect(kept.gst_lines?.[0]?.gst_rate_pct).toBe("18.0000");
+  });
+
+  it("⛔ CONTROL: a PURCHASE with no HSN alters freely — the rule is per class", async () => {
+    // HSN_REQUIRED_CLASSES is ["sales"], and it is deliberately not every GST
+    // class: Rule 46(g) governs the invoice a company ISSUES. A test that only
+    // ever saw the refusal could not tell "required on a sale" from "required
+    // always", and the second would refuse re-saving every supplier bill.
+    const base = createMockClient({ seed: false });
+    await base.createLedger("co-1", {
+      name: "Steel Suppliers",
+      group_name: "Sundry Creditors",
+      state_code: "29",
+    });
+    const { client, spies } = spyClient(base);
+    const posted = await base.postPurchaseVoucher("co-1", {
+      voucher_date: "2026-06-01",
+      narration: "supplier bill, no HSN",
+      party: "Steel Suppliers",
+      postings: [],
+      gst: {
+        place_of_supply_state_code: "29",
+        reverse_charge: false,
+        lines: [{ taxable_value: "10000.0000", gst_rate_pct: "18", hsn: "" }],
+      },
+    } as VoucherRequest);
+
+    renderShell(client);
+    const app = screen.getByRole("application");
+    await drill(app, posted.voucher_no);
+    await waitFor(() => expect(spies.getVoucher).toHaveBeenCalled());
+    fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    await waitFor(() => expect(spies.alterPurchaseVoucher).toHaveBeenCalledTimes(1));
+  });
+});

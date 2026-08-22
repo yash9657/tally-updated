@@ -208,11 +208,24 @@ export async function openApp({
   // above expires first and the assertion fires against a LOADING SCREEN. It
   // then reports "signed in to the WRONG COMPANY", which sends the next session
   // looking for a tenancy bug that is not there (2026-08-21, and it cost a
-  // diagnosis). A fixed sleep in front of an assertion is a flake; the failure
-  // message below is unchanged, so a REAL wrong tenant still reads the same.
+  // diagnosis TWICE). A fixed sleep in front of an assertion is a flake; the
+  // failure message below is unchanged, so a REAL wrong tenant still reads the
+  // same, and it now QUOTES the chrome so the two are distinguishable.
+  //
+  // ⚠ 40s, AND THE NUMBER IS MEASURED RATHER THAN GUESSED. This dev database
+  // has accumulated 112 companies across every drive ever run here (`seed:demo`
+  // mints a NEW one each time and nothing reaps them), and `GET /v1/me` on that
+  // subject measures 0.5-3.5s wall — variable, because it returns the whole
+  // membership list. Until those tenants are reaped, the browser bootstrap is
+  // occasionally slower than any sane fixed wait.
+  //
+  // ⚠ AND "No Company" IS A LOADING STATE, NOT A RESOLVED ONE. AppShell renders
+  // `company?.name ?? "No Company"` and paints the Gateway underneath it while
+  // CompanyContext is still resolving — so a probe reading the chrome early sees
+  // a fully-drawn app naming no tenant. Worth knowing it means "not yet".
   if (expectCompany) {
     let shown = "";
-    for (let i = 0; i < 60; i++) {
+    for (let i = 0; i < 160; i++) {
       shown = await body();
       if (shown.includes(expectCompany)) break;
       await page.waitForTimeout(250);

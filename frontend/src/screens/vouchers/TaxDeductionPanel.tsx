@@ -36,6 +36,7 @@ export function TaxDeductionPanel({
   onChange,
   parties,
   ledgerIdByName,
+  ledgerNameByID,
   gridLedgers,
 }: {
   /** TDS on money paid out; TCS on a sale. The two are never the same voucher. */
@@ -45,6 +46,22 @@ export function TaxDeductionPanel({
   /** Ledger names offered as the deductee / buyer, with their ids. */
   parties: readonly string[];
   ledgerIdByName: (name: string) => string;
+  /**
+   * THE REVERSE LOOKUP, AND IT IS FOR HYDRATION ONLY (register row D88).
+   *
+   * ⛔ A RE-STATED DEDUCTION ARRIVES WITH AN ID AND NO NAME. `taxDeductionFromView`
+   * is pure and runs before the chart of accounts has loaded, so it resolves the
+   * deductee from the VOUCHER'S OWN POSTINGS — and a deductee is very often not
+   * a leg of the entry at all (a rent withholding debits Rent and credits the
+   * bank; the landlord appears nowhere). The block then read
+   *
+   *     This voucher will carry TDS under 194I-B on (nobody) for 200000.0000
+   *
+   * over a deduction that names a real party, which is a disclosure saying the
+   * wrong thing — seen in a browser on 2026-08-21. The effect below repairs the
+   * name ONCE the chart is available; the id was right all along.
+   */
+  ledgerNameByID: (id: string) => string;
   /**
    * The ledgers KEYED ON THIS VOUCHER'S GRID, so the operator names the line
    * that carries the withheld tax from what is actually on the entry rather
@@ -64,6 +81,21 @@ export function TaxDeductionPanel({
    * which is a statement about the law rather than about a network.
    */
   const [catError, setCatError] = useState("");
+
+  /**
+   * ⛔ NAME A HYDRATED PARTY ONCE THE CHART ARRIVES. See `ledgerNameByID`.
+   *
+   * ⚠️ IT ONLY EVER FILLS A BLANK. It never overwrites a name the operator
+   * typed — that would fight the party input on every keystroke that does not
+   * yet match a ledger, and typing a party who does not exist is a state this
+   * form deliberately allows (the refusal names it, rather than minting one).
+   * The id is untouched either way: it was correct before this ran.
+   */
+  useEffect(() => {
+    if (value.partyName !== "" || value.partyLedgerId === "") return;
+    const name = ledgerNameByID(value.partyLedgerId);
+    if (name !== "") onChange({ ...value, partyName: name });
+  }, [value, onChange, ledgerNameByID]);
 
   useEffect(() => {
     if (!open || cat !== null) return;
