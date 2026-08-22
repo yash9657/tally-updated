@@ -2646,3 +2646,49 @@ left the two money checks (BS vs Outstandings, GSTR-1 vs Domestic Sales) alone. 
 than discovered: no company-delete route, and `company` has 14 non-cascading FKs, so reaping needs a
 script that does not exist. One more unreaped tenant among 112+ costs a little `GET /v1/me` latency;
 poisoning the demo tenant cost a lane. They are named `CT Contract <stamp>` so a reaper can find them.
+
+### ✅ L15c — D92, the refusal that cost the operator their work. CLOSED 2026-08-22. **6/6 in a browser.**
+
+⛔ **FOUND BY MEASURING A TRAP INSTEAD OF REASONING ABOUT IT.** `HANDOFF-RECON-LAST-16.md` §3.7 flags
+the master-create frame-pop as something to *"decide deliberately"* for D87. Rather than decide from
+the code, it was DRIVEN — name a ledger, leave the group blank, Ctrl+A — and the form was gone, the
+name with it, with the reason on the Gateway.
+
+`navMachine`'s `accept` reducer pops a master-create frame **unconditionally**, which was correct
+while the only way to reach it was a successful create. The shell could not tell a refusal from a
+success: `onAccept` returned a plain string for both.
+
+⛔ **THE BREAKUP REFUSAL'S OWN COMMENT ASSERTED THE OPPOSITE** — *"so the operator learns it while the
+figures are still in front of them rather than from a status line after the frame has popped"* —
+describing behaviour the product did not have. **A comment asserting the fix is not the fix**, and
+this one had been read by three sessions.
+
+**THE FIX IS AN EXPLICIT SIGNAL:** `screenRefusal(message)` → `ScreenActionResult.refused` → the shell
+shows it, consumes the key, and does not forward it to the machine. A thrown error would be
+indistinguishable from a real bug at every dispatch site; a magic string is what a success returns.
+Only opt-in handlers take the path.
+
+⚠️ **SEQUENCED BEFORE D87 DELIBERATELY.** D87 makes this refusal the COMMON case (every party keyed
+without a state code) and adds four more fields to lose. **Refusing on the common path while
+discarding everything keyed would make D87 a net harm**, so this is a prerequisite, not polish.
+
+| Arm | Result |
+|---|---|
+| refusal → the form is STILL UP | ✓ `master-opening-balance` present |
+| refusal → **everything keyed survived** | ✓ `master-name` still reads `"D92 Probe Party"` |
+| the reason reached the operator | ✓ on a screen they can still act on |
+| §4.4 the remedy works from the SAME frame, no retyping | ✓ |
+| ⛔ **CONTROL: a success still creates and pops** | ✓ asserted on the creation MESSAGE, not on the form having closed |
+
+**MUTATIONS — M8** (delete the shell's early return) and **M9** (make `refuse` return a plain string
+again) produced **identical** failures, as predicted: the two refusal cases fail, **the success
+control stays green in both**. That insensitivity is what makes it a control rather than a fourth
+assertion. The pair also confirms the halves are exactly that — a pair: the signal is worth nothing
+unless the shell honours it, and vice versa.
+
+⚠️ **§4.6 FOR THE THIRD TIME IN ONE SESSION.** The browser arm first checked `body.innerText` for the
+typed name and reported it LOST against the FIXED build, while vitest said it survived —
+**`innerText` does not contain input values.** It now reads `.inputValue()` and THROWS on an absent
+field, so a missing field can never read as an empty one. The three instances this session (D77's
+`p.ledger_name`, D5's `stock_item_name`, this one) were all the same shape: **a projection that does
+not exist, compared instead of thrown on.**
