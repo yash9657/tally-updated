@@ -929,7 +929,7 @@ WORK"** — not "hard to fix".
 | **D87** | 5 | MEDIUM | ⛔ **A PARTY CREATED FROM THE KEYBOARD HAS NO GSTIN, NO STATE CODE AND NO REGISTRATION TYPE — and state_code NULL is the exact input that made D19 derive an intra-state bill as IGST.** `masters.CreateLedger` and `CreateLedgerRequest` have accepted all three since they were written; the master-create form renders no field for any of them, so every Sundry Debtor/Creditor keyed by an operator lands with `gstin` NULL, `state_code` NULL and `registration_type` UNKNOWN. Driven in a browser while closing D36: the form's text contains no "GSTIN", no "State code" and no "Registration type", and the ledger it created read back `(null)|(null)|UNKNOWN`. The repo's OWN gate flags it — `verify:demo`'s "Every party's GSTIN prefix == its state_code" and "Every party is registration_type REGULAR" both fail on a keyed party, which is how it was found. ⚠️ NOT FIXED: it is the same class of build as D36 (fields the form does not render) but it carries a judgement D36 did not — whether `state_code` becomes MANDATORY under Sundry Debtors/Creditors, which would refuse creations that succeed today, and how many of the party's ten-odd optional columns (address block, PAN, credit days, bank details) the form should expose alongside it. | `frontend/src/screens/masters/MasterCreateScreen.tsx` (the ledger `Draft` has no gstin/state/registration field; `build`'s `CreateLedgerRequest` therefore sends none) vs `backend/internal/masters/masters.go` `CreateLedger`, which stores all three | ✅ CLOSED L15d 2026-08-22 |
 | **D88** | 17 | HIGH | ⛔ **ALTERING A VOUCHER SILENTLY DELETES ITS TDS DEDUCTION, and any challan allocation against it is orphaned.** `internal/ledger`'s `deleteTDSDeductions` runs on EVERY alter and the row is re-derived from the body — which is correct on its own terms ("a voucher altered to carry no TDS at all must lose its deduction row rather than keep a stale one"). But the voucher READ path serves no `tds`/`tcs` block, so the form CANNOT re-state what it loaded: hydrate a voucher that carried a deduction, edit its narration, press Ctrl+A, and the deduction is gone — while the challan that paid it keeps an allocation whose natural key now matches no deduction row (migration 0069 carries no foreign key by design, so nothing in the database refuses it). The register then shows the allocation with `deduction_on_record: false`, which is the state that panel already renders and calls out. Found while building D3's form, which is the first thing in the product that can create the precondition. ⚠️ NOT FIXED: the fix is a SERVER READ-PATH change (serve the stored deduction on `GET /vouchers/{id}`) plus hydration in `formFromView`, and it should land with D3's remaining TCS half rather than ahead of it. `formFromView` states the gap at the field today. | `backend/internal/ledger/tds.go` `deleteTDSDeductions` + the voucher GET (`VoucherView` has no tds/tcs) vs `frontend/src/screens/VoucherScreen.tsx` `formFromView` | ✅ **FIXED (L4) — MUTATION-PROVED *AND* DRIVEN 2026-08-21.** The GET serves the stored block and `formFromView` re-states it. Oracle: alter the narration, the `tds_deduction` row SURVIVES and the challan register stops reading "deduction no longer on record". Pinned with its INVERSE CONTROL — an alter that OMITS the block is accepted and deletes it. See §7.5 |
 | **D89** | 17 | HIGH | ⛔⛔ **A REFUSED ALTER SILENTLY BECAME A CREATE, SO THE REMEDY THE REFUSAL PRESCRIBED MINTED A SECOND INVOICE.** `navMachine`'s `accept` reducer replaced ANY voucher frame with a fresh `create` frame on every Ctrl+A. It is pure, so it can never learn that the write was refused — least of all here, where the refusal was CLIENT-SIDE and not one byte left the browser. That dropped the loaded `voucher_id` which routes the PUT, while the form kept the loaded voucher's values on screen: the heading was the only thing that changed, by thirteen characters, at the bottom of a refusal the operator is reading. Driven in a browser: drill a legacy no-HSN sales invoice out of the Day Book, Ctrl+A → refused by `gstRefusal`, key the HSN the refusal asked for, Ctrl+A → **`POST /vouchers/sales` 201**, status line "Saved", and the original invoice's `hsn` still empty. **One tax invoice keyed, two on the books.** ⚠️ NOT GST-SPECIFIC: any refusal on an alter had this shape, client- or server-side. ⚠️ The class was already known on the DRILL side — `phase1.test.ts`'s CONTROL "a row naming no class does not open a voucher frame" closes the same failure reached the other way; that guarded the door IN, nothing guarded the door THROUGH. | `frontend/src/keystroke/navMachine.ts`, the `accept` reducer's voucher arm | ✅ **FIXED (L14) — MUTATION-PROVED *AND* DRIVEN 2026-08-22.** An alter frame stays put; a second Ctrl+A re-PUTs the same `voucher_id` and Esc still returns to the report it was drilled from — which is what `delete` directly below already did. Oracle: the Day Book entry count over the date is UNCHANGED and the voucher reads `op=ALTER`, not a second `CREATE`. Pinned with both CONTROLs (a CREATE frame still re-opens fresh for bulk entry; two accepts on a create really do key two invoices) so neither "never re-open a fresh form" nor "never accept a frame twice" can pass in place of the fix. See §7.5 |
-| **D90** | — | MEDIUM | ⚠️ **A DUPLICATE STOCK ITEM NAME IS ACCEPTED (201, a NEW id) WHILE A DUPLICATE LEDGER NAME IS REFUSED (422).** Found by D84's wire discovery, which measured the recon's claim instead of trusting it: the recon said the route "only ever reaches `CreateStockItem`, which 422s" — cored actually mints a second item with the same name. Consequence: two identical rows in every item picker with nothing to tell them apart, and one item's movements and valuation split across two masters, each weighted-average costed on half the history. ⚠️ **The mock does the OPPOSITE** (create-or-select returns the existing id), so no test can see this — it is recorded as a declared divergence in `corpora/mock-vs-cored/masters.json` rather than mirrored, because mirroring cored here would spread the more suspicious of the two behaviours. ⛔ NOT FIXED: whether a duplicate item name should be refused is a judgement (Tally allows same-named items under different stock GROUPS, which this build does not have yet — that is T10), so it needs deciding before code moves. | `backend/internal/masters/masters.go` CreateStockItem vs CreateLedger's uniqueness check | ⛔ OPEN — registered 2026-08-22 |
+| **D90** | — | MEDIUM | ⚠️ **A DUPLICATE STOCK ITEM NAME IS ACCEPTED (201, a NEW id) WHILE A DUPLICATE LEDGER NAME IS REFUSED (422).** Found by D84's wire discovery, which measured the recon's claim instead of trusting it: the recon said the route "only ever reaches `CreateStockItem`, which 422s" — cored actually mints a second item with the same name. Consequence: two identical rows in every item picker with nothing to tell them apart, and one item's movements and valuation split across two masters, each weighted-average costed on half the history. ⚠️ **The mock does the OPPOSITE** (create-or-select returns the existing id), so no test can see this — it is recorded as a declared divergence in `corpora/mock-vs-cored/masters.json` rather than mirrored, because mirroring cored here would spread the more suspicious of the two behaviours. ⛔ NOT FIXED: whether a duplicate item name should be refused is a judgement (Tally allows same-named items under different stock GROUPS, which this build does not have yet — that is T10), so it needs deciding before code moves. | `backend/internal/masters/masters.go` CreateStockItem vs CreateLedger's uniqueness check | ✅ CLOSED L15f 2026-08-22 — ⛔ **PREMISE DISPROVEN, CONSEQUENCE REAL.** cored refuses an exact duplicate on BOTH masters and always has; the real defect was BYTE-EXACT uniqueness across ledgers, stock items AND units. See §7.5's L15f section. |
 | **D91** | — | MEDIUM | ⚠️ **`pnpm contract:cored` PERMANENTLY BREAKS `pnpm verify:demo` ON WHATEVER TENANT IT IS POINTED AT.** The D84 contract runner creates its fixture parties (`CT Ledger *`, `CT Control *`, `CT Dup *`) in the company named by `CO`, which every session hands it the DEMO company. Those parties have no `state_code`, no GSTIN and no bill-by-bill, so they fail three of `verify:demo`'s party checks BY CONSTRUCTION, and cored has no `DELETE /ledgers` to undo them. The damage accumulates one run at a time: fixture ledgers dated 20:33 and 20:44 (L14d) and 22:59 (L15) took the demo tenant from 34/34 to 27/34, and a fresh seed reads 34/34. ⛔ **THE REAL COST IS MISATTRIBUTION** — the next session runs `verify:demo`, sees seven failures including two money ones, and spends the lane debugging its own change. Found 2026-08-22 while measuring L15's gates, by re-seeding instead of assuming. **FIX: give `contract:cored` its own throwaway tenant** (it already creates everything it needs; only the company is borrowed). Reaping is not the alternative — there is no delete route, and `company` has 14 non-cascading FKs. ⚠️ Note the two MONEY failures on the stale tenant (BS vs Outstandings, GSTR-1 vs Domestic Sales) are a DIFFERENT residue — L14's deliberately-left probe fixtures — and are not this row. | `frontend/scripts/contract-mock-vs-cored.mts` (the runner, takes `CO`) vs `frontend/scripts/verify-demo.mts:357-375` (the party checks) | ✅ CLOSED L15b 2026-08-22 |
 | **D92** | — | HIGH | ⚠️ **A REFUSED `Ctrl+A` ON A MASTER-CREATE FRAME THREW AWAY EVERYTHING THE OPERATOR HAD KEYED.** `navMachine`'s `accept` reducer pops a master-create frame UNCONDITIONALLY — it was written when the only way to reach that reducer was a SUCCESSFUL create — and the shell could not tell a refusal from a success because both returned a plain string. So a `build()` refusal (no group, or a bill-wise breakup that does not add up) threw the operator back to the Gateway, discarded the form, and explained why on a screen they could no longer act on. Measured in a browser 2026-08-22: name a ledger, leave the group blank, Ctrl+A, and the form is gone along with the name. ⛔ **THE BREAKUP REFUSAL'S OWN COMMENT CLAIMED THE OPPOSITE** — *"so the operator learns it while the figures are still in front of them rather than from a status line after the frame has popped"* — which is precisely what did NOT happen. ⚠️ Survivable only because the refusals were RARE; **D87 makes one of them the common case** (every party keyed without a state code), which is why this was found and closed immediately before it. Found by measuring a recon TRAP instead of reasoning about it. | `frontend/src/keystroke/navMachine.ts` (the unconditional `stack.pop()` in `case "accept"`) + `frontend/src/app/AppShell.tsx` (the keydown wrapper, which forwarded the key regardless) + `frontend/src/app/ScreenActions.tsx` (`ScreenActionResult` had no way to say "refused") | ✅ CLOSED L15c 2026-08-22 |
 | **D93** | — | LOW | ⚠️ **`masters.CreateLedger` VALIDATED SOME FIELDS BY HAND AND LET THREE OTHERS FAIL AT THE DATABASE, leaking the raw driver error — SQLSTATE and the CONSTRAINT NAME — to the HTTP caller.** `registration_type` (a Postgres ENUM), `bank_ifsc` and `bank_account_number` (two CHECK constraints) all answered things like *`masters: insert ledger: ERROR: invalid input value for enum gst_registration_type: "Regular" (SQLSTATE 22P02)`* and *`violates check constraint "ledger_bank_ifsc_shape" (SQLSTATE 23514)`*. Each names an internal type or constraint, quotes a SQLSTATE, and tells the operator nothing about what they may type instead. ⛔ **THE EXPECTATION WAS ALREADY PINNED — ON ONE PATH:** `drive-l13-masters.mjs` asserts `!/SQLSTATE/` on a refusal from THIS ROUTE (the duplicate-name arm), so three sibling refusals were unenforced beside one that was. ⛔ **FOUND BY A MUTATION PROOF, AND BY THE PREDICTION BEING WRONG** (§4.2): D87's M13 sent the display label `"Regular"` instead of `"REGULAR"` and predicted cored would silently coerce it to the UNKNOWN default. It does not — the refusal was correct all along and only its SENTENCE was wrong. | `backend/internal/masters/masters.go` `CreateLedger` (the RegistrationType default with no validation beside the hand-written OpeningDC check) | ✅ CLOSED L15e 2026-08-22 |
@@ -2771,3 +2771,80 @@ it COMPARES is narrower than what it appears to cover.**
 Registered as **D93** and fixed in the same wave. **The control is the test that matters:** all six
 enum members still get through, including `UNKNOWN` — without it, "refuse everything" passes the
 refusal test.
+
+### ✅ L15f — D90, the row whose PREMISE was wrong and whose CONSEQUENCE was right. CLOSED 2026-08-22. **8/8.**
+
+#### ⛔⛔ THIS IS THE MOST IMPORTANT ENTRY IN §7.5 FOR ANYONE WHO READS ONE
+
+D90 said: *"a duplicate STOCK ITEM name is accepted (201, a NEW id) while a duplicate LEDGER name is
+refused (422)."* Re-measured on the wire before a line was written, against a binary verified fresh by
+symbol:
+
+```
+POST the same stock item name twice  -> 201, then 422 "already has a stock item named ..."
+POST the same ledger name twice      -> 201, then 422
+```
+
+**Both refused. No asymmetry. `UNIQUE (company_id, name)` has been on `stock_item` since migration
+0005** — the very first schema. D84's measurement was wrong, the recon it "overturned" was right, and
+**a user decision was taken on the strength of it.**
+
+⚠️ **AND THE LESSON IS NOT "MEASURE LESS."** Measuring is what found the real defect underneath.
+Uniqueness was **BYTE-EXACT**, so all of these coexisted:
+
+```
+'Acme Traders'      'acme traders'      'Acme Traders '
+```
+
+Three masters, **indistinguishable in every picker** — which is exactly the damage D90 predicted for
+its own non-existent mechanism, reached by a mechanism nobody had measured. It applied to **ledgers
+and units** too, and **the ledger case is the worst of the three and was not in D90 at all**: a party
+keyed twice with different capitalisation splits one supplier's outstandings across two accounts.
+
+⛔ **THE RULE THIS YIELDS: A MEASUREMENT IS EVIDENCE, NOT PROOF.** §4.1 says a recon is for finding the
+code and never for filling in an expected value, and it is right — but the counterweight now exists
+too: **a measurement that OVERTURNS a documented claim deserves the same scepticism as the claim it
+overturns.** D84's overturning of the recon was celebrated in three handoffs and was false.
+
+#### THE FIX — migration 0075
+Expression indexes on `lower(btrim(...))` for `ledger`, `stock_item` and `unit`, replacing the
+byte-exact constraints.
+- **Not `citext`** (changes the column's type and every comparison with it) and **not a normalising
+  trigger** (discards the operator's capitalisation — `HDFC Bank` must still PRINT that way). An
+  expression index changes what **collides** and nothing about what is **stored**.
+- **`btrim`, not a whitespace fold.** `Acme  Traders` stays distinct, deliberately: an inner double
+  space is VISIBLE in a picker; a trailing space and a capital letter are not.
+- Verified safe on existing data **before** it was written: zero colliding groups across 208
+  companies, 3,782 ledgers, 211 items, 301 units. The proving query is in the migration.
+
+#### ⛔ THE MIGRATION RENAMES THE CONSTRAINTS, AND `nameTaken` MATCHES THE NAME EXACTLY
+Left alone, every one of these refusals would have kept refusing and started coming out as a **raw
+wrapped driver error instead of a sentence** — **D93's exact shape, one migration away at all times.**
+That is why the tests assert the SENTENCE and not the status code.
+
+#### THE MESSAGE NAMES THE STORED MASTER — and the obvious way does not work
+Letting the index fire and then reading the stored name **fails**: by then the transaction is in a
+FAILED state and Postgres rejects every further query in it. Measured on the wire — every refusal fell
+back to quoting the caller's own text, so an operator who typed `"d90x ..."` was told they already had
+a stock item named `"d90x ..."`, **which they can see they do not.** The lookup now runs BEFORE the
+insert; the index is still the authority and still catches the race.
+
+#### THE MOCK'S COMMENT NAMED A FUNCTION THAT DOES NOT EXIST
+*"create-or-select by NAME mirrors `masters.EnsureStockItem`"* — there is no `masters.EnsureStockItem`.
+The mock was the loose one, the exact class D84 exists to stop, and **it survived because the corpus
+recorded it as a DELIBERATE divergence on the strength of the wrong measurement.** That divergence is
+**DELETED, not edited**: it certified behaviour that never existed. The corpus `$provenance` now
+records its own error.
+
+#### THE DRIVE — 8/8, and ⛔ THE ORACLE IS THE PICKER, NOT THE REFUSAL
+A refusal message proves the server said no; it does not prove the operator can no longer end up with
+two indistinguishable rows. The probe counts the ledger rows and requires **ONE where two creates were
+attempted.** Two controls: a genuinely different name is still accepted, and an inner double space is
+still distinct.
+
+#### ⚠️ AN ASYMMETRY THE DRIVE RECORDED AND DID NOT FIX — FOR D81's LANE
+**D92 made a CLIENT-side refusal non-destructive. This is a SERVER refusal, so the frame still pops
+and the keying is still lost** (which is why D47 exists at all). **The product now refuses in two
+different ways.** That seam is register row D81's — it is the same seam, a server refusal leaving the
+operator holding nothing — and folding it in here would put two rows in one commit with one oracle
+between them. ⛔ **D81's lane owes this.**
