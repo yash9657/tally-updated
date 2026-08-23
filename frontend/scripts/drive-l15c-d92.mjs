@@ -114,8 +114,20 @@ try {
   // refusal invites is "choose a group and press Ctrl+A again", and it must
   // work from the frame the operator is still sitting on — with the name they
   // never had to retype.
-  await page.getByText("Sundry Debtors").click();
+  // ⚠️ getByRole("option"), NOT getByText. D87 put a party block on this form
+  // whose own copy contains the words "Sundry Debtors" ("a state code is
+  // REQUIRED under Sundry Debtors and Sundry Creditors"), so a text match now
+  // resolves to two elements and Playwright's strict mode throws. The picker
+  // entry is the OPTION; the sentence is prose.
+  await page.getByRole("option", { name: "Sundry Debtors" }).click();
   await page.waitForTimeout(300);
+  // ⚠️ AND THE PARTY NEEDS A STATE CODE NOW (D87). Without it this arm meets
+  // D87's refusal instead of succeeding, and the CONTROL — "a success still
+  // creates and pops" — would fail for a reason that has nothing to do with
+  // D92. Supplying it keeps the control measuring what it was written to
+  // measure.
+  await page.getByTestId("master-state-code").selectOption("29");
+  await page.waitForTimeout(150);
   await press("Control+a", 2500);
   rec(
     "§4.4: the remedy works from the SAME frame, without retyping",
