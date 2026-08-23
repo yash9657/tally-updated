@@ -15,7 +15,8 @@ Execute it top to bottom.
 
 ## ⛔ THE COUNT, RE-DERIVED BY PARSING §7.1 — NOT COPIED FROM A HEADER
 
-**94 registered · 85 CLOSED · 9 OPEN · 0 PARTIAL.** `85 + 9 = 94`. (Was `93 · 81 · 8 · 4` before L16 position 0.)
+**96 registered · 87 CLOSED · 9 OPEN · 0 PARTIAL.** `87 + 9 = 96`.
+(`93 · 81 · 8 · 4` before L16 · `94 · 85 · 9 · 0` after position 0 · this after position 1.)
 
 ```bash
 python3 - <<'PY'
@@ -51,11 +52,22 @@ cannot reproduce the previous count is a redefinition wearing a fix's clothes.
 ⚠️ And it prints a `?` bucket: a row whose status cell matches nothing must be seen, not silently
 dropped into a total that still looks plausible.
 
-**OPEN (9):** D8 · D22 · D49 · D52 · D81 · D83 · D85 · D86 · **D94**
+**OPEN (9):** D8 · D49 · D81 · D83 · D85 · D86 · **D94** · **D95** · **D96**
 **PARTIAL: none.** ✅ **L16 position 0 resolved all four** (D13 · D15 · D17 · D48 — see §2) **and the
 count went UP, which is the right outcome:** D17 and D48 had been closed for two waves and never
 re-marked, D15's residue was already tracked in §7.3 B, and **D13 was hiding a build that is now
 row D94.**
+
+✅ **AND POSITION 1 CLOSED D22 + D52** (the forecast plane's door — 34/34 in a browser, two mutation
+proofs, §3 row 1). ⛔ **IT REGISTERED TWO MORE ROWS DOING IT, AND NEITHER IS OPTIONAL BOOKKEEPING:**
+**D95** (neither new report name has an ACL counterweight, so a Data Entry clerk can read the list of
+their own backdated entries — **the cash-flow half needs the USER**) and **D96** (insightd's statistical
+forecast, extracted from D22 *on closure* — a clause living inside another row's text disappears the
+moment that row is marked closed, **which is the D13 failure position 0 had just repaired**).
+
+⛔⛔ **SO THE OPEN COUNT HAS NOT MOVED IN TWO LANES — 9, THEN 9 — WHILE FOUR ROWS CLOSED.** That is not
+a stall. It is what measuring looks like in this phase: **every lane so far has found roughly one new row
+per row it closed, and the new ones were always already true.** Plan for it.
 
 ⚠️ **THE OPEN COUNT FELL BY FOUR WHILE SEVEN ROWS CLOSED**, because three of the seven were rows
 nobody had written down. **That is the normal shape of this phase.** Do not read "9 open" as "9 lanes
@@ -106,7 +118,7 @@ build, and **D48 scopes D81 (position 2)** so doing it later means doing D81 twi
 | # | Row(s) | Sev | Why here |
 |---|---|---|---|
 | ~~0~~ | ~~D13 · D15 · D17 · D48~~ | — | ✅ **DONE 2026-08-23 (L16).** All four resolved, no product code changed, **D94 registered** out of D13, and **D81 is now scoped** — see §2 for each verdict. |
-| 1 | **D22 + D52** | HIGH | **ONE commit** — a door without the sentence, or the sentence without the door, is each worse than today |
+| ~~1~~ | ~~D22 + D52~~ | HIGH | ✅ **DONE 2026-08-23 (L16), ONE commit as required.** 34/34 in a browser · M1 + M3 both predicted then observed · **registered D95 and D96.** §3 row 1. |
 | 2 | **D81** | MED | ⛔ **BIGGER THAN THE ROW SAYS — L15 added a second half to it.** Do after D48 (§2) says what remains. |
 | 3 | **D49** | MED | largest scope of the wave. **Before D85**, so D85 lands on the final transport |
 | 4 | **D85** | MED | **moves a pinned number.** ALONE |
@@ -114,6 +126,8 @@ build, and **D48 scopes D81 (position 2)** so doing it later means doing D81 twi
 | 6 | **D86** | MED | **moves Outstandings** and inverts a Go test by design. ALONE |
 | 7 | **D83** | LOW | ⛔ the register's proposed index **WILL NOT WORK.** Last |
 | **8** | **D94** | HIGH | ⛔ **NEW, out of D13 (§2).** The payables ageing report has **no door**: the server serves it, nothing can ask for it. ⚠️ **AFTER D86** — both move the Outstandings report. §3 row 8. |
+| **9** | **D95** | MED | ⛔ **NEW, out of D22.** `report:cash-flow` and `report:anomalies` have **no ACL counterweight**, so Data Entry reads the anomaly list — the control surface about them. ⚠️ **ASK THE USER about the cash-flow half**; the anomaly half needs no decision. §3 row 9. |
+| **10** | **D96** | LOW | ⚠️ **NEW, out of D22 on closure.** insightd's STATISTICAL forecast still has no renderer. ⛔ **Answer "should it exist at all?" before wiring anything.** §3 row 10. |
 
 **Must be ONE commit:** D22+D52. **Must be ALONE:** D85, D8, D86, D83.
 ⚠️ **Must be SERIALISED:** **D86 then D94** — both move the Outstandings report, D86 in three places at
@@ -163,7 +177,16 @@ to the line: HEAD moved ~16 times in L15 alone.
 ⛔ **And use `/usr/bin/grep`** — the shell's `grep` is aliased to ugrep and returns **silently empty**
 on `frontend/src/api/mock.ts`. It has cost four searches across three sessions.
 
-### 1 · D22 + D52 — no cash-flow screen, advertised as `on` · RECON §3.8 · ONE COMMIT
+### ~~1 · D22 + D52 — no cash-flow screen, advertised as `on`~~ · ✅ **DONE 2026-08-23 (L16)**
+> ✅ **CLOSED. 34/34 in a browser, keyboard only; M1 and M3 both predicted then observed.** Two report names
+> (`"Cash Flow"`, `"Anomalies"`), two screens, two client methods, the mock arms, four name registries and D52's
+> two corrected rows — ONE commit. Full record in `HANDOFF-PARITY-AUDIT.md` §7.5 (L16 position 1).
+> ⛔ **THE ONE THING TO CARRY FORWARD:** the load-bearing arm was **a footing against a DIFFERENT report**
+> (the screen's three basis bill counts 9+0+3=12 vs the Outstandings route's 8+4=12), and M3 proved it was the
+> ONLY arm that could see the defect — a **totalled disclosure still looks like a disclosure**, and every
+> "is the disclosure on the page?" arm stayed green while the numbers lied.
+> ⚠️ **It registered D95 and D96.** The text below is kept for its anchors and its reasoning.
+
 `/cash-flow` and `/anomalies` are live, ACL-mapped and carry their own `estimate`/`method`/`basis`
 disclosure — **that disclosure IS register row D23, which is CLOSED, so the screen MUST render it.**
 There is no type, no client method, no report name and no screen. `FeaturesScreen` advertises it as
@@ -301,6 +324,47 @@ book**. That second arm is the one a `?kind=` toggle could never pass.
 (`whitelist.go`'s `EntityOutstandings`, whose `nature` filter already answers both directions) depend on
 it. **This row adds a NAME; it does not remove a parameter.**
 ⚠️ **AFTER D86**, which moves this report's `as_on` bounding in three places at once.
+
+---
+
+### 9 · D95 — the anomaly list has no ACL counterweight · ⛔ NEW 2026-08-23, out of D22
+⛔ **THE CONTROL SURFACE IS READABLE BY THE PEOPLE IT MONITORS.** Migration 0011 seeds Data Entry a coarse
+`allow display report` that `internal/authz` matches against ANY `report:NAME` at **specificity 1**, so a
+report name is **GRANTED by default and the refusal is the thing that must be written**. Eight migrations
+write exactly that refusal — 0026 (Stock Summary, it prints cost prices), 0028, 0033, 0035, 0063 (bank
+statement), 0068 (TDS/TCS register), 0072 (cost reports), 0073 (order books). **`report:cash-flow` and
+`report:anomalies` have none.** So a Data Entry clerk can read every voucher they backdated, keyed after
+hours, edited three times in a day or wrote for a round amount — **by number**. That is the list a
+supervisor reads *about them*.
+⚠️ **IT PREDATES THE DOOR.** The routes have been open since wave 2; anyone who knew the URL could read
+them. L16 made it one keystroke, which is why it is written down rather than left implicit.
+**THE FIX IS `0073_order_book_acl.sql` COPIED**, and read its header first — it is the argument, not just
+the template: `disallow display` **AND** `disallow print` for both tokens (a report that cannot be
+displayed but CAN be printed is a leak with a paper trail), **no allow seeded**, ONE shared
+`*_acl_grants()` definition read by both the seeder and the backfill, and a restatement of
+`seed_company_auth_defaults` ⛔ **derived from the HIGHEST-NUMBERED restatement at the time and numbered
+above it** — lower loses every rule on a fresh database, which is the defect 0071 exists to repair.
+`migrations/seeder_census_test.go` guards it statically; if it fails, do not route around it.
+⛔ **ASK THE USER ABOUT THE CASH-FLOW HALF ONLY.** Denying a clerk the audit list is the established
+pattern and needs no decision. A forward cash position is a management report, and 0073's own header says
+an explicit `allow` is a tenant's decision and never a default — a senior clerk might fairly have it.
+**ORACLE:** on the wire, as a Data Entry member: `GET /anomalies` → **403**, and the print form → 403 too.
+Then in a browser, the screen renders that 403 **as a decision naming the report** — the panel for it is
+already built. ⚠️ **AND A CONTROL ARM: an Owner still reads both**, or the migration has over-reached.
+
+### 10 · D96 — insightd's statistical forecast still has no renderer · ⚠️ NEW, out of D22 ON CLOSURE
+⚠️ **THIS IS D72's ONE SURVIVING CLAUSE, AND IT ALMOST DIED SILENTLY.** D72 closed 2026-08-21 (its money
+half was already fixed) and its remainder — *"still not reachable from the keyboard"* — was folded into
+D22. L16 then closed D22 by building a door over **cored's** `/cash-flow`. ⛔ **THAT IS A DIFFERENT
+SERVICE, A DIFFERENT ENDPOINT AND A DELIBERATELY DIFFERENT METHOD:** cored's own `method` string says
+*"deterministic; no statistics, no model"*. Wiring one did not wire the other.
+✅ Its disclosure work is already done on its side (`estimate: true` plus its own method), and its money
+is fixed-4 `Money` strings with a non-vacuity test arm.
+⛔ **ANSWER THE PRIOR QUESTION BEFORE WIRING ANYTHING: should it exist at all?** cored's projection is
+explainable to an auditor bill by bill. A statistical forecast rendered anywhere near it invites exactly
+the confusion the Cash Flow screen's disclosure block exists to prevent. It may deserve **its own report
+NAME** (the PDP argument again — a different method is a different authority) or it may deserve
+**deletion**. That is a product decision, so **raise it; do not quietly build it.**
 
 ---
 
@@ -529,6 +593,43 @@ inverted one fails the day the field disappears and still explains why it has to
 ### 5.17 ⚠️ THE NUMBER-MOVING ROWS MAY MOVE MORE THAN PREDICTED — OR NOTHING
 If D85/D8/D86's gate stays GREEN, assume the binary was not rebuilt and cored not restarted **before**
 assuming the probe is not an oracle. **Predict the moved number out loud in the commit message.**
+
+### 5.19 ⛔⛔ A DISCLOSURE CAN BE FULLY PRESENT AND FULLY WRONG — DON'T ASSERT ON ITS PRESENCE
+**L16's M3 is the cleanest evidence in the repo for this.** The Cash Flow screen's disclosure was mutated
+to TOTAL its three settlement-date sources into one figure — the single design the screen exists to
+refuse. The page still said **"THIS IS AN ESTIMATE"**, still carried the server's `method` sentence
+verbatim, still listed all four `not_modelled` lines, still named the 30-day convention by its day count.
+**Every one of those arms passed while the numbers lied.** Only the three per-source COUNTS and the
+FOOTING caught it — 4 failures out of 34, exactly as predicted.
+⛔ **SO A PROBE BUILT OUT OF "IS THE DISCLOSURE ON THE PAGE?" ASSERTIONS IS GREEN THROUGH A FALSE
+DISCLOSURE.** Assert on the NUMBERS it discloses, and foot them against something that is not the same
+handler. This generalises past disclosures: it is §5.10 ("answer from the row, never from the request")
+applied to prose instead of a database column.
+
+### 5.20 ⚠️ THE §5.11 VITE CHECK HAS A RACE, AND IT READS EXACTLY LIKE A DEAD MUTATION
+M3's first `curl` of the mutated module out of vite counted **0** occurrences — which looks precisely like
+"the mutation never landed", and the disciplined next step (§5.4) would have been to go find out what was
+holding it up. **It had landed.** The curl beat the dev server's re-transform; a second curl counted 3
+against a HEAD baseline of 0. ⛔ **CURL TWICE, or `grep -c` the file ON DISK first** — the disk said 3
+immediately. A one-shot vite count is not evidence of anything.
+
+### 5.21 ⛔ A STATUS CELL MUST CARRY EXACTLY ONE MARKER AND NO CELL SEPARATOR
+§0's count snippet was hardened in position 0 to read the STATUS COLUMN instead of the line. **Writing
+three rows in position 1 then broke it twice more, in two new ways, both in the ROW TEXT:**
+- **D22's status cell contained a literal ` | `**, which split it into two cells. The last cell had no
+  marker, so the row parsed as `?`.
+- **D96's status prose contained the words "marked ✅"**, so the row parsed as CLOSED while saying OPEN.
+⚠️ **The `?` bucket is what caught the first one.** A parser that silently binned it would have printed a
+total that still looked plausible. **Fix the row, never the parser** — and re-run the count after writing
+any row, not only after closing one.
+
+### 5.22 ⚠️ CHECK YOUR OWN PROSE AS HARD AS YOU CHECK THE RECON'S
+While correcting F11's feature note, L16 added "the Bank Reconciliation Statement" to the list of things
+Alt+E exports. **It does not** — `grep -rln useExportAction frontend/src/screens` lists eight files and no
+BRS screen is among them. Caught before shipping, by grepping a claim I had just written myself. §5.1 says
+the recon's claims are unverified until fired; **the same applies to the sentence you are typing.** And in
+the same edit a pinned count moved (`NINE` → `ELEVEN` reports in the Alt+G list) whose enumeration had
+**already** been double-counting four of its own members before anyone touched it.
 
 ### 5.18 ⚠️ A FULL-SUITE FAILURE UNDER LOAD MAY BE A FLAKE — CHECK, DON'T ASSUME
 **Structural argument first** (does the test even touch your change?), then the standalone run, then
