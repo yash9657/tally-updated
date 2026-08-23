@@ -7,7 +7,7 @@ Execute it top to bottom.
 
 ## ⛔ THE COUNT, RE-DERIVED BY PARSING §7.1 — NOT COPIED FROM A HEADER
 
-**93 registered · 80 CLOSED · 9 OPEN · 4 PARTIAL.** `80 + 4 + 9 = 93`.
+**93 registered · 81 CLOSED · 8 OPEN · 4 PARTIAL.** `81 + 4 + 8 = 93`.
 
 ⚠️ **L15 closed SIX (D5, D43, D87, D91, D92, D93) and registered THREE of them itself.**
 The OPEN count fell from 12 to 10 while CLOSED rose by five, because half the lane's work was rows
@@ -30,9 +30,9 @@ for l in s[a:b]:
 PY
 ```
 
-**OPEN (9):** D8 · D22 · D49 · D52 · D81 · D83 · D85 · D86 · D90
-~~D5 · D43 · D87~~ — ✅ CLOSED L15. ~~D91 · D92 · D93~~ — registered AND closed in L15; the register is a
-record, not a to-do list.
+**OPEN (8):** D8 · D22 · D49 · D52 · D81 · D83 · D85 · D86
+~~D5 · D43 · D87 · D90~~ — ✅ CLOSED L15. ~~D91 · D92 · D93~~ — registered AND closed in L15; the register
+is a record, not a to-do list.
 ~~D91~~ — registered AND closed in L15b the same day; kept in §7.1 because the register is a record, not a to-do list.
 **PARTIAL (4), status genuinely ambiguous:** D13 · D15 · D17 · D48 — see §5.
 ~~D5 · D43~~ — ✅ **CLOSED L15 2026-08-22**, one commit (`766af00`), 22/22 wire + browser.
@@ -101,8 +101,8 @@ Cost-ordered, continuing the previous driver's reasoning. **D5+D43 is next.**
 | ~~1~~ | ~~**D5 + D43**~~ | HIGH | ✅ **DONE L15 2026-08-22** — `766af00`, 22/22. See §7.5's L15 section. |
 | ~~0~~ | ~~**D91**~~ | MED | ✅ **DONE L15b 2026-08-22** — `0676e7e`. The gate now makes its own tenant. `verify:demo` stays 34/34 across a `contract:cored` run. |
 | ~~2~~ | ~~**D87**~~ | MED | ✅ **DONE L15d 2026-08-22** — `040457e`, 13/13 both doors. Pulled in **D92** (prerequisite) and **D93** (found by its mutation proof). |
-| 3 | **D90** | MED | ✅ DECIDED 2026-08-22 (§6.3): refuse now. Cheapest row in the wave. |
-| 4 | **D22 + D52** | HIGH | **ONE commit** — a door without the sentence, or the sentence without the door, is each worse than today |
+| ~~3~~ | ~~**D90**~~ | MED | ✅ **DONE L15f 2026-08-22** — `7132798`, 8/8. ⛔ **ITS PREMISE WAS FALSE** and the real defect was wider. See §7.5's L15f. |
+| **NEXT** | **D22 + D52** | HIGH | **ONE commit** — a door without the sentence, or the sentence without the door, is each worse than today |
 | 5 | **D81** | MED | after the VoucherScreen churn from 1 and 4 settles |
 | 6 | **D49** | MED | largest scope of the wave. **Before D85**, so D85 lands on the final transport |
 | 7 | **D85** | MED | **moves a pinned number.** ALONE |
@@ -431,6 +431,39 @@ was green on a re-run. **Structural argument first** (does the test even touch y
 standalone run, then the re-run. Known members of this class: `internal/sync`, `EWayBillScreen`.
 
 ---
+
+### 4.11 ⛔⛔ A MEASUREMENT IS EVIDENCE, NOT PROOF — THE COUNTERWEIGHT TO §4.1
+§4.1 says a recon is for finding the CODE and never for filling in an EXPECTED VALUE. It stands.
+**L15 supplies the other half.** D84 measured that cored ACCEPTS a duplicate stock item name,
+contradicting the recon. That overturning was written into the corpus `$provenance`, repeated across
+three handoffs, used to register **D90**, and used to frame a question **the user answered**. It was
+false — `UNIQUE (company_id, name)` has been on `stock_item` since migration **0005**, the first
+schema this product ever had. Ten minutes of `curl` disproved it.
+**The corrective is not to measure less** — re-measuring is what found the real defect underneath
+(byte-exact uniqueness across THREE master kinds, with the ledger case worse than anything D90
+described and absent from it). **The corrective is that "I measured it" is a claim like any other,
+and the measurements that feel like DISCOVERIES are the ones to re-run.**
+
+### 4.12 ⛔ A MUTATION THAT WILL NOT REPRODUCE IS A FINDING, NOT A FAILED STEP
+D90's predicted mutation — drop the normalised indexes, watch the corpus go red — **did not
+reproduce.** `contract:cored` reported **14/14 with two of three indexes missing**, because a Go
+pre-check shadows the index for serial creates. That is a real hole: the index is the only thing that
+refuses the second of two CONCURRENT creates, and **no gate could see its absence.** The
+non-reproduction bought a schema-census test (`migrations/master_name_index_census_test.go`) that the
+mutation itself would not have. **When a mutation refuses to break something, find out what is
+holding it up before writing a better mutation.**
+
+### 4.13 ⚠️ NEVER GROUP BY A DISPLAY NAME IN THIS DATABASE
+A duplicate-hunting query grouped by `company.name` and reported **188 collisions**; the real number
+was **6**. There are 208 companies and **81 of them are called "Demo Traders"** — one per re-seed — so
+it counted one `cash` ledger in each of 81 separate tenants as 81 duplicates. **Group by
+`company_id`.**
+
+### 4.14 ⚠️ A PROBE THAT CREATES A MASTER IN THE DEMO TENANT MUST REAP IT
+D91 closed this for `contract:cored`. **It did not close the class**, and the very next drive script
+written in the same session re-introduced it — `verify:demo` went 34/34 → 31/34 on a party the probe
+left behind. Any probe that creates a master it cannot delete through the product owes a reap, and the
+reap must **assert** it worked and **refuse to run on a master that has postings**.
 
 ## 5. ⛔ THE FOUR `PARTIAL` ROWS — AUDIT BEFORE TRUSTING THE COUNT
 
