@@ -321,7 +321,10 @@ pnpm run verify:demo "$(cat /tmp/drive-company-id)"     # -> ALL CHECKS PASSED
 CO="$(cat /tmp/drive-company-id)" node frontend/scripts/drive-l14-cheap.mjs    # 17/17 (D82/D89/D80)
 CO="$(cat /tmp/drive-company-id)" node frontend/scripts/drive-l14b-d77.mjs     # 8/8   (D77)
 CO="$(cat /tmp/drive-company-id)" node frontend/scripts/drive-l15-d5.mjs      # 22/22 (D5/D43)
-cd frontend && CO="$(cat /tmp/drive-company-id)" pnpm contract:cored           # 11/11 (D84)
+CO="$(cat /tmp/drive-company-id)" node frontend/scripts/drive-l15c-d92.mjs    # 7/7   (D92)
+CO="$(cat /tmp/drive-company-id)" node frontend/scripts/drive-l15d-d87.mjs    # 13/13 (D87, both doors)
+CO="$(cat /tmp/drive-company-id)" node frontend/scripts/drive-l15f-d90.mjs    # 8/8   (D90)
+cd frontend && pnpm contract:cored                                            # 14/14 (D84) — ⛔ NO `CO`, it makes its own tenant (D91)
 ```
 
 ### ⛔⛔ RE-SEED BEFORE JUDGING `verify:demo`, AND RUN `contract:cored` LAST
@@ -431,6 +434,18 @@ was green on a re-run. **Structural argument first** (does the test even touch y
 standalone run, then the re-run. Known members of this class: `internal/sync`, `EWayBillScreen`.
 
 ---
+
+### 4.15 ⛔ RE-RUN THE WHOLE DRIVE SET AT THE END OF A LANE, NOT JUST YOURS
+D87 broke D92's probe twice, hours after D92 was green and committed:
+- `getByText("Sundry Debtors")` began matching TWO elements, because D87's party block carries the
+  prose *"a state code is REQUIRED under Sundry Debtors and Sundry Creditors"*. Playwright's strict
+  mode throws. **Pick a group with `getByRole("option", …)`, never by text.**
+- and the probe's party needed a state code it did not supply, so its **CONTROL** arm would have
+  failed for a reason with nothing to do with D92 — **which does not read as a broken probe, it reads
+  as D92 having regressed.** A control that fails for an unrelated reason is worse than no control,
+  because it is believed.
+⚠️ **Every drive that creates a PARTY now needs a state code.** Every drive that picks a group by TEXT
+is one copy change away from breaking.
 
 ### 4.11 ⛔⛔ A MEASUREMENT IS EVIDENCE, NOT PROOF — THE COUNTERWEIGHT TO §4.1
 §4.1 says a recon is for finding the CODE and never for filling in an EXPECTED VALUE. It stands.
