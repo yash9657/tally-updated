@@ -99,6 +99,20 @@ const REPORT_SLUGS: Record<ReportName, string> = {
   // be granted or refused on its own — migration 0073 refuses both.
   "Sales Order Book": "sales-order-book",
   "Purchase Order Book": "purchase-order-book",
+  // ---- THE FORECAST PLANE. MAPPED AND DEFERRED, for the same reason as the two
+  // books above: the server mounts both names and answers 501, so Ctrl+P says the
+  // printed layout does not exist instead of doing nothing. REPORT_BAR advertises
+  // "Ctrl+P Print" over every `report` frame, so an unmapped name here would ship a
+  // button that silently fails on a screen that otherwise works.
+  //
+  // ⛔ AND FOR CASH FLOW THE 501 IS A LAYOUT DECISION WORTH KEEPING. Printed on the
+  // company's own stationery, a bucket table of fixed-4 figures reads exactly like a
+  // statement of account — while every date in it is INVENTED by the projection. The
+  // screen can carry `estimate`, the `method` sentence and the whole basis block
+  // beside the numbers; a page that loses them is a guess on letterhead. A printed
+  // cash flow needs the disclosure designed INTO the layout, not appended to it.
+  "Cash Flow": "cash-flow",
+  Anomalies: "anomalies",
 };
 
 /**
@@ -140,6 +154,20 @@ const REPORT_PERIOD_SHAPE: Record<ReportName, ReportPeriodShape> = {
   "TDS / TCS Register": "full-period",
   "Sales Order Book": "as-at",
   "Purchase Order Book": "as-at",
+  // ⛔ THE FORECAST PLANE SPLITS, AND THE SPLIT IS THE POINT.
+  //
+  // Cash Flow is "as-at": it takes ONE date and projects FORWARD from it. Sending a
+  // `from` would ask the server to bound a projection below, which means dropping
+  // the bills that are already overdue — the ones folded into the first bucket, and
+  // the most certain cash in the whole answer.
+  //
+  // Anomalies is "full-period": both bounds apply, and they bound `created_at` —
+  // WHEN A VOUCHER WAS ENTERED, not the period it accounts for. That is the only
+  // axis on which "backdated" or "after hours" means anything, and it is why this
+  // one report's F2 period is about the operator's working day rather than the
+  // books' accounting period.
+  "Cash Flow": "as-at",
+  Anomalies: "full-period",
 };
 
 /**

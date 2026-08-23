@@ -251,6 +251,15 @@ export const AS_AT_ONLY_REPORTS = [
   // the entity's earlier history and still foot").
   "Sales Order Book",
   "Purchase Order Book",
+  // ---- CASH FLOW (wave-2 WS5a). A POSITION PROJECTED FORWARD from one date.
+  //
+  // `CashFlowScreen` reads `config.periodTo` alone and sends it as `as_on`. There
+  // is deliberately no `periodFrom`: bounding a projection BELOW would drop the
+  // bills that are already overdue, and those are folded into the first bucket
+  // precisely because they are the most certain cash in the answer. Dropping them
+  // would make the projection look healthier the further back the operator set
+  // the From date — a wrong answer that improves as you misuse it.
+  "Cash Flow",
 ];
 
 /**
@@ -281,6 +290,21 @@ export const FULL_PERIOD_REPORTS = [
   // headings ask for a period.
   "Cost Centre Summary",
   "Cost Category Summary",
+  // ---- THE ANOMALY LIST (wave-2 WS5a). A WINDOW, and over an unusual axis.
+  //
+  // `AnomaliesScreen` reads `periodFrom` AND `periodTo` and sends them as
+  // `from`/`to` — but ⛔ THEY BOUND `created_at`, NOT THE VOUCHER DATE. This is
+  // the "when was it ENTERED" axis, which is the only one on which "backdated"
+  // or "entered after hours" is a statement about anything: a rule that compared
+  // a voucher's own date to a window of voucher dates could never see a voucher
+  // dated inside the period and keyed months later, which is the whole finding.
+  //
+  // So it is a full-period report whose period is about the OPERATOR'S working
+  // days rather than the books' accounting period, and the screen says so on the
+  // page. Leaving it unbounded is legal and means "every finding ever", which is
+  // a list that grows forever — so the panel telling the operator both bounds
+  // apply is the useful answer, not a technicality.
+  "Anomalies",
 ];
 
 /**

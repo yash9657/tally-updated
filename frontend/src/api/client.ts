@@ -79,6 +79,8 @@ import type {
   EInvoiceRaised,
   EInvoicePinned,
   OrderBookResponse,
+  AnomaliesResponse,
+  CashFlowResponse,
   CostCentreListResponse,
   CostCentreWriteResponse,
   CostCentreSummaryResponse,
@@ -737,6 +739,44 @@ export interface CoredClient {
     companyID: string,
     asOn?: string,
   ): Promise<OrderBookResponse>;
+
+  /**
+   * THE CASH-FLOW PROJECTION — `report:cash-flow`.
+   *
+   * ⛔ WHAT COMES BACK IS AN ESTIMATE AND THE RESPONSE SAYS SO. `estimate`,
+   * `method` and `basis` are REQUIRED on {@link CashFlowResponse}, and a caller
+   * that renders the buckets without them is displaying invented settlement
+   * dates as if they were posted balances. That is register defect D23, whose
+   * server half is closed precisely so this half has something true to show.
+   *
+   * `asOn` may be omitted, and then the server projects from TODAY. Unlike the
+   * order books it does not answer "" — it substitutes its own date and returns
+   * it, so the heading takes `as_on` off the RESPONSE.
+   *
+   * ⚠️ `horizon_days` and `bucket_days` are the SERVER's choice. There is no
+   * argument for them here on purpose: F2 gives an operator a date and nothing
+   * else, so offering a horizon the frame cannot set would be a control with no
+   * keyboard behind it.
+   */
+  cashFlow(companyID: string, asOn?: string): Promise<CashFlowResponse>;
+
+  /**
+   * THE ANOMALY LIST — `report:anomalies`.
+   *
+   * ⛔ THE WINDOW KEYS ON `created_at` — WHEN A VOUCHER WAS ENTERED, not the
+   * period it belongs to. That is the audit axis, and it is the only one on
+   * which "backdated" or "entered after hours" is a statement about anything.
+   * Passing a voucher period here would answer a different question and look
+   * like it had answered this one.
+   *
+   * Both bounds may be omitted, and then the list is UNBOUNDED — every finding
+   * in the tenant's history. The response echoes what it used.
+   */
+  anomalies(
+    companyID: string,
+    from?: string,
+    to?: string,
+  ): Promise<AnomaliesResponse>;
 
   createGroup(
     companyID: string,

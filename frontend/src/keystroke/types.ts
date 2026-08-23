@@ -331,6 +331,38 @@ export const REPORT_NAMES = [
    */
   "Sales Order Book",
   "Purchase Order Book",
+  /**
+   * ---- THE FORECAST PLANE (wave-2 WS5a). Two names, both AI-native, and both
+   * were served by cored for a whole wave with NO DOOR — no Gateway entry, no Go
+   * To entry and no screen — while F11 Company Features advertised them as `on`.
+   * That was register defect D22, and listing them here is the first half of it:
+   * a report name is what buys a screen the report keymap, F2, the report button
+   * bar and a place in Go To and Display More Reports.
+   *
+   * ⛔ "Cash Flow" IS AN ESTIMATE AND ITS SCREEN MUST SAY SO. The response
+   * carries `estimate`, `method` and `basis` because the engine INVENTS a
+   * settlement date for every unpaid bill while every figure it returns is a
+   * fixed-4 string that reads like a posted balance (register defect D23, server
+   * half closed). A screen on this name that renders buckets without the basis
+   * re-opens D23 from the client side.
+   *
+   * ⛔ "Anomalies" IS A CONTROL SURFACE, NOT A REPORT ABOUT MONEY. It lists every
+   * voucher that was backdated, entered after hours, edited in a burst or written
+   * for a suspiciously round amount — BY NUMBER. Note that unlike the order books
+   * and the Stock Summary it has NO ACL counterweight migration: 0011's coarse
+   * `allow display report` matches it at specificity 1, so the seeded Data Entry
+   * level can read it. That is a POLICY QUESTION rather than a defect in this
+   * screen, it predates this door, and it is registered rather than decided here.
+   *
+   * ⚠️ THEY CLASSIFY DIFFERENTLY UNDER F2 and the split is not cosmetic: Cash
+   * Flow is a POSITION projected forward from one date (`as_on` — an as-at
+   * report), while Anomalies is a WINDOW over when vouchers were ENTERED
+   * (`from`/`to` on `created_at` — a full-period report). Bounding Cash Flow
+   * below would be meaningless and leaving Anomalies unbounded below makes it
+   * grow forever.
+   */
+  "Cash Flow",
+  "Anomalies",
 ] as const;
 export type ReportName = (typeof REPORT_NAMES)[number];
 

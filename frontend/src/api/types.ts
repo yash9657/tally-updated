@@ -2986,6 +2986,143 @@ export interface OrderBookResponse {
   notes: string[];
 }
 
+// ===========================================================================
+// THE FORECAST PLANE (wave-2 WS5a) — GET /cash-flow and GET /anomalies
+// ===========================================================================
+//
+// ⛔⛔ EVERY FIELD BELOW WAS TRANSCRIBED FROM A LIVE RESPONSE, NOT FROM THE
+// HANDLER AND NOT FROM A HANDOFF. A report route's JSON shape is not guessable —
+// two earlier attempts at this screen died on `'str' has no attribute 'get'` —
+// so the shape was measured against a running cored (`GET /cash-flow` on a
+// seeded tenant) and the handler was then read to confirm the TYPES rather than
+// the other way round. Two things a reader would have got wrong:
+//
+//  1. `beyond_horizon` is an OBJECT, not an array. It is the tail of the
+//     projection past the horizon, not another bucket.
+//  2. `overdue_folded_into_first_bucket` EXISTS TWICE WITH TWO DIFFERENT TYPES —
+//     a `boolean` at the top level (did the folding happen?) and a
+//     {@link CashFlowBasisCount} inside `basis` (how much was folded). They are
+//     not the same field and neither is redundant.
+//
+// And every money value is a fixed-4 STRING. `Number()` on any of them loses
+// paisa; they are formatted, compared and exported as strings.
+
+/**
+ * One side-split count inside the projection's basis: how many bills got their
+ * settlement date from this source, and how much money that was, per side.
+ */
+export interface CashFlowBasisCount {
+  bills: number;
+  inflow: Money;
+  outflow: Money;
+}
+
+/**
+ * WHERE THE PROJECTION'S DATES CAME FROM — the disclosure that makes the numbers
+ * readable as an estimate instead of a balance.
+ *
+ * ⛔ THE THREE `assumed_settlement_date` SOURCES ARE NOT INTERCHANGEABLE AND THE
+ * SCREEN MUST NOT TOTAL THEM INTO ONE FIGURE. `from_due_date` is OBSERVED — the
+ * bill carried an explicit due date. `from_party_credit_days` is assumed from
+ * something the tenant configured. `from_default_credit_days` is assumed from a
+ * CONSTANT COMPILED INTO THIS BUILD, which no tenant ever agreed to — it is the
+ * one an operator most needs to see, and it is the reason this block exists at
+ * all. A single "assumed" total would hide exactly the distinction being
+ * disclosed.
+ */
+export interface CashFlowBasis {
+  what_is_projected: string;
+  assumed_settlement_date: {
+    from_due_date: CashFlowBasisCount;
+    from_party_credit_days: CashFlowBasisCount;
+    from_default_credit_days: CashFlowBasisCount;
+    /** The build's convention, in days, when a bill has neither a due date nor a party credit period. */
+    default_credit_days: number;
+  };
+  overdue_folded_into_first_bucket: CashFlowBasisCount;
+  /** What the projection does NOT model. Rendered verbatim; never summarised. */
+  not_modelled: string[];
+}
+
+/** One bucket of the projection. `from` is inclusive, `to` exclusive. */
+export interface CashFlowBucket {
+  from: string;
+  to: string;
+  inflow: Money;
+  outflow: Money;
+  nett: Money;
+  opening_cash: Money;
+  closing_cash: Money;
+}
+
+/**
+ * A CASH-FLOW PROJECTION — `report:cash-flow` on the server.
+ *
+ * ⛔⛔ `estimate`, `method` AND `basis` ARE REQUIRED, NOT OPTIONAL, AND THAT IS
+ * THE WHOLE POINT OF THE TYPE. This response used to carry seven keys, not one
+ * of which contained the words projection, estimate, basis, assumed or method,
+ * while every figure in it was a fixed-4 string that reads exactly like a posted
+ * ledger balance — and the engine INVENTS a settlement date for every unpaid
+ * bill. That was register defect D23, and the server half of it is closed.
+ *
+ * Declaring these three OPTIONAL would re-open it from the client side: a screen
+ * written against `basis?` compiles perfectly while rendering nothing, and a
+ * projection displayed without its basis is a guess printed as a balance. If the
+ * server ever stops sending them, this type must fail to compile — which is why
+ * there is no `?` anywhere in this interface.
+ */
+export interface CashFlowResponse {
+  as_on: string;
+  horizon_days: number;
+  bucket_days: number;
+  opening_cash: Money;
+  buckets: CashFlowBucket[];
+  /** The tail PAST the horizon. An OBJECT, not a bucket — it has no dates. */
+  beyond_horizon: {
+    inflow: Money;
+    outflow: Money;
+    nett: Money;
+  };
+  /** Did overdue bills get folded into bucket 1? A BOOLEAN here; a count in `basis`. */
+  overdue_folded_into_first_bucket: boolean;
+  /** Always true. A plain bool so no reader has to parse prose to find it. */
+  estimate: boolean;
+  method: string;
+  basis: CashFlowBasis;
+}
+
+/**
+ * One anomaly finding. `severity` and `kind` are the server's own vocabulary and
+ * are rendered as they arrive — a client that re-ranked them would be inventing
+ * an opinion the audit trail does not have.
+ */
+export interface AnomalyFinding {
+  kind: string;
+  voucher_id: string;
+  voucher_no: string;
+  severity: string;
+  detail: string;
+}
+
+/**
+ * THE ANOMALY LIST — `report:anomalies` on the server.
+ *
+ * ⚠️ `from`/`to` COME BACK AS THE EMPTY STRING WHEN NONE WAS SENT, and that
+ * means UNBOUNDED rather than "today". The screen says so instead of
+ * interpolating a blank into a heading — the same defect the order books shipped
+ * and had to fix.
+ *
+ * ⛔ AND THE WINDOW KEYS ON `created_at`, NOT ON THE VOUCHER DATE. This is the
+ * "when was it ENTERED" audit axis, which is the only axis on which "entered
+ * after hours" or "backdated" means anything. A screen that labelled it with the
+ * voucher period would be describing a different question.
+ */
+export interface AnomaliesResponse {
+  from: string;
+  to: string;
+  findings: AnomalyFinding[];
+}
+
 /**
  * A BILL OF MATERIALS — a recipe, and a MASTER (migration 0043). It moves
  * nothing, commits nothing and balances nothing; it becomes real only when

@@ -21,11 +21,22 @@ package server
 // Doing only (a) would make even an Owner get a 403, because routeAction
 // default-denies unmapped {companyID} sub-paths.
 //
-// ⛔ WHAT IS STILL MISSING IS THE CLIENT, NOT THE ROUTE. No frontend code calls
-// GET /v1/companies/{id}/cash-flow — there is no Gateway entry, no Go To entry
-// and no screen — so this handler is reachable by cURL and by nothing an operator
-// can press. That is a tracked defect (D22) whose remaining half needs a
-// CoredClient method in frontend/src/api, which is another lane's file.
+// ✅ THE CLIENT NOW EXISTS, AND THIS COMMENT USED TO SAY IT DID NOT. For a whole
+// wave this block read "WHAT IS STILL MISSING IS THE CLIENT, NOT THE ROUTE — this
+// handler is reachable by cURL and by nothing an operator can press", which was
+// true and was register defect D22. Both routes now have a door:
+// frontend/src/screens/reports/ForecastScreens.tsx renders them as the report
+// names "Cash Flow" and "Anomalies", reachable from Alt+G and Display More
+// Reports, with client methods cashFlow()/anomalies().
+//
+// ⛔ WHICH MATTERS TO THIS FILE FOR ONE REASON: the disclosure below now HAS a
+// renderer. The long comment on cashFlowJSON ends "it is written so that the
+// screen has something true to render the moment it exists" — that moment has
+// arrived, and CashFlowScreen renders `estimate`, the `method` sentence, all three
+// `assumed_settlement_date` sources SEPARATELY (never totalled into one "assumed"
+// figure), the overdue fold with its money, and every `not_modelled` line
+// verbatim. ⚠️ SO CHANGING A SENTENCE IN basisJSON NOW CHANGES WHAT AN OPERATOR
+// READS. It is no longer server-side prose that nobody sees.
 //
 // The forecast Service is constructed per-request from s.pool (which satisfies
 // both the read-only runner and reporting's tx runner). This diverges from the

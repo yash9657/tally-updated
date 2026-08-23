@@ -80,6 +80,8 @@ import type {
   EInvoiceRaised,
   EInvoicePinned,
   OrderBookResponse,
+  AnomaliesResponse,
+  CashFlowResponse,
   CostCentreListResponse,
   CostCentreWriteResponse,
   CostCentreSummaryResponse,
@@ -542,6 +544,32 @@ export function createRestClient(
       return http.get<OrderBookResponse>(
         `${company(companyID)}/purchase-order-book`,
         asOn ? { as_on: asOn } : undefined,
+      );
+    },
+
+    cashFlow(companyID, asOn?: string) {
+      // A FLAT LITERAL PATH, like every report route, so routeAction can map it to
+      // `report:cash-flow` — the PDP decides on the NAME and cannot see a query
+      // parameter. `horizon_days` and `bucket` are deliberately NOT sent: they are
+      // the server's defaults (90 days, weekly) and F2 gives the operator a date
+      // and nothing else, so a horizon nobody can set would be an argument with no
+      // keyboard behind it.
+      return http.get<CashFlowResponse>(
+        `${company(companyID)}/cash-flow`,
+        asOn ? { as_on: asOn } : undefined,
+      );
+    },
+    anomalies(companyID, from?: string, to?: string) {
+      // BOTH bounds are optional and BOTH are omitted when absent, rather than
+      // sent empty: the server reads "" as unbounded, but a `?from=&to=` on the
+      // wire is indistinguishable from a screen that meant to send a window and
+      // computed one wrong.
+      const q: Record<string, string> = {};
+      if (from) q.from = from;
+      if (to) q.to = to;
+      return http.get<AnomaliesResponse>(
+        `${company(companyID)}/anomalies`,
+        Object.keys(q).length > 0 ? q : undefined,
       );
     },
 

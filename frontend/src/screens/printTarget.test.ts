@@ -250,13 +250,56 @@ describe("reports (I-3, and the drill-down rule)", () => {
     expect(target.label.toLowerCase()).toContain("whole statement");
   });
 
-  it("a display-only report is refused with the 501 reason, not a blank page", () => {
+  it("a report name with no slug is refused with the 501 reason, not a blank page", () => {
+    // ⛔ THIS ARM USED TO USE "Cash Flow" AS ITS STAND-IN, AND THAT IS NO LONGER AN
+    // UNMAPPED NAME — the Cash Flow screen shipped (register defect D22) and the
+    // name is now in REPORT_SLUGS, so this test began asserting the ABSENCE of a
+    // door that now exists. It is repointed rather than deleted: the branch it
+    // covers is still live and still load-bearing.
+    //
+    // What reaches it now is an OFF-VOCABULARY name — `NavSnapshot.reportName` is
+    // a plain `string`, so a frame persisted by an older build, or one pushed by
+    // hand, can carry a name this build has never heard of. REPORT_SLUGS is total
+    // over `ReportName` by construction (tsc enforces it, and adding a report name
+    // without a slug is a compile error), so a name IN the vocabulary can never
+    // land here. That is precisely why the fallback must keep working: the only
+    // way in is a name nobody planned for.
     const target = resolvePrintTarget(
-      snap({ screen: "report", reportName: "Cash Flow" }),
+      snap({ screen: "report", reportName: "Depreciation Schedule" }),
     );
     expect(target.kind).toBe("refusal");
     if (target.kind !== "refusal") return;
     expect(target.reason).toContain("501");
+  });
+
+  it("the forecast plane's two reports MAP to slugs, so Ctrl+P earns the server's own 501", () => {
+    // ⛔ THE POINT OF MAPPING SOMETHING THAT CANNOT PRINT. This module has two
+    // treatments for a report with no printed layout, and picking the wrong one is
+    // a real defect either way:
+    //
+    //   MAP it   — when the flat route CAN express the request. Ctrl+P goes to the
+    //              server and the operator reads the SERVER's own sentence about
+    //              why there is no layout. The TDS register and both order books
+    //              are mapped for exactly this reason.
+    //   REFUSE it locally — when the route CANNOT express the request. The cost
+    //              summaries need an axis and the BRS needs a bank account, and a
+    //              flat `/print/reports/{name}` carries neither; printing the first
+    //              axis would put a correct-looking report on paper for a question
+    //              nobody asked.
+    //
+    // `/print/reports/cash-flow?as_on=` and `/print/reports/anomalies?from=&to=`
+    // both express their whole request, so both are MAPPED. ⚠️ MEASURED, not
+    // assumed: both answer `501` with the server's explanatory sentence, exactly
+    // as `tds-register` and `sales-order-book` do.
+    for (const [name, slug] of [
+      ["Cash Flow", "cash-flow"],
+      ["Anomalies", "anomalies"],
+    ] as const) {
+      const target = resolvePrintTarget(snap({ screen: "report", reportName: name }));
+      expect(target.kind, `${name} did not resolve to a print target`).toBe("report");
+      if (target.kind !== "report") continue;
+      expect(target.slug).toBe(slug);
+    }
   });
 });
 

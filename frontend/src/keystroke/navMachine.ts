@@ -84,6 +84,22 @@ const REPORT_ALIASES: Readonly<Record<string, string>> = {
   "tcs register": "TDS / TCS Register",
   tds: "TDS / TCS Register",
   tcs: "TDS / TCS Register",
+  // The forecast plane. Spelling variants only, and note what is NOT here.
+  cashflow: "Cash Flow",
+  "cash-flow": "Cash Flow",
+  "cash flow projection": "Cash Flow",
+  anomalies: "Anomalies",
+  anomaly: "Anomalies",
+  "anomaly detection": "Anomalies",
+  // ⛔ "cash flow statement" AND "funds flow" ARE DELIBERATELY ABSENT, AND THAT
+  // IS NOT AN OVERSIGHT. In Tally those name a HISTORIC statement of cash that
+  // actually moved in a period. This report is a FORWARD PROJECTION of when open
+  // bills are guessed to settle — a different question with a different answer,
+  // and every date in it is invented. An operator who typed "cash flow statement"
+  // and landed here would read projected figures as recorded ones, which is
+  // exactly the confusion the screen's whole disclosure block exists to prevent.
+  // An alias that silently answers a different question is worse than no alias:
+  // the picker leaves the entry unmatched and the operator looks again.
 };
 
 /**

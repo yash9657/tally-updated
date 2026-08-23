@@ -107,6 +107,8 @@ import type {
   OrderView,
   OrderBookRow,
   OrderBookResponse,
+  AnomaliesResponse,
+  CashFlowResponse,
   CreateBomRequest,
   BomView,
   EWayBillRequest,
@@ -1122,6 +1124,21 @@ function daysBetween(from: string, to: string): number {
   const b = Date.parse(`${to}T00:00:00Z`);
   if (Number.isNaN(a) || Number.isNaN(b)) return 0;
   return Math.max(0, Math.round((b - a) / 86_400_000));
+}
+
+/**
+ * `n` whole days after an ISO date, as an ISO date.
+ *
+ * ⛔ ANCHORED AT MIDNIGHT UTC, LIKE {@link daysBetween}, AND THAT IS NOT
+ * COSMETIC. `new Date("2026-08-23")` parses as UTC but `.toISOString()` on a
+ * date built from local parts does not, so an operator west of Greenwich would
+ * see every projected bucket boundary land a day early — the bug would appear
+ * only on some machines, which is the worst kind.
+ */
+function mockAddDays(iso: string, n: number): string {
+  const ms = Date.parse(`${iso}T00:00:00Z`);
+  if (Number.isNaN(ms)) return iso;
+  return new Date(ms + n * 86_400_000).toISOString().slice(0, 10);
 }
 
 /**
@@ -6915,6 +6932,257 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     },
     async purchaseOrderBook(companyID, asOn?: string) {
       return mockOrderBook(companyID, "PURCHASE", asOn);
+    },
+
+    /**
+     * THE CASH-FLOW PROJECTION.
+     *
+     * ⛔⛔ THIS ARM EXISTS BECAUSE AN UNDISCLOSED PROJECTION MUST NOT BE
+     * REACHABLE FROM A HERMETIC TEST. `estimate`, `method` and `basis` are
+     * REQUIRED on the wire (register defect D23), and if the mock returned the
+     * buckets alone then every vitest in this repo would render invented
+     * settlement dates as if they were posted balances and pass — the screen
+     * would look finished and the disclosure would only be missing where nobody
+     * was watching. So the counts below are DERIVED from this store's own bills
+     * rather than stubbed, and `from_default_credit_days.bills` is non-zero on
+     * the seeded data on purpose: it is the figure that says how much of the
+     * answer is a constant compiled into the build talking.
+     *
+     * ⚠️ THE SIMPLIFICATIONS, STATED RATHER THAN HIDDEN — all in the direction
+     * of showing LESS than cored, never more (the D84 rule):
+     *   - `opening_cash` sums postings on Cash-in-Hand and bank-group ledgers up
+     *     to `as_on`. cored reads its own balance query; a company whose cash
+     *     sits in a custom group is right in cored and low here.
+     *   - the horizon and bucket width are cored's DEFAULTS (90 days, weekly),
+     *     because the client never sends anything else.
+     *   - `not_modelled` and `what_is_projected` are cored's sentences verbatim.
+     *     They are copied, not paraphrased: a screen test that pins a paraphrase
+     *     would go green while the real disclosure changed underneath it.
+     */
+    async cashFlow(companyID, asOn?: string): Promise<CashFlowResponse> {
+      const c = ensure(companyID);
+      const asOnDate = asOn || new Date().toISOString().slice(0, 10);
+      const DEFAULT_CREDIT_DAYS = 30;
+      const HORIZON = 90;
+      const BUCKET = 7;
+
+      // ---- opening cash, from the postings this store actually holds.
+      const cashLedgers = new Set(
+        c.ledgers
+          .filter(
+            (l) =>
+              l.group === "Cash-in-Hand" ||
+              BANK_PRIMARY_GROUPS.includes(l.group) ||
+              l.bankParentGroup != null,
+          )
+          .map((l) => l.name),
+      );
+      let openingUnits = 0n;
+      for (const v of c.vouchers) {
+        if (v.date > asOnDate) continue;
+        for (const pl of v.postings) {
+          if (!cashLedgers.has(pl.ledger)) continue;
+          const amt = mockMoneyToUnits(pl.amount);
+          openingUnits += pl.dr_cr.trim().toUpperCase().startsWith("D")
+            ? amt
+            : -amt;
+        }
+      }
+
+      // ---- the open bills, netted exactly as getOutstandings nets them:
+      // by (ledger_id, ref_name), ignoring ref_type, because that is what
+      // reporting.Outstandings does.
+      interface ProjBill {
+        units: bigint;
+        inflow: boolean;
+        settles: string;
+        source: "due" | "party" | "default";
+      }
+      const net = new Map<
+        string,
+        { ledgerID: string; units: bigint; due: string; inflow: boolean }
+      >();
+      for (const view of c.views.values()) {
+        for (const b of view.bill_allocations) {
+          const ledger = c.ledgers.find((l) => l.id === b.ledger_id);
+          if (!ledger) continue;
+          const inflow = ledger.group === "Sundry Debtors";
+          const outflow = ledger.group === "Sundry Creditors";
+          if (!inflow && !outflow) continue;
+          const signed =
+            b.dr_cr === "D"
+              ? mockMoneyToUnits(b.amount)
+              : -mockMoneyToUnits(b.amount);
+          const key = `${b.ledger_id} ${b.ref_name}`;
+          const cur =
+            net.get(key) ??
+            { ledgerID: b.ledger_id, units: 0n, due: "", inflow };
+          // Positive on the party's natural side, per direction.
+          cur.units += inflow ? signed : -signed;
+          if (b.due_date && (cur.due === "" || b.due_date < cur.due)) {
+            cur.due = b.due_date;
+          }
+          net.set(key, cur);
+        }
+      }
+
+      const bills: ProjBill[] = [];
+      for (const { ledgerID, units, due, inflow } of net.values()) {
+        if (units === 0n) continue; // a settled bill is not outstanding
+        const ledger = c.ledgers.find((l) => l.id === ledgerID);
+        // ⛔ THE THREE SOURCES, IN CORED'S OWN PRECEDENCE: an observed due date,
+        // else the party's configured credit period, else the build's constant.
+        // Collapsing the last two would hide exactly what `basis` discloses.
+        let settles: string;
+        let source: ProjBill["source"];
+        if (due !== "") {
+          settles = due;
+          source = "due";
+        } else if (ledger?.creditDays != null) {
+          settles = mockAddDays(asOnDate, ledger.creditDays);
+          source = "party";
+        } else {
+          settles = mockAddDays(asOnDate, DEFAULT_CREDIT_DAYS);
+          source = "default";
+        }
+        bills.push({ units, inflow, settles, source });
+      }
+
+      // ---- the buckets. `from` inclusive, `to` exclusive, weekly.
+      const zero = () => ({ in: 0n, out: 0n });
+      // ⛔ `ceil`, NOT a plain divide. 90/7 is 12.857 and `Array.from` floors a
+      // fractional length to TWELVE buckets, silently dropping the last partial
+      // week — cored answers THIRTEEN (measured: 13 buckets for the default
+      // horizon), so a floor here would make the mock and the server disagree
+      // about how far the projection reaches, in the direction that hides money.
+      const buckets = Array.from({ length: Math.ceil(HORIZON / BUCKET) }, (_, i) => ({
+        from: mockAddDays(asOnDate, i * BUCKET),
+        to: mockAddDays(asOnDate, (i + 1) * BUCKET),
+        ...zero(),
+      }));
+      const beyond = zero();
+      const basisCounts = {
+        due: { bills: 0, ...zero() },
+        party: { bills: 0, ...zero() },
+        default: { bills: 0, ...zero() },
+      };
+      const overdue = { bills: 0, ...zero() };
+      let anyOverdue = false;
+
+      for (const b of bills) {
+        const abs = b.units < 0n ? -b.units : b.units;
+        const add = (t: { in: bigint; out: bigint }) => {
+          if (b.inflow) t.in += abs;
+          else t.out += abs;
+        };
+        const bc = basisCounts[b.source];
+        bc.bills += 1;
+        add(bc);
+        // OVERDUE FOLDS INTO BUCKET 1, exactly as cored does — a bill already
+        // late is cash the business is waiting on now, not cash that never
+        // arrives. Dropping it would flatter the projection.
+        if (b.settles < asOnDate) {
+          anyOverdue = true;
+          overdue.bills += 1;
+          add(overdue);
+          // `first` is only undefined for a zero-bucket horizon, which cannot
+          // arise from the constants above — but it is checked rather than
+          // asserted, because a `!` here would crash the screen instead of
+          // showing a short projection if the horizon ever became configurable.
+          const first = buckets[0];
+          if (first) add(first);
+          continue;
+        }
+        const target = buckets.find((k) => b.settles >= k.from && b.settles < k.to);
+        if (target) add(target);
+        else add(beyond);
+      }
+
+      let running = openingUnits;
+      const wireBuckets = buckets.map((k) => {
+        const open = running;
+        const nett = k.in - k.out;
+        running = open + nett;
+        return {
+          from: k.from,
+          to: k.to,
+          inflow: mockUnitsToMoney(k.in),
+          outflow: mockUnitsToMoney(k.out),
+          nett: mockUnitsToMoney(nett),
+          opening_cash: mockUnitsToMoney(open),
+          closing_cash: mockUnitsToMoney(running),
+        };
+      });
+      const count = (x: { bills: number; in: bigint; out: bigint }) => ({
+        bills: x.bills,
+        inflow: mockUnitsToMoney(x.in),
+        outflow: mockUnitsToMoney(x.out),
+      });
+
+      return {
+        as_on: asOnDate,
+        horizon_days: HORIZON,
+        bucket_days: BUCKET,
+        opening_cash: mockUnitsToMoney(openingUnits),
+        buckets: wireBuckets,
+        beyond_horizon: {
+          inflow: mockUnitsToMoney(beyond.in),
+          outflow: mockUnitsToMoney(beyond.out),
+          nett: mockUnitsToMoney(beyond.in - beyond.out),
+        },
+        overdue_folded_into_first_bucket: anyOverdue,
+        estimate: true,
+        method:
+          "open-bill settlement projection (deterministic; no statistics, no model)",
+        basis: {
+          what_is_projected:
+            "the DATE each open bill settles, not its amount. Amounts are the " +
+            "pending balances the Outstandings report shows; the bucket a bill " +
+            "falls into is derived.",
+          assumed_settlement_date: {
+            from_due_date: count(basisCounts.due),
+            from_party_credit_days: count(basisCounts.party),
+            from_default_credit_days: count(basisCounts.default),
+            default_credit_days: DEFAULT_CREDIT_DAYS,
+          },
+          overdue_folded_into_first_bucket: count(overdue),
+          not_modelled: [
+            "vouchers not yet entered \u2014 this reads the books, not the business",
+            "part payments arriving earlier or later than the projected date",
+            "bills raised after as_on",
+            "cash movements with no bill behind them (salaries, rent, taxes, drawings)",
+          ],
+        },
+      };
+    },
+
+    /**
+     * THE ANOMALY LIST — and it answers EMPTY, deliberately, with the reason
+     * written down.
+     *
+     * ⛔ ALL FOUR OF CORED'S RULES NEED SOMETHING THIS STORE DOES NOT KEEP, AND
+     * INVENTING A FIFTH RULE HERE WOULD BE WORSE THAN ANSWERING NOTHING.
+     * BACKDATED, AFTER_HOURS and EDIT_BURST all key on `created_at` per voucher
+     * VERSION — the "when was it entered" axis — and this store keeps no version
+     * chain with entry timestamps. ROUND_AMOUNT keys on `taxable_value`, which is
+     * the GST base and NOT the voucher total; substituting the total would flag a
+     * different set of vouchers and a hermetic test pinning it would be pinning a
+     * rule cored does not have. That is the D84 defect exactly: a mock that is
+     * DIFFERENT from cored is a source of false green, and "different" includes
+     * being cleverer.
+     *
+     * So: `from`/`to` are echoed (the screen's heading reads them, and empty
+     * means UNBOUNDED, not today), the list is empty, and a screen test that
+     * needs findings injects them through a stub client. ⛔ THE ORACLE FOR A
+     * POPULATED LIST IS THE BROWSER AGAINST CORED — never this arm.
+     */
+    async anomalies(
+      companyID,
+      from?: string,
+      to?: string,
+    ): Promise<AnomaliesResponse> {
+      ensure(companyID);
+      return { from: from ?? "", to: to ?? "", findings: [] };
     },
   };
 }

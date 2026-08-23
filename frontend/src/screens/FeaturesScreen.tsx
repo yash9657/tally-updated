@@ -347,11 +347,26 @@ const FEATURES: {
         state: "on",
         note: "Gateway > Query. Natural language compiles to a closed query DSL, then to parameterized, read-only, tenant-scoped SQL.",
       },
+      /**
+       * ⛔ ONE ROW BECAME TWO, AND THE SPLIT IS THE HONEST PART.
+       *
+       * This was a single row reading "Cash-flow projection and anomaly
+       * detection", state `on`, with a note that named NO DOOR while both of its
+       * neighbours above named theirs — and there was no door to name. cored had
+       * served both routes for a whole wave with no screen behind either
+       * (register defects D22 and D52). Two names now exist because the PDP
+       * decides on the report NAME: a projection about money and a control
+       * surface listing who keyed what irregularly are two different authorities,
+       * and one row implying one feature hid that.
+       */
       {
-        name: "Cash-flow projection and anomaly detection",
+        name: "Cash-flow projection",
         state: "on",
-        note: "Deterministic projection + rule-based anomalies, with an optional statistical forecast.",
-      },
+        note: "Alt+G > Cash Flow, or under Display More Reports. ⛔ IT IS AN ESTIMATE AND THE SCREEN SAYS SO, IN ITS OWN RIGHT AND NOT IN A FOOTNOTE. What is projected is the DATE each open bill settles, never its amount: the amounts are the same pending balances the Outstandings report shows, and the bucket a bill lands in is derived. A settlement date comes from the bill's own due date where it has one, else the party's credit period, else a 30-DAY CONVENTION COMPILED INTO THIS BUILD THAT NO TENANT AGREED TO — and the screen reports how many bills and how much money sat on each of those three sources separately, because a single 'assumed' total would hide the one worth doubting. Bills already overdue are folded into the first bucket, with their money named, because they are owed now rather than because a date says they arrive then. What it does NOT model is on the page verbatim: vouchers not yet entered, part payments, bills raised after the date, and every cash movement with no bill behind it — salaries, rent, taxes, drawings. So it is a projection of the BOOKS, not of the business. F2 sets the date it runs from; the 90-day horizon and the weekly buckets are the server's and there is deliberately no keyboard control for them. Alt+E exports it WITH the disclosure written into the file, because a spreadsheet of fixed-4 figures read away from this screen is exactly where a projection gets mistaken for a statement of account. Ctrl+P answers 501: a printed bucket table on company stationery needs the disclosure designed into the layout, and that layout is unwritten."},
+      {
+        name: "Anomaly detection",
+        state: "on",
+        note: "Alt+G > Anomalies, or under Display More Reports. FOUR RULES OVER THE VERSION CHAIN, and every one of them keys on WHEN A VOUCHER WAS ENTERED rather than the period it accounts for — which is the only axis on which any of this means anything: backdated (dated more than 7 days before it was keyed), entered outside 07:00-22:00 IST, three or more edits to one voucher inside 24 hours, and a taxable value at or above 10,000 that is an exact multiple of 1,000. A FINDING IS NOT AN ERROR AND NOT AN ACCUSATION — the whole design is that a human reads it, so the screen offers no remedy, never uses the word error, and renders the server's own kind, severity and detail verbatim rather than re-wording them into a verdict. One voucher can carry several findings at once. F2 bounds the window on entry time; leaving it unbounded means every finding in the books. ⚠️ UNLIKE EVERY OTHER SENSITIVE REPORT IN THIS PRODUCT THIS ONE HAS NO ACL COUNTERWEIGHT: the Stock Summary (migration 0026), the TDS/TCS register (0068), the bank statement (0063), the cost reports (0072) and both order books (0073) are each taken back from the seeded Data Entry level by an explicit rule, because 0011 grants a coarse `allow display report` that matches ANY report name. Nothing narrows this one, so a Data Entry operator can read the list of irregular entries — including their own. That predates this screen (the route has been open since wave 2), it is a POLICY question rather than a defect in the report, and it is registered rather than silently decided. Ctrl+P answers 501; Alt+E exports the findings with the voucher id in its own column."},
     ],
   },
   {
@@ -426,8 +441,16 @@ const FEATURES: {
         state: "on",
         note:
           "Alt+E writes the report ON SCREEN to a file, from the SAME rows the screen rendered — " +
-          "all NINE reports in the Alt+G list, the two cost summaries, the Stock Summary, the " +
-          "TDS/TCS register, both order books, and a drilled-down level. F12 > \"Export (Alt+E) " +
+          // ⛔ THE COUNT MOVED AND THE ENUMERATION WAS ALREADY DOUBLE-COUNTING.
+          // "NINE reports in the Alt+G list" became ELEVEN when Cash Flow and the
+          // anomaly list got their doors — and the four items listed after it
+          // (Stock Summary, the TDS/TCS register, both order books) were ALREADY
+          // members of that same list, so the sentence counted them twice. Stating
+          // the list once and naming only what is genuinely outside it is both
+          // shorter and true.
+          "all ELEVEN reports in the Alt+G list (Cash Flow and the anomaly list " +
+          "included), plus the two cost summaries and a drilled-down level. " +
+          "F12 > \"Export (Alt+E) " +
           "as Excel XML instead of CSV\" switches format. " +
           "⛔ MONEY IS WRITTEN AS THE EXACT WIRE VALUE, NOT AS THE FORMATTED STRING ON SCREEN, " +
           "and that is the whole point of the feature: a display string has been rounded for a " +

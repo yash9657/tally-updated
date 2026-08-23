@@ -35,6 +35,10 @@ import {
   SalesOrderBookScreen,
   PurchaseOrderBookScreen,
 } from "../screens/reports/OrderBookScreens";
+import {
+  CashFlowScreen,
+  AnomaliesScreen,
+} from "../screens/reports/ForecastScreens";
 import { REPORT_NAMES } from "../keystroke/types";
 import { GOTO_ENTRIES } from "../keystroke/navMachine";
 import type { ScreenComponent, ScreenComponentProps } from "./screenRegistry";
@@ -320,5 +324,25 @@ export function createDefaultRegistry(): ScreenRegistry {
     // we owe suppliers" an unwritable rule.
     "report:Sales Order Book": SalesOrderBookScreen,
     "report:Purchase Order Book": PurchaseOrderBookScreen,
+    // ---- THE FORECAST PLANE (wave-2 WS5a). Registered BY NAME for the same
+    // reason as the order books: cored genuinely serves them as `report:cash-flow`
+    // and `report:anomalies`, and both are pure readers with a date dimension and
+    // no form — which is what a `report` frame is.
+    //
+    // ⛔ THESE TWO LINES ARE THE DOOR. Both routes have been live on the server
+    // since wave 2 with no Gateway entry, no Go To entry and no screen, while F11
+    // advertised the capability as `on` — register defects D22 and D52. A report
+    // NAME without a component here does not fail loudly: it falls through to
+    // `UnwiredReportScreen`, so the name and the screen must land together or
+    // Alt+G leads somewhere worse than nowhere.
+    //
+    // ⚠️ NEITHER HAS AN ACL COUNTERWEIGHT MIGRATION. Unlike the order books (0073)
+    // and the Stock Summary (0026), nothing narrows `report:cash-flow` or
+    // `report:anomalies`, so 0011's coarse `allow display report` grants both to
+    // the seeded Data Entry level. For the anomaly list — every backdated,
+    // after-hours and round-amount voucher, by number — that is a policy question,
+    // it predates this door, and it is registered rather than decided here.
+    "report:Cash Flow": CashFlowScreen,
+    "report:Anomalies": AnomaliesScreen,
   });
 }
