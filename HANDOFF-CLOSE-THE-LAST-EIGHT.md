@@ -5,9 +5,17 @@ D91, D92 and D93** along the way. This **supersedes `HANDOFF-THE-LAST-TWELVE.md`
 0–3 are done. It is the DRIVER: what to do next, in what order, what proves it, what will go wrong.
 Execute it top to bottom.
 
+> ⚠️ **THE FILENAME SAYS EIGHT AND THERE ARE NOW NINE, AND THE FILENAME IS KEPT ON PURPOSE** — six other
+> documents point at it by name and a rename costs more than the arithmetic is worth. **L16 position 0
+> ran (§2): the four `PARTIAL` rows are resolved, no product code changed, and D13's hidden build is now
+> row D94.** ⛔ **Position 0 was worth doing exactly as the driver claimed** — it closed two rows that
+> had been done for two waves, settled a third against a residue already tracked, **scoped D81 down to
+> two named halves with two working shapes to copy**, and turned up a HIGH parity gap nobody had written
+> down. **Start at position 1.**
+
 ## ⛔ THE COUNT, RE-DERIVED BY PARSING §7.1 — NOT COPIED FROM A HEADER
 
-**93 registered · 81 CLOSED · 8 OPEN · 4 PARTIAL.** `81 + 4 + 8 = 93`.
+**94 registered · 85 CLOSED · 9 OPEN · 0 PARTIAL.** `85 + 9 = 94`. (Was `93 · 81 · 8 · 4` before L16 position 0.)
 
 ```bash
 python3 - <<'PY'
@@ -19,7 +27,11 @@ c=collections.Counter(); rows={}
 for l in s[a:b]:
     m=re.match(r'^\| \*?\*?(D\d+)\*?\*? \|', l)
     if m:
-        st="CLOSED" if "✅" in l else "PARTIAL" if "PARTIAL" in l else "OPEN" if "OPEN" in l else "?"
+        # ⛔ THE STATUS IS THE LAST CELL. Never scan the whole LINE — see below.
+        cells=[x.strip() for x in l.strip().strip("|").split(" | ")]
+        st_cell=cells[-1]
+        st=("CLOSED" if "✅" in st_cell else "PARTIAL" if "PARTIAL" in st_cell
+            else "OPEN" if "OPEN" in st_cell else "?")
         c[st]+=1; rows[m.group(1)]=st
 print(c, "total", sum(c.values()))
 print("OPEN   :", " · ".join(k for k,v in rows.items() if v=="OPEN"))
@@ -27,17 +39,28 @@ print("PARTIAL:", " · ".join(k for k,v in rows.items() if v=="PARTIAL"))
 PY
 ```
 
-⚠️ **CHECK `✅` BEFORE `OPEN`, IN THAT ORDER.** Several CLOSED rows contain the word "OPEN" in their
-prose (D28 and D84 both do), so a naive `"OPEN" in line` test reports 10. The snippet above is
-correct; a hand-rolled one usually is not.
+⛔⛔ **THE SNIPPET ABOVE READS THE STATUS COLUMN, NOT THE LINE, AND THE PREVIOUS ONE DID NOT.**
+Several CLOSED rows contain the word "OPEN" in their prose (D28 and D84 both do), so a naive
+`"OPEN" in line` test reports 10 — that trap was already documented. **L16 was then bitten by the SAME
+defect from the other side:** the newly-registered D94's prose contained the word "PARTIAL", so the old
+snippet filed the register's newest OPEN row as PARTIAL. **The act of registering a row broke the tool
+that counts rows.** Reading the last cell fixes both directions at once.
+⚠️ **VALIDATE A PARSER CHANGE BY RE-DERIVING THE OLD NUMBER FROM THE OLD FILE** —
+`python3 count.py HEAD~1:HANDOFF-PARITY-AUDIT.md` must still print `93 · 81 · 8 · 4`. A parser that
+cannot reproduce the previous count is a redefinition wearing a fix's clothes.
+⚠️ And it prints a `?` bucket: a row whose status cell matches nothing must be seen, not silently
+dropped into a total that still looks plausible.
 
-**OPEN (8):** D8 · D22 · D49 · D52 · D81 · D83 · D85 · D86
-**PARTIAL (4):** D13 · D15 · D17 · D48 — see §0, and do them FIRST this time.
+**OPEN (9):** D8 · D22 · D49 · D52 · D81 · D83 · D85 · D86 · **D94**
+**PARTIAL: none.** ✅ **L16 position 0 resolved all four** (D13 · D15 · D17 · D48 — see §2) **and the
+count went UP, which is the right outcome:** D17 and D48 had been closed for two waves and never
+re-marked, D15's residue was already tracked in §7.3 B, and **D13 was hiding a build that is now
+row D94.**
 
 ⚠️ **THE OPEN COUNT FELL BY FOUR WHILE SEVEN ROWS CLOSED**, because three of the seven were rows
-nobody had written down. **That is the normal shape of this phase.** Do not read "8 open" as "8 lanes
-of work left" — read it as "8 known, plus whatever measuring turns up." L15 found one new row for
-every row it was sent to fix.
+nobody had written down. **That is the normal shape of this phase.** Do not read "9 open" as "9 lanes
+of work left" — read it as "9 known, plus whatever measuring turns up." L15 found one new row for
+every row it was sent to fix; **L16 position 0 changed no product code at all and still added one.**
 
 ---
 
@@ -82,7 +105,7 @@ build, and **D48 scopes D81 (position 2)** so doing it later means doing D81 twi
 
 | # | Row(s) | Sev | Why here |
 |---|---|---|---|
-| **0** | **D13 · D15 · D17 · D48** | — | ⛔ **A READ, NOT A BUILD.** Settles what "finished" means, and **D48 decides how big D81 is.** ~40 minutes for all four. §2. |
+| ~~0~~ | ~~D13 · D15 · D17 · D48~~ | — | ✅ **DONE 2026-08-23 (L16).** All four resolved, no product code changed, **D94 registered** out of D13, and **D81 is now scoped** — see §2 for each verdict. |
 | 1 | **D22 + D52** | HIGH | **ONE commit** — a door without the sentence, or the sentence without the door, is each worse than today |
 | 2 | **D81** | MED | ⛔ **BIGGER THAN THE ROW SAYS — L15 added a second half to it.** Do after D48 (§2) says what remains. |
 | 3 | **D49** | MED | largest scope of the wave. **Before D85**, so D85 lands on the final transport |
@@ -90,27 +113,46 @@ build, and **D48 scopes D81 (position 2)** so doing it later means doing D81 twi
 | 5 | **D8** | HIGH | ⛔ **moves the BALANCE SHEET.** ALONE, with a release note |
 | 6 | **D86** | MED | **moves Outstandings** and inverts a Go test by design. ALONE |
 | 7 | **D83** | LOW | ⛔ the register's proposed index **WILL NOT WORK.** Last |
+| **8** | **D94** | HIGH | ⛔ **NEW, out of D13 (§2).** The payables ageing report has **no door**: the server serves it, nothing can ask for it. ⚠️ **AFTER D86** — both move the Outstandings report. §3 row 8. |
 
 **Must be ONE commit:** D22+D52. **Must be ALONE:** D85, D8, D86, D83.
+⚠️ **Must be SERIALISED:** **D86 then D94** — both move the Outstandings report, D86 in three places at
+once. Whichever lands second rebases on the first.
 **Nothing is waiting on the user.** All four §6 questions were answered 2026-08-22.
+⚠️ **D94 IS THE ONLY ROW IN THE WAVE THE USER HAS NOT SEEN.** It is a plain parity gap with an
+established in-repo pattern (the Order Book), so it needs no decision — but say so when reporting,
+rather than letting a new HIGH row appear in a list they thought was closing.
 
 ---
 
-## 2. POSITION 0 — THE FOUR `PARTIAL` ROWS. DO THESE FIRST.
+## 2. ✅ POSITION 0 — DONE 2026-08-23 (L16). ALL FOUR RESOLVED, ONE NEW ROW.
 
-They have been counted as CLOSED by every session since F6/F8 and **their status is genuinely
-ambiguous**. Each is a ten-minute read.
+**No product code changed.** Four rows counted as CLOSED by every session since F6/F8 while the table
+said `PARTIAL`; one of them was scoping the next lane. Full record in `HANDOFF-PARITY-AUDIT.md` §7.5,
+entry **L16 position 0**.
 
-| Row | Sev | What is definitely done | ⛔ THE QUESTION TO ANSWER |
-|---|---|---|---|
-| **D48** | MED | — | ⛔ **DO THIS ONE FIRST OF THE FOUR.** It is the orphan-master-on-failed-accept defect **on the DRAFT path**, and D81's row says the draft path already discloses its orphans via `DraftAcceptFailedError`. **If that is true, D48 is CLOSED and D81 is the surviving half — which is what position 2 needs to know before it starts.** |
-| **D17** | HIGH | §7.4 records bill-wise references reaching the wire, driven | **This may simply be CLOSED and never re-marked.** Verify against `draftBodyToVoucherRequest` at HEAD, then close it or state what remains. |
-| **D15** | HIGH | the claim→post→confirm reorder closed the race it was built for (two browsers 13ms apart → ONE voucher) | Is the residue exactly **§7.3 B** (the durable pending-confirm retry)? If so, say so in the row and stop calling it PARTIAL — the open work is already tracked in §8. |
-| **D13** | HIGH | the per-bill receivables breakdown is on screen and exported, driven | The **PAYABLE side** is missing, and it is deliberately NOT a `?kind=` toggle: two directions must be two report NAMES, because **the PDP decides on the report name and a query parameter is invisible to it**. Needs a `Payables` report name + server resource + migration. ⛔ **THIS IS A BUILD. Register it as its own row and stop calling D13 partial** — otherwise "the register is finished" will be claimed with a feature missing. |
+| Row | Verdict | What settled it |
+|---|---|---|
+| **D48** | ✅ **CLOSED** | The draft path discloses orphans via `DraftAcceptFailedError`, naming the minted masters in a sentence — **and goes further than the row asked:** L15's posting claim is taken BEFORE `resolveDraftLedgers` *deliberately for this row's reason*, so a race loser mints nothing at all. ⛔ **This was the scoping question and the answer is yes** — see §3 row 2. |
+| **D17** | ✅ **CLOSED — for two waves, never re-marked** | `draftBodyToVoucherRequest` takes `billAllocations` **and `postDraftBody` passes them** (`draftBillAllocations(resolved, refs)`). **The call site is the half that matters:** a converter nobody calls with refs is the same defect wearing a fix. `draftAccept.test.ts` **56/56** at HEAD, guarding both directions — the `not.toHaveProperty` arm is what stops a fix that always emits the key. |
+| **D15** | ✅ **CLOSED, residue tracked** | Five layers. ⚠️ **The driver's guess — "the residue is exactly §7.3 B" — was not quite right.** §7.3 B is the CONFIRM, *after* the money moved (`recordAcceptance` fires `.catch(report)` un-awaited, still only `console.warn`). The other residue is at the CLAIM, *before* the write: **four windows enumerated in full at the code site**, each stating its cost and why the alternative is worse. **§7.3 B is unfinished work; those four are finished decisions.** That distinction is why the row could close. |
+| **D13** | ✅ **CLOSED (breakdown half) → ⛔ D94 (payables)** | The breakdown renders `p.bills`. The payable side is a **build**, now registered. §3 row 8. |
 
-⚠️ **RESOLVING THESE MAY RAISE THE OPEN COUNT.** D13 becoming a row of its own is the likely outcome
-and it is the correct one. A count that goes up because a hidden build was written down is a better
-count.
+### ⛔ THE FINDING — A WHOLE REPORTING DIRECTION IS LIVE ON THE WIRE WITH NO DOOR
+Measured, not inferred: `GET /outstandings?kind=PAYABLE` → **200 · total 1,04,050.0000 · 2 creditors ·
+4 bills**, each with its per-bill array. `?kind=payable` accepted; `?kind=BOTH` refused **400**. **Every
+supplier bill the business owes is being served right now and the app cannot ask for it.** That is D94.
+
+### ✅ §5.1 HELD — AND THE CLAIM SURVIVED, WHICH IS ALSO A RESULT
+The register said "the server serves both". Three sessions running, ten minutes of `curl` had overturned
+such a claim, **so it was fired at the server rather than trusted — and it was right.** ⚠️ The rule is
+not "the recon is always wrong" (§5.2 is the counterweight); it is **"an unfired claim has no status."**
+Firing it also bought the row its real scope: a NAME, an ACL migration and a screen — **not** a query
+parameter, and **not** the server work the row might have implied.
+
+### ⛔ AND REGISTERING THE ROW BROKE THE TOOL THAT COUNTS ROWS — see §0
+D94's prose contained the word "PARTIAL" and the old snippet filed it as PARTIAL. **The parser now reads
+the status COLUMN, and was validated by re-deriving `93 · 81 · 8 · 4` from the previous commit.**
 
 ---
 
@@ -148,8 +190,16 @@ discards everything keyed — which is why D47 exists at all. **So the product n
 different ways, and it is the same seam:** a server refusal leaves the operator holding nothing, both
 in the books (orphan masters) and on the screen (lost keying). Measured 2026-08-22 by
 `drive-l15f-d90.mjs`, which asserts the pop as KNOWN and points here.
-⛔ **Check D48 first (§2).** If the draft path is genuinely covered, this row is exactly the two
-halves above and nothing else.
+✅ **D48 IS CHECKED AND CLOSED (§2), SO THIS ROW IS EXACTLY THE TWO HALVES ABOVE AND NOTHING ELSE.**
+⛔ **AND IT HANDS YOU TWO WORKING SHAPES INSTEAD OF A DESIGN TO INVENT:** (a) `DraftAcceptFailedError`'s
+naming sentence — what the row asks for — and (b) ⛔ **the claim-before-ledger-create ORDERING, which is
+the STRONGER of the two and is the one to reach for first.** Disclosure explains an orphan to the
+operator; **ordering means there is no orphan to explain.** The draft path took the trouble to do both,
+and its comment says why the ordering is not optional: *"A claim taken after it would mean the loser of a
+race still left orphan masters behind for a bill it never posted."*
+⚠️ **The voucher path has no claim to take** — there is no draft to reserve — so (b) does not transplant
+directly. What transplants is the QUESTION: **what can this path check BEFORE it mints anything?** A
+back-dated cutoff and an ACL refusal are both knowable without writing a master.
 **ORACLE:** provoke a REAL server refusal (a back-dated cutoff is easiest; a duplicate master name is
 now easier still — see D90) and the screen NAMES the masters it minted **and keeps the operator's
 work**.
@@ -217,6 +267,40 @@ test before designing this row:** it is the same shape (an application check tha
 authority) and it names the trap.
 **ORACLE:** two simultaneous posts of the same bill number on one party — one succeeds, one is
 refused. On the wire; there is no mock equivalent for concurrency, and the mock says so at the method.
+
+---
+
+### 8 · D94 — the payables ageing report has NO DOOR · ⛔ NEW 2026-08-23, out of D13 · AFTER D86
+⛔ **THE SERVER ALREADY SERVES IT AND NOTHING IN THE PRODUCT CAN ASK.** Measured on the wire against a
+binary verified fresh by symbol: `?kind=PAYABLE` → **200 · 1,04,050.0000 · 2 creditors · 4 bills**, full
+per-bill arrays; `?kind=BOTH` → **400**. The client builds `const query: { as_on?: string } = {}` and
+`kind` is never a member. **One report name, one screen, one PDP resource.**
+⛔ **IT IS NOT A `?kind=` TOGGLE, AND THAT IS THE ENTIRE REASON IT IS A ROW.** `routeAction` maps the flat
+literal path `/outstandings` → `"outstandings"`, so **the PDP decides on the NAME and a query parameter is
+invisible to it.** A toggle would make *"the sales clerk may see what customers owe us but not what we owe
+suppliers"* an **unwritable rule** — and those two lists belong to two different jobs.
+⛔ **AND A NEW REPORT NAME ARRIVES PRE-GRANTED.** Migration 0011 seeds Data Entry a coarse
+`allow display report` that matches ANY `report:NAME` at specificity 1, so **the refusal is the thing that
+must be written**, not the grant. Without the migration, every seeded Data Entry operator can read the
+payables book the moment the route exists.
+**THE BUILD — `0073_order_book_acl.sql` is the template end to end, and its header is the argument:**
+(1) a second FLAT LITERAL route beside `/outstandings` — **additive, so no existing `acl_rule` row is
+invalidated**; (2) its `routeAction` arm; (3) the name in `authz.KnownReportNames`; (4) the printed form
+(`printOutstandings` already parses `kind`, and `outstandingKindParam` is SHARED with the JSON handler on
+purpose); (5) **migration 0076** — `disallow display` **and** `disallow print`, **no allow seeded**,
+⛔ **derived from `0073`'s body, the highest-numbered restatement of `seed_company_auth_defaults`
+(confirmed 2026-08-23), carrying all THIRTEEN existing `PERFORM`s plus the new one** — a body installed
+lower silently loses rules on every fresh database, which is the defect `0071` exists to repair, and
+`migrations/seeder_census_test.go` guards it statically; (6) the client: the report name, the screen
+registration, and the screen sending `kind`.
+**ORACLE:** a keyboard path reaches the payables ageing in a browser and the figures match
+`?kind=PAYABLE` on the wire; **and the PDP oracle that is the whole point of the row** — a level with
+`disallow display report:<payables-name>` is refused it **while still being allowed the receivables
+book**. That second arm is the one a `?kind=` toggle could never pass.
+⚠️ **`?kind=` MUST KEEP WORKING** on the existing route: `printOutstandings` and the NLQ surface
+(`whitelist.go`'s `EntityOutstandings`, whose `nature` filter already answers both directions) depend on
+it. **This row adds a NAME; it does not remove a parameter.**
+⚠️ **AFTER D86**, which moves this report's `as_on` bounding in three places at once.
 
 ---
 
