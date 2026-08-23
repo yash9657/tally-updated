@@ -1,3 +1,14 @@
+# ⛔ SUPERSEDED 2026-08-23 by `HANDOFF-CLOSE-THE-LAST-EIGHT.md` — DO NOT DRIVE FROM THIS FILE
+
+Positions **0–3 are DONE**: D91, D5+D43, D87 and D90 all closed in L15, which also found and closed
+**D92** and **D93**. Its §4 trap list has been carried forward IN FULL (and extended) into §5 of the
+new driver, so nothing is lost by reading that one instead.
+
+**Kept for its per-row detail on the rows still open** — but ⚠️ its §1 order table, its count and its
+`FeaturesScreen.tsx` line numbers are all stale. The new driver re-derives every one of them.
+
+---
+
 # HANDOFF — THE LAST TWELVE: the register's remaining rows, in order, with the oracle for each
 
 Written 2026-08-22, after L14/b/c/d closed **D82, D77, D80 and D84**, found and fixed **D89**, and
