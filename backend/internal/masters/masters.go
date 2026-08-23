@@ -346,9 +346,24 @@ var ErrMasterNameTaken = errors.New("masters: that name is already in use")
 type MasterNameTaken struct {
 	Kind string // "ledger", "group", "unit", "stock item", "voucher type"
 	Name string
+	// Existing is the name ALREADY STORED, when it differs from Name.
+	//
+	// ⛔ IT EXISTS BECAUSE THE COLLISION IS NO LONGER BYTE-EXACT (D90).
+	// Uniqueness is now case-insensitive and whitespace-trimmed, so an operator
+	// who types "acme traders" collides with a stored "Acme Traders" — and a
+	// message quoting only what THEY typed reads as a lie: they can see there is
+	// no "acme traders" in the picker. Naming the stored master is what turns
+	// the refusal into an instruction.
+	Existing string
 }
 
 func (e *MasterNameTaken) Error() string {
+	if e.Existing != "" && e.Existing != e.Name {
+		return fmt.Sprintf(
+			"masters: this company already has a %s named %q, which is the same name as %q "+
+				"apart from capitalisation or surrounding spaces — use the existing one",
+			e.Kind, e.Existing, e.Name)
+	}
 	return fmt.Sprintf("masters: this company already has a %s named %q", e.Kind, e.Name)
 }
 
@@ -367,6 +382,67 @@ func nameTaken(err error, constraint, kind, name, context string) error {
 		return &MasterNameTaken{Kind: kind, Name: name}
 	}
 	return fmt.Errorf("masters: %s: %w", context, err)
+}
+
+// refuseIfNameTaken looks the name up BEFORE the INSERT and refuses with the
+// STORED name when one collides under the normalised rule (D90, migration
+// 0075).
+//
+// ⛔⛔ IT RUNS BEFORE THE INSERT, AND THAT ORDER IS NOT A STYLE CHOICE.
+// The obvious shape is to let the unique index fire and then read the stored
+// name to build the message. It does not work: by then the transaction is in a
+// FAILED state, and Postgres rejects every further query in it with
+// "current transaction is aborted". The first version of this did exactly that
+// and every refusal silently fell back to quoting the caller's own text —
+// measured on the wire, where an operator who typed "d90x ..." was told they
+// already had a stock item named "d90x ...", which they can see they do not.
+//
+// ⚠️ THE UNIQUE INDEX IS STILL THE AUTHORITY AND STILL RUNS. This check races:
+// two concurrent creates of the same name both pass it and one is refused by
+// the index, with the plainer message. That is the correct trade — the common
+// case gets a sentence naming the master the operator actually has, and the
+// rare case gets a correct refusal with a vaguer sentence. A pre-check that
+// REPLACED the constraint would be the D83 defect by construction.
+//
+// #nosec G201 -- table and column are compile-time literals from this file's
+// own call sites, never caller input.
+func refuseIfNameTaken(
+	ctx context.Context, tx pgx.Tx, kind, name, table, column string,
+) error {
+	companyID, ok := db.CompanyFromContext(ctx)
+	if !ok {
+		return db.ErrNoCompany
+	}
+	var existing string
+	err := tx.QueryRow(ctx,
+		`SELECT `+column+` FROM `+table+
+			` WHERE company_id = $1 AND lower(btrim(`+column+`)) = lower(btrim($2))`,
+		companyID, name).Scan(&existing)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return nil
+	case err != nil:
+		return fmt.Errorf("masters: check %s name: %w", kind, err)
+	}
+	return &MasterNameTaken{Kind: kind, Name: name, Existing: existing}
+}
+
+// nameTakenNormalised is nameTaken for the three masters whose uniqueness is
+// NORMALISED. It is the BACKSTOP behind refuseIfNameTaken — reached only when
+// two creates race — so its message cannot name the stored master (see above).
+//
+// ⛔ THE CONSTRAINT NAME IT IS GIVEN MUST BE THE INDEX 0075 CREATES, NOT THE
+// CONSTRAINT IT DROPPED. `isUniqueViolationOn` compares the name EXACTLY, so a
+// stale name here does not loosen the refusal — the database still refuses —
+// it makes the refusal come out as a raw wrapped driver error instead of a
+// sentence. That is register row D93's exact shape, one migration away at all
+// times, and it is why the sentence is asserted in a test rather than the
+// status code.
+func nameTakenNormalised(err error, constraint, kind, name, context_ string) error {
+	if isUniqueViolationOn(err, constraint) {
+		return &MasterNameTaken{Kind: kind, Name: name}
+	}
+	return fmt.Errorf("masters: %s: %w", context_, err)
 }
 
 // CreateLedger creates a ledger under the named group and appends a
@@ -468,6 +544,12 @@ func (s *Service) CreateLedger(ctx context.Context, l Ledger, createdBy string) 
 		// fourth way of spelling absent. Dropping them from this column list is
 		// what made every tax invoice unprintable — see the Ledger.Address
 		// comment and TestAPartyWithNoAddressOnFileIsATaxInvoiceThatCannotBeIssued.
+		// D90: refuse a NORMALISED collision here, so the message can name
+		// the master the operator actually has. The unique index behind it
+		// is still the authority and still catches a race.
+		if err := refuseIfNameTaken(ctx, tx, "ledger", l.Name, "ledger", "name"); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO ledger
 			   (id, company_id, name, group_id, opening_balance, opening_dc,
@@ -484,7 +566,8 @@ func (s *Service) CreateLedger(ctx context.Context, l Ledger, createdBy string) 
 			l.PAN, l.CreditDays, l.Address, l.City, l.PIN,
 			l.BankAccountNumber, strings.ToUpper(strings.TrimSpace(l.BankIFSC)),
 		); err != nil {
-			return nameTaken(err, "ledger_company_id_name_key", "ledger", l.Name, "insert ledger")
+			return nameTakenNormalised(err,
+				"ledger_company_name_normalised", "ledger", l.Name, "insert ledger")
 		}
 		for _, b := range l.OpeningBills {
 			billID, err := uuid.NewV7()
@@ -827,12 +910,19 @@ func (s *Service) CreateUnit(ctx context.Context, u Unit, createdBy string) (uui
 		return uuid.Nil, fmt.Errorf("masters: new unit id: %w", err)
 	}
 	err = s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		// D90: refuse a NORMALISED collision here, so the message can name
+		// the master the operator actually has. The unique index behind it
+		// is still the authority and still catches a race.
+		if err := refuseIfNameTaken(ctx, tx, "unit", u.Symbol, "unit", "symbol"); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO unit (id, company_id, symbol, formal_name, decimal_places)
 			 VALUES ($1, $2, $3, $4, $5)`,
 			id, companyID, u.Symbol, u.FormalName, u.DecimalPlaces,
 		); err != nil {
-			return nameTaken(err, "unit_company_id_symbol_key", "unit", u.Symbol, "insert unit")
+			return nameTakenNormalised(err,
+				"unit_company_symbol_normalised", "unit", u.Symbol, "insert unit")
 		}
 		after := map[string]any{"symbol": u.Symbol, "formal_name": u.FormalName}
 		return appendAudit(ctx, tx, companyID, "unit", id, OpCreate, nil, after, createdBy)
@@ -921,13 +1011,20 @@ func (s *Service) CreateStockItem(ctx context.Context, si StockItem, createdBy s
 			}
 			unitID = &uid
 		}
+		// D90: refuse a NORMALISED collision here, so the message can name
+		// the master the operator actually has. The unique index behind it
+		// is still the authority and still catches a race.
+		if err := refuseIfNameTaken(ctx, tx, "stock item", si.Name, "stock_item", "name"); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO stock_item
 			   (id, company_id, name, unit_id, hsn, gst_rate_pct)
 			 VALUES ($1, $2, $3, $4, NULLIF($5,''), $6)`,
 			id, companyID, si.Name, unitID, si.HSN, si.GSTRatePct,
 		); err != nil {
-			return nameTaken(err, "stock_item_company_id_name_key", "stock item", si.Name, "insert stock item")
+			return nameTakenNormalised(err,
+				"stock_item_company_name_normalised", "stock item", si.Name, "insert stock item")
 		}
 		after := map[string]any{
 			"name": si.Name, "unit": si.UnitSymbol, "hsn": si.HSN,

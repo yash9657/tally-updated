@@ -25,14 +25,31 @@
   ],
   "$provenance": [
     "EVERY `expect` BELOW WAS OBSERVED ON THE WIRE against a cored verified fresh",
-    "by symbol on 2026-08-22 — not read off a handoff. Two of them contradict what",
-    "the recon predicted, which is exactly why they were measured:",
+    "by symbol — not read off a handoff.",
     "",
-    "  - an unknown group answers 404, not 422;",
-    "  - a DUPLICATE STOCK ITEM NAME IS ACCEPTED (201, a new id). The recon said",
-    "    `masters.EnsureStockItem` does not exist so the route 'only ever reaches",
-    "    CreateStockItem, which 422s'. The first half is true and the conclusion is",
-    "    not. See `stock-item-duplicate-name` for what that means."
+    "  - an unknown group answers 404, not 422 (measured 2026-08-22; the recon",
+    "    predicted 422). Still true.",
+    "",
+    "⛔⛔ AND ONE OF THIS FILE'S OWN MEASUREMENTS WAS WRONG. It recorded, on",
+    "2026-08-22, that 'a DUPLICATE STOCK ITEM NAME IS ACCEPTED (201, a new id)',",
+    "contradicting the recon — and register row D90 was raised, and a USER",
+    "DECISION taken, on the strength of it. Re-measured the same day while",
+    "implementing that decision: cored REFUSES an exact duplicate with 422, and",
+    "`UNIQUE (company_id, name)` has been on `stock_item` since migration 0005.",
+    "The recon was right. This file was wrong.",
+    "",
+    "  ⚠️ THE LESSON IS NOT 'MEASURE LESS'. Measuring is what found the real",
+    "  defect underneath: uniqueness was BYTE-EXACT, so 'Acme Traders' and",
+    "  'acme traders' were two masters, indistinguishable in every picker. That",
+    "  is the consequence D90 described, reached by a mechanism nobody had",
+    "  measured, and it applied to LEDGERS and UNITS too. Migration 0075",
+    "  normalises all three. The lesson is that a measurement is evidence, not",
+    "  proof — and a measurement that OVERTURNS a documented claim deserves the",
+    "  same scepticism as the claim it overturns.",
+    "",
+    "  The `stock-item-duplicate-name` divergence this file used to declare has",
+    "  been DELETED rather than edited: it certified behaviour that never",
+    "  existed."
   ],
   "mock_gaps": [
     {
@@ -64,11 +81,6 @@
       "what": "TDSDeductionView's derived figures are omitted by the mock",
       "where": "frontend/src/api/types.ts, declared at the type",
       "why": "Deriving them in the browser would put a second copy of internal/compliance in the bundle. Declared at the type rather than discovered by a reader."
-    },
-    {
-      "what": "createStockItem with a duplicate name: mock returns the EXISTING id, cored mints a NEW item",
-      "where": "mock.ts createStockItem (create-or-select) vs cored, observed 201 + new id",
-      "why": "NOT a divergence the mock should close by copying cored. Both sides 'succeed', so no refusal row can express it, and cored's behaviour is the more suspicious of the two — duplicate ledger names are refused (422) while duplicate STOCK ITEM names are accepted, which leaves two identical rows in every item picker and splits an item's valuation across them. Recorded here rather than silently mirrored, and raised as a candidate register row."
     },
     {
       "what": "allow_negative_stock ROUND-TRIPS through the mock and switches nothing",
@@ -143,6 +155,36 @@
       "body": { "name": "CT Item {STAMP}", "unit_symbol": "Nos", "gst_rate_pct": "abc" },
       "expect": { "status": 400, "sentence": "invalid gst_rate_pct" },
       "note": "400, not 422 — this one is bound by the HTTP layer, not by masters."
+    },
+    {
+      "name": "ledger-duplicate-name-case",
+      "note": "D90. A NORMALISED collision: same name, different capitalisation. Byte-exact uniqueness let both through, so one supplier's outstandings split across two accounts with nothing on screen to tell them apart. The sentence must name the STORED master, not the one the caller sent — an operator who types 'ct dup x' can see there is no 'ct dup x' in the picker.",
+      "call": "createLedger",
+      "setup": [
+        { "call": "createLedger", "body": { "name": "CT Case {STAMP}", "group_name": "Sundry Debtors" } }
+      ],
+      "body": { "name": "ct case {STAMP}", "group_name": "Sundry Debtors" },
+      "expect": { "status": 422, "sentence": "apart from capitalisation or surrounding spaces" }
+    },
+    {
+      "name": "stock-item-duplicate-name",
+      "note": "D90. The EXACT duplicate cored has refused since migration 0005 — the row this corpus once declared a deliberate divergence over, on a measurement that was wrong.",
+      "call": "createStockItem",
+      "setup": [
+        { "call": "createStockItem", "body": { "name": "CT Dup Item {STAMP}", "unit_symbol": "Nos" } }
+      ],
+      "body": { "name": "CT Dup Item {STAMP}", "unit_symbol": "Nos" },
+      "expect": { "status": 422, "sentence": "already has a stock item named" }
+    },
+    {
+      "name": "stock-item-duplicate-name-spaces",
+      "note": "D90. Surrounding whitespace is not identity. A trailing space is INVISIBLE in a picker, which is exactly why it belongs in the normalised rule while an inner double space does not.",
+      "call": "createStockItem",
+      "setup": [
+        { "call": "createStockItem", "body": { "name": "CT Space Item {STAMP}", "unit_symbol": "Nos" } }
+      ],
+      "body": { "name": "  CT Space Item {STAMP} ", "unit_symbol": "Nos" },
+      "expect": { "status": 422, "sentence": "apart from capitalisation or surrounding spaces" }
     },
     {
       "name": "ledger-valid-is-still-accepted",

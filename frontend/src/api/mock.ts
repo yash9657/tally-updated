@@ -3349,6 +3349,35 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     };
   }
 
+  /**
+   * A master name's IDENTITY, as migration 0075 defines it: case-folded and
+   * with surrounding whitespace removed.
+   *
+   * ⚠️ NOT a full whitespace fold. "Acme  Traders" (two inner spaces) stays
+   * distinct from "Acme Traders", deliberately: an inner double space is
+   * VISIBLE in a picker, while a trailing space and a capital letter are not,
+   * and the rule is aimed at the collisions an operator cannot see.
+   */
+  function normalisedName(v: string): string {
+    return v.trim().toLowerCase();
+  }
+
+  /** The refusal sentence, mirroring masters.MasterNameTaken exactly. */
+  function duplicateMasterMessage(
+    kind: string,
+    sent: string,
+    stored: string,
+  ): string {
+    if (stored !== "" && stored !== sent) {
+      return (
+        `masters: this company already has a ${kind} named ${JSON.stringify(stored)}, ` +
+        `which is the same name as ${JSON.stringify(sent)} apart from capitalisation ` +
+        `or surrounding spaces — use the existing one`
+      );
+    }
+    return `masters: this company already has a ${kind} named ${JSON.stringify(sent)}`;
+  }
+
   return {
     async createCompany(
       req: CreateCompanyRequest,
@@ -3529,14 +3558,18 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
           `masters: invalid opening dr/cr ${JSON.stringify(openingDC)}`,
         );
       }
-      // ⛔ THE DUPLICATE RULE IS CASE-SENSITIVE HERE because that is what the
-      // wire showed: cored answered 422 for the exact name and this mirrors the
-      // observed behaviour rather than a guessed collation.
-      if (c.ledgers.some((l) => l.name === req.name)) {
-        throw new ApiError(
-          422,
-          `masters: this company already has a ledger named ${JSON.stringify(req.name)}`,
-        );
+      // ⛔ THE DUPLICATE RULE IS NORMALISED — case-insensitive and
+      // whitespace-trimmed — mirroring migration 0075 (register row D90).
+      //
+      // ⚠️ THIS COMMENT USED TO SAY THE RULE WAS CASE-SENSITIVE "because that
+      // is what the wire showed". It was, and the wire showing it was the
+      // DEFECT: 'Acme Traders' and 'acme traders' were two parties, splitting
+      // one supplier's outstandings across two accounts with nothing on screen
+      // to tell them apart. An observation faithfully mirrored is still only as
+      // good as the behaviour it observed.
+      const taken = c.ledgers.find((l) => normalisedName(l.name) === normalisedName(req.name));
+      if (taken) {
+        throw new ApiError(422, duplicateMasterMessage("ledger", req.name, taken.name));
       }
       const ledgerID = id("ledger");
       c.ledgers.push({
@@ -3579,8 +3612,16 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     ): Promise<CreateStockItemResponse> {
       // STORE it. This used to mint an id and throw the master away, which made
       // listStockItems impossible and would have let an item-grid test pass
-      // against an item nobody created. Create-or-select by NAME mirrors
-      // masters.EnsureStockItem, so re-creating resolves the same id.
+      // against an item nobody created.
+      //
+      // ⛔ IT NO LONGER CREATE-OR-SELECTS, AND THE OLD COMMENT NAMED A FUNCTION
+      // THAT DOES NOT EXIST. It said "create-or-select by NAME mirrors
+      // masters.EnsureStockItem" — there is no `masters.EnsureStockItem`, and
+      // cored has REFUSED a duplicate stock item name since migration 0005.
+      // The mock was the loose one, which is precisely the class of divergence
+      // D84 exists to stop; it survived because the corpus recorded it as a
+      // DELIBERATE divergence on the strength of a measurement (D84's) that was
+      // itself wrong. Measured again 2026-08-22: cored answers 422.
       const c = ensure(companyID);
       // D84: mirrors masters.CreateStockItem's required-name refusal…
       if ((req.name ?? "").trim() === "") {
@@ -3597,8 +3638,20 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       ) {
         throw new ApiError(400, "invalid gst_rate_pct");
       }
-      const existing = c.stockItems.find((s) => s.name === req.name);
-      if (existing) return { stock_item_id: existing.id };
+      // ⛔ THE DUPLICATE CHECK COMES LAST, mirroring the wire: cored's own
+      // required-name and decimal-bind refusals fire BEFORE the INSERT that
+      // trips the unique index, so a body that is both blank and duplicated
+      // must report the blank name — not the collision.
+      const dup = c.stockItems.find(
+        (s) => normalisedName(s.name) === normalisedName(req.name ?? ""),
+      );
+      if (dup) {
+        throw new ApiError(
+          422,
+          duplicateMasterMessage("stock item", req.name ?? "", dup.name),
+        );
+      }
+
       const stockItemID = id("stock");
       c.stockItems.push({
         id: stockItemID,
