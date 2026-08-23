@@ -167,6 +167,13 @@ await type("master-name", LEDGER);
   await press("Enter", 300);
   rec("the ledger is filed under Sundry Debtors",
       (await text("master-parent-echo")).includes("Sundry Debtors"), await text("master-parent-echo"));
+  // ⛔ D87 (2026-08-22): a party under Sundry Debtors/Creditors now needs a
+  // STATE CODE or the form refuses CLIENT-SIDE and sends nothing. Without this
+  // line the very first create here is refused and EVERY arm below it fails —
+  // which does not read as a stale probe, it reads as D36 and D47 having
+  // regressed. Supplying it keeps this file measuring what it was written for.
+  await page.getByTestId("master-state-code").selectOption("29");
+  await page.waitForTimeout(150);
 }
 // ⛔ THE CURSOR. D36's traced cause was that MASTER_FIELDS' "details" position
 // had NO CONTROL BEHIND IT — the form rendered two inputs and Enter advanced a
@@ -263,6 +270,12 @@ await type("master-name", LEDGER); // the SAME name — the server refuses it
   await picker.fill("Sundry Debtors");
   await page.waitForTimeout(250);
   await press("Enter", 300);
+  // ⛔ D87: a state code, or the form refuses CLIENT-SIDE and the SERVER
+  // refusal this whole section exists to measure never happens. The arms would
+  // then fail reporting "no server refusal reached the status line" — true, and
+  // for entirely the wrong reason. This is the trap §4.15 of the driver names.
+  await page.getByTestId("master-state-code").selectOption("29");
+  await page.waitForTimeout(150);
 }
 await press("Control+a", 1600);
 {
@@ -332,6 +345,12 @@ console.log(`\n── D47: the inline Alt+C door from a voucher field ───�
     await picker.fill("Sundry Debtors");
     await page.waitForTimeout(250);
     await press("Enter", 300);
+    // ⛔ D87: a state code, or the form refuses CLIENT-SIDE and the SERVER
+    // refusal this arm exists to measure never happens. The arm would then fail
+    // reporting "no server refusal reached the status line" — true, and for
+    // entirely the wrong reason.
+    await page.getByTestId("master-state-code").selectOption("29");
+    await page.waitForTimeout(150);
     await press("Control+a", 1600);
     const msg = await statusLine();
     rec("an inline create refused by the server still reaches the status line",
@@ -345,28 +364,39 @@ console.log(`\n── D47: the inline Alt+C door from a voucher field ───�
 }
 
 // ===========================================================================
-// ⛔ NEW, FOUND BY THIS DRIVE — registered as D87, deliberately NOT fixed here.
-// The ledger form can key an opening balance now, but it still cannot key a
-// PARTY'S GSTIN, STATE CODE or REGISTRATION TYPE, and `masters.CreateLedger`
-// has accepted all three since it was written. So every Sundry Debtor/Creditor
-// created from the keyboard has state_code NULL — which is exactly the input
-// that made D19 derive an intra-state bill as IGST — and the repo's own
-// `verify:demo` flags it ("Every party's GSTIN prefix == its state_code").
+// ⛔⛔ THESE TWO ARMS ONCE ASSERTED A DEFECT. THEY NOW ASSERT ITS FIX.
+//
+// This drive FOUND D87 and deliberately did not fix it, so the arms below read
+// "the ledger form offers NO GSTIN / state-code / registration-type field" and
+// "…and the party it created really carries NONE of them". Both were true and
+// both are now false: D87 closed 2026-08-22 (L15d).
+//
+// ⛔ THEY ARE INVERTED, NOT DELETED, and the difference matters. A deleted arm
+// leaves nothing behind that would notice a REVERT; an inverted one fails the
+// day the field disappears again, and its message still explains why the field
+// has to be there at all. `drive-l15d-d87.mjs` is the row's real oracle (both
+// doors, zero-POST refusal, five fields read back); this is the regression
+// tripwire the file that found the row keeps pointing at it.
 // ===========================================================================
-console.log(`\n── D87 (new): a keyed party has no GSTIN and no state ────────`);
+console.log(`\n── D87 (CLOSED L15d): a keyed party carries its GST identity ─`);
 {
   await goTo("Create Ledger");
   const form = await body();
-  rec("the ledger form offers no GSTIN / state-code / registration-type field",
-      !/GSTIN/i.test(form) && !/State code/i.test(form) && !/Registration type/i.test(form),
+  rec("D87: the ledger form OFFERS a GSTIN / state-code / registration-type field",
+      /GSTIN/i.test(form) && /State code/i.test(form) && /Registration type/i.test(form),
       form.replace(/\s+/g, " ").slice(0, 130));
   await press("Escape", 400);
   const row = await sql(
     `select coalesce(gstin,'(null)')||'|'||coalesce(state_code,'(null)')||'|'||coalesce(registration_type::text,'(null)')
        from ledger where company_id=${q(CO)} and name=${q(LEDGER)}`);
-  rec("…and the party it created really carries none of them",
-      row === "(null)|(null)|UNREGISTERED" || row.startsWith("(null)|(null)|"),
-      row || "(no row)");
+  // ⛔ THE STATE CODE IS THE ONE THAT MATTERS. state_code NULL is the exact
+  // input that made D19 derive an intra-state bill as IGST, and it is what
+  // `verify:demo` flags. This party was keyed at the top of this file WITHOUT a
+  // GSTIN, which is legitimate for an Unregistered party — so the assertion is
+  // on the state code and the registration type, not on all three.
+  rec("D87: …and the party this drive keyed carries a REAL state code, not (null)",
+      row.split("|")[1] === "29" && row.split("|")[2] !== "UNKNOWN",
+      `${row || "(no row)"} — before D87 every keyed party read (null)|(null)|UNKNOWN`);
 }
 
 // ===========================================================================
