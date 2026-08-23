@@ -122,6 +122,29 @@ const inv = await api("POST", `/v1/companies/${CO}/vouchers/sales`, {
     { ledger_id: L["Output CGST"], dr_cr: "C", amount: "900" },
     { ledger_id: L["Output SGST"], dr_cr: "C", amount: "900" },
   ],
+  // ⛔⛔ THE BILL REFERENCE IS NOT DECORATION — WITHOUT IT THIS PROBE BREAKS A
+  // GATE AND LEAVES IT BROKEN. `Acme Traders` is maintained bill-by-bill, so an
+  // invoice posted with no reference lands as an unallocated ON-ACCOUNT balance:
+  // the Balance Sheet counts it (it is a ledger balance) and the Outstandings
+  // report does not (it is bill-wise). `verify:demo`'s
+  // "BS Sundry Debtors == Outstandings (receivable)" check then fails by exactly
+  // this amount, on a tenant this probe does not tear down — and it fails as a
+  // MONEY failure, which the next session reads as a regression in whatever lane
+  // they are in. Measured 2026-08-23: fresh seed 34/34, run this file, 33/34,
+  // short by 11800.0000.
+  //
+  // ⚠️ IT ALSO MAKES THE FIXTURE HONEST. A real intra-state sales invoice to a
+  // bill-wise party carries a reference; one without is a shape an operator
+  // cannot key from F8.
+  bill_allocations: [
+    {
+      ledger_id: L["Acme Traders"],
+      ref_name: `D77/${STAMP}`,
+      ref_type: "NEW",
+      dr_cr: "D",
+      amount: "11800",
+    },
+  ],
   gst: {
     place_of_supply_state_code: "29",
     supplier_state_code: "29",

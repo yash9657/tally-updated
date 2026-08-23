@@ -261,7 +261,22 @@ grep -oE "company id: [0-9a-f-]{36}" /tmp/seed.log | head -1 | awk '{print $3}' 
 pnpm run verify:demo "$(cat /tmp/drive-company-id)"     # -> ALL CHECKS PASSED (34/34)
 ```
 
-### THE DRIVE SET — all green at HEAD `8e73e03`, 2026-08-23
+### ✅ THE DRIVE SET IS GATE-SAFE — MEASURED 2026-08-23, END TO END
+```
+fresh seed -> verify:demo 34/34
+   run all seven drives + contract:cored
+verify:demo 34/34          <- the whole set leaves the tenant level
+```
+⛔ **THAT WAS NOT TRUE UNTIL THIS HANDOFF WAS WRITTEN, AND IT DIRECTLY CONTRADICTED §5.15.**
+`drive-l14b-d77.mjs` posted an 11,800 invoice to `Acme Traders` — a bill-by-bill party — **with no
+bill reference**, so it landed as an unallocated ON-ACCOUNT balance: the Balance Sheet counts it (a
+ledger balance) and Outstandings does not (bill-wise). `verify:demo`'s **"BS Sundry Debtors ==
+Outstandings (receivable)"** then failed by exactly that amount, on a tenant the probe does not tear
+down. **A MONEY failure, which the next session reads as a regression in its own lane.** Fixed by
+giving the fixture the bill reference a real invoice carries. **Re-run this end-to-end check after
+adding any probe that POSTS.**
+
+### THE DRIVE SET — all green at HEAD, 2026-08-23
 ```bash
 # always from the REPO ROOT; the harness resolves against frontend/
 CO="$(cat /tmp/drive-company-id)" node frontend/scripts/drive-l13-masters.mjs  # 33/33
@@ -417,6 +432,10 @@ D87 broke **two** probes hours after both were green:
 ⚠️ **Every drive that creates a PARTY through the FORM now needs a state code.** Measured 2026-08-23:
 only `drive-l13-masters` and `drive-l15c-d92` use the form path; the other five that mention party
 groups go through the API, where the client-side refusal does not apply.
+⛔⛔ **AND FOLLOWING THIS RULE IS WHAT EXPOSED THE NEXT ONE.** Re-running the set turned `verify:demo`
+from 34/34 to 33/34 with a MONEY failure — `drive-l14b-d77` was posting to a bill-wise party with no
+bill reference (see §4). **Advice to re-run everything is a trap unless the set is gate-safe**, so the
+set was made gate-safe in the same pass and the end-to-end check is now in §4.
 
 ### 5.16 ⛔ WHEN A ROW'S OWN DRIVE ASSERTED THE DEFECT, INVERT IT — DO NOT DELETE IT
 `drive-l13-masters.mjs` found D87 and asserted *"the ledger form offers NO GSTIN field"*. Those arms
