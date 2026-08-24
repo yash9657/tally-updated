@@ -779,3 +779,110 @@ func TestStockSummaryIsTenantScoped(t *testing.T) {
 			len(s.Rows), s.TotalValue.StringFixed(4))
 	}
 }
+
+// TestReplayOrdersByENTRY_NotByVoucherNumber pins defect D8 where it actually
+// bites: through the SQL, against the database, on figures a person reads.
+//
+// ⛔⛔ WHY THIS TEST EXISTS AND THE UNIT TEST IS NOT ENOUGH. `inventory.less()` is
+// pinned by TestReplayOrdersByEveryKeyInTurn, but that test builds Movements in
+// memory. NOTHING proved that `queryStockMovements` actually PUTS the ordering key
+// on them. A mutation proof deleted the `r.movement.VoucherID = …` assignment and
+// the ENTIRE Go suite stayed green while the wire figure was still correct — because
+// with every id equal the order fell through to `version_created_at`, which on a
+// seed that posts each voucher in its own transaction happens to agree with entry
+// order. That is D90's shape: an application key shadowed by a tiebreak, with no
+// gate able to see it missing.
+//
+// ⛔ SO THE ALTER IS THE POINT OF THE SECOND HALF. An ALTER keeps `voucher_id` and
+// re-mints BOTH `voucher_version.created_at` and `voucher_version.id`, so restating
+// the RECEIPT makes it the NEWEST version while leaving it the EARLIER voucher.
+// After that, voucher_id is the ONLY key that still orders it first — and restating
+// a voucher without changing a single line must not re-price anything.
+func TestReplayOrdersByENTRY_NotByVoucherNumber(t *testing.T) {
+	b := stockSetup(t)
+	item := b.newItem(t, "Copper Bar")
+
+	// ⛔ THE NUMBERS ARE TYPED, NOT GENERATED, AND "10" < "9" AS STRINGS. That is the
+	// whole defect and it needs no second series to show it: voucher_no is a STRING,
+	// so one company's own counter breaks the ordering the moment it reaches double
+	// digits. (Cross-series is the commoner case in the wild — cored mints a bare
+	// integer per voucher TYPE — but same-series is the tighter statement.)
+	//
+	// ⚠️ THE DIRECTION MATTERS AND THE FIRST DRAFT OF THIS TEST HAD IT BACKWARDS: it
+	// numbered the receipt 10 and the issue 2, and "10" < "2", so voucher_no order
+	// put the receipt FIRST — the correct order — and the M1 mutation (less() back to
+	// voucher_no) passed straight through. The issue must carry the number that sorts
+	// EARLIER, which for entry order receipt-then-issue means 9 then 10.
+	const day = "2025-08-11"
+
+	// 1. The stock the issue will be costed against: 10 @ 100.0000, on an earlier day.
+	b.postNo(t, "1", "2025-08-01", stockLine(item, b.main, uuid.Nil, ledger.Inward, "10", "100", "0"))
+
+	// 2. On ONE day: a receipt that RAISES the average, keyed FIRST and numbered 10.
+	//    20 @ 250.0000 -> 30 units / 6000.0000 -> average 200.0000.
+	receipt := b.postNo(t, "9", day,
+		stockLine(item, b.main, uuid.Nil, ledger.Inward, "20", "250", "0"))
+
+	// 3. …and an issue keyed SECOND and numbered 10, so it sorts FIRST by number.
+	//    Entry order costs it at the POST-receipt average: 5 * 200.0000 = 1000.0000,
+	//    leaving 25 / 5000.0000 @ 200.0000.
+	//    ⛔ Ordered by voucher_no it would consume 5 * 100.0000 = 500.0000 at the
+	//    PRE-receipt average and leave 25 / 5500.0000 @ 220.0000 — 500.0000 too high
+	//    on an issue nobody edited.
+	b.postNo(t, "10", day, stockLine(item, b.main, uuid.Nil, ledger.Outward, "5", "400", "0"))
+
+	pos := positionRow(t, b.summary(t, ""), item, b.main, uuid.Nil)
+	eq(t, "the quantity issued (it is the VALUE that D8 moves, never the quantity)",
+		pos.OutwardQty, dec("5"))
+	eq(t, "the cost of an issue keyed AFTER the receipt that funds it, on the same day, "+
+		"where the issue carries the LOWER number — 500.0000 would be the pre-receipt average",
+		pos.OutwardValue, dec("1000"))
+	eq(t, "closing value: 5500.0000 would mean the replay used voucher_no order",
+		pos.ClosingValue, dec("5000"))
+	eq(t, "closing quantity — unchanged by the ordering, which is what makes this a "+
+		"VALUATION defect and not a units one",
+		pos.ClosingQty, dec("25"))
+	eq(t, "closing rate", pos.ClosingRate, dec("200"))
+
+	// 4. ⛔⛔ THE ARM THE MUTATION PROOF BOUGHT. Restate the RECEIPT with the SAME
+	//    lines. Its voucher_version.created_at and its voucher_version.id are now
+	//    the NEWEST of the three, while its voucher_id is unchanged. Ordering by
+	//    either of those would move the receipt after the issue and re-price it; the
+	//    figures must not move by a paisa, because nothing about the goods changed.
+	b.alterNo(t, receipt, "9", day,
+		stockLine(item, b.main, uuid.Nil, ledger.Inward, "20", "250", "0"))
+
+	after := positionRow(t, b.summary(t, ""), item, b.main, uuid.Nil)
+	eq(t, "the cost of the issue after RESTATING the receipt unchanged — if this reads "+
+		"500.0000 the replay is ordering by version_created_at or voucher_version_id, "+
+		"both of which an ALTER re-mints, and neither of which is entry order",
+		after.OutwardValue, dec("1000"))
+	eq(t, "closing value after restating the receipt unchanged",
+		after.ClosingValue, dec("5000"))
+	eq(t, "closing quantity after restating the receipt unchanged",
+		after.ClosingQty, dec("25"))
+}
+
+// postNo and alterNo are post/alter with an EXPLICIT voucher number. The ordinary
+// helpers let the server allocate one, which on a single class allocates in entry
+// order — so a test that needs the number to DISAGREE with entry order cannot use
+// them. (`VoucherInput.VoucherNo` empty = server-allocated; set = as given.)
+func (b *stockBooks) postNo(t *testing.T, no, date string, lines ...ledger.InventoryLine) uuid.UUID {
+	t.Helper()
+	in := b.input(date, lines...)
+	in.VoucherNo = no
+	res, err := b.led.PostVoucher(b.ctx, in)
+	if err != nil {
+		t.Fatalf("post inventory voucher %q on %s: %v", no, date, err)
+	}
+	return res.VoucherID
+}
+
+func (b *stockBooks) alterNo(t *testing.T, id uuid.UUID, no, date string, lines ...ledger.InventoryLine) {
+	t.Helper()
+	in := b.input(date, lines...)
+	in.VoucherNo = no
+	if _, err := b.led.AlterVoucher(b.ctx, id, in); err != nil {
+		t.Fatalf("alter inventory voucher %q: %v", no, err)
+	}
+}
