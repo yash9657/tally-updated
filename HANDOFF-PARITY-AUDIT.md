@@ -3961,3 +3961,20 @@ totals, or on status codes, is green straight through it.
 `go test ./... -count=1` **exit 0, 0 FAIL, 0 SKIP**, bracketed with a live psql. Binary verified fresh BY
 SYMBOL (`pg_advisory_xact_lock` = 1). ⚠️ **The first re-measure of the race read as UNCHANGED because cored
 had not been rebuilt** — §5.17, exactly as written.
+
+**THE WHOLE DRIVE SET, ON A FRESH SEED, AFTER THE LANE** — and, since D83 was the last of the builds, this
+is the state the whole wave leaves behind. Binary verified fresh BY SYMBOL first:
+`pg_advisory_xact_lock`=1 (D83) · `bills-payable`=2 (D94) · `aged_as_on`=1 (D86) ·
+`COALESCE(vv.voucher_no, ''), vv.voucher_id`=1 (D8).
+```
+verify:demo 34/34
+  l5-nlq 41/41 · l13 33/33 · l14 17/17 · l14b 8/8 · l15-d5 22/22 · l15c 7/7 · l15d 13/13 · l15f 8/8
+  l16-d22 34/34 · l11-ai 14/14 · l20-d49 52/52 · l21-d85 16/16 · l22-d8 14/14 · l23-d86 16/16
+  l25-d83 9/9 · l24-d94 15/15 · l17-d95 20/20 · contract:cored 14/14
+verify:demo 34/34
+```
+**GATES AT THE END OF THE WAVE:** `go test ./... -count=1` **exit 0, 0 FAIL, 0 SKIP** ·
+`python3 corpora/validate.py` **OK** (inventory=7) · insightd pytest **166 passed** ·
+`pnpm vitest run` **1463 / 87 files** · `pnpm exec tsc --noEmit` **clean**.
+✅ **Seventeen drives now, and the set is still gate-safe** — three of the five lanes added a probe that
+POSTS (l21, l23, l25) and `verify:demo` foots the same 34 checks at both ends.
