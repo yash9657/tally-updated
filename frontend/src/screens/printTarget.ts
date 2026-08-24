@@ -76,6 +76,11 @@ const NO_DOCUMENT_REASON: Partial<Record<VoucherType, string>> = {
  * indistinguishable from a key that quietly failed.
  */
 const REPORT_SLUGS: Record<ReportName, string> = {
+  // ⛔ THE PAYABLES AGEING (D94). It is one of the few names here that DOES print —
+  // the layout is `outstandings`' own, with the kind passed rather than parsed, so
+  // `/print/reports/bills-payable` cannot be talked into printing the receivables
+  // list by a `?kind=` on the URL.
+  "Bills Payable": "bills-payable",
   "Balance Sheet": "balance-sheet",
   "Profit & Loss A/c": "profit-and-loss",
   "Trial Balance": "trial-balance",
@@ -145,6 +150,10 @@ const REPORT_SLUGS: Record<ReportName, string> = {
 type ReportPeriodShape = "as-at" | "full-period";
 
 const REPORT_PERIOD_SHAPE: Record<ReportName, ReportPeriodShape> = {
+  // As-at, like Outstandings and the two order books: a bill is either still open
+  // on the day asked about or it is not, and bounding it BELOW would drop the older
+  // half of exactly the debt this report exists to show.
+  "Bills Payable": "as-at",
   "Balance Sheet": "as-at",
   "Profit & Loss A/c": "full-period",
   "Trial Balance": "as-at",

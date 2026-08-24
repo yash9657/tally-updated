@@ -234,6 +234,12 @@ export const AS_AT_ONLY_REPORTS = [
   "Trial Balance",
   "Balance Sheet",
   "Outstandings",
+  // ---- THE PAYABLES AGEING (D94). The same report as Outstandings, on the other
+  // side of the ledger, and classified identically for the same reason: a bill is
+  // either still open on the day asked about or it is not. ⛔ A name in NEITHER
+  // list is silently told its F2 period does nothing, which is how a report ships
+  // with a period box that changes no figure.
+  "Bills Payable",
   // Closing stock is a position, not a flow: StockSummaryScreen reads
   // `periodTo` as `asOn` and never reads `periodFrom`. It was in NEITHER list
   // and was therefore told its period did nothing.

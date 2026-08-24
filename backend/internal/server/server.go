@@ -825,6 +825,21 @@ func (s *Server) routes() {
 		r.Get("/profit-and-loss", s.handleProfitAndLoss)
 		r.Get("/day-book", s.handleDayBook)
 		r.Get("/outstandings", s.handleOutstandings)
+		// ⛔⛔ A SECOND FLAT LITERAL ROUTE, AND THE FLATNESS IS THE WHOLE POINT (D94).
+		// `routeAction` maps the literal path to the PDP resource, so a report NAME is
+		// what a rule can name and a QUERY PARAMETER is invisible to it. Serving the
+		// payables ageing as `?kind=PAYABLE` on the route above — which is all the
+		// product could do until now — makes *"the sales clerk may see what customers
+		// owe us but not what we owe suppliers"* an UNWRITABLE rule. Two names, never
+		// one report with a direction toggle: the same reasoning migration 0073 and
+		// `REPORT_NAMES` already carry for the two ORDER BOOKS.
+		//
+		// ⚠️ IT IS ADDITIVE. `/outstandings` and its `?kind=` are untouched, so no
+		// existing `acl_rule` row is invalidated and `printOutstandings`, the NLQ
+		// surface and the bill-wise picker all keep working — the picker in particular
+		// MUST keep reading `?kind=PAYABLE`, because a Data Entry clerk keying a
+		// Payment needs a supplier's open bills or the receipt lands ON ACCOUNT.
+		r.Get("/bills-payable", s.handleBillsPayable)
 
 		// BANK RECONCILIATION (T4). The GET is a report; the PUT/DELETE are an
 		// Alter of "bank-reconciliation" — two DIFFERENT resources, because
@@ -2889,17 +2904,52 @@ func (s *Server) handleDayBook(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleBillsPayable serves the PAYABLES ageing under its own report name.
+//
+// ⛔ IT SHARES ITS BODY WITH `handleOutstandings` AND FORCES THE KIND. Two handlers
+// that formatted the same report differently is exactly the divergence D20 is about,
+// and `outstandingKindParam` is already shared between the JSON and printed forms for
+// the same reason. What differs here is ONE thing and it is not a format: the PDP sees
+// `report:bills-payable` instead of `report:outstandings`, because the path is
+// different. That is the entire row.
+//
+// ⚠️ `?kind=` IS IGNORED HERE, DELIBERATELY, AND NOT REJECTED. This route IS the
+// payables book; honouring a `?kind=RECEIVABLE` on it would hand a caller the
+// receivables list from under the payables rule — the exact leak the split exists to
+// prevent — and refusing the parameter with a 400 would make an operator's stale
+// bookmark an error instead of an answer.
+func (s *Server) handleBillsPayable(w http.ResponseWriter, r *http.Request) {
+	s.writeOutstandings(w, r, reporting.Payables)
+}
+
 func (s *Server) handleOutstandings(w http.ResponseWriter, r *http.Request) {
-	ctx, companyID, ok := s.scopeCtxID(w, r)
-	if !ok {
-		return
-	}
 	// The `kind` parser lives in handler_print_reports.go and is SHARED with the
 	// printed ageing. If the two parsed it differently — one defaulting to
 	// payables, one accepting a spelling the other refused — an operator would
 	// chase a customer for what is actually a supplier balance.
+	//
+	// ⚠️ THE PARAMETER IS PARSED BEFORE THE SCOPE CHECK ONLY ON THIS ROUTE, because
+	// `/bills-payable` has no parameter to parse — see handleBillsPayable.
+	if _, _, ok := s.scopeCtxID(w, r); !ok {
+		return
+	}
 	kind, ok2 := outstandingKindParam(w, r)
 	if !ok2 {
+		return
+	}
+	s.writeOutstandings(w, r, kind)
+}
+
+// writeOutstandings is the ONE body behind both ageing routes.
+//
+// ⛔ ONE WRITER, TWO DOORS. `/outstandings` parses `?kind=` and passes it; the flat
+// `/bills-payable` route passes `Payables` and ignores the parameter. Everything the
+// operator reads — the party rows, the bill arrays, the slab totals, the honest
+// `as_on`/`aged_as_on` pair from D86 — is emitted here exactly once, so the two doors
+// cannot drift into two different reports the way D20's two surfaces did.
+func (s *Server) writeOutstandings(w http.ResponseWriter, r *http.Request, kind reporting.OutstandingKind) {
+	ctx, companyID, ok := s.scopeCtxID(w, r)
+	if !ok {
 		return
 	}
 	asOn := r.URL.Query().Get("as_on")

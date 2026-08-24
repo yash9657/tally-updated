@@ -1217,6 +1217,16 @@ func TestTheUnimplementedReportsAreStillGovernableAndSaySo(t *testing.T) {
 		// rather than 200 to a bare GET, because it needs ?ledger_id= or ?all=;
 		// the loop below allows for that.
 		"bank-reconciliation": true,
+		// ⛔ THE PAYABLES AGEING PRINTS (D94), AND IT IS IN `implemented` RATHER THAN
+		// DEFERRED FOR A REASON THE DEFERRED SET DOES NOT SHARE. Every name below is
+		// deferred because its printed form would be a DIFFERENT DOCUMENT from the
+		// screen the slug names — a re-typeset bank statement with no way to tell
+		// whose it is, a commitment schedule at order rates that reads as a promise.
+		// This one is the SAME document as `outstandings`, differing only in which
+		// side of the ledger it ages, and the layout already existed: the JSON and
+		// printed forms have always shared `outstandingKindParam`, so both directions
+		// printed from one parser long before either had its own name.
+		"bills-payable": true,
 	}
 	deferred := 0
 	for _, name := range authz.KnownReportNames {

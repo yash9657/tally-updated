@@ -456,6 +456,37 @@ var KnownReportNames = []string{
 	"trial-balance", "balance-sheet", "profit-and-loss", "day-book",
 	"outstandings", "cash-flow", "anomalies", "gstr1", "gstr3b",
 	"reconciliation-queue",
+	// THE PAYABLES AGEING (D94). A report NAME because the PDP decides on the
+	// name and a query parameter is invisible to it: served only as
+	// `/outstandings?kind=PAYABLE`, *"this level may see what customers owe us but
+	// not what we owe suppliers"* was an UNWRITABLE rule, and those two lists
+	// belong to two different jobs. Exactly the reasoning behind the two ORDER
+	// BOOKS below, one table over.
+	//
+	// ⛔⛔ AND UNLIKE EVERY OTHER NAME IN THIS BLOCK IT SHIPS WITH **NO ACL
+	// COUNTERWEIGHT MIGRATION**, WHICH IS A DECISION AND NOT AN OVERSIGHT. The
+	// others exist because a NEW resource arrived pre-granted by 0011's coarse
+	// `allow display report`. Here the DATA is not new: measured on the wire against
+	// a freshly seeded tenant, with a control proving membership, a seeded Data
+	// Entry clerk ALREADY reads `GET /outstandings?kind=PAYABLE` -> 200 (there is no
+	// `outstandings` rule at all; the coarse grant reaches it, and 0038 already
+	// refuses the printed form). Adding this name therefore takes nothing away and
+	// grants nothing new.
+	//
+	// ⛔ AND DENYING IT WOULD BREAK PAYMENT ENTRY. The bill-wise picker calls
+	// `kindForGroup(group)` -> "PAYABLE" for a Sundry Creditor, so a Data Entry
+	// clerk keying a Payment needs that read; refused, they lose the picker and the
+	// money lands ON ACCOUNT — the balance nobody can chase later. A seeded denial
+	// would also be only PARTLY enforceable, because `?kind=PAYABLE` must keep
+	// answering under the `outstandings` name for exactly that picker.
+	//
+	// ⚠️ SO THE RULE IS WRITABLE, NOT WRITTEN: a tenant that wants the split writes
+	// `disallow display report:bills-payable` through the admin API at specificity
+	// 2, which beats the coarse allow. `drive-l24-d94.mjs` writes it and proves the
+	// refusal, WITH the receivables book still allowed. The residual — that the data
+	// is still reachable as `?kind=PAYABLE` under the other name — is registered
+	// rather than silently closed.
+	"bills-payable",
 	// The Bank Reconciliation Statement (T4). A report NAME so migration 0046
 	// can write `disallow display report:bank-reconciliation` at specificity 2 —
 	// without which 0011's coarse `allow display report` reaches it at

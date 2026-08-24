@@ -360,3 +360,53 @@ describe("⛔ D80: Alt+G > Vouchers opens a voucher, not the Unwired screen", ()
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// D94 — the payables ageing has a door, and the alias that lied now points at it
+// ---------------------------------------------------------------------------
+
+describe("D94 — 'bills payable' reaches the PAYABLES report", () => {
+  it("⛔⛔ 'bills payable' no longer opens the RECEIVABLE report", () => {
+    // ⛔ THIS ARM IS RED ON THE PREVIOUS COMMIT, and the defect it names had
+    // SHIPPED: `REPORT_ALIASES` mapped "bills payable" -> "Outstandings", which is
+    // what customers owe US. An operator typing the words for what the company owes
+    // was shown the opposite, under a heading that did not say so — the same class
+    // of wrong answer L16 deliberately refused to create for "cash flow statement"
+    // (§6.5), except this one was already live. It could not be fixed before D94,
+    // because there was no payables report to point it at.
+    for (const label of ["bills payable", "Bills Payable", "  BILLS PAYABLE  "]) {
+      const snap = drive([
+        { type: "KEY", combo: "Alt+G" },
+        { type: "SELECT", menuItem: label },
+        { type: "KEY", combo: "Enter" },
+      ]);
+      expect(snap.screen, JSON.stringify(label)).toBe("report");
+      expect(snap.reportName, JSON.stringify(label)).toBe("Bills Payable");
+    }
+  });
+
+  it("⛔ CONTROL: the RECEIVABLE aliases still reach Outstandings", () => {
+    // Without this, "re-point every alias at the new report" passes the arm above
+    // and quietly does the same damage in the other direction.
+    for (const label of ["outstandings", "bills receivable", "bills outstanding"]) {
+      const snap = drive([
+        { type: "KEY", combo: "Alt+G" },
+        { type: "SELECT", menuItem: label },
+        { type: "KEY", combo: "Enter" },
+      ]);
+      expect(snap.screen, JSON.stringify(label)).toBe("report");
+      expect(snap.reportName, JSON.stringify(label)).toBe("Outstandings");
+    }
+  });
+
+  it("the other words an operator reaches for also land on the payables book", () => {
+    for (const label of ["payables", "accounts payable", "creditors ageing"]) {
+      const snap = drive([
+        { type: "KEY", combo: "Alt+G" },
+        { type: "SELECT", menuItem: label },
+        { type: "KEY", combo: "Enter" },
+      ]);
+      expect(snap.reportName, JSON.stringify(label)).toBe("Bills Payable");
+    }
+  });
+});

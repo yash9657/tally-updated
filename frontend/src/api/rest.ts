@@ -822,6 +822,14 @@ export function createRestClient(
         query,
       );
     },
+    getBillsPayable(companyID, query?: { as_on?: string }) {
+      // ⛔ THE FLAT PATH IS THE POINT (D94) — see the interface. No `kind` is sent
+      // and none would be honoured: this route IS the payables book.
+      return http.get<OutstandingsResponse>(
+        `${company(companyID)}/bills-payable`,
+        query,
+      );
+    },
     getStockSummary(companyID, asOn?: string) {
       // `as_on` is omitted entirely when absent (not sent as ""), so the server
       // replays the WHOLE movement ledger — a position has no lower bound.

@@ -2348,6 +2348,18 @@ func reportName(rest string) string {
 		return "day-book"
 	case "/outstandings":
 		return "outstandings"
+	// ⛔⛔ THE PAYABLES AGEING'S OWN NAME (D94). This arm is the row: the PDP decides on
+	// the resource this function returns, and it returns it from the FLAT LITERAL PATH.
+	// Until this line existed, the payables book could only be asked for as
+	// `/outstandings?kind=PAYABLE` — and a query parameter never reaches here, so
+	// *"this level may see what customers owe us but not what we owe suppliers"* could
+	// not be written down at all. Same shape as the two order books above.
+	//
+	// ⚠️ IT IS A SECOND NAME, NOT A REPLACEMENT. `outstandings` still maps as before, so
+	// every `acl_rule` row naming it — and the bill-wise picker that a Data Entry clerk
+	// needs to settle a supplier bill — is untouched.
+	case "/bills-payable":
+		return "bills-payable"
 	case "/cash-flow":
 		return "cash-flow"
 	case "/anomalies":

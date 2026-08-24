@@ -15,6 +15,7 @@ import {
   BalanceSheetScreen,
   ProfitLossScreen,
   OutstandingsScreen,
+  BillsPayableScreen,
 } from "../screens/reports/ReportScreens";
 import { ReportDetailScreen } from "../screens/reports/ReportDetailScreen";
 import { StockSummaryScreen } from "../screens/reports/StockSummaryScreen";
@@ -303,6 +304,24 @@ export function createDefaultRegistry(): ScreenRegistry {
     "report:Balance Sheet": BalanceSheetScreen,
     "report:Profit & Loss A/c": ProfitLossScreen,
     "report:Outstandings": OutstandingsScreen,
+    // ---- THE PAYABLES AGEING (D94). Registered BY NAME, like the order books and
+    // the forecast plane, because cored genuinely serves it as `report:bills-payable`
+    // from its own FLAT LITERAL route — which is the entire row: the PDP decides on
+    // the resource that path maps to, so a query parameter could never have carried
+    // this. Registering it by name is what buys it the report keymap, F2, the report
+    // button bar and a place in Go To and Display More Reports.
+    //
+    // ⛔ AND IT SHARES ONE BODY WITH "Outstandings" (`OutstandingsLikeScreen`) so the
+    // two cannot drift, while calling a DIFFERENT client method so the two rules
+    // cannot merge. Never collapse them into one name with a ?kind= — that would make
+    // "may see what customers owe us, may not see what we owe suppliers" an unwritable
+    // rule, which is what it was until this row.
+    //
+    // ⚠️ UNLIKE the order books and the forecast plane it has NO counterweight
+    // migration: the data is not new (a seeded Data Entry level already reads it as
+    // ?kind=PAYABLE, and needs to, for the bill-wise picker on a Payment). The rule is
+    // WRITABLE at specificity 2 for a tenant that wants the split; it is not seeded.
+    "report:Bills Payable": BillsPayableScreen,
     // Inventory: the position as at a date, replayed from the movement ledger.
     // Denied to Data Entry by migration 0026 (it prints cost prices); the
     // screen states that refusal rather than rendering an empty table.

@@ -138,6 +138,14 @@ func (s *Server) handlePrintReport(w http.ResponseWriter, r *http.Request) {
 		table, built = s.printDayBook(ctx, w, r, companyID)
 	case "outstandings":
 		table, built = s.printOutstandings(ctx, w, r, companyID)
+	// ⛔ THE PAYABLES AGEING PRINTS FROM THE SAME BUILDER (D94). Its route is
+	// auto-mounted the moment the name enters `authz.KnownReportNames`, and a name with
+	// no case here reaches the `default` arm — an honest 501, but a needless one when
+	// the layout already exists and only the kind differs. `outstandingKindParam` is
+	// shared between the JSON and printed forms on purpose, so both directions have
+	// always printed from one parser; this passes the kind instead of parsing it.
+	case "bills-payable":
+		table, built = s.printOutstandingsOfKind(ctx, w, r, companyID, reporting.Payables)
 	case "stock-summary":
 		table, built = s.printStockSummary(ctx, w, r, companyID)
 	case "payroll-register":
@@ -682,6 +690,15 @@ func (s *Server) printOutstandings(ctx context.Context, w http.ResponseWriter, r
 	if !ok {
 		return printing.ReportTable{}, false
 	}
+	return s.printOutstandingsOfKind(ctx, w, r, companyID, kind)
+}
+
+// printOutstandingsOfKind is the ONE printed layout behind both ageing report names.
+//
+// ⚠️ The kind is a PARAMETER rather than re-parsed, so `/print/reports/bills-payable`
+// cannot be talked into printing the receivables list by a `?kind=RECEIVABLE` on the
+// URL — which would hand a caller that list from under the payables print rule.
+func (s *Server) printOutstandingsOfKind(ctx context.Context, w http.ResponseWriter, r *http.Request, companyID uuid.UUID, kind reporting.OutstandingKind) (printing.ReportTable, bool) {
 	asOn := r.URL.Query().Get("as_on")
 	out, err := s.report.Outstandings(ctx, companyID, kind, asOn, nil)
 	if err != nil {

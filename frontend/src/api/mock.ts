@@ -43,6 +43,7 @@ import type {
   ImportTallyXMLQuery,
   ImportTallyXMLResponse,
   Money,
+  OutstandingKind,
   OutstandingParty,
   OutstandingsQuery,
   OutstandingsResponse,
@@ -1941,6 +1942,131 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       notes: [
         "Outstanding quantities and value at the ORDER's agreed rate. An order is a committed quantity and not a movement, so nothing on this report affects closing stock, the Profit & Loss or the Balance Sheet.",
       ],
+    };
+  }
+
+  /**
+   * ⛔ THE ONE IMPLEMENTATION BEHIND BOTH AGEING METHODS (D94), mirroring cored's
+   * `writeOutstandings`, which is the single writer behind its two routes.
+   *
+   * ⛔⛔ NEITHER PUBLIC METHOD CALLS THE OTHER. Delegating `getBillsPayable` through
+   * `this.getOutstandings` meant a test that spied on the receivables method also
+   * observed — and could stub — the payables one: a mock coupling two surfaces the
+   * server keeps independent, which is D84's class of false green pointed at the very
+   * split D94 exists to make. Caught by the arm asserting the payables SCREEN never
+   * touches `getOutstandings`.
+   */
+  async function outstandingsOf(
+    companyID: string,
+    kind: OutstandingKind,
+    asOn?: string,
+  ): Promise<OutstandingsResponse> {
+    const c = ensure(companyID);
+    const wantGroup = kind === "PAYABLE" ? "Sundry Creditors" : "Sundry Debtors";
+    // ⛔⛔ TWO QUESTIONS, TWO VARIABLES — AND THIS MOCK USED TO CONFLATE THEM
+    // EXACTLY AS CORED DID (D86). `bound` is the date the ROWS are limited to
+    // ("" = not limited); `agedOn` is the day the ageing is measured against and
+    // is always a real date. Echoing the resolved date as `as_on` while listing
+    // every bill whatever its date is a caption that is present and false, and it
+    // is what made `verify:demo`'s and the screen's vitest arms green either way.
+    //
+    // ⛔ AND THE BOUND IS NOW APPLIED, WHICH IT NEVER WAS HERE. The loop below had
+    // no date predicate at all, so the mock was UNBOUNDED in both cases — looser
+    // than cored in the direction that hides a bug (D84's class). With `as_on`
+    // supplied it now excludes later vouchers, exactly as cored does, so a vitest
+    // that asks "as at April" gets April's answer here too.
+    const bound = (asOn ?? "").trim();
+    const agedOn = bound || new Date().toISOString().slice(0, 10);
+
+    // Net every reference on a CURRENT, non-deleted voucher. c.views holds
+    // exactly those: an ALTER restates the view in place and a DELETE removes it.
+    const net = new Map<string, { ledgerID: string; ref: string; units: bigint; due: string }>();
+    for (const view of c.views.values()) {
+      if (bound !== "" && (view.voucher_date ?? "") > bound) continue;
+      for (const b of view.bill_allocations) {
+        const ledger = c.ledgers.find((l) => l.id === b.ledger_id);
+        if (!ledger || ledger.group !== wantGroup) continue;
+        // Positive on the party's natural side: debit for a receivable.
+        const signed =
+          b.dr_cr === "D"
+            ? mockMoneyToUnits(b.amount)
+            : -mockMoneyToUnits(b.amount);
+        const key = `${b.ledger_id} ${b.ref_name}`;
+        const cur = net.get(key) ?? {
+          ledgerID: b.ledger_id,
+          ref: b.ref_name,
+          units: 0n,
+          due: "",
+        };
+        cur.units += kind === "PAYABLE" ? -signed : signed;
+        // The EARLIEST due date on the reference, as the server takes MIN().
+        if (b.due_date && (cur.due === "" || b.due_date < cur.due)) cur.due = b.due_date;
+        net.set(key, cur);
+      }
+    }
+
+    const SLABS: [string, number][] = [
+      ["0-45 days", 45],
+      ["45-90 days", 90],
+      ["90-180 days", 180],
+      ["180+ days", 0],
+    ];
+    const slabTotals = new Map<string, bigint>();
+    const byParty = new Map<string, OutstandingParty>();
+    let total = 0n;
+
+    for (const { ledgerID, ref, units, due } of [...net.values()].sort((a, b) =>
+      a.ref.localeCompare(b.ref),
+    )) {
+      // A fully-settled bill nets to zero and is not outstanding.
+      if (units === 0n) continue;
+      const ledger = c.ledgers.find((l) => l.id === ledgerID);
+      if (!ledger) continue;
+      const overdue =
+        due === ""
+          ? 0
+          : Math.max(
+              0,
+              Math.round(
+                (Date.parse(agedOn) - Date.parse(due)) / 86_400_000,
+              ),
+            );
+      const slab = SLABS.find(([, upto]) => upto !== 0 && overdue <= upto)?.[0] ?? "180+ days";
+      const party =
+        byParty.get(ledgerID) ??
+        ({
+          ledger_id: ledgerID,
+          ledger: ledger.name,
+          group: ledger.group,
+          pending: "0.0000",
+          bills: [],
+        } satisfies OutstandingParty);
+      party.bills.push({
+        ref_name: ref,
+        pending: mockUnitsToMoney(units),
+        due_date: due,
+        overdue_days: overdue,
+        slab,
+      });
+      party.pending = mockUnitsToMoney(mockMoneyToUnits(party.pending) + units);
+      byParty.set(ledgerID, party);
+      slabTotals.set(slab, (slabTotals.get(slab) ?? 0n) + units);
+      total += units;
+    }
+
+    return {
+      kind,
+      // ⛔ "" WHEN NOTHING WAS ASKED FOR — the same convention cored and
+      // /stock-summary use, and the string `outstandingsScopeLine` turns into the
+      // NO DATE LIMIT sentence. Echoing `agedOn` here is the defect.
+      as_on: bound,
+      aged_as_on: agedOn,
+      parties: [...byParty.values()].sort((a, b) => a.ledger.localeCompare(b.ledger)),
+      slab_totals: SLABS.filter(([l]) => slabTotals.has(l)).map(([label]) => ({
+        label,
+        amount: mockUnitsToMoney(slabTotals.get(label) ?? 0n),
+      })),
+      total: mockUnitsToMoney(total),
     };
   }
 
@@ -5923,6 +6049,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         );
       }
 
+
       return {
         ledger_id: ledgerID,
         ledger_name: ledger.name,
@@ -5967,115 +6094,29 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       companyID,
       query?: OutstandingsQuery,
     ): Promise<OutstandingsResponse> {
-      const c = ensure(companyID);
-      const kind = query?.kind ?? "RECEIVABLE";
-      const wantGroup = kind === "PAYABLE" ? "Sundry Creditors" : "Sundry Debtors";
-      // ⛔⛔ TWO QUESTIONS, TWO VARIABLES — AND THIS MOCK USED TO CONFLATE THEM
-      // EXACTLY AS CORED DID (D86). `bound` is the date the ROWS are limited to
-      // ("" = not limited); `agedOn` is the day the ageing is measured against and
-      // is always a real date. Echoing the resolved date as `as_on` while listing
-      // every bill whatever its date is a caption that is present and false, and it
-      // is what made `verify:demo`'s and the screen's vitest arms green either way.
-      //
-      // ⛔ AND THE BOUND IS NOW APPLIED, WHICH IT NEVER WAS HERE. The loop below had
-      // no date predicate at all, so the mock was UNBOUNDED in both cases — looser
-      // than cored in the direction that hides a bug (D84's class). With `as_on`
-      // supplied it now excludes later vouchers, exactly as cored does, so a vitest
-      // that asks "as at April" gets April's answer here too.
-      const bound = (query?.as_on ?? "").trim();
-      const agedOn = bound || new Date().toISOString().slice(0, 10);
-
-      // Net every reference on a CURRENT, non-deleted voucher. c.views holds
-      // exactly those: an ALTER restates the view in place and a DELETE removes it.
-      const net = new Map<string, { ledgerID: string; ref: string; units: bigint; due: string }>();
-      for (const view of c.views.values()) {
-        if (bound !== "" && (view.voucher_date ?? "") > bound) continue;
-        for (const b of view.bill_allocations) {
-          const ledger = c.ledgers.find((l) => l.id === b.ledger_id);
-          if (!ledger || ledger.group !== wantGroup) continue;
-          // Positive on the party's natural side: debit for a receivable.
-          const signed =
-            b.dr_cr === "D"
-              ? mockMoneyToUnits(b.amount)
-              : -mockMoneyToUnits(b.amount);
-          const key = `${b.ledger_id} ${b.ref_name}`;
-          const cur = net.get(key) ?? {
-            ledgerID: b.ledger_id,
-            ref: b.ref_name,
-            units: 0n,
-            due: "",
-          };
-          cur.units += kind === "PAYABLE" ? -signed : signed;
-          // The EARLIEST due date on the reference, as the server takes MIN().
-          if (b.due_date && (cur.due === "" || b.due_date < cur.due)) cur.due = b.due_date;
-          net.set(key, cur);
-        }
-      }
-
-      const SLABS: [string, number][] = [
-        ["0-45 days", 45],
-        ["45-90 days", 90],
-        ["90-180 days", 180],
-        ["180+ days", 0],
-      ];
-      const slabTotals = new Map<string, bigint>();
-      const byParty = new Map<string, OutstandingParty>();
-      let total = 0n;
-
-      for (const { ledgerID, ref, units, due } of [...net.values()].sort((a, b) =>
-        a.ref.localeCompare(b.ref),
-      )) {
-        // A fully-settled bill nets to zero and is not outstanding.
-        if (units === 0n) continue;
-        const ledger = c.ledgers.find((l) => l.id === ledgerID);
-        if (!ledger) continue;
-        const overdue =
-          due === ""
-            ? 0
-            : Math.max(
-                0,
-                Math.round(
-                  (Date.parse(agedOn) - Date.parse(due)) / 86_400_000,
-                ),
-              );
-        const slab = SLABS.find(([, upto]) => upto !== 0 && overdue <= upto)?.[0] ?? "180+ days";
-        const party =
-          byParty.get(ledgerID) ??
-          ({
-            ledger_id: ledgerID,
-            ledger: ledger.name,
-            group: ledger.group,
-            pending: "0.0000",
-            bills: [],
-          } satisfies OutstandingParty);
-        party.bills.push({
-          ref_name: ref,
-          pending: mockUnitsToMoney(units),
-          due_date: due,
-          overdue_days: overdue,
-          slab,
-        });
-        party.pending = mockUnitsToMoney(mockMoneyToUnits(party.pending) + units);
-        byParty.set(ledgerID, party);
-        slabTotals.set(slab, (slabTotals.get(slab) ?? 0n) + units);
-        total += units;
-      }
-
-      return {
-        kind,
-        // ⛔ "" WHEN NOTHING WAS ASKED FOR — the same convention cored and
-        // /stock-summary use, and the string `outstandingsScopeLine` turns into the
-        // NO DATE LIMIT sentence. Echoing `agedOn` here is the defect.
-        as_on: bound,
-        aged_as_on: agedOn,
-        parties: [...byParty.values()].sort((a, b) => a.ledger.localeCompare(b.ledger)),
-        slab_totals: SLABS.filter(([l]) => slabTotals.has(l)).map(([label]) => ({
-          label,
-          amount: mockUnitsToMoney(slabTotals.get(label) ?? 0n),
-        })),
-        total: mockUnitsToMoney(total),
-      };
+      return outstandingsOf(companyID, query?.kind ?? "RECEIVABLE", query?.as_on);
     },
+
+    /**
+     * THE PAYABLES AGEING under its own name (D94).
+     *
+     * ⛔ IT DOES NOT CALL `this.getOutstandings`. Both public methods are thin
+     * wrappers over ONE local implementation, mirroring cored, where
+     * `writeOutstandings` is the single writer behind both doors. Delegating
+     * through the sibling METHOD would mean a test that stubs or spies on
+     * `getOutstandings` silently changes what this one does — a mock that couples
+     * two surfaces the server keeps independent, which is D84's class of false
+     * green pointed at the very split this row exists to make.
+     *
+     * ⚠️ WHAT THE MOCK CANNOT MODEL is the only thing that actually differs: the
+     * PDP sees a different resource for a different PATH. There is no ACL in this
+     * store, so a screen's 403 for `report:bills-payable` can only be driven
+     * against real cored — `drive-l24-d94.mjs` is where that arm lives.
+     */
+    async getBillsPayable(companyID, query?: { as_on?: string }) {
+      return outstandingsOf(companyID, "PAYABLE", query?.as_on);
+    },
+
 
     async generateGSTR1(companyID, query: GSTR1Query): Promise<GSTR1Response> {
       ensure(companyID);

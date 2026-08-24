@@ -76,7 +76,16 @@ const REPORT_ALIASES: Readonly<Record<string, string>> = {
   outstandings: "Outstandings",
   "bills outstanding": "Outstandings",
   "bills receivable": "Outstandings",
-  "bills payable": "Outstandings",
+  // ⛔⛔ THIS ALIAS POINTED AT "Outstandings" — THE **RECEIVABLE** REPORT — AND HAD
+  // SHIPPED THAT WAY. An operator typing the words for what the company OWES was
+  // shown what it is OWED, under a heading that did not say so: the same class of
+  // wrong answer as an alias that silently answers a different question, which L16
+  // deliberately refused to add for "cash flow statement" (§6.5). It could not be
+  // fixed before D94, because there was no payables report to point it at.
+  "bills payable": "Bills Payable",
+  payables: "Bills Payable",
+  "accounts payable": "Bills Payable",
+  "creditors ageing": "Bills Payable",
   // The register answers to the words an operator actually types. "tds" alone
   // is the common one; the rest are what a Tally user calls the same screen.
   "tds / tcs register": "TDS / TCS Register",

@@ -363,6 +363,34 @@ export const REPORT_NAMES = [
    */
   "Cash Flow",
   "Anomalies",
+  /**
+   * ---- THE PAYABLES AGEING (D94). What WE owe, bill by bill.
+   *
+   * ⛔⛔ A SECOND NAME AND NEVER A `?kind=` TOGGLE ON "Outstandings", FOR EXACTLY
+   * THE REASON THE TWO ORDER BOOKS ABOVE ARE TWO NAMES. cored serves the ageing
+   * from two FLAT LITERAL routes because `routeAction` maps the path to the PDP
+   * resource and a query parameter is INVISIBLE to it. Served only as
+   * `?kind=PAYABLE`, *"this level may see what customers owe us but not what we
+   * owe suppliers"* was a rule nobody could write down — and those two lists
+   * belong to two different jobs: chasing debtors is the sales side's work,
+   * knowing what the company owes is not.
+   *
+   * ⚠️ "Outstandings" KEEPS ITS NAME AND ITS MEANING (receivables), rather than
+   * being renamed to a symmetric pair. Renaming it would invalidate every
+   * `acl_rule` row a tenant has already written against `report:outstandings`,
+   * which is precisely the additivity this row was built to preserve.
+   *
+   * ⛔ IT SHIPS WITH NO ACL COUNTERWEIGHT MIGRATION, WHICH IS A DECISION. Unlike
+   * the order books and the forecast plane, the DATA is not new: a seeded Data
+   * Entry level already reads it as `?kind=PAYABLE` (measured on the wire), and
+   * it NEEDS to — the bill-wise picker on a Payment asks for exactly that, and a
+   * clerk refused it settles ON ACCOUNT instead. The rule is now WRITABLE at
+   * specificity 2 for a tenant that wants the split; it is not written for them.
+   *
+   * It is a POSITION AS AT A DATE, like Outstandings and the order books, so
+   * FrameOverlays classifies it `as-at`.
+   */
+  "Bills Payable",
 ] as const;
 export type ReportName = (typeof REPORT_NAMES)[number];
 

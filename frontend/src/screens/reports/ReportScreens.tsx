@@ -21,12 +21,14 @@ import { exactCell, moneyCell, textCell } from "../../export/sheet";
 import { LEDGER_WISE_DEFAULT } from "../../keystroke/types";
 import type {
   BalanceSheetResponse,
+  CoredClient,
   DayBookResponse,
   OutstandingsResponse,
   ProfitLossResponse,
   StatementNode,
   TrialBalanceResponse,
 } from "../../api";
+import type { ReportName } from "../../keystroke/types";
 
 /**
  * The Phase-1 report screens, wired to the LIVE client. Each fetches its report
@@ -573,7 +575,31 @@ export function outstandingsScopeLine(asOn: string, agedAsOn: string): string {
   );
 }
 
-export function OutstandingsScreen({ snapshot, onSelect }: ReportProps) {
+/**
+ * ⛔⛔ ONE SCREEN BODY, TWO REPORT NAMES (D94) — the client mirror of cored's
+ * `writeOutstandings`, which is the single writer behind both doors.
+ *
+ * The receivables and payables ageings are the SAME report on opposite sides of the
+ * ledger. Two components would be two places for the bill rows, the ageing columns
+ * and D86's scope caption to drift, and "the two surfaces diverged" is what D20 is
+ * about. What genuinely differs is not rendering at all: it is WHICH ROUTE is called,
+ * because cored maps the flat literal path to the PDP resource — so the payables
+ * screen is governed by `report:bills-payable` and this one by `report:outstandings`.
+ *
+ * ⚠️ THAT IS ALSO WHY THE FETCH IS PASSED IN RATHER THAN A `kind` FLAG. A `kind`
+ * would put both screens back on one route and one rule, which is the defect.
+ */
+function OutstandingsLikeScreen({
+  snapshot,
+  onSelect,
+  reportName,
+  fetchIt,
+  ariaLabel,
+}: ReportProps & {
+  reportName: ReportName;
+  fetchIt: (client: CoredClient, companyID: string, asOn?: string) => Promise<OutstandingsResponse>;
+  ariaLabel: string;
+}) {
   const client = useClient();
   const companyID = useCompanyID();
   // F2 period: Outstandings is an AS-ON report, so the period's "To" date is
@@ -582,10 +608,8 @@ export function OutstandingsScreen({ snapshot, onSelect }: ReportProps) {
 
   const { data, availability } = useReportFetch<OutstandingsResponse>(
     useCallback(() => {
-      const query: { as_on?: string } = {};
-      if (asOn) query.as_on = asOn;
-      return client.getOutstandings(companyID, query);
-    }, [client, companyID, asOn]),
+      return fetchIt(client, companyID, asOn);
+    }, [client, companyID, asOn, fetchIt]),
   );
 
   const columns = "grid-cols-[1fr_8rem_8rem]";
@@ -670,7 +694,7 @@ export function OutstandingsScreen({ snapshot, onSelect }: ReportProps) {
   });
 
   const visible = useReportView(rows, snapshot, {
-    title: "Outstandings",
+    title: reportName,
     // ⚠️ THE HEADERS NAME BOTH ROW KINDS, because the sheet now carries both. A
     // header reading "Group" over a column that holds a due date on every second
     // row is the Stock Summary export's defect (a quantity under a header the
@@ -681,7 +705,7 @@ export function OutstandingsScreen({ snapshot, onSelect }: ReportProps) {
 
   return (
     <ReportFrame
-      title="Outstandings"
+      title={reportName}
       snapshot={snapshot}
       availability={availability}
     >
@@ -696,7 +720,7 @@ export function OutstandingsScreen({ snapshot, onSelect }: ReportProps) {
       <DrillRows
         rows={visible}
         onSelect={onSelect}
-        ariaLabel="Outstandings rows"
+        ariaLabel={ariaLabel}
         columnsClassName={columns}
       />
       {data ? (
@@ -706,4 +730,55 @@ export function OutstandingsScreen({ snapshot, onSelect }: ReportProps) {
       ) : null}
     </ReportFrame>
   );
+}
+
+/** The RECEIVABLES ageing — what customers owe us. */
+export function OutstandingsScreen(props: ReportProps) {
+  return (
+    <OutstandingsLikeScreen
+      {...props}
+      reportName="Outstandings"
+      ariaLabel="Outstandings rows"
+      fetchIt={outstandingsFetch}
+    />
+  );
+}
+
+/**
+ * The PAYABLES ageing — what WE owe, bill by bill (D94).
+ *
+ * ⛔ IT CALLS `getBillsPayable`, WHICH IS A DIFFERENT ROUTE AND THEREFORE A DIFFERENT
+ * PDP RESOURCE. Routing it through `getOutstandings(co, {kind:"PAYABLE"})` would render
+ * identically and put the payables book back under the receivables rule — the screen
+ * would look right and the authorisation would be wrong, which is the failure mode this
+ * whole row exists to remove.
+ *
+ * ⚠️ A 403 IS A NORMAL ANSWER HERE for a tenant that has written
+ * `disallow display report:bills-payable`, and `availability` renders it as a stated
+ * decision rather than an empty table — the same treatment the order books and the
+ * forecast plane already get.
+ */
+export function BillsPayableScreen(props: ReportProps) {
+  return (
+    <OutstandingsLikeScreen
+      {...props}
+      reportName="Bills Payable"
+      ariaLabel="Bills Payable rows"
+      fetchIt={billsPayableFetch}
+    />
+  );
+}
+
+// ⛔ HOISTED TO MODULE SCOPE, NOT INLINE. `useReportFetch`'s dependency array carries
+// `fetchIt`, so an arrow created in the render body would be a new value every pass and
+// the report would re-fetch forever.
+function outstandingsFetch(client: CoredClient, companyID: string, asOn?: string) {
+  const query: { as_on?: string } = {};
+  if (asOn) query.as_on = asOn;
+  return client.getOutstandings(companyID, query);
+}
+function billsPayableFetch(client: CoredClient, companyID: string, asOn?: string) {
+  const query: { as_on?: string } = {};
+  if (asOn) query.as_on = asOn;
+  return client.getBillsPayable(companyID, query);
 }

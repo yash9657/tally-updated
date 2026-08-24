@@ -9,6 +9,7 @@ import {
   BalanceSheetScreen,
   ProfitLossScreen,
   OutstandingsScreen,
+  BillsPayableScreen,
   outstandingsScopeLine,
 } from "./ReportScreens";
 import { createMockClient } from "../../api";
@@ -411,5 +412,45 @@ describe("outstandingsScopeLine — the scope the ageing report actually has", (
     expect(outstandingsScopeLine("2026-04-30", "2026-08-24")).toBe(
       "As on 2026-04-30 · aged against 2026-08-24",
     );
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// D94 — the payables ageing has its own door, and therefore its own RULE
+// ---------------------------------------------------------------------------
+
+describe("BillsPayableScreen — the door is the authorisation", () => {
+  it("⛔⛔ calls getBillsPayable (its own ROUTE), never getOutstandings with a kind", async () => {
+    // ⛔ THIS IS THE ONE ARM THAT CATCHES THE WRONG BUILD, AND IT IS NOT ABOUT
+    // RENDERING. A payables screen written as
+    // `getOutstandings(co, {kind: "PAYABLE"})` renders IDENTICALLY — same parties,
+    // same bills, same totals — and puts the payables book back under
+    // `report:outstandings`, because cored maps the FLAT LITERAL PATH to the PDP
+    // resource and a query parameter never reaches it. The screen would look right
+    // and the authorisation would be wrong, which is exactly the state D94 exists
+    // to leave. Nothing visual can tell the two apart; only the call can.
+    const client = createMockClient({ seed: false });
+    const payable = vi.spyOn(client, "getBillsPayable");
+    const receivable = vi.spyOn(client, "getOutstandings");
+
+    renderReport(BillsPayableScreen, client);
+    await waitFor(() => expect(payable).toHaveBeenCalled());
+    expect(receivable).not.toHaveBeenCalled();
+    // And it sends NO kind: the route IS the kind, and honouring one would hand
+    // back the receivables list from under the payables rule.
+    const [, query] = payable.mock.calls[0]!;
+    expect(query ?? {}).not.toHaveProperty("kind");
+  });
+
+  it("⛔ CONTROL: OutstandingsScreen still calls getOutstandings, so the split is real", async () => {
+    // Without this, "point both screens at getBillsPayable" passes the arm above.
+    const client = createMockClient({ seed: false });
+    const payable = vi.spyOn(client, "getBillsPayable");
+    const receivable = vi.spyOn(client, "getOutstandings");
+
+    renderReport(OutstandingsScreen, client);
+    await waitFor(() => expect(receivable).toHaveBeenCalled());
+    expect(payable).not.toHaveBeenCalled();
   });
 });

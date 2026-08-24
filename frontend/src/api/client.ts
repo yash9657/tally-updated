@@ -1027,6 +1027,26 @@ export interface CoredClient {
     query?: OutstandingsQuery,
   ): Promise<OutstandingsResponse>;
   /**
+   * THE PAYABLES AGEING, under its OWN report name (D94).
+   *
+   * ⛔⛔ IT IS A SEPARATE METHOD AND NOT `getOutstandings(co, {kind: "PAYABLE"})`,
+   * AND THE DIFFERENCE IS AUTHORISATION RATHER THAN STYLE. cored maps the FLAT
+   * LITERAL PATH to the PDP resource, so this call is governed by
+   * `report:bills-payable` while the other is governed by `report:outstandings`.
+   * Routing this screen through the `?kind=` form would silently put the payables
+   * book back under the receivables rule — which is the whole defect.
+   *
+   * ⚠️ It takes no `kind`. The route IS the kind; a `?kind=RECEIVABLE` on it would
+   * hand back the receivables list from under the payables rule.
+   * ⚠️ A 403 is a NORMAL answer here for a level a tenant has written
+   * `disallow display report:bills-payable` for, and must be rendered as a stated
+   * decision rather than an empty table.
+   */
+  getBillsPayable(
+    companyID: string,
+    query?: { as_on?: string },
+  ): Promise<OutstandingsResponse>;
+  /**
    * The STOCK SUMMARY as at a date — a POSITION, so it takes `asOn` only, for
    * the same reason the Trial Balance does: applying a lower bound would drop
    * the stock the company already owned while still rendering a tidy-looking
