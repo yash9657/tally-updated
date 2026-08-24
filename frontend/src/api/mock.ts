@@ -47,6 +47,7 @@ import type {
   OutstandingParty,
   OutstandingsQuery,
   OutstandingsResponse,
+  PartyOpenBillsResponse,
   ProfitLossResponse,
   TrialBalanceResponse,
   VoucherClass,
@@ -6115,6 +6116,45 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
      */
     async getBillsPayable(companyID, query?: { as_on?: string }) {
       return outstandingsOf(companyID, "PAYABLE", query?.as_on);
+    },
+
+    /**
+     * ONE PARTY's open bills, for the settlement picker (D97).
+     *
+     * ⛔ A THIRD THIN WRAPPER OVER THE SAME LOCAL IMPLEMENTATION, never a call to
+     * a sibling METHOD, for the reason `getBillsPayable` records above: cored has
+     * one writer behind these doors, and a mock whose surfaces delegate through
+     * each other lets a test that stubs one silently change another.
+     *
+     * ⛔ IT NARROWS TO THE PARTY HERE, and that is fidelity rather than tidiness:
+     * cored emits ONE party and no totals from this route, so a mock that handed
+     * back the whole report would let a screen bug that reads another party's
+     * bills — or the ageing total — pass green and fail on the wire.
+     *
+     * ⚠️ NO `as_on` IS ACCEPTED OR APPLIED, matching the route (D86): "which open
+     * bill is this payment for" is answered by a future-dated bill too.
+     *
+     * ⚠️ WHAT THE MOCK CANNOT MODEL is the whole reason the route exists: there is
+     * no PDP in this store, so `voucherClass` changes nothing here. That it is the
+     * AUTHORITY can only be driven against real cored — see drive-l25-d97.mjs.
+     */
+    async getPartyOpenBills(
+      companyID,
+      _voucherClass,
+      ledgerID,
+      kind,
+    ): Promise<PartyOpenBillsResponse> {
+      const out = await outstandingsOf(companyID, kind, undefined);
+      const party = out.parties.find((p) => p.ledger_id === ledgerID);
+      return {
+        kind,
+        ledger_id: ledgerID,
+        ledger: party?.ledger ?? "",
+        group: party?.group ?? "",
+        pending: party?.pending ?? "0.0000",
+        bills: party?.bills ?? [],
+        found: party !== undefined,
+      };
     },
 
 

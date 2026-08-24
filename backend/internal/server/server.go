@@ -834,12 +834,39 @@ func (s *Server) routes() {
 		// one report with a direction toggle: the same reasoning migration 0073 and
 		// `REPORT_NAMES` already carry for the two ORDER BOOKS.
 		//
-		// ⚠️ IT IS ADDITIVE. `/outstandings` and its `?kind=` are untouched, so no
-		// existing `acl_rule` row is invalidated and `printOutstandings`, the NLQ
-		// surface and the bill-wise picker all keep working — the picker in particular
-		// MUST keep reading `?kind=PAYABLE`, because a Data Entry clerk keying a
-		// Payment needs a supplier's open bills or the receipt lands ON ACCOUNT.
+		// ⚠️ IT WAS ADDITIVE WHEN IT LANDED, AND D97 IS WHY IT COULD NOT STAY THAT
+		// WAY. `/outstandings?kind=PAYABLE` kept answering the payables book from
+		// under the RECEIVABLES rule, because it had to: the bill-wise picker was the
+		// only caller that needed it, and refusing it there pushes a clerk's payment
+		// ON ACCOUNT. The picker now has a door of its own (`/vouchers/{class}/
+		// open-bills/{ledgerID}` below), so nothing needs the parameter any more and
+		// `handleOutstandings` redirects it to the route above — see that handler.
 		r.Get("/bills-payable", s.handleBillsPayable)
+
+		// ⛔⛔ THE BILL-WISE PICKER'S OWN DOOR (D97). ONE handler, EIGHT literal
+		// routes, and the repetition is load-bearing twice over.
+		//
+		// The CLASS is a literal segment because `routeAction` is the PDP's only view
+		// of the request and it reads the path: this read is authorised as
+		// `display <class>` — the authority the clerk keying that voucher already
+		// holds — so the class has to be IN the path, exactly as it is for the POSTs
+		// and PUTs above. A `{class}` pattern would also break
+		// TestEveryCompanyRouteIsMappedAndInVocabulary, whose synthesiser hands every
+		// path parameter a UUID; `isVoucherClass("<uuid>")` is false, and the route
+		// would walk as unmapped.
+		//
+		// The LEDGER is a path segment so there is NO unscoped form: this route can
+		// never answer with the whole book, whatever a caller omits.
+		//
+		// ⚠️ ONLY THE EIGHT ACCOUNTING CLASSES. The four non-accounting stock vouchers
+		// post no ledger lines at all, so they open and settle nothing — a route for
+		// them would be an authority over an empty question.
+		for _, cls := range []string{
+			"sales", "purchase", "receipt", "payment", "contra", "journal",
+			"credit-note", "debit-note",
+		} {
+			r.Get("/vouchers/"+cls+"/open-bills/{ledgerID}", s.handleOpenBills)
+		}
 
 		// BANK RECONCILIATION (T4). The GET is a report; the PUT/DELETE are an
 		// Alter of "bank-reconciliation" — two DIFFERENT resources, because
@@ -2922,6 +2949,94 @@ func (s *Server) handleBillsPayable(w http.ResponseWriter, r *http.Request) {
 	s.writeOutstandings(w, r, reporting.Payables)
 }
 
+// handleOpenBills lists ONE party's open bills, for the bill-wise picker (D97).
+//
+// ⛔⛔ IT EXISTS TO SPLIT AN AUTHORITY, NOT TO ADD A REPORT. "Read the payables
+// book" and "list THIS party's open bills so I can settle one" are two different
+// jobs, and until this handler they went through one door: the picker called
+// `/outstandings?kind=PAYABLE`, so a level refused `report:bills-payable` was
+// refused the ageing and could still read every figure in it. The refusal governed
+// the DOOR and not the bytes. `routeAction` sees the path and never the query, so
+// the split had to become a route.
+//
+// ⛔ WHAT IT DELIBERATELY DOES NOT EMIT. No slab totals, no grand total, no other
+// party. The picker had been receiving the whole book — every party's bills and the
+// ageing summary — to render one supplier's list, and that over-disclosure was half
+// of what made the leak worth anything. A caller here learns what they must name a
+// ledger to ask about, and nothing else.
+//
+// ⚠️ THE RESIDUAL, STATED RATHER THAN HIDDEN. A level holding `display payment` can
+// call this once per supplier ledger it can already see in the chart and rebuild a
+// list of open bills by hand. That is inherent to ANY party-scoped door and it is
+// the accepted cost of the decision: the authority to pick a bill is not separable
+// from the authority to key the voucher that settles it. What it can no longer do is
+// read the BOOK — no ageing, no totals, no parties it did not name.
+//
+// ⚠️ NO `as_on`, AND THAT IS DELIBERATE (D86, and the picker's own comment). The
+// question is "which open bill is this payment for", and a bill dated ahead is an
+// ordinary answer to it. Bounding at today would make an allocable bill unallocable
+// and push the money ON ACCOUNT.
+func (s *Server) handleOpenBills(w http.ResponseWriter, r *http.Request) {
+	ctx, companyID, ok := s.scopeCtxID(w, r)
+	if !ok {
+		return
+	}
+	// The SAME parser both ageing doors use. A kind spelled one way here and
+	// another there would offer an operator the wrong party's list — and an empty
+	// picker reads as "this supplier has no open bills", which is a settlement
+	// keyed ON ACCOUNT for a bill that was sitting right there.
+	kind, ok2 := outstandingKindParam(w, r)
+	if !ok2 {
+		return
+	}
+	ledgerID, err := uuid.Parse(chi.URLParam(r, "ledgerID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid ledger id")
+		return
+	}
+	out, err := s.report.Outstandings(ctx, companyID, kind, "", nil)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	// ⛔ MATCHED ON THE LEDGER ID, never the name — the same rule the client used
+	// to apply and for the same reason: a rename would otherwise show a party with
+	// several open bills as having none, silently.
+	bills := make([]map[string]any, 0)
+	found := false
+	var ledgerName, groupName, pending string
+	for _, party := range out.Parties {
+		if party.LedgerID != ledgerID {
+			continue
+		}
+		found = true
+		ledgerName, groupName, pending = party.LedgerName, party.GroupName, party.Pending.StringFixed(4)
+		for _, b := range party.Bills {
+			bills = append(bills, map[string]any{
+				"ref_name":     b.RefName,
+				"pending":      b.Pending.StringFixed(4),
+				"due_date":     b.DueDate,
+				"overdue_days": b.OverdueDays,
+				"slab":         b.SlabLabel,
+			})
+		}
+		break
+	}
+	// ⚠️ A PARTY WITH NOTHING OPEN IS A 200 WITH AN EMPTY LIST, NOT A 404. "This
+	// supplier owes nothing" is an ANSWER to the picker's question, and a 404 would
+	// make the form render an error over an ordinary state — which trains an
+	// operator to key past it.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"kind":      string(kind),
+		"ledger_id": ledgerID.String(),
+		"ledger":    ledgerName,
+		"group":     groupName,
+		"pending":   pending,
+		"bills":     bills,
+		"found":     found,
+	})
+}
+
 func (s *Server) handleOutstandings(w http.ResponseWriter, r *http.Request) {
 	// The `kind` parser lives in handler_print_reports.go and is SHARED with the
 	// printed ageing. If the two parsed it differently — one defaulting to
@@ -2935,6 +3050,38 @@ func (s *Server) handleOutstandings(w http.ResponseWriter, r *http.Request) {
 	}
 	kind, ok2 := outstandingKindParam(w, r)
 	if !ok2 {
+		return
+	}
+	// ⛔⛔ THIS IS THE RETIREMENT OF `?kind=PAYABLE` (D97), AND IT IS A REDIRECT
+	// RATHER THAN A REFUSAL OR A 403.
+	//
+	// This route is decided as `report:outstandings`. Answering the PAYABLES book
+	// from it handed a level that had been refused `report:bills-payable` the same
+	// figures under the other name — the whole row. It could only ever be served
+	// here because the bill-wise picker had no other way to ask; now it has one
+	// (handleOpenBills above), and nothing needs the parameter.
+	//
+	// ⚠️ WHY 308 AND NOT 400. `/bills-payable`'s own comment records the call: an
+	// operator's stale bookmark should be an ANSWER, not an error. A redirect keeps
+	// that promise AND fixes the authority, because the follow-up request is a new
+	// request over a different path — so `routeAction` decides it as
+	// `report:bills-payable`, and a level refused that name gets a 403 from the
+	// middleware, which is where every other refusal in this system comes from. A
+	// 400 would break the bookmark; a 403 written here would be the first
+	// authorization decision inside a handler in this codebase, and the PDP living
+	// in exactly one place is what makes it auditable.
+	//
+	// ⚠️ THE QUERY IS CARRIED OVER MINUS THE KIND. `as_on` is the caller's question
+	// and dropping it would answer a different one; `kind` is deleted because the
+	// target route IS the kind and ignores it anyway (see handleBillsPayable).
+	if kind == reporting.Payables {
+		q := r.URL.Query()
+		q.Del("kind")
+		target := strings.TrimSuffix(r.URL.EscapedPath(), "/outstandings") + "/bills-payable"
+		if enc := q.Encode(); enc != "" {
+			target += "?" + enc
+		}
+		http.Redirect(w, r, target, http.StatusPermanentRedirect)
 		return
 	}
 	s.writeOutstandings(w, r, kind)

@@ -1408,6 +1408,41 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 		if len(segs) == 3 && segs[0] == "vouchers" && segs[2] == "history" {
 			return authz.Display, "voucher", "", true
 		}
+		// ⛔⛔ THE BILL-WISE PICKER'S OWN DOOR (D97), AND THE CLASS IN THE PATH IS
+		// THE WHOLE POINT OF THE SHAPE.
+		//
+		// Until this route existed, listing a party's open bills to settle one meant
+		// calling `GET /outstandings?kind=PAYABLE` — the RECEIVABLES report's door —
+		// so a level carrying `disallow display report:bills-payable` was refused the
+		// payables ageing and could still read every figure in it. THE RULE GOVERNED
+		// THE DOOR AND NOT THE BYTES. It could not be fixed where it was: this
+		// function is the PDP's only view of the request, it sees the PATH, and a
+		// query parameter never reaches it.
+		//
+		// ⛔ THE AUTHORITY IS THE VOUCHER CLASS BEING KEYED, not a report name and not
+		// a token of its own. "May list THIS party's open bills so I can settle one"
+		// is not the same authority as "may read the payables book", and it is not
+		// separable from "may key a Payment" either: a clerk who may post the payment
+		// but may not pick the bill can only post it ON ACCOUNT — the balance nobody
+		// can chase, which is the failure this whole row exists to avoid. So the class
+		// segment carries the decision, every seeded level that can key the voucher
+		// already holds `allow display <class>` (migration 0011), and NO migration is
+		// needed: a default-deny level cannot silently lose its picker on upgrade.
+		//
+		// ⛔ THE LEDGER IS IN THE PATH SO THERE IS NO UNSCOPED FORM TO SERVE. Had it
+		// ridden a `?ledger_id=`, omitting it would have to be validated into a 400 —
+		// and a route that CAN answer with the whole book, guarded only by a check
+		// inside the handler, is the same defect as before wearing a third name.
+		// Structure, not validation.
+		//
+		// ⚠️ `?kind=` STILL RIDES IN THE QUERY, AND THAT IS CORRECT HERE. The kind
+		// follows the PARTY's group (a Payment can refund a debtor — see kindForGroup
+		// in VoucherScreen.tsx), not the class, and the authority granted does not
+		// depend on it: it is the same job either way.
+		if len(segs) == 4 && segs[0] == "vouchers" && isVoucherClass(segs[1]) &&
+			segs[2] == "open-bills" {
+			return authz.Display, authz.Resource(segs[1]), "", true
+		}
 		return "", "", "", false
 
 	// DELETE voucher.

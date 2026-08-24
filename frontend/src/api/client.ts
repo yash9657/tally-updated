@@ -38,8 +38,10 @@ import type {
   GSTR1Response,
   ImportTallyXMLQuery,
   ImportTallyXMLResponse,
+  OutstandingKind,
   OutstandingsQuery,
   OutstandingsResponse,
+  PartyOpenBillsResponse,
   ProfitLossResponse,
   TrialBalanceResponse,
   VoucherRequest,
@@ -97,6 +99,7 @@ import type {
   SetTDSProfileResponse,
   SetBankDateRequest,
   SetBankDateResponse,
+  VoucherClass,
 } from "./types";
 import type { QueryRequest, QueryResult } from "./query";
 import type {
@@ -1046,6 +1049,43 @@ export interface CoredClient {
     companyID: string,
     query?: { as_on?: string },
   ): Promise<OutstandingsResponse>;
+  /**
+   * ONE PARTY's open bills, for the bill-wise settlement picker (D97).
+   *
+   * ⛔⛔ IT IS NOT `getOutstandings(co, { kind })` FILTERED IN THE BROWSER, AND THE
+   * DIFFERENCE IS AUTHORISATION BEFORE IT IS SHAPE. That call goes through
+   * `report:outstandings` — the RECEIVABLES report's door — so the picker was how
+   * a level carrying `disallow display report:bills-payable` still read every
+   * figure in the payables book: the rule governed the DOOR and not the bytes.
+   * cored maps the FLAT PATH to the PDP resource and never the query string, so
+   * splitting the two jobs had to become a route.
+   *
+   * ⛔ IT IS AUTHORISED AS THE VOUCHER CLASS BEING KEYED, which is why `voucherClass`
+   * is a required argument and rides in the PATH. "May list THIS party's open bills
+   * so I can settle one" is the authority a clerk keying that voucher already holds
+   * (migration 0011 seeds `allow display <class>` for every class a level may key),
+   * and it is deliberately NOT separable from it: a level that may post a Payment
+   * but may not pick the bill can only post ON ACCOUNT — the balance nobody can
+   * chase, which is the failure the whole split exists to avoid.
+   *
+   * ⚠️ `kind` FOLLOWS THE PARTY, NOT THE CLASS. A Payment can refund a debtor; see
+   * `kindForGroup` in VoucherScreen.tsx. It rides the query because the authority
+   * granted is the same job either way.
+   *
+   * ⚠️ NO `as_on`, DELIBERATELY (D86). "Which open bill is this payment for" is
+   * answered by a bill dated ahead just as well as one dated behind; bounding at
+   * today would make an allocable bill unallocable and push the money ON ACCOUNT.
+   *
+   * ⚠️ A 403 IS A NORMAL ANSWER for a level that may not key this class, and must be
+   * rendered as a stated decision rather than an empty list — an empty picker reads
+   * as "this party has no open bills", which is a settlement keyed against nothing.
+   */
+  getPartyOpenBills(
+    companyID: string,
+    voucherClass: VoucherClass,
+    ledgerID: string,
+    kind: OutstandingKind,
+  ): Promise<PartyOpenBillsResponse>;
   /**
    * The STOCK SUMMARY as at a date — a POSITION, so it takes `asOn` only, for
    * the same reason the Trial Balance does: applying a lower bound would drop

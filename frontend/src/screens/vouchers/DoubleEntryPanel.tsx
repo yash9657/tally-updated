@@ -1,4 +1,4 @@
-import type { LedgerListItem } from "../../api";
+import type { LedgerListItem, VoucherClass } from "../../api";
 import { BillAllocationPicker } from "./BillAllocationPicker";
 import { CostAllocationPicker } from "./CostAllocationPicker";
 import {
@@ -27,12 +27,19 @@ import { normalizeMoney } from "./money";
  * are pinned by their own tests.
  */
 export function DoubleEntryPanel({
+  voucherClass,
   lines,
   setLines,
   parties,
   ledgerByName,
   kindForGroup,
 }: {
+  /**
+   * The class being keyed — the AUTHORITY the row's open-bill list is read under
+   * (D97). Passed down rather than inferred: this grid is reached from F5/F6/F4
+   * and from the Journal, and each is a different `display <class>` rule.
+   */
+  voucherClass: VoucherClass;
   lines: readonly DoubleEntryLine[];
   setLines: (
     next: (prev: readonly DoubleEntryLine[]) => DoubleEntryLine[],
@@ -129,6 +136,7 @@ export function DoubleEntryPanel({
               if (led === undefined || !led.maintain_bill_by_bill) return null;
               return (
                 <BillAllocationPicker
+                  voucherClass={voucherClass}
                   leg={{
                     ledgerId: led.id,
                     drCr: l.side,

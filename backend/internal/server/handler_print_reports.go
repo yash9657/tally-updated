@@ -690,6 +690,23 @@ func (s *Server) printOutstandings(ctx context.Context, w http.ResponseWriter, r
 	if !ok {
 		return printing.ReportTable{}, false
 	}
+	// ⛔⛔ THE PAPER DOOR IS RETIRED TOO, AND CLOSING ONLY THE JSON ONE WOULD HAVE
+	// BEEN THE §5.19 MISTAKE EXACTLY (D97). This route is decided as
+	// `print report:outstandings`; serving the payables list from it handed a level
+	// refused `print report:bills-payable` the same rows on a filed sheet, which is
+	// the leak wearing a letterhead. Same 308 as the JSON handler, for the same
+	// reasons written there — the redirected request is decided as
+	// `print report:bills-payable`, by the middleware, where every refusal belongs.
+	if kind == reporting.Payables {
+		q := r.URL.Query()
+		q.Del("kind")
+		target := strings.TrimSuffix(r.URL.EscapedPath(), "/outstandings") + "/bills-payable"
+		if enc := q.Encode(); enc != "" {
+			target += "?" + enc
+		}
+		http.Redirect(w, r, target, http.StatusPermanentRedirect)
+		return printing.ReportTable{}, false
+	}
 	return s.printOutstandingsOfKind(ctx, w, r, companyID, kind)
 }
 

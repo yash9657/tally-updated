@@ -44,6 +44,43 @@ const AS_VOUCHER_TYPE: Readonly<Record<VoucherClass, VoucherType>> = {
   "physical-stock": "physical-stock",
 };
 
+/**
+ * The REVERSE join: a frame's `VoucherType` back to the api `VoucherClass`.
+ *
+ * ⛔ IT IS A SECOND EXPLICIT TABLE, NOT A CAST AND NOT AN INVERSION LOOP, for the
+ * same reason `AS_VOUCHER_TYPE` above is not `identity` written as a loop: tsc
+ * requires every `VoucherType` key and requires each value to be a real
+ * `VoucherClass`, so a slug that exists on one side only stops compiling. An
+ * inverted loop, or a `type as VoucherClass`, would happily hand a frame slug
+ * that no api class matches straight into a URL path.
+ *
+ * ⚠️ IT IS LOAD-BEARING FOR AN ACL DECISION (D97), which is why it is worth a
+ * table. The class goes into the PATH of `/vouchers/{class}/open-bills/{ledgerID}`
+ * and cored's PDP decides the bill-wise picker's read on it; a slug the server
+ * does not recognise as a voucher class is default-DENIED by routeAction, so a
+ * silent mis-cast here would take the picker away from a clerk who is entitled to
+ * it and land their settlement ON ACCOUNT.
+ */
+const AS_VOUCHER_CLASS: Readonly<Record<VoucherType, VoucherClass>> = {
+  sales: "sales",
+  purchase: "purchase",
+  receipt: "receipt",
+  payment: "payment",
+  contra: "contra",
+  journal: "journal",
+  "credit-note": "credit-note",
+  "debit-note": "debit-note",
+  "delivery-note": "delivery-note",
+  "receipt-note": "receipt-note",
+  "stock-journal": "stock-journal",
+  "physical-stock": "physical-stock",
+};
+
+/** The api `VoucherClass` a voucher frame keys. Total: every frame has one. */
+export function voucherClassForType(type: VoucherType): VoucherClass {
+  return AS_VOUCHER_CLASS[type];
+}
+
 /** label -> frame type, built once from the two tables above. */
 const BY_LABEL: ReadonlyMap<string, VoucherType> = new Map(
   (Object.keys(AS_VOUCHER_TYPE) as VoucherClass[]).map((cls) => [

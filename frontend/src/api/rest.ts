@@ -40,6 +40,7 @@ import type {
   ListStockItemsResponse,
   OutstandingsQuery,
   OutstandingsResponse,
+  PartyOpenBillsResponse,
   ProfitLossResponse,
   StockSummaryResponse,
   TrialBalanceResponse,
@@ -828,6 +829,18 @@ export function createRestClient(
       return http.get<OutstandingsResponse>(
         `${company(companyID)}/bills-payable`,
         query,
+      );
+    },
+    getPartyOpenBills(companyID, voucherClass, ledgerID, kind) {
+      // ⛔ THE CLASS AND THE LEDGER ARE BOTH IN THE PATH, AND NEITHER IS STYLE.
+      // The class is what cored's PDP decides on (it reads the path, never the
+      // query), and the ledger is in the path so this route has NO unscoped form
+      // — it can never answer with the whole ageing book, whatever a caller
+      // omits. The kind rides the query because the authority does not depend on
+      // it. See the interface for the row this shape closes.
+      return http.get<PartyOpenBillsResponse>(
+        `${company(companyID)}/vouchers/${voucherClass}/open-bills/${encodeURIComponent(ledgerID)}`,
+        { kind },
       );
     },
     getStockSummary(companyID, asOn?: string) {

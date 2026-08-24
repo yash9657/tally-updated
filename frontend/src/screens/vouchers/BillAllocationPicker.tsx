@@ -2,7 +2,12 @@ import { useCallback, useEffect, useState } from "react";
 
 import { useClient, useCompanyID } from "../../app/CompanyContext";
 import { ApiError } from "../../api";
-import type { OutstandingBill, OutstandingKind, RefType } from "../../api";
+import type {
+  OutstandingBill,
+  OutstandingKind,
+  RefType,
+  VoucherClass,
+} from "../../api";
 import { formatFixed4, parseFixed4 } from "./itemInvoice";
 import {
   billAllocated,
@@ -69,8 +74,26 @@ const REF_TYPE_LABEL: Record<RefType, string> = {
   ON_ACCOUNT: "On Account",
 };
 
-/** The party's open bills, for the settle mode's picker. */
+/**
+ * The party's open bills, for the settle mode's picker.
+ *
+ * ⛔⛔ IT READS THE PARTY-SCOPED ROUTE, NOT THE AGEING REPORT (D97). This hook used
+ * to call `getOutstandings(companyID, { kind })` and filter the whole book down to
+ * one `ledger_id` in the browser — so rendering one supplier's list fetched every
+ * party's bills and the ageing totals, and it fetched them through
+ * `report:outstandings`, the RECEIVABLES report's door. That is how a level
+ * carrying `disallow display report:bills-payable` was refused the payables ageing
+ * and could still read every figure in it: the rule governed the DOOR, not the
+ * bytes.
+ *
+ * ⛔ THE FIX WAS NEVER "REFUSE THE PICKER TOO". A clerk who may key a Payment but
+ * cannot pick the bill posts it ON ACCOUNT — the balance nobody can chase. So the
+ * read is authorised as the VOUCHER CLASS being keyed, which is the authority they
+ * already hold, and the class rides in the path because cored's PDP sees the path
+ * and never the query.
+ */
 function useOpenBills(
+  voucherClass: VoucherClass,
   ledgerId: string,
   kind: OutstandingKind,
   enabled: boolean,
@@ -91,24 +114,26 @@ function useOpenBills(
     let live = true;
     setLoading(true);
     client
-      // ⛔ NO `as_on`, AND THAT IS NOW A DECISION RATHER THAN AN OMISSION (D86).
-      // Since the ageing report stopped bounding an unnamed date at today, this
-      // picker lists FUTURE-DATED open bills too — and it should. The question this
-      // list answers is "which open bill is this payment for", and a customer paying
-      // an advance or proforma invoice early is the ordinary case; excluding it would
-      // make an allocable bill unallocable and push the operator onto ON ACCOUNT,
-      // which is the balance nobody can chase later. A bill that exists and is unpaid
-      // is a valid target whatever its date.
-      // ⚠️ Passing today's date here to "restore" the old list would be the wrong
-      // fix twice over: it would re-open the same disagreement with the ledger
-      // balance, on a surface where the consequence is a mis-allocated receipt.
-      .getOutstandings(companyID, { kind })
+      // ⛔ NO `as_on`, AND THAT IS A DECISION RATHER THAN AN OMISSION (D86). The
+      // route takes none at all now, for this reason: the question this list answers
+      // is "which open bill is this payment for", and a customer paying an advance or
+      // proforma invoice early is the ordinary case. Excluding a future-dated bill
+      // would make an allocable one unallocable and push the operator onto ON
+      // ACCOUNT, which is the balance nobody can chase later. A bill that exists and
+      // is unpaid is a valid target whatever its date.
+      // ⚠️ Passing today's date to "restore" the old list would be the wrong fix
+      // twice over: it would re-open the same disagreement with the ledger balance,
+      // on a surface where the consequence is a mis-allocated receipt.
+      //
+      // ⛔ THE MATCH ON LEDGER ID NOW HAPPENS ON THE SERVER, and it still matches on
+      // the ID rather than the display name for the same reason it did here: a
+      // rename would otherwise show a customer with several open bills as having
+      // none, silently. What changed is that the browser no longer receives the
+      // parties it is not asking about.
+      .getPartyOpenBills(companyID, voucherClass, ledgerId, kind)
       .then((res) => {
         if (!live) return;
-        // ⛔ MATCHED ON THE LEDGER ID, not the display name. A rename would
-        // silently show a customer with several open bills as having none.
-        const party = res.parties.find((p) => p.ledger_id === ledgerId);
-        setBills(party?.bills ?? []);
+        setBills(res.bills);
         setError("");
         setDenied(false);
       })
@@ -132,12 +157,13 @@ function useOpenBills(
     return () => {
       live = false;
     };
-  }, [client, companyID, ledgerId, kind, enabled]);
+  }, [client, companyID, voucherClass, ledgerId, kind, enabled]);
 
   return { bills, error, denied, loading };
 }
 
 export function BillAllocationPicker({
+  voucherClass,
   leg,
   refs,
   mode,
@@ -145,6 +171,19 @@ export function BillAllocationPicker({
   label,
   onChange,
 }: {
+  /**
+   * The class of voucher being keyed — the AUTHORITY this panel's read is
+   * granted under (D97).
+   *
+   * ⛔ It is NOT cosmetic and it is NOT derivable from `mode`: `mode` says what
+   * the voucher usually does to a bill, while this says which `display <class>`
+   * rule cored decides the open-bill list on. The class rides in the path of
+   * `/vouchers/{class}/open-bills/{ledgerID}` because cored's PDP reads the path
+   * and never the query, and it is the class rather than a report name because a
+   * clerk who may key the voucher must be able to pick the bill it settles — one
+   * who cannot posts ON ACCOUNT, the balance nobody can chase.
+   */
+  voucherClass: VoucherClass;
   leg: BillBearingLeg;
   refs: readonly DraftBillRef[];
   /** "raise" opens bills (Sales/Purchase); "settle" closes them (Receipt/Payment). */
@@ -162,6 +201,7 @@ export function BillAllocationPicker({
   const wantsOpenBills =
     mode === "settle" || refs.some((r) => r.refType === "AGAINST");
   const { bills, error, denied, loading } = useOpenBills(
+    voucherClass,
     leg.ledgerId,
     kind,
     wantsOpenBills,

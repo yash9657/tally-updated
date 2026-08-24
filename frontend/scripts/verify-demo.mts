@@ -164,7 +164,11 @@ async function main(): Promise<void> {
     `BS ${debtors} vs Outstandings ${rec.total}`,
   );
 
-  const pay = await client.getOutstandings(co, { kind: "PAYABLE" });
+  // ⛔ THE PAYABLES BOOK IS ASKED FOR BY ITS OWN NAME (D94/D97). `?kind=PAYABLE`
+  // on the receivables route now answers a 308 to exactly this call, because
+  // serving the payables ageing from under `report:outstandings` is what let a
+  // level refused `report:bills-payable` read every figure in it anyway.
+  const pay = await client.getBillsPayable(co);
   const creditors = findNode(bs.liabilities.nodes as unknown as TreeNode[], "Sundry Creditors");
   check(
     "BS Sundry Creditors == Outstandings (payable)",

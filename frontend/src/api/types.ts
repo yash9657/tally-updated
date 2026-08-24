@@ -1592,6 +1592,31 @@ export interface OutstandingsQuery {
   [key: string]: string | undefined;
 }
 
+/**
+ * ONE PARTY's open bills, for the bill-wise settlement picker (D97).
+ *
+ * ⛔⛔ IT IS A DIFFERENT SHAPE FROM `OutstandingsResponse` AND THE DIFFERENCE IS
+ * THE POINT. No slab totals, no grand total, no other party. The picker used to
+ * fetch the whole ageing report and filter it client-side to one `ledger_id`, so
+ * to render one supplier's list it received every party's bills and the ageing
+ * summary — and it fetched them from `/outstandings?kind=PAYABLE`, the
+ * RECEIVABLES report's door, which is how a level refused
+ * `report:bills-payable` could still read every figure in the payables book.
+ *
+ * ⚠️ `found` DISTINGUISHES "no such party in this ageing" FROM "this party has
+ * nothing open", which an empty `bills` array cannot. Both render as an empty
+ * picker, but only one of them is a bug worth seeing in a drive.
+ */
+export interface PartyOpenBillsResponse {
+  kind: OutstandingKind;
+  ledger_id: string;
+  ledger: string;
+  group: string;
+  pending: Money;
+  bills: OutstandingBill[];
+  found: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // GSTR-1
 // ---------------------------------------------------------------------------

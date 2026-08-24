@@ -22,7 +22,11 @@ import {
   entryModesFor,
   type VoucherConfig,
 } from "./vouchers/voucherConfig";
-import { dayBookRowKey, voucherTypeForClass } from "./vouchers/voucherClass";
+import {
+  dayBookRowKey,
+  voucherClassForType,
+  voucherTypeForClass,
+} from "./vouchers/voucherClass";
 import {
   emptyGstFormState,
   ensureLedger,
@@ -100,6 +104,7 @@ import type {
   PostingRequest,
   PurchaseVoucherDraft,
   StockItemListItem,
+  VoucherClass,
   VoucherDraftBody,
   VoucherRequest,
   VoucherResponse,
@@ -2991,6 +2996,7 @@ function AccountingVoucherScreen({
         </>
       ) : entryMode === "single" ? (
         <SingleEntryPanel
+          voucherClass={voucherClassForType(type)}
           form={form}
           setForm={setForm}
           accountLabel={cfg.partyLabel}
@@ -3007,6 +3013,7 @@ function AccountingVoucherScreen({
            same dead end. See doubleEntry.ts's header. */
         <>
           <DoubleEntryPanel
+            voucherClass={voucherClassForType(type)}
             lines={form.drCrLines}
             setLines={(next) =>
               setForm((f) => ({ ...f, drCrLines: next(f.drCrLines) }))
@@ -3052,6 +3059,7 @@ function AccountingVoucherScreen({
       {raiseParty !== undefined && raiseParty.maintain_bill_by_bill ? (
         <div className="mt-3 max-w-2xl bg-tally-panel p-3 text-sm" data-testid="bill-refs-panel">
           <BillAllocationPicker
+            voucherClass={voucherClassForType(type)}
             leg={raiseLeg}
             refs={form.billRefs}
             mode="raise"
@@ -3544,6 +3552,7 @@ function ChangeModeOverlay({
  * sides disagree in a form whose job is to make them agree.
  */
 function SingleEntryPanel({
+  voucherClass,
   form,
   setForm,
   accountLabel,
@@ -3552,6 +3561,13 @@ function SingleEntryPanel({
   ledgerByName,
   kindForGroup,
 }: {
+  /**
+   * The class being keyed — the AUTHORITY a particular's open-bill list is read
+   * under (D97). Threaded down rather than inferred here: the single-entry form
+   * renders for Receipt, Payment and Contra alike, and each is a different
+   * `display <class>` rule in cored's PDP.
+   */
+  voucherClass: VoucherClass;
   form: VoucherForm;
   setForm: React.Dispatch<React.SetStateAction<VoucherForm>>;
   accountLabel: string;
@@ -3658,6 +3674,7 @@ function SingleEntryPanel({
               if (led === undefined || !led.maintain_bill_by_bill) return null;
               return (
                 <BillAllocationPicker
+                  voucherClass={voucherClass}
                   leg={{
                     ledgerId: led.id,
                     drCr: manySide === "Dr" ? "DR" : "CR",

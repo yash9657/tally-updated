@@ -20,10 +20,18 @@
  * tenant's security posture that must never be left on shared books.
  *
  * ⚠️ NOTE WHAT IS **NOT** SEEDED. This row ships NO counterweight migration: a seeded
- * Data Entry level can still read the payables book by default, because it already
- * could as `?kind=PAYABLE` and NEEDS to (the bill-wise picker on a Payment). The rule
- * is WRITABLE, not written — so this probe WRITES it, which is exactly how a tenant
- * that wants the split would.
+ * Data Entry level can still read the payables book by default. The rule is WRITABLE,
+ * not written — so this probe WRITES it, which is exactly how a tenant that wants the
+ * split would.
+ *
+ * ✅ **AND ITS RESIDUAL ARM HAS SINCE INVERTED — D97 IS CLOSED (L26).** When this
+ * drive was written, the denied clerk was 200 on `?kind=PAYABLE` and the arm below
+ * said so. The bill-wise picker was the only thing that needed that read, and it now
+ * has a door of its own at `/vouchers/{class}/open-bills/{ledgerID}` authorised as
+ * `display <class>`, so the parameter was retired: it answers a 308 to
+ * `/bills-payable`, where the PDP refuses the clerk. The arm now asserts the 403 and
+ * is the same experiment either way — which is why it was left in place and inverted
+ * rather than deleted.
  *
  * RUN:  node frontend/scripts/drive-l24-d94.mjs        (takes NO CO — it makes one)
  */
@@ -199,15 +207,43 @@ rec("D94: ⛔ …and the PRINTED form is refused too, or the refusal has a paper
     clerkPayPrint.status === 403,
     `GET /print/reports/bills-payable = ${clerkPayPrint.status}`);
 
-// ⚠️ THE RESIDUAL, MEASURED AND STATED RATHER THAN HIDDEN. The same data is still
-// reachable under the OTHER name, because `?kind=` must keep working for the
-// bill-wise picker a clerk needs to settle a supplier bill. The refusal governs the
-// DOOR, not the bytes. Registered as its own row, not silently closed.
+// ✅⛔ THE RESIDUAL, NOW CLOSED — THIS ARM IS INVERTED FROM WHAT IT ASSERTED WHEN IT
+// REGISTERED D97, AND IT IS THE SAME EXPERIMENT. It used to demand a 200 here and get
+// one: the payables book served from under `report:outstandings`, to a clerk who had
+// just been refused `report:bills-payable` at its own name. `fetch` follows the 308,
+// so what this measures is the END of that journey — the PDP's verdict on
+// `/bills-payable`, which is a 403. The rule now governs the BYTES and not just the
+// door.
 const bypass = await j("GET", `${base}/outstandings?kind=PAYABLE`, { token: CLERK_TOK });
-rec("D94: ⚠️ RESIDUAL (registered, not fixed) — ?kind=PAYABLE still answers under the OTHER name",
-    bypass.status === 200,
+rec("D97: ⛔⛔ THE ROW — ?kind=PAYABLE no longer answers under the OTHER name",
+    bypass.status === 403,
     `GET /outstandings?kind=PAYABLE as the DENIED clerk = ${bypass.status}` +
-    (bypass.status === 200 ? ` total=${bypass.body.total} — the rule governs the door, not the data` : ""));
+    (bypass.status === 200
+      ? ` total=${bypass.body.total} — THE LEAK IS BACK: the rule governs the door, not the data`
+      : " (308 -> /bills-payable -> refused by the PDP, where every refusal belongs)"));
+// ⛔ AND THE PAPER DOOR WITH IT. Closing the JSON one and leaving this open is a
+// refusal fully present and fully wrong: the same rows, on a filed sheet.
+const bypassPrint = await j("GET", `${base}/print/reports/outstandings?kind=PAYABLE`, { token: CLERK_TOK });
+rec("D97: ⛔ …and neither does the PRINTED form",
+    bypassPrint.status === 403,
+    `GET /print/reports/outstandings?kind=PAYABLE as the DENIED clerk = ${bypassPrint.status}`);
+// ⛔⛔ THE CONTROL THAT MAKES BOTH REFUSALS MEAN SOMETHING: the clerk KEEPS THE
+// PICKER. If this were 403 too, the row would be "closed" by taking away the read a
+// Payment needs — and every settlement that clerk keys would land ON ACCOUNT, the
+// balance nobody can chase. That is the failure the whole design decision avoids.
+const picker = await j("GET",
+    `${base}/vouchers/payment/open-bills/${L.supplier}?kind=PAYABLE`, { token: CLERK_TOK });
+rec("D97: ⛔⛔ CONTROL — the SAME clerk still lists that supplier's open bills to settle one",
+    picker.status === 200 && Array.isArray(picker.body.bills),
+    `GET /vouchers/payment/open-bills/{supplier}?kind=PAYABLE = ${picker.status}` +
+    (picker.status === 200 ? ` bills=${picker.body.bills.length} party=${JSON.stringify(picker.body.ledger)}` : ""));
+// ⛔ AND WHAT IT NO LONGER CARRIES. The picker used to receive the WHOLE book —
+// every party's bills and the ageing totals — to render one supplier's list. A door
+// that still handed those over would be the same disclosure wearing a new path.
+rec("D97: ⛔ …and that read carries NO ageing totals and NO other party",
+    picker.status === 200 && picker.body.slab_totals === undefined &&
+      picker.body.total === undefined && picker.body.parties === undefined,
+    `keys = ${picker.status === 200 ? Object.keys(picker.body).sort().join(",") : "n/a"}`);
 
 // ---------------------------------------------------------------------------
 // ARM (a) — A KEYBOARD PATH, IN A REAL BROWSER, as the OWNER.
