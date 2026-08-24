@@ -1,21 +1,23 @@
 # HANDOFF — THE REMAINING SIX: the register's last rows, in order, with the oracle for each
 
-> ✅ **L20 CLOSED D49 — cored is the only door to insightd.** Position 1 is now **D85**, and its
-> precondition is met: D85 had to land on the FINAL transport, and the transport is final. Full record:
-> `HANDOFF-PARITY-AUDIT.md` §7.5 **L20**. Nothing is blocked on the user.
+> ✅ **L21 CLOSED D85 — the redaction tag now discriminates.** Position 1 is now **D8**, which is
+> **ALONE**, moves the BALANCE SHEET, and must be serialised with feature T9. Full record:
+> `HANDOFF-PARITY-AUDIT.md` §7.5 **L21**. Nothing is blocked on the user.
 >
-> ⛔ **WHAT D85 MUST NOW KNOW ABOUT THE TRANSPORT IT INHERITS.** The draft routes are **cored** routes
-> (`/v1/companies/{id}/drafts…`), mapped onto the `purchase` voucher-class token (GET → Display, POST →
-> Create). cored forwards to insightd with a service credential and the company its PDP authorized, and
-> **passes insightd's answer back BYTE FOR BYTE** — status, content type and bytes. ⛔⛔ **D85 changes
-> insightd's wire shape, so it MUST NOT reshape that passthrough:** the client's `conflictCode` reads
-> `err.body.detail.code` and only for 409, and all four insightd-backed layers of the duplicate-bill guard
-> fail OPEN on anything else. A mutation proved it: "tidying" the 409 into cored's `{"error": …}` form left
-> the drive at **51/52 with the status arm still green.**
-> ⚠️ **And a new draft-body field now travels through TWO contracts, not one** — insightd's
-> `VoucherDraftBody` (`extra="forbid"`) and cored's proxy is transparent, so nothing in Go needs to change;
-> but `frontend/src/api/draft.ts` still must mirror it with a `= None` default.
+> ⛔⛔ **WHAT L21 SHOULD CHANGE ABOUT HOW YOU READ THE REST OF THIS FILE.** D85's stated scope was wrong in
+> the *expensive* direction and this file said it three times: it called for a hash carried as a **new
+> draft-body field** through two contracts plus a `draft.ts` mirror, and warned at length about not
+> reshaping cored's 409 passthrough. **None of it applied.** The day book stores only `voucher_no`, so a
+> draft-side hash could not have closed the layer at all; the fix is one function in
+> `insightd/insightd/redaction/persistence.py`. ⛔ **AND THIS FILE'S "IT MOVES PINNED NUMBERS" WAS FALSE** —
+> the insightd suite was **161 passed before and 161 after, with not one test moved**, so there was nothing
+> that would have noticed a revert and the gate had to be WRITTEN. **Re-measure the row. That is now four
+> lanes running (L18 half-imaginary · L19 deleted · L20 the number · L21 the shape AND the pins).**
 >
+> ⚠️ **THE TRANSPORT NOTE BELOW IS STILL TRUE AND STILL WORTH READING** — cored passes insightd's answer
+> back byte for byte and `conflictCode` reads `err.body.detail.code` for 409 only — but **D85 did not touch
+> it**, so no remaining row is known to.
+
 > ✅ **L19 CLOSED D96 BY DELETING IT** and ✅ **L18 CLOSED D81** (half A shipped; **half B did not
 > reproduce and the user closed it as such**). §6.7 and §6.8 are both ANSWERED.
 
@@ -40,14 +42,16 @@ to do next, in what order, what proves it, what will go wrong. Execute it top to
 
 ## ⛔ THE COUNT, RE-DERIVED BY PARSING §7.1 — NOT COPIED FROM A HEADER
 
-**96 registered · 91 CLOSED · 5 OPEN · 0 PARTIAL.** `91 + 5 = 96`.
+**96 registered · 92 CLOSED · 4 OPEN · 0 PARTIAL.** `92 + 4 = 96`.
 (`93 · 81 · 8 · 4` before L16 · `94 · 85 · 9 · 0` after L16 p0 · `96 · 87 · 9 · 0` after L16 p1 ·
-`96 · 88 · 8 · 0` after L17 · `96 · 89 · 7 · 0` after L18 · `96 · 90 · 6 · 0` after L19 · this after
-**L20**.)
-⚠️ **THREE LANES NOW WITHOUT A NEW ROW APPEARING.** The pattern has not changed, it has changed SHAPE:
-L18 found **half of D81 did not exist**, and L20 found a **gate firing on a route class nobody had in mind**
-plus a truncation the move itself created. What a lane surfaces is now a false PREMISE or a gate, rather
-than a missing row. **Re-measure every row before building it.**
+`96 · 88 · 8 · 0` after L17 · `96 · 89 · 7 · 0` after L18 · `96 · 90 · 6 · 0` after L19 ·
+`96 · 91 · 5 · 0` after L20 · this after **L21**.)
+⚠️ **FOUR LANES NOW WITHOUT A NEW ROW APPEARING.** The pattern has not changed, it has changed SHAPE:
+L18 found **half of D81 did not exist**, L19 closed a row by DELETING it, L20 found a **gate firing on a
+route class nobody had in mind** plus a truncation the move itself created, and **L21 found the row's
+written SCOPE and its predicted PINS both wrong** — the expensive design could not have worked and the
+"numbers it moves" moved nothing. What a lane surfaces is now a false PREMISE, a gate, or a scope,
+rather than a missing row. **Re-measure every row before building it.**
 
 ```bash
 python3 - <<'PY'
@@ -79,7 +83,7 @@ written in L16 broke it again — one carried a literal ` | ` inside its status 
 ⚠️ **VALIDATE ANY PARSER CHANGE BY RE-DERIVING THE OLD NUMBER FROM THE OLD FILE.** ⚠️ **And it prints a
 `?` bucket on purpose** — a row matching nothing must be SEEN, not folded into a plausible total.
 
-**OPEN (5):** D8 · D83 · D85 · D86 · D94
+**OPEN (4):** D8 · D83 · D86 · D94
 **PARTIAL: none**, and there should never be another: **`PARTIAL` is how a hidden build survives for
 three sessions** (that was D13). A row is CLOSED, or OPEN, or TWO rows.
 
@@ -140,13 +144,13 @@ builds** (the only genuinely concurrent probe).
 |---|---|---|---|
 | ~~0~~ | ~~**D81**~~ | MED | ✅ **CLOSED L18 2026-08-24.** Half A shipped; **half B did not reproduce.** §7.5 L18. |
 | ~~0~~ | ~~**D49**~~ | MED | ✅ **CLOSED L20 2026-08-24.** cored proxies insightd; 12 anonymous routes closed, no migration needed. §7.5 L20. |
-| **1** | **D85** | MED | **moves pinned numbers.** ALONE. ✅ **Its precondition is met — the transport is final** (see the header for what it inherits). |
-| 3 | **D8** | HIGH | ⛔ **moves the BALANCE SHEET.** ALONE, release note, serialise with T9. |
+| ~~0~~ | ~~**D85**~~ | MED | ✅ **CLOSED L21 2026-08-24.** One function in `persistence.py`; **no new field, and it moved no pinned number.** §7.5 L21. |
+| **1** | **D8** | HIGH | ⛔ **moves the BALANCE SHEET.** ALONE, release note, serialise with T9. |
 | 4 | **D86** | MED | **moves Outstandings**, inverts a Go test by design. ALONE, **before D94.** |
 | 5 | **D94** | HIGH | the payables door. **After D86.** ✅ **L16 built this exact shape twice — copy `ForecastScreens.tsx`.** |
 | 6 | **D83** | LOW | the register's proposed index **WILL NOT WORK.** The only concurrent probe. |
 
-**Must be ALONE:** D85, D8, D86, D83.  **Must be SERIALISED:** ~~D49→D85~~ (D49 done) · D86→D94.
+**Must be ALONE:** D8, D86, D83.  **Must be SERIALISED:** ~~D49→D85~~ (both done) · D86→D94.
 ✅ **NOTHING IS BLOCKED ON THE USER — §6.7 and §6.8 were both answered 2026-08-24, and §6.7 was then
 RE-ASKED AND REVERSED on a measurement** (D81 half B: does not reproduce, closed as such; D96: delete).
 ⛔ **Do not re-ask either; §6 carries the reasoning and the reversal.**
@@ -189,6 +193,28 @@ the frame replacement never cleared it. ⛔ **§6.7 had already been ANSWERED on
 building the answer would have moved "the entry succeeded" out of the machine into both voucher screens
 to fix nothing. **Measure the row before you build it AND before you ask about it.** This is D90's shape
 twice over; §5.2 is the most load-bearing rule in this file.
+
+### ⛔⛔ 7. A ROW'S WRITTEN SCOPE CAN BE WRONG IN THE **EXPENSIVE** DIRECTION, AND ITS PINS TOO (L21)
+D85 was described in four handoffs as an insightd **wire-shape change**: a hash carried as a new
+draft-body field, through `VoucherDraftBody` (`extra="forbid"`) and cored's proxy, mirrored in
+`frontend/src/api/draft.ts`, with a ⛔⛔ warning about not reshaping the 409 passthrough. ⛔ **That design
+could not have closed the row.** The layer that over-refused asks the DAY BOOK, and the day book stores
+only `voucher_no` — there is no field on it to carry a hash. The discriminator had to go **into the value
+that persists**, which is one function in `redaction/persistence.py` and touches no contract at all.
+⚠️ **AND THE SAME ENTRY'S "IT MOVES PINNED NUMBERS" WAS FALSE:** the insightd suite was **161 passed
+before and 161 after, not one test moved**, because the fix changes the tag STRING and every existing
+assertion on it is a substring or a prefix. ⛔ **So there was nothing that would have caught a revert, and
+the budget was for WRITING the gate, not re-pinning one.** Ask of a row's stated scope what §5.1 asks of a
+recon's expected value: **it is unverified until you fire it at the code.**
+
+### ⛔⛔ 8. AN ARM CAN BE WRITTEN FOR EXACTLY ONE MUTATION AND PASS THROUGH IT (L21, §5.7's cousin)
+L21's M2 salted the fingerprint — the wrong fix that passes the row's own oracle. The arm written for that
+hazard, "the same bill redacts to the same voucher number", **passed**: both fixtures ran in ONE pytest
+process, so a per-process salt agreed with itself. The only thing that caught M2 recomputed the digest
+**out of band**. ⛔ **The property was CROSS-PROCESS all along** — the day book is asked on a LATER request
+than the one that redacted — **and an in-process test cannot see it.** Ask of every arm not only "would it
+be green before my change" (§5.23) but **"is the property I care about even observable from where I am
+standing?"**
 
 ### ✅ 5. ON FANNING OUT: READING PARALLELISES, WRITING DOES NOT
 L17 ran 4 read-only recon agents concurrently (~344k subagent tokens, ~9 min) and it paid for itself
@@ -324,24 +350,35 @@ exists in the repo** and `/readyz` 404s, so `infra/k8s/base/insightd.yaml` is no
 
 </details>
 
-### 2 · D85 — the duplicate-bill guard keys on the POST-redaction number · RECON §3.11 · ALONE · ⛔ NOW POSITION 1
-✅ **DECIDED: key on a PRE-REDACTION HASH.** Every PII-shaped invoice number collapses to the constant
-`[PAN REDACTED]`, so two different PAN-shaped numbers from one supplier on one date are the same bill to
-the check, and the second accept is refused. Its own advice — *"key its own supplier invoice number"* —
-**cannot work**, because any number that redacts lands on the same token.
-⛔ **The hash must be taken on the PII boundary's OWN INPUT:** `insightd/insightd/pipeline.py` is the last
-place the raw number exists, so the hash travels **with the draft as a field**. That is an **insightd
-wire-shape change**, and `pii_boundary_strict` plus M23 guard that boundary.
-⛔ **THE REFUSAL'S ADVICE MUST CHANGE WITH THE KEY — AND §5.19 IS ABOUT EXACTLY THIS.** The current
-sentence tells the operator to do something that cannot work. A new key with the old advice is a refusal
-that is *fully present and fully wrong*: it reads as helpful and sends the operator down a dead end.
-**Assert on the ADVICE, not on the presence of a refusal.**
-**ORACLE:** two DIFFERENT PAN-shaped invoice numbers from one supplier on one date **both post** — and
-the same number twice is still refused (the control arm; without it the fix could simply be "guard
-removed").
-⚠️ It **moves pinned numbers** — `test_pii_persistence.py`'s redaction counts and the F9 panel text.
-**Predict the moved number OUT LOUD in the commit message before running the gate**; if the gate stays
-green, assume the binary was not rebuilt before assuming the probe is not an oracle (§5.17).
+### ✅ 2 · D85 — CLOSED L21 2026-08-24. The tag now carries a fingerprint. Kept for what it teaches D8/D86.
+Full record: `HANDOFF-PARITY-AUDIT.md` §7.5 **L21**. What carries forward:
+- ⛔⛔ **THE ROW'S WRITTEN SCOPE WAS WRONG IN THE EXPENSIVE DIRECTION** — see §2.7. The predicted new
+  draft-body field, its two contracts and the `draft.ts` mirror were all unnecessary AND could not have
+  closed the layer. ⛔ **D8 and D86 both carry equally confident scope prose in this file. Fire it at the
+  code first.**
+- ⚠️⚠️ **AND ITS "IT MOVES PINNED NUMBERS" WAS FALSE, WHICH MATTERS DIRECTLY TO D8 AND D86** because this
+  file makes the same claim about both (§5.17). insightd went **161 → 161 with nothing moved.** ⛔ **The
+  right response to a green gate is not only "was the binary rebuilt" — it is also "was the prediction ever
+  true?" Ask both.** For D8 the cheapest check in §3 row 3 (add ONLY the fixture and the subcase, expect
+  exactly one Go subcase to fail) is exactly the right instinct; run it.
+- ✅ **THE REFUSAL-ADVICE SHAPE IS NOW A FUNCTION, NOT A PATTERN TO COPY:** `secondBillAdvice(draftId)` in
+  `screens/vouchers/draftAccept.ts` names the KEY the memo layers refused on. ⛔ Do not write a third copy
+  of a "if this is genuinely a second bill…" sentence.
+- ⛔ **THE PERSISTED TAG SHAPE IS `[TYPE REDACTED xxxx]` AND IT HAS TWO COPIES ON PURPOSE:**
+  `persistence.py`'s `placeholder()` is the authority, and `draftAccept.ts`'s `REDACTION_TAG_RE` is a
+  client-side copy used ONLY to pick a sentence. `drive-l21-d85.mjs` asserts the two agree against a real
+  draft. ⛔ **The fingerprint must stay UNSALTED and must NOT be widened** — the docstring says why in both
+  directions.
+- ⛔⛔ **AND THE TAG IS EMBEDDED IN GENERATED BILL-REF NAMES, WHICH IS D83's NAMESPACE.** cored mints
+  `Purchase/<fy>/<voucher_no>`, so while the tag was a constant every PII-numbered bill from one supplier
+  competed for ONE ref name and `resolveGeneratedBillRefNames` renamed the loser instead of failing — the
+  collapse showed up as bills wearing `(xxxxxxxx)` suffixes nobody typed. **Read this before designing D83:
+  it is live evidence that the rename branch fires in practice.**
+- ⚠️ **`GET /drafts` RETURNS SUMMARIES WITH NO `body`.** Reading `draft.body.voucher_no` off the list gives
+  `undefined`, and a probe that compares it reports PASS on `"" === ""` (§5.7). Use `GET /drafts/{id}`.
+- ⚠️ **A BROWSER PROBE THAT WRITES WILL SEE ONE `403 STEPUP_REQUIRED` PER RUN** on its first mutating POST,
+  because `openApp` signs in with a password and the client then performs the WebAuthn step-up and retries.
+  **Assert it rather than filtering it out.**
 
 ### 3 · D8 — closing stock replayed in LEXICAL voucher_no order · RECON §3.12 · ⛔ ALONE
 An issue keyed after a receipt on the same date is costed at the pre-receipt average. Measured in a
@@ -480,12 +517,18 @@ grep -oE "company id: [0-9a-f-]{36}" /tmp/seed.log | head -1 | awk '{print $3}' 
 pnpm run verify:demo "$(cat /tmp/drive-company-id)"     # -> ALL CHECKS PASSED (34/34)
 ```
 
-### ✅ THE DRIVE SET IS GATE-SAFE — MEASURED 2026-08-23, END TO END
+### ✅ THE DRIVE SET IS GATE-SAFE — RE-MEASURED 2026-08-24 (L21), END TO END
 ```
 fresh seed -> verify:demo 34/34
-   run all seven drives + contract:cored
+   run all TWELVE drives + contract:cored
 verify:demo 34/34          <- the whole set leaves the tenant level
 ```
+⛔⛔ **AND HOW TO ACTUALLY RUN THE SET, BECAUSE L21 RE-LEARNED THIS THE HARD WAY.** `drive-l16-d22`,
+`drive-l11-ai`, `drive-l20-d49` and `drive-l21-d85` all **print their summary and then do not exit.**
+Redirecting each to its own file (L20's advice) is NECESSARY BUT NOT SUFFICIENT — with the pipe gone the
+PROCESS still hangs, so a `for` loop blocks on it regardless. The working shape is: redirect to a file, poll
+the file for `probes ok`, then **kill that drive by PID** (⛔ never `pkill -f <script-name>` — it matches the
+wrapper too) and move on. ⚠️ **A mid-sequence kill is a RESEED**, not a resume.
 ⛔ **THAT WAS NOT TRUE UNTIL THIS HANDOFF WAS WRITTEN, AND IT DIRECTLY CONTRADICTED §5.15.**
 `drive-l14b-d77.mjs` posted an 11,800 invoice to `Acme Traders` — a bill-by-bill party — **with no
 bill reference**, so it landed as an unallocated ON-ACCOUNT balance: the Balance Sheet counts it (a
@@ -510,6 +553,9 @@ CO="$(cat /tmp/drive-company-id)" node frontend/scripts/drive-l11-ai.mjs      # 
                                               #   listing goes through CORED now (D49); a bare :8088 fetch 401s
 CO="$(cat /tmp/drive-company-id)" node frontend/scripts/drive-l20-d49.mjs     # 52/52 (D49) — wire + a READ-ONLY
                                               #   browser arm; makes and REAPS its own two tenants
+CO="$(cat /tmp/drive-company-id)" node frontend/scripts/drive-l21-d85.mjs     # 16/16 (D85) — wire + browser,
+                                              #   ⚠️ it POSTS two purchases into the demo tenant (l11-ai's
+                                              #   shape: no master, dated <= today, bill-ref via F9)
 node frontend/scripts/drive-l17-d95.mjs        # 20/20 (D95) — ⛔ takes NO `CO`: it makes its OWN tenant
                                               #   with its OWN Data Entry member and REAPS it (D91 pattern)
 cd frontend && pnpm contract:cored                     # 14/14 — ⛔ NO `CO`, it makes its own tenant (D91)
@@ -530,7 +576,9 @@ drive by its PRINTED SUMMARY, not by whether the process exited**, and check
 that killed the whole drive-set job mid-sequence and cost the last two gates a re-run. Kill by PID.
 
 ### Gates, measured at this handoff
-`pnpm vitest run` **1443 / 87 files** · `pnpm exec tsc --noEmit` **clean** (a SEPARATE gate) ·
+⚠️ **RE-MEASURED AFTER L21** (the numbers below the vitest line were re-confirmed, not copied).
+`pnpm vitest run` **1454 / 87 files** · insightd pytest **166 passed** ·
+`pnpm exec tsc --noEmit` **clean** (a SEPARATE gate) ·
 `go test ./... -count=1` **0 FAIL / 0 SKIP** (bracket with a live `psql` — ⚠️ a down database makes
 every DB test SKIP and `go test` still exits 0, so the `0 SKIP` count is the load-bearing number) ·
 `pnpm contract:cored` **14/14** · `pnpm verify:demo` **34/34 on a FRESH seed** ·
@@ -858,6 +906,8 @@ the same edit a pinned count moved (`NINE` → `ELEVEN` reports in the Alt+G lis
 | `screenRefusal()` / `ScreenActionResult.refused` (D92) | ⚠️ **still live, still correct, and still never reached from `onAccept`** — which returns void. L18 left it that way deliberately: §6.7 was re-asked and the answer became "do not build it". |
 | the D89 guard keeping an ALTER frame put (`navMachine.ts:1281`) | ✅ unchanged by L18 — the accept reducer still replaces a CREATE frame, and that is now known to cost nothing |
 | `voucherAcceptFailure` / `VoucherAcceptFailedError` (L18, renamed from `DraftAcceptFailedError`) | ⛔ **the ONE writing of the orphan sentence**, used by the draft accept AND `VoucherScreen`. Do not write a second. |
+| ⛔ **the persisted redaction tag is `[TYPE REDACTED xxxx]`** — `persistence.py`'s `placeholder()`, UNSALTED, and copied client-side as `REDACTION_TAG_RE` for sentence selection only (L21/D85) | **D83** — cored mints `Purchase/<fy>/<voucher_no>`, so the tag is inside every generated bill-ref name. ⛔ While it was a constant, every PII-numbered bill from one supplier shared ONE ref name and `resolveGeneratedBillRefNames` renamed the loser — live evidence that the rename branch fires |
+| `secondBillAdvice(draftId)` in `draftAccept.ts` (L21) | ⛔ **the ONE writing of the "if this is genuinely a second bill…" advice** for both memo layers, and it names the KEY it refused on. Do not write a third |
 | the ledger party block + 6 client-side refusals (D87) | **any probe creating a party through the FORM** needs a state code (§5.15) |
 | `pan` + `credit_days` on `ledgerReq` and `GET /ledgers` | ⚠️ **D85** — `credit_days` is one of the three basis sources |
 | migration **0075** — normalised master-name uniqueness | **D83** (same pre-check-vs-authority shape) |

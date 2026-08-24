@@ -936,7 +936,7 @@ WORK"** — not "hard to fix".
 | **D82** | 17 | LOW | The HSN refusal bites the ALTER path: an old sales invoice stored without an HSN cannot be re-saved without keying one. Arguably correct (it cannot be printed either way) but it is a new refusal on existing data | `frontend/src/screens/VoucherScreen.tsx` `HSN_REQUIRED_CLASSES` | ✅ **WORKING AS INTENDED — THE USER'S DECISION, 2026-08-21. `HSN_REQUIRED_CLASSES` STAYS AS IT IS.** The invoice is unprintable without an HSN (CGST Rules 2017, Rule 46(g)), so keying the code is the FIX rather than a hoop. ⛔ A later session that finds this row and "fixes" it is REVERSING A USER DECISION — the SENTENCE is pinned, not just the behaviour (`VoucherScreen.gstAlter.test.tsx`, mutation-proved: disabling the condition turns this pin AND `masterGate.test.tsx`'s D60 arm red). **Driven (L14) 2026-08-22, 12/12:** the refusal reaches the operator on the alter naming Rule 46(g) and "cannot be printed", the HSN field sits empty and keyable on the SAME screen, nothing is sent, and keying the code lets the same alter through as a PUT. ⛔ **AND THE DRIVE FOUND D89** — the remedy this refusal prescribes was minting a duplicate invoice. See §7.5 |
 | **D83** | 5 | LOW | Two SIMULTANEOUS posts with the same hand-typed bill number on one party can both pass the uniqueness check. Needs an index `bill_allocation` cannot carry, because duplicate names are legal for AGAINST/ON_ACCOUNT/caller-named openers. ⚠️ **The sequential case — what an operator actually produces — is closed** | `backend/internal/ledger/` bill uniqueness | ⛔ OPEN — registered 2026-08-20 |
 | **D84** | — | MEDIUM | ⛔ **`api/mock.ts` IS LOOSER THAN CORED AND IS A SOURCE OF FALSE GREEN — three lanes hit it.** 61 test files build their masters through it, and `App.tsx`'s dev-client switch hands the same mock to a real operator in the dev browser, so all of them were measured against an engine that enforces less than the server. Needs a STRUCTURAL mock-vs-server gate, not three patches | `frontend/src/api/mock.ts` + `corpora/mock-vs-cored/` | ✅ **FIXED (L14d) — MUTATION-PROVED 2026-08-22. Runner A 14/14 in vitest, runner B 11/11 against live cored.** The instrument: `corpora/mock-vs-cored/masters.json` (refusal-shaped rows), `src/api/contract/corpus.ts` (ONE reader, so the two runners cannot drift on what a row means), runner A in vitest over `createMockClient()`, runner B as `pnpm contract:cored` over live cored. **Ran as the row prescribed — both runners BEFORE any fix, divergences printed side by side: 9 rows where the mock ACCEPTED a body cored refuses.** Eight closed, mirroring cored's SENTENCES not just its statuses. ⛔⛔ **EVERY EXPECTATION WAS MEASURED ON THE WIRE AND TWO CONTRADICTED THE RECON:** an unknown group answers **404** (not 422), and **a duplicate STOCK ITEM name is ACCEPTED** (201, new id) — the recon's `EnsureStockItem`-does-not-exist premise is true but its conclusion was not. ⛔ **THE TIGHTENING FOUND FIVE TESTS THAT COULD NEVER HAVE RUN AGAINST CORED:** `draftAccept.test.ts`'s `realDraftBody` called `createLedger` unconditionally, so the passing tests were measuring a chart of accounts with DUPLICATE party ledgers — the exact state the product's `ensureLedger` was fixed TWICE to avoid. ⚠️ **BLAST RADIUS MEASURED, NOT FEARED:** the split criterion was ">~10 files from one arm"; the first arm broke **ZERO** and all eight broke **ONE** file. Not split — but the premise ("tightening turns green tests red — that is the deliverable") only half held: most of the value is preventing FUTURE false green. ⚠️ **ONE ROW IS A PINNED GAP, NOT A FIX** — `ledger-unknown-group`, because the mock models no chart of accounts and copying cored's 28 seeded groups would be an undetectable duplicate (no `listGroups` for either runner to compare). Runner A asserts the gap is STILL OPEN so closing it is deliberate. See §7.5 |
-| **D85** | 30 | MEDIUM | ⛔ **The duplicate-supplier-bill guard keys on the POST-REDACTION `voucher_no`, so every PII-shaped invoice number collapses to ONE key and a legitimate second bill is refused.** `assertNotAlreadyOnTheBooks` matches on `body.voucher_no`, which for a bill whose invoice number is a PAN/GSTIN/Aadhaar is the constant token `[PAN REDACTED]` — not the supplier's number. Two DIFFERENT PAN-shaped invoice numbers from one supplier on one date are therefore the same bill as far as this check is concerned, and the second accept is refused. Its own error text advises *"If this is genuinely a second bill, key its own supplier invoice number"* — **which cannot work**, because any number that redacts lands on the same token. Found by driving, not by reading: the L11 probe randomised its PAN to become re-runnable and was still refused. | `frontend/src/screens/vouchers/draftAccept.ts:1526-1545` (`assertNotAlreadyOnTheBooks` — `no = body.voucher_no`, compared to `e.voucher_no`) + `insightd/insightd/pipeline.py:65` (redaction happens BEFORE the value ever reaches the client) | ⛔ OPEN |
+| **D85** | 30 | MEDIUM | ⛔ **The duplicate-supplier-bill guard keys on the POST-REDACTION `voucher_no`, so every PII-shaped invoice number collapses to ONE key and a legitimate second bill is refused.** `assertNotAlreadyOnTheBooks` matches on `body.voucher_no`, which for a bill whose invoice number is a PAN/GSTIN/Aadhaar is the constant token `[PAN REDACTED]` — not the supplier's number. Two DIFFERENT PAN-shaped invoice numbers from one supplier on one date are therefore the same bill as far as this check is concerned, and the second accept is refused. Its own error text advises *"If this is genuinely a second bill, key its own supplier invoice number"* — **which cannot work**, because any number that redacts lands on the same token. Found by driving, not by reading: the L11 probe randomised its PAN to become re-runnable and was still refused. | `frontend/src/screens/vouchers/draftAccept.ts:1526-1545` (`assertNotAlreadyOnTheBooks` — `no = body.voucher_no`, compared to `e.voucher_no`) + `insightd/insightd/pipeline.py:65` (redaction happens BEFORE the value ever reaches the client) | ✅ **CLOSED L21 2026-08-24 — the discriminator went into the value that PERSISTS, and the row was SMALLER than three handoffs predicted.** `redaction/persistence.py`'s `placeholder()` now ends the tag in a short UNSALTED fingerprint of the removed value (`[PAN REDACTED 6442]` vs `[PAN REDACTED 0413]`), computed from `m.value` inside `scrub()` where the raw number already is. ⛔ **NO new draft-body field, NO wire-shape change, NO `draft.ts` mirror and nothing near cored's byte-for-byte 409 passthrough** — the driver and the recon both expected a hash carried ON the draft, and the day book has no field to carry one, so that design could not have closed this layer at all. ⛔ **UNSALTED is load-bearing and is the OPPOSITE choice from `boundary.py`:** the same bill re-uploaded must redact to the same `voucher_no` or layer 2 stops seeing the duplicate. ⚠️ **The register's own claim that it moves pinned numbers is FALSE** — the fingerprint changes the tag STRING, not the COUNT of matches, and the whole insightd suite was green before AND after (161 → 161, nothing moved), so the gate had to be WRITTEN rather than re-pinned. ⛔ **The advice changed with the key too:** the day-book refusal no longer advises a remedy that cannot work, and one `secondBillAdvice()` now names whether the memo layers refused on the DRAFT or on the body's CONTENT. 3 mutations — two corrected the TESTS (an arm written for the salting hazard passed through it in-process; it is cross-process now) — and **16/16 on the wire and in a browser**, both halves of the oracle, footed against Outstandings. Full record: §7.5 **L21**. |
 | **D86** | 3 | MEDIUM | ⛔ **Sundry Creditors on the Balance Sheet and the payables Outstandings DISAGREE the moment any voucher is dated after today, and the repo's own gate asserts they agree EXACTLY.** With no `as_on`, Outstandings bounds at today and drops a future-dated bill; the Balance Sheet does not bound and includes it. Measured: one bill dated 2026-08-27 with today at 2026-08-20 gave BS **109950.0000** vs Outstandings **108770.0000** — short by exactly that bill's 1180.0000 — while `?as_on=2026-09-30` returned **109950.0000** and agreed. Nothing refuses a future-dated purchase (cored answers 201), so an operator who post-dates one bill sees the ageing disagree with the balance sheet with no explanation. ⚠️ `verify:demo`'s check passes today only because the seeded demo data happens to carry no future dates — it calls **neither** report with an `as_on`, and its own comment says the two paths "must agree exactly". | `frontend/scripts/verify-demo.mts:154-168` (both calls omit `as_on`) + the default-`as_on` divergence between the Outstandings and Balance Sheet handlers | ⛔ OPEN |
 | **D87** | 5 | MEDIUM | ⛔ **A PARTY CREATED FROM THE KEYBOARD HAS NO GSTIN, NO STATE CODE AND NO REGISTRATION TYPE — and state_code NULL is the exact input that made D19 derive an intra-state bill as IGST.** `masters.CreateLedger` and `CreateLedgerRequest` have accepted all three since they were written; the master-create form renders no field for any of them, so every Sundry Debtor/Creditor keyed by an operator lands with `gstin` NULL, `state_code` NULL and `registration_type` UNKNOWN. Driven in a browser while closing D36: the form's text contains no "GSTIN", no "State code" and no "Registration type", and the ledger it created read back `(null)|(null)|UNKNOWN`. The repo's OWN gate flags it — `verify:demo`'s "Every party's GSTIN prefix == its state_code" and "Every party is registration_type REGULAR" both fail on a keyed party, which is how it was found. ⚠️ NOT FIXED: it is the same class of build as D36 (fields the form does not render) but it carries a judgement D36 did not — whether `state_code` becomes MANDATORY under Sundry Debtors/Creditors, which would refuse creations that succeed today, and how many of the party's ten-odd optional columns (address block, PAN, credit days, bank details) the form should expose alongside it. | `frontend/src/screens/masters/MasterCreateScreen.tsx` (the ledger `Draft` has no gstin/state/registration field; `build`'s `CreateLedgerRequest` therefore sends none) vs `backend/internal/masters/masters.go` `CreateLedger`, which stores all three | ✅ CLOSED L15d 2026-08-22 |
 | **D88** | 17 | HIGH | ⛔ **ALTERING A VOUCHER SILENTLY DELETES ITS TDS DEDUCTION, and any challan allocation against it is orphaned.** `internal/ledger`'s `deleteTDSDeductions` runs on EVERY alter and the row is re-derived from the body — which is correct on its own terms ("a voucher altered to carry no TDS at all must lose its deduction row rather than keep a stale one"). But the voucher READ path serves no `tds`/`tcs` block, so the form CANNOT re-state what it loaded: hydrate a voucher that carried a deduction, edit its narration, press Ctrl+A, and the deduction is gone — while the challan that paid it keeps an allocation whose natural key now matches no deduction row (migration 0069 carries no foreign key by design, so nothing in the database refuses it). The register then shows the allocation with `deduction_on_record: false`, which is the state that panel already renders and calls out. Found while building D3's form, which is the first thing in the product that can create the precondition. ⚠️ NOT FIXED: the fix is a SERVER READ-PATH change (serve the stored deduction on `GET /vouchers/{id}`) plus hydration in `formFromView`, and it should land with D3's remaining TCS half rather than ahead of it. `formFromView` states the gap at the field today. | `backend/internal/ledger/tds.go` `deleteTDSDeductions` + the voucher GET (`VoucherView` has no tds/tcs) vs `frontend/src/screens/VoucherScreen.tsx` `formFromView` | ✅ **FIXED (L4) — MUTATION-PROVED *AND* DRIVEN 2026-08-21.** The GET serves the stored block and `formFromView` re-states it. Oracle: alter the narration, the `tds_deduction` row SURVIVES and the challan register stops reading "deduction no longer on record". Pinned with its INVERSE CONTROL — an alter that OMITS the block is accepted and deletes it. See §7.5 |
@@ -3435,3 +3435,144 @@ own FILE and judge it there.
 ⚠️ **AND A GATE HAZARD WORTH KNOWING:** a `pnpm vitest run` with **9 failing tests** was reported by the
 harness as **exit code 0**. Judge vitest by its printed `Test Files` line, never by the exit status of the
 wrapper that ran it.
+
+---
+
+### L21 — 2026-08-24 · D85 CLOSED: the redaction tag was a CONSTANT, so a supplier's SECOND bill was refused
+
+**Position 1 of `HANDOFF-THE-REMAINING-SIX.md`**, unblocked by L20 landing the final transport. One row.
+The transport warning in that driver's header turned out not to bind at all — see below.
+
+#### ⛔⛔ THE ROW, MEASURED THROUGH THE REAL MAPPER BEFORE A LINE MOVED
+```
+invoice_no "ABCDE1234F" -> voucher_no '[PAN REDACTED]'
+invoice_no "ZZZZZ9999Z" -> voucher_no '[PAN REDACTED]'   COLLAPSE: True
+```
+`assertNotAlreadyOnTheBooks` asks the DAY BOOK, and the day book stores nothing but `voucher_no`. Two
+bills from one supplier on one date whose numbers were different PANs were one bill to that check.
+✅ **AND THE COLLAPSE IS NARROWER THAN THE REGISTER SAYS, EXACTLY AS THE RECON WARNED.** `scrub()` replaces
+only the MATCHED SPAN, so `INV/ABCDE1234F/77` and `INV/ZZZZZ9999Z/88` never collided. Total collapse needs
+the whole invoice number to BE the entity — which is what the L11 fixture carries and is why this was found
+by driving. ⛔ **A probe built on the wrapped form passes vacuously in both worlds.**
+
+#### ⛔⛔ THE FIX IS SMALLER THAN THREE HANDOFFS PREDICTED, AND THE PREDICTED SHAPE COULD NOT HAVE WORKED
+The driver and `HANDOFF-RECON-LAST-16.md` §3.11 both called for a hash carried as a **new draft-body
+field**, travelling through insightd's `VoucherDraftBody` (`extra="forbid"`), cored's transparent proxy and
+a mirrored `= None` default in `frontend/src/api/draft.ts`. ⛔ **The day book has no field to carry one**, so
+a draft-side hash closes nothing; and `scrub()` already holds the raw `m.value` at the point it writes the
+tag. So the whole change is `placeholder(entity_type, value)` returning
+`[{TYPE} REDACTED {fingerprint(value)}]`. **No new field, no wire-shape change, no contract to mirror, and
+nothing anywhere near cored's byte-for-byte passthrough of insightd's 409** — the header's ⛔⛔ warning was
+about a change this row did not need to make.
+
+#### ⛔ UNSALTED IS LOAD-BEARING, AND IT IS THE OPPOSITE CHOICE FROM `boundary.py`
+`boundary.py` salts per REQUEST (`secrets.token_hex(8)`) so co-reference tags are unlinkable across
+documents. The persistence path REQUIRES linkability: the same bill re-uploaded must redact to the same
+`voucher_no` or layer 2 stops recognising the duplicate and the money defect it exists to stop comes back.
+⛔ **AND THE WIDTH IS A PRIVACY CONTROL, NOT A COLLISION BUDGET.** Four hex characters leave ~10,700 issued
+PANs per fingerprint; widening it helps a brute-force of the removed value back out of append-only books.
+⚠️ **The residual is written into the module docstring rather than hidden:** for an entity whose REAL domain
+is small — an IFSC, ~1.7e5 live branch codes — a fingerprint of any usable width narrows it to a couple of
+candidates, so such a value is protected by the REMOVAL of the value and not by the fingerprint.
+
+#### ⚠️⚠️ "IT MOVES PINNED NUMBERS" WAS FALSE, IN BOTH DIRECTIONS — A FOURTH §5.24 CASE
+Four handoffs said D85 moves `test_pii_persistence.py`'s 4/6 redaction counts and the F9 panel text, each
+derived from the last. **It moves neither.** The fingerprint changes the tag STRING, not the COUNT of
+matches, and every pre-existing assertion on the tag is a substring or a prefix (`"PAN" in`,
+`startswith("INV/")`, `endswith("/77")`, `"AADHAAR REDACTED" in`). The insightd suite was **161 passed
+before and 161 passed after, with not one test moved** — and M1 confirmed the other direction too: with the
+fingerprint removed again, the count assertions still did not move.
+⛔ **SO THERE WAS NOTHING THAT WOULD HAVE NOTICED A REVERT, AND THE GATE HAD TO BE WRITTEN.** §5.17 says a
+green gate means "check the binary was rebuilt before doubting the probe"; here there is no binary, the
+structural reason is plain, and the honest conclusion is that the prediction was wrong. **Budget for writing
+the gate, not for re-pinning one.**
+
+#### ⛔⛔ THE MUTATION PROOFS CORRECTED THE TESTS, NOT THE CODE — TWICE, IN OPPOSITE DIRECTIONS (§5.3)
+- **M1 (drop the fingerprint).** Predicted 1 failure; observed **2 of 166**. The arm I had labelled a
+  REGRESSION GUARD — "the tag still says WHAT was removed in words" — is not one: its
+  `startswith("INV/[PAN REDACTED ")` includes the SPACE, so it pins the fingerprint's presence too.
+- **M2 (salt it per process — i.e. copy `boundary.py`).** Predicted the determinism arm would fail;
+  observed **1 failure, and not that one.** ⛔⛔ **THE ARM WRITTEN FOR EXACTLY THIS MUTATION PASSED THROUGH
+  IT.** Both `_draft()` calls ran in ONE pytest process, so a per-process salt agreed with itself. The only
+  thing that caught M2 was `test_the_fingerprint_is_SHORT_and_unsalted`, which recomputes the digest **out of
+  band** — §5.10 applied to a hash instead of a database column. **The property is cross-process, because the
+  day book is asked on a LATER request than the one that redacted**, and the arm now spawns two fresh
+  interpreters. Re-run under M2: the predicted 2 failures, with the discrimination oracle still GREEN — which
+  is what makes a salted fingerprint the wrong fix that a weaker gate ships.
+- **M3 (give the fingerprint sentence unconditionally).** 1 of 60 in `draftAccept.test.ts`, exactly as
+  predicted: the ORDINARY-number arm. A blanket rewrite would tell an operator holding "INV-9001" about a
+  fingerprint they do not have.
+
+#### ⛔ THE ADVICE CHANGED WITH THE KEY — THE OTHER HALF OF THE ROW (§5.19)
+Three refusal sentences advised remedies their own key cannot deliver:
+- the **day-book** refusal said *"key its own supplier invoice number"* about a number that had been
+  REDACTED — a dead end, since every number keyed landed on the same token. It now says the tag ends in a
+  fingerprint of the removed number, so this is the SAME supplier number and a genuinely different bill would
+  not have been stopped. ⚠️ **The ordinary-number sentence is UNCHANGED and an arm pins that.**
+- the **session and durable memos** key on `draftAcceptKey` — the DRAFT id when the caller passes one, the
+  body's CONTENT when it does not — and both gave the content remedy, i.e. the wrong one exactly when the
+  caller is most precise. One `secondBillAdvice()` names the key it actually refused on rather than a third
+  copy of the sentence. ⚠️ **Both branches are driven; the live F9 path passes no `draftId`.**
+
+#### THE DRIVE — 16/16, WIRE AND BROWSER, ON A FRESH SEED
+`frontend/scripts/drive-l21-d85.mjs`. Both halves, because half one alone is satisfied by deleting the guard:
+two different bare-PAN numbers BOTH post (`[PAN REDACTED 6442]` / `[PAN REDACTED 0413]`, two purchases, each
+with its own `C:Steel Suppliers` leg and its own `D:Input CGST`/`D:Input SGST` debits — sides and NAMES,
+never totals); the SAME number is still refused, posts nothing, and a **second Ctrl+A** refuses again (§5.8);
+and the refusal's ADVICE is asserted, not its presence.
+⛔ **THE CONTROL BILL DIFFERS IN AMOUNT ON PURPOSE.** The five layers are ORDERED: a byte-identical
+re-upload is refused by the CONTENT-keyed memo before the day book is ever asked. Same party, same date, same
+tag, **different amount** is the only shape that reaches layer 2 — a probe that re-uploads an identical bill
+measures layer 1 and reports on layer 2.
+⛔ **FOOTED AGAINST A HANDLER THAT IS NOT THE DAY BOOK (§2.2):** Outstandings reads `bill_allocation` and
+names each bill `Purchase/<fy>/<voucher_no>`. Both tags appear, every generated ref name is distinct, and the
+count of refs carrying a `(xxxxxxxx)` discriminating suffix is **0**.
+
+#### ⛔⛔ A SECOND DEFECT'S WORTH OF EVIDENCE, FOR D83 — FOUND BY DRIVING, NOT REGISTERED HERE
+cored mints a generated bill reference as `Purchase/<fy>/<voucher_no>`, so while the tag was a CONSTANT
+**every PII-numbered bill from one supplier competed for ONE ref-name namespace**, and
+`resolveGeneratedBillRefNames` renamed the loser rather than failing. So the collapse never surfaced as an
+error there — it surfaced as a supplier's bills wearing suffixes nobody typed. A pre-fix tenant carried
+`Purchase/2026-27/[PAN REDACTED]` beside `… [PAN REDACTED 6442] (583827a8)`. ⛔ **That is D83's namespace and
+D83 is still OPEN** — this row removes one large source of collisions in it and changes nothing about the
+concurrent race.
+
+#### ⚠️ THREE PROBE BUGS, AND ONE OF THEM IS §5.7 VERBATIM
+- `pages: 1` — `_normalized_from_fixture` **iterates** `input.pages`, so this raised `'int' object is not
+  iterable` inside insightd and cored answered **500**.
+- `classify: {supplier: {ledger_id}}` — the fake classifier reads the FLAT `supplier_ledger_id`. Nested is
+  silently NO MATCH: no supplier state, zero input-tax legs, and cored refuses with
+  *"CGST posting 0.0000 != derived 90.0000"* — which reads exactly like **D18/D19 having regressed**.
+- ⛔⛔ **`GET /drafts` CARRIES NO `body` AT ALL** — it returns summaries (`draft_id · party · grand_total ·
+  status · confidence · accepted_voucher_no`). Reading `draft.body.voucher_no` off one gave `undefined`,
+  defaulted to `""`, **and the determinism arm then compared `"" === ""` and reported PASS.** §5.7 verbatim: an
+  absent projection COMPARED instead of THROWN on. `voucherNoOf()` goes through `GET /drafts/{id}` and THROWS.
+
+#### ⚠️ AND THE ONE UNEXPLAINED 403 IS EXPLAINED AND ASSERTED, NOT FILTERED OUT
+Every run logged one `POST /drafts 403` beside its 201s. Its body is `{"code":"STEPUP_REQUIRED"}`: the
+session signs in with a PASSWORD and the first mutating write demands a WebAuthn step-up, which the client
+performs and retries — the product working. ⛔ **An unexplained refusal on the route a lane is driving must
+never be waved through as noise**, so the probe reads the body and pins that this is the ONLY refusal there.
+
+#### GATES
+insightd pytest **166 passed** (was 161; **+5**, one of them the only arm red on the previous commit) ·
+`pnpm vitest run` **1454 / 87 files** (+4 in `draftAccept.test.ts`) · `pnpm exec tsc --noEmit` clean ·
+`go test ./... -count=1` **exit 0, 0 FAIL, 0 SKIP**, bracketed with a live `psql` (this row touches no Go).
+
+**THE WHOLE DRIVE SET, ON A FRESH SEED, AFTER THE LANE:** `verify:demo` **34/34** → l13 **33/33** ·
+l14 **17/17** · l14b **8/8** · l15-d5 **22/22** · l15c **7/7** · l15d **13/13** · l15f **8/8** ·
+l16-d22 **34/34** · l11-ai **14/14** · l20-d49 **52/52** · **l21-d85 16/16** · l17-d95 **20/20** ·
+`contract:cored` **14/14** → `verify:demo` **34/34 again**.
+✅ **The set is still gate-safe with the new probe in it** (§4/§5.15) — and l21 is the first probe in the set
+that POSTS into the demo tenant besides l11-ai, so that was the check that mattered: two purchases per run,
+each with its own bill reference via F9 and dated on or before today, leave BS Sundry Creditors and
+Outstandings (payable) in agreement.
+⚠️ **AND L20's WARNING ABOUT `| tail` WAS EARNED AGAIN, THE HARD WAY.** The first attempt at the set ran each
+drive as `node … | tail -4`; it reached `drive-l16-d22`, which printed **34/34** and then held on with **zero**
+`Chrome for Testing` processes alive, and the sequence stalled. ⛔ **Each drive to its own FILE is necessary
+but NOT sufficient** — with the pipe gone the *process* still does not exit, so the runner blocks on it
+anyway. The working shape is: redirect to a file, and **judge the printed summary in that file, then kill the
+pid** (⛔ by PID — `pkill -f <script>` also matches the wrapper, §4). l11-ai, l20 and l21 all needed the same
+treatment.
+⚠️ **A MID-SEQUENCE KILL IS A RESEED.** `drive-l14-cheap` was killed part-way through the first attempt; the
+tenant was re-seeded before the real run rather than trusting that a half-finished probe left nothing behind.
