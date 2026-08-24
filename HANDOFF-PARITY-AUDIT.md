@@ -937,7 +937,7 @@ WORK"** — not "hard to fix".
 | **D83** | 5 | LOW | Two SIMULTANEOUS posts with the same hand-typed bill number on one party can both pass the uniqueness check. Needs an index `bill_allocation` cannot carry, because duplicate names are legal for AGAINST/ON_ACCOUNT/caller-named openers. ⚠️ **The sequential case — what an operator actually produces — is closed** | `backend/internal/ledger/` bill uniqueness | ⛔ OPEN — registered 2026-08-20 |
 | **D84** | — | MEDIUM | ⛔ **`api/mock.ts` IS LOOSER THAN CORED AND IS A SOURCE OF FALSE GREEN — three lanes hit it.** 61 test files build their masters through it, and `App.tsx`'s dev-client switch hands the same mock to a real operator in the dev browser, so all of them were measured against an engine that enforces less than the server. Needs a STRUCTURAL mock-vs-server gate, not three patches | `frontend/src/api/mock.ts` + `corpora/mock-vs-cored/` | ✅ **FIXED (L14d) — MUTATION-PROVED 2026-08-22. Runner A 14/14 in vitest, runner B 11/11 against live cored.** The instrument: `corpora/mock-vs-cored/masters.json` (refusal-shaped rows), `src/api/contract/corpus.ts` (ONE reader, so the two runners cannot drift on what a row means), runner A in vitest over `createMockClient()`, runner B as `pnpm contract:cored` over live cored. **Ran as the row prescribed — both runners BEFORE any fix, divergences printed side by side: 9 rows where the mock ACCEPTED a body cored refuses.** Eight closed, mirroring cored's SENTENCES not just its statuses. ⛔⛔ **EVERY EXPECTATION WAS MEASURED ON THE WIRE AND TWO CONTRADICTED THE RECON:** an unknown group answers **404** (not 422), and **a duplicate STOCK ITEM name is ACCEPTED** (201, new id) — the recon's `EnsureStockItem`-does-not-exist premise is true but its conclusion was not. ⛔ **THE TIGHTENING FOUND FIVE TESTS THAT COULD NEVER HAVE RUN AGAINST CORED:** `draftAccept.test.ts`'s `realDraftBody` called `createLedger` unconditionally, so the passing tests were measuring a chart of accounts with DUPLICATE party ledgers — the exact state the product's `ensureLedger` was fixed TWICE to avoid. ⚠️ **BLAST RADIUS MEASURED, NOT FEARED:** the split criterion was ">~10 files from one arm"; the first arm broke **ZERO** and all eight broke **ONE** file. Not split — but the premise ("tightening turns green tests red — that is the deliverable") only half held: most of the value is preventing FUTURE false green. ⚠️ **ONE ROW IS A PINNED GAP, NOT A FIX** — `ledger-unknown-group`, because the mock models no chart of accounts and copying cored's 28 seeded groups would be an undetectable duplicate (no `listGroups` for either runner to compare). Runner A asserts the gap is STILL OPEN so closing it is deliberate. See §7.5 |
 | **D85** | 30 | MEDIUM | ⛔ **The duplicate-supplier-bill guard keys on the POST-REDACTION `voucher_no`, so every PII-shaped invoice number collapses to ONE key and a legitimate second bill is refused.** `assertNotAlreadyOnTheBooks` matches on `body.voucher_no`, which for a bill whose invoice number is a PAN/GSTIN/Aadhaar is the constant token `[PAN REDACTED]` — not the supplier's number. Two DIFFERENT PAN-shaped invoice numbers from one supplier on one date are therefore the same bill as far as this check is concerned, and the second accept is refused. Its own error text advises *"If this is genuinely a second bill, key its own supplier invoice number"* — **which cannot work**, because any number that redacts lands on the same token. Found by driving, not by reading: the L11 probe randomised its PAN to become re-runnable and was still refused. | `frontend/src/screens/vouchers/draftAccept.ts:1526-1545` (`assertNotAlreadyOnTheBooks` — `no = body.voucher_no`, compared to `e.voucher_no`) + `insightd/insightd/pipeline.py:65` (redaction happens BEFORE the value ever reaches the client) | ✅ **CLOSED L21 2026-08-24 — the discriminator went into the value that PERSISTS, and the row was SMALLER than three handoffs predicted.** `redaction/persistence.py`'s `placeholder()` now ends the tag in a short UNSALTED fingerprint of the removed value (`[PAN REDACTED 6442]` vs `[PAN REDACTED 0413]`), computed from `m.value` inside `scrub()` where the raw number already is. ⛔ **NO new draft-body field, NO wire-shape change, NO `draft.ts` mirror and nothing near cored's byte-for-byte 409 passthrough** — the driver and the recon both expected a hash carried ON the draft, and the day book has no field to carry one, so that design could not have closed this layer at all. ⛔ **UNSALTED is load-bearing and is the OPPOSITE choice from `boundary.py`:** the same bill re-uploaded must redact to the same `voucher_no` or layer 2 stops seeing the duplicate. ⚠️ **The register's own claim that it moves pinned numbers is FALSE** — the fingerprint changes the tag STRING, not the COUNT of matches, and the whole insightd suite was green before AND after (161 → 161, nothing moved), so the gate had to be WRITTEN rather than re-pinned. ⛔ **The advice changed with the key too:** the day-book refusal no longer advises a remedy that cannot work, and one `secondBillAdvice()` now names whether the memo layers refused on the DRAFT or on the body's CONTENT. 3 mutations — two corrected the TESTS (an arm written for the salting hazard passed through it in-process; it is cross-process now) — and **16/16 on the wire and in a browser**, both halves of the oracle, footed against Outstandings. Full record: §7.5 **L21**. |
-| **D86** | 3 | MEDIUM | ⛔ **Sundry Creditors on the Balance Sheet and the payables Outstandings DISAGREE the moment any voucher is dated after today, and the repo's own gate asserts they agree EXACTLY.** With no `as_on`, Outstandings bounds at today and drops a future-dated bill; the Balance Sheet does not bound and includes it. Measured: one bill dated 2026-08-27 with today at 2026-08-20 gave BS **109950.0000** vs Outstandings **108770.0000** — short by exactly that bill's 1180.0000 — while `?as_on=2026-09-30` returned **109950.0000** and agreed. Nothing refuses a future-dated purchase (cored answers 201), so an operator who post-dates one bill sees the ageing disagree with the balance sheet with no explanation. ⚠️ `verify:demo`'s check passes today only because the seeded demo data happens to carry no future dates — it calls **neither** report with an `as_on`, and its own comment says the two paths "must agree exactly". | `frontend/scripts/verify-demo.mts:154-168` (both calls omit `as_on`) + the default-`as_on` divergence between the Outstandings and Balance Sheet handlers | ⛔ OPEN |
+| **D86** | 3 | MEDIUM | ⛔ **Sundry Creditors on the Balance Sheet and the payables Outstandings DISAGREE the moment any voucher is dated after today, and the repo's own gate asserts they agree EXACTLY.** With no `as_on`, Outstandings bounds at today and drops a future-dated bill; the Balance Sheet does not bound and includes it. Measured: one bill dated 2026-08-27 with today at 2026-08-20 gave BS **109950.0000** vs Outstandings **108770.0000** — short by exactly that bill's 1180.0000 — while `?as_on=2026-09-30` returned **109950.0000** and agreed. Nothing refuses a future-dated purchase (cored answers 201), so an operator who post-dates one bill sees the ageing disagree with the balance sheet with no explanation. ⚠️ `verify:demo`'s check passes today only because the seeded demo data happens to carry no future dates — it calls **neither** report with an `as_on`, and its own comment says the two paths "must agree exactly". | `frontend/scripts/verify-demo.mts:154-168` (both calls omit `as_on`) + the default-`as_on` divergence between the Outstandings and Balance Sheet handlers | ✅ **CLOSED L23 2026-08-24 — the DEFAULT was the defect, not the predicate.** `resolveAsOn` defaults an empty as-on to today, which is right for AGEING and was also feeding INCLUSION, so a bill-wise breakup explained less than the ledger balance it is a breakup OF the moment a bill was dated ahead. With no `as_on` the rows are unbounded now; an EXPLICIT `as_on` still bounds exactly as before, and every arm carries that control. ⛔ **THE BALANCE SHEET DELIBERATELY DID NOT MOVE**, so `verify:demo` needed no re-pin — and the end-to-end proof is that it stays **34/34 WITH a future-dated bill on the books**, the very combination that used to break it. ⛔ **THREE PLACES MOVED TOGETHER** (the report, `whitelist.go`'s `EntityOutstandings` skeleton including its books-beginning guard, and the caption in FOUR copies — `QueryScreen`'s basis line, the wire echo, the screen's scope line and the printed subtitle). ⚠️ `resolveAsOn` is package-shared with `bankrecon.go` and its signature is UNTOUCHED. ⛔⛔ **THE CHEAPEST CHECK FOUND THE REAL SHAPE OF THE LANE:** with only the report-side change, `internal/reporting` was ENTIRELY GREEN and the only three failures were in `internal/query` — so this package had **no test on the unbounded default at all**, which is why the row existed. One of those three was a tripwire an earlier lane had planted for exactly this day. ⛔⛔ **AND M3 — reverting the wire echo to the false caption — LEFT THE WHOLE GO SUITE GREEN, 0 FAIL:** nothing read the sentence, which bought `TestTheAgeingReportsScopeOnTheWireIsHONEST`. Two Go tests INVERTED rather than deleted, 3 mutations, driven **16/16** on the wire and in a browser. Full record: §7.5 **L23**. |
 | **D87** | 5 | MEDIUM | ⛔ **A PARTY CREATED FROM THE KEYBOARD HAS NO GSTIN, NO STATE CODE AND NO REGISTRATION TYPE — and state_code NULL is the exact input that made D19 derive an intra-state bill as IGST.** `masters.CreateLedger` and `CreateLedgerRequest` have accepted all three since they were written; the master-create form renders no field for any of them, so every Sundry Debtor/Creditor keyed by an operator lands with `gstin` NULL, `state_code` NULL and `registration_type` UNKNOWN. Driven in a browser while closing D36: the form's text contains no "GSTIN", no "State code" and no "Registration type", and the ledger it created read back `(null)|(null)|UNKNOWN`. The repo's OWN gate flags it — `verify:demo`'s "Every party's GSTIN prefix == its state_code" and "Every party is registration_type REGULAR" both fail on a keyed party, which is how it was found. ⚠️ NOT FIXED: it is the same class of build as D36 (fields the form does not render) but it carries a judgement D36 did not — whether `state_code` becomes MANDATORY under Sundry Debtors/Creditors, which would refuse creations that succeed today, and how many of the party's ten-odd optional columns (address block, PAN, credit days, bank details) the form should expose alongside it. | `frontend/src/screens/masters/MasterCreateScreen.tsx` (the ledger `Draft` has no gstin/state/registration field; `build`'s `CreateLedgerRequest` therefore sends none) vs `backend/internal/masters/masters.go` `CreateLedger`, which stores all three | ✅ CLOSED L15d 2026-08-22 |
 | **D88** | 17 | HIGH | ⛔ **ALTERING A VOUCHER SILENTLY DELETES ITS TDS DEDUCTION, and any challan allocation against it is orphaned.** `internal/ledger`'s `deleteTDSDeductions` runs on EVERY alter and the row is re-derived from the body — which is correct on its own terms ("a voucher altered to carry no TDS at all must lose its deduction row rather than keep a stale one"). But the voucher READ path serves no `tds`/`tcs` block, so the form CANNOT re-state what it loaded: hydrate a voucher that carried a deduction, edit its narration, press Ctrl+A, and the deduction is gone — while the challan that paid it keeps an allocation whose natural key now matches no deduction row (migration 0069 carries no foreign key by design, so nothing in the database refuses it). The register then shows the allocation with `deduction_on_record: false`, which is the state that panel already renders and calls out. Found while building D3's form, which is the first thing in the product that can create the precondition. ⚠️ NOT FIXED: the fix is a SERVER READ-PATH change (serve the stored deduction on `GET /vouchers/{id}`) plus hydration in `formFromView`, and it should land with D3's remaining TCS half rather than ahead of it. `formFromView` states the gap at the field today. | `backend/internal/ledger/tds.go` `deleteTDSDeductions` + the voucher GET (`VoucherView` has no tds/tcs) vs `frontend/src/screens/VoucherScreen.tsx` `formFromView` | ✅ **FIXED (L4) — MUTATION-PROVED *AND* DRIVEN 2026-08-21.** The GET serves the stored block and `formFromView` re-states it. Oracle: alter the narration, the `tds_deduction` row SURVIVES and the challan register stops reading "deduction no longer on record". Pinned with its INVERSE CONTROL — an alter that OMITS the block is accepted and deletes it. See §7.5 |
 | **D89** | 17 | HIGH | ⛔⛔ **A REFUSED ALTER SILENTLY BECAME A CREATE, SO THE REMEDY THE REFUSAL PRESCRIBED MINTED A SECOND INVOICE.** `navMachine`'s `accept` reducer replaced ANY voucher frame with a fresh `create` frame on every Ctrl+A. It is pure, so it can never learn that the write was refused — least of all here, where the refusal was CLIENT-SIDE and not one byte left the browser. That dropped the loaded `voucher_id` which routes the PUT, while the form kept the loaded voucher's values on screen: the heading was the only thing that changed, by thirteen characters, at the bottom of a refusal the operator is reading. Driven in a browser: drill a legacy no-HSN sales invoice out of the Day Book, Ctrl+A → refused by `gstRefusal`, key the HSN the refusal asked for, Ctrl+A → **`POST /vouchers/sales` 201**, status line "Saved", and the original invoice's `hsn` still empty. **One tax invoice keyed, two on the books.** ⚠️ NOT GST-SPECIFIC: any refusal on an alter had this shape, client- or server-side. ⚠️ The class was already known on the DRILL side — `phase1.test.ts`'s CONTROL "a row naming no class does not open a voucher frame" closes the same failure reached the other way; that guarded the door IN, nothing guarded the door THROUGH. | `frontend/src/keystroke/navMachine.ts`, the `accept` reducer's voucher arm | ✅ **FIXED (L14) — MUTATION-PROVED *AND* DRIVEN 2026-08-22.** An alter frame stays put; a second Ctrl+A re-PUTs the same `voucher_id` and Esc still returns to the report it was drilled from — which is what `delete` directly below already did. Oracle: the Day Book entry count over the date is UNCHANGED and the voucher reads `op=ALTER`, not a second `CREATE`. Pinned with both CONTROLs (a CREATE frame still re-opens fresh for bulk entry; two accepts on a create really do key two invoices) so neither "never re-open a fresh form" nor "never accept a frame twice" can pass in place of the fix. See §7.5 |
@@ -3684,3 +3684,125 @@ l16-d22 **34/34** · l11-ai **14/14** · l20-d49 **52/52** · l21-d85 **16/16** 
 l17-d95 **20/20** · `contract:cored` **14/14** → `verify:demo` **34/34 again**.
 ✅ **Gate-safe with the new probe in it, and that mattered here:** D8 moves money that `verify:demo` foots,
 and the seed grew a voucher pair. l22 is READ-ONLY (no posts, no masters), so it cannot shift the tenant.
+
+---
+
+### L23 — 2026-08-24 · D86 CLOSED: the ageing bounded an UNASKED date at today; the Balance Sheet did not
+
+**Position 1 of `HANDOFF-THE-REMAINING-SIX.md` after L22.** ALONE, and **before D94**, which is now the
+only report-screen row left.
+
+#### ⛔⛔ THE DEFECT WAS THE DEFAULT, NOT THE PREDICATE
+Outstandings is the BILL-WISE BREAKUP of a ledger balance, and a ledger balance includes every posted
+voucher whatever its date. `resolveAsOn` defaults an empty as-on to today — correct for AGEING, because an
+ageing report with no reference date answers nothing — and that same default was feeding the INCLUSION
+predicate. So the moment a bill was dated ahead the breakup explained LESS than the balance it broke up:
+driven, Balance Sheet 109950.0000 against Outstandings 108770.0000, each footing, nothing to reconcile them.
+✅ **DECIDED: OUTSTANDINGS MOVES, NOT THE BALANCE SHEET.** The sheet's figure is byte-identical.
+
+#### ⛔⛔ THE CHEAPEST CHECK (§2.10) FOUND THE SHAPE OF THE LANE BEFORE ANY GATE WAS WRITTEN
+With ONLY the report-side change made:
+```
+go test ./internal/reporting/  -> ENTIRELY GREEN
+go test ./internal/query/      -> exactly 3 failures, all Outstandings parity
+```
+⛔ **SO `internal/reporting` HAD NO TEST ON THE UNBOUNDED DEFAULT AT ALL.** Every assertion in
+`outstanding_as_on_test.go` was about a date that had been ASKED for; the answer nobody asked for was the
+one that was wrong. That is why the row existed and why the gate had to be WRITTEN, not re-pinned.
+✅ **AND ONE OF THE THREE FAILURES WAS A TRIPWIRE AN EARLIER LANE PLANTED FOR THIS EXACT DAY:**
+*"the REPORT itself now includes INV-FUT — reporting/outstanding.go lost its as-on bound and this test is
+measuring the wrong thing."* It fired on purpose. **Leave tripwires like that; they pay.**
+
+#### THE THREE PLACES THAT MOVED TOGETHER — MISSING ANY ONE RE-OPENS D20 VERBATIM
+1. **the report** — a `bounded` flag plus `Outstanding.Bounded` on the struct so no reader re-derives it.
+   ⚠️ **The ARG LIST moves with the predicate:** leaving `$2` bound while dropping it from the text answers
+   *"bind message supplies 2 parameters, but prepared statement requires 1"* — a 500, not a wrong number.
+2. **the NLQ skeleton** — both predicates dropped together, including the opening branch's
+   `books_beginning_from` guard, which asks "had the books begun by the as-on date?", a question with no
+   meaning when there is no as-on date. **Decided, not dropped:** the opening breakup IS part of these books
+   and the ledger balance always includes it. The old constant's TIME-ZONE reasoning is kept verbatim
+   (unreferenced, renamed) for the day an `as_on` parameter reaches the DSL.
+3. **the caption, in FOUR copies** — `QueryScreen`'s basis line (which said *"AS AT TODAY … Bills dated in
+   the future are not outstanding yet and are excluded"*, true when written and made FALSE by this commit),
+   the wire echo, the screen's scope line, and the printed subtitle.
+
+#### ⛔⛔ M3 IS THE ONE TO REMEMBER: THE FALSE CAPTION HAD NO GATE ANYWHERE
+Reverting the wire echo to the RESOLVED as-on left `go test ./... -count=1` at **exit 0, 0 FAIL**. Every
+figure right, the sentence over them wrong, and nothing in the repo read the sentence. §5.19 in its purest
+form, and §2.9 for the second lane running. It bought `TestTheAgeingReportsScopeOnTheWireIsHONEST`, which
+checks the caption **against the rows it captions** (the unbounded total equals Sundry Debtors from the
+Balance Sheet) rather than asserting a field in isolation.
+⛔ **THE CONVENTION WAS COPIED, NOT INVENTED:** `as_on: ""` means UNBOUNDED, exactly as `/stock-summary`
+already answers, and `outstandingsScopeLine` mirrors `stockSummaryScopeLine`. ⚠️ `aged_as_on` is always
+populated, because the ageing day is a real and DIFFERENT fact — one field could not say both things, and
+trying to was the defect.
+⚠️ **AND THE OLD CLIENT CAPTION WOULD HAVE VANISHED, NOT LIED:** `data.as_on ? … : null` renders NOTHING on
+`""`. Quieter, no more honest — an operator cannot tell an unbounded report from a caption that failed.
+
+#### M1 AND M2, BOTH PREDICTED, BOTH REPRODUCING
+- **M1** (the unconditional bound restored) → **4** failures, one more than predicted: the two inverted
+  parity tests, the new reporting gate, and — unpredicted — `TestExecute_OutstandingsMatchesTheOutstandings
+  Report`. ✅ **The D20 gate catches the REPORT diverging from the DSL as readily as the reverse**, which is
+  more than it was credited with.
+- **M2** (the whitelist predicate restored alone) → 3 failures, all in `internal/query`, `internal/reporting`
+  green. Exactly the D20 family.
+
+#### TWO GO TESTS INVERTED, NOT DELETED (§5.16)
+`TestExecute_OutstandingsExcludesTheFutureDatedBill` → `…INCLUDES…`, and
+`…DropsTheOpeningWhenBooksBeginLater` → `…KeepsTheOpeningWhenUnboundedAndDropsItAsAtAnEarlierDate`. Both
+keep their original reasoning verbatim — it is still exactly right **for a report that was asked for a
+date** — and both gained an EXPLICIT-`as_on` arm, which is what keeps the guards alive and stops the fix
+reading as "the bound was deleted".
+
+#### ⛔ THE MOCK WAS LOOSER THAN CORED IN BOTH DIRECTIONS (D84's class)
+Its bill loop had NO date predicate at all — already unbounded — while it echoed today as `as_on`. Every
+vitest was green either way. It now applies the bound when one is given and echoes `""` when one is not.
+
+#### ✅ `BillAllocationPicker` IS A DECISION NOW, NOT AN OMISSION
+It passes no `as_on`, so it lists future-dated open bills — and it should: a customer paying an advance or
+proforma invoice early is ordinary, and excluding it makes an allocable bill unallocable and pushes the
+operator onto ON ACCOUNT, the balance nobody can chase. Recorded in the code.
+
+#### THE DRIVE — 16/16, AND THE END-TO-END ARM IS THE PROOF
+`frontend/scripts/drive-l23-d86.mjs`. Two reports from two TABLES agreeing with no `as_on`
+(111130.0000 == 111130.0000), grown by exactly the new bill; the future bill NAMED in the list; the
+explicit-`as_on` control; both wire fields; the screen's caption and the NLQ basis line each checked for the
+new claim AND the absence of the old.
+⛔ **fresh seed → verify:demo 34/34 → the probe posts a future-dated bill → verify:demo 34/34 AGAIN.**
+`verify:demo` asserts "BS Sundry Creditors == Outstandings (payable)" EXACTLY, and one future-dated bill
+used to break it by its own amount. That is the row, proved by a gate that already existed.
+
+#### ⚠️⚠️ TWO PROBE BUGS, AND BOTH ARE FINDINGS RATHER THAN SLIPS
+- ⛔ **THE OUTSTANDINGS SCREEN CANNOT SHOW A PAYABLE AT ALL.** `OutstandingsScreen` sends no `kind`, so the
+  only ageing reachable from the keyboard is the RECEIVABLE one. The first version of the browser arm
+  asserted the payable's ref was on screen; it never can be. **That is D94, still OPEN**, and the probe now
+  posts a future-dated SALES invoice too so the browser arm has a receivable to find.
+- ⛔⛔ **THE FUTURE DATE IS LOAD-BEARING AND 2027-02-20 BROKE A GATE.** `verify-demo.mts` asserts a Profit &
+  Loss over **2027-02-01..2027-02-28** is EMPTY; two future-dated vouchers landed inside it and the gate went
+  33/34 with `Feb-2027 net_profit -1000.0000` — a failure with nothing to do with D86 that the next session
+  reads as a regression in their own lane. **2027-03-10** is after today, inside the demo FY (so the same
+  numbering counter), and outside every window verify-demo probes. ⛔ **Read `verify-demo.mts` before dating
+  a probe that posts.**
+- ⚠️ And the control arm was RED ON CORRECT CODE first: it asserted `unbounded - bounded === 7080`, true only
+  on a tenant no earlier run had touched. §5.23's second question applied to a SHARED tenant. It now accounts
+  for the gap BY NAME — the refs the bound removes, summed.
+
+#### ⛔ IT SHIPS WITH A RELEASE NOTE
+D86 moves a number an operator has already read, so by `docs/RELEASE-NOTES.md`'s own rule it owes one.
+
+#### GATES
+`go test ./... -count=1` **exit 0, 0 FAIL, 0 SKIP** · `python3 corpora/validate.py` OK ·
+`pnpm vitest run` **1457 / 87 files** · `pnpm exec tsc --noEmit` clean — and tsc named all four response
+fixtures needing `aged_as_on`.
+
+**THE WHOLE DRIVE SET, ON A FRESH SEED, AFTER THE LANE:** `verify:demo` **34/34** → l5-nlq **41/41** ·
+l13 **33/33** · l14 **17/17** · l14b **8/8** · l15-d5 **22/22** · l15c **7/7** · l15d **13/13** ·
+l15f **8/8** · l16-d22 **34/34** · l11-ai **14/14** · l20-d49 **52/52** · l21-d85 **16/16** ·
+l22-d8 **14/14** · **l23-d86 16/16** · l17-d95 **20/20** · `contract:cored` **14/14** →
+`verify:demo` **34/34 again**.
+✅ **`drive-l5-nlq` IS IN THE SET NOW AND WAS NOT BEFORE**, which matters for this row: it is the probe that
+carries the NLQ basis-line pin D86 re-wrote, and running it was how that re-pin was proved rather than
+assumed. ⛔ **Add it to the standard sequence** — 41 probes on the surface D20 lives on had been outside the
+routine re-run.
+✅ **The set is gate-safe with the two new probes in it**, and for D86 that is the row's own proof: l23 POSTS
+two future-dated bills and `verify:demo` still foots "BS Sundry Creditors == Outstandings (payable)" exactly.

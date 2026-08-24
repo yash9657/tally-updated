@@ -1,24 +1,26 @@
 # HANDOFF — THE REMAINING SIX: the register's last rows, in order, with the oracle for each
 
-> ✅ **L22 CLOSED D8 — closing stock replays in ENTRY order now.** Position 1 is now **D86**, which is
-> **ALONE** and must land **BEFORE D94**. Full records: `HANDOFF-PARITY-AUDIT.md` §7.5 **L21** (D85) and
-> **L22** (D8). Nothing is blocked on the user.
+> ✅ **L23 CLOSED D86 — the ageing no longer bounds an unasked date at today.** Position 1 is now **D94**
+> (the payables door), and **D83 is last**. Full records: `HANDOFF-PARITY-AUDIT.md` §7.5 **L21** (D85),
+> **L22** (D8), **L23** (D86). Nothing is blocked on the user. **Two rows left.**
 >
-> ⛔⛔ **THE TWO LANES SINCE THIS FILE WAS WRITTEN BOTH CORRECTED IT, IN OPPOSITE DIRECTIONS.**
-> **D85's stated scope was too BIG** — the predicted new draft-body field through two contracts could not
-> have closed the row at all, and its "it moves pinned numbers" was false (161 → 161 tests, nothing moved).
-> **D8's stated cost model was RIGHT and its cheapest check paid for itself** — with only the new fixture
-> added, exactly one Go subcase and that fixture failed, nothing else. ⛔ **So the lesson is not "this file
-> exaggerates"; it is that a written scope is a CLAIM. D8's cheapest check is the shape to copy: make the
-> smallest change that SHOULD fail, run the full suites, and count.**
+> ⛔⛔ **D94's OWN EVIDENCE ARRIVED WHILE DRIVING D86, AND IT IS BETTER THAN THE ROW TEXT.** L23's browser arm
+> asserted a PAYABLE bill's reference was on the Outstandings screen and it **never can be**:
+> `OutstandingsScreen` sends no `kind`, so the only ageing reachable from the keyboard is the RECEIVABLE one.
+> That is D94 stated as a measurement rather than a claim, and the probe now posts a future-dated SALES
+> invoice so its browser arm has a receivable to find. ⚠️ **D86 also moved what D94 renders** — the screen's
+> caption is now `outstandingsScopeLine()` and the response carries `as_on` + `aged_as_on`, so D94's new
+> screen must use the same function and not write a second one.
 >
-> ⛔⛔ **AND READ §2.9 BEFORE D86.** D8's mutation proof did NOT reproduce: the ordering key could be deleted
-> from the SQL entirely and every Go test stayed green *and* the wire figure stayed correct, because a
-> tiebreak accidentally agreed with it. **D86 changes a report's default bound — exactly the kind of change a
-> nearby default can shadow.**
+> ⛔⛔ **AND THE LESSON THAT NOW HOLDS FOR TWO LANES RUNNING — §2.9. THE CAPTION HAD NO GATE.** D86's M3
+> reverted the wire echo to the false `as_on` and `go test ./... -count=1` stayed at **exit 0, 0 FAIL**:
+> every figure right, the sentence over them wrong, nothing reading the sentence. D8's M2 was the same shape
+> from the other side. ⛔ **D94 ships a new report NAME, a new screen and a new ACL counterweight — three
+> things whose failure mode is a caption, a door or a rule that is present and wrong. Assume no gate sees it
+> until you have mutated it.**
 >
-> ⚠️ **THE TRANSPORT NOTE BELOW IS STILL TRUE AND STILL UNUSED** — cored passes insightd's answer back byte
-> for byte and `conflictCode` reads `err.body.detail.code` for 409 only. Neither D85 nor D8 touched it.
+> ⚠️ **THE TRANSPORT NOTE BELOW IS STILL TRUE AND STILL UNUSED.** cored passes insightd's answer back byte for
+> byte and `conflictCode` reads `err.body.detail.code` for 409 only. None of D85/D8/D86 touched it.
 
 > ✅ **L19 CLOSED D96 BY DELETING IT** and ✅ **L18 CLOSED D81** (half A shipped; **half B did not
 > reproduce and the user closed it as such**). §6.7 and §6.8 are both ANSWERED.
@@ -44,11 +46,11 @@ to do next, in what order, what proves it, what will go wrong. Execute it top to
 
 ## ⛔ THE COUNT, RE-DERIVED BY PARSING §7.1 — NOT COPIED FROM A HEADER
 
-**96 registered · 93 CLOSED · 3 OPEN · 0 PARTIAL.** `93 + 3 = 96`.
+**96 registered · 94 CLOSED · 2 OPEN · 0 PARTIAL.** `94 + 2 = 96`.
 (`93 · 81 · 8 · 4` before L16 · `94 · 85 · 9 · 0` after L16 p0 · `96 · 87 · 9 · 0` after L16 p1 ·
 `96 · 88 · 8 · 0` after L17 · `96 · 89 · 7 · 0` after L18 · `96 · 90 · 6 · 0` after L19 ·
-`96 · 91 · 5 · 0` after L20 · `96 · 92 · 4 · 0` after L21 · this after **L22**.)
-⚠️ **FIVE LANES NOW WITHOUT A NEW ROW APPEARING.** The pattern has not changed, it has changed SHAPE:
+`96 · 91 · 5 · 0` after L20 · `96 · 92 · 4 · 0` after L21 · `96 · 93 · 3 · 0` after L22 · this after **L23**.)
+⚠️ **SIX LANES NOW WITHOUT A NEW ROW APPEARING.** The pattern has not changed, it has changed SHAPE:
 L18 found **half of D81 did not exist**, L19 closed a row by DELETING it, L20 found a **gate firing on a
 route class nobody had in mind** plus a truncation the move itself created, and **L21 found the row's
 written SCOPE and its predicted PINS both wrong** — the expensive design could not have worked and the
@@ -85,7 +87,7 @@ written in L16 broke it again — one carried a literal ` | ` inside its status 
 ⚠️ **VALIDATE ANY PARSER CHANGE BY RE-DERIVING THE OLD NUMBER FROM THE OLD FILE.** ⚠️ **And it prints a
 `?` bucket on purpose** — a row matching nothing must be SEEN, not folded into a plausible total.
 
-**OPEN (3):** D83 · D86 · D94
+**OPEN (2):** D83 · D94
 **PARTIAL: none**, and there should never be another: **`PARTIAL` is how a hidden build survives for
 three sessions** (that was D13). A row is CLOSED, or OPEN, or TWO rows.
 
@@ -148,11 +150,11 @@ builds** (the only genuinely concurrent probe).
 | ~~0~~ | ~~**D49**~~ | MED | ✅ **CLOSED L20 2026-08-24.** cored proxies insightd; 12 anonymous routes closed, no migration needed. §7.5 L20. |
 | ~~0~~ | ~~**D85**~~ | MED | ✅ **CLOSED L21 2026-08-24.** One function in `persistence.py`; **no new field, and it moved no pinned number.** §7.5 L21. |
 | ~~0~~ | ~~**D8**~~ | HIGH | ✅ **CLOSED L22 2026-08-24.** `voucher_id` replaces `voucher_no` as the second replay key; `docs/RELEASE-NOTES.md` created. §7.5 L22. |
-| **1** | **D86** | MED | **moves Outstandings**, inverts a Go test by design. ALONE, **before D94.** |
-| 5 | **D94** | HIGH | the payables door. **After D86.** ✅ **L16 built this exact shape twice — copy `ForecastScreens.tsx`.** |
+| ~~0~~ | ~~**D86**~~ | MED | ✅ **CLOSED L23 2026-08-24.** Unbounded with no `as_on`; TWO Go tests inverted; the caption in four copies. §7.5 L23. |
+| **1** | **D94** | HIGH | the payables door. ✅ **Its precondition is met — D86 has landed.** ✅ **L16 built this exact shape twice — copy `ForecastScreens.tsx`.** |
 | 6 | **D83** | LOW | the register's proposed index **WILL NOT WORK.** The only concurrent probe. |
 
-**Must be ALONE:** D86, D83.  **Must be SERIALISED:** ~~D49→D85~~ (done) · **D86→D94**.
+**Must be ALONE:** D83.  **Must be SERIALISED:** ~~D49→D85~~ · ~~D86→D94~~ — **both orderings are now satisfied.**
 ✅ **NOTHING IS BLOCKED ON THE USER — §6.7 and §6.8 were both answered 2026-08-24, and §6.7 was then
 RE-ASKED AND REVERSED on a measurement** (D81 half B: does not reproduce, closed as such; D96: delete).
 ⛔ **Do not re-ask either; §6 carries the reasoning and the reversal.**
@@ -425,20 +427,36 @@ Full record: `HANDOFF-PARITY-AUDIT.md` §7.5 **L22**. What carries forward:
 - ✅ **T9 (FIFO/LIFO) IS UNBLOCKED** and ⛔ must be built on the `voucher_id` order, not the old one — FIFO
   is *more* order-sensitive, so fixtures authored against the old order would all be wrong.
 
-### 4 · D86 — Outstandings bounds at today, the Balance Sheet does not · RECON §3.13 · ⛔ ALONE · BEFORE D94
-✅ **DECIDED: OUTSTANDINGS STOPS BOUNDING AT TODAY** — deliberately NOT the Balance Sheet, so
-`verify:demo` needs no re-pin. One bill dated in the future gave BS **109950.0000** vs Outstandings
-**108770.0000**, while `?as_on` in the future made them agree.
-⛔⛔ **THREE PLACES MOVE TOGETHER, AND MISSING ONE RE-OPENS D20:** (1) the report; (2)
-`internal/query/whitelist.go`'s `EntityOutstandings` skeleton, which D20's fix made MIRROR the report —
-`drive-l5-nlq.mjs` will catch it; (3) `QueryScreen`'s `measureBasis` caption, which says future-dated
-bills are excluded and becomes **FALSE**. ⚠️ **That caption is a §5.19 case**: it is prose that will still
-be present, still well-worded, and wrong.
-**ORACLE:** post a future-dated bill; the two reports AGREE with no `as_on`.
-⚠️ It **inverts a Go test by design** — say so in the commit rather than deleting the test (§5.16).
-⚠️ **AND IT MOVES WHAT D94 RENDERS**, which is why D94 comes after it.
+### ✅ 4 · D86 — CLOSED L23 2026-08-24. Unbounded with no `as_on`. Kept for what it hands D94.
+Full record: `HANDOFF-PARITY-AUDIT.md` §7.5 **L23**. What carries forward:
+- ⛔⛔ **D94's CENTRAL CLAIM IS NOW A MEASUREMENT, NOT A CLAIM.** L23's browser arm asserted a PAYABLE bill's
+  reference was on the Outstandings screen and it **never can be** — `OutstandingsScreen` sends no `kind`, so
+  the only ageing reachable from the keyboard is the receivable one. The probe posts a future-dated SALES
+  invoice for that reason, with the note next to it.
+- ⛔ **D86 MOVED WHAT D94 RENDERS.** The scope caption is `outstandingsScopeLine(as_on, aged_as_on)` in
+  `screens/reports/ReportScreens.tsx`, and the response now carries **both** fields (`as_on: ""` means
+  UNBOUNDED — the `/stock-summary` convention; `aged_as_on` is always a real date). ⛔ **D94's payables screen
+  must call that same function, not write a second sentence** — the whole of D86's second half was four copies
+  of one caption disagreeing.
+- ⛔ **THE PRINTED FORM ALREADY SHARES ITS SUBTITLE THROUGH `outstandingsSubtitle(out)`**, which takes the
+  whole report so a caller cannot pass the ageing date and forget the bound. ⚠️ `printOutstandings` and
+  `outstandingKindParam` are still SHARED between JSON and print on purpose — D94 adds a NAME, it does not
+  remove the `?kind=` parameter.
+- ⛔⛔ **ASSUME NO GATE SEES A CAPTION, A DOOR OR A RULE UNTIL YOU HAVE MUTATED IT (§2.9).** M3 reverted the
+  wire echo to the false `as_on` and the ENTIRE Go suite stayed green — 0 FAIL. D94 ships a new report name, a
+  new screen and a new ACL counterweight; all three fail in exactly that silent way.
+- ⚠️ **`resolveAsOn` IS PACKAGE-SHARED** with `bankrecon.go` ("asOn empty means everything ever posted") and
+  its signature is untouched. Do not "tidy" it into one meaning.
+- ⚠️ **THE FUTURE DATE A PROBE POSTS IS LOAD-BEARING.** `verify-demo.mts` asserts a P&L over
+  **2027-02-01..2027-02-28** is EMPTY. A voucher inside it takes the gate to 33/34 for a reason that has
+  nothing to do with the lane. Use **2027-03-10** (after today, inside the demo FY, outside every probed
+  window) or read `verify-demo.mts` first.
 
-### 5 · D94 — the payables ageing report has NO DOOR · AFTER D86 · anchors inline
+### 5 · D94 — the payables ageing report has NO DOOR · ⛔ NOW POSITION 1 · anchors inline
+✅ **PRECONDITION MET: D86 LANDED (L23).** ⛔ **Read §3 row 4 above first** — it hands you three things this
+row needs: the payables screen is confirmed absent BY MEASUREMENT, the scope caption is now a shared function
+`outstandingsScopeLine()` that the new screen must reuse rather than re-write, and the response carries
+`as_on` + `aged_as_on` with `""` meaning UNBOUNDED.
 ⛔ **THE SERVER ALREADY SERVES IT AND NOTHING IN THE PRODUCT CAN ASK.** Measured on the wire 2026-08-23
 against a binary verified fresh by symbol: `?kind=PAYABLE` → **200 · total 1,04,050.0000 · 2 creditors ·
 4 bills** (`Steel Suppliers` 80,450.0000 / 3 bills · `Delhi Parts` 23,600.0000 / 1 bill), full per-bill
@@ -549,7 +567,7 @@ pnpm run verify:demo "$(cat /tmp/drive-company-id)"     # -> ALL CHECKS PASSED (
 ### ✅ THE DRIVE SET IS GATE-SAFE — RE-MEASURED 2026-08-24 (L21), END TO END
 ```
 fresh seed -> verify:demo 34/34
-   run all THIRTEEN drives + contract:cored
+   run all FOURTEEN drives + contract:cored
 verify:demo 34/34          <- the whole set leaves the tenant level
 ```
 ⛔⛔ **AND HOW TO ACTUALLY RUN THE SET, BECAUSE L21 RE-LEARNED THIS THE HARD WAY.** `drive-l16-d22`,
@@ -582,6 +600,9 @@ CO="$(cat /tmp/drive-company-id)" node frontend/scripts/drive-l11-ai.mjs      # 
                                               #   listing goes through CORED now (D49); a bare :8088 fetch 401s
 CO="$(cat /tmp/drive-company-id)" node frontend/scripts/drive-l20-d49.mjs     # 52/52 (D49) — wire + a READ-ONLY
                                               #   browser arm; makes and REAPS its own two tenants
+CO="$(cat /tmp/drive-company-id)" node frontend/scripts/drive-l23-d86.mjs     # 16/16 (D86) — ⚠️ it POSTS two
+                                              #   FUTURE-dated bills (2027-03-10: outside every window
+                                              #   verify-demo probes — see §3 row 4)
 CO="$(cat /tmp/drive-company-id)" node frontend/scripts/drive-l22-d8.mjs      # 14/14 (D8) — READ-ONLY; its
                                               #   FIRST arm is a precondition: it refuses to run on a seed
                                               #   with no same-date cross-series stock pair
