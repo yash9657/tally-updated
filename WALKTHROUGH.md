@@ -16,10 +16,16 @@ Two rules this document follows:
 
 ```bash
 make dev-db                       # Postgres 16 on :5433
-cd backend && go run ./cmd/cored migrate
-AUTH_DEV_TOKEN_ENABLED=true PORT=8087 APP_DSN=... go run ./cmd/cored serve   # cored  :8087
-cd insightd && uvicorn insightd.api.app:create_app --factory --port 8088     # insightd :8088
-cd frontend && pnpm dev                                                       # UI     :5173
+make migrate                      # ⛔ serving does NOT migrate
+make run-cored                    # cored    :8087
+make run-insightd                 # insightd :8088  (loopback; cored is its only caller)
+cd frontend && pnpm dev           # UI       :5173
+
+# ⛔ USE THE MAKE TARGETS, or pass the shared credential by hand. insightd is
+# reached ONLY through cored's draft proxy now, and BOTH processes need the same
+# INSIGHTD_SERVICE_TOKEN (the Makefile exports a dev value to both). Start either
+# one without it and you get two loud refusals rather than a quiet open door:
+# cored answers 503 naming the variable, insightd answers 503 "unconfigured".
 # optional, for e-invoice / IRN:
 SVC=$(curl -s -XPOST localhost:8087/auth/token -d '{"subject":"svc:statutoryd"}' | jq -r .token)
 CORED_BASE_URL=http://localhost:8087 CORED_SERVICE_TOKEN=$SVC PORT=8091 \
@@ -27,9 +33,10 @@ CORED_BASE_URL=http://localhost:8087 CORED_SERVICE_TOKEN=$SVC PORT=8091 \
 ```
 
 `frontend/.env.development.local` with `VITE_LIVE=1` points the UI at the real
-backend (the dev server proxies `/v1`, `/auth` → cored and `/companies` →
-insightd, and auto-mints a dev owner token). Delete that file to run the UI
-against its in-memory mock instead.
+backend (the dev server proxies `/v1` and `/auth` → cored, and **nothing else** —
+the old `/companies` → insightd rule is gone, because the browser no longer
+addresses insightd at all). Delete that file to run the UI against its in-memory
+mock instead.
 
 ### 1.1 The demo company — seed it, then open one link
 
@@ -309,9 +316,14 @@ liabilities = 109000.0000; net profit 9000.0000.
 - `GET /cash-flow` — deterministic weekly projection with opening/closing cash.
 - `GET /anomalies` — rule-based findings. **Verified:** it flagged the voucher I
   had just posted as `AFTER_HOURS` ("entered at 22:39 IST") and `ROUND_AMOUNT`.
-- `POST /companies/{id}/forecast/cashflow` (insightd) — Holt-Winters, optional
-  dependency. **Verified:** 60 weeks of history → `method:"holt-winters-additive"`,
-  a 4-week forecast that tracks the seasonality against a flat naive baseline.
+- ⛔ **insightd's statistical forecast is GONE, deliberately** (register row D96,
+  deleted 2026-08-24). `POST /companies/{id}/forecast/cashflow` existed, worked, and
+  answered `method:"holt-winters-additive"` — and no client could reach it. It was
+  deleted rather than wired because cored's projection above is explainable to an
+  auditor bill by bill (its own `method` says *"deterministic; no statistics, no
+  model"*), and a second cash-forward number produced by a different method, with no
+  auditor story, invites exactly the confusion the Cash Flow disclosure exists to
+  prevent. `insightd/tests/test_forecast_plane_is_gone.py` keeps it gone.
 
 ### 3.13 Security
 
@@ -321,6 +333,19 @@ liabilities = 109000.0000; net profit 9000.0000.
   master without a WebAuthn step-up → **403 `STEPUP_REQUIRED`**; the WebAuthn
   ceremony (`/auth/webauthn/register/begin`) returns a challenge; five bad logins
   → **423 `LOCKED`** with an `until` timestamp.
+- ⛔ **AND THE AI SIDE PLANE IS INSIDE THAT NOW TOO** (register row D49, closed
+  2026-08-24). `insightd` used to answer **twelve routes anonymously** and scope
+  drafts by the `company_id` in the caller's own path — an anonymous
+  `GET :8088/companies/{any-uuid}/drafts` returned a tenant's supplier bills in
+  full while cored answered 401 for the same company. The drafts are cored routes
+  now (`/v1/companies/{id}/drafts…`), judged as `(Display|Create, "purchase")`, and
+  insightd refuses anything that did not come through the proxy.
+  **Verified, 52/52:** each route 401 anonymously *with the supplier name absent
+  from the body*; the four auto-doc routes 404; another tenant's drafts 403 with
+  that tenant's supplier name nowhere in the answer; `disallow display purchase`
+  hides the Bill Inbox while the same clerk still reads the Trial Balance; and
+  `disallow create purchase` leaves the inbox readable while refusing the claim.
+  See `docs/TENANCY-AND-ACCESS.md` §5b.
 
 ### 3.13a Users, roles and switching company
 

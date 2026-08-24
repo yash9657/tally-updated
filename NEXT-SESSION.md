@@ -1,5 +1,19 @@
 # NEXT SESSION — test-data hygiene, then closing stock, GSTR-2A/2B + IMS, and payroll
 
+> ## ⛔⛔ SUPERSEDED — DO NOT DRIVE FROM THIS FILE
+>
+> Every track it plans has since shipped. **The current driver is
+> `HANDOFF-THE-REMAINING-SIX.md`**, and the state of record is
+> `HANDOFF-PARITY-AUDIT.md` §7.1 (the register) and §7.5 (the per-lane ledger).
+> As of **2026-08-24**: **96 registered · 91 CLOSED · 5 OPEN · 0 PARTIAL**, open
+> rows **D85 · D8 · D86 → D94 · D83**, position 1 **D85**.
+>
+> Kept for the §3 baseline commands and the trap notes below, which are still
+> useful — ⚠️ **with one correction: the insightd start command below is now
+> incomplete.** insightd is reached only through cored's draft proxy and both
+> processes need the same `INSIGHTD_SERVICE_TOKEN` (register row D49). Use
+> `make run-cored` / `make run-insightd`, which export it.
+
 > ## ⚠️ READ THIS BEFORE YOU TOUCH ANYTHING
 >
 > **This is accounting software. Real companies will file real returns from its
@@ -99,10 +113,17 @@ AUTH_DEV_TOKEN_ENABLED=true PORT=8087 \
   APP_DSN="postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable" /tmp/cored serve &
 
 # insightd MUST carry the DSN or verify:demo drops a check.
+# ⛔ AND IT MUST CARRY THE SERVICE TOKEN (D49), the SAME value cored is given, or
+#    every company-scoped route answers 503 "unconfigured" and the Bill Inbox is
+#    empty for a reason that looks like a seeding failure. `make run-insightd`
+#    and `make run-cored` both export it; by hand:
 cd insightd && . .venv/bin/activate && \
   INSIGHTD_PII_BOUNDARY_STRICT=1 \
+  INSIGHTD_SERVICE_TOKEN="dev-insightd-service-token" \
   INSIGHTD_DATABASE_URL="postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable" \
   python -m uvicorn insightd.api.app:app --port 8088 &
+# ...and cored needs the matching pair:
+#   INSIGHTD_BASE_URL=http://localhost:8088 INSIGHTD_SERVICE_TOKEN="dev-insightd-service-token"
 ```
 
 > The `?sslmode=disable` on that DSN is **load-bearing for the test suite**, not

@@ -1,5 +1,21 @@
 # HANDOFF — THE LIVE ONE. Start here, from cold.
 
+> ## ⛔⛔ NO LONGER THE LIVE ONE — SUPERSEDED 2026-08-24
+>
+> **The driver is `HANDOFF-THE-REMAINING-SIX.md`.** The state of record is
+> `HANDOFF-PARITY-AUDIT.md` §7.1 (the defect register) and §7.5 (one section per
+> lane, newest last). As of **2026-08-24**: **96 registered · 91 CLOSED · 5 OPEN ·
+> 0 PARTIAL** — open rows **D85 · D8 · D86 → D94 · D83**, position 1 **D85**.
+>
+> ⛔ **Do not re-derive the count from any header, including this one.** §0 of the
+> driver carries a snippet that re-parses §7.1's STATUS COLUMN, and every earlier
+> version of it was wrong in a different way. Run it.
+>
+> This file is kept for its cold-start mechanics (§1–§2) and its reasoning. ⚠️ Its
+> stack commands predate the insightd draft proxy: both cored and insightd now need
+> the same `INSIGHTD_SERVICE_TOKEN` (`make run-cored` / `make run-insightd` export
+> a dev value), and the vite dev server no longer proxies `/companies` anywhere.
+
 > **Written 2026-08-05, updated in place at the IRN-groundwork commit (2026-08-06).** This file replaces the ELEVEN `HANDOFF-*.md`
 > files that preceded it (§11 lists them; `ls` confirms eleven). **Every other `HANDOFF-*.md` in this
 > repository is SPENT** — see §11 for the list and for the one thing to do about them.

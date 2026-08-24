@@ -9,7 +9,7 @@ follow-up; this document freezes the shape so both sides can build in parallel.
 insightd returns a `PurchaseVoucherDraft` and **stops**. It NEVER POSTs to
 cored. The operator reviews the prefilled F9 form and presses **Ctrl+A**; the
 EXISTING frontend voucher API (`frontend/src/api/rest.ts` → `POST
-/companies/{id}/vouchers/purchase`) submits under the human's identity, and
+/v1/companies/{id}/vouchers/purchase`) submits under the human's identity, and
 cored re-derives GST authoritatively and writes the immutable ledger entry.
 
 Human-in-the-loop is therefore **structural**: there is no insightd endpoint
@@ -17,11 +17,41 @@ that writes the ledger.
 
 ## Fetching a draft
 
+⛔ **THESE ARE CORED ROUTES, UNDER `/v1`** (register row D49, closed 2026-08-24).
+The frontend never addresses insightd. It calls cored, which authenticates the
+caller, checks membership, evaluates `(Display|Create, "purchase")` and forwards to
+insightd with the company its PDP authorized:
+
 ```
-GET /companies/{company_id}/drafts/{draft_id}   ->  PurchaseVoucherDraft (JSON)
+GET  /v1/companies/{company_id}/drafts                      ->  DraftSummary[]
+GET  /v1/companies/{company_id}/drafts/{draft_id}           ->  PurchaseVoucherDraft
+POST /v1/companies/{company_id}/drafts                      ->  PurchaseVoucherDraft (201)
+POST /v1/companies/{company_id}/drafts/{draft_id}/claim           (the accept lifecycle)
+POST /v1/companies/{company_id}/drafts/{draft_id}/claim/release
+POST /v1/companies/{company_id}/drafts/{draft_id}/accepted
 ```
 
-RLS-scoped: a `draft_id` from another `company_id` returns 404.
+⚠️ **NOT `/companies/…`, and the difference is not cosmetic.** vite used to proxy
+that whole prefix to insightd, so a cored path written without `/v1` was delivered
+to the wrong process — a mistake that looks like nothing happening in the browser
+while every unit test passes. That proxy rule is gone; `/v1` is the only prefix
+cored answers.
+
+✅ **THE BEARER ARRIVES ON ITS OWN.** `createInsightdClient()` with no arguments
+resolves cored's base URL and picks up the session transport the auth gate
+installed (`api/http.ts`'s `setSessionFetch`, resolved per request). A caller does
+not pass a credential, and `VITE_INSIGHTD_BASE_URL` no longer exists.
+
+⛔ **AND A 409 MUST REACH THE CLIENT UNCHANGED.** cored passes insightd's answer
+back byte for byte — status, content type and bytes — because `draftAccept.ts`'s
+`conflictCode` reads `err.body.detail.code` and **only** for status 409, and every
+insightd-backed layer of the duplicate-bill guard fails OPEN on anything else. A
+proxy that reshaped that body into cored's own `{"error": …}` form would turn three
+specific refusals into the fail-open branch, and the accept would still succeed.
+
+Tenant scoping: a `draft_id` from another `company_id` returns 404, and a caller
+who is not a member of `{company_id}` never reaches insightd at all (cored answers
+403).
 
 ## What the frontend reads
 
@@ -96,5 +126,5 @@ values ever appear in the draft.
 
 The frontend does NOT call insightd to submit. On Ctrl+A it POSTs `body`
 (possibly edited by the operator) via the existing `rest.ts` →
-`POST /companies/{id}/vouchers/purchase`. cored re-derives GST and writes the
+`POST /v1/companies/{id}/vouchers/purchase`. cored re-derives GST and writes the
 ledger entry attributed to the human.

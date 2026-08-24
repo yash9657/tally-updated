@@ -80,6 +80,28 @@ spec:
           port: 8080
 ---
 # insightd ingress: only cored may call it.
+#
+# ⚠️ THIS CLAIM WAS ASPIRATIONAL UNTIL 2026-08-24 AND IS NOW A SECOND CONTROL.
+# When it was written there was NO cored proxy — insightd authenticated nobody,
+# answered twelve routes anonymously, and the browser reached it same-origin
+# through the dev server. So this policy was the ONLY thing standing between a
+# tenant's supplier bills and anyone who could open a socket, and it has never
+# been applied to a cluster.
+#
+# Register row D49 built the proxy: the drafts are cored routes
+# (/v1/companies/{id}/drafts...) judged by cored's PDP, and insightd refuses any
+# request that does not present the shared service credential AND the company
+# cored authorized. So this rule is now defence in depth rather than the whole
+# defence — which is the right relationship between a network policy and an
+# application control.
+#
+# ⛔ BUT IT IS NOT COMPLETE ON ITS OWN: nothing in infra/ yet delivers
+# INSIGHTD_SERVICE_TOKEN to both pods. Without it cored refuses to forward (503,
+# naming the variable) and insightd refuses every company-scoped route (503,
+# "unconfigured"). Two loud refusals rather than a quiet open door — but the
+# Bill Inbox will not work until the secret is wired. There is also no
+# Dockerfile for insightd in this repository, so this manifest set cannot be
+# applied as-is.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

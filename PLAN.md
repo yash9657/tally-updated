@@ -125,7 +125,15 @@ The result: Tally's exact Ctrl+A feel (synchronous atomic post), the MCA Edit Lo
 
 ## Security
 - **Tenancy isolation (highest-severity risk).** Pool model: shared schema, mandatory `company_id` on every business row, Postgres RLS default-deny. `cored` NEVER connects as a bypassrls/superuser role and ALWAYS sets `app.current_company_id` GUC before any query. Enforced by: a sqlc/pgx connection wrapper that refuses queries without the GUC set, CI architecture tests asserting an RLS policy exists on every table, and per-release tenant-isolation fuzzing + pen-testing. Largest/regulated tenants can be promoted to a dedicated schema/cluster later.
-- **AuthN/Z.** TLS 1.3 to clients, mTLS between `cored`/`statutoryd`/`insightd` (Linkerd). Keycloak issues short-lived company-scoped JWTs. PDP evaluates Tally Disallow/Allow levels (Postgres ACLs) + back-dated cutoff server-side on every write/read; OPA/Rego for cross-cutting policy. Mandatory MFA/WebAuthn for Owner/Admin (account-takeover at Admin = catastrophic, controls escrow). Extensions and AI run with narrow OAuth2 scopes bound to one company_id — no god-mode, no RLS bypass.
+- **AuthN/Z.** TLS 1.3 to clients, mTLS between `cored`/`statutoryd`/`insightd` (Linkerd).
+  ⚠️ **STATUS 2026-08-24: the plane-to-plane half is shipped at the APPLICATION layer, not the transport
+  layer.** `cored` is the only door to both side planes — it proxies them after its own authn + PDP have
+  decided, and each refuses a request that does not present its shared service credential (statutoryd a
+  cored-minted `svc:` bearer, insightd `INSIGHTD_SERVICE_TOKEN` plus the company cored authorized). That is
+  a real control and it is what closed register row D49, but it is **not** mTLS: it authenticates the
+  CALLER, not the connection, so it does not encrypt plane-to-plane traffic and does not survive an
+  attacker on the pod network who has read the secret. Linkerd remains the plan; the application credential
+  is what makes the current deployment honest in the meantime. Keycloak issues short-lived company-scoped JWTs. PDP evaluates Tally Disallow/Allow levels (Postgres ACLs) + back-dated cutoff server-side on every write/read; OPA/Rego for cross-cutting policy. Mandatory MFA/WebAuthn for Owner/Admin (account-takeover at Admin = catastrophic, controls escrow). Extensions and AI run with narrow OAuth2 scopes bound to one company_id — no god-mode, no RLS bypass.
 - **At-rest & secrets.** KMS-wrapped per-tenant AES-256-GCM; Vault dynamic short-TTL DB creds; no secrets in env/images. Migration Agent terminates mTLS so Tally's plaintext port 9000 never leaves localhost; the legacy Modified-DES bridge (two-way sync window) is network-isolated and treated as untrusted input.
 
 ## Observability

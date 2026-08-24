@@ -254,6 +254,56 @@ The corpora carry 11 isolation cases and `internal/security` adds dedicated
 fuzzing, including "GUC unset", "GUC reset mid-transaction", and "malformed GUC"
 — all of which must return **zero rows**, never all rows.
 
+### 5b. ⛔ THE SIDE PLANE THAT WAS OUTSIDE ALL THREE LAYERS — AND IS NOT ANY MORE
+
+Everything above is about **cored**. Until 2026-08-24 the AI insight plane
+(`insightd`, the F9 Bill Inbox) sat entirely outside it, and that was a real
+tenancy hole rather than a theoretical one. Measured on the wire:
+
+```
+GET :8088/companies/<any-company-uuid>/drafts  ->  200 · 15 drafts, hydrated in full
+                                                   supplier names · invoice numbers · dates
+                                                   posting ledger names · amounts · GST state codes
+GET :8087/v1/companies/<the same uuid>         ->  401
+```
+
+Twelve routes answered anonymously — six draft routes, `/healthz`,
+`/benchmark/last`, and `/docs` `/redoc` `/openapi.json` `/docs/oauth2-redirect`,
+which published the whole schema and which no count of the exposure had ever
+included because they do not appear in `openapi.paths`. And the browser reached
+them **same-origin**: the dev server proxied every `/companies/*` request there.
+
+⛔ **THE POSTGRES RLS UNDERNEATH WAS NEVER A SECOND LAYER.** insightd set
+`app.current_company_id` from *the company_id in the path* — the same value the
+caller typed — so RLS faithfully enforced whichever scope the caller chose. This is
+worth stating plainly because it is the general trap: **RLS is only a second layer
+when the GUC comes from somewhere the caller does not control.**
+
+**The fix (register row D49) puts the drafts inside the same three layers as the
+day book.** They are cored routes now — `/v1/companies/{id}/drafts…` — mapped by
+`routeAction` onto the **existing `purchase` voucher-class token** (GET →
+`Display`, POST → `Create`), so §2's precedence, §3's seeded levels and §4's
+allow/disallow paths all apply to them unchanged. cored then forwards to insightd
+presenting a service credential shared by exactly those two processes, plus the
+company **its PDP just authorized**; insightd refuses anything else.
+
+| Caller | Request | Result |
+|---|---|---|
+| anonymous | `GET :8088/companies/{B}/drafts` | `401` — and the supplier name is absent from the body, not merely behind a status code |
+| anonymous | `GET /v1/companies/{B}/drafts` | `401 "missing bearer token"` |
+| Owner of A | `GET /v1/companies/{B}/drafts` | `403 "not a member of this company"`, B's supplier name nowhere in the answer |
+| Owner of B | `GET /v1/companies/{B}/drafts` | `200`, the draft in full |
+| **Data Entry** of B | `GET /v1/companies/{B}/drafts` | `200` — migration 0011 already grants that level `display purchase`, so the inbox needed **no new ACL row** |
+| Data Entry with `disallow display purchase` | `GET /v1/companies/{B}/drafts` | `403` — while the same clerk still reads the Trial Balance |
+| Data Entry with `disallow create purchase` | `POST …/drafts/{id}/claim` | `403`, **nothing reserved** — while the inbox stays readable |
+| holds the service credential, names a company the PDP did not authorize | `GET :8088/companies/{B}/drafts` | `403` — holding the credential is not holding a tenant |
+
+⚠️ **THE TOKEN CHOICE IS THE PART WORTH COPYING.** A new `draft` resource would
+have arrived **denied** for Data Entry (`default_access: none`) and forced a
+migration granting a power that level already held — §7's lesson in reverse. Reusing
+the class token means one rule governs "may this level see supplier purchases" for
+the day book and the AI inbox alike, and the two cannot drift apart.
+
 ---
 
 ## 6. Administering users, roles and levels — over HTTP, no SQL
@@ -405,7 +455,8 @@ Honest list. The engine is multi-tenant; the *product* around it is not yet.
 | ~~UI is single-identity~~ | **DONE** — the hardcoded `browser-dev-owner` mint is deleted. The browser signs in as whoever types their user name and password, holds the token in `sessionStorage` (per-tab, so a closed tab is a logged-out tab), shows who is signed in, and offers Sign Out. Every allow/disallow path in this document is now reachable *as the right person*. |
 | ~~Admin screens are read-mostly~~ | **DONE** — Gateway > **Users & Roles** now performs every write the API offers: invite, change a member's level, revoke access, revoke a pending invite, and create / edit / delete a custom security level. The rule editor's tokens are SERVED by the PDP (`GET .../security-levels/vocabulary`) rather than hardcoded, so a rule the PDP could never match is unrepresentable. See §9. |
 | ~~No email delivery~~ | **DONE** — a transactional outbox (migration 0023): the notification is enqueued in the SAME transaction as the invite and delivered by a dispatcher, with retry and dead-lettering. Users & Roles reports delivery separately from acceptance. The default Sender LOGS — real SMTP is configuration, not code — so nothing yet claims a message left the building. |
-| **Not deployed** | `infra/` holds k8s + terraform for EKS `ap-south-1`; none of it has been applied. |
+| ~~The AI plane was outside the engine~~ | **DONE** — §5b. `insightd` answered twelve routes anonymously and scoped drafts by the caller's own path value; it is now reached only through cored, inside the same three layers. |
+| **Not deployed** | `infra/` holds k8s + terraform for EKS `ap-south-1`; none of it has been applied. ⚠️ **And `infra/k8s/base/networkpolicy-default-deny.yaml` claimed "only cored may call insightd" while no proxy existed.** The proxy exists now, so the policy has become a second control instead of the only (unimplemented) one — but it still needs `INSIGHTD_SERVICE_TOKEN` delivered as a secret to both pods, which nothing in `infra/` yet does. |
 
 Suggested ordering from here: invite delivery (an outbox table plus a
 logged/stubbed sender is honest and testable offline; real SMTP is config, not

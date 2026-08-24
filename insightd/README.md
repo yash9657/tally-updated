@@ -9,6 +9,40 @@ human reviews and submits via the existing frontend voucher API.
 insightd has **NO ledger write path** and holds **no cored write credential** —
 the human-in-the-loop boundary is structural, not a runtime check.
 
+## ⛔ HOW insightd IS REACHED: CORED IS THE ONLY DOOR
+
+**Nothing but cored talks to this service** (register row D49, closed 2026-08-24).
+A browser calls `/v1/companies/{id}/drafts…` on **cored**, which verifies the
+caller's JWT, rejects a revoked session, requires membership in that company and
+evaluates `(Display|Create, "purchase")` against the caller's security level —
+then forwards the request here, presenting:
+
+| Header | What it is |
+|---|---|
+| `X-Insightd-Service-Token` | a credential shared by **exactly two server processes**, cored and this one. It says "this came through the proxy" and nothing else. |
+| `X-Insightd-Company` | the company **cored's PDP already authorized** for that caller. Every company-scoped route requires it to equal the `company_id` in the path. |
+
+So the path `company_id` still scopes the store and the RLS GUC — but a caller can
+only NAME a company somebody vouched for. Before this, the GUC was set from a value
+an anonymous caller typed, which is why the Postgres RLS was never a second layer.
+
+`INSIGHTD_SERVICE_TOKEN` **must be set on both processes** (the repo `Makefile`
+exports a dev value to `run-cored` and `run-insightd`). With it unset, cored
+refuses to forward and this service answers **503 "unconfigured"** on every
+company-scoped route — it never serves them open.
+
+⚠️ **This is not "a shared secret bolted on".** A secret the *browser* holds is not
+a credential, and it would say nothing about which company the caller may read;
+neither clause applies to a credential held only by two server processes for a
+request whose company the PDP has already decided. `api/authn.py` carries that
+argument in full, and `/healthz` states the posture on the wire.
+
+⚠️ **The auto-docs are NOT mounted** (`openapi_url=None`): `/docs`, `/redoc`,
+`/openapi.json` and `/docs/oauth2-redirect` all 404. They published the entire
+schema to anyone who could open a socket, they never appear in `openapi.paths`
+(which is why every count of this service's exposure missed them), and no runtime
+client reads them. `create_app().openapi()` still builds the schema in-process.
+
 ## Pipeline
 
 ```
@@ -42,14 +76,36 @@ insightd/
 
 ## Endpoints
 
-| Method | Path | Purpose |
-|---|---|---|
-| POST | `/companies/{id}/drafts` | run the pipeline, store + return a draft (the ONLY mutating route) |
-| GET | `/companies/{id}/drafts/{draft_id}` | hydrate the F9 screen (RLS-scoped) |
-| GET | `/healthz` | active adapter set per stage (fake\|real) |
-| GET | `/benchmark/last` | most recent accuracy report (read-only) |
+**EIGHT**, enumerated rather than summarised — the count of this service's surface
+has been written wrong three times. The first six are company-scoped and require
+both proxy headers; `/benchmark/last` requires the service token alone (it names no
+tenant, so there is no company to assert); `/healthz` is the **only** anonymous
+route, and says so in its own `unauthenticated_routes` field.
+
+| Method | Path | Purpose | Guard |
+|---|---|---|---|
+| POST | `/companies/{id}/drafts` | run the pipeline, store + return a draft (the only route that writes the DRAFT store) | `require_proxy` |
+| GET | `/companies/{id}/drafts` | slim list for the F9 bill inbox | `require_proxy` |
+| GET | `/companies/{id}/drafts/{draft_id}` | hydrate the F9 screen (RLS-scoped) | `require_proxy` |
+| POST | `/companies/{id}/drafts/{draft_id}/claim` | RESERVE the draft for one poster, before any voucher exists | `require_proxy` |
+| POST | `/companies/{id}/drafts/{draft_id}/claim/release` | give the claim back when the voucher POST failed | `require_proxy` |
+| POST | `/companies/{id}/drafts/{draft_id}/accepted` | record WHICH cored voucher a human posted from this draft | `require_proxy` |
+| GET | `/benchmark/last` | most recent accuracy report (read-only) | service token |
+| GET | `/healthz` | adapter set, PII posture, and what a token is checked against | **none, deliberately** |
 
 There is **no** endpoint that writes to the cored ledger.
+
+⚠️ **The guard is on the drafts ROUTER, not on six decorators**, so a route added
+to `routes_drafts.py` inherits it. And it is a route dependency and **not
+middleware**, on purpose: routing must happen first, so a path this service does
+not serve still answers **404** rather than 401 — `tests/test_api.py`'s
+ledger-write-endpoint proof POSTs to a cored `/vouchers` path and observes that
+nothing answers, and 401-before-routing would turn that proof into a statement
+about headers.
+
+⛔ **A claim token is not a credential.** It is an opaque concurrency value whose
+only power is to release or renew the claim it already holds; these routes would be
+exactly as safe if it were printed on a billboard.
 
 ## Run the tests (core only — no models/keys)
 
