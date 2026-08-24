@@ -405,7 +405,10 @@ class PureVoucherDraftMapper:
         # A field whose value had to be redacted is a field a human must retype:
         # a masked voucher number is not a voucher number. Naming them here is
         # what stops `_decide_status` returning "ready" for a draft that would
-        # post "[PAN REDACTED]" as the supplier's invoice number.
+        # post "[PAN REDACTED 6442]" as the supplier's invoice number. ⚠️ The tag
+        # carries a fingerprint of the removed value (D85) — do NOT read that as
+        # "so it is a usable number now". It tells the duplicate-bill guard two
+        # different bills apart; it still tells the OPERATOR to retype the field.
         for field in guard.fields:
             if field not in unresolved:
                 unresolved.append(field)

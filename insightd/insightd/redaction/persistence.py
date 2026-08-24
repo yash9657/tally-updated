@@ -40,11 +40,45 @@ mistaken for a real invoice number or a real ledger name. Every scrubbed field i
 also reported in ``unresolved`` by the mapper, which degrades the draft to
 ``low_confidence_manual`` — a redacted voucher number must never be auto-ready.
 
+⛔⛔ AND THE TAG CARRIES A FINGERPRINT, BECAUSE THE WORDS ALONE REFUSED REAL BILLS.
+That is D85, and it was found by DRIVING, not by reading. A tag of words only is a
+CONSTANT: every PII-shaped invoice number collapsed to the one string
+``[PAN REDACTED]``. The client's duplicate-supplier-bill guard
+(``draftAccept.ts``'s ``assertNotAlreadyOnTheBooks``) asks the DAY BOOK whether a
+purchase for this party, on this date, under this ``voucher_no`` is already
+posted — and the day book stores only ``voucher_no``. So two bills from one
+supplier on one date whose numbers were DIFFERENT PANs were the SAME bill to that
+check, and the second was refused, advising the operator to *"key its own supplier
+invoice number"* — which could not work, because any number that redacts landed on
+the same token. ⛔ THE DISCRIMINATOR THEREFORE HAS TO LIVE IN THE VALUE THAT
+PERSISTS: a hash carried alongside the draft cannot close that layer, because the
+day book has no field to carry it.
+
+⛔ IT IS UNSALTED ON PURPOSE — THE OPPOSITE CHOICE FROM ``boundary.py``, WHICH
+SALTS PER REQUEST. There, unlinkability across documents is the point. Here the
+guard REQUIRES linkability: re-uploading the SAME bill must produce the SAME
+``voucher_no``, or the day-book layer stops recognising the duplicate and the money
+defect that layer exists to stop comes back. A per-request salt here would silently
+disable one of the five layers while every test still passed.
+
+⛔ AND IT IS DELIBERATELY SHORT (``_FINGERPRINT_HEX``). It only has to tell apart
+the handful of bills one supplier issues on one date; every extra character is
+extra help to anyone brute-forcing the removed value back out of the append-only
+books. Four hex characters leave roughly ten thousand issued PANs per fingerprint.
+⚠️ THE RESIDUAL, STATED RATHER THAN HIDDEN: for an entity whose REAL domain is
+small — an IFSC, with ~1.7e5 live branch codes — a fingerprint of any usable width
+narrows it to a couple of candidates, so such a value is protected by the REMOVAL
+of the value and not by the fingerprint. ⛔ Do not widen this, and never log a
+fingerprint beside the party name.
+
 Pure-python — no optional deps, deterministic, no salt (a salted hash would make
-two runs of the same document produce two different ledger names).
+two runs of the same document produce two different ledger names, and would break
+the day-book guard described above).
 """
 
 from __future__ import annotations
+
+import hashlib
 
 from . import recognizers
 from .boundary import PIIBoundaryViolation
@@ -151,13 +185,36 @@ def classify_field(name: str) -> str:
     )
 
 
-def placeholder(entity_type: str) -> str:
+#: How many hex characters of the fingerprint reach the tag. ⛔ DO NOT WIDEN IT.
+#: The width is a PRIVACY control, not a collision budget: four characters already
+#: tell apart far more bills than one supplier issues on one date, and every extra
+#: character narrows a brute-force search of the removed value. It happens to match
+#: ``boundary.py``'s tag width; that is a coincidence and not a contract — that one
+#: is salted per request and this one must never be (module docstring).
+_FINGERPRINT_HEX = 4
+
+
+def fingerprint(value: str) -> str:
+    """A short, UNSALTED, deterministic fingerprint of a removed PII value.
+
+    ⛔ Unsalted is load-bearing, not lazy. The day-book duplicate check keys on the
+    persisted ``voucher_no`` and has nothing else to key on, so the SAME bill
+    re-uploaded must redact to the SAME string. See the module docstring.
+    """
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:_FINGERPRINT_HEX]
+
+
+def placeholder(entity_type: str, value: str) -> str:
     """The tag written in place of a persisted PII value.
 
-    Words, not a hash: an operator has to look at this in the F9 form and retype
-    the field, and ``<<PAN:ab12>>`` tells them nothing about what to do.
+    WORDS FIRST, then a fingerprint. The words are for the operator, who has to
+    look at this in the F9 form and retype the field — ``<<PAN:ab12>>`` tells them
+    nothing about what to do. The fingerprint is for the duplicate-bill guard: it
+    is derived from the value that was removed, so two DIFFERENT PANs no longer
+    produce the same persisted voucher number (D85). It is not a co-reference tag
+    and nothing resolves it back to a value.
     """
-    return f"[{entity_type} REDACTED]"
+    return f"[{entity_type} REDACTED {fingerprint(value)}]"
 
 
 def scrub(value: str | None) -> tuple[str | None, dict[str, int]]:
@@ -177,7 +234,7 @@ def scrub(value: str | None) -> tuple[str | None, dict[str, int]]:
     cursor = 0
     for m in matches:
         out.append(value[cursor : m.start])
-        out.append(placeholder(m.type))
+        out.append(placeholder(m.type, m.value))
         counts[m.type] = counts.get(m.type, 0) + 1
         cursor = m.end
     out.append(value[cursor:])

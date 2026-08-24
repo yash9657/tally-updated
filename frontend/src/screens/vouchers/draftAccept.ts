@@ -898,6 +898,47 @@ export function _resetDurableAcceptRecords(): void {
 }
 
 /**
+ * Does a voucher number carry insightd's PERSISTENCE-boundary redaction tag?
+ *
+ * insightd removes PII from every value that persists and writes a tag in its
+ * place — `[PAN REDACTED 6442]` — because a PAN read out of an invoice number
+ * would otherwise become an immutable `voucher_version.voucher_no`. The trailing
+ * group is an UNSALTED fingerprint of the value that was removed, which is what
+ * makes the day-book check below correct for a redacted number at all: without it
+ * every PII-shaped invoice number collapsed to one string and a supplier's SECOND
+ * bill on one date was refused as a duplicate of the first (D85).
+ * `insightd/insightd/redaction/persistence.py` is the authority for this shape.
+ *
+ * ⚠️ IT IS A SECOND COPY OF A SHAPE THAT LIVES IN PYTHON, so it can drift — and it
+ * is used ONLY to choose which SENTENCE the operator reads, never to decide whether
+ * to refuse. If it drifts the advice gets less specific and nothing is mis-posted.
+ * `drive-l21-d85.mjs` asserts the two still agree, against a real draft.
+ */
+const REDACTION_TAG_RE = /\[[A-Z][A-Z_]* REDACTED [0-9a-f]+\]/;
+
+/**
+ * What to tell the operator who is holding a bill this refusal will not post.
+ *
+ * ⛔ THE ADVICE HAS TO MATCH THE KEY, AND THAT IS THE LESSON OF D85 RATHER THAN AN
+ * AESTHETIC. The two memo layers key on {@link draftAcceptKey}: the DRAFT id when
+ * the caller passed one, and otherwise the body's own CONTENT. Those two keys have
+ * two different remedies, and a sentence that names the wrong one sends the
+ * operator down a dead end while reading as helpful — the refusal is fully present
+ * and fully wrong. ⚠️ Note which branch the product actually takes today: the F9
+ * screen does not pass `draftId` (see {@link AcceptDraftOptions}), so the live path
+ * is the content one.
+ */
+function secondBillAdvice(draftId: string | undefined): string {
+  return draftId
+    ? `This refusal is keyed on the DRAFT, so retyping the invoice number does not ` +
+        `make it a different bill: if this is genuinely a second bill, upload it as ` +
+        `its own document so it gets its own draft.`
+    : `This refusal is keyed on the draft's own CONTENT — party, supplier invoice ` +
+        `number, date, narration and every leg — so if this is genuinely a second ` +
+        `bill, key its own supplier invoice number.`;
+}
+
+/**
  * The once-only key for a draft.
  *
  * `draftId` wins whenever the caller has it. The fallback is the draft body's
@@ -967,7 +1008,7 @@ function guardAcceptOnce(
         `This draft has already been accepted in this session as voucher ` +
           `${seen.done.voucher_no || seen.done.voucher_id}. It has NOT been posted again — ` +
           `accepting the same supplier bill twice duplicates both the payable and the input tax. ` +
-          `If this is genuinely a second bill, key its own supplier invoice number.`,
+          `${secondBillAdvice(opts.draftId)}`,
         seen.done.voucher_no,
         seen.done.voucher_id,
       ),
@@ -987,7 +1028,7 @@ function guardAcceptOnce(
           `${remembered.voucherNo || remembered.voucherID}` +
           `${remembered.at ? ` (${remembered.at})` : ""}. It has NOT been posted again — ` +
           `accepting the same supplier bill twice duplicates both the payable and the input tax. ` +
-          `If this is genuinely a second bill, upload it as its own document so it gets its own draft.`,
+          `${secondBillAdvice(opts.draftId)}`,
         remembered.voucherNo,
         remembered.voucherID,
       ),
@@ -1542,6 +1583,18 @@ async function releaseClaimAfterFailure(
  * re-compared in JS rather than trusted to the query, because the mock's
  * `getDayBook` ignores from/to and returns every voucher.
  *
+ * ⛔⛔ AND WHAT IT MATCHES ON IS THE POST-REDACTION NUMBER, WHICH ONCE MADE IT
+ * REFUSE REAL BILLS (D85, driven). The day book stores only `voucher_no`, and for a
+ * bill whose invoice number insightd had to redact that string is a TAG, not the
+ * supplier's number. While the tag was a constant, two DIFFERENT PAN-shaped numbers
+ * from one supplier on one date were the same bill here and the second accept was
+ * refused. The tag now ends in an unsalted fingerprint of the removed value
+ * (`insightd/insightd/redaction/persistence.py`), so this check is exact again for
+ * redacted numbers too — and the refusal below says which case it is in, because
+ * the old sentence advised a remedy that could not work. ⛔ The fingerprint must
+ * stay UNSALTED: a per-request salt would make a re-upload of the SAME bill miss
+ * here, which is this layer's whole job.
+ *
  * ⛔ IT CANNOT SEE A BILL WITH NO NUMBER OR NO DATE, AND THAT GAP IS WHAT A BROWSER
  * RE-DRIVE WALKED THROUGH. A draft whose supplier invoice number the OCR never read
  * has nothing to match on, so this returns without an opinion — and once a reload
@@ -1573,11 +1626,25 @@ async function assertNotAlreadyOnTheBooks(
     e.party.trim().toLowerCase() === party;
   const hit = day.entries.find(isThisBill);
   if (hit === undefined) return;
+  // ⛔ D85 — THE ADVICE DEPENDS ON WHAT THE NUMBER IS. For an ordinary number,
+  // "key its own number" is the remedy. For a number insightd had to REDACT it
+  // used to be a dead end: every PII-shaped number collapsed to one token, so the
+  // operator keyed a different real number and was refused again. The token now
+  // carries a fingerprint of the value that was removed, so reaching this branch
+  // means the SAME supplier number — and saying so is the difference between a
+  // refusal that helps and one that is fully present and fully wrong.
+  const redacted = REDACTION_TAG_RE.test(hit.voucher_no);
   throw new DraftAlreadyAcceptedError(
     `This supplier bill is already on the books: purchase ${hit.voucher_no} dated ${hit.date}` +
       `${hit.party ? ` for ${hit.party}` : ""}. It has NOT been posted again — accepting the same ` +
-      `bill twice duplicates both the payable and the input tax. If this is genuinely a second ` +
-      `bill, key its own supplier invoice number.`,
+      `bill twice duplicates both the payable and the input tax. ` +
+      (redacted
+        ? `That number was removed as PII before it could reach the books, and the tag ends in a ` +
+          `fingerprint of the removed number itself — so this is the SAME supplier number, not ` +
+          `merely another redacted one. A genuinely different bill carries a different number, ` +
+          `hence a different fingerprint, and would not have been stopped here; retype the real ` +
+          `number in the invoice-number box if this bill is one the books do not have.`
+        : `If this is genuinely a second bill, key its own supplier invoice number.`),
     hit.voucher_no,
     hit.voucher_id,
   );

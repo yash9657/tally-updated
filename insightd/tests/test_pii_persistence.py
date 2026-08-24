@@ -270,3 +270,107 @@ def test_the_body_rescan_is_FAIL_CLOSED():
     )
     with pytest.raises(PersistedPIIViolation):
         persistence.assert_body_clean(body)
+
+
+# --------------------------------------------------------------------------- #
+# ⛔⛔ D85 — THE TAG MUST DISCRIMINATE, AND IT MUST DO IT DETERMINISTICALLY.
+#
+# The whole file above was GREEN through D85, and that is the point of this
+# block: every assertion up there reads the tag as a SUBSTRING ("PAN" in …,
+# startswith("INV/"), "AADHAAR REDACTED" in …) or counts matches, and none of
+# those move when a constant tag becomes a discriminating one. So a revert of
+# the fingerprint would have been invisible to this suite. These four tests are
+# the gate, and only the first of them fails on the pre-fix code — the other
+# three are labelled REGRESSION GUARDS because they were green before and prove
+# nothing about the fix. They are here because each of them refuses a WRONG fix
+# that the first test alone would accept.
+# --------------------------------------------------------------------------- #
+
+
+PAN_OTHER = "ZZZZZ9999Z"  # a second structurally valid PAN, different from PAN
+
+
+def test_two_DIFFERENT_PAN_invoice_numbers_do_not_collapse_to_one_voucher_number():
+    """⛔ THE ORACLE. This is the only test here that is RED before the fix.
+
+    Driven: the L11 probe randomised its PAN to become re-runnable and was still
+    refused "This supplier bill is already on the books". `voucher_no` is all the
+    day book carries, so a constant tag makes two suppliers' bills the same bill.
+    """
+    a = _draft(invoice_no=PAN, description="MS Angle")
+    b = _draft(invoice_no=PAN_OTHER, description="MS Angle")
+    assert a.body.voucher_no != b.body.voucher_no, (
+        "two DIFFERENT PANs produced the SAME persisted voucher number — the "
+        "duplicate-bill guard keys on exactly this string and would refuse the "
+        "second supplier bill (D85)"
+    )
+    # And neither of them leaked the value that was removed.
+    assert PAN not in (a.body.voucher_no or "")
+    assert PAN_OTHER not in (b.body.voucher_no or "")
+
+
+def test_the_SAME_invoice_number_redacts_to_the_SAME_voucher_number():
+    """⚠️ REGRESSION GUARD — green before the fix, and load-bearing anyway.
+
+    It is the arm that refuses the wrong fix: a SALTED fingerprint passes the
+    oracle above and silently disables the day-book layer of the five-layer
+    duplicate guard, because the same bill re-uploaded would no longer match what
+    is on the books. `boundary.py` salts per request ON PURPOSE; this path must
+    not, and nothing else in the tree would notice if it started.
+    """
+    first = _draft(invoice_no=f"INV/{PAN}/77", description="MS Angle")
+    again = _draft(invoice_no=f"INV/{PAN}/77", description="MS Angle")
+    assert first.body.voucher_no == again.body.voucher_no, (
+        "the same bill redacted to two different voucher numbers — the day-book "
+        "duplicate check would stop recognising a re-upload and the money defect "
+        "it exists to stop comes back"
+    )
+
+
+def test_the_tag_still_says_WHAT_was_removed_in_words():
+    """⚠️ REGRESSION GUARD. The operator has to retype the field.
+
+    Refuses the other wrong fix: emitting the boundary's `<<PAN:ab12>>` style tag,
+    or a bare hash, would pass both tests above and tell the operator nothing.
+    """
+    d = _draft(invoice_no=f"INV/{PAN}/77", description="MS Angle")
+    no = d.body.voucher_no or ""
+    assert no.startswith("INV/[PAN REDACTED ") and no.endswith("]/77"), no
+    assert "<<" not in no, "this is an operator-facing tag, not a co-reference tag"
+
+
+def test_a_scrubbed_value_never_RE_DETECTS_as_PII():
+    """⚠️ REGRESSION GUARD, and not vacuous: the fingerprint alphabet is hex.
+
+    A hex fingerprint can be all digits, and `AADHAAR_RE`/`BANK_ACCT_RE` key on
+    digit runs. If a tag ever formed a fresh match, `assert_body_clean` would
+    REFUSE a legitimate draft — a loud failure, but on correct input. Assert the
+    tags are inert over every entity type the recognizers know.
+    """
+    from insightd.redaction import recognizers
+
+    for raw in (PAN, PAN_OTHER, AADHAAR, IFSC, "29ABCDE1234F1Z5", f"INV/{PAN}/77"):
+        masked, counts = persistence.scrub(raw)
+        assert counts, f"{raw!r} was expected to contain PII"
+        assert not recognizers.detect(masked), (
+            f"the tag for {raw!r} re-detects as PII: {masked!r} — assert_body_clean "
+            "would refuse this draft"
+        )
+
+
+def test_the_fingerprint_is_SHORT_and_unsalted():
+    """⛔ The width is a PRIVACY control (module docstring), so pin it.
+
+    A future session reaching for "more bits, fewer collisions" is reaching the
+    wrong way: the fingerprint only has to tell apart the handful of bills one
+    supplier issues on one date, and every extra character helps a brute-force of
+    the removed value back out of the append-only books.
+    """
+    assert persistence._FINGERPRINT_HEX == 4
+    fp = persistence.fingerprint(PAN)
+    assert len(fp) == 4
+    # Unsalted: a fresh process must agree, which is what a re-upload depends on.
+    import hashlib
+
+    assert fp == hashlib.sha256(PAN.encode()).hexdigest()[:4]
+    assert persistence.fingerprint(PAN) != persistence.fingerprint(PAN_OTHER)

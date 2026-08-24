@@ -1718,3 +1718,121 @@ describe("LAYER 5 on the EDITED accept path (the same funnel, the same reservati
     expect(ledgers).not.toHaveBeenCalled();
   });
 });
+
+describe("D85 — the duplicate-bill guard, and the ADVICE it gives", () => {
+  /**
+   * ⛔ WHAT IS AND IS NOT PROVED HERE. The DISCRIMINATION lives in insightd
+   * (`redaction/persistence.py` now appends a fingerprint of the removed value to
+   * the tag it writes, so two different PANs no longer become one voucher number);
+   * `insightd/tests/test_pii_persistence.py` is where that is proved and it is RED
+   * without the fix. This file's share of D85 is the half the client owns: the
+   * SENTENCE. The old one advised "key its own supplier invoice number" for a
+   * number that had been redacted, which was a dead end — a refusal fully present
+   * and fully wrong. Only the first two cases below are red on the previous commit.
+   */
+  const TAG_A = "[PAN REDACTED 6442]"; // sha256("ABCDE1234F")[:4]
+  const TAG_B = "[PAN REDACTED 0413]"; // sha256("ZZZZZ9999Z")[:4]
+
+  const refusalFor = async (
+    client: CoredClient,
+    body: VoucherDraftBody,
+    opts?: { draftId?: string },
+  ): Promise<DraftAlreadyAcceptedError> => {
+    const err = await acceptPurchaseDraft(client, COMPANY, body, opts).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(DraftAlreadyAcceptedError);
+    return err as DraftAlreadyAcceptedError;
+  };
+
+  it("tells a REDACTED number's refusal apart from an ordinary one — the fingerprint sentence", async () => {
+    const client = createMockClient({ seed: false });
+    const first = balancedBody();
+    first.voucher_no = TAG_A;
+    await acceptPurchaseDraft(client, COMPANY, first);
+
+    // A RELOAD, so only the day-book layer can speak — the same shape as the
+    // "still refuses AFTER A PAGE RELOAD" case above.
+    _resetAcceptedDraftCache();
+    _resetDurableAcceptRecords();
+    const again = balancedBody();
+    again.voucher_no = TAG_A;
+
+    const err = await refusalFor(client, again);
+    expect(err.message).toMatch(/fingerprint of the removed number/);
+    expect(err.message).toMatch(/SAME supplier number/);
+    // ⛔ AND IT MUST NOT STILL GIVE THE DEAD-END ADVICE. This is the assertion the
+    // previous commit fails: the sentence was unconditional.
+    expect(err.message).not.toMatch(/key its own supplier invoice number/);
+  });
+
+  it("keeps the ORDINARY advice for an ordinary number — the fix is not a blanket rewrite", async () => {
+    // ⚠️ Green before the change, and it is here to refuse the WRONG fix: replacing
+    // the sentence unconditionally would tell an operator holding a plain "INV-9001"
+    // about a fingerprint that is not in their number.
+    const client = createMockClient({ seed: false });
+    await acceptPurchaseDraft(client, COMPANY, balancedBody()); // voucher_no INV-9001
+    _resetAcceptedDraftCache();
+    _resetDurableAcceptRecords();
+
+    const err = await refusalFor(client, balancedBody());
+    expect(err.voucherNo).toBe("INV-9001");
+    expect(err.message).toMatch(/key its own supplier invoice number/);
+    expect(err.message).not.toMatch(/fingerprint/);
+  });
+
+  it("names the KEY it actually refused on: the draft when one was passed, the content otherwise", async () => {
+    // ⛔ THE OTHER HALF OF "THE ADVICE MUST MATCH THE KEY". The session and durable
+    // memos key on `draftAcceptKey`, which is the DRAFT id when the caller passes
+    // one and the body's CONTENT when it does not. Those have two different
+    // remedies, and the old sentence gave the content one in both cases — which is
+    // the wrong remedy exactly when the caller is most precise. ⚠️ Note which branch
+    // the product takes today: the F9 screen passes no draftId.
+    const client = createMockClient({ seed: false });
+    const body = balancedBody();
+    await acceptPurchaseDraft(client, COMPANY, body, { draftId: "d-77" });
+    const keyed = await refusalFor(client, body, { draftId: "d-77" });
+    expect(keyed.message).toMatch(/keyed on the DRAFT/);
+    expect(keyed.message).toMatch(/upload it as its own document/);
+    expect(keyed.message).not.toMatch(/key its own supplier invoice number/);
+
+    // ⚠️ A FRESH CLIENT, AND DELIBERATELY NO CACHE RESET. Resetting the memos is
+    // what lets the DAY BOOK speak (the case above), and the day book would then
+    // answer this one too — a vacuous pass on the wrong layer's sentence. An empty
+    // book plus a live memo leaves exactly one layer able to refuse.
+    const client2 = createMockClient({ seed: false });
+    const other = balancedBody();
+    await acceptPurchaseDraft(client2, COMPANY, other);
+    const content = await refusalFor(client2, other);
+    expect(content.message).toMatch(/keyed on the draft's own CONTENT/);
+    expect(content.message).toMatch(/key its own supplier invoice number/);
+  });
+
+  it("posts BOTH bills when the two tags differ — the client adds no opinion of its own", async () => {
+    // ⚠️ Green before the change BY CONSTRUCTION, and that is the point worth
+    // pinning: the client compares strings and nothing else, so the whole of D85's
+    // discrimination is upstream in insightd. If a later session "helpfully" makes
+    // this guard normalise or truncate a redaction tag, the over-refusal comes
+    // straight back and this is what notices.
+    const client = createMockClient({ seed: false });
+    const spy = vi.spyOn(client, "postPurchaseVoucher");
+    const a = balancedBody();
+    a.voucher_no = TAG_A;
+    const b = balancedBody();
+    b.voucher_no = TAG_B;
+    b.postings[0]!.amount = "2000.0000"; // a different bill, different money
+    b.postings[3]!.amount = "2180.0000";
+    b.gst!.lines[0]!.taxable_value = "2000.0000";
+
+    await acceptPurchaseDraft(client, COMPANY, a);
+    await acceptPurchaseDraft(client, COMPANY, b);
+    expect(spy).toHaveBeenCalledTimes(2);
+    // SIDES AND NAMES, not totals: each bill left its own party CREDIT leg.
+    const credits = spy.mock.calls.flatMap((c) =>
+      (c[1].postings ?? []).filter((p) => p.dr_cr === "C"),
+    );
+    expect(credits.map((p) => p.amount)).toEqual(["1180.0000", "2180.0000"]);
+    expect(credits.every((p) => p.ledger_id === "ledger-acme")).toBe(true);
+  });
+});

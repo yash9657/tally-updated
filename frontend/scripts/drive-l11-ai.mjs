@@ -30,14 +30,19 @@ const PAN = "ABCDE1234F";
 const AADHAAR = "4321 8765 2109";
 
 /**
- * \u26d4 A FRESH INVOICE **DATE** PER RUN \u2014 not a fresh PAN. The books carry
- * a duplicate-supplier-bill refusal keyed on (supplier, voucher_no, date), and it
- * is CORRECT; a second run on the same tenant answers "This supplier bill is
- * already on the books" and D18 reads as BROKEN. Varying the PAN does **not**
- * help: redaction rewrites every PAN to the SAME literal token, so the stored
- * voucher_no is `[PAN REDACTED]` whatever the input was \u2014 the date is the only
- * part of that key this probe can move. Kept inside August 2026 so the day-book
- * window below still contains it.
+ * \u26d4 A FRESH INVOICE **DATE** PER RUN. The books carry a duplicate-supplier-bill
+ * refusal keyed on (supplier, voucher_no, date), and it is CORRECT; a second run on
+ * the same tenant answers "This supplier bill is already on the books" and D18 reads
+ * as BROKEN. Kept inside August 2026 so the day-book window below still contains it.
+ *
+ * \u26a0\ufe0f THE REASON THIS COMMENT USED TO GIVE IS NOW FALSE, AND THAT IS D85.
+ * It said varying the PAN does not help, because redaction rewrote every PAN to the
+ * same literal token `[PAN REDACTED]`. It did \u2014 and that was the defect: two
+ * DIFFERENT PAN-shaped numbers from one supplier on one date were one bill to that
+ * check, so a legitimate second bill was refused. The tag now ends in an unsalted
+ * fingerprint of the removed value, so a fresh PAN WOULD move the key too. The date
+ * is still what this probe varies, for a different and better reason: it is the only
+ * part of the key that does not depend on the redaction tag holding its shape.
  */
 const INVOICE_DATE = await (async () => {
   const taken = new Set(
