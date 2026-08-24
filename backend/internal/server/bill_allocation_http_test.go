@@ -145,6 +145,37 @@ func (f billFixture) postSale(t *testing.T, srv *server.Server, party, amount, d
 	return id, no
 }
 
+// postSaleOn is postSale with the VOUCHER DATE stated.
+//
+// ⚠️ A separate helper rather than a fifth parameter on `postSale`: that one is used
+// by three tests that do not care about the date, and widening a shared harness to
+// serve one caller is how it accumulates knobs nobody reads (the same reason
+// `setupCompanyBooksFrom` exists beside `setupCompany` in internal/query).
+func (f billFixture) postSaleOn(t *testing.T, srv *server.Server, party, amount, due, on string) (string, string) {
+	t.Helper()
+	body := map[string]any{
+		"voucher_date": on, "party": "buyer", "party_ledger_id": party,
+		"created_by": f.subject,
+		"postings": []any{
+			map[string]any{"ledger_id": party, "dr_cr": "D", "amount": amount},
+			map[string]any{"ledger_id": f.salesID, "dr_cr": "C", "amount": amount},
+		},
+		"bill_allocations": []any{
+			map[string]any{
+				"ledger_id": party, "ref_name": "", "ref_type": "NEW",
+				"dr_cr": "D", "amount": amount, "due_date": due,
+			},
+		},
+	}
+	rec, b := doRaw(t, srv, http.MethodPost, f.base+"/vouchers/sales", f.ownerTok, body)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("post sale dated %s = %d, want 201 (%s)", on, rec.Code, rec.Body.String())
+	}
+	id, _ := b["voucher_id"].(string)
+	no, _ := b["voucher_no"].(string)
+	return id, no
+}
+
 // outstandingBills returns the bills the ageing report shows for one party.
 func (f billFixture) outstandingBills(t *testing.T, srv *server.Server, ledgerID string) []map[string]any {
 	t.Helper()
@@ -423,5 +454,82 @@ func TestAnAlterRebuiltFromTheGetKeepsTheBill(t *testing.T) {
 	}
 	if p, _ := after[0]["pending"].(string); p != "94400.0000" {
 		t.Fatalf("pending after the restating alter = %q, want 94400.0000", p)
+	}
+}
+
+// TestTheAgeingReportsScopeOnTheWireIsHONEST is D86's caption, on the wire.
+//
+// ⛔⛔ IT EXISTS BECAUSE A MUTATION PROVED NOTHING ELSE WOULD CATCH IT. Reverting the
+// echo to the RESOLVED as-on — the false caption the row is half about — left the
+// ENTIRE Go suite green: `go test ./... -count=1` exit 0, 0 FAIL. The rows were right
+// and the sentence over them was wrong, and no test read the sentence. That is the
+// §5.19 class in its purest form: every figure agrees while the caption lies, and it
+// is the half a wrong number can never reveal.
+//
+// ⛔ THE TWO FIELDS SAY TWO DIFFERENT THINGS AND ONE COULD NOT SAY BOTH:
+//   - `as_on` is what the ROWS are limited to, and `""` means NOT LIMITED. That is the
+//     convention `/stock-summary` already uses, and the client's
+//     `outstandingsScopeLine` turns the empty string into "NO DATE LIMIT — …".
+//   - `aged_as_on` is the day the SLABS are measured against, and is always a date:
+//     an unbounded report still buckets every bill by days overdue, and dropping that
+//     would trade a false caption for a missing one.
+func TestTheAgeingReportsScopeOnTheWireIsHONEST(t *testing.T) {
+	srv := newServer(t)
+	f := newBillFixture(t, srv)
+
+	// Two invoices: one ordinary, one dated well AHEAD. Both are POSTED, so the
+	// ledger balance carries both and a bill-wise breakup of it must too.
+	//
+	// ⚠️ THE FUTURE ONE NEEDS A FUTURE **VOUCHER DATE**, AND THE FIRST DRAFT OF THIS
+	// TEST GOT THAT WRONG. `postSale`'s last argument is the bill's DUE date and its
+	// voucher_date is hardcoded, so passing "2027-01-15" there dated the bill's
+	// payment terms into the future and left the voucher on 2026-06-19 — both
+	// invoices inside every bound, and the explicit-as_on control read 14000.0000
+	// and failed. The inclusion predicate keys on `vv.voucher_date`; nothing else.
+	f.postSale(t, srv, f.partyID, "10000.0000", "2026-06-30")
+	f.postSaleOn(t, srv, f.partyID, "4000.0000", "2027-02-15", "2027-01-15")
+
+	// ── NO as_on: the rows are unbounded and the echo must SAY SO ───────────────
+	rec, b := doRaw(t, srv, http.MethodGet, f.base+"/outstandings?kind=RECEIVABLE", f.ownerTok, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("outstandings = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	if got, _ := b["as_on"].(string); got != "" {
+		t.Errorf("as_on = %q for a request that named NO date; the rows are not limited "+
+			"to it, so every caption downstream claims a boundary this report does not "+
+			"have — which is exactly the defect, with all the numbers right", got)
+	}
+	aged, _ := b["aged_as_on"].(string)
+	if aged == "" {
+		t.Errorf("aged_as_on is empty: the slab labels in this response mean nothing " +
+			"without the day they were measured against")
+	}
+	// ⛔ AND THE ROWS THEMSELVES, so this is a caption over the answer it describes
+	// rather than a field asserted in isolation.
+	if total, _ := b["total"].(string); total != "14000.0000" {
+		t.Errorf("unbounded total = %q, want 14000.0000 (both invoices)", total)
+	}
+	if debtors := f.sundryDebtors(t, srv); debtors != "14000.0000" {
+		t.Errorf("Sundry Debtors %q != the unbounded ageing total — the bill-wise breakup "+
+			"explains less than the balance it breaks up", debtors)
+	}
+
+	// ── AN EXPLICIT as_on: bounded, and the echo names the date ─────────────────
+	// ⛔ THE CONTROL. "Always send an empty as_on" passes every arm above.
+	rec2, b2 := doRaw(t, srv, http.MethodGet,
+		f.base+"/outstandings?kind=RECEIVABLE&as_on=2026-12-31", f.ownerTok, nil)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("outstandings as_on = %d, want 200 (%s)", rec2.Code, rec2.Body.String())
+	}
+	if got, _ := b2["as_on"].(string); got != "2026-12-31" {
+		t.Errorf("as_on = %q for an explicit as_on=2026-12-31", got)
+	}
+	if got, _ := b2["aged_as_on"].(string); got != "2026-12-31" {
+		t.Errorf("aged_as_on = %q for an explicit as_on=2026-12-31", got)
+	}
+	if total, _ := b2["total"].(string); total != "10000.0000" {
+		t.Errorf("as at 2026-12-31 total = %q, want 10000.0000 — the bound was REMOVED "+
+			"rather than made conditional, and the report can no longer answer "+
+			"'as at the year end'", total)
 	}
 }
