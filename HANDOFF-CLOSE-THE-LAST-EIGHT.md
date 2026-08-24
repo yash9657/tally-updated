@@ -1,5 +1,13 @@
 # HANDOFF — CLOSE THE LAST EIGHT: the register's remaining rows, in order, with the oracle for each
 
+> ⛔⛔ **SUPERSEDED 2026-08-23 BY `HANDOFF-CLOSE-THE-FINAL-NINE.md`. START THERE, NOT HERE.**
+> Positions 0 and 1 of this file are DONE (D13, D15, D17, D48, D22, D52), and the three rows they
+> registered (D94, D95, D96) are not in this file's order at all.
+> **This file is kept, not deleted, for two things the successor does not duplicate:** its **§2** is the
+> full record of how the four `PARTIAL` rows were resolved, and its **§3 rows 1 and 8–10** hold the
+> original reasoning for D22/D52 and for the three new rows as first written. Its trap list is carried
+> forward IN FULL, so read §5 from the successor — this copy will go stale.
+
 Written 2026-08-23, after L15 closed **D5, D43, D87 and D90** from the driver and **found and closed
 D91, D92 and D93** along the way. This **supersedes `HANDOFF-THE-LAST-TWELVE.md`**, whose positions
 0–3 are done. It is the DRIVER: what to do next, in what order, what proves it, what will go wrong.
