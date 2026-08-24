@@ -18,8 +18,12 @@ will go wrong. Execute it top to bottom.
 
 ## ⛔ THE COUNT, RE-DERIVED BY PARSING §7.1 — NOT COPIED FROM A HEADER
 
-**96 registered · 87 CLOSED · 9 OPEN · 0 PARTIAL.** `87 + 9 = 96`.
-(`93 · 81 · 8 · 4` before L16 · `94 · 85 · 9 · 0` after position 0 · this after position 1.)
+**96 registered · 88 CLOSED · 8 OPEN · 0 PARTIAL.** `88 + 8 = 96`.
+(`93 · 81 · 8 · 4` before L16 · `94 · 85 · 9 · 0` after L16 p0 · `96 · 87 · 9 · 0` after L16 p1 ·
+this after **L17 closed D95**.)
+⛔ **AND THE OPEN COUNT FINALLY FELL WITHOUT A NEW ROW APPEARING — the first lane in three where that
+happened.** Do not read it as the pattern changing; D95 was an ACL migration with the design already
+decided, which is the narrowest kind of lane there is.
 
 ```bash
 python3 - <<'PY'
@@ -59,7 +63,7 @@ the previous count is a redefinition wearing a fix's clothes.
 ⚠️ **AND IT PRINTS A `?` BUCKET ON PURPOSE.** A row whose status cell matches nothing must be SEEN, not
 silently dropped into a total that still looks plausible. The `?` bucket is what caught D22's broken cell.
 
-**OPEN (9):** D8 · D49 · D81 · D83 · D85 · D86 · D94 · D95 · D96
+**OPEN (8):** D8 · D49 · D81 · D83 · D85 · D86 · D94 · D96  ~~D95~~ ✅ **CLOSED (L17)**
 **PARTIAL: none.** There has not been a `PARTIAL` row since L16 position 0, and there should never be
 another one: **`PARTIAL` is how a hidden build survives for three sessions** (that was D13). A row is
 CLOSED, or it is OPEN, or it is TWO rows.
@@ -117,7 +121,7 @@ sheet) · **D83 LAST of the builds** (it is the only genuinely concurrent probe 
 
 | # | Row | Sev | Why here |
 |---|---|---|---|
-| **1** | **D95** | MED | ⛔ **FIRST, and it is the cheapest real win left.** The decision is already made (§6.4), the pattern is fully established in eight prior migrations, and it closes a **live exposure**: a Data Entry clerk can read the list of their own backdated entries. One migration + a census test + a wire oracle. |
+| ~~1~~ | ~~D95~~ | MED | ✅ **DONE 2026-08-23 (L17).** Migration 0076 · 20/20 wire + browser · M1 predicted then observed, **and it corrected a second prediction of mine**. ⛔ **Half its stated oracle was VACUOUS and half was IMPOSSIBLE — read §3 row 1 before writing any ACL probe.** |
 | **2** | **D81** | MED | **Scoped down by L16 to exactly two halves with two working shapes to copy** — no design to invent. §3. |
 | 3 | **D49** | MED | largest scope of the wave (7 routes). ⛔ **Before D85.** |
 | 4 | **D85** | MED | **moves pinned numbers.** ALONE, and **after D49.** |
@@ -178,7 +182,20 @@ available and it will not prove anything.** Find the second source before writin
 ⚠️ **`cd` PERSISTS BETWEEN Bash CALLS IN THIS HARNESS but shell state does not.** L16 lost two calls to a
 `cd frontend` still being in effect three tool calls later. **Use absolute paths in every command.**
 
-### 1 · D95 — the forecast plane has no ACL counterweight · ⛔ FIRST · anchors inline
+### ~~1 · D95 — the forecast plane has no ACL counterweight~~ · ✅ **DONE 2026-08-23 (L17)**
+> ✅ **CLOSED. Migration 0076 · 20/20 on the wire and in a browser · M1 predicted then observed.** Full
+> record in `HANDOFF-PARITY-AUDIT.md` §7.5 (L17).
+> ⛔⛔ **THE THING TO CARRY INTO EVERY REMAINING ACL/REFUSAL ROW: HALF THIS ROW'S STATED ORACLE WAS
+> VACUOUS AND HALF WAS IMPOSSIBLE.** The two `print` arms were ALREADY 403 before the migration (so they
+> proved nothing), and the "an Owner still reads all four" control arm **could not pass** — printing
+> those two is unimplemented and an Owner gets **501**. **Asserting 200 would have failed on correct
+> code.** Before writing a refusal probe, ask of every arm: *would this pass before my change, and can
+> the positive arm actually succeed?*
+> ⚠️ **AND EIGHT MIGRATION HEADERS SAY "specificity 1" AND ARE OFF BY ONE** — `ruleSpecificity` sums an
+> exact-ACTION point and a resource weight, so the coarse rule scores **2** and `report:NAME` scores
+> **3**. Internally consistent, wrong, and it survived because the conclusion it supports is right.
+> The text below is kept for its anchors and its reasoning.
+
 ⛔ **A CONTROL SURFACE IS READABLE BY THE PEOPLE IT MONITORS.** Migration `0011_auth_acl.sql` seeds the
 Data Entry level a **coarse `allow display report`**, and `internal/authz` matches that against ANY
 `report:NAME` at **specificity 1**. So **a report name is GRANTED BY DEFAULT and the refusal is the thing
@@ -475,6 +492,8 @@ CO="$(cat /tmp/drive-company-id)" node frontend/scripts/drive-l15c-d92.mjs     #
 CO="$(cat /tmp/drive-company-id)" node frontend/scripts/drive-l15d-d87.mjs     # 13/13 (D87, both doors)
 CO="$(cat /tmp/drive-company-id)" node frontend/scripts/drive-l15f-d90.mjs     # 8/8   (D90)
 CO="$(cat /tmp/drive-company-id)" node frontend/scripts/drive-l16-d22.mjs      # 34/34 (D22/D52/D23)
+node frontend/scripts/drive-l17-d95.mjs        # 20/20 (D95) — ⛔ takes NO `CO`: it makes its OWN tenant
+                                              #   with its OWN Data Entry member and REAPS it (D91 pattern)
 cd frontend && pnpm contract:cored                     # 14/14 — ⛔ NO `CO`, it makes its own tenant (D91)
 ```
 
@@ -483,6 +502,14 @@ cd frontend && pnpm contract:cored                     # 14/14 — ⛔ NO `CO`, 
   `run_in_background: true`** and wait on a marker in its log, not on a fixed sleep.
 - ⛔ **It READS ONLY** — no posts, no masters — which is why it cannot shift `verify:demo`. **A probe that
   posts or mints owes the §5.14 reap and the §5.15 end-to-end re-check.**
+
+### ⚠️ A PROBE CAN FINISH AND STILL NOT EXIT — AND `pkill` BY SCRIPT NAME KILLS ITS PARENT
+Measured 2026-08-23: `drive-l16-d22.mjs` printed **34/34 probes ok** and then sat for 20 minutes with
+**zero** `Chrome for Testing` processes alive — finished, but holding an unclosed handle. ⛔ **Judge a
+drive by its PRINTED SUMMARY, not by whether the process exited**, and check
+`pgrep -fl "Chrome for Testing"` before concluding it is still working.
+⛔⛔ **AND DO NOT `pkill -f <script-name>`: the pattern also matches the WRAPPER that launched it.** Doing
+that killed the whole drive-set job mid-sequence and cost the last two gates a re-run. Kill by PID.
 
 ### Gates, measured at this handoff
 `pnpm vitest run` **1443 / 87 files** · `pnpm exec tsc --noEmit` **clean** (a SEPARATE gate) ·
@@ -646,6 +673,46 @@ assuming the probe is not an oracle. **Predict the moved number out loud in the 
 ### 5.18 ⚠️ A FULL-SUITE FAILURE UNDER LOAD MAY BE A FLAKE — CHECK, DON'T ASSUME
 **Structural argument first** (does the test even touch your change?), then the standalone run, then
 the re-run. Known members: `internal/sync`, `EWayBillScreen`, `VoucherScreen.draft.test.tsx`.
+
+### 5.23 ⛔⛔ ASK OF EVERY ARM: WOULD IT PASS **BEFORE** MY CHANGE? AND CAN THE POSITIVE ARM SUCCEED?
+**D95's stated oracle was half vacuous and half impossible, and both halves looked perfectly reasonable
+written down.** The driver said: *"Data Entry 403 on display AND print for both, and an Owner still reads
+all four."*
+- **The two `print` arms passed before the migration existed.** Print was already default-denied for that
+  level (0038 seeds no `allow print report:`, the coarse grant is `display`-only, `default_access` is
+  `none`). Four green arms, two of which proved nothing.
+- **The Owner arm could not pass at all.** Printing those two reports is unimplemented — an Owner gets
+  **501**, and a test actively requires that. **Asserting 200 would have failed on CORRECT code**, which
+  is the worst kind of wrong probe: it sends the next session hunting a defect that is not there.
+⛔ **SO RUN BOTH CHECKS ON EVERY ARM BEFORE WRITING IT:** (1) *would this be green on the commit before
+mine?* — if yes it is a regression guard, label it as one and do not count it as proof; (2) *can the
+positive/control arm actually reach its success state?* — check what the happy path really returns
+instead of assuming 200. This is §5.6 ("a probe that passes first try is the one to distrust") turned
+into two questions you can ask before running anything.
+
+### 5.24 ⚠️ DOCUMENTATION THAT AGREES WITH ITSELF IS STILL UNVERIFIED — EIGHT HEADERS, ONE WRONG NUMBER
+Eight migration headers state that the coarse `allow display report` rule matches "at specificity 1".
+**It scores 2.** `internal/authz`'s `ruleSpecificity` SUMS an exact-ACTION point and a resource weight
+(0 wildcard / 1 exact resource / 2 exact `resource:name`), so the coarse rule is 1+1 and `report:NAME`
+is 1+2. The error propagated because **each header was derived from the last** and the CONCLUSION it
+supports is correct, so nothing ever contradicted it.
+⛔ **THIS IS §5.2's LESSON FROM A THIRD DIRECTION.** §5.1 says a recon's expected values are unverified;
+§5.2 says your own measurements are claims too. **§5.24: so is a comment that eight files agree on.**
+⚠️ **The recon agent put this in its `uncertain` list rather than asserting it, which is the only reason
+it got checked** — an agent that had confidently repeated the headers would have been believed.
+
+### 5.25 ⚠️ REAPING A TENANT: `company` HAS FIFTEEN NON-CASCADING FKs, AND THE OBVIOUS FOUR ARE NOT ENOUGH
+§4 warns that reaping needs a script. Here is the measured one for a **book-less** tenant, in order —
+the four-table version fails on `notification_outbox_company_id_fkey`, because creating a company writes
+an outbox row:
+```
+acl_rule · company_membership · company_invite · notification_outbox · ledger · godown · unit ·
+voucher_type · account_group · security_level · company
+```
+✅ A failed reap inside `BEGIN/COMMIT` **rolls back cleanly**, so a wrong order costs a run and not a
+half-deleted tenant. ⚠️ `account_group` self-references via `parent_id` and the single-statement DELETE
+handles it. ⛔ **A tenant WITH BOOKS needs more than this** — `drive-l17-d95.mjs` therefore REFUSES to
+reap one that has any voucher versions, and says so rather than deleting books.
 
 ### 5.19 ⛔⛔ A DISCLOSURE CAN BE FULLY PRESENT AND FULLY WRONG — DON'T ASSERT ON ITS PRESENCE
 **L16's M3 is the cleanest evidence in the repo for this.** The Cash Flow screen's disclosure was mutated
