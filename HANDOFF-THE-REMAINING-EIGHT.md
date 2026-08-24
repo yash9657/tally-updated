@@ -7,7 +7,7 @@ to do next, in what order, what proves it, what will go wrong. Execute it top to
 > ⛔⛔ **TWO ROWS IN HERE ARE MATERIALLY BIGGER OR DIFFERENT THAN THE REGISTER SAYS, AND BOTH WERE
 > RE-SCOPED BY READING THE CODE RATHER THAN THE ROW.** D49 is **9 routes, not 7** (13 counting the
 > auto-docs), and **D81's half B is not a "pop"** — it is a frame REPLACEMENT, it is already closed for
-> ALTER frames, and it carries an **unanswered design question** (§6.7). §3 has both in full. **Read
+> ALTER frames, and its design question is now **ANSWERED — §6.7, shape (b)**. §3 has both in full. **Read
 > §3 before estimating anything.**
 
 > ⚠️ **THE OPEN COUNT FINALLY FELL WITHOUT A NEW ROW APPEARING — the first lane in three.** Do not read
@@ -112,18 +112,18 @@ builds** (the only genuinely concurrent probe).
 
 | # | Row | Sev | Why here |
 |---|---|---|---|
-| **1** | **D81** | MED | **Scoped to two halves with two working shapes to copy** — but ⛔ **half B has an unanswered DESIGN question (§6.7): ASK BEFORE BUILDING.** Half A is buildable today. §3. |
+| **1** | **D81** | MED | **Scoped to two halves with two working shapes to copy.** ✅ **§6.7 ANSWERED 2026-08-24: shape (b) — the reducer stays put in BOTH modes and the SCREEN advances on success.** §3. |
 | 2 | **D49** | MED | ⛔ **9 routes, not 7 — 13 with the auto-docs.** Largest of the wave. **Before D85.** |
 | 3 | **D85** | MED | **moves pinned numbers.** ALONE, **after D49.** |
 | 4 | **D8** | HIGH | ⛔ **moves the BALANCE SHEET.** ALONE, release note, serialise with T9. |
 | 5 | **D86** | MED | **moves Outstandings**, inverts a Go test by design. ALONE, **before D94.** |
 | 6 | **D94** | HIGH | the payables door. **After D86.** ✅ **L16 built this exact shape twice — copy `ForecastScreens.tsx`.** |
 | 7 | **D83** | LOW | the register's proposed index **WILL NOT WORK.** The only concurrent probe. |
-| 8 | **D96** | LOW | ⛔ **A QUESTION BEFORE A BUILD (§6.8), and the honest answer may be DELETION.** |
+| 8 | **D96** | LOW | ✅ **§6.8 ANSWERED 2026-08-24: DELETE IT.** Not a build — a deletion, and its oracle is a deletion oracle. |
 
 **Must be ALONE:** D85, D8, D86, D83.  **Must be SERIALISED:** D49→D85 · D86→D94.
-⛔ **TWO ROWS NEED THE USER BEFORE CODE MOVES: D81's half B (§6.7) and D96 (§6.8).** Raise both early —
-D81 is position 1, and its half A can proceed while the answer is pending.
+✅ **NOTHING IS BLOCKED ON THE USER ANY MORE — §6.7 and §6.8 were both answered 2026-08-24** (D81 half B:
+reducer stays put, screen advances; D96: delete). ⛔ **Do not re-ask either; §6 carries the reasoning.**
 
 ⚠️ **D94 NEEDS THE NEXT MIGRATION NUMBER.** D95 took **0076**; the next free is **0077**, and it must
 derive its seeder restatement from **0076's body** (14 PERFORMs), not from 0073. Re-check the highest
@@ -173,7 +173,7 @@ still point at `HANDOFF-RECON-LAST-16.md` §3 entries 11–14 — ⚠️ **and t
 ugrep and returns **silently empty** on `frontend/src/api/mock.ts`. ⚠️ **Use ABSOLUTE paths**; `cd`
 persists between Bash calls in this harness and has cost real time twice.
 
-### 1 · D81 — a server refusal leaves masters behind AND throws away the keying · ⛔ ASK §6.7 FIRST
+### 1 · D81 — a server refusal leaves masters behind AND throws away the keying · ✅ §6.7 ANSWERED: SHAPE (b)
 ⛔⛔ **THE ROW'S OWN WORDING IS WRONG IN TWO PLACES AND THE PATHS IN EVERY PRIOR DRIVER ARE WRONG TOO.**
 - ⚠️ **THE FILES ARE `frontend/src/screens/VoucherScreen.tsx` and
   `frontend/src/screens/VoucherScreen.masterGate.test.tsx`.** There is no `screens/vouchers/VoucherScreen.tsx`
@@ -207,7 +207,8 @@ resolver filled) · **the UNCACHED snapshot `:1694`** · the rethrow `:1709` (�
 `ensureLedger` writes newly minted ids straight into that shared index (`gstVoucher.ts:413`), so a "before"
 picture taken from the cache **comes back empty and half A silently reports nothing.**
 
-⛔⛔ **HALF B IS A DESIGN GAP, NOT A WIRING OVERSIGHT — AND THAT IS §6.7's QUESTION.** `onAccept` returns
+⛔⛔ **HALF B IS A DESIGN GAP, NOT A WIRING OVERSIGHT — AND §6.7 ANSWERED IT: SHAPE (b), the reducer stays
+put in BOTH modes and the SCREEN advances the frame on success.** The gap it was diagnosing: `onAccept` returns
 **void** on every path, so the dispatcher gets `undefined`, returns `{ran:true}`, and the key reaches the
 machine. AppShell's D92 refusal path (`AppShell.tsx:307`) is **live and correct — it is simply never
 reached.** And it cannot be reached as-is: `screenRefusal` is **synchronous by construction**
@@ -412,7 +413,7 @@ mutation that will not break anything is a finding (§5.4), and on this row it i
 **ORACLE:** two simultaneous posts of the same bill number on one party — one succeeds, one is refused.
 **On the wire**; there is no mock equivalent for concurrency, and the mock says so at the method.
 
-### 8 · D96 — insightd's statistical forecast has no renderer · ⛔ A QUESTION FIRST · LAST
+### 8 · D96 — insightd's statistical forecast has no renderer · ✅ §6.8 ANSWERED: DELETE IT · LAST
 ⚠️ **THIS IS D72's ONE SURVIVING CLAUSE AND IT ALMOST DIED SILENTLY.** D72 closed 2026-08-21 (its money
 half was already fixed — `ForecastRequest` takes fixed-4 `Money` strings, gated with a non-vacuity arm)
 and its remainder, *"still not reachable from the keyboard"*, was folded into D22. L16 then closed D22 by
@@ -766,7 +767,7 @@ the same edit a pinned count moved (`NINE` → `ELEVEN` reports in the Alt+G lis
 
 ---
 
-## 6. THE USER'S DECISIONS — 1-6 ✅ ANSWERED (DO NOT RE-ASK) · ⛔ 7 AND 8 ARE OPEN QUESTIONS
+## 6. THE USER'S DECISIONS — ⛔ ALL 8 ✅ ANSWERED. DO NOT RE-ASK ANY OF THEM.
 
 1. **T32:** ✅ **No public corpus of genuine Tally exports exists.** What GitHub carries
    (`TallyConnector`, `nodejs-tally-integration`, `PHP-to-tally-integration`, `tally-prime-api-docs`)
@@ -800,31 +801,31 @@ the same edit a pinned count moved (`NINE` → `ELEVEN` reports in the Alt+G lis
 
 ---
 
-7. ⛔ **D81's HALF B — UNANSWERED, AND IT BLOCKS HALF OF POSITION 1. ASK BEFORE BUILDING.**
-   A server refusal must stop the voucher CREATE frame being replaced with a fresh empty one, but
-   **`screenRefusal` is SYNCHRONOUS by construction while the accept POSTs ASYNCHRONOUSLY**, and
-   AppShell forwards the key to the machine (`AppShell.tsx:316`) BEFORE it awaits `effect.pending`
-   (`:321-330`). So the refusal is not knowable at the moment `onAccept` must return. **Three shapes,
-   and this is a product decision, not a wiring choice:**
-   **(a)** a new ASYNC-refusal field on `ScreenActionResult`, and AppShell defers the machine until
-   `pending` settles — ⚠️ **changes keystroke latency for every screen**, not just this one;
-   **(b)** make the voucher accept reducer STAY PUT unconditionally, exactly as the ALTER branch already
-   does (`navMachine.ts:1281`), and let the screen advance the frame itself on success — ⚠️ narrower, but
-   it moves who owns "the entry succeeded";
-   **(c)** leave half B open and ship half A alone, disclosing the orphan without saving the keying.
-   ⚠️ **Half A is buildable TODAY and needs no answer**, so position 1 can start either way.
-8. **D96 — should insightd's statistical forecast exist at all?** ⛔ **A QUESTION BEFORE A BUILD.**
-   cored's projection is explainable to an auditor bill by bill; a statistical forecast beside it invites
-   exactly the confusion the Cash Flow screen's disclosure block exists to prevent. **(a)** its own report
-   NAME (a different method is a different authority — and it would need its own ACL counterweight per
-   D95); **(b)** DELETION, which closes the row for free and removes a maintained path nobody can reach;
-   **(c)** leave it, documented as internal-only. **Raise it; do not quietly build it.**
+7. **D81's HALF B:** ✅ **(b) THE REDUCER STAYS PUT UNCONDITIONALLY. Answered 2026-08-24.**
+   The `accept` reducer keeps a voucher frame put in BOTH modes — exactly as the D89 alter branch already
+   does (`navMachine.ts:1281`) — and **`VoucherScreen` advances the frame itself on success**. ⛔ **The
+   reasoning the user endorsed, recorded so it is not re-litigated:** the refusal is not knowable when
+   `onAccept` must return (`screenRefusal` is synchronous by construction, `ScreenActions.tsx:232`, while
+   the accept POSTs asynchronously and AppShell forwards the key at `AppShell.tsx:316` BEFORE awaiting
+   `effect.pending` at `:321-330`). Shape **(a)** — an async-refusal field AppShell awaits before moving the
+   machine — was rejected because it **changes keystroke latency for every screen**, not just this one.
+   ⚠️ **The cost the user accepted:** ownership of "the entry succeeded" moves from the machine to the
+   screen. ⛔ **So the screen MUST advance on success** — if it does not, a successful voucher leaves the
+   operator staring at their own keyed values with no signal, which is a worse defect than the one being fixed.
+8. **D96:** ✅ **(b) DELETE IT. Answered 2026-08-24.** insightd's statistical forecast path is removed
+   entirely. ⛔ **The reasoning the user endorsed:** cored's projection is explainable to an auditor bill by
+   bill; a second cash-forward number produced by a different method, with no renderer and no auditor story,
+   invites exactly the confusion the Cash Flow disclosure block exists to prevent. Deletion closes the row
+   **and** removes a maintained path nobody can reach. ⚠️ **So it needs NO report name and NO ACL
+   counterweight** — there is no reachable report to deny (contrast D95/§6.4, which existed because the
+   forecast plane's two reports ARE reachable). ⚠️ **The oracle is therefore a DELETION oracle:** the path is
+   gone from the package, `/openapi.json` no longer carries it, and nothing else imported it.
 
 ## 7. WHAT L15-L17 CHANGED THAT THE REMAINING ROWS TOUCH
 
 | Change | Who it affects |
 |---|---|
-| `screenRefusal()` / `ScreenActionResult.refused` (D92) | ⛔ **D81 half B** — live and correct, and **never reached**, because `onAccept` returns void. See §6.7. |
+| `screenRefusal()` / `ScreenActionResult.refused` (D92) | ⚠️ **D81 half B** — live and correct, and **never reached**, because `onAccept` returns void. ✅ **§6.7 chose shape (b), which does NOT use it** — the fix is in the reducer and the screen, not in the refusal channel. |
 | the D89 guard keeping an ALTER frame put (`navMachine.ts:1281`) | ⛔ **D81** — half B is **CREATE-frame-only**; an alter arm passes today |
 | `DraftAcceptFailedError` + `ledgersMintedByThisAccept` + the uncached snapshot | ⛔ **D81 half A** — the shapes to copy, and the cache trap that makes the diff come back empty |
 | the ledger party block + 6 client-side refusals (D87) | **any probe creating a party through the FORM** needs a state code (§5.15) |
