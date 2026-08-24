@@ -8,6 +8,24 @@ Endpoints:
 
 There is NO route that writes to the cored ledger.
 
+⛔ AND THERE IS NO STATISTICAL FORECAST HERE ANY MORE (register row D96, deleted
+2026-08-24 by the user's decision). ``POST /companies/{id}/forecast/cashflow`` — a
+Holt-Winters estimate over an injected history frame — was mounted here behind a
+``try: import statsmodels`` and **no client ever called it**. It was deleted rather
+than wired, and the reason is not "it was unused":
+
+  cored's WS5a projection is explainable to an auditor BILL BY BILL — its own
+  ``method`` string says *"deterministic; no statistics, no model"*. A second
+  cash-forward number, produced by a different method and carrying no auditor
+  story, invites exactly the confusion the Cash Flow screen's whole disclosure
+  block exists to prevent. A forecast nobody can explain is worse than no forecast.
+
+⚠️ SO IT NEEDS NO REPORT NAME AND NO ACL COUNTERWEIGHT — contrast D95/migration
+0076, which existed precisely because the forecast plane's two cored reports ARE
+reachable. There is nothing here left to deny.
+⛔ ``tests/test_forecast_plane_is_gone.py`` is what keeps it gone. If you are about
+to re-add a statistical forecast, that test is where the decision has to be argued.
+
 ⛔⛔ AND THERE IS NO AUTHENTICATION ON ANY OF THEM. Every route above is scoped by
 the caller-supplied ``company_id`` in the PATH and by nothing else, so any caller
 who can reach this process can list and fully hydrate any tenant's drafts —
@@ -46,17 +64,6 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(drafts_router)
-
-    # Forecast plane (WS5b, wave 3) is OPTIONAL: importing it pulls in statsmodels
-    # (requirements-forecast.txt). Mount it only when that dep is present, so the
-    # core suite/deploy stays dep-free — mirroring the lazy psycopg/anthropic/
-    # paddleocr adapters. Absent statsmodels -> the route simply isn't available.
-    try:
-        from .routes_forecast import router as forecast_router
-
-        app.include_router(forecast_router)
-    except ImportError:
-        pass
 
     @app.get("/healthz")
     def healthz() -> dict:

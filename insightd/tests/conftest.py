@@ -41,8 +41,8 @@ def _in_memory_draft_store_by_default(request, monkeypatch):
     code under test:
 
       1. Any test that builds the real app without overriding ``get_draft_store``
-         (``test_forecast_api.py``, ``test_hitl_invariant.py``,
-         ``test_enqueue_and_poll.py``) quietly connects to the SHARED DEV DATABASE
+         (``test_hitl_invariant.py``, ``test_enqueue_and_poll.py``) quietly
+         connects to the SHARED DEV DATABASE
          and writes real ``insightd_draft`` rows — 61 stray ``co-1`` drafts, at the
          last count — while appearing to run against fakes.
       2. It populates ``_pg_store`` for the rest of the process. The later

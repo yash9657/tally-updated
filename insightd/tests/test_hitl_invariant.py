@@ -18,10 +18,12 @@ PKG = pathlib.Path(__file__).resolve().parent.parent / "insightd"
 
 
 # The POST routes insightd is allowed to expose. /drafts writes the DRAFT store
-# (never cored). /forecast/cashflow (WS5b, mounted only when statsmodels is
-# installed) writes NOTHING — it is a pure read-only computation that uses POST
-# only to carry the history frame in its body; test_forecast_no_cored_write.py
-# separately proves it holds no cored write path.
+# (never cored).
+#
+# ⛔ /forecast/cashflow USED TO BE ON THIS LIST AND IS NOT ANY MORE (D96, deleted
+# 2026-08-24). It is removed rather than left as a harmless spare entry: an
+# allowlist that names a route which no longer exists cannot fail when that route
+# comes back, which is the one job it has. See tests/test_forecast_plane_is_gone.py.
 #
 # /drafts/{id}/accepted moves a draft to its terminal 'accepted'
 # status and records WHICH cored voucher the human posted from it — it is told an
@@ -59,7 +61,6 @@ _ALLOWED_MUTATING_PATHS = {
     "/companies/{company_id}/drafts/{draft_id}/claim",
     "/companies/{company_id}/drafts/{draft_id}/claim/release",
     "/companies/{company_id}/drafts/{draft_id}/accepted",
-    "/companies/{company_id}/forecast/cashflow",
 }
 
 
@@ -70,7 +71,7 @@ def test_no_route_targets_cored_vouchers_write():
         methods = getattr(route, "methods", set()) or set()
         # No route may target a cored /vouchers path at all.
         assert "/vouchers" not in path, f"forbidden route: {path}"
-        # The only mutating routes are the drafts write + the read-only forecast.
+        # The only mutating routes are the drafts write and the draft lifecycle.
         mutating = methods & {"POST", "PUT", "PATCH", "DELETE"}
         if mutating:
             assert path in _ALLOWED_MUTATING_PATHS, f"unexpected mutating route: {methods} {path}"
