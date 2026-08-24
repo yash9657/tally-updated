@@ -7,6 +7,49 @@ what was wrong; this file records what a person will notice.
 
 ---
 
+## "Bills Payable" is a report of its own, and the words for it now open it
+
+**Applies to:** Go To / Switch To, the report list, printing, and access rules.
+**Register:** D94.
+
+### What changes
+
+The ageing of what you OWE has always been computed — the server has served it since the
+report existed — but nothing in the product could ask for it. There was one screen,
+"Outstandings", and it showed what customers owe YOU.
+
+**There is now a second report, "Bills Payable".** Press **Alt+G** and type `bills
+payable`, `payables`, `accounts payable` or `creditors ageing` and you land on it: your
+suppliers, bill by bill, with due dates and ageing slabs, and Ctrl+P prints it.
+
+⛔ **`bills payable` used to open the RECEIVABLES report.** If you have typed those words
+before, you were shown what customers owe you, under a heading that did not say
+otherwise. That is fixed. `bills receivable`, `bills outstanding` and `outstandings`
+still open "Outstandings", which is unchanged.
+
+### Why it is a separate report and not a toggle
+
+Access rules are written against a report's NAME. While the payables ageing was only
+reachable as a setting on the receivables report, *"this person may see what customers
+owe us but not what we owe suppliers"* was a rule you could not write. Now you can:
+
+    disallow  display  report:bills-payable
+
+on any security level, and that level keeps its access to "Outstandings".
+
+⚠️ **Nothing is denied by default, and nobody loses access.** Every level that could read
+the ageing before still can, including the seeded Data Entry level — which needs it: the
+bill-by-bill picker on a Payment lists a supplier's open bills from the same data, and a
+clerk who cannot see them has to post the payment on account.
+
+⚠️ **The rule governs the report, not the underlying figures.** A level denied
+`report:bills-payable` is refused the report and its printed copy, and can still reach
+the same amounts through the bill picker while keying a payment — which is exactly what
+that picker is for. If you need the stricter separation, say so; it is a change to what
+the picker is authorised as, and it is recorded as open work.
+
+---
+
 ## The Outstandings ageing now covers every bill, not just those dated up to today
 
 **Applies to:** Outstandings (receivables and payables), its printed copy, and the

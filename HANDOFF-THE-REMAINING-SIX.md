@@ -1,26 +1,23 @@
 # HANDOFF — THE REMAINING SIX: the register's last rows, in order, with the oracle for each
 
-> ✅ **L23 CLOSED D86 — the ageing no longer bounds an unasked date at today.** Position 1 is now **D94**
-> (the payables door), and **D83 is last**. Full records: `HANDOFF-PARITY-AUDIT.md` §7.5 **L21** (D85),
-> **L22** (D8), **L23** (D86). Nothing is blocked on the user. **Two rows left.**
+> ✅ **L24 CLOSED D94 — the payables ageing has a door, and the rule for it can be written.** Position 1 is
+> now **D83**, the LAST of the builds and the only genuinely concurrent probe. Full records:
+> `HANDOFF-PARITY-AUDIT.md` §7.5 **L21** (D85) · **L22** (D8) · **L23** (D86) · **L24** (D94).
 >
-> ⛔⛔ **D94's OWN EVIDENCE ARRIVED WHILE DRIVING D86, AND IT IS BETTER THAN THE ROW TEXT.** L23's browser arm
-> asserted a PAYABLE bill's reference was on the Outstandings screen and it **never can be**:
-> `OutstandingsScreen` sends no `kind`, so the only ageing reachable from the keyboard is the RECEIVABLE one.
-> That is D94 stated as a measurement rather than a claim, and the probe now posts a future-dated SALES
-> invoice so its browser arm has a receivable to find. ⚠️ **D86 also moved what D94 renders** — the screen's
-> caption is now `outstandingsScopeLine()` and the response carries `as_on` + `aged_as_on`, so D94's new
-> screen must use the same function and not write a second one.
+> ⛔⛔ **THE COUNT MOVED THE OTHER WAY FOR THE FIRST TIME IN SEVEN LANES: 97 REGISTERED, NOT 96.** L24
+> registered **D97** — a level denied `report:bills-payable` can still read the same figures as
+> `GET /outstandings?kind=PAYABLE` (measured, 200, same total). The rule governs the DOOR, not the bytes.
+> ⛔ It is NOT a route patch: that read is what the bill-wise picker uses when a clerk keys a Payment, so a
+> fix has to separate *"read the payables REPORT"* from *"list THIS party's open bills to settle one"*.
+> **D97 and D83 are the two OPEN rows.**
 >
-> ⛔⛔ **AND THE LESSON THAT NOW HOLDS FOR TWO LANES RUNNING — §2.9. THE CAPTION HAD NO GATE.** D86's M3
-> reverted the wire echo to the false `as_on` and `go test ./... -count=1` stayed at **exit 0, 0 FAIL**:
-> every figure right, the sentence over them wrong, nothing reading the sentence. D8's M2 was the same shape
-> from the other side. ⛔ **D94 ships a new report NAME, a new screen and a new ACL counterweight — three
-> things whose failure mode is a caption, a door or a rule that is present and wrong. Assume no gate sees it
-> until you have mutated it.**
+> ⚠️ **AND D94's ACL HALF WAS WRONG IN THIS FILE — 0077 IS STILL FREE.** The row said it "owes an ACL
+> counterweight". Measured: a seeded Data Entry level ALREADY reads the payables data as `?kind=PAYABLE`
+> and NEEDS to (the picker), so nothing arrives pre-granted and denying it would break payment entry. **The
+> user was asked with the measurement and chose to seed nothing.** ⛔ That is §2.7 a second time — a row's
+> written scope is a claim. **Measure before building AND before asking.**
 >
-> ⚠️ **THE TRANSPORT NOTE BELOW IS STILL TRUE AND STILL UNUSED.** cored passes insightd's answer back byte for
-> byte and `conflictCode` reads `err.body.detail.code` for 409 only. None of D85/D8/D86 touched it.
+> ⚠️ **THE TRANSPORT NOTE BELOW IS STILL TRUE AND STILL UNUSED.** None of D85/D8/D86/D94 touched it.
 
 > ✅ **L19 CLOSED D96 BY DELETING IT** and ✅ **L18 CLOSED D81** (half A shipped; **half B did not
 > reproduce and the user closed it as such**). §6.7 and §6.8 are both ANSWERED.
@@ -46,11 +43,16 @@ to do next, in what order, what proves it, what will go wrong. Execute it top to
 
 ## ⛔ THE COUNT, RE-DERIVED BY PARSING §7.1 — NOT COPIED FROM A HEADER
 
-**96 registered · 94 CLOSED · 2 OPEN · 0 PARTIAL.** `94 + 2 = 96`.
+**97 registered · 95 CLOSED · 2 OPEN · 0 PARTIAL.** `95 + 2 = 97`.
 (`93 · 81 · 8 · 4` before L16 · `94 · 85 · 9 · 0` after L16 p0 · `96 · 87 · 9 · 0` after L16 p1 ·
 `96 · 88 · 8 · 0` after L17 · `96 · 89 · 7 · 0` after L18 · `96 · 90 · 6 · 0` after L19 ·
-`96 · 91 · 5 · 0` after L20 · `96 · 92 · 4 · 0` after L21 · `96 · 93 · 3 · 0` after L22 · this after **L23**.)
-⚠️ **SIX LANES NOW WITHOUT A NEW ROW APPEARING.** The pattern has not changed, it has changed SHAPE:
+`96 · 91 · 5 · 0` after L20 · `96 · 92 · 4 · 0` after L21 · `96 · 93 · 3 · 0` after L22 · `96 · 94 · 2 · 0` after L23 · this after **L24**, which is the
+FIRST lane in seven to ADD a row.)
+✅ **AND THE SEVENTH LANE BROKE THE RUN: L24 REGISTERED D97**, found by driving D94's own oracle rather
+than by reading. The six before it surfaced a false PREMISE, a gate, a scope or a caption instead of a row;
+this one surfaced a row the moment the oracle was made precise enough to fail. **Both patterns are the same
+instruction: make the oracle exact, then believe what it says.**
+⚠️ **WHAT THE SIX BEFORE IT FOUND, UNCHANGED:** The pattern has not changed, it has changed SHAPE:
 L18 found **half of D81 did not exist**, L19 closed a row by DELETING it, L20 found a **gate firing on a
 route class nobody had in mind** plus a truncation the move itself created, and **L21 found the row's
 written SCOPE and its predicted PINS both wrong** — the expensive design could not have worked and the
@@ -87,7 +89,7 @@ written in L16 broke it again — one carried a literal ` | ` inside its status 
 ⚠️ **VALIDATE ANY PARSER CHANGE BY RE-DERIVING THE OLD NUMBER FROM THE OLD FILE.** ⚠️ **And it prints a
 `?` bucket on purpose** — a row matching nothing must be SEEN, not folded into a plausible total.
 
-**OPEN (2):** D83 · D94
+**OPEN (2):** D83 · **D97**
 **PARTIAL: none**, and there should never be another: **`PARTIAL` is how a hidden build survives for
 three sessions** (that was D13). A row is CLOSED, or OPEN, or TWO rows.
 
@@ -151,10 +153,11 @@ builds** (the only genuinely concurrent probe).
 | ~~0~~ | ~~**D85**~~ | MED | ✅ **CLOSED L21 2026-08-24.** One function in `persistence.py`; **no new field, and it moved no pinned number.** §7.5 L21. |
 | ~~0~~ | ~~**D8**~~ | HIGH | ✅ **CLOSED L22 2026-08-24.** `voucher_id` replaces `voucher_no` as the second replay key; `docs/RELEASE-NOTES.md` created. §7.5 L22. |
 | ~~0~~ | ~~**D86**~~ | MED | ✅ **CLOSED L23 2026-08-24.** Unbounded with no `as_on`; TWO Go tests inverted; the caption in four copies. §7.5 L23. |
-| **1** | **D94** | HIGH | the payables door. ✅ **Its precondition is met — D86 has landed.** ✅ **L16 built this exact shape twice — copy `ForecastScreens.tsx`.** |
-| 6 | **D83** | LOW | the register's proposed index **WILL NOT WORK.** The only concurrent probe. |
+| ~~0~~ | ~~**D94**~~ | HIGH | ✅ **CLOSED L24 2026-08-24.** A second flat route + the name; **no migration, 0077 still free**; registered **D97**. §7.5 L24. |
+| **1** | **D83** | LOW | the register's proposed index **WILL NOT WORK.** The only concurrent probe. **LAST of the builds.** |
+| 2 | **D97** | LOW | ⛔ **NEW, registered by L24.** The payables rule governs the DOOR, not the bytes. **Not a route patch** — see §7.1. |
 
-**Must be ALONE:** D83.  **Must be SERIALISED:** ~~D49→D85~~ · ~~D86→D94~~ — **both orderings are now satisfied.**
+**Must be ALONE:** D83.  **Must be SERIALISED:** ~~D49→D85~~ · ~~D86→D94~~ — **every ordering in this file is now satisfied.** ⚠️ **D97 has no ordering constraint but is a DESIGN decision, not a build** — it needs the user before it needs code.
 ✅ **NOTHING IS BLOCKED ON THE USER — §6.7 and §6.8 were both answered 2026-08-24, and §6.7 was then
 RE-ASKED AND REVERSED on a measurement** (D81 half B: does not reproduce, closed as such; D96: delete).
 ⛔ **Do not re-ask either; §6 carries the reasoning and the reversal.**
@@ -452,51 +455,29 @@ Full record: `HANDOFF-PARITY-AUDIT.md` §7.5 **L23**. What carries forward:
   nothing to do with the lane. Use **2027-03-10** (after today, inside the demo FY, outside every probed
   window) or read `verify-demo.mts` first.
 
-### 5 · D94 — the payables ageing report has NO DOOR · ⛔ NOW POSITION 1 · anchors inline
-✅ **PRECONDITION MET: D86 LANDED (L23).** ⛔ **Read §3 row 4 above first** — it hands you three things this
-row needs: the payables screen is confirmed absent BY MEASUREMENT, the scope caption is now a shared function
-`outstandingsScopeLine()` that the new screen must reuse rather than re-write, and the response carries
-`as_on` + `aged_as_on` with `""` meaning UNBOUNDED.
-⛔ **THE SERVER ALREADY SERVES IT AND NOTHING IN THE PRODUCT CAN ASK.** Measured on the wire 2026-08-23
-against a binary verified fresh by symbol: `?kind=PAYABLE` → **200 · total 1,04,050.0000 · 2 creditors ·
-4 bills** (`Steel Suppliers` 80,450.0000 / 3 bills · `Delhi Parts` 23,600.0000 / 1 bill), full per-bill
-arrays; `?kind=payable` also accepted; `?kind=BOTH` → **400 `invalid kind (RECEIVABLE|PAYABLE)`**.
-The client builds `const query: { as_on?: string } = {}` and **`kind` is never a member**
-(`ReportScreens.tsx`, the Outstandings fetch). **One report name (`"Outstandings"`), one screen
-(`report:Outstandings`), one PDP resource.**
-⛔ **IT IS NOT A `?kind=` TOGGLE, AND THAT IS THE ENTIRE REASON IT IS A ROW.** `routeAction`
-(`auth_middleware.go`, the `case "/outstandings"` arm) maps the **flat literal path** to the resource, so
-the PDP decides on the NAME and **a query parameter is invisible to it**. A toggle would make *"the sales
-clerk may see what customers owe us but not what we owe suppliers"* an **unwritable rule**, and those two
-lists belong to two different jobs.
-⛔ **AND A NEW REPORT NAME ARRIVES PRE-GRANTED** — same mechanism as D95, so this row owes an ACL
-counterweight of its own. **See §1's warning about the migration number.**
-**THE BUILD — the Order Book's treatment end to end** (`0073_order_book_acl.sql` is the template):
-(1) a second **FLAT LITERAL route** beside `/outstandings` — additive, so **no existing `acl_rule` row is
-invalidated**; (2) its `routeAction` arm; (3) the name in `authz.KnownReportNames` (`vocabulary.go`);
-(4) the printed form — ⚠️ **`printOutstandings` already parses `kind`, and `outstandingKindParam` is
-SHARED with the JSON handler on purpose**, so both directions print from one parser; (5) **the ACL migration — ⛔ D95 TOOK 0076, so this is 0077 and it must derive its
-seeder restatement from 0076's body (FOURTEEN PERFORMs), not from 0073**; (6) the client: the report name in `keystroke/types.ts`, the screen registration in
-`defaultScreens.tsx`, the `REPORT_SLUGS` + `REPORT_PERIOD_SHAPE` entries in `printTarget.ts` (both
-`Record<ReportName, …>`, so **tsc names them for you**), the `AS_AT_ONLY_REPORTS` membership, and the
-screen sending `kind`.
-✅ **L16 JUST DID THIS EXACT SHAPE TWICE — COPY `ForecastScreens.tsx` AND ITS COMMIT.** The four
-registries, the mock arm, the 403-as-a-decision panel and the `REPORT_DOORS` sweep are all already
-solved there.
-**ORACLE, TWO ARMS, AND THE SECOND IS THE POINT OF THE ROW:**
-(a) a keyboard path reaches the payables ageing in a browser and the figures match `?kind=PAYABLE` on the
-wire; **(b) ⛔ a level with `disallow display report:<payables-name>` is REFUSED it WHILE STILL BEING
-ALLOWED the receivables book.** **That second arm is the one a `?kind=` toggle could never pass**, and it
-is what proves the row was understood rather than merely closed.
-⚠️ **`?kind=` MUST KEEP WORKING** on the existing route: `printOutstandings` and the NLQ surface
-(`whitelist.go`'s `EntityOutstandings`, whose `nature` filter already answers both directions) both depend
-on it. **This row adds a NAME; it does not remove a parameter.**
-⚠️ **AND THERE IS AN EXISTING ALIAS THAT LIES.** `navMachine.ts`'s `REPORT_ALIASES` maps
-**`"bills payable" → "Outstandings"`** — the RECEIVABLE report. An operator typing the words for payables
-gets receivables today. **Re-point it in this lane**, and note that L16 deliberately refused to add a
-misleading alias for the same class of reason (§6.5).
+### ✅ 5 · D94 — CLOSED L24 2026-08-24. Two flat routes, two names, two rules. Kept for D83/D97.
+Full record: `HANDOFF-PARITY-AUDIT.md` §7.5 **L24**. What carries forward:
+- ⛔⛔ **THE ARM THAT MATTERED WAS INVISIBLE TO EVERY RENDERING ASSERTION.** M1 pointed the payables screen
+  at `getOutstandings(co, {kind:"PAYABLE"})`: it rendered IDENTICALLY — same parties, bills and totals — and
+  exactly ONE test failed, the one asserting WHICH CLIENT METHOD was called. ⛔ **D83's fix has the same
+  property**: a losing concurrent post that renames itself looks exactly like one that never collided.
+  **Assert on the mechanism, not on the result.**
+- ⛔ **ROW SCOPE WAS WRONG AGAIN, THIS TIME ABOUT THE ACL.** 0077 is STILL FREE. Measured: the data was
+  already granted and is NEEDED by the picker, so no counterweight was owed and denying it would have broken
+  payment entry. §2.7 for the second time.
+- ⛔⛔ **D97 IS THE RESIDUAL AND IT IS A DESIGN DECISION, NOT A BUILD.** The payables rule governs the DOOR;
+  `?kind=PAYABLE` still answers under the receivables name because the bill-wise picker needs it. **Do not
+  "fix" it with a routeAction change** — that refuses the picker and pushes payments ON ACCOUNT. It needs the
+  user first.
+- ✅ **ONE WRITER, TWO DOORS is now the shape on all three sides** — `writeOutstandings`,
+  `OutstandingsLikeScreen`, `outstandingsOf`. ⚠️ **And the mock must not delegate through `this`**: it meant
+  a spy on one public method observed and could stub the other, coupling two surfaces the server keeps
+  independent.
+- ⚠️ **ADDING A NAME TO `REPORT_NAMES` EXTENDS EXISTING GATES FOR FREE** — `REPORT_DOORS` mounted the new
+  frame and fired Ctrl+P at it, and the Go To control that iterates `REPORT_NAMES` began pinning the new
+  report's self-resolution. Both caught mutations I had not aimed at them.
 
-### 6 · D83 — two concurrent posts share one hand-typed bill number · RECON §3.14 · LAST
+### 6 · D83 — two concurrent posts share one hand-typed bill number · RECON §3.14 · ⛔ NOW POSITION 1, LAST OF THE BUILDS
 ⛔ **THE REGISTER'S PROPOSED FIX WILL NOT WORK.** `bill_allocation` cannot carry the index, because
 duplicate names are legal for AGAINST / ON_ACCOUNT / caller-named openers. It needs
 `pg_advisory_xact_lock` or a new table.
