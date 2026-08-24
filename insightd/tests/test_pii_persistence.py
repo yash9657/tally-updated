@@ -289,6 +289,10 @@ def test_the_body_rescan_is_FAIL_CLOSED():
 
 PAN_OTHER = "ZZZZZ9999Z"  # a second structurally valid PAN, different from PAN
 
+#: The insightd package root, so the cross-process arm below does not depend on the
+#: cwd pytest happened to be invoked from.
+_REPO_INSIGHTD = __import__("pathlib").Path(__file__).resolve().parent.parent
+
 
 def test_two_DIFFERENT_PAN_invoice_numbers_do_not_collapse_to_one_voucher_number():
     """⛔ THE ORACLE. This is the only test here that is RED before the fix.
@@ -310,20 +314,46 @@ def test_two_DIFFERENT_PAN_invoice_numbers_do_not_collapse_to_one_voucher_number
 
 
 def test_the_SAME_invoice_number_redacts_to_the_SAME_voucher_number():
-    """⚠️ REGRESSION GUARD — green before the fix, and load-bearing anyway.
+    """⛔ THE ARM THAT REFUSES THE WRONG FIX — AND IT HAS TO CROSS A PROCESS.
 
-    It is the arm that refuses the wrong fix: a SALTED fingerprint passes the
-    oracle above and silently disables the day-book layer of the five-layer
-    duplicate guard, because the same bill re-uploaded would no longer match what
-    is on the books. `boundary.py` salts per request ON PURPOSE; this path must
-    not, and nothing else in the tree would notice if it started.
+    A SALTED fingerprint passes the oracle above perfectly well (it discriminates
+    two different PANs just fine) while silently disabling the day-book layer of
+    the five-layer duplicate guard: the same bill re-uploaded on another request
+    would no longer match what is on the books. `boundary.py` salts per request ON
+    PURPOSE, and copying that choice here is the mistake this arm exists to catch.
+
+    ⛔⛔ IT WAS WRITTEN IN-PROCESS FIRST AND THE MUTATION PROOF SHOWED IT VACUOUS.
+    With a per-process salt mixed into `fingerprint`, two `_draft()` calls in ONE
+    pytest process still agree — so the in-process version of this test PASSED the
+    mutation it was written for, and only the out-of-band arm below caught it. The
+    day book is asked on a LATER REQUEST than the one that redacted, so the
+    property is cross-process and the test has to be too. (§5.10: answer from the
+    row, never from the request.)
     """
-    first = _draft(invoice_no=f"INV/{PAN}/77", description="MS Angle")
-    again = _draft(invoice_no=f"INV/{PAN}/77", description="MS Angle")
-    assert first.body.voucher_no == again.body.voucher_no, (
-        "the same bill redacted to two different voucher numbers — the day-book "
-        "duplicate check would stop recognising a re-upload and the money defect "
-        "it exists to stop comes back"
+    import subprocess
+    import sys
+
+    src = (
+        "import sys; sys.path.insert(0, 'tests')\n"
+        "from test_pii_persistence import _draft, PAN\n"
+        "print(_draft(invoice_no=f'INV/{PAN}/77', description='MS Angle').body.voucher_no)\n"
+    )
+    runs = [
+        subprocess.run(
+            [sys.executable, "-c", src],
+            capture_output=True,
+            text=True,
+            cwd=str(_REPO_INSIGHTD),
+            check=True,
+        ).stdout.strip()
+        for _ in range(2)
+    ]
+    in_process = _draft(invoice_no=f"INV/{PAN}/77", description="MS Angle").body.voucher_no
+    assert runs[0] == runs[1] == in_process, (
+        "the same bill redacted to different voucher numbers across processes "
+        f"({runs} vs {in_process!r}) — the day-book duplicate check is asked on a "
+        "LATER request than the one that redacted, so it would stop recognising a "
+        "re-upload and the money defect it exists to stop comes back"
     )
 
 
