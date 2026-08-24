@@ -16,7 +16,7 @@ import {
   assertPostableDraft,
   defaultDraftBillRefs,
   draftPartyBillLeg,
-  DraftAcceptFailedError,
+  VoucherAcceptFailedError,
   DraftAlreadyAcceptedError,
   DraftBeingPostedError,
   DraftNotPostableError,
@@ -593,8 +593,8 @@ describe("DEFECT 3 — a refused accept must not quietly leave masters behind", 
       (e: unknown) => e,
     );
 
-    expect(err).toBeInstanceOf(DraftAcceptFailedError);
-    const failed = err as DraftAcceptFailedError;
+    expect(err).toBeInstanceOf(VoucherAcceptFailedError);
+    const failed = err as VoucherAcceptFailedError;
     // The server's own refusal comes FIRST and unaltered — it is what the
     // operator needs in order to fix the voucher.
     expect(failed.message).toMatch(/^422: ledger: voucher date is before/);
@@ -622,7 +622,7 @@ describe("DEFECT 3 — a refused accept must not quietly leave masters behind", 
     );
     await expect(
       acceptPurchaseDraft(client, COMPANY, body),
-    ).rejects.not.toBeInstanceOf(DraftAcceptFailedError);
+    ).rejects.not.toBeInstanceOf(VoucherAcceptFailedError);
   });
 
   it("refuses an unpostable draft BEFORE creating a single master", async () => {

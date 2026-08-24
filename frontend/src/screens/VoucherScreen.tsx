@@ -84,7 +84,11 @@ import {
   lineAmount,
   type ItemInvoiceLine,
 } from "./vouchers/itemInvoice";
-import { acceptEditedPurchaseDraft, canRebuildDraft } from "./vouchers/draftAccept";
+import {
+  acceptEditedPurchaseDraft,
+  canRebuildDraft,
+  voucherAcceptFailure,
+} from "./vouchers/draftAccept";
 import { StockVoucherScreen } from "./vouchers/StockVoucherScreen";
 import { defaultGodownOf, isStockVoucherType } from "./vouchers/stockVoucher";
 import { acceptPurchaseDraft, ApiError } from "../api";
@@ -102,6 +106,7 @@ import type {
   VoucherView,
 } from "../api";
 import type { EntryMode } from "../keystroke/types";
+import type { CoredClient } from "../api";
 
 /**
  * The account groups a PARTY field offers. A voucher's party is a debtor, a
@@ -943,6 +948,14 @@ function draftDirtyFields(seed: VoucherForm | null, form: VoucherForm): Set<Draf
 // masters exist, because a posting needs a real uuid and there is no
 // DELETE /ledgers route to compensate with. The client's half is that it never
 // contributes a refusal of its own to that window.
+//
+// ⚠️ AND WHAT NOW HAPPENS IN THAT WINDOW (D81, closed 2026-08-24). The orphan is
+// still real — it cannot be otherwise — but it is no longer SILENT. `onAccept`
+// reads the chart before the builder runs and, on a refused POST, names every
+// master this accept minted and says that a retry reuses them. See
+// {@link discloseOrphanedMasters}. Driven: a GST sales invoice refused for a
+// closed period minted FOUR accounts and the operator was shown only
+// "Error: period is closed".
 // ===========================================================================
 
 /**
@@ -959,6 +972,80 @@ async function resolveMasters<T>(
 ): Promise<T> {
   if (refusal !== "") throw new Error(refusal);
   return resolve();
+}
+
+/**
+ * Every ledger id a request body names, wherever it sits in that body.
+ *
+ * ⛔ A WALK, NOT A LIST OF FIELDS, AND THE DIFFERENCE IS THE WHOLE VALUE. The ids
+ * live at `postings[].ledger_id`, `party_ledger_id`, `item_ledger_id`,
+ * `bill_allocations[].ledger_id` and the three `gst.{c,s,i}gst_ledger_id` — and
+ * `types.ts` carries `tds_ledger_id`, `deductee_ledger_id` and `buyer_ledger_id`
+ * besides. An enumeration here would silently stop covering the body the day a
+ * tenth field is added, and the failure mode is the quiet one: a master minted for
+ * a refused voucher that this disclosure no longer mentions. The suffix is the
+ * contract the server's own wire already keeps.
+ */
+function ledgerIdsIn(value: unknown, into: Set<string> = new Set()): Set<string> {
+  if (Array.isArray(value)) {
+    for (const v of value) ledgerIdsIn(v, into);
+    return into;
+  }
+  if (value === null || typeof value !== "object") return into;
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof v === "string") {
+      if (k === "ledger_id" || k.endsWith("_ledger_id")) into.add(v);
+    } else {
+      ledgerIdsIn(v, into);
+    }
+  }
+  return into;
+}
+
+/**
+ * A refused voucher whose accept had ALREADY minted masters says which ones
+ * (register row D81).
+ *
+ * ⛔ THE ORPHAN CANNOT BE UNDONE AND NOTHING HERE PRETENDS OTHERWISE. cored exposes
+ * POST /ledgers, GET /ledgers and PUT /ledgers/{id}/opening — there is NO DELETE
+ * route (five DELETEs exist on the whole server and none of them is one), and the
+ * voucher needs real ledger ids, so the masters must exist before the POST that may
+ * be refused. The honest remedy is to make the orphan VISIBLE and HARMLESS: name it,
+ * and say that a retry REUSES it.
+ *
+ * ⚠️ MINTED IS JUDGED BY ID against the chart as it stood moments earlier, and it is
+ * used ONLY TO REPORT. A create in another tab between the snapshot and the build
+ * could in principle be misattributed here, which costs one slightly wrong sentence
+ * — and is precisely why nothing is deleted on the strength of it.
+ *
+ * ⛔ AND A DISCLOSURE THAT CANNOT BE MADE ACCURATELY IS NOT MADE AT ALL. If either
+ * chart read failed we do not know which masters are new, so the operator gets the
+ * server's own refusal unaltered rather than a sentence naming a guess. A disclosure
+ * that is fully present and fully wrong is worse than none — the operator acts on it.
+ */
+async function discloseOrphanedMasters(
+  client: CoredClient,
+  companyID: string,
+  req: VoucherRequest,
+  known: Set<string> | null,
+  err: unknown,
+): Promise<never> {
+  if (known === null) throw err; // no "before" picture — see the header
+  const mintedIds = [...ledgerIdsIn(req)].filter((id) => !known.has(id));
+  if (mintedIds.length === 0) throw err;
+  // The names come from the chart the masters are now ON, which is the only
+  // authority for them: the request carries ids, and the builders that minted them
+  // do not report back.
+  const after = await client
+    .listLedgers(companyID)
+    .then((r) => new Map(r.ledgers.map((l) => [l.id, l.name])))
+    .catch(() => null);
+  if (after === null) throw err;
+  const minted = mintedIds
+    .map((id) => ({ id, name: after.get(id) }))
+    .filter((m): m is { id: string; name: string } => m.name !== undefined);
+  if (minted.length === 0) throw err;
+  throw voucherAcceptFailure(err, minted);
 }
 
 /**
@@ -2486,7 +2573,7 @@ function AccountingVoucherScreen({
     // before the request promise resolves, so we must not re-read ctxRef late or
     // an alter would mis-route to a create (POST instead of PUT).
     const ctx = ctxRef.current;
-    const reqPromise =
+    const buildRequest = (): Promise<VoucherRequest> =>
       entryMode === "item-invoice"
         ? buildItemRequest(f)
         : cfg.showGst
@@ -2505,8 +2592,42 @@ function AccountingVoucherScreen({
               : // The stock classes, whose bodies carry no postings at all and
                 // are built by StockVoucherScreen. Left on the verbatim path.
                 Promise.resolve(buildPlainRequest(f));
-    reqPromise
-      .then((req) => acceptVoucher(client, companyID, ctx, req))
+    // =====================================================================
+    // ⛔⛔ THE CHART AS IT STOOD BEFORE THIS ACCEPT — D81's HALF, AND IT MUST BE
+    // READ BEFORE THE BUILDER RUNS.
+    // =====================================================================
+    // The gate above guarantees no master is created for a body this CLIENT can
+    // refuse. It cannot guarantee the same for a refusal only the SERVER can make
+    // (a back-dated cutoff, an ACL denial, a duplicate voucher number, negative
+    // stock) — see the gate's own header, which says exactly this and calls it
+    // NOT CLOSED. Driven: a GST sales invoice refused for a closed period left
+    // "Output CGST", "Output SGST", "Output IGST" and "Domestic Sales" on the
+    // chart, and the operator was shown `Error: period is closed`. Four accounts,
+    // named by nothing.
+    //
+    // ⛔ A DIRECT client.listLedgers, NEVER gstVoucher's ledgerIndex. `ensureLedger`
+    // writes each id it mints straight into that shared index (gstVoucher.ts's
+    // `index.set(spec.name, r.ledger_id)`), so a "before" picture taken from the
+    // cache already contains the masters this accept is about to create and the
+    // diff comes back EMPTY — the disclosure would be silently absent, which is
+    // indistinguishable from there being nothing to disclose.
+    //
+    // ⚠️ AND IT IS BEST-EFFORT, NEVER FATAL. A voucher must not become unpostable
+    // because a read that exists only to word an error message failed. `null` here
+    // means "no picture", and no picture means the plain server error — see
+    // `discloseOrphanedMasters`.
+    const chartBefore: Promise<Set<string> | null> = client
+      .listLedgers(companyID)
+      .then((r) => new Set(r.ledgers.map((l) => l.id)))
+      .catch(() => null);
+    chartBefore
+      .then((known) =>
+        buildRequest().then((req) =>
+          acceptVoucher(client, companyID, ctx, req).catch((err: unknown) =>
+            discloseOrphanedMasters(client, companyID, req, known, err),
+          ),
+        ),
+      )
       .then((res: VoucherResponse) => {
         setSavedNo(res.voucher_no);
         setSavedVoucherID(res.voucher_id);

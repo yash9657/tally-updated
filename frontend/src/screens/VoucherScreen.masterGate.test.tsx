@@ -516,6 +516,14 @@ describe("⛔ the master gate: the ALTER path (D41, DRIVEN)", () => {
     );
     expect(consumables).toBeTruthy();
     expect(debitLedgers).toContain(consumables!.id);
+    // ⛔ AND THE THREE IT MINTED ARE NOT DISCLOSED, BECAUSE THE VOUCHER WAS
+    // WRITTEN (D81). The orphan sentence is about masters with NO voucher against
+    // them; saying it here would tell an operator whose alter succeeded that they
+    // have three accounts to go and clean up. Minting is normal — orphaning is not.
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toMatch(/Saved/),
+    );
+    expect(screen.getByRole("status").textContent).not.toMatch(/had already created/);
   });
 });
 
@@ -725,5 +733,163 @@ describe("D60 — a sales invoice may not be saved without its Rule 46(g) HSN", 
       target: { value: withHsn.stock_item_id },
     });
     await waitFor(() => expect(screen.queryByTestId("item-hsn-missing")).toBeNull());
+  });
+});
+
+/**
+ * ===========================================================================
+ * ⛔⛔ THE RESIDUAL WINDOW THE GATE ITSELF SAYS IT CANNOT CLOSE — REGISTER D81.
+ * ===========================================================================
+ *
+ * Everything above is about masters that must NEVER be created. This is about the
+ * ones that legitimately ARE, for a voucher the SERVER then refuses: a back-dated
+ * cutoff, an ACL denial, a duplicate number, negative stock. The gate's own header
+ * says this window stays open and calls it NOT CLOSED, because a posting needs real
+ * ledger uuids and cored has no DELETE /ledgers to compensate with.
+ *
+ * ⛔ SO THE ORACLE IS NOT "NO MASTER EXISTS" — IT IS "THE OPERATOR IS TOLD WHICH".
+ * Measured at HEAD before the fix: a GST sales invoice refused for a closed period
+ * left FOUR accounts on the chart (Output CGST, Output SGST, Output IGST, Domestic
+ * Sales) and the status line read `Error: period is closed for back-dated entry`.
+ * Four masters, named by nothing. The chart of accounts is what an auditor reads.
+ *
+ * ⚠️ THE DISCLOSURE IS FOOTED AGAINST A DIFFERENT SOURCE THAN THE ONE THAT WROTE
+ * IT. `createdLedgerNames` reads the `createLedger` SPY — what actually went over
+ * the wire — while the sentence is built from a chart diff inside the screen. Both
+ * sides coming from one handler would prove only that the handler agrees with
+ * itself (§2.2), and this defect is exactly a case where it could agree and lie.
+ */
+describe("⛔ D81: a refused accept NAMES the masters it had already minted", () => {
+  /** A GST sales invoice that is complete, so only the SERVER can refuse it. */
+  async function keyASaleableInvoice(app: HTMLElement, base: CoredClient) {
+    await base.createLedger("co-1", {
+      name: "Acme Traders",
+      group_name: "Sundry Debtors",
+      state_code: "29",
+    });
+    fireEvent.keyDown(app, { key: "F8" });
+    await screen.findByTestId("gst-panel");
+    fireEvent.mouseDown(await screen.findByText("Acme Traders"));
+    fireEvent.change(screen.getByTestId("gst-taxable"), { target: { value: "10000" } });
+    fireEvent.change(screen.getByTestId("gst-rate"), { target: { value: "18" } });
+    fireEvent.change(screen.getByTestId("gst-pos"), { target: { value: "29" } });
+    fireEvent.change(screen.getByTestId("gst-hsn"), { target: { value: "9983" } });
+  }
+
+  it("names ALL FOUR, keeps the server's own sentence first, and says a retry reuses them", async () => {
+    const base = createMockClient({ seed: false });
+    const { client, spies } = spyClient(base);
+    renderShell(client);
+    const app = screen.getByRole("application");
+    await keyASaleableInvoice(app, base);
+    spies.createLedger!.mockClear(); // the seeded party is not this accept's doing
+
+    // The refusal only the server can make, arriving AFTER the four masters exist.
+    spies.postSalesVoucher!.mockImplementationOnce(() =>
+      Promise.reject(new Error("period is closed for back-dated entry")),
+    );
+    fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    await waitFor(() => expect(spies.postSalesVoucher).toHaveBeenCalledTimes(1));
+
+    const status = await waitFor(() => {
+      const t = screen.getByRole("status").textContent ?? "";
+      expect(t).toMatch(/had already created/);
+      return t;
+    });
+
+    // ⛔ THE SERVER'S OWN REFUSAL IS STILL FIRST AND UNALTERED — it is the sentence
+    // that tells the operator what to FIX. The orphan note is what they need after.
+    expect(status.indexOf("period is closed")).toBeLessThan(
+      status.indexOf("had already created"),
+    );
+    // ⛔ AND EVERY MINTED MASTER IS NAMED. Footed against the createLedger spy.
+    const minted = createdLedgerNames(spies);
+    expect(minted.sort()).toEqual([
+      "Domestic Sales",
+      "Output CGST",
+      "Output IGST",
+      "Output SGST",
+    ]);
+    for (const name of minted) expect(status).toContain(name);
+    expect(status).toMatch(/4 new ledger masters/);
+    // The two things the operator can act on: a retry is safe, and nothing here
+    // can undo the accounts.
+    expect(status).toMatch(/Retrying this accept REUSES them/);
+    expect(status).toMatch(/no route that deletes a ledger/);
+  });
+
+  it("⛔ CONTROL: a refusal that minted NOTHING says nothing about masters", async () => {
+    // Without this the fix is indistinguishable from pasting an orphan clause onto
+    // every error the screen can show — which would name masters that do not exist
+    // and send the operator hunting for accounts nobody created (§5.19: a
+    // disclosure can be fully present and fully wrong).
+    const base = createMockClient({ seed: false });
+    const { client, spies } = spyClient(base);
+    renderShell(client);
+    const app = screen.getByRole("application");
+    await keyASaleableInvoice(app, base);
+
+    // Post once so all four masters EXIST, then refuse the second post. The second
+    // accept mints nothing: ensureLedger resolves them off the chart.
+    fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    await waitFor(() => expect(spies.postSalesVoucher).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByRole("status").textContent).toMatch(/Saved/));
+
+    spies.createLedger!.mockClear();
+    spies.postSalesVoucher!.mockImplementationOnce(() =>
+      Promise.reject(new Error("voucher number 1 already exists")),
+    );
+    fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    await waitFor(() => expect(spies.postSalesVoucher).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toMatch(/already exists/),
+    );
+
+    expect(createdLedgerNames(spies)).toEqual([]);
+    const status = screen.getByRole("status").textContent ?? "";
+    expect(status).not.toMatch(/had already created/);
+    expect(status).not.toMatch(/ledger master/);
+  });
+
+  it("⛔ CONTROL: the chart read that words the message cannot make a voucher unpostable", async () => {
+    // The disclosure needs a picture of the chart taken BEFORE the builder runs.
+    // That read exists only to word an error message, so a failure of it must cost
+    // the SENTENCE and never the VOUCHER — an operator who cannot post because a
+    // diagnostic read failed is worse off than one who gets a vaguer error.
+    const base = createMockClient({ seed: false });
+    const { client, spies } = spyClient(base);
+    renderShell(client);
+    const app = screen.getByRole("application");
+    await keyASaleableInvoice(app, base);
+
+    // ⛔ NOT `mockImplementationOnce`, AND THAT IS NOT A STYLE CHOICE. The party
+    // pick list and the screen's own chart both read `listLedgers` AT MOUNT, so a
+    // queued one-shot rejection is consumed long before Ctrl+A and the arm passes
+    // having tested nothing (§5.6: the probe that passes first try is the one to
+    // distrust — this one did). The flag makes the ACCEPT's read the one that
+    // fails, and `failedReads` proves it actually failed.
+    const realList = spies.listLedgers!.getMockImplementation()!;
+    let failNext = false;
+    let failedReads = 0;
+    spies.listLedgers!.mockImplementation((...args: unknown[]) => {
+      if (failNext) {
+        failNext = false;
+        failedReads += 1;
+        return Promise.reject(new Error("ledgers read failed"));
+      }
+      return realList(...args) as Promise<unknown>;
+    });
+
+    failNext = true;
+    fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    await waitFor(() => expect(spies.postSalesVoucher).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toMatch(/Saved/),
+    );
+    // The read really was the accept's, and it really did fail.
+    expect(failedReads).toBe(1);
+    // ⛔ AND THE VOUCHER IS ON THE BOOKS — the diagnostic read cost the sentence,
+    // not the entry.
+    expect(spies.postSalesVoucher).toHaveBeenCalledTimes(1);
   });
 });

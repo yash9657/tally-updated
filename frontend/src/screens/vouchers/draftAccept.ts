@@ -32,7 +32,7 @@
  *  3. A REFUSED ACCEPT STILL WROTE MASTERS. Ledger creation necessarily precedes
  *     the voucher POST (the voucher needs the ids), and there is NO route that
  *     deletes a ledger, so the orphan cannot be undone. What it can be is
- *     VISIBLE: see {@link DraftAcceptFailedError}.
+ *     VISIBLE: see {@link VoucherAcceptFailedError}.
  */
 
 import type {
@@ -638,7 +638,13 @@ export class DraftBeingPostedError extends Error {
 }
 
 /**
- * A refused voucher POST that had already created ledger masters (defect 3).
+ * A refused voucher POST that had already created ledger masters (defect 3, and
+ * register row D81 for the ordinary — non-draft — accept path).
+ *
+ * ⚠️ IT IS NOT DRAFT-SPECIFIC, which is why it is not called `DraftAccept…`. It was,
+ * for as long as the draft accept was the only path that disclosed its orphans; the
+ * five builders in VoucherScreen mint up to five masters on one Ctrl+A and named
+ * none of them. Both paths now raise THIS error, through {@link voucherAcceptFailure}.
  *
  * ⛔ THE ORPHAN CANNOT BE UNDONE, AND PRETENDING OTHERWISE WOULD BE WORSE. The
  * voucher needs real ledger ids, so the masters must exist before the POST that
@@ -651,7 +657,7 @@ export class DraftBeingPostedError extends Error {
  * ⚠️ `message` keeps the server's own refusal FIRST and unaltered — that is the
  * sentence the operator needs in order to fix the voucher.
  */
-export class DraftAcceptFailedError extends Error {
+export class VoucherAcceptFailedError extends Error {
   readonly createdLedgers: readonly { id: string; name: string }[];
   constructor(
     message: string,
@@ -659,10 +665,42 @@ export class DraftAcceptFailedError extends Error {
     createdLedgers: readonly { id: string; name: string }[],
   ) {
     super(message);
-    this.name = "DraftAcceptFailedError";
+    this.name = "VoucherAcceptFailedError";
     this.cause = cause;
     this.createdLedgers = createdLedgers;
   }
+}
+
+/**
+ * The one place the orphan sentence is WRITTEN — used by the draft accept below
+ * AND by the ordinary voucher accept in VoucherScreen (register row D81).
+ *
+ * ⛔ IT IS A FUNCTION, NOT A SECOND COPY, AND THAT IS THE POINT. This module's own
+ * §1.3 lesson is that a second copy is exactly how a defect gets fixed once and
+ * shipped twice: `ensureLedger` was corrected in one caller and left broken in the
+ * next, and a browser found it. The draft path had this disclosure from the day it
+ * was written; the five builders on the ordinary voucher screen mint up to five
+ * masters and said nothing at all. One sentence, two callers.
+ *
+ * ⚠️ THE SERVER'S OWN REFUSAL STAYS FIRST AND UNALTERED. That is the sentence the
+ * operator needs in order to fix the voucher; the orphan note is what they need
+ * afterwards, and putting it first would bury the cause.
+ */
+export function voucherAcceptFailure(
+  cause: unknown,
+  minted: readonly { id: string; name: string }[],
+): VoucherAcceptFailedError {
+  const names = minted.map((m) => m.name).join(", ");
+  const one = minted.length === 1;
+  return new VoucherAcceptFailedError(
+    `${cause instanceof Error ? cause.message : String(cause)} — this accept had already created ` +
+      `${minted.length} new ledger master${one ? "" : "s"} (${names}), which now ` +
+      `${one ? "has" : "have"} no voucher against ${one ? "it" : "them"}. ` +
+      `Retrying this accept REUSES ${one ? "it" : "them"} rather than creating more. ` +
+      `There is no route that deletes a ledger, so ${one ? "it" : "they"} cannot be undone automatically.`,
+    cause,
+    minted,
+  );
 }
 
 /**
@@ -1705,16 +1743,7 @@ async function postDraftBody(
       res = await client.postPurchaseVoucher(companyID, req);
     } catch (err) {
       if (minted.length === 0) throw err;
-      const names = minted.map((m) => m.name).join(", ");
-      throw new DraftAcceptFailedError(
-        `${err instanceof Error ? err.message : String(err)} — this accept had already created ` +
-          `${minted.length} new ledger master${minted.length === 1 ? "" : "s"} (${names}), which now ` +
-          `${minted.length === 1 ? "has" : "have"} no voucher against ${minted.length === 1 ? "it" : "them"}. ` +
-          `Retrying this accept REUSES ${minted.length === 1 ? "it" : "them"} rather than creating more. ` +
-          `There is no route that deletes a ledger, so ${minted.length === 1 ? "it" : "they"} cannot be undone automatically.`,
-        err,
-        minted,
-      );
+      throw voucherAcceptFailure(err, minted);
     }
   } catch (err) {
     // No voucher was posted, so the reservation is owed back IMMEDIATELY rather than
