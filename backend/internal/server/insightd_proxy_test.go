@@ -322,8 +322,17 @@ func TestTheProxyReportsAnUnreachableInsightdAs503(t *testing.T) {
 	}
 }
 
-// TestTheProxyForwardsTheCreateBodyWhole — the companion to the cap test, one
-// layer up: whatever the middleware restored must reach insightd unchanged.
+// TestTheProxyForwardsTheCreateBodyWhole — the create's body must reach insightd
+// unchanged THROUGH THE MIDDLEWARE SEAM.
+//
+// ⛔ IT DRAINS THE BODY FIRST, AND THAT LINE IS THE ENTIRE TEST. A mutation proof
+// corrected the earlier version of this: with `bodyCapFor`'s draft arm removed it
+// stayed GREEN, because calling handleDraftProxy directly never runs drainBody —
+// so it was asserting the handler's own LimitReader against itself while the real
+// truncation (the middleware REPLACING r.Body with 1 MiB of a 2 MiB scan) went
+// unobserved. companyAuthMiddleware drains every write body before any handler
+// sees it, so a test of this path that skips it is testing a request shape the
+// product never produces.
 func TestTheProxyForwardsTheCreateBodyWhole(t *testing.T) {
 	fake := &fakeInsightd{status: http.StatusCreated, body: `{"draft_id":"D-9"}`}
 	srv := fake.server()
@@ -334,6 +343,9 @@ func TestTheProxyForwardsTheCreateBodyWhole(t *testing.T) {
 	scan := strings.Repeat("A", 3<<20) // 3 MiB of base64, over maxJSONBody
 	body := `{"source":"upload","content_b64":"` + scan + `"}`
 	r := authorizedRequest(t, http.MethodPost, "/drafts", co, body)
+	// The middleware's peek, exactly as companyAuthMiddleware runs it: it reads the
+	// body (capped by bodyCapFor) and RESTORES what it read.
+	drainBody(r)
 	w := httptest.NewRecorder()
 	s.handleDraftProxy(w, r)
 

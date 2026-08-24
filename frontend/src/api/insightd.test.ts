@@ -160,6 +160,34 @@ describe("⛔ THE DRAFT CLIENT INHERITS THE SESSION BEARER (register row D49)", 
     expect(seen[0]?.auth).toBe("Bearer session-token");
   });
 
+  it("⛔ a client built BEFORE the session is installed still picks it up", async () => {
+    /**
+     * ⛔ THE ORDERING IS THE PROPERTY, AND A MUTATION PROOF IS WHY THIS ARM
+     * EXISTS. Resolving the transport ONCE at construction — the version a reader
+     * would naturally write — passes every other arm in this file, because they
+     * all install the session first. The app does the opposite: the Bill Inbox's
+     * factory and the draft lifecycle's memoised port are built from module scope,
+     * and the auth gate REBUILDS its bearer fetch whenever the session changes
+     * (sign-out, sign-in as a different subject, a step-up replacing the token).
+     * A client that captured whichever fetch existed when it happened to be
+     * constructed would keep the previous session's closure, and the symptom would
+     * be a 401 that every draft layer swallows.
+     */
+    const seen: string[] = [];
+    // Constructed with NO session installed at all.
+    const client = createInsightdClient();
+    setSessionFetch((async (input: RequestInfo | URL) => {
+      seen.push(String(input));
+      return new Response("[]", { status: 200 });
+    }) as typeof fetch);
+    try {
+      await client.listDrafts("co-1");
+    } finally {
+      setSessionFetch(null);
+    }
+    expect(seen).toEqual(["/v1/companies/co-1/drafts"]);
+  });
+
   it("an explicit transport still wins over the session one", async () => {
     const sessionCalls: string[] = [];
     setSessionFetch((async () => {
