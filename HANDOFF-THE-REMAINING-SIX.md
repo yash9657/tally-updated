@@ -1,22 +1,24 @@
 # HANDOFF — THE REMAINING SIX: the register's last rows, in order, with the oracle for each
 
-> ✅ **L21 CLOSED D85 — the redaction tag now discriminates.** Position 1 is now **D8**, which is
-> **ALONE**, moves the BALANCE SHEET, and must be serialised with feature T9. Full record:
-> `HANDOFF-PARITY-AUDIT.md` §7.5 **L21**. Nothing is blocked on the user.
+> ✅ **L22 CLOSED D8 — closing stock replays in ENTRY order now.** Position 1 is now **D86**, which is
+> **ALONE** and must land **BEFORE D94**. Full records: `HANDOFF-PARITY-AUDIT.md` §7.5 **L21** (D85) and
+> **L22** (D8). Nothing is blocked on the user.
 >
-> ⛔⛔ **WHAT L21 SHOULD CHANGE ABOUT HOW YOU READ THE REST OF THIS FILE.** D85's stated scope was wrong in
-> the *expensive* direction and this file said it three times: it called for a hash carried as a **new
-> draft-body field** through two contracts plus a `draft.ts` mirror, and warned at length about not
-> reshaping cored's 409 passthrough. **None of it applied.** The day book stores only `voucher_no`, so a
-> draft-side hash could not have closed the layer at all; the fix is one function in
-> `insightd/insightd/redaction/persistence.py`. ⛔ **AND THIS FILE'S "IT MOVES PINNED NUMBERS" WAS FALSE** —
-> the insightd suite was **161 passed before and 161 after, with not one test moved**, so there was nothing
-> that would have noticed a revert and the gate had to be WRITTEN. **Re-measure the row. That is now four
-> lanes running (L18 half-imaginary · L19 deleted · L20 the number · L21 the shape AND the pins).**
+> ⛔⛔ **THE TWO LANES SINCE THIS FILE WAS WRITTEN BOTH CORRECTED IT, IN OPPOSITE DIRECTIONS.**
+> **D85's stated scope was too BIG** — the predicted new draft-body field through two contracts could not
+> have closed the row at all, and its "it moves pinned numbers" was false (161 → 161 tests, nothing moved).
+> **D8's stated cost model was RIGHT and its cheapest check paid for itself** — with only the new fixture
+> added, exactly one Go subcase and that fixture failed, nothing else. ⛔ **So the lesson is not "this file
+> exaggerates"; it is that a written scope is a CLAIM. D8's cheapest check is the shape to copy: make the
+> smallest change that SHOULD fail, run the full suites, and count.**
 >
-> ⚠️ **THE TRANSPORT NOTE BELOW IS STILL TRUE AND STILL WORTH READING** — cored passes insightd's answer
-> back byte for byte and `conflictCode` reads `err.body.detail.code` for 409 only — but **D85 did not touch
-> it**, so no remaining row is known to.
+> ⛔⛔ **AND READ §2.9 BEFORE D86.** D8's mutation proof did NOT reproduce: the ordering key could be deleted
+> from the SQL entirely and every Go test stayed green *and* the wire figure stayed correct, because a
+> tiebreak accidentally agreed with it. **D86 changes a report's default bound — exactly the kind of change a
+> nearby default can shadow.**
+>
+> ⚠️ **THE TRANSPORT NOTE BELOW IS STILL TRUE AND STILL UNUSED** — cored passes insightd's answer back byte
+> for byte and `conflictCode` reads `err.body.detail.code` for 409 only. Neither D85 nor D8 touched it.
 
 > ✅ **L19 CLOSED D96 BY DELETING IT** and ✅ **L18 CLOSED D81** (half A shipped; **half B did not
 > reproduce and the user closed it as such**). §6.7 and §6.8 are both ANSWERED.
@@ -42,11 +44,11 @@ to do next, in what order, what proves it, what will go wrong. Execute it top to
 
 ## ⛔ THE COUNT, RE-DERIVED BY PARSING §7.1 — NOT COPIED FROM A HEADER
 
-**96 registered · 92 CLOSED · 4 OPEN · 0 PARTIAL.** `92 + 4 = 96`.
+**96 registered · 93 CLOSED · 3 OPEN · 0 PARTIAL.** `93 + 3 = 96`.
 (`93 · 81 · 8 · 4` before L16 · `94 · 85 · 9 · 0` after L16 p0 · `96 · 87 · 9 · 0` after L16 p1 ·
 `96 · 88 · 8 · 0` after L17 · `96 · 89 · 7 · 0` after L18 · `96 · 90 · 6 · 0` after L19 ·
-`96 · 91 · 5 · 0` after L20 · this after **L21**.)
-⚠️ **FOUR LANES NOW WITHOUT A NEW ROW APPEARING.** The pattern has not changed, it has changed SHAPE:
+`96 · 91 · 5 · 0` after L20 · `96 · 92 · 4 · 0` after L21 · this after **L22**.)
+⚠️ **FIVE LANES NOW WITHOUT A NEW ROW APPEARING.** The pattern has not changed, it has changed SHAPE:
 L18 found **half of D81 did not exist**, L19 closed a row by DELETING it, L20 found a **gate firing on a
 route class nobody had in mind** plus a truncation the move itself created, and **L21 found the row's
 written SCOPE and its predicted PINS both wrong** — the expensive design could not have worked and the
@@ -83,7 +85,7 @@ written in L16 broke it again — one carried a literal ` | ` inside its status 
 ⚠️ **VALIDATE ANY PARSER CHANGE BY RE-DERIVING THE OLD NUMBER FROM THE OLD FILE.** ⚠️ **And it prints a
 `?` bucket on purpose** — a row matching nothing must be SEEN, not folded into a plausible total.
 
-**OPEN (4):** D8 · D83 · D86 · D94
+**OPEN (3):** D83 · D86 · D94
 **PARTIAL: none**, and there should never be another: **`PARTIAL` is how a hidden build survives for
 three sessions** (that was D13). A row is CLOSED, or OPEN, or TWO rows.
 
@@ -145,12 +147,12 @@ builds** (the only genuinely concurrent probe).
 | ~~0~~ | ~~**D81**~~ | MED | ✅ **CLOSED L18 2026-08-24.** Half A shipped; **half B did not reproduce.** §7.5 L18. |
 | ~~0~~ | ~~**D49**~~ | MED | ✅ **CLOSED L20 2026-08-24.** cored proxies insightd; 12 anonymous routes closed, no migration needed. §7.5 L20. |
 | ~~0~~ | ~~**D85**~~ | MED | ✅ **CLOSED L21 2026-08-24.** One function in `persistence.py`; **no new field, and it moved no pinned number.** §7.5 L21. |
-| **1** | **D8** | HIGH | ⛔ **moves the BALANCE SHEET.** ALONE, release note, serialise with T9. |
-| 4 | **D86** | MED | **moves Outstandings**, inverts a Go test by design. ALONE, **before D94.** |
+| ~~0~~ | ~~**D8**~~ | HIGH | ✅ **CLOSED L22 2026-08-24.** `voucher_id` replaces `voucher_no` as the second replay key; `docs/RELEASE-NOTES.md` created. §7.5 L22. |
+| **1** | **D86** | MED | **moves Outstandings**, inverts a Go test by design. ALONE, **before D94.** |
 | 5 | **D94** | HIGH | the payables door. **After D86.** ✅ **L16 built this exact shape twice — copy `ForecastScreens.tsx`.** |
 | 6 | **D83** | LOW | the register's proposed index **WILL NOT WORK.** The only concurrent probe. |
 
-**Must be ALONE:** D8, D86, D83.  **Must be SERIALISED:** ~~D49→D85~~ (both done) · D86→D94.
+**Must be ALONE:** D86, D83.  **Must be SERIALISED:** ~~D49→D85~~ (done) · **D86→D94**.
 ✅ **NOTHING IS BLOCKED ON THE USER — §6.7 and §6.8 were both answered 2026-08-24, and §6.7 was then
 RE-ASKED AND REVERSED on a measurement** (D81 half B: does not reproduce, closed as such; D96: delete).
 ⛔ **Do not re-ask either; §6 carries the reasoning and the reversal.**
@@ -215,6 +217,28 @@ process, so a per-process salt agreed with itself. The only thing that caught M2
 than the one that redacted — **and an in-process test cannot see it.** Ask of every arm not only "would it
 be green before my change" (§5.23) but **"is the property I care about even observable from where I am
 standing?"**
+
+### ⛔⛔ 9. A DEFAULT OR A TIEBREAK CAN SHADOW THE KEY YOU JUST FIXED (L22 — READ THIS BEFORE D86)
+D8's M2 deleted the ordering key from the SQL scan entirely — `queryStockMovements` stopped putting
+`voucher_id` on the Movement at all. **Every Go test stayed green AND the wire figure stayed CORRECT.**
+With every id equal to `""` the sort fell through to `version_created_at`, and the demo seed posts each
+voucher in its own transaction, so the tiebreak happened to agree with entry order. ⛔ **So the money
+oracle could not tell the fixed code from code that never received the key.** That is D90's shape (an
+application check shadowed by something behind it), and the only thing that caught it was an arm built on an
+ALTER — which keeps `voucher_id` and re-mints both of the keys below it.
+⛔ **WHY THIS BINDS D86:** it changes a report's DEFAULT BOUND, and `resolveAsOn` is package-SHARED with
+`bankrecon.go`. A "fixed" default that is then re-defaulted downstream, or an `as_on` echo that keeps
+answering `today`, looks exactly like a working fix from the outside. **Construct the arm where the shadow
+cannot help you** — for D8 that was the ALTER; for D86 it is the explicit-`as_on` path and the
+`openingIsInScope`/`ageBill` branches that the same value feeds.
+
+### ✅ 10. THE CHEAPEST CHECK IS WORTH MORE THAN THE SCOPE PROSE, AND D8 PROVED IT (L22)
+D8's driver said: before changing a line, add ONLY the new fixture and the new subcase, run the full suites,
+and expect exactly one Go subcase and the new fixture to fail. Run verbatim, that produced exactly 3 Python
+failures on the new fixture and exactly ONE Go subcase, nothing else — and the REASON was then verified
+independently (grouping every existing fixture's movements showed not one same-date pair). ⛔ **Ten minutes,
+and it converted the whole cost model from a claim into a measurement.** D86 has no such check written for
+it; **write one.** The shape: make the smallest change that SHOULD fail, run everything, and count.
 
 ### ✅ 5. ON FANNING OUT: READING PARALLELISES, WRITING DOES NOT
 L17 ran 4 read-only recon agents concurrently (~344k subagent tokens, ~9 min) and it paid for itself
@@ -380,21 +404,26 @@ Full record: `HANDOFF-PARITY-AUDIT.md` §7.5 **L21**. What carries forward:
   because `openApp` signs in with a password and the client then performs the WebAuthn step-up and retries.
   **Assert it rather than filtering it out.**
 
-### 3 · D8 — closing stock replayed in LEXICAL voucher_no order · RECON §3.12 · ⛔ ALONE
-An issue keyed after a receipt on the same date is costed at the pre-receipt average. Measured in a
-browser: Closing Stock **25,909.3478** where entry order gives **25,307.8797** — 601.4681 too high. The
-valuation half is correct; the ORDERING half is wrong, and **no existing fixture can fail on it.**
-⛔ **THIS MOVES THE BALANCE SHEET** — closing stock feeds it — so it re-prices real books on the next
-report read. **Serialise with feature T9 (FIFO/LIFO)** and ship a release note.
-⛔ **CHEAPEST CHECK, BEFORE CHANGING A LINE:** add ONLY the new failing fixture and the new
-`valuation_test.go` subcase, and run the full backend + corpora suites. **Exactly one Go subcase and the
-new fixture should fail.** If anything else fails, the cost model is wrong and the row needs re-scoping
-before any code moves.
-✅ **D77 is done, so posting order is stable** — this row's drive reads reports whose leg order no longer
-wobbles.
-**ORACLE:** the same books, replayed in ENTRY order, price the issue at the post-receipt average — and the
-figure the browser showed moves to the one entry order gives. ⚠️ **Read it in a browser, not only from Go:
-`verify:demo` pins 34 checks and this row moves money that several of them foot.**
+### ✅ 3 · D8 — CLOSED L22 2026-08-24. Entry order is `voucher_id`. Kept for what it teaches D86/D83.
+Full record: `HANDOFF-PARITY-AUDIT.md` §7.5 **L22**. What carries forward:
+- ⛔⛔ **THE MUTATION DID NOT REPRODUCE AND THE MONEY ORACLE COULD NOT SEE IT** — §2.9 above. The gate that
+  closed it (`TestReplayOrdersByENTRY_NotByVoucherNumber`) works by RESTATING a voucher unchanged, because an
+  ALTER keeps `voucher_id` and re-mints `created_at` and `voucher_version.id`. ⛔ **D83 should read this
+  test:** it is the same "an application key is not the authority" shape as D90's index census, and D83's
+  own trap list already says to expect a non-reproduction.
+- ✅ **THE CHEAPEST CHECK WORKED EXACTLY AS WRITTEN** — §2.10. D86 has no equivalent written for it; write
+  one before touching `outstanding.go`.
+- ⚠️ **THE SCREEN RENDERS 2 dp, INDIAN-GROUPED AND TRUNCATED** (`8,419.90` for `8419.9091`), while the
+  routes answer fixed-4. Three browser arms went red on that first (§5.7). ⛔ **D86's drive reads Outstandings
+  and the Balance Sheet in a browser — measure the rendered string, do not re-derive it.**
+- ⚠️ **THE SEED NOW CARRIES A SAME-DATE CROSS-SERIES STOCK PAIR** on `2026-07-15` (MS Angle: receipt keyed
+  first with the HIGHER number, delivery second with the lower). `drive-l22-d8.mjs`'s first arm asserts the
+  two orders still disagree and says "reseed" if they do not. ⛔ **Do not remove that pair** — without it the
+  whole replay-ordering rule has no demo figure able to notice it being wrong.
+- ⛔ **`docs/RELEASE-NOTES.md` NOW EXISTS.** A row that moves a number an operator has already read owes an
+  entry. **D86 moves Outstandings, so it owes one.**
+- ✅ **T9 (FIFO/LIFO) IS UNBLOCKED** and ⛔ must be built on the `voucher_id` order, not the old one — FIFO
+  is *more* order-sensitive, so fixtures authored against the old order would all be wrong.
 
 ### 4 · D86 — Outstandings bounds at today, the Balance Sheet does not · RECON §3.13 · ⛔ ALONE · BEFORE D94
 ✅ **DECIDED: OUTSTANDINGS STOPS BOUNDING AT TODAY** — deliberately NOT the Balance Sheet, so
@@ -520,7 +549,7 @@ pnpm run verify:demo "$(cat /tmp/drive-company-id)"     # -> ALL CHECKS PASSED (
 ### ✅ THE DRIVE SET IS GATE-SAFE — RE-MEASURED 2026-08-24 (L21), END TO END
 ```
 fresh seed -> verify:demo 34/34
-   run all TWELVE drives + contract:cored
+   run all THIRTEEN drives + contract:cored
 verify:demo 34/34          <- the whole set leaves the tenant level
 ```
 ⛔⛔ **AND HOW TO ACTUALLY RUN THE SET, BECAUSE L21 RE-LEARNED THIS THE HARD WAY.** `drive-l16-d22`,
@@ -553,6 +582,9 @@ CO="$(cat /tmp/drive-company-id)" node frontend/scripts/drive-l11-ai.mjs      # 
                                               #   listing goes through CORED now (D49); a bare :8088 fetch 401s
 CO="$(cat /tmp/drive-company-id)" node frontend/scripts/drive-l20-d49.mjs     # 52/52 (D49) — wire + a READ-ONLY
                                               #   browser arm; makes and REAPS its own two tenants
+CO="$(cat /tmp/drive-company-id)" node frontend/scripts/drive-l22-d8.mjs      # 14/14 (D8) — READ-ONLY; its
+                                              #   FIRST arm is a precondition: it refuses to run on a seed
+                                              #   with no same-date cross-series stock pair
 CO="$(cat /tmp/drive-company-id)" node frontend/scripts/drive-l21-d85.mjs     # 16/16 (D85) — wire + browser,
                                               #   ⚠️ it POSTS two purchases into the demo tenant (l11-ai's
                                               #   shape: no master, dated <= today, bill-ref via F9)
@@ -948,7 +980,7 @@ session reports T18 done, reject it.** **2 rows read `server`** (the payroll scr
 `internal/payroll` is already in the archtest allowed set — and offline sync).
 
 ⛔ **T32 Tally XML import is the COMMERCIAL BLOCKER** (§6.1 has the path).
-⚠️ **T9 must be serialised with D8** (§3 row 5).
+⚠️ **T9 must be serialised with D8, which is now CLOSED** — so T9 is unblocked, and ⛔ **it must be built on the `voucher_id` replay order, not the old one** (FIFO is MORE order-sensitive). `docs/RELEASE-NOTES.md` says so.
 ⚠️ **T10 widens D90's stock-item index** to `(company_id, group_id, lower(btrim(name)))` — a
 **widening** migration that admits rows the current one refuses and can never fail on existing data.
 

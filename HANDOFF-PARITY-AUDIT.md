@@ -859,7 +859,7 @@ WORK"** — not "hard to fix".
 | D5 | 24 | HIGH | `allow_negative_stock` has no writer anywhere in the product: no HTTP route, no request field, no service setter, no UI control. Both enforcers read it and honour it correctly, but it is permanently false for every tenant, so the "allowed per the company's flag" arm of Tally's rule can only be reached by a hand-written psql UPDA … | backend/internal/server/server.go:1161 (companyReq, field absent) + backend/internal/server/server.go:515-524 (no Put/Patch on /v1 … | ✅ CLOSED L15 2026-08-22 |
 | D6 | 27 | HIGH | An order's party is picked from the ENTIRE chart of accounts — a sales order can be committed to a bank ledger and a purchase order to a customer. Nothing on the client, in Validate, or in the DB restricts it to Sundry Debtors / Sundry Creditors. | frontend/src/screens/OrderRegisterScreen.tsx:753 (and the unfiltered load at :258) / backend/internal/orders/order.go:156 | ✅ **FIXED (L8) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D7 | 27 | HIGH | The fulfilment picker sorts candidate orders by order_no as a raw string while its own comment claims "Oldest commitment first", so the order offered first is the NEWEST one. | frontend/src/screens/vouchers/FulfilmentPicker.tsx:156 | ✅ **FIXED (L8) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
-| D8 | 29 | HIGH | Closing stock VALUE is replayed in LEXICAL voucher_no order across independent numbering series, so an issue keyed after a receipt on the same date is costed at the pre-receipt average. Confirmed to the paisa in the browser: Closing Stock 25,909.3478 for MS Angle where entry order gives 25,307.8797 — 601.4681 too high, with quan … | backend/internal/inventory/valuation.go:155-170 (func less; `if a.VoucherNo != b.VoucherNo { return a.VoucherNo < b.VoucherNo }`) | ⛔ OPEN |
+| D8 | 29 | HIGH | Closing stock VALUE is replayed in LEXICAL voucher_no order across independent numbering series, so an issue keyed after a receipt on the same date is costed at the pre-receipt average. Confirmed to the paisa in the browser: Closing Stock 25,909.3478 for MS Angle where entry order gives 25,307.8797 — 601.4681 too high, with quan … | backend/internal/inventory/valuation.go:155-170 (func less; `if a.VoucherNo != b.VoucherNo { return a.VoucherNo < b.VoucherNo }`) | ✅ **CLOSED L22 2026-08-24 — the second replay key is the voucher's ID, not its NUMBER.** `inventory.less()` ordered on `voucher_no`, a STRING from a PER-VOUCHER-TYPE counter (and on a purchase the supplier's own reference), so on one date a delivery note numbered 2 sorted before a receipt numbered 4 and — within one series — 10 before 9. `voucher_id` is a UUIDv7 minted at CREATE, so it is entry order across every series, and an ALTER keeps it. ⛔ **THIS RE-PRICED REAL BOOKS ON THE NEXT REPORT READ** — `docs/RELEASE-NOTES.md` is created for it. ✅ **The cost model held exactly as the driver predicted:** with ONLY the new fixture added, `corpora/validate.py` failed 3 times on that fixture and `go test ./...` failed in exactly ONE subcase, nothing else — verified by grouping every existing fixture's movements and finding not one same-date pair. ⛔⛔ **M2 DID NOT REPRODUCE AND THAT BOUGHT THE REAL GATE:** deleting `r.movement.VoucherID = …` from the scan left the whole Go suite green AND the wire figure correct, because with every id empty the order fell through to `version_created_at`, which on a seed that posts each voucher in its own transaction happens to agree with entry order — D90's shape, an application key shadowed by a tiebreak. `TestReplayOrdersByENTRY_NotByVoucherNumber` closes it by RESTATING the receipt: an ALTER keeps `voucher_id` and re-mints both `created_at` and `voucher_version.id`, so only the id still orders it first. ⚠️ **And the mutation corrected the test twice** — the first fixture numbered the receipt 10 and the issue 2, and `"10" < "2"`, so M1 passed straight through a test written to catch it. Driven **14/14** on the wire and in a browser, figures predicted before they were read. Full record: §7.5 **L22**. |
 | D9 | 29 | HIGH | On the Balance Sheet the Closing Stock row (and its Stock-in-Hand group) is invisible in the default condensed view and is likewise absent from the Alt+E export, while the identically named row on the P&L is always visible. | frontend/src/screens/reports/reportView.ts:158-162 (`if (!cfg.detailed) out = out.filter((r) => (r.depth ?? 0) <= 1)`), with backe … | ✅ **FIXED (L10) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D10 | 3 | HIGH | Two NEW references on one invoice collapse into a SINGLE bill: post() stamps the allocated voucher number onto EVERY unnamed reference with no uniqueness check, and Outstandings groups by (ledger_id, ref_name) taking MIN(due_date). An 11,800 invoice split 5,900@30d / 5,900@60d ages entirely at the 30-day date, and the 60-day ins … | backend/internal/ledger/ledger.go:1754-1756 (stamp); backend/internal/reporting/outstanding.go:141,158 (MIN(due_date) + GROUP BY r … | ✅ **FIXED (L1r) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D11 | 3 | HIGH | ADVANCE and ON_ACCOUNT are stored as ordinary named bills. They take the same unnamed->voucher-number stamp as NEW, each voucher type has its own bare-integer counter, and Outstandings ignores ref_type when grouping — so an on-account or advance payment silently NETS AGAINST an unrelated invoice of another voucher type whose num … | backend/internal/ledger/ledger.go:1754-1756 (stamps ON_ACCOUNT/ADVANCE identically to NEW); backend/internal/ledger/ledger.go:2529 … | ✅ **FIXED (L1r) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
@@ -3576,3 +3576,111 @@ pid** (⛔ by PID — `pkill -f <script>` also matches the wrapper, §4). l11-ai
 treatment.
 ⚠️ **A MID-SEQUENCE KILL IS A RESEED.** `drive-l14-cheap` was killed part-way through the first attempt; the
 tenant was re-seeded before the real run rather than trusting that a half-finished probe left nothing behind.
+
+---
+
+### L22 — 2026-08-24 · D8 CLOSED: closing stock replayed in LEXICAL number order, not entry order
+
+**Position 1 of `HANDOFF-THE-REMAINING-SIX.md` after L21.** One row, ALONE, and the only row in the wave
+that re-prices books an operator has already read.
+
+#### ⛔⛔ THE DEFECT, AND WHY THE KEY WAS NEVER GOING TO BE A NUMBER
+`inventory.less()` ordered movements by (voucher_date, **voucher_no**, version_created_at, line_no,
+voucher_version_id). A `voucher_no` is TEXT from a counter that is **per voucher type** — and on a purchase
+it is the *supplier's* own reference — so it carries no ordering relationship to a number from another
+series. cored mints bare integers per type, so on one date a delivery note numbered `2` sorts before a
+receipt numbered `4`; and within ONE series `10` sorts before `9`. Weighted average is order-dependent, so
+an issue keyed AFTER the receipt that funds it was costed at the **pre-receipt** average.
+`voucher_id` is a UUIDv7 minted at CREATE (`ledger.go`'s `CreateVoucher`), so it is entry order per company
+across every series, and an ALTER keeps it. ⚠️ **BOTH OBVIOUS ALTERNATIVES ARE WRONG AND THE CODE NOW SAYS
+SO:** `version_created_at` is the CURRENT version's stamp, so an ALTER moves it and batched posts inside one
+transaction share `now()` and tie; `voucher_version_id` is already a UUIDv7 but is RE-MINTED by an ALTER.
+Both stay, BELOW `voucher_id`, so the order remains total.
+
+#### ✅ THE COST MODEL WAS CHECKED BEFORE PRODUCTION CODE MOVED, AND IT HELD
+The driver's cheapest check, run exactly as written — add ONLY the new fixture:
+`corpora/validate.py` → **3 failures, all on `07-same-date-cross-series`** (outwardValue 750 vs 500,
+closingValue 2250 vs 2500, closingRate 150 vs 166.6667); `go test ./... -count=1` → **exactly one** failure,
+`TestWeightedAverageCorpus/07-same-date-cross-series`, **0 SKIP**. Nothing else in the backend suite.
+✅ **And the REASON was verified rather than assumed:** grouping every existing fixture's movements by
+(date, item, godown, batch) shows **not one** of the six has two voucher numbers on one date on one
+position, so none of their expected values could move.
+
+#### ⛔⛔ M2 DID NOT REPRODUCE, AND THE NON-REPRODUCTION BOUGHT THE ONLY GATE THAT MATTERS (§5.4)
+M2 deleted `r.movement.VoucherID = voucherID.String()` from the scan, leaving `less()` fixed. Predicted: Go
+green, wire figure back to the defect. Observed: **Go green AND the wire figure still CORRECT.** Measured
+reason: with every `VoucherID` empty the order falls through to `version_created_at`, and the seed posts each
+voucher in its own transaction —
+```
+RN "4"  created_at 20:30:21.722064
+DN "2"  created_at 20:30:21.725537
+```
+— so the tiebreak happens to AGREE with entry order.
+⛔ **SO THE WIRE ORACLE ALONE DOES NOT PROVE `voucher_id` IS DOING THE WORK**, and nothing in the repo
+proved `queryStockMovements` populated the ordering key at all. **That is D90's shape exactly**: an
+application key shadowed by a tiebreak, invisible to every gate.
+✅ **THE GATE:** `TestReplayOrdersByENTRY_NotByVoucherNumber` (`internal/reporting`, through the real SQL).
+A same-day pair whose NUMBER order is the wrong order, then — the arm M2 fails — **RESTATE THE RECEIPT WITH
+IDENTICAL LINES.** An ALTER keeps `voucher_id` and re-mints BOTH `created_at` and `voucher_version.id`, so
+the receipt becomes the newest version while staying the earlier voucher; after that `voucher_id` is the ONLY
+key that still orders it first, and restating a voucher without changing a line must not re-price anything.
+
+#### ⚠️ AND THE MUTATION CORRECTED THE TEST — THE THIRD TIME IN TWO LANES (§5.3)
+The first draft of that gate numbered the receipt **10** and the issue **2**. `"10" < "2"`, so voucher_no
+order put the receipt FIRST — the CORRECT order — and **M1 passed straight through a test written to catch
+it.** The issue must carry the number that sorts EARLIER: receipt 9, issue 10. ⛔ **A test whose fixture
+accidentally agrees with the defect is worse than no test, and only running the mutation showed it.**
+⚠️ It also needed `postNo`/`alterNo`: the existing helpers let the SERVER allocate the number, and on a
+single voucher class the server allocates in ENTRY order — so through them the numbers *cannot* disagree
+with entry order, which is the disagreement under test.
+
+#### THE ORACLE — PREDICTED FIRST, THEN READ (WIRE AND BROWSER)
+The seed's own movements were replayed independently in Python (a THIRD implementation) before the fix was
+built; that replay reproduced the PRE-fix figures exactly, which is what licensed it as a prediction.
+```
+                        PRE-FIX      POST-FIX     predicted
+MS Angle closing_value  8500.8152 -> 8419.9091    8419.9091
+MS Angle outward_value  2359.1848 -> 2440.0909    2440.0909
+MS Angle closing_rate     41.4674 ->   41.0727      41.0727
+MS Angle closing_qty     205.0000 ->  205.0000    UNCHANGED
+BS Closing Stock       75175.8152 -> 75094.9091   -80.9061
+```
+⛔ **THE QUANTITY IS UNCHANGED WHILE THE VALUE MOVED** — the D8 signature, and the drive asserts it FIRST.
+Both binaries were verified fresh BY SYMBOL (the pre-fix one counted **0** occurrences of the new SQL, the
+post-fix one **1**).
+⛔ **FOOTED ACROSS HANDLERS:** `/balance-sheet`'s Closing Stock node == `/stock-summary`'s total, and
+`balanced: true` still holds. **And the defect's own figures are asserted ABSENT by value**, so a revert
+reads as the defect by name.
+
+#### ⚠️ THE BROWSER ARMS FAILED FIRST, AND IT IS §5.7 A THIRD TIME
+The routes answer fixed-4 (`8419.9091`); the screen renders Indian-grouped, 2 dp, **TRUNCATED**
+(`8,419.90`, *not* `8,419.91`). Both the wanted AND the defect string were absent from the page text, so all
+three browser arms went red while every wire arm was green — a probe comparing a projection the DOM does not
+carry. The display strings are now MEASURED off the rendered page rather than re-derived in the probe (a
+second copy of the formatter would drift and would agree with itself), and **both** plausible renderings of
+the defect are asserted absent so the arm cannot go quiet if the rounding mode changes.
+
+#### ⛔ A PRECONDITION ARM, BECAUSE THE WHOLE ORACLE IS OTHERWISE VACUOUS (§5.5)
+Nothing in the seed put two differently-numbered vouchers on one position on one date, so the entire
+replay-ordering rule shipped with **no demo figure able to notice it being wrong**. `seed-demo.mts` grows the
+pair, and `drive-l22-d8.mjs`'s first arm reads it off the wire and asserts the two orders DISAGREE — on a
+stale seed that arm goes red and says "reseed" instead of thirteen green arms measuring the only figure there
+is.
+
+#### ⛔ IT SHIPS WITH A RELEASE NOTE, AND THE REPO HAD NOWHERE TO PUT ONE
+`docs/RELEASE-NOTES.md` is created, with a one-line rule for what belongs in it (a change that moves a
+number an operator has already read — not merely a large change) and the D8 entry: which reports move, that
+QUANTITIES do not, that nothing is migrated (so an older figure can no longer be reproduced from the data),
+and that **T9 FIFO/LIFO must be built on this ordering** because FIFO is *more* order-sensitive.
+
+#### GATES
+`go test ./... -count=1` **exit 0, 0 FAIL, 0 SKIP** (bracketed with a live `psql`) ·
+`python3 corpora/validate.py` **OK, inventory=7** · `pnpm vitest run` **1454 / 87 files** ·
+`pnpm exec tsc --noEmit` clean.
+
+**THE WHOLE DRIVE SET, ON A FRESH SEED, AFTER THE LANE:** `verify:demo` **34/34** → l13 **33/33** ·
+l14 **17/17** · l14b **8/8** · l15-d5 **22/22** · l15c **7/7** · l15d **13/13** · l15f **8/8** ·
+l16-d22 **34/34** · l11-ai **14/14** · l20-d49 **52/52** · l21-d85 **16/16** · **l22-d8 14/14** ·
+l17-d95 **20/20** · `contract:cored` **14/14** → `verify:demo` **34/34 again**.
+✅ **Gate-safe with the new probe in it, and that mattered here:** D8 moves money that `verify:demo` foots,
+and the seed grew a voucher pair. l22 is READ-ONLY (no posts, no masters), so it cannot shift the tenant.
