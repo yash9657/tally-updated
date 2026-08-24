@@ -1,5 +1,12 @@
 # HANDOFF — CLOSE THE FINAL NINE: the register's last rows, in order, with the oracle for each
 
+> ⛔⛔ **SUPERSEDED 2026-08-24 BY `HANDOFF-THE-REMAINING-EIGHT.md`. START THERE, NOT HERE.**
+> Position 1 (D95) is DONE, and **two of the rows in this file are wrong**: D49 is 9 routes not 7,
+> and D81's half B is a frame REPLACEMENT rather than a pop, is already closed for ALTER frames, and
+> carries an unanswered design question. The successor rewrote both from code read at HEAD.
+> **This file is kept for one thing the successor does not duplicate: its §3 row 1 holds D95's full
+> reasoning.** Its trap list is carried forward in full — read §5 from the successor.
+
 Written 2026-08-23, after **L16 closed D13, D15, D17, D48 (position 0) and D22 + D52 (position 1)**, and
 **registered D94, D95 and D96 along the way.** This **supersedes `HANDOFF-CLOSE-THE-LAST-EIGHT.md`**,
 whose positions 0 and 1 are done. It is the DRIVER: what to do next, in what order, what proves it, what
