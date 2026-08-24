@@ -1,15 +1,21 @@
-# HANDOFF — THE REMAINING SEVEN: the register's last rows, in order, with the oracle for each
+# HANDOFF — THE REMAINING SIX: the register's last rows, in order, with the oracle for each
 
 > ✅ **L18 CLOSED D81** (half A shipped and proven; **half B did not reproduce and the user closed it as
-> such**). Position 1 below is now **D49**. §6.7 and §6.8 are both ANSWERED — nothing is blocked on the
-> user. Full record: `HANDOFF-PARITY-AUDIT.md` §7.5 **L18**.
+> such**) and ✅ **L19 CLOSED D96 BY DELETING IT**. Position 1 is **D49**. §6.7 and §6.8 are both ANSWERED
+> — nothing is blocked on the user. Full record: `HANDOFF-PARITY-AUDIT.md` §7.5 **L18** and **L19**.
+>
+> ⛔⛔ **L19 LOWERED D49: IT IS 8 APPLICATION ROUTES NOW, NOT 9 — 12 WITH THE AUTO-DOCS.**
+> `routes_forecast.py` was one of the nine and it no longer exists. §3 is corrected; the old "9" is wrong
+> wherever it still appears in an older handoff.
 
 Written 2026-08-24, after **L17 closed D95** (the forecast plane's ACL counterweight, migration 0076).
 This **supersedes `HANDOFF-CLOSE-THE-FINAL-NINE.md`**, whose position 1 is done. It is the DRIVER: what
 to do next, in what order, what proves it, what will go wrong. Execute it top to bottom.
 
 > ⛔⛔ **ONE ROW IN HERE IS MATERIALLY BIGGER THAN THE REGISTER SAYS, AND IT WAS RE-SCOPED BY READING THE
-> CODE RATHER THAN THE ROW.** D49 is **9 routes, not 7** (13 counting the auto-docs). §3 has it in full.
+> CODE RATHER THAN THE ROW.** D49 is **8 routes, not 7** (12 counting the auto-docs) — it read 9 until L19
+> deleted the forecast route. §3 has it in full, and says to re-derive the number from the live
+> `/openapi.json` rather than trust any written copy of it.
 > ⛔ **The OTHER row re-scoped this way was D81 — and re-reading it found half of it DID NOT EXIST.**
 > **Read §3 before estimating anything, and MEASURE before you build or ask.**
 
@@ -22,9 +28,9 @@ to do next, in what order, what proves it, what will go wrong. Execute it top to
 
 ## ⛔ THE COUNT, RE-DERIVED BY PARSING §7.1 — NOT COPIED FROM A HEADER
 
-**96 registered · 89 CLOSED · 7 OPEN · 0 PARTIAL.** `89 + 7 = 96`.
+**96 registered · 90 CLOSED · 6 OPEN · 0 PARTIAL.** `90 + 6 = 96`.
 (`93 · 81 · 8 · 4` before L16 · `94 · 85 · 9 · 0` after L16 p0 · `96 · 87 · 9 · 0` after L16 p1 ·
-`96 · 88 · 8 · 0` after L17 · this after **L18**.)
+`96 · 88 · 8 · 0` after L17 · `96 · 89 · 7 · 0` after L18 · this after **L19**.)
 ⚠️ **TWO LANES RUNNING WITHOUT A NEW ROW APPEARING NOW.** L18 still found something the register had
 wrong — **half of D81 did not exist** — so the pattern has not changed, it has changed SHAPE: what a lane
 surfaces is now a false PREMISE rather than a missing row. **Re-measure every row before building it.**
@@ -59,7 +65,7 @@ written in L16 broke it again — one carried a literal ` | ` inside its status 
 ⚠️ **VALIDATE ANY PARSER CHANGE BY RE-DERIVING THE OLD NUMBER FROM THE OLD FILE.** ⚠️ **And it prints a
 `?` bucket on purpose** — a row matching nothing must be SEEN, not folded into a plausible total.
 
-**OPEN (7):** D8 · D49 · D83 · D85 · D86 · D94 · D96
+**OPEN (6):** D8 · D49 · D83 · D85 · D86 · D94
 **PARTIAL: none**, and there should never be another: **`PARTIAL` is how a hidden build survives for
 three sessions** (that was D13). A row is CLOSED, or OPEN, or TWO rows.
 
@@ -119,13 +125,12 @@ builds** (the only genuinely concurrent probe).
 | # | Row | Sev | Why here |
 |---|---|---|---|
 | ~~0~~ | ~~**D81**~~ | MED | ✅ **CLOSED L18 2026-08-24.** Half A shipped; **half B did not reproduce.** §7.5 L18. |
-| **1** | **D49** | MED | ⛔ **9 routes, not 7 — 13 with the auto-docs.** Largest of the wave. **Before D85.** |
+| **1** | **D49** | MED | ⛔ **8 routes — 12 with the auto-docs.** ⚠️ **Every driver before L19 says 9 (and older ones 7); the forecast route was deleted by D96.** Largest of the wave. **Before D85.** |
 | 2 | **D85** | MED | **moves pinned numbers.** ALONE, **after D49.** |
 | 3 | **D8** | HIGH | ⛔ **moves the BALANCE SHEET.** ALONE, release note, serialise with T9. |
 | 4 | **D86** | MED | **moves Outstandings**, inverts a Go test by design. ALONE, **before D94.** |
 | 5 | **D94** | HIGH | the payables door. **After D86.** ✅ **L16 built this exact shape twice — copy `ForecastScreens.tsx`.** |
 | 6 | **D83** | LOW | the register's proposed index **WILL NOT WORK.** The only concurrent probe. |
-| 7 | **D96** | LOW | ✅ **§6.8 ANSWERED 2026-08-24: DELETE IT.** Not a build — a deletion, and its oracle is a deletion oracle. |
 
 **Must be ALONE:** D85, D8, D86, D83.  **Must be SERIALISED:** D49→D85 · D86→D94.
 ✅ **NOTHING IS BLOCKED ON THE USER — §6.7 and §6.8 were both answered 2026-08-24, and §6.7 was then
@@ -205,16 +210,21 @@ Full record: `HANDOFF-PARITY-AUDIT.md` §7.5 **L18**. Three things carry forward
   `VoucherDate` only, so `POST /ledgers` and every other dateless write sails straight through.
   `drive-l18-d81.mjs` has it working end to end, including the reap.
 
-### 2 · D49 — insightd authenticates nobody · ⛔ 9 ROUTES, NOT 7 · BEFORE D85
-⛔⛔ **THE REGISTER'S "7" IS WRONG AND SO IS EVERY DRIVER SINCE.** It is **9 application routes**, and
-**13** counting FastAPI's auto-docs. Verified two ways — every decorator in the package, and the LIVE
-`/openapi.json`. ⚠️ `HANDOFF-RECON-LAST-16.md:44` was more honest ("7 (8)") and later drivers regressed.
+### 1 · D49 — insightd authenticates nobody · ⛔ 8 ROUTES (NOT 7, AND NO LONGER 9) · BEFORE D85
+⛔⛔ **THE REGISTER'S "7" IS WRONG, EVERY DRIVER BEFORE L18 SAID 7, THIS DRIVER SAID 9, AND IT IS NOW 8.**
+⚠️ **Read that as a warning about the number, not as a settled fact:** it has been restated wrong three
+times (§5.24). **Re-derive it from the LIVE `/openapi.json` at the moment you start**, which is how both
+corrections were found.
+It is **8 application routes** and **12** counting FastAPI's auto-docs. **L19 deleted
+`POST /companies/{id}/forecast/cashflow` (D96), which was the ninth** — measured on the wire after
+restarting insightd onto the deletion.
 
-**THE NINE** (⛔ 7 take `company_id` in the PATH; that path value is the *only* tenant scope):
+**THE EIGHT** (⛔ 6 take `company_id` in the PATH; that path value is the *only* tenant scope):
 `POST /companies/{id}/drafts` · `GET …/drafts` · `GET …/drafts/{draft_id}` · `POST …/claim` ·
 `POST …/claim/release` · `POST …/accepted` (all `routes_drafts.py` decorators 130/225/238/286/364/468) ·
-`POST /companies/{id}/forecast/cashflow` (`routes_forecast.py:54`) · `GET /healthz` (`app.py:61`) ·
-`GET /benchmark/last` (`app.py:84`).
+`GET /healthz` (`app.py`) · `GET /benchmark/last` (`app.py`).
+⚠️ **`app.py`'s line numbers MOVED in L19** — the optional forecast mount was removed and a block of
+reasoning added. Search for the decorator, never jump to the line.
 **PLUS FOUR NOBODY HAS COUNTED:** `/docs`, `/redoc`, `/openapi.json`, `/docs/oauth2-redirect` — **all
 answer 200 and publish the entire schema.** They are absent from `openapi.paths`, which is why an
 openapi-based count misses them. `docs_url=None`/`redoc_url=None` are not set (`app.py:39-46`).
@@ -251,7 +261,7 @@ no-draftId path, `GET drafts` plus one GET per candidate (the find-by-body fallb
 status 409. The three codes are minted at `routes_drafts.py:338 / :426 / :440`. **A proxy that reshapes the
 409 body or its status turns three specific refusals into the fail-open branch.**
 
-**SCOPE:** 9 routes + the bind + **2 client transports** (`api/insightd.ts:50` and a **deliberately
+**SCOPE:** 8 routes + the bind + **2 client transports** (`api/insightd.ts:50` and a **deliberately
 duplicated** resolver at `draftAccept.ts:1173`, flagged at `:1116-1123` as a copy that must not drift) +
 **2 more callers in `frontend/scripts`** (`seed-demo.mts:1774`, `e2e-ocr-prefill.mts:101`) + the vite proxy
 + healthz + its tests. ⚠️ **Neither transport can send a credential today** — `createHttpClient` emits only
@@ -281,7 +291,7 @@ anti-fail-open arm above), and `/docs` + `/openapi.json` no longer publish the s
 `try/except ImportError`, so a deploy without it serves **8**); the in-cluster bind host (**no Dockerfile
 exists in the repo** and `/readyz` 404s, so `infra/k8s/base/insightd.yaml` is not a usable reference).
 
-### 3 · D85 — the duplicate-bill guard keys on the POST-redaction number · RECON §3.11 · ALONE · AFTER D49
+### 2 · D85 — the duplicate-bill guard keys on the POST-redaction number · RECON §3.11 · ALONE · AFTER D49
 ✅ **DECIDED: key on a PRE-REDACTION HASH.** Every PII-shaped invoice number collapses to the constant
 `[PAN REDACTED]`, so two different PAN-shaped numbers from one supplier on one date are the same bill to
 the check, and the second accept is refused. Its own advice — *"key its own supplier invoice number"* —
@@ -300,7 +310,7 @@ removed").
 **Predict the moved number OUT LOUD in the commit message before running the gate**; if the gate stays
 green, assume the binary was not rebuilt before assuming the probe is not an oracle (§5.17).
 
-### 4 · D8 — closing stock replayed in LEXICAL voucher_no order · RECON §3.12 · ⛔ ALONE
+### 3 · D8 — closing stock replayed in LEXICAL voucher_no order · RECON §3.12 · ⛔ ALONE
 An issue keyed after a receipt on the same date is costed at the pre-receipt average. Measured in a
 browser: Closing Stock **25,909.3478** where entry order gives **25,307.8797** — 601.4681 too high. The
 valuation half is correct; the ORDERING half is wrong, and **no existing fixture can fail on it.**
@@ -316,7 +326,7 @@ wobbles.
 figure the browser showed moves to the one entry order gives. ⚠️ **Read it in a browser, not only from Go:
 `verify:demo` pins 34 checks and this row moves money that several of them foot.**
 
-### 5 · D86 — Outstandings bounds at today, the Balance Sheet does not · RECON §3.13 · ⛔ ALONE · BEFORE D94
+### 4 · D86 — Outstandings bounds at today, the Balance Sheet does not · RECON §3.13 · ⛔ ALONE · BEFORE D94
 ✅ **DECIDED: OUTSTANDINGS STOPS BOUNDING AT TODAY** — deliberately NOT the Balance Sheet, so
 `verify:demo` needs no re-pin. One bill dated in the future gave BS **109950.0000** vs Outstandings
 **108770.0000**, while `?as_on` in the future made them agree.
@@ -329,7 +339,7 @@ be present, still well-worded, and wrong.
 ⚠️ It **inverts a Go test by design** — say so in the commit rather than deleting the test (§5.16).
 ⚠️ **AND IT MOVES WHAT D94 RENDERS**, which is why D94 comes after it.
 
-### 6 · D94 — the payables ageing report has NO DOOR · AFTER D86 · anchors inline
+### 5 · D94 — the payables ageing report has NO DOOR · AFTER D86 · anchors inline
 ⛔ **THE SERVER ALREADY SERVES IT AND NOTHING IN THE PRODUCT CAN ASK.** Measured on the wire 2026-08-23
 against a binary verified fresh by symbol: `?kind=PAYABLE` → **200 · total 1,04,050.0000 · 2 creditors ·
 4 bills** (`Steel Suppliers` 80,450.0000 / 3 bills · `Delhi Parts` 23,600.0000 / 1 bill), full per-bill
@@ -369,7 +379,7 @@ on it. **This row adds a NAME; it does not remove a parameter.**
 gets receivables today. **Re-point it in this lane**, and note that L16 deliberately refused to add a
 misleading alias for the same class of reason (§6.5).
 
-### 7 · D83 — two concurrent posts share one hand-typed bill number · RECON §3.14 · LAST
+### 6 · D83 — two concurrent posts share one hand-typed bill number · RECON §3.14 · LAST
 ⛔ **THE REGISTER'S PROPOSED FIX WILL NOT WORK.** `bill_allocation` cannot carry the index, because
 duplicate names are legal for AGAINST / ON_ACCOUNT / caller-named openers. It needs
 `pg_advisory_xact_lock` or a new table.
@@ -387,23 +397,12 @@ mutation that will not break anything is a finding (§5.4), and on this row it i
 **ORACLE:** two simultaneous posts of the same bill number on one party — one succeeds, one is refused.
 **On the wire**; there is no mock equivalent for concurrency, and the mock says so at the method.
 
-### 8 · D96 — insightd's statistical forecast has no renderer · ✅ §6.8 ANSWERED: DELETE IT · LAST
-⚠️ **THIS IS D72's ONE SURVIVING CLAUSE AND IT ALMOST DIED SILENTLY.** D72 closed 2026-08-21 (its money
-half was already fixed — `ForecastRequest` takes fixed-4 `Money` strings, gated with a non-vacuity arm)
-and its remainder, *"still not reachable from the keyboard"*, was folded into D22. L16 then closed D22 by
-building a door over **cored's** `/cash-flow`. ⛔ **That is a different service, a different endpoint and
-a deliberately different method** — cored's own `method` string says *"deterministic; no statistics, no
-model"*. **Wiring one did not wire the other.**
-✅ Its disclosure work is already done on its side (`estimate: true` plus its own method).
-⛔⛔ **ANSWER THIS BEFORE WRITING A LINE: SHOULD IT EXIST AT ALL?** cored's projection is explainable to
-an auditor bill by bill. A statistical forecast rendered anywhere near it invites exactly the confusion
-the Cash Flow screen's whole disclosure block exists to prevent. Three honest outcomes:
-**(a) its own report NAME** (the PDP argument again — a different method is a different authority, and it
-would need its own ACL counterweight per D95); **(b) deletion**, which closes the row for free and
-removes a maintained path nobody can reach; **(c) leave it, documented as internal-only.**
-**This is a product decision. RAISE IT; do not quietly build it.**
-⚠️ **If the answer is (b), the row still owes a proof** — that nothing imports it and no route serves it,
-asserted by a test rather than by a grep in a commit message.
+### ✅ 7 · D96 — CLOSED L19 2026-08-24 BY **DELETION**.
+The statistical forecast plane is gone: package, route, dependency pin and its three test modules.
+`insightd/tests/test_forecast_plane_is_gone.py` keeps it gone. ⛔ **It lowered D49 to 8 routes.**
+⚠️ **The lesson worth carrying: `git rm` is not a deletion** — it left `insightd/forecast/` on disk with a
+stale `__pycache__`, and Python imported the surviving directory as an implicit NAMESPACE package. Check
+the directory too. §7.5 **L19**.
 
 ---
 

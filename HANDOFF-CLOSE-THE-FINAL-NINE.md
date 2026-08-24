@@ -1,6 +1,12 @@
 # HANDOFF — CLOSE THE FINAL NINE: the register's last rows, in order, with the oracle for each
 
-> ⛔⛔ **SUPERSEDED 2026-08-24 BY `HANDOFF-THE-REMAINING-SEVEN.md`. START THERE, NOT HERE.**
+> ⛔⛔ **SUPERSEDED TWICE OVER — DO NOT SCOPE FROM THIS FILE.** The live driver is
+> `HANDOFF-THE-REMAINING-SIX.md`. Two numbers in here are now wrong in BOTH directions: **D49 is 8
+> routes** (this file says 7, the next driver said 9 — L19 deleted the forecast route), and **D81's
+> "throws away the keying" half DOES NOT REPRODUCE** (L18). Kept only for its D95 reasoning.
+
+
+> ⛔⛔ **SUPERSEDED 2026-08-24 BY `HANDOFF-THE-REMAINING-SIX.md`. START THERE, NOT HERE.**
 > Position 1 (D95) is DONE, and **two of the rows in this file are wrong**: D49 is 9 routes not 7,
 > and D81's half B is a frame REPLACEMENT rather than a pop, is already closed for ALTER frames, and
 > carries an unanswered design question. The successor rewrote both from code read at HEAD.

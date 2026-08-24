@@ -375,6 +375,13 @@ Dependency edges: WS1 after WS2 (the translator's tool schema should describe th
 ## §5 Wave-3 (stretch) workstream specs
 
 ### WS5b — Statistical forecast (statsmodels), backtest-gated
+⛔ **WS5b WAS BUILT AND THEN DELETED — register row D96, 2026-08-24, by the user's decision.** cored's
+WS5a projection is explainable to an auditor bill by bill; a second cash-forward number by a different
+method, with no auditor story, invites the confusion the Cash Flow disclosure block exists to prevent. The
+route was never called by any client. `insightd/tests/test_forecast_plane_is_gone.py` keeps it gone, and is
+where re-adding it has to be argued. **The paragraph below is kept as the historical spec; it is NOT work
+to do.**
+
 Only start after WS5a ships. insightd module `insightd/insightd/forecast/` (statsmodels Holt-Winters over weekly net cash movement; input = cored's day-book/cash-flow endpoints fetched read-only with a service token, or an injected fixture frame for tests). **Backtest gate, not vibes:** on ≥3 synthetic seasonal fixtures (generated, seeded), rolling-origin backtest MAPE must beat the naive last-value baseline by ≥20% — the gate FAILS otherwise; plus a determinism test (same input → same forecast). Deps via `requirements-forecast.txt` (statsmodels only — NO xgboost, §1.1). Endpoint `GET /companies/{id}/forecast/cashflow` on insightd (read-only plane; no cored write path — archtest-equivalent assertion in pytest: the forecast module imports no cored-writing client).
 
 ### WS10 — Real-OCR wiring (PaddleOCR) + real upload in Bill Inbox
