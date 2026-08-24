@@ -1,14 +1,17 @@
-# HANDOFF — THE REMAINING EIGHT: the register's last rows, in order, with the oracle for each
+# HANDOFF — THE REMAINING SEVEN: the register's last rows, in order, with the oracle for each
+
+> ✅ **L18 CLOSED D81** (half A shipped and proven; **half B did not reproduce and the user closed it as
+> such**). Position 1 below is now **D49**. §6.7 and §6.8 are both ANSWERED — nothing is blocked on the
+> user. Full record: `HANDOFF-PARITY-AUDIT.md` §7.5 **L18**.
 
 Written 2026-08-24, after **L17 closed D95** (the forecast plane's ACL counterweight, migration 0076).
 This **supersedes `HANDOFF-CLOSE-THE-FINAL-NINE.md`**, whose position 1 is done. It is the DRIVER: what
 to do next, in what order, what proves it, what will go wrong. Execute it top to bottom.
 
-> ⛔⛔ **TWO ROWS IN HERE ARE MATERIALLY BIGGER OR DIFFERENT THAN THE REGISTER SAYS, AND BOTH WERE
-> RE-SCOPED BY READING THE CODE RATHER THAN THE ROW.** D49 is **9 routes, not 7** (13 counting the
-> auto-docs), and **D81's half B is not a "pop"** — it is a frame REPLACEMENT, it is already closed for
-> ALTER frames, and its design question is now **ANSWERED — §6.7, shape (b)**. §3 has both in full. **Read
-> §3 before estimating anything.**
+> ⛔⛔ **ONE ROW IN HERE IS MATERIALLY BIGGER THAN THE REGISTER SAYS, AND IT WAS RE-SCOPED BY READING THE
+> CODE RATHER THAN THE ROW.** D49 is **9 routes, not 7** (13 counting the auto-docs). §3 has it in full.
+> ⛔ **The OTHER row re-scoped this way was D81 — and re-reading it found half of it DID NOT EXIST.**
+> **Read §3 before estimating anything, and MEASURE before you build or ask.**
 
 > ⚠️ **THE OPEN COUNT FINALLY FELL WITHOUT A NEW ROW APPEARING — the first lane in three.** Do not read
 > that as the pattern changing: D95 was an ACL migration with the design already decided, which is the
@@ -19,9 +22,12 @@ to do next, in what order, what proves it, what will go wrong. Execute it top to
 
 ## ⛔ THE COUNT, RE-DERIVED BY PARSING §7.1 — NOT COPIED FROM A HEADER
 
-**96 registered · 88 CLOSED · 8 OPEN · 0 PARTIAL.** `88 + 8 = 96`.
+**96 registered · 89 CLOSED · 7 OPEN · 0 PARTIAL.** `89 + 7 = 96`.
 (`93 · 81 · 8 · 4` before L16 · `94 · 85 · 9 · 0` after L16 p0 · `96 · 87 · 9 · 0` after L16 p1 ·
-this after L17.)
+`96 · 88 · 8 · 0` after L17 · this after **L18**.)
+⚠️ **TWO LANES RUNNING WITHOUT A NEW ROW APPEARING NOW.** L18 still found something the register had
+wrong — **half of D81 did not exist** — so the pattern has not changed, it has changed SHAPE: what a lane
+surfaces is now a false PREMISE rather than a missing row. **Re-measure every row before building it.**
 
 ```bash
 python3 - <<'PY'
@@ -53,7 +59,7 @@ written in L16 broke it again — one carried a literal ` | ` inside its status 
 ⚠️ **VALIDATE ANY PARSER CHANGE BY RE-DERIVING THE OLD NUMBER FROM THE OLD FILE.** ⚠️ **And it prints a
 `?` bucket on purpose** — a row matching nothing must be SEEN, not folded into a plausible total.
 
-**OPEN (8):** D8 · D49 · D81 · D83 · D85 · D86 · D94 · D96
+**OPEN (7):** D8 · D49 · D83 · D85 · D86 · D94 · D96
 **PARTIAL: none**, and there should never be another: **`PARTIAL` is how a hidden build survives for
 three sessions** (that was D13). A row is CLOSED, or OPEN, or TWO rows.
 
@@ -64,7 +70,7 @@ three sessions** (that was D13). A row is CLOSED, or OPEN, or TWO rows.
 | File | Role |
 |---|---|
 | **this file** | ⛔ **the order, the state, the oracle per row, the traps.** Start here. |
-| **`HANDOFF-RECON-LAST-16.md` §3** | the `file:line` ANCHORS for D8/D83/D85/D86. ⚠️ **D49's and D81's anchors in §3 below SUPERSEDE it** — they were re-verified at HEAD and the recon's are stale in three places (`PARITY-AUDIT.md:903`'s `routes_drafts.py:192-219`; RECON §3.10's `draftAccept.ts:1172` and `:1243`). ⚠️ **Its expected values have been wrong three times.** |
+| **`HANDOFF-RECON-LAST-16.md` §3** | the `file:line` ANCHORS for D8/D83/D85/D86. ⚠️ **D49's anchors in §3 below SUPERSEDE it** — they were re-verified at HEAD and the recon's are stale in three places (`PARITY-AUDIT.md:903`'s `routes_drafts.py:192-219`; RECON §3.10's `draftAccept.ts:1172` and `:1243`). ⚠️ **Its expected values have been wrong three times.** |
 | `HANDOFF-PARITY-AUDIT.md` §7.1 / §7.3 / §7.5 | the register (re-parse it), the three non-register defects B/C/D (§8), and the drive ledger (append one section per lane) |
 | `HANDOFF-CLOSE-THE-REGISTER.md` §4 + **§6 below** | ⛔ **the user's decisions. AUTHORITY, not suggestion.** Disagreeing is disagreeing with the USER — ask again, do not re-decide. ⚠️ **Unless the PREMISE is false — see §5.2 and D90.** |
 | `HANDOFF-CLOSE-THE-FINAL-NINE.md` | ⚠️ the PREVIOUS driver. Position 1 (D95) done; **its §3 row 1 holds D95's full reasoning**. Trap list carried forward here in full. |
@@ -112,18 +118,19 @@ builds** (the only genuinely concurrent probe).
 
 | # | Row | Sev | Why here |
 |---|---|---|---|
-| **1** | **D81** | MED | **Scoped to two halves with two working shapes to copy.** ✅ **§6.7 ANSWERED 2026-08-24: shape (b) — the reducer stays put in BOTH modes and the SCREEN advances on success.** §3. |
-| 2 | **D49** | MED | ⛔ **9 routes, not 7 — 13 with the auto-docs.** Largest of the wave. **Before D85.** |
-| 3 | **D85** | MED | **moves pinned numbers.** ALONE, **after D49.** |
-| 4 | **D8** | HIGH | ⛔ **moves the BALANCE SHEET.** ALONE, release note, serialise with T9. |
-| 5 | **D86** | MED | **moves Outstandings**, inverts a Go test by design. ALONE, **before D94.** |
-| 6 | **D94** | HIGH | the payables door. **After D86.** ✅ **L16 built this exact shape twice — copy `ForecastScreens.tsx`.** |
-| 7 | **D83** | LOW | the register's proposed index **WILL NOT WORK.** The only concurrent probe. |
-| 8 | **D96** | LOW | ✅ **§6.8 ANSWERED 2026-08-24: DELETE IT.** Not a build — a deletion, and its oracle is a deletion oracle. |
+| ~~0~~ | ~~**D81**~~ | MED | ✅ **CLOSED L18 2026-08-24.** Half A shipped; **half B did not reproduce.** §7.5 L18. |
+| **1** | **D49** | MED | ⛔ **9 routes, not 7 — 13 with the auto-docs.** Largest of the wave. **Before D85.** |
+| 2 | **D85** | MED | **moves pinned numbers.** ALONE, **after D49.** |
+| 3 | **D8** | HIGH | ⛔ **moves the BALANCE SHEET.** ALONE, release note, serialise with T9. |
+| 4 | **D86** | MED | **moves Outstandings**, inverts a Go test by design. ALONE, **before D94.** |
+| 5 | **D94** | HIGH | the payables door. **After D86.** ✅ **L16 built this exact shape twice — copy `ForecastScreens.tsx`.** |
+| 6 | **D83** | LOW | the register's proposed index **WILL NOT WORK.** The only concurrent probe. |
+| 7 | **D96** | LOW | ✅ **§6.8 ANSWERED 2026-08-24: DELETE IT.** Not a build — a deletion, and its oracle is a deletion oracle. |
 
 **Must be ALONE:** D85, D8, D86, D83.  **Must be SERIALISED:** D49→D85 · D86→D94.
-✅ **NOTHING IS BLOCKED ON THE USER ANY MORE — §6.7 and §6.8 were both answered 2026-08-24** (D81 half B:
-reducer stays put, screen advances; D96: delete). ⛔ **Do not re-ask either; §6 carries the reasoning.**
+✅ **NOTHING IS BLOCKED ON THE USER — §6.7 and §6.8 were both answered 2026-08-24, and §6.7 was then
+RE-ASKED AND REVERSED on a measurement** (D81 half B: does not reproduce, closed as such; D96: delete).
+⛔ **Do not re-ask either; §6 carries the reasoning and the reversal.**
 
 ⚠️ **D94 NEEDS THE NEXT MIGRATION NUMBER.** D95 took **0076**; the next free is **0077**, and it must
 derive its seeder restatement from **0076's body** (14 PERFORMs), not from 0073. Re-check the highest
@@ -156,6 +163,14 @@ Eight migration headers say the coarse rule matches "at specificity 1". **It is 
 each was derived from the last and the conclusion it supports is right. ⚠️ **The recon agent flagged it
 as `uncertain` rather than repeating it — which is the only reason it got checked.**
 
+### ⛔⛔ 6. A ROW CAN BE HALF-IMAGINARY, AND THE USER MAY ALREADY HAVE DECIDED THE IMAGINARY HALF (L18)
+D81 said a server refusal *"leaves masters behind AND throws away the keying"*. The first half left FOUR
+accounts on the chart named by nothing. The second **never happened** — the form is component state and
+the frame replacement never cleared it. ⛔ **§6.7 had already been ANSWERED on that false premise**, and
+building the answer would have moved "the entry succeeded" out of the machine into both voucher screens
+to fix nothing. **Measure the row before you build it AND before you ask about it.** This is D90's shape
+twice over; §5.2 is the most load-bearing rule in this file.
+
 ### ✅ 5. ON FANNING OUT: READING PARALLELISES, WRITING DOES NOT
 L17 ran 4 read-only recon agents concurrently (~344k subagent tokens, ~9 min) and it paid for itself
 three times over — **two findings changed the work before a line was written.** ⛔ **But everything that
@@ -167,69 +182,28 @@ database, ONE cored, ONE vite and ONE tenant (§10). **Recon fans out; proof doe
 
 ## 3. PER ROW — state, the change, THE ORACLE
 
-⛔ **D81's and D49's anchors below were re-verified at HEAD and SUPERSEDE the recon's.** D8/D83/D85/D86
+⛔ **D49's anchors below were re-verified at HEAD and SUPERSEDE the recon's.** D8/D83/D85/D86
 still point at `HANDOFF-RECON-LAST-16.md` §3 entries 11–14 — ⚠️ **and those are unverified since L14.**
 ⛔ **Search for the SYMBOL, never jump to the line.** ⛔ **Use `/usr/bin/grep`** — the shell alias is
 ugrep and returns **silently empty** on `frontend/src/api/mock.ts`. ⚠️ **Use ABSOLUTE paths**; `cd`
 persists between Bash calls in this harness and has cost real time twice.
 
-### 1 · D81 — a server refusal leaves masters behind AND throws away the keying · ✅ §6.7 ANSWERED: SHAPE (b)
-⛔⛔ **THE ROW'S OWN WORDING IS WRONG IN TWO PLACES AND THE PATHS IN EVERY PRIOR DRIVER ARE WRONG TOO.**
-- ⚠️ **THE FILES ARE `frontend/src/screens/VoucherScreen.tsx` and
-  `frontend/src/screens/VoucherScreen.masterGate.test.tsx`.** There is no `screens/vouchers/VoucherScreen.tsx`
-  and no `masterGate.test.tsx`. Every earlier driver said otherwise.
-- ⚠️ **HALF B IS NOT A "POP".** On a voucher CREATE frame the accept reducer **REPLACES** the frame with a
-  fresh empty one (`navMachine.ts:1284-1291`, `stack[len-1] = fresh`). **Only the master-create arm pops**
-  (`:1233`). A fix written to "stop the pop" is reading the wrong branch.
+### ✅ 0 · D81 — CLOSED L18 2026-08-24. Kept ONLY for what it teaches the rows below.
+Full record: `HANDOFF-PARITY-AUDIT.md` §7.5 **L18**. Three things carry forward:
 
-**STATE, VERIFIED AT HEAD:**
-- ✅ **HALF A IS ALREADY DONE ON THE DRAFT PATH.** `onAccept` has TWO catches. The draft one
-  (`VoucherScreen.tsx:2475`) already renders `DraftAcceptFailedError`'s minted-master sentence. **Only the
-  non-draft catch at `:2518` is defective** — it renders `Error: ${err.message}` and names nothing.
-  ⛔ **Do not "fix" the draft branch or count it as evidence the row is open.**
-- ✅ **HALF B IS ALREADY CLOSED FOR *ALTER* FRAMES.** The D89 guard (`navMachine.ts:1281-1283`) keeps an
-  alter frame put. **Half B is CREATE-frame-only.** ⚠️ **A test arm that drills a voucher from the Day
-  Book and asserts the frame survives PASSES TODAY and proves nothing.**
-- **FIVE builders, FOUR of which mint** (earlier drivers said four): `buildSingleEntryRequest:1772`
-  (ensureLedger 1794, 1803) · `buildDoubleEntryRequest:1915` (1946) · `buildPlainRequest:2180`
-  (**the only non-minting one, synchronous**) · `buildGstRequest:2213` (ensureGstTaxLedgers 2235;
-  ensureLedger 2243, 2258, 2278) · `buildItemRequest:2349` (2373; 2380, 2385).
-- `resolveMasters:956` · the non-draft send `:2509` · **the file's own written admission of D81 at
-  `:941-946`** — ⛔ **that comment must be updated by the fix or it will contradict the new behaviour.**
-- **No `DELETE /ledgers` exists.** Five DELETE routes total (`server.go:753, 786, 1098, 1100, 1108`);
-  ⚠️ `:786` takes a `ledgerID` in its path but clears a bank date — the one that could be misread.
-
-**THE SHAPES TO COPY — all in `draftAccept.ts`:** `DraftAcceptFailedError:654` (carries
-`readonly createdLedgers`) · `ledgersMintedByThisAccept:1560` (diffs BY ID, only at positions the
-resolver filled) · **the UNCACHED snapshot `:1694`** · the rethrow `:1709` (⚠️ guard
-`if (minted.length === 0) throw err;` first).
-⛔⛔ **THE SNAPSHOT MUST BE A DIRECT `client.listLedgers`, NOT `gstVoucher`'s `ledgerIndex`.**
-`ensureLedger` writes newly minted ids straight into that shared index (`gstVoucher.ts:413`), so a "before"
-picture taken from the cache **comes back empty and half A silently reports nothing.**
-
-⛔⛔ **HALF B IS A DESIGN GAP, NOT A WIRING OVERSIGHT — AND §6.7 ANSWERED IT: SHAPE (b), the reducer stays
-put in BOTH modes and the SCREEN advances the frame on success.** The gap it was diagnosing: `onAccept` returns
-**void** on every path, so the dispatcher gets `undefined`, returns `{ran:true}`, and the key reaches the
-machine. AppShell's D92 refusal path (`AppShell.tsx:307`) is **live and correct — it is simply never
-reached.** And it cannot be reached as-is: `screenRefusal` is **synchronous by construction**
-(`ScreenActions.tsx:232`) while the accept POSTs **asynchronously**, and `effect.pending`
-(`ScreenActions.tsx:194`) is awaited by AppShell **at `:321-330`, AFTER `onKeyDown(ev)` at `:316` has
-already moved the machine. **So a server refusal is not knowable at the moment the handler must return.**
-
-**ORACLE:** provoke a REAL server refusal (a back-dated cutoff is easiest; a duplicate master name is
-easier still since D90) on a **CREATE** frame, and: `GET /ledgers` shows the minted master · the Day Book
-shows **no** voucher · the status line **NAMES** the master · **and the keyed values are still in the
-fields.** ⛔ **Both halves in one oracle or the row is not closed.**
-⚠️ **Extend `VoucherScreen.masterGate.test.tsx:287/390/505` — do NOT invert them.** They assert masters
-ARE created ("delayed, not removed"). ⛔ **`:505` must NOT gain `"Purchases"` back** — that expectation
-previously encoded closed defect **D79**, and restoring it re-pins it.
-⚠️ **The structural test `:142` reads `VoucherScreen.tsx` AS TEXT**, hard-codes the five builder names,
-asserts no `ensure*` outside a builder region, and **scopes its regions by the `const onAccept = useCallback(`
-regex** — renaming a builder, adding a sixth, hoisting an `ensure*`, or moving `onAccept` above the
-builders all break it.
-⚠️ **UNVERIFIED (recon could not run tests):** whether the mock client can be made to REFUSE a voucher
-POST after ledgers are created. **Without that hook a non-draft test arm may not be expressible against
-the existing mock** — check before promising a unit-level proof.
+- ⛔⛔ **HALF THE ROW DID NOT EXIST, AND THE USER HAD ALREADY DECIDED IT.** §6.7 was answered before the
+  code was measured; the measurement showed the keying was never thrown away, and the decision was
+  re-asked and reversed. **This is D90's shape for the SECOND time.** ⛔ **MEASURE THE ROW BEFORE YOU
+  BUILD IT, AND BEFORE YOU ASK THE USER ABOUT IT** — a question asked on a false premise costs a decision,
+  not just a build. §5.2.
+- ✅ **THE ORPHAN-DISCLOSURE SHAPE IS NOW A FUNCTION, NOT A PATTERN TO COPY:** `voucherAcceptFailure` in
+  `screens/vouchers/draftAccept.ts`, with `VoucherAcceptFailedError` beside it (renamed from
+  `DraftAcceptFailedError` — it serves both paths now).
+- ⛔ **THE BACK-DATED CUTOFF IS THE CHEAPEST SERVER-ONLY REFUSAL IN THE PRODUCT, and D8/D85/D86/D94 may
+  all want it.** Set it on the **Owner** level (`PUT …/security-levels/{id}` with
+  `{"backdated_cutoff":"2027-01-01"}` — the Owner level is immutable EXCEPT for this). It is judged on
+  `VoucherDate` only, so `POST /ledgers` and every other dateless write sails straight through.
+  `drive-l18-d81.mjs` has it working end to end, including the reap.
 
 ### 2 · D49 — insightd authenticates nobody · ⛔ 9 ROUTES, NOT 7 · BEFORE D85
 ⛔⛔ **THE REGISTER'S "7" IS WRONG AND SO IS EVERY DRIVER SINCE.** It is **9 application routes**, and
@@ -728,6 +702,15 @@ half-deleted tenant. ⚠️ `account_group` self-references via `parent_id` and 
 handles it. ⛔ **A tenant WITH BOOKS needs more than this** — `drive-l17-d95.mjs` therefore REFUSES to
 reap one that has any voucher versions, and says so rather than deleting books.
 
+### 5.26 ⛔⛔ L17's REAP DOES NOT PORT TO A TENANT WITH BOOKS, AND `posting` IS APPEND-ONLY BY TRIGGER
+L18's probe posts a voucher on purpose (its control arm), and L17's reap list failed four ways: there is
+no `cost_allocation` (it is **`posting_cost_allocation`**) and no `voucher` (it is **`voucher_head`**);
+`bill_allocation` hangs off **`voucher_version_id`**, not `posting_id`; `voucher_head.current_version_id`
+means the **head must be deleted BEFORE the version**; and `posting`/`voucher_version` carry
+`*_no_mutate` triggers that **RAISE on DELETE**. ⛔ The working shape is in `drive-l18-d81.mjs` and uses
+`SET LOCAL session_replication_role = replica` — **transaction-local, reverts at COMMIT**. ⛔⛔ **It is
+permissible only for a tenant the probe minted moments earlier. NEVER against books an operator keyed.**
+
 ### 5.19 ⛔⛔ A DISCLOSURE CAN BE FULLY PRESENT AND FULLY WRONG — DON'T ASSERT ON ITS PRESENCE
 **L16's M3 is the cleanest evidence in the repo for this.** The Cash Flow screen's disclosure was mutated
 to TOTAL its three settlement-date sources into one figure — the single design the screen exists to
@@ -801,17 +784,22 @@ the same edit a pinned count moved (`NINE` → `ELEVEN` reports in the Alt+G lis
 
 ---
 
-7. **D81's HALF B:** ✅ **(b) THE REDUCER STAYS PUT UNCONDITIONALLY. Answered 2026-08-24.**
-   The `accept` reducer keeps a voucher frame put in BOTH modes — exactly as the D89 alter branch already
-   does (`navMachine.ts:1281`) — and **`VoucherScreen` advances the frame itself on success**. ⛔ **The
-   reasoning the user endorsed, recorded so it is not re-litigated:** the refusal is not knowable when
-   `onAccept` must return (`screenRefusal` is synchronous by construction, `ScreenActions.tsx:232`, while
-   the accept POSTs asynchronously and AppShell forwards the key at `AppShell.tsx:316` BEFORE awaiting
-   `effect.pending` at `:321-330`). Shape **(a)** — an async-refusal field AppShell awaits before moving the
-   machine — was rejected because it **changes keystroke latency for every screen**, not just this one.
-   ⚠️ **The cost the user accepted:** ownership of "the entry succeeded" moves from the machine to the
-   screen. ⛔ **So the screen MUST advance on success** — if it does not, a successful voucher leaves the
-   operator staring at their own keyed values with no signal, which is a worse defect than the one being fixed.
+7. **D81's HALF B:** ✅ **CLOSED AS NOT-REPRODUCING. Re-asked and answered 2026-08-24, superseding the
+   same day's answer of shape (b).** ⛔⛔ **THE FIRST ANSWER WAS GIVEN ON A FALSE PREMISE AND THIS IS THE
+   RECORD OF WHY, SO IT IS NOT RE-LITIGATED.** Shape (b) — the reducer stays put in both modes, the screen
+   advances on success — was chosen **to stop a server refusal throwing away the operator's keying.** The
+   code was then measured and **the keying is never thrown away**: the accept reducer replaces the FRAME,
+   but the form is component state in `AccountingVoucherScreen` and the only two things that reset it are
+   a voucher-CLASS change (F5/F7/F8) and Alt+X. The entry mode survives too (`Ctrl+H` writes it to
+   `ctx.entryModeByType`, which the fresh frame re-reads). Measured three ways: vitest on the single-entry
+   payment form, vitest on the GST sales form including the party fed through the pick list, and a real
+   browser against real cored after a genuine 403 — every input byte-identical before and after.
+   ⛔ **THE COST THE USER AVOIDED:** building it would have moved ownership of *"the entry succeeded"* out
+   of the machine and into **both** voucher screens, and if either failed to advance, bulk entry breaks
+   silently — worse than the flag it would have fixed. ⚠️ **THE RESIDUAL, RECORDED NOT BUILT:** a refused
+   create still stamps the frame `saved: true`; it drives a badge the error status masks, so nothing
+   renders it. **Not a row.** ⚠️ Pins exist in `masterGate.test.tsx` and `drive-l18-d81.mjs` and are
+   labelled as pins — **they were green before the change and prove nothing about it (§5.23).**
 8. **D96:** ✅ **(b) DELETE IT. Answered 2026-08-24.** insightd's statistical forecast path is removed
    entirely. ⛔ **The reasoning the user endorsed:** cored's projection is explainable to an auditor bill by
    bill; a second cash-forward number produced by a different method, with no renderer and no auditor story,
@@ -825,13 +813,13 @@ the same edit a pinned count moved (`NINE` → `ELEVEN` reports in the Alt+G lis
 
 | Change | Who it affects |
 |---|---|
-| `screenRefusal()` / `ScreenActionResult.refused` (D92) | ⚠️ **D81 half B** — live and correct, and **never reached**, because `onAccept` returns void. ✅ **§6.7 chose shape (b), which does NOT use it** — the fix is in the reducer and the screen, not in the refusal channel. |
-| the D89 guard keeping an ALTER frame put (`navMachine.ts:1281`) | ⛔ **D81** — half B is **CREATE-frame-only**; an alter arm passes today |
-| `DraftAcceptFailedError` + `ledgersMintedByThisAccept` + the uncached snapshot | ⛔ **D81 half A** — the shapes to copy, and the cache trap that makes the diff come back empty |
+| `screenRefusal()` / `ScreenActionResult.refused` (D92) | ⚠️ **still live, still correct, and still never reached from `onAccept`** — which returns void. L18 left it that way deliberately: §6.7 was re-asked and the answer became "do not build it". |
+| the D89 guard keeping an ALTER frame put (`navMachine.ts:1281`) | ✅ unchanged by L18 — the accept reducer still replaces a CREATE frame, and that is now known to cost nothing |
+| `voucherAcceptFailure` / `VoucherAcceptFailedError` (L18, renamed from `DraftAcceptFailedError`) | ⛔ **the ONE writing of the orphan sentence**, used by the draft accept AND `VoucherScreen`. Do not write a second. |
 | the ledger party block + 6 client-side refusals (D87) | **any probe creating a party through the FORM** needs a state code (§5.15) |
 | `pan` + `credit_days` on `ledgerReq` and `GET /ledgers` | ⚠️ **D85** — `credit_days` is one of the three basis sources |
 | migration **0075** — normalised master-name uniqueness | **D83** (same pre-check-vs-authority shape) |
-| `masters` refusals are sentences, not driver errors (D93) | ⚠️ **D81 and D85 both assert on refusals** |
+| `masters` refusals are sentences, not driver errors (D93) | ⚠️ **D85 asserts on refusals** |
 | ⛔ **`REPORT_NAMES` gained `"Cash Flow"` and `"Anomalies"` (L16)** | **D94** — `printTarget.ts`'s two `Record<ReportName,…>` tables are TOTAL, so **tsc names every registry you forgot**, and `REPORT_DOORS` derives from `REPORT_NAMES` and **mounts every report frame and fires Ctrl+P at it** |
 | `FrameOverlays.tsx`'s `AS_AT_ONLY_REPORTS` / `FULL_PERIOD_REPORTS` | **D94** (payables is `as-at`) — ⚠️ **a name in NEITHER list is told its F2 period does nothing** |
 | ⛔ **migration `0076` (D95) is the new highest restatement — FOURTEEN PERFORMs** | **D94's ACL migration is 0077 and derives from 0076**, not 0073 |
@@ -911,10 +899,11 @@ own tenant through the product's own route. **That is the pattern the rest would
 two client-heavy rows that forced serialisation (D22+D52) are done: **D95** (a migration + a wire
 oracle), **D49** (insightd, a separate service), **D8** and **D86** (backend-only — and "ALONE" stops
 meaning "serial" once each has its own stack) and **D83** (backend-only) are all genuinely concurrent
-once slots exist. ⚠️ **That is five of the nine, so call it ~3× rather than 5×:** the DEPENDENCIES in §1
+once slots exist. ⚠️ **That is five of the SEVEN that remain, so call it ~3× rather than 5×:** the DEPENDENCIES in §1
 do not go away when the stacks multiply — **D49 still has to finish before D85 starts, and D86 before
-D94**, because those are orderings in the PRODUCT and not contention for a port. **D81 and D94 both
-churn client screens and should stay serial with each other.**
+**D94**, because those are orderings in the PRODUCT and not contention for a port. ⚠️ **D94 is now the
+only remaining client-screen row**, so the "keep the screen-churning rows serial" caveat that used to
+pair it with D81 no longer binds anything.
 **The user's standing decision as of 2026-08-22 is to keep going serially.** Raise it again only if
 they ask.
 
