@@ -164,6 +164,20 @@ const levelID = await (async () => {
         // …and the ONE refusal this row exists to make writable. At specificity 2 it
         // beats the coarse allow above; before D94 there was no name to put here.
         { effect: "disallow", action: "display", resource: "report:bills-payable" },
+        // ⛔⛔ AND THE PAYMENT CLASS, WHICH IS WHAT MAKES THIS LEVEL THE ONE D97 IS
+        // ABOUT (added L26). The tenant that wants this split is not banning a
+        // clerk from paying suppliers — it is saying "pay them, but you may not
+        // read the whole payables book". Without these three the level cannot key
+        // a Payment at all, and the picker arm below would assert that a clerk who
+        // cannot pay anybody should still be handed a supplier's open bills.
+        //
+        // ⚠️ `sales` IS DELIBERATELY LEFT OFF, and that absence is the negative
+        // control the picker arms use: same token, two classes, one held and one
+        // not. It is what distinguishes "the class is the authority" from "the new
+        // route is a free pass".
+        { effect: "allow", action: "create", resource: "payment" },
+        { effect: "allow", action: "alter", resource: "payment" },
+        { effect: "allow", action: "display", resource: "payment" },
       ],
     },
   });
@@ -231,12 +245,32 @@ rec("D97: ⛔ …and neither does the PRINTED form",
 // PICKER. If this were 403 too, the row would be "closed" by taking away the read a
 // Payment needs — and every settlement that clerk keys would land ON ACCOUNT, the
 // balance nobody can chase. That is the failure the whole design decision avoids.
+//
+// ⛔ THIS CLERK HOLDS `display payment` AND IS DENIED `report:bills-payable`. That
+// pair is the entire point: the two authorities are now separable, and the one that
+// governs settling a bill is the one that governs keying the voucher.
 const picker = await j("GET",
     `${base}/vouchers/payment/open-bills/${L.supplier}?kind=PAYABLE`, { token: CLERK_TOK });
 rec("D97: ⛔⛔ CONTROL — the SAME clerk still lists that supplier's open bills to settle one",
     picker.status === 200 && Array.isArray(picker.body.bills),
     `GET /vouchers/payment/open-bills/{supplier}?kind=PAYABLE = ${picker.status}` +
     (picker.status === 200 ? ` bills=${picker.body.bills.length} party=${JSON.stringify(picker.body.ledger)}` : ""));
+// ⛔⛔ AND THE NEGATIVE CONTROL, ON THE SAME TOKEN AND THE SAME LEDGER: a class this
+// level does NOT hold. Without it the arm above would read equally well as "the new
+// route lets anybody in", which is a worse leak than the one being closed. The ONLY
+// difference between these two requests is the class segment — which is the claim.
+const pickerDenied = await j("GET",
+    `${base}/vouchers/sales/open-bills/${L.supplier}?kind=PAYABLE`, { token: CLERK_TOK });
+rec("D97: ⛔⛔ …but NOT under a class it does not hold — the class IS the authority",
+    pickerDenied.status === 403,
+    `same token, same ledger, class=sales (not granted) = ${pickerDenied.status} ` +
+    `vs class=payment (granted) = ${picker.status}`);
+// ⛔ AND IT IS THE PAYABLES DATA — the very rows the clerk was just refused as a
+// REPORT. An arm that only proved "200" would pass on an empty body.
+rec("D97: ⛔ …and the bill it lists IS the supplier bill the REPORT refused it",
+    picker.status === 200 && picker.body.bills.some((b) => b.ref_name === `D94/PAY/${stamp}`),
+    `bills = ${picker.status === 200 ? JSON.stringify(picker.body.bills.map((b) => b.ref_name)) : "n/a"} ` +
+    `(the same D94/PAY/${stamp} that /bills-payable answered 403 for)`);
 // ⛔ AND WHAT IT NO LONGER CARRIES. The picker used to receive the WHOLE book —
 // every party's bills and the ageing totals — to render one supplier's list. A door
 // that still handed those over would be the same disclosure wearing a new path.

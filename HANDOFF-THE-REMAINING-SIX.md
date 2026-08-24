@@ -4,14 +4,22 @@
 > Full records: `HANDOFF-PARITY-AUDIT.md` §7.5 **L21** (D85) · **L22** (D8) · **L23** (D86) · **L24** (D94)
 > · **L25** (D83).
 >
-> ⛔⛔ **POSITION 1 IS NOW D97, AND IT IS NOT A BUILD — IT NEEDS THE USER FIRST.** It is the only OPEN row.
-> A level carrying `disallow display report:bills-payable` is refused the payables report **and can still
-> read the same figures as `GET /outstandings?kind=PAYABLE`** (measured in `drive-l24-d94.mjs` as an
-> explicit arm: 403 on one, 200 with the same total on the other). **The rule governs the DOOR, not the
-> bytes.** ⛔ **DO NOT "FIX" IT WITH A `routeAction` CHANGE** — that read is what the bill-wise picker uses
-> when a clerk keys a Payment, and refusing it there pushes the money onto ON ACCOUNT, the balance nobody
-> can chase. The decision to put to the user is what the PICKER is authorised as, separately from the
-> REPORT. Full statement of the residual and its anchors: §7.1 row **D97**.
+> ✅✅ **L26 CLOSED D97 — THE REGISTER IS EMPTY. 97 registered · 97 CLOSED · 0 OPEN · 0 PARTIAL.**
+> It was never a build: the options were put to the user and the user chose. The bill-wise picker now has a
+> PARTY-SCOPED door of its own — `GET /vouchers/{class}/open-bills/{ledgerID}?kind=` — authorised as **the
+> VOUCHER CLASS being keyed**, which is the authority a clerk keying that voucher already holds, so **no
+> migration was needed and no default-deny level can lose its picker on upgrade**. With nothing left needing
+> it, `?kind=PAYABLE` is **retired from BOTH ageing doors, JSON and PRINTED**, by a 308 to `/bills-payable`
+> — so a stale bookmark stays an answer and the refusal still comes from the middleware. Full record:
+> `HANDOFF-PARITY-AUDIT.md` §7.5 **L26** · §7.1 row **D97**.
+>
+> ⚠️ **TWO THINGS L26 FOUND THAT THE ROW DID NOT SAY**, both by measuring before proposing: the **PRINTED**
+> door had the identical leak (closing only the JSON one would have been §5.19 exactly), and the picker was
+> **over-reading** — it fetched the WHOLE ageing book and narrowed it in the browser. ⛔ **And its first
+> drive run FAILED ITS OWN CONTROL**: the probe's clerk had no Payment class at all, so the 403 was correct
+> and the FIXTURE was wrong. That absence became the negative control — same token, same ledger,
+> `class=payment` 200 vs `class=sales` 403 — which is what makes the 200 mean "the class is the authority"
+> rather than "the new route lets anybody in".
 >
 > ⚠️ **AND THE ONE PIECE OF UNFINISHED BUSINESS THAT IS NOT A ROW:** §8's B / C / D are still open outside
 > the register, and §9's "once done" phase (T32 Tally XML import is the COMMERCIAL BLOCKER) has not begun.
@@ -44,7 +52,7 @@ to do next, in what order, what proves it, what will go wrong. Execute it top to
 
 ## ⛔ THE COUNT, RE-DERIVED BY PARSING §7.1 — NOT COPIED FROM A HEADER
 
-**97 registered · 96 CLOSED · 1 OPEN · 0 PARTIAL.** `96 + 1 = 97`.
+**97 registered · 97 CLOSED · 0 OPEN · 0 PARTIAL.** `97 + 0 = 97`.
 (`93 · 81 · 8 · 4` before L16 · `94 · 85 · 9 · 0` after L16 p0 · `96 · 87 · 9 · 0` after L16 p1 ·
 `96 · 88 · 8 · 0` after L17 · `96 · 89 · 7 · 0` after L18 · `96 · 90 · 6 · 0` after L19 ·
 `96 · 91 · 5 · 0` after L20 · `96 · 92 · 4 · 0` after L21 · `96 · 93 · 3 · 0` after L22 · `96 · 94 · 2 · 0` after L23 · `97 · 95 · 2 · 0` after **L24**, the FIRST lane in seven to ADD
@@ -90,7 +98,8 @@ written in L16 broke it again — one carried a literal ` | ` inside its status 
 ⚠️ **VALIDATE ANY PARSER CHANGE BY RE-DERIVING THE OLD NUMBER FROM THE OLD FILE.** ⚠️ **And it prints a
 `?` bucket on purpose** — a row matching nothing must be SEEN, not folded into a plausible total.
 
-**OPEN (1):** **D97** — and it is a DESIGN DECISION, not a build. See the header.
+**OPEN: none.** ✅ **D97 was the last, and L26 closed it** — see the header. The parser was re-run AFTER
+the row was rewritten (§5.21's rule) and prints no `?` bucket.
 **PARTIAL: none**, and there should never be another: **`PARTIAL` is how a hidden build survives for
 three sessions** (that was D13). A row is CLOSED, or OPEN, or TWO rows.
 
@@ -156,7 +165,7 @@ builds** (the only genuinely concurrent probe).
 | ~~0~~ | ~~**D86**~~ | MED | ✅ **CLOSED L23 2026-08-24.** Unbounded with no `as_on`; TWO Go tests inverted; the caption in four copies. §7.5 L23. |
 | ~~0~~ | ~~**D94**~~ | HIGH | ✅ **CLOSED L24 2026-08-24.** A second flat route + the name; **no migration, 0077 still free**; registered **D97**. §7.5 L24. |
 | ~~0~~ | ~~**D83**~~ | LOW | ✅ **CLOSED L25 2026-08-24.** An ADVISORY lock on the NAME — the index could not express the rule. §7.5 L25. |
-| **1** | **D97** | LOW | ⛔ **NOT A BUILD.** The payables rule governs the DOOR, not the bytes. **Needs the user before it needs code** — see the header and §7.1. |
+| ~~1~~ | ~~**D97**~~ | LOW | ✅ **CLOSED L26 2026-08-24.** Not a build — a decision the user took. The picker got its own door under the CLASS's authority; `?kind=PAYABLE` retired from both ageing doors. §7.5 L26. |
 
 ✅ **EVERY ORDERING AND EVERY "ALONE" CONSTRAINT IN THIS FILE IS NOW SPENT** — ~~D49→D85~~ ·
 ~~D86→D94~~ · ~~D85/D8/D86/D83 alone~~. ⚠️ **D97 has no ordering constraint and is a DESIGN decision, not a

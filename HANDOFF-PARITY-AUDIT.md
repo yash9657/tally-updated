@@ -948,7 +948,7 @@ WORK"** — not "hard to fix".
 | **D94** | 3 | HIGH | ⛔ **THE PAYABLES AGEING REPORT HAS NO DOOR: the server serves it, and nothing in the product can ask for it.** Split out of **D13** on 2026-08-23 (L16 position 0) because it is a BUILD and a half-closed row was hiding it. **MEASURED ON THE WIRE, not inferred** (§5.1 — this time the register's server-side claim SURVIVED the check), against a binary verified fresh by symbol: `GET /outstandings?kind=PAYABLE` → **200, total 1,04,050.0000, 2 creditors, 4 bills** (`Steel Suppliers` 80,450.0000 / 3 bills · `Delhi Parts` 23,600.0000 / 1 bill), each with its full per-bill array; `?kind=payable` is accepted too, and `?kind=BOTH` is refused **400 `invalid kind (RECEIVABLE\|PAYABLE)`**. So the whole payable direction — every supplier bill the business owes — is live on the transport and unreachable from the app: the client builds `const query: { as_on?: string } = {}` and `kind` is never a member, there is ONE report name (`"Outstandings"`), ONE screen (`report:Outstandings`) and ONE PDP resource. ⛔ **AND IT IS NOT A ONE-LINE `?kind=` TOGGLE — THAT IS THE WHOLE REASON IT IS A ROW.** `routeAction` maps the flat literal path `/outstandings` → `"outstandings"`, so the PDP decides on the report NAME and **a query parameter is invisible to it**; a toggle would make *"the sales clerk may see what customers owe us but not what we owe suppliers"* an **unwritable rule**, and those two lists belong to two different jobs. Migration 0011 seeds Data Entry a COARSE `allow display report` that matches ANY `report:NAME` at specificity 1, so **a new report name arrives PRE-GRANTED** and the refusal is the thing that must be written. | **THE BUILD, and it is the Order Book's treatment end to end** (`0073_order_book_acl.sql` is the template and its header is the argument): (1) a second FLAT LITERAL route beside `/outstandings` — additive, so no existing `acl_rule` row is invalidated; (2) its arm in `routeAction` (`auth_middleware.go:2258`); (3) the name in `authz.KnownReportNames` (`vocabulary.go:457`); (4) the printed form (`handler_print_reports.go` — `printOutstandings` already parses `kind`, and `outstandingKindParam` is SHARED with the JSON handler on purpose, so both directions print from one parser); (5) **migration 0076 = the ACL counterweight**, `disallow display` **and** `disallow print`, no allow seeded, ⛔ **derived from `0073`'s body — the highest-numbered restatement of `seed_company_auth_defaults` (confirmed 2026-08-23) — carrying all THIRTEEN existing `PERFORM`s plus the new one, or every fresh database silently loses rules** (the defect `0071` exists to repair); (6) the client: the report name in `keystroke/types.ts:290`, the screen in `defaultScreens.tsx:301`, and the screen sending `kind`. | ✅ **CLOSED L24 2026-08-24 — a second FLAT LITERAL route, so the rule can be written at all.** `/bills-payable` beside `/outstandings`, its `routeAction` arm, `bills-payable` in `authz.KnownReportNames`, the printed form from the SAME layout with the kind passed rather than re-parsed, and the client registries (tsc named both `Record<ReportName,…>` tables). ⛔ **ONE WRITER, TWO DOORS ON ALL THREE SIDES** — cored's `writeOutstandings`, the client's `OutstandingsLikeScreen`, the mock's `outstandingsOf` — so the two reports cannot drift while the two RULES stay separate. ⛔⛔ **THE ORACLE'S SECOND ARM, DRIVEN:** a level with `disallow display report:bills-payable` gets **403** on `/bills-payable` and **200 with a row** on `/outstandings`. A `?kind=` toggle could never pass that. ⛔ **AND THE ALIAS THAT LIED IS RE-POINTED:** `REPORT_ALIASES` mapped `"bills payable"` to the RECEIVABLE report and had SHIPPED that way. ⛔⛔ **NO COUNTERWEIGHT MIGRATION, AND 0077 STAYS FREE — a user decision taken on a measurement that contradicts the row's own text.** A seeded Data Entry level ALREADY reads the payables data as `?kind=PAYABLE` (200, measured with a membership control), and NEEDS to: the bill-wise picker on a Payment asks for exactly that, and a clerk refused it settles ON ACCOUNT. The rule is WRITABLE, not written. 3 mutations, driven **15/15**. Full record: §7.5 **L24**. |
 | **D95** | 32 | MEDIUM | ⛔ **THE ANOMALY LIST AND THE CASH-FLOW PROJECTION HAVE NO ACL COUNTERWEIGHT, SO THE SEEDED DATA ENTRY LEVEL CAN READ BOTH — AND THE ANOMALY LIST IS THE CONTROL SURFACE THAT MONITORS THAT VERY OPERATOR.** Migration 0011 seeds Data Entry a COARSE `allow display report` which `internal/authz` matches against ANY `report:NAME` at specificity 1, so **a report name is GRANTED by default and the refusal is the thing that must be written.** Every comparable report in this product has that refusal written: the Stock Summary (0026, it prints cost prices), the other inventory reports (0028), the ITC reports (0033), payroll (0035), the bank statement (0063), the TDS/TCS register (0068), the cost reports (0072) and both order books (0073). **`report:cash-flow` and `report:anomalies` have nothing** — `rg 'cash-flow\|anomalies' backend/migrations` is empty. So a Data Entry clerk can read **every voucher they backdated, keyed after hours, edited three times in a day or wrote for a round amount, by number** — the list a supervisor reads ABOUT them. A control surface visible to the people it monitors is not much of a control. ⚠️ **THIS PREDATES THE SCREEN AND IS NOT CAUSED BY IT:** the routes have been open since wave 2 and were reachable by anyone who knew the URL. What L16 changed is that it is now one keystroke, which is why it is registered rather than left implicit. | **THE FIX IS `0073_order_book_acl.sql` COPIED, and its header is the whole argument:** a new migration writing `disallow display` **and** `disallow print` for BOTH tokens (a report that cannot be displayed but CAN be printed is a leak with a paper trail — 0063/0068/0072/0073 all write the pair), **no allow seeded**, one shared `*_acl_grants()` definition read by both the per-company seeder and the backfill, plus a restatement of `seed_company_auth_defaults` ⛔ **derived from the HIGHEST-NUMBERED restatement at the time and taking a higher number than it** — a body installed lower is overwritten on every fresh database and the rules simply do not exist, which is the defect 0071 exists to repair. `migrations/seeder_census_test.go` guards it statically. ✅ **ASKED AND ANSWERED 2026-08-23: DENY BOTH, NO ALLOW SEEDED** (driver §6.4, which is AUTHORITY). The user endorsed the precedent argument: a forward cash position is a MANAGEMENT report, and a tenant wanting a senior clerk to read it writes an explicit `allow display report:cash-flow` through the admin API — visible in `acl_rule`, chosen rather than inherited. ⛔ **Do not seed an allow back and do not treat the two tokens differently.** Nothing about this row is waiting on the user any more | ✅ **CLOSED 2026-08-23 (L17) — migration 0076, MUTATION-PROVED AND DRIVEN 20/20 on the wire AND in a browser.** ⛔ **THE TWO `display` ROWS ARE THE FIX; THE TWO `print` ROWS ARE DURABILITY, AND BOTH THE MIGRATION HEADER AND THE PROBE SAY SO.** Data Entry was ALREADY 403 on both print forms (0038 seeds no `allow print report:`, 0011's coarse grant is `display`-only, default_access is `none`), so only the display arms go red-to-green — a probe reporting "4/4 green" would be half vacuous. ⛔ **AND THE DRIVER'S STATED ORACLE WAS WRONG:** it said *"an Owner still reads all four"*; printing these two is UNIMPLEMENTED and an Owner gets **501**, which `TestTheUnimplementedReportsAreStillGovernableAndSaySo` actively requires — asserting 200 would have failed on correct code. The arm now asserts 501 **and** that the body names the report, because the Owner's refusal is a MISSING LAYOUT and the clerk's is a POLICY DECISION. ✅ **THE BROWSER ARM IS THE ONE WORTH KEEPING:** L16 shipped a 403-as-a-decision panel on speculation and this row is its FIRST REAL REFUSAL — the clerk reaches Cash Flow from the keyboard and reads *"Your security level may not open the Cash Flow projection. This is a decision recorded against your level, not a failure."* ⚠️ **The probe brings its own tenant and reaps it (D91 pattern)** — the demo tenant has no Data Entry member, and provisioning one there would leave a user `verify:demo` does not tear down |
 | **D96** | 32 | LOW | ⚠️ **insightd's OPTIONAL STATISTICAL FORECAST STILL HAS NO RENDERER — extracted from D22 on closure rather than buried inside it.** This is D72's one surviving clause. D72 was closed 2026-08-21 because its MONEY half was already fixed (`ForecastRequest` takes fixed-4 `Money` strings, gated with a non-vacuity arm), and its remaining clause — *"still not reachable from the keyboard"* — was folded into D22. ⛔ **L16 CLOSED D22 WITHOUT CLOSING THIS**, and the distinction is real rather than pedantic: D22's door was built over **cored's** `GET /cash-flow`, a deterministic open-bill settlement projection. This is a **different service** (insightd), a different endpoint, and a genuinely different method — a STATISTICAL forecast, which cored's own `method` string goes out of its way to say it is not (*"deterministic; no statistics, no model"*). Wiring one did not wire the other. ✅ It already declares `estimate: true` and its own method, so the disclosure work is done on its side. | ✅ DONE — deleted. `insightd/insightd/forecast/` · `api/routes_forecast.py` · `requirements-forecast.txt` · `tests/test_forecast_{api,backtest,no_cored_write}.py`, and the optional mount in `api/app.py` | ✅ CLOSED L19 2026-08-24 — **DELETED, not built.** The user's answer to the row's own prior question (§6.8): cored's projection is explainable to an auditor bill by bill, and a second cash-forward number by a different method with no auditor story invites exactly the confusion the Cash Flow disclosure block exists to prevent. The package, the route, the optional dependency pin and its three test modules are gone; `tests/test_forecast_plane_is_gone.py` keeps them gone. ⚠️ **Needs NO report name and NO ACL counterweight** — contrast D95/0076, which existed because the forecast plane's CORED reports ARE reachable. ⛔ **This LOWERS D49 from 9 routes to 8.** See §7.5 L19 |
-| **D97** | — | LOW | ⚠️ **A LEVEL DENIED `report:bills-payable` CAN STILL READ THE SAME FIGURES AS `GET /outstandings?kind=PAYABLE`.** Found by driving D94's own oracle and MEASURED in `drive-l24-d94.mjs` as an explicit arm: the clerk is 403 on `/bills-payable` and **200 on `/outstandings?kind=PAYABLE`, with the same total**. `routeAction` maps the FLAT LITERAL PATH to the PDP resource, so the receivables route keeps its own name whatever `?kind=` says — **the rule governs the DOOR, not the bytes**, and an administrator writing *"may not see what we owe suppliers"* would not expect that. ⛔ **IT IS NOT SIMPLY A BUG TO PATCH:** `?kind=PAYABLE` on that route is what the BILL-WISE PICKER uses to list a supplier's open bills when a clerk keys a Payment, and refusing it there pushes the money onto ON ACCOUNT — the balance nobody can chase. Any fix has to separate *"read the payables REPORT"* from *"list THIS party's open bills to settle one"*, which is a design decision about what the picker is authorised as, not a route change. | `backend/internal/server/auth_middleware.go` (the `case "/outstandings"` arm — the receivables route keeps its own PDP name whatever `?kind=` says) + `frontend/src/screens/vouchers/BillAllocationPicker.tsx` (the `{kind}` read that must keep working) + `frontend/scripts/drive-l24-d94.mjs` (the arm that MEASURES it) | ⛔ OPEN |
+| **D97** | — | LOW | ✅ **CLOSED L26 2026-08-24.** A level denied `report:bills-payable` could still read the same figures as `GET /outstandings?kind=PAYABLE` — `routeAction` maps the FLAT LITERAL PATH to the PDP resource and a query parameter never reaches it, so **the rule governed the DOOR, not the bytes**. It was NOT patchable where it was found: that read is what the BILL-WISE PICKER uses when a clerk keys a Payment, and refusing it there pushes the money onto ON ACCOUNT. **The user took the design decision** (options put 2026-08-24): (1) the picker gets a PARTY-SCOPED door authorised as **the VOUCHER CLASS being keyed** — `GET /vouchers/{class}/open-bills/{ledgerID}?kind=` — because that is the authority a clerk keying the voucher already holds (migration 0011 seeds `allow display <class>`), so **NO migration is needed and no default-deny level can silently lose its picker on upgrade**; and (2) `?kind=PAYABLE` is **RETIRED** from BOTH ageing doors — JSON *and* PRINTED — with a **308** to `/bills-payable`, so a stale bookmark stays an ANSWER and the refusal still comes from the MIDDLEWARE rather than from a first-ever in-handler 403. The ledger is a PATH segment so there is **no unscoped form of the route to serve** — structure, not validation. The picker also stops over-reading: it used to fetch the WHOLE ageing report and narrow it in the browser; the route emits ONE party, no slab totals, no grand total. ⚠️ **RESIDUAL, STATED NOT HIDDEN:** a level with `display payment` can call the route once per supplier ledger it can already see and rebuild a list by hand — inherent to ANY party-scoped door, and the accepted cost of decision (1). What it can no longer do is read the BOOK. §7.5 **L26**. | `backend/internal/server/auth_middleware.go` (the 4-segment `open-bills` arm) + `backend/internal/server/server.go` (`handleOpenBills`, the 8 literal routes, the 308 in `handleOutstandings`) + `backend/internal/server/handler_print_reports.go` (the PAPER door's 308) + `frontend/src/screens/vouchers/BillAllocationPicker.tsx` (`useOpenBills` reads the new door) + `frontend/scripts/drive-l24-d94.mjs` (**the arm that registered it, now INVERTED**) | ✅ CLOSED |
 
 ### ⛔⛔ §7.2 — THE BACK-DATED CUTOFF TOOK **SIX** DOORS TO CLOSE, AND THAT IS THE SESSION'S MAIN LESSON
 
@@ -3978,3 +3978,111 @@ verify:demo 34/34
 `pnpm vitest run` **1463 / 87 files** · `pnpm exec tsc --noEmit` **clean**.
 ✅ **Seventeen drives now, and the set is still gate-safe** — three of the five lanes added a probe that
 POSTS (l21, l23, l25) and `verify:demo` foots the same 34 checks at both ends.
+
+---
+
+### L26 — 2026-08-24 · D97 CLOSED: the payables rule now governs the BYTES, not just the door
+
+⛔⛔ **THE LAST ROW IN THE REGISTER, AND THE ONLY ONE THAT WAS NEVER A BUILD.** It was registered by L24
+from L24's own oracle, and it was written down as a DESIGN DECISION rather than a defect to patch. **The
+user was brought the options before a line moved, and took them.** 97 registered · **97 CLOSED** · 0 OPEN ·
+0 PARTIAL.
+
+#### ⛔ WHAT WAS MEASURED BEFORE ANYTHING WAS PROPOSED (§3: measure, then ask)
+Four facts, and the third and fourth are the ones that decided it:
+
+1. `routeAction` maps the FLAT LITERAL PATH to the PDP resource (`auth_middleware.go`), and the PDP is
+   **middleware-only** — no handler in `internal/server` consults it and `Server` holds no evaluator. A
+   query parameter cannot reach the decision, so `/outstandings?kind=PAYABLE` is decided as
+   `report:outstandings` no matter what it serves. Both doors share one body (`writeOutstandings`).
+2. ⛔ **THE PRINTED DOOR HAD THE IDENTICAL LEAK AND THE ROW DID NOT MENTION IT.**
+   `/print/reports/outstandings?kind=PAYABLE` is decided as `print report:outstandings`. Closing only the
+   JSON one would have been **§5.19 exactly**: a refusal fully present and fully wrong, with the same rows
+   on a filed sheet.
+3. ⛔ **THE PICKER WAS ALSO OVER-READING, WHICH THE ROW DID NOT SAY.** `BillAllocationPicker` called
+   `getOutstandings(companyID, { kind })` — the WHOLE book — and filtered to one `ledger_id` **in the
+   browser**. To render one supplier's list it received every party's bills, the slab totals and the grand
+   total. There was no party-scoped read anywhere: `reporting.Outstandings`' fifth argument is `slabs`, not
+   a ledger filter.
+4. ⛔⛔ **THE SEEDED LEVELS DECIDED THE ANSWER.** `0011_auth_acl.sql` makes Data Entry `default_access =
+   deny` with `allow display <class>` per class it may key. **A NEW resource token is invisible to every
+   existing default-deny level until a migration grants it** — and a level that loses its picker on upgrade
+   posts every settlement ON ACCOUNT, which is the exact failure the row exists to prevent.
+
+#### ✅ THE DECISION THE USER TOOK
+**(1) The picker is authorised as the VOUCHER CLASS being keyed.**
+`GET /vouchers/{class}/open-bills/{ledgerID}?kind=` — eight literal routes, one handler.
+- The **class** is a literal path segment because that is the PDP's only view of the request. It is also
+  what makes fact 4 harmless: every seeded level that can key the voucher **already holds the rule**, so
+  **no migration, and no upgrade can silently take the picker away**.
+- ⛔ **AND THE INSEPARABILITY IS THE POINT, NOT A COMPROMISE.** A level that may post a Payment but may not
+  pick the bill it settles can only post ON ACCOUNT — the balance nobody can chase. Splitting those two
+  would sell expressiveness for the very failure the row is about.
+- The **ledger** is a path segment so there is **NO unscoped form of the route**. A `?ledger_id=` guarded by
+  a check inside the handler would be the same defect wearing a third name. **Structure, not validation.**
+- It emits ONE party: no slab totals, no grand total, no other party. Fact 3, closed with it.
+
+**(2) `?kind=PAYABLE` is RETIRED from BOTH doors — a 308, not a 400 and not a handler-side 403.**
+Nothing needs the parameter once the picker has its own door. A **redirect** keeps `handleBillsPayable`'s
+own recorded promise that a stale bookmark is an ANSWER, and the follow-up request is a NEW request over a
+DIFFERENT path — so `routeAction` decides it as `report:bills-payable` and **the MIDDLEWARE refuses it**. A
+403 written in the handler would have been the first in-handler authorization decision in this codebase;
+the PDP living in exactly one place is what makes it auditable.
+
+#### ⛔ TWO THINGS RULED OUT BY MEASUREMENT, NOT BY PREFERENCE
+A `routeAction` change (the driver forbade it, and it cannot see `?kind=` anyway); and an in-handler PDP
+re-check to narrow the bytes — measured as a second decision point this codebase has deliberately never
+had.
+
+#### ⛔⛔ THE MUTATIONS — PREDICTIONS WRITTEN BEFORE RUNNING (§5.3), AND ONE OF THEM CORRECTED ME
+**M1 — delete the 4-segment `open-bills` arm from `routeAction`.** Predicted (a) the row's own test fails
+"not mapped by the PDP at all"; (b) `TestEveryCompanyRouteIsMappedAndInVocabulary` fails **8 times**, naming
+each route — the structural gate catching it independently; (c) the non-class guard still passes, so it is
+a guard and not a proof. ✅ **All three observed, verbatim.**
+
+**M2 — delete the 308 from `handleOutstandings`.** Predicted (a) the redirect test fails **by PANIC inside
+`writeOutstandings` on the nil reporting service**, which is itself the observation that the request reached
+the report BODY; (b) the PRINTED test **still passes**, because the paper door is a different function; (c)
+the receivables control still passes. ✅ **All three observed** — and (b) is the proof fact 2 needed its own
+arm: **the JSON fix does not close the paper door.**
+
+**M3 — point the picker back at `getOutstandings`.** Predicted the two D97 arms fail and the "ordinary sale
+asks nothing" control still passes. ✅ Observed — ⚠️ **AND IT CORRECTED THE PREDICTION: five MORE tests
+failed** than I wrote down, because the whole picker file's stubs now pin the new door. The prediction was
+incomplete, not wrong, and the experiment is what said so.
+
+#### ✅⛔ THE DRIVE — AND THE ARM THAT REGISTERED THE ROW WAS **INVERTED**, NOT DELETED
+`drive-l24-d94.mjs`'s residual arm demanded a 200 and got one when it registered D97. It now demands a
+**403** and gets one. **It is the same experiment pointed at the same URL**, which is the strongest form
+this file has: the probe that found the row measures its closure.
+
+⛔⛔ **AND THE FIRST RUN FAILED ITS OWN CONTROL, WHICH IS WHY THE FIXTURE WAS WRONG AND NOT THE DESIGN.**
+The probe's clerk was a *Sales Clerk* with `default_access: none` and **no Payment class at all**, so the
+picker answered 403 — correctly. A level that cannot key a Payment has no business settling a supplier
+bill. The fixture now grants `create|alter|display payment` and **deliberately withholds `sales`**, which
+turns that absence into the negative control:
+```
+same token, same ledger, class=payment (granted) = 200   ·   class=sales (NOT granted) = 403
+```
+⛔ **Without that pair the 200 would read equally well as "the new route lets anybody in"** — a worse leak
+than the one being closed. The only difference between those two requests is the class segment, which IS
+the claim.
+
+And the read is the refused data, not an empty 200: the picker lists `D94/PAY/<stamp>` — **the very bill
+`/bills-payable` had just answered 403 for** — while carrying `keys = bills,found,group,kind,ledger,
+ledger_id,pending`: no `total`, no `slab_totals`, no `parties`.
+
+⚠️ **THE RESIDUAL OF THE FIX, STATED RATHER THAN HIDDEN.** A level with `display payment` can call the
+route once per supplier ledger it can already see and rebuild a list by hand. That is inherent to ANY
+party-scoped door — decision (2)'s alternative had it too — and it is the accepted cost of (1). What it can
+no longer do is read the BOOK: no ageing, no totals, no party it did not name.
+
+#### GATES
+`go build ./...` + `go vet` clean · `go test ./... -count=1` **exit 0, 0 FAIL, 0 SKIP** ·
+`pnpm vitest run` **1466 / 87 files** (+3: the two D97 arms and their absence-control) ·
+`pnpm exec tsc --noEmit` clean, and it named all four picker call sites plus the mock — the closed
+`Record<VoucherType, VoucherClass>` table is what keeps the class in the URL a compile-time fact.
+Binary verified fresh BY SYMBOL: `handleOpenBills` = 1. ⚠️ **AND THE FIRST START SILENTLY DID NOT TAKE** —
+a stale `go run` cored from 15:40 still held :8087 and the fresh binary logged `bind: address already in
+use` while `/healthz` answered 200 from the OLD process. §5.17's trap, wearing a green health check.
+Driven **20/20**, own tenant, reaped.
