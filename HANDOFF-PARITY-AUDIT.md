@@ -900,7 +900,7 @@ WORK"** — not "hard to fix".
 | D46 | 29 | MEDIUM | The Balance Sheet's "Profit & Loss A/c (Current Period)" line ignores F2's From date while the P&L honours it, so the same F2 setting yields 1,16,237.15 on one statement and -37,911.02 on the other, and the Balance Sheet's caption still says "(Current Period)". | backend/internal/reporting/reporting.go:975-977 (`openingBS := decimal.Zero; stockAdj := closing.Sub(openingBS); bs.NetProfit = in … | ✅ **FIXED (L10) — MUTATION-PROVED *AND* DRIVEN 2026-08-20.** See §7.5 |
 | D47 | 29 | MEDIUM | A master creation that the server refuses is reported into a screen that has already been unmounted: Ctrl+A on Create ledger returned the operator to the Gateway with no message while POST /ledgers answered 403 and nothing was created. | frontend/src/screens/masters/MasterCreateScreen.tsx:103-120 (onAccept calls onSelect(n) synchronously, then `create(n, p).catch((e … | ✅ **FIXED (L13) — MUTATION-PROVED *AND* DRIVEN 2026-08-21.** Server refusal, client refusal and the inline `Alt+C` refusal all reach the shell's status line after the frame pops. ⚠️ Driving found the refusal was a RAW POSTGRES ERROR; fixed in the same lane. See §7.5 |
 | D48 | 30 | MEDIUM | A FAILED Ctrl+A still writes to the chart of accounts. resolveDraftLedgers ensures the party ledger and every null posting ledger via real POST /ledgers calls BEFORE the voucher POST is attempted, so an accept the server then rejects leaves an orphan master behind — here 'Sundry Creditor' under 'Sundry Creditors'. | frontend/src/screens/vouchers/draftAccept.ts:274-320 (resolveDraftLedgers: ensureLedger for the party, then each posting) then :33 … | ✅ **CLOSED — audited at HEAD 2026-08-23 (L16 position 0). The draft path discloses its orphans, and the ORDERING now goes further than this row asked.** (1) DISCLOSURE: `postDraftBody` snapshots the chart BEFORE `resolveDraftLedgers`, computes `ledgersMintedByThisAccept(body, resolved, chart)`, and on a refused POST throws `DraftAcceptFailedError` NAMING them — "…had already created 2 new ledger masters (X, Y), which now have no voucher against them. Retrying this accept REUSES them… There is no route that deletes a ledger". Guarded at HEAD by BOTH arms: thrown when masters were minted, and `rejects.not.toBeInstanceOf(DraftAcceptFailedError)` when none were. (2) ⛔ **AND THE RACE LOSER NOW MINTS NOTHING AT ALL** — L15's layer-5 posting claim is taken BEFORE `resolveDraftLedgers` **deliberately, for this row's reason**, documented at the site: "A claim taken after it would mean the loser of a race still left orphan masters behind for a bill it never posted". ⛔ **THIS ROW WAS SCOPING D81** (see §7.1 D81): the draft path is genuinely covered, so **D81 is exactly the VOUCHER-path half and nothing else**, and `DraftAcceptFailedError` + the claim ordering are the two shapes it copies. ⚠️ Anchors `:274-320`/`:33…` are stale — `resolveDraftLedgers` is at `:427`, the mint-and-name block at `:1694-1717` |
-| D49 | 30 | MEDIUM | insightd has no authentication and scopes OCR drafts by the caller-supplied company_id alone, and vite proxies it same-origin at /companies/*. Any company_id lists and fully hydrates another tenant's drafts — supplier names, invoice numbers, dates, posting ledger names, amounts and GST state codes. | insightd/insightd/api/routes_drafts.py:192-219 (list/get keyed only on the path company_id; no auth dependency) + frontend/src/api … | ⛔ **OPEN — and RE-SCOPED 2026-08-24: it is 9 APPLICATION ROUTES, NOT 7, and 13 counting FastAPI's auto-docs.** Verified two ways (every decorator in the package, and the LIVE `/openapi.json`). The "7" counts the six draft routes plus forecast and omits `GET /benchmark/last` and `GET /healthz`; `/docs`, `/redoc`, `/openapi.json` and `/docs/oauth2-redirect` all answer **200** and publish the entire schema, and are absent from `openapi.paths` which is why an openapi-based count misses them. ⚠️ `HANDOFF-RECON-LAST-16.md:44` was more honest ("7 (8)") and later drivers regressed to a bare 7. ⛔⛔ **AND THE BIGGEST TRAP IS SILENT: all FOUR insightd-backed layers of the duplicate-bill guard FAIL OPEN on any non-409 error**, so adding auth before the two client transports learn to send a credential silently collapses the five-door guard to its client-side layers — the accept still succeeds and the only evidence is a `console.warn`. **A gate that checks "accept still works" is GREEN while a money defect is re-opened.** ⚠️ The loopback bind is an ACCIDENT (uvicorn's default, no `--host` in `Makefile:126`), the NetworkPolicy's "only cored may call it" is aspirational (**no cored proxy exists**), and vite's `/companies` prefix is a NAMESPACE GRAB that would send a cored proxy route to insightd instead. Full scope in `HANDOFF-THE-REMAINING-SIX.md` §3 row 2 |
+| D49 | 30 | MEDIUM | insightd has no authentication and scopes OCR drafts by the caller-supplied company_id alone, and vite proxies it same-origin at /companies/*. Any company_id lists and fully hydrates another tenant's drafts — supplier names, invoice numbers, dates, posting ledger names, amounts and GST state codes. | ✅ DONE — cored is the only door. `backend/internal/server/insightd_proxy.go` (the six proxy routes) · the `/drafts` arms + `isDraftPath` in `auth_middleware.go` · six `r.Get/r.Post` lines in `server.go`'s `{companyID}` subtree · `maxDraftUploadBody` + its `bodyCapFor` arm · `insightd/insightd/api/authn.py` (`require_proxy`, `require_service_token`) · `routes_drafts.py`'s router dependency · `app.py` (`openapi_url=None`, the healthz disclosure, the guarded `/benchmark/last`) · `config.py` `service_token` · `api/http.ts` `setSessionFetch` installed by `App.tsx` · `api/insightd.ts` + `draftAccept.ts` `draftPath` under `/v1` · `vite.config.ts` (the `/companies` rule DELETED) · `Makefile` `INSIGHTD_SERVICE_TOKEN` | ✅ **CLOSED L20 2026-08-24 — Option B, cored proxies insightd.** The recommendation on file, re-verified at HEAD rather than trusted: cored's dev issuer mints an EPHEMERAL Ed25519 key and publishes no JWKS, insightd's core deps carry no crypto library at all, and a signature proves *who* and never *which company* — so validating a token inside insightd needed a second copy of cored's PDP in another language. Measured before the build: **8 application routes + 4 auto-docs = 12**, `securitySchemes: None`, and an anonymous `GET :8088/companies/{co}/drafts` returned **15 drafts in full** while cored answered 401 for the same tenant. Now every company-scoped route needs cored's service credential AND the company cored's PDP authorized (`X-Insightd-Company` must equal the path), `/benchmark/last` needs the credential, and the four auto-docs are unmounted. ⛔ **The six routes map onto the EXISTING `purchase` voucher-class token, so no migration and no pre-granted resource** — migration 0011 already grants Data Entry create/display on it, and 0077 stays free for D94. Drive `drive-l20-d49.mjs` **52/52**, including the two arms that prove the row was understood: the CLAIM still reaches insightd (200, read back out of band) with the 409's `detail.code` intact — because all four insightd-backed layers of the duplicate-bill guard fail OPEN on a non-409, so a gate asserting *the accept still works* would be green while a money defect re-opened — and `disallow display purchase` hides the inbox while `disallow create purchase` leaves it readable and refuses the claim. See §7.5 **L20** |
 | D50 | 31 | MEDIUM | A cross-tenant question is not refused. Naming another company by name, by UUID, or asking for "every company" / "all tenants" all return 200 with the caller's OWN table and no statement that the named tenant was ignored. The data is genuinely safe — the compiled SQL carries no company predicate and scoping rests on FORCE RLS pl … | backend/internal/query/translate.go:113-183 (keyword switch; no entity/party/company recognition and no refusal branch — the fallt … | ✅ **FIXED (L5) — MUTATION-PROVED *AND* DRIVEN 2026-08-21.** ⚠️ Three arms refuse (every/all-tenants/UUID); a company named by an UNENUMERATED NAME is still ANSWERED, under the unconditional scope caption — by design, see §7.5 |
 | D51 | 31 | MEDIUM | "total sales" sums vv.taxable_value only. It excludes the GST component of every invoice and excludes credit notes entirely, and the screen discloses neither — so the figure matches no report: 156500.0000 answered, against a net sales-ledger position of 144500.0000 (after a 12000.0000 credit note) and an invoice total of 183080. … | backend/internal/query/translate.go:148-159 (metric sum(taxable_value), filter voucher_type_name = 'Sales' — Credit Note is a sepa … | ✅ **FIXED (L5) — MUTATION-PROVED *AND* DRIVEN 2026-08-21.** 144500 = the P&L Sales line, against 156500 for the old taxable-value shape. See §7.5 |
 | D52 | 32 | MEDIUM | FeaturesScreen advertises "Cash-flow projection and anomaly detection" as state "on" with a note that names no door, while the two AI-native rows immediately above it in the same group name theirs ("Gateway > Bill Inbox", "Gateway > Query"). The capability list overstates what an operator can reach. | frontend/src/screens/FeaturesScreen.tsx:340-354 — :342 note "Gateway > Bill Inbox", :347 note "Gateway > Query", :353 note "Determ … | ✅ **CLOSED 2026-08-23 (L16 position 1), in the SAME COMMIT as D22 — a door without the sentence leaves the note naming no door, and the sentence without the door is worse.** The one row became TWO, each naming its real door (`Alt+G > Cash Flow` / `Alt+G > Anomalies`), matching the form its two AI-native neighbours already used. ⛔ **THE DRIVE'S ARM IS THE POINT OF THE ROW: read F11's note, then FOLLOW ITS OWN INSTRUCTION from the keyboard.** A note that names a door is only true if the door opens, and both do. The old note's `"optional statistical forecast"` clause is GONE (it advertised D96, which has no renderer). ⚠️ **A PINNED COUNT MOVED:** the Alt+E row's "all NINE reports in the Alt+G list" is now ELEVEN — and the four items it enumerated afterwards (Stock Summary, TDS/TCS register, both order books) were ALREADY members of that same list, so the sentence had been double-counting. ⚠️ **AND ONE CLAIM I WROTE INTO IT WAS FALSE AND WAS CHECKED BEFORE SHIPPING:** I added "the Bank Reconciliation Statement" to the exportable list, grepped `useExportAction`, and no BRS screen registers it — removed rather than shipped |
@@ -3277,3 +3277,161 @@ only arithmetic that distinguishes "tests removed with their feature" from "test
 Wire, after restarting insightd onto the change: `/openapi.json` **9 → 8 routes**, the deleted path
 absent, a direct `POST .../forecast/cashflow` answers **404**, `/healthz` still `ok` with all six draft
 routes published.
+
+---
+
+### L20 — 2026-08-24 · D49 CLOSED: insightd authenticated nobody, and cored is now the only door
+
+**Position 1 of `HANDOFF-THE-REMAINING-SIX.md`.** One row, one commit. The driver called it the largest
+of the wave and it was.
+
+#### ⛔⛔ THE NUMBER WAS RIGHT THIS TIME, AND IT WAS RE-DERIVED RATHER THAN TRUSTED
+Three written scopings of this row had said 7, then 9, then 8. **Measured on the live wire before a line
+moved: 8 application routes, `securitySchemes: None`, and `/docs` `/redoc` `/openapi.json`
+`/docs/oauth2-redirect` all 200 — twelve.** The driver's 8 was correct. ⚠️ The four auto-doc routes are
+absent from `openapi.paths`, which is *why* every openapi-based count had missed them, and one
+`openapi_url=None` unmounts all four (FastAPI gates /docs and /redoc on it too).
+
+**And the defect itself, re-driven rather than quoted:**
+```
+GET  :8088/companies/ddb8c6ec-…/drafts   -> 200 · 15 drafts · "Pune Fabricators | 21240.0000"
+GET  :8087/v1/companies/ddb8c6ec-…       -> 401
+```
+
+#### ⛔ OPTION A WAS RE-VERIFIED AS TOO BIG, WHICH IS WHY THE RECOMMENDATION ON FILE HELD
+The recommendation (Option B, cored proxies) was recorded in two earlier handoffs. It was checked, not
+inherited: cored's `devIssuer` generates an **ephemeral** Ed25519 key (no `AUTH_DEV_SIGNING_KEY` anywhere)
+and cored publishes **no JWKS route**, so in dev there is nothing for a second verifier to verify against;
+insightd's core dependency set is pydantic/fastapi/httpx/uvicorn/pypdf, with **no crypto library**, behind
+its own import-lint. And the part that is not a dependency problem: **a signature proves *who*, never
+*which company*.** Membership and the per-(action, resource) rules live in cored's database behind cored's
+PDP, so a token validated inside insightd would need a second copy of that PDP in Python.
+
+#### ⛔⛔ THE TOKEN CHOICE WAS THE LOAD-BEARING DECISION, AND IT AVOIDED A MIGRATION ENTIRELY
+The six proxied routes map onto the **existing `purchase` voucher-class token** — GET → `Display purchase`,
+POST → `Create purchase`. A draft IS a proposed purchase voucher; the accept posts one through
+`POST /vouchers/purchase` moments later.
+- Migration **0011 already seeds Data Entry `allow create|alter|display purchase`**, so the F9 Bill Inbox
+  works for the level that actually keys supplier bills **with no migration** — and **no new resource
+  arrives pre-granted**, so this row owed no ACL counterweight at all (contrast D95 and D94, which exist
+  precisely because a new report NAME arrives granted through 0011's coarse `allow display report`).
+- ⚠️ **A new `draft` token would have been the obvious answer and the wrong one:** it would arrive
+  DENIED for Data Entry (`default_access = 'none'`), and the lane would then have had to write a migration
+  granting it — asking a tenant to re-decide a power they had already given that level.
+- ⛔ **0077 therefore stays free for D94.**
+
+#### THE FIX, IN THREE PLACES THAT HAD TO LAND TOGETHER
+1. **cored** — `insightd_proxy.go`: six routes inside the `{companyID}` subtree, so the same middleware that
+   guards the day book guards the drafts; the upstream path is derived from `routeSuffix`, so it cannot
+   forward a path chi did not route. The company sent onward is the one **the PDP authorized** (from
+   `db.CompanyFromContext`), never `chi.URLParam`.
+2. **insightd** — `api/authn.py`: the credential and the company assertion, attached to the drafts
+   **router** so a route added later inherits it. `/benchmark/last` takes the credential alone (no company
+   to assert); `/healthz` stays anonymous and now states the truth; the auto-docs are unmounted.
+3. **the clients** — `api/http.ts` gains `setSessionFetch`, installed once by the auth gate, resolved
+   **per request** so construction order cannot matter. That is what lets `createInsightdClient()` and
+   `insightdDraftLifecycle()` — both built from module scope, nowhere near the gate — carry the bearer with
+   no plumbing of their own. `vite.config.ts`'s `/companies -> insightd` rule is **deleted**, which closes
+   the namespace grab as well as the exposure.
+
+#### ⛔⛔ THE ARM THE WHOLE ROW TURNS ON, AND WHY "THE ACCEPT STILL WORKS" IS THE WRONG ORACLE
+All four insightd-backed layers of the duplicate-bill guard **fail OPEN on any non-409**: `claimDraftForPost`
+warns and returns null, `draftAlreadyAcceptedInsightd` returns null, `releaseClaimAfterFailure` never throws,
+`recordAccepted` is fire-and-forget. **A 401 lands in every one.** So shipping insightd's refusal before the
+clients could send a credential would have collapsed a five-door guard onto its client-side layers — the
+accept would still succeed, and the only evidence would be a `console.warn`. Hence one commit, and hence the
+two arms that matter:
+- **the CLAIM still reaches insightd (200)**, and `insightd_draft.body.claim_token` was read back **out of
+  band from Postgres** rather than believed from the response (§5.10);
+- **the 409 still carries `detail.code`** (`draft_being_posted`) **through the proxy.** cored's own errors are
+  `{"error": …}`; the proxy passes status, content type and bytes verbatim, and a tidier version of it would
+  have turned three specific refusals into the fail-open branch.
+
+#### ⛔ A STRUCTURAL GATE CAUGHT A CLASS I HAD NOT PREDICTED — AND IT WAS RIGHT TO
+`TestEveryWriteRouteNamingAnExistingDocumentIsAccountedFor` went red on all three `/drafts/{draftID}/…`
+POSTs: a write naming an already-stored document must either have its STORED date judged or be listed in
+`writeRoutesNamingADocumentButNotMovingIt` **with the reason**. They are now listed, with it: a draft is not
+a ledger document — no `voucher_version`, no posting, no figure in any period — and the one that looks like it
+might move something, `accepted`, cannot: it records which voucher a human already posted, and that
+`POST /vouchers/purchase` is where the cutoff judged the date. **This is the round-3 enumeration doing exactly
+what it was built for**, on a route class nobody had in mind when it was written.
+
+#### ⚠️ AND A SILENT TRUNCATION THAT THE MOVE ITSELF CREATED
+`POST .../drafts` carries a **base64 scan** — the Bill Inbox has a file input and does `btoa(binary)` — and
+base64 inflates by 4/3, so an ordinary ~800 KB photo of a bill exceeds 1 MiB on the wire. While the browser
+posted straight to insightd there was no cap in the way at all; routing it through cored put `drainBody`'s cap
+in front of it, and **`drainBody` REPLACES `r.Body` with what it read**. The symptom would have been a 422
+from insightd on a body the operator's own file produced. Fixed with `maxDraftUploadBody` (16 MiB) and its
+own `bodyCapFor` arm, asserted both ways — this is `body_cap_test.go`'s lesson arriving at a second route.
+
+#### THE PREDICTIONS, WRITTEN BEFORE THE BUILD (§5.3), AND HOW THEY LANDED
+- ✅ `test_healthz_DISCLOSES_that_there_is_no_authentication` had to move. It did, renamed, **with the answer
+  its own message demanded** — what a token is checked against — in the docstring.
+- ⛔ **I predicted the opposite of the driver on one point and was right.** The driver said
+  `test_no_ledger_write_endpoint_exists` would go RED and to anticipate it in the commit. It stays **GREEN**,
+  because the credential is a route `Depends` and not middleware: routing runs first, so a path insightd does
+  not serve still answers 404. That test is the product's proof that insightd has no ledger-write route, and
+  401-before-routing would have turned it into a statement about headers. It now drives the path **both**
+  credentialed and anonymous, and says why.
+- ✅ `test_get_draft_other_company_is_404` stays green, re-expressed: the harness stands in for the proxy and
+  asserts the company header from the request PATH, so `OTHER-CO` still 404s — and the property is now about
+  the STORE's scope, which is what it always meant.
+- ✅ The back-dated cutoff reaches `POST /drafts` through the generic peek and is inert: **zero** `voucher_date`
+  occurrences across the whole OCR corpus, and `CreateDraftRequest` has no such field.
+- ⚠️ **Unpredicted:** the stored-date gate above, and `test_hitl_invariant`'s write-client grep firing on my own
+  comments — they cited the test's name, which contains the forbidden token `ledger_write`. **The guard was
+  left alone and the prose was rephrased**; widening an allowlist to silence a failure is what that file
+  forbids, and the token is now avoided deliberately, with a note saying why.
+
+#### THE DRIVE — `frontend/scripts/drive-l20-d49.mjs`, **52/52**
+Two tenants it mints and reaps (the D91 pattern), plus a **read-only** browser arm on the demo tenant so it
+cannot move `verify:demo`. Every refusal asserts the **payload** as well as the status — a 401 that still
+shipped the body would be the same leak with a different number on it. The arms worth naming:
+- six anonymous draft routes → 401, each with the supplier name **absent** from the body;
+- `/benchmark/last` → 401 anonymous **and 200 with the credential** (without that second half the first
+  proves nothing about the credential);
+- the four auto-docs → 404;
+- ⛔ **a caller who HOLDS the service credential but names a company cored did not authorize → 403.** Holding
+  the credential is not holding a tenant, and this is the arm that retires *"caller-supplied company_id in
+  the path"*;
+- through cored: anonymous → 401, **B's owner lists B's drafts → 200 with the supplier name present** (the
+  control, without which every refusal is satisfied by a bricked-up door), and **A's bearer naming B → 403
+  with B's supplier name absent from a 41-byte body** — the string in an A-scoped response was always the
+  defect, not the status code;
+- ⛔ `disallow display purchase` **hides the inbox** while the same clerk still reads the Trial Balance, and
+  `disallow create purchase` **leaves the inbox readable and refuses the claim, with nothing reserved.** That
+  pair is what proves the token choice was understood rather than merely chosen: a mapping that lumped all six
+  routes onto one action could never pass it;
+- browser: the Bill Inbox opens, the LIST went to **`/v1/companies/{co}/drafts` 200**, **nothing** addressed
+  insightd's own prefix, and the row **rendered** (`Pune Fabricators · 21240.0000 · ready · 95%`). A 200 on an
+  empty array would have satisfied the arm above it;
+- ⚠️ **the reap deletes `insightd_draft` too.** Its `company_id` is TEXT with no FK, so nothing in the schema
+  would ever have reported the rows left behind — they would simply accumulate under a company that no longer
+  exists, which is exactly how 61 stray `co-1` drafts were once found.
+
+#### ⚠️ ONE MORE PROBE THE MOVE WOULD HAVE BROKEN — FOUND BY GREPPING, NOT BY RUNNING
+`drive-l11-ai.mjs:119` listed drafts with a bare `fetch("http://localhost:8088/companies/…/drafts")` and **no
+credential at all** — which worked precisely because insightd authenticated nobody. It now goes through cored
+with the bearer it already mints. Left alone it would have thrown `cannot list insightd drafts: HTTP 401`, and
+the next session would have read D16/D18/D19 as broken. §5.15 says re-run the whole set; **grep the set too.**
+
+#### GATES
+`pnpm vitest run` **1450 / 87 files** (+7: four client arms for the session transport — including the
+ORDERING one a mutation bought — and the path pins in `draftAccept.test.ts` **inverted rather than
+deleted**, §5.16) · `pnpm exec tsc --noEmit` clean · insightd pytest **161 passed** (was 154; **+7**, all
+refusal arms) · `go test ./... -count=1` **35 ok / 0 FAIL / 0 SKIP, exit 0**, bracketed with a live `psql`
+· `pnpm contract:cored` **14/14**.
+
+**THE WHOLE DRIVE SET, ON A FRESH SEED, AFTER THE LANE:** `verify:demo` **34/34** → l13 **33/33** ·
+l14 **17/17** · l14b **8/8** · l15-d5 **22/22** · l15c **7/7** · l15d **13/13** · l15f **8/8** ·
+l16-d22 **34/34** · l11-ai **14/14** · l17-d95 **20/20** · **l20-d49 52/52** → `verify:demo` **34/34
+again**. ✅ **The set is still gate-safe with the new probe in it** (§4/§5.15) — l20 mints and reaps its own
+two tenants and its browser arm never presses Ctrl+A.
+⚠️ **AND drive-l16-d22 STILL FINISHES WITHOUT EXITING** (§4's warning, re-confirmed): it printed 34/34 with
+zero `Chrome for Testing` processes alive and then held the pipe. ⛔ **Running the set as
+`node … | tail -4` therefore LOSES that summary** — `tail` emits nothing until EOF, so the sequence stalls
+and killing the node process discards the very line you were waiting for. Write each drive's output to its
+own FILE and judge it there.
+⚠️ **AND A GATE HAZARD WORTH KNOWING:** a `pnpm vitest run` with **9 failing tests** was reported by the
+harness as **exit code 0**. Judge vitest by its printed `Test Files` line, never by the exit status of the
+wrapper that ran it.

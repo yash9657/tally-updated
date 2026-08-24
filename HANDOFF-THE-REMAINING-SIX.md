@@ -1,39 +1,53 @@
 # HANDOFF — THE REMAINING SIX: the register's last rows, in order, with the oracle for each
 
-> ✅ **L18 CLOSED D81** (half A shipped and proven; **half B did not reproduce and the user closed it as
-> such**) and ✅ **L19 CLOSED D96 BY DELETING IT**. Position 1 is **D49**. §6.7 and §6.8 are both ANSWERED
-> — nothing is blocked on the user. Full record: `HANDOFF-PARITY-AUDIT.md` §7.5 **L18** and **L19**.
+> ✅ **L20 CLOSED D49 — cored is the only door to insightd.** Position 1 is now **D85**, and its
+> precondition is met: D85 had to land on the FINAL transport, and the transport is final. Full record:
+> `HANDOFF-PARITY-AUDIT.md` §7.5 **L20**. Nothing is blocked on the user.
 >
-> ⛔⛔ **L19 LOWERED D49: IT IS 8 APPLICATION ROUTES NOW, NOT 9 — 12 WITH THE AUTO-DOCS.**
-> `routes_forecast.py` was one of the nine and it no longer exists. §3 is corrected; the old "9" is wrong
-> wherever it still appears in an older handoff.
+> ⛔ **WHAT D85 MUST NOW KNOW ABOUT THE TRANSPORT IT INHERITS.** The draft routes are **cored** routes
+> (`/v1/companies/{id}/drafts…`), mapped onto the `purchase` voucher-class token (GET → Display, POST →
+> Create). cored forwards to insightd with a service credential and the company its PDP authorized, and
+> **passes insightd's answer back BYTE FOR BYTE** — status, content type and bytes. ⛔⛔ **D85 changes
+> insightd's wire shape, so it MUST NOT reshape that passthrough:** the client's `conflictCode` reads
+> `err.body.detail.code` and only for 409, and all four insightd-backed layers of the duplicate-bill guard
+> fail OPEN on anything else. A mutation proved it: "tidying" the 409 into cored's `{"error": …}` form left
+> the drive at **51/52 with the status arm still green.**
+> ⚠️ **And a new draft-body field now travels through TWO contracts, not one** — insightd's
+> `VoucherDraftBody` (`extra="forbid"`) and cored's proxy is transparent, so nothing in Go needs to change;
+> but `frontend/src/api/draft.ts` still must mirror it with a `= None` default.
+>
+> ✅ **L19 CLOSED D96 BY DELETING IT** and ✅ **L18 CLOSED D81** (half A shipped; **half B did not
+> reproduce and the user closed it as such**). §6.7 and §6.8 are both ANSWERED.
 
 Written 2026-08-24, after **L17 closed D95** (the forecast plane's ACL counterweight, migration 0076).
 This **supersedes `HANDOFF-CLOSE-THE-FINAL-NINE.md`**, whose position 1 is done. It is the DRIVER: what
 to do next, in what order, what proves it, what will go wrong. Execute it top to bottom.
 
-> ⛔⛔ **ONE ROW IN HERE IS MATERIALLY BIGGER THAN THE REGISTER SAYS, AND IT WAS RE-SCOPED BY READING THE
-> CODE RATHER THAN THE ROW.** D49 is **8 routes, not 7** (12 counting the auto-docs) — it read 9 until L19
-> deleted the forecast route. §3 has it in full, and says to re-derive the number from the live
-> `/openapi.json` rather than trust any written copy of it.
-> ⛔ **The OTHER row re-scoped this way was D81 — and re-reading it found half of it DID NOT EXIST.**
-> **Read §3 before estimating anything, and MEASURE before you build or ask.**
+> ⛔ **THE RE-SCOPING LESSON, NOW WITH THREE CASES.** D49 read 7, then 9, then 8 across three written
+> scopings; **L20 measured the live wire and 8 was right** — and the four auto-doc routes that made it 12
+> are absent from `openapi.paths`, which is why every openapi-based count had missed them. D81 was
+> re-scoped the same way and **half of it did not exist**. **Read §3 before estimating anything, and
+> MEASURE before you build or ask.**
 
-> ⚠️ **THE OPEN COUNT FINALLY FELL WITHOUT A NEW ROW APPEARING — the first lane in three.** Do not read
-> that as the pattern changing: D95 was an ACL migration with the design already decided, which is the
-> narrowest kind of lane there is. **L15 found 3 rows while closing 4. L16 found 3 while closing 6.**
-> Plan for the next build-shaped lane to surface something.
+> ⚠️ **THREE LANES NOW WITHOUT A NEW ROW — AND L20 WAS THE BUILD-SHAPED ONE, SO THIS IS WORTH READING
+> CAREFULLY.** It still surfaced two things, neither of them a register row: **a structural gate caught a
+> route class nobody had in mind when it was written** (the stored-date cutoff enumeration, on all three
+> `/drafts/{draftID}` POSTs), and **the move itself created a silent truncation** (drainBody's 1 MiB cap
+> becoming newly binding on a body carrying a base64 scan). **What a lane surfaces is now a gate firing or
+> a false premise rather than a missing row. Re-measure every row before building it.**
 
 ---
 
 ## ⛔ THE COUNT, RE-DERIVED BY PARSING §7.1 — NOT COPIED FROM A HEADER
 
-**96 registered · 90 CLOSED · 6 OPEN · 0 PARTIAL.** `90 + 6 = 96`.
+**96 registered · 91 CLOSED · 5 OPEN · 0 PARTIAL.** `91 + 5 = 96`.
 (`93 · 81 · 8 · 4` before L16 · `94 · 85 · 9 · 0` after L16 p0 · `96 · 87 · 9 · 0` after L16 p1 ·
-`96 · 88 · 8 · 0` after L17 · `96 · 89 · 7 · 0` after L18 · this after **L19**.)
-⚠️ **TWO LANES RUNNING WITHOUT A NEW ROW APPEARING NOW.** L18 still found something the register had
-wrong — **half of D81 did not exist** — so the pattern has not changed, it has changed SHAPE: what a lane
-surfaces is now a false PREMISE rather than a missing row. **Re-measure every row before building it.**
+`96 · 88 · 8 · 0` after L17 · `96 · 89 · 7 · 0` after L18 · `96 · 90 · 6 · 0` after L19 · this after
+**L20**.)
+⚠️ **THREE LANES NOW WITHOUT A NEW ROW APPEARING.** The pattern has not changed, it has changed SHAPE:
+L18 found **half of D81 did not exist**, and L20 found a **gate firing on a route class nobody had in mind**
+plus a truncation the move itself created. What a lane surfaces is now a false PREMISE or a gate, rather
+than a missing row. **Re-measure every row before building it.**
 
 ```bash
 python3 - <<'PY'
@@ -65,7 +79,7 @@ written in L16 broke it again — one carried a literal ` | ` inside its status 
 ⚠️ **VALIDATE ANY PARSER CHANGE BY RE-DERIVING THE OLD NUMBER FROM THE OLD FILE.** ⚠️ **And it prints a
 `?` bucket on purpose** — a row matching nothing must be SEEN, not folded into a plausible total.
 
-**OPEN (6):** D8 · D49 · D83 · D85 · D86 · D94
+**OPEN (5):** D8 · D83 · D85 · D86 · D94
 **PARTIAL: none**, and there should never be another: **`PARTIAL` is how a hidden build survives for
 three sessions** (that was D13). A row is CLOSED, or OPEN, or TWO rows.
 
@@ -117,22 +131,22 @@ down. This is now the cheapest check in the file. Run it on every arm before wri
 
 ## 1. THE ORDER
 
-Cost-and-dependency ordered. **Four hard constraints, and they are not preferences:**
-**D49 → D85** (D85 changes insightd's wire shape; it must land on the FINAL transport) · **D86 → D94**
+Cost-and-dependency ordered. **Three hard constraints left, and they are not preferences:**
+~~**D49 → D85**~~ ✅ **satisfied — D49 closed L20, so D85 is now free to start** · **D86 → D94**
 (both move the Outstandings report) · **D8 ALONE** (it re-prices the balance sheet) · **D83 LAST of the
 builds** (the only genuinely concurrent probe).
 
 | # | Row | Sev | Why here |
 |---|---|---|---|
 | ~~0~~ | ~~**D81**~~ | MED | ✅ **CLOSED L18 2026-08-24.** Half A shipped; **half B did not reproduce.** §7.5 L18. |
-| **1** | **D49** | MED | ⛔ **8 routes — 12 with the auto-docs.** ⚠️ **Every driver before L19 says 9 (and older ones 7); the forecast route was deleted by D96.** Largest of the wave. **Before D85.** |
-| 2 | **D85** | MED | **moves pinned numbers.** ALONE, **after D49.** |
+| ~~0~~ | ~~**D49**~~ | MED | ✅ **CLOSED L20 2026-08-24.** cored proxies insightd; 12 anonymous routes closed, no migration needed. §7.5 L20. |
+| **1** | **D85** | MED | **moves pinned numbers.** ALONE. ✅ **Its precondition is met — the transport is final** (see the header for what it inherits). |
 | 3 | **D8** | HIGH | ⛔ **moves the BALANCE SHEET.** ALONE, release note, serialise with T9. |
 | 4 | **D86** | MED | **moves Outstandings**, inverts a Go test by design. ALONE, **before D94.** |
 | 5 | **D94** | HIGH | the payables door. **After D86.** ✅ **L16 built this exact shape twice — copy `ForecastScreens.tsx`.** |
 | 6 | **D83** | LOW | the register's proposed index **WILL NOT WORK.** The only concurrent probe. |
 
-**Must be ALONE:** D85, D8, D86, D83.  **Must be SERIALISED:** D49→D85 · D86→D94.
+**Must be ALONE:** D85, D8, D86, D83.  **Must be SERIALISED:** ~~D49→D85~~ (D49 done) · D86→D94.
 ✅ **NOTHING IS BLOCKED ON THE USER — §6.7 and §6.8 were both answered 2026-08-24, and §6.7 was then
 RE-ASKED AND REVERSED on a measurement** (D81 half B: does not reproduce, closed as such; D96: delete).
 ⛔ **Do not re-ask either; §6 carries the reasoning and the reversal.**
@@ -210,7 +224,24 @@ Full record: `HANDOFF-PARITY-AUDIT.md` §7.5 **L18**. Three things carry forward
   `VoucherDate` only, so `POST /ledgers` and every other dateless write sails straight through.
   `drive-l18-d81.mjs` has it working end to end, including the reap.
 
-### 1 · D49 — insightd authenticates nobody · ⛔ 8 ROUTES (NOT 7, AND NO LONGER 9) · BEFORE D85
+### ✅ 1 · D49 — CLOSED L20 2026-08-24. cored is the only door. Kept for what it teaches D85.
+Full record: `HANDOFF-PARITY-AUDIT.md` §7.5 **L20**. What carries forward:
+- ⛔⛔ **THE PROXY PASSES insightd's ANSWER BACK BYTE FOR BYTE, AND D85 MUST NOT TIDY IT.** `conflictCode`
+  reads `err.body.detail.code` and only for 409; all four insightd-backed guard layers fail OPEN on
+  anything else. Mutation M3 reshaped it into cored's `{"error": …}` form: the drive went **51/52 with the
+  409 STATUS arm still green** — the money defect with a green gate around it.
+- ✅ **THE SESSION TRANSPORT IS A SOLVED PROBLEM NOW:** `api/http.ts`'s `setSessionFetch`, installed once
+  by the auth gate and resolved **per request**. Any client built without an explicit `fetchImpl` carries
+  the bearer, so a new draft caller needs no plumbing.
+- ⚠️ **`POST .../drafts` HAS ITS OWN BODY CAP** (`maxDraftUploadBody`, 16 MiB) because it carries a base64
+  scan. If D85 adds a field to that body, the cap is already there; if it adds one to a *response*,
+  `maxDraftResponse` (4 MiB) is the number to check.
+- ⚠️ **THE THREE LIFECYCLE POSTS ARE IN `writeRoutesNamingADocumentButNotMovingIt`** with their reason. A
+  fourth draft route needs an entry or that gate goes red — which is the gate working.
+
+<details><summary>The original row text, kept for the measurements in it</summary>
+
+#### D49 — insightd authenticates nobody · ⛔ 8 ROUTES (NOT 7, AND NO LONGER 9) · BEFORE D85
 ⛔⛔ **THE REGISTER'S "7" IS WRONG, EVERY DRIVER BEFORE L18 SAID 7, THIS DRIVER SAID 9, AND IT IS NOW 8.**
 ⚠️ **Read that as a warning about the number, not as a settled fact:** it has been restated wrong three
 times (§5.24). **Re-derive it from the LIVE `/openapi.json` at the moment you start**, which is how both
@@ -291,7 +322,9 @@ anti-fail-open arm above), and `/docs` + `/openapi.json` no longer publish the s
 `try/except ImportError`, so a deploy without it serves **8**); the in-cluster bind host (**no Dockerfile
 exists in the repo** and `/readyz` 404s, so `infra/k8s/base/insightd.yaml` is not a usable reference).
 
-### 2 · D85 — the duplicate-bill guard keys on the POST-redaction number · RECON §3.11 · ALONE · AFTER D49
+</details>
+
+### 2 · D85 — the duplicate-bill guard keys on the POST-redaction number · RECON §3.11 · ALONE · ⛔ NOW POSITION 1
 ✅ **DECIDED: key on a PRE-REDACTION HASH.** Every PII-shaped invoice number collapses to the constant
 `[PAN REDACTED]`, so two different PAN-shaped numbers from one supplier on one date are the same bill to
 the check, and the second accept is refused. Its own advice — *"key its own supplier invoice number"* —
@@ -473,6 +506,10 @@ CO="$(cat /tmp/drive-company-id)" node frontend/scripts/drive-l15c-d92.mjs     #
 CO="$(cat /tmp/drive-company-id)" node frontend/scripts/drive-l15d-d87.mjs     # 13/13 (D87, both doors)
 CO="$(cat /tmp/drive-company-id)" node frontend/scripts/drive-l15f-d90.mjs     # 8/8   (D90)
 CO="$(cat /tmp/drive-company-id)" node frontend/scripts/drive-l16-d22.mjs      # 34/34 (D22/D52/D23)
+CO="$(cat /tmp/drive-company-id)" node frontend/scripts/drive-l11-ai.mjs      # (D16/D18/D19) — ⚠️ its draft
+                                              #   listing goes through CORED now (D49); a bare :8088 fetch 401s
+CO="$(cat /tmp/drive-company-id)" node frontend/scripts/drive-l20-d49.mjs     # 52/52 (D49) — wire + a READ-ONLY
+                                              #   browser arm; makes and REAPS its own two tenants
 node frontend/scripts/drive-l17-d95.mjs        # 20/20 (D95) — ⛔ takes NO `CO`: it makes its OWN tenant
                                               #   with its OWN Data Entry member and REAPS it (D91 pattern)
 cd frontend && pnpm contract:cored                     # 14/14 — ⛔ NO `CO`, it makes its own tenant (D91)
@@ -808,10 +845,16 @@ the same edit a pinned count moved (`NINE` → `ELEVEN` reports in the Alt+G lis
    forecast plane's two reports ARE reachable). ⚠️ **The oracle is therefore a DELETION oracle:** the path is
    gone from the package, `/openapi.json` no longer carries it, and nothing else imported it.
 
-## 7. WHAT L15-L17 CHANGED THAT THE REMAINING ROWS TOUCH
+## 7. WHAT L15-L20 CHANGED THAT THE REMAINING ROWS TOUCH
 
 | Change | Who it affects |
 |---|---|
+| ⛔ **the drafts are CORED routes now** — `/v1/companies/{id}/drafts…`, proxied to insightd (L20/D49) | **D85** — it changes insightd's wire shape and now travels through a proxy that **passes the answer back byte for byte**. ⛔ Do not reshape it: `conflictCode` reads `err.body.detail.code` for 409 only, and every insightd-backed guard layer fails OPEN on anything else |
+| ✅ `setSessionFetch` in `api/http.ts`, installed by `App.tsx`'s auth gate, **resolved per request** (L20) | **any** new client built at module scope — it inherits the bearer with no plumbing. ⚠️ An explicit `fetchImpl` still wins, so every test seam is unaffected |
+| `maxDraftUploadBody` (16 MiB) + its `bodyCapFor` arm (L20) | **D85** if it grows the draft-create body. ⚠️ `drainBody` REPLACES `r.Body` with what it read, so the two caps must agree or the handler is fed a truncated body |
+| the three `/drafts/{draftID}` POSTs in `writeRoutesNamingADocumentButNotMovingIt` (L20) | **any** new draft route — it needs an entry with a REASON, or `TestEveryWriteRouteNamingAnExistingDocumentIsAccountedFor` goes red. That is the gate working |
+| ⛔ **vite no longer proxies `/companies`** (L20) | **anyone adding a route**: the namespace grab is gone, so a cored route at `/companies` is no longer silently delivered to insightd — but `/v1` is still the only prefix cored's router answers |
+| `INSIGHTD_SERVICE_TOKEN` on BOTH processes (`Makefile`) | **the stack**: with it unset, cored answers 503 naming the variable and insightd answers 503 saying it is unconfigured. Two loud refusals, never a quiet open door |
 | `screenRefusal()` / `ScreenActionResult.refused` (D92) | ⚠️ **still live, still correct, and still never reached from `onAccept`** — which returns void. L18 left it that way deliberately: §6.7 was re-asked and the answer became "do not build it". |
 | the D89 guard keeping an ALTER frame put (`navMachine.ts:1281`) | ✅ unchanged by L18 — the accept reducer still replaces a CREATE frame, and that is now known to cost nothing |
 | `voucherAcceptFailure` / `VoucherAcceptFailedError` (L18, renamed from `DraftAcceptFailedError`) | ⛔ **the ONE writing of the orphan sentence**, used by the draft accept AND `VoucherScreen`. Do not write a second. |
