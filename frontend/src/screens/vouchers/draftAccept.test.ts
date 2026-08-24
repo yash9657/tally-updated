@@ -1008,8 +1008,8 @@ describe("LAYER 4 — insightd's terminal draft state (the root fix)", () => {
     // screen does not pass a draft id. ⛔ TWO posts, in THIS order: the draft is
     // RESERVED first and confirmed second.
     expect(fake.posts.map((p) => p.path)).toEqual([
-      `/companies/${COMPANY}/drafts/D-1/claim`,
-      `/companies/${COMPANY}/drafts/D-1/accepted`,
+      `/v1/companies/${COMPANY}/drafts/D-1/claim`,
+      `/v1/companies/${COMPANY}/drafts/D-1/accepted`,
     ]);
     expect(fake.posts[1]!.body).toEqual({
       voucher_id: first.voucher_id,
@@ -1075,8 +1075,8 @@ describe("LAYER 4 — insightd's terminal draft state (the root fix)", () => {
     await flush();
     expect(listed).toHaveBeenCalledWith("D-1");
     expect(fake.posts.map((p) => p.path)).toEqual([
-      `/companies/${COMPANY}/drafts/D-1/claim`,
-      `/companies/${COMPANY}/drafts/D-1/accepted`,
+      `/v1/companies/${COMPANY}/drafts/D-1/claim`,
+      `/v1/companies/${COMPANY}/drafts/D-1/accepted`,
     ]);
   });
 
@@ -1332,8 +1332,8 @@ describe("THE CONTROL — a normal FIRST accept is untouched by all four layers"
     // voucher was posted and CONFIRMED after — claim -> post -> confirm.
     expect(fake.rows[0]!.status).toBe("accepted");
     expect(fake.posts.map((p) => p.path)).toEqual([
-      `/companies/${COMPANY}/drafts/D-1/claim`,
-      `/companies/${COMPANY}/drafts/D-1/accepted`,
+      `/v1/companies/${COMPANY}/drafts/D-1/claim`,
+      `/v1/companies/${COMPANY}/drafts/D-1/accepted`,
     ]);
     // The confirm CLEARED the lease: an accepted draft is nobody's work in progress.
     expect(fake.rows[0]!.claim_token).toBeNull();
@@ -1504,8 +1504,8 @@ describe("LAYER 5 — the posting claim (reserve before posting, not check befor
     // bill the operator can neither post NOR release — worse than the duplicate this
     // whole layer prevents. The release is on the wire, and the lease is GONE.
     expect(fake.posts.map((p) => p.path)).toEqual([
-      `/companies/${COMPANY}/drafts/D-1/claim`,
-      `/companies/${COMPANY}/drafts/D-1/claim/release`,
+      `/v1/companies/${COMPANY}/drafts/D-1/claim`,
+      `/v1/companies/${COMPANY}/drafts/D-1/claim/release`,
     ]);
     expect(fake.rows[0]!.claim_token).toBeNull();
     expect(fake.rows[0]!.status).toBe("ready");
@@ -1540,7 +1540,7 @@ describe("LAYER 5 — the posting claim (reserve before posting, not check befor
     // fail too. Stranding the bill here would be a self-inflicted outage.
     expect(spy).not.toHaveBeenCalled();
     expect(fake.posts.map((p) => p.path)).toContain(
-      `/companies/${COMPANY}/drafts/D-1/claim/release`,
+      `/v1/companies/${COMPANY}/drafts/D-1/claim/release`,
     );
     expect(fake.rows[0]!.claim_token).toBeNull();
   });
@@ -1693,8 +1693,8 @@ describe("LAYER 5 on the EDITED accept path (the same funnel, the same reservati
     await flush();
 
     expect(fake.posts.map((p) => p.path)).toEqual([
-      `/companies/${COMPANY}/drafts/D-1/claim`,
-      `/companies/${COMPANY}/drafts/D-1/accepted`,
+      `/v1/companies/${COMPANY}/drafts/D-1/claim`,
+      `/v1/companies/${COMPANY}/drafts/D-1/accepted`,
     ]);
     expect(fake.rows[0]!.status).toBe("accepted");
   });

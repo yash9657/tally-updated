@@ -10,11 +10,14 @@
  * that must agree to the paisa. Those are the ones that caught real bugs.
  */
 
-import { createRestClient, createInsightdClient } from "../src/api";
+import { createRestClient, createInsightdClient, createHttpClient } from "../src/api";
 import type { CoredClient } from "../src/api";
 
 const baseUrl = process.env.CORED_BASE_URL ?? "http://localhost:8087";
-const insightdUrl = process.env.INSIGHTD_BASE_URL ?? "http://localhost:8088";
+// ⛔ D49: the draft routes moved behind cored, so there is no insightd URL to
+// configure here and the draft check below runs on cored's base with cored's
+// bearer. A direct call to insightd would now be REFUSED (401), which would look
+// like a broken invariant rather than a working control.
 const SEED_SUBJECT = process.env.SEED_SUBJECT ?? "browser-dev-owner";
 const companyID: string = (() => {
   const id = process.argv[2];
@@ -126,7 +129,9 @@ async function getJSON<T>(path: string, headers: Record<string, string>): Promis
 async function main(): Promise<void> {
   const headers = await authHeaders();
   const client: CoredClient = createRestClient({ baseUrl, headers });
-  const insightd = createInsightdClient({ baseUrl: insightdUrl });
+  const insightd = createInsightdClient({
+    http: createHttpClient({ baseUrl, headers }),
+  });
   const co = companyID;
 
   console.log(`\nVERIFYING ${co}\n`);
@@ -399,9 +404,11 @@ async function main(): Promise<void> {
       "no drafts — is insightd running with INSIGHTD_DATABASE_URL set?");
   } else {
     const d = drafts[0]!;
-    const full = (await (
-      await fetch(`${insightdUrl}/companies/${co}/drafts/${d.draft_id}`)
-    ).json()) as {
+    // ⚠️ THROUGH THE CLIENT, NOT A BARE fetch (D49). A raw fetch here would have
+    // to rebuild cored's path AND carry the bearer, and the version that forgot
+    // either would report "no drafts" — an invariant failure that looks like a
+    // seeding bug. The typed client already holds both.
+    const full = (await insightd.getDraft(co, d.draft_id)) as unknown as {
       body: {
         voucher_date: string;
         party: string;

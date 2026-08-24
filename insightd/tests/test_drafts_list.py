@@ -7,7 +7,6 @@ exact derivations and the RLS-style empty-collection contract.
 
 from __future__ import annotations
 
-from fastapi.testclient import TestClient
 
 from insightd.api.app import create_app
 from insightd.api.deps import get_draft_store
@@ -19,14 +18,14 @@ from insightd.contracts.draft import (
 )
 from insightd.contracts.cored_map import VoucherDraftBody
 
-from conftest import load_fixture
+from conftest import ProxyTestClient, load_fixture
 
 
 def _client():
     app = create_app()
     store = DraftStore()
     app.dependency_overrides[get_draft_store] = lambda: store
-    return TestClient(app), store
+    return ProxyTestClient(app), store
 
 
 def _post_fixture(client, fid):

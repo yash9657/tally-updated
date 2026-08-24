@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { createInsightdClient } from "./insightd";
-import { createHttpClient } from "./http";
+import { createHttpClient, setSessionFetch } from "./http";
 import type { PurchaseVoucherDraft, CreateDraftRequest } from "./draft";
 
 /** A minimal but contract-shaped draft for the fetch stub to echo back. */
@@ -39,7 +39,7 @@ function sampleDraft(): PurchaseVoucherDraft {
 }
 
 describe("InsightdClient over a stub fetch", () => {
-  it("getDraft hits the company-scoped draft route (NO /v1) with GET", async () => {
+  it("getDraft hits cored's company-scoped draft route UNDER /v1, with GET", async () => {
     const calls: { url: string; init?: RequestInit }[] = [];
     const draft = sampleDraft();
     const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
@@ -58,7 +58,7 @@ describe("InsightdClient over a stub fetch", () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.url).toBe(
-      "http://insightd.test/companies/co-1/drafts/draft-1",
+      "http://insightd.test/v1/companies/co-1/drafts/draft-1",
     );
     expect(calls[0]?.init?.method).toBe("GET");
     // Parsed JSON round-trips; money stays a string.
@@ -79,7 +79,7 @@ describe("InsightdClient over a stub fetch", () => {
     });
     await client.getDraft("co/1", "draft 7");
     expect(calls[0]?.url).toBe(
-      "http://insightd.test/companies/co%2F1/drafts/draft%207",
+      "http://insightd.test/v1/companies/co%2F1/drafts/draft%207",
     );
   });
 
@@ -109,9 +109,97 @@ describe("InsightdClient over a stub fetch", () => {
     const got = await client.createDraft("co-1", req);
 
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.url).toBe("http://insightd.test/companies/co-1/drafts");
+    expect(calls[0]?.url).toBe("http://insightd.test/v1/companies/co-1/drafts");
     expect(calls[0]?.init?.method).toBe("POST");
     expect(calls[0]?.init?.body).toBe(JSON.stringify(req));
     expect(got.status).toBe("ready");
+  });
+});
+
+describe("⛔ THE DRAFT CLIENT INHERITS THE SESSION BEARER (register row D49)", () => {
+  /**
+   * ⛔⛔ WHY THIS ARM EXISTS AND WHY "THE ACCEPT STILL WORKS" IS NOT AN ORACLE.
+   *
+   * The Bill Inbox and the draft-accept lifecycle both build their transport from
+   * MODULE SCOPE — `createInsightdClient()` with no arguments — nowhere near the
+   * auth gate. Their routes are cored routes now, so a transport with no bearer
+   * gets 401 on every one of them.
+   *
+   * And a 401 there is SILENT. Every insightd-backed layer of the duplicate-bill
+   * guard fails OPEN on a non-409: claimDraftForPost warns and returns null,
+   * draftAlreadyAcceptedInsightd returns null, releaseClaimAfterFailure never
+   * throws, recordAccepted is fire-and-forget. So an unauthenticated draft client
+   * does not break the accept — it quietly collapses a five-door duplicate guard
+   * onto its client-side layers and re-opens a money defect, with a console.warn
+   * as the only evidence. A test that asserted "the accept succeeded" would be
+   * GREEN through exactly that.
+   *
+   * So this asserts the CREDENTIAL REACHED THE WIRE.
+   */
+  it("a client built with NO transport sends the session bearer", async () => {
+    const seen: { url: string; auth: string | null }[] = [];
+    // Stands in for App.tsx's bearerFetch: a fetch that attaches the session's
+    // bearer to whatever it is handed.
+    const sessionImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const headers = new Headers(init?.headers ?? {});
+      headers.set("Authorization", "Bearer session-token");
+      seen.push({ url: String(input), auth: headers.get("Authorization") });
+      return new Response(JSON.stringify([]), { status: 200 });
+    }) as typeof fetch;
+
+    setSessionFetch(sessionImpl);
+    try {
+      // No baseUrl, no http, no fetchImpl — the module-scope default.
+      await createInsightdClient().listDrafts("co-1");
+    } finally {
+      setSessionFetch(null);
+    }
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.url).toBe("/v1/companies/co-1/drafts");
+    expect(seen[0]?.auth).toBe("Bearer session-token");
+  });
+
+  it("an explicit transport still wins over the session one", async () => {
+    const sessionCalls: string[] = [];
+    setSessionFetch((async () => {
+      sessionCalls.push("session");
+      return new Response("[]", { status: 200 });
+    }) as typeof fetch);
+    const explicitCalls: string[] = [];
+    try {
+      const client = createInsightdClient({
+        http: createHttpClient({
+          baseUrl: "http://explicit.test",
+          fetchImpl: (async (url: string | URL) => {
+            explicitCalls.push(String(url));
+            return new Response("[]", { status: 200 });
+          }) as typeof fetch,
+        }),
+      });
+      await client.listDrafts("co-1");
+    } finally {
+      setSessionFetch(null);
+    }
+    expect(explicitCalls).toEqual(["http://explicit.test/v1/companies/co-1/drafts"]);
+    expect(sessionCalls).toEqual([]);
+  });
+
+  it("with NO session installed it falls back to the global fetch", async () => {
+    // ⚠️ THE CONTROL. Without this the arm above would pass on a client that
+    // simply never worked at all, and mock mode (which installs no session) would
+    // be broken with nothing noticing.
+    const original = globalThis.fetch;
+    const globalCalls: string[] = [];
+    globalThis.fetch = (async (url: string | URL) => {
+      globalCalls.push(String(url));
+      return new Response("[]", { status: 200 });
+    }) as typeof fetch;
+    try {
+      await createInsightdClient({ baseUrl: "http://fallback.test" }).listDrafts("co-1");
+    } finally {
+      globalThis.fetch = original;
+    }
+    expect(globalCalls).toEqual(["http://fallback.test/v1/companies/co-1/drafts"]);
   });
 });

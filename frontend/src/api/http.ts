@@ -116,10 +116,61 @@ export function filenameFromDisposition(header: string | null): string | null {
   return bare?.[1]?.trim() ?? null;
 }
 
+/**
+ * THE SESSION TRANSPORT — the one fetch that carries the signed-in bearer.
+ *
+ * ⛔⛔ WHY THIS EXISTS (register row D49). The Bill Inbox and the draft-accept
+ * lifecycle build their transports THEMSELVES, from module scope, nowhere near
+ * the auth gate — `createInsightdClient()` and `insightdDraftLifecycle()` both
+ * default to a client nobody handed them. That was harmless while those routes
+ * went to a service that authenticated nobody; now they are cored routes under
+ * `/v1/companies/{id}/drafts`, and a transport with no bearer gets 401 on every
+ * one of them.
+ *
+ * ⛔ AND A 401 THERE IS SILENT. All four insightd-backed layers of the
+ * duplicate-bill guard fail OPEN on any non-409 — `claimDraftForPost` warns and
+ * returns null, `draftAlreadyAcceptedInsightd` returns null,
+ * `releaseClaimAfterFailure` never throws, `recordAccepted` is
+ * fire-and-forget — so an unauthenticated draft client does not break the accept.
+ * It quietly collapses a five-door guard onto its client-side layers and re-opens
+ * a duplicate-supplier-bill defect, with a console.warn as the only evidence.
+ *
+ * So the auth gate installs its bearer-carrying fetch here, ONCE, and every
+ * client built without an explicit `fetchImpl` inherits it.
+ *
+ * ⚠️ IT IS RESOLVED PER REQUEST, NOT AT CONSTRUCTION. A client built before the
+ * gate signs in — which is exactly what a module-scope default does — would
+ * otherwise capture `globalThis.fetch` forever and never see the session. Reading
+ * it inside `request` makes construction order irrelevant.
+ *
+ * ⚠️ AN EXPLICIT `fetchImpl` STILL WINS, so every test seam and every script that
+ * injects its own transport is unaffected, and mock mode (where nothing installs
+ * one) keeps the plain global fetch.
+ */
+let sessionFetch: typeof fetch | null = null;
+
+/**
+ * Install (or clear, with null) the authenticated session transport. Called by
+ * the auth gate on sign-in and on sign-out; tests may call it directly.
+ */
+export function setSessionFetch(impl: typeof fetch | null): void {
+  sessionFetch = impl;
+}
+
+/** The installed session transport, or null. Exported for assertions. */
+export function currentSessionFetch(): typeof fetch | null {
+  return sessionFetch;
+}
+
 /** Construct an {@link HttpClient} bound to a base URL + fetch implementation. */
 export function createHttpClient(opts: HttpClientOptions = {}): HttpClient {
   const baseUrl = (opts.baseUrl ?? envBaseUrl()).replace(/\/$/, "");
-  const doFetch = opts.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  // Resolved per call — see setSessionFetch. Explicit > session > global.
+  const doFetch: typeof fetch = (input, init) =>
+    (opts.fetchImpl ?? sessionFetch ?? globalThis.fetch.bind(globalThis))(
+      input,
+      init,
+    );
   const baseHeaders = opts.headers ?? {};
 
   async function request<T>(

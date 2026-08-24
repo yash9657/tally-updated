@@ -5,7 +5,7 @@
  * Not a vitest unit test — runs via tsx against a RUNNING `cored` (:8087) AND a
  * RUNNING `insightd` (:8088):
  *
- *   CORED_BASE_URL=http://localhost:8087 INSIGHTD_BASE_URL=http://localhost:8088 \
+ *   CORED_BASE_URL=http://localhost:8087 \
  *     pnpm tsx scripts/e2e-ocr-prefill.mts
  *
  * It drives the EXACT production clients (createRestClient + createInsightdClient)
@@ -31,15 +31,23 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import { createRestClient, createInsightdClient, acceptPurchaseDraft } from "../src/api";
+import {
+  createRestClient,
+  createInsightdClient,
+  createHttpClient,
+  acceptPurchaseDraft,
+} from "../src/api";
 // WS8b edit-through helper lives in the screen module (not re-exported by ../src/api).
 import { acceptEditedPurchaseDraft } from "../src/screens/vouchers/draftAccept";
 import { authHeaders } from "./auth.mjs";
 
 const coredBase =
   process.env.CORED_BASE_URL ?? process.env.VITE_CORED_BASE_URL ?? "http://localhost:8087";
-const insightdBase =
-  process.env.INSIGHTD_BASE_URL ?? process.env.VITE_INSIGHTD_BASE_URL ?? "http://localhost:8088";
+// ⛔ THE DRAFT ROUTES ARE CORED ROUTES NOW (register row D49). insightd
+// authenticates nobody on its own behalf any more — it refuses anything that did
+// not come through cored's proxy — so this script drives them at cored's base URL
+// with cored's bearer, exactly as the browser does. There is no INSIGHTD_BASE_URL
+// here to point anywhere; if you set one, nothing reads it.
 
 const here = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = resolve(
@@ -93,12 +101,15 @@ async function provision(client: RestClient, insightd: InsClient, name: string) 
 }
 
 async function main(): Promise<void> {
-  console.log(`e2e-ocr-prefill: cored=${coredBase} insightd=${insightdBase}`);
-  const client = createRestClient({
-    baseUrl: coredBase,
-    headers: await authHeaders(coredBase),
+  console.log(`e2e-ocr-prefill: cored=${coredBase} (drafts proxied to insightd)`);
+  const headers = await authHeaders(coredBase);
+  const client = createRestClient({ baseUrl: coredBase, headers });
+  // ⚠️ THE SAME BEARER, ON PURPOSE. A draft belongs to the company whose books
+  // this token may write; handing the draft client a different identity would
+  // authorize the inbox and the accept to two different people.
+  const insightd = createInsightdClient({
+    http: createHttpClient({ baseUrl: coredBase, headers }),
   });
-  const insightd = createInsightdClient({ baseUrl: insightdBase });
 
   // ===== PART A: pristine accept (regression pin — byte-identical body) =====
   const { cid, party, draft } = await provision(client, insightd, "E2E OCR Co");

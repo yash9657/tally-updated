@@ -59,6 +59,14 @@ class Settings(BaseSettings):
     # rejected at startup unless an explicit DEV override env is also set.
     pii_boundary_strict: bool = True
 
+    # THE SERVICE CREDENTIAL (env INSIGHTD_SERVICE_TOKEN, register row D49).
+    # Shared by exactly two processes — cored's draft proxy and this one — and
+    # never by a browser. Unset/empty means UNCONFIGURED, and an unconfigured
+    # insightd REFUSES every company-scoped request with a 503 rather than
+    # serving it open; see api/authn.py for what it is checked against and why
+    # that is not the shared secret api/app.py refuses.
+    service_token: str | None = None
+
     # Draft-store selection (env INSIGHTD_DATABASE_URL). Unset/empty -> the
     # in-memory DraftStore (the default; drafts die with the process). Set to a
     # Postgres DSN -> the RLS-scoped PGDraftStore, so drafts survive a restart.

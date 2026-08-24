@@ -790,6 +790,35 @@ var writeRoutesNamingADocumentButNotMovingIt = map[string]string{
 		"writes only tds_challan_allocation; no voucher is restated (its stored deposit_date is " +
 		"judged separately, by storedChallanDepositDate)",
 
+	// THE AI BILL INBOX's three lifecycle routes (register row D49). The
+	// {draftID} in the path names an insightd DRAFT, which is not a ledger
+	// document at all: it has no voucher_version, no posting, no ledger figure and
+	// no place in any period's totals. A draft is a PROPOSAL sitting outside the
+	// books, and all three of these write one JSON column on one insightd_draft
+	// row through cored's proxy — claim takes a lease, release gives it back, and
+	// accepted records WHICH voucher a human already posted from it.
+	//
+	// ⛔ THE ONE THAT LOOKS LIKE IT MIGHT MOVE SOMETHING IS `accepted`, AND IT
+	// CANNOT. It is told an outcome by the client that did the write; the voucher
+	// it names was created by POST /vouchers/purchase moments earlier, and THAT
+	// route is where the cutoff was judged, on the date the voucher actually
+	// carries. Recording the outcome afterwards cannot take that voucher into or
+	// out of a locked period — and refusing to record it would strand the draft,
+	// which is the duplicate-bill failure the route exists to prevent.
+	//
+	// ⚠️ THE CREATE (`POST .../drafts`) IS NOT IN THIS MAP AND DOES NOT BELONG
+	// HERE: it names no existing document, so the gate above never asks about it.
+	// It IS still judged by the generic peek (it is a Create), which is inert
+	// because no draft-create body carries a voucher_date — measured across the
+	// whole OCR corpus. If one ever does, refusing is the right direction.
+	"POST /v1/companies/{companyID}/drafts/{draftID}/claim": "" +
+		"writes one insightd_draft lease column; a draft is not a ledger document",
+	"POST /v1/companies/{companyID}/drafts/{draftID}/claim/release": "" +
+		"gives the same lease back; nothing in the books is touched",
+	"POST /v1/companies/{companyID}/drafts/{draftID}/accepted": "" +
+		"records WHICH voucher a human already posted; that POST /vouchers/{class} " +
+		"is where the cutoff judged the date",
+
 	// Raising an e-way bill / an e-invoice AGAINST a voucher. Both are siblings
 	// of the ledger, not callers of it (archtest pins internal/ewaybill and
 	// internal/einvoice away from posting), so neither can restate or remove a

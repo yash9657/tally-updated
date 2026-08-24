@@ -33,7 +33,7 @@
 
 import { writeFileSync } from "node:fs";
 
-import { createRestClient, createInsightdClient } from "../src/api";
+import { createRestClient, createInsightdClient, createHttpClient } from "../src/api";
 import type {
   CoredClient,
   InventoryLineRequest,
@@ -54,7 +54,11 @@ const baseUrl =
   process.env.CORED_BASE_URL ??
   process.env.VITE_CORED_BASE_URL ??
   "http://localhost:8087";
-const insightdUrl = process.env.INSIGHTD_BASE_URL ?? "http://localhost:8088";
+// ⛔ D49: the draft routes are cored routes now, so the seeded Bill Inbox draft is
+// created THROUGH cored with cored's bearer. There is no insightd URL to
+// configure: a direct call would be refused (401) by an insightd that only trusts
+// cored's proxy, and the seed would report "bill inbox: SKIPPED" for a reason that
+// looks like insightd being down.
 const uiUrl = process.env.UI_BASE_URL ?? "http://localhost:5173";
 const withInsightd = process.argv.includes("--insightd");
 
@@ -1771,7 +1775,9 @@ async function main(): Promise<void> {
   // the inbox resolves against these books and can actually be accepted.
   if (withInsightd) {
     try {
-      const insightd = createInsightdClient({ baseUrl: insightdUrl });
+      const insightd = createInsightdClient({
+        http: createHttpClient({ baseUrl, headers }),
+      });
 
       // The bill is BUILT FROM THESE BOOKS rather than string-patched out of a
       // benchmark fixture. The old approach remapped ledger IDs but left the
@@ -1915,7 +1921,9 @@ async function main(): Promise<void> {
       );
     } catch (err) {
       console.log(
-        `  bill inbox: SKIPPED — ${err instanceof Error ? err.message : String(err)} (insightd at ${insightdUrl})`,
+        `  bill inbox: SKIPPED — ${err instanceof Error ? err.message : String(err)} ` +
+          `(the drafts ride cored at ${baseUrl}; a 503 here means cored has no ` +
+          `INSIGHTD_SERVICE_TOKEN or insightd is not running — see \`make run-insightd\`)`,
       );
     }
   }

@@ -9,6 +9,10 @@ export { createMockClient } from "./mock";
 export type { MockClientOptions } from "./mock";
 export {
   createHttpClient,
+  // The authenticated session transport (D49). Installed once by the auth gate;
+  // every client built without an explicit fetchImpl inherits it.
+  setSessionFetch,
+  currentSessionFetch,
   ApiError,
   type HttpClient,
   type HttpClientOptions,

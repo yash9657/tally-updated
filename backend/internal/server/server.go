@@ -67,9 +67,24 @@ import (
 
 // Request-body size caps guard against unbounded uploads. The Tally-XML import
 // endpoint accepts a larger body than the JSON endpoints.
+//
+// ⛔ THE DRAFT UPLOAD IS THE SECOND ROUTE THAT CANNOT LIVE WITH maxJSONBody, AND
+// IT BECAME ONE THE DAY insightd MOVED BEHIND THIS PROXY (register row D49).
+// `POST .../drafts` carries a base64 SCAN — the Bill Inbox has a file input and
+// does `btoa(binary)` — and base64 inflates by 4/3, so a perfectly ordinary
+// ~800 KB photo of a supplier bill exceeds 1 MiB on the wire. While the browser
+// posted straight to insightd there was no cap in the way at all; forwarding
+// through cored puts drainBody's cap in front of it, and drainBody REPLACES
+// r.Body with what it read, so the truncation would be silent — insightd would
+// answer 422 on a body the operator's own file produced. See bodyCapFor.
 const (
 	maxJSONBody = 1 << 20  // 1 MiB
 	maxXMLBody  = 32 << 20 // 32 MiB
+	// Sized for a phone photo of a bill (the OCR spike's ~12 MP case) once
+	// base64 has grown it by a third, with headroom — and deliberately well
+	// under the XML import's allowance, because this body is buffered in memory
+	// on the authorization path before the PDP has agreed to anything.
+	maxDraftUploadBody = 16 << 20 // 16 MiB
 )
 
 // Server holds the module services and the chi router. All services share one
@@ -145,6 +160,14 @@ type Server struct {
 	// NOTHING rather than everything. Never hand this an admin pool: it would
 	// bypass RLS and the tenant predicate would stop being enforced.
 	printStore *printingdb.Store
+
+	// drafts is cored's PROXY into insightd — the AI bill inbox (register row
+	// D49). It holds NO database handle and no service of its own: it forwards an
+	// already-authorized request and passes insightd's answer back byte for byte.
+	// insightd is a SEPARATE deployable that is routinely not running, so every
+	// route through this answers 503 rather than failing the request in a way that
+	// looks like a books problem. See insightd_proxy.go.
+	drafts *draftProxy
 
 	// Auth (Task D, WS1). verifier verifies inbound JWTs; signer mints dev
 	// tokens for POST /auth/token; authStore + the PDP enforce membership and
@@ -257,6 +280,11 @@ func New(ctx context.Context, appDSN string) (*Server, error) {
 			einvoice.NewHTTPStatutorydClient(
 				envOr("STATUTORYD_BASE_URL", einvoice.DefaultStatutorydBaseURL),
 				statutorydTimeout())),
+		// The AI bill inbox proxy (D49). Same shape as the IRN proxy above:
+		// insightd's location is configuration, the client carries a deadline, and
+		// the SERVICE CREDENTIAL has no default — there is no safe compiled-in
+		// value for a credential. See insightd_proxy.go.
+		drafts:   newDraftProxy(),
 		gstr:     gstr.NewService(pool),
 		importer: migration.NewImporter(m, l),
 		sync:     sync.NewService(l, pool),
@@ -553,6 +581,35 @@ func (s *Server) routes() {
 		// voucherDateFromRequest returns nil for a route with none, which is
 		// correct: a policy switch is not a dated document.
 		r.Put("/", s.handleUpdateCompany)
+
+		// ===================================================================
+		// THE AI BILL INBOX — cored's PROXY into insightd (register row D49).
+		// ===================================================================
+		// Six routes, enumerated here because the handler derives its upstream
+		// path from routeSuffix and therefore cannot forward anything chi did not
+		// route. They are inside THIS subtree, which is the entire point: insightd
+		// authenticated nobody and scoped drafts by the company_id in the path, so
+		// any caller who could reach the process could hydrate any tenant's
+		// supplier bills. Now the same middleware that guards the day book guards
+		// the drafts, and insightd refuses anything that did not come through here.
+		//
+		// TWO-TOUCH RULE: these six lines are inert without the matching
+		// `/drafts` arms in routeAction() — an unmapped {companyID} sub-path
+		// default-DENIES, and TestEveryCompanyRouteIsMappedAndInVocabulary walks
+		// this router and turns the suite red if a mapping is missing.
+		//
+		// ⚠️ NOT AT /companies/*. The dev proxy used to route EVERY same-origin
+		// /companies/* to insightd (a namespace grab: cored's own router is
+		// /v1/companies/{companyID}), so a proxy route added there would have been
+		// sent to insightd instead of cored — a fix that appears to do nothing in
+		// the browser while every unit test passes. These are under /v1 like
+		// everything else, and vite's /companies rule is deleted.
+		r.Post("/drafts", s.handleDraftProxy)
+		r.Get("/drafts", s.handleDraftProxy)
+		r.Get("/drafts/{draftID}", s.handleDraftProxy)
+		r.Post("/drafts/{draftID}/claim", s.handleDraftProxy)
+		r.Post("/drafts/{draftID}/claim/release", s.handleDraftProxy)
+		r.Post("/drafts/{draftID}/accepted", s.handleDraftProxy)
 
 		// Masters.
 		r.Post("/groups", s.handleCreateGroup)
@@ -3405,6 +3462,17 @@ func bodyCapFor(r *http.Request) int64 {
 	segs := splitPath(routeSuffix(r))
 	if n := len(segs); n >= 2 && segs[n-2] == "import" && segs[n-1] == "tally-xml" {
 		return maxXMLBody
+	}
+	// THE DRAFT UPLOAD (D49). Matched on the trailing segment for the same reason
+	// the XML import is, and narrowed to the POST: it is the CREATE that carries a
+	// base64 scan. The other five draft routes carry a claim token or a voucher
+	// id and nothing else, and `GET .../drafts` never reaches here at all
+	// (drainBody runs only for writes). ⛔ 16 MiB here MUST equal the cap
+	// handleDraftProxy declares — if this is smaller the proxy forwards a
+	// truncated body, which is the exact failure this function was written to fix,
+	// in the direction that fails quietly.
+	if n := len(segs); n >= 1 && segs[n-1] == "drafts" && r.Method == http.MethodPost {
+		return maxDraftUploadBody
 	}
 	return maxJSONBody
 }

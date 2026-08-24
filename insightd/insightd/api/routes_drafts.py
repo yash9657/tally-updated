@@ -21,10 +21,23 @@ two browsers raced on one draft therefore both posted, and only the second MARKI
 was refused (409) — after the money had already moved. Reserving first is the only
 ordering in which the loser can be stopped before it writes. See store.py.
 
-⚠️ insightd HAS NO AUTHENTICATION and scopes every one of these by the
-caller-supplied ``company_id`` (a separate, known high finding). The claim routes do
-not change that: a claim token is a concurrency token, NOT a credential, and it
-authorises nothing beyond releasing the claim it already holds.
+⛔ EVERY ROUTE BELOW IS GUARDED BY ``require_proxy`` (register row D49, closed
+2026-08-24). It is attached to the ROUTER, once, so a route added here cannot
+forget it. What it checks, and what it does NOT:
+
+  * the request carries cored's service credential, so it came through the proxy;
+  * ``X-Insightd-Company`` — the company cored's PDP already authorized for the
+    caller — equals the ``company_id`` in the path.
+
+⚠️ SO THE PATH VALUE IS STILL WHAT SCOPES THE STORE AND THE RLS GUC, AND THAT IS
+NOW SAFE for the first time: a caller may only name a company the proxy vouched
+for. Before this, ``pg_store`` set the tenant GUC from a value the anonymous
+caller typed, so RLS enforced whichever scope the caller chose. See api/authn.py.
+
+⚠️ A CLAIM TOKEN IS STILL NOT A CREDENTIAL. It is an opaque concurrency value
+whose only power is to release or renew the claim it already holds; the
+authorisation is the guard above, and these routes would be exactly as safe if
+the claim token were printed on a billboard.
 """
 
 from __future__ import annotations
@@ -48,10 +61,19 @@ from ..contracts.draft import (
 )
 from ..contracts.pipeline import NormalizedDoc, RawUpload, TenantContext
 from ..pipeline import Pipeline
+from .authn import require_proxy
 from .deps import get_draft_store, get_pipeline
 from .store import DraftStore
 
-router = APIRouter()
+# ⛔ THE GUARD IS ON THE ROUTER, NOT ON SIX DECORATORS. A route added to this file
+# inherits it; a route that needed to opt OUT would have to say so in a diff.
+# ⚠️ It is a route dependency and NOT middleware on purpose — routing must run
+# first, so a path insightd does not serve still answers 404 rather than 401.
+# test_api.py's ledger-write-endpoint proof depends on that ordering: it POSTs to
+# a cored /vouchers path and asserts 404/405. ⚠️ Do not name that test in full
+# here — test_hitl_invariant.py greps this tree for a write-client token that its
+# own name contains, and cannot tell a citation from a client.
+router = APIRouter(dependencies=[Depends(require_proxy)])
 
 
 class CreateDraftRequest(BaseModel):
@@ -271,7 +293,8 @@ class ClaimDraftRequest(BaseModel):
     # not per-profile because two TABS of one browser are two racers.
     claim_token: str
     # Display only, so a refused operator can be told who/what holds it. Never
-    # trusted, never used for authorisation — insightd has no authentication.
+    # trusted, never used for authorisation: the authorisation is require_proxy,
+    # and this string is a label the losing racer is shown.
     claimed_by: str = ""
 
 

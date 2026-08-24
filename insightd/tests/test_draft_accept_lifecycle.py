@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import threading
 
-from fastapi.testclient import TestClient
+from conftest import ProxyTestClient
 
 from insightd.api.app import create_app
 from insightd.api.deps import get_draft_store
@@ -52,7 +52,7 @@ def _client():
     app = create_app()
     store = DraftStore()
     app.dependency_overrides[get_draft_store] = lambda: store
-    return TestClient(app), store
+    return ProxyTestClient(app), store
 
 
 def _ready_draft(

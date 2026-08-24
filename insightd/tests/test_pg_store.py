@@ -32,7 +32,6 @@ import threading
 import uuid
 
 import pytest
-from fastapi.testclient import TestClient
 
 from insightd.api.app import create_app
 from insightd.api.deps import get_draft_store
@@ -44,7 +43,7 @@ from insightd.contracts.draft import (
     RedactionReportSummary,
 )
 
-from conftest import ENV_DATABASE_URL, load_fixture
+from conftest import ENV_DATABASE_URL, ProxyTestClient, load_fixture
 
 PKG = pathlib.Path(__file__).resolve().parent.parent / "insightd"
 
@@ -608,7 +607,7 @@ def _pg_client(dsn: str):
     app = create_app()
     store = _store(dsn)
     app.dependency_overrides[get_draft_store] = lambda: store
-    return TestClient(app), store
+    return ProxyTestClient(app), store
 
 
 def test_http_routes_are_company_scoped_against_the_pg_store(dsn):
@@ -659,7 +658,7 @@ def test_http_created_draft_survives_a_store_restart(dsn):
 
     app2 = create_app()
     app2.dependency_overrides[get_draft_store] = lambda: _store(dsn)
-    client2 = TestClient(app2)
+    client2 = ProxyTestClient(app2)
     g = client2.get(f"/companies/{a}/drafts/{posted['draft_id']}")
     assert g.status_code == 200, g.text
     assert g.json() == posted  # byte-for-byte the same draft after "restart"

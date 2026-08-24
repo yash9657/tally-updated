@@ -6,7 +6,7 @@ import {
   rememberChosenCompanyId,
   type CompanyInfo,
 } from "./app/CompanyContext";
-import { createMockClient, createRestClient } from "./api";
+import { createMockClient, createRestClient, setSessionFetch } from "./api";
 import type { CoredClient } from "./api";
 import { AuthProvider, useAuth } from "./auth/AuthContext";
 import { LoginScreen } from "./auth/LoginScreen";
@@ -120,19 +120,27 @@ function AuthGatedApp({
     if (!session) return null;
     // An explicit client prop bypasses the transport entirely (test seam).
     if (client) return client;
-    return createRestClient({
-      baseUrl: gate.baseUrl,
-      fetchImpl: bearerFetch(
-        session.token,
-        () => onUnauthorized?.(),
-        () =>
-          requestStepUp
-            ? requestStepUp()
-            : Promise.reject(new Error("no auth provider")),
-        () => currentToken?.() ?? null,
-        gate.fetchImpl,
-      ),
-    });
+    const authed = bearerFetch(
+      session.token,
+      () => onUnauthorized?.(),
+      () =>
+        requestStepUp
+          ? requestStepUp()
+          : Promise.reject(new Error("no auth provider")),
+      () => currentToken?.() ?? null,
+      gate.fetchImpl,
+    );
+    // ⛔ AND INSTALL IT AS THE SESSION TRANSPORT (register row D49). Two clients
+    // in this app build their own HttpClient from MODULE SCOPE, nowhere near this
+    // gate — the Bill Inbox's `createInsightdClient()` and the draft-accept
+    // lifecycle's `insightdDraftLifecycle()`. Their routes are cored routes now
+    // (`/v1/companies/{id}/drafts...`), so without a bearer they 401 — and every
+    // insightd-backed layer of the duplicate-bill guard fails OPEN on a non-409,
+    // so the accept would still succeed while the guard silently collapsed to its
+    // client-side layers. Installing it here, once, is what keeps those two from
+    // needing any plumbing of their own. See api/http.ts setSessionFetch.
+    setSessionFetch(authed);
+    return createRestClient({ baseUrl: gate.baseUrl, fetchImpl: authed });
   }, [
     client,
     currentToken,

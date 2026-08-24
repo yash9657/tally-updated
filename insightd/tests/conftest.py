@@ -14,6 +14,9 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from fastapi.testclient import TestClient  # noqa: E402
+
+from insightd.api.authn import COMPANY_HEADER, SERVICE_TOKEN_HEADER  # noqa: E402
 from insightd.contracts.pipeline import (  # noqa: E402
     NormalizedDoc,
     RawUpload,
@@ -21,6 +24,58 @@ from insightd.contracts.pipeline import (  # noqa: E402
 )
 
 CORPUS_DIR = ROOT / "insightd" / "benchmark" / "corpus"
+
+# The service credential every test presents. Any non-empty value works — what is
+# under test is that it must MATCH what the process is configured with, not what it
+# says. The autouse fixture below configures the same value on Settings.
+TEST_SERVICE_TOKEN = "test-service-token"
+
+
+class ProxyTestClient(TestClient):
+    """A TestClient that STANDS IN FOR CORED'S DRAFT PROXY (register row D49).
+
+    ⛔ WHY THIS EXISTS AND WHY IT IS NOT A WAY TO SILENCE THE GUARD. Every
+    company-scoped route now requires two headers: the service credential, and
+    ``X-Insightd-Company`` carrying the company cored's PDP authorized. The
+    company one VARIES PER REQUEST — it must equal the ``company_id`` in the path
+    — so a fixed ``headers=`` dict cannot express it, and 55 test functions across
+    six files would otherwise each have to build it.
+
+    So this derives the header from the request PATH, exactly as the real proxy
+    derives it from the route it just authorized. That keeps every existing
+    assertion meaningful rather than vacuous:
+    ``test_get_draft_other_company_is_404`` still sends ``OTHER-CO`` and still
+    gets 404 — which is now a statement about the STORE's scope (what it was
+    always meant to prove) rather than about the absence of authentication.
+
+    ⚠️ IT DOES NOT BYPASS ANYTHING. It presents credentials; it cannot make a
+    wrong one work. The refusal arms in test_api.py drive a PLAIN TestClient on
+    purpose, because a client that always presents a valid credential can never
+    observe a refusal.
+    """
+
+    def request(self, method, url, *args, **kwargs):  # type: ignore[override]
+        headers = dict(kwargs.pop("headers", None) or {})
+        headers.setdefault(SERVICE_TOKEN_HEADER, TEST_SERVICE_TOKEN)
+        company = _company_from_path(str(url))
+        if company is not None:
+            headers.setdefault(COMPANY_HEADER, company)
+        return super().request(method, url, *args, headers=headers, **kwargs)
+
+
+def _company_from_path(url: str) -> str | None:
+    """The ``{company_id}`` segment of a /companies/{id}/... path, or None.
+
+    Deliberately literal: it reads the path the request is about to take, the same
+    way the proxy knows which company it authorized. A path with no company
+    segment (``/healthz``, ``/benchmark/last``) gets no company header, which is
+    correct — those routes have no company to assert.
+    """
+    path = url.split("?", 1)[0].lstrip("/")
+    parts = path.split("/")
+    if len(parts) >= 2 and parts[0] == "companies" and parts[1]:
+        return parts[1]
+    return None
 
 # The DSN the ENVIRONMENT supplied, captured ONCE at import — before the autouse
 # fixture below deletes it from os.environ. tests/test_pg_store.py's module-scoped
@@ -67,7 +122,17 @@ def _in_memory_draft_store_by_default(request, monkeypatch):
     import insightd.config as config_mod
 
     monkeypatch.delenv("INSIGHTD_DATABASE_URL", raising=False)
-    monkeypatch.setattr(config_mod, "_settings", config_mod.Settings(database_url=None))
+    # ⚠️ THE SERVICE TOKEN IS PINNED HERE FOR THE SAME REASON THE DSN IS: this
+    # fixture REPLACES the Settings singleton, so anything it does not name reverts
+    # to its default — and the default for service_token is None, which makes every
+    # company-scoped route answer 503 "unconfigured". Pinning it here is what keeps
+    # the suite testing the ROUTES; the "unconfigured" behaviour has its own arm in
+    # test_api.py which sets it back to None explicitly.
+    monkeypatch.setattr(
+        config_mod,
+        "_settings",
+        config_mod.Settings(database_url=None, service_token=TEST_SERVICE_TOKEN),
+    )
     monkeypatch.setattr(deps_mod, "_pg_store", None)
     yield
     assert deps_mod._pg_store is None, (

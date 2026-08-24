@@ -20,6 +20,22 @@ export INSIGHTD_DATABASE_URL
 # both expect 8087, so it must be set explicitly or `serve` binds the wrong port.
 CORED_PORT    ?= 8087
 INSIGHTD_PORT ?= 8088
+
+# THE cored -> insightd SERVICE CREDENTIAL (register row D49). insightd is now
+# reached ONLY through cored's draft proxy, and it refuses any request that does
+# not present this token — so BOTH processes must be given the same value or the
+# Bill Inbox answers 401 with cored's own message naming this variable.
+#
+# ⛔ A DEV DEFAULT IS SAFE HERE AND A COMPILED-IN ONE IS NOT, which is why the
+# value lives in this file and not in Go. This Makefile runs a loopback dev stack
+# against a throwaway database; a default inside the binary would be a credential
+# published in the repository, shipped to every deployment, and defaulted to by
+# every operator who did not know it existed. cored's newDraftProxy therefore
+# keeps an empty token as EMPTY and refuses to forward, and insightd answers 503
+# "unconfigured" — a deployment that forgets this gets two loud refusals rather
+# than a quiet shared secret.
+INSIGHTD_SERVICE_TOKEN ?= dev-insightd-service-token
+export INSIGHTD_SERVICE_TOKEN
 # statutoryd — the IRN e-invoice plane, a SEPARATE deployable that calls BACK
 # into cored. ⛔ Check this port before assuming a fresh instance bound: a
 # seven-day-old /tmp/statutoryd once held it while carrying a service token
@@ -112,8 +128,17 @@ insightd-test: ## insightd pytest (SKIPS loudly when insightd/.venv is absent)
 # the port this Makefile printed.
 run-cored: ## Run cored locally on :$(CORED_PORT) with dev token minting enabled
 	cd backend && PORT=$(CORED_PORT) AUTH_DEV_TOKEN_ENABLED=true APP_DSN="$(DATABASE_URL)" \
-		STATUTORYD_BASE_URL="http://localhost:$(STATUTORYD_PORT)" go run ./cmd/cored serve
+		STATUTORYD_BASE_URL="http://localhost:$(STATUTORYD_PORT)" \
+		INSIGHTD_BASE_URL="http://localhost:$(INSIGHTD_PORT)" \
+		INSIGHTD_SERVICE_TOKEN="$(INSIGHTD_SERVICE_TOKEN)" \
+		go run ./cmd/cored serve
 
+# ⚠️ NO `--host`, SO UVICORN BINDS 127.0.0.1 — AND THAT WAS AN ACCIDENT, NOT A
+# CONTROL, FOR THE WHOLE OF D49's OPEN LIFE. Adding `--host 0.0.0.0` here, or
+# running vite with `--host`, exposed all twelve routes with no code change and no
+# test failing. It is still a good default, but it is no longer what keeps the
+# drafts private: INSIGHTD_SERVICE_TOKEN is. Off-loopback exposure now costs an
+# attacker the credential rather than a command-line flag.
 run-insightd: ## Run insightd on :$(INSIGHTD_PORT) with the DURABLE (Postgres) draft store
 	@if [ ! -x insightd/.venv/bin/python ]; then \
 		echo "*** insightd/.venv missing — create it first (see insightd-test)"; exit 1; \
@@ -123,6 +148,7 @@ run-insightd: ## Run insightd on :$(INSIGHTD_PORT) with the DURABLE (Postgres) d
 		echo "*** without it insightd cannot use the durable draft store"; exit 1; \
 	fi
 	cd insightd && INSIGHTD_DATABASE_URL="$(INSIGHTD_DATABASE_URL)" \
+		INSIGHTD_SERVICE_TOKEN="$(INSIGHTD_SERVICE_TOKEN)" \
 		.venv/bin/python -m uvicorn insightd.api.app:app --port $(INSIGHTD_PORT)
 
 run-statutoryd: ## Run statutoryd on :$(STATUTORYD_PORT) with the DURABLE store (needs cored running)

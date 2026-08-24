@@ -18,14 +18,14 @@ from __future__ import annotations
 import base64
 
 import pytest
-from fastapi.testclient import TestClient
+from conftest import ProxyTestClient
 
 from insightd.api.app import create_app
 
 
 @pytest.fixture()
 def client():
-    return TestClient(create_app())
+    return ProxyTestClient(create_app())
 
 
 FIXTURE_UPLOAD = {

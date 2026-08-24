@@ -1151,19 +1151,6 @@ function draftLifecyclePort(): DraftLifecyclePort {
   return LIFECYCLE_PORT;
 }
 
-/**
- * ⛔ A COPY OF `insightd.ts`'s PRIVATE `insightdEnvBaseUrl`, AND IT MUST NOT
- * DRIFT. The real home for both this and `recordAccepted` below is
- * `createInsightdClient` in src/api/insightd.ts, which is owned by another lane in
- * this round and could not be edited here; fold them in when it can be, and delete
- * this. Until then the two readings of VITE_INSIGHTD_BASE_URL must stay identical
- * or the Bill Inbox and the accept path will talk to two different insightds.
- */
-function insightdBaseUrl(): string {
-  const env = (import.meta as unknown as { env?: Record<string, string> }).env;
-  return env?.VITE_INSIGHTD_BASE_URL ?? "http://localhost:8088";
-}
-
 /** A deep, key-SORTED JSON rendering, so two bodies compare by VALUE not by key order.
  *
  * `null` and absent are treated as the same thing: pydantic emits every optional
@@ -1208,7 +1195,13 @@ export function insightdDraftLifecycle(deps: {
   http?: HttpClient;
 } = {}): DraftLifecyclePort {
   const insightd = deps.insightd ?? createInsightdClient();
-  const http = deps.http ?? createHttpClient({ baseUrl: insightdBaseUrl() });
+  // ✅ THE DUPLICATED BASE-URL RESOLVER IS GONE (register row D49). It existed
+  // because both readings of VITE_INSIGHTD_BASE_URL had to stay identical or the
+  // Bill Inbox and the accept path would talk to two different insightds; there is
+  // now no variable to keep in step, because neither of them addresses insightd at
+  // all. Both build a cored client with no arguments: same-origin base, and the
+  // session transport the auth gate installed, so the bearer arrives on its own.
+  const http = deps.http ?? createHttpClient();
 
   const toRecord = (d: {
     draft_id: string;
@@ -1276,9 +1269,16 @@ export function insightdDraftLifecycle(deps: {
   };
 }
 
-/** The one place the draft URL is built, so claim / release / accepted cannot drift. */
+/** The one place the draft URL is built, so claim / release / accepted cannot drift.
+ *
+ * ⛔ UNDER CORED (D49). `/v1/companies/{id}/drafts/{draftId}` — cored authenticates
+ * the caller, checks membership, evaluates (Create, "purchase") and forwards to
+ * insightd with the company its PDP authorized. ⚠️ NOT `/companies/...`: vite used
+ * to route that whole prefix to insightd, so a cored path written that way would
+ * be delivered to the wrong process while every unit test passed.
+ */
 function draftPath(companyID: string, draftId: string): string {
-  return `/companies/${encodeURIComponent(companyID)}/drafts/${encodeURIComponent(draftId)}`;
+  return `/v1/companies/${encodeURIComponent(companyID)}/drafts/${encodeURIComponent(draftId)}`;
 }
 
 /**

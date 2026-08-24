@@ -1209,6 +1209,9 @@ func peekTallyXMLSupersededGUIDs(body []byte) []string {
 //	POST  .../groups|ledgers|voucher-types|units|stock-items -> Create/master
 //	POST  .../godowns|batches                                -> Create/master
 //	GET   .../ledgers|units|stock-items|godowns|batches      -> Display/master
+//	GET   .../drafts, .../drafts/{id}                        -> Display/purchase
+//	POST  .../drafts, .../drafts/{id}/{claim,claim/release,accepted}
+//	                                                         -> Create/purchase
 //	POST  .../vouchers/{class}                               -> Create/{class}
 //	POST  .../sales (alias)                                  -> Create/sales
 //	PUT   .../vouchers/{class}/{voucherID}                   -> Alter/{class}
@@ -1301,6 +1304,63 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 			return authz.Alter, "master", "", true
 		}
 		return "", "", "", false
+
+	// ===================================================================
+	// THE AI BILL INBOX — the six routes cored proxies into insightd (D49).
+	// ===================================================================
+	// ⛔⛔ THE TOKEN IS `purchase`, THE VOUCHER CLASS, AND THAT CHOICE IS THE
+	// LOAD-BEARING PART OF THIS ROW. A draft IS a proposed purchase voucher: the
+	// accept posts one through POST /vouchers/purchase moments later, from the same
+	// screen, in the same operator's session. So:
+	//
+	//	GET  /drafts, /drafts/{id}            -> (Display, "purchase")
+	//	POST /drafts                          -> (Create,  "purchase")
+	//	POST /drafts/{id}/claim               -> (Create,  "purchase")
+	//	POST /drafts/{id}/claim/release       -> (Create,  "purchase")
+	//	POST /drafts/{id}/accepted            -> (Create,  "purchase")
+	//
+	// WHY NOT A NEW `draft` TOKEN, which is the obvious answer and the wrong one.
+	// Migration 0011 seeds the Data Entry level `allow create|alter|display` on the
+	// six voucher classes and `default_access = 'none'`, so a brand-new token would
+	// arrive DENIED for the one level that actually keys supplier bills — and the
+	// lane would then have to write a migration granting it, i.e. ask a tenant to
+	// re-decide a power they already gave that level. Reusing the class token means
+	// the F9 Bill Inbox works for Data Entry on the day it lands, with NO migration
+	// and with NO new resource arriving pre-granted (contrast D95 and D94, which
+	// exist precisely because a new report NAME does arrive granted through 0011's
+	// coarse `allow display report`).
+	//
+	// AND WHAT IT BUYS AN ADMINISTRATOR, which is the test of any token choice:
+	// `disallow display purchase` hides the inbox, and `disallow create purchase`
+	// refuses the CLAIM — which is the first write of the whole flow and runs
+	// before any master or voucher exists, so a level that may not book purchases
+	// is stopped at the cheapest possible moment instead of after minting ledgers.
+	// Both are rules a supervisor can already write today.
+	//
+	// ⚠️ THE RELEASE IS A `Create` TOO, AND NOT A Delete. It hands back the lease
+	// the claim took; whoever may claim must be able to release, or a failed post
+	// strands the bill in a state the operator can neither post nor clear. Giving
+	// it its own weaker action would be a rule that lets somebody strand other
+	// people's bills.
+	//
+	// ⚠️ THE BACK-DATED CUTOFF REACHES `POST /drafts` through
+	// voucherDateFromRequest's generic peek (it is a write), and it is INERT today
+	// because no draft-create body carries a voucher_date — measured: zero
+	// occurrences across the whole OCR corpus, and CreateDraftRequest has no such
+	// field. If one ever does, refusing is the correct direction: the accept it is
+	// preparing would be refused a moment later anyway.
+	//
+	// ⚠️ AND THE OWNER'S WEBAUTHN STEP-UP now fires at the CLAIM rather than at the
+	// on-demand POST /ledgers, because the claim is now the first write of an F9
+	// accept. bearerFetch runs the ceremony and replays the request, which is the
+	// same path every other first write of a session takes. `GET /drafts` is a
+	// Display and must never demand a passkey — an inbox that asks for a
+	// fingerprint to LIST is an inbox nobody opens.
+	case (method == http.MethodGet || method == http.MethodPost) && isDraftPath(rest):
+		if method == http.MethodGet {
+			return authz.Display, "purchase", "", true
+		}
+		return authz.Create, "purchase", "", true
 
 	// Voucher class POSTs (and the /sales alias).
 	case method == http.MethodPost && rest == "/sales":
@@ -2087,6 +2147,37 @@ func isSecurityLevelsPath(rest string) bool {
 		return false
 	}
 	return len(segs) == 1 || len(segs) == 2
+}
+
+// isDraftPath matches the SIX bill-inbox paths cored proxies into insightd, and
+// ONLY those six (register row D49).
+//
+// ⛔ IT MATCHES SHAPES, NOT PREFIXES, ON PURPOSE. A `strings.HasPrefix(rest,
+// "/drafts")` arm would map every future /drafts/... sub-path to (Create,
+// "purchase") the moment somebody mounted one — which is the opposite of what
+// routeAction's default-deny is for, and it is how a route gets born authorized
+// by a rule nobody wrote for it. The six lines in routes() and the six shapes
+// here are the same list, twice, deliberately.
+//
+// ⚠️ The METHODS are checked by the caller, so this deliberately has no opinion
+// about them: `GET /drafts/{id}/claim` is not a mounted route, chi answers 405,
+// and this function has no business duplicating that.
+func isDraftPath(rest string) bool {
+	segs := splitPath(rest)
+	if len(segs) == 0 || segs[0] != "drafts" {
+		return false
+	}
+	switch len(segs) {
+	case 1: // /drafts            (the list, and the create)
+		return true
+	case 2: // /drafts/{draftID}  (hydrate one)
+		return true
+	case 3: // /drafts/{draftID}/claim | .../accepted
+		return segs[2] == "claim" || segs[2] == "accepted"
+	case 4: // /drafts/{draftID}/claim/release
+		return segs[2] == "claim" && segs[3] == "release"
+	}
+	return false
 }
 
 // isVoucherClass matches the path segment that FIXES a voucher class, and its

@@ -116,8 +116,18 @@ const PURCHASES = needLedger("Raw Material Purchases");
  * index of the new id in this list is the index of its row.
  */
 const listDrafts = async () => {
-  const r = await fetch(`http://localhost:8088/companies/${process.env.CO}/drafts`);
-  if (!r.ok) throw new Error(`cannot list insightd drafts: HTTP ${r.status}`);
+  // ⛔ THROUGH CORED, WITH THE BEARER (register row D49, 2026-08-24). This used to
+  // be a bare `fetch("http://localhost:8088/companies/…/drafts")` with no
+  // credential at all, which worked because insightd authenticated nobody. It now
+  // answers 401 to anything that did not come through cored's proxy, and the
+  // symptom of leaving this line alone would be `cannot list insightd drafts:
+  // HTTP 401` — i.e. this probe reading as broken for a reason that has nothing
+  // to do with D16/D18/D19.
+  const r = await fetch(
+    `http://localhost:8087/v1/companies/${process.env.CO}/drafts`,
+    { headers: { Authorization: `Bearer ${TOKEN}` } },
+  );
+  if (!r.ok) throw new Error(`cannot list drafts through cored: HTTP ${r.status}`);
   return await r.json();
 };
 const draftsBefore = new Set((await listDrafts()).map((d) => d.draft_id));
