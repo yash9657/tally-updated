@@ -1,23 +1,24 @@
 # HANDOFF — THE REMAINING SIX: the register's last rows, in order, with the oracle for each
 
-> ✅ **L24 CLOSED D94 — the payables ageing has a door, and the rule for it can be written.** Position 1 is
-> now **D83**, the LAST of the builds and the only genuinely concurrent probe. Full records:
-> `HANDOFF-PARITY-AUDIT.md` §7.5 **L21** (D85) · **L22** (D8) · **L23** (D86) · **L24** (D94).
+> ✅✅ **L25 CLOSED D83 — THE LAST OF THE BUILDS. EVERY ROW THIS FILE WAS WRITTEN TO DRIVE IS DONE.**
+> Full records: `HANDOFF-PARITY-AUDIT.md` §7.5 **L21** (D85) · **L22** (D8) · **L23** (D86) · **L24** (D94)
+> · **L25** (D83).
 >
-> ⛔⛔ **THE COUNT MOVED THE OTHER WAY FOR THE FIRST TIME IN SEVEN LANES: 97 REGISTERED, NOT 96.** L24
-> registered **D97** — a level denied `report:bills-payable` can still read the same figures as
-> `GET /outstandings?kind=PAYABLE` (measured, 200, same total). The rule governs the DOOR, not the bytes.
-> ⛔ It is NOT a route patch: that read is what the bill-wise picker uses when a clerk keys a Payment, so a
-> fix has to separate *"read the payables REPORT"* from *"list THIS party's open bills to settle one"*.
-> **D97 and D83 are the two OPEN rows.**
+> ⛔⛔ **POSITION 1 IS NOW D97, AND IT IS NOT A BUILD — IT NEEDS THE USER FIRST.** It is the only OPEN row.
+> A level carrying `disallow display report:bills-payable` is refused the payables report **and can still
+> read the same figures as `GET /outstandings?kind=PAYABLE`** (measured in `drive-l24-d94.mjs` as an
+> explicit arm: 403 on one, 200 with the same total on the other). **The rule governs the DOOR, not the
+> bytes.** ⛔ **DO NOT "FIX" IT WITH A `routeAction` CHANGE** — that read is what the bill-wise picker uses
+> when a clerk keys a Payment, and refusing it there pushes the money onto ON ACCOUNT, the balance nobody
+> can chase. The decision to put to the user is what the PICKER is authorised as, separately from the
+> REPORT. Full statement of the residual and its anchors: §7.1 row **D97**.
 >
-> ⚠️ **AND D94's ACL HALF WAS WRONG IN THIS FILE — 0077 IS STILL FREE.** The row said it "owes an ACL
-> counterweight". Measured: a seeded Data Entry level ALREADY reads the payables data as `?kind=PAYABLE`
-> and NEEDS to (the picker), so nothing arrives pre-granted and denying it would break payment entry. **The
-> user was asked with the measurement and chose to seed nothing.** ⛔ That is §2.7 a second time — a row's
-> written scope is a claim. **Measure before building AND before asking.**
+> ⚠️ **AND THE ONE PIECE OF UNFINISHED BUSINESS THAT IS NOT A ROW:** §8's B / C / D are still open outside
+> the register, and §9's "once done" phase (T32 Tally XML import is the COMMERCIAL BLOCKER) has not begun.
+> **T9 FIFO/LIFO is now unblocked by D8 and must be built on the `voucher_id` replay order.**
 >
-> ⚠️ **THE TRANSPORT NOTE BELOW IS STILL TRUE AND STILL UNUSED.** None of D85/D8/D86/D94 touched it.
+> ⚠️ **THE TRANSPORT NOTE BELOW IS STILL TRUE AND WAS NEVER NEEDED.** None of D85/D8/D86/D94/D83 touched
+> cored's byte-for-byte passthrough of insightd's 409.
 
 > ✅ **L19 CLOSED D96 BY DELETING IT** and ✅ **L18 CLOSED D81** (half A shipped; **half B did not
 > reproduce and the user closed it as such**). §6.7 and §6.8 are both ANSWERED.
@@ -43,11 +44,11 @@ to do next, in what order, what proves it, what will go wrong. Execute it top to
 
 ## ⛔ THE COUNT, RE-DERIVED BY PARSING §7.1 — NOT COPIED FROM A HEADER
 
-**97 registered · 95 CLOSED · 2 OPEN · 0 PARTIAL.** `95 + 2 = 97`.
+**97 registered · 96 CLOSED · 1 OPEN · 0 PARTIAL.** `96 + 1 = 97`.
 (`93 · 81 · 8 · 4` before L16 · `94 · 85 · 9 · 0` after L16 p0 · `96 · 87 · 9 · 0` after L16 p1 ·
 `96 · 88 · 8 · 0` after L17 · `96 · 89 · 7 · 0` after L18 · `96 · 90 · 6 · 0` after L19 ·
-`96 · 91 · 5 · 0` after L20 · `96 · 92 · 4 · 0` after L21 · `96 · 93 · 3 · 0` after L22 · `96 · 94 · 2 · 0` after L23 · this after **L24**, which is the
-FIRST lane in seven to ADD a row.)
+`96 · 91 · 5 · 0` after L20 · `96 · 92 · 4 · 0` after L21 · `96 · 93 · 3 · 0` after L22 · `96 · 94 · 2 · 0` after L23 · `97 · 95 · 2 · 0` after **L24**, the FIRST lane in seven to ADD
+a row · this after **L25**.)
 ✅ **AND THE SEVENTH LANE BROKE THE RUN: L24 REGISTERED D97**, found by driving D94's own oracle rather
 than by reading. The six before it surfaced a false PREMISE, a gate, a scope or a caption instead of a row;
 this one surfaced a row the moment the oracle was made precise enough to fail. **Both patterns are the same
@@ -89,7 +90,7 @@ written in L16 broke it again — one carried a literal ` | ` inside its status 
 ⚠️ **VALIDATE ANY PARSER CHANGE BY RE-DERIVING THE OLD NUMBER FROM THE OLD FILE.** ⚠️ **And it prints a
 `?` bucket on purpose** — a row matching nothing must be SEEN, not folded into a plausible total.
 
-**OPEN (2):** D83 · **D97**
+**OPEN (1):** **D97** — and it is a DESIGN DECISION, not a build. See the header.
 **PARTIAL: none**, and there should never be another: **`PARTIAL` is how a hidden build survives for
 three sessions** (that was D13). A row is CLOSED, or OPEN, or TWO rows.
 
@@ -154,10 +155,12 @@ builds** (the only genuinely concurrent probe).
 | ~~0~~ | ~~**D8**~~ | HIGH | ✅ **CLOSED L22 2026-08-24.** `voucher_id` replaces `voucher_no` as the second replay key; `docs/RELEASE-NOTES.md` created. §7.5 L22. |
 | ~~0~~ | ~~**D86**~~ | MED | ✅ **CLOSED L23 2026-08-24.** Unbounded with no `as_on`; TWO Go tests inverted; the caption in four copies. §7.5 L23. |
 | ~~0~~ | ~~**D94**~~ | HIGH | ✅ **CLOSED L24 2026-08-24.** A second flat route + the name; **no migration, 0077 still free**; registered **D97**. §7.5 L24. |
-| **1** | **D83** | LOW | the register's proposed index **WILL NOT WORK.** The only concurrent probe. **LAST of the builds.** |
-| 2 | **D97** | LOW | ⛔ **NEW, registered by L24.** The payables rule governs the DOOR, not the bytes. **Not a route patch** — see §7.1. |
+| ~~0~~ | ~~**D83**~~ | LOW | ✅ **CLOSED L25 2026-08-24.** An ADVISORY lock on the NAME — the index could not express the rule. §7.5 L25. |
+| **1** | **D97** | LOW | ⛔ **NOT A BUILD.** The payables rule governs the DOOR, not the bytes. **Needs the user before it needs code** — see the header and §7.1. |
 
-**Must be ALONE:** D83.  **Must be SERIALISED:** ~~D49→D85~~ · ~~D86→D94~~ — **every ordering in this file is now satisfied.** ⚠️ **D97 has no ordering constraint but is a DESIGN decision, not a build** — it needs the user before it needs code.
+✅ **EVERY ORDERING AND EVERY "ALONE" CONSTRAINT IN THIS FILE IS NOW SPENT** — ~~D49→D85~~ ·
+~~D86→D94~~ · ~~D85/D8/D86/D83 alone~~. ⚠️ **D97 has no ordering constraint and is a DESIGN decision, not a
+build.**
 ✅ **NOTHING IS BLOCKED ON THE USER — §6.7 and §6.8 were both answered 2026-08-24, and §6.7 was then
 RE-ASKED AND REVERSED on a measurement** (D81 half B: does not reproduce, closed as such; D96: delete).
 ⛔ **Do not re-ask either; §6 carries the reasoning and the reversal.**
@@ -477,23 +480,21 @@ Full record: `HANDOFF-PARITY-AUDIT.md` §7.5 **L24**. What carries forward:
   frame and fired Ctrl+P at it, and the Go To control that iterates `REPORT_NAMES` began pinning the new
   report's self-resolution. Both caught mutations I had not aimed at them.
 
-### 6 · D83 — two concurrent posts share one hand-typed bill number · RECON §3.14 · ⛔ NOW POSITION 1, LAST OF THE BUILDS
-⛔ **THE REGISTER'S PROPOSED FIX WILL NOT WORK.** `bill_allocation` cannot carry the index, because
-duplicate names are legal for AGAINST / ON_ACCOUNT / caller-named openers. It needs
-`pg_advisory_xact_lock` or a new table.
-⚠️ **The SEQUENTIAL case — what an operator actually produces — is already closed.** This is the
-concurrent one, under READ COMMITTED, and it is the only row in the wave needing a genuinely concurrent
-probe.
-✅ **L15 BUILT THE PATTERN YOU NEED HERE.** D90's `refuseIfNameTaken` is a pre-check that RACES with a
-unique index behind it, and `migrations/master_name_index_census_test.go` exists precisely because **no
-gate could see the index missing** — the pre-check shadowed it for serial creates. ⛔ **Read that test
-before designing this row:** it is the same shape (an application check that is not the authority) and it
-names the trap.
-⛔ **AND EXPECT THE MUTATION NOT TO REPRODUCE.** That is what happened on D90 — `contract:cored` reported
-14/14 with two of three indexes missing — and the non-reproduction is what bought the census test. **A
-mutation that will not break anything is a finding (§5.4), and on this row it is the LIKELY outcome.**
-**ORACLE:** two simultaneous posts of the same bill number on one party — one succeeds, one is refused.
-**On the wire**; there is no mock equivalent for concurrency, and the mock says so at the method.
+### ✅ 6 · D83 — CLOSED L25 2026-08-24. An advisory lock on the NAME. Kept for what it teaches D97.
+Full record: `HANDOFF-PARITY-AUDIT.md` §7.5 **L25**. What carries forward:
+- ⛔⛔ **THE "EXPECT THE MUTATION NOT TO REPRODUCE" WARNING WAS WRONG, AND THE REASON MATTERS.** It failed
+  **10 runs out of 10**. D90's non-reproduction was a property of D90's PROBE — it had no way to make two
+  creates overlap, so a pre-check answered first. This gate holds both goroutines on a barrier until both are
+  inside `PostVoucher`. ✅ **A race you can CONSTRUCT is a race you can gate. Build the barrier, then judge.**
+- ⛔ **THE FIRST `pg_advisory_*` IN THE CODEBASE** (`lockGeneratedBillRefStems`). Keys SORTED against
+  deadlock, `_xact_` scoped, keyed on the STEM because the rename branch renames BY LEDGER. ⚠️ If a second
+  advisory lock ever appears, the two should share a key-space convention rather than each hashing whatever
+  string was to hand.
+- ⚠️ **THE DEFECT LOST A BILL, NOT MONEY.** The total was right in both worlds — a probe built on totals or
+  status codes is green straight through it. ⛔ **D97 has the same property**: the refusal it is about is
+  correct on the door it governs, and the residual is only visible if you ask the OTHER route.
+- ⚠️ **`GET /outstandings` GROUPS BY `(ledger, ref_name)`.** The mutation failed on the NAMES check, not the
+  row count: both allocation rows existed, sharing one name. **Assert on the names.**
 
 ### ✅ 7 · D96 — CLOSED L19 2026-08-24 BY **DELETION**.
 The statistical forecast plane is gone: package, route, dependency pin and its three test modules.
