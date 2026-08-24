@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -2907,6 +2908,64 @@ func validateDistinctBillOpeners(bs []BillAllocationInput) error {
 	return nil
 }
 
+// lockGeneratedBillRefStems serialises concurrent posters that would invent the SAME
+// bill reference name, so the loser sees the winner's name and renames itself (D83).
+//
+// ⛔⛔ AN ADVISORY LOCK, BECAUSE THERE IS NOTHING ELSE TO LOCK. The collision is
+// between two names NEITHER transaction has written yet, so there is no row to take a
+// lock on, and a unique index cannot express the rule (duplicate ref names are legal
+// for AGAINST, for ON_ACCOUNT and for openers a caller NAMED — only names this server
+// INVENTED must be unique). An advisory lock is a lock on an agreed-upon number rather
+// than on data, which is exactly the shape this needs.
+//
+// ⚠️ IT IS THE FIRST pg_advisory_* IN THIS CODEBASE. Said plainly because a primitive
+// nobody has used before is one nobody looks for: `db.go`'s pool takes no TxOptions, so
+// every transaction here is READ COMMITTED, and nothing else in backend/ serialises on
+// anything but a row. If a second use appears, these two should share a key-space
+// convention rather than each hashing whatever string was to hand.
+//
+// ⛔ THE KEY IS (company, ledger, stem) AND NOT THE WHOLE REF NAME, because the rename
+// branch renames by LEDGER: an invoice split into instalments keeps its instalments
+// under one stem, so two posters colliding on any one of those names must be
+// serialised against each other on all of them.
+//
+// ⛔ AND THE KEYS ARE SORTED, WHICH IS NOT COSMETIC. A voucher can open bills on more
+// than one party, so more than one lock may be taken in a single transaction; two
+// posters acquiring an overlapping set in OPPOSITE orders would deadlock, and Postgres
+// would resolve it by killing one post with a deadlock error an operator cannot act on.
+// A total order over the keys removes the cycle.
+//
+// ⚠️ `hashtextextended` gives 64 bits rather than `hashtext`'s 32. A collision costs
+// two unrelated posters a moment of serialisation and nothing else — never a wrong
+// answer — but the wider space makes even that vanishingly rare.
+//
+// ⚠️ THE LOCK IS TRANSACTION-SCOPED (`_xact_`) so it is released at COMMIT or ROLLBACK
+// with no unlock call to forget. That is also WHY it works: it is still held while this
+// voucher's bill_allocation rows are written, so the loser blocks until they are
+// COMMITTED and its own check — a fresh snapshot under READ COMMITTED — can see them.
+func lockGeneratedBillRefStems(
+	ctx context.Context, tx pgx.Tx, companyID uuid.UUID, st stampedBillRefs,
+) error {
+	keys := make([]string, 0, len(st.generated))
+	seen := make(map[string]bool, len(st.generated))
+	for _, i := range st.generated {
+		k := companyID.String() + "|" + st.refs[i].LedgerID.String() + "|" + st.base
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if _, err := tx.Exec(ctx,
+			`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, k); err != nil {
+			return fmt.Errorf("ledger: lock generated bill-ref stem: %w", err)
+		}
+	}
+	return nil
+}
+
 // resolveGeneratedBillRefNames is the THIRD door of the ref-collision class, and
 // the only one the pure stamp cannot see: a name this server invented that some
 // OTHER voucher's bill on the same party is already called.
@@ -2942,13 +3001,27 @@ func validateDistinctBillOpeners(bs []BillAllocationInput) error {
 // space; a generated name landing on an opening reference would net an invoice
 // against the party's brought-forward balance.
 //
-// ⚠️ AND THE RACE IS REAL BUT NARROW, so it is named rather than hidden: two
-// CONCURRENT posts, both with the same manually-typed number, on the same party,
-// each committing after the other's check, still both write the base name. Closing
-// that needs a unique index bill_allocation cannot carry (duplicate names are
-// legal for AGAINST and for ON_ACCOUNT, and legal for openers a caller named), or
-// a lock on a row that does not exist. The sequential case — which is what an
-// operator produces — is closed.
+// ⛔⛔ AND THE CONCURRENT CASE IS CLOSED TOO NOW (D83), BY THE LOCK BELOW. It was
+// real, narrow and named rather than hidden: two CONCURRENT posts, both with the
+// same manually-typed number, on the same party, each committing after the other's
+// check, both wrote the base name. Measured on the wire before the fix — two posts
+// in flight together, both 201, and `GET /outstandings` showed **ONE bill of
+// 3000.0000 aged at the EARLIER due date**, with the second instalment's 2000.0000
+// and its own due date gone from the report and nothing anywhere to say so.
+//
+// ⚠️ THE TWO SHAPES THIS COMMENT USED TO RULE OUT ARE STILL RULED OUT, and the
+// reasoning is kept because it is what makes the third shape the right one:
+//   - a UNIQUE INDEX on bill_allocation cannot carry it. Duplicate names are LEGAL
+//     for AGAINST and for ON_ACCOUNT, and legal for openers a CALLER named (see the
+//     paragraph above: that is how Tally adds to an existing bill, and how
+//     internal/migration hands through what the XML says). An index cannot tell the
+//     invented names from the supplied ones.
+//   - and there is no ROW to lock: the collision is between two names neither
+//     transaction has written yet.
+//
+// ⛔ WHICH LEAVES A LOCK ON A NAME RATHER THAN ON A ROW — an ADVISORY lock, keyed
+// on exactly the (company, ledger, stem) the generated names would occupy. See
+// lockGeneratedBillRefStems.
 //
 // It RENAMES IN PLACE, through st.refs' backing array, so post() goes on reading
 // one variable for both the hashed payload and the bill_allocation rows — the
@@ -2958,6 +3031,15 @@ func resolveGeneratedBillRefNames(
 ) error {
 	if len(st.generated) == 0 {
 		return nil
+	}
+	// ⛔⛔ THE LOCK COMES BEFORE THE CHECK, AND THAT ORDERING IS THE FIX (D83). The
+	// check below asks "has any other voucher ever called a bill this?", and between
+	// that question and this transaction's COMMIT a concurrent poster can ask the
+	// same question and get the same answer. Serialising the two on the NAME they are
+	// competing for turns the loser's read into a read of the winner's committed row,
+	// so it takes the rename branch it would have taken sequentially.
+	if err := lockGeneratedBillRefStems(ctx, tx, companyID, st); err != nil {
+		return err
 	}
 	taken, err := billRefNamesTakenElsewhere(ctx, tx, companyID, voucherID, st.refs, st.generated)
 	if err != nil {

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -542,4 +544,171 @@ func loadCorpus(t *testing.T, id string) taxCorpus {
 	}
 	t.Fatalf("could not locate corpora/tax/%s.json", id)
 	return taxCorpus{}
+}
+
+// TestTwoCONCURRENTPostsOfOneNumberDoNotMERGEIntoOneBill is D83, and it is the only
+// test in this package that needs two things happening at once.
+//
+// ⛔⛔ THE SEQUENTIAL CASE WAS ALREADY CLOSED, AND THAT IS WHY THIS TEST HAD TO EXIST.
+// `resolveGeneratedBillRefNames` asks "has any other voucher ever called a bill this?"
+// and renames itself if so — which works perfectly when the two posts are one after the
+// other, and not at all when they overlap: under READ COMMITTED both ask before either
+// commits, both get "no", and both write the base name. Measured on the wire before the
+// fix, two posts in flight together:
+//
+//	post A -> 201 "7"      post B -> 201 "7"
+//	GET /outstandings -> ONE bill "Sales/2026-27/7", pending 3000.0000, due 2026-07-10
+//
+// The second instalment's 2000.0000 and its own 2026-08-10 due date were simply GONE
+// from the ageing report, with nothing anywhere to say so. Nobody gets an error; a
+// creditor's later instalment stops being chased.
+//
+// ⛔ WHAT THE FIX IS NOT. A unique index on bill_allocation cannot express the rule —
+// duplicate ref names are LEGAL for AGAINST, for ON_ACCOUNT and for openers a CALLER
+// named (that is how Tally adds to an existing bill) — and there is no ROW to lock,
+// because the collision is between two names neither transaction has written yet.
+// `lockGeneratedBillRefStems` takes an ADVISORY lock on the (company, ledger, stem) the
+// generated names would occupy: a lock on a NAME rather than on data.
+//
+// ⚠️ THE ASSERTION IS NOT ON THE STATUS CODES, AND THAT MATTERS. Both posts succeed in
+// both worlds — before the fix AND after it. What changes is the BOOKS: two bills, each
+// with its own amount and its own due date, exactly as the sequential case has always
+// produced. A test that checked for an error would pass on the broken code.
+func TestTwoCONCURRENTPostsOfOneNumberDoNotMERGEIntoOneBill(t *testing.T) {
+	if os.Getenv("CORED_SKIP_DB") != "" {
+		t.Skip("db tests skipped")
+	}
+	pool, ctx, _, _ := setup(t)
+	m := masters.NewService(pool)
+	led := ledger.NewService(pool)
+
+	vtID, _ := m.VoucherTypeID(ctx, "Sales")
+	debtor, err := m.CreateLedger(ctx, masters.Ledger{
+		Name: "Race Debtor", GroupName: "Sundry Debtors", MaintainBillByBill: true,
+	}, "tester")
+	if err != nil {
+		t.Fatalf("create debtor: %v", err)
+	}
+	salesAcct, err := m.CreateLedger(ctx, masters.Ledger{
+		Name: "Race Sales", GroupName: "Sales Accounts",
+	}, "tester")
+	if err != nil {
+		t.Fatalf("create sales ledger: %v", err)
+	}
+
+	// ⛔ THE SAME HAND-TYPED NUMBER ON BOTH, and NEITHER names its reference. Both are
+	// required: numbering.go honours a client-supplied `VoucherNo` verbatim (and does
+	// not bump the counter), and an empty RefName on a NEW opener is what makes the
+	// SERVER invent the name — the only names this function resolves.
+	post := func(amount, due string) (ledger.PostResult, error) {
+		return led.PostVoucher(ctx, ledger.VoucherInput{
+			Class: ledger.Sales, VoucherTypeID: vtID, VoucherNo: "7",
+			VoucherDate: "2025-05-12", PartyLedgerID: debtor, CreatedBy: "tester",
+			Postings: []ledger.PostingInput{
+				{LedgerID: debtor, DrCr: ledger.Debit, Amount: dec(t, amount)},
+				{LedgerID: salesAcct, DrCr: ledger.Credit, Amount: dec(t, amount)},
+			},
+			BillAllocations: []ledger.BillAllocationInput{
+				{LedgerID: debtor, RefName: "", RefType: ledger.RefNew, DrCr: ledger.Debit,
+					Amount: dec(t, amount), DueDate: due},
+			},
+		})
+	}
+
+	// ⛔ A BARRIER, NOT JUST TWO GOROUTINES. Both must be inside PostVoucher before
+	// either can commit, or this is the sequential case wearing a WaitGroup — and the
+	// sequential case passes on the broken code.
+	var start sync.WaitGroup
+	var done sync.WaitGroup
+	start.Add(1)
+	errs := make([]error, 2)
+	amounts := []string{"1000.0000", "2000.0000"}
+	dues := []string{"2025-06-11", "2025-07-11"}
+	for i := 0; i < 2; i++ {
+		done.Add(1)
+		go func(i int) {
+			defer done.Done()
+			start.Wait()
+			_, errs[i] = post(amounts[i], dues[i])
+		}(i)
+	}
+	start.Done()
+	done.Wait()
+
+	for i, e := range errs {
+		if e != nil {
+			t.Fatalf("concurrent post %d failed: %v — both posts must SUCCEED; this row is "+
+				"about what lands in the books, not about refusing a write", i, e)
+		}
+	}
+
+	// ⛔ READ THE BOOKS BACK. The names are what the Outstandings report groups on, so
+	// two names is two bills and one name is one bill of the summed amount.
+	type row struct {
+		ref    string
+		amount decimal.Decimal
+		due    *string
+	}
+	var rows []row
+	if err := pool.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		rs, err := tx.Query(ctx,
+			`SELECT ref_name, amount, due_date::text FROM bill_allocation
+			   WHERE ledger_id = $1 ORDER BY ref_name`,
+			debtor)
+		if err != nil {
+			return err
+		}
+		defer rs.Close()
+		for rs.Next() {
+			var r row
+			if err := rs.Scan(&r.ref, &r.amount, &r.due); err != nil {
+				return err
+			}
+			rows = append(rows, r)
+		}
+		return rs.Err()
+	}); err != nil {
+		t.Fatalf("read bill allocations: %v", err)
+	}
+
+	if len(rows) != 2 {
+		t.Fatalf("two concurrent posts produced %d bill allocation(s), want 2: %+v — one row "+
+			"means both invented the SAME name, so the Outstandings report shows ONE bill of "+
+			"the summed amount aged at the EARLIER due date and the later instalment is gone",
+			len(rows), rows)
+	}
+	names := map[string]bool{rows[0].ref: true, rows[1].ref: true}
+	if len(names) != 2 {
+		t.Fatalf("the two bills share the name %q — they will net into one on the ageing report",
+			rows[0].ref)
+	}
+	// ⛔ AND ONE OF THEM CARRIES THE DISCRIMINATED STEM, which is what says the loser
+	// went down the RENAME branch rather than the two of them differing by accident.
+	discriminated := 0
+	for r := range names {
+		if strings.Contains(r, " (") && strings.HasSuffix(r, ")") {
+			discriminated++
+		}
+	}
+	if discriminated != 1 {
+		t.Errorf("expected exactly ONE of %v to carry the discriminated `(xxxxxxxx)` stem; the "+
+			"loser of the race must take the same rename branch the sequential case takes",
+			rows)
+	}
+	// Each keeps its OWN amount and its OWN due date — the two facts the merge destroyed.
+	byAmount := map[string]*string{}
+	for _, r := range rows {
+		byAmount[r.amount.StringFixed(4)] = r.due
+	}
+	for i, want := range amounts {
+		due, ok := byAmount[want]
+		if !ok {
+			t.Errorf("no bill carries amount %s: %+v", want, rows)
+			continue
+		}
+		if due == nil || *due != dues[i] {
+			t.Errorf("the %s bill is due %v, want %s — the merge aged BOTH at the earlier date",
+				want, due, dues[i])
+		}
+	}
 }
