@@ -385,10 +385,16 @@ for (const [phrase, kind] of [
     sameNames,
     `screen ${JSON.stringify([...screenByLedger].map(([n, v]) => `${n}=${money(v)}`))} vs report ${JSON.stringify([...o.byLedger].map(([n, v]) => `${n}=${money(v)}`))}`,
   );
+  // ⛔ RE-PINNED BY D86. This read /AS AT TODAY/, which was the caption's claim
+  // until the rows stopped being bounded at today. Both halves are asserted: the
+  // new claim is present AND the old one is gone, so a revert of the sentence or of
+  // the SQL under it fails here rather than passing on a caption nobody re-reads.
   rec(
-    `"${phrase}" states its as-at basis on screen`,
-    /AS AT TODAY/i.test(a.measure),
-    a.measure.slice(0, 100),
+    `"${phrase}" states its NO-DATE-LIMIT basis on screen, and no longer claims "as at today"`,
+    /NO DATE LIMIT/i.test(a.measure) &&
+      /INCLUDING any dated in the future/i.test(a.measure) &&
+      !/AS AT TODAY/i.test(a.measure),
+    a.measure.slice(0, 160),
   );
 }
 

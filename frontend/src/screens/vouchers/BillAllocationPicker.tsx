@@ -91,6 +91,17 @@ function useOpenBills(
     let live = true;
     setLoading(true);
     client
+      // ⛔ NO `as_on`, AND THAT IS NOW A DECISION RATHER THAN AN OMISSION (D86).
+      // Since the ageing report stopped bounding an unnamed date at today, this
+      // picker lists FUTURE-DATED open bills too — and it should. The question this
+      // list answers is "which open bill is this payment for", and a customer paying
+      // an advance or proforma invoice early is the ordinary case; excluding it would
+      // make an allocable bill unallocable and push the operator onto ON ACCOUNT,
+      // which is the balance nobody can chase later. A bill that exists and is unpaid
+      // is a valid target whatever its date.
+      // ⚠️ Passing today's date here to "restore" the old list would be the wrong
+      // fix twice over: it would re-open the same disagreement with the ledger
+      // balance, on a surface where the consequence is a mis-allocated receipt.
       .getOutstandings(companyID, { kind })
       .then((res) => {
         if (!live) return;

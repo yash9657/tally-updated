@@ -2941,9 +2941,30 @@ func (s *Server) handleOutstandings(w http.ResponseWriter, r *http.Request) {
 			"amount": st.Amount.StringFixed(4),
 		})
 	}
+	// ⛔⛔ `as_on` IS EMPTY WHEN THE CALLER NAMED NO DATE, AND THAT IS THE WHOLE
+	// SECOND HALF OF D86. It used to echo the RESOLVED date — today — on a report
+	// whose rows were no longer limited to today, so every caption downstream read
+	// "as at <today>" over a table that included next month's invoices. A caption
+	// that is present, well-formed and false is worse than none.
+	//
+	// ✅ THE CONVENTION IS ALREADY IN THIS CODEBASE AND IS COPIED RATHER THAN
+	// INVENTED: `/stock-summary` echoes `as_on: ""` for an unbounded read, and
+	// `stockSummaryScopeLine` in the client turns that empty string into "NO DATE
+	// LIMIT — …". ⚠️ EMPTY IS AN ANSWER, not a missing field, and the client's own
+	// comment explains why `??` and not `||` is the right operator on it.
+	//
+	// ⚠️ `aged_as_on` IS ALWAYS POPULATED, because the ageing reference is a real
+	// and different fact: an unbounded report still buckets every bill by days
+	// overdue against SOME day, and dropping that would trade a false caption for a
+	// missing one.
+	asOnEcho := ""
+	if out.Bounded {
+		asOnEcho = out.AsOn
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"kind":        string(out.Kind),
-		"as_on":       out.AsOn,
+		"as_on":       asOnEcho,
+		"aged_as_on":  out.AsOn,
 		"parties":     parties,
 		"slab_totals": slabs,
 		"total":       out.Total.StringFixed(4),

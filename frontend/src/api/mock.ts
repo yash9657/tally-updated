@@ -5970,12 +5970,26 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       const c = ensure(companyID);
       const kind = query?.kind ?? "RECEIVABLE";
       const wantGroup = kind === "PAYABLE" ? "Sundry Creditors" : "Sundry Debtors";
-      const asOn = query?.as_on || new Date().toISOString().slice(0, 10);
+      // ⛔⛔ TWO QUESTIONS, TWO VARIABLES — AND THIS MOCK USED TO CONFLATE THEM
+      // EXACTLY AS CORED DID (D86). `bound` is the date the ROWS are limited to
+      // ("" = not limited); `agedOn` is the day the ageing is measured against and
+      // is always a real date. Echoing the resolved date as `as_on` while listing
+      // every bill whatever its date is a caption that is present and false, and it
+      // is what made `verify:demo`'s and the screen's vitest arms green either way.
+      //
+      // ⛔ AND THE BOUND IS NOW APPLIED, WHICH IT NEVER WAS HERE. The loop below had
+      // no date predicate at all, so the mock was UNBOUNDED in both cases — looser
+      // than cored in the direction that hides a bug (D84's class). With `as_on`
+      // supplied it now excludes later vouchers, exactly as cored does, so a vitest
+      // that asks "as at April" gets April's answer here too.
+      const bound = (query?.as_on ?? "").trim();
+      const agedOn = bound || new Date().toISOString().slice(0, 10);
 
       // Net every reference on a CURRENT, non-deleted voucher. c.views holds
       // exactly those: an ALTER restates the view in place and a DELETE removes it.
       const net = new Map<string, { ledgerID: string; ref: string; units: bigint; due: string }>();
       for (const view of c.views.values()) {
+        if (bound !== "" && (view.voucher_date ?? "") > bound) continue;
         for (const b of view.bill_allocations) {
           const ledger = c.ledgers.find((l) => l.id === b.ledger_id);
           if (!ledger || ledger.group !== wantGroup) continue;
@@ -6021,7 +6035,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
             : Math.max(
                 0,
                 Math.round(
-                  (Date.parse(asOn) - Date.parse(due)) / 86_400_000,
+                  (Date.parse(agedOn) - Date.parse(due)) / 86_400_000,
                 ),
               );
         const slab = SLABS.find(([, upto]) => upto !== 0 && overdue <= upto)?.[0] ?? "180+ days";
@@ -6049,7 +6063,11 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
 
       return {
         kind,
-        as_on: asOn,
+        // ⛔ "" WHEN NOTHING WAS ASKED FOR — the same convention cored and
+        // /stock-summary use, and the string `outstandingsScopeLine` turns into the
+        // NO DATE LIMIT sentence. Echoing `agedOn` here is the defect.
+        as_on: bound,
+        aged_as_on: agedOn,
         parties: [...byParty.values()].sort((a, b) => a.ledger.localeCompare(b.ledger)),
         slab_totals: SLABS.filter(([l]) => slabTotals.has(l)).map(([label]) => ({
           label,

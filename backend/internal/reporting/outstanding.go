@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -65,8 +66,21 @@ type PartyOutstanding struct {
 // Outstanding is the Receivables or Payables ageing report: per-party rows
 // (each expandable to its bills), ageing-slab totals, and the grand total.
 type Outstanding struct {
-	Kind       OutstandingKind
-	AsOn       string // ISO date the ageing is computed against
+	Kind OutstandingKind
+	// AsOn is the ISO date the AGEING is computed against. ⚠️ IT IS NOT A CLAIM
+	// ABOUT WHICH BILLS ARE INCLUDED — see Bounded. It is always populated,
+	// because every bill on this report is aged against something.
+	AsOn string
+	// Bounded is whether the CALLER named a date, and therefore whether the rows
+	// are limited to vouchers dated on or before AsOn.
+	//
+	// ⛔⛔ IT EXISTS BECAUSE ONE FIELD CANNOT SAY BOTH THINGS, AND TRYING TO WAS
+	// DEFECT D86's SECOND HALF. With `AsOn` alone, an unbounded report echoed
+	// today's date and every caption downstream read it as "as at today" — a
+	// sentence that is fully present, well-formed and false. A reader that wants
+	// to know what the rows COVER must ask this; a reader that wants to know what
+	// the ageing is measured FROM asks AsOn.
+	Bounded    bool
 	Parties    []PartyOutstanding
 	SlabTotals []SlabTotal
 	Total      decimal.Decimal
@@ -128,6 +142,30 @@ func (s *Service) Outstandings(ctx context.Context, companyID uuid.UUID, kind Ou
 	if err != nil {
 		return Outstanding{}, err
 	}
+	// ⛔⛔ "THE CALLER SUPPLIED NOTHING" AND "THE CALLER SUPPLIED TODAY" ARE DIFFERENT
+	// QUESTIONS, AND CONFLATING THEM WAS DEFECT D86. `resolveAsOn` answers the second
+	// by defaulting the first, which is right for AGEING — an ageing report with no
+	// reference date answers nothing — and wrong for INCLUSION. Bounded at today, this
+	// report disagreed with the Balance Sheet's Sundry Debtors/Creditors the moment a
+	// bill was dated ahead: driven, BS 109950.0000 against Outstandings 108770.0000
+	// over one set of books, with nothing on either report to reconcile them.
+	//
+	// ⛔ THE DECISION IS THAT **OUTSTANDINGS** MOVES, NOT THE BALANCE SHEET. A ledger
+	// balance includes every posted voucher whatever its date; a bill-wise breakup of
+	// that same balance must cover the same vouchers or it is a breakup of something
+	// else. So with no `as_on` the ROWS are unbounded and the whole balance is
+	// explained; with an explicit `as_on` the bound is honoured exactly as before.
+	//
+	// ⚠️ `resolveAsOn` IS PACKAGE-SHARED — `bankrecon.go` is a second caller with its
+	// own meaning for empty ("everything ever posted") — so its signature and its
+	// default are UNTOUCHED and the distinction is carried here, next to the query
+	// that needs it. `asOnTime` still reaches `ageBill` and still self-captions, so an
+	// unbounded report ages against today rather than against nothing.
+	//
+	// ✅ THE PRECEDENT IS IN THIS PACKAGE: `orderbook.go`'s `resolveOverdueAsOn` splits
+	// exactly these two halves — the ROWS stay genuinely unbounded while only the
+	// LATENESS gets a default — and says so in its own comment.
+	bounded := strings.TrimSpace(asOn) != ""
 
 	// Receivables track debit-natured (asset) parties; payables credit-natured
 	// (liability) parties. The pending sign is oriented so a still-open bill is
@@ -137,7 +175,12 @@ func (s *Service) Outstandings(ctx context.Context, companyID uuid.UUID, kind Ou
 		natureFilter = "LIABILITY"
 	}
 
-	out := Outstanding{Kind: kind, AsOn: asOnTime.Format("2006-01-02"), Total: decimal.Zero}
+	out := Outstanding{
+		Kind:    kind,
+		AsOn:    asOnTime.Format("2006-01-02"),
+		Bounded: bounded,
+		Total:   decimal.Zero,
+	}
 
 	err = s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		// Net each (ledger, ref_name) by dr_cr. For a receivable (debit-natured),
@@ -190,8 +233,32 @@ func (s *Service) Outstandings(ctx context.Context, companyID uuid.UUID, kind Ou
 			          UNION ALL
 			          SELECT ob.ledger_id, ob.ref_name, ob.dr_cr, ob.amount, ob.due_date
 			            FROM ledger_opening_bill ob`
-		if !s.openingIsInScope(ctx, tx, asOnTime) {
+		// ⛔ THE OPENING BREAKUP IS DECIDED EXPLICITLY FOR THE UNBOUNDED CASE RATHER
+		// THAN INHERITING TODAY'S ANSWER. Unbounded means "every bill these books
+		// carry", and the opening references ARE part of the books, so they are IN —
+		// and the guard below is asked only when the caller named a date. It happens
+		// to give the same answer for a live company (today >= books_beginning_from),
+		// which is exactly why it must be written down: a silent agreement is not a
+		// decision, and the next person to read `openingIsInScope` needs to know
+		// which question it is answering.
+		if bounded && !s.openingIsInScope(ctx, tx, asOnTime) {
 			openingBranch = ""
+		}
+		// ⛔ THE INCLUSION BOUND, AND IT IS NOW THE ONLY THING `bounded` GATES. The
+		// predicate is spelled exactly as before when a date was asked for; with no
+		// date there is no predicate at all, so a voucher with a NULL date is included
+		// too — which is the honest answer for "every bill on these books" and is the
+		// same set the ledger balance covers.
+		inclusionBound := ""
+		// ⛔ THE ARGUMENT LIST MOVES WITH THE PREDICATE. pgx binds exactly what the
+		// statement references, so leaving `$2` in the args while dropping it from the
+		// text answers `bind message supplies 2 parameters, but prepared statement
+		// requires 1` — a 500 on the report, not a wrong number. They are built
+		// together, here, for that reason.
+		args := []any{natureFilter}
+		if bounded {
+			inclusionBound = "\n			             AND vv.voucher_date <= $2::date"
+			args = append(args, asOnTime.Format("2006-01-02"))
 		}
 		rows, err := tx.Query(ctx, fmt.Sprintf(
 			`SELECT ba.ledger_id, l.name, g.name, ba.ref_name,
@@ -205,15 +272,14 @@ func (s *Service) Outstandings(ctx context.Context, companyID uuid.UUID, kind Ou
 			              ON vh.company_id = vv.company_id
 			             AND vh.voucher_id = vv.voucher_id
 			             AND vh.current_version_id = vv.id
-			           WHERE vh.is_deleted = false
-			             AND vv.voucher_date <= $2::date%s
+			           WHERE vh.is_deleted = false%s%s
 			        ) ba
 			   JOIN ledger l        ON l.id = ba.ledger_id
 			   JOIN account_group g ON g.id = l.group_id
 			  WHERE g.nature = $1
 			  GROUP BY ba.ledger_id, l.name, g.name, ba.ref_name
-			  ORDER BY l.name, ba.ref_name`, signExpr, openingBranch),
-			natureFilter, asOnTime.Format("2006-01-02"))
+			  ORDER BY l.name, ba.ref_name`, signExpr, inclusionBound, openingBranch),
+			args...)
 		if err != nil {
 			return fmt.Errorf("reporting: query outstandings: %w", err)
 		}

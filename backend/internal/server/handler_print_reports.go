@@ -664,6 +664,19 @@ func outstandingKindParam(w http.ResponseWriter, r *http.Request) (reporting.Out
 	}
 }
 
+// outstandingsSubtitle is the ONE writing of the printed ageing's scope sentence.
+//
+// ⚠️ It takes the whole report rather than two strings so a caller cannot pass the
+// ageing date and forget the bound — which is exactly the mistake D86 was.
+func outstandingsSubtitle(out reporting.Outstanding) string {
+	aged := "Bill-wise, aged " + printAsOnSubtitle(out.AsOn)
+	if out.Bounded {
+		return aged
+	}
+	return aged + " — NO DATE LIMIT on which bills are listed: every bill on these " +
+		"books, including any dated after that day"
+}
+
 func (s *Server) printOutstandings(ctx context.Context, w http.ResponseWriter, r *http.Request, companyID uuid.UUID) (printing.ReportTable, bool) {
 	kind, ok := outstandingKindParam(w, r)
 	if !ok {
@@ -713,8 +726,14 @@ func (s *Server) printOutstandings(ctx context.Context, w http.ResponseWriter, r
 		title = "Outstanding Payables"
 	}
 	return printing.ReportTable{
-		Title:     title,
-		Subtitle:  "Bill-wise, aged " + printAsOnSubtitle(out.AsOn),
+		Title: title,
+		// ⛔ THE PRINTED COPY MUST NOT CLAIM A BOUND THE ROWS DO NOT HAVE (D86). The
+		// ageing sentence is true either way — every bill is aged against `AsOn` — but
+		// on an unbounded read the sheet also has to say the ROWS are not date-limited,
+		// or a printout filed against a quarter looks like a quarter-end statement and
+		// is not one. Same words the screen uses, so the paper and the screen cannot
+		// disagree.
+		Subtitle:  outstandingsSubtitle(out),
 		Landscape: true,
 		Columns: []printing.Column{
 			{Header: "Party", Align: printing.AlignLeft, Width: 4},

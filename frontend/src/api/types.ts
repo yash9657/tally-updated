@@ -1554,7 +1554,23 @@ export interface OutstandingSlabTotal {
 
 export interface OutstandingsResponse {
   kind: OutstandingKind;
+  /**
+   * The date the ROWS are limited to, or `""` when they are not limited at all.
+   *
+   * ⛔⛔ EMPTY IS AN ANSWER, NOT A MISSING FIELD (D86), and it is the same
+   * convention `/stock-summary` already uses. The server used to echo the
+   * RESOLVED date here — today — on a report whose rows were no longer limited to
+   * today, so the screen's "As on <date>" caption was present, well-formed and
+   * false. Read it with `??`, never `||`: a bounded report's date and an
+   * unbounded report's `""` are two different answers, and `||` collapses them.
+   */
   as_on: string;
+  /**
+   * The day every bill's ageing is measured against. ALWAYS populated, including
+   * on an unbounded read — the slabs mean nothing without it. ⚠️ It is NOT a claim
+   * about which bills are listed; `as_on` is.
+   */
+  aged_as_on: string;
   parties: OutstandingParty[];
   slab_totals: OutstandingSlabTotal[];
   total: Money;

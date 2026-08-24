@@ -249,7 +249,7 @@ func TestExecute_OutstandingsMatchesTheOutstandingsReport(t *testing.T) {
 		   JOIN voucher_version vv ON vv.id = ba.voucher_version_id
 		  WHERE ba.company_id = $1 AND vv.voucher_date > (now() AT TIME ZONE 'UTC')::date`,
 		companyID); n < 1 {
-		t.Fatalf("seed no longer carries a FUTURE-dated bill allocation: the as-on "+
+		t.Fatalf("seed no longer carries a FUTURE-dated bill allocation: the as-on " +
 			"bound this test exists to prove is not exercised")
 	}
 
@@ -311,14 +311,32 @@ func TestExecute_OutstandingsMatchesTheOutstandingsReport(t *testing.T) {
 	}
 }
 
-// TestExecute_OutstandingsExcludesTheFutureDatedBill nails the as-on bound
-// directly rather than by arithmetic: it asks for the answer broken down by
-// REFERENCE NAME and requires the future-dated invoice's reference to be absent
-// while a same-day one is present.
+// TestExecute_OutstandingsINCLUDESTheFutureDatedBill nails the absence of an
+// as-on bound directly rather than by arithmetic: it asks for the answer broken
+// down by REFERENCE NAME and requires the future-dated invoice's reference to be
+// PRESENT alongside a same-day one.
 //
 // A test that only compared totals could be satisfied by two errors cancelling.
 // This one names the row.
-func TestExecute_OutstandingsExcludesTheFutureDatedBill(t *testing.T) {
+//
+// ⛔⛔ THIS TEST IS INVERTED, NOT NEW, AND THE INVERSION IS THE FIX (D86, §5.16).
+// It used to require INV-FUT to be ABSENT — the surfaces bounded the rows at today
+// — and it carried its own tripwire for the day that changed: a final loop over the
+// REPORT that failed with "reporting/outstanding.go lost its as-on bound and this
+// test is measuring the wrong thing". That tripwire fired, on purpose, and this is
+// the other side of it.
+//
+// ⛔ WHY THE DIRECTION REVERSED. Outstandings is the BILL-WISE BREAKUP of a ledger
+// balance, and a ledger balance includes every posted voucher whatever its date.
+// Bounded at today the breakup explained less than the balance it broke up, and the
+// two reports disagreed by exactly the future-dated bills with nothing on either to
+// reconcile them. The Balance Sheet was deliberately NOT moved; this surface was.
+// An explicit `as_on` still bounds, and `outstanding_as_on_test.go` still pins that.
+//
+// ⚠️ IT IS DELETED NOWHERE. An absent test would leave nothing that notices a
+// REVERT, and this one now fails the day the bound comes back — while still saying
+// why the bound must not.
+func TestExecute_OutstandingsINCLUDESTheFutureDatedBill(t *testing.T) {
 	pool, ctx, companyID, ids := setupCompany(t, "OS AsOn Co")
 	seedBillWiseBooks(t, pool, ctx, ids)
 
@@ -330,13 +348,10 @@ func TestExecute_OutstandingsExcludesTheFutureDatedBill(t *testing.T) {
 		Limit:      1000,
 	})
 
-	if _, ok := byRef["INV-FUT"]; ok {
-		t.Errorf("a bill raised in the FUTURE (INV-FUT) is reported as outstanding TODAY; "+
-			"the skeleton's `vv.voucher_date <= as-on` bound is not doing its job. rows=%v", byRef)
-	}
-	// Controls: the same-day invoice and BOTH opening references are present, so
-	// the absence above is a date decision and not an empty answer.
-	for _, ref := range []string{"INV-1", "OB-ACME-1", "OB-ACME-2"} {
+	// Controls first, then the row under test — all four must be present, because
+	// "everything is here" is only a date decision if the answer is not simply
+	// everything-shaped by accident of an empty query.
+	for _, ref := range []string{"INV-FUT", "INV-1", "OB-ACME-1", "OB-ACME-2"} {
 		if _, ok := byRef[ref]; !ok {
 			t.Errorf("reference %q is missing from the query answer; rows=%v", ref, byRef)
 		}
@@ -344,15 +359,45 @@ func TestExecute_OutstandingsExcludesTheFutureDatedBill(t *testing.T) {
 
 	// And the report agrees about the same row set — the point of D20 is that
 	// these two surfaces must not diverge again.
-	want, err := reporting.NewService(pool).Outstandings(ctx, companyID, reporting.Receivables, "", nil)
+	rep := reporting.NewService(pool)
+	want, err := rep.Outstandings(ctx, companyID, reporting.Receivables, "", nil)
 	if err != nil {
 		t.Fatalf("oracle: %v", err)
 	}
+	found := false
 	for _, p := range want.Parties {
 		for _, b := range p.Bills {
 			if b.RefName == "INV-FUT" {
-				t.Fatalf("the REPORT itself now includes INV-FUT — reporting/outstanding.go "+
-					"lost its as-on bound and this test is measuring the wrong thing")
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Errorf("the REPORT does not include INV-FUT with no as_on — the two surfaces have " +
+			"diverged again, which is D20 verbatim")
+	}
+	if want.Bounded {
+		t.Errorf("Outstandings reports Bounded=true for an EMPTY as_on; every caption " +
+			"downstream reads that as a date limit the rows do not have")
+	}
+
+	// ⛔⛔ AND THE OTHER HALF, WHICH IS WHAT KEEPS THIS A DATE DECISION RATHER THAN A
+	// DELETED GUARD: an EXPLICIT as_on still excludes the future-dated bill. Without
+	// this arm the fix could simply be "the bound was removed", and the report would
+	// have no way to answer "as at the quarter end" at all.
+	today := time.Now().UTC().Format("2006-01-02")
+	asAt, err := rep.Outstandings(ctx, companyID, reporting.Receivables, today, nil)
+	if err != nil {
+		t.Fatalf("oracle (explicit as_on): %v", err)
+	}
+	if !asAt.Bounded {
+		t.Errorf("Outstandings reports Bounded=false for an EXPLICIT as_on %q", today)
+	}
+	for _, p := range asAt.Parties {
+		for _, b := range p.Bills {
+			if b.RefName == "INV-FUT" {
+				t.Errorf("with an EXPLICIT as_on of %s the future-dated bill is STILL listed — "+
+					"the bound was removed rather than made conditional", today)
 			}
 		}
 	}
@@ -375,7 +420,16 @@ func TestExecute_OutstandingsExcludesTheFutureDatedBill(t *testing.T) {
 // COALESCE(..., '-infinity'), because a bare `>= NULL` is NULL and WHERE treats
 // that as false — i.e. it would have silently dropped every opening reference
 // the moment the GUC was unreadable, which is the OPPOSITE of the report.
-func TestExecute_OutstandingsDropsTheOpeningWhenBooksBeginLater(t *testing.T) {
+// ⛔⛔ INVERTED BY D86, AND THE COMMENT ABOVE IS KEPT BECAUSE ITS REASONING IS STILL
+// EXACTLY RIGHT — for a report that was ASKED FOR A DATE. "Asked for a date before
+// the books began" is a question; "asked for no date at all" is not, and the guard
+// answered it anyway. With no as_on the report covers every bill these books carry,
+// the opening bill-wise breakup IS part of those books, and the Balance Sheet's
+// ledger balance always includes it — so both surfaces now keep it, together, and
+// `reporting.Outstandings` gates the guard on `bounded` in the same words.
+// ⚠️ The test is renamed rather than deleted so a REVERT is still noticed, and the
+// EXPLICIT-as_on arm below is what keeps the guard itself alive and tested.
+func TestExecute_OutstandingsKeepsTheOpeningWhenUnboundedAndDropsItAsAtAnEarlierDate(t *testing.T) {
 	pool, ctx, companyID, ids := setupCompanyBooksFrom(t, "OS Books Co",
 		time.Now().UTC().AddDate(0, 0, 30).Format("2006-01-02"))
 	seedBillWiseBooks(t, pool, ctx, ids)
@@ -394,16 +448,36 @@ func TestExecute_OutstandingsDropsTheOpeningWhenBooksBeginLater(t *testing.T) {
 		Limit:      1000,
 	})
 	for _, ref := range []string{"OB-ACME-1", "OB-ACME-2"} {
-		if _, ok := byRef[ref]; ok {
-			t.Errorf("opening reference %q is reported although the books do not begin "+
-				"until 30 days from now; rows=%v", ref, byRef)
+		if _, ok := byRef[ref]; !ok {
+			t.Errorf("opening reference %q is MISSING from an unbounded answer; the opening "+
+				"bill-wise breakup is part of these books and the ledger balance it breaks "+
+				"up always includes it; rows=%v", ref, byRef)
 		}
 	}
-	// The POSTED invoice is still there, proving the exclusion is the opening
-	// branch and not the whole query going dark.
+	// The POSTED invoice is there too, so this is not "the query returns
+	// everything because it returns everything".
 	if _, ok := byRef["INV-1"]; !ok {
-		t.Errorf("the posted invoice INV-1 vanished too — the guard excluded more than "+
-			"the opening breakup; rows=%v", byRef)
+		t.Errorf("the posted invoice INV-1 is missing; rows=%v", byRef)
+	}
+
+	// ⛔ THE GUARD IS STILL ALIVE AND THIS IS WHERE IT IS TESTED. Asked AS AT a date
+	// before the books began, the report must still drop the whole opening breakup —
+	// all-or-nothing, because opening references balance among themselves. This is
+	// the arm that stops the fix being read as "the books-beginning guard was
+	// deleted".
+	before := time.Now().UTC().AddDate(0, 0, 10).Format("2006-01-02")
+	early, err := reporting.NewService(pool).Outstandings(ctx, companyID, reporting.Receivables, before, nil)
+	if err != nil {
+		t.Fatalf("oracle (as at %s): %v", before, err)
+	}
+	for _, p := range early.Parties {
+		for _, b := range p.Bills {
+			if b.RefName == "OB-ACME-1" || b.RefName == "OB-ACME-2" {
+				t.Errorf("as at %s — BEFORE the books begin — opening reference %q is still "+
+					"reported; openingIsInScope is no longer consulted for a bounded read",
+					before, b.RefName)
+			}
+		}
 	}
 
 	// PARITY, which is the actual requirement: whatever the report does here,

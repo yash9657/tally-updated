@@ -215,3 +215,98 @@ func TestTheOpeningBreakupIsNotReportedBeforeTheBooksBegan(t *testing.T) {
 		t.Errorf("as at 2026-07-26 the Balance Sheet says %s and Outstandings says %s", bs, after.Total)
 	}
 }
+
+// TestOutstandingsWithNoAsOnAGREESWithTheBalanceSheet is D86, and it is the other
+// end of the same predicate the three tests above pin.
+//
+// ⛔⛔ THE DEFECT WAS THE **DEFAULT**, NOT THE PREDICATE. Everything above asks for a
+// DATE and is right to be bounded by it. Asked for NOTHING, `resolveAsOn` handed the
+// predicate today's date — so the bill-wise breakup covered less than the ledger
+// balance it is a breakup OF the moment a bill was dated ahead, and the two reports
+// disagreed by exactly those bills with nothing on either to reconcile them. Driven:
+// Balance Sheet 109950.0000 against Outstandings 108770.0000.
+//
+// ⛔ AND THE DECISION WAS THAT **OUTSTANDINGS** MOVES. The Balance Sheet is
+// deliberately NOT bounded at today — a ledger balance includes every posted voucher
+// whatever its date — so `verify:demo` needs no re-pin and the sheet's own figure is
+// byte-identical to what it was.
+//
+// ⚠️ THIS PACKAGE HAD NO TEST ON THE UNBOUNDED DEFAULT AT ALL, WHICH IS WHY THE
+// DEFECT LIVED HERE. Making the change and running `go test ./internal/reporting/`
+// was entirely GREEN; the only three failures anywhere were in `internal/query`. So
+// every assertion in this file was about a date that had been ASKED for, and the
+// answer nobody asked for was the one that was wrong.
+func TestOutstandingsWithNoAsOnAGREESWithTheBalanceSheet(t *testing.T) {
+	pool, ctx, companyID, _ := setup(t)
+	led := ledger.NewService(pool)
+	svc := reporting.NewService(pool)
+	party, sales := billParties(t, pool, ctx)
+
+	// One ordinary invoice and one dated well AHEAD — a proforma keyed early, a
+	// scheduled billing run, an advance invoice. It is posted, so the ledger
+	// balance carries it.
+	billSale(t, led, ctx, party, sales, "NOW-1", "2026-05-10", "NOW-1", "10000.0000")
+	billSale(t, led, ctx, party, sales, "FUT-1", "2027-01-15", "FUT-1", "4000.0000")
+
+	// ⛔ THE ORACLE, AND NEITHER CALL NAMES A DATE. `debtorsAsAt` reads the Balance
+	// Sheet, which is computed from ledger_balance (postings); Outstandings is
+	// computed from bill_allocation. Two paths, one answer.
+	unbounded, err := svc.Outstandings(ctx, companyID, reporting.Receivables, "", nil)
+	if err != nil {
+		t.Fatalf("outstandings with no as_on: %v", err)
+	}
+	if bs := debtorsAsAt(t, svc, ctx, companyID, ""); !bs.Equal(unbounded.Total) {
+		t.Errorf("with NO as_on the Balance Sheet says Sundry Debtors %s and Outstandings says %s — "+
+			"a bill-wise breakup that explains less than the balance it breaks up (short by %s)",
+			bs, unbounded.Total, bs.Sub(unbounded.Total))
+	}
+	if want := dec("14000"); !unbounded.Total.Equal(want) {
+		t.Errorf("Outstandings with no as_on = %s, want %s", unbounded.Total, want)
+	}
+	// It NAMES the row, not just the total: two errors cancelling would satisfy an
+	// arithmetic-only check.
+	refs := map[string]bool{}
+	for _, p := range unbounded.Parties {
+		for _, b := range p.Bills {
+			refs[b.RefName] = true
+		}
+	}
+	if !refs["FUT-1"] {
+		t.Errorf("the future-dated bill FUT-1 is absent from an unbounded report; refs=%v", refs)
+	}
+	if !refs["NOW-1"] {
+		t.Errorf("NOW-1 is absent too — the report is not simply unbounded, it is empty; refs=%v", refs)
+	}
+
+	// ⛔ AND THE REPORT SAYS WHICH QUESTION IT ANSWERED. `AsOn` is the AGEING
+	// reference and is always populated; `Bounded` is the claim about the ROWS. One
+	// field could not say both, and every caption downstream reads the wrong one if
+	// it tries.
+	if unbounded.Bounded {
+		t.Errorf("Bounded=true for an empty as_on — every caption downstream will claim a date " +
+			"limit these rows do not have, which is the same class of defect as the wrong number")
+	}
+	if unbounded.AsOn == "" {
+		t.Errorf("AsOn is empty — the bills are still aged against a day, and dropping that " +
+			"trades a false caption for a missing one")
+	}
+
+	// ── THE CONTROL, AND IT IS THE WHOLE POINT ────────────────────────────────
+	// "Remove the bound" would satisfy every assertion above. An EXPLICIT as_on must
+	// still bound, exactly as the three tests above require, and must still say so.
+	as31May, err := svc.Outstandings(ctx, companyID, reporting.Receivables, "2026-05-31", nil)
+	if err != nil {
+		t.Fatalf("outstandings as at 2026-05-31: %v", err)
+	}
+	if want := dec("10000"); !as31May.Total.Equal(want) {
+		t.Fatalf("CONTROL: as at 2026-05-31 = %s, want %s — the bound was REMOVED rather than "+
+			"made conditional, and the report can no longer answer 'as at the quarter end'",
+			as31May.Total, want)
+	}
+	if !as31May.Bounded {
+		t.Errorf("CONTROL: Bounded=false for an explicit as_on")
+	}
+	if bs := debtorsAsAt(t, svc, ctx, companyID, "2026-05-31"); !bs.Equal(as31May.Total) {
+		t.Errorf("as at 2026-05-31 the Balance Sheet says %s and Outstandings says %s", bs, as31May.Total)
+	}
+}

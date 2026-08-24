@@ -302,7 +302,15 @@ describe("QueryScreen (Ask your books)", () => {
     // caption names it so a reader can tell which figure they are looking at.
     expect(measure).toContain("opening");
     expect(measure).toContain("Outstandings report");
-    expect(measure).toContain("AS AT TODAY");
+    // ⛔ RE-PINNED BY D86, AND INVERTED RATHER THAN LOOSENED (§5.16). This asserted
+    // "AS AT TODAY", which the caption said and both surfaces stopped doing in the
+    // same commit — the bill-wise breakup is now unbounded so it covers the same
+    // vouchers as the ledger balance it breaks up. The new pin names the claim AND
+    // refuses the old one, so a revert of either the sentence or the SQL is loud.
+    expect(measure).toContain("NO DATE LIMIT");
+    expect(measure).toContain("INCLUDING any dated in the future");
+    expect(measure).not.toContain("AS AT TODAY");
+    expect(measure).not.toContain("are excluded");
   });
 
   it("never leaves a figure undescribed: an unknown metric column still gets a basis line", async () => {

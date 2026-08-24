@@ -538,6 +538,41 @@ export function ProfitLossScreen({ snapshot, onSelect }: ReportProps) {
 // Outstandings.
 // ---------------------------------------------------------------------------
 
+/**
+ * The ONE writing of the Outstandings scope sentence.
+ *
+ * ⛔⛔ THE OLD CAPTION WAS `data.as_on ? "As on " + data.as_on : null`, AND D86 IS
+ * WHY THAT IS NOT ENOUGH. The server echoed the RESOLVED as-on — today — even when
+ * the caller had named no date, so the screen said "As on 2026-08-24" over a table
+ * that included next month's invoices. The sentence was present, well-worded and
+ * false, which is the class of defect that survives longest because a caption that
+ * reads well is never re-read.
+ *
+ * Two things had to change together: the server now sends `as_on: ""` for an
+ * unbounded read (the convention `/stock-summary` already uses), and this function
+ * turns that empty string into a sentence that says so and names the key that
+ * changes it. ⚠️ A falsy-but-absent `as_on` would also have hidden the caption
+ * entirely, which is quieter but no more honest — an operator cannot tell an
+ * unbounded report from one whose caption failed to render.
+ *
+ * ⚠️ `aged_as_on` IS A DIFFERENT FACT and is stated in both branches: the ageing
+ * slabs are meaningless without the day they were measured against, and dropping it
+ * would trade a false caption for a missing one.
+ */
+export function outstandingsScopeLine(asOn: string, agedAsOn: string): string {
+  const bound = (asOn ?? "").trim();
+  const aged = (agedAsOn ?? "").trim();
+  if (bound !== "") {
+    return `As on ${bound}` + (aged && aged !== bound ? ` · aged against ${aged}` : "");
+  }
+  return (
+    "NO DATE LIMIT — every bill on these books, including any dated AFTER today, " +
+    "so this agrees with Sundry Debtors/Creditors on the Balance Sheet" +
+    (aged ? `. Ageing measured against ${aged}` : "") +
+    ". Press F2 and set a To date to read it as at a day."
+  );
+}
+
 export function OutstandingsScreen({ snapshot, onSelect }: ReportProps) {
   const client = useClient();
   const companyID = useCompanyID();
@@ -664,9 +699,9 @@ export function OutstandingsScreen({ snapshot, onSelect }: ReportProps) {
         ariaLabel="Outstandings rows"
         columnsClassName={columns}
       />
-      {data?.as_on ? (
+      {data ? (
         <p className="mt-2 text-xs" data-testid="os-as-on">
-          As on {data.as_on}
+          {outstandingsScopeLine(data.as_on, data.aged_as_on)}
         </p>
       ) : null}
     </ReportFrame>

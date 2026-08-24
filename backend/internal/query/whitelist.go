@@ -155,7 +155,33 @@ const plRootGroupExpr = `(SELECT root.name FROM account_group root
 	                                             WHERE par.id = root.parent_id AND par.is_pl)
 	                          LIMIT 1)`
 
-// outstandingAsOnExpr is the CONSTANT "as on" date the outstandings entity is
+// ⛔⛔ THERE IS NO "AS ON" IN THIS SKELETON ANY MORE, AND ITS ABSENCE IS THE POINT.
+// (D86, and it is the D20 rule applied a second time.)
+//
+// This entity has no `as_on` parameter — the DSL surface cannot express one — so the
+// question it answers is the same question `reporting.Outstandings(…, asOn: "")`
+// answers: EVERY bill these books carry. Until D86 both surfaces bounded that at
+// today, which made the bill-wise breakup disagree with the ledger balance it is a
+// breakup OF the moment a bill was dated ahead. Both surfaces now drop the bound
+// together, and `report_parity_execute_test.go` is what refuses to let them diverge.
+//
+// ⛔ THE OPENING-BILL BRANCH LOST ITS books_beginning_from GUARD FOR THE SAME REASON,
+// AND THAT WAS DECIDED RATHER THAN DROPPED. The guard asks "had the books begun by
+// the as-on date?" — a question with no meaning when there is no as-on date. The
+// opening bill-wise breakup IS part of these books and the Balance Sheet's ledger
+// balance always includes it, so an unbounded bill-wise breakup includes it too.
+// `reporting.Outstandings` makes the same decision in the same words
+// (`bounded && !openingIsInScope`).
+//
+// ⚠️ WHAT WAS HERE, KEPT BECAUSE THE REASONING IS STILL RIGHT AND WILL BE NEEDED IF
+// AN `as_on` PARAMETER IS EVER ADDED TO THE DSL: the constant was spelled
+// `(now() AT TIME ZONE 'UTC')::date` rather than CURRENT_DATE on purpose, because
+// `reporting.resolveAsOn` defaults to `time.Now().UTC()` while CURRENT_DATE is
+// evaluated in the SESSION time zone — so on a server running in IST the two surfaces
+// would name different days for five and a half hours out of every twenty-four, and
+// the mismatch would appear only at night.
+//
+// outstandingAsOnExpr WAS the CONSTANT "as on" date the outstandings entity is
 // answered at: TODAY in UTC.
 //
 // It is spelled `(now() AT TIME ZONE 'UTC')::date` rather than CURRENT_DATE on
@@ -165,7 +191,8 @@ const plRootGroupExpr = `(SELECT root.name FROM account_group root
 // and a half hours out of every twenty-four and the mismatch would appear only
 // at night. Matching the report's clock exactly is the whole point of the
 // entity.
-const outstandingAsOnExpr = `(now() AT TIME ZONE 'UTC')::date`
+// (retained, unreferenced, as the spelling to reuse — see the note above)
+const outstandingAsOnExprIfEverNeeded = `(now() AT TIME ZONE 'UTC')::date`
 
 // filterCol describes a whitelisted filter target: the constant SQL identifier,
 // the set of operators it accepts, and the value-type that constrains literals.
@@ -449,15 +476,9 @@ var entities = map[Entity]entityDef{
 		               AND vh.voucher_id = vv.voucher_id
 		               AND vh.current_version_id = vv.id
 		             WHERE vh.is_deleted = false
-		               AND vv.voucher_date <= ` + outstandingAsOnExpr + `
 		             UNION ALL
 		            SELECT ob.ledger_id, ob.ref_name, ob.dr_cr, ob.amount, ob.due_date
 		              FROM ledger_opening_bill ob
-		             WHERE ` + outstandingAsOnExpr + ` >= COALESCE(
-		                     (SELECT COALESCE(c.books_beginning_from, c.fy_start_date)
-		                        FROM company c
-		                       WHERE c.id = app_current_company_id()),
-		                     '-infinity'::date)
 		           ) ba
 		   JOIN ledger l ON l.id = ba.ledger_id
 		   JOIN account_group g ON g.id = l.group_id`,

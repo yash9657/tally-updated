@@ -38,6 +38,7 @@ const LEG: BillBearingLeg = { ledgerId: "led-acme", drCr: "CR", amount: "1180.00
 const OPEN_BILLS: OutstandingsResponse = {
   kind: "RECEIVABLE",
   as_on: "2026-08-08",
+  aged_as_on: "2026-06-30",
   parties: [
     {
       ledger_id: "led-acme",

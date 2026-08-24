@@ -111,11 +111,20 @@ function measureBasis(dsl: Query | undefined): string[] {
         );
         break;
       case "pending":
+        // ⛔⛔ THIS SENTENCE USED TO SAY "AS AT TODAY … Bills dated in the future are
+        // not outstanding yet and are excluded", AND D86 MADE IT FALSE. It was true,
+        // well-worded, and both surfaces stopped behaving that way in the same commit
+        // — which is the shape of defect that survives longest, because a caption that
+        // reads well is not re-read. The rows are now unbounded on BOTH the report and
+        // this DSL surface, deliberately, so that a bill-wise breakup covers the same
+        // vouchers as the ledger balance it is a breakup OF.
         out.push(
-          "Measure: bill-wise pending AS AT TODAY, from both sources the Outstandings report " +
-            "reads — references raised by vouchers dated on or before today, plus the opening " +
-            "bill-wise breakup carried on the ledger master. Bills dated in the future are not " +
-            "outstanding yet and are excluded.",
+          "Measure: bill-wise pending with NO DATE LIMIT, from both sources the Outstandings " +
+            "report reads — every reference raised by a posted voucher whatever its date, " +
+            "INCLUDING any dated in the future, plus the opening bill-wise breakup carried on " +
+            "the ledger master. That is the same set of vouchers the ledger balance covers, " +
+            "which is why this agrees with Sundry Debtors/Creditors on the Balance Sheet. " +
+            "Ageing is still measured against today.",
         );
         break;
       case "closing_net":

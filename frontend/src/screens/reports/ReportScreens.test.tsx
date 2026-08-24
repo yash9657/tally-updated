@@ -9,6 +9,7 @@ import {
   BalanceSheetScreen,
   ProfitLossScreen,
   OutstandingsScreen,
+  outstandingsScopeLine,
 } from "./ReportScreens";
 import { createMockClient } from "../../api";
 import type { CoredClient } from "../../api";
@@ -126,6 +127,7 @@ describe("report screens fetch from the live client on mount", () => {
     const getOutstandings = vi.fn(async () => ({
       kind: "RECEIVABLE" as const,
       as_on: "",
+      aged_as_on: "2026-06-30",
       parties: [
         {
           ledger_id: "led-acme",
@@ -290,6 +292,7 @@ describe("Outstandings shows the BILLS, not just the party totals", () => {
     vi.fn(async () => ({
       kind: "RECEIVABLE" as const,
       as_on: "2026-06-30",
+      aged_as_on: "2026-06-30",
       parties: [
         {
           ledger_id: "led-acme",
@@ -345,6 +348,7 @@ describe("Outstandings shows the BILLS, not just the party totals", () => {
     const getOutstandings = vi.fn(async () => ({
       kind: "RECEIVABLE" as const,
       as_on: "2026-06-30",
+      aged_as_on: "2026-06-30",
       parties: [
         {
           ledger_id: "led-x",
@@ -369,5 +373,43 @@ describe("Outstandings shows the BILLS, not just the party totals", () => {
     await waitFor(() => expect(screen.getByText("OPEN-1")).toBeTruthy());
     expect(screen.getByText(/no due date recorded/)).toBeTruthy();
     expect(screen.getByText("no due date")).toBeTruthy();
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// D86 — what the ageing report actually covers, and what its caption claims
+// ---------------------------------------------------------------------------
+
+describe("outstandingsScopeLine — the scope the ageing report actually has", () => {
+  it("says NO DATE LIMIT, and names post-dated bills, when the server bounded nothing", () => {
+    const line = outstandingsScopeLine("", "2026-08-24");
+    // ⛔ THE MUTATION THIS ARM EXISTS FOR: restore `as_on ? "As on " + as_on : null`
+    // — the caption either claims a boundary the query no longer applies, or (with a
+    // falsy `as_on`) vanishes entirely and the operator cannot tell an unbounded
+    // report from a caption that failed to render. Both fail here.
+    expect(line).toMatch(/no date limit/i);
+    expect(line).toMatch(/after today/i);
+    expect(line).not.toMatch(/^As on /);
+    // ⛔ AND IT STILL STATES THE AGEING DAY. Dropping that would trade a false
+    // caption for a missing one: the slab labels mean nothing without it.
+    expect(line).toContain("2026-08-24");
+    // It names the key that changes the answer, so the sentence is actionable.
+    expect(line).toMatch(/F2/);
+  });
+
+  it("says As on <date> when the caller DID name one — the bound is conditional, not gone", () => {
+    // ⛔ THE CONTROL. "Remove the caption" and "always say NO DATE LIMIT" both pass
+    // the arm above; only this one refuses them.
+    expect(outstandingsScopeLine("2026-04-30", "2026-04-30")).toBe("As on 2026-04-30");
+    expect(outstandingsScopeLine("2026-04-30", "2026-04-30")).not.toMatch(/no date limit/i);
+  });
+
+  it("names the ageing day separately when it differs from the bound", () => {
+    // Two facts, two statements. One field could not carry both, which is why the
+    // response has `as_on` AND `aged_as_on`.
+    expect(outstandingsScopeLine("2026-04-30", "2026-08-24")).toBe(
+      "As on 2026-04-30 · aged against 2026-08-24",
+    );
   });
 });
