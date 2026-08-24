@@ -7,6 +7,51 @@ what was wrong; this file records what a person will notice.
 
 ---
 
+## The Outstandings ageing now covers every bill, not just those dated up to today
+
+**Applies to:** Outstandings (receivables and payables), its printed copy, and the
+conversational query surface. **Register:** D86.
+
+### What changes
+
+Outstandings is the bill-by-bill breakup of what a party owes you or you owe them —
+the same figure the Balance Sheet shows as Sundry Debtors / Sundry Creditors. A ledger
+balance includes every voucher that has been posted, whatever date it carries.
+
+Until this release, asking for the ageing **without naming a date** silently limited it
+to bills dated up to today. So the moment a bill was dated ahead — an advance invoice, a
+proforma, a scheduled billing run — the bill-wise breakup explained LESS than the
+balance it was a breakup of, and the two reports disagreed by exactly those bills with
+nothing on either to reconcile them.
+
+⛔ **The ageing report moved; the Balance Sheet did not.** With no date named, the ageing
+now lists every bill these books carry, so the two agree again.
+
+### What you will see
+
+* **Outstandings may show more bills and a higher total than before**, if your books
+  carry any future-dated ones. It now equals Sundry Debtors / Sundry Creditors exactly.
+* The caption over the table used to read *"As on <today>"*. It now reads **"NO DATE
+  LIMIT — every bill on these books, including any dated AFTER today…"**, and names the
+  ageing day separately, because the two are different facts.
+* **Asking as at a date is unchanged.** Press **F2** and set a To date and you get
+  exactly what you got before: bills up to that date, opening breakup included only if
+  the books had begun. That is the right way to read the ageing at a quarter or year end,
+  and it is now the *only* thing that claims to be one.
+* The bill-wise picker on a Receipt or Payment will offer future-dated open bills. That
+  is deliberate: a customer paying an advance invoice early is ordinary, and the
+  alternative pushes the receipt onto ON ACCOUNT, which nobody can chase later.
+* Days overdue and the ageing slabs are unchanged — they are still measured against
+  today unless you name a date.
+
+### What does NOT change
+
+Nothing is migrated and no voucher is rewritten; only the default scope of one read.
+The Balance Sheet, the Trial Balance, and every report you asked for a date are
+byte-identical.
+
+---
+
 ## Closing stock is re-valued: two vouchers on one date now replay in ENTRY order
 
 **Applies to:** Stock Summary, Stock Movement (period), the Closing Stock statement,
