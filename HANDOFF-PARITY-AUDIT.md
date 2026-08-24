@@ -815,7 +815,11 @@ have now been driven end to end in a real browser against real cored.**
 
 ---
 
-## 7.1 ⛔ THE DEFECT REGISTER — 96 REGISTERED · 88 CLOSED · 8 OPEN · 0 PARTIAL (2026-08-23)
+## 7.1 ⛔ THE DEFECT REGISTER — 97 REGISTERED · 97 CLOSED · 0 OPEN · 0 PARTIAL (2026-08-24)
+
+⚠️ **THIS HEADING WAS STALE FOR THREE LANES** (it read `96 · 88 · 8` from 2026-08-23 while the rows below
+said otherwise) — which is the file's own §5.21 rule proving itself: **re-derive the count by PARSING the
+rows, never by reading this line.** The snippet that does it lives in `HANDOFF-THE-REMAINING-SIX.md`.
 
 > ⛔⛔ **THIS HEADER IS A COPY AND COPIES GO STALE — IT SAID `90 · 74 · 12 · 4` FOR THREE SESSIONS WHILE THE TABLE
 > SAID `93 · 81 · 8 · 4`. RE-PARSE THE TABLE; DO NOT QUOTE THIS LINE.** The snippet is in
