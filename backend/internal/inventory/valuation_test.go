@@ -249,7 +249,7 @@ func (r recordingValuer) Apply(state ValuationState, m Movement) (ValuationState
 }
 
 // TestReplayOrdersByEveryKeyInTurn pins each level of the canonical replay key
-// (voucher_date, voucher_no, version_created_at, line_no, voucher_version_id).
+// (voucher_date, voucher_id, version_created_at, line_no, voucher_version_id).
 // Each case feeds two movements that differ at exactly ONE level in the WRONG
 // order and demands that Replay put them right.
 func TestReplayOrdersByEveryKeyInTurn(t *testing.T) {
@@ -264,6 +264,7 @@ func TestReplayOrdersByEveryKeyInTurn(t *testing.T) {
 	ref := Movement{
 		VoucherDate:      day(t, "2026-04-01"),
 		VoucherNo:        "SAL-1",
+		VoucherID:        "0195c000-0000-7000-8000-000000000001",
 		VersionCreatedAt: stamp("2026-04-01T10:00:00Z"),
 		LineNo:           1,
 		VoucherVersionID: "aaa",
@@ -284,9 +285,29 @@ func TestReplayOrdersByEveryKeyInTurn(t *testing.T) {
 			why:     "a back-dated voucher must be re-valued into its own place in history, not appended",
 		},
 		{
-			key:     "voucher_no",
-			perturb: func(m Movement) Movement { m.VoucherNo = "SAL-2"; return m },
-			why:     "two vouchers on one day replay in number order, the order the day's book was written in",
+			// ⛔ THIS SUBCASE READ `voucher_no` AND ITS `why` WAS FALSE (defect D8):
+			// "two vouchers on one day replay in number order, the order the day's
+			// book was written in" — a per-series counter is not the order the book
+			// was written in, and a purchase number is the supplier's string. It is
+			// INVERTED rather than deleted (§5.16): the key is the voucher's ID.
+			key:     "voucher_id",
+			perturb: func(m Movement) Movement { m.VoucherID = "0195c000-0000-7000-8000-00000000000f"; return m },
+			why:     "two vouchers on one day replay in ENTRY order, and voucher_id is a UUIDv7 minted at CREATE — which the number is not",
+		},
+		{
+			// ⛔⛔ AND THE OTHER HALF OF THE INVERSION, WHICH IS THE ARM THAT ACTUALLY
+			// GUARDS D8. The perturbed movement is LATER by voucher_id and EARLIER by
+			// voucher_no, so it can only be ordered correctly if the number is not
+			// consulted above the id. Without this arm, re-adding a `voucher_no`
+			// comparison above `voucher_id` would leave every other test in this file
+			// green — which is exactly the state the defect shipped in.
+			key: "voucher_no is NOT an ordering key",
+			perturb: func(m Movement) Movement {
+				m.VoucherNo = "AAA-0" // sorts BEFORE the reference's "SAL-1"
+				m.VoucherID = "0195c000-0000-7000-8000-00000000000f"
+				return m
+			},
+			why:     "a per-series number carries no ordering relationship to another series' number, and on a purchase it is the SUPPLIER's string — this is D8",
 		},
 		{
 			key:     "version_created_at",

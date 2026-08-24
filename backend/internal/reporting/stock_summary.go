@@ -227,7 +227,7 @@ type StockMovementReport struct {
 const stockMovementSQL = `
 	SELECT sm.stock_item_id, sm.godown_id, sm.batch_id,
 	       sm.direction::text, sm.qty, sm.rate, sm.discount_pct,
-	       vv.voucher_date, COALESCE(vv.voucher_no, ''),
+	       vv.voucher_date, COALESCE(vv.voucher_no, ''), vv.voucher_id,
 	       vv.created_at, sm.line_no, vv.id,
 	       COALESCE($1::date IS NULL OR vv.voucher_date >= $1::date, true) AS in_window
 	  FROM stock_movement sm
@@ -266,11 +266,16 @@ func queryStockMovements(ctx context.Context, tx pgx.Tx, from, to any) ([]stockM
 			batchID   *uuid.UUID
 			direction string
 			date      *time.Time
+			// ⛔ voucherID is the REPLAY ORDERING key (D8), voucherVersionID is the
+			// final tiebreak. They are different columns and an ALTER moves only the
+			// second one; scanning one into the other would make an alteration look
+			// like a new voucher entered now.
+			voucherID uuid.UUID
 			versionID uuid.UUID
 		)
 		if err := rows.Scan(&itemID, &godownID, &batchID,
 			&direction, &r.movement.Qty, &r.movement.Rate, &r.movement.DiscountPct,
-			&date, &r.movement.VoucherNo,
+			&date, &r.movement.VoucherNo, &voucherID,
 			&r.movement.VersionCreatedAt, &r.movement.LineNo, &versionID,
 			&r.inWindow); err != nil {
 			return nil, fmt.Errorf("reporting: scan stock movement: %w", err)
@@ -280,6 +285,7 @@ func queryStockMovements(ctx context.Context, tx pgx.Tx, from, to any) ([]stockM
 		}
 		r.movement.Position = positionKey(itemID, godownID, batchID)
 		r.movement.Direction = inventory.Direction(direction)
+		r.movement.VoucherID = voucherID.String()
 		r.movement.VoucherVersionID = versionID.String()
 		out = append(out, r)
 	}

@@ -76,13 +76,30 @@ type PositionKey struct {
 // derives (see Value) — that is how a materialised value creeps back in.
 type Movement struct {
 	// --- replay ordering key -------------------------------------------------
-	// Replay sorts by exactly (VoucherDate, VoucherNo, VersionCreatedAt, LineNo,
+	// Replay sorts by exactly (VoucherDate, VoucherID, VersionCreatedAt, LineNo,
 	// VoucherVersionID) and applies that itself, so correctness can never depend
 	// on the order a caller happened to read rows in.
 
 	// VoucherDate is voucher_version.voucher_date (a DATE; pass it as midnight).
 	VoucherDate time.Time
-	// VoucherNo is voucher_version.voucher_no.
+	// VoucherID is voucher_head.voucher_id — ⛔ THE SECOND KEY, AND IT USED TO BE
+	// VoucherNo, WHICH WAS DEFECT D8. A voucher_no is a STRING from a counter that
+	// is per-series (and on a purchase it is the SUPPLIER's own reference), so on
+	// one date "DN-1" sorts before "GRN-2" whatever order the two were keyed in —
+	// and weighted average is order-dependent, so an issue keyed after a receipt
+	// was costed at the PRE-receipt average. `voucher_id` is a UUIDv7 minted at
+	// CREATE (`ledger.go`'s CreateVoucher), so it IS entry order, per company,
+	// across every series.
+	//
+	// ⚠️ IT IS NOT A SUBSTITUTE FOR THE KEYS BELOW AND THEY ALL STAY. An ALTER
+	// keeps the voucher_id and mints a new voucher_version, so VersionCreatedAt is
+	// still what lands an alteration after the version it replaced; LineNo still
+	// orders one invoice's own lines; and VoucherVersionID is still the final
+	// tiebreak that makes the order TOTAL.
+	VoucherID string
+	// VoucherNo is voucher_version.voucher_no. ⛔ IT IS NO LONGER AN ORDERING KEY —
+	// see VoucherID. It is carried because reports and errors name the voucher by
+	// it, and removing it would make every diagnostic anonymous.
 	VoucherNo string
 	// VersionCreatedAt is voucher_version.created_at — it is what makes an ALTER
 	// land after the version it replaced on the same date and number.

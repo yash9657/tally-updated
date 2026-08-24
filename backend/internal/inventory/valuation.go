@@ -153,13 +153,29 @@ func ValuerFor(method string) (Valuer, error) {
 }
 
 // less orders two movements by the canonical replay key
-// (voucher_date, voucher_no, version_created_at, line_no, voucher_version_id).
+// (voucher_date, voucher_id, version_created_at, line_no, voucher_version_id).
+//
+// ⛔⛔ THE SECOND KEY IS THE VOUCHER'S ID, NOT ITS NUMBER, AND THAT CHANGE IS
+// DEFECT D8. A voucher_no is a string from a PER-SERIES counter — and on a
+// purchase it is the supplier's own reference — so it carries no ordering
+// relationship to a number from another series. On one date "DN-1" sorted before
+// "GRN-2" regardless of which was keyed first, and because weighted average is
+// order-dependent an issue entered AFTER a receipt was costed at the PRE-receipt
+// average. Measured in a browser: closing stock 601.4681 too high, on an issue
+// nobody had edited.
+//
+// voucher_id is a UUIDv7 minted at CREATE, so it is entry order per company
+// across every series, and it is stable: an ALTER keeps it. ⚠️ THE OBVIOUS
+// ALTERNATIVE IS WRONG — VersionCreatedAt is the CURRENT version's timestamp, so
+// an ALTER moves it, and batched posts in one transaction share now() and tie.
+// VoucherVersionID is already a UUIDv7 but is RE-MINTED by an ALTER, so it is a
+// tiebreak and not entry order either.
 func less(a, b Movement) bool {
 	if !a.VoucherDate.Equal(b.VoucherDate) {
 		return a.VoucherDate.Before(b.VoucherDate)
 	}
-	if a.VoucherNo != b.VoucherNo {
-		return a.VoucherNo < b.VoucherNo
+	if a.VoucherID != b.VoucherID {
+		return a.VoucherID < b.VoucherID
 	}
 	if !a.VersionCreatedAt.Equal(b.VersionCreatedAt) {
 		return a.VersionCreatedAt.Before(b.VersionCreatedAt)

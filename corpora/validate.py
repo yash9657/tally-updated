@@ -989,8 +989,14 @@ def _validate_forecast_anomaly(path: Path, data: dict) -> None:
 # agreed with it, which is the only way a wrong golden number gets caught.
 #
 # The rules, in full:
-#   * replay order is (voucherDate, voucherNo, versionCreatedAt, lineNo,
-#     versionId) — applied here, not assumed of the file's order;
+#   * replay order is (voucherDate, voucherId, versionCreatedAt, lineNo,
+#     versionId) — applied here, not assumed of the file's order. ⛔ THE SECOND KEY
+#     IS voucherId AND IT USED TO BE voucherNo, WHICH WAS DEFECT D8: a per-series
+#     counter carries no ordering relationship to another series' counter (and a
+#     purchase number is the supplier's own string), so on ONE DATE an issue keyed
+#     after a receipt could replay before it and be costed at the pre-receipt
+#     average. voucher_id is a UUIDv7 minted at CREATE, so it IS entry order;
+#     ⚠️ versionCreatedAt is not a substitute, because an ALTER moves it;
 #   * the opening folds in first, as an inward, whatever the dates say;
 #   * a movement's value is qty * rate * (100 - discountPct)/100 at 4 dp;
 #   * an inward adds qty and value; an outward consumes at the CURRENT average
@@ -1027,11 +1033,15 @@ def _inv_key(obj: dict) -> tuple[str, str, str]:
 
 def _inv_replay(opening: dict | None, movements: list[dict]) -> dict[str, Decimal]:
     """Re-derive one position from its opening and movements."""
+    # ⛔ voucherId, NOT voucherNo — D8. Keep this in step with `less()` in
+    # backend/internal/inventory/valuation.go: these are two INDEPENDENT
+    # implementations on purpose, and they are only an oracle for each other while
+    # they agree on the key.
     ordered = sorted(
         movements,
         key=lambda m: (
             m["voucherDate"],
-            m["voucherNo"],
+            m["voucherId"],
             datetime.fromisoformat(m["versionCreatedAt"]),
             m["lineNo"],
             m["versionId"],
@@ -1132,8 +1142,11 @@ def validate_inventory(path: Path, case: dict) -> None:
         if not require(
             path,
             m,
-            ["voucherDate", "voucherNo", "versionCreatedAt", "versionId", "lineNo",
-             "stockItem", "direction", "qty", "rate", "discountPct"],
+            # ⛔ voucherId is REQUIRED, not optional. A fixture without it would sort
+            # every movement under the same empty string and its replay order would
+            # be decided by the tiebreaks — silently, and differently from cored.
+            ["voucherDate", "voucherNo", "voucherId", "versionCreatedAt", "versionId",
+             "lineNo", "stockItem", "direction", "qty", "rate", "discountPct"],
         ):
             return
         try:

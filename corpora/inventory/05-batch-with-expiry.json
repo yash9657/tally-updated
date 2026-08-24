@@ -2,15 +2,26 @@
   "id": "05-batch-with-expiry",
   "description": "Batch is part of the position key, and an expiry date is METADATA on the batch master - it never enters the arithmetic. Two batches of one item in one godown, bought at different prices on the same purchase: B-2609 (expires 2026-09-30) 100 @ 50.0000 = 5000.0000, B-2703 (expires 2027-03-31) 100 @ 60.0000 = 6000.0000. An issue of 30 from B-2609 consumes 30*50.0000 = 1500.0000, leaving 70.0000 / 3500.0000 @ 50.0000; B-2703 is untouched at 100.0000 / 6000.0000 @ 60.0000. Blending the batches would have costed that issue at the pooled 55.0000 (1650.0000) and mis-stated both rows. The near-expiry batch being cheaper is exactly the case where a blended cost would hide the loss.",
   "valuationMethod": "WEIGHTED_AVG",
-  "godowns": ["main-location"],
+  "godowns": [
+    "main-location"
+  ],
   "batches": [
-    { "id": "b-2609", "stockItem": "vaccine", "expiryDate": "2026-09-30" },
-    { "id": "b-2703", "stockItem": "vaccine", "expiryDate": "2027-03-31" }
+    {
+      "id": "b-2609",
+      "stockItem": "vaccine",
+      "expiryDate": "2026-09-30"
+    },
+    {
+      "id": "b-2703",
+      "stockItem": "vaccine",
+      "expiryDate": "2027-03-31"
+    }
   ],
   "movements": [
     {
       "voucherDate": "2026-04-02",
       "voucherNo": "PUR-1",
+      "voucherId": "0195c000-0000-7000-8000-000000000001",
       "versionCreatedAt": "2026-04-02T09:00:00+05:30",
       "versionId": "PUR-1/v1",
       "lineNo": 1,
@@ -25,6 +36,7 @@
     {
       "voucherDate": "2026-04-02",
       "voucherNo": "PUR-1",
+      "voucherId": "0195c000-0000-7000-8000-000000000001",
       "versionCreatedAt": "2026-04-02T09:00:00+05:30",
       "versionId": "PUR-1/v1",
       "lineNo": 2,
@@ -39,6 +51,7 @@
     {
       "voucherDate": "2026-04-12",
       "voucherNo": "SAL-1",
+      "voucherId": "0195c000-0000-7000-8000-000000000002",
       "versionCreatedAt": "2026-04-12T15:10:00+05:30",
       "versionId": "SAL-1/v1",
       "lineNo": 1,

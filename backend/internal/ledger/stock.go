@@ -480,9 +480,14 @@ func closingPosition(ctx context.Context, tx pgx.Tx, companyID uuid.UUID, p stoc
 // behind.
 //
 // line_no is the 1-based input position, not a sort of anything: it is part of
-// the replay ordering key (voucher_date, voucher_no, version_created_at,
+// the replay ordering key (voucher_date, voucher_id, version_created_at,
 // line_no), so preserving the order the user keyed the grid in is what makes a
 // weighted-average replay reproducible.
+//
+// ⛔ THE SECOND KEY IS voucher_id AND IT USED TO BE voucher_no (defect D8): a
+// per-series number carries no ordering relationship to a number from another
+// series, so on one date an issue keyed after a receipt could replay before it
+// and be costed at the pre-receipt average.
 func writeStockMovements(ctx context.Context, tx pgx.Tx, companyID, versionID uuid.UUID, lines []InventoryLine) error {
 	for n, l := range lines {
 		// THE BACKSTOP FOR AN UNPRICED LINE, put here because this is the single

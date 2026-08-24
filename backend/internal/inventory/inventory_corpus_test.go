@@ -56,6 +56,7 @@ func (p fixturePosition) key() PositionKey {
 type fixtureMovement struct {
 	VoucherDate      string  `json:"voucherDate"`
 	VoucherNo        string  `json:"voucherNo"`
+	VoucherID        string  `json:"voucherId"`
 	VersionCreatedAt string  `json:"versionCreatedAt"`
 	VersionID        string  `json:"versionId"`
 	LineNo           int     `json:"lineNo"`
@@ -179,6 +180,7 @@ func (f inventoryFixture) toMovements(t *testing.T) []Movement {
 		out = append(out, Movement{
 			VoucherDate:      mustDate(t, m.VoucherDate),
 			VoucherNo:        m.VoucherNo,
+			VoucherID:        m.VoucherID,
 			VersionCreatedAt: mustStamp(t, m.VersionCreatedAt),
 			LineNo:           m.LineNo,
 			VoucherVersionID: m.VersionID,

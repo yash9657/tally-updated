@@ -1,0 +1,64 @@
+{
+  "id": "07-same-date-cross-series",
+  "description": "⛔ TWO SERIES ON ONE DATE, AND LEXICAL NUMBER ORDER IS NOT ENTRY ORDER (defect D8). The books open with 10.0000 @ 100.0000. A goods receipt GRN-2 (10.0000 @ 200.0000) is keyed FIRST, taking the running average to 150.0000; a delivery note DN-1 against the same item is keyed SECOND and consumes 5.0000. Both are dated 2026-04-12 and both were entered in that order on that day. The issue must therefore cost 5.0000 * 150.0000 = 750.0000, leaving 15.0000 / 2250.0000 @ 150.0000. ⛔ ORDERED BY voucher_no INSTEAD, 'DN-1' < 'GRN-2', so the issue replays FIRST and is costed at the PRE-receipt average: 5.0000 * 100.0000 = 500.0000, closing 15.0000 / 2500.0000 @ 166.6667 — 250.0000 too high, on an issue nobody edited. The two numbers come from two different series, which is what makes them incomparable: a delivery-note counter and a goods-receipt counter have no ordering relationship to each other, and a purchase voucher_no is the SUPPLIER's string anyway. versionCreatedAt cannot break the tie either — it is the CURRENT version's timestamp, so an ALTER moves it, and batched posts inside one transaction share now(). The only key that is entry order is the voucher's own id, minted as a UUIDv7 at CREATE.",
+  "valuationMethod": "WEIGHTED_AVG",
+  "openings": [
+    {
+      "stockItem": "widget",
+      "godown": null,
+      "batch": null,
+      "qty": "10.0000",
+      "rate": "100.0000"
+    }
+  ],
+  "movements": [
+    {
+      "voucherDate": "2026-04-12",
+      "voucherNo": "GRN-2",
+      "voucherId": "0195c000-0000-7000-8000-000000000001",
+      "versionCreatedAt": "2026-04-12T10:00:00+05:30",
+      "versionId": "GRN-2/v1",
+      "lineNo": 1,
+      "stockItem": "widget",
+      "godown": null,
+      "batch": null,
+      "direction": "IN",
+      "qty": "10.0000",
+      "rate": "200.0000",
+      "discountPct": "0.0000"
+    },
+    {
+      "voucherDate": "2026-04-12",
+      "voucherNo": "DN-1",
+      "voucherId": "0195c000-0000-7000-8000-000000000002",
+      "versionCreatedAt": "2026-04-12T10:05:00+05:30",
+      "versionId": "DN-1/v1",
+      "lineNo": 1,
+      "stockItem": "widget",
+      "godown": null,
+      "batch": null,
+      "direction": "OUT",
+      "qty": "5.0000",
+      "rate": "400.0000",
+      "discountPct": "0.0000"
+    }
+  ],
+  "expected": {
+    "positions": [
+      {
+        "stockItem": "widget",
+        "godown": null,
+        "batch": null,
+        "openingQty": "10.0000",
+        "openingValue": "1000.0000",
+        "inwardQty": "10.0000",
+        "inwardValue": "2000.0000",
+        "outwardQty": "5.0000",
+        "outwardValue": "750.0000",
+        "closingQty": "15.0000",
+        "closingValue": "2250.0000",
+        "closingRate": "150.0000"
+      }
+    ]
+  }
+}

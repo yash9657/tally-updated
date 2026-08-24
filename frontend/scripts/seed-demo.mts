@@ -1377,6 +1377,37 @@ async function main(): Promise<void> {
   });
   moves.push("2026-07-01  RN  MS Angle 50x50   IN   40 @ 88.0000  (ON the Jul–Mar lower bound)");
 
+  // 4b. ⛔⛔ TWO SERIES ON ONE DATE, KEYED IN AN ORDER THE NUMBERS DO NOT EXPRESS.
+  //     THIS IS DEFECT D8's FIXTURE IN THE DEMO, and it is here because nothing
+  //     else in this seed had two differently-numbered vouchers touching one
+  //     position on one date — so the whole replay-ordering rule shipped with no
+  //     demo figure able to notice it being wrong.
+  //
+  //     ⚠️ THE NUMBERS ARE WHAT MAKES IT BITE, AND THEY ARE GENERATED, NOT TYPED.
+  //     The counter is PER VOUCHER TYPE and cored mints bare integers, so the
+  //     receipt note below takes the next Receipt Note number and the delivery
+  //     note takes the next Delivery Note number — a LOWER integer, because this
+  //     seed has posted more receipts than deliveries. Ordered by voucher_no the
+  //     issue therefore replays BEFORE the receipt that funds it and is costed at
+  //     the PRE-receipt average; ordered by voucher_id (entry order) it is costed
+  //     at the post-receipt average, which is what actually happened on the shelf.
+  //     ⛔ The receipt is priced ABOVE the running average on purpose: if it were
+  //     at or below it, both orders would give nearly the same answer and this
+  //     pair would sit in the seed proving nothing.
+  await stockVoucher("POST", "receipt-note", {
+    voucher_date: "2026-07-15",
+    narration: "Receipt note — MS Angle, third lot at a much higher price",
+    inventory: [stockLine(itemAngle, "IN", "20.0000", "150.0000", "3000.0000")],
+  });
+  moves.push("2026-07-15  RN  MS Angle 50x50   IN   20 @ 150.0000  (keyed FIRST — D8's pair)");
+  await stockVoucher("POST", "delivery-note", {
+    voucher_date: "2026-07-15",
+    party: "Mumbai Metals",
+    narration: "Delivery note — MS Angle, issued from the lot received the same day",
+    inventory: [stockLine(itemAngle, "OUT", "10.0000", "260.0000", "2600.0000")],
+  });
+  moves.push("2026-07-15  DN  MS Angle 50x50   OUT  10          (keyed SECOND, LOWER number — D8)");
+
   // 5. Goods OUT. Item B is issued, so BOTH items have movement in both
   //    directions and neither closing position is a pure opening.
   await stockVoucher("POST", "delivery-note", {
