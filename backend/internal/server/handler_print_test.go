@@ -1949,6 +1949,22 @@ var printDisallowedBySeededMigrations = []struct{ resource, discloses string }{
 	{"report:purchase-order-book",
 		"every supplier the company has committed to pay and on what terms — its cost base " +
 			"and its dependencies, before either shows up in the books"},
+	// ---- THE FORECAST PLANE (migration 0076, register defect D95).
+	//
+	// ⛔ THE ANOMALY LIST IS THE ONLY ENTRY IN THIS WHOLE TABLE THAT IS NOT A
+	// DISCLOSURE ABOUT THE BUSINESS — IT IS A DISCLOSURE ABOUT THE OPERATOR. Every
+	// other row above leaks what the company earns, owes, holds or has committed
+	// to. This one names, by voucher number, which of the reader's OWN entries a
+	// supervisor's control flagged as irregular. Handing it over on paper is worse
+	// than handing over a report: a clerk who knows which of their backdated
+	// vouchers were caught knows which were not.
+	{"report:anomalies",
+		"every voucher this operator backdated, keyed after hours, edited three times in a " +
+			"day or wrote for a suspiciously round amount — the control surface that watches " +
+			"them, in their own hands"},
+	{"report:cash-flow",
+		"the forward cash position — what the business expects to collect and pay, week by " +
+			"week, for ninety days, including how much of it rests on a convention nobody agreed to"},
 }
 
 // TestAnOwnerWritingOneConvenientAllowPrintStarStillCannotHandOverTheWageBill is
@@ -2049,15 +2065,28 @@ func TestAnOwnerWritingOneConvenientAllowPrintStarStillCannotHandOverTheWageBill
 		}
 	}
 
-	// AND THE ACL IS CHECKED BEFORE THE IMPLEMENTATION. cash-flow has no seeded
+	// AND THE ACL IS CHECKED BEFORE THE IMPLEMENTATION. This name has no seeded
 	// refusal and no printed layout, so the convenience rule must carry it all the
 	// way to the honest 501. A 403 here would mean the PDP was consulted about
 	// something else, and a 501 on a REFUSED report would mean an operator could
 	// learn which reports exist by reading the status code.
-	if rec := printGet(t, s, f.base+"/print/reports/cash-flow", f.dataEntry); rec.Code != http.StatusNotImplemented {
-		t.Errorf("with `allow print *` on the level, printing the cash-flow report = %d, want 501: "+
+	//
+	// ⛔ THIS ARM USED TO NAME `cash-flow` AND MIGRATION 0076 TOOK THAT NAME AWAY.
+	// It is REPOINTED, not deleted: the property it tests is still real and still
+	// worth pinning. But note what the move cost, because the next person to seed a
+	// print refusal will hit it too — the stand-in has to satisfy BOTH halves at
+	// once: in authz.KnownReportNames with NO seeded `disallow print`, AND no
+	// implemented layout in handler_print_reports.go. When 0076 landed, exactly four
+	// names still qualified (gstr1, gstr3b, itc, reconciliation-queue). ⚠️ IF THAT SET
+	// EVER EMPTIES, do not delete this arm — give the level an explicit
+	// `allow print report:<something-unimplemented>` and assert the same 501, because
+	// the property is "the PDP decides before the layout does" and that outlives any
+	// particular name.
+	const unrefusedAndUnimplemented = "gstr1"
+	if rec := printGet(t, s, f.base+"/print/reports/"+unrefusedAndUnimplemented, f.dataEntry); rec.Code != http.StatusNotImplemented {
+		t.Errorf("with `allow print *` on the level, printing the %s report = %d, want 501: "+
 			"the report is authorized by the convenience rule and simply has no layout. A 403 here "+
 			"would mean the ACL check is not the thing deciding these routes (%s)",
-			rec.Code, rec.Body.String())
+			unrefusedAndUnimplemented, rec.Code, rec.Body.String())
 	}
 }
