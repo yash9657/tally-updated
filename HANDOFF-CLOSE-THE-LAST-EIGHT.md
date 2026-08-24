@@ -126,7 +126,7 @@ build, and **D48 scopes D81 (position 2)** so doing it later means doing D81 twi
 | 6 | **D86** | MED | **moves Outstandings** and inverts a Go test by design. ALONE |
 | 7 | **D83** | LOW | ⛔ the register's proposed index **WILL NOT WORK.** Last |
 | **8** | **D94** | HIGH | ⛔ **NEW, out of D13 (§2).** The payables ageing report has **no door**: the server serves it, nothing can ask for it. ⚠️ **AFTER D86** — both move the Outstandings report. §3 row 8. |
-| **9** | **D95** | MED | ⛔ **NEW, out of D22.** `report:cash-flow` and `report:anomalies` have **no ACL counterweight**, so Data Entry reads the anomaly list — the control surface about them. ⚠️ **ASK THE USER about the cash-flow half**; the anomaly half needs no decision. §3 row 9. |
+| **9** | **D95** | MED | ⛔ **NEW, out of D22.** `report:cash-flow` and `report:anomalies` have **no ACL counterweight**, so Data Entry reads the anomaly list — the control surface about them. ✅ **ANSWERED 2026-08-23 (§6.4): DENY BOTH, no allow seeded.** Nothing is waiting on the user. §3 row 9. |
 | **10** | **D96** | LOW | ⚠️ **NEW, out of D22 on closure.** insightd's STATISTICAL forecast still has no renderer. ⛔ **Answer "should it exist at all?" before wiring anything.** §3 row 10. |
 
 **Must be ONE commit:** D22+D52. **Must be ALONE:** D85, D8, D86, D83.
@@ -345,9 +345,11 @@ displayed but CAN be printed is a leak with a paper trail), **no allow seeded**,
 `seed_company_auth_defaults` ⛔ **derived from the HIGHEST-NUMBERED restatement at the time and numbered
 above it** — lower loses every rule on a fresh database, which is the defect 0071 exists to repair.
 `migrations/seeder_census_test.go` guards it statically; if it fails, do not route around it.
-⛔ **ASK THE USER ABOUT THE CASH-FLOW HALF ONLY.** Denying a clerk the audit list is the established
-pattern and needs no decision. A forward cash position is a management report, and 0073's own header says
-an explicit `allow` is a tenant's decision and never a default — a senior clerk might fairly have it.
+✅ **ASKED AND ANSWERED 2026-08-23 — §6.4 IS AUTHORITY, NOT A SUGGESTION: DENY BOTH.** Both tokens get
+`disallow display` and `disallow print`; **no allow is seeded for either.** The user endorsed the precedent
+argument explicitly: a forward cash position is a MANAGEMENT report, and a tenant wanting a senior clerk to
+read it writes an explicit `allow display report:cash-flow` through the admin API — visible in `acl_rule`,
+chosen rather than inherited. ⛔ **Do not seed an allow back, and do not treat the two tokens differently.**
 **ORACLE:** on the wire, as a Data Entry member: `GET /anomalies` → **403**, and the print form → 403 too.
 Then in a browser, the screen renders that 403 **as a decision naming the report** — the panel for it is
 already built. ⚠️ **AND A CONTROL ARM: an Owner still reads both**, or the migration has over-reached.
@@ -650,7 +652,15 @@ the re-run. Known members: `internal/sync`, `EWayBillScreen`, `VoucherScreen.dra
 2. **D87's scope:** ✅ the three + PAN + credit days. **DONE (L15d).**
 3. **D90:** ✅ refuse duplicates. ⛔ **Its premise was false; the user was re-asked with the real
    finding and chose to normalise all three master kinds. DONE (L15f).**
-4. **D50's fourth arm** stays answered-with-disclosure. Raise again only if the user asks for a
+4. **D95 (the ACL counterweight for the forecast plane):** ✅ **DENY BOTH, MATCHING PRECEDENT. Answered
+   2026-08-23.** The migration writes `disallow display` **and** `disallow print` for **both**
+   `report:cash-flow` and `report:anomalies`, with **NO allow seeded** — identical in shape to 0072 (cost
+   reports) and 0073 (order books). ⛔ **The reasoning the user endorsed, recorded so it is not re-litigated:**
+   a forward cash position is a MANAGEMENT report, and a tenant that wants a senior clerk reading it writes an
+   explicit `allow display report:cash-flow` through the admin API — a decision they make, visible in
+   `acl_rule`, rather than a default nobody chose. ⚠️ **So do NOT seed an allow back**, and do not treat the
+   two tokens differently.
+5. **D50's fourth arm** stays answered-with-disclosure. Raise again only if the user asks for a
    refusal — the only honest way puts the caller's own party names in the prompt, reversing the
    current safety posture.
 
