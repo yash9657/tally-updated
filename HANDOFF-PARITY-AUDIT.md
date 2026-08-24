@@ -3882,3 +3882,9 @@ believe the refusal is airtight.
 arms with their control, the route-not-kind arm with its control, and the `REPORT_DOORS` sweep picking the
 new name up for free) · `pnpm exec tsc --noEmit` clean, and it named both `Record<ReportName,…>` tables.
 **Driven 15/15**, own tenant, reaped.
+
+**THE WHOLE DRIVE SET, ON A FRESH SEED, AFTER THE LANE:** `verify:demo` **34/34** → l5-nlq **41/41** ·
+l13 **33/33** · l14 **17/17** · l14b **8/8** · l15-d5 **22/22** · l15c **7/7** · l15d **13/13** ·
+l15f **8/8** · l16-d22 **34/34** · l11-ai **14/14** · l20-d49 **52/52** · l21-d85 **16/16** ·
+l22-d8 **14/14** · l23-d86 **16/16** · **l24-d94 15/15** · l17-d95 **20/20** · `contract:cored` **14/14**
+→ `verify:demo` **34/34 again**.
