@@ -915,7 +915,7 @@ The criterion is unchanged: **how much of a real business's day is blocked.**
 | **0** | ✅ **DONE — THE ACCOUNTING-MODE POSTING BUILDER** (§1.14) | Fixed on BOTH sides: a `GST_ORIENTATION` table drives every direction, tax kind, base ledger and party group; and cored now **REFUSES** a reversed party leg (`ErrPartyOrientation`) so the 201 is closed for every caller, not just the browser | ✅ Purchase AND Credit Note both browser-verified; every gate green. §1.14 carries one loose end worth a look: a blank HSN yields an empty GSTR-1 `hsn_sc` row |
 | **1** | ✅ **DONE — THE IRN SCREEN** (§1.13) | Shipped and browser-verified; the row is `on`. **What is left around it is in §1.13** | — |
 | **2** | ✅ **DONE — PAYROLL SCREENS** (2026-08-25). Five screens: `employees` (Alt+C create, **Alt+S salary structure + statutory election**), `payroll-run` (Ctrl+F4), `payroll-register` (prints, exports, Alt+S produces the ECR and the ESI return, Enter drills), `payroll-payslip` (prints), `payroll-form-138`. Gateway entries for four; `Ctrl+F4` stopped being `unavailable` after the whole life of the project | ⛔ **ITS PREMISE — "no refactor, pure frontend" — WAS FALSE, AND THE WAY IT WAS FALSE IS THE FINDING.** `payrolldb.SetSalaryComponent` and `SetStatutoryElection` shipped with Track 3 and had **NO ROUTE**, so an employee created over HTTP could never be paid: every pay run answered 422 *"no statutory election is in force"*. **Every payroll test in `internal/server` sets both up by calling the Go SERVICE** (handler_payroll_test.go's fixture says so in a comment), which is exactly why eight mounted, PDP-mapped, fully-tested routes stayed unusable and nothing went red. Four routes + a vocabulary route added (`handler_payroll_structure.go`), mapped to the **existing** `employee` token so migration 0035's seeded disallow covers them with no new migration. **A ROUTE TABLE IS NOT A SURFACE** — see §1.15 | Driven in a browser end to end: employee → salary → election → pay run → register → payslip → ECR + ESI + Form 138. 34/34 probes (`frontend/scripts/drive-payroll.mjs`) |
-| **3** | **T9 FIFO/LIFO** → then **T10 stock groups + compound units** | ⛔ **SERIALISE THESE TWO** — both touch the movement primitive. ⚠️ Closing stock feeds the **Balance Sheet**, so a valuation change MOVES THE SHEET: re-pin `verify:demo` deliberately and explain the change | T9 is a new arm in `ValuerFor` + fixtures, **not** a schema change |
+| **3** | ✅ **DONE 2026-08-25 — THE INVENTORY LANE: T9 FIFO/LIFO, §3 goods-on-import, T10 stock groups + compound units** (§1.16) | Three costing methods chosen per item; the Tally importer brings in items, units, godowns, batches, opening positions and **quantities**; an item hierarchy whose subtotals are the whole BRANCH, and units with a base and a conversion factor. ⛔ **The lesson is rule 2 of §1.16: AN ORACLE THAT CANNOT SEE THE DEFECT IS NOT AN ORACLE** — §3 survived a whole real-file gate because a trial balance cannot see quantity | Driven in a browser three times: **21/21** valuation, **10/10** import, **27/27** groups + compound units. `verify:demo` re-pinned at 34/34 |
 | **4** | **T14 Backup / restore / split company** | Table stakes: Tally users expect a company to be a file they can carry | Must be tenant-exact. **Reuse the `testdb` delete-plan census** — it already knows every tenant table and is anti-rot by construction |
 | **5** | **OFFLINE ENTRY SCREEN** (§5.2) | The differentiator against Tally's LAN-only model, and it is built | A screen **plus a decision**: how does a browser present queued intents? |
 | **6** | **T8 multi-currency** → **T11 budgets** → **T13 interest** → **T12 GSTR-9** → **T16 print templates** → **SSO/OIDC last** | Ordinary Tier-2 backlog. §5.4 states the one thing not to get wrong in each | |
@@ -1047,6 +1047,81 @@ self-evidencing). Never driven end to end: **Credit Note, Debit Note, Alt+F7 Phy
 Alt+F10 Stock Journal, the Edit Log, Budgets-adjacent screens.**
 
 ---
+
+### 1.16 ✅ THE INVENTORY LANE — T9 + §3 + T10, DONE AND DRIVEN. THREE RULES IT PAID FOR.
+
+> ## ⛔ AN ORACLE THAT CANNOT SEE THE DEFECT IS NOT AN ORACLE.
+>
+> §3 — "the Tally importer throws every stock line away" — survived the whole T32 real-file gate,
+> because the rupee value of a trade lives in the LEDGER entries. The Trial Balance footed, the
+> Balance Sheet carried closing stock, and the Stock Summary was **empty**. If you touch inventory,
+> your oracle is **quantities or values**, never "the statements balance".
+
+**Shipped:** `d574aa2` (T9) · `64887c4` (§3) · `9cc1fed` (T10 product) · this session (T10 proof).
+`HANDOFF-T10-FINISH.md` is **deleted** (it was written to be retired the day its items landed,
+and they have) and `HANDOFF-NEXT-BUILD.md` §2/§3 are spent — §4 onwards there is still the order.
+
+| Lane | What is now true | Proof |
+|---|---|---|
+| **T9** | `WEIGHTED_AVG` / `FIFO` / `LIFO` **per item**, chosen on the item master (Alt+G > Create Stock Item) or changed with **Alt+V on the Stock Summary**. Migration **0078** widens the CHECK. The lot queue lives in the **POSITION's state** (`internal/inventory/lots.go`) and never in the valuer — `ReplayAll` hands ONE valuer to every position | `frontend/scripts/drive-valuation.mjs` **21/21**; 4 corpus fixtures re-derived independently in `corpora/validate.py` |
+| **§3** | The importer brings in items, units, godowns, batches, opening positions and **quantities** (`internal/migration/inventory.go`). An export with **no `STOCKITEM` masters carries no opening stock**, so the first sale of older goods **aborts the import** naming both ways forward | `frontend/scripts/drive-tally-import.mjs` **10/10**; `corpora/migration/07-tallyprime-inventory-shapes.xml` (UTF-16LE, BOM, CRLF) with an oracle that **re-parses the XML using its own structs** |
+| **T10** | Migration **0079**: `stock_group` (LTREE, like `account_group`) + nullable `stock_item.stock_group_id`; `unit.base_unit_id` + `conversion_factor`. `POST`/`GET /stock-groups`; `POST /units` takes `base_unit_symbol` + `conversion_factor` (**a decimal string**); the item body takes `stock_group_name` | `frontend/scripts/drive-stock-groups.mjs` **27/27**; `StockSummaryScreen.groups.test.tsx` + the T10 cases in `MasterCreateScreen.test.tsx`, each measured against a broken build |
+
+#### The two operator-facing consequences — they are in `docs/RELEASE-NOTES.md` and they are not obvious
+
+1. ⛔ **A stock group subtotal is the WHOLE BRANCH**, so the group lines **overlap and must not be
+   added**. The company's closing stock is the Stock-in-Hand line. The table prints "No total" and
+   says why, in its own footer, because a column of money with no total invites a calculator.
+2. ⛔ **A quantity in a compound unit is STORED in that unit** — `4 BOX`, not `48 Nos` — and the
+   restatement is a derived column. That is deliberate: **correcting a conversion factor later
+   changes no voucher, no quantity and no balance.** A build that multiplied on the way IN would
+   have to rewrite every movement ever posted in that unit.
+
+#### The three rules this lane paid for once each
+
+1. **VERIFYING THAT THE PIECES EXIST IS NOT VERIFYING THAT THEY COMPOSE** (§1.15's rule, inherited
+   and re-earned). T9's valuers, CHECK constraint and corpus were all green while `POST /stock-items`
+   had **no `valuation_method` field** — so nobody had FIFO. The probe that pins it now
+   (`TestAnItemCreatedAsFIFOOverHTTPIsValuedAsFIFO`) **reads the master back** rather than trusting
+   the 201, because "accepted and discarded" answers 201 (register row D43).
+2. **AN ORACLE THAT CANNOT SEE THE DEFECT IS NOT AN ORACLE** — the box above.
+3. **A POSITION IS `(item, godown, batch)` OR IT IS NOTHING.** §3's own worst bug, found by
+   measurement mid-lane: an opening written to `Main Location` while the file's own movements were
+   **untracked** put the opening in one position and every issue in another. ⛔ **Do not "normalise"
+   `Main Location` to `""` anywhere** — a test that does collapses two real positions into one map
+   key and hides exactly this.
+
+#### The map, for anything that goes near this later
+
+```
+backend/internal/inventory/lots.go              T9  FIFO/LIFO. The queue is in the POSITION's state.
+backend/internal/inventory/valuation.go         T9  ValuerFor's three arms; `less()` is the replay order.
+backend/internal/masters/stock_valuation.go     T9  the switch + its audit row (a RESTATEMENT, not an edit).
+backend/internal/masters/inventory_ensure.go    §3  case-insensitive resolve-or-create; SetStockOpening.
+backend/internal/masters/stock_group.go         T10 the LTREE hierarchy.
+backend/internal/migration/inventory.go         §3  the goods lane: masters pass + per-voucher stock lines.
+backend/internal/integration/tallyxml.go        §3  STOCKITEM/UNIT/GODOWN/STOCKGROUP + BATCHALLOCATIONS.
+backend/internal/reporting/stock_summary.go     T9+T10 the item fold, the GROUP fold, the restatement.
+frontend/src/api/mock.ts                        ⛔ REPLAYS FIFO/LIFO and the group/base derivations —
+                                                a SECOND implementation, on purpose. Keep it that way.
+```
+
+**The four tests that tell you fastest if you broke something:**
+
+```
+go test ./internal/inventory/                                    # pure, no DB, 0.3s
+go test ./internal/migration/ -run TallyPrimeInventoryShapes     # the quantity oracle
+go test ./internal/server/ -run 'FIFO|Valuation|StockGroup|Compound|FillsTheWarehouse'
+cd frontend && pnpm vitest run src/screens/reports src/screens/masters
+```
+
+#### What T10 deliberately does NOT do, so nobody re-derives it
+
+No rename, re-parent or delete of a stock group, and **no way to move an item to a different group
+after creation** — both are master ALTERs and this build has none for either master. A **chain** (a
+base unit that is itself compound) is REFUSED rather than half-resolved, because resolving one level
+of two is wrong by the second factor. And the group subtotals are **on the screen only**: the export
+and the printed report carry the base-unit column but not the group table.
 
 ### 1.12 ⛔ HOW TO PARALLELISE THIS — WHAT WORKED LAST SESSION, AND WHAT MUST NOT BE SPLIT
 
@@ -1493,6 +1568,13 @@ cd .. && make verify
 | `make verify` | exit 0 | |
 | `verify:demo` | **33/33**, run **ALONE**, needs cored **and** insightd up | 33/33 |
 | `gofmt -l` on every file you touch | clean | |
+
+⛔ **RE-MEASURED 2026-08-25, at the end of the inventory lane (§1.16) — the table above is a
+2026-08-06 baseline and four of its five numbers have moved:** `go build` / `go vet` clean ·
+`go test ./... -timeout 60m` **exit 0** · `pnpm exec tsc --noEmit` clean · `pnpm vitest run`
+**1565 pass / 93 files** · `pnpm verify:demo <companyID>` **34/34** (⚠️ it takes the company id as an
+ARGUMENT and exits 2 with a usage line without one) · `python3 corpora/validate.py` OK
+(inventory=11, migration=6).
 
 ⛔ **`verify:demo` WAS RUN AGAINST THE EXISTING DEMO COMPANY, NOT A FRESHLY SEEDED ONE — AND THAT
 MATTERS THIS TIME.** `seed-demo.mts` grew T2 cost masters and T3 orders this session and **none of
@@ -2695,6 +2777,13 @@ the list above is exactly what to remove.
 
 - **`T6 Drive Co`** (`9466b85c-…`) — three TDS deductions, two challans, a deductor profile.
 - **`tally_freshproof`** — a scratch *database* predating all of this. Harmless; drop it.
+- **THE `… Drive <stamp>` TENANTS** — `Payroll Drive …` ×9, `Valuation Drive …` ×2, `Import Drive …`,
+  `Stock Group Drive …`. Every browser probe under `frontend/scripts/drive-*.mjs` creates a
+  **throwaway company of its own** and leaves it. ⛔ **That is the point, and it is not the same
+  practice as the "left no residue" notes below:** those are about `Demo Traders`, where a posted
+  voucher moves a trial balance and drops `verify:demo` below 34/34. A separate tenant cannot, so the
+  probe is re-runnable and its evidence stays readable in Postgres afterwards. Drop them in bulk
+  whenever you like; nothing reads them.
 - ⚠️ **THE DEMO COMPANY NOW HAS T3 DATA, PUT THERE BY A BROWSER AND NOT BY THE SEED SCRIPT.** Measured
   at `7e565a3` in `71fe4e15-…`: one sales order **`SO-BROWSER-1`** (20 MS Angle @ 500, 8 delivered, 12
   outstanding), one BOM **`Standard`** (10 MS Angle yields 3 SS Sheet), one `order_fulfilment` link, and

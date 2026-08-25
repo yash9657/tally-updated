@@ -17,22 +17,23 @@
 
 ## 0. THE HEADLINE — READ THIS FIRST, IT CHANGES WHAT YOU DO
 
-> ### ⛔⛔ 2026-08-25 (LATEST) — §2 AND §3 BELOW ARE **DONE**. GO TO `HANDOFF-T10-FINISH.md`.
+> ### ✅ 2026-08-25 (LATEST) — §1, §2 AND §3 ARE ALL **DONE**. THE NEXT TRACK IS **§4 (T14)**.
 >
-> **T9 (FIFO/LIFO)** shipped in `d574aa2` and was driven 21/21. **§3 (inventory masters and
-> quantities on import)** shipped in `64887c4` and was driven 10/10. **T10 (stock groups and
-> compound units)** shipped in `9cc1fed`: the backend and both screens are complete and every gate
-> is green, and **four pieces of PROOF are missing** — the Features honesty row, the frontend tests,
-> the browser drive and the release note.
+> **T9 (FIFO/LIFO)** shipped in `d574aa2`, driven 21/21. **§3 (inventory masters and quantities on
+> import)** shipped in `64887c4`, driven 10/10. **T10 (stock groups and compound units)** shipped in
+> `9cc1fed` and its remaining PROOF landed this session — the Features honesty row, two frontend test
+> files, `frontend/scripts/drive-stock-groups.mjs` (**27/27**) and the release note.
 >
-> **⛔ DO NOT START §2 OR §3. READ `HANDOFF-T10-FINISH.md`,** which holds the four remaining items,
-> the two honesty tests that will FAIL when the Features row flips (that is the gate working), and
-> the mutations to measure the new probes against.
+> ⛔ **The whole lane is folded into `HANDOFF.md` §1.16 — read that, not §2/§3 below.** Those two
+> sections are kept only for the REASONING that produced them; their *state* is spent.
 >
-> ⚠️ This is exactly the failure mode §0 warns about one paragraph down — a "still open" claim that
-> is no longer true — so it is corrected here rather than left for somebody to discover by reading
-> the code. The sections below are kept for their REASONING, which is still good; their *state* is
-> stale. §4 onwards is untouched and is still the right order.
+> **START AT §4 (T14 backup / restore / split).** §5 (offline entry) and §6 (the long tail) follow,
+> unchanged. §7 ("parse once" on the Tally import) is now MORE valuable than when it was written:
+> §3 added a **fourth** consumer of the same bytes, and the prize is that the peeks and the handler
+> become structurally unable to disagree about the file. §8 is still the one thing only a human can
+> do — and note that the real file this importer was fixed against is a **grain trader, GST-free and
+> zero-rated**, so `classifyTaxLedger`, `inferRate` and the GSTR-1 B2B join remain exactly as tested
+> as they were before any real file arrived. §3 did not change that.
 
 > ### ✅ 2026-08-25 (LATER) — §1 PAYROLL SCREENS HAS LANDED. THE NEXT TRACK IS §2 (T9 + T10 + §3).
 >
@@ -206,7 +207,8 @@ downloaded, and the payslip renders and prints.)*
 
 ---
 
-## 2. 🥇 T9 FIFO/LIFO → then T10 STOCK GROUPS + COMPOUND UNITS — **START HERE NOW**
+## 2. ✅ **DONE 2026-08-25 — T9 FIFO/LIFO AND T10 STOCK GROUPS + COMPOUND UNITS.** Folded into
+## `HANDOFF.md` §1.16; read that, not this. Kept below for the reasoning only.
 
 ⛔ **SERIALISE THESE TWO** — both touch the movement primitive.
 
@@ -231,7 +233,8 @@ stands.
 
 ---
 
-## 3. INVENTORY MASTERS AND QUANTITIES ON IMPORT — **do it WITH T9, in the same lane**
+## 3. ✅ **DONE 2026-08-25 — INVENTORY MASTERS AND QUANTITIES ON IMPORT.** Folded into
+## `HANDOFF.md` §1.16; read that, not this. Kept below for the reasoning only.
 
 ### VERIFIED 2026-08-25
 

@@ -943,7 +943,7 @@ describe("F11 Company Features tells the truth about the stock vouchers", () => 
     expect(note).toMatch(/Data Entry/);
   });
 
-  it("still says NOT BUILT for what this slice did not build", () => {
+  it("still says NOT BUILT for what is not built", () => {
     // The other half of honesty. If every row said "On" the screen would be
     // decoration.
     //
@@ -951,13 +951,23 @@ describe("F11 Company Features tells the truth about the stock vouchers", () => 
     // test below. That is this assertion working as intended rather than being
     // weakened: the row was "Not built" while its whole backend shipped, and it flipped
     // in the change that finally gave an operator a screen (Ctrl+F8 / Ctrl+F9, the BOM
-    // screen and both order books). Two rows are kept so this cannot pass vacuously.
-    // ⚠️ FIFO / LIFO HAS MOVED TO THE POSITIVE TEST TOO, for the same reason
-    // order processing did: T9 gave an operator a costing-method picker on the
-    // master form and Alt+V on the Stock Summary. One row is left here, and it
-    // is genuinely absent — no quantity in this build is unit-qualified.
+    // screen and both order books).
+    // ⚠️ FIFO / LIFO MOVED TO THE POSITIVE TEST TOO (T9: a costing-method picker
+    // on the master form and Alt+V on the Stock Summary), and now STOCK GROUPS AND
+    // COMPOUND UNITS has as well — T10 gives an operator Alt+G > Create Stock Group
+    // and a base unit + conversion factor on Alt+G > Create Unit, and the flip is
+    // pinned by its own test in VoucherScreen.itemInvoice.test.tsx.
+    //
+    // ⛔ THERE IS NO "Not built" ROW LEFT UNDER INVENTORY AT ALL — all ten read On —
+    // so this assertion had to leave the group rather than be deleted. It is now
+    // pointed at the nearest genuinely absent thing to a DOCUMENT this file keys:
+    // a delivery note prints (Ctrl+P), and there is still no way to e-mail it or
+    // to export a report as PDF.
     renderFeatures();
-    expect(badgeFor(/^Stock groups and compound units/)).toBe("Not built");
+    expect(badgeFor(/^Export: e-mail a document/)).toBe("Not built");
+    // And the screen-wide property, so this cannot pass vacuously the day that
+    // row is built: F11 still carries real gaps, plural.
+    expect(screen.getAllByText("Not built").length).toBeGreaterThan(1);
   });
 
   it("says ON for order processing, and ONLY because a human can now reach it", () => {

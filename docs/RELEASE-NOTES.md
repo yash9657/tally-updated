@@ -7,6 +7,89 @@ what was wrong; this file records what a person will notice.
 
 ---
 
+## Stock groups subtotal the WHOLE BRANCH, and a compound quantity stays in its own unit
+
+**Applies to:** the Stock Summary, the stock item and unit masters, and a Tally import.
+**Feature:** T10.
+
+### What changes
+
+Stock items were flat and a unit was a bare symbol. Two things are now modelled, and both
+of them show up on the Stock Summary:
+
+- **Stock groups.** `Alt+G > Create Stock Group` builds an item hierarchy — a name and,
+  optionally, a parent, nested as deep as you like — and an item is filed into one on its
+  own master form (`Alt+G > Create Stock Item`, *Stock group*). The Stock Summary then
+  prints a subtotal table above the item list: one line per group in tree order, indented
+  by depth, with everything ungrouped in its own named bucket. **A company that has created
+  no groups sees no table at all**, rather than a one-line box saying "(ungrouped)".
+- **Compound units.** `Alt+G > Create Unit` takes a base unit and a conversion factor, so
+  `1 BOX = 12 Nos`, and the Stock Summary carries a base-unit column beside the closing
+  quantity. An item in a simple unit prints an em dash there, not a zero.
+
+A Tally import brings both in: `STOCKGROUP` masters arrive with their hierarchy, and a unit
+the export marks `ISSIMPLEUNIT=No` arrives with its base and its factor.
+
+### ⛔ The group lines OVERLAP. Do not add them up.
+
+A group's subtotal is **the whole branch** — "Provisions" includes "Provisions > Grains" —
+which is the only thing that makes a branch total worth reading, and exactly what makes the
+column impossible to total:
+
+```
+Stock group                    Items   Closing Value
+Provisions                         3        2,450.00     <- 250 direct, plus the branch
+  Grains                           2        2,200.00
+(ungrouped)                        1           20.00
+                                          ----------
+your closing stock is                       2,470.00     <- NOT 4,670.00
+```
+
+**The company's closing stock is the Stock-in-Hand line, never the sum of that table.** The
+table says so in its own footer, where a reader would otherwise reach for a calculator.
+
+⚠️ **A stock group is not an accounting classification.** Every item in every group lands
+in the same Stock-in-Hand asset, so a group has no *nature* and no group decides which
+statement a figure appears on. It changes how the Stock Summary is subtotalled and nothing
+else — no balance moves when you create one.
+
+### ⛔ A quantity in a compound unit is STORED in that unit — `4 BOX`, not `48 Nos`
+
+Four boxes of twelve are stored as **`4.0000 BOX`**. Your invoice says 4, the stock ledger
+says 4, and `48.0000 Nos` is a **derived column** recomputed on every read.
+
+That is the reason to key it this way, and it is worth knowing before you key it wrongly:
+**if a conversion factor turns out to be wrong, correcting it changes no voucher, no
+quantity and no balance** — only the restated column moves. A build that had multiplied on
+the way *in* would have to rewrite every movement ever posted in that unit, and could not
+tell which ones it had already done.
+
+⚠️ The corollary: the Qty column on a compound item is **boxes**, so it is not comparable
+with a Nos figure on the line above it. That is what the base-unit column is for.
+
+### What is refused
+
+- **A chain** — a base unit that is itself compound (Tally's *PALLET of 20 BOX of 12 Nos*).
+  This build converts **one level only**, and a conversion that resolved one level of two
+  would be wrong by the second factor and printed as confidently as any other number.
+  Define the outer unit in terms of the simple unit at the bottom instead.
+- **Half a conversion** — a base with no factor, or a factor with no base. The form refuses
+  it before the request, naming the field; the service and a `CHECK` constraint refuse
+  behind it.
+- **An item naming a stock group that does not exist.** The group is never minted from the
+  item, because a group created from a misspelling subtotals half a company's stock under a
+  name nobody meant. Create the group first.
+
+### What is not here
+
+No rename, re-parent or delete of a stock group, and **no way to move an item to a
+different group after it is created** — both are master alters and this build has none for
+either master, so a mis-filed item is corrected by creating it again. And the group
+subtotals are **on the screen only**: the exported and printed Stock Summary carries the
+base-unit column but not the group table.
+
+---
+
 ## A Tally import now brings in the GOODS, and it refuses a file with no opening stock
 
 **Applies to:** `POST .../import/tally-xml` — migrating from TallyPrime. **Feature:** §3.
@@ -62,10 +145,13 @@ its own job succeed.
 ### What is still not imported
 
 Cost-centre allocations, price lists and budgets. Tally's location **tree** is flattened —
-the stock is in the right place and the hierarchy is not recorded — and a **compound unit**
-("Box of 12 Nos") arrives as a simple symbol: quantities in Boxes are stored as Boxes,
-correctly, and nothing in this build can restate them in pieces. Each of those is reported
+the stock is in the right place and the hierarchy is not recorded. Each of those is reported
 in the import's warnings rather than silently flattened.
+
+⛔ **This paragraph used to say a compound unit ("Box of 12 Nos") arrives as a simple
+symbol. That is no longer true** — T10 gave units a base and a factor, and the importer
+brings both in (see the note above). A compound unit whose export carries no usable base or
+conversion still arrives as a simple symbol, and still says so in the warnings.
 
 ⚠️ **A clean import is not an empty warnings list, and a balanced Trial Balance proves
 nothing about your stock.** Read the warnings, then read the Stock Summary.

@@ -655,19 +655,52 @@ describe("F11 Company Features tells the truth about inventory", () => {
     ).toBe("On");
   });
 
-  it("still says NOT BUILT for the inventory things that are not built", () => {
-    // The other half of honesty. If every row said "On" the screen would be
-    // decoration, so the gaps this slice did NOT close are asserted too.
-    // Closing stock is NOT one of them any more — it has its own test above.
+  it("the stock-group / compound-unit row reads 'On', because an operator can key both", () => {
+    // T10, and the same rule as every flip above: the row moves in the change
+    // that gives the operator the KEYS — Alt+G > Create Stock Group, and a base
+    // unit + conversion factor on Alt+G > Create Unit — not the change that
+    // added migration 0079's tables.
     renderFeatures();
-    // Was "Inventory vouchers (Stock Journal, ...)" until those four got an entry
-    // screen, then ORDER PROCESSING until that got one too, and then FIFO/LIFO
-    // until T9 shipped three costing methods with a picker on the master form and
-    // Alt+V on the Stock Summary — this assertion has now been re-pointed three
-    // times by features actually shipping, which is exactly what it is for.
+    expect(
+      badgeFor(/^Stock groups and compound units/),
+      "F11 must say stock groups and compound units are On in the same change that gives an operator the keys",
+    ).toBe("On");
+    const note =
+      screen.getByText(/^Stock groups and compound units/).closest("tr")
+        ?.textContent ?? "";
+    // The KEYS must be named, or the row claims a feature with no door.
+    expect(note).toMatch(/Alt\+G > Create Stock Group/);
+    // ⛔ AND THE TWO DISCLOSURES THAT COST MONEY TRAVEL WITH IT. A group subtotal
+    // is the whole BRANCH, so the lines overlap; and a compound quantity is
+    // stored in the item's own unit, so the base column is derived. A row that
+    // announced the feature without either would invite an operator to add the
+    // group column up and to read 48 where 4 was keyed.
+    expect(note).toMatch(/MUST NOT BE ADDED/);
+    expect(note).toMatch(/STORED IN THE ITEM'S OWN UNIT/);
+  });
+
+  it("still says NOT BUILT for what is not built", () => {
+    // The other half of honesty. If every row said "On" the screen would be
+    // decoration, so a genuine gap is asserted too.
     //
-    // What is left is genuinely absent: a conversion factor makes every quantity
-    // in the system unit-qualified, and nothing in this build is.
-    expect(badgeFor(/^Stock groups and compound units/)).toBe("Not built");
+    // ⚠️ THIS ASSERTION HAS BEEN RE-POINTED FOUR TIMES BY FEATURES ACTUALLY
+    // SHIPPING — "Inventory vouchers", then ORDER PROCESSING, then FIFO/LIFO,
+    // and now STOCK GROUPS AND COMPOUND UNITS, which has its own positive test
+    // above. That is what it is for, and each re-pointing is a human deciding
+    // the flip was earned.
+    //
+    // ⛔ AND IT HAD TO LEAVE THE INVENTORY GROUP ENTIRELY: with T10 shipped there
+    // is no "Not built" row left under Inventory at all — all ten read On — so
+    // there is nothing inventory-shaped left here to pin. It is now pointed at
+    // the nearest thing to THIS file's subject that is genuinely absent: an item
+    // invoice prints, and the Rule 48(4) QR code that makes a printed e-invoice
+    // compliant does not exist. If that row is ever flipped without being built,
+    // this fails.
+    renderFeatures();
+    expect(badgeFor(/^Rule 48\(4\) QR code/)).toBe("Not built");
+    // And the SCREEN-WIDE property behind the assertion above, so this test
+    // cannot pass vacuously on a page whose last gap was just closed: F11 still
+    // carries real gaps, plural.
+    expect(screen.getAllByText("Not built").length).toBeGreaterThan(1);
   });
 });
