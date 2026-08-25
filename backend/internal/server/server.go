@@ -78,8 +78,22 @@ import (
 // r.Body with what it read, so the truncation would be silent — insightd would
 // answer 422 on a body the operator's own file produced. See bodyCapFor.
 const (
-	maxJSONBody = 1 << 20  // 1 MiB
-	maxXMLBody  = 32 << 20 // 32 MiB
+	maxJSONBody = 1 << 20 // 1 MiB
+	// ⛔ 32 MiB WAS NOT ENOUGH FOR ONE REAL COMPANY. A TallyPrime "All Masters"
+	// export of a mid-sized trader — 3,706 ledgers, nine years of counter-parties
+	// — is 84 MB, because Tally writes UTF-16 (two bytes per ASCII character) and
+	// stamps ~200 mostly-empty elements on every master. The old cap refused it at
+	// the door with a 413, so the commercial migration path could not be walked at
+	// all with the very first genuine file it met.
+	//
+	// ⚠️ THE COST OF THIS NUMBER IS MEMORY, AND IT IS NOT LINEAR IN IT. The
+	// back-dating peek buffers the whole body (drainBody) before the handler reads
+	// it, and the importer then builds a parse tree several times the size of the
+	// text. A body at this cap can cost well over a gigabyte of heap. It is raised
+	// to what a real export needs and no further; the actual fix is a STREAMING
+	// import that decodes TALLYMESSAGE by TALLYMESSAGE and never holds the
+	// document, which would let this cap come back down.
+	maxXMLBody = 128 << 20 // 128 MiB
 	// Sized for a phone photo of a bill (the OCR spike's ~12 MP case) once
 	// base64 has grown it by a third, with headroom — and deliberately well
 	// under the XML import's allowance, because this body is buffered in memory
@@ -3264,11 +3278,29 @@ func (s *Server) handleImportTallyXML(w http.ResponseWriter, r *http.Request) {
 			"version_no":         p.VersionNo,
 		})
 	}
+	// ⛔ WARNINGS ARE PART OF THE RESULT, NOT A LOG LINE. The importer carries on
+	// past what it cannot represent exactly — an opening bill-wise breakup that
+	// does not add up, a ledger whose Tally group is not in the file — and an
+	// operator who is told only "121 vouchers posted" will believe the migration
+	// was lossless when parts of it were not.
+	warnings := res.Warnings
+	if warnings == nil {
+		warnings = []string{}
+	}
+	groups := res.GroupsEnsured
+	if groups == nil {
+		groups = []string{}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"source_company":  res.SourceCompany,
-		"vouchers_posted": res.VouchersPosted,
-		"ledgers_ensured": res.LedgersEnsured,
-		"posted":          posted,
+		"source_company":   res.SourceCompany,
+		"vouchers_posted":  res.VouchersPosted,
+		"vouchers_altered": res.VouchersAltered,
+		"vouchers_deleted": res.VouchersDeleted,
+		"vouchers_skipped": res.Skipped,
+		"groups_ensured":   groups,
+		"ledgers_ensured":  res.LedgersEnsured,
+		"warnings":         warnings,
+		"posted":           posted,
 	})
 }
 
@@ -4146,7 +4178,7 @@ func peekTallyXMLVoucherDate(body []byte) *time.Time {
 		return beforeEveryCutoff()
 	}
 	var earliest *time.Time
-	for _, m := range env.Body.Data.Messages {
+	for _, m := range env.Messages() {
 		if m.Voucher == nil {
 			continue // a LEDGER master message: nothing dated, nothing to back-date.
 		}

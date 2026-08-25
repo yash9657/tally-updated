@@ -21,6 +21,7 @@ package migration
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -32,6 +33,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/khata/cored/internal/compliance"
+	"github.com/khata/cored/internal/gststate"
 	"github.com/khata/cored/internal/integration"
 	"github.com/khata/cored/internal/ledger"
 	"github.com/khata/cored/internal/masters"
@@ -75,9 +77,19 @@ type ImportResult struct {
 	// messages that were routed (by Tally GUID) to AlterVoucher / DeleteVoucher.
 	VouchersAltered int
 	VouchersDeleted int
+	// GroupsEnsured names the account groups created from GROUP masters, in
+	// document order. Groups already present (Tally's own built-ins, which every
+	// cored company is seeded with) are resolved, not created, and not listed.
+	GroupsEnsured []string
 	// LedgersEnsured is the set of distinct ledger names referenced (created or
 	// already present), in stable order.
 	LedgersEnsured []string
+	// Warnings records everything the import decided to carry on through rather
+	// than abort over — a ledger whose Tally group is not in the export, an
+	// opening bill-wise breakup that does not add up to its own opening balance.
+	// ⛔ A CLEAN IMPORT IS NOT THE SAME AS AN EMPTY Warnings, and an operator who
+	// never reads them has migrated something subtly different from their books.
+	Warnings []string
 	// Posted holds one PostResult per posted voucher, in document order.
 	Posted []ledger.PostResult
 	// Skipped is the count of vouchers that were NOT posted because a voucher with
@@ -120,7 +132,7 @@ func (im *Importer) ImportEnvelope(ctx context.Context, env *integration.TallyEn
 	if createdBy == "" {
 		createdBy = "tally-import"
 	}
-	res := ImportResult{SourceCompany: env.Body.Desc.StaticVariables.CurrentCompany}
+	res := ImportResult{SourceCompany: env.SourceCompany()}
 
 	// ledgerIDs memoises name->id within this run so a ledger referenced by
 	// several vouchers is resolved/created once.
@@ -131,18 +143,34 @@ func (im *Importer) ImportEnvelope(ctx context.Context, env *integration.TallyEn
 	// supply when the voucher itself does not carry one.
 	ledgerState := make(map[string]string)
 
+	// PASS ZERO — GROUP masters, before any ledger can name one as its parent.
+	// A real export carries the whole chart of accounts, and a company that has
+	// been trading for years has ADDED to it: the file tested against declared 37
+	// groups, 9 of them the user's own ("DALALI EXPS.", "SUNDRY DEBTORS -
+	// OUTSTATION", "PURCHASES-OMS"), and 217 ledgers hung off those nine. Without
+	// this pass every one of them failed to create — masters.CreateLedger
+	// resolves the group by name and refuses ErrNotFound — and the import died on
+	// the first of them.
+	groupCanon, groupsMade, groupWarns, err := im.importGroups(ctx, env.Messages(), createdBy)
+	if err != nil {
+		return res, err
+	}
+	res.GroupsEnsured = groupsMade
+	res.Warnings = append(res.Warnings, groupWarns...)
+
 	// FIRST PASS — LEDGER masters: opening balances + GST master attributes. These
 	// must land before any voucher posts so (a) reporting folds the opening
 	// balances into TB/BS/P&L and (b) the GSTR-1 party join classifies B2B vs B2C.
 	// A master whose ledger already exists is left unchanged (resolve-first).
-	for i, msg := range env.Body.Data.Messages {
+	for i, msg := range env.Messages() {
 		if msg.Ledger == nil {
 			continue
 		}
-		id, name, state, err := im.importLedgerMaster(ctx, i, msg.Ledger, ledgerIDs, createdBy)
+		id, name, state, warns, err := im.importLedgerMaster(ctx, i, msg.Ledger, ledgerIDs, groupCanon, createdBy)
 		if err != nil {
 			return res, err
 		}
+		res.Warnings = append(res.Warnings, warns...)
 		if state != "" {
 			ledgerState[name] = state
 		}
@@ -169,7 +197,7 @@ func (im *Importer) ImportEnvelope(ctx context.Context, env *integration.TallyEn
 	// new immutable version to the voucher previously imported under that GUID,
 	// and Delete tombstones it. Alter/Delete resolve their target by the stable
 	// Tally GUID, mirroring how Tally itself re-syncs an edited/removed voucher.
-	for i, msg := range env.Body.Data.Messages {
+	for i, msg := range env.Messages() {
 		if msg.Voucher == nil {
 			continue // ledger masters handled in the first pass
 		}
@@ -265,41 +293,162 @@ func (im *Importer) ImportEnvelope(ctx context.Context, env *integration.TallyEn
 	return res, nil
 }
 
+// importGroups ensures every GROUP master in the export exists as an account
+// group, parents before children, and returns a map from the Tally spelling
+// (lower-cased) to the name as STORED — which is what every later lookup must
+// use, because masters resolves a ledger's group by exact name.
+//
+// Tally's own built-in groups are seeded into every cored company already, so
+// they resolve rather than create. That resolution is deliberately
+// case-insensitive: Tally exports "Cash-in-hand" and "Stock-in-hand" where the
+// seed spells them "Cash-in-Hand" and "Stock-in-Hand", and account_group has no
+// normalised unique index to stop a second copy landing beside the first.
+//
+// A group whose parent is missing from the export is REPORTED, not invented: a
+// primary group needs a nature (Balance Sheet vs P&L) that nothing in the file
+// supplies, and guessing it would misfile every ledger beneath it.
+func (im *Importer) importGroups(ctx context.Context, msgs []integration.TallyMessage,
+	createdBy string) (map[string]string, []string, []string, error) {
+
+	canon := make(map[string]string)
+	var made, warns []string
+
+	pending := make([]*integration.TallyGroupMaster, 0, len(msgs))
+	for _, m := range msgs {
+		if m.Group == nil || m.Group.Deleted() || m.Group.Name() == "" {
+			continue
+		}
+		pending = append(pending, m.Group)
+	}
+
+	// resolve returns the stored spelling of a group already known to the
+	// company (or to this run), and whether it was found.
+	resolve := func(name string) (string, bool, error) {
+		key := strings.ToLower(strings.TrimSpace(name))
+		if stored, ok := canon[key]; ok {
+			return stored, true, nil
+		}
+		_, stored, err := im.masters.GroupIDByName(ctx, name)
+		switch {
+		case err == nil:
+			canon[key] = stored
+			return stored, true, nil
+		case errors.Is(err, masters.ErrNotFound):
+			return "", false, nil
+		default:
+			return "", false, err
+		}
+	}
+
+	// Parents before children, without assuming the export is ordered that way:
+	// keep sweeping while any group resolves, then report whatever is left.
+	for len(pending) > 0 {
+		var deferred []*integration.TallyGroupMaster
+		progress := false
+		for _, g := range pending {
+			name := g.Name()
+			if _, found, err := resolve(name); err != nil {
+				return nil, nil, nil, fmt.Errorf("migration: group %q: %w", name, err)
+			} else if found {
+				progress = true
+				continue
+			}
+			parent := strings.TrimSpace(g.Parent)
+			if parent == "" {
+				// A primary group cored does not already have. Its nature is not in
+				// the file, and a wrong nature moves ledgers between the Balance
+				// Sheet and the P&L, so this one is named rather than guessed.
+				warns = append(warns, fmt.Sprintf(
+					"group %q is a primary group this company does not have and the export "+
+						"does not state its nature; ledgers under it will be grouped by inference", name))
+				progress = true
+				continue
+			}
+			storedParent, found, err := resolve(parent)
+			if err != nil {
+				return nil, nil, nil, fmt.Errorf("migration: group %q: parent %q: %w", name, parent, err)
+			}
+			if !found {
+				deferred = append(deferred, g) // parent may be declared later in the file
+				continue
+			}
+			_, stored, err := im.masters.EnsureGroup(ctx,
+				masters.Group{Name: name, ParentName: storedParent}, createdBy)
+			if err != nil {
+				return nil, nil, nil, fmt.Errorf("migration: group %q under %q: %w", name, storedParent, err)
+			}
+			canon[strings.ToLower(strings.TrimSpace(name))] = stored
+			made = append(made, stored)
+			progress = true
+		}
+		if !progress {
+			for _, g := range deferred {
+				warns = append(warns, fmt.Sprintf(
+					"group %q names a parent %q that is neither in this company nor in the export; "+
+						"ledgers under it will be grouped by inference", g.Name(), strings.TrimSpace(g.Parent)))
+			}
+			break
+		}
+		pending = deferred
+	}
+	return canon, made, warns, nil
+}
+
+// groupNameFor maps a Tally PARENT onto the account group name as stored in this
+// company, resolving case-insensitively and consulting the groups this run
+// created. It returns ok=false when the group is not in the company at all —
+// which happens when the export carried ledgers but not the GROUP masters they
+// name (an "Accounting Masters only" export, or a Day Book on its own).
+func (im *Importer) groupNameFor(ctx context.Context, parent string,
+	canon map[string]string) (string, bool, error) {
+
+	parent = strings.TrimSpace(parent)
+	if parent == "" {
+		return "", false, nil
+	}
+	if stored, ok := canon[strings.ToLower(parent)]; ok {
+		return stored, true, nil
+	}
+	_, stored, err := im.masters.GroupIDByName(ctx, parent)
+	switch {
+	case err == nil:
+		canon[strings.ToLower(parent)] = stored
+		return stored, true, nil
+	case errors.Is(err, masters.ErrNotFound):
+		return "", false, nil
+	default:
+		return "", false, err
+	}
+}
+
 // importLedgerMaster applies one Tally LEDGER master: it ensures the ledger
 // exists with its opening balance (set as ledger.opening_balance/opening_dc so
-// reporting folds it into the statements with zero reporting change) and its GST
-// master attributes (GSTIN / state_code / registration_type). An already-present
-// ledger is left unchanged. It returns the ledger id, resolved name, and the
-// declared state code (empty if none).
+// reporting folds it into the statements with zero reporting change), its
+// opening bill-wise breakup, and its GST master attributes (GSTIN / state_code /
+// registration_type). An already-present ledger is left unchanged. It returns the
+// ledger id, resolved name, the declared state code (empty if none) and any
+// warnings raised.
 func (im *Importer) importLedgerMaster(ctx context.Context, idx int, m *integration.TallyLedgerMaster,
-	cache map[string]uuid.UUID, createdBy string) (uuid.UUID, string, string, error) {
+	cache map[string]uuid.UUID, groupCanon map[string]string, createdBy string) (
+	uuid.UUID, string, string, []string, error) {
 
+	var warns []string
 	name := m.Name()
 	if name == "" {
-		return uuid.Nil, "", "", fmt.Errorf("migration: ledger master %d: empty NAME", idx+1)
+		return uuid.Nil, "", "", nil, fmt.Errorf("migration: ledger master %d: empty NAME", idx+1)
 	}
+	stateCode := stateCodeFor(m)
 	if id, ok := cache[name]; ok {
-		return id, name, masterStateCode(m), nil
+		return id, name, stateCode, nil, nil
 	}
 
 	debit, hasOpening, err := m.OpeningSide()
 	if err != nil {
-		return uuid.Nil, "", "", fmt.Errorf("migration: ledger master %d: %w", idx+1, err)
+		return uuid.Nil, "", "", nil, fmt.Errorf("migration: ledger master %d: %w", idx+1, err)
 	}
 	mag, err := m.OpeningMagnitude()
 	if err != nil {
-		return uuid.Nil, "", "", fmt.Errorf("migration: ledger master %d: %w", idx+1, err)
-	}
-
-	group := strings.TrimSpace(m.Parent)
-	if group == "" {
-		// No Tally parent: infer a home from the opening side (debit-natured =>
-		// asset bucket, credit-natured => liability bucket) by name.
-		side := ledger.Credit
-		if debit {
-			side = ledger.Debit
-		}
-		group = inferGroup(name, ledger.Journal, side)
+		return uuid.Nil, "", "", nil, fmt.Errorf("migration: ledger master %d: %w", idx+1, err)
 	}
 
 	openDC := "C"
@@ -311,41 +460,215 @@ func (im *Importer) importLedgerMaster(ctx context.Context, idx int, m *integrat
 		openBal = mag
 	}
 
+	group, found, err := im.groupNameFor(ctx, m.Parent, groupCanon)
+	if err != nil {
+		return uuid.Nil, "", "", nil, fmt.Errorf("migration: ledger master %d: group: %w", idx+1, err)
+	}
+	if !found {
+		// No usable Tally parent: infer a home from the opening side (debit-natured
+		// => asset bucket, credit-natured => liability bucket) by name.
+		side := ledger.Credit
+		if debit {
+			side = ledger.Debit
+		}
+		group = inferGroup(name, ledger.Journal, side)
+		if p := strings.TrimSpace(m.Parent); p != "" {
+			warns = append(warns, fmt.Sprintf(
+				"ledger %q names Tally group %q, which is not in this company and not in the "+
+					"export; it was grouped under %q by inference", name, p, group))
+		}
+	}
+
 	l := masters.Ledger{
 		Name:             name,
 		GroupName:        group,
 		OpeningBalance:   openBal,
 		OpeningDC:        openDC,
 		GSTIN:            m.GSTINValue(),
-		StateCode:        masterStateCode(m),
+		StateCode:        stateCode,
 		RegistrationType: masterRegType(m),
 	}
 	id, err := im.masters.EnsureLedgerWithOpening(ctx, l, createdBy)
 	if err != nil {
-		return uuid.Nil, "", "", fmt.Errorf("migration: ledger master %d: ensure %q: %w", idx+1, name, err)
+		return uuid.Nil, "", "", nil, fmt.Errorf("migration: ledger master %d: ensure %q: %w", idx+1, name, err)
 	}
-	return id, name, l.StateCode, nil
-}
 
-// masterStateCode returns the two-digit GST state code declared on a LEDGER
-// master, accepting the STATE / STATENAME / LEDSTATENAME spellings (a two-digit
-// code is taken verbatim; a state NAME is not resolved here — corpora carry the
-// numeric code in STATE).
-func masterStateCode(m *integration.TallyLedgerMaster) string {
-	for _, s := range []string{m.State, m.StateName, m.LedgerStateName} {
-		s = strings.TrimSpace(s)
-		if len(s) == 2 {
-			return s
+	if hasOpening {
+		w, err := im.applyOpening(ctx, m, id, openBal, openDC, createdBy)
+		if err != nil {
+			return uuid.Nil, "", "", nil, fmt.Errorf(
+				"migration: ledger master %d: opening for %q: %w", idx+1, name, err)
+		}
+		if w != "" {
+			warns = append(warns, w)
 		}
 	}
+	return id, name, l.StateCode, warns, nil
+}
+
+// applyOpeningBills writes the bill-wise breakup of a ledger's OPENING balance.
+//
+// ⛔ WITHOUT IT A MIGRATED DEBTOR HAS THE RIGHT TOTAL AND NO AGEING AT ALL. The
+// opening balance is one number; the Outstandings report buckets by BILL, so
+// every rupee a business was owed on the day it switched would sit outside
+// 0-30/31-60/61-90 with no invoice against it — which is precisely the report a
+// migrating business checks first.
+//
+// The breakup is attached only when it actually reconciles: masters requires it
+// to sum to the opening balance on one side, and a real file does not always
+// oblige. Of the 156 ledgers carrying named opening bills in the export tested
+// against, 139 summed exactly, 17 did not, and 5 mixed debit and credit refs on
+// one ledger (a debtor holding advances — a position cored's opening cannot
+// express). Those are reported and the TOTAL is kept: a right balance with a
+// blank ageing beats a wrong balance.
+func (im *Importer) applyOpening(ctx context.Context, m *integration.TallyLedgerMaster,
+	ledgerID uuid.UUID, openBal decimal.Decimal, openDC, createdBy string) (string, error) {
+
+	// ⛔ THE OPENING MUST BE WRITTEN EVEN WHEN THE LEDGER WAS ALREADY THERE, and
+	// that is the whole reason this reads before it writes. Every company is
+	// seeded with a handful of ledgers — Cash among them — so the export's Cash
+	// master resolves to one that exists, EnsureLedgerWithOpening returns it
+	// UNCHANGED, and the opening cash balance is dropped on the floor. In the real
+	// export tested against that was ONE ledger and 14,14,596.01 rupees, and the
+	// only reason it was caught is that a Trial Balance which no longer balances
+	// is impossible to miss. Had it been a debtor rather than cash, the sheet
+	// would still have balanced and simply been wrong.
+	//
+	// An existing NON-ZERO opening is never overwritten: that is somebody's
+	// already-migrated position, and a second import must not restate it.
+	current, _, err := im.masters.LedgerOpening(ctx, ledgerID)
+	if err != nil {
+		return "", err
+	}
+	if !current.IsZero() && !current.Equal(openBal) {
+		return fmt.Sprintf(
+			"ledger %q already carries an opening balance of %s in this company; the export's %s "+
+				"was NOT applied", m.Name(), current.StringFixed(2), openBal.StringFixed(2)), nil
+	}
+
+	var (
+		bills []masters.OpeningBill
+		sum   decimal.Decimal
+	)
+	for _, b := range m.OpeningBills {
+		ref := strings.TrimSpace(b.Name)
+		if ref == "" {
+			continue
+		}
+		raw := strings.TrimSpace(b.OpeningBalance)
+		if raw == "" {
+			continue
+		}
+		amt, err := decimal.NewFromString(raw)
+		if err != nil {
+			return "", fmt.Errorf("bill %q: bad OPENINGBALANCE %q: %w", ref, raw, err)
+		}
+		if amt.IsZero() {
+			continue
+		}
+		// Same signed convention as the ledger's own opening: negative = debit.
+		dc := "C"
+		if amt.IsNegative() {
+			dc = "D"
+		}
+		if dc != openDC {
+			return fmt.Sprintf(
+					"ledger %q: opening bill %q is a %s against a %s opening balance; cored's opening "+
+						"cannot hold both sides, so the total was kept and the bill-wise breakup dropped "+
+						"(its ageing must be re-entered)", m.Name(), ref, drcrWord(dc), drcrWord(openDC)),
+				im.masters.SetLedgerOpening(ctx, ledgerID, openBal, openDC, nil, createdBy)
+		}
+		bills = append(bills, masters.OpeningBill{
+			RefName: ref,
+			RefType: "NEW",
+			DrCr:    dc,
+			Amount:  amt.Abs(),
+			DueDate: billDueISO(b.CreditPeriod),
+		})
+		sum = sum.Add(amt.Abs())
+	}
+	if len(bills) == 0 {
+		// No usable breakup: still write the balance itself.
+		return "", im.masters.SetLedgerOpening(ctx, ledgerID, openBal, openDC, nil, createdBy)
+	}
+	if !sum.Equal(openBal) {
+		return fmt.Sprintf(
+				"ledger %q: opening bill-wise breakup sums to %s but its opening balance is %s; the "+
+					"total was kept and the breakup dropped (its ageing must be re-entered)",
+				m.Name(), sum.StringFixed(2), openBal.StringFixed(2)),
+			im.masters.SetLedgerOpening(ctx, ledgerID, openBal, openDC, nil, createdBy)
+	}
+	return "", im.masters.SetLedgerOpening(ctx, ledgerID, openBal, openDC, bills, createdBy)
+}
+
+// drcrWord spells a "D"/"C" for a message a human reads.
+func drcrWord(dc string) string {
+	if dc == "D" {
+		return "debit"
+	}
+	return "credit"
+}
+
+// stateCodeFor determines a ledger's two-digit GST state code.
+//
+// ⛔ THE EXPORT DOES NOT CARRY ONE. Tally records the state by NAME
+// ("Maharashtra"), in several places and sometimes in none of them: of the 342
+// GST-registered parties in the file tested against, ZERO carried a two-digit
+// code anywhere, so a reader that insisted on one — as this importer did —
+// migrated every party with a blank state, and a blank state is what decides
+// intra- vs inter-state on every invoice afterwards.
+//
+// The GSTIN is the best source and needs no table: its first two digits ARE the
+// state code, by construction, and they agreed for 340 of those 342. It is
+// validated against the statutory table so a retired code (25, 28) is refused
+// rather than written into a master the invoice printer will later refuse to
+// print. The state NAME is the fallback, and a literal two-digit field — which
+// the hand-authored corpora do use — is honoured ahead of both.
+func stateCodeFor(m *integration.TallyLedgerMaster) string {
+	for _, s := range []string{m.State, m.StateName, m.LedgerStateName} {
+		if s = strings.TrimSpace(s); len(s) == 2 {
+			if _, ok := gststate.Name(s); ok {
+				return s
+			}
+		}
+	}
+	if g := strings.TrimSpace(m.GSTINValue()); len(g) >= 2 {
+		if code := g[:2]; code >= "01" && code <= "99" {
+			if _, ok := gststate.Name(code); ok {
+				return code
+			}
+		}
+	}
+	if code, ok := stateCodeByName(m.GSTStateName()); ok {
+		return code
+	}
 	return ""
+}
+
+// stateCodeByName reverses the statutory state table: a Tally state NAME becomes
+// the code cored stores. Only CURRENT entries answer — a ledger still naming
+// "Daman and Diu" gets no code rather than a retired one.
+func stateCodeByName(name string) (string, bool) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", false
+	}
+	for _, e := range gststate.All() {
+		if strings.EqualFold(e.Name, name) {
+			if _, ok := gststate.Name(e.Code); ok {
+				return e.Code, true
+			}
+			return "", false
+		}
+	}
+	return "", false
 }
 
 // masterRegType maps a Tally GSTREGISTRATIONTYPE onto the cored enum. A blank or
 // unknown value yields UNKNOWN; a GSTIN with an unspecified type is treated as
 // REGULAR so the GSTR-1 join classifies it B2B.
 func masterRegType(m *integration.TallyLedgerMaster) masters.GSTRegistrationType {
-	switch strings.ToUpper(strings.TrimSpace(m.GSTRegistration)) {
+	switch strings.ToUpper(m.RegistrationTypeValue()) {
 	case "REGULAR":
 		return masters.GSTRegular
 	case "COMPOSITION":

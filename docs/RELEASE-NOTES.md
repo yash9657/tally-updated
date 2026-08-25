@@ -7,6 +7,75 @@ what was wrong; this file records what a person will notice.
 
 ---
 
+## Tally XML import now reads a file TallyPrime actually wrote
+
+**Applies to:** migrating an existing company in — Gateway of Tally > Export > Masters
+and > Day Book, XML — and the `POST .../import/tally-xml` endpoint behind it.
+**Register:** T32.
+
+### What changes
+
+The importer had never been given a genuine export. Everything it had been built and
+tested against was hand-authored — the shape an integrator SENDS Tally, not the shape
+Tally EMITS — and the two differ enough that a real file did not import at all.
+
+**A real export now imports.** The one it was fixed against carried 3,706 ledgers, 37
+account groups and 121 vouchers; it goes in and the Trial Balance comes back balanced to
+the paisa against the same figures recomputed straight from the XML.
+
+⛔ **If you tried to import a Tally file before and were told it worked, check what
+landed.** The most serious of the defects was silent: an export in TallyPrime's own
+envelope parsed without error, produced **zero** vouchers, and reported success. An
+import that appeared to do nothing did in fact do nothing, and one that appeared to
+succeed may also have done nothing. Re-run it.
+
+The rest were loud but total — the file was rejected before a single voucher was read:
+
+- Tally writes **UTF-16**, which was read as UTF-8 and failed on the first two bytes.
+- Tally puts **U+0004 inside ordinary field values** ("&#4; Not Applicable"), which XML
+  forbids and the parser refused. The two files tested against held 32,464 of them.
+- A masters export of a nine-year-old company is **84 MB**; the endpoint capped bodies at
+  32 MB and answered 413. The cap is now 128 MB.
+
+And three were quiet and would have produced WRONG BOOKS rather than no books:
+
+- On an **item invoice**, the sales and purchase amounts are recorded inside the stock
+  lines, not beside the party. Reading only the top level left 63 of those 121 vouchers
+  missing their entire revenue side.
+- A **round-off line** states one side in its flag and the other in its sign. The sign is
+  the truth; reading the flag put 25 lines on the wrong side.
+- A ledger the company **already has** — Cash is seeded into every company — kept its
+  zero opening while the export's real opening was dropped. That was ₹14,14,596.01 of
+  cash in the file tested against.
+
+### What to check after importing
+
+**Read the warnings.** The response now carries a `warnings` list, and an import can
+finish with correct totals and still not be a perfect copy of your books. Two things a
+real file does that cored cannot hold exactly:
+
+- an opening balance whose **bill-by-bill breakup does not add up** to it, or which mixes
+  amounts you owe with amounts owed to you on one party. The **total is kept** and the
+  breakup is dropped — so that party's balance is right and its ageing needs re-entering.
+  In the file tested against this was 19 of 3,706 ledgers.
+- a ledger whose Tally **group is not in the file** (an export of ledgers without their
+  groups). It is filed by inference and the warning names it.
+
+Your own account groups come across: the nine user-defined groups in the file tested
+against were created, and Tally's built-in ones were matched to the ones cored already
+seeds rather than duplicated — including "Cash-in-hand", which Tally spells with a small
+h and cored with a capital.
+
+⚠️ **Import into a FRESH company and reconcile before going live.** Each voucher is its
+own transaction, so a run that stops part-way leaves what it already posted.
+
+⚠️ **GST is not exercised by this evidence.** The company the fixes were proved against
+trades GST-free and zero-rated goods, so not one voucher in it carried a CGST/SGST/IGST
+line. Tax-bearing invoices still import through the path the existing corpora cover, but
+they have not met a real file yet.
+
+---
+
 ## "Bills Payable" is a report of its own, and the words for it now open it
 
 **Applies to:** Go To / Switch To, the report list, printing, and access rules.

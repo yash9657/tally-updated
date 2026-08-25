@@ -1189,7 +1189,7 @@ func peekTallyXMLSupersededGUIDs(body []byte) []string {
 		return nil
 	}
 	var guids []string
-	for _, m := range env.Body.Data.Messages {
+	for _, m := range env.Messages() {
 		if m.Voucher == nil {
 			continue // a LEDGER master message supersedes no voucher.
 		}

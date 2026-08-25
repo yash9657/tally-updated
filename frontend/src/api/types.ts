@@ -390,9 +390,7 @@ export interface SetBankDateResponse {
 
 /** How a file says which way money moved. */
 export type StatementDirectionEncoding =
-  | "two-columns"
-  | "signed-amount"
-  | "amount-and-flag";
+  "two-columns" | "signed-amount" | "amount-and-flag";
 
 /**
  * The operator-confirmed reading of one file. Every field except `encoding` and
@@ -1682,7 +1680,21 @@ export interface ImportedVoucher {
 export interface ImportTallyXMLResponse {
   source_company: string;
   vouchers_posted: number;
-  ledgers_ensured: number;
+  vouchers_altered: number;
+  vouchers_deleted: number;
+  vouchers_skipped: number;
+  /** Account groups CREATED from the export's GROUP masters (Tally's own built-ins resolve instead). */
+  groups_ensured: string[];
+  /** Every ledger name the import touched. It is a list of NAMES, not a count. */
+  ledgers_ensured: string[];
+  /**
+   * What the import carried on past rather than aborting over — an opening
+   * bill-wise breakup that does not sum to its own balance, a ledger whose Tally
+   * group was not in the file. An empty array is the only clean import; a
+   * non-empty one MUST be shown to the operator, because the totals will look
+   * right either way.
+   */
+  warnings: string[];
   posted: ImportedVoucher[];
 }
 
@@ -2879,7 +2891,7 @@ export interface CostCategorySummaryResponse {
  * stock effect, and an order must never appear in the Day Book beside vouchers.
  * It is a promise, not an entry.
  */
-export type OrderDirection = 'SALES' | 'PURCHASE';
+export type OrderDirection = "SALES" | "PURCHASE";
 
 /**
  * One committed item quantity on an order.
@@ -3278,7 +3290,7 @@ export interface EWayBillRequest {
   transporter_name?: string;
   /** Part B. Absent for a movement under the distance threshold the server states. */
   vehicle_number?: string;
-  transport_mode?: 'ROAD' | 'RAIL' | 'AIR' | 'SHIP';
+  transport_mode?: "ROAD" | "RAIL" | "AIR" | "SHIP";
   /**
    * Approximate distance in km — drives the validity period the server computes.
    *
@@ -3464,7 +3476,7 @@ export interface EInvoicePinned {
 /** The order list: heads only, WITHOUT their lines — see {@link OrderView}. */
 export interface OrderListResponse {
   direction: OrderDirection;
-  orders: Omit<OrderView, 'lines'>[];
+  orders: Omit<OrderView, "lines">[];
   /**
    * Echoed so a screen cannot render a filtered list under an unfiltered heading.
    * "No orders" and "no OPEN orders" are different answers to an operator.
@@ -3474,7 +3486,7 @@ export interface OrderListResponse {
 
 /** The recipe list: heads only, WITHOUT their components. */
 export interface BomListResponse {
-  boms: Omit<BomView, 'components'>[];
+  boms: Omit<BomView, "components">[];
 }
 
 /**

@@ -591,22 +591,118 @@ const MOCK_MINOR_HEADS: MinorHead[] = [
  * "Company" FORBIDS it. Same caveat as above: served, never a client's own copy.
  */
 const MOCK_DEDUCTOR_CATEGORIES: DeductorCategory[] = [
-  { code: "A", description: "Central Government", state_name_code_required: false, ministry_required: true, ministry_allowed: true },
-  { code: "S", description: "State Government", state_name_code_required: true, ministry_required: false, ministry_allowed: false },
-  { code: "D", description: "Statutory body (Central Govt.)", state_name_code_required: false, ministry_required: true, ministry_allowed: true },
-  { code: "E", description: "Statutory body (State Govt.)", state_name_code_required: true, ministry_required: false, ministry_allowed: true },
-  { code: "G", description: "Autonomous body (Central Govt.)", state_name_code_required: false, ministry_required: true, ministry_allowed: true },
-  { code: "H", description: "Autonomous body (State Govt.)", state_name_code_required: true, ministry_required: false, ministry_allowed: true },
-  { code: "L", description: "Local Authority (Central Govt.)", state_name_code_required: false, ministry_required: false, ministry_allowed: true },
-  { code: "N", description: "Local Authority (State Govt.)", state_name_code_required: true, ministry_required: false, ministry_allowed: true },
-  { code: "K", description: "Company", state_name_code_required: false, ministry_required: false, ministry_allowed: false },
-  { code: "M", description: "Branch / Division of Company", state_name_code_required: false, ministry_required: false, ministry_allowed: false },
-  { code: "P", description: "Association of Person (AOP)", state_name_code_required: false, ministry_required: false, ministry_allowed: false },
-  { code: "T", description: "Association of Person (Trust)", state_name_code_required: false, ministry_required: false, ministry_allowed: false },
-  { code: "J", description: "Artificial Juridical Person", state_name_code_required: false, ministry_required: false, ministry_allowed: false },
-  { code: "B", description: "Body of Individuals", state_name_code_required: false, ministry_required: false, ministry_allowed: false },
-  { code: "Q", description: "Individual/HUF", state_name_code_required: false, ministry_required: false, ministry_allowed: false },
-  { code: "F", description: "Firm", state_name_code_required: false, ministry_required: false, ministry_allowed: false },
+  {
+    code: "A",
+    description: "Central Government",
+    state_name_code_required: false,
+    ministry_required: true,
+    ministry_allowed: true,
+  },
+  {
+    code: "S",
+    description: "State Government",
+    state_name_code_required: true,
+    ministry_required: false,
+    ministry_allowed: false,
+  },
+  {
+    code: "D",
+    description: "Statutory body (Central Govt.)",
+    state_name_code_required: false,
+    ministry_required: true,
+    ministry_allowed: true,
+  },
+  {
+    code: "E",
+    description: "Statutory body (State Govt.)",
+    state_name_code_required: true,
+    ministry_required: false,
+    ministry_allowed: true,
+  },
+  {
+    code: "G",
+    description: "Autonomous body (Central Govt.)",
+    state_name_code_required: false,
+    ministry_required: true,
+    ministry_allowed: true,
+  },
+  {
+    code: "H",
+    description: "Autonomous body (State Govt.)",
+    state_name_code_required: true,
+    ministry_required: false,
+    ministry_allowed: true,
+  },
+  {
+    code: "L",
+    description: "Local Authority (Central Govt.)",
+    state_name_code_required: false,
+    ministry_required: false,
+    ministry_allowed: true,
+  },
+  {
+    code: "N",
+    description: "Local Authority (State Govt.)",
+    state_name_code_required: true,
+    ministry_required: false,
+    ministry_allowed: true,
+  },
+  {
+    code: "K",
+    description: "Company",
+    state_name_code_required: false,
+    ministry_required: false,
+    ministry_allowed: false,
+  },
+  {
+    code: "M",
+    description: "Branch / Division of Company",
+    state_name_code_required: false,
+    ministry_required: false,
+    ministry_allowed: false,
+  },
+  {
+    code: "P",
+    description: "Association of Person (AOP)",
+    state_name_code_required: false,
+    ministry_required: false,
+    ministry_allowed: false,
+  },
+  {
+    code: "T",
+    description: "Association of Person (Trust)",
+    state_name_code_required: false,
+    ministry_required: false,
+    ministry_allowed: false,
+  },
+  {
+    code: "J",
+    description: "Artificial Juridical Person",
+    state_name_code_required: false,
+    ministry_required: false,
+    ministry_allowed: false,
+  },
+  {
+    code: "B",
+    description: "Body of Individuals",
+    state_name_code_required: false,
+    ministry_required: false,
+    ministry_allowed: false,
+  },
+  {
+    code: "Q",
+    description: "Individual/HUF",
+    state_name_code_required: false,
+    ministry_required: false,
+    ministry_allowed: false,
+  },
+  {
+    code: "F",
+    description: "Firm",
+    state_name_code_required: false,
+    ministry_required: false,
+    ministry_allowed: false,
+  },
 ];
 
 /** The format's literal for a deductor not required to hold a PAN (masters.PANNotRequired). */
@@ -704,18 +800,72 @@ export interface MockTDSDeduction {
  * server's own catalog by a test — see the note on `taxSections`.
  */
 export const MOCK_TDS_SECTIONS: TaxSectionDoc[] = [
-  { section: "194C", rate_ind_huf_pct: "1", rate_other_pct: "2", threshold_rupees: "30000.0000", basis: "PER_TXN" },
-  { section: "194H", rate_ind_huf_pct: "2", rate_other_pct: "2", threshold_rupees: "20000.0000", basis: "ANNUAL" },
-  { section: "194I-A", rate_ind_huf_pct: "2", rate_other_pct: "2", threshold_rupees: "50000.0000", basis: "MONTHLY" },
-  { section: "194I-B", rate_ind_huf_pct: "10", rate_other_pct: "10", threshold_rupees: "50000.0000", basis: "MONTHLY" },
-  { section: "194J-D", rate_ind_huf_pct: "10", rate_other_pct: "10", threshold_rupees: "0.0000", basis: "NIL" },
-  { section: "194J-P", rate_ind_huf_pct: "10", rate_other_pct: "10", threshold_rupees: "50000.0000", basis: "ANNUAL" },
-  { section: "194J-T", rate_ind_huf_pct: "2", rate_other_pct: "2", threshold_rupees: "50000.0000", basis: "ANNUAL" },
+  {
+    section: "194C",
+    rate_ind_huf_pct: "1",
+    rate_other_pct: "2",
+    threshold_rupees: "30000.0000",
+    basis: "PER_TXN",
+  },
+  {
+    section: "194H",
+    rate_ind_huf_pct: "2",
+    rate_other_pct: "2",
+    threshold_rupees: "20000.0000",
+    basis: "ANNUAL",
+  },
+  {
+    section: "194I-A",
+    rate_ind_huf_pct: "2",
+    rate_other_pct: "2",
+    threshold_rupees: "50000.0000",
+    basis: "MONTHLY",
+  },
+  {
+    section: "194I-B",
+    rate_ind_huf_pct: "10",
+    rate_other_pct: "10",
+    threshold_rupees: "50000.0000",
+    basis: "MONTHLY",
+  },
+  {
+    section: "194J-D",
+    rate_ind_huf_pct: "10",
+    rate_other_pct: "10",
+    threshold_rupees: "0.0000",
+    basis: "NIL",
+  },
+  {
+    section: "194J-P",
+    rate_ind_huf_pct: "10",
+    rate_other_pct: "10",
+    threshold_rupees: "50000.0000",
+    basis: "ANNUAL",
+  },
+  {
+    section: "194J-T",
+    rate_ind_huf_pct: "2",
+    rate_other_pct: "2",
+    threshold_rupees: "50000.0000",
+    basis: "ANNUAL",
+  },
 ];
 
 export const MOCK_TCS_SECTIONS: TaxSectionDoc[] = [
-  { section: "206C(1)-SCRAP", rate_ind_huf_pct: "2", rate_other_pct: "2", threshold_rupees: "0.0000", basis: "PER_TXN" },
-  { section: "206C(1F)-MV", rate_ind_huf_pct: "1", rate_other_pct: "1", threshold_rupees: "1000000.0000", basis: "PER_TXN" },
+  {
+    section: "206C(1)-SCRAP",
+    rate_ind_huf_pct: "2",
+    rate_other_pct: "2",
+    threshold_rupees: "0.0000",
+    basis: "PER_TXN",
+  },
+  {
+    section: "206C(1F)-MV",
+    rate_ind_huf_pct: "1",
+    rate_other_pct: "1",
+    threshold_rupees: "1000000.0000",
+    basis: "PER_TXN",
+  },
 ];
 
 export const MOCK_TDS_DEDUCTIONS: MockTDSDeduction[] = [
@@ -1208,7 +1358,16 @@ function mockEmptyMapping(): StatementColumnMapping {
  * an id or an empty statement that reads as "nothing imported".
  */
 function mockRequireBankLedger(
-  c: { ledgers: { id: string; name: string; group: string; bankParentGroup?: string; bankAccountNumber?: string; bankIFSC?: string }[] },
+  c: {
+    ledgers: {
+      id: string;
+      name: string;
+      group: string;
+      bankParentGroup?: string;
+      bankAccountNumber?: string;
+      bankIFSC?: string;
+    }[];
+  },
   ledgerID: string,
 ) {
   const ledger = c.ledgers.find((l) => l.id === ledgerID);
@@ -1281,8 +1440,18 @@ function mockUnitsToMoney(u: bigint): Money {
 function mockParseDate(raw: string, layout: string): string {
   const digits = raw.split(/[/\-.]/).map((p) => p.trim());
   const months = [
-    "jan", "feb", "mar", "apr", "may", "jun",
-    "jul", "aug", "sep", "oct", "nov", "dec",
+    "jan",
+    "feb",
+    "mar",
+    "apr",
+    "may",
+    "jun",
+    "jul",
+    "aug",
+    "sep",
+    "oct",
+    "nov",
+    "dec",
   ];
   const pad = (n: string) => n.padStart(2, "0");
   const fail = () => {
@@ -1374,7 +1543,8 @@ function mockParseStatement(
       bank_reference: cell(r, m.bank_reference),
       cheque_number: cell(r, m.cheque_number),
     };
-    if (bal !== "") line.running_balance = mockUnitsToMoney(mockMoneyToUnits(bal));
+    if (bal !== "")
+      line.running_balance = mockUnitsToMoney(mockMoneyToUnits(bal));
     out.push(line);
   });
   return out;
@@ -1789,7 +1959,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
    * the company's purchase commitments. "Forbidden" would confirm the id names
    * something real; "not found" is the honest answer for this path. A mock that
    * served it would let a screen be built against a leak. */
-  function mockFindOrder(direction: OrderDirection, orderID: string): MockOrder {
+  function mockFindOrder(
+    direction: OrderDirection,
+    orderID: string,
+  ): MockOrder {
     const o = mockOrders.find((x) => x.order_id === orderID);
     if (!o || o.direction !== direction) {
       throw new ApiError(404, `no such ${direction.toLowerCase()} order`);
@@ -1963,7 +2136,8 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     asOn?: string,
   ): Promise<OutstandingsResponse> {
     const c = ensure(companyID);
-    const wantGroup = kind === "PAYABLE" ? "Sundry Creditors" : "Sundry Debtors";
+    const wantGroup =
+      kind === "PAYABLE" ? "Sundry Creditors" : "Sundry Debtors";
     // ⛔⛔ TWO QUESTIONS, TWO VARIABLES — AND THIS MOCK USED TO CONFLATE THEM
     // EXACTLY AS CORED DID (D86). `bound` is the date the ROWS are limited to
     // ("" = not limited); `agedOn` is the day the ageing is measured against and
@@ -1981,7 +2155,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
 
     // Net every reference on a CURRENT, non-deleted voucher. c.views holds
     // exactly those: an ALTER restates the view in place and a DELETE removes it.
-    const net = new Map<string, { ledgerID: string; ref: string; units: bigint; due: string }>();
+    const net = new Map<
+      string,
+      { ledgerID: string; ref: string; units: bigint; due: string }
+    >();
     for (const view of c.views.values()) {
       if (bound !== "" && (view.voucher_date ?? "") > bound) continue;
       for (const b of view.bill_allocations) {
@@ -2001,7 +2178,8 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         };
         cur.units += kind === "PAYABLE" ? -signed : signed;
         // The EARLIEST due date on the reference, as the server takes MIN().
-        if (b.due_date && (cur.due === "" || b.due_date < cur.due)) cur.due = b.due_date;
+        if (b.due_date && (cur.due === "" || b.due_date < cur.due))
+          cur.due = b.due_date;
         net.set(key, cur);
       }
     }
@@ -2028,11 +2206,11 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
           ? 0
           : Math.max(
               0,
-              Math.round(
-                (Date.parse(agedOn) - Date.parse(due)) / 86_400_000,
-              ),
+              Math.round((Date.parse(agedOn) - Date.parse(due)) / 86_400_000),
             );
-      const slab = SLABS.find(([, upto]) => upto !== 0 && overdue <= upto)?.[0] ?? "180+ days";
+      const slab =
+        SLABS.find(([, upto]) => upto !== 0 && overdue <= upto)?.[0] ??
+        "180+ days";
       const party =
         byParty.get(ledgerID) ??
         ({
@@ -2062,7 +2240,9 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       // NO DATE LIMIT sentence. Echoing `agedOn` here is the defect.
       as_on: bound,
       aged_as_on: agedOn,
-      parties: [...byParty.values()].sort((a, b) => a.ledger.localeCompare(b.ledger)),
+      parties: [...byParty.values()].sort((a, b) =>
+        a.ledger.localeCompare(b.ledger),
+      ),
       slab_totals: SLABS.filter(([l]) => slabTotals.has(l)).map(([label]) => ({
         label,
         amount: mockUnitsToMoney(slabTotals.get(label) ?? 0n),
@@ -2836,9 +3016,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
    *     parallel, so a posting-wide total would refuse correct parallel allocation and
    *     no total at all would let cost go silently unattributed.
    */
-  function costAllocationViews(
-    req: VoucherRequest,
-  ): CostAllocationView[] {
+  function costAllocationViews(req: VoucherRequest): CostAllocationView[] {
     const as = req.cost_allocations ?? [];
     if (as.length === 0) return [];
     const postings = req.postings ?? [];
@@ -2855,7 +3033,11 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     const centres = mockCostCentres();
     const out: CostAllocationView[] = [];
     for (const a of as) {
-      if (!Number.isInteger(a.posting_seq) || a.posting_seq < 0 || a.posting_seq >= postings.length) {
+      if (
+        !Number.isInteger(a.posting_seq) ||
+        a.posting_seq < 0 ||
+        a.posting_seq >= postings.length
+      ) {
         throw new ApiError(
           422,
           postings.length === 0
@@ -2893,7 +3075,8 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       out.push({
         posting_seq: a.posting_seq,
         cost_category_id: a.cost_category_id,
-        cost_category_name: cats.find((c) => c.id === a.cost_category_id)?.name ?? "",
+        cost_category_name:
+          cats.find((c) => c.id === a.cost_category_id)?.name ?? "",
         cost_centre_id: a.cost_centre_id,
         cost_centre_name: centre?.path ?? "",
         amount: Number.parseFloat(a.amount).toFixed(4),
@@ -3106,7 +3289,8 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
   ): BillAllocationView[] {
     const bs = req.bill_allocations ?? [];
     if (bs.length === 0) return [];
-    const canonDC = (dc: string) => (dc.trim().toUpperCase().startsWith("D") ? "D" : "C");
+    const canonDC = (dc: string) =>
+      dc.trim().toUpperCase().startsWith("D") ? "D" : "C";
     // ⚠️ The SHARED scaled-integer helpers, never a local copy and never a float.
     // The invariant is exact to the paisa, and a second implementation of money
     // parsing is precisely how two places in one file come to disagree.
@@ -3122,7 +3306,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       }
       const dc = canonDC(b.dr_cr);
       const signed = dc === "C" ? -units(b.amount) : units(b.amount);
-      signedByLedger.set(b.ledger_id, (signedByLedger.get(b.ledger_id) ?? 0n) + signed);
+      signedByLedger.set(
+        b.ledger_id,
+        (signedByLedger.get(b.ledger_id) ?? 0n) + signed,
+      );
       out.push({
         ledger_id: b.ledger_id,
         // THE SUBSTITUTION. An empty name is the normal case for a reference that
@@ -3136,8 +3323,12 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     }
     const postedByLedger = new Map<string, bigint>();
     for (const p of postings) {
-      const signed = canonDC(p.dr_cr) === "C" ? -units(p.amount) : units(p.amount);
-      postedByLedger.set(p.ledger_id, (postedByLedger.get(p.ledger_id) ?? 0n) + signed);
+      const signed =
+        canonDC(p.dr_cr) === "C" ? -units(p.amount) : units(p.amount);
+      postedByLedger.set(
+        p.ledger_id,
+        (postedByLedger.get(p.ledger_id) ?? 0n) + signed,
+      );
     }
     for (const [lid, got] of signedByLedger) {
       const want = postedByLedger.get(lid) ?? 0n;
@@ -3711,9 +3902,14 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       // one supplier's outstandings across two accounts with nothing on screen
       // to tell them apart. An observation faithfully mirrored is still only as
       // good as the behaviour it observed.
-      const taken = c.ledgers.find((l) => normalisedName(l.name) === normalisedName(req.name));
+      const taken = c.ledgers.find(
+        (l) => normalisedName(l.name) === normalisedName(req.name),
+      );
       if (taken) {
-        throw new ApiError(422, duplicateMasterMessage("ledger", req.name, taken.name));
+        throw new ApiError(
+          422,
+          duplicateMasterMessage("ledger", req.name, taken.name),
+        );
       }
       const ledgerID = id("ledger");
       c.ledgers.push({
@@ -4913,7 +5109,9 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         const voucherID = (a.voucher_id ?? "").trim();
         const section = (a.section ?? "").trim();
         if (voucherID === "") {
-          throw invalid("an allocation must name the voucher whose deduction was paid");
+          throw invalid(
+            "an allocation must name the voucher whose deduction was paid",
+          );
         }
         if (section === "") {
           throw invalid(
@@ -4963,7 +5161,12 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         // be told apart from one that named the WRONG kind and the refusal can
         // say which mistake was made.
         parsed.push({
-          voucherID, section, legSeq: a.leg_seq, rawAmount, amountUnits, triple,
+          voucherID,
+          section,
+          legSeq: a.leg_seq,
+          rawAmount,
+          amountUnits,
+          triple,
           sentKind: a.kind,
         });
       }
@@ -5009,10 +5212,21 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       // the allocate-later route needed its own cap for D2 as well.
       const kindsOnThisChallan = new Set<TaxAllocationKind>(
         (challan.allocations ?? []).map(
-          (a) => c.tdsDeductions.get(allocationTriple(a.voucher_id, a.section, a.leg_seq))?.kind ?? "TDS",
+          (a) =>
+            c.tdsDeductions.get(
+              allocationTriple(a.voucher_id, a.section, a.leg_seq),
+            )?.kind ?? "TDS",
         ),
       );
-      for (const { voucherID, section, legSeq, rawAmount, amountUnits, triple, sentKind } of parsed) {
+      for (const {
+        voucherID,
+        section,
+        legSeq,
+        rawAmount,
+        amountUnits,
+        triple,
+        sentKind,
+      } of parsed) {
         const deduction = c.tdsDeductions.get(triple);
         if (!deduction) {
           throw new ApiError(
@@ -5134,7 +5348,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       };
       c.tdsChallans.set(cin, updated);
       for (const v of added) {
-        c.tdsAllocations.set(allocationTriple(v.voucher_id, v.section, v.leg_seq), cin);
+        c.tdsAllocations.set(
+          allocationTriple(v.voucher_id, v.section, v.leg_seq),
+          cin,
+        );
       }
       return {
         id: updated.id,
@@ -5213,7 +5430,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       ensure(companyID);
       const name = (req.name ?? "").trim();
       if (name === "") {
-        throw new ApiError(400, "masters: invalid cost master: a cost category needs a name");
+        throw new ApiError(
+          400,
+          "masters: invalid cost master: a cost category needs a name",
+        );
       }
       // ⛔ THE MOCK MUST REFUSE WHAT THE SERVER REFUSES, and this check exists
       // because it did not. The screen originally sent no created_by; the server
@@ -5223,7 +5443,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       // reads as "the passkey failed" and is not. A mock more permissive than the
       // server does not model the server; it hides it.
       if ((req.created_by ?? "").trim() === "") {
-        throw new ApiError(400, "masters: invalid cost master: created_by is required");
+        throw new ApiError(
+          400,
+          "masters: invalid cost master: created_by is required",
+        );
       }
       // Case- AND whitespace-insensitive, matching the server's
       // lower(btrim(name)) unique index. A Go check that normalised differently
@@ -5254,7 +5477,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       ensure(companyID);
       const existing = mockCostCategories().find((c) => c.id === categoryID);
       if (!existing) {
-        throw new ApiError(404, "masters: there is no cost category with that id for this company");
+        throw new ApiError(
+          404,
+          "masters: there is no cost category with that id for this company",
+        );
       }
       return { ...existing, name: (req.name ?? "").trim() || existing.name };
     },
@@ -5297,11 +5523,17 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       }
       const name = (req.name ?? "").trim();
       if (name === "") {
-        throw new ApiError(400, "masters: invalid cost master: a cost centre needs a name");
+        throw new ApiError(
+          400,
+          "masters: invalid cost master: a cost centre needs a name",
+        );
       }
       // See createCostCategory: the mock refuses what the server refuses.
       if ((req.created_by ?? "").trim() === "") {
-        throw new ApiError(400, "masters: invalid cost master: created_by is required");
+        throw new ApiError(
+          400,
+          "masters: invalid cost master: created_by is required",
+        );
       }
       if (req.parent_id === "00000000-0000-0000-0000-000000000000") {
         throw new ApiError(
@@ -5328,7 +5560,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         ? mockCostCentres().find((c) => c.id === req.parent_id)
         : undefined;
       if (req.parent_id && !parent) {
-        throw new ApiError(404, "masters: there is no cost centre with that id to sit under");
+        throw new ApiError(
+          404,
+          "masters: there is no cost centre with that id to sit under",
+        );
       }
       if (parent && parent.cost_category_id !== req.cost_category_id) {
         throw new ApiError(
@@ -5368,7 +5603,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       ensure(companyID);
       const existing = mockCostCentres().find((c) => c.id === centreID);
       if (!existing) {
-        throw new ApiError(404, "masters: there is no cost centre with that id for this company");
+        throw new ApiError(
+          404,
+          "masters: there is no cost centre with that id for this company",
+        );
       }
       if (req.parent_id === "00000000-0000-0000-0000-000000000000") {
         throw new ApiError(
@@ -5378,7 +5616,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       }
       return {
         id: existing.id,
-        cost_centre: { ...existing, name: (req.name ?? "").trim() || existing.name },
+        cost_centre: {
+          ...existing,
+          name: (req.name ?? "").trim() || existing.name,
+        },
       };
     },
 
@@ -5397,9 +5638,14 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         );
       }
       if (!axis) {
-        throw new ApiError(422, "there is no cost category with that id for this company");
+        throw new ApiError(
+          422,
+          "there is no cost category with that id for this company",
+        );
       }
-      const centres = mockCostCentres().filter((c) => c.cost_category_id === costCategoryID);
+      const centres = mockCostCentres().filter(
+        (c) => c.cost_category_id === costCategoryID,
+      );
       const nodes = centres.map((c) => {
         const own = mockAllocationFor(c.id);
         return {
@@ -6016,8 +6262,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         imports: [],
         lines: [],
       };
-      const inPeriod = (d: string) =>
-        (!from || d >= from) && (!to || d <= to);
+      const inPeriod = (d: string) => (!from || d >= from) && (!to || d <= to);
       const lines = store.lines.filter((l) => inPeriod(l.value_date));
 
       // Money is summed as PAISE INTEGERS, never parseFloat: every money value
@@ -6049,7 +6294,6 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
             "against the file's own account. Record them on the ledger.",
         );
       }
-
 
       return {
         ledger_id: ledgerID,
@@ -6095,7 +6339,11 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       companyID,
       query?: OutstandingsQuery,
     ): Promise<OutstandingsResponse> {
-      return outstandingsOf(companyID, query?.kind ?? "RECEIVABLE", query?.as_on);
+      return outstandingsOf(
+        companyID,
+        query?.kind ?? "RECEIVABLE",
+        query?.as_on,
+      );
     },
 
     /**
@@ -6156,7 +6404,6 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         found: party !== undefined,
       };
     },
-
 
     async generateGSTR1(companyID, query: GSTR1Query): Promise<GSTR1Response> {
       ensure(companyID);
@@ -6515,7 +6762,12 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       return {
         source_company: ensure(companyID).name,
         vouchers_posted: 0,
-        ledgers_ensured: 0,
+        vouchers_altered: 0,
+        vouchers_deleted: 0,
+        vouchers_skipped: 0,
+        groups_ensured: [],
+        ledgers_ensured: [],
+        warnings: [],
         posted: [],
       };
     },
@@ -6563,14 +6815,21 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     async closeSalesOrder(companyID, orderID: string, req: CloseOrderRequest) {
       return mockCloseOrder(companyID, "SALES", orderID, req);
     },
-    async closePurchaseOrder(companyID, orderID: string, req: CloseOrderRequest) {
+    async closePurchaseOrder(
+      companyID,
+      orderID: string,
+      req: CloseOrderRequest,
+    ) {
       return mockCloseOrder(companyID, "PURCHASE", orderID, req);
     },
     async createBom(companyID, req: CreateBomRequest) {
       const co = ensure(companyID);
       const name = (req.name ?? "").trim();
       if (!req.stock_item_id) {
-        throw new ApiError(422, "orders: a bill of materials must name the finished good it produces");
+        throw new ApiError(
+          422,
+          "orders: a bill of materials must name the finished good it produces",
+        );
       }
       if (name === "") {
         throw new ApiError(422, "orders: a bill of materials needs a name");
@@ -6598,7 +6857,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       const seen = new Set<string>();
       for (const c of req.components) {
         if (seen.has(c.stock_item_id)) {
-          throw new ApiError(422, "orders: the same item appears twice in this recipe");
+          throw new ApiError(
+            422,
+            "orders: the same item appears twice in this recipe",
+          );
         }
         seen.add(c.stock_item_id);
       }
@@ -6609,9 +6871,17 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
             b.name.trim().toLowerCase() === name.toLowerCase(),
         )
       ) {
-        throw new ApiError(409, `orders: this item already has a recipe named "${name}"`);
+        throw new ApiError(
+          409,
+          `orders: this item already has a recipe named "${name}"`,
+        );
       }
-      if (req.is_default && mockBoms.some((b) => b.stock_item_id === req.stock_item_id && b.is_default)) {
+      if (
+        req.is_default &&
+        mockBoms.some(
+          (b) => b.stock_item_id === req.stock_item_id && b.is_default,
+        )
+      ) {
         // ⛔ Two defaults is a silent coin flip over which recipe a manufacture used,
         // and the two consume different materials.
         throw new ApiError(
@@ -6665,7 +6935,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       ensure(companyID);
       const b = mockBoms.find((x) => x.bom_id === bomID);
       if (!b) {
-        throw new ApiError(404, "orders: no such bill of materials in this company");
+        throw new ApiError(
+          404,
+          "orders: no such bill of materials in this company",
+        );
       }
       return b;
     },
@@ -6679,11 +6952,17 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       }
       const wanted = Number(qty);
       if (!Number.isFinite(wanted) || wanted <= 0) {
-        throw new ApiError(422, "orders: the quantity to make must be more than zero");
+        throw new ApiError(
+          422,
+          "orders: the quantity to make must be more than zero",
+        );
       }
       const b = mockBoms.find((x) => x.bom_id === bomID);
       if (!b) {
-        throw new ApiError(404, "orders: no such bill of materials in this company");
+        throw new ApiError(
+          404,
+          "orders: no such bill of materials in this company",
+        );
       }
       const output = Number(b.output_qty);
       return {
@@ -6887,8 +7166,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       const current = co.views.get(voucherID)?.version_no;
       return {
         ...held.view,
-        stale:
-          current !== undefined && current !== held.generatedFromVersion,
+        stale: current !== undefined && current !== held.generatedFromVersion,
       };
     },
     /**
@@ -6949,7 +7227,9 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
 
       // ---- REFUSAL 2: no tax. An e-invoice reports a taxable supply.
       const tax =
-        Number(view.cgst ?? 0) + Number(view.sgst ?? 0) + Number(view.igst ?? 0);
+        Number(view.cgst ?? 0) +
+        Number(view.sgst ?? 0) +
+        Number(view.igst ?? 0);
       if (Number(view.taxable_value ?? 0) <= 0 && tax <= 0) {
         throw new ApiError(
           422,
@@ -7113,9 +7393,12 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
               ? mockMoneyToUnits(b.amount)
               : -mockMoneyToUnits(b.amount);
           const key = `${b.ledger_id} ${b.ref_name}`;
-          const cur =
-            net.get(key) ??
-            { ledgerID: b.ledger_id, units: 0n, due: "", inflow };
+          const cur = net.get(key) ?? {
+            ledgerID: b.ledger_id,
+            units: 0n,
+            due: "",
+            inflow,
+          };
           // Positive on the party's natural side, per direction.
           cur.units += inflow ? signed : -signed;
           if (b.due_date && (cur.due === "" || b.due_date < cur.due)) {
@@ -7154,11 +7437,14 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       // week — cored answers THIRTEEN (measured: 13 buckets for the default
       // horizon), so a floor here would make the mock and the server disagree
       // about how far the projection reaches, in the direction that hides money.
-      const buckets = Array.from({ length: Math.ceil(HORIZON / BUCKET) }, (_, i) => ({
-        from: mockAddDays(asOnDate, i * BUCKET),
-        to: mockAddDays(asOnDate, (i + 1) * BUCKET),
-        ...zero(),
-      }));
+      const buckets = Array.from(
+        { length: Math.ceil(HORIZON / BUCKET) },
+        (_, i) => ({
+          from: mockAddDays(asOnDate, i * BUCKET),
+          to: mockAddDays(asOnDate, (i + 1) * BUCKET),
+          ...zero(),
+        }),
+      );
       const beyond = zero();
       const basisCounts = {
         due: { bills: 0, ...zero() },
@@ -7192,7 +7478,9 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
           if (first) add(first);
           continue;
         }
-        const target = buckets.find((k) => b.settles >= k.from && b.settles < k.to);
+        const target = buckets.find(
+          (k) => b.settles >= k.from && b.settles < k.to,
+        );
         if (target) add(target);
         else add(beyond);
       }

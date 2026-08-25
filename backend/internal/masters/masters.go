@@ -173,6 +173,63 @@ func (s *Service) GroupID(ctx context.Context, name string) (uuid.UUID, error) {
 	return s.resolveID(ctx, "account_group", name)
 }
 
+// GroupIDByName resolves an account group case- and whitespace-insensitively,
+// returning its id AND the name as actually stored. The stored name is the half
+// callers need: every other lookup on this table matches EXACTLY, so a caller
+// holding "Cash-in-hand" must learn that the company's group is spelled
+// "Cash-in-Hand" before it can create a ledger under it.
+//
+// ⛔ IT EXISTS BECAUSE A NEAR-MISS HERE CREATES A SECOND GROUP RATHER THAN
+// FAILING. account_group is unique on (company_id, name) and — unlike ledger,
+// stock_item and unit since migration 0075 — has NO normalised unique index. So
+// "Cash-in-hand" INSERTs happily alongside the seeded "Cash-in-Hand", and the
+// company silently acquires two groups that a human reads as one, with its
+// ledgers split across them and the Balance Sheet listing both. Tally's own
+// export spells two of its built-in groups with a lowercase h, so an importer
+// that resolves exactly would do this on the very first real file.
+func (s *Service) GroupIDByName(ctx context.Context, name string) (uuid.UUID, string, error) {
+	var (
+		id     uuid.UUID
+		stored string
+	)
+	err := s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		err := tx.QueryRow(ctx,
+			`SELECT id, name FROM account_group WHERE lower(btrim(name)) = lower(btrim($1))`,
+			name).Scan(&id, &stored)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("masters: %w: account_group %q", ErrNotFound, name)
+		}
+		return err
+	})
+	if err != nil {
+		return uuid.Nil, "", err
+	}
+	return id, stored, nil
+}
+
+// EnsureGroup resolves an account group by name (case-insensitively, per
+// GroupIDByName) and creates it if absent, returning the id and the name as
+// stored. An already-present group is returned UNCHANGED — its parent and nature
+// are never restated, so re-importing a chart of accounts cannot reshape one.
+//
+// g.ParentName must already name an existing group; pass the STORED spelling
+// (this method's own second return value for the parent) because CreateGroup
+// resolves the parent exactly.
+func (s *Service) EnsureGroup(ctx context.Context, g Group, createdBy string) (uuid.UUID, string, error) {
+	id, stored, err := s.GroupIDByName(ctx, g.Name)
+	if err == nil {
+		return id, stored, nil
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return uuid.Nil, "", err
+	}
+	id, err = s.CreateGroup(ctx, g, createdBy)
+	if err != nil {
+		return uuid.Nil, "", err
+	}
+	return id, g.Name, nil
+}
+
 // --------------------------------------------------------------------------
 // Ledger
 // --------------------------------------------------------------------------
@@ -295,7 +352,7 @@ type OpeningBill struct {
 // not exist. It is the convenience entry point for callers (and other agents)
 // that just need a ledger to post to. Returns the ledger id.
 func (s *Service) EnsureLedger(ctx context.Context, name, groupName string, createdBy string) (uuid.UUID, error) {
-	id, err := s.resolveID(ctx, "ledger", name)
+	id, _, err := s.LedgerIDByName(ctx, name)
 	if err == nil {
 		return id, nil
 	}
@@ -305,13 +362,49 @@ func (s *Service) EnsureLedger(ctx context.Context, name, groupName string, crea
 	return s.CreateLedger(ctx, Ledger{Name: name, GroupName: groupName}, createdBy)
 }
 
+// LedgerIDByName resolves a ledger case- and whitespace-insensitively, returning
+// its id and the name as stored.
+//
+// ⛔ THE ENSURE VERBS MUST MATCH THE WAY UNIQUENESS IS ENFORCED, and since
+// migration 0075 that is lower(btrim(name)), not the raw string. Resolving
+// exactly while refusing normalised leaves a gap that nothing can get through:
+// the resolve misses, the create is refused as a duplicate, and the caller — who
+// asked only for "make sure this exists" — gets an error for a ledger that DOES
+// exist. A real Tally import walked straight into it on its 2,522nd master, an
+// export naming "SALARY PAYABLE" against the seeded "Salary Payable", and the
+// whole migration stopped there.
+//
+// LedgerID() stays EXACT on purpose: it answers "the ledger by this name", and a
+// caller resolving a name a human typed should not be silently given a different
+// spelling. This one answers "the ledger this name would collide with", which is
+// the question ensure is really asking.
+func (s *Service) LedgerIDByName(ctx context.Context, name string) (uuid.UUID, string, error) {
+	var (
+		id     uuid.UUID
+		stored string
+	)
+	err := s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		err := tx.QueryRow(ctx,
+			`SELECT id, name FROM ledger WHERE lower(btrim(name)) = lower(btrim($1))`,
+			name).Scan(&id, &stored)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("masters: %w: ledger %q", ErrNotFound, name)
+		}
+		return err
+	})
+	if err != nil {
+		return uuid.Nil, "", err
+	}
+	return id, stored, nil
+}
+
 // EnsureLedgerWithOpening resolves a ledger by name; if it already exists it is
 // returned UNCHANGED (an opening balance or GST master already set is never
 // clobbered — resolve-first). If absent it is created with the supplied opening
 // balance and GST master attributes. This is the importer's first-pass entry
 // point for LEDGER masters carrying an opening balance and/or GST identity.
 func (s *Service) EnsureLedgerWithOpening(ctx context.Context, l Ledger, createdBy string) (uuid.UUID, error) {
-	id, err := s.resolveID(ctx, "ledger", l.Name)
+	id, _, err := s.LedgerIDByName(ctx, l.Name)
 	if err == nil {
 		return id, nil
 	}
@@ -720,6 +813,33 @@ func (s *Service) SetLedgerOpening(ctx context.Context, ledgerID uuid.UUID, open
 		}
 		return appendAudit(ctx, tx, companyID, "ledger", ledgerID, OpAlter, before, after, createdBy)
 	})
+}
+
+// LedgerOpening returns a ledger's opening balance and its Dr/Cr side.
+//
+// It exists for the importer, which must tell two situations apart that the
+// ensure verbs deliberately blur: a ledger it just created (opening already
+// written) and one that was ALREADY THERE — seeded, or from an earlier import —
+// whose opening is still zero and whose real opening is sitting in the file.
+// EnsureLedgerWithOpening returns an existing ledger UNCHANGED, which is the
+// right rule and, on its own, silently drops that opening.
+func (s *Service) LedgerOpening(ctx context.Context, id uuid.UUID) (decimal.Decimal, string, error) {
+	var (
+		bal decimal.Decimal
+		dc  string
+	)
+	err := s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		err := tx.QueryRow(ctx,
+			`SELECT opening_balance, opening_dc FROM ledger WHERE id = $1`, id).Scan(&bal, &dc)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("masters: %w: ledger %s", ErrNotFound, id)
+		}
+		return err
+	})
+	if err != nil {
+		return decimal.Zero, "", err
+	}
+	return bal, dc, nil
 }
 
 // LedgerID resolves a ledger's id by name within the company in context.

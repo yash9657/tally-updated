@@ -73,6 +73,48 @@ A fixture pair: a Tally XML export sample and the expected post-import trial bal
 }
 ```
 
+### `06-tallyprime-real-shapes.xml` — the shapes a REAL export has
+
+⛔ **Every other file in this directory was written by us, and that is exactly the
+limitation this one exists to cover.** A hand-authored envelope proves the importer can
+read what an integrator would SEND Tally; it proves nothing about what TallyPrime EMITS.
+When a genuine export was finally obtained, seven defects surfaced at once — three of
+them silent — and none of them were reachable from the five corpora above.
+
+This fixture is that file's SHAPE, anonymised (invented parties, invented amounts),
+byte-for-byte in the form Tally writes:
+
+| In the fixture | Because a real export |
+|---|---|
+| **UTF-16LE with a BOM**, CRLF | is UTF-16, with no `<?xml?>` to say so |
+| `&#4;` inside field values | uses U+0004 as a marker, which XML 1.0 forbids |
+| `BODY > IMPORTDATA > REQUESTDESC / REQUESTDATA` | nests the payload one level deeper, under different names, than every published example |
+| revenue only inside `ALLINVENTORYENTRIES.LIST > ACCOUNTINGALLOCATIONS.LIST` | keeps an item invoice's sales lines on the stock lines, not beside the party |
+| a round-off whose `ISDEEMEDPOSITIVE` contradicts its `AMOUNT` sign | states the side twice and means the sign |
+| `GROUP` masters, user-defined and built-in | carries the whole chart of accounts, and the user has added to it |
+| `Cash-in-hand` against the seeded `Cash-in-Hand` | spells two of Tally's own groups with a lowercase h |
+| an opening balance on `CASH` | names ledgers the company is already seeded with |
+| `LEDGSTREGDETAILS.LIST` superseding a stale `PARTYGSTIN` | keeps a DATED registration history and lets the flat field go stale |
+| the state as `Karnataka`, never as `29` | records states by NAME and never as a code |
+| a bill-wise breakup that does not sum to its opening | is not always internally consistent |
+
+It has **no `.expected.json`** on purpose — it is not a reconciliation corpus. It is
+gated by `TestTallyPrimeShapesCorpus`, which asserts the specific consequence of each
+row above, so a failure names the shape that regressed rather than a total that moved.
+
+⛔ **The real file is NOT in this repository and must not be.** An export is a real
+company's books — every counter-party, their GSTIN, what they owe. The end-to-end gate
+against one is opt-in by path and skips without it:
+
+```
+CORED_TALLY_MASTERS_XML=…/Master.xml CORED_TALLY_VOUCHERS_XML=…/Transactions.xml \
+  go test ./internal/migration/ -run RealTallyExport -v
+```
+
+Its oracle is not a fixture either: it recomputes the entire trial balance from the XML
+by plain arithmetic and requires cored's own reporting to match, ledger by ledger, to the
+paisa — so it cannot be quietly restated to match a regression.
+
 ### Four-statement oracle (`<id>.expected.json`)
 
 Phase 1 adds a richer oracle paired with each `<id>.xml`: besides the trial

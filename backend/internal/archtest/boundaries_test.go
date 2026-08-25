@@ -270,7 +270,13 @@ var allowedDeps = map[string]map[string]bool{
 	// via integration, ensures masters, posts through ledger, and reconciles via
 	// reporting. It is an orchestration leaf — nothing imports it except server.
 	"internal/migration": {
-		"internal/integration":     true,
+		"internal/integration": true,
+		// gststate is the statutory State-code table, a pure reference leaf with
+		// no I/O. The importer needs it because a Tally export records a party's
+		// State by NAME and never as a code, while cored stores the two-digit GST
+		// code — so somewhere a name has to become a code, and the alternative to
+		// this edge is a second copy of the table inside the importer.
+		"internal/gststate":        true,
 		"internal/masters":         true,
 		"internal/ledger":          true,
 		"internal/reporting":       true,

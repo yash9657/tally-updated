@@ -1,12 +1,16 @@
 package integration
 
 import (
+	"bufio"
 	"encoding/xml"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
 	"github.com/shopspring/decimal"
+	"golang.org/x/text/encoding/unicode"
+	"golang.org/x/text/transform"
 )
 
 // TallyEnvelope is the root of a Tally data export/import document
@@ -29,9 +33,58 @@ type TallyHeader struct {
 }
 
 // TallyBody wraps the request description and the data payload.
+//
+// ⛔ THERE ARE TWO SHAPES AND ONLY ONE OF THEM WAS MODELLED. The hand-authored
+// import envelopes every integrator publishes put DESC and DATA directly under
+// BODY, and that is what this parser was built against. A file that TallyPrime
+// itself writes — Gateway > Export > Masters / Day Book, XML format — nests them
+// one level deeper, inside IMPORTDATA, and renames them:
+//
+//	<BODY><IMPORTDATA><REQUESTDESC>…</REQUESTDESC><REQUESTDATA>…</REQUESTDATA>
+//
+// (An export is written AS an import request so it can be fed straight back in;
+// some report exports spell the wrapper EXPORTDATA instead.) With only the flat
+// shape modelled, a genuine 84 MB export parsed WITHOUT ERROR and yielded ZERO
+// messages — a "successful" import of nothing at all, which is the worst
+// possible failure for a migration tool. All three shapes are now accepted and
+// Messages()/SourceCompany() are the only supported way to read them.
 type TallyBody struct {
-	Desc TallyDesc `xml:"DESC"`
-	Data TallyData `xml:"DATA"`
+	Desc       TallyDesc       `xml:"DESC"`
+	Data       TallyData       `xml:"DATA"`
+	ImportData TallyRequestBox `xml:"IMPORTDATA"`
+	ExportData TallyRequestBox `xml:"EXPORTDATA"`
+}
+
+// TallyRequestBox is the IMPORTDATA/EXPORTDATA wrapper TallyPrime writes around
+// the description and payload of a real export.
+type TallyRequestBox struct {
+	Desc TallyDesc `xml:"REQUESTDESC"`
+	Data TallyData `xml:"REQUESTDATA"`
+}
+
+// Messages returns the TALLYMESSAGE list from whichever of the three envelope
+// shapes this document uses. It is the ONLY supported accessor: reading
+// Body.Data.Messages directly is what silently imported nothing.
+func (e *TallyEnvelope) Messages() []TallyMessage {
+	switch {
+	case len(e.Body.Data.Messages) > 0:
+		return e.Body.Data.Messages
+	case len(e.Body.ImportData.Data.Messages) > 0:
+		return e.Body.ImportData.Data.Messages
+	default:
+		return e.Body.ExportData.Data.Messages
+	}
+}
+
+// SourceCompany returns the SVCURRENTCOMPANY name from whichever envelope shape
+// this document uses.
+func (e *TallyEnvelope) SourceCompany() string {
+	for _, d := range []TallyDesc{e.Body.Desc, e.Body.ImportData.Desc, e.Body.ExportData.Desc} {
+		if n := strings.TrimSpace(d.StaticVariables.CurrentCompany); n != "" {
+			return n
+		}
+	}
+	return ""
 }
 
 // TallyDesc carries the static variables, notably the source company name.
@@ -57,6 +110,42 @@ type TallyData struct {
 type TallyMessage struct {
 	Voucher *TallyVoucher      `xml:"VOUCHER"`
 	Ledger  *TallyLedgerMaster `xml:"LEDGER"`
+	// Group is a GROUP master. A real export carries the company's whole
+	// chart-of-accounts tree, INCLUDING groups the user added themselves, and a
+	// ledger whose PARENT names one of those cannot be created until the group
+	// exists — see the group pass in migration.ImportEnvelope.
+	Group *TallyGroupMaster `xml:"GROUP"`
+}
+
+// TallyGroupMaster is a Tally GROUP master: one node of the chart-of-accounts
+// tree. PARENT is empty for one of Tally's 15 primary groups and names the
+// parent group otherwise.
+type TallyGroupMaster struct {
+	NameAttr     string `xml:"NAME,attr"`
+	ReservedName string `xml:"RESERVEDNAME,attr"`
+	NameElem     string `xml:"NAME"`
+	Parent       string `xml:"PARENT"`
+	IsDeleted    string `xml:"ISDELETED"`
+}
+
+// Name returns the group's name, preferring the NAME attribute.
+func (g TallyGroupMaster) Name() string {
+	if n := strings.TrimSpace(g.NameAttr); n != "" {
+		return n
+	}
+	return strings.TrimSpace(g.NameElem)
+}
+
+// IsReserved reports whether this is one of Tally's own built-in groups (the
+// export stamps RESERVEDNAME on them). A reserved group is already seeded in
+// every cored company, so the importer resolves rather than creates it.
+func (g TallyGroupMaster) IsReserved() bool {
+	return strings.TrimSpace(g.ReservedName) != ""
+}
+
+// Deleted reports whether the master is tombstoned in the export.
+func (g TallyGroupMaster) Deleted() bool {
+	return strings.EqualFold(strings.TrimSpace(g.IsDeleted), "Yes")
 }
 
 // TallyLedgerMaster is a Tally LEDGER master message. The NAME comes from either
@@ -75,6 +164,89 @@ type TallyLedgerMaster struct {
 	State           string `xml:"STATE"`
 	StateName       string `xml:"STATENAME"`
 	LedgerStateName string `xml:"LEDSTATENAME"`
+	PriorStateName  string `xml:"PRIORSTATENAME"`
+	OldStateName    string `xml:"OLDLEDSTATENAME"`
+	// GSTRegs is the DATED registration history TallyPrime keeps under
+	// LEDGSTREGDETAILS.LIST. It — not the flat PARTYGSTIN above — is the
+	// authority: a party that re-registered carries several entries, and in the
+	// real export that was tested against, the flat field still held the 2020
+	// GSTIN while the list carried the one applicable from 2026-07-28.
+	GSTRegs []TallyLedgerGSTReg `xml:"LEDGSTREGDETAILS.LIST"`
+	// OpeningBills are the bill-wise references that make up an opening
+	// receivable/payable balance. Without them a migrated debtor has a correct
+	// total and an EMPTY ageing — every opening rupee falls outside the buckets.
+	OpeningBills []TallyOpeningBill `xml:"BILLALLOCATIONS.LIST"`
+}
+
+// TallyLedgerGSTReg is one dated GST registration of a party ledger.
+// ApplicableFrom is YYYYMMDD; State is a state NAME, not a code.
+type TallyLedgerGSTReg struct {
+	ApplicableFrom   string `xml:"APPLICABLEFROM"`
+	RegistrationType string `xml:"GSTREGISTRATIONTYPE"`
+	State            string `xml:"STATE"`
+	PlaceOfSupply    string `xml:"PLACEOFSUPPLY"`
+	GSTIN            string `xml:"GSTIN"`
+}
+
+// TallyOpeningBill is one bill-wise reference making up a ledger's OPENING
+// balance (as opposed to a bill raised by an imported voucher). OpeningBalance
+// carries the same signed convention as the ledger's own: negative = debit.
+type TallyOpeningBill struct {
+	Name           string `xml:"NAME"`
+	BillDate       string `xml:"BILLDATE"`
+	CreditPeriod   string `xml:"BILLCREDITPERIOD"`
+	IsAdvance      string `xml:"ISADVANCE"`
+	OpeningBalance string `xml:"OPENINGBALANCE"`
+}
+
+// currentGSTReg returns the registration with the greatest APPLICABLEFROM that
+// actually carries a GSTIN, and whether one was found.
+func (m TallyLedgerMaster) currentGSTReg() (TallyLedgerGSTReg, bool) {
+	var best TallyLedgerGSTReg
+	var found bool
+	for _, r := range m.GSTRegs {
+		if strings.TrimSpace(r.GSTIN) == "" {
+			continue
+		}
+		if !found || strings.TrimSpace(r.ApplicableFrom) > strings.TrimSpace(best.ApplicableFrom) {
+			best, found = r, true
+		}
+	}
+	return best, found
+}
+
+// GSTStateName returns the state NAME declared for this ledger, preferring the
+// current dated registration and falling back to the flat spellings. It is a
+// name ("Maharashtra"), never a code — see migration.stateCodeFor, which is
+// where a name becomes a two-digit GST code.
+func (m TallyLedgerMaster) GSTStateName() string {
+	if r, ok := m.currentGSTReg(); ok {
+		if s := strings.TrimSpace(r.State); s != "" {
+			return s
+		}
+	}
+	for _, r := range m.GSTRegs {
+		if s := strings.TrimSpace(r.State); s != "" {
+			return s
+		}
+	}
+	for _, s := range []string{m.LedgerStateName, m.StateName, m.State, m.PriorStateName, m.OldStateName} {
+		if s = strings.TrimSpace(s); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+// RegistrationTypeValue returns the GST registration type, preferring the
+// current dated registration over the flat field.
+func (m TallyLedgerMaster) RegistrationTypeValue() string {
+	if r, ok := m.currentGSTReg(); ok {
+		if t := strings.TrimSpace(r.RegistrationType); t != "" {
+			return t
+		}
+	}
+	return strings.TrimSpace(m.GSTRegistration)
 }
 
 // Name returns the ledger master's name, preferring the NAME attribute and
@@ -88,7 +260,14 @@ func (m TallyLedgerMaster) Name() string {
 
 // GSTINValue returns the counter-party GSTIN, accepting either the PARTYGSTIN or
 // GSTIN spelling Tally emits.
+// It prefers the CURRENT dated registration under LEDGSTREGDETAILS.LIST, because
+// the flat PARTYGSTIN can be stale: in the real export tested against, three
+// parties carried a superseded GSTIN there and sixteen carried none at all while
+// the dated list held one. A stale GSTIN on a B2B invoice is a wrong GSTR-1 row.
 func (m TallyLedgerMaster) GSTINValue() string {
+	if r, ok := m.currentGSTReg(); ok {
+		return strings.TrimSpace(r.GSTIN)
+	}
 	if g := strings.TrimSpace(m.GSTIN); g != "" {
 		return g
 	}
@@ -154,6 +333,28 @@ type TallyVoucher struct {
 	// AllLedgerEntries is Tally's alternate element name for accounting lines on
 	// inventory vouchers; both are merged by Entries().
 	AllLedgerEntries []TallyLedgerEntry `xml:"ALLLEDGERENTRIES.LIST"`
+	// InventoryEntries are the STOCK lines of an item invoice — and they are not
+	// optional colour. ⛔ ON AN ITEM INVOICE THE REVENUE LINES DO NOT APPEAR AT
+	// THE TOP LEVEL AT ALL: only the party, the tax/charge ledgers and the round
+	// off do. Each sales/purchase ledger amount hangs off its stock line inside
+	// ACCOUNTINGALLOCATIONS.LIST. Reading only the top level therefore yields a
+	// voucher missing its entire income side: of the 121 vouchers in the real
+	// export tested against, 63 were unbalanced by exactly the goods value and
+	// would have been REFUSED by the double-entry trigger.
+	InventoryEntries    []TallyInventoryEntry `xml:"ALLINVENTORYENTRIES.LIST"`
+	InventoryEntriesAlt []TallyInventoryEntry `xml:"INVENTORYENTRIES.LIST"`
+}
+
+// TallyInventoryEntry is one stock line of an item invoice. Its
+// AccountingAllocations carry the ledger postings the line generates — the sales
+// or purchase ledger, split when one item is booked across several.
+type TallyInventoryEntry struct {
+	StockItemName         string             `xml:"STOCKITEMNAME"`
+	Rate                  string             `xml:"RATE"`
+	Amount                string             `xml:"AMOUNT"`
+	ActualQty             string             `xml:"ACTUALQTY"`
+	BilledQty             string             `xml:"BILLEDQTY"`
+	AccountingAllocations []TallyLedgerEntry `xml:"ACCOUNTINGALLOCATIONS.LIST"`
 }
 
 // GUIDValue returns the stable source GUID, preferring <GUID> and falling back
@@ -173,13 +374,29 @@ func (v TallyVoucher) ReverseChargeFlag() bool {
 	return yes(v.RCMFlag)
 }
 
-// Entries returns the combined ledger lines, accepting either the
-// LEDGERENTRIES.LIST or ALLLEDGERENTRIES.LIST spelling Tally emits.
+// Entries returns EVERY accounting line of the voucher: the top-level lines
+// under either spelling Tally emits (LEDGERENTRIES.LIST / ALLLEDGERENTRIES.LIST)
+// PLUS the per-item allocations nested inside the stock lines of an item
+// invoice. Order is document order — top-level lines first, then item lines.
+//
+// ⛔ IT USED TO RETURN ONE LIST *OR* THE OTHER and never looked inside the
+// inventory entries. Both halves of that were wrong against a real export: the
+// two top-level spellings can coexist (they do, across the file tested against),
+// and an item invoice keeps its revenue lines only in the nested allocations.
+// Together they are what makes a voucher balance; see the comment on
+// InventoryEntries for the count.
 func (v TallyVoucher) Entries() []TallyLedgerEntry {
-	if len(v.LedgerEntries) > 0 {
-		return v.LedgerEntries
+	out := make([]TallyLedgerEntry, 0,
+		len(v.LedgerEntries)+len(v.AllLedgerEntries)+len(v.InventoryEntries))
+	out = append(out, v.LedgerEntries...)
+	out = append(out, v.AllLedgerEntries...)
+	for _, inv := range v.InventoryEntries {
+		out = append(out, inv.AccountingAllocations...)
 	}
-	return v.AllLedgerEntries
+	for _, inv := range v.InventoryEntriesAlt {
+		out = append(out, inv.AccountingAllocations...)
+	}
+	return out
 }
 
 // TallyLedgerEntry is one accounting line of a voucher. Tally's sign convention
@@ -231,6 +448,28 @@ func (b TallyBillAllocation) RefType() string {
 // Side reports whether this entry is a debit (true) or credit (false) per the
 // ISDEEMEDPOSITIVE flag.
 func (e TallyLedgerEntry) Side() (debit bool, err error) {
+	// THE SIGN OF AMOUNT IS THE AUTHORITY, not the flag. Both normally agree, and
+	// where they disagree it is the flag that is wrong: ISDEEMEDPOSITIVE records
+	// the side the voucher TYPE deems the line to be on, so a line that ends up
+	// contra to its own voucher keeps the type's flag and flips only its sign. A
+	// round-off that reduces an invoice is the everyday case —
+	//
+	//	<LEDGERNAME>ROUND OFF SALES</LEDGERNAME>
+	//	<ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>   (says credit)
+	//	<AMOUNT>-0.12</AMOUNT>                     (is a debit)
+	//
+	// — and reading the flag puts 12 paise on the wrong side, so the voucher
+	// misses by 24 and the double-entry trigger refuses it. In the real export
+	// tested against, 25 lines disagreed; trusting the sign balanced 121 of 121
+	// vouchers, trusting the flag balanced 96.
+	//
+	// The flag is still the fallback, and it is the ONLY answer for a zero or
+	// absent amount, where a sign cannot exist.
+	if raw := strings.TrimSpace(e.Amount); raw != "" {
+		if d, err := decimal.NewFromString(raw); err == nil && !d.IsZero() {
+			return d.IsNegative(), nil
+		}
+	}
 	switch strings.ToUpper(strings.TrimSpace(e.IsDeemedPositive)) {
 	case "YES":
 		return true, nil
@@ -260,16 +499,185 @@ func (e TallyLedgerEntry) Magnitude() (decimal.Decimal, error) {
 // ParseTallyEnvelope decodes a Tally XML export stream into a TallyEnvelope. It
 // is pure (no I/O beyond the reader) and does not validate accounting
 // semantics — that is the importer's job.
+//
+// The stream is put through NewTallyDecodeReader first, which is what makes a
+// file TallyPrime actually wrote readable at all; see that function for the two
+// things about such a file that stop encoding/xml dead.
 func ParseTallyEnvelope(r io.Reader) (*TallyEnvelope, error) {
 	var env TallyEnvelope
-	dec := xml.NewDecoder(r)
+	dec := xml.NewDecoder(NewTallyDecodeReader(r))
 	// Tally documents declare namespaces (xmlns:UDF); the strict default rejects
 	// unbound prefixes on some exports, so be lenient about charset/namespaces.
 	dec.Strict = false
+	// Anything reaching the decoder is already UTF-8 (NewTallyDecodeReader
+	// transcoded it), so a declared encoding is passed straight through rather
+	// than refused as unsupported.
+	dec.CharsetReader = func(_ string, input io.Reader) (io.Reader, error) { return input, nil }
 	if err := dec.Decode(&env); err != nil {
 		return nil, fmt.Errorf("integration: decode tally envelope: %w", err)
 	}
 	return &env, nil
+}
+
+// NewTallyDecodeReader wraps a raw Tally export so encoding/xml can read it: it
+// transcodes UTF-16 to UTF-8, drops the BOM, and removes the characters XML 1.0
+// does not permit.
+//
+// ⛔ BOTH FIXES ARE LOAD-BEARING, AND EITHER ONE ALONE STOPS THE PARSE DEAD.
+//
+//  1. TALLYPRIME WRITES UTF-16LE. Not UTF-8, and with no <?xml?> declaration to
+//     say so — just a byte-order mark and then 16-bit code units. Handed to
+//     encoding/xml as-is, that fails on the first byte pair: "XML syntax error
+//     on line 1: invalid UTF-8".
+//
+//  2. TALLYPRIME EMITS U+0004 IN ORDINARY FIELD VALUES. It uses it as an
+//     internal marker on "not applicable" style values, so the file is littered
+//     with things like <CSTFORMISSUETYPE>&#4; Not Applicable</CSTFORMISSUETYPE>.
+//     A numeric reference to a C0 control is FORBIDDEN by XML 1.0 — not merely
+//     discouraged — and Go rejects it: "illegal character code U+0004". The two
+//     files tested against carried 32,464 of them.
+//
+// Neither is a corner case; they are simply what the program whose output this
+// parser exists to read produces. A stripped control is dropped, not replaced,
+// so "&#4; Not Applicable" reads as " Not Applicable" and callers keep trimming.
+func NewTallyDecodeReader(r io.Reader) io.Reader {
+	return newControlStripper(newTranscodingReader(r))
+}
+
+// newTranscodingReader sniffs the byte-order mark and returns a reader that
+// yields UTF-8. A UTF-8 BOM is dropped; UTF-16 in either byte order is decoded.
+// With no BOM the bytes are passed through untouched — a UTF-8 file, which is
+// what every hand-authored envelope is.
+func newTranscodingReader(r io.Reader) io.Reader {
+	br := bufio.NewReaderSize(r, 64<<10)
+	prefix, err := br.Peek(3)
+	if err != nil && len(prefix) < 2 {
+		return br // too short to sniff; let the decoder produce the error
+	}
+	switch {
+	case len(prefix) >= 3 && prefix[0] == 0xEF && prefix[1] == 0xBB && prefix[2] == 0xBF:
+		_, _ = br.Discard(3)
+		return br
+	case prefix[0] == 0xFF && prefix[1] == 0xFE:
+		return transform.NewReader(br,
+			unicode.UTF16(unicode.LittleEndian, unicode.ExpectBOM).NewDecoder())
+	case prefix[0] == 0xFE && prefix[1] == 0xFF:
+		return transform.NewReader(br,
+			unicode.UTF16(unicode.BigEndian, unicode.ExpectBOM).NewDecoder())
+	case prefix[0] == 0x00:
+		// UTF-16BE with no BOM: the high byte of '<' is zero.
+		return transform.NewReader(br,
+			unicode.UTF16(unicode.BigEndian, unicode.IgnoreBOM).NewDecoder())
+	case len(prefix) >= 2 && prefix[1] == 0x00:
+		// UTF-16LE with no BOM.
+		return transform.NewReader(br,
+			unicode.UTF16(unicode.LittleEndian, unicode.IgnoreBOM).NewDecoder())
+	default:
+		return br
+	}
+}
+
+// controlStripper removes characters XML 1.0 forbids from a UTF-8 stream, both
+// as raw bytes and as numeric character references (&#4; / &#x4;).
+type controlStripper struct {
+	br  *bufio.Reader
+	out []byte // bytes produced but not yet handed to the caller
+}
+
+func newControlStripper(r io.Reader) io.Reader {
+	if br, ok := r.(*bufio.Reader); ok {
+		return &controlStripper{br: br}
+	}
+	return &controlStripper{br: bufio.NewReaderSize(r, 64<<10)}
+}
+
+// legalXMLChar reports whether a rune may appear in an XML 1.0 document.
+func legalXMLChar(r rune) bool {
+	switch {
+	case r == 0x09, r == 0x0A, r == 0x0D:
+		return true
+	case r >= 0x20 && r <= 0xD7FF:
+		return true
+	case r >= 0xE000 && r <= 0xFFFD:
+		return true
+	case r >= 0x10000 && r <= 0x10FFFF:
+		return true
+	default:
+		return false
+	}
+}
+
+func (c *controlStripper) Read(p []byte) (int, error) {
+	for len(c.out) == 0 {
+		if err := c.fill(); err != nil {
+			if len(c.out) == 0 {
+				return 0, err
+			}
+			break
+		}
+	}
+	n := copy(p, c.out)
+	c.out = c.out[n:]
+	return n, nil
+}
+
+// fill appends at least one byte to c.out, or returns the reader's error. It
+// works a byte at a time because the only bytes it may drop are ASCII controls
+// and a numeric reference — neither can occur inside a multi-byte UTF-8
+// sequence, whose continuation bytes are all >= 0x80.
+func (c *controlStripper) fill() error {
+	for {
+		b, err := c.br.ReadByte()
+		if err != nil {
+			return err
+		}
+		if b < 0x20 && b != '\t' && b != '\n' && b != '\r' {
+			continue // raw C0 control: drop
+		}
+		if b != '&' {
+			c.out = append(c.out, b)
+			return nil
+		}
+		// '&': it may open a numeric character reference. Peek far enough to see
+		// the whole of a plausible one (&#x10FFFF; is 10 bytes).
+		peek, _ := c.br.Peek(10)
+		if n, r, ok := scanNumericRef(peek); ok {
+			_, _ = c.br.Discard(n)
+			if !legalXMLChar(r) {
+				continue // e.g. &#4; — drop the reference entirely
+			}
+			c.out = append(c.out, '&')
+			c.out = append(c.out, peek[:n]...)
+			return nil
+		}
+		c.out = append(c.out, b)
+		return nil
+	}
+}
+
+// scanNumericRef reads a numeric character reference from the bytes FOLLOWING an
+// '&'. It returns how many bytes the reference occupies (through the ';'), the
+// rune it denotes, and whether one was found at all.
+func scanNumericRef(b []byte) (int, rune, bool) {
+	if len(b) < 3 || b[0] != '#' {
+		return 0, 0, false
+	}
+	i, base := 1, 10
+	if b[1] == 'x' || b[1] == 'X' {
+		i, base = 2, 16
+	}
+	start := i
+	for i < len(b) && b[i] != ';' {
+		i++
+	}
+	if i == start || i >= len(b) || b[i] != ';' {
+		return 0, 0, false
+	}
+	v, err := strconv.ParseInt(string(b[start:i]), base, 64)
+	if err != nil {
+		return 0, 0, false
+	}
+	return i + 1, rune(v), true
 }
 
 // TallyDateToISO converts Tally's YYYYMMDD date string into the ISO YYYY-MM-DD
