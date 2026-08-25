@@ -1952,8 +1952,29 @@ type voucherReq struct {
 	// those rules in the HTTP layer is a copy that drifts, and the drifted one
 	// always wins for whichever caller reaches it first.
 	Fulfilments []fulfilmentReq `json:"fulfilments"`
-	GST         *gstReq         `json:"gst"`
-	TDS         *tdsReq         `json:"tds"`
+	// DraftID is the insightd PurchaseVoucherDraft this POST is ACCEPTING
+	// (migration 0077, register row §7.3 B). Empty on every hand-keyed voucher,
+	// which is nearly all of them.
+	//
+	// ⛔⛔ THIS FIELD IS THE SERVER HALF OF "ACCEPT AN AI BILL ONCE", AND WITHOUT
+	// IT THE GUARANTEE IS A CLIENT-SIDE CLAIM. Accepting a draft is two writes to
+	// two services: this POST, and then the browser telling insightd the draft is
+	// `accepted`. When the second is lost — tab closed, network dropped, laptop
+	// asleep — insightd keeps offering the bill as `ready`. The browser's own
+	// retry queue is localStorage, so ONLY the machine that posted can drive it;
+	// a second machine used to be protected by a day-book lookup alone, which
+	// cannot see a bill whose supplier invoice number the OCR never read. Carrying
+	// the draft id here puts the decision under a unique index inside the SAME
+	// transaction as the voucher, so the loser writes nothing at all and gets a
+	// 409 naming the voucher the draft did produce.
+	//
+	// Carried on voucherReq rather than on a purchase-only body for the same
+	// reason Inventory and CostAllocations are: syncIntentReq.Payload IS a
+	// voucherReq and buildVoucherInput is the single translator, so an accept
+	// replayed from an offline node keeps its once-only key for free.
+	DraftID string  `json:"draft_id"`
+	GST     *gstReq `json:"gst"`
+	TDS     *tdsReq `json:"tds"`
 	// TCS is the collection-side mirror, honoured on Sales only. It carries no
 	// exemption flag: a s.394(2) declaration is read from the declarations table
 	// inside the post transaction, never asserted here.
@@ -1980,6 +2001,13 @@ func (s *Server) postVoucher(class ledger.Class) http.HandlerFunc {
 		if err != nil {
 			if errors.Is(err, db.ErrNoCompany) {
 				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			// THE DUPLICATED AI BILL — 409, not 422, and in insightd's OWN refusal
+			// SHAPE. See writeDraftAlreadyAccepted.
+			var dup *ledger.DraftAlreadyAcceptedError
+			if errors.As(err, &dup) {
+				writeDraftAlreadyAccepted(w, dup)
 				return
 			}
 			writeError(w, http.StatusUnprocessableEntity, err.Error())
@@ -2468,6 +2496,13 @@ func buildVoucherInput(w http.ResponseWriter, class ledger.Class, req voucherReq
 		Narration:   req.Narration,
 		Party:       req.Party,
 		CreatedBy:   req.CreatedBy,
+		// The insightd draft being accepted. Passed through UNVALIDATED and
+		// unparsed: it is an opaque insightd identifier, not a uuid (its benchmark
+		// corpora use ids like "CO-DEMO/bill-3"), and the only thing cored needs of
+		// it is that two accepts of the same draft spell it the same way. Migration
+		// 0077's CHECK refuses the empty string; nullIfEmpty in the ledger maps ""
+		// to NULL before it can get there.
+		SourceDraftID: req.DraftID,
 	}
 	var err error
 	if in.VoucherTypeID, err = optionalUUID(req.VoucherTypeID); err != nil {
@@ -4431,4 +4466,40 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+// writeDraftAlreadyAccepted refuses a second accept of one insightd draft.
+//
+// ⛔⛔ THE BODY SHAPE IS insightd'S, NOT CORED'S, AND THAT IS THE WHOLE POINT OF
+// WRITING IT BY HAND HERE. The browser's duplicate-bill guard reads
+// `err.body.detail.code` on a 409 and translates exactly three insightd codes
+// into sentences an operator can act on (draftAccept.ts's conflictCode /
+// conflictField). `draft_already_accepted` is one of them, and it already names
+// the winning voucher in `accepted_voucher_no` / `accepted_voucher_id`. Emitting
+// cored's usual {"error": ...} instead would leave the client with an unrecognised
+// 409 — still a refusal, but a generic one that could not tell the operator WHICH
+// voucher their bill is already on, which is the single most useful fact here.
+//
+// `error` is carried AS WELL so ApiError.message is a sentence rather than
+// "request failed: 409" — http.ts reads that key and nothing else for the message.
+// Two keys, one refusal, and both readers get what they parse.
+func writeDraftAlreadyAccepted(w http.ResponseWriter, e *ledger.DraftAlreadyAcceptedError) {
+	detail := map[string]any{
+		"code":     "draft_already_accepted",
+		"draft_id": e.DraftID,
+	}
+	// Only ever the winner's REAL identity. An empty voucher_no is left out rather
+	// than sent as "", because the client renders `accepted_voucher_no ||
+	// accepted_voucher_id` and an empty string that is present reads to a human as
+	// a voucher with no number.
+	if e.VoucherNo != "" {
+		detail["accepted_voucher_no"] = e.VoucherNo
+	}
+	if e.VoucherID != uuid.Nil {
+		detail["accepted_voucher_id"] = e.VoucherID.String()
+	}
+	writeJSON(w, http.StatusConflict, map[string]any{
+		"error":  e.Error(),
+		"detail": detail,
+	})
 }

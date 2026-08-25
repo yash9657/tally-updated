@@ -27,6 +27,10 @@ import {
   _pageClaimToken,
   _resetAcceptedDraftCache,
   _resetDurableAcceptRecords,
+  _resetPendingDraftConfirms,
+  _pendingDraftConfirms,
+  drainPendingDraftConfirms,
+  pendingDraftConfirmCount,
   _setDraftLifecyclePort,
 } from "./draftAccept";
 import { _resetLedgerCache, _resetOutputTaxLedgerCache } from "./gstVoucher";
@@ -48,10 +52,30 @@ function balancedBody(): VoucherDraftBody {
     voucher_date: "2026-04-02",
     narration: "OCR purchase",
     postings: [
-      { ledger_id: "ledger-purchases", ledger_name: "Purchases", dr_cr: "D", amount: "1000.0000" },
-      { ledger_id: "ledger-cgst", ledger_name: "Input CGST", dr_cr: "D", amount: "90.0000" },
-      { ledger_id: "ledger-sgst", ledger_name: "Input SGST", dr_cr: "D", amount: "90.0000" },
-      { ledger_id: "ledger-acme", ledger_name: "Acme Traders", dr_cr: "C", amount: "1180.0000" },
+      {
+        ledger_id: "ledger-purchases",
+        ledger_name: "Purchases",
+        dr_cr: "D",
+        amount: "1000.0000",
+      },
+      {
+        ledger_id: "ledger-cgst",
+        ledger_name: "Input CGST",
+        dr_cr: "D",
+        amount: "90.0000",
+      },
+      {
+        ledger_id: "ledger-sgst",
+        ledger_name: "Input SGST",
+        dr_cr: "D",
+        amount: "90.0000",
+      },
+      {
+        ledger_id: "ledger-acme",
+        ledger_name: "Acme Traders",
+        dr_cr: "C",
+        amount: "1180.0000",
+      },
     ],
     gst: {
       ruleset_version: "gst-2024-09",
@@ -59,7 +83,9 @@ function balancedBody(): VoucherDraftBody {
       place_of_supply_state_code: "29",
       reverse_charge: false,
       exempt: false,
-      lines: [{ taxable_value: "1000.0000", gst_rate_pct: "18.0000", hsn: "1234" }],
+      lines: [
+        { taxable_value: "1000.0000", gst_rate_pct: "18.0000", hsn: "1234" },
+      ],
       cgst_ledger_id: "ledger-cgst",
       sgst_ledger_id: "ledger-sgst",
       igst_ledger_id: "ledger-igst",
@@ -76,6 +102,10 @@ beforeEach(() => {
   // A FRESH MACHINE. The durable memo (localStorage) deliberately OUTLIVES a reload,
   // so it must be cleared per test or one test's accept refuses the next one's.
   _resetDurableAcceptRecords();
+  // §7.3 B's queue is localStorage too, so it outlives a test the same way the
+  // memo does — and an owed confirm left behind would silently drain into the
+  // NEXT test's fake port.
+  _resetPendingDraftConfirms();
   // ⛔ LAYER 4 OFF BY DEFAULT IN THESE TESTS, ON PURPOSE. The real port talks to
   // insightd on another port; leaving it live here would make every accept in this
   // file depend on whether a dev insightd happens to be running. Tests that are
@@ -86,6 +116,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   _setDraftLifecyclePort(null);
   _resetDurableAcceptRecords();
+  _resetPendingDraftConfirms();
 });
 
 describe("draftBodyToVoucherRequest (pure)", () => {
@@ -124,7 +155,9 @@ describe("draftBodyToVoucherRequest (pure)", () => {
       exempt: false,
       supplier_state_code: "29",
       place_of_supply_state_code: "29",
-      lines: [{ taxable_value: "1000.0000", gst_rate_pct: "18.0000", hsn: "1234" }],
+      lines: [
+        { taxable_value: "1000.0000", gst_rate_pct: "18.0000", hsn: "1234" },
+      ],
       cgst_ledger_id: "ledger-cgst",
       sgst_ledger_id: "ledger-sgst",
       igst_ledger_id: "ledger-igst",
@@ -187,8 +220,14 @@ describe("resolveDraftLedgers (async)", () => {
       name: c[1].name,
       group: c[1].group_name,
     }));
-    expect(groups).toContainEqual({ name: "Acme Traders", group: "Sundry Creditors" });
-    expect(groups).toContainEqual({ name: "Purchases", group: "Purchase Accounts" });
+    expect(groups).toContainEqual({
+      name: "Acme Traders",
+      group: "Sundry Creditors",
+    });
+    expect(groups).toContainEqual({
+      name: "Purchases",
+      group: "Purchase Accounts",
+    });
   });
 
   it("falls back to the single CREDIT posting when no name matches the party", async () => {
@@ -387,7 +426,12 @@ describe("DEFECT 2 — the bill-wise references the panel certifies reach the wi
     // enforce to the paisa.
     await acceptPurchaseDraft(client, COMPANY, body, {
       billRefs: [
-        { refType: "NEW", refName: "", amount: "1000.0000", dueDate: "2026-05-02" },
+        {
+          refType: "NEW",
+          refName: "",
+          amount: "1000.0000",
+          dueDate: "2026-05-02",
+        },
         { refType: "ON_ACCOUNT", refName: "", amount: "180.0000", dueDate: "" },
       ],
     });
@@ -446,7 +490,13 @@ describe("DEFECT 2 — the bill-wise references the panel certifies reach the wi
       } as unknown as Parameters<typeof defaultDraftBillRefs>[1][number],
     ];
     expect(defaultDraftBillRefs(body, chart(true))).toEqual([
-      { refType: "NEW", refName: "", amount: "1180.0000", dueDate: "", auto: true },
+      {
+        refType: "NEW",
+        refName: "",
+        amount: "1180.0000",
+        dueDate: "",
+        auto: true,
+      },
     ]);
     expect(defaultDraftBillRefs(body, chart(false))).toEqual([]);
     // A party the chart does not carry (minted by this very accept) has no flag,
@@ -681,7 +731,9 @@ describe("DEFECT 3 — a refused accept must not quietly leave masters behind", 
 // ===========================================================================
 
 /** A numberless purchase draft: the exact shape the re-drive duplicated. */
-async function numberlessDraftBody(client: CoredClient): Promise<VoucherDraftBody> {
+async function numberlessDraftBody(
+  client: CoredClient,
+): Promise<VoucherDraftBody> {
   const body = await realDraftBody(client, true);
   body.voucher_no = null; // the OCR never read it -> the day book has no key
   return body;
@@ -859,7 +911,8 @@ function fakeInsightd(bodies: VoucherDraftBody[]) {
   /** Force every live lease to have lapsed (the crashed-browser / TTL case). */
   const lapseClaims = () => {
     for (const r of rows) {
-      if (r.claim_token) r.claim_expires_at = new Date(Date.now() - 1).toISOString();
+      if (r.claim_token)
+        r.claim_expires_at = new Date(Date.now() - 1).toISOString();
     }
   };
 
@@ -897,7 +950,9 @@ describe("LAYER 3 — the durable memo, which is what a page reload used to defe
     expect(err).toBeInstanceOf(DraftAlreadyAcceptedError);
     // It names the voucher the FIRST accept produced, so the operator can go look.
     expect((err as DraftAlreadyAcceptedError).voucherID).toBe(first.voucher_id);
-    expect((err as DraftAlreadyAcceptedError).message).toMatch(/already accepted/i);
+    expect((err as DraftAlreadyAcceptedError).message).toMatch(
+      /already accepted/i,
+    );
     // ⛔ THE MONEY ASSERTION: one payable and one lot of input tax, not two.
     expect(spy).toHaveBeenCalledTimes(1);
   });
@@ -949,11 +1004,15 @@ describe("LAYER 3 — the durable memo, which is what a page reload used to defe
       .spyOn(client, "postPurchaseVoucher")
       .mockRejectedValueOnce(new Error("422: back-dated beyond the cutoff"));
 
-    await expect(acceptPurchaseDraft(client, COMPANY, body)).rejects.toThrow(/422/);
+    await expect(acceptPurchaseDraft(client, COMPANY, body)).rejects.toThrow(
+      /422/,
+    );
     // …even across a reload: a memo that remembered a FAILURE would lock the
     // operator out of their own bill forever, not just for this page.
     _resetAcceptedDraftCache();
-    await expect(acceptPurchaseDraft(client, COMPANY, body)).resolves.toBeTruthy();
+    await expect(
+      acceptPurchaseDraft(client, COMPANY, body),
+    ).resolves.toBeTruthy();
     expect(spy).toHaveBeenCalledTimes(2);
   });
 
@@ -988,7 +1047,9 @@ describe("LAYER 3 — the durable memo, which is what a page reload used to defe
 
     _resetAcceptedDraftCache();
     _resetDurableAcceptRecords();
-    await expect(acceptPurchaseDraft(client, COMPANY, body)).resolves.toBeTruthy();
+    await expect(
+      acceptPurchaseDraft(client, COMPANY, body),
+    ).resolves.toBeTruthy();
     expect(spy).toHaveBeenCalledTimes(2);
   });
 });
@@ -1029,7 +1090,9 @@ describe("LAYER 4 — insightd's terminal draft state (the root fix)", () => {
     );
     expect(err).toBeInstanceOf(DraftAlreadyAcceptedError);
     expect((err as DraftAlreadyAcceptedError).voucherID).toBe(first.voucher_id);
-    expect((err as DraftAlreadyAcceptedError).message).toMatch(/insightd records it/);
+    expect((err as DraftAlreadyAcceptedError).message).toMatch(
+      /insightd records it/,
+    );
     expect(spy).toHaveBeenCalledTimes(1);
   });
 
@@ -1113,7 +1176,9 @@ describe("LAYER 4 — insightd's terminal draft state (the root fix)", () => {
     // A first accept of a bill insightd has never seen must not be refused — an
     // exact body match, not a resemblance to "a bill from this supplier".
     expect(await fake.port.find(COMPANY, mine)).toBeNull();
-    await expect(acceptPurchaseDraft(client, COMPANY, mine)).resolves.toBeTruthy();
+    await expect(
+      acceptPurchaseDraft(client, COMPANY, mine),
+    ).resolves.toBeTruthy();
     await flush();
     expect(fake.posts).toHaveLength(0); // nothing to mark
   });
@@ -1129,15 +1194,19 @@ describe("LAYER 4 — insightd's terminal draft state (the root fix)", () => {
         // route. A claim that could not be TAKEN must degrade, not refuse: see
         // claimDraftForPost. This is the residual window, asserted rather than implied.
         claim: () => Promise.reject(new Error("ECONNREFUSED 127.0.0.1:8088")),
-        releaseClaim: () => Promise.reject(new Error("ECONNREFUSED 127.0.0.1:8088")),
-        recordAccepted: () => Promise.reject(new Error("ECONNREFUSED 127.0.0.1:8088")),
+        releaseClaim: () =>
+          Promise.reject(new Error("ECONNREFUSED 127.0.0.1:8088")),
+        recordAccepted: () =>
+          Promise.reject(new Error("ECONNREFUSED 127.0.0.1:8088")),
       }),
     );
 
     // ⛔ The FIRST accept of a non-duplicate bill must still post. Refusing here
     // would mean an insightd hiccup takes away the human's only write path, which
     // is a worse failure than losing the fourth of four duplicate checks.
-    await expect(acceptPurchaseDraft(client, COMPANY, body)).resolves.toBeTruthy();
+    await expect(
+      acceptPurchaseDraft(client, COMPANY, body),
+    ).resolves.toBeTruthy();
     await flush();
     expect(warn).toHaveBeenCalled(); // reported, never silent
 
@@ -1170,7 +1239,9 @@ describe("LAYER 4 — insightd's terminal draft state (the root fix)", () => {
       }),
     );
 
-    await expect(acceptPurchaseDraft(client, COMPANY, body)).resolves.toBeTruthy();
+    await expect(
+      acceptPurchaseDraft(client, COMPANY, body),
+    ).resolves.toBeTruthy();
     await flush();
     expect(warn).not.toHaveBeenCalled();
   });
@@ -1181,19 +1252,19 @@ describe("LAYER 4 — insightd's terminal draft state (the root fix)", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     _setDraftLifecyclePort(
       portWith({
-      find: () =>
-        Promise.resolve({
-          draftId: "D-1",
-          status: "ready",
-          acceptedVoucherID: "",
-          acceptedVoucherNo: "",
-        }),
-      // A port that THROWS rather than rejecting. Nothing in the interface forbids
-      // it, and an unguarded `void p.recordAccepted(...)` would let this escape past
-      // a POST that already moved money.
-      recordAccepted: () => {
-        throw new Error("boom, synchronously");
-      },
+        find: () =>
+          Promise.resolve({
+            draftId: "D-1",
+            status: "ready",
+            acceptedVoucherID: "",
+            acceptedVoucherNo: "",
+          }),
+        // A port that THROWS rather than rejecting. Nothing in the interface forbids
+        // it, and an unguarded `void p.recordAccepted(...)` would let this escape past
+        // a POST that already moved money.
+        recordAccepted: () => {
+          throw new Error("boom, synchronously");
+        },
       }),
     );
 
@@ -1215,7 +1286,8 @@ describe("LAYER 4 — insightd's terminal draft state (the root fix)", () => {
             acceptedVoucherID: "",
             acceptedVoucherNo: "",
           }),
-        recordAccepted: () => Promise.reject(new ApiError(500, "insightd exploded")),
+        recordAccepted: () =>
+          Promise.reject(new ApiError(500, "insightd exploded")),
       }),
     );
 
@@ -1225,7 +1297,9 @@ describe("LAYER 4 — insightd's terminal draft state (the root fix)", () => {
     expect(res.voucher_id).toBeTruthy();
     await flush();
     expect(warn).toHaveBeenCalled();
-    expect(String(warn.mock.calls[0]![0])).toMatch(/may still offer it as ready/);
+    expect(String(warn.mock.calls[0]![0])).toMatch(
+      /may still offer it as ready/,
+    );
   });
 });
 
@@ -1298,13 +1372,13 @@ describe("THE CONTROL — a normal FIRST accept is untouched by all four layers"
     const [, req] = spy.mock.calls[0]!;
 
     // ORIENTATION: the party is CREDITED, the expense and the INPUT taxes DEBITED.
-    const byLedger = new Map(
-      (req.postings ?? []).map((p) => [p.ledger_id, p]),
-    );
+    const byLedger = new Map((req.postings ?? []).map((p) => [p.ledger_id, p]));
     expect(byLedger.get(body.party_ledger_id!)!.dr_cr).toBe("C");
     expect(byLedger.get(body.party_ledger_id!)!.amount).toBe("1180.0000");
     expect(byLedger.get(body.postings[0]!.ledger_id!)!.dr_cr).toBe("D");
-    expect(byLedger.get(body.postings[0]!.ledger_id!)!.amount).toBe("1000.0000");
+    expect(byLedger.get(body.postings[0]!.ledger_id!)!.amount).toBe(
+      "1000.0000",
+    );
     expect(byLedger.get(body.gst!.cgst_ledger_id!)!.dr_cr).toBe("D");
     expect(byLedger.get(body.gst!.sgst_ledger_id!)!.dr_cr).toBe("D");
 
@@ -1432,7 +1506,9 @@ describe("LAYER 5 — the posting claim (reserve before posting, not check befor
       from: body.voucher_date!,
       to: body.voucher_date!,
     });
-    expect(day.entries.filter((e) => e.class.toLowerCase() === "purchase")).toHaveLength(1);
+    expect(
+      day.entries.filter((e) => e.class.toLowerCase() === "purchase"),
+    ).toHaveLength(1);
   });
 
   it("⛔⛔ CLAIM BEFORE THE FIRST WRITE OF ANY KIND — ledger masters INCLUDED", async () => {
@@ -1460,10 +1536,12 @@ describe("LAYER 5 — the posting claim (reserve before posting, not check befor
       return realCreate(c, req);
     });
     const realPost = client.postPurchaseVoucher.bind(client);
-    vi.spyOn(client, "postPurchaseVoucher").mockImplementation(async (c, req) => {
-      order.push("voucher-post");
-      return realPost(c, req);
-    });
+    vi.spyOn(client, "postPurchaseVoucher").mockImplementation(
+      async (c, req) => {
+        order.push("voucher-post");
+        return realPost(c, req);
+      },
+    );
     const realClaim = fake.port.claim;
     _setDraftLifecyclePort(
       portWith({
@@ -1484,7 +1562,12 @@ describe("LAYER 5 — the posting claim (reserve before posting, not check befor
     await flush();
 
     // The claim is FIRST. Not first-among-the-writes — first, period.
-    expect(order).toEqual(["claim", "ledger-master", "voucher-post", "confirm"]);
+    expect(order).toEqual([
+      "claim",
+      "ledger-master",
+      "voucher-post",
+      "confirm",
+    ]);
     expect(order.indexOf("claim")).toBeLessThan(order.indexOf("ledger-master"));
     expect(order.indexOf("claim")).toBeLessThan(order.indexOf("voucher-post"));
   });
@@ -1498,7 +1581,9 @@ describe("LAYER 5 — the posting claim (reserve before posting, not check befor
       .spyOn(client, "postPurchaseVoucher")
       .mockRejectedValueOnce(new Error("422: back-dated beyond the cutoff"));
 
-    await expect(acceptPurchaseDraft(client, COMPANY, body)).rejects.toThrow(/422/);
+    await expect(acceptPurchaseDraft(client, COMPANY, body)).rejects.toThrow(
+      /422/,
+    );
 
     // ⛔ THE ANTI-STRANDING ASSERTION. A draft left claimed after a failed post is a
     // bill the operator can neither post NOR release — worse than the duplicate this
@@ -1513,7 +1598,9 @@ describe("LAYER 5 — the posting claim (reserve before posting, not check befor
     // …and the operator who fixes the problem can post it, WITHOUT waiting for a TTL.
     _resetAcceptedDraftCache();
     _resetDurableAcceptRecords();
-    await expect(acceptPurchaseDraft(client, COMPANY, body)).resolves.toBeTruthy();
+    await expect(
+      acceptPurchaseDraft(client, COMPANY, body),
+    ).resolves.toBeTruthy();
     expect(spy).toHaveBeenCalledTimes(2);
     expect(fake.rows[0]!.status).toBe("accepted");
   });
@@ -1563,7 +1650,9 @@ describe("LAYER 5 — the posting claim (reserve before posting, not check befor
 
     // The 422 is what surfaces — not "ECONNREFUSED". The claim then lapses via the
     // TTL, which is exactly what the TTL is the backstop for.
-    await expect(acceptPurchaseDraft(client, COMPANY, body)).rejects.toThrow(/422/);
+    await expect(acceptPurchaseDraft(client, COMPANY, body)).rejects.toThrow(
+      /422/,
+    );
     expect(warn).toHaveBeenCalled();
     expect(String(warn.mock.calls[0]![0])).toMatch(/lapses on its own/);
   });
@@ -1590,7 +1679,12 @@ describe("LAYER 5 — the posting claim (reserve before posting, not check befor
 
     // A browser claimed the draft and DIED — it never posted and never released.
     _setDraftLifecyclePort(fake.port);
-    await fake.port.claim(COMPANY, "D-1", _pageClaimToken(), "the dead browser");
+    await fake.port.claim(
+      COMPANY,
+      "D-1",
+      _pageClaimToken(),
+      "the dead browser",
+    );
     fake.lapseClaims();
 
     // A permanent claim here would be a bill NOBODY can ever post, which is worse
@@ -1649,7 +1743,9 @@ describe("LAYER 5 — the posting claim (reserve before posting, not check befor
             acceptedVoucherNo: "",
           }),
         claim: () =>
-          Promise.reject(new ApiError(409, "some future conflict", { detail: {} })),
+          Promise.reject(
+            new ApiError(409, "some future conflict", { detail: {} }),
+          ),
       }),
     );
 
@@ -1667,7 +1763,9 @@ describe("LAYER 5 — the posting claim (reserve before posting, not check befor
     // no address to claim. The accept must still go through (a first accept of a bill
     // insightd never saw is not a duplicate) — but the race is NOT covered here.
     // Passing opts.draftId removes this case entirely.
-    _setDraftLifecyclePort(portWith({ find: () => Promise.resolve(null), claim }));
+    _setDraftLifecyclePort(
+      portWith({ find: () => Promise.resolve(null), claim }),
+    );
 
     await expect(
       acceptPurchaseDraft(client, COMPANY, body),
@@ -1834,5 +1932,352 @@ describe("D85 — the duplicate-bill guard, and the ADVICE it gives", () => {
     );
     expect(credits.map((p) => p.amount)).toEqual(["1180.0000", "2180.0000"]);
     expect(credits.every((p) => p.ledger_id === "ledger-acme")).toBe(true);
+  });
+});
+
+/**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * §7.3 B — THE SEVENTH DOOR: A CONFIRM THAT NEVER LANDED, AND NOTHING WENT BACK
+ *          FOR IT.
+ * ═══════════════════════════════════════════════════════════════════════════
+ * The claim -> post -> confirm reorder closes the race it was built for. The
+ * CONFIRM did not have the same care: `recordAccepted` was fire-and-forget with a
+ * `console.warn`, so a confirm aborted at the network layer left insightd's draft
+ * `ready` — LAYER 4, the only layer not confined to one browser profile, with no
+ * record of an acceptance that had already moved money — while the operator was
+ * told "Saved". The claim's TTL then became the duplicate's timer.
+ *
+ * ⚠️ READ THE LIMITATION TEST AT THE END BEFORE CALLING THIS CLOSED. The queue is
+ * localStorage, so only the browser that posted can drive the retry.
+ */
+describe("§7.3 B — the pending-confirm queue", () => {
+  /** A port whose confirm fails the way an aborted request does. */
+  const confirmFails = (base: DraftLifecyclePort, err: unknown) =>
+    portWith({
+      find: base.find.bind(base),
+      claim: base.claim.bind(base),
+      releaseClaim: base.releaseClaim.bind(base),
+      recordAccepted: () => Promise.reject(err),
+    });
+
+  it("OWES the confirm when it fails, naming the voucher that already exists", async () => {
+    const client = createMockClient({ seed: false });
+    const body = await numberlessDraftBody(client);
+    const fake = fakeInsightd([body]);
+    _setDraftLifecyclePort(
+      confirmFails(fake.port, new TypeError("Failed to fetch")),
+    );
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const res = await acceptPurchaseDraft(client, COMPANY, body);
+    await flush();
+
+    // The accept SUCCEEDED — bookkeeping about a posted voucher may never turn a
+    // success into a failure, and that rule is unchanged.
+    expect(res.voucher_id).toBeTruthy();
+    // insightd is in the defect state: the draft is still offered as ready.
+    expect(fake.rows[0]!.status).toBe("ready");
+    // ⛔ THE FIX: the confirm is written down as OWED, against the voucher that
+    // exists, instead of surviving only as a console line.
+    const owed = _pendingDraftConfirms();
+    expect(owed).toHaveLength(1);
+    expect(owed[0]!.draftId).toBe("D-1");
+    expect(owed[0]!.voucherID).toBe(res.voucher_id);
+    expect(owed[0]!.voucherNo).toBe(res.voucher_no);
+    expect(owed[0]!.companyID).toBe(COMPANY);
+  });
+
+  it("owes it even when the confirm NEVER SETTLES — the aborted-request case", async () => {
+    // The reported failure: browser A posted purchase 6, the confirm was aborted
+    // at the network layer, and the operator was told "Saved". A note written on
+    // the RESPONSE would not exist here, which is why the queue is written first.
+    const client = createMockClient({ seed: false });
+    const body = await numberlessDraftBody(client);
+    const fake = fakeInsightd([body]);
+    _setDraftLifecyclePort(
+      portWith({
+        find: fake.port.find.bind(fake.port),
+        claim: fake.port.claim.bind(fake.port),
+        recordAccepted: () => new Promise<void>(() => {}), // never settles
+      }),
+    );
+
+    await acceptPurchaseDraft(client, COMPANY, body);
+    await flush();
+
+    expect(pendingDraftConfirmCount(COMPANY)).toBe(1);
+  });
+
+  it("a 409 is an ACKNOWLEDGEMENT, so nothing stays owed", async () => {
+    const client = createMockClient({ seed: false });
+    const body = await numberlessDraftBody(client);
+    const fake = fakeInsightd([body]);
+    _setDraftLifecyclePort(
+      confirmFails(fake.port, new ApiError(409, "already accepted")),
+    );
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await acceptPurchaseDraft(client, COMPANY, body);
+    await flush();
+
+    // insightd already holds the record, which is the state the queue exists to
+    // reach — so it is not owed, and it is not a warning either.
+    expect(_pendingDraftConfirms()).toEqual([]);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("a SUCCESSFUL confirm leaves nothing owed (the control)", async () => {
+    const client = createMockClient({ seed: false });
+    const body = await numberlessDraftBody(client);
+    const fake = fakeInsightd([body]);
+    _setDraftLifecyclePort(fake.port);
+
+    await acceptPurchaseDraft(client, COMPANY, body);
+    await flush();
+
+    expect(fake.rows[0]!.status).toBe("accepted");
+    expect(_pendingDraftConfirms()).toEqual([]);
+  });
+
+  it("the drain lands the confirm once insightd is reachable again", async () => {
+    const client = createMockClient({ seed: false });
+    const body = await numberlessDraftBody(client);
+    const fake = fakeInsightd([body]);
+    _setDraftLifecyclePort(
+      confirmFails(fake.port, new TypeError("Failed to fetch")),
+    );
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const res = await acceptPurchaseDraft(client, COMPANY, body);
+    await flush();
+    expect(pendingDraftConfirmCount()).toBe(1);
+
+    // The network comes back.
+    _setDraftLifecyclePort(fake.port);
+    const stillOwed = await drainPendingDraftConfirms(COMPANY);
+
+    expect(stillOwed).toBe(0);
+    expect(_pendingDraftConfirms()).toEqual([]);
+    // ⛔ THE POINT: layer 4 is restored. The draft is terminal and names the
+    // voucher, so the inbox stops offering it and a DIFFERENT machine is covered.
+    expect(fake.rows[0]!.status).toBe("accepted");
+    expect(fake.rows[0]!.accepted_voucher_id).toBe(res.voucher_id);
+    expect(fake.rows[0]!.accepted_voucher_no).toBe(res.voucher_no);
+  });
+
+  it("a still-broken insightd keeps the confirm owed and COUNTS the attempts", async () => {
+    const client = createMockClient({ seed: false });
+    const body = await numberlessDraftBody(client);
+    const fake = fakeInsightd([body]);
+    _setDraftLifecyclePort(
+      confirmFails(fake.port, new TypeError("Failed to fetch")),
+    );
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await acceptPurchaseDraft(client, COMPANY, body);
+    await flush();
+    const afterPost = _pendingDraftConfirms()[0]!.attempts;
+
+    // ⛔ AND IT MUST NOT THROW. The drain runs on the accept path and on a screen
+    // mount; a rejection here would become a failed post or an error screen.
+    const stillOwed = await drainPendingDraftConfirms(COMPANY);
+
+    expect(stillOwed).toBe(1);
+    expect(_pendingDraftConfirms()[0]!.attempts).toBeGreaterThan(afterPost);
+    expect(fake.rows[0]!.status).toBe("ready");
+  });
+
+  it("⛔ THE DOOR: the NEXT accept from this browser settles the debt, and layer 4 then refuses the duplicate", async () => {
+    const client = createMockClient({ seed: false });
+    const body = await numberlessDraftBody(client);
+    const fake = fakeInsightd([body]);
+    _setDraftLifecyclePort(
+      confirmFails(fake.port, new TypeError("Failed to fetch")),
+    );
+    const spy = vi.spyOn(client, "postPurchaseVoucher");
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const first = await acceptPurchaseDraft(client, COMPANY, body);
+    await flush();
+    expect(fake.rows[0]!.status).toBe("ready"); // the lost confirm
+    expect(pendingDraftConfirmCount(COMPANY)).toBe(1);
+
+    // insightd comes back, and the claim's lease lapses — which is exactly the
+    // moment the bill used to become postable again by anyone.
+    _setDraftLifecyclePort(fake.port);
+    fake.lapseClaims();
+    // A PAGE RELOAD and a WIPED MEMO, so layers 1 and 3 have no opinion: the only
+    // thing that can refuse this is the server-side record the drain restores.
+    _resetAcceptedDraftCache();
+    _resetDurableAcceptRecords();
+    _resetLedgerCache();
+
+    const err = await acceptPurchaseDraft(client, COMPANY, body).then(
+      () => null,
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(DraftAlreadyAcceptedError);
+    expect((err as DraftAlreadyAcceptedError).voucherID).toBe(first.voucher_id);
+    // ONE voucher for one supplier bill. That is the whole register row.
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("the drain is AWAITED on the accept path, not raced", async () => {
+    // A drain kicked off un-awaited would leave layer 4's read racing it, which
+    // makes the guard probabilistic — the quality that made the FIRST duplicate
+    // fix insufficient. So the confirm must be settled before `find` is consulted.
+    const client = createMockClient({ seed: false });
+    const body = await numberlessDraftBody(client);
+    const fake = fakeInsightd([body]);
+    _setDraftLifecyclePort(
+      confirmFails(fake.port, new TypeError("Failed to fetch")),
+    );
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    await acceptPurchaseDraft(client, COMPANY, body);
+    await flush();
+
+    const order: string[] = [];
+    let confirmDone = false;
+    _setDraftLifecyclePort(
+      portWith({
+        find: async (co, b, id) => {
+          order.push(
+            confirmDone ? "find-after-confirm" : "find-before-confirm",
+          );
+          return fake.port.find(co, b, id);
+        },
+        claim: fake.port.claim.bind(fake.port),
+        releaseClaim: fake.port.releaseClaim.bind(fake.port),
+        recordAccepted: async (co, id, v) => {
+          // A real network hop, so a racing read would win if it were racing.
+          await new Promise((r) => setTimeout(r, 5));
+          await fake.port.recordAccepted(co, id, v);
+          confirmDone = true;
+        },
+      }),
+    );
+    _resetAcceptedDraftCache();
+    _resetDurableAcceptRecords();
+    _resetLedgerCache();
+
+    await acceptPurchaseDraft(client, COMPANY, body).catch(() => null);
+
+    expect(order).toContain("find-after-confirm");
+    expect(order).not.toContain("find-before-confirm");
+  });
+
+  it("an empty queue costs the accept path NO port calls at all", async () => {
+    // The normal case is an empty queue, so the guard must be one storage read
+    // and not a network round trip on every accept.
+    const client = createMockClient({ seed: false });
+    const body = await numberlessDraftBody(client);
+    const fake = fakeInsightd([body]);
+    const recordAccepted = vi.fn(fake.port.recordAccepted.bind(fake.port));
+    _setDraftLifecyclePort(
+      portWith({
+        find: fake.port.find.bind(fake.port),
+        claim: fake.port.claim.bind(fake.port),
+        releaseClaim: fake.port.releaseClaim.bind(fake.port),
+        recordAccepted,
+      }),
+    );
+
+    expect(pendingDraftConfirmCount(COMPANY)).toBe(0);
+    await acceptPurchaseDraft(client, COMPANY, body);
+    await flush();
+
+    // Exactly one — the confirm for THIS accept, not a retry pass on top of it.
+    expect(recordAccepted).toHaveBeenCalledTimes(1);
+  });
+
+  it("scopes the drain to the company asked for", async () => {
+    const client = createMockClient({ seed: false });
+    const body = await numberlessDraftBody(client);
+    const fake = fakeInsightd([body]);
+    _setDraftLifecyclePort(
+      confirmFails(fake.port, new TypeError("Failed to fetch")),
+    );
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    await acceptPurchaseDraft(client, COMPANY, body);
+    await flush();
+
+    _setDraftLifecyclePort(fake.port);
+    // Another company's drain must not touch this one's debt: an accept in
+    // company B may not silently confirm a draft in company A.
+    expect(await drainPendingDraftConfirms("co-OTHER")).toBe(0);
+    expect(pendingDraftConfirmCount(COMPANY)).toBe(1);
+
+    expect(await drainPendingDraftConfirms(COMPANY)).toBe(0);
+    expect(pendingDraftConfirmCount(COMPANY)).toBe(0);
+  });
+
+  it("⛔ THE DOOR IS SHUT: a DIFFERENT browser with a lost confirm gets ONE voucher", async () => {
+    // ⚠️ THIS TEST REPLACES A PIN, AND THE PIN IS WHY IT IS WORDED THIS WAY. Until
+    // §7.3 B's server half landed, this exact scenario asserted TWO vouchers and
+    // said so in a comment telling the next session to delete it when it went red.
+    // It went red. What follows is its inverse, and it asserts the SAME scenario —
+    // nothing about the setup is softened.
+    const client = createMockClient({ seed: false });
+    const body = await numberlessDraftBody(client);
+    const fake = fakeInsightd([body]);
+    _setDraftLifecyclePort(
+      confirmFails(fake.port, new TypeError("Failed to fetch")),
+    );
+    const spy = vi.spyOn(client, "postPurchaseVoucher");
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const first = await acceptPurchaseDraft(client, COMPANY, body);
+    await flush();
+    // The confirm really was lost: insightd still calls this bill `ready`.
+    expect(pendingDraftConfirmCount(COMPANY)).toBe(1);
+    expect(fake.rows[0]!.status).not.toBe("accepted");
+
+    // A DIFFERENT MACHINE: no session memo, no durable memo, NO QUEUE, and a
+    // lapsed claim. Every layer that lives in a browser is gone, and the one that
+    // does not — the day book — has nothing to match on, because this draft's
+    // supplier invoice number was never read by the OCR.
+    _resetAcceptedDraftCache();
+    _resetDurableAcceptRecords();
+    _resetPendingDraftConfirms();
+    _resetLedgerCache();
+    fake.lapseClaims();
+    _setDraftLifecyclePort(fake.port); // insightd reachable from here, but `ready`
+
+    const err = await acceptPurchaseDraft(client, COMPANY, body).then(
+      () => null,
+      (e: unknown) => e,
+    );
+
+    // ⛔ THE REFUSAL IS TERMINAL AND IT NAMES THE VOUCHER. An operator told only
+    // "refused" cannot tell a blocked duplicate from a bill that went missing.
+    expect(err).toBeInstanceOf(DraftAlreadyAcceptedError);
+    expect((err as DraftAlreadyAcceptedError).voucherNo).toBe(first.voucher_no);
+    expect((err as DraftAlreadyAcceptedError).message).toContain(
+      "NOTHING was posted",
+    );
+
+    // ⛔⛔ THE ASSERTION THAT IS THE FEATURE. Note that the second browser DID
+    // attempt the POST — the guard is not "the client declined to try", which is
+    // what all four client-side layers amount to and what a second machine walks
+    // straight through. It is that the SERVER refused inside the voucher's own
+    // transaction, so the attempt left no voucher behind.
+    expect(spy).toHaveBeenCalledTimes(2);
+    const day = await client.getDayBook(COMPANY, {
+      from: "1970-01-01",
+      to: "2999-12-31",
+    });
+    expect(
+      day.entries.filter((e) => e.class.toLowerCase() === "purchase"),
+    ).toHaveLength(1);
+
+    // ⛔ AND THE BILL IS NOT WEDGED. The refusal taught insightd what the first
+    // browser never managed to, so the inbox stops offering a bill that can no
+    // longer be posted — otherwise closing the duplicate door would just move the
+    // defect to "this row never goes away".
+    await flush();
+    expect(fake.rows[0]!.status).toBe("accepted");
+    expect(fake.rows[0]!.accepted_voucher_no).toBe(first.voucher_no);
+    expect(pendingDraftConfirmCount(COMPANY)).toBe(0);
   });
 });

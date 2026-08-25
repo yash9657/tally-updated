@@ -27,6 +27,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/shopspring/decimal"
 
 	"github.com/khata/cored/internal/compliance"
@@ -132,6 +133,53 @@ func gstBearing(c Class) bool {
 // guard an alter/delete on an unknown id would silently mint version 1 and
 // create a phantom voucher; the HTTP layer maps it to a 404.
 var ErrVoucherNotFound = errors.New("ledger: voucher not found")
+
+// DraftAlreadyAcceptedError is returned by PostVoucher when the SourceDraftID on
+// the input names an insightd draft that has already produced a voucher in this
+// company (migration 0077's ux_voucher_head_source_draft_id).
+//
+// ⛔ NOTHING WAS WRITTEN. The whole point of enforcing this inside the post
+// transaction is that the loser's voucher, its numbering advance, its postings,
+// its bill references and its tax rows are all rolled back together. The HTTP
+// layer maps it to 409 and the message must not read like a partial success.
+//
+// ⚠️ VoucherNo AND VoucherID NAME THE WINNER, and they are read AFTER the
+// rollback, in a separate transaction, so they can legitimately be empty/Nil if
+// that read fails. A caller must treat them as an aid to the operator, never as
+// the fact that the refusal rests on — the refusal rests on the index.
+type DraftAlreadyAcceptedError struct {
+	DraftID   string
+	VoucherID uuid.UUID
+	VoucherNo string
+}
+
+func (e *DraftAlreadyAcceptedError) Error() string {
+	switch {
+	case e.VoucherNo != "":
+		return fmt.Sprintf(
+			"ledger: draft %s was already accepted as voucher %s; nothing was posted",
+			e.DraftID, e.VoucherNo)
+	case e.VoucherID != uuid.Nil:
+		return fmt.Sprintf(
+			"ledger: draft %s was already accepted as voucher %s; nothing was posted",
+			e.DraftID, e.VoucherID)
+	default:
+		return fmt.Sprintf(
+			"ledger: draft %s was already accepted; nothing was posted", e.DraftID)
+	}
+}
+
+// errDraftAlreadyAccepted is the in-transaction marker post() raises the moment
+// the unique index refuses the head upsert. It never leaves the package: post()
+// swaps it for a *DraftAlreadyAcceptedError once the rollback has happened and
+// the winner can be read.
+var errDraftAlreadyAccepted = errors.New("ledger: source draft already accepted")
+
+// draftAcceptanceIndex is migration 0077's partial unique index. Matched BY NAME
+// rather than by "any 23505 on voucher_head": the head also carries 0008's
+// ux_voucher_head_source_guid and its own primary key, and reporting a re-imported
+// Tally voucher as a duplicated AI bill would send the operator to the wrong door.
+const draftAcceptanceIndex = "ux_voucher_head_source_draft_id"
 
 // RefType is a bill-wise allocation reference type (RESEARCH sec 5).
 type RefType string
@@ -345,6 +393,26 @@ type VoucherInput struct {
 	// from, recorded on voucher_head for idempotent re-import. Empty for natively
 	// created vouchers (those never participate in the (company, guid) dedupe).
 	SourceGUID string
+	// SourceDraftID is the insightd PurchaseVoucherDraft this voucher is being
+	// ACCEPTED from (migration 0077), recorded on voucher_head under a PARTIAL
+	// UNIQUE INDEX over (company_id, source_draft_id). Empty for every voucher
+	// nobody accepted from a draft, which is the overwhelming majority and which
+	// the partial index therefore never constrains.
+	//
+	// ⛔⛔ IT IS THE ONLY THING THAT MAKES "ACCEPT THIS AI BILL ONCE" A GUARANTEE
+	// RATHER THAN A CLAIM, AND THE REASON IS THAT IT COMMITS WITH THE VOUCHER.
+	// Accepting a draft is two writes to two services — cored posts the purchase,
+	// the browser then tells insightd the draft is `accepted`. When the second one
+	// is lost, insightd keeps offering the bill as `ready`, and every guard that
+	// READS a status (the browser's memo, its retry queue, a day-book lookup, a
+	// claim lease) is a check-then-act that a second machine can walk straight
+	// through. Naming the draft HERE moves the decision into the same transaction
+	// as the money: the loser trips the unique index, the transaction rolls back,
+	// and it has written no voucher, no numbering advance and no tax row.
+	//
+	// A conflict is reported as *DraftAlreadyAcceptedError, which names the
+	// voucher the draft DID produce — see post().
+	SourceDraftID string
 }
 
 // SalesVoucherInput describes an F8 Sales voucher to post. Retained for
@@ -1378,6 +1446,17 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 	var tcsRes compliance.TCSResult
 	var tcsTaxYear int
 
+	// ⛔ PROVENANCE IS STATED ONCE, AT CREATION. An ALTER or a DELETE that carried
+	// a draft id would REPOINT an existing voucher at a fresh draft (EXCLUDED wins
+	// over COALESCE when it is non-null), which would consume that draft — marking
+	// the bill posted — without a single line of it reaching the books. The client
+	// never sends one on those paths; this makes it impossible rather than merely
+	// unused, and it is why the COALESCE in the head upsert below is what preserves
+	// the id across later versions.
+	if op != OpCreate {
+		in.SourceDraftID = ""
+	}
+
 	var result PostResult
 	err = s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		// Server-side, atomic SupplierStateCode default (WS3): when a Sales/Purchase
@@ -2307,10 +2386,19 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 
 		// Move the mutable head pointer to this new version. ledger_balance now
 		// reflects exactly the current version of every voucher.
+		//
+		// ⛔ source_draft_id RIDES THIS STATEMENT ON PURPOSE — see 0077. It is the
+		// ONLY line in this transaction that can refuse a duplicated AI bill accept,
+		// and it can only do so from inside the transaction: the loser must not have
+		// posted a voucher, advanced the numbering counter or written a tax row.
+		// COALESCE, exactly like source_guid, so an ALTER that does not restate the
+		// draft id does not erase which draft the voucher came from — and so an ALTER
+		// that DOES restate it writes the row's own value back and cannot collide
+		// with itself.
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO voucher_head
-			   (company_id, voucher_id, current_version_id, version_no, op, is_deleted, voucher_date, source_guid)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			   (company_id, voucher_id, current_version_id, version_no, op, is_deleted, voucher_date, source_guid, source_draft_id)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 			 ON CONFLICT (company_id, voucher_id) DO UPDATE
 			   SET current_version_id = EXCLUDED.current_version_id,
 			       version_no         = EXCLUDED.version_no,
@@ -2318,10 +2406,16 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 			       is_deleted         = EXCLUDED.is_deleted,
 			       voucher_date       = EXCLUDED.voucher_date,
 			       source_guid        = COALESCE(EXCLUDED.source_guid, voucher_head.source_guid),
+			       source_draft_id    = COALESCE(EXCLUDED.source_draft_id, voucher_head.source_draft_id),
 			       updated_at         = now()`,
 			companyID, voucherID, versionID, versionNo, string(op), op == OpDelete, vDate,
-			nullIfEmpty(in.SourceGUID),
+			nullIfEmpty(in.SourceGUID), nullIfEmpty(in.SourceDraftID),
 		); err != nil {
+			if isDraftAcceptanceConflict(err) {
+				// Raised as a bare marker: the winner cannot be READ from this
+				// transaction (it is about to roll back), so post() reads it after.
+				return errDraftAlreadyAccepted
+			}
 			return fmt.Errorf("ledger: upsert voucher_head: %w", err)
 		}
 
@@ -2363,9 +2457,78 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 		return nil
 	})
 	if err != nil {
+		// THE DUPLICATED AI BILL. The transaction has rolled back by the time we
+		// get here, so the winner is read in its own transaction and folded into
+		// the error the operator sees. A failure to read it degrades the MESSAGE
+		// and never the REFUSAL — see DraftAlreadyAcceptedError.
+		if errors.Is(err, errDraftAlreadyAccepted) {
+			return PostResult{}, s.draftConflictError(ctx, in.SourceDraftID)
+		}
 		return PostResult{}, err
 	}
 	return result, nil
+}
+
+// isDraftAcceptanceConflict reports whether err is the unique violation raised by
+// migration 0077's partial index — and NOT any other 23505 the head can raise.
+// See draftAcceptanceIndex for why the name is matched rather than the code alone.
+func isDraftAcceptanceConflict(err error) bool {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return false
+	}
+	return pgErr.Code == "23505" && pgErr.ConstraintName == draftAcceptanceIndex
+}
+
+// draftConflictError names the voucher a draft already produced, for the refusal
+// message. It NEVER returns nil: the refusal is owed to the caller whether or not
+// the winner could be read.
+func (s *Service) draftConflictError(ctx context.Context, draftID string) error {
+	e := &DraftAlreadyAcceptedError{DraftID: draftID}
+	id, no, found, lookupErr := s.VoucherBySourceDraftID(ctx, draftID)
+	if lookupErr == nil && found {
+		e.VoucherID, e.VoucherNo = id, no
+	}
+	return e
+}
+
+// VoucherBySourceDraftID returns the logical voucher a given insightd draft was
+// accepted into: (id, voucherNo, true, nil) when one exists, (uuid.Nil, "", false,
+// nil) when none does. The display number comes from the head's CURRENT version,
+// so an altered voucher reports the number it carries now.
+//
+// ⚠️ A TOMBSTONED VOUCHER STILL ANSWERS TRUE. Acceptance is terminal (0077): the
+// draft is spent even if the voucher it produced was later deleted, and a caller
+// asking "was this draft accepted" must not be told no because the answer would
+// invite the inbox to offer the bill again.
+func (s *Service) VoucherBySourceDraftID(ctx context.Context, draftID string) (uuid.UUID, string, bool, error) {
+	if draftID == "" {
+		return uuid.Nil, "", false, nil
+	}
+	companyID, ok := db.CompanyFromContext(ctx)
+	if !ok {
+		return uuid.Nil, "", false, db.ErrNoCompany
+	}
+	var (
+		voucherID uuid.UUID
+		voucherNo string
+	)
+	err := s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT h.voucher_id, COALESCE(v.voucher_no, '')
+			   FROM voucher_head h
+			   LEFT JOIN voucher_version v
+			     ON v.company_id = h.company_id AND v.id = h.current_version_id
+			  WHERE h.company_id = $1 AND h.source_draft_id = $2`,
+			companyID, draftID).Scan(&voucherID, &voucherNo)
+	})
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return uuid.Nil, "", false, nil
+	case err != nil:
+		return uuid.Nil, "", false, fmt.Errorf("ledger: lookup source_draft_id: %w", err)
+	}
+	return voucherID, voucherNo, true, nil
 }
 
 // deriveGST runs the PURE compliance engine over the params, defaulting the

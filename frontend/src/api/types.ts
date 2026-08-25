@@ -942,6 +942,33 @@ export interface VoucherRequest {
    * the seller. See {@link TCSRequest}.
    */
   tcs?: TCSRequest | null;
+  /**
+   * THE insightd BILL DRAFT THIS POST IS ACCEPTING (§7.3 B, migration 0077).
+   * Unset on every hand-keyed voucher, which is nearly all of them.
+   *
+   * ⛔⛔ IT IS WHAT MAKES "ACCEPT THIS AI BILL ONCE" A GUARANTEE INSTEAD OF A
+   * CLAIM, AND THE REASON IS THAT THE SERVER ENFORCES IT IN THE VOUCHER'S OWN
+   * TRANSACTION. Accepting a draft is two writes to two services: this POST, and
+   * then telling insightd the draft is `accepted`. When that second write is lost
+   * — tab closed, network dropped, laptop asleep — insightd keeps offering the
+   * bill as `ready`. Every guard that READS a status (the session memo, the
+   * durable memo, the localStorage retry queue, the day-book lookup, the claim
+   * lease) is a check-then-act, and all of them live in ONE BROWSER: a second
+   * machine inside that window walked straight through, which is why
+   * draftAccept.test.ts used to pin a test asserting TWO real vouchers.
+   *
+   * Sending it here puts the decision under a unique index on
+   * (company_id, source_draft_id): the loser rolls back with no voucher, no
+   * numbering advance and no input tax, and gets a 409 whose `detail.code` is
+   * `draft_already_accepted` — the SAME code and fields insightd's own claim
+   * route mints, so {@link acceptPurchaseDraft} translates one refusal shape and
+   * not two.
+   *
+   * ⚠️ IT IS AN OPAQUE insightd IDENTIFIER, NOT A UUID (its corpora use ids like
+   * "CO-DEMO/bill-3"). The only property the server needs is that two accepts of
+   * one draft spell it identically.
+   */
+  draft_id?: string;
 }
 
 /**

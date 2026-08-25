@@ -7,6 +7,109 @@ what was wrong; this file records what a person will notice.
 
 ---
 
+## A link with a broken company id no longer opens the wrong company
+
+**Applies to:** opening the app with `?company=` in the address bar.
+**Register:** §7.3 C.
+
+### What changes
+
+A `?company=` that is not a valid company id — a typo, a template that was never filled
+in, an id copied out of a demo — used to be **thrown away without a word**, and the app
+then opened whichever company this browser had open last. Real books, fully populated,
+nothing on screen wrong. Every report and every voucher screen answered normally about a
+company nobody had asked for.
+
+It now refuses: no company is opened, none is created, and the notice names the value it
+ignored and says explicitly that your stored company was **not** silently substituted.
+One button drops the bad `?company=` and carries on.
+
+⛔ **If you have ever keyed a voucher after following a `?company=` link, check which
+company it landed in** — particularly if the link came from a chat message, a spreadsheet
+or a template. The address bar showed the id you asked for the whole time.
+
+⚠️ A `?company=` carrying **nothing at all** is unchanged: it means "no preference", and
+the app opens your stored company as before.
+
+---
+
+## A refused company now tells you a reload will not help, and offers a way out
+
+**Applies to:** opening the app with a `?company=` the server refuses (HTTP 403).
+**Register:** §7.3 D.
+
+### What changes
+
+Two things were wrong with the old notice, and both mattered.
+
+**It told you the wrong reason.** It said you are not a member of that company. The server
+cannot actually tell you that: it checks membership before it checks existence — on
+purpose, so a stranger cannot discover which companies exist — so **a company that does
+not exist looks exactly like someone else's books.** A mistyped or deleted id therefore
+read as "wait for your invite", and the invite was never coming.
+
+**And there was no way out.** The id stays in the address bar, so every reload asked the
+same dead question and got the same refusal, for ever. F3 (Select Company) does not help:
+it opens a company you are already a member of, it does not remove the id that is
+refusing.
+
+The notice now states both possibilities, says plainly that reloading cannot change the
+answer, and carries a control that drops `?company=` and continues — without a page
+reload, and without Back walking you into the refusing URL.
+
+⚠️ **The refusal itself is unchanged and is not being softened.** Nothing is opened and
+nothing is created; you are never quietly made the Owner of a new empty company.
+
+---
+
+## One supplier bill can now only ever become one voucher — from any machine
+
+**Applies to:** accepting a supplier bill from the Bill Inbox (Ctrl+A on the F9 screen).
+**Register:** §7.3 B — **now closed, on both halves.**
+
+### What changes
+
+Accepting a bill does three things in order: reserve the bill, post the voucher, then
+record that it was posted. **The third step used to be sent and forgotten.** If it failed
+after the voucher was already on the books — a dropped connection, a closed tab, a
+restarted service — you were told "Saved" (correctly, the voucher exists) and the bill
+stayed in the Bill Inbox looking un-posted, with nothing anywhere that would ever go back
+and finish the job. Once the reservation expired the bill could be posted a second time.
+
+That confirmation is now **written down before it is attempted** and retried on your next
+accept and every time you open the Bill Inbox, until the server acknowledges it. A bill
+that was posted stops being offered.
+
+⛔ **AND THE SERVER NOW RECORDS IT TOO, WHICH IS WHAT ACTUALLY CLOSES THIS.** The note
+above is kept in **this browser**, so only this browser can finish the job — which used to
+mean that a colleague on another machine, inside that window, could post the same bill a
+second time. Their only protection was a check against the day book, and that check cannot
+find a bill whose invoice number was never read off the scan.
+
+**The bill it came from is now recorded on the voucher itself, as part of the same save.**
+So a second attempt — from any machine, at any time, with or without the note above — does
+not post. It is refused, and the refusal **names the voucher your bill is already on**, so
+you can go and look at it. Nothing is written by the refused attempt: no voucher, no
+voucher number, no input tax credit.
+
+⚠️ **A refused bill does not sit in the inbox for ever.** The machine that was refused
+tells the inbox what happened, so the bill stops being offered there too.
+
+⚠️ **This applies to bills accepted from the Bill Inbox and to nothing else.** A purchase
+you key yourself is unaffected in every way — there is no bill draft behind it, so there is
+nothing to record and nothing that can refuse it.
+
+⚠️ **Deleting the voucher does not put the bill back in the inbox.** Accepting a bill is a
+once-only act: if you delete a purchase that came from a scan and want it back, key it, or
+upload the bill again so it gets its own draft. This is deliberate — a deleted voucher that
+silently re-offered its bill is how one supplier invoice becomes two.
+
+⚠️ **Nothing here can turn a successful accept into an error.** Everything above happens
+after the voucher exists, and an operator told "Error" about a bill that posted retries
+and posts it twice — which is the defect, arriving through the error path.
+
+---
+
 ## Tally XML import now reads a file TallyPrime actually wrote
 
 **Applies to:** migrating an existing company in — Gateway of Tally > Export > Masters

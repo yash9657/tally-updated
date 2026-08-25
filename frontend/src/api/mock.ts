@@ -1073,6 +1073,21 @@ interface MockCompany {
   }[];
   vouchers: DayBookEntry[];
   /**
+   * WHICH VOUCHER EACH insightd DRAFT PRODUCED — the mock's stand-in for
+   * migration 0077's partial unique index on
+   * `voucher_head (company_id, source_draft_id)`.
+   *
+   * ⛔ IT IS NOT A CONVENIENCE. cored enforces once-only accept inside the
+   * voucher's OWN transaction, and that guarantee is the entire point of §7.3 B:
+   * a second machine, with none of this browser's memos or queues, must be unable
+   * to post the same supplier bill twice. A mock that let the second POST through
+   * would make every test of that guarantee green for the wrong reason — the
+   * `false negative` this whole row exists to end. Kept a Map rather than derived
+   * from `vouchers` because acceptance is TERMINAL ACROSS A DELETE, exactly as it
+   * is on the server.
+   */
+  acceptedDrafts: Map<string, { voucher_id: string; voucher_no: string }>;
+  /**
    * Bank reconciliations, keyed `${ledgerID}:${voucherID}:${legNo}`.
    *
    * OUTSIDE the voucher, exactly as migration 0045 puts it outside the hash
@@ -2278,6 +2293,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         stockItems: [],
         batches: [],
         vouchers: [],
+        acceptedDrafts: new Map(),
         bankDates: new Map(),
         deductorStatuses: new Map(),
         bankStatements: new Map(),
@@ -2380,6 +2396,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       ],
       batches: [],
       vouchers: [],
+      acceptedDrafts: new Map(),
       bankDates: new Map(),
       deductorStatuses: new Map(),
       bankStatements: new Map(),
@@ -3451,6 +3468,38 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     req: VoucherRequest,
   ): VoucherResponse {
     const c = ensure(companyID);
+    // ⛔⛔ §7.3 B — THE ONCE-ONLY ACCEPT, AND IT IS FIRST FOR THE REASON THE
+    // SERVER'S IS INSIDE THE TRANSACTION: the loser must write NOTHING. Not a
+    // voucher, not a number, not a day-book row. A mock that refused after
+    // pushing the entry would still be "correct" about the status code and would
+    // hide the only failure that matters.
+    //
+    // Mirrors migration 0077 exactly: keyed on the draft id alone (never on the
+    // body — a second machine can send a different amount for the same bill), and
+    // TERMINAL, so deleting the voucher does not put the bill back in the inbox.
+    const draftID = req.draft_id ?? "";
+    if (draftID !== "") {
+      const won = c.acceptedDrafts.get(draftID);
+      if (won) {
+        // The refusal shape is insightd's, because that is the one shape
+        // draftAccept.ts parses — `detail.code` picks the sentence, and
+        // `accepted_voucher_no` is the fact the operator needs. `error` is carried
+        // too because http.ts reads THAT key and nothing else to build
+        // ApiError.message. Both, exactly as cored's writeDraftAlreadyAccepted does.
+        const message =
+          `ledger: draft ${draftID} was already accepted as voucher ` +
+          `${won.voucher_no || won.voucher_id}; nothing was posted`;
+        throw new ApiError(409, message, {
+          error: message,
+          detail: {
+            code: "draft_already_accepted",
+            draft_id: draftID,
+            accepted_voucher_no: won.voucher_no,
+            accepted_voucher_id: won.voucher_id,
+          },
+        });
+      }
+    }
     const voucherID = id("voucher");
     // STOCK-ONLY CLASSES first: they are refused a money side outright, and a
     // Physical Stock has its correction DERIVED here (against the books as they
@@ -3535,6 +3584,16 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       tds: tdsView(req.tds),
       tcs: tcsView(req.tcs),
     });
+    // The draft is SPENT, and only now — after every write this call makes has
+    // landed. Recorded on CREATE only: an alter or a delete restating a draft id
+    // would repoint provenance and consume a draft whose bill never reached the
+    // books, which is why the server strips it for any op but CREATE.
+    if (draftID !== "") {
+      c.acceptedDrafts.set(draftID, {
+        voucher_id: voucherID,
+        voucher_no: voucherNo,
+      });
+    }
     return {
       voucher_id: voucherID,
       voucher_version_id: id("vv"),

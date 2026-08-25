@@ -20,8 +20,9 @@
  *     added, A BROWSER RE-DRIVE STILL PRODUCED TWO REAL VOUCHERS from one bill,
  *     because a draft whose invoice number the OCR never read gives the day book
  *     nothing to match on and a page reload empties the memo. The guard is now
- *     FOUR layers ending in a TERMINAL SERVER-SIDE DRAFT STATE — insightd's
- *     `status: "accepted"` — so the truth is no longer only in the client. See
+ *     SIX layers ending in a UNIQUE INDEX INSIDE THE VOUCHER'S OWN TRANSACTION
+ *     (`voucher_head.source_draft_id`, migration 0077), so the truth is not in the
+ *     client at all and there is no window between checking and writing. See
  *     {@link acceptPurchaseDraft} for the layers and what each one alone misses.
  *  2. THE BILL-WISE REFERENCE THE SCREEN CERTIFIED WAS DROPPED. The panel renders
  *     "referenced in full (…)" for a bill-by-bill party and this converter emitted
@@ -308,7 +309,8 @@ export function applyDraftEdits(
   const taxable = normalizeMoney(edits.taxableValue ?? line.taxable_value);
   const rate = edits.gstRatePct ?? line.gst_rate_pct;
   const supplierState = g.supplier_state_code ?? "";
-  const placeOfSupply = edits.placeOfSupply ?? g.place_of_supply_state_code ?? "";
+  const placeOfSupply =
+    edits.placeOfSupply ?? g.place_of_supply_state_code ?? "";
 
   const split = deriveGstSplit(taxable, rate, supplierState, placeOfSupply);
 
@@ -339,7 +341,12 @@ export function applyDraftEdits(
         `edited GST needs the ${name} ledger id, which the draft does not carry`,
       );
     }
-    taxPostings.push({ ledger_id: ledgerId, ledger_name: name, dr_cr: "D", amount });
+    taxPostings.push({
+      ledger_id: ledgerId,
+      ledger_name: name,
+      dr_cr: "D",
+      amount,
+    });
   };
   if (split.intra) {
     pushTax(split.cgst, g.cgst_ledger_id, "Input CGST");
@@ -503,7 +510,19 @@ export async function resolveDraftLedgers(
  * so the loser is refused before it writes anything at all. See {@link postDraftBody}
  * step 4 and {@link claimDraftForPost}.
  *
- * So the guard is now FIVE layers, ordered cheapest-and-most-local first. None of
+ * ⛔⛔ AND THE FIFTH STILL LEFT A HOLE, WHICH IS WHY THERE IS NOW A SIXTH AND WHY IT
+ * IS THE ONLY ONE THAT IS NOT IN A BROWSER OR ON A LEASE. Accepting a draft is TWO
+ * writes to TWO services: the voucher POST here, and then insightd being told the
+ * draft is `accepted`. When that second write is lost — tab closed, network dropped,
+ * laptop asleep — insightd goes on offering the bill as `ready`. The retry queue that
+ * covers it is `localStorage`, so ONLY the machine that posted can drive it; once the
+ * claim's lease lapses, a DIFFERENT machine sees `ready` from layer 4, nothing from
+ * layers 1 and 3, and nothing from layer 2 for a bill whose invoice number the OCR
+ * never read. It posts. That case was PINNED by a test asserting two vouchers until
+ * §7.3 B's server half landed. Layer 6 moves the decision into the voucher's own
+ * transaction, where no client can be between the check and the act.
+ *
+ * So the guard is now SIX layers, ordered cheapest-and-most-local first. None of
  * them may be removed: each covers a case the others cannot see.
  *
  *   1. {@link guardAcceptOnce}'s per-(company, draft) SESSION memo. Also
@@ -534,11 +553,23 @@ export async function resolveDraftLedgers(
  *      on a write that has already happened. Its cost is that a claim can outlive the
  *      attempt that took it, which is why a failed post releases it immediately and
  *      why the lease expires — see {@link releaseClaimAfterFailure}.
+ *   6. ⛔⛔ THE DRAFT ID ON THE VOUCHER ITSELF (§7.3 B, migration 0077). The POST
+ *      carries `draft_id`, and cored writes it to `voucher_head.source_draft_id`
+ *      under a UNIQUE INDEX, IN THE SAME TRANSACTION AS THE VOUCHER. This is the
+ *      only layer that is neither a question nor a lease: there is no window
+ *      between deciding and writing, because they are one commit. A second machine
+ *      with no memo, no queue and a lapsed claim gets a 409 and posts nothing — not
+ *      a voucher, not a voucher number, not an input tax credit — and is told which
+ *      voucher its bill is already on. Layers 1–5 are now the CHEAP path (they
+ *      refuse without a round trip, and they cover the draft insightd cannot
+ *      identify); this one is the guarantee.
  *
- * ⚠️ cored itself still does not enforce unique purchase voucher numbers
+ * ⚠️ cored still does not enforce unique purchase voucher NUMBERS
  * (`INSERT INTO voucher_version` has no such constraint), and a purchase number is
- * the SUPPLIER's reference, so it could not be globally unique anyway. Nothing
- * here can be delegated to a database constraint.
+ * the SUPPLIER's reference, so it could not be globally unique anyway. ⛔ An earlier
+ * version of this paragraph concluded "nothing here can be delegated to a database
+ * constraint", and that was the wrong lesson drawn from a true fact: the DOCUMENT
+ * NUMBER cannot be a key, but the DRAFT can, and layer 6 is exactly that constraint.
  *
  * `opts.draftId` is the authoritative identity when the caller has it (the
  * `PurchaseVoucherDraft.draft_id` it fetched) and should be passed; without it the
@@ -690,16 +721,88 @@ export function voucherAcceptFailure(
   cause: unknown,
   minted: readonly { id: string; name: string }[],
 ): VoucherAcceptFailedError {
-  const names = minted.map((m) => m.name).join(", ");
-  const one = minted.length === 1;
   return new VoucherAcceptFailedError(
-    `${cause instanceof Error ? cause.message : String(cause)} — this accept had already created ` +
-      `${minted.length} new ledger master${one ? "" : "s"} (${names}), which now ` +
-      `${one ? "has" : "have"} no voucher against ${one ? "it" : "them"}. ` +
-      `Retrying this accept REUSES ${one ? "it" : "them"} rather than creating more. ` +
-      `There is no route that deletes a ledger, so ${one ? "it" : "they"} cannot be undone automatically.`,
+    `${cause instanceof Error ? cause.message : String(cause)} — ${orphanedLedgerNote(minted)}`,
     cause,
     minted,
+  );
+}
+
+/**
+ * The orphan sentence ALONE, without a cause in front of it.
+ *
+ * ⚠️ SPLIT OUT FOR A THIRD CALLER, NOT FOR TIDINESS. A second accept refused by
+ * CORED is not a {@link VoucherAcceptFailedError} — it is terminal and it names a
+ * voucher — but the masters it minted on the way to that refusal are just as
+ * orphaned and just as undeletable. Writing the sentence again there is exactly
+ * the second copy {@link voucherAcceptFailure}'s own header warns about.
+ */
+function orphanedLedgerNote(
+  minted: readonly { id: string; name: string }[],
+): string {
+  const names = minted.map((m) => m.name).join(", ");
+  const one = minted.length === 1;
+  return (
+    `this accept had already created ` +
+    `${minted.length} new ledger master${one ? "" : "s"} (${names}), which now ` +
+    `${one ? "has" : "have"} no voucher against ${one ? "it" : "them"}. ` +
+    `Retrying this accept REUSES ${one ? "it" : "them"} rather than creating more. ` +
+    `There is no route that deletes a ledger, so ${one ? "it" : "they"} cannot be undone automatically.`
+  );
+}
+
+/**
+ * CORED refused the POST because this draft already produced a voucher (§7.3 B).
+ *
+ * ⛔ THIS IS THE ONE REFUSAL IN THE FLOW THAT NO CLIENT LAYER COULD HAVE RAISED,
+ * and it is the case the four client layers were built for and could not reach: a
+ * DIFFERENT machine, with no session memo, no durable memo, no pending-confirm
+ * queue and a lapsed claim, accepting a bill whose confirm to insightd was lost.
+ * Everything this browser knows says the bill is `ready`. The server knows better,
+ * because it wrote the answer in the same transaction as the voucher.
+ *
+ * ⛔⛔ AND IT TEACHES insightd, WHICH IS NOT A NICETY — IT IS WHAT KEEPS THE FIX
+ * FROM WEDGING THE BILL. The reason we are here is that insightd never learned the
+ * first accept landed, so it is still offering this bill in the inbox. Without
+ * this, closing the duplicate door would leave the operator with a bill that can
+ * never be posted (cored refuses) and never disappears (insightd still offers it)
+ * — the exact shape of the §7.3 D defect the last session closed. The confirm goes
+ * through the SAME durable queue every other confirm does, so if insightd is
+ * unreachable right now it is retried on the next accept or Bill Inbox open.
+ *
+ * ⚠️ THE REFUSAL DOES NOT DEPEND ON THAT SUCCEEDING. It is best-effort and never
+ * throws; the bill is refused either way, because the fact rests on cored's index
+ * and not on insightd's opinion.
+ */
+function draftAlreadyAcceptedOnTheServer(
+  companyID: string,
+  err: unknown,
+  draftId: string,
+  minted: readonly { id: string; name: string }[],
+): DraftAlreadyAcceptedError {
+  const voucherNo = conflictField(err, "accepted_voucher_no");
+  const voucherID = conflictField(err, "accepted_voucher_id");
+  const named = voucherNo || voucherID;
+  if (named) {
+    oweAndSendConfirm(
+      companyID,
+      draftId,
+      { id: voucherID, no: voucherNo },
+      `draftAccept: cored refused a second accept of draft ${draftId} because it is ` +
+        `already voucher ${named}, and telling insightd so did not land — so the Bill ` +
+        `Inbox may keep offering a bill that can no longer be posted. The confirm is ` +
+        `QUEUED and will be retried on the next accept or Bill Inbox open:`,
+    );
+  }
+  return new DraftAlreadyAcceptedError(
+    `This supplier bill is already on the books` +
+      `${named ? ` as voucher ${named}` : ""} — cored records which voucher a draft ` +
+      `produced in the SAME transaction that writes it, so this second accept was ` +
+      `refused before any voucher, voucher number or input tax credit could exist. ` +
+      `NOTHING was posted.` +
+      `${minted.length > 0 ? ` But ${orphanedLedgerNote(minted)}` : ""}`,
+    voucherNo,
+    voucherID,
   );
 }
 
@@ -832,7 +935,11 @@ function readDurableAccepts(): Record<string, DurableAcceptRecord> {
     const raw = store.getItem(DURABLE_ACCEPTS_KEY);
     if (!raw) return {};
     const parsed: unknown = JSON.parse(raw);
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    if (
+      parsed === null ||
+      typeof parsed !== "object" ||
+      Array.isArray(parsed)
+    ) {
       return {};
     }
     return parsed as Record<string, DurableAcceptRecord>;
@@ -897,6 +1004,263 @@ export function _resetDurableAcceptRecords(): void {
   }
 }
 
+// ---------------------------------------------------------------------------
+// §7.3 B — THE PENDING-CONFIRM QUEUE. THE SEVENTH DOOR ON THE DRAFT ACCEPT.
+//
+// ⛔ WHAT WENT WRONG, AND IT WAS REPRODUCED IN A BROWSER. The accept is ordered
+// CLAIM -> POST -> CONFIRM, and that reorder does close the race it was built for
+// (two browsers 13ms apart -> ONE voucher, the loser gets `claim 409`). But the
+// CONFIRM — `recordAccepted`, which moves insightd's draft to its TERMINAL
+// `accepted` state — was fire-and-forget with a `console.warn`. Browser A posted
+// purchase 6, its confirm was ABORTED AT THE NETWORK LAYER, and the operator was
+// told "Saved". After that:
+//
+//   - insightd's draft stayed `ready`, so LAYER 4 — the only layer that is not
+//     confined to one browser profile — had no record of the acceptance at all;
+//   - the inbox row kept offering the bill (no `accepted_voucher_no` to render);
+//   - and the CLAIM's TTL, which exists to stop a dead browser stranding a draft,
+//     became THE DUPLICATE'S TIMER: once the lease lapsed the bill was postable
+//     again by anyone.
+//
+// So the durable record of "this bill is on the books" was lost, and nothing was
+// ever going to go back for it. A `console.warn` is not a retry.
+//
+// ⛔ WHAT THIS QUEUE IS: THE CONFIRM WRITTEN DOWN BEFORE IT IS ATTEMPTED, so a
+// confirm that never lands is still OWED rather than forgotten. It is enqueued
+// BEFORE the call (a tab closed mid-flight is the exact reported failure, and a
+// record written after the response would not exist in that case), and it is
+// removed ONLY on an acknowledgement from insightd — a resolve, or a 409, which
+// means insightd already holds the record.
+//
+// ⚠️⚠️ WHAT IT DOES **NOT** CLOSE, AND NOBODY MAY READ THIS AS §7.3 B BEING GONE
+// WITHOUT READING THIS PARAGRAPH. localStorage is per-browser-profile, exactly as
+// layer 3's memo is, so the retry can only be driven by THE BROWSER THAT POSTED.
+// The window therefore shrinks from FOR EVER to "until that browser next accepts
+// a bill or opens the Bill Inbox" — a real change, because the layer that
+// protects OTHER machines is restored instead of staying lost — but during the
+// window a different browser is protected only by the day-book read (layer 2),
+// which cannot see a bill whose supplier invoice number the OCR never read. That
+// is the same hole that made the FIRST duplicate fix insufficient.
+//
+// ⛔ THE COMPLETE FIX IS STILL THE ONE §7.3 B NAMES: cored recording the
+// acceptance IN THE SAME TRANSACTION as the voucher, so the durable record cannot
+// outlive or predecease the posting it describes. That is a server change and a
+// route, and it is deliberately NOT in this diff.
+// ---------------------------------------------------------------------------
+
+/** The one localStorage key the queue owns. Versioned, like the memo's. */
+const PENDING_CONFIRMS_KEY = "tally.vouchers.pendingDraftConfirms.v1";
+
+/**
+ * How many owed confirms to keep. The queue is EMPTY in normal operation — an
+ * entry exists only between a successful post and insightd acknowledging it — so
+ * this cap is only reached when insightd has been failing for a long run of
+ * bills. Eviction is oldest-first and is announced loudly (see
+ * {@link rememberPendingConfirm}): dropping an owed confirm silently is the very
+ * failure this queue exists to end, so if it ever has to happen it says so.
+ */
+const PENDING_CONFIRMS_MAX = 200;
+
+interface PendingDraftConfirm {
+  companyID: string;
+  /** insightd's draft id — the address the acceptance is recorded against. */
+  draftId: string;
+  voucherID: string;
+  voucherNo: string;
+  /** ISO-8601, when the VOUCHER was posted (not when the retry last ran). */
+  at: string;
+  /** How many times the confirm has been attempted and failed. Diagnostics only. */
+  attempts: number;
+}
+
+function pendingConfirmKey(companyID: string, draftId: string): string {
+  return `${companyID}::${draftId}`;
+}
+
+/** The whole queue, or `{}` for absent / unreadable / malformed storage. */
+function readPendingConfirms(): Record<string, PendingDraftConfirm> {
+  const store = durableStore();
+  if (store === null) return {};
+  try {
+    const raw = store.getItem(PENDING_CONFIRMS_KEY);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      parsed === null ||
+      typeof parsed !== "object" ||
+      Array.isArray(parsed)
+    ) {
+      return {};
+    }
+    const out: Record<string, PendingDraftConfirm> = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      // A hand-edited or half-written entry is DROPPED rather than retried: a
+      // confirm this module cannot address (no company, no draft) is not
+      // something a retry could ever land.
+      if (v === null || typeof v !== "object") continue;
+      const r = v as Partial<PendingDraftConfirm>;
+      if (typeof r.companyID !== "string" || r.companyID === "") continue;
+      if (typeof r.draftId !== "string" || r.draftId === "") continue;
+      out[k] = {
+        companyID: r.companyID,
+        draftId: r.draftId,
+        voucherID: typeof r.voucherID === "string" ? r.voucherID : "",
+        voucherNo: typeof r.voucherNo === "string" ? r.voucherNo : "",
+        at: typeof r.at === "string" ? r.at : "",
+        attempts: typeof r.attempts === "number" ? r.attempts : 0,
+      };
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/** Never throws: the queue is best-effort storage, like the memo. */
+function writePendingConfirms(all: Record<string, PendingDraftConfirm>): void {
+  const store = durableStore();
+  if (store === null) return;
+  try {
+    store.setItem(PENDING_CONFIRMS_KEY, JSON.stringify(all));
+  } catch {
+    // Quota / private mode. See the memo's header: never break an accept because
+    // storage would not take a note.
+  }
+}
+
+/**
+ * Record that a confirm is OWED for a voucher that is already on the books.
+ *
+ * ⛔ CALLED BEFORE THE CONFIRM IS ATTEMPTED. The reported failure is a confirm
+ * aborted at the network layer with the operator already told "Saved"; a note
+ * written after the response would not exist in precisely that case.
+ */
+function rememberPendingConfirm(rec: PendingDraftConfirm): void {
+  const all = readPendingConfirms();
+  all[pendingConfirmKey(rec.companyID, rec.draftId)] = rec;
+  const keys = Object.keys(all);
+  if (keys.length > PENDING_CONFIRMS_MAX) {
+    // `at` is ISO-8601, so a lexical sort IS a time sort.
+    const evicted = keys
+      .sort((a, b) => (all[a]?.at ?? "").localeCompare(all[b]?.at ?? ""))
+      .slice(0, keys.length - PENDING_CONFIRMS_MAX);
+    for (const k of evicted) {
+      const e = all[k];
+      console.warn(
+        `draftAccept: DROPPING an owed acceptance confirm for insightd draft ` +
+          `${e?.draftId ?? k} (voucher ${e?.voucherNo || e?.voucherID || "?"}, ` +
+          `posted ${e?.at || "?"}) — ${keys.length} confirms are queued, over the ` +
+          `cap of ${PENDING_CONFIRMS_MAX}. That draft may still be offered as ` +
+          `ready in the Bill Inbox even though its voucher exists. insightd has ` +
+          `been unreachable for a long run of accepts; fix that first.`,
+      );
+      delete all[k];
+    }
+  }
+  writePendingConfirms(all);
+}
+
+/** insightd has acknowledged this confirm (or already held it): stop owing it. */
+function forgetPendingConfirm(companyID: string, draftId: string): void {
+  const all = readPendingConfirms();
+  const key = pendingConfirmKey(companyID, draftId);
+  if (!(key in all)) return;
+  delete all[key];
+  writePendingConfirms(all);
+}
+
+/** Bump the failure count, so a stuck confirm is legible rather than silent. */
+function noteConfirmAttempt(companyID: string, draftId: string): void {
+  const all = readPendingConfirms();
+  const key = pendingConfirmKey(companyID, draftId);
+  const rec = all[key];
+  if (rec === undefined) return;
+  all[key] = { ...rec, attempts: rec.attempts + 1 };
+  writePendingConfirms(all);
+}
+
+/**
+ * How many acceptance confirms this browser profile still owes, for one company
+ * or (with no argument) at all. A cheap single storage read, so callers on the
+ * hot path can ask before deciding to await a drain.
+ */
+export function pendingDraftConfirmCount(companyID?: string): number {
+  return Object.values(readPendingConfirms()).filter(
+    (r) => companyID === undefined || r.companyID === companyID,
+  ).length;
+}
+
+/** Test observer: the owed confirms, oldest first. */
+export function _pendingDraftConfirms(): PendingDraftConfirm[] {
+  return Object.values(readPendingConfirms()).sort((a, b) =>
+    a.at.localeCompare(b.at),
+  );
+}
+
+/** Test-only: empty the queue (models a wiped profile). */
+export function _resetPendingDraftConfirms(): void {
+  const store = durableStore();
+  if (store === null) return;
+  try {
+    store.removeItem(PENDING_CONFIRMS_KEY);
+  } catch {
+    /* unusable store; reads already return {} */
+  }
+}
+
+/**
+ * ⛔ ONE DRAIN AT A TIME, PROCESS-WIDE. Two overlapping drains would each read the
+ * queue, each POST the same confirm, and the second would get a 409 it then
+ * treats as success — harmless, but it also means the retry count and the warning
+ * text stop describing what happened. Serialising is cheaper than reasoning about
+ * it, and a caller that arrives mid-drain gets the in-flight promise rather than a
+ * no-op, so `await drain()` always means "the queue has been worked".
+ */
+let DRAIN_IN_FLIGHT: Promise<number> | null = null;
+
+/**
+ * Retry every acceptance confirm this browser still owes. NEVER THROWS and never
+ * rejects: it is called from the accept path and from a screen mount, and a
+ * failure to retry must not become a failure to post or a failure to render.
+ *
+ * Returns how many confirms are STILL owed afterwards, so a caller can log or
+ * surface it.
+ */
+export async function drainPendingDraftConfirms(
+  companyID?: string,
+): Promise<number> {
+  if (DRAIN_IN_FLIGHT !== null) return DRAIN_IN_FLIGHT;
+  const run = (async () => {
+    const owed = Object.values(readPendingConfirms()).filter(
+      (r) => companyID === undefined || r.companyID === companyID,
+    );
+    for (const rec of owed) {
+      try {
+        await draftLifecyclePort().recordAccepted(rec.companyID, rec.draftId, {
+          id: rec.voucherID,
+          no: rec.voucherNo,
+        });
+        forgetPendingConfirm(rec.companyID, rec.draftId);
+      } catch (err) {
+        // A 409 is an ACKNOWLEDGEMENT, not a failure: insightd already holds the
+        // record, which is the state this queue is trying to reach.
+        if (err instanceof ApiError && err.status === 409) {
+          forgetPendingConfirm(rec.companyID, rec.draftId);
+          continue;
+        }
+        noteConfirmAttempt(rec.companyID, rec.draftId);
+      }
+    }
+    return pendingDraftConfirmCount(companyID);
+  })();
+  DRAIN_IN_FLIGHT = run;
+  try {
+    return await run;
+  } finally {
+    DRAIN_IN_FLIGHT = null;
+  }
+}
+
 /**
  * Does a voucher number carry insightd's PERSISTENCE-boundary redaction tag?
  *
@@ -958,8 +1322,7 @@ function draftAcceptKey(
   if (draftId) return `${companyID}::draft::${draftId}`;
   const legs = body.postings
     .map(
-      (p) =>
-        `${p.ledger_id ?? `new:${p.ledger_name}`}|${p.dr_cr}|${p.amount}`,
+      (p) => `${p.ledger_id ?? `new:${p.ledger_name}`}|${p.dr_cr}|${p.amount}`,
     )
     .join(";");
   const lines = (body.gst?.lines ?? [])
@@ -1151,7 +1514,11 @@ export interface DraftLifecyclePort {
    * DUPLICATE. A draft left claimed after a failed post is a bill the operator can
    * neither post nor release; the TTL is only the backstop for a browser that died.
    */
-  releaseClaim(companyID: string, draftId: string, token: string): Promise<void>;
+  releaseClaim(
+    companyID: string,
+    draftId: string,
+    token: string,
+  ): Promise<void>;
   /** STEP 3 — record which cored voucher a draft became (also clears the claim). */
   recordAccepted(
     companyID: string,
@@ -1229,12 +1596,14 @@ function canonicalJson(value: unknown): string {
  * An ACCEPTED match wins over a ready one when several bodies are identical (the
  * same bill uploaded twice): the accepted one is the answer that stops a duplicate.
  */
-export function insightdDraftLifecycle(deps: {
-  /** Injected insightd reader (tests). Defaults to the env-configured client. */
-  insightd?: Pick<InsightdClient, "getDraft" | "listDrafts">;
-  /** Injected transport for the ONE write (tests). Defaults to insightd's base URL. */
-  http?: HttpClient;
-} = {}): DraftLifecyclePort {
+export function insightdDraftLifecycle(
+  deps: {
+    /** Injected insightd reader (tests). Defaults to the env-configured client. */
+    insightd?: Pick<InsightdClient, "getDraft" | "listDrafts">;
+    /** Injected transport for the ONE write (tests). Defaults to insightd's base URL. */
+    http?: HttpClient;
+  } = {},
+): DraftLifecyclePort {
   const insightd = deps.insightd ?? createInsightdClient();
   // ✅ THE DUPLICATED BASE-URL RESOLVER IS GONE (register row D49). It existed
   // because both readings of VITE_INSIGHTD_BASE_URL had to stay identical or the
@@ -1763,6 +2132,18 @@ async function postDraftBody(
   identity: VoucherDraftBody = body,
 ): Promise<VoucherResponse> {
   assertPostableDraft(body);
+  // ⛔ §7.3 B — SETTLE WHAT THIS BROWSER OWES BEFORE ANY LAYER READS. A confirm
+  // that never landed left insightd's draft `ready`, so LAYER 4 below would say
+  // "not accepted" about a bill that is already on the books and this accept would
+  // be allowed to post it a second time.
+  //
+  // ⚠️ AWAITED, AND ONLY WHEN SOMETHING IS OWED. Kicking the drain off un-awaited
+  // would leave layer 4's read racing it, which makes the guard probabilistic —
+  // the exact quality that made the first duplicate fix insufficient. The empty
+  // case, which is every normal accept, costs one localStorage read.
+  if (pendingDraftConfirmCount(companyID) > 0) {
+    await drainPendingDraftConfirms(companyID);
+  }
   await assertNotAlreadyOnTheBooks(client, companyID, identity);
   if (billIdentity(body) !== billIdentity(identity)) {
     // An edit moved the bill's identity. Both are worth asking about: the pristine
@@ -1772,7 +2153,11 @@ async function postDraftBody(
   }
   // LAYER 4 — the server's own record. Keyed on the PRISTINE draft for the same
   // reason as everything above: the document's identity is the draft.
-  const lifecycle = await draftAlreadyAcceptedInsightd(companyID, identity, opts);
+  const lifecycle = await draftAlreadyAcceptedInsightd(
+    companyID,
+    identity,
+    opts,
+  );
 
   // ⛔⛔ LAYER 5 — RESERVE THE DRAFT. THIS IS THE ONLY LINE IN THIS FUNCTION THAT CAN
   // STOP A CONCURRENT POSTER, AND ITS POSITION IS THE FIX. Everything above only READ;
@@ -1806,9 +2191,39 @@ async function postDraftBody(
       resolved,
       draftBillAllocations(resolved, refs),
     );
+    // ⛔⛔ LAYER 6 — NAME THE DRAFT ON THE VOUCHER ITSELF, AND IT IS THE ONLY ONE
+    // OF THE SIX THAT IS NOT A CHECK-THEN-ACT. Layers 1-4 READ a status and then
+    // decide; layer 5 reserves, which narrows the window but does not close it,
+    // and every one of them lives in THIS BROWSER or in a lease that lapses. cored
+    // enforces this one inside the voucher's OWN transaction (migration 0077's
+    // unique index on (company_id, source_draft_id)), so a second machine with no
+    // memo, no queue and no claim posts NOTHING — not a voucher, not a numbering
+    // advance, not an input tax credit — and is told which voucher its bill is
+    // already on. That is what retires the residue the four client layers left.
+    //
+    // ⚠️ Sent whenever we have an id AT ALL — the caller's, or the one layer 4's
+    // body match resolved. With neither, insightd does not know this draft and
+    // there is nothing for the server to key on either; the accept then rests on
+    // the client layers exactly as it did before, which is disclosed on
+    // postDraftBody's residual note.
+    if (claimDraftId !== null) req.draft_id = claimDraftId;
     try {
       res = await client.postPurchaseVoucher(companyID, req);
     } catch (err) {
+      // THE SERVER SAYS THIS BILL IS ALREADY ON THE BOOKS. Terminal, and it names
+      // the voucher — so it is translated rather than dressed up as a generic
+      // failed accept. See draftAlreadyAcceptedOnTheServer.
+      if (
+        claimDraftId !== null &&
+        conflictCode(err) === "draft_already_accepted"
+      ) {
+        throw draftAlreadyAcceptedOnTheServer(
+          companyID,
+          err,
+          claimDraftId,
+          minted,
+        );
+      }
       if (minted.length === 0) throw err;
       throw voucherAcceptFailure(err, minted);
     }
@@ -1863,28 +2278,76 @@ function recordAcceptance(
   // neither, insightd does not know of this draft and there is nothing to mark.
   const draftId = opts.draftId ?? lifecycle?.draftId;
   if (!draftId) return;
+  // ⛔ §7.3 B — OWE THE CONFIRM BEFORE ATTEMPTING IT. The reported failure is a
+  // confirm aborted at the network layer with the operator already told "Saved";
+  // a note written on the response would not exist in exactly that case, and the
+  // acceptance would be durably recorded NOWHERE outside this browser's memo.
+  // See the pending-confirm queue's header, including what it does not close.
+  oweAndSendConfirm(
+    companyID,
+    draftId,
+    { id: res.voucher_id, no: res.voucher_no },
+    `draftAccept: posted purchase ${res.voucher_no || res.voucher_id} but could not ` +
+      `mark insightd draft ${draftId} accepted, so the Bill Inbox may still offer it ` +
+      `as ready. The accept itself succeeded, and the confirm is now QUEUED and will ` +
+      `be retried on the next accept or Bill Inbox open FROM THIS BROWSER; until it ` +
+      `lands the duplicate guard falls back to its client-side layers:`,
+  );
+}
+
+/**
+ * Owe insightd a confirm, then attempt it. The ONE writer of the pending-confirm
+ * queue's happy path, called from BOTH places that learn a draft is spent:
+ *
+ *  1. {@link recordAcceptance}, after THIS browser posted the voucher, and
+ *  2. {@link postDraftBody}, when CORED refused a second accept — at which point
+ *     this browser has just learned, from the server, a fact insightd does not
+ *     know yet. See draftAlreadyAcceptedOnTheServer for why teaching it here is
+ *     not a nicety.
+ *
+ * ⛔ IT IS ONE FUNCTION AND NOT TWO COPIES, WHICH IS THIS MODULE'S OWN §1.3
+ * LESSON: `ensureLedger` was corrected in one caller and left broken in the next,
+ * and a browser found it. The queue's ordering rule — OWE IT BEFORE ATTEMPTING IT
+ * — is the part that must not drift, because the failure it exists for is a
+ * confirm aborted at the network layer, where a note written on the response
+ * would not exist at all.
+ *
+ * ⚠️ IT NEVER THROWS, IN EITHER SHAPE. A port implementation is free to be a
+ * plain function that throws rather than one that rejects (and
+ * `draftLifecyclePort()` itself constructs a client), and a synchronous throw
+ * escaping here would be reported to the operator as a failed accept — who would
+ * then retry and post the bill twice. That is the defect arriving through the
+ * error path, so both shapes are caught.
+ */
+function oweAndSendConfirm(
+  companyID: string,
+  draftId: string,
+  voucher: { id: string; no: string },
+  warning: string,
+): void {
+  rememberPendingConfirm({
+    companyID,
+    draftId,
+    voucherID: voucher.id,
+    voucherNo: voucher.no,
+    at: new Date().toISOString(),
+    attempts: 0,
+  });
+  const settled = () => forgetPendingConfirm(companyID, draftId);
   const report = (err: unknown) => {
-    if (err instanceof ApiError && err.status === 409) return; // already recorded
-    console.warn(
-      `draftAccept: posted purchase ${res.voucher_no || res.voucher_id} but could not ` +
-        `mark insightd draft ${draftId} accepted, so the Bill Inbox may still offer it ` +
-        `as ready. The accept itself succeeded; the duplicate guard falls back to its ` +
-        `client-side layers:`,
-      err,
-    );
+    // A 409 is an ACKNOWLEDGEMENT — insightd already holds the record — so the
+    // confirm is no longer owed.
+    if (err instanceof ApiError && err.status === 409) {
+      settled();
+      return;
+    }
+    noteConfirmAttempt(companyID, draftId);
+    console.warn(warning, err);
   };
-  // ⛔ THE try IS NOT DECORATION. A port implementation is free to be a plain
-  // function that throws rather than one that rejects (and `draftLifecyclePort()`
-  // itself constructs a client), and a synchronous throw here would escape past the
-  // successful POST above and be reported to the operator as a failed accept — who
-  // would then retry and post the bill twice. That is the defect arriving through
-  // the error path, so it is caught in BOTH shapes.
   try {
     void draftLifecyclePort()
-      .recordAccepted(companyID, draftId, {
-        id: res.voucher_id,
-        no: res.voucher_no,
-      })
+      .recordAccepted(companyID, draftId, voucher)
+      .then(settled)
       .catch(report);
   } catch (err) {
     report(err);
