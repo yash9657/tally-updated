@@ -1781,6 +1781,30 @@ export interface ImportTallyXMLResponse {
    */
   warnings: string[];
   posted: ImportedVoucher[];
+  /**
+   * THE GOODS — the number of stock MOVEMENTS the import wrote across every
+   * voucher, and the number of OPENING POSITIONS it wrote from STOCKITEM
+   * masters.
+   *
+   * ⛔ THESE ARE THE ONLY FIGURES IN THIS RESPONSE THAT CAN TELL AN OPERATOR
+   * WHETHER THEIR STOCK ARRIVED. Quantity is invisible in a trial balance, so an
+   * import that reads every stock line and drops it answers 200 with a report
+   * that looks complete — books that balance, and a Stock Summary with nothing
+   * in it. `stock_lines: 0` on a file full of invoices is the tell.
+   *
+   * ⚠️ `opening_positions: 0` alongside a non-zero `stock_lines` is a WARNING and
+   * not a clean result: the export carried no opening stock (a Day Book does
+   * not), so every position starts at nil and the first issue of older goods was
+   * either refused or consumed nothing at all.
+   */
+  stock_lines: number;
+  opening_positions: number;
+  /** The inventory masters CREATED (not merely referenced), sorted and unique. */
+  stock_items_ensured: string[];
+  units_ensured: string[];
+  godowns_ensured: string[];
+  /** "ITEM/BATCH", because a batch name is scoped to its item. */
+  batches_ensured: string[];
 }
 
 // ---------------------------------------------------------------------------

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
 
 	"github.com/khata/cored/internal/ledger"
@@ -28,6 +29,36 @@ func TestTallyPrimeShapesCorpus(t *testing.T) {
 
 	ms := masters.NewService(pool)
 	im := migration.NewImporter(ms, ledger.NewService(pool))
+
+	// ⛔ NEGATIVE STOCK IS ALLOWED HERE, AND THE REASON IS THE POINT OF THIS
+	// FIXTURE RATHER THAN A CONCESSION TO IT.
+	//
+	// This file is a DAY BOOK export — vouchers and ledgers, no STOCKITEM masters
+	// — and its invoice sells 100 BAG of rice. A Day Book carries no opening
+	// stock, so from this file's point of view those bags were never received.
+	// Until the importer read stock lines at all, that was invisible: the goods
+	// were dropped, the rupees balanced, and the import "succeeded". Now the sale
+	// has nothing to issue and the whole import is REFUSED, naming both ways
+	// forward (TestAnExportWithNoOpeningStockIsRefusedWithBothWaysForward pins
+	// that refusal and its message).
+	//
+	// This test is about the ACCOUNTING SHAPES a real TallyPrime file has — a
+	// UTF-16 envelope under IMPORTDATA, revenue nested in a stock line, a
+	// round-off line whose sign contradicts its flag, a dated GST registration —
+	// so it takes way forward 2 and moves on. It must NOT be "fixed" by giving
+	// the fixture an opening balance: a Day Book export does not have one, and a
+	// fixture that quietly stops being the shape it stands in for is worth less
+	// than no fixture.
+	adminConn, err := pgx.Connect(ctx, adminDSN)
+	if err != nil {
+		t.Skipf("admin postgres unavailable: %v", err)
+	}
+	if _, err := adminConn.Exec(ctx,
+		`UPDATE company SET allow_negative_stock = true WHERE id = $1`, companyID); err != nil {
+		_ = adminConn.Close(ctx)
+		t.Fatalf("allow negative stock: %v", err)
+	}
+	_ = adminConn.Close(ctx)
 
 	res, err := im.ImportFile(ctx, path, "tester")
 	if err != nil {

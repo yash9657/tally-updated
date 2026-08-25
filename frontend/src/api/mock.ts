@@ -7057,6 +7057,17 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         ledgers_ensured: [],
         warnings: [],
         posted: [],
+        // ⚠️ ZEROES, AND HONEST ONES: this mock does not parse Tally XML at all
+        // (the real importer is 1,500 lines of Go), so it imports nothing and
+        // says so. The fields are present because the SHAPE is the server's —
+        // register row D84's rule — and a client that reads
+        // `res.stock_lines` must not get `undefined` here while type-checking.
+        stock_lines: 0,
+        opening_positions: 0,
+        stock_items_ensured: [],
+        units_ensured: [],
+        godowns_ensured: [],
+        batches_ensured: [],
       };
     },
 

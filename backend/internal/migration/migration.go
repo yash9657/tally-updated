@@ -97,6 +97,32 @@ type ImportResult struct {
 	// re-import). SkippedGUIDs lists those GUIDs in document order.
 	Skipped      int
 	SkippedGUIDs []string
+
+	// ---- THE GOODS (inventory.go) ------------------------------------------
+	//
+	// ⛔ THESE COUNTS ARE THE ONLY VISIBLE EVIDENCE THAT THE IMPORT BROUGHT IN ANY
+	// STOCK AT ALL, and that is why they are reported rather than left to a query.
+	// Quantity is INVISIBLE IN A TRIAL BALANCE: an import that reads every stock
+	// line and throws it away produces books that balance perfectly and a Stock
+	// Summary with nothing in it — which is exactly what this importer did until
+	// the lane that added them. A migration whose report says "227 stock lines"
+	// can be checked; one that says "121 vouchers posted" cannot.
+	//
+	// Each name list holds the masters CREATED (not merely referenced), sorted
+	// and de-duplicated, so a 121-voucher file does not report one item forty
+	// times.
+	StockItemsEnsured []string
+	UnitsEnsured      []string
+	GodownsEnsured    []string
+	BatchesEnsured    []string
+	// OpeningPositions is the number of stock_opening rows written from STOCKITEM
+	// masters. ⚠️ ZERO HERE ON A FILE WITH STOCK LINES IS A WARNING SIGN, not a
+	// clean result: it means the export carried no opening stock, so every
+	// position starts at nil and the first issue of older goods has nothing to
+	// consume. See describeNegativeStock.
+	OpeningPositions int
+	// StockLines is the number of stock MOVEMENTS written across every voucher.
+	StockLines int
 }
 
 // ImportReader parses a Tally XML export from r and imports every VOUCHER
@@ -157,6 +183,25 @@ func (im *Importer) ImportEnvelope(ctx context.Context, env *integration.TallyEn
 	}
 	res.GroupsEnsured = groupsMade
 	res.Warnings = append(res.Warnings, groupWarns...)
+
+	// PASS ZERO-AND-A-HALF — THE INVENTORY MASTERS, before any voucher can name
+	// one: units, then locations, then items with their OPENING POSITIONS.
+	//
+	// ⛔ IT RUNS BEFORE THE LEDGER PASS AS WELL AS BEFORE THE VOUCHERS, and the
+	// reason is the opening stock. An opening position must exist before the first
+	// issue of that item, and the first issue is a voucher; putting this after the
+	// ledgers costs nothing and putting it after the vouchers would mean every
+	// position was already negative by the time its opening arrived — with the
+	// issues already valued at nil cost, which no later row can repair, because
+	// the cost of goods sold is derived from the state AT THE MOVEMENT.
+	//
+	// ⚠️ A file with no inventory masters at all (a Day Book export — the real one
+	// this was built against) does nothing here and imports its goods from the
+	// vouchers themselves. See inventory.go.
+	run := cctx{ctx: ctx, createdBy: createdBy, inv: newInventoryCache()}
+	if err := im.importInventoryMasters(run, env.Messages(), &res); err != nil {
+		return res, err
+	}
 
 	// FIRST PASS — LEDGER masters: opening balances + GST master attributes. These
 	// must land before any voucher posts so (a) reporting folds the opening
@@ -231,7 +276,7 @@ func (im *Importer) ImportEnvelope(ctx context.Context, env *integration.TallyEn
 			res.VouchersDeleted++
 
 		case "ALTER":
-			in, names, err := im.buildVoucherInput(ctx, i, v, ledgerIDs, ledgerState, createdBy)
+			in, names, err := im.buildVoucherInput(run, i, v, ledgerIDs, ledgerState, &res)
 			if err != nil {
 				return res, err
 			}
@@ -247,7 +292,7 @@ func (im *Importer) ImportEnvelope(ctx context.Context, env *integration.TallyEn
 			if found {
 				posted, err := im.ledger.AlterVoucher(ctx, vid, in)
 				if err != nil {
-					return res, fmt.Errorf("migration: voucher %d: alter: %w", i+1, err)
+					return res, postError(i, v, "alter", err)
 				}
 				recordLedgers(names)
 				res.Posted = append(res.Posted, posted)
@@ -257,7 +302,7 @@ func (im *Importer) ImportEnvelope(ctx context.Context, env *integration.TallyEn
 				// is treated as a create (the voucher simply did not arrive first).
 				posted, err := im.ledger.PostVoucher(ctx, in)
 				if err != nil {
-					return res, fmt.Errorf("migration: voucher %d: post: %w", i+1, err)
+					return res, postError(i, v, "post", err)
 				}
 				recordLedgers(names)
 				res.Posted = append(res.Posted, posted)
@@ -277,20 +322,38 @@ func (im *Importer) ImportEnvelope(ctx context.Context, env *integration.TallyEn
 					continue
 				}
 			}
-			in, names, err := im.buildVoucherInput(ctx, i, v, ledgerIDs, ledgerState, createdBy)
+			in, names, err := im.buildVoucherInput(run, i, v, ledgerIDs, ledgerState, &res)
 			if err != nil {
 				return res, err
 			}
 			posted, err := im.ledger.PostVoucher(ctx, in)
 			if err != nil {
-				return res, fmt.Errorf("migration: voucher %d: post: %w", i+1, err)
+				return res, postError(i, v, "post", err)
 			}
 			recordLedgers(names)
 			res.Posted = append(res.Posted, posted)
 			res.VouchersPosted++
 		}
 	}
+	// One item named on forty invoices is ONE line in the report. Sorted so two
+	// runs of the same file produce the same report and a diff means something.
+	res.StockItemsEnsured = sortedUnique(res.StockItemsEnsured)
+	res.UnitsEnsured = sortedUnique(res.UnitsEnsured)
+	res.GodownsEnsured = sortedUnique(res.GodownsEnsured)
+	res.BatchesEnsured = sortedUnique(res.BatchesEnsured)
 	return res, nil
+}
+
+// postError decorates a post/alter failure. A NEGATIVE-STOCK refusal gets its own
+// sentence, because it is the one failure a REAL export causes routinely and the
+// one an operator can do something about — see describeNegativeStock. Everything
+// else keeps the message it always had.
+func postError(idx int, v *integration.TallyVoucher, verb string, err error) error {
+	var neg *ledger.NegativeStockError
+	if errors.As(err, &neg) {
+		return describeNegativeStock(idx, v, err)
+	}
+	return fmt.Errorf("migration: voucher %d: %s: %w", idx+1, verb, err)
 }
 
 // importGroups ensures every GROUP master in the export exists as an account
@@ -740,8 +803,14 @@ func billDueISO(s string) string {
 // buildVoucherInput assembles the ledger.VoucherInput for one Tally voucher
 // (postings, GST params, bill-wise allocations) WITHOUT posting it — the caller
 // dispatches to PostVoucher/AlterVoucher/DeleteVoucher based on the Tally ACTION.
-func (im *Importer) buildVoucherInput(ctx context.Context, idx int, v *integration.TallyVoucher,
-	ledgerIDs map[string]uuid.UUID, ledgerState map[string]string, createdBy string) (ledger.VoucherInput, []string, error) {
+func (im *Importer) buildVoucherInput(run cctx, idx int, v *integration.TallyVoucher,
+	ledgerIDs map[string]uuid.UUID, ledgerState map[string]string, res *ImportResult) (ledger.VoucherInput, []string, error) {
+
+	// The accounting half of this function predates the goods entirely and reads
+	// `ctx` and `createdBy` throughout; they now travel together in `run` so the
+	// stock half can reach the master cache. Bound here so the body below is
+	// unchanged.
+	ctx, createdBy := run.ctx, run.createdBy
 
 	class, ok := classByVchType[strings.ToLower(strings.TrimSpace(v.VchType))]
 	if !ok {
@@ -886,6 +955,15 @@ func (im *Importer) buildVoucherInput(ctx context.Context, idx int, v *integrati
 	// purpose — ledger.post() fills it from the company's home state inside the tx
 	// (WS3). The rate is inferred from total tax over taxable value (a whole
 	// percent), unless an explicit GSTRATE was present on a taxable line.
+	// THE GOODS. Independent of the postings, not derived from them: a 3-item
+	// invoice billed to one Sales ledger is ONE posting and THREE movements, so
+	// the two halves are built from two different parts of the file.
+	stock, err := im.inventoryLinesFor(run, idx, v, class, res)
+	if err != nil {
+		return ledger.VoucherInput{}, nil, err
+	}
+	in.Inventory = stock
+
 	if class == ledger.Sales && !taxTotal.IsZero() && !taxableTotal.IsZero() {
 		rate := inferRate(v.Entries(), taxTotal, taxableTotal)
 		for i := range taxableLines {

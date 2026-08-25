@@ -3413,6 +3413,24 @@ func (s *Server) handleImportTallyXML(w http.ResponseWriter, r *http.Request) {
 		"ledgers_ensured":  res.LedgersEnsured,
 		"warnings":         warnings,
 		"posted":           posted,
+		// ---- THE GOODS. ⛔ THESE SIX ARE THE ONLY THING ON THE WIRE THAT CAN
+		// TELL AN OPERATOR WHETHER THEIR STOCK ARRIVED. Quantity is invisible in
+		// a trial balance, so an import that read every stock line and threw it
+		// away answered 200 with a report that looked complete — which is exactly
+		// what this route did until the importer was taught quantities. A caller
+		// that sees `stock_lines: 0` on a file full of invoices knows something
+		// is wrong; one that sees `vouchers_posted: 121` does not.
+		//
+		// ⚠️ `opening_positions: 0` ON A FILE WITH STOCK LINES IS A WARNING, not a
+		// clean result: it means the export carried no opening stock, so every
+		// position starts at nil and the first issue of older goods will either
+		// be refused or consume nothing at all.
+		"stock_lines":         res.StockLines,
+		"opening_positions":   res.OpeningPositions,
+		"stock_items_ensured": res.StockItemsEnsured,
+		"units_ensured":       res.UnitsEnsured,
+		"godowns_ensured":     res.GodownsEnsured,
+		"batches_ensured":     res.BatchesEnsured,
 	})
 }
 

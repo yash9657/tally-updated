@@ -7,6 +7,71 @@ what was wrong; this file records what a person will notice.
 
 ---
 
+## A Tally import now brings in the GOODS, and it refuses a file with no opening stock
+
+**Applies to:** `POST .../import/tally-xml` — migrating from TallyPrime. **Feature:** §3.
+
+### What changes
+
+The importer read every stock line in an export and threw it away. A migrated company
+got the **accounting value** of its trading and no goods at all: no item, no quantity, no
+batch, no location.
+
+⛔ **And nothing disagreed.** The rupee value of a trade lives in the ledger entries, so
+the Trial Balance footed, the Balance Sheet carried closing stock, and the Stock Summary
+was empty. If you have migrated from Tally on an earlier build, **open the Stock Summary**:
+if it is empty while the Balance Sheet shows Stock-in-Hand, that is this defect and the
+fix is to re-import into a fresh company.
+
+An import now brings in:
+
+- **stock items, units, locations and batches** — created from the masters when the export
+  declares them, and INFERRED from the vouchers when it does not (a Day Book export
+  declares none; the unit is recovered from the quantity's own text, `100.00 BAG`);
+- **opening positions** from `STOCKITEM` masters, per (location, batch), with the rate
+  derived from `OPENINGVALUE` when the file states no rate;
+- **quantities**, read from `BATCHALLOCATIONS.LIST` where a real export puts the location
+  and the lot — a line split 60/40 across two batches lands as two positions, and the
+  line's own total is not posted a second time;
+- and a **negative quantity inside a purchase** (goods rejected back) as an OUTWARD
+  movement, because a quantity is never signed in this product.
+
+The import report now says how many stock movements and opening positions it wrote. **That
+count is the only figure that distinguishes "imported the accounting" from "imported the
+trade"** — check it.
+
+### ⛔ The refusal you are most likely to meet, and why it is not a bug
+
+An export with no `STOCKITEM` masters carries **no opening stock** — and a Day Book export
+has none. So the first sale of goods you bought before the export window has nothing to
+issue, and **the whole import is refused**, naming the item and the voucher.
+
+Two ways forward, and the importer will not choose for you:
+
+1. **Import a `Masters.xml` carrying the items with their opening balances first.** This is
+   the correct fix, and it is also the only one that gets the opening VALUE right.
+2. **Switch the company's `allow negative stock` on before importing.** The quantities come
+   in with the shortfall visible as a negative position — which is how you find the missing
+   purchases — but a negative position has no cost to consume, so the cost of goods sold is
+   understated by the whole opening value until you correct it.
+
+The importer will not invent an opening position (a quantity nobody stated is not derivable
+from a voucher, however plausible) and will not change your negative-stock setting to make
+its own job succeed.
+
+### What is still not imported
+
+Cost-centre allocations, price lists and budgets. Tally's location **tree** is flattened —
+the stock is in the right place and the hierarchy is not recorded — and a **compound unit**
+("Box of 12 Nos") arrives as a simple symbol: quantities in Boxes are stored as Boxes,
+correctly, and nothing in this build can restate them in pieces. Each of those is reported
+in the import's warnings rather than silently flattened.
+
+⚠️ **A clean import is not an empty warnings list, and a balanced Trial Balance proves
+nothing about your stock.** Read the warnings, then read the Stock Summary.
+
+---
+
 ## Stock items can be valued FIFO or LIFO, and switching one RESTATES its whole history
 
 **Applies to:** every stock item, the Stock Summary, closing stock on the Balance Sheet
