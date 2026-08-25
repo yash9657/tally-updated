@@ -232,9 +232,87 @@ type stockItemListItem struct {
 	// GSTRatePct is a fixed-4 decimal STRING, like every other rate on the wire.
 	GSTRatePct string `json:"gst_rate_pct"`
 	// ValuationMethod names the valuer that replays this item's movements
-	// ('WEIGHTED_AVG' today), so a client can state a report's basis.
+	// (WEIGHTED_AVG, FIFO or LIFO — T9), so a client can state a report's basis.
 	ValuationMethod string `json:"valuation_method"`
 	IsSystem        bool   `json:"is_system"`
+	// StockGroup is the item's group (T10), or "" for an UNGROUPED item — which
+	// is a real state and not a missing value: every item created before T10 is
+	// ungrouped, and a picker that hid them would hide most of a company's stock.
+	StockGroup string `json:"stock_group"`
+}
+
+// --------------------------------------------------------------------------
+// STOCK GROUPS (T10, migration 0079)
+// --------------------------------------------------------------------------
+
+// stockGroupReq is the POST /stock-groups body. parent_name is optional and
+// names an EXISTING group; a group is created under nothing by default, which is
+// what Tally calls being under "Primary".
+type stockGroupReq struct {
+	Name       string `json:"name"`
+	ParentName string `json:"parent_name"`
+	CreatedBy  string `json:"created_by"`
+}
+
+func (s *Server) handleCreateStockGroup(w http.ResponseWriter, r *http.Request) {
+	ctx, ok := s.scopeCtx(w, r)
+	if !ok {
+		return
+	}
+	var req stockGroupReq
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	id, err := s.masters.CreateStockGroup(ctx, masters.StockGroup{
+		Name:       strings.TrimSpace(req.Name),
+		ParentName: strings.TrimSpace(req.ParentName),
+	}, req.CreatedBy)
+	if err != nil {
+		writeMastersError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]string{"stock_group_id": id.String()})
+}
+
+// stockGroupListItem is one node of the item hierarchy.
+//
+// `depth` is served rather than left to the client to derive: it is the number
+// of labels in the ltree path minus one, and a client that computed it by
+// counting dots would be parsing a database detail it has no business knowing.
+type stockGroupListItem struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	ParentName string `json:"parent_name"`
+	Depth      int    `json:"depth"`
+	// ItemCount is how many items sit DIRECTLY in this group — the one thing a
+	// picker needs before it can offer to delete one.
+	ItemCount int `json:"item_count"`
+}
+
+func (s *Server) handleListStockGroups(w http.ResponseWriter, r *http.Request) {
+	ctx, ok := s.scopeCtx(w, r)
+	if !ok {
+		return
+	}
+	groups, err := s.masters.ListStockGroups(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list stock groups: "+err.Error())
+		return
+	}
+	out := make([]stockGroupListItem, 0, len(groups))
+	for _, g := range groups {
+		out = append(out, stockGroupListItem{
+			ID:         g.ID.String(),
+			Name:       g.Name,
+			ParentName: g.ParentName,
+			Depth:      strings.Count(g.Path, "."),
+			ItemCount:  g.ItemCount,
+		})
+	}
+	// ⚠️ IN TREE ORDER (a parent always precedes its children), because that is
+	// the order masters.ListStockGroups returns and re-sorting it here by name
+	// would break the indentation a client renders from `depth`.
+	writeJSON(w, http.StatusOK, map[string]any{"stock_groups": out})
 }
 
 func (s *Server) handleListStockItems(w http.ResponseWriter, r *http.Request) {
@@ -250,9 +328,11 @@ func (s *Server) handleListStockItems(w http.ResponseWriter, r *http.Request) {
 		// for the writer and not for the reader.
 		rows, err := tx.Query(ctx,
 			`SELECT si.id, si.name, COALESCE(u.symbol, ''), COALESCE(si.hsn, ''),
-			        si.gst_rate_pct, si.valuation_method, si.is_system
+			        si.gst_rate_pct, si.valuation_method, si.is_system,
+			        COALESCE(sg.name, '')
 			   FROM stock_item si
-			   LEFT JOIN unit u ON u.id = si.unit_id
+			   LEFT JOIN unit u         ON u.id  = si.unit_id
+			   LEFT JOIN stock_group sg ON sg.id = si.stock_group_id
 			  ORDER BY si.name`)
 		if err != nil {
 			return err
@@ -264,7 +344,7 @@ func (s *Server) handleListStockItems(w http.ResponseWriter, r *http.Request) {
 				rate decimal.Decimal
 			)
 			if err := rows.Scan(&it.ID, &it.Name, &it.UnitSymbol, &it.HSN,
-				&rate, &it.ValuationMethod, &it.IsSystem); err != nil {
+				&rate, &it.ValuationMethod, &it.IsSystem, &it.StockGroup); err != nil {
 				return err
 			}
 			it.GSTRatePct = rate.StringFixed(4)
@@ -288,6 +368,16 @@ type unitListItem struct {
 	FormalName    string `json:"formal_name"`
 	DecimalPlaces int    `json:"decimal_places"`
 	IsSystem      bool   `json:"is_system"`
+	// A COMPOUND unit (T10) is defined in terms of another: 1 BOX = 12 NOS. Both
+	// are empty for a simple unit, and a client must render nothing rather than
+	// "0.0000" in that case.
+	//
+	// ⚠️ REPORTED BUT NEVER APPLIED HERE. Quantities are stored in the item's own
+	// unit and restated at REPORT time (the Stock Summary does it); a client that
+	// multiplied a quantity by this factor itself would be doing the conversion
+	// twice on any figure that had already been restated.
+	BaseUnitSymbol   string `json:"base_unit_symbol"`
+	ConversionFactor string `json:"conversion_factor"`
 }
 
 func (s *Server) handleListUnits(w http.ResponseWriter, r *http.Request) {
@@ -298,18 +388,28 @@ func (s *Server) handleListUnits(w http.ResponseWriter, r *http.Request) {
 	out := []unitListItem{}
 	err := s.pool.RunInReadOnlyTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
-			`SELECT id, symbol, formal_name, decimal_places, is_system
-			   FROM unit
-			  ORDER BY symbol`)
+			`SELECT u.id, u.symbol, u.formal_name, u.decimal_places, u.is_system,
+			        COALESCE(b.symbol, ''), u.conversion_factor
+			   FROM unit u
+			   LEFT JOIN unit b ON b.id = u.base_unit_id
+			  ORDER BY u.symbol`)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 		for rows.Next() {
-			var it unitListItem
+			var (
+				it     unitListItem
+				factor *decimal.Decimal
+			)
 			if err := rows.Scan(&it.ID, &it.Symbol, &it.FormalName,
-				&it.DecimalPlaces, &it.IsSystem); err != nil {
+				&it.DecimalPlaces, &it.IsSystem, &it.BaseUnitSymbol, &factor); err != nil {
 				return err
+			}
+			// NULL stays "" rather than becoming "0.0000": a simple unit has NO
+			// factor, and a zero one would read as "one BOX holds no pieces".
+			if factor != nil {
+				it.ConversionFactor = factor.StringFixed(4)
 			}
 			out = append(out, it)
 		}

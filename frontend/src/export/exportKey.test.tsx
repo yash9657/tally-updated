@@ -790,6 +790,7 @@ describe("Alt+E agrees with the Stock Summary screen about emptiness", () => {
     batch_id: "",
     batch: "",
     valuation_method: "AVERAGE",
+    stock_group: "",
     opening_qty: "0.0000",
     opening_value: "0.0000",
     inward_qty: "100.0000",
@@ -812,6 +813,7 @@ describe("Alt+E agrees with the Stock Summary screen about emptiness", () => {
     const app = renderShell(
       stockClient({
         as_on: "2026-06-30",
+        groups: [],
         total_value: "2999.4322",
         rows: [],
         items: [
@@ -820,6 +822,7 @@ describe("Alt+E agrees with the Stock Summary screen about emptiness", () => {
             item: "Widget",
             unit: "Nos",
             valuation_method: "WEIGHTED_AVG",
+            stock_group: "",
             opening_qty: "0.0000",
             opening_value: "0.0000",
             inward_qty: "100.0000",
@@ -828,6 +831,8 @@ describe("Alt+E agrees with the Stock Summary screen about emptiness", () => {
             outward_value: "2000.5678",
             closing_qty: "60.0000",
             closing_value: "2999.4322",
+            base_unit: "",
+            base_qty: "",
             positions: [POSITION],
           },
         ],
@@ -859,6 +864,7 @@ describe("Alt+E agrees with the Stock Summary screen about emptiness", () => {
     const app = renderShell(
       stockClient({
         as_on: "2026-06-30",
+        groups: [],
         total_value: "2999.4322",
         rows: [POSITION],
         items: [],
@@ -884,7 +890,7 @@ describe("Alt+E agrees with the Stock Summary screen about emptiness", () => {
 
   it("CONTROL: genuinely empty — BOTH fields empty — still refuses, in the screen's words", async () => {
     const app = renderShell(
-      stockClient({ as_on: "", total_value: "0.0000", rows: [], items: [] }),
+      stockClient({ as_on: "", groups: [], total_value: "0.0000", rows: [], items: [] }),
     );
     goTo(app, "Stock Summary");
     // The empty state, and NOT the table: without this the two tests above

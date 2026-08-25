@@ -369,7 +369,21 @@ export const LEDGER_WISE_DEFAULT = true;
  * the backend exposes; the masters agent renders the matching form.
  */
 export type MasterKind =
-  "ledger" | "group" | "voucher-type" | "unit" | "stock-item";
+  | "ledger"
+  | "group"
+  | "voucher-type"
+  | "unit"
+  | "stock-item"
+  /**
+   * A STOCK GROUP (T10) — a node of the ITEM hierarchy, which is what makes a
+   * Stock Summary readable on a company with four hundred items.
+   *
+   * ⚠️ IT IS A MasterKind AND THE COST MASTERS ARE NOT, and the difference is
+   * the form: MasterCreateScreen's shape is "a name, one picker, some details",
+   * which is exactly a stock group (a name and a parent). A cost centre needs an
+   * axis it cannot exist without, which is why that one has a screen of its own.
+   */
+  | "stock-group";
 
 /**
  * The canonical Phase 1 report names. These strings are the `reportName` on a

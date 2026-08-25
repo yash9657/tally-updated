@@ -32,8 +32,12 @@ import type {
   DayBookResponse,
   ListGodownsResponse,
   ListStockBatchesResponse,
+  CreateStockGroupRequest,
+  CreateStockGroupResponse,
   InventoryVocabularyResponse,
+  ListStockGroupsResponse,
   ListStockItemsResponse,
+  ListUnitsResponse,
   SetValuationMethodRequest,
   SetValuationMethodResponse,
   StockSummaryResponse,
@@ -826,6 +830,23 @@ export interface CoredClient {
   // name. The item grid cannot offer a location picker against a collection it
   // cannot list.
   listStockItems(companyID: string): Promise<ListStockItemsResponse>;
+  /**
+   * The company's own units of measure.
+   *
+   * ⛔ IT EXISTS BECAUSE THE ITEM FORM'S UNIT PICKER WAS A HARDCODED LIST. GET
+   * /units has been served since the inventory masters shipped and nothing in
+   * this client read it, so a unit the operator created — including any COMPOUND
+   * unit (T10) — could not be chosen for an item, and the picker offered twelve
+   * symbols that may not exist in this company at all.
+   */
+  listUnits(companyID: string): Promise<ListUnitsResponse>;
+
+  // ---- The ITEM HIERARCHY (T10) -------------------------------------------
+  listStockGroups(companyID: string): Promise<ListStockGroupsResponse>;
+  createStockGroup(
+    companyID: string,
+    req: CreateStockGroupRequest,
+  ): Promise<CreateStockGroupResponse>;
 
   // ---- The COSTING METHOD (T9) -------------------------------------------
   //

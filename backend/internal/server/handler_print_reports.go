@@ -821,12 +821,21 @@ func (s *Server) printStockSummary(ctx context.Context, w http.ResponseWriter, r
 		if mixed {
 			itemLabel += " · " + it.ValuationMethod
 		}
+		// T10 — a COMPOUND unit's closing quantity is restated in its base unit,
+		// IN THE CELL rather than in a new column. The paper is read, not summed
+		// (the CSV export is the one that has to stay numeric, and it gets its own
+		// column), and a twelfth column on a landscape page costs every other
+		// column width for a figure that appears on the few items that have one.
+		closingQty := printing.FormatQty(it.ClosingQty)
+		if it.BaseUnitSymbol != "" && it.ConversionFactor.IsPositive() {
+			closingQty += " (= " + printing.FormatQty(it.ClosingBaseQty) + " " + it.BaseUnitSymbol + ")"
+		}
 		rows = append(rows, printing.Row{
 			Cells: []string{itemLabel, it.UnitSymbol,
 				printing.FormatQty(it.OpeningQty), printMoneyOrBlank(it.OpeningValue),
 				printing.FormatQty(it.InwardQty), printMoneyOrBlank(it.InwardValue),
 				printing.FormatQty(it.OutwardQty), printMoneyOrBlank(it.OutwardValue),
-				printing.FormatQty(it.ClosingQty), printMoney(it.ClosingValue)},
+				closingQty, printMoney(it.ClosingValue)},
 			Bold: true,
 		})
 		for _, p := range it.Positions {
@@ -881,6 +890,33 @@ func (s *Server) printStockSummary(ctx context.Context, w http.ResponseWriter, r
 	if b := printSortedKeys(bases); b != "" {
 		footer = append(footer, printNoteRows(cols, true, "Valuation basis: "+b+
 			". Value is never stored; every figure above is a replay of the movement ledger.")...)
+	}
+
+	// T10 — THE STOCK GROUP SUBTOTALS, as notes rather than as rows in the table.
+	//
+	// ⛔ THEY ARE NOT TABLE ROWS BECAUSE THEY DO NOT BELONG TO ITS ARITHMETIC:
+	// every item counts in every ancestor of its group, so a group line placed in
+	// the body would sit in a column that a reader adds down — and adding it would
+	// double-count every nested branch. Stated as notes, with the reason, they are
+	// a summary of the page rather than part of its total.
+	//
+	// ⚠️ A company with no groups prints nothing here (grouped is empty), rather
+	// than a note saying every item is ungrouped.
+	var grouped []reporting.StockGroupRollup
+	for _, g := range sum.Groups {
+		if g.GroupName != "" {
+			grouped = append(grouped, g)
+		}
+	}
+	if len(grouped) > 0 {
+		note := "Stock group subtotals (the whole branch, so they OVERLAP and must not be added): "
+		for i, g := range grouped {
+			if i > 0 {
+				note += "; "
+			}
+			note += g.GroupName + " " + printMoney(g.ClosingValue)
+		}
+		footer = append(footer, printNoteRows(cols, false, note)...)
 	}
 
 	return printing.ReportTable{

@@ -5,6 +5,7 @@ import type { MasterKind } from "../../keystroke/types";
 import type {
   CreateGroupRequest,
   CreateLedgerRequest,
+  CreateStockGroupRequest,
   CreateStockItemRequest,
   OpeningBillRequest,
   RefType,
@@ -158,6 +159,18 @@ const SECOND_FIELD: Readonly<Record<MasterKind, SecondField | null>> = {
   group: { label: "Under (parent)", options: GROUP_PARENT_OPTIONS },
   "voucher-type": { label: "Type of voucher", options: VOUCHER_TYPE_CLASSES },
   "stock-item": { label: "Units", options: UNIT_SYMBOLS, allowCreate: true },
+  // ⛔ A STOCK GROUP'S PARENT LIST IS SERVED, NOT LISTED HERE, and the empty
+  // array is the honest expression of that. Unlike an account group, there are no
+  // built-in stock groups: a company starts with NONE, so every option in this
+  // picker is one the operator created, and the component fills them in from
+  // GET /stock-groups (see `parentOptions`). A hardcoded list would offer
+  // Tally's names to a company that has never created them and be refused on
+  // save.
+  "stock-group": {
+    label: "Under (parent stock group)",
+    options: [],
+    allowCreate: false,
+  },
   // A unit has no parent at all: its own symbol IS the master.
   unit: null,
 };
@@ -169,6 +182,7 @@ const NAME_LABEL: Readonly<Record<MasterKind, string>> = {
   "voucher-type": "Name",
   "stock-item": "Name",
   unit: "Symbol",
+  "stock-group": "Name",
 };
 
 /** The noun used in every status sentence, so a refusal names what was refused. */
@@ -178,6 +192,7 @@ const NOUN: Readonly<Record<MasterKind, string>> = {
   "voucher-type": "voucher type",
   "stock-item": "stock item",
   unit: "unit",
+  "stock-group": "stock group",
 };
 
 /**
@@ -196,6 +211,11 @@ const DETAIL_FOCUS: Readonly<Record<MasterKind, string | null>> = {
   group: '[data-testid="master-group-nature"]',
   unit: '[data-testid="master-unit-formal-name"]',
   "stock-item": '[data-testid="master-item-hsn"]',
+  // A stock group has NOTHING after its name and its parent — no HSN, no rate,
+  // no opening (a group holds no stock of its own; its items do). The cursor
+  // lands on a stated "nothing here" rather than on nothing at all, which is
+  // register row D36 exactly.
+  "stock-group": null,
   // A voucher type has no further keyable field — see the note it renders.
   "voucher-type": null,
 };
@@ -250,6 +270,19 @@ interface Draft {
   openingQty: string;
   openingRate: string;
   /**
+   * A COMPOUND unit's two halves (T10): 1 <symbol> = <conversionFactor>
+   * <baseUnit>. Both blank makes a SIMPLE unit, which is what every unit created
+   * before T10 is; the server refuses half of one.
+   */
+  baseUnit: string;
+  conversionFactor: string;
+  /**
+   * The item's STOCK GROUP (T10). It is its OWN field rather than the form's
+   * second (parent) field because the second field is already the UNIT — an item
+   * needs both, and the unit is the one it cannot be created without.
+   */
+  stockGroup: string;
+  /**
    * THE COSTING METHOD (T9) — "" means "send nothing and take the server's
    * default", which is Tally's own (Avg. Cost).
    *
@@ -295,6 +328,9 @@ function emptyDraft(): Draft {
     gstRatePct: "",
     openingQty: "",
     openingRate: "",
+    baseUnit: "",
+    conversionFactor: "",
+    stockGroup: "",
     // Empty, NOT "WEIGHTED_AVG": an absent key means "the server's default", and
     // sending the default explicitly would make this form assert a choice the
     // operator did not make — the same mistake `parent: ""` above documents.
@@ -352,6 +388,48 @@ export function MasterCreateScreen({
   // before T9 does.
   const [methods, setMethods] = useState<ValuationMethodOption[] | null>(null);
   const [methodsDefault, setMethodsDefault] = useState("");
+  /**
+   * THE COMPANY'S OWN UNITS AND STOCK GROUPS (T10), read from the server.
+   *
+   * ⛔ THE UNIT PICKER USED TO BE A HARDCODED LIST OF TWELVE SYMBOLS, and that
+   * is a defect of the same family as row 20: GET /units has been served since
+   * the inventory masters shipped and nothing in this client read it, so an
+   * operator could create a unit — including a COMPOUND one, which is the whole
+   * of T10's second half — and then not be able to choose it for an item. The
+   * hardcoded list is kept as a SUGGESTION for a company that has none of its
+   * own (a fresh company has exactly "Nos"), because an empty picker on the
+   * first item is worse than a list that may over-offer: the field also allows
+   * the typed text, so a symbol not in this company is created on the fly.
+   *
+   * STOCK GROUPS ARE THE OPPOSITE CASE and get no fallback at all: there are no
+   * built-in ones, so every option is one the operator made, and offering a
+   * guess would be offering something the server refuses.
+   */
+  const [units, setUnits] = useState<readonly string[] | null>(null);
+  const [groups, setGroups] = useState<readonly string[] | null>(null);
+  useEffect(() => {
+    if (kind !== "stock-item" && kind !== "stock-group" && kind !== "unit")
+      return;
+    let live = true;
+    void client
+      .listUnits(companyID)
+      .then((r) => {
+        if (live) setUnits(r.units.map((u) => u.symbol));
+      })
+      .catch(() => {
+        // Silent: the field still works (it accepts typed text), and a red line
+        // about a picker fetch over a half-keyed master is noise.
+      });
+    void client
+      .listStockGroups(companyID)
+      .then((r) => {
+        if (live) setGroups(r.stock_groups.map((g) => g.name));
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [client, companyID, kind]);
   useEffect(() => {
     if (kind !== "stock-item") return;
     let live = true;
@@ -421,7 +499,21 @@ export function MasterCreateScreen({
     [onSelect],
   );
 
-  const second = SECOND_FIELD[kind];
+  const secondBase = SECOND_FIELD[kind];
+  // The picker's options, SERVED where the server owns the vocabulary. A unit
+  // list that has not arrived yet falls back to the suggestions; a stock-group
+  // list that has not arrived offers nothing, because there is nothing to guess.
+  const second = ((): SecondField | null => {
+    if (secondBase === null) return null;
+    if (kind === "stock-item") {
+      const offered = units && units.length > 0 ? units : UNIT_SYMBOLS;
+      return { ...secondBase, options: offered };
+    }
+    if (kind === "stock-group") {
+      return { ...secondBase, options: groups ?? [] };
+    }
+    return secondBase;
+  })();
   const bills = keyedBills(draft);
   const billTotal = sumMoney(bills.map((b) => b.amount));
   const billDifference = subMoney(
@@ -624,6 +716,19 @@ export function MasterCreateScreen({
           if (!Number.isFinite(dp) || dp < 0 || dp > 4) {
             return `Decimal places must be 0 to 4 (money and quantity are stored fixed-4) — nothing was created.`;
           }
+          // ---- T10: A COMPOUND UNIT. Both halves or neither, refused HERE as
+          // well as on the server, so the operator is told which field is wrong
+          // instead of reading a 422 about a conversion.
+          const base = d.baseUnit.trim();
+          const factor = d.conversionFactor.trim();
+          if ((base === "") !== (factor === "")) {
+            return base === ""
+              ? `A conversion factor of ${factor} needs a base unit to convert TO — 1 ${n} = ${factor} of WHAT? Nothing was created.`
+              : `${n} is defined in terms of ${base}, so it needs a conversion factor: 1 ${n} = ? ${base}. Nothing was created.`;
+          }
+          if (factor !== "" && !(Number(factor) > 0)) {
+            return `A conversion factor must be greater than zero — 1 ${n} = 0 ${base} would make every quantity in ${n} worth nothing. Nothing was created.`;
+          }
           return {
             req: {
               symbol: n,
@@ -631,8 +736,31 @@ export function MasterCreateScreen({
                 ? { formal_name: d.formalName.trim() }
                 : {}),
               decimal_places: dp,
+              ...(base !== ""
+                ? {
+                    base_unit_symbol: base,
+                    conversion_factor: normalizeMoney(factor),
+                  }
+                : {}),
             },
-            summary: dp === 0 ? "whole units" : `${String(dp)} decimal places`,
+            summary:
+              base !== ""
+                ? `1 ${n} = ${normalizeMoney(factor)} ${base}`
+                : dp === 0
+                  ? "whole units"
+                  : `${String(dp)} decimal places`,
+          };
+        }
+        case "stock-group": {
+          // A group has a name and, optionally, a parent. Nothing else: a group
+          // holds no stock of its own — its items do — so there is no opening,
+          // no rate and no unit to key.
+          return {
+            req: {
+              name: n,
+              ...(p ? { parent_name: p } : {}),
+            },
+            summary: p ? `under ${p}` : "at the top of the item tree",
           };
         }
         case "stock-item": {
@@ -649,6 +777,9 @@ export function MasterCreateScreen({
           const req: CreateStockItemRequest = {
             name: n,
             unit_symbol: p,
+            ...(d.stockGroup.trim()
+              ? { stock_group_name: d.stockGroup.trim() }
+              : {}),
             ...(d.valuationMethod.trim()
               ? { valuation_method: d.valuationMethod.trim() }
               : {}),
@@ -723,6 +854,13 @@ export function MasterCreateScreen({
             req as CreateStockItemRequest,
           );
           return { id: r.stock_item_id };
+        }
+        case "stock-group": {
+          const r = await client.createStockGroup(
+            companyID,
+            req as CreateStockGroupRequest,
+          );
+          return { id: r.stock_group_id };
         }
         default:
           throw new Error(`unknown master kind ${String(kind)}`);
@@ -1181,6 +1319,58 @@ export function MasterCreateScreen({
                 }}
               />
             </label>
+            {/* ---- T10: A COMPOUND UNIT ("BOX of 12 Nos"). Leave both blank for
+                an ordinary unit. The options are the company's OWN units,
+                because a base unit has to exist before something can be
+                measured in it. */}
+            <label className="mt-2 block text-tally-field">
+              Measured in (base unit)
+              <select
+                aria-label="Measured in (base unit)"
+                data-testid="master-unit-base"
+                className="ml-2 bg-tally-field px-1 text-tally-fieldText outline-none"
+                value={draft.baseUnit}
+                onChange={(e) => {
+                  patch({ baseUnit: e.target.value });
+                }}
+              >
+                <option value="">(a simple unit — nothing to convert)</option>
+                {(units ?? []).map((u) => (
+                  <option key={u} value={u}>
+                    {u}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {draft.baseUnit ? (
+              <label className="mt-2 block text-tally-field">
+                1 {draft.name || "this unit"} =
+                <input
+                  aria-label="Conversion factor"
+                  data-testid="master-unit-conversion"
+                  inputMode="decimal"
+                  className="mx-2 w-20 bg-tally-field px-1 text-right text-tally-fieldText outline-none"
+                  value={draft.conversionFactor}
+                  onChange={(e) => {
+                    patch({ conversionFactor: e.target.value });
+                  }}
+                />
+                {draft.baseUnit}
+              </label>
+            ) : null}
+            {draft.baseUnit ? (
+              <p
+                className="mt-1 text-xs"
+                data-testid="master-unit-compound-note"
+              >
+                Quantities stay in {draft.name || "this unit"} — a movement of 5
+                is five {draft.name || "of these"}, not{" "}
+                {draft.conversionFactor || "n"} {draft.baseUnit}. The Stock
+                Summary restates the closing quantity in {draft.baseUnit} beside
+                it, so the number on an invoice and the number in the stock
+                ledger are always the one that was keyed.
+              </p>
+            ) : null}
           </div>
         ) : null}
 
@@ -1238,6 +1428,36 @@ export function MasterCreateScreen({
                 }}
               />
             </label>
+            {/* ---- T10: THE STOCK GROUP. A <select> over the company's own
+                groups, with a stated "(none)" — ungrouped is a real state and
+                the Stock Summary reports it as its own bucket. There is no
+                "create it as you type" here on purpose: the server refuses an
+                unknown group rather than minting one, because a group made from
+                a misspelling subtotals half a company's stock under a name
+                nobody meant. */}
+            <label className="mt-2 block text-tally-field">
+              Stock group
+              <select
+                aria-label="Stock group"
+                data-testid="master-item-stock-group"
+                className="ml-2 bg-tally-field px-1 text-tally-fieldText outline-none"
+                value={draft.stockGroup}
+                onChange={(e) => {
+                  patch({ stockGroup: e.target.value });
+                }}
+              >
+                <option value="">
+                  {groups && groups.length > 0
+                    ? "(none — ungrouped)"
+                    : "(none — this company has no stock groups yet)"}
+                </option>
+                {(groups ?? []).map((g) => (
+                  <option key={g} value={g}>
+                    {g}
+                  </option>
+                ))}
+              </select>
+            </label>
             {/* THE COSTING METHOD (T9). A <select> and not a SelectionList: the
                 set is closed, three long, SERVED by the server, and the operator
                 needs to READ the three descriptions rather than type-ahead a
@@ -1281,6 +1501,18 @@ export function MasterCreateScreen({
               </p>
             )}
           </div>
+        ) : null}
+
+        {kind === "stock-group" && onDetails ? (
+          // The cursor lands on a STATED "nothing here" rather than on nothing
+          // at all, which is register row D36. A group holds no stock of its own
+          // — its items do — so there is no opening, no rate and no unit here.
+          <p className="mt-3 text-xs" data-testid="master-no-details">
+            No further fields — a stock group holds no stock of its own; its
+            items do. Give items this group when you create them (Alt+G &gt;
+            Create Stock Item), and the Stock Summary subtotals the whole
+            branch.
+          </p>
         ) : null}
 
         {kind === "voucher-type" && onDetails ? (

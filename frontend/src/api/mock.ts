@@ -68,7 +68,14 @@ import type {
   PostingRequest,
   ListGodownsResponse,
   ListStockBatchesResponse,
+  CreateStockGroupRequest,
+  CreateStockGroupResponse,
   InventoryVocabularyResponse,
+  ListStockGroupsResponse,
+  ListUnitsResponse,
+  StockGroupListItem,
+  StockGroupSubtotal,
+  UnitListItem,
   ListStockItemsResponse,
   StockBatchListItem,
   StockItemListItem,
@@ -264,6 +271,22 @@ function mainLocation(companyID: string): GodownListItem {
   };
 }
 
+/** A seeded SIMPLE unit — every company gets "Nos", as migration 0005 does. */
+function seedUnit(companyID: string, symbol: string, formalName: string): UnitListItem {
+  return {
+    id: `${companyID}:unit-${symbol.toLowerCase()}`,
+    symbol,
+    formal_name: formalName,
+    decimal_places: 0,
+    is_system: true,
+    // Simple: no base, and "" rather than "0.0000" — a unit with no base
+    // restates into nothing, and a zero factor would read as "one of these holds
+    // none of those".
+    base_unit_symbol: "",
+    conversion_factor: "",
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Stock replay (the mock's GET /stock-summary)
 // ---------------------------------------------------------------------------
@@ -329,6 +352,8 @@ interface MockPosition {
    * what the replay needs at each movement.
    */
   method: string;
+  /** The ITEM's stock group (T10), for the group subtotals. */
+  group: string;
   /**
    * THE COSTED LAYERS, oldest first — empty for a weighted-average position,
    * which has one blended rate and needs no layers.
@@ -399,6 +424,8 @@ function replayStock(c: MockCompany, asOn?: string): StockSummaryResponse {
         method:
           c.stockItems.find((s) => s.id === l.stock_item_id)
             ?.valuation_method ?? "WEIGHTED_AVG",
+        group:
+          c.stockItems.find((s) => s.id === l.stock_item_id)?.stock_group ?? "",
         lots: [],
       };
       positions.set(key, p);
@@ -497,6 +524,7 @@ function replayStock(c: MockCompany, asOn?: string): StockSummaryResponse {
     batch_id: p.key.batchID,
     batch: p.batch,
     valuation_method: p.method,
+    stock_group: p.group,
     opening_qty: "0.0000",
     opening_value: "0.0000",
     inward_qty: q4str(p.inwardQty),
@@ -532,6 +560,12 @@ function replayStock(c: MockCompany, asOn?: string): StockSummaryResponse {
         // The basis, from the position that arrived first: every position of one
         // item shares the item's method, exactly as the server folds it.
         valuation_method: row.valuation_method,
+        stock_group: row.stock_group,
+        // Filled after the fold: the restatement is a function of the item's
+        // FINAL closing quantity, and doing it per position would restate each
+        // one separately and then add the roundings up.
+        base_unit: "",
+        base_qty: "",
         positions: [],
       };
       items.push(it);
@@ -545,9 +579,86 @@ function replayStock(c: MockCompany, asOn?: string): StockSummaryResponse {
     it.closing_value = addMoney(it.closing_value, row.closing_value);
   }
 
+  // ---- T10a: THE COMPOUND-UNIT RESTATEMENT, once per item after the fold.
+  for (const it of items) {
+    const unit = c.units.find(
+      (u) => u.symbol.toLowerCase() === it.unit.toLowerCase(),
+    );
+    if (!unit || unit.base_unit_symbol === "" || unit.conversion_factor === "") {
+      continue;
+    }
+    it.base_unit = unit.base_unit_symbol;
+    // Fixed-4 throughout, like every other quantity here. ⛔ closing_qty is NOT
+    // touched: the stored quantity is the one that was keyed.
+    it.base_qty = q4str(q4div(q4(it.closing_qty) * q4(unit.conversion_factor), QSCALE));
+  }
+
+  // ---- T10b: THE GROUP SUBTOTALS — the whole BRANCH, so an item counts in
+  // every ANCESTOR of its group. The mock walks the parent chain rather than an
+  // ltree path (it has no ltree), which is a second implementation of the same
+  // rule and therefore able to disagree with the server — which is the point of
+  // having it: a screen test that renders these is rendering something derived.
+  const ancestors = (group: string): string[] => {
+    const chain: string[] = [];
+    let cursor = group;
+    // A cycle is impossible through the API (the server refuses one) but a
+    // hand-built fixture could hold one; the bound stops an infinite loop from
+    // hanging a test suite instead of failing it.
+    for (let hops = 0; cursor !== "" && hops < 32; hops++) {
+      chain.push(cursor);
+      cursor = c.stockGroups.find((g) => g.name === cursor)?.parent_name ?? "";
+    }
+    return chain;
+  };
+  const subtotals = new Map<string, StockGroupSubtotal>();
+  const ungrouped: StockGroupSubtotal = {
+    group: "",
+    depth: 0,
+    item_count: 0,
+    opening_value: "0.0000",
+    inward_value: "0.0000",
+    outward_value: "0.0000",
+    closing_value: "0.0000",
+  };
+  const fold = (into: StockGroupSubtotal, it: StockSummaryItem) => {
+    into.item_count += 1;
+    into.opening_value = addMoney(into.opening_value, it.opening_value);
+    into.inward_value = addMoney(into.inward_value, it.inward_value);
+    into.outward_value = addMoney(into.outward_value, it.outward_value);
+    into.closing_value = addMoney(into.closing_value, it.closing_value);
+  };
+  for (const it of items) {
+    if (it.stock_group === "") {
+      fold(ungrouped, it);
+      continue;
+    }
+    for (const name of ancestors(it.stock_group)) {
+      let sub = subtotals.get(name);
+      if (!sub) {
+        sub = {
+          group: name,
+          depth: c.stockGroups.find((g) => g.name === name)?.depth ?? 0,
+          item_count: 0,
+          opening_value: "0.0000",
+          inward_value: "0.0000",
+          outward_value: "0.0000",
+          closing_value: "0.0000",
+        };
+        subtotals.set(name, sub);
+      }
+      fold(sub, it);
+    }
+  }
+  // Tree order: by depth, then by name — the server sorts by ltree path, which
+  // is the same order for a tree whose siblings are named uniquely.
+  const groups = [...subtotals.values()].sort(
+    (a, b) => a.depth - b.depth || a.group.localeCompare(b.group),
+  );
+  if (ungrouped.item_count > 0) groups.push(ungrouped);
+
   let total = "0.0000";
   for (const row of rows) total = addMoney(total, row.closing_value);
-  return { as_on: asOn ?? "", items, rows, total_value: total };
+  return { as_on: asOn ?? "", groups, items, rows, total_value: total };
 }
 
 /**
@@ -1314,6 +1425,18 @@ interface MockCompany {
   stockItems: StockItemListItem[];
   godowns: GodownListItem[];
   batches: StockBatchListItem[];
+  /**
+   * T10 — the ITEM HIERARCHY and the company's own UNITS.
+   *
+   * ⛔ THE UNITS ARE HELD AS ROWS, not synthesized, because a COMPOUND unit's
+   * conversion factor is what the Stock Summary restates a quantity with. A mock
+   * that invented units on read could not hold a factor, so a screen test would
+   * render a base quantity of zero and pass — the mock LABELLING a feature it
+   * does not compute, which is register row D84 exactly (it happened once
+   * already this lane, with the valuation method).
+   */
+  stockGroups: StockGroupListItem[];
+  units: UnitListItem[];
   /**
    * Head VoucherView per logical voucher_id — the GET /vouchers/{id} source.
    * Unlike the day-book DayBookEntry (which keeps ledger NAMEs for display),
@@ -2432,6 +2555,12 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         godowns: [mainLocation(companyID)],
         stockItems: [],
         batches: [],
+        stockGroups: [],
+        // "Nos" is seeded with every company by migration 0005's
+        // seed_phase1_voucher_types, and the item form's unit picker reads this
+        // list — a fresh company with an empty one could not create an item at
+        // all (the form refuses an item with no unit, deliberately).
+        units: [seedUnit(companyID, "Nos", "Numbers")],
         vouchers: [],
         acceptedDrafts: new Map(),
         bankDates: new Map(),
@@ -2515,6 +2644,8 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         },
       ],
       godowns: [mainLocation(demoID)],
+      stockGroups: [],
+      units: [seedUnit(demoID, "Nos", "Numbers")],
       // Two demo items with DIFFERENT GST rates, so an item invoice keyed
       // against the seeded company exercises the multi-rate grouping rather
       // than the single-rate happy path.
@@ -2527,6 +2658,9 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
           gst_rate_pct: "18.0000",
           valuation_method: "WEIGHTED_AVG",
           is_system: false,
+          // Ungrouped, like every item that predates T10 — a real state, and the
+          // one the Stock Summary's ungrouped bucket exists to report.
+          stock_group: "",
         },
         {
           id: "stock-gasket",
@@ -2536,6 +2670,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
           gst_rate_pct: "12.0000",
           valuation_method: "WEIGHTED_AVG",
           is_system: false,
+          stock_group: "",
         },
       ],
       batches: [],
@@ -4146,12 +4281,70 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     ): Promise<CreateVoucherTypeResponse> {
       return { voucher_type_id: id("vtype") };
     },
-    async createUnit(_c, req: CreateUnitRequest): Promise<CreateUnitResponse> {
+    async createUnit(companyID, req: CreateUnitRequest): Promise<CreateUnitResponse> {
       // D84: mirrors masters.CreateUnit's required-symbol refusal.
-      if ((req.symbol ?? "").trim() === "") {
+      const symbol = (req.symbol ?? "").trim();
+      if (symbol === "") {
         throw new ApiError(422, "masters: unit symbol is required");
       }
-      return { unit_id: id("unit") };
+      const c = ensure(companyID);
+      const dup = c.units.find(
+        (u) => normalisedName(u.symbol) === normalisedName(symbol),
+      );
+      if (dup) {
+        throw new ApiError(422, duplicateMasterMessage("unit", symbol, dup.symbol));
+      }
+      // ---- T10: A COMPOUND UNIT, and the four refusals the server makes.
+      //
+      // ⛔ IT STORES THE ROW NOW, where it used to mint an id and throw the
+      // master away. That was survivable while a unit was a bare symbol; a
+      // compound unit carries the CONVERSION FACTOR the Stock Summary restates
+      // quantities with, so a discarded unit means every base quantity in a
+      // screen test reads empty and the test passes anyway.
+      const base = (req.base_unit_symbol ?? "").trim();
+      const factor = (req.conversion_factor ?? "").trim();
+      if ((base === "") !== (factor === "")) {
+        throw new ApiError(
+          422,
+          `masters: unit ${JSON.stringify(symbol)} states only half a conversion — a base unit ` +
+            `with no factor cannot be converted and a factor with no base converts to nothing`,
+        );
+      }
+      let baseRow: UnitListItem | undefined;
+      if (base !== "") {
+        if (!/^-?\d+(\.\d+)?$/.test(factor) || Number(factor) <= 0) {
+          throw new ApiError(
+            422,
+            `masters: unit ${JSON.stringify(symbol)} needs a conversion factor greater than zero`,
+          );
+        }
+        baseRow = c.units.find(
+          (u) => normalisedName(u.symbol) === normalisedName(base),
+        );
+        if (!baseRow) {
+          throw new ApiError(404, `masters: not found: base unit "${base}"`);
+        }
+        // A CHAIN is refused rather than half-resolved: this build converts one
+        // level, and resolving the first of two factors is wrong by the second.
+        if (baseRow.base_unit_symbol !== "") {
+          throw new ApiError(
+            422,
+            `masters: unit ${JSON.stringify(symbol)} would be measured in ${JSON.stringify(base)}, ` +
+              `which is itself compound; this build converts ONE level only`,
+          );
+        }
+      }
+      const unitID = id("unit");
+      c.units.push({
+        id: unitID,
+        symbol,
+        formal_name: (req.formal_name ?? "").trim(),
+        decimal_places: req.decimal_places ?? 0,
+        is_system: false,
+        base_unit_symbol: baseRow ? baseRow.symbol : "",
+        conversion_factor: base === "" ? "" : factor,
+      });
+      return { unit_id: unitID };
     },
     async createStockItem(
       companyID,
@@ -4199,11 +4392,25 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         );
       }
 
+      // T10: the STOCK GROUP must already exist, exactly as on the wire — a
+      // group minted from a misspelling subtotals half a company's stock under a
+      // name nobody meant.
+      const groupName = (req.stock_group_name ?? "").trim();
+      if (groupName !== "") {
+        const g = c.stockGroups.find(
+          (x) => normalisedName(x.name) === normalisedName(groupName),
+        );
+        if (!g) {
+          throw new ApiError(404, `masters: not found: stock group "${groupName}"`);
+        }
+        g.item_count += 1;
+      }
       const stockItemID = id("stock");
       c.stockItems.push({
         id: stockItemID,
         name: req.name,
         unit_symbol: req.unit_symbol,
+        stock_group: groupName,
         hsn: req.hsn ?? "",
         gst_rate_pct: req.gst_rate_pct ?? "0.0000",
         // T9: the method ASKED FOR, defaulting to weighted average when the
@@ -4215,6 +4422,64 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         is_system: false,
       });
       return { stock_item_id: stockItemID };
+    },
+    async listUnits(companyID): Promise<ListUnitsResponse> {
+      return {
+        units: [...ensure(companyID).units].sort((a, b) =>
+          a.symbol.localeCompare(b.symbol),
+        ),
+      };
+    },
+    async listStockGroups(companyID): Promise<ListStockGroupsResponse> {
+      // ⚠️ TREE ORDER (parents before children), which the server produces from
+      // its ltree path. The mock keeps insertion order and only sorts by depth,
+      // because a parent must exist before a child can name it — so insertion
+      // order is already topological.
+      return {
+        stock_groups: [...ensure(companyID).stockGroups].sort(
+          (a, b) => a.depth - b.depth,
+        ),
+      };
+    },
+    async createStockGroup(
+      companyID,
+      req: CreateStockGroupRequest,
+    ): Promise<CreateStockGroupResponse> {
+      const c = ensure(companyID);
+      const name = (req.name ?? "").trim();
+      if (name === "") {
+        throw new ApiError(422, "masters: stock group name is required");
+      }
+      // D84: the mock refuses what the server refuses, in the server's order.
+      const dup = c.stockGroups.find(
+        (g) => normalisedName(g.name) === normalisedName(name),
+      );
+      if (dup) {
+        throw new ApiError(
+          422,
+          duplicateMasterMessage("stock group", name, dup.name),
+        );
+      }
+      const parent = (req.parent_name ?? "").trim();
+      let depth = 0;
+      if (parent !== "") {
+        const p = c.stockGroups.find(
+          (g) => normalisedName(g.name) === normalisedName(parent),
+        );
+        if (!p) {
+          throw new ApiError(404, `masters: not found: parent stock group "${parent}"`);
+        }
+        depth = p.depth + 1;
+      }
+      const groupID = id("stock-group");
+      c.stockGroups.push({
+        id: groupID,
+        name,
+        parent_name: parent === "" ? "" : parent,
+        depth,
+        item_count: 0,
+      });
+      return { stock_group_id: groupID };
     },
     async inventoryVocabulary(
       _companyID,

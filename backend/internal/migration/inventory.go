@@ -66,6 +66,7 @@ type inventoryCache struct {
 	items   map[string]stockItem // lower(name)   -> id + stored name + unit
 	godowns map[string]uuid.UUID // lower(name)   -> id
 	batches map[string]uuid.UUID // itemID|lower(name) -> id
+	groups  map[string]string    // lower(name)   -> STORED stock group name
 }
 
 // cctx is the per-RUN context an inventory helper needs: the request context,
@@ -97,6 +98,7 @@ func newInventoryCache() *inventoryCache {
 		items:   map[string]stockItem{},
 		godowns: map[string]uuid.UUID{},
 		batches: map[string]uuid.UUID{},
+		groups:  map[string]string{},
 	}
 }
 
@@ -107,6 +109,22 @@ func lowerKey(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
 // server allows unit_id NULL) and inventing "Nos" for it would put a unit on the
 // e-invoice of goods that were never counted in pieces.
 func (im *Importer) ensureUnit(ctx cctx, symbol string, res *ImportResult) (string, error) {
+	return im.ensureUnitWithBase(ctx, symbol, "", decimal.Zero, res)
+}
+
+// ensureUnitWithBase is ensureUnit for a unit that may be COMPOUND (T10): 1 BOX
+// = 12 NOS. The base unit is ensured FIRST, because masters.CreateUnit resolves
+// it and refuses ErrNotFound — and in a real export the base unit is often not
+// declared as a UNIT master at all (a Day Book declares none), so it has to be
+// inferable exactly as the compound one is.
+//
+// ⚠️ A COMPOUND UNIT WHOSE BASE IS ITSELF COMPOUND IS REFUSED BY masters, not
+// here. The refusal is a decision about what this build can restate (one level),
+// so it belongs where the vocabulary is; the importer's job is to report it
+// against the file that carried it.
+func (im *Importer) ensureUnitWithBase(ctx cctx, symbol, baseSymbol string,
+	factor decimal.Decimal, res *ImportResult) (string, error) {
+
 	symbol = strings.TrimSpace(symbol)
 	if symbol == "" {
 		return "", nil
@@ -114,13 +132,24 @@ func (im *Importer) ensureUnit(ctx cctx, symbol string, res *ImportResult) (stri
 	if stored, ok := ctx.inv.units[lowerKey(symbol)]; ok {
 		return stored, nil
 	}
+	baseStored := ""
+	if strings.TrimSpace(baseSymbol) != "" && factor.IsPositive() {
+		var err error
+		if baseStored, err = im.ensureUnit(ctx, baseSymbol, res); err != nil {
+			return "", err
+		}
+	}
 	// DecimalPlaces 4 rather than 0: Tally quantities in a real file carry
 	// fractions (grain is weighed), and unit.decimal_places is a DISPLAY
 	// constraint whose default of 0 would make every fractional quantity in the
 	// file look wrong on screen while the stored NUMERIC(19,4) held the truth.
 	// Four matches the column.
-	_, stored, created, err := im.masters.EnsureUnit(ctx.ctx,
-		masters.Unit{Symbol: symbol, DecimalPlaces: 4}, ctx.createdBy)
+	spec := masters.Unit{Symbol: symbol, DecimalPlaces: 4}
+	if baseStored != "" {
+		spec.BaseUnitSymbol = baseStored
+		spec.ConversionFactor = factor
+	}
+	_, stored, created, err := im.masters.EnsureUnit(ctx.ctx, spec, ctx.createdBy)
 	if err != nil {
 		return "", fmt.Errorf("unit %q: %w", symbol, err)
 	}
@@ -160,6 +189,18 @@ func (im *Importer) ensureGodown(ctx cctx, name string, res *ImportResult) (uuid
 func (im *Importer) ensureStockItem(ctx cctx, name, unitSymbol, hsn string,
 	gstRate decimal.Decimal, res *ImportResult) (stockItem, error) {
 
+	return im.ensureStockItemInGroup(ctx, name, unitSymbol, hsn, "", gstRate, res)
+}
+
+// ensureStockItemInGroup is ensureStockItem for an item whose STOCK GROUP the
+// file states (T10). The group must already exist — importInventoryMasters lands
+// the whole hierarchy before any item — and an unknown one is REPORTED and the
+// item created ungrouped, rather than the import aborting: a missing group
+// misfiles a SUBTOTAL, and refusing the whole migration over a subtotal would
+// trade the trader's books for their report layout.
+func (im *Importer) ensureStockItemInGroup(ctx cctx, name, unitSymbol, hsn, groupName string,
+	gstRate decimal.Decimal, res *ImportResult) (stockItem, error) {
+
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return stockItem{}, fmt.Errorf("a stock line names no item")
@@ -171,11 +212,23 @@ func (im *Importer) ensureStockItem(ctx cctx, name, unitSymbol, hsn string,
 	if err != nil {
 		return stockItem{}, err
 	}
+	group := ""
+	if g := strings.TrimSpace(groupName); g != "" {
+		if stored, ok := ctx.inv.groups[lowerKey(g)]; ok {
+			group = stored
+		} else {
+			res.Warnings = append(res.Warnings, fmt.Sprintf(
+				"stock item %q names stock group %q, which the export does not declare — the item "+
+					"was created UNGROUPED, so its stock is in the books and outside that group's "+
+					"subtotal", name, g))
+		}
+	}
 	id, stored, created, err := im.masters.EnsureStockItem(ctx.ctx, masters.StockItem{
-		Name:       name,
-		UnitSymbol: unit,
-		HSN:        hsn,
-		GSTRatePct: gstRate,
+		Name:           name,
+		UnitSymbol:     unit,
+		HSN:            hsn,
+		GSTRatePct:     gstRate,
+		StockGroupName: group,
 	}, ctx.createdBy)
 	if err != nil {
 		return stockItem{}, fmt.Errorf("stock item %q: %w", name, err)
@@ -237,28 +290,113 @@ func tallyDateOrEmpty(s string) string {
 func (im *Importer) importInventoryMasters(ctx cctx, msgs []integration.TallyMessage,
 	res *ImportResult) error {
 
+	// STOCK GROUPS FIRST, PARENTS BEFORE CHILDREN, and without assuming the file
+	// is ordered that way — a real export is not. The sweep is importGroups'
+	// (the accounting side's) applied to the item tree: keep going while anything
+	// resolves, then report whatever is left rather than inventing a parent.
+	pending := make([]*integration.TallyStockGroupMaster, 0, len(msgs))
+	for _, msg := range msgs {
+		if g := msg.StockGroup; g != nil && !g.Deleted() && g.Name() != "" {
+			pending = append(pending, g)
+		}
+	}
+	for len(pending) > 0 {
+		var deferred []*integration.TallyStockGroupMaster
+		progress := false
+		for _, g := range pending {
+			parent := g.ParentName()
+			if parent != "" {
+				if _, ok := ctx.inv.groups[lowerKey(parent)]; !ok {
+					// Not yet created in this run — but it may already exist in
+					// the company from an earlier import.
+					if _, stored, err := im.masters.StockGroupIDByName(ctx.ctx, parent); err == nil {
+						ctx.inv.groups[lowerKey(parent)] = stored
+					} else {
+						deferred = append(deferred, g)
+						continue
+					}
+				}
+			}
+			stored := ctx.inv.groups[lowerKey(parent)]
+			_, name, created, err := im.masters.EnsureStockGroup(ctx.ctx, masters.StockGroup{
+				Name:       g.Name(),
+				ParentName: stored,
+			}, ctx.createdBy)
+			if err != nil {
+				return fmt.Errorf("migration: stock group %q: %w", g.Name(), err)
+			}
+			ctx.inv.groups[lowerKey(g.Name())] = name
+			if created {
+				res.StockGroupsEnsured = append(res.StockGroupsEnsured, name)
+			}
+			progress = true
+		}
+		if !progress {
+			// ⛔ REPORTED, NOT INVENTED. A group whose parent is nowhere in the
+			// file is created at the TOP of the tree and said so: the items in it
+			// are correct and its subtotal simply sits one level higher than it
+			// did in Tally. Inventing the missing parent would put a group in the
+			// hierarchy that the operator never created and cannot recognise.
+			for _, g := range deferred {
+				_, name, created, err := im.masters.EnsureStockGroup(ctx.ctx,
+					masters.StockGroup{Name: g.Name()}, ctx.createdBy)
+				if err != nil {
+					return fmt.Errorf("migration: stock group %q: %w", g.Name(), err)
+				}
+				ctx.inv.groups[lowerKey(g.Name())] = name
+				if created {
+					res.StockGroupsEnsured = append(res.StockGroupsEnsured, name)
+				}
+				res.Warnings = append(res.Warnings, fmt.Sprintf(
+					"stock group %q was under %q in Tally and that parent is not in the export, so "+
+						"it was created at the TOP of the item tree — its items and their values are "+
+						"right and its subtotal sits one level higher than it did",
+					g.Name(), g.ParentName()))
+			}
+			break
+		}
+		pending = deferred
+	}
+
 	for _, msg := range msgs {
 		u := msg.Unit
 		if u == nil || u.Deleted() || u.Name() == "" {
 			continue
 		}
-		stored, err := im.ensureUnit(ctx, u.Name(), res)
+		// ⛔ A COMPOUND UNIT IS NOW IMPORTED AS ONE (T10). It used to arrive as a
+		// bare symbol with a warning saying nothing could restate it; the base and
+		// the factor are real columns now, so "BOX of 12 BAG" comes in as
+		// 1 BOX = 12 BAG and the Stock Summary restates it.
+		base, factor := "", decimal.Zero
+		if u.Compound() {
+			base = strings.TrimSpace(u.AdditionalUnits)
+			if f, err := decimal.NewFromString(strings.TrimSpace(u.Conversion)); err == nil {
+				factor = f
+			}
+			if base == "" || !factor.IsPositive() {
+				// Half a compound unit cannot be represented and must not be
+				// guessed: a factor of 1 would silently say a box holds one piece.
+				res.Warnings = append(res.Warnings, fmt.Sprintf(
+					"unit %q is marked compound in the export but carries no usable base unit "+
+						"(%q) or conversion (%q), so it was imported as a SIMPLE symbol — "+
+						"quantities in it are correct and cannot be restated in another unit",
+					u.Name(), strings.TrimSpace(u.AdditionalUnits), strings.TrimSpace(u.Conversion)))
+				base, factor = "", decimal.Zero
+			}
+		}
+		stored, err := im.ensureUnitWithBase(ctx, u.Name(), base, factor, res)
 		if err != nil {
 			return fmt.Errorf("migration: %w", err)
 		}
-		// ⛔ A COMPOUND UNIT IS REPORTED, NEVER SILENTLY FLATTENED. "Box of 12
-		// Nos" arrives as a unit named Box with a conversion this schema cannot
-		// hold, so every quantity in Boxes is stored as Boxes and is CORRECT —
-		// but a report cannot restate it in pieces, and a reader who assumes it
-		// can is out by the conversion factor. Saying so is the difference
-		// between a limitation and a wrong number.
-		if u.Compound() {
+		// What LANDED is reported, not what could not: a compound unit now has a
+		// base and a factor, and the operator needs to know that quantities in it
+		// are stored in the OUTER unit and restated at report time — because the
+		// number on the Stock Summary's Qty column is boxes, not pieces.
+		if u.Compound() && base != "" && factor.IsPositive() {
 			res.Warnings = append(res.Warnings, fmt.Sprintf(
-				"unit %q is a COMPOUND unit in Tally (1 %s = %s %s) and was imported as a SIMPLE "+
-					"symbol: quantities in it are stored as %s and nothing in this build can "+
-					"restate them in %s",
-				stored, strings.TrimSpace(u.BaseUnits), strings.TrimSpace(u.Conversion),
-				strings.TrimSpace(u.AdditionalUnits), stored, strings.TrimSpace(u.AdditionalUnits)))
+				"unit %q is COMPOUND (1 %s = %s %s): quantities are stored in %s and the Stock "+
+					"Summary restates the closing quantity in %s beside it",
+				stored, stored, factor.String(), base, stored, base))
 		}
 	}
 
@@ -302,7 +440,8 @@ func (im *Importer) importInventoryMasters(ctx cctx, msgs []integration.TallyMes
 				}
 			}
 		}
-		it, err := im.ensureStockItem(ctx, si.Name(), unit, si.HSNCode(), rate, res)
+		it, err := im.ensureStockItemInGroup(ctx, si.Name(), unit, si.HSNCode(),
+			si.StockGroupName(), rate, res)
 		if err != nil {
 			return fmt.Errorf("migration: %w", err)
 		}

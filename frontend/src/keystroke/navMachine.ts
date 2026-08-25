@@ -166,6 +166,10 @@ export const MASTER_GOTO_ENTRIES: Readonly<Record<string, MasterKind>> = {
   "Create Ledger": "ledger",
   "Create Group": "group",
   "Create Stock Item": "stock-item",
+  // T10. Listed AFTER "Create Stock Item" so typing "stock" offers the item
+  // first — the master an operator reaches for forty times a day — and the group
+  // second.
+  "Create Stock Group": "stock-group",
   "Create Unit": "unit",
   "Create Voucher Type": "voucher-type",
 };

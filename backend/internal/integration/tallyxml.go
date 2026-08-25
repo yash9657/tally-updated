@@ -128,6 +128,46 @@ type TallyMessage struct {
 	StockItem *TallyStockItemMaster `xml:"STOCKITEM"`
 	Unit      *TallyUnitMaster      `xml:"UNIT"`
 	Godown    *TallyGodownMaster    `xml:"GODOWN"`
+	// StockGroup is a STOCKGROUP master: one node of the item hierarchy (T10).
+	// PARENT names another stock group, or is empty / "Primary" for a top-level
+	// one — and Tally spells the root both ways depending on the export.
+	StockGroup *TallyStockGroupMaster `xml:"STOCKGROUP"`
+}
+
+// TallyStockGroupMaster is a STOCKGROUP master: a node of the item hierarchy.
+type TallyStockGroupMaster struct {
+	NameAttr  string `xml:"NAME,attr"`
+	NameElem  string `xml:"NAME"`
+	Parent    string `xml:"PARENT"`
+	IsDeleted string `xml:"ISDELETED"`
+}
+
+// Name returns the group's name, preferring the NAME attribute.
+func (g TallyStockGroupMaster) Name() string {
+	if n := strings.TrimSpace(g.NameAttr); n != "" {
+		return n
+	}
+	return strings.TrimSpace(g.NameElem)
+}
+
+// ParentName returns the parent group's name, or "" for a top-level group.
+//
+// ⛔ "Primary" IS TRANSLATED TO "no parent", and it has to be. Tally's item tree
+// has a synthetic root spelled "Primary" that is not a group anybody created —
+// the same trap the ACCOUNT side documents (masters resolves a parent by name and
+// answers "parent group "Primary" not found" for what the operator read as the
+// ordinary top-level choice).
+func (g TallyStockGroupMaster) ParentName() string {
+	p := strings.TrimSpace(g.Parent)
+	if strings.EqualFold(p, "Primary") {
+		return ""
+	}
+	return p
+}
+
+// Deleted reports whether the master is tombstoned in the export.
+func (g TallyStockGroupMaster) Deleted() bool {
+	return strings.EqualFold(strings.TrimSpace(g.IsDeleted), "Yes")
 }
 
 // TallyUnitMaster is a UNIT master: a unit of measure.
@@ -239,6 +279,17 @@ func (i TallyStockItemMaster) Name() string {
 		return n
 	}
 	return strings.TrimSpace(i.NameElem)
+}
+
+// StockGroupName returns the item's STOCK GROUP — Tally puts it in <PARENT> —
+// with the synthetic root "Primary" translated to "" (ungrouped), for the reason
+// TallyStockGroupMaster.ParentName gives.
+func (i TallyStockItemMaster) StockGroupName() string {
+	p := strings.TrimSpace(i.Parent)
+	if strings.EqualFold(p, "Primary") {
+		return ""
+	}
+	return p
 }
 
 // UnitSymbol returns the item's unit of measure, preferring <BASEUNITS>.

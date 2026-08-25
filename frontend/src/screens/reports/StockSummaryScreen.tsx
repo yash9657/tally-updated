@@ -276,7 +276,10 @@ export function StockSummaryScreen({ snapshot }: { snapshot: NavSnapshot }) {
             this report fills in.
           </p>
         ) : (
-          <StockRows data={data} />
+          <>
+            <StockGroupSubtotals data={data} />
+            <StockRows data={data} />
+          </>
         )}
       </div>
     </section>
@@ -502,6 +505,14 @@ const STOCK_SUMMARY_HEADERS = [
   "Outward Qty",
   "Outward Value (at cost)",
   "Closing Qty",
+  // T10 — the closing quantity RESTATED in the unit's base unit ("48.0000" for
+  // four boxes of twelve). ⛔ ITS OWN COLUMN AND NOT PARENTHESES INSIDE
+  // "Closing Qty": the screen can afford "4.0000 (= 48.0000 Nos)" in one cell
+  // and a spreadsheet cannot — a numeric column with prose in it is a column
+  // nobody can sum, and this file's whole purpose is to be summed. It is BEFORE
+  // Closing Value because that one must stay LAST (both footers put the one
+  // total the server states in the final cell).
+  "Closing Qty (base unit)",
   "Rate",
   "Closing Value",
 ] as const;
@@ -541,6 +552,21 @@ function StockRows({ data }: { data: StockSummaryResponse }) {
                 {formatMoney(it.outward_value)}
               </td>
               <td className="pr-3 text-right">{it.closing_qty}</td>
+              {/* ⛔ THE RESTATEMENT IS ITS OWN COLUMN, BESIDE THE STORED FIGURE
+                  AND NEVER INSTEAD OF IT (T10). The quantity that was keyed is
+                  the one in the item's own unit; the base-unit figure is DERIVED
+                  by the server. A screen that showed only "48 Nos" for four
+                  boxes would disagree with the invoice about what was entered.
+                  A simple unit renders an em dash: there is no base to restate
+                  into, and a zero would be a claim about the goods. */}
+              <td
+                className="pr-3 text-right"
+                data-testid={`stock-base-qty:${it.item}`}
+              >
+                {it.base_unit && it.base_qty
+                  ? `${it.base_qty} ${it.base_unit}`
+                  : "—"}
+              </td>
               {/* No rate on an item total: two godowns of the same item carry
                   two different average costs, and the average of the averages
                   is not the average. */}
@@ -577,6 +603,10 @@ function StockRows({ data }: { data: StockSummaryResponse }) {
                   {formatMoney(row.outward_value)}
                 </td>
                 <td className="pr-3 text-right">{row.closing_qty}</td>
+                {/* Empty: the restatement belongs to the ITEM (one unit, one
+                    conversion), and repeating it per location would imply a
+                    location could have a conversion of its own. */}
+                <td className="pr-3" />
                 <td className="pr-3 text-right">
                   {formatMoney(row.closing_rate)}
                 </td>
@@ -636,7 +666,7 @@ export function stockSummarySheet(
       rows.push(
         stockSummaryRow(
           `${pos.godown || "(no location)"}${pos.batch ? ` \u00b7 ${pos.batch}` : ""}`,
-          { ...pos, valuation_method: "" },
+          { ...pos, valuation_method: "", base_unit: "", base_qty: "" },
           { rate: pos.closing_rate },
         ),
       );
@@ -676,6 +706,8 @@ function stockSummaryRow(
   f: {
     unit: string;
     valuation_method?: string;
+    base_unit?: string;
+    base_qty?: string;
     opening_qty: string;
     opening_value: string;
     inward_qty: string;
@@ -699,6 +731,10 @@ function stockSummaryRow(
     exactCell(f.outward_qty),
     moneyCell(f.outward_value),
     exactCell(f.closing_qty),
+    // Empty for a simple unit AND for every position line (the restatement is a
+    // property of the ITEM, stated on its own line), rather than "0.0000":
+    // a zero in a quantity column is a claim about the goods.
+    f.base_qty && f.base_unit ? exactCell(f.base_qty) : textCell(""),
     opts.rate === null ? textCell("") : moneyCell(opts.rate),
     moneyCell(f.closing_value),
   ];
@@ -816,5 +852,64 @@ function ValuationSwitchPanel({
         </button>
       </p>
     </div>
+  );
+}
+
+/**
+ * THE STOCK GROUP SUBTOTALS (T10) — one line per group, in tree order, above the
+ * item table.
+ *
+ * ⛔⛔ IT PRINTS "NO TOTAL" AND SAYS WHY. The group figures DO NOT SUM to the
+ * company's closing stock: an item counts in every ancestor of its group, which
+ * is exactly what makes a branch total worth reading ("Provisions" includes
+ * "Provisions > Grains") and exactly what makes adding the column up wrong. A
+ * table of numbers with no total invites the reader to add them, so the reason is
+ * stated where they would otherwise do it.
+ *
+ * ⚠️ A COMPANY WITH NO GROUPS RENDERS NOTHING AT ALL — not an empty box, not a
+ * heading. Every item that predates T10 is ungrouped, so the one-bucket case
+ * (just "(ungrouped)") is a table that says nothing the item list does not, and
+ * a heading over it would imply a feature is missing rather than unused.
+ */
+function StockGroupSubtotals({ data }: { data: StockSummaryResponse }) {
+  const grouped = data.groups.filter((g) => g.group !== "");
+  if (grouped.length === 0) return null;
+  return (
+    <table className="mb-4 w-full text-sm" data-testid="stock-group-subtotals">
+      <thead>
+        <tr className="text-left text-xs text-tally-title">
+          <th className="pr-3">Stock group</th>
+          <th className="pr-3 text-right">Items</th>
+          <th className="pr-3 text-right">Closing Value</th>
+        </tr>
+      </thead>
+      <tbody>
+        {data.groups.map((g) => (
+          <tr
+            key={g.group || "(ungrouped)"}
+            data-testid={`stock-group:${g.group}`}
+          >
+            <td className="pr-3">
+              {/* The indent IS the hierarchy, and `depth` comes from the server
+                  (an ltree path) rather than from anything this screen derives. */}
+              <span style={{ paddingLeft: `${String(g.depth)}rem` }}>
+                {g.group === "" ? "(ungrouped)" : g.group}
+              </span>
+            </td>
+            <td className="pr-3 text-right">{g.item_count}</td>
+            <td className="pr-3 text-right">{formatMoney(g.closing_value)}</td>
+          </tr>
+        ))}
+      </tbody>
+      <tfoot>
+        <tr>
+          <td colSpan={3} className="pt-1 text-xs">
+            No total: an item counts in EVERY group above it, so these lines
+            overlap and adding them up double-counts every nested branch. The
+            company&rsquo;s closing stock is the Stock-in-Hand line below.
+          </td>
+        </tr>
+      </tfoot>
+    </table>
   );
 }

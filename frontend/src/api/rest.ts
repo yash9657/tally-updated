@@ -37,7 +37,11 @@ import type {
   ImportTallyXMLResponse,
   ListGodownsResponse,
   ListStockBatchesResponse,
+  CreateStockGroupRequest,
+  CreateStockGroupResponse,
   InventoryVocabularyResponse,
+  ListStockGroupsResponse,
+  ListUnitsResponse,
   SetValuationMethodRequest,
   SetValuationMethodResponse,
   ListStockItemsResponse,
@@ -629,6 +633,18 @@ export function createRestClient(
     listStockItems(companyID) {
       return http.get<ListStockItemsResponse>(
         `${company(companyID)}/stock-items`,
+      );
+    },
+    listUnits(companyID) {
+      return http.get<ListUnitsResponse>(`${company(companyID)}/units`);
+    },
+    listStockGroups(companyID) {
+      return http.get<ListStockGroupsResponse>(`${company(companyID)}/stock-groups`);
+    },
+    createStockGroup(companyID, req: CreateStockGroupRequest) {
+      return http.post<CreateStockGroupResponse>(
+        `${company(companyID)}/stock-groups`,
+        req,
       );
     },
     inventoryVocabulary(companyID) {

@@ -651,7 +651,43 @@ export interface CreateUnitRequest {
   symbol: string;
   formal_name?: string;
   decimal_places?: number;
+  /**
+   * A COMPOUND unit (T10): 1 <symbol> = <conversion_factor> <base_unit_symbol>,
+   * e.g. 1 BOX = 12 Nos.
+   *
+   * ⛔ BOTH OR NEITHER — the server refuses half of one, because a base with no
+   * factor cannot be converted and a factor with no base converts to nothing.
+   * ⛔ AND THE FACTOR IS A DECIMAL STRING, like every other number on this wire:
+   * a JSON number is a float, and a float conversion factor is how one BOX
+   * quietly becomes 11.999999 pieces.
+   */
+  base_unit_symbol?: string;
+  conversion_factor?: Money;
   created_by?: string;
+}
+
+/**
+ * One unit of measure as stored. `decimal_places` is what tells a grid how many
+ * decimals a quantity in this unit may carry.
+ *
+ * A COMPOUND unit carries `base_unit_symbol` and `conversion_factor`; both are ""
+ * for a simple one.
+ *
+ * ⚠️ DO NOT MULTIPLY A QUANTITY BY THIS FACTOR IN A CLIENT. Quantities are stored
+ * in the item's own unit and RESTATED by the server (the Stock Summary's
+ * base_qty); a client that converted as well would convert twice.
+ */
+export interface UnitListItem {
+  id: string;
+  symbol: string;
+  formal_name: string;
+  decimal_places: number;
+  is_system: boolean;
+  base_unit_symbol: string;
+  conversion_factor: Money | "";
+}
+export interface ListUnitsResponse {
+  units: UnitListItem[];
 }
 export interface CreateUnitResponse {
   unit_id: string;
@@ -674,6 +710,14 @@ export interface CreateStockItemRequest {
    * Stock Summary and the Balance Sheet fail later for the whole company.
    */
   valuation_method?: string;
+  /**
+   * The item's STOCK GROUP (T10). Absent leaves it UNGROUPED.
+   *
+   * ⚠️ THE GROUP MUST ALREADY EXIST — the server refuses an unknown one rather
+   * than creating it, because a group minted from a misspelling subtotals half a
+   * company's stock under a name nobody meant.
+   */
+  stock_group_name?: string;
   created_by?: string;
 }
 export interface CreateStockItemResponse {
@@ -1381,6 +1425,43 @@ export interface StockItemListItem {
   /** Names the valuer that replays this item's movements, e.g. "WEIGHTED_AVG". */
   valuation_method: string;
   is_system: boolean;
+  /**
+   * The item's STOCK GROUP (T10), or "" for an UNGROUPED item — a real state
+   * (Tally's "under Primary") and not a missing value: every item created before
+   * T10 is ungrouped, so a picker that hid them would hide most of a company's
+   * stock.
+   */
+  stock_group: string;
+}
+
+/**
+ * One node of the item hierarchy (T10), as served in TREE ORDER: a parent always
+ * precedes its children, and `depth` is what a client indents by.
+ *
+ * ⚠️ RE-SORTING THE LIST BREAKS THE TREE. The order is the server's ltree path
+ * order; sorting by name would put a child above its parent and the indentation
+ * would describe a hierarchy that does not exist.
+ */
+export interface StockGroupListItem {
+  id: string;
+  name: string;
+  /** "" for a top-level group. */
+  parent_name: string;
+  depth: number;
+  /** How many items sit DIRECTLY in this group (not in its descendants). */
+  item_count: number;
+}
+export interface ListStockGroupsResponse {
+  stock_groups: StockGroupListItem[];
+}
+export interface CreateStockGroupRequest {
+  name: string;
+  /** An EXISTING group, or absent for a top-level one. */
+  parent_name?: string;
+  created_by?: string;
+}
+export interface CreateStockGroupResponse {
+  stock_group_id: string;
 }
 export interface ListStockItemsResponse {
   stock_items: StockItemListItem[];
@@ -1473,6 +1554,8 @@ export interface StockPositionRow {
   godown: string;
   batch_id: string;
   batch: string;
+  /** The item's stock group (T10), carried on the flat row so an export can group by it. */
+  stock_group: string;
   valuation_method: string;
   opening_qty: Money;
   opening_value: Money;
@@ -1500,6 +1583,21 @@ export interface StockSummaryItem {
   stock_item_id: string;
   item: string;
   unit: string;
+  /** The item's STOCK GROUP (T10), "" for an ungrouped item. */
+  stock_group: string;
+  /**
+   * The closing quantity RESTATED in the unit's base unit when the item's unit
+   * is COMPOUND: an item in "BOX of 12 Nos" closing at 4 BOX reads base_qty
+   * "48.0000" in base_unit "Nos".
+   *
+   * ⛔ BOTH ARE "" FOR A SIMPLE UNIT — render NOTHING, never "0.0000": a unit
+   * with no base restates into nothing, and a zero would read as a claim about
+   * the goods. And `closing_qty` is the STORED figure: nothing converts a
+   * quantity on the way in, so a report that showed base_qty as the quantity
+   * would disagree with the invoice about what was keyed.
+   */
+  base_unit: string;
+  base_qty: Money;
   /**
    * The BASIS every figure on this line was derived on — "WEIGHTED_AVG",
    * "FIFO" or "LIFO". It is on the ITEM and not on a position because that is
@@ -1522,9 +1620,33 @@ export interface StockSummaryItem {
   positions: StockPositionRow[];
 }
 
+/**
+ * One STOCK GROUP's subtotal on the Stock Summary (T10) — the whole BRANCH: a
+ * group's own items plus every item in every group beneath it.
+ *
+ * ⛔ THESE DO NOT SUM TO `total_value`, AND ADDING THEM UP IS A BUG. An item
+ * counts in every ancestor of its group, which is what makes a branch total worth
+ * reading. The company's closing stock is `total_value`, which comes off the
+ * POSITIONS.
+ *
+ * `group` is "" for the UNGROUPED bucket, which is a real bucket holding every
+ * item that predates T10 — label it, never skip it.
+ */
+export interface StockGroupSubtotal {
+  group: string;
+  depth: number;
+  item_count: number;
+  opening_value: Money;
+  inward_value: Money;
+  outward_value: Money;
+  closing_value: Money;
+}
+
 export interface StockSummaryResponse {
   /** The as-at date the replay stopped at; "" when unbounded. */
   as_on: string;
+  /** Group subtotals in TREE ORDER, ungrouped last. See StockGroupSubtotal. */
+  groups: StockGroupSubtotal[];
   items: StockSummaryItem[];
   /** The same positions, flat — the item tree is folded from these. */
   rows: StockPositionRow[];

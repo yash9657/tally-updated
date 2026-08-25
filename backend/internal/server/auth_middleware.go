@@ -2187,6 +2187,12 @@ func isMasterPath(rest string) bool {
 	switch rest {
 	case "/groups", "/ledgers", "/voucher-types", "/units", "/stock-items",
 		"/godowns", "/batches",
+		// T10 — the STOCK GROUP hierarchy (migration 0079). A master on exactly
+		// the terms /godowns is: it names no amount, it is what an item form's
+		// group picker is built from, and the READ and the WRITE emit the SAME
+		// token so one ACL rule governs both (the reason isMasterPath is shared
+		// between the two arms above).
+		"/stock-groups",
 		// THE STATUTORY TDS/TCS SECTION VOCABULARY (D3). A master list in the
 		// only sense that matters to the PDP: it names no party, no amount and
 		// nothing about this company — it is the Finance Act's rate table — so it

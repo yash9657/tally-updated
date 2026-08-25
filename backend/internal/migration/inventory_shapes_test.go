@@ -248,8 +248,9 @@ func TestTallyPrimeInventoryShapesCorpus(t *testing.T) {
 			"warehouses; WHEAT 5 rejected back) — a stock line that is read and dropped leaves "+
 			"the trial balance perfect and the warehouse empty", res.StockLines)
 	}
-	if res.OpeningPositions != 2 {
-		t.Errorf("opening positions written = %d, want 2 (RICE untracked, WHEAT in WAREHOUSE A/W-1) "+
+	if res.OpeningPositions != 3 {
+		t.Errorf("opening positions written = %d, want 3 (RICE untracked, WHEAT in WAREHOUSE A/W-1, "+
+			"PACKETS untracked) "+
 			"— without them the first issue of older goods has nothing to consume and the cost of "+
 			"goods sold is understated by the whole opening value", res.OpeningPositions)
 	}
@@ -258,7 +259,8 @@ func TestTallyPrimeInventoryShapesCorpus(t *testing.T) {
 		label   string
 		members []string
 	}{
-		{res.StockItemsEnsured, "stock items", []string{"RICE", "WHEAT"}},
+		{res.StockItemsEnsured, "stock items", []string{"PACKETS", "RICE", "WHEAT"}},
+		{res.StockGroupsEnsured, "stock groups", []string{"GRAINS", "PROVISIONS"}},
 		{res.UnitsEnsured, "units", []string{"BAG", "BOX"}},
 		{res.GodownsEnsured, "godowns", []string{"WAREHOUSE A", "WAREHOUSE B"}},
 		{res.BatchesEnsured, "batches", []string{"RICE/R-1", "RICE/R-2", "WHEAT/W-1"}},
@@ -271,9 +273,14 @@ func TestTallyPrimeInventoryShapesCorpus(t *testing.T) {
 	// ---- WHAT COULD NOT BE REPRESENTED WAS REPORTED, not swallowed.
 	joined := strings.Join(res.Warnings, " | ")
 	for _, want := range []struct{ needle, why string }{
-		{"COMPOUND unit", "a 'BOX of 12 BAG' unit is imported as the simple symbol BOX; nothing " +
-			"in this build can restate a quantity in BAG, and a reader who assumes it can is out " +
-			"by the conversion factor"},
+		// ⚠️ THIS ASSERTION WAS RE-POINTED WHEN T10 LANDED, and the direction is
+		// the interesting part: it used to demand a warning saying a compound unit
+		// had been FLATTENED and that nothing could restate it. That limitation is
+		// gone — unit.base_unit_id and conversion_factor are real columns — so the
+		// warning now reports what DID happen, which an operator still needs,
+		// because the Qty column shows BOXES and not pieces.
+		{"is COMPOUND (1 BOX = 12 BAG)", "the unit came in as a real compound unit and the " +
+			"operator has to know that the stored quantity is in the outer unit"},
 		{"locations are FLAT", "WAREHOUSE B was a child of WAREHOUSE A in Tally; the stock is in " +
 			"the right place and the hierarchy is gone"},
 	} {
@@ -346,11 +353,98 @@ func TestTallyPrimeInventoryShapesCorpus(t *testing.T) {
 	// opened 40 for 3600 (a rate of 90 DERIVED from OPENINGVALUE, because the
 	// file states no OPENINGRATE) and gave 5 back at 90 (450), leaving 35 @ 90 =
 	// 3150. Closing stock 1800 + 2000 + 1000 + 3150 = 7950.
-	if wantTotal := decimal.RequireFromString("7950.0000"); !sum.TotalValue.Equal(wantTotal) {
-		t.Errorf("closing stock VALUE = %s, want %s. Two ways this goes wrong and both balance: an "+
+	if wantTotal := decimal.RequireFromString("8950.0000"); !sum.TotalValue.Equal(wantTotal) {
+		t.Errorf("closing stock VALUE = %s, want %s (RICE 4800 + WHEAT 3150 + PACKETS 1000). Two "+
+			"ways this goes wrong and both balance: an "+
 			"opening whose rate was not derived from OPENINGVALUE carries the stock at nil (that "+
 			"alone is 3600 of this figure), and a rejected-goods line posted as an INWARD adds 450 "+
 			"instead of removing it", sum.TotalValue.StringFixed(4), wantTotal.StringFixed(4))
+	}
+
+	// ---- T10: THE ITEM HIERARCHY AND THE COMPOUND UNIT, both imported from the
+	// same file, both checked on the REPORT rather than on the master.
+	//
+	// ⛔ THE GROUP TOTAL IS THE WHOLE BRANCH. PROVISIONS holds PACKETS directly
+	// and GRAINS beneath it, so PROVISIONS = 8,950 (everything) and GRAINS =
+	// 7,950 (RICE 4,800 + WHEAT 3,150). A rollup that counted only DIRECT items
+	// would print PROVISIONS as 1,000 — smaller than the rows underneath it, with
+	// nothing on the page to explain the difference.
+	byGroup := map[string]decimal.Decimal{}
+	depth := map[string]int{}
+	for _, g := range sum.Groups {
+		byGroup[g.GroupName] = g.ClosingValue
+		depth[g.GroupName] = g.Depth
+	}
+	for _, tc := range []struct {
+		group     string
+		want      string
+		wantDepth int
+	}{
+		{"PROVISIONS", "8950.0000", 0},
+		{"GRAINS", "7950.0000", 1},
+	} {
+		got, ok := byGroup[tc.group]
+		if !ok {
+			t.Errorf("no subtotal for stock group %q — the group exists and its items are in the "+
+				"books, so a Stock Summary that cannot subtotal them is the whole feature missing",
+				tc.group)
+			continue
+		}
+		if !got.Equal(decimal.RequireFromString(tc.want)) {
+			t.Errorf("stock group %q closes at %s, want %s — a group total that is not the whole "+
+				"BRANCH is smaller than the rows printed under it", tc.group,
+				got.StringFixed(4), tc.want)
+		}
+		if depth[tc.group] != tc.wantDepth {
+			t.Errorf("stock group %q is at depth %d, want %d — the depth is what a client indents "+
+				"the tree by, and the child was declared BEFORE its parent in the file",
+				tc.group, depth[tc.group], tc.wantDepth)
+		}
+	}
+	// ⚠️ AND THEY DO NOT SUM TO THE COMPANY TOTAL, which is the property the
+	// group rollup's own doc states: PACKETS is in PROVISIONS and RICE is in BOTH
+	// GRAINS and PROVISIONS, so adding the group rows gives 16,900 against a
+	// company holding 8,950. A client that totals them double-counts every nested
+	// branch.
+	groupSum := decimal.Zero
+	for _, g := range sum.Groups {
+		groupSum = groupSum.Add(g.ClosingValue)
+	}
+	if groupSum.Equal(sum.TotalValue) {
+		t.Errorf("the group subtotals sum to the company total (%s). With a NESTED group they "+
+			"must not: an item counts in every ancestor, which is what makes a branch total "+
+			"readable — if these agree, either the nesting is not being rolled up or the "+
+			"company total is wrong", groupSum.StringFixed(4))
+	}
+
+	// THE COMPOUND UNIT, RESTATED. PACKETS is measured in BOX, and BOX is
+	// "1 BOX = 12 BAG", so 5 BOX closes as 60 BAG. ⛔ THE STORED QUANTITY IS 5:
+	// nothing converts on the way in, and if closing_qty read 60.0000 the invoice
+	// that said 5 BOX and the stock ledger would disagree about what was keyed.
+	var packets *reporting.StockItemRollup
+	for i := range sum.Items {
+		if sum.Items[i].ItemName == "PACKETS" {
+			packets = &sum.Items[i]
+		}
+	}
+	if packets == nil {
+		t.Fatal("PACKETS is not in the Stock Summary")
+	}
+	if want := decimal.RequireFromString("5.0000"); !packets.ClosingQty.Equal(want) {
+		t.Errorf("PACKETS closes at %s BOX, want %s — the STORED quantity is in the item's own "+
+			"unit and nothing converts it on the way in", packets.ClosingQty.StringFixed(4),
+			want.StringFixed(4))
+	}
+	if packets.BaseUnitSymbol != "BAG" {
+		t.Errorf("PACKETS restates into %q, want BAG — the export declares BOX as a compound unit "+
+			"of 12 BAG and the importer used to flatten it to a bare symbol",
+			packets.BaseUnitSymbol)
+	}
+	if want := decimal.RequireFromString("60.0000"); !packets.ClosingBaseQty.Equal(want) {
+		t.Errorf("PACKETS restates as %s BAG, want %s (5 x 12). A build that resolved no "+
+			"conversion would report 0 here, and one that converted on the way IN would have "+
+			"stored 60 and lost the 5 that was keyed",
+			packets.ClosingBaseQty.StringFixed(4), want.StringFixed(4))
 	}
 
 	// ---- RE-IMPORTING THE SAME FILE MUST NOT DOUBLE THE WAREHOUSE. The vouchers

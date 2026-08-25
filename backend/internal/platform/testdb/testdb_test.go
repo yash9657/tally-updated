@@ -146,18 +146,20 @@ type fixtureRow struct {
 func buildFixture(cid uuid.UUID) []fixtureRow {
 	id := func() uuid.UUID { return uuid.New() }
 	var (
-		groupID   = id()
-		levelID   = id()
-		userID    = id()
-		unitID    = id()
-		itemID    = id()
-		godownID  = id()
-		batchID   = id()
-		ledgerID  = id()
-		vtypeID   = id()
-		voucherID = id()
-		versionID = id()
-		plistID   = id()
+		groupID = id()
+		levelID = id()
+		userID  = id()
+		unitID  = id()
+		itemID  = id()
+		// T10 — the stock group the item below belongs to (migration 0079).
+		stockGroupID = id()
+		godownID     = id()
+		batchID      = id()
+		ledgerID     = id()
+		vtypeID      = id()
+		voucherID    = id()
+		versionID    = id()
+		plistID      = id()
 
 		// Captured (rather than inlined as id()) because
 		// posting_cost_allocation below has to hang off this exact posting.
@@ -229,8 +231,20 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 			[]any{userID, cid, levelID}},
 		{"unit", `INSERT INTO unit (id, company_id, symbol) VALUES ($1, $2, 'Nos')`,
 			[]any{unitID, cid}},
-		{"stock_item", `INSERT INTO stock_item (id, company_id, name, unit_id) VALUES ($1, $2, 'Fixture Item', $3)`,
-			[]any{itemID, cid, unitID}},
+		// T10 — the item hierarchy (migration 0079). Seeded ABOVE stock_item
+		// because the item below hangs off it, and the plan's order is the order
+		// these run in.
+		{"stock_group", `INSERT INTO stock_group (id, company_id, name, path)
+			VALUES ($1, $2, 'Fixture Stock Group', 'fixturestockgroup'::ltree)`,
+			[]any{stockGroupID, cid}},
+		// ⚠️ THE ITEM CARRIES THE GROUP, and it does so on purpose: an item with a
+		// NULL stock_group_id would seed a row in both tables while leaving the FK
+		// between them unexercised, so a teardown that deleted the groups BEFORE
+		// the items would still pass. It is the reference that has to be present
+		// for the delete ORDER to be tested at all.
+		{"stock_item", `INSERT INTO stock_item (id, company_id, name, unit_id, stock_group_id)
+			VALUES ($1, $2, 'Fixture Item', $3, $4)`,
+			[]any{itemID, cid, unitID, stockGroupID}},
 		{"godown", `INSERT INTO godown (id, company_id, name) VALUES ($1, $2, 'Fixture Godown')`,
 			[]any{godownID, cid}},
 		{"stock_batch", `INSERT INTO stock_batch (id, company_id, stock_item_id, name)

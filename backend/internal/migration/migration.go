@@ -112,9 +112,11 @@ type ImportResult struct {
 	// and de-duplicated, so a 121-voucher file does not report one item forty
 	// times.
 	StockItemsEnsured []string
-	UnitsEnsured      []string
-	GodownsEnsured    []string
-	BatchesEnsured    []string
+	// StockGroupsEnsured are the item-hierarchy nodes created (T10).
+	StockGroupsEnsured []string
+	UnitsEnsured       []string
+	GodownsEnsured     []string
+	BatchesEnsured     []string
 	// OpeningPositions is the number of stock_opening rows written from STOCKITEM
 	// masters. ⚠️ ZERO HERE ON A FILE WITH STOCK LINES IS A WARNING SIGN, not a
 	// clean result: it means the export carried no opening stock, so every
@@ -338,6 +340,7 @@ func (im *Importer) ImportEnvelope(ctx context.Context, env *integration.TallyEn
 	// One item named on forty invoices is ONE line in the report. Sorted so two
 	// runs of the same file produce the same report and a diff means something.
 	res.StockItemsEnsured = sortedUnique(res.StockItemsEnsured)
+	res.StockGroupsEnsured = sortedUnique(res.StockGroupsEnsured)
 	res.UnitsEnsured = sortedUnique(res.UnitsEnsured)
 	res.GodownsEnsured = sortedUnique(res.GodownsEnsured)
 	res.BatchesEnsured = sortedUnique(res.BatchesEnsured)

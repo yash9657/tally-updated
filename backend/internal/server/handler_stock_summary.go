@@ -69,6 +69,16 @@ func (s *Server) handleStockSummary(w http.ResponseWriter, r *http.Request) {
 // StockPositionRow values — the reporting layer folds one from the other, so a
 // UI can render either an item-wise summary or a location-wise grid without a
 // second round trip and without the two disagreeing.
+// baseQtyOrEmpty renders the compound-unit restatement, or "" when the item's
+// unit is simple. ⛔ NOT "0.0000": a client cannot tell a zero conversion from an
+// absent one, and one of the two is a lie about the stock.
+func baseQtyOrEmpty(it reporting.StockItemRollup) string {
+	if it.BaseUnitSymbol == "" || !it.ConversionFactor.IsPositive() {
+		return ""
+	}
+	return it.ClosingBaseQty.StringFixed(4)
+}
+
 func stockSummaryJSON(sum reporting.StockSummary) map[string]any {
 	items := make([]map[string]any, 0, len(sum.Items))
 	for _, it := range sum.Items {
@@ -81,24 +91,56 @@ func stockSummaryJSON(sum reporting.StockSummary) map[string]any {
 			// Without it a screen showing three items on three different bases can
 			// only print values that cannot be compared.
 			"valuation_method": it.ValuationMethod,
-			"opening_qty":      it.OpeningQty.StringFixed(4),
-			"opening_value":    it.OpeningValue.StringFixed(4),
-			"inward_qty":       it.InwardQty.StringFixed(4),
-			"inward_value":     it.InwardValue.StringFixed(4),
-			"outward_qty":      it.OutwardQty.StringFixed(4),
-			"outward_value":    it.OutwardValue.StringFixed(4),
-			"closing_qty":      it.ClosingQty.StringFixed(4),
-			"closing_value":    it.ClosingValue.StringFixed(4),
+			// T10 — the item's GROUP, and the closing quantity RESTATED in the
+			// unit's base unit when the unit is compound (5 BOX -> 60 NOS).
+			//
+			// ⚠️ base_qty AND base_unit ARE EMPTY FOR A SIMPLE UNIT, and a client
+			// must render nothing rather than "0.0000": a simple unit has no base
+			// to restate into, and a zero would read as "this stock is worth no
+			// pieces". The STORED quantity is closing_qty; this is derived at read
+			// time, exactly as value is.
+			"stock_group":   it.StockGroupName,
+			"base_unit":     it.BaseUnitSymbol,
+			"base_qty":      baseQtyOrEmpty(it),
+			"opening_qty":   it.OpeningQty.StringFixed(4),
+			"opening_value": it.OpeningValue.StringFixed(4),
+			"inward_qty":    it.InwardQty.StringFixed(4),
+			"inward_value":  it.InwardValue.StringFixed(4),
+			"outward_qty":   it.OutwardQty.StringFixed(4),
+			"outward_value": it.OutwardValue.StringFixed(4),
+			"closing_qty":   it.ClosingQty.StringFixed(4),
+			"closing_value": it.ClosingValue.StringFixed(4),
 			// DELIBERATELY NO closing_rate on an item total: two godowns of the
 			// same item carry two different average costs, and the average of
 			// the averages is not the average. Ask a position for its rate.
 			"positions": stockRowsJSON(it.Positions),
 		})
 	}
+	// T10 — THE GROUP SUBTOTALS, in tree order with the ungrouped bucket last.
+	//
+	// ⛔ THEY DO NOT SUM TO total_value AND THE KEY SAYS SO IN ITS OWN COMMENT:
+	// every item counts in EVERY ANCESTOR of its group, which is what makes a
+	// branch total worth reading and what makes adding the rows up wrong. The
+	// company's closing stock is the sum of the POSITIONS.
+	groups := make([]map[string]any, 0, len(sum.Groups))
+	for _, g := range sum.Groups {
+		groups = append(groups, map[string]any{
+			// "" is the UNGROUPED bucket — a real bucket holding every item that
+			// predates T10, which a client must LABEL rather than skip.
+			"group":         g.GroupName,
+			"depth":         g.Depth,
+			"item_count":    g.ItemCount,
+			"opening_value": g.OpeningValue.StringFixed(4),
+			"inward_value":  g.InwardValue.StringFixed(4),
+			"outward_value": g.OutwardValue.StringFixed(4),
+			"closing_value": g.ClosingValue.StringFixed(4),
+		})
+	}
 	return map[string]any{
-		"as_on": sum.AsOn,
-		"items": items,
-		"rows":  stockRowsJSON(sum.Rows),
+		"as_on":  sum.AsOn,
+		"groups": groups,
+		"items":  items,
+		"rows":   stockRowsJSON(sum.Rows),
 		// The closing value of the whole inventory as at as_on: what a
 		// Stock-in-Hand line on the Balance Sheet is worth on that date.
 		"total_value": sum.TotalValue.StringFixed(4),
@@ -119,8 +161,12 @@ func stockRowsJSON(rows []reporting.StockPositionRow) []map[string]any {
 			// re-sends this row must send "" (meaning NULL), never "-".
 			"godown_id": uuidOrEmpty(row.GodownID),
 			"godown":    row.GodownName,
-			"batch_id":  uuidOrEmpty(row.BatchID),
-			"batch":     row.BatchName,
+			// The item's group on the FLAT row as well as on the rollup, so a
+			// caller that reads `rows` (the CSV export does) can group without a
+			// second lookup.
+			"stock_group": row.StockGroupName,
+			"batch_id":    uuidOrEmpty(row.BatchID),
+			"batch":       row.BatchName,
 			// The basis the figures were derived on, so a printed report can
 			// state its own valuation basis.
 			"valuation_method": row.ValuationMethod,

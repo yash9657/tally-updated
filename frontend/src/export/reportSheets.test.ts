@@ -51,6 +51,7 @@ function expectRectangular(sheet: ExportSheet) {
 describe("stockSummarySheet", () => {
   const data: StockSummaryResponse = {
     as_on: "2026-06-30",
+    groups: [],
     total_value: "9999.1234",
     rows: [],
     items: [
@@ -59,6 +60,7 @@ describe("stockSummarySheet", () => {
         item: "Widget",
         unit: "Nos",
         valuation_method: "AVERAGE",
+        stock_group: "",
         opening_qty: "0.0000",
         opening_value: "0.0000",
         inward_qty: "100.0000",
@@ -67,6 +69,8 @@ describe("stockSummarySheet", () => {
         outward_value: "2000.5678",
         closing_qty: "60.0000",
         closing_value: "2999.4322",
+        base_unit: "",
+        base_qty: "",
         positions: [
           {
             stock_item_id: "i1",
@@ -77,6 +81,7 @@ describe("stockSummarySheet", () => {
             batch_id: "",
             batch: "",
             valuation_method: "AVERAGE",
+            stock_group: "",
             opening_qty: "0.0000",
             opening_value: "0.0000",
             inward_qty: "100.0000",
@@ -139,6 +144,8 @@ describe("stockSummarySheet", () => {
       items: [
         {
           ...data.items[0]!,
+          base_unit: "",
+          base_qty: "",
           positions: [
             { ...data.items[0]!.positions[0]!, godown_id: "", godown: "" },
           ],

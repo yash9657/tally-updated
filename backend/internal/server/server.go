@@ -703,6 +703,15 @@ func (s *Server) routes() {
 		r.Put("/stock-items/{stockItemID}/valuation-method", s.handleSetStockItemValuationMethod)
 		r.Get("/inventory-vocabulary", s.handleInventoryVocabulary)
 
+		// T10 — STOCK GROUPS (migration 0079). The item hierarchy, which is what
+		// makes a Stock Summary readable on a company with four hundred items.
+		// Masters like every other inventory master: isMasterPath maps the POST
+		// to (Create, "master") and the GET to (Display, "master"), so the level
+		// that may pick a godown may pick a group and the level that may not mint
+		// one cannot mint a group either.
+		r.Get("/stock-groups", s.handleListStockGroups)
+		r.Post("/stock-groups", s.handleCreateStockGroup)
+
 		// THE COST MASTERS (T2, migration 0040) — the AXES of cost analysis and the
 		// POSITIONS on them. A cost CATEGORY is an axis (Department, Branch, Project);
 		// a cost CENTRE is a position on that axis. Several axes exist in order to
@@ -1706,7 +1715,17 @@ type unitReq struct {
 	Symbol        string `json:"symbol"`
 	FormalName    string `json:"formal_name"`
 	DecimalPlaces int    `json:"decimal_places"`
-	CreatedBy     string `json:"created_by"`
+	// A COMPOUND unit (T10): 1 <symbol> = <conversion_factor> <base_unit_symbol>,
+	// e.g. 1 BOX = 12 NOS. Both or neither — a base with no factor cannot be
+	// converted and a factor with no base converts to nothing, and either half
+	// alone is a unit that looks compound to a reader and cannot be restated.
+	//
+	// ⚠️ conversion_factor IS A DECIMAL STRING, like every other number on this
+	// wire. A JSON number would be a float, and a float conversion factor is how
+	// 1 BOX quietly becomes 11.999999 NOS.
+	BaseUnitSymbol   string `json:"base_unit_symbol"`
+	ConversionFactor string `json:"conversion_factor"`
+	CreatedBy        string `json:"created_by"`
 }
 
 func (s *Server) handleCreateUnit(w http.ResponseWriter, r *http.Request) {
@@ -1718,10 +1737,17 @@ func (s *Server) handleCreateUnit(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
+	factor, err := optionalDecimal(req.ConversionFactor)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid conversion_factor (send a decimal STRING)")
+		return
+	}
 	id, err := s.masters.CreateUnit(ctx, masters.Unit{
-		Symbol:        req.Symbol,
-		FormalName:    req.FormalName,
-		DecimalPlaces: req.DecimalPlaces,
+		Symbol:           req.Symbol,
+		FormalName:       req.FormalName,
+		DecimalPlaces:    req.DecimalPlaces,
+		BaseUnitSymbol:   strings.TrimSpace(req.BaseUnitSymbol),
+		ConversionFactor: factor,
 	}, req.CreatedBy)
 	if err != nil {
 		writeMastersError(w, err)
@@ -1749,7 +1775,15 @@ type stockItemReq struct {
 	// nearby precedent for the other half of this: a body key that is accepted
 	// and discarded is worse than one that is refused.
 	ValuationMethod string `json:"valuation_method"`
-	CreatedBy       string `json:"created_by"`
+	// StockGroupName is the item's STOCK GROUP (T10). Absent or empty leaves the
+	// item UNGROUPED, which is a real state (Tally's "under Primary") and what
+	// every item created before T10 is.
+	//
+	// ⚠️ THE GROUP MUST ALREADY EXIST. Creating one implicitly from a misspelling
+	// here is how a company ends up with "Raw Materials" and "Raw materials"
+	// subtotalling half its stock each.
+	StockGroupName string `json:"stock_group_name"`
+	CreatedBy      string `json:"created_by"`
 }
 
 func (s *Server) handleCreateStockItem(w http.ResponseWriter, r *http.Request) {
@@ -1784,6 +1818,7 @@ func (s *Server) handleCreateStockItem(w http.ResponseWriter, r *http.Request) {
 		OpeningQty:      qty,
 		OpeningRate:     openRate,
 		ValuationMethod: strings.TrimSpace(req.ValuationMethod),
+		StockGroupName:  strings.TrimSpace(req.StockGroupName),
 	}, req.CreatedBy)
 	if err != nil {
 		writeMastersError(w, err)

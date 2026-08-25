@@ -1011,7 +1011,36 @@ type Unit struct {
 	Symbol        string
 	FormalName    string
 	DecimalPlaces int
+	// BaseUnitSymbol and ConversionFactor make this a COMPOUND unit (T10):
+	// 1 <Symbol> = <ConversionFactor> <BaseUnitSymbol>, e.g. 1 BOX = 12 NOS.
+	// Both empty/zero is a SIMPLE unit, which is what every unit created before
+	// T10 is and what every caller that does not know about this field creates.
+	//
+	// ⛔ A QUANTITY IS NEVER CONVERTED ON THE WAY IN. A movement of 5 BOX stores
+	// 5.0000 in BOX, and a report that wants pieces multiplies at READ time —
+	// the same rule stock VALUE follows, for the same reason: an inbound
+	// conversion destroys the number that was keyed, so the invoice and the stock
+	// ledger would no longer agree, and correcting a factor later (the supplier
+	// repacks 12 to a box as 10) could not restate the history. See migration
+	// 0079's header.
+	BaseUnitSymbol   string
+	ConversionFactor decimal.Decimal
 }
+
+// UnitRecord is a unit as stored, for a list or a picker: the symbol, and — for
+// a compound unit — what it is defined in terms of.
+type UnitRecord struct {
+	ID               uuid.UUID
+	Symbol           string
+	FormalName       string
+	DecimalPlaces    int
+	BaseUnitSymbol   string
+	ConversionFactor decimal.Decimal
+	IsSystem         bool
+}
+
+// Compound reports whether the unit is defined in terms of another.
+func (u UnitRecord) Compound() bool { return u.BaseUnitSymbol != "" }
 
 // CreateUnit creates a unit of measure and appends a master_audit row.
 func (s *Service) CreateUnit(ctx context.Context, u Unit, createdBy string) (uuid.UUID, error) {
@@ -1029,6 +1058,24 @@ func (s *Service) CreateUnit(ctx context.Context, u Unit, createdBy string) (uui
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("masters: new unit id: %w", err)
 	}
+	// A compound unit needs BOTH halves or neither: the CHECK constraint
+	// unit_compound_is_whole says so too, and catching it here names the field.
+	compound := strings.TrimSpace(u.BaseUnitSymbol) != ""
+	if compound && !u.ConversionFactor.IsPositive() {
+		return uuid.Nil, fmt.Errorf(
+			"masters: unit %q is defined in terms of %q, so it needs a conversion factor greater "+
+				"than zero (1 %s = ? %s); a factor of zero would make every quantity in %s worth "+
+				"nothing in %s",
+			u.Symbol, u.BaseUnitSymbol, u.Symbol, u.BaseUnitSymbol, u.Symbol, u.BaseUnitSymbol)
+	}
+	if !compound && !u.ConversionFactor.IsZero() {
+		return uuid.Nil, fmt.Errorf(
+			"masters: unit %q carries a conversion factor of %s and names no base unit to convert "+
+				"TO — a factor with no base converts to nothing, and a unit that looks compound to "+
+				"a reader and cannot be restated is worse than a simple one",
+			u.Symbol, u.ConversionFactor.String())
+	}
+
 	err = s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
 		// D90: refuse a NORMALISED collision here, so the message can name
 		// the master the operator actually has. The unique index behind it
@@ -1036,15 +1083,55 @@ func (s *Service) CreateUnit(ctx context.Context, u Unit, createdBy string) (uui
 		if err := refuseIfNameTaken(ctx, tx, "unit", u.Symbol, "unit", "symbol"); err != nil {
 			return err
 		}
+		var baseID *uuid.UUID
+		var factor *decimal.Decimal
+		if compound {
+			var (
+				bid      uuid.UUID
+				baseBase *uuid.UUID
+			)
+			err := tx.QueryRow(ctx,
+				`SELECT id, base_unit_id FROM unit
+				  WHERE lower(btrim(symbol)) = lower(btrim($1))`,
+				u.BaseUnitSymbol).Scan(&bid, &baseBase)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return fmt.Errorf("masters: %w: base unit %q (create it before the compound unit "+
+					"that is measured in it)", ErrNotFound, u.BaseUnitSymbol)
+			}
+			if err != nil {
+				return fmt.Errorf("masters: resolve base unit: %w", err)
+			}
+			// ⛔ A CHAIN IS REFUSED, NOT FLATTENED. Tally allows a compound unit
+			// whose base is itself compound (a PALLET of 20 BOX of 12 NOS) and
+			// this build does not, because a conversion that resolves ONE level
+			// of a two-level chain is wrong by the second factor — a factor of
+			// twelve, reported as confidently as any other number. Refusing says
+			// so; resolving one level would not.
+			if baseBase != nil {
+				return fmt.Errorf(
+					"masters: unit %q would be measured in %q, which is itself a compound unit. "+
+						"This build converts ONE level only, so a chain is refused rather than "+
+						"half-resolved — define %q in terms of the SIMPLE unit at the bottom of "+
+						"the chain instead",
+					u.Symbol, u.BaseUnitSymbol, u.Symbol)
+			}
+			f := u.ConversionFactor
+			baseID, factor = &bid, &f
+		}
 		if _, err := tx.Exec(ctx,
-			`INSERT INTO unit (id, company_id, symbol, formal_name, decimal_places)
-			 VALUES ($1, $2, $3, $4, $5)`,
-			id, companyID, u.Symbol, u.FormalName, u.DecimalPlaces,
+			`INSERT INTO unit (id, company_id, symbol, formal_name, decimal_places,
+			                   base_unit_id, conversion_factor)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+			id, companyID, u.Symbol, u.FormalName, u.DecimalPlaces, baseID, factor,
 		); err != nil {
 			return nameTakenNormalised(err,
 				"unit_company_symbol_normalised", "unit", u.Symbol, "insert unit")
 		}
 		after := map[string]any{"symbol": u.Symbol, "formal_name": u.FormalName}
+		if compound {
+			after["base_unit"] = u.BaseUnitSymbol
+			after["conversion_factor"] = u.ConversionFactor.String()
+		}
 		return appendAudit(ctx, tx, companyID, "unit", id, OpCreate, nil, after, createdBy)
 	})
 	if err != nil {
@@ -1093,6 +1180,15 @@ type StockItem struct {
 	// — is the one that cannot express where the stock is.
 	OpeningQty  decimal.Decimal
 	OpeningRate decimal.Decimal
+	// StockGroupName is the item's STOCK GROUP (T10), or empty for an ungrouped
+	// item — which is a real state (Tally's "under Primary") and not a missing
+	// value: the Stock Summary renders ungrouped items as a stated bucket rather
+	// than hiding them or filing them somewhere nobody chose.
+	//
+	// ⚠️ RESOLVED CASE-INSENSITIVELY and it must ALREADY EXIST. Creating a group
+	// implicitly from a misspelling here is how a company ends up with "Raw
+	// Materials" and "Raw materials" subtotalling half its stock each.
+	StockGroupName string
 	// ValuationMethod is the COSTING METHOD this item's movements are replayed
 	// through — inventory.MethodWeightedAverage (the default, and Tally's),
 	// MethodFIFO or MethodLIFO. Empty means "the default", so every caller that
@@ -1149,6 +1245,21 @@ func (s *Service) CreateStockItem(ctx context.Context, si StockItem, createdBy s
 			}
 			unitID = &uid
 		}
+		var groupID *uuid.UUID
+		if strings.TrimSpace(si.StockGroupName) != "" {
+			var gid uuid.UUID
+			err := tx.QueryRow(ctx,
+				`SELECT id FROM stock_group WHERE lower(btrim(name)) = lower(btrim($1))`,
+				si.StockGroupName).Scan(&gid)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return fmt.Errorf("masters: %w: stock group %q (create the group before the item "+
+					"that belongs to it)", ErrNotFound, si.StockGroupName)
+			}
+			if err != nil {
+				return fmt.Errorf("masters: resolve stock group: %w", err)
+			}
+			groupID = &gid
+		}
 		// D90: refuse a NORMALISED collision here, so the message can name
 		// the master the operator actually has. The unique index behind it
 		// is still the authority and still catches a race.
@@ -1157,9 +1268,9 @@ func (s *Service) CreateStockItem(ctx context.Context, si StockItem, createdBy s
 		}
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO stock_item
-			   (id, company_id, name, unit_id, hsn, gst_rate_pct, valuation_method)
-			 VALUES ($1, $2, $3, $4, NULLIF($5,''), $6, $7)`,
-			id, companyID, si.Name, unitID, si.HSN, si.GSTRatePct, method,
+			   (id, company_id, name, unit_id, hsn, gst_rate_pct, valuation_method, stock_group_id)
+			 VALUES ($1, $2, $3, $4, NULLIF($5,''), $6, $7, $8)`,
+			id, companyID, si.Name, unitID, si.HSN, si.GSTRatePct, method, groupID,
 		); err != nil {
 			return nameTakenNormalised(err,
 				"stock_item_company_name_normalised", "stock item", si.Name, "insert stock item")
@@ -1167,6 +1278,7 @@ func (s *Service) CreateStockItem(ctx context.Context, si StockItem, createdBy s
 		after := map[string]any{
 			"name": si.Name, "unit": si.UnitSymbol, "hsn": si.HSN,
 			"gst_rate_pct": si.GSTRatePct.String(),
+			"stock_group":  si.StockGroupName,
 			// The costing method is in the audit row because it decides every
 			// value this item will ever be reported at. A master_audit trail that
 			// recorded the name and not the basis could not explain why the

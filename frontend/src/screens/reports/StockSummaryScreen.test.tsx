@@ -116,6 +116,7 @@ afterEach(() => {
  */
 const WIDGET: StockSummaryResponse = {
   as_on: "2026-07-31",
+  groups: [],
   total_value: "1200.0000",
   rows: [],
   items: [
@@ -124,6 +125,7 @@ const WIDGET: StockSummaryResponse = {
       item: "Widget",
       unit: "Nos",
       valuation_method: "WEIGHTED_AVG",
+      stock_group: "",
       opening_qty: "2.0000",
       opening_value: "300.0000",
       inward_qty: "10.0000",
@@ -132,6 +134,8 @@ const WIDGET: StockSummaryResponse = {
       outward_value: "800.0000",
       closing_qty: "8.0000",
       closing_value: "1200.0000",
+      base_unit: "",
+      base_qty: "",
       positions: [
         {
           stock_item_id: "s1",
@@ -142,6 +146,7 @@ const WIDGET: StockSummaryResponse = {
           batch_id: "",
           batch: "",
           valuation_method: "WEIGHTED_AVG",
+          stock_group: "",
           opening_qty: "2.0000",
           opening_value: "300.0000",
           inward_qty: "10.0000",
@@ -464,6 +469,7 @@ describe("the Stock Summary columns", () => {
       as_on: "",
       items: [],
       rows: [],
+      groups: [],
       total_value: "0.0000",
     }));
     await waitFor(() =>
