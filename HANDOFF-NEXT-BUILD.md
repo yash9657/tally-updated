@@ -17,6 +17,23 @@
 
 ## 0. THE HEADLINE — READ THIS FIRST, IT CHANGES WHAT YOU DO
 
+> ### ⛔⛔ 2026-08-25 (LATEST) — §2 AND §3 BELOW ARE **DONE**. GO TO `HANDOFF-T10-FINISH.md`.
+>
+> **T9 (FIFO/LIFO)** shipped in `d574aa2` and was driven 21/21. **§3 (inventory masters and
+> quantities on import)** shipped in `64887c4` and was driven 10/10. **T10 (stock groups and
+> compound units)** shipped in `9cc1fed`: the backend and both screens are complete and every gate
+> is green, and **four pieces of PROOF are missing** — the Features honesty row, the frontend tests,
+> the browser drive and the release note.
+>
+> **⛔ DO NOT START §2 OR §3. READ `HANDOFF-T10-FINISH.md`,** which holds the four remaining items,
+> the two honesty tests that will FAIL when the Features row flips (that is the gate working), and
+> the mutations to measure the new probes against.
+>
+> ⚠️ This is exactly the failure mode §0 warns about one paragraph down — a "still open" claim that
+> is no longer true — so it is corrected here rather than left for somebody to discover by reading
+> the code. The sections below are kept for their REASONING, which is still good; their *state* is
+> stale. §4 onwards is untouched and is still the right order.
+
 > ### ✅ 2026-08-25 (LATER) — §1 PAYROLL SCREENS HAS LANDED. THE NEXT TRACK IS §2 (T9 + T10 + §3).
 >
 > ⛔ **AND IT CORRECTED THIS FILE'S OWN §0 IN THE ONE DIRECTION §0 WARNS ABOUT.** The table below
