@@ -432,7 +432,22 @@ var allowedDeps = map[string]map[string]bool{
 	//
 	// It is a NON-test package, so it could in principle be linked into cored.
 	// TestNoProductionCodeImportsTestdb below is what forbids that.
-	"internal/platform/testdb": {},
+	"internal/platform/testdb": {"internal/platform/tenant": true},
+	// tenant is the SCHEMA-DERIVED CENSUS of which tables hold one company's data
+	// (internal/platform/tenant). Its allowed set is the EMPTY SET for the same
+	// reason testdb's nearly is: it issues catalog queries over a caller-supplied
+	// pgx ConnLike and imports no sibling at all — not platform/db, which would be
+	// the tempting edge and is the wrong one. Census has to run on whatever
+	// connection the caller already holds (a pooled admin conn in testdb, the
+	// request's pgx.Tx in the backup service), and taking a *db.Pool would both
+	// break testdb's emptiness and stop the census running inside the restore's
+	// single transaction.
+	//
+	// It is the ONE enumeration: teardown and backup both derive from it, because
+	// the day they derive from two lists is the day a new migration's table is
+	// cleaned up but not backed up, and the omission surfaces as a restored company
+	// missing a plane of its books.
+	"internal/platform/tenant": {},
 	"internal/server": {
 		"internal/platform/db": true,
 		"internal/authn":       true,

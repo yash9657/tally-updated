@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+
+	"github.com/khata/cored/internal/platform/tenant"
 )
 
 // requireDB skips when the admin database is unreachable or CORED_SKIP_DB is
@@ -35,96 +37,18 @@ func newCompanyID(t *testing.T) uuid.UUID {
 }
 
 // ---------------------------------------------------------------------------
-// 1. Classification — the anti-rot test
+// 1. Classification — the anti-rot test LIVES IN internal/platform/tenant
 // ---------------------------------------------------------------------------
-
-// TestEveryTableIsClassifiedForTeardown is the test that makes the two
-// hand-maintained registries in plan.go trustworthy.
 //
-// Every base table in `public` must be classified as exactly one of: enumerated
-// by its company_id column, listed in specialTenancy, or listed in
-// notTenantScoped. A migration that adds a tenant table with a company_id is
-// picked up automatically and this test stays green. A migration that adds a
-// tenant table whose tenancy is encoded some other way — as statutory_step's
-// "irn:<companyID>:<voucherID>" primary key is — makes this test RED, by name,
-// on the day it lands. That is the only moment at which somebody still knows how
-// that table's tenancy works.
+// TestEveryTableIsClassifiedForTeardown used to be here. It moved with the
+// registries it makes complete, to internal/platform/tenant/census_test.go
+// (TestEveryTableIsClassified) — a completeness test that lives apart from the
+// thing it makes complete is one refactor away from being vacuous.
 //
-// A hardcoded 31-table teardown list cannot do this: it goes stale silently, and
-// silence is the whole problem.
-func TestEveryTableIsClassifiedForTeardown(t *testing.T) {
-	requireDB(t)
-	ctx := context.Background()
-
-	pool, err := adminPool(ctx)
-	if err != nil {
-		t.Fatalf("admin pool: %v", err)
-	}
-	conn, err := pool.Acquire(ctx)
-	if err != nil {
-		t.Fatalf("acquire: %v", err)
-	}
-	defer conn.Release()
-
-	census, err := queryBaseTables(ctx, conn)
-	if err != nil {
-		t.Fatalf("census: %v", err)
-	}
-	if len(census) == 0 {
-		t.Fatal("census returned no tables — the check would be vacuous; is this the right database?")
-	}
-	scopedTables, err := queryScopedTables(ctx, conn)
-	if err != nil {
-		t.Fatalf("scoped tables: %v", err)
-	}
-
-	inCensus := map[string]bool{}
-	for _, tbl := range census {
-		inCensus[tbl] = true
-	}
-
-	for _, tbl := range census {
-		var classes []string
-		if _, ok := scopedTables[tbl]; ok {
-			classes = append(classes, "company_id column")
-		}
-		if _, ok := specialTenancy[tbl]; ok {
-			classes = append(classes, "specialTenancy")
-		}
-		if _, ok := notTenantScoped[tbl]; ok {
-			classes = append(classes, "notTenantScoped")
-		}
-		switch len(classes) {
-		case 1:
-			// classified exactly once: good.
-		case 0:
-			t.Errorf("table %q is UNCLASSIFIED for teardown: it has no company_id column and appears in "+
-				"neither specialTenancy nor notTenantScoped in internal/platform/testdb/plan.go. "+
-				"Until it is classified, either its rows leak on every test run or a deliberate omission "+
-				"is undocumented. Add it to one of the two registries, with the reason.", tbl)
-		default:
-			t.Errorf("table %q is classified %d ways (%s); exactly one classification is required, "+
-				"or the delete plan and the residue check will disagree about it",
-				tbl, len(classes), strings.Join(classes, " + "))
-		}
-	}
-
-	// A registry entry naming a table that no longer exists is rot in the other
-	// direction: it silently narrows the census check.
-	for tbl := range specialTenancy {
-		if !inCensus[tbl] {
-			t.Errorf("specialTenancy names %q, which is not a base table in public — remove the stale entry", tbl)
-		}
-	}
-	for tbl := range notTenantScoped {
-		if !inCensus[tbl] {
-			t.Errorf("notTenantScoped names %q, which is not a base table in public — remove the stale entry", tbl)
-		}
-	}
-
-	t.Logf("classified %d base tables: %d by company_id, %d specialTenancy, %d notTenantScoped",
-		len(census), len(scopedTables), len(specialTenancy), len(notTenantScoped))
-}
+// It is still the OTHER HALF of this file's guarantee and the Drop comment still
+// names it: the residue check below is generated from the same plan the deletes
+// came from, so it structurally cannot see a table that is missing from the plan
+// entirely. The classification test is what sees that one.
 
 // ---------------------------------------------------------------------------
 // The fixture: one row in EVERY table the plan touches
@@ -657,10 +581,10 @@ func seedCompany(t *testing.T, cid uuid.UUID) {
 	// The fixture must cover EXACTLY the plan. Anything else and the test proves
 	// less than it claims.
 	planned := map[string]bool{}
-	for _, s := range pl.order {
+	for _, s := range pl.Order {
 		planned[s.Table] = true
 	}
-	for _, s := range pl.special {
+	for _, s := range pl.Special {
 		planned[s.Table] = true
 	}
 	seeded := map[string]bool{}
@@ -879,11 +803,11 @@ func TestResidueCheckCatchesADeleteThatMissedItsRows(t *testing.T) {
 	}
 	// A copy of the real plan with ONE broken predicate. verifySQL is untouched,
 	// so the check still knows to look at statutory_step.
-	broken := &plan{verifySQL: good.verifySQL, order: good.order}
+	broken := &tenant.Plan{VerifySQL: good.VerifySQL, Order: good.Order}
 	var patched bool
-	for _, s := range good.special {
+	for _, s := range good.Special {
 		if s.Table == "statutory_step" {
-			broken.special = append(broken.special, specialStmt{
+			broken.Special = append(broken.Special, tenant.SpecialStmt{
 				Table: s.Table,
 				// 'IRN:' never matches the lower-case prefix the workflow writes.
 				SQL: `DELETE FROM statutory_step WHERE workflow_id LIKE 'IRN:' || $1 || ':%'`,
@@ -891,10 +815,10 @@ func TestResidueCheckCatchesADeleteThatMissedItsRows(t *testing.T) {
 			patched = true
 			continue
 		}
-		broken.special = append(broken.special, s)
+		broken.Special = append(broken.Special, s)
 	}
 	if !patched {
-		t.Fatal("statutory_step is no longer in specialTenancy; this test needs a new subject")
+		t.Fatal("statutory_step is no longer in tenant.SpecialTenancy; this test needs a new subject")
 	}
 
 	err = dropWithPlan(ctx, broken, cid)
@@ -1005,48 +929,31 @@ func TestDeleteOrderIsReverseTopological(t *testing.T) {
 		t.Fatalf("acquire: %v", err)
 	}
 	defer conn.Release()
-	edges, err := queryFKEdges(ctx, conn)
+	edges, err := tenant.FKEdges(ctx, conn)
 	if err != nil {
 		t.Fatalf("fk edges: %v", err)
 	}
 
 	pos := map[string]int{}
-	for i, s := range pl.order {
+	for i, s := range pl.Order {
 		pos[s.Table] = i
 	}
 	for _, e := range edges {
-		ci, cok := pos[e.child]
-		pi, pok := pos[e.parent]
+		ci, cok := pos[e.Child]
+		pi, pok := pos[e.Parent]
 		if !cok || !pok {
 			continue
 		}
 		if ci > pi {
 			t.Errorf("delete order puts parent %q (position %d) before child %q (position %d); "+
-				"with foreign keys enforced that delete would fail", e.parent, pi, e.child, ci)
+				"with foreign keys enforced that delete would fail", e.Parent, pi, e.Child, ci)
 		}
 	}
-	if len(pl.order) == 0 {
+	if len(pl.Order) == 0 {
 		t.Fatal("plan is empty")
 	}
-	if last := pl.order[len(pl.order)-1].Table; last != tenantRoot {
-		t.Errorf("the tenant root %q must be deleted last, got %q", tenantRoot, last)
-	}
-}
-
-// TestReverseTopoReportsACycle proves the cycle branch is real code and not a
-// comment. A silently-chosen order under a cycle would fail intermittently
-// rather than always, which is the worst possible failure mode for a harness.
-func TestReverseTopoReportsACycle(t *testing.T) {
-	target := map[string]bool{"a": true, "b": true, "c": true}
-	edges := []fkEdge{{child: "a", parent: "b"}, {child: "b", parent: "c"}, {child: "c", parent: "a"}}
-	_, err := reverseTopo(target, edges)
-	if err == nil {
-		t.Fatal("reverseTopo accepted a cycle; it must refuse rather than pick an arbitrary order")
-	}
-	for _, name := range []string{"a", "b", "c"} {
-		if !strings.Contains(err.Error(), name) {
-			t.Errorf("cycle error must name every table in the cycle; %q missing from: %v", name, err)
-		}
+	if last := pl.Order[len(pl.Order)-1].Table; last != tenant.TenantRoot {
+		t.Errorf("the tenant root %q must be deleted last, got %q", tenant.TenantRoot, last)
 	}
 }
 
@@ -1190,9 +1097,9 @@ func TestCleanupDefersRatherThanDropping(t *testing.T) {
 }
 
 // TestASecondSpecialTenancyEntryIsVerifiedByItsOwnPredicate pins the fix for a
-// silent-leak bug that only a SECOND specialTenancy entry could ever expose.
+// silent-leak bug that only a SECOND tenant.SpecialTenancy entry could ever expose.
 //
-// WHAT WENT WRONG. specialTenancy used to hold a full DELETE per table, while
+// WHAT WENT WRONG. tenant.SpecialTenancy used to hold a full DELETE per table, while
 // buildVerifySQL re-spelled the residue predicate itself — and it re-spelled it
 // as statutory_step's, `workflow_id LIKE 'irn:' || $2 || ':%'`, for EVERY entry.
 // With exactly one entry registered, the two happened to agree and nothing could
@@ -1249,24 +1156,24 @@ func TestASecondSpecialTenancyEntryIsVerifiedByItsOwnPredicate(t *testing.T) {
 
 	// A plan carrying ONLY the second entry, with a predicate that is CORRECT.
 	// Equality on owner_key — nothing like statutory_step's prefix LIKE.
-	good := &plan{order: real.order}
-	good.special = append(good.special, specialStmt{
+	good := &tenant.Plan{Order: real.Order}
+	good.Special = append(good.Special, tenant.SpecialStmt{
 		Table:     probe,
-		SQL:       deleteFor(probe, `owner_key = `+idParam),
-		Predicate: `owner_key = ` + idParam,
+		SQL:       tenant.DeleteFor(probe, `owner_key = `+tenant.IDParam),
+		Predicate: `owner_key = ` + tenant.IDParam,
 	})
-	good.verifySQL = buildVerifySQL(good)
+	good.VerifySQL = tenant.BuildVerifySQL(good)
 
 	// The residue predicate must be THIS table's, not statutory_step's. If
 	// buildVerifySQL ever re-spells it again, this assertion is what says so
 	// before anything silently leaks.
-	if strings.Contains(good.verifySQL, "workflow_id") {
+	if strings.Contains(good.VerifySQL, "workflow_id") {
 		t.Fatalf("the residue query verifies %s with statutory_step's predicate; "+
 			"a second special entry would be deleted by its own predicate and verified by "+
-			"someone else's, so a wrong predicate would leak silently. got: %s", probe, good.verifySQL)
+			"someone else's, so a wrong predicate would leak silently. got: %s", probe, good.VerifySQL)
 	}
-	if !strings.Contains(good.verifySQL, "owner_key") {
-		t.Fatalf("the residue query does not mention %s's own column; got: %s", probe, good.verifySQL)
+	if !strings.Contains(good.VerifySQL, "owner_key") {
+		t.Fatalf("the residue query does not mention %s's own column; got: %s", probe, good.VerifySQL)
 	}
 
 	// The correct predicate removes the row and the check agrees.
@@ -1288,16 +1195,16 @@ func TestASecondSpecialTenancyEntryIsVerifiedByItsOwnPredicate(t *testing.T) {
 		`INSERT INTO `+probe+` (id, owner_key) VALUES ($1, $2)`, newCompanyID(t), cid.String()); err != nil {
 		t.Fatalf("re-seed probe row: %v", err)
 	}
-	broken := &plan{order: real.order}
-	broken.special = append(broken.special, specialStmt{
+	broken := &tenant.Plan{Order: real.Order}
+	broken.Special = append(broken.Special, tenant.SpecialStmt{
 		Table: probe,
 		// Still binds $1 (the batch always supplies it) but matches nothing: the
 		// prefix makes every comparison fail. This is the realistic shape of the
 		// bug — a predicate that is subtly wrong, not one that is malformed.
 		SQL:       `DELETE FROM ` + probe + ` WHERE owner_key = 'nobody-' || $1`,
-		Predicate: `owner_key = ` + idParam,
+		Predicate: `owner_key = ` + tenant.IDParam,
 	})
-	broken.verifySQL = buildVerifySQL(broken)
+	broken.VerifySQL = tenant.BuildVerifySQL(broken)
 
 	err = dropWithPlan(ctx, broken, cid)
 	if err == nil {

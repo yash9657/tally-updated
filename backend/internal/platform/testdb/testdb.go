@@ -43,6 +43,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/khata/cored/internal/platform/tenant"
 )
 
 // TB is the slice of *testing.T this package needs. Taking an interface rather
@@ -267,7 +269,7 @@ func Drop(ctx context.Context, companyID uuid.UUID) error {
 // check can be exercised against a deliberately broken plan (see
 // TestResidueCheckCatchesADeleteThatMissedItsRows). Production callers always go
 // through Drop and get the derived plan.
-func dropWithPlan(ctx context.Context, pl *plan, companyID uuid.UUID) error {
+func dropWithPlan(ctx context.Context, pl *tenant.Plan, companyID uuid.UUID) error {
 	pool, err := adminPool(ctx)
 	if err != nil {
 		return err
@@ -286,10 +288,10 @@ func dropWithPlan(ctx context.Context, pl *plan, companyID uuid.UUID) error {
 
 	batch := &pgx.Batch{}
 	idText := companyID.String()
-	for _, s := range pl.special {
+	for _, s := range pl.Special {
 		batch.Queue(s.SQL, idText)
 	}
-	for _, s := range pl.order {
+	for _, s := range pl.Order {
 		if s.IsText {
 			batch.Queue(`DELETE FROM `+s.Table+` WHERE company_id = $1`, idText)
 		} else {
@@ -322,7 +324,7 @@ func dropWithPlan(ctx context.Context, pl *plan, companyID uuid.UUID) error {
 		return fmt.Errorf(
 			"testdb: company %s NOT fully torn down — rows survived the delete: %s (plan covered %d tables). "+
 				"Test data is leaking into the shared dev database; classify the table or fix its delete predicate",
-			companyID, strings.Join(survivors, " "), len(pl.order)+len(pl.special))
+			companyID, strings.Join(survivors, " "), len(pl.Order)+len(pl.Special))
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -333,13 +335,13 @@ func dropWithPlan(ctx context.Context, pl *plan, companyID uuid.UUID) error {
 
 // batchTableName maps a batch index back to the table it deleted from, so a
 // failure names the table instead of an integer.
-func batchTableName(pl *plan, i int) string {
-	if i < len(pl.special) {
-		return pl.special[i].Table
+func batchTableName(pl *tenant.Plan, i int) string {
+	if i < len(pl.Special) {
+		return pl.Special[i].Table
 	}
-	i -= len(pl.special)
-	if i < len(pl.order) {
-		return pl.order[i].Table
+	i -= len(pl.Special)
+	if i < len(pl.Order) {
+		return pl.Order[i].Table
 	}
 	return "?"
 }
@@ -349,8 +351,8 @@ func batchTableName(pl *plan, i int) string {
 // what lets a test assert that the fixture actually populated every table, which
 // is the difference between "the teardown works" and "the teardown was never
 // given anything to delete".
-func residue(ctx context.Context, q connLike, pl *plan, companyID uuid.UUID) ([]tableCount, error) {
-	rows, err := q.Query(ctx, pl.verifySQL, companyID, companyID.String())
+func residue(ctx context.Context, q tenant.ConnLike, pl *tenant.Plan, companyID uuid.UUID) ([]tableCount, error) {
+	rows, err := q.Query(ctx, pl.VerifySQL, companyID, companyID.String())
 	if err != nil {
 		return nil, fmt.Errorf("testdb: residue check for company %s: %w", companyID, err)
 	}
