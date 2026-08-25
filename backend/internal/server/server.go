@@ -686,6 +686,23 @@ func (s *Server) routes() {
 		r.Get("/stock-items", s.handleListStockItems)
 		r.Get("/units", s.handleListUnits)
 
+		// T9 — THE COSTING METHOD. Switching an item from weighted average to
+		// FIFO or LIFO restates every report that has ever priced it (no data
+		// moves; value is derived), so it is its own narrow route with its own
+		// audit row, mapped to (Alter, "master") so it inherits the back-dated
+		// cutoff and the step-up. The vocabulary is SERVED because a picker
+		// built from a client-side list can offer a method the reports cannot
+		// value; see handler_inventory_masters.go.
+		//
+		// ⚠️ ORDER MATTERS AND chi's ROUTER DOES NOT REORDER FOR YOU: this is
+		// the FIRST {id} sub-route under /stock-items, and the comment above
+		// which said there were none is now wrong wherever it still stands.
+		// A literal segment ("/stock-items") and a parameterised one
+		// ("/stock-items/{stockItemID}/...") do not collide, but a second
+		// literal added under the collection later would.
+		r.Put("/stock-items/{stockItemID}/valuation-method", s.handleSetStockItemValuationMethod)
+		r.Get("/inventory-vocabulary", s.handleInventoryVocabulary)
+
 		// THE COST MASTERS (T2, migration 0040) — the AXES of cost analysis and the
 		// POSITIONS on them. A cost CATEGORY is an axis (Department, Branch, Project);
 		// a cost CENTRE is a position on that axis. Several axes exist in order to
@@ -1183,6 +1200,31 @@ func (s *Server) routes() {
 		// admitted by 0011's coarse `allow display report`.
 		r.Post("/employees", s.handleCreateEmployee)
 		r.Get("/employees", s.handleListEmployees)
+		// ⛔ THE TWO EFFECTIVE-DATED CHILDREN, WITHOUT WHICH THE EIGHT ROUTES
+		// ABOVE AND BELOW COULD NOT PAY ANYBODY. `payrolldb.SetSalaryComponent`
+		// and `SetStatutoryElection` shipped with Track 3 and had no route at
+		// all, so an employee created through POST /employees hit
+		// "no salary structure is in force" / "no statutory election is in
+		// force" on every pay run — a 422 arriving on the RUN, long after the
+		// master was created, with nothing anywhere saying it was incomplete.
+		// Every payroll test in this package set both up by calling the SERVICE,
+		// which is exactly why a green suite never noticed. See
+		// handler_payroll_structure.go's header.
+		//
+		// They resolve to the SAME `employee` authority as the master itself
+		// (Create for the writes, Display for the reads), so migration 0035's
+		// seeded `disallow create|alter|display employee` covers them from the
+		// moment they exist and no new token — granted by nothing, denied by
+		// nothing — guards a salary.
+		r.Post("/employees/{employeeID}/salary-components", s.handleSetSalaryComponent)
+		r.Get("/employees/{employeeID}/salary-components", s.handleListSalaryComponents)
+		r.Post("/employees/{employeeID}/statutory-elections", s.handleSetStatutoryElection)
+		r.Get("/employees/{employeeID}/statutory-elections", s.handleListStatutoryElections)
+		// The closed sets a payroll form chooses from — served, not hardcoded in
+		// the client, for the reason /security-levels/vocabulary is: `is_wages`
+		// is a LEGAL classification and a second copy of it in another language
+		// is the drift that under-contributes PF with no error anywhere.
+		r.Get("/payroll-vocabulary", s.handlePayrollVocabulary)
 		r.Post("/vouchers/payroll", s.handlePayrollRun)
 		r.Get("/payroll-register", s.handlePayrollRegister)
 		r.Get("/payroll-payslip", s.handlePayrollPayslip)
@@ -1695,7 +1737,19 @@ type stockItemReq struct {
 	GSTRatePct  string `json:"gst_rate_pct"`
 	OpeningQty  string `json:"opening_qty"`
 	OpeningRate string `json:"opening_rate"`
-	CreatedBy   string `json:"created_by"`
+	// ValuationMethod is the item's COSTING METHOD (T9). Absent means the
+	// default, WEIGHTED_AVG, which is what every item created before T9 carries
+	// and what Tally defaults to.
+	//
+	// ⛔ IT IS ACCEPTED HERE RATHER THAN ONLY ON THE ALTER ROUTE ON PURPOSE. An
+	// item's method decided at creation values it from its first purchase; a
+	// method that could only be set afterwards would mean every item's first
+	// figures were on a basis nobody chose, and correcting it later would be a
+	// RESTATEMENT of reports that had already been read. Register row D43 is the
+	// nearby precedent for the other half of this: a body key that is accepted
+	// and discarded is worse than one that is refused.
+	ValuationMethod string `json:"valuation_method"`
+	CreatedBy       string `json:"created_by"`
 }
 
 func (s *Server) handleCreateStockItem(w http.ResponseWriter, r *http.Request) {
@@ -1723,12 +1777,13 @@ func (s *Server) handleCreateStockItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, err := s.masters.CreateStockItem(ctx, masters.StockItem{
-		Name:        req.Name,
-		UnitSymbol:  req.UnitSymbol,
-		HSN:         req.HSN,
-		GSTRatePct:  rate,
-		OpeningQty:  qty,
-		OpeningRate: openRate,
+		Name:            req.Name,
+		UnitSymbol:      req.UnitSymbol,
+		HSN:             req.HSN,
+		GSTRatePct:      rate,
+		OpeningQty:      qty,
+		OpeningRate:     openRate,
+		ValuationMethod: strings.TrimSpace(req.ValuationMethod),
 	}, req.CreatedBy)
 	if err != nil {
 		writeMastersError(w, err)

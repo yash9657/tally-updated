@@ -474,6 +474,7 @@ const ONE_ROW_SUMMARY: StockSummaryResponse = {
       stock_item_id: "s1",
       item: "Widget",
       unit: "Nos",
+      valuation_method: "WEIGHTED_AVG",
       opening_qty: "0.0000",
       opening_value: "0.0000",
       inward_qty: "10.0000",
@@ -653,11 +654,13 @@ describe("F11 Company Features tells the truth about inventory", () => {
     // decoration, so the gaps this slice did NOT close are asserted too.
     // Closing stock is NOT one of them any more — it has its own test above.
     renderFeatures();
-    expect(badgeFor(/^FIFO \/ LIFO/)).toBe("Not built");
     // Was "Inventory vouchers (Stock Journal, ...)" until those four got an entry
-    // screen, and then ORDER PROCESSING until that got one too — this assertion has
-    // now been re-pointed twice by features actually shipping, which is what it is
-    // for. What is left is genuinely absent: a conversion factor makes every quantity
+    // screen, then ORDER PROCESSING until that got one too, and then FIFO/LIFO
+    // until T9 shipped three costing methods with a picker on the master form and
+    // Alt+V on the Stock Summary — this assertion has now been re-pointed three
+    // times by features actually shipping, which is exactly what it is for.
+    //
+    // What is left is genuinely absent: a conversion factor makes every quantity
     // in the system unit-qualified, and nothing in this build is.
     expect(badgeFor(/^Stock groups and compound units/)).toBe("Not built");
   });

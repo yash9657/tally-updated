@@ -64,9 +64,16 @@ const NO_DOCUMENT_REASON: Partial<Record<VoucherType, string>> = {
 /**
  * Client report name -> the server's report slug.
  *
- * `payroll-register` and `payroll-payslip` also print server-side but have NO
- * screen in this build (payroll is server-only), so they are deliberately absent
- * rather than mapped to a screen that does not exist.
+ * ⚠️ `payroll-register` AND `payroll-payslip` ARE NOT IN THIS TABLE, AND THE
+ * REASON CHANGED. It used to be "payroll is server-only, so they are deliberately
+ * absent rather than mapped to a screen that does not exist" — both now HAVE
+ * screens. They are still absent because neither is a report NAME frame: this
+ * table is keyed by `ReportName`, and both payroll screens are ScreenKinds whose
+ * dimension is a wage MONTH (and, for the payslip, an EMPLOYEE) rather than the
+ * From/To period a report frame carries. Both DO print — `printPayrollRegister`
+ * and `printPayrollPayslip` are real layouts, not deferred 501s — and they are
+ * resolved in the ScreenKind branches at the bottom of `resolvePrintTarget`,
+ * where the month and the employee id are available to be sent.
  *
  * ⚠️ NOT EVERY MAPPED REPORT ACTUALLY PRINTS. The slug being here means the
  * print route is REACHABLE and the ACL rule `print report:<slug>` can match it;
@@ -278,6 +285,20 @@ export interface PrintVoucherContext {
    * screen can tell them apart: `undefined` means the list has not arrived.
    */
   bankAccountCount?: number;
+  /**
+   * The WAGE MONTH ("YYYY-MM") the payroll register or payslip is showing.
+   *
+   * It lives here rather than on NavSnapshot's config for the same reason
+   * `bankLedgerID` does — it is what the SCREEN has actually loaded, which is not
+   * always what the frame asked for: a month typed but not yet fetched, or one
+   * the server refused, must not reach the print route as though it had produced
+   * the page on screen. Printing "2026-13" because it was typed would produce a
+   * 400 the operator cannot connect to anything they can see.
+   */
+  payrollMonth?: string | null;
+  /** The employee whose payslip is on screen, and their name for the status line. */
+  payrollEmployeeID?: string | null;
+  payrollEmployeeName?: string | null;
 }
 
 function titleCase(cls: VoucherType): string {
@@ -476,6 +497,86 @@ export function resolvePrintTarget(
       kind: "refusal",
       reason:
         "There is nothing to print here — this is a list of masters, and the print route serves REPORTS. What each of these centres COST is the Cost Centre Summary; how much of the period's cost each axis accounts for is the Cost Category Summary. Neither of those prints yet either.",
+    };
+  }
+
+  // ---- THE FIVE PAYROLL SCREENS. Two of them PRINT — and they are the only
+  // screens added in this wave that do, which is a fact about the server and not a
+  // preference: handler_print_reports.go carries a real `printPayrollRegister` and
+  // `printPayrollPayslip` layout, with the RULESET VERSIONS laid out on the page,
+  // while every other payroll name is in the deferred set.
+  //
+  // ⛔ THE MONTH IS PART OF THE REQUEST, NOT DECORATION — the same defect the
+  // REPORT_PERIOD_SHAPE table exists to close, and worse here. The route reads
+  // `month` and refuses without it, so an unsent month is a 400; and a payslip
+  // printed for the wrong month is one person's pay, correctly rendered, for a
+  // period nobody asked about, on a document that person is handed.
+  if (screen === "payroll-register") {
+    const month = voucher.payrollMonth?.trim() ?? "";
+    if (month === "") {
+      // No round trip. The register on screen has no month yet, so there is no
+      // document to ask for — and a request with no month is a 400 in somebody's
+      // log rather than an answer.
+      return {
+        kind: "refusal",
+        reason:
+          "Type the wage month (YYYY-MM) first — a payroll register is always for ONE month, and the print route refuses without it rather than printing the whole year under a monthly heading.",
+      };
+    }
+    return {
+      kind: "report",
+      slug: "payroll-register",
+      label: `Payroll Register — ${month}`,
+      query: { month },
+    };
+  }
+
+  if (screen === "payroll-payslip") {
+    const month = voucher.payrollMonth?.trim() ?? "";
+    const employeeID = voucher.payrollEmployeeID?.trim() ?? "";
+    if (month === "" || employeeID === "") {
+      return {
+        kind: "refusal",
+        reason:
+          "There is no payslip on this screen yet. A payslip is ONE person's pay for ONE wage month, so both are needed — open it from the Payroll Register (Enter on a row), which carries both with it.",
+      };
+    }
+    // ⛔ THE NAME IS ON THE STATUS LINE, and it is here for the reason the bank
+    // account's name is on the reconciliation's: the operator reads WHO went to
+    // paper without opening the PDF. On this screen that matters more than
+    // anywhere else in the product — the failure it catches is handing one
+    // employee another employee's salary.
+    const who = voucher.payrollEmployeeName?.trim();
+    return {
+      kind: "report",
+      slug: "payroll-payslip",
+      label:
+        `Payslip — ${who && who !== "" ? who : "the selected employee"} for ${month}`,
+      query: { month, employee_id: employeeID },
+    };
+  }
+
+  if (screen === "employees") {
+    return {
+      kind: "refusal",
+      reason:
+        "There is nothing to print here — this is a list of PEOPLE, and the print route serves reports. What each of them was paid is the Payroll Register (Alt+G > Payroll Register), which prints; one person's own document is their Payslip, which prints from the register with Enter then Ctrl+P.",
+    };
+  }
+
+  if (screen === "payroll-run") {
+    return {
+      kind: "refusal",
+      reason:
+        "A pay run has no printed document of its own — it is the ACT of computing and posting a wage month, not a statement. What it produced is the Payroll Register for that month, and that prints (Alt+G > Payroll Register, then Ctrl+P). Each person's own copy is their payslip.",
+    };
+  }
+
+  if (screen === "payroll-form-138") {
+    return {
+      kind: "refusal",
+      reason:
+        "Form 138 is not printed, it is DOWNLOADED — press Ctrl+A. It is a FILE the department's utility reads, not a page: the statement must begin with its FH record, and a PDF of it would be a document no portal can accept and no human is meant to read. ⛔ And note what the download says about itself: nothing here has been through the department's FVU, which needs a Java runtime this environment does not have, so the archive carries a README stating that — and the file and that statement cannot be saved apart.",
     };
   }
 

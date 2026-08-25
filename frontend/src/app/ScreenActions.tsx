@@ -131,7 +131,43 @@ export type ScreenActionKind =
    * reason F4 above is one: the import belongs to the SELECTED bank account,
    * and which account that is never travels through the pure machine.
    */
-  | "importBankStatement";
+  | "importBankStatement"
+  /**
+   * Alt+C on the EMPLOYEES screen — open the form that creates an employee. A
+   * screen action for the reasons `createOrder` gives: the form's state and the
+   * client that posts it belong to the screen, and creating a master here does
+   * not navigate — the operator is still looking at the list they are adding to,
+   * which is the list that tells them the code is not taken already.
+   */
+  | "createEmployee"
+  /**
+   * Alt+S on the EMPLOYEES screen — set the highlighted employee's SALARY
+   * STRUCTURE or STATUTORY ELECTION.
+   *
+   * ⛔ SCREEN-OWNED BECAUSE IT ACTS ON THE HIGHLIGHTED ROW, exactly like
+   * `closeOrder`: which employee is selected is screen state and never travels
+   * through the pure machine. And it is a separate key from `createEmployee`
+   * because it answers a different question — Alt+C creates the person, Alt+S is
+   * what makes them PAYABLE. Without both children cored refuses the entire pay
+   * run, on the run, long after this screen was left.
+   */
+  | "setEmployeePay"
+  /**
+   * Alt+S on the PAYROLL REGISTER — open the statutory-files panel for the month
+   * on screen (the EPFO ECR and the ESIC return). Screen-owned because the month
+   * is typed on the screen's own face, and because the ESIC return needs a
+   * LEAVING REASON per leaver, which is a question only this panel can ask.
+   */
+  | "payrollStatutoryFiles"
+  /**
+   * Alt+V on the STOCK SUMMARY — change an item's COSTING METHOD (T9). A screen
+   * action for the reasons `selectCostCategory` is one (the item being re-valued
+   * is the one highlighted on the report, which only the screen knows) and one
+   * that is specific to this key: the report has to REDRAW underneath it, because
+   * the whole point of the change is that the figure on screen moves. A machine
+   * transition could not do that without navigating away from the answer.
+   */
+  | "setValuationMethod";
 
 /**
  * A handler the active screen registers for a screen action. It may return a

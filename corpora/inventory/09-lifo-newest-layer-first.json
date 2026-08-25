@@ -1,0 +1,100 @@
+{
+  "id": "09-lifo-newest-layer-first",
+  "description": "LIFO PERPETUAL CONSUMES THE NEWEST LAYER THAT EXISTED AT THE MOMENT OF THE ISSUE. The receipts are the same three layers as fixture 08: PUR-1 10.0000 @ 100.0000 = 1000.0000, PUR-2 10.0000 @ 120.0000 = 1200.0000, PUR-3 5.0000 @ 80.0000 = 400.0000. SAL-1 issues 15.0000 on 05-Apr and takes ALL of PUR-2, the newest layer then in existence (1200.0000), then 5.0000 of PUR-1 at 100.0000 (500.0000) -> consumed 1700.0000, leaving 5.0000 units of PUR-1 at 500.0000. SAL-2 issues 8.0000 on 07-Apr, by when PUR-3 exists and is the newest: all of PUR-3 (400.0000) plus 3.0000 of PUR-1 at 100.0000 (300.0000) -> consumed 700.0000. Closing 2.0000 units of the ORIGINAL layer, at 200.0000, rate 100.0000. Total consumed 2400.0000. Conservation: 0 + 2600.0000 - 2400.0000 = 200.0000. 40.0000 of this item's cost of goods sold is the METHOD and nothing else (FIFO consumed 2440.0000). NOTE WHAT THIS IS NOT: ANNUAL LIFO would cost an April issue at a purchase made the following March - a figure that cannot be stated until the year closes and that changes every time a later purchase is keyed. This is the perpetual variant, which is the only one a movement replay can express without restating an interim Profit & Loss.",
+  "valuationMethod": "LIFO",
+  "movements": [
+    {
+      "voucherDate": "2026-04-01",
+      "voucherNo": "PUR-1",
+      "voucherId": "0195c000-0000-7000-8000-000000000801",
+      "versionCreatedAt": "2026-04-01T10:00:00+05:30",
+      "versionId": "PUR-1/v1",
+      "lineNo": 1,
+      "stockItem": "widget",
+      "godown": null,
+      "batch": null,
+      "direction": "IN",
+      "qty": "10.0000",
+      "rate": "100.0000",
+      "discountPct": "0.0000"
+    },
+    {
+      "voucherDate": "2026-04-03",
+      "voucherNo": "PUR-2",
+      "voucherId": "0195c000-0000-7000-8000-000000000802",
+      "versionCreatedAt": "2026-04-03T10:00:00+05:30",
+      "versionId": "PUR-2/v1",
+      "lineNo": 1,
+      "stockItem": "widget",
+      "godown": null,
+      "batch": null,
+      "direction": "IN",
+      "qty": "10.0000",
+      "rate": "120.0000",
+      "discountPct": "0.0000"
+    },
+    {
+      "voucherDate": "2026-04-05",
+      "voucherNo": "SAL-1",
+      "voucherId": "0195c000-0000-7000-8000-000000000803",
+      "versionCreatedAt": "2026-04-05T11:30:00+05:30",
+      "versionId": "SAL-1/v1",
+      "lineNo": 1,
+      "stockItem": "widget",
+      "godown": null,
+      "batch": null,
+      "direction": "OUT",
+      "qty": "15.0000",
+      "rate": "200.0000",
+      "discountPct": "0.0000"
+    },
+    {
+      "voucherDate": "2026-04-06",
+      "voucherNo": "PUR-3",
+      "voucherId": "0195c000-0000-7000-8000-000000000804",
+      "versionCreatedAt": "2026-04-06T09:15:00+05:30",
+      "versionId": "PUR-3/v1",
+      "lineNo": 1,
+      "stockItem": "widget",
+      "godown": null,
+      "batch": null,
+      "direction": "IN",
+      "qty": "5.0000",
+      "rate": "80.0000",
+      "discountPct": "0.0000"
+    },
+    {
+      "voucherDate": "2026-04-07",
+      "voucherNo": "SAL-2",
+      "voucherId": "0195c000-0000-7000-8000-000000000805",
+      "versionCreatedAt": "2026-04-07T15:45:00+05:30",
+      "versionId": "SAL-2/v1",
+      "lineNo": 1,
+      "stockItem": "widget",
+      "godown": null,
+      "batch": null,
+      "direction": "OUT",
+      "qty": "8.0000",
+      "rate": "210.0000",
+      "discountPct": "0.0000"
+    }
+  ],
+  "expected": {
+    "positions": [
+      {
+        "stockItem": "widget",
+        "godown": null,
+        "batch": null,
+        "openingQty": "0.0000",
+        "openingValue": "0.0000",
+        "inwardQty": "25.0000",
+        "inwardValue": "2600.0000",
+        "outwardQty": "23.0000",
+        "outwardValue": "2400.0000",
+        "closingQty": "2.0000",
+        "closingValue": "200.0000",
+        "closingRate": "100.0000"
+      }
+    ]
+  }
+}

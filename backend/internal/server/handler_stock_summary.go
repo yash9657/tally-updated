@@ -76,14 +76,19 @@ func stockSummaryJSON(sum reporting.StockSummary) map[string]any {
 			"stock_item_id": it.StockItemID.String(),
 			"item":          it.ItemName,
 			"unit":          it.UnitSymbol,
-			"opening_qty":   it.OpeningQty.StringFixed(4),
-			"opening_value": it.OpeningValue.StringFixed(4),
-			"inward_qty":    it.InwardQty.StringFixed(4),
-			"inward_value":  it.InwardValue.StringFixed(4),
-			"outward_qty":   it.OutwardQty.StringFixed(4),
-			"outward_value": it.OutwardValue.StringFixed(4),
-			"closing_qty":   it.ClosingQty.StringFixed(4),
-			"closing_value": it.ClosingValue.StringFixed(4),
+			// THE BASIS, on the ITEM, because that is what stock_item carries and
+			// what a client's "change the costing method" control has to address.
+			// Without it a screen showing three items on three different bases can
+			// only print values that cannot be compared.
+			"valuation_method": it.ValuationMethod,
+			"opening_qty":      it.OpeningQty.StringFixed(4),
+			"opening_value":    it.OpeningValue.StringFixed(4),
+			"inward_qty":       it.InwardQty.StringFixed(4),
+			"inward_value":     it.InwardValue.StringFixed(4),
+			"outward_qty":      it.OutwardQty.StringFixed(4),
+			"outward_value":    it.OutwardValue.StringFixed(4),
+			"closing_qty":      it.ClosingQty.StringFixed(4),
+			"closing_value":    it.ClosingValue.StringFixed(4),
 			// DELIBERATELY NO closing_rate on an item total: two godowns of the
 			// same item carry two different average costs, and the average of
 			// the averages is not the average. Ask a position for its rate.

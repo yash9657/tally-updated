@@ -145,6 +145,74 @@
  *                          is quantities, and what those quantities COST is the
  *                          valuation plane.
  *
+ *  - "employees"         — THE EMPLOYEE MASTER (Track 3): the people on the
+ *                          payroll, the form that creates one, and — on the same
+ *                          screen — the two EFFECTIVE-DATED CHILDREN without
+ *                          which none of them can be paid (the salary structure
+ *                          and the statutory election). ⛔ ALL THREE ON ONE
+ *                          SCREEN AND NOT THREE SCREENS, because a master
+ *                          without them is not a half-finished record but an
+ *                          UNPAYABLE one: cored refuses the whole pay run with
+ *                          "no salary structure is in force" / "no statutory
+ *                          election is in force", and that refusal arrives on
+ *                          the RUN — long after the operator left this screen
+ *                          believing they had created an employee. Splitting
+ *                          them would put the completeness of the record on a
+ *                          screen nobody is required to visit.
+ *                          A ScreenKind and not a "report:NAME" for the reason
+ *                          tds-challans is: the server serves the master under
+ *                          the BARE token `employee` — deliberately NOT folded
+ *                          into `master`, which migration 0022 grants to every
+ *                          seeded Data Entry level, because an employee row
+ *                          carries PAN, UAN, ESIC IP number and bank IFSC.
+ *                          Migration 0035 disallows create/alter/display of it
+ *                          for Data Entry, so a 403 here is a NORMAL answer.
+ *  - "payroll-run"       — THE PAY RUN (Ctrl+F4). One WAGE MONTH for every
+ *                          eligible employee at once — not a voucher form with
+ *                          particulars, which is why it is a ScreenKind and not
+ *                          a `voucher` frame even though it posts through
+ *                          /vouchers/payroll. VoucherScreen resolves its layout
+ *                          through configFor(voucherType) and there is no
+ *                          payroll VoucherConfig; a payroll voucher's "lines"
+ *                          are computed from the masters, not keyed.
+ *                          ⛔ ITS DATE DIMENSION IS A WAGE MONTH AND THE
+ *                          BACK-DATED CUTOFF APPLIES THROUGH IT: cored derives
+ *                          the voucher date with payrolldb.LastDayOf, so a run
+ *                          for a closed month is a 403 that means "that month is
+ *                          locked" and NOT "you may not run payroll". The screen
+ *                          must render those two differently — see
+ *                          auth_payroll_cutoff_test.go, which is the contract.
+ *  - "payroll-register"  — THE WAGE MONTH'S REGISTER: every employee's gross,
+ *                          deductions and net, the totals, and the RULESET
+ *                          VERSIONS that say which law produced the figures.
+ *                          Its dimension is a MONTH typed on its face, never an
+ *                          F2 period — so, like tds-challans, it needs no
+ *                          FrameOverlays classification. It is the door to the
+ *                          three statutory FILES and to one employee's payslip.
+ *  - "payroll-payslip"   — ONE employee's payslip for one wage month: the
+ *                          components, and the DEFERRALS — the things the engine
+ *                          did not compute, with the reason, because a blank
+ *                          where a number should be is a question the employee
+ *                          will ask and the honest answer is "the rate has not
+ *                          been notified", not "zero".
+ *  - "payroll-form-138"  — THE QUARTERLY SALARY-TDS STATEMENT (ex-24Q Annexure
+ *                          I). A FORM and not a download button: NOT ONE of the
+ *                          deductor or challan particulars is in the database —
+ *                          the company master carries no TAN and no challan — so
+ *                          all of them are asked for and an absent one is a 400.
+ *                          Nothing is defaulted into a FILED RECORD.
+ *                          ⚠️ Q4 is refused by the server: the Annexure II
+ *                          record structure is not published, and guessing it
+ *                          would mis-file every employee's whole-year salary.
+ *
+ * ⚠️ THE FIVE PAYROLL REPORTS ARE REPORT NAMES ON THE SERVER AND ARE STILL NOT
+ * "report:NAME" KEYS HERE, for the reason the two cost summaries are not: none
+ * of them is reachable as a reportName frame. `payroll-register` and
+ * `payroll-payslip` take a wage MONTH (and the payslip an EMPLOYEE) where a
+ * report frame carries a period; the three file names are not screens at all but
+ * downloads, two of which hang off the register and the third of which is the
+ * form above.
+ *
  * ⚠️ Both cost SUMMARIES are ScreenKinds AND report names on the server
  * (`report:cost-centre-summary`, `report:cost-category-summary`, refused to the
  * seeded Data Entry level by migration 0072). They are ScreenKinds here because
@@ -177,7 +245,12 @@ export type ScreenKind =
   | "boms"
   | "e-way-bill"
   | "e-invoice"
-  | "bank-reconciliation";
+  | "bank-reconciliation"
+  | "employees"
+  | "payroll-run"
+  | "payroll-register"
+  | "payroll-payslip"
+  | "payroll-form-138";
 
 /**
  * An in-frame overlay: a sub-screen that keeps its parent frame alive and is
@@ -260,6 +333,27 @@ export interface FrameConfig {
   /** F2 / Alt+F2: report period (ISO yyyy-mm-dd). */
   periodFrom?: string;
   periodTo?: string;
+  /**
+   * The WAGE MONTH ("YYYY-MM") the payroll register is showing.
+   *
+   * ⛔ A MONTH AND NOT A PERIOD, AND IT IS NOT SET BY F2. Every social-security
+   * scheme keys off a wage month: contributions, the ECR, the ESI return and the
+   * whole-month/part-month tests are all functions of it, and a month coerced to
+   * a neighbouring one computes somebody's contributions under the wrong window
+   * (the server refuses "2026-13" and "2026-1" with a strict parser for exactly
+   * this reason). A From/To range would let an operator ask for a span no
+   * statutory scheme has an answer for, so the register asks for a month on its
+   * own face — the way the TDS challan register asks for a tax year — and F2 says
+   * so rather than opening a period dialog that does nothing.
+   *
+   * It lives on the FRAME rather than in screen state solely so it can TRAVEL
+   * WITH THE DRILL into a payslip. Without that, the primary path — read the
+   * register, press Enter on a row — lands on "type a month", and the operator
+   * re-keys the month they just chose; re-keying it differently reads one
+   * person's July payslip under a register for June, with nothing on either page
+   * saying so.
+   */
+  wageMonth?: string;
 }
 
 /**
@@ -781,6 +875,74 @@ export type KeymapAction =
    * what makes a keyboard user distrust the app. `feature` is the human name,
    * `note` the one-line explanation shown in the status line.
    */
+  /**
+   * Ctrl+F4 — THE PAY RUN (Track 3).
+   *
+   * RESEARCH.md:903 names the combo: *"Alt+G > Create Voucher > Ctrl+F4
+   * (Payroll)"*. It was bound to `unavailable` ("The payroll module is not built
+   * yet") for the whole life of this project, in TWO stages and for two
+   * different reasons — the same two-stage history the four stock voucher keys
+   * have.
+   *
+   * First there was no engine. Then the engine, the statutory rates, the two
+   * reports, the three statutory file emitters, eight mounted routes and their
+   * PDP mappings all existed and there was NO SCREEN — so a keyboard-only
+   * operator could not create an employee, let alone pay one, and F11 said the
+   * module was absent while every payroll test passed.
+   *
+   * ⛔ IT IS A SCREEN AND NOT `{ kind: "voucher", voucherType: "payroll" }`.
+   * VoucherScreen resolves its layout through `configFor(voucherType)`, a
+   * Readonly<Record<VoucherType, VoucherConfig>> with no payroll entry; the key
+   * would not have "partly worked", it would have taken the operator to an
+   * undefined config. And the shape is genuinely different: a pay run has no
+   * particulars to key — its lines are COMPUTED from the masters for a whole
+   * WAGE MONTH — which is why the frame carries a month and not a voucher date.
+   */
+  | { kind: "payRun" }
+  /**
+   * Alt+C on the EMPLOYEES screen — open the create form.
+   *
+   * Scoped to the screen because the global `createMaster` would push a
+   * LEDGER-create frame over it: an employee is deliberately not a member of the
+   * MasterKind union, for the same reason cost masters are not — the server
+   * serves it under its own `employee` token and not under `master`.
+   */
+  | { kind: "createEmployee" }
+  /**
+   * Alt+S on the EMPLOYEES screen — set the SALARY STRUCTURE or the STATUTORY
+   * ELECTION of the employee highlighted in the list.
+   *
+   * ⛔ A SECOND WRITE KEY ON A MASTER SCREEN, AND IT IS NOT A CONVENIENCE. An
+   * employee with neither child cannot be paid at all: cored refuses the whole
+   * pay run with "no salary structure is in force" / "no statutory election is
+   * in force", and that refusal arrives on the RUN, long after the operator left
+   * this screen believing the record was complete. Alt+C creates the person;
+   * Alt+S is what makes them payable.
+   */
+  | { kind: "setEmployeePay" }
+  /**
+   * Alt+S on the PAYROLL REGISTER — open the STATUTORY FILES panel (the EPFO
+   * ECR and the ESIC monthly return, both for the month on screen).
+   *
+   * ⚠️ THE THIRD FILE IS NOT HERE and that is deliberate: Form 138 is
+   * QUARTERLY, needs a TAN, a deductor PAN, a deductor name and every challan's
+   * counterfoil — none of which is in the database — so it is a FORM on its own
+   * screen. Offering it beside two one-click downloads would imply it takes one
+   * click, and the operator would meet four 400s discovering otherwise.
+   */
+  | { kind: "payrollStatutoryFiles" }
+  /**
+   * Alt+V — CHANGE AN ITEM'S COSTING METHOD (T9), on the Stock Summary.
+   *
+   * ⚠️ IT IS BOUND ON THE `report` SCREEN KIND, so it is bound on every report,
+   * and only the Stock Summary registers a handler for it. On any other report
+   * the shell says "does not apply on this screen", which is the honest answer:
+   * keymap bindings, the button bar and the hint strip are all per SCREEN KIND,
+   * and a report NAME cannot carry its own binding without a second dispatch
+   * layer. The Stock Summary advertises the key in its own prose instead — the
+   * one surface that can be specific about which report it is.
+   */
+  | { kind: "setValuationMethod" }
   | { kind: "unavailable"; feature: string; note: string };
 
 /**

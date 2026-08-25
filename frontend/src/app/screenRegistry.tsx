@@ -1,5 +1,6 @@
 import type { ComponentType } from "react";
 import type { NavSnapshot } from "../keystroke/navMachine";
+import type { FrameConfig } from "../keystroke/types";
 
 /**
  * The screen registry — the seam other agents (vouchers, reports, masters) plug
@@ -19,6 +20,31 @@ import type { NavSnapshot } from "../keystroke/navMachine";
 export interface ScreenComponentProps {
   snapshot: NavSnapshot;
   onSelect: (item: string) => void;
+  /**
+   * Publish a view-configuration patch onto the ACTIVE FRAME — the same channel
+   * the F2 / F12 / Ctrl+F overlays use.
+   *
+   * ⛔ IT EXISTS FOR ONE SHAPE: A SCREEN WHOSE DIMENSION IS TYPED ON ITS OWN
+   * FACE AND MUST TRAVEL WITH A DRILL. The Payroll Register is the first: its
+   * dimension is a WAGE MONTH rather than an F2 period (a From/To range would be
+   * a span no social-security scheme has an answer for), so the month exists only
+   * as screen state — and Enter on a row must open THAT month's payslip. Without
+   * this the payslip lands on "type a month" and an operator re-keys the month
+   * they just chose; re-key it slightly differently and they read one person's
+   * July payslip under a register for June, with nothing on either page saying
+   * so. Measured in a real browser, where the drill arrived with no month at all.
+   *
+   * ⚠️ IT IS NOT A GENERAL BACK-CHANNEL INTO THE MACHINE. A screen may publish
+   * what it is CURRENTLY SHOWING; it may not navigate — all navigation stays with
+   * the machine, which is the rule this seam has kept since Phase 0. Publish the
+   * LOADED value and never the typed one, for the reason Ctrl+P sends the loaded
+   * month: a value typed but never fetched has produced nothing on screen, and a
+   * drill from it opens a page that does not match the one it came from.
+   *
+   * Optional, so the many screens with no dimension of their own ignore it and
+   * every existing call site keeps compiling.
+   */
+  onConfig?: (patch: FrameConfig) => void;
 }
 
 export type ScreenComponent = ComponentType<ScreenComponentProps>;

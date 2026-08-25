@@ -7,6 +7,79 @@ what was wrong; this file records what a person will notice.
 
 ---
 
+## Stock items can be valued FIFO or LIFO, and switching one RESTATES its whole history
+
+**Applies to:** every stock item, the Stock Summary, closing stock on the Balance Sheet
+and the gross profit in the Profit & Loss. **Feature:** T9.
+
+### What changes
+
+Until now every item in every company was valued at **Avg. Cost** (weighted average),
+which is Tally's default and remains this build's. Two more costing methods are now
+available and are chosen **per item**:
+
+- **FIFO** — the oldest receipt is issued first, so closing stock is carried at what the
+  most recent purchases cost.
+- **LIFO (Perpetual)** — the newest receipt in existence at the moment of each issue is
+  consumed first, so closing stock is carried at what the oldest purchases cost.
+
+Choose the method when you create the item (Gateway → Alt+G → Create Stock Item →
+**Costing method**), or change it on an existing item with **Alt+V on the Stock Summary**.
+The Stock Summary now has a **Basis** column, and the printed report names each item's
+basis whenever a company holds more than one.
+
+⛔ **NO EXISTING FIGURE MOVES UNTIL YOU CHANGE AN ITEM.** Every item keeps `WEIGHTED_AVG`
+and every number you have already read is reproducible. Nothing was migrated and no
+company's books were touched by the release itself.
+
+### ⛔ What happens when you DO change one, and why it is not an edit
+
+The same three movements — buy 10 @ 100.00, buy 10 @ 120.00, issue 5 — close at
+**1,650.00** at Avg. Cost, **1,700.00** under FIFO and **1,600.00** under LIFO. On one
+item, on one page, the method is worth 100.00.
+
+No valuation figure is stored anywhere in this product: value is DERIVED at report time by
+replaying the movement ledger. So changing an item's method does not change data going
+forward — **it re-values that item's entire history, from its opening onwards, including
+periods that have already been reported, printed and filed.** Your April Balance Sheet
+will not read the same as the copy in the folder.
+
+⚠️ **Switching back reproduces the earlier figures exactly**, to the paisa. That is the
+one comfort available here, and it exists because nothing was stored: there is nothing to
+lose and nothing to rebuild. If you change a method by mistake, change it back.
+
+Each switch writes a `master_audit` row naming both methods — the only record of why a
+period's closing stock moved — and it is an `alter master` write, so it obeys the
+back-dated-entry cutoff and asks for your passkey like any other change to the books.
+
+### What is deliberately NOT offered
+
+TallyPrime ships eight costing methods; this build implements three, and an item naming
+any of the other five is **refused when you save the item** rather than when a report is
+read (a refusal at the report would take out the Stock Summary and the Balance Sheet for
+the whole company, every other item included):
+
+- **At Zero Cost** silently zeroes closing stock;
+- **Last Purchase Cost** and **Standard Cost** need a price the movement ledger does not
+  carry;
+- **Monthly Avg. Cost** needs a period boundary a replay has no notion of;
+- **LIFO Annual** would cost an April issue at a purchase made the following March — no
+  figure could be stated until the year closed, and every interim Profit & Loss would be
+  restated by the next purchase keyed. The LIFO offered here is the perpetual variant.
+
+⚠️ **Batch-wise valuation is not a fourth method and never was.** A batch is a dimension
+of the position (item, godown, batch), so all three methods already value each batch — and
+each godown — as its own independent cost history.
+
+⚠️ **What negative stock does to FIFO.** If `Allow negative stock` is on and an issue
+exceeds everything received, the valuer consumes only what was actually there — never a
+cost invented from the sale price — and the item's layer history is then gone, because
+FIFO cannot say which receipt a unit that was never received came from. The next receipt
+rebuilds a single blended layer. Under negative stock a FIFO figure is not a FIFO figure,
+and that is a cost of the setting rather than of the method.
+
+---
+
 ## A link with a broken company id no longer opens the wrong company
 
 **Applies to:** opening the app with `?company=` in the address bar.

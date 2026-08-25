@@ -90,7 +90,33 @@ var allowedDeps = map[string]map[string]bool{
 	// constraint worth keeping: compliance must stay a leaf that knows nothing
 	// about storage. If you ever find yourself wanting compliance -> masters,
 	// that is the signal the logic belongs on this side of the line instead.
-	"internal/masters": {"internal/platform/db": true, "internal/compliance": true},
+	//
+	// THE SECOND EDGE, TO internal/inventory, IS THE SAME ARGUMENT ONE FEATURE
+	// ALONG (T9). stock_item.valuation_method names the VALUER a report replays
+	// the item's movements through, and inventory is where the valuers live. So
+	// the vocabulary of costing methods has exactly TWO copies — the valuers
+	// themselves and migration 0078's CHECK, pinned to each other by
+	// TestValuationMethodsMatchTheMigration — instead of three.
+	//
+	// ⛔ THE ALTERNATIVE IS NOT "no edge", IT IS A THIRD COPY, and that copy is
+	// the one that goes stale ahead of the others: a masters-local list of
+	// methods would let a master be created naming a method no valuer implements,
+	// and the report that then failed would fail for the WHOLE COMPANY, on the
+	// Stock Summary and the Balance Sheet, long after the master was written.
+	// masters therefore validates by asking inventory.ValuerFor whether a valuer
+	// EXISTS, which is the only question worth asking.
+	//
+	// internal/inventory's own allowed set is EMPTY ({} above): it imports
+	// nothing in this repo, has no I/O and no clock, so this edge cannot drag a
+	// dependency in behind it. And the direction is the one that matters, exactly
+	// as it is for compliance: inventory must stay a leaf that knows nothing
+	// about storage. inventory -> masters would be the signal that the logic
+	// belongs on this side of the line.
+	"internal/masters": {
+		"internal/platform/db": true,
+		"internal/compliance":  true,
+		"internal/inventory":   true,
+	},
 	// banking (T4) is the WRITE side of bank reconciliation. It touches the db
 	// layer and NOTHING else — deliberately, and the empty-but-for-db set is the
 	// enforcement of the feature's central rule: reconciling records a fact about

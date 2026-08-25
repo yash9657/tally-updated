@@ -17,6 +17,18 @@
 
 ## 0. THE HEADLINE — READ THIS FIRST, IT CHANGES WHAT YOU DO
 
+> ### ✅ 2026-08-25 (LATER) — §1 PAYROLL SCREENS HAS LANDED. THE NEXT TRACK IS §2 (T9 + T10 + §3).
+>
+> ⛔ **AND IT CORRECTED THIS FILE'S OWN §0 IN THE ONE DIRECTION §0 WARNS ABOUT.** The table below
+> says there are no known defects — checked by parsing, and true of the DEFECT REGISTER. It was not
+> true of the product: `payrolldb.SetSalaryComponent` and `SetStatutoryElection` had no route, so
+> the entire payroll module could not pay anybody over HTTP, and no register anywhere had a row for
+> it because nobody had tried to perform the task. See §1 and `HANDOFF.md` §1.15.
+>
+> **The rule that adds to "VERIFY, DO NOT INHERIT": verifying that the pieces EXIST is not verifying
+> that they COMPOSE.** "Eight routes are mounted" is not a measurement of anything an operator can
+> do. Perform the whole task through the public surface, or it has not been checked.
+
 **There are no known defects.** Re-derived by parsing on 2026-08-25, not by reading a heading:
 
 | Register | State |
@@ -94,7 +106,38 @@ last session's claim — that is exactly how door 7 survived.
 
 ---
 
-## 1. 🥇 PAYROLL SCREENS — **START HERE**
+## 1. ✅ **DONE 2026-08-25 — PAYROLL SCREENS.** Folded into `HANDOFF.md` §1.15; read that, not this.
+
+> ## ⛔⛔ AND READ WHY THIS SECTION'S OWN PREMISE WAS WRONG — IT IS THE MOST USEFUL THING IT PRODUCED
+>
+> Everything below that was CHECKED was true: eight routes mounted, all PDP-mapped, `internal/payroll`
+> complete with tests, no payroll screen anywhere. **And "pure frontend" was still false.**
+>
+> `payrolldb.SetSalaryComponent` and `SetStatutoryElection` — the two writers a pay run cannot
+> proceed without — had **NO ROUTE AT ALL**, so an employee created over HTTP could never be paid:
+> `POST /vouchers/payroll` answered 422 *"no statutory election is in force"* for every caller.
+> Every payroll test in `internal/server` lays both children down by calling the Go SERVICE, and
+> `handler_payroll_test.go`'s fixture says so in a comment — so the suite bypassed the exact seam
+> that was missing, and a green run said nothing about whether the module worked.
+>
+> ⛔ **THE RULE THIS ADDS TO §0's "VERIFY, DO NOT INHERIT": VERIFYING THAT THE PIECES EXIST IS NOT
+> VERIFYING THAT THEY COMPOSE.** Counting mounted routes measures nothing. Perform the whole task
+> through the public surface, or you have not checked it. The probe that now pins payroll
+> (`TestAnEmployeeCreatedOverHTTPCanBePaidOverHTTP`) makes no `s.payroll.*` call at all, and it was
+> run against the broken build first — predicted 422, observed 422.
+>
+> **Shipped:** 4 routes + a vocabulary route (`handler_payroll_structure.go`, mapped to the EXISTING
+> `employee` token so migration 0035 already covers them); 5 screens; Gateway entries; Ctrl+F4 bound
+> at last. Two further defects that only the BROWSER found — the register never published its wage
+> month to the frame (so the payslip drill arrived empty), and Form 138 pre-checked every deductor
+> field but not the challan. Driven end to end: **34/34**, `frontend/scripts/drive-payroll.mjs`.
+>
+> ⚠️ **NOT built, and F11 says so:** per-employee attendance/declarations on the pay run (an empty
+> `inputs` is sent DELIBERATELY — a non-empty one is also the SELECTION), and altering or reversing a
+> posted run.
+
+<details>
+<summary>The original plan, kept only because its reasoning is what the correction above is about.</summary>
 
 **Why first:** it is the biggest module in the product that a user cannot see at all, and it is
 **pure frontend**. Nothing needs designing, refactoring or deciding — the engine, the statutory rates,
@@ -138,9 +181,15 @@ existing shape (a list, a create frame, a report, a file download).
 register read back **through the product's own screens**, and each of the four statutory files
 downloaded. Plus a browser drive, per §8.
 
+⚠️ *(There are THREE statutory files, not four — the ECR, the ESI return and Form 138. The fourth
+name in `authz.KnownReportNames` is the PAYSLIP, which is a report and not a file. All three
+downloaded, and the payslip renders and prints.)*
+
+</details>
+
 ---
 
-## 2. T9 FIFO/LIFO → then T10 STOCK GROUPS + COMPOUND UNITS
+## 2. 🥇 T9 FIFO/LIFO → then T10 STOCK GROUPS + COMPOUND UNITS — **START HERE NOW**
 
 ⛔ **SERIALISE THESE TWO** — both touch the movement primitive.
 

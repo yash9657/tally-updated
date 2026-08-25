@@ -37,6 +37,9 @@ import type {
   ImportTallyXMLResponse,
   ListGodownsResponse,
   ListStockBatchesResponse,
+  InventoryVocabularyResponse,
+  SetValuationMethodRequest,
+  SetValuationMethodResponse,
   ListStockItemsResponse,
   OutstandingsQuery,
   OutstandingsResponse,
@@ -99,6 +102,22 @@ import type {
   SetTDSProfileResponse,
   SetBankDateRequest,
   SetBankDateResponse,
+  ListEmployeesResponse,
+  CreateEmployeeRequest,
+  CreateEmployeeResponse,
+  PayRunRequest,
+  PayRunResponse,
+  PayrollRegisterResponse,
+  PayslipResponse,
+  Form138Request,
+  StatutoryFileDownload,
+  ListSalaryComponentsResponse,
+  SetSalaryComponentRequest,
+  SetSalaryComponentResponse,
+  ListStatutoryElectionsResponse,
+  SetStatutoryElectionRequest,
+  SetStatutoryElectionResponse,
+  PayrollVocabularyResponse,
 } from "./types";
 import type { QueryRequest, QueryResult } from "./query";
 import type {
@@ -318,7 +337,9 @@ export function createRestClient(
       // and two companies on one deployment get the same answer. A company id in
       // the path only because every route on this seam is company-scoped by the
       // middleware that authorises it.
-      return http.get<TaxSectionsResponse>(`${company(companyID)}/tds-sections`);
+      return http.get<TaxSectionsResponse>(
+        `${company(companyID)}/tds-sections`,
+      );
     },
 
     // ---- The TDS deductor return profile (T6, migration 0070).
@@ -511,10 +532,7 @@ export function createRestClient(
       // /companies/{c}/vouchers/{v}/e-invoice) and that is fine: it has no
       // routeAction, no PDP and no voucher classes. The two paths differ on
       // purpose, and this is cored's.
-      return http.post<EInvoiceRaised>(
-        `${company(companyID)}/e-invoices`,
-        req,
-      );
+      return http.post<EInvoiceRaised>(`${company(companyID)}/e-invoices`, req);
     },
     getEInvoice(companyID, voucherID: string) {
       return http.get<EInvoicePinned>(
@@ -574,7 +592,6 @@ export function createRestClient(
       );
     },
 
-
     // ---- s.394(2) declarations (Item Zero step 3).
     listTCSDeclarations(companyID) {
       return http.get<TCSDeclarationListResponse>(
@@ -612,6 +629,24 @@ export function createRestClient(
     listStockItems(companyID) {
       return http.get<ListStockItemsResponse>(
         `${company(companyID)}/stock-items`,
+      );
+    },
+    inventoryVocabulary(companyID) {
+      return http.get<InventoryVocabularyResponse>(
+        `${company(companyID)}/inventory-vocabulary`,
+      );
+    },
+    setStockItemValuationMethod(
+      companyID,
+      stockItemID,
+      req: SetValuationMethodRequest,
+    ) {
+      // A PUT, and a narrow one: it is an ALTER of a master (the server maps it
+      // to `alter master`), so it inherits the back-dated cutoff and the
+      // passkey step-up like every other write. It answers with the STORED row.
+      return http.put<SetValuationMethodResponse>(
+        `${company(companyID)}/stock-items/${encodeURIComponent(stockItemID)}/valuation-method`,
+        req,
       );
     },
     listGodowns(companyID) {
@@ -933,5 +968,185 @@ export function createRestClient(
         query,
       );
     },
+
+    // ---- PAYROLL (Track 3). Eight routes; see the CoredClient interface for
+    // why they are eight methods and not one facade.
+    listEmployees(companyID, includeInactive?: boolean) {
+      // The flag is sent ONLY when true. The server reads
+      // `include_inactive == "true"` literally, and sending "false" would be a
+      // client asserting a default it does not own.
+      return http.get<ListEmployeesResponse>(
+        `${company(companyID)}/employees`,
+        includeInactive ? { include_inactive: "true" } : undefined,
+      );
+    },
+    createEmployee(companyID, req: CreateEmployeeRequest) {
+      // NOTHING IS DEFAULTED HERE, and `is_active` least of all: the server's
+      // field is a *bool whose absence means TRUE, so a client that helpfully
+      // sent `false` for an unticked box would create employees who are silently
+      // left out of the pay run. The form omits the key unless it was chosen.
+      return http.post<CreateEmployeeResponse>(
+        `${company(companyID)}/employees`,
+        req,
+      );
+    },
+    runPayroll(companyID, req: PayRunRequest) {
+      // It rides the ordinary /vouchers/{class} shape on purpose — that is what
+      // puts the pay run under the SAME PDP mapping, back-dated cutoff and
+      // WebAuthn step-up as an invoice, through the same code.
+      return http.post<PayRunResponse>(
+        `${company(companyID)}/vouchers/payroll`,
+        req,
+      );
+    },
+    payrollRegister(companyID, month: string) {
+      return http.get<PayrollRegisterResponse>(
+        `${company(companyID)}/payroll-register`,
+        { month },
+      );
+    },
+    payslip(companyID, month: string, employeeID: string) {
+      return http.get<PayslipResponse>(
+        `${company(companyID)}/payroll-payslip`,
+        { month, employee_id: employeeID },
+      );
+    },
+
+    // ---- The three statutory FILES. `application/zip`, so getBlob and never the
+    // JSON path — which reads every response as text and would hand back a lossy
+    // string instead of an archive.
+    payrollPFECR(companyID, month: string) {
+      return statutory(
+        http.getBlob(`${company(companyID)}/payroll-pf-ecr`, { month }),
+      );
+    },
+    payrollESIReturn(
+      companyID,
+      month: string,
+      leavingReasons?: Readonly<Record<string, string>>,
+    ) {
+      // `leaving_reason` is a REPEATABLE param of the form CODE=Reason, which is
+      // why the query is assembled here rather than passed as an object:
+      // buildQuery takes flat pairs, and one key repeated is the server's own
+      // contract. URLSearchParams encodes the whole `CODE=Reason` pair as ONE
+      // value, which is what keeps a reason containing '&' or '=' — "Left &
+      // settled", "Retired = superannuation" — from splitting into a second
+      // param or a second key. The server cuts on the FIRST '=' after decoding,
+      // so the code may not contain one and a reason may.
+      const q = new URLSearchParams({ month });
+      for (const [code, reason] of Object.entries(leavingReasons ?? {})) {
+        q.append("leaving_reason", `${code}=${reason}`);
+      }
+      return statutory(
+        http.getBlob(
+          `${company(companyID)}/payroll-esi-return?${q.toString()}`,
+        ),
+      );
+    },
+    payrollForm138(companyID, req: Form138Request) {
+      // Every particular is a QUERY PARAM because the route is a GET that
+      // produces a file, and not one of them is in the database — see
+      // Form138Request. `challan` repeats, in the server's own positional form.
+      const q = new URLSearchParams();
+      q.set("tax_year", req.tax_year);
+      q.set("quarter", req.quarter);
+      q.set("tan", req.tan);
+      q.set("deductor_pan", req.deductor_pan);
+      q.set("deductor_name", req.deductor_name);
+      q.set("form_number", req.form_number);
+      q.set("file_creation_date", req.file_creation_date);
+      if (req.file_sequence !== undefined) {
+        q.set("file_sequence", String(req.file_sequence));
+      }
+      for (const ch of req.challans) {
+        // MONTH,BSR,DEPOSIT_DATE,SERIAL[,AMOUNT[,book]] — positional, and the
+        // AMOUNT is omitted when the operator did not state one so the server
+        // DERIVES it from the month's payslips. Sending an empty field instead
+        // would be a stated amount of nothing, which the reconciliation refuses.
+        const parts = [
+          ch.month,
+          ch.bsr_code,
+          ch.date_of_deposit,
+          String(ch.challan_serial_number),
+        ];
+        if (ch.total_tds_deposited && ch.total_tds_deposited.trim() !== "") {
+          parts.push(ch.total_tds_deposited.trim());
+          if (ch.book_entry) parts.push("book");
+        } else if (ch.book_entry) {
+          // The `book` flag is the SIXTH field, so it needs the fifth present.
+          // An empty amount here is the one shape the parser reads as "derive".
+          parts.push("");
+          parts.push("book");
+        }
+        q.append("challan", parts.join(","));
+      }
+      return statutory(
+        http.getBlob(`${company(companyID)}/payroll-form-138?${q.toString()}`),
+      );
+    },
+
+    // ---- The employee master's two effective-dated children. The employee id
+    // goes in the PATH and never in a body: it is not the operator's to type —
+    // it comes from the master they are looking at — and a body that could
+    // disagree with the URL is a question about which one wins.
+    listSalaryComponents(companyID, employeeID: string) {
+      return http.get<ListSalaryComponentsResponse>(
+        `${company(companyID)}/employees/${encodeURIComponent(employeeID)}/salary-components`,
+      );
+    },
+    setSalaryComponent(
+      companyID,
+      employeeID: string,
+      req: SetSalaryComponentRequest,
+    ) {
+      return http.post<SetSalaryComponentResponse>(
+        `${company(companyID)}/employees/${encodeURIComponent(employeeID)}/salary-components`,
+        req,
+      );
+    },
+    listStatutoryElections(companyID, employeeID: string) {
+      return http.get<ListStatutoryElectionsResponse>(
+        `${company(companyID)}/employees/${encodeURIComponent(employeeID)}/statutory-elections`,
+      );
+    },
+    setStatutoryElection(
+      companyID,
+      employeeID: string,
+      req: SetStatutoryElectionRequest,
+    ) {
+      return http.post<SetStatutoryElectionResponse>(
+        `${company(companyID)}/employees/${encodeURIComponent(employeeID)}/statutory-elections`,
+        req,
+      );
+    },
+    payrollVocabulary(companyID) {
+      return http.get<PayrollVocabularyResponse>(
+        `${company(companyID)}/payroll-vocabulary`,
+      );
+    },
   };
+}
+
+/**
+ * Attach the two statutory headers to a blob download.
+ *
+ * ⛔ THE DISCLOSURE IS READ OFF THE RESPONSE AND NEVER WRITTEN HERE. The server
+ * sets `X-Statutory-Disclosure` because no emitted file in this product has been
+ * through the FVU, the EPFO portal or the ESIC portal — none of which can run in
+ * this environment — and a client that composed that sentence itself would be one
+ * refactor away from composing a friendlier one.
+ */
+function statutory(
+  pending: Promise<{
+    blob: Blob;
+    filename: string | null;
+    header(name: string): string | null;
+  }>,
+): Promise<StatutoryFileDownload> {
+  return pending.then((res) => ({
+    blob: res.blob,
+    filename: res.filename,
+    statutoryFile: res.header("X-Statutory-File"),
+    disclosure: res.header("X-Statutory-Disclosure"),
+  }));
 }

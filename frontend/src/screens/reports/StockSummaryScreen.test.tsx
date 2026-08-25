@@ -123,6 +123,7 @@ const WIDGET: StockSummaryResponse = {
       stock_item_id: "s1",
       item: "Widget",
       unit: "Nos",
+      valuation_method: "WEIGHTED_AVG",
       opening_qty: "2.0000",
       opening_value: "300.0000",
       inward_qty: "10.0000",

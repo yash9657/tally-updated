@@ -69,6 +69,18 @@ const COMPANY_SCOPED_SCREENS = new Set<NavSnapshot["screen"]>([
   // `e-invoice` token is denied to a level whose default_access is 'none', so
   // Data Entry cannot raise or see one until an administrator grants it).
   "e-invoice",
+  // THE FIVE PAYROLL SCREENS. All five read (and three of them write) ONE
+  // company's employees, pay runs and statutory files, so all five need a scope.
+  // Same failure mode as every screen above: omit one and useCompanyID() THROWS
+  // before the screen can render its own state — including its 403 panel, which
+  // is a NORMAL answer on every one of them (migration 0035 disallows
+  // create/alter/display of the bare `employee` token for the seeded Data Entry
+  // level, and refuses all five payroll report names to it as well).
+  "employees",
+  "payroll-run",
+  "payroll-register",
+  "payroll-payslip",
+  "payroll-form-138",
   // The EDIT LOG reads ONE company's voucher versions, so it needs a scope for
   // the same reason as every screen above: omit it and useCompanyID() THROWS
   // before the screen can render anything, including its own empty state.
@@ -147,6 +159,24 @@ const SCREEN_ACTIONS: Partial<Record<KeymapAction["kind"], ScreenActionKind>> = 
   closeOrder: "closeOrder",
   createBom: "createBom",
   explodeBom: "explodeBom",
+  // ---- THE THREE PAYROLL SCREEN ACTIONS (Alt+C / Alt+S on the employee master,
+  // Alt+S on the payroll register).
+  //
+  // ⛔ THE Alt+O LESSON AGAIN, and one of these three is the worst place yet to
+  // repeat it. `setEmployeePay` is the ONLY key that gives an employee a salary
+  // structure and a statutory election, and without both cored refuses the entire
+  // pay run — on the RUN, days later, naming a person. A silently dead Alt+S here
+  // would look exactly like a complete employee master right up to pay day.
+  createEmployee: "createEmployee",
+  setEmployeePay: "setEmployeePay",
+  payrollStatutoryFiles: "payrollStatutoryFiles",
+  // Alt+V on the Stock Summary — the COSTING METHOD (T9). Without this line the
+  // panel never opens and NOTHING says so: the keymap binding, the
+  // ScreenActionKind, the navMachine case and the screen's own handler all look
+  // correct in review. That is the Alt+O lesson, and this key is the only way an
+  // operator can re-value an item created before T9 — which is every item in
+  // every existing company.
+  setValuationMethod: "setValuationMethod",
 };
 
 /** How long a status-line message stays up before it fades (ms). */
@@ -172,6 +202,9 @@ const ALWAYS_MEANINGFUL = new Set<KeymapAction["kind"]>([
   "eWayBill",
   // Alt+I on the e-invoice screen it already opens — same pushOnce reasoning.
   "eInvoice",
+  // Ctrl+F4 on the pay run screen it already opens — same pushOnce reasoning as
+  // orderRegister above.
+  "payRun",
   "date",
   "help",
   "features",
@@ -400,7 +433,15 @@ function AppShellInner({
         {needsCompany && !companyReady ? (
           <CompanyLoadingScreen />
         ) : Screen ? (
-          <Screen snapshot={snapshot} onSelect={onSelect} />
+          // ⛔ `onConfig` IS PASSED TO THE SCREEN AND NOT ONLY TO THE OVERLAY
+          // HOST. A screen whose dimension is typed on its own face — the
+          // Payroll Register's wage month is the first — has no other way to put
+          // that dimension on the frame, and a drill from it therefore carried
+          // NOTHING. That was measured in a browser: Enter on a register row
+          // opened a payslip screen with no month, which is the state that says
+          // "open this from the register", from the register. See
+          // ScreenComponentProps.onConfig.
+          <Screen snapshot={snapshot} onSelect={onSelect} onConfig={onConfig} />
         ) : (
           <UnregisteredScreen snapshot={snapshot} />
         )}
@@ -533,6 +574,27 @@ function screenTitle(snap: NavSnapshot): string {
     // verification); it was the frame around it that said nothing. A title bar is
     // read as the name of what you are looking at, and an audit trail that will
     // not name itself is the one screen where that matters most.
+    // The five PAYROLL screens. ⛔ THE REGISTER AND THE PAYSLIP DELIBERATELY DO
+    // NOT NAME THE MONTH IN THE TITLE BAR, for the reason the Cost Centre Summary
+    // does not name its axis: the month is chosen INSIDE the screen, and a stale
+    // title naming the previous one over another month's figures is precisely the
+    // confusion payroll must avoid. Each screen prints the month in its own
+    // heading, from the response the figures came in.
+    case "employees":
+      return "Employees";
+    case "payroll-run":
+      return "Pay Run";
+    case "payroll-register":
+      return "Payroll Register";
+    // ⛔ AND THE PAYSLIP DOES NOT NAME THE EMPLOYEE EITHER — a title bar carrying
+    // one person's name over another person's figures is the single worst
+    // rendering error this screen can make, and it is exactly what a title
+    // derived from the frame (rather than from the served payslip) would produce
+    // when a drill resolves to a different row than the one highlighted.
+    case "payroll-payslip":
+      return "Payslip";
+    case "payroll-form-138":
+      return "Form 138 — Salary TDS (Annexure I)";
     case "edit-log":
       return "Edit Log";
     default:

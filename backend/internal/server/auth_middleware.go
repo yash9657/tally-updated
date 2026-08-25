@@ -1305,6 +1305,23 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 		}
 		return "", "", "", false
 
+	// Switch a stock item's COSTING METHOD (T9): an ALTER of a master, and the
+	// most consequential one in the product. It writes no figure and restates
+	// every report that has ever priced the item, so it MUST inherit both write
+	// rules: the back-dated cutoff (this is how a closed period's closing stock
+	// would otherwise be moved through the front door) and the step-up.
+	//
+	// ⛔ THE SHAPE IS EXACT AND THE FALL-THROUGH IS THE POINT. Anything else
+	// under PUT /stock-items/... returns false and therefore DEFAULT-DENIES,
+	// rather than inheriting this rule by prefix — a later sub-route must be
+	// mapped deliberately or it does not exist.
+	case method == http.MethodPut && strings.HasPrefix(rest, "/stock-items/"):
+		segs := splitPath(rest)
+		if len(segs) == 3 && segs[0] == "stock-items" && segs[2] == "valuation-method" {
+			return authz.Alter, "master", "", true
+		}
+		return "", "", "", false
+
 	// ===================================================================
 	// THE AI BILL INBOX — the six routes cored proxies into insightd (D49).
 	// ===================================================================
@@ -2059,6 +2076,41 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 		}
 		return "", "", "", false
 
+	// THE EMPLOYEE'S TWO EFFECTIVE-DATED CHILDREN — the salary structure and the
+	// statutory election — plus the closed vocabulary a form keys them from.
+	//
+	// ⛔ THE SAME RESOURCE AS THE MASTER, ON PURPOSE. A new token here would be
+	// granted by nothing and denied by nothing — migration 0035 has never heard
+	// of it — so it would guard a SALARY with a rule no administrator has
+	// written. Mapped to `employee`, 0035's seeded
+	// `disallow create|alter|display employee` covers these routes from the
+	// moment they exist, in every tenant, without a migration.
+	//
+	// AND THE WRITES ARE Creates, so they inherit the back-dated cutoff and the
+	// WebAuthn step-up exactly as POST /employees does. That is not incidental: a
+	// salary component is effective-DATED, and back-dating one into a closed
+	// period silently re-prices every pay run that period contains.
+	case isEmployeeChildPath(rest):
+		switch method {
+		case http.MethodGet:
+			return authz.Display, "employee", "", true
+		case http.MethodPost:
+			return authz.Create, "employee", "", true
+		}
+		return "", "", "", false
+
+	// The payroll VOCABULARY: the component types with their s.2(88)
+	// classification, the PF bases, the regimes and the age bands. It names no
+	// party, no amount and nothing about this company — it is the statute's own
+	// list — but it is mapped to `employee` rather than to `master` (which every
+	// seeded Data Entry level holds) because the only screens that read it are
+	// the employee screens, and a level refused the master should meet ONE
+	// consistent refusal rather than a form it can fill in and never submit.
+	// GET only; there is no POST route, so a POST answers 404 rather than being
+	// authorised into nothing.
+	case method == http.MethodGet && rest == "/payroll-vocabulary":
+		return authz.Display, "employee", "", true
+
 	// The three ITC/IMS WRITES (Track 2). Each gets its OWN resource token —
 	// see authz.KnownResources for why three and not one. All three are Creates
 	// (each appends a row: a statement, an IMS action, a filing record), so all
@@ -2145,10 +2197,36 @@ func isMasterPath(rest string) bool {
 		// deny the picker to the one level that keys the vouchers, leaving D3
 		// open behind a different error. GET only; there is no POST route, so a
 		// POST answers 404 rather than being authorised into nothing.
-		"/tds-sections":
+		"/tds-sections",
+		// THE COSTING-METHOD VOCABULARY (T9). A master list on exactly the terms
+		// /tds-sections is: it names no party, no amount and nothing about this
+		// company — it is the list of methods THIS BUILD can value stock with —
+		// and it is what an item form's picker is built from, so the level that
+		// keys stock items must be able to read it. GET only; there is no POST
+		// route, so a POST answers 404 rather than being authorised into nothing.
+		"/inventory-vocabulary":
 		return true
 	}
 	return false
+}
+
+// isEmployeeChildPath matches the employee master's two effective-dated
+// children:
+//
+//	/employees/{employeeID}/salary-components
+//	/employees/{employeeID}/statutory-elections
+//
+// It matches the SHAPE and not the id, for the reason isMembersPath does: a
+// malformed employee id still resolves to the `employee` resource and is
+// rejected by the handler with a 400, rather than falling through to
+// routeAction's default-deny and reporting an authorization failure for what is
+// actually a bad request.
+func isEmployeeChildPath(rest string) bool {
+	segs := splitPath(rest)
+	if len(segs) != 3 || segs[0] != "employees" {
+		return false
+	}
+	return segs[2] == "salary-components" || segs[2] == "statutory-elections"
 }
 
 // isMembersPath matches the member/invite admin routes:

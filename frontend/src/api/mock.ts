@@ -43,6 +43,8 @@ import type {
   ImportTallyXMLQuery,
   ImportTallyXMLResponse,
   Money,
+  SetValuationMethodRequest,
+  SetValuationMethodResponse,
   OutstandingKind,
   OutstandingParty,
   OutstandingsQuery,
@@ -66,6 +68,7 @@ import type {
   PostingRequest,
   ListGodownsResponse,
   ListStockBatchesResponse,
+  InventoryVocabularyResponse,
   ListStockItemsResponse,
   StockBatchListItem,
   StockItemListItem,
@@ -123,6 +126,27 @@ import type {
   CostCentreSummaryResponse,
   CreateCostCategoryRequest,
   CreateCostCentreRequest,
+  EmployeeView,
+  ListEmployeesResponse,
+  CreateEmployeeRequest,
+  CreateEmployeeResponse,
+  PayRunRequest,
+  PayRunResponse,
+  PayrollRegisterResponse,
+  PayrollRegisterRow,
+  PayslipResponse,
+  PayslipDeferral,
+  Form138Request,
+  StatutoryFileDownload,
+  SalaryComponentView,
+  ListSalaryComponentsResponse,
+  SetSalaryComponentRequest,
+  SetSalaryComponentResponse,
+  StatutoryElectionView,
+  ListStatutoryElectionsResponse,
+  SetStatutoryElectionRequest,
+  SetStatutoryElectionResponse,
+  PayrollVocabularyResponse,
   TDSChallanListResponse,
   AllocateToChallanRequest,
   AllocateToChallanResponse,
@@ -300,6 +324,24 @@ interface MockPosition {
   outwardValue: bigint;
   qty: bigint;
   value: bigint;
+  /**
+   * The ITEM's costing method (T9), carried on the position because that is
+   * what the replay needs at each movement.
+   */
+  method: string;
+  /**
+   * THE COSTED LAYERS, oldest first — empty for a weighted-average position,
+   * which has one blended rate and needs no layers.
+   *
+   * ⛔ THE MOCK REPLAYS THE METHOD, IT DOES NOT LABEL ONE. Hardcoding
+   * `valuation_method: "WEIGHTED_AVG"` on the row (which is what this did) while
+   * folding a weighted average was harmless while that was the only method; the
+   * moment an item can be FIFO, a mock that folds an average and prints "FIFO"
+   * beside it makes every screen test PASS against figures the browser will not
+   * reproduce — the exact class of divergence register row D84 exists to stop,
+   * and the worst kind, because both numbers look right.
+   */
+  lots: { qty: bigint; value: bigint }[];
 }
 
 function replayStock(c: MockCompany, asOn?: string): StockSummaryResponse {
@@ -354,6 +396,10 @@ function replayStock(c: MockCompany, asOn?: string): StockSummaryResponse {
         outwardValue: 0n,
         qty: 0n,
         value: 0n,
+        method:
+          c.stockItems.find((s) => s.id === l.stock_item_id)
+            ?.valuation_method ?? "WEIGHTED_AVG",
+        lots: [],
       };
       positions.set(key, p);
     }
@@ -368,19 +414,70 @@ function replayStock(c: MockCompany, asOn?: string): StockSummaryResponse {
         ? gross
         : q4div(gross * (100n * QSCALE - disc), 100n * QSCALE);
 
+    const layered = p.method === "FIFO" || p.method === "LIFO";
+
     if (l.direction === "IN") {
       p.inwardQty += qty;
       p.inwardValue += value;
       p.qty += qty;
       p.value += value;
+      if (layered) {
+        // An empty queue is a fresh position, one issued flat, or one that has
+        // gone NEGATIVE and lost its layers; all three become ONE blended layer
+        // of whatever is now held, and a still-negative position holds none.
+        if (p.lots.length === 0) {
+          if (p.qty > 0n) p.lots = [{ qty: p.qty, value: p.value }];
+        } else {
+          p.lots.push({ qty, value });
+        }
+      }
       continue;
     }
+
     const nextQty = p.qty - qty;
     let consumed: bigint;
-    if (nextQty === 0n) {
-      consumed = p.value; // empty the position: take the whole remaining value
-      p.qty = 0n;
-      p.value = 0n;
+    if (layered && nextQty > 0n) {
+      // Walk the queue from the end the method names. FIFO eats the oldest
+      // layer, LIFO the newest; the SURVIVORS stay in arrival order either way,
+      // or the next issue would eat them in the wrong sequence.
+      let remaining = qty;
+      consumed = 0n;
+      const kept: { qty: bigint; value: bigint }[] = [];
+      const queue =
+        p.lots.length > 0 ? p.lots : [{ qty: p.qty, value: p.value }];
+      for (let i = 0; i < queue.length; i++) {
+        const lot = queue[p.method === "LIFO" ? queue.length - 1 - i : i]!;
+        if (remaining === 0n) {
+          kept.push(lot);
+        } else if (lot.qty <= remaining) {
+          consumed += lot.value;
+          remaining -= lot.qty;
+        } else {
+          // A partial issue out of one layer, at the LAYER's own rate carried
+          // at RATE_SCALE — rounding the rate to 4 dp first loses value on
+          // every issue and leaves a layer holding nothing but a paisa.
+          const rate = q4div(lot.value * RATE_SCALE, lot.qty);
+          const take = q4div(remaining * rate, RATE_SCALE);
+          consumed += take;
+          kept.push({ qty: lot.qty - remaining, value: lot.value - take });
+          remaining = 0n;
+        }
+      }
+      if (p.method === "LIFO") kept.reverse();
+      p.lots = kept;
+      p.qty = nextQty;
+      p.value -= consumed;
+    } else if (nextQty === 0n || (layered && nextQty < 0n)) {
+      // The position is emptied (or driven past empty): take everything the
+      // layers held and NOT ONE PAISA MORE — stock never received has no cost
+      // to consume, and valuing the shortfall at the SALE rate is the classic
+      // inventory bug. Weighted average keeps its own long-standing behaviour
+      // for a negative overshoot (it consumes qty * the running rate), which is
+      // why this arm is `layered &&` for the negative case only.
+      consumed = p.value > 0n ? p.value : 0n;
+      p.qty = nextQty;
+      p.value -= consumed;
+      p.lots = [];
     } else {
       const rate = p.qty === 0n ? 0n : q4div(p.value * RATE_SCALE, p.qty);
       consumed = q4div(qty * rate, RATE_SCALE);
@@ -399,7 +496,7 @@ function replayStock(c: MockCompany, asOn?: string): StockSummaryResponse {
     godown: p.godown,
     batch_id: p.key.batchID,
     batch: p.batch,
-    valuation_method: "WEIGHTED_AVG",
+    valuation_method: p.method,
     opening_qty: "0.0000",
     opening_value: "0.0000",
     inward_qty: q4str(p.inwardQty),
@@ -432,6 +529,9 @@ function replayStock(c: MockCompany, asOn?: string): StockSummaryResponse {
         outward_value: "0.0000",
         closing_qty: "0.0000",
         closing_value: "0.0000",
+        // The basis, from the position that arrived first: every position of one
+        // item shares the item's method, exactly as the server folds it.
+        valuation_method: row.valuation_method,
         positions: [],
       };
       items.push(it);
@@ -1143,6 +1243,46 @@ interface MockCompany {
    * the surrogate id would make the duplicate a mock cannot refuse — and the
    * duplicate is the refusal an operator meets most.
    */
+  /**
+   * THE PAYROLL MASTERS AND RUNS (Track 3).
+   *
+   * ⛔⛔ READ `mockPayrollRegister` BEFORE PINNING ANY FIGURE THAT COMES OUT OF
+   * HERE. This store holds employees, their salary structure and their
+   * elections as REAL ROWS — a screen must be able to read back exactly what it
+   * wrote — and it COMPUTES NOTHING STATUTORY. Every PF, EPS, ESI and TDS figure
+   * it serves is 0.0000, and those zeros are an ABSTENTION, not a computation.
+   *
+   * Reproducing the engine here would be a second implementation of Indian
+   * payroll law in another language: the wage classification alone carries
+   * s.2(88)'s exhaustive exclusion list and the Vivekananda Vidyamandir holding,
+   * and a screen test pinning a number this file invented would be pinning a
+   * payroll engine nobody reviewed. That is the D84 lesson in its sharpest form
+   * — a mock that is DIFFERENT from cored is a source of false green, and
+   * "different" includes being cleverer.
+   *
+   * So the payslip carries every statutory component as a DEFERRAL with the
+   * reason written on it (the same channel cored uses for a rate that has not
+   * been notified), and ⛔ THE ORACLE FOR ANY PAYROLL FIGURE IS THE BROWSER
+   * AGAINST CORED — never this arm.
+   */
+  employees: EmployeeView[];
+  /** Salary components by employee id, in insertion order. */
+  salaryComponents: Map<string, SalaryComponentView[]>;
+  /** Statutory elections by employee id, in insertion order. */
+  statutoryElections: Map<string, StatutoryElectionView[]>;
+  /**
+   * Posted pay runs, keyed by wage month "YYYY-MM".
+   *
+   * KEYED BY MONTH because that is what uniqueness is written on: a wage month
+   * is posted once, and a second run of a posted month answers `already_posted`
+   * with the FIRST run's identifiers and writes nothing. A screen that read that
+   * as a fresh posting would tell an operator a correction took effect when the
+   * stored run is the earlier one.
+   */
+  payRuns: Map<
+    string,
+    { payRunID: string; voucherID: string; voucherNo: string }
+  >;
   tdsChallans: Map<string, TDSChallan>;
   /**
    * Which challan paid which deduction, keyed by the allocation triple
@@ -2298,6 +2438,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         deductorStatuses: new Map(),
         bankStatements: new Map(),
         tcsDeclarations: new Map(),
+        employees: [],
+        salaryComponents: new Map(),
+        statutoryElections: new Map(),
+        payRuns: new Map(),
         tdsChallans: new Map(),
         tdsAllocations: new Map(),
         // The fixture deductions are seeded into EVERY company, not just the demo
@@ -2401,6 +2545,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       deductorStatuses: new Map(),
       bankStatements: new Map(),
       tcsDeclarations: new Map(),
+      employees: [],
+      salaryComponents: new Map(),
+      statutoryElections: new Map(),
+      payRuns: new Map(),
       tdsChallans: new Map(),
       tdsAllocations: new Map(),
       tdsDeductions: mockDeductionFixtures(),
@@ -4058,10 +4206,91 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         unit_symbol: req.unit_symbol,
         hsn: req.hsn ?? "",
         gst_rate_pct: req.gst_rate_pct ?? "0.0000",
-        valuation_method: "WEIGHTED_AVG",
+        // T9: the method ASKED FOR, defaulting to weighted average when the
+        // body names none. ⛔ It was hardcoded to WEIGHTED_AVG here, which is
+        // exactly the defect this mock exists to catch on the real wire (a body
+        // key accepted and discarded, register row D43) — a screen test would
+        // have passed against a mock that could not express the feature.
+        valuation_method: (req.valuation_method ?? "").trim() || "WEIGHTED_AVG",
         is_system: false,
       });
       return { stock_item_id: stockItemID };
+    },
+    async inventoryVocabulary(
+      _companyID,
+    ): Promise<InventoryVocabularyResponse> {
+      // The three methods cored implements, with the server's own labels. The
+      // mock mirrors the WIRE and not a convenience: a screen that renders a
+      // picker from this in a test must be rendering the same set the browser
+      // gets, or the test proves nothing about the picker.
+      return {
+        valuation_methods: [
+          {
+            method: "WEIGHTED_AVG",
+            label: "Avg. Cost (default)",
+            basis:
+              "One blended rate for the whole position: every receipt re-prices " +
+              "the stock already on hand, so a late purchase changes what earlier issues cost.",
+          },
+          {
+            method: "FIFO",
+            label: "FIFO",
+            basis:
+              "The oldest receipt is issued first, so closing stock is carried at " +
+              "what the MOST RECENT purchases cost — higher than average in a rising market.",
+          },
+          {
+            method: "LIFO",
+            label: "LIFO (Perpetual)",
+            basis:
+              "The newest receipt at the time of each issue is consumed first, so closing " +
+              "stock is carried at what the OLDEST purchases cost. Not LIFO Annual, which " +
+              "cannot be stated until the year closes.",
+          },
+        ],
+        default: "WEIGHTED_AVG",
+      };
+    },
+    async setStockItemValuationMethod(
+      companyID,
+      stockItemID,
+      req: SetValuationMethodRequest,
+    ): Promise<SetValuationMethodResponse> {
+      const c = ensure(companyID);
+      const item = c.stockItems.find((s) => s.id === stockItemID);
+      if (!item) {
+        throw new ApiError(
+          404,
+          `masters: not found: stock item ${stockItemID}`,
+        );
+      }
+      const method = (req.valuation_method ?? "").trim();
+      // Mirrors the wire's two refusals, in the server's order: a method no
+      // valuer implements is 422 at the MASTER (never a failing report later),
+      // and a no-op is 409 so the audit trail of restatements holds only real
+      // ones. D84's rule — the mock is not allowed to be the loose one.
+      if (!["WEIGHTED_AVG", "FIFO", "LIFO"].includes(method)) {
+        throw new ApiError(
+          422,
+          `masters: valuation method ${JSON.stringify(method)} is not one this build can value stock with (WEIGHTED_AVG, FIFO, LIFO)`,
+        );
+      }
+      if (item.valuation_method === method) {
+        throw new ApiError(
+          409,
+          `masters: the stock item already uses that valuation method: ${item.name} is already ${method}`,
+        );
+      }
+      item.valuation_method = method;
+      return {
+        stock_item_id: item.id,
+        name: item.name,
+        valuation_method: method,
+        restates:
+          "Stock value is derived at report time, so this item's WHOLE history is " +
+          "now valued on the new basis — including periods that have already been reported. " +
+          "Switching back reproduces the earlier figures exactly.",
+      };
     },
     async listStockItems(companyID): Promise<ListStockItemsResponse> {
       return {
@@ -7630,5 +7859,503 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       ensure(companyID);
       return { from: from ?? "", to: to ?? "", findings: [] };
     },
+
+    // =======================================================================
+    // PAYROLL (Track 3). ⛔ READ THE `employees` FIELD'S DOC ON MockCompany
+    // BEFORE PINNING A FIGURE: this store computes NOTHING statutory, and every
+    // PF/EPS/ESI/TDS number it serves is an abstention rather than a
+    // computation. The oracle for a payroll figure is the browser against
+    // cored.
+    // =======================================================================
+
+    async listEmployees(
+      companyID,
+      includeInactive?: boolean,
+    ): Promise<ListEmployeesResponse> {
+      const c = ensure(companyID);
+      // Active first then by code — the server's own ORDER BY. A mock that
+      // returned insertion order would let a screen test pass while the live
+      // list is sorted differently, which is exactly the kind of difference
+      // nobody re-checks.
+      const rows = c.employees
+        .filter((e) => includeInactive || e.is_active)
+        .slice()
+        .sort((a, b) =>
+          a.is_active === b.is_active
+            ? a.code.localeCompare(b.code)
+            : a.is_active
+              ? -1
+              : 1,
+        );
+      return { employees: rows };
+    },
+
+    async createEmployee(
+      companyID,
+      req: CreateEmployeeRequest,
+    ): Promise<CreateEmployeeResponse> {
+      const c = ensure(companyID);
+      const code = (req.code ?? "").trim();
+      if (code === "") {
+        throw new ApiError(400, "payrolldb: employee code is required");
+      }
+      if (
+        c.employees.some((e) => e.code.toLowerCase() === code.toLowerCase())
+      ) {
+        throw new ApiError(
+          422,
+          `payrolldb: this company already has an employee with code ${JSON.stringify(code)}`,
+        );
+      }
+      const employeeID = id("employee");
+      c.employees.push({
+        id: employeeID,
+        code,
+        name: req.name ?? "",
+        doj: req.doj ?? "",
+        dol: req.dol ?? "",
+        designation: req.designation ?? "",
+        pan: req.pan ?? "",
+        uan: req.uan ?? "",
+        esic_ip_number: req.esic_ip_number ?? "",
+        bank_ifsc: req.bank_ifsc ?? "",
+        bank_account_last4: req.bank_account_last4 ?? "",
+        // ⛔ AN OMITTED FLAG IS TRUE, mirroring the server's *bool exactly. A
+        // mock that defaulted it to false would make every screen test pass
+        // against employees who are silently excluded from the pay run — which
+        // is a missing salary, discovered on pay day.
+        is_active: req.is_active === undefined ? true : req.is_active,
+        ...(req.payable_ledger_id
+          ? { payable_ledger_id: req.payable_ledger_id }
+          : {}),
+      });
+      return { employee_id: employeeID };
+    },
+
+    async listSalaryComponents(
+      companyID,
+      employeeID: string,
+    ): Promise<ListSalaryComponentsResponse> {
+      const c = ensure(companyID);
+      return { salary_components: c.salaryComponents.get(employeeID) ?? [] };
+    },
+
+    async setSalaryComponent(
+      companyID,
+      employeeID: string,
+      req: SetSalaryComponentRequest,
+    ): Promise<SetSalaryComponentResponse> {
+      const c = ensure(companyID);
+      if (!c.employees.some((e) => e.id === employeeID)) {
+        throw new ApiError(404, "payrolldb: no such employee");
+      }
+      if ((req.effective_from ?? "").trim() === "") {
+        throw new ApiError(
+          400,
+          "effective_from is required and must be YYYY-MM-DD: a salary component is effective-dated, and the pay run reads the window in force on the first day of the wage month",
+        );
+      }
+      const type = (req.type ?? "").trim();
+      const known = MOCK_PAYROLL_COMPONENT_TYPES.find((t) => t.code === type);
+      if (!known) {
+        throw new ApiError(
+          400,
+          `payroll: unknown salary component type: ${JSON.stringify(type)} — the type decides whether PF and ESI are contributed on this component (Code on Social Security s.2(88)), so it is a closed set`,
+        );
+      }
+      const componentID = id("salary-component");
+      const rows = c.salaryComponents.get(employeeID) ?? [];
+      rows.push({
+        id: componentID,
+        effective_from: req.effective_from,
+        effective_to: req.effective_to ?? "",
+        code: req.code,
+        type,
+        amount: mockFixed4(req.amount),
+        // From the SAME table the vocabulary is served from, so the flag on the
+        // row and the flag in the picker cannot disagree here either.
+        is_wages: known.is_wages,
+        in_deeming_test: known.in_deeming_test,
+      });
+      c.salaryComponents.set(employeeID, rows);
+      return { salary_component_id: componentID };
+    },
+
+    async listStatutoryElections(
+      companyID,
+      employeeID: string,
+    ): Promise<ListStatutoryElectionsResponse> {
+      const c = ensure(companyID);
+      return {
+        statutory_elections: c.statutoryElections.get(employeeID) ?? [],
+      };
+    },
+
+    async setStatutoryElection(
+      companyID,
+      employeeID: string,
+      req: SetStatutoryElectionRequest,
+    ): Promise<SetStatutoryElectionResponse> {
+      const c = ensure(companyID);
+      if (!c.employees.some((e) => e.id === employeeID)) {
+        throw new ApiError(404, "payrolldb: no such employee");
+      }
+      if ((req.effective_from ?? "").trim() === "") {
+        throw new ApiError(
+          400,
+          "effective_from is required and must be YYYY-MM-DD: an election is effective-dated, and the pay run reads the one in force on the first day of the wage month",
+        );
+      }
+      if ((req.pf_base ?? "").trim() === "") {
+        // The one refusal in this whole payroll arm that is a REAL rule and not
+        // a shape check: CEILING and ACTUAL differ for anybody paid above the
+        // EPF wage ceiling, so an unstated base is a contribution figure nobody
+        // chose. The mock refuses it because the server does.
+        throw new ApiError(
+          400,
+          "pf_base is required and must be CEILING or ACTUAL: the two differ for anybody paid above the EPF wage ceiling, so there is no safe default",
+        );
+      }
+      const electionID = id("statutory-election");
+      const rows = c.statutoryElections.get(employeeID) ?? [];
+      rows.push({
+        id: electionID,
+        effective_from: req.effective_from,
+        effective_to: req.effective_to ?? "",
+        pf_base: req.pf_base,
+        pf_voluntary_base: mockFixed4(req.pf_voluntary_base ?? "0"),
+        employer_matches_voluntary: req.employer_matches_voluntary ?? false,
+        eps_member: req.eps_member ?? false,
+        esi_applicable: req.esi_applicable ?? false,
+        // STORED AS GIVEN. "" is "no election", which is a different fact from
+        // "NEW" — see StatutoryElectionView.regime.
+        regime: req.regime ?? "",
+      });
+      c.statutoryElections.set(employeeID, rows);
+      return { statutory_election_id: electionID };
+    },
+
+    async payrollVocabulary(companyID): Promise<PayrollVocabularyResponse> {
+      ensure(companyID);
+      return {
+        component_types: MOCK_PAYROLL_COMPONENT_TYPES.map((t) => ({ ...t })),
+        pf_bases: ["CEILING", "ACTUAL"],
+        regimes: ["NEW", "OLD"],
+        default_regime: "NEW",
+        age_bands: ["BELOW_60", "SENIOR", "SUPER_SENIOR"],
+      };
+    },
+
+    async runPayroll(companyID, req: PayRunRequest): Promise<PayRunResponse> {
+      const c = ensure(companyID);
+      const month = (req.wage_month ?? "").trim();
+      if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
+        throw new ApiError(
+          400,
+          `month ${JSON.stringify(month)} is not a wage month; it must be YYYY-MM (e.g. 2026-07)`,
+        );
+      }
+      const already = c.payRuns.get(month);
+      if (already) {
+        // ⛔ NOT AN ERROR AND NOT A FRESH POSTING. The server answers 201 with
+        // `already_posted: true` and the FIRST run's identifiers, and the mock
+        // must too — a screen that renders this as a new run tells an operator a
+        // correction took effect when the stored run is the earlier one.
+        return {
+          pay_run_id: already.payRunID,
+          voucher_id: already.voucherID,
+          voucher_no: already.voucherNo,
+          version_no: 1,
+          status: "POSTED",
+          already_posted: true,
+        };
+      }
+      // Eligibility mirrors the server's: ACTIVE employees only, and each must
+      // have a salary structure AND an election — cored refuses the whole run
+      // otherwise, by name, and a mock that posted anyway would hide the single
+      // most common payroll failure from every screen test.
+      const eligible = c.employees.filter((e) => e.is_active);
+      if (eligible.length === 0) {
+        throw new ApiError(
+          422,
+          `payrolldb: no employee is eligible for the ${month} pay run (active, joined on or before the month ended, and not left before it began); a run with no payslips computes nothing and would post an empty voucher`,
+        );
+      }
+      for (const e of eligible) {
+        if ((c.statutoryElections.get(e.id) ?? []).length === 0) {
+          throw new ApiError(
+            422,
+            `payrolldb: compute payslip for employee ${e.code}, wage month ${month}: no statutory election is in force for wage month ${month}; the PF contribution base and the tax regime are elections and there is no safe default for the first of them (CEILING and ACTUAL differ for anyone paid above the wage ceiling)`,
+          );
+        }
+        if ((c.salaryComponents.get(e.id) ?? []).length === 0) {
+          throw new ApiError(
+            422,
+            `payrolldb: compute payslip for employee ${e.code}, wage month ${month}: no salary structure is in force; there is nothing to pay and nothing to contribute on`,
+          );
+        }
+      }
+      const payRunID = id("pay-run");
+      const voucherID = id("voucher");
+      const voucherNo = String(c.payRuns.size + 1);
+      c.payRuns.set(month, { payRunID, voucherID, voucherNo });
+      return {
+        pay_run_id: payRunID,
+        voucher_id: voucherID,
+        voucher_no: voucherNo,
+        version_no: 1,
+        status: "POSTED",
+        already_posted: false,
+      };
+    },
+
+    async payrollRegister(
+      companyID,
+      month: string,
+    ): Promise<PayrollRegisterResponse> {
+      const c = ensure(companyID);
+      const run = c.payRuns.get(month);
+      if (!run) {
+        throw new ApiError(
+          404,
+          `payrolldb: no pay run for wage month ${month}`,
+        );
+      }
+      const rows = c.employees
+        .filter((e) => e.is_active)
+        .map((e) => mockRegisterRow(e, c.salaryComponents.get(e.id) ?? []));
+      return {
+        pay_run_id: run.payRunID,
+        wage_month: month,
+        status: "POSTED",
+        // ⛔ NAMED SO NOBODY MISTAKES THE MOCK'S ZEROS FOR A COMPUTATION. cored
+        // serves the real ruleset ids here ("ss-2026-07"), and the versions are
+        // ON the report because a payroll figure with no statement of which law
+        // produced it cannot be checked by anybody who was not present.
+        ss_ruleset_version: "mock-no-statutory-engine",
+        it_ruleset_version: "mock-no-statutory-engine",
+        rows,
+        totals: mockRegisterTotals(rows),
+      };
+    },
+
+    async payslip(
+      companyID,
+      month: string,
+      employeeID: string,
+    ): Promise<PayslipResponse> {
+      const c = ensure(companyID);
+      const run = c.payRuns.get(month);
+      if (!run) {
+        throw new ApiError(
+          404,
+          `payrolldb: no pay run for wage month ${month}`,
+        );
+      }
+      const e = c.employees.find((x) => x.id === employeeID);
+      if (!e) {
+        // The SAME answer cored gives for another tenant's employee id, which
+        // resolves through RLS to no rows: 404, and never that person's figures.
+        throw new ApiError(404, "payrolldb: no payslip for that employee");
+      }
+      const components = c.salaryComponents.get(employeeID) ?? [];
+      const gross = components.reduce(
+        (sum, comp) => sum + Number(comp.amount),
+        0,
+      );
+      return {
+        pay_run_id: run.payRunID,
+        wage_month: month,
+        employee_id: e.id,
+        employee_code: e.code,
+        employee_name: e.name,
+        days_paid: "0.0000",
+        lop_days: "0.0000",
+        gross: mockFixed4(String(gross)),
+        deductions: "0.0000",
+        net: mockFixed4(String(gross)),
+        lines: components.map((comp) => ({
+          code: comp.code,
+          type: comp.type,
+          tag: comp.is_wages ? "WAGES" : "EXCLUDED",
+          direction: "EARNING",
+          amount: comp.amount,
+        })),
+        // ⛔ THE ABSTENTION, SAID OUT LOUD ON THE PAYSLIP ITSELF. This is the
+        // channel cored uses for a component whose rate has not been notified,
+        // and it is the right one here: a blank where a number should be is a
+        // question somebody will ask, and the honest answer is "this was not
+        // computed", not "zero".
+        deferrals: MOCK_PAYROLL_DEFERRALS.map((d) => ({ ...d })),
+        ss_ruleset_version: "mock-no-statutory-engine",
+        it_ruleset_version: "mock-no-statutory-engine",
+      };
+    },
+
+    // ---- The three statutory FILES. The mock serves a NOTE, not a file.
+    //
+    // ⛔ IT MUST NOT PRODUCE ECR/ESI/Form-138 BYTES. Those layouts are the
+    // portals' own and cored's payrollfile package is where they live, spelled
+    // out record by record; a second hand-rolled copy here would be bytes a
+    // screen test could pin and nobody validated — and the one thing worse than
+    // an unvalidated statutory file is two of them that differ. What IS
+    // exercised, which is all a screen can be asked to get right, is that the
+    // download path carries the archive AND the disclosure headers.
+    async payrollPFECR(companyID, month: string) {
+      return mockStatutoryDownload(ensure(companyID), month, "ECR", "ECR.txt");
+    },
+    async payrollESIReturn(companyID, month: string) {
+      return mockStatutoryDownload(
+        ensure(companyID),
+        month,
+        "ESI monthly contribution return",
+        "ESI.csv",
+      );
+    },
+    async payrollForm138(companyID, req: Form138Request) {
+      return mockStatutoryDownload(
+        ensure(companyID),
+        `${req.tax_year} ${req.quarter}`,
+        "Form 138 Annexure I",
+        "Form138.txt",
+      );
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The payroll mock's helpers. See MockCompany.employees for why none of them
+// computes a statutory figure.
+// ---------------------------------------------------------------------------
+
+/**
+ * The salary-component vocabulary, mirroring `payroll.ComponentTypes()` and its
+ * s.2(88) classification.
+ *
+ * ⚠️ THIS IS A SECOND COPY OF A LEGAL CLASSIFICATION AND THE RISK IS REAL — it
+ * is here only because a mock has no way to call Go. It is the reason the LIVE
+ * client fetches the vocabulary from the server instead of holding a table like
+ * this one: a form built from a hardcoded list can offer a type the server
+ * refuses, and `is_wages` decides whether PF is contributed at all. If cored's
+ * vocabulary changes, THIS is the copy that goes stale, and the symptom is a
+ * hermetic test that passes while the browser does not.
+ */
+const MOCK_PAYROLL_COMPONENT_TYPES: readonly {
+  code: string;
+  is_wages: boolean;
+  in_deeming_test: boolean;
+}[] = [
+  { code: "BASIC", is_wages: true, in_deeming_test: false },
+  { code: "DA", is_wages: true, in_deeming_test: false },
+  { code: "RETAINING_ALLOWANCE", is_wages: true, in_deeming_test: false },
+  { code: "SPECIAL_ALLOWANCE", is_wages: true, in_deeming_test: false },
+  { code: "OTHER_ALLOWANCE", is_wages: true, in_deeming_test: false },
+  { code: "BONUS", is_wages: false, in_deeming_test: true },
+  { code: "HOUSE_ACCOMMODATION_VALUE", is_wages: false, in_deeming_test: true },
+  { code: "EMPLOYER_PF_CONTRIBUTION", is_wages: false, in_deeming_test: true },
+  { code: "CONVEYANCE_ALLOWANCE", is_wages: false, in_deeming_test: true },
+  { code: "SPECIAL_EXPENSES", is_wages: false, in_deeming_test: true },
+  { code: "HRA", is_wages: false, in_deeming_test: true },
+  { code: "AWARD_OR_SETTLEMENT", is_wages: false, in_deeming_test: true },
+  { code: "OVERTIME_ALLOWANCE", is_wages: false, in_deeming_test: true },
+  { code: "COMMISSION", is_wages: false, in_deeming_test: true },
+  { code: "GRATUITY", is_wages: false, in_deeming_test: false },
+  {
+    code: "RETRENCHMENT_COMPENSATION",
+    is_wages: false,
+    in_deeming_test: false,
+  },
+  { code: "EX_GRATIA", is_wages: false, in_deeming_test: false },
+];
+
+/** What this mock deliberately did not compute, on the payslip that lacks it. */
+const MOCK_PAYROLL_DEFERRALS: readonly PayslipDeferral[] = [
+  {
+    component: "EPF / EPS / ESI / TDS",
+    reason:
+      "This is the in-memory mock client, which implements no statutory engine. " +
+      "Every contribution and tax figure here is 0.0000 as an ABSTENTION, not as a " +
+      "computation — the real figures come from cored's internal/payroll, whose " +
+      "rules carry the wage ceilings, the s.2(88) classification and s.392.",
+    citation: "frontend/src/api/mock.ts — see MockCompany.employees",
+  },
+];
+
+/** Render a decimal-ish string at the storage scale, as every payroll field is. */
+function mockFixed4(value: string): string {
+  const n = Number(value);
+  return Number.isFinite(n) ? n.toFixed(4) : "0.0000";
+}
+
+/** One register row: gross from the stored components, everything else zero. */
+function mockRegisterRow(
+  e: EmployeeView,
+  components: readonly SalaryComponentView[],
+): PayrollRegisterRow {
+  const gross = components.reduce((sum, c) => sum + Number(c.amount), 0);
+  return {
+    employee_id: e.id,
+    employee_code: e.code,
+    employee_name: e.name,
+    days_paid: "0.0000",
+    gross: mockFixed4(String(gross)),
+    epf_employee: "0.0000",
+    esi_employee: "0.0000",
+    tds: "0.0000",
+    deductions: "0.0000",
+    net: mockFixed4(String(gross)),
+    epf_employer: "0.0000",
+    eps_employer: "0.0000",
+    esi_employer: "0.0000",
+  };
+}
+
+/** The totals row — a SUM of the rows above and nothing else. */
+function mockRegisterTotals(
+  rows: readonly PayrollRegisterRow[],
+): PayrollRegisterRow {
+  const sum = (pick: (r: PayrollRegisterRow) => string): string =>
+    mockFixed4(String(rows.reduce((t, r) => t + Number(pick(r)), 0)));
+  return {
+    days_paid: sum((r) => r.days_paid),
+    gross: sum((r) => r.gross),
+    epf_employee: sum((r) => r.epf_employee),
+    esi_employee: sum((r) => r.esi_employee),
+    tds: sum((r) => r.tds),
+    deductions: sum((r) => r.deductions),
+    net: sum((r) => r.net),
+    epf_employer: sum((r) => r.epf_employer),
+    eps_employer: sum((r) => r.eps_employer),
+    esi_employer: sum((r) => r.esi_employer),
+  };
+}
+
+/**
+ * A stand-in statutory download: a note, under the real filename, WITH both
+ * disclosure headers.
+ *
+ * The headers are the part that matters. cored sets `X-Statutory-File` and
+ * `X-Statutory-Disclosure` on every one of these routes, and a screen's only job
+ * is to put them in front of the operator — so the mock carries them, and a
+ * screen test that forgets to render the disclosure fails here rather than in
+ * production.
+ */
+function mockStatutoryDownload(
+  c: MockCompany,
+  period: string,
+  what: string,
+  fileName: string,
+): StatutoryFileDownload {
+  const note =
+    `This is the in-memory MOCK client, not cored. No ${what} was produced for ` +
+    `${period} (company ${c.id}): the layout lives in cored's payrollfile package, ` +
+    `record by record, and a second hand-rolled copy here would be unvalidated ` +
+    `bytes a test could pin.`;
+  return {
+    blob: new Blob([note], { type: "text/plain" }),
+    filename: fileName.replace(/\.[^.]+$/, "") + ".zip",
+    statutoryFile: fileName,
+    disclosure:
+      "NOT validator-verified; see the .README.txt inside this archive",
   };
 }

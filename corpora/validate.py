@@ -151,6 +151,29 @@ KNOWN_SCREENS = {
     # alteration and deletion, with no undo anywhere in the product. A fixture
     # that keys it is describing a one-way door.
     "e-invoice",
+    # THE PAYROLL SCREENS (Track 3). They shipped in ScreenKind and were absent
+    # here — the SAME drift this list has now had three times, and the reason the
+    # cross-check against types.ts exists at all rather than a comment asking
+    # the next author to remember.
+    #
+    # "employees" is the MASTER (a person, plus the Alt+S salary structure and
+    # statutory election without which a pay run answers 422); "payroll-run" is
+    # Ctrl+F4, one WAGE MONTH for every employee at once; the other three are
+    # what comes back off it. All five are ScreenKinds and not "report:NAME"
+    # frames for the reason the two cost summaries are not: the register and the
+    # payslip carry a MONTH (and the payslip an EMPLOYEE) that no generic report
+    # frame holds, and the server serves the masters under the bare `employee`
+    # token, which no `allow display report` rule can match.
+    #
+    # ⚠️ A fixture keying "payroll-run" is describing a form that sends an EMPTY
+    # per-employee selection on purpose: a non-empty `inputs` is also the
+    # SELECTION, so rows for the employees a client happened to have loaded would
+    # silently leave everybody else out of the month.
+    "employees",
+    "payroll-run",
+    "payroll-register",
+    "payroll-payslip",
+    "payroll-form-138",
 }
 
 RULESET_VERSION = "gst-2024-09"
@@ -1006,7 +1029,11 @@ def _validate_forecast_anomaly(path: Path, data: dict) -> None:
 #   * the average is carried at 16 dp and only the consumed value is rounded to
 #     4 dp (rounding the rate first loses value on every issue).
 
-INVENTORY_METHODS = {"WEIGHTED_AVG"}
+# The three stock_item.valuation_method values migration 0078's CHECK allows.
+# ⛔ A fixture naming anything else is REFUSED rather than validated against the
+# nearest method, for the same reason inventory.ValuerFor errors instead of
+# falling back: a plausible number on the wrong basis is unreviewable.
+INVENTORY_METHODS = {"WEIGHTED_AVG", "FIFO", "LIFO"}
 
 # Working precision of the running average cost. Must equal rateScale in
 # backend/internal/inventory/valuation.go, or the two implementations will
@@ -1031,7 +1058,14 @@ def _inv_key(obj: dict) -> tuple[str, str, str]:
     return (obj["stockItem"], obj.get("godown") or "", obj.get("batch") or "")
 
 
-def _inv_replay(opening: dict | None, movements: list[dict]) -> dict[str, Decimal]:
+def _inv_net(m: dict) -> Decimal:
+    """The movement's own money value: qty * rate less the line discount, at 4 dp."""
+    gross = Decimal(m["qty"]) * Decimal(m["rate"])
+    disc = Decimal(m["discountPct"])
+    return (gross * (Decimal("100") - disc) / Decimal("100")).quantize(MONEY_DP, rounding=ROUND_HALF_UP)
+
+
+def _inv_replay(opening: dict | None, movements: list[dict], method: str) -> dict[str, Decimal]:
     """Re-derive one position from its opening and movements."""
     # ⛔ voucherId, NOT voucherNo — D8. Keep this in step with `less()` in
     # backend/internal/inventory/valuation.go: these are two INDEPENDENT
@@ -1058,10 +1092,85 @@ def _inv_replay(opening: dict | None, movements: list[dict]) -> dict[str, Decima
     qty, value = open_qty, open_val
     in_qty = in_val = out_qty = out_val = Decimal("0")
 
+    if method in ("FIFO", "LIFO"):
+        # A QUEUE OF COSTED LAYERS, oldest first. This is a deliberately
+        # separate derivation from the Go valuer in internal/inventory/lots.go:
+        # the two are only an oracle for each other while neither is a
+        # transliteration of the other. The layers here are a plain list of
+        # [qty, value] pairs walked from whichever end the method names.
+        #
+        # The OPENING is the first layer -- one quantity at one rate is exactly
+        # one layer -- which is the case a lot-queue implementation is most
+        # likely to miss (it would consume nothing for the opening units and
+        # report the position at more than the books paid for it).
+        lots: list[list[Decimal]] = []
+        if open_qty > 0:
+            lots.append([open_qty, open_val])
+        newest_first = method == "LIFO"
+
+        for m in ordered:
+            net = _inv_net(m)
+            mqty = Decimal(m["qty"])
+            if m["direction"] == "IN":
+                qty += mqty
+                value += net
+                in_qty += mqty
+                in_val += net
+                if lots:
+                    lots.append([mqty, net])
+                elif qty > 0:
+                    # Nothing to layer onto: a fresh position, one issued flat,
+                    # or one that went NEGATIVE and lost its history. All three
+                    # become a single blended layer of whatever is now held.
+                    lots = [[qty, value]]
+                continue
+
+            out_qty += mqty
+            if qty - mqty <= 0:
+                # Everything the layers held, and NOT ONE PAISA MORE: stock that
+                # was never received has no cost to consume, and valuing the
+                # shortfall at the sale rate is the classic bug.
+                consumed = value if value > 0 else Decimal("0")
+                qty -= mqty
+                value -= consumed
+                lots = []
+                out_val += consumed
+                continue
+
+            remaining, consumed = mqty, Decimal("0")
+            while remaining > 0:
+                i = -1 if newest_first else 0
+                lot_qty, lot_val = lots[i]
+                if lot_qty <= remaining:
+                    consumed += lot_val
+                    remaining -= lot_qty
+                    lots.pop(i)
+                    continue
+                # Partial: the layer's OWN rate at 16 dp, never a 4-dp rate.
+                take = (remaining * _inv_div(lot_val, lot_qty, INV_RATE_DP)).quantize(
+                    MONEY_DP, rounding=ROUND_HALF_UP
+                )
+                consumed += take
+                lots[i] = [lot_qty - remaining, lot_val - take]
+                remaining = Decimal("0")
+            qty -= mqty
+            value -= consumed
+            out_val += consumed
+
+        return {
+            "openingQty": open_qty,
+            "openingValue": open_val,
+            "inwardQty": in_qty,
+            "inwardValue": in_val,
+            "outwardQty": out_qty,
+            "outwardValue": out_val,
+            "closingQty": qty,
+            "closingValue": value.quantize(MONEY_DP, rounding=ROUND_HALF_UP),
+            "closingRate": _inv_div(value, qty, MONEY_DP) if qty != 0 else Decimal("0"),
+        }
+
     for m in ordered:
-        gross = Decimal(m["qty"]) * Decimal(m["rate"])
-        disc = Decimal(m["discountPct"])
-        net = (gross * (Decimal("100") - disc) / Decimal("100")).quantize(MONEY_DP, rounding=ROUND_HALF_UP)
+        net = _inv_net(m)
         if m["direction"] == "IN":
             qty += Decimal(m["qty"])
             value += net
@@ -1215,8 +1324,13 @@ def validate_inventory(path: Path, case: dict) -> None:
         )
         return
 
+    # ⛔ THE METHOD IS PASSED, NOT DEFAULTED. _inv_replay took a defaulted
+    # method for exactly as long as there was one method; a default here would
+    # let a FIFO fixture be re-derived at weighted average and reported as a
+    # wrong EXPECTED BLOCK, which is the one failure mode this validator cannot
+    # afford — it is the oracle.
     for key, ms in grouped.items():
-        derived = _inv_replay(openings.get(key), ms)
+        derived = _inv_replay(openings.get(key), ms, case["valuationMethod"])
         _inv_check_expected(path, f"expected.positions[{key}]", by_key[key], derived)
 
     # --- the back-dated case's "before" world ------------------------------
@@ -1229,7 +1343,11 @@ def validate_inventory(path: Path, case: dict) -> None:
             fail(path, f"backdatedInward.voucherNo {bi['voucherNo']!r} matches no movement")
             return
         key = _inv_key(case["expected"]["positions"][0])
-        derived = _inv_replay(openings.get(key), [m for m in remaining if _inv_key(m) == key])
+        derived = _inv_replay(
+            openings.get(key),
+            [m for m in remaining if _inv_key(m) == key],
+            case["valuationMethod"],
+        )
         _inv_check_expected(path, "backdatedInward.expectedWithout", bi["expectedWithout"], derived)
         after = by_key[key]
         if after["outwardValue"] == bi["expectedWithout"]["outwardValue"]:

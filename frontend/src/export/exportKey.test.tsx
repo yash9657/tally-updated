@@ -819,6 +819,7 @@ describe("Alt+E agrees with the Stock Summary screen about emptiness", () => {
             stock_item_id: "i1",
             item: "Widget",
             unit: "Nos",
+            valuation_method: "WEIGHTED_AVG",
             opening_qty: "0.0000",
             opening_value: "0.0000",
             inward_qty: "100.0000",

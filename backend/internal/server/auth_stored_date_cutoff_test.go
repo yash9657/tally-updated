@@ -835,6 +835,35 @@ var writeRoutesNamingADocumentButNotMovingIt = map[string]string{
 		"records WHICH voucher a human already posted; that POST /vouchers/{class} " +
 		"is where the cutoff judged the date",
 
+	// THE EMPLOYEE MASTER'S TWO EFFECTIVE-DATED CHILDREN (the payroll-screens
+	// wave). The {employeeID} in the path names an EMPLOYEE, which is a MASTER
+	// and not a ledger document at all: it has no voucher_version, no posting, no
+	// amount and no place in any period's totals. Both routes insert one row into
+	// employee_salary_structure / employee_statutory_election and restate no
+	// voucher.
+	//
+	// ⛔ THE ONE THAT LOOKS LIKE IT MIGHT MOVE MONEY IS `effective_from`, AND IT
+	// CANNOT — but the reason is worth writing down, because "a salary component
+	// is DATED" is exactly the observation that makes this route look like the
+	// class the gate is hunting. A structure row decides what a pay run COMPUTES;
+	// it posts nothing itself, and it does not retro-post into a run that has
+	// already happened (a posted month answers `already_posted` and writes
+	// nothing). So the only way a back-dated component reaches the ledger is
+	// through a pay run FOR that month — and POST /vouchers/payroll is judged by
+	// the cutoff on the date it derives from `wage_month`
+	// (peekPayrollVoucherDate). The money is stopped where the money moves.
+	//
+	// ⚠️ IF A ROUTE IS EVER ADDED THAT RE-DERIVES A POSTED PAY RUN FROM THE
+	// CURRENT STRUCTURE — payrolldb.AlterPayRunVoucher and ResumePayRun both
+	// exist and neither is mounted — THIS ENTRY STOPS BEING TRUE, because that
+	// route would turn a back-dated component into a restatement of a voucher in
+	// a locked period. Judge it there, and revisit this.
+	"POST /v1/companies/{companyID}/employees/{employeeID}/salary-components": "" +
+		"writes one employee_salary_structure row; an employee is a master, not a ledger " +
+		"document, and a component reaches the ledger only through a pay run, which is judged",
+	"POST /v1/companies/{companyID}/employees/{employeeID}/statutory-elections": "" +
+		"writes one employee_statutory_election row; same reason as the salary component above",
+
 	// Raising an e-way bill / an e-invoice AGAINST a voucher. Both are siblings
 	// of the ledger, not callers of it (archtest pins internal/ewaybill and
 	// internal/einvoice away from posting), so neither can restate or remove a
@@ -862,7 +891,43 @@ var writeRoutesNamingADocumentButNotMovingIt = map[string]string{
 	// filed periods depend on — but it is a masters write with no date on the
 	// wire and no voucher, so it is a different control's problem, not this
 	// one's. Recorded here rather than left to silence.
-	"PUT /v1/companies/{companyID}/ledgers/{ledgerID}/opening":    "masters write; no voucher, no date",
+	"PUT /v1/companies/{companyID}/ledgers/{ledgerID}/opening": "masters write; no voucher, no date",
+
+	// THE COSTING METHOD OF A STOCK ITEM (T9). It belongs in this map for the
+	// reason the ledger opening above does, and it is the most honest entry here,
+	// so the reasoning is written out rather than compressed into six words.
+	//
+	// ⛔ IT DOES RESTATE CLOSED PERIODS, AND IT IS STILL NOT THIS CONTROL'S
+	// PROBLEM. Switching an item from WEIGHTED_AVG to FIFO changes its closing
+	// stock, its cost of goods sold and therefore the Balance Sheet and the
+	// Profit & Loss of EVERY period it has traded in — because no valuation figure
+	// is stored and the whole history is replayed from the opening on every read.
+	// A filed period's closing stock will come back a different number.
+	//
+	// But it writes NO voucher_version, NO posting and NO stock_movement: it
+	// UPDATEs one text column on a stock_item master. There is no date on the
+	// wire and no document in the path that has a date, so there is nothing for
+	// storedCutoffDateForRequest to read and nothing for the cutoff to compare —
+	// which is exactly the shape of the ledger-opening route above. The gate this
+	// map guards is "a write that can take a LEDGER ENTRY into or out of a locked
+	// period"; this cannot move an entry at all, it re-prices one.
+	//
+	// ⚠️ WHAT ACTUALLY GOVERNS IT is that it is an (Alter, "master") action, so a
+	// level that may not alter masters cannot reach it, and it writes a
+	// master_audit row naming both methods — the only record of why a period's
+	// closing stock moved. If a company needs the restatement itself locked, the
+	// control is the ACL and not the date cutoff: there is no date to judge.
+	//
+	// ⛔ IF A ROUTE IS EVER ADDED THAT MATERIALISES A VALUATION — a stored closing
+	// value, a period-end snapshot, a "freeze last year's stock" — THIS ENTRY
+	// STOPS BEING TRUE, because that route WOULD write a dated figure into a
+	// locked period. Judge it there.
+	"PUT /v1/companies/{companyID}/stock-items/{stockItemID}/valuation-method": "" +
+		"masters write: UPDATEs one column on a stock_item, writes no voucher_version, no " +
+		"posting and no stock_movement, and carries no date on the wire or in the path. It " +
+		"RE-PRICES a period (value is never stored, so the whole history is replayed) but " +
+		"cannot move a ledger entry into or out of one — the ledger-opening route above is " +
+		"the same shape. Governed by `alter master` in the ACL plus a master_audit row.",
 	"PUT /v1/companies/{companyID}/cost-categories/{categoryID}":  "master rename",
 	"PUT /v1/companies/{companyID}/cost-centres/{centreID}":       "master rename",
 	"PUT /v1/companies/{companyID}/deductor-status/{taxYear}":     "not a ledger entry",

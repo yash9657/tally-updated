@@ -28,11 +28,16 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"strings"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
 
+	"github.com/khata/cored/internal/inventory"
 	"github.com/khata/cored/internal/masters"
 )
 
@@ -315,4 +320,118 @@ func (s *Server) handleListUnits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"units": out})
+}
+
+// --------------------------------------------------------------------------
+// THE COSTING METHOD OF A STOCK ITEM (feature T9)
+// --------------------------------------------------------------------------
+
+// valuationMethodReq is the PUT /stock-items/{stockItemID}/valuation-method
+// body. One field, and it is REQUIRED rather than a pointer — unlike the
+// company settings PUT, where an absent field means "leave it alone". This
+// route exists to change exactly one thing, so a body that names nothing is a
+// caller mistake and not an instruction to do nothing.
+type valuationMethodReq struct {
+	ValuationMethod string `json:"valuation_method"`
+	CreatedBy       string `json:"created_by"`
+}
+
+// handleSetStockItemValuationMethod switches one item's costing method.
+//
+// PUT /v1/companies/{companyID}/stock-items/{stockItemID}/valuation-method
+//
+// ⛔ THIS IS A RESTATEMENT AND THE ROUTE IS SHAPED LIKE ONE. Stock value is
+// never stored, so changing the method changes NO data and every figure: the
+// item's closing stock, its cost of goods sold, and therefore the Balance Sheet
+// and the Profit & Loss for EVERY period the item has ever traded in — not just
+// the ones after today, because the replay starts at the opening. So it is:
+//
+//   - its own narrow route rather than a field on a general master editor;
+//   - an (Alter, "master") action, so it inherits the back-dated-entry cutoff
+//     and the WebAuthn step-up like any other write (a change that restates a
+//     closed period through the FRONT door should not walk past the lock that
+//     stops a voucher doing it through the back one);
+//   - refused when it names the method the item already has, so the audit trail
+//     of restatements contains only real ones;
+//   - answered WITH THE STORED ROW, never with the request body. That is
+//     register row D43's lesson, and it is exactly the shape of failure this
+//     route could have: a caller told the method changed while the column did
+//     not move has no way to tell the two outcomes apart, and the next report
+//     they read is on the old basis and looks perfectly plausible.
+func (s *Server) handleSetStockItemValuationMethod(w http.ResponseWriter, r *http.Request) {
+	ctx, ok := s.scopeCtx(w, r)
+	if !ok {
+		return
+	}
+	itemID, err := uuid.Parse(chi.URLParam(r, "stockItemID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "stockItemID is not a uuid")
+		return
+	}
+	var req valuationMethodReq
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if strings.TrimSpace(req.ValuationMethod) == "" {
+		writeError(w, http.StatusBadRequest,
+			"valuation_method is required; GET ../inventory-vocabulary lists the methods this build values stock with")
+		return
+	}
+	stored, err := s.masters.SetStockItemValuationMethod(ctx, itemID,
+		strings.TrimSpace(req.ValuationMethod), req.CreatedBy)
+	if err != nil {
+		if errors.Is(err, masters.ErrValuationMethodUnchanged) {
+			// 409, not 422: nothing about the request is unprocessable — the
+			// world is already in the state it asks for.
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeMastersError(w, err)
+		return
+	}
+	// The read-back, and the disclosure that goes with it. A client that shows
+	// "saved" and nothing else would let an operator walk away not knowing that
+	// last quarter's closing stock has just changed.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"stock_item_id":    stored.StockItemID.String(),
+		"name":             stored.Name,
+		"valuation_method": stored.ValuationMethod,
+		"restates": "Stock value is derived at report time, so this item's WHOLE history is " +
+			"now valued on the new basis — including periods that have already been reported. " +
+			"Switching back reproduces the earlier figures exactly.",
+	})
+}
+
+// handleInventoryVocabulary serves the closed set of costing methods a stock
+// item form must choose from, with Tally's own name for each and one line on
+// what the closing stock ends up carried at.
+//
+// GET /v1/companies/{companyID}/inventory-vocabulary
+//
+// ⛔ SERVED RATHER THAN HARDCODED IN THE CLIENT, for the reason the payroll
+// vocabulary is: a form built from a list the server does not own can compose a
+// value the server refuses, and the operator meets that refusal after keying the
+// whole master. The list is DERIVED from the implemented valuers
+// (inventory.KnownValuationMethods), so a build that ships a method the reports
+// cannot serve cannot offer it either.
+//
+// NO PARAMETERS, and nothing about this company in the answer: the vocabulary is
+// this build's, not the tenant's. The company id is in the path only because
+// every route on this seam is company-scoped by the middleware that authorises it.
+func (s *Server) handleInventoryVocabulary(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.scopeCtx(w, r); !ok {
+		return
+	}
+	methods := make([]map[string]any, 0, 3)
+	for _, m := range inventory.MethodCatalogue() {
+		methods = append(methods, map[string]any{
+			"method": m.Method,
+			"label":  m.Label,
+			"basis":  m.Basis,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"valuation_methods": methods,
+		"default":           inventory.MethodWeightedAverage,
+	})
 }

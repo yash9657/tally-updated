@@ -57,6 +57,31 @@ const GATEWAY_MENU = [
   "Purchase Orders",
   "Bills of Materials",
 
+  // ---- THE FOUR PAYROLL ENTRIES (Track 3).
+  //
+  // "Employees" is FIRST of the four, and that ordering is the same argument
+  // "Cost Centres" comes before the two cost reports: until an employee exists
+  // WITH a salary structure and a statutory election, a pay run refuses outright
+  // ("no salary structure is in force", "no statutory election is in force") and
+  // both reports below can only say there is nothing to show.
+  //
+  // Tally files these under Gateway > Payroll Info / Payroll Vouchers / Payroll
+  // Reports. This build has no second-level payroll menu, and a Gateway entry is
+  // the same door — the door Bank Reconciliation, the TDS challan register and
+  // the three cost screens already use. The pay run additionally has its
+  // documented key, Ctrl+F4 (RESEARCH.md:903), and both land on ONE frame.
+  //
+  // ⚠️ "Payroll Register" IS NOT IN "Display More Reports" even though
+  // `payroll-register` is a real report name on the server. That menu is
+  // generated from REPORT_NAMES, and the register is not reachable as a
+  // reportName frame: its dimension is a WAGE MONTH, not the From/To period a
+  // report frame carries. See PAYROLL_REGISTER_LABEL in navMachine.ts for the
+  // trap that makes this load-bearing rather than tidy.
+  "Employees",
+  "Pay Run",
+  "Payroll Register",
+  "Form 138 (Salary TDS)",
+
   "Users & Roles",
   "Display More Reports",
 ] as const;

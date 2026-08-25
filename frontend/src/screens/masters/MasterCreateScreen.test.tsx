@@ -319,6 +319,85 @@ describe("⛔ a stock item can be given a REAL unit", () => {
     expect(seen[0]!.unit_symbol).not.toBe("Nos");
   });
 
+  it("⛔ T9: the COSTING METHOD is chosen here and it is what goes on the wire", async () => {
+    const base = createMockClient();
+    const seen: (string | undefined)[] = [];
+    const client: CoredClient = {
+      ...base,
+      createStockItem: vi.fn(async (c: string, req) => {
+        seen.push(req.valuation_method);
+        return base.createStockItem(c, req);
+      }),
+    };
+    const app = renderShell(client);
+    goTo(app, "Create Stock Item");
+
+    type("master-name", "FIFO Rice");
+    const units = screen.getByRole("combobox", { name: "Units" });
+    fireEvent.change(units, { target: { value: "Kg" } });
+    fireEvent.mouseDown(screen.getByText("Kg"));
+
+    // The picker is built from the SERVER's vocabulary, not from a list in this
+    // file: a form that offered a method cored refuses would meet that refusal
+    // only after the whole master had been keyed.
+    await waitFor(() => {
+      expect(screen.getByRole("option", { name: /^FIFO —/ })).toBeTruthy();
+    });
+    type("master-item-valuation-method", "FIFO");
+    // Choosing one shows what it MEANS. "FIFO" alone tells an operator nothing
+    // about which of the three to pick, and the choice moves the Balance Sheet.
+    expect(
+      screen.getByTestId("master-item-valuation-basis").textContent,
+    ).toMatch(/MOST RECENT purchases cost/);
+
+    await act(async () => {
+      fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    });
+
+    expect(seen).toEqual(["FIFO"]);
+    // ⛔ AND THE STORED ROW SAYS SO. The failure this guards against answers 201
+    // with the key accepted and discarded (register row D43), which no assertion
+    // on the request alone can tell apart from a working write.
+    const stored = await base.listStockItems(COMPANY);
+    expect(
+      stored.stock_items.find((i) => i.name === "FIFO Rice")?.valuation_method,
+    ).toBe("FIFO");
+    // The status line names the basis, so an item created on the default is
+    // distinguishable from one where the choice was dropped.
+    expect(statusLine()).toContain("valued FIFO");
+  });
+
+  it("⛔ T9: choosing NOTHING sends NOTHING, so the server's own default stands", async () => {
+    // The polarity that matters. Sending "WEIGHTED_AVG" explicitly would make
+    // this form assert a choice the operator never made — and it would be the
+    // client, not the server, deciding what an unspecified item is worth.
+    const base = createMockClient();
+    const seen: Record<string, unknown>[] = [];
+    const client: CoredClient = {
+      ...base,
+      createStockItem: vi.fn(async (c: string, req) => {
+        seen.push(req as unknown as Record<string, unknown>);
+        return base.createStockItem(c, req);
+      }),
+    };
+    const app = renderShell(client);
+    goTo(app, "Create Stock Item");
+    type("master-name", "Default Rice");
+    const units = screen.getByRole("combobox", { name: "Units" });
+    fireEvent.change(units, { target: { value: "Kg" } });
+    fireEvent.mouseDown(screen.getByText("Kg"));
+    await act(async () => {
+      fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    });
+    expect(seen).toHaveLength(1);
+    expect("valuation_method" in seen[0]!).toBe(false);
+    const stored = await base.listStockItems(COMPANY);
+    expect(
+      stored.stock_items.find((i) => i.name === "Default Rice")
+        ?.valuation_method,
+    ).toBe("WEIGHTED_AVG");
+  });
+
   it("⛔ an item with NO unit is refused here, STRICTER than the server", async () => {
     // masters.CreateStockItem writes `unit_id NULL` for an empty unit_symbol with
     // no CHECK and no refusal, and the ONLY thing that ever notices is the
@@ -330,7 +409,10 @@ describe("⛔ a stock item can be given a REAL unit", () => {
     // code is what row 20 was.
     const base = createMockClient();
     const create = vi.fn(base.createStockItem);
-    const app = renderShell({ ...base, createStockItem: create } as CoredClient);
+    const app = renderShell({
+      ...base,
+      createStockItem: create,
+    } as CoredClient);
     goTo(app, "Create Stock Item");
     type("master-name", "Unitless Widget");
     await act(async () => {
@@ -345,7 +427,10 @@ describe("⛔ a stock item can be given a REAL unit", () => {
     // A path that refuses everything looks identical to a working refusal.
     const base = createMockClient();
     const create = vi.fn(base.createStockItem);
-    const app = renderShell({ ...base, createStockItem: create } as CoredClient);
+    const app = renderShell({
+      ...base,
+      createStockItem: create,
+    } as CoredClient);
     goTo(app, "Create Stock Item");
     type("master-name", "Unitless Widget");
     fireEvent.mouseDown(screen.getByText("Nos"));
@@ -572,9 +657,9 @@ describe("⛔ D92: a refused Ctrl+A keeps the form, the keying and the cursor", 
     expect(screen.queryByTestId("master-opening-balance")).not.toBeNull();
     // ⛔ AND THE KEYING SURVIVED. This is the assertion the operator cares
     // about; the frame being up is worth nothing if it came back empty.
-    expect(
-      (screen.getByTestId("master-name") as HTMLInputElement).value,
-    ).toBe("Pop Probe Party");
+    expect((screen.getByTestId("master-name") as HTMLInputElement).value).toBe(
+      "Pop Probe Party",
+    );
     // Nothing was sent — a refusal that also POSTs is D89's shape.
     expect(calls).toHaveLength(0);
     // The reason reached the operator, on the screen they can still act on.
@@ -725,9 +810,9 @@ describe("⛔ D87: the party block reaches the wire, and a party without a state
     expect(calls).toHaveLength(0);
     expect(statusLine()).toMatch(/needs a STATE CODE/i);
     // And D92: the form is still up with the keying intact.
-    expect(
-      (screen.getByTestId("master-name") as HTMLInputElement).value,
-    ).toBe("Stateless Party");
+    expect((screen.getByTestId("master-name") as HTMLInputElement).value).toBe(
+      "Stateless Party",
+    );
   });
 
   it("does NOT demand a state code on a non-party ledger", async () => {

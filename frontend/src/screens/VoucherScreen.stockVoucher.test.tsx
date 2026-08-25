@@ -952,8 +952,11 @@ describe("F11 Company Features tells the truth about the stock vouchers", () => 
     // weakened: the row was "Not built" while its whole backend shipped, and it flipped
     // in the change that finally gave an operator a screen (Ctrl+F8 / Ctrl+F9, the BOM
     // screen and both order books). Two rows are kept so this cannot pass vacuously.
+    // ⚠️ FIFO / LIFO HAS MOVED TO THE POSITIVE TEST TOO, for the same reason
+    // order processing did: T9 gave an operator a costing-method picker on the
+    // master form and Alt+V on the Stock Summary. One row is left here, and it
+    // is genuinely absent — no quantity in this build is unit-qualified.
     renderFeatures();
-    expect(badgeFor(/^FIFO \/ LIFO/)).toBe("Not built");
     expect(badgeFor(/^Stock groups and compound units/)).toBe("Not built");
   });
 

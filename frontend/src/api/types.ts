@@ -664,6 +664,16 @@ export interface CreateStockItemRequest {
   gst_rate_pct?: Money;
   opening_qty?: Money;
   opening_rate?: Money;
+  /**
+   * THE COSTING METHOD (T9): "WEIGHTED_AVG" (the default), "FIFO" or "LIFO".
+   *
+   * ⛔ OMITTED MEANS THE DEFAULT, and it is optional so that every caller
+   * written before T9 keeps creating weighted-average items. Do not send a
+   * method the server does not offer: GET .../inventory-vocabulary is the list,
+   * and the server refuses anything else at the MASTER rather than letting the
+   * Stock Summary and the Balance Sheet fail later for the whole company.
+   */
+  valuation_method?: string;
   created_by?: string;
 }
 export interface CreateStockItemResponse {
@@ -1404,6 +1414,43 @@ export interface ListStockBatchesResponse {
   batches: StockBatchListItem[];
 }
 
+/**
+ * One costing method the SERVER offers, with Tally's own name for it and one
+ * line on what the closing stock ends up carried at.
+ *
+ * ⛔ SERVED, NEVER HARDCODED. A picker built from a client-side list can offer a
+ * method the server refuses, and the operator meets that refusal after keying
+ * the whole master — and the list will grow (Tally ships eight methods, this
+ * build implements three).
+ */
+export interface ValuationMethodOption {
+  method: string;
+  label: string;
+  basis: string;
+}
+export interface InventoryVocabularyResponse {
+  valuation_methods: ValuationMethodOption[];
+  /** The method an item gets when none is asked for. */
+  default: string;
+}
+
+export interface SetValuationMethodRequest {
+  valuation_method: string;
+  created_by?: string;
+}
+export interface SetValuationMethodResponse {
+  stock_item_id: string;
+  name: string;
+  /** THE STORED value, never an echo of the request. */
+  valuation_method: string;
+  /**
+   * The server's own disclosure that the item's WHOLE history has been
+   * re-valued — including periods already reported. Show it: a client that says
+   * only "saved" lets an operator walk away not knowing a filed figure moved.
+   */
+  restates: string;
+}
+
 // ---------------------------------------------------------------------------
 // Stock Summary (GET .../stock-summary)
 // ---------------------------------------------------------------------------
@@ -1453,6 +1500,17 @@ export interface StockSummaryItem {
   stock_item_id: string;
   item: string;
   unit: string;
+  /**
+   * The BASIS every figure on this line was derived on — "WEIGHTED_AVG",
+   * "FIFO" or "LIFO". It is on the ITEM and not on a position because that is
+   * where stock_item.valuation_method lives: one item is valued one way in
+   * every godown it sits in.
+   *
+   * ⛔ A SCREEN THAT PRINTS THESE VALUES MUST PRINT THIS TOO. One company can
+   * mix all three, so two item totals on the same page can mean different
+   * things; without the basis beside them neither can be reproduced or compared.
+   */
+  valuation_method: string;
   opening_qty: Money;
   opening_value: Money;
   inward_qty: Money;
@@ -3527,4 +3585,475 @@ export interface CloseOrderRequest {
   is_closed: boolean;
   /** Required when closing. Omit (or send empty) when re-opening. */
   reason?: string;
+}
+
+// ===========================================================================
+// PAYROLL (Track 3, migrations 0034-0036 · backend/internal/payroll,
+// internal/server/handler_payroll.go).
+// ===========================================================================
+//
+// The eight routes below have been mounted, PDP-mapped and tested since Track 3
+// landed, and NOTHING IN THIS APP HAS EVER CALLED ONE OF THEM. The engine, the
+// statutory rates, the two reports and the three statutory FILES were all built
+// server-side; `frontend/src/screens/` contained no payroll screen at all, so an
+// operator could not create an employee, run a wage month, or produce an ECR
+// without calling the server directly. That is the same shape of gap T4 (bank
+// reconciliation) and T6 (the challan register) each had, and it is closed the
+// same way: a client method per route, and a screen per authority.
+//
+// ⛔ EVERY MONEY FIELD ON EVERY TYPE BELOW IS A STRING, AND IT IS THE SERVER'S
+// OWN `StringFixed(4)`. There is no `number` anywhere in this section and there
+// must never be one: a JSON number arrives as a float64 and re-prices somebody's
+// salary in the last paisa. The screens render these strings and never parse
+// them; the ONE place a decimal is built is an operator's own typed input on the
+// way OUT, where it travels as a string too (`monthInputReq` on the server takes
+// strings for exactly this reason).
+
+/**
+ * One employee master row.
+ *
+ * ⚠️ THE IDENTIFIERS ARE HERE — PAN, UAN, ESIC IP number, bank IFSC — and that
+ * is a deliberate server decision, not an oversight to be filtered in a screen:
+ * an operator who may reach the master must be able to SEE and correct a wrong
+ * PAN, because a malformed one is a Form 138 deductee record the department
+ * rejects. WHO may reach it is decided by the ACL and not by this projection —
+ * `employees` is served under its OWN resource token `employee` (never folded
+ * into `master`, which migration 0022 grants to every seeded Data Entry level),
+ * and migration 0035 disallows create/alter/display of it there by default. So a
+ * 403 on the employee screen is a NORMAL answer and is rendered as the decision
+ * it is.
+ */
+export interface EmployeeView {
+  id: string;
+  code: string;
+  name: string;
+  /** Date of joining, YYYY-MM-DD. "" when not recorded. */
+  doj: string;
+  /** Date of leaving, YYYY-MM-DD. "" for a serving employee — the usual case. */
+  dol: string;
+  designation: string;
+  pan: string;
+  uan: string;
+  esic_ip_number: string;
+  bank_ifsc: string;
+  /**
+   * The LAST FOUR DIGITS of the bank account and nothing else. The column is
+   * `bank_account_last4` on the server too: a payroll master is the highest-value
+   * row in the database for anybody who reaches it, and a full account number
+   * buys nothing the payslip or the ECR needs.
+   */
+  bank_account_last4: string;
+  is_active: boolean;
+  /** Absent when the employee has no dedicated payable ledger. */
+  payable_ledger_id?: string;
+}
+
+export interface ListEmployeesResponse {
+  employees: EmployeeView[];
+}
+
+/**
+ * The POST /employees body.
+ *
+ * ⛔ `is_active` IS OPTIONAL AND ITS ABSENCE MEANS TRUE — the server's field is a
+ * `*bool` precisely so a client that does not know about the flag cannot create
+ * an INACTIVE employee. An inactive employee is silently excluded from the pay
+ * run, which is a missing salary discovered on pay day, so this client never
+ * sends `false` unless somebody chose it.
+ */
+export interface CreateEmployeeRequest {
+  code: string;
+  name: string;
+  doj?: string;
+  dol?: string;
+  designation?: string;
+  pan?: string;
+  uan?: string;
+  esic_ip_number?: string;
+  bank_ifsc?: string;
+  bank_account_last4?: string;
+  payable_ledger_id?: string;
+  is_active?: boolean;
+}
+
+export interface CreateEmployeeResponse {
+  employee_id: string;
+}
+
+/**
+ * One employee's non-derivable facts for a wage month.
+ *
+ * EVERY FIELD IS A STRING for the reason this section's header states. `paid_days`
+ * and `lop_days` are decimals too — a half-day of loss of pay is real, and
+ * `parseFloat` on the wire is how it stops being exactly a half.
+ *
+ * Omitted fields are omitted, not sent as "0": the server skips an empty string
+ * and leaves the engine's own zero value, so sending "0" for a declaration the
+ * employee never made is the client asserting something it was not told.
+ */
+export interface PayRunMonthInput {
+  employee_id: string;
+  paid_days?: string;
+  lop_days?: string;
+  /** YYYY-MM-DD — first date this person was EVER a PF member (s.PF continuity). */
+  first_pf_member_on?: string;
+  prior_employer_taxable?: string;
+  prior_employer_tds?: string;
+  house_property_loss?: string;
+  chapter_via?: string;
+  other_income_declared?: string;
+  non_resident?: boolean;
+  /** The income-tax age band; the engine's own vocabulary, passed through. */
+  age_band?: string;
+}
+
+/**
+ * POST /vouchers/payroll — compute and post a whole wage month.
+ *
+ * ⛔ ITS DATE DIMENSION IS `wage_month`, NOT A VOUCHER DATE, AND THE BACK-DATED
+ * CUTOFF STILL APPLIES TO IT. The server derives the voucher date from the wage
+ * month with `payrolldb.LastDayOf` and runs the SAME period lock every invoice
+ * meets (`peekPayrollVoucherDate`, `auth_payroll_cutoff_test.go`). So a pay run
+ * for a closed month is a 403 that means "that month is locked" — never a
+ * permission problem with payroll — and the screen must say which.
+ */
+export interface PayRunRequest {
+  /** YYYY-MM. Strictly parsed server-side: "2026-13" and "2026-1" are refused. */
+  wage_month: string;
+  created_by?: string;
+  narration?: string;
+  inputs: PayRunMonthInput[];
+}
+
+export interface PayRunResponse {
+  pay_run_id: string;
+  voucher_id: string;
+  voucher_no: string;
+  version_no: number;
+  status: string;
+  /**
+   * TRUE when this month had already been posted and nothing new was written.
+   *
+   * ⛔ IT IS NOT A FAILURE AND IT IS NOT A FRESH POSTING, and a screen that
+   * renders it as either is wrong in a way that costs money: read as a failure,
+   * the operator runs it again; read as a success, they believe a correction they
+   * just keyed took effect when the stored run is the earlier one.
+   */
+  already_posted: boolean;
+}
+
+/** One line of the payroll register — an employee, or the TOTALS row. */
+export interface PayrollRegisterRow {
+  /** Absent on the totals row, which is how the totals row is identified. */
+  employee_id?: string;
+  employee_code?: string;
+  employee_name?: string;
+  days_paid: string;
+  gross: string;
+  epf_employee: string;
+  esi_employee: string;
+  tds: string;
+  deductions: string;
+  net: string;
+  epf_employer: string;
+  eps_employer: string;
+  esi_employer: string;
+}
+
+/**
+ * GET /payroll-register?month=YYYY-MM.
+ *
+ * ⚠️ THE RULESET VERSIONS ARE PART OF THE REPORT AND MUST BE RENDERED. A payroll
+ * figure with no statement of which law produced it cannot be checked by anybody
+ * who was not present when it was run — which is the whole audit problem with
+ * every payroll system. The server puts them on the JSON and on the printed page;
+ * a screen that drops them is the only place the chain breaks.
+ */
+export interface PayrollRegisterResponse {
+  pay_run_id: string;
+  wage_month: string;
+  status: string;
+  ss_ruleset_version: string;
+  it_ruleset_version: string;
+  rows: PayrollRegisterRow[];
+  totals: PayrollRegisterRow;
+}
+
+/** One component line of a payslip. */
+export interface PayslipLine {
+  code: string;
+  type: string;
+  tag: string;
+  /** "EARNING" or "DEDUCTION" — the server's own word, never inferred here. */
+  direction: string;
+  amount: string;
+}
+
+/**
+ * A component the engine DID NOT compute, and why.
+ *
+ * ⛔ IT BELONGS ON THE PAYSLIP, NOT IN A LOG. A blank where a number should be is
+ * a question the employee will ask, and the honest answer is "the rate has not
+ * been notified", not "zero". The server puts these on the payslip for that
+ * reason; the screen renders them beside the components rather than swallowing
+ * them.
+ */
+export interface PayslipDeferral {
+  component: string;
+  reason: string;
+  citation: string;
+}
+
+/** GET /payroll-payslip?month=YYYY-MM&employee_id=UUID. */
+export interface PayslipResponse {
+  pay_run_id: string;
+  wage_month: string;
+  employee_id: string;
+  employee_code: string;
+  employee_name: string;
+  days_paid: string;
+  lop_days: string;
+  gross: string;
+  deductions: string;
+  net: string;
+  lines: PayslipLine[];
+  deferrals: PayslipDeferral[];
+  ss_ruleset_version: string;
+  it_ruleset_version: string;
+}
+
+/**
+ * One challan on a Form 138 Annexure I statement.
+ *
+ * `total_tds_deposited` is OPTIONAL and omitting it is the better answer: the
+ * server DERIVES the challan total from the month's payslips (what the books say
+ * was deducted). A supplied amount that does not equal the deductee sum is
+ * REFUSED — that reconciliation is the whole point of the statement, so this is
+ * not a convenience field but a cross-check the operator can opt into.
+ */
+export interface Form138Challan {
+  /** YYYY-MM — the wage month the challan pays for. */
+  month: string;
+  bsr_code: string;
+  /** YYYY-MM-DD. */
+  date_of_deposit: string;
+  challan_serial_number: number;
+  total_tds_deposited?: string;
+  /** A government book-entry transfer rather than a bank deposit. */
+  book_entry?: boolean;
+}
+
+/**
+ * GET /payroll-form-138 — the quarterly salary-TDS statement (ex-24Q Annexure I).
+ *
+ * ⛔ NOT ONE OF THESE PARTICULARS IS IN THE DATABASE. The company master carries
+ * no TAN and no challan, so every field here is supplied by the operator and an
+ * absent one is a 400. Nothing is defaulted into a FILED RECORD — that is the
+ * rule this whole shape exists to keep, and it is why the screen behind it is a
+ * form rather than a download button.
+ *
+ * ⚠️ Q4 IS REFUSED BY THE SERVER (`ErrQ4FormatNotPublished`): the Q4 / Annexure
+ * II record structure is not published, and guessing it would mis-file every
+ * employee's whole-year salary detail.
+ */
+export interface Form138Request {
+  /** "2026-27" or "2026" — the tax year beginning 1 April of the leading year. */
+  tax_year: string;
+  /** "Q1" | "Q2" | "Q3" (Q4 is refused — see above). */
+  quarter: string;
+  tan: string;
+  deductor_pan: string;
+  deductor_name: string;
+  /** "24Q". */
+  form_number: string;
+  /** YYYY-MM-DD. */
+  file_creation_date: string;
+  /** Defaults to 1 server-side. Unique across every file this deductor has sent. */
+  file_sequence?: number;
+  challans: Form138Challan[];
+}
+
+/**
+ * A statutory file download: the file, its statutory NAME, and the disclosure.
+ *
+ * ⛔ THE SERVER SERVES A ZIP, ON PURPOSE, AND THIS CLIENT NEVER UNWRAPS IT. None
+ * of the three formats permits an in-file comment — the ECR is a bare member list
+ * the portal parses line by line, the Form 138 file must begin with its FH record,
+ * and the ESI CSV must begin with the ESIC column headers — so the "this has NOT
+ * been through the validator" disclosure can only travel BESIDE the file. The
+ * archive holds exactly two entries: the statutory file under its statutory
+ * filename, and `<name>.README.txt`. A client that opened the zip and handed over
+ * only the file would be separating the file from the statement of what is not
+ * verified about it, which is the one thing the zip exists to prevent.
+ */
+export interface StatutoryFileDownload {
+  /** The .zip itself, exactly as served. */
+  blob: Blob;
+  /** The download name from Content-Disposition, or null. */
+  filename: string | null;
+  /**
+   * `X-Statutory-File` — the name of the statutory file INSIDE the archive.
+   * Shown so an operator knows what the portal will be given, not just what
+   * landed in their downloads folder.
+   */
+  statutoryFile: string | null;
+  /**
+   * `X-Statutory-Disclosure` — the server's own one-line warning that nothing
+   * here has been through the FVU, the EPFO portal or the ESIC portal, none of
+   * which can run in this environment. Rendered VERBATIM; never summarised.
+   */
+  disclosure: string | null;
+}
+
+/**
+ * One effective-dated salary component.
+ *
+ * ⛔ THE EMPLOYEE MASTER ALONE CANNOT BE PAID, AND THAT IS WHY THIS TYPE EXISTS.
+ * `payrolldb.SetSalaryComponent` and `SetStatutoryElection` shipped with Track 3
+ * and had NO ROUTE, so an employee created through `POST /employees` met
+ * "no salary structure is in force on <date>; there is nothing to pay and
+ * nothing to contribute on" — a 422 on the PAY RUN, long after the master was
+ * created, with nothing anywhere saying it was incomplete. Both children are now
+ * served under the same `employee` authority as the master itself.
+ *
+ * The window is HALF-OPEN [effective_from, effective_to): with an inclusive
+ * upper bound the day of a revision belongs to both the old row and the new one,
+ * and a pay run for that month would have two answers to "what is the basic".
+ * An empty `effective_to` is an open window — the usual case.
+ */
+export interface SalaryComponentView {
+  id: string;
+  effective_from: string;
+  /** "" = still in force. */
+  effective_to: string;
+  /** The operator's own name for it — "Basic", "HRA", "Site allowance". */
+  code: string;
+  /** A member of the served component-type vocabulary; never free text. */
+  type: string;
+  amount: string;
+  /**
+   * Whether PF and ESI are contributed on this component (Code on Social
+   * Security s.2(88)).
+   *
+   * ⛔ IT TRAVELS WITH THE ROW rather than being looked up by this client against
+   * a vocabulary it fetched at some other moment. This is the single most
+   * consequential fact about a component — a type that silently fell through to
+   * "excluded" under-contributes PF for the whole of an employee's service with
+   * no error anywhere — and a join between two responses is a join that can be
+   * stale.
+   */
+  is_wages: boolean;
+  /**
+   * Whether this component is one of s.2(88) clauses (a)-(i), the only sum
+   * proviso 1 measures against the one-half floor.
+   *
+   * A screen that showed only wages/not-wages would be telling an operator that
+   * an excluded component never affects the contribution, and for these it does:
+   * paid above one half of all remuneration, the EXCESS is deemed back into
+   * wages. (j) gratuity and (k) retrenchment compensation are outside it.
+   */
+  in_deeming_test: boolean;
+}
+
+export interface ListSalaryComponentsResponse {
+  salary_components: SalaryComponentView[];
+}
+
+/** The POST body for one effective-dated salary component. */
+export interface SetSalaryComponentRequest {
+  effective_from: string;
+  effective_to?: string;
+  code: string;
+  type: string;
+  /** A decimal STRING. Never a JSON number — see this section's header. */
+  amount: string;
+}
+
+export interface SetSalaryComponentResponse {
+  salary_component_id: string;
+}
+
+/**
+ * One effective-dated statutory election: the PF contribution base, the pension
+ * scheme, ESI coverage and the income-tax regime.
+ *
+ * ⛔ `regime` MAY BE "" AND THAT IS A DIFFERENT FACT FROM "NEW". An empty regime
+ * is "no election was made", which the server resolves to the s.202 default when
+ * it computes and STORES AS GIVEN so a later reader can still tell one from the
+ * other. A screen that rendered "" as "New regime" would be reporting an
+ * election nobody made.
+ */
+export interface StatutoryElectionView {
+  id: string;
+  effective_from: string;
+  effective_to: string;
+  /** "CEILING" | "ACTUAL" — no default; the two differ above the wage ceiling. */
+  pf_base: string;
+  pf_voluntary_base: string;
+  employer_matches_voluntary: boolean;
+  eps_member: boolean;
+  esi_applicable: boolean;
+  /** "" = no election; see the interface doc. */
+  regime: string;
+}
+
+export interface ListStatutoryElectionsResponse {
+  statutory_elections: StatutoryElectionView[];
+}
+
+/**
+ * The POST body for one election.
+ *
+ * The three booleans are POSITIVE ASSERTIONS about one person and an omitted one
+ * is FALSE, unlike {@link CreateEmployeeRequest}'s `is_active`: there is no
+ * answer that is safe to assume — assuming membership contributes on somebody who
+ * is not a member, and assuming coverage withholds from somebody who is not
+ * covered — so the form asks for all three rather than letting a default decide.
+ */
+export interface SetStatutoryElectionRequest {
+  effective_from: string;
+  effective_to?: string;
+  pf_base: string;
+  pf_voluntary_base?: string;
+  employer_matches_voluntary?: boolean;
+  eps_member?: boolean;
+  esi_applicable?: boolean;
+  regime?: string;
+}
+
+export interface SetStatutoryElectionResponse {
+  statutory_election_id: string;
+}
+
+/** One entry of the served salary-component vocabulary. */
+export interface PayrollComponentType {
+  code: string;
+  is_wages: boolean;
+  in_deeming_test: boolean;
+}
+
+/**
+ * The closed sets a payroll form chooses from.
+ *
+ * ⛔ FETCHED AND NEVER HARDCODED, for the reason {@link SecurityVocabulary} is:
+ * a form built from a list this client owns can compose a value the server
+ * answers 400, and the operator meets the refusal after keying the whole thing.
+ * Here it is worse than inconvenient — `is_wages` is a LEGAL classification (it
+ * carries the Vivekananda Vidyamandir holding that a universally paid special
+ * allowance IS wages), and a second copy of it in TypeScript, updated by
+ * somebody else, is the drift that under-contributes PF with no error anywhere.
+ */
+export interface PayrollVocabularyResponse {
+  component_types: PayrollComponentType[];
+  pf_bases: string[];
+  regimes: string[];
+  /**
+   * What an UNSTATED regime resolves to (s.202: the new regime).
+   *
+   * Served so a form can SAY so rather than pre-selecting it — pre-selecting
+   * would record an election nobody made, which is exactly the distinction
+   * {@link StatutoryElectionView.regime} keeps.
+   */
+  default_regime: string;
+  age_bands: string[];
 }

@@ -31,8 +31,10 @@ const rateScale int32 = 16
 
 var hundred = decimal.NewFromInt(100)
 
-// MethodWeightedAverage is the only valuation method v1 supports. It is the
-// exact string stock_item.valuation_method's CHECK constraint allows.
+// MethodWeightedAverage is Tally's default costing method and this build's
+// default for a new stock item. It is the exact string
+// stock_item.valuation_method's CHECK constraint allows; the other two it
+// allows are MethodFIFO and MethodLIFO, in lots.go.
 const MethodWeightedAverage = "WEIGHTED_AVG"
 
 // ErrUnknownValuation is returned by ValuerFor for a method it does not
@@ -50,16 +52,33 @@ func round(d decimal.Decimal) decimal.Decimal {
 
 // ValuationState is a position's running cost state during a replay: how much
 // stock is on hand and what it is carried at. Weighted average needs exactly
-// this pair and nothing more.
+// the first two fields and nothing more.
 //
-// This is also why FIFO is a later, additive change and not a schema change:
-// weighted average's state is a strict SUBSET of what FIFO needs (a queue of
-// lots). A FIFO valuer carries its own lot queue in its own implementation of
-// Valuer, projects it into this Qty/Value pair for reporting, and no caller,
-// column or corpus shape moves.
+// That is why FIFO WAS an additive change and not a schema change, and it is
+// worth recording how it actually landed, because the prediction here was only
+// half right. The predicted shape — "a FIFO valuer carries its own lot queue in
+// its own implementation of Valuer" — is WRONG, and would have been a defect:
+// ReplayAll passes ONE valuer to EVERY position, so a queue held in the valuer
+// would have blended the lots of an item in two godowns into one, silently, and
+// a valuer that mutated itself would no longer be pure. The queue belongs to the
+// POSITION, so it lives here in the position's state (Lots below), where the
+// Valuer contract stays "fold one movement" and stays pure. No caller, no
+// column and no corpus shape moved, which was the part that was right.
 type ValuationState struct {
 	Qty   decimal.Decimal
 	Value decimal.Decimal
+	// Lots is the position's COSTED LAYERS, oldest first, and it is what FIFO
+	// and LIFO carry that weighted average does not need. It is nil for a
+	// weighted-average replay and that is not an omission: an average has one
+	// rate for the whole position, so a layer list would be a second, redundant
+	// statement of the same fact and the two could disagree.
+	//
+	// The invariant, when the queue is non-empty: the lots' quantities sum to
+	// Qty and their values sum to Value. A position with stock but no layers is
+	// legal and means "one layer, blended" — see the lots method for the two
+	// places that happens (an opening, and an item switched onto FIFO after
+	// trading at average).
+	Lots []Lot
 }
 
 // Rate is the current weighted-average cost per unit at rateScale precision, or
@@ -139,14 +158,20 @@ func (WeightedAverage) Apply(state ValuationState, m Movement) (ValuationState, 
 // ValuerFor selects the valuer for a stock_item.valuation_method string.
 //
 // The default arm returns ErrUnknownValuation rather than a working valuer.
-// That is deliberate and load-bearing: when FIFO is added, the CHECK constraint
-// widens, rows appear with method 'FIFO', and every deployment that has not
-// shipped the FIFO arm must FAIL LOUDLY instead of quietly reporting weighted
-// average numbers under a FIFO heading.
+// That is deliberate and load-bearing, and it has now been paid for twice over:
+// migration 0078 widened the CHECK to admit 'FIFO' and 'LIFO', so rows with
+// those methods exist, and any deployment running a binary that predates them
+// FAILS LOUDLY on the Stock Summary and the Balance Sheet instead of quietly
+// reporting weighted-average numbers under a FIFO heading. The next method
+// (Tally ships eight) inherits the same protection for free.
 func ValuerFor(method string) (Valuer, error) {
 	switch method {
 	case MethodWeightedAverage:
 		return WeightedAverage{}, nil
+	case MethodFIFO:
+		return FIFO{}, nil
+	case MethodLIFO:
+		return LIFO{}, nil
 	default:
 		return nil, fmt.Errorf("%w: %q", ErrUnknownValuation, method)
 	}

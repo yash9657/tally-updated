@@ -109,6 +109,18 @@ type StockItemRollup struct {
 	StockItemID uuid.UUID
 	ItemName    string
 	UnitSymbol  string
+	// ValuationMethod is the basis every figure BELOW this line was derived on,
+	// and it belongs on the item rather than on a position because that is where
+	// stock_item.valuation_method lives: one item is valued one way in every
+	// godown it sits in.
+	//
+	// ⛔ IT IS HERE BECAUSE T9 MADE IT MEAN SOMETHING. While WEIGHTED_AVG was the
+	// only method, a rollup that omitted it was merely incomplete; with three
+	// methods in one company (they can differ item by item) a Stock Summary that
+	// prints values and NOT the basis is a report whose numbers cannot be
+	// reproduced or compared — the same item total means different things on two
+	// lines and nothing on the page says which.
+	ValuationMethod string
 
 	OpeningQty   decimal.Decimal
 	OpeningValue decimal.Decimal
@@ -678,17 +690,23 @@ func rollupStockItems(rows []StockPositionRow) []StockItemRollup {
 			i = len(out)
 			idx[r.StockItemID] = i
 			out = append(out, StockItemRollup{
-				StockItemID:  r.StockItemID,
-				ItemName:     r.ItemName,
-				UnitSymbol:   r.UnitSymbol,
-				OpeningQty:   decimal.Zero,
-				OpeningValue: decimal.Zero,
-				InwardQty:    decimal.Zero,
-				InwardValue:  decimal.Zero,
-				OutwardQty:   decimal.Zero,
-				OutwardValue: decimal.Zero,
-				ClosingQty:   decimal.Zero,
-				ClosingValue: decimal.Zero,
+				StockItemID: r.StockItemID,
+				ItemName:    r.ItemName,
+				UnitSymbol:  r.UnitSymbol,
+				// Taken from the position rows, which is where the replay put
+				// it: every position of one item shares the item's method, so
+				// the first row to arrive states it for the rollup. Re-querying
+				// stock_item here would be a second read of the same fact, able
+				// to disagree with the basis the figures were actually derived on.
+				ValuationMethod: r.ValuationMethod,
+				OpeningQty:      decimal.Zero,
+				OpeningValue:    decimal.Zero,
+				InwardQty:       decimal.Zero,
+				InwardValue:     decimal.Zero,
+				OutwardQty:      decimal.Zero,
+				OutwardValue:    decimal.Zero,
+				ClosingQty:      decimal.Zero,
+				ClosingValue:    decimal.Zero,
 			})
 		}
 		g := &out[i]

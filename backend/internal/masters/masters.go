@@ -1093,6 +1093,20 @@ type StockItem struct {
 	// — is the one that cannot express where the stock is.
 	OpeningQty  decimal.Decimal
 	OpeningRate decimal.Decimal
+	// ValuationMethod is the COSTING METHOD this item's movements are replayed
+	// through — inventory.MethodWeightedAverage (the default, and Tally's),
+	// MethodFIFO or MethodLIFO. Empty means "the default", so every caller that
+	// predates T9 keeps creating weighted-average items without knowing the
+	// field exists.
+	//
+	// ⛔ IT IS VALIDATED AGAINST inventory.ValuerFor AND NOT AGAINST A LIST HERE.
+	// A method this binary has no valuer for must never reach the column: the
+	// reports would then fail on the Stock Summary and the Balance Sheet — loudly,
+	// by design, but for the whole company and not just this item, and long after
+	// the master was created. There are exactly two copies of the vocabulary (the
+	// valuers, and migration 0078's CHECK) and TestValuationMethodsMatchTheMigration
+	// pins them to each other.
+	ValuationMethod string
 }
 
 // CreateStockItem creates a stock item and appends a master_audit row. If
@@ -1109,6 +1123,10 @@ func (s *Service) CreateStockItem(ctx context.Context, si StockItem, createdBy s
 	if si.OpeningRate.IsNegative() {
 		return uuid.Nil, fmt.Errorf("masters: stock item %q has a negative opening rate %s",
 			si.Name, si.OpeningRate.StringFixed(4))
+	}
+	method, err := valuationMethodOrDefault(si.ValuationMethod)
+	if err != nil {
+		return uuid.Nil, err
 	}
 	companyID, ok := db.CompanyFromContext(ctx)
 	if !ok {
@@ -1139,9 +1157,9 @@ func (s *Service) CreateStockItem(ctx context.Context, si StockItem, createdBy s
 		}
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO stock_item
-			   (id, company_id, name, unit_id, hsn, gst_rate_pct)
-			 VALUES ($1, $2, $3, $4, NULLIF($5,''), $6)`,
-			id, companyID, si.Name, unitID, si.HSN, si.GSTRatePct,
+			   (id, company_id, name, unit_id, hsn, gst_rate_pct, valuation_method)
+			 VALUES ($1, $2, $3, $4, NULLIF($5,''), $6, $7)`,
+			id, companyID, si.Name, unitID, si.HSN, si.GSTRatePct, method,
 		); err != nil {
 			return nameTakenNormalised(err,
 				"stock_item_company_name_normalised", "stock item", si.Name, "insert stock item")
@@ -1149,6 +1167,11 @@ func (s *Service) CreateStockItem(ctx context.Context, si StockItem, createdBy s
 		after := map[string]any{
 			"name": si.Name, "unit": si.UnitSymbol, "hsn": si.HSN,
 			"gst_rate_pct": si.GSTRatePct.String(),
+			// The costing method is in the audit row because it decides every
+			// value this item will ever be reported at. A master_audit trail that
+			// recorded the name and not the basis could not explain why the
+			// Balance Sheet moved.
+			"valuation_method": method,
 		}
 		// An opening position is only recorded when there IS one. A zero row
 		// would claim a position exists at Main Location for every item ever

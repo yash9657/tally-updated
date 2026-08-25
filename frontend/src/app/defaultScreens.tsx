@@ -40,6 +40,11 @@ import {
   CashFlowScreen,
   AnomaliesScreen,
 } from "../screens/reports/ForecastScreens";
+import { EmployeesScreen } from "../screens/payroll/EmployeesScreen";
+import { PayRunScreen } from "../screens/payroll/PayRunScreen";
+import { PayrollRegisterScreen } from "../screens/payroll/PayrollRegisterScreen";
+import { PayslipScreen } from "../screens/payroll/PayslipScreen";
+import { Form138Screen } from "../screens/payroll/Form138Screen";
 import { REPORT_NAMES } from "../keystroke/types";
 import { GOTO_ENTRIES } from "../keystroke/navMachine";
 import type { ScreenComponent, ScreenComponentProps } from "./screenRegistry";
@@ -294,6 +299,33 @@ export function createDefaultRegistry(): ScreenRegistry {
     "sales-orders": SalesOrdersScreen,
     "purchase-orders": PurchaseOrdersScreen,
     boms: BomsScreen,
+    // ---- THE FIVE PAYROLL SCREENS (Track 3).
+    //
+    // ⛔ NONE OF THEM IS A "report:…" KEY, AND TWO OF THEM LOOK LIKE THEY SHOULD
+    // BE. `payroll-register` and `payroll-payslip` are real names in
+    // authz.KnownReportNames — migration 0035 refuses all five payroll report
+    // names to the seeded Data Entry level, and both genuinely PRINT (unlike the
+    // two cost summaries, which are mapped and answer 501). They are still
+    // ScreenKinds because neither is REACHABLE as a reportName frame: a report
+    // frame carries a From/To period, and these carry a WAGE MONTH — and the
+    // payslip additionally carries an EMPLOYEE, which no report frame has a place
+    // for. Registering them by ScreenKind is what keeps their Gateway entries
+    // from landing on UnwiredReportScreen, which would announce that a built,
+    // ACL-gated, printable report is "not available in this build".
+    //
+    // ⛔ AND THE EMPLOYEE MASTER IS THE ONE THAT MOST NEEDED A SCREEN. Eight
+    // payroll routes had been mounted and PDP-mapped since Track 3 with NO
+    // payroll screen anywhere in this app — so the biggest module in the product
+    // was invisible — and two more routes did not exist at all: the salary
+    // structure and the statutory election, without which cored refuses every
+    // pay run outright. Both are on the employees screen, behind Alt+S, because
+    // an employee without them is not a half-finished record but an unpayable
+    // one, and the refusal arrives on the RUN.
+    employees: EmployeesScreen,
+    "payroll-run": PayRunScreen,
+    "payroll-register": PayrollRegisterScreen,
+    "payroll-payslip": PayslipScreen,
+    "payroll-form-138": Form138Screen,
     // F1 Help (keystroke reference, generated from the live keymap) and F11
     // Company Features (the honest capability inventory).
     help: HelpAdapter,

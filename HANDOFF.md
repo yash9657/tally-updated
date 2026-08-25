@@ -914,7 +914,7 @@ The criterion is unchanged: **how much of a real business's day is blocked.**
 |---|---|---|---|
 | **0** | ✅ **DONE — THE ACCOUNTING-MODE POSTING BUILDER** (§1.14) | Fixed on BOTH sides: a `GST_ORIENTATION` table drives every direction, tax kind, base ledger and party group; and cored now **REFUSES** a reversed party leg (`ErrPartyOrientation`) so the 201 is closed for every caller, not just the browser | ✅ Purchase AND Credit Note both browser-verified; every gate green. §1.14 carries one loose end worth a look: a blank HSN yields an empty GSTR-1 `hsn_sc` row |
 | **1** | ✅ **DONE — THE IRN SCREEN** (§1.13) | Shipped and browser-verified; the row is `on`. **What is left around it is in §1.13** | — |
-| **2** | **PAYROLL SCREENS** (§5.2) | Any business with employees. The engine, the statutory rates and the file emitters are all built, and `internal/payroll`/`payrolldb` are **already** in `internal/server`'s archtest allow-set — **no refactor, pure frontend** | The biggest module currently invisible: employees, pay heads, pay run, payslips. Budget **2 sessions**, not 1 |
+| **2** | ✅ **DONE — PAYROLL SCREENS** (2026-08-25). Five screens: `employees` (Alt+C create, **Alt+S salary structure + statutory election**), `payroll-run` (Ctrl+F4), `payroll-register` (prints, exports, Alt+S produces the ECR and the ESI return, Enter drills), `payroll-payslip` (prints), `payroll-form-138`. Gateway entries for four; `Ctrl+F4` stopped being `unavailable` after the whole life of the project | ⛔ **ITS PREMISE — "no refactor, pure frontend" — WAS FALSE, AND THE WAY IT WAS FALSE IS THE FINDING.** `payrolldb.SetSalaryComponent` and `SetStatutoryElection` shipped with Track 3 and had **NO ROUTE**, so an employee created over HTTP could never be paid: every pay run answered 422 *"no statutory election is in force"*. **Every payroll test in `internal/server` sets both up by calling the Go SERVICE** (handler_payroll_test.go's fixture says so in a comment), which is exactly why eight mounted, PDP-mapped, fully-tested routes stayed unusable and nothing went red. Four routes + a vocabulary route added (`handler_payroll_structure.go`), mapped to the **existing** `employee` token so migration 0035's seeded disallow covers them with no new migration. **A ROUTE TABLE IS NOT A SURFACE** — see §1.15 | Driven in a browser end to end: employee → salary → election → pay run → register → payslip → ECR + ESI + Form 138. 34/34 probes (`frontend/scripts/drive-payroll.mjs`) |
 | **3** | **T9 FIFO/LIFO** → then **T10 stock groups + compound units** | ⛔ **SERIALISE THESE TWO** — both touch the movement primitive. ⚠️ Closing stock feeds the **Balance Sheet**, so a valuation change MOVES THE SHEET: re-pin `verify:demo` deliberately and explain the change | T9 is a new arm in `ValuerFor` + fixtures, **not** a schema change |
 | **4** | **T14 Backup / restore / split company** | Table stakes: Tally users expect a company to be a file they can carry | Must be tenant-exact. **Reuse the `testdb` delete-plan census** — it already knows every tenant table and is anti-rot by construction |
 | **5** | **OFFLINE ENTRY SCREEN** (§5.2) | The differentiator against Tally's LAN-only model, and it is built | A screen **plus a decision**: how does a browser present queued intents? |
@@ -931,6 +931,68 @@ The criterion is unchanged: **how much of a real business's day is blocked.**
 > stops being groundwork and becomes a filing** — and the e-way bill becomes real too, **with no
 > change to either payload builder**. That is the whole difference between these and T18. Re-order
 > immediately if a human supplies them.
+
+### 1.15 ✅ PAYROLL SCREENS — DONE, AND THE LESSON IS ABOUT THE PREMISE, NOT THE SCREENS
+
+> ## ⛔ A ROUTE TABLE IS NOT A SURFACE.
+>
+> `HANDOFF-NEXT-BUILD.md` §1 said payroll was **"pure frontend — nothing needs designing,
+> refactoring or deciding"**, and it had verified the part it checked: eight routes mounted, every
+> one PDP-mapped, `internal/payroll` complete with tests, no payroll screen anywhere. All true.
+>
+> **And an employee created over HTTP could not be paid by anybody.** `payrolldb.SetSalaryComponent`
+> and `SetStatutoryElection` — the two writers a pay run cannot proceed without — had **no route at
+> all**, so `POST /vouchers/payroll` answered 422 for every caller:
+>
+> ```
+> no statutory election is in force for wage month 2026-07; the PF contribution base
+> and the tax regime are elections and there is no safe default for the first of them
+> ```
+>
+> ⛔ **AND THE TESTS WERE THE REASON NOBODY NOTICED.** Every payroll test in `internal/server` lays
+> both children down by calling `s.payroll.SetSalaryComponent` directly — the fixture even says so:
+> *"The salary structure and the election have no HTTP surface in this wave, so they go in through
+> the service."* The suite bypassed the exact seam that was missing, so a green run meant nothing
+> about whether the module was usable.
+>
+> **THE GENERALISATION, AND IT IS WORTH MORE THAN THIS TRACK:** counting mounted routes measures
+> nothing. The question is whether the routes **compose into one completed task** — and the only
+> thing that answers it is performing that task with nothing but the public surface. The probe that
+> now pins it (`TestAnEmployeeCreatedOverHTTPCanBePaidOverHTTP`) asserts exactly that PROPERTY, makes
+> no `s.payroll.*` call, and was **run against the broken build first** — predicted 422, observed 422.
+
+**What landed.** Four routes (`POST`/`GET` on `/employees/{id}/salary-components` and
+`/statutory-elections`) plus `GET /payroll-vocabulary`, all mapped to the **existing** `employee`
+resource so migration 0035's seeded `disallow create|alter|display employee` covers them from the
+moment they exist — a new token would have been granted by nothing and denied by nothing, guarding a
+salary. Five screens, a Gateway entry for four of them, `Ctrl+F4` bound at last, and the vocabulary
+**served rather than hardcoded**, because `is_wages` is a legal classification (s.2(88), and the
+Vivekananda Vidyamandir holding) and a second copy of it in TypeScript is the drift that
+under-contributes PF for a whole service with no error anywhere.
+
+**Two more defects the BROWSER found that no test did**, both of the "every unit test passes because
+the test built the state the screen was supposed to publish" shape:
+
+1. The register never wrote its loaded wage month onto the frame, so Enter on a row opened a payslip
+   with **no month** — the state whose text is "open this from the register", reached *from the
+   register*. Fixed by giving `ScreenComponentProps` an `onConfig`, which is now the documented seam
+   for a screen whose dimension is typed on its own face.
+2. Form 138 pre-checked every deductor field and not the **challan**, so a complete-looking form's
+   only refusal came back from cored (*"a statement with no challan credits nobody"*).
+
+⚠️ **WHAT IS DELIBERATELY NOT BUILT, and F11 says so on its face:** the pay run sends an EMPTY
+`inputs` — no per-employee attendance, no loss-of-pay days, no prior-employer salary, no Chapter VI-A
+declarations — so every run is a full month with no declarations. That is deliberate rather than
+lazy: a **non-empty `inputs` is also the SELECTION**, so a client sending a row per employee it
+happened to have loaded would silently leave anybody else out of the run. And nothing alters or
+reverses a posted pay run (`AlterPayRunVoucher` / `ResumePayRun` exist and neither is mounted).
+
+⛔ **AND IF EITHER IS EVER MOUNTED, RE-READ `writeRoutesNamingADocumentButNotMovingIt`.** The two new
+write routes are allowlisted there on the stated ground that a back-dated salary component reaches
+the ledger only through a pay run, which IS judged by the cutoff. A route that re-derives a POSTED
+pay run from the current structure makes that entry false.
+
+---
 
 > ## ⛔⛔ 2026-08-25 — THE DEFECT BACKLOG IS EMPTY. THE ENTRY POINT IS `HANDOFF-NEXT-BUILD.md`.
 >

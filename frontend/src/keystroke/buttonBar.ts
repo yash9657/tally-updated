@@ -323,6 +323,111 @@ const BOM_BAR: readonly ButtonBarItem[] = [
   item("F1", "Help"),
 ];
 
+/**
+ * THE EMPLOYEE MASTER bar (Track 3).
+ *
+ * ⛔ TWO WRITE KEYS, AND THE SECOND ONE IS NOT A REFINEMENT. Alt+C creates the
+ * person; Alt+S sets their salary structure and statutory election, WITHOUT WHICH
+ * cored refuses the entire pay run — "no salary structure is in force", "no
+ * statutory election is in force" — and refuses it on the RUN, long after the
+ * operator left this screen believing the record was complete. A bar that
+ * advertised only Alt+C would be advertising half a task.
+ *
+ * Ctrl+P is NOT here, for the reason TDS_CHALLAN_BAR gives: there is no printed
+ * layout for a list of employees, so the key could only explain itself — and an
+ * operator reaches for a bar button by position from then on. It stays bound
+ * globally, and printTarget answers it with a sentence.
+ */
+const EMPLOYEES_BAR: readonly ButtonBarItem[] = [
+  item("Alt+C", "New Employee"),
+  item("Alt+S", "Set Pay"),
+  item("Ctrl+A", "Accept"),
+  item("Esc", "Back"),
+  item("Alt+G", "Go To"),
+  item("Ctrl+G", "Switch To"),
+  item("F1", "Help"),
+];
+
+/**
+ * THE PAY RUN bar (Track 3).
+ *
+ * Ctrl+A is the only write, and it writes a whole month at once. F2 is NOT here:
+ * a pay run has no date to set — the server DERIVES the voucher date from the
+ * wage month (the last day of it), which is also the date the back-dated cutoff
+ * judges, so a date on this bar would advertise a choice the server overwrites.
+ */
+const PAY_RUN_BAR: readonly ButtonBarItem[] = [
+  item("Ctrl+A", "Post Pay Run"),
+  item("Esc", "Back"),
+  item("Alt+G", "Go To"),
+  item("Ctrl+G", "Switch To"),
+  item("F1", "Help"),
+];
+
+/**
+ * THE PAYROLL REGISTER bar (Track 3).
+ *
+ * Ctrl+P IS here, unlike on every other screen added in this wave, and that is a
+ * fact and not a preference: `payroll-register` has a REAL printed layout on the
+ * server (handler_print_reports.go's `printPayrollRegister`, with the ruleset
+ * versions laid out on the page), so the key produces a document rather than a
+ * sentence. Alt+E writes the rows on screen to a spreadsheet.
+ *
+ * Alt+S opens the statutory files panel — the EPFO ECR and the ESIC monthly
+ * return for the month on screen. ⚠️ Form 138 is deliberately NOT on this bar: it
+ * is QUARTERLY and needs a TAN, a deductor PAN and every challan's counterfoil,
+ * none of which is in the database, so it is a FORM on its own screen (Alt+G >
+ * Form 138). A button beside two one-click downloads would imply it takes one
+ * click, and the operator would meet four 400s discovering otherwise.
+ *
+ * F2 is NOT here: this register's dimension is a WAGE MONTH typed on its own
+ * face, never a From/To range — see the keymap's note on F2 for why a range is a
+ * span no statutory scheme has an answer for.
+ */
+const PAYROLL_REGISTER_BAR: readonly ButtonBarItem[] = [
+  item("Alt+S", "Statutory Files"),
+  item("Ctrl+P", "Print"),
+  item("Alt+E", "Export"),
+  item("Enter", "Payslip"),
+  item("Esc", "Back"),
+  item("Alt+G", "Go To"),
+  item("Ctrl+G", "Switch To"),
+  item("F1", "Help"),
+];
+
+/**
+ * THE PAYSLIP bar (Track 3). A pure reader with a real printed layout
+ * (`printPayrollPayslip`), so Ctrl+P produces the document an employee is handed.
+ *
+ * There is no Alt+E: a payslip is one person's document, not a table of rows, and
+ * a CSV of it invites the one thing a payslip must not become — a column in
+ * somebody's spreadsheet of everybody's pay. The register is where rows are
+ * exported, and it is ACL'd as its own report name for exactly that reason.
+ */
+const PAYSLIP_BAR: readonly ButtonBarItem[] = [
+  item("Ctrl+P", "Print"),
+  item("Esc", "Back"),
+  item("Alt+G", "Go To"),
+  item("Ctrl+G", "Switch To"),
+  item("F1", "Help"),
+];
+
+/**
+ * THE FORM 138 bar (Track 3). Ctrl+A builds and downloads the statement.
+ *
+ * ⛔ "Download" AND NOT "File". Nothing this screen produces has been through the
+ * department's FVU — it cannot run in this environment — and the archive says so
+ * on its own face, in a README the download cannot be separated from. A button
+ * labelled "File Return" would be a claim about a filing that has not happened.
+ */
+const FORM_138_BAR: readonly ButtonBarItem[] = [
+  item("Ctrl+A", "Download"),
+  item("Esc", "Back"),
+  item("Alt+G", "Go To"),
+  item("Ctrl+G", "Switch To"),
+  item("F1", "Help"),
+];
+
 /** Screens that are pure readers (Help, Features): Esc out, nothing to save. */
 const READER_BAR: readonly ButtonBarItem[] = [
   item("Esc", "Back"),
@@ -392,6 +497,21 @@ export function buttonBarFor(
       return ORDER_REGISTER_BAR;
     case "boms":
       return BOM_BAR;
+    // The five PAYROLL screens, for the reason every case here exists: without
+    // them they fall through to GATEWAY_BAR, WHICH NO TEST CATCHES. The bar would
+    // advertise F3 Company and F11 Features over a half-keyed employee and say
+    // nothing about Alt+C — or about Alt+S, which is the only key that makes a
+    // person payable at all, and whose absence cored reports only on the pay run.
+    case "employees":
+      return EMPLOYEES_BAR;
+    case "payroll-run":
+      return PAY_RUN_BAR;
+    case "payroll-register":
+      return PAYROLL_REGISTER_BAR;
+    case "payroll-payslip":
+      return PAYSLIP_BAR;
+    case "payroll-form-138":
+      return FORM_138_BAR;
     case "master-create":
       return MASTER_BAR;
     case "gateway":

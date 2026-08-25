@@ -85,10 +85,30 @@ export interface HttpClient {
    * client that replaced either message with a guess of its own would either leak
    * what the 404 protects or hide why nothing printed.
    */
-  getBlob(
-    path: string,
-    query?: QueryParams,
-  ): Promise<{ blob: Blob; filename: string | null }>;
+  getBlob(path: string, query?: QueryParams): Promise<BlobResponse>;
+}
+
+/**
+ * A binary response: the bytes, the download name, and a reader for any
+ * RESPONSE HEADER the caller needs.
+ *
+ * ⛔ `header` EXISTS BECAUSE SOME BODIES ARE NOT SELF-DESCRIBING. The three
+ * statutory payroll files are served as a ZIP whose two entries are the file and
+ * its disclosure sidecar, and the server states what is inside on the response
+ * itself — `X-Statutory-File` names the file the portal will be given, and
+ * `X-Statutory-Disclosure` says that nothing in it has been through the FVU, the
+ * EPFO portal or the ESIC portal. A client that could not read those would have
+ * to either unzip the archive (separating the file from its disclosure, which is
+ * the one thing the zip exists to prevent) or invent the sentence itself.
+ *
+ * It is a LOOKUP and not the `Headers` object so that the shape stays trivially
+ * fakeable in a test without constructing a DOM Headers.
+ */
+export interface BlobResponse {
+  blob: Blob;
+  filename: string | null;
+  /** Case-insensitive response header lookup; null when absent. */
+  header(name: string): string | null;
 }
 
 /**
@@ -278,6 +298,7 @@ export function createHttpClient(opts: HttpClientOptions = {}): HttpClient {
       return {
         blob: await res.blob(),
         filename: filenameFromDisposition(res.headers.get("Content-Disposition")),
+        header: (name: string) => res.headers.get(name),
       };
     },
   };

@@ -32,7 +32,10 @@ import type {
   DayBookResponse,
   ListGodownsResponse,
   ListStockBatchesResponse,
+  InventoryVocabularyResponse,
   ListStockItemsResponse,
+  SetValuationMethodRequest,
+  SetValuationMethodResponse,
   StockSummaryResponse,
   GSTR1Query,
   GSTR1Response,
@@ -100,6 +103,22 @@ import type {
   SetBankDateRequest,
   SetBankDateResponse,
   VoucherClass,
+  ListEmployeesResponse,
+  CreateEmployeeRequest,
+  CreateEmployeeResponse,
+  PayRunRequest,
+  PayRunResponse,
+  PayrollRegisterResponse,
+  PayslipResponse,
+  Form138Request,
+  StatutoryFileDownload,
+  ListSalaryComponentsResponse,
+  SetSalaryComponentRequest,
+  SetSalaryComponentResponse,
+  ListStatutoryElectionsResponse,
+  SetStatutoryElectionRequest,
+  SetStatutoryElectionResponse,
+  PayrollVocabularyResponse,
 } from "./types";
 import type { QueryRequest, QueryResult } from "./query";
 import type {
@@ -618,7 +637,10 @@ export interface CoredClient {
    * another name", the second is "clear the other default or add this as an
    * alternative".
    */
-  createBom(companyID: string, req: CreateBomRequest): Promise<{ bom_id: string }>;
+  createBom(
+    companyID: string,
+    req: CreateBomRequest,
+  ): Promise<{ bom_id: string }>;
   /**
    * List recipes, optionally for one item.
    *
@@ -673,10 +695,7 @@ export interface CoredClient {
    * the bill was raised, so the payload describes goods the voucher no longer
    * states. Nothing else in the system will ever say so.
    */
-  getEWayBill(
-    companyID: string,
-    voucherID: string,
-  ): Promise<EWayBillResponse>;
+  getEWayBill(companyID: string, voucherID: string): Promise<EWayBillResponse>;
 
   /**
    * RAISE THE e-INVOICE for one voucher, through cored's proxy into statutoryd.
@@ -734,10 +753,7 @@ export interface CoredClient {
    * `asOn` may be omitted, and then the position is from every order ever placed.
    * The response SAYS SO in `notes` rather than leaving a reader to assume a default.
    */
-  salesOrderBook(
-    companyID: string,
-    asOn?: string,
-  ): Promise<OrderBookResponse>;
+  salesOrderBook(companyID: string, asOn?: string): Promise<OrderBookResponse>;
   purchaseOrderBook(
     companyID: string,
     asOn?: string,
@@ -810,6 +826,20 @@ export interface CoredClient {
   // name. The item grid cannot offer a location picker against a collection it
   // cannot list.
   listStockItems(companyID: string): Promise<ListStockItemsResponse>;
+
+  // ---- The COSTING METHOD (T9) -------------------------------------------
+  //
+  // `inventoryVocabulary` is the closed set of methods THIS SERVER can value
+  // stock with, and `setStockItemValuationMethod` switches one item onto one of
+  // them. The switch is a RESTATEMENT, not an edit: no figure is stored, so the
+  // item's whole history — every period already reported — comes back on the new
+  // basis. Show the `restates` sentence the answer carries.
+  inventoryVocabulary(companyID: string): Promise<InventoryVocabularyResponse>;
+  setStockItemValuationMethod(
+    companyID: string,
+    stockItemID: string,
+    req: SetValuationMethodRequest,
+  ): Promise<SetValuationMethodResponse>;
   listGodowns(companyID: string): Promise<ListGodownsResponse>;
   listStockBatches(companyID: string): Promise<ListStockBatchesResponse>;
 
@@ -1181,4 +1211,120 @@ export interface CoredClient {
     xml: string,
     query?: ImportTallyXMLQuery,
   ): Promise<ImportTallyXMLResponse>;
+
+  // -------------------------------------------------------------------------
+  // PAYROLL (Track 3). Eight routes, mounted and PDP-mapped since Track 3 and
+  // never once called from this app until the payroll screens landed.
+  //
+  // ⛔ EIGHT METHODS AND NOT ONE `payroll(op, …)` FACADE. Each route is its own
+  // AUTHORITY on the server — `employee` is a bare resource token of its own
+  // (deliberately NOT folded into `master`, which every seeded Data Entry level
+  // is granted), the pay run is the voucher class `payroll`, and the five reads
+  // are five separate report names so that "may produce the monthly ECR but may
+  // not read the register" is a rule an administrator can actually write. A
+  // facade that took the operation as an argument would make the PDP's decision
+  // invisible at the call site, which is the mistake the two order registers and
+  // the two order books each have a paragraph about.
+  // -------------------------------------------------------------------------
+
+  /** The employee master. `includeInactive` adds leavers, who are excluded by default. */
+  listEmployees(
+    companyID: string,
+    includeInactive?: boolean,
+  ): Promise<ListEmployeesResponse>;
+  createEmployee(
+    companyID: string,
+    req: CreateEmployeeRequest,
+  ): Promise<CreateEmployeeResponse>;
+
+  /**
+   * Compute and post a whole wage month.
+   *
+   * ⚠️ A 403 HERE IS AMBIGUOUS ON THE WIRE AND THE SCREEN MUST DISAMBIGUATE IT:
+   * the route is under the back-dated cutoff via `wage_month` (the server derives
+   * the voucher date with `payrolldb.LastDayOf`), so a refusal may mean "that
+   * month is closed" rather than "you may not run payroll".
+   */
+  runPayroll(companyID: string, req: PayRunRequest): Promise<PayRunResponse>;
+
+  /** The wage month's register: a row per employee plus the totals. */
+  payrollRegister(
+    companyID: string,
+    month: string,
+  ): Promise<PayrollRegisterResponse>;
+  /** ONE employee's payslip for a wage month. Another tenant's id is a 404, via RLS. */
+  payslip(
+    companyID: string,
+    month: string,
+    employeeID: string,
+  ): Promise<PayslipResponse>;
+
+  // ---- The three statutory FILES. All three answer application/zip (the file
+  // plus its disclosure sidecar), so all three go through the BLOB path — the
+  // JSON path would corrupt the archive into a lossy string, exactly as it would
+  // a PDF. See {@link StatutoryFileDownload}.
+  payrollPFECR(
+    companyID: string,
+    month: string,
+  ): Promise<StatutoryFileDownload>;
+  /**
+   * The ESIC monthly contribution return.
+   *
+   * `leavingReasons` maps an employee CODE to the reason they left. It is NOT
+   * derivable — the master records a date of leaving and not why, and "Retired",
+   * "Expired" and "Employee has left service" are three different filings — so a
+   * leaver with no supplied reason is refused with a 422 NAMING the employee
+   * code, never filed with a blank reason the portal reads as accepted-but-empty.
+   */
+  payrollESIReturn(
+    companyID: string,
+    month: string,
+    leavingReasons?: Readonly<Record<string, string>>,
+  ): Promise<StatutoryFileDownload>;
+  /** The quarterly salary-TDS statement (ex-24Q Annexure I). Q4 is refused server-side. */
+  payrollForm138(
+    companyID: string,
+    req: Form138Request,
+  ): Promise<StatutoryFileDownload>;
+
+  // ---- THE EMPLOYEE MASTER'S TWO EFFECTIVE-DATED CHILDREN.
+  //
+  // ⛔ WITHOUT THESE THE SEVEN METHODS ABOVE CANNOT PAY ANYBODY. A pay run
+  // refuses an employee with no salary structure in force ("there is nothing to
+  // pay and nothing to contribute on") and one with no statutory election ("the
+  // PF contribution base and the tax regime are elections and there is no safe
+  // default"). Both writers shipped with Track 3 with NO ROUTE, so the whole
+  // module answered 422 to every caller that had not reached into the Go service
+  // directly — which every payroll test in the server package does, which is why
+  // a green suite never noticed.
+  //
+  // Both READS exist so a screen can tell a complete master from an incomplete
+  // one BEFORE a pay run. Without them the only way to discover the gap is to
+  // attempt the run, which is the one operation an operator most wants to be
+  // sure about beforehand.
+  listSalaryComponents(
+    companyID: string,
+    employeeID: string,
+  ): Promise<ListSalaryComponentsResponse>;
+  setSalaryComponent(
+    companyID: string,
+    employeeID: string,
+    req: SetSalaryComponentRequest,
+  ): Promise<SetSalaryComponentResponse>;
+  listStatutoryElections(
+    companyID: string,
+    employeeID: string,
+  ): Promise<ListStatutoryElectionsResponse>;
+  setStatutoryElection(
+    companyID: string,
+    employeeID: string,
+    req: SetStatutoryElectionRequest,
+  ): Promise<SetStatutoryElectionResponse>;
+
+  /**
+   * The closed sets a payroll form chooses from. No parameters: the vocabulary
+   * is the statute's, not the tenant's, and two companies on one deployment get
+   * the same answer.
+   */
+  payrollVocabulary(companyID: string): Promise<PayrollVocabularyResponse>;
 }

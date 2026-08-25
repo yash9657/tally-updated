@@ -8,6 +8,7 @@ import type {
   CreateStockItemRequest,
   OpeningBillRequest,
   RefType,
+  ValuationMethodOption,
 } from "../../api";
 import { useClient, useCompanyID } from "../../app/CompanyContext";
 import {
@@ -248,6 +249,17 @@ interface Draft {
   gstRatePct: string;
   openingQty: string;
   openingRate: string;
+  /**
+   * THE COSTING METHOD (T9) — "" means "send nothing and take the server's
+   * default", which is Tally's own (Avg. Cost).
+   *
+   * ⛔ IT IS CHOSEN AT CREATION FOR A REASON THAT IS NOT CONVENIENCE. Changing
+   * it later is a RESTATEMENT: no valuation figure is stored, so the item's
+   * whole history — every period already reported — comes back on the new
+   * basis. Choosing it once, here, before the item has traded, is the only time
+   * the choice costs nothing.
+   */
+  valuationMethod: string;
 }
 
 function emptyDraft(): Draft {
@@ -283,6 +295,10 @@ function emptyDraft(): Draft {
     gstRatePct: "",
     openingQty: "",
     openingRate: "",
+    // Empty, NOT "WEIGHTED_AVG": an absent key means "the server's default", and
+    // sending the default explicitly would make this form assert a choice the
+    // operator did not make — the same mistake `parent: ""` above documents.
+    valuationMethod: "",
   };
 }
 
@@ -322,6 +338,42 @@ export function MasterCreateScreen({
   const kind = (snapshot.masterKind ?? "ledger") as MasterKind;
 
   const [draft, setDraft] = useState<Draft>(emptyDraft);
+  // ---- THE COSTING METHODS THIS SERVER OFFERS (T9), SERVED AND NOT HARDCODED.
+  //
+  // ⛔ A picker built from a list this client owns can offer a method the server
+  // refuses — and the operator meets that refusal after keying the whole master,
+  // with (before register row D92) the form and everything in it already gone.
+  // The set will also GROW: Tally ships eight costing methods and cored
+  // implements three, so a hardcoded three would quietly stop being the truth.
+  //
+  // A FAILED FETCH OFFERS NOTHING RATHER THAN A GUESS. The default option is
+  // always there, so an item can still be created on the server's own default
+  // with no method sent at all — which is exactly what every caller written
+  // before T9 does.
+  const [methods, setMethods] = useState<ValuationMethodOption[] | null>(null);
+  const [methodsDefault, setMethodsDefault] = useState("");
+  useEffect(() => {
+    if (kind !== "stock-item") return;
+    let live = true;
+    client
+      .inventoryVocabulary(companyID)
+      .then((v) => {
+        if (!live) return;
+        setMethods(v.valuation_methods);
+        setMethodsDefault(v.default);
+      })
+      .catch(() => {
+        // Deliberately silent: the form is still usable (the default option
+        // needs no list), and a red line about a vocabulary fetch over a
+        // half-keyed master would be noise about a field the operator may not
+        // even be using.
+      });
+    return () => {
+      live = false;
+    };
+  }, [client, companyID, kind]);
+  const chosenMethod =
+    (methods ?? []).find((m) => m.method === draft.valuationMethod) ?? null;
   const [status, setStatus] = useState<string | null>(null);
 
   // ONE ref, updated every render, so the accept handler reads the live form
@@ -354,7 +406,9 @@ export function MasterCreateScreen({
   const patchBill = useCallback((i: number, p: Partial<BillDraft>) => {
     setDraft((d) => ({
       ...d,
-      openingBills: d.openingBills.map((b, j) => (j === i ? { ...b, ...p } : b)),
+      openingBills: d.openingBills.map((b, j) =>
+        j === i ? { ...b, ...p } : b,
+      ),
     }));
   }, []);
 
@@ -370,7 +424,10 @@ export function MasterCreateScreen({
   const second = SECOND_FIELD[kind];
   const bills = keyedBills(draft);
   const billTotal = sumMoney(bills.map((b) => b.amount));
-  const billDifference = subMoney(normalizeMoney(draft.openingBalance), billTotal);
+  const billDifference = subMoney(
+    normalizeMoney(draft.openingBalance),
+    billTotal,
+  );
 
   /**
    * Build the request for `kind`, or return a REFUSAL SENTENCE.
@@ -439,9 +496,7 @@ export function MasterCreateScreen({
             );
           }
           if (stateCode !== "" && !isKnownStateCode(stateCode)) {
-            return (
-              `“${stateCode}” is not a GST state code. Nothing was created.`
-            );
+            return `“${stateCode}” is not a GST state code. Nothing was created.`;
           }
           if (requiresGstin(d.registrationType) && gstin === "") {
             // A Regular or Composition party BY DEFINITION holds a
@@ -459,7 +514,11 @@ export function MasterCreateScreen({
               `10-character PAN, entity digit, “Z”, checksum). Nothing was created.`
             );
           }
-          if (gstin !== "" && stateCode !== "" && stateCodeFromGstin(gstin) !== stateCode) {
+          if (
+            gstin !== "" &&
+            stateCode !== "" &&
+            stateCodeFromGstin(gstin) !== stateCode
+          ) {
             // ⛔ THE TWO MUST AGREE OR ONE OF THEM IS WRONG, and after the
             // master is saved nothing ever looks again. This is the exact
             // relationship `verify:demo` checks across the whole book.
@@ -546,14 +605,19 @@ export function MasterCreateScreen({
           };
           return {
             req,
-            summary: isPrimary ? `as a primary ${d.nature} group` : `under ${p}`,
+            summary: isPrimary
+              ? `as a primary ${d.nature} group`
+              : `under ${p}`,
           };
         }
         case "voucher-type": {
           if (!p) {
             return `A voucher type must name the class it behaves as — nothing was created.`;
           }
-          return { req: { name: n, parent_class: p }, summary: `behaving as ${p}` };
+          return {
+            req: { name: n, parent_class: p },
+            summary: `behaving as ${p}`,
+          };
         }
         case "unit": {
           const dp = Number.parseInt(d.decimalPlaces, 10);
@@ -563,7 +627,9 @@ export function MasterCreateScreen({
           return {
             req: {
               symbol: n,
-              ...(d.formalName.trim() ? { formal_name: d.formalName.trim() } : {}),
+              ...(d.formalName.trim()
+                ? { formal_name: d.formalName.trim() }
+                : {}),
               decimal_places: dp,
             },
             summary: dp === 0 ? "whole units" : `${String(dp)} decimal places`,
@@ -583,6 +649,9 @@ export function MasterCreateScreen({
           const req: CreateStockItemRequest = {
             name: n,
             unit_symbol: p,
+            ...(d.valuationMethod.trim()
+              ? { valuation_method: d.valuationMethod.trim() }
+              : {}),
             ...(d.hsn.trim() ? { hsn: d.hsn.trim() } : {}),
             ...(d.gstRatePct.trim()
               ? { gst_rate_pct: normalizeMoney(d.gstRatePct) }
@@ -595,12 +664,19 @@ export function MasterCreateScreen({
               : {}),
           };
           const qty = normalizeMoney(d.openingQty);
+          // The summary reaches the status line after the create, so it names
+          // the BASIS whenever the operator chose one — an item silently created
+          // on the default would otherwise be indistinguishable from one where
+          // the choice was made and dropped (register row D43's shape).
+          const basis = d.valuationMethod.trim()
+            ? `, valued ${d.valuationMethod.trim()}`
+            : "";
           return {
             req,
             summary:
               qty === "0.0000"
-                ? `in ${p}`
-                : `in ${p}, opening ${qty} @ ${normalizeMoney(d.openingRate)}`,
+                ? `in ${p}${basis}`
+                : `in ${p}, opening ${qty} @ ${normalizeMoney(d.openingRate)}${basis}`,
           };
         }
         default:
@@ -614,11 +690,17 @@ export function MasterCreateScreen({
     async (req: unknown): Promise<{ id: string }> => {
       switch (kind) {
         case "ledger": {
-          const r = await client.createLedger(companyID, req as CreateLedgerRequest);
+          const r = await client.createLedger(
+            companyID,
+            req as CreateLedgerRequest,
+          );
           return { id: r.ledger_id };
         }
         case "group": {
-          const r = await client.createGroup(companyID, req as CreateGroupRequest);
+          const r = await client.createGroup(
+            companyID,
+            req as CreateGroupRequest,
+          );
           return { id: r.group_id };
         }
         case "voucher-type": {
@@ -629,7 +711,10 @@ export function MasterCreateScreen({
           return { id: r.voucher_type_id };
         }
         case "unit": {
-          const r = await client.createUnit(companyID, req as { symbol: string });
+          const r = await client.createUnit(
+            companyID,
+            req as { symbol: string },
+          );
           return { id: r.unit_id };
         }
         case "stock-item": {
@@ -825,7 +910,10 @@ export function MasterCreateScreen({
                 vanish and reappear as the operator moves the group cursor — and
                 anything already keyed would be lost with them. Only the
                 REFUSAL is party-specific. */}
-            <div className="mt-3 border-t border-tally-field/30 pt-2" data-testid="master-party-block">
+            <div
+              className="mt-3 border-t border-tally-field/30 pt-2"
+              data-testid="master-party-block"
+            >
               <p className="text-xs">
                 GST identity —{" "}
                 <span className="text-tally-title">
@@ -950,11 +1038,15 @@ export function MasterCreateScreen({
             {draft.maintainBillByBill ? (
               <div className="mt-2" data-testid="master-opening-bills">
                 <p className="text-xs">
-                  Bill-wise breakup of the opening balance — it must ADD UP to it,
-                  or Outstandings and the Balance Sheet disagree by the difference.
+                  Bill-wise breakup of the opening balance — it must ADD UP to
+                  it, or Outstandings and the Balance Sheet disagree by the
+                  difference.
                 </p>
                 {draft.openingBills.map((b, i) => (
-                  <div key={i} className="mt-1 flex flex-wrap items-center gap-1">
+                  <div
+                    key={i}
+                    className="mt-1 flex flex-wrap items-center gap-1"
+                  >
                     <input
                       aria-label={`Opening bill ${i + 1} reference`}
                       data-testid={`master-bill-${i}-ref`}
@@ -1020,8 +1112,12 @@ export function MasterCreateScreen({
                     screen. The refusal is the server's rule; this is arithmetic,
                     so the operator never has to discover it from a status line
                     after the frame has popped. */}
-                <p className="mt-1 text-xs" data-testid="master-bill-difference">
-                  Breakup {billTotal} of {normalizeMoney(draft.openingBalance)} —{" "}
+                <p
+                  className="mt-1 text-xs"
+                  data-testid="master-bill-difference"
+                >
+                  Breakup {billTotal} of {normalizeMoney(draft.openingBalance)}{" "}
+                  —{" "}
                   {billDifference === "0.0000"
                     ? "it adds up"
                     : `${billDifference} unaccounted`}
@@ -1034,7 +1130,8 @@ export function MasterCreateScreen({
         {kind === "group" ? (
           <div className="mt-3 border-t border-tally-field/30 pt-2">
             <label className="block text-xs">
-              Nature (a top-level group only — a sub-group inherits its parent's)
+              Nature (a top-level group only — a sub-group inherits its
+              parent's)
               <select
                 aria-label="Nature"
                 data-testid="master-group-nature"
@@ -1141,6 +1238,48 @@ export function MasterCreateScreen({
                 }}
               />
             </label>
+            {/* THE COSTING METHOD (T9). A <select> and not a SelectionList: the
+                set is closed, three long, SERVED by the server, and the operator
+                needs to READ the three descriptions rather than type-ahead a
+                code they have never seen. Blank = the server's default, stated
+                as such rather than left ambiguous. */}
+            <label className="mt-2 block text-tally-field">
+              Costing method
+              <select
+                aria-label="Costing method"
+                data-testid="master-item-valuation-method"
+                className="ml-2 bg-tally-field px-1 text-tally-fieldText outline-none"
+                value={draft.valuationMethod}
+                onChange={(e) => {
+                  patch({ valuationMethod: e.target.value });
+                }}
+              >
+                <option value="">
+                  {methods === null
+                    ? "(the server's default)"
+                    : `(the server's default — ${methodsDefault})`}
+                </option>
+                {(methods ?? []).map((m) => (
+                  <option key={m.method} value={m.method}>
+                    {m.method} — {m.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {chosenMethod ? (
+              <p
+                className="mt-1 text-xs"
+                data-testid="master-item-valuation-basis"
+              >
+                {chosenMethod.basis}
+              </p>
+            ) : (
+              <p className="mt-1 text-xs">
+                Changing this later re-values the item&rsquo;s WHOLE history,
+                including periods already reported — so it is worth choosing
+                now. Alt+V on the Stock Summary is where it can be changed.
+              </p>
+            )}
           </div>
         ) : null}
 
@@ -1167,7 +1306,9 @@ export function MasterCreateScreen({
             {status}
           </p>
         ) : null}
-        <p className="mt-2 text-xs">Ctrl+A to accept and return; Esc to cancel.</p>
+        <p className="mt-2 text-xs">
+          Ctrl+A to accept and return; Esc to cancel.
+        </p>
       </div>
     </section>
   );

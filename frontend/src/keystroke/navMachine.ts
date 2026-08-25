@@ -321,6 +321,54 @@ export const COST_CATEGORY_ROW_PREFIX = "cost-category:";
  * Ctrl+F8/F9) versus BOOK (what is outstanding as at a date, a report name). One
  * is where an order is created; the other is where the commitments are read.
  */
+/**
+ * The Gateway entries that open the FOUR PAYROLL screens (Track 3).
+ *
+ * ⛔ SAME ORDERING REQUIREMENT AS EVERY LABEL ABOVE, and two of these are the
+ * most dangerous strings in the whole set: "Payroll Register" and "Payslip" are
+ * report-SHAPED, and `payroll-register` and `payroll-payslip` genuinely ARE names
+ * in authz.KnownReportNames (migration 0035 refuses all five payroll reports to
+ * the seeded Data Entry level, which needs a name to refuse). So a frame pushed
+ * by the canonicalReportName fallback would be a `report` frame named "Payroll
+ * Register" — resolving to UnwiredReportScreen, i.e. a screen politely announcing
+ * that a built, ACL-gated, PRINTABLE report is "not available in this build".
+ *
+ * WHY THE GATEWAY AND NOT "Display More Reports": that menu is generated from
+ * REPORT_NAMES, and none of these four is reachable as a reportName frame. The
+ * register's dimension is a wage MONTH and the payslip's is a month plus an
+ * EMPLOYEE — neither is the period a `report` frame carries. Same door Bank
+ * Reconciliation, the TDS challan register and the three cost screens use.
+ *
+ * ⚠️ "Employees" IS FIRST, and that ordering is the same argument "Cost Centres"
+ * comes before the two cost reports: until an employee exists with a salary
+ * structure and a statutory election, a pay run refuses outright and both reports
+ * below can only say so.
+ */
+export const EMPLOYEES_LABEL = "Employees";
+export const PAY_RUN_LABEL = "Pay Run";
+export const PAYROLL_REGISTER_LABEL = "Payroll Register";
+export const FORM_138_LABEL = "Form 138 (Salary TDS)";
+
+/**
+ * The prefix the PAYROLL REGISTER puts on the row keys it publishes through
+ * `onSelect`, so Enter opens THAT employee's payslip — "no report is a dead end"
+ * (RESEARCH sec 8), applied to the one drill this report has.
+ *
+ * ⚠️ IT CARRIES THE EMPLOYEE'S CODE AND NEVER THEIR ID. The machine stays pure:
+ * it has no database, so it cannot know an employee uuid, and smuggling one
+ * through a frame would be the first step to a screen asking an operator for a
+ * UUID. The payslip screen resolves the code against the SERVED register,
+ * exactly as the Bank Reconciliation screen resolves a drilled ledger name and
+ * the Cost Centre Summary resolves an axis name.
+ *
+ * ⛔ THE CODE AND NOT THE NAME, which is the one place this differs from those
+ * two. `employee.code` is UNIQUE in the company (the server refuses a duplicate);
+ * a NAME is not, and two people called the same thing would make the drill open
+ * whichever the resolver met first — one person's whole pay under another
+ * person's heading.
+ */
+export const EMPLOYEE_ROW_PREFIX = "employee:";
+
 export const SALES_ORDERS_LABEL = "Sales Orders";
 export const PURCHASE_ORDERS_LABEL = "Purchase Orders";
 export const BOMS_LABEL = "Bills of Materials";
@@ -790,6 +838,35 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
         });
         return { stack };
       }
+      if (active.screen === "payroll-register") {
+        // ENTER OPENS THE HIGHLIGHTED EMPLOYEE'S PAYSLIP — the one drill the
+        // register has, and the reason it is not a dead end: the register says
+        // what each person was paid in total, and this is how you get from that
+        // to WHICH COMPONENTS made it up and what was deducted.
+        //
+        // The row key carries the employee's CODE (see EMPLOYEE_ROW_PREFIX) and
+        // never their id: the machine has no database. With no row highlighted
+        // Enter is a no-op rather than a frame for "some employee" — the same
+        // rule every statement report follows for an empty selection, and it
+        // matters more here, because a payslip opened for the wrong person is one
+        // individual's entire pay under another individual's name.
+        const sel = active.selectedItem ?? "";
+        if (!sel.startsWith(EMPLOYEE_ROW_PREFIX)) return {};
+        // ⛔ THE WAGE MONTH TRAVELS WITH THE DRILL, for the reason the period
+        // travels with the cost-category drill: a payslip frame without one lands
+        // on "type a month", and the operator re-keys the month they just chose —
+        // or, worse, re-keys it slightly differently and reads one person's July
+        // payslip under a register for June with nothing on either page saying so.
+        //
+        // ONLY the month is copied, never the rest of the frame: the register's
+        // own highlighted row and its toggles belong to the register.
+        stack.push({
+          screen: "payroll-payslip",
+          detailOf: sel,
+          config: { wageMonth: active.config?.wageMonth },
+        });
+        return { stack };
+      }
       if (active.screen === "master-create") {
         // Enter advances the master-create field cursor.
         active.field = nextMasterField(active.field);
@@ -894,6 +971,40 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
           PURCHASE_ORDERS_LABEL.toLowerCase()
         ) {
           stack.push({ screen: "purchase-orders" });
+          return { stack };
+        }
+        // ---- THE FOUR PAYROLL SCREENS (Track 3). Ordering as above, and it is
+        // load-bearing for two of them: "Payroll Register" and the payslip are
+        // report-SHAPED and both ARE real report names on the server, so the
+        // fallback would push a `report` frame that renders "not available in
+        // this build" over a built, ACL-gated, printable report. See
+        // EMPLOYEES_LABEL.
+        if (
+          active.selectedItem?.toLowerCase() === EMPLOYEES_LABEL.toLowerCase()
+        ) {
+          stack.push({ screen: "employees" });
+          return { stack };
+        }
+        if (active.selectedItem?.toLowerCase() === PAY_RUN_LABEL.toLowerCase()) {
+          // The same frame Ctrl+F4 pushes. A Gateway drill and a key on one
+          // destination must land on ONE frame, which is the rule the "Vouchers"
+          // entry's own arm exists to keep.
+          stack.push({ screen: "payroll-run" });
+          return { stack };
+        }
+        if (
+          active.selectedItem?.toLowerCase() ===
+          PAYROLL_REGISTER_LABEL.toLowerCase()
+        ) {
+          // No month on the frame: the screen asks for it on its own face, the
+          // way the TDS challan register asks for a tax year. The machine cannot
+          // choose a wage month, and defaulting one would answer a question
+          // nobody asked while looking like the one they did.
+          stack.push({ screen: "payroll-register" });
+          return { stack };
+        }
+        if (active.selectedItem?.toLowerCase() === FORM_138_LABEL.toLowerCase()) {
+          stack.push({ screen: "payroll-form-138" });
           return { stack };
         }
         if (active.selectedItem?.toLowerCase() === BOMS_LABEL.toLowerCase()) {
@@ -1219,6 +1330,57 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
       return {};
     }
 
+    case "payRun": {
+      // Ctrl+F4 — THE PAY RUN (RESEARCH.md:903).
+      //
+      // pushOnce, so pressing it twice does not stack a second identical frame;
+      // `payRun` is in ALWAYS_MEANINGFUL in AppShell so the shell does not
+      // additionally report it as a key that does not apply here.
+      //
+      // ⛔ IT PUSHES A SCREEN AND NOT A VOUCHER FRAME, and the difference is not
+      // cosmetic: VoucherScreen resolves its layout through configFor(voucherType)
+      // and there is no payroll VoucherConfig, so a voucher frame would take the
+      // operator to an undefined config. A pay run has no particulars to key —
+      // its lines are computed from the masters for a whole WAGE MONTH.
+      return pushOnce("payroll-run");
+    }
+
+    case "setValuationMethod":
+      // NO NAVIGATION, and here that is the whole point: the operator is looking
+      // at the figure that is about to change, and the panel opens OVER the
+      // report so the table redraws underneath it. Navigating anywhere would
+      // take away the only evidence that the switch did anything.
+      //
+      // ⚠️ Written out rather than left to a `default: return {}` for the reason
+      // the payroll block below gives: the shell reports "does not apply on this
+      // screen" for a key that neither ran a screen action nor moved the stack,
+      // so a MISSING entry here is indistinguishable from a key meant to be
+      // inert — which is how Alt+O once shipped completely dead.
+      return {};
+
+    case "createEmployee":
+    case "setEmployeePay":
+    case "payrollStatutoryFiles": {
+      // NO NAVIGATION — the same answer, and the same reasons, as
+      // `createCostMaster` and `createOrder` above:
+      //
+      //  - the create FORM lives on the employee list, because the list beside it
+      //    is what tells an operator the code is already taken;
+      //  - Alt+S sets the pay of the employee HIGHLIGHTED in that list, which is a
+      //    fact only the screen holds;
+      //  - Alt+S on the register opens a panel for the month ON SCREEN, and the
+      //    ESIC return additionally needs a LEAVING REASON per leaver — a question
+      //    only that panel can ask, and one the server refuses to guess (a leaver
+      //    with a blank reason is a row the portal accepts and reads as empty).
+      //
+      // ⚠️ Written out rather than left to a `default: return {}` for the reason
+      // every block above gives: the shell reports "does not apply on this screen"
+      // for a key that neither ran a screen action nor moved the stack, so a
+      // MISSING SCREEN_ACTIONS entry is indistinguishable from a key meant to be
+      // inert — which is how Alt+O once shipped completely dead.
+      return {};
+    }
+
     case "bankReconciliation": {
       // The Gateway / menu entry opens the statement — TallyPrime's own route to
       // it is Alt+G > Banking Activities (RESEARCH.md:873), so a Gateway entry
@@ -1485,6 +1647,10 @@ function reduceSelect(ctx: NavContext, menuItem: string): Partial<NavContext> {
       menuItem.toLowerCase() === SALES_ORDERS_LABEL.toLowerCase() ||
       menuItem.toLowerCase() === PURCHASE_ORDERS_LABEL.toLowerCase() ||
       menuItem.toLowerCase() === BOMS_LABEL.toLowerCase() ||
+      menuItem.toLowerCase() === EMPLOYEES_LABEL.toLowerCase() ||
+      menuItem.toLowerCase() === PAY_RUN_LABEL.toLowerCase() ||
+      menuItem.toLowerCase() === PAYROLL_REGISTER_LABEL.toLowerCase() ||
+      menuItem.toLowerCase() === FORM_138_LABEL.toLowerCase() ||
       canonicalReportName(menuItem) !== undefined
     ) {
       active.selectedItem = menuItem;
@@ -1515,6 +1681,26 @@ function reduceSelect(ctx: NavContext, menuItem: string): Partial<NavContext> {
       return { stack: [stack[0] as ScreenFrame] };
     }
     return {};
+  }
+
+  // THE PAYROLL REGISTER: a selection highlights the EMPLOYEE Enter will open the
+  // payslip for. Its own branch rather than the report branch below, because this
+  // screen is a ScreenKind — see keystroke/types.ts for why the register is not a
+  // `report` frame despite `payroll-register` being a real report NAME.
+  if (active.screen === "payroll-register") {
+    active.selectedItem = menuItem;
+    stack[stack.length - 1] = active;
+    return { stack };
+  }
+
+  // THE EMPLOYEE MASTER: a selection highlights the employee that Alt+S sets the
+  // salary structure and the statutory election of. Enter does NOT navigate from
+  // here — there is nothing below an employee to drill into — so this branch only
+  // records the highlight, which is what the screen's own write key acts on.
+  if (active.screen === "employees") {
+    active.selectedItem = menuItem;
+    stack[stack.length - 1] = active;
+    return { stack };
   }
 
   // The Cost CATEGORY Summary: a selection highlights the AXIS Enter will open.

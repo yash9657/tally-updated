@@ -504,6 +504,104 @@ func (s *Service) SetStatutoryElection(ctx context.Context, e StatutoryElection)
 }
 
 // ---------------------------------------------------------------------------
+// Reading the effective-dated children back.
+//
+// ⛔ BOTH READERS EXIST BECAUSE THE WRITERS ARE NOT ENOUGH TO BE USABLE. The pay
+// run refuses an employee with no salary structure in force ("there is nothing
+// to pay and nothing to contribute on") and refuses one with no statutory
+// election ("the PF contribution base and the tax regime are elections and there
+// is no safe default"), and both refusals arrive as a 422 on the RUN — long
+// after the employee was created and with nothing anywhere saying the master is
+// incomplete. A screen that cannot read these back can only discover the gap by
+// attempting a pay run, which is the one operation an operator most wants to be
+// sure about before pressing it.
+// ---------------------------------------------------------------------------
+
+// ListSalaryComponents returns one employee's salary structure, oldest window
+// first and then by component code.
+//
+// It returns EVERY window and not just the one in force today, because an
+// effective-dated master is only checkable as a sequence: an operator looking at
+// "Basic 50,000" cannot tell a standing figure from one that was superseded last
+// month, and the pay run reads the window in force on the FIRST of the wage
+// month — which is a question about the past for every back-dated run.
+func (s *Service) ListSalaryComponents(ctx context.Context, employeeID uuid.UUID) ([]SalaryComponent, error) {
+	var out []SalaryComponent
+	err := s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		rows, err := tx.Query(ctx,
+			`SELECT id, employee_id, effective_from::text,
+			        COALESCE(effective_to::text, ''), component_code, component_type, amount
+			   FROM employee_salary_structure
+			  WHERE employee_id = $1
+			  ORDER BY effective_from, component_code`, employeeID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var c SalaryComponent
+			var typ string
+			if err := rows.Scan(&c.ID, &c.EmployeeID, &c.EffectiveFrom, &c.EffectiveTo,
+				&c.Code, &typ, &c.Amount); err != nil {
+				return err
+			}
+			c.Type = payroll.ComponentType(typ)
+			out = append(out, c)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, fmt.Errorf("payrolldb: list salary components for employee %s: %w", employeeID, err)
+	}
+	return out, nil
+}
+
+// ListStatutoryElections returns one employee's elections, oldest window first.
+//
+// Every window, for the reason ListSalaryComponents returns every window: the
+// election in force is a function of the wage month, and a reader that showed
+// only today's would misdescribe every back-dated run.
+func (s *Service) ListStatutoryElections(ctx context.Context, employeeID uuid.UUID) ([]StatutoryElection, error) {
+	var out []StatutoryElection
+	err := s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		rows, err := tx.Query(ctx,
+			`SELECT id, employee_id, effective_from::text,
+			        COALESCE(effective_to::text, ''), pf_base,
+			        COALESCE(pf_employee_voluntary_base, 0),
+			        pf_employer_matches_voluntary, eps_member, esi_applicable,
+			        COALESCE(tax_regime, '')
+			   FROM employee_statutory_election
+			  WHERE employee_id = $1
+			  ORDER BY effective_from`, employeeID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var e StatutoryElection
+			var base, regime string
+			if err := rows.Scan(&e.ID, &e.EmployeeID, &e.EffectiveFrom, &e.EffectiveTo,
+				&base, &e.PFVoluntaryBase, &e.EmployerMatchVoluntary,
+				&e.EPSMember, &e.ESIApplicable, &regime); err != nil {
+				return err
+			}
+			// Passed through as STORED and never defaulted here. RegimeOrDefault
+			// resolves an empty election to the s.202 default on the way IN; a
+			// reader that applied it again would make a company that never chose
+			// a regime indistinguishable from one that expressly elected NEW.
+			e.PFBase = payroll.PFBase(base)
+			e.Regime = payroll.Regime(regime)
+			out = append(out, e)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, fmt.Errorf("payrolldb: list statutory elections for employee %s: %w", employeeID, err)
+	}
+	return out, nil
+}
+
+// ---------------------------------------------------------------------------
 // NULL helpers. An empty string is not the same as SQL NULL, and conflating
 // them here would store '' in a PAN column that every reader then has to guard.
 // ---------------------------------------------------------------------------

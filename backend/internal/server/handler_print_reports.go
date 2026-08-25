@@ -800,9 +800,29 @@ func (s *Server) printStockSummary(ctx context.Context, w http.ResponseWriter, r
 
 	var rows []printing.Row
 	bases := map[string]bool{}
+	// ⛔ THE SET OF BASES IS COMPUTED BEFORE THE ROWS, AND THAT ORDER IS THE
+	// FEATURE (T9). The footer has always named the basis this report was derived
+	// on, which was enough while WEIGHTED_AVG was the only one. Costing method is
+	// a property of the ITEM, so one company's Stock Summary can now mix three of
+	// them — and a footer reading "Valuation basis: FIFO, WEIGHTED_AVG" over a
+	// page of item totals tells a reader that two bases are present and NOT which
+	// item is on which, while every figure is confidently printed.
+	//
+	// So when (and only when) more than one basis appears, each item line names
+	// its own. A single-basis report — every existing company, and every existing
+	// print golden — is unchanged to the byte: the footer already says it once,
+	// and repeating it on every line would be noise.
 	for _, it := range sum.Items {
+		bases[it.ValuationMethod] = true
+	}
+	mixed := len(bases) > 1
+	for _, it := range sum.Items {
+		itemLabel := it.ItemName
+		if mixed {
+			itemLabel += " · " + it.ValuationMethod
+		}
 		rows = append(rows, printing.Row{
-			Cells: []string{it.ItemName, it.UnitSymbol,
+			Cells: []string{itemLabel, it.UnitSymbol,
 				printing.FormatQty(it.OpeningQty), printMoneyOrBlank(it.OpeningValue),
 				printing.FormatQty(it.InwardQty), printMoneyOrBlank(it.InwardValue),
 				printing.FormatQty(it.OutwardQty), printMoneyOrBlank(it.OutwardValue),
@@ -810,7 +830,9 @@ func (s *Server) printStockSummary(ctx context.Context, w http.ResponseWriter, r
 			Bold: true,
 		})
 		for _, p := range it.Positions {
-			bases[p.ValuationMethod] = true
+			// The item's own basis was already folded in above; a position
+			// cannot carry a different one (the method is on the item), and
+			// folding it here as well would let the two disagree silently.
 			rows = append(rows, printing.Row{
 				Cells: []string{printStockPositionLabel(p), p.UnitSymbol,
 					printing.FormatQty(p.OpeningQty), printMoneyOrBlank(p.OpeningValue),

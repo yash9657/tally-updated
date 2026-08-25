@@ -141,11 +141,24 @@ const RAW_BINDINGS: Record<string, KeymapAction> = {
   // 0031), so the key opens the screen for everyone and the POST is what
   // answers 403 — with a stated reason, not a blank form.
   "Alt+F10": { kind: "voucher", voucherType: "physical-stock" },
-  "Ctrl+F4": {
-    kind: "unavailable",
-    feature: "Payroll voucher (Ctrl+F4)",
-    note: "The payroll module is not built yet.",
-  },
+  // ---- THE PAY RUN (Track 3). `unavailable` ("The payroll module is not built
+  // yet") for the whole life of the project up to here, in TWO stages and for two
+  // different reasons — the same two-stage history the four stock voucher keys
+  // above have.
+  //
+  // First there was no engine. Then the engine, the statutory rates, both
+  // reports, all three statutory file emitters, EIGHT mounted routes and every
+  // one of their PDP mappings existed and there was NO SCREEN — so a
+  // keyboard-only operator could not create an employee, let alone pay one,
+  // while the note below still said the module was not built.
+  //
+  // ⛔ IT IS A SCREEN AND NOT `{ kind: "voucher", voucherType: "payroll" }`.
+  // VoucherScreen resolves its layout through configFor(voucherType), which has
+  // no payroll entry: the key would not have "partly worked", it would have
+  // taken the operator to an undefined config. And a pay run genuinely is not a
+  // voucher FORM — its lines are computed from the masters for a whole wage
+  // month, so there are no particulars to key. RESEARCH.md:903 pins the combo.
+  "Ctrl+F4": { kind: "payRun" },
   // Ctrl+F7 was ERP 9's Physical Stock key. TallyPrime moved it to Alt+F10
   // (bound above), so this profile keeps Ctrl+F7 bound — an operator with ERP 9
   // in their fingers WILL press it — but says where the key went rather than
@@ -268,6 +281,21 @@ const RAW_SCREEN_BINDINGS: Partial<
     F5: { kind: "ledgerWise" },
     "Ctrl+H": { kind: "changeView" },
     "Alt+F5": { kind: "detailed" },
+    // Alt+V — the COSTING METHOD of a stock item (T9), on the Stock Summary.
+    //
+    // ⚠️ IT IS BOUND FOR EVERY REPORT AND MEANINGFUL ON ONE, and that is a
+    // limitation of this table rather than a choice: bindings are keyed by
+    // ScreenKind, and a report reached as `report:stock-summary` has no key of
+    // its own here. Only StockSummaryScreen registers the handler, so on any
+    // other report the shell answers "does not apply on this screen" — the same
+    // way F5 (ledger-wise) already behaves on the reports that have no
+    // ledger-wise view. The alternative, leaving it unbound, is worse: the ONLY
+    // other way to re-value an item is to have chosen its method when it was
+    // created, which no existing company's items were.
+    //
+    // V for Valuation. Tally leaves Alt+V unbound in the global table, and the
+    // letter is not used by anything else in this build.
+    "Alt+V": { kind: "setValuationMethod" },
   },
   "report-detail": {
     F2: { kind: "period" },
@@ -731,6 +759,86 @@ const RAW_SCREEN_BINDINGS: Partial<
     // already on is answered by pushOnce plus ALWAYS_MEANINGFUL, not a refusal.
     ...voucherKeysHeldBack("the e-invoice screen", "invoice"),
   },
+  // =========================================================================
+  // THE FIVE PAYROLL SCREENS (Track 3).
+  //
+  // Three of them carry a FORM (the employee master, the pay run and Form 138),
+  // so all three hold the voucher keys back for the reason every form-carrying
+  // screen above does: AN UNBOUND KEY HERE IS NOT INERT — F5 opens a Payment
+  // over a half-keyed record and the frame holding it goes too.
+  //
+  // ⚠️ THE TWO READERS (the register and the payslip) DELIBERATELY DO NOT hold
+  // them back. There is no form on either to lose, and an operator reading a
+  // payslip who presses F5 to key the payment that pays it should get a Payment
+  // voucher — which is exactly what Tally does. A holdback there would be
+  // friction invented by us.
+  // =========================================================================
+  employees: {
+    // Alt+C — CREATE AN EMPLOYEE. Scoped, because the global `createMaster`
+    // pushes a LEDGER-create frame: an employee is deliberately not a member of
+    // the MasterKind union, for the same reason a cost centre is not — the
+    // server serves it under its own `employee` token and not under `master`.
+    "Alt+C": { kind: "createEmployee" },
+    // Alt+S — SET THE HIGHLIGHTED EMPLOYEE'S PAY: the salary structure and the
+    // statutory election.
+    //
+    // ⛔ A SECOND WRITE KEY ON A MASTER SCREEN, AND IT IS NOT A CONVENIENCE. An
+    // employee with neither child cannot be paid at all — cored refuses the
+    // WHOLE pay run with "no salary structure is in force" / "no statutory
+    // election is in force" — and that refusal arrives on the RUN, long after
+    // the operator left this screen believing they had created an employee.
+    // Alt+C creates the person; Alt+S is what makes them payable.
+    //
+    // ⚠️ Alt+S IS NOT A DOCUMENTED TallyPrime COMBO and is not claimed as one.
+    // The global table leaves it unbound (checked), so scoping it here takes
+    // nothing away from an operator's muscle memory.
+    "Alt+S": { kind: "setEmployeePay" },
+    F2: {
+      kind: "unavailable",
+      feature: "Period (F2)",
+      note: "The employee master has no period — it is a list of people, and each row carries its own date of joining and date of leaving. What a period applies to is the PAY RUN (Ctrl+F4) and the Payroll Register, whose dimension is a WAGE MONTH typed on the screen itself.",
+    },
+    ...voucherKeysHeldBack("the employee master", "employee record"),
+  },
+  "payroll-run": {
+    // ⚠️ Ctrl+F4 IS DELIBERATELY LEFT LIVE HERE rather than held back, exactly as
+    // Alt+Z is on the e-way bill screen: pressing the key for the screen you are
+    // already on is answered by pushOnce, not by a refusal.
+    F2: {
+      kind: "unavailable",
+      feature: "Period (F2)",
+      note: "A pay run has no period and no voucher date to set. Its dimension is a WAGE MONTH, typed on the screen itself, and the voucher's date is DERIVED from it by the server (the last day of that month) — which is also the date the back-dated cutoff judges. Setting a date here would be setting one the server overwrites.",
+    },
+    ...voucherKeysHeldBack("the pay run", "wage month"),
+  },
+  "payroll-register": {
+    // Alt+S — THE STATUTORY FILES PANEL (the EPFO ECR and the ESIC monthly
+    // return, both for the month on screen). Not a documented Tally combo; the
+    // global table leaves Alt+S unbound, and it is the same letter this build
+    // already uses for "set the pay" on the employee master, which keeps one
+    // letter meaning one family of things.
+    "Alt+S": { kind: "payrollStatutoryFiles" },
+    F2: {
+      kind: "unavailable",
+      feature: "Period (F2)",
+      note: "The payroll register has no From/To period. Every social-security scheme keys off a WAGE MONTH — contributions, the ECR, the ESI return and the whole-month tests are all functions of it — so a range would be asking for a span no scheme has an answer for. Type the month (YYYY-MM) on the screen itself; the server refuses \"2026-13\" and \"2026-1\" rather than coercing either to a neighbouring month.",
+    },
+  },
+  "payroll-payslip": {
+    F2: {
+      kind: "unavailable",
+      feature: "Period (F2)",
+      note: "A payslip has no period. It is ONE person's pay for ONE wage month, and the month came with you from the register — press Esc to go back and change it there, so the payslip and the register can never disagree about which month you are reading.",
+    },
+  },
+  "payroll-form-138": {
+    F2: {
+      kind: "unavailable",
+      feature: "Period (F2)",
+      note: "Form 138 has no From/To period. Its dimension is a TAX YEAR and a QUARTER, both typed on the screen — a quarterly statement covers whole wage months by definition, and a range would let you ask for a span the department has no return for. Q4 is refused by the server: the Annexure II record structure is not published, and guessing it would mis-file every employee's whole-year salary detail.",
+    },
+    ...voucherKeysHeldBack("the Form 138 statement", "return"),
+  },
   // Alt+L on a voucher opens its EDIT LOG. RESEARCH sec 6 pins the PLACEMENT
   // (Tally shows the Edit Log from the voucher alteration screen and the Day
   // Book) but not the combo, so this is scoped to the voucher screen rather
@@ -943,6 +1051,33 @@ export function actionLabel(action: KeymapAction): string {
       // would be pressed by an operator who thinks they are marking it delivered —
       // which is the one thing it does not do.
       return "Pre-close (abandon) this order, with a reason — NOT 'mark it delivered'";
+    case "payRun":
+      // ⛔ "Pay run" AND NOT "Payroll voucher". The label reaches the button bar
+      // and the F1 help, and an operator told "voucher" would be looking for a
+      // form with particulars to key — there is none. A pay run computes a whole
+      // WAGE MONTH from the masters and posts one voucher at the end of it.
+      return "Pay run — compute and post a whole wage month";
+    case "createEmployee":
+      return "Create an employee";
+    case "setEmployeePay":
+      // The label says what the key is FOR, not what it edits. "Salary structure"
+      // alone reads as a refinement; it is the thing without which this person
+      // cannot be paid at all.
+      return "Set this employee's salary and statutory election (needed before they can be paid)";
+    case "setValuationMethod":
+      // ⛔ IT NAMES THE CONSEQUENCE, NOT THE FIELD. This label reaches the F1
+      // help and the "does not apply on this screen" message, and an operator
+      // told "change the valuation method" would read it as a display option
+      // (which is what Tally's own Alt+N on the Balance Sheet is). This one
+      // RESTATES the books: every period the item has traded in comes back on
+      // the new basis.
+      return "Costing method of a stock item — re-values its whole history (Avg. Cost / FIFO / LIFO)";
+    case "payrollStatutoryFiles":
+      // ⛔ IT NAMES THE TWO FILES AND SAYS THEY ARE NOT VALIDATED. Neither the
+      // EPFO portal nor the ESIC portal can run in this environment, so nothing
+      // this key produces has been through one — and a label reading "file the
+      // returns" would be a claim about a filing that has not happened.
+      return "Statutory files for this month — the EPFO ECR and the ESIC return (generated, not validated)";
     case "createBom":
       return "Define a bill of materials (a recipe)";
     case "explodeBom":

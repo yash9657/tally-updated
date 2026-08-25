@@ -53,6 +53,29 @@ const ALL_SCREENS: NavSnapshot["screen"][] = [
   "cost-centres",
   "cost-centre-summary",
   "cost-category-summary",
+  // ⚠️ THESE FIVE WERE MISSING FROM THIS LIST FOR THE WHOLE LIFE OF THE T3/T5
+  // SCREENS, and the omission is the same class of hole the list exists to
+  // close: a ScreenKind absent from here is a screen the Ctrl+P coverage
+  // assertions never look at, so a screen could ship with the browser's own
+  // print dialog on Ctrl+P and every test would stay green. Added when the
+  // payroll screens went in, because adding five and leaving five out would be
+  // the same mistake with a fresher date on it.
+  "sales-orders",
+  "purchase-orders",
+  "boms",
+  "e-way-bill",
+  "e-invoice",
+  // ---- THE FIVE PAYROLL SCREENS. TWO OF THEM GENUINELY PRINT, which makes them
+  // the first entries in this list that resolve to a ROUTE rather than a
+  // sentence: `payroll-register` and `payroll-payslip` have real layouts on the
+  // server (not deferred 501s), so Ctrl+P produces a document. The other three
+  // resolve to sentences, and the key must still be BOUND on all five — which is
+  // what this list checks.
+  "employees",
+  "payroll-run",
+  "payroll-register",
+  "payroll-payslip",
+  "payroll-form-138",
 ];
 
 /** A bare snapshot for a screen, with only the fields the resolver reads. */
