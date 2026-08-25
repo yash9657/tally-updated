@@ -8496,6 +8496,41 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         "Form138.txt",
       );
     },
+
+    // ---- T14: DATA (Alt+Y) — backup and restore.
+    //
+    // ⛔ THE MOCK DOES NOT FABRICATE AN ARCHIVE, and that is the honest shape
+    // rather than a gap. A real archive is 62 tables of rows that Postgres
+    // itself serialised with to_jsonb and that a restore feeds back through
+    // jsonb_populate_record; a hand-rolled imitation here would be bytes no
+    // restore has ever read, and a screen test pinned against it would prove
+    // that the mock and the screen agree with each other and nothing more.
+    //
+    // What it DOES do is answer honestly, so the screen's failure path is the
+    // thing under test: a backup hands back a plain-text note under the real
+    // filename, and a restore REJECTS it — with the sentence the operator would
+    // see — because the mock has no database to create a company in.
+    async backupCompany(companyID) {
+      const c = ensure(companyID);
+      const note =
+        `This is the in-memory MOCK client, not cored. No archive of ${c.name} ` +
+        `(${c.id}) was produced: an archive is every row of 62 tables as ` +
+        `Postgres itself serialised them, and a hand-rolled imitation here ` +
+        `would be bytes no restore has ever read.`;
+      return {
+        blob: new Blob([note], { type: "text/plain" }),
+        filename: "mock-company.tallybak.jsonl.gz",
+        header: () => null,
+      };
+    },
+    async restoreCompany(_archive: Blob) {
+      throw new ApiError(
+        422,
+        "This is the in-memory mock client. A restore CREATES a company from an " +
+          "archive, and the mock has no database to create one in — run against " +
+          "cored to restore.",
+      );
+    },
   };
 }
 

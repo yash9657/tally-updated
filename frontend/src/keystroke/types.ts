@@ -250,7 +250,18 @@ export type ScreenKind =
   | "payroll-run"
   | "payroll-register"
   | "payroll-payslip"
-  | "payroll-form-138";
+  | "payroll-form-138"
+  /**
+   * ALT+Y — DATA (backup / restore). Tally's own surface is `Alt+Y (Data) >
+   * Backup / Restore` (RESEARCH.md:993), and Alt+Y was COMPLETELY UNBOUND in
+   * this build, so the real key was free to take.
+   *
+   * ⚠️ IT IS DELIBERATELY NOT "backup". The screen is the DATA menu: backup is
+   * one thing on it, restore is another, and Tally's third — Split Company Data
+   * — is absent on purpose (see the FeaturesScreen rows). Naming the screen
+   * after one of its three would make the other two look like intruders.
+   */
+  | "data";
 
 /**
  * An in-frame overlay: a sub-screen that keeps its parent frame alive and is
@@ -628,6 +639,18 @@ export type KeymapAction =
   | { kind: "calculator" } // Ctrl+N — calculator panel
   | { kind: "help" } // F1 / Ctrl+F1 — Help (the keystroke reference)
   | { kind: "features" } // F11 — Company Features
+  /**
+   * Alt+Y — DATA: backup and restore (T14). Tally's `Alt+Y (Data) > Backup /
+   * Restore`, RESEARCH.md:993.
+   *
+   * ⛔ A BACKUP IS THE MOST SENSITIVE READ IN THE PRODUCT — every ledger, every
+   * party, every salary, in one file — so the server models it as its own
+   * `backup` resource and not as a report. Nothing about that is enforced HERE;
+   * this binding only opens a screen. It is noted because the tempting shortcut
+   * is to reach the archive from the Export (Alt+E) machinery, which is the
+   * report path and would be authorised as one.
+   */
+  | { kind: "dataScreen" }
   | { kind: "configure" } // F12 — screen/report Configure
   | { kind: "createMaster"; masterKind: MasterKind } // Alt+C — inline create
   /**

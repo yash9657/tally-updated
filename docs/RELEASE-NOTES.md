@@ -7,6 +7,72 @@ what was wrong; this file records what a person will notice.
 
 ---
 
+## Alt+Y: a company can now be backed up, and an archive can be restored — as a NEW company
+
+**Applies to:** every company. **Feature:** T14.
+
+### What changes
+
+`Alt+Y` opens a **Data** screen with two things on it.
+
+**Backup** downloads the whole company as one compressed file
+(`<company>-<date>.tallybak.jsonl.gz`). It covers every table the database itself says
+holds this company's data — the list is derived from the live schema and shared with the
+test-data teardown, so a table added by a future migration is archived without anyone
+having to remember it. Vouchers and every version of them, the chart of accounts, the
+inventory and its movements, the statutory workflow log, and the unposted bills sitting in
+the AI inbox are all in it.
+
+⛔ **Treat the file as you would the books.** It contains every party's details and every
+salary, and anyone holding it holds all of them. It is served under its own permission
+(`backup`), which no seeded level has: an Owner can take one, and a Data Entry operator
+cannot, without anybody granting or revoking anything.
+
+### ⛔ The two things to know before you use Restore
+
+**1. A RESTORE CREATES A NEW COMPANY. IT NEVER REPLACES ONE.** There is no way to
+overwrite or delete a company in this product at all — the audit trail is immutable, and
+the same rule that stops anyone editing a posted voucher stops anyone erasing a book. So
+if the archive's company is still in the database, the restore is **refused** (409) rather
+than merged. Restore into a different database, or restore a company that is genuinely
+gone.
+
+This is a consequence of a deliberate choice: the archive keeps every internal identifier
+exactly as it was, which is what lets the restored books verify against their **original**
+hash chain. An archive that renumbered everything would restore into a company that looked
+perfect and whose audit trail attested only to itself.
+
+**2. AN ARCHIVE DOES NOT GIVE ANYBODY BACK THEIR ACCESS.** Who could open the archived
+company is recorded in the file but is never re-granted: silently restoring permissions
+from a file somebody handed you is how access is escalated by accident. Whoever performs
+the restore becomes the Owner, and **everyone else is listed by name on the screen** so
+they can be re-granted deliberately.
+
+### What else the restore refuses, and why
+
+- **A download that was cut short.** A truncated archive is still a valid compressed file
+  and still reads as far as it got, so the archive carries a per-table row count at the
+  end and the restore checks it. An incomplete file is refused with a message saying so —
+  download it again. Nothing is written; a restore is one transaction, so it is all or
+  nothing.
+- **An archive from a newer version of the product**, which would restore "successfully"
+  while quietly dropping any field added since. Upgrade first.
+- **A file that is not an archive at all.**
+
+### Split Company Data is deliberately absent
+
+Tally's Data menu has a third item, and this one does not. Tally splits a company by
+financial year because it loads the whole company into memory and cannot hold the history;
+this product keeps every year queryable at once, so splitting would be a workaround for a
+limit it does not have. The Features screen (`F11`) carries this as its own row reading
+**Not built**, with the reason, rather than folding it into the backup row.
+
+⚠️ There **is** a real feature next door and it is not built either: closing a financial
+year into a read-only archive company plus a fresh one carrying opening balances, for
+year-end and for handing a closed year to an auditor. That is archive-and-carry-forward,
+not a performance workaround.
+
+
 ## Stock groups subtotal the WHOLE BRANCH, and a compound quantity stays in its own unit
 
 **Applies to:** the Stock Summary, the stock item and unit masters, and a Tally import.

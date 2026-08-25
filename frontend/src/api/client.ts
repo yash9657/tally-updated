@@ -142,6 +142,28 @@ import type {
   UpdateSecurityLevelResponse,
 } from "./admin";
 
+/**
+ * What a restore did — and, as importantly, what it did NOT do.
+ *
+ * `membershipsNotRestored` is the field this shape exists for. company_membership
+ * is the only foreign key from tenant data to app_user, so an archive names
+ * people who need not exist in this database, and silently recreating access
+ * rights from a file somebody handed you is a privilege-escalation vector. The
+ * restore seeds the RESTORING user as Owner and reports the rest by name, so
+ * somebody has to re-grant them deliberately.
+ */
+export interface RestoreResult {
+  companyID: string;
+  companyName: string;
+  rowCount: number;
+  rows: Record<string, number>;
+  skippedTables: string[];
+  skippedRows: number;
+  membershipsNotRestored: string[];
+  sourceSchemaVersion: string;
+  schemaVersion: string;
+}
+
 export interface CoredClient {
   // Company
   createCompany(req: CreateCompanyRequest): Promise<CreateCompanyResponse>;
@@ -233,6 +255,40 @@ export interface CoredClient {
     slug: string,
     query?: Record<string, string>,
   ): Promise<{ blob: Blob; filename: string | null }>;
+
+  // ---- T14: DATA (Alt+Y) — backup and restore.
+
+  /**
+   * Download the WHOLE COMPANY as one gzipped JSON Lines archive
+   * (GET .../backup).
+   *
+   * ⛔ IT IS NOT AN EXPORT AND MUST NOT BE REACHED THROUGH THE EXPORT (Alt+E)
+   * MACHINERY. The server models an archive as its own `backup` resource
+   * precisely because migration 0011 seeds every Data Entry level a coarse
+   * `allow display report`, so anything shaped like a report is granted to every
+   * operator in every tenant — and this answers with every ledger balance, every
+   * party's PAN and address and every payslip in one file. A level without the
+   * token gets a 403, which arrives here as an ApiError and is shown verbatim.
+   */
+  backupCompany(
+    companyID: string,
+  ): Promise<{ blob: Blob; filename: string | null }>;
+
+  /**
+   * Upload an archive and CREATE the company it describes
+   * (POST /v1/companies/restore).
+   *
+   * ⛔ IT CREATES A NEW COMPANY AND NEVER REPLACES ONE. The archive preserves
+   * every primary key — which is what keeps the audit hash chain verifiable —
+   * so restoring beside the original is refused with a 409, and there is
+   * deliberately no way to overwrite a company at all: every immutability
+   * trigger refuses DELETE for every role. The screen has to SAY this before the
+   * operator picks a file, not after the server answers.
+   *
+   * It takes no companyID because the route is outside the {companyID} subtree:
+   * the company does not exist yet.
+   */
+  restoreCompany(archive: Blob): Promise<RestoreResult>;
 
   /**
    * The Bank Reconciliation Statement for one bank ledger, as at an optional

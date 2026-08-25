@@ -498,10 +498,21 @@ const FEATURES: {
   {
     group: "Data and operations",
     items: [
+      // ⛔ THIS WAS ONE ROW AND IT IS NOW TWO, DELIBERATELY. It read "Backup /
+      // restore, split company data — Not built". Backup and restore now exist;
+      // split does not, and is not going to. Flipping the single row to `on`
+      // would have absorbed a missing feature into a green badge, which is the
+      // exact failure this whole screen exists to prevent — so the row was SPLIT
+      // and the half that did not ship still says so, with its reason.
       {
-        name: "Backup / restore, split company data",
+        name: "Backup / restore (Alt+Y)",
+        state: "on",
+        note: "Alt+Y > Data. Backup downloads the whole company as one gzipped JSON Lines archive covering every table the schema itself says holds this company's data — the enumeration is DERIVED from the live catalog and shared with the test-data teardown, so a table added by tomorrow's migration is archived without anyone remembering to add it. ⛔ A RESTORE CREATES A NEW COMPANY AND NEVER REPLACES ONE, and that is what the schema permits rather than a simplification: there is no delete path for a company anywhere in this product, because every immutability trigger refuses DELETE for every role — so an archive whose company is already here is REFUSED rather than merged. It preserves every primary key, which is what keeps the audit hash chain verifiable against the ORIGINAL chain: re-minting ids would produce books that looked perfect and a chain that only attested to itself. ⛔ WHAT AN ARCHIVE DOES NOT RE-GRANT IS ACCESS. Who could open the archived company is carried in the file but never recreated — silently restoring access rights from a file somebody handed you is a privilege-escalation vector — so the restoring user becomes the Owner and everyone else is listed BY NAME to be re-granted deliberately. The archive carries a trailer with a per-table row count, and a restore refuses one whose counts do not match: a truncated download is still valid gzip and still parses, so without it a short file would restore as most of a company. It is its own permission (`backup`), not a report — a report token would be reached by the coarse `allow display report` every Data Entry level is seeded with, which would hand every operator in every tenant the entire book.",
+      },
+      {
+        name: "Split company data (by financial year)",
         state: "off",
-        note: "Not built, and absent is the honest state to be in until it can be TENANT-EXACT: a restore that leaks one company's rows into another is worse than having no backup at all, because it is silent and it is discovered by the wrong person. Use your Postgres backups meanwhile.",
+        note: "Not built, DELIBERATELY, and this row exists so that absence is visible rather than absorbed into the backup row above. Tally splits a company by financial year because it loads the whole company into memory and RAM is the binding constraint (RESEARCH.md:987); this product keeps unlimited multi-year history queryable at once, which is one of the things it competes on. Building split for parity would be building a workaround for a limit we do not have, and a worse copy of a feature is a worse answer than not needing it. ⚠️ THERE IS A REAL REASON TO BUILD SOMETHING NEXT DOOR, and it is not this one: closing a financial year into a READ-ONLY archive company plus a fresh one carrying opening balances, for statutory year-end and for handing a closed year to an auditor. That is archive-and-carry-forward, not a performance workaround, and it is not built either. If you came here from Tally's Alt+Y menu looking for the third item, this is why it is not there.",
       },
       {
         name: "Migrate from Tally (import a TallyPrime XML export)",

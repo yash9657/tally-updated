@@ -916,7 +916,7 @@ The criterion is unchanged: **how much of a real business's day is blocked.**
 | **1** | ✅ **DONE — THE IRN SCREEN** (§1.13) | Shipped and browser-verified; the row is `on`. **What is left around it is in §1.13** | — |
 | **2** | ✅ **DONE — PAYROLL SCREENS** (2026-08-25). Five screens: `employees` (Alt+C create, **Alt+S salary structure + statutory election**), `payroll-run` (Ctrl+F4), `payroll-register` (prints, exports, Alt+S produces the ECR and the ESI return, Enter drills), `payroll-payslip` (prints), `payroll-form-138`. Gateway entries for four; `Ctrl+F4` stopped being `unavailable` after the whole life of the project | ⛔ **ITS PREMISE — "no refactor, pure frontend" — WAS FALSE, AND THE WAY IT WAS FALSE IS THE FINDING.** `payrolldb.SetSalaryComponent` and `SetStatutoryElection` shipped with Track 3 and had **NO ROUTE**, so an employee created over HTTP could never be paid: every pay run answered 422 *"no statutory election is in force"*. **Every payroll test in `internal/server` sets both up by calling the Go SERVICE** (handler_payroll_test.go's fixture says so in a comment), which is exactly why eight mounted, PDP-mapped, fully-tested routes stayed unusable and nothing went red. Four routes + a vocabulary route added (`handler_payroll_structure.go`), mapped to the **existing** `employee` token so migration 0035's seeded disallow covers them with no new migration. **A ROUTE TABLE IS NOT A SURFACE** — see §1.15 | Driven in a browser end to end: employee → salary → election → pay run → register → payslip → ECR + ESI + Form 138. 34/34 probes (`frontend/scripts/drive-payroll.mjs`) |
 | **3** | ✅ **DONE 2026-08-25 — THE INVENTORY LANE: T9 FIFO/LIFO, §3 goods-on-import, T10 stock groups + compound units** (§1.16) | Three costing methods chosen per item; the Tally importer brings in items, units, godowns, batches, opening positions and **quantities**; an item hierarchy whose subtotals are the whole BRANCH, and units with a base and a conversion factor. ⛔ **The lesson is rule 2 of §1.16: AN ORACLE THAT CANNOT SEE THE DEFECT IS NOT AN ORACLE** — §3 survived a whole real-file gate because a trial balance cannot see quantity | Driven in a browser three times: **21/21** valuation, **10/10** import, **27/27** groups + compound units. `verify:demo` re-pinned at 34/34 |
-| **4** | **T14 Backup / restore / split company** | Table stakes: Tally users expect a company to be a file they can carry | Must be tenant-exact. **Reuse the `testdb` delete-plan census** — it already knows every tenant table and is anti-rot by construction |
+| **4** | ✅ **DONE 2026-08-25 — T14 BACKUP / RESTORE** (§1.17). **Split company is a STATED REFUSAL, not a gap** — the FeaturesScreen row was split in two so the half that did not ship still says so | `Alt+Y` > Data. A gzipped JSON Lines archive of every table the **live schema** says is this company's, sharing ONE enumeration with the teardown harness (`internal/platform/tenant`) — the plan said "reuse the testdb census" and `archtest` FORBIDS that, so it was extracted. ⛔ **A restore CREATES a company and cannot replace one**: there is no delete path for a company anywhere, and keys are PRESERVED because the hash chain contains them | Round trip that **DROPS the original**: census row contents + `VerifyChain` + 3 reports byte-identical. `drive-t14-data.mjs` **25/25** in a browser. `verify:demo` re-pinned 34/34 |
 | **5** | **OFFLINE ENTRY SCREEN** (§5.2) | The differentiator against Tally's LAN-only model, and it is built | A screen **plus a decision**: how does a browser present queued intents? |
 | **6** | **T8 multi-currency** → **T11 budgets** → **T13 interest** → **T12 GSTR-9** → **T16 print templates** → **SSO/OIDC last** | Ordinary Tier-2 backlog. §5.4 states the one thing not to get wrong in each | |
 
@@ -1122,6 +1122,106 @@ after creation** — both are master ALTERs and this build has none for either m
 base unit that is itself compound) is REFUSED rather than half-resolved, because resolving one level
 of two is wrong by the second factor. And the group subtotals are **on the screen only**: the export
 and the printed report carry the base-unit column but not the group table.
+
+### 1.17 ✅ T14 BACKUP / RESTORE — DONE AND DRIVEN. SPLIT COMPANY IS A STATED REFUSAL.
+
+> ## ⛔ A SECOND LIST IS THE DEFECT.
+>
+> Backup and the test-data teardown need the same answer to "which tables hold this company's
+> data". The moment they derive it from two places, a new migration's table is cleaned up and
+> **not archived**, and the omission is discovered by somebody restoring a company missing a
+> plane of its books. There is now exactly ONE enumeration and both use it.
+
+**Shipped:** `ddf1bd1` (slice 0, the census extraction) · `870d443` (slice 1, backup) ·
+`bdf55a7` (slice 2, restore) · this session (the screen, the Features row, the drive).
+`HANDOFF-T14-BACKUP-RESTORE.md` is **deleted** — it was written to be retired.
+
+| Slice | What is now true | Proof |
+|---|---|---|
+| **0** | `internal/platform/tenant` holds the schema-derived census and **nothing privileged** — no DSN, no pool, no DELETE. `Census(ctx, ConnLike)` runs on a pooled conn OR the restore's own `pgx.Tx`. `testdb` keeps only the superuser half. ⛔ **The plan file said "reuse the testdb census"; `archtest` FORBIDS production code importing `testdb`, so it had to be extracted, not reused** | `TestEveryTableIsClassified` moved WITH the registries. Mutations: dropped a `NotTenantScoped` entry (named by table); a scratch database's new `company_id` table picked up with **zero code change**; removed the archtest edge (fails only in the FULL suite) |
+| **1** | `GET .../backup` streams gzipped JSON Lines in ONE read-only transaction. Rows are Postgres's own `to_jsonb`, restored with `jsonb_populate_record` — **type-exact for bytea hashes, numerics with scale and nested jsonb, with zero per-type binding code**. Its own `backup` resource token | `TestBackupCoversEveryTableTheCensusReports`: **62 tables**, zeros included, derived from `plan.VerifySQL` — the same query the teardown residue check uses. Mutation: dropped `posting` from the loop, named with its count |
+| **2** | `POST /v1/companies/restore`, authn-only beside company creation. ONE transaction, primary keys **preserved**, membership seeded **in that same transaction** | Round trip that **DROPS the original**: census row CONTENTS + `VerifyChain` + three reports byte-identical (**179 rows / 62 tables**) |
+| **3** | `Alt+Y` → the **Data** screen. It states the consequences BEFORE the operator acts | `drive-t14-data.mjs` **25/25** in a real browser, on the file the browser downloaded |
+
+#### ⛔ THE FOUR THINGS THAT ARE NOT OBVIOUS AND WILL BE RE-DERIVED WRONGLY
+
+1. ⛔ **A RESTORE CREATES A COMPANY AND CANNOT REPLACE ONE.** There is no `DELETE /companies`
+   route anywhere and every `*_no_mutate` trigger is `BEFORE UPDATE OR DELETE` and RAISEs **for
+   every role** — which is why `testdb` needs a superuser and `session_replication_role = replica`
+   just to drop a test company. Making "restore over this company" work means putting a tenant-wipe
+   into the product. **Do not.**
+2. ⛔ **KEYS ARE PRESERVED BECAUSE THE HASH CHAIN CONTAINS THEM.** `CanonicalPayload` hashes
+   `voucher_id`, `voucher_type_id` and every `ledger_id`/`stock_item_id` — but **not** `company_id`.
+   MEASURED: only **6 of 68** primary keys include `company_id` (`voucher_head`, `ledger`, `posting`,
+   `stock_item`, `voucher_version` are all PK(id) alone), so there is no re-mint-the-company-id-only
+   variant that avoids collisions. The consequence is the 409: an archive cannot be restored beside
+   itself.
+3. ⛔ **ONE STATEMENT PER TABLE IS A CORRECTNESS MECHANISM.** 83 foreign keys, **none deferrable**,
+   and five tables reference themselves (`account_group`, `cost_centre`, `stock_group`, `unit`,
+   `gst_inward_statement`). Postgres checks a non-deferrable FK at **end of statement**, so one
+   `INSERT ... jsonb_populate_recordset` per table satisfies a self-reference whatever the row order.
+   Row-at-a-time inserts would fail whenever a child sorted before its parent.
+4. ⛔ **THE ROW PAYLOAD IS `json.RawMessage` END TO END.** Decode it into `any` and every numeric
+   goes through float64: the archive still restores, every test stays green, and the books differ in
+   the last places.
+
+#### The three rules this lane paid for
+
+1. ⛔ **A MUTATION THAT SILENTLY DOES NOTHING LOOKS EXACTLY LIKE A TEST THAT PASSED.** Two attempts
+   at "re-mint an id class on restore" were **no-ops** because they guessed schema names — the table
+   is `voucher_head`, not `voucher`, and its key is `voucher_id`, not `id`. Both "passed". Print
+   something from inside a mutation, or you are proving nothing.
+2. ⛔ **PREDICT WHICH ORACLE FIRES, THEN CHECK.** The working mutation was predicted to break the
+   census and the chain, not the reports. It broke the census and **all three reports**, and left the
+   chain intact: `voucher_head` references `voucher_version`, so the versions are inserted FIRST and
+   kept the old identity while the head took the new one. The edit log still resolved; the sale
+   vanished from every statement. **That is what the third oracle is for**, and the chain check
+   structurally could not see it.
+3. ⛔ **A REFUSAL FOR THE WRONG REASON IS A VACUOUS PROBE.** The browser drive's first truncation
+   check got a green 409 — because the company still existed and the existence check answered before
+   the trailer check ever ran. The probe now DROPS the company first. It then found a real defect:
+   a byte-truncated archive was refused by the JSON decoder with *"unexpected end of JSON input"*,
+   a true sentence an operator can do nothing with. Every truncation refusal now leads with
+   **INCOMPLETE**, and the Go test covers all three shapes (byte cut, clean early end, trailer that
+   over-claims) asserting the SENTENCE and not only the status.
+
+#### The map
+
+```
+backend/internal/platform/tenant/census.go   THE ONE ENUMERATION. No DSN, no pool, no DELETE.
+backend/internal/platform/testdb/plan.go     now a thin adapter: the admin pool + memoisation.
+backend/internal/backup/archive.go           the format; Contents states D3/D4/D5 IN THE FILE.
+backend/internal/backup/write.go             insertOrder() = plan.Order REVERSED. No table list.
+backend/internal/backup/restore.go           one tx, one statement per table, the trailer check.
+backend/internal/backup/notrestored.go       the deliberate-omission registry (company_membership).
+frontend/src/screens/DataScreen.tsx          says the consequences BEFORE the operator acts.
+frontend/scripts/drive-t14-data.mjs          25/25. Creates AND tears down its own tenant.
+```
+
+**The tests that tell you fastest if you broke something:**
+
+```
+go test ./internal/platform/tenant/ ./internal/archtest/          # the census + both edges
+go test ./internal/server/ -run 'TestBackup|TestRestore'          # backup coverage + the round trip
+cd frontend && pnpm vitest run src/screens/DataScreen.test.tsx src/screens/FeaturesScreen.test.tsx
+node frontend/scripts/drive-t14-data.mjs                          # needs cored :8087 + vite :5173
+```
+
+#### What T14 deliberately does NOT do
+
+**Split Company Data is not built and is not planned**, and the FeaturesScreen row was **SPLIT IN
+TWO** rather than flipped, so the gap stays visible instead of being absorbed by a green badge.
+Tally splits because RAM is its binding constraint (`RESEARCH.md:987`); `RESEARCH.md:1010` is our own
+positioning that unlimited hot multi-year history *"directly attacks Tally's #1 pain"*. Building
+split for parity would be building a workaround for a limit we do not have. ⚠️ **The real feature
+next door is archive-and-carry-forward** — closing a year into a read-only company plus a fresh one
+with opening balances, for year-end and for auditors. If it is built, the opening machinery already
+exists (`ledger.opening_balance`, `ledger_opening_bill`, `stock_opening`, `masters.SetStockOpening`)
+and **both halves must independently balance** — that is the gate, not "it ran".
+
+Also absent: no restore under a NEW company id (the rewrite machinery exists and is tested —
+`tenant.RewriteSpecialKey` — but nothing calls it with a different id), no scheduled or server-side
+backups, and the archive is not encrypted at rest beyond being a file the operator holds.
 
 ### 1.12 ⛔ HOW TO PARALLELISE THIS — WHAT WORKED LAST SESSION, AND WHAT MUST NOT BE SPLIT
 

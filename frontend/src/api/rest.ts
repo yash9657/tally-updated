@@ -5,7 +5,7 @@
  * filters as query params. Money stays string end to end.
  */
 
-import type { CoredClient } from "./client";
+import type { CoredClient, RestoreResult } from "./client";
 import {
   createHttpClient,
   type HttpClient,
@@ -169,6 +169,38 @@ function wireVoucher(req: VoucherRequest): VoucherRequest {
 }
 
 /** Build a REST CoredClient over an HttpClient (constructed from opts if absent). */
+/**
+ * The server's restore response, snake_case on the wire. Mapped rather than
+ * spread so a field the server renames fails HERE, in one place, instead of
+ * arriving as undefined on a screen that then renders "undefined memberships
+ * were not restored".
+ */
+interface RestoreWire {
+  company_id: string;
+  company_name: string;
+  row_count: number;
+  rows: Record<string, number>;
+  skipped_tables: string[] | null;
+  skipped_rows: number;
+  memberships_not_restored: string[] | null;
+  source_schema_version: string;
+  schema_version: string;
+}
+
+function fromRestoreWire(w: RestoreWire): RestoreResult {
+  return {
+    companyID: w.company_id,
+    companyName: w.company_name,
+    rowCount: w.row_count,
+    rows: w.rows ?? {},
+    skippedTables: w.skipped_tables ?? [],
+    skippedRows: w.skipped_rows,
+    membershipsNotRestored: w.memberships_not_restored ?? [],
+    sourceSchemaVersion: w.source_schema_version,
+    schemaVersion: w.schema_version,
+  };
+}
+
 export function createRestClient(
   opts: HttpClientOptions | { http: HttpClient } = {},
 ): CoredClient {
@@ -214,6 +246,25 @@ export function createRestClient(
     },
     printReport(companyID, slug, query) {
       return http.getBlob(`${company(companyID)}/print/reports/${slug}`, query);
+    },
+
+    // ---- T14: DATA (Alt+Y) — backup and restore.
+    backupCompany(companyID) {
+      // getBlob and NOT get: the body is gzip, and `request` reads every
+      // response as text and then tries JSON.parse, which for a compressed
+      // archive yields a lossy string rather than a file.
+      return http.getBlob(`${company(companyID)}/backup`);
+    },
+    restoreCompany(archive) {
+      // NO company() PREFIX, deliberately: the route is outside the
+      // {companyID} subtree because the company does not exist yet, so the
+      // subtree's membership check would 403 every caller before the company
+      // it names could be created.
+      return http.postRaw<RestoreWire>(
+        "/v1/companies/restore",
+        archive,
+        "application/gzip",
+      ).then(fromRestoreWire);
     },
 
     // ---- Bank reconciliation (T4).

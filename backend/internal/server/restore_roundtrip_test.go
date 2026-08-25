@@ -344,32 +344,77 @@ func TestRestoreRefusesWhenTheCompanyAlreadyExists(t *testing.T) {
 	}
 }
 
-// TestRestoreRefusesATruncatedArchive is the trailer earning its place. A
-// cut-off download is still valid gzip up to the cut and still parses as JSON
-// Lines, so without the trailer this restore would SUCCEED and produce a company
-// missing however much did not arrive.
+// TestRestoreRefusesATruncatedArchive is the trailer earning its place, in the
+// THREE shapes a short file actually arrives in.
+//
+// A cut-off download is still valid gzip up to the cut and still parses as JSON
+// Lines, so without these a restore would succeed and produce a company missing
+// however much did not arrive.
+//
+// ⛔ THE FIRST VERSION OF THIS TEST ASSERTED ONLY THE STATUS CODE, and the
+// browser drive showed why that was not enough: a byte-cut archive is refused by
+// the JSON decoder long before the trailer check, so the test was green while the
+// operator got "archive line is not a JSON record: unexpected end of JSON input"
+// — a true sentence they can do nothing with. Each case below now pins the
+// SENTENCE as well as the refusal, and cases (b) and (c) are constructed so that
+// the TRAILER is the only thing that can catch them.
 func TestRestoreRefusesATruncatedArchive(t *testing.T) {
 	srv := newServer(t)
 	companyID, _ := seedBackupCompany(t, srv)
 	archive := append([]byte(nil), fetchBackup(t, srv, companyID).Body.Bytes()...)
-
 	if err := testdb.Drop(context.Background(), uuid.MustParse(companyID)); err != nil {
 		t.Fatalf("drop: %v", err)
 	}
 
-	// Cut the gzip stream short. Everything up to the cut still inflates.
-	short := archive[:len(archive)*3/4]
-	rec, _ := postRestore(t, srv, short)
-	if rec.Code == http.StatusCreated {
-		t.Fatalf("a TRUNCATED archive restored successfully — 80%% of a company is worse than a "+
-			"failed restore (%s)", rec.Body.String())
-	}
-	if rec.Code != http.StatusUnprocessableEntity {
-		t.Errorf("truncated restore = %d, want 422 (%s)", rec.Code, rec.Body.String())
-	}
-	// And nothing landed: the whole thing is one transaction.
-	if n := len(censusRows(t, companyID)["company"]); n != 0 {
-		t.Errorf("a refused restore left %d company rows behind; it must be one transaction", n)
+	for _, tc := range []struct {
+		name  string
+		build func(t *testing.T) []byte
+		why   string
+	}{
+		{
+			// (a) The literal cut: a download that stopped. It usually lands
+			// mid-record, so the decoder is what notices.
+			name:  "cut mid-stream",
+			build: func(*testing.T) []byte { return archive[: len(archive)*3/4 : len(archive)*3/4] },
+			why:   "a download that stopped part-way",
+		},
+		{
+			// (b) A file that is PERFECTLY WELL FORMED and simply stops early:
+			// whole lines, cleanly re-gzipped, no trailer. Nothing but the trailer
+			// check can tell this from a complete archive.
+			name:  "whole lines, trailer missing",
+			build: func(t *testing.T) []byte { return rebuildArchive(t, archive, func(n int) int { return n * 3 / 4 }) },
+			why:   "an archive that ends cleanly but early",
+		},
+		{
+			// (c) The nastiest: the trailer IS there and DISAGREES. Every line
+			// parses, the file ends properly, and a restore that trusted the rows
+			// it was given would create a company missing whatever was cut.
+			name:  "trailer present but rows missing",
+			build: func(t *testing.T) []byte { return dropRowsKeepingTrailer(t, archive, 5) },
+			why:   "rows lost while the trailer still claims them",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec, _ := postRestore(t, srv, tc.build(t))
+			if rec.Code == http.StatusCreated {
+				t.Fatalf("%s restored successfully — most of a company is worse than a failed restore", tc.why)
+			}
+			if rec.Code != http.StatusUnprocessableEntity {
+				t.Errorf("%s = %d, want 422 (%s)", tc.name, rec.Code, rec.Body.String())
+			}
+			// ⛔ THE SENTENCE, not only the status. An operator who is told the
+			// archive is INCOMPLETE downloads it again; one who is told about
+			// "unexpected end of JSON input" files a bug against the wrong thing.
+			body := strings.ToUpper(rec.Body.String())
+			if !strings.Contains(body, "INCOMPLETE") {
+				t.Errorf("the refusal for %s does not tell the operator the archive is incomplete: %s",
+					tc.name, rec.Body.String())
+			}
+			if n := len(censusRows(t, companyID)["company"]); n != 0 {
+				t.Errorf("a refused restore left %d company rows behind; it must be one transaction", n)
+			}
+		})
 	}
 }
 
@@ -447,4 +492,61 @@ func rewriteHeader(t *testing.T, archive []byte, mutate func(*backup.Header)) []
 		t.Fatalf("close gzip: %v", err)
 	}
 	return out.Bytes()
+}
+
+// rebuildArchive gunzips an archive, keeps the first keep(n) of its n lines, and
+// re-gzips them cleanly. The result is a VALID gzip file of VALID JSON Lines
+// that simply stops early — which is the shape nothing but the trailer can
+// detect.
+func rebuildArchive(t *testing.T, archive []byte, keep func(n int) int) []byte {
+	t.Helper()
+	lines := archiveLines(t, archive)
+	return gzipLines(t, lines[:keep(len(lines))])
+}
+
+// dropRowsKeepingTrailer removes n row records from the middle and puts the
+// trailer back, so the file is well formed and the trailer over-claims.
+func dropRowsKeepingTrailer(t *testing.T, archive []byte, n int) []byte {
+	t.Helper()
+	lines := archiveLines(t, archive)
+	if len(lines) < n+3 {
+		t.Fatalf("archive has only %d lines; cannot drop %d rows", len(lines), n)
+	}
+	kept := append([][]byte{}, lines[:len(lines)-1-n]...)
+	kept = append(kept, lines[len(lines)-1]) // the trailer, unchanged
+	return gzipLines(t, kept)
+}
+
+func archiveLines(t *testing.T, archive []byte) [][]byte {
+	t.Helper()
+	gz, err := gzip.NewReader(bytes.NewReader(archive))
+	if err != nil {
+		t.Fatalf("gunzip: %v", err)
+	}
+	defer gz.Close()
+	sc := bufio.NewScanner(gz)
+	sc.Buffer(make([]byte, 0, 1<<20), 64<<20)
+	var out [][]byte
+	for sc.Scan() {
+		out = append(out, append([]byte(nil), sc.Bytes()...))
+	}
+	if err := sc.Err(); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	return out
+}
+
+func gzipLines(t *testing.T, lines [][]byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	for _, l := range lines {
+		if _, err := zw.Write(append(l, '\n')); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("close gzip: %v", err)
+	}
+	return buf.Bytes()
 }

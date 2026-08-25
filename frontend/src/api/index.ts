@@ -3,7 +3,7 @@
  * (i.e. ./api) and depend only on the {@link CoredClient} interface plus the
  * request/response types — never on a concrete implementation.
  */
-export type { CoredClient } from "./client";
+export type { CoredClient, RestoreResult } from "./client";
 export { createRestClient } from "./rest";
 export { createMockClient } from "./mock";
 export type { MockClientOptions } from "./mock";

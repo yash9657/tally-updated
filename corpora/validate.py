@@ -80,6 +80,14 @@ KNOWN_SCREENS = {
     "edit-log",
     "help",
     "features",
+    # T14 — DATA (Alt+Y): backup and restore. Tally's own `Alt+Y (Data) >
+    # Backup / Restore` (RESEARCH.md:993); Alt+Y was completely unbound in this
+    # build, so the real key was free to take.
+    #
+    # It is "data" and NOT "backup": the screen is Tally's Data menu, backup is
+    # one thing on it, restore is another, and Tally's third — Split Company
+    # Data — is absent on purpose and says so on its own face.
+    "data",
     # The Bank Reconciliation Statement (T4): a bank ledger's postings with the
     # ONE editable column, Bank Date. Reached from the Gateway (TallyPrime's own
     # route is Alt+G > Banking Activities); F4 picks the account.

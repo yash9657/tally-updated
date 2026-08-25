@@ -91,6 +91,11 @@ const COMPANY_SCOPED_SCREENS = new Set<NavSnapshot["screen"]>([
   // second entry point — a Go To row, or a deep link — which is exactly the kind
   // of change nobody expects to break an unrelated screen.
   "edit-log",
+  // T14 — the DATA screen (Alt+Y). It backs up ONE company, so it needs a scope
+  // for the same reason every screen above does: omit it and useCompanyID()
+  // THROWS before the screen can render anything, including the sentence
+  // explaining that a restore creates a new company rather than replacing one.
+  "data",
 ]);
 
 /**
@@ -568,6 +573,12 @@ function screenTitle(snap: NavSnapshot): string {
     // screen produces a government reference number, which this build cannot.
     case "e-invoice":
       return "e-Invoice";
+    // ⛔ THE TITLE SAYS "Data" AND NOT "Backup". The screen is Tally's Data menu
+    // — backup, restore, and a deliberate refusal of Split Company Data — and a
+    // title bar naming only the first would leave an operator looking for the
+    // other two somewhere else.
+    case "data":
+      return "Data";
     // ⛔ WITHOUT THIS CASE THE CHROME READS "Tally" — the `default` below — over a
     // screen showing a voucher's hash-chained version history. The screen itself
     // is real and honest (it renders voucher_version with tri-state chain
@@ -691,6 +702,8 @@ function hintsFor(snap: NavSnapshot): string[] {
     case "help":
       return ["Esc: Back"];
     case "features":
+      return ["Esc: Back", "F1: Help"];
+    case "data":
       return ["Esc: Back", "F1: Help"];
     // ⛔ WITHOUT THIS CASE THE STRIP FALLS TO `default` AND ADVERTISES
     // "Enter: Open" ON A SCREEN WITH NOTHING TO OPEN. The edit log is a read-only

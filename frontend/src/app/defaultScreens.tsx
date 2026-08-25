@@ -7,6 +7,7 @@ import { CompanySelectScreen } from "../screens/CompanySelectScreen";
 import { MembersScreen } from "../screens/MembersScreen";
 import { EditLogScreen } from "../screens/EditLogScreen";
 import { HelpScreen } from "../screens/HelpScreen";
+import { DataScreen } from "../screens/DataScreen";
 import { FeaturesScreen } from "../screens/FeaturesScreen";
 import { MasterCreateScreen } from "../screens/masters/MasterCreateScreen";
 import {
@@ -221,6 +222,9 @@ const StockSummaryAdapter: ScreenComponent = ({
 /** F11 Company Features adapter. */
 const FeaturesAdapter: ScreenComponent = () => <FeaturesScreen />;
 
+/** Alt+Y Data adapter: backup and restore (T14). */
+const DataAdapter: ScreenComponent = () => <DataScreen />;
+
 /**
  * Build a registry pre-populated with the default screens. Agents extend the
  * returned registry; call sites that want a clean slate construct their own
@@ -330,6 +334,13 @@ export function createDefaultRegistry(): ScreenRegistry {
     // Company Features (the honest capability inventory).
     help: HelpAdapter,
     features: FeaturesAdapter,
+    // Alt+Y — DATA: backup and restore (T14). Registered by ScreenKind and NOT
+    // as a "report:…" key, and that is the same argument the cost screens and
+    // the e-way bill make one degree sharper: the server serves the archive
+    // under the BARE `backup` token precisely so migration 0011's coarse
+    // `allow display report` can never reach it, and this screen carries a
+    // FORM (a file upload) besides.
+    data: DataAdapter,
     // Live, per-name report screens (override the generic fallback).
     "report:Day Book": DayBookScreen,
     "report:Trial Balance": TrialBalanceScreen,

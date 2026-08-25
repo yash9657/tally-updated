@@ -74,6 +74,15 @@ const RAW_BINDINGS: Record<string, KeymapAction> = {
   F1: { kind: "help" }, // Help
   "Ctrl+F1": { kind: "help" }, // Context help
   F11: { kind: "features" }, // Company Features
+  // Alt+Y — DATA (backup / restore). Tally's own surface is `Alt+Y (Data) >
+  // Backup / Restore` (RESEARCH.md:993), and Alt+Y was COMPLETELY UNBOUND in
+  // this build before T14, so the real key was free to take rather than invented.
+  //
+  // ⚠️ macOS COMPOSES Option+Y INTO "¥". Every Alt binding in this product was
+  // once found dead on a Mac while every browser test passed, which is why
+  // combos resolve on `code` and not on `key`; drive it in a test with the
+  // harness's altMac("y"), never press("Alt+y").
+  "Alt+Y": { kind: "dataScreen" },
   F12: { kind: "configure" }, // Configure (screen/report settings)
   // Alt+C — create a master inline (e.g. a new ledger from a voucher field).
   // The default master is a ledger, the by-far most common inline create; the
@@ -972,6 +981,11 @@ export function actionLabel(action: KeymapAction): string {
       // government one — from the button bar, where there is no room for the
       // disclosure the screen carries.
       return "e-Invoice (report to IRP)";
+    case "dataScreen":
+      // "Data (backup / restore)" AND NOT "Backup". The screen is Tally's Data
+      // menu; naming the key after one of the two things on it would leave an
+      // operator looking for restore under a different key that does not exist.
+      return "Data (backup / restore)";
     case "goto":
       return "Go To (keeps this screen)";
     case "switchTo":

@@ -247,7 +247,16 @@ func (s *Service) restoreInTx(
 		}
 		var env envelope
 		if err := json.Unmarshal(line, &env); err != nil {
-			return nil, fmt.Errorf("backup: archive line is not a JSON record: %w", err)
+			// ⛔ THE OVERWHELMINGLY LIKELY CAUSE IS A CUT-SHORT DOWNLOAD, and the
+			// message has to say so. A truncated archive usually ends mid-line, so
+			// the FIRST thing that fails is this decode rather than the trailer
+			// check below — and "archive line is not a JSON record: unexpected end
+			// of JSON input" is a true sentence that tells an operator nothing they
+			// can act on. Found by the browser drive, which cut an archive at 70%
+			// and got exactly that.
+			return nil, fmt.Errorf(
+				"backup: the archive is INCOMPLETE and was not restored — it ends mid-record, which "+
+					"means the download was CUT SHORT. Download it again. (%w)", err)
 		}
 		switch env.Kind {
 		case KindHeader:
@@ -299,7 +308,11 @@ func (s *Service) restoreInTx(
 		}
 	}
 	if err := sc.Err(); err != nil {
-		return nil, fmt.Errorf("backup: read archive: %w", err)
+		// A gzip stream cut mid-block surfaces here as an unexpected EOF. Same
+		// cause, same sentence: the operator needs to know to download it again.
+		return nil, fmt.Errorf(
+			"backup: the archive is INCOMPLETE and was not restored — the compressed stream ends "+
+				"before it should, which means the download was CUT SHORT. Download it again. (%w)", err)
 	}
 	if err := flush(); err != nil {
 		return nil, err
@@ -459,9 +472,9 @@ func quoteIdent(s string) string {
 func checkTrailer(trailer *Trailer, seen map[string]int64) error {
 	if trailer == nil {
 		return errors.New(
-			"backup: the archive has no trailer, which means the download was CUT SHORT — a truncated " +
-				"archive is still valid gzip and still parses, so the trailer is the only thing that can " +
-				"tell a complete file from most of one. Download it again")
+			"backup: the archive is INCOMPLETE and was not restored — it has no trailer, which means the " +
+				"download was CUT SHORT. A truncated archive is still valid gzip and still parses, so the " +
+				"trailer is the only thing that can tell a complete file from most of one. Download it again")
 	}
 	var bad []string
 	for table, want := range trailer.Counts {

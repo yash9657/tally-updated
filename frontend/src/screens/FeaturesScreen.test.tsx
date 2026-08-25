@@ -215,3 +215,59 @@ describe("F11 s.394(2) declarations", () => {
     expect(values).toContain("206C(1)-SCRAP");
   });
 });
+
+/**
+ * T14 — THE ROW THAT WAS SPLIT IN TWO.
+ *
+ * It read "Backup / restore, split company data — Not built". Backup and restore
+ * now exist; split does not and is not going to. Flipping the single row to "On"
+ * would have absorbed a missing feature into a green badge, which is the exact
+ * failure this whole screen exists to prevent — so the row was SPLIT, and the
+ * half that did not ship still says so with its reason.
+ *
+ * ⛔ THE MUTATION THIS PINS is the tempting one-line change: flip the old row to
+ * "On" and move on. These assertions go red on it.
+ */
+describe("F11 — backup / restore shipped, split company data did not", () => {
+  function badgeFor(namePattern: RegExp): string {
+    const cell = screen.getByText(namePattern);
+    const row = cell.closest("tr");
+    return row?.firstElementChild?.textContent?.trim() ?? "";
+  }
+  function noteFor(namePattern: RegExp): string {
+    return screen.getByText(namePattern).closest("tr")?.textContent ?? "";
+  }
+
+  it("the old combined row is GONE — a half-true row is the failure mode", () => {
+    renderFeatures();
+    expect(screen.queryByText(/^Backup \/ restore, split company data$/)).toBeNull();
+  });
+
+  it("backup / restore reads On, and names the key that reaches it", () => {
+    renderFeatures();
+    expect(badgeFor(/^Backup \/ restore \(Alt\+Y\)/)).toBe("On");
+    // The rule this screen holds itself to: a row flips in the change that gives
+    // the operator a SCREEN, not the change that gave them a route.
+    expect(noteFor(/^Backup \/ restore \(Alt\+Y\)/)).toMatch(/Alt\+Y/);
+  });
+
+  it("...and its note states the two consequences an operator must know first", () => {
+    renderFeatures();
+    const note = noteFor(/^Backup \/ restore \(Alt\+Y\)/);
+    expect(note, "a restore creates a company rather than replacing one").toMatch(
+      /CREATES A NEW COMPANY AND NEVER REPLACES ONE/,
+    );
+    expect(note, "an archive does not re-grant access").toMatch(/privilege-escalation/);
+  });
+
+  it("⛔ split company data STILL reads Not built, with the reason", () => {
+    renderFeatures();
+    expect(badgeFor(/^Split company data/)).toBe("Not built");
+    const note = noteFor(/^Split company data/);
+    // "Not built" alone reads as a gap. The claim is that the limit split works
+    // around is Tally's and not this product's — so the row has to say it.
+    expect(note).toMatch(/DELIBERATELY/);
+    expect(note).toMatch(/memory|RAM/i);
+    expect(note).toMatch(/multi-year/i);
+  });
+});

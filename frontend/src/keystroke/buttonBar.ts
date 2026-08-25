@@ -435,6 +435,21 @@ const READER_BAR: readonly ButtonBarItem[] = [
   item("Ctrl+G", "Switch To"),
 ];
 
+/**
+ * THE DATA SCREEN (Alt+Y) — backup and restore.
+ *
+ * Ctrl+A is not offered and that is deliberate: this screen has nothing to
+ * "accept". Its two actions are a download and an upload, each with its own
+ * consequence, and a generic Accept would have to pick one of them for the
+ * operator.
+ */
+const DATA_BAR: readonly ButtonBarItem[] = [
+  item("Esc", "Back"),
+  item("Alt+G", "Go To"),
+  item("Ctrl+G", "Switch To"),
+  item("F1", "Help"),
+];
+
 /** The AI-native screens (Bill Inbox, Ask your books). */
 const AI_BAR: readonly ButtonBarItem[] = [
   item("F1", "Help"),
@@ -522,6 +537,8 @@ export function buttonBarFor(
     case "help":
     case "features":
       return READER_BAR;
+    case "data":
+      return DATA_BAR;
     case "bill-inbox":
     case "query":
       return AI_BAR;

@@ -17,7 +17,20 @@
 
 ## 0. THE HEADLINE — READ THIS FIRST, IT CHANGES WHAT YOU DO
 
-> ### ✅ 2026-08-25 (LATEST) — §1, §2 AND §3 ARE ALL **DONE**. THE NEXT TRACK IS **§4 (T14)**.
+> ### ✅ 2026-08-25 (LATEST) — §1, §2, §3 **AND §4** ARE ALL **DONE**. THE NEXT TRACK IS **§5 (THE OFFLINE ENTRY SCREEN)**.
+>
+> **T14 (backup / restore)** shipped in `ddf1bd1` (the census extraction), `870d443` (backup) and
+> `bdf55a7` (restore), with the screen, the Features row and `drive-t14-data.mjs` (**25/25**) this
+> session. ⛔ **It is folded into `HANDOFF.md` §1.17 — read that, not §4 below, whose state is spent.**
+>
+> ⛔ **AND §4'S OWN ADVICE DID NOT COMPILE.** It said "reuse `internal/platform/testdb`'s delete-plan
+> census", as five handoffs before it did. `internal/archtest` FORBIDS production code importing
+> `testdb` (it carries a superuser DSN and a tenant-wipe), so the census had to be EXTRACTED into
+> `internal/platform/tenant` first. The instinct behind the advice was right — a second list is the
+> defect — and the instruction was not executable. §1.17 carries the corrected version.
+>
+> **Split company data is NOT built and is a stated refusal**, not a gap: the FeaturesScreen row was
+> SPLIT IN TWO so the half that did not ship still says so, with its reason.
 >
 > **T9 (FIFO/LIFO)** shipped in `d574aa2`, driven 21/21. **§3 (inventory masters and quantities on
 > import)** shipped in `64887c4`, driven 10/10. **T10 (stock groups and compound units)** shipped in
@@ -260,13 +273,22 @@ back as `Kg`). So creating them from an import is completing a path, not half a 
 
 ---
 
-## 4. T14 BACKUP / RESTORE / SPLIT COMPANY
+## 4. ✅ SPENT — T14 BACKUP / RESTORE (SPLIT COMPANY IS A STATED REFUSAL)
+
+> ⛔ **DONE. See `HANDOFF.md` §1.17.** This section is kept only for the reasoning that produced it,
+> and for the record of how its one instruction was wrong.
 
 Table stakes: Tally users expect a company to be a file they can carry.
 
-⛔ **Must be tenant-exact.** **Reuse `internal/platform/testdb`'s delete-plan census** — it already
-enumerates every tenant table and is anti-rot by construction, so it cannot silently miss a table a
-later migration added. Writing a second list of "all the tenant tables" is how backup quietly drops one.
+⛔ **Must be tenant-exact.** ~~**Reuse `internal/platform/testdb`'s delete-plan census**~~ — the
+instinct was right and **the instruction was not executable**. `internal/archtest`'s
+`TestNoProductionCodeImportsTestdb` walks every non-test `.go` file and forbids production code
+importing `testdb`, because it carries a hardcoded superuser DSN and a routine that disarms every
+immutability trigger and mass-deletes a tenant. The census was therefore **EXTRACTED** into
+`internal/platform/tenant` — a production package with no DSN, no pool and no DELETE — which
+`testdb` and `internal/backup` now share. The reasoning the sentence was reaching for stands and is
+the package comment: *writing a second list of "all the tenant tables" is how backup quietly drops
+one*, and it is discovered by whoever restores.
 
 ---
 

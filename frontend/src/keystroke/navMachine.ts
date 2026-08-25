@@ -1103,6 +1103,19 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
       return pushOnce("features");
     }
 
+    case "dataScreen": {
+      // Alt+Y — DATA (backup / restore). pushOnce so pressing it twice does not
+      // stack two of them, the same treatment Help, Features and the company
+      // picker get.
+      //
+      // It is reachable from ANY screen, deliberately: a backup is a thing an
+      // operator decides to take, not a thing they navigate to, and Tally's own
+      // Alt+Y is global too. The voucher-key hold-back that guards the create
+      // forms does not apply in reverse — leaving a half-keyed voucher to take a
+      // backup is the operator's call, and Esc brings them straight back.
+      return pushOnce("data");
+    }
+
     case "switchCompany": {
       // F3 — the company picker. pushOnce so pressing F3 twice does not stack
       // two pickers (the same treatment Help and Features get).
