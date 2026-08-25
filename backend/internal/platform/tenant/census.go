@@ -309,12 +309,18 @@ func DeleteFor(table, predicate string) string {
 	return `DELETE FROM ` + table + ` WHERE ` + strings.ReplaceAll(predicate, IDParam, "$1")
 }
 
-// SelectFor renders a SpecialTenancy predicate as the backup's SELECT, binding
-// the company id as $1. Generated from the SAME predicate as the DELETE, so a
-// table can never be backed up by one definition of tenancy and deleted by
-// another.
-func SelectFor(table, predicate string) string {
-	return `SELECT * FROM ` + table + ` WHERE ` + strings.ReplaceAll(predicate, IDParam, "$1")
+// RenderPredicate renders a registered SpecialTenancy predicate with the company
+// id bound to a caller-chosen positional parameter, so a backup's SELECT, a
+// teardown's DELETE and a residue count are all generated from the SAME string.
+//
+// It exists so that no caller ever re-spells a predicate. That is not a style
+// preference: statutory_step's tenancy used to be re-spelled by the residue
+// query, and with one entry registered the duplication was invisible — a second
+// entry would have been deleted by its own predicate and verified by
+// statutory_step's, so a wrong predicate would delete nothing, count nothing,
+// and report success while orphaning tenant rows.
+func RenderPredicate(predicate, param string) string {
+	return strings.ReplaceAll(predicate, IDParam, param)
 }
 
 // ScopedTables returns table -> isText for every public BASE TABLE with a

@@ -101,6 +101,29 @@ var KnownResources = append([]Resource{
 	"sync",     // offline sync commit
 	"query",    // conversational query
 	"security", // users, memberships and security levels (this admin surface)
+
+	// WHOLE-COMPANY BACKUP (T14): GET /v1/companies/{id}/backup, one archive of
+	// every table the tenant census covers.
+	//
+	// WHY IT IS ITS OWN TOKEN AND NOT `report`, WHICH IS THE MISTAKE THIS LINE
+	// EXISTS TO PREVENT. Migration 0011 grants the seeded Data Entry level a
+	// coarse `allow display report`, so a whole-company export modelled as
+	// report:NAME would be granted to every operator in every tenant on the day
+	// it shipped, by inheritance, without anybody deciding to — and unlike a
+	// single report this one answers with the entire book: every ledger balance,
+	// every party's PAN and address, every employee's payslip and bank details.
+	//
+	// WHY NOT `company` EITHER. Migration 0022 seeds Data Entry `allow display
+	// company` so the client can hydrate the home state code for the GST split.
+	// Reusing that token would make "an operator may read which state we are in"
+	// and "an operator may download the whole company" the same permission, with
+	// no narrowing form in which to separate them again afterwards.
+	//
+	// It needs no ACL migration: Data Entry's default_access is 'none' and no
+	// seeded rule names `backup`, so it is DENIED for every seeded non-Owner
+	// level for free — the same treatment tds-challan, cost-centre, sales-order,
+	// purchase-order and bom all shipped with.
+	"backup",
 	// Price lists (INV-L, migration 0030): named rates for stock items over a
 	// date window, optionally narrowed to a party group.
 	//

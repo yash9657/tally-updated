@@ -448,7 +448,28 @@ var allowedDeps = map[string]map[string]bool{
 	// cleaned up but not backed up, and the omission surfaces as a restored company
 	// missing a plane of its books.
 	"internal/platform/tenant": {},
+	// backup (T14) is whole-company archive out and whole-company restore in.
+	// TWO EDGES AND NO MORE, and the ones it does NOT have are the point:
+	//
+	// ⛔ NOT internal/ledger. A restore INSERTs archived rows verbatim, because
+	// preserving primary keys is what preserves the hash chain (CanonicalPayload
+	// contains voucher_id and every ledger/stock id). A backup package that could
+	// call ledger.Post would be a SECOND voucher path — one that mints new ids,
+	// re-derives hashes and would attest to a chain it had just written itself.
+	//
+	// ⛔ NOT internal/masters, internal/identity or internal/reporting, for the
+	// same reason stated from the other side: an archive is rows in and rows out.
+	// The moment restore goes through a service, the restored company stops being
+	// the archived one and starts being whatever today's defaulting produces.
+	//
+	// It reaches platform/tenant for the census — the ONE enumeration, shared with
+	// the teardown harness — and platform/db for the transaction.
+	"internal/backup": {
+		"internal/platform/db":     true,
+		"internal/platform/tenant": true,
+	},
 	"internal/server": {
+		"internal/backup":      true,
 		"internal/platform/db": true,
 		"internal/authn":       true,
 		"internal/authz":       true,

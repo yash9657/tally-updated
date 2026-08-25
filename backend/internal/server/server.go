@@ -37,6 +37,7 @@ import (
 
 	"github.com/khata/cored/internal/authn"
 	"github.com/khata/cored/internal/authz"
+	"github.com/khata/cored/internal/backup"
 	"github.com/khata/cored/internal/banking"
 	"github.com/khata/cored/internal/bankstatement"
 	"github.com/khata/cored/internal/compliance"
@@ -177,6 +178,16 @@ type Server struct {
 	// itc is input-tax-credit reconciliation: the GSTR-2B/2A inward statements
 	// ingested into gst_inward_statement + gst_inward_document (migration 0032),
 	// matched against purchase vouchers to decide what credit is claimable.
+	// backup is T14: whole-company archive out, whole-company restore in.
+	//
+	// ⛔ IT IS NOT A REPORT AND MUST NEVER BE MODELLED AS ONE. Migration 0011
+	// grants the seeded Data Entry level a coarse `allow display report`, so a
+	// `report:NAME` token is GRANTED to every operator in every tenant the moment
+	// it exists. A backup is the most sensitive read in the product — every
+	// ledger, every party, every salary, in one file — so it carries its own
+	// `backup` resource token, which a level that never mentions it is DENIED.
+	backup *backup.Service
+
 	itc *itc.Service
 	// payroll is the employee master, the pay run and the register/payslip read
 	// models over the tables migration 0034 created. It posts salary vouchers
@@ -340,11 +351,16 @@ func New(ctx context.Context, appDSN string) (*Server, error) {
 		// the print path is under the same NOBYPASSRLS role and the same
 		// tenant-scoped transactions as every report.
 		printStore: printingdb.NewStore(pool.Raw()),
-		verifier:   verifier,
-		signer:     signer,
-		authStore:  authzStore,
-		authzSeed:  authzStore,
-		authAdmin:  authzStore,
+		// backup (T14) serialises one company to a portable archive and restores
+		// one into a company that does not yet exist. It reaches ONLY platform/db
+		// and platform/tenant: an archive is rows in and rows out, and a package
+		// that could call ledger.Post would be a second, unaudited voucher path.
+		backup:    backup.New(pool),
+		verifier:  verifier,
+		signer:    signer,
+		authStore: authzStore,
+		authzSeed: authzStore,
+		authAdmin: authzStore,
 		// Password login (WS-A1). Same concrete store; a distinct interface
 		// because it operates on the pre-auth side of the boundary.
 		credentials: authzStore,
@@ -617,6 +633,21 @@ func (s *Server) routes() {
 		// voucherDateFromRequest returns nil for a route with none, which is
 		// correct: a policy switch is not a dated document.
 		r.Put("/", s.handleUpdateCompany)
+
+		// WHOLE-COMPANY BACKUP (T14). One gzipped JSON Lines archive of every
+		// table the tenant census says holds this company's data.
+		//
+		// TWO-TOUCH RULE: inert without the matching `GET "/backup"` arm in
+		// routeAction(). TestEveryCompanyRouteIsMappedAndInVocabulary walks THIS
+		// router and turns the suite red if the arm is missing, so the gap cannot
+		// ship as a 403 for the Owner.
+		//
+		// ⛔ ITS RESOURCE TOKEN IS `backup` AND NOT `report:NAME`. Migration 0011
+		// seeds Data Entry a coarse `allow display report`, so a report token is
+		// granted to every operator in every tenant the day it exists — and this
+		// route emits every ledger, every party and every salary as one file. See
+		// handler_backup.go.
+		r.Get("/backup", s.handleBackupCompany)
 
 		// ===================================================================
 		// THE AI BILL INBOX — cored's PROXY into insightd (register row D49).

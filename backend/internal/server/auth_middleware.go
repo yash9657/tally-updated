@@ -1274,6 +1274,28 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 	case method == http.MethodPut && (rest == "" || rest == "/"):
 		return authz.Alter, "company", "", true
 
+	// WHOLE-COMPANY BACKUP (T14): a Display over its OWN `backup` token.
+	//
+	// ⛔ NOT report:NAME, AND THIS IS THE WHOLE SECURITY ARGUMENT FOR THE ROUTE.
+	// Migration 0011 seeds the Data Entry level a coarse `allow display report`,
+	// so any resource spelled report:<something> is GRANTED to every operator in
+	// every tenant the moment it appears. This route answers with every ledger,
+	// every party's PAN and address and every payslip in one file. `backup` is a
+	// token no seeded level mentions and Data Entry's default_access is 'none',
+	// so it is default-DENIED for every seeded non-Owner level — which is why
+	// this line needs NO ACL migration, exactly as tds-challan, cost-centre,
+	// sales-order, purchase-order and bom shipped with zero acl_rule rows.
+	//
+	// ⛔ AND NOT `company` EITHER, even though the token exists and is convenient.
+	// Migration 0022 seeds Data Entry `allow display company` so the client can
+	// read the home state code; folding the backup into that token would hand
+	// every operator the entire book by inheritance, without anybody deciding to.
+	//
+	// A Display, so it does NOT inherit the WebAuthn step-up or the back-dated
+	// write cutoff — both gate on Action.IsWrite(), and a read carries no date.
+	case method == http.MethodGet && rest == "/backup":
+		return authz.Display, "backup", "", true
+
 	// Masters.
 	case method == http.MethodPost && isMasterPath(rest):
 		return authz.Create, "master", "", true
