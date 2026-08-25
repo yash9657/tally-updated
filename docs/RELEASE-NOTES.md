@@ -62,6 +62,42 @@ nothing is created; you are never quietly made the Owner of a new empty company.
 
 ---
 
+## A closed period now also stops a Tally import — including a real Tally file
+
+**Applies to:** importing a Tally XML export into a company whose security level has
+a back-dated cutoff set (Admin > Security Levels > "backdated cutoff").
+**Register:** §7.2, door 7.
+
+### What changes
+
+Setting a back-dated cutoff is what an owner does the day a quarter's returns are
+filed: from then on nobody may post into that period. It worked on every screen,
+and on the Tally import — **but only for import files saved as UTF-8.**
+
+Files that Gateway of Tally writes are **UTF-16**. On those, the check that decides
+whether a body contains any vouchers at all could not read the bytes, concluded
+there were none, and let the import through untouched. So a real, unmodified export
+straight out of Tally could post vouchers dated inside a filed period, in bulk —
+while typing a single voucher of the same date into the same company was refused.
+The same blind spot meant editing or deleting a previously-imported voucher through
+an import file did not ask for the passkey confirmation it should have.
+
+Both now behave the same for every file, whatever it is saved as.
+
+⛔ **If you have imported a Tally file into a company with a cutoff set, check what
+landed in the closed period.** The import reported success and the vouchers are
+ordinary vouchers — nothing about them looks unusual in the day book. The Day Book
+for the closed dates, or a Trial Balance as at the cutoff compared against your
+filed figures, is where a difference would show.
+
+⚠️ **Imports are not otherwise restricted, and this is worth knowing before you set
+a cutoff.** A file whose vouchers are all on or after the cutoff imports exactly as
+before. Only vouchers dated into the closed period are refused — and the whole file
+is refused together, because one import posts every voucher in it, so a file
+containing even one back-dated voucher must be split or the cutoff moved.
+
+---
+
 ## One supplier bill can now only ever become one voucher — from any machine
 
 **Applies to:** accepting a supplier bill from the Bill Inbox (Ctrl+A on the F9 screen).

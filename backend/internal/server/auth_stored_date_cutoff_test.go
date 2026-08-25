@@ -51,6 +51,7 @@ package server
 // is this repository's signature failure.
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -636,9 +637,24 @@ func tallyVoucher(action, guid, date, voucherNo string) string {
 }
 
 // importXML posts a raw Tally envelope through the real router.
+//
+// ⚠️ It delegates to importXMLBytes rather than building the request itself,
+// because the UTF-16 arm (auth_backdated_tally_utf16_http_test.go) has to post
+// bytes that are NOT valid UTF-8 and must reach the router through the SAME call
+// this one uses. Two request builders is how one of them keeps a header the other
+// loses — and this route's whole defect history is peeks and handlers disagreeing
+// about the same bytes.
 func importXML(t *testing.T, s *Server, base, tok, xml string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, base+"/import/tally-xml", strings.NewReader(xml))
+	return importXMLBytes(t, s, base, tok, []byte(xml))
+}
+
+// importXMLBytes posts a raw Tally envelope as BYTES — the form a real export
+// arrives in, which is UTF-16LE and therefore not expressible as a Go string
+// without re-encoding it.
+func importXMLBytes(t *testing.T, s *Server, base, tok string, body []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, base+"/import/tally-xml", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+tok)
 	req.Header.Set("Content-Type", "application/xml")
 	rec := httptest.NewRecorder()

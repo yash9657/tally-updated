@@ -86,13 +86,35 @@ const (
 	// the door with a 413, so the commercial migration path could not be walked at
 	// all with the very first genuine file it met.
 	//
-	// ⚠️ THE COST OF THIS NUMBER IS MEMORY, AND IT IS NOT LINEAR IN IT. The
-	// back-dating peek buffers the whole body (drainBody) before the handler reads
-	// it, and the importer then builds a parse tree several times the size of the
-	// text. A body at this cap can cost well over a gigabyte of heap. It is raised
-	// to what a real export needs and no further; the actual fix is a STREAMING
-	// import that decodes TALLYMESSAGE by TALLYMESSAGE and never holds the
-	// document, which would let this cap come back down.
+	// ⚠️ THE COST OF THIS NUMBER IS MEMORY — BUT NOT THE MEMORY AN EARLIER VERSION
+	// OF THIS COMMENT NAMED, AND THE DIFFERENCE CHANGES WHAT THE FIX IS.
+	//
+	// It said "the importer builds a parse tree several times the size of the text"
+	// and "a body at this cap can cost well over a gigabyte of heap", and concluded
+	// the answer was a streaming decode. MEASURED 2026-08-25, on a document shaped
+	// like a real export (~200 mostly-empty unmapped elements per master, which is
+	// what TallyPrime writes):
+	//
+	//	document                       202.5 MiB (UTF-16LE)
+	//	live parse tree                 25.5 MiB   <- 0.1x the document, not 3x
+	//	total allocated, full parse   1352   MiB   <- the "gigabyte", and it is CHURN
+	//	total allocated, streaming    1346   MiB   <- streaming does not avoid it
+	//
+	// encoding/xml discards every element the structs do not model, so the tree is a
+	// FRACTION of the text; the gigabyte is tokenising churn, which a streaming walk
+	// incurs identically. So the three real costs, largest first, are: tokenising
+	// this body THREE TIMES per request (drainBody buffers it, then each of the two
+	// XML peeks parses it, then the handler parses it again); the body buffer itself;
+	// and only then the tree. Streaming removes the smallest one and would make us
+	// tokenise MORE often, because the importer needs three passes over the messages.
+	//
+	// ⛔ THE CHANGE THAT PAYS IS PARSE ONCE — parse from r.Body in the middleware
+	// after the membership check, memoise the envelope on the request context, and
+	// have both peeks and the handler read that one envelope. It cuts the churn ~3x,
+	// removes the body buffer (NewTallyDecodeReader already streams), and makes it
+	// structurally impossible for the peeks and the handler to disagree about the
+	// file — which is what every one of §7.2's seven doors has been. See HANDOFF.md
+	// §1.11 item B. This cap stays at what a real export needs.
 	maxXMLBody = 128 << 20 // 128 MiB
 	// Sized for a phone photo of a bill (the OCR spike's ~12 MP case) once
 	// base64 has grown it by a third, with headroom — and deliberately well
@@ -4241,10 +4263,42 @@ func peekTallyXMLVoucherDate(body []byte) *time.Time {
 // comments and whitespace and hands back the first real element — which is the
 // same thing encoding/xml will hand the importer.
 func isTallyEnvelope(body []byte) bool {
-	dec := xml.NewDecoder(bytes.NewReader(body))
+	// ⛔⛔ THROUGH NewTallyDecodeReader, AND THAT WORD IS THE WHOLE FIX (2026-08-25).
+	//
+	// This decoded the RAW BYTES. Every real TallyPrime export is UTF-16LE — that
+	// is defect #1 of the seven T32 found — so `xml.Decoder` hit "invalid UTF-8"
+	// on the first byte pair, this returned FALSE, and false means "not an
+	// envelope, no voucher can hide in it". Measured on the corpus fixture that
+	// carries the real shapes, on IDENTICAL BYTES:
+	//
+	//	integration.ParseTallyEnvelope  ->  12 messages, 1 voucher, DATED
+	//	peekTallyXMLVoucherDate         ->  nil   (the cutoff does not apply)
+	//	peekTallyXMLSupersededGUIDs     ->  []    (the step-up names nothing)
+	//	CONTROL, the same document in UTF-8  ->  2025-04-10, seen correctly
+	//
+	// So the back-dated cutoff and the superseded-voucher step-up were BOTH inert
+	// on the only encoding a real Tally file actually uses, while the importer
+	// read that same file perfectly and posted every voucher in it. An operator
+	// who cannot key one back-dated journal could import ten thousand of them.
+	//
+	// ⚠️ T32 BELIEVED IT HAD FIXED THIS AND HAD NOT. It fixed the ENVELOPE SHAPE
+	// (BODY > IMPORTDATA > REQUESTDATA) in both peeks, so they now walk a real
+	// export's messages — but they never get there, because this gate upstream of
+	// them still could not read the bytes. A fix to the second stage of a pipeline
+	// is worth nothing while the first stage returns false.
+	//
+	// It is the SAME rule this file states six times over for JSON, in XML: A PEEK
+	// THAT DECIDES A WRITE'S FATE MUST DECODE THE BODY THE WAY THE HANDLER DECODES
+	// IT. The handler decodes it with NewTallyDecodeReader. So does this now.
+	dec := xml.NewDecoder(integration.NewTallyDecodeReader(bytes.NewReader(body)))
 	// Lenient for the same reason ParseTallyEnvelope is: real Tally exports
 	// declare namespace prefixes (xmlns:UDF) that the strict decoder rejects.
 	dec.Strict = false
+	// Anything reaching the decoder is already UTF-8, so a declared encoding is
+	// passed straight through rather than refused as unsupported — ParseTallyEnvelope
+	// does exactly this, and a peek that refused what the parser accepts would be
+	// the same disagreement in the other direction.
+	dec.CharsetReader = func(_ string, input io.Reader) (io.Reader, error) { return input, nil }
 	for {
 		tok, err := dec.Token()
 		if err != nil {

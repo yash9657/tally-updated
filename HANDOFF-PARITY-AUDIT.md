@@ -954,7 +954,7 @@ WORK"** — not "hard to fix".
 | **D96** | 32 | LOW | ⚠️ **insightd's OPTIONAL STATISTICAL FORECAST STILL HAS NO RENDERER — extracted from D22 on closure rather than buried inside it.** This is D72's one surviving clause. D72 was closed 2026-08-21 because its MONEY half was already fixed (`ForecastRequest` takes fixed-4 `Money` strings, gated with a non-vacuity arm), and its remaining clause — *"still not reachable from the keyboard"* — was folded into D22. ⛔ **L16 CLOSED D22 WITHOUT CLOSING THIS**, and the distinction is real rather than pedantic: D22's door was built over **cored's** `GET /cash-flow`, a deterministic open-bill settlement projection. This is a **different service** (insightd), a different endpoint, and a genuinely different method — a STATISTICAL forecast, which cored's own `method` string goes out of its way to say it is not (*"deterministic; no statistics, no model"*). Wiring one did not wire the other. ✅ It already declares `estimate: true` and its own method, so the disclosure work is done on its side. | ✅ DONE — deleted. `insightd/insightd/forecast/` · `api/routes_forecast.py` · `requirements-forecast.txt` · `tests/test_forecast_{api,backtest,no_cored_write}.py`, and the optional mount in `api/app.py` | ✅ CLOSED L19 2026-08-24 — **DELETED, not built.** The user's answer to the row's own prior question (§6.8): cored's projection is explainable to an auditor bill by bill, and a second cash-forward number by a different method with no auditor story invites exactly the confusion the Cash Flow disclosure block exists to prevent. The package, the route, the optional dependency pin and its three test modules are gone; `tests/test_forecast_plane_is_gone.py` keeps them gone. ⚠️ **Needs NO report name and NO ACL counterweight** — contrast D95/0076, which existed because the forecast plane's CORED reports ARE reachable. ⛔ **This LOWERS D49 from 9 routes to 8.** See §7.5 L19 |
 | **D97** | — | LOW | ✅ **CLOSED L26 2026-08-24.** A level denied `report:bills-payable` could still read the same figures as `GET /outstandings?kind=PAYABLE` — `routeAction` maps the FLAT LITERAL PATH to the PDP resource and a query parameter never reaches it, so **the rule governed the DOOR, not the bytes**. It was NOT patchable where it was found: that read is what the BILL-WISE PICKER uses when a clerk keys a Payment, and refusing it there pushes the money onto ON ACCOUNT. **The user took the design decision** (options put 2026-08-24): (1) the picker gets a PARTY-SCOPED door authorised as **the VOUCHER CLASS being keyed** — `GET /vouchers/{class}/open-bills/{ledgerID}?kind=` — because that is the authority a clerk keying the voucher already holds (migration 0011 seeds `allow display <class>`), so **NO migration is needed and no default-deny level can silently lose its picker on upgrade**; and (2) `?kind=PAYABLE` is **RETIRED** from BOTH ageing doors — JSON *and* PRINTED — with a **308** to `/bills-payable`, so a stale bookmark stays an ANSWER and the refusal still comes from the MIDDLEWARE rather than from a first-ever in-handler 403. The ledger is a PATH segment so there is **no unscoped form of the route to serve** — structure, not validation. The picker also stops over-reading: it used to fetch the WHOLE ageing report and narrow it in the browser; the route emits ONE party, no slab totals, no grand total. ⚠️ **RESIDUAL, STATED NOT HIDDEN:** a level with `display payment` can call the route once per supplier ledger it can already see and rebuild a list by hand — inherent to ANY party-scoped door, and the accepted cost of decision (1). What it can no longer do is read the BOOK. §7.5 **L26**. | `backend/internal/server/auth_middleware.go` (the 4-segment `open-bills` arm) + `backend/internal/server/server.go` (`handleOpenBills`, the 8 literal routes, the 308 in `handleOutstandings`) + `backend/internal/server/handler_print_reports.go` (the PAPER door's 308) + `frontend/src/screens/vouchers/BillAllocationPicker.tsx` (`useOpenBills` reads the new door) + `frontend/scripts/drive-l24-d94.mjs` (**the arm that registered it, now INVERTED**) | ✅ CLOSED |
 
-### ⛔⛔ §7.2 — THE BACK-DATED CUTOFF TOOK **SIX** DOORS TO CLOSE, AND THAT IS THE SESSION'S MAIN LESSON
+### ⛔⛔ §7.2 — THE BACK-DATED CUTOFF TOOK **SEVEN** DOORS TO CLOSE, AND THAT IS THE SESSION'S MAIN LESSON
 
 The cutoff is the control that makes a filed GST period trustworthy. It was believed fixed **four times**,
 and each time a browser re-drive walked straight through a different door. Every door is now closed and
@@ -969,13 +969,29 @@ before you fix anything else in this repo:**
 | 4 | The **STORED** date: ALTER moved a voucher OUT of the lock, and DELETE removed one, because the date that matters is in the DB and no body carries it | driven on the wire (200 + `version_no:2`, and 200 `op:DELETE`) | ✅ store read, BOTH ends judged |
 | 5 | The **JSON KEY'S CASE**: `encoding/json` binds tags case-INSENSITIVELY; the peek compared `k == "voucher_date"` exactly | ⛔ re-drive put **five back-dated vouchers in the operator's own May Day Book** | ✅ binds via `encoding/json` |
 | 6 | **TRAILING BYTES**: `decodeJSON` uses `Decoder.Decode` (ignores trailing bytes); three sibling peeks used `json.Unmarshal` (rejects them) — one appended byte switched the control off | driven on `/vouchers/journal`, `/tds-challans` and `/sync/commit` op=ALTER | ✅ all peeks decode as the handler does |
+| 7 | ⛔⛔ **THE ENCODING.** `isTallyEnvelope` — the gate BOTH XML peeks pass through — decoded the RAW BYTES. Every real TallyPrime export is **UTF-16LE**, so it answered `false` ("no voucher can hide in this body"), the cutoff did not apply and the step-up named nothing — **while the importer read the same bytes and posted every voucher in them** | ⛔ found 2026-08-25 by MEASURING both ends on one corpus fixture: importer `12 messages, 1 voucher, DATED` vs peek `nil`. Driven at the door: a back-dated UTF-16 import answered **`200`, `"vouchers_posted":1`**, and the voucher landed in the May day book inside a period closed at 2026-07-01 | ✅ `isTallyEnvelope` decodes through `integration.NewTallyDecodeReader` |
 
 > ### ⛔⛔ THE ONE SENTENCE TO TAKE FROM THIS
-> **Every one of the six doors was a place where an AUTHORIZATION PEEK RE-IMPLEMENTED A DECODING RULE THAT
-> LIVES IN `encoding/json`.** The PDP and the handler have to agree about what a body SAYS; wherever they
-> disagreed, the disagreement WAS the hole. A peek that decides a write's fate must decode the body the
-> way the handler decodes it — same call, same semantics — or it is a second implementation and it will
-> drift.
+> **Every one of the seven doors was a place where an AUTHORIZATION PEEK RE-IMPLEMENTED A DECODING RULE
+> THE HANDLER GETS FROM A LIBRARY.** For doors 1–6 that library was `encoding/json`; for door 7 it was
+> `integration.NewTallyDecodeReader`, and the rule was *which bytes are even text*. The PDP and the
+> handler have to agree about what a body SAYS; wherever they disagreed, the disagreement WAS the hole. A
+> peek that decides a write's fate must decode the body the way the handler decodes it — same call, same
+> semantics — or it is a second implementation and it will drift.
+
+> ### ⛔ DOOR 7 ALSO CARRIES A LESSON THE OTHER SIX DO NOT, AND IT IS ABOUT THE TESTS
+>
+> Door 3 (a non-JSON body) was closed with an XML peek and then tested **hard** — three suites, dozens of
+> hostile inputs: the earliest voucher in a batch, a loose `<DATE>`, a truncated envelope, an
+> `ACTION=Delete` carrying a legal date, a masters-only envelope that must stay `nil`. Every one of those
+> bodies is **UTF-8**, and **no real Tally file is.** The control was tested exhaustively along the axis of
+> hostile CONTENT and never once along the axis of ENCODING — the axis the product it exists to read
+> actually varies on.
+>
+> ⚠️ **AND T32 BELIEVED IT HAD ALREADY FIXED THIS.** It found both peeks blind to a real export, fixed the
+> ENVELOPE SHAPE in each, and recorded the seventh door as closed. That fix is *downstream* of
+> `isTallyEnvelope`, so it never ran. **Fixing stage two of a pipeline is worth nothing while stage one
+> returns false** — and a session that has just fixed something is the least likely to re-measure it.
 
 ⚠️ **AND THE GUARD THAT MATTERS MORE THAN THE SIX FIXES.** Rounds 1–4 each asserted a *list* of hostile
 inputs, and the next bypass was always off-list. Two structural guards now exist instead:
@@ -985,6 +1001,16 @@ inputs, and the next bypass was always off-list. Two structural guards now exist
 - `TestEveryWriteRouteNamingAnExistingDocumentIsAccountedFor` walks the REAL chi router and requires every
   write route naming an existing document to be recognised or explicitly excused with a reason. **A new
   route cannot be mounted in silence.**
+- `TestEveryDateShapedWireFieldIsAccountedForByTheCutoff` parses package `server` and makes somebody
+  classify **every date-shaped json key on every wire type** as judged-or-excused-with-a-reason.
+- ⛔ **`TestTheCutoffSeesEveryTallyFileTheImporterCanRead` (new, door 7)** — and it exists because the gate
+  directly above it is *structurally* blind to this route, twice over: the Tally date is not a json key
+  (it is a `<DATE>` element) and it is not in package `server` (it is `integration.TallyVoucher`). So the
+  ONE write route whose body is not JSON, and which posts more vouchers per request than every other route
+  combined, sits outside the universe that gate quantifies over. The new property quantifies over the axis
+  this route actually varies on: **for every corpus fixture, in every encoding, what the cutoff sees must
+  equal what the importer would post** — both ends computed independently and compared, so a new envelope
+  shape, a new encoding, or either end being changed without the other fails there naming the file.
 
 ### §7.3 — ✅ **CLOSED. A ✅, B ✅, C ✅, D ✅** (A/C/D 2026-08-25 · B's server half 2026-08-25 — see §7.6)
 
