@@ -35,8 +35,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/khata/cored/internal/authn"
 	"github.com/khata/cored/internal/authz"
+
 	"github.com/khata/cored/internal/backup"
 	"github.com/khata/cored/internal/banking"
 	"github.com/khata/cored/internal/bankstatement"
@@ -261,6 +263,12 @@ type Server struct {
 // company. Backed by the 0011 seed_company_auth_defaults() SQL helper.
 type authSeeder interface {
 	SeedCompanyAuthDefaults(ctx context.Context, companyID, userID uuid.UUID) error
+	// SeedCompanyAuthDefaultsInTx is the same seeding inside a transaction the
+	// CALLER owns, which is what RESTORE (T14) needs: the membership that makes a
+	// restored company reachable has to commit with the rows, or a failure here
+	// would leave a fully restored company nobody is a member of — and there is
+	// no delete path with which to clean that up.
+	SeedCompanyAuthDefaultsInTx(ctx context.Context, tx pgx.Tx, companyID, userID uuid.UUID) error
 }
 
 // credentialStore is the subset of authz.Store the password routes need.
@@ -594,6 +602,21 @@ func (s *Server) routes() {
 	// (create-on-first-login); skip membership/PDP (the company does not exist
 	// yet). handleCreateCompany seeds the Owner level + membership afterward.
 	r.With(s.authnOnlyMiddleware).Post("/v1/companies", s.handleCreateCompany)
+
+	// RESTORE A COMPANY FROM AN ARCHIVE (T14). authn-ONLY, mounted BESIDE company
+	// creation and OUTSIDE the {companyID} subtree, because that is what it is:
+	// the company does not exist yet, so the subtree's membership check would 403
+	// every caller before the company it names could ever be created.
+	//
+	// ⛔ routeAction() THEREFORE NEVER SEES THIS ROUTE, and the only thing gating
+	// it is "you are a signed-in user" — exactly as for POST /v1/companies. That
+	// is a deliberate, stated hole and not an oversight: a restore CREATES a
+	// company from a file the caller already holds, it cannot read or overwrite
+	// any company that is already here (it refuses when the id exists, and there
+	// is no delete path in the product at all), and the restoring user becomes
+	// the Owner of what they created. The archive is the authority; whoever holds
+	// it already holds the books.
+	r.With(s.authnOnlyMiddleware).Post("/v1/companies/restore", s.handleRestoreCompany)
 
 	// Session bootstrap + invite claim. authn-ONLY for the same reason company
 	// creation is: an INVITED user is not yet a member of anything, so the
