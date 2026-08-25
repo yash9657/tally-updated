@@ -1051,20 +1051,38 @@ the summary.
 | **F7 — a BANK DATE could be asserted into a closed period** (§7.3 A), while `routeAction`'s comment said the cutoff already reached it. The third route of that class after the pay run and the challan, and the second to ship with a comment asserting the missing control | `peekBankDate` (the destination) + `storedBankDateForLeg` (the source, because the PUT is an UPSERT and the DELETE withdraws) — **both ends, as round 3 established for the voucher ALTER/DELETE**; the refusal now names the operator's own field (`authz.Request.DateSubject`). ⛔ **AND THE STRUCTURAL GUARD THIS CLASS NEVER HAD:** `TestEveryDateShapedWireFieldIsAccountedForByTheCutoff` parses package `server` and requires **every date-shaped json key on every wire type** to be classified as judged-or-excused-with-a-reason — the three defects were invisible at ROUTE granularity, which is why the existing router walk could not see them — and `TestTheCutoffActuallyReadsEveryDateItClaimsToRead` **executes** every "judged" claim through the real `voucherDateFromRequest`. 3 executed mutation proofs, each predicted then observed | ✅ **FIX_HOLDS 8/8 on the wire** against a binary verified fresh BY SYMBOL, on a seeded tenant: assert-into 403 · loose spelling 403 · trailing byte 403 · move-out 403 · withdraw 403 · **CONTROL** un-tick after the cutoff 200 · **CONTROL** old cheque cleared today 200 · journal control 403. ⛔ **DB oracle, as `postgres`:** two rows survive — `2026-04-02 / 2026-04-05` untouched and `2026-05-20 / 2026-08-01` from the allowed tick — **and not one `attack` row**, so no refusal wrote |
 | **An accepted draft did not name the voucher it became** — insightd sent `accepted_voucher_no`, the wire returned it, the type declared it, and the inbox row never rendered it | the row now reads "already posted as … — do not re-enter" | found by the final re-drive; the operator-visibility half of the duplicate defect |
 
-### ⛔ THE THREE DEFECTS DELIBERATELY NOT FIXED, AND WHY — read before picking one up
+### ✅ THE THREE DEFECTS DELIBERATELY NOT FIXED — **ALL THREE ARE NOW FIXED** (re-checked 2026-08-25)
 
-1. **D-row-29, closing stock replayed in LEXICAL `voucher_no` order** (`inventory/valuation.go:155-170`:
-   `if a.VoucherNo != b.VoucherNo { return a.VoucherNo < b.VoucherNo }`). Voucher numbers are bare
-   integers with an INDEPENDENT counter per type, so on a shared date `"10" < "9"` and two series
-   interleave arbitrarily — an issue keyed after a receipt on the same date is costed at the
-   **pre-receipt average**. ⛔ **NOT FIXED ON PURPOSE:** it changes the **valuation/movement primitive**,
-   which §5 requires be serialised with T9 FIFO/LIFO, and it **MOVES THE BALANCE SHEET**, so it needs a
-   deliberate `verify:demo` re-pin. Same call the second pass made about the value-neutral transfer. **Do
-   it as part of T9.**
-2. ~~**Row 20's masters gap**~~ — ✅ **CLOSED (L13) 2026-08-21.** It was a build, and the build had landed; it had never been driven. See §7.5.
-3. **Row 24's `allow_negative_stock` writer** — the flag is read and honoured by both enforcers and can
-   be written by NOTHING (no route, no request field, no setter, no UI). Building the writer is a small
-   feature; ⚠️ **what WAS fixed is F11's claim**, which asserted the per-company opt-in already existed.
+⛔ **THIS LIST WAS STALE ON ALL THREE ROWS, AND IT IS THE THIRD STALE "STILL OPEN" CLAIM FOUND IN ONE
+DAY** (the others: §0's Row 20 entry, and `maxXMLBody`'s memory figure). A list of things deliberately
+NOT fixed is the most dangerous kind to leave stale — a session reads it, believes there is known
+broken behaviour, and either works around it or rebuilds it. **Re-check by reading the code, not this
+list.** Each row below records what was verified and how.
+
+1. ~~**D-row-29 / D8, closing stock replayed in LEXICAL `voucher_no` order**~~ — ✅ **FIXED.** The claim
+   named `inventory/valuation.go:155-170` and the line
+   `if a.VoucherNo != b.VoucherNo { return a.VoucherNo < b.VoucherNo }`. **That line does not exist**;
+   `grep -rn "a.VoucherNo < b.VoucherNo" internal/inventory/` returns nothing. `less()` now orders on
+   `(voucher_date, VOUCHER_ID, version_created_at, line_no, voucher_version_id)` — voucher_id is a
+   UUIDv7 minted at CREATE, so it is entry order per company across every series and an ALTER keeps it.
+   The code comment carries the reasoning and the measurement (601.4681 too high on an unedited issue).
+   D8 is CLOSED in §7.1. ⚠️ **CONSEQUENCE FOR PLANNING: T9 FIFO/LIFO is NO LONGER BLOCKED BY THIS.** The
+   "serialise it with T9 because it moves the Balance Sheet" instruction was about this fix, and this
+   fix has landed and been re-pinned.
+2. ~~**Row 20's masters gap**~~ — ✅ **CLOSED (L13) 2026-08-21.** It was a build, and the build had
+   landed; it had never been driven. See §7.5. §0's still-open table disagreed until 2026-08-25 and was
+   the stale half.
+3. ~~**Row 24's `allow_negative_stock` writer**~~ — ✅ **FIXED (D5 + D43) 2026-08-22.** The claim was
+   "no route, no request field, no setter, no UI". All four now exist: `PUT /v1/companies/{id}` →
+   `handleSetCompanyFeatures` (`handler_company_get.go`), `AllowNegativeStock *bool` on the request,
+   and an **ALLOW NEGATIVE STOCK panel at the top of `FeaturesScreen.tsx`** wired through
+   `client.setCompanyFeatures`. The route is deliberately narrow — it writes this one column and is not
+   a general company editor, because name/FY/state/currency are identity that posted books depend on.
+
+> ⚠️ **SO THERE IS NO KNOWN-BROKEN-AND-UNFIXED BEHAVIOUR IN THIS PRODUCT AS OF 2026-08-25.** §7.1 is
+> 97/97/0/0, §7.2's seven doors are closed, §7.3's four rows are closed, and this list is empty. The
+> ONLY thing that is permanently unshippable is **T18 (rule 48(4) QR)** — it is signed with the Income
+> Tax Department's private key. **Reject any session that reports it done.**
 
 ## 7.6 ✅ §7.3 B / C / D — THE LAST THREE ROWS OF §7.3, WORKED 2026-08-25 (B FINISHED THE SAME DAY)
 

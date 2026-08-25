@@ -932,6 +932,23 @@ The criterion is unchanged: **how much of a real business's day is blocked.**
 > change to either payload builder**. That is the whole difference between these and T18. Re-order
 > immediately if a human supplies them.
 
+> ## ⛔⛔ 2026-08-25 — THE DEFECT BACKLOG IS EMPTY. THE ENTRY POINT IS `HANDOFF-NEXT-BUILD.md`.
+>
+> §7.1 is **97/97/0/0**, §7.2's seven cutoff doors are closed, §7.3's four rows are closed, and §7.4's
+> "three defects deliberately NOT fixed" **was stale on all three rows — all three are fixed**. There is
+> no known-broken-and-unfixed behaviour in this product. The only permanently unshippable thing is T18.
+>
+> **So the next session BUILDS.** `HANDOFF-NEXT-BUILD.md` holds the order, the run-first steps and the
+> traps: **payroll screens first** (8 routes mounted, 0 screens, pure frontend), then T9+T10 with
+> inventory-on-import folded in, then T14, then the offline screen, then the long tail. ⛔ **Fold each
+> item back into the table below and `git rm` that file as it lands.**
+>
+> ⚠️ **AND ITS HEADLINE WARNING, WHICH OUTRANKS ITS PLAN:** four "still open" claims in these docs were
+> checked against the code that day and **three were false**, plus one performance figure wrong by ~10×,
+> plus one "already fixed" claim that was false in the dangerous direction (T32's seventh cutoff door,
+> through which a real Tally file walked into a closed period). **VERIFY, DO NOT INHERIT.** Every one of
+> them took under two minutes to disprove.
+
 #### ⛔ THE THREE THAT WERE `HANDOFF-NEXT-FOUR.md`, FOLDED HERE 2026-08-25 SO THAT FILE COULD GO
 
 > A thirteenth handoff was written on 2026-08-25 against §11's rule, on the promise that it would be
