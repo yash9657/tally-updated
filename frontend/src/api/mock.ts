@@ -2447,7 +2447,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
           b.dr_cr === "D"
             ? mockMoneyToUnits(b.amount)
             : -mockMoneyToUnits(b.amount);
-        const key = `${b.ledger_id} ${b.ref_name}`;
+        const key = `${b.ledger_id}\u0000${b.ref_name}`;
         const cur = net.get(key) ?? {
           ledgerID: b.ledger_id,
           ref: b.ref_name,
