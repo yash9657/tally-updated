@@ -1,7 +1,10 @@
 import { useState } from "react";
 import type { NavSnapshot } from "../../keystroke/navMachine";
 import type { FrameConfig } from "../../keystroke/types";
-import { EXPORT_NOT_BUILT_NOTE } from "../../export/useExportAction";
+import {
+  EXPORT_NOT_BUILT_NOTE,
+  frameCanExportPdf,
+} from "../../export/useExportAction";
 
 /**
  * The in-frame overlays behind Tally's F12 Configure, F2/Alt+F2 Period, Ctrl+F
@@ -128,6 +131,7 @@ function ConfigureOverlay({
   const cfg = snapshot.config ?? {};
   const isReport =
     snapshot.screen === "report" || snapshot.screen === "report-detail";
+  const canPdf = frameCanExportPdf(snapshot);
 
   if (!isReport) {
     return (
@@ -173,19 +177,48 @@ function ConfigureOverlay({
           value={Boolean(cfg.vertical)}
           onToggle={() => onConfig({ vertical: !cfg.vertical })}
         />
-        {/* Alt+E's format. A toggle rather than a picker because there are two
-            formats and only two: see EXPORT_NOT_BUILT_NOTE for the ones Tally
-            offers that this build does not. */}
+        {/* Alt+E's SHEET format. See EXPORT_NOT_BUILT_NOTE for what Tally offers
+            that this build does not. */}
         <ToggleRow
           testId="cfg-export-excel-xml"
           label="Export (Alt+E) as Excel XML instead of CSV"
           value={Boolean(cfg.exportExcelXml)}
           onToggle={() => onConfig({ exportExcelXml: !cfg.exportExcelXml })}
         />
+        {/*
+          ⛔ THE PDF ROW IS OFFERED ONLY WHERE THE SERVER HAS A LAYOUT — ten of the
+          thirty report names. On the other twenty the print route answers an
+          honest 501, and a format that fails AFTER the operator has chosen it is
+          a menu item that lies. `frameCanExportPdf` asks the same resolver Ctrl+P
+          uses, against a golden generated from the router itself.
+
+          ⛔ AND THE LABEL CARRIES THE DIFFERENCE, because this is the one Alt+E
+          format whose contents are not what is on screen.
+        */}
+        {canPdf && (
+          <ToggleRow
+            testId="cfg-export-pdf"
+            label="Export (Alt+E) as PDF — the server's WHOLE statement, not the rows on screen"
+            value={Boolean(cfg.exportPdf)}
+            onToggle={() => onConfig({ exportPdf: !cfg.exportPdf })}
+          />
+        )}
       </div>
       <p className="mt-2 text-xs opacity-80" data-testid="cfg-export-note">
         Alt+E writes the rows on screen, with every amount as TEXT so a
         spreadsheet cannot round the paisa off it. {EXPORT_NOT_BUILT_NOTE}
+      </p>
+      {/*
+        ⛔ STATED WHEREVER PDF IS REACHABLE, INCLUDING WHERE IT IS NOT OFFERED. A
+        report with no printed layout says so here rather than silently lacking a
+        row — the absence of a control is indistinguishable from a control that
+        failed to render, which is the same argument the keymap makes for listing
+        its `unavailable` combos.
+      */}
+      <p className="mt-1 text-xs opacity-80" data-testid="cfg-export-pdf-note">
+        {canPdf
+          ? "PDF is fetched from the print route, so it is the whole statement: the Ctrl+F filter and the settings above are NOT applied to it. Ctrl+P opens the same document in a tab instead of saving it."
+          : `${snapshot.reportName ?? "This report"} has no printed layout in this build, so Alt+E cannot write it as a PDF and Ctrl+P answers 501. CSV and Excel XML export the rows on screen as usual.`}
       </p>
       <button
         type="button"

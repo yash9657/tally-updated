@@ -358,6 +358,24 @@ export interface FrameConfig {
    * one; CSV is the default because it is what every other tool can read.
    */
   exportExcelXml?: boolean;
+  /**
+   * F12 (Alt+E export): write the SERVER'S PDF instead of a sheet (B1).
+   *
+   * ⛔ IT TAKES PRECEDENCE OVER `exportExcelXml`, and two booleans encoding three
+   * states is why that has to be written down: both set resolves to PDF. See
+   * `exportTargetFor`, which is the one place that decides.
+   *
+   * ⛔ AND IT IS NOT THE ROWS ON SCREEN. A PDF is fetched from the print route, so
+   * it is the whole statement — the Ctrl+F filter and the F12 settings above are
+   * NOT applied to it. The panel's own label says so, and so does the status line
+   * after the file is written, because this is the one Alt+E format whose contents
+   * differ from what the operator is looking at.
+   *
+   * ⚠️ The F12 row is OFFERED ONLY where the server has a printed layout (ten of
+   * thirty report names). A format that 501s after being chosen is a menu item
+   * that lies; `printsALayout` gates it.
+   */
+  exportPdf?: boolean;
   /** F2 / Alt+F2: report period (ISO yyyy-mm-dd). */
   periodFrom?: string;
   periodTo?: string;

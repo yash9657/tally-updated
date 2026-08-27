@@ -7,6 +7,63 @@ what was wrong; this file records what a person will notice.
 
 ---
 
+## Alt+E can now save a report as a PDF — and it is NOT the rows on screen
+
+**Applies to:** ten of the thirty reports. **Feature:** B1.
+
+### What changes
+
+Press **F12** on a report and there is a new line: **Export (Alt+E) as PDF**. Turn it
+on and **Alt+E** saves the report as a PDF file instead of a spreadsheet.
+
+The document is the same one **Ctrl+P** has always produced — the server lays it out,
+with your company's letterhead. The difference is the verb: Ctrl+P opens it in a tab
+where your browser's print command lives, Alt+E saves it to your downloads.
+
+### ⛔ The one thing to know: a PDF is the WHOLE statement
+
+Alt+E's other two formats — CSV and Excel XML — write **exactly what is on your
+screen**, after a Ctrl+F filter and any F12 settings have been applied. **The PDF does
+not.** It comes from the print route, which returns the complete statement.
+
+So if you filter the Trial Balance to one party and export it as a PDF, **the PDF
+contains every party**. That is not a bug and it is not going to change — the printed
+layout is the one used on your invoices, and re-implementing it in the browser would
+produce a second document that disagrees with the first.
+
+Because that is easy to get wrong in a way you would only notice after sending the file
+to somebody, the product tells you twice:
+
+- the F12 line itself reads *"the server's WHOLE statement, not the rows on screen"*;
+- and the message after the export **names what was not applied** — for example,
+  *"your Ctrl+F filter "ACME" was NOT applied to it"*. With nothing filtered it says so
+  instead, so the line is worth reading rather than something to skip past.
+
+### Which reports offer it
+
+Ten reports have a printed layout: the **Trial Balance**, **Balance Sheet**, **Profit &
+Loss**, **Day Book**, **Outstandings**, **Bills Payable**, **Stock Summary**, the
+**Payroll Register**, a **Payslip**, and the **Bank Reconciliation Statement**.
+
+On any other report the F12 line is simply not there — and the panel says which report
+it is and that printing it answers "not implemented", rather than leaving you looking
+for a control that never appears. CSV and Excel XML still work on every report.
+
+⚠️ Printing is its own permission, separate from displaying, so a user allowed to READ a
+statement may still be refused permission to export it as a PDF. If that happens the
+message is the server's own, naming the report.
+
+### Not built
+
+**E-mailing a document is still not built**, and it is now its own line on the F11
+Company Features screen rather than sharing one with PDF export. The reason is on that
+line: the outbox that would carry it is real and good, but this deployment has no mail
+transport at all, and the first question — whether the product sends mail itself or
+hands your own mail client a pre-addressed draft with the PDF already downloaded — is a
+product decision that has not been made. JPEG and HTML export are also still not built.
+
+---
+
 ## Alt+O: your books can now be brought over from Tally, from the keyboard
 
 **Applies to:** every company. **Feature:** T32.

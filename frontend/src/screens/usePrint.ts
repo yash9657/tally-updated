@@ -3,6 +3,7 @@ import type { NavSnapshot } from "../keystroke/navMachine";
 import { useRegisterScreenAction } from "../app/ScreenActions";
 import { useCompanyContext } from "../app/CompanyContext";
 import { ApiError } from "../api/http";
+import { downloadBlob } from "../export/download";
 import {
   resolvePrintTarget,
   type PrintTarget,
@@ -43,18 +44,18 @@ export type PdfSink = (blob: Blob, filename: string | null) => void;
 export function openPdfInBrowser(blob: Blob, filename: string | null): void {
   const url = URL.createObjectURL(blob);
   const win = window.open(url, "_blank");
-  if (!win) {
-    // Pop-up blocked: fall back to a download so the document is not simply lost.
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename ?? "document.pdf";
-    a.rel = "noopener";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+  if (win) {
+    // Revoke late: revoking before the viewer has read the blob shows a blank tab.
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    return;
   }
-  // Revoke late: revoking before the viewer has read the blob shows a blank tab.
-  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  // Pop-up blocked: fall back to a download so the document is not simply lost.
+  //
+  // ⛔ THROUGH THE SHARED ANCHOR (export/download.ts), which is now the only one
+  // in the frontend. This was one of three near-copies that disagreed about when
+  // to revoke the object URL; see downloadBlob's header.
+  URL.revokeObjectURL(url);
+  downloadBlob(blob, filename ?? "document.pdf");
 }
 
 export interface UsePrintOptions {

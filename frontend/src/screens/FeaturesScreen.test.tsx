@@ -335,3 +335,57 @@ describe("T32 — Migrate from Tally reads On, and only because a key reaches it
     expect(note).toMatch(/Stock Summary/);
   });
 });
+
+/**
+ * B1 — THE EXPORT ROW WAS SPLIT, NOT FLIPPED.
+ *
+ * It read "Export: e-mail a document, and export to PDF — Not built". PDF export
+ * shipped; e-mail did not, and is blocked on a product decision rather than on
+ * work. Flipping the joint row to On would have claimed e-mail works — the exact
+ * failure this screen exists to prevent, and the same shape as the backup /
+ * split-company row above.
+ */
+describe("B1 — export to PDF shipped, e-mailing a document did not", () => {
+  it("the old JOINT row is GONE — a half-true row is the failure mode", () => {
+    renderFeatures();
+    expect(
+      screen.queryByText(/^Export: e-mail a document, and export to PDF$/),
+    ).toBeNull();
+  });
+
+  it("PDF export reads On and names the key", () => {
+    renderFeatures();
+    expect(badgeFor(/^Export to PDF \(Alt\+E\)/)).toBe("On");
+  });
+
+  it("⛔ ...and its note says the PDF is NOT the rows on screen", () => {
+    renderFeatures();
+    const note = noteFor(/^Export to PDF \(Alt\+E\)/);
+    // The one thing an operator must know: Alt+E's other formats write what is
+    // displayed; this one is the server's whole statement.
+    expect(note).toMatch(/NOT the rows on screen/i);
+    expect(note).toMatch(/WHOLE statement/i);
+    // And that it is offered only where a layout exists, with the 501 named.
+    expect(note).toMatch(/ten\s+of the thirty/i);
+    expect(note).toMatch(/501/);
+    // ⛔ AND THAT THE LIST IS GENERATED. A row claiming a hand-maintained list is
+    // accurate is the claim this repository has had to withdraw three times.
+    expect(note).toMatch(/generates it by asking the router|cannot drift/i);
+  });
+
+  it("⛔ e-mail STILL reads Not built, and says the decision comes first", () => {
+    renderFeatures();
+    expect(badgeFor(/^Export: e-mail a document$/)).toBe("Not built");
+    const note = noteFor(/^Export: e-mail a document$/);
+    // Not "coming soon". The blocker is a product question, and the row states
+    // both options rather than implying the work is merely unstarted.
+    expect(note).toMatch(/does this product SEND mail/i);
+    expect(note).toMatch(/mail client/i);
+    // The outbox exists and is good — saying so is what stops the next reader
+    // rebuilding it.
+    expect(note).toMatch(/internal\/notify/);
+    expect(note).toMatch(/LogSender/);
+    // ⛔ And the rule that must not be broken when it IS built.
+    expect(note).toMatch(/HALF-SEND/i);
+  });
+});

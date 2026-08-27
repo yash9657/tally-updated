@@ -1,6 +1,6 @@
 # HANDOFF — THE NEXT FOUR TRACKS
 
-**Written:** 2026-08-25 · **Updated:** 2026-08-26 (track A spent) · **Branch:** `session/t32-and-close-7-3`
+**Written:** 2026-08-25 · **Updated:** 2026-08-26 (tracks A and B1 spent) · **Branch:** `session/t32-and-close-7-3`
 **Read time:** ~15 minutes. Everything below was MEASURED today; every claim has the command beside it.
 
 > ## ⛔⛔ THE ONE THING THAT DECIDES HOW BIG THIS WORK IS
@@ -10,7 +10,7 @@
 > | Track | The engine | The gap |
 > |---|---|---|
 > | ~~**A** Migrate from Tally~~ | ✅ **DONE 2026-08-26 — `Alt+O` and Gateway > Import.** `HANDOFF.md` §1.18 | ~~no screen~~ **closed** |
-> | **B** Export to PDF | ✅ a full PDF renderer, 10 report layouts, `usePrint.ts` | Alt+E offers **csv / excel-xml only** |
+> | ~~**B** Export to PDF~~ | ✅ **DONE 2026-08-26 — B1 shipped.** `HANDOFF.md` §1.19 | ~~csv / excel-xml only~~ **closed.** ⛔ The **e-mail half is SPLIT off and still open — it needs a DECISION, §3.3** |
 > | **C** Print templates | ✅ `SaveOverrides` is written, tested, upserts | ⛔ **NO ROUTE CALLS IT** |
 > | **D** Offline entry | ✅ sequencer, HLC, idempotency, conflict/freeze outcomes | **no client at all** |
 >
@@ -150,79 +150,43 @@ met real GST data — **do not touch them until it arrives.**
 
 ---
 
-## 3. TRACK B — EXPORT TO PDF, AND E-MAIL A DOCUMENT
+## 3. ~~TRACK B — EXPORT TO PDF~~ ✅ B1 SPENT 2026-08-26 · ⛔ B2 (E-MAIL) STILL NEEDS A DECISION
 
-> ## ⛔ SPLIT THIS ROW IN TWO BEFORE YOU START. THEY ARE NOT ONE FEATURE.
-> `FeaturesScreen.tsx` has one row reading *"Export: e-mail a document, and export to PDF"*. **PDF
-> export is nearly free and e-mail needs a product decision and a transport.** Shipping the first and
-> flipping the joint row to `on` would claim e-mail works. T14 split the backup/split-company row for
-> exactly this reason and `FeaturesScreen.test.tsx` has the pattern to copy.
+**`HANDOFF.md` §1.19 has B1 in full.** F12 offers "Export (Alt+E) as PDF"; Alt+E saves the server's
+document. The row was **split**: "Export to PDF (Alt+E) — On" and "Export: e-mail a document — Not
+built".
 
-### 3.1 What already exists — measured
+⛔ **THE TWO THINGS B1 LEARNED THAT THE OTHER TRACKS SHOULD NOT RE-DERIVE:**
 
-| Fact | Value | Command |
-|---|---|---|
-| PDF renderer | `internal/printing` — a pure leaf, deterministic bytes, Rule 46 validated | archtest: its allowed set is the EMPTY map |
-| voucher print | `GET .../print/vouchers/{class}/{voucherID}` | `server.go:1384` |
-| report print | `GET .../print/reports/{name}` | `server.go:1387` |
-| **reports that actually print** | **10 of 30** report names | the `switch name` in `handler_print_reports.go:130` |
-| the other 20 | answer an **honest 501** | the `default` arm |
-| client side | `printVoucher` / `printReport` → `http.getBlob` | `api/rest.ts:242` |
-| the browser side | `usePrint.ts` — opens the PDF in a tab, falls back to a download when pop-ups are blocked | `screens/usePrint.ts:44` |
-| Alt+E export | **`"csv" | "excel-xml"` only** | `export/sheet.ts:90` |
-| PDF in the export path | **none** — `grep -rn pdf src/export/` is empty | |
+1. **A GATE OVER A SERVER DECISION IS A GENERATED GOLDEN, NEVER A LIST IN TYPESCRIPT.** Only 10 of
+   30 reports print. `internal/server`'s `TestPrintedReportLayoutsGolden` asks the router and emits
+   `frontend/src/api/goldens/printed-report-layouts.json`. ⚠️ **It skips without Postgres**, so the
+   frontend asserts the golden's SHAPE in a suite that always runs. **Track C faces the identical
+   problem** — `print_template.doc_kind`'s CHECK constraint vocabulary is a server decision the
+   screen needs, and §4.1 already warns against hardcoding a TypeScript copy. Generate it.
+2. **THERE IS NOW EXACTLY ONE DOWNLOAD ANCHOR** (`export/download.ts`'s `downloadBlob`). There were
+   three and they disagreed about when to revoke the object URL. Do not write a fourth.
 
-**The ten that print:** `trial-balance`, `balance-sheet`, `profit-and-loss`, `day-book`,
-`outstandings`, `bills-payable`, `stock-summary`, `payroll-register`, `payroll-payslip`,
-`bank-reconciliation`.
+### ⛔⛔ B2 — E-MAIL. THE DECISION, RESTATED BECAUSE IT IS THE ONLY ONE LEFT IN THIS FILE
 
-### 3.2 Slice B1 — PDF as an export format (small, ship it first)
+**What exists:** `internal/notify` — a real, durable, transactional outbox. `Enqueue` runs INSIDE
+the caller's transaction, at-least-once delivery, a lease, status transitions. It is genuinely good
+and it is **not** the missing piece.
 
-The PDF **bytes already exist**. What is missing is that `Alt+E` never offers them: `ExportFormat` is
-`"csv" | "excel-xml"`, and the print path is a separate key (`Ctrl+P`) that opens a tab rather than
-saving a file.
-
-- Widen `ExportFormat` with `"pdf"`, and in `useExportAction` route that format to the **existing**
-  `printReport` / `printVoucher` blob rather than to `sheet.ts`.
-- ⛔ **A REPORT THAT DOES NOT PRINT MUST SAY SO, NOT OFFER PDF.** 20 of 30 answer 501. Offering PDF on
-  a screen where it 501s is a menu item that fails after the operator chooses it. The screen knows its
-  own report name; gate the option on it.
-- ⚠️ **Reuse `usePrint.ts`'s sink and `export/download.ts`'s anchor.** Do not invent a third download
-  path — T14 already had to be told this and reused the second.
-
-**Proof:** an export test that asserts the `pdf` format calls `printReport` and **never** `sheet.ts`,
-plus one asserting a 501-only report does not offer the option. ⛔ **Mutation:** offer `pdf`
-unconditionally and watch the second test name the report.
-
-### 3.3 Slice B2 — e-mail. ⛔ THIS ONE NEEDS A DECISION BEFORE CODE
-
-**What exists, measured:** `internal/notify` is a real, durable, transactional outbox — `Enqueue` runs
-**inside the caller's transaction** (roll back the invite and the notification rolls back with it),
-at-least-once delivery, a lease, status transitions, and `StatusesByRef`. It is genuinely good.
-
-**What does not exist:**
-
-- ⛔ **NO SMTP.** The only `Sender` is `LogSender`, and its comment is deliberate: *"REAL SMTP IS
-  CONFIGURATION, NOT CODE… it is the honest statement that this deployment does not send mail."*
-- ⛔ **ONE Kind: `KindCompanyInvite`** (`notify.go:41`). There is no document kind.
-- ⛔ **NO ATTACHMENT CONCEPT.** `Message` carries `Recipient`, `SubjectLine`, `Body`. A PDF is not
-  representable.
-
-**So "e-mail an invoice" is three separate things, and the first is not an engineering question:**
+**What does not:** ⛔ **NO SMTP** (the only `Sender` is `LogSender`, and its comment is deliberate:
+*"REAL SMTP IS CONFIGURATION, NOT CODE"*); ⛔ **ONE `Kind`** (`KindCompanyInvite`); ⛔ **NO
+ATTACHMENT CONCEPT** — a `Message` carries `Recipient`, `SubjectLine`, `Body`, so a PDF is not
+representable.
 
 | # | Question | Note |
 |---|---|---|
-| **1** | **Does this product send mail at all?** Or does "e-mail a document" mean a `mailto:` handoff to the operator's own mail client with the PDF already downloaded? | The second is honest, needs no transport, no deliverability story and no bounce handling — and it is what a lot of accounting software actually does. **Decide this before writing anything.** |
-| **2** | If it sends: which `Sender`, and where does the config live? | The seam is already there. This is a deployment decision, not a refactor |
+| **1** | **Does this product send mail at all?** Or does "e-mail a document" mean a `mailto:` handoff to the operator's own client, with the PDF already downloaded? | The second is honest, needs no transport, no deliverability story and no bounce handling — and it is what a lot of accounting software does. **Decide this before writing anything.** ⚠️ **B1 made the second option cheaper than it was**: the PDF is now a file the operator already has. |
+| **2** | If it sends: which `Sender`, and where does the config live? | The seam exists. A deployment decision, not a refactor |
 | **3** | Attachments, and a `Kind` for a document | `Message` has to grow; the outbox does not |
 
-⛔ **DO NOT BUILD A HALF-SEND.** `internal/notify`'s own rule is that *"nothing in this package calls
-'delivered to nobody' a send"* — an addressless message is settled as a terminal failure carrying
-`NoAddressReason`, **never** as `sent`, because returning nil was once read as success and it cost a
-bug. A document e-mail that logs and reports "sent" would re-introduce exactly that.
-
-**Recommendation:** ship **B1** and split the row. Leave the e-mail half reading `Not built` with the
-decision written into the note, the way the split-company row now does.
+⛔ **DO NOT BUILD A HALF-SEND.** `notify`'s own rule: nothing in it calls *"delivered to nobody"* a
+send — an addressless message is settled as a terminal failure carrying `NoAddressReason`, **never**
+as `sent`, because returning nil was once read as success and it cost a bug.
 
 ---
 

@@ -918,8 +918,9 @@ The criterion is unchanged: **how much of a real business's day is blocked.**
 | **3** | ✅ **DONE 2026-08-25 — THE INVENTORY LANE: T9 FIFO/LIFO, §3 goods-on-import, T10 stock groups + compound units** (§1.16) | Three costing methods chosen per item; the Tally importer brings in items, units, godowns, batches, opening positions and **quantities**; an item hierarchy whose subtotals are the whole BRANCH, and units with a base and a conversion factor. ⛔ **The lesson is rule 2 of §1.16: AN ORACLE THAT CANNOT SEE THE DEFECT IS NOT AN ORACLE** — §3 survived a whole real-file gate because a trial balance cannot see quantity | Driven in a browser three times: **21/21** valuation, **10/10** import, **27/27** groups + compound units. `verify:demo` re-pinned at 34/34 |
 | **4** | ✅ **DONE 2026-08-25 — T14 BACKUP / RESTORE** (§1.17). **Split company is a STATED REFUSAL, not a gap** — the FeaturesScreen row was split in two so the half that did not ship still says so | `Alt+Y` > Data. A gzipped JSON Lines archive of every table the **live schema** says is this company's, sharing ONE enumeration with the teardown harness (`internal/platform/tenant`) — the plan said "reuse the testdb census" and `archtest` FORBIDS that, so it was extracted. ⛔ **A restore CREATES a company and cannot replace one**: there is no delete path for a company anywhere, and keys are PRESERVED because the hash chain contains them | Round trip that **DROPS the original**: census row contents + `VerifyChain` + 3 reports byte-identical. `drive-t14-data.mjs` **25/25** in a browser. `verify:demo` re-pinned 34/34 |
 | **5** | ✅ **DONE 2026-08-26 — T32 THE MIGRATE-FROM-TALLY SCREEN** (§1.18). `Alt+O`, and **Gateway of Tally > Import** — Tally has both doors, so this has both | ⛔ **NO GO CODE CHANGED**: the route, its `routeAction` arm, its vocabulary token and its 128 MiB cap were all already right, and nothing in the product could reach them — the fifth time this repo has shipped an engine with no front door. ⛔ **The screen sends the `File` and never `await file.text()`**: every real export is UTF-16LE, and `Blob.text()` is a UTF-8 decode, so the one-liner destroys the only file shape a customer sends while every ASCII fixture keeps passing. The report puts `stock_lines` and `opening_positions` level with the voucher count, because a trial balance cannot see quantity | The byte-identity PAIR — UTF-16 red, ASCII **green** — under an executed `.text()` mutation, plus 9 more mutations each predicted then observed. `drive-t32-import-screen.mjs` **25/25** in a browser, figures read off the page and cross-checked against the database. `verify:demo` re-pinned 34/34 |
-| **6** | **OFFLINE ENTRY SCREEN** (§5.2) | The differentiator against Tally's LAN-only model, and it is built | A screen **plus a decision**: how does a browser present queued intents? |
-| **7** | **T8 multi-currency** → **T11 budgets** → **T13 interest** → **T12 GSTR-9** → **T16 print templates** → **SSO/OIDC last** | Ordinary Tier-2 backlog. §5.4 states the one thing not to get wrong in each | |
+| **6** | ✅ **DONE 2026-08-26 — B1 EXPORT TO PDF** (§1.19). F12 offers it, `Alt+E` saves it. The **e-mail half was SPLIT off** and still reads Not built, because it is blocked on a PRODUCT DECISION rather than on work | ⛔ **A PDF IS NOT THE ROWS ON SCREEN** — Alt+E's other formats write what is displayed, the print route returns the whole statement, so the status line NAMES the Ctrl+F filter that was not applied. Offered only on the 10 of 30 reports with a layout, gated by a golden **generated from the router** rather than a list anybody keeps. And the three disagreeing download anchors became one (two revoked late and said why; the third revoked synchronously) | 14 vitest cases · `drive-b1-pdf-export.mjs` **15/15**, reading the PDF Chromium actually saved · 6 mutations predicted then observed |
+| **7** | **OFFLINE ENTRY SCREEN** (§5.2) | The differentiator against Tally's LAN-only model, and it is built | A screen **plus a decision**: how does a browser present queued intents? |
+| **8** | **T8 multi-currency** → **T11 budgets** → **T13 interest** → **T12 GSTR-9** → **T16 print templates** → **SSO/OIDC last** | Ordinary Tier-2 backlog. §5.4 states the one thing not to get wrong in each | |
 
 > ### ⛔⛔ AND THE TWO THINGS THAT ARE NOT TRACKS AND OUTRANK MOST OF THIS LIST
 >
@@ -1363,6 +1364,125 @@ what turns receiving it from an afternoon into ten minutes. `classifyTaxLedger`,
 GSTR-1 B2B join have **still never met real GST data** — the file the importer was fixed against is a
 grain trader, GST-free and zero-rated. **Do not touch those three until it arrives**; speculative
 changes now destroy the evidence it will give you.
+
+### 1.19 ✅ B1 EXPORT TO PDF — DONE AND DRIVEN. THE E-MAIL HALF IS A DECISION, NOT WORK.
+
+> ## ⛔ THE PDF IS NOT THE ROWS ON SCREEN, AND THAT IS THE WHOLE DESIGN PROBLEM.
+>
+> `Alt+E`'s identity is *"write exactly what is displayed, after Ctrl+F and F12 have been
+> applied"* — `actionLabel` says so, in those words, and contrasts it with Ctrl+P. The print
+> route returns the **whole statement**. So routing a new `pdf` format to that route puts **two
+> different documents under one key**, and an operator who filters to one party and exports is
+> one keystroke from sending a customer the entire ledger.
+>
+> The alternative — typesetting a PDF in the browser from the rows on screen — is a **second
+> typesetter** that would disagree with the one on the invoices. That is not a trade worth making.
+>
+> So the difference is **stated three times**: in the F12 row's own label, in the FeaturesScreen
+> note, and in the status line after the export, which **NAMES the narrowing that was not
+> honoured** — *"your Ctrl+F filter "Acme" was NOT applied to it"*. With nothing narrowed it says
+> so plainly, because a warning an operator learns to skip protects nobody.
+
+**Shipped:** this session. ⛔ **The only Go code added is a TEST** (a golden generator); no
+handler, no route, no migration.
+
+| What is now true | Proof |
+|---|---|
+| `ExportTarget = ExportFormat \| "pdf"`. ⛔ **PDF is deliberately NOT in `ExportFormat`** — `renderSheet` and `mimeTypeFor` are total over that union and a PDF is not rendered from a sheet, so widening it would give both an impossible case answerable only by a runtime throw | `tsc`; the two functions still have no default arm |
+| `Alt+E` with the F12 flag SAVES the server's PDF, via `printReport`/`printVoucher` — the same routes Ctrl+P uses, resolved by the same pure `resolvePrintTarget`, so the two keys cannot disagree about what this screen's document is | 14 vitest cases; `drive-b1-pdf-export.mjs` **15/15**, reading the file Chromium saved |
+| PDF is offered **only** where the server has a layout — 10 of 30 | The gate is a **generated golden**, below |
+| The FeaturesScreen row was **SPLIT**, not flipped | Mutation M17: flipping the joint row fails four assertions, one of them a pre-existing pinned guard |
+
+#### ⛔ THE GATE IS A GENERATED GOLDEN, BECAUSE A HAND-KEPT LIST IS THE DRIFT BUG
+
+Twenty of the thirty names in `authz.KnownReportNames` answer an honest **501**. Offering PDF on
+one of those is *a menu item that fails after the operator chooses it*. So the frontend must know
+which is which — and the moment it knows by holding its own copy, the copy drifts.
+
+`internal/server`'s **`TestPrintedReportLayoutsGolden`** requests every one of the thirty and
+records the answer into `frontend/src/api/goldens/printed-report-layouts.json`. The list is
+**measured from the router**, not typed. It is the `tds-register-prose` mechanism, for the same
+reason, and `printTarget.ts` reads it.
+
+> ### ⚠️ AND ITS GENERATOR CAN SILENTLY STOP RUNNING — SO THE COUNTERWEIGHT IS ON THE OTHER SIDE
+>
+> It needs Postgres and calls `t.Skip` without it, and **a skip is indistinguishable from a pass
+> in `go test`'s exit code**. `internal/reporting`'s golden dodged that by building its fixture
+> synthetically; this one cannot, because deciding whether a report prints means running the
+> handler. So `exportPdf.test.tsx` asserts the golden's **shape** — the two lists partition all
+> thirty, neither is empty, and a handful of anchors are on the right side — in a suite that
+> always runs. **Mutation M16 empties the golden and that block goes red.**
+
+⛔ **AND THERE ARE TWO GATES, NOT ONE.** The F12 panel decides what to SHOW; `exportTargetFor`
+decides what will HAPPEN, and refuses `pdf` on a layout-less frame even with the flag set. Frame
+config travels on the frame, so the tempting future change — remembering an export preference
+across screens — would otherwise silently arm a format that 501s. Mutation M13 removes the second
+gate and three tests name it.
+
+#### ⛔ THERE WERE THREE DOWNLOAD ANCHORS AND THEY DISAGREED ABOUT THE ONE THING THAT MATTERS
+
+`download.ts` (inline in `downloadSheet`), `usePrint.ts`'s pop-up-blocked fallback, and
+`DataScreen.tsx` — whose own comment said it was *"deliberately not a third variant"* while being
+one. B1 was about to write the fourth.
+
+They are now **one function**, `downloadBlob`. And the disagreement was real:
+
+| | revoke |
+|---|---|
+| `usePrint` fallback, `DataScreen` | on a **60-second timer**, each saying why: *"revoking before the browser has read the blob produces an empty file"* |
+| `downloadSheet` | **synchronously, in a `finally`, right after `a.click()`** |
+
+That is the hazard the other two documented, and it survived because a small CSV is usually
+snapshotted before the revoke lands. A multi-megabyte PDF is a far better bet to lose. All three
+call sites now revoke late.
+
+#### The e-mail half — ⛔ A PRODUCT DECISION, AND IT BLOCKS NOTHING ELSE
+
+The row was **split** rather than flipped, so the half that did not ship still says so.
+
+**What exists:** `internal/notify` is a real, durable, transactional outbox — `Enqueue` runs
+INSIDE the caller's transaction (roll back the invite and the notification rolls back with it),
+at-least-once delivery, a lease, status transitions. It is good, and it is not the missing piece.
+
+**What does not:** no SMTP sender at all (the only `Sender` is `LogSender`, whose comment is
+deliberate — *"REAL SMTP IS CONFIGURATION, NOT CODE"*), exactly one `Kind` (a company invite), and
+no attachment concept — a `Message` carries a recipient, a subject and a body, so a PDF is not
+representable.
+
+⛔ **THE FIRST QUESTION IS NOT AN ENGINEERING ONE:** does this product **send mail**, or does
+"e-mail a document" mean a `mailto:` handoff to the operator's own client with the PDF already
+downloaded? The second is honest, needs no transport, no deliverability story and no bounce
+handling, and it is what a great deal of accounting software actually does. **Until that is
+decided, building either is guessing.**
+
+⛔ **AND WHATEVER IS DECIDED, DO NOT BUILD A HALF-SEND.** `notify`'s own rule is that nothing in
+it calls *"delivered to nobody"* a send: an addressless message is settled as a terminal FAILURE
+carrying `NoAddressReason`, **never** as `sent`, because returning nil was once read as success
+and it cost a bug.
+
+#### The map
+
+```
+backend/internal/server/handler_print_layouts_golden_test.go   GENERATES the list, by asking the router
+frontend/src/api/goldens/printed-report-layouts.json           10 print, 20 answer 501
+frontend/src/screens/printTarget.ts                            printsALayout() — reads the golden
+frontend/src/export/sheet.ts                                   ExportTarget; PDF is NOT an ExportFormat
+frontend/src/export/useExportAction.ts                         the two gates, and describeUnappliedView
+frontend/src/export/download.ts                                THE ONE ANCHOR. Revokes late.
+frontend/src/screens/overlays/FrameOverlays.tsx                the gated row, and the note where it is absent
+frontend/scripts/drive-b1-pdf-export.mjs                       15/15. Reads the PDF the browser saved.
+```
+
+**The tests that tell you fastest if you broke something:**
+
+```
+cd backend && go test ./internal/server/ -run TestPrintedReportLayoutsGolden
+cd frontend && pnpm vitest run src/export/ src/screens/FeaturesScreen.test.tsx
+node frontend/scripts/drive-b1-pdf-export.mjs        # needs cored :8087 + vite :5173
+```
+
+⚠️ **IF THE GOLDEN'S DIFF EVER SURPRISES YOU, READ IT — DO NOT REGENERATE IT.** A name moving out
+of `prints_a_layout` means an operator is about to be offered a PDF that 501s after they choose.
 
 ### 1.12 ⛔ HOW TO PARALLELISE THIS — WHAT WORKED LAST SESSION, AND WHAT MUST NOT BE SPLIT
 

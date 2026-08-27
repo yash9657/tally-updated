@@ -1,5 +1,9 @@
 import type { NavSnapshot } from "../keystroke/navMachine";
 import type { FrameConfig, ReportName, VoucherType } from "../keystroke/types";
+// GENERATED, NOT AUTHORED — see PRINTS_A_LAYOUT below. internal/server's
+// TestPrintedReportLayoutsGolden emits this from the router that serves the
+// requests, so the frontend cannot hold a stale opinion about what prints.
+import printedLayouts from "../api/goldens/printed-report-layouts.json";
 
 /**
  * WHAT DOES Ctrl+P PRINT? — the pure resolution, with no client and no React.
@@ -29,6 +33,45 @@ import type { FrameConfig, ReportName, VoucherType } from "../keystroke/types";
  * a Go test asserts docKindForClass accepts exactly these and refuses the other
  * seven.
  */
+/**
+ * ⛔ WHICH REPORTS ACTUALLY PRODUCE A DOCUMENT — READ FROM A GENERATED GOLDEN.
+ *
+ * GENERATED, NOT AUTHORED. `internal/server`'s `TestPrintedReportLayoutsGolden`
+ * requests every name in `authz.KnownReportNames` and records the answer, so this
+ * list is whatever the router actually does. Ten of the thirty print; the other
+ * twenty answer an honest 501.
+ *
+ * ⛔ THE SLUG BEING IN `REPORT_SLUGS` BELOW DOES NOT MEAN IT PRINTS, and that
+ * distinction is load-bearing rather than pedantic. A mapped slug means the route
+ * is REACHABLE and `print report:<slug>` can be governed by an ACL rule — which
+ * is exactly why the TDS/TCS register and both order books are mapped and answer
+ * 501: so Ctrl+P SAYS the layout does not exist instead of doing nothing.
+ *
+ * For Ctrl+P that is the right behaviour and this list is not consulted. For
+ * Alt+E-as-PDF it is not: an export FORMAT that fails after the operator has
+ * chosen it is a menu item that lies, so the option is gated on this.
+ */
+const PRINTS_A_LAYOUT: ReadonlySet<string> = new Set(
+  printedLayouts.prints_a_layout,
+);
+
+/**
+ * Whether the server has a printed layout for a report slug.
+ *
+ * ⚠️ Ask this ONLY to decide whether to OFFER something. Never to decide whether
+ * to send a request Ctrl+P would otherwise send: a 501 the operator asked for is
+ * information, and suppressing it locally would turn a stated gap into a dead key.
+ */
+export function printsALayout(slug: string): boolean {
+  return PRINTS_A_LAYOUT.has(slug);
+}
+
+/** Every slug with a printed layout, sorted. Exported for tests and the F12 note. */
+export const SLUGS_THAT_PRINT: readonly string[] = printedLayouts.prints_a_layout;
+
+/** Every slug whose print route answers an honest 501. */
+export const SLUGS_THAT_DO_NOT_PRINT: readonly string[] = printedLayouts.answers_501;
+
 export const PRINTABLE_VOUCHER_CLASSES: readonly VoucherType[] = [
   "sales",
   "credit-note",

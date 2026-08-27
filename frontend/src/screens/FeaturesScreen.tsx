@@ -477,16 +477,57 @@ const FEATURES: {
           "the file still written. A control that lies is worse than an absent one. Export follows " +
           "the DISPLAY permission: bytes the server has already handed over are already disclosed.",
       },
+      // ⛔ THIS WAS ONE ROW READING "Export: e-mail a document, and export to
+      // PDF — Not built", AND IT IS NOW TWO. PDF export shipped (B1); e-mail did
+      // not, and it needs a PRODUCT DECISION before any code — see its row.
+      // Flipping the joint row to `on` would have claimed e-mail works, which is
+      // the exact failure this screen exists to prevent, so it was SPLIT the way
+      // the backup / split-company row was.
       {
-        name: "Export: e-mail a document, and export to PDF",
+        name: "Export to PDF (Alt+E)",
+        state: "on",
+        note:
+          "F12 on a report offers 'Export (Alt+E) as PDF' and Alt+E then SAVES the server-rendered " +
+          "document as a file. ⛔ AND IT IS NOT THE ROWS ON SCREEN, which is the one thing to know " +
+          "about it: Alt+E's other two formats write exactly what is displayed, after Ctrl+F and " +
+          "F12 have been applied, whereas the PDF comes from the print route and is the WHOLE " +
+          "statement. They are two different documents under one key. Rather than pick one meaning " +
+          "and hope, the F12 row says so in its label and the status line after the export NAMES " +
+          "the narrowing that was not honoured — 'your Ctrl+F filter \"ACME\" was NOT applied' — " +
+          "because an operator who filters to one party and exports must not send a customer the " +
+          "whole ledger believing it was filtered. ⛔ IT IS OFFERED ONLY WHERE A LAYOUT EXISTS: ten " +
+          "of the thirty report names have one, the other twenty answer an honest 501, and a format " +
+          "that fails AFTER being chosen is a menu item that lies. Which ten is not a list anybody " +
+          "maintains here — internal/server generates it by asking the router, and the frontend " +
+          "reads that golden, so the two cannot drift. On a report with no layout the F12 panel " +
+          "says which report and why instead of silently lacking a row. ⚠️ Ctrl+P is still the way " +
+          "to PRINT: it opens the same document in a tab where the browser's print command lives. " +
+          "Same bytes, same route, different verb. JPEG and HTML export are still not built.",
+      },
+      {
+        name: "Export: e-mail a document",
         state: "off",
         note:
-          "Not built, and stated separately rather than folded into the row above so that row can " +
-          "be honest. Tally's own Alt+E also mails a document and writes PDF; this build does " +
-          "neither. ⚠️ Ctrl+P DOES produce a server-rendered PDF of a voucher, which is the nearest " +
-          "thing that exists — it is a different key, a different path and a per-document layout, " +
-          "not a report export. Tally XML IMPORT is a separate, built thing; these two rows are " +
-          "about getting data OUT.",
+          "Not built, and this row is SPLIT from PDF export above rather than sharing its badge, " +
+          "because the two are not one feature and only this half is blocked. ⛔ WHAT EXISTS: " +
+          "internal/notify is a real durable transactional outbox — Enqueue runs INSIDE the " +
+          "caller's transaction, so rolling back an invite rolls back its notification with it — " +
+          "with at-least-once delivery, a lease and status transitions. It is good, and it is not " +
+          "the missing piece. ⛔ WHAT DOES NOT EXIST IS A TRANSPORT AND A DECISION. There is no " +
+          "SMTP sender at all: the only Sender is LogSender, whose comment is deliberate — real " +
+          "SMTP is configuration, not code, and a log line is the honest statement that this " +
+          "deployment does not send mail. There is exactly one message Kind (a company invite) and " +
+          "no attachment concept: a Message carries a recipient, a subject and a body, so a PDF is " +
+          "not representable. ⛔ AND THE FIRST QUESTION IS NOT AN ENGINEERING ONE: does this " +
+          "product SEND mail, or does 'e-mail a document' mean handing the operator's own mail " +
+          "client a pre-addressed draft with the PDF already downloaded? The second is honest, " +
+          "needs no transport, no deliverability story and no bounce handling, and it is what a " +
+          "good deal of accounting software actually does. Until that is decided, building either " +
+          "one is guessing. ⛔ WHAT MUST NOT HAPPEN IS A HALF-SEND: notify's own rule is that " +
+          "nothing in it calls 'delivered to nobody' a send — an addressless message is settled as " +
+          "a terminal FAILURE carrying a reason, never as sent, because returning nil was once " +
+          "read as success and it cost a bug. A document e-mail that logged and reported 'sent' " +
+          "would re-introduce exactly that.",
       },
       {
         name: "Per-company print templates (logo, address block, footer, declarations)",

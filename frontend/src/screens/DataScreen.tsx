@@ -3,6 +3,10 @@ import { useCallback, useRef, useState } from "react";
 import { ApiError } from "../api";
 import type { RestoreResult } from "../api";
 import { useClient, useCompanyID } from "../app/CompanyContext";
+// ⛔ THE SHARED ANCHOR. This file used to carry its own copy, whose comment said
+// it was "deliberately not a third variant" — while being one. There is now
+// exactly one, and it is the one that revokes the object URL late.
+import { downloadBlob } from "../export/download";
 
 /**
  * THE DATA SCREEN (Alt+Y) — BACKUP AND RESTORE (T14).
@@ -204,27 +208,6 @@ export function DataScreen(): JSX.Element {
       )}
     </div>
   );
-}
-
-/**
- * Hand a blob to the browser as a download.
- *
- * The same shape usePrint.ts falls back to when a pop-up is blocked, and
- * deliberately not a third variant: an archive is never opened in a tab (there
- * is nothing to view), so this goes straight to the anchor.
- */
-function downloadBlob(blob: Blob, filename: string): void {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.rel = "noopener";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  // Revoke late, for the same reason usePrint does: revoking before the browser
-  // has read the blob produces an empty file.
-  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
 /**

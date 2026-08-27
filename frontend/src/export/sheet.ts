@@ -86,19 +86,48 @@ export interface ExportSheet {
   readonly rows: readonly ExportRow[];
 }
 
-/** The formats this build can actually write. See {@link UNBUILT_FORMATS}. */
+/**
+ * The SHEET formats — the ones rendered from an {@link ExportSheet} in this file.
+ *
+ * ⛔ PDF IS DELIBERATELY NOT IN THIS UNION, and that is a typing decision rather
+ * than an oversight. `renderSheet` and `mimeTypeFor` are total over it, and a PDF
+ * is not rendered from a sheet at all — it comes from the server's print route,
+ * already laid out. Widening this type would give both functions an impossible
+ * case to answer, and the answer would have to be a runtime throw. Alt+E's full
+ * choice is {@link ExportTarget}.
+ */
 export type ExportFormat = "csv" | "excel-xml";
 
 /**
- * Tally's own Alt+E also offers PDF, JPEG, HTML and "e-mail this document".
- * NONE of them is built here, and they are listed rather than omitted for the
- * reason the keymap lists its `unavailable` actions: an operator cannot tell a
- * missing feature from a broken one. (Printed PDFs DO exist — that is Ctrl+P,
- * a server-rendered statement, and a different thing from exporting the rows
- * on screen.)
+ * What Alt+E can produce: a sheet this file renders, or the SERVER'S PDF.
+ *
+ * ⛔⛔ THE PDF IS NOT THE ROWS ON SCREEN, AND THAT IS THE ONE THING AN OPERATOR
+ * MUST BE TOLD. Alt+E's whole identity is "write what is displayed, after Ctrl+F
+ * and F12 have been applied". The PDF is the opposite: it is what Ctrl+P fetches
+ * — the server's whole statement, unfiltered — because the print route is the
+ * only thing in this product that lays out a page against Rule 46, and
+ * re-implementing that in the browser would be a second typesetter that
+ * disagrees with the one on the invoices.
+ *
+ * So the two are genuinely different documents under one key, and every place
+ * that offers PDF says so: the F12 row's label, and the status line after the
+ * file is written. See `useExportAction`.
+ */
+export type ExportTarget = ExportFormat | "pdf";
+
+/**
+ * Tally's own Alt+E also offers JPEG, HTML and "e-mail this document". NONE of
+ * them is built here, and they are listed rather than omitted for the reason the
+ * keymap lists its `unavailable` actions: an operator cannot tell a missing
+ * feature from a broken one.
+ *
+ * ⚠️ PDF LEFT THIS LIST WHEN IT BECAME REAL (B1) — the same rule the button bar
+ * follows, where Alt+O joined the reconciliation bar the day the import shipped.
+ * It is available on the ten reports the server has a layout for and is not
+ * offered on the twenty that answer 501, which is a narrower claim than "PDF
+ * export works" and is the true one.
  */
 export const UNBUILT_FORMATS: readonly string[] = [
-  "PDF",
   "JPEG",
   "HTML",
   "e-mail this document",
