@@ -73,6 +73,11 @@ import type {
   ListGodownsResponse,
   ListStockBatchesResponse,
   CreateStockGroupRequest,
+  CreateCurrencyRequest,
+  CreateCurrencyResponse,
+  CurrencyListItem,
+  ListCurrenciesResponse,
+  SetCurrencyRateRequest,
   CreateStockGroupResponse,
   InventoryVocabularyResponse,
   ListStockGroupsResponse,
@@ -1444,6 +1449,13 @@ interface MockCompany {
    * already this lane, with the valuation method).
    */
   stockGroups: StockGroupListItem[];
+  /**
+   * T8 — the company's FOREIGN currencies. ⛔ The base currency is deliberately
+   * never in here, and createCurrency below refuses it, because the SERVER
+   * refuses it with a database trigger. A mock that allowed it would let a
+   * screen test create "INR" on an INR company and pass — D84 exactly.
+   */
+  currencies: CurrencyListItem[];
   units: UnitListItem[];
   /**
    * Head VoucherView per logical voucher_id — the GET /vouchers/{id} source.
@@ -2578,6 +2590,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         stockItems: [],
         batches: [],
         stockGroups: [],
+        currencies: [],
         // "Nos" is seeded with every company by migration 0005's
         // seed_phase1_voucher_types, and the item form's unit picker reads this
         // list — a fresh company with an empty one could not create an item at
@@ -2667,6 +2680,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       ],
       godowns: [mainLocation(demoID)],
       stockGroups: [],
+      currencies: [],
       units: [seedUnit(demoID, "Nos", "Numbers")],
       // Two demo items with DIFFERENT GST rates, so an item invoice keyed
       // against the seeded company exercises the multi-rate grouping rather
@@ -4451,6 +4465,83 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
           a.symbol.localeCompare(b.symbol),
         ),
       };
+    },
+    async listCurrencies(companyID): Promise<ListCurrenciesResponse> {
+      return {
+        currencies: [...ensure(companyID).currencies].sort((a, b) =>
+          a.code.localeCompare(b.code),
+        ),
+      };
+    },
+    async createCurrency(
+      companyID,
+      req: CreateCurrencyRequest,
+    ): Promise<CreateCurrencyResponse> {
+      const c = ensure(companyID);
+      const code = (req.code ?? "").trim();
+      if (code === "") {
+        throw new ApiError(422, "masters: currency code is required");
+      }
+      // D84: the mock refuses what the server refuses, IN THE SERVER'S ORDER.
+      // ⛔ THE BASE-CURRENCY REFUSAL IS FIRST because the server's trigger fires
+      // before the unique index can: on an INR company, "INR" is refused as the
+      // base currency and never as a duplicate.
+      if (
+        normalisedName(code) === normalisedName(c.baseCurrency) &&
+        c.baseCurrency !== ""
+      ) {
+        throw new ApiError(
+          422,
+          `${code}: that is this company's base currency, and the books are already kept in it. ` +
+            `Add a currency only for money you receive or pay in something else`,
+        );
+      }
+      const dup = c.currencies.find(
+        (x) => normalisedName(x.code) === normalisedName(code),
+      );
+      if (dup) {
+        throw new ApiError(422, duplicateMasterMessage("currency", code, dup.code));
+      }
+      const dp = req.decimal_places;
+      if (!Number.isInteger(dp) || dp < 0 || dp > 4) {
+        throw new ApiError(
+          422,
+          `masters: ${String(dp)} decimal places: money is carried to 4 decimals in this product, so a currency may have between 0 and 4`,
+        );
+      }
+      const id = `cur-${String(c.currencies.length + 1)}`;
+      c.currencies.push({
+        id,
+        code,
+        symbol: req.symbol,
+        formal_name: req.formal_name,
+        decimal_places: dp,
+        // ⛔ EMPTY, NOT "0". A currency starts with NO rate on file, and empty is
+        // the state the client must render as "no rate yet".
+        latest_rate: "",
+        latest_rate_date: "",
+      });
+      return { currency_id: id };
+    },
+    async setCurrencyRate(companyID, req: SetCurrencyRateRequest) {
+      const c = ensure(companyID);
+      const cur = c.currencies.find(
+        (x) => normalisedName(x.code) === normalisedName(req.code),
+      );
+      if (!cur) {
+        throw new ApiError(404, `masters: not found: currency "${req.code}"`);
+      }
+      if (!(Number(req.rate) > 0)) {
+        throw new ApiError(
+          422,
+          `masters: rate ${req.rate}: an exchange rate must be greater than zero`,
+        );
+      }
+      // Replaces the rate for that date, exactly as the server's upsert does.
+      if (req.effective_date >= cur.latest_rate_date) {
+        cur.latest_rate = req.rate;
+        cur.latest_rate_date = req.effective_date;
+      }
     },
     async listStockGroups(companyID): Promise<ListStockGroupsResponse> {
       // ⚠️ TREE ORDER (parents before children), which the server produces from

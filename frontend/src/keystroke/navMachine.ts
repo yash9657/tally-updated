@@ -172,6 +172,10 @@ export const MASTER_GOTO_ENTRIES: Readonly<Record<string, MasterKind>> = {
   "Create Stock Group": "stock-group",
   "Create Unit": "unit",
   "Create Voucher Type": "voucher-type",
+  // T8. A currency master is reached the same way every other master is. Named
+  // "Create Currency" rather than "Currency" so the type-ahead groups it with
+  // the other Create entries, per the note above.
+  "Create Currency": "currency",
 };
 
 /**

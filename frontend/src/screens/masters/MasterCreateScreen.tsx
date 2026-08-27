@@ -6,6 +6,7 @@ import type {
   CreateGroupRequest,
   CreateLedgerRequest,
   CreateStockGroupRequest,
+  CreateCurrencyRequest,
   CreateStockItemRequest,
   OpeningBillRequest,
   RefType,
@@ -173,6 +174,9 @@ const SECOND_FIELD: Readonly<Record<MasterKind, SecondField | null>> = {
   },
   // A unit has no parent at all: its own symbol IS the master.
   unit: null,
+  // T8 — a currency has no parent either. Its CODE is the master, and its
+  // symbol / formal name / decimals are all details.
+  currency: null,
 };
 
 /** What the first field is CALLED per kind (a unit is keyed by its symbol). */
@@ -183,6 +187,10 @@ const NAME_LABEL: Readonly<Record<MasterKind, string>> = {
   "stock-item": "Name",
   unit: "Symbol",
   "stock-group": "Name",
+  // ⚠️ "Code", not "Name": USD is the code, "$" is the symbol and "US Dollars"
+  // is the formal name, and a form that called the first field "Name" would
+  // collect the wrong one of the three.
+  currency: "Code",
 };
 
 /** The noun used in every status sentence, so a refusal names what was refused. */
@@ -193,6 +201,7 @@ const NOUN: Readonly<Record<MasterKind, string>> = {
   "stock-item": "stock item",
   unit: "unit",
   "stock-group": "stock group",
+  currency: "currency",
 };
 
 /**
@@ -218,6 +227,8 @@ const DETAIL_FOCUS: Readonly<Record<MasterKind, string | null>> = {
   "stock-group": null,
   // A voucher type has no further keyable field — see the note it renders.
   "voucher-type": null,
+  // T8 — the currency's SYMBOL is the first detail after its code.
+  currency: '[data-testid="master-currency-symbol"]',
 };
 
 /** One row of a ledger's bill-wise opening breakup, as keyed. */
@@ -264,6 +275,9 @@ interface Draft {
   // ---- unit
   formalName: string;
   decimalPlaces: string;
+  // ---- currency (T8). formalName and decimalPlaces are SHARED with unit —
+  // both masters carry exactly those two — so only the symbol is new here.
+  currencySymbol: string;
   // ---- stock item
   hsn: string;
   gstRatePct: string;
@@ -324,6 +338,7 @@ function emptyDraft(): Draft {
     nature: "",
     formalName: "",
     decimalPlaces: "2",
+    currencySymbol: "",
     hsn: "",
     gstRatePct: "",
     openingQty: "",
@@ -751,6 +766,31 @@ export function MasterCreateScreen({
                   : `${String(dp)} decimal places`,
           };
         }
+        case "currency": {
+          // ⛔ REFUSED HERE AS WELL AS ON THE SERVER, so the operator is told
+          // which field is wrong instead of reading a 422 about a constraint.
+          const dp = Number.parseInt(d.decimalPlaces, 10);
+          if (!Number.isFinite(dp) || dp < 0 || dp > 4) {
+            return `Decimal places must be 0 to 4 — money is stored to four decimals in this product. Nothing was created.`;
+          }
+          const sym = d.currencySymbol.trim();
+          if (sym === "") {
+            return `A currency needs a symbol to render amounts with — ${n} would print as a bare number. Nothing was created.`;
+          }
+          const formal = d.formalName.trim();
+          if (formal === "") {
+            return `A currency needs a formal name for documents — "${n}" is a code, not something an invoice can say. Nothing was created.`;
+          }
+          return {
+            req: {
+              code: n,
+              symbol: sym,
+              formal_name: formal,
+              decimal_places: dp,
+            },
+            summary: `${sym} ${formal}, ${dp === 0 ? "whole units" : `${String(dp)} decimal places`}`,
+          };
+        }
         case "stock-group": {
           // A group has a name and, optionally, a parent. Nothing else: a group
           // holds no stock of its own — its items do — so there is no opening,
@@ -861,6 +901,13 @@ export function MasterCreateScreen({
             req as CreateStockGroupRequest,
           );
           return { id: r.stock_group_id };
+        }
+        case "currency": {
+          const r = await client.createCurrency(
+            companyID,
+            req as CreateCurrencyRequest,
+          );
+          return { id: r.currency_id };
         }
         default:
           throw new Error(`unknown master kind ${String(kind)}`);
@@ -1291,6 +1338,60 @@ export function MasterCreateScreen({
           </div>
         ) : null}
 
+        {kind === "currency" ? (
+          <div className="mt-3 border-t border-tally-field/30 pt-2">
+            {/* ⛔ THE SYMBOL IS FIRST because DETAIL_FOCUS lands the "details"
+                cursor here — the code is already keyed in the first field, and
+                the symbol is the next thing an operator knows. */}
+            <label className="block text-tally-field">
+              Symbol
+              <input
+                aria-label="Symbol"
+                data-testid="master-currency-symbol"
+                className="ml-2 w-16 bg-tally-field px-1 text-tally-fieldText outline-none"
+                value={draft.currencySymbol}
+                onChange={(e) => {
+                  patch({ currencySymbol: e.target.value });
+                }}
+                autoFocus={onDetails}
+              />
+            </label>
+            <label className="mt-2 block text-tally-field">
+              Formal name
+              <input
+                aria-label="Formal name"
+                data-testid="master-currency-formal-name"
+                className="ml-2 bg-tally-field px-1 text-tally-fieldText outline-none"
+                value={draft.formalName}
+                onChange={(e) => {
+                  patch({ formalName: e.target.value });
+                }}
+              />
+            </label>
+            <label className="mt-2 block text-tally-field">
+              Decimal places
+              <input
+                aria-label="Decimal places"
+                data-testid="master-currency-decimals"
+                inputMode="numeric"
+                className="ml-2 w-12 bg-tally-field px-1 text-right text-tally-fieldText outline-none"
+                value={draft.decimalPlaces}
+                onChange={(e) => {
+                  patch({ decimalPlaces: e.target.value });
+                }}
+              />
+            </label>
+            {/* ⛔ SAID ON THE FORM, NOT DISCOVERED ON SAVE. Two facts an
+                operator cannot infer: the base currency is not creatable here,
+                and a currency is not usable until it has a rate. */}
+            <p className="mt-2 text-tally-dim">
+              This company&rsquo;s own base currency is not created here — the
+              books are already kept in it. A new currency has no exchange rate
+              until one is entered, and cannot be used on a voucher until it
+              does.
+            </p>
+          </div>
+        ) : null}
         {kind === "unit" ? (
           <div className="mt-3 border-t border-tally-field/30 pt-2">
             <label className="block text-tally-field">

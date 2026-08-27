@@ -69,6 +69,16 @@ const REACHED_BY: Record<MasterKind, { how: string; events: Ev[] }> = {
       { type: "KEY", combo: "Enter" },
     ],
   },
+  currency: {
+    // T8. Same guard as the stock group below: a currency master with no
+    // keystroke that reaches it is a form that exists and cannot be opened.
+    how: "Alt+G > Create Currency",
+    events: [
+      { type: "KEY", combo: "Alt+G" },
+      { type: "SELECT", menuItem: "Create Currency" },
+      { type: "KEY", combo: "Enter" },
+    ],
+  },
   "stock-group": {
     // T10. ⚠️ The table refused to compile the moment "stock-group" joined the
     // union, which is exactly what it is for: a MasterKind with no keystroke that

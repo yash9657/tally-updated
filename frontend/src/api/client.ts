@@ -33,6 +33,10 @@ import type {
   ListGodownsResponse,
   ListStockBatchesResponse,
   CreateStockGroupRequest,
+  CreateCurrencyRequest,
+  CreateCurrencyResponse,
+  ListCurrenciesResponse,
+  SetCurrencyRateRequest,
   CreateStockGroupResponse,
   InventoryVocabularyResponse,
   ListStockGroupsResponse,
@@ -913,6 +917,23 @@ export interface CoredClient {
     companyID: string,
     req: CreateStockGroupRequest,
   ): Promise<CreateStockGroupResponse>;
+
+  // ---- FOREIGN CURRENCIES AND THEIR RATES (T8) ----------------------------
+  //
+  // ⛔ THE COMPANY'S OWN BASE CURRENCY IS NOT IN THIS LIST and creating it is
+  // refused: a base-currency amount is recorded with no currency at all, so a
+  // master for it would be a second encoding of the same fact.
+  //
+  // ⚠️ `setCurrencyRate` REPLACES the rate already on file for that date, and
+  // that is safe ONLY because a voucher stores its own rate — this table
+  // supplies defaults and the revaluation report and is never joined by the
+  // ledger, so correcting a rate cannot restate a posted voucher.
+  listCurrencies(companyID: string): Promise<ListCurrenciesResponse>;
+  createCurrency(
+    companyID: string,
+    req: CreateCurrencyRequest,
+  ): Promise<CreateCurrencyResponse>;
+  setCurrencyRate(companyID: string, req: SetCurrencyRateRequest): Promise<void>;
 
   // ---- The COSTING METHOD (T9) -------------------------------------------
   //

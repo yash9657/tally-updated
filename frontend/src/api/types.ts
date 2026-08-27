@@ -1454,6 +1454,47 @@ export interface StockGroupListItem {
 export interface ListStockGroupsResponse {
   stock_groups: StockGroupListItem[];
 }
+/**
+ * A foreign currency as the server stores it (T8).
+ *
+ * ⛔ `latest_rate` IS A STRING AND MAY BE EMPTY, AND EMPTY IS NOT ZERO. A
+ * currency with no rate on file cannot be used to key a voucher; rendering "0"
+ * would offer the choice anyway and value the whole invoice at nothing. The
+ * rate carries TEN decimals — more than `Money` — so it must never be parsed
+ * with parseFixed4, which truncates the fifth.
+ */
+export interface CurrencyListItem {
+  id: string;
+  code: string;
+  symbol: string;
+  formal_name: string;
+  decimal_places: number;
+  /** "" when no rate has ever been entered. */
+  latest_rate: string;
+  /** "" when no rate has ever been entered. */
+  latest_rate_date: string;
+}
+export interface ListCurrenciesResponse {
+  currencies: CurrencyListItem[];
+}
+export interface CreateCurrencyRequest {
+  code: string;
+  symbol: string;
+  formal_name: string;
+  decimal_places: number;
+  created_by?: string;
+}
+export interface CreateCurrencyResponse {
+  currency_id: string;
+}
+export interface SetCurrencyRateRequest {
+  code: string;
+  effective_date: string;
+  /** Base units per ONE foreign unit, as a STRING. Never a number. */
+  rate: string;
+  created_by?: string;
+}
+
 export interface CreateStockGroupRequest {
   name: string;
   /** An EXISTING group, or absent for a top-level one. */

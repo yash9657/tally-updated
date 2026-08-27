@@ -109,6 +109,33 @@ var wireDatesInPackageServer = map[string]wireDateVerdict{
 	// ---- NOT A DATE THE CUTOFF CAN OWN, WITH THE REASON. ------------------
 	"voucherDateProbe.voucher_date": {reason: "the PEEK's own probe type, not a wire contract"},
 
+	"currencyListItem.latest_rate_date": {reason: "" +
+		"a RESPONSE field, never an input: it is the date of the newest rate on file, emitted by " +
+		"GET /currencies so a picker can say how stale a rate is. The cutoff judges WRITES — it " +
+		"reads a date out of a request body to decide whether an entry may be made — so there is " +
+		"no request here for it to judge. ⚠️ It is listed rather than skipped because the census " +
+		"scans by SHAPE, and 'it is only a response' is exactly the sentence that would be wrong " +
+		"the day someone accepts it back as an input."},
+
+	"currencyRateReq.effective_date": {reason: "" +
+		"the date a published EXCHANGE RATE took effect, which is a fact about the money market " +
+		"and not about this company's books. Three reasons the cutoff cannot own it, and the " +
+		"third is the one that makes it safe:\n" +
+		"  (1) it posts NOTHING. A currency_rate row names no ledger, carries no dr_cr and " +
+		"      appears on no statement; there is no entry here for a closed period to protect.\n" +
+		"  (2) BACK-DATING IT IS THE NORMAL CASE, not the suspicious one. A company adopting " +
+		"      this product mid-year has to enter the rates that were in force BEFORE its " +
+		"      cutoff, and the unadjusted-forex report is precisely a question about past " +
+		"      dates. A cutoff here would make that report unbuildable for the periods it is " +
+		"      about.\n" +
+		"  (3) ⛔ AND IT CANNOT RESTATE ANYTHING. A voucher stores its OWN rate " +
+		"      (migration 0080), so this table is read for DEFAULTS and for the revaluation " +
+		"      report and is never joined by the ledger. Writing a rate dated inside a closed " +
+		"      period moves no posted voucher, no balance and no statement — which is exactly " +
+		"      what the cutoff exists to prevent, and is structurally impossible here.\n" +
+		"⚠️ IF A LATER TRACK EVER MAKES THE LEDGER READ THIS TABLE, THIS ENTRY BECOMES FALSE " +
+		"and the field must move to `judged`. That is the one change to watch for."},
+
 	"billAllocationReq.due_date": {reason: "" +
 		"a bill's MATURITY, not the date of the entry: the voucher carrying it is dated by " +
 		"voucher_date and judged on that. A due date places nothing in a period"},

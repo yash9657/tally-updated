@@ -796,6 +796,15 @@ func (s *Server) routes() {
 		r.Get("/stock-groups", s.handleListStockGroups)
 		r.Post("/stock-groups", s.handleCreateStockGroup)
 
+		// T8 — FOREIGN CURRENCIES AND THEIR RATES (migration 0080).
+		// isMasterPath maps both to the `master` token, so the level that may
+		// read a godown may read a currency, and the level that may not mint one
+		// cannot decide what a dollar is worth either. See auth_middleware.go's
+		// note for why a bare `currency` token was rejected.
+		r.Get("/currencies", s.handleListCurrencies)
+		r.Post("/currencies", s.handleCreateCurrency)
+		r.Post("/currencies/rates", s.handleSetCurrencyRate)
+
 		// THE COST MASTERS (T2, migration 0040) — the AXES of cost analysis and the
 		// POSITIONS on them. A cost CATEGORY is an axis (Department, Branch, Project);
 		// a cost CENTRE is a position on that axis. Several axes exist in order to

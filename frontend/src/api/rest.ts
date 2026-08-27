@@ -40,6 +40,10 @@ import type {
   ListGodownsResponse,
   ListStockBatchesResponse,
   CreateStockGroupRequest,
+  CreateCurrencyRequest,
+  CreateCurrencyResponse,
+  ListCurrenciesResponse,
+  SetCurrencyRateRequest,
   CreateStockGroupResponse,
   InventoryVocabularyResponse,
   ListStockGroupsResponse,
@@ -716,6 +720,18 @@ export function createRestClient(
         `${company(companyID)}/stock-groups`,
         req,
       );
+    },
+    listCurrencies(companyID) {
+      return http.get<ListCurrenciesResponse>(`${company(companyID)}/currencies`);
+    },
+    createCurrency(companyID, req: CreateCurrencyRequest) {
+      return http.post<CreateCurrencyResponse>(
+        `${company(companyID)}/currencies`,
+        req,
+      );
+    },
+    async setCurrencyRate(companyID, req: SetCurrencyRateRequest) {
+      await http.post(`${company(companyID)}/currencies/rates`, req);
     },
     inventoryVocabulary(companyID) {
       return http.get<InventoryVocabularyResponse>(

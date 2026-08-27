@@ -2314,7 +2314,27 @@ func isMasterPath(rest string) bool {
 		// and it is what an item form's picker is built from, so the level that
 		// keys stock items must be able to read it. GET only; there is no POST
 		// route, so a POST answers 404 rather than being authorised into nothing.
-		"/inventory-vocabulary":
+		"/inventory-vocabulary",
+		// T8 — FOREIGN CURRENCIES AND THEIR RATES (migration 0080).
+		//
+		// ⛔⛔ MODELLED AS `master`, AND THE ALTERNATIVE WAS SERIOUSLY CONSIDERED
+		// AND REJECTED FOR A CONCRETE REASON. A bare `currency` token of its own
+		// would be denied to every seeded non-Owner level for free (Data Entry's
+		// default_access is 'none'), which is the safe-looking choice — and it
+		// would DENY THE CURRENCY PICKER TO THE ONE LEVEL THAT KEYS THE VOUCHERS.
+		// An operator entering a dollar invoice must be able to SEE that USD
+		// exists, exactly as they must see ledgers, units and godowns. That is
+		// the same trap /tds-sections above records, and it is worth writing
+		// twice because the safe-looking answer is wrong in the same way both
+		// times.
+		//
+		// ⭐ AND `master` ALREADY CARRIES THE RIGHT SPLIT WITH NO MIGRATION:
+		// migration 0011 seeds Data Entry `allow display master` and NOTHING
+		// wider, so reading currencies is granted and creating one is DENIED —
+		// which is exactly the line that matters here. Setting an exchange RATE
+		// is a (Create, "master") write, so a data-entry clerk cannot decide what
+		// a dollar is worth while still being able to key an invoice in one.
+		"/currencies", "/currencies/rates":
 		return true
 	}
 	return false

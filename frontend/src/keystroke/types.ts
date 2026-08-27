@@ -475,7 +475,20 @@ export type MasterKind =
    * which is exactly a stock group (a name and a parent). A cost centre needs an
    * axis it cannot exist without, which is why that one has a screen of its own.
    */
-  | "stock-group";
+  | "stock-group"
+  /**
+   * A FOREIGN CURRENCY (T8, migration 0080) — a code, a symbol, a formal name
+   * and how many decimals it has.
+   *
+   * ⚠️ IT IS A MasterKind FOR THE SAME REASON A STOCK GROUP IS: the form is "a
+   * name and some details", which is exactly a currency. It needs no picker it
+   * cannot exist without, so it earns no screen of its own.
+   *
+   * ⛔ THE COMPANY'S OWN BASE CURRENCY IS NOT ONE OF THESE. A base-currency
+   * amount is recorded with no currency at all, so a master for the base would
+   * be a second encoding of the same fact — the server refuses it by name.
+   */
+  | "currency";
 
 /**
  * The canonical Phase 1 report names. These strings are the `reportName` on a

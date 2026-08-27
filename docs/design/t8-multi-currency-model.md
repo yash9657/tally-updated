@@ -344,12 +344,41 @@ mutation demonstrably took effect.
 
 ## 5. THE BUILD ORDER THAT FOLLOWS
 
-1. **The importer disclosure — first, and worth doing even if T8 stopped here.**
-   ⛔ **BUT ITS PREMISE WAS WRONG, AND THE PROBE IS IN §6.** Build what §6 concludes, not what
-   `HANDOFF-T8-MULTI-CURRENCY.md` §6 item 2 assumed.
-2. **0080 block: the tables, the columns, the `CHECK`.** Prove `ledger_balance`, the Trial Balance and
-   `verify:demo` are all untouched — §4's free oracle, run BEFORE any surface exists.
-3. **The currency `MasterKind`** + the rate table's write path.
+1. ⭐ **MOVED TO THE AUDIT LANE — `HANDOFF-AUDIT-THE-UNDRIVEN.md` row U1.** Its premise was wrong
+   (§6) and settling it needs a `Alt+O` drive plus a REAL Tally forex export, which is that lane's
+   job and `HANDOFF.md` §10 item 1's ask. It is no longer blocking T8.
+2. ✅ **DONE (`20dd96f`) — the 0080 block: the tables, the columns, the `CHECK`.** `verify:demo`
+   34/34 unchanged, 7035 existing postings all base, Dr = Cr untouched. Four schema invariants
+   mutation-proved (§4.1).
+3. ✅ **DONE — the currency `MasterKind` + the rate write path.** `masters/currency.go`,
+   `GET/POST /currencies` and `POST /currencies/rates`, the typed client, the faithful mock and
+   `Alt+G > Create Currency`. **Driven 15/15 in a real browser**; five service tests, four mutations.
+   ⭐ **AND THE `FeaturesScreen` ROW WAS SPLIT RATHER THAN FLIPPED** — `Multi-currency` stays `off`
+   because you still cannot key a foreign voucher, and the masters got a row of their own that is
+   wholly true. Same treatment as the offline pair, for the same reason.
+
+   > ⛔ **THREE REGISTRATION FACTS WORTH CARRYING, ALL MEASURED:**
+   >
+   > 1. ⭐ **A NEW `MasterKind` IS NOT LIKE A NEW `ScreenKind`.** `HANDOFF.md` §7.2 says a
+   >    `ScreenKind` needs 15 registrations and `tsc` enforces NONE. A `MasterKind` is the
+   >    opposite: `SECOND_FIELD`, `NAME_LABEL`, `NOUN`, `DETAIL_FOCUS` and `masterGoto.test.ts`
+   >    are all `Record<MasterKind, …>`, so **`tsc` named every missing one.** The Go To test's
+   >    own comment says that is exactly what it is for — a master form no keystroke reaches is
+   >    register row 20, for five kinds at once.
+   > 2. ⛔ **THE ROUTE STILL NEEDS `isMasterPath`, AND NOTHING TYPE-CHECKS THAT.** `routeAction`
+   >    default-denies an unmapped `{companyID}` route, so a new route with no entry compiles,
+   >    passes every Go test (they call the SERVICE, not the route) and is **403 for the Owner**.
+   >    Only an HTTP call through the real middleware catches it — probe 1 of the drive.
+   > 3. ⭐ **A NEW DATE-SHAPED WIRE FIELD IS A REGISTRATION POINT, AND NOTHING WARNS YOU.**
+   >    `TestEveryDateShapedWireFieldIsAccountedForByTheCutoff` scans package `server` BY SHAPE
+   >    and failed the build on both `currencyRateReq.effective_date` **and the response field
+   >    `currencyListItem.latest_rate_date`**. It demands a decision plus a WRITTEN REASON, because
+   >    this exact gap shipped open three times (`wage_month`, `deposit_date`, `bank_date`) and
+   >    **two of the three shipped with a comment asserting the control was in place.**
+   >    ⛔ A rate's `effective_date` is deliberately NOT judged by the cutoff, and the reason that
+   >    makes it safe is Q1's design: back-dating a rate moves no posted voucher, because a voucher
+   >    stores its own. ⚠️ **If a later track ever makes the ledger read `currency_rate`, that
+   >    classification becomes false** — the entry says so, in the file.
 4. **Foreign entry on a voucher** — the three values stored, the client's `Rate` type NOT `Money`.
 5. **Realised gain/loss on settlement**, including the REFUSAL when no ledger is chosen.
 6. **Outstandings gains its two fields and the currency in its netting key**, incl. the mixed-currency
