@@ -3344,8 +3344,24 @@ more than one type — the default is always right for exactly one of them.**
 
 ## 6. ⛔⛔ MIGRATIONS — READ BEFORE TAKING A NUMBER
 
-Highest number in the tree is **0073**. **`0073_order_book_acl.sql` is the highest-numbered
-restatement of `seed_company_auth_defaults` (13 PERFORMs) — DERIVE FROM IT.**
+Highest number in the tree is **0079** (`0079_stock_groups_and_compound_units.sql`, 63 files).
+**`0076_forecast_report_acl.sql` is the highest-numbered restatement of `seed_company_auth_defaults`
+(14 in-body PERFORMs) — DERIVE FROM IT.**
+
+> ⚠️ **CORRECTED 2026-08-27 (T8 scouting).** This line said *0073 / 13 PERFORMs* for three sessions
+> after it stopped being true. **Re-measure it; do not inherit it:**
+>
+> ```
+> $ ls backend/migrations/*.sql | tail -1
+> $ for f in backend/migrations/*.sql; do awk '/CREATE OR REPLACE FUNCTION seed_company_auth_defaults/,
+>       /^\$\$ LANGUAGE plpgsql/' "$f" | /usr/bin/grep -c PERFORM; done
+>     0071 → 11 · 0072 → 12 · 0073 → 13 · 0076 → 14   (monotonic: nothing was dropped)
+> ```
+>
+> ⛔ **COUNT THE FUNCTION BODY, NOT THE FILE.** `grep -c PERFORM` on the whole file gives **22** for
+> 0071 and **20** for 0076, which reads as if 0076 dropped two rules. It did not — 0071 also PERFORMs
+> the seeder for existing companies *outside* the body. A file-level count is a false alarm generator
+> on exactly the check §6.2 step 2 exists to make.
 
 > ### ⛔ 0041 AND 0044 ARE PERMANENTLY UNUSABLE AND MUST BE LEFT EMPTY.
 > Both were reserved for a track's ACL rules and neither can carry them.
