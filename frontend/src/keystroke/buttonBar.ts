@@ -473,6 +473,22 @@ const TALLY_IMPORT_BAR: readonly ButtonBarItem[] = [
 ];
 
 /**
+ * RECONCILIATION QUEUE (track D) — the refused alters and deletes.
+ *
+ * ⛔ NO ACCEPT KEY AND NO ADVERTISED WRITE. The screen's one write — clearing an
+ * entry — is a NAMED BUTTON per row and deliberately not on the bar: "Accept"
+ * would fire it from a key operators press reflexively on every form, and what it
+ * clears is the only record that somebody's work was refused. The same reasoning
+ * TALLY_IMPORT_BAR above carries for its irreversible import.
+ */
+const RECONCILIATION_BAR: readonly ButtonBarItem[] = [
+  item("Esc", "Back"),
+  item("Alt+G", "Go To"),
+  item("Ctrl+G", "Switch To"),
+  item("F1", "Help"),
+];
+
+/**
  * PRINT TEMPLATES (track C) — the per-company document layouts.
  *
  * Ctrl+A is not offered, for the reason the Data and import screens do not offer
@@ -594,6 +610,8 @@ export function buttonBarFor(
       return DATA_BAR;
     case "tally-import":
       return TALLY_IMPORT_BAR;
+    case "reconciliation":
+      return RECONCILIATION_BAR;
     case "print-templates":
       return PRINT_TEMPLATES_BAR;
     case "bill-inbox":

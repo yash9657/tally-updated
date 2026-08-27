@@ -106,6 +106,17 @@ KNOWN_SCREENS = {
     # the print preview rather than a documented Alt binding, so there is none to
     # be faithful to.
     "print-templates",
+    # Reconciliation (track D) — every alter or delete these books REFUSED: the
+    # freeze rule's rows (an IRN or a filed GSTR-1 pins a voucher) and the offline
+    # sequencer's parked conflict losers, on one list. Reached from Gateway of
+    # Tally > Reconciliation and from Alt+R.
+    #
+    # A ScreenKind rather than a report name, though `report:reconciliation-queue`
+    # exists: that report answers 501, and the two routes this screen needs beyond
+    # the listing — the parked payload and the resolve — are governed by the bare
+    # `reconciliation` token, which migration 0011's coarse `allow display report`
+    # cannot reach. The screen also carries a WRITE, which no report frame does.
+    "reconciliation",
     # The Bank Reconciliation Statement (T4): a bank ledger's postings with the
     # ONE editable column, Bank Date. Reached from the Gateway (TallyPrime's own
     # route is Alt+G > Banking Activities); F4 picks the account.

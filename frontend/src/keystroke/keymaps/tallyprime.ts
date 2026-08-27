@@ -114,6 +114,13 @@ const RAW_BINDINGS: Record<string, KeymapAction> = {
   // pins that mapping for this very combo). Combos resolve on `code`, so drive
   // it in a test with the harness's altMac("o") and never press("Alt+o").
   "Alt+O": { kind: "tallyImport" },
+  // "R: Reconcile" — the queue of refused alters and deletes (track D).
+  //
+  // ⚠️ macOS COMPOSES Option+R INTO "®". Combos resolve on `code`, so drive it in
+  // a test with the harness's altMac("r") and NEVER press("Alt+r") — every Alt
+  // binding in this product was once found dead on macOS while every browser
+  // test passed (HANDOFF rule 6).
+  "Alt+R": { kind: "reconciliationQueue" },
   F12: { kind: "configure" }, // Configure (screen/report settings)
   // Alt+C — create a master inline (e.g. a new ledger from a voucher field).
   // The default master is a ledger, the by-far most common inline create; the
@@ -1023,6 +1030,13 @@ export function actionLabel(action: KeymapAction): string {
       // is also reached with Alt+O — a bare "Import" would make the two
       // indistinguishable in the one place an operator goes to tell them apart.
       return "Import from Tally (XML export)";
+    case "reconciliationQueue":
+      // ⛔ "Reconciliation (refused changes)" AND NOT "Reconciliation". This
+      // product already has a BANK reconciliation screen, reached from a
+      // different key, and a bare "Reconciliation" in the F1 keyboard help would
+      // make the two indistinguishable in the one place an operator goes to tell
+      // them apart. What this one holds is refused alters and deletes.
+      return "Reconciliation (refused changes)";
     case "goto":
       return "Go To (keeps this screen)";
     case "switchTo":

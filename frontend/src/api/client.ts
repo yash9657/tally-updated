@@ -144,6 +144,14 @@ import type {
   UpdateSecurityLevelResponse,
 } from "./admin";
 
+import type {
+  ReconciliationPayloadResponse,
+  ReconciliationQueueResponse,
+  ResolveReconciliationResponse,
+  SyncCommitResponse,
+  SyncIntent,
+} from "./types";
+
 /**
  * What a restore did — and, as importantly, what it did NOT do.
  *
@@ -1517,4 +1525,94 @@ export interface CoredClient {
    * the same answer.
    */
   payrollVocabulary(companyID: string): Promise<PayrollVocabularyResponse>;
+
+  // -------------------------------------------------------------------------
+  // OFFLINE SYNC + THE RECONCILIATION QUEUE (track D).
+  //
+  // ⛔ THE FIRST TWO ROUTES HAVE BEEN MOUNTED SINCE TASK C AND WERE NEVER CALLED
+  // BY THIS APP. `/usr/bin/grep -rln "sync/commit" frontend/src/` was EMPTY, and
+  // so the queue that records every refused alter/delete has never been shown to
+  // an operator — including the FROZEN rows the shipped IRN freeze rule already
+  // raises today. That is a present-tense defect, not only an offline one.
+  // -------------------------------------------------------------------------
+
+  /**
+   * Commit an offline node's outbox through the cloud sequencer, returning ONE
+   * outcome per intent in submission order.
+   *
+   * ⛔⛔ SEND THE WHOLE OUTBOX IN ONE CALL, AND DO NOT DRAIN IT ROW BY ROW. Two
+   * reasons, and the second is not an optimisation:
+   *
+   *   1. the commit is one WRITE, so a level requiring WebAuthn costs exactly one
+   *      step-up for the whole batch rather than one per voucher;
+   *   2. the back-dated cutoff judges the batch as a UNIT — "a batch is only as
+   *      permitted as its most-refused member" (cutoff round 2). One pre-cutoff
+   *      intent refuses ALL of them with a 403 and NO outcomes at all. Draining
+   *      row by row would turn one honest refusal into a partial commit whose
+   *      shape depends on the order the rows happened to be in.
+   *
+   * ⛔ A 403 IS NOT A PER-INTENT FAILURE. It returns no outcomes, nothing was
+   * applied, and THE OUTBOX MUST BE LEFT INTACT — see {@link SyncBatchRefusal}.
+   * Calling `OfflineNode.settle` on a refusal destroys work the server never
+   * judged.
+   *
+   * ⚠️ AND `provisional_no` IS NEVER THE VOUCHER NUMBER. The server allocates the
+   * final number; the provisional is carried only so a conflict loser can be
+   * surfaced with the label the operator saw offline.
+   */
+  syncCommit(companyID: string, intents: SyncIntent[]): Promise<SyncCommitResponse>;
+
+  /**
+   * The OPEN reconciliation entries, newest first — every refused alter/delete
+   * this company has accumulated.
+   *
+   * Two kinds arrive on one list and they are NOT interchangeable: `kind ===
+   * "CONFLICT"` is a parked offline loser whose payload was preserved, while
+   * `"IRN"` / `"FILED_GSTR1"` is a freeze row raised by the ledger, which carries
+   * no payload at all. {@link reconciliationPayload} is where that difference
+   * becomes visible.
+   */
+  reconciliationQueue(companyID: string): Promise<ReconciliationQueueResponse>;
+
+  /**
+   * The intent PARKED on one open entry — the voucher body the operator keyed,
+   * for the right-hand pane of the conflict compare screen. The left-hand pane is
+   * {@link getVoucher}, which returns the live head.
+   *
+   * ⚠️ `has_payload: false` IS A REAL ANSWER, NOT AN ERROR. A freeze row never
+   * held a payload, so the operator's own version exists only in the local outbox
+   * on the machine that keyed it. Read it from there — and say so plainly when
+   * this is not that machine, rather than rendering an empty pane.
+   *
+   * ⛔ THE MONEY IN `intent.payload` IS ALREADY FORMATTED TO MATCH `getVoucher`'s
+   * (fixed-4 strings). Do not re-format it, and do not compare it against
+   * anything you have re-formatted yourself: the whole reason the server does not
+   * echo its stored bytes is that "1180" beside "1180.0000" reads as a difference
+   * that does not exist.
+   */
+  reconciliationPayload(
+    companyID: string,
+    reconID: string,
+  ): Promise<ReconciliationPayloadResponse>;
+
+  /**
+   * Mark one open entry handled.
+   *
+   * ⛔ THIS IS THE ONLY WRITER OF `resolved_at` THAT EXISTS. Before it, the
+   * column had none anywhere in the codebase, so a row was immortal and the queue
+   * could only grow.
+   *
+   * ⚠️ IT DOES NOT REPLAY THE PARKED INTENT AND NOTHING DOES. Resolving records
+   * that a human dealt with the item; the refused alter/delete stays refused. The
+   * operator's ways back into the books are a fresh voucher or a credit note, and
+   * a screen that implies "resolve" retries the edit is promising something no
+   * route performs.
+   *
+   * A second resolve of the same id answers 404 — the row is no longer open —
+   * which is a stale view rather than a failure.
+   */
+  resolveReconciliation(
+    companyID: string,
+    reconID: string,
+  ): Promise<ResolveReconciliationResponse>;
 }

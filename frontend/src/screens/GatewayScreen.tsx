@@ -47,6 +47,25 @@ const GATEWAY_MENU = [
   // shadowing a binding a screen already owns.
   "Print Templates",
 
+  // Reconciliation (track D) — every alter or delete these books refused.
+  //
+  // ⛔ IT IS A DOOR BECAUSE THE ROWS BEHIND IT HAVE NEVER BEEN VISIBLE. The
+  // ledger's freeze rule has raised queue rows since migration 0009 and the route
+  // has served them the whole time; nothing in this app called it, so an operator
+  // whose edit was refused got the explanation written to a table only Postgres
+  // could read. Alt+R reaches it too, but a keyboard operator who does not know
+  // the key needs it on the Gateway.
+  //
+  // ⚠️ THE LABEL IS MATCHED IN navMachine BEFORE the canonicalReportName
+  // fallback — see RECONCILIATION_LABEL, and note the trap is sharper here than
+  // for the other two because a bank-reconciliation REPORT really does exist.
+  //
+  // ⛔ IT SAYS "QUEUE" BECAUSE THE BARE WORD COLLIDED WITH "Bank Reconciliation"
+  // ABOVE. The Gateway is driven by typing into its search box; the short name
+  // opened the BANK screen instead, silently, which reads as an empty queue
+  // rather than as a wrong turn. Found in a real browser, not in a test.
+  "Reconciliation Queue",
+
   // ---- THE THREE COST SCREENS (T2).
   //
   // "Cost Centres" is the MASTERS door — the axes of analysis (Department,

@@ -921,7 +921,8 @@ The criterion is unchanged: **how much of a real business's day is blocked.**
 | **6** | ✅ **DONE 2026-08-26 — B1 EXPORT TO PDF** (§1.19). F12 offers it, `Alt+E` saves it. The **e-mail half was SPLIT off** and still reads Not built, because it is blocked on a PRODUCT DECISION rather than on work | ⛔ **A PDF IS NOT THE ROWS ON SCREEN** — Alt+E's other formats write what is displayed, the print route returns the whole statement, so the status line NAMES the Ctrl+F filter that was not applied. Offered only on the 10 of 30 reports with a layout, gated by a golden **generated from the router** rather than a list anybody keeps. And the three disagreeing download anchors became one (two revoked late and said why; the third revoked synchronously) | 14 vitest cases · `drive-b1-pdf-export.mjs` **15/15**, reading the PDF Chromium actually saved · 6 mutations predicted then observed |
 | **7** | ✅ **DONE 2026-08-27 — TRACK C / T16 PER-COMPANY PRINT TEMPLATES** (§1.20). Three routes plus one screen, reached from **Gateway of Tally > Print Templates**; the F11 row was **RENAMED to drop "logo"**, because there is no image storage anywhere in this product | ⛔ **THE SIXTH ENGINE WITH NO FRONT DOOR.** `SaveOverrides` was implemented AND TESTED since migration 0037 and the printer honoured overrides on every print — and no route could write one, so `print_template` held **zero rows in the entire database**. ⛔ **The finding that changed the design: THE FIELD GRID IS RAGGED.** `RenderReport` reads 3 of the 7 overridable fields, so a form built from the obvious reading stores a declaration no statement will ever print, with no error anywhere. Which fields bite is now a **golden MEASURED by rendering each kind twice per field** — and unlike B1's it needs no Postgres, so it cannot hide behind a skip | 18 mutations predicted then observed · the oracle is the **printed PDF**, never the stored row · `drive-c-print-templates.mjs` **33/33**, whose strongest probe is that after clearing the PDF is **byte-identical** to the pre-override one |
 | **8** | ✅ **DONE 2026-08-27 — B2 E-MAIL A DOCUMENT** (§1.21). `Alt+M` saves the server's PDF and opens the operator's OWN mail client on a draft. The F11 row reads On and **names the mechanism in its own title**, because a bare "E-mail a document — On" is read as SMTP by everybody | ⛔ **NO GO CODE CHANGED, AND `internal/notify` IS UNTOUCHED** — this product does not send mail, which is the decision rather than a gap. ⛔ **A WEB PAGE CANNOT ATTACH A FILE TO A `mailto:` DRAFT**, so the one failure mode is a draft opening with no file saved — hence the proof is an **ORDERING** test (save, then draft; and no draft at all if the save fails), because asserting the two effects separately cannot see it. ⚠️ **The plan said "pre-addressed" and that was wrong**: no party e-mail exists anywhere in the schema, so the draft has no recipient and the screen says so. Its own key rather than a fourth `ExportTarget`, because Tally's top menu carries `E: Export` and `M: E-mail` separately (RESEARCH.md:361/:415/:774/:817) | 13 mutations predicted then observed · `drive-b2-email-document.mjs` **20/20**, asserting the real `mailto:` URL Chromium was asked to open · it also found a blind spot: `buttons.test.ts` cannot see a decorative Alt+M **or Ctrl+P**, so the bar invariant is now asserted directly |
-| **9** | **OFFLINE ENTRY SCREEN** (§5.2) | The differentiator against Tally's LAN-only model, and it is built | A screen **plus a decision**: how does a browser present queued intents? |
+| **9** | 🟡 **HALF DONE 2026-08-27 — TRACK D** (§1.22). **The reconciliation queue SHIPPED**: `Alt+R` / **Gateway of Tally > Reconciliation Queue**, plus the two backend routes it needed and the first writer of `resolved_at` that has ever existed. **Offline ENTRY did not** — the offline node is ported to TypeScript and proved against Go by a generated golden, but nothing enqueues into it and there is no app shell | ⛔ **THE QUEUE WAS A PRESENT-TENSE DEFECT, NOT AN OFFLINE ONE.** The freeze rule has raised rows since migration 0009 and `GET /reconciliation-queue` served them the whole time; **nothing in the app ever called it**, so every operator whose edit was refused by an IRN or a filed GSTR-1 got the explanation written to a table only Postgres could read. ⛔ **AND `resolved_at` HAD NO WRITER ANYWHERE** — no `UPDATE reconciliation_queue` existed in Go or SQL — so a row was **immortal** and the queue could only grow. ⛔ **The finding that changed the design: `ConflictPayload` HAD NO HTTP READER** (callers: two Go test files), so Q2's compare screen was unbuildable. ⚠️ **And the payload must NOT be echoed as stored**: it renders 1180 as `"1180"` while the live voucher renders `"1180.0000"`, so raw bytes would invite an operator to discard work over a difference that does not exist | 11 backend + 20 frontend mutations predicted then observed · `drive-d-reconciliation.mjs` **29/29** on a **REAL** conflict (a stale `base_version` through the actual sequencer, never stubbed), whose strongest probe is that resolving **stamps `resolved_at` in Postgres** · the drive also caught a **shipped-label collision**: the Gateway door was called "Reconciliation" and opened **Bank Reconciliation** instead, silently |
+| **10** | **OFFLINE ENTRY — the half that is left** (§1.22.6, §5.2) | The differentiator against Tally's LAN-only model. The engine, the client port and the queue UI all exist now | ⛔ **TWO THINGS, AND THE FIRST IS A DECISION NOT A SCREEN**: when does a failed post become a queued intent (a dropped connection must queue; a 422 the books refused must NOT), and then the service worker + app shell, which is its own track |
 | **10** | **T8 multi-currency** → **T11 budgets** → **T13 interest** → **T12 GSTR-9** → **SSO/OIDC last** | Ordinary Tier-2 backlog. §5.4 states the one thing not to get wrong in each. ⚠️ **T16 print templates and B2 are GONE from this list — they shipped as rows 7 and 8.** | |
 
 > ### ⛔⛔ AND THE TWO THINGS THAT ARE NOT TRACKS AND OUTRANK MOST OF THIS LIST
@@ -2296,6 +2297,162 @@ prove the two things a test can prove and a demo cannot:
   deployable, a service token, and a process nothing currently runs.
 - **Do not skip the browser pass to save time.** T5's found three defects, two in code that session
   never touched (§1.3), and §3.1's fourth observation exists because of it.
+
+---
+
+### 1.22 🟡 TRACK D — THE RECONCILIATION QUEUE SHIPPED. OFFLINE **ENTRY** DID NOT, AND THIS SAYS WHICH.
+
+**Landed 2026-08-27.** `Alt+R` and **Gateway of Tally > Reconciliation Queue** open a screen listing
+every alter or delete these books refused. Two new backend routes, one new PDP token, one new
+`ScreenKind`, and a TypeScript port of the offline node proved against Go by a generated golden.
+
+⛔ **READ §1.22.6 BEFORE SAYING "OFFLINE ENTRY IS DONE". IT IS NOT.** The FeaturesScreen row was
+**SPLIT** rather than flipped, for the reason the backup/split pair was split: the half that shipped
+says On, and the half that did not still says what is missing.
+
+#### 1.22.1 ⛔ THE QUEUE WAS A DEFECT IN THE SHIPPED PRODUCT, NOT A MISSING OFFLINE FEATURE
+
+`internal/ledger`'s freeze rule has written a `reconciliation_queue` row every time somebody tried to
+alter or delete a voucher pinned by an IRN or a filed GSTR-1 — since **migration 0009** — and
+`GET /reconciliation-queue` has served them the whole time. **Nothing in this app ever called it:**
+
+```
+$ /usr/bin/grep -rn "reconciliation-queue" frontend/src/     # BEFORE this track
+  src/api/mock.ts:1930  "report:reconciliation-queue"        (an ACL token)
+  src/api/goldens/printed-report-layouts.json:32             (in answers_501)
+$ /usr/bin/grep -rn "Reconciliation Queue" frontend/src/  -> EMPTY
+```
+
+So an operator's edit was refused and the explanation went to a table only Postgres could read. That
+is §1.15's rule again — **a route table is not a surface** — and it is the seventh engine found with
+no front door.
+
+#### 1.22.2 ⛔⛔ TWO BACKEND GAPS MADE THE COMPARE SCREEN UNBUILDABLE. BOTH WERE MEASURED ABSENCES.
+
+| Gap | Evidence | Fix |
+|---|---|---|
+| **the parked payload had no HTTP reader** | `sync.Service.ConflictPayload` has read the JSONB since migration 0010; `/usr/bin/grep -rn "ConflictPayload" backend --include='*.go'` found callers in **`fuzz_test.go` and `service_test.go` only** | `GET .../reconciliation-queue/{reconID}/payload` |
+| **`resolved_at` had NO WRITER AT ALL** | in the schema since migration 0009, every read filters on it, and `/usr/bin/grep -rn "UPDATE reconciliation_queue"` over Go **and** SQL was **EMPTY** | `ledger.ResolveReconciliation` + `POST .../{reconID}/resolve` |
+
+⛔ **A ROW WAS THEREFORE IMMORTAL.** Every refused change a company ever attempted stayed open
+forever and an operator who dealt with one had nowhere to record it. A queue that cannot be emptied
+is one operators stop reading, which is the failure that matters here: the entry is how somebody
+finds out their work was refused.
+
+#### 1.22.3 ⛔⛔ THE PAYLOAD ROUTE MUST NOT ECHO ITS STORED BYTES, AND THIS IS THE TRAP OF THE TRACK
+
+The column holds `json.Marshal(sync.Intent)` verbatim, so returning it is the obvious implementation:
+nothing omitted, nothing reformatted. **MEASURED**, that shape renders a posting of 1180 as
+`"Amount":"1180"` — `ledger.VoucherInput` carries no json tags and `decimal.Decimal` marshals bare —
+while the LIVE side of the comparison, `voucherFullJSON`, renders `"1180.0000"` via `StringFixed(4)`.
+
+A compare screen fed the raw bytes shows those two side by side and **invites an operator to discard
+their work over a difference that does not exist.** `parkedVoucherJSON` re-formats to match the live
+pane, and `TestParkedMoneyIsFormattedLikeTheLiveVoucher` is the only thing standing between the route
+and that regression. **The drive asserts it on the real bytes** — it reads the stored `"1180"` out of
+Postgres and then requires the page to show `1180.0000`.
+
+⚠️ **Hand-rendering costs DRIFT, so it is gated**:
+`TestParkedVoucherAccountsForEveryVoucherInputField` reflects over the struct and fails **by name**
+if a field is neither rendered nor listed in `also_carries`. The offline path carries new fields for
+free (`buildVoucherInput` is the single translator), so a silently omitted one is a pane that looks
+identical and differs.
+
+#### 1.22.4 THE THREE THINGS THE SCREEN REFUSES TO DO
+
+1. ⛔ **NO "FORCE MY VERSION".** The base version is stale *permanently* — the head has moved and will
+   not move back — so a retried ALTER is refused by construction. A button for it could not work, and
+   the failure is worse than a dead button: an operator who believes their version can still win does
+   not re-key it, and the work is lost quietly. Asserted as a **property over every button on the
+   page**, in vitest and in the browser, so a helpfully-worded addition later cannot slip past.
+2. ⛔ **A FROZEN ENTRY IS EXPLAINED, NEVER RETRIED**, and the row **names what pinned it**. "This is
+   frozen" without "because an IRN is registered against it" sends somebody looking for a setting
+   that does not exist; the way forward is a credit note, and the screen says so.
+3. ⚠️ **RESOLVING REPLAYS NOTHING AND THE SCREEN NEVER SAYS "RETRY".** It records that a human dealt
+   with the item; the refused change stays refused.
+
+⚠️ **`has_payload: false` IS A REAL ANSWER, NOT AN ERROR.** Only `sync.parkConflict` writes the
+payload column; a FROZEN row is raised by the ledger and never held one, so a 404 would spell "never
+held one" the same way as "no such entry" — and the client's next move differs (for a freeze, the
+operator's version is in the local outbox on the machine that keyed it, and nowhere else).
+
+#### 1.22.5 ⛔ AUTHZ: A NEW `reconciliation` TOKEN, AND WHY NOT `report:reconciliation-queue`
+
+Migration 0011 grants the seeded Data Entry level a coarse `allow display report`. Reusing the report
+token would have handed **every operator in every tenant** the voucher body a colleague keyed on
+another machine — by inheritance, on the day it shipped, with no `report:NAME` form left to narrow it
+back. The queue **LIST keeps its shipped resource, unchanged**; the payload read and the resolve are
+the bare `reconciliation` token. It consumes **no migration number** (Data Entry's `default_access`
+is `none`), the treatment `backup`, `tds-challan`, `e-way-bill` and `e-invoice` all shipped with.
+
+⚠️ **The stored-date-cutoff gate caught the new write route** — a recon row carries a `voucher_id`, so
+`TestEveryWriteRouteNamingAnExistingDocumentIsAccountedFor` demanded a decision. It is in that
+allowlist **with its reason**: resolving replays no intent, so a refused change stays refused, and
+`resolved_at` is server-stamped with `now()` — the route carries no body, so there is no field in
+which a date could be smuggled past the cutoff.
+
+#### 1.22.6 ⛔⛔ WHAT DID **NOT** SHIP, AND THE ONE DECISION THE NEXT SESSION MUST MAKE FIRST
+
+**Offline ENTRY.** `frontend/src/offline/` now holds a faithful port of `internal/sync/node.go` —
+outbox, HLC, node-partitioned UUIDv7, provisional numbering, all three idempotency-key formats — and
+`internal/sync`'s `TestOfflineNodeVectorsGolden` **generates the vectors the TS suite asserts against**,
+so the two cannot drift apart silently. (⛔ That matters because the server's exactly-once replay
+matches on the key string: a port that spelled one differently would make a re-commit **apply twice**
+instead of answering `DUPLICATE`. It needs **no Postgres**, so it cannot hide behind a skip.)
+
+⛔ **NOTHING PUTS A VOUCHER INTO THAT OUTBOX.** The entry forms still post straight to the server.
+Two things stand between the port and a usable feature:
+
+1. ⛔ **A DECISION, NOT A SCREEN: when does a failed post become a queued intent?** A dropped
+   connection must queue; **a 422 the books refused must NOT**, and confusing the two tells an
+   operator their voucher is safe when it was rejected. The funnel is narrow — `voucherConfig.ts`'s
+   per-class `post`, reached from `editActions.ts:63` and `StockVoucherScreen.tsx:238` — so the wiring
+   is small and the *judgement* is the work. Do not bolt this onto the product's main write path
+   without its own drive.
+2. **The service worker + offline app shell**, which is a separate track. Until it exists this
+   application needs the server and nothing can be keyed on a train, and the FeaturesScreen row
+   says exactly that.
+
+⚠️ **AND THE STORAGE DECISION IS ALREADY MADE AND WRITTEN DOWN** (`docs/design/d-offline-entry-model.md`
+answers §3.2's four questions): IndexedDB, scoped per **(company, subject)** so a second operator on a
+shared machine never inherits a queue, cleared on sign-out, **unencrypted — and the screen must say
+so.** Client-side encryption with a key in the same origin as the ciphertext is theatre.
+⛔ **MEASURED: jsdom exposes no `indexedDB` and `fake-indexeddb` is not a dependency**, so the store's
+decisions are unit-tested in a pure layer and the adapter's proof is the browser drive. The fallback
+reports `durable: false` and **must be rendered** — a queue that quietly forgets is worse than no
+queue, because the operator has already trusted it.
+
+#### 1.22.7 ⚠️ TWO THINGS THE DRIVE CAUGHT THAT NO TEST DID
+
+1. ⛔ **A SHIPPED-LABEL COLLISION.** The Gateway door was called **"Reconciliation"**, and
+   **"Bank Reconciliation"** — a screen that has shipped since T4 — contains the word. The Gateway is
+   reached by typing into its search box, so typing "Reconciliation" and pressing Enter opened the
+   **BANK** screen, every time, with no error: the operator simply arrived at "this company has no
+   bank accounts", which reads as an empty queue rather than as a wrong turn. Renamed to
+   **"Reconciliation Queue"**. ⚠️ **And the probe could not see it either** — it asserted
+   `/Reconciliation/i`, which "Bank Reconciliation" satisfies. Rule 4, in the drive itself.
+2. ⚠️ **A `403 STEPUP_REQUIRED` ON THE RESOLVE IS THE DESIGN WORKING.** `reconciliation` is an Alter,
+   so a level requiring WebAuthn is challenged; the app answers the ceremony and retries, and the
+   retry is what stamped `resolved_at`. The drive asserts the 403's **body** rather than tolerating a
+   count, so a genuine denial still fails.
+3. ⚠️ **AND ONE MUTATION MISMATCH WORTH COPYING.** A freeze-label test asserted `/IRN/` and passed
+   while `reasonLabel` had been reduced to the bare word "Frozen" — because the **server's own
+   `detail` string already contains "IRN"**. The assertion was reading the wire data back and
+   checking nothing the screen decides. It now asserts `/e-invoiced/i`, a word that appears nowhere
+   in the payload.
+
+#### 1.22.8 THE GATES, AFTER
+
+| Gate | Value |
+|---|---|
+| backend build + vet + tests | clean · **exit 0**, 36 packages |
+| `tsc --noEmit` | clean |
+| frontend tests | **1729 pass / 102 files** (was 1690 / 99) |
+| `python3 corpora/validate.py` | OK (keystroke=33, migration=6, inventory=11) |
+| `make verify` | exit 0 |
+| `pnpm verify:demo` | **34/34** |
+| `drive-d-reconciliation.mjs` | **29/29**, tenant torn down clean |
+| T32 · B1 · C · B2 drives | **25/25 · 15/15 · 33/33 · 20/20** (re-run: the Gateway list changed) |
 
 ---
 

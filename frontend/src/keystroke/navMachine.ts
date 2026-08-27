@@ -299,6 +299,29 @@ export const TDS_CHALLANS_LABEL = "TDS Challans";
 export const TALLY_IMPORT_LABEL = "Import from Tally";
 
 /**
+ * The Gateway entry that opens the RECONCILIATION QUEUE (track D).
+ *
+ * ⛔ IT MUST BE MATCHED BEFORE THE canonicalReportName FALLBACK, or selecting it
+ * pushes a `report` frame of that literal name, which renders as a screen
+ * politely announcing that a built, reachable queue is "not available in this
+ * build".
+ *
+ * ⛔⛔ AND IT IS "Reconciliation QUEUE" RATHER THAN "Reconciliation" BECAUSE THE
+ * SHORT NAME WAS A COLLISION, FOUND IN A REAL BROWSER. The Gateway is reached by
+ * typing into its search box, and "Bank Reconciliation" — a screen that has
+ * shipped for as long as T4 has — CONTAINS the word. Typing "Reconciliation" and
+ * pressing Enter opened the BANK screen, every time. Nothing errored: the
+ * operator simply arrived somewhere else, at a screen that says "this company has
+ * no bank accounts", which reads as an empty queue rather than as a wrong turn.
+ *
+ * ⚠️ THE DRIVE'S FIRST VERSION OF THIS PROBE COULD NOT SEE IT EITHER: it asserted
+ * /Reconciliation/i against the page, and "Bank Reconciliation" matches that
+ * happily. An oracle that cannot see the defect is not an oracle (HANDOFF rule
+ * 4); the probe now asserts it is NOT the bank screen.
+ */
+export const RECONCILIATION_LABEL = "Reconciliation Queue";
+
+/**
  * The Gateway entry that opens the PRINT TEMPLATES screen (track C).
  *
  * ⛔ IT MUST BE MATCHED BEFORE THE canonicalReportName FALLBACK, which falls back
@@ -977,6 +1000,17 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
           stack.push({ screen: "tally-import" });
           return { stack };
         }
+        // "Reconciliation" drills into the refused-changes queue (track D).
+        // Ordering as above, and it matters MORE here: the canonicalReportName
+        // fallback would resolve this to something report-shaped rather than the
+        // screen, because a bank-reconciliation report really does exist.
+        if (
+          active.selectedItem?.toLowerCase() ===
+          RECONCILIATION_LABEL.toLowerCase()
+        ) {
+          stack.push({ screen: "reconciliation" });
+          return { stack };
+        }
         // "Print Templates" drills into the per-company document layouts (track
         // C). Ordering as above: BEFORE the canonicalReportName fallback, which
         // would otherwise push a report frame named "Print Templates".
@@ -1181,6 +1215,12 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
       // reconciliation screen; resolveAction gives screen bindings priority, so
       // this global never reaches it.
       return pushOnce("tally-import");
+    }
+
+    case "reconciliationQueue": {
+      // Alt+R — the refused-changes queue. pushOnce so pressing it twice does not
+      // stack two frames, the same treatment every other reader screen gets.
+      return pushOnce("reconciliation");
     }
 
     case "dataScreen": {

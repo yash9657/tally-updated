@@ -4291,3 +4291,192 @@ export interface PrintTemplateRequest {
   show_bank_details?: boolean;
   bank_lines?: string[];
 }
+
+// ---------------------------------------------------------------------------
+// OFFLINE SYNC (track D) — the cloud sequencer's wire contract.
+//
+// ⛔ `SyncIntent.payload` IS A `VoucherRequest`, THE SAME TYPE THE ONLINE PATH
+// POSTS, and that is load-bearing rather than tidy. The server decodes it with
+// `buildVoucherInput`, the single translator every voucher route shares, so
+// anything the online path carries the offline path carries for free — including
+// the once-only AI-bill `draft_id`. `server.go` warns three times against a
+// parallel type and records two silent-drop defects from ignoring it.
+// ---------------------------------------------------------------------------
+
+/** A hybrid-logical-clock reading on the wire. Mirrors `sync.HLCTimestamp`. */
+export interface SyncHLC {
+  wall_millis: number;
+  counter: number;
+  node_id: string;
+}
+
+/** CREATE / ALTER / DELETE — the change kinds an offline node records. */
+export type SyncOp = "CREATE" | "ALTER" | "DELETE";
+
+/**
+ * One outbox entry: a single recorded voucher change awaiting commit.
+ *
+ * ⚠️ `provisional_no` IS NEVER SENT AS `payload.voucher_no`. The server allocates
+ * the real sequential number; the provisional exists so the offline UI can show
+ * something, and so the loser of a conflict can be surfaced with the label the
+ * operator actually saw. `OfflineNode` forces `payload.voucher_no` empty.
+ */
+export interface SyncIntent {
+  idempotency_key: string;
+  client_voucher_id: string;
+  op: SyncOp;
+  class: string;
+  provisional_no: string;
+  hlc: SyncHLC;
+  node_id: string;
+  /** The head version an ALTER/DELETE was based on; 0 for a CREATE. */
+  base_version: number;
+  payload: VoucherRequest;
+}
+
+/**
+ * The four TERMINAL dispositions of one committed intent.
+ *
+ * ⛔ THERE IS NO NON-TERMINAL STATUS ON THIS WIRE, and a probe must not invent
+ * one (HANDOFF's standing rule). A commit either produces one of these four per
+ * intent, or fails as a WHOLE REQUEST — see `SyncBatchRefusal`.
+ */
+export type SyncOutcomeStatus = "COMMITTED" | "CONFLICT" | "FROZEN" | "DUPLICATE";
+
+/** The sequencer's answer for one intent, in submission order. */
+export interface SyncOutcome {
+  idempotency_key: string;
+  client_voucher_id: string;
+  status: SyncOutcomeStatus;
+  /** The server-assigned number on a COMMITTED CREATE; "" otherwise. */
+  final_voucher_no: string;
+  version_no: number;
+  /** Set on CONFLICT (the parked loser) and on FROZEN (the freeze row). */
+  reconciliation_id: string;
+  detail: string;
+}
+
+/** `POST /sync/commit` — one outcome per submitted intent, in caller order. */
+export interface SyncCommitResponse {
+  outcomes: SyncOutcome[];
+}
+
+/**
+ * A WHOLE-BATCH refusal, which is NOT one of the four statuses above.
+ *
+ * ⛔⛔ THE OUTBOX IS INTACT WHEN THIS HAPPENS AND MUST BE LEFT THAT WAY. Two
+ * request-level failures return no outcomes at all:
+ *
+ *   cutoff   the back-dated cutoff refuses the LOT if ONE intent is pre-cutoff
+ *            ("a batch is only as permitted as its most-refused member" —
+ *            auth_backdated_key_binding_test.go, cutoff round 2)
+ *   stepup   403 STEPUP_REQUIRED: any write at a level requiring WebAuthn
+ *
+ * Rendering either as "these 12 vouchers failed" is wrong in the dangerous
+ * direction — nothing was rejected, the batch was never judged intent by intent,
+ * and a screen that says otherwise invites an operator to re-key work that is
+ * still queued. Because the commit is ONE batched write, the whole outbox costs
+ * exactly one step-up, which is the argument for draining it as a batch.
+ */
+export interface SyncBatchRefusal {
+  kind: "cutoff" | "stepup" | "other";
+  status: number;
+  message: string;
+}
+
+/** One OPEN reconciliation-queue row (`GET /reconciliation-queue`). */
+export interface ReconciliationEntry {
+  id: string;
+  voucher_id: string;
+  attempted_op: string;
+  /** "CONFLICT" for a parked sync loser; "IRN" / "FILED_GSTR1" for a freeze. */
+  kind: string;
+  ref_value: string;
+  frozen_voucher_no: string;
+  detail: string;
+  created_at: string;
+}
+
+/** `GET /reconciliation-queue` */
+export interface ReconciliationQueueResponse {
+  entries: ReconciliationEntry[];
+}
+
+/** The parked voucher body, formatted the way the LIVE voucher route formats it. */
+export interface ParkedVoucher {
+  class: string;
+  voucher_type_id: string;
+  party_ledger_id: string;
+  item_ledger_id: string;
+  voucher_no: string;
+  voucher_date: string;
+  narration: string;
+  party: string;
+  created_by: string;
+  source_guid: string;
+  source_draft_id: string;
+  postings: { ledger_id: string; dr_cr: string; amount: string }[];
+  bill_allocations: { ledger_id: string; ref_name: string; ref_type: string; amount: string }[];
+  inventory: {
+    stock_item_id: string;
+    godown_id: string;
+    batch_id: string;
+    direction: string;
+    qty: string;
+    rate: string;
+    discount_pct: string;
+    amount: string;
+    rate_unstated: boolean;
+  }[];
+  physical_count: {
+    stock_item_id: string;
+    godown_id: string;
+    batch_id: string;
+    qty: string;
+    rate: string;
+  }[];
+  /**
+   * Blocks a two-pane diff has no room for, NAMED rather than dropped (e.g.
+   * "GST parameters"). A field that is neither rendered above nor named here
+   * fails `TestParkedVoucherAccountsForEveryVoucherInputField` server-side.
+   */
+  also_carries: string[];
+}
+
+/** The parked intent, with the entry metadata the compare screen needs. */
+export interface ReconciliationPayloadResponse {
+  reconciliation_id: string;
+  voucher_id: string;
+  attempted_op: string;
+  kind: string;
+  ref_value: string;
+  frozen_voucher_no: string;
+  detail: string;
+  created_at: string;
+  /**
+   * ⚠️ FALSE IS A REAL ANSWER, NOT AN ERROR. Only a parked CONFLICT preserves the
+   * keyed payload; a FROZEN row is raised by the ledger's freeze rule and never
+   * held one. When this is false the operator's own version exists ONLY in the
+   * local outbox on the machine that keyed it — read it from there, and say so
+   * when it is not on this machine.
+   */
+  has_payload: boolean;
+  payload_absent_because?: string;
+  intent?: {
+    idempotency_key: string;
+    client_voucher_id: string;
+    op: SyncOp;
+    class: string;
+    provisional_no: string;
+    node_id: string;
+    base_version: number;
+    hlc: SyncHLC;
+    payload: ParkedVoucher;
+  };
+}
+
+/** `POST /reconciliation-queue/{id}/resolve` */
+export interface ResolveReconciliationResponse {
+  reconciliation_id: string;
+  resolved: boolean;
+}

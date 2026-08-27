@@ -300,7 +300,19 @@ export type ScreenKind =
    * company-level import. Both are Tally's same "O: Import" — the narrower one
    * simply wins where it applies.
    */
-  | "tally-import";
+  | "tally-import"
+  /**
+   * RECONCILIATION QUEUE (track D) — every alter or delete these books refused.
+   *
+   * ⛔ IT IS NOT `report:reconciliation-queue`, THOUGH A REPORT OF THAT NAME
+   * EXISTS. That report answers 501 and the server serves the LIST under a
+   * separate JSON route, while the two routes this screen needs beyond it (the
+   * parked payload and the resolve) are governed by the bare `reconciliation`
+   * token — which migration 0011's coarse `allow display report` can never
+   * reach. A ScreenKind is also right on its own terms: the screen carries a
+   * WRITE (clearing an entry), which no report frame does.
+   */
+  | "reconciliation";
 
 /**
  * An in-frame overlay: a sub-screen that keeps its parent frame alive and is
@@ -740,6 +752,13 @@ export type KeymapAction =
    * a Tally export belongs to the company, so it is the global.
    */
   | { kind: "tallyImport" }
+  /**
+   * Alt+R — the RECONCILIATION QUEUE (track D).
+   *
+   * ⚠️ There is no narrower screen-scoped Alt+R anywhere, unlike Alt+O, so this
+   * global is the only binding on the key and nothing shadows it.
+   */
+  | { kind: "reconciliationQueue" }
   | { kind: "configure" } // F12 — screen/report Configure
   | { kind: "createMaster"; masterKind: MasterKind } // Alt+C — inline create
   /**

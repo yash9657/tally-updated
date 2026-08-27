@@ -7,6 +7,63 @@ what was wrong; this file records what a person will notice.
 
 ---
 
+## Alt+R: the changes your books refused are now visible — and clearable
+
+**Applies to:** every company. **Feature:** track D (first half).
+
+### What changes
+
+Press **Alt+R**, or pick **Reconciliation Queue** on the Gateway of Tally. You get
+every alter and delete your books have refused, with what to do about each one.
+
+### ⛔ These refusals have been happening all along. You could not see them.
+
+If anyone in your company has ever tried to change a voucher that carries an
+**IRN**, or one inside a **GSTR-1 you have already filed**, the books refused it
+and wrote down why. That explanation went somewhere only the database could read.
+Nothing in the application ever showed it, so the edit simply did not take and the
+reason was not available to anybody.
+
+Every one of those refusals is on this screen now, including the ones raised
+before today.
+
+### The two kinds are different questions, and the screen keeps them apart
+
+**A frozen voucher can never be changed.** That is the point of an IRN or a filed
+return, and there is no setting that lifts it. The row names *what* pinned it —
+not just that it is frozen — because your next step depends on which: to correct
+what the document says, issue a **credit note**, not an edit.
+
+**A conflict** is a change that lost a race: somebody else altered the same
+voucher first. Both versions are shown side by side — what the books hold now, and
+what was keyed.
+
+### ⛔ On a conflict there are two choices, and "force mine through" is not one
+
+The version your change was based on has already been superseded, so re-applying
+it would be refused again — there is no way to push it through, and the screen
+does not pretend otherwise. Keeping your version means **entering it again as a
+new voucher**.
+
+We would rather tell you that plainly than offer a button that cannot work: if you
+believe your version can still win, you do not re-key it, and the work is quietly
+lost.
+
+### Clearing an entry records that you dealt with it. It does not re-apply anything
+
+The refused change stays refused. Clearing is how the queue gets shorter — and
+until now nothing in the product could clear one at all, so it could only ever
+grow, which is how a list becomes something people stop reading.
+
+### ⚠️ What has NOT changed: you still cannot key vouchers offline
+
+This release does **not** make the application work without a connection. That row
+on the Features screen (F11 > Features) still says so. What exists now is the part
+that is useful the moment a change is refused or a connection drops — the queue and
+the explanations — not offline entry itself.
+
+---
+
 ## Alt+M e-mails a document — but you attach the file, and we never send it
 
 **Applies to:** every document and report that prints. **Feature:** B2.

@@ -8,6 +8,7 @@ import { MembersScreen } from "../screens/MembersScreen";
 import { EditLogScreen } from "../screens/EditLogScreen";
 import { HelpScreen } from "../screens/HelpScreen";
 import { DataScreen } from "../screens/DataScreen";
+import { ReconciliationScreen } from "../screens/ReconciliationScreen";
 import { TallyImportScreen } from "../screens/TallyImportScreen";
 import { PrintTemplateScreen } from "../screens/PrintTemplateScreen";
 import { FeaturesScreen } from "../screens/FeaturesScreen";
@@ -229,6 +230,7 @@ const DataAdapter: ScreenComponent = () => <DataScreen />;
 
 /** Alt+O Migrate-from-Tally adapter: the TallyPrime XML importer (T32). */
 const TallyImportAdapter: ScreenComponent = () => <TallyImportScreen />;
+const ReconciliationAdapter: ScreenComponent = () => <ReconciliationScreen />;
 
 /** Print Templates adapter: the per-company document layouts (track C). */
 const PrintTemplateAdapter: ScreenComponent = () => <PrintTemplateScreen />;
@@ -358,6 +360,16 @@ export function createDefaultRegistry(): ScreenRegistry {
     // it the navMachine pushes a frame nothing renders, so Alt+O appears to do
     // nothing at all — no error, no status line.
     "tally-import": TallyImportAdapter,
+    // RECONCILIATION QUEUE (track D). Registered by ScreenKind and NOT as a
+    // "report:…" key: the LIST route is a report token but the two routes this
+    // screen needs beyond it are governed by the bare `reconciliation` token,
+    // which migration 0011's coarse `allow display report` can never reach — and
+    // the screen carries a WRITE.
+    //
+    // ⛔ THIS ENTRY IS ONE OF THE THREE THAT SHIP THE KEY DEAD SILENTLY. Without
+    // it the navMachine pushes a frame nothing renders, so Alt+R appears to do
+    // nothing at all — no error, no status line.
+    "reconciliation": ReconciliationAdapter,
     // PRINT TEMPLATES (track C). Registered by ScreenKind and NOT as a "report:…"
     // key: the server serves these routes under the `company` token — the same
     // authority as the F11 feature settings — which migration 0011's coarse

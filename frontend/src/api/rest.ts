@@ -124,6 +124,10 @@ import type {
   SetStatutoryElectionRequest,
   SetStatutoryElectionResponse,
   PayrollVocabularyResponse,
+  ReconciliationPayloadResponse,
+  ReconciliationQueueResponse,
+  ResolveReconciliationResponse,
+  SyncCommitResponse,
 } from "./types";
 import type { QueryRequest, QueryResult } from "./query";
 import type {
@@ -1227,6 +1231,35 @@ export function createRestClient(
     payrollVocabulary(companyID) {
       return http.get<PayrollVocabularyResponse>(
         `${company(companyID)}/payroll-vocabulary`,
+      );
+    },
+
+    // ---- OFFLINE SYNC + THE RECONCILIATION QUEUE (track D).
+    //
+    // Four routes, three of which were mounted long before anything called them.
+    // The commit path has existed since Task C; the queue listing since the
+    // freeze rule shipped; only the payload read and the resolve are new.
+    syncCommit(companyID, intents) {
+      // ONE call for the whole outbox. See CoredClient.syncCommit: the cutoff
+      // judges the batch as a unit and a step-up is charged once per write, so
+      // draining row by row is not a smaller version of this — it is a different
+      // and worse behaviour.
+      return http.post<SyncCommitResponse>(`${company(companyID)}/sync/commit`, { intents });
+    },
+    reconciliationQueue(companyID) {
+      return http.get<ReconciliationQueueResponse>(`${company(companyID)}/reconciliation-queue`);
+    },
+    reconciliationPayload(companyID, reconID) {
+      return http.get<ReconciliationPayloadResponse>(
+        `${company(companyID)}/reconciliation-queue/${encodeURIComponent(reconID)}/payload`,
+      );
+    },
+    resolveReconciliation(companyID, reconID) {
+      // No body: the route asserts nothing but "a human dealt with this", and
+      // resolved_at is stamped server-side with now() so there is no date a
+      // caller could supply.
+      return http.post<ResolveReconciliationResponse>(
+        `${company(companyID)}/reconciliation-queue/${encodeURIComponent(reconID)}/resolve`,
       );
     },
   };

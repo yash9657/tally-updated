@@ -8621,6 +8621,53 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
           "cored to restore.",
       );
     },
+
+    // ---- OFFLINE SYNC + THE RECONCILIATION QUEUE (track D).
+    //
+    // ⛔ THE MOCK IS NOT TAUGHT TO SEQUENCE. Faking syncCommit would mean a
+    // SECOND IMPLEMENTATION of the subtlest thing on the server — the atomic
+    // per-(company, type, FY) numbering allocator, the (HLC, node) total order
+    // that picks a conflict winner, per-intent idempotency, and the freeze rule —
+    // and a test could then pin bytes no real backend ever produced. The one
+    // honest answer is a refusal that says which gate to run instead.
+    async syncCommit() {
+      throw new ApiError(
+        501,
+        "the mock has no cloud sequencer: committing an outbox needs the real " +
+          "numbering allocator, the (HLC, node) conflict order and the freeze rule, " +
+          "and a second copy of those in TypeScript would be unvalidated. Run " +
+          "against cored (pnpm verify:demo / the track-D drive) to exercise a commit.",
+      );
+    },
+
+    // ⚠️ AN EMPTY QUEUE HERE IS ACCURATE, NOT A STAND-IN. The mock never refuses
+    // an alter or a delete — it models no freeze rule and no stale-base conflict —
+    // so nothing in this world has ever been parked, and reporting nothing is the
+    // truth about it rather than a convenient blank. A test that needs entries
+    // injects them by spreading this client and overriding the method, which is
+    // the pattern TallyImportScreen.test.tsx documents.
+    async reconciliationQueue() {
+      return { entries: [] };
+    },
+
+    // No row can exist here, so both of these answer the way the server answers
+    // for an id that names no open entry. ⛔ RETURNING A FABRICATED PARKED
+    // VOUCHER WOULD BE THE ONE THING THE RULE FORBIDS — inventing a payload a
+    // real backend never produced, which a screen test could then pin.
+    async reconciliationPayload(_companyID: string, reconID: string) {
+      throw new ApiError(
+        404,
+        `no open reconciliation entry with that id (${reconID}); the mock parks none ` +
+          "because it refuses no alter or delete",
+      );
+    },
+    async resolveReconciliation(_companyID: string, reconID: string) {
+      throw new ApiError(
+        404,
+        `no open reconciliation entry with that id (${reconID}); the mock parks none ` +
+          "because it refuses no alter or delete",
+      );
+    },
   };
 }
 

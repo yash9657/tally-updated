@@ -101,6 +101,15 @@ const COMPANY_SCOPED_SCREENS = new Set<NavSnapshot["screen"]>([
   // useCompanyID() THROWS before the screen can render anything, including the
   // line naming the company the export is about to be posted into.
   "tally-import",
+  // RECONCILIATION QUEUE (track D). Every route it drives is company-scoped, so
+  // omit it and useCompanyID() THROWS during render, taking the whole shell down
+  // before the screen can say anything — including which company's refused
+  // changes these are.
+  //
+  // ⛔ §0.1 item 2: NO TEST IN THIS REPOSITORY CAN SEE THIS ENTRY unless one
+  // renders the screen with company === null. ReconciliationScreen.test.tsx has
+  // that case; it is the test the handoff asked track D to add.
+  "reconciliation",
   // PRINT TEMPLATES (track C). Every route it drives is company-scoped, so it
   // needs a scope for the same reason every screen above does: omit it and
   // useCompanyID() THROWS during render, taking the whole shell down before the
@@ -613,6 +622,12 @@ function screenTitle(snap: NavSnapshot): string {
     case "tally-import":
       return "Import from Tally";
     // ⛔ WITHOUT THIS CASE THE CHROME READS "Tally" — the `default` below — over
+    // the screen that lists work these books REFUSED. A wrong title here is not
+    // cosmetic: it is the screen an operator reaches while trying to find out why
+    // their edit did not take.
+    case "reconciliation":
+      return "Reconciliation Queue";
+    // ⛔ WITHOUT THIS CASE THE CHROME READS "Tally" — the `default` below — over
     // the screen that decides what every invoice this company issues will say.
     case "print-templates":
       return "Print Templates";
@@ -746,6 +761,11 @@ function hintsFor(snap: NavSnapshot): string[] {
     // "Enter: Open" ON A SCREEN WITH NOTHING TO OPEN — and worse, next to a
     // button that fires an import that cannot be undone.
     case "tally-import":
+      return ["Esc: Back", "F1: Help"];
+    // ⛔ WITHOUT THIS CASE THE STRIP FALLS TO `default` AND ADVERTISES
+    // "Enter: Open" — on a screen whose rows open with a named button, and one of
+    // whose buttons CLEARS the only record that somebody's work was refused.
+    case "reconciliation":
       return ["Esc: Back", "F1: Help"];
     // ⛔ WITHOUT THIS CASE THE STRIP FALLS TO `default` AND ADVERTISES
     // "Enter: Open" ON A SCREEN WITH NOTHING TO OPEN. This is a form: its two
