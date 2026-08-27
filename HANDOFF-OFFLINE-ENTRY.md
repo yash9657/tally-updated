@@ -204,5 +204,5 @@ everything the untested tax paths produce.
   the same change that makes it true** — a row flips when an operator gets a SCREEN, not a route.
 - Add a `docs/RELEASE-NOTES.md` note leading with what an operator will act on.
 - ⛔ **DELETE THIS FILE.** `HANDOFF.md` §11's rule is *update in place rather than write another*, and
-  its evidence is twelve superseded files that each re-derived context the last already held. This is
-  the thirteenth unless it is deleted rather than renamed again.
+  its evidence is the eleven superseded files it names — and that list is stale, because there are **25
+  `HANDOFF-*.md` files on disk today**. This is one more unless it is DELETED rather than renamed again.

@@ -1,4 +1,20 @@
-# ⛔ THE DEFECT BURNDOWN — 69 OPEN, ALL TRACED. FIX THEM IN PARALLEL.
+# ⛔ SPENT — THE REGISTER IS CLOSED. 97 REGISTERED · 97 CLOSED · **0 OPEN**.
+
+> ## ⛔⛔ THE "69 OPEN" IN THIS FILE'S OLD TITLE WAS STALE FROM 2026-08-12 AND IT MISLED A SESSION.
+>
+> On 2026-08-27 a session quoted that number to a user as live work. It was wrong: parsing
+> `HANDOFF-PARITY-AUDIT.md` §7.1's table — which is that file's own stated rule, *re-derive the count
+> by PARSING the rows, never by reading a header* — gives **97 CLOSED, 0 OPEN, 0 PARTIAL** as of
+> 2026-08-24. The snippet is in `HANDOFF-THE-REMAINING-SIX.md` §0.
+>
+> ⛔ **DO NOT PLAN DEFECT WORK FROM THIS FILE.** Everything below is history. The lanes, the five
+> rules and the orchestration pattern (§1, §2) are still worth reading if you are running a parallel
+> fix session — but there is nothing left in this register to fix.
+>
+> ⚠️ **AND THE LESSON THAT OUTLIVES IT**, because it is the third time a header in this repository has
+> been believed over the table beneath it: **a count written in prose is a COPY, and copies go stale.**
+> §7.1's own heading was wrong twice for the same reason. Parse the rows.
+
 
 > ## THIS FILE REPLACES `HANDOFF-PARITY-AUDIT.md` AS THE LIVE DRIVER. IT IS NOT A TWELFTH HANDOFF.
 >
