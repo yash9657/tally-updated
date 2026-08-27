@@ -69,35 +69,49 @@ sandbox credentials). So the real remaining feature work is **five tracks plus t
 
 ## 2. ⛔ THE ORDER, AND THE REASONING
 
-### FIRST — the SERVICE WORKER. `HANDOFF-OFFLINE-ENTRY.md` is the plan; read it, not this.
+### ⛔ FIRST — **T8 MULTI-CURRENCY**. `HANDOFF-T8-MULTI-CURRENCY.md` is the plan; read it, not this.
 
-**Why still first:** it is the only feature in a half-built state, and it is the **differentiator
-against Tally's LAN-only model** — the one remaining track that is advantage rather than parity.
+⚠️ **THE ORDER CHANGED ON 2026-08-27, AND HERE IS WHY — DO NOT SILENTLY REVERT IT.** This file used
+to put the service worker first, on the grounds that offline entry was *"the only feature in a
+half-built state — the engine, the client port and the queue UI all exist and nothing can reach
+them."* ⭐ **That reason has been CONSUMED** (`HANDOFF.md` §1.23): a dropped connection now queues the
+voucher, `Alt+Q` commits it and it lands, and the `FeaturesScreen` row honestly names the one half
+still missing. **Nothing is unreachable any more**, so the argument that ranked infrastructure above
+the largest accounting gap no longer holds.
 
-⛔ **THE JUDGEMENT CALL IS DONE. DO NOT RE-LITIGATE IT.** "When does a failed post become a queued
-intent" is answered, wired on both write paths, tested and driven: a dropped connection queues; a
-422, a 403, even a 500 does not. `HANDOFF.md` §1.23.1 has the reasoning and
-`offline/queueDecision.ts` has it beside the code.
+**Why T8 now:** it is **the largest genuine gap for a real business — anyone who imports or exports is
+blocked today**, and it is accounting work rather than plumbing.
 
-⛔ **WHAT IS LEFT IS THE BOOT PATH, AND THE AUTH GATE IS THE HARD PART, NOT THE CACHE.** `App.tsx`
-renders nothing until a session exists, `AuthProvider` hydrates from `sessionStorage`, and
-`CompanyProvider` bootstraps by calling the server — so an offline boot must answer "who is signed in,
-and to which company" with no network, and the honest answers are constrained by decisions already
-made (including that the offline queue is cleared on sign-out).
+⛔ **IT IS A SCHEMA TRACK, NOT A UI TRACK, AND THE FIRST DELIVERABLE IS A DESIGN DOCUMENT.** Measured:
+there is **no** currency table, **no** rate table, **no** forex column, and **no** Go logic — every
+`currency` hit in `backend/internal` is the word *conCURRENCy*. Three facts already constrain the
+design (all in the plan, with commands): `posting.amount` must stay the BASE amount because a deferred
+DB trigger sums it; `posting` rows are IMMUTABLE, so revaluation must be a new voucher; and an
+exchange RATE is not fixed-4, which this product has no precedent for.
 
-⛔ **KEEP THE `FeaturesScreen` ROW SPLIT.** "Offline entry with sync" reads `server` and names the
-missing half; "Offline Outbox … (Alt+Q)" reads `on`. The row flips only when an operator can BOOT with
-the network off.
+⛔⛔ **AND THE REAL RISK IS NOT CODE: `RESEARCH.md` DOES NOT PIN TALLY'S MULTI-CURRENCY BEHAVIOUR** —
+one passing mention, about print formats. This repository cites RESEARCH.md for every keystroke and
+behaviour; here there is nothing to cite. **Ask the user the §5 questions rather than inventing a
+model.** Track D was run this way (`docs/design/d-offline-entry-model.md` before any code) and it
+caught two gaps that would have made the screen unbuildable.
 
-### THEN — the five remaining features, in this order
+### THEN — in this order
 
 | # | Track | Why here | ⛔ The one thing not to get wrong (`HANDOFF.md` §5.4) |
 |---|---|---|---|
-| 1 | **Multi-currency (T8)** | The largest genuine gap for a real business; anyone importing or exporting is blocked | A foreign amount, a rate and the base amount are **three stored values**, not two plus arithmetic. Realised vs unrealised gain/loss are **different postings** |
+| 1 | **Offline entry, piece two — the service worker** (`HANDOFF-OFFLINE-ENTRY.md`) | Finishes the differentiator against Tally's LAN-only model. Deferred rather than dropped | ⛔ **The AUTH GATE is the hard part, not the cache.** `App.tsx` renders nothing without a session, `AuthProvider` hydrates from `sessionStorage`, `CompanyProvider` bootstraps over HTTP — so an offline boot must answer "who is signed in, to which company" with no network. And ⛔ **never let a cached shell serve stale code after a deploy.** ⛔ **KEEP THE `FeaturesScreen` ROW SPLIT** until an operator can BOOT offline |
 | 2 | **Budgets (T11)** | Common in Tally shops, and it is comparison rather than new posting machinery | A budget is a **comparison dimension, not a posting**. It inherits T2's axis model — see §8.1 |
 | 3 | **Interest on overdue bills (T13)** | Small, self-contained, immediately visible on Outstandings | Simple vs compound and the day-count basis are configuration with statutory defaults — **cite them** |
-| 4 | **GSTR-9 annual return (T12)** | ⚠️ **Deliberately last of the four.** It is an annual return that reads everything the tax paths produce, and those paths have **never met real GST data** — see §4 | It is a **reconciliation** of the year's returns to the books and must **state where it disagrees** rather than smoothing it |
+| 4 | **GSTR-9 annual return (T12)** | ⚠️ **Deliberately last.** It is an annual return that reads everything the tax paths produce, and those paths have **never met real GST data** — see §4 | It is a **reconciliation** of the year's returns to the books and must **state where it disagrees** rather than smoothing it |
 | 5 | **SSO / OIDC login** | Lowest business value; an enterprise sales unblocker, not an accounting one | — |
+
+⭐ **A CHEAP HONEST FIX FOUND WHILE SCOUTING T8, WORTH DOING EVEN IF T8 SLIPS.** The TallyPrime XML
+importer **ignores currency entirely** (`/usr/bin/grep -rni currency backend/internal/migration/*.go`
+minus *concurrency* → **EMPTY**), so a real Tally file with foreign-currency vouchers imports them as
+if the amounts were rupees — silently. ⛔ **It is not in the defect register**, because that register is
+row-by-row over keyboard-reachable features and nobody had tried to perform this task. Making the
+importer DISCLOSE such a voucher rather than absorb it is small, and `TallyImportScreen` already has
+the disclosure surface.
 
 **Not on this list, on purpose:** split company data (a stated refusal, and the row says so) and the
 Rule 48(4) QR code (§4 — it is one e-mail away, not one track).
@@ -167,7 +181,8 @@ required field added to a store snapshot that vitest happily ignored and `tsc` r
 | File | Status |
 |---|---|
 | **`HANDOFF.md`** | ⭐ **THE LIVE ONE.** §1.11 is the plan, **§1.23 is the newest track**, §5 is the parity ordering, §7.2 the 15-point registration surface, §9 the traps |
-| **`HANDOFF-OFFLINE-ENTRY.md`** | ⭐ **LIVE** — §2's first item (the service worker), in full, plus the nine hazards this lane paid for |
+| **`HANDOFF-T8-MULTI-CURRENCY.md`** | ⭐ **LIVE — §2's FIRST ITEM**, in full: what exists (nothing, measured), the three schema facts that constrain the design, the six design questions, and what to ask the user |
+| **`HANDOFF-OFFLINE-ENTRY.md`** | ⭐ **LIVE** — §2's item 1 after T8 (the service worker), plus the nine hazards this lane paid for |
 | **`HANDOFF-NEXT-BUILD.md`** | ⭐ LIVE for §6's long tail; its §1–§4 are spent and say so |
 | **`HANDOFF-PARITY-AUDIT.md`** | **DATA, not a driver.** §7.1 is the closed register — parse it, never quote a header |
 | **`HANDOFF-DEFECT-BURNDOWN.md`** | ⛔ **SPENT** (retitled 2026-08-27). Its §1 five rules and §2 orchestration pattern are still worth reading for a parallel session |

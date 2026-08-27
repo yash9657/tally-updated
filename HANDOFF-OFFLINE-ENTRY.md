@@ -142,16 +142,23 @@ Everything downstream of booting already works.
   immediately. ⚠️ The Rule 48(4) QR row is what `VoucherScreen.stockVoucher.test.tsx`'s pinned "Not
   built" assertion names — whoever makes it true must re-point that assertion in the same change.
 
-## 6. THE BACKLOG AFTER THIS
+## 6. ⛔ THIS TRACK IS NO LONGER FIRST IN THE ORDER — AND THAT WAS DELIBERATE
 
-`Multi-currency (T8)` → `Budgets (T11)` → `Interest on overdue bills (T13)` → `GSTR-9 (T12)` →
-`SSO/OIDC last`. `HANDOFF.md` §5.4 states the one thing not to get wrong in each. ⚠️ **GSTR-9 is worth
-deferring until real GST data has been through the importer.**
+⚠️ **T8 MULTI-CURRENCY WAS PROMOTED ABOVE IT ON 2026-08-27.** The reason this track led the order was
+that it was *"the only feature in a half-built state — the engine, the client port and the queue UI all
+exist and nothing can reach them."* ⭐ **That reason is gone**: piece one shipped, everything is
+reachable, and the `FeaturesScreen` row honestly names the missing half. What is left here is
+infrastructure with no accounting value, so it now sits behind the largest genuine business gap.
+`HANDOFF-T8-MULTI-CURRENCY.md` is the live plan; this file is item 1 after it.
+
+**Then:** `Budgets (T11)` → `Interest on overdue bills (T13)` → `GSTR-9 (T12)` → `SSO/OIDC last`.
+`HANDOFF.md` §5.4 states the one thing not to get wrong in each. ⚠️ **GSTR-9 is worth deferring until
+real GST data has been through the importer.**
 
 ## 7. WHEN THE SERVICE WORKER LANDS
 
-- Fold it into `HANDOFF.md` **§1.24**, flip §1.11 **row 11**, and edit the `FeaturesScreen` row **in
-  the same change that makes it true** — a row flips when an operator gets a BEHAVIOUR, not a file.
+- Fold it into `HANDOFF.md` **§1.24**, flip §1.11 **row 12** (⚠️ it was row 11 until T8 was promoted
+  above it), and edit the `FeaturesScreen` row **in the same change that makes it true** — a row flips when an operator gets a BEHAVIOUR, not a file.
 - Add a `docs/RELEASE-NOTES.md` note leading with what an operator will act on.
 - ⛔ **DELETE THIS FILE.** `HANDOFF.md` §11's rule is *update in place rather than write another*.
   This file was UPDATED rather than replaced for that reason, and there is nothing left in it once the
