@@ -467,6 +467,22 @@ const TALLY_IMPORT_BAR: readonly ButtonBarItem[] = [
   item("F1", "Help"),
 ];
 
+/**
+ * PRINT TEMPLATES (track C) — the per-company document layouts.
+ *
+ * Ctrl+A is not offered, for the reason the Data and import screens do not offer
+ * it: this screen has TWO named actions with different consequences — save a
+ * layout, and clear a customisation — and a generic "Accept (save) the screen"
+ * cannot say which it would do. Both are behind named buttons, and the clear
+ * button appears only when there is something to clear.
+ */
+const PRINT_TEMPLATES_BAR: readonly ButtonBarItem[] = [
+  item("Esc", "Back"),
+  item("Alt+G", "Go To"),
+  item("Ctrl+G", "Switch To"),
+  item("F1", "Help"),
+];
+
 /** The AI-native screens (Bill Inbox, Ask your books). */
 const AI_BAR: readonly ButtonBarItem[] = [
   item("F1", "Help"),
@@ -558,6 +574,8 @@ export function buttonBarFor(
       return DATA_BAR;
     case "tally-import":
       return TALLY_IMPORT_BAR;
+    case "print-templates":
+      return PRINT_TEMPLATES_BAR;
     case "bill-inbox":
     case "query":
       return AI_BAR;

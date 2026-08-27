@@ -1,8 +1,9 @@
-# HANDOFF — THE LAST THREE
+# HANDOFF — THE LAST TWO
 
-**Updated:** 2026-08-27 · **Branch:** `session/t32-and-close-7-3` · **Tree:** clean at `e7ab65c` + this
+**Updated:** 2026-08-27 (late) · **Branch:** `session/t32-and-close-7-3` · **Tree:** clean
+**Track C landed** — see `HANDOFF.md` **§1.20**. Two tracks left: **B2** (§2) and **D** (§3).
 **Read time:** ~12 minutes. Every claim was MEASURED, most of it re-verified 2026-08-26/27; each has
-the command beside it. ⛔ **§0.1 is the part to read first — four of its five items cost real time.**
+the command beside it. ⛔ **§0.1 is the part to read first — six of its seven items cost real time.**
 
 > ## ✅ BOTH BLOCKING DECISIONS ARE MADE (user, 2026-08-26). DO NOT RE-LITIGATE EITHER.
 >
@@ -11,16 +12,18 @@ the command beside it. ⛔ **§0.1 is the part to read first — four of its fiv
 > | **Does this product send mail?** | ⭐ **NO — a `mailto:` HANDOFF.** The PDF downloads, then the operator's own mail client opens with a pre-addressed, pre-subjected draft. They attach the file and send. | **No SMTP, no `Sender`, no attachment concept, no `Kind`, no bounce story, no migration.** `internal/notify` is **not touched at all**. |
 > | **The invoice logo** | ⭐ **SHIP THE FOUR FIELDS THAT EXIST; RENAME THE ROW to drop "logo".** | No image storage, no upload route, no size/type policy, **no change to the PDF renderer**. |
 >
-> ## THE THREE, IN THE RECOMMENDED ORDER
+> ## THE TWO, IN THE RECOMMENDED ORDER
 >
 > | # | Track | Size | Why here |
 > |---|---|---|---|
-> | **1** | **C — per-company print templates** (§1) | small | ⛔ The write **already exists, is tested, and NOTHING CALLS IT.** One route + one screen. Most customer value per hour in the whole backlog, and it is the first thing anyone asks for after seeing their invoice |
-> | **2** | **B2 — e-mail a document** (§2) | small | Decision made; B1 already leaves the PDF on disk. ⚠️ It is the ONLY one of the three that **breaks a pinned test on purpose** |
-> | **3** | **D — offline entry screen** (§3) | ⛔ large, and it is **thinking, not typing** | The engine is complete and there is **no client at all**. Four questions must be answered before any code |
+> | **1** | **B2 — e-mail a document** (§2) | small | Decision made; B1 already leaves the PDF on disk. ⚠️ It is the one that **breaks a pinned test on purpose** |
+> | **2** | **D — offline entry screen** (§3) | ⛔ large, and it is **thinking, not typing** | The engine is complete and there is **no client at all**. Four questions must be answered before any code |
 >
-> ⚠️ **THE ORDER IS A RECOMMENDATION, NOT A DEPENDENCY.** Nothing in C, B2 or D touches anything the
-> others need. Take them in any order; do **not** interleave them in one commit.
+> ⚠️ **THE ORDER IS A RECOMMENDATION, NOT A DEPENDENCY.** Neither B2 nor D touches anything the other
+> needs. Take them in either order; do **not** interleave them in one commit.
+>
+> ✅ **TRACK C IS SPENT** — folded into `HANDOFF.md` §1.20, F11 row renamed, `drive-c-print-templates.mjs`
+> 33/33. §1 below is a marker; the section is deleted.
 
 ### ⛔ AND ONE THING THAT IS NOT A TRACK AND COSTS ONE E-MAIL
 
@@ -48,26 +51,27 @@ one second.
 ```bash
 ps -o lstart= -p "$(lsof -nP -iTCP:8087 -sTCP:LISTEN -t)"      # NEWER than the last backend commit?
 kill <pid> && (nohup make run-cored > /tmp/cored.log 2>&1 &)    # up in ~1s
-# For a track that DOES change Go code (C does), grep the binary for a new string:
+# For a track that DOES change Go code, grep the binary for a new string:
 strings "$(ps -o command= -p "$(lsof -nP -iTCP:8087 -sTCP:LISTEN -t)" | awk '{print $1}')" | /usr/bin/grep -c <new-symbol>
 ```
 
 ⛔ **VITE MUST BE ON `:5173`.** WebAuthn origin matching is exact; a vite that took `:5174` signs in
 fine and then fails every write with `PASSKEY STEP-UP FAILED`.
 
-**The gate baseline, measured 2026-08-26 at `13e0ba8` — these are the numbers to beat:**
+**The gate baseline, RE-MEASURED 2026-08-27 after track C — these are the numbers to beat:**
 
 | Gate | Command | Value now |
 |---|---|---|
 | backend build + vet | `cd backend && go build ./... && go vet ./...` | clean |
 | backend tests | `cd backend && go test ./... -timeout 60m` | **exit 0** |
 | typecheck | `cd frontend && pnpm exec tsc --noEmit` | clean |
-| frontend tests | `cd frontend && pnpm vitest run` | **1628 pass / 96 files** |
+| frontend tests | `cd frontend && pnpm vitest run` | **1662 pass / 98 files** |
 | live demo | `cd frontend && pnpm verify:demo "$(cat .demo-company-id)"` | **34/34** ⚠️ takes the id as an ARGUMENT |
 | corpora | `python3 corpora/validate.py` | OK (migration=6, inventory=11) |
 | everything | `make verify` | exit 0 |
 | T32 drive | `node frontend/scripts/drive-t32-import-screen.mjs` | **25/25**, tenant torn down |
 | B1 drive | `node frontend/scripts/drive-b1-pdf-export.mjs` | **15/15**, tenant torn down |
+| C drive | `node frontend/scripts/drive-c-print-templates.mjs` | **33/33**, tenant torn down |
 
 ⚠️ **`make verify` DOES NOT RUN `tsc`.** Different gates, and each has caught a real error the other
 missed — including last session, where a new test file was green in vitest with **8 real `tsc`
@@ -80,13 +84,14 @@ errors**.
 | `05c9775` | **A raw NUL byte** in `mock.ts` had made 8,672 lines **invisible to grep**. §0.1 item 1 |
 | `d60546c` | **T32** — `Alt+O` and `Gateway > Import` import a TallyPrime export. `HANDOFF.md` **§1.18**. No Go code changed |
 | `13e0ba8` | **B1** — F12 offers "Export (Alt+E) as PDF"; Alt+E **saves** it (Ctrl+P still **opens** it). `HANDOFF.md` **§1.19** |
+| _this_ | **C** — Gateway > Print Templates writes a per-company layout; the F11 row is RENAMED to drop "logo". `HANDOFF.md` **§1.20** |
 
 ⛔ **Read `HANDOFF.md` §1.17's *"three rules this lane paid for"*, §1.18's *"three things the mutation
 proofs found"*, and §0.1 below before writing a probe.** Between them they cost four sessions.
 
 ---
 
-## ⛔ 0.1 FIVE HAZARDS ALREADY PAID FOR. READ THIS OR RE-PAY THEM.
+## ⛔ 0.1 SEVEN HAZARDS ALREADY PAID FOR. READ THIS OR RE-PAY THEM.
 
 ### 1. ⛔⛔ THE SHELL'S `grep` IS A `ugrep` SHIM THAT SILENTLY SKIPS FILES — AND IT LIED
 
@@ -100,9 +105,10 @@ invisible: `grep -n importTallyXML src/api/mock.ts` returned **nothing** while t
 
 > ⛔ **THIS REPOSITORY'S HANDOFFS USE `grep … -> EMPTY` AS EVIDENCE THAT SOMETHING IS UNWIRED.**
 > Against a skipped file that evidence is worthless in the dangerous direction. **Use `/usr/bin/grep`
-> whenever an absence is load-bearing.** Every "EMPTY" claim in §1 below was re-verified that way.
+> whenever an absence is load-bearing.** Track C's "nothing calls SaveOverrides" claim was
+> re-verified that way before a line was written, and it held.
 
-### 2. ⛔ A REGISTRATION POINT NO TEST CAN SEE — STILL OPEN FOR 14 SCREENS
+### 2. ⛔ A REGISTRATION POINT NO TEST CAN SEE — STILL OPEN FOR 13 SCREENS
 
 Deleting a screen from `AppShell.tsx`'s `COMPANY_SCOPED_SCREENS` broke **nothing**: 25 of 25 tests
 stayed green. That set is consulted **only when `company === null`** (`needsCompany && !companyReady`
@@ -110,9 +116,9 @@ picks the "Preparing company…" placeholder) and every test passes an `initialC
 entry the screen renders company-less and `useCompanyID()` **throws during render**, taking the shell
 down.
 
-`TallyImportScreen.test.tsx` now has that case (`CompanyProvider` does not bootstrap unless asked, so
-it is deterministic — copy it). ⚠️ **NOTHING COVERS IT FOR THE OTHER FOURTEEN SCREENS IN THAT SET.**
-**Tracks C and D each add one: write that test.**
+`TallyImportScreen.test.tsx` and `PrintTemplateScreen.test.tsx` now have that case (`CompanyProvider`
+does not bootstrap unless asked, so it is deterministic — copy either). ⚠️ **NOTHING COVERS IT FOR THE
+OTHER THIRTEEN SCREENS IN THAT SET.** **Track D adds one: write that test.**
 
 ### 3. ⛔ jsdom IS MISSING MORE OF `File`/`Blob` THAN YOU THINK
 
@@ -140,8 +146,12 @@ from the router, not typed.** It is `internal/reporting`'s `tds-register-prose` 
 test`'s exit code — so `exportPdf.test.tsx` asserts the golden's **shape** (the two lists partition
 all 30, neither is empty, anchors on the right side) in a suite that always runs.
 
-> ⛔ **TRACK C HAS THE IDENTICAL PROBLEM** — `print_template.doc_kind`'s vocabulary is a server
-> decision the screen needs. **Generate it. Copy this pattern, including the counterweight.** §1.1
+> ✅ **TRACK C HAD THE IDENTICAL PROBLEM AND THIS IS WHERE IT GOT BETTER.** Its golden
+> (`print-template-surface.json`) is emitted by RENDERING each document kind twice per field and
+> comparing the PDF bytes, and it needs **no Postgres** — so unlike the one above it **cannot hide
+> behind a skip**, and a false "this field prints" is not a thing the measurement can produce. Copy
+> **that** one (`internal/printing/template_surface_golden_test.go`) in preference to this one, and copy
+> its counterweight too (`printTemplateSurface.test.ts` asserts the artefact's shape as PROPERTIES).
 
 ### 5. ⚠️ ONE DOWNLOAD ANCHOR, AND TWO WAYS TO REACH A SCREEN IN A DRIVE
 
@@ -157,7 +167,36 @@ all 30, neither is empty, anchors on the right side) in a suite that always runs
   `page.keyboard.press("Alt+KeyE")` works for a global binding; use the harness's `altMac("x")` for
   anything macOS **composes**.
 
-### 0.1.1 The shared registration surface — only if a track adds a SCREEN (C and D do)
+### 6. ⚠️ CLICKING A GATEWAY LABEL IN A DRIVE DOES NOT OPEN IT — USE `openFromGateway`
+
+The `SelectionList`'s selection stays on its **default**, so `Enter` activates whatever was already
+highlighted rather than the label that was clicked. T32's drive carries this warning and track C's
+drive walked into it anyway, costing a run: the screen simply never appeared and the failure looked
+like a dead registration point.
+
+⛔ **Use the harness's `openFromGateway(label)`**, which drives the Gateway's own search box — the way
+a keyboard operator gets there. (And it is still NOT `Alt+G`: that picker is hard-wired to
+`["Vouchers", ...REPORT_NAMES]`, so no ScreenKind is in it. §0.1 item 5 already says so.)
+
+⚠️ **AND WHEN A PROBE SEARCHES PDF BYTES, USE SINGLE TOKENS WITH NO SPACES.** The renderer wraps a long
+string across several show-text operands, so a whole sentence never appears contiguously in the byte
+stream and a search for one fails against a document that is perfectly correct — rule 5 again.
+
+### 7. ⛔ NEVER `DELETE FROM company` ALONE. IT BREAKS `/v1/me` FOR EVERY SESSION.
+
+A hand-rolled `DELETE FROM company WHERE id=…` for a throwaway probe tenant left **13 voucher_type, 28
+account_group, 9 ledger, 96 acl_rule and 1 company_membership** rows behind. `GET /v1/me` then answered
+**500** for every session — *"authz: user companies (resolve …): no rows in result set"* — and it looked
+like a defect in the track being worked on.
+
+⛔ **ALWAYS USE THE CATALOG-DERIVED SWEEP** the drive scripts carry: loop every `public` BASE TABLE with
+a `company_id` column under `session_replication_role = replica`, then delete the company. Copy it from
+`drive-c-print-templates.mjs` or `drive-b1-pdf-export.mjs`. The drives get this right; a one-line manual
+delete does not, and the damage is not visible until a screen fails to load.
+
+---
+
+### 0.1.1 The shared registration surface — only if a track adds a SCREEN (D does)
 
 `HANDOFF.md` §7.2 is the authority. **Two worked examples: `b5c61b7` (T14's Data screen) and
 `d60546c` (T32's importer).** Read either diff — it touches exactly these files and nothing else.
@@ -196,119 +235,19 @@ fake a payload a real backend has never produced.**
 
 ---
 
-# 1. TRACK C — PER-COMPANY PRINT TEMPLATES  ⭐ DO THIS FIRST
+# 1. ✅ TRACK C — SPENT. IT SHIPPED 2026-08-27.
 
-> ## ⛔ THE WRITE ALREADY EXISTS AND NOTHING CAN REACH IT. RE-VERIFIED 2026-08-26.
->
-> `printingdb.Store.SaveOverrides` (`printing/printingdb/template.go:153`) is fully implemented — a
-> real `INSERT … ON CONFLICT (company_id, doc_kind) DO UPDATE` with `updated_at` set on **both**
-> paths, so *"when did our invoice layout last change?"* is answerable from the row. It is **tested**.
->
-> ```
-> /usr/bin/grep -rn 'SaveOverrides' backend/internal/server/    -> EMPTY (exit 1)
-> /usr/bin/grep -rn 'SaveOverrides' backend/ | grep -v _test    -> only its own definition + comment
-> psql -tAc "SELECT count(*) FROM print_template"               -> 0
-> ```
->
-> **No route calls it. Not one row exists in the entire database.** This is `payrolldb`'s bug exactly
-> (`HANDOFF.md` §1.15). ⛔ **THIS TRACK IS ONE ROUTE PLUS ONE SCREEN.** It is not "build a templating
-> system", and if you find yourself designing one, stop.
->
-> ✅ **AND THE READ SIDE IS ALREADY WIRED — which is what makes the proof easy.** `LoadOverrides` is
-> consumed in **three** places: `printingdb/document.go:1218` and `:1924` (the two document paths) and
-> `handler_print_reports.go:181` (the report letterhead). **The printer honours overrides today.**
-> Write one, print, and the bytes change.
+**Folded into `HANDOFF.md` §1.20**, which carries the whole of it. This section is deleted per §5's
+rule rather than left as prose. The four things worth carrying forward are already in §0.1 below
+(items 6 and 7) and in `HANDOFF.md` §1.20.1–§1.20.9; in one line each:
 
-## 1.1 What the table holds — MEASURED 2026-08-26
-
-```
-psql -tAc "SELECT column_name||':'||data_type FROM information_schema.columns
-           WHERE table_name='print_template' ORDER BY ordinal_position"
-```
-
-```
-id:uuid · company_id:uuid · doc_kind:text · title:text · declaration:text · terms:text ·
-signature_label:text · header_lines:ARRAY · footer_lines:ARRAY · bank_lines:ARRAY ·
-show_bank_details:boolean · created_at · updated_at
-```
-
-**`doc_kind` vocabulary** — read from the live catalog (migration 0037's
-`print_template_doc_kind_known` CHECK):
-
-```
-tax-invoice · bill-of-supply · delivery-note · receipt · payment · credit-note · debit-note · report
-```
-
-⛔ **DO NOT HARDCODE A TYPESCRIPT COPY OF THAT LIST** — the drift bug this repo has had three times.
-**B1 already built the answer:** generate a golden the way `TestPrintedReportLayoutsGolden` does
-(§0.1 item 4), from the Go `DocKind` constants or the CHECK itself, and have the frontend consume it.
-⚠️ **And copy the counterweight too:** if the generator needs Postgres it **skips silently**, so
-assert the golden's shape in a vitest that always runs.
-
-## 1.2 ✅ THE LOGO — DECIDED: SHIP THE FOUR, RENAME THE ROW
-
-```
-psql -tAc "SELECT table_name||'.'||column_name FROM information_schema.columns
-           WHERE table_schema='public' AND (column_name LIKE '%logo%' OR column_name LIKE '%image%')"
-   -> EMPTY     (re-verified 2026-08-26: there is NO image storage anywhere in the schema)
-```
-
-`FeaturesScreen.tsx:533` reads **"Per-company print templates (logo, address block, footer,
-declarations)"**. Three of those four are columns. **A logo is not.**
-
-> ## ✅ THE DECISION: ship the four that exist and **RENAME THE ROW to drop "logo"**, with a note
-> saying a logo would need image storage the product does not have.
->
-> **No migration, no binary column, no object store, no upload route, no size/type policy, and no
-> change to the PDF renderer.**
->
-> ⛔ **WHAT MUST NOT HAPPEN IS SHIPPING THE FOUR AND LEAVING THE ROW PROMISING A LOGO** — the exact
-> failure the whole FeaturesScreen exists to prevent. **Mutation-prove it:** leave "logo" in the row
-> name and watch a test name it.
-
-## 1.3 The route
-
-`PUT /v1/companies/{companyID}/print-templates/{docKind}` (+ a `GET` so the form can hydrate).
-
-**TWO-TOUCH RULE — the route is inert without all four:**
-
-1. `routeAction()` in `auth_middleware.go` — add the arms;
-2. `authz.KnownResources` in `authz/vocabulary.go` — the token;
-3. gate: `go test ./internal/server/ -run TestEveryCompanyRouteIsMappedAndInVocabulary`;
-4. archtest: `internal/server` already reaches `internal/printing/printingdb`, so **no new edge**.
-
-⛔ **THE TOKEN: model it as `company`.** Not `report`, and not a new token. A print template is
-company configuration — the same authority as the F11 feature settings, which already emit
-`(Alter, "company")`.
-
-⚠️ **NOT `report:NAME`.** Migration 0011 seeds every Data Entry level a coarse `allow display
-report`, so a report-shaped token is granted to **every operator in every tenant** the day it ships —
-and this one rewrites what the company's invoices say. Migration 0022 seeds Data Entry `allow display
-company` (a **Display**), so `alter company` stays **default-DENIED** for them: the right answer, and
-it **needs no ACL migration**. Being a write it inherits the Owner level's WebAuthn step-up, and
-correctly does **not** inherit the back-dated cutoff (a layout carries no date).
-
-## 1.4 The screen
-
-Reached from **F11 Company Features** — where a Tally operator looks for company configuration and
-where the three existing real controls live. **`FeaturesScreen.tsx:580` (TDS Deductor Details, *"the
-FIRST of the three REAL CONTROLS on this screen"*) is the pattern to copy**, including its argument
-for why a control belongs on a screen whose header says it is a statement of fact.
-
-⚠️ **A DOC KIND WITH NO OVERRIDE ROW IS NOT EMPTY — IT PRINTS THE BUILT-IN LAYOUT.** `LoadOverrides`
-returns the zero value with **no error** for an absent row (migration 0037 says so). Therefore:
-
-- the form must show **what will actually print**, not blank fields that read as *"this company has no
-  declaration"*;
-- **"clear this override" must be reachable**, or a company that sets a declaration once can never go
-  back to the default.
-
-**Proof:** ⛔ **an HTTP test that PUTs an override and asserts THE PRINTED PDF CHANGES** — not that
-the row was written. The read side is already wired (the box above), so this is a genuine end-to-end
-oracle. ⛔ **Mutation:** have the handler drop `declaration` and watch the print assertion name it.
-**A test that only reads the row back cannot see a printer that ignores the override.**
-
----
+- the field grid is **RAGGED** — `RenderReport` reads 3 of the 7 overridable fields, and a form built
+  from the obvious reading stores a declaration no statement will ever print, with no error anywhere;
+- the golden that decides which fields bite is **MEASURED by rendering** and **needs no Postgres**, so
+  it fixes §0.1 item 4's skip hazard rather than inheriting it;
+- the oracle was the **printed PDF**, never the stored row — and the drive's strongest probe is that
+  after clearing, the PDF is **byte-identical** to the pre-override one;
+- **the logo was cut and the F11 row renamed**, because the schema has no image storage anywhere.
 
 # 2. TRACK B2 — E-MAIL A DOCUMENT. ✅ DECIDED: `mailto:` HANDOFF.
 
@@ -460,8 +399,9 @@ committing a stale `base_version`, **not** by stubbing one.
    anchor occurs exactly once before replacing it, and print the byte delta.** Last session caught a
    mutation whose anchor matched **zero** times (an escaped emoji in the anchor string); it would
    otherwise have been logged as a pass.
-4. ⛔ **AN ORACLE THAT CANNOT SEE THE DEFECT IS NOT AN ORACLE** (`HANDOFF.md` §1.16). Applied here:
-   **track C must assert the printed bytes, not the stored row.**
+4. ⛔ **AN ORACLE THAT CANNOT SEE THE DEFECT IS NOT AN ORACLE** (`HANDOFF.md` §1.16). Track C is the
+   worked example: its tests assert the **printed PDF**, never the stored row — the row had been
+   written correctly by a tested store for months while no document was affected by it.
 5. ⛔ **A REFUSAL FOR THE WRONG REASON IS A VACUOUS PROBE.** Three of last session's failures were in
    the PROBE, not the product: a `.text()` mutation that failed because jsdom lacks the method, a
    drive that compared a raw byte count against a **localised** one (`"15,328"`), and a drive that
@@ -494,8 +434,9 @@ predictions were themselves found wrong, which is exactly why they are written d
 
 ## 5. WHEN EACH ONE LANDS
 
-- Fold it into `HANDOFF.md` (**§1.20** onward — T32 took §1.18, B1 took §1.19), flip its `HANDOFF.md`
-  §1.11 row (T32 is row 5, B1 row 6, so **offline entry is row 7**), and update the FeaturesScreen row
+- Fold it into `HANDOFF.md` (**§1.21** onward — T32 took §1.18, B1 §1.19, track C §1.20), flip its
+  `HANDOFF.md` §1.11 row (C is row 7, so **offline entry is row 8** and B2 lives in row 9), and update
+  the FeaturesScreen row
   **in the same change that makes it true** — the screen's own rule: a row flips when an operator gets
   a SCREEN, not when they got a route.
 - Add a `docs/RELEASE-NOTES.md` note leading with what an operator will act on.

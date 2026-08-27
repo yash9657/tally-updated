@@ -299,6 +299,20 @@ export const TDS_CHALLANS_LABEL = "TDS Challans";
 export const TALLY_IMPORT_LABEL = "Import from Tally";
 
 /**
+ * The Gateway entry that opens the PRINT TEMPLATES screen (track C).
+ *
+ * ⛔ IT MUST BE MATCHED BEFORE THE canonicalReportName FALLBACK, which falls back
+ * to the RAW LABEL for anything it does not recognise — so without the match
+ * below this label pushes a `report` frame named "Print Templates", which renders
+ * "not available in this build" over a screen that exists and works.
+ *
+ * ⚠️ IT IS NOT IN Alt+G GO TO AND CANNOT BE: that picker is generated from
+ * ["Vouchers", ...REPORT_NAMES], and this is not a report name. The Gateway entry
+ * and the F11 Company Features row are its two doors.
+ */
+export const PRINT_TEMPLATES_LABEL = "Print Templates";
+
+/**
  * The Gateway entries that open the three T2 COST screens.
  *
  * ⛔ SAME ORDERING REQUIREMENT AS EVERY LABEL ABOVE, and it bites harder here
@@ -961,6 +975,21 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
           TALLY_IMPORT_LABEL.toLowerCase()
         ) {
           stack.push({ screen: "tally-import" });
+          return { stack };
+        }
+        // "Print Templates" drills into the per-company document layouts (track
+        // C). Ordering as above: BEFORE the canonicalReportName fallback, which
+        // would otherwise push a report frame named "Print Templates".
+        //
+        // ⛔ THIS IS ONE OF THE THREE POINTS THAT SHIP THE SCREEN DEAD. Without
+        // it the label falls through to the fallback and the operator gets a
+        // report frame that says the report is not available — over a screen that
+        // is built.
+        if (
+          active.selectedItem?.toLowerCase() ===
+          PRINT_TEMPLATES_LABEL.toLowerCase()
+        ) {
+          stack.push({ screen: "print-templates" });
           return { stack };
         }
         // The three T2 COST screens. Ordering as above, and load-bearing: two of

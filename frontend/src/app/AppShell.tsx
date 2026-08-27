@@ -101,6 +101,18 @@ const COMPANY_SCOPED_SCREENS = new Set<NavSnapshot["screen"]>([
   // useCompanyID() THROWS before the screen can render anything, including the
   // line naming the company the export is about to be posted into.
   "tally-import",
+  // PRINT TEMPLATES (track C). Every route it drives is company-scoped, so it
+  // needs a scope for the same reason every screen above does: omit it and
+  // useCompanyID() THROWS during render, taking the whole shell down before the
+  // screen can show anything — including the line naming which company's
+  // documents are being edited.
+  //
+  // ⛔ NO TEST IN THIS REPOSITORY COULD SEE THIS ENTRY BEFORE ONE WAS WRITTEN FOR
+  // IT. This set is consulted ONLY when company === null, and every screen test
+  // passes an initialCompany, so deleting an entry here breaks nothing in the
+  // suite. PrintTemplateScreen.test.tsx has the company-less case; it is the
+  // second screen in the set to have one.
+  "print-templates",
 ]);
 
 /**
@@ -590,6 +602,10 @@ function screenTitle(snap: NavSnapshot): string {
     // more than cosmetic.
     case "tally-import":
       return "Import from Tally";
+    // ⛔ WITHOUT THIS CASE THE CHROME READS "Tally" — the `default` below — over
+    // the screen that decides what every invoice this company issues will say.
+    case "print-templates":
+      return "Print Templates";
     // ⛔ WITHOUT THIS CASE THE CHROME READS "Tally" — the `default` below — over a
     // screen showing a voucher's hash-chained version history. The screen itself
     // is real and honest (it renders voucher_version with tri-state chain
@@ -720,6 +736,13 @@ function hintsFor(snap: NavSnapshot): string[] {
     // "Enter: Open" ON A SCREEN WITH NOTHING TO OPEN — and worse, next to a
     // button that fires an import that cannot be undone.
     case "tally-import":
+      return ["Esc: Back", "F1: Help"];
+    // ⛔ WITHOUT THIS CASE THE STRIP FALLS TO `default` AND ADVERTISES
+    // "Enter: Open" ON A SCREEN WITH NOTHING TO OPEN. This is a form: its two
+    // actions are named buttons, deliberately, because "save a layout" and
+    // "clear a customisation" are different consequences and a generic accept
+    // key cannot say which it would fire.
+    case "print-templates":
       return ["Esc: Back", "F1: Help"];
     // ⛔ WITHOUT THIS CASE THE STRIP FALLS TO `default` AND ADVERTISES
     // "Enter: Open" ON A SCREEN WITH NOTHING TO OPEN. The edit log is a read-only

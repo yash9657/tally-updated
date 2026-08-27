@@ -31,6 +31,22 @@ const GATEWAY_MENU = [
   // ["Vouchers", ...REPORT_NAMES] and this is not a report name.
   "Import from Tally",
 
+  // Print Templates (track C) — what this company's own documents say. The
+  // override store has been implemented AND TESTED since migration 0037 and the
+  // printer has honoured it the whole time; NO ROUTE COULD WRITE ONE, and
+  // print_template held zero rows in the entire database. So the Gateway is this
+  // screen's door for the same reason it is Bank Reconciliation's and TDS
+  // Challans': built server-side with no surface anywhere.
+  //
+  // ⚠️ It is NOT in Alt+G Go To and cannot be: that picker is generated from
+  // ["Vouchers", ...REPORT_NAMES] and this is not a report name.
+  //
+  // ⚠️ AND IT HAS NO GLOBAL KEY, on purpose. Tally reaches print configuration
+  // through F12 Configure and the print preview rather than a documented Alt
+  // binding, so there is no key to be faithful to and inventing one risks
+  // shadowing a binding a screen already owns.
+  "Print Templates",
+
   // ---- THE THREE COST SCREENS (T2).
   //
   // "Cost Centres" is the MASTERS door — the axes of analysis (Department,

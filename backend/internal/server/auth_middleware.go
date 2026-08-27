@@ -1238,6 +1238,9 @@ func peekTallyXMLSupersededGUIDs(body []byte) []string {
 //	GET   .../payroll-esi-return                             -> Display/report:NAME
 //	GET   .../print/vouchers/{class}/{voucherID}             -> Print/{class}
 //	GET   .../print/reports/{reportName}                     -> Print/report:NAME
+//	GET   .../print-templates/{docKind}                      -> Display/company
+//	PUT   .../print-templates/{docKind}                      -> Alter/company
+//	DELETE .../print-templates/{docKind}                     -> Alter/company
 //
 // An unmatched route returns mapped=false (default-deny).
 func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName string, mapped bool) {
@@ -1295,6 +1298,54 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 	// write cutoff — both gate on Action.IsWrite(), and a read carries no date.
 	case method == http.MethodGet && rest == "/backup":
 		return authz.Display, "backup", "", true
+
+	// PER-COMPANY PRINT TEMPLATES (track C): what this company's own documents
+	// SAY — the title, the letterhead lines, the declaration, the terms, the
+	// signature label and the bank block, per document kind.
+	//
+	// TWO-TOUCH RULE: these arms are what make the three routes in server.go
+	// anything other than a 403 for an Owner.
+	// TestEveryCompanyRouteIsMappedAndInVocabulary walks the router and turns the
+	// suite red if one is missing.
+	//
+	// ⛔ THE TOKEN IS `company`, AND NOT report:NAME. A print template is company
+	// CONFIGURATION — the same authority as the F11 feature settings, which the
+	// `PUT ""` arm above already maps to (Alter, "company"). Migration 0011 seeds
+	// the Data Entry level a coarse `allow display report`, so anything spelled
+	// report:<something> is GRANTED to every operator in every tenant the day it
+	// appears — and this write changes what the company's INVOICES say to its
+	// customers. Migration 0022 seeds Data Entry `allow display company`, which is
+	// a Display, so `alter company` stays default-DENIED for every seeded
+	// non-Owner level and this needs NO ACL MIGRATION.
+	//
+	// ⚠️ AND NOT A NEW TOKEN EITHER. A separate `print-template` token would make
+	// "may this level change our invoice layout?" a question no existing rule
+	// answers, which sounds tidier until an administrator who wrote `disallow
+	// alter company` to lock down company configuration discovers it did not
+	// cover the letterhead.
+	//
+	// THE READ IS A Display AND THE WRITES ARE Alter — including DELETE, which
+	// clears an override and returns the company to the built-in layout. That is
+	// the same split /bank-reconciliation/ uses for the same reason: the DELETE
+	// here UNDOES A CUSTOMISATION, it does not destroy a record, and mapping it to
+	// authz.Delete would let a level permitted to SET a declaration be unable to
+	// remove it — a one-way door — while making it share authority with `delete
+	// company`, which means something far more dangerous.
+	//
+	// Being writes, PUT and DELETE inherit the Owner level's WebAuthn step-up
+	// (Action.IsWrite()). They correctly do NOT inherit the back-dated cutoff: a
+	// layout carries no date, and voucherDateFromRequest returns nil for a route
+	// with none.
+	case strings.HasPrefix(rest, "/print-templates/"):
+		switch method {
+		case http.MethodGet:
+			return authz.Display, "company", "", true
+		case http.MethodPut, http.MethodDelete:
+			return authz.Alter, "company", "", true
+		}
+		// Any other method on this prefix falls through to default-deny rather
+		// than being silently treated as one of the above.
+		return "", "", "", false
 
 	// Masters.
 	case method == http.MethodPost && isMasterPath(rest):

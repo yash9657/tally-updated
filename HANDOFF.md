@@ -919,8 +919,9 @@ The criterion is unchanged: **how much of a real business's day is blocked.**
 | **4** | ✅ **DONE 2026-08-25 — T14 BACKUP / RESTORE** (§1.17). **Split company is a STATED REFUSAL, not a gap** — the FeaturesScreen row was split in two so the half that did not ship still says so | `Alt+Y` > Data. A gzipped JSON Lines archive of every table the **live schema** says is this company's, sharing ONE enumeration with the teardown harness (`internal/platform/tenant`) — the plan said "reuse the testdb census" and `archtest` FORBIDS that, so it was extracted. ⛔ **A restore CREATES a company and cannot replace one**: there is no delete path for a company anywhere, and keys are PRESERVED because the hash chain contains them | Round trip that **DROPS the original**: census row contents + `VerifyChain` + 3 reports byte-identical. `drive-t14-data.mjs` **25/25** in a browser. `verify:demo` re-pinned 34/34 |
 | **5** | ✅ **DONE 2026-08-26 — T32 THE MIGRATE-FROM-TALLY SCREEN** (§1.18). `Alt+O`, and **Gateway of Tally > Import** — Tally has both doors, so this has both | ⛔ **NO GO CODE CHANGED**: the route, its `routeAction` arm, its vocabulary token and its 128 MiB cap were all already right, and nothing in the product could reach them — the fifth time this repo has shipped an engine with no front door. ⛔ **The screen sends the `File` and never `await file.text()`**: every real export is UTF-16LE, and `Blob.text()` is a UTF-8 decode, so the one-liner destroys the only file shape a customer sends while every ASCII fixture keeps passing. The report puts `stock_lines` and `opening_positions` level with the voucher count, because a trial balance cannot see quantity | The byte-identity PAIR — UTF-16 red, ASCII **green** — under an executed `.text()` mutation, plus 9 more mutations each predicted then observed. `drive-t32-import-screen.mjs` **25/25** in a browser, figures read off the page and cross-checked against the database. `verify:demo` re-pinned 34/34 |
 | **6** | ✅ **DONE 2026-08-26 — B1 EXPORT TO PDF** (§1.19). F12 offers it, `Alt+E` saves it. The **e-mail half was SPLIT off** and still reads Not built, because it is blocked on a PRODUCT DECISION rather than on work | ⛔ **A PDF IS NOT THE ROWS ON SCREEN** — Alt+E's other formats write what is displayed, the print route returns the whole statement, so the status line NAMES the Ctrl+F filter that was not applied. Offered only on the 10 of 30 reports with a layout, gated by a golden **generated from the router** rather than a list anybody keeps. And the three disagreeing download anchors became one (two revoked late and said why; the third revoked synchronously) | 14 vitest cases · `drive-b1-pdf-export.mjs` **15/15**, reading the PDF Chromium actually saved · 6 mutations predicted then observed |
-| **7** | **OFFLINE ENTRY SCREEN** (§5.2) | The differentiator against Tally's LAN-only model, and it is built | A screen **plus a decision**: how does a browser present queued intents? |
-| **8** | **T8 multi-currency** → **T11 budgets** → **T13 interest** → **T12 GSTR-9** → **T16 print templates** → **SSO/OIDC last** | Ordinary Tier-2 backlog. §5.4 states the one thing not to get wrong in each | |
+| **7** | ✅ **DONE 2026-08-27 — TRACK C / T16 PER-COMPANY PRINT TEMPLATES** (§1.20). Three routes plus one screen, reached from **Gateway of Tally > Print Templates**; the F11 row was **RENAMED to drop "logo"**, because there is no image storage anywhere in this product | ⛔ **THE SIXTH ENGINE WITH NO FRONT DOOR.** `SaveOverrides` was implemented AND TESTED since migration 0037 and the printer honoured overrides on every print — and no route could write one, so `print_template` held **zero rows in the entire database**. ⛔ **The finding that changed the design: THE FIELD GRID IS RAGGED.** `RenderReport` reads 3 of the 7 overridable fields, so a form built from the obvious reading stores a declaration no statement will ever print, with no error anywhere. Which fields bite is now a **golden MEASURED by rendering each kind twice per field** — and unlike B1's it needs no Postgres, so it cannot hide behind a skip | 18 mutations predicted then observed · the oracle is the **printed PDF**, never the stored row · `drive-c-print-templates.mjs` **33/33**, whose strongest probe is that after clearing the PDF is **byte-identical** to the pre-override one |
+| **8** | **OFFLINE ENTRY SCREEN** (§5.2) | The differentiator against Tally's LAN-only model, and it is built | A screen **plus a decision**: how does a browser present queued intents? |
+| **9** | **B2 e-mail a document** (`HANDOFF-THE-LAST-THREE.md` §2) → **T8 multi-currency** → **T11 budgets** → **T13 interest** → **T12 GSTR-9** → **SSO/OIDC last** | Ordinary Tier-2 backlog. §5.4 states the one thing not to get wrong in each. ⚠️ **T16 print templates is GONE from this list — it shipped as row 7.** B2's product decision is MADE (a `mailto:` handoff; this product does not send mail) | |
 
 > ### ⛔⛔ AND THE TWO THINGS THAT ARE NOT TRACKS AND OUTRANK MOST OF THIS LIST
 >
@@ -1483,6 +1484,214 @@ node frontend/scripts/drive-b1-pdf-export.mjs        # needs cored :8087 + vite 
 
 ⚠️ **IF THE GOLDEN'S DIFF EVER SURPRISES YOU, READ IT — DO NOT REGENERATE IT.** A name moving out
 of `prints_a_layout` means an operator is about to be offered a PDF that 501s after they choose.
+
+### 1.20 ✅ TRACK C PER-COMPANY PRINT TEMPLATES — DONE AND DRIVEN. THE SIXTH ENGINE WITH NO FRONT DOOR.
+
+> ## ⛔ WHAT WAS MISSING WAS ONE ROUTE AND ONE SCREEN. EVERYTHING ELSE WAS ALREADY BUILT AND TESTED.
+>
+> `printingdb.Store.SaveOverrides` — a real `INSERT … ON CONFLICT (company_id, doc_kind) DO UPDATE`
+> with `updated_at` maintained on **both** paths, so *"when did our invoice layout last change?"* is
+> answerable from the row — has been implemented **and unit-tested** since migration 0037. The READ
+> side was wired the whole time too: `printingdb/document.go:1218` and `:1924` (both document paths)
+> and `handler_print_reports.go:181` (the report letterhead) call `LoadOverrides` on **every print**.
+>
+> **Nothing could write one.** `/usr/bin/grep -rn 'SaveOverrides' backend/internal/server/` was
+> EMPTY, and `SELECT count(*) FROM print_template` was **0 across the entire database**. Changing what
+> a company's own invoice says was not possible from anywhere in the product. That is the **sixth**
+> time this repository has shipped an engine with no front door — order processing, payroll, T14's
+> census, T32's importer, print templates, and the payroll structure routes. **A ROUTE TABLE IS NOT A
+> SURFACE.**
+
+**Shape:** three routes (`GET`/`PUT`/`DELETE .../print-templates/{docKind}`), one screen
+(`print-templates`, reached from **Gateway of Tally > Print Templates**), one **generated golden**, and
+the F11 row renamed.
+
+#### 1.20.1 ⛔ THE FINDING THAT CHANGED THE DESIGN: THE FIELD GRID IS RAGGED
+
+`TemplateOverrides` has seven overridable fields and `DocKind` has eight values, and the obvious
+reading — that the grid is full — is **wrong**:
+
+| Kinds | Honour |
+|---|---|
+| `tax-invoice`, `bill-of-supply`, `delivery-note`, `receipt`, `payment`, `credit-note`, `debit-note` | **all seven** |
+| `report` | **three** — `title`, `header_lines`, `footer_lines` |
+
+`RenderReport` ignores `declaration`, `terms`, `signature_label` and the bank block on purpose:
+printing *"Authorised Signatory"* under a Trial Balance would imply a certification nobody gave.
+`handler_print_reports.go` had said so in a comment since the report letterhead shipped.
+
+⛔ **A FORM BUILT FROM THE OBVIOUS READING IS A LIE WITH NO ERROR ANYWHERE.** The operator types a
+declaration for `report`, the screen accepts it, the row stores it, and no printed statement ever
+carries it. Nothing fails and nothing logs. So:
+
+- `printing.HonouredFields(kind)` is the authority, and **the renderers now READ the same table** the
+  screen is told the defaults from (`internal/printing/template_surface.go`). The first draft declared
+  its own copy of the defaults beside the ones in `invoice.go` and `voucherdoc.go` — the drift bug this
+  repo has paid for three times. `invTitle`, `declaration()` and the signature label now call
+  `DefaultTitle` / `DefaultDeclaration` / `DefaultSignatureLabel`, so a wrong answer on the screen is a
+  wrong answer on the paper too.
+- the **route REFUSES** a field the kind cannot print, with a 400 naming it — rather than storing a
+  value that will never appear. ⚠️ **Only CONTENT is refused, not presence:** a screen that submits its
+  whole form shape with the unused boxes empty is behaving correctly and must not get a 400 for it.
+
+#### 1.20.2 ✅ THE GOLDEN THAT CANNOT SKIP — AN IMPROVEMENT ON B1'S
+
+`internal/printing`'s **`TestPrintTemplateSurfaceGolden`** emits
+`frontend/src/api/goldens/print-template-surface.json` by **rendering each kind twice per field and
+comparing the PDF bytes**. Different bytes ⇒ the renderer read the field.
+
+⛔ **THIS CANNOT BE WRONG IN THE DANGEROUS DIRECTION.** A field the renderer never reads *cannot*
+change the output, so a false "honoured" is not a thing the measurement can produce.
+
+✅ **AND IT NEEDS NO POSTGRES, WHICH FIXES §0.1 ITEM 4's HAZARD RATHER THAN INHERITING IT.**
+`TestPrintedReportLayoutsGolden` skips without a database and a skip is indistinguishable from a pass
+in `go test`'s exit code. Deciding whether a *field* prints needs two renders and a byte comparison, so
+this artefact is regenerated on **every run of the Go suite on any machine**. The frontend counterweight
+(`printTemplateSurface.test.ts`, 10 cases) still asserts the artefact's **shape** — non-empty, every
+kind honours something, the two lists partition the seven fields, and **the grid is still RAGGED** — as
+properties, never as a list of the eight kinds.
+
+#### 1.20.3 ⛔ WHY THERE IS NO SERVER-COMPUTED "EFFECTIVE TEMPLATE" (IT WAS DRAFTED AND REMOVED)
+
+The response carries what is **stored** and what the **built-in default** is, separately, and the screen
+shows the default as the empty box's placeholder. It does **not** carry a computed "what will print".
+
+That would be a **third** implementation of "blank falls back to the built-in", and **the two that
+exist do not agree**: `invoice.go` tests `invBlank`, which trims whitespace, while `voucherdoc.go`'s
+declaration tests `d != ""`, which does not — so a declaration of one space prints the default on an
+invoice and a blank line on a delivery note. A third copy would be right about neither.
+
+#### 1.20.4 THE FOUR FACTS THE RESPONSE KEEPS APART
+
+`customised` · `overrides` · `defaults` · `honours`. Collapsing any two is unrecoverable for a form:
+
+- ⛔ **`customised` is why `LoadOverridesRow` was added.** `LoadOverrides` returns the zero value both
+  for *"never customised"* and for *"customised to blank on purpose"* — the same PDF, not the same
+  sentence. Without the bit, a form cannot offer to CLEAR an override because it does not know one
+  exists. The printing path deliberately still uses `LoadOverrides`: a renderer that branched on
+  presence would print two documents from one row state.
+- ⛔ **`DELETE` REMOVES THE ROW; IT DOES NOT BLANK IT.** A PUT of blanks prints the same document but
+  still reports `customised: true`, so the company could never again be told it is on the built-in
+  layout — and `updated_at` would answer *"when did our layout last change?"* with the date somebody
+  reverted. **A one-way door is not a setting.** Idempotent: clearing an absent override is a success
+  reporting `cleared: false`.
+
+#### 1.20.5 THE AUTHORITY — `company`, AND THE DELETE IS AN `Alter`
+
+`GET` → `(Display, company)`, `PUT`/`DELETE` → `(Alter, company)`. The same token the F11 feature
+settings write over.
+
+⛔ **NOT `report:NAME`.** Migration 0011 seeds Data Entry a coarse `allow display report`, so a
+report-shaped token is granted to **every operator in every tenant** the day it ships — and this write
+rewrites what the company's invoices say to its customers. Migration 0022 seeds Data Entry `allow
+display company` (a **Display**), so `alter company` stays default-DENIED for every seeded non-Owner
+level and **no ACL migration was needed**. ⛔ **AND NOT A NEW TOKEN:** an administrator who wrote
+`disallow alter company` to lock down company configuration would otherwise find it did not cover the
+letterhead.
+
+⚠️ **THE DELETE IS `Alter`, NOT `authz.Delete`** — following `/bank-reconciliation/`'s existing split.
+It undoes a customisation, it does not destroy a record; `authz.Delete` would let a level permitted to
+SET a declaration be unable to remove it, and would share authority with `delete company`.
+
+#### 1.20.6 ⚠️ THE GATE THAT CAUGHT IT, AND WHY THE ANSWER WAS AN ALLOWLIST ENTRY
+
+`TestEveryWriteRouteNamingAnExistingDocumentIsAccountedFor` went **red** on both writes: a `{docKind}`
+in the path looks like a document id to the heuristic. It is not — it is a document **TYPE**. The entry
+in `writeRoutesNamingADocumentButNotMovingIt` states the reason: **a layout carries no date**, so there
+is nothing to lift into or out of a locked period.
+
+⚠️ **WHAT IT DOES CHANGE IS WHAT A REPRINT OF AN OLD DOCUMENT LOOKS LIKE**, and that is a decision
+rather than an oversight — the schema holds exactly one row per (company, doc_kind) by UNIQUE
+constraint, so per-period layout history is a different feature. **The screen says so on its face.**
+
+#### 1.20.7 ✅ THE LOGO — DECIDED, AND THE RENAME IS THE POINT
+
+The F11 row read *"Per-company print templates (logo, address block, footer, declarations)"*. Three of
+those four are columns. **A logo is not** — `column_name LIKE '%logo%' OR '%image%'` over the whole
+schema returns **nothing**, so there is no image storage anywhere in this product.
+
+The row now reads *"(letterhead, declaration, terms, signature, bank block)"* and its note says a logo
+is absent **and why**. ⛔ **Mutation-proved:** leaving "logo" in the name turns
+`FeaturesScreen.test.tsx` red naming it. Shipping the four and leaving the fifth advertised is the
+exact failure that screen exists to prevent.
+
+#### 1.20.8 THE PROOFS
+
+⛔ **18 EXECUTED MUTATIONS, EACH PREDICTED THEN OBSERVED — 7 backend, 11 frontend.** The backend set
+includes the one §1.4 of the handoff asked for by name (**the handler drops `declaration`** → the
+PRINTED-PDF assertion names it, not a row read-back), `DeleteOverrides` deleting nothing,
+`LoadOverridesRow` never reporting presence, the two-touch `routeAction` arm, and `HonouredFields`
+claiming a report honours everything (which the rendering measurement catches). The frontend set covers
+all three registration points that ship a screen **dead with no error and no status line** — the
+navMachine dispatch, the Gateway entry, the registry entry — plus `COMPANY_SCOPED_SCREENS`, the title
+case, the hint case, and the screen echoing its own request instead of the stored row.
+
+⛔ **THE ORACLE IS THE PRINTED PDF, NEVER THE STORED ROW** (rule 4). A read-back test proves the table
+works — which it already did, for months, while no document was affected by anything in it.
+`handler_print_templates_test.go` PUTs an override and asserts the **printed receipt** changes, then
+DELETEs and asserts the **built-in comes back**.
+
+**`drive-c-print-templates.mjs` — 33/33 in a browser**, on a throwaway tenant it creates and tears
+down. Its strongest oracle: after clearing, **the printed PDF is BYTE-IDENTICAL to the one before any
+override existed** — not "the probe words are gone". A DELETE that blanked the row would pass the weaker
+check and fail this one. It also cross-checks the DATABASE (a screen rendering a response the server
+never acted on passes every on-page assertion) and incidentally proves the **WebAuthn step-up**
+end to end: the first PUT is refused 403 `STEPUP_REQUIRED`, the ceremony runs, the retry succeeds.
+
+⚠️ **TWO PROBE FAILURES WORTH INHERITING, BOTH RULE 5 (a refusal for the wrong reason):**
+
+1. **Clicking the Gateway label does not open the screen.** The `SelectionList` selection stays on its
+   default, so `Enter` activates whatever was highlighted. **Use the harness's `openFromGateway`**,
+   which drives the Gateway's own search box. T32's drive carries the same warning and this probe
+   walked into it anyway.
+2. **The probe words must be SINGLE TOKENS WITH NO SPACES.** The renderer wraps a long declaration
+   across several show-text operands, so a whole sentence never appears contiguously in the byte stream
+   and a search for one fails against a document that is perfectly correct.
+
+⛔ **AND ONE MOCK DEFECT THE SUITE FOUND, WHICH GENERALISES:** the mock's override store was
+**module-scoped**, so one test's save leaked into the next test's *"this company has customised
+nothing"*. It failed loudly here; in a differently-ordered suite it would have made a test pass for the
+wrong reason. `createMockClient`'s other state (`companies`, `mockOrders`) is per-client for exactly
+this reason — **state that models a database belongs to the client pretending to be one.**
+
+⚠️ **THE MOCK IS ALSO NOT MORE PERMISSIVE THAN THE BACKEND.** It refuses an unknown kind and refuses a
+field the kind ignores, using the same generated artefact. A mock more permissive than the real server
+is worse than no mock: a screen developed against it offers a control that works in every test and
+400s in production.
+
+#### 1.20.9 ⚠️ A HOUSEKEEPING TRAP THIS SESSION FELL INTO — DO NOT `DELETE FROM company` ALONE
+
+A hand-rolled `DELETE FROM company WHERE id=…` for a throwaway probe tenant left **13 voucher_type, 28
+account_group, 9 ledger, 96 acl_rule and 1 company_membership rows** behind, and `GET /v1/me` then
+answered **500** for every session: *"authz: user companies (resolve …): no rows in result set"*. It
+looked like a defect in this track for several minutes.
+
+⛔ **ALWAYS USE THE CATALOG-DERIVED SWEEP** the drive scripts carry (loop every `public` base table with
+a `company_id`, under `session_replication_role = replica`, then delete the company). The drives get
+this right; a one-line manual delete does not.
+
+#### 1.20.10 Where it all is
+
+| Thing | Where |
+|---|---|
+| exported surface + defaults | `backend/internal/printing/template_surface.go` |
+| the measured golden | `backend/internal/printing/template_surface_golden_test.go` |
+| presence + clear | `printingdb/template.go` — `LoadOverridesRow`, `DeleteOverrides` |
+| the three routes | `backend/internal/server/handler_print_templates.go` |
+| printed-bytes proof | `backend/internal/server/handler_print_templates_test.go` |
+| the screen | `frontend/src/screens/PrintTemplateScreen.tsx` |
+| golden consumer | `frontend/src/screens/printTemplateSurface.ts` |
+| the drive | `frontend/scripts/drive-c-print-templates.mjs` |
+
+```
+cd backend && go test ./internal/printing/ -run TestPrintTemplateSurfaceGolden
+cd backend && go test ./internal/server/ -run 'PrintTemplate'
+cd frontend && pnpm vitest run src/screens/PrintTemplateScreen.test.tsx src/screens/printTemplateSurface.test.ts
+node frontend/scripts/drive-c-print-templates.mjs   # needs cored :8087 + vite :5173
+```
+
+⚠️ **IF THE SURFACE GOLDEN'S DIFF EVER SURPRISES YOU, READ IT — DO NOT REGENERATE IT.** A field moving
+into `ignores` is a control an operator can still fill in and which will never print.
 
 ### 1.12 ⛔ HOW TO PARALLELISE THIS — WHAT WORKED LAST SESSION, AND WHAT MUST NOT BE SPLIT
 

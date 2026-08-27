@@ -97,6 +97,15 @@ KNOWN_SCREENS = {
     # scoped there because a statement belongs to one account) and that is not a
     # clash: screen bindings resolve before the global table.
     "tally-import",
+    # Print Templates (track C) — the per-company document layouts: title,
+    # letterhead lines, declaration, terms, signature label and bank block, per
+    # document kind. Reached from Gateway of Tally > Print Templates and named on
+    # the F11 Company Features row.
+    #
+    # No global key: Tally reaches print configuration through F12 Configure and
+    # the print preview rather than a documented Alt binding, so there is none to
+    # be faithful to.
+    "print-templates",
     # The Bank Reconciliation Statement (T4): a bank ledger's postings with the
     # ONE editable column, Bank Date. Reached from the Gateway (TallyPrime's own
     # route is Alt+G > Banking Activities); F4 picks the account.

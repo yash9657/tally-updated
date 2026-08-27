@@ -7,6 +7,86 @@ what was wrong; this file records what a person will notice.
 
 ---
 
+## You can now change what your own invoices say
+
+**Applies to:** every printed document and every printed report. **Feature:** track C / T16.
+
+### What changes
+
+**Gateway of Tally > Print Templates.** Pick a document — Tax Invoice, Bill of Supply,
+Delivery Note, Receipt, Payment, Credit Note, Debit Note, or Report — and set what it
+says:
+
+- the **document title** ("MONEY RECEIPT" instead of "RECEIPT VOUCHER");
+- **letterhead lines** printed under your company block;
+- the **declaration** above the signature;
+- **terms**;
+- the **signature label** ("Authorised Signatory" by default);
+- a **bank details** block;
+- **footer lines**.
+
+Until now the built-in layout was the only layout. The override table has existed since
+the beginning and the printer has always honoured it — **but nothing in the product could
+write to it**, so every company printed the same document. Changing a declaration meant a
+database edit.
+
+### An empty box is not an empty document
+
+A field you leave empty prints the **built-in default**, and the form shows you that
+default underneath the box. So a company that changes nothing still prints a correct Rule
+46 tax invoice, and an empty declaration box does not mean "this company has no
+declaration" — it means "print the standard one", and you can read it right there.
+
+### ⛔ Clearing a customisation is its own action, and it really does clear it
+
+Once you have set something, a **Clear this customisation** button appears. It removes the
+customisation entirely and puts the document back on the built-in layout — it does not
+merely blank the fields. Emptying every box by hand and saving is **not** the same thing:
+that stores a customisation that happens to be empty, and the screen would go on telling
+you the document is customised.
+
+The button only appears when there is something to clear.
+
+### ⚠️ Not every document prints every field, and the form only offers what will print
+
+A **Report** — a Trial Balance, a Day Book — prints a title and letterhead lines, and
+nothing else. It does not print a declaration, terms, a signature label or a bank block,
+because a statement carries no certification and printing "Authorised Signatory" under a
+Trial Balance would imply something nobody signed.
+
+So when you pick Report, those four controls are **not shown**, and the screen says which
+ones and why. This is not a permission problem and it is not a bug: the fields would be
+stored and would never appear on paper, so you are not offered them.
+
+### ⚠️ A change also affects REPRINTS of documents you entered earlier
+
+A document is laid out when it is **printed**, not when it was entered. If you change your
+letterhead today and then reprint April's invoice, **it comes out with the new
+letterhead**. There is no per-period layout history.
+
+That is worth knowing before you change an address: if you need a reprint to show what the
+document said at the time, print it before you make the change.
+
+### ⚠️ There is no logo
+
+The F11 Company Features row for this used to promise "logo, address block, footer,
+declarations". Three of those four now work; **a logo does not, and it has been removed
+from the row's name rather than left advertised.** This product has no image storage of any
+kind — no place to upload one to and nothing in the document renderer that would draw one —
+so a logo is a separate piece of work, not a missing box on this form.
+
+### Who can change it
+
+Reading the screen needs the same permission as reading company settings, which a Data
+Entry level already has. **Changing it needs `alter company`**, which a Data Entry level
+does **not** have by default — the same authority as the F11 feature settings, because a
+print template decides what your invoices tell your customers. If you are an Owner, saving
+asks for your passkey, as every other write does.
+
+A refusal here is the permission system working, not a broken screen.
+
+---
+
 ## Alt+E can now save a report as a PDF — and it is NOT the rows on screen
 
 **Applies to:** ten of the thirty reports. **Feature:** B1.

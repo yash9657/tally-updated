@@ -806,6 +806,33 @@ var writeRoutesNamingADocumentButNotMovingIt = map[string]string{
 		"writes only tds_challan_allocation; no voucher is restated (its stored deposit_date is " +
 		"judged separately, by storedChallanDepositDate)",
 
+	// PER-COMPANY PRINT TEMPLATES (track C). The {docKind} in the path is NOT a
+	// document id — it is a document TYPE, one of the eight strings
+	// printing.AllDocKinds names ("tax-invoice", "receipt", "report", …). There is
+	// no voucher on the other end of it and there never can be: the row these two
+	// routes write is print_template, which holds a title, letterhead lines, a
+	// declaration, terms, a signature label and a bank block.
+	//
+	// ⛔ A LAYOUT CARRIES NO DATE, so there is no stored date to judge and nothing
+	// this route could lift into or out of a locked period. It writes no
+	// voucher_version, no posting and no amount; no figure in any period's totals
+	// moves, and no filed return can be affected by it.
+	//
+	// ⚠️ WHAT IT DOES CHANGE IS WHAT A REPRINT OF AN OLD DOCUMENT LOOKS LIKE, and
+	// that is deliberate rather than overlooked. A printed document is rendered
+	// from the books at the moment it is printed, so a company that corrects its
+	// registered address will — correctly — see the corrected address when it
+	// reprints April's invoice. The alternative, versioning the template and
+	// pinning each voucher to the layout in force on its date, is a real design
+	// with a real cost and NOTHING in the schema supports it: print_template holds
+	// exactly one row per (company, doc_kind) by UNIQUE constraint. The back-dated
+	// cutoff is about ledger figures, not about typography, and conflating the two
+	// here would refuse a company its own letterhead for every locked period.
+	"PUT /v1/companies/{companyID}/print-templates/{docKind}": "" +
+		"{docKind} is a document TYPE, not a document; writes only print_template, which has no date",
+	"DELETE /v1/companies/{companyID}/print-templates/{docKind}": "" +
+		"{docKind} is a document TYPE, not a document; writes only print_template, which has no date",
+
 	// THE AI BILL INBOX's three lifecycle routes (register row D49). The
 	// {draftID} in the path names an insightd DRAFT, which is not a ledger
 	// document at all: it has no voucher_version, no posting, no ledger figure and

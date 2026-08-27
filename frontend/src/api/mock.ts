@@ -16,6 +16,10 @@ import type { CoredClient } from "./client";
 // See the note at the tdsRegister mock below for the two occasions it did.
 import registerProse from "./goldens/tds-register-prose.json";
 import { ApiError } from "./http";
+import {
+  PRINT_TEMPLATE_KINDS,
+  printTemplateSurfaceFor,
+} from "../screens/printTemplateSurface";
 import type {
   BalanceSheetResponse,
   CompanyFeaturesRequest,
@@ -175,6 +179,10 @@ import type {
   TaxAllocationKind,
   TDSDeductionView,
   TCSCollectionView,
+  PrintTemplateField,
+  PrintTemplateOverrides,
+  PrintTemplateRequest,
+  PrintTemplateResponse,
 } from "./types";
 // A VALUE, not a type: the recorded `payload.class` labels the server stamps.
 // The mock must agree with them exactly — see classLabel().
@@ -2092,6 +2100,20 @@ function mockAllocationFor(centreID: string): Money {
 
 export function createMockClient(opts: MockClientOptions = {}): CoredClient {
   const companies = new Map<string, MockCompany>();
+
+  /**
+   * PRINT TEMPLATES (track C): one row per (company, doc_kind), which is exactly
+   * `print_template`'s UNIQUE constraint.
+   *
+   * ⛔ PER-CLIENT AND NOT MODULE-SCOPED, and this was a real defect before it was
+   * one line. A module-scoped map is shared by every `createMockClient()` in a
+   * process, so one test's save leaked into the next test's "this company has
+   * customised nothing" — which failed loudly here, but in a suite ordered
+   * differently would have made a test pass for the wrong reason. `companies`
+   * above is per-client for the same reason; state that models a DATABASE belongs
+   * to the client that pretends to be one.
+   */
+  const printTemplates = new Map<string, PrintTemplateOverrides>();
 
   // =========================================================================
   // T3 mock state and helpers
@@ -8523,6 +8545,74 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         header: () => null,
       };
     },
+    // ---- PER-COMPANY PRINT TEMPLATES (track C).
+    //
+    // ⛔ THIS ONE IS IMPLEMENTED RATHER THAN REFUSED, AND THE LINE IS WORTH
+    // STATING. The mock's rule is HONEST, NOT HELPFUL: it replays domain logic
+    // where the logic is genuinely reproducible (FIFO, group rollups) and refuses
+    // everywhere else, and it must never fake a payload a real backend has never
+    // produced. An override store is the reproducible case — it is one row per
+    // (company, doc_kind), keyed by a unique constraint, with no derivation at
+    // all — so an in-memory map behaves exactly as the server does.
+    //
+    // ✅ AND THE PARTS IT COULD NOT INVENT ARE READ FROM THE SERVER'S OWN
+    // GENERATED ARTEFACT. `honours` and `defaults` are decisions belonging to the
+    // Go renderers, and `print-template-surface.json` is emitted by
+    // TestPrintTemplateSurfaceGolden by RENDERING each kind twice per field. So
+    // these are not invented values that resemble the server's — they are the
+    // server's, measured.
+    //
+    // ⛔ IT ALSO REFUSES WHAT THE SERVER REFUSES, which is the part a lazier mock
+    // would skip. A mock more PERMISSIVE than the real backend is worse than no
+    // mock: a screen developed against it offers a control that works in every
+    // test and 400s in production. So an unknown kind is refused, and so is a
+    // field the kind's renderer does not read.
+    async getPrintTemplate(
+      companyID: string,
+      docKind: string,
+    ): Promise<PrintTemplateResponse> {
+      ensure(companyID);
+      return mockPrintTemplateBody(
+        docKind,
+        printTemplates.get(mockPrintTemplateKey(companyID, docKind)),
+      );
+    },
+    async savePrintTemplate(
+      companyID: string,
+      docKind: string,
+      req: PrintTemplateRequest,
+    ): Promise<PrintTemplateResponse> {
+      ensure(companyID);
+      const kind = mockPrintTemplateKind(docKind);
+      mockPrintTemplateRefuseUnhonoured(kind, req);
+      // A FULL RESTATEMENT, matching the route: an omitted field is stored as
+      // empty, which means "fall back to the built-in default". Merging would
+      // make an emptied box un-emptiable.
+      const stored: PrintTemplateOverrides = {
+        title: req.title ?? "",
+        header_lines: req.header_lines ?? null,
+        footer_lines: req.footer_lines ?? null,
+        declaration: req.declaration ?? "",
+        terms: req.terms ?? "",
+        signature_label: req.signature_label ?? "",
+        show_bank_details: req.show_bank_details ?? false,
+        bank_lines: req.bank_lines ?? null,
+      };
+      printTemplates.set(mockPrintTemplateKey(companyID, docKind), stored);
+      return mockPrintTemplateBody(docKind, stored);
+    },
+    async clearPrintTemplate(
+      companyID: string,
+      docKind: string,
+    ): Promise<PrintTemplateResponse> {
+      ensure(companyID);
+      mockPrintTemplateKind(docKind);
+      const key = mockPrintTemplateKey(companyID, docKind);
+      const cleared = printTemplates.delete(key);
+      // Idempotent, and honest about having found nothing — the server's contract.
+      return { ...mockPrintTemplateBody(docKind, undefined), cleared };
+    },
+
     async restoreCompany(_archive: Blob) {
       throw new ApiError(
         422,
@@ -8668,5 +8758,121 @@ function mockStatutoryDownload(
     statutoryFile: fileName,
     disclosure:
       "NOT validator-verified; see the .README.txt inside this archive",
+  };
+}
+
+// ---------------------------------------------------------------------------
+// PER-COMPANY PRINT TEMPLATES (track C) — the mock's override store.
+// ---------------------------------------------------------------------------
+
+function mockPrintTemplateKey(companyID: string, docKind: string): string {
+  return `${companyID} ${docKind}`;
+}
+
+/**
+ * Refuse a document kind the server does not print, with the server's own 400.
+ *
+ * ⛔ THE MOCK MUST NOT BE MORE PERMISSIVE THAN THE BACKEND. A screen developed
+ * against a mock that accepted "invoice" (the plausible wrong answer — everybody
+ * calls it that, and the stored vocabulary spells it "tax-invoice") would pass
+ * every test and 400 in production.
+ */
+function mockPrintTemplateKind(docKind: string): string {
+  if (!printTemplateSurfaceFor(docKind)) {
+    throw new ApiError(
+      400,
+      `unknown document kind ${docKind}: this system prints ` +
+        PRINT_TEMPLATE_KINDS.map((k) => k.doc_kind).join(", "),
+    );
+  }
+  return docKind;
+}
+
+/**
+ * Refuse a field this kind's renderer does not read, when it carries CONTENT.
+ *
+ * ⛔ WHY REFUSING IS THE HONEST BEHAVIOUR. `RenderReport` reads three of the
+ * seven overridable fields. Storing a declaration for the `report` kind would be
+ * accepted, stored and never printed — the operator types a certification, the
+ * screen says saved, and no statement ever carries it. Nothing errors.
+ *
+ * ⚠️ PRESENCE IS NOT CONTENT. A form that submits its whole shape with the unused
+ * boxes empty is behaving correctly and must not be refused; only a typed value
+ * is.
+ */
+function mockPrintTemplateRefuseUnhonoured(
+  docKind: string,
+  req: PrintTemplateRequest,
+): void {
+  const surface = printTemplateSurfaceFor(docKind);
+  if (!surface) return;
+  const honours = (f: PrintTemplateField) => surface.honours.includes(f);
+  const refuse = (name: string): never => {
+    throw new ApiError(
+      400,
+      `the ${docKind} layout does not print ${name}, so this would be stored ` +
+        `and never appear. Fields this document honours: ${surface.honours.join(", ")}`,
+    );
+  };
+  const texts: [PrintTemplateField, string, string | undefined][] = [
+    ["title", "title", req.title],
+    ["declaration", "declaration", req.declaration],
+    ["terms", "terms", req.terms],
+    ["signature_label", "signature_label", req.signature_label],
+  ];
+  for (const [field, name, value] of texts) {
+    if ((value ?? "").trim() !== "" && !honours(field)) refuse(name);
+  }
+  const lines: [PrintTemplateField, string, string[] | undefined][] = [
+    ["header_lines", "header_lines", req.header_lines],
+    ["footer_lines", "footer_lines", req.footer_lines],
+    ["bank_details", "bank_lines", req.bank_lines],
+  ];
+  for (const [field, name, value] of lines) {
+    if ((value?.length ?? 0) > 0 && !honours(field)) refuse(name);
+  }
+  if (req.show_bank_details && !honours("bank_details")) refuse("bank details");
+}
+
+/** The zero value, which is what an ABSENT row reads as. */
+function mockPrintTemplateZero(): PrintTemplateOverrides {
+  return {
+    title: "",
+    header_lines: null,
+    footer_lines: null,
+    declaration: "",
+    terms: "",
+    signature_label: "",
+    show_bank_details: false,
+    bank_lines: null,
+  };
+}
+
+/**
+ * Assemble the response the same way the Go handler does.
+ *
+ * `honours` and `defaults` come from the GENERATED artefact rather than from
+ * anything this file decides — they are the Go renderers' answers, measured by
+ * rendering, so the mock cannot drift from them.
+ */
+function mockPrintTemplateBody(
+  docKind: string,
+  stored: PrintTemplateOverrides | undefined,
+): PrintTemplateResponse {
+  const kind = mockPrintTemplateKind(docKind);
+  const surface = printTemplateSurfaceFor(kind);
+  if (!surface) {
+    throw new ApiError(400, `unknown document kind ${docKind}`);
+  }
+  return {
+    doc_kind: kind,
+    customised: stored !== undefined,
+    honours: surface.honours,
+    defaults: surface.defaults,
+    default_title_is_the_documents_own_name:
+      surface.default_title_is_the_documents_own_name,
+    // Blank everywhere means "the built-in default prints", and that is the
+    // ordinary case for most companies forever.
+    overrides: stored ?? mockPrintTemplateZero(),
   };
 }

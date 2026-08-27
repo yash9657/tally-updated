@@ -530,9 +530,18 @@ const FEATURES: {
           "would re-introduce exactly that.",
       },
       {
-        name: "Per-company print templates (logo, address block, footer, declarations)",
-        state: "off",
-        note: "Not built as a UI. The default document layout lives in CODE, so a company created a minute ago prints correctly with zero configuration rows — and the per-company override table holds only DIFFERENCES from it. Nothing in this application yet writes an override, so every company prints the built-in layout.",
+        // ⛔ THE WORD "logo" IS GONE FROM THIS NAME, AND ITS ABSENCE IS THE
+        // DECISION. This row used to promise "logo, address block, footer,
+        // declarations". Three of those four are columns in print_template. A
+        // LOGO IS NOT: there is no image storage anywhere in this product — no
+        // column, no object store, no upload route — so a logo is not one field
+        // short of shipping, it is a different feature with a storage decision
+        // behind it. Shipping the three and leaving the fourth advertised is the
+        // precise failure this screen exists to prevent, so the name states what
+        // exists and the note states what does not.
+        name: "Per-company print templates (letterhead, declaration, terms, signature, bank block)",
+        state: "on",
+        note: "Gateway of Tally > Print Templates. Pick a document kind and set what it says: the title, the letterhead lines under the company block, the declaration, the terms, the signature label and the bank block. A field left EMPTY prints the built-in default, which the form shows beneath the box — so a company that changes nothing still prints a correct Rule 46 invoice, and an empty box never means 'this company has no declaration'. Clearing a customisation is a separate action that REMOVES the row rather than blanking it, because a blank row still counts as a customisation and would leave the company unable to say it is back on the built-in layout. ⛔ THE FORM IS BUILT FROM A GENERATED ARTEFACT AND NOT FROM A LIST: the eight document kinds do NOT honour the same fields — a REPORT reads only the title and the letterhead lines, and ignores the declaration, terms, signature label and bank block, because printing 'Authorised Signatory' under a Trial Balance would imply a certification nobody gave. The server refuses a field the document cannot print rather than storing a value that would never appear, and which fields those are is MEASURED by rendering each kind twice per field and comparing the PDF bytes. ⚠️ NO LOGO, and that is a storage decision rather than an oversight: this product has no image storage of any kind, so there is nowhere to put one and nothing in the PDF renderer that would draw it. ⚠️ AND A DOCUMENT IS LAID OUT WHEN IT IS PRINTED, NOT WHEN IT WAS ENTERED — so changing the letterhead also changes how already-entered documents look when they are printed again. There is no per-period layout history; print_template holds exactly one row per company and document kind.",
       },
     ],
   },

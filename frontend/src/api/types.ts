@@ -4203,3 +4203,91 @@ export interface PayrollVocabularyResponse {
   default_regime: string;
   age_bands: string[];
 }
+
+// ---------------------------------------------------------------------------
+// PER-COMPANY PRINT TEMPLATES (track C)
+// ---------------------------------------------------------------------------
+
+/**
+ * The seven fields a company may override on a printed document.
+ *
+ * ⛔ THE STRINGS ARE THE SERVER'S, and the vocabulary is CONSUMED FROM A
+ * GENERATED GOLDEN rather than declared here — see `printTemplateSurface.ts`.
+ * `bank_details` is deliberately ONE field covering TWO columns
+ * (`show_bank_details` and `bank_lines`): every renderer tests them together, so
+ * lines with the flag off print nothing, and offering them separately lets an
+ * operator fill in their account number, save, and print a document with no bank
+ * block having done everything the screen asked.
+ */
+export type PrintTemplateField =
+  | "title"
+  | "header_lines"
+  | "footer_lines"
+  | "declaration"
+  | "terms"
+  | "signature_label"
+  | "bank_details";
+
+/** What a company has overridden. Every field is optional; blank means "use the built-in default". */
+export interface PrintTemplateOverrides {
+  title: string;
+  header_lines: string[] | null;
+  footer_lines: string[] | null;
+  declaration: string;
+  terms: string;
+  signature_label: string;
+  show_bank_details: boolean;
+  bank_lines: string[] | null;
+}
+
+/**
+ * GET/PUT/DELETE .../print-templates/{docKind}.
+ *
+ * ⛔ `customised` AND THE BLANKNESS OF `overrides` ARE DIFFERENT FACTS and the
+ * screen needs both. An absent row and a row of empty strings print the same
+ * document but are not the same sentence: the first is "this company has never
+ * been asked", the second is "this company deliberately prints nothing there".
+ * Without `customised` a form cannot offer to CLEAR an override, because it does
+ * not know there is one.
+ *
+ * ⚠️ THERE IS NO SERVER-COMPUTED "EFFECTIVE TEMPLATE" AND ASKING FOR ONE WAS
+ * CONSIDERED AND REFUSED. It would be a third implementation of "blank falls back
+ * to the built-in", and the two that exist in the renderers do not agree about
+ * whitespace. `defaults` is what prints when a box is empty, so the screen shows
+ * it as the placeholder — which tells the operator what will print without
+ * anybody re-deriving it.
+ */
+export interface PrintTemplateResponse {
+  doc_kind: string;
+  /** Whether a print_template row exists at all. */
+  customised: boolean;
+  /** The fields THIS document's renderer actually reads. A form must offer no others. */
+  honours: PrintTemplateField[];
+  /** What prints when the corresponding box is blank. */
+  defaults: {
+    title: string;
+    declaration: string;
+    signature_label: string;
+  };
+  /**
+   * This kind honours a title override but has no fixed default, because the
+   * default is the document's own name. True only for `report`, whose title is
+   * whichever of the thirty statements is being printed.
+   */
+  default_title_is_the_documents_own_name: boolean;
+  overrides: PrintTemplateOverrides;
+  /** Present only on a DELETE: whether there was anything to clear. */
+  cleared?: boolean;
+}
+
+/** The PUT body. A FULL restatement: an omitted field is stored as empty, not left alone. */
+export interface PrintTemplateRequest {
+  title?: string;
+  header_lines?: string[];
+  footer_lines?: string[];
+  declaration?: string;
+  terms?: string;
+  signature_label?: string;
+  show_bank_details?: boolean;
+  bank_lines?: string[];
+}

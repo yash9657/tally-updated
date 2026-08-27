@@ -389,3 +389,82 @@ describe("B1 — export to PDF shipped, e-mailing a document did not", () => {
     expect(note).toMatch(/HALF-SEND/i);
   });
 });
+
+/**
+ * TRACK C — THE PRINT-TEMPLATES ROW, AND THE WORD THAT HAD TO GO.
+ *
+ * ⛔ WHAT THIS BLOCK EXISTS TO PREVENT is the tempting version of this change:
+ * ship the fields that exist, flip the badge to "On", and leave the row's name
+ * promising a LOGO. Three of the four things the old name listed are columns in
+ * `print_template`; a logo is not, and there is no image storage anywhere in this
+ * product — no column, no object store, no upload route. So a green badge over
+ * that name would advertise a feature with nowhere to put its data, which is the
+ * precise failure this whole screen exists to prevent.
+ *
+ * The row's own doctrine is also pinned: it flips in the change that gives the
+ * operator a SCREEN, not the change that gave them a route. The route, the
+ * override table and the printer's honouring of it all existed for months while
+ * this row correctly read "Not built".
+ */
+describe("track C — Per-company print templates reads On, and promises no logo", () => {
+  const ROW = /^Per-company print templates/;
+
+  it("reads On, because a screen reaches it and not merely a route", () => {
+    renderFeatures();
+    expect(badgeFor(ROW)).toBe("On");
+  });
+
+  it("⛔ the row NAME no longer promises a logo", () => {
+    renderFeatures();
+    const name = screen.getByText(ROW).textContent ?? "";
+    // ⛔ THE ONE ASSERTION THAT CANNOT BE SATISFIED BY FLIPPING THE BADGE ALONE,
+    // and the mutation §1.2 of the handoff asks for: leave "logo" in the name and
+    // this goes red naming it. A row reading "On" while its own name lists a
+    // field the product cannot store is worse than the honest "Not built" it
+    // replaced.
+    expect(
+      name,
+      "the row name still promises a logo, and there is no image storage anywhere " +
+        "in this product to put one in",
+    ).not.toMatch(/logo/i);
+    // And it names what DOES exist, so the rename is not just a deletion.
+    expect(name).toMatch(/letterhead/i);
+    expect(name).toMatch(/declaration/i);
+  });
+
+  it("the note says a logo is absent and WHY, rather than going quiet about it", () => {
+    renderFeatures();
+    const note = noteFor(ROW);
+    // Dropping the word from the name and saying nothing would leave an operator
+    // who remembers the old row wondering whether the logo moved somewhere.
+    expect(note).toMatch(/NO LOGO/i);
+    expect(note).toMatch(/image storage/i);
+  });
+
+  it("the note no longer claims nothing writes an override — that clause had to go", () => {
+    renderFeatures();
+    const note = noteFor(ROW);
+    // The old note's honest core: "Nothing in this application yet writes an
+    // override, so every company prints the built-in layout." That is what
+    // stopped being true.
+    expect(note).not.toMatch(/Not built as a UI/);
+    expect(note).not.toMatch(/Nothing in this application yet writes an override/);
+    // And it names the door, so an operator can find the screen.
+    expect(note).toMatch(/Gateway of Tally > Print Templates/);
+  });
+
+  it("...and it keeps the two facts that make the feature usable rather than surprising", () => {
+    renderFeatures();
+    const note = noteFor(ROW);
+    // An empty box prints the built-in default — the reason the form shows the
+    // default beneath each field rather than leaving a blank that reads as
+    // "this company has no declaration".
+    expect(note).toMatch(/built-in default/i);
+    // ⛔ AND THE RAGGED GRID. A report honours three of the seven fields, and an
+    // operator who set a declaration on the invoice and then picked Report must
+    // not conclude the screen is broken.
+    expect(note, "the note says a report ignores some fields").toMatch(
+      /REPORT reads only the title and the letterhead lines/i,
+    );
+  });
+});

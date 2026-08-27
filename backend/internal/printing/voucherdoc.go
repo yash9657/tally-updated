@@ -510,17 +510,10 @@ func (r *voucherRenderer) title() string {
 	if t := strings.TrimSpace(r.v.Overrides.Title); t != "" {
 		return t
 	}
-	switch r.v.Kind {
-	case KindDeliveryNote:
-		return "DELIVERY NOTE"
-	case KindReceipt:
-		return "RECEIPT VOUCHER"
-	case KindPayment:
-		return "PAYMENT VOUCHER"
-	case KindCreditNote:
-		return "CREDIT NOTE"
-	case KindDebitNote:
-		return "DEBIT NOTE"
+	// ONE TABLE, in template_surface.go: the same function an editing screen is
+	// told the default from. An unknown kind still falls back to its own name.
+	if t := DefaultTitle(r.v.Kind); t != "" {
+		return t
 	}
 	return string(r.v.Kind)
 }
@@ -1069,13 +1062,7 @@ func (r *voucherRenderer) declaration() string {
 	if d := r.v.Overrides.Declaration; d != "" {
 		return d
 	}
-	switch r.v.Kind {
-	case KindDeliveryNote:
-		return "Received the goods described above in good order and condition."
-	case KindReceipt:
-		return "Received subject to realisation of the instrument."
-	}
-	return ""
+	return DefaultDeclaration(r.v.Kind)
 }
 
 // drawSignature prints the issuer's signature block on the right, and — on a
@@ -1091,7 +1078,7 @@ func (r *voucherRenderer) drawSignature() {
 
 	label := r.v.Overrides.SignatureLabel
 	if label == "" {
-		label = "Authorised Signatory"
+		label = DefaultSignatureLabel(r.v.Kind)
 	}
 
 	nameLines := r.signatureNameLines()

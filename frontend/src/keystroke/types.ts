@@ -236,6 +236,28 @@ export type ScreenKind =
   | "edit-log"
   | "help"
   | "features"
+  /**
+   * PRINT TEMPLATES (track C) — what this company's own documents SAY: the
+   * title, the letterhead lines, the declaration, the terms, the signature
+   * label and the bank block, per document kind.
+   *
+   * ⛔ A ScreenKind AND NOT A "report:NAME". The server serves these three
+   * routes under the `company` resource token — the same authority as the F11
+   * feature settings — so a coarse `allow display report` can never reach the
+   * write. Modelling it as a report name would have handed every Data Entry
+   * operator in every tenant the power to rewrite what the company's invoices
+   * say, by inheritance from migration 0011, without anybody deciding to.
+   *
+   * It carries a FORM, so it needs no FrameOverlays period classification: the
+   * F2 overlay opens only for report screens, and a layout has no period.
+   *
+   * ⚠️ IT HAS NO GLOBAL KEY, AND THAT IS A DECISION. Tally reaches print
+   * configuration through F12 Configure and through the print preview, not
+   * through a documented Alt binding, so there is no key to be faithful to —
+   * and inventing one risks shadowing a binding a screen already owns. Its
+   * doors are the Gateway entry and the F11 Company Features row that names it.
+   */
+  | "print-templates"
   | "tds-challans"
   | "cost-centres"
   | "cost-centre-summary"

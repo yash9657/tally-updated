@@ -9,6 +9,7 @@ import { EditLogScreen } from "../screens/EditLogScreen";
 import { HelpScreen } from "../screens/HelpScreen";
 import { DataScreen } from "../screens/DataScreen";
 import { TallyImportScreen } from "../screens/TallyImportScreen";
+import { PrintTemplateScreen } from "../screens/PrintTemplateScreen";
 import { FeaturesScreen } from "../screens/FeaturesScreen";
 import { MasterCreateScreen } from "../screens/masters/MasterCreateScreen";
 import {
@@ -229,6 +230,9 @@ const DataAdapter: ScreenComponent = () => <DataScreen />;
 /** Alt+O Migrate-from-Tally adapter: the TallyPrime XML importer (T32). */
 const TallyImportAdapter: ScreenComponent = () => <TallyImportScreen />;
 
+/** Print Templates adapter: the per-company document layouts (track C). */
+const PrintTemplateAdapter: ScreenComponent = () => <PrintTemplateScreen />;
+
 /**
  * Build a registry pre-populated with the default screens. Agents extend the
  * returned registry; call sites that want a clean slate construct their own
@@ -354,6 +358,15 @@ export function createDefaultRegistry(): ScreenRegistry {
     // it the navMachine pushes a frame nothing renders, so Alt+O appears to do
     // nothing at all — no error, no status line.
     "tally-import": TallyImportAdapter,
+    // PRINT TEMPLATES (track C). Registered by ScreenKind and NOT as a "report:…"
+    // key: the server serves these routes under the `company` token — the same
+    // authority as the F11 feature settings — which migration 0011's coarse
+    // `allow display report` can never reach, and the screen carries a FORM.
+    //
+    // ⛔ THIS ENTRY IS ONE OF THE THREE THAT SHIP THE SCREEN DEAD SILENTLY.
+    // Without it the navMachine pushes a frame nothing renders, so the Gateway
+    // entry appears to do nothing at all — no error, no status line.
+    "print-templates": PrintTemplateAdapter,
     // Live, per-name report screens (override the generic fallback).
     "report:Day Book": DayBookScreen,
     "report:Trial Balance": TrialBalanceScreen,

@@ -225,8 +225,11 @@ func invTitle(inv Invoice) string {
 	if !invBlank(inv.Overrides.Title) {
 		return inv.Overrides.Title
 	}
-	if inv.Kind == KindBillOfSupply {
-		return invDefaultBillOfSupplyTitle
+	// ONE TABLE, in template_surface.go, because an editing screen shows the
+	// default and this draws it. A second copy here is how the box an operator
+	// reads stops matching the paper they get.
+	if t := DefaultTitle(inv.Kind); t != "" {
+		return t
 	}
 	return invDefaultTaxInvoiceTitle
 }
@@ -808,8 +811,11 @@ func invDrawTotals(p *Page, inv Invoice, y float64, showTax bool) float64 {
 	leftY := y
 	declaration := inv.Overrides.Declaration
 	if invBlank(declaration) {
-		declaration = invDefaultDeclaration
-		if !showTax {
+		// DefaultDeclaration keys on the kind, which for a document that reaches
+		// here is exactly what showTax tests: RenderInvoice refuses any kind but
+		// the two above before anything is drawn.
+		declaration = DefaultDeclaration(inv.Kind)
+		if declaration == "" {
 			declaration = invDefaultBillOfSupplyDeclaration
 		}
 	}
@@ -850,7 +856,10 @@ func invDrawTotals(p *Page, inv Invoice, y float64, showTax bool) float64 {
 	rightY -= 30
 	signature := inv.Overrides.SignatureLabel
 	if invBlank(signature) {
-		signature = invDefaultSignatureLabel
+		signature = DefaultSignatureLabel(inv.Kind)
+		if signature == "" {
+			signature = invDefaultSignatureLabel
+		}
 	}
 	p.TextRight(invMarginRight, rightY, Helvetica, invFontBody, signature)
 	rightY -= invLineHeight

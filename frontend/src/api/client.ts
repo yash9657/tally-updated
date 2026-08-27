@@ -45,6 +45,8 @@ import type {
   GSTR1Response,
   ImportTallyXMLQuery,
   ImportTallyXMLResponse,
+  PrintTemplateRequest,
+  PrintTemplateResponse,
   OutstandingKind,
   OutstandingsQuery,
   OutstandingsResponse,
@@ -1329,6 +1331,76 @@ export interface CoredClient {
     xml: string | Blob,
     query?: ImportTallyXMLQuery,
   ): Promise<ImportTallyXMLResponse>;
+
+  // -------------------------------------------------------------------------
+  // PER-COMPANY PRINT TEMPLATES (track C).
+  //
+  // ⛔ THE ENGINE WAS COMPLETE AND HAD NO FRONT DOOR, WHICH IS THE SIXTH TIME.
+  // `printingdb.SaveOverrides` — a real upsert with `updated_at` on both paths —
+  // has been implemented AND TESTED since migration 0037, and the READ side was
+  // wired the whole time: both document paths and the report letterhead honour
+  // overrides on every print. No route reached the write, and `print_template`
+  // held ZERO ROWS in the entire database. Changing what a company's own invoice
+  // says was not possible from anywhere.
+  // -------------------------------------------------------------------------
+  /**
+   * Read the company's template for one document kind (GET
+   * .../print-templates/{docKind}).
+   *
+   * ⚠️ AN ABSENT ROW IS NOT AN ERROR AND IS THE ORDINARY CASE. Most companies
+   * will never customise anything, and they print correct documents from the
+   * built-in layout. The response says `customised: false` and still carries the
+   * `defaults` and `honours` a form needs — so this never rejects, and a caller
+   * must not treat blank overrides as a failure to load.
+   */
+  getPrintTemplate(
+    companyID: string,
+    docKind: string,
+  ): Promise<PrintTemplateResponse>;
+  /**
+   * Replace the company's template for one document kind (PUT
+   * .../print-templates/{docKind}).
+   *
+   * ⛔ A FULL RESTATEMENT, NOT A PATCH. An omitted field is stored as EMPTY,
+   * which means "fall back to the built-in default". That is the opposite of
+   * {@link setCompanyFeatures}, whose absent fields are left alone, and the
+   * difference is deliberate: this backs a form that submits every box, so an
+   * emptied declaration has to stay empty. Merge semantics would make a cleared
+   * box un-clearable — the operator deletes the text, saves, and it comes back.
+   *
+   * ⛔ THE SERVER REFUSES A FIELD THIS KIND CANNOT PRINT, with a 400 naming it.
+   * `RenderReport` reads three of the seven fields, so a declaration sent for
+   * `report` is rejected rather than stored — storing it would mean the operator
+   * typed a certification, was told it saved, and no statement ever carries it.
+   * Consult `printTemplateHonours` before rendering a control.
+   *
+   * ⛔ AND THE RESPONSE IS THE STORED ROW, NOT AN ECHO. Assert against the
+   * returned `overrides`, never against the fact that the call resolved — the
+   * exact trap register row D43 set for every caller of POST /v1/companies.
+   */
+  savePrintTemplate(
+    companyID: string,
+    docKind: string,
+    req: PrintTemplateRequest,
+  ): Promise<PrintTemplateResponse>;
+  /**
+   * Remove the company's template for one document kind, returning it to the
+   * built-in layout (DELETE .../print-templates/{docKind}).
+   *
+   * ⛔ THIS IS WHAT MAKES THE FEATURE TWO-WAY, and a PUT of blanks is NOT a
+   * substitute. Both print the same document, but a blank row still reports
+   * `customised: true`, so the screen could never again tell an operator they are
+   * on the built-in layout — and `print_template.updated_at`, which answers "when
+   * did our invoice layout last change?", would answer with the date somebody
+   * reverted. A one-way door is not a setting.
+   *
+   * IDEMPOTENT: clearing an override that is not there succeeds and reports
+   * `cleared: false`. A colleague having already cleared it is not a failure.
+   */
+  clearPrintTemplate(
+    companyID: string,
+    docKind: string,
+  ): Promise<PrintTemplateResponse>;
 
   // -------------------------------------------------------------------------
   // PAYROLL (Track 3). Eight routes, mounted and PDP-mapped since Track 3 and

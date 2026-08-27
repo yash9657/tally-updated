@@ -35,6 +35,8 @@ import type {
   GSTR1Response,
   ImportTallyXMLQuery,
   ImportTallyXMLResponse,
+  PrintTemplateRequest,
+  PrintTemplateResponse,
   ListGodownsResponse,
   ListStockBatchesResponse,
   CreateStockGroupRequest,
@@ -143,6 +145,19 @@ import type {
 
 function company(companyID: string): string {
   return `/v1/companies/${encodeURIComponent(companyID)}`;
+}
+
+/**
+ * The print-template path for one document kind.
+ *
+ * ⚠️ THE KIND IS ENCODED. Every kind the server knows is a plain kebab-case slug
+ * that needs no escaping, so this looks like ceremony — but the value reaching
+ * here comes from a screen's picker, and an unencoded segment is how a stray
+ * slash turns one path into another route entirely. The server refuses an unknown
+ * kind with a 400 that names the vocabulary; it should never see a mangled one.
+ */
+function printTemplate(companyID: string, docKind: string): string {
+  return `${company(companyID)}/print-templates/${encodeURIComponent(docKind)}`;
 }
 
 /**
@@ -1034,6 +1049,29 @@ export function createRestClient(
         "application/xml",
         query,
       );
+    },
+
+    // ---- PER-COMPANY PRINT TEMPLATES (track C). Three verbs, ONE path.
+    //
+    // The GET and the two writes share the path deliberately, and routeAction
+    // maps them onto the SAME `company` resource token — a Display for the read
+    // and an Alter for both writes. One resource, one token, so no ACL rule can
+    // govern the read and miss the write, which is the rule the company
+    // master's own read/write pair is built on.
+    getPrintTemplate(companyID, docKind: string) {
+      return http.get<PrintTemplateResponse>(printTemplate(companyID, docKind));
+    },
+    savePrintTemplate(companyID, docKind: string, req: PrintTemplateRequest) {
+      return http.put<PrintTemplateResponse>(
+        printTemplate(companyID, docKind),
+        req,
+      );
+    },
+    clearPrintTemplate(companyID, docKind: string) {
+      // DELETE and not "PUT everything blank": the row must GO, so the company
+      // reports `customised: false` and is genuinely back on the built-in
+      // layout. See the CoredClient interface for why the two are not the same.
+      return http.del<PrintTemplateResponse>(printTemplate(companyID, docKind));
     },
 
     // ---- PAYROLL (Track 3). Eight routes; see the CoredClient interface for

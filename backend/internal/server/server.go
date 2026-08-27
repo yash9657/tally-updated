@@ -673,6 +673,36 @@ func (s *Server) routes() {
 		r.Get("/backup", s.handleBackupCompany)
 
 		// ===================================================================
+		// PER-COMPANY PRINT TEMPLATES (track C). handler_print_templates.go.
+		// ===================================================================
+		// ⛔ WHAT WAS MISSING WAS ONLY THIS. printingdb.SaveOverrides has been
+		// implemented and tested since migration 0037, and the READ side has been
+		// wired the whole time — printingdb/document.go honours overrides on both
+		// document paths and handler_print_reports.go honours them on the report
+		// letterhead. Nothing could WRITE one: no route reached SaveOverrides and
+		// print_template held zero rows in the entire database. These three lines
+		// are the fix, and the printed bytes change the moment one is used.
+		//
+		// TWO-TOUCH RULE: inert without the matching
+		// `/print-templates/` arms in routeAction() — an unmapped {companyID}
+		// sub-path default-DENIES, and
+		// TestEveryCompanyRouteIsMappedAndInVocabulary walks THIS router and turns
+		// the suite red if a mapping is missing, so the gap cannot ship as a 403
+		// for the Owner.
+		//
+		// The token is `company`, the same as the F11 features write above: a
+		// print template is company configuration, and modelling it as report:NAME
+		// would hand it to every Data Entry operator by inheritance from migration
+		// 0011. The full argument is on the routeAction arm.
+		//
+		// DELETE is what makes the setting two-way: it removes the override row so
+		// the company returns to the built-in layout. Without it, a company that
+		// sets a declaration once could never go back.
+		r.Get("/print-templates/{docKind}", s.handleGetPrintTemplate)
+		r.Put("/print-templates/{docKind}", s.handleSavePrintTemplate)
+		r.Delete("/print-templates/{docKind}", s.handleClearPrintTemplate)
+
+		// ===================================================================
 		// THE AI BILL INBOX — cored's PROXY into insightd (register row D49).
 		// ===================================================================
 		// Six routes, enumerated here because the handler derives its upstream
