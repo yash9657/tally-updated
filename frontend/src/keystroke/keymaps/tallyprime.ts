@@ -121,6 +121,19 @@ const RAW_BINDINGS: Record<string, KeymapAction> = {
   // binding in this product was once found dead on macOS while every browser
   // test passed (HANDOFF rule 6).
   "Alt+R": { kind: "reconciliationQueue" },
+  // "Q: Outbox" — the vouchers this machine is holding because the server could
+  // not be reached (track D).
+  //
+  // ⚠️ Alt+Q WAS FREE, MEASURED: the bound Alt letters are A C D E G I L M O P R
+  // S V W X Y Z (plus Alt+2), and RESEARCH pins no documented TallyPrime global
+  // to Q — there is no offline outbox in Tally to have a key for. So nothing
+  // shadows this and it shadows nothing.
+  //
+  // ⚠️ macOS COMPOSES Option+Q INTO "œ". Combos resolve on `code`, so drive it in
+  // a test with the harness's altMac("q") and NEVER press("Alt+q") — every Alt
+  // binding in this product was once found dead on macOS while every browser
+  // test passed (HANDOFF rule 6).
+  "Alt+Q": { kind: "offlineOutbox" },
   F12: { kind: "configure" }, // Configure (screen/report settings)
   // Alt+C — create a master inline (e.g. a new ledger from a voucher field).
   // The default master is a ledger, the by-far most common inline create; the
@@ -1037,6 +1050,12 @@ export function actionLabel(action: KeymapAction): string {
       // make the two indistinguishable in the one place an operator goes to tell
       // them apart. What this one holds is refused alters and deletes.
       return "Reconciliation (refused changes)";
+    case "offlineOutbox":
+      // ⛔ THE LABEL SAYS "not posted", AND THAT IS THE WHOLE POINT OF IT. This
+      // string is what the button bar and the F1 keyboard help show, and it is
+      // the only description of this screen an operator sees before opening it. A
+      // bare "Outbox" reads like a sent-items folder — the opposite of the truth.
+      return "Offline Outbox (queued, not posted)";
     case "goto":
       return "Go To (keeps this screen)";
     case "switchTo":

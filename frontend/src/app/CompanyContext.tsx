@@ -789,6 +789,23 @@ function RefusedCompanyNotice({
 }
 
 /** Access the full company context (throws outside a provider). */
+/**
+ * The company context, or `null` OUTSIDE a provider — never a throw.
+ *
+ * ⚠️ IT EXISTS FOR PROVIDERS THAT ARE SCOPED BY COMPANY BUT DO NOT REQUIRE ONE,
+ * and `OfflineOutboxProvider` is the first: it takes explicit company/subject
+ * overrides so it can be rendered in a test with no shell around it, and
+ * `useCompanyContext()` would throw before those overrides were ever read. This
+ * mirrors `useAuth()`, which is null outside its provider for the same reason.
+ *
+ * ⛔ SCREENS MUST STILL USE `useCompanyID()`. A screen that silently rendered
+ * with no company would be showing somebody nothing and calling it empty; the
+ * throw is what routes them to the company picker.
+ */
+export function useOptionalCompanyContext(): CompanyContextValue | null {
+  return useContext(CompanyContext);
+}
+
 export function useCompanyContext(): CompanyContextValue {
   const ctx = useContext(CompanyContext);
   if (!ctx) {

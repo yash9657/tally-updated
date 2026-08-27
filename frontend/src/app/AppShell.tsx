@@ -16,6 +16,7 @@ import {
   type ScreenActionKind,
 } from "./ScreenActions";
 import { LoadedVoucherProvider } from "./LoadedVoucher";
+import { OfflineOutboxProvider } from "../offline/OfflineOutbox";
 import { VOUCHER_CONFIGS } from "../screens/vouchers/voucherConfig";
 import { LoadedDraftProvider } from "./LoadedDraft";
 import { Chrome } from "./Chrome";
@@ -122,6 +123,18 @@ const COMPANY_SCOPED_SCREENS = new Set<NavSnapshot["screen"]>([
   // suite. PrintTemplateScreen.test.tsx has the company-less case; it is the
   // second screen in the set to have one.
   "print-templates",
+  // OFFLINE OUTBOX (track D). ⚠️ THE REASON IS DIFFERENT FROM EVERY ENTRY ABOVE,
+  // AND THAT IS WHY IT IS EASY TO GET WRONG. This screen drives NO company-scoped
+  // route — it reads a queue out of this browser's IndexedDB — so nothing here
+  // would throw. It needs the scope because the QUEUE ITSELF is scoped by
+  // (company, subject): with no company selected there is no queue to show, and
+  // the honest thing is the company picker rather than an empty table that reads
+  // as "nothing is waiting".
+  //
+  // ⛔ NO TEST IN THIS REPOSITORY CAN SEE THIS ENTRY unless one renders with
+  // company === null — this set is consulted only then, and every screen test
+  // passes an initialCompany. OfflineOutboxScreen.test.tsx has that case.
+  "offline-outbox",
 ]);
 
 /**
@@ -282,7 +295,18 @@ export function AppShell({
     <ScreenActionsProvider>
       <LoadedVoucherProvider>
         <LoadedDraftProvider>
-          <AppShellInner registry={registry} />
+          {/* ⛔⛔ THE OFFLINE QUEUE'S ONLY MOUNT POINT, AND THE ONE PLACE THE
+              WHOLE TRACK CAN GO SILENTLY MISSING. `useOfflineOutbox()` returns
+              null outside a provider and the accept path then REFUSES to queue —
+              correctly, and invisibly to every screen test, because those render
+              a screen and not the shell. So AppShell.test.tsx asserts this
+              provider is mounted here, by driving a failed post on the real
+              shell. Wrapping INSIDE LoadedVoucher/LoadedDraft is arbitrary; it
+              must be inside CompanyProvider and the auth gate, which are above
+              AppShell, because it is scoped by (company, subject). */}
+          <OfflineOutboxProvider>
+            <AppShellInner registry={registry} />
+          </OfflineOutboxProvider>
         </LoadedDraftProvider>
       </LoadedVoucherProvider>
     </ScreenActionsProvider>
@@ -627,6 +651,13 @@ function screenTitle(snap: NavSnapshot): string {
     // their edit did not take.
     case "reconciliation":
       return "Reconciliation Queue";
+    // ⛔ WITHOUT THIS CASE THE CHROME READS "Tally" — the `default` below — over a
+    // list of vouchers that are NOT IN THE BOOKS. That is the one title this
+    // application cannot afford to get wrong: the whole screen exists to say
+    // "these are not posted yet", and a frame labelled with the product name
+    // makes it look like any other register.
+    case "offline-outbox":
+      return "Offline Outbox";
     // ⛔ WITHOUT THIS CASE THE CHROME READS "Tally" — the `default` below — over
     // the screen that decides what every invoice this company issues will say.
     case "print-templates":
@@ -766,6 +797,12 @@ function hintsFor(snap: NavSnapshot): string[] {
     // "Enter: Open" — on a screen whose rows open with a named button, and one of
     // whose buttons CLEARS the only record that somebody's work was refused.
     case "reconciliation":
+      return ["Esc: Back", "F1: Help"];
+    // ⛔ WITHOUT THIS CASE THE STRIP FALLS TO `default` AND ADVERTISES
+    // "Enter: Open" on a screen whose rows open nothing — and whose two actions
+    // (commit the queue to the books, discard a voucher) are named buttons
+    // precisely because a generic accept cannot say which it would do.
+    case "offline-outbox":
       return ["Esc: Back", "F1: Help"];
     // ⛔ WITHOUT THIS CASE THE STRIP FALLS TO `default` AND ADVERTISES
     // "Enter: Open" ON A SCREEN WITH NOTHING TO OPEN. This is a form: its two

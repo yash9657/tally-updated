@@ -504,6 +504,24 @@ const PRINT_TEMPLATES_BAR: readonly ButtonBarItem[] = [
   item("F1", "Help"),
 ];
 
+/**
+ * OFFLINE OUTBOX (track D) — the vouchers this machine is holding.
+ *
+ * Ctrl+A is not offered, for exactly the reason the two bars above do not offer
+ * it: this screen has TWO named actions with different consequences — commit the
+ * whole queue to the books, and discard one voucher — and a generic "Accept the
+ * screen" cannot say which it would do. On a screen where one of those two
+ * choices writes somebody's invoices into the ledger and the other deletes work
+ * that exists nowhere else, an ambiguous key is the wrong kind of convenience.
+ * Both are named buttons.
+ */
+const OFFLINE_OUTBOX_BAR: readonly ButtonBarItem[] = [
+  item("Esc", "Back"),
+  item("Alt+G", "Go To"),
+  item("Ctrl+G", "Switch To"),
+  item("F1", "Help"),
+];
+
 /** The AI-native screens (Bill Inbox, Ask your books). */
 /**
  * ⛔ ALT+M SITS BESIDE Ctrl+P ON EVERY BAR THAT HAS ONE, AND NOWHERE ELSE (B2).
@@ -614,6 +632,8 @@ export function buttonBarFor(
       return RECONCILIATION_BAR;
     case "print-templates":
       return PRINT_TEMPLATES_BAR;
+    case "offline-outbox":
+      return OFFLINE_OUTBOX_BAR;
     case "bill-inbox":
     case "query":
       return AI_BAR;

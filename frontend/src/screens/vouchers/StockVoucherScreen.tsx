@@ -5,6 +5,13 @@ import { useClient, useCompanyID } from "../../app/CompanyContext";
 import { useRegisterScreenAction } from "../../app/ScreenActions";
 import { useLoadedVoucher } from "../../app/LoadedVoucher";
 import { ApiError } from "../../api";
+import { VOUCHER_CLASS_LABELS } from "../../api/types";
+import {
+  QueuedOfflineSignal,
+  queuedStatus,
+  useOfflineFallback,
+} from "../../offline/useOfflineFallback";
+import { voucherClassForType } from "./voucherClass";
 import type {
   FulfilmentView,
   GodownListItem,
@@ -163,6 +170,8 @@ export function StockVoucherScreen({ snapshot }: { snapshot: NavSnapshot }) {
   const fulfilsDir = fulfilsDirection(type as VoucherType);
 
   const seedRef = useRef<string | null>(null);
+  /** The loaded voucher's head version, from the hydration below. 0 = unknown. */
+  const loadedVersion = useRef(0);
   useEffect(() => {
     if (!loadedVoucherID || alterRefusal || seedRef.current === loadedVoucherID) return;
     let cancelled = false;
@@ -171,6 +180,11 @@ export function StockVoucherScreen({ snapshot }: { snapshot: NavSnapshot }) {
       .then((view) => {
         if (cancelled) return;
         seedRef.current = loadedVoucherID;
+        // ⛔ THE HEAD VERSION IS THE ONLY HONEST `base_version` FOR A QUEUED
+        // ALTER. Queueing one at base 0 would park as a CONFLICT every single
+        // time — a reconciliation row that tells the operator nothing except
+        // that this client did not know what it was editing.
+        loadedVersion.current = view.version_no;
         setDate(view.voucher_date);
         setVoucherNo(view.voucher_no);
         setNarration(view.narration);
@@ -196,6 +210,10 @@ export function StockVoucherScreen({ snapshot }: { snapshot: NavSnapshot }) {
   const formRef = useRef({ lines, date, narration, party, voucherNo });
   formRef.current = { lines, date, narration, party, voucherNo };
   const inFlight = useRef(false);
+
+  // ⛔ THE QUEUE-OR-REFUSE JUDGEMENT, shared with VoucherScreen so it cannot
+  // drift between the two screens that post vouchers. See useOfflineFallback.
+  const queueOrRethrow = useOfflineFallback();
 
   const ctx = useMemo(
     () => ({ type, voucherID: loadedVoucherID }),
@@ -233,9 +251,22 @@ export function StockVoucherScreen({ snapshot }: { snapshot: NavSnapshot }) {
     inFlight.current = true;
     setDenied(null);
     const voucherID = ctxRef.current.voucherID;
-    const send: Promise<VoucherResponse> = voucherID
-      ? cfg.alter(client, companyID, voucherID, req)
-      : cfg.post(client, companyID, req);
+    const send: Promise<VoucherResponse> = (
+      voucherID
+        ? cfg.alter(client, companyID, voucherID, req)
+        : cfg.post(client, companyID, req)
+    ).catch((err: unknown) =>
+      // ⛔⛔ WAS IT THE NETWORK, OR DID THE BOOKS REFUSE IT? The narrow catch —
+      // around the post and nothing else. `buildStockVoucherRequest` above has
+      // already run and cannot fail here, so everything this sees is the wire.
+      // A proven transport failure is QUEUED; a 422 or a 403 is rethrown to the
+      // handler below, which keeps every message it already had.
+      queueOrRethrow(err, {
+        cls: VOUCHER_CLASS_LABELS[voucherClassForType(type)],
+        req,
+        ...(voucherID ? { alter: { targetID: voucherID, baseVersion: loadedVersion.current } } : {}),
+      }),
+    );
     send
       .then((res) => {
         setSavedNo(res.voucher_no);
@@ -281,12 +312,22 @@ export function StockVoucherScreen({ snapshot }: { snapshot: NavSnapshot }) {
           setStatus(null);
           return;
         }
+        // ⛔ NOT AN ERROR: the voucher is queued on this machine. It is checked
+        // BEFORE the generic line because `QueuedOfflineSignal` is an Error
+        // subclass and would otherwise be rendered as "Error: …" — telling the
+        // operator their kept work failed.
+        if (err instanceof QueuedOfflineSignal) {
+          setSavedNo(null);
+          setSavedID(null);
+          setStatus(queuedStatus(err));
+          return;
+        }
         setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`);
       })
       .finally(() => {
         inFlight.current = false;
       });
-  }, [client, companyID, cfg, type]);
+  }, [client, companyID, cfg, type, queueOrRethrow]);
 
   useRegisterScreenAction("accept", onAccept);
 

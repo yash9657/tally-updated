@@ -4379,7 +4379,15 @@ export interface SyncCommitResponse {
  * exactly one step-up, which is the argument for draining it as a batch.
  */
 export interface SyncBatchRefusal {
-  kind: "cutoff" | "stepup" | "other";
+  /**
+   * ⚠️ `offline` IS THE THIRD ONE, and it is the commonest of the three on this
+   * track: the drain was attempted with no network, so the request never got an
+   * answer. It belongs in this union rather than under `other` because the screen
+   * must say something different — "you are still offline, nothing was sent"
+   * rather than "the server refused the batch" — while the invariant it shares
+   * with the other two is the important part: THE OUTBOX IS UNTOUCHED.
+   */
+  kind: "cutoff" | "stepup" | "offline" | "other";
   status: number;
   message: string;
 }

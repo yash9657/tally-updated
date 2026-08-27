@@ -66,6 +66,27 @@ const GATEWAY_MENU = [
   // rather than as a wrong turn. Found in a real browser, not in a test.
   "Reconciliation Queue",
 
+  // Offline Outbox (track D) — the vouchers this machine is holding because the
+  // server could not be reached to post them.
+  //
+  // ⛔ IT IS A DOOR BECAUSE THE ALTERNATIVE IS AN OPERATOR WHO CANNOT FIND THEIR
+  // OWN UN-POSTED WORK. Alt+Q reaches it and the accept path's own status line
+  // names that key, but a keyboard operator who did not read the status line — or
+  // who reloaded, or came back the next morning — has no other way in, and what
+  // they are looking for is invoices they believe they have already keyed.
+  //
+  // ⚠️ It is NOT in Alt+G Go To and cannot be: that picker is generated from
+  // ["Vouchers", ...REPORT_NAMES] and this is not a report name. It could not be
+  // one — there is no route that serves this list; the rows are in this browser.
+  //
+  // ⚠️ THE LABEL WAS CHECKED AGAINST THE COLLISION THAT COST "Reconciliation"
+  // TWO BROWSER RUNS: the Gateway is driven by typing into its search box, so a
+  // label that is a SUBSTRING of a shipped one silently opens the shipped one.
+  // "Offline Outbox" is a substring of nothing above and contains nothing above
+  // — and note "Bill Inbox" is the nearest neighbour and is not a substring of
+  // it. See OFFLINE_OUTBOX_LABEL in navMachine.ts.
+  "Offline Outbox",
+
   // ---- THE THREE COST SCREENS (T2).
   //
   // "Cost Centres" is the MASTERS door — the axes of analysis (Department,

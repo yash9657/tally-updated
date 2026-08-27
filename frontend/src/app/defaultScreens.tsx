@@ -52,6 +52,7 @@ import { Form138Screen } from "../screens/payroll/Form138Screen";
 import { REPORT_NAMES } from "../keystroke/types";
 import { GOTO_ENTRIES } from "../keystroke/navMachine";
 import type { ScreenComponent, ScreenComponentProps } from "./screenRegistry";
+import { OfflineOutboxScreen } from "../screens/OfflineOutboxScreen";
 import { ScreenRegistry } from "./screenRegistry";
 
 /**
@@ -232,6 +233,9 @@ const DataAdapter: ScreenComponent = () => <DataScreen />;
 const TallyImportAdapter: ScreenComponent = () => <TallyImportScreen />;
 const ReconciliationAdapter: ScreenComponent = () => <ReconciliationScreen />;
 
+/** Alt+Q Offline Outbox adapter: the queue this machine holds (track D). */
+const OfflineOutboxAdapter: ScreenComponent = () => <OfflineOutboxScreen />;
+
 /** Print Templates adapter: the per-company document layouts (track C). */
 const PrintTemplateAdapter: ScreenComponent = () => <PrintTemplateScreen />;
 
@@ -379,6 +383,16 @@ export function createDefaultRegistry(): ScreenRegistry {
     // Without it the navMachine pushes a frame nothing renders, so the Gateway
     // entry appears to do nothing at all — no error, no status line.
     "print-templates": PrintTemplateAdapter,
+    // OFFLINE OUTBOX (track D). A ScreenKind and not a "report:…" key for a
+    // reason stronger than the three above: THERE IS NO ROUTE THAT COULD SERVE
+    // THIS LIST. The rows are in this browser's IndexedDB, not in cored — so a
+    // report frame, whose entire shape is "ask the server for rows", could not
+    // render it even in principle. It also carries two writes (commit, discard).
+    //
+    // ⛔ THIS ENTRY IS ONE OF THE ONES THAT SHIP THE KEY DEAD SILENTLY. Without
+    // it the navMachine pushes a frame nothing renders, so Alt+Q appears to do
+    // nothing at all — no error, no status line.
+    "offline-outbox": OfflineOutboxAdapter,
     // Live, per-name report screens (override the generic fallback).
     "report:Day Book": DayBookScreen,
     "report:Trial Balance": TrialBalanceScreen,

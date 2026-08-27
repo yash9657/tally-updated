@@ -312,7 +312,19 @@ export type ScreenKind =
    * reach. A ScreenKind is also right on its own terms: the screen carries a
    * WRITE (clearing an entry), which no report frame does.
    */
-  | "reconciliation";
+  | "reconciliation"
+  /**
+   * OFFLINE OUTBOX (track D) — the vouchers this machine is holding because the
+   * server could not be reached, and the one control that sends them.
+   *
+   * ⛔ IT IS A ScreenKind AND NOT A `report:` FRAME, and the reason is the same
+   * one `reconciliation` gives plus a stronger one: this screen's contents are
+   * NOT ON THE SERVER. A report frame's whole shape is "ask cored for rows and
+   * render them"; there is no route that could serve this list, because the rows
+   * live in this browser's IndexedDB. It also carries two WRITES (commit the
+   * queue, discard a row), and no report frame does.
+   */
+  | "offline-outbox";
 
 /**
  * An in-frame overlay: a sub-screen that keeps its parent frame alive and is
@@ -759,6 +771,14 @@ export type KeymapAction =
    * global is the only binding on the key and nothing shadows it.
    */
   | { kind: "reconciliationQueue" }
+  /**
+   * Alt+Q — the OFFLINE OUTBOX (track D).
+   *
+   * ⚠️ Alt+Q was free: the bound Alt letters are A C D E G I L M O P R S V W X Y Z
+   * and 2, and Tally pins no documented global to Q. Nothing shadows this and it
+   * shadows nothing.
+   */
+  | { kind: "offlineOutbox" }
   | { kind: "configure" } // F12 — screen/report Configure
   | { kind: "createMaster"; masterKind: MasterKind } // Alt+C — inline create
   /**

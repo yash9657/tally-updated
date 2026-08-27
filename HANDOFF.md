@@ -922,8 +922,9 @@ The criterion is unchanged: **how much of a real business's day is blocked.**
 | **7** | ✅ **DONE 2026-08-27 — TRACK C / T16 PER-COMPANY PRINT TEMPLATES** (§1.20). Three routes plus one screen, reached from **Gateway of Tally > Print Templates**; the F11 row was **RENAMED to drop "logo"**, because there is no image storage anywhere in this product | ⛔ **THE SIXTH ENGINE WITH NO FRONT DOOR.** `SaveOverrides` was implemented AND TESTED since migration 0037 and the printer honoured overrides on every print — and no route could write one, so `print_template` held **zero rows in the entire database**. ⛔ **The finding that changed the design: THE FIELD GRID IS RAGGED.** `RenderReport` reads 3 of the 7 overridable fields, so a form built from the obvious reading stores a declaration no statement will ever print, with no error anywhere. Which fields bite is now a **golden MEASURED by rendering each kind twice per field** — and unlike B1's it needs no Postgres, so it cannot hide behind a skip | 18 mutations predicted then observed · the oracle is the **printed PDF**, never the stored row · `drive-c-print-templates.mjs` **33/33**, whose strongest probe is that after clearing the PDF is **byte-identical** to the pre-override one |
 | **8** | ✅ **DONE 2026-08-27 — B2 E-MAIL A DOCUMENT** (§1.21). `Alt+M` saves the server's PDF and opens the operator's OWN mail client on a draft. The F11 row reads On and **names the mechanism in its own title**, because a bare "E-mail a document — On" is read as SMTP by everybody | ⛔ **NO GO CODE CHANGED, AND `internal/notify` IS UNTOUCHED** — this product does not send mail, which is the decision rather than a gap. ⛔ **A WEB PAGE CANNOT ATTACH A FILE TO A `mailto:` DRAFT**, so the one failure mode is a draft opening with no file saved — hence the proof is an **ORDERING** test (save, then draft; and no draft at all if the save fails), because asserting the two effects separately cannot see it. ⚠️ **The plan said "pre-addressed" and that was wrong**: no party e-mail exists anywhere in the schema, so the draft has no recipient and the screen says so. Its own key rather than a fourth `ExportTarget`, because Tally's top menu carries `E: Export` and `M: E-mail` separately (RESEARCH.md:361/:415/:774/:817) | 13 mutations predicted then observed · `drive-b2-email-document.mjs` **20/20**, asserting the real `mailto:` URL Chromium was asked to open · it also found a blind spot: `buttons.test.ts` cannot see a decorative Alt+M **or Ctrl+P**, so the bar invariant is now asserted directly |
 | **9** | 🟡 **HALF DONE 2026-08-27 — TRACK D** (§1.22). **The reconciliation queue SHIPPED**: `Alt+R` / **Gateway of Tally > Reconciliation Queue**, plus the two backend routes it needed and the first writer of `resolved_at` that has ever existed. **Offline ENTRY did not** — the offline node is ported to TypeScript and proved against Go by a generated golden, but nothing enqueues into it and there is no app shell | ⛔ **THE QUEUE WAS A PRESENT-TENSE DEFECT, NOT AN OFFLINE ONE.** The freeze rule has raised rows since migration 0009 and `GET /reconciliation-queue` served them the whole time; **nothing in the app ever called it**, so every operator whose edit was refused by an IRN or a filed GSTR-1 got the explanation written to a table only Postgres could read. ⛔ **AND `resolved_at` HAD NO WRITER ANYWHERE** — no `UPDATE reconciliation_queue` existed in Go or SQL — so a row was **immortal** and the queue could only grow. ⛔ **The finding that changed the design: `ConflictPayload` HAD NO HTTP READER** (callers: two Go test files), so Q2's compare screen was unbuildable. ⚠️ **And the payload must NOT be echoed as stored**: it renders 1180 as `"1180"` while the live voucher renders `"1180.0000"`, so raw bytes would invite an operator to discard work over a difference that does not exist | 11 backend + 20 frontend mutations predicted then observed · `drive-d-reconciliation.mjs` **29/29** on a **REAL** conflict (a stale `base_version` through the actual sequencer, never stubbed), whose strongest probe is that resolving **stamps `resolved_at` in Postgres** · the drive also caught a **shipped-label collision**: the Gateway door was called "Reconciliation" and opened **Bank Reconciliation** instead, silently |
-| **10** | **OFFLINE ENTRY — the half that is left** (§1.22.6, §5.2) | The differentiator against Tally's LAN-only model. The engine, the client port and the queue UI all exist now | ⛔ **TWO THINGS, AND THE FIRST IS A DECISION NOT A SCREEN**: when does a failed post become a queued intent (a dropped connection must queue; a 422 the books refused must NOT), and then the service worker + app shell, which is its own track |
-| **10** | **T8 multi-currency** → **T11 budgets** → **T13 interest** → **T12 GSTR-9** → **SSO/OIDC last** | Ordinary Tier-2 backlog. §5.4 states the one thing not to get wrong in each. ⚠️ **T16 print templates and B2 are GONE from this list — they shipped as rows 7 and 8.** | |
+| **10** | 🟡 **PARTLY DONE 2026-08-27 — OFFLINE ENTRY, PIECE ONE** (§1.23). A failed post now becomes a queued intent; `Alt+Q` is the outbox, and a commit really lands | ⛔ **THE DECISION WAS THE WORK**: a dropped connection queues, a 422 / 403 / 500 does NOT — queue only when the client can PROVE the books never saw the write, and test it POSITIVELY (`instanceof NetworkError`) so a client crash cannot masquerade as an outage. ⛔ **And the browser found what vitest could not**: `sync/commit` sent `dr_cr` un-normalised, so every queued voucher was refused 422 at COMMIT time (§1.23.2) | 1784 vitest cases / 109 files · `drive-d-offline-queue.mjs` **27/27**, run twice · 20 mutations predicted then observed |
+| **11** | **OFFLINE ENTRY — piece TWO, and it is all that is left of the track** (§1.23.6) | The differentiator against Tally's LAN-only model. Everything except the app shell now exists | ⛔ **A SERVICE WORKER AND AN OFFLINE APP SHELL.** Until it exists this application still needs the server to LOAD, so the FeaturesScreen row stays `server` and says so. `HANDOFF-OFFLINE-ENTRY.md` is the live plan |
+| **12** | **T8 multi-currency** → **T11 budgets** → **T13 interest** → **T12 GSTR-9** → **SSO/OIDC last** | Ordinary Tier-2 backlog. §5.4 states the one thing not to get wrong in each. ⚠️ **T16 print templates and B2 are GONE from this list — they shipped as rows 7 and 8.** | |
 
 > ### ⛔⛔ AND THE TWO THINGS THAT ARE NOT TRACKS AND OUTRANK MOST OF THIS LIST
 >
@@ -2453,6 +2454,147 @@ queue, because the operator has already trusted it.
 | `pnpm verify:demo` | **34/34** |
 | `drive-d-reconciliation.mjs` | **29/29**, tenant torn down clean |
 | T32 · B1 · C · B2 drives | **25/25 · 15/15 · 33/33 · 20/20** (re-run: the Gateway list changed) |
+
+---
+
+### 1.23 ✅ OFFLINE ENTRY, PIECE ONE — A FAILED POST NOW BECOMES A QUEUED INTENT. `Alt+Q`.
+
+**Landed 2026-08-27 (later the same day as §1.22).** The judgement §1.22.6 named is made, wired on
+both write paths, and driven in a real browser: **`Alt+Q` / Gateway of Tally > Offline Outbox.**
+
+⛔ **THE FEATURESSCREEN ROW IS STILL `server`, AND THAT IS CORRECT.** Piece TWO — a service worker
+and an offline app shell — does not exist, so this application still needs the server to LOAD. What
+shipped helps when a connection drops during a session you already have open; it does not let anybody
+start one on a train. A second row was added (`Offline Outbox … (Alt+Q)` reads `on`) rather than
+flipping the first, for the reason §1.22 split it in the first place.
+
+#### 1.23.1 ⛔⛔ THE JUDGEMENT, AND WHY IT IS NOT "QUEUE UNLESS IT LOOKS LIKE A REFUSAL"
+
+The two errors are not symmetric, and the whole design follows from that:
+
+| | |
+|---|---|
+| **refused, rendered as queued** | the operator is told their invoice is safe. They close the laptop. The invoice does not exist, nobody is billed, and the queue will re-offer a voucher the books already rejected. **LOSES MONEY SILENTLY.** |
+| **queued, rendered as refused** | the operator sees an error and re-keys. Annoying. Nothing is lost. |
+
+So: ⭐ **queue ONLY when the client can PROVE the books never saw the write**, and treat every other
+failure — including every failure whose meaning is unclear — as a refusal the operator must read.
+
+⛔ **WHICH IS WHY THE TEST IS `err instanceof NetworkError` AND NOT `!(err instanceof ApiError)`.** A
+decision by EXCLUSION also catches every bug in the client — a null deref in the accept chain, a
+builder that throws — and would have told an operator their invoice was queued because THIS
+APPLICATION crashed. So `http.ts` now raises a typed `NetworkError` from the `fetch` call **and from
+nowhere else**, and the decision is positive. `queueDecision.test.ts` has the control: a bare
+`TypeError("Failed to fetch")` — worded exactly like a browser's own rejection — must NOT queue.
+
+⚠️ **A 5xx IS ON THE REFUSED SIDE, DELIBERATELY.** The request REACHED the books and may have
+applied before failing to answer. A queued re-commit mints a NEW client voucher id and a NEW
+idempotency key, so the server cannot dedupe it against the first attempt — queueing a 500 is how ONE
+invoice becomes TWO. The operator seeing an error is strictly better.
+
+⚠️ **AND THE RESIDUAL AMBIGUITY IS DISCLOSED, NOT PAPERED OVER.** A connection reset AFTER the server
+committed but BEFORE the response was read raises `NetworkError` too, so a queued voucher MAY already
+be in the books. Nothing on the wire distinguishes it. The outbox screen says so and names the Day
+Book as the place to check.
+
+⛔ **THE CATCH IS NARROW ON PURPOSE, AND THIS IS THE SUBTLE PART.** It wraps the POST and nothing
+else. `VoucherScreen`'s accept chain also BUILDS the request, and that build creates ledgers on
+demand — so a transport failure *there* means the ledger ids in the payload do not exist on the
+server, and queueing it would store an intent that can only ever come back "no such ledger". The
+narrow catch is what keeps the queue's contents committable. It also runs BEFORE
+`discloseOrphanedMasters`: that disclosure names masters this accept created and then ABANDONED, but a
+QUEUED voucher has not abandoned them — it will commit with those very ids, so disclosing them would
+tell the operator to delete the ledgers their queued invoice depends on.
+
+#### 1.23.2 ⛔⛔ THE DEFECT THE BROWSER FOUND, AND NO UNIT TEST COULD
+
+`POST /sync/commit` sent every intent's payload **un-normalised**. `SyncIntent.payload` IS a
+`VoucherRequest` — the same type the online path posts, deliberately, so the server decodes both with
+one `buildVoucherInput`. That equivalence cuts both ways: it also needs the same transformation on the
+way OUT. Every `post*Voucher` in `rest.ts` sends `wireVoucher(req)`, which maps the frontend's legible
+`dr_cr` ("DR"/"CR") onto the backend's canonical `"D"`/`"C"`; `syncCommit` sent the intents verbatim.
+
+`ledger.Debit` is `"D"`, so a `"DR"` posting matched **neither side**, was summed as a credit, and the
+batch was refused **422 "debit total must equal credit total"**.
+
+⛔ **IT FAILED AT COMMIT TIME, NOT AT QUEUE TIME — the worst available place.** An operator could key
+ten invoices offline, watch each one queue safely, and then find that NONE of them could ever be
+committed, with the outbox correctly refusing to clear, so the queue would simply never drain.
+
+⚠️ **THE WHOLE QUEUE-AND-COMMIT FLOW WAS GREEN IN VITEST WHILE THIS WAS BROKEN.** The mock client is
+not an HTTP client: it never runs that adapter, and it accepts either spelling. The 422 appeared on
+the FIRST real commit from a browser. **This is §4.1's rule for the sixth time, in its sharpest form
+yet: verifying that the pieces exist is not verifying that they compose.** The regression test is
+`api/syncCommitWire.test.ts`, and its oracle is the REQUEST BODY, because nothing else can see it.
+
+#### 1.23.3 WHAT SHIPPED, FILE BY FILE
+
+| Piece | Where | Note |
+|---|---|---|
+| the typed transport failure | `api/http.ts` `NetworkError` | raised from the `fetch` call only — never the body read: once `fetch` resolves there is a status, so the server answered |
+| the judgement | `offline/queueDecision.ts` | pure, and the table of statuses is in the file header |
+| a whole-batch refusal | `offline/commitRefusal.ts` | `cutoff` / `stepup` / **`offline`** (new on `SyncBatchRefusal`) / `other`, each with a remedy |
+| the one live node | `offline/OfflineOutbox.tsx` | ⛔ **the node id is RANDOM per browser profile and PERSISTED** — see 1.23.4 |
+| the shared wiring | `offline/useOfflineFallback.ts` | ONE hook, used by both screens, so the judgement cannot drift between them |
+| the screen | `screens/OfflineOutboxScreen.tsx` | `Alt+Q`, Gateway door, 15 registration points |
+| sign-out clears the queue | `auth/AuthContext.tsx` | see 1.23.5 |
+| the wire fix | `api/rest.ts` `syncCommit` | 1.23.2 |
+
+#### 1.23.4 ⛔⛔ THE NODE ID MUST BE RANDOM AND MUST PERSIST. THIS IS A DATA-LOSS TRAP.
+
+`NodeIdGen` is **deterministic**: the same node id and the same call count mint the SAME voucher
+uuid, and the CREATE idempotency key is `<nodeID>:CREATE:<clientVoucherID>`. So a node id derived from
+anything two machines share — the company, the operator's subject, a hash of both — would have the
+laptop and the back office mint **one key for two DIFFERENT vouchers**, and the server's exactly-once
+replay would answer `DUPLICATE` and silently drop the second. It is therefore `crypto.randomUUID()`,
+minted once, and stored in the snapshot beside the queue.
+
+⚠️ **AND `structuredCloneSnapshot` COPIES FIELD BY FIELD**, so the added `nodeID` had to be added
+there too or it would be silently dropped and re-minted on the next load — which orphans every
+provisional number the operator has already read out to a customer. `store.test.ts` has the
+round-trip assertion and a mutation proved it bites.
+
+#### 1.23.5 ⛔ A SECURITY PROPERTY THAT WAS A COMMENT FOR AS LONG AS IT EXISTED
+
+`store.ts`'s header has said since the day it was written that `clearOutboxStores` is "called on
+SIGN-OUT". Measured when the queue was wired up:
+
+```
+$ /usr/bin/grep -rn "clearOutboxStores" frontend/src/ | grep -v '^frontend/src/offline/'   -> EMPTY
+```
+
+**Nothing called it.** What was left behind is UNENCRYPTED BOOKS — un-posted vouchers keyed by one
+operator, in a shared back-office browser, under a subject nobody is signed in as, which the next
+person to sign in could commit under their own name. It is wired now, fire-and-forget (sign-out is
+synchronous — it is called from a click AND from a 401 handler), and the oracle is the STORE'S
+CONTENTS afterwards, because reading `signOut` cannot prove a fire-and-forget call happened.
+
+#### 1.23.6 WHAT IS LEFT, AND IT IS ONE THING
+
+**A service worker and an offline app shell.** Until it exists this application needs the server to
+load. `HANDOFF-OFFLINE-ENTRY.md` is still the live plan for it. Also NOT built, and stated rather than
+implied: a queued **DELETE** (Alt+D takes the ordinary online path; only Ctrl+A queues), and any
+request TIMEOUT — this app sets none anywhere, so a STALLED connection hangs rather than failing, and
+nothing is queued because nothing ever rejects. Adding one would trade that stall for the
+committed-then-abandoned ambiguity above on a deadline of our choosing, so it is a separate decision.
+
+#### 1.23.7 THE GATES, AFTER
+
+| Gate | Value |
+|---|---|
+| `tsc --noEmit` | clean |
+| frontend tests | **1784 pass / 109 files** (was 1729 / 102) |
+| `python3 corpora/validate.py` | OK (keystroke=33, migration=6, inventory=11) |
+| `pnpm verify:demo` | **34/34** |
+| `drive-d-offline-queue.mjs` | **27/27**, run TWICE, tenant torn down clean both times |
+| d-reconciliation · T32 · B1 · C · B2 drives | **29/29 · 25/25 · 15/15 · 33/33 · 20/20** — all re-run, the Gateway list changed again |
+| mutations | **20 predicted, 20 observed** — after one MISMATCH that was the mutation's fault, not the test's (see below) |
+
+⚠️ **THE MISMATCH IS WORTH THE PARAGRAPH.** A mutation meant to make a 5xx queue was written as
+`err.status < 500` on the `instanceof ApiError` guard — which drops a 500 through to the
+CLIENT-FAULT branch, which also refuses to queue. It changed the code, ran green, and proved nothing:
+a **vacuous mutation**, the exact shape §1.22.7 warns about. The replacement mutates the returned
+`queue:` value and fails three tests.
 
 ---
 

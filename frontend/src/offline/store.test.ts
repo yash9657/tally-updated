@@ -12,8 +12,6 @@
 
 import { beforeEach, describe, expect, it } from "vitest";
 
-import type { SyncIntent } from "../api/types";
-
 import { OfflineNode } from "./outbox";
 import {
   clearOutboxStores,
@@ -21,6 +19,7 @@ import {
   memoryOutboxStore,
   openOutboxStore,
   outboxKey,
+  type OutboxSnapshot,
 } from "./store";
 
 const ALICE = "user:alice";
@@ -28,14 +27,30 @@ const BOB = "user:bob";
 const CO_A = "company-a";
 const CO_B = "company-b";
 
-function nodeWith(n: number): { outbox: SyncIntent[]; knownHeads: Record<string, number>; seq: number } {
-  const node = new OfflineNode({ nodeID: "node-a", fy: "2025-26" });
+function nodeWith(n: number, nodeID = "node-a"): OutboxSnapshot {
+  const node = new OfflineNode({ nodeID, fy: "2025-26" });
   for (let i = 0; i < n; i++) node.createVoucher(1756300000000 + i, "Journal", { narration: `v${i}` });
-  return node.snapshot();
+  // ⛔ The node id travels WITH the queue. See OutboxSnapshot.nodeID: it is the
+  // partition every idempotency key is namespaced by, so a snapshot that lost it
+  // would be restored under a NEW id and mint keys a second machine could match.
+  return { ...node.snapshot(), nodeID };
 }
 
 beforeEach(async () => {
   await clearOutboxStores();
+});
+
+describe("⛔ the node id survives the round trip", () => {
+  // The mutation this catches: `structuredCloneSnapshot` copies FIELD BY FIELD,
+  // so an added field is silently dropped rather than failing to compile. A
+  // dropped node id is re-minted on the next load, which orphans every
+  // provisional number the operator has already read out to a customer — and
+  // two profiles that both re-mint can then collide on an idempotency key.
+  it("a saved snapshot comes back carrying the SAME nodeID", async () => {
+    const store = memoryOutboxStore(CO_A, ALICE);
+    await store.save(nodeWith(2, "node-zebra"));
+    expect((await store.load())?.nodeID).toBe("node-zebra");
+  });
 });
 
 describe("the store is scoped so no operator inherits another's queue", () => {
@@ -96,7 +111,7 @@ describe("what the store hands back", () => {
     const first = new OfflineNode({ nodeID: "node-a", fy: "2025-26" });
     first.createVoucher(1756300000000, "Journal", {});
     first.createVoucher(1756300001000, "Journal", {});
-    await store.save(first.snapshot());
+    await store.save({ ...first.snapshot(), nodeID: "node-a" });
 
     const restored = new OfflineNode({
       nodeID: "node-a",

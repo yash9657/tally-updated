@@ -1,11 +1,15 @@
 # HANDOFF — WHAT TO DO NEXT, AND WHY IT IS NOT DEFECT WORK
 
-**Written:** 2026-08-27 (late) · **Branch:** `session/t32-and-close-7-3` · **Tree:** clean
+**Written:** 2026-08-27 (late) · **Updated:** 2026-08-27 (later — offline entry piece one landed)
+**Branch:** `session/t32-and-close-7-3`
 **Read time: 5 minutes.** This file is the ORDER and the reasoning. It deliberately holds no analysis
-that is not already at a code site or in the files it points at — ⛔ **`git rm` it once §2's first
-item lands.** `HANDOFF.md` §11 names eleven superseded handoffs and what they cost — and that list is itself
-stale: there are **25 `HANDOFF-*.md` files on disk today**. This one is built to be cheap to retire
-rather than to become another.
+that is not already at a code site or in the files it points at.
+
+⛔ **IT WAS NOT DELETED, AND HERE IS WHY.** Its own §2 said to `git rm` it once the first item landed.
+That item was "finish OFFLINE ENTRY", and only **piece one** of it has — the service worker is still
+outstanding — so the order has CHANGED rather than completed, and a stale order file is exactly what
+§0 warns about. ⛔ **`git rm` it once §2's first item lands in full.** `HANDOFF.md` §11 names eleven
+superseded handoffs and what they cost; there are **25 `HANDOFF-*.md` files on disk today**.
 
 ---
 
@@ -39,9 +43,12 @@ The register is organised **row by row**. The payroll defect was not: `SetSalary
 no register had a row for it **because nobody had tried to perform the task**.
 
 > ⛔ **VERIFYING THAT THE PIECES EXIST IS NOT VERIFYING THAT THEY COMPOSE.** "Eight routes are
-> mounted" measures nothing an operator can do. This class has now produced **seven** findings —
-> the seventh was this session's reconciliation queue, whose rows had been written since migration
-> 0009 with no screen ever reading them — and **not one was found by reading code.**
+> mounted" measures nothing an operator can do. This class has now produced **eight** findings —
+> the eighth is the sharpest yet and it is worth reading in full (`HANDOFF.md` §1.23.2): the offline
+> queue's whole queue-and-commit flow was GREEN IN VITEST while `POST /sync/commit` sent `dr_cr`
+> un-normalised, so **every queued voucher was refused 422 at COMMIT time.** The mock client is not an
+> HTTP client, so no unit test could see it. It appeared on the first real commit from a browser.
+> **Not one of the eight was found by reading code.**
 
 **Carry this as a standing habit, not a track:** when you finish anything, try to perform a whole
 BUSINESS TASK with it end to end, not just the row you built.
@@ -50,36 +57,37 @@ BUSINESS TASK with it end to end, not just the row you built.
 
 ## 1. WHERE THE PRODUCT IS, IN ONE PARAGRAPH
 
-Measured from `FeaturesScreen.tsx` today: **52 feature rows — 43 `on`, 1 `always`, 7 `off`, 1
-`server`.** The one `server` row is offline entry, which is **half built** as of this session. Of the
-7 `off`, one is a **stated refusal** (split company data — Tally splits because it loads everything
-into RAM; this product does not have that limit) and one is **blocked on a human** (the Rule 48(4) QR
-code needs government sandbox credentials). So the real remaining feature work is **five tracks plus
-the other half of offline entry.**
+Measured from `FeaturesScreen.tsx` today: **53 feature rows — 44 `on`, 1 `always`, 7 `off`, 1
+`server`.** The one `server` row is offline entry, which is now **half built and honest about which
+half** (`HANDOFF.md` §1.23): a dropped connection queues the voucher and `Alt+Q` commits it, but there
+is no service worker, so the app still needs the server to LOAD. Of the 7 `off`, one is a **stated
+refusal** (split company data — Tally splits because it loads everything into RAM; this product does
+not have that limit) and one is **blocked on a human** (the Rule 48(4) QR code needs government
+sandbox credentials). So the real remaining feature work is **five tracks plus the service worker.**
 
 ---
 
 ## 2. ⛔ THE ORDER, AND THE REASONING
 
-### FIRST — finish OFFLINE ENTRY. `HANDOFF-OFFLINE-ENTRY.md` is the plan; read it, not this.
+### FIRST — the SERVICE WORKER. `HANDOFF-OFFLINE-ENTRY.md` is the plan; read it, not this.
 
-**Why first:** it is the only feature in a half-built state, and half-built is the worst state a
-feature can be in — the engine, the TypeScript client and the reconciliation UI all exist and nothing
-can reach them. It is also the **differentiator against Tally's LAN-only model**, so it is the one
-remaining track that is not parity but advantage.
+**Why still first:** it is the only feature in a half-built state, and it is the **differentiator
+against Tally's LAN-only model** — the one remaining track that is advantage rather than parity.
 
-⛔ **THE FIRST PIECE IS A JUDGEMENT CALL, NOT A SCREEN, AND IT IS ON THE PRODUCT'S MAIN WRITE PATH:**
-when a voucher fails to post, was it the NETWORK (queue it) or did the BOOKS REJECT IT (do not queue —
-say so)? A dropped connection must queue; **a 422 or a 403 must not.** Getting it backwards tells an
-operator their invoice is safe when it was refused, and they walk away. The funnel is narrow —
-`voucherConfig.ts`'s per-class `post`, reached from `editActions.ts:63` and
-`StockVoucherScreen.tsx:238` — so the wiring is small and the judgement is the whole job.
-**It needs its own browser drive, and the 422 half is the half that matters.**
+⛔ **THE JUDGEMENT CALL IS DONE. DO NOT RE-LITIGATE IT.** "When does a failed post become a queued
+intent" is answered, wired on both write paths, tested and driven: a dropped connection queues; a
+422, a 403, even a 500 does not. `HANDOFF.md` §1.23.1 has the reasoning and
+`offline/queueDecision.ts` has it beside the code.
 
-The second piece — a service worker and an offline app shell — is a separate track and the honest one
-to defer. ⛔ **Until it exists, keep the `FeaturesScreen` row SPLIT**: "Offline entry with sync" reads
-`server` and names both missing pieces; the reconciliation row reads `on`. Flipping one row would
-absorb a missing feature into a green badge, which is what that screen exists to prevent.
+⛔ **WHAT IS LEFT IS THE BOOT PATH, AND THE AUTH GATE IS THE HARD PART, NOT THE CACHE.** `App.tsx`
+renders nothing until a session exists, `AuthProvider` hydrates from `sessionStorage`, and
+`CompanyProvider` bootstraps by calling the server — so an offline boot must answer "who is signed in,
+and to which company" with no network, and the honest answers are constrained by decisions already
+made (including that the offline queue is cleared on sign-out).
+
+⛔ **KEEP THE `FeaturesScreen` ROW SPLIT.** "Offline entry with sync" reads `server` and names the
+missing half; "Offline Outbox … (Alt+Q)" reads `on`. The row flips only when an operator can BOOT with
+the network off.
 
 ### THEN — the five remaining features, in this order
 
@@ -106,29 +114,35 @@ ps -o lstart= -p "$(lsof -nP -iTCP:8087 -sTCP:LISTEN -t)"   # NEWER than the las
 ```
 
 ⛔ **CHECK THE AGE OF `cored` BEFORE BELIEVING ANY DRIVE.** `make run-cored` is `go run`, so a stale
-process is indistinguishable from a fix that does not work. **It has now been found stale three
-times**, once costing a whole failed browser run that showed 404s for routes that existed.
+process is indistinguishable from a fix that does not work. **It has now been found stale four
+times** — including at the start of this session — once costing a whole failed browser run that showed
+404s for routes that existed.
 ⚠️ **Run `make run-cored` FROM THE REPO ROOT** — from `backend/` there is no such target and the
 process simply never starts, which looks like a crash.
 
 ⛔ **VITE MUST BE ON `:5173`.** WebAuthn origin matching is exact; a vite that took `:5174` signs in
 fine and then fails every write with `PASSKEY STEP-UP FAILED`.
 
-**The gate baseline to beat** (measured 2026-08-27, after the reconciliation queue):
+⛔⛔ **NEVER RUN `make verify` CONCURRENTLY WITH A BROWSER DRIVE.** They share the dev database. Doing
+it once this session produced two failures that were pure artefacts: the residue check reported
+**+4 companies** and `internal/sync` hit its **600s timeout** under the contention. Both looked like
+real regressions and neither was. Run the drives, then run `make verify` alone.
+
+**The gate baseline to beat** (measured 2026-08-27, after offline entry piece one):
 
 | Gate | Command | Value |
 |---|---|---|
 | backend | `cd backend && go build ./... && go vet ./... && go test ./... -timeout 60m` | clean · **exit 0**, 36 pkgs |
 | typecheck | `cd frontend && pnpm exec tsc --noEmit` | clean |
-| frontend tests | `cd frontend && pnpm vitest run` | **1729 pass / 102 files** |
+| frontend tests | `cd frontend && pnpm vitest run` | **1784 pass / 109 files** |
 | live demo | `cd frontend && pnpm verify:demo "$(cat .demo-company-id)"` | **34/34** ⚠️ takes the id as an ARGUMENT |
 | corpora | `python3 corpora/validate.py` | OK (keystroke=33, migration=6, inventory=11) |
 | everything | `make verify` | exit 0 |
-| drives | `drive-t32` · `drive-b1` · `drive-c` · `drive-b2` · `drive-d-reconciliation` | **25/25 · 15/15 · 33/33 · 20/20 · 29/29** |
+| drives | `drive-d-offline-queue` · `drive-d-reconciliation` · `drive-t32` · `drive-b1` · `drive-c` · `drive-b2` | **27/27 · 29/29 · 25/25 · 15/15 · 33/33 · 20/20** |
 
 ⚠️ **`make verify` DOES NOT RUN `tsc`.** Different gates, and each has caught a real error the other
 missed — including a suite that was green in vitest with 8 real `tsc` errors, and (this session) a
-`tsc`-only strict-index error in a file whose tests all passed.
+required field added to a store snapshot that vitest happily ignored and `tsc` refused.
 
 ---
 
@@ -152,12 +166,13 @@ missed — including a suite that was green in vitest with 8 real `tsc` errors, 
 
 | File | Status |
 |---|---|
-| **`HANDOFF.md`** | ⭐ **THE LIVE ONE.** §1.11 is the plan, §1.22 is the newest track, §5 is the parity ordering, §7.2 the registration surface, §9 the traps |
-| **`HANDOFF-OFFLINE-ENTRY.md`** | ⭐ **LIVE** — §2's first item, in full |
+| **`HANDOFF.md`** | ⭐ **THE LIVE ONE.** §1.11 is the plan, **§1.23 is the newest track**, §5 is the parity ordering, §7.2 the 15-point registration surface, §9 the traps |
+| **`HANDOFF-OFFLINE-ENTRY.md`** | ⭐ **LIVE** — §2's first item (the service worker), in full, plus the nine hazards this lane paid for |
 | **`HANDOFF-NEXT-BUILD.md`** | ⭐ LIVE for §6's long tail; its §1–§4 are spent and say so |
 | **`HANDOFF-PARITY-AUDIT.md`** | **DATA, not a driver.** §7.1 is the closed register — parse it, never quote a header |
 | **`HANDOFF-DEFECT-BURNDOWN.md`** | ⛔ **SPENT** (retitled 2026-08-27). Its §1 five rules and §2 orchestration pattern are still worth reading for a parallel session |
 | **`docs/design/d-offline-entry-model.md`** | ⭐ LIVE — the four offline questions, answered, with a command beside each claim |
+| **`docs/RELEASE-NOTES.md`** | ⭐ LIVE — what an operator will notice, newest first |
 | the other ~20 `HANDOFF-*.md` | spent; each says so in its first line |
 
 ---
@@ -166,29 +181,31 @@ missed — including a suite that was green in vitest with 8 real `tsc` errors, 
 
 1. **Both proofs, for every change.** A mutation proof whose failure was **predicted, then observed**,
    *and* a drive in a real browser. ⛔ **A mutation proof proves the TEST; only the browser proves the
-   FIX.**
+   FIX** — and this session the browser is what found the only real defect (§0).
 2. ⛔ **Run every new probe against the BROKEN build first.** A probe that has never failed proves
-   nothing. This session: 34 mutations, 34 predictions matched — after **one MISMATCH** exposed a test
-   asserting `/IRN/` against a string **the server itself supplies**, so it was reading the wire data
-   back and checking nothing the screen decided.
+   nothing. This session: 20 mutations, 20 predictions matched — after **one MISMATCH** that was the
+   MUTATION's fault: it set `err.status < 500` on an `instanceof ApiError` guard, which drops a 500
+   into the client-fault branch, which also refuses to queue. The code changed, the tests stayed
+   green, and it proved nothing.
 3. ⛔ **A MUTATION THAT SILENTLY DOES NOTHING LOOKS EXACTLY LIKE A TEST THAT PASSED.** Assert the
-   anchor occurs **exactly once** and print the byte delta. The harness aborted twice this session on
-   a two-match anchor — that is it working.
-4. ⛔ **AN ORACLE THAT CANNOT SEE THE DEFECT IS NOT AN ORACLE.** Worked example: the resolve probe
-   asserts the **queue listing** and **Postgres**, never the handler's return value — a resolve that
-   stamped nothing still answers 200.
-5. ⛔ **A REFUSAL FOR THE WRONG REASON IS A VACUOUS PROBE.** Three of this session's failures were in
-   the probe, not the product: a live 401-vs-404 check that could not distinguish mounted from
-   unmounted (auth runs before routing), a Gateway assertion a **different shipped screen** satisfied,
-   and a `403 STEPUP_REQUIRED` passkey challenge counted as a failed request.
+   anchor occurs **exactly once** and print the byte delta.
+4. ⛔ **AN ORACLE THAT CANNOT SEE THE DEFECT IS NOT AN ORACLE.** Worked example from this session: the
+   "a 422 is not queued" probe asserts **the queue's CONTENTS**, never just the status line — a build
+   that queued the voucher AND printed the error would satisfy a status-line assertion while being the
+   worst of both outcomes.
+5. ⛔⛔ **A FIXED SLEEP IN FRONT OF AN ASSERTION IS A FLAKE, AND IT LIES IN THE DANGEROUS DIRECTION.**
+   Two probes written that way reported false DATA-LOSS claims this session ("the queue did not survive
+   a reload"; "the commit wrote nothing") — both were the probe being early. **A probe that says
+   "your books are gone" must be certain.** Poll.
 6. ⚠️ **macOS COMPOSES Option+<letter>.** Drive every Alt binding with the harness's `altMac("x")`,
-   and add the composed character to `normalize.test.ts`'s `MAC_COMPOSED` table.
+   and add the composed character to `normalize.test.ts`'s `MAC_COMPOSED` table (Alt+Q → `œ`).
 7. ⚠️ **DRIVE ON A THROWAWAY COMPANY, NEVER `Demo Traders`**, and tear it down with the
-   catalog-derived sweep (`drive-d-reconciliation.mjs` is the copy-me). ⛔ **Never `DELETE FROM
-   company` alone** — it strands ACL rows and `/v1/me` then answers 500 for **every** session.
+   catalog-derived sweep. ⛔ **Never `DELETE FROM company` alone** — it strands ACL rows and `/v1/me`
+   then answers 500 for **every** session. ⛔ **And wrap the whole drive in one `try` so a throw still
+   reaches the teardown**: a drive that died after 19 green probes leaked a tenant this session.
 8. **Assert a PROPERTY, not a list.**
 9. ⛔ **USE `/usr/bin/grep` WHENEVER AN ABSENCE IS LOAD-BEARING.** The shell's `grep` is a `ugrep`
    shim that silently skips files it judges binary, and one NUL byte is enough — it once hid 8,672
    lines. This repository's handoffs use `grep … -> EMPTY` as evidence that something is unwired.
 10. ⛔ **VERIFY, DO NOT INHERIT — including this file, and including any COUNT in it.** §0 exists
-    because that rule was broken by the session that wrote this one.
+    because that rule was broken by the session that wrote the first version of this file.

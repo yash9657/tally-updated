@@ -322,6 +322,26 @@ export const TALLY_IMPORT_LABEL = "Import from Tally";
 export const RECONCILIATION_LABEL = "Reconciliation Queue";
 
 /**
+ * The Gateway entry that opens the OFFLINE OUTBOX (track D).
+ *
+ * ⛔ IT MUST BE MATCHED BEFORE THE canonicalReportName FALLBACK, exactly as the
+ * three labels around it must, or selecting it pushes a `report` frame named
+ * "Offline Outbox" that announces a built, reachable screen is "not available in
+ * this build".
+ *
+ * ⚠️ CHECKED FOR THE COLLISION THAT COST THE LABEL ABOVE TWO BROWSER RUNS. The
+ * Gateway is driven by typing into its search box, so a new label that is a
+ * SUBSTRING of a shipped one silently opens the shipped one. Measured against
+ * GatewayScreen's list — Vouchers, Bill Inbox, Query, Day Book, Balance Sheet,
+ * Profit & Loss A/c, Stock Summary, Bank Reconciliation, TDS Challans, Import
+ * from Tally, Print Templates, Reconciliation Queue, the three cost screens, the
+ * three T3 screens, the four payroll ones, Users & Roles, Display More Reports —
+ * and against REPORT_NAMES. "Offline Outbox" is a substring of none of them and
+ * contains none of them. ⛔ CHECK BOTH LISTS BEFORE ADDING A LABEL.
+ */
+export const OFFLINE_OUTBOX_LABEL = "Offline Outbox";
+
+/**
  * The Gateway entry that opens the PRINT TEMPLATES screen (track C).
  *
  * ⛔ IT MUST BE MATCHED BEFORE THE canonicalReportName FALLBACK, which falls back
@@ -1011,6 +1031,18 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
           stack.push({ screen: "reconciliation" });
           return { stack };
         }
+        // "Offline Outbox" drills into the queue this machine holds (track D).
+        // Ordering as above: BEFORE the canonicalReportName fallback, which would
+        // otherwise push a report frame named "Offline Outbox" — and there is no
+        // such report, so it would render "not available in this build" over a
+        // screen that is the only way to see un-posted work.
+        if (
+          active.selectedItem?.toLowerCase() ===
+          OFFLINE_OUTBOX_LABEL.toLowerCase()
+        ) {
+          stack.push({ screen: "offline-outbox" });
+          return { stack };
+        }
         // "Print Templates" drills into the per-company document layouts (track
         // C). Ordering as above: BEFORE the canonicalReportName fallback, which
         // would otherwise push a report frame named "Print Templates".
@@ -1221,6 +1253,19 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
       // Alt+R — the refused-changes queue. pushOnce so pressing it twice does not
       // stack two frames, the same treatment every other reader screen gets.
       return pushOnce("reconciliation");
+    }
+
+    case "offlineOutbox": {
+      // Alt+Q — the offline outbox. pushOnce so pressing it twice does not stack
+      // two frames, the same treatment every other reader screen gets.
+      //
+      // ⛔ REACHABLE FROM A HALF-KEYED VOUCHER, DELIBERATELY, and this is the one
+      // global where that matters most. The moment an operator most wants this
+      // screen is immediately after an accept failed — while the form is still
+      // full — because that is when they need to know whether their work was
+      // kept. Holding the key back on voucher screens would hide the answer at
+      // exactly the moment it is asked for. Esc brings them straight back.
+      return pushOnce("offline-outbox");
     }
 
     case "dataScreen": {

@@ -13,6 +13,7 @@ import {
   type AuthUser,
 } from "../api/auth";
 import { clearPersistedCompanyId } from "../app/CompanyContext";
+import { clearOutboxStores } from "../offline/store";
 import { stepUp as runStepUp } from "./webauthn";
 
 /**
@@ -227,6 +228,22 @@ export function AuthProvider({
     // the company id MUST go too — otherwise the next user hydrates this user's
     // company, gets a 403, and CompanyContext silently mints them a new one.
     clearPersistedCompanyId();
+    // ⛔⛔ AND THE OFFLINE OUTBOX, FOR THE SAME REASON AND A SHARPER ONE:
+    // un-committed vouchers are UNENCRYPTED BOOKS in this browser's storage
+    // (`offline/store.ts` says so, and the outbox screen tells the operator).
+    // Leaving them keyed to a subject nobody is signed in as is how one
+    // operator's un-posted invoices outlive their session on a shared
+    // back-office PC — and the next person to sign in could commit them.
+    //
+    // ⛔ `clearOutboxStores` DOCUMENTED THIS RULE FROM THE DAY IT WAS WRITTEN AND
+    // NOTHING CALLED IT: `/usr/bin/grep -rn "clearOutboxStores" src/ | grep -v
+    // ^src/offline/` was EMPTY. The header was a promise, not a behaviour.
+    //
+    // ⚠️ FIRE-AND-FORGET ON PURPOSE. `signOut` is synchronous (it must be — it is
+    // called from a click and from a 401 handler), and awaiting IndexedDB here
+    // would either make it async everywhere or strand a signed-out operator
+    // behind a storage error. The clear is itself best-effort and never throws.
+    void clearOutboxStores();
     setStepUpState("idle");
     commit(null);
   }, [commit]);

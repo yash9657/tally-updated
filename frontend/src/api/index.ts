@@ -14,6 +14,9 @@ export {
   setSessionFetch,
   currentSessionFetch,
   ApiError,
+  // ⛔ The transport's "the books never saw this" signal — the ONE error the
+  // offline outbox is allowed to queue on. See http.ts.
+  NetworkError,
   type HttpClient,
   type HttpClientOptions,
 } from "./http";

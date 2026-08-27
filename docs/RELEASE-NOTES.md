@@ -7,6 +7,71 @@ what was wrong; this file records what a person will notice.
 
 ---
 
+## Alt+Q: a voucher the server could not be reached to save is now KEPT, not lost
+
+**Applies to:** every company. **Feature:** track D (offline entry, first half).
+
+### What changes
+
+Until now, pressing Ctrl+A when the connection was down lost the voucher: you got an error and
+an empty form. Now that voucher is **kept on this machine** and `Alt+Q` — or
+**Gateway of Tally > Offline Outbox** — shows it, with one button that sends the whole queue to
+the books when you are back online.
+
+### ⛔ WHAT IS QUEUED, AND WHAT IS NOT. THIS IS THE PART TO READ.
+
+A voucher is queued **only when the server could not be reached at all**.
+
+⛔ **A voucher your books REFUSED is never queued.** A closed period, a permission you do not
+hold, an unbalanced entry, an error from the server of any kind — those are reported on the
+voucher screen, with the reason, and there is nothing waiting in the outbox afterwards. That is
+deliberate: being told your invoice is safely queued when it was actually rejected is the one
+failure here that costs money, because you would walk away and nobody would ever be billed.
+
+**So if the outbox is empty after a failure, the failure was a refusal, and the reason is on the
+voucher screen.**
+
+### The number on a queued voucher is NOT a voucher number
+
+A queued voucher shows a **provisional** number like `INV/2026-27/PROV-<machine>-3`. It contains
+the word `PROV` on purpose: it is not a document number and must not be quoted to a customer as
+one. The real number is allocated by the server when the voucher commits — and the outbox then
+shows **both**, for the rest of your session, so if you did read a provisional number out to
+somebody you can go back and correct it.
+
+⚠️ A queued voucher is in no register, no report and not in the Day Book. It cannot be — it is
+not in the books yet.
+
+### The whole queue is sent as ONE write, and that is on purpose
+
+Not one voucher at a time. Two reasons: a back-dated cutoff judges a batch as a unit (so **one
+voucher dated inside a closed period refuses the entire batch** — that is why each row has a
+Discard button, so you can drop or re-date the offending one), and a passkey prompt is charged
+once per write, so the whole outbox costs **one** prompt instead of one per voucher.
+
+⛔ **If a commit is refused as a whole, nothing was rejected voucher by voucher and everything is
+still queued exactly as you keyed it.** The screen says so before it says anything else. Do not
+re-key: fix or discard the row it names and commit again.
+
+### Two things you are entitled to know
+
+1. ⛔ **The queue is stored unencrypted in this browser.** Anyone who can use this browser profile
+   can read the vouchers in it. Encrypting it here would be theatre — the key would sit in the
+   same place as the data — so instead it is scoped to you and this company, it is **cleared when
+   you sign out**, and the screen says all of this on its face. It is not a filing cabinet:
+   anything not committed by sign-out is gone.
+2. ⚠️ **If a connection dropped WHILE a voucher was being sent, that voucher may already have
+   reached the books.** Nothing your browser can see tells the two apart. Check the Day Book for
+   that date before committing if you suspect it.
+
+### ⛔ What this still does NOT do
+
+**You cannot start the application without a network.** This helps when a connection drops during
+a session you already have open; it does not yet let you open the app on a train. The F11 features
+screen says so, and that row will not read "on" until it is true.
+
+---
+
 ## Alt+R: the changes your books refused are now visible — and clearable
 
 **Applies to:** every company. **Feature:** track D (first half).

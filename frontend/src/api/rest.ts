@@ -1244,7 +1244,32 @@ export function createRestClient(
       // judges the batch as a unit and a step-up is charged once per write, so
       // draining row by row is not a smaller version of this — it is a different
       // and worse behaviour.
-      return http.post<SyncCommitResponse>(`${company(companyID)}/sync/commit`, { intents });
+      //
+      // ⛔⛔ `wireVoucher` ON EVERY PAYLOAD, AND ITS ABSENCE HERE WAS A REAL DEFECT
+      // FOUND IN A BROWSER. `SyncIntent.payload` IS a `VoucherRequest` — the same
+      // type the online path posts, deliberately, so the server can decode both
+      // with the single `buildVoucherInput` translator. That equivalence cuts both
+      // ways: it also needs the SAME transformation on the way out. Every
+      // `post*Voucher` above sends `wireVoucher(req)`, which maps the frontend's
+      // legible `dr_cr` ("DR"/"CR") to the backend's canonical "D"/"C"; this route
+      // sent the intents untouched.
+      //
+      // ⛔ AND IT FAILED IN THE WORST AVAILABLE WAY: not at queue time, when an
+      // operator could react, but at COMMIT time. `ledger.Debit` is "D", so a "DR"
+      // posting matched NEITHER side, was summed as a credit, and the batch was
+      // refused 422 "debit total must equal credit total". An operator could key
+      // ten invoices offline, see each one safely queued, and then find that NONE
+      // of them can ever be committed — with the outbox correctly refusing to
+      // clear, so the queue would simply never drain.
+      //
+      // ⚠️ NO UNIT TEST COULD HAVE SEEN IT. The mock client is not an HTTP client,
+      // so it never runs this adapter, and it accepts either spelling; the vitest
+      // suite proved the whole queue-and-commit flow against it and passed. The
+      // 422 appeared on the first real commit from a browser. Verifying that the
+      // pieces exist is not verifying that they compose.
+      return http.post<SyncCommitResponse>(`${company(companyID)}/sync/commit`, {
+        intents: intents.map((i) => ({ ...i, payload: wireVoucher(i.payload) })),
+      });
     },
     reconciliationQueue(companyID) {
       return http.get<ReconciliationQueueResponse>(`${company(companyID)}/reconciliation-queue`);

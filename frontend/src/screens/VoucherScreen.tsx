@@ -96,6 +96,12 @@ import {
 import { StockVoucherScreen } from "./vouchers/StockVoucherScreen";
 import { defaultGodownOf, isStockVoucherType } from "./vouchers/stockVoucher";
 import { acceptPurchaseDraft, ApiError } from "../api";
+import { VOUCHER_CLASS_LABELS } from "../api/types";
+import {
+  QueuedOfflineSignal,
+  queuedStatus,
+  useOfflineFallback,
+} from "../offline/useOfflineFallback";
 import type {
   DayBookEntry,
   FieldConfidence,
@@ -1669,6 +1675,11 @@ function AccountingVoucherScreen({
   const loadedEntry = isAlter ? (loaded?.entry ?? null) : null;
   const loadedVoucherID = loadedEntry?.voucher_id ?? null;
   const seedRef = useRef<string | null>(null);
+  /** The loaded voucher's head version, stamped by the hydration below. */
+  const loadedVersion = useRef(0);
+
+  // ⛔ THE QUEUE-OR-REFUSE JUDGEMENT. One hook, shared with StockVoucherScreen.
+  const queueOrRethrow = useOfflineFallback();
   const draftSeedRef = useRef<string | null>(null);
   const [form, setForm] = useState<VoucherForm>(emptyForm);
   /**
@@ -1796,6 +1807,11 @@ function AccountingVoucherScreen({
       .then((view) => {
         if (cancelled) return;
         seedRef.current = loadedVoucherID;
+        // ⛔ THE HEAD VERSION IS THE ONLY HONEST `base_version` FOR A QUEUED
+        // ALTER — see useOfflineFallback. An ALTER queued at base 0 parks as a
+        // CONFLICT every time, which reports this client's ignorance as if the
+        // server had moved on.
+        loadedVersion.current = view.version_no;
         setForm(formFromView(view));
       })
       .catch((err: unknown) => {
@@ -2629,7 +2645,29 @@ function AccountingVoucherScreen({
       .then((known) =>
         buildRequest().then((req) =>
           acceptVoucher(client, companyID, ctx, req).catch((err: unknown) =>
-            discloseOrphanedMasters(client, companyID, req, known, err),
+            // ⛔⛔ THE QUEUE-OR-REFUSE JUDGEMENT SITS INSIDE THIS CATCH AND NOT
+            // THE OUTER ONE, and the reason is the chain above it. `buildRequest`
+            // creates ledgers on demand; a transport failure THERE means the
+            // ledger ids in this body do not exist on the server, and queueing it
+            // would store an intent that can only ever come back "no such
+            // ledger". Only a failure of the post itself is queueable.
+            //
+            // ⚠️ AND IT RUNS BEFORE `discloseOrphanedMasters`, DELIBERATELY. That
+            // disclosure names masters this accept created and then ABANDONED — but
+            // a QUEUED voucher has not abandoned them: it will commit with those
+            // very ids. Disclosing them as orphans would tell the operator to go
+            // and delete the ledgers their queued invoice depends on.
+            queueOrRethrow(err, {
+              cls: VOUCHER_CLASS_LABELS[voucherClassForType(ctx.type)],
+              req,
+              ...(ctx.mode === "alter" && ctx.voucherID
+                ? { alter: { targetID: ctx.voucherID, baseVersion: loadedVersion.current } }
+                : {}),
+            }).catch((queueErr: unknown) =>
+              queueErr instanceof QueuedOfflineSignal
+                ? Promise.reject(queueErr)
+                : discloseOrphanedMasters(client, companyID, req, known, queueErr),
+            ),
           ),
         ),
       )
@@ -2641,12 +2679,27 @@ function AccountingVoucherScreen({
         setStatus("Saved");
       })
       .catch((err: unknown) => {
+        // ⛔ NOT AN ERROR: the voucher is queued on this machine. Checked BEFORE
+        // the generic line because QueuedOfflineSignal is an Error subclass and
+        // would otherwise render as "Error: …", which tells the operator the work
+        // they were just promised was kept has failed.
+        //
+        // ⛔ AND `savedNo` / `savedVoucherID` / `taxResult` STAY UNSET. A
+        // provisional number is not a voucher number, and a queued intent has no
+        // server-derived tax split — Ctrl+P and Alt+M read exactly those fields,
+        // so setting them would offer to print and e-mail a document that does
+        // not exist.
+        if (err instanceof QueuedOfflineSignal) {
+          setStatus(queuedStatus(err));
+          return;
+        }
         setStatus(`Error: ${err instanceof Error ? err.message : String(err)}`);
       })
       .finally(() => {
         inFlight.current = false;
       });
   }, [
+    queueOrRethrow,
     buildGstRequest,
     buildItemRequest,
     buildPlainRequest,

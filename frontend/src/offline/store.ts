@@ -38,11 +38,23 @@ import type { SyncIntent } from "../api/types";
 
 import type { KnownHeads } from "./outbox";
 
-/** Exactly what `OfflineNode.snapshot()` returns. */
+/** `OfflineNode.snapshot()`, plus the node identity that minted it. */
 export interface OutboxSnapshot {
   outbox: SyncIntent[];
   knownHeads: KnownHeads;
   seq: number;
+  /**
+   * ⛔⛔ THE NODE ID MUST PERSIST, AND THIS IS NOT TIDINESS. `NodeIdGen` is
+   * DETERMINISTIC: the same nodeID and the same call count mint the SAME uuid,
+   * and the idempotency key is `<nodeID>:CREATE:<clientVoucherID>`. So a node id
+   * derived from anything two machines share — the company, the operator's
+   * subject, a hash of both — would have the operator's laptop and the back
+   * office mint the same key for two DIFFERENT vouchers, and the server's
+   * exactly-once replay would answer `DUPLICATE` and silently drop the second.
+   * The id is therefore random per browser profile, minted once, and kept here so
+   * a reload does not mint another.
+   */
+  nodeID: string;
 }
 
 export interface OutboxStore {
@@ -108,6 +120,10 @@ function structuredCloneSnapshot(s: OutboxSnapshot): OutboxSnapshot {
     outbox: s.outbox.map((i) => ({ ...i, hlc: { ...i.hlc }, payload: { ...i.payload } })),
     knownHeads: { ...s.knownHeads },
     seq: s.seq,
+    // ⛔ FIELD-BY-FIELD, SO AN ADDITION MUST BE MADE HERE TOO OR IT IS SILENTLY
+    // DROPPED — and a dropped nodeID is re-minted on reload, which orphans every
+    // provisional number the operator has already read out loud.
+    nodeID: s.nodeID,
   };
 }
 

@@ -1,6 +1,23 @@
 # Track D — the offline entry screen: the model
 
-**Written:** 2026-08-27 · **Status:** DESIGN ANSWERED, no code written yet
+**Written:** 2026-08-27 · **Status:** ⭐ **ALL FOUR ANSWERS ARE NOW SHIPPED CODE** (see below)
+
+> **Updated 2026-08-27 (later).** Every answer in this file has been built and driven in a browser:
+> Q1's outbox is `screens/OfflineOutboxScreen.tsx` (`Alt+Q`), Q2/Q3's compare screen is
+> `ReconciliationScreen.tsx` (`Alt+R`), Q4's store is `offline/store.ts`, and §0.2's two backend gaps
+> are closed. `HANDOFF.md` §1.22 and **§1.23** are the authority on what shipped; this file remains the
+> record of WHY each answer is what it is, and it is still the thing to read before changing one.
+>
+> ⛔ **TWO THINGS IN HERE ARE NOW OUT OF DATE AS STATEMENTS OF FACT, and both are noted where they
+> appear:** §0.2's three "measured absence" greps (all three are wired now) and Q4's claim that there
+> is no client-side datastore in the app (there is — this track added the first). They are kept because
+> the absences are the EVIDENCE for the decisions, and deleting them would leave the decisions
+> unexplained.
+>
+> ⛔ **THE FIFTH OUTCOME IN §2 IS THE ONE TO RE-READ BEFORE TOUCHING THE OUTBOX SCREEN.** A whole-batch
+> refusal is a banner over an intact queue, never a per-voucher status — and §1.23.2 records a real
+> defect found downstream of it: `sync/commit` was sending `dr_cr` un-normalised, so every queued
+> voucher was refused 422 at COMMIT time while every unit test passed.
 **Prerequisite:** `HANDOFF-THE-LAST-ONE.md` §3. This file is that section's §3.2 deliverable —
 *"answer the four questions in writing; the answers are the deliverable before the code is."*
 

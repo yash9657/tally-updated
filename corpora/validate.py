@@ -117,6 +117,17 @@ KNOWN_SCREENS = {
     # `reconciliation` token, which migration 0011's coarse `allow display report`
     # cannot reach. The screen also carries a WRITE, which no report frame does.
     "reconciliation",
+    # Offline Outbox (track D) — the vouchers keyed on THIS MACHINE that the
+    # server could not be reached to post. Reached from Gateway of Tally >
+    # Offline Outbox and from Alt+Q (free: no documented TallyPrime global uses Q,
+    # because Tally has no offline outbox to have a key for).
+    #
+    # A ScreenKind rather than a report name, and here the reason is stronger than
+    # for `reconciliation` above: THERE IS NO ROUTE THAT COULD SERVE THIS LIST.
+    # The rows live in the browser's IndexedDB, never on cored, so a report frame
+    # — whose whole shape is "ask the server for rows" — could not render it even
+    # in principle. It also carries two writes: commit the queue, discard a row.
+    "offline-outbox",
     # The Bank Reconciliation Statement (T4): a bank ledger's postings with the
     # ONE editable column, Bank Date. Reached from the Gateway (TallyPrime's own
     # route is Alt+G > Banking Activities); F4 picks the account.
