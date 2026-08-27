@@ -3148,9 +3148,29 @@ a customer tries it.
 | **T15** | Export | ⚠️ Money is fixed-4 on the wire and Excel will happily eat it as a float. Emit text, not numbers, or a CSV round trip loses paisa |
 | **T16** | Per-company print templates | 0065 / 0066 reserved |
 
-### 5.5 ⛔ THE AUDIT NOBODY HAS RUN: WHICH `on` ROWS ARE LYING?
+### 5.5 ⛔ THE AUDIT — ✅ **COMPLETE. ALL 34 ROWS DRIVEN. THE REGISTER IS CLOSED.**
 
-> ## ⛔⛔ 2026-08-07, SECOND PASS: **15 of 34 ROWS DRIVEN, 10 WERE LYING, 9 FIXED.**
+> ## ⭐⭐ CORRECTED 2026-08-27. THIS SECTION SAID "15 of 34 DRIVEN" FOR THREE WEEKS AFTER IT STOPPED BEING TRUE.
+>
+> **All 34 reachable rows were driven end to end in a real browser** (16 in passes 1–2, the final 18
+> in the third pass). The audit produced **97 registered defects**, and re-derived today by PARSING
+> `HANDOFF-PARITY-AUDIT.md` §7.1's rows — that file's own rule, *never read the header* —
+> **97 REGISTERED · 97 CLOSED · 0 OPEN.**
+>
+> ⛔ **SO THERE IS NO DRIVING WORK LEFT ON THOSE 34, AND NO OPEN DEFECT BACKLOG.**
+> `HANDOFF-DEFECT-BURNDOWN.md` is **SPENT**; its "69 OPEN" header was believed by a session and
+> reported to a user as live work. ⚠️ **A count in prose is a COPY, and copies go stale — this
+> heading was the third such case in this repository.**
+>
+> ⭐ **WHAT IS ACTUALLY UNDRIVEN IS THE ROWS ADDED SINCE THE AUDIT.** `FeaturesScreen` was 47 rows
+> then and is **53** now; ten were added, of which two are renames of audited rows (row 32 split,
+> row 43 renamed). **The genuine list is SEVEN rows and it is in
+> `HANDOFF-AUDIT-THE-UNDRIVEN.md`** — `Alt+O` Tally import (the commercial blocker), `Alt+Q` outbox,
+> `Alt+R` reconciliation, `Alt+Y` backup/restore, per-company print templates, `Alt+M` e-mail, and
+> the `off` split-company row. ⚠️ Plus rows **20 / 23 / 26**, whose engines were replaced underneath
+> them by T9 and T10 after they were driven.
+
+> ### WAS: 2026-08-07, SECOND PASS: **15 of 34 ROWS DRIVEN, 10 WERE LYING, 9 FIXED.**
 > ## The worksheet is `HANDOFF-PARITY-AUDIT.md` §7. **One found defect is deliberately NOT fixed — row 20 — and its box in §7 says why.**
 >
 > The second pass drove rows **8, 11 and 20** and did three things worth carrying:
