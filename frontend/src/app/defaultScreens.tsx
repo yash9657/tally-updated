@@ -8,6 +8,7 @@ import { MembersScreen } from "../screens/MembersScreen";
 import { EditLogScreen } from "../screens/EditLogScreen";
 import { HelpScreen } from "../screens/HelpScreen";
 import { DataScreen } from "../screens/DataScreen";
+import { TallyImportScreen } from "../screens/TallyImportScreen";
 import { FeaturesScreen } from "../screens/FeaturesScreen";
 import { MasterCreateScreen } from "../screens/masters/MasterCreateScreen";
 import {
@@ -225,6 +226,9 @@ const FeaturesAdapter: ScreenComponent = () => <FeaturesScreen />;
 /** Alt+Y Data adapter: backup and restore (T14). */
 const DataAdapter: ScreenComponent = () => <DataScreen />;
 
+/** Alt+O Migrate-from-Tally adapter: the TallyPrime XML importer (T32). */
+const TallyImportAdapter: ScreenComponent = () => <TallyImportScreen />;
+
 /**
  * Build a registry pre-populated with the default screens. Agents extend the
  * returned registry; call sites that want a clean slate construct their own
@@ -341,6 +345,15 @@ export function createDefaultRegistry(): ScreenRegistry {
     // `allow display report` can never reach it, and this screen carries a
     // FORM (a file upload) besides.
     data: DataAdapter,
+    // Alt+O — MIGRATE FROM TALLY (T32). Registered by ScreenKind and NOT as a
+    // "report:…" key: the server serves the importer under the BARE `import`
+    // token, which migration 0011's coarse `allow display report` can never
+    // reach, and the screen carries a FORM (a file upload) besides.
+    //
+    // ⛔ THIS ENTRY IS ONE OF THE THREE THAT SHIP THE KEY DEAD SILENTLY. Without
+    // it the navMachine pushes a frame nothing renders, so Alt+O appears to do
+    // nothing at all — no error, no status line.
+    "tally-import": TallyImportAdapter,
     // Live, per-name report screens (override the generic fallback).
     "report:Day Book": DayBookScreen,
     "report:Trial Balance": TrialBalanceScreen,

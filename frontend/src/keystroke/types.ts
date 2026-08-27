@@ -261,7 +261,24 @@ export type ScreenKind =
    * — is absent on purpose (see the FeaturesScreen rows). Naming the screen
    * after one of its three would make the other two look like intruders.
    */
-  | "data";
+  | "data"
+  /**
+   * ALT+O — MIGRATE FROM TALLY: import a TallyPrime XML export (T32).
+   *
+   * Tally's own path is `Gateway of Tally > Import` and Alt+O is its documented
+   * global for it ("O: Import", RESEARCH.md:361, :415, :1221). The route has
+   * existed since the migration lane with NO SCREEN, so migrating meant a
+   * hand-rolled `curl` — HANDOFF.md §1.15's rule that a route table is not a
+   * surface.
+   *
+   * ⚠️ Alt+O IS ALREADY BOUND ON `bank-reconciliation`, and that is not a
+   * conflict: `resolveAction` consults `screenBindings[screen]` BEFORE the
+   * global table, so the statement import keeps the key on the one screen that
+   * knows which bank account is selected, and every other screen gets the
+   * company-level import. Both are Tally's same "O: Import" — the narrower one
+   * simply wins where it applies.
+   */
+  | "tally-import";
 
 /**
  * An in-frame overlay: a sub-screen that keeps its parent frame alive and is
@@ -651,6 +668,18 @@ export type KeymapAction =
    * report path and would be authorised as one.
    */
   | { kind: "dataScreen" }
+  /**
+   * Alt+O — MIGRATE FROM TALLY: the TallyPrime XML import screen (T32).
+   * Tally's `Gateway of Tally > Import`, RESEARCH.md:1221.
+   *
+   * ⛔ THE GLOBAL Alt+O AND THE BANK-RECONCILIATION Alt+O ARE DIFFERENT
+   * ACTIONS ON PURPOSE, and neither shadows the other by accident:
+   * `importBankStatement` is registered in RAW_SCREEN_BINDINGS for
+   * `bank-reconciliation` only, and screen bindings resolve first. A statement
+   * belongs to ONE bank account and only that screen knows which is selected;
+   * a Tally export belongs to the company, so it is the global.
+   */
+  | { kind: "tallyImport" }
   | { kind: "configure" } // F12 — screen/report Configure
   | { kind: "createMaster"; masterKind: MasterKind } // Alt+C — inline create
   /**

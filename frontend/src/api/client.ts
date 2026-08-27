@@ -1283,9 +1283,50 @@ export interface CoredClient {
   ): Promise<DeleteSecurityLevelResponse>;
 
   // Migration import (Tally-XML ingress)
+  /**
+   * Import a TallyPrime XML export into this company.
+   *
+   * ⛔⛔ `Blob` IS NOT A CONVENIENCE OVERLOAD — IT IS THE ONLY CORRECT WAY TO
+   * SEND A REAL EXPORT, AND `string` IS THE TRAP.
+   *
+   * EVERY genuine TallyPrime export is UTF-16LE with a BOM (`file -b
+   * corpora/migration/06-tallyprime-real-shapes.xml` — "Unicode text, UTF-16,
+   * little-endian, with CRLF"). Nothing hand-authored is, which is why this
+   * parameter was a `string` for as long as the only fixtures were ASCII.
+   *
+   * The obvious screen code is the destructive one:
+   *
+   *     const xml = await file.text();            // ⛔ DECODES UTF-16 AS UTF-8
+   *     await client.importTallyXML(id, xml);
+   *
+   * `File.text()` always decodes as UTF-8. Handed UTF-16LE bytes it yields a
+   * string of replacement characters interleaved with NULs, and `fetch` then
+   * re-encodes THAT as UTF-8. What reaches the server has no recognisable BOM,
+   * so `decodeTallyBytes` (internal/integration/tallyxml.go) passes it through
+   * untouched and the parse fails — on the only file shape a real customer will
+   * ever send, while every ASCII fixture keeps passing.
+   *
+   * ⚠️ AND `FileReader.readAsText` IS NOT THE SAME FUNCTION, WHICH IS WHAT
+   * MAKES THIS TRAP WORSE THAN IT LOOKS. `readAsText` runs the "decode"
+   * algorithm and DOES sniff a UTF-16 BOM, so it recovers the text correctly;
+   * `Blob.text()` is specified as a plain UTF-8 decode and strips only a UTF-8
+   * BOM. Both were measured here: `readAsText` yields "<ENVELOPE>...",
+   * `TextDecoder("utf-8")` over the same bytes yields
+   * "\uFFFD\uFFFD<\u0000E\u0000N\u0000V...". So a developer who reached for a
+   * FileReader while checking this would have concluded that sending a string is
+   * fine, and shipped the version that is not.
+   *
+   * So a caller holding a `File` MUST pass the `File` and never its `.text()`.
+   * `http.postRaw` takes `BodyInit`, so the bytes travel verbatim and the
+   * server's own sniffer does the decoding, which is the side that has been
+   * tested against real exports.
+   *
+   * `string` remains accepted because the corpus drivers legitimately hold XML
+   * they built in memory; it is not the browser path.
+   */
   importTallyXML(
     companyID: string,
-    xml: string,
+    xml: string | Blob,
     query?: ImportTallyXMLQuery,
   ): Promise<ImportTallyXMLResponse>;
 

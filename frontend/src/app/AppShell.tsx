@@ -96,6 +96,11 @@ const COMPANY_SCOPED_SCREENS = new Set<NavSnapshot["screen"]>([
   // THROWS before the screen can render anything, including the sentence
   // explaining that a restore creates a new company rather than replacing one.
   "data",
+  // T32 — MIGRATE FROM TALLY (Alt+O). It imports INTO one company, so it needs a
+  // scope for the same reason every screen above does: omit it and
+  // useCompanyID() THROWS before the screen can render anything, including the
+  // line naming the company the export is about to be posted into.
+  "tally-import",
 ]);
 
 /**
@@ -579,6 +584,12 @@ function screenTitle(snap: NavSnapshot): string {
     // other two somewhere else.
     case "data":
       return "Data";
+    // ⛔ THE TITLE NAMES TALLY. Without this case the chrome reads "Tally" — the
+    // `default` below — over a screen that is about to post somebody's whole
+    // book into the open company, which is the one screen where a wrong title is
+    // more than cosmetic.
+    case "tally-import":
+      return "Import from Tally";
     // ⛔ WITHOUT THIS CASE THE CHROME READS "Tally" — the `default` below — over a
     // screen showing a voucher's hash-chained version history. The screen itself
     // is real and honest (it renders voucher_version with tri-state chain
@@ -704,6 +715,11 @@ function hintsFor(snap: NavSnapshot): string[] {
     case "features":
       return ["Esc: Back", "F1: Help"];
     case "data":
+      return ["Esc: Back", "F1: Help"];
+    // ⛔ WITHOUT THIS CASE THE STRIP FALLS TO `default` AND ADVERTISES
+    // "Enter: Open" ON A SCREEN WITH NOTHING TO OPEN — and worse, next to a
+    // button that fires an import that cannot be undone.
+    case "tally-import":
       return ["Esc: Back", "F1: Help"];
     // ⛔ WITHOUT THIS CASE THE STRIP FALLS TO `default` AND ADVERTISES
     // "Enter: Open" ON A SCREEN WITH NOTHING TO OPEN. The edit log is a read-only

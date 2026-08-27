@@ -83,6 +83,22 @@ const RAW_BINDINGS: Record<string, KeymapAction> = {
   // combos resolve on `code` and not on `key`; drive it in a test with the
   // harness's altMac("y"), never press("Alt+y").
   "Alt+Y": { kind: "dataScreen" },
+  // Alt+O — MIGRATE FROM TALLY: import a TallyPrime XML export (T32). This is
+  // TALLY'S OWN IMPORT KEY, not an invented one: "O: Import" from the top
+  // horizontal menu (RESEARCH.md:361), and `Gateway of Tally > Import`
+  // (RESEARCH.md:415, :1221).
+  //
+  // ⛔ IT DOES NOT SHADOW THE BANK-STATEMENT IMPORT, AND THAT IS GUARANTEED BY
+  // resolveAction RATHER THAN BY LUCK: `Alt+O` is in RAW_SCREEN_BINDINGS for
+  // `bank-reconciliation`, screen bindings are consulted FIRST, so the narrower
+  // meaning wins on the one screen that has one. Both are Tally's same
+  // "O: Import"; the statement one is scoped because a statement belongs to one
+  // bank account, and a Tally export belongs to the company.
+  //
+  // ⚠️ macOS COMPOSES Option+O INTO "ø" (see normalize.test.ts, which already
+  // pins that mapping for this very combo). Combos resolve on `code`, so drive
+  // it in a test with the harness's altMac("o") and never press("Alt+o").
+  "Alt+O": { kind: "tallyImport" },
   F12: { kind: "configure" }, // Configure (screen/report settings)
   // Alt+C — create a master inline (e.g. a new ledger from a voucher field).
   // The default master is a ledger, the by-far most common inline create; the
@@ -986,6 +1002,12 @@ export function actionLabel(action: KeymapAction): string {
       // menu; naming the key after one of the two things on it would leave an
       // operator looking for restore under a different key that does not exist.
       return "Data (backup / restore)";
+    case "tallyImport":
+      // ⛔ "Import from Tally" AND NOT "Import". The label appears on the button
+      // bar and in the F1 keyboard help, next to a bank-statement import that
+      // is also reached with Alt+O — a bare "Import" would make the two
+      // indistinguishable in the one place an operator goes to tell them apart.
+      return "Import from Tally (XML export)";
     case "goto":
       return "Go To (keeps this screen)";
     case "switchTo":

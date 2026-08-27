@@ -88,6 +88,15 @@ KNOWN_SCREENS = {
     # one thing on it, restore is another, and Tally's third — Split Company
     # Data — is absent on purpose and says so on its own face.
     "data",
+    # T32 — MIGRATE FROM TALLY (Alt+O): import a TallyPrime XML export. Tally's
+    # own `Gateway of Tally > Import` (RESEARCH.md:1221) and its documented key,
+    # "O: Import" (RESEARCH.md:361). The screen has BOTH doors because Tally has
+    # both.
+    #
+    # Alt+O was already bound on `bank-reconciliation` (a bank STATEMENT import,
+    # scoped there because a statement belongs to one account) and that is not a
+    # clash: screen bindings resolve before the global table.
+    "tally-import",
     # The Bank Reconciliation Statement (T4): a bank ledger's postings with the
     # ONE editable column, Bank Date. Reached from the Gateway (TallyPrime's own
     # route is Alt+G > Banking Activities); F4 picks the account.

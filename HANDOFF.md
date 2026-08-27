@@ -917,15 +917,20 @@ The criterion is unchanged: **how much of a real business's day is blocked.**
 | **2** | ✅ **DONE — PAYROLL SCREENS** (2026-08-25). Five screens: `employees` (Alt+C create, **Alt+S salary structure + statutory election**), `payroll-run` (Ctrl+F4), `payroll-register` (prints, exports, Alt+S produces the ECR and the ESI return, Enter drills), `payroll-payslip` (prints), `payroll-form-138`. Gateway entries for four; `Ctrl+F4` stopped being `unavailable` after the whole life of the project | ⛔ **ITS PREMISE — "no refactor, pure frontend" — WAS FALSE, AND THE WAY IT WAS FALSE IS THE FINDING.** `payrolldb.SetSalaryComponent` and `SetStatutoryElection` shipped with Track 3 and had **NO ROUTE**, so an employee created over HTTP could never be paid: every pay run answered 422 *"no statutory election is in force"*. **Every payroll test in `internal/server` sets both up by calling the Go SERVICE** (handler_payroll_test.go's fixture says so in a comment), which is exactly why eight mounted, PDP-mapped, fully-tested routes stayed unusable and nothing went red. Four routes + a vocabulary route added (`handler_payroll_structure.go`), mapped to the **existing** `employee` token so migration 0035's seeded disallow covers them with no new migration. **A ROUTE TABLE IS NOT A SURFACE** — see §1.15 | Driven in a browser end to end: employee → salary → election → pay run → register → payslip → ECR + ESI + Form 138. 34/34 probes (`frontend/scripts/drive-payroll.mjs`) |
 | **3** | ✅ **DONE 2026-08-25 — THE INVENTORY LANE: T9 FIFO/LIFO, §3 goods-on-import, T10 stock groups + compound units** (§1.16) | Three costing methods chosen per item; the Tally importer brings in items, units, godowns, batches, opening positions and **quantities**; an item hierarchy whose subtotals are the whole BRANCH, and units with a base and a conversion factor. ⛔ **The lesson is rule 2 of §1.16: AN ORACLE THAT CANNOT SEE THE DEFECT IS NOT AN ORACLE** — §3 survived a whole real-file gate because a trial balance cannot see quantity | Driven in a browser three times: **21/21** valuation, **10/10** import, **27/27** groups + compound units. `verify:demo` re-pinned at 34/34 |
 | **4** | ✅ **DONE 2026-08-25 — T14 BACKUP / RESTORE** (§1.17). **Split company is a STATED REFUSAL, not a gap** — the FeaturesScreen row was split in two so the half that did not ship still says so | `Alt+Y` > Data. A gzipped JSON Lines archive of every table the **live schema** says is this company's, sharing ONE enumeration with the teardown harness (`internal/platform/tenant`) — the plan said "reuse the testdb census" and `archtest` FORBIDS that, so it was extracted. ⛔ **A restore CREATES a company and cannot replace one**: there is no delete path for a company anywhere, and keys are PRESERVED because the hash chain contains them | Round trip that **DROPS the original**: census row contents + `VerifyChain` + 3 reports byte-identical. `drive-t14-data.mjs` **25/25** in a browser. `verify:demo` re-pinned 34/34 |
-| **5** | **OFFLINE ENTRY SCREEN** (§5.2) | The differentiator against Tally's LAN-only model, and it is built | A screen **plus a decision**: how does a browser present queued intents? |
-| **6** | **T8 multi-currency** → **T11 budgets** → **T13 interest** → **T12 GSTR-9** → **T16 print templates** → **SSO/OIDC last** | Ordinary Tier-2 backlog. §5.4 states the one thing not to get wrong in each | |
+| **5** | ✅ **DONE 2026-08-26 — T32 THE MIGRATE-FROM-TALLY SCREEN** (§1.18). `Alt+O`, and **Gateway of Tally > Import** — Tally has both doors, so this has both | ⛔ **NO GO CODE CHANGED**: the route, its `routeAction` arm, its vocabulary token and its 128 MiB cap were all already right, and nothing in the product could reach them — the fifth time this repo has shipped an engine with no front door. ⛔ **The screen sends the `File` and never `await file.text()`**: every real export is UTF-16LE, and `Blob.text()` is a UTF-8 decode, so the one-liner destroys the only file shape a customer sends while every ASCII fixture keeps passing. The report puts `stock_lines` and `opening_positions` level with the voucher count, because a trial balance cannot see quantity | The byte-identity PAIR — UTF-16 red, ASCII **green** — under an executed `.text()` mutation, plus 9 more mutations each predicted then observed. `drive-t32-import-screen.mjs` **25/25** in a browser, figures read off the page and cross-checked against the database. `verify:demo` re-pinned 34/34 |
+| **6** | **OFFLINE ENTRY SCREEN** (§5.2) | The differentiator against Tally's LAN-only model, and it is built | A screen **plus a decision**: how does a browser present queued intents? |
+| **7** | **T8 multi-currency** → **T11 budgets** → **T13 interest** → **T12 GSTR-9** → **T16 print templates** → **SSO/OIDC last** | Ordinary Tier-2 backlog. §5.4 states the one thing not to get wrong in each | |
 
 > ### ⛔⛔ AND THE TWO THINGS THAT ARE NOT TRACKS AND OUTRANK MOST OF THIS LIST
 >
-> **T32 — a real Tally XML export (§10 item 1).** `POST /import/tally-xml` EXISTS and **has never
-> met a real Tally file.** A business cannot switch if it cannot bring its books, so this is the
-> commercial blocker and it is not on the FeaturesScreen at all. **It costs one email.** Ask on day
-> one; do not discover the importer is wrong after a customer tries it.
+> **T32 — a real GST-REGISTERED Tally XML export (§10 item 1). STILL OUTSTANDING, AND NOW THE ONLY
+> HALF LEFT.** The SCREEN shipped 2026-08-26 (§1.18): `Alt+O` imports a TallyPrime export, and the
+> FeaturesScreen row reads On. What has **never arrived** is a real export from a **GST-registered**
+> company — the file the importer was fixed against is a grain trader, GST-free and zero-rated, so
+> `classifyTaxLedger`, `inferRate` and the GSTR-1 B2B join have never met real GST data. ⛔ **DO NOT
+> TOUCH THOSE THREE UNTIL IT ARRIVES**; speculative changes destroy the evidence it will give you.
+> A business cannot switch if it cannot bring its books, so this is still the commercial blocker.
+> **It costs one email**, and the screen now turns receiving it from an afternoon into ten minutes.
 >
 > **IRP / GSTN / e-Way Bill sandbox credentials (§10 item 4).** ⛔ **If these arrive, the IRN screen
 > stops being groundwork and becomes a filing** — and the e-way bill becomes real too, **with no
@@ -1222,6 +1227,142 @@ and **both halves must independently balance** — that is the gate, not "it ran
 Also absent: no restore under a NEW company id (the rewrite machinery exists and is tested —
 `tenant.RewriteSpecialKey` — but nothing calls it with a different id), no scheduled or server-side
 backups, and the archive is not encrypted at rest beyond being a file the operator holds.
+
+### 1.18 ✅ T32 THE MIGRATE-FROM-TALLY SCREEN — DONE AND DRIVEN. `Alt+O` IMPORTS A REAL EXPORT.
+
+> ## ⛔ THE BUG WAS A MISSING FRONT DOOR, AND IT IS THE FIFTH TIME.
+>
+> `POST /import/tally-xml` had been green in `internal/migration`, in `internal/server` and in a
+> browser drive for a whole lane, and **no operator could reach it**: `grep -rn 'tally-xml'
+> frontend/src/` returned three hits, all in `api/`, and nothing called the client method.
+> Migrating a customer's books meant hand-rolling a `curl` with the right content type.
+>
+> Order processing (whole backend, no screen), payroll (`SetSalaryComponent` had no route, so every
+> pay run answered 422), T14's census (lived in `testdb`, unreachable), print templates
+> (`SaveOverrides` written, tested, **no route**) and now this. **A ROUTE TABLE IS NOT A SURFACE.**
+
+**Shipped:** this session. `HANDOFF-T32-IMPORT-SCREEN.md` is **deleted** — it was written to be
+retired. ⛔ **NO GO CODE CHANGED.** The route, its `routeAction` arm, its vocabulary token and its
+128 MiB body cap all already existed and all were correct.
+
+| Slice | What is now true | Proof |
+|---|---|---|
+| **0** | `CoredClient.importTallyXML` takes `xml: string \| Blob`. `http.postRaw` already declared `BodyInit`, so this was a **type** change in one file and the other two inherited it | The byte-identity property below, both halves |
+| **1** | `Alt+O` → the **`tally-import`** screen, plus **Gateway of Tally > Import**. Tally has both doors (`RESEARCH.md:361`, `:415`, `:1221`), so the screen has both | 26 vitest cases; nine EXECUTED mutations, each predicted then observed |
+| **2** | The report puts **`stock_lines` and `opening_positions` under their own heading, level with the accounting**, renders every warning in full, lists the masters CREATED by name, and closes with what a clean report still does not prove | `drive-t32-import-screen.mjs` **25/25**, figures read OFF THE PAGE and cross-checked against the database |
+| **3** | Every refusal is the SERVER'S sentence — the whole-import abort, the 403, the back-dated cutoff, the 413 | Four cases pinning the sentence, not the status |
+| **4** | The FeaturesScreen row reads **On**, names the key, and the *"there is NO SCREEN for it"* clause is **deleted** — the rest of that hard-won note is untouched | Two mutations: the badge-only flip and the note-only flip each fail a different assertion |
+
+#### ⛔⛔ THE ONE TECHNICAL RISK, AND THE THING NOBODY WILL RE-DERIVE
+
+**EVERY REAL TALLYPRIME EXPORT IS UTF-16LE WITH A BOM.** `file -b corpora/migration/06-*.xml` and
+`07-*.xml` both say so; `01`–`05` are ASCII because they were hand-authored before a genuine file
+arrived. The obvious screen code is the destructive one:
+
+```ts
+const xml = await file.text();          // ⛔ DECODES UTF-16 BYTES AS UTF-8
+```
+
+`Blob.text()` is specified as a plain UTF-8 decode. Handed UTF-16LE it yields replacement characters
+interleaved with NULs, `fetch` re-encodes **that** as UTF-8, and what reaches the server has no
+recognisable BOM — so `decodeTallyBytes` never fires and the parse fails **on the only file shape a
+customer will ever send**, while every ASCII fixture keeps passing. The screen sends the `File`.
+
+> ### ⚠️ AND `FileReader.readAsText` IS NOT THE SAME FUNCTION. MEASURED, IN BOTH DIRECTIONS.
+>
+> ```
+> FileReader.readAsText(fixture 06)  ->  "<ENVELOPE>\r\n <HEADER>..."      (BOM-sniffs, CORRECT)
+> TextDecoder("utf-8").decode(same)  ->  "��<\0E\0N\0V\0E\0L..."  (what .text() does)
+> ```
+>
+> ⛔ **So a developer who checked this with a FileReader would have concluded that sending a string
+> is fine, and shipped the version that is not.** `readAsText` runs the "decode" algorithm and
+> honours a UTF-16 BOM; `Blob.text()` runs "UTF-8 decode" and honours only a UTF-8 one.
+
+#### ⛔ THE PROOF IS A PAIR, AND THE SECOND HALF IS THE POINT
+
+The oracle is **"the bytes that would go on the wire are the bytes on disk"**, modelled for both
+payload shapes (`Blob` → its own bytes; `string` → `fetch`'s UTF-8 encoding). Under the mutation:
+
+| Fixture | Under `.text()` | Why it matters |
+|---|---|---|
+| `06`/`07` UTF-16LE | **RED** | this is the defect |
+| `01` ASCII | **GREEN** | ⛔ **this is what proves the fixture choice is load-bearing rather than incidental.** A suite that had only ever driven `01`–`05` would have been green against a screen that destroys every real export |
+
+⛔ **ASSERTING `instanceof Blob` IN BOTH WOULD HAVE PROVED NOTHING.** Both would go red, which looks
+identical to "the ASCII file is equally destroyed" — and it is not.
+
+#### ⛔ THREE THINGS THE MUTATION PROOFS FOUND, EACH IN THE PROBE RATHER THAN THE PRODUCT
+
+1. ⛔ **MY OWN SUITE WAS BLIND TO A REGISTRATION POINT.** Deleting `"tally-import"` from AppShell's
+   `COMPANY_SCOPED_SCREENS` broke **nothing** — 25 of 25 still passed. That set is consulted only
+   when `company === null`, and every test handed the provider an `initialCompany`. Without the entry
+   the screen renders company-less and `useCompanyID()` **throws during render**, taking the shell
+   down. There is now a company-less test (`CompanyProvider` does not bootstrap unless asked, so it
+   is deterministic). ⚠️ **THE SAME HOLE IS STILL OPEN FOR THE OTHER FOURTEEN SCREENS IN THAT SET** —
+   nothing in this repo covered the company-less case for any of them.
+2. ⛔ **THE FIRST `.text()` MUTATION WAS VACUOUS — IT FAILED FOR THE WRONG REASON.** jsdom's `File`
+   has **no `text()`, no `arrayBuffer()` and no `stream()`**, so the screen caught a `TypeError` and
+   16 tests went red because no import ever fired. That is a refusal for the wrong reason (§1.17
+   rule 3). The mutation now simulates what `Blob.text()` does — a `TextDecoder("utf-8")` over the
+   real bytes — and produces exactly 2 red and 24 green.
+3. ⚠️ **AND A PROBE THAT FAILED ON THE SCREEN BEING RIGHT.** The drive compared the rendered file
+   size against `"15328"` while the screen correctly renders `toLocaleString()` — `"15,328 bytes"`.
+
+#### ⚠️ THE `Alt+O` PRECEDENCE CLAIM, AND WHY IT NEEDED A BROWSER
+
+`Alt+O` was **already bound** — to `importBankStatement`, in `RAW_SCREEN_BINDINGS` for
+`bank-reconciliation` only. Adding a **global** `Alt+O` is safe **because `resolveAction` consults
+`screenBindings[screen]` before the global table**, and that is a precedence claim, not a fact about
+this screen. If it ever inverts, `Alt+O` on the reconciliation screen opens a company-wide XML
+importer over a bank statement — and both are called "import".
+
+⛔ **AND THE BROWSER CHECK NEEDED A SEEDED BANK LEDGER OR IT WOULD HAVE BEEN VACUOUS.** The drive's
+tenant is created empty and the export carries no bank ledger, so the reconciliation screen shows
+`brs-no-banks` and `Alt+O` correctly answers *"select a bank account first"* — a pass for the wrong
+reason. One ledger is seeded over HTTP and `brs-as-on` is asserted as the control **before** the key
+is pressed.
+
+#### What the screen deliberately does NOT do
+
+1. ⛔ **It never parses or pre-validates the XML.** The encoding sniffing, the
+   `IMPORTDATA/REQUESTDESC/REQUESTDATA` nesting, the dated GST registrations and the
+   `ACTION=Alter|Delete` GUID routing are server-side and hard-won. A client-side "fail fast" is a
+   second implementation that will disagree, and the first thing it would get wrong is the encoding.
+   A test pins this: a file that is not XML at all still reaches the server.
+2. ⛔ **No progress bar.** The route is a single POST that returns when the import has committed;
+   there is no progress channel, so a percentage would be invented. A spinner is honest.
+3. ⛔ **No `Ctrl+A`.** There is nothing to "accept" — the one action is an import that cannot be
+   undone, behind a named button. A generic Accept would fire an irreversible write from the key an
+   operator presses reflexively on every form in the product.
+4. ⛔ **The mock was NOT taught to parse Tally XML.** It still returns honest zeroes and says so.
+   Screen tests that need a populated report inject a stub client, as `DataScreen.test.tsx` does.
+
+#### The map
+
+```
+frontend/src/api/client.ts                        xml: string | Blob, and the WHOLE argument for it
+frontend/src/screens/TallyImportScreen.tsx        sends the File; the report; the server's sentence
+frontend/src/screens/TallyImportScreen.test.tsx   26 cases; the byte-identity PAIR is the first two
+frontend/src/keystroke/keymaps/tallyprime.ts      the GLOBAL Alt+O, beside the screen-scoped one
+frontend/src/screens/GatewayScreen.tsx            "Import from Tally" — Tally's own path
+frontend/scripts/drive-t32-import-screen.mjs      25/25. Creates AND tears down its own tenant.
+corpora/migration/07-tallyprime-inventory-shapes.xml   UTF-16LE. 2 vouchers, 4 movements, 3 openings
+```
+
+**The tests that tell you fastest if you broke something:**
+
+```
+cd frontend && pnpm vitest run src/screens/TallyImportScreen.test.tsx src/screens/FeaturesScreen.test.tsx
+cd frontend && pnpm exec tsc --noEmit        # ⚠️ make verify does NOT run this; it caught 8 real errors here
+node frontend/scripts/drive-t32-import-screen.mjs      # needs cored :8087 + vite :5173
+```
+
+⛔ **AND THE THING TO ASK FOR NOW: THE GST-REGISTERED TALLY EXPORT (§10 item 1).** This screen is
+what turns receiving it from an afternoon into ten minutes. `classifyTaxLedger`, `inferRate` and the
+GSTR-1 B2B join have **still never met real GST data** — the file the importer was fixed against is a
+grain trader, GST-free and zero-rated. **Do not touch those three until it arrives**; speculative
+changes now destroy the evidence it will give you.
 
 ### 1.12 ⛔ HOW TO PARALLELISE THIS — WHAT WORKED LAST SESSION, AND WHAT MUST NOT BE SPLIT
 

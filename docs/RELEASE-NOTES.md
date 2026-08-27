@@ -7,6 +7,73 @@ what was wrong; this file records what a person will notice.
 
 ---
 
+## Alt+O: your books can now be brought over from Tally, from the keyboard
+
+**Applies to:** every company. **Feature:** T32.
+
+### What changes
+
+`Alt+O` opens **Import from Tally** — and so does `Gateway of Tally > Import`, because
+that is where a Tally operator looks for it. Choose the XML file TallyPrime wrote (export
+the whole company: Masters *and* Transactions) and press **Import this file**.
+
+The importer has existed for a while. What did not exist was any way to reach it: bringing
+a company over meant somebody hand-rolling an HTTP request with the right content type. It
+is now a screen.
+
+### ⛔ Read the stock figures, not just the voucher count
+
+The report shows **two things side by side**: the accounting (vouchers posted, altered,
+deleted, and skipped because they were already imported) and **the goods** — how many stock
+movements were written, and how many opening positions.
+
+⛔ **That second pair is the only thing that tells you your stock arrived.** The rupee value
+of a sale lives in the ledger entries, so an import that read every stock line and dropped
+it would give you books that balance perfectly and a **Stock Summary with nothing in it**.
+`Stock movements written: 0` on a file full of invoices is the tell, and the screen says so
+in those words.
+
+The screen also flags a subtler case: **no opening positions alongside real stock movement**
+is a warning, not a clean result. It means the export carried no opening stock, so every
+item starts at nil and any sale of goods bought before the export window has nothing behind
+it.
+
+### ⛔ Every warning is shown in full, and an empty list is not a clean bill of health
+
+The importer carries on past things it cannot represent exactly rather than refusing the
+whole file — an opening bill-wise breakup that does not add up to its own balance, a ledger
+whose Tally group was not in the export, a compound unit (`1 BOX = 12 BAG`) stored in its
+own unit rather than flattened, Tally's location *tree* recorded as flat locations. Each of
+those is listed on the page, in the importer's own words. **A total looks right either way.**
+
+> **Never treat an empty warning list as the only thing to check, and never treat a
+> balanced trial balance as proof the migration worked: check the Stock Summary.**
+
+### Before you press the button
+
+- **The import goes into the company that is open, and it cannot be undone.** The screen
+  names that company above the file picker. Every voucher it writes goes through the same
+  immutable ledger path as one you key by hand, so nothing can remove them afterwards.
+- **An export with no stock-item masters is refused outright**, naming both ways forward.
+  Such a file carries no opening stock, so the first sale of goods bought before the export
+  window has nothing to issue — and the importer will neither invent a quantity nobody
+  stated nor switch your negative-stock setting on your behalf.
+- **Importing needs permission.** It is a write, so it asks for your passkey, it respects a
+  closed-period cutoff, and no seeded level below Owner is allowed it. If you are refused,
+  the screen shows the reason it was given rather than "import failed".
+- Files up to **128 MB** are accepted. A whole-company export takes a while and the page
+  will not show a percentage — there is nothing honest to show one from. It answers once,
+  when the import has committed.
+
+### One thing worth knowing if you are testing this
+
+Real TallyPrime exports are UTF-16 encoded. The screen sends the file to the server as
+bytes and lets the server work out the encoding, which is why a genuine export imports
+correctly. If you have been round this loop before with a tool that mangled non-ASCII names
+in a Tally export, that is the bug this avoids.
+
+---
+
 ## Alt+Y: a company can now be backed up, and an archive can be restored — as a NEW company
 
 **Applies to:** every company. **Feature:** T14.

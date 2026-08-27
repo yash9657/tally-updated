@@ -21,6 +21,16 @@ const GATEWAY_MENU = [
   // needs a door rather than a route only cURL can reach.
   "TDS Challans",
 
+  // Import from Tally (T32) — the migration importer. TallyPrime's own path is
+  // Gateway of Tally > Import (RESEARCH.md:1221), so this is the documented
+  // door and Alt+O is the documented key; the screen has both because Tally has
+  // both. It was built server-side with NO surface at all, so migrating a
+  // customer's books meant hand-rolling a curl.
+  //
+  // ⚠️ It is NOT in Alt+G Go To and cannot be: that picker is generated from
+  // ["Vouchers", ...REPORT_NAMES] and this is not a report name.
+  "Import from Tally",
+
   // ---- THE THREE COST SCREENS (T2).
   //
   // "Cost Centres" is the MASTERS door — the axes of analysis (Department,

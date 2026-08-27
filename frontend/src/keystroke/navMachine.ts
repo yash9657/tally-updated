@@ -277,6 +277,28 @@ export const BANK_RECON_LABEL = "Bank Reconciliation";
 export const TDS_CHALLANS_LABEL = "TDS Challans";
 
 /**
+ * The Gateway entry that opens the MIGRATE-FROM-TALLY import screen (T32).
+ *
+ * Tally's own path is `Gateway of Tally > Import` (RESEARCH.md:1221), so this
+ * door is the documented one and not a convenience. The screen also has Tally's
+ * documented KEY (Alt+O), and it has both because Tally has both — unlike the
+ * Data screen (Alt+Y), which deliberately has no Gateway entry because Alt+Y is
+ * global in Tally too.
+ *
+ * ⚠️ Alt+G Go To IS NOT A THIRD DOOR AND CANNOT BE MADE ONE HERE. That picker is
+ * hard-wired to ["Vouchers", ...REPORT_NAMES], so every screen that is not a
+ * report name is absent from it — which is exactly why the Gateway entry is
+ * needed rather than optional.
+ *
+ * Same ordering requirement as every label above: it MUST be matched BEFORE the
+ * canonicalReportName fallback. The trap is milder than Bank Reconciliation's
+ * ("Import from Tally" is not a report name) but the fallback would still push a
+ * report frame with that literal name, which renders as a screen politely
+ * announcing that a built, reachable importer is "not available in this build".
+ */
+export const TALLY_IMPORT_LABEL = "Import from Tally";
+
+/**
  * The Gateway entries that open the three T2 COST screens.
  *
  * ⛔ SAME ORDERING REQUIREMENT AS EVERY LABEL ABOVE, and it bites harder here
@@ -931,6 +953,16 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
           stack.push({ screen: "tds-challans" });
           return { stack };
         }
+        // "Import from Tally" drills into the T32 migration import screen.
+        // Ordering as above: BEFORE the canonicalReportName fallback, which
+        // would otherwise push a report frame named "Import from Tally".
+        if (
+          active.selectedItem?.toLowerCase() ===
+          TALLY_IMPORT_LABEL.toLowerCase()
+        ) {
+          stack.push({ screen: "tally-import" });
+          return { stack };
+        }
         // The three T2 COST screens. Ordering as above, and load-bearing: two of
         // these labels ARE report names on the server, so the fallback would push
         // a `report` frame that renders "not available in this build" over a
@@ -1101,6 +1133,25 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
 
     case "features": {
       return pushOnce("features");
+    }
+
+    case "tallyImport": {
+      // Alt+O — MIGRATE FROM TALLY (T32). pushOnce so pressing it twice does not
+      // stack two copies, the same treatment Help, Features and the Data screen
+      // get.
+      //
+      // ⛔ THIS CASE IS ONE OF THE THREE REGISTRATION POINTS THAT SHIP THE KEY
+      // COMPLETELY DEAD WITH NO ERROR AND NO STATUS LINE (the keymap binding and
+      // the screen-registry entry are the others). It is mutation-proved
+      // separately in TallyImportScreen.test.tsx for that reason.
+      //
+      // ⚠️ IT IS REACHABLE FROM ANY SCREEN, and unlike the voucher keys it is NOT
+      // held back on the create forms — Esc brings the operator straight back to
+      // a half-keyed voucher, and an import is a thing decided rather than
+      // navigated to. The narrower `importBankStatement` still owns Alt+O on the
+      // reconciliation screen; resolveAction gives screen bindings priority, so
+      // this global never reaches it.
+      return pushOnce("tally-import");
     }
 
     case "dataScreen": {

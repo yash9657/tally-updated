@@ -228,16 +228,23 @@ describe("F11 s.394(2) declarations", () => {
  * ⛔ THE MUTATION THIS PINS is the tempting one-line change: flip the old row to
  * "On" and move on. These assertions go red on it.
  */
-describe("F11 — backup / restore shipped, split company data did not", () => {
-  function badgeFor(namePattern: RegExp): string {
-    const cell = screen.getByText(namePattern);
-    const row = cell.closest("tr");
-    return row?.firstElementChild?.textContent?.trim() ?? "";
-  }
-  function noteFor(namePattern: RegExp): string {
-    return screen.getByText(namePattern).closest("tr")?.textContent ?? "";
-  }
+/**
+ * The row readers, at MODULE scope so more than one describe can use them.
+ *
+ * They were local to the backup/restore block; T32 needed the same two, and a
+ * second copy is how two readers of the same table quietly start disagreeing
+ * about what "the badge" is.
+ */
+function badgeFor(namePattern: RegExp): string {
+  const cell = screen.getByText(namePattern);
+  const row = cell.closest("tr");
+  return row?.firstElementChild?.textContent?.trim() ?? "";
+}
+function noteFor(namePattern: RegExp): string {
+  return screen.getByText(namePattern).closest("tr")?.textContent ?? "";
+}
 
+describe("F11 — backup / restore shipped, split company data did not", () => {
   it("the old combined row is GONE — a half-true row is the failure mode", () => {
     renderFeatures();
     expect(screen.queryByText(/^Backup \/ restore, split company data$/)).toBeNull();
@@ -269,5 +276,62 @@ describe("F11 — backup / restore shipped, split company data did not", () => {
     expect(note).toMatch(/DELIBERATELY/);
     expect(note).toMatch(/memory|RAM/i);
     expect(note).toMatch(/multi-year/i);
+  });
+});
+
+/**
+ * T32 — THE MIGRATE-FROM-TALLY ROW.
+ *
+ * ⛔ THE RULE THIS PINS is FeaturesScreen's own: a row flips in the change that
+ * gives the operator a SCREEN, not the change that gave them a route. This row
+ * read `state: "server"` for a whole lane and its note SAID SO — "there is NO
+ * SCREEN for it — an operator cannot migrate their own books from the keyboard"
+ * — which is exactly the honesty that makes flipping it meaningful now that
+ * Alt+O exists and has been driven in a browser.
+ */
+describe("T32 — Migrate from Tally reads On, and only because a key reaches it", () => {
+  it("reads On and names Tally's own key", () => {
+    renderFeatures();
+    expect(badgeFor(/^Migrate from Tally \(Alt\+O\)/)).toBe("On");
+  });
+
+  it("the note no longer claims there is NO SCREEN — that clause had to go", () => {
+    renderFeatures();
+    const note = noteFor(/^Migrate from Tally \(Alt\+O\)/);
+    // ⛔ THE ONE ASSERTION THAT CANNOT BE SATISFIED BY FLIPPING THE BADGE ALONE.
+    // A row reading "On" above a note saying no screen exists is worse than the
+    // honest "Server only" it replaced.
+    expect(note).not.toMatch(/NO SCREEN/);
+    expect(note).not.toMatch(/cannot migrate their own books/);
+    expect(note).toMatch(/Alt\+O/);
+    // Tally's own path, so an operator coming from Tally finds the door.
+    expect(note).toMatch(/Gateway of Tally > Import/);
+  });
+
+  it("...and it still carries the two things that make a migration go wrong", () => {
+    renderFeatures();
+    const note = noteFor(/^Migrate from Tally \(Alt\+O\)/);
+    // The encoding trap: the reason the screen sends bytes and not text.
+    expect(note, "the UTF-16 trap is named").toMatch(/UTF-16/);
+    // And the report guidance: vouchers_posted alone is the failure mode.
+    expect(note, "the stock figures are not optional reading").toMatch(
+      /stock movements and opening positions/i,
+    );
+    expect(note, "a balanced trial balance is not proof").toMatch(
+      /trial balance cannot see quantity/i,
+    );
+  });
+
+  it("⛔ the rest of the hard-won note SURVIVED the edit", () => {
+    renderFeatures();
+    const note = noteFor(/^Migrate from Tally \(Alt\+O\)/);
+    // Only the clause that stopped being true was replaced. Everything the
+    // migration lane learned about real exports is still here — a wholesale
+    // rewrite would have quietly dropped it, and none of it is recoverable from
+    // the code.
+    expect(note).toMatch(/IMPORTDATA\/REQUESTDESC\/REQUESTDATA/);
+    expect(note).toMatch(/PARTYGSTIN/);
+    expect(note).toMatch(/ACTION=Alter/);
+    expect(note).toMatch(/Stock Summary/);
   });
 });

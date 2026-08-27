@@ -1,6 +1,6 @@
 # HANDOFF — THE NEXT FOUR TRACKS
 
-**Written:** 2026-08-25 · **Branch:** `session/t32-and-close-7-3` · **Tree:** clean at `92694bf`
+**Written:** 2026-08-25 · **Updated:** 2026-08-26 (track A spent) · **Branch:** `session/t32-and-close-7-3`
 **Read time:** ~15 minutes. Everything below was MEASURED today; every claim has the command beside it.
 
 > ## ⛔⛔ THE ONE THING THAT DECIDES HOW BIG THIS WORK IS
@@ -9,7 +9,7 @@
 >
 > | Track | The engine | The gap |
 > |---|---|---|
-> | **A** Migrate from Tally | ✅ parses a real 84 MB TallyPrime export, posts through the ledger, imports the goods | **no screen** — migrating means `curl` |
+> | ~~**A** Migrate from Tally~~ | ✅ **DONE 2026-08-26 — `Alt+O` and Gateway > Import.** `HANDOFF.md` §1.18 | ~~no screen~~ **closed** |
 > | **B** Export to PDF | ✅ a full PDF renderer, 10 report layouts, `usePrint.ts` | Alt+E offers **csv / excel-xml only** |
 > | **C** Print templates | ✅ `SaveOverrides` is written, tested, upserts | ⛔ **NO ROUTE CALLS IT** |
 > | **D** Offline entry | ✅ sequencer, HLC, idempotency, conflict/freeze outcomes | **no client at all** |
@@ -21,6 +21,22 @@
 > **A ROUTE TABLE IS NOT A SURFACE.** Verifying that the pieces exist is not verifying that they compose.
 >
 > **Only ONE of the four (B's e-mail half) needs a decision before code. Everything else is surface.**
+>
+> ### ⛔ WHAT TRACK A COST, AND WHAT IT LEFT FOR B, C AND D
+>
+> It came in at **no Go changes**, 26 vitest cases and a 25/25 browser drive — and eleven executed
+> mutations, **three of which failed in the PROBE rather than the product.** Read `HANDOFF.md` §1.18's
+> *"three things the mutation proofs found"* before writing a probe in any track below. The two that
+> generalise:
+>
+> 1. ⛔ **A REGISTRATION POINT WITH NO TEST THAT CAN SEE IT.** Deleting the screen from AppShell's
+>    `COMPANY_SCOPED_SCREENS` broke **nothing** — that set is only consulted when `company === null`,
+>    and every test passes an `initialCompany`. **The same hole is open for the other fourteen screens
+>    in that set.** Tracks C and D both add a company-scoped screen: write the company-less case.
+> 2. ⛔ **jsdom IS MISSING MORE THAN YOU THINK.** `File.text()`, `File.arrayBuffer()`, `File.stream()`
+>    and `Blob.arrayBuffer()` are **all absent**. A mutation that reaches for one fails for the wrong
+>    reason and 16 tests go red for nothing. Read a Blob with `FileReader`; simulate `.text()` with
+>    `TextDecoder`. Track C's PDF assertions will hit this.
 
 ---
 
@@ -43,14 +59,14 @@ strings "$(ps -o command= -p "$(lsof -nP -iTCP:8087 -sTCP:LISTEN -t)" | awk '{pr
 ⛔ **VITE MUST BE ON `:5173`.** WebAuthn origin matching is exact; a vite that took `:5174` signs in
 fine and then fails every write with `PASSKEY STEP-UP FAILED`.
 
-**The gate baseline, measured 2026-08-25 at `92694bf` — these are the numbers to beat:**
+**The gate baseline, RE-MEASURED 2026-08-26 after track A — these are the numbers to beat:**
 
 | Gate | Command | Value now |
 |---|---|---|
 | backend build + vet | `cd backend && go build ./... && go vet ./...` | clean |
 | backend tests | `cd backend && go test ./... -timeout 60m` | **exit 0** |
 | typecheck | `cd frontend && pnpm exec tsc --noEmit` | clean |
-| frontend tests | `cd frontend && pnpm vitest run` | **1580 pass / 94 files** |
+| frontend tests | `cd frontend && pnpm vitest run` | **1610 pass / 95 files** |
 | live demo | `cd frontend && pnpm verify:demo "$(cat .demo-company-id)"` | **34/34** ⚠️ takes the id as an ARGUMENT |
 | corpora | `python3 corpora/validate.py` | OK (migration=6, inventory=11) |
 | everything | `make verify` | exit 0 |
@@ -60,8 +76,12 @@ other missed.
 
 ### What landed immediately before this file
 
-**T14 backup / restore** — `Alt+Y` > Data. `HANDOFF.md` **§1.17** has it in full. Read §1.17's *"three
-rules this lane paid for"* before writing a probe in any track below; they cost a session each.
+**T32 migrate from Tally** — `Alt+O`. `HANDOFF.md` **§1.18**, and the box above for what it cost.
+**T14 backup / restore** — `Alt+Y` > Data. `HANDOFF.md` **§1.17**.
+
+⛔ Read §1.17's *"three rules this lane paid for"* AND §1.18's *"three things the mutation proofs
+found"* before writing a probe in any track below. Between them they cost three sessions, and §1.18's
+first item is a hole that is **still open** for fourteen screens.
 
 ---
 
@@ -114,25 +134,19 @@ does not parse XML. Never fake a payload a real backend has never produced.
 
 ---
 
-## 2. TRACK A — MIGRATE FROM TALLY (the import screen)
+## 2. ~~TRACK A — MIGRATE FROM TALLY~~ ✅ SPENT 2026-08-26
 
-> ## ⛔ THE FULL PLAN IS `HANDOFF-T32-IMPORT-SCREEN.md`. READ THAT FILE, NOT THIS SECTION.
-> It is 382 lines, every `file:line` in it was verified to resolve, and duplicating it here is exactly
-> the rot `HANDOFF.md` §11 forbids. This section exists only to place it in the order.
+**`HANDOFF.md` §1.18 has it in full, and `HANDOFF-T32-IMPORT-SCREEN.md` is `git rm`'d** — it was
+written to be retired. `Alt+O` and `Gateway of Tally > Import` both open the screen; the FeaturesScreen
+row reads **On** and its *"there is NO SCREEN for it"* clause is gone.
 
-**Why it is first:** it is the commercial blocker's missing half, and it is **not blocked** on the
-GST-registered Tally export that has not arrived. It is what makes that file usable the hour it lands
-— drag it onto a screen instead of hand-rolling a `curl` with the right content type.
+⛔ **THE ONE THING TO CARRY FORWARD: `Blob.text()` IS A UTF-8 DECODE AND `FileReader.readAsText` IS
+NOT.** The first BOM-sniffs and recovers UTF-16 correctly; the second is what `.text()` does and it
+destroys a real export. Both measured in §1.18. Any future file-upload screen faces the same fork.
 
-**The one fact that would otherwise eat the session:** every real TallyPrime export is **UTF-16LE**
-(`file -b corpora/migration/06-*.xml`), and `CoredClient.importTallyXML` declares its body as
-`xml: string`. `await file.text()` decodes those bytes as UTF-8 and destroys the file. Send the `File`;
-`http.postRaw` already takes `BodyInit`. **Drive with fixture `06` or `07`, never `01`–`05`** — the
-ASCII ones pass either way, so a probe built on them cannot see the defect.
-
-⛔ **DO NOT touch `classifyTaxLedger` / `inferRate` / the GSTR-1 B2B join.** The real file this importer
-was fixed against is a **grain trader, GST-free and zero-rated**, so those three have never met real
-GST data. Speculative changes now destroy the evidence the pending file will give you.
+⛔ **AND THE HALF STILL OUTSTANDING IS A HUMAN'S: ASK FOR THE GST-REGISTERED TALLY EXPORT**
+(`HANDOFF.md` §10 item 1). `classifyTaxLedger`, `inferRate` and the GSTR-1 B2B join have still never
+met real GST data — **do not touch them until it arrives.**
 
 ---
 
@@ -382,7 +396,8 @@ committing a stale `base_version`, not by stubbing one.
    attempts guessing schema names (the table is `voucher_head`, not `voucher`; its key is `voucher_id`,
    not `id`) and both "passed". **Print something from inside a mutation.**
 4. ⛔ **AN ORACLE THAT CANNOT SEE THE DEFECT IS NOT AN ORACLE** (`HANDOFF.md` §1.16). Applied here:
-   track A must drive a UTF-16 fixture; track C must assert the **printed bytes**, not the stored row.
+   track A had to drive a UTF-16 fixture (it did — §1.18); track C must assert the **printed bytes**,
+   not the stored row.
 5. ⛔ **A REFUSAL FOR THE WRONG REASON IS A VACUOUS PROBE.** T14's truncation check passed green
    because a *different* guard answered first. Make sure the thing you are testing is the thing that
    refuses.
@@ -407,14 +422,14 @@ committing a stale `base_version`, not by stubbing one.
   be retired. `HANDOFF.md` §11's rule is *update it in place rather than write another*, and its
   evidence is twelve superseded files that each re-derived context the last already held. **Do not grow
   this file — shrink it as tracks land.**
-- ⛔ **AFTER TRACK A: ASK FOR THE GST-REGISTERED TALLY EXPORT AGAIN** (`HANDOFF.md` §10 item 1). It
-  costs one email, it is the commercial blocker, and the import screen is what turns receiving it from
-  an afternoon into ten minutes.
+- ⛔ **ASK FOR THE GST-REGISTERED TALLY EXPORT** (`HANDOFF.md` §10 item 1) — track A is spent and this
+  is the half still outstanding. One email; it is the commercial blocker, and the screen now turns
+  receiving it from an afternoon into ten minutes.
 
 ### Still blocked on a human, not on us
 
-- **The GST-registered Tally XML export** — track A does not need it; `classifyTaxLedger`, `inferRate`
-  and the GSTR-1 B2B join do, and they must not be touched until it arrives.
+- **The GST-registered Tally XML export** — the screen shipped without it; `classifyTaxLedger`,
+  `inferRate` and the GSTR-1 B2B join still need it, and must not be touched until it arrives.
 - **IRP / GSTN / e-Way Bill sandbox credentials** — the **Rule 48(4) QR code** row cannot be built
   without them. If they arrive, the IRN screen stops being groundwork and becomes a filing, and the
   e-way bill becomes real **with no change to either payload builder**. Re-order immediately.

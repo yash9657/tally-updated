@@ -450,6 +450,23 @@ const DATA_BAR: readonly ButtonBarItem[] = [
   item("F1", "Help"),
 ];
 
+/**
+ * MIGRATE FROM TALLY (Alt+O) — the TallyPrime XML import screen (T32).
+ *
+ * Ctrl+A is not offered, deliberately and for the same reason the Data screen
+ * does not offer it: this screen has nothing to "accept". Its one action is an
+ * import that is not undoable, and it is behind a named button next to the file
+ * that was chosen — a generic "Accept (save) the screen" would fire an
+ * irreversible write from a key an operator presses reflexively on every form in
+ * the product.
+ */
+const TALLY_IMPORT_BAR: readonly ButtonBarItem[] = [
+  item("Esc", "Back"),
+  item("Alt+G", "Go To"),
+  item("Ctrl+G", "Switch To"),
+  item("F1", "Help"),
+];
+
 /** The AI-native screens (Bill Inbox, Ask your books). */
 const AI_BAR: readonly ButtonBarItem[] = [
   item("F1", "Help"),
@@ -539,6 +556,8 @@ export function buttonBarFor(
       return READER_BAR;
     case "data":
       return DATA_BAR;
+    case "tally-import":
+      return TALLY_IMPORT_BAR;
     case "bill-inbox":
     case "query":
       return AI_BAR;
