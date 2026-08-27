@@ -187,6 +187,52 @@ func (s *Service) ListReconciliationQueue(ctx context.Context) ([]ReconEntry, er
 	return entries, nil
 }
 
+// ResolveReconciliation marks ONE open reconciliation_queue row handled by
+// stamping resolved_at. It reports whether a row was actually stamped: false
+// means no OPEN row with that id exists in this company — an unknown id, or one
+// a concurrent request already resolved. The caller turns that into a 404; the
+// two cases are deliberately NOT distinguished, because telling an operator
+// "that id exists but is already resolved" leaks the existence of a row they
+// cannot see (ListReconciliationQueue returns open rows only).
+//
+// ⛔ WHY THIS FUNCTION IS NEW AND WHAT ITS ABSENCE MEANT. resolved_at has been
+// in the schema since migration 0009 and EVERY read filters on `resolved_at IS
+// NULL`, but nothing anywhere ever wrote it — no UPDATE of this table existed in
+// the codebase, in Go or in SQL. So a reconciliation row was IMMORTAL: every
+// refused alter/delete a company ever attempted stayed open forever, the queue
+// only ever grew, and an operator who dealt with an item had nowhere to record
+// that they had. A queue that cannot be emptied is one operators stop reading,
+// which is the failure mode that matters: the entry is how somebody finds out
+// their work was refused.
+//
+// The WHERE clause carries `resolved_at IS NULL` as well as the id, so this is
+// idempotent under a double-submit: the second call stamps nothing and reports
+// false rather than moving the timestamp forward.
+func (s *Service) ResolveReconciliation(ctx context.Context, reconID uuid.UUID) (bool, error) {
+	companyID, ok := db.CompanyFromContext(ctx)
+	if !ok {
+		return false, db.ErrNoCompany
+	}
+
+	var stamped bool
+	err := s.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx,
+			`UPDATE reconciliation_queue
+			    SET resolved_at = now()
+			  WHERE company_id = $1 AND id = $2 AND resolved_at IS NULL`,
+			companyID, reconID)
+		if err != nil {
+			return fmt.Errorf("ledger: resolve reconciliation: %w", err)
+		}
+		stamped = tag.RowsAffected() == 1
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return stamped, nil
+}
+
 // frozenRef reads voucher_external_reference for the voucher and returns the
 // first blocking reference as a *FrozenError, or nil when the voucher is not
 // frozen. It takes the post transaction so the check joins that transaction

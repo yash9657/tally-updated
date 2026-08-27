@@ -2055,6 +2055,37 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 		// one of the two above.
 		return "", "", "", false
 
+	// The reconciliation queue's two SUB-ROUTES (track D). The bare
+	// GET /reconciliation-queue is NOT matched here — the prefix carries a
+	// trailing slash on purpose — so it keeps falling through to the reports arm
+	// below and its shipped resource (report:reconciliation-queue) is unchanged.
+	//
+	// ⛔ THEY NEEDED A CASE OF THEIR OWN BECAUSE reportName() MATCHES THE BARE
+	// PATH EXACTLY. Without this, GET .../reconciliation-queue/{id}/payload maps
+	// to nothing, i.e. default-DENY for every level including the Owner — the
+	// same defect this file already records shipping once for
+	// GET /print/reports/reconciliation-queue.
+	//
+	// WHY "reconciliation" AND NOT report:reconciliation-queue: migration 0011
+	// grants Data Entry a coarse `allow display report`, so reusing the report
+	// token would hand every operator in every tenant the voucher body a
+	// colleague keyed on another machine, by inheritance. See
+	// authz.KnownResources' "reconciliation" entry for the full argument.
+	//
+	// The POST is an Alter and therefore a write, inheriting the level's step-up.
+	// It names no voucher and carries no date, so existingVouchersNamedByRequest
+	// returns nothing for it and the back-dated cutoff correctly does not apply —
+	// clearing a workflow item moves nothing into or out of a locked period.
+	case strings.HasPrefix(rest, "/reconciliation-queue/"):
+		switch method {
+		case http.MethodGet:
+			return authz.Display, "reconciliation", "", true
+		case http.MethodPost:
+			return authz.Alter, "reconciliation", "", true
+		}
+		// Any other method default-denies rather than being folded into one above.
+		return "", "", "", false
+
 	// Reports (and the recon queue / gstr1, modelled as reports).
 	//
 	// reconciliation-queue used to be handled by a case of its own HERE, with

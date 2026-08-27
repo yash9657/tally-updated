@@ -961,6 +961,12 @@ func (s *Server) routes() {
 		// open reconciliation entries (refused alter/delete attempts).
 		r.Post("/vouchers/{voucherID}/external-reference", s.handleRegisterExternalReference)
 		r.Get("/reconciliation-queue", s.handleReconciliationQueue)
+		// The conflict compare screen's two missing halves (track D). The payload
+		// GET is the operator's own keyed intent, preserved when the sequencer
+		// refused it; the resolve POST is the only writer of resolved_at that has
+		// ever existed, without which a queue row is immortal.
+		r.Get("/reconciliation-queue/{reconID}/payload", s.handleReconciliationPayload)
+		r.Post("/reconciliation-queue/{reconID}/resolve", s.handleResolveReconciliation)
 
 		// Backward-compatible alias for the original F8 Sales endpoint.
 		r.Post("/sales", s.postVoucher(ledger.Sales))
@@ -2364,6 +2370,278 @@ func (s *Server) handleReconciliationQueue(w http.ResponseWriter, r *http.Reques
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"entries": entries})
+}
+
+// handleReconciliationPayload returns the intent PARKED on one open
+// reconciliation entry — the voucher body an offline operator keyed, preserved
+// verbatim when the sequencer refused it. It is the right-hand pane of the
+// conflict compare screen; the left-hand pane is GET /vouchers/{voucherID},
+// which already exists and already returns real ledger ids.
+//
+// ⛔ WHY IT EXISTS AT ALL. sync.Service.ConflictPayload has read this column
+// since migration 0010 and had NO caller outside two Go test files, so a client
+// could learn THAT its work was refused and never WHAT it had typed. Without
+// this route the conflict screen can only ever show one side of the comparison
+// it exists to make.
+//
+// ⚠️ has_payload=false IS A REAL ANSWER, NOT AN ERROR, AND THE ASYMMETRY IS
+// DELIBERATE. Only sync.parkConflict writes the payload column; a FROZEN row is
+// raised by the ledger's freeze rule (kind IRN / FILED_GSTR1) and carries NO
+// payload. So the honest answer for a freeze row is "this entry exists and never
+// held one", which a 404 would spell the same way as "no such entry". The client
+// must source the operator's keyed version from its own outbox in that case, and
+// say so when the local copy is gone.
+//
+// The entry metadata is returned alongside so the compare screen needs ONE call:
+// which op was attempted, what pinned it, and the sequencer's own explanation.
+func (s *Server) handleReconciliationPayload(w http.ResponseWriter, r *http.Request) {
+	ctx, ok := s.scopeCtx(w, r)
+	if !ok {
+		return
+	}
+	reconID, err := uuid.Parse(chi.URLParam(r, "reconID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid reconciliation id")
+		return
+	}
+
+	// Locate the entry among the OPEN rows first. This reuses the tested lister
+	// rather than adding a second query, and it pins the contract to open rows:
+	// ConflictPayload alone cannot tell an unknown id from a null payload (both
+	// answer (zero, false, nil)), and conflating those is exactly the confusion
+	// the has_payload flag exists to remove.
+	rows, err := s.ledger.ListReconciliationQueue(ctx)
+	if err != nil {
+		if errors.Is(err, db.ErrNoCompany) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	var entry *ledger.ReconEntry
+	for i := range rows {
+		if rows[i].ID == reconID {
+			entry = &rows[i]
+			break
+		}
+	}
+	if entry == nil {
+		writeError(w, http.StatusNotFound, "no open reconciliation entry with that id")
+		return
+	}
+
+	body := map[string]any{
+		"reconciliation_id": entry.ID.String(),
+		"voucher_id":        entry.VoucherID.String(),
+		"attempted_op":      entry.AttemptedOp,
+		"kind":              entry.Kind,
+		"ref_value":         entry.Ref,
+		"frozen_voucher_no": entry.FrozenVoucherNo,
+		"detail":            entry.Detail,
+		"created_at":        entry.CreatedAt,
+	}
+
+	in, hasPayload, err := s.sync.ConflictPayload(ctx, reconID)
+	if err != nil {
+		if errors.Is(err, db.ErrNoCompany) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	body["has_payload"] = hasPayload
+	if !hasPayload {
+		// Name the reason rather than leaving a bare false: a freeze row never had
+		// a payload, and a client that cannot tell that from a fault would retry.
+		body["payload_absent_because"] = "this entry was raised by the freeze rule, " +
+			"which parks no keyed payload; the operator's own version exists only on the node that keyed it"
+		writeJSON(w, http.StatusOK, body)
+		return
+	}
+	body["intent"] = syncIntentJSON(in)
+	writeJSON(w, http.StatusOK, body)
+}
+
+// syncIntentJSON serialises a parked sync.Intent for the compare screen.
+//
+// ⛔⛔ IT DOES NOT RETURN THE STORED BYTES, AND THAT IS THE WHOLE POINT. The
+// column holds json.Marshal(sync.Intent) verbatim, which is the tempting thing
+// to hand back — nothing omitted, nothing reformatted. MEASURED, that shape
+// renders a posting of 1180 as "Amount":"1180", because ledger.VoucherInput
+// carries no json tags and decimal.Decimal marshals bare. The LIVE side of the
+// comparison, voucherFullJSON, renders the same money as "1180.0000" via
+// StringFixed(4).
+//
+// So a compare screen fed the raw bytes would show "1180" beside "1180.0000" and
+// invite an operator to discard their work over a difference that does not
+// exist. Money is formatted HERE the way the live pane formats it, and the two
+// panes are only comparable because of that.
+func syncIntentJSON(in sync.Intent) map[string]any {
+	return map[string]any{
+		"idempotency_key":   in.IdempotencyKey,
+		"client_voucher_id": in.ClientVoucherID.String(),
+		"op":                string(in.Op),
+		"class":             string(in.Class),
+		"provisional_no":    in.ProvisionalNo,
+		"node_id":           in.NodeID,
+		"base_version":      in.BaseVersion,
+		"hlc": map[string]any{
+			"wall_millis": in.HLC.WallMillis,
+			"counter":     in.HLC.Counter,
+			"node_id":     in.HLC.NodeID,
+		},
+		"payload": parkedVoucherJSON(in.Payload),
+	}
+}
+
+// parkedVoucherJSON renders the parked ledger.VoucherInput with the SAME
+// conventions voucherFullJSON uses for a stored voucher: money as fixed-4
+// strings, canonical "D"/"C", zero uuids as "". See syncIntentJSON for why
+// re-formatting rather than echoing the stored bytes is the correct choice.
+//
+// ⚠️ THE FIELDS IT DOES NOT RENDER ARE NAMED, NOT DROPPED. A VoucherInput
+// carries six optional blocks (inward document, cost allocations, order
+// fulfilments, GST/TDS/TCS parameters) that a two-pane diff has no room for.
+// Omitting them silently is the failure this product keeps paying for: the
+// operator compares two panes that look identical and differ. So each one that
+// is PRESENT is named in `also_carries`, and the screen can say so.
+//
+// TestParkedVoucherAccountsForEveryVoucherInputField reflects over the struct
+// and fails if a field is added that is neither rendered here nor named there —
+// so a new field cannot go silently missing from the comparison.
+func parkedVoucherJSON(v ledger.VoucherInput) map[string]any {
+	postings := make([]map[string]any, 0, len(v.Postings))
+	for _, p := range v.Postings {
+		postings = append(postings, map[string]any{
+			"ledger_id": p.LedgerID.String(),
+			"dr_cr":     p.DrCr,
+			"amount":    p.Amount.StringFixed(4),
+		})
+	}
+	bills := make([]map[string]any, 0, len(v.BillAllocations))
+	for _, b := range v.BillAllocations {
+		bills = append(bills, map[string]any{
+			"ledger_id": b.LedgerID.String(),
+			"ref_name":  b.RefName,
+			"ref_type":  b.RefType,
+			"amount":    b.Amount.StringFixed(4),
+		})
+	}
+	inventory := make([]map[string]any, 0, len(v.Inventory))
+	for _, l := range v.Inventory {
+		inventory = append(inventory, map[string]any{
+			"stock_item_id": l.StockItemID.String(),
+			"godown_id":     uuidOrEmpty(l.GodownID),
+			"batch_id":      uuidOrEmpty(l.BatchID),
+			"direction":     string(l.Direction),
+			"qty":           l.Qty.StringFixed(4),
+			"rate":          l.Rate.StringFixed(4),
+			"discount_pct":  l.DiscountPct.StringFixed(4),
+			"amount":        l.Amount.StringFixed(4),
+			// A line that said NOTHING about price is not a line priced at zero,
+			// and the two must not read the same in a comparison.
+			"rate_unstated": l.RateUnstated,
+		})
+	}
+	counts := make([]map[string]any, 0, len(v.PhysicalCount))
+	for _, c := range v.PhysicalCount {
+		counts = append(counts, map[string]any{
+			"stock_item_id": c.StockItemID.String(),
+			"godown_id":     uuidOrEmpty(c.GodownID),
+			"batch_id":      uuidOrEmpty(c.BatchID),
+			"qty":           c.Qty.StringFixed(4),
+			"rate":          c.Rate.StringFixed(4),
+		})
+	}
+
+	// Presence of the blocks a diff cannot show. Named, never dropped.
+	var also []string
+	if v.Inward != nil {
+		also = append(also, "inward document")
+	}
+	if len(v.CostAllocations) > 0 {
+		also = append(also, "cost allocations")
+	}
+	if len(v.Fulfilments) > 0 {
+		also = append(also, "order fulfilments")
+	}
+	if v.GST != nil {
+		also = append(also, "GST parameters")
+	}
+	if v.TDS != nil {
+		also = append(also, "TDS parameters")
+	}
+	if v.TCS != nil {
+		also = append(also, "TCS parameters")
+	}
+	if also == nil {
+		also = []string{}
+	}
+
+	return map[string]any{
+		"class":            string(v.Class),
+		"voucher_type_id":  uuidOrEmpty(v.VoucherTypeID),
+		"party_ledger_id":  uuidOrEmpty(v.PartyLedgerID),
+		"item_ledger_id":   uuidOrEmpty(v.ItemLedgerID),
+		"voucher_no":       v.VoucherNo,
+		"voucher_date":     v.VoucherDate,
+		"narration":        v.Narration,
+		"party":            v.Party,
+		"created_by":       v.CreatedBy,
+		"source_guid":      v.SourceGUID,
+		"source_draft_id":  v.SourceDraftID,
+		"postings":         postings,
+		"bill_allocations": bills,
+		"inventory":        inventory,
+		"physical_count":   counts,
+		"also_carries":     also,
+	}
+}
+
+// handleResolveReconciliation marks one open reconciliation entry handled.
+//
+// ⛔ WHY IT EXISTS. resolved_at has been in the schema since migration 0009 and
+// every read filters on it, but NOTHING in this codebase ever wrote it — so a
+// reconciliation row was immortal and the queue could only grow. See
+// ledger.ResolveReconciliation.
+//
+// It is an Alter in the PDP (resource "reconciliation"), so it is a WRITE and
+// inherits whatever step-up the level requires. It carries no body and asserts
+// no date, so the back-dated cutoff correctly does not apply: clearing a
+// workflow item moves nothing in or out of a locked period.
+//
+// A second resolve of the same id answers 404, not 200 — the row is no longer
+// open. That makes the route idempotent in EFFECT (the timestamp never moves
+// forward) while still telling a client that its view is stale.
+func (s *Server) handleResolveReconciliation(w http.ResponseWriter, r *http.Request) {
+	ctx, ok := s.scopeCtx(w, r)
+	if !ok {
+		return
+	}
+	reconID, err := uuid.Parse(chi.URLParam(r, "reconID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid reconciliation id")
+		return
+	}
+	stamped, err := s.ledger.ResolveReconciliation(ctx, reconID)
+	if err != nil {
+		if errors.Is(err, db.ErrNoCompany) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !stamped {
+		writeError(w, http.StatusNotFound, "no open reconciliation entry with that id")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"reconciliation_id": reconID.String(),
+		"resolved":          true,
+	})
 }
 
 // handleGetVoucher returns the CURRENT (head) version of one logical voucher.

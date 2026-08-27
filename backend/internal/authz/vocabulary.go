@@ -470,6 +470,45 @@ var KnownResources = append([]Resource{
 	// invoice was wrong, to require a credit note rather than an edit. Weigh it
 	// like `delete`, not like `create`.
 	"e-invoice",
+
+	// CLEARING A RECONCILIATION-QUEUE ROW, and reading back the intent parked on
+	// one (track D: GET .../reconciliation-queue/{reconID}/payload and
+	// POST .../reconciliation-queue/{reconID}/resolve).
+	//
+	// WHY THE QUEUE'S OWN LIST KEEPS report:reconciliation-queue AND THESE TWO DO
+	// NOT. The list is a position statement and is reached today by migration
+	// 0011's coarse `allow display report`, which every seeded Data Entry level
+	// has. These two are different questions:
+	//
+	//	the PAYLOAD read is the voucher body ANOTHER node's operator keyed while
+	//	  disconnected — the losing side of a conflict, preserved verbatim. Seeing
+	//	  that a clash happened is clerical; reading what a colleague typed into
+	//	  the books on their own machine is not the same authority, and folding it
+	//	  into the coarse report grant would hand it to every operator in every
+	//	  tenant on the day it shipped, by inheritance, with no report:NAME form
+	//	  left in which to narrow it back.
+	//	the RESOLVE is the WRITE, and it is the one that loses information: an
+	//	  entry is how an operator finds out their offline work was refused, so
+	//	  clearing one makes a refused voucher stop being anybody's problem. The
+	//	  clerk who reads the queue is not automatically the person who decides an
+	//	  item needs no further action.
+	//
+	// ONE TOKEN FOR BOTH, unlike bank-reconciliation's read/write split, because
+	// both halves answer the same question — "does this level own the
+	// reconciliation workflow?" — and neither is a position statement. The
+	// `display`/`alter` ACTIONS already separate them for any administrator who
+	// wants the reader without the clearer.
+	//
+	// IT CONSUMES NO MIGRATION NUMBER: Data Entry's default_access is 'none' and
+	// no seeded rule names this token, so it is denied for every seeded non-Owner
+	// level for free — the treatment backup, tds-challan, e-way-bill and
+	// e-invoice all shipped with.
+	//
+	// ⛔ AND IT MUST NEVER BE ADDED TO KnownReportNames BELOW: server.go loops
+	// over that list and auto-mounts GET /print/reports/<name>, and a name with no
+	// reportName() case is default-DENY for every level including the Owner. That
+	// bug already shipped once for reconciliation-queue itself.
+	"reconciliation",
 }, KnownVoucherClasses...)
 
 // KnownReportNames is every report a rule may name via the "report:NAME" form.

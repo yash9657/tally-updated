@@ -833,6 +833,32 @@ var writeRoutesNamingADocumentButNotMovingIt = map[string]string{
 	"DELETE /v1/companies/{companyID}/print-templates/{docKind}": "" +
 		"{docKind} is a document TYPE, not a document; writes only print_template, which has no date",
 
+	// CLEARING A RECONCILIATION-QUEUE ROW (track D). The {reconID} names a
+	// reconciliation_queue row, and that row DOES carry a voucher_id — which is
+	// why the gate above asks about this route at all. But the row is a WORKFLOW
+	// RECORD ABOUT a refused attempt, not the document itself:
+	// ledger.ResolveReconciliation writes exactly one column, resolved_at, on
+	// exactly that row. No voucher_version, no posting, no amount, no date on any
+	// ledger document.
+	//
+	// ⛔ IT CANNOT LOOSEN ANYTHING, WHICH IS THE DIRECTION THAT MATTERS. Resolving
+	// does NOT replay the parked intent — nothing anywhere replays it, and the
+	// refused alter/delete stays refused. A frozen voucher stays frozen and a
+	// stale-base ALTER stays rejected; the operator's only routes back into the
+	// books are a fresh CREATE or a credit note, both of which are ordinary writes
+	// judged on their own dates. So this is the external-reference entry's shape:
+	// it can make the locked period no less immutable than it already was.
+	//
+	// ⚠️ AND UNLIKE THE BANK LEG AND THE CHALLAN ALLOCATION, IT HAS NO DATE OF ITS
+	// OWN TO JUDGE. Those two are in this map with the warning that their own
+	// asserted date IS judged separately; here there is nothing to judge, because
+	// resolved_at is set to now() inside the UPDATE and is not caller-supplied.
+	// The route carries no body at all, so there is no field in which a date could
+	// be smuggled past the cutoff.
+	"POST /v1/companies/{companyID}/reconciliation-queue/{reconID}/resolve": "" +
+		"writes only reconciliation_queue.resolved_at, server-stamped; replays no intent, so a " +
+		"refused alter/delete stays refused and the locked period is no less immutable",
+
 	// THE AI BILL INBOX's three lifecycle routes (register row D49). The
 	// {draftID} in the path names an insightd DRAFT, which is not a ledger
 	// document at all: it has no voucher_version, no posting, no ledger figure and
