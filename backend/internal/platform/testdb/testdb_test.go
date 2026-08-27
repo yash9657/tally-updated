@@ -109,6 +109,9 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 		// T6 — the challan the allocation below hangs off (migration 0069).
 		challanID = id()
 
+		// T8 — the currency the rate below is quoted for (migration 0080).
+		currencyID = id()
+
 		// Track 2 — GSTR-2A/2B inward statement and the IMS worklist.
 		statementID = id()
 		inwardDocID = id()
@@ -541,6 +544,30 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 			(id, company_id, payslip_id, line_no, component_code, component_type, tag, direction, amount)
 			VALUES ($1, $2, $3, 1, 'BASIC', 'BASIC', 'NA', 'EARNING', 20000)`,
 			[]any{id(), cid, payslipID}},
+
+		// T8 — multi-currency (migration 0080).
+		//
+		// ⚠️ 'USD' RATHER THAN THE COMPANY'S OWN BASE CURRENCY, and that is not
+		// arbitrary: currency_not_base refuses a master for the base currency,
+		// because a base-currency amount is encoded by currency_id IS NULL and a
+		// row here would be a second encoding of it. The trigger does not fire
+		// under session_replication_role = replica (see the company row above),
+		// so this fixture would not be stopped by it — which is exactly why the
+		// row is written the way real code must write it rather than the way the
+		// fixture could get away with.
+		{"currency", `INSERT INTO currency (id, company_id, code, symbol, formal_name, decimal_places)
+			VALUES ($1, $2, 'USD', '$', 'US Dollars', 2)`,
+			[]any{currencyID, cid}},
+		{"currency_rate", `INSERT INTO currency_rate
+			(id, company_id, currency_id, effective_date, rate)
+			VALUES ($1, $2, $3, DATE '2024-04-01', 83.6500000000)`,
+			[]any{id(), cid, currencyID}},
+		// The key IS the company (mirrors company_tds_profile). The gain/loss
+		// ledger is left NULL: "not chosen" is a real state the settlement path
+		// must refuse on, so the fixture seeds the state that actually ships.
+		{"company_forex_settings", `INSERT INTO company_forex_settings (company_id)
+			VALUES ($1)`,
+			[]any{cid}},
 
 		// TEXT company_id. This is the row that the "AND data_type='uuid'"
 		// mutation orphans, and the reason the enumeration query must not filter

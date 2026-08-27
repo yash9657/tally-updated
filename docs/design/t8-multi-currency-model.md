@@ -181,10 +181,26 @@ an **extra posting on the settlement voucher**, so the voucher still balances in
 `check_double_entry` passes untouched.
 
 ⛔ **WHICH LEDGER: THE OPERATOR'S CHOICE, AND ABSENCE IS A REFUSAL, NOT A DEFAULT.**
-`company.forex_gain_loss_ledger_id UUID NULL REFERENCES ledger(id)`. A settlement that would realise a
-difference on a company that has not chosen one is **refused, naming the setting** — never posted to a
-guessed ledger and never silently absorbed into the party balance. (Silent absorption is precisely the
-§6-item-2 class of hole this track exists to close.)
+`company_forex_settings.forex_gain_loss_ledger_id`. A settlement that would realise a difference on a
+company that has not chosen one is **refused, naming the setting** — never posted to a guessed ledger
+and never silently absorbed into the party balance. (Silent absorption is precisely the §6-item-2
+class of hole this track exists to close.)
+
+> ### ⛔⛔ IT IS A TABLE, NOT A COLUMN ON `company` — AND A CENSUS FOUND THAT, NOT TASTE
+> This document's first draft said `company.forex_gain_loss_ledger_id`. It migrated cleanly and
+> broke `internal/platform/tenant`'s delete-order census:
+>
+> ```
+> tenant: foreign-key cycle among {account_group, ledger}: no order exists that removes children first
+> ```
+>
+> ⭐ **The cycle is a LAYERING INVERSION, not a graph technicality:**
+> `company → ledger → account_group → (company_id) → company`. `company` is the tenant ROOT and every
+> scoped table is its child, so the moment the root points at one of its own descendants **no tenant
+> can be torn down** — which breaks backup/restore (T14) and every harness that mints a company.
+> ⚠️ **Nothing about the column was wrong at the SQL level.** It is exactly the defect that ships
+> silently and resurfaces as *"tenant delete sometimes fails"*. Shape now mirrors
+> `company_tds_profile` (0070): the key IS the company.
 
 ⚠️ **`ADVANCE` and `ON_ACCOUNT` have no bill rate to difference against.** They are foreign-tagged and
 carried, and they realise nothing until they are allocated. State this rather than computing zero.
@@ -247,7 +263,15 @@ absent from the tree entirely):
 1. `currency` — the master. (company_id, code, symbol, formal_name, decimal_places). Many per company.
 2. `currency_rate` — (company_id, currency_code, effective_date, rate `NUMERIC(19,10)`).
 3. The three columns + `CHECK` on **`posting`**, **`bill_allocation`**, **`ledger_opening_bill`**.
-4. `company.forex_gain_loss_ledger_id` and the F11 enable flag.
+4. `company_forex_settings` — key IS the company, one row. ⛔ **A TABLE, not columns on `company`;
+   see Q3's box for the delete-order cycle that proves why.**
+
+⭐ **AND THERE IS DELIBERATELY NO `forex_enabled` FLAG.** The presence of a currency master IS the
+enablement: every foreign column is FK-bound to `currency`, so a company with no currency rows cannot
+key a foreign voucher at all. A boolean beside that is a **second source of truth**, free to be off
+while currencies exist, and every screen would then have to decide which it believed. F11 reports the
+count. This is also `FeaturesScreen`'s own doctrine honoured rather than worked around — *a toggle
+that flips a flag with nothing behind it is worse than no toggle at all.*
 
 **The ACL number, taken LAST, derived from `0076_forecast_report_acl.sql` (§0.3):**
 
@@ -296,6 +320,25 @@ Every forex test asserts, separately:
 
 ⚠️ **And the free oracle from §3:** `verify:demo` 34/34 must be UNCHANGED by every T8 commit. A T8
 change that moves the Balance Sheet has touched `posting.amount`, which Q2 forbids.
+
+### 4.1 ⭐ WHAT 0080 IS ACTUALLY GUARDED BY — `internal/ledger/forex_schema_test.go`
+
+Four tests, each mutation-proved against a deliberately broken schema (predicted, then observed,
+then reverted and re-run green):
+
+| Test | Mutation | Predicted → observed |
+|---|---|---|
+| base currency has no master | `DROP TRIGGER currency_not_base` | `'INR'` accepted → **FAIL** ✅ |
+| all-or-none across the triple | the `CHECK` replaced with `CHECK (true)` | two-of-three accepted → **FAIL** ✅ |
+| a rate keeps 10 decimals | `rate TYPE NUMERIC(19,4)` | `0.0033333333` → `0.0033` → **FAIL** ✅ |
+| base is the summed column | `check_double_entry` pointed at `foreign_amount` | base-balanced voucher **REFUSED** → **FAIL** ✅ |
+
+⛔ **THE FOURTH IS THE ONE THAT MATTERS, AND IT IS A PAIR.** A voucher that balances in BASE but not
+in foreign must COMMIT; a voucher that balances in FOREIGN but not in base must be REFUSED. Only the
+second says *which column the trigger actually sums* — a suite with the first alone would pass just
+as happily if the trigger had been pointed at `foreign_amount` all along. ⭐ The mutation proved
+itself non-vacuous by reporting `debit 1000.0000 <> credit 920.0000`: the FOREIGN figures, so the
+mutation demonstrably took effect.
 
 ---
 
