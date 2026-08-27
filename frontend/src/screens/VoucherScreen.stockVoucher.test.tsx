@@ -961,8 +961,19 @@ describe("F11 Company Features tells the truth about the stock vouchers", () => 
     // ⛔ THERE IS NO "Not built" ROW LEFT UNDER INVENTORY AT ALL — all ten read On —
     // so this assertion had to leave the group rather than be deleted. It is now
     // pointed at the nearest genuinely absent thing to a DOCUMENT this file keys:
-    // a delivery note prints (Ctrl+P), and there is still no way to e-mail it or
-    // to export a report as PDF.
+    // a delivery note prints (Ctrl+P), and there is still no way to E-MAIL it.
+    //
+    // ⚠️ AND THAT SENTENCE USED TO SAY "...or to export a report as PDF", WHICH IS
+    // NO LONGER TRUE — B1 shipped PDF export (F12 offers it, Alt+E saves it) and
+    // the old joint row "Export: e-mail a document, and export to PDF" was SPLIT.
+    // The regex below still matches, because the e-mail half kept the name and is
+    // still genuinely not built; only the stale half of the reason is gone.
+    //
+    // ⛔ WHOEVER BUILDS THE E-MAIL HALF (a mailto: handoff — the decision is
+    // recorded in HANDOFF-THE-LAST-THREE.md §2) MUST RE-POINT THIS ASSERTION IN
+    // THE SAME CHANGE. It is the last row this file can name, so a flip leaves it
+    // with nothing to assert; find another genuinely absent row rather than
+    // deleting the test, and keep the plural property below.
     renderFeatures();
     expect(badgeFor(/^Export: e-mail a document/)).toBe("Not built");
     // And the screen-wide property, so this cannot pass vacuously the day that
