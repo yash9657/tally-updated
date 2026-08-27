@@ -39,6 +39,18 @@ import type { NavSnapshot } from "../keystroke/navMachine";
  */
 export type ScreenActionKind =
   /**
+   * Alt+M — E-MAIL THIS DOCUMENT (B2). Saves the server's PDF for the document on
+   * screen, then opens the operator's own mail client on a pre-subjected draft.
+   *
+   * A screen action rather than a machine transition for the same reason `print`
+   * is: WHICH document this is depends on what the screen has loaded (a voucher's
+   * id, a report's period, the reconciliation screen's chosen bank account), and
+   * the nav machine has no business knowing any of it. It is registered by the
+   * same hook that registers `print`, so a screen cannot offer one and not the
+   * other — see useEmailDocumentAction.
+   */
+  | "emailDocument"
+  /**
    * Alt+C on the TDS Challans screen — open the DEPOSIT FORM (T6). A screen
    * action rather than a machine transition because the form's state (and the
    * client that posts it) belong to the screen, and recording a deposit does not

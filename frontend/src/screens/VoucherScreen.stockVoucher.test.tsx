@@ -963,19 +963,27 @@ describe("F11 Company Features tells the truth about the stock vouchers", () => 
     // pointed at the nearest genuinely absent thing to a DOCUMENT this file keys:
     // a delivery note prints (Ctrl+P), and there is still no way to E-MAIL it.
     //
-    // ⚠️ AND THAT SENTENCE USED TO SAY "...or to export a report as PDF", WHICH IS
-    // NO LONGER TRUE — B1 shipped PDF export (F12 offers it, Alt+E saves it) and
-    // the old joint row "Export: e-mail a document, and export to PDF" was SPLIT.
-    // The regex below still matches, because the e-mail half kept the name and is
-    // still genuinely not built; only the stale half of the reason is gone.
+    // ⚠️ THIS ASSERTION HAS NOW BEEN RE-POINTED TWICE, AND THAT IS IT WORKING.
+    // It named order processing, then FIFO/LIFO, then stock groups, then
+    // "Export: e-mail a document, and export to PDF" — each time because the row
+    // it named FLIPPED in the change that finally gave an operator a screen or a
+    // key. B1 split the joint export row; B2 then shipped the e-mail half as
+    // Alt+M (it saves the PDF and opens the operator's own mail client), so that
+    // row now reads On and this assertion had to move again.
     //
-    // ⛔ WHOEVER BUILDS THE E-MAIL HALF (a mailto: handoff — the decision is
-    // recorded in HANDOFF-THE-LAST-THREE.md §2) MUST RE-POINT THIS ASSERTION IN
-    // THE SAME CHANGE. It is the last row this file can name, so a flip leaves it
-    // with nothing to assert; find another genuinely absent row rather than
-    // deleting the test, and keep the plural property below.
+    // ⛔ IT IS NOW POINTED AT THE Rule 48(4) QR CODE, chosen deliberately over the
+    // other six absent rows: it is the nearest genuinely absent thing to a printed
+    // DOCUMENT, which is what this file keys — a delivery note prints, and what a
+    // registered e-invoice must also carry is a QR code that this build cannot
+    // produce. It is also blocked on a HUMAN (IRP sandbox credentials, HANDOFF.md
+    // §10 item 4) rather than on work, so it will not flip out from under this
+    // test the way three screen rows already have.
+    //
+    // ⛔ WHOEVER MAKES THAT ROW TRUE MUST RE-POINT THIS ASSERTION IN THE SAME
+    // CHANGE. Find another genuinely absent row rather than deleting the test, and
+    // keep the plural property below.
     renderFeatures();
-    expect(badgeFor(/^Export: e-mail a document/)).toBe("Not built");
+    expect(badgeFor(/^Rule 48\(4\) QR code/)).toBe("Not built");
     // And the screen-wide property, so this cannot pass vacuously the day that
     // row is built: F11 still carries real gaps, plural.
     expect(screen.getAllByText("Not built").length).toBeGreaterThan(1);

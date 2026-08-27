@@ -63,6 +63,7 @@ const VOUCHER_BAR: readonly ButtonBarItem[] = [
   // prints a SAVED voucher — including one saved a moment ago by Ctrl+A — and
   // says so when there is nothing to print yet.
   item("Ctrl+P", "Print"),
+  item("Alt+M", "E-Mail"),
   item("Ctrl+A", "Accept"),
   item("Ctrl+Q", "Quit"),
   item("F1", "Help"),
@@ -117,6 +118,7 @@ const REPORT_BAR: readonly ButtonBarItem[] = [
   item("Ctrl+F", "Filter"),
   item("Alt+E", "Export"),
   item("Ctrl+P", "Print"),
+  item("Alt+M", "E-Mail"),
   item("Alt+G", "Go To"),
   item("Ctrl+G", "Switch To"),
   item("F1", "Help"),
@@ -153,6 +155,7 @@ const BANK_RECON_BAR: readonly ButtonBarItem[] = [
   item("F4", "Bank"),
   item("Alt+O", "Import"),
   item("Ctrl+P", "Print"),
+  item("Alt+M", "E-Mail"),
   item("Ctrl+A", "Accept"),
   item("Esc", "Back"),
   item("Alt+G", "Go To"),
@@ -387,6 +390,7 @@ const PAY_RUN_BAR: readonly ButtonBarItem[] = [
 const PAYROLL_REGISTER_BAR: readonly ButtonBarItem[] = [
   item("Alt+S", "Statutory Files"),
   item("Ctrl+P", "Print"),
+  item("Alt+M", "E-Mail"),
   item("Alt+E", "Export"),
   item("Enter", "Payslip"),
   item("Esc", "Back"),
@@ -406,6 +410,7 @@ const PAYROLL_REGISTER_BAR: readonly ButtonBarItem[] = [
  */
 const PAYSLIP_BAR: readonly ButtonBarItem[] = [
   item("Ctrl+P", "Print"),
+  item("Alt+M", "E-Mail"),
   item("Esc", "Back"),
   item("Alt+G", "Go To"),
   item("Ctrl+G", "Switch To"),
@@ -484,6 +489,21 @@ const PRINT_TEMPLATES_BAR: readonly ButtonBarItem[] = [
 ];
 
 /** The AI-native screens (Bill Inbox, Ask your books). */
+/**
+ * ⛔ ALT+M SITS BESIDE Ctrl+P ON EVERY BAR THAT HAS ONE, AND NOWHERE ELSE (B2).
+ *
+ * That is not a layout preference, it is the same invariant `usePrintAction`
+ * enforces in code: Alt+M asks `resolvePrintTarget` the identical question Ctrl+P
+ * does, so a screen that can print its document can e-mail it and a screen that
+ * cannot refuses both with the same sentence. A bar offering one without the other
+ * would advertise a difference that does not exist — and the bars that omit Ctrl+P
+ * (the TDS challan register, both order books, the BOM screen) omit Alt+M for the
+ * reason they already state: there is no printed layout to send.
+ *
+ * ⚠️ THE LABEL IS "E-Mail" AND THE FULL SENTENCE IS IN `actionLabel()`. There is
+ * no room on a bar for "saves the PDF, opens your mail client", and F1's keyboard
+ * help is where an operator reads what a key actually does.
+ */
 const AI_BAR: readonly ButtonBarItem[] = [
   item("F1", "Help"),
   item("Esc", "Back"),

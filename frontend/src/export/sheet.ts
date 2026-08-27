@@ -130,7 +130,12 @@ export type ExportTarget = ExportFormat | "pdf";
 export const UNBUILT_FORMATS: readonly string[] = [
   "JPEG",
   "HTML",
-  "e-mail this document",
+  // ⛔ "e-mail this document" WAS HERE AND IT SHIPPED AS Alt+M (B2), NOT AS A
+  // FORMAT — and listing it here was itself the mistake it caused. Tally's own
+  // top menu carries `E: Export` and `M: E-mail` as two separate entries
+  // (RESEARCH.md:361), so e-mail was never one of Alt+E's formats in the product
+  // this one is faithful to. Every entry left in this list is a genuine FORMAT
+  // Alt+E does not write.
 ];
 
 /** File extension for a format. */

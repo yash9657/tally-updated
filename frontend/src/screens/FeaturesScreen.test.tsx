@@ -373,19 +373,73 @@ describe("B1 — export to PDF shipped, e-mailing a document did not", () => {
     expect(note).toMatch(/generates it by asking the router|cannot drift/i);
   });
 
-  it("⛔ e-mail STILL reads Not built, and says the decision comes first", () => {
+  it("⛔ the OLD e-mail row name is gone — it was never an export format", () => {
     renderFeatures();
-    expect(badgeFor(/^Export: e-mail a document$/)).toBe("Not built");
-    const note = noteFor(/^Export: e-mail a document$/);
-    // Not "coming soon". The blocker is a product question, and the row states
-    // both options rather than implying the work is merely unstarted.
-    expect(note).toMatch(/does this product SEND mail/i);
-    expect(note).toMatch(/mail client/i);
+    // It shipped as Alt+M, its own key, because Tally's own top menu carries
+    // `E: Export` and `M: E-mail` as two separate entries. Keeping "Export:" in
+    // the name would have re-asserted the framing the implementation rejected.
+    expect(screen.queryByText(/^Export: e-mail a document$/)).toBeNull();
+  });
+});
+
+/**
+ * B2 — E-MAIL A DOCUMENT READS ON, AND MUST NOT READ AS SMTP.
+ *
+ * ⛔ WHAT THIS BLOCK EXISTS TO PREVENT is the tempting version: flip the badge to
+ * On and leave a row that any reader takes to mean this product sends mail. It
+ * does not — there is no SMTP anywhere and internal/notify is untouched — so the
+ * badge is earned by a KEY, and the row's own NAME has to say which mechanism.
+ *
+ * It also pins the two limits an operator meets in the first minute: the flow is
+ * two steps and the second is theirs, and the draft has no recipient.
+ */
+describe("B2 — e-mail a document reads On, and names the mechanism", () => {
+  const ROW = /^E-mail a document \(Alt\+M/;
+
+  it("reads On and names Tally's own key", () => {
+    renderFeatures();
+    expect(badgeFor(ROW)).toBe("On");
+  });
+
+  it("⛔ the row NAME says it opens YOUR mail client, so On cannot read as SMTP", () => {
+    renderFeatures();
+    const name = screen.getByText(ROW).textContent ?? "";
+    // ⛔ THE ASSERTION THAT CANNOT BE SATISFIED BY FLIPPING THE BADGE ALONE. A
+    // green badge over a bare "E-mail a document" claims a transport that does
+    // not exist anywhere in this product.
+    expect(
+      name,
+      "the row reads On without naming the mechanism, so it claims this product sends mail",
+    ).toMatch(/opens your mail client/i);
+    expect(name).toMatch(/Alt\+M/);
+  });
+
+  it("⛔ ...and the note says the flow is TWO STEPS and the attachment is the operator's", () => {
+    renderFeatures();
+    const note = noteFor(ROW);
+    // The one thing that goes wrong: a draft sent with no invoice on it.
+    expect(note).toMatch(/ATTACH THE SAVED PDF BEFORE YOU SEND/i);
+    expect(note).toMatch(/cannot put a file on a mail draft/i);
+  });
+
+  it("⛔ ...and that the draft has NO RECIPIENT, because no party e-mail is stored", () => {
+    renderFeatures();
+    const note = noteFor(ROW);
+    // ⚠️ THIS CORRECTS THE PLAN, which described a "pre-addressed" draft. Measured
+    // over the whole schema: no ledger carries an e-mail address.
+    expect(note).toMatch(/NO RECIPIENT/i);
+    expect(note).toMatch(/no party e-mail address anywhere/i);
+  });
+
+  it("⛔ ...and that this product still does not send mail", () => {
+    renderFeatures();
+    const note = noteFor(ROW);
+    expect(note).toMatch(/STILL DOES NOT SEND MAIL/i);
     // The outbox exists and is good — saying so is what stops the next reader
-    // rebuilding it.
+    // rebuilding it. These clauses were NOT rewritten when the row flipped.
     expect(note).toMatch(/internal\/notify/);
     expect(note).toMatch(/LogSender/);
-    // ⛔ And the rule that must not be broken when it IS built.
+    // ⛔ And the rule that must not be broken if a transport is ever added.
     expect(note).toMatch(/HALF-SEND/i);
   });
 });

@@ -171,6 +171,17 @@ describe("no advertised button is decorative", () => {
           // export it deliberately does NOT move the stack: an operator who
           // prints an invoice is still on that invoice.
           "print",
+          // Alt+M e-mails the document (B2). Screen-owned for exactly the reason
+          // `print` is — it asks the same `resolvePrintTarget` what the document on
+          // this screen is, then saves the server's PDF and opens the operator's
+          // own mail client on a draft. It does not move the stack: an operator
+          // e-mailing an invoice is still on that invoice.
+          //
+          // ⚠️ IT IS ON EVERY BAR THAT CARRIES Ctrl+P AND NO OTHER, which is the
+          // same invariant `usePrintAction` enforces by registering both keys from
+          // one hook — so this entry appears here in the same change the bar items
+          // did, and neither can be added without the other going red.
+          "emailDocument",
           // F4 on the reconciliation screen picks the bank account
           // (RESEARCH.md:879). The screen owns the picker, because which ledgers
           // are BANK ledgers is an ltree ancestry fact in the database, not

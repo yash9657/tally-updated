@@ -1,29 +1,97 @@
-# HANDOFF — THE LAST TWO
+# HANDOFF — THE LAST ONE
 
 **Updated:** 2026-08-27 (late) · **Branch:** `session/t32-and-close-7-3` · **Tree:** clean
-**Track C landed** — see `HANDOFF.md` **§1.20**. Two tracks left: **B2** (§2) and **D** (§3).
+**Tracks C and B2 both landed** — `HANDOFF.md` **§1.20** and **§1.21**. ⭐ **ONE track left: D,
+the offline entry screen (§3).** It is the only one of the four that is a DESIGN problem rather
+than a typing problem, so §0 below is now mostly about not re-paying hazards.
 **Read time:** ~12 minutes. Every claim was MEASURED, most of it re-verified 2026-08-26/27; each has
-the command beside it. ⛔ **§0.1 is the part to read first — six of its seven items cost real time.**
+the command beside it. ⛔ **§0.1 is the part to read first — eight of its nine items cost real time.**
 
-> ## ✅ BOTH BLOCKING DECISIONS ARE MADE (user, 2026-08-26). DO NOT RE-LITIGATE EITHER.
+---
+
+> # ⭐ RESUMING COLD? READ THIS BOX, THEN §0, THEN §3. NOTHING ELSE IS URGENT.
 >
-> | Decision | Answer | What it removes from the work |
+> **Where the tree is.** Branch `session/t32-and-close-7-3`, and the last two commits are the two
+> tracks that just shipped:
+>
+> ```
+> HEAD     feat(B2): Alt+M saves the PDF and hands your OWN mail client a draft
+> HEAD~1   feat(C):  Gateway > Print Templates writes a company's own layout   (e5a3e1c)
+> ```
+>
+> (⚠️ B2 is named by position rather than by SHA on purpose: this box ships INSIDE that commit, so
+> any hash written here is invalidated by the amend that would be needed to correct it. `git log
+> --oneline -3` is the authority.)
+>
+> **What is DONE.** Four of the four tracks this file's ancestors tracked (`T32`, `B1`, `C`, `B2`) are
+> shipped, driven in a browser, and folded into `HANDOFF.md` §1.18–§1.21. **Nothing from them is
+> outstanding.** ⛔ Do not re-open the two decisions in the box below; both shipped.
+>
+> **What is LEFT, and it is one thing:** **track D, the offline entry screen — §3.**
+>
+> ⛔⛔ **D IS NOT A TYPING TRACK AND THIS IS THE ONE THING TO GET RIGHT ABOUT IT.** The server engine
+> is complete (`POST .../sync/commit`, the cloud sequencer, HLC timestamps, per-intent idempotency,
+> conflict/freeze handling) and there is **NO CLIENT AT ALL** —
+> `/usr/bin/grep -rln "sync/commit\|syncCommit" frontend/src/` is **empty**. So the work is a DESIGN
+> problem: **§3.2's four questions must be answered before any code is written.** If you find yourself
+> building a queue before answering them, stop.
+>
+> ⚠️ **AND KNOW THE HONEST LIMIT BEFORE YOU START.** A service worker and an offline app shell are a
+> real piece of work SEPARATE from the queue screen. It is legitimate — and probably right — to ship
+> the queue + reconciliation UI first, which is useful the moment a commit fails or a connection drops
+> mid-session, and leave the FeaturesScreen row honest about the shell. **Say which you did.**
+>
+> ### The first ten minutes, in order
+>
+> | # | Do this | Why |
 > |---|---|---|
-> | **Does this product send mail?** | ⭐ **NO — a `mailto:` HANDOFF.** The PDF downloads, then the operator's own mail client opens with a pre-addressed, pre-subjected draft. They attach the file and send. | **No SMTP, no `Sender`, no attachment concept, no `Kind`, no bounce story, no migration.** `internal/notify` is **not touched at all**. |
-> | **The invoice logo** | ⭐ **SHIP THE FOUR FIELDS THAT EXIST; RENAME THE ROW to drop "logo".** | No image storage, no upload route, no size/type policy, **no change to the PDF renderer**. |
+> | 1 | `git log --oneline -3` · `git status --porcelain` | Confirm you are at the commit above with a clean tree |
+> | 2 | Check the ports **and the AGE of `cored`** (§0) | ⛔ A stale `cored` was found **twice** in the last session — once at start, once mid-session, where it cost a whole failed browser run showing 404s for routes that existed. `make run-cored` is `go run`, so restarting costs one second |
+> | 3 | Re-measure the gate table in §0 | It is the baseline you will be judged against; do not assume it |
+> | 4 | Read **§0.1** — nine hazards, eight of which cost real time | Items 6–9 are new this session and every one was paid for in a failed probe |
+> | 5 | Read **§3** and answer **§3.2's four questions** in writing | This is the track. The answers are the deliverable before the code is |
 >
-> ## THE TWO, IN THE RECOMMENDED ORDER
+> ### What is still blocked on a HUMAN, not on us
+>
+> ⛔ **A real GST-REGISTERED TallyPrime XML export** (`HANDOFF.md` §10 item 1) — still the commercial
+> blocker, still one e-mail. `classifyTaxLedger`, `inferRate` and the GSTR-1 B2B join have **never met
+> real GST data**; the only real file the importer was fixed against is a grain trader, GST-free and
+> zero-rated. **Do not touch those three until it arrives** — speculative changes destroy the evidence
+> the file would give you. The `Alt+O` import screen (§1.18) turns receiving it from an afternoon into
+> ten minutes.
+>
+> ⛔ **IRP / GSTN / e-Way Bill sandbox credentials** (§10 item 4). If they arrive, the IRN screen stops
+> being groundwork and becomes a filing, and the e-way bill becomes real **with no change to either
+> payload builder**. Re-order immediately. ⚠️ Note the Rule 48(4) QR row is also what
+> `VoucherScreen.stockVoucher.test.tsx`'s pinned "Not built" assertion now names — **whoever makes it
+> true must re-point that assertion in the same change** (§1.21.6 in `HANDOFF.md` explains why it was
+> pointed there).
+
+---
+
+> ## ✅ BOTH BLOCKING DECISIONS WERE MADE (user, 2026-08-26) AND BOTH ARE NOW SHIPPED.
+>
+> Kept as the record of what was decided and why, so nobody reopens either.
+> **Neither applies to track D** — D's own open questions are §3.2.
+>
+> | Decision | Answer | What shipped |
+> |---|---|---|
+> | **Does this product send mail?** | ⭐ **NO — a `mailto:` HANDOFF.** The PDF downloads, then the operator's own mail client opens on a pre-subjected draft. They attach the file and send. | `Alt+M` (§1.21). **No SMTP, no `Sender`, no attachment concept, no `Kind`, no bounce story, no migration** — `internal/notify` was **not touched at all**. ⚠️ **ONE CORRECTION TO THIS ROW: the draft is NOT "pre-addressed".** No party e-mail address exists anywhere in the schema (measured), so it opens with an empty `To:` and the screen says why. |
+> | **The invoice logo** | ⭐ **SHIP THE FOUR FIELDS THAT EXIST; RENAME THE ROW to drop "logo".** | Gateway > Print Templates (§1.20). No image storage, no upload route, no size/type policy, **no change to the PDF renderer** — and the row now names what exists. |
+>
+> ## THE ONE THAT IS LEFT
 >
 > | # | Track | Size | Why here |
 > |---|---|---|---|
-> | **1** | **B2 — e-mail a document** (§2) | small | Decision made; B1 already leaves the PDF on disk. ⚠️ It is the one that **breaks a pinned test on purpose** |
-> | **2** | **D — offline entry screen** (§3) | ⛔ large, and it is **thinking, not typing** | The engine is complete and there is **no client at all**. Four questions must be answered before any code |
+> | **1** | **D — offline entry screen** (§3) | ⛔ large, and it is **thinking, not typing** | The engine is complete and there is **no client at all**. ⛔ **Four questions must be answered before any code** — §3.2 |
 >
-> ⚠️ **THE ORDER IS A RECOMMENDATION, NOT A DEPENDENCY.** Neither B2 nor D touches anything the other
-> needs. Take them in either order; do **not** interleave them in one commit.
+> ✅ **C AND B2 ARE BOTH SPENT.** C: `HANDOFF.md` §1.20, F11 row renamed to drop "logo",
+> `drive-c-print-templates.mjs` 33/33. B2: `HANDOFF.md` §1.21, `Alt+M`, the pinned test re-pointed at
+> the Rule 48(4) QR row, `drive-b2-email-document.mjs` 20/20. §§1–2 below are a marker; both sections
+> are deleted.
 >
-> ✅ **TRACK C IS SPENT** — folded into `HANDOFF.md` §1.20, F11 row renamed, `drive-c-print-templates.mjs`
-> 33/33. §1 below is a marker; the section is deleted.
+> ⛔ **BUDGET THE THINKING, NOT THE TYPING.** D is not a small track and it is not mostly code. If you
+> find yourself writing a queue before answering §3.2, stop.
 
 ### ⛔ AND ONE THING THAT IS NOT A TRACK AND COSTS ONE E-MAIL
 
@@ -58,20 +126,21 @@ strings "$(ps -o command= -p "$(lsof -nP -iTCP:8087 -sTCP:LISTEN -t)" | awk '{pr
 ⛔ **VITE MUST BE ON `:5173`.** WebAuthn origin matching is exact; a vite that took `:5174` signs in
 fine and then fails every write with `PASSKEY STEP-UP FAILED`.
 
-**The gate baseline, RE-MEASURED 2026-08-27 after track C — these are the numbers to beat:**
+**The gate baseline, RE-MEASURED 2026-08-27 after C **and** B2 — these are the numbers to beat:**
 
 | Gate | Command | Value now |
 |---|---|---|
 | backend build + vet | `cd backend && go build ./... && go vet ./...` | clean |
 | backend tests | `cd backend && go test ./... -timeout 60m` | **exit 0** |
 | typecheck | `cd frontend && pnpm exec tsc --noEmit` | clean |
-| frontend tests | `cd frontend && pnpm vitest run` | **1662 pass / 98 files** |
+| frontend tests | `cd frontend && pnpm vitest run` | **1690 pass / 99 files** |
 | live demo | `cd frontend && pnpm verify:demo "$(cat .demo-company-id)"` | **34/34** ⚠️ takes the id as an ARGUMENT |
 | corpora | `python3 corpora/validate.py` | OK (migration=6, inventory=11) |
 | everything | `make verify` | exit 0 |
 | T32 drive | `node frontend/scripts/drive-t32-import-screen.mjs` | **25/25**, tenant torn down |
 | B1 drive | `node frontend/scripts/drive-b1-pdf-export.mjs` | **15/15**, tenant torn down |
 | C drive | `node frontend/scripts/drive-c-print-templates.mjs` | **33/33**, tenant torn down |
+| B2 drive | `node frontend/scripts/drive-b2-email-document.mjs` | **20/20**, tenant torn down |
 
 ⚠️ **`make verify` DOES NOT RUN `tsc`.** Different gates, and each has caught a real error the other
 missed — including last session, where a new test file was green in vitest with **8 real `tsc`
@@ -84,14 +153,15 @@ errors**.
 | `05c9775` | **A raw NUL byte** in `mock.ts` had made 8,672 lines **invisible to grep**. §0.1 item 1 |
 | `d60546c` | **T32** — `Alt+O` and `Gateway > Import` import a TallyPrime export. `HANDOFF.md` **§1.18**. No Go code changed |
 | `13e0ba8` | **B1** — F12 offers "Export (Alt+E) as PDF"; Alt+E **saves** it (Ctrl+P still **opens** it). `HANDOFF.md` **§1.19** |
-| _this_ | **C** — Gateway > Print Templates writes a per-company layout; the F11 row is RENAMED to drop "logo". `HANDOFF.md` **§1.20** |
+| `e5a3e1c` | **C** — Gateway > Print Templates writes a per-company layout; the F11 row is RENAMED to drop "logo". `HANDOFF.md` **§1.20** |
+| _this_ | **B2** — `Alt+M` saves the PDF and opens the operator's OWN mail client. No Go code. `HANDOFF.md` **§1.21** |
 
 ⛔ **Read `HANDOFF.md` §1.17's *"three rules this lane paid for"*, §1.18's *"three things the mutation
 proofs found"*, and §0.1 below before writing a probe.** Between them they cost four sessions.
 
 ---
 
-## ⛔ 0.1 SEVEN HAZARDS ALREADY PAID FOR. READ THIS OR RE-PAY THEM.
+## ⛔ 0.1 NINE HAZARDS ALREADY PAID FOR. READ THIS OR RE-PAY THEM.
 
 ### 1. ⛔⛔ THE SHELL'S `grep` IS A `ugrep` SHIM THAT SILENTLY SKIPS FILES — AND IT LIED
 
@@ -133,7 +203,9 @@ Measured. So:
 ⚠️ **AND `FileReader.readAsText` IS NOT `Blob.text()`**: the first BOM-sniffs and decodes UTF-16
 correctly, the second is a plain UTF-8 decode and produces mojibake. Both measured. A developer who
 checked with a FileReader would have concluded that sending a string is fine and shipped the version
-that is not. **B2 touches file handling; keep this in mind.**
+that is not. ✅ **B2 shipped without needing either** — it hands the `File` nowhere and reads no
+bytes in the browser; the PDF goes straight from the client to `downloadBlob`. Keep this in mind
+if D's queue ever holds attachments.
 
 ### 4. ⛔ A GATE OVER A SERVER DECISION IS A **GENERATED GOLDEN**, NEVER A LIST IN TYPESCRIPT
 
@@ -159,7 +231,8 @@ all 30, neither is empty, anchors on the right side) in a suite that always runs
   (`downloadSheet`, `usePrint`'s pop-up fallback, `DataScreen`) and they disagreed: two revoked the
   object URL on a 60s timer **and said why** (*"revoking before the browser has read the blob produces
   an empty file"*), the third revoked **synchronously in a `finally`**. All three now revoke late.
-  ⛔ **B2 needs a download. Do not write a fourth.**
+  ✅ **B2 used it and wrote no fourth** — `useEmailAction` calls `downloadBlob` and nothing else.
+  ⛔ **Do not write a fourth.**
 - **In a drive: `openFromGateway` drives the GATEWAY menu (ScreenKinds); report NAMES live behind
   `Alt+G`.** The B1 drive used the wrong one, never left the Gateway, opened a Sales Voucher and
   failed three probes. `drive-b1-pdf-export.mjs`'s `goTo` is the Alt+G form;
@@ -193,6 +266,34 @@ like a defect in the track being worked on.
 a `company_id` column under `session_replication_role = replica`, then delete the company. Copy it from
 `drive-c-print-templates.mjs` or `drive-b1-pdf-export.mjs`. The drives get this right; a one-line manual
 delete does not, and the damage is not visible until a screen fails to load.
+
+### 8. ⛔ A BROWSER'S EVENT ORDER IS **NOT** YOUR CODE'S CALL ORDER
+
+B2's drive asserted that Chromium's `download` event arrived before the `mailto:` request, and it
+**failed against provably correct code**. Chromium emits a `mailto:` navigation request synchronously
+from the renderer, while a `download` has to cross to the browser process and start writing a file —
+so `["draft", "file:…"]` is what a CORRECT build produces there.
+
+⛔ **"FIXING" THE PRODUCT TO SATISFY THAT WOULD HAVE BEEN REORDERING CORRECT CODE TO PLEASE A BROKEN
+ORACLE.** Assert strict ordering where it is deterministic — in vitest, with both sinks pushing to one
+synchronous array — and let the browser prove only that each effect really happens.
+
+⚠️ **AND `location.href` CANNOT BE STUBBED IN CHROMIUM.** It is `[LegacyUnforgeable]`, so
+`Object.defineProperty(window.location, "href", …)` throws *"Cannot redefine property"* — measured.
+What DOES work, and is better, is `page.on("request")`: a `mailto:` assignment fires a genuine request
+event carrying the full URL, so a drive can assert the real encoded URL rather than a stub.
+
+### 9. ⛔ `buttons.test.ts` CANNOT SEE A DECORATIVE **GLOBAL** KEY ON A BAR
+
+Adding `item("Alt+M", "E-Mail")` to the TDS challan bar — a screen with no printable document, which
+is why it carries no Ctrl+P — left the whole suite **GREEN**. "No advertised button is decorative"
+checks that a bar's combo RESOLVES to a built action and is a known side effect, and a GLOBAL binding
+in the side-effect list satisfies both on **every** screen.
+
+⚠️ **Ctrl+P HAS THE IDENTICAL HOLE AND ALWAYS HAS**, and so will any future global that is also a
+screen action. If a track adds one, assert its bar placement DIRECTLY as a property — B2's
+`emailDocument.test.tsx` reads the screen list from `corpora/validate.py`'s `KNOWN_SCREENS` so a
+screen added later cannot escape the invariant.
 
 ---
 
@@ -235,92 +336,28 @@ fake a payload a real backend has never produced.**
 
 ---
 
-# 1. ✅ TRACK C — SPENT. IT SHIPPED 2026-08-27.
+# §§1–2. ✅ TRACKS C AND B2 — BOTH SPENT. THEY SHIPPED 2026-08-27.
 
-**Folded into `HANDOFF.md` §1.20**, which carries the whole of it. This section is deleted per §5's
-rule rather than left as prose. The four things worth carrying forward are already in §0.1 below
-(items 6 and 7) and in `HANDOFF.md` §1.20.1–§1.20.9; in one line each:
+Folded into `HANDOFF.md` **§1.20** (C) and **§1.21** (B2), which carry the whole of both. These
+sections are deleted per §5's rule rather than left as prose. What generalises is already in §0.1
+below; in one line each:
 
-- the field grid is **RAGGED** — `RenderReport` reads 3 of the 7 overridable fields, and a form built
-  from the obvious reading stores a declaration no statement will ever print, with no error anywhere;
-- the golden that decides which fields bite is **MEASURED by rendering** and **needs no Postgres**, so
-  it fixes §0.1 item 4's skip hazard rather than inheriting it;
-- the oracle was the **printed PDF**, never the stored row — and the drive's strongest probe is that
-  after clearing, the PDF is **byte-identical** to the pre-override one;
-- **the logo was cut and the F11 row renamed**, because the schema has no image storage anywhere.
+**C — per-company print templates.** The field grid is **RAGGED** (`RenderReport` reads 3 of the 7
+overridable fields), so a form built from the obvious reading stores a declaration no statement will
+ever print, with no error anywhere. The golden that decides which fields bite is **measured by
+rendering** and needs **no Postgres**, so it fixes §0.1 item 4's skip hazard rather than inheriting
+it. The oracle was the **printed PDF**, never the stored row. The logo was cut and the F11 row
+renamed, because the schema has no image storage anywhere.
 
-# 2. TRACK B2 — E-MAIL A DOCUMENT. ✅ DECIDED: `mailto:` HANDOFF.
+**B2 — e-mail a document.** `Alt+M`, its own key rather than a fourth `ExportTarget`, because Tally's
+top menu carries `E: Export` and `M: E-mail` separately. **A web page cannot attach a file to a
+`mailto:` draft**, so the one failure mode is a draft opening with no file saved — hence the proof is
+an **ORDERING** test, and no draft opens at all if the save fails. ⚠️ **The plan's "pre-addressed"
+draft was wrong**: no party e-mail exists anywhere in the schema, so there is no recipient and the
+screen says so.
 
-> ## ✅ THE DECISION: **THIS PRODUCT DOES NOT SEND MAIL.**
->
-> The PDF downloads, and the operator's **own mail client** opens with a pre-addressed,
-> pre-subjected, pre-bodied draft. They attach the file and send it.
->
-> ⛔ **SO `internal/notify` IS NOT TOUCHED AT ALL.** No `Sender`, no SMTP, no attachment concept, no
-> new `Kind`, no migration, no deliverability story, no bounce handling. **If you find yourself
-> editing `internal/notify`, stop and re-read this box.**
->
-> (For the record, so nobody reopens it: `internal/notify` is a real, durable, transactional outbox —
-> `Enqueue` runs INSIDE the caller's transaction, at-least-once delivery, a lease, status transitions.
-> It is genuinely good and it is **not** the missing piece. What is missing is a transport, and the
-> decision above says we are not building one.)
-
-## 2.1 The limit that must be ON THE SCREEN
-
-⛔ **A WEB PAGE CANNOT ATTACH A FILE TO A `mailto:` DRAFT.** There is no such thing in the `mailto:`
-URL scheme and no browser implements one. The flow is **inherently two steps**, and the screen must
-say so **before** the operator clicks — otherwise they send an invoice e-mail with no invoice on it
-and find out from the customer.
-
-The honest shape:
-
-1. the PDF is **downloaded first** — B1's `downloadBlob` already does exactly this; **reuse it**
-   (§0.1 item 5);
-2. **then** the draft opens. ⛔ **ITS BODY MUST NOT SAY "the invoice is attached"**, because at that
-   moment it is not. Word the body so it is true of a draft nobody has attached to yet, and put the
-   *instruction* in the UI rather than in the e-mail;
-3. the screen **names the downloaded file**, so the operator knows which file to attach.
-
-⚠️ **`mailto:` LIMITS, BEFORE YOU DESIGN THE BODY.** URL length is capped in practice (keep well
-under ~2 KB), the body needs `encodeURIComponent`, and a newline is `%0D%0A`. A long templated body
-**silently truncates** in some clients — keep it short and put nothing load-bearing at the end.
-
-## 2.2 Where it hangs, and what it must not claim
-
-- **The key.** Tally's Alt+E menu lists "e-mail this document" among its export choices, and
-  `UNBUILT_FORMATS` in `export/sheet.ts` still names it (currently
-  `["JPEG", "HTML", "e-mail this document"]`). The natural home is the **same F12 export block B1
-  added** — but ⛔ **it is an ACTION, not a FORMAT.** `ExportTarget` is `"csv" | "excel-xml" | "pdf"`
-  and every one writes a file; e-mail *also* writes a file and then does something else. **Decide
-  deliberately** whether it is a fourth `ExportTarget` or its own key, and **say which in the
-  commit**. A fourth "format" that silently opens a mail client is a surprise.
-- ⛔ **REMOVE `"e-mail this document"` FROM `UNBUILT_FORMATS`** the day it ships — the rule `Alt+O`
-  and B1's PDF both followed.
-- **The FeaturesScreen row** is currently **`Export: e-mail a document` — `off`**, and its note is
-  long and already states this decision *and* its alternative. **Edit the clause that stops being
-  true; do not rewrite the note.**
-- ⛔ **AND THE ROW MUST NOT READ "On" AS IF THE PRODUCT SENDS MAIL.** Name the mechanism in the row
-  itself — e.g. *"E-mail a document (opens your mail client)"* — so nobody reads a green badge as an
-  SMTP feature. The note keeps the reason the transport does not exist.
-
-## 2.3 ⚠️⚠️ THE ONE PINNED TEST THIS TRACK WILL BREAK — ON PURPOSE
-
-`VoucherScreen.stockVoucher.test.tsx:967` pins `/^Export: e-mail a document/` as its "Not built" row
-and then asserts `getAllByText("Not built").length > 1`. **T32 and B1 both checked it and were safe;
-B2 is not.**
-
-⛔ **RE-POINT IT AT ANOTHER GENUINELY ABSENT ROW IN THE SAME CHANGE**, keep the plural property, and
-**do not delete the test**. Its own comment (updated 2026-08-27) now says so at the site, and explains
-that it is the last row that file can name. `FeaturesScreen.test.tsx` has both patterns — the flip and
-the split.
-
-**Proof:** a test asserting the `mailto:` URL is built with an encoded subject and body **and that the
-PDF was downloaded first** — both, *in order*. A draft with no file downloaded is the failure mode.
-⛔ **Mutation:** open the draft without downloading, and watch the ordering assertion name it.
-⚠️ **In jsdom `window.open` / `location.href` must be stubbed** — assert the URL that was requested,
-never that a client opened.
-
----
+⛔ **THE NUMBERING SKIPS TO §3 ON PURPOSE.** Track D's own text cross-references §3.2, so it keeps its
+section number; renumbering it to §1 would break every internal pointer in the one section still live.
 
 # 3. TRACK D — THE OFFLINE ENTRY SCREEN
 
@@ -434,9 +471,9 @@ predictions were themselves found wrong, which is exactly why they are written d
 
 ## 5. WHEN EACH ONE LANDS
 
-- Fold it into `HANDOFF.md` (**§1.21** onward — T32 took §1.18, B1 §1.19, track C §1.20), flip its
-  `HANDOFF.md` §1.11 row (C is row 7, so **offline entry is row 8** and B2 lives in row 9), and update
-  the FeaturesScreen row
+- Fold it into `HANDOFF.md` (**§1.22** onward — T32 took §1.18, B1 §1.19, C §1.20, B2 §1.21), flip
+  its `HANDOFF.md` §1.11 row (C is row 7 and B2 row 8, so **offline entry is row 9**), and update the
+  FeaturesScreen row
   **in the same change that makes it true** — the screen's own rule: a row flips when an operator gets
   a SCREEN, not when they got a route.
 - Add a `docs/RELEASE-NOTES.md` note leading with what an operator will act on.

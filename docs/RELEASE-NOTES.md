@@ -7,6 +7,71 @@ what was wrong; this file records what a person will notice.
 
 ---
 
+## Alt+M e-mails a document — but you attach the file, and we never send it
+
+**Applies to:** every document and report that prints. **Feature:** B2.
+
+### What changes
+
+Press **Alt+M** on an invoice, a receipt, a delivery note or any report that
+prints. Two things happen, in this order:
+
+1. the **PDF is saved** to your downloads — the same document Ctrl+P prints, laid
+   out by the server with your company's letterhead;
+2. **your own mail client opens** on a new message, with the subject and a short
+   covering note already filled in.
+
+It is Tally's own key: TallyPrime's top menu has `E: Export` and `M: E-mail` as
+two separate entries, and this follows that — e-mail is not one of Alt+E's export
+formats.
+
+### ⛔ You must attach the PDF yourself. The draft opens empty.
+
+**A web page cannot put a file onto an e-mail draft.** There is no way to do it —
+no browser allows it, and no amount of work on our side changes that. So the file
+is saved to your computer and **you attach it before sending**.
+
+The status line names the exact file, so you know which one to pick. And the
+draft's wording deliberately never says "please find attached", because at the
+moment it opens nothing is attached — if it said so and you forgot, the e-mail
+would be telling your customer something untrue.
+
+**If the PDF cannot be saved, no draft opens at all** and the message says why.
+That is on purpose: a draft with no file behind it is how an invoice e-mail gets
+sent with no invoice on it.
+
+### ⚠️ The draft has no recipient
+
+We do not store e-mail addresses against your customers and suppliers — there is
+no field for one anywhere in the product — so there is nothing to fill in. You
+pick the address from your own mail client's address book, which is where it
+actually lives.
+
+### ⚠️ This product does not send your mail, and that is deliberate
+
+Nothing here talks to a mail server. The message is composed, sent and stored by
+**your own mail client**, which means:
+
+- it appears in **your** Sent folder, from **your** address;
+- there is nothing on our side that can silently fail to deliver;
+- your replies come back to you, not into a system you would have to check.
+
+The alternative — us sending mail on your behalf — needs a mail server, a
+deliverability story and bounce handling, and it puts a machine between you and
+your customer that can fail quietly. We chose not to.
+
+### Where it appears
+
+**Alt+M** sits next to **Ctrl+P** on every button bar that has one, and only
+there. If a screen cannot print its document it cannot e-mail it either, and both
+keys refuse with the same sentence — for example, an unsaved voucher says
+"Nothing to print yet".
+
+The F11 Company Features row now reads **On**, and names the mechanism: *"E-mail a
+document (Alt+M — opens your mail client)"*.
+
+---
+
 ## You can now change what your own invoices say
 
 **Applies to:** every printed document and every printed report. **Feature:** track C / T16.

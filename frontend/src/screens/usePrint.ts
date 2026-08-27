@@ -4,6 +4,7 @@ import { useRegisterScreenAction } from "../app/ScreenActions";
 import { useCompanyContext } from "../app/CompanyContext";
 import { ApiError } from "../api/http";
 import { downloadBlob } from "../export/download";
+import { useEmailDocumentAction } from "../export/useEmailAction";
 import {
   resolvePrintTarget,
   type PrintTarget,
@@ -77,6 +78,24 @@ export interface UsePrintOptions {
 export function usePrintAction(options: UsePrintOptions = {}): void {
   const { voucher, sink = openPdfInBrowser } = options;
   const { company, client } = useCompanyContext();
+
+  // ⛔ ALT+M IS REGISTERED HERE, FROM THE SAME OPTIONS, AND THAT IS A DESIGN
+  // DECISION RATHER THAN A SHORTCUT.
+  //
+  // There are 23 call sites of this hook. Wiring Alt+M into each of them would be
+  // 23 chances to forget one — and a forgotten one is SILENT: the key resolves,
+  // the shell finds no handler for that screen, and nothing happens. Registering
+  // both here makes "a screen that can PRINT its document can also E-MAIL it" a
+  // structural invariant instead of a checklist, which is the right invariant:
+  // Alt+M is "print it, but hand it to your mail client instead of the printer",
+  // and both keys ask the SAME `resolvePrintTarget` what the document is. A screen
+  // where printing is refused refuses e-mail with the identical sentence.
+  //
+  // ⚠️ SO THIS HOOK BINDS TWO KEYS DESPITE ITS NAME. It is not renamed because
+  // renaming would touch all 23 sites for no behavioural gain; the coupling is
+  // asserted by a test instead (`emailDocument.test.tsx` mounts a screen and
+  // presses both).
+  useEmailDocumentAction({ voucher });
 
   const handler = useCallback(
     async (snapshot: NavSnapshot): Promise<string> => {

@@ -130,6 +130,16 @@ const SCREEN_ACTIONS: Partial<Record<KeymapAction["kind"], ScreenActionKind>> = 
   prevVoucher: "prevVoucher",
   nextVoucher: "nextVoucher",
   print: "print",
+  // Alt+M — E-MAIL THIS DOCUMENT (B2).
+  //
+  // ⛔⛔ THIS LINE IS THE ONE THAT SHIPS THE KEY DEAD. Everything else can be
+  // present and correct — the keymap binding, the KeymapAction, the
+  // ScreenActionKind, the button-bar item and the screen's own
+  // useEmailDocumentAction — and Alt+M STILL does nothing, silently, because the
+  // shell never dispatches it. Read the comment on `importBankStatement` below:
+  // that is exactly how Alt+O shipped, with every unit test passing because they
+  // call the dispatcher directly and bypass this map.
+  emailDocument: "emailDocument",
   bankReconciliation: "bankReconciliation",
   // Alt+O on the reconciliation screen — statement IMPORT (T4 slice 2a).
   //

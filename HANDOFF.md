@@ -920,8 +920,9 @@ The criterion is unchanged: **how much of a real business's day is blocked.**
 | **5** | ✅ **DONE 2026-08-26 — T32 THE MIGRATE-FROM-TALLY SCREEN** (§1.18). `Alt+O`, and **Gateway of Tally > Import** — Tally has both doors, so this has both | ⛔ **NO GO CODE CHANGED**: the route, its `routeAction` arm, its vocabulary token and its 128 MiB cap were all already right, and nothing in the product could reach them — the fifth time this repo has shipped an engine with no front door. ⛔ **The screen sends the `File` and never `await file.text()`**: every real export is UTF-16LE, and `Blob.text()` is a UTF-8 decode, so the one-liner destroys the only file shape a customer sends while every ASCII fixture keeps passing. The report puts `stock_lines` and `opening_positions` level with the voucher count, because a trial balance cannot see quantity | The byte-identity PAIR — UTF-16 red, ASCII **green** — under an executed `.text()` mutation, plus 9 more mutations each predicted then observed. `drive-t32-import-screen.mjs` **25/25** in a browser, figures read off the page and cross-checked against the database. `verify:demo` re-pinned 34/34 |
 | **6** | ✅ **DONE 2026-08-26 — B1 EXPORT TO PDF** (§1.19). F12 offers it, `Alt+E` saves it. The **e-mail half was SPLIT off** and still reads Not built, because it is blocked on a PRODUCT DECISION rather than on work | ⛔ **A PDF IS NOT THE ROWS ON SCREEN** — Alt+E's other formats write what is displayed, the print route returns the whole statement, so the status line NAMES the Ctrl+F filter that was not applied. Offered only on the 10 of 30 reports with a layout, gated by a golden **generated from the router** rather than a list anybody keeps. And the three disagreeing download anchors became one (two revoked late and said why; the third revoked synchronously) | 14 vitest cases · `drive-b1-pdf-export.mjs` **15/15**, reading the PDF Chromium actually saved · 6 mutations predicted then observed |
 | **7** | ✅ **DONE 2026-08-27 — TRACK C / T16 PER-COMPANY PRINT TEMPLATES** (§1.20). Three routes plus one screen, reached from **Gateway of Tally > Print Templates**; the F11 row was **RENAMED to drop "logo"**, because there is no image storage anywhere in this product | ⛔ **THE SIXTH ENGINE WITH NO FRONT DOOR.** `SaveOverrides` was implemented AND TESTED since migration 0037 and the printer honoured overrides on every print — and no route could write one, so `print_template` held **zero rows in the entire database**. ⛔ **The finding that changed the design: THE FIELD GRID IS RAGGED.** `RenderReport` reads 3 of the 7 overridable fields, so a form built from the obvious reading stores a declaration no statement will ever print, with no error anywhere. Which fields bite is now a **golden MEASURED by rendering each kind twice per field** — and unlike B1's it needs no Postgres, so it cannot hide behind a skip | 18 mutations predicted then observed · the oracle is the **printed PDF**, never the stored row · `drive-c-print-templates.mjs` **33/33**, whose strongest probe is that after clearing the PDF is **byte-identical** to the pre-override one |
-| **8** | **OFFLINE ENTRY SCREEN** (§5.2) | The differentiator against Tally's LAN-only model, and it is built | A screen **plus a decision**: how does a browser present queued intents? |
-| **9** | **B2 e-mail a document** (`HANDOFF-THE-LAST-THREE.md` §2) → **T8 multi-currency** → **T11 budgets** → **T13 interest** → **T12 GSTR-9** → **SSO/OIDC last** | Ordinary Tier-2 backlog. §5.4 states the one thing not to get wrong in each. ⚠️ **T16 print templates is GONE from this list — it shipped as row 7.** B2's product decision is MADE (a `mailto:` handoff; this product does not send mail) | |
+| **8** | ✅ **DONE 2026-08-27 — B2 E-MAIL A DOCUMENT** (§1.21). `Alt+M` saves the server's PDF and opens the operator's OWN mail client on a draft. The F11 row reads On and **names the mechanism in its own title**, because a bare "E-mail a document — On" is read as SMTP by everybody | ⛔ **NO GO CODE CHANGED, AND `internal/notify` IS UNTOUCHED** — this product does not send mail, which is the decision rather than a gap. ⛔ **A WEB PAGE CANNOT ATTACH A FILE TO A `mailto:` DRAFT**, so the one failure mode is a draft opening with no file saved — hence the proof is an **ORDERING** test (save, then draft; and no draft at all if the save fails), because asserting the two effects separately cannot see it. ⚠️ **The plan said "pre-addressed" and that was wrong**: no party e-mail exists anywhere in the schema, so the draft has no recipient and the screen says so. Its own key rather than a fourth `ExportTarget`, because Tally's top menu carries `E: Export` and `M: E-mail` separately (RESEARCH.md:361/:415/:774/:817) | 13 mutations predicted then observed · `drive-b2-email-document.mjs` **20/20**, asserting the real `mailto:` URL Chromium was asked to open · it also found a blind spot: `buttons.test.ts` cannot see a decorative Alt+M **or Ctrl+P**, so the bar invariant is now asserted directly |
+| **9** | **OFFLINE ENTRY SCREEN** (§5.2) | The differentiator against Tally's LAN-only model, and it is built | A screen **plus a decision**: how does a browser present queued intents? |
+| **10** | **T8 multi-currency** → **T11 budgets** → **T13 interest** → **T12 GSTR-9** → **SSO/OIDC last** | Ordinary Tier-2 backlog. §5.4 states the one thing not to get wrong in each. ⚠️ **T16 print templates and B2 are GONE from this list — they shipped as rows 7 and 8.** | |
 
 > ### ⛔⛔ AND THE TWO THINGS THAT ARE NOT TRACKS AND OUTRANK MOST OF THIS LIST
 >
@@ -1692,6 +1693,209 @@ node frontend/scripts/drive-c-print-templates.mjs   # needs cored :8087 + vite :
 
 ⚠️ **IF THE SURFACE GOLDEN'S DIFF EVER SURPRISES YOU, READ IT — DO NOT REGENERATE IT.** A field moving
 into `ignores` is a control an operator can still fill in and which will never print.
+
+### 1.21 ✅ B2 E-MAIL A DOCUMENT — DONE AND DRIVEN. `Alt+M`, AND THIS PRODUCT STILL DOES NOT SEND MAIL.
+
+> ## ✅ THE DECISION, AND IT WAS NOT AN ENGINEERING ONE.
+>
+> `Alt+M` saves the server's PDF and opens the operator's **own** mail client on a
+> pre-subjected draft. **`internal/notify` IS NOT TOUCHED** — no SMTP, no `Sender`,
+> no attachment concept, no new `Kind`, no migration, no deliverability story, no
+> bounce handling. What is missing there is a *transport*, and we deliberately did
+> not build one.
+>
+> ⛔ **NO GO CODE CHANGED AT ALL.** This is entirely frontend.
+
+#### 1.21.1 ⛔ THE DESIGN QUESTION THE PLAN LEFT OPEN, AND WHAT SETTLED IT
+
+`HANDOFF-THE-LAST-TWO.md` §2.2 required a deliberate choice: **a fourth
+`ExportTarget`, or its own key?** — and said to state which in the commit.
+
+**Its own key, `Alt+M`.** `RESEARCH.md` settles it four independent times: the
+TallyPrime top menu is `E: Export` **and** `M: E-mail`, two separate entries
+(:361); `Alt+M` is listed among the top-menu globals (:415); the report key table
+carries it (:774); and the export page says *"Alt+M e-mails the report"* **alongside
+rather than among** Alt+E's format list (:817).
+
+Beyond faithfulness: every `ExportTarget` writes a file and stops. This writes a
+file and then **leaves the application**, handing the operator a manual step — so a
+fourth "format" that silently opens a mail client would be a surprise.
+
+⛔ **AND `"e-mail this document"` IN `UNBUILT_FORMATS` WAS ITSELF THE DRIFT IT
+CAUSED.** It was removed in the same change. `EXPORT_NOT_BUILT_NOTE` is *derived*
+from that list, so leaving it would have gone on telling operators in the F12 panel
+that e-mail is unbuilt after it shipped.
+
+#### 1.21.2 ⛔⛔ THE ONE FAILURE MODE, AND WHY THE PROOF IS AN **ORDERING** TEST
+
+**A web page cannot attach a file to a `mailto:` draft.** There is no such field in
+the scheme and no browser implements one. So the flow is inherently two steps, and
+the way it fails a customer is a draft that opens with **no file saved**: the
+operator types an address, sends, and the invoice e-mail has no invoice on it.
+
+Asserting "the PDF was downloaded" and "a draft was opened" **separately cannot see
+that** — both are true in the broken build too. So:
+
+1. the PDF is fetched and written to disk **first**, through the one shared
+   `downloadBlob` anchor;
+2. **if the save fails the draft does not open at all**, and the message says so;
+3. the status line **names the file** and says to attach it.
+
+`emailDocument.test.tsx` asserts the ORDER from one synchronous call log, and the
+executed mutation that opens the draft first turns it red.
+
+⛔ **THE BODY NEVER MENTIONS AN ATTACHMENT.** It is a short covering note that is
+true of a draft nobody has attached to yet and stays true after they do — and the
+*instruction* lives in the status line, never in the message, because "please attach
+the PDF" is addressed to the sender and the **recipient** is who reads the body. A
+test refuses `attached`, `enclosed`, `please find`, `herewith` and `follows`.
+
+⚠️ **AND NOTHING LOAD-BEARING GOES AT THE END OF THE BODY**, because a client past
+its URL ceiling truncates the tail rather than refusing. The cap (1800) trims the
+**body** and never the subject, and marks the draft `trimmed` so the status line can
+say so — a silently shortened body being the failure the flag exists to prevent.
+
+#### 1.21.3 ⚠️⚠️ ONE CORRECTION TO THE PLAN: THE DRAFT IS **NOT** PRE-ADDRESSED
+
+§2 of the plan describes a *"pre-addressed"* draft. **There is no party e-mail
+address anywhere in this product.** Measured over the whole schema:
+
+```
+psql -tAc "SELECT table_name||'.'||column_name FROM information_schema.columns
+           WHERE table_schema='public' AND column_name LIKE '%email%'"
+   -> app_user.email · company_invite.email
+      company_tds_profile.email · company_tds_profile.responsible_email
+```
+
+The operator's own login, an invitation, and the company's own TDS contact. **A
+ledger carries none.** So the draft opens with an empty `To:` — `mailto:?subject=…`
+is valid — and the screen SAYS so rather than leaving the operator to wonder. The
+address lives in their address book, which is the only place this product has ever
+known it. Storing one against a ledger is a real, separate piece of work (a column,
+a master-form field, and a decision about which address wins when the two differ).
+
+#### 1.21.4 ⛔ ALT+M IS REGISTERED BY `usePrintAction`, FROM ONE HOOK
+
+`usePrintAction` has **23 call sites**. Wiring Alt+M into each would have been 23
+chances to forget one, and a forgotten one is **silent** — the key resolves, the
+shell finds no handler for that screen, nothing happens. So `usePrintAction` now
+registers **both**, which makes *"a screen that can PRINT its document can also
+E-MAIL it"* a structural invariant rather than a checklist. That is the right
+invariant: both ask the same `resolvePrintTarget`, so a screen where printing is
+refused refuses e-mail with the identical sentence (asserted).
+
+⚠️ **THE HOOK THEREFORE BINDS TWO KEYS DESPITE ITS NAME.** Not renamed: that would
+touch all 23 sites for no behavioural gain, and the coupling is asserted by a test
+instead.
+
+**Five registration points, and ONE ships the key dead:** the `KeymapAction`, the
+global binding + `actionLabel()`, `ScreenActionKind`, and ⛔
+**`SCREEN_ACTIONS` in `AppShell.tsx`** — everything else can be correct and Alt+M
+still does nothing, silently, because the shell never dispatches it. That is exactly
+how `Alt+O` once shipped. Mutation-proved separately.
+
+⚠️ **macOS composes Option+M into "µ"** and it needs no special case — `baseKeyOf`
+resolves every `Alt+<letter>` on `ev.code` precisely so layout-specific composition
+cannot kill a binding. The drive sends the composed character anyway, because a
+probe that sends the *uncomposed* key tests a keystroke no Mac produces.
+
+#### 1.21.5 ⛔ A BLIND SPOT IN `buttons.test.ts` THAT A MUTATION FOUND
+
+Adding `item("Alt+M", "E-Mail")` to the **TDS challan bar** — a screen with no
+printable document at all, which is why it deliberately carries no Ctrl+P — left the
+whole suite **GREEN**. The "no advertised button is decorative" gate checks that a
+bar's combo resolves to a built action and is a known side effect, and **Alt+M is a
+global binding in the side-effect list, so it satisfies both on every screen.**
+⚠️ **Ctrl+P has the identical hole and always has.**
+
+The invariant is now asserted directly: for every screen, the bar offers Alt+M **iff**
+it offers Ctrl+P — plus a control that at least one screen offers both and at least
+one offers neither, so it cannot pass on a build where Alt+M is on no bar at all.
+The screen list is **read from `corpora/validate.py`'s `KNOWN_SCREENS`**, the
+repository's canonical ScreenKind set, so a screen added later is covered
+automatically instead of quietly escaping.
+
+#### 1.21.6 THE PINNED TEST, RE-POINTED — THE THING THIS TRACK WAS WARNED ABOUT
+
+`VoucherScreen.stockVoucher.test.tsx` pinned `/^Export: e-mail a document/` as its
+"Not built" row and asserted `getAllByText("Not built").length > 1`. Its own comment
+said whoever built the e-mail half must re-point it in the same change.
+
+⛔ **IT NOW NAMES THE Rule 48(4) QR CODE**, chosen over the other six absent rows
+because it is the nearest genuinely absent thing to a printed **document** (which is
+what that file keys) and because it is blocked on a **human** — IRP sandbox
+credentials, §10 item 4 — rather than on work, so it will not flip out from under the
+test the way three screen rows already have. The plural property is kept and the test
+was not deleted.
+
+#### 1.21.7 THE FEATURES ROW — ON, WITHOUT CLAIMING SMTP
+
+The row is now **`E-mail a document (Alt+M — opens your mail client)` — On**.
+
+⛔ **THE MECHANISM IS IN THE NAME AND THAT IS NOT OPTIONAL.** A bare "E-mail a
+document — On" is read as an SMTP feature by everybody. Mutation-proved: dropping
+"opens your mail client" from the name turns a test red naming it.
+⚠️ **"Export:" is gone from the name too** — e-mail is not one of Alt+E's formats and
+never was in Tally either. Only the clause that stopped being true was replaced; every
+word about `internal/notify`, `LogSender` and the HALF-SEND rule survives and is
+pinned.
+
+#### 1.21.8 THE PROOFS
+
+⛔ **13 EXECUTED MUTATIONS, EACH PREDICTED THEN OBSERVED.** Including: the draft
+opening **before** the save (the one the plan named), a draft opening despite a failed
+save, the refusal path no longer short-circuiting, `SCREEN_ACTIONS` losing the entry,
+the keymap losing the binding, `usePrintAction` no longer registering it,
+`encodeURI` instead of `encodeURIComponent` (a company named "Smith & Sons" would
+otherwise end the subject early and inject a parameter), the body claiming an
+attachment, an invented recipient, the length cap removed, the row dropping its
+mechanism, `UNBUILT_FORMATS` keeping the stale entry, and Alt+M on a bar with no
+Ctrl+P.
+
+**`drive-b2-email-document.mjs` — 20/20 in a browser**, on a throwaway tenant it
+creates and tears down. ✅ **The `mailto:` URL is observable on the real thing:**
+setting `location.href` to a `mailto:` fires a genuine `page.on("request")` in
+Chromium (measured), so the drive asserts the exact encoded URL — subject, body, no
+`to=`, `%0D%0A` line breaks, no attachment claim — rather than a stub. It also reads
+the **real PDF Chromium saved** (`%PDF-` … `%%EOF`, company name inside) and confirms
+the page did **not** navigate away, which is the property that made `location.href`
+the right sink over `window.open` (a pop-up blocker eats the latter after an await).
+
+⚠️ **TWO PROBE FAILURES WORTH INHERITING, BOTH RULE 5:**
+
+1. ⛔ **BROWSER EVENT ORDER IS NOT CALL ORDER.** The drive first asserted the
+   download event arrived before the `mailto:` request and **failed on provably
+   correct code**: Chromium emits the request synchronously from the renderer while a
+   download must cross to the browser process, so `["draft", "file:…"]` is what a
+   CORRECT build produces there. "Fixing" the product to satisfy it would have been
+   reordering correct code to please a broken oracle. **The strict ordering oracle is
+   the vitest one**, where both sinks push to one synchronous array.
+2. **`location.href` cannot be stubbed in Chromium** — it is `[LegacyUnforgeable]`,
+   so `Object.defineProperty(window.location, "href", …)` throws *"Cannot redefine
+   property"*. Measured before the drive was written; the `page.on("request")` route
+   is what works.
+
+⛔ **AND ONE REAL GAP A PROBE FOUND IN THE PRODUCT:** the first version of the
+failed-save test made `URL.createObjectURL` **throw**, and the exception escaped the
+handler entirely — no file, no draft, **and no status line either**, so the key
+appeared to do nothing at all. The file step is now wrapped. (The test itself was
+then changed to drive `downloadBlob`'s documented `canSaveAFile()` path, because a
+throw was not that test's subject.)
+
+#### 1.21.9 Where it all is
+
+| Thing | Where |
+|---|---|
+| the draft's wording + the URL | `frontend/src/export/emailDocument.ts` |
+| the effect, and the ORDER | `frontend/src/export/useEmailAction.ts` |
+| registered beside Ctrl+P | `frontend/src/screens/usePrint.ts` |
+| tests (23 cases) | `frontend/src/export/emailDocument.test.tsx` |
+| the drive | `frontend/scripts/drive-b2-email-document.mjs` |
+
+```
+cd frontend && pnpm vitest run src/export/ src/screens/FeaturesScreen.test.tsx src/keystroke/buttons.test.ts
+node frontend/scripts/drive-b2-email-document.mjs   # needs cored :8087 + vite :5173
+```
 
 ### 1.12 ⛔ HOW TO PARALLELISE THIS — WHAT WORKED LAST SESSION, AND WHAT MUST NOT BE SPLIT
 

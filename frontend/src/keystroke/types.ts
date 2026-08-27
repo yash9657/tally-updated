@@ -693,6 +693,26 @@ export type KeymapAction =
   | { kind: "ledgerWise" } // F5 on a report — group-wise <-> ledger-wise
   | { kind: "filter" } // Ctrl+F — filter report rows
   | { kind: "exportScreen" } // Alt+E — export the rows on screen (CSV / Excel XML)
+  /**
+   * Alt+M — E-MAIL THIS DOCUMENT (B2). Saves the server's PDF, then opens the
+   * operator's own mail client on a pre-subjected draft.
+   *
+   * ⛔ ITS OWN ACTION AND NOT A FOURTH `ExportTarget`, AND TALLY AGREES. The
+   * TallyPrime top menu is `E: Export` and `M: E-mail` — two separate entries
+   * (RESEARCH.md:361) — Alt+M is a documented global (:415, :774), and the
+   * export page says "Alt+M e-mails the report" ALONGSIDE rather than among
+   * Alt+E's format list (:817). Beyond faithfulness: every `ExportTarget` writes
+   * a file and stops, whereas this writes a file and then LEAVES THE
+   * APPLICATION, so a fourth "format" that silently opens a mail client would be
+   * a surprise.
+   *
+   * ⛔⛔ THIS PRODUCT DOES NOT SEND MAIL, and the key must never read as if it
+   * does. There is no SMTP anywhere and `internal/notify` is untouched. A web
+   * page also CANNOT attach a file to a `mailto:` draft — no such field exists
+   * in the scheme — so the flow is inherently two steps and the status line says
+   * so before the operator sends. See export/emailDocument.ts.
+   */
+  | { kind: "emailDocument" }
   | { kind: "calculator" } // Ctrl+N — calculator panel
   | { kind: "help" } // F1 / Ctrl+F1 — Help (the keystroke reference)
   | { kind: "features" } // F11 — Company Features

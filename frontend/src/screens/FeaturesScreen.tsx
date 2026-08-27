@@ -505,11 +505,37 @@ const FEATURES: {
           "Same bytes, same route, different verb. JPEG and HTML export are still not built.",
       },
       {
-        name: "Export: e-mail a document",
-        state: "off",
+        // ⛔ THE NAME CARRIES THE MECHANISM, AND THAT IS NOT OPTIONAL. This row
+        // reads "On" and THIS PRODUCT STILL DOES NOT SEND MAIL — there is no SMTP
+        // anywhere and internal/notify is untouched. A bare "E-mail a document —
+        // On" would be read as an SMTP feature by everybody, which is the exact
+        // class of half-truth this screen exists to prevent. So the badge is
+        // earned by the key, and the title says what the key actually does.
+        //
+        // ⚠️ "Export:" IS GONE FROM THE NAME ON PURPOSE. E-mail is NOT one of
+        // Alt+E's formats and never was in Tally either — the TallyPrime top menu
+        // carries `E: Export` and `M: E-mail` as two separate entries
+        // (RESEARCH.md:361). It shipped as its own key, so it is named as its own
+        // feature. "e-mail this document" was removed from UNBUILT_FORMATS in the
+        // same change.
+        name: "E-mail a document (Alt+M — opens your mail client)",
+        state: "on",
         note:
-          "Not built, and this row is SPLIT from PDF export above rather than sharing its badge, " +
-          "because the two are not one feature and only this half is blocked. ⛔ WHAT EXISTS: " +
+          "Alt+M on any document or report that prints. It SAVES the server's PDF to your " +
+          "downloads and then opens YOUR OWN mail client on a draft with the subject and a short " +
+          "covering note already filled in. ⛔ IT IS TWO STEPS AND THE SECOND ONE IS YOURS: a web " +
+          "page cannot put a file on a mail draft — there is no such field in the mailto: scheme " +
+          "and no browser implements one — so YOU MUST ATTACH THE SAVED PDF BEFORE YOU SEND. The " +
+          "status line names the file and says so, and the draft's body deliberately never claims " +
+          "the document is attached, because at the moment it opens it is not. ⛔ AND THE DRAFT " +
+          "HAS NO RECIPIENT: there is no party e-mail address anywhere in this product (measured " +
+          "over the whole schema — the only e-mail columns are the operator's own login, a " +
+          "company invitation, and the company's TDS contact), so there is nothing to prefill and " +
+          "you pick the address from your own address book. Storing one against a ledger is a " +
+          "separate piece of work. ⛔ THIS PRODUCT STILL DOES NOT SEND MAIL, and that is the " +
+          "decision rather than a gap: nothing here talks to a mail server, so there is no " +
+          "deliverability story, no bounce handling and nothing that can silently fail to arrive " +
+          "— the message is in your own Sent folder, sent by your own client. ⛔ WHAT EXISTS: " +
           "internal/notify is a real durable transactional outbox — Enqueue runs INSIDE the " +
           "caller's transaction, so rolling back an invite rolls back its notification with it — " +
           "with at-least-once delivery, a lease and status transitions. It is good, and it is not " +
@@ -518,12 +544,13 @@ const FEATURES: {
           "SMTP is configuration, not code, and a log line is the honest statement that this " +
           "deployment does not send mail. There is exactly one message Kind (a company invite) and " +
           "no attachment concept: a Message carries a recipient, a subject and a body, so a PDF is " +
-          "not representable. ⛔ AND THE FIRST QUESTION IS NOT AN ENGINEERING ONE: does this " +
-          "product SEND mail, or does 'e-mail a document' mean handing the operator's own mail " +
-          "client a pre-addressed draft with the PDF already downloaded? The second is honest, " +
-          "needs no transport, no deliverability story and no bounce handling, and it is what a " +
-          "good deal of accounting software actually does. Until that is decided, building either " +
-          "one is guessing. ⛔ WHAT MUST NOT HAPPEN IS A HALF-SEND: notify's own rule is that " +
+          "not representable. ✅ THAT QUESTION IS ANSWERED AND IT WAS NOT AN ENGINEERING ONE: " +
+          "'e-mail a document' means handing the operator's own mail client a draft with the PDF " +
+          "already saved, NOT this product sending mail. That is what shipped. It needs no " +
+          "transport, no deliverability story and no bounce handling, and it is what a good deal " +
+          "of accounting software actually does. ⚠️ ONE CORRECTION TO HOW IT WAS PLANNED: the " +
+          "draft is pre-SUBJECTED but NOT pre-ADDRESSED, because no party e-mail address is " +
+          "stored anywhere — see above. ⛔ WHAT MUST NOT HAPPEN IS A HALF-SEND: notify's own rule is that " +
           "nothing in it calls 'delivered to nobody' a send — an addressless message is settled as " +
           "a terminal FAILURE carrying a reason, never as sent, because returning nil was once " +
           "read as success and it cost a bug. A document e-mail that logged and reported 'sent' " +

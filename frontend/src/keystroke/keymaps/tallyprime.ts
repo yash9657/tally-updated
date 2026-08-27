@@ -54,6 +54,21 @@ const RAW_BINDINGS: Record<string, KeymapAction> = {
   "Alt+F1": { kind: "detailed" }, // Detailed / condensed
   "Ctrl+F": { kind: "filter" }, // Filter rows
   "Alt+E": { kind: "exportScreen" }, // Export the active screen
+  // Alt+M — E-MAIL THIS DOCUMENT (B2). TALLY'S OWN E-MAIL KEY, not an invented
+  // one: the TallyPrime top menu carries `E: Export` and `M: E-mail` as two
+  // SEPARATE entries (RESEARCH.md:361), Alt+M is listed among the top-menu
+  // globals (:415), the report key table has it (:774), and the export page says
+  // "Alt+M e-mails the report" alongside rather than among Alt+E's formats (:817).
+  //
+  // ⛔ IT IS NOT A FOURTH EXPORT FORMAT, which is why it is here and not in
+  // `ExportTarget`. Every export target writes a file and stops; this writes a
+  // file and then leaves the application for the operator's mail client.
+  //
+  // ⚠️ macOS COMPOSES Option+M INTO "µ". It needs no special case — `baseKeyOf`
+  // resolves every Alt+<letter> on `ev.code` precisely so that layout-specific
+  // composition cannot kill a binding — but drive it in a test with the harness's
+  // altMac("m") and never press("Alt+m").
+  "Alt+M": { kind: "emailDocument" },
   // ---- PRINT. Two combos, two DIFFERENT Tally actions (RESEARCH.md:2165:
   // ERP 9 Alt+P; TallyPrime "Ctrl+P (voucher) / Alt+P (print menu)").
   //
@@ -1026,6 +1041,14 @@ export function actionLabel(action: KeymapAction): string {
       return "Ledger-wise / group-wise";
     case "filter":
       return "Filter rows";
+    case "emailDocument":
+      // ⛔ "opens your mail client" IS THE LOAD-BEARING HALF OF THIS LABEL. It
+      // appears on the button bar and in the F1 keyboard help, and an operator who
+      // reads a bare "E-Mail this document" will believe this application sends
+      // the mail. It does not — it saves the PDF and hands a draft to their own
+      // client, which they must then attach the file to. The label is the first
+      // place that can be said, so it is said here.
+      return "E-Mail this document (saves the PDF, opens your mail client)";
     case "exportScreen":
       // "the rows on screen" and NOT "this report": Alt+E writes what is
       // displayed AFTER Ctrl+F and F12 have been applied, which is the opposite
