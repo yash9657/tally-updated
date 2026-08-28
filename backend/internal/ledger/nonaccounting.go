@@ -108,8 +108,12 @@ const (
 	// line is Inward.
 	ReceiptNote Class = "Receipt Note"
 	// StockJournal (Alt+F7): a transfer between godowns, or a manufacture that
-	// consumes components and produces a finished good. It is the ONE class that
-	// carries BOTH directions on the same voucher — which is exactly why
+	// consumes components and produces a finished good. ⭐ IT IS THE ONE CLASS
+	// WHOSE VALUE MUST CONSERVE: both sides of the document are the company's own
+	// stock and it posts no accounting lines, so what its inward legs are carried
+	// at is DERIVED from what its outward legs consumed, in the replay, never
+	// from the keyed rate (inventory/conserving.go, defect D103). It is the ONE
+	// class that carries BOTH directions on the same voucher — which is exactly why
 	// migration 0025 made stock_movement_not_negative DEFERRABLE INITIALLY
 	// DEFERRED: checked per statement, the OUT line would raise before the IN
 	// line had been written and a balanced transfer would be refused or accepted
@@ -313,25 +317,53 @@ func validateStockVoucher(in VoucherInput) error {
 		// TestAnInventoryLineWhoseAmountContradictsItsOwnRateIsRefused pins exactly
 		// that as a control. Refusing it would make free samples unkeyable.
 		//
-		// A StockJournal is the opposite case, because the goods came from OUR OWN
-		// shelf. The OUT leg removes them at the position's running weighted-average
-		// cost; if the IN leg carries them back at zero, the difference is simply
-		// DESTROYED. The document says "no value moves"; a blank Rate makes that
-		// false by the full average cost of the goods, while QUANTITY is unchanged —
-		// invisible to any quantity-only check, and closing stock feeds the BALANCE
-		// SHEET. Measured in a browser 2026-08-07: a 10-unit transfer with the Rate
-		// column blank took 8,890 off the sheet.
+		// ===================================================================
+		// ⛔⛔ WHAT THIS RATE IS FOR CHANGED UNDER THIS COMMENT — READ THIS.
+		// ===================================================================
+		// The paragraph that used to live here said the OUT leg removes goods "at
+		// the position's running WEIGHTED-AVERAGE cost", so an IN leg at zero
+		// destroyed the difference. That was true, and COMPLETE, for the world it
+		// was written in on 2026-08-07 — and MIGRATION 0078 FALSIFIED IT by adding
+		// FIFO and LIFO. Under a lot queue the outward consumes the oldest (or
+		// newest) LAYER, not any average, and no single rate an operator can key
+		// conserves value in general. Keying the only rate the product displays —
+		// the position's blended closing value / closing qty — CREATED 33.30 on a
+		// 10-unit transfer, measured in a browser 2026-08-27 (defect D103).
+		//
+		// ⭐ NOTE THE PATTERN, because it is the point of this comment: nothing
+		// EDITED this rule. A migration two features away made its PREMISE false
+		// and everything downstream kept reasoning in the old vocabulary. When you
+		// add the fourth costing method, come back here.
+		//
+		// ⭐ SO THE VALUE IS NO LONGER TAKEN FROM THIS RATE AT ALL. The replay
+		// DERIVES what the outward leg actually consumed and carries the inward leg
+		// at exactly that, so a Stock Journal conserves BY CONSTRUCTION and no
+		// keystroke can make it otherwise — inventory/conserving.go is the rule and
+		// the reason. It has to live there and not here: value is never stored, so
+		// what a transfer consumed is not KNOWN at post time (a back-dated purchase
+		// changes which layers it eats).
+		//
+		// ⚠️ THE REFUSAL STAYS, AND ITS JOB IS NOW DIFFERENT. On a voucher with
+		// several inward legs — a manufacture producing a product and a by-product
+		// — the keyed rates are the RATIO the derived consumption cost is split by.
+		// A zero says "this leg is worth nothing", which silently hands the whole
+		// cost to the other legs and is indistinguishable from an operator tabbing
+		// past the box. On a plain transfer there is one inward leg per item, the
+		// ratio is 1, and the number has no effect on any figure at all — but a
+		// screen that accepted a blank there would be teaching the habit.
 		//
 		// This is the same rule buildPhysicalStockDeltas applies to a counted
 		// surplus (a server-INVENTED inward has no supplier price to appeal to
 		// either), and the two now read the same way.
 		//
-		// OUTWARD IS EXEMPT on every class: an outward is consumed at the position's
-		// running weighted-average cost and its own rate is IGNORED by the valuer
-		// (inventory.Movement.Rate), so a zero there changes no figure anybody reads.
+		// OUTWARD IS EXEMPT on every class: an outward is consumed at whatever its
+		// position's own valuer says it cost — an average, an oldest layer, a
+		// newest layer — and its own stated rate is IGNORED throughout
+		// (inventory.Movement.Rate), so a zero there changes no figure anybody
+		// reads.
 		if in.Class == StockJournal && l.Direction == Inward && l.Rate.IsZero() {
 			return fmt.Errorf(
-				"ledger: inventory line %d: a %s brings goods IN at a rate of zero, which would carry them at no cost and destroy the value the outward leg removed; state the rate the goods are carried at",
+				"ledger: inventory line %d: a %s brings goods IN at a rate of zero; the rate is what splits the consumed cost between the goods this voucher produces, and a zero hands this line's share to the others; state the rate the goods are carried at",
 				i+1, in.Class)
 		}
 	}
@@ -429,21 +461,31 @@ func buildPhysicalStockDeltas(ctx context.Context, tx pgx.Tx, companyID, voucher
 			//
 			// This inward is INVENTED by the server — nobody keyed a supplier's
 			// price for it — so if we let the rate default to zero we would bring
-			// units in at no cost and silently write the position's weighted
-			// average DOWN, understating closing stock and overstating the cost of
-			// every subsequent issue. That is a misstated balance sheet produced by
-			// a stock-take, which is the opposite of what a stock-take is for. An
-			// operator who genuinely found extra units knows (or can be told) what
-			// they cost; Tally's Physical Stock screen has a Rate column for
-			// exactly this reason.
+			// units in at no cost, understating closing stock and overstating the
+			// cost of every subsequent issue. That is a misstated balance sheet
+			// produced by a stock-take, which is the opposite of what a stock-take
+			// is for. An operator who genuinely found extra units knows (or can be
+			// told) what they cost; Tally's Physical Stock screen has a Rate column
+			// for exactly this reason.
 			//
-			// The mirror case needs no rate: an outward is consumed at the
-			// position's running weighted-average cost and its own rate is IGNORED
-			// by the valuer (see inventory.Movement.Rate).
+			// ⚠️ THE MESSAGE MUST NOT NAME ONE COSTING METHOD — THAT WAS D104. It
+			// used to say the surplus "would write the item's WEIGHTED-AVERAGE value
+			// down", and it said it on FIFO and LIFO items too, where there is no
+			// weighted average to write down: a zero-cost surplus lands as a lot
+			// layer worth nothing and drags the position's value down all the same.
+			// The RULE was right on all three methods; only its REASON named one.
+			// The wording below states the CONSEQUENCE — the item is carried at
+			// less than it is worth — which is true on every method there is, and
+			// stays true when the fourth arrives. Same pattern as D103 above:
+			// migration 0078 falsified a premise and the prose did not follow.
+			//
+			// The mirror case needs no rate: an outward is consumed at whatever the
+			// item's own valuer says it cost and its own stated rate is IGNORED
+			// (see inventory.Movement.Rate).
 			if c.Rate.IsZero() {
 				name := itemNameOrID(ctx, tx, companyID, c.StockItemID)
 				return nil, fmt.Errorf(
-					"ledger: physical count line %d (%s): the count is %s above the books, and bringing a surplus in at zero cost would write the item's weighted-average value down; state the rate the extra units are carried at",
+					"ledger: physical count line %d (%s): the count is %s above the books, and bringing a surplus in at zero cost would carry the extra units at nothing and write the item's stock value down; state the rate the extra units are carried at",
 					i+1, name, delta.StringFixed(4))
 			}
 			l.Direction = Inward

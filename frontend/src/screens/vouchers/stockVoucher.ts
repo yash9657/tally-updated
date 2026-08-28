@@ -116,8 +116,13 @@ export function stockShapeFor(type: StockVoucherType): StockVoucherShape {
  * One keyed row of a stock voucher's grid.
  *
  * There is NO ledger column and no amount column, because there is no money
- * side: `rate` exists to VALUE the movement (the weighted-average valuer reads
- * qty and rate; nothing reads a stated amount), not to price a sale.
+ * side: `rate` exists to VALUE the movement (the item's valuer reads qty and
+ * rate; nothing reads a stated amount), not to price a sale.
+ *
+ * ⚠️ ON A STOCK JOURNAL IT DOES NOT VALUE THE MOVEMENT AT ALL ANY MORE — see
+ * the zero-rate guard in `buildStockVoucherRequest` below. The replay derives
+ * what the outward leg consumed and carries the inward leg at exactly that
+ * (defect D103), so on a transfer this number changes no figure anywhere.
  */
 export interface StockVoucherLine {
   stockItemId: string;
@@ -292,8 +297,10 @@ export function buildStockVoucherRequest(
       batch_id: l.batchId,
       qty: formatFixed4(parseFixed4(l.qty)),
       // Required (non-zero) only when the count EXCEEDS the books: a surplus
-      // brought in at zero cost writes the item's weighted average down, so the
-      // server refuses one rather than silently devaluing the warehouse.
+      // brought in at zero cost carries the extra units at nothing and writes
+      // the item's stock value down — on every costing method, which is why
+      // neither this comment nor the server's refusal names one (D104) — so the
+      // server refuses it rather than silently devaluing the warehouse.
       rate: formatFixed4(parseFixed4(l.rate)),
     }));
     req.physical_count = counts;
@@ -438,38 +445,50 @@ export function refuseWrongWayGoods(
     }
   }
 
-  // A BLANK RATE COLUMN IS A STATED ZERO BY THE TIME IT REACHES THE WIRE, AND ON
-  // A TRANSFER'S INWARD LEG IT WRITES STOCK VALUE OFF THE BALANCE SHEET.
+  // A BLANK RATE COLUMN IS A STATED ZERO BY THE TIME IT REACHES THE WIRE.
   //
   // `isKeyedStockLine` asks only for a positive quantity, so a row with an empty
   // Rate is a keyed row; `parseFixed4("")` is 0n; and the line ships
   // `rate: "0.0000"` — a rate that was STATED, so the server's RateUnstated
-  // backstop cannot fire on it. Measured in a browser on 2026-08-07: a 10-unit
-  // transfer with Rate blank took 8,890 off the sheet while the quantity stayed
-  // put, under a caption that reads "no value moves".
+  // backstop cannot fire on it.
   //
-  // ⛔ TRANSFERS ONLY, and the scope is the whole point of the rule. The goods on
-  // a transfer came off our own shelf, where the OUT leg values them at the
-  // running weighted average; an IN leg at zero destroys that difference. Goods
+  // ⛔⛔ WHAT THIS RATE MEANS CHANGED UNDERNEATH THIS GUARD (defect D103) — the
+  // paragraph that used to be here is worth remembering. It said the OUT leg
+  // values the goods "at the running weighted average", so an IN leg at zero
+  // destroyed the difference; measured in a browser on 2026-08-07, a 10-unit
+  // transfer with Rate blank took 8,890 off the sheet. All true — for a build
+  // where every item was on weighted average. Migration 0078 added FIFO and
+  // LIFO, and then the rate the Stock Summary DISPLAYS (closing value / closing
+  // qty) stopped being the rate the outward leg consumes at, so keying the only
+  // number on screen CREATED 33.30 on a transfer between two of our own
+  // godowns, measured 2026-08-27.
+  //
+  // ⭐ SO cored NO LONGER TAKES THE VALUE FROM THIS RATE. The replay derives what
+  // the outward leg actually consumed and carries the inward leg at exactly that
+  // (backend inventory/conserving.go), which is why the Rate column on this
+  // screen is left BLANK and must stay blank: there is no price to offer,
+  // because a transfer between your own shelves has none.
+  //
+  // ⚠️ THE GUARD STAYS, because the rate is still the RATIO that splits the
+  // consumed cost when one voucher produces more than one thing, and because
+  // cored still refuses a zero here — a client that let it through would meet a
+  // 422 after the whole row was keyed, which is the client/server disagreement
+  // §7.4 exists to prevent.
+  //
+  // ⛔ TRANSFERS ONLY, and the scope is the whole point of the rule. Goods
   // arriving from OUTSIDE are a different question — a free sample on a Receipt
   // Note really does cost 0.0000, and cored accepts it deliberately (see
   // ledger.validateStockVoucher, and the control in the server's read-back
   // audit). Refusing it here would make free samples unkeyable in the browser
-  // while the API allowed them, which is the client/server disagreement §7.4
-  // exists to prevent.
-  //
-  // cored refuses the transfer case too, which is what actually closes the hole
-  // for every caller. It is refused HERE as well so the operator is told at the
-  // keyboard, in the vocabulary of the screen they are on, rather than by a 422 —
-  // and because this function is the one check that also runs on the ALTER path,
-  // where the lines came back from stored movements.
+  // while the API allowed them.
   if (shape.kind === "transfer") {
     for (const [i, l] of req.inventory.entries()) {
-      // OUTWARD IS EXEMPT: it is consumed at the position's running
-      // weighted-average cost and its stated rate is ignored by the valuer.
+      // OUTWARD IS EXEMPT: it is consumed at whatever the item's own valuer says
+      // it cost — an average, an oldest layer, a newest layer — and its stated
+      // rate is ignored throughout.
       if (l.direction === "IN" && parseFixed4(l.rate ?? "") === 0n) {
         throw new Error(
-          `Line ${i + 1}: state the Rate — a ${title} that brings goods IN at zero carries them at no cost and destroys the value the outward leg removed (the quantity would look right and the Balance Sheet would not).`,
+          `Line ${i + 1}: state the Rate — on a ${title} it is what splits the consumed cost between the goods the voucher produces, and a zero hands this line's share to the others.`,
         );
       }
     }

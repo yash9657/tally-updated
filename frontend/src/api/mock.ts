@@ -3264,7 +3264,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
           c.stockItems.find((s) => s.id === count.stock_item_id)?.name ??
           count.stock_item_id;
         refuse(
-          `physical count line ${i + 1} (${name}): the count is ${q4str(delta)} above the books, and bringing a surplus in at zero cost would write the item's weighted-average value down; state the rate the extra units are carried at`,
+          `physical count line ${i + 1} (${name}): the count is ${q4str(delta)} above the books, and bringing a surplus in at zero cost would carry the extra units at nothing and write the item's stock value down; state the rate the extra units are carried at`,
         );
       }
       out.push({

@@ -543,6 +543,13 @@ describe("Alt+F7 Stock Journal — a transfer, not a creation", () => {
     // What that cost, measured in a browser on 2026-08-07: transferring 10 units
     // carried at 889 took 8,890 off the Balance Sheet's Closing Stock line while
     // the quantity stayed at 75, under a caption reading "no value moves".
+    //
+    // ⚠️ THE SERVER NO LONGER TAKES A TRANSFER'S VALUE FROM THIS RATE (D103) —
+    // it derives what the outward leg consumed and carries the inward leg at
+    // exactly that. The guard stays because the rate is still the RATIO that
+    // splits the consumed cost when one voucher produces more than one thing,
+    // and because cored still refuses a zero: a client that let it through
+    // would meet a 422 after the whole row was keyed.
     const line: StockVoucherLine = {
       stockItemId: "s1",
       itemName: "Widget",
@@ -596,9 +603,9 @@ describe("Alt+F7 Stock Journal — a transfer, not a creation", () => {
 
   it("a Delivery Note with no rate still ships — an outward's rate is ignored by the valuer", () => {
     // The mirror of the case above, and it is the reason the refusal is scoped to
-    // INWARD rather than to "any zero". An outward is consumed at the position's
-    // running weighted-average cost; its stated rate moves no figure anybody
-    // reads. Refusing it would block a warehouse from despatching goods it holds
+    // INWARD rather than to "any zero". An outward is consumed at whatever the
+    // item's own valuer says it cost — an average, an oldest layer, a newest
+    // layer — and its stated rate moves no figure anybody reads. Refusing it would block a warehouse from despatching goods it holds
     // because nobody had priced them yet — which is the entire point of the class.
     const line: StockVoucherLine = {
       stockItemId: "s1",
@@ -657,8 +664,9 @@ describe("Alt+F10 Physical Stock — the count is stated, the correction is deri
     const { client, spies } = spyClient(base);
     const app = await openStockVoucher(client, "physical-stock");
     // "There are 13 on the shelf." The rate is what the three EXTRA units are
-    // carried at; a surplus at zero cost is refused, because it would write the
-    // item's weighted average down.
+    // carried at; a surplus at zero cost is refused, because it would carry the
+    // extra units at nothing and write the item's stock value down — on every
+    // costing method, which is why the refusal names none (D104).
     //
     // ⛔ THE GODOWN IS LEFT UNTOUCHED ON PURPOSE — that is the defect this test
     // now also guards. The count must be differenced against the shelf that
@@ -719,8 +727,8 @@ describe("Alt+F10 Physical Stock — the count is stated, the correction is deri
     });
 
     const app = await openStockVoucher(base, "physical-stock");
-    // A shortage needs no rate: the outward is consumed at the position's own
-    // running weighted-average cost and its stated rate is ignored.
+    // A shortage needs no rate: the outward is consumed at whatever the item's
+    // own valuer says it cost, and its stated rate is ignored.
     await keyRow(0, { item: widget, qty: "6" });
     fireEvent.keyDown(app, { key: "a", ctrlKey: true });
     await screen.findByTestId("voucher-no");

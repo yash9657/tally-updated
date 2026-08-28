@@ -612,7 +612,7 @@ export function StockVoucherScreen({ snapshot }: { snapshot: NavSnapshot }) {
           {shape.kind === "count"
             ? `${keyed.length} position(s) counted, ${formatFixed4(totalQty)} units in total. The SERVER derives the correction against the books — this form never states a delta.`
             : shape.kind === "transfer"
-              ? `${keyed.length} transfer(s), ${formatFixed4(totalQty)} units. Each line posts as a PAIR (out of From, into To), so the company's total holding is unchanged.`
+              ? `${keyed.length} transfer(s), ${formatFixed4(totalQty)} units. Each line posts as a PAIR (out of From, into To). The server carries the goods in at exactly what they cost on the way out, so neither the quantity nor the VALUE the company holds changes.`
               : `${keyed.length} line(s), ${formatFixed4(totalQty)} units ${shape.direction === "OUT" ? "out" : "in"}.`}
         </p>
       </div>

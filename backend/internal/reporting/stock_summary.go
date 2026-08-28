@@ -300,11 +300,33 @@ type StockMovementReport struct {
 // off-by-one on every stock report and it survived undetected on the accounting
 // side until a test placed a voucher exactly on a bound — which is what
 // TestStockPeriodBoundsAreInclusiveOnBothEnds now does.
+//
+// ⛔⛔ THE voucher_type JOIN IS D103, AND IT IS THE ONLY THING THAT TELLS THE
+// VALUER A DOCUMENT MUST CONSERVE VALUE. A Stock Journal moves goods between
+// the company's OWN shelves and posts NO accounting lines, so whatever its
+// inward legs are carried at must be exactly what its outward legs consumed —
+// see inventory/conserving.go for what a FIFO transfer did to the Balance Sheet
+// without this. The class is NOT a column on the voucher: it lives on the TYPE
+// (voucher_type.parent_class, UPPER_SNAKE, seeded by migration 0029 as the
+// form ledger.defaultVoucherTypeID resolves), so the flag has to be joined in
+// here or the leaf cannot know.
+//
+// The join is LEFT and the comparison COALESCEd because voucher_type_id is
+// NULLABLE (see migration 0034's header on what a missing seeded type does):
+// a movement whose type cannot be resolved is treated as NOT conserving, which
+// is the same behaviour every class other than the Stock Journal already has.
+//
+// ⚠️ IF THE STRING DRIFTS, VALUE CREATION COMES BACK SILENTLY. The literal is
+// pinned end-to-end by TestAFifoTransferBetweenOurOwnGodownsConservesValue,
+// which posts a real Stock Journal through ledger.PostVoucher and reads the
+// Stock Summary back: a renamed parent_class fails it, rather than quietly
+// turning the rule off.
 const stockMovementSQL = `
 	SELECT sm.stock_item_id, sm.godown_id, sm.batch_id,
 	       sm.direction::text, sm.qty, sm.rate, sm.discount_pct,
 	       vv.voucher_date, COALESCE(vv.voucher_no, ''), vv.voucher_id,
 	       vv.created_at, sm.line_no, vv.id,
+	       COALESCE(vt.parent_class, '') = 'STOCK_JOURNAL' AS voucher_conserves,
 	       COALESCE($1::date IS NULL OR vv.voucher_date >= $1::date, true) AS in_window
 	  FROM stock_movement sm
 	  JOIN voucher_version vv ON vv.id = sm.voucher_version_id
@@ -312,6 +334,7 @@ const stockMovementSQL = `
 	    ON vh.company_id = vv.company_id
 	   AND vh.voucher_id = vv.voucher_id
 	   AND vh.current_version_id = vv.id
+	  LEFT JOIN voucher_type vt ON vt.id = vv.voucher_type_id
 	 WHERE vh.is_deleted = false
 	   AND ($2::date IS NULL OR vv.voucher_date <= $2::date)`
 
@@ -353,6 +376,7 @@ func queryStockMovements(ctx context.Context, tx pgx.Tx, from, to any) ([]stockM
 			&direction, &r.movement.Qty, &r.movement.Rate, &r.movement.DiscountPct,
 			&date, &r.movement.VoucherNo, &voucherID,
 			&r.movement.VersionCreatedAt, &r.movement.LineNo, &versionID,
+			&r.movement.VoucherConserves,
 			&r.inWindow); err != nil {
 			return nil, fmt.Errorf("reporting: scan stock movement: %w", err)
 		}
@@ -621,20 +645,31 @@ func scanNames(ctx context.Context, tx pgx.Tx, sql string, into map[uuid.UUID]st
 // The replay
 // --------------------------------------------------------------------------
 
-// replayPositions groups the openings and movements BY ITEM, selects that item's
-// valuer, and replays each of its positions.
+// replayPositions replays EVERY position of EVERY item in ONE coupled pass,
+// handing the leaf a selector that resolves each item's own valuer.
 //
-// Grouping by item first is not an optimisation: stock_item.valuation_method is
-// per item, so two items in the same report can be valued on different bases.
+// PER-ITEM VALUERS ARE NOT AN OPTIMISATION: stock_item.valuation_method is per
+// item, so two items in the same report are valued on different bases.
 // ValuerFor returns an ERROR for a method it does not implement and this
-// propagates it — a report that quietly fell back to weighted average for a FIFO
-// item would print a plausible number under the wrong heading, which is the
-// failure mode the leaf's default arm exists to prevent.
+// propagates it — a report that quietly fell back to weighted average for a
+// FIFO item would print a plausible number under the wrong heading, which is
+// the failure mode the leaf's default arm exists to prevent.
+//
+// ⛔⛔ IT USED TO REPLAY EACH ITEM SEPARATELY, AND THAT WAS HALF OF D103. The
+// legs of a Stock Journal land in different POSITIONS and, on a manufacture, in
+// different ITEMS; an inward leg cannot be carried at what its paired outward
+// leg consumed if the outward was valued in a replay this one never sees. One
+// pass is what makes the coupling expressible at all — inventory.ReplayCompany
+// owns the rule itself.
+//
+// ⚠️ EVERY ITEM IS RESOLVED UP FRONT, IN A DETERMINISTIC ORDER, rather than
+// lazily inside the replay. Two items can BOTH be unvaluable, and a report that
+// named whichever one the movement stream happened to reach first would produce
+// a different error message on the same data from one call to the next — an
+// irreproducible failure, which is the worst property a refusal can have.
 func replayPositions(
 	openings []inventory.Opening, movements []inventory.Movement, names stockNames,
 ) (map[inventory.PositionKey]inventory.Position, error) {
-	openingsByItem := map[string][]inventory.Opening{}
-	movementsByItem := map[string][]inventory.Movement{}
 	var itemOrder []string
 	seen := map[string]bool{}
 	note := func(item string) {
@@ -644,15 +679,13 @@ func replayPositions(
 		}
 	}
 	for _, o := range openings {
-		openingsByItem[o.Position.StockItemID] = append(openingsByItem[o.Position.StockItemID], o)
 		note(o.Position.StockItemID)
 	}
 	for _, m := range movements {
-		movementsByItem[m.Position.StockItemID] = append(movementsByItem[m.Position.StockItemID], m)
 		note(m.Position.StockItemID)
 	}
 
-	out := map[inventory.PositionKey]inventory.Position{}
+	valuers := make(map[string]inventory.Valuer, len(itemOrder))
 	for _, item := range itemOrder {
 		meta, ok := names.items[uuidOrNil(item)]
 		if !ok {
@@ -664,11 +697,17 @@ func replayPositions(
 		if err != nil {
 			return nil, fmt.Errorf("reporting: cannot value stock item %q: %w", meta.Name, err)
 		}
-		for key, pos := range inventory.ReplayAll(openingsByItem[item], movementsByItem[item], valuer) {
-			out[key] = pos
-		}
+		valuers[item] = valuer
 	}
-	return out, nil
+
+	return inventory.ReplayCompany(openings, movements, func(item string) (inventory.Valuer, error) {
+		v, ok := valuers[item]
+		if !ok {
+			// Unreachable: itemOrder above is built from these exact inputs.
+			return nil, fmt.Errorf("reporting: stock item %s reached the replay unresolved", item)
+		}
+		return v, nil
+	})
 }
 
 // movementsOf projects the leaf-shaped movements out of the query rows, keeping
