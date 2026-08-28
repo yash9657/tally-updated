@@ -14,12 +14,21 @@ package reporting
 // it lives here beside the Bank Reconciliation Statement it will eventually sit
 // next to.
 //
-// ⚠️ THIS REPORT SAYS NOTHING ABOUT WHAT HAS CLEARED, AND THAT IS NOT AN
-// OVERSIGHT. Matching is slice 2b. A "Status" column here would have exactly
-// one value — blank — for every row, and a blank status column reads as
-// "unmatched" rather than as "matching is not built", which is a different and
-// false statement. The absence is stated in Disclosures instead, which is the
-// same arrangement the TDS register uses for the challan it cannot show.
+// ⚠️ THIS REPORT SAYS NOTHING ABOUT WHAT HAS CLEARED, AND THAT IS STILL NOT AN
+// OVERSIGHT — but the REASON changed when slice 2b shipped on 2026-08-28, and
+// the disclosure changed with it.
+//
+// It used to say "matching is not built". That is now FALSE: Alt+S proposes
+// matches and an accepted one writes a bank_reconciliation row. What remains
+// true is that THIS report does not show match status, and a "Status" column
+// here would need the match data this query does not load — so a row shown here
+// may already be matched, set aside, or untouched, and the report says exactly
+// that rather than leaving silence to read as "none of these matched".
+//
+// ⛔ THE OLD SENTENCE WAS LEFT STANDING BY THE FEATURE WORK AND WAS CAUGHT BY
+// verify:demo, which asserts the disclosure exists. A gate that pins the
+// PRESENCE of a disclosure does not pin its TRUTH — the check now looks for the
+// current sentence, and that is the only reason the lie was short-lived.
 
 import (
 	"context"
@@ -217,9 +226,10 @@ func (s *Service) ImportedStatementReport(
 	// ⚠️ THE DISCLOSURES ARE PART OF THE REPORT, not decoration. Each one is a
 	// question the operator would otherwise answer wrongly from silence.
 	out.Disclosures = append(out.Disclosures,
-		"MATCHING IS NOT BUILT YET (T4 slice 2b). These are the bank's own rows; nothing here "+
-			"says whether a row has been matched to a voucher or cleared. Reconciling is still done on the "+
-			"Bank Reconciliation screen by entering a Bank Date against each voucher.")
+		"THIS REPORT SHOWS NO MATCH STATUS (T4 slice 2b). These are the bank's own rows, and a row "+
+			"here may already be matched to a voucher, set aside as matching nothing, or untouched — "+
+			"nothing on this report says which. Matching now works: press Alt+S on the Bank "+
+			"Reconciliation screen. Reconciling by hand, a Bank Date at a time, still works too.")
 	for _, im := range out.Imports {
 		if !im.BalanceWalked {
 			out.Disclosures = append(out.Disclosures, fmt.Sprintf(

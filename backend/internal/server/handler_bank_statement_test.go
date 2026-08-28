@@ -155,7 +155,7 @@ func TestImportingAStatementStoresWhatTheBankSaid(t *testing.T) {
 	}
 }
 
-// THE REPORT MUST SAY THAT MATCHING IS NOT BUILT. Rows of bank movements with
+// THE REPORT MUST SAY IT SHOWS NO MATCH STATUS. Rows of bank movements with
 // no status column otherwise read as "none of these matched", which is a
 // different and false statement.
 func TestTheImportedStatementSaysMatchingIsNotBuiltYet(t *testing.T) {
@@ -171,7 +171,12 @@ func TestTheImportedStatementSaysMatchingIsNotBuiltYet(t *testing.T) {
 	for _, d := range got["disclosures"].([]any) {
 		joined += " " + d.(string)
 	}
-	if !strings.Contains(joined, "MATCHING IS NOT BUILT YET") {
+	// ⚠️ THE SENTENCE CHANGED WHEN SLICE 2b SHIPPED. It used to read "MATCHING IS
+	// NOT BUILT YET", which became false the day Alt+S started proposing matches.
+	// What is still true — and still worth disclosing — is that THIS report shows
+	// no match status, so a row here may already be matched, set aside or
+	// untouched and nothing on the page says which.
+	if !strings.Contains(joined, "THIS REPORT SHOWS NO MATCH STATUS") {
 		t.Errorf("the report must state that nothing here is matched or cleared; got %q", joined)
 	}
 	// It must also point at where reconciling IS done, or the disclosure is a

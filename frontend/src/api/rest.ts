@@ -65,6 +65,7 @@ import type {
   SetLedgerOpeningRequest,
   SetLedgerOpeningResponse,
   VoucherHistoryResponse,
+  BankMatchesResponse,
   BankReconciliationResponse,
   ImportedStatementResponse,
   ImportStatementRequest,
@@ -111,6 +112,8 @@ import type {
   TDSProfileResponse,
   SetTDSProfileRequest,
   SetTDSProfileResponse,
+  SetAsideRequest,
+  SetAsideResponse,
   SetBankDateRequest,
   SetBankDateResponse,
   ListEmployeesResponse,
@@ -354,6 +357,38 @@ export function createRestClient(
         // Omitted rather than sent empty; the server reads a missing period as
         // "everything imported".
         from || to ? { from: from ?? "", to: to ?? "" } : undefined,
+      );
+    },
+    // ---- Bank statement MATCHING (T4 slice 2b).
+    //
+    // ⭐ NOTE WHAT IS NOT HERE: there is no `resolveBankMatch`. Accepting a
+    // proposal is `setBankDate` above with a statement_line_id in the body,
+    // which is the whole point — matching borrows the tick's authority, its
+    // back-dated cutoff and its step-up rather than minting its own.
+    bankStatementMatches(companyID, ledgerID, opts) {
+      const q: Record<string, string> = {};
+      if (opts?.from) q.from = opts.from;
+      if (opts?.to) q.to = opts.to;
+      // Sent only when the caller chose one. An omitted window means "use the
+      // build's search width", and the response states which was used.
+      if (opts?.windowDays) q.window_days = String(opts.windowDays);
+      return http.get<BankMatchesResponse>(
+        `${company(companyID)}/bank-statement/${ledgerID}/matches`,
+        Object.keys(q).length > 0 ? q : undefined,
+      );
+    },
+    setAsideStatementLine(companyID, ledgerID, lineID, req: SetAsideRequest) {
+      return http.post<SetAsideResponse>(
+        `${company(companyID)}/bank-statement/${ledgerID}/lines/${lineID}/set-aside`,
+        req,
+      );
+    },
+    restoreStatementLine(companyID, ledgerID, lineID) {
+      // A POST, not a DELETE: routeAction maps no DELETE on the /bank-statement/
+      // prefix, and widening it would give the prefix an authority nobody chose.
+      return http.post<SetAsideResponse>(
+        `${company(companyID)}/bank-statement/${ledgerID}/lines/${lineID}/restore`,
+        {},
       );
     },
     // ---- TDS deductor status (Item Zero step 2).

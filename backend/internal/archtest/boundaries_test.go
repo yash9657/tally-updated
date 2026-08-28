@@ -124,7 +124,30 @@ var allowedDeps = map[string]map[string]bool{
 	// to internal/ledger here would be the beginning of "while we are clearing
 	// this, also adjust the books", which is exactly what a reconciliation must
 	// not do. The read side lives in internal/reporting, which stays read-only.
-	"internal/banking": {"internal/platform/db": true},
+	//
+	// ⭐ T4 SLICE 2b ADDED THE ONE EDGE TO internal/bankstatement, AND IT RUNS IN
+	// THIS DIRECTION DELIBERATELY. bankstatement's entry below anticipated the
+	// question and answered it: the tempting edge was bankstatement -> banking,
+	// "so that a matched row could write its own bank_reconciliation row", and it
+	// said such an edge "belongs on THIS side of the line" — because memo §2.1
+	// requires a resolved match to land in 0045's table precisely so there is ONE
+	// source of "cleared".
+	//
+	// So banking still owns every write of a clearance, and it calls
+	// bankstatement.LinkMatch to record — inside the SAME transaction — which
+	// imported bank row that clearance came from. The edge buys two things no
+	// other arrangement does: the tick and its link cannot land separately, and
+	// matching acquires no write path of its own to drift from this one.
+	//
+	// ⛔ NOTE WHAT THE EDGE STILL DOES NOT REACH. Neither package may see
+	// internal/ledger, a voucher or a balance, and adding bankstatement here
+	// changes none of that: it is a leaf over the same db layer. The rule this
+	// map enforces — reconciling records a fact about the BANK and never adjusts
+	// the books — survives intact.
+	"internal/banking": {
+		"internal/platform/db":   true,
+		"internal/bankstatement": true,
+	},
 	// bankstatement (T4 slice 2a) is the WRITE side of bank-statement IMPORT, and
 	// its allowed set is the same one-edge set as banking above, for the same
 	// reason stated one line further: importing records what the BANK said, and

@@ -420,47 +420,28 @@ const RAW_SCREEN_BINDINGS: Partial<
     // documented global for import; scoped to this screen because a statement
     // belongs to ONE bank account and only the screen knows which is selected.
     "Alt+O": { kind: "importBankStatement" },
-    // The MATCHING keys (:879) belong to slice 2b and are still refusals — but
-    // their notes now name 2b, not "slice 2", because HALF of slice 2 has
-    // shipped: the import is real and only the matching is missing. A key that
-    // says "import is not built" on a screen with a working import teaches an
-    // operator to distrust every other refusal in the product.
-    F8: {
-      kind: "unavailable",
-      feature: "Modify match (F8)",
-      note: "Statements now import (Alt+O), but MATCHING them to vouchers is T4 slice 2b and is not built, so there are no matches to modify yet.",
-    },
-    F9: {
-      kind: "unavailable",
-      feature: "Set status manually (F9)",
-      note: "Statuses come from matching imported rows to vouchers, which is T4 slice 2b and not built. Enter a Bank Date against a row instead — that IS the manual reconciliation.",
-    },
-    "Alt+F8": {
-      kind: "unavailable",
-      feature: "Unlink a match (Alt+F8)",
-      note: "Nothing is matched yet: statements import (Alt+O) but matching is T4 slice 2b, so there is nothing to unlink.",
-    },
-    "Alt+S": {
-      kind: "unavailable",
-      feature: "Potential matches (Alt+S)",
-      note: "Automatic matching is T4 slice 2b. Note its governing rule when it lands: an AMBIGUOUS match is never auto-cleared — it surfaces BOTH candidates and waits for you.",
-    },
-    // Ctrl+J and Ctrl+B are at RESEARCH.md:879 and are bound to NEITHER an
-    // action nor a refusal anywhere in this file — so they are inert TODAY and
-    // would silently inherit any future global binding for the same combo. The
-    // slice-2 memo §6 asks for them to be bound while their absence is still
-    // harmless, and Ctrl+J especially: an "exception report" is a matching
-    // concept and will be reached for the week matching ships.
-    "Ctrl+J": {
-      kind: "unavailable",
-      feature: "Exception report (Ctrl+J)",
-      note: "The reconciliation exception report is not built. It reports on MATCHING, which is T4 slice 2b.",
-    },
-    "Ctrl+B": {
-      kind: "unavailable",
-      feature: "Basis of values (Ctrl+B)",
-      note: "The basis-of-values panel is not built on this screen. The statement's own arithmetic is on its face: book balance, un-cleared items, bank balance, and a difference that must be exactly zero.",
-    },
+    // ⭐ THE MATCHING KEYS (:879) ARE REAL AS OF T4 SLICE 2b. They were
+    // refusals for two rounds, and the notes they carried promised exactly what
+    // the actions below now do — including §0's governing rule, which Alt+S's
+    // old note stated in advance: an AMBIGUOUS match is never auto-cleared, it
+    // surfaces BOTH candidates and waits for you.
+    //
+    // ⛔ NONE OF THESE KEYS RECONCILES ANYTHING. Alt+S derives PROPOSALS and
+    // writes nothing. A bank date is written only when the operator accepts a
+    // proposal by name — through the same write the Bank Date column makes,
+    // which is why matching cannot become a second way to acquire the authority
+    // to assert a clearance.
+    F8: { kind: "modifyBankMatch" },
+    F9: { kind: "setAsideBankRow" },
+    "Alt+F8": { kind: "unlinkBankMatch" },
+    "Alt+S": { kind: "matchBankRows" },
+    // Ctrl+J and Ctrl+B were bound to REFUSALS by slice 2a, on the memo §6
+    // reasoning that a combo bound to neither an action nor a refusal silently
+    // inherits any future global for the same combo. Ctrl+J was the one called
+    // out — "an exception report is a matching concept and will be reached for
+    // the week matching ships" — and this is that week.
+    "Ctrl+J": { kind: "bankExceptionReport" },
+    "Ctrl+B": { kind: "bankBasisOfValues" },
   },
   // THE TDS CHALLAN REGISTER (T6). This screen carries an ENTRY FORM, and that
   // is what every binding below is about: AN UNBOUND KEY HERE IS NOT INERT.
@@ -1191,6 +1172,21 @@ export function actionLabel(action: KeymapAction): string {
       return "Bank Reconciliation (tick items off the bank statement)";
     case "importBankStatement":
       return "Import a bank statement (CSV)";
+    // T4 slice 2b. ⛔ EVERY LABEL SAYS "PROPOSED" OR NAMES THE ASSERTION,
+    // because the one thing an operator must not conclude from a key's name is
+    // that pressing it reconciled something.
+    case "matchBankRows":
+      return "Match imported bank rows to vouchers (proposals — nothing is cleared)";
+    case "modifyBankMatch":
+      return "Re-match this bank row (withdraws the current match first)";
+    case "unlinkBankMatch":
+      return "Withdraw this match, and the bank date it recorded";
+    case "setAsideBankRow":
+      return "Set this bank row aside — it matches nothing in the books";
+    case "bankExceptionReport":
+      return "Exception report — what is still unmatched, and why";
+    case "bankBasisOfValues":
+      return "Basis of values — how these proposals were arrived at";
     case "recordTDSChallan":
       return "Record a TDS deposit (challan)";
     case "allocateTDSChallan":

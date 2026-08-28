@@ -142,7 +142,7 @@ function imported(
     lines: [],
     total_in: "0.0000",
     total_out: "0.0000",
-    disclosures: ["MATCHING IS NOT BUILT YET (T4 slice 2b)."],
+    disclosures: ["THIS REPORT SHOWS NO MATCH STATUS (T4 slice 2b)."],
     ...over,
   };
 }
@@ -402,7 +402,7 @@ describe("what the bank said", () => {
     expect(await screen.findByTestId("stmt-report-disclosures")).toBeTruthy();
     expect(
       screen.getByTestId("stmt-report-disclosures").textContent,
-    ).toMatch(/MATCHING IS NOT BUILT YET/);
+    ).toMatch(/THIS REPORT SHOWS NO MATCH STATUS/);
   });
 
   it("distinguishes 'nothing imported' from a broken panel", async () => {

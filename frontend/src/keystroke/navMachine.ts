@@ -1559,6 +1559,23 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
       return {};
     }
 
+    case "matchBankRows":
+    case "modifyBankMatch":
+    case "unlinkBankMatch":
+    case "setAsideBankRow":
+    case "bankExceptionReport":
+    case "bankBasisOfValues": {
+      // NO NAVIGATION — T4 slice 2b. Matching is a panel ON the reconciliation
+      // screen and not a screen of its own, because it is inherently a
+      // two-column view of statement rows beside book legs: splitting them would
+      // make the operator hold one column in their head while looking at the
+      // other, which is the exact judgement the feature asks them to make.
+      //
+      // The screen owns the panel and fires these through the ScreenActions
+      // bridge, exactly as F4 owns its picker and Alt+O owns its import panel.
+      return {};
+    }
+
     case "importBankStatement": {
       // NO NAVIGATION. Importing happens in a panel ON the reconciliation
       // screen, because slice 2b's matching is inherently a two-column view of

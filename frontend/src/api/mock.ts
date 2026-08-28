@@ -96,6 +96,11 @@ import type {
   SetLedgerOpeningRequest,
   SetLedgerOpeningResponse,
   VoucherHistoryResponse,
+  BankMatchCandidate,
+  BankMatchCounts,
+  BankMatchesResponse,
+  BankMatchProposal,
+  BankMatchResolution,
   BankReconciliationResponse,
   BankStatementImport,
   DrCr,
@@ -176,6 +181,8 @@ import type {
   SetTDSProfileRequest,
   SetTDSProfileResponse,
   BankReconLine,
+  SetAsideRequest,
+  SetAsideResponse,
   SetBankDateRequest,
   SetBankDateResponse,
   VoucherVersionView,
@@ -1379,6 +1386,16 @@ interface MockCompany {
     string,
     { imports: BankStatementImport[]; lines: BankStatementLine[] }
   >;
+  /**
+   * T4 slice 2b — RESOLUTIONS ONLY, keyed `${ledgerID}:${lineID}`.
+   *
+   * ⭐ THERE IS NO CANDIDATE STORE, AND THAT MIRRORS THE SERVER RATHER THAN
+   * SIMPLIFYING IT. Proposals are DERIVED on every read in both places, because
+   * a stored candidate goes stale silently: a voucher altered, deleted or
+   * cleared between the proposal and the acceptance leaves the operator choosing
+   * from a list that no longer describes the books.
+   */
+  bankMatches: Map<string, BankMatchResolution>;
   /** s.394(2) declarations, keyed `${buyer}:${section}:${taxYear}`. */
   tcsDeclarations: Map<string, TCSDeclaration>;
   /**
@@ -1809,6 +1826,142 @@ function mockParseDate(raw: string, layout: string): string {
  * thing in this file that must not drift: a DEPOSIT becomes "D", because in our
  * books the bank asset rose, though the bank's own statement calls it a credit.
  */
+
+// ---------------------------------------------------------------------------
+// T4 SLICE 2b — the mock's matcher.
+//
+// ⚠️ READ THIS BEFORE PINNING A TIER IN A SCREEN TEST. This is a NARROWER
+// matcher than the server's, and the narrowing is deliberate and listed, in the
+// same spirit as `previewBankStatement`'s refusal to copy the synonym list:
+//
+//   * NO PARTIAL TIER. The server finds a bank row that is the sum of two
+//     vouchers, and the reverse. This does not, so a line that would be
+//     `partial` on the server is `""` (no candidate) here.
+//   * NO STRONG-KEY TIER. The server promotes a match to `exact` when a cheque
+//     number or UTR appears on the voucher. This looks only at amount, direction
+//     and date.
+//   * THE WINDOW IS FIXED AT 7. The server takes it as a parameter.
+//
+// ⭐ WHAT IT DOES REPRODUCE FAITHFULLY IS THE PART A SCREEN CAN GET WRONG:
+// amounts compared to the PAISE with zero tolerance, direction compared
+// directly, and AMBIGUITY IN BOTH DIRECTIONS — one row with two candidates, and
+// one voucher claimed by two rows. Those are invariant B-1, which is the rule
+// the whole slice exists to honour, and a screen that mis-renders it is the
+// failure that matters.
+// ---------------------------------------------------------------------------
+const MOCK_MATCH_WINDOW_DAYS = 7;
+
+function mockDaysApart(a: string, b: string): number {
+  const ms = Date.parse(a + "T00:00:00Z") - Date.parse(b + "T00:00:00Z");
+  return Math.abs(Math.round(ms / 86400000));
+}
+
+/** Every un-cleared, un-matched bank leg of one ledger, as a candidate shape. */
+function mockCandidateLegs(
+  c: MockCompany,
+  ledgerID: string,
+  ledgerName: string,
+): BankMatchCandidate[] {
+  const out: BankMatchCandidate[] = [];
+  for (const v of c.vouchers) {
+    const legs = v.postings.filter((p) => p.ledger === ledgerName);
+    legs.forEach((leg, legNo) => {
+      // A leg with ANY clearance is not a candidate — not "un-cleared as at a
+      // date", which is a different question. Offering a cleared leg would let a
+      // second clearance be asserted over the first.
+      if (c.bankDates.has(`${ledgerID}:${v.voucher_id}:${legNo}`)) return;
+      out.push({
+        voucher_id: v.voucher_id,
+        leg_no: legNo,
+        voucher_no: v.voucher_no,
+        class: v.class,
+        voucher_date: v.date,
+        narration: v.narration,
+        party: v.party,
+        amount: leg.amount,
+        dr_cr: leg.dr_cr as DrCr,
+        tier: "",
+        why: "",
+      });
+    });
+  }
+  return out;
+}
+
+function mockProposeMatches(
+  lines: BankStatementLine[],
+  legs: BankMatchCandidate[],
+): BankMatchProposal[] {
+  const proposals: BankMatchProposal[] = lines.map((ln) => {
+    const candidates: BankMatchCandidate[] = [];
+    for (const leg of legs) {
+      // ZERO TOLERANCE, compared as PAISE INTEGERS. A one-paisa difference is a
+      // bank charge or a different transaction, and a tolerance is how a real
+      // difference hides for a year.
+      if (mockMoneyToUnits(leg.amount) !== mockMoneyToUnits(ln.amount)) continue;
+      if (leg.dr_cr !== ln.dr_cr) continue;
+      const apart = mockDaysApart(ln.value_date, leg.voucher_date);
+      if (apart === 0) {
+        candidates.push({
+          ...leg,
+          tier: "exact",
+          why: "amount, direction and date all agree to the paisa and the day",
+        });
+      } else if (apart <= MOCK_MATCH_WINDOW_DAYS) {
+        candidates.push({
+          ...leg,
+          tier: "potential",
+          why:
+            `amount and direction agree to the paisa; the voucher is dated ${leg.voucher_date} ` +
+            `and the bank ${ln.value_date} — a cheque clearing late is ordinary`,
+        });
+      }
+    }
+    candidates.sort((a, b) => (a.tier === "exact" ? 0 : 1) - (b.tier === "exact" ? 0 : 1));
+    const bestTier = candidates[0]?.tier ?? "";
+    const atBest = candidates.filter((x) => x.tier === bestTier).length;
+    return {
+      line_id: ln.id,
+      line_no: ln.line_no,
+      value_date: ln.value_date,
+      description: ln.description,
+      amount: ln.amount,
+      dr_cr: ln.dr_cr,
+      bank_reference: ln.bank_reference || undefined,
+      cheque_number: ln.cheque_number || undefined,
+      best_tier: bestTier,
+      candidates,
+      ambiguous: atBest > 1,
+      acceptable_in_bulk: atBest === 1 && bestTier === "exact",
+    };
+  });
+
+  // ⛔ THE MIRROR AMBIGUITY: one leg claimed by more than one bank row. Each of
+  // those rows looks perfectly unambiguous ON ITS OWN, which is why this pass
+  // exists — without it both would be offered for bulk acceptance and the second
+  // would collide after the first had already asserted a clearance.
+  const claimants = new Map<string, number[]>();
+  proposals.forEach((p, i) => {
+    for (const cnd of p.candidates) {
+      if (cnd.tier !== p.best_tier) continue;
+      const k = `${cnd.voucher_id}:${cnd.leg_no}`;
+      claimants.set(k, [...(claimants.get(k) ?? []), i]);
+    }
+  });
+  for (const idxs of claimants.values()) {
+    if (idxs.length < 2) continue;
+    for (const i of idxs) {
+      proposals[i]!.ambiguous = true;
+      proposals[i]!.acceptable_in_bulk = false;
+      proposals[i]!.contested_by = idxs
+        .filter((o) => o !== i)
+        .map((o) => proposals[o]!.line_no)
+        .sort((a, b) => a - b);
+    }
+  }
+  return proposals;
+}
+
 function mockParseStatement(
   content: string,
   m: StatementColumnMapping,
@@ -2735,6 +2888,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         bankDates: new Map(),
         deductorStatuses: new Map(),
         bankStatements: new Map(),
+        bankMatches: new Map(),
         tcsDeclarations: new Map(),
         employees: [],
         salaryComponents: new Map(),
@@ -2849,6 +3003,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       bankDates: new Map(),
       deductorStatuses: new Map(),
       bankStatements: new Map(),
+      bankMatches: new Map(),
       tcsDeclarations: new Map(),
       employees: [],
       salaryComponents: new Map(),
@@ -7505,6 +7660,61 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
           `banking: bank_date ${req.bank_date} is before the voucher date ${v.date}`,
         );
       }
+      // T4 slice 2b. A statement_line_id makes this the ACCEPTANCE of a
+      // proposed match — the same write, additionally recording which imported
+      // bank row the tick came from. There is no separate resolve route, here or
+      // on the server.
+      if (req.statement_line_id) {
+        const store = c.bankStatements.get(ledgerID);
+        const line = store?.lines.find((l) => l.id === req.statement_line_id);
+        if (!line) {
+          throw new ApiError(
+            404,
+            "bankstatement: that statement line is not on this bank account",
+          );
+        }
+        // ⛔ THE ASSERTED DATE MUST BE THE ROW'S OWN VALUE DATE, refused naming
+        // BOTH rather than resolved in either direction — silently preferring
+        // one would be invisible afterwards, because every figure would be real.
+        if (line.value_date !== req.bank_date) {
+          throw new ApiError(
+            400,
+            `bankstatement: this bank row is dated ${line.value_date} on the statement ` +
+              `but the request asserts ${req.bank_date}; a match records the bank's own date and nothing else`,
+          );
+        }
+        if (c.bankMatches.has(`${ledgerID}:${req.statement_line_id}`)) {
+          throw new ApiError(
+            409,
+            "bankstatement: that statement line has already been resolved",
+          );
+        }
+        // The TIER IS THE MOCK'S OWN VERDICT, never the caller's — there is no
+        // field by which a caller could describe its own evidence.
+        const apart = mockDaysApart(line.value_date, v.date);
+        const sameAmount =
+          mockMoneyToUnits(leg.amount) === mockMoneyToUnits(line.amount) &&
+          leg.dr_cr === line.dr_cr;
+        c.bankMatches.set(`${ledgerID}:${req.statement_line_id}`, {
+          line_id: req.statement_line_id,
+          status: "matched",
+          tier: !sameAmount
+            ? "manual"
+            : apart === 0
+              ? "exact"
+              : apart <= MOCK_MATCH_WINDOW_DAYS
+                ? "potential"
+                : "manual",
+          matched_by: req.created_by,
+          matched_at: new Date().toISOString(),
+          voucher_id: voucherID,
+          leg_no: legNo,
+          voucher_no: v.voucher_no,
+          class: v.class,
+          bank_date: req.bank_date,
+          line_value_date: line.value_date,
+        });
+      }
       c.bankDates.set(`${ledgerID}:${voucherID}:${legNo}`, {
         bankDate: req.bank_date,
         clearedAmount: leg.amount,
@@ -7524,6 +7734,21 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       // intent is satisfied either way, and making a double-click an error is
       // friction with no safety gain.
       c.bankDates.delete(`${ledgerID}:${voucherID}:${legNo}`);
+      // ⭐ AND THE MATCH GOES WITH IT — migration 0088's ON DELETE CASCADE, which
+      // is what makes un-linking a match (Alt+F8) and un-ticking a bank date the
+      // SAME operation rather than two that can drift apart. A match outliving
+      // its clearance would leave the leg un-ticked while the bank row still read
+      // as matched.
+      for (const [k, m] of c.bankMatches) {
+        if (
+          k.startsWith(`${ledgerID}:`) &&
+          m.status === "matched" &&
+          m.voucher_id === voucherID &&
+          m.leg_no === legNo
+        ) {
+          c.bankMatches.delete(k);
+        }
+      }
       return { status: "unreconciled" };
     },
 
@@ -7634,6 +7859,173 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       };
     },
 
+    // ---- BANK STATEMENT MATCHING (T4 slice 2b).
+    //
+    // ⚠️ See mockProposeMatches for what this matcher deliberately does NOT do
+    // (no partial tier, no strong-key tier, a fixed window). What it DOES
+    // reproduce faithfully is ambiguity in both directions, which is invariant
+    // B-1 and the thing a screen can get dangerously wrong.
+    async bankStatementMatches(
+      companyID,
+      ledgerID,
+      opts?,
+    ): Promise<BankMatchesResponse> {
+      const c = ensure(companyID);
+      const ledger = mockRequireBankLedger(c, ledgerID);
+      const store = c.bankStatements.get(ledgerID) ?? { imports: [], lines: [] };
+      const from = opts?.from;
+      const to = opts?.to;
+      const inPeriod = (d: string) => (!from || d >= from) && (!to || d <= to);
+
+      const resolvedKeys = new Set(
+        [...c.bankMatches.keys()]
+          .filter((k) => k.startsWith(`${ledgerID}:`))
+          .map((k) => k.slice(ledgerID.length + 1)),
+      );
+      const open = store.lines.filter(
+        (l) => inPeriod(l.value_date) && !resolvedKeys.has(l.id),
+      );
+      const legs = mockCandidateLegs(c, ledgerID, ledger.name);
+      const proposals = mockProposeMatches(open, legs);
+
+      const proposed = new Set<string>();
+      for (const p of proposals) {
+        for (const cnd of p.candidates) proposed.add(`${cnd.voucher_id}:${cnd.leg_no}`);
+      }
+      const unmatchedLegs = legs.filter(
+        (l) => !proposed.has(`${l.voucher_id}:${l.leg_no}`),
+      );
+
+      const resolved = [...c.bankMatches.entries()]
+        .filter(([k]) => k.startsWith(`${ledgerID}:`))
+        .map(([, m]) => ({
+          ...m,
+          // Derived on READ, never stored: true when somebody retyped the Bank
+          // Date cell after matching, so the tick and the statement row no
+          // longer agree about WHEN.
+          bank_date_differs:
+            m.status === "matched" &&
+            !!m.bank_date &&
+            !!m.line_value_date &&
+            m.bank_date !== m.line_value_date,
+        }))
+        .sort((a, b) => (a.matched_at < b.matched_at ? 1 : -1));
+
+      const counts: BankMatchCounts = {
+        lines: proposals.length,
+        exact: proposals.filter((p) => p.best_tier === "exact").length,
+        potential: proposals.filter((p) => p.best_tier === "potential").length,
+        partial: proposals.filter((p) => p.best_tier === "partial").length,
+        ambiguous: proposals.filter((p) => p.ambiguous).length,
+        no_candidate: proposals.filter((p) => p.best_tier === "").length,
+        acceptable_in_bulk: proposals.filter((p) => p.acceptable_in_bulk).length,
+        unmatched_legs: unmatchedLegs.length,
+      };
+
+      const disclosures = [
+        "NOTHING ON THIS SCREEN HAS BEEN RECONCILED. Every row below is a PROPOSAL; " +
+          "a bank date is written only when you accept one, and accepting is the assertion " +
+          "that this bank row IS that voucher.",
+        `Candidates were sought within ${MOCK_MATCH_WINDOW_DAYS} days either side of the bank's date. ` +
+          "That window is this build's search width, not a rule from anywhere — widening it only " +
+          "shows you more proposals, because none of them clears itself.",
+        "Amounts must agree TO THE PAISA. A row that is one paisa out is not shown as a match to anything, " +
+          "deliberately: it is a bank charge or a different transaction, and absorbing it into a tolerance " +
+          "is how a real difference hides for a year.",
+      ];
+      if (counts.ambiguous > 0) {
+        disclosures.push(
+          `${counts.ambiguous} row(s) fit more than one voucher, or compete with another bank row for the same voucher. ` +
+            "None of them can be accepted in bulk and none has been chosen for you — " +
+            "two payments of the same amount on the same day are ordinary, and picking one is right half the time.",
+        );
+      }
+
+      return {
+        ledger_id: ledgerID,
+        ledger_name: ledger.name,
+        from: from ?? "",
+        to: to ?? "",
+        date_window_days: MOCK_MATCH_WINDOW_DAYS,
+        proposals,
+        unmatched_legs: unmatchedLegs,
+        resolved,
+        counts,
+        disclosures,
+      };
+    },
+
+    async setAsideStatementLine(
+      companyID,
+      ledgerID,
+      lineID,
+      req: SetAsideRequest,
+    ): Promise<SetAsideResponse> {
+      const c = ensure(companyID);
+      mockRequireBankLedger(c, ledgerID);
+      const store = c.bankStatements.get(ledgerID) ?? { imports: [], lines: [] };
+      const line = store.lines.find((l) => l.id === lineID);
+      if (!line) {
+        throw new ApiError(
+          404,
+          "bankstatement: that statement line is not on this bank account",
+        );
+      }
+      if (c.bankMatches.has(`${ledgerID}:${lineID}`)) {
+        throw new ApiError(
+          409,
+          "bankstatement: that statement line has already been resolved",
+        );
+      }
+      // ⛔ NO CLEARANCE IS WRITTEN. A set-aside asserts that this bank row
+      // corresponds to nothing in the books; it is not a weaker kind of match,
+      // and it moves no balance — c.bankDates is untouched.
+      c.bankMatches.set(`${ledgerID}:${lineID}`, {
+        line_id: lineID,
+        status: "set-aside",
+        tier: "manual",
+        note: req.note,
+        matched_by: req.created_by ?? "ui",
+        matched_at: new Date().toISOString(),
+        line_value_date: line.value_date,
+      });
+      return { status: "set-aside" };
+    },
+
+    async restoreStatementLine(
+      companyID,
+      ledgerID,
+      lineID,
+    ): Promise<SetAsideResponse> {
+      const c = ensure(companyID);
+      mockRequireBankLedger(c, ledgerID);
+      const store = c.bankStatements.get(ledgerID) ?? { imports: [], lines: [] };
+      if (!store.lines.some((l) => l.id === lineID)) {
+        throw new ApiError(
+          404,
+          "bankstatement: that statement line is not on this bank account",
+        );
+      }
+      const existing = c.bankMatches.get(`${ledgerID}:${lineID}`);
+      if (existing?.status === "matched") {
+        // ⛔ REFUSED, and the refusal is the feature. Deleting a matched row here
+        // would leave the clearance behind with nothing pointing at it: the leg
+        // would stay ticked while the bank row returned to the unmatched list,
+        // and the same row could be reconciled a second time against a second
+        // voucher. Both would look right.
+        throw new ApiError(
+          400,
+          "bankstatement: that line is MATCHED to a voucher, not set aside; " +
+            "un-tick the bank date on the reconciliation screen to undo it, " +
+            "which withdraws the clearance and the match together",
+        );
+      }
+      // Idempotent otherwise: restoring a line that was never set aside is a
+      // success, because the caller's intent is satisfied either way.
+      c.bankMatches.delete(`${ledgerID}:${lineID}`);
+      return { status: "unmatched" };
+    },
+
     async importedStatement(
       companyID,
       ledgerID,
@@ -7660,9 +8052,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       }
 
       const disclosures = [
-        "MATCHING IS NOT BUILT YET (T4 slice 2b). These are the bank's own rows; nothing here " +
-          "says whether a row has been matched to a voucher or cleared. Reconciling is still done on the " +
-          "Bank Reconciliation screen by entering a Bank Date against each voucher.",
+        "THIS REPORT SHOWS NO MATCH STATUS (T4 slice 2b). These are the bank's own rows, and a row " +
+          "here may already be matched to a voucher, set aside as matching nothing, or untouched — " +
+          "nothing on this report says which. Matching now works: press Alt+S on the Bank " +
+          "Reconciliation screen. Reconciling by hand, a Bank Date at a time, still works too.",
       ];
       for (const im of store.imports) {
         if (!im.balance_walked) {

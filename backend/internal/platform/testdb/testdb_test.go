@@ -122,6 +122,10 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 
 		// T4 slice 2a — the imported bank statement (migration 0062).
 		bankImportID = id()
+		// Slice 2b (migration 0088) links a statement LINE to the clearance it
+		// produced, so both ends need ids the match row can name.
+		bankReconID = id()
+		bankLineID  = id()
 
 		// Track 3 — payroll.
 		employeeID = id()
@@ -346,7 +350,7 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 		{"bank_reconciliation", `INSERT INTO bank_reconciliation
 			(id, company_id, voucher_id, ledger_id, leg_no, bank_date, cleared_amount, cleared_dr_cr, reconciled_by)
 			VALUES ($1, $2, $3, $4, 0, DATE '2024-05-03', 100, 'D', 'testdb')`,
-			[]any{id(), cid, voucherID, ledgerID}},
+			[]any{bankReconID, cid, voucherID, ledgerID}},
 
 		// ------------------------------------------------------------------
 		// Migration 0062 — T4 slice 2a, the imported bank statement.
@@ -372,7 +376,27 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 			 amount, dr_cr, raw, line_hash, occurrence)
 			VALUES ($1, $2, $3, $4, 2, DATE '2024-05-03', 'FIXTURE CREDIT',
 			        100, 'D', '{}'::jsonb, 'fixture-hash-' || $5, 0)`,
-			[]any{id(), cid, bankImportID, ledgerID, cidText}},
+			[]any{bankLineID, cid, bankImportID, ledgerID, cidText}},
+
+		// ------------------------------------------------------------------
+		// Migration 0088 — T4 slice 2b, one RESOLVED match.
+		//
+		// It must come after BOTH bank_statement_line and bank_reconciliation:
+		// its two three-column FKs point at each, and they carry the LEDGER as
+		// well as the id, so a match whose line and clearance belong to
+		// different bank accounts is refused by the database rather than by the
+		// service remembering to look.
+		//
+		// 'matched' with a reconciliation_id is the arm that exercises 0088's
+		// clearance_matches_status CHECK in the direction a real row takes; the
+		// set-aside arm (status 'set-aside', reconciliation_id NULL) is covered
+		// by the service tests rather than here, because one fixture row per
+		// table is what this census needs.
+		// ------------------------------------------------------------------
+		{"bank_statement_match", `INSERT INTO bank_statement_match
+			(id, company_id, line_id, ledger_id, status, reconciliation_id, tier, matched_by)
+			VALUES ($1, $2, $3, $4, 'matched', $5, 'exact', 'testdb')`,
+			[]any{id(), cid, bankLineID, ledgerID, bankReconID}},
 
 		// ------------------------------------------------------------------
 		// Migration 0047 — T5, one raised e-way bill.

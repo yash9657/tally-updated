@@ -12,6 +12,7 @@ import type {
 import { formatMoney } from "./reports/money";
 import { SelectionList } from "./SelectionList";
 import { BankStatementImportPanel } from "./BankStatementImportPanel";
+import { BankMatchPanel, panelOps } from "./BankMatchPanel";
 import { usePrintAction } from "./usePrint";
 
 /**
@@ -89,6 +90,15 @@ export function BankReconciliationScreen({ snapshot }: ScreenComponentProps) {
   // own, because slice 2b's matching is inherently a two-column view of
   // statement rows beside book legs; splitting them would make that slice worse.
   const [importing, setImporting] = useState(false);
+  // Alt+S — the MATCHING panel (T4 slice 2b). A panel on this screen for the
+  // reason the import panel is one, and the reason slice 2a predicted: matching
+  // is inherently a two-column view of statement rows beside book legs.
+  const [matching, setMatching] = useState(false);
+  const [matchView, setMatchView] = useState<"match" | "exceptions" | "basis">(
+    "match",
+  );
+  /** The bank row F8 / F9 / Alt+F8 act on. */
+  const [matchRow, setMatchRow] = useState<string | null>(null);
   const [brs, setBrs] = useState<BankReconciliationResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -288,6 +298,120 @@ export function BankReconciliationScreen({ snapshot }: ScreenComponentProps) {
     }, [ledgerID]),
   );
 
+  // ---- T4 SLICE 2b — the five matching keys (RESEARCH.md:879).
+  //
+  // ⛔ EVERY ONE OF THEM REFUSES BEFORE OPENING ONTO NOTHING, and the refusals
+  // name the key that fixes them. A panel that opened with no account selected
+  // could only ask again, and a row-scoped key with no row selected would
+  // otherwise act on whichever row happened to be first — which for a WITHDRAW
+  // is a real reconciliation undone by accident.
+
+  // Alt+S — "potential matches" (:879). Its slice-2a refusal promised the §0
+  // rule; the panel now keeps that promise.
+  useRegisterScreenAction(
+    "matchBankRows",
+    useCallback((): string => {
+      if (!ledgerID) {
+        return "Select a bank account first (F4) — matching compares ONE account's imported rows against the vouchers on that account.";
+      }
+      setMatchView("match");
+      setMatching(true);
+      return "Proposed matches. NOTHING here is reconciled until you accept it.";
+    }, [ledgerID]),
+  );
+
+  // Ctrl+J — the exception report. It is a VIEW over the proposals already
+  // loaded, not a second endpoint: two routes answering "what is outstanding?"
+  // would be two answers that can disagree.
+  useRegisterScreenAction(
+    "bankExceptionReport",
+    useCallback((): string => {
+      if (!ledgerID) {
+        return "Select a bank account first (F4).";
+      }
+      setMatchView("exceptions");
+      setMatching(true);
+      return "Exception report — what is still unmatched, and why.";
+    }, [ledgerID]),
+  );
+
+  // Ctrl+B — basis of values. What the comparison actually did: zero tolerance,
+  // the search window, and what each tier rests on.
+  useRegisterScreenAction(
+    "bankBasisOfValues",
+    useCallback((): string => {
+      if (!ledgerID) {
+        return "Select a bank account first (F4).";
+      }
+      setMatchView("basis");
+      setMatching(true);
+      return "Basis of values — how these proposals were arrived at.";
+    }, [ledgerID]),
+  );
+
+  // F9 — "set status manually" (:879). In this build the status a person can
+  // set by hand is SET ASIDE: this bank row matches nothing in the books.
+  //
+  // ⛔ IT IS NOT A WEAKER "MATCHED". It writes no bank date and moves no
+  // balance, and the panel words it so it cannot be read as reconciled.
+  useRegisterScreenAction(
+    "setAsideBankRow",
+    useCallback((): string => {
+      if (!matching || !panelOps.setAside) {
+        return "Open the matching panel first (Alt+S) — F9 sets the status of an imported BANK ROW, and there are none on screen.";
+      }
+      if (!matchRow) {
+        return "Select a bank row first. F9 records that THAT row matches nothing in the books, and it must not guess which one you mean.";
+      }
+      void panelOps.setAside(matchRow);
+      return "Set aside: this bank row matches nothing in the books. Nothing was reconciled.";
+    }, [matching, matchRow]),
+  );
+
+  // Alt+F8 — "unlink a match" (:879).
+  //
+  // ⛔ IT WITHDRAWS THE CLEARANCE, and says so before it does. Un-linking a
+  // match and un-ticking a bank date are the SAME operation (migration 0088's
+  // cascade), so a key that said only "unlink" would understate what it does.
+  useRegisterScreenAction(
+    "unlinkBankMatch",
+    useCallback((): string => {
+      if (!matching || !panelOps.unlink) {
+        return "Open the matching panel first (Alt+S) — Alt+F8 withdraws a MATCH, and the matches are listed there.";
+      }
+      const resolved = panelOps.data?.resolved ?? [];
+      const target = resolved.find(
+        (r) => r.line_id === matchRow && r.status === "matched",
+      );
+      if (!target || !target.voucher_id) {
+        return "Select a MATCHED bank row first. Alt+F8 withdraws a match and the bank date it recorded, so it must not guess which.";
+      }
+      void panelOps.unlink(target.voucher_id, target.leg_no ?? 0);
+      return `Withdrawing the match to ${target.class ?? ""} ${target.voucher_no ?? ""} — the voucher becomes un-cleared again.`;
+    }, [matching, matchRow]),
+  );
+
+  // F8 — "modify match" (:879). Re-matching IS withdraw-then-choose, and it says
+  // so rather than pretending to be an edit: there is no way to re-point a
+  // clearance without first withdrawing the one that exists.
+  useRegisterScreenAction(
+    "modifyBankMatch",
+    useCallback((): string => {
+      if (!matching || !panelOps.unlink) {
+        return "Open the matching panel first (Alt+S).";
+      }
+      const resolved = panelOps.data?.resolved ?? [];
+      const target = resolved.find(
+        (r) => r.line_id === matchRow && r.status === "matched",
+      );
+      if (!target || !target.voucher_id) {
+        return "Select a MATCHED bank row first — F8 re-matches one, which means withdrawing the match it has now.";
+      }
+      void panelOps.unlink(target.voucher_id, target.leg_no ?? 0);
+      return `Match withdrawn and the bank date with it. The row is back among the proposals — choose the voucher it should be.`;
+    }, [matching, matchRow]),
+  );
+
   /** Tick an item off, or un-tick it. The ONE write this screen makes. */
   const setBankDate = useCallback(
     (line: BankReconLine, value: string) => {
@@ -339,6 +463,35 @@ export function BankReconciliationScreen({ snapshot }: ScreenComponentProps) {
     },
     [client, companyID, ledgerID, load, asOn],
   );
+
+  // ---- The matching panel (Alt+S, Ctrl+J, Ctrl+B).
+  if (matching && ledgerID) {
+    const bank = banks?.find((b) => b.id === ledgerID);
+    return (
+      <BankMatchPanel
+        ledgerID={ledgerID}
+        ledgerName={bank?.name ?? brs?.ledger_name ?? ""}
+        to={asOn}
+        view={matchView}
+        onView={setMatchView}
+        selected={matchRow}
+        onSelect={setMatchRow}
+        onWrote={() => {
+          // A match writes a bank date, so the statement behind this panel is
+          // now stale. Re-reading it here is what stops the operator closing the
+          // panel onto figures from before their own work.
+          setWriteGen((g) => g + 1);
+          load(ledgerID);
+        }}
+        onClose={() => {
+          setMatching(false);
+          setMatchRow(null);
+          setMatchView("match");
+          load(ledgerID);
+        }}
+      />
+    );
+  }
 
   // ---- The import panel (Alt+O).
   if (importing && ledgerID) {

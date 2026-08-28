@@ -109,6 +109,56 @@ var wireDatesInPackageServer = map[string]wireDateVerdict{
 	// ---- NOT A DATE THE CUTOFF CAN OWN, WITH THE REASON. ------------------
 	"voucherDateProbe.voucher_date": {reason: "the PEEK's own probe type, not a wire contract"},
 
+	// ---- T4 SLICE 2b — THE MATCHING RESPONSE. ----------------------------
+	//
+	// ⭐ EVERY ONE OF THESE IS A RESPONSE FIELD, AND THE SLICE'S WRITE IS
+	// ALREADY JUDGED ABOVE. Accepting a proposed match is not a route of its
+	// own: it is PUT .../bank-reconciliation/{ledgerID}/{voucherID}/{legNo} with
+	// a statement_line_id added to the body, so the date it asserts is
+	// setBankDateReq.bank_date — the entry four lines up, which IS judged and IS
+	// exercised. Slice 2b deliberately added no second way to assert a date,
+	// precisely so this census would have nothing new to judge.
+	//
+	// ⚠️ THEY ARE LISTED RATHER THAN SKIPPED for the reason
+	// currencyListItem.latest_rate_date states: the census scans by SHAPE, and
+	// "it is only a response" is exactly the sentence that would be wrong the
+	// day someone accepts one of them back as an input.
+	"lineProposalView.value_date": {reason: "" +
+		"a RESPONSE field: the date the BANK gave an imported statement row, echoed by " +
+		"GET .../bank-statement/{ledgerID}/matches so the operator can see what they are " +
+		"being asked to match. Deriving proposals writes nothing, so there is no entry for " +
+		"the cutoff to judge. When this date IS asserted, it is asserted through " +
+		"setBankDateReq.bank_date on the bank-reconciliation PUT, which is judged above."},
+
+	"candidateView.voucher_date": {reason: "" +
+		"a RESPONSE field: the date of a voucher the matcher OFFERS as a candidate. It is a " +
+		"date the books already hold, read back so the operator can weigh the proposal; " +
+		"nothing in this response can change it, and accepting the candidate writes a BANK " +
+		"date rather than a voucher date."},
+
+	"lineProposalView.candidates": {reason: "" +
+		"NOT A DATE AT ALL — the census matches by substring and 'candidates' contains " +
+		"'date'. It is the list of legs the matcher offers for one bank row. Listed rather " +
+		"than renamed, because the field name is the right one and a census false positive " +
+		"is cheaper than a worse name."},
+
+	"resolutionView.bank_date": {reason: "" +
+		"a RESPONSE field: the date on the bank_reconciliation row a resolved match " +
+		"produced, read back so the screen can show what was recorded. The row was written " +
+		"through the bank-reconciliation PUT, where setBankDateReq.bank_date WAS judged by " +
+		"the cutoff on the way in."},
+
+	"resolutionView.line_value_date": {reason: "" +
+		"a RESPONSE field, and specifically the EVIDENCE half of a disagreement: it is the " +
+		"statement row's own date, shown beside bank_date so a reader can see when the two " +
+		"have drifted apart (somebody retyped the Bank Date cell after matching). It is " +
+		"read from the imported statement and is never an input."},
+
+	"resolutionView.bank_date_differs": {reason: "" +
+		"NOT A DATE — a BOOLEAN whose name contains one. True when the clearance's bank " +
+		"date is no longer the statement row's own value date. It is derived on read from " +
+		"the two fields above and is never sent by a client."},
+
 	"currencyListItem.latest_rate_date": {reason: "" +
 		"a RESPONSE field, never an input: it is the date of the newest rate on file, emitted by " +
 		"GET /currencies so a picker can say how stale a rate is. The cutoff judges WRITES — it " +

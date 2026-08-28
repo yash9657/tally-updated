@@ -756,6 +756,46 @@ func TestCutoffRefusesATallyXMLAlterOrDeleteOutOfALockedPeriod(t *testing.T) {
 // records WHY, because the whole reason this is round 3 is that "it looked
 // harmless" was decided by silence three times.
 var writeRoutesNamingADocumentButNotMovingIt = map[string]string{
+	// ---- T4 SLICE 2b (migration 0088). TWO WRITE ROUTES, ONE REASON.
+	//
+	// ⛔ THE DOCUMENT THESE NAME IS AN IMPORTED BANK ROW, WHICH IS NOT A LEDGER
+	// DOCUMENT AND HAS NO POSITION IN A PERIOD TO BE MOVED OUT OF. The census
+	// matches them because the path carries a {lineID} and a bank_statement_line
+	// IS dated — but that date is the BANK's, a fact about a file somebody
+	// downloaded, and setting a row aside neither changes it nor asserts anything
+	// about the books.
+	//
+	// ⭐ WHAT MAKES THIS SAFE IS STRUCTURAL AND NOT A PROMISE: migration 0088's
+	// bank_statement_match_clearance_matches_status CHECK refuses a 'set-aside'
+	// row that carries a reconciliation_id. So a set-aside CANNOT write a
+	// clearance, cannot touch a voucher_version or a posting, and cannot move any
+	// balance — the Bank Reconciliation Statement reads bank_reconciliation and a
+	// set-aside writes none. There is nothing here to lift across a cutoff.
+	//
+	// ⚠️ AND THE OTHER HALF OF THE DECISION: NEITHER ROUTE SENDS A DATE AT ALL.
+	// setAsideReq carries a note and a created_by and nothing else, so there is no
+	// asserted date for the cutoff to judge either. Both halves are written down
+	// because the three shipped defects were each a case where one half was
+	// recorded and the other assumed.
+	//
+	// ⛔ THE WRITE THAT *DOES* MOVE A LEDGER DOCUMENT IS NOT IN THIS SLICE'S
+	// ROUTES AT ALL. Accepting a match asserts a bank date, and it does so through
+	// the EXISTING PUT .../bank-reconciliation/{ledgerID}/{voucherID}/{legNo},
+	// which this census already judges on both ends (peekBankDate for the asserted
+	// date, storedBankDateForLeg for the one already there). Slice 2b added no
+	// second way to assert a clearance precisely so that stayed true.
+	//
+	// ⛔ IF A LATER TRACK EVER LETS A SET-ASIDE POST — an auto-created voucher for
+	// a bank charge, say — BOTH ENTRIES BECOME FALSE and the routes must move to
+	// existingVouchersNamedByRequest.
+	"POST /v1/companies/{companyID}/bank-statement/{ledgerID}/lines/{lineID}/set-aside": "" +
+		"an imported bank row is not a ledger entry: a set-aside writes no clearance " +
+		"(migration 0088's CHECK refuses one), no posting and no balance, and the request " +
+		"carries no date at all",
+	"POST /v1/companies/{companyID}/bank-statement/{ledgerID}/lines/{lineID}/restore": "" +
+		"the undo of the above, with the same reach: it deletes a 'set-aside' row only, " +
+		"refuses to touch a 'matched' one, and carries no date",
+
 	// ---- T11 BUDGETS (migrations 0085/0086). FIVE WRITE ROUTES, ONE REASON.
 	//
 	// ⛔ THE DOCUMENT THESE NAME IS NOT A LEDGER DOCUMENT. The census matches them

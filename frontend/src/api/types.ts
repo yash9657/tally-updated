@@ -401,6 +401,19 @@ export interface SetBankDateRequest {
    */
   bank_date: string;
   created_by: string;
+  /**
+   * T4 slice 2b — the imported bank row this tick came from. OPTIONAL; its
+   * absence is the ordinary manual reconciliation.
+   *
+   * ⭐ ACCEPTING A PROPOSED MATCH IS THIS REQUEST, not a route of its own, so
+   * matching cannot become a second way to acquire the authority to assert a
+   * clearance — and the back-dated cutoff, which reads `bank_date` out of THIS
+   * body, keeps working because it is the same body.
+   *
+   * ⛔ `bank_date` MUST BE THE STATEMENT ROW'S OWN VALUE DATE. The server
+   * refuses a disagreement naming both dates rather than preferring either.
+   */
+  statement_line_id?: string;
 }
 
 export interface SetBankDateResponse {
@@ -567,6 +580,141 @@ export interface ImportedStatementResponse {
    * as "none of these matched", which is a different and false statement.
    */
   disclosures: string[];
+}
+
+// ---------------------------------------------------------------------------
+// T4 SLICE 2b — MATCHING an imported bank row to a voucher leg.
+// ---------------------------------------------------------------------------
+
+/**
+ * The evidence a proposal rests on — RESEARCH.md:879's four tiers.
+ *
+ * "manual" is never PROPOSED. It is what the server stores when an operator
+ * resolves a leg the matcher offered at no tier, and is the honest word for
+ * "a person said so".
+ */
+export type MatchTier = "exact" | "potential" | "partial" | "manual";
+
+/** One voucher leg the matcher believes a bank row might be. */
+export interface BankMatchCandidate {
+  voucher_id: string;
+  leg_no: number;
+  voucher_no: string;
+  class: string;
+  voucher_date: string;
+  narration: string;
+  party: string;
+  amount: Money;
+  dr_cr: DrCr;
+  /** "" on an unmatched LEG, which was offered to nobody. */
+  tier: MatchTier | "";
+  /**
+   * The evidence in the operator's words. A client MUST show it: a candidate
+   * offered without a reason is a machine asking to be trusted.
+   */
+  why: string;
+  /** For a partial: what makes up the sum. */
+  partial_with?: string[];
+}
+
+/** One imported bank row and what the matcher found for it. */
+export interface BankMatchProposal {
+  line_id: string;
+  line_no: number;
+  value_date: string;
+  description: string;
+  amount: Money;
+  dr_cr: DrCr;
+  bank_reference?: string;
+  cheque_number?: string;
+
+  /** "" when nothing was found at any tier. */
+  best_tier: MatchTier | "";
+  candidates: BankMatchCandidate[];
+  /**
+   * ⛔ INVARIANT B-1 ON THE WIRE. True when more than one candidate sits at the
+   * best tier, OR when another bank row competes for this one's best candidate.
+   * A client must NEVER offer a one-key acceptance for a row carrying it: two
+   * payments of the same amount on the same day are ordinary, and picking one is
+   * right half the time — with the wrong half invisible.
+   */
+  ambiguous: boolean;
+  /** The other file line numbers competing for this row's best candidate. */
+  contested_by?: number[];
+  /** The ONLY field a bulk-accept key may read. */
+  acceptable_in_bulk: boolean;
+}
+
+/** One decision already recorded about a bank row. */
+export interface BankMatchResolution {
+  line_id: string;
+  /**
+   * ⛔ "set-aside" IS NOT A WEAK "matched" AND MUST NOT RENDER AS ONE. It is the
+   * operator recording that a bank row corresponds to NOTHING in the books — a
+   * real category. It writes no clearance and moves no balance.
+   */
+  status: "matched" | "set-aside";
+  tier: MatchTier;
+  note?: string;
+  matched_by: string;
+  matched_at: string;
+
+  voucher_id?: string;
+  leg_no?: number;
+  voucher_no?: string;
+  class?: string;
+  bank_date?: string;
+  /**
+   * True when somebody retyped the Bank Date cell after matching, so the tick
+   * and the statement row no longer agree about WHEN the bank did it. The same
+   * class as BROKEN BY ALTER, one column over — surface it.
+   */
+  bank_date_differs?: boolean;
+  line_value_date?: string;
+}
+
+/** The exception report's counts (Ctrl+J), over the same payload. */
+export interface BankMatchCounts {
+  lines: number;
+  exact: number;
+  potential: number;
+  partial: number;
+  ambiguous: number;
+  no_candidate: number;
+  acceptable_in_bulk: number;
+  unmatched_legs: number;
+}
+
+/**
+ * GET /bank-statement/{ledgerID}/matches — what the matcher PROPOSES.
+ *
+ * ⛔ NOTHING IN THIS RESPONSE HAS BEEN RECONCILED, and `disclosures[0]` says so
+ * in those words. Deriving proposals writes nothing; a bank date is written only
+ * when the operator accepts one, through the bank-reconciliation PUT.
+ */
+export interface BankMatchesResponse {
+  ledger_id: string;
+  ledger_name: string;
+  from: string;
+  to: string;
+  /** The search width actually used, which the screen must state. */
+  date_window_days: number;
+  proposals: BankMatchProposal[];
+  /** Books-only unreconciled: legs no bank row proposed. A CATEGORY, not an error. */
+  unmatched_legs: BankMatchCandidate[];
+  resolved: BankMatchResolution[];
+  counts: BankMatchCounts;
+  disclosures: string[];
+}
+
+/** POST .../lines/{lineID}/set-aside */
+export interface SetAsideRequest {
+  note?: string;
+  created_by?: string;
+}
+
+export interface SetAsideResponse {
+  status: "set-aside" | "unmatched";
 }
 
 /**

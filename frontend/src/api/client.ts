@@ -65,6 +65,7 @@ import type {
   SetLedgerOpeningRequest,
   SetLedgerOpeningResponse,
   VoucherHistoryResponse,
+  BankMatchesResponse,
   BankReconciliationResponse,
   ImportedStatementResponse,
   ImportStatementRequest,
@@ -111,6 +112,8 @@ import type {
   TDSProfileResponse,
   SetTDSProfileRequest,
   SetTDSProfileResponse,
+  SetAsideRequest,
+  SetAsideResponse,
   SetBankDateRequest,
   SetBankDateResponse,
   VoucherClass,
@@ -389,6 +392,46 @@ export interface CoredClient {
     from?: string,
     to?: string,
   ): Promise<ImportedStatementResponse>;
+  /**
+   * T4 slice 2b — what the matcher PROPOSES for one bank account.
+   *
+   * ⛔ IT WRITES NOTHING, and there is no argument that would make it write.
+   * Proposals are DERIVED on every read rather than stored, because a stored
+   * candidate goes stale silently: a voucher altered, deleted or cleared between
+   * the proposal and the acceptance leaves the operator choosing from a list
+   * that no longer describes the books while still looking authoritative.
+   *
+   * `windowDays` is a SEARCH WIDTH, not a rule from anywhere — widening it only
+   * shows more proposals, because none of them clears itself.
+   */
+  bankStatementMatches(
+    companyID: string,
+    ledgerID: string,
+    opts?: { from?: string; to?: string; windowDays?: number },
+  ): Promise<BankMatchesResponse>;
+  /**
+   * Record that a bank row corresponds to NOTHING in the books — the bank
+   * charge, the standing order, the drawings.
+   *
+   * ⛔ IT WRITES NO CLEARANCE AND MOVES NO BALANCE. A set-aside is a real
+   * category, not a weaker match, and must never render as reconciled.
+   */
+  setAsideStatementLine(
+    companyID: string,
+    ledgerID: string,
+    lineID: string,
+    req: SetAsideRequest,
+  ): Promise<SetAsideResponse>;
+  /**
+   * Undo a set-aside, returning the row to the unmatched list. REFUSES a row
+   * that is MATCHED: withdrawing a match means withdrawing its clearance, which
+   * is `clearBankDate`'s job and cascades the link away with it.
+   */
+  restoreStatementLine(
+    companyID: string,
+    ledgerID: string,
+    lineID: string,
+  ): Promise<SetAsideResponse>;
 
   /**
    * Every recorded deductor-status year, plus the category vocabulary to render

@@ -179,6 +179,27 @@ export type ScreenActionKind =
    */
   | "importBankStatement"
   /**
+   * T4 SLICE 2b — the five MATCHING actions on the Bank Reconciliation
+   * Statement. All are screen actions for the reason F4 and Alt+O above are:
+   * everything they operate on — the selected bank account, the loaded
+   * proposals, the highlighted bank row — lives on the screen and never travels
+   * through the pure machine.
+   *
+   * ⛔ NONE OF THEM RECONCILES ANYTHING BY ITSELF. `matchBankRows` opens the
+   * proposals; accepting one is a bank-date write the operator asks for by name.
+   */
+  | "matchBankRows"
+  /** F8 — re-match a bank row: unlink what it points at, then choose again. */
+  | "modifyBankMatch"
+  /** Alt+F8 — withdraw a match, which withdraws its clearance with it. */
+  | "unlinkBankMatch"
+  /** F9 — set a row's status by hand: mark it as matching nothing in the books. */
+  | "setAsideBankRow"
+  /** Ctrl+J — the exception report: what is outstanding, and why. */
+  | "bankExceptionReport"
+  /** Ctrl+B — basis of values: how these proposals were arrived at. */
+  | "bankBasisOfValues"
+  /**
    * Alt+C on the EMPLOYEES screen — open the form that creates an employee. A
    * screen action for the reasons `createOrder` gives: the form's state and the
    * client that posts it belong to the screen, and creating a master here does

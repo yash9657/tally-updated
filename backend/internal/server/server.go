@@ -1115,6 +1115,21 @@ func (s *Server) routes() {
 		r.Post("/bank-statement/{ledgerID}/import", s.handleImportBankStatement)
 		r.Get("/bank-statement/{ledgerID}", s.handleImportedStatement)
 
+		// T4 SLICE 2b — MATCHING. Two of its three routes are here; the third
+		// and most important one is not, because ACCEPTING a match is the
+		// EXISTING bank-reconciliation PUT above with a statement_line_id in the
+		// body. handler_bank_match.go's header has the four properties that
+		// follow from sharing that route rather than minting a new one, and
+		// migration 0088's footer records why slice 2b writes no ACL migration.
+		//
+		// All three are mapped by routeAction's existing `/bank-statement/`
+		// prefix arm: the GET as Display/report:bank-statement (which 0063
+		// already disallows to Data Entry) and both POSTs as
+		// Create/bank-statement (which 0063 grants Data Entry nothing of).
+		r.Get("/bank-statement/{ledgerID}/matches", s.handleBankStatementMatches)
+		r.Post("/bank-statement/{ledgerID}/lines/{lineID}/set-aside", s.handleSetAsideStatementLine)
+		r.Post("/bank-statement/{ledgerID}/lines/{lineID}/restore", s.handleRestoreStatementLine)
+
 		// TDS DEDUCTOR STATUS (Item Zero step 2) — Tally's F11 > Enable TDS >
 		// "TDS Deductor Details" (RESEARCH.md:692). Whether this company is a
 		// s.402(11) designated person / s.402(37) specified person, per tax year.

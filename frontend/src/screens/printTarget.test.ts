@@ -660,18 +660,38 @@ describe("print never navigates, and reconcile does (the machine)", () => {
     expect(s.voucherType).toBeUndefined();
   });
 
-  it("the statement's unbuilt keys answer instead of doing something wrong", () => {
-    // RESEARCH.md:879 lists F5/F8/F9/Alt+F8/Alt+S inside reconciliation. All
-    // belong to statement import (T4 slice 2). Each must be bound to an explicit
-    // "not built" — F9 in particular, whose global binding is a PURCHASE voucher.
-    for (const combo of ["F5", "F8", "F9", "Alt+F8", "Alt+S"]) {
+  it("the statement's MATCHING keys are real now, and each is its own action", () => {
+    // ⭐ THIS TEST USED TO ASSERT ALL FIVE WERE REFUSALS. T4 slice 2b built four
+    // of them, so it now pins what they ARE — and it still pins that every combo
+    // is BOUND, which is the property that mattered all along: F9's global
+    // binding is a PURCHASE voucher and Alt+S's is nothing, so a key that fell
+    // through to the global would not be a missing feature but a wrong one.
+    const built: Record<string, string> = {
+      F8: "modifyBankMatch",
+      F9: "setAsideBankRow",
+      "Alt+F8": "unlinkBankMatch",
+      "Alt+S": "matchBankRows",
+      // RESEARCH.md:879 also lists these two on this screen. Slice 2a bound them
+      // to refusals so they could not silently inherit a future global; 2b makes
+      // them real, because both report on MATCHING.
+      "Ctrl+J": "bankExceptionReport",
+      "Ctrl+B": "bankBasisOfValues",
+    };
+    for (const [combo, kind] of Object.entries(built)) {
       const action = resolveAction(keymap, "bank-reconciliation", combo);
       expect(action, `${combo} is unbound on the statement`).toBeTruthy();
-      expect(
-        action?.kind,
-        `${combo} on the statement resolves to ${action?.kind}, which is not a refusal`,
-      ).toBe("unavailable");
+      expect(action?.kind, `${combo} on the statement`).toBe(kind);
     }
+  });
+
+  it("F5 is STILL a refusal, and that is the honest answer", () => {
+    // ⛔ THE AMOUNT-VIEW TOGGLE IS NOT PART OF SLICE 2b. The memo says so in §6:
+    // it is a display toggle, not matching. Flipping it to a real action while
+    // the toggle does not exist would be the flattering-direction error the
+    // FeaturesScreen exists to prevent, and it would ALSO re-open the hazard the
+    // test above describes — the global F5 opens a Payment voucher.
+    const action = resolveAction(keymap, "bank-reconciliation", "F5");
+    expect(action?.kind).toBe("unavailable");
   });
 
   it("F4 picks the bank account without moving the stack", () => {

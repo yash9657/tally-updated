@@ -893,6 +893,31 @@ export type KeymapAction =
    */
   | { kind: "importBankStatement" }
   /**
+   * T4 SLICE 2b — the five MATCHING keys on the Bank Reconciliation Statement.
+   * Every combo is RESEARCH.md:879's own for this screen; none was invented.
+   *
+   *   Alt+S   "potential matches"      -> matchBankRows
+   *   F8      "modify match"           -> modifyBankMatch
+   *   Alt+F8  "unlink a match"         -> unlinkBankMatch
+   *   F9      "set status manually"    -> setAsideBankRow
+   *   Ctrl+J  "exception report"       -> bankExceptionReport
+   *   Ctrl+B  "basis of values"        -> bankBasisOfValues
+   *
+   * ⛔ Alt+S IS SCOPED TO THIS SCREEN and does not shadow the EMPLOYEES screen's
+   * Alt+S (set salary), for the same reason the two Alt+O actions coexist:
+   * screen bindings resolve first and each is registered for one screen only.
+   *
+   * ⛔ AND NONE OF THEM CLEARS ANYTHING. Alt+S opens a list of PROPOSALS. A
+   * clearance is written only by accepting one, which is a bank-date write the
+   * operator asks for by name — the same write the Bank Date column makes.
+   */
+  | { kind: "matchBankRows" }
+  | { kind: "modifyBankMatch" }
+  | { kind: "unlinkBankMatch" }
+  | { kind: "setAsideBankRow" }
+  | { kind: "bankExceptionReport" }
+  | { kind: "bankBasisOfValues" }
+  /**
    * Alt+C on the TDS Challans screen — RECORD A DEPOSIT (T6).
    *
    * THE COMBO is Tally's documented create-inline key (RESEARCH.md:405, "Alt+C =

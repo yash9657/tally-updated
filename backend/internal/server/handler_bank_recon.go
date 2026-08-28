@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/khata/cored/internal/banking"
+	"github.com/khata/cored/internal/bankstatement"
 	"github.com/khata/cored/internal/reporting"
 )
 
@@ -30,6 +31,31 @@ type setBankDateReq struct {
 	// would invent the one fact the whole feature exists to record.
 	BankDate  string `json:"bank_date"`
 	CreatedBy string `json:"created_by"`
+	// StatementLineID is the imported bank row this tick came from — T4 slice
+	// 2b. OPTIONAL, and its absence is the ordinary manual reconciliation this
+	// route has always served.
+	//
+	// ⭐ ACCEPTING A PROPOSED MATCH IS THIS ROUTE, NOT A ROUTE OF ITS OWN, and
+	// that is slice 2b's load-bearing decision — see
+	// banking.SetBankDateFromStatementLine for the four properties that follow
+	// (the ACL, the back-dated cutoff, the WebAuthn step-up, invariant B-2).
+	//
+	// ⛔ THE DATE IS STILL SENT AND STILL REQUIRED even when a line id is
+	// present, though the server could read it off that line. Two reasons, and
+	// the second is load-bearing:
+	//
+	//   1. The operator is asserting a date, and an assertion they never see is
+	//      not one they made. The screen shows the date it is about to write.
+	//   2. peekBankDate — the back-dated cutoff's wire-date probe — reads
+	//      `bank_date` FROM THIS BODY. A resolve that carried only a line id
+	//      would leave the PDP with no date, cutoffDeny would skip, and a
+	//      clearance could be asserted into a filed period. That is byte for
+	//      byte the defect routeAction's bank-reconciliation comment records
+	//      shipping once already, and it would have shipped again here.
+	//
+	// The server REFUSES a date that disagrees with the line's own value date
+	// rather than preferring either — see handleSetBankDate.
+	StatementLineID string `json:"statement_line_id"`
 }
 
 // bankReconLineView is the wire shape of one statement line. Money is a
@@ -138,10 +164,36 @@ func (s *Server) handleSetBankDate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := s.banking.SetBankDate(ctx, companyID, voucherID, ledgerID, legNo, req.BankDate, req.CreatedBy)
+	// T4 slice 2b. An ABSENT statement_line_id is the manual reconciliation this
+	// route has always served; a PRESENT one additionally records which imported
+	// bank row the tick came from. A malformed one is refused rather than
+	// ignored: silently dropping it would write the clearance WITHOUT the link,
+	// and the operator would be looking at a match that the statement screen
+	// still showed as unmatched.
+	var err error
+	if req.StatementLineID == "" {
+		err = s.banking.SetBankDate(ctx, companyID, voucherID, ledgerID, legNo, req.BankDate, req.CreatedBy)
+	} else {
+		lineID, perr := uuid.Parse(req.StatementLineID)
+		if perr != nil {
+			writeError(w, http.StatusBadRequest, "invalid statement_line_id")
+			return
+		}
+		err = s.banking.SetBankDateFromStatementLine(
+			ctx, companyID, voucherID, ledgerID, legNo, req.BankDate, req.CreatedBy, lineID)
+	}
 	switch {
 	case err == nil:
 		writeJSON(w, http.StatusOK, map[string]any{"status": "reconciled"})
+	case errors.Is(err, bankstatement.ErrLineAlreadyResolved):
+		// 409: this bank row already carries a decision. The clearance was NOT
+		// written — LinkMatch runs inside the same transaction, so its refusal
+		// rolls the tick back with it, which is what stops a failed match from
+		// leaving a tick nothing points at.
+		writeError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, bankstatement.ErrLineNotFound),
+		errors.Is(err, bankstatement.ErrDateDisagrees):
+		writeError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, banking.ErrLegNotFound):
 		// 404, not 403: the leg genuinely is not on the voucher's current
 		// version. 403 would confirm that some other leg exists.

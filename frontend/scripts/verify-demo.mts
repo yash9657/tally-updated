@@ -909,12 +909,19 @@ async function main(): Promise<void> {
 
   if (demoBank) {
     // The imported-statement report answers for a bank account with nothing
-    // imported yet, and SAYS that matching is not built. An empty list plus
+    // imported yet, and SAYS that it shows no match status. An empty list plus
     // silence would read as "none of your bank rows matched", which is a
     // different and false statement.
+    //
+    // ⛔ THIS CHECK PINNED A SENTENCE THAT WENT STALE. Until 2026-08-28 it looked
+    // for "MATCHING IS NOT BUILT YET", and slice 2b made that FALSE while this
+    // gate went on passing — because a gate that pins the PRESENCE of a
+    // disclosure does not pin its TRUTH. It was caught only because the sentence
+    // it names is quoted here in full. Keep it that way: name the words, so the
+    // next feature that falsifies them has to come and look.
     const stmt = await client.importedStatement(co, demoBank.id);
     const saysMatchingIsMissing = stmt.disclosures.some((d) =>
-      d.includes("MATCHING IS NOT BUILT YET"),
+      d.includes("THIS REPORT SHOWS NO MATCH STATUS"),
     );
     // ⚠️ ASSERT THE DISCLOSURE ONLY, NOT THE LINE COUNT. This check first read
     // `&& stmt.lines.length === 0`, which passed on a fresh seed and then FAILED
@@ -926,10 +933,10 @@ async function main(): Promise<void> {
     // The invariant is that the report ALWAYS says matching is not built,
     // whether it is showing zero rows or four hundred.
     check(
-      "the imported-statement report discloses that matching is not built",
+      "the imported-statement report discloses that it shows no match status",
       saysMatchingIsMissing,
       `${stmt.lines.length} imported line(s), ${stmt.disclosures.length} disclosure(s)` +
-        (saysMatchingIsMissing ? "" : " — the matching disclosure is MISSING"),
+        (saysMatchingIsMissing ? "" : " — the match-status disclosure is MISSING"),
     );
   }
 

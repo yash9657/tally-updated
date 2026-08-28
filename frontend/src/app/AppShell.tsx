@@ -175,6 +175,17 @@ const SCREEN_ACTIONS: Partial<Record<KeymapAction["kind"], ScreenActionKind>> = 
   // routes it), and the failure only appeared when the app was driven in a real
   // browser. Add the entry here whenever you add a screen action.
   importBankStatement: "importBankStatement",
+  // T4 SLICE 2b — the five matching keys on the same screen. ⛔ THESE SIX LINES
+  // ARE THE REGISTRATION POINT THE COMMENT ABOVE IS ABOUT: without them every
+  // key below resolves, finds no screen action, and is forwarded to a machine
+  // case that deliberately does nothing — silently, with every unit test still
+  // passing, because they call the dispatcher directly and bypass this map.
+  matchBankRows: "matchBankRows",
+  modifyBankMatch: "modifyBankMatch",
+  unlinkBankMatch: "unlinkBankMatch",
+  setAsideBankRow: "setAsideBankRow",
+  bankExceptionReport: "bankExceptionReport",
+  bankBasisOfValues: "bankBasisOfValues",
   // Alt+C on the TDS challan register — RECORD A DEPOSIT (T6).
   //
   // ⛔ THIS IS THE LINE THE COMMENT ABOVE IS ABOUT. Alt+O shipped completely
