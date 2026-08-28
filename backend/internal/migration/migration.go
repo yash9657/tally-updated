@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
 
 	"github.com/khata/cored/internal/compliance"
@@ -37,6 +38,7 @@ import (
 	"github.com/khata/cored/internal/integration"
 	"github.com/khata/cored/internal/ledger"
 	"github.com/khata/cored/internal/masters"
+	"github.com/khata/cored/internal/platform/db"
 	"github.com/khata/cored/internal/reporting"
 )
 
@@ -58,13 +60,50 @@ var classByVchType = map[string]ledger.Class{
 type Importer struct {
 	masters *masters.Service
 	ledger  *ledger.Service
+	// runner opens the ONE transaction the voucher pass runs inside (D98). It is
+	// the same tenant-scoped runner the two services above are built over.
+	runner TxRunner
 }
 
-// NewImporter constructs an Importer over the masters and ledger services. Both
-// must be backed by the same tenant-scoped pool; the importer never opens its
-// own database connection.
-func NewImporter(m *masters.Service, l *ledger.Service) *Importer {
-	return &Importer{masters: m, ledger: l}
+// TxRunner is the transaction seam the voucher pass needs. It is deliberately
+// the SAME one-method interface ledger.Service and masters.Service are built
+// over, which is what makes an atomic import possible without either package
+// changing: an implementation that hands out an already-open transaction turns
+// every nested write into part of one unit of work.
+type TxRunner interface {
+	RunInTx(ctx context.Context, fn db.TxFunc) error
+}
+
+// NewImporter constructs an Importer over the masters and ledger services and
+// the runner they are both backed by. All three must be the same tenant-scoped
+// pool; the importer never opens its own database connection.
+func NewImporter(m *masters.Service, l *ledger.Service, runner TxRunner) *Importer {
+	return &Importer{masters: m, ledger: l, runner: runner}
+}
+
+// txPin enrols every nested RunInTx call in ONE already-open transaction (D98).
+//
+// ⛔ THIS IS THE WHOLE ATOMICITY MECHANISM AND IT IS SEVEN LINES, because
+// ledger.Service and masters.Service take a one-method TxRunner rather than a
+// *pgxpool.Pool. Handing them a runner that returns the SAME pgx.Tx every time
+// makes the voucher pass one transaction — the hash chain included, since it is
+// computed inside that transaction rather than against committed state.
+//
+// ⛔ IT DOES NOT COMMIT AND IT DOES NOT ROLL BACK. Both belong to whoever opened
+// the transaction — here db.Pool.RunInTx, which is also why the company GUC and
+// the ErrNoCompany short-circuit are not reimplemented: the outer RunInTx has
+// already done both, once, for the lifetime of this transaction.
+//
+// ⚠️ A nested call that FAILS therefore poisons the whole transaction rather
+// than just itself, which is exactly the semantics wanted here — the first
+// refused voucher must take the whole pass down. If a future caller ever wants
+// to tolerate one failure and continue, that is what pgx's savepoint-backed
+// tx.Begin() is for; do not reach for it to paper over an error that should
+// abort the run.
+type txPin struct{ tx pgx.Tx }
+
+func (p txPin) RunInTx(ctx context.Context, fn db.TxFunc) error {
+	return fn(ctx, p.tx)
 }
 
 // ImportResult summarises an import run.
@@ -97,6 +136,28 @@ type ImportResult struct {
 	// re-import). SkippedGUIDs lists those GUIDs in document order.
 	Skipped      int
 	SkippedGUIDs []string
+
+	// ---- MONEY THE SOURCE BOOKS EXCLUDE (D101) -----------------------------
+	//
+	// ⛔ THIS IS DELIBERATELY *NOT* THE Skipped BUCKET ABOVE, AND THE REASON IS
+	// THE OPERATOR. Skipped means "a voucher with this GUID was already imported"
+	// — a re-import that changed nothing. These vouchers were never imported and
+	// never will be: Tally keeps a CANCELLED or OPTIONAL voucher out of the books
+	// (RESEARCH.md:2225 — only Cash Flow's "Include Scenarios" pulls optional
+	// entries in), so posting them would put money in these books that the source
+	// company excludes. Folding the two counts together would tell an operator
+	// their voided sales were "already imported", which is worse than silence.
+	//
+	// ⛔ IT MUST BE REPORTED, NOT SILENTLY DROPPED. "3 posted" against a file of 5
+	// is the same class of silence the stock counts exist to prevent.
+	VouchersVoided int
+	// VoidedVouchers describes each excluded voucher in document order, e.g.
+	// "voucher 2 (Sales 7595 dated 20190402): cancelled". One line per voucher:
+	// an operator reconciling a migration against Tally needs to find them.
+	VoidedVouchers []string
+	// LedgersTombstoned names LEDGER masters marked ISDELETED in the export and
+	// therefore NOT created. Five other master kinds already honoured this flag.
+	LedgersTombstoned []string
 
 	// ---- THE GOODS (inventory.go) ------------------------------------------
 	//
@@ -149,10 +210,19 @@ func (im *Importer) ImportFile(ctx context.Context, path, createdBy string) (Imp
 }
 
 // ImportEnvelope imports an already-parsed Tally envelope. Vouchers are posted
-// in document order; the first error aborts the run (each voucher is its own
-// transaction, so vouchers committed before the failure remain — callers
-// migrating production data should import into a fresh company and reconcile
-// before going live).
+// in document order and the first error aborts the run.
+//
+// ⭐ THE VOUCHER PASS IS ATOMIC (D98, 2026-08-27). It runs inside ONE
+// transaction, so a refusal leaves the books exactly as they were and a
+// corrected re-import cannot double-post. This sentence used to read "each
+// voucher is its own transaction, so vouchers committed before the failure
+// remain" — which was true, was never disclosed to the operator, and made the
+// natural recovery duplicate real money on a GUID-less export.
+//
+// ⚠️ THE MASTER PASSES ARE NOT ATOMIC AND THAT IS DELIBERATE — groups, inventory
+// masters and ledger masters commit as they are read and SURVIVE a refused
+// voucher pass. They are facts about the file rather than claims about the
+// trade, and an operator who fixes one voucher and re-imports wants them there.
 func (im *Importer) ImportEnvelope(ctx context.Context, env *integration.TallyEnvelope, createdBy string) (ImportResult, error) {
 	if env == nil {
 		return ImportResult{}, fmt.Errorf("migration: nil envelope")
@@ -213,6 +283,14 @@ func (im *Importer) ImportEnvelope(ctx context.Context, env *integration.TallyEn
 		if msg.Ledger == nil {
 			continue
 		}
+		// D101: a master Tally has tombstoned is not a master. Five other master
+		// kinds already skip on this flag; the ledger master is the one it never
+		// reached. Named in the report rather than dropped, because a ledger the
+		// operator expected to see and cannot find is a support call.
+		if msg.Ledger.Deleted() {
+			res.LedgersTombstoned = append(res.LedgersTombstoned, msg.Ledger.Name())
+			continue
+		}
 		id, name, state, warns, err := im.importLedgerMaster(ctx, i, msg.Ledger, ledgerIDs, groupCanon, createdBy)
 		if err != nil {
 			return res, err
@@ -228,6 +306,75 @@ func (im *Importer) ImportEnvelope(ctx context.Context, env *integration.TallyEn
 		ledgerIDs[name] = id
 	}
 
+	// ---- THE VOUCHER PASS IS ONE UNIT OF WORK (D98) ------------------------
+	//
+	// ⛔ THE DEFECT THIS CLOSES: the loop below used to run each voucher in its
+	// OWN transaction and `return res, err` on the first failure, so a refused
+	// import left every voucher BEFORE the bad one committed, said nothing about
+	// them, and the operator's natural recovery — fix the file, import again —
+	// posted them a SECOND time on a GUID-less export. Real money duplicated,
+	// with no delete path anywhere in this product.
+	//
+	// ⛔ SCOPE IS DELIBERATE AND IT IS THE VOUCHER PASS ONLY. The three master
+	// passes above keep committing per-master and keep SURVIVING a refusal,
+	// because a master is a fact about the FILE and a voucher is a claim about
+	// the TRADE — the distinction inventory_shapes_test.go already states. What
+	// changes here is that money no longer lands by halves.
+	//
+	// ⚠️ MASTERS ENSURED *INSIDE* THIS PASS (the 72 ledgers a real export's
+	// vouchers name but its masters file omits, plus any stock item met on a
+	// voucher line) DO roll back with it, and that is the honest outcome: they
+	// were created to carry a voucher that no longer exists.
+	//
+	// The outer RunInTx belongs to the pool, which is what sets the company GUC
+	// and short-circuits ErrNoCompany — see txPin's note.
+	committed := res
+	if err := im.runner.RunInTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		pin := txPin{tx: tx}
+		enrolled := &Importer{
+			masters: masters.NewService(pin),
+			ledger:  ledger.NewService(pin),
+			runner:  im.runner,
+		}
+		// run carries the ctx the enrolled services will be handed. RunInTx passes
+		// ctx through unchanged, so the inventory cache and createdBy are the same
+		// run's — only the SERVICES differ.
+		return enrolled.postVouchers(cctx{ctx: ctx, createdBy: createdBy, inv: run.inv},
+			env.Messages(), &res, ledgerIDs, ledgerState, seenLedger, createdBy)
+	}); err != nil {
+		// ⛔ THE RESULT MUST NOT CLAIM WHAT THE ROLLBACK TOOK BACK. Everything the
+		// voucher pass accumulated into res is gone from the database, so the
+		// report is restored to what actually COMMITTED — the master passes. A
+		// caller that rendered res.VouchersPosted here would be reporting posts
+		// that no longer exist, which is the same silence this defect is about.
+		res = committed
+		return res, err
+	}
+
+	// One item named on forty invoices is ONE line in the report. Sorted so two
+	// runs of the same file produce the same report and a diff means something.
+	res.StockItemsEnsured = sortedUnique(res.StockItemsEnsured)
+	res.StockGroupsEnsured = sortedUnique(res.StockGroupsEnsured)
+	res.UnitsEnsured = sortedUnique(res.UnitsEnsured)
+	res.GodownsEnsured = sortedUnique(res.GodownsEnsured)
+	res.BatchesEnsured = sortedUnique(res.BatchesEnsured)
+	return res, nil
+}
+
+// postVouchers runs the voucher pass. It is a method rather than a loop inside
+// ImportEnvelope so that it can be invoked on an ENROLLED Importer — one whose
+// masters and ledger services share a single open transaction (D98). The
+// receiver is named ip to make that non-obvious fact visible at every call: the
+// services this uses are NOT necessarily the ones ImportEnvelope was built with.
+//
+// ⛔ EVERY `return err` IN HERE ABORTS THE WHOLE IMPORT AND ROLLS IT BACK. That
+// is the contract; a failure that should be tolerated must be turned into a
+// warning or a skip BEFORE it becomes an error, the way a voided voucher is.
+func (ip *Importer) postVouchers(run cctx, msgs []integration.TallyMessage,
+	res *ImportResult, ledgerIDs map[string]uuid.UUID, ledgerState map[string]string,
+	seenLedger map[string]bool, createdBy string) error {
+
+	ctx := run.ctx
 	// recordLedgers folds the names referenced by a posted/altered voucher into
 	// the run's distinct ensured-ledger set, in stable first-seen order.
 	recordLedgers := func(names []string) {
@@ -244,11 +391,24 @@ func (im *Importer) ImportEnvelope(ctx context.Context, env *integration.TallyEn
 	// new immutable version to the voucher previously imported under that GUID,
 	// and Delete tombstones it. Alter/Delete resolve their target by the stable
 	// Tally GUID, mirroring how Tally itself re-syncs an edited/removed voucher.
-	for i, msg := range env.Messages() {
+	for i, msg := range msgs {
 		if msg.Voucher == nil {
 			continue // ledger masters handled in the first pass
 		}
 		v := msg.Voucher
+		// D101: MONEY THE SOURCE BOOKS EXCLUDE DOES NOT ENTER THESE BOOKS.
+		// Checked BEFORE the ACTION dispatch on purpose — a cancelled voucher is
+		// not money whether it arrives as a Create, an Alter or a Delete, and an
+		// ALTER that resolved to a cancelled source would otherwise append a live
+		// version to a voucher the source company had voided.
+		if reason := v.VoidReason(); reason != "" {
+			res.VouchersVoided++
+			res.VoidedVouchers = append(res.VoidedVouchers, fmt.Sprintf(
+				"voucher %d (%s %s dated %s): %s",
+				i+1, strings.TrimSpace(v.VchType), strings.TrimSpace(v.VoucherNumber),
+				strings.TrimSpace(v.Date), reason))
+			continue
+		}
 		action := strings.ToUpper(strings.TrimSpace(v.Action))
 		if action == "" {
 			action = "CREATE"
@@ -261,40 +421,40 @@ func (im *Importer) ImportEnvelope(ctx context.Context, env *integration.TallyEn
 			// GUID there is nothing to resolve; with an unknown GUID there is
 			// nothing to delete (recorded as skipped).
 			if guid == "" {
-				return res, fmt.Errorf("migration: voucher %d: ACTION=Delete requires a GUID", i+1)
+				return fmt.Errorf("migration: voucher %d: ACTION=Delete requires a GUID", i+1)
 			}
-			vid, found, err := im.ledger.VoucherIDBySourceGUID(ctx, guid)
+			vid, found, err := ip.ledger.VoucherIDBySourceGUID(ctx, guid)
 			if err != nil {
-				return res, fmt.Errorf("migration: voucher %d: delete lookup: %w", i+1, err)
+				return fmt.Errorf("migration: voucher %d: delete lookup: %w", i+1, err)
 			}
 			if !found {
 				res.Skipped++
 				res.SkippedGUIDs = append(res.SkippedGUIDs, guid)
 				continue
 			}
-			if _, err := im.ledger.DeleteVoucher(ctx, vid, createdBy); err != nil {
-				return res, fmt.Errorf("migration: voucher %d: delete: %w", i+1, err)
+			if _, err := ip.ledger.DeleteVoucher(ctx, vid, createdBy); err != nil {
+				return fmt.Errorf("migration: voucher %d: delete: %w", i+1, err)
 			}
 			res.VouchersDeleted++
 
 		case "ALTER":
-			in, names, err := im.buildVoucherInput(run, i, v, ledgerIDs, ledgerState, &res)
+			in, names, err := ip.buildVoucherInput(run, i, v, ledgerIDs, ledgerState, res)
 			if err != nil {
-				return res, err
+				return err
 			}
 			var (
 				vid   uuid.UUID
 				found bool
 			)
 			if guid != "" {
-				if vid, found, err = im.ledger.VoucherIDBySourceGUID(ctx, guid); err != nil {
-					return res, fmt.Errorf("migration: voucher %d: alter lookup: %w", i+1, err)
+				if vid, found, err = ip.ledger.VoucherIDBySourceGUID(ctx, guid); err != nil {
+					return fmt.Errorf("migration: voucher %d: alter lookup: %w", i+1, err)
 				}
 			}
 			if found {
-				posted, err := im.ledger.AlterVoucher(ctx, vid, in)
+				posted, err := ip.ledger.AlterVoucher(ctx, vid, in)
 				if err != nil {
-					return res, postError(i, v, "alter", err)
+					return postError(i, v, "alter", err)
 				}
 				recordLedgers(names)
 				res.Posted = append(res.Posted, posted)
@@ -302,9 +462,9 @@ func (im *Importer) ImportEnvelope(ctx context.Context, env *integration.TallyEn
 			} else {
 				// No prior version under this GUID: an Alter with nothing to amend
 				// is treated as a create (the voucher simply did not arrive first).
-				posted, err := im.ledger.PostVoucher(ctx, in)
+				posted, err := ip.ledger.PostVoucher(ctx, in)
 				if err != nil {
-					return res, postError(i, v, "post", err)
+					return postError(i, v, "post", err)
 				}
 				recordLedgers(names)
 				res.Posted = append(res.Posted, posted)
@@ -316,35 +476,28 @@ func (im *Importer) ImportEnvelope(ctx context.Context, env *integration.TallyEn
 			// company is skipped (no re-post), matching Tally's same-GUID
 			// semantics. A GUID-less voucher is never deduped — it always posts.
 			if guid != "" {
-				if _, found, err := im.ledger.VoucherIDBySourceGUID(ctx, guid); err != nil {
-					return res, fmt.Errorf("migration: voucher %d: idempotency lookup: %w", i+1, err)
+				if _, found, err := ip.ledger.VoucherIDBySourceGUID(ctx, guid); err != nil {
+					return fmt.Errorf("migration: voucher %d: idempotency lookup: %w", i+1, err)
 				} else if found {
 					res.Skipped++
 					res.SkippedGUIDs = append(res.SkippedGUIDs, guid)
 					continue
 				}
 			}
-			in, names, err := im.buildVoucherInput(run, i, v, ledgerIDs, ledgerState, &res)
+			in, names, err := ip.buildVoucherInput(run, i, v, ledgerIDs, ledgerState, res)
 			if err != nil {
-				return res, err
+				return err
 			}
-			posted, err := im.ledger.PostVoucher(ctx, in)
+			posted, err := ip.ledger.PostVoucher(ctx, in)
 			if err != nil {
-				return res, postError(i, v, "post", err)
+				return postError(i, v, "post", err)
 			}
 			recordLedgers(names)
 			res.Posted = append(res.Posted, posted)
 			res.VouchersPosted++
 		}
 	}
-	// One item named on forty invoices is ONE line in the report. Sorted so two
-	// runs of the same file produce the same report and a diff means something.
-	res.StockItemsEnsured = sortedUnique(res.StockItemsEnsured)
-	res.StockGroupsEnsured = sortedUnique(res.StockGroupsEnsured)
-	res.UnitsEnsured = sortedUnique(res.UnitsEnsured)
-	res.GodownsEnsured = sortedUnique(res.GodownsEnsured)
-	res.BatchesEnsured = sortedUnique(res.BatchesEnsured)
-	return res, nil
+	return nil
 }
 
 // postError decorates a post/alter failure. A NEGATIVE-STOCK refusal gets its own

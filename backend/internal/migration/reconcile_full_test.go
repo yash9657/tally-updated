@@ -50,7 +50,7 @@ func TestReconcileFullEachCorpus(t *testing.T) {
 			}
 
 			pool, ctx, companyID := setupCompanyState(t, exp.StateCode)
-			im := migration.NewImporter(masters.NewService(pool), ledger.NewService(pool))
+			im := migration.NewImporter(masters.NewService(pool), ledger.NewService(pool), pool)
 			if _, err := im.ImportFile(ctx, xmlPath, "fullrecon"); err != nil {
 				t.Fatalf("import %s: %v", c.id, err)
 			}
@@ -75,7 +75,7 @@ func TestReconcileFullEachCorpus(t *testing.T) {
 func TestImportRoutesAlterAndDelete(t *testing.T) {
 	root := repoRoot(t)
 	pool, ctx, _ := setupCompanyState(t, "")
-	im := migration.NewImporter(masters.NewService(pool), ledger.NewService(pool))
+	im := migration.NewImporter(masters.NewService(pool), ledger.NewService(pool), pool)
 	res, err := im.ImportFile(ctx, filepath.Join(root, "corpora", "migration", "04-edited-deleted.xml"), "routing")
 	if err != nil {
 		t.Fatalf("import: %v", err)

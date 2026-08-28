@@ -227,7 +227,7 @@ func TestTallyPrimeInventoryShapesCorpus(t *testing.T) {
 	path := filepath.Join(repoRoot(t), "corpora", "migration", "07-tallyprime-inventory-shapes.xml")
 
 	ms := masters.NewService(pool)
-	im := migration.NewImporter(ms, ledger.NewService(pool))
+	im := migration.NewImporter(ms, ledger.NewService(pool), pool)
 
 	res, err := im.ImportFile(ctx, path, "tester")
 	if err != nil {
@@ -545,7 +545,7 @@ const noOpeningStockXML = `<ENVELOPE><BODY><IMPORTDATA>
 func TestAnExportWithNoOpeningStockIsRefusedWithBothWaysForward(t *testing.T) {
 	pool, ctx, companyID := setup(t)
 	ms := masters.NewService(pool)
-	im := migration.NewImporter(ms, ledger.NewService(pool))
+	im := migration.NewImporter(ms, ledger.NewService(pool), pool)
 
 	_, err := im.ImportReader(ctx, strings.NewReader(noOpeningStockXML), "tester")
 	if err == nil {

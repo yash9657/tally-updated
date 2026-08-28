@@ -341,7 +341,7 @@ func New(ctx context.Context, appDSN string) (*Server, error) {
 		// value for a credential. See insightd_proxy.go.
 		drafts:   newDraftProxy(),
 		gstr:     gstr.NewService(pool),
-		importer: migration.NewImporter(m, l),
+		importer: migration.NewImporter(m, l, pool),
 		sync:     sync.NewService(l, pool),
 		// Conversational query (Phase 3 + wave-2 WS1). buildTranslator selects the
 		// real-Claude adapter when ANTHROPIC_API_KEY is present, else the
@@ -3809,16 +3809,41 @@ func (s *Server) handleImportTallyXML(w http.ResponseWriter, r *http.Request) {
 	if groups == nil {
 		groups = []string{}
 	}
+	// D101: money the SOURCE books exclude. Never nil on the wire — a client that
+	// has to distinguish "no voided vouchers" from "this server does not report
+	// them" will get it wrong, and the wrong answer is the reassuring one.
+	voided := res.VoidedVouchers
+	if voided == nil {
+		voided = []string{}
+	}
+	tombstoned := res.LedgersTombstoned
+	if tombstoned == nil {
+		tombstoned = []string{}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"source_company":   res.SourceCompany,
 		"vouchers_posted":  res.VouchersPosted,
 		"vouchers_altered": res.VouchersAltered,
 		"vouchers_deleted": res.VouchersDeleted,
 		"vouchers_skipped": res.Skipped,
-		"groups_ensured":   groups,
-		"ledgers_ensured":  res.LedgersEnsured,
-		"warnings":         warnings,
-		"posted":           posted,
+		// ---- MONEY THE SOURCE BOOKS EXCLUDE (D101) -------------------------
+		//
+		// ⛔ DELIBERATELY NOT FOLDED INTO vouchers_skipped. That figure means "a
+		// voucher with this GUID was already imported"; these were never imported
+		// and never will be, because Tally keeps a CANCELLED or OPTIONAL voucher
+		// out of the books. An operator told their voided sales were "skipped"
+		// would read it as a duplicate-detection message and move on.
+		//
+		// ⚠️ "3 posted" against a file of 5 is the same class of silence the
+		// stock counts below exist to prevent, which is why this is on the wire
+		// rather than in a log line.
+		"vouchers_voided":    res.VouchersVoided,
+		"voided_vouchers":    voided,
+		"ledgers_tombstoned": tombstoned,
+		"groups_ensured":     groups,
+		"ledgers_ensured":    res.LedgersEnsured,
+		"warnings":           warnings,
+		"posted":             posted,
 		// ---- THE GOODS. ⛔ THESE SIX ARE THE ONLY THING ON THE WIRE THAT CAN
 		// TELL AN OPERATOR WHETHER THEIR STOCK ARRIVED. Quantity is invisible in
 		// a trial balance, so an import that read every stock line and threw it

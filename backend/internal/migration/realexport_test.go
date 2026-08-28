@@ -64,7 +64,7 @@ func TestRealTallyExportImportsAndReconcilesToThePaisa(t *testing.T) {
 	mastersPath, vouchersPath := realExportPaths(t)
 	pool, ctx, companyID := setup(t)
 
-	im := migration.NewImporter(masters.NewService(pool), ledger.NewService(pool))
+	im := migration.NewImporter(masters.NewService(pool), ledger.NewService(pool), pool)
 
 	mres, err := im.ImportFile(ctx, mastersPath, "tester")
 	if err != nil {

@@ -127,7 +127,7 @@ const gstSalesXML = `<ENVELOPE>
 func TestReconcileFull_FailsLoudly(t *testing.T) {
 	pool, ctx, companyID := setupCompanyState(t, "29")
 
-	im := migration.NewImporter(masters.NewService(pool), ledger.NewService(pool))
+	im := migration.NewImporter(masters.NewService(pool), ledger.NewService(pool), pool)
 	res, err := im.ImportReader(ctx, strings.NewReader(gstSalesXML), "tester")
 	if err != nil {
 		t.Fatalf("import: %v", err)
@@ -198,7 +198,7 @@ func TestReconcileFull_FailsLoudly(t *testing.T) {
 func TestReconcileFull_FailsLoudlyOnGSTR3B(t *testing.T) {
 	pool, ctx, companyID := setupCompanyState(t, "29")
 
-	im := migration.NewImporter(masters.NewService(pool), ledger.NewService(pool))
+	im := migration.NewImporter(masters.NewService(pool), ledger.NewService(pool), pool)
 	if _, err := im.ImportReader(ctx, strings.NewReader(gstSalesXML), "tester"); err != nil {
 		t.Fatalf("import: %v", err)
 	}
@@ -265,7 +265,7 @@ func TestReconcileFull_FailsLoudlyOnGSTR3B(t *testing.T) {
 func TestReconcileFull_PassesOnTrueGSTR3B(t *testing.T) {
 	pool, ctx, companyID := setupCompanyState(t, "29")
 
-	im := migration.NewImporter(masters.NewService(pool), ledger.NewService(pool))
+	im := migration.NewImporter(masters.NewService(pool), ledger.NewService(pool), pool)
 	if _, err := im.ImportReader(ctx, strings.NewReader(gstSalesXML), "tester"); err != nil {
 		t.Fatalf("import: %v", err)
 	}
@@ -312,7 +312,7 @@ func TestReconcileFull_PassesOnTrueGSTR3B(t *testing.T) {
 func TestImportIdempotentOnGUID(t *testing.T) {
 	pool, ctx, companyID := setupCompanyState(t, "29")
 
-	im := migration.NewImporter(masters.NewService(pool), ledger.NewService(pool))
+	im := migration.NewImporter(masters.NewService(pool), ledger.NewService(pool), pool)
 	first, err := im.ImportReader(ctx, strings.NewReader(gstSalesXML), "tester")
 	if err != nil {
 		t.Fatalf("first import: %v", err)
@@ -362,7 +362,7 @@ func TestImportOpeningBalancesFold(t *testing.T) {
 	    <TALLYMESSAGE><LEDGER NAME="Opening Cash"><PARENT>Cash-in-Hand</PARENT><OPENINGBALANCE>-100000.00</OPENINGBALANCE></LEDGER></TALLYMESSAGE>
 	  </DATA></BODY></ENVELOPE>`
 
-	im := migration.NewImporter(masters.NewService(pool), ledger.NewService(pool))
+	im := migration.NewImporter(masters.NewService(pool), ledger.NewService(pool), pool)
 	if _, err := im.ImportReader(ctx, strings.NewReader(openingXML), "tester"); err != nil {
 		t.Fatalf("import openings: %v", err)
 	}

@@ -372,6 +372,15 @@ type TallyLedgerMaster struct {
 	// receivable/payable balance. Without them a migrated debtor has a correct
 	// total and an EMPTY ageing — every opening rupee falls outside the buckets.
 	OpeningBills []TallyOpeningBill `xml:"BILLALLOCATIONS.LIST"`
+	// IsDeleted tombstones the master (D101). Five other master kinds already
+	// honour this flag; the ledger master — one of the two oldest readers — was
+	// the one it never reached.
+	IsDeleted string `xml:"ISDELETED"`
+}
+
+// Deleted reports whether the master is tombstoned in the export.
+func (l TallyLedgerMaster) Deleted() bool {
+	return strings.EqualFold(strings.TrimSpace(l.IsDeleted), "Yes")
 }
 
 // TallyLedgerGSTReg is one dated GST registration of a party ledger.
@@ -539,6 +548,53 @@ type TallyVoucher struct {
 	// would have been REFUSED by the double-entry trigger.
 	InventoryEntries    []TallyInventoryEntry `xml:"ALLINVENTORYENTRIES.LIST"`
 	InventoryEntriesAlt []TallyInventoryEntry `xml:"INVENTORYENTRIES.LIST"`
+	// ⛔ THE THREE FLAGS THAT DECIDE WHETHER THIS VOUCHER IS MONEY AT ALL (D101).
+	// A real TallyPrime <VOUCHER> has 207 distinct direct children and this
+	// struct binds a handful; almost all of the rest are internals nobody should
+	// read. These three are not. Tally keeps a CANCELLED voucher out of the books
+	// while RETAINING its number, and an OPTIONAL voucher is provisional — only
+	// Cash Flow's "Include Scenarios" pulls the latter in (RESEARCH.md:2225).
+	// Importing either as a live entry puts money in the books that the source
+	// company excludes, and nothing downstream can tell it apart afterwards.
+	IsCancelled string `xml:"ISCANCELLED"`
+	IsOptional  string `xml:"ISOPTIONAL"`
+	IsDeleted   string `xml:"ISDELETED"`
+}
+
+// Cancelled reports whether Tally CANCELLED this voucher. A cancelled voucher
+// keeps its number in Tally (which is why a filtered export leaves no gap in a
+// number series) and carries no money.
+func (v TallyVoucher) Cancelled() bool {
+	return strings.EqualFold(strings.TrimSpace(v.IsCancelled), "Yes")
+}
+
+// Optional reports whether this is an OPTIONAL voucher — Tally's provisional
+// entry, excluded from the books everywhere except Cash Flow's "Include
+// Scenarios".
+func (v TallyVoucher) Optional() bool {
+	return strings.EqualFold(strings.TrimSpace(v.IsOptional), "Yes")
+}
+
+// Deleted reports whether the voucher is tombstoned in the export.
+func (v TallyVoucher) Deleted() bool {
+	return strings.EqualFold(strings.TrimSpace(v.IsDeleted), "Yes")
+}
+
+// VoidReason names why this voucher is not money, for a report an operator
+// reads. It returns "" when the voucher is live. ⛔ THE ORDER IS DELIBERATE:
+// a voucher can carry more than one flag, and naming the strongest reason is
+// better than naming the first one found.
+func (v TallyVoucher) VoidReason() string {
+	switch {
+	case v.Deleted():
+		return "deleted"
+	case v.Cancelled():
+		return "cancelled"
+	case v.Optional():
+		return "optional"
+	default:
+		return ""
+	}
 }
 
 // TallyInventoryEntry is one stock line of an item invoice. Its

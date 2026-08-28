@@ -140,6 +140,9 @@ const EMPTY_RESULT: ImportTallyXMLResponse = {
   vouchers_altered: 0,
   vouchers_deleted: 0,
   vouchers_skipped: 0,
+  vouchers_voided: 0,
+  voided_vouchers: [],
+  ledgers_tombstoned: [],
   groups_ensured: [],
   ledgers_ensured: [],
   warnings: [],
@@ -419,6 +422,54 @@ describe("the report shows THE GOODS beside the accounting", () => {
     const warn = screen.getByTestId("tally-import-no-stock").textContent ?? "";
     expect(warn).toMatch(/no stock movements/i);
     expect(warn).toMatch(/stock summary/i);
+  });
+
+  // =========================================================================
+  // D101 — MONEY THE SOURCE BOOKS EXCLUDE MUST BE ON THE SCREEN
+  // =========================================================================
+
+  /**
+   * ⛔ THE DEFECT WAS SILENCE, NOT THE SKIP. Before the fix the importer POSTED
+   * vouchers Tally marks ISCANCELLED/ISOPTIONAL and reported "Vouchers posted:
+   * 3, Warnings (0)". Skipping them without saying so would be the same defect
+   * wearing the other mask: an operator reconciling 5 vouchers in Tally against
+   * 3 here needs the other two accounted for on the page.
+   */
+  it("names the vouchers Tally excludes from the books, and does NOT call them skipped", async () => {
+    await importWith({
+      vouchers_posted: 1,
+      vouchers_voided: 2,
+      voided_vouchers: [
+        "voucher 2 (Sales 1 dated 20260402): cancelled",
+        "voucher 3 (Journal 1 dated 20260403): optional",
+      ],
+    });
+    const block = screen.getByTestId("tally-import-voided").textContent ?? "";
+    expect(block).toContain("cancelled");
+    expect(block).toContain("optional");
+    // ⛔ THE NOTE IS THE POINT. A bare list of two vouchers reads as a failure;
+    // these were excluded ON PURPOSE and the page has to say which.
+    const note = screen.getByTestId("tally-import-voided-note").textContent ?? "";
+    expect(note).toMatch(/not posted/i);
+    expect(note).toMatch(/not duplicates/i);
+  });
+
+  /**
+   * ⛔ vouchers_skipped MEANS "ALREADY IMPORTED UNDER THIS GUID". Rendering the
+   * voided count through it would tell an operator their voided sales were
+   * duplicate detections — a reassuring wrong answer.
+   */
+  it("keeps the voided block OFF the page when there is nothing to exclude", async () => {
+    await importWith({ vouchers_posted: 3, vouchers_voided: 0 });
+    expect(screen.queryByTestId("tally-import-voided")).toBeNull();
+    expect(screen.queryByTestId("tally-import-voided-note")).toBeNull();
+  });
+
+  it("names LEDGER masters Tally has deleted rather than creating them", async () => {
+    await importWith({ ledgers_tombstoned: ["ZZDELETEDLEDGER"] });
+    expect(
+      screen.getByTestId("tally-import-tombstoned").textContent,
+    ).toContain("ZZDELETEDLEDGER");
   });
 
   it("treats zero opening positions ALONGSIDE real movement as a WARNING", async () => {

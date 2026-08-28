@@ -28,7 +28,7 @@ func TestTallyPrimeShapesCorpus(t *testing.T) {
 	path := filepath.Join(repoRoot(t), "corpora", "migration", "06-tallyprime-real-shapes.xml")
 
 	ms := masters.NewService(pool)
-	im := migration.NewImporter(ms, ledger.NewService(pool))
+	im := migration.NewImporter(ms, ledger.NewService(pool), pool)
 
 	// ⛔ NEGATIVE STOCK IS ALLOWED HERE, AND THE REASON IS THE POINT OF THIS
 	// FIXTURE RATHER THAN A CONCESSION TO IT.

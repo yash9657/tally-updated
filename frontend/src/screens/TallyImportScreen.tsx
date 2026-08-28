@@ -171,10 +171,30 @@ export function TallyImportScreen(): JSX.Element {
 
       {result !== null && <ImportReport result={result} />}
 
+      {/*
+        ⛔ A REFUSAL MUST SAY WHAT IT LEFT BEHIND, AND THE ANSWER IS NOW "NO
+        VOUCHERS" (D98). Before the voucher pass became one transaction, an
+        import refused on voucher 3 had already committed vouchers 1 and 2, said
+        nothing about them, and the operator's natural recovery — fix the file,
+        import it again — posted them a SECOND time. This paragraph is where that
+        recovery begins, so it is where the guarantee belongs.
+
+        ⚠️ THE SECOND SENTENCE IS NOT DECORATION. Without it the honest operator
+        does the cautious thing, which used to be the wrong thing: hand-edit the
+        file down to "the ones that did not make it" and import that.
+      */}
       {error !== null && (
-        <p className="tally-import-error" role="alert" data-testid="tally-import-error">
-          {error}
-        </p>
+        <div className="tally-import-error" role="alert" data-testid="tally-import-error">
+          <p>{error}</p>
+          <p data-testid="tally-import-refusal-atomic">
+            <strong>No vouchers were imported.</strong> A refused import leaves
+            the books exactly as they were, so fix the file and import the whole
+            thing again — do not remove the vouchers before the failure, and do
+            not import a trimmed file. Masters the file created (ledgers, stock
+            items, units) do remain, and re-importing resolves them rather than
+            duplicating them.
+          </p>
+        </div>
       )}
     </div>
   );
@@ -207,6 +227,46 @@ function ImportReport({ result }: { result: ImportTallyXMLResponse }): JSX.Eleme
           Vouchers skipped (already imported): {result.vouchers_skipped}
         </li>
       </ul>
+
+      {/*
+        ⛔ MONEY THE SOURCE BOOKS EXCLUDE GETS ITS OWN BLOCK, AND ONLY WHEN THERE
+        IS SOME (D101). Tally keeps a CANCELLED or OPTIONAL voucher out of the
+        books, so this importer does not post them — but an import that quietly
+        drops entries is the same class of silence as one that quietly adds them.
+        "3 posted" against a file of 5 has to explain the other two.
+
+        ⚠️ IT IS DELIBERATELY NOT IN THE LIST ABOVE, beside "skipped (already
+        imported)". Those two numbers mean opposite things and an operator
+        scanning a list of four counts will not stop to tell them apart.
+      */}
+      {result.vouchers_voided > 0 && (
+        <>
+          <h3>Excluded as void in Tally: {result.vouchers_voided}</h3>
+          <p data-testid="tally-import-voided-note">
+            These vouchers are marked cancelled, optional or deleted in the
+            source company. Tally keeps them out of its own books, so they were
+            NOT posted here — they are not missing, and they are not duplicates.
+          </p>
+          <ul data-testid="tally-import-voided">
+            {result.voided_vouchers.map((v) => (
+              <li key={v}>{v}</li>
+            ))}
+          </ul>
+        </>
+      )}
+      {result.ledgers_tombstoned.length > 0 && (
+        <>
+          <h3>
+            Ledgers deleted in Tally, not created:{" "}
+            {result.ledgers_tombstoned.length}
+          </h3>
+          <ul data-testid="tally-import-tombstoned">
+            {result.ledgers_tombstoned.map((n) => (
+              <li key={n}>{n}</li>
+            ))}
+          </ul>
+        </>
+      )}
 
       {/*
         ⛔ THE GOODS GET THEIR OWN HEADING, LEVEL WITH THE ACCOUNTING. Folding

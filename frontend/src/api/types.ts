@@ -1931,6 +1931,20 @@ export interface ImportTallyXMLResponse {
   vouchers_altered: number;
   vouchers_deleted: number;
   vouchers_skipped: number;
+  /**
+   * D101 — MONEY THE SOURCE BOOKS EXCLUDE. Vouchers marked ISCANCELLED or
+   * ISOPTIONAL in Tally, which Tally itself keeps out of the books, and which
+   * this importer therefore does NOT post.
+   *
+   * ⛔ THIS IS NOT `vouchers_skipped`. That figure means "already imported under
+   * this GUID". Rendering the two together would tell an operator their voided
+   * sales were duplicates.
+   */
+  vouchers_voided: number;
+  /** One line per excluded voucher: ordinal, type, number, date and reason. */
+  voided_vouchers: string[];
+  /** LEDGER masters marked ISDELETED in the export, and so not created. */
+  ledgers_tombstoned: string[];
   /** Account groups CREATED from the export's GROUP masters (Tally's own built-ins resolve instead). */
   groups_ensured: string[];
   /** Every ledger name the import touched. It is a list of NAMES, not a count. */
