@@ -1,6 +1,10 @@
 # HANDOFF — WHAT IS LEFT BEFORE THIS CAN BE CALLED FEATURE-LOCKED AGAINST TALLY
 
 **Written:** 2026-08-27, at `8ee2bdb` · **Branch:** `session/t32-and-close-7-3`
+**⭐ UPDATED 2026-08-27 at `9707ebe` — §7 STEPS 1 AND 2 ARE DONE.** Three of the four open defects are
+fixed (D98, D100, D101), D102 is newly registered, and the migration path is no longer a blocker.
+**The register now stands at 102 · 100 · 2 · 0.** §3, §6 and §7 below are marked up accordingly; the
+LOCK LINE ITSELF IS STILL UNAGREED and that is what remains of this file's purpose.
 **Read time: 8 minutes.** ⭐ **Every number below was MEASURED today and the command is beside it.**
 
 ⛔ **THIS FILE ANSWERS ONE QUESTION AND NOTHING ELSE:** *what stands between here and a defensible
@@ -14,7 +18,8 @@ decision document, not a reference one.
 
 ## 0. ⛔ THE ONE THING TO READ FIRST: "FEATURE LOCK" IS A DECISION, NOT A MEASUREMENT
 
-The measurement below is unambiguous — **6 real gaps, 4 open defects, 3 rows with stale evidence.**
+The measurement below is unambiguous — **6 real gaps, ~~4 open defects~~ → 2 open defects (neither on
+the migration path), 3 rows with stale evidence.**
 What is NOT a measurement is which of those must close before the product may be called complete.
 Two of the six are not Tally-parity items at all, and shipping them would be scope the competitor
 never had. **§6 proposes a line and argues for it. Disagreeing with the line is a legitimate outcome
@@ -147,30 +152,34 @@ of §7.
 
 ---
 
-## 3. ⛔ THE FOUR OPEN DEFECTS — ALL FOUR ON THE MIGRATION PATH
+## 3. ✅ THE MIGRATION PATH IS NO LONGER A BLOCKER — THREE OF THE FOUR ARE FIXED
 
 ```bash
 python3 docs/parse-defect-register.py HANDOFF-PARITY-AUDIT.md
-# -> 101 REGISTERED · 93 CLOSED · 4 OPEN · 0 PARTIAL · 4 UNREADABLE
-#    OPEN: D98, D99, D100, D101      ?: D49, D80, D82, D84 (all CLOSED, see the §7.1 header)
+# -> 102 REGISTERED · 96 CLOSED · 2 OPEN · 0 PARTIAL · 4 UNREADABLE
+#    OPEN: D99, D102               ?: D49, D80, D82, D84 (all CLOSED, see the §7.1 header)
+#    (96 parsed + 4 unreadable-but-closed = 100 closed)
 ```
 
-| # | Sev | One line | Blocked on |
+| # | Sev | One line | State |
 |---|---|---|---|
-| **D98** | HIGH | A refused import is **not atomic**, says nothing about the vouchers it already committed, and the operator's natural recovery **double-posts** them on a GUID-less export | a design decision: make it atomic, or keep it partial and disclose it |
-| **D101** | HIGH | A voucher marked **ISCANCELLED or ISOPTIONAL** in Tally — money the source books exclude — is posted as a **live entry**, with no warning. A `ISDELETED` ledger master is created | a decision: skip them, or post and say so |
-| **D100** | MEDIUM | The screen tells an operator to *"export the whole company"*; doing exactly that produces a file that cannot satisfy the importer's own stated remedy | **nothing — answered.** TallyPrime's *Type of Master* offers All/Inventory Masters. It is three sentences of copy |
-| **D99** | LOW | The three money readers refuse comma-grouped numbers while the quantity reader strips them on purpose | nothing. Premise refuted by a real export; leave it |
+| **D98** | HIGH | A refused import was not atomic and the natural recovery **double-posted** | ✅ **FIXED `9707ebe`.** The voucher pass is ONE transaction. Mutation proof predicted then observed (2 left behind, 5 after recovery); re-driven 15/16 |
+| **D101** | HIGH | Vouchers Tally marks **ISCANCELLED / ISOPTIONAL** were posted as live money | ✅ **FIXED `9707ebe`.** Skipped, counted in their own bucket, and named on the screen. Mutation proof (3 posted, want 1); re-driven 12/12 |
+| **D100** | MEDIUM | The screen told an operator to produce a file and not how | ✅ **FIXED `7085159`.** The Alt+E recipe in both copies, pinned together by a test |
+| **D99** | LOW | The money readers refuse comma-grouped numbers; the quantity reader strips them | ⚠️ **OPEN BY DECISION.** Premise refuted by a real export. **Do not fix it speculatively** — accepting commas everywhere also makes `1,2,3.00` readable |
+| **D102** | MEDIUM | The production JWKS verifier **does not check `aud`** | ⛔ **OPEN, REGISTERED `07df42e`.** Not a Tally-parity item; it is the defect inside SSO's shipped half. Gated on one decision: what to do when `AUTH_AUDIENCE` is unset (refusing to boot is the precedent `AUTH_ISSUER` sets) |
 
-⛔⛔ **A FEATURE LOCK WITH TWO OPEN HIGH DEFECTS ON THE MIGRATION PATH IS NOT A LOCK.** Both are on
-`Alt+O`, which `HANDOFF.md` §10 item 1 calls **the commercial blocker**: a business cannot switch if it
-cannot bring its books. **D98 and D101 change the same loop** (`migration.go:247`, the second pass), so
-they are ONE piece of work and should be decided together.
+⭐⭐ **WHAT MADE THE TWO HIGH ONES CHEAP WAS A SEAM THAT WAS ALREADY THERE.** `ledger.Service` and
+`masters.Service` are both built over a **one-method `TxRunner`**, so enrolling the whole voucher pass
+in one transaction needed **no change to either package** — a seven-line `txPin` that returns the same
+`pgx.Tx`. The hash chain rolls back with it because it is computed inside the transaction. ⛔ **The
+lesson worth carrying: the atomicity question was registered as a blocker for a week and answering it
+took twenty minutes of reading. Check the seam before you scope the work.**
 
-⭐ **D100 is the cheapest item on this entire document** — three sentences of copy, no new code path,
-and it should name TallyPrime's **"Export closing balance as opening balance"** option, because that is
-what makes the remedy deliver what it promises: an export of a closed year carries CLOSING balances and
-the new company needs them as OPENINGS.
+⚠️ **NOT CLOSED, AND IT HAS NO ROW YET:** `classByVchType` maps only the six built-in classes, so a
+`Memorandum` or `Reversing Journal` VCHTYPE still aborts a whole import. It is safe for the money and
+no longer lands in a partial commit now that D98 is fixed — but it is the third kind of voucher Tally
+keeps out of the books, and D101 handled the other two.
 
 ---
 
@@ -217,8 +226,9 @@ written down.**
 | **T11 Budgets** | A Tally feature every Tally user has. Nothing blocks it |
 | **T12 GSTR-9** | A Tally feature, statutory, and its inputs are already built and driven |
 | **T13 Interest on overdue bills** | A Tally feature. ⚠️ Gated on §5 item 3, so START THE SOURCING NOW even if the build is last |
-| **D98 + D101** | Both HIGH, both on the migration path, both the same loop. **A product that cannot be migrated into cannot be locked** |
-| **D100** | Three sentences. There is no version of "we are finished" that survives leaving this |
+| ~~**D98 + D101**~~ | ✅ **DONE `9707ebe`.** Both HIGH, both the same loop, decided together and fixed together |
+| ~~**D100**~~ | ✅ **DONE `7085159`.** |
+| **D102** (new) | ⚠️ **A JUDGEMENT CALL, NOT AN OBVIOUS INSIDE.** It is not a Tally-parity item — Tally has no SSO — so by this document's own logic it sits with the deferred rows. **But it is a security defect in shipped code rather than a missing feature**, and the deployment note that mitigates it lives in a Go comment no operator reads. Cheap to close; cheaper still to move the note |
 
 ### DEFER, WITH THE REASON RECORDED ON THE ROW
 
@@ -242,13 +252,17 @@ undisclosed gap is the one failure mode this screen exists to prevent.
 
 ## 7. THE ORDER TO WORK IN
 
-1. ⭐ **D100 + the SSO-audience defect registration.** An hour. Copy and a register row.
-2. ⛔ **Decide D98/D101 together, then fix them.** One loop, two decisions, both proofs required —
-   a mutation proof whose failure was **predicted then observed**, *and* a browser re-drive.
-   `drive-u1-import-partial.mjs` and `drive-u1-voided-vouchers.mjs` are written so that **the correct
-   behaviour is the PASS**: either fix turns them green, which is how you will know.
-3. **Ask for §5 items 1 and 3 in the same message.** Item 1 unblocks a row nothing else can; item 3
-   has to arrive before T13 can start honestly. Both have lead time; neither blocks steps 1–2, 4 or 5.
+1. ~~**D100 + the SSO-audience defect registration.**~~ ✅ **DONE** — `7085159` and `07df42e` (D102).
+2. ~~**Decide D98/D101 together, then fix them.**~~ ✅ **DONE** — `9707ebe`. Both decisions were taken
+   by the repo owner: **atomicity scoped to the voucher pass** (masters keep committing per-master,
+   which contradicts no prior decision) and **skip-and-report** for voided vouchers. Both proofs were
+   produced. ⭐ **THE DRIVES DID EXACTLY WHAT THIS FILE PROMISED THEY WOULD** — written so the correct
+   behaviour is the PASS, they went 15/16 and 12/12 the moment the fixes landed, with no edit to
+   either script. ⚠️ The 16th is D99's comma arm and it fails **by decision**; do not "fix" it to get
+   a green line.
+3. ⛔ **STILL OPEN AND IT IS THE NEXT THING: ask for §5 items 1 and 3 in the same message.** Item 1
+   unblocks a row nothing else can; item 3 has to arrive before T13 can start honestly. Both have lead
+   time; neither blocks steps 4, 5 or 6.
 4. **T11 Budgets**, then **T12 GSTR-9**. Independent of each other and of T8.
 5. **T13 Interest**, once item 3 has arrived.
 6. **The stale-evidence audit** (§4) — rows 20 / 23 / 26. One session.
@@ -300,7 +314,10 @@ vite was found squatting on 5174 today. ⛔ **A TCP CONNECT IS NOT LIVENESS.**
 | `cd frontend && pnpm verify:demo "$(cat .demo-company-id)"` | **34/34** ⚠️ takes the id as an ARGUMENT | ✅ |
 | `python3 docs/parse-defect-register.py HANDOFF-PARITY-AUDIT.md` | **101 · 93 · 4 · 0** (+4 unreadable, all closed) | ✅ |
 | Six browser drives (U1–U7) | see §7.5 L27 | ✅ |
-| `cd backend && go build ./... && go vet ./... && go test ./... -timeout 60m` | exit 0 at `20dd96f` | ⚠️ **carried forward, NOT re-run** |
+| `cd backend && go build ./... && go vet ./... && go test ./... -timeout 60m` | **exit 0 at `9707ebe`** | ✅ ⭐ **RE-RUN 2026-08-27 — it is no longer carried forward.** 0 FAIL lines; `internal/server` 39.1s, `internal/migration` 2.8s |
+| `cd frontend && pnpm exec vitest run` | **1784 passed / 109 files** | ✅ (plus 3 new D101 render tests) |
+| `node frontend/scripts/drive-u1-import-partial.mjs` | **15/16** | ✅ ⚠️ the 16th is D99's comma arm, failing **by decision** |
+| `node frontend/scripts/drive-u1-voided-vouchers.mjs` | **12/12** | ✅ |
 | `make verify` | exit 0 at `20dd96f` | ⛔ **NOT run — it invokes `make migrate`, and the T8 lane owns the schema this week** |
 
 ⚠️ **`make verify` DOES NOT RUN `tsc`.** Each gate has caught a real error the other missed.
