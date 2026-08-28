@@ -560,8 +560,13 @@ Roughly parallel where the owners differ — most of this is not engineering tim
 2. **The usability day** (§9.5). Do it before more features, because it re-orders everything after it.
 3. **T4 slice 2b — bank matching** (§4). The last unblocked parity track.
 4. **Telemetry** (§9.3). It is the gap that decides whether you can operate what you ship.
-5. **Apply the infra once, in a staging environment**, and run `verify:demo`, `verify:tenancy` and
-   the browser drives against it. A first apply on launch day is not a plan.
+5. **Apply the infra once, in a staging environment**, and run the live gates against it. A first
+   apply on launch day is not a plan.
+   ```bash
+   pnpm verify:demo     "$(cat frontend/.demo-company-id)"
+   pnpm verify:tenancy  "$(cat frontend/.demo-company-id)" "$(cat frontend/.tenancy-company-id)"   # ⚠️ TWO ids
+   node frontend/scripts/drive-t12-gstr9.mjs && node frontend/scripts/drive-t11-budgets.mjs
+   ```
 6. **Then, and only then, a feature-freeze and a release-candidate pass** — re-run every gate in §3,
    re-read every `FeaturesScreen` note against what the build actually does, and confirm no
    disclosure has been quietly softened.
