@@ -87,10 +87,44 @@ export function TallyImportScreen(): JSX.Element {
           , the company that is open now. There is no way to undo an import: the
           audit trail is immutable, so nothing can remove the vouchers it writes.
         </p>
+        {/*
+          D100: THE RECIPE, NOT "EXPORT THE WHOLE COMPANY". This screen used to
+          say "export the whole company (Masters and Transactions)", and an
+          operator who does exactly that in TallyPrime gets an ACCOUNTING
+          MASTERS export — ledgers and groups and nothing else. The stock items
+          are absent, so the first sale of goods bought before the window drives
+          a position negative and the import aborts offering "import a
+          Masters.xml carrying the items FIRST", which is the door the operator
+          could not find. Type of Master is that door. Keep this in step with
+          describeNegativeStock() in backend/internal/migration/inventory.go —
+          an operator meets the same problem there, and one recipe drifting from
+          the other is how this defect gets re-registered.
+        */}
         <p>
-          Choose the XML file TallyPrime wrote. Export the whole company from
-          Tally (Masters and Transactions); this reads the chart of accounts, the
-          vouchers, and the stock.
+          Choose the XML file TallyPrime wrote. In TallyPrime press{" "}
+          <strong>Alt+E</strong> to export, and before exporting the masters open{" "}
+          <strong>Configure</strong> and set:
+        </p>
+        <ul data-testid="tally-import-recipe">
+          <li>
+            <strong>Type of Master = All Masters</strong> — the default is{" "}
+            <em>Accounting Masters</em>, which carries your ledgers and groups
+            but <strong>no stock items, units or godowns</strong>. An import
+            without them aborts on the first sale of goods you bought earlier.
+          </li>
+          <li>
+            <strong>Include dependent masters = Yes</strong> — so a master your
+            vouchers refer to comes with them.
+          </li>
+          <li>
+            <strong>Export closing balance as opening balance = Yes</strong> —
+            an export of a closed year carries CLOSING balances, and this
+            company needs them as OPENINGS.
+          </li>
+        </ul>
+        <p>
+          Export the transactions too. Together these read the chart of
+          accounts, the vouchers, and the stock.
         </p>
         <input
           type="file"

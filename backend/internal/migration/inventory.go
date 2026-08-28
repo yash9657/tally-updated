@@ -678,7 +678,13 @@ func flipDirection(d ledger.Direction) ledger.Direction {
 // ⛔ THIS IS THE MOST LIKELY WAY A REAL IMPORT FAILS, AND IT IS NOT A BUG IN THE
 // FILE. A Day Book export carries no STOCKITEM masters, so it carries no opening
 // stock; the company's first sale of goods bought before the window has nothing
-// to issue. The importer will NOT invent an opening (a quantity nobody stated)
+// to issue. ⚠️ AND THE COMMONEST CAUSE IS NOT A DAY BOOK AT ALL — it is a
+// whole-company masters export taken with TallyPrime's DEFAULT 'Type of Master =
+// Accounting Masters', which carries ledgers and groups and no inventory
+// whatsoever. That was measured against a real 84 MB TallyPrime export (D100):
+// 3706 LEDGER, 37 GROUP, and zero STOCKITEM, while its own transactions named
+// six stock items. So the remedy below MUST name the setting, or the operator is
+// told to produce a file they have no way to produce. The importer will NOT invent an opening (a quantity nobody stated)
 // and will NOT switch the company's allow_negative_stock setting on behalf of
 // the operator — either would be this program deciding what the trader's
 // warehouse held.
@@ -689,7 +695,11 @@ func describeNegativeStock(idx int, v *integration.TallyVoucher, err error) erro
 			"STOCK, so goods bought before the export window cannot be issued. Two ways forward, "+
 			"and the importer will not choose for you: (1) import a Masters.xml carrying the items "+
 			"with their opening balances FIRST — that is the correct fix and it also gets the "+
-			"opening VALUE right; or (2) switch this company's 'allow negative stock' on before "+
+			"opening VALUE right. In TallyPrime that file is an Alt+E export with Configure > "+
+			"'Type of Master' set to 'All Masters' (the default, 'Accounting Masters', is what "+
+			"produced a file with no STOCKITEM in it), 'Include dependent masters' = Yes, and "+
+			"'Export closing balance as opening balance' = Yes so the openings arrive as "+
+			"openings; or (2) switch this company's 'allow negative stock' on before "+
 			"importing, which brings the quantities in with the shortfall visible as a negative "+
 			"position, at ZERO cost, and understates the cost of goods sold by the whole opening "+
 			"value until you correct it",

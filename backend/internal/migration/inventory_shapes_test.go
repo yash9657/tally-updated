@@ -559,6 +559,10 @@ func TestAnExportWithNoOpeningStockIsRefusedWithBothWaysForward(t *testing.T) {
 		{"PULSES", "and the ITEM, or the operator has 227 stock lines to search"},
 		{"SX-1", "and the voucher"},
 		{"Masters.xml", "way forward 1: the export that carries opening stock"},
+		{"All Masters", "D100: way forward 1 is unreachable unless the refusal names the Type of " +
+			"Master setting that produces such a file — the operator's default export is " +
+			"'Accounting Masters', which is what got them here. Keep in step with the same " +
+			"recipe on TallyImportScreen.tsx"},
 		{"allow negative stock", "way forward 2: the setting, with its cost stated"},
 		{"understates the cost of goods sold", "the cost of choosing way 2, stated before it is chosen"},
 	} {
