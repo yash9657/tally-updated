@@ -137,7 +137,7 @@ that the verification has something specific to confirm or refute.
 
 | Element | What the statute fixes | Consequence for the build |
 |---|---|---|
-| **s.15 — the appointed day** | Payment is due on the day agreed, and in any case **not later than 45 days** from the day of acceptance / deemed acceptance of the goods or services. The "appointed day" is the day the clock starts. | ⛔ **The anchor is the BILL's own date, not its due date.** See §5 — the schema cannot supply it for every bill today. |
+| **s.15 — the appointed day** | Payment is due on the day agreed **in writing**, and in any case **not later than 45 days** from acceptance / deemed acceptance. ⭐ **AND WHERE THERE IS NO WRITTEN AGREEMENT, WITHIN 15 DAYS** — added 2026-08-28, see §1.1. The "appointed day" is the day the clock starts. | ⛔ **The anchor is the BILL's own date, not its due date.** See §5 — the schema cannot supply it for every bill today. ⛔ **AND THE FALLBACK IS 15 DAYS, NOT 45**: defaulting every unagreed bill to 45 starts the interest clock a month late on all of them, understating in the debtor's favour, and every figure would still foot. |
 | **s.16 — the rate and the rests** | Interest is **COMPOUND**, with **MONTHLY RESTS**, at **THREE TIMES the Bank Rate notified by the Reserve Bank**. | ⛔ Not a rate input, not a simple/compound toggle, not a day-count basis. **Months, not days.** |
 | **ss.15–23 — the override** (⚠️ carried by a *separate* overriding-effect section, s.24 or equivalent — §8 must pin which) | ss.15–23 have effect **notwithstanding anything inconsistent contained in any other law**. A clause reading "no interest on late payment" does not survive against an MSE supplier. | ⛔ **A per-party interest configuration must not be readable for a party flagged MSE.** The regime is selected, then the configuration is *ignored*, and the report must say it was ignored and why. |
 
@@ -148,6 +148,47 @@ disabled input still reads as "this is the value, we just locked it"; an absent 
 
 ⚠️ **"Three times the Bank Rate" is a MULTIPLE OF A MOVING NUMBER.** It is not a rate this build
 gets to store. It is an arithmetic instruction over a dated series — which is §6.
+
+### 1.1 ⭐ THREE THINGS ss.15–23 CARRY THAT THIS NOTE DID NOT KNOW ABOUT
+
+**Added 2026-08-28** from a section-by-section summary supplied by the project owner.
+⚠️ **STILL SECOND-HAND — see §0.2.** It is a *second independent* second-hand source rather than a
+primary one: it corroborates s.15's 45 days and s.16's compound/monthly-rests/three-times-Bank-Rate
+against the brief this note was written from, which is worth something, and it is **not** the
+gazette text §8 asks for. Everything here remains **PENDING PRIMARY VERIFICATION**.
+
+**(a) ⛔ s.15's 15-DAY FALLBACK — a correction, not an addition.** This note had only "the day agreed
+… not later than 45 days". The summary states that **without a written agreement payment is due
+within 15 days**. The memo's §1 row is corrected above. ⭐ **This is the kind of error that would
+never have surfaced in testing**: 45 days is a real number from the real section, so a fixture built
+on it passes, and the only symptom is that interest on every unagreed bill starts a month late.
+
+**(b) ⭐ s.22 — AN ANNUAL-ACCOUNTS DISCLOSURE, WHICH IS A REPORTING FEATURE NOBODY HAS SCOPED.**
+Companies must disclose unpaid MSME dues **and the related interest** in their annual financial
+statements. That is not part of an interest *calculator*; it is a note on the Balance Sheet, and it
+needs the same MSME party flag §3.2 says does not exist yet. **It is out of scope for T13 and should
+be tracked separately — but it shares T13's blocker**, so whoever adds the flag should know both
+consumers exist before choosing where it lives.
+
+**(c) ⛔⛔ s.23 — THE INTEREST IS NOT TAX-DEDUCTIBLE, AND THIS ONE CHANGES §7.**
+Interest paid or payable on a delayed MSME payment **is disallowed as a deduction** to the buyer.
+
+§7 decides that v1 **POSTS NOTHING** and only reports. ⭐ **s.23 makes that decision safer, not
+less so** — an interest expense posted into the books without being marked disallowed would flow
+into the tax computation as an ordinary deduction and understate the buyer's liability. So:
+
+> ⛔ **IF A LATER WAVE EVER POSTS THIS INTEREST, THE POSTING MUST CARRY A "DISALLOWED UNDER s.23"
+> MARKER FROM THE MOMENT IT IS WRITTEN**, not as a year-end adjustment somebody remembers. A
+> deductible-looking expense that is not deductible is exactly the shape this repository's register
+> is full of: it foots, it reconciles, and it is wrong in one direction only.
+
+⚠️ **AND NOTE WHAT THE SUMMARY DOES *NOT* COVER**, so the §8 ask stays honest:
+
+| Still missing | Why it matters |
+|---|---|
+| ⛔ **The overriding-effect provision** (s.24 or equivalent) | §1's table rests on it: it is what makes an MSE party's interest terms **unreadable** rather than merely pre-filled. The summary runs 15–23 and names no override |
+| ⛔ **The definitions of micro / small** (s.7 and s.2, NOT 15–23) | They decide **who is in regime (a) at all**. Without them the flag in §3.2 has no rule behind it |
+| ⛔ **The RBI Bank Rate dated series** | The other half of §8, and the harder one. "Three times the Bank Rate" is arithmetic over a series this build does not have |
 
 ---
 
@@ -534,7 +575,7 @@ geo-fence. This is the ask worth chasing."*
 
 | File | Status | Source | What it settles |
 |---|---|---|---|
-| MSMED Act 2006, **ss.15–23** — gazette text | ⛔ **NOT HERE** | The Ministry of MSME / India Code gazette text of the Micro, Small and Medium Enterprises Development Act, 2006 | §1 in full: s.15's appointed day and its 45-day limit; s.16's *compound / monthly rests / three times the Bank Rate*; the s.24 (or equivalent) overriding effect; **and the definitions that decide who is in regime (a)** — micro vs small vs medium, which §3.2 stores a class for |
+| MSMED Act 2006, **ss.15–23** — gazette text ⚠️ **plus s.24 (override) and s.7/s.2 (the micro/small definitions), which are OUTSIDE 15–23 and which §1.1 shows a 15–23 summary does not reach** | ⛔ **NOT HERE.** ⭐ Partially corroborated 2026-08-28 by a second second-hand source (§1.1), which also CORRECTED s.15 — the 15-day no-written-agreement fallback this note had missed | The Ministry of MSME / India Code gazette text of the Micro, Small and Medium Enterprises Development Act, 2006 | §1 in full: s.15's appointed day and its 45-day limit; s.16's *compound / monthly rests / three times the Bank Rate*; the s.24 (or equivalent) overriding effect; **and the definitions that decide who is in regime (a)** — micro vs small vs medium, which §3.2 stores a class for |
 | **RBI Bank Rate**, notification history | ⛔ **NOT HERE** | **`rbi.org.in`** — the Reserve Bank's own notifications / policy-rate archive | The dated series of §6. ⛔ **NOT a calculator website. NOT a news summary. NOT the repo rate** |
 
 ### ⛔ WHY THE ORDER IS NOT NEGOTIABLE
