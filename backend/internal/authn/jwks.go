@@ -27,22 +27,32 @@
 //   - The issuer is REQUIRED by the caller (server.buildAuth refuses to start
 //     when AUTH_ISSUER is empty), so a token minted by a DIFFERENT realm that
 //     happens to share the signing key cannot be replayed here.
+//   - The AUDIENCE is likewise REQUIRED by the caller (server.buildAuth refuses
+//     to start when AUTH_JWKS_URL is set and AUTH_AUDIENCE is empty), and the
+//     token's `aud` must CONTAIN it. This is what the issuer pin cannot do: every
+//     CLIENT inside one realm mints tokens carrying the SAME `iss`, so a token a
+//     user legitimately obtained for ANOTHER application in that realm is
+//     invisible to the issuer check — and before this check landed it
+//     authenticated here as that subject. `aud` is read through authn.Audience,
+//     which accepts BOTH RFC 7519 §4.1.3 forms (bare string and array); binding
+//     it as a plain string would drop Keycloak's array form and make the check
+//     pass vacuously, which is the precise trap D102 warned about.
 //
-// KNOWN GAP (deliberate, v1) — REGISTERED AS D102 (HANDOFF-PARITY-AUDIT.md §7.1),
-// 2026-08-27: the `aud` claim is NOT checked — Claims does not even parse it.
-// Pinning `iss` scopes acceptance to one realm, but every CLIENT inside that
-// realm issues tokens with the same `iss`, so any such token is accepted by
-// cored. Deploy cored's realm with only trusted clients until an AUTH_AUDIENCE
-// check lands.
+// AUDIENCE SCOPE (v1): exactly ONE expected value. A deployment that needs cored
+// to accept two client ids would need AUTH_AUDIENCE to become a list; that is
+// deliberately not built here, and no caller should assume comma-splitting.
 //
-// ⚠️ THAT LAST SENTENCE IS A DEPLOYMENT CONSTRAINT AND IT LIVES HERE, WHERE NO
-// OPERATOR WILL READ IT. The production recipe operators are actually handed
-// (docs/SESSION_HANDOFF_WAVE2.md) sets AUTH_JWKS_URL + AUTH_ISSUER and says
-// nothing about the realm needing to be single-tenant, and nothing warns at
-// boot. Whoever lands the audience check must move the constraint into that
-// recipe; D102 carries the reasoning and the shape of the fix, including why
-// `aud` must NOT be bound as a plain string (RFC 7519 permits an array, and
-// that is the form Keycloak emits).
+// CLOSED GAP — D102 (HANDOFF-PARITY-AUDIT.md §7.1), registered and closed
+// 2026-08-27. Until it was closed, `aud` was NOT checked and Claims did not even
+// parse it, so any client in the pinned realm was accepted. The mitigation was a
+// sentence in THIS COMMENT telling operators to deploy cored's realm with only
+// trusted clients — a DEPLOYMENT CONSTRAINT living where no operator would ever
+// read it, while the recipe they were actually handed
+// (docs/SESSION_HANDOFF_WAVE2.md) set AUTH_JWKS_URL + AUTH_ISSUER and said
+// nothing. ⭐ THE HISTORICAL LESSON IS KEPT ON PURPOSE: a constraint a source
+// comment asks for and no code enforces is not a mitigation, it is a hope. The
+// constraint is now (a) enforced at boot and (b) written into that recipe as a
+// required variable.
 //
 // (This note previously pointed at "HANDOFF §6" — a dangling reference: §6 of
 // HANDOFF.md is the migration-numbering section and has never mentioned the
@@ -111,6 +121,11 @@ type JWKSVerifier struct {
 	// Issuer, when non-empty, must equal the token's iss claim. Callers are
 	// expected to REQUIRE it in production (see the file doc).
 	Issuer string
+	// Audience, when non-empty, must appear in the token's aud claim. Callers
+	// REQUIRE it in production: server.buildAuth refuses to boot without it,
+	// because the issuer pin above scopes acceptance to a realm, not to this
+	// application (see the file doc's FAIL-CLOSED POSTURE).
+	Audience string
 	// TTL is the cache freshness window; zero means defaultJWKSTTL.
 	TTL time.Duration
 	// MinRefetch throttles Verify-triggered fetches; zero means
@@ -127,11 +142,17 @@ type JWKSVerifier struct {
 	lastAttempt time.Time
 }
 
-// NewJWKSVerifier builds a verifier for a JWKS endpoint and an expected issuer.
-// It performs NO I/O: call Refresh once at boot to fail closed on a misconfigured
-// or unreachable IdP, after which Verify keeps the cache warm lazily.
-func NewJWKSVerifier(jwksURL, issuer string) *JWKSVerifier {
-	return &JWKSVerifier{URL: jwksURL, Issuer: issuer}
+// NewJWKSVerifier builds a verifier for a JWKS endpoint, an expected issuer and
+// an expected audience. It performs NO I/O: call Refresh once at boot to fail
+// closed on a misconfigured or unreachable IdP, after which Verify keeps the
+// cache warm lazily.
+//
+// ⭐ audience is a REQUIRED POSITIONAL PARAMETER rather than an optional field
+// the caller may remember to set. That is the whole lesson of D102: the audience
+// check was missing for a year precisely because nothing at any call site forced
+// anyone to name it. A parameter cannot be forgotten; a field can.
+func NewJWKSVerifier(jwksURL, issuer, audience string) *JWKSVerifier {
+	return &JWKSVerifier{URL: jwksURL, Issuer: issuer, Audience: audience}
 }
 
 func (v *JWKSVerifier) now() time.Time {
@@ -356,9 +377,14 @@ func (v *JWKSVerifier) Verify(ctx contextLike, rawJWT string) (*Claims, error) {
 }
 
 // delegate builds the StaticKeyVerifier that performs the actual alg/signature/
-// iss/exp/iat checks over a key snapshot. All verification logic lives there.
+// iss/aud/exp/iat checks over a key snapshot. All verification logic lives there.
+//
+// ⚠️ EVERY claim this verifier pins must be forwarded here or it is silently not
+// checked — this one-line struct literal is exactly where the audience check was
+// missing (D102). Adding a field to JWKSVerifier without adding it here is a
+// no-op with the shape of a fix.
 func (v *JWKSVerifier) delegate(keys map[string]crypto.PublicKey) *StaticKeyVerifier {
-	return &StaticKeyVerifier{Keys: keys, Issuer: v.Issuer, Now: v.Now}
+	return &StaticKeyVerifier{Keys: keys, Issuer: v.Issuer, Audience: v.Audience, Now: v.Now}
 }
 
 // Compile-time assertion that JWKSVerifier is a drop-in TokenVerifier.

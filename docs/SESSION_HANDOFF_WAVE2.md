@@ -58,13 +58,20 @@ Follow `HANDOFF.md` §3 + §9 exactly (the pattern that produced wave 1):
 
 ### Env vars / gates introduced in wave 1 (you'll need these)
 ```bash
-# production auth (WS6): AUTH_ISSUER now REQUIRED with AUTH_JWKS_URL; JWKS fetched once at boot (5s), hard-fail if unreachable
-AUTH_JWKS_URL=... AUTH_ISSUER=... /tmp/cored serve
+# production auth (WS6 + D102): AUTH_ISSUER **and** AUTH_AUDIENCE are BOTH REQUIRED with AUTH_JWKS_URL;
+# JWKS fetched once at boot (5s), hard-fail if unreachable
+AUTH_JWKS_URL=... AUTH_ISSUER=... AUTH_AUDIENCE=... /tmp/cored serve
 STATUTORYD_DSN="postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable" /tmp/statutoryd   # WS7a durable runner
 INSIGHTD_DATABASE_URL="postgres://tally_app:tally_app@localhost:5433/tally" uvicorn insightd.api.app:app --port 8088  # WS7b (needs requirements-db.txt)
 CORED_BASE_URL=http://localhost:8087 pnpm e2e:state-code   # WS8a live gate
 # statutory freeze e2e now has an opt-in durable-restart phase (STATUTORYD_BIN + STATUTORYD_DSN)
 ```
+**`AUTH_AUDIENCE` — what to set it to, and why it is not optional (D102, closed 2026-08-27).** Set it to the **OIDC client id / audience cored's tokens are minted for** — the value the IdP puts in the token's `aud`. Keycloak emits `aud` as an **array** and usually includes `"account"` alongside your client id (`"aud":["account","cored"]`); cored accepts both RFC 7519 forms (bare string and array) and requires only that the list **contains** the configured value. Exactly one expected value is supported in v1 — it is **not** comma-split into a list.
+
+⛔ **cored REFUSES TO BOOT if `AUTH_JWKS_URL` is set and `AUTH_AUDIENCE` is empty.** This is deliberate, and `AUTH_ISSUER` does not cover it: `iss` identifies the **realm**, and *every client in a realm mints tokens carrying the same `iss`*. Before this check landed, a token a user had legitimately obtained for **any other application in that realm** authenticated against cored as that subject — the issuer pin cannot see the difference. The constraint used to live only as a "deploy the realm with trusted clients only" sentence in a source comment (`backend/internal/authn/jwks.go`), where no operator would ever read it; it is now enforced at boot and written here.
+
+⚠️ In JWKS mode there is **no in-process signer**, so any service principal (`svc:` subject) must obtain its token from the IdP — and that token now needs cored's `aud` too. Nothing in the tree mints such a token today, so this changes nothing that currently works, but plan for it before wiring statutoryd to a real IdP.
+
 Boot cored for e2e with `AUTH_DEV_TOKEN_ENABLED=true PORT=8087 APP_DSN="postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable"`. Concurrent workflow agents must use unique high ports and kill their servers when done.
 
 ---
@@ -72,7 +79,7 @@ Boot cored for e2e with `AUTH_DEV_TOKEN_ENABLED=true PORT=8087 APP_DSN="postgres
 ## 4. Honest edges to keep visible (already in HANDOFF §6, don't re-drop)
 - GSTR-3B is a **books-derived summary**, ITC all-eligible, NIC field names unverified → no portal-upload claim.
 - TDS/TCS thresholds are **per-transaction in v1** (annual/monthly are the true basis → v1 **under-deducts**; each rule records its statutory `Basis`). Rates were curated offline and spot-checked vs live sources — **re-verify against current law before any release.**
-- Auth `aud` claim is **never validated** — `iss` pins the realm, not the client. Live-Keycloak smoke test still a follow-up.
+- ~~Auth `aud` claim is **never validated** — `iss` pins the realm, not the client.~~ **CLOSED (D102, 2026-08-27):** `aud` is now parsed (both RFC 7519 forms) and enforced against `AUTH_AUDIENCE`, which cored refuses to boot without whenever `AUTH_JWKS_URL` is set. See the env-var block in §3. Live-Keycloak smoke test **is still a follow-up** — the audience path is proven against a hermetic JWKS server, not against a real Keycloak.
 - `statutory_step` has **no RLS** (deliberate; not user-facing) and statutoryd now holds a `tally_app` DSN → a narrower DB role is a follow-up.
 - Re-DELETE is **retry-safe, not serialisable** (head-probe and tombstone write are two txns).
 - Deferred entirely (tracked in `IMPLEMENTATION_PLAN.md` §7): Tauri desktop shell (no Rust toolchain here), OPA/Rego, real GSP/NIC adapter + e-way bill + full GSTR filing, sequencer/statutoryd HA.

@@ -815,7 +815,7 @@ have now been driven end to end in a real browser against real cored.**
 
 ---
 
-## 7.1 ⛔ THE DEFECT REGISTER — 102 REGISTERED · 100 CLOSED · **2 OPEN** · 0 PARTIAL (2026-08-27)
+## 7.1 ⛔ THE DEFECT REGISTER — 105 REGISTERED · 101 CLOSED · **4 OPEN** · 0 PARTIAL (2026-08-27)
 
 > ⭐ **THE REGISTER RE-OPENED ON 2026-08-27, DELIBERATELY.** It stood at 97 · 97 · 0 for three days.
 > **D98**, **D99**, **D100** and **D101** were registered by the U1 lane (`HANDOFF-AUDIT-THE-UNDRIVEN.md`) and all four are
@@ -832,7 +832,15 @@ have now been driven end to end in a real browser against real cored.**
 > D98, 3 posted for D101, the exact numbers the browser drives measured when the rows were written —
 > and each re-driven in a browser against a cored verified fresh. **D99 stays OPEN by decision** (its
 > premise was refuted by a real export; do not fix it speculatively) and **D102 is newly registered**.
-> Re-derived by parsing, not by editing this line: `102 · 96 · 2 · 0` from `docs/parse-defect-register.py`, plus the
+> ⭐⭐ **D102 CLOSED AND THREE NEW ROWS OPENED THE SAME DAY — AND THE THREE CAME FROM AN AUDIT THAT
+> ALLEGED NO DEFECT.** The L28 lane existed only to refresh STALE EVIDENCE on rows 20/23/26, which were
+> driven before T9 (`0078`) and T10 (`0079`) landed underneath them. It found **D103 (HIGH)**: a stock
+> journal between the company's own godowns CREATES VALUE on a FIFO item, and the Balance Sheet moves
+> with it and still balances. ⛔ **THAT IS THE ARGUMENT FOR RE-DRIVING STALE ROWS, MADE BY THE ROWS
+> THEMSELVES.** D103 is a regression BY PREMISE rather than by edit — a 2026-08-07 fix was complete for
+> a weighted-average world, `0078` made that premise false for two of three methods, and nothing
+> downstream was revisited.
+> Re-derived by parsing, not by editing this line: `105 · 97 · 4 · 0` from `docs/parse-defect-register.py`, plus the
 > **four rows the naive parser cannot read**, every one of which is CLOSED and each for a known reason:
 > **D49** and **D84** say `OPEN` in their status PROSE beside `CLOSED`/`FIXED`; **D82** says
 > `WORKING AS INTENDED` and carries no marker word at all; **D80**'s status cell contains a literal
@@ -980,7 +988,10 @@ WORK"** — not "hard to fix".
 | **D99** | **U1** | LOW | ⚠️ **THE THREE MONEY READERS REFUSE A COMMA-GROUPED NUMBER WHILE THE QUANTITY READER STRIPS COMMAS ON PURPOSE — SO THIS CODEBASE STATES THAT TALLY EMITS THEM AND THEN CANNOT READ THEM.** `SplitQtyUnit`'s own comment: *"Commas are thousands separators in Tally's own output and are not part of the number"* — and it strips them. `Magnitude()`, `OpeningSide()` and `OpeningMagnitude()` all hand the raw string to `decimal.NewFromString`, which refuses. Predicted in `docs/design/t8-multi-currency-model.md` §6 against the unchanged build; **driven through the screen 2026-08-27**: `<AMOUNT>83,650.00</AMOUNT>` is refused with `migration: voucher 3: integration: ledger "Rent": bad AMOUNT "-83,650.00": can't convert -83,650.00 to decimal`, and — because it is a per-voucher failure — it lands squarely in **D98**: the two vouchers before it are committed and the operator is told only about the third. ⭐⭐ **AND THE PREMISE IS NOW REFUTED BY A REAL EXPORT — SEVERITY LOWERED FROM MEDIUM TO LOW, 2026-08-27.** The user supplied a genuine TallyPrime pair and every money and quantity field in it was COUNTED rather than sampled: **1,156 `<AMOUNT>` values, 714 `<OPENINGBALANCE>` values, 454 `<BILLEDQTY>`, 454 `<ACTUALQTY>`, 227 `<RATE>` — and ZERO of them carries a comma.** Every money value is plain `[-]digits.digits`; the quantities carry a UNIT inside the value (`" 101.00 BAG"`) and the rates a `/UNIT` (`"59.03/BAG"`), which is what `SplitQtyUnit` genuinely exists for. ⛔ **SO `SplitQtyUnit`'s COMMENT IS THE ONLY EVIDENCE FOR THE CLAIM AND THE ONE REAL EXPORT WE HAVE CONTRADICTS IT** — its comma-stripping is defensive, not a response to observed Tally output. ⚠️ **A COMMA DOES APPEAR IN THAT FILE, AND IT IS DATA RATHER THAN FORMATTING:** 51 of the 227 `<STOCKITEMNAME>` values name an item called `TOORDAL & DALI,ATTA,ETC`. A reader that stripped commas from a NAME would merge distinct items. ⛔ **LATENT, NOT ACTIVE.** The reader asymmetry is still real and still worth recording; what has gone is the reason to think a customer will hit it. ⛔ **DO NOT FIX IT SPECULATIVELY.** Accepting commas everywhere also makes a genuinely malformed value readable — `1,2,3.00` and `1,00,000.00` (the Indian grouping) both become numbers under a naive strip — so a fix has to decide what it is willing to call a number, and that decision wants a real file behind it. | `backend/internal/integration/tallyxml.go:890` (`Magnitude`), `:478` (`OpeningSide`), `:496` (`OpeningMagnitude`) — all three call `decimal.NewFromString` on the raw string — versus `:612` (`SplitQtyUnit`, which strips `,` in its digit scan). ⛔ **THE DECISION IS NOW "LEAVE IT", NOT "WAIT".** One real export has arrived and refutes the premise; a second would have to CONTRADICT it before any reader changes. If one ever does, settle all three money readers together — one left alone is the shape that ships a half-fix — and settle `SplitQtyUnit`'s comment at the same time, because a comment asserting a format that no observed file uses is how this row came to exist | ⛔ **OPEN — REGISTERED 2026-08-27, and deliberately left alone.** ⭐ Its premise was tested against a real export the same day and did not survive; it stays on the register at LOW because the reader asymmetry is real, and it is now a note for whoever meets a grouped money field rather than a repair anybody should make today. ⚠️ D98 is what would make this one cost money; on its own it is a refusal an operator can act on |
 | **D100** | **U1** | MEDIUM | ⛔ **THE PRODUCT TELLS A MIGRATING OPERATOR TO PRODUCE A FILE, AND DOES NOT TELL THEM HOW — SO THE ABORT'S OWN "CORRECT FIX" IS THE ONE DOOR THEY CANNOT FIND.** Found 2026-08-27 driving `drive-u1-real-export.mjs` against a genuine TallyPrime export pair supplied by the user (a real trading company's 2019-20 books; 84 MB `Master.xml`, 121-voucher `Transactions.xml`). `TallyImportScreen.tsx:88-92` says *"Export the whole company from Tally (Masters and Transactions)"*. An operator who does exactly that gets a masters file whose `TALLYMESSAGE` children are **LEDGER 3706 · GROUP 37 · CURRENCY 2 · COMPANY 1 and nothing else** — no `STOCKITEM`, no `UNIT`, no `GODOWN`, no `STOCKGROUP` — while the transactions name **6 stock items, 1 godown and 75 batches**, so those masters plainly exist in the source company. The import then aborts on voucher 1 (`… would drive a stock position NEGATIVE: item RICE …`) and offers *"(1) import a Masters.xml carrying the items with their opening balances FIRST — that is the correct fix"*, which the operator has no way to act on, pushing them to remedy (2) — the one the message itself says **understates the cost of goods sold**. ⭐⭐ **SETTLED 2026-08-27, AND THE ANSWER IS THAT THE CAPABILITY EXISTS**: TallyPrime's master export carries a **Type of Master** dropdown (`Accounting Masters` / `Inventory Masters` / **All Masters**) plus **Include dependent masters** and **Export closing balance as opening balance** ([TallyHelp — Export Data in TallyPrime](https://help.tallysolutions.com/tally-prime/data-management/export-data-in-tally/)). The user's file is an **Accounting Masters** export. ⛔ **SO THIS IS A DOCUMENTATION DEFECT, NOT A MISSING CAPABILITY, AND THAT IS WHY IT IS MEDIUM RATHER THAN HIGH** — nothing is silently wrong, the product refuses correctly and loudly; the cost is that it sends every migrating customer down the worse of two doors for want of one sentence. ⚠️⚠️ **AND ONE PIECE OF EVIDENCE IN THE FIRST DRAFT OF THIS ROW WAS WRONG — RECORDED RATHER THAN QUIETLY DROPPED.** It said *"their Master.xml IS the All Masters export — its own REPORTNAME says so"*. **`<REPORTNAME>` IS VESTIGIAL IN A TALLYPRIME EXPORT: both files carry `<REPORTNAME>All Masters</REPORTNAME>`, including `Transactions.xml`, which holds 121 VOUCHERs and ZERO ledgers.** It identifies nothing. **Count the `TALLYMESSAGE` children instead** — that measurement was always the load-bearing one and it is unchanged. ⭐ The rest of the migration is good, which is what makes this worth one sentence rather than a project: with negative stock allowed, 121 vouchers and 226 stock movements post with **zero** warnings and the trial balance **BALANCES at 25,986,501.8800 over 3,712 rows**. ⚠️ A second measured fact, not a defect: the transactions create **72 ledgers the masters export did not contain**, so Tally's masters export is not all the masters its own vouchers post to — which is why `ensureLedger` exists and must keep existing. | **THE FIX IS THREE SENTENCES AND NO NEW CODE PATH.** (1) `frontend/src/screens/TallyImportScreen.tsx:88-92` — replace *"Export the whole company from Tally (Masters and Transactions)"* with the actual keystroke recipe: in TallyPrime press **Alt+E**, and under **Configure** set **Type of Master = All Masters** and **Include dependent masters = Yes**; ⭐ **and name `Export closing balance as opening balance`, because that is the option that makes remedy (1) say what it promises** — an export of a closed year carries CLOSING balances, and the new company needs them as OPENINGS. (2) `backend/internal/migration/migration.go` — remedy (1) in the abort text carries the same recipe, since that is where an operator meets the problem. (3) ⚠️ **Consider having the importer SAY SO when a masters file contains no inventory masters at all** — the import is otherwise clean and the operator learns their file was incomplete one step later, from an abort about RICE. ⛔ **STILL DO NOT DEFAULT `allow_negative_stock` ON FOR IMPORTS:** the Features panel's own warning is the reason — an issue with no stock to consume has no COST to consume, so closing valuation stays wrong until a receipt prices it, and choosing that silently is what the two-remedies message exists to avoid | ✅ **FIXED 2026-08-27.** Three sentences and no new code path, as the row said. `TallyImportScreen.tsx` carries the recipe — **Alt+E**, Configure, **Type of Master = All Masters**, **Include dependent masters = Yes**, **Export closing balance as opening balance = Yes** — and `describeNegativeStock` in `inventory.go` carries the same recipe inside remedy (1), because that is where an operator actually meets the problem. ⭐ **THE TWO COPIES ARE PINNED TOGETHER BY A TEST**: `TestAnExportWithNoOpeningStockIsRefusedWithBothWaysForward` now asserts the refusal contains `"All Masters"` beside its existing needles, so the recipe cannot drift out of one of them silently — which is the failure mode a two-place copy fix invites. ⚠️ The doc comment on `describeNegativeStock` was corrected too: it blamed a Day Book export, and the commonest cause is a whole-company export taken with the DEFAULT Type of Master |
 | **D101** | **U1** | HIGH | ⛔⛔ **THE IMPORTER POSTS VOUCHERS THAT TALLY KEEPS OUT OF THE BOOKS, AND SAYS NOTHING.** Found 2026-08-27 by ENUMERATING a real TallyPrime export element by element and diffing it against every `xml:"…"` tag the parser binds: `<VOUCHER>` has **207 distinct direct children in a real file and `TallyVoucher` binds 15**. Almost all of the other 192 are Tally internals nobody should read (`USEFOREXCISE`, `LEDGERFBTCATEGORY`, `PERSISTEDVIEW`). **Three are not**: `ISCANCELLED`, `ISOPTIONAL` and `ISDELETED`. ⛔ **DRIVEN, NOT INFERRED** (`drive-u1-voided-vouchers.mjs`, fixture `corpora/migration/10-voided-vouchers.xml`, own tenant, reaped): a file whose second voucher is `ISCANCELLED=Yes` and whose third is `ISOPTIONAL=Yes` reports **"Vouchers posted: 3"** and **"Warnings (0)"**, and **both voided vouchers appear in the operator's own DAY BOOK** beside the real one — 30,000.00 of sales the source books show as VOIDED, and a provisional Journal the source books exclude by definition. ⛔ **AND A LEDGER MASTER MARKED `ISDELETED=Yes` IS CREATED.** ⭐ **THE ASYMMETRY IS THE TELL, AND IT IS WHY THIS IS AN OVERSIGHT RATHER THAN A DECISION:** this codebase already knows the idea — `Deleted()` is defined AND honoured on **five** master kinds (stock group, unit, godown, stock item at `inventory.go:299,363,405,423`; account group at `migration.go:384`). It never reached the voucher or the ledger master, which are the two oldest readers. ⚠️ **LATENT IN THE ONE REAL EXPORT WE HAVE, AND THE LIMITS OF THAT ARE STATED:** all 121 vouchers in it carry `No` for all three, so this company has none. What the file DOES show is that the export is **not filtered** — all five voucher-number series are CONTIGUOUS (Sales 7594-7641 · Receipt 475-511 · Payment 403-414 · Journal 60-68 · Purchase 105-119, **zero missing numbers in any series**), and a cancelled voucher in Tally RETAINS its number, so a filtering export would leave gaps. Tally also emits the flag on every voucher, which is what an export that CARRIES them looks like rather than one that drops them. ⛔ **The consequence if it fires is silent and unrecoverable**: the trial balance still balances, no warning is raised, nothing on any screen distinguishes voided money from real money, and there is no delete path in this product. Tally semantics: `RESEARCH.md:2173` (Ctrl+L is the optional-voucher toggle) and `RESEARCH.md:2225` (only Cash Flow's *"Include Scenarios"* pulls Memorandum, Reversing Journal and Optional vouchers in — everywhere else Tally keeps them out). | **THE FIX IS THE PATTERN THIS PACKAGE ALREADY USES, APPLIED TO TWO MORE READERS.** (1) `backend/internal/integration/tallyxml.go` — add `IsCancelled`/`IsOptional`/`IsDeleted` to `TallyVoucher` and `IsDeleted` to `TallyLedgerMaster`, with the same `Deleted()`-style `strings.EqualFold(…,"Yes")` accessors the five master kinds have. (2) `backend/internal/migration/migration.go:247` — the second-pass loop skips a voided voucher the way `migration.go:384` already skips a deleted account group, and counts it. ⛔ **IT MUST BE COUNTED AND REPORTED, NOT SILENTLY DROPPED** — `ImportResult` has `Skipped`/`SkippedGUIDs` for GUID idempotency and that is the WRONG bucket (an operator reading "skipped: 2" would think they were already imported); this wants its own figure beside `vouchers_posted`, rendered on `TallyImportScreen` like the goods are, because *"3 posted"* against a file of 5 is the same class of silence as `stock_lines: 0`. ⚠️ **AND THE OPPOSITE DECISION IS DEFENSIBLE IF IT IS DISCLOSED**: importing them for the audit trail's sake is a choice somebody could make, but then the report must SAY they were posted as live entries. The drive's last arm asserts exactly that, so either fix turns it green. ⛔ **RELATED AND NOT THE SAME ROW:** `classByVchType` maps only the six built-in classes, so a `Memorandum` or `Reversing Journal` voucher — the other two kinds Tally keeps out of the books — aborts the whole import with *"unrecognised VCHTYPE"*, which is safe for the money and lands squarely in **D98**'s partial commit | ✅ **FIXED AND RE-DRIVEN 2026-08-27.** Skip-and-report, decided with the repo owner. `TallyVoucher` binds `ISCANCELLED`/`ISOPTIONAL`/`ISDELETED` with `Cancelled()`/`Optional()`/`Deleted()` accessors in the same `strings.EqualFold(…,"Yes")` shape the five master kinds use, plus `VoidReason()`; `TallyLedgerMaster` binds `ISDELETED` and gets its `Deleted()`. ⛔ **THE SKIP IS CHECKED BEFORE THE ACTION DISPATCH, DELIBERATELY** — a cancelled voucher is not money whether it arrives as a Create, an Alter or a Delete, and an ALTER resolving to a cancelled source would otherwise append a LIVE version to a voucher the source company had voided. ⭐ **IT IS COUNTED IN ITS OWN BUCKET AND IT IS ON THE SCREEN.** `VouchersVoided`/`VoidedVouchers`/`LedgersTombstoned` on the result, `vouchers_voided`/`voided_vouchers`/`ledgers_tombstoned` on the wire (never nil), and a report block headed *"Excluded as void in Tally: N"* whose note says they were **not posted, are not missing, and are not duplicates**. ⛔ It is NOT folded into `vouchers_skipped`, which means "already imported under this GUID" — the register said that bucket was wrong and it stayed wrong. ⭐ **MUTATION PROOF PREDICTED THEN OBSERVED**: with the skip disabled, `TestVoucherFlagsTallyExcludesFromTheBooks` reports *"3 vouchers posted, want 1"* and *"VouchersVoided = 0, want 2"* — **3 is exactly the pre-fix number the drive recorded.** The screen block has its own mutation proof too (blank it and the render test fails). ⭐ **RE-DRIVEN: `drive-u1-voided-vouchers.mjs` 12/12**, including *"NEITHER VOIDED VOUCHER APPEARS IN THE OPERATOR'S DAY BOOK"* and the ISDELETED ledger master not created. ⚠️ **NOT CLOSED BY THIS ROW:** `classByVchType` still aborts a whole import on a `Memorandum` or `Reversing Journal` VCHTYPE — the other two kinds Tally keeps out of the books. It is safe for the money and no longer lands in a partial commit now that D98 is fixed, but it is a separate row waiting to be written |
-| **D102** | — | MEDIUM | ⛔ **THE PRODUCTION TOKEN VERIFIER DOES NOT CHECK `aud`, SO ANY TOKEN MINTED BY ANY CLIENT IN THE PINNED REALM IS ACCEPTED AS A CREDENTIAL FOR THE BOOKS.** Registered 2026-08-27 from `HANDOFF-FEATURE-LOCK-LINE.md` §2.8, which found it disclosed on the SSO FeaturesScreen row and **nowhere on this register** — the row argued the feature should be deferred (Tally has no SSO, so it is not a parity item) while the defect INSIDE its shipped half stayed unrecorded. ⛔ **NOT INFERRED FROM THE COMMENT — CONFIRMED IN THE TYPE.** `authn.Claims` binds `sub`, `email`, `companies`, `amr`, `iss`, `exp`, `iat`, `jti` and **has no `aud` field at all**, so the claim is not merely unchecked, it is never parsed; `grep -rn aud --include=*.go backend/internal/` returns exactly ONE hit in the whole tree and it is the comment admitting the gap. There is no `AUTH_AUDIENCE` env var anywhere in the repo. ⭐ **THE SURROUNDING POSTURE IS GOOD, WHICH IS WHY THIS IS THE ONE HOLE AND NOT A CLASS OF THEM**: keys cached by kid, asymmetric only (RSA/oct/`oct` HMAC and empty-kid JWKs skipped at parse time), fail-closed on fetch failure, a missing `exp` REJECTED, and `buildAuth` refuses to BOOT when `AUTH_JWKS_URL` is set without `AUTH_ISSUER` — with a sentence that names the exact reasoning (*"without a pinned issuer the JWKS verifier would accept tokens from any realm sharing the signing key"*). ⛔ **PINNING `iss` IS THE MITIGATION AND IT STOPS ONE DOOR SHORT.** Every client inside one Keycloak realm mints tokens carrying the SAME `iss`, so the issuer pin scopes acceptance to the realm and not to this application. A token a user legitimately obtained for ANY other client in that realm — another internal app, a public SPA, a service account — replays at cored and authenticates as that `sub`, after which the PDP grants on subject and company exactly as if the token had been minted for the books. ⚠️⚠️ **AND THE COMPENSATING CONTROL IS WRITTEN WHERE NO OPERATOR WILL EVER READ IT.** `jwks.go:31-35` says *"Deploy cored's realm with only trusted clients until an AUTH_AUDIENCE check lands"* — that is a DEPLOYMENT constraint living in a Go source comment. The only operator-facing production recipe in the repo, `docs/SESSION_HANDOFF_WAVE2.md:61-62`, hands over `AUTH_JWKS_URL=... AUTH_ISSUER=... /tmp/cored serve` and says nothing about the realm needing to be single-tenant. Nothing warns at boot. ⭐ **MEDIUM RATHER THAN HIGH, AND THE REASON IS THE DEPLOYMENT SHAPE, NOT THE SEVERITY OF THE HOLE**: the JWKS path is live only when `AUTH_JWKS_URL` is set, and this product has no such deployment today (`docs/TENANCY-AND-ACCESS.md:453` — first-party password login is what ships, and it runs on the dev signer with a single pinned issuer where `aud` is meaningless). ⛔ **It becomes HIGH the day anybody points this at a shared realm, which is the ordinary way Keycloak is run.** | `backend/internal/authn/authn.go` (`type Claims struct` — no `aud` member) + `backend/internal/authn/jwks.go:31-35` (the KNOWN GAP note) + `backend/internal/server/server.go:500-514` (`buildAuth`, which enforces the issuer pin and has no audience equivalent). **THE FIX IS SMALL AND ITS ONLY REAL DECISION IS WHAT TO DO WHEN THE VAR IS UNSET.** (1) add `Audience` to `Claims` — ⛔ it must be `json.RawMessage` or a custom unmarshaller, because RFC 7519 lets `aud` be EITHER a string OR an array of strings and a plain `string` field silently drops the array form, which is the form Keycloak actually emits; (2) check it in the same place the issuer is checked, against a new `AUTH_AUDIENCE`; (3) ⛔ **decide the unset case DELIBERATELY and prefer refusing to boot** — the `AUTH_ISSUER` branch of `buildAuth` is the precedent and it refuses, with a sentence explaining why, rather than warning and continuing. A verifier that accepts anything when a var is unset is the fail-open shape this function was written to avoid. ⚠️ Whichever is chosen, move the realm constraint out of the source comment and into the operator recipe at `docs/SESSION_HANDOFF_WAVE2.md`, because a mitigation nobody can read is not a mitigation. | ⛔ **OPEN — REGISTERED 2026-08-27, and no code has changed.** Registering is what a reading lane owes; the repair is a separate decision, and this one is gated on the unset-case question above rather than on any investigation. ⚠️ Status cell deliberately avoids the words a status parser matches on, per this section's own rule |
+| **D102** | — | MEDIUM | ⛔ **THE PRODUCTION TOKEN VERIFIER DOES NOT CHECK `aud`, SO ANY TOKEN MINTED BY ANY CLIENT IN THE PINNED REALM IS ACCEPTED AS A CREDENTIAL FOR THE BOOKS.** Registered 2026-08-27 from `HANDOFF-FEATURE-LOCK-LINE.md` §2.8, which found it disclosed on the SSO FeaturesScreen row and **nowhere on this register** — the row argued the feature should be deferred (Tally has no SSO, so it is not a parity item) while the defect INSIDE its shipped half stayed unrecorded. ⛔ **NOT INFERRED FROM THE COMMENT — CONFIRMED IN THE TYPE.** `authn.Claims` binds `sub`, `email`, `companies`, `amr`, `iss`, `exp`, `iat`, `jti` and **has no `aud` field at all**, so the claim is not merely unchecked, it is never parsed; `grep -rn aud --include=*.go backend/internal/` returns exactly ONE hit in the whole tree and it is the comment admitting the gap. There is no `AUTH_AUDIENCE` env var anywhere in the repo. ⭐ **THE SURROUNDING POSTURE IS GOOD, WHICH IS WHY THIS IS THE ONE HOLE AND NOT A CLASS OF THEM**: keys cached by kid, asymmetric only (RSA/oct/`oct` HMAC and empty-kid JWKs skipped at parse time), fail-closed on fetch failure, a missing `exp` REJECTED, and `buildAuth` refuses to BOOT when `AUTH_JWKS_URL` is set without `AUTH_ISSUER` — with a sentence that names the exact reasoning (*"without a pinned issuer the JWKS verifier would accept tokens from any realm sharing the signing key"*). ⛔ **PINNING `iss` IS THE MITIGATION AND IT STOPS ONE DOOR SHORT.** Every client inside one Keycloak realm mints tokens carrying the SAME `iss`, so the issuer pin scopes acceptance to the realm and not to this application. A token a user legitimately obtained for ANY other client in that realm — another internal app, a public SPA, a service account — replays at cored and authenticates as that `sub`, after which the PDP grants on subject and company exactly as if the token had been minted for the books. ⚠️⚠️ **AND THE COMPENSATING CONTROL IS WRITTEN WHERE NO OPERATOR WILL EVER READ IT.** `jwks.go:31-35` says *"Deploy cored's realm with only trusted clients until an AUTH_AUDIENCE check lands"* — that is a DEPLOYMENT constraint living in a Go source comment. The only operator-facing production recipe in the repo, `docs/SESSION_HANDOFF_WAVE2.md:61-62`, hands over `AUTH_JWKS_URL=... AUTH_ISSUER=... /tmp/cored serve` and says nothing about the realm needing to be single-tenant. Nothing warns at boot. ⭐ **MEDIUM RATHER THAN HIGH, AND THE REASON IS THE DEPLOYMENT SHAPE, NOT THE SEVERITY OF THE HOLE**: the JWKS path is live only when `AUTH_JWKS_URL` is set, and this product has no such deployment today (`docs/TENANCY-AND-ACCESS.md:453` — first-party password login is what ships, and it runs on the dev signer with a single pinned issuer where `aud` is meaningless). ⛔ **It becomes HIGH the day anybody points this at a shared realm, which is the ordinary way Keycloak is run.** | `backend/internal/authn/authn.go` (`type Claims struct` — no `aud` member) + `backend/internal/authn/jwks.go:31-35` (the KNOWN GAP note) + `backend/internal/server/server.go:500-514` (`buildAuth`, which enforces the issuer pin and has no audience equivalent). **THE FIX IS SMALL AND ITS ONLY REAL DECISION IS WHAT TO DO WHEN THE VAR IS UNSET.** (1) add `Audience` to `Claims` — ⛔ it must be `json.RawMessage` or a custom unmarshaller, because RFC 7519 lets `aud` be EITHER a string OR an array of strings and a plain `string` field silently drops the array form, which is the form Keycloak actually emits; (2) check it in the same place the issuer is checked, against a new `AUTH_AUDIENCE`; (3) ⛔ **decide the unset case DELIBERATELY and prefer refusing to boot** — the `AUTH_ISSUER` branch of `buildAuth` is the precedent and it refuses, with a sentence explaining why, rather than warning and continuing. A verifier that accepts anything when a var is unset is the fail-open shape this function was written to avoid. ⚠️ Whichever is chosen, move the realm constraint out of the source comment and into the operator recipe at `docs/SESSION_HANDOFF_WAVE2.md`, because a mitigation nobody can read is not a mitigation. | ✅ **FIXED 2026-08-27.** Decision taken: **refuse to boot**, following the `AUTH_ISSUER` precedent in the same function. `authn.Audience` is a `[]string` with a custom `UnmarshalJSON` accepting BOTH RFC 7519 §4.1.3 forms — ⛔ **the array form is the one Keycloak emits, and binding `aud` as a plain `string` would have made the check pass VACUOUSLY for every token**, which is the trap this row was registered with. `buildAuth` now refuses to start when `AUTH_JWKS_URL` is set and `AUTH_AUDIENCE` is empty, with a sentence naming the consequence rather than the variable. ⭐ **GUARD ORDER IS DELIBERATE AND PINNED BY A TEST:** the audience check runs BEFORE the JWKS fetch, so an operator with a LIVE IdP and no audience cannot boot; the test asserts the error is NOT the unreachable one. ⭐⭐ **MUTATION-PROVEN END TO END.** With the comparison disabled, a token signed by the real IdP key under the published kid with the pinned issuer but minted for ANOTHER application returns **403 — it AUTHENTICATED** — and the new probe fails with *"a token minted for ANOTHER application in the same realm was AUTHENTICATED (403 = it got past the 401 gate)"*. That is D102 reproduced exactly. Restored: green, and 13 authn unit assertions bite under the same mutation. ⚠️ **TWO EXISTING SECURITY TESTS WERE FOUND PASSING FOR THE WRONG REASON AND WERE TIGHTENED** — `AUTH_JWKS_URL at a dead endpoint fails closed` and `serving an unusable JWKS fails closed` both asserted `Contains(err, "JWKS")`, and the new audience refusal contains that substring inside `AUTH_JWKS_URL`. They now assert `unreachable` and `invalid JWKS` respectively. ⛔ **A test that keeps passing while testing nothing is the failure mode this register exists for.** ⚠️ The realm constraint moved out of the Go comment and into `docs/SESSION_HANDOFF_WAVE2.md`, the only operator-facing production recipe |
+| **D103** | **L28** | HIGH | ⛔⛔ **A STOCK JOURNAL BETWEEN THE COMPANY'S OWN GODOWNS *CREATES VALUE* ON A FIFO ITEM, AND THE BALANCE SHEET MOVES WITH IT AND STILL BALANCES.** Found 2026-08-27 by the L28 stale-evidence re-audit (`drive-l28-stock-restale.mjs`, own tenant, reaped) — **driven, not inferred.** `Fifo Widget` at `Main Location` holds two lots (10 @ 120.00 and 5 @ 130.00), closing **15.0000 / 1,850.00**. The Stock Summary shows a position Rate of **123.33**, which is `closing_value / closing_qty` and **the only rate the product displays anywhere**. Alt+F7, transfer 10 units Main Location → Second Store, keying that rate. ⛔ **RESULT: item closing value 1,850.00 → 1,883.30 (+33.30); company closing stock 5,100.00 → 5,133.30; `GET /balance-sheet?as_on=2026-04-30` carries 5133.3000 and `balanced=true`.** Nothing entered or left the business. ⭐ **THE MECHANISM:** the OUT leg consumes the OLDEST LAYER (10 @ 120.00 = 1,200.00) while the IN leg carries the goods at the keyed BLENDED 123.33 = 1,233.30. ⛔ **QUANTITY IS UNCHANGED, so no quantity check anywhere can see it** — and the screen's own footer asserts the opposite: *"Each line posts as a PAIR (out of From, into To), so the company's total holding is unchanged."* ⭐⭐ **TWO CONTROLS IN THE SAME RUN LOCATE IT, WHICH IS WHY THIS IS ACTIONABLE RATHER THAN A SIGHTING:** (1) identical keystrokes on the WEIGHTED_AVG item at its offered rate conserve EXACTLY (1,650.00 → 1,650.00); (2) identical keystrokes on a SINGLE-LAYER FIFO position conserve EXACTLY (1,883.30 → 1,883.30). **So it is neither "transfers" nor "FIFO" — it is the RATE the product offers**, which stops being the consumption rate the moment a lot queue holds more than one layer. ⚠️ **DIRECTION IS NOT FIXED EITHER:** a queue whose oldest layer is DEARER than the blend DESTROYS value on the same keystrokes. ⭐ **THIS IS A REGRESSION BY PREMISE, NOT BY EDIT, AND THAT IS THE LESSON.** The 2026-08-07 fix (Lead 2) forced a non-zero inward rate and was COMPLETE for the world it was written in: under weighted average the displayed rate IS the consumption rate, so keying it conserved. **`0078` made that premise false for two of three methods and nothing downstream was revisited** — every comment in `nonaccounting.go` and `stockVoucher.ts` still reasons in weighted-average terms. ⛔ **This is exactly what the stale-evidence audit existed to find: the rows were driven BEFORE T9/T10 landed.** | `backend/internal/ledger/nonaccounting.go` (the transfer pair) and/or the rate the Stock Journal screen offers — `frontend/src/screens/vouchers/stockVoucher.ts` leaves Rate BLANK and the operator reads 123.33 off the Stock Summary, because it is the only figure in the product to reach for. **A CONSERVING RATE EXISTS IN PRINCIPLE — FIFO consumption cost ÷ qty = 120.00 here — AND NOTHING DERIVES, SHOWS OR DEFAULTS IT.** ⛔ **THE FIX IS A DECISION:** (a) derive the OUT leg's actual consumption cost and carry the IN leg at exactly that, making a same-company transfer conserve BY CONSTRUCTION rather than by the operator keying the right number; or (b) keep the rate an operator input but REFUSE a same-company transfer whose legs do not net to zero. ⛔ **(a) is right** — a transfer between your own godowns has no price, and asking an operator to key one is asking them to be the invariant. | ⛔ **OPEN — REGISTERED 2026-08-27, and no code has changed.** Registering is what a driving lane owes; the repair is a separate decision. ⚠️ Status cell deliberately avoids the words a status parser matches on, per this section's own rule |
+| **D104** | **L28** | LOW | ⚠️ **THE PHYSICAL-STOCK SURPLUS REFUSAL NAMES "the item's weighted-average value" ON EVERY ITEM, INCLUDING FIFO AND LIFO ONES.** Measured verbatim on a LIFO item 2026-08-27: *`ledger: physical count line 1 (Lifo Widget): the count is 2.0000 above the books, and bringing a surplus in at zero cost would write the item's weighted-average value down; state the rate the extra units are carried at`*. ⭐ **THE RULE IS CORRECT ON ALL THREE METHODS AND THE REFUSAL ITSELF IS RIGHT — ONLY ITS REASON NAMES ONE.** Same family as **D103** and the same root: `0078` introduced per-item valuers and the surrounding prose still reasons in weighted-average terms. Same class as **D100** — nothing is silently wrong, the sentence is. | `backend/internal/ledger/nonaccounting.go:446`. One sentence: name the item's ACTUAL basis, or say "the item's carrying value" and be true on all three. ⭐ `drive-l28-stock-restale.mjs` already asserts the corrected copy, so it goes green on the run that fixes it | ⛔ **OPEN — REGISTERED 2026-08-27.** Cheap, and it should ride along with D103 since it is the same file and the same misconception |
+| **D105** | **L28** | LOW | ⚠️ **FeaturesScreen ROW 23 STILL TELLS THE OPERATOR THE VALUER IS WEIGHTED-AVERAGE.** Its note reads *"value is DERIVED at report time by replaying the movement ledger through a WEIGHTED-AVERAGE valuer"*. Since `0078`, `reporting.replayPositions` selects a valuer **PER ITEM** and it may be FIFO or LIFO — `drive-l28-stock-restale.mjs` measures **three different valuers on one report in one company** (1,650.00 / 1,700.00 / 1,600.00 on identical movements). ⭐ Same class as **D100**: nothing is silently wrong, the sentence is — and this screen is the product's own truth-telling surface, so a stale sentence on it costs more than one in a comment. | `frontend/src/screens/FeaturesScreen.tsx` row 23. ⛔ **NOT EDITED BY THE DRIVING LANE ON PURPOSE — that file is SHARED with the T8 and T32 lanes** and a silent double-edit is the failure §7.5 warns about. Hand it to whoever owns the file next | ⛔ **OPEN — REGISTERED 2026-08-27.** One sentence, blocked only on file ownership |
 
 ### ⛔⛔ §7.2 — THE BACK-DATED CUTOFF TOOK **SEVEN** DOORS TO CLOSE, AND THAT IS THE SESSION'S MAIN LESSON
 
@@ -4410,3 +4421,215 @@ named as the single deliberate exception rather than skipped.
 ⚠️ **ROWS 20 / 23 / 26 HAVE STALE DRIVES.** They were driven before **T9** (FIFO/LIFO, `0078`) and
 **T10** (stock groups + compound units, `0079`) landed underneath them. The rows are old; their
 evidence is not current. That is the next audit lane, and it is smaller than this one was.
+
+---
+
+### L28 — 2026-08-27 · ROWS 20 / 23 / 26, RE-DRIVEN AGAINST T9 AND T10. **TWO CLEAN, ONE HOLE.**
+
+L27's closing paragraph named this lane. It is that lane. One new drive,
+`frontend/scripts/drive-l28-stock-restale.mjs`, **72/75**, its own throwaway company reaped clean on
+every run (`torn down Stale Stock Rows Drive <stamp>: clean`), three consecutive runs with the same
+three reds.
+
+```
+node frontend/scripts/drive-l28-stock-restale.mjs
+→ 72/75 probes ok · torn down Stale Stock Rows Drive 37usd: clean
+```
+
+| Row | Verdict |
+|---|---|
+| **20** `Stock items and units of measure (masters)` | ✅ **TRUE.** The SIMPLE path — the one no existing drive covers — still works with T10's three new fields on the two forms, and POSTGRES agrees on the shape |
+| **23** `Stock Summary (closing quantity AND value)` | ✅ **TRUE IN SUBSTANCE, and its NOTE is now WRONG.** Every figure, both new columns, the branch rollup and both halves of the ACL clause hold. ⚠️ The row's own sentence still says value is derived "through a **weighted-average** valuer" — since `0078` the valuer is chosen PER ITEM and may be FIFO or LIFO. Copy defect, reported for registration; `FeaturesScreen.tsx` is out of this lane's file set |
+| **26** `Inventory vouchers (Delivery Note, Receipt Note, Stock Journal, Physical Stock)` | ⛔ **PARTLY FALSE — a NEW HIGH defect.** Eleven of its twelve claims hold and are driven for the first time. **An Alt+F7 Stock Journal between the company's own godowns CREATES VALUE on a FIFO or LIFO item**, and the Balance Sheet moves with it |
+
+#### WHY THESE THREE HAD TO BE RE-DRIVEN, AND WHAT THEIR STANDING EVIDENCE ACTUALLY WAS
+
+⛔ **ROW 26 HAD NO COMMITTED DRIVE AT ALL FOR TWO OF ITS FOUR CLASSES.** There is no script anywhere
+in `frontend/scripts/` that presses **Alt+F7** or **Alt+F10**; the row's only evidence is the
+hand-driven 2026-08-07 table rows at §4/§6 that found LEAD 2 and LEAD 3, and **every one of those
+observations predates `internal/inventory/lots.go` entirely.**
+
+⛔ **ROW 23's STANDING DRIVE IS STALE ON ITS FACE.** `drive-l10-stock.mjs:34` asserts
+`headers.length === 11`. **Measured today: 13** — T9 added `Basis`, T10 added `Closing Qty (base
+unit)`. That file is row 23's evidence and it should be failing. ⚠️ **It is NOT corrected here**: this
+lane's brief is to ADD a drive, and silently editing another lane's assertion would remove the record
+that the evidence went stale. `drive-l28` asserts the 13 explicitly so the staleness is written down.
+**Follow-up for whoever owns `drive-l10-stock.mjs`.**
+
+⛔ **AND NEITHER `drive-valuation.mjs` NOR `drive-stock-groups.mjs` CAN REACH THE INTERSECTION.** Both
+drive only their OWN row, and both post every voucher over HTTP as an ordinary purchase. **Neither has
+ever keyed an inventory voucher.** A Delivery Note against a FIFO lot queue, a Stock Journal between
+two godowns of a FIFO item, and a Physical Stock count on a compound-unit item are untested ground in
+both directions — which is exactly where the defect below lives.
+
+#### THE ORACLES, AND ONE THING THE COMPANY TOTAL CANNOT TELL YOU
+
+Three items, **identical** movements (buy 10 @ 100, buy 10 @ 120, issue 5 at a sale price of 200),
+three bases — hand-derived from `0078`'s own worked example, never read back from the thing under test:
+
+| Item | Basis | Outward (at cost) | Closing |
+|---|---|---|---|
+| `Avg Widget` (ungrouped, `Nos`) | `WEIGHTED_AVG` | **550.00** | **1,650.00** |
+| `Fifo Widget` (group `Grains`, `Nos`) | `FIFO` | **500.00** | **1,700.00** |
+| `Lifo Widget` (group `Provisions`, `BOXX` = 12 `Nos`) | `LIFO` | **600.00** | **1,600.00** |
+
+All three measured exactly. The three bases **disagree**, which is the control: a build that stored the
+method and valued everything at average prints 1,650.00 three times and looks perfectly plausible.
+
+⚠️⚠️ **RECORDED AS A PROBE OF ITS OWN, BECAUSE IT IS THE TRAP IN THIS ROW: 1,650 + 1,700 + 1,600 =
+4,950 = 3 × 1,650.** The mixed-basis company total is **exactly** the all-average total, to the paisa.
+A build with a broken per-item valuer selection would print a Balance Sheet that foots, a Stock Summary
+footer that is right, and three item lines that are each wrong. **On a mixed company the per-ITEM lines
+are the only oracle**, and every valuation assertion in this drive is written per item.
+Branch rollup measured beside them: `Provisions` **3,300.00** (1,600 direct + `Grains` 1,700 beneath),
+`Grains` **1,700.00**, `(ungrouped)` **1,650.00**, company **4,950.00**, and the Balance Sheet carries
+`4950.0000` and balances.
+
+#### ROW 20 — ✅ THE SIMPLE PATH SURVIVED T10, AND POSTGRES IS THE ORACLE
+
+`0079` put **two** fields on the unit form (`base_unit_id`, `conversion_factor` — a **both-or-neither
+CHECK**) and **one** on the item form (`stock_group_id`). `drive-stock-groups.mjs` only ever creates a
+COMPOUND unit and a GROUPED item; `drive-l13-masters.mjs` predates all three. **Nothing had driven the
+plain path since the fields landed** — and a form that defaulted one half of the conversion would not
+fail quietly, it would hand the operator a SQLSTATE on the master they key most often.
+
+- `Alt+G > Create Unit`, symbol only, both new fields untouched, `Ctrl+A` → created, and
+  `unit.base_unit_id` / `conversion_factor` are **`NULL/NULL`** in Postgres.
+- `Alt+G > Create Stock Item` with that unit, **no** group and **no** costing method →
+  **`KGX/NULL/WEIGHTED_AVG`**. ⭐ The unit read-back is L13's own oracle kept verbatim (the defect it
+  was written for was an item silently filed as `Nos`), and a **CONTROL** keys a second item in a
+  different unit so the read-back cannot pass vacuously: `Simple Kg=KGX,Simple Nos=Nos`.
+- The compound half still holds: `1 BOXX = 12 Nos` stored as `Nos/12.0000`, child group filed under
+  its parent, and all three valued items filed as keyed —
+  `Avg Widget=:WEIGHTED_AVG,Fifo Widget=Grains:FIFO,Lifo Widget=Provisions:LIFO`, **the ungrouped one
+  included**.
+
+#### ROW 23 — ✅ EVERY FIGURE HOLDS, INCLUDING BOTH HALVES OF THE ACL CLAUSE
+
+- **13 headers**, `Basis` and `Closing Qty (base unit)` both present, and **`Closing Value` is still
+  LAST** — the invariant `StockSummaryScreen` argues for at length, because both the table footer
+  (`colSpan`) and the CSV footer (`slice(1,-1)`) put the company total in the FINAL cell.
+- The compound item restates **15.0000 BOXX = 180.0000 Nos** beside the keyed figure; a simple-unit
+  item prints an **em dash** there, never `0.0000`.
+- ⛔ **THE ACL CLAUSE, RE-TESTED AGAINST A WRITE SURFACE THAT DID NOT EXIST WHEN THE ROW WAS LAST
+  DRIVEN.** T9 mounted `PUT /stock-items/{id}/valuation-method` and `auth_middleware` maps it to
+  `(alter, "master")`. A real **Data Entry** member, minted and invited on the throwaway company:
+  - the route answers **403 `{"error":"default access: none"}`** and `valuation_method` is still
+    `FIFO` — an operator who may not READ the closing valuation cannot RESTATE every reported
+    period's closing stock either;
+  - the Stock Summary renders `stock-summary-denied` with advice naming the remedy and **no table**;
+  - ⭐ **CONTROL**: the same subject in the same session **can** open the Day Book, so the denial is a
+    RULE and not a broken session.
+
+⚠️ **THE ROW'S OWN NOTE IS NOW PARTLY UNTRUE.** It reads *"value is DERIVED at report time by
+replaying the movement ledger through a **weighted-average** valuer"*. Since `0078`,
+`reporting.replayPositions` selects a valuer **per item** and it may be FIFO or LIFO — the drive
+measures three different valuers on one report. **Same class as U1's D100: nothing is silently wrong,
+the sentence is.** `FeaturesScreen.tsx` is shared with the T8 and T32 lanes and is out of this lane's
+file set, so this is **reported for registration, not edited**.
+
+#### ROW 26 — ⛔ ELEVEN CLAIMS HOLD. THE TWELFTH IS A HOLE.
+
+Driven from the keyboard, all four classes, `down("Alt") + press("F7"/"F8"/"F9"/"F10")` with the
+screen **asserted open** each time (function keys are not subject to the `altMac` composition trap,
+but the whole point of that table is that a key a Mac cannot send passes silently):
+
+- **`DELIVERY_NOTE,PHYSICAL_STOCK,RECEIPT_NOTE,STOCK_JOURNAL`** all keyed and committed from the
+  keyboard.
+- ⛔ **NO ACCOUNTING POSTING FROM ANY OF THE FOUR.** 0 posting rows on those classes, the company's
+  posting count **unchanged (18 → 18)** across the whole sequence, and the **Trial Balance
+  byte-for-byte identical** before and after.
+- A Stock Journal row is stored as a **PAIR** (`IN+OUT`). Direction is still **fixed by the document**:
+  `DELIVERY_NOTE=OUT,RECEIPT_NOTE=IN`.
+- ⛔ **THE FOUR CLASSES REACH THE LOT QUEUE, WHICH NOTHING HAD EVER ASKED.** A Delivery Note for 5 on
+  the FIFO item, with the Rate keyed as **200 — the SALE price, deliberately** — costs out at the
+  **OLDEST layer**: `Outward Value (at cost)` reads **1,000.00** (500 from the sale + 500 from the
+  note). *1,500.00 would mean the keyed rate was honoured; 1,100.00 would mean a weighted-average
+  fallback under a FIFO heading.* The position it leaves is **10.0000 / 1,200.00**, and a Receipt Note
+  of 5 @ 130 adds a new layer: **15.0000 / 1,850.00**, inward value **2,850.00**.
+- **Physical Stock, on the COMPOUND-unit item** (LEAD 3's shape, now with a factor of twelve available
+  to get wrong): the grid names the item's **own** unit (`BOXX`) beside it, the screen states that the
+  SERVER derives the correction, a count of **15 BOXX** equal to the book derives a delta of zero and
+  writes **0 movement rows**, and a count of 17 with the Rate column blank is **refused in words**
+  (`the count is 2.0000 above the books … state the rate the extra units are carried at`) with nothing
+  written.
+- A Delivery Note with **no consignee** is refused at the keyboard in the screen's own vocabulary —
+  met by accident on the first run of the drive and kept as a deliberate probe.
+
+##### ⛔⛔ THE HOLE: AN Alt+F7 STOCK JOURNAL BETWEEN OUR OWN SHELVES CREATES VALUE UNDER FIFO/LIFO
+
+**What was done.** `Fifo Widget` at `Main Location` holds two layers (10 @ 120 and 5 @ 130), closing
+**15.0000 / 1,850.00**. The Stock Summary's `Rate` column for that position shows **123.33** — the
+only rate the product displays anywhere. Alt+F7, transfer **10** from `Main Location` to
+`Second Store`, keying that rate.
+
+**What should happen.** Nothing entered or left the business, so no figure should move.
+
+**What happens.**
+
+```
+Fifo Widget closing value   1,850.00 -> 1,883.30    (+33.30)
+company closing stock       5,100.00 -> 5,133.30    (+33.30)
+Balance Sheet as_on 2026-04-30 carries 5133.3000, balanced = true
+```
+
+The OUT leg consumes the **oldest layer** — 10 @ 120.00 = **1,200.00** — while the IN leg carries the
+goods into `Second Store` at the keyed **123.33** = **1,233.30**. The difference is created out of
+nothing by a document that says *"Each line posts as a PAIR (out of From, into To), so the company's
+total holding is unchanged."* **Quantity IS unchanged**, so no quantity check anywhere can see it, and
+closing stock feeds the **Balance Sheet** — which moves with it and still balances.
+
+⭐ **TWO CONTROLS MAKE IT ATTRIBUTABLE, AND THEY ARE THE REASON THIS IS A LOCATED DEFECT RATHER THAN A
+SUSPICION.**
+
+1. **The weighted-average arm, keyed identically, conserves exactly.** `Avg Widget`, same 10 units,
+   rate read off the screen (**110.00**), Main → Second: closing value **1,650.00 → 1,650.00**, company
+   total **5,100.00 → 5,100.00**. So the fault is not "transfers".
+2. **A SINGLE-LAYER FIFO transfer, keyed identically, also conserves exactly.** After the arm above,
+   `Main` holds one layer (5.0000 @ 130.00). Transferring 5 at the offered 130.00 gives
+   **1,883.30 → 1,883.30**. So the fault is not "FIFO" either.
+
+⛔ **THE FAULT IS THE RATE THE PRODUCT OFFERS.** The only rate on any screen is the position's
+**blended `closing_value / closing_qty`**, which stops being the consumption rate the instant a lot
+queue holds more than one layer. A conserving rate does exist in principle — the FIFO consumption cost
+divided by the quantity, **120.00** in this case — but **nothing in the product derives it, shows it,
+or defaults it**, so the operator cannot key it.
+
+⚠️ **THIS IS LEAD 2's FAMILY, AND THE 2026-08-07 FIX WAS COMPLETE FOR THE WORLD IT WAS WRITTEN IN.**
+That fix forced a **non-zero** inward rate (`nonaccounting.go`, and the mirror in `stockVoucher.ts`).
+Under weighted average the displayed rate **is** the consumption rate, so keying it conserved exactly —
+and every comment in both files reasons in those terms ("the OUT leg removes them at the position's
+running **weighted-average** cost"). `0078` made that premise false for two of the three methods and
+nothing downstream of it was revisited. **Direction is not fixed either**: a queue whose oldest layer
+is dearer than the blend destroys value on the same keystrokes.
+
+⛔ **THE FIX IS IN `backend/internal/ledger/nonaccounting.go` (and/or the rate the Stock Journal screen
+offers), WHICH IS OUTSIDE THIS LANE'S FILE SET.** Measured, both arms, not fixed here.
+**Reported to the orchestrator for registration; §7.1 is deliberately untouched by this lane.**
+
+##### ⚠️ AND ONE COPY DEFECT BESIDE IT, LOW
+
+The Physical Stock surplus refusal names **"the item's weighted-average value"** — on a `LIFO` item:
+
+```
+ledger: physical count line 1 (Lifo Widget): the count is 2.0000 above the books, and bringing a
+surplus in at zero cost would write the item's weighted-average value down; state the rate the extra
+units are carried at
+```
+
+The **rule is right on all three methods** and the refusal is correct; only its reason names one.
+`nonaccounting.go:446`. Same file, same lane boundary — reported, not edited. The drive asserts the
+correct copy so this goes green on the run that fixes it.
+
+#### TWO MORE THINGS MEASURED AND WORTH WRITING DOWN
+
+⚠️ **THERE IS NO KEYBOARD ROUTE TO A GODOWN MASTER.** `MASTER_GOTO_ENTRIES` (`navMachine.ts`) lists
+five master kinds — ledger, group, stock item, stock group, unit — plus currency. **A godown is not
+one of them**, so the second location this drive needed had to be minted over HTTP. Row 22 ("Godowns /
+stock locations and batches") says *"more can be created"*, which is true of the API and not of the
+keyboard. Not registered; reported.
+
+⭐ **THE `403` ON THE FIRST WRITE OF EVERY RUN IS THE STEP-UP CEREMONY, NOT A FAILURE.** The wire log
+opens `POST /units 403` → `webauthn/register/begin` → `register/finish` → `assert/*` → `POST /units
+201`. Recorded because the harness's own header warns that LEAD 1's defect class only reproduces on
+the first write of a session, and a reader of this log should not go hunting for a permission bug.

@@ -484,6 +484,12 @@ func buildTranslator() query.Translator {
 //     /auth/login are not mounted and WebAuthn assert/finish 501s (the IdP does
 //     step-up). AUTH_ISSUER is REQUIRED alongside it — an unpinned issuer would
 //     accept tokens from any realm/client sharing the IdP's signing key.
+//     AUTH_AUDIENCE is REQUIRED alongside it too, and it is NOT redundant with
+//     the issuer: `iss` identifies the REALM, and every client in a realm mints
+//     tokens carrying the same `iss`, so the issuer pin cannot distinguish a
+//     token minted FOR cored from one a user obtained for any other application
+//     in that realm. Set it to the OIDC client/audience cored's tokens are
+//     minted for; the token's `aud` must contain it. (D102.)
 //     STARTUP BEHAVIOUR CHANGE (WS6): the JWKS is fetched ONCE here, with a 5s
 //     timeout, and a failure is a HARD BOOT FAILURE. An operator whose IdP is
 //     briefly unreachable now gets a refusal to start instead of a process that
@@ -503,7 +509,15 @@ func buildAuth() (authn.TokenVerifier, *authn.Signer, error) {
 		if issuer == "" {
 			return nil, nil, errors.New("server: AUTH_JWKS_URL is set but AUTH_ISSUER is empty; without a pinned issuer the JWKS verifier would accept tokens from any realm sharing the signing key. Refusing to start fail-open")
 		}
-		verifier := authn.NewJWKSVerifier(jwksURL, issuer)
+		// ⚠️ ORDER MATTERS: the AUTH_ISSUER guard above stays FIRST. An operator
+		// who has set neither should be told about the issuer first (it is the
+		// coarser pin), and the boot-matrix test that asserts the AUTH_ISSUER
+		// message would otherwise start matching this branch instead.
+		audience := os.Getenv("AUTH_AUDIENCE")
+		if audience == "" {
+			return nil, nil, errors.New("server: AUTH_JWKS_URL is set but AUTH_AUDIENCE is empty; the issuer pin scopes acceptance to one REALM, and every client in a realm mints tokens carrying the same iss, so without a pinned audience a token a user obtained for ANY OTHER application in that realm authenticates here as that subject. Set AUTH_AUDIENCE to the OIDC client/audience cored's tokens are minted for. Refusing to start fail-open")
+		}
+		verifier := authn.NewJWKSVerifier(jwksURL, issuer, audience)
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := verifier.Refresh(ctx); err != nil {
@@ -527,7 +541,9 @@ func buildAuth() (authn.TokenVerifier, *authn.Signer, error) {
 // matching StaticKeyVerifier (issuer "cored-dev", kid "cored-dev-ed25519")
 // verifies tokens this signer mints.
 //
-// Production swap (SHIPPED as of WS6): set AUTH_JWKS_URL + AUTH_ISSUER and
+// Production swap (SHIPPED as of WS6): set AUTH_JWKS_URL + AUTH_ISSUER +
+// AUTH_AUDIENCE (all three REQUIRED — buildAuth refuses to boot without any of
+// them; the audience pin is D102) and
 // buildAuth uses authn.JWKSVerifier instead of this pair — it fetches the IdP's
 // JWKS (ES256/EdDSA only, symmetric keys never admitted) over the network, so
 // this package DOES make outbound requests in production mode. This dev issuer

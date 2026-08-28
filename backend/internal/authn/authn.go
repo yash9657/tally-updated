@@ -15,6 +15,7 @@
 package authn
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -32,6 +33,64 @@ import (
 	"time"
 )
 
+// Audience is the `aud` claim, which RFC 7519 §4.1.3 defines with TWO wire
+// shapes: an array of strings, OR — "in the special case when the JWT has one
+// audience" — a single bare string. Both are legal and both occur in the wild,
+// so this type accepts both and normalises to a slice.
+//
+// ⛔ WHY THIS TYPE EXISTS AT ALL — the whole point of D102. Binding `aud` as a
+// plain `string` compiles, passes a hand-written round-trip test, and then
+// SILENTLY FAILS OPEN against a real IdP: Keycloak emits the ARRAY form
+// (`"aud":["account","cored"]`), encoding/json cannot unmarshal an array into a
+// string, StaticKeyVerifier wraps that as ErrMalformedToken... or, worse, if the
+// error were ever swallowed, the field is left EMPTY and an emptiness-skipping
+// audience check passes vacuously for every token. A security check that is
+// skipped whenever the claim is present in its most common form is not a check.
+// The dual-form parse is therefore load-bearing, not pedantry.
+type Audience []string
+
+// UnmarshalJSON accepts both RFC 7519 forms. A JSON null (or an absent claim)
+// leaves the audience nil, which Contains treats as "matches nothing" — the
+// fail-closed direction, and the reason a token with no aud at all is rejected
+// whenever an audience is configured without any extra code.
+func (a *Audience) UnmarshalJSON(data []byte) error {
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		*a = nil
+		return nil
+	}
+	// The single-string form first: it is the cheaper probe and the one a
+	// string-typed field would have handled, so trying it first keeps the common
+	// dev-shaped token on the fast path.
+	var single string
+	if err := json.Unmarshal(data, &single); err == nil {
+		*a = Audience{single}
+		return nil
+	}
+	var many []string
+	if err := json.Unmarshal(data, &many); err != nil {
+		// ⚠️ A weird IdP emitting `"aud":42` or `"aud":{...}` surfaces to the
+		// caller as ErrMalformedToken, NOT ErrBadAudience — StaticKeyVerifier
+		// wraps every payload-unmarshal failure with that sentinel and discards
+		// this message. The outcome is still REJECTION, and it happens after the
+		// signature check, so there is no unauthenticated-parse amplification.
+		return fmt.Errorf("authn: aud claim is neither a string nor an array of strings: %w", err)
+	}
+	*a = Audience(many)
+	return nil
+}
+
+// Contains reports whether want appears in the audience. Plain == is correct
+// here: `aud` is a public identifier, not a secret, so unlike ConstantTimeEqual
+// below there is nothing for a timing side channel to leak.
+func (a Audience) Contains(want string) bool {
+	for _, got := range a {
+		if got == want {
+			return true
+		}
+	}
+	return false
+}
+
 // Claims is the verified identity carried by a token. It is the only thing
 // downstream authz code trusts about the caller.
 type Claims struct {
@@ -40,6 +99,7 @@ type Claims struct {
 	Companies []string `json:"companies,omitempty"` // optional hint; NOT authoritative
 	AMR       []string `json:"amr,omitempty"`       // contains "webauthn" after step-up
 	Issuer    string   `json:"iss"`
+	Audience  Audience `json:"aud,omitempty"` // see StaticKeyVerifier.Audience
 	ExpiresAt int64    `json:"exp"`
 	IssuedAt  int64    `json:"iat"`
 	ID        string   `json:"jti,omitempty"`
@@ -73,6 +133,12 @@ var (
 	ErrExpired        = errors.New("authn: token expired")
 	ErrNotYetValid    = errors.New("authn: token not yet valid (iat in future)")
 	ErrBadIssuer      = errors.New("authn: unexpected issuer")
+	// ErrBadAudience rejects a token minted for a DIFFERENT application. It is a
+	// distinct sentinel from ErrBadIssuer on purpose: the two failures have
+	// different operator remedies (wrong realm vs. wrong client), and an
+	// authentication log that cannot tell them apart cannot tell a
+	// misconfiguration from a cross-client replay attempt.
+	ErrBadAudience = errors.New("authn: token audience does not include this application")
 )
 
 // TokenVerifier verifies a compact JWS and returns its claims.
@@ -108,6 +174,15 @@ type StaticKeyVerifier struct {
 	Keys map[string]crypto.PublicKey
 	// Issuer, when non-empty, must equal the token's iss claim.
 	Issuer string
+	// Audience, when non-empty, must appear in the token's aud claim.
+	//
+	// ⭐ THE EMPTY CASE IS THE SEAM THAT KEEPS THE DEV PATH ALIVE: devIssuer and
+	// NewTestIssuer build verifiers through NewStaticKeyVerifier, which leaves
+	// this at its zero value, so the check below is never entered and the
+	// hermetic dev issuer / /auth/token / /auth/login keep working unchanged.
+	// Production does NOT get to inherit that leniency: server.buildAuth refuses
+	// to boot in JWKS mode unless AUTH_AUDIENCE is set.
+	Audience string
 	// Now is overridable for deterministic tests; defaults to time.Now.
 	Now func() time.Time
 }
@@ -176,6 +251,16 @@ func (v *StaticKeyVerifier) Verify(_ contextLike, rawJWT string) (*Claims, error
 
 	if v.Issuer != "" && claims.Issuer != v.Issuer {
 		return nil, fmt.Errorf("%w: got %q want %q", ErrBadIssuer, claims.Issuer, v.Issuer)
+	}
+	// ⭐ The audience check sits DIRECTLY BESIDE the issuer check because it is
+	// the other half of the same question. `iss` narrows acceptance to one REALM;
+	// every client in that realm mints tokens carrying the SAME iss, so the
+	// issuer pin alone cannot tell "a token for cored" from "a token this user
+	// legitimately obtained for some other app in the same realm" — and the
+	// latter would authenticate here as that subject. `aud` is what narrows
+	// acceptance to THIS APPLICATION.
+	if v.Audience != "" && !claims.Audience.Contains(v.Audience) {
+		return nil, fmt.Errorf("%w: token aud %v does not include %q", ErrBadAudience, []string(claims.Audience), v.Audience)
 	}
 	now := v.now()
 	if claims.ExpiresAt != 0 && now.After(time.Unix(claims.ExpiresAt, 0).Add(allowedSkew)) {
