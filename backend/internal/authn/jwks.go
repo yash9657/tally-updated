@@ -28,11 +28,25 @@
 //     when AUTH_ISSUER is empty), so a token minted by a DIFFERENT realm that
 //     happens to share the signing key cannot be replayed here.
 //
-// KNOWN GAP (deliberate, v1): the `aud` claim is NOT checked — Claims does not
-// even parse it. Pinning `iss` scopes acceptance to one realm, but every CLIENT
-// inside that realm issues tokens with the same `iss`, so any such token is
-// accepted by cored. Deploy cored's realm with only trusted clients until an
-// AUTH_AUDIENCE check lands (tracked in HANDOFF §6).
+// KNOWN GAP (deliberate, v1) — REGISTERED AS D102 (HANDOFF-PARITY-AUDIT.md §7.1),
+// 2026-08-27: the `aud` claim is NOT checked — Claims does not even parse it.
+// Pinning `iss` scopes acceptance to one realm, but every CLIENT inside that
+// realm issues tokens with the same `iss`, so any such token is accepted by
+// cored. Deploy cored's realm with only trusted clients until an AUTH_AUDIENCE
+// check lands.
+//
+// ⚠️ THAT LAST SENTENCE IS A DEPLOYMENT CONSTRAINT AND IT LIVES HERE, WHERE NO
+// OPERATOR WILL READ IT. The production recipe operators are actually handed
+// (docs/SESSION_HANDOFF_WAVE2.md) sets AUTH_JWKS_URL + AUTH_ISSUER and says
+// nothing about the realm needing to be single-tenant, and nothing warns at
+// boot. Whoever lands the audience check must move the constraint into that
+// recipe; D102 carries the reasoning and the shape of the fix, including why
+// `aud` must NOT be bound as a plain string (RFC 7519 permits an array, and
+// that is the form Keycloak emits).
+//
+// (This note previously pointed at "HANDOFF §6" — a dangling reference: §6 of
+// HANDOFF.md is the migration-numbering section and has never mentioned the
+// audience claim. Corrected when D102 was registered.)
 //
 // PRODUCTION SHAPE: when AUTH_JWKS_URL is set there is NO in-process signer, so
 // the dev endpoints POST /auth/token and POST /auth/login are NOT mounted
