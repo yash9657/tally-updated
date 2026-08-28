@@ -413,6 +413,23 @@ pins it, and the pure B-1 test deliberately does not catch it.
 3. **No printed layout** for the matching screen.
 4. **F5's amount-view toggle stays refused** — §6 says it is a display toggle and not matching, and
    flipping it would also re-open the hazard that the global F5 opens a Payment voucher.
-5. **The date window is a SEARCH WIDTH, not a cited rule.** No authority says how late a cheque may
-   clear, so the build does not pretend one does: the number is stated on screen, adjustable, and
+5. **The date window is a SEARCH WIDTH, not a statutory rule** — stated on screen, adjustable, and
    safe to choose precisely because widening it cannot clear anything.
+
+   ⛔ **CORRECTED 2026-08-28, HOURS AFTER THE TRACK SHIPPED: THE DEFAULT WAS 7 AND 7 WAS INVENTED.**
+   The constant's own comment said *"no authority anywhere says how late a cheque may clear"* and
+   then chose a number regardless, justifying it as *"a cheque written on a Friday and cleared after
+   a weekend and a bank holiday"*. That is reasoning from nothing dressed as reasoning from
+   something, and it survived review precisely because the sentence admitting the invention sat
+   directly above it — the admission read as diligence.
+
+   ⭐ **The default is now 30, which is TALLY'S OWN DOCUMENTED DEFAULT** for this exact parameter:
+   TallyPrime's auto bank reconciliation exposes it as **"Find Potential Matches within"**, states
+   *"the default number of days set is 30 days"*, and treats 0 as "the dates must be identical"
+   (`help.tallysolutions.com/auto-bank-reconciliation/`, read 2026-08-28).
+
+   ⚠️ **THAT IS A PARITY CITATION AND NOT A STATUTORY ONE.** A vendor help page is good evidence
+   about what Tally does — which is what this product is measured against — and is worth nothing as
+   evidence about what a law requires. `docs/statutory/README.md`'s rule ("the notified form, the
+   gazette text… **Not** blog articles, and not summaries") governs rates and is untouched by this.
+   The two kinds of source must never be filed in the same drawer.

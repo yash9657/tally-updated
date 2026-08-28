@@ -83,18 +83,34 @@ const (
 // DefaultDateWindowDays is how far apart a bank row and a voucher may be dated
 // and still be considered the same transaction.
 //
-// ⚠️ IT IS A SEARCH WIDTH, NOT A CITED RULE, AND THE DIFFERENCE IS STATED
-// RATHER THAN BURIED. HANDOFF-FEATURE-LOCK.md §1.1 forbids inventing a rate, a
-// threshold or a clause letter and passing it off as a fact; no authority
-// anywhere says how late a cheque may clear, so this build does not pretend one
-// does. What makes the number safe to choose is that widening or narrowing it
-// CANNOT CLEAR ANYTHING — it only changes how many proposals a human is shown,
-// and every proposal still waits for that human. The screen states the window
-// it used and lets the operator change it.
+// ⚠️ IT IS A SEARCH WIDTH, NOT A STATUTORY RULE, AND THE DIFFERENCE IS STATED
+// RATHER THAN BURIED. No authority anywhere says how late a cheque may clear, so
+// this build does not pretend one does. What makes the number safe to choose at
+// all is that widening or narrowing it CANNOT CLEAR ANYTHING — it only changes
+// how many proposals a human is shown, and every proposal still waits for that
+// human. The screen states the window it used and lets the operator change it.
 //
-// Seven days covers a cheque written on a Friday and cleared after a weekend and
-// a bank holiday, which is the shape the window exists for.
-const DefaultDateWindowDays = 7
+// ⛔ IT WAS 7, AND 7 WAS INVENTED. The comment that stood here said "no authority
+// anywhere says how late a cheque may clear" and then chose a number anyway,
+// justifying it as "a cheque written on a Friday and cleared after a weekend and
+// a bank holiday". That is reasoning from nothing dressed as reasoning from
+// something — the soft version of the mistake HANDOFF-FEATURE-LOCK.md §1.1
+// forbids, and it survived review because the sentence admitting the invention
+// sat directly above it.
+//
+// ⭐ 30 IS TALLY'S OWN DOCUMENTED DEFAULT, and for a Tally-parity product that IS
+// a citation. TallyPrime's auto bank reconciliation exposes this exact parameter
+// under the label "Find Potential Matches within", with "the default number of
+// days set is 30 days", and 0 meaning the dates must be identical
+// (help.tallysolutions.com/auto-bank-reconciliation/, read 2026-08-28).
+//
+// ⚠️ THAT IS A PARITY CITATION, NOT A STATUTORY ONE, and the two must not be
+// confused. A vendor's help page is evidence about what Tally does — which is
+// what this product is measured against — and is worth nothing at all as
+// evidence about what a law requires. docs/statutory/README.md's rule ("the
+// notified form, the gazette text... Not blog articles, and not summaries")
+// governs rates and is untouched by this.
+const DefaultDateWindowDays = 30
 
 // maxPartialCombination bounds the subset search for a part payment.
 //

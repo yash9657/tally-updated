@@ -218,7 +218,7 @@ function matches(over: Partial<BankMatchesResponse> = {}): BankMatchesResponse {
     ledger_name: "HDFC Bank",
     from: "",
     to: "",
-    date_window_days: 7,
+    date_window_days: 30,
     proposals,
     unmatched_legs: [],
     resolved: [],
@@ -505,19 +505,24 @@ describe("the exception report and the basis of values", () => {
     // search width, and saying so is what keeps it from becoming an invented
     // threshold — HANDOFF-FEATURE-LOCK.md §1.1.
     expect(panel.textContent).toContain("search width");
-    expect(panel.textContent).toContain("7 days");
+    // ⭐ 30 IS TALLY'S OWN DOCUMENTED DEFAULT for this exact parameter ("Find
+    // Potential Matches within"). It replaced an invented 7 on 2026-08-28.
+    expect(panel.textContent).toContain("30 days");
   });
 
   it("renders the window the SERVER used, not a constant of its own", async () => {
     const h = await openPanel({
-      bankStatementMatches: async () => matches({ date_window_days: 30 }),
+      bankStatementMatches: async () => matches({ date_window_days: 45 }),
     } as Partial<CoredClient>);
     await h.fire("bankBasisOfValues");
     const panel = await screen.findByTestId("match-basis");
     // ⛔ A PANEL THAT PRINTED ITS OWN DEFAULT would state one window while the
     // proposals were computed under another, and every row would look right.
-    expect(panel.textContent).toContain("30 days");
-    expect(panel.textContent).not.toContain("7 days");
+    // ⚠️ 45 IS DELIBERATELY NOT THE DEFAULT. When the default was 7 this test
+    // contrasted against 30 — which then BECAME the default, at which point the
+    // contrast would have proved nothing.
+    expect(panel.textContent).toContain("45 days");
+    expect(panel.textContent).not.toContain("30 days");
   });
 });
 

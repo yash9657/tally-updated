@@ -1840,7 +1840,9 @@ function mockParseDate(raw: string, layout: string): string {
 //   * NO STRONG-KEY TIER. The server promotes a match to `exact` when a cheque
 //     number or UTR appears on the voucher. This looks only at amount, direction
 //     and date.
-//   * THE WINDOW IS FIXED AT 7. The server takes it as a parameter.
+//   * THE WINDOW IS FIXED. The server takes it as a parameter; this uses the
+//     same default (30 — Tally's own documented "Find Potential Matches within"
+//     default) so a screen test never pins a number the server would not send.
 //
 // ⭐ WHAT IT DOES REPRODUCE FAITHFULLY IS THE PART A SCREEN CAN GET WRONG:
 // amounts compared to the PAISE with zero tolerance, direction compared
@@ -1849,7 +1851,7 @@ function mockParseDate(raw: string, layout: string): string {
 // the whole slice exists to honour, and a screen that mis-renders it is the
 // failure that matters.
 // ---------------------------------------------------------------------------
-const MOCK_MATCH_WINDOW_DAYS = 7;
+const MOCK_MATCH_WINDOW_DAYS = 30;
 
 function mockDaysApart(a: string, b: string): number {
   const ms = Date.parse(a + "T00:00:00Z") - Date.parse(b + "T00:00:00Z");
