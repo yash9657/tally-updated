@@ -3148,7 +3148,7 @@ a customer tries it.
 | **T15** | Export | ⚠️ Money is fixed-4 on the wire and Excel will happily eat it as a float. Emit text, not numbers, or a CSV round trip loses paisa |
 | **T16** | Per-company print templates | 0065 / 0066 reserved |
 
-### 5.5 ⛔ THE AUDIT — ✅ **COMPLETE: 34 ROWS + THE SEVEN ADDED SINCE.** ⚠️ THE REGISTER RE-OPENED 2026-08-27 AT **3**
+### 5.5 ⛔ THE AUDIT — ✅ **COMPLETE: 34 ROWS + THE SEVEN ADDED SINCE.** ⚠️ THE REGISTER RE-OPENED 2026-08-27 AT **4**
 
 > ## ⭐⭐ CORRECTED 2026-08-27. THIS SECTION SAID "15 of 34 DRIVEN" FOR THREE WEEKS AFTER IT STOPPED BEING TRUE.
 >
@@ -3157,14 +3157,16 @@ a customer tries it.
 > `HANDOFF-PARITY-AUDIT.md` §7.1's rows — that file's own rule, *never read the header* —
 > they were **97 REGISTERED · 97 CLOSED · 0 OPEN** on 2026-08-24.
 >
-> ⭐ **AND THE REGISTER RE-OPENED ON 2026-08-27, DELIBERATELY: `100 · 97 · 3`.** The U1 lane drove the
+> ⭐ **AND THE REGISTER RE-OPENED ON 2026-08-27, DELIBERATELY: `101 · 97 · 4`.** The U1 lane drove the
 > Tally importer's REFUSAL path — which nothing in this repository ever had, because every fixture in
 > `corpora/migration/` parses — and registered **D98** (a refused import is not atomic, says nothing
 > about the vouchers it already committed, and double-posts them on the operator's natural recovery
 > when the export carries no GUIDs), **D99** (the money readers refuse comma-grouped numbers while
 > the quantity reader strips them on purpose — premise refuted by a real export the same day and
 > lowered to LOW) and **D100** (the abort's own stated "correct fix" cannot be performed with a real
-> TallyPrime All Masters export, which carries no STOCKITEM at all). ⛔ **All three are OPEN BY
+> TallyPrime All Masters export, which carries no STOCKITEM at all) and **D101** (a voucher marked
+> CANCELLED or OPTIONAL in Tally — money the source books exclude — is posted as a live entry, with
+> no warning; found by diffing a real export against the parser tag by tag). ⛔ **All four are OPEN BY
 > CHOICE** — registering is what a driving lane owes; repairing is a separate decision. D98 needs the
 > atomicity question answered against the immutable ledger path first, and D100 needs a Tally
 > export-options question answered before anyone writes a line.
@@ -3179,7 +3181,7 @@ a customer tries it.
 > rename of audited rows. Of the seven genuinely new ones, **SIX ARE CLEAN and ONE IS LYING**:
 > `Alt+Q` outbox (23/23), `Alt+R` reconciliation (32/32), `Alt+Y` backup/restore (10/10),
 > per-company print templates (33/33), `Alt+M` e-mail (20/20) and the honest `off` split-company row
-> all tell the truth; **`Alt+O` Migrate from Tally does not**, and carries D98, D99 and D100.
+> all tell the truth; **`Alt+O` Migrate from Tally does not**, and carries D98, D99, D100 and D101.
 >
 > ⚠️ **THE PREMISE OF THAT LANE'S OWN HANDOFF WAS PARTLY WRONG, AND IT IS WORTH KNOWING WHY.** It said
 > none of the seven had ever been driven; in fact **every one shipped with a browser drive beside it**

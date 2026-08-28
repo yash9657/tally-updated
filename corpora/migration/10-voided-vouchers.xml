@@ -1,0 +1,101 @@
+<ENVELOPE>
+  <HEADER>
+    <VERSION>1</VERSION>
+    <TALLYREQUEST>Import</TALLYREQUEST>
+    <TYPE>Data</TYPE>
+    <ID>Vouchers</ID>
+  </HEADER>
+  <BODY>
+    <DESC>
+      <STATICVARIABLES>
+        <SVCURRENTCOMPANY>Voided Voucher Traders</SVCURRENTCOMPANY>
+      </STATICVARIABLES>
+    </DESC>
+    <DATA>
+      <!-- ⭐ THE CONTROL: an ordinary voucher, so "nothing imported" cannot be
+           mistaken for "the voided ones were skipped". -->
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <VOUCHER VCHTYPE="Receipt" ACTION="Create">
+          <GUID>voided-0001</GUID>
+          <DATE>20260401</DATE>
+          <VOUCHERTYPENAME>Receipt</VOUCHERTYPENAME>
+          <VOUCHERNUMBER>1</VOUCHERNUMBER>
+          <NARRATION>ZZLIVEVOUCHER capital introduced</NARRATION>
+          <ISCANCELLED>No</ISCANCELLED>
+          <ISOPTIONAL>No</ISOPTIONAL>
+          <ISDELETED>No</ISDELETED>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Cash</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+            <AMOUNT>-50000.00</AMOUNT>
+          </LEDGERENTRIES.LIST>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Capital</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+            <AMOUNT>50000.00</AMOUNT>
+          </LEDGERENTRIES.LIST>
+        </VOUCHER>
+      </TALLYMESSAGE>
+      <!-- ⛔ CANCELLED IN TALLY: the number is retained, the voucher has NO
+           effect on the books. It is a VOID, not an entry. -->
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <VOUCHER VCHTYPE="Sales" ACTION="Create">
+          <GUID>voided-0002</GUID>
+          <DATE>20260402</DATE>
+          <VOUCHERTYPENAME>Sales</VOUCHERTYPENAME>
+          <VOUCHERNUMBER>1</VOUCHERNUMBER>
+          <NARRATION>ZZCANCELLEDVOUCHER this sale was voided in Tally</NARRATION>
+          <ISCANCELLED>Yes</ISCANCELLED>
+          <ISOPTIONAL>No</ISOPTIONAL>
+          <ISDELETED>No</ISDELETED>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Cash</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+            <AMOUNT>-30000.00</AMOUNT>
+          </LEDGERENTRIES.LIST>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Sales</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+            <AMOUNT>30000.00</AMOUNT>
+          </LEDGERENTRIES.LIST>
+        </VOUCHER>
+      </TALLYMESSAGE>
+      <!-- ⛔ OPTIONAL IN TALLY (Ctrl+L, RESEARCH.md:2173): a provisional entry
+           that is deliberately EXCLUDED from the books. RESEARCH.md:2225 records
+           that only Cash Flow's "Include Scenarios" pulls them in. -->
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <VOUCHER VCHTYPE="Journal" ACTION="Create">
+          <GUID>voided-0003</GUID>
+          <DATE>20260403</DATE>
+          <VOUCHERTYPENAME>Journal</VOUCHERTYPENAME>
+          <VOUCHERNUMBER>1</VOUCHERNUMBER>
+          <NARRATION>ZZOPTIONALVOUCHER provisional, not in the books</NARRATION>
+          <ISCANCELLED>No</ISCANCELLED>
+          <ISOPTIONAL>Yes</ISOPTIONAL>
+          <ISDELETED>No</ISDELETED>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Rent</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+            <AMOUNT>-8000.00</AMOUNT>
+          </LEDGERENTRIES.LIST>
+          <LEDGERENTRIES.LIST>
+            <LEDGERNAME>Cash</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+            <AMOUNT>8000.00</AMOUNT>
+          </LEDGERENTRIES.LIST>
+        </VOUCHER>
+      </TALLYMESSAGE>
+      <!-- ⛔ AND A DELETED LEDGER MASTER. `Deleted()` is honoured on stock
+           groups, units, godowns, stock items and ACCOUNT GROUPS — but
+           TallyLedgerMaster binds no ISDELETED at all. -->
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <LEDGER NAME="ZZDELETEDLEDGER" RESERVEDNAME="">
+          <NAME>ZZDELETEDLEDGER</NAME>
+          <PARENT>Sundry Debtors</PARENT>
+          <ISDELETED>Yes</ISDELETED>
+          <OPENINGBALANCE>1234.00</OPENINGBALANCE>
+        </LEDGER>
+      </TALLYMESSAGE>
+    </DATA>
+  </BODY>
+</ENVELOPE>
