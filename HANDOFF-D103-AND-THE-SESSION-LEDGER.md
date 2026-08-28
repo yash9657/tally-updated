@@ -1,6 +1,6 @@
 # HANDOFF — D103, AND EVERYTHING THIS SESSION DID
 
-**Written:** 2026-08-27/28, from `c9b2ded` to `87eb9da` · **Branch:** `session/t32-and-close-7-3`
+**Written:** 2026-08-27/28, from `c9b2ded` to `9412f57` · **Branch:** `session/t32-and-close-7-3`
 **Read time: 10 minutes.** ⭐ **Every number below was MEASURED and the command is beside it.**
 
 ⛔ **THIS FILE SUPERSEDES `HANDOFF-NEXT-UNBLOCKED.md`**, which was written earlier in this same
@@ -15,11 +15,11 @@ nearly let an inert fix ship green.** The register stands at **105 · 103 · 2**
 
 ---
 
-## 1. ⭐ WHAT THIS SESSION DID — EIGHT COMMITS, `c9b2ded` → `87eb9da`
+## 1. ⭐ WHAT THIS SESSION DID — 11 COMMITS, `c9b2ded` → `9412f57`
 
 ```bash
-git log --oneline c9b2ded..HEAD          # 8 commits
-git diff --stat c9b2ded..HEAD | tail -1  # -> 27 files changed, 3508 insertions(+), 129 deletions(-)
+git log --oneline c9b2ded..HEAD          # 11 commits
+git diff --stat c9b2ded..HEAD | tail -1  # -> 38 files changed, 5399 insertions(+), 286 deletions(-)
 ```
 
 | Commit | What |
@@ -32,13 +32,17 @@ git diff --stat c9b2ded..HEAD | tail -1  # -> 27 files changed, 3508 insertions(
 | `c091af7` | `HANDOFF-NEXT-UNBLOCKED.md` (⛔ **now superseded by this file**) |
 | `fc7b9d9` | **Migration numbers reserved** — 0085–0087, with a deliberate gap for the T8 lane |
 | `87eb9da` | **D102 FIXED · T13 design note · L28 re-audit → D103/D104/D105 registered** |
+| `d8fe4e4` | **This file** — and `HANDOFF-NEXT-UNBLOCKED.md` removed rather than left to rot |
+| `cfd46c3` | ⭐ **D103 + D104 FIXED** — a stock journal conserves value again, on every costing method |
+| `9412f57` | §2.6 rewritten with the outcome and the four mutations |
 
-**Defect register moved `102 · 100 · 2` → `105 · 101 · 4`.**
+**Defect register moved `102 · 100 · 2` → `105 · 103 · 2`** — five rows registered and seven closed,
+so it both grew and shrank.
 
 ```bash
 python3 docs/parse-defect-register.py HANDOFF-PARITY-AUDIT.md
-# -> 105 REGISTERED · 97 CLOSED · 4 OPEN · 0 PARTIAL · 4 UNREADABLE
-#    OPEN: D99, D103, D104, D105     (97 parsed + 4 unreadable-but-closed = 101 closed)
+# -> 105 REGISTERED · 99 CLOSED · 2 OPEN · 0 PARTIAL · 4 UNREADABLE
+#    OPEN: D99, D105                (99 parsed + 4 unreadable-but-closed = 103 closed)
 ```
 
 ⭐⭐ **THE COMMERCIAL BLOCKER IS GONE.** `HANDOFF.md` §10 item 1 called the Tally import path the
