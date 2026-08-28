@@ -31,14 +31,22 @@
  *      a sale of RICE cannot issue goods that are not there. The message names
  *      two ways forward and refuses to choose.
  *
- *   3. ⛔⛔ AND REMEDY (1) — "import a Masters.xml carrying the items with their
- *      opening balances FIRST" — **IS NOT AVAILABLE TO THIS OPERATOR.** Their
- *      `Master.xml` IS the "All Masters" export (its own REPORTNAME says so) and
- *      it contains **zero STOCKITEM, zero UNIT, zero GODOWN, zero STOCKGROUP** —
- *      measured by counting the TALLYMESSAGE children: LEDGER 3706, GROUP 37,
- *      CURRENCY 2, COMPANY 1, and nothing else. So the only door actually open
- *      is remedy (2), which the message itself says understates the cost of
- *      goods sold. That is registered as **D100**.
+ *   3. ⛔ AND REMEDY (1) — "import a Masters.xml carrying the items with their
+ *      opening balances FIRST" — **CANNOT BE FOLLOWED WITH THE FILE THE OPERATOR
+ *      WAS TOLD TO PRODUCE.** Their `Master.xml` contains **zero STOCKITEM, zero
+ *      UNIT, zero GODOWN, zero STOCKGROUP** — measured by counting the
+ *      TALLYMESSAGE children: LEDGER 3706, GROUP 37, CURRENCY 2, COMPANY 1, and
+ *      nothing else — while the transactions name 6 stock items, 1 godown and 75
+ *      batches, so those masters plainly EXIST in the source company. So the
+ *      only door open to them is remedy (2), which the message itself says
+ *      understates the cost of goods sold. That is **D100**.
+ *
+ *      ⚠️ AND DO NOT READ `<REPORTNAME>` TO IDENTIFY WHAT A FILE HOLDS. Both of
+ *      these files say `<REPORTNAME>All Masters</REPORTNAME>` — including
+ *      `Transactions.xml`, which carries 121 VOUCHERs and ZERO ledgers. The tag
+ *      is vestigial in a TallyPrime export. An earlier draft of D100 cited it as
+ *      evidence that this was the All Masters export; it is not evidence of
+ *      anything. **Count the TALLYMESSAGE children instead.**
  *
  *   4. With `allow_negative_stock` ON: 121 vouchers posted, 226 stock lines,
  *      **0 warnings**, 72 ledgers the masters export did not contain, 4 stock
@@ -307,7 +315,7 @@ try {
   rec(
     "⚠️ 72 ledgers the MASTERS export did not contain were created by the transactions",
     /Ledgers touched \(72\)/.test(await text("tally-import-ledgers")),
-    `${(await text("tally-import-ledgers")).slice(0, 100)} — an "All Masters" export that does ` +
+    `${(await text("tally-import-ledgers")).slice(0, 100)} — a masters export that does ` +
       `not name every ledger its own vouchers post to`,
   );
 

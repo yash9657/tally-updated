@@ -3164,7 +3164,8 @@ a customer tries it.
 > when the export carries no GUIDs), **D99** (the money readers refuse comma-grouped numbers while
 > the quantity reader strips them on purpose — premise refuted by a real export the same day and
 > lowered to LOW) and **D100** (the abort's own stated "correct fix" cannot be performed with a real
-> TallyPrime All Masters export, which carries no STOCKITEM at all) and **D101** (a voucher marked
+> TallyPrime masters export as the screen instructs — settled the same day as a DOCUMENTATION defect,
+> because TallyPrime's Type of Master dropdown does offer Inventory/All Masters) and **D101** (a voucher marked
 > CANCELLED or OPTIONAL in Tally — money the source books exclude — is posted as a live entry, with
 > no warning; found by diffing a real export against the parser tag by tag). ⛔ **All four are OPEN BY
 > CHOICE** — registering is what a driving lane owes; repairing is a separate decision. D98 needs the
