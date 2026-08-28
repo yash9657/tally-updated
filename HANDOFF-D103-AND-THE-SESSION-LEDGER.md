@@ -8,9 +8,10 @@ session and is already partly stale (it lists D102 as open and knows nothing of 
 still live in it has been folded in here. **`git rm HANDOFF-NEXT-UNBLOCKED.md`** — the handoff count
 stays at 28 rather than growing to 29.
 
-⛔ **THE ONE THING TO READ IF YOU READ NOTHING ELSE:** **§2 — D103.** A stock journal between the
-company's own godowns **creates value on the Balance Sheet**, a fix is **IN FLIGHT** as of this
-writing, and §2.6 tells you exactly how to check whether it landed.
+⭐ **D103 IS FIXED AND PROVEN — `cfd46c3`.** A stock journal between the company's own godowns no
+longer creates value on the Balance Sheet. **§2.6 carries the four mutations, including the one that
+nearly let an inert fix ship green.** The register stands at **105 · 103 · 2**; the two open rows are
+**D99** (open by decision) and **D105** (one sentence, needs the `FeaturesScreen.tsx` owner).
 
 ---
 
@@ -126,28 +127,63 @@ conservation (total inward value == total outward consumption cost) is the right
 selects a valuer per item since 0078), not stored at post time — so the outward's true consumption
 cost may not be knowable at post time at all, and the fix may belong in the **valuer**.
 
-### 2.6 ⛔ STATUS: A FIX IS IN FLIGHT. HOW TO TELL WHETHER IT LANDED.
+### 2.6 ✅ STATUS: FIXED AND PROVEN — `cfd46c3`, 2026-08-28
 
-A 6-agent workflow was running when this file was written: three read-only investigation lenses (the
-valuation path · scope-and-manufacture · an adversarial sweep for the same rotten premise elsewhere)
-→ a design agent taking the two forks above → implementation → an **independent** proof agent.
+**Both forks were settled with evidence.** The fix lives in the **valuer/replay, not the post path**:
+value is never stored, and a purchase keyed later but *dated earlier* re-orders the lot queue and
+changes what the transfer ate — a rate frozen at post time would be right on the day and **silently
+wrong forever after**, the same defect one layer down.
+
+⭐⭐ **VOUCHER-LEVEL CONSERVATION IS THE RIGHT INVARIANT WITH THE WRONG ALLOCATION**, and that
+distinction is the design. One voucher can carry rows of **different items**, so pooling would let a
+cheap item absorb an expensive one's cost while the total still footed — **the invariant would
+certify the corruption.** Each item takes its own consumption first; only the residue is pooled onto
+legs that got nothing. **The keyed rate survives as a ratio, not a price.** A manufacture is still
+postable.
+
+⛔⛔ **THE PROOF THAT MATTERED MOST WAS THE ONE THE FIXING LANE COULD NOT RUN.**
+`COALESCE(vt.parent_class,'') = 'STOCK_JOURNAL'` in `reporting/stock_summary.go` is the **only** thing
+setting `Movement.VoucherConserves` in production. **It has no compiler on it.** If it were wrong the
+entire fix would be inert *while every pure-Go test stayed green* — which is exactly what the suite
+looked like. Breaking that literal was run 2026-08-28 once the database was unwedged: **D103 comes
+straight back, 1,850.00 → 1,883.33 on FIFO and −16.667 on LIFO.** The seam is load-bearing and tested.
+
+| Mutation | Observed |
+|---|---|
+| disable the engine | **10 test functions fail**; headline arm reproduces the browser figure exactly — *"created 33.3000 … 1850.0000 → 1883.3000"* |
+| delete the residue step | 3 fail (all three manufacture/rework arms) |
+| break the SQL literal | D103 returns: 1,850.00 → 1,883.33 |
+| ⚠️ **drop the last-leg remainder** | **SURVIVED** — see below |
+
+⚠️ **A SURVIVING MUTANT WAS FOUND BY THE INDEPENDENT PROOF, AND IT IS THE BEST ARGUMENT FOR HAVING
+ONE.** `allocate()`'s last-leg remainder had **no test**: replacing it with a plain rounded share left
+the whole suite green while leaking **0.0001 per voucher** onto the Balance Sheet. The test believed
+to pin it did not — its 2400/2600 split rounds to 1000.0000 either way. Closed with
+`TestAThreeWayEvenSplitLosesNoPaisaToRounding`, **a three-way even split being the smallest case that
+cannot round cleanly**.
+
+⭐ **RE-DRIVEN: `drive-l28-stock-restale.mjs` 75/75, up from 72/75, WITH THE SCRIPT UNTOUCHED**
+(`git status --porcelain frontend/scripts/` empty). Its probes were always phrased so conservation is
+the PASS.
+
+⚠️ **AND THIS FILE'S OWN §2.3 WAS SLIGHTLY WRONG.** The weighted-average arm was described as having
+conserved *exactly* before the fix. It did not — it lost **0.0003**. The 2026-08-07 premise was
+already off by a rounding tail before `0078` ever landed.
+
+⛔ **AN ENVIRONMENTAL BLOCKER HAD TO BE CLEARED FIRST, AND IT WILL RECUR.** Postgres :5433 was
+**wedged** — OrbStack's forwarder accepted TCP while the server never completed a handshake, so
+`nc -z` succeeded and `pg_isready` said *"no response"*. ⛔ **A TCP CONNECT IS NOT LIVENESS**, which
+this repo's run-first section already says about `cored` and is equally true of the database. A
+`docker ps` had been hung for 1h32m. Fix:
 
 ```bash
-git log --oneline -5                 # is there a commit naming D103 after 87eb9da?
-node frontend/scripts/drive-l28-stock-restale.mjs
-#   BEFORE the fix: 72/75, three reds
-#   AFTER  the fix: the D103 probe and the D104 copy assertion should be GREEN
+orbctl stop && orbctl start && docker start tally_pg   # ⛔ NEVER `orbctl reset` — it deletes all data
+PGCONNECT_TIMEOUT=5 pg_isready -h localhost -p 5433     # must say "accepting connections"
 ```
 
-⭐ **THE DRIVE IS THE ORACLE AND IT IS ALREADY WRITTEN CORRECTLY** — its probes are phrased so that
-**conservation is the PASS**, so it goes green on the run that fixes this, with no edit to the
-script. If you find the script edited to make it pass, treat that as the defect.
-
-⛔ **IF THE FIX DID NOT LAND, DO NOT START FROM SCRATCH.** The workflow's transcript and its per-agent
-findings are at
-`~/.claude-premium/projects/-Users-yashbhalgat-code-tally-updated/*/subagents/workflows/wf_b82d1f94-f0d/journal.jsonl`
-(one `{"type":"result",...}` line per agent). The three investigation lenses alone are worth
-recovering before re-doing the work.
+⚠️ Other projects' containers share that VM (`supabase_db_*`, `dentabill-*`). Start **only**
+`tally_pg`. And restart `cored` afterwards — its `go run` binary predated the fix by nine hours, which
+would have made the drive measure the old code and produce a red that meant nothing.
 
 ### 2.7 D104 and D105 ride with it
 
@@ -274,9 +310,9 @@ once: overridable where MSMED ss.15–23 forbid override, and defaulted where no
 
 ## 5. THE ORDER TO WORK IN
 
-1. ⛔ **Land D103** (§2.6) — check whether the in-flight fix committed; if not, recover the
-   workflow's investigation findings before redoing anything.
-2. **D104** rides with it. **D105** needs the `FeaturesScreen.tsx` owner.
+1. ~~**Land D103**~~ ✅ **DONE — `cfd46c3`**, with D104. ⛔ **D105 is the only thing left from that
+   family and it needs the `FeaturesScreen.tsx` owner** — one sentence, row 23 still says the valuer
+   is weighted-average.
 3. ⭐ **T11 Budgets** — nothing blocks it. **Migration `0085` (tables) + `0086` (ACL).**
 4. **T12 GSTR-9** — **migration `0087`**. Independent of T11 and T8.
 5. **T13** — once §4 ask 1 lands. The design note makes it a one-sitting build.
@@ -352,7 +388,7 @@ ps -o lstart= -p "$(lsof -nP -iTCP:8087 -sTCP:LISTEN -t)"   # NEWER than the las
 | `python3 docs/parse-defect-register.py HANDOFF-PARITY-AUDIT.md` | **105 · 97 · 4 · 0** (+4 unreadable, all closed) |
 | `node frontend/scripts/drive-u1-import-partial.mjs` | **15/16** ⚠️ the 16th is D99's comma arm, red **by decision** |
 | `node frontend/scripts/drive-u1-voided-vouchers.mjs` | **12/12** |
-| `node frontend/scripts/drive-l28-stock-restale.mjs` | **72/75** ⛔ three reds = D103 + D104 + the row-23 copy |
+| `node frontend/scripts/drive-l28-stock-restale.mjs` | ⭐ **75/75** at `cfd46c3` (was 72/75; script untouched) |
 
 ---
 
