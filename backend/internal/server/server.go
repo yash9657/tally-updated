@@ -748,6 +748,13 @@ func (s *Server) routes() {
 		r.Post("/drafts/{draftID}/accepted", s.handleDraftProxy)
 
 		// Masters.
+		// ⛔ THE READ, ADDED FOR T11. `/groups` was already in isMasterPath — which
+		// maps a GET to (Display, "master"), the token /ledgers and /units read under
+		// — so this route arrives GOVERNED by a rule that already exists and grants
+		// nothing new: a group name is on every ledger row today. It exists because a
+		// budget line on a GROUP stores an account_group_id, and no master form in
+		// this product may ask a human for a uuid. See handler_groups_list.go.
+		r.Get("/groups", s.handleListGroups)
 		r.Post("/groups", s.handleCreateGroup)
 		r.Post("/ledgers", s.handleCreateLedger)
 		// Read the chart of accounts back. Until this existed a client could
@@ -901,6 +908,29 @@ func (s *Server) routes() {
 		r.Get("/cost-centres", s.handleListCostCentres)
 		r.Post("/cost-centres", s.handleCreateCostCentre)
 		r.Put("/cost-centres/{centreID}", s.handleAlterCostCentre)
+
+		// THE BUDGET MASTER (T11, migration 0085). All eight routes map to the BARE
+		// `budget` resource, so the seeded Data Entry level is refused every one of
+		// them with no ACL migration at all — see handler_budget.go's header.
+		//
+		// ⚠️ `/budgets` IS PLURAL AND THE REPORT IS `/budget-variance`, one character
+		// from a collision. routeAction's master arm is HasPrefix(rest, "/budgets"),
+		// which "/budget-variance" does not satisfy — so the report falls through to
+		// the reports arm and is governed by `report:budget-variance`. A master route
+		// at "/budget" would have swallowed it and made migration 0086 dead text.
+		//
+		// ⛔ DELETE IS MOUNTED, unlike every other master above. Migration 0085
+		// grants UPDATE and DELETE because A BUDGET IS A PLAN AND PLANS ARE REVISED,
+		// which is the opposite of a voucher. It maps to authz.Delete and not to
+		// Alter so "may revise a figure but may not drop a line" stays writable.
+		r.Get("/budgets", s.handleListBudgets)
+		r.Post("/budgets", s.handleCreateBudget)
+		r.Put("/budgets/{budgetID}", s.handleAlterBudget)
+		r.Delete("/budgets/{budgetID}", s.handleDeleteBudget)
+		r.Get("/budgets/{budgetID}/lines", s.handleListBudgetLines)
+		r.Post("/budgets/{budgetID}/lines", s.handleAddBudgetLine)
+		r.Put("/budgets/{budgetID}/lines/{lineID}", s.handleAlterBudgetLine)
+		r.Delete("/budgets/{budgetID}/lines/{lineID}", s.handleDeleteBudgetLine)
 
 		// Vouchers: one endpoint per accounting class (F4-F9). The body is the
 		// same generic voucher shape; the path fixes the class.
@@ -1229,6 +1259,21 @@ func (s *Server) routes() {
 		// specificity 2.
 		r.Get("/cost-centre-summary", s.handleCostCentreSummary)
 		r.Get("/cost-category-summary", s.handleCostCategorySummary)
+
+		// BUDGET VS ACTUAL (T11, migrations 0085/0086). A FLAT LITERAL PATH SPELLING
+		// THE REPORT NAME, because TestReportVocabularyMatchesRouter asks routeAction
+		// for GET /v1/companies/{id}/<name> for every entry in
+		// authz.KnownReportNames — a tidier /budgets/{id}/variance would be a
+		// vocabulary entry no route serves, i.e. a `disallow` an administrator can
+		// write that can never match. The plan, the grain and the axis all ride in
+		// the query string for that reason.
+		//
+		// A Display, so it inherits neither the back-dated write cutoff nor the
+		// WebAuthn step-up (both gate on Action.IsWrite()). It carries what the owner
+		// PLANNED — the one figure in this product no voucher contains — which is why
+		// migration 0086 disallows it for the seeded Data Entry level in both the
+		// display and the print form.
+		r.Get("/budget-variance", s.handleBudgetVariance)
 
 		// THE TWO ORDER BOOKS (T3, migration 0042). What is still outstanding, per
 		// direction, as at a date.

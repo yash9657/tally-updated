@@ -118,6 +118,28 @@
  *                          remainder that is the report's whole purpose. ⛔ It
  *                          has NO grand total and may never grow one.
  *
+ *  - "budgets" — THE BUDGET MASTER (T11, migration 0085): the plans this company
+ *                          has and the figures on them. A ScreenKind and not a
+ *                          "report:NAME" for the same reason cost-centres is:
+ *                          the server serves these routes under the BARE token
+ *                          `budget`, which a coarse `allow display report` can
+ *                          never match — and because a master list is not a
+ *                          report. It carries a create form and therefore needs
+ *                          no period, so it is exempt from the FrameOverlays
+ *                          classification.
+ *  - "budget-variance" — BUDGET VS ACTUAL (T11, migrations 0085/0086): a plan
+ *                          beside the books, at one grain. ⛔ A ScreenKind and
+ *                          NOT a "report:NAME" key even though the server DOES
+ *                          serve it as `report:budget-variance` — the screen
+ *                          takes a PLAN and a GRAIN (and, at the cost-centre
+ *                          grain, an AXIS) and renders a shape no generic report
+ *                          screen draws, so registering it by ScreenKind is what
+ *                          keeps the Gateway entry off UnwiredReportScreen. ⛔ IT
+ *                          IS EXEMPT FROM THE F2 PERIOD: the period is the
+ *                          PLAN's own and cannot be narrowed, because comparing
+ *                          a full-period budget against a shorter window needs a
+ *                          spread rule nobody has chosen.
+ *
  *  - "sales-orders" / "purchase-orders" — THE ORDER REGISTERS (T3, migration
  *                          0042): the commitments made to customers and to
  *                          suppliers, the form that records one, and the
@@ -262,6 +284,8 @@ export type ScreenKind =
   | "cost-centres"
   | "cost-centre-summary"
   | "cost-category-summary"
+  | "budgets"
+  | "budget-variance"
   | "sales-orders"
   | "purchase-orders"
   | "boms"
@@ -933,6 +957,30 @@ export type KeymapAction =
    * IS the list of axes, and Enter on a row opens that axis here.
    */
   | { kind: "selectCostCategory" }
+  /**
+   * F4 on the BUDGET VARIANCE report — CHOOSE THE PLAN (T11).
+   *
+   * Same gesture as `selectCostCategory` above and for the same reason: F4 on a
+   * report is "pick the thing this report is about", it is scoped to this screen
+   * and never claimed globally, and binding it is protective because the global F4
+   * is a CONTRA VOUCHER — an operator reaching for the picker they used a moment
+   * ago would otherwise open a voucher over the report.
+   *
+   * ⛔ THE PLAN IS NEVER DEFAULTED, which is why this key exists at all. A variance
+   * report is a comparison and there is no default plan: an empty one would read as
+   * "nothing was planned and nothing was spent", which is a real and reassuring
+   * claim about a company and would be a lie.
+   */
+  | { kind: "selectBudget" }
+  /**
+   * Alt+C on the BUDGETS screen — create a plan, or a line on the open one (T11).
+   *
+   * Alt+C is Tally's create-a-master-on-the-fly key (RESEARCH.md:405), and binding
+   * it here is protective as well as useful: the global `createMaster` would push a
+   * LEDGER-create frame over this screen, because a budget is deliberately not a
+   * member of the MasterKind union — it is not a thing a voucher can name.
+   */
+  | { kind: "createBudget" }
   /**
    * Ctrl+F8 / Ctrl+F9 — THE ORDER REGISTERS (T3). `direction` is what decides
    * which, and it is on the ACTION rather than being read off the active screen

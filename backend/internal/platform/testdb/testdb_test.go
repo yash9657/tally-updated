@@ -93,6 +93,10 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 		costCategoryID = id()
 		costCentreID   = id()
 
+		// T11 — a budget and one line on it (migration 0085). Captured because the
+		// line has to hang off this exact budget.
+		budgetID = id()
+
 		// T3 — a purchase order, its line, and the link from the stock_movement
 		// below (migrations 0042 and 0043).
 		orderID     = id()
@@ -228,6 +232,26 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 			(id, company_id, posting_id, cost_category_id, cost_centre_id, amount)
 			VALUES ($1, $2, $3, $4, $5, 100)`,
 			[]any{id(), cid, postingID, costCategoryID, costCentreID}},
+		// T11 — budgets (migration 0085). The head and one line, which is all the
+		// teardown needs to exercise: budget_line cascades from budget, so both
+		// tables must hold a row or the plan's entry for one of them is never
+		// touched.
+		//
+		// ⚠️ THE LINE TARGETS A LEDGER AND IS ON NETT_TRANSACTIONS, deliberately.
+		// A COST_CENTRE line would be legal too, but 0085's
+		// budget_line_cost_centre_is_transactional pins the basis for those, and a
+		// fixture that quietly relied on that constraint being satisfied would be
+		// one more thing to get wrong here. The amount is positive, as
+		// budget_line_amount_positive requires -- a fixture row that would be
+		// ILLEGAL in production is a teardown test standing on data the write path
+		// could never create, the argument posting_cost_allocation records above.
+		{"budget", `INSERT INTO budget (id, company_id, name, from_date, to_date, created_by)
+			VALUES ($1, $2, 'Fixture Plan', DATE '2024-04-01', DATE '2025-03-31', 'testdb')`,
+			[]any{budgetID, cid}},
+		{"budget_line", `INSERT INTO budget_line
+			(id, company_id, budget_id, dimension, ledger_id, basis, dr_cr, amount)
+			VALUES ($1, $2, $3, 'LEDGER', $4, 'NETT_TRANSACTIONS', 'D', 500)`,
+			[]any{id(), cid, budgetID, ledgerID}},
 		{"voucher_gst_line", `INSERT INTO voucher_gst_line
 			(id, company_id, voucher_version_id, line_no, hsn, taxable_value, gst_rate_pct, cgst, sgst, igst)
 			VALUES ($1, $2, $3, 1, '1234', 100, 18, 9, 9, 0)`,

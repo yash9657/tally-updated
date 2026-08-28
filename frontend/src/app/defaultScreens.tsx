@@ -28,6 +28,8 @@ import { BankReconciliationScreen } from "../screens/BankReconciliationScreen";
 import { TDSChallansScreen } from "../screens/TDSChallansScreen";
 import { EWayBillScreen } from "../screens/EWayBillScreen";
 import { EInvoiceScreen } from "../screens/EInvoiceScreen";
+import { BudgetsScreen } from "../screens/masters/BudgetsScreen";
+import { BudgetVarianceScreen } from "../screens/reports/BudgetVarianceScreen";
 import { CostCentresScreen } from "../screens/masters/CostCentresScreen";
 import { CostCentreSummaryScreen } from "../screens/reports/CostCentreSummaryScreen";
 import { CostCategorySummaryScreen } from "../screens/reports/CostCategorySummaryScreen";
@@ -297,6 +299,18 @@ export function createDefaultRegistry(): ScreenRegistry {
     // serves it under the BARE `e-invoice` token, which a coarse `allow display
     // report` can never match, and it carries a FORM.
     "e-invoice": EInvoiceScreen,
+    // ---- THE TWO T11 BUDGET SCREENS.
+    //
+    // ⛔ "budget-variance" IS REGISTERED BY ScreenKind AND NOT AS A "report:…" KEY,
+    // and unlike the cost screens above the reason is NOT that the server uses a
+    // bare token — it genuinely serves this one as `report:budget-variance`. It is
+    // a ScreenKind because a `report` frame cannot carry the PLAN, the GRAIN or the
+    // AXIS the screen needs, and because registering it as a report key would put
+    // UnwiredReportScreen — "not available in this build" — in front of a report
+    // that is built and ACL-gated. The ACL name and the navigation mechanism are
+    // different things.
+    budgets: BudgetsScreen,
+    "budget-variance": BudgetVarianceScreen,
     "cost-centres": CostCentresScreen,
     "cost-centre-summary": CostCentreSummaryScreen,
     "cost-category-summary": CostCategorySummaryScreen,

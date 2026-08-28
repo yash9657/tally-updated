@@ -91,6 +91,7 @@ import type {
   StockPositionRow,
   StockSummaryItem,
   StockSummaryResponse,
+  ListGroupsResponse,
   ListLedgersResponse,
   SetLedgerOpeningRequest,
   SetLedgerOpeningResponse,
@@ -188,6 +189,21 @@ import type {
   PrintTemplateOverrides,
   PrintTemplateRequest,
   PrintTemplateResponse,
+  AlterBudgetResponse,
+  Budget,
+  BudgetBasis,
+  BudgetDimension,
+  BudgetLine,
+  BudgetLineListResponse,
+  BudgetListResponse,
+  BudgetStatus,
+  BudgetVarianceResponse,
+  BudgetVarianceRow,
+  CreateBudgetLineRequest,
+  CreateBudgetLineResponse,
+  CreateBudgetRequest,
+  CreateBudgetResponse,
+  DeleteBudgetResponse,
 } from "./types";
 // A VALUE, not a type: the recorded `payload.class` labels the server stamps.
 // The mock must agree with them exactly — see classLabel().
@@ -2091,6 +2107,117 @@ function mockCostCentres(): CostCentre[] {
     // cost_centre_name_unique is per (company, CATEGORY, name).
     on("cost-ctr-mumbai", "Mumbai", "cost-cat-branch", "Branch"),
     on("cost-ctr-delhi", "Delhi", "cost-cat-branch", "Branch"),
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// T11 — BUDGETS (migrations 0085/0086)
+// ---------------------------------------------------------------------------
+//
+// ⛔ THE FIXTURE DELIBERATELY MIXES THE TWO BASES, because the mixed case is the
+// one a screen gets wrong. A plan holding a CLOSING_BALANCE line and a
+// NETT_TRANSACTIONS line has NO addable grand total — a position plus a flow is
+// not a quantity — and `totals_are_addable: false` with three ZERO grand totals
+// is the shape every consumer must handle. A single-basis fixture would let a
+// screen draw a footer unconditionally and pass every test.
+//
+// ⛔ AND IT CARRIES ONE ROW OF EACH AWKWARD STATUS: an UNSPENT budget (nothing
+// posted), an UNBUDGETED actual in its own array with `variance_percent: null`,
+// and an ordinary OVER. A fixture of well-behaved rows is how a screen ships with
+// no "no budget set" rendering at all and a divide-by-zero in production.
+
+function mockBudgets(): Budget[] {
+  return [
+    {
+      id: "budget-fy26",
+      name: "FY 2026-27 Plan",
+      from_date: "2026-04-01",
+      to_date: "2027-03-31",
+      line_count: 3,
+      created_by: "seed",
+      created_at: "2026-04-01T00:00:00Z",
+    },
+    {
+      // An EMPTY plan, on purpose: the variance report over it is a page of
+      // unbudgeted actuals, which reads as "nothing was planned" and is
+      // indistinguishable from "the plan was never keyed". A screen must be able
+      // to show that a plan has no lines BEFORE drawing a report from it.
+      id: "budget-empty",
+      name: "Draft Plan (no lines yet)",
+      from_date: "2026-04-01",
+      to_date: "2027-03-31",
+      line_count: 0,
+      created_by: "seed",
+      created_at: "2026-04-02T00:00:00Z",
+    },
+  ];
+}
+
+function mockBudgetLines(budgetID: string): BudgetLine[] {
+  if (budgetID !== "budget-fy26") return [];
+  const line = (
+    id: string,
+    dimension: BudgetDimension,
+    targetID: string,
+    targetName: string,
+    nature: string,
+    basis: BudgetBasis,
+    drCr: string,
+    amount: string,
+    note = "",
+  ): BudgetLine => ({
+    id,
+    budget_id: budgetID,
+    dimension,
+    target_id: targetID,
+    target_name: targetName,
+    cost_category_id: "",
+    cost_category_name: "",
+    nature,
+    basis,
+    dr_cr: drCr,
+    amount,
+    note,
+    basis_means:
+      basis === "CLOSING_BALANCE"
+        ? "a POSITION as at the budget period's end date, with the opening balance folded in"
+        : "MOVEMENT inside the budget period, with the opening balance excluded",
+    created_at: "2026-04-01T00:00:00Z",
+  });
+  return [
+    line(
+      "budget-line-travel",
+      "LEDGER",
+      "ledger-travel",
+      "Travel Expenses",
+      "EXPENSE",
+      "NETT_TRANSACTIONS",
+      "D",
+      "500000.0000",
+      "assumes two regional trips per quarter",
+    ),
+    line(
+      "budget-line-rent",
+      "LEDGER",
+      "ledger-rent",
+      "Office Rent",
+      "EXPENSE",
+      "NETT_TRANSACTIONS",
+      "D",
+      "120000.0000",
+    ),
+    // The CLOSING_BALANCE line — this is what makes the plan mixed-basis.
+    line(
+      "budget-line-debtors",
+      "GROUP",
+      "group-sundry-debtors",
+      "Sundry Debtors",
+      "ASSET",
+      "CLOSING_BALANCE",
+      "D",
+      "4000000.0000",
+      "year-end receivables ceiling",
+    ),
   ];
 }
 
@@ -4184,6 +4311,43 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       }
       return { group_id: id("group") };
     },
+    async listGroups(companyID): Promise<ListGroupsResponse> {
+      // DERIVED FROM THE LEDGERS' OWN GROUP NAMES rather than from a second
+      // fixture, so the mock cannot offer a group no ledger in it belongs to — a
+      // picker entry that resolves to nothing is exactly the kind of fixture-only
+      // state a screen test would pass on and a browser drive would fail on.
+      //
+      // ⚠️ THE NATURE IS INFERRED FROM THE NAME here and READ FROM THE COLUMN by
+      // cored, which is a real difference and is stated rather than hidden: the
+      // mock has no account_group table to read a nature out of. A screen must
+      // therefore not treat the mock's nature as authoritative for anything but
+      // rendering — the SIDE a budget line ends up on is derived server-side from
+      // the real column, which is why the field is served at all.
+      const seen = new Map<string, string>();
+      for (const l of ensure(companyID).ledgers) {
+        if (!seen.has(l.group)) seen.set(l.group, l.group);
+      }
+      const natureOf = (name: string): string => {
+        const n = name.toLowerCase();
+        if (n.includes("sales") || n.includes("income")) return "INCOME";
+        if (n.includes("purchase") || n.includes("expense")) return "EXPENSE";
+        if (n.includes("creditor") || n.includes("duties") || n.includes("capital"))
+          return "LIABILITY";
+        return "ASSET";
+      };
+      return {
+        groups: Array.from(seen.keys())
+          .sort()
+          .map((name) => ({
+            id: `group-${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+            name,
+            parent_name: "",
+            nature: natureOf(name),
+            is_pl: natureOf(name) === "INCOME" || natureOf(name) === "EXPENSE",
+          })),
+      };
+    },
+
     async listLedgers(companyID): Promise<ListLedgersResponse> {
       return {
         ledgers: ensure(companyID).ledgers.map((l) => ({
@@ -6400,6 +6564,393 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         notes: [
           "These rows must NOT be added together. Each is a different axis through the SAME money, so a total across them is a multiple of the cost actually borne.",
         ],
+      };
+    },
+
+    // ---- T11: budgets and budget vs actual (migrations 0085/0086).
+    async listBudgets(companyID): Promise<BudgetListResponse> {
+      ensure(companyID);
+      return { budgets: mockBudgets() };
+    },
+    async createBudget(
+      companyID,
+      req: CreateBudgetRequest,
+    ): Promise<CreateBudgetResponse> {
+      ensure(companyID);
+      const name = (req.name ?? "").trim();
+      if (name === "") {
+        throw new ApiError(
+          400,
+          "a budget needs a name — a plan nobody can name is a plan nobody can be asked about",
+        );
+      }
+      if (!req.from_date || !req.to_date) {
+        throw new ApiError(
+          400,
+          "a budget needs both a from_date and a to_date (YYYY-MM-DD). A plan for no stated period cannot be compared against anything: the closing-balance basis would have no date to be measured as at",
+        );
+      }
+      if (req.to_date < req.from_date) {
+        throw new ApiError(
+          400,
+          "the budget period ends before it begins. Reversed bounds would match no movement at all and report the entire budget as unspent, which reads as a business fact rather than as a typo",
+        );
+      }
+      if (
+        mockBudgets().some(
+          (b) => b.name.trim().toLowerCase() === name.toLowerCase(),
+        )
+      ) {
+        throw new ApiError(
+          409,
+          `a budget called "${name}" already exists for this company (names are compared ignoring case and surrounding spaces)`,
+        );
+      }
+      return {
+        id: `budget-${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+        name,
+        from_date: req.from_date,
+        to_date: req.to_date,
+      };
+    },
+    async alterBudget(
+      companyID,
+      budgetID: string,
+      req: CreateBudgetRequest,
+    ): Promise<AlterBudgetResponse> {
+      ensure(companyID);
+      const existing = mockBudgets().find((b) => b.id === budgetID);
+      if (!existing) {
+        throw new ApiError(404, `no budget ${budgetID} in this company`);
+      }
+      if (req.to_date < req.from_date) {
+        throw new ApiError(
+          400,
+          "the budget period ends before it begins",
+        );
+      }
+      return {
+        id: existing.id,
+        budget: {
+          ...existing,
+          name: (req.name ?? "").trim() || existing.name,
+          from_date: req.from_date || existing.from_date,
+          to_date: req.to_date || existing.to_date,
+        },
+      };
+    },
+    async deleteBudget(
+      companyID,
+      budgetID: string,
+      deletedBy: string,
+    ): Promise<DeleteBudgetResponse> {
+      ensure(companyID);
+      const existing = mockBudgets().find((b) => b.id === budgetID);
+      if (!existing) {
+        throw new ApiError(404, `no budget ${budgetID} in this company`);
+      }
+      if (!deletedBy) {
+        throw new ApiError(
+          400,
+          "deleted_by is required (?deleted_by=…) — a plan deleted by nobody in particular is a plan nobody can be asked about",
+        );
+      }
+      // ⚠️ THE COUNT IS SERVED because deleting a plan cascades to its lines, and
+      // "I deleted a budget" and "I deleted 3 budgeted figures" are different acts.
+      return {
+        id: existing.id,
+        deleted: true,
+        lines_deleted_by_cascade: existing.line_count,
+      };
+    },
+    async listBudgetLines(
+      companyID,
+      budgetID: string,
+    ): Promise<BudgetLineListResponse> {
+      ensure(companyID);
+      if (!mockBudgets().some((b) => b.id === budgetID)) {
+        // ⛔ 404 AND NOT AN EMPTY LIST. An empty line list for a plan that does not
+        // exist reads as "this plan has no figures", which is a different and more
+        // reassuring claim than "there is no such plan".
+        throw new ApiError(404, `no budget ${budgetID} in this company`);
+      }
+      return { budget_id: budgetID, lines: mockBudgetLines(budgetID) };
+    },
+    async addBudgetLine(
+      companyID,
+      budgetID: string,
+      req: CreateBudgetLineRequest,
+    ): Promise<CreateBudgetLineResponse> {
+      ensure(companyID);
+      if (!mockBudgets().some((b) => b.id === budgetID)) {
+        throw new ApiError(404, `no budget ${budgetID} in this company`);
+      }
+      if (!req.target_id) {
+        throw new ApiError(
+          400,
+          "target_id is required — the thing being budgeted. A line with no target could not be compared against anything",
+        );
+      }
+      // ⛔ A COST CENTRE HOLDS NO POSITION, so it may not be budgeted on one.
+      if (
+        req.dimension === "COST_CENTRE" &&
+        req.basis !== "NETT_TRANSACTIONS"
+      ) {
+        throw new ApiError(
+          400,
+          "a cost centre cannot be budgeted on a CLOSING_BALANCE. A cost centre is not an account: it holds no opening balance and carries no position, only allocations against dated postings. Use NETT_TRANSACTIONS",
+        );
+      }
+      // ⛔ AND IT HAS NO NATURE, so it cannot take a side by default.
+      if (req.dimension === "COST_CENTRE" && !req.dr_cr) {
+        throw new ApiError(
+          400,
+          'a cost centre budget must state its side (dr_cr "D" or "C"). A group or a ledger has a NATURE to take the side from; a cost centre has none. A cost budget is "D"',
+        );
+      }
+      if (!req.amount || Number(req.amount) <= 0) {
+        throw new ApiError(
+          400,
+          "a budget amount must be greater than zero. A budget of zero is the ABSENCE of a budget, and the report already has a distinct answer for a target nobody budgeted (UNBUDGETED). To plan to spend nothing here, set no line at all",
+        );
+      }
+      if (
+        mockBudgetLines(budgetID).some((l) => l.target_id === req.target_id)
+      ) {
+        throw new ApiError(
+          409,
+          "this budget already has a line for that target. One target gets one figure per budget: two would make the variance report show it twice, with the actual counted in full against each. Alter the existing line instead",
+        );
+      }
+      return { id: `budget-line-${req.target_id}`, budget_id: budgetID };
+    },
+    async alterBudgetLine(
+      companyID,
+      budgetID: string,
+      lineID: string,
+      req: CreateBudgetLineRequest,
+    ): Promise<{ id: string; altered: boolean }> {
+      ensure(companyID);
+      const line = mockBudgetLines(budgetID).find((l) => l.id === lineID);
+      if (!line) {
+        throw new ApiError(404, `no budget line ${lineID} in this company`);
+      }
+      // ⛔ THE DIMENSION AND TARGET ARE IMMUTABLE. Re-filing a figure would leave
+      // the original target reading as unbudgeted and the new one as having been
+      // planned all along — a change of meaning dressed as a correction.
+      if (req.dimension && req.dimension !== line.dimension) {
+        throw new ApiError(
+          400,
+          `a budget line's dimension cannot be changed (it is ${line.dimension}). Delete this line and add the right one`,
+        );
+      }
+      if (req.target_id && req.target_id !== line.target_id) {
+        throw new ApiError(
+          400,
+          "a budget line's target cannot be changed. Delete this line and add one against the target you mean — that is two audited acts, which is what actually happened",
+        );
+      }
+      if (line.dimension === "COST_CENTRE" && req.basis !== "NETT_TRANSACTIONS") {
+        throw new ApiError(
+          400,
+          "a cost centre cannot be budgeted on a CLOSING_BALANCE — it holds no position, only allocations against dated postings",
+        );
+      }
+      return { id: lineID, altered: true };
+    },
+    async deleteBudgetLine(
+      companyID,
+      budgetID: string,
+      lineID: string,
+      deletedBy: string,
+    ): Promise<{ id: string; deleted: boolean }> {
+      ensure(companyID);
+      if (!mockBudgetLines(budgetID).some((l) => l.id === lineID)) {
+        throw new ApiError(404, `no budget line ${lineID} in this company`);
+      }
+      if (!deletedBy) {
+        throw new ApiError(400, "deleted_by is required (?deleted_by=…)");
+      }
+      return { id: lineID, deleted: true };
+    },
+    async budgetVariance(
+      companyID,
+      budgetID: string,
+      dimension: BudgetDimension,
+      costCategoryID?: string,
+    ): Promise<BudgetVarianceResponse> {
+      ensure(companyID);
+      // ⛔ THE THREE REFUSALS, IN THE ORDER cored CHECKS THEM. The dimension is a
+      // pure check and runs first; the plan needs a lookup and runs second. A mock
+      // that refused in a different order would let a screen's error handling pass
+      // here and fail against the real server.
+      if (!dimension) {
+        throw new ApiError(
+          400,
+          "a dimension must be named (dimension): a budget is compared at ONE grain, and the three answer different questions — GROUP, LEDGER, COST_CENTRE",
+        );
+      }
+      if (!["GROUP", "LEDGER", "COST_CENTRE"].includes(dimension)) {
+        throw new ApiError(
+          400,
+          `"${dimension}" is not a budget dimension — want one of GROUP, LEDGER, COST_CENTRE`,
+        );
+      }
+      const plan = mockBudgets().find((b) => b.id === budgetID);
+      if (!budgetID) {
+        throw new ApiError(
+          400,
+          `a budget must be named (budget_id): a variance report is a comparison, and there is no default plan to compare against. This company has: ${mockBudgets()
+            .map((b) => `"${b.name}" (${b.from_date} to ${b.to_date}, ${b.id})`)
+            .join("; ")}`,
+        );
+      }
+      if (!plan) {
+        throw new ApiError(422, `no budget ${budgetID} in these books`);
+      }
+      // ⛔ THE COST-CENTRE ARM DEMANDS AN AXIS. The same money is allocated in full
+      // on every axis, so a report spanning two would total a multiple of the cost
+      // borne — the identical rule costCentreSummary enforces.
+      if (dimension === "COST_CENTRE" && !costCategoryID) {
+        throw new ApiError(
+          400,
+          "cost_category_id is required: a cost-centre variance is always for ONE axis, because centres on different axes describe the same money and summing them double-counts",
+        );
+      }
+
+      const lines = mockBudgetLines(budgetID).filter(
+        (l) => l.dimension === dimension,
+      );
+      const row = (
+        l: BudgetLine,
+        actualDebit: string,
+        status: BudgetStatus,
+        variance: string,
+        variancePercent: string | null,
+        notes: string[] = [],
+      ): BudgetVarianceRow => ({
+        dimension: l.dimension,
+        target_id: l.target_id,
+        target_name: l.target_name,
+        nature: l.nature,
+        basis: l.basis,
+        dr_cr: l.dr_cr,
+        budget: l.amount,
+        actual_debit: actualDebit,
+        actual_credit: "0.0000",
+        actual: actualDebit,
+        variance,
+        variance_percent: variancePercent,
+        status,
+        note: l.note,
+        notes,
+      });
+
+      const rows: BudgetVarianceRow[] = lines.map((l) => {
+        if (l.id === "budget-line-rent") {
+          // ⛔ UNSPENT, NOT ZERO VARIANCE. Nothing was posted at all.
+          return row(l, "0.0000", "UNSPENT", "-120000.0000", "-100.00", [
+            "Nothing was posted against this at all in the period. That is UNSPENT, not a variance of zero — the whole budget is untouched, which is a fact about the plan or about what has been keyed, not a sign of accuracy.",
+          ]);
+        }
+        if (l.id === "budget-line-debtors") {
+          return row(l, "3500000.0000", "UNDER", "-500000.0000", "-12.50");
+        }
+        return row(l, "620000.0000", "OVER", "120000.0000", "24.00");
+      });
+
+      // ⛔ UNBUDGETED IN ITS OWN ARRAY, WITH variance_percent NULL. A screen that
+      // has never seen this row ships with no "no budget set" rendering.
+      const unbudgeted: BudgetVarianceRow[] =
+        dimension === "COST_CENTRE"
+          ? []
+          : [
+              {
+                dimension,
+                target_id: "ledger-stationery",
+                target_name: "Stationery",
+                nature: "EXPENSE",
+                basis: "NETT_TRANSACTIONS",
+                dr_cr: "D",
+                budget: "0.0000",
+                actual_debit: "83000.0000",
+                actual_credit: "0.0000",
+                actual: "83000.0000",
+                variance: "83000.0000",
+                variance_percent: null,
+                variance_percent_absent_because:
+                  "no budget was set for this target, so there is nothing for the actual to be a percentage of",
+                status: "UNBUDGETED",
+                note: "",
+                notes: [
+                  "No budget line covers this. It is UNBUDGETED, not 100% over budget: the plan is silent about it rather than exceeded, and no percentage of a budget that was never set can be stated.",
+                ],
+              },
+            ];
+
+      const bases = Array.from(new Set(rows.map((r) => r.basis))).sort();
+      const totals = bases.map((basis) => {
+        const mine = rows.filter((r) => r.basis === basis);
+        const sum = (pick: (r: BudgetVarianceRow) => string) =>
+          (
+            mine.reduce((acc, r) => acc + Number(pick(r)), 0) as number
+          ).toFixed(4);
+        return {
+          basis,
+          rows: mine.length,
+          budget: sum((r) => r.budget),
+          actual: sum((r) => r.actual),
+          variance: sum((r) => r.variance),
+        };
+      });
+      // ⛔⛔ A GRAND TOTAL ONLY WHEN EVERY ROW SHARES ONE BASIS. A position plus a
+      // flow is not a quantity, and a client that ignores the flag must find zeros.
+      const addable = totals.length <= 1;
+      const notes: string[] = [];
+      if (!addable) {
+        notes.push(
+          `⛔ THIS PLAN MIXES BOTH BASES, SO THERE IS NO GRAND TOTAL. A closing-balance budget is a POSITION as at ${plan.to_date} and a nett-transactions budget is MOVEMENT within the period; adding them would not produce a quantity. Use the per-basis subtotals.`,
+        );
+      }
+      if (rows.length === 0) {
+        notes.push(
+          "This budget has no lines at this grain, so there is nothing to compare. Every actual below is listed as unbudgeted — that is the absence of a plan, not a plan that was met.",
+        );
+      }
+      notes.push(
+        `The budget column is this plan's WHOLE period (${plan.from_date} to ${plan.to_date}) and is not apportioned to any shorter window. Comparing a full-period budget against part-period actuals needs a spread rule (straight-line, monthly or seasonal) that nobody has chosen, so this report does not narrow the period rather than inventing one.`,
+      );
+      notes.push(
+        "OVER and UNDER are statements about arithmetic, not about good and bad. Spending more than budget and EARNING more than budget are both OVER. Each row carries the target's nature so a reader can tell which it is.",
+      );
+
+      const statusCounts: Partial<Record<BudgetStatus, number>> = {};
+      for (const r of [...rows, ...unbudgeted]) {
+        statusCounts[r.status] = (statusCounts[r.status] ?? 0) + 1;
+      }
+
+      const axis = mockCostCategories().find((c) => c.id === costCategoryID);
+      return {
+        budget_id: plan.id,
+        budget_name: plan.name,
+        dimension,
+        from_date: plan.from_date,
+        to_date: plan.to_date,
+        rows,
+        unbudgeted,
+        unbudgeted_count: unbudgeted.length,
+        unbudgeted_actual: unbudgeted
+          .reduce((acc, r) => acc + Number(r.actual), 0)
+          .toFixed(4),
+        totals,
+        totals_are_addable: addable,
+        total_budget: addable ? (totals[0]?.budget ?? "0.0000") : "0.0000",
+        total_actual: addable ? (totals[0]?.actual ?? "0.0000") : "0.0000",
+        total_variance: addable ? (totals[0]?.variance ?? "0.0000") : "0.0000",
+        status_counts: statusCounts,
+        cost_category_id: axis?.id ?? "",
+        cost_category_name: axis?.name ?? "",
+        notes,
       };
     },
 

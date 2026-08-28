@@ -1908,6 +1908,81 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 		}
 		return "", "", "", false
 
+	// ===========================================================================
+	// T11 — THE BUDGET MASTER (migration 0085)
+	// ===========================================================================
+	//
+	//	GET    .../budgets                            -> Display / budget
+	//	POST   .../budgets                            -> Create  / budget
+	//	PUT    .../budgets/{budgetID}                 -> Alter   / budget
+	//	DELETE .../budgets/{budgetID}                 -> Delete  / budget
+	//	GET    .../budgets/{budgetID}/lines           -> Display / budget
+	//	POST   .../budgets/{budgetID}/lines           -> Create  / budget
+	//	PUT    .../budgets/{budgetID}/lines/{lineID}  -> Alter   / budget
+	//	DELETE .../budgets/{budgetID}/lines/{lineID}  -> Delete  / budget
+	//
+	// ONE TOKEN FOR ALL EIGHT — the head and its lines, every verb — on the
+	// `cost-centre` reasoning above: a line's budget_id is NOT NULL and a budget
+	// with no lines budgets nothing, so they are one object and two tokens would
+	// always have to be granted together. The `display`/`create`/`alter`/`delete`
+	// ACTIONS already separate the reader from the writer for any administrator who
+	// wants one without the other.
+	//
+	// ⛔ A BARE RESOURCE TOKEN, DELIBERATELY NOT `report:budget`. internal/authz
+	// matches a bare `report` rule against ANY `report:NAME`, so a report name would
+	// be GRANTED to every seeded Data Entry level by migration 0011's coarse
+	// `allow display report` — a rule written years ago for another purpose — and
+	// taking it back would need a counterweight migration. As a bare token, Data
+	// Entry (default_access 'none', every rule it carries naming a specific token)
+	// is refused all eight routes with NO ACL MIGRATION AT ALL. State the
+	// consequence plainly: DATA ENTRY CAN NEITHER SEE NOR SET A BUDGET until an
+	// administrator writes `allow display budget` through the admin API. A budget
+	// states what the owner intends, and setting one is not clerical work.
+	//
+	// ⛔ `budget` IS THEREFORE NOT IN authz.KnownReportNames AND MUST NOT BE ADDED.
+	// server.go loops over that list and auto-mounts GET /print/reports/<name>; a
+	// name with no reportName() case is a route routeAction cannot map, i.e.
+	// default-DENY for every level including the Owner. That bug already shipped
+	// once for reconciliation-queue. THE VARIANCE REPORT (report:budget-variance) IS
+	// a report name and is reached by the reports arm below, not by this one.
+	//
+	// ⛔ DELETE IS MAPPED, WHICH NO OTHER MASTER ARM HERE DOES, and it is a real
+	// difference rather than an inconsistency. Migration 0085 grants UPDATE and
+	// DELETE on budget and budget_line because A BUDGET IS A PLAN AND PLANS ARE
+	// REVISED — the opposite of `posting`, which posting_immutable protects from
+	// both. Ledgers and cost centres are never deleted here (an allocation or a
+	// posting would be orphaned); a budget line points at nothing and nothing points
+	// at it, so removing a line an operator no longer plans against is the ordinary
+	// correction. It maps to authz.Delete and not to Alter so that "may revise a
+	// figure but may not drop a line" stays a writable rule.
+	//
+	// ⚠️ THE BACK-DATED CUTOFF IS INERT ON ALL EIGHT, AND THAT IS STATED RATHER THAN
+	// LEFT IMPLIED. A budget body DOES carry dates (from_date/to_date on the head),
+	// so this is NOT the "no date in the body" case the cost-master arm above
+	// records — voucherDateFromRequest looks for `voucher_date` specifically and
+	// finds none here, so cutoffDeny skips on a nil date. The distinction matters:
+	// a budget's period is a PLANNING WINDOW, not the date an entry was made, and a
+	// plan for a period that has already closed is an ordinary and useful thing to
+	// key (that is how last year's variance gets recorded at all). Gating it on the
+	// back-dated cutoff would refuse a legitimate act while protecting nothing —
+	// a budget posts nothing and moves no balance. A comment asserting a control
+	// that never runs is worse than a missing control, which is the lesson the
+	// /tds-challans arm below records at length.
+	case strings.HasPrefix(rest, "/budgets"):
+		switch method {
+		case http.MethodGet:
+			return authz.Display, "budget", "", true
+		case http.MethodPost:
+			return authz.Create, "budget", "", true
+		case http.MethodPut:
+			return authz.Alter, "budget", "", true
+		case http.MethodDelete:
+			return authz.Delete, "budget", "", true
+		}
+		// Any other method default-denies rather than being silently treated as one
+		// of the four above.
+		return "", "", "", false
+
 		// TDS DEDUCTOR STATUS (Item Zero step 2): whether this company must deduct
 	// at all, per tax year. Tally's F11 > Enable TDS > TDS Deductor Details.
 	//
@@ -2581,6 +2656,45 @@ func reportName(rest string) string {
 		return "sales-order-book"
 	case "/purchase-order-book":
 		return "purchase-order-book"
+	// THE BUDGET VARIANCE REPORT (T11, migrations 0085/0086). Here for the reason
+	// every entry above records: a name in authz.KnownReportNames that this function
+	// does not know is a name some arms serve and others default-deny, and routes()
+	// mounts /print/reports/<name> for EVERY known name — so omitting it would leave
+	// a mounted route unreachable for every level INCLUDING the Owner. That bug
+	// already shipped once for reconciliation-queue.
+	//
+	// ⛔ NOTE IT DOES NOT COLLIDE WITH THE `/budgets` MASTER ARM in routeAction, and
+	// the two are one character from doing so. "/budget-variance" does not carry the
+	// prefix "/budgets" ("/budget-" vs "/budgets"), so the master arm never claims
+	// this path and it falls through to the reports arm as intended. That is why the
+	// report is named `budget-variance` and the master route is `/budgets` PLURAL —
+	// a master route at "/budget" would have made HasPrefix swallow the report and
+	// serve it under the BARE `budget` token, which no `report:` rule could ever
+	// match. TestReportVocabularyMatchesRouter is what holds this.
+	//
+	// ⛔ ONE NAME FOR ALL THREE GRAINS. The dimension (group / ledger / cost centre)
+	// rides in ?dimension= and is INVISIBLE TO THE PDP by design — see the long note
+	// on this name in authz/vocabulary.go. The three are the same plan and the same
+	// actuals at three grains, not three disclosures, and the group figure IS the
+	// ledger figures added up: granting one hands over the other. That is the
+	// opposite call from the two order books above, where the split is an authority a
+	// business actually writes.
+	//
+	// It is a Display, so it inherits neither the back-dated write cutoff nor the
+	// WebAuthn step-up (both gate on Action.IsWrite()).
+	//
+	// ⚠️ IT NEEDS NO ARM OF ITS OWN IN routeAction, and adding one would be a
+	// mistake. The route path is a flat literal equal to this name, so the
+	// `method == GET && reportName(rest) != ""` arm already maps it — the only
+	// arrangement under which the two places cannot disagree. The budget being
+	// reported rides in ?budget_id=, for the flat-literal reason the cost statements
+	// above and /stock-item-vouchers below state at length.
+	//
+	// Printing it answers 501: no printed layout has been specified for a variance
+	// statement, and a blank page that looks like a filed budget is worse than a
+	// refusal — the same call the cost statements and order books record above.
+	case "/budget-variance":
+		return "budget-variance"
 	case "/trial-balance":
 		return "trial-balance"
 	case "/balance-sheet":

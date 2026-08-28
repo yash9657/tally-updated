@@ -509,6 +509,45 @@ var KnownResources = append([]Resource{
 	// reportName() case is default-DENY for every level including the Owner. That
 	// bug already shipped once for reconciliation-queue itself.
 	"reconciliation",
+
+	// THE BUDGET MASTER (T11, migration 0085): a named plan over a period, and the
+	// lines on it. Tally keeps it at Gateway > Accounts Info > Budgets.
+	//
+	// ONE TOKEN FOR THE HEAD AND ITS LINES, on the `cost-centre` and `bom`
+	// reasoning rather than the sales-order/purchase-order reasoning: a line's
+	// budget_id is NOT NULL and a budget with no lines budgets nothing, so the two
+	// are one object in practice. Two tokens would always have to be granted
+	// together, which is a rule an administrator can only get wrong. The test is
+	// not "are these two things similar" but "would an administrator ever grant one
+	// without the other", and here they would not.
+	//
+	// A BARE TOKEN AND NOT A REPORT NAME, which is the decision this entry records.
+	// internal/authz matches a bare `report` rule against ANY `report:NAME`, so
+	// `report:budget` would be GRANTED to every seeded Data Entry level by
+	// migration 0011's `allow display report` and taking it back would need a
+	// counterweight migration. As a bare token, Data Entry's default_access 'none'
+	// refuses every budget-master route and every rule it carries names a specific
+	// token, so a token never mentioned stays denied.
+	//
+	// NO ACL ROWS ACCOMPANY IT, and that is the point rather than an omission.
+	// Stated plainly: DATA ENTRY CAN NEITHER SEE NOR SET A BUDGET with no rule
+	// written. A budget states what the owner INTENDS — it is the one figure in
+	// this product no voucher contains — and setting one is not clerical work.
+	// An administrator who wants a clerk maintaining budget lines writes an
+	// explicit `allow create budget` through the admin API, which is what the
+	// separate token makes POSSIBLE, not automatic. Migration 0086 therefore writes
+	// rows for the REPORT name only.
+	//
+	// ⛔ AND IT MUST NEVER BE ADDED TO KnownReportNames BELOW. server.go loops over
+	// that list and auto-mounts GET /print/reports/<name>; a name with no
+	// reportName() case is a route routeAction cannot map, i.e. default-DENY for
+	// every level including the Owner. That bug already shipped once for
+	// reconciliation-queue. The VARIANCE REPORT (report:budget-variance) is a
+	// report name and is registered as such; this is the MASTER token and is not
+	// it. Sitting in a rule list, `budget` and `report:budget-variance` are named
+	// as differently as the objects allow, because a token one word from another is
+	// how an administrator grants the wrong one.
+	"budget",
 }, KnownVoucherClasses...)
 
 // KnownReportNames is every report a rule may name via the "report:NAME" form.
@@ -707,6 +746,52 @@ var KnownReportNames = []string{
 	// these routes mount.
 	"payroll-register", "payroll-payslip", "payroll-form-138",
 	"payroll-pf-ecr", "payroll-esi-return",
+
+	// THE BUDGET VARIANCE REPORT (T11, migrations 0085/0086). A report NAME, so
+	// migration 0086 can write `disallow display report:budget-variance` and
+	// `disallow print report:budget-variance` — without which migration 0011's
+	// coarse `allow display report` reaches it and every seeded Data Entry operator
+	// can read it. Exactly the bank-statement, tds-register, cost-summary and
+	// order-book problem, one table over.
+	//
+	// ⛔ AND IT IS A SHARPER DISCLOSURE THAN ANY OF THOSE, which is why 0086 is not
+	// optional. Every other report here derives from vouchers the clerk can already
+	// see in some form. This one carries a figure NO VOUCHER CONTAINS — what the
+	// owner PLANNED — and sets it beside the actual, so one read yields the
+	// strategy, every line the business is failing against, and (via a budget on a
+	// payroll group) the payroll total that migration 0035 refuses at five separate
+	// names. A refusal that can be walked around through a second report is not a
+	// refusal.
+	//
+	// ONE NAME AND NOT THREE, WHICH IS THE OPPOSITE CALL FROM THE COST REPORTS AND
+	// THE ORDER BOOKS ABOVE — worth stating, because those entries argue at length
+	// that anything deserving a separate authority needs a separate name.
+	//
+	// The dimension (group / ledger / cost centre) rides in ?dimension= rather than
+	// in the name, because the three are not different DISCLOSURES: they are the
+	// same plan and the same actuals at three grains, and every one of them reveals
+	// the budget. "A clerk may see the variance by department but not by ledger" is
+	// not a rule a business wants, because the department figure IS the ledger
+	// figures added up — granting one hands over the other. Contrast the two order
+	// books, where "may see our sales pipeline but not what we owe suppliers" is an
+	// ordinary rule because the two lists belong to two different jobs. The test is
+	// whether the split is an authority a business would actually write, not
+	// whether the data can be sliced.
+	//
+	// ⚠️ THE CONSEQUENCE IS THAT ?dimension= IS INVISIBLE TO THE PDP and must stay
+	// that way: it is a rendering grain, not an authority. If a later slice ever
+	// makes one grain genuinely more sensitive than another, that grain needs its
+	// OWN report name — a query parameter can never carry a permission.
+	//
+	// ⛔ THE MASTER IS THE BARE TOKEN `budget` in KnownResources above and is NOT
+	// this name. Only the `report:NAME` form arrives pre-granted and needs taking
+	// back.
+	//
+	// PRINTING IT ANSWERS 501: no printed layout has been specified for a variance
+	// statement, and a blank page that looks like a filed budget is worse than a
+	// refusal — the same call bank-statement, tds-register, the cost statements and
+	// the order books all record above.
+	"budget-variance",
 }
 
 // ValidAction reports whether a is a legal rule action (Wildcard included).

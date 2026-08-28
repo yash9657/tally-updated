@@ -557,6 +557,60 @@ const RAW_SCREEN_BINDINGS: Partial<
   // NOT INERT. Without these entries the global voucher keys fire — F5 a Payment,
   // F9 a Purchase, F8 a Sales — over a half-keyed cost centre, and the frame that
   // held the panel goes with it.
+  // ---- THE TWO T11 BUDGET SCREENS.
+  //
+  // Both are ScreenKinds and not `report` frames, so NOTHING from the `report`
+  // table applies to them: every key they need is bound here or it falls through
+  // to the global voucher keys.
+  budgets: {
+    // Alt+C — CREATE a plan, or a line on the open one. See the `createBudget`
+    // action comment for why the global createMaster must not claim this key.
+    "Alt+C": { kind: "createBudget" },
+    // F2 would read as "Date" from the global table, and a master list has no date
+    // dimension. ⛔ THE NOTE IS NOT THE COST-MASTERS NOTE, because a budget DOES
+    // carry dates and saying "a budget has no period" would be false: what is true
+    // is that the period belongs to the PLAN and is keyed on the create panel, not
+    // set by F2. A note that is nearly right about a date is worse than none.
+    F2: {
+      kind: "unavailable",
+      feature: "Period (F2)",
+      note: "A budget carries its OWN period — from and to are part of the plan and are keyed on the create panel (Alt+C). F2 does not set it, and could not: changing a plan's period changes which movement every nett-transactions line is measured over and which date every closing-balance line is measured as at, so it is an audited alteration of the plan rather than a view setting.",
+    },
+    F4: {
+      kind: "unavailable",
+      feature: "Contra voucher (F4) — not from this screen",
+      note: "The voucher keys are held back on the budgets screen: opening a voucher over it would abandon the plan or line you are keying. Esc leaves the panel, then F4 works as it always does. Note that a voucher could not affect a budget anyway — a budget posts nothing and is not in the books.",
+    },
+  },
+  "budget-variance": {
+    // F4 — CHOOSE THE PLAN. Same provenance as the Cost Centre Summary's axis
+    // picker: ours, placed where RESEARCH.md:879 puts the analogous account picker,
+    // never claimed as documented. Binding it is protective twice over, because the
+    // global F4 is a Contra voucher.
+    F4: { kind: "selectBudget" },
+    // ⛔ F2 IS REFUSED ON THIS REPORT, WHICH IS UNUSUAL AND DELIBERATE. Every other
+    // report in the product takes a period from F2. This one cannot: the period is
+    // the PLAN's own, and narrowing it would compare a full-period budget against
+    // part-period actuals — which needs a spread rule (straight-line, monthly,
+    // seasonal) that Tally makes the operator choose and that these books give no
+    // basis to invent. Apportioning silently by day count is confidently wrong every
+    // October for any festival-weighted business. So the key says so rather than
+    // setting dates the report ignores — which is the failure the cost-masters F2
+    // note above exists to prevent, one screen over.
+    F2: {
+      kind: "unavailable",
+      feature: "Period (F2) — fixed by the plan",
+      note: "This report's period is the BUDGET's own and cannot be narrowed. Comparing a full-period budget against a shorter window needs a spread rule — straight-line, monthly or seasonal — that nobody has chosen, and apportioning by day count would be confidently wrong for any business with a seasonal year. To report on a different period, budget for that period: F4 chooses which plan.",
+    },
+    // Alt+C inside a report is Tally's NEW COLUMN (RESEARCH.md:771). Not built, and
+    // bound anyway: the global Alt+C would push a LEDGER-CREATE frame over the
+    // report.
+    "Alt+C": {
+      kind: "unavailable",
+      feature: "New Column (Alt+C)",
+      note: "Comparison columns are not built. In Tally this adds a second period or budget column side by side; here one plan at a time is the whole report. ⛔ Note that a column comparing two BUDGETS ON DIFFERENT BASES would be the one comparison this report must never offer — a closing balance is a position and nett transactions are a flow, so the two columns would not be comparable and their difference would not be a quantity.",
+    },
+  },
   "cost-centres": {
     // Alt+C — CREATE an axis (cost category) or a centre. Tally's own route to
     // these masters is Alt+G > Create Master > Cost Centre (RESEARCH.md:525) and
@@ -1123,6 +1177,15 @@ export function actionLabel(action: KeymapAction): string {
       // "cost centre" would hide the axis — the master an operator has to create
       // FIRST, since a centre cannot exist without one.
       return "Create a cost category (axis) or a cost centre";
+    case "createBudget":
+      // Both, named, because one key creates either — and a label saying only
+      // "budget line" would hide the PLAN, which has to exist first.
+      return "Create a budget, or add a line to the open one";
+    case "selectBudget":
+      // "Budget" and not "plan": it is the word on the master screen and on the
+      // Gateway entry, and a key labelled with a synonym is a key an operator does
+      // not connect to the thing they created.
+      return "Choose the budget this variance report compares against";
     case "selectCostCategory":
       // "Axis" is spelled out: this key is what stops one axis's figures being
       // read under another's heading, and every figure on that report is scoped

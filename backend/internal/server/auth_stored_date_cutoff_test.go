@@ -756,6 +756,52 @@ func TestCutoffRefusesATallyXMLAlterOrDeleteOutOfALockedPeriod(t *testing.T) {
 // records WHY, because the whole reason this is round 3 is that "it looked
 // harmless" was decided by silence three times.
 var writeRoutesNamingADocumentButNotMovingIt = map[string]string{
+	// ---- T11 BUDGETS (migrations 0085/0086). FIVE WRITE ROUTES, ONE REASON.
+	//
+	// ⛔ THE DOCUMENT THESE NAME IS NOT A LEDGER DOCUMENT. The census matches them
+	// because the path carries a {budgetID} and a budget IS dated — but a budget is
+	// a PLAN, not an entry: it writes no voucher_version, no posting and no
+	// balance, and appears on no statement. Migration 0085 grants UPDATE and DELETE
+	// on both tables for exactly that reason, which is the opposite of `posting`
+	// (posting_immutable RAISES on both).
+	//
+	// ⛔ SO THERE IS NOTHING HERE THAT COULD BE LIFTED OUT OF A LOCKED PERIOD. The
+	// hazard this test guards is a write that takes an ALREADY-DATED ledger
+	// document across the cutoff — a voucher altered or deleted out of a filed
+	// return. A budget cannot be that: nothing in the ledger reads `budget` or
+	// `budget_line`, and the only consumer is reporting.BudgetVarianceFor, which
+	// puts the plan in its own column beside an actual it derives independently.
+	// Altering a plan's period changes which movement the REPORT compares against;
+	// it changes no posted figure, and the actual side is re-derived from the
+	// vouchers either way.
+	//
+	// ⚠️ AND THEIR OWN DATES ARE **NOT** JUDGED EITHER, WHICH IS THE OTHER HALF OF
+	// THE DECISION AND IS RECORDED SEPARATELY — see budgetReq.from_date/to_date in
+	// wireDatesInPackageServer (auth_backdated_wire_date_test.go), which states the
+	// four reasons at length. This entry says "not moving a ledger document"; it
+	// does NOT say "a cutoff was considered and applied". Both halves had to be
+	// written down, because the three shipped defects were each a case where one
+	// half was recorded and the other was assumed.
+	//
+	// ⛔ IF A LATER TRACK EVER LETS A BUDGET POST — an accrual, a provision, an
+	// auto-reversing commitment — EVERY ONE OF THESE FIVE ENTRIES BECOMES FALSE and
+	// the routes must move to existingVouchersNamedByRequest.
+	"PUT /v1/companies/{companyID}/budgets/{budgetID}": "" +
+		"a budget is a PLAN, not a ledger entry: writes no voucher_version and no posting, " +
+		"and nothing in the ledger reads it (its own dates are accounted for in " +
+		"wireDatesInPackageServer)",
+	"DELETE /v1/companies/{companyID}/budgets/{budgetID}": "" +
+		"a budget is a PLAN, not a ledger entry: deleting one moves no posted figure, and " +
+		"a plan abandoned before its period is not history",
+	"POST /v1/companies/{companyID}/budgets/{budgetID}/lines": "" +
+		"a budget line is a figure in a comparison column: writes no voucher_version and no " +
+		"posting, and the actual it is compared against is derived from the vouchers " +
+		"independently",
+	"PUT /v1/companies/{companyID}/budgets/{budgetID}/lines/{lineID}": "" +
+		"restates a planned figure in place; writes no voucher_version and no posting",
+	"DELETE /v1/companies/{companyID}/budgets/{budgetID}/lines/{lineID}": "" +
+		"removes a planned figure; writes no voucher_version and no posting",
+
 	// Pins an IRN/ARN onto a voucher. ledger.RegisterExternalReference writes ONE
 	// row in voucher_external_reference and NO voucher_version: no date, no
 	// amount and no posting changes. Its only effect on the voucher is to FREEZE

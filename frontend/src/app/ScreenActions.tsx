@@ -74,12 +74,33 @@ export type ScreenActionKind =
    */
   | "createCostMaster"
   /**
+   * Alt+C on the BUDGETS screen — open the create panel for a BUDGET (a named plan
+   * over a period) or a LINE on the open one. A screen action rather than a machine
+   * transition for the same reasons `createCostMaster` is: the panel's state and the
+   * client that posts it belong to the screen, and creating a plan here does not
+   * navigate — the operator is still looking at the list that tells them the name is
+   * not taken already, and at the plan they are adding a line to.
+   */
+  | "createBudget"
+  /**
    * F4 on the COST CENTRE SUMMARY — choose the AXIS (cost category) the report is
    * for. The screen owns it because the axes are a SERVED list, and because the
    * report is meaningless without one: every figure on it is scoped to one axis,
    * since several axes allocate the same money in parallel.
    */
   | "selectCostCategory"
+  /**
+   * F4 on the BUDGET VARIANCE screen — CHOOSE THE PLAN (T11). A screen action for
+   * the same reason `selectCostCategory` is: the plan list and the client that
+   * fetches it belong to the screen, and choosing a plan does not navigate — the
+   * operator is still on the report they are re-drawing.
+   *
+   * ⛔ IT EXISTS BECAUSE THE PLAN IS NEVER DEFAULTED. A variance report is a
+   * comparison and there is no default plan: an empty one reads as "nothing was
+   * planned and nothing was spent", which is a claim about the company rather than
+   * about a missing selection.
+   */
+  | "selectBudget"
   /**
    * Alt+C on an ORDER REGISTER — open the form that records a new sales or
    * purchase order (T3). A screen action rather than a machine transition for the

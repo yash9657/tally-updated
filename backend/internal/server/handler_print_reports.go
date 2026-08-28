@@ -17,7 +17,19 @@ package server
 //	payroll-form-138, payroll-pf-ecr, payroll-esi-return,
 //	tds-register,
 //	cost-centre-summary, cost-category-summary,
-//	sales-order-book, purchase-order-book
+//	sales-order-book, purchase-order-book,
+//	budget-variance
+//
+// The BUDGET VARIANCE (T11) is deferred because the screen's honesty does not
+// survive being printed. It legitimately SUPPRESSES the grand total when a plan
+// mixes a CLOSING_BALANCE line with a NETT_TRANSACTIONS one — a position plus a
+// flow is not a quantity — and says so in a note beside the missing figure. Paper
+// has no such affordance: a footer is either there or it is not, and a reader
+// holding a printout cannot expand a caveat. The same applies to the UNBUDGETED
+// section, which is deliberately outside the plan's totals on screen and which, as
+// a second table under one heading, is exactly how it gets added to the first. So
+// the printed form needs a layout that splits by basis or states the suppression
+// in the footer, and that decision has not been taken.
 //
 // The two order books (T3) are deferred because a printed order book is a
 // different document from the screen. On paper, on our stationery, it reads as a

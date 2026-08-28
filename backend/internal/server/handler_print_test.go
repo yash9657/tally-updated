@@ -1283,8 +1283,25 @@ func TestTheUnimplementedReportsAreStillGovernableAndSaySo(t *testing.T) {
 	// lawfully differ from — so the printed version needs to say which of its
 	// numbers are agreed and which are expected. That is a different document from
 	// the screen this slug names.
-	if deferred != 20 {
-		t.Errorf("expected 20 deferred report names, saw %d: handler_print_reports.go's header "+
+	// 21: the twenty above plus the BUDGET VARIANCE (T11, migrations 0085/0086).
+	// Deferred for the same reason and with the same permanence as the order books:
+	// a printed variance statement is not the screen with a border round it.
+	//
+	// ⛔ IT IS THE ONE DEFERRED REPORT WHOSE LAYOUT PROBLEM IS ABOUT WHAT MAY NOT BE
+	// PRINTED AT ALL. The screen legitimately refuses a grand total when a plan
+	// mixes a CLOSING_BALANCE line with a NETT_TRANSACTIONS one — a position plus a
+	// flow is not a quantity — and it says so in a note beside the suppressed
+	// figure. A printed page has no such affordance: a footer is either there or it
+	// is not, and a reader holding paper cannot expand a caveat. So the printed form
+	// needs a layout that either splits the page by basis or states the suppression
+	// in the footer itself, and that is a decision nobody has made.
+	//
+	// The same goes for the UNBUDGETED array, which is deliberately NOT part of the
+	// plan's totals: on screen it is a separate section a reader scrolls to, and on
+	// paper a second table under one heading is exactly how it gets added to the
+	// first. A blank page is better than a variance statement that foots wrongly.
+	if deferred != 21 {
+		t.Errorf("expected 21 deferred report names, saw %d: handler_print_reports.go's header "+
 			"lists the deferred set explicitly and it is now out of step with "+
 			"authz.KnownReportNames", deferred)
 	}
@@ -1975,6 +1992,21 @@ var printDisallowedBySeededMigrations = []struct{ resource, discloses string }{
 	{"report:cash-flow",
 		"the forward cash position — what the business expects to collect and pay, week by " +
 			"week, for ninety days, including how much of it rests on a convention nobody agreed to"},
+	// ---- THE BUDGET VARIANCE (migration 0086, T11).
+	//
+	// ⛔ THE ONLY ENTRY IN THIS TABLE WHOSE DISCLOSURE IS NOT IN THE BOOKS AT ALL.
+	// Every other row leaks something a voucher records — what the company earns,
+	// owes, holds, has committed to, or (the anomaly list) what its operator keyed
+	// irregularly. A budget is the one figure in this product that NO VOUCHER
+	// CONTAINS: it is what the owner INTENDS. On paper, beside the actual, it is
+	// the plan, every line the business is failing against, and — through a budget
+	// on a payroll group compared with its actual — the payroll total that the five
+	// payroll entries at the top of this table refuse individually. A refusal that
+	// can be walked around through a second report is not a refusal.
+	{"report:budget-variance",
+		"what the owner PLANNED — the business's own targets — set beside what actually " +
+			"happened, line by line, including the payroll total by inference from a budget " +
+			"on a payroll group"},
 }
 
 // TestAnOwnerWritingOneConvenientAllowPrintStarStillCannotHandOverTheWageBill is

@@ -301,6 +301,37 @@ export interface ListLedgersResponse {
   ledgers: LedgerListItem[];
 }
 
+/**
+ * One account group as `GET .../groups` serves it.
+ *
+ * ⚠️ THE ROUTE WAS ADDED FOR T11 AND `POST /groups` LONG PREDATES IT. Every
+ * screen that cared about groups before named them by NAME (createLedger takes a
+ * group name), and a budget line on a GROUP has to store an account_group_id —
+ * which no master form may ask a human to type. It costs no permission rule: the
+ * server already mapped `/groups` to the shared `master` token, the same one
+ * `listLedgers` reads under.
+ */
+export interface AccountGroupListItem {
+  id: string;
+  name: string;
+  /** "" for a primary group — never a null and never the nil uuid. */
+  parent_name: string;
+  /**
+   * ASSET / LIABILITY / INCOME / EXPENSE.
+   *
+   * ⚠️ SERVED BECAUSE A CALLER CANNOT DERIVE IT, and a budget line takes its SIDE
+   * from it: debit for what is spent or owned, credit for what is earned or owed.
+   */
+  nature: string;
+  /** A Profit & Loss group rather than a Balance Sheet one. */
+  is_pl: boolean;
+}
+
+/** `GET .../groups` */
+export interface ListGroupsResponse {
+  groups: AccountGroupListItem[];
+}
+
 // ---------------------------------------------------------------------------
 // BANK RECONCILIATION (T4). Wire shapes of GET /bank-reconciliation/{ledgerID}.
 // ---------------------------------------------------------------------------
@@ -4542,4 +4573,303 @@ export interface ReconciliationPayloadResponse {
 export interface ResolveReconciliationResponse {
   reconciliation_id: string;
   resolved: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// T11 — BUDGETS AND BUDGET VS ACTUAL (migrations 0085/0086)
+// ---------------------------------------------------------------------------
+//
+// ⛔⛔ THE ONE RULE THAT GOVERNS EVERY CALLER OF THESE TYPES: A BUDGET FIGURE IS
+// MEANINGLESS WITHOUT ITS BASIS, AND TWO BASES MAY NEVER BE ADDED.
+//
+// A CLOSING_BALANCE budget is a POSITION as at the period's end date (opening
+// balance folded in); a NETT_TRANSACTIONS budget is MOVEMENT inside the period
+// (opening balance excluded). "Sundry Debtors must not exceed 40 lakh at year
+// end" is the first; "travel spend must not exceed 5 lakh this year" is the
+// second. The same Rs 10,00,000 means different things under each, so the basis
+// is on EVERY line and EVERY total, and the server refuses a grand total when a
+// plan mixes them — see {@link BudgetVarianceResponse.totals_are_addable}.
+//
+// ⛔ AND A BUDGET POSTS NOTHING. There is no voucher, no posting, no balance
+// effect and no hash chain. That is why a budget cannot be faked by keying
+// journals: it is the second column a report compares an actual against.
+
+/** The grain a budget line targets. A closed set; the server refuses anything else. */
+export type BudgetDimension = "GROUP" | "LEDGER" | "COST_CENTRE";
+
+/**
+ * How a budget line's actual is measured.
+ *
+ * ⛔ THERE IS NO DEFAULT, DELIBERATELY. These answer different questions and a
+ * line whose author never chose would still be reported against with total
+ * confidence.
+ */
+export type BudgetBasis = "CLOSING_BALANCE" | "NETT_TRANSACTIONS";
+
+/**
+ * What a variance row IS — seven distinct facts, none a rounding of another.
+ *
+ * ⛔ THE FOUR THAT ARE EASY TO GET WRONG:
+ *
+ *  - `UNSPENT` is a budget with NOTHING posted against it. It is NOT "zero
+ *    variance" and NOT ordinary underspend: an untouched budget is a fact about
+ *    the plan, or about what is being keyed, and both matter.
+ *  - `NETTED_TO_ZERO` is movement on both sides that cancelled exactly. Distinct
+ *    from UNSPENT, where nothing happened — which is why every row carries
+ *    `actual_debit` and `actual_credit` and not just the nett.
+ *  - `CONTRA` is an actual on the OPPOSITE side from the budget. It is NOT
+ *    "comfortably under budget"; it usually means a reversal, a refund, or a
+ *    posting on the wrong side.
+ *  - `UNBUDGETED` is an actual with NO budget line. It is NOT "100% over": the
+ *    plan is silent about it rather than exceeded, and no percentage of a budget
+ *    that was never set can be stated. These rows arrive in their own array.
+ */
+export type BudgetStatus =
+  | "ON_TARGET"
+  | "OVER"
+  | "UNDER"
+  | "UNSPENT"
+  | "NETTED_TO_ZERO"
+  | "CONTRA"
+  | "UNBUDGETED";
+
+/** One plan: a name and a period. `GET .../budgets` */
+export interface Budget {
+  id: string;
+  name: string;
+  /** Both bounds inclusive. REQUIRED, unlike every report period in this API. */
+  from_date: string;
+  to_date: string;
+  /**
+   * ⚠️ RENDER THIS. An empty budget is a live trap: the variance report over it is
+   * a page of unbudgeted actuals, which reads as "nothing was planned" and is
+   * indistinguishable from "the plan was never keyed".
+   */
+  line_count: number;
+  created_by: string;
+  created_at: string;
+}
+
+/** `GET .../budgets` */
+export interface BudgetListResponse {
+  budgets: Budget[];
+}
+
+/** `POST .../budgets` and `PUT .../budgets/{id}` */
+export interface CreateBudgetRequest {
+  name: string;
+  from_date: string;
+  to_date: string;
+  created_by: string;
+}
+
+/** `POST .../budgets` */
+export interface CreateBudgetResponse {
+  id: string;
+  name: string;
+  from_date: string;
+  to_date: string;
+}
+
+/** `PUT .../budgets/{id}` — the read-back may be null when it failed. */
+export interface AlterBudgetResponse {
+  id: string;
+  budget: Budget | null;
+  read_back_error?: string;
+}
+
+/** `DELETE .../budgets/{id}` */
+export interface DeleteBudgetResponse {
+  id: string;
+  deleted: boolean;
+  /**
+   * ⚠️ SHOW THIS. Deleting a plan cascades to its lines, and "I deleted a budget"
+   * and "I deleted 40 budgeted figures" are different acts.
+   */
+  lines_deleted_by_cascade: number;
+}
+
+/** One budgeted figure. */
+export interface BudgetLine {
+  id: string;
+  budget_id: string;
+  dimension: BudgetDimension;
+  target_id: string;
+  /**
+   * The group / ledger / centre name. ⚠️ FOR A COST CENTRE THE NAME ALONE IS
+   * AMBIGUOUS — "Mumbai" may legitimately be both a Branch and a Project — so
+   * render `cost_category_name` beside it.
+   */
+  target_name: string;
+  /** Set for a COST_CENTRE line only; "" otherwise. */
+  cost_category_id: string;
+  cost_category_name: string;
+  /**
+   * ASSET / LIABILITY / INCOME / EXPENSE, and "" for a cost centre, which has
+   * none. Carried so a caller can tell whether exceeding this budget is the good
+   * direction — the server refuses to say "favourable" and this is what lets a
+   * screen decide. See {@link BudgetVarianceRow.nature}.
+   */
+  nature: string;
+  basis: BudgetBasis;
+  /** "D" or "C" — the side the figure is expected on. */
+  dr_cr: string;
+  amount: Money;
+  note: string;
+  /**
+   * The basis in words, served on EVERY line. ⛔ RENDER IT: a screen that showed
+   * only the token would let an operator set a position ceiling thinking they had
+   * set a spend cap.
+   */
+  basis_means: string;
+  created_at: string;
+}
+
+/** `GET .../budgets/{id}/lines` */
+export interface BudgetLineListResponse {
+  budget_id: string;
+  lines: BudgetLine[];
+}
+
+/**
+ * `POST .../budgets/{id}/lines` and `PUT .../budgets/{id}/lines/{lineID}`
+ *
+ * ⛔ ON A PUT, `dimension` AND `target_id` ARE IMMUTABLE and the server refuses a
+ * different one by name. Omit them, or send the stored values.
+ */
+export interface CreateBudgetLineRequest {
+  dimension?: BudgetDimension;
+  target_id?: string;
+  basis: BudgetBasis;
+  /**
+   * Omit for a GROUP or LEDGER line to take the target's natural side (debit for
+   * ASSET/EXPENSE, credit for LIABILITY/INCOME) — the ordinary case, which an
+   * operator never types.
+   *
+   * ⛔ REQUIRED FOR A COST CENTRE, which has no nature to derive from. A cost
+   * budget is "D".
+   */
+  dr_cr?: string;
+  /** A decimal STRING. Never a JSON number: a budgeted figure sent as a float has already lost precision. */
+  amount: Money;
+  note?: string;
+  created_by: string;
+}
+
+/** `POST .../budgets/{id}/lines` */
+export interface CreateBudgetLineResponse {
+  id: string;
+  budget_id: string;
+}
+
+/** One target's plan beside its actual. */
+export interface BudgetVarianceRow {
+  dimension: BudgetDimension;
+  target_id: string;
+  target_name: string;
+  /** Set for a COST_CENTRE row only. */
+  cost_category_id?: string;
+  cost_category_name?: string;
+  /**
+   * ⛔ THIS IS HERE BECAUSE THE SERVER REFUSES TO SAY "FAVOURABLE". Spending more
+   * than budget is bad; EARNING more than budget is good; and both are `OVER`. A
+   * screen that colours every OVER row red paints the best news on the page in the
+   * colour of a crisis. "" for a cost centre.
+   */
+  nature: string;
+  basis: BudgetBasis;
+  dr_cr: string;
+  /** Zero on an UNBUDGETED row, which arrives in its own array. */
+  budget: Money;
+  /**
+   * BOTH RAW SIDES, not only the nett. They are the only thing distinguishing
+   * `UNSPENT` (nothing posted) from `NETTED_TO_ZERO` (movement that cancelled),
+   * and they let a caller re-derive `actual` rather than trust it.
+   */
+  actual_debit: Money;
+  actual_credit: Money;
+  /** Oriented to `dr_cr`: the figure the budget is actually compared with. */
+  actual: Money;
+  /** `actual` - `budget`. Positive means MORE than planned on the budgeted side. */
+  variance: Money;
+  /**
+   * ⛔⛔ `null` WHENEVER THERE IS NO BUDGET TO DIVIDE BY, and a caller MUST render
+   * "no budget set" rather than substituting a number. A 0, a 100 or an infinity
+   * here is a figure a reader will believe and act on.
+   */
+  variance_percent: Money | null;
+  /** Present only when `variance_percent` is null, saying why in words. */
+  variance_percent_absent_because?: string;
+  status: BudgetStatus;
+  /** The operator's own note from the budget line. */
+  note: string;
+  /** The REPORT's caveats about THIS row. They travel with the number; render them. */
+  notes: string[];
+}
+
+/**
+ * The subtotal for one basis.
+ *
+ * ⛔ THE ONLY TOTALS THIS REPORT IS ALWAYS WILLING TO STATE. A grand total exists
+ * only when every row shares one basis.
+ */
+export interface BudgetBasisTotal {
+  basis: BudgetBasis;
+  rows: number;
+  budget: Money;
+  actual: Money;
+  variance: Money;
+}
+
+/** `GET .../budget-variance?budget_id=&dimension=[&cost_category_id=]` */
+export interface BudgetVarianceResponse {
+  /** Echoed so a screen cannot render one plan or grain under another's heading. */
+  budget_id: string;
+  budget_name: string;
+  dimension: BudgetDimension;
+  /**
+   * The plan's OWN period. ⛔ THE REPORT DOES NOT NARROW IT: comparing a
+   * full-period budget against a shorter window needs a spread rule
+   * (straight-line, monthly, seasonal) that nobody has chosen, and apportioning by
+   * day count would be confidently wrong for any business with a seasonal year.
+   */
+  from_date: string;
+  to_date: string;
+  /** The plan: one row per budget line. */
+  rows: BudgetVarianceRow[];
+  /**
+   * Actuals no budget line covers, at leaf grain.
+   *
+   * ⛔ A SEPARATE ARRAY AND NOT ROWS WITH A ZERO BUDGET, so the budget column
+   * never carries a figure nobody set. These are the plan's GAPS, not variances
+   * against it, and they are NOT in the totals below. Complete — no cap, no
+   * sampling.
+   */
+  unbudgeted: BudgetVarianceRow[];
+  unbudgeted_count: number;
+  unbudgeted_actual: Money;
+  /** Always served, one per basis present. */
+  totals: BudgetBasisTotal[];
+  /**
+   * ⛔⛔ CHECK THIS BEFORE DRAWING A FOOTER. When a plan mixes bases this is false
+   * and the three grand totals below are ZERO — not because the report failed, but
+   * because no single number is correct: a position plus a flow is not a quantity.
+   * A footer that summed them would be the most believable wrong figure on the page.
+   */
+  totals_are_addable: boolean;
+  total_budget: Money;
+  total_actual: Money;
+  total_variance: Money;
+  /** Counts by status, so a screen can lead with "4 overspent, 11 untouched". */
+  status_counts: Partial<Record<BudgetStatus, number>>;
+  /** Set for the COST_CENTRE dimension only. */
+  cost_category_id: string;
+  cost_category_name: string;
+  /**
+   * The report-level caveats: the mixed-basis refusal, the no-apportionment
+   * statement, the cross-axis warning, and the reminder that OVER is arithmetic
+   * rather than bad news. A screen may style them; it may not decide whether to
+   * show them.
+   */
+  notes: string[];
 }

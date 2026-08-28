@@ -198,6 +198,13 @@ const SCREEN_ACTIONS: Partial<Record<KeymapAction["kind"], ScreenActionKind>> = 
   // Ditto: a Cost Centre Summary with no axis chosen renders a picker, and
   // without this entry F4 could never reopen it.
   selectCostCategory: "selectCostCategory",
+  // Alt+C on the BUDGETS screen — create a plan, or a line on the open one (T11).
+  // Same registration point and the same silent failure mode as the two above.
+  createBudget: "createBudget",
+  // F4 on the BUDGET VARIANCE report — choose the plan it compares against (T11).
+  // The report has NO default plan, so without this entry a company with several
+  // budgets could never re-point the report after the first choice.
+  selectBudget: "selectBudget",
   // ---- THE FOUR T3 SCREEN ACTIONS (Alt+C / Alt+W on the two order registers,
   // Alt+C / Alt+X on the BOM screen).
   //

@@ -153,6 +153,28 @@ KNOWN_SCREENS = {
     # know, and the category summary is a shape no generic report screen renders.
     "cost-centre-summary",
     "cost-category-summary",
+    # T11 — THE TWO BUDGET SCREENS (migrations 0085/0086). A budget POSTS NOTHING:
+    # no voucher, no posting, no balance, no hash chain. It is the second column a
+    # report compares an actual against, which is exactly why it cannot be faked by
+    # keying journals — and why nothing a fixture does on these screens can move a
+    # single figure in the books.
+    #
+    # "budgets" is the MASTER screen (the plans and the figures on them) — a
+    # ScreenKind because the server serves it under the bare token `budget`, which
+    # no `allow display report` rule can match, the same reason "cost-centres" is.
+    "budgets",
+    # THE VARIANCE REPORT. Unlike the two cost summaries above, this one IS served
+    # as a report name (`report:budget-variance`, refused to the seeded Data Entry
+    # level by migration 0086) — and it is STILL a ScreenKind, because the screen
+    # takes a PLAN and a GRAIN (and an AXIS at the cost-centre grain) that no
+    # reportName frame can carry. The ACL name and the navigation mechanism are
+    # independent.
+    #
+    # ⛔ A FIXTURE ON THIS SCREEN MUST NOT ASSERT A GRAND TOTAL WITHOUT CHECKING
+    # `totals_are_addable`. A plan mixing a CLOSING_BALANCE line with a
+    # NETT_TRANSACTIONS one has NO addable total — a position plus a flow is not a
+    # quantity — and the server sends three zeros with the flag false.
+    "budget-variance",
     # T3 — THE TWO ORDER REGISTERS AND THE BILLS OF MATERIALS (migrations 0042,
     # 0043). An order is a COMMITTED QUANTITY and not a movement: the stock ledger
     # has exactly one primitive (a positive quantity plus a direction) and an order

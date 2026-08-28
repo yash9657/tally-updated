@@ -104,6 +104,22 @@ const GATEWAY_MENU = [
   "Cost Centre Summary",
   "Cost Category Summary",
 
+  // ---- THE TWO T11 BUDGET SCREENS.
+  //
+  // "Budgets" is the MASTER door and comes first for the same reason "Cost
+  // Centres" does: until a plan with lines exists, the variance report has nothing
+  // in its second column and can only say so.
+  //
+  // ⛔ "Budget Variance" IS A GATEWAY ENTRY AND NOT A REPORT_NAMES ENTRY, even
+  // though the server serves it as `report:budget-variance`. This build's
+  // second-level menu is generated from REPORT_NAMES and pushes a `report` frame,
+  // which renders "not available in this build" — over a report that is built and
+  // ACL-gated. It also takes a plan, a grain and (at the cost-centre grain) an
+  // axis, none of which a reportName frame can carry. See BUDGET_VARIANCE_LABEL in
+  // navMachine.ts.
+  "Budgets",
+  "Budget Variance",
+
   // ---- THE THREE T3 SCREENS (order processing and bills of materials).
   //
   // The two REGISTERS also have documented keys — Ctrl+F8 and Ctrl+F9

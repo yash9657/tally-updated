@@ -144,8 +144,8 @@ const FEATURES: {
       },
       {
         name: "Budgets and budget-vs-actual",
-        state: "off",
-        note: "Not built. A budget is a comparison dimension rather than a posting, so it changes no voucher and no balance — which is exactly why it cannot be faked by keying journals: there is no second column for any report to compare an actual against.",
+        state: "on",
+        note: "Budgets on GROUPS, LEDGERS and COST CENTRES, each line measured on either a CLOSING BALANCE (a position as at the plan's end date) or NETT TRANSACTIONS (movement inside the period) — Tally's two bases, both built, and the report prints which one every figure uses. A budget still posts nothing: no voucher, no balance, no hash chain. Unspent budgets, actuals nobody budgeted, and movement that netted to zero are each reported as what they are rather than as a variance of zero, and no percentage is shown against a budget that was never set. FOUR THINGS ARE NOT BUILT AND THE REPORT SAYS SO ON ITS FACE: (1) no pro-rata — the budget column is always the plan's WHOLE period, because comparing it against a shorter window needs a spread rule (straight-line, monthly, seasonal) that nobody has chosen; (2) no revision history — altering a figure overwrites it, so \u201coriginal, revised, actual\u201d is not available as three columns; (3) no grand total when a plan mixes the two bases, deliberately, because a position plus a flow is not a quantity; (4) no printed layout — Ctrl+P answers \u201cnot built\u201d rather than putting a variance statement on paper without those caveats. The report is denied to the seeded Data Entry level (migration 0086) and the budget master is denied to it with no rule at all.",
       },
     ],
   },

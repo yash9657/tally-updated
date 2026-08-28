@@ -179,6 +179,61 @@ export const MASTER_GOTO_ENTRIES: Readonly<Record<string, MasterKind>> = {
 };
 
 /**
+ * Go To entries that open a SCREEN KIND rather than a report frame or a master
+ * form (T11).
+ *
+ * ⛔⛔ WHY THIS MAP HAS TO EXIST, AND WHAT GOES WRONG WITHOUT IT. The picker's
+ * fallback is `canonicalReportName(label) ?? label`, which pushes
+ * `{screen:"report", reportName}` for ANY label it does not recognise — and a
+ * `report` frame with an unregistered name renders UnwiredReportScreen, politely
+ * announcing that the thing the operator just asked for "is not available in this
+ * build". So a screen-kind destination cannot simply be added to
+ * {@link GOTO_ENTRIES}: it needs a branch in `resolveGotoSelection` that fires
+ * BEFORE that fallback, exactly as the master entries do. This is the third time
+ * that shape has bitten (the five master entries, then "Vouchers"/D80), and it is
+ * why the machine owns the list.
+ *
+ * ⚠️ "Budget Variance" IS a report name on the SERVER (`report:budget-variance`,
+ * refused to Data Entry by migration 0086) and is deliberately NOT in
+ * REPORT_NAMES. The two are different things: REPORT_NAMES drives the generic
+ * report frame, and this screen takes a PLAN and a GRAIN that such a frame cannot
+ * carry. The ACL name and the navigation mechanism are independent, and conflating
+ * them is what would put a dead screen in front of a live report.
+ *
+ * ⚠️ THE THREE COST SCREENS (T2) HAVE THE SAME SHAPE AND ARE NOT LISTED HERE.
+ * They are Gateway-only today and this map would give them an Alt+G door too;
+ * adding them is a change to T2's reachability and belongs to whoever owns that,
+ * not to a budgets lane quietly widening it. The mechanism is here when they want
+ * it.
+ */
+export const SCREEN_GOTO_ENTRIES: Readonly<Record<string, ScreenKind>> = {
+  // The MASTER first, so typing "budget" offers the thing that has to exist
+  // before the report means anything — the same ordering argument
+  // MASTER_GOTO_ENTRIES makes for "Create Stock Item" over "Create Stock Group".
+  Budgets: "budgets",
+  "Budget Variance": "budget-variance",
+};
+
+/** Case-insensitive index of {@link SCREEN_GOTO_ENTRIES}, built once. */
+const SCREEN_GOTO_BY_LABEL: ReadonlyMap<string, ScreenKind> = new Map(
+  Object.entries(SCREEN_GOTO_ENTRIES).map(([label, kind]) => [
+    label.toLowerCase(),
+    kind,
+  ]),
+);
+
+/**
+ * The {@link ScreenKind} a Go To label opens, or undefined for anything else.
+ * Matched case-insensitively, exactly as every Gateway label above is.
+ */
+export function screenKindForGotoLabel(
+  label: string | undefined,
+): ScreenKind | undefined {
+  if (!label) return undefined;
+  return SCREEN_GOTO_BY_LABEL.get(label.trim().toLowerCase());
+}
+
+/**
  * Everything the Alt+G / Ctrl+G picker offers, in the order it offers it.
  *
  * ⛔ IT LIVES HERE, NOT IN THE PICKER COMPONENT, for the reason every
@@ -191,6 +246,7 @@ export const MASTER_GOTO_ENTRIES: Readonly<Record<string, MasterKind>> = {
 export const GOTO_ENTRIES: readonly string[] = [
   "Vouchers",
   ...Object.keys(MASTER_GOTO_ENTRIES),
+  ...Object.keys(SCREEN_GOTO_ENTRIES),
   ...REPORT_NAMES,
 ];
 
@@ -381,6 +437,27 @@ export const PRINT_TEMPLATES_LABEL = "Print Templates";
 export const COST_CENTRES_LABEL = "Cost Centres";
 export const COST_CENTRE_SUMMARY_LABEL = "Cost Centre Summary";
 export const COST_CATEGORY_SUMMARY_LABEL = "Cost Category Summary";
+
+/**
+ * The Gateway entries that open the BUDGET MASTER and the BUDGET VARIANCE report
+ * (T11, migrations 0085/0086).
+ *
+ * ⛔⛔ `BUDGET_VARIANCE_LABEL` IS *NOT* IN REPORT_NAMES, AND THAT IS THE SAME
+ * DECISION THE TWO COST SUMMARIES MADE — read it before "fixing" the omission.
+ * The server DOES serve it as `report:budget-variance`, so the temptation is
+ * obvious. But this build's second-level report menu is generated from
+ * REPORT_NAMES and pushes a `report` FRAME, and a `report` frame renders
+ * UnwiredReportScreen — "not available in this build" — over a report that IS
+ * built and IS ACL-gated. The screen also takes a PLAN and a GRAIN (and an AXIS at
+ * the cost-centre grain), none of which a reportName frame can carry.
+ *
+ * So it is a ScreenKind reached from the Gateway, exactly as Bank Reconciliation,
+ * the TDS Challan register and the two cost summaries are. The ACL name and the
+ * navigation mechanism are different things, and conflating them is what put a
+ * dead screen in front of a live report once already.
+ */
+export const BUDGETS_LABEL = "Budgets";
+export const BUDGET_VARIANCE_LABEL = "Budget Variance";
 
 /**
  * The prefix the Cost CATEGORY Summary puts on the row keys it publishes through
@@ -720,6 +797,17 @@ function resolveGotoSelection(
   // unconditionally and really does return to it. Pinned in masterGoto.test.ts.
   if (overlay.selectedItem?.trim().toLowerCase() === "vouchers") {
     return [baseFrame, newVoucherFrame(DEFAULT_LAST_VOUCHER)];
+  }
+  // ⛔ THE SCREEN-KIND ENTRIES, MATCHED BEFORE THE REPORT FALLBACK BELOW, for the
+  // reason the master arm above records at length: the fallback takes ANY
+  // unrecognised label and pushes a `report` frame, which renders "not available
+  // in this build" over a screen that is built and registered. See
+  // SCREEN_GOTO_ENTRIES.
+  const screenKind = screenKindForGotoLabel(overlay.selectedItem);
+  if (screenKind) {
+    const target: ScreenFrame = { screen: screenKind };
+    if (overlay.gotoMode === "switchTo") target.replaced = true;
+    return [baseFrame, target];
   }
   const reportName =
     canonicalReportName(overlay.selectedItem) ?? overlay.selectedItem ?? "";
@@ -1090,6 +1178,31 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
           stack.push({ screen: "cost-category-summary" });
           return { stack };
         }
+        // THE TWO T11 BUDGET SCREENS. Ordering as above, and load-bearing for the
+        // SECOND of them: "Budget Variance" IS a report name on the server, so the
+        // fallback would push a `report` frame that renders "not available in this
+        // build" over a built, ACL-gated report. See BUDGET_VARIANCE_LABEL.
+        //
+        // The MASTER comes first of the two on purpose: until a plan with lines
+        // exists, the variance report has nothing in its second column and can only
+        // say so — the same ordering argument the three cost screens make.
+        if (
+          active.selectedItem?.toLowerCase() === BUDGETS_LABEL.toLowerCase()
+        ) {
+          stack.push({ screen: "budgets" });
+          return { stack };
+        }
+        if (
+          active.selectedItem?.toLowerCase() ===
+          BUDGET_VARIANCE_LABEL.toLowerCase()
+        ) {
+          // No plan and no grain on the frame: the screen opens its PICKER (or
+          // resolves the company's only plan) and defaults the GRAIN to ledger,
+          // which it states on its face. The machine cannot choose a plan — it has
+          // no database — and there is no default plan for it to choose.
+          stack.push({ screen: "budget-variance" });
+          return { stack };
+        }
         // The two ORDER REGISTERS and the BOM screen (T3). Ordering as above.
         // These are the screens Ctrl+F8 / Ctrl+F9 reach; the Gateway is the other
         // door, and it is the only door to the BOM screen (RESEARCH pins no key
@@ -1424,12 +1537,16 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
     }
 
     case "createCostMaster":
+    case "selectBudget":
     case "selectCostCategory": {
       // NO NAVIGATION, for the reason `recordTDSChallan` above gives. The create
       // panel lives ON the cost masters screen (the list beside it is what tells
       // an operator the name is not taken, and on which axis it is not taken), and
       // the axis picker lives ON the Cost Centre Summary (choosing an axis does
-      // not leave the report — it IS the report's subject). Both are screen-owned
+      // not leave the report — it IS the report's subject). The BUDGET picker is
+      // the same shape one report over: choosing which plan the variance is
+      // measured against does not leave the report, it IS the report's subject,
+      // and there is no default plan to fall back to. All three are screen-owned
       // side effects fired through the ScreenActions bridge.
       //
       // ⚠️ A `default: return {}` below would already produce this answer. The
@@ -1830,6 +1947,8 @@ function reduceSelect(ctx: NavContext, menuItem: string): Partial<NavContext> {
       menuItem.toLowerCase() === COST_CENTRES_LABEL.toLowerCase() ||
       menuItem.toLowerCase() === COST_CENTRE_SUMMARY_LABEL.toLowerCase() ||
       menuItem.toLowerCase() === COST_CATEGORY_SUMMARY_LABEL.toLowerCase() ||
+      menuItem.toLowerCase() === BUDGETS_LABEL.toLowerCase() ||
+      menuItem.toLowerCase() === BUDGET_VARIANCE_LABEL.toLowerCase() ||
       menuItem.toLowerCase() === SALES_ORDERS_LABEL.toLowerCase() ||
       menuItem.toLowerCase() === PURCHASE_ORDERS_LABEL.toLowerCase() ||
       menuItem.toLowerCase() === BOMS_LABEL.toLowerCase() ||

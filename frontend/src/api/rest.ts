@@ -60,6 +60,7 @@ import type {
   VoucherRequest,
   VoucherResponse,
   VoucherView,
+  ListGroupsResponse,
   ListLedgersResponse,
   SetLedgerOpeningRequest,
   SetLedgerOpeningResponse,
@@ -132,6 +133,16 @@ import type {
   ReconciliationQueueResponse,
   ResolveReconciliationResponse,
   SyncCommitResponse,
+  AlterBudgetResponse,
+  BudgetDimension,
+  BudgetLineListResponse,
+  BudgetListResponse,
+  BudgetVarianceResponse,
+  CreateBudgetLineRequest,
+  CreateBudgetLineResponse,
+  CreateBudgetRequest,
+  CreateBudgetResponse,
+  DeleteBudgetResponse,
 } from "./types";
 import type { QueryRequest, QueryResult } from "./query";
 import type {
@@ -251,6 +262,12 @@ export function createRestClient(
     },
     listLedgers(companyID) {
       return http.get<ListLedgersResponse>(`${company(companyID)}/ledgers`);
+    },
+    listGroups(companyID) {
+      // A flat list with each row's parent NAMED, ordered by name. Not a tree: the
+      // caller that needs one can build it, and the caller that only needs a picker
+      // is not made to walk one first.
+      return http.get<ListGroupsResponse>(`${company(companyID)}/groups`);
     },
     setLedgerOpening(companyID, ledgerID, req: SetLedgerOpeningRequest) {
       return http.put<SetLedgerOpeningResponse>(
@@ -501,6 +518,96 @@ export function createRestClient(
         { cost_category_id: costCategoryID, from, to },
       );
     },
+    // ---- T11: budgets and budget vs actual (migrations 0085/0086).
+    listBudgets(companyID) {
+      return http.get<BudgetListResponse>(`${company(companyID)}/budgets`);
+    },
+    createBudget(companyID, req: CreateBudgetRequest) {
+      return http.post<CreateBudgetResponse>(
+        `${company(companyID)}/budgets`,
+        req,
+      );
+    },
+    alterBudget(companyID, budgetID: string, req: CreateBudgetRequest) {
+      // The server nests the read-back under `budget` and may return it null when
+      // the read-back failed AFTER a successful write. Handed over AS THE ENVELOPE
+      // rather than unwrapped here, because unwrapping would have to invent
+      // something for the null case — and the caller is the only one who can decide
+      // what to say about "it saved, but we could not read it back".
+      return http.put<AlterBudgetResponse>(
+        `${company(companyID)}/budgets/${encodeURIComponent(budgetID)}`,
+        req,
+      );
+    },
+    deleteBudget(companyID, budgetID: string, deletedBy: string) {
+      // ⚠️ THE ACTOR RIDES IN THE QUERY STRING, not a body: a DELETE carries no body
+      // by convention and the server refuses an absent actor rather than defaulting
+      // it — a plan deleted by nobody in particular is a plan nobody can be asked
+      // about.
+      return http.del<DeleteBudgetResponse>(
+        `${company(companyID)}/budgets/${encodeURIComponent(budgetID)}`,
+        { deleted_by: deletedBy },
+      );
+    },
+    listBudgetLines(companyID, budgetID: string) {
+      return http.get<BudgetLineListResponse>(
+        `${company(companyID)}/budgets/${encodeURIComponent(budgetID)}/lines`,
+      );
+    },
+    addBudgetLine(companyID, budgetID: string, req: CreateBudgetLineRequest) {
+      return http.post<CreateBudgetLineResponse>(
+        `${company(companyID)}/budgets/${encodeURIComponent(budgetID)}/lines`,
+        req,
+      );
+    },
+    alterBudgetLine(
+      companyID,
+      budgetID: string,
+      lineID: string,
+      req: CreateBudgetLineRequest,
+    ) {
+      return http.put<{ id: string; altered: boolean }>(
+        `${company(companyID)}/budgets/${encodeURIComponent(budgetID)}/lines/${encodeURIComponent(lineID)}`,
+        req,
+      );
+    },
+    deleteBudgetLine(
+      companyID,
+      budgetID: string,
+      lineID: string,
+      deletedBy: string,
+    ) {
+      return http.del<{ id: string; deleted: boolean }>(
+        `${company(companyID)}/budgets/${encodeURIComponent(budgetID)}/lines/${encodeURIComponent(lineID)}`,
+        { deleted_by: deletedBy },
+      );
+    },
+    budgetVariance(
+      companyID,
+      budgetID: string,
+      dimension: BudgetDimension,
+      costCategoryID?: string,
+    ) {
+      // A FLAT LITERAL PATH with every selector as a query param, not
+      // /budgets/{id}/variance — a report's route must spell its own name so
+      // routeAction can map it to `report:budget-variance`, exactly as
+      // cost-centre-summary takes cost_category_id this way.
+      //
+      // ⛔ THE PLAN AND THE GRAIN ARE ALWAYS SENT. The server has no default for
+      // either, deliberately: defaulting the grain would render a real, correct
+      // ledger-level report under a heading the operator chose for groups.
+      //
+      // The axis is OMITTED rather than sent empty when absent — the server reads a
+      // present-but-blank id as a 400 about a malformed uuid rather than the
+      // "which axis did you mean" refusal that names the alternatives.
+      return http.get<BudgetVarianceResponse>(
+        `${company(companyID)}/budget-variance`,
+        costCategoryID
+          ? { budget_id: budgetID, dimension, cost_category_id: costCategoryID }
+          : { budget_id: budgetID, dimension },
+      );
+    },
+
     costCategorySummary(companyID, from: string, to: string) {
       // No axis: this report IS the list of axes.
       return http.get<CostCategorySummaryResponse>(

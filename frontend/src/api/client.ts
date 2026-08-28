@@ -60,6 +60,7 @@ import type {
   VoucherRequest,
   VoucherResponse,
   VoucherView,
+  ListGroupsResponse,
   ListLedgersResponse,
   SetLedgerOpeningRequest,
   SetLedgerOpeningResponse,
@@ -129,6 +130,16 @@ import type {
   SetStatutoryElectionRequest,
   SetStatutoryElectionResponse,
   PayrollVocabularyResponse,
+  AlterBudgetResponse,
+  BudgetDimension,
+  BudgetLineListResponse,
+  BudgetListResponse,
+  BudgetVarianceResponse,
+  CreateBudgetLineRequest,
+  CreateBudgetLineResponse,
+  CreateBudgetRequest,
+  CreateBudgetResponse,
+  DeleteBudgetResponse,
 } from "./types";
 import type { QueryRequest, QueryResult } from "./query";
 import type {
@@ -219,6 +230,15 @@ export interface CoredClient {
    * end up minting duplicates of the predefined ledgers.
    */
   listLedgers(companyID: string): Promise<ListLedgersResponse>;
+  /**
+   * The account groups — a flat list with each row's parent NAMED.
+   *
+   * ⚠️ ADDED FOR T11, and it reads under the SAME `master` token as
+   * {@link listLedgers}: a budget line on a GROUP stores an account_group_id, and
+   * no master form in this product may ask a human for a uuid. It grants nothing
+   * new — a group name is already on every ledger row.
+   */
+  listGroups(companyID: string): Promise<ListGroupsResponse>;
   /**
    * Set a ledger's OPENING BALANCE + bill-wise opening breakup. Needed for the
    * ledgers seeded with the company, which cannot carry one at creation.
@@ -619,6 +639,123 @@ export interface CoredClient {
     from: string,
     to: string,
   ): Promise<CostCategorySummaryResponse>;
+
+  // ---- T11: budgets and budget vs actual (migrations 0085/0086).
+  //
+  // ⛔ THE ONE RULE THAT GOVERNS EVERY CALLER OF THESE SEVEN: A BUDGET FIGURE IS
+  // MEANINGLESS WITHOUT ITS BASIS, AND TWO BASES MAY NEVER BE ADDED. A
+  // CLOSING_BALANCE budget is a POSITION as at the period end; a NETT_TRANSACTIONS
+  // one is MOVEMENT within it. See {@link BudgetBasis} and, for the consequence,
+  // {@link BudgetVarianceResponse.totals_are_addable}.
+  //
+  // ⛔ AND THE MASTER AND THE REPORT ARE TWO DIFFERENT AUTHORITIES. The master
+  // routes are governed by the BARE `budget` token, which the seeded Data Entry
+  // level is refused with no ACL rule at all; the report is
+  // `report:budget-variance`, which migration 0086 refuses explicitly because
+  // 0011's coarse `allow display report` would otherwise GRANT it. A level may
+  // legitimately hold one and not the other, so a caller must handle a 403 on
+  // either independently.
+
+  /** The plans. `line_count` is served so a screen can show an EMPTY plan as empty. */
+  listBudgets(companyID: string): Promise<BudgetListResponse>;
+  /**
+   * Create a plan. Both period bounds are REQUIRED — a plan for no stated period
+   * cannot be compared against anything. A 409 means the name is taken (compared
+   * ignoring case and surrounding spaces).
+   */
+  createBudget(
+    companyID: string,
+    req: CreateBudgetRequest,
+  ): Promise<CreateBudgetResponse>;
+  /**
+   * Restate a plan's name AND period together.
+   *
+   * ⚠️ A PERIOD CHANGE IS NOT COSMETIC: it changes which movement every
+   * NETT_TRANSACTIONS line is measured over and which date every CLOSING_BALANCE
+   * line is measured as at — i.e. every actual on the report moves without one
+   * budgeted figure changing.
+   */
+  alterBudget(
+    companyID: string,
+    budgetID: string,
+    req: CreateBudgetRequest,
+  ): Promise<AlterBudgetResponse>;
+  /**
+   * Delete a plan AND its lines (the server cascades).
+   *
+   * ⚠️ `lines_deleted_by_cascade` is served so a caller can say what actually went.
+   */
+  deleteBudget(
+    companyID: string,
+    budgetID: string,
+    deletedBy: string,
+  ): Promise<DeleteBudgetResponse>;
+
+  /** One plan's lines, with every target's name, nature and basis-in-words resolved. */
+  listBudgetLines(
+    companyID: string,
+    budgetID: string,
+  ): Promise<BudgetLineListResponse>;
+  /**
+   * Add one budgeted figure.
+   *
+   * A 409 means this plan ALREADY has a line for that target: one target gets one
+   * figure per plan, because two would make the report show it twice with the
+   * actual counted in full against each.
+   *
+   * ⛔ A COST CENTRE MAY ONLY BE BUDGETED ON `NETT_TRANSACTIONS` (400 otherwise): a
+   * centre holds no position, only allocations against dated postings.
+   */
+  addBudgetLine(
+    companyID: string,
+    budgetID: string,
+    req: CreateBudgetLineRequest,
+  ): Promise<CreateBudgetLineResponse>;
+  /**
+   * Restate one figure in place.
+   *
+   * ⛔ THE DIMENSION AND TARGET ARE IMMUTABLE (400 on a change). Re-filing a figure
+   * would leave the original target reading as unbudgeted and the new one as having
+   * been planned all along — a change of meaning dressed as a correction. Delete
+   * and re-add instead: two audited acts, which is what happened.
+   */
+  alterBudgetLine(
+    companyID: string,
+    budgetID: string,
+    lineID: string,
+    req: CreateBudgetLineRequest,
+  ): Promise<{ id: string; altered: boolean }>;
+  /** Remove one figure. */
+  deleteBudgetLine(
+    companyID: string,
+    budgetID: string,
+    lineID: string,
+    deletedBy: string,
+  ): Promise<{ id: string; deleted: boolean }>;
+
+  /**
+   * BUDGET VS ACTUAL, for ONE plan at ONE grain.
+   *
+   * Both `budgetID` and `dimension` are REQUIRED and neither has a default: a
+   * missing plan is a 400 whose message NAMES the plans this company has, and a
+   * missing grain is a 400 naming the three. An empty report for a plan that does
+   * not exist would read as "nothing was planned and nothing was spent", which is a
+   * real and reassuring claim about a company and would be a lie.
+   *
+   * ⛔ `costCategoryID` IS REQUIRED WHEN `dimension` IS "COST_CENTRE" and ignored
+   * otherwise. The same money is allocated in full on every axis, so a report
+   * spanning two would total a multiple of the cost borne — the identical rule
+   * {@link costCentreSummary} enforces, with the identical refusal.
+   *
+   * ⚠️ THE PERIOD IS THE PLAN'S OWN AND CANNOT BE NARROWED. See
+   * {@link BudgetVarianceResponse.from_date}.
+   */
+  budgetVariance(
+    companyID: string,
+    budgetID: string,
+    dimension: BudgetDimension,
+    costCategoryID?: string,
+  ): Promise<BudgetVarianceResponse>;
 
   // ---- T3: sales/purchase orders, the bill of materials, and the order books.
   //
