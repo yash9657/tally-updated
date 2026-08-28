@@ -1,4 +1,4 @@
-# HANDOFF — T11 AND T12 ARE BOTH **COMMITTED**, AND T14 BACKUP/RESTORE IS NEXT
+# HANDOFF — T11 AND T12 ARE BOTH **COMMITTED**, AND BANK-STATEMENT MATCHING IS NEXT
 
 **Written:** 2026-08-28, working tree CLEAN at `92319a9` · **Branch:** `session/t32-and-close-7-3`
 **Read time: 12 minutes.** ⭐ **Every number below was MEASURED and the command is beside it.**
@@ -212,47 +212,81 @@ forward from `0080`. ⭐ **T12 TOOK NO TABLE NUMBER — `0088` IS FREE AND IS TH
 
 ---
 
-## 4. ⭐ WHAT TO PICK UP NEXT: **T14 BACKUP / RESTORE**
+## 4. ⭐ WHAT TO PICK UP NEXT: **T4 SLICE 2b — BANK STATEMENT MATCHING**
 
-The plan order is T11 → T12 → **T13 Interest** → **T14 Backup/restore**
-(`PLAN-TALLY-PARITY.md:497`). ⛔ **T13 IS BLOCKED ON STATUTORY DOCUMENTS** — the day-count basis and
-simple-vs-compound are configuration with statutory defaults, and inventing them would be worse than
-the gap. Design note: `docs/design/t13-interest-model.md`. **So T14 is the realistic next one.**
-
-`PLAN-TALLY-PARITY.md:478` is the specification:
-
-> **T14 · Backup / restore, split company data** — *"Operationally important and currently absent.
-> Must be tenant-exact: a restore that leaks one company's rows into another is worse than no
-> backup. Reuse the `testdb` delete-plan census — it already knows every tenant-scoped table and is
-> anti-rot by construction."*
-
-### 4.1 ⭐ THE CENSUS ALREADY EXISTS AND IS SCHEMA-DERIVED
+⛔⛔ **CORRECTION, MADE THE SAME DAY THIS FILE WAS WRITTEN. THIS SECTION USED TO SAY "T14 BACKUP /
+RESTORE" AND THAT WAS WRONG: T14 IS ALREADY BUILT.** It shipped on another lane and takes no
+migration number, so `PLAN-TALLY-PARITY.md` §2.5 still reads `0060–0061 free` and the plan's §5
+sequence still lists it — both are stale, and reading either one is how the mistake was made.
 
 ```bash
-ls backend/internal/platform/tenant/     # -> census.go, census_test.go
+ls backend/internal/backup/                       # -> archive.go, restore.go (+ tests)
+ls backend/internal/server/handler_backup.go      # exists
+ls frontend/src/screens/DataScreen.tsx            # Alt+Y > Data
+grep -n '"backup"' backend/internal/authz/vocabulary.go   # -> a BARE token, so ZERO acl_rule rows
 ```
 
-⭐ **IT IS ANTI-ROT BY CONSTRUCTION AND HAS ALREADY PROVEN IT TWICE**: T11's two new tables
-(`budget`, `budget_line`) were picked up automatically, and T12 added none. A backup that enumerated
-tables by hand would go stale the first time anyone shipped a migration.
+⭐ **THE LESSON IS GENERAL AND IT IS WHY THIS CORRECTION IS KEPT RATHER THAN EDITED AWAY: THE PLAN
+IS NOT THE STATE OF THE TREE.** `PLAN-TALLY-PARITY.md` is a reservation and sequencing document,
+and several lanes have shipped work without updating it. **`FeaturesScreen.tsx` is the closest
+thing to ground truth** — it is the product's own truth-telling surface and a track that ships is
+supposed to flip its row in the same commit. ⛔ **Check the row BEFORE starting a track**, and if
+the row and the plan disagree, believe the row and then fix the plan.
 
-⚠️ **`split company data` IS A DELIBERATE NON-GOAL** (§8) even though it shares T14's row. **Never
-build it.** Back up and restore; do not split.
+### 4.1 WHAT IS ACTUALLY LEFT AND UNBLOCKED
+
+**T4 slice 2b — matching imported bank-statement rows to vouchers.** Slice 2a (the import) shipped;
+matching did not, and the Bank Reconciliation row says so in its own words:
+
+> *"STATEMENT IMPORT NOW WORKS (Alt+O), AND MATCHING STILL DOES NOT. … MATCHING those rows to your
+> vouchers is slice 2b and is NOT built, so every tick in the Bank Date column is still manual and
+> the keys Tally offers for matching (F8, Alt+F8, Alt+S, F9, plus Ctrl+J and Ctrl+B) all answer
+> 'not built' rather than doing nothing."*
+
+```bash
+grep -rn "bank_statement_match" backend/migrations/*.sql   # -> named in 0062's header ONLY; no table
+grep -n "does not compute a match" frontend/src/screens/BankReconciliationScreen.tsx
+```
+
+**It is the last unblocked Tally-parity track on the board.** Everything else is either built,
+blocked on a human or a document, or a declared non-goal — see §7.
 
 ### 4.2 THE MIGRATION NUMBER
 
-**`0060–0061` are reserved for T14** (`PLAN-TALLY-PARITY.md:179`). ⚠️ **CHECK THAT RESERVATION
-BEFORE TAKING IT.** Numbers below the highest `seed_company_auth_defaults` restatement are the
-0071-class trap — if T14 needs *any* ACL rows, those numbers **cannot carry them** and it must take
-a fresh number at the end (**0088**). Tables alone are fine at 0060–0061; a seeder is not.
+`PLAN-TALLY-PARITY.md:181` reserves *"a new number at the end"* for `bank_statement_match`, because
+T4's own block (0045–0046, 0062–0064) is consumed. ⭐ **T12 took no table number, so `0088` IS
+FREE and is the one to take.** ⛔ Do NOT take 0060–0061: numbers below the highest
+`seed_company_auth_defaults` restatement cannot carry a seeder (the 0071 trap, §5.1). Tables alone
+would be safe there, but taking a fresh number costs nothing and removes the question.
 
-### 4.3 ⛔ THE DESIGN RULE T14 WILL LIVE OR DIE ON
+⚠️ **IT PROBABLY NEEDS NO ACL MIGRATION AT ALL.** `bank-statement` and `bank-reconciliation` are
+already governed (0046, 0063), and a MATCH is an operation on the statement rather than a new
+disclosure. Confirm that before writing one — but do not write one reflexively, for the reason §5.1
+gives about bare tokens.
 
-**A restore that leaks one company's rows into another is worse than no backup.** The nearest
-reusable discipline in the tree is T12's: **a figure the system cannot honestly state is SUPPRESSED
-and the reason is printed in its place.** Applied here that means a restore must REFUSE a partial or
-ambiguous archive rather than restoring what it can — a half-restored tenant that foots is exactly
-the shape this repository's register is full of.
+### 4.3 ⛔ THE DESIGN RULE SLICE 2b WILL LIVE OR DIE ON
+
+**A PROPOSED MATCH IS NOT A RECONCILIATION, AND THE TWO MUST NEVER RENDER THE SAME.** The whole
+value of a bank reconciliation is that a human asserted "this line is that voucher"; a fuzzy match
+on amount and date that ticks itself is a reconciliation that attests to nothing, and it fails in
+the direction that foots perfectly. T12's discipline transfers directly: **a figure — or a link —
+the system cannot honestly state must be SUPPRESSED with its reason in place, never left as a
+plausible default.** A confident-looking auto-tick is exactly the "understatement that foots" shape
+this repository's register is full of.
+
+⚠️ **AND AMOUNT-PLUS-DATE IS NOT A KEY.** Two identical payments to the same supplier on the same
+day are ordinary, not pathological. The design has to say what happens when a statement line has
+more than one candidate, and "pick the first" is the wrong answer.
+
+### 4.4 THE OTHER TWO THINGS WORTH DOING, AND ONE IS NOT A FEATURE
+
+1. ⛔ **THE USABILITY PASS THE PLAN ITSELF DEMANDS BEFORE ANYONE CALLS PARITY**
+   (`PLAN-TALLY-PARITY.md` §7): *"Nobody has yet driven the app for a day as a shopkeeper would,
+   which is how the smaller papercuts surface — the ones that do not show up as a missing table."*
+   That is still true. Every gate here is a test or a scripted drive; **no one has used this product
+   to do a day's bookkeeping.** It is the highest-value unbuilt thing on the board and it is not a
+   track.
+2. **D105** — one note string on a shared file. See §7.1.
 
 ---
 
@@ -349,6 +383,7 @@ PGCONNECT_TIMEOUT=5 pg_isready -h localhost -p 5433          # must say "accepti
 | **Single sign-on (SSO / OIDC)** | Needs an IdP and credentials — waits on a human |
 | **Rule 48(4) QR on a printed e-invoice** | Needs the IRP, **geo-fenced from this machine** |
 | **Split company data** | ⛔ A deliberate **non-goal**. Never build it |
+| **T14 Backup / restore** | ✅ **ALREADY BUILT** — `internal/backup/`, Alt+Y > Data, a bare `backup` token. ⚠️ The PLAN still lists it as pending; the PLAN is stale. See §4 |
 | **A printed GSTR-9** | ⛔ Deliberately 501. On screen the ten disclosures sit beside the figures; on paper, a tidy annual return on company stationery with nowhere for ten caveats is a document somebody hands to a tax officer. It needs a layout where the disclosures come FIRST |
 | **A statement-backed annual ITC** | Needs a statement PER MONTH — a different signature and a different decision. See §2.4(3) |
 
@@ -369,22 +404,26 @@ PGCONNECT_TIMEOUT=5 pg_isready -h localhost -p 5433          # must say "accepti
 
 ## 8. DEFINITION OF DONE FOR THE NEXT SESSION
 
-- [ ] Whatever T14 needs is **tenant-exact**, and it **reuses `internal/platform/tenant`'s
-      schema-derived census** rather than listing tables by hand.
-- [ ] ⛔ A restore **REFUSES a partial or ambiguous archive** rather than restoring what it can. A
-      half-restored tenant that foots is the failure shape to design against.
-- [ ] If it takes an ACL name, it takes a **fresh number at the end (0088)** and not 0060–0061 —
-      see §4.2 — and it writes `disallow display` **AND** `disallow print`.
+- [ ] ⛔ **CHECK THE `FeaturesScreen.tsx` ROW BEFORE STARTING ANY TRACK.** The plan is a
+      reservation document and has gone stale at least once — this file's §4 sent a session to
+      build T14, which already existed. If the row and the plan disagree, believe the row.
+- [ ] A statement line's match to a voucher is **asserted, never assumed**: a proposed match and a
+      reconciled one must not render the same, and a line with more than one candidate must say so
+      rather than pick.
+- [ ] Migration **0088** (a fresh number at the end), and **only** an ACL migration if one is
+      genuinely needed — see §4.2.
 - [ ] `seeder_census_test.go` passes. ⛔ **Do not route around it.**
 - [ ] A **browser drive** under `frontend/scripts/`: its own throwaway tenant, reaped in a
       `try/finally`, assertions phrased so the CORRECT behaviour is the PASS, and **control probes**
       that prove the oracle is not vacuous. ⭐ `drive-t12-gstr9.mjs` is the current best example —
       it has **four** controls, labels its pre-existing arm as pre-existing, and **found a real
       defect the unit tests did not** (a refused operator met the 403 only after filling in a form).
-- [ ] `FeaturesScreen.tsx` row flipped with a note that is **true**, including everything not built.
-      ⚠️ Announce first — shared file.
-- [ ] `PLAN-TALLY-PARITY.md` §2.5 updated **in place**.
-- [ ] All gates in §3 green — **including the new 1812/112 vitest baseline**.
+- [ ] `FeaturesScreen.tsx` row updated with a note that is **true**, including everything not built.
+      ⚠️ Announce first — shared file. ⛔ **And in the SAME commit as the feature**, which is the
+      convention that would have kept T14's status legible.
+- [ ] `PLAN-TALLY-PARITY.md` §2.5 updated **in place** — and while you are there, **correct T14's
+      row and the §5 sequence**, which are stale.
+- [ ] All gates in §3 green — **including the 1812/112 vitest baseline**.
 - [ ] ⛔ **MUTATION-PROVE EVERY GUARD, AND CHECK THE TEST ACTUALLY EXECUTES THE MUTATED CODE.**
       T11's cautionary tale: one mutation left the suite green because the test reached the property
       by a path that bypassed the guard. **T12's addition: a migration mutation needs the
