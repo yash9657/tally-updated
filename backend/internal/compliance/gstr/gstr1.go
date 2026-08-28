@@ -251,10 +251,19 @@ type HSNItem struct {
 }
 
 // TaxTotals is the summed CGST/SGST/IGST across a set of rows.
+//
+// ⚠️ THE JSON TAGS WERE ADDED BY T12 AND THEY CHANGED NOTHING ON THE WIRE. This
+// type had never been marshalled: Reconciliation and Reconciliation3B are
+// internal, and both /gstr1 and /gstr3b send a `reconciliation_ok` BOOLEAN rather
+// than the totals themselves. GSTR-9 is the first response to carry a TaxTotals,
+// and it takes the same `camt`/`samt`/`iamt` spellings Table31Row and Table4Row
+// already use — so one document does not have two conventions for the same three
+// numbers. ⛔ Do not remove them: `{"CGST": ...}` beside `{"camt": ...}` in one
+// payload is how a frontend reads the wrong key and renders a confident zero.
 type TaxTotals struct {
-	CGST decimal.Decimal
-	SGST decimal.Decimal
-	IGST decimal.Decimal
+	CGST decimal.Decimal `json:"camt"`
+	SGST decimal.Decimal `json:"samt"`
+	IGST decimal.Decimal `json:"iamt"`
 }
 
 // Total returns the sum of the three heads.

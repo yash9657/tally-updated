@@ -198,6 +198,12 @@ import type {
   BudgetListResponse,
   BudgetStatus,
   BudgetVarianceResponse,
+  GSTR9Envelope,
+  GSTR9Month,
+  GSTR9Divergence,
+  GSTR9Table,
+  GSTR9TaxLedgers,
+  GSTTax,
   BudgetVarianceRow,
   CreateBudgetLineRequest,
   CreateBudgetLineResponse,
@@ -1955,6 +1961,7 @@ const MOCK_VOCABULARY: SecurityVocabulary = {
     "report:anomalies",
     "report:gstr1",
     "report:gstr3b",
+    "report:gstr9",
     "report:reconciliation-queue",
     "*",
   ],
@@ -6773,6 +6780,166 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       }
       return { id: lineID, deleted: true };
     },
+    async gstr9(
+      companyID,
+      from: string,
+      to: string,
+      ledgers: GSTR9TaxLedgers,
+      gstin?: string,
+    ): Promise<GSTR9Envelope> {
+      const c = ensure(companyID);
+
+      // ⛔ THE TWO REFUSALS, IN THE ORDER cored CHECKS THEM. The window is a pure
+      // check and runs first; the ledgers need no lookup but are checked second
+      // because that is the order handleGSTR9 checks them in. A mock that refused
+      // in a different order lets a screen's error handling pass here and fail
+      // against the real server.
+      const fy = financialYearOf(from, to);
+      if (!fy) {
+        throw new ApiError(
+          400,
+          "GSTR-9 covers an Indian financial year (1 April to 31 March), not " +
+            `${from} to ${to}. For a shorter window read the monthly GSTR-3B ` +
+            "instead — an annual return for a period the law does not recognise " +
+            "is a statutory-looking document about nothing",
+        );
+      }
+      const missing = (
+        [
+          ["cgst_ledger_id", ledgers.cgst],
+          ["sgst_ledger_id", ledgers.sgst],
+          ["igst_ledger_id", ledgers.igst],
+          ["input_cgst_ledger_id", ledgers.inputCGST],
+          ["input_sgst_ledger_id", ledgers.inputSGST],
+          ["input_igst_ledger_id", ledgers.inputIGST],
+        ] as [string, string][]
+      )
+        .filter(([, v]) => !v)
+        .map(([k]) => k);
+      if (missing.length > 0) {
+        throw new ApiError(
+          400,
+          `GSTR-9 is a reconciliation TO the books and needs the tax ledger ids: ${missing.join(", ")}. ` +
+            "Without them the books column is ZERO for every month and every period appears to " +
+            "disagree with the returns by exactly the tax charged, which is a wrong number that " +
+            "looks like a finding",
+        );
+      }
+
+      // Resolve the six ids to LEDGER NAMES, because a mock posting records the
+      // ledger by name and not by id.
+      const nameOf = (id: string) =>
+        c.ledgers.find((l) => l.id === id)?.name ?? "";
+      const outNames = [ledgers.cgst, ledgers.sgst, ledgers.igst].map(nameOf);
+      const inNames = [
+        ledgers.inputCGST,
+        ledgers.inputSGST,
+        ledgers.inputIGST,
+      ].map(nameOf);
+
+      const months: GSTR9Month[] = [];
+      for (let n = 0; n < 12; n++) {
+        const w = monthWindowOf(fy, n);
+        const books = (names: string[], cls: string): GSTTax => {
+          const head = (name: string) => {
+            let net = 0;
+            for (const v of c.vouchers) {
+              if (v.class.toUpperCase() !== cls) continue;
+              if (v.date < w.from || v.date > w.to) continue;
+              for (const p of v.postings) {
+                if (p.ledger !== name) continue;
+                const amt = Number(p.amount);
+                net += p.dr_cr === "C" ? amt : -amt;
+              }
+            }
+            return net.toFixed(4);
+          };
+          const [cg = "", sg = "", ig = ""] = names;
+          return { camt: head(cg), samt: head(sg), iamt: head(ig) };
+        };
+        const outward = books(outNames, "SALES");
+        const itc = books(inNames, "PURCHASE");
+        // ⛔⛔ THE RETURNS SIDE IS SET EQUAL TO THE BOOKS, AND THAT IS A LIMITATION
+        // OF THIS MOCK RATHER THAN A CLAIM ABOUT ANY REAL COMPANY. The server's
+        // three columns come from three INDEPENDENT computations — GSTR-1's
+        // section classifier, GSTR-3B's own SQL, and the postings — and this mock
+        // has none of the first two: it stores postings and never derives a GST
+        // return from anything.
+        //
+        // So THE MOCK CAN NEVER PRODUCE A DIVERGENCE, and a screen test that needs
+        // one MUST build the response itself rather than driving this method. A
+        // mock that faked a divergence would be worse: it would let a screen's
+        // offsetting rendering pass here while the real wire shape went untested.
+        months.push({
+          fp: w.fp,
+          from: w.from,
+          to: w.to,
+          r1_txval: "0.0000",
+          r1_tax: outward,
+          r3b_txval: "0.0000",
+          r3b_tax: outward,
+          books_outward_tax: outward,
+          r3b_itc_available: itc,
+          r3b_itc_ineligible: zeroTax9(),
+          books_itc_tax: itc,
+          hsn_txval: "0.0000",
+          hsn_tax: outward,
+          r1_matches_r3b: true,
+          r3b_matches_books: true,
+          itc_matches_books: true,
+          hsn_foots_to_r1: true,
+        });
+      }
+
+      const agreed = (a: string, b: string): GSTR9Divergence => ({
+        a,
+        b,
+        net: zeroTax9(),
+        gross: zeroTax9(),
+        offsetting: false,
+        agrees: true,
+      });
+
+      return {
+        gstr9: {
+          gstin: gstin ?? c.gstin,
+          fy: `${fy}-${String((fy + 1) % 100).padStart(2, "0")}`,
+          from,
+          to,
+          months,
+          outward_r1_vs_r3b: agreed("gstr1", "gstr3b"),
+          outward_r3b_vs_books: agreed("gstr3b", "books"),
+          outward_r1_vs_books: agreed("gstr1", "books"),
+          itc_vs_books: agreed("gstr3b-4a-plus-4d", "books"),
+          hsn_vs_r1: agreed("gstr1-table-12", "gstr1-sections"),
+          taxable_r1_vs_r3b: {
+            a: "gstr1",
+            b: "gstr3b",
+            net: "0.0000",
+            gross: "0.0000",
+            offsetting: false,
+            agrees: true,
+          },
+          tables: gstr9Tables(),
+          // The TEN unconditional tokens, in the sorted order cored emits them.
+          // ⛔ NOT A SUBSET. A mock that disclosed less than the server would let a
+          // screen ship without rendering a limitation the real product always has.
+          disclosures: [
+            "advances-not-modelled",
+            "amendments-not-modelled",
+            "annual-table-structure-unverified",
+            "books-carry-no-taxable-value",
+            "exempt-and-zero-rated-not-marked",
+            "itc-reversals-not-computed",
+            "no-annual-2a",
+            "no-cash-or-credit-ledger",
+            "not-filing-ready",
+            "portal-schema-unverified",
+          ],
+        },
+        reconciled: true,
+      };
+    },
     async budgetVariance(
       companyID,
       budgetID: string,
@@ -9567,4 +9734,169 @@ function mockPrintTemplateBody(
     // ordinary case for most companies forever.
     overrides: stored ?? mockPrintTemplateZero(),
   };
+}
+
+// ---------------------------------------------------------------------------
+// T12 — GSTR-9 helpers
+// ---------------------------------------------------------------------------
+
+/** An all-zero tax triple, in the fixed-4 spelling every money value uses. */
+function zeroTax9(): GSTTax {
+  return { camt: "0.0000", samt: "0.0000", iamt: "0.0000" };
+}
+
+/**
+ * The calendar year an Indian financial year STARTS in, or null when [from, to]
+ * is not one.
+ *
+ * ⛔ IT IS STRICT ON PURPOSE, exactly as cored's financialYear() is. There is no
+ * GSTR-9 for an arbitrary window, and a mock that accepted one would let a screen
+ * ship a control the server refuses.
+ */
+function financialYearOf(from: string, to: string): number | null {
+  const m = /^(\d{4})-04-01$/.exec(from);
+  if (!m) return null;
+  const y = Number(m[1]);
+  return to === `${y + 1}-03-31` ? y : null;
+}
+
+/** The inclusive bounds and FP of month `n` (0-based) of the year from April. */
+function monthWindowOf(
+  startYear: number,
+  n: number,
+): { from: string; to: string; fp: string } {
+  // Month arithmetic in UTC so a developer machine's timezone cannot shift a
+  // boundary — a month that starts a day early silently moves vouchers between
+  // periods, which is the one thing this grid must never do.
+  const start = new Date(Date.UTC(startYear, 3 + n, 1));
+  const end = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 0));
+  const iso = (d: Date) => d.toISOString().slice(0, 10);
+  const mm = String(start.getUTCMonth() + 1).padStart(2, "0");
+  return { from: iso(start), to: iso(end), fp: `${mm}${start.getUTCFullYear()}` };
+}
+
+/**
+ * The statutory table list, with the statuses cored gives them.
+ *
+ * ⚠️ ELEVEN OF THE FOURTEEN ARE NOT_DERIVED, and the mock says so rather than
+ * emitting empty derived tables: a screen built against a mock where everything
+ * derives would have no rendering for the case that is actually normal.
+ */
+function gstr9Tables(): GSTR9Table[] {
+  const nd = (no: string, title: string, reason: string): GSTR9Table => ({
+    no,
+    title,
+    status: "NOT_DERIVED",
+    reason,
+  });
+  return [
+    {
+      no: "4",
+      title: "Details of advances and outward supplies on which tax is payable",
+      status: "PARTIAL",
+      reason:
+        "The B2B and B2C rows come from the year's twelve GSTR-1 returns and are net of " +
+        "credit and debit notes. Four statutory rows below cannot be produced from these books.",
+      rows: [
+        {
+          label: "4A-4B",
+          title:
+            "Supplies to unregistered and registered persons (B2C and B2B), net of credit and debit notes",
+          txval: "0.0000",
+          tax: zeroTax9(),
+        },
+      ],
+      omitted: [
+        {
+          label: "4C",
+          title: "Exports on payment of tax",
+          reason: "these books carry no export, SEZ or deemed-export marker on a supply.",
+        },
+      ],
+      total_suppressed: true,
+      total_suppressed_reason:
+        "4N totals rows 4A to 4L, and five of them are not derived here. A total over a set " +
+        "with known-missing members is not a total — it is an UNDERSTATEMENT that foots.",
+    },
+    nd(
+      "5",
+      "Outward supplies on which tax is not payable",
+      "these books carry no export, SEZ, deemed-export, nil-rated, exempt or non-GST marker.",
+    ),
+    {
+      no: "6",
+      title: "Details of ITC availed as declared in returns filed during the year",
+      status: "PARTIAL",
+      reason:
+        "6A is the year's GSTR-3B table 4(A). The statutory breakdown below it cannot be reproduced.",
+      rows: [
+        { label: "6A", title: "Total ITC availed as per GSTR-3B table 4(A)", tax: zeroTax9() },
+      ],
+      omitted: [
+        {
+          label: "6B",
+          title: "Inputs, capital goods and input services, separately",
+          reason:
+            "the input / capital-goods / input-services split is not modelled.",
+        },
+      ],
+      total_suppressed: true,
+      total_suppressed_reason:
+        "6J is meant to be ZERO on a correct return. Emitting it from a breakdown that is not " +
+        "derived would print a zero meaning 'nothing was checked' in the one cell whose zero " +
+        "means 'everything ties'.",
+    },
+    nd(
+      "7",
+      "ITC reversed and ineligible ITC",
+      "the twelve GSTR-3Bs behind this year were generated with NO inward statement, so table " +
+        "4(B) is empty in every one of them. A zero here would say the taxpayer reversed nothing.",
+    ),
+    nd(
+      "8",
+      "Other ITC-related information (GSTR-2A comparison)",
+      "the department's own annual GSTR-2A is not held by this build.",
+    ),
+    nd(
+      "9",
+      "Tax paid as declared in returns filed during the year",
+      "there is no electronic cash or credit ledger and no GST challan register here.",
+    ),
+    nd(
+      "10 & 11",
+      "Prior-year supplies declared in the next year's April-September returns",
+      "those returns are outside the window asked for, and amendments are not modelled.",
+    ),
+    nd(
+      "12 & 13",
+      "Prior-year ITC reversed or availed in the next year's April-September returns",
+      "those returns are outside the window asked for, and amendments are not modelled.",
+    ),
+    nd(
+      "14",
+      "Differential tax paid on account of tables 10 and 11",
+      "those returns are outside the window asked for, and what was actually PAID is not known.",
+    ),
+    nd(
+      "15",
+      "Particulars of demands and refunds",
+      "demands, refunds and their status are departmental data that never enter these books.",
+    ),
+    nd(
+      "16",
+      "Composition supplies, deemed supply under s.143, goods sent on approval",
+      "there is no job-work register and no approval-basis dispatch tracking.",
+    ),
+    { no: "17", title: "HSN-wise summary of outward supplies", status: "DERIVED", rows: [] },
+    nd(
+      "18",
+      "HSN-wise summary of inward supplies",
+      "per-line GST detail IS recorded for purchases, but nothing rolls it up today.",
+    ),
+    nd(
+      "19",
+      "Late fee payable and paid",
+      "nothing here records WHEN a return was filed, and late fee is a function of the delay.",
+    ),
+  ];
 }

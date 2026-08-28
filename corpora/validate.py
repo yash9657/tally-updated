@@ -175,6 +175,24 @@ KNOWN_SCREENS = {
     # NETT_TRANSACTIONS one has NO addable total — a position plus a flow is not a
     # quantity — and the server sends three zeros with the flag false.
     "budget-variance",
+    # T12 — THE GSTR-9 ANNUAL RECONCILIATION (migration 0087). A ScreenKind for the
+    # same reason "budget-variance" above is, and against a stronger pull: the
+    # server serves it as `report:gstr9`, right beside `report:gstr1` and
+    # `report:gstr3b`, which ARE report names — but the screen takes a FINANCIAL
+    # YEAR and six TAX LEDGERS that no reportName frame can carry.
+    #
+    # ⛔ A FIXTURE ON THIS SCREEN MUST NOT ASSERT AGREEMENT FROM AN ANNUAL NET.
+    # Twelve months added up CANCEL: a year that is +40,000 in May and -40,000 in
+    # September has a net of ZERO and two months that disagree with the books. The
+    # server sends `gross` and `offsetting` beside every `net` precisely so nothing
+    # downstream has to work that out, and a fixture that read the net alone would
+    # assert the defect this report exists to find.
+    #
+    # ⛔ AND IT MUST NOT READ A NOT_DERIVED TABLE AS ZERO. Eleven of the fourteen
+    # statutory tables cannot be produced from these books and carry NO rows; a zero
+    # in table 7 would assert the taxpayer reversed nothing when the truth is that
+    # nothing was checked.
+    "gstr9",
     # T3 — THE TWO ORDER REGISTERS AND THE BILLS OF MATERIALS (migrations 0042,
     # 0043). An order is a COMMITTED QUANTITY and not a movement: the stock ledger
     # has exactly one primitive (a positive quantity plus a direction) and an order

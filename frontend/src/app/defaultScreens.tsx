@@ -30,6 +30,7 @@ import { EWayBillScreen } from "../screens/EWayBillScreen";
 import { EInvoiceScreen } from "../screens/EInvoiceScreen";
 import { BudgetsScreen } from "../screens/masters/BudgetsScreen";
 import { BudgetVarianceScreen } from "../screens/reports/BudgetVarianceScreen";
+import { GSTR9Screen } from "../screens/reports/GSTR9Screen";
 import { CostCentresScreen } from "../screens/masters/CostCentresScreen";
 import { CostCentreSummaryScreen } from "../screens/reports/CostCentreSummaryScreen";
 import { CostCategorySummaryScreen } from "../screens/reports/CostCategorySummaryScreen";
@@ -311,6 +312,20 @@ export function createDefaultRegistry(): ScreenRegistry {
     // different things.
     budgets: BudgetsScreen,
     "budget-variance": BudgetVarianceScreen,
+    // ---- THE T12 ANNUAL RECONCILIATION.
+    //
+    // ⛔ REGISTERED BY ScreenKind FOR EXACTLY THE REASON ABOVE, and it is worth
+    // saying twice because the temptation is stronger here: the server serves it
+    // as `report:gstr9`, right beside `report:gstr1` and `report:gstr3b`, so a
+    // "report:…" key looks obviously correct. It would render UnwiredReportScreen
+    // — "not available in this build" — over a report that is built and ACL-gated,
+    // and it could not carry the FINANCIAL YEAR or the six TAX LEDGERS the screen
+    // needs before it can ask for anything.
+    //
+    // ⚠️ NOTE WHAT IS *NOT* HERE: gstr1 and gstr3b still have no screen at all.
+    // Giving this one a screen does not give them one, and nothing here should be
+    // read as implying it.
+    gstr9: GSTR9Screen,
     "cost-centres": CostCentresScreen,
     "cost-centre-summary": CostCentreSummaryScreen,
     "cost-category-summary": CostCategorySummaryScreen,

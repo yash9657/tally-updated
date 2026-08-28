@@ -792,6 +792,42 @@ var KnownReportNames = []string{
 	// refusal — the same call bank-statement, tds-register, the cost statements and
 	// the order books all record above.
 	"budget-variance",
+
+	// THE GSTR-9 ANNUAL RETURN (T12, migration 0087): the reconciliation of a
+	// financial year's twelve GSTR-1s and twelve GSTR-3Bs against the books.
+	//
+	// ⚠️ SPELLED `gstr9`, NOT `gstr-9`, AND THAT IS A DELIBERATE DEPARTURE FROM
+	// PLAN-TALLY-PARITY.md §2.5, WHICH RESERVED THE HYPHENATED NAME. The two
+	// siblings this sits beside are `gstr1` and `gstr3b`, served at /gstr1 and
+	// /gstr3b. An administrator writing rules reads this vocabulary as a list, and
+	// `report:gstr1`, `report:gstr3b`, `report:gstr-9` is a list with one member
+	// spelled differently from the others for no reason the reader can see — which
+	// is how a rule gets written for a resource that does not exist and silently
+	// governs nothing. The statutory document is "GSTR-9"; the TOKEN follows the
+	// two tokens already here. §2.5 has been updated in place to record the name
+	// actually taken.
+	//
+	// ⛔ THE REFUSAL IS THE THING THAT HAD TO BE WRITTEN, NOT THE GRANT. Migration
+	// 0011 line 249 seeds Data Entry a coarse `allow display report` against a BARE
+	// resource, and this package matches that against ANY `report:NAME` — so adding
+	// the name below GRANTS the annual return to every seeded data-entry clerk the
+	// day it ships. Migration 0087 writes `disallow display` and `disallow print`
+	// for it. That is registered defect D95, and 0087 is the TWELFTH migration to
+	// write this refusal.
+	//
+	// WHAT IT DISCLOSES, since that is the justification: a whole year of outward
+	// supplies and input credit in one document, the month-by-month divergence
+	// between what was filed and what the books say, and — through the divergence
+	// list — precisely which months would not survive a departmental look. It is
+	// the company's tax exposure on one page.
+	//
+	// PRINTING IT ANSWERS 501: no printed layout has been specified, and a blank
+	// page that looks like a filed annual return is worse than a refusal — the same
+	// call bank-statement, tds-register, the cost statements, the order books and
+	// the budget variance all record above. ⚠️ It is a sharper call here than for
+	// any of them: those are internal statements, and this one carries the shape of
+	// a filed statutory return.
+	"gstr9",
 }
 
 // ValidAction reports whether a is a legal rule action (Wildcard included).

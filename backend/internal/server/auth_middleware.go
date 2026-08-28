@@ -2725,6 +2725,26 @@ func reportName(rest string) string {
 		return "gstr1"
 	case "/gstr3b":
 		return "gstr3b"
+	// THE GSTR-9 ANNUAL RETURN (T12, migration 0087). Here for the reason every
+	// entry in this function records: a name in authz.KnownReportNames that this
+	// function does not know is a name some arms serve and others default-deny,
+	// and routes() mounts /print/reports/<name> for EVERY known name — so
+	// omitting it would leave a mounted route unreachable for every level
+	// including the Owner.
+	//
+	// ⚠️ NO routeAction ARM OF ITS OWN, AND ADDING ONE WOULD BE A MISTAKE. The
+	// route path is a flat literal equal to the name, so the
+	// `method == GET && reportName(rest) != ""` arm already maps it — the only
+	// arrangement under which the two places cannot disagree. The financial year
+	// rides in ?from=/?to= and the six tax ledgers in their own query params,
+	// for the flat-literal reason the /stock-item-vouchers comment below states
+	// at length.
+	//
+	// It is a Display, so it inherits neither the back-dated write cutoff nor
+	// the WebAuthn step-up (both gate on Action.IsWrite()). Printing it answers
+	// 501: there is no printed layout for an annual return here.
+	case "/gstr9":
+		return "gstr9"
 	// The Stock Summary (INV-F). A Display over report:stock-summary — read-only,
 	// so it must NOT inherit the back-dated write cutoff or the WebAuthn step-up
 	// (both gate on Action.IsWrite()). An Owner who has not stepped up can read

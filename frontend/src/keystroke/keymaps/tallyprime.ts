@@ -611,6 +611,32 @@ const RAW_SCREEN_BINDINGS: Partial<
       note: "Comparison columns are not built. In Tally this adds a second period or budget column side by side; here one plan at a time is the whole report. ⛔ Note that a column comparing two BUDGETS ON DIFFERENT BASES would be the one comparison this report must never offer — a closing balance is a position and nett transactions are a flow, so the two columns would not be comparable and their difference would not be a quantity.",
     },
   },
+  gstr9: {
+    // F4 — CHOOSE THE FINANCIAL YEAR. Same provenance as the budget-variance plan
+    // picker: ours, never claimed as documented. Binding it is protective twice
+    // over, because the global F4 is a Contra voucher.
+    F4: { kind: "selectFinancialYear" },
+    // ⛔ F2 IS REFUSED HERE, FOR A DIFFERENT REASON FROM BUDGET-VARIANCE'S REFUSAL
+    // ABOVE, AND THE DIFFERENCE IS WORTH THE WORDS. That report refuses a period
+    // because apportioning a plan needs a spread rule nobody has chosen. This one
+    // refuses because THE DOCUMENT DOES NOT EXIST for any other window: GSTR-9 is
+    // an annual return for a financial year, cored answers 400 to anything else,
+    // and a period frame here would let an operator set a range the report can
+    // only refuse.
+    F2: {
+      kind: "unavailable",
+      feature: "Period (F2) — this report is annual",
+      note: "GSTR-9 covers a FINANCIAL YEAR, 1 April to 31 March, and no other window exists — a shorter one is not a smaller GSTR-9, it is a different document that has no name. F4 chooses which year. For a month, read the GSTR-3B.",
+    },
+    // Alt+C inside a report is Tally's NEW COLUMN (RESEARCH.md:771). Not built,
+    // and bound anyway: the global Alt+C would push a LEDGER-CREATE frame over the
+    // report.
+    "Alt+C": {
+      kind: "unavailable",
+      feature: "New Column (Alt+C)",
+      note: "Comparison columns are not built. ⛔ Note what this report ALREADY does instead: it puts three independently-computed views of the same year beside each other and states where they disagree. A fourth column comparing two YEARS would be a different report, and adding one without the same month-by-month divergence treatment would reintroduce the netting this report exists to prevent.",
+    },
+  },
   "cost-centres": {
     // Alt+C — CREATE an axis (cost category) or a centre. Tally's own route to
     // these masters is Alt+G > Create Master > Cost Centre (RESEARCH.md:525) and
@@ -1186,6 +1212,11 @@ export function actionLabel(action: KeymapAction): string {
       // Gateway entry, and a key labelled with a synonym is a key an operator does
       // not connect to the thing they created.
       return "Choose the budget this variance report compares against";
+    case "selectFinancialYear":
+      // "Financial year" spelled in full, and NOT "period": the whole point of
+      // this key is that the window is not a period an operator may compose. An
+      // operator told "period" looks for a from/to and finds a list of years.
+      return "Choose the financial year this annual return reconciles";
     case "selectCostCategory":
       // "Axis" is spelled out: this key is what stops one axis's figures being
       // read under another's heading, and every figure on that report is scoped

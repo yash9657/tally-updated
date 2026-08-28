@@ -4873,3 +4873,272 @@ export interface BudgetVarianceResponse {
    */
   notes: string[];
 }
+
+// ---------------------------------------------------------------------------
+// T12 — THE GSTR-9 ANNUAL RECONCILIATION
+// ---------------------------------------------------------------------------
+//
+// ⛔ READ {@link GSTR9Divergence} BEFORE ANY OTHER TYPE HERE. Everything else in
+// this block is evidence for it, and its `net` field is the one number in this
+// whole API that must never be rendered on its own.
+
+/**
+ * The three GST tax heads, as every GSTR-9 figure carries them.
+ *
+ * ⚠️ THE KEYS ARE THE GSTN SPELLINGS — `camt` CGST, `samt` SGST, `iamt` IGST —
+ * matching the 3B tables rather than the Go field names. Fixed-point strings, so
+ * no caller is tempted into arithmetic.
+ */
+export interface GSTTax {
+  camt: Money;
+  samt: Money;
+  iamt: Money;
+}
+
+/**
+ * A comparison of two of the year's sources, month by month, in the only form
+ * that cannot hide an offsetting pair.
+ *
+ * ⭐⭐ THE RULE THIS TYPE EXISTS TO ENFORCE: AN ANNUAL NET DIFFERENCE IS A LIE.
+ * Twelve months added up CANCEL. A company that over-declared 40,000 of IGST in
+ * May and under-declared 40,000 in September has an annual net of ZERO — every
+ * figure foots, every total is correct, and the return is silently wrong about
+ * the one thing it exists to say.
+ *
+ * So a screen MUST NOT render {@link net} without {@link gross} beside it, and
+ * when {@link offsetting} is true it must say so and name {@link months}. This is
+ * the same discipline as {@link BudgetVarianceResponse.totals_are_addable}: a
+ * figure that cannot be honestly stated is suppressed and the reason printed in
+ * its place, never left as a plausible zero.
+ */
+export interface GSTR9Divergence {
+  /** The two sources compared, in subtraction order: every figure is `a` minus `b`. */
+  a: string;
+  b: string;
+  /** Sum over the year of (a − b), head by head. IT CANCELS. */
+  net: GSTTax;
+  /** Sum over the year of |a − b|, head by head. It cannot cancel. */
+  gross: GSTTax;
+  /**
+   * True when `gross` differs from |`net`| in at least one head: months disagree
+   * in opposite directions and the annual net understates the disagreement.
+   */
+  offsetting: boolean;
+  /** The FPs ("MMYYYY") where the two sources disagree, in period order. */
+  months?: string[];
+  /**
+   * True when the two sources agree in EVERY month.
+   *
+   * ⛔ IT IS NOT `net === 0`. That is precisely the question a net cannot answer,
+   * and a client that recomputes it that way reintroduces the defect this type
+   * was built to prevent. The server derives it per month.
+   */
+  agrees: boolean;
+}
+
+/**
+ * The taxable-value analogue of {@link GSTR9Divergence}. It is a separate type
+ * because taxable value is ONE figure where tax is three heads, and it has no
+ * books column at all — see the `books-carry-no-taxable-value` disclosure: the
+ * books post TAX to ledgers, and taxable value is not a posted quantity, so
+ * there is no third opinion on it.
+ */
+export interface GSTR9TaxableDivergence {
+  a: string;
+  b: string;
+  net: Money;
+  gross: Money;
+  offsetting: boolean;
+  months?: string[];
+  agrees: boolean;
+}
+
+/** One (HSN, rate) bucket of a month's GSTR-1 table 12. */
+export interface GSTR9HSNItem {
+  num: number;
+  /** Blank when the supply could not be attributed to a code. Rendered, never dropped. */
+  hsn_sc: string;
+  rt: Money;
+  txval: Money;
+  iamt: Money;
+  camt: Money;
+  samt: Money;
+  tot_val: Money;
+}
+
+/**
+ * One month of the year with all sources beside each other.
+ *
+ * ⛔ THE ARRAY IS ALWAYS TWELVE LONG, including months with no activity. A month
+ * missing from a list of twelve is a month nobody checked, and a reader who
+ * cannot tell "absent" from "nothing happened" cannot tell which they are seeing.
+ */
+export interface GSTR9Month {
+  /** Filing period, "MMYYYY" — how a reader matches this row to a return they filed. */
+  fp: string;
+  from: string;
+  to: string;
+
+  /** GSTR-1, summed across every section (credit notes signed negative). */
+  r1_txval: Money;
+  r1_tax: GSTTax;
+  /** GSTR-3B table 3.1(a). */
+  r3b_txval: Money;
+  r3b_tax: GSTTax;
+  /** The BOOKS: postings on the output-tax ledgers. A third table, a third query. */
+  books_outward_tax: GSTTax;
+
+  /** GSTR-3B table 4(A) and 4(D). Their sum must equal the input-tax postings. */
+  r3b_itc_available: GSTTax;
+  r3b_itc_ineligible: GSTTax;
+  books_itc_tax: GSTTax;
+
+  /**
+   * The month's GSTR-1 table-12 rollup — a FOURTH path, and the only one that
+   * reads per-line detail rather than the invoice aggregates.
+   */
+  hsn_txval: Money;
+  hsn_tax: GSTTax;
+  hsn?: GSTR9HSNItem[];
+
+  /** The per-month verdicts, so a reader can find the month without re-doing the sums. */
+  r1_matches_r3b: boolean;
+  r3b_matches_books: boolean;
+  itc_matches_books: boolean;
+  hsn_foots_to_r1: boolean;
+}
+
+/**
+ * What a GSTR-9 table can say about itself.
+ *
+ * ⛔ THERE IS DELIBERATELY NO VALUE MEANING "EMPTY". A table with no data is
+ * DERIVED and zero, which is a different statement from NOT_DERIVED and must
+ * never be rendered the same way: a zero in table 7 ("ITC reversed") asserts the
+ * taxpayer reversed nothing, when the truth is that nothing was checked.
+ */
+export type GSTR9TableStatus = "DERIVED" | "PARTIAL" | "NOT_DERIVED";
+
+/** One sub-row a table could not produce, and why. */
+export interface GSTR9Omission {
+  label: string;
+  title: string;
+  reason: string;
+}
+
+/** One lettered row of a derived table. */
+export interface GSTR9Row {
+  label: string;
+  title: string;
+  /**
+   * Absent where the row has no taxable value (the ITC tables are tax-only).
+   * OPTIONAL rather than zero, for the reason
+   * {@link BudgetVarianceRow.variance_percent} is nullable: "no taxable value"
+   * and "a taxable value of zero" are different facts.
+   */
+  txval?: Money;
+  tax: GSTTax;
+}
+
+/** One statutory table of the annual return, and its own account of itself. */
+export interface GSTR9Table {
+  no: string;
+  title: string;
+  status: GSTR9TableStatus;
+  /** Present unless DERIVED, and names the missing input in words a filer can act on. */
+  reason?: string;
+  /** Empty for NOT_DERIVED — which means NO rows, not zero rows. */
+  rows?: GSTR9Row[];
+  /** The sub-rows that could not be derived. Populated for PARTIAL. */
+  omitted?: GSTR9Omission[];
+  /**
+   * True when the table's statutory TOTAL cannot be honestly stated because
+   * something in it is not derived. There is then no total row, and
+   * {@link total_suppressed_reason} must be printed in its place — a total over a
+   * set with known-missing members is an UNDERSTATEMENT THAT FOOTS.
+   */
+  total_suppressed?: boolean;
+  total_suppressed_reason?: string;
+}
+
+/**
+ * `GET .../gstr9?from=&to=&cgst_ledger_id=&…` — the annual reconciliation.
+ *
+ * ⛔ IT IS NOT FILING-READY AND IT NEVER WILL BE WITHOUT PORTAL VERIFICATION.
+ * {@link disclosures} always carries ten tokens on a clean year and up to twelve
+ * otherwise. A screen must render ALL of them; showing some and dropping the rest
+ * is the closed-vocabulary failure the field exists to prevent. The ten
+ * unconditional ones:
+ *
+ *   advances-not-modelled · amendments-not-modelled ·
+ *   annual-table-structure-unverified · books-carry-no-taxable-value ·
+ *   exempt-and-zero-rated-not-marked · itc-reversals-not-computed ·
+ *   no-annual-2a · no-cash-or-credit-ledger · not-filing-ready ·
+ *   portal-schema-unverified
+ *
+ * and the two conditional ones — `monthly-differences-offset`, which is the most
+ * important token in the set, and `returns-and-books-disagree`.
+ */
+export interface GSTR9Response {
+  gstin?: string;
+  /** The financial year as Indian filers write it: "2025-26". */
+  fy: string;
+  from: string;
+  to: string;
+  /** Always twelve, in period order. See {@link GSTR9Month}. */
+  months: GSTR9Month[];
+
+  /** The two RETURNS against each other. A break here is a filing inconsistency. */
+  outward_r1_vs_r3b: GSTR9Divergence;
+  /** The return against the BOOKS. A break here means the trial balance disagrees. */
+  outward_r3b_vs_books: GSTR9Divergence;
+  /** The third leg, emitted rather than left for the reader to compose. */
+  outward_r1_vs_books: GSTR9Divergence;
+  /** 3B table 4(A)+4(D) against the input-tax postings. */
+  itc_vs_books: GSTR9Divergence;
+  /** Per-line HSN detail against the invoice aggregates — the fourth path. */
+  hsn_vs_r1: GSTR9Divergence;
+  /** Taxable value, two-way only. See {@link GSTR9TaxableDivergence}. */
+  taxable_r1_vs_r3b: GSTR9TaxableDivergence;
+
+  /** Tables 4 through 19, each with its status. Every one is present. */
+  tables: GSTR9Table[];
+  /** The closed vocabulary. Always non-empty. See the interface doc. */
+  disclosures: string[];
+}
+
+/** The envelope `GET .../gstr9` actually returns. */
+export interface GSTR9Envelope {
+  gstr9: GSTR9Response;
+  /**
+   * True when every comparison agrees in every month.
+   *
+   * ⛔ IT IS LIFTED ONTO THE ENVELOPE SO NO CLIENT COMPUTES IT. A client that
+   * derived it would derive it from the annual nets, which is exactly the
+   * question a net cannot answer.
+   */
+  reconciled: boolean;
+}
+
+/**
+ * The six tax ledgers a GSTR-9 needs, as a named record rather than six loose
+ * strings.
+ *
+ * ⛔ ALL SIX ARE REQUIRED AND THE TYPE SAYS SO. The server refuses a missing one
+ * (400, naming it), and making the field optional here would move that discovery
+ * from compile time to a support call. See {@link ApiClient.gstr9} for why the
+ * refusal exists at all: the books column would otherwise be silently zero.
+ *
+ * ⚠️ THEY ARE IDS, AND NO SCREEN MAY ASK A HUMAN TO TYPE ONE. A screen resolves
+ * them by letting an operator CHOOSE ledgers from the Duties & Taxes group — the
+ * same rule that made `GET /groups` necessary for T11.
+ */
+export interface GSTR9TaxLedgers {
+  /** OUTPUT tax — what was charged on sales. */
+  cgst: string;
+  sgst: string;
+  igst: string;
+  /** INPUT tax — the credit claimed on purchases. */
+  inputCGST: string;
+  inputSGST: string;
+  inputIGST: string;
+}

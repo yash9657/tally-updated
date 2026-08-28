@@ -120,6 +120,21 @@ const GATEWAY_MENU = [
   "Budgets",
   "Budget Variance",
 
+  // ---- THE T12 ANNUAL RECONCILIATION.
+  //
+  // ⛔ A GATEWAY ENTRY AND NOT A REPORT_NAMES ENTRY, for the reason the budget
+  // variance above records — and the temptation is stronger here, because
+  // `report:gstr1` and `report:gstr3b` ARE already report names, so putting their
+  // annual sibling beside them looks obviously right. It would render "not
+  // available in this build" over a report that is built and ACL-gated, and a
+  // reportName frame could carry neither the FINANCIAL YEAR nor the six TAX
+  // LEDGERS this screen needs. See GSTR9_LABEL in navMachine.ts.
+  //
+  // ⚠️ AND NOTE WHAT THIS ENTRY DOES NOT DO: gstr1 and gstr3b still have no screen
+  // at all and are still not reachable from here. Adding one report's door does not
+  // add theirs.
+  "GSTR-9",
+
   // ---- THE THREE T3 SCREENS (order processing and bills of materials).
   //
   // The two REGISTERS also have documented keys — Ctrl+F8 and Ctrl+F9

@@ -127,6 +127,16 @@
  *                          report. It carries a create form and therefore needs
  *                          no period, so it is exempt from the FrameOverlays
  *                          classification.
+ *  - "gstr9" — THE GSTR-9 ANNUAL RECONCILIATION (T12, migration 0087): the
+ *                          year's twelve GSTR-1s and twelve GSTR-3Bs set against
+ *                          the postings, month by month, with the disagreements
+ *                          as the content. ⛔ It is a report NAME on the server
+ *                          (`report:gstr9`, refused to Data Entry by 0087) and is
+ *                          deliberately NOT in REPORT_NAMES — that list pushes a
+ *                          generic report frame, and this screen takes a
+ *                          FINANCIAL YEAR and six tax ledgers that such a frame
+ *                          cannot carry. SCREEN_GOTO_ENTRIES routes it instead,
+ *                          exactly as it routes budget-variance.
  *  - "budget-variance" — BUDGET VS ACTUAL (T11, migrations 0085/0086): a plan
  *                          beside the books, at one grain. ⛔ A ScreenKind and
  *                          NOT a "report:NAME" key even though the server DOES
@@ -286,6 +296,7 @@ export type ScreenKind =
   | "cost-category-summary"
   | "budgets"
   | "budget-variance"
+  | "gstr9"
   | "sales-orders"
   | "purchase-orders"
   | "boms"
@@ -972,6 +983,15 @@ export type KeymapAction =
    * claim about a company and would be a lie.
    */
   | { kind: "selectBudget" }
+  /**
+   * F4 on the GSTR-9 screen — choose the FINANCIAL YEAR (T12).
+   *
+   * ⛔ NOT `period`. cored refuses any window that is not 1 April to 31 March, so
+   * a period frame would let an operator compose a request the report can only
+   * answer with a 400. The choice is a list of financial years instead, and F2 on
+   * that screen is bound to `unavailable` saying so.
+   */
+  | { kind: "selectFinancialYear" }
   /**
    * Alt+C on the BUDGETS screen — create a plan, or a line on the open one (T11).
    *

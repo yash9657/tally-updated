@@ -1300,8 +1300,22 @@ func TestTheUnimplementedReportsAreStillGovernableAndSaySo(t *testing.T) {
 	// plan's totals: on screen it is a separate section a reader scrolls to, and on
 	// paper a second table under one heading is exactly how it gets added to the
 	// first. A blank page is better than a variance statement that foots wrongly.
-	if deferred != 21 {
-		t.Errorf("expected 21 deferred report names, saw %d: handler_print_reports.go's header "+
+	// 22: the twenty-one above plus the GSTR-9 ANNUAL RECONCILIATION (T12,
+	// migration 0087), and it is the sharpest case in the set rather than one more
+	// of the same. Every other deferred name is an INTERNAL statement whose printed
+	// form would be a different document from the screen. This one has the SHAPE OF
+	// A FILED STATUTORY RETURN and explicitly is not one: eleven of its fourteen
+	// tables are NOT_DERIVED, table 4's total is suppressed because five of its rows
+	// cannot be produced from these books, and every response carries ten
+	// unconditional disclosures headed `not-filing-ready`.
+	//
+	// ⛔ On screen the disclosures sit beside the figures and cannot be missed. On
+	// paper, an annual return on company stationery with tidy tables and no room for
+	// ten caveats is a document somebody hands to a tax officer. The printed form
+	// needs a layout in which the disclosures come FIRST, and nobody has designed
+	// one. A blank page is better than a statutory return that reads as filed.
+	if deferred != 22 {
+		t.Errorf("expected 22 deferred report names, saw %d: handler_print_reports.go's header "+
 			"lists the deferred set explicitly and it is now out of step with "+
 			"authz.KnownReportNames", deferred)
 	}
@@ -2007,6 +2021,17 @@ var printDisallowedBySeededMigrations = []struct{ resource, discloses string }{
 		"what the owner PLANNED — the business's own targets — set beside what actually " +
 			"happened, line by line, including the payroll total by inference from a budget " +
 			"on a payroll group"},
+	// T12, migration 0087. ⛔ THE SECOND HALF OF THIS SENTENCE IS THE PART WITHOUT
+	// PRECEDENT IN THE LIST. Every other entry above discloses something about the
+	// company's TRADING. This one additionally discloses where the company's own
+	// FILED RETURNS and its books part company, month by month, with the amount —
+	// which is a statement about the company's exposure rather than its business,
+	// and it is not derivable from anything else in this product.
+	{"report:gstr9",
+		"a whole financial year of outward supply and input credit in one document, plus " +
+			"the months in which this company's filed GSTR-1s and GSTR-3Bs disagree with " +
+			"its own books — i.e. exactly which periods would not survive a departmental " +
+			"look, and by how much"},
 }
 
 // TestAnOwnerWritingOneConvenientAllowPrintStarStillCannotHandOverTheWageBill is

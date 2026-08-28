@@ -102,6 +102,19 @@ export type ScreenActionKind =
    */
   | "selectBudget"
   /**
+   * F4 on the GSTR-9 ANNUAL RETURN screen — choose the FINANCIAL YEAR (T12).
+   *
+   * ⛔ A SEPARATE KIND FROM THE MACHINE'S `period`, AND THAT IS THE POINT. Every
+   * other report takes a free date range from F2. GSTR-9 cannot: the server
+   * REFUSES any window that is not 1 April to 31 March, because there is no such
+   * document as "the GSTR-9 for June to August" and producing one would hand a
+   * filer a statutory-looking artifact for a period the law does not recognise.
+   * A period frame would let an operator set a range the report can only answer
+   * with a 400 — so the choice is a LIST OF FINANCIAL YEARS instead, and F2 says
+   * so rather than pretending.
+   */
+  | "selectFinancialYear"
+  /**
    * Alt+C on an ORDER REGISTER — open the form that records a new sales or
    * purchase order (T3). A screen action rather than a machine transition for the
    * reasons `recordTDSChallan` gives: the form's state and the client that posts it

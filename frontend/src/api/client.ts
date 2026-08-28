@@ -135,6 +135,8 @@ import type {
   BudgetLineListResponse,
   BudgetListResponse,
   BudgetVarianceResponse,
+  GSTR9Envelope,
+  GSTR9TaxLedgers,
   CreateBudgetLineRequest,
   CreateBudgetLineResponse,
   CreateBudgetRequest,
@@ -756,6 +758,41 @@ export interface CoredClient {
     dimension: BudgetDimension,
     costCategoryID?: string,
   ): Promise<BudgetVarianceResponse>;
+
+  // ---- T12: the GSTR-9 annual reconciliation.
+
+  /**
+   * The annual reconciliation for one financial year.
+   *
+   * ⛔ IT REFUSES TWO REQUESTS ITS MONTHLY NEIGHBOURS ACCEPT, and both refusals
+   * are 400s that name the thing to change:
+   *
+   *  1. `from`/`to` MUST BE A FINANCIAL YEAR — 1 April to 31 March. There is no
+   *     such document as "the GSTR-9 for June to August"; one that existed would
+   *     be a statutory-looking artifact for a period the law does not recognise.
+   *     For a shorter window the message says to read the monthly GSTR-3B.
+   *  2. ALL SIX TAX LEDGER IDS ARE REQUIRED, where {@link gstr1} makes them
+   *     optional. A GSTR-1 without them is still a return; a GSTR-9 without them
+   *     is a reconciliation with nothing to reconcile against — the books column
+   *     would read zero for all twelve months and every period would appear to
+   *     disagree with the returns by exactly the tax charged. Twelve findings,
+   *     all artefacts of a missing parameter.
+   *
+   * ⚠️ THERE IS NO `statement_id`, unlike {@link gstr3b}. A 2A/2B statement
+   * belongs to ONE period and this covers twelve, so applying one would reconcile
+   * eleven months against a statement that has nothing to do with them. The
+   * consequence is DISCLOSED rather than hidden: table 7 comes back NOT_DERIVED
+   * and `itc-reversals-not-computed` is unconditional.
+   *
+   * ⛔ IT IS NEVER FILING-READY. See {@link GSTR9Response.disclosures}.
+   */
+  gstr9(
+    companyID: string,
+    from: string,
+    to: string,
+    ledgers: GSTR9TaxLedgers,
+    gstin?: string,
+  ): Promise<GSTR9Envelope>;
 
   // ---- T3: sales/purchase orders, the bill of materials, and the order books.
   //

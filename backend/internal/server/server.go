@@ -1320,6 +1320,10 @@ func (s *Server) routes() {
 		// GST.
 		r.Get("/gstr1", s.handleGSTR1)
 		r.Get("/gstr3b", s.handleGSTR3B)
+		// THE ANNUAL RECONCILIATION (T12). Both touches of the two-touch rule:
+		// this mount, and `case "/gstr9"` in reportName() in auth_middleware.go.
+		// With only this one, even an Owner gets a 403.
+		r.Get("/gstr9", s.handleGSTR9)
 
 		// INPUT TAX CREDIT: the books-vs-GSTR-2B reconciliation, the IMS
 		// worklist, and the three writes that feed them (handler_itc.go).

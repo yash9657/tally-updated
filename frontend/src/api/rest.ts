@@ -138,6 +138,8 @@ import type {
   BudgetLineListResponse,
   BudgetListResponse,
   BudgetVarianceResponse,
+  GSTR9Envelope,
+  GSTR9TaxLedgers,
   CreateBudgetLineRequest,
   CreateBudgetLineResponse,
   CreateBudgetRequest,
@@ -606,6 +608,38 @@ export function createRestClient(
           ? { budget_id: budgetID, dimension, cost_category_id: costCategoryID }
           : { budget_id: budgetID, dimension },
       );
+    },
+
+    gstr9(
+      companyID,
+      from: string,
+      to: string,
+      ledgers: GSTR9TaxLedgers,
+      gstin?: string,
+    ) {
+      // A FLAT LITERAL PATH beside /gstr1 and /gstr3b, with the year and the six
+      // ledgers as query params. A report's route must spell its own name so
+      // routeAction can map it to `report:gstr9` — the same reason
+      // /budget-variance is not /budgets/{id}/variance.
+      //
+      // ⛔ ALL SIX LEDGER IDS ARE ALWAYS SENT, and the caller cannot omit one:
+      // the type requires all six. The server refuses a missing one with a 400
+      // naming it, and this client does not paper over that by sending a blank —
+      // a present-but-empty id reads as a malformed uuid rather than as the
+      // "there is nothing to reconcile against" refusal, and the operator would
+      // be told the wrong thing.
+      const query: Record<string, string> = {
+        from,
+        to,
+        cgst_ledger_id: ledgers.cgst,
+        sgst_ledger_id: ledgers.sgst,
+        igst_ledger_id: ledgers.igst,
+        input_cgst_ledger_id: ledgers.inputCGST,
+        input_sgst_ledger_id: ledgers.inputSGST,
+        input_igst_ledger_id: ledgers.inputIGST,
+      };
+      if (gstin) query.gstin = gstin;
+      return http.get<GSTR9Envelope>(`${company(companyID)}/gstr9`, query);
     },
 
     costCategorySummary(companyID, from: string, to: string) {

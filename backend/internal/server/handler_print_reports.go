@@ -19,6 +19,7 @@ package server
 //	cost-centre-summary, cost-category-summary,
 //	sales-order-book, purchase-order-book,
 //	budget-variance
+//	gstr9
 //
 // The BUDGET VARIANCE (T11) is deferred because the screen's honesty does not
 // survive being printed. It legitimately SUPPRESSES the grand total when a plan
@@ -30,6 +31,19 @@ package server
 // a second table under one heading, is exactly how it gets added to the first. So
 // the printed form needs a layout that splits by basis or states the suppression
 // in the footer, and that decision has not been taken.
+//
+// The GSTR-9 ANNUAL RECONCILIATION (T12) is deferred, and it is the sharpest case
+// of the rule this whole header states. Every other deferred name is an internal
+// statement whose printed form would merely be a different document. This one has
+// the SHAPE OF A FILED STATUTORY RETURN, and it is explicitly not one: eleven of
+// its fourteen tables are NOT_DERIVED, table 4's total is suppressed because five
+// of its rows cannot be produced, and the whole thing carries ten unconditional
+// disclosures beginning with `not-filing-ready`. On screen those live beside the
+// figures and a reader cannot miss them. On paper, an annual return on our
+// stationery with tidy tables and no room for ten caveats is a document somebody
+// will hand to a tax officer. So the printed form needs a layout in which the
+// disclosures are the FIRST thing on the page, and that decision has not been
+// taken.
 //
 // The two order books (T3) are deferred because a printed order book is a
 // different document from the screen. On paper, on our stationery, it reads as a

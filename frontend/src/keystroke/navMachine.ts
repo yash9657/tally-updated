@@ -212,6 +212,18 @@ export const SCREEN_GOTO_ENTRIES: Readonly<Record<string, ScreenKind>> = {
   // MASTER_GOTO_ENTRIES makes for "Create Stock Item" over "Create Stock Group".
   Budgets: "budgets",
   "Budget Variance": "budget-variance",
+  // ⚠️ "GSTR-9" IS a report name on the SERVER (`report:gstr9`, refused to Data
+  // Entry by migration 0087) and is deliberately NOT in REPORT_NAMES, for the same
+  // reason "Budget Variance" is not: that list pushes a generic report frame, and
+  // this screen takes a FINANCIAL YEAR and six TAX LEDGERS such a frame cannot
+  // carry.
+  //
+  // ⛔ LABELLED "GSTR-9" WITH THE HYPHEN, THOUGH THE ACL TOKEN IS `gstr9`. The
+  // label is what a human types and reads, and the statutory document is written
+  // with a hyphen everywhere it appears; the token follows its two siblings
+  // `gstr1`/`gstr3b` instead. The two are independent and neither should be
+  // "made consistent" with the other — see the migration 0087 header.
+  "GSTR-9": "gstr9",
 };
 
 /** Case-insensitive index of {@link SCREEN_GOTO_ENTRIES}, built once. */
@@ -458,6 +470,25 @@ export const COST_CATEGORY_SUMMARY_LABEL = "Cost Category Summary";
  */
 export const BUDGETS_LABEL = "Budgets";
 export const BUDGET_VARIANCE_LABEL = "Budget Variance";
+
+/**
+ * The Gateway entry that opens the GSTR-9 ANNUAL RECONCILIATION (T12, migration
+ * 0087).
+ *
+ * ⛔ IT IS NOT IN REPORT_NAMES EITHER, and the reason is the one stated above for
+ * the budget variance — but the temptation is stronger here, so it is worth
+ * stating again: `report:gstr1` and `report:gstr3b` are ALREADY in REPORT_NAMES,
+ * and putting their annual sibling beside them looks obviously right. It would
+ * render UnwiredReportScreen — "not available in this build" — over a report that
+ * IS built and IS ACL-gated, and the frame could carry neither the FINANCIAL YEAR
+ * nor the six TAX LEDGERS the screen needs before it can ask cored anything.
+ *
+ * ⚠️ THE LABEL CARRIES THE HYPHEN AND THE ACL TOKEN DOES NOT (`report:gstr9`).
+ * The label is what a human types into Go To and reads on the Gateway, and the
+ * statutory document is written "GSTR-9" everywhere it appears; the token follows
+ * its two siblings instead. Migration 0087's header records that split.
+ */
+export const GSTR9_LABEL = "GSTR-9";
 
 /**
  * The prefix the Cost CATEGORY Summary puts on the row keys it publishes through
@@ -1201,6 +1232,17 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
           // which it states on its face. The machine cannot choose a plan — it has
           // no database — and there is no default plan for it to choose.
           stack.push({ screen: "budget-variance" });
+          return { stack };
+        }
+        // THE ANNUAL RECONCILIATION (T12). Same shape as the budget variance
+        // above: no year and no ledgers on the frame, because the machine has no
+        // database and cannot choose either. The screen defaults to the CURRENT
+        // financial year, pre-selects the tax ledgers by name, and refuses to load
+        // until all six are confirmed — every one of which it states on its face.
+        if (
+          active.selectedItem?.toLowerCase() === GSTR9_LABEL.toLowerCase()
+        ) {
+          stack.push({ screen: "gstr9" });
           return { stack };
         }
         // The two ORDER REGISTERS and the BOM screen (T3). Ordering as above.
