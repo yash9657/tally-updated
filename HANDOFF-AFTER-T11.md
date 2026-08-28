@@ -1,4 +1,9 @@
-# HANDOFF — T11 IS BUILT AND **COMMITTED**, AND T12 GSTR-9 IS NEXT
+# HANDOFF — T11 IS BUILT AND **COMMITTED** · ⛔ **SUPERSEDED BY `HANDOFF-AFTER-T12.md`**
+
+> ⛔ **READ `HANDOFF-AFTER-T12.md` INSTEAD.** T12 GSTR-9 — which §4 below calls "next" — SHIPPED on
+> 2026-08-28 at `92319a9`, so §4, §5 and §9 of this file are about work that is done. What is still
+> worth reading here is **§2, the T11 map**, and **§2.6, T11's two open judgement calls** — the ACL
+> deny remains an ASSUMPTION and the owner still has not ruled.
 
 **Written:** 2026-08-28, working tree at `19fec0c` + T11's 39 uncommitted files · **Updated:** 2026-08-28, T11 committed at `186f89d` · **Branch:** `session/t32-and-close-7-3`
 **Read time: 14 minutes.** ⭐ **Every number below was MEASURED and the command is beside it.**
