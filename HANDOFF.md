@@ -3148,7 +3148,7 @@ a customer tries it.
 | **T15** | Export | ⚠️ Money is fixed-4 on the wire and Excel will happily eat it as a float. Emit text, not numbers, or a CSV round trip loses paisa |
 | **T16** | Per-company print templates | 0065 / 0066 reserved |
 
-### 5.5 ⛔ THE AUDIT — ✅ **COMPLETE. ALL 34 ROWS DRIVEN.** ⚠️ THE REGISTER RE-OPENED 2026-08-27 AT **2**
+### 5.5 ⛔ THE AUDIT — ✅ **COMPLETE: 34 ROWS + THE SEVEN ADDED SINCE.** ⚠️ THE REGISTER RE-OPENED 2026-08-27 AT **3**
 
 > ## ⭐⭐ CORRECTED 2026-08-27. THIS SECTION SAID "15 of 34 DRIVEN" FOR THREE WEEKS AFTER IT STOPPED BEING TRUE.
 >
@@ -3157,27 +3157,38 @@ a customer tries it.
 > `HANDOFF-PARITY-AUDIT.md` §7.1's rows — that file's own rule, *never read the header* —
 > they were **97 REGISTERED · 97 CLOSED · 0 OPEN** on 2026-08-24.
 >
-> ⭐ **AND THE REGISTER RE-OPENED ON 2026-08-27, DELIBERATELY: `99 · 97 · 2`.** The U1 lane drove the
+> ⭐ **AND THE REGISTER RE-OPENED ON 2026-08-27, DELIBERATELY: `100 · 97 · 3`.** The U1 lane drove the
 > Tally importer's REFUSAL path — which nothing in this repository ever had, because every fixture in
 > `corpora/migration/` parses — and registered **D98** (a refused import is not atomic, says nothing
 > about the vouchers it already committed, and double-posts them on the operator's natural recovery
-> when the export carries no GUIDs) and **D99** (the three money readers refuse comma-grouped
-> numbers while the quantity reader strips them on purpose). ⛔ **Both are OPEN BY CHOICE** —
-> registering is what a driving lane owes; repairing is a separate decision. D98's needs the
-> atomicity question answered against the immutable ledger path first.
+> when the export carries no GUIDs), **D99** (the money readers refuse comma-grouped numbers while
+> the quantity reader strips them on purpose — premise refuted by a real export the same day and
+> lowered to LOW) and **D100** (the abort's own stated "correct fix" cannot be performed with a real
+> TallyPrime All Masters export, which carries no STOCKITEM at all). ⛔ **All three are OPEN BY
+> CHOICE** — registering is what a driving lane owes; repairing is a separate decision. D98 needs the
+> atomicity question answered against the immutable ledger path first, and D100 needs a Tally
+> export-options question answered before anyone writes a line.
 >
 > ⛔ **SO THERE IS NO DRIVING WORK LEFT ON THOSE 34, AND NO INHERITED DEFECT BACKLOG.**
 > `HANDOFF-DEFECT-BURNDOWN.md` is **SPENT**; its "69 OPEN" header was believed by a session and
 > reported to a user as live work. ⚠️ **A count in prose is a COPY, and copies go stale — this
 > heading was the third such case in this repository.**
 >
-> ⭐ **WHAT IS ACTUALLY UNDRIVEN IS THE ROWS ADDED SINCE THE AUDIT.** `FeaturesScreen` was 47 rows
-> then and is **53** now; ten were added, of which two are renames of audited rows (row 32 split,
-> row 43 renamed). **The genuine list is SEVEN rows and it is in
-> `HANDOFF-AUDIT-THE-UNDRIVEN.md`** — `Alt+O` Tally import (the commercial blocker), `Alt+Q` outbox,
-> `Alt+R` reconciliation, `Alt+Y` backup/restore, per-company print templates, `Alt+M` e-mail, and
-> the `off` split-company row. ⚠️ Plus rows **20 / 23 / 26**, whose engines were replaced underneath
-> them by T9 and T10 after they were driven.
+> ✅ **AND THE SEVEN ROWS ADDED SINCE THE AUDIT ARE NOW DRIVEN TOO — 2026-08-27, §7.5 L27.**
+> `FeaturesScreen` was 47 rows then and is **53** now; ten were added, of which two are a split and a
+> rename of audited rows. Of the seven genuinely new ones, **SIX ARE CLEAN and ONE IS LYING**:
+> `Alt+Q` outbox (23/23), `Alt+R` reconciliation (32/32), `Alt+Y` backup/restore (10/10),
+> per-company print templates (33/33), `Alt+M` e-mail (20/20) and the honest `off` split-company row
+> all tell the truth; **`Alt+O` Migrate from Tally does not**, and carries D98, D99 and D100.
+>
+> ⚠️ **THE PREMISE OF THAT LANE'S OWN HANDOFF WAS PARTLY WRONG, AND IT IS WORTH KNOWING WHY.** It said
+> none of the seven had ever been driven; in fact **every one shipped with a browser drive beside it**
+> and all still pass. What had never happened was an AUDIT — reading each drive's assertions against
+> the ROW'S OWN WORDS and driving what the row claims and the drive does not reach. Every finding in
+> L27 came from that gap, not from a missing drive.
+>
+> ⛔ **WHAT REMAINS IS ROWS 20 / 23 / 26**, whose engines were replaced underneath them by T9
+> (`0078`) and T10 (`0079`) after they were driven. The rows are old; their evidence is not current.
 
 > ### WAS: 2026-08-07, SECOND PASS: **15 of 34 ROWS DRIVEN, 10 WERE LYING, 9 FIXED.**
 > ## The worksheet is `HANDOFF-PARITY-AUDIT.md` §7. **One found defect is deliberately NOT fixed — row 20 — and its box in §7 says why.**

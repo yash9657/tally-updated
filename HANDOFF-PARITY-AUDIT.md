@@ -4245,3 +4245,125 @@ Binary verified fresh BY SYMBOL: `handleOpenBills` = 1. ⚠️ **AND THE FIRST S
 a stale `go run` cored from 15:40 still held :8087 and the fresh binary logged `bind: address already in
 use` while `/healthz` answered 200 from the OLD process. §5.17's trap, wearing a green health check.
 Driven **20/20**, own tenant, reaped.
+
+### L27 — 2026-08-27 · THE SEVEN ROWS THE PARITY AUDIT NEVER SAW, DRIVEN. **SIX CLEAN, ONE LYING.**
+
+`HANDOFF-AUDIT-THE-UNDRIVEN.md` (now `git rm`'d, its work done here) identified the gap the audit's
+own scope created: the audit drove **34 reachable rows of a 47-row `FeaturesScreen`**, and the screen
+is **53 rows** now. Ten were added; two of the ten are a split and a rename of audited rows. **Seven
+were genuinely undriven.** All seven are driven below.
+
+⭐ **THE HANDOFF'S PREMISE WAS PARTLY WRONG AND SAYING SO IS THE FIRST FINDING.** It said none of the
+seven "has ever been driven end to end". In fact **every one of them shipped with a browser drive
+beside it**, and all of those still pass against today's build — `drive-t32-import-screen` (U1),
+`drive-d-offline-queue` 27/27 (U2), `drive-d-reconciliation` (U3), `drive-t14-data` 25/25 (U4 and
+U7), `drive-c-print-templates` 33/33 (U5), `drive-b2-email-document` 20/20 (U6). ⛔ **What had never
+happened is an AUDIT** — reading each drive's assertions against the row's own words and driving what
+the row claims and the drive does not reach. That is a different and smaller job than the handoff
+described, and it is the one that found things.
+
+| Row | Verdict |
+|---|---|
+| **U1** `Migrate from Tally (Alt+O)` | ⛔ **LYING — three defects, D98 / D99 / D100.** See below |
+| **U2** `Offline Outbox (Alt+Q)` | ✅ **CLEAN**, **23/23** on four claims the shipped drive could not reach |
+| **U3** `Reconciliation (Alt+R)` | ✅ **CLEAN**, **32/32** with the books arm that could actually fail |
+| **U4** `Backup / restore (Alt+Y)` | ✅ **CLEAN**, **10/10**, and the anti-rot claim proved against a table added the day before |
+| **U5** Per-company print templates | ✅ **CLEAN**, **33/33**. Reached from the Gateway; **no key was invented for it** |
+| **U6** `E-mail a document (Alt+M)` | ✅ **CLEAN**, **20/20**. The oracle is the `mailto:` URL, driven with `altMac` |
+| **U7** Split company data | ✅ **CLEAN** — an honest `off`, and the Data screen states the reason (`data-split-absent`) |
+
+#### U1 — THE COMMERCIAL BLOCKER, AND IT IS NOT ONE PROBLEM BUT THREE
+
+⛔⛔ **NOTHING IN THIS REPOSITORY HAD EVER DRIVEN THE IMPORTER'S REFUSAL PATH**, because every fixture
+in `corpora/migration/` parses. Five fixtures that do not parse are now committed beside them
+(`08-refusal-*.xml`, `09-refusal-grouped-amount.xml`); `corpora/validate.py` never sees them, because
+it discovers cases by globbing `*.json` and these carry none — the same shape as 06 and 07.
+
+**D98 (HIGH) — a refused import is not atomic, says nothing about it, and the recovery double-posts.**
+`drive-u1-import-partial.mjs`, four throwaway tenants, all reaped. A three-voucher export whose third
+voucher carries `<AMOUNT>$ 1000.00</AMOUNT>` is refused with a good sentence naming the voucher
+ordinal, the ledger and the value — **and vouchers 1 and 2 are in the books**, read back off the
+operator's own **Day Book** in the same session. ⛔ **THE RECOVERY IS THE MONEY LOSS AND IT WAS
+MEASURED BOTH WAYS**: correcting the file and re-importing gives **5 vouchers** on a GUID-less export
+(two duplicated, no delete path anywhere in this product) and **3** on a GUID-bearing one, which is
+what TallyPrime itself writes. The GUID arm is the control that keeps the blast radius honest.
+
+**D100 (HIGH) — the abort's own "correct fix" cannot be performed by a real operator.** Driven against
+a **genuine TallyPrime export pair the user supplied** — a real trading company's 2019-20 books,
+`Master.xml` 84 MB UTF-16LE and `Transactions.xml` 121 vouchers. ⛔ **NEITHER FILE IS IN THIS
+REPOSITORY AND NEITHER MAY BE**; `drive-u1-real-export.mjs` reads them from `TALLY_MASTERS` /
+`TALLY_TXNS` and records a **SKIP as a failed probe** when they are absent, because 22 vacuous greens
+against two missing files is the worst outcome available. The migration's first act is the
+whole-import abort naming two remedies — and remedy (1), "import a Masters.xml carrying the items
+with their opening balances FIRST", is impossible with their file: it **is** the All Masters export
+and its `TALLYMESSAGE` children count **LEDGER 3706 · GROUP 37 · CURRENCY 2 · COMPANY 1**, no
+`STOCKITEM`, no `UNIT`, no `GODOWN`, while the transactions move 226 stock lines.
+
+⭐ **AND THE REST OF THE MIGRATION IS GOOD, WHICH IS WHY THIS IS A BLOCKER RATHER THAN A DISASTER.**
+**22/22 in a browser**: 19 real accounting warnings rendered in full, `opening_positions: 0` shown as
+a WARNING and not a clean result, F11 reaching the negative-stock control from the keyboard, then 121
+vouchers and 226 stock movements with **zero** warnings, a trial balance that **BALANCES at
+25,986,501.8800 over 3,712 rows**, and the Stock Summary the report tells you to check showing the
+real items. ⚠️ One more measured fact, recorded and not a defect: the transactions create **72 ledgers
+the All Masters export did not contain**, so Tally's "all masters" is not all the masters its own
+vouchers post to.
+
+**D99 (LOW, lowered from MEDIUM the same day) — its premise did not survive contact with a real file.**
+Every money and quantity field in the real export was **counted, not sampled**: 1,156 `AMOUNT`, 714
+`OPENINGBALANCE`, 454 `BILLEDQTY`, 454 `ACTUALQTY`, 227 `RATE` — **zero commas**. So `SplitQtyUnit`'s
+comment ("Commas are thousands separators in Tally's own output") is the only evidence for the claim
+and the one real export we have contradicts it. ⚠️ A comma *does* appear, 51 times, inside a stock
+item NAME (`TOORDAL & DALI,ATTA,ETC`) — a reader that stripped commas from a name would merge items.
+
+#### U2 — FOUR CLAIMS ABOUT A *QUEUE*, WHICH A ONE-VOUCHER DRIVE CANNOT REACH
+
+`drive-u2-outbox-batch.mjs`, **23/23**. The shipped drive is thorough and queues exactly one voucher,
+so "one write, **oldest first**", the **whole-batch refusal banner**, **discard**, and **cleared on
+sign-out** had never run. All four hold. ⛔ **The batch refusal is produced by the REAL control** — the
+back-dated cutoff, set through the admin route — and not by stubbing a 422, because a stub would prove
+the banner renders and nothing about whether the cutoff judges a batch as a unit. It does: banner
+shown, both rows still queued, **nothing written**. ⛔ **Oldest-first is proved by the SERVER'S OWN
+NUMBERING**, not by row order on screen — a screen that listed them oldest-first and sent them
+newest-first would look identical. Sign-out really does clear the queue and the abandoned voucher
+reaches no books either: lost is lost, not silently posted.
+
+⚠️ **AND A TRAP FOR THE NEXT PROBE THAT TOUCHES A SECURITY LEVEL: clearing the cutoff is the EMPTY
+STRING, not `null`.** `levelReq.BackdatedCutoff` is a `*string` so ABSENT and PRESENT are
+distinguishable, and `null` decodes to absent — "leave it alone". A `null` clear returns **200 with
+the cutoff still set**, and the next commit is refused for a reason the probe is no longer watching
+for. That cost one run and read as a product failure.
+
+#### U3 — THE ONE ARM THAT COULD ACTUALLY FAIL WAS MISSING
+
+The row says clearing an entry "RE-APPLIES NOTHING". The shipped drive checked that against the
+SCREEN and against `resolved_at`; **neither can see the failure the clause is about** — a resolve that
+also replayed the parked intent would stamp the column, render the same sentence, and leave the books
+carrying an edit the sequencer refused. Two arms added to `drive-d-reconciliation.mjs` (**32/32**):
+the voucher head is byte-for-byte where it was, and the keyed version is in **no** version at all.
+
+⛔ **THAT FILE HAD NO `try`/`finally`, WHICH IS THIS REPOSITORY'S OWN DOCUMENTED RULE.** Adding the two
+arms threw on a Postgres precedence trap — `a || b->>'k'` parses as `(a || b) ->> 'k'` — and the drive
+died between `openApp` and the teardown **twice**, leaking a tenant each time. Both were swept by
+hand; the guard is now in, deliberately without re-indenting the 290 lines it wraps.
+
+#### U4 — THE ANTI-ROT CLAIM, TESTED AGAINST A TABLE ADDED THE DAY BEFORE
+
+`drive-u4-backup-newest-table.mjs`, **10/10**. ⛔⛔ **The shipped drive's tenant-exactness probe is
+structurally blind to this row's worst failure**: "the restored company matches the archived one on
+every table" compares the RESTORE against the ARCHIVE, so a table missing from the **enumeration** is
+missing from both and the comparison is green while the data is gone. The row's actual claim is that
+the enumeration is catalog-derived, *"so a table added by tomorrow's migration is archived without
+anyone remembering to add it"* — and the T8 lane landed **migration 0080** the previous day.
+
+A `currency` and a `currency_rate` written through **T8's own routes** (this lane edits none of their
+files) survive a backup and a restore with nobody having touched `internal/backup`, and the rate comes
+back as `87.1234567890` — to the last decimal, because an archive that rounds is an archive that lies.
+The general form is checked too, catalog-derived on the probe's side as well so it keeps working when
+0081 lands: **11 tables held rows and every one came back, none short**, with `company_membership`
+named as the single deliberate exception rather than skipped.
+
+#### WHAT IS LEFT, AND IT IS NAMED RATHER THAN IMPLIED
+
+⚠️ **ROWS 20 / 23 / 26 HAVE STALE DRIVES.** They were driven before **T9** (FIFO/LIFO, `0078`) and
+**T10** (stock groups + compound units, `0079`) landed underneath them. The rows are old; their
+evidence is not current. That is the next audit lane, and it is smaller than this one was.
