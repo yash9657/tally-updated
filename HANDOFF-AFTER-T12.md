@@ -1,4 +1,8 @@
-# HANDOFF — T11 AND T12 ARE BOTH **COMMITTED**, AND BANK-STATEMENT MATCHING IS NEXT
+# HANDOFF — T11 AND T12 COMMITTED · **BANK-STATEMENT MATCHING IS NEXT** · AND WHAT IS LEFT TO SHIP
+
+⭐ **§9 IS THE RELEASE PICTURE.** If you only read one section, read that one — it is the honest
+account of what stands between this build and a public launch, and most of it is **not** feature
+work.
 
 **Written:** 2026-08-28, working tree CLEAN at `92319a9` · **Branch:** `session/t32-and-close-7-3`
 **Read time: 12 minutes.** ⭐ **Every number below was MEASURED and the command is beside it.**
@@ -11,19 +15,24 @@ register.)
 
 ---
 
-## 0. ✅ THE TREE IS CLEAN — NOTHING IS AT RISK
+## 0. ✅ THE TREE IS CLEAN — WHAT THIS SESSION DID
 
 ```bash
 git status --porcelain | wc -l    # -> 0
-git log --oneline -3              # -> 92319a9 T12 · 5bd6a1f docs · 186f89d T11
+git log --oneline -5
 ```
 
-Two features landed this session, in this order:
+**Three things, in this order:**
 
-| Commit | What | Size |
-|---|---|---|
-| `186f89d` | **T11 Budgets** — built by the previous session, left uncommitted, committed here | 39 files, **10,610** insertions |
-| `92319a9` | **T12 GSTR-9** — built here | 29 files, **6,204** insertions |
+| # | Commit | What | Size |
+|---|---|---|---|
+| 1 | `186f89d` | **T11 Budgets COMMITTED.** The previous session built it and left 39 files loose in the working tree — one `git checkout .` from destroying a feature. Verified the tree matched its handoff exactly (40 files, 17 `??` / 23 `M`, 1817 insertions) before committing | 39 files, **10,610** insertions |
+| 2 | `92319a9` | **T12 GSTR-9 BUILT AND COMMITTED.** The annual reconciliation — see §2 | 29 files, **6,204** insertions |
+| 3 | `cac48af` | **A CORRECTION: T14 Backup/restore was already built.** This file originally sent the next session to build it. See §4 — the lesson is bigger than the fix | docs |
+
+⭐ **THE SESSION'S OWN LESSON, AND IT IS §4's TOO: THE PLAN IS NOT THE STATE OF THE TREE.** Two of
+the three items above were about the gap between what a document said and what the code actually
+held. Measure before you build.
 
 ⚠️ **NEITHER HAS BEEN REVIEWED BY THE OWNER.** Green gates are not a review and a commit is not a
 review. §2.4 lists T12's judgement calls; `HANDOFF-AFTER-T11.md` §2.6 lists T11's, and its ACL
@@ -429,3 +438,136 @@ PGCONNECT_TIMEOUT=5 pg_isready -h localhost -p 5433          # must say "accepti
       by a path that bypassed the guard. **T12's addition: a migration mutation needs the
       `schema_migrations` un-stamp of §5, or it is never applied and the green means nothing.**
       Restore byte-identically and verify with `shasum -a 256`.
+
+---
+
+## 9. ⭐⭐ WHAT IS LEFT TO CLOSE THIS BUILD OUT AND RELEASE IT
+
+**The verdict in one paragraph.** On the plan's own terms the *feature* work is nearly finished:
+**47 of 54** FeaturesScreen rows are on, and exactly **one unblocked Tally-parity track remains**
+(§4). But feature completeness is the part that is nearly done, and it is not what stands between
+this build and a public launch. **Three of the four blocking categories below are not code**, and
+the least-audited area of the whole repository is production operations. ⛔ **Nothing here is a
+reason to slow down; all of it is a reason not to call the product ready because the test suite is
+green.**
+
+### 9.1 A — FEATURE COMPLETENESS (nearly closed)
+
+```bash
+python3 -c "import re,collections;s=open('frontend/src/screens/FeaturesScreen.tsx').read();\
+print(collections.Counter(re.findall(r'state:\s*\"(\w+)\"',s)))"
+# -> {'on': 47, 'off': 5, 'always': 1, 'server': 1}
+```
+
+| Item | State |
+|---|---|
+| **T4 slice 2b — bank statement matching** | ⭐ **THE ONE UNBLOCKED TRACK.** §4 |
+| T8 Multi-currency | In flight on another lane (0080 landed) |
+| T13 Interest on overdue bills | ⛔ Blocked on statutory documents — a human must read them |
+| SSO / OIDC | ⛔ Blocked on an IdP and credentials — a human must choose one |
+| Rule 48(4) QR on a printed e-invoice | ⛔ Blocked on the IRP, geo-fenced from this machine |
+| Split company data | ⛔ A declared **non-goal**. Never build it |
+
+⚠️ **"ON" DOES NOT MEAN "COMPLETE", AND THE ROWS SAY SO THEMSELVES.** 17 of the ~37 measurable
+`on` rows carry an explicit not-built or unverified disclosure inside their own note — bank
+matching, the pay run taking no per-employee attendance or declarations, no alter/reverse of a
+posted pay run, GSTR-9's eleven underived tables. The rows are honest. Do not read the count as a
+completion percentage.
+
+### 9.2 B — STATUTORY CORRECTNESS ⛔ **THE ONE THAT COSTS REAL MONEY**
+
+⛔⛔ **NOT ONE STATUTORY OUTPUT HAS EVER BEEN THROUGH A GOVERNMENT PORTAL.** GSTR-1, GSTR-3B,
+GSTR-9, the PF ECR, the ESI return and Form 138 are all **GENERATED, NOT VALIDATED** — every one of
+them says so in its own disclosures, and none of the portals is reachable from this machine.
+
+| Blocker | Who unblocks it |
+|---|---|
+| **EPF / EDLI ADMINISTRATIVE CHARGES ARE DEFERRED.** No standalone rate notification exists under the 2026 Schemes, so the engine refuses to invent one. Roughly **₹500 per establishment per month is accruing UNBOOKED** on every real pay run, and each run names it in its deferrals | A human reading the primary G.S.R. ⛔ **A release blocker, not a follow-up. Do not invent a rate to close it** |
+| **GSTN / NSDL-Protean / EPFO / ESIC schema verification** | A human in India with portal credentials, uploading one real file per format |
+| **The IRP is geo-fenced** (NIC's `164.100.69.x` hosts time out from here) | ⚠️ This is not only a testing problem — **it constrains where the product may be hosted.** It is recorded in this project's memory |
+| GSTR-9's eleven underived tables | Honest today. Only a problem if somebody markets it as a filing tool |
+
+⭐ **THE PRODUCT'S DISCLOSURE DISCIPLINE IS THE ASSET HERE.** Every one of these gaps is already
+named on the artefact that carries it. **Do not "clean up" a disclosure to make a screen look
+finished** — that is the single most damaging change anyone could make to this codebase.
+
+### 9.3 C — PRODUCTION OPERATIONS ⛔ **THE LEAST-AUDITED AREA IN THE REPOSITORY**
+
+**What already exists, and is better than expected:**
+
+```bash
+ls infra/terraform infra/k8s/base infra/security   # aurora.tf kms.tf · cored/statutoryd/insightd + default-deny netpol · semgrep + gitleaks
+ls .github/workflows/ci.yml                        # backend (build/vet/test/migrate) + frontend (tsc/vitest)
+grep -n "storage_encrypted\|backup_retention\|deletion_protection" infra/terraform/aurora.tf
+grep -n "Refusing to start fail-open" backend/internal/server/server.go   # -> :535
+```
+
+⭐ Aurora is encrypted with a customer KMS key, has a backup retention period and deletion
+protection. The k8s base has a **default-deny NetworkPolicy** and restricted Pod Security. And
+`cored` **REFUSES TO START FAIL-OPEN**: with neither `AUTH_DEV_TOKEN_ENABLED` nor `AUTH_JWKS_URL`
+it exits with a message naming both. That is the right posture and it is already there.
+
+**What is missing, measured:**
+
+| Gap | Evidence | Why it blocks a launch |
+|---|---|---|
+| ⛔ **NO TELEMETRY AT ALL** | `grep -i "otel\|opentelemetry\|prometheus" backend/go.mod` → **nothing is even a dependency**. `infra/observability/otel-collector-config.yaml` exists with **nothing emitting to it**. The only endpoint is `/healthz` | You will not know the product is broken until a customer tells you. For an accounting system that is the difference between a bad hour and a bad quarter |
+| **No inbound rate limiting** | The only `RateLimit` in the tree is `internal/statutory/provider.go` — that is throttling calls *out* to the government. Account lockout exists; request throttling does not | A public endpoint with no throttle is a public endpoint somebody will enumerate |
+| **The infra has never been applied** | No terraform state, no environment. It is well-written and **unexercised** | A first `terraform apply` on launch day is not a plan |
+| **TLS is terminated upstream** | `ListenAndServe`, not `ListenAndServeTLS` — correct for k8s, but the ingress must actually exist and be configured | ⚠️ Note WebAuthn origin matching is **exact**; the production origin has to be right first time |
+| **No load or scale evidence** | Nothing in the tree measures concurrent tenants, report latency on a large ledger, or the 48-query annual read | GSTR-9 reads twelve months × four queries. Nobody has run it against a year of real volume |
+| **`insightd` is a third deployable** | Python/FastAPI, its own requirements files, in the k8s base | Three planes to ship, not one. Its release story is the least written-down |
+
+### 9.4 D — LEGAL AND DATA PROTECTION ⛔ **ZERO COVERAGE, AND THIS IS A HARD BLOCKER**
+
+```bash
+grep -rli "dpdp\|privacy polic\|data retention\|right to erasure\|consent" docs backend/internal frontend/src
+# -> NOTHING. Not one file.
+```
+
+This product stores, for real people: **PAN numbers, salaries, bank account numbers and IFSC codes,
+UANs, employee addresses and designations, and counterparty GSTINs.** That is personal and financial
+data under India's **DPDP Act**, and there is currently **no privacy policy, no consent surface, no
+stated retention period, and no erasure path** anywhere in the repository.
+
+⚠️ **NOTE THE ONE PLACE THE ARCHITECTURE ALREADY HELPS**, so this is not started from zero: a
+company archive **carries who could open it but never re-grants access** — the restoring user
+becomes Owner and everyone else is listed by name to be re-granted deliberately. That instinct is
+correct and it is the instinct the rest of this work needs. ⛔ **But an erasure path is genuinely
+hard here and must be designed rather than assumed: every voucher is immutable and hash-chained,
+and there is no delete path for a company anywhere in the product because every immutability
+trigger refuses DELETE for every role.** "Delete my data" and "the chain must stay verifiable" are
+in real tension. **Do not let anyone discover that tension for the first time in a legal review.**
+
+### 9.5 E — THE USABILITY DAY ⭐ **HIGHEST VALUE, LOWEST COST, STILL NOT DONE**
+
+`PLAN-TALLY-PARITY.md` §7, in its own words:
+
+> *"Nobody has yet driven the app for a day as a shopkeeper would, which is how the smaller
+> papercuts surface — the ones that do not show up as a missing table. **Budget a usability pass**
+> before calling parity."*
+
+Still true. **Every gate in §3 is a test or a scripted drive. Nobody has used this product to do a
+day's bookkeeping.** It is the cheapest remaining item and probably the most valuable.
+
+### 9.6 ⭐ A SUGGESTED ORDER TO CLOSE THIS OUT
+
+Roughly parallel where the owners differ — most of this is not engineering time.
+
+1. **Start the human-blocked items NOW, because they have the longest lead time and none of them is
+   code:** the EPF/EDLI G.S.R., portal credentials for GSTN/EPFO/ESIC, an IdP choice for SSO, and
+   a DPDP review. ⛔ Every one of these is somebody waiting on somebody, and they will not compress.
+2. **The usability day** (§9.5). Do it before more features, because it re-orders everything after it.
+3. **T4 slice 2b — bank matching** (§4). The last unblocked parity track.
+4. **Telemetry** (§9.3). It is the gap that decides whether you can operate what you ship.
+5. **Apply the infra once, in a staging environment**, and run `verify:demo`, `verify:tenancy` and
+   the browser drives against it. A first apply on launch day is not a plan.
+6. **Then, and only then, a feature-freeze and a release-candidate pass** — re-run every gate in §3,
+   re-read every `FeaturesScreen` note against what the build actually does, and confirm no
+   disclosure has been quietly softened.
+
+⛔ **THE ONE THING NOT TO DO.** Do not ship this as a filing tool. It is an excellent set of books
+with honest statutory *workpapers*, and every one of those workpapers says so on its face. The
+moment marketing describes it as "file your GSTR-9 from here", the disclosures stop being honesty
+and start being a liability — and the engineering that makes this product trustworthy is exactly
+the engineering that gets deleted first when somebody wants the screens to look finished.
