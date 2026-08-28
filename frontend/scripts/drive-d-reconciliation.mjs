@@ -213,6 +213,22 @@ rec(
 const app = await openApp({ company: CO, expectCompany: COMPANY_NAME });
 const { page, body, press, toGateway, altMac, openFromGateway } = app;
 
+// ===========================================================================
+// ⛔ EVERY PROBE BELOW RUNS INSIDE ONE try, SO A THROW STILL REACHES THE SWEEP.
+//
+// Added 2026-08-27 by the U1-U7 audit lane, and NOT speculatively: adding two
+// assertions to this file threw on a Postgres precedence error (`a || b->>'k'`
+// parses as `(a || b) ->> 'k'`) and the drive died between `openApp` and the
+// teardown TWICE, leaking a tenant each time. That is `drive-d-offline-queue`'s
+// lesson exactly, and this file did not have the guard.
+//
+// ⚠️ THE BLOCK IS DELIBERATELY NOT RE-INDENTED, for the reason that file gives:
+// indenting 290 lines to add a guard buries the change that matters in a
+// whitespace diff.
+// ===========================================================================
+let driveError = null;
+try {
+
 /**
  * EVERY FAILED RESPONSE, WITH ITS URL **AND ITS BODY**.
  *
@@ -333,6 +349,28 @@ const openBefore = await sql(
 );
 rec("Postgres holds exactly one OPEN entry before the resolve", openBefore === "1", `open=${openBefore}`);
 
+// ⛔⛔ THE BOOKS, PHOTOGRAPHED BEFORE THE RESOLVE. Added by the U1-U7 audit lane
+// 2026-08-27 for the row's clause "CLEARING AN ENTRY RECORDS THAT SOMEBODY DEALT
+// WITH IT AND RE-APPLIES NOTHING; the refused change stays refused."
+//
+// Everything below already checked that against the SCREEN ("does NOT claim to
+// have re-applied anything") and against `resolved_at`. Neither can see the
+// failure the clause is about: a resolve that ALSO replayed the parked intent
+// would stamp `resolved_at`, would render the same sentence, and would leave the
+// operator's books carrying an edit the sequencer refused — at version 3, with
+// the losing amount, and nothing on any screen saying so. The oracle has to be
+// the voucher.
+const booksBefore = await sql(`
+SELECT vh.version_no || '|' || (vv.payload->>'narration')
+  FROM voucher_head vh
+  JOIN voucher_version vv ON vv.id = vh.current_version_id
+ WHERE vh.company_id = ${q(CO)}`);
+rec(
+  "control: the books are at the WINNING version before the resolve",
+  booksBefore.startsWith("2|") && booksBefore.includes(WINNER_NARRATION),
+  `head = ${booksBefore}`,
+);
+
 await page.getByRole("button", { name: /discard my version/i }).first().click();
 await page.waitForTimeout(1500);
 txt = await body();
@@ -357,6 +395,26 @@ rec(
   "⚠️ and it does NOT claim to have re-applied anything",
   /still refused/i.test(txt),
   "nothing anywhere replays a parked intent; saying otherwise promises what no route performs",
+);
+
+// ⛔⛔ AND THE BOOKS SAY THE SAME THING. This is the arm that can actually fail:
+// the two above read the screen and a timestamp column.
+const booksAfter = await sql(`
+SELECT vh.version_no || '|' || (vv.payload->>'narration')
+  FROM voucher_head vh
+  JOIN voucher_version vv ON vv.id = vh.current_version_id
+ WHERE vh.company_id = ${q(CO)}`);
+rec(
+  "⛔⛔ CLEARING RE-APPLIED NOTHING — the voucher is byte-for-byte where it was",
+  booksAfter === booksBefore,
+  `head before: ${booksBefore} · after: ${booksAfter}`,
+);
+rec(
+  "⛔ and the KEYED version never reached the books at any version",
+  !(await sql(
+    `SELECT count(*) FROM voucher_version WHERE company_id = ${q(CO)} AND payload->>'narration' LIKE ${q("%" + KEYED_NARRATION + "%")}`,
+  )).startsWith("1"),
+  "a parked intent that got replayed on clear would be here, and only here would show it",
 );
 
 // ---- 6. A FROZEN ENTRY IS EXPLAINED, NOT RETRIED ----------------------------
@@ -457,7 +515,13 @@ rec(
   failedRequests.filter((f) => f.status === 403).map((f) => f.body).join(" | ") || "no 403 at all",
 );
 
+} catch (e) {
+  driveError = e;
+  rec("the drive ran to the end without throwing", false, String(e).slice(0, 400));
+}
+
 await app.browser.close();
+if (driveError) console.log("\n--- the throw ---\n" + String(driveError).slice(0, 1200));
 
 // ---- teardown: the CATALOG-DERIVED sweep (HANDOFF §0.1 item 7) ---------------
 try {
