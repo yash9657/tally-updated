@@ -530,31 +530,40 @@ accruing inside the gap** — here, 8 June–5 Aug 2022 and 9 April–6 June 202
 everywhere else. It would pass any spot-check that happened to land outside the window, and the
 error compounds forward through every subsequent monthly rest (§6.1, symptom 1).
 
-### THE SERIES AS BEST ASSEMBLED — ⚠️ NOT YET CITABLE
+### THE SERIES — FOUR ROWS NOW PINNED TO RBI'S OWN NOTIFICATIONS
 
-Post-2020 the Bank Rate is aligned to the MSF rate at the policy repo rate **+ 25 bp**, and each
-MPC resolution states it in terms. Assembled from RBI press releases and, for several rows, from
-secondary reporting of them:
+⭐ **EVERY Bank Rate change carries a notification with the SAME TITLE**, which is the key to
+finding the rest quickly:
 
-| Effective | Repo | Bank Rate | s.16's `3 ×` | Provenance |
-|---|---|---|---|---|
-| 22 May 2020 | 4.00% | 4.25% | 12.75% | ⚠️ secondary |
-| 4 May 2022 | 4.40% | 4.65% | 13.95% | ⚠️ secondary |
-| **8 Jun 2022** | 4.90% | **5.15%** | 15.45% | ✅ **RBI press release, quoted** — ⛔ **MISSING from the supplied table** |
-| 5 Aug 2022 | 5.40% | 5.65% | 16.95% | ⚠️ secondary, quoting RBI's wording |
-| 30 Sep 2022 | 5.90% | 6.15% | 18.45% | ⚠️ secondary, quoting RBI's wording |
-| 7 Dec 2022 | 6.25% | 6.50% | 19.50% | ⚠️ secondary |
-| 8 Feb 2023 | 6.50% | 6.75% | 20.25% | ⚠️ secondary |
-| 7 Feb 2025 | 6.25% | 6.50% | 19.50% | ⚠️ secondary quoting an RBI notification |
-| **9 Apr 2025** | 6.00% | **6.25%** | 18.75% | ⚠️ secondary — ⛔ **MISSING from the supplied table** |
-| 6 Jun 2025 | 5.50% | 5.75% | 17.25% | ✅ RBI notification wording, quoted |
-| 5 Dec 2025 | 5.25% | 5.50% | 16.50% | ⚠️ secondary |
-| *(current, 28 Aug 2026)* | 5.25% | 5.50% | 16.50% | ✅ **RBI home page, read directly** |
+> **"Penal Interest on shortfall in CRR and SLR requirements – Change in Bank Rate"**
 
-⚠️ **ONE SECONDARY SOURCE WAS ALREADY CAUGHT CONTRADICTING ITSELF**, which is the calibration for
-the whole column: a search result reported February 2023 as *"MSF Rate at 6.50%, and Bank Rate at
-6.50%"* — impossible, since the repo went to 6.50% and the Bank Rate sits 25 bp above it. **The
-table above uses 6.75%.** Do not promote any ⚠️ row without the notification behind it.
+issued by the Department of Regulation under a `DoR.RET.REC.<n>/12.01.001/<year>` reference. Post
+2020 the Bank Rate is aligned to the MSF rate at the policy repo rate **+ 25 bp**.
+
+| Effective | Bank Rate | `3 ×` | Source |
+|---|---|---|---|
+| 22 May 2020 | 4.25% | 12.75% | ⚠️ secondary |
+| 4 May 2022 | 4.65% | 13.95% | ⚠️ secondary |
+| **8 Jun 2022** | **5.15%** | 15.45% | ✅ RBI press release quoted; ⛔ **absent from the supplied table** |
+| 5 Aug 2022 | 5.65% | 16.95% | ✅ **`NotificationUser.aspx?Id=12372`** — RBI/2022-23/103, *"5.15 → 5.65 with immediate effect"* |
+| 30 Sep 2022 | 6.15% | 18.45% | ⚠️ secondary |
+| 7 Dec 2022 | 6.50% | 19.50% | ⚠️ secondary |
+| 8 Feb 2023 | 6.75% | 20.25% | ✅ **`Id=12450`** — RBI/2022-23/174, *"6.50 → 6.75"* |
+| 7 Feb 2025 | 6.50% | 19.50% | ⚠️ secondary |
+| **9 Apr 2025** | **6.25%** | 18.75% | ✅ **`Id=12832`** — RBI/2025-26/23, *"6.50 → 6.25"*; ⛔ **absent from the supplied table** |
+| 6 Jun 2025 | 5.75% | 17.25% | ✅ **`Id=12857`** — RBI/2025-26/45, *"6.25 → 5.75"* |
+| 5 Dec 2025 | 5.50% | 16.50% | ⚠️ secondary |
+| *(current, 28 Aug 2026)* | 5.50% | 16.50% | ✅ RBI home page, read directly |
+
+⭐⭐ **THE TWO MISSING ROWS ARE NOW BOTH CONFIRMED FROM RBI ITSELF, NOT INFERRED.** `Id=12857`
+(June 2025) revises the rate *"from 6.25 per cent"* — a figure that exists only because of the
+April step in `Id=12832`. And `Id=12372` (Aug 2022) revises *"from 5.15 per cent"* — a figure that
+exists only because of the June 2022 step. **Each missing change is proved by the notification that
+follows it**, which is a stronger argument than any table.
+
+⚠️ **AND A SECONDARY SOURCE WAS CAUGHT AND KILLED.** Search results reported February 2023 as
+*"Bank Rate at 6.50%"*. `Id=12450` says **6.75%** in RBI's own words. The ⚠️ rows above are exactly
+as reliable as that one was.
 
 ### ⛔ WHAT AUTOMATED RETRIEVAL CANNOT DO, AND IT IS WORTH RECORDING ONCE
 
