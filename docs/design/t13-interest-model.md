@@ -505,56 +505,70 @@ the rate in force ON THAT SEGMENT.** Rest 4 above spans the change and must be s
 notification's effective date — which means the walk in §4.2 is segmented by **two** things: the
 payment events, and the rate-change events.
 
-### 6.3 ⚠️ A PROVISIONAL SERIES — SUPPLIED 2026-08-29, AND WHY IT IS NOT YET USABLE
+### 6.3 ⛔⛔ THE SUPPLIED SERIES IS INCOMPLETE — TWO CHANGES ARE MISSING, MEASURED
 
-The project owner supplied a Bank Rate table. It is recorded here **because its SHAPE is
-informative even though its DATES are not usable**, and because §6.1 deliberately reasons with
-symbols `B₁`/`B₂` — the engine can be built against this shape and take the numbers later.
+**2026-08-29.** The project owner supplied a twelve-row Bank Rate table. ⛔ **It must not be used,
+and the reason is not its provenance but its CONTENT: at least two rate changes are absent.**
 
-⛔ **IT IS NOT COMMITTED TO `docs/statutory/` AND MUST NOT BE READ AS VERIFIED.** No source, no
-notification reference. It is at best `ConfUnverified` in `rates.go`'s vocabulary.
+⭐ **HOW THE GAPS WERE FOUND — by checking, not by reading.** `rbi.org.in` is reachable from this
+machine (no geo-fence, no 403), so RBI's own words were compared against the table:
 
-⭐ **WHAT PASSED — a real consistency check, not a glance.** RBI's convention aligns the Bank Rate
-with the MSF rate at the repo rate plus 25 basis points. **All twelve supplied rows satisfy
-`bank = repo + 0.25` exactly**, computed rather than eyeballed. A table that had been assembled
-carelessly would very likely have broken that somewhere.
+| Evidence | Consequence |
+|---|---|
+| RBI's June 2025 notification revises the Bank Rate *"from 6.25 per cent to 5.75 per cent"* | ⛔ The table has the Bank Rate at **6.50%** from Feb 2025 straight to **5.75%** in June. For RBI's sentence to be true there must be a step at **6.25%** in between. It is **9 April 2025** (repo 6.25→6.00) |
+| RBI press release, **8 June 2022**: *"…the marginal standing facility (MSF) rate and the Bank Rate to 5.15 per cent"* | ⛔ The table jumps **4.65% (May 2022) → 5.65% (Aug 2022)** with nothing between. **8 June 2022 at 5.15% is missing** |
 
-⭐ **AND THE SHAPE: TWELVE ROWS ARE NINE CHANGES.** Three rows repeat the preceding rate unchanged
-(Feb 2026 and Aug 2026 both restate Dec 2025; Dec 2024 restates Feb 2023). **They are observation
-points, not notifications.** A series builder that loaded twelve rows as twelve change-events would
-insert three spurious segment boundaries — harmless to the arithmetic, since the rate either side is
-identical, but it would make the segmented walk of §4.2 emit rests that split for no stated reason,
-and a reader asking "why does this rest end here?" would find no answer.
+⚠️ **AND THE TABLE'S INTERNAL CHECK PASSED ANYWAY.** All twelve rows satisfy
+`bank = repo + 0.25`, computed. **A consistency check over the rows present cannot detect a row
+that is absent** — which is exactly why "the numbers look right" is not a verification, and why a
+missing rate change is the most dangerous defect this series can carry: every figure would foot.
 
-| Bank Rate from | Rate | s.16's `3 ×` |
-|---|---|---|
-| May 2020 | 4.25% | 12.75% |
-| May 2022 | 4.65% | 13.95% |
-| Aug 2022 | 5.65% | 16.95% |
-| Sep 2022 | 6.15% | 18.45% |
-| Dec 2022 | 6.50% | 19.50% |
-| Feb 2023 | 6.75% | 20.25% |
-| Feb 2025 | 6.50% | 19.50% |
-| June 2025 | 5.75% | 17.25% |
-| Dec 2025 | 5.50% | 16.50% |
+### ⛔ WHY A MISSING CHANGE IS WORSE THAN A WRONG ONE
 
-⚠️ **Note what `3 ×` produces: 12.75% to 20.25% per annum, compounding monthly.** These are large
-numbers and they are the statute's, not a setting anyone chose. It is worth seeing them written out
-before the first demand letter is generated.
+A wrong rate is wrong everywhere and somebody notices. **A missing change is wrong only for bills
+accruing inside the gap** — here, 8 June–5 Aug 2022 and 9 April–6 June 2025 — and correct
+everywhere else. It would pass any spot-check that happened to land outside the window, and the
+error compounds forward through every subsequent monthly rest (§6.1, symptom 1).
 
-### ⛔⛔ WHY IT CANNOT BE USED YET: THE DATES ARE MONTHS, AND §6.1 NEEDS DAYS
+### THE SERIES AS BEST ASSEMBLED — ⚠️ NOT YET CITABLE
 
-§6.1's rest 4 *"spans the change and must be split at the notification's **effective date**"*.
-**"Feb 2025" cannot split anything.** A bill whose appointed day falls in the same month as a rate
-change has at least one rest priced off a boundary this table cannot locate, and the engine would
-have to pick a day — the 1st, the last, the announcement — which is precisely the invention this
-whole note exists to prevent.
+Post-2020 the Bank Rate is aligned to the MSF rate at the policy repo rate **+ 25 bp**, and each
+MPC resolution states it in terms. Assembled from RBI press releases and, for several rows, from
+secondary reporting of them:
 
-⭐ **SO THE REMAINING ASK IS NARROW AND IT IS THE ONLY THING LEFT BLOCKING T13:** the **exact
-effective date** of each of the nine changes above, from `rbi.org.in`. The Bank Rate moves with the
-MSF rate, which moves with the MPC's policy decisions, so the per-decision press releases carry the
-dates; RBI's own historical rate tables carry them in one place. **Nine dates and a source, and this
-section becomes `docs/statutory/` material and the build starts.**
+| Effective | Repo | Bank Rate | s.16's `3 ×` | Provenance |
+|---|---|---|---|---|
+| 22 May 2020 | 4.00% | 4.25% | 12.75% | ⚠️ secondary |
+| 4 May 2022 | 4.40% | 4.65% | 13.95% | ⚠️ secondary |
+| **8 Jun 2022** | 4.90% | **5.15%** | 15.45% | ✅ **RBI press release, quoted** — ⛔ **MISSING from the supplied table** |
+| 5 Aug 2022 | 5.40% | 5.65% | 16.95% | ⚠️ secondary, quoting RBI's wording |
+| 30 Sep 2022 | 5.90% | 6.15% | 18.45% | ⚠️ secondary, quoting RBI's wording |
+| 7 Dec 2022 | 6.25% | 6.50% | 19.50% | ⚠️ secondary |
+| 8 Feb 2023 | 6.50% | 6.75% | 20.25% | ⚠️ secondary |
+| 7 Feb 2025 | 6.25% | 6.50% | 19.50% | ⚠️ secondary quoting an RBI notification |
+| **9 Apr 2025** | 6.00% | **6.25%** | 18.75% | ⚠️ secondary — ⛔ **MISSING from the supplied table** |
+| 6 Jun 2025 | 5.50% | 5.75% | 17.25% | ✅ RBI notification wording, quoted |
+| 5 Dec 2025 | 5.25% | 5.50% | 16.50% | ⚠️ secondary |
+| *(current, 28 Aug 2026)* | 5.25% | 5.50% | 16.50% | ✅ **RBI home page, read directly** |
+
+⚠️ **ONE SECONDARY SOURCE WAS ALREADY CAUGHT CONTRADICTING ITSELF**, which is the calibration for
+the whole column: a search result reported February 2023 as *"MSF Rate at 6.50%, and Bank Rate at
+6.50%"* — impossible, since the repo went to 6.50% and the Bank Rate sits 25 bp above it. **The
+table above uses 6.75%.** Do not promote any ⚠️ row without the notification behind it.
+
+### ⛔ WHAT AUTOMATED RETRIEVAL CANNOT DO, AND IT IS WORTH RECORDING ONCE
+
+| Source | Result |
+|---|---|
+| RBI's own *"Bankrate, CRR and SLR Changes"* history page | ⛔ **Ends at 3 April 1998.** Useless for this |
+| `rbidocs.rbi.org.in` press-release PDFs | ⛔ **CAPTCHA** to a fetcher |
+| `dbie.rbi.org.in` / `data.rbi.org.in` (Database on Indian Economy) | ⛔ JavaScript app; a fetcher gets an empty shell |
+| `rbi.org.in` HTML press releases and the home page | ✅ **Readable** — this is where the two quoted rows came from |
+
+⭐ **SO THE REMAINING WORK IS ELEVEN LOOKUPS, NOT A RESEARCH PROJECT**, and it is now precisely
+specified: for each row above, RBI's *"Change in Bank Rate"* notification or the MPC resolution,
+giving the reference number and the effective date. Downloaded by a human where the fetcher meets a
+CAPTCHA, committed to `docs/statutory/`, and the ⚠️ column becomes ✅.
 
 ### 6.2 Where the series lives — three options, and a recommendation
 
