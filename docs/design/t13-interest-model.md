@@ -505,6 +505,57 @@ the rate in force ON THAT SEGMENT.** Rest 4 above spans the change and must be s
 notification's effective date — which means the walk in §4.2 is segmented by **two** things: the
 payment events, and the rate-change events.
 
+### 6.3 ⚠️ A PROVISIONAL SERIES — SUPPLIED 2026-08-29, AND WHY IT IS NOT YET USABLE
+
+The project owner supplied a Bank Rate table. It is recorded here **because its SHAPE is
+informative even though its DATES are not usable**, and because §6.1 deliberately reasons with
+symbols `B₁`/`B₂` — the engine can be built against this shape and take the numbers later.
+
+⛔ **IT IS NOT COMMITTED TO `docs/statutory/` AND MUST NOT BE READ AS VERIFIED.** No source, no
+notification reference. It is at best `ConfUnverified` in `rates.go`'s vocabulary.
+
+⭐ **WHAT PASSED — a real consistency check, not a glance.** RBI's convention aligns the Bank Rate
+with the MSF rate at the repo rate plus 25 basis points. **All twelve supplied rows satisfy
+`bank = repo + 0.25` exactly**, computed rather than eyeballed. A table that had been assembled
+carelessly would very likely have broken that somewhere.
+
+⭐ **AND THE SHAPE: TWELVE ROWS ARE NINE CHANGES.** Three rows repeat the preceding rate unchanged
+(Feb 2026 and Aug 2026 both restate Dec 2025; Dec 2024 restates Feb 2023). **They are observation
+points, not notifications.** A series builder that loaded twelve rows as twelve change-events would
+insert three spurious segment boundaries — harmless to the arithmetic, since the rate either side is
+identical, but it would make the segmented walk of §4.2 emit rests that split for no stated reason,
+and a reader asking "why does this rest end here?" would find no answer.
+
+| Bank Rate from | Rate | s.16's `3 ×` |
+|---|---|---|
+| May 2020 | 4.25% | 12.75% |
+| May 2022 | 4.65% | 13.95% |
+| Aug 2022 | 5.65% | 16.95% |
+| Sep 2022 | 6.15% | 18.45% |
+| Dec 2022 | 6.50% | 19.50% |
+| Feb 2023 | 6.75% | 20.25% |
+| Feb 2025 | 6.50% | 19.50% |
+| June 2025 | 5.75% | 17.25% |
+| Dec 2025 | 5.50% | 16.50% |
+
+⚠️ **Note what `3 ×` produces: 12.75% to 20.25% per annum, compounding monthly.** These are large
+numbers and they are the statute's, not a setting anyone chose. It is worth seeing them written out
+before the first demand letter is generated.
+
+### ⛔⛔ WHY IT CANNOT BE USED YET: THE DATES ARE MONTHS, AND §6.1 NEEDS DAYS
+
+§6.1's rest 4 *"spans the change and must be split at the notification's **effective date**"*.
+**"Feb 2025" cannot split anything.** A bill whose appointed day falls in the same month as a rate
+change has at least one rest priced off a boundary this table cannot locate, and the engine would
+have to pick a day — the 1st, the last, the announcement — which is precisely the invention this
+whole note exists to prevent.
+
+⭐ **SO THE REMAINING ASK IS NARROW AND IT IS THE ONLY THING LEFT BLOCKING T13:** the **exact
+effective date** of each of the nine changes above, from `rbi.org.in`. The Bank Rate moves with the
+MSF rate, which moves with the MPC's policy decisions, so the per-decision press releases carry the
+dates; RBI's own historical rate tables carry them in one place. **Nine dates and a source, and this
+section becomes `docs/statutory/` material and the build starts.**
+
 ### 6.2 Where the series lives — three options, and a recommendation
 
 **Precedent A — a keyed effective-date table.** `currency_rate`,
