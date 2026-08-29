@@ -18,7 +18,7 @@ not summaries.
 | `ita-2025-as-amended-fa-2026.pdf` | ✅ **here** (2026-07-30) | `https://www.incometaxindia.gov.in/documents/d/guest/income_tax_act_2025_as_amended_by_fa_act_2026-pdf` | The s.393 rate table **as amended**. This is now the authority to verify §9 against — better than a yes/no on "did FA 2026 change it", because whatever this text says IS current law. |
 | `form-140-file-format.xlsx` | ✅ **here** (2026-07-31) | Protean/TIN, "File Format for Form Number 140 (26Q) Q1 to Q4 Version 1.0" | **THE BLOCKER, CLEARED.** Annexure 2's payment codes, the annexure field list, and Annexure 6's reason codes. See below. |
 | `form-143-file-format.xlsx` | ✅ **here** (2026-07-31) | Protean/TIN, "File Format for Form Number 143 (27EQ) Q1 to Q4 Version 1.0" | The **TCS** return. Delivered more than expected — see the verified collection codes below. |
-| `msmed-act-2006.pdf` | ⚠️ **here** (2026-08-29) — **an OCR'd scan from a Ministry host, NOT the eGazette.** See "MSMED Act" below | `https://www.dcmsme.gov.in/MSMED2006.pdf` — the Development Commissioner (MSME), the Ministry's own office | **T13's statutory half, except the numbers.** ss.15, 16, 23, 24 and the s.2(b) "appointed day" definition, all as enacted. ⛔ **It does NOT settle who is a micro/small enterprise** (s.7's thresholds are the 2006 originals and are superseded), and it says nothing about the RBI Bank Rate |
+| `msmed-act-2006.pdf` | ✅ **here** (2026-08-29) — **India Code, text-native, downloaded by a human.** See "MSMED Act" below | `https://www.indiacode.nic.in/bitstream/123456789/2013/3/A2006-27.pdf` — India Code, the canonical portal | **T13's statutory half, except the numbers.** ss.15, 16, 23, 24 and the s.2(b) "appointed day" definition, all as enacted. ⛔ **It does NOT settle who is a micro/small enterprise** (s.7's thresholds are the 2006 originals and are superseded), and it says nothing about the RBI Bank Rate |
 
 ### ⚠️ What Form 140 does NOT contain — checked, not assumed
 
@@ -303,22 +303,41 @@ half that was false is worth recording because the next person will hit it:
 | `wb.gov.in` | ⚠️ Downloads, but it is an **FAQ / guidance document**, not the Act |
 | ✅ `dcmsme.gov.in` | **Downloads, and it is the whole Act, ss.1–32** |
 
-### ⛔ GRADE IT HONESTLY: A MINISTRY SCAN, NOT THE GAZETTE
+### ✅ THE COMMITTED COPY IS INDIA CODE'S, AND IT WAS VERIFIED AGAINST A SECOND SOURCE
 
-It is an **OCR'd image scan** and the text layer carries artifacts — `d2Y` for "day", `(I)` for
-`(1)`, `offacilitating`, stray marginal marks. **Every quotation taken from it must be read against
-the page image, not lifted from the text layer.** It is hosted by the Development Commissioner
-(MSME) — the Ministry's own office — so it is a government source, but it is not the eGazette and
-should be replaced by the eGazette text if anyone ever has an Indian IP and five minutes.
+**The file here is India Code's `A2006-27.pdf`**, downloaded **by a human with a browser** on
+2026-08-29 — the same workaround this README's opening paragraph prescribes for
+`incometaxindia.gov.in`, applied to `indiacode.nic.in`, which 403s automated fetchers identically.
+It is **text-native** (produced from Word, not scanned), so quotations can be taken from the text
+layer directly.
+
+⭐ **IT REPLACED AN OCR'd MINISTRY SCAN, AND THE TWO WERE DIFFED BEFORE THE SWAP.** The first copy
+obtained was `https://www.dcmsme.gov.in/MSMED2006.pdf` (Development Commissioner, MSME) — a scan
+whose text layer carried artifacts (`d2Y` for "day", `(I)` for `(1)`, `offacilitating`). Every
+section quoted below was re-read against the India Code text **word for word** and **all of them
+matched**, including s.7's thresholds. The scan was right; it is simply a worse artefact to keep.
+
+⚠️ **NOTE FOR ANYONE RE-VERIFYING WITH `grep`.** Both documents wrap lines mid-phrase, so
+`grep "three times"` returns **zero** against s.16 and `grep "twenty-five lakh"` returns **zero**
+against s.7 — in each case the phrase is split across a line break (`at three` / `times of the bank
+rate`; `twenty-` / `five lakh rupees`). **A zero here is a line-wrap artefact and not an absence.**
+Searching for a distinctive single word is the reliable form.
 
 ### ✅ WHAT IT SETTLES — read from its own text
 
 - **s.2(b) — "appointed day"**: *"the day following immediately after the expiry of the period of
   fifteen days from the day of acceptance or the day of deemed acceptance"*.
   ⭐ **THE FIFTEEN DAYS LIVES HERE, NOT IN s.15.** A note citing s.15 for it cites the wrong section.
-  ⚠️ And its **Explanation** moves the anchor: where the buyer objects **in writing within fifteen
-  days** of delivery, "the day of acceptance" becomes the day the objection is **removed by the
-  supplier** — so the clock's start is not simply the delivery date.
+  ⚠️ And its **Explanation** moves the anchor. It defines **two** starting facts, not one:
+  - *"the day of acceptance"* — the day of actual delivery **or**, where the buyer objects **in
+    writing within fifteen days** of delivery, *"the day on which such objection is removed by the
+    supplier"*;
+  - *"the day of deemed acceptance"* — where **no** written objection is made within fifteen days,
+    *"the day of the actual delivery of goods or the rendering of services"*.
+
+  ⛔ **SO THE CLOCK'S START IS NOT SIMPLY THE INVOICE DATE, AND IT IS NOT EVEN FIXED AT DELIVERY.**
+  A written objection resets it to an event that happens later and that this product does not
+  record anywhere. §5's anchor-date gap is therefore wider than §5 states.
 - **s.15**: payment on or before the date agreed **in writing**, or *"where there is no agreement in
   this behalf, before the appointed day"*; proviso — the agreed period *"shall in no case exceed
   forty-five days from the day of acceptance or the day of deemed acceptance"*.

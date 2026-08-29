@@ -132,18 +132,20 @@ removing the false premise:
 
 ## 1. REGIME (a) — THE MSMED ACT. WHAT IS FIXED, AND THEREFORE WHAT MUST NOT BE A UI CONTROL
 
-⭐ **VERIFIED 2026-08-29 AGAINST THE ACT'S OWN TEXT** — `docs/statutory/msmed-act-2006.pdf`, an
-OCR'd Ministry scan (Development Commissioner, MSME). §0.2's "PENDING PRIMARY VERIFICATION" is
-**discharged for the mechanics below**; it still stands for the two things the Act does not carry,
-which are the RBI Bank Rate series (§6) and the current micro/small thresholds (§1.2).
+⭐⭐ **VERIFIED 2026-08-29 AGAINST THE ACT'S OWN TEXT, FROM TWO INDEPENDENT COPIES.**
+`docs/statutory/msmed-act-2006.pdf` is now **India Code's `A2006-27.pdf`** — text-native, downloaded
+by a human with a browser (India Code 403s automated fetchers). It replaced an OCR'd Ministry scan
+from `dcmsme.gov.in`, and **every quotation below was diffed word for word between the two before
+the swap; all matched.** §0.2's "PENDING PRIMARY VERIFICATION" is **DISCHARGED for the mechanics
+below.**
 
-⚠️ The scan's text layer has OCR artifacts (`d2Y` for "day", `(I)` for `(1)`). Quotations here were
-read against the page; a future edit must do the same rather than trust the layer.
+⚠️ It still stands for the two things the Act does not carry: the **RBI Bank Rate series** (§6) and
+the **current micro/small thresholds** (§1.2). Neither is in this Act and neither ever will be.
 
 | Element | What the statute fixes | Consequence for the build |
 |---|---|---|
 | **s.15 — when payment is due** | *"payment therefor on or before the date agreed upon between him and the supplier **in writing** or, where there is no agreement in this behalf, before the appointed day"*; proviso — the agreed period *"shall in no case exceed forty-five days from the day of acceptance or the day of deemed acceptance"*. | ⛔ **TWO CASES, NOT ONE.** A written agreement (capped at 45 days) or, failing that, the appointed day. |
-| **s.2(b) — "appointed day"** ⭐ **THE 15 DAYS LIVES HERE, NOT IN s.15** | *"the day following immediately after the expiry of the period of **fifteen days** from the day of acceptance or the day of deemed acceptance"*. ⚠️ Its **Explanation** moves the anchor: where the buyer objects **in writing within fifteen days** of delivery, "the day of acceptance" is the day the objection is **removed by the supplier**. | ⛔ **DEFAULTING AN UNAGREED BILL TO 45 DAYS STARTS THE CLOCK A MONTH LATE** on every one of them — understating in the debtor's favour, with every figure still footing. ⚠️ And the anchor is **not simply the invoice date**: a written objection resets it. §5's anchor-date gap is therefore worse than §5 states. |
+| **s.2(b) — "appointed day"** ⭐ **THE 15 DAYS LIVES HERE, NOT IN s.15** | *"the day following immediately after the expiry of the period of **fifteen days** from the day of acceptance or the day of deemed acceptance"*. Its **Explanation** defines BOTH: *"the day of acceptance"* is actual delivery, **or** where the buyer objects in writing within fifteen days, *"the day on which such objection is removed by the supplier"*; *"the day of deemed acceptance"* is actual delivery where no such objection is made. | ⛔ **DEFAULTING AN UNAGREED BILL TO 45 DAYS STARTS THE CLOCK A MONTH LATE** on every one of them — understating in the debtor's favour, with every figure still footing. ⛔⛔ **AND THE ANCHOR IS NOT THE INVOICE DATE, NOR EVEN THE DELIVERY DATE**: a written objection moves it to the day the supplier resolves that objection — **an event this product records nowhere**. §5's anchor-date gap is therefore WIDER than §5 states, and closing it needs a new fact, not a new query. |
 | **s.16 — the rate and the rests** | *"compound interest with monthly rests … from the appointed day or, as the case may be, from the date immediately following the date agreed upon, at three times of the bank rate notified by the Reserve Bank"*. | ⛔ Not a rate input, not a simple/compound toggle, not a day-count basis. **Months, not days.** ⭐ **AND TWO ANCHORS**: the appointed day when there was no written agreement, the day after the agreed date when there was. A single anchor is wrong for half of all bills. |
 | **s.24 — the override** ⭐ **PINNED 2026-08-29; §8 no longer needs to** | *"The provisions of sections 15 to 23 shall have effect notwithstanding anything inconsistent therewith contained in any other law for the time being in force."* A clause reading "no interest on late payment" does not survive against an MSE supplier. | ⛔ **A per-party interest configuration must not be readable for a party flagged MSE.** The regime is selected, then the configuration is *ignored*, and the report must say it was ignored and why. |
 
