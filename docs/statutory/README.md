@@ -18,6 +18,7 @@ not summaries.
 | `ita-2025-as-amended-fa-2026.pdf` | ✅ **here** (2026-07-30) | `https://www.incometaxindia.gov.in/documents/d/guest/income_tax_act_2025_as_amended_by_fa_act_2026-pdf` | The s.393 rate table **as amended**. This is now the authority to verify §9 against — better than a yes/no on "did FA 2026 change it", because whatever this text says IS current law. |
 | `form-140-file-format.xlsx` | ✅ **here** (2026-07-31) | Protean/TIN, "File Format for Form Number 140 (26Q) Q1 to Q4 Version 1.0" | **THE BLOCKER, CLEARED.** Annexure 2's payment codes, the annexure field list, and Annexure 6's reason codes. See below. |
 | `form-143-file-format.xlsx` | ✅ **here** (2026-07-31) | Protean/TIN, "File Format for Form Number 143 (27EQ) Q1 to Q4 Version 1.0" | The **TCS** return. Delivered more than expected — see the verified collection codes below. |
+| `msmed-act-2006.pdf` | ⚠️ **here** (2026-08-29) — **an OCR'd scan from a Ministry host, NOT the eGazette.** See "MSMED Act" below | `https://www.dcmsme.gov.in/MSMED2006.pdf` — the Development Commissioner (MSME), the Ministry's own office | **T13's statutory half, except the numbers.** ss.15, 16, 23, 24 and the s.2(b) "appointed day" definition, all as enacted. ⛔ **It does NOT settle who is a micro/small enterprise** (s.7's thresholds are the 2006 originals and are superseded), and it says nothing about the RBI Bank Rate |
 
 ### ⚠️ What Form 140 does NOT contain — checked, not assumed
 
@@ -284,3 +285,72 @@ exists. So the zero in `rates.go` must stay a refusal and must never harden into
 **The FVU cannot be run in this environment, and the GSTN portal, the NIC e-Way Bill API and
 the EPFO/ESIC portals cannot be reached from it. Never claim a validation that was not
 performed.**
+
+
+---
+
+## ⚠️ MSMED Act 2006 — what it settles, what it does not, and how it was obtained
+
+**Obtained 2026-08-29.** `docs/design/t13-interest-model.md` §8 asked for this and rated it
+*"NOT blocked by anything — ordinary public documents"*. That turned out to be half true, and the
+half that was false is worth recording because the next person will hit it:
+
+| Host | Result |
+|---|---|
+| `indiacode.nic.in` (the canonical portal) | ⛔ **403 to automated fetchers.** A human with a browser gets through — the same behaviour this README's opening paragraph records for `incometaxindia.gov.in` |
+| `samadhaan.msme.gov.in` (the Ministry's delayed-payment portal) | ⛔ **Connection REFUSED from `164.100.158.186`.** ⚠️ That is the **same `164.100.x` NIC range** as the geo-fenced e-invoice hosts. **The geo-fence is broader than the IRP** — it is a property of NIC-hosted government services generally, and it is now known to block a second, unrelated document source |
+| `legislative.gov.in` | ⛔ 403 |
+| `wb.gov.in` | ⚠️ Downloads, but it is an **FAQ / guidance document**, not the Act |
+| ✅ `dcmsme.gov.in` | **Downloads, and it is the whole Act, ss.1–32** |
+
+### ⛔ GRADE IT HONESTLY: A MINISTRY SCAN, NOT THE GAZETTE
+
+It is an **OCR'd image scan** and the text layer carries artifacts — `d2Y` for "day", `(I)` for
+`(1)`, `offacilitating`, stray marginal marks. **Every quotation taken from it must be read against
+the page image, not lifted from the text layer.** It is hosted by the Development Commissioner
+(MSME) — the Ministry's own office — so it is a government source, but it is not the eGazette and
+should be replaced by the eGazette text if anyone ever has an Indian IP and five minutes.
+
+### ✅ WHAT IT SETTLES — read from its own text
+
+- **s.2(b) — "appointed day"**: *"the day following immediately after the expiry of the period of
+  fifteen days from the day of acceptance or the day of deemed acceptance"*.
+  ⭐ **THE FIFTEEN DAYS LIVES HERE, NOT IN s.15.** A note citing s.15 for it cites the wrong section.
+  ⚠️ And its **Explanation** moves the anchor: where the buyer objects **in writing within fifteen
+  days** of delivery, "the day of acceptance" becomes the day the objection is **removed by the
+  supplier** — so the clock's start is not simply the delivery date.
+- **s.15**: payment on or before the date agreed **in writing**, or *"where there is no agreement in
+  this behalf, before the appointed day"*; proviso — the agreed period *"shall in no case exceed
+  forty-five days from the day of acceptance or the day of deemed acceptance"*.
+- **s.16**: *"compound interest with monthly rests … from the appointed day or, as the case may be,
+  from the date immediately following the date agreed upon, at three times of the bank rate notified
+  by the Reserve Bank"*. ⭐ **TWO ANCHORS, not one** — which of them applies depends on whether there
+  was a written agreement.
+- **s.23**: the interest *"shall not, for the purposes of computation of income under the Income-tax
+  Act, 1961, be allowed as deduction"*.
+- **s.24 — the override, now PINNED**: *"The provisions of sections 15 to 23 shall have effect
+  notwithstanding anything inconsistent therewith contained in any other law for the time being in
+  force."* The T13 memo guessed "s.24 or equivalent"; it is s.24.
+
+### ⛔ WHAT IT DOES *NOT* SETTLE — and the second one is a trap
+
+1. **THE RBI BANK RATE.** Not in the Act and never will be. s.16 is an arithmetic instruction over a
+   dated series that this repository still does not have. **T13 remains blocked on it.**
+2. ⛔⛔ **WHO IS A MICRO OR SMALL ENTERPRISE. s.7's THRESHOLDS ARE THE 2006 ORIGINALS AND ARE
+   SUPERSEDED.** The Act as enacted reads *"a micro enterprise, where the investment in plant and
+   machinery does not exceed twenty-five lakh rupees"*. Those figures were replaced in 2020 by
+   composite investment-**and**-turnover criteria and revised again since. **Using the Act's own
+   numbers would misclassify almost every real enterprise**, and it would do so in the flattering
+   direction — nearly everybody would fall outside micro/small, so the MSMED regime would silently
+   never apply and no interest would ever be computed under it.
+
+   ⭐ **s.7(1) IS THE PART THAT MATTERS, AND IT IS STILL GOOD LAW**: the Central Government *"may,
+   for the purposes of this Act, **by notification** … classify"*. So classification is delegated,
+   exactly as the EPF administrative charges are — the Act supplies the mechanism and a separate
+   notification supplies the numbers.
+
+   ⚠️ **AND THE PRODUCT PROBABLY SHOULD NOT COMPUTE THIS AT ALL.** It has no investment or turnover
+   figure for a counterparty and must not invent one. What a supplier actually presents is a **Udyam
+   Registration Number** and a declared class. **Record the declaration; do not derive the
+   classification.** That is a design decision for `t13-interest-model.md` §3.2, which currently only
+   records that the flag does not exist.

@@ -132,14 +132,20 @@ removing the false premise:
 
 ## 1. REGIME (a) — THE MSMED ACT. WHAT IS FIXED, AND THEREFORE WHAT MUST NOT BE A UI CONTROL
 
-**⚠️ PENDING PRIMARY VERIFICATION — see §0.2 and §8.** Stated as this note understands the law, so
-that the verification has something specific to confirm or refute.
+⭐ **VERIFIED 2026-08-29 AGAINST THE ACT'S OWN TEXT** — `docs/statutory/msmed-act-2006.pdf`, an
+OCR'd Ministry scan (Development Commissioner, MSME). §0.2's "PENDING PRIMARY VERIFICATION" is
+**discharged for the mechanics below**; it still stands for the two things the Act does not carry,
+which are the RBI Bank Rate series (§6) and the current micro/small thresholds (§1.2).
+
+⚠️ The scan's text layer has OCR artifacts (`d2Y` for "day", `(I)` for `(1)`). Quotations here were
+read against the page; a future edit must do the same rather than trust the layer.
 
 | Element | What the statute fixes | Consequence for the build |
 |---|---|---|
-| **s.15 — the appointed day** | Payment is due on the day agreed **in writing**, and in any case **not later than 45 days** from acceptance / deemed acceptance. ⭐ **AND WHERE THERE IS NO WRITTEN AGREEMENT, WITHIN 15 DAYS** — added 2026-08-28, see §1.1. The "appointed day" is the day the clock starts. | ⛔ **The anchor is the BILL's own date, not its due date.** See §5 — the schema cannot supply it for every bill today. ⛔ **AND THE FALLBACK IS 15 DAYS, NOT 45**: defaulting every unagreed bill to 45 starts the interest clock a month late on all of them, understating in the debtor's favour, and every figure would still foot. |
-| **s.16 — the rate and the rests** | Interest is **COMPOUND**, with **MONTHLY RESTS**, at **THREE TIMES the Bank Rate notified by the Reserve Bank**. | ⛔ Not a rate input, not a simple/compound toggle, not a day-count basis. **Months, not days.** |
-| **ss.15–23 — the override** (⚠️ carried by a *separate* overriding-effect section, s.24 or equivalent — §8 must pin which) | ss.15–23 have effect **notwithstanding anything inconsistent contained in any other law**. A clause reading "no interest on late payment" does not survive against an MSE supplier. | ⛔ **A per-party interest configuration must not be readable for a party flagged MSE.** The regime is selected, then the configuration is *ignored*, and the report must say it was ignored and why. |
+| **s.15 — when payment is due** | *"payment therefor on or before the date agreed upon between him and the supplier **in writing** or, where there is no agreement in this behalf, before the appointed day"*; proviso — the agreed period *"shall in no case exceed forty-five days from the day of acceptance or the day of deemed acceptance"*. | ⛔ **TWO CASES, NOT ONE.** A written agreement (capped at 45 days) or, failing that, the appointed day. |
+| **s.2(b) — "appointed day"** ⭐ **THE 15 DAYS LIVES HERE, NOT IN s.15** | *"the day following immediately after the expiry of the period of **fifteen days** from the day of acceptance or the day of deemed acceptance"*. ⚠️ Its **Explanation** moves the anchor: where the buyer objects **in writing within fifteen days** of delivery, "the day of acceptance" is the day the objection is **removed by the supplier**. | ⛔ **DEFAULTING AN UNAGREED BILL TO 45 DAYS STARTS THE CLOCK A MONTH LATE** on every one of them — understating in the debtor's favour, with every figure still footing. ⚠️ And the anchor is **not simply the invoice date**: a written objection resets it. §5's anchor-date gap is therefore worse than §5 states. |
+| **s.16 — the rate and the rests** | *"compound interest with monthly rests … from the appointed day or, as the case may be, from the date immediately following the date agreed upon, at three times of the bank rate notified by the Reserve Bank"*. | ⛔ Not a rate input, not a simple/compound toggle, not a day-count basis. **Months, not days.** ⭐ **AND TWO ANCHORS**: the appointed day when there was no written agreement, the day after the agreed date when there was. A single anchor is wrong for half of all bills. |
+| **s.24 — the override** ⭐ **PINNED 2026-08-29; §8 no longer needs to** | *"The provisions of sections 15 to 23 shall have effect notwithstanding anything inconsistent therewith contained in any other law for the time being in force."* A clause reading "no interest on late payment" does not survive against an MSE supplier. | ⛔ **A per-party interest configuration must not be readable for a party flagged MSE.** The regime is selected, then the configuration is *ignored*, and the report must say it was ignored and why. |
 
 ⭐ **THE UI RULE THAT FOLLOWS.** For an MSE party the rate/rests/basis controls are not merely
 pre-filled — they are **absent**, replaced by a statement of the regime and its citation. A
@@ -149,19 +155,59 @@ disabled input still reads as "this is the value, we just locked it"; an absent 
 ⚠️ **"Three times the Bank Rate" is a MULTIPLE OF A MOVING NUMBER.** It is not a rate this build
 gets to store. It is an arithmetic instruction over a dated series — which is §6.
 
+### 1.2 ⛔⛔ WHO IS IN REGIME (a) — STILL OPEN, AND s.7's OWN NUMBERS ARE A TRAP
+
+The Act reaches this note's mechanics but **not** its most basic precondition: which counterparties
+regime (a) applies to at all.
+
+**s.7(1) as enacted** classifies a micro manufacturing enterprise as one *"where the investment in
+plant and machinery does not exceed twenty-five lakh rupees"*. ⛔ **THOSE FIGURES ARE THE 2006
+ORIGINALS AND ARE SUPERSEDED** — replaced in 2020 by composite investment-**and**-turnover criteria
+and revised since.
+
+⛔ **AND THE FAILURE IS IN THE FLATTERING DIRECTION**, which is why it would survive review: judged
+against 2006 thresholds almost every real enterprise falls *outside* micro/small, so regime (a)
+would silently never fire, no MSMED interest would ever be computed, and **every screen would look
+clean**. There is no error state to notice.
+
+⭐ **WHAT IS STILL GOOD LAW IS s.7(1)'s MECHANISM**: the Central Government *"may, for the purposes
+of this Act, **by notification** … classify"*. Classification is delegated — the same shape as the
+EPF administrative charges blocker, where the Scheme fixes no rate and a separate notification does.
+
+⭐⭐ **THE DESIGN CONSEQUENCE, AND IT SIMPLIFIES §3.2: DO NOT DERIVE THE CLASSIFICATION.** This
+product holds no investment figure and no turnover figure for a counterparty, and must not invent
+either. What an MSE supplier actually presents is a **Udyam Registration Number** and a declared
+class. So the flag §3.2 says does not exist should store **a recorded declaration** — the Udyam
+number, the class declared, and the date it was given — and the report should say *"treated as a
+micro/small enterprise on the supplier's own Udyam declaration of <date>"*.
+
+⛔ **A DECLARATION IS NOT A DERIVATION, AND THE REPORT MUST NOT DRESS IT AS ONE.** The buyer is
+relying on what the supplier told them, which is exactly what s.22's annual-accounts disclosure also
+rests on. Recording the source of the belief is what makes the figure defensible when a debtor asks.
+
+---
+
 ### 1.1 ⭐ THREE THINGS ss.15–23 CARRY THAT THIS NOTE DID NOT KNOW ABOUT
 
 **Added 2026-08-28** from a section-by-section summary supplied by the project owner.
-⚠️ **STILL SECOND-HAND — see §0.2.** It is a *second independent* second-hand source rather than a
+⭐ **SUPERSEDED 2026-08-29 BY THE ACT ITSELF** (`docs/statutory/msmed-act-2006.pdf`); kept because it
+is what prompted the s.15 correction, and because §1.1(a) records what the summary got wrong.
+⚠️ Originally marked second-hand — see §0.2. It is a *second independent* second-hand source rather than a
 primary one: it corroborates s.15's 45 days and s.16's compound/monthly-rests/three-times-Bank-Rate
 against the brief this note was written from, which is worth something, and it is **not** the
 gazette text §8 asks for. Everything here remains **PENDING PRIMARY VERIFICATION**.
 
-**(a) ⛔ s.15's 15-DAY FALLBACK — a correction, not an addition.** This note had only "the day agreed
-… not later than 45 days". The summary states that **without a written agreement payment is due
-within 15 days**. The memo's §1 row is corrected above. ⭐ **This is the kind of error that would
-never have surfaced in testing**: 45 days is a real number from the real section, so a fixture built
-on it passes, and the only symptom is that interest on every unagreed bill starts a month late.
+**(a) ⛔ THE 15-DAY FALLBACK — a correction, not an addition.** This note had only "the day agreed
+… not later than 45 days". ⭐ **This is the kind of error that would never have surfaced in
+testing**: 45 days is a real number from the real section, so a fixture built on it passes, and the
+only symptom is that interest on every unagreed bill starts a month late.
+
+⚠️ **AND THE SUMMARY ATTRIBUTED IT TO THE WRONG SECTION**, which the Act text (obtained the next
+day) settled: s.15 says *"before the appointed day"* and never mentions fifteen days. **The fifteen
+days is the s.2(b) DEFINITION of "appointed day"**, and s.2(b)'s Explanation additionally moves the
+anchor when the buyer objects in writing. Both are in §1's table above. A note that had cited s.15
+for the 15 days would have cited a section that does not contain it — the softer version of the
+mistake this whole file exists to prevent.
 
 **(b) ⭐ s.22 — AN ANNUAL-ACCOUNTS DISCLOSURE, WHICH IS A REPORTING FEATURE NOBODY HAS SCOPED.**
 Companies must disclose unpaid MSME dues **and the related interest** in their annual financial
