@@ -172,8 +172,16 @@ func newDocEnv(t *testing.T) *docEnv {
 	e.customer = mk(masters.Ledger{
 		Name: docNameCustomer, GroupName: "Sundry Debtors",
 		GSTIN: docCustomerGSTIN, StateCode: docStateHome,
-		RegistrationType: masters.GSTRegular, MaintainBillByBill: true,
-		Address: docAddrCustomer, City: "Pune", PIN: "410501",
+		RegistrationType: masters.GSTRegular,
+		// ⚠️ NOT bill-by-bill, and that is now a DELIBERATE fixture fact (D106).
+		// It used to be true while every invoice these tests post names no bill
+		// reference at all — an internally inconsistent book that `ledger` now
+		// refuses, because on a bill-by-bill ledger the references must account for
+		// the whole posting. Nothing in `printing` reads this flag; the documents
+		// under test are unchanged. Setting it false states what the fixture
+		// actually is instead of claiming a tracking mode it never honoured.
+		MaintainBillByBill: false,
+		Address:            docAddrCustomer, City: "Pune", PIN: "410501",
 	})
 	e.away = mk(masters.Ledger{
 		Name: docNameAway, GroupName: "Sundry Debtors",

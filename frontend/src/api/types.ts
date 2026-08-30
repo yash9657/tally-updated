@@ -1957,6 +1957,20 @@ export interface OutstandingBill {
   due_date: string;
   overdue_days: number;
   slab: string;
+  /**
+   * True for the one row per party that is NOT a bill: the part of the balance
+   * that names no reference at all (D106).
+   *
+   * ⛔ IT IS UN-AGED AND IN NO SLAB, so `slab` is `""` and `overdue_days` is 0 —
+   * and an empty `due_date` here means "there is no bill to be due", not "the due
+   * date was not recorded". The screen must say those differently, because
+   * "no due date recorded" invites an operator to go and record one.
+   *
+   * ⚠️ READ THE FLAG, NEVER THE NAME. Testing `ref_name === "On Account"` would
+   * re-derive a server fact from a display string, and a customer may legitimately
+   * name a real bill that.
+   */
+  on_account: boolean;
 }
 
 export interface OutstandingParty {
@@ -1977,8 +1991,18 @@ export interface OutstandingSlabTotal {
   amount: Money;
 }
 
+/**
+ * ⛔ THE SLAB TOTALS DO NOT SUM TO `total`, AND THIS IS THE DIFFERENCE (D106).
+ * On-account money has no due date and is therefore in no bucket, so
+ * `sum(slab_totals) + on_account_total === total` — always. Tally leaves that gap
+ * silent; this report states it, because a column of buckets printed beside a
+ * larger total is exactly the shape a reader checks by adding up.
+ */
+
 export interface OutstandingsResponse {
   kind: OutstandingKind;
+  /** See OutstandingSlabTotal — the part of `total` that is in no ageing slab. */
+  on_account_total: Money;
   /**
    * The date the ROWS are limited to, or `""` when they are not limited at all.
    *

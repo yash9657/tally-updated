@@ -3624,6 +3624,20 @@ func (s *Server) handleOpenBills(w http.ResponseWriter, r *http.Request) {
 		found = true
 		ledgerName, groupName, pending = party.LedgerName, party.GroupName, party.Pending.StringFixed(4)
 		for _, b := range party.Bills {
+			// ⛔⛔ THE DERIVED ON-ACCOUNT ROW IS NOT A BILL AND MUST NOT BE OFFERED HERE.
+			// This picker's rows become AGAINST allocations, and an AGAINST names the
+			// reference it settles. `On Account` is not a stored reference — since D106
+			// it is the COMPUTED remainder of a party's balance — so settling "against"
+			// it would write an allocation naming a bill that does not exist, and the
+			// arithmetic would still foot.
+			//
+			// ⭐ APPLYING ON-ACCOUNT MONEY TO A BILL IS A REAL OPERATION AND IT HAS A
+			// DIFFERENT DOOR: alter the receipt that brought the money in and name the
+			// bill on it. That is the only path that can work here, because allocations
+			// live inside the voucher hash and a new version is how they change.
+			if b.OnAccount {
+				continue
+			}
 			bills = append(bills, map[string]any{
 				"ref_name":     b.RefName,
 				"pending":      b.Pending.StringFixed(4),
@@ -3727,6 +3741,11 @@ func (s *Server) writeOutstandings(w http.ResponseWriter, r *http.Request, kind 
 				"due_date":     b.DueDate,
 				"overdue_days": b.OverdueDays,
 				"slab":         b.SlabLabel,
+				// ⛔ EMITTED RATHER THAN LEFT TO THE CLIENT TO INFER FROM THE NAME. A
+				// client testing `ref_name === "On Account"` would re-derive a server
+				// fact from a display string, and a customer is perfectly entitled to
+				// name a real bill "On Account".
+				"on_account": b.OnAccount,
 			})
 		}
 		parties = append(parties, map[string]any{
@@ -3777,6 +3796,13 @@ func (s *Server) writeOutstandings(w http.ResponseWriter, r *http.Request, kind 
 		"parties":     parties,
 		"slab_totals": slabs,
 		"total":       out.Total.StringFixed(4),
+		// ⛔ THE SLABS DO NOT SUM TO THE TOTAL, AND THIS FIELD IS THE DIFFERENCE.
+		// An on-account amount has no due date, so it sits in no ageing bucket (D106;
+		// Tally is the same — "On Account amounts are not reflected in ... Age
+		// Analysis Statement"). Emitting the remainder lets the client state
+		// `sum(slab_totals) + on_account_total == total` instead of leaving a reader
+		// to discover the gap by adding the column up.
+		"on_account_total": out.OnAccountTotal.StringFixed(4),
 	})
 }
 

@@ -11,6 +11,7 @@ import {
   OutstandingsScreen,
   BillsPayableScreen,
   outstandingsScopeLine,
+  onAccountLine,
 } from "./ReportScreens";
 import { createMockClient } from "../../api";
 import type { CoredClient } from "../../api";
@@ -140,6 +141,7 @@ describe("report screens fetch from the live client on mount", () => {
       ],
       slab_totals: [],
       total: "400.0000",
+      on_account_total: "0.0000",
     }));
     renderReport(OutstandingsScreen, { getOutstandings });
     await waitFor(() => expect(getOutstandings).toHaveBeenCalledWith("co-1", {}));
@@ -307,6 +309,7 @@ describe("Outstandings shows the BILLS, not just the party totals", () => {
               due_date: "2026-05-20",
               overdue_days: 41,
               slab: "0-45 days",
+              on_account: false,
             },
             {
               ref_name: "INV/0008",
@@ -314,12 +317,14 @@ describe("Outstandings shows the BILLS, not just the party totals", () => {
               due_date: "2026-07-20",
               overdue_days: 0,
               slab: "0-45 days",
+              on_account: false,
             },
           ],
         },
       ],
       slab_totals: [],
       total: "11800.0000",
+      on_account_total: "0.0000",
     }));
 
   it("renders each bill with its reference, its due date and its ageing", async () => {
@@ -363,12 +368,14 @@ describe("Outstandings shows the BILLS, not just the party totals", () => {
               due_date: "",
               overdue_days: 0,
               slab: "0-45 days",
+              on_account: false,
             },
           ],
         },
       ],
       slab_totals: [],
       total: "1000.0000",
+      on_account_total: "0.0000",
     }));
     renderReport(OutstandingsScreen, { getOutstandings });
     await waitFor(() => expect(screen.getByText("OPEN-1")).toBeTruthy());
@@ -452,5 +459,139 @@ describe("BillsPayableScreen — the door is the authorisation", () => {
     renderReport(OutstandingsScreen, client);
     await waitFor(() => expect(receivable).toHaveBeenCalled());
     expect(payable).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * ⛔⛔ D106 — THE ON-ACCOUNT ROW MUST NOT READ LIKE A BILL WITH A MISSING DUE DATE.
+ *
+ * The row is the part of a party's balance that names no reference. Rendered
+ * through the ordinary branch it comes out as "no due date recorded" / "no due
+ * date", which invites an operator to go and record one — there is nothing to
+ * record, and the absence IS the fact being reported.
+ *
+ * ⚠️ AND THE SLABS ARE SHORT OF THE TOTAL BY EXACTLY THIS ROW, which is the shape
+ * a reader checks by adding up. Tally leaves that silent; this screen says it.
+ */
+describe("Outstandings states its on-account money (D106)", () => {
+  const withOnAccount = () =>
+    vi.fn(async () => ({
+      kind: "RECEIVABLE" as const,
+      as_on: "",
+      aged_as_on: "2026-08-30",
+      parties: [
+        {
+          ledger_id: "led-acme",
+          ledger: "Acme",
+          group: "Sundry Debtors",
+          pending: "17000.0000",
+          bills: [
+            {
+              ref_name: "INV/0007",
+              pending: "24000.0000",
+              due_date: "2026-05-12",
+              overdue_days: 110,
+              slab: "90-180 days",
+              on_account: false,
+            },
+            {
+              ref_name: "On Account",
+              pending: "-7000.0000",
+              due_date: "",
+              overdue_days: 0,
+              slab: "",
+              on_account: true,
+            },
+          ],
+        },
+      ],
+      slab_totals: [{ label: "90-180 days", amount: "24000.0000" }],
+      total: "17000.0000",
+      on_account_total: "-7000.0000",
+    }));
+
+  it("says the money is unapplied rather than that a due date is missing", async () => {
+    renderReport(OutstandingsScreen, { getOutstandings: withOnAccount() });
+
+    // THE CONTROL FIRST: the real bill still reads as a bill, with its ageing.
+    await waitFor(() => expect(screen.getByText("INV/0007")).toBeTruthy());
+    expect(screen.getByText(/due 2026-05-12/)).toBeTruthy();
+    expect(screen.getByText("110 days overdue")).toBeTruthy();
+
+    // ⛔ AND THE ON-ACCOUNT ROW SAYS WHAT IT IS.
+    expect(screen.getByText("On Account")).toBeTruthy();
+    expect(screen.getByText(/received, not applied to any bill/)).toBeTruthy();
+    expect(screen.getByText("not aged — in no slab")).toBeTruthy();
+    // The wording that would be WRONG here — it invites a correction that cannot
+    // be made, because there is no bill whose due date could be filled in.
+    expect(screen.queryByText(/no due date recorded/)).toBeNull();
+  });
+
+  it("discloses that the slabs are short of the total by exactly that much", async () => {
+    renderReport(OutstandingsScreen, { getOutstandings: withOnAccount() });
+    await waitFor(() =>
+      expect(screen.getByTestId("os-on-account")).toBeTruthy(),
+    );
+    const said = screen.getByTestId("os-on-account").textContent ?? "";
+    expect(said).toMatch(/ON ACCOUNT/);
+    expect(said).toMatch(/NOT in any ageing slab/);
+  });
+
+  it("says nothing at all when there is no on-account money", async () => {
+    // ⛔ THE CONTROL ON THE DISCLOSURE ITSELF. A caption about a case that does
+    // not apply is noise, and noise is how a real disclosure stops being read.
+    renderReport(OutstandingsScreen, { getOutstandings: twoBillsNoOnAccount() });
+    await waitFor(() => expect(screen.getByText("INV/0007")).toBeTruthy());
+    expect(screen.queryByTestId("os-on-account")).toBeNull();
+  });
+
+  const twoBillsNoOnAccount = () =>
+    vi.fn(async () => ({
+      kind: "RECEIVABLE" as const,
+      as_on: "",
+      aged_as_on: "2026-08-30",
+      parties: [
+        {
+          ledger_id: "led-acme",
+          ledger: "Acme",
+          group: "Sundry Debtors",
+          pending: "24000.0000",
+          bills: [
+            {
+              ref_name: "INV/0007",
+              pending: "24000.0000",
+              due_date: "2026-05-12",
+              overdue_days: 110,
+              slab: "90-180 days",
+              on_account: false,
+            },
+          ],
+        },
+      ],
+      slab_totals: [{ label: "90-180 days", amount: "24000.0000" }],
+      total: "24000.0000",
+      on_account_total: "0.0000",
+    }));
+});
+
+/**
+ * The sentence, held to its rule directly — cheaper than a rendered screen, and
+ * the reason `onAccountLine` is exported at all.
+ */
+describe("onAccountLine", () => {
+  it("reads money HELD as received-and-unapplied", () => {
+    const said = onAccountLine("-7000.0000");
+    expect(said).toMatch(/received and not yet applied/);
+    expect(said).toMatch(/NOT in any ageing slab/);
+    // ⛔ IT TELLS THE OPERATOR WHAT TO DO. A disclosure that names a problem and
+    // no remedy just teaches people to scroll past it.
+    expect(said).toMatch(/alter the voucher/);
+  });
+
+  it("reads the other direction as an amount with no invoice raised", () => {
+    // ⚠️ THE SIGN IS NOT COSMETIC. A positive on-account figure is money the party
+    // owes that no invoice covers — the opposite bookkeeping situation from an
+    // unapplied receipt, and calling it "received" would be plainly false.
+    expect(onAccountLine("7000.0000")).toMatch(/no invoice has been raised/);
   });
 });

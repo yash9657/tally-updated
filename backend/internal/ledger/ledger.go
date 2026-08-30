@@ -1952,7 +1952,7 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 		// Checked HERE, not beside validateBillAllocations, because this is the
 		// first point at which in.Postings is FINAL — an item invoice's postings
 		// were generated above from the stock masters. See the function's comment.
-		if err := validateBillAllocationsSumToPosting(in.Postings, billAllocations); err != nil {
+		if err := validateBillAllocationsSumToPosting(ctx, tx, companyID, in.Postings, billAllocations); err != nil {
 			return err
 		}
 
@@ -2830,7 +2830,18 @@ func validateBillAllocations(bs []BillAllocationInput) error {
 // nothing will ever settle. Every on-account amount on a party therefore nets
 // into this single bucket, which is exactly how the operator reads it: "money
 // from this customer that is not applied to anything".
-const onAccountRefName = "On Account"
+//
+// ⛔ IT IS EXPORTED BECAUSE reporting.Outstandings MUST FILE ITS DERIVED RESIDUE
+// UNDER THE SAME NAME (D106). That report groups by (ledger_id, ref_name), so an
+// explicit ON_ACCOUNT reference written here and the unreferenced remainder it
+// computes there have to land in ONE bucket or a party shows two "On Account"
+// lines that do not add up. Two string literals in two packages would agree
+// until somebody edited one of them; this is one fact with one home.
+const OnAccountRefName = "On Account"
+
+// onAccountRefName is the package-internal spelling, kept so the existing call
+// sites read unchanged.
+const onAccountRefName = OnAccountRefName
 
 // stampBillRefNames names every reference that arrived WITHOUT a name, and it is
 // the whole of the fix for two defects that were driven in a browser.
@@ -3344,10 +3355,35 @@ func billRefNamesTakenElsewhere(
 // carrying both a settlement and an on-account remainder nets naturally instead
 // of needing a special case. It is exact to the paisa: a tolerance here is how a
 // real error hides for a year.
-func validateBillAllocationsSumToPosting(postings []PostingInput, bs []BillAllocationInput) error {
-	if len(bs) == 0 {
-		return nil
-	}
+//
+// =============================================================================
+// ⛔⛔ D106 — "NO REFERENCES AT ALL" USED TO BE EXEMPT, AND THAT WAS THE HOLE.
+// =============================================================================
+// This function began with `if len(bs) == 0 { return nil }`, so it policed a
+// PARTIAL allocation and waved through a voucher that referenced nothing. A
+// Receipt for 7,000 on a bill-by-bill debtor, entered with an empty bill-wise
+// panel, was therefore legal — and produced exactly the disagreement the comment
+// above says must never happen: driven in a browser 2026-08-30, Outstandings
+// 318584.0000 against Sundry Debtors 311584.0000.
+//
+// ⭐ THE RULE IS NOW TALLY'S OWN, AND IT IS A LEDGER-MASTER RULE, NOT A VOUCHER
+// ONE: on a ledger flagged `maintain_bill_by_bill` ("Maintain balances
+// bill-by-bill"), the references MUST account for the whole posting. Tally states
+// it as "the total net amount of all references must be equal to the net amount
+// of debit / credit in the respective ledger account of the party". A ledger
+// WITHOUT the flag is untouched — it never had bills and is not being given any.
+//
+// ⚠️ AND THE ESCAPE HATCH IS A REAL ANSWER, NOT A BYPASS. An operator who does
+// not know which invoice a payment settles picks ON_ACCOUNT, which is one of the
+// four Tally reference types this package already models. That records "money
+// from this customer, not applied to anything" as a FACT the report can show,
+// instead of leaving a silent hole the report cannot see. The refusal below names
+// it, because a refusal that does not say what to do instead just teaches the
+// operator to find another door.
+func validateBillAllocationsSumToPosting(
+	ctx context.Context, tx pgx.Tx, companyID uuid.UUID,
+	postings []PostingInput, bs []BillAllocationInput,
+) error {
 	signed := func(dc DrCr, amt decimal.Decimal) decimal.Decimal {
 		if dc == Credit {
 			return amt.Neg()
@@ -3363,9 +3399,32 @@ func validateBillAllocationsSumToPosting(postings []PostingInput, bs []BillAlloc
 		allocByLedger[b.LedgerID] = allocByLedger[b.LedgerID].Add(signed(b.DrCr, b.Amount))
 	}
 	postByLedger := make(map[uuid.UUID]decimal.Decimal)
+	postOrder := make([]uuid.UUID, 0, len(postings))
 	for _, p := range postings {
+		if _, seen := postByLedger[p.LedgerID]; !seen {
+			postOrder = append(postOrder, p.LedgerID)
+		}
 		postByLedger[p.LedgerID] = postByLedger[p.LedgerID].Add(signed(p.DrCr, p.Amount))
 	}
+
+	// ⛔ THE LEDGERS TO CHECK ARE THE UNION OF TWO SETS, AND THE SECOND IS THE NEW
+	// HALF. (1) every ledger this voucher wrote a reference for — a reference on a
+	// ledger the voucher does not post to is nonsense whatever the master says;
+	// (2) every ledger it POSTS to that is flagged bill-by-bill, which is what
+	// catches the voucher that referenced nothing at all.
+	required, err := billWiseLedgers(ctx, tx, companyID, postOrder)
+	if err != nil {
+		return err
+	}
+	for _, lid := range postOrder {
+		if _, already := allocByLedger[lid]; already {
+			continue
+		}
+		if required[lid] {
+			order = append(order, lid)
+		}
+	}
+
 	for _, lid := range order {
 		got, want := allocByLedger[lid], postByLedger[lid]
 		if got.Equal(want) {
@@ -3377,6 +3436,13 @@ func validateBillAllocationsSumToPosting(postings []PostingInput, bs []BillAlloc
 					"a bill cannot be raised or settled on a line that is not in the entry",
 				got.StringFixed(4))
 		}
+		if got.IsZero() {
+			return fmt.Errorf(
+				"ledger: this ledger is maintained bill-by-bill and posts %s, but the "+
+					"voucher names no bill reference for it — record which bill it is "+
+					"against, or record it as %s if you do not yet know",
+				want.StringFixed(4), RefOnAccount)
+		}
 		return fmt.Errorf(
 			"ledger: bill references on this ledger total %s but it posts %s — "+
 				"the difference is %s, and leaving it would make the Outstandings report "+
@@ -3384,4 +3450,39 @@ func validateBillAllocationsSumToPosting(postings []PostingInput, bs []BillAlloc
 			got.StringFixed(4), want.StringFixed(4), want.Sub(got).StringFixed(4))
 	}
 	return nil
+}
+
+// billWiseLedgers returns which of `ids` are flagged `maintain_bill_by_bill`.
+//
+// ⚠️ IT ASKS THE DATABASE RATHER THAN TRUSTING THE REQUEST, for the same reason
+// validateBillAllocationsSumToPosting runs inside the transaction: the flag is a
+// MASTER fact, the caller does not send it, and a client that decided for itself
+// which ledgers need references would be re-implementing the rule it is being
+// checked against.
+func billWiseLedgers(
+	ctx context.Context, tx pgx.Tx, companyID uuid.UUID, ids []uuid.UUID,
+) (map[uuid.UUID]bool, error) {
+	out := make(map[uuid.UUID]bool, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := tx.Query(ctx,
+		`SELECT id FROM ledger
+		  WHERE company_id = $1 AND id = ANY($2::uuid[]) AND maintain_bill_by_bill`,
+		companyID, ids)
+	if err != nil {
+		return nil, fmt.Errorf("ledger: read bill-by-bill flags: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("ledger: scan bill-by-bill flag: %w", err)
+		}
+		out[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("ledger: iterate bill-by-bill flags: %w", err)
+	}
+	return out, nil
 }

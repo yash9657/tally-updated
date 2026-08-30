@@ -348,6 +348,18 @@ function seedUnit(companyID: string, symbol: string, formalName: string): UnitLi
 // floats, for the same reason the wire is strings.
 
 /** Scale of a fixed-4 quantity/value, as a BigInt. */
+/**
+ * The ONE bucket a party's unreferenced balance is reported under (D106).
+ *
+ * ⛔ IT MUST MATCH cored's `reporting.OnAccountRefName` AND `ledger.OnAccountRefName`
+ * EXACTLY. The report groups by (ledger, ref_name), so a mock that spelled it
+ * differently would put an explicit ON_ACCOUNT reference and the derived residue in
+ * two rows here and one row against the real server — and the screen tests would be
+ * proving a layout the product never renders. That is D84's failure (this double
+ * being looser than cored) wearing a different hat.
+ */
+const ON_ACCOUNT_REF = "On Account";
+
 const QSCALE = 10_000n;
 /** Working precision of the running weighted-average cost rate (inventory.rateScale). */
 const RATE_SCALE = 10n ** 16n;
@@ -2785,6 +2797,51 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       }
     }
 
+    // ⛔⛔ THE ON-ACCOUNT RESIDUE (D106), MODELLED HERE BECAUSE A MOCK THAT IS
+    // LOOSER THAN CORED IS A SOURCE OF FALSE GREEN — which is D84, and three lanes
+    // hit it. cored reports the part of a party's balance that names no reference
+    // as one un-aged `On Account` row, via the identity
+    //
+    //     On Account = the ledger's whole balance − every named reference
+    //
+    // so the report reconciles to Sundry Debtors/Creditors by construction. If
+    // this double kept reporting only references, 61 test files would go on
+    // building books whose two reports silently disagree, and the screen tests
+    // would prove the old behaviour.
+    //
+    // ⚠️ IT IS THE SAME TWO PASSES AS THE SERVER'S: add every party POSTING, then
+    // take every named reference back out. A fully referenced voucher contributes
+    // +X and −X and vanishes, which is why an ordinary book grows no such row.
+    const onAcctKey = (ledgerID: string) => `${ledgerID}\u0000${ON_ACCOUNT_REF}`;
+    for (const view of c.views.values()) {
+      if (bound !== "" && (view.voucher_date ?? "") > bound) continue;
+      const bump = (ledgerID: string, units: bigint) => {
+        const ledger = c.ledgers.find((l) => l.id === ledgerID);
+        if (!ledger || ledger.group !== wantGroup) return;
+        const key = onAcctKey(ledgerID);
+        const cur = net.get(key) ?? {
+          ledgerID,
+          ref: ON_ACCOUNT_REF,
+          units: 0n,
+          due: "",
+        };
+        cur.units += kind === "PAYABLE" ? -units : units;
+        net.set(key, cur);
+      };
+      for (const p of view.postings ?? []) {
+        bump(
+          p.ledger_id,
+          p.dr_cr === "D" ? mockMoneyToUnits(p.amount) : -mockMoneyToUnits(p.amount),
+        );
+      }
+      for (const b of view.bill_allocations) {
+        bump(
+          b.ledger_id,
+          b.dr_cr === "D" ? -mockMoneyToUnits(b.amount) : mockMoneyToUnits(b.amount),
+        );
+      }
+    }
+
     const SLABS: [string, number][] = [
       ["0-45 days", 45],
       ["45-90 days", 90],
@@ -2794,6 +2851,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     const slabTotals = new Map<string, bigint>();
     const byParty = new Map<string, OutstandingParty>();
     let total = 0n;
+    let onAccountUnits = 0n;
 
     for (const { ledgerID, ref, units, due } of [...net.values()].sort((a, b) =>
       a.ref.localeCompare(b.ref),
@@ -2802,16 +2860,21 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       if (units === 0n) continue;
       const ledger = c.ledgers.find((l) => l.id === ledgerID);
       if (!ledger) continue;
+      // ⛔ THE ON-ACCOUNT ROW IS UN-AGED AND IN NO SLAB, exactly as cored leaves
+      // it: money with no bill has no due date to be overdue against, and ageing
+      // it would file it in the FIRST slab as the freshest debt on the party.
+      const onAccount = ref === ON_ACCOUNT_REF;
       const overdue =
-        due === ""
+        onAccount || due === ""
           ? 0
           : Math.max(
               0,
               Math.round((Date.parse(agedOn) - Date.parse(due)) / 86_400_000),
             );
-      const slab =
-        SLABS.find(([, upto]) => upto !== 0 && overdue <= upto)?.[0] ??
-        "180+ days";
+      const slab = onAccount
+        ? ""
+        : (SLABS.find(([, upto]) => upto !== 0 && overdue <= upto)?.[0] ??
+          "180+ days");
       const party =
         byParty.get(ledgerID) ??
         ({
@@ -2827,10 +2890,14 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         due_date: due,
         overdue_days: overdue,
         slab,
+        on_account: onAccount,
       });
       party.pending = mockUnitsToMoney(mockMoneyToUnits(party.pending) + units);
       byParty.set(ledgerID, party);
-      slabTotals.set(slab, (slabTotals.get(slab) ?? 0n) + units);
+      // ⛔ ON-ACCOUNT MONEY IS IN NO SLAB, so it is accumulated separately and the
+      // slab column is deliberately SHORT of the total by exactly this much.
+      if (onAccount) onAccountUnits += units;
+      else slabTotals.set(slab, (slabTotals.get(slab) ?? 0n) + units);
       total += units;
     }
 
@@ -2841,6 +2908,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       // NO DATE LIMIT sentence. Echoing `agedOn` here is the defect.
       as_on: bound,
       aged_as_on: agedOn,
+      on_account_total: mockUnitsToMoney(onAccountUnits),
       parties: [...byParty.values()].sort((a, b) =>
         a.ledger.localeCompare(b.ledger),
       ),

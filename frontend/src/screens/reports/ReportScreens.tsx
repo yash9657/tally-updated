@@ -576,6 +576,25 @@ export function outstandingsScopeLine(asOn: string, agedAsOn: string): string {
 }
 
 /**
+ * The on-account disclosure (D106). Exported for the same reason
+ * `outstandingsScopeLine` is: it is a sentence with a rule in it, and a test can
+ * hold a sentence to a rule far more cheaply than it can hold a rendered screen.
+ */
+export function onAccountLine(onAccountTotal: string): string {
+  const n = Number(onAccountTotal);
+  const held = n < 0;
+  return (
+    `INCLUDES ${formatMoney(onAccountTotal)} ON ACCOUNT — money that names no bill, ` +
+    (held
+      ? "so it is money received and not yet applied to any invoice. "
+      : "so it is an amount owed that no invoice has been raised for. ") +
+    "It is NOT in any ageing slab (it has no due date to be overdue against), so " +
+    "the slab totals are short of the grand total by exactly this much. " +
+    "To apply it, alter the voucher that carried it and name the bill."
+  );
+}
+
+/**
  * ⛔⛔ ONE SCREEN BODY, TWO REPORT NAMES (D94) — the client mirror of cored's
  * `writeOutstandings`, which is the single writer behind both doors.
  *
@@ -647,13 +666,24 @@ function OutstandingsLikeScreen({
       // beats a bare slab label, because the slab is a bucket and the days are
       // the fact — and a bill with no due date says so rather than reading as
       // "not overdue", which is what an empty cell would imply.
-      const age =
-        b.overdue_days > 0
+      // ⛔⛔ THE ON-ACCOUNT ROW IS NOT A BILL AND MUST NOT READ LIKE ONE (D106).
+      // It falls through the branch below as "no due date recorded" / "no due
+      // date", which invites an operator to go and record one — there is nothing
+      // to record: the money names no bill, which is the whole fact being
+      // reported. It is also in NO ageing slab, so it says that too rather than
+      // showing a blank where every other row has a bucket.
+      const age = b.on_account
+        ? "not aged — in no slab"
+        : b.overdue_days > 0
           ? `${b.overdue_days} days overdue`
           : b.due_date
             ? "not yet due"
             : "no due date";
-      const when = b.due_date ? `due ${b.due_date}` : "no due date recorded";
+      const when = b.on_account
+        ? "received, not applied to any bill"
+        : b.due_date
+          ? `due ${b.due_date}`
+          : "no due date recorded";
       rows.push({
         rowKey: `${LEDGER_ROW_PREFIX}${p.ledger}/${b.ref_name}`,
         depth: 1,
@@ -726,6 +756,24 @@ function OutstandingsLikeScreen({
       {data ? (
         <p className="mt-2 text-xs" data-testid="os-as-on">
           {outstandingsScopeLine(data.as_on, data.aged_as_on)}
+        </p>
+      ) : null}
+      {/*
+        ⛔⛔ THE SLABS DO NOT ADD UP TO THE TOTAL WHEN THERE IS ON-ACCOUNT MONEY,
+        AND THE READER IS TOLD SO RATHER THAN LEFT TO FIND IT (D106).
+        An amount that names no bill has no due date, so it is in no ageing
+        bucket — Tally excludes it from its Age Analysis for the same reason, and
+        leaves the discrepancy silent. A column of buckets printed beside a larger
+        total is exactly the shape somebody checks by adding up, so the line below
+        states the identity instead of letting the gap look like an error.
+
+        ⚠️ IT IS RENDERED ONLY WHEN THERE IS SOME, because a permanent caption
+        about a case that does not apply is noise, and noise is how a real
+        disclosure stops being read.
+      */}
+      {data && data.on_account_total && Number(data.on_account_total) !== 0 ? (
+        <p className="mt-1 text-xs" data-testid="os-on-account">
+          {onAccountLine(data.on_account_total)}
         </p>
       ) : null}
     </ReportFrame>

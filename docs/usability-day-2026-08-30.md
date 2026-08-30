@@ -15,6 +15,15 @@ is itself a finding.
 
 ---
 
+> ## ✅ D106 IS FIXED — both halves, same day
+> The design was taken from **Tally's own documentation**, not invented: see
+> `HANDOFF-PARITY-AUDIT.md` D106 for the full close. Outstandings now reports the
+> unreferenced part of a party's balance as one un-aged **On Account** row, so it
+> reconciles to Sundry Debtors *by construction*; and the entry path refuses a
+> voucher that leaves a bill-by-bill ledger unreferenced, naming `ON_ACCOUNT` as
+> the answer. §2.1's sort-order papercut went with it. **§2.2–§2.8 below are still
+> open**, and so is §4.
+
 ## 1. ⛔⛔ THE FINDING — D106, and it fails in the direction that foots
 
 **An on-account receipt is invisible to Outstandings.** Registered as **D106** in
@@ -52,15 +61,18 @@ D86 closed the date half. The allocation half was never asked.
 
 ## 2. ⚠️ THE PAPERCUTS — smaller, and all in the daily loop
 
-### 2.1 The chasing report buries the oldest debt
+### 2.1 ✅ FIXED — the chasing report buried the oldest debt
 
 `outstanding.go:281` — `ORDER BY l.name, ba.ref_name`. Bills sort by **reference as a string**, so
 Acme's list reads `1`, `4`, `7`, `8`, `INV-001`, `INV-003`, `OB/ACME/24-25/07`,
 `OB/ACME/24-25/11`. The four leading rows are the ones with **no due date recorded** — the bills
 that cannot be chased — and the **132-day-old ₹70,000** sits seventh of eight.
 
-⭐ **The entire purpose of this screen is deciding who to ring first**, and the sort works against
+⭐ **The entire purpose of this screen is deciding who to ring first**, and the sort worked against
 it. Tally's Bills Outstanding leads with age.
+
+✅ **Fixed with D106** (same query, same screen): bills now sort by due date oldest-first, with the
+un-aged On Account row last. Driven after: `132d → 117d → 110d → 42d → undated → On Account`.
 
 ### 2.2 The Gateway and Go To are two different catalogues, and neither contains the other
 

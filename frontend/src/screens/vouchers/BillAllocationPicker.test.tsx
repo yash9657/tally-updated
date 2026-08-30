@@ -62,6 +62,7 @@ const OPEN_BILLS: PartyOpenBillsResponse = {
       due_date: "2026-07-19",
       overdue_days: 20,
       slab: "0-45 days",
+      on_account: false,
     },
   ],
 };
