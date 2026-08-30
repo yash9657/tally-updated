@@ -287,6 +287,78 @@ the EPFO/ESIC portals cannot be reached from it. Never claim a validation that w
 performed.**
 
 
+| `rbi-bank-rate-2022-08-05.pdf` | ✅ **here** (2026-08-30) | RBI/2022-23/103, `DOR.RET.REC.59/12.01.001/2022-23` | Bank Rate **5.15% → 5.65%** w.e.f. 5 Aug 2022 |
+| `rbi-bank-rate-2023-02-08.pdf` | ✅ **here** (2026-08-30) | RBI/2022-23/174, `DOR.RET.REC.101/12.01.001/2022-23` | Bank Rate **6.50% → 6.75%** w.e.f. 8 Feb 2023 |
+| `rbi-bank-rate-2025-04-09.pdf` | ✅ **here** (2026-08-30) | RBI/2025-26/23, `DoR.RET.REC.16/12.01.001/2025-26` | Bank Rate **6.50% → 6.25%** w.e.f. 9 Apr 2025 |
+| `rbi-bank-rate-2025-06-06.pdf` | ✅ **here** (2026-08-30) | RBI/2025-26/45, `DoR.RET.REC.22/12.01.001/2025-26` | Bank Rate **6.25% → 5.75%** w.e.f. 6 Jun 2025 |
+
+---
+
+## ⭐⭐ RBI BANK RATE — THE NOTIFICATIONS FORM A CHAIN, AND THAT IS THE WHOLE POINT
+
+**T13 (`docs/design/t13-interest-model.md` §6) needs a DATED SERIES**, because MSMED s.16 prices
+interest at three times the Bank Rate and an accrual period spanning a change must be split at the
+change's effective date. A table of rates is not enough; the series must also be **provably
+complete**, because a MISSING change is wrong only for bills inside the gap and correct everywhere
+else — it survives any spot-check that lands outside the window.
+
+⭐ **RBI's notifications solve that, and not by accident.** Every one opens by citing its
+IMMEDIATE PREDECESSOR, with both the reference number and the exact date:
+
+```
+$ for f in docs/statutory/rbi-bank-rate-*.pdf; do pdftotext -layout "$f" - \
+    | tr -s ' \n' ' \n' | /usr/bin/grep -oE "(DOR|DoR)\.RET\.REC\.[0-9]+/12\.01\.001/[0-9-]+ dated [A-Z][a-z]+ [0-9]{2}, [0-9]{4}"; done
+
+2022-08-05  ->  DOR.RET.REC.44/12.01.001/2022-23  dated June 08, 2022
+2023-02-08  ->  DOR.RET.REC.88/12.01.001/2022-23  dated December 07, 2022
+2025-04-09  ->  DoR.RET.REC.57/12.01.001/2024-25  dated February 07, 2025
+2025-06-06  ->  DoR.RET.REC.16/12.01.001/2025-26  dated April 09, 2025
+```
+
+⛔ **SO THE SERIES IS A LINKED LIST AND A GAP BREAKS IT.** Walking the chain backwards from the
+current rate does not merely *assemble* the series — it **proves there is nothing missing**, because
+a change that had been skipped would leave a notification whose named predecessor is absent. No
+table can offer that, and the table this project was originally given was in fact missing two
+changes.
+
+### ✅ WHAT THE FOUR COMMITTED FILES ALREADY ESTABLISH
+
+**Four rate changes, quoted from RBI, plus THREE MORE dates and reference numbers** recovered from
+the predecessor citations without needing the documents themselves:
+
+| Effective | Reference | Bank Rate becomes | How known |
+|---|---|---|---|
+| **8 Jun 2022** | `DOR.RET.REC.44/…/2022-23` | 5.15% | ⭐ named by the 5 Aug 2022 notification, which revises *"from 5.15 per cent"* |
+| 5 Aug 2022 | `DOR.RET.REC.59` | **5.65%** | ✅ committed |
+| **7 Dec 2022** | `DOR.RET.REC.88/…/2022-23` | 6.50% | ⭐ named by the 8 Feb 2023 notification, which revises *"from 6.50 per cent"* |
+| 8 Feb 2023 | `DOR.RET.REC.101` | **6.75%** | ✅ committed |
+| **7 Feb 2025** | `DoR.RET.REC.57/…/2024-25` | 6.50% | ⭐ named by the 9 Apr 2025 notification, which revises *"from 6.50 per cent"* |
+| 9 Apr 2025 | `DoR.RET.REC.16` | **6.25%** | ✅ committed |
+| 6 Jun 2025 | `DoR.RET.REC.22` | **5.75%** | ✅ committed |
+
+⭐ **NOTE HOW THE TWO ORIGINALLY-MISSING CHANGES WERE CAUGHT.** 8 June 2022 and 9 April 2025 were
+both absent from the table this project was handed. Each is now proved twice over: by the *"from X
+per cent"* wording of the notification that follows it, and by that notification naming it as the
+predecessor circular. **Neither was inferred.**
+
+### ⛔ STILL TO DOWNLOAD — and the chain says exactly what each should say
+
+Same title every time: **"Penal Interest on shortfall in CRR and SLR requirements – Change in Bank
+Rate"**. Browse `https://www.rbi.org.in/Scripts/NotificationUser.aspx` by year and month.
+
+| Date | Reference (already known from the chain) | Should say | And should name as its predecessor |
+|---|---|---|---|
+| **7 Feb 2025** | `DoR.RET.REC.57/12.01.001/2024-25` | 6.75% → 6.50% | ⭐ **8 Feb 2023's `REC.101`** — which would PROVE the Bank Rate never moved between Feb 2023 and Feb 2025 |
+| **7 Dec 2022** | `DOR.RET.REC.88/12.01.001/2022-23` | 6.15% → 6.50% | 30 Sep 2022's circular |
+| **30 Sep 2022** | *(named by 7 Dec 2022's)* | 5.65% → 6.15% | 5 Aug 2022's `REC.59` |
+| **8 Jun 2022** | `DOR.RET.REC.44/12.01.001/2022-23` | 4.65% → 5.15% | 4 May 2022's circular |
+| **4 May 2022** | *(named by 8 Jun 2022's)* | 4.25% → 4.65% | the 2020 circular |
+| **5 Dec 2025** | *(RBI/2025-26/…)* | 5.75% → 5.50% | 6 Jun 2025's `REC.22` |
+| **22 May 2020** | *(named by 4 May 2022's)* | → 4.25% | the tail of the chain |
+
+⚠️ **IF ANY PREDECESSOR CITATION NAMES A DATE NOT IN THIS TABLE, THERE IS ANOTHER CHANGE** and it
+must be downloaded too. That is the check; it is why the chain matters more than the list.
+
 ---
 
 ## ⚠️ MSMED Act 2006 — what it settles, what it does not, and how it was obtained
