@@ -537,10 +537,15 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 ## 7. WHAT THIS PLAN DELIBERATELY DOES NOT CLAIM
 
 - That this is the complete gap to Tally. It is the gap **found by inventorying
-  routes, tables and code** against Tally's feature set. Nobody has yet driven the
-  app for a day as a shopkeeper would, which is how the smaller papercuts surface —
-  the ones that do not show up as a missing table. **Budget a usability pass**
-  before calling parity.
+  routes, tables and code** against Tally's feature set — which is why a usability
+  pass was budgeted here, to catch the papercuts that do not show up as a missing
+  table. ⭐ **THE FIRST HALF OF THAT PASS RAN 2026-08-30:
+  `docs/usability-day-2026-08-30.md`.** It produced **D106** — Outstandings and the
+  Balance Sheet disagreeing by an on-account receipt, which no inventory could have
+  found because nothing is missing — plus seven smaller papercuts, all in the daily
+  loop. ⛔ **THE WRITE HALF IS STILL UNDRIVEN**: voucher entry has nowhere safe to
+  run, because the only populated books are the demo company the gates assert
+  against. That pass needs a throwaway company first, and §4 of the write-up says so.
 - That Tier 2 is exhaustive. Tally has thirty years of accumulated surface: POS,
   job costing, ODBC, data synchronisation, payroll attendance/leave, and more. What
   is here is what a typical Indian SMB would miss first.
