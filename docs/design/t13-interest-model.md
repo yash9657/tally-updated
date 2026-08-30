@@ -84,23 +84,24 @@ $ /usr/bin/grep -n -o -i ".\{0,28\}interest.\{0,24\}" RESEARCH.md
 feature is therefore a DESIGN DECISION taken here, labelled as such — not parity recalled from
 Tally.** That is the same discipline `t8-multi-currency-model.md` §0.1 applied.
 
-⛔⛔ **AND THE STATUTORY CONTENT OF §1 IS ITSELF SECOND-HAND.** It comes from
-`HANDOFF-NEXT-UNBLOCKED.md:137` and the task brief, **not from primary text**:
+⚠️ **THE STATUTORY CONTENT OF §1 WAS SECOND-HAND WHEN THIS NOTE WAS WRITTEN.** It came from
+`HANDOFF-NEXT-UNBLOCKED.md:137` and the task brief, not from primary text, and at the time
+`docs/statutory/` held no MSMED file and no RBI notification. Every assertion in §1 was marked
+**PENDING PRIMARY VERIFICATION** — a design note that warned against uncited numbers while resting
+on uncited numbers would be the very thing it warns against.
 
-```
-$ ls -1 docs/statutory/
-form-140-faqs.pdf
-form-140-file-format.xlsx
-form-140.pdf
-form-143-file-format.xlsx
-ita-2025-as-amended-fa-2026.pdf
-README.md
-```
+✅ **BOTH DOCUMENTS ARE NOW HERE, AND THE VERIFICATION WAS DONE.**
 
-**No MSMED file. No RBI notification.** Every statutory assertion in §1 is therefore marked
-**PENDING PRIMARY VERIFICATION** and must be re-read against the gazette before a line of engine
-code is written. A design note that warned against uncited numbers while resting on uncited
-numbers would be the very thing it warns against — so it says so here, at the top.
+| | |
+|---|---|
+| **The Act** | ✅ `msmed-act-2006.pdf`, **2026-08-29**. §1.1 is read from its own text and §1's claims were re-read against it word for word — **the exercise CORRECTED s.15** (the 15-day fallback where there is no written agreement) and moved the fifteen days to their real home in **s.2(b), not s.15** |
+| **The rate series** | ✅ Eleven RBI notifications, **2026-08-30**. §6.3 has the table and the chain closes, so it is provably complete from 22 May 2020 |
+
+⛔ **THE MARK IS LIFTED FROM §1 AND §6, AND NOWHERE ELSE.** Two things §1 states are still open and
+neither is a document: **who is a micro or small enterprise** (§1.2 — s.7's own thresholds are the
+2006 originals and are a trap) and **the anchor date** (§5). ⭐ **And the shape of the feature
+remains a design decision taken here, not parity recalled from Tally** — that half of this section
+is unaffected by any download.
 
 ### 0.3 ⛔ THE SAME WRONG SENTENCE EXISTS A SECOND TIME, IN THE SHIPPED UI
 
@@ -139,8 +140,11 @@ from `dcmsme.gov.in`, and **every quotation below was diffed word for word betwe
 the swap; all matched.** §0.2's "PENDING PRIMARY VERIFICATION" is **DISCHARGED for the mechanics
 below.**
 
-⚠️ It still stands for the two things the Act does not carry: the **RBI Bank Rate series** (§6) and
-the **current micro/small thresholds** (§1.2). Neither is in this Act and neither ever will be.
+⚠️ It stood for the two things the Act does not carry — the **RBI Bank Rate series** (§6) and the
+**current micro/small thresholds** (§1.2). Neither is in this Act and neither ever will be.
+✅ **The series was closed 2026-08-30** (§6.3: eleven notifications, chain proved, floor at 22 May
+2020). ⛔ **The thresholds are still open, and no download closes them** — §1.2's recommendation is
+to record the supplier's Udyam declaration rather than derive the class.
 
 | Element | What the statute fixes | Consequence for the build |
 |---|---|---|
@@ -530,54 +534,87 @@ accruing inside the gap** — here, 8 June–5 Aug 2022 and 9 April–6 June 202
 everywhere else. It would pass any spot-check that happened to land outside the window, and the
 error compounds forward through every subsequent monthly rest (§6.1, symptom 1).
 
-### THE SERIES — FOUR ROWS NOW PINNED TO RBI'S OWN NOTIFICATIONS
+### ✅ THE SERIES — EVERY ROW NOW PINNED TO RBI'S OWN NOTIFICATION
 
-⭐ **EVERY Bank Rate change carries a notification with the SAME TITLE**, which is the key to
-finding the rest quickly:
+**2026-08-30. CLOSED.** All eleven documents are in `docs/statutory/` and each was read before
+filing. ⛔ **No row below is secondary any more.** `docs/statutory/README.md` carries the full
+provenance, the notification ids, and the withdrawn-stamp status of each file.
 
-> **"Penal Interest on shortfall in CRR and SLR requirements – Change in Bank Rate"**
+⚠️ **THE TITLE HAS TWO SPELLINGS AND THIS MEMO PREVIOUSLY RECORDED ONLY ONE.** The 2025-26
+circulars are titled *"Penal Interest on shortfall in CRR and SLR requirements - Change in Bank
+Rate"*; everything earlier is titled just **"Change in Bank Rate"**. Searching for the long form
+alone misses February 2025 — which is why it was once reported "not findable". Post-2020 the Bank
+Rate tracks the MSF rate at the policy repo rate **+ 25 bp**.
 
-issued by the Department of Regulation under a `DoR.RET.REC.<n>/12.01.001/<year>` reference. Post
-2020 the Bank Rate is aligned to the MSF rate at the policy repo rate **+ 25 bp**.
-
-| Effective | Bank Rate | `3 ×` | Source |
+| Effective | Bank Rate | `3 ×` | Notification |
 |---|---|---|---|
-| 22 May 2020 | 4.25% | 12.75% | ⚠️ secondary |
-| 4 May 2022 | 4.65% | 13.95% | ⚠️ secondary |
-| **8 Jun 2022** | **5.15%** | 15.45% | ✅ RBI press release quoted; ⛔ **absent from the supplied table** |
-| 5 Aug 2022 | 5.65% | 16.95% | ✅ **`NotificationUser.aspx?Id=12372`** — RBI/2022-23/103, *"5.15 → 5.65 with immediate effect"* |
-| 30 Sep 2022 | 6.15% | 18.45% | ⚠️ secondary |
-| 7 Dec 2022 | 6.50% | 19.50% | ⚠️ secondary |
-| 8 Feb 2023 | 6.75% | 20.25% | ✅ **`Id=12450`** — RBI/2022-23/174, *"6.50 → 6.75"* |
-| 7 Feb 2025 | 6.50% | 19.50% | ⚠️ secondary |
-| **9 Apr 2025** | **6.25%** | 18.75% | ✅ **`Id=12832`** — RBI/2025-26/23, *"6.50 → 6.25"*; ⛔ **absent from the supplied table** |
-| 6 Jun 2025 | 5.75% | 17.25% | ✅ **`Id=12857`** — RBI/2025-26/45, *"6.25 → 5.75"* |
-| 5 Dec 2025 | 5.50% | 16.50% | ⚠️ secondary |
-| *(current, 28 Aug 2026)* | 5.50% | 16.50% | ✅ RBI home page, read directly |
+| **22 May 2020** | **4.25%** | 12.75% | ✅ **`Id=11897`** — RBI/2019-20/240, `DOR.No.Ret.BC.74`, *"4.65 → 4.25"*. ⭐ **THE FLOOR** |
+| 4 May 2022 | 4.65% | 13.95% | ✅ **`Id=12312`** — RBI/2022-23/45, `DOR.RET.REC.32`, *"4.25 → 4.65"* |
+| **8 Jun 2022** | **5.15%** | 15.45% | ✅ **`Id=12333`** — RBI/2022-23/65, `DOR.RET.REC.44`, *"4.65 → 5.15"*; ⛔ **was absent from the supplied table** |
+| 5 Aug 2022 | 5.65% | 16.95% | ✅ **`Id=12372`** — RBI/2022-23/103, `DOR.RET.REC.59`, *"5.15 → 5.65"* |
+| 30 Sep 2022 | 6.15% | 18.45% | ✅ **`Id=12394`** — RBI/2022-23/123, `DOR.RET.REC.70`, *"5.65 → 6.15"* |
+| 7 Dec 2022 | 6.50% | 19.50% | ✅ **`Id=12420`** — RBI/2022-23/148, `DOR.RET.REC.88`, *"6.15 → 6.50"* |
+| 8 Feb 2023 | 6.75% | 20.25% | ✅ **`Id=12450`** — RBI/2022-23/174, `DOR.RET.REC.101`, *"6.50 → 6.75"* |
+| 7 Feb 2025 | 6.50% | 19.50% | ✅ **`Id=12776`** — RBI/2024-25/111, `DoR.RET.REC.57`, *"6.75 → 6.50"* |
+| **9 Apr 2025** | **6.25%** | 18.75% | ✅ **`Id=12832`** — RBI/2025-26/23, `DoR.RET.REC.16`, *"6.50 → 6.25"*; ⛔ **was absent from the supplied table** |
+| 6 Jun 2025 | 5.75% | 17.25% | ✅ **`Id=12857`** — RBI/2025-26/45, `DoR.RET.REC.22`, *"6.25 → 5.75"* |
+| 5 Dec 2025 | 5.50% | 16.50% | ✅ **`Id=13208`** — RBI/2025-26/134, `DoR.RET.REC.341`, *"5.75 → 5.50"*. **Current as at 2026-08-30** |
 
-⭐⭐ **THE TWO MISSING ROWS ARE NOW BOTH CONFIRMED FROM RBI ITSELF, NOT INFERRED.** `Id=12857`
-(June 2025) revises the rate *"from 6.25 per cent"* — a figure that exists only because of the
-April step in `Id=12832`. And `Id=12372` (Aug 2022) revises *"from 5.15 per cent"* — a figure that
-exists only because of the June 2022 step. **Each missing change is proved by the notification that
-follows it**, which is a stronger argument than any table.
+⭐⭐ **THE CHAIN CLOSES, AND THAT IS THE COMPLETENESS PROOF.** Every circular opens by citing its
+immediate predecessor by reference number and date, so the series is a linked list and each row's
+*"from"* was checked against the row above's *"to"*:
 
-⚠️ **AND A SECONDARY SOURCE WAS CAUGHT AND KILLED.** Search results reported February 2023 as
-*"Bank Rate at 6.50%"*. `Id=12450` says **6.75%** in RBI's own words. The ⚠️ rows above are exactly
-as reliable as that one was.
+```
+4.25 -> 4.65 -> 5.15 -> 5.65 -> 6.15 -> 6.50 -> 6.75 -> 6.50 -> 6.25 -> 5.75 -> 5.50
+```
 
-### ⛔ WHAT AUTOMATED RETRIEVAL CANNOT DO, AND IT IS WORTH RECORDING ONCE
+**A skipped change would leave a circular whose named predecessor is absent, or whose "from" did not
+match. None does.** ⛔ **This is what a rate table cannot give you** — §6.3's diagnosis above stands
+as the record of why: a table's internal consistency check passes over the rows that are *present*.
+
+⚠️ **AND THE TWO-YEAR HOLD IS PROVED, NOT ASSUMED FROM SILENCE.** `Id=12776` (Feb 2025) names
+`Id=12450` (Feb 2023) as its immediate predecessor and revises *"from 6.75 per cent"* — the figure
+that one set. **So the Bank Rate genuinely did not move between 8 Feb 2023 and 7 Feb 2025.** That
+gap in the table is a fact about the world, not a hole in the research.
+
+### ⛔ THE FLOOR IS 22 MAY 2020, AND THE ENGINE MUST REFUSE BELOW IT
+
+The 4 May 2022 circular revises *"from 4.25 per cent"*, and names
+`DOR.No.Ret.BC.74/12.01.001/2019-20` **dated May 22, 2020**. That circular was fetched and it says
+*"revised downwards by 40 basis points from 4.65 per cent to 4.25 per cent"*. ✅ **So 4.25% began
+on 22 May 2020** — previously believed from secondary sources, now read from the notification.
+
+⚠️ **THE SERIES STOPS THERE BY CHOICE.** The May 2020 circular names `DBR.No.Ret.BC.53` dated
+27 March 2020, which will name another; the chain regresses without end. **22 May 2020 is a chosen
+floor — but a VERIFIED one**, which is the whole point: the earliest rate in the series has a known
+start date rather than an assumed one. It covers more than six years as at 2026-08-30, beyond any
+period a receivable is realistically still being pursued.
+
+⛔⛔ **REQUIREMENT ON THE ENGINE.** For an anchor date (§5) earlier than **22 May 2020**, T13 must
+**refuse to compute, and name the floor and the reason in the refusal**. ⛔ **It must NOT price a
+pre-floor period at the earliest rate it happens to hold.** That is the missing-change failure one
+step removed — it foots perfectly, it spot-checks clean everywhere outside the gap, and it is
+wrong. ⭐ This is the same shape as `pf.go`'s deliberate refusal of the EPF administrative-charge
+rate, and it should read the same way to a user.
+
+⚠️ **THE SERIES WILL ALSO GO STALE AT THE TOP.** RBI reviews the policy rate roughly every two
+months, so `5 Dec 2025 → 5.50%` is the last link only until the next announcement. **A new circular
+extends the chain rather than breaking it**, and the intake check is unchanged: does its *"from"*
+equal 5.50?
+
+### ⛔ WHAT AUTOMATED RETRIEVAL CAN AND CANNOT DO — RE-MEASURED 2026-08-30
 
 | Source | Result |
 |---|---|
-| RBI's own *"Bankrate, CRR and SLR Changes"* history page | ⛔ **Ends at 3 April 1998.** Useless for this |
-| `rbidocs.rbi.org.in` press-release PDFs | ⛔ **CAPTCHA** to a fetcher |
-| `dbie.rbi.org.in` / `data.rbi.org.in` (Database on Indian Economy) | ⛔ JavaScript app; a fetcher gets an empty shell |
-| `rbi.org.in` HTML press releases and the home page | ✅ **Readable** — this is where the two quoted rows came from |
+| ✅ `www.rbi.org.in/Scripts/NotificationUser.aspx?Id=<n>&Mode=0` | **200, and it carries the FULL circular text** — reference number, date, predecessor citation, the from/to sentence and the Annex. Azure Front Door fronted, so no geo-fence. ⭐ **This is how every id above was located**, by scanning ids either side of a known policy day |
+| ⛔ `rbidocs.rbi.org.in` (the PDF host) | **Empty reply.** TCP connects and TLS completes against a valid `*.rbi.org.in` certificate, then the request is dropped. Resolves to Indian IPs (`1.6.75.39`, `14.140.169.71`). ⚠️ **Corrects this memo's earlier "CAPTCHA" note** — it is an application-layer block, not a challenge, and no header, protocol or TLS-version variation gets past it |
+| ⛔ RBI's *"Bankrate, CRR and SLR Changes"* history page | **Ends at 3 April 1998.** Useless for this |
+| ⛔ `dbie.rbi.org.in` / `data.rbi.org.in` | JavaScript app; a fetcher gets an empty shell |
 
-⭐ **SO THE REMAINING WORK IS ELEVEN LOOKUPS, NOT A RESEARCH PROJECT**, and it is now precisely
-specified: for each row above, RBI's *"Change in Bank Rate"* notification or the MPC resolution,
-giving the reference number and the effective date. Downloaded by a human where the fetcher meets a
-CAPTCHA, committed to `docs/statutory/`, and the ⚠️ column becomes ✅.
+⭐ **THE CONSEQUENCE FOR THE ONE HTML FILE.** `rbi-bank-rate-2020-05-22.html` is a capture of the
+notification page rather than the PDF, because the PDF host refuses this machine. It is primary
+evidence from RBI's own domain and carries the same text; the PDF can be swapped in whenever a human
+with a browser fetches `Id=11897`.
 
 ### 6.2 Where the series lives — three options, and a recommendation
 
@@ -683,22 +720,34 @@ its own. Said here so the deferral is visible rather than mistaken for a resolut
 
 ---
 
-## 8. ⛔⛔ WHAT IS STILL MISSING — THE PRIMARY DOCUMENTS, AND WHY THEY COME FIRST
+## 8. ✅ THE PRIMARY DOCUMENTS — BOTH ASKS ARE NOW CLOSED
 
 `docs/statutory/README.md` states the convention this note is written against: *"the notified form,
 the file-format specification, the gazette text — the things a rate, a field or a code list must be
-traceable to. **Not** blog articles, and not summaries"*, downloaded **by a human with a browser**
-(automated fetchers get 403s and certificate rejections), committed to `docs/statutory/`, and
-listed in that README's table with a status, a source and a "what it settles" column.
+traceable to. **Not** blog articles, and not summaries"*, committed to `docs/statutory/` and listed
+in that README's table with a status, a source and a "what it settles" column.
 
-**T13 needs two rows added to that table.** They are `HANDOFF-NEXT-UNBLOCKED.md:182`'s ask 2, which
-that document rates ⭐ *"NOT blocked by anything — ordinary public documents, no registration, no
-geo-fence. This is the ask worth chasing."*
+**This section asked for two things. Both are here.**
 
-| File | Status | Source | What it settles |
-|---|---|---|---|
-| MSMED Act 2006, **ss.15–23** — gazette text ⚠️ **plus s.24 (override) and s.7/s.2 (the micro/small definitions), which are OUTSIDE 15–23 and which §1.1 shows a 15–23 summary does not reach** | ⛔ **NOT HERE.** ⭐ Partially corroborated 2026-08-28 by a second second-hand source (§1.1), which also CORRECTED s.15 — the 15-day no-written-agreement fallback this note had missed | The Ministry of MSME / India Code gazette text of the Micro, Small and Medium Enterprises Development Act, 2006 | §1 in full: s.15's appointed day and its 45-day limit; s.16's *compound / monthly rests / three times the Bank Rate*; the s.24 (or equivalent) overriding effect; **and the definitions that decide who is in regime (a)** — micro vs small vs medium, which §3.2 stores a class for |
-| **RBI Bank Rate**, notification history | ⛔ **NOT HERE** | **`rbi.org.in`** — the Reserve Bank's own notifications / policy-rate archive | The dated series of §6. ⛔ **NOT a calculator website. NOT a news summary. NOT the repo rate** |
+| Ask | Status |
+|---|---|
+| **MSMED Act 2006** — ss.15–23 gazette text, plus s.24 and the s.2/s.7 definitions | ✅ **`msmed-act-2006.pdf`, 2026-08-29.** India Code's text-native copy, downloaded by a human (the portal 403s fetchers), diffed word-for-word against a second source before the swap. §1 and §4.1 are now read from it rather than second-hand |
+| **RBI Bank Rate**, the dated series | ✅ **Eleven notifications, 2026-08-30.** `rbi-bank-rate-*.pdf` (ten) plus one HTML capture. §6.3 has the table; **the chain closes**, so the series is provably complete from 22 May 2020 |
+
+⛔ **WHAT DID NOT CLOSE, AND NEITHER IS A DOWNLOAD.** Both are recorded where they bite, not here:
+
+1. **Who is a micro or small enterprise (§1.2).** s.7's thresholds *in the Act* are the 2006
+   originals and are superseded. ⛔ Judged against them almost every real business falls **outside**
+   micro/small — so the regime would silently never fire and every screen would look clean. The
+   recommendation stands: **do not derive the classification**; record the supplier's **Udyam
+   declaration** (number, class, date) and say so on the report.
+2. **The anchor-date gap (§5).** s.2(b)'s Explanation moves the start when the buyer objects in
+   writing within fifteen days — to the day the supplier resolves the objection, **an event this
+   product records nowhere.** Closing it needs a new fact captured at entry, not a new query.
+
+⚠️ **AND ONE THING THE SERIES ITSELF LEAVES OPEN:** the 22 May 2020 floor, for which the engine
+must refuse rather than guess. See §6.3's floor section — that refusal is a build requirement, not
+a caveat.
 
 ### ⛔ WHY THE ORDER IS NOT NEGOTIABLE
 
@@ -717,6 +766,20 @@ that: not the wrong edition, but no text at all.**
 built now.** The two-regime split, the per-party resolution, the per-allocation walk, the segmented
 accrual, the disclosure — none of it needs the documents. Only the rate series and the exact
 wording of ss.15–16 do. So the wait is not idle time.
+
+### ✅ AND THE WAIT IS OVER — SO THE RULE CHANGES SHAPE, IT DOES NOT LAPSE
+
+**As at 2026-08-30 the documents are here**, so "do not build the engine first" is no longer a
+reason to wait. ⛔ **But it was never only about waiting.** What it forbids is a rupee figure that
+cannot be traced, and that is still possible with the documents on disk — by hard-coding a rate
+instead of reading the dated series (§6.2), by pricing an accrual period below the 22 May 2020 floor
+instead of refusing, or by letting the day-count basis become a UI control for an MSE party
+(§0.1/§0.3). **Each of those produces a number that foots and cannot be defended.** The citation
+requirement now lands on the code and its fixtures (§9.1), not on the reading list.
+
+⛔ **AND THE ENGINE IS STILL NOT THE NEXT THING TO BUILD** — §4.2's finding
+(`reporting.Outstandings` is the wrong input) and §8's two open questions shape the schema. **§9.2
+has the order.**
 
 ---
 
@@ -775,7 +838,7 @@ provenance — it is an unusable one.
 
 | # | Open | Who decides |
 |---|---|---|
-| 1 | ⛔ **The statutory content of §1 is second-hand** (`HANDOFF-NEXT-UNBLOCKED.md:137` + the task brief), not primary text. Every rate, rest and period in it is **PENDING PRIMARY VERIFICATION**. | §8's two documents |
+| 1 | ✅ **CLOSED 2026-08-30.** §1's statutory content was second-hand; it is now read from `msmed-act-2006.pdf` (2026-08-29) and the eleven RBI notifications (2026-08-30). ⛔ **What remains open is §1.2 (who is micro/small — the Udyam declaration, not a derivation) and §5 (the anchor date)**, and neither is a document. ⚠️ **The series has a floor at 22 May 2020 that the engine must refuse below** (§6.3). | — |
 | 2 | ⛔ **Shared vs tenant-scoped rate series (§6.2).** The recommendation — compiled-in, versioned — cuts against the universal `company_id` + FORCE RLS convention. Following the convention reflexively lets two tenants hold contradictory law. | Owner sign-off, before the schema |
 | 3 | ⛔ **The bill-date column (§5)** and the MSME columns (§3.2) need a migration number this note does not take. `PLAN-TALLY-PARITY.md:154`'s `0058` reservation is stale — the tree is at `0080`. | Whoever schedules T13 |
 | 4 | ⚠️ **GST on interest — CGST s.15(2)(d) (§7.1).** Unanswered anywhere in this tree before this note (§7.1 has the commands). Deferred by the report-only choice, **not retired** by it. | Blocking only if interest ever posts |

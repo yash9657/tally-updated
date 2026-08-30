@@ -19,6 +19,17 @@ not summaries.
 | `form-140-file-format.xlsx` | ✅ **here** (2026-07-31) | Protean/TIN, "File Format for Form Number 140 (26Q) Q1 to Q4 Version 1.0" | **THE BLOCKER, CLEARED.** Annexure 2's payment codes, the annexure field list, and Annexure 6's reason codes. See below. |
 | `form-143-file-format.xlsx` | ✅ **here** (2026-07-31) | Protean/TIN, "File Format for Form Number 143 (27EQ) Q1 to Q4 Version 1.0" | The **TCS** return. Delivered more than expected — see the verified collection codes below. |
 | `msmed-act-2006.pdf` | ✅ **here** (2026-08-29) — **India Code, text-native, downloaded by a human.** See "MSMED Act" below | `https://www.indiacode.nic.in/bitstream/123456789/2013/3/A2006-27.pdf` — India Code, the canonical portal | **T13's statutory half, except the numbers.** ss.15, 16, 23, 24 and the s.2(b) "appointed day" definition, all as enacted. ⛔ **It does NOT settle who is a micro/small enterprise** (s.7's thresholds are the 2006 originals and are superseded), and it says nothing about the RBI Bank Rate |
+| `rbi-bank-rate-2020-05-22.html` | ⚠️ **here** (2026-08-30) — **an HTML capture of the notification, not the PDF.** `rbidocs.rbi.org.in` (RBI's document host) refuses this machine; `www.rbi.org.in` does not. See "the PDF host is fenced" below | RBI/2019-20/240, `DOR.No.Ret.BC.74/12.01.001/2019-20` | Bank Rate **4.65% → 4.25%** w.e.f. 22 May 2020. ⭐ **The FLOOR of the series** — the one document that says when 4.25% began, previously believed from secondary sources only |
+| `rbi-bank-rate-2022-05-04.pdf` | ✅ **here** (2026-08-30) | RBI/2022-23/45, `DOR.RET.REC.32/12.01.001/2022-23` | Bank Rate **4.25% → 4.65%** w.e.f. 4 May 2022 |
+| `rbi-bank-rate-2022-06-08.pdf` | ✅ **here** (2026-08-30) | RBI/2022-23/65, `DOR.RET.REC.44/12.01.001/2022-23` | Bank Rate **4.65% → 5.15%** w.e.f. 8 Jun 2022. ⭐ One of the two changes missing from the table this project was originally handed |
+| `rbi-bank-rate-2022-08-05.pdf` | ✅ **here** (2026-08-30) | RBI/2022-23/103, `DOR.RET.REC.59/12.01.001/2022-23` | Bank Rate **5.15% → 5.65%** w.e.f. 5 Aug 2022 |
+| `rbi-bank-rate-2022-09-30.pdf` | ✅ **here** (2026-08-30) | RBI/2022-23/123, `DOR.RET.REC.70/12.01.001/2022-23` | Bank Rate **5.65% → 6.15%** w.e.f. 30 Sep 2022 |
+| `rbi-bank-rate-2022-12-07.pdf` | ✅ **here** (2026-08-30) | RBI/2022-23/148, `DOR.RET.REC.88/12.01.001/2022-23` | Bank Rate **6.15% → 6.50%** w.e.f. 7 Dec 2022 |
+| `rbi-bank-rate-2023-02-08.pdf` | ✅ **here** (2026-08-30) | RBI/2022-23/174, `DOR.RET.REC.101/12.01.001/2022-23` | Bank Rate **6.50% → 6.75%** w.e.f. 8 Feb 2023 |
+| `rbi-bank-rate-2025-02-07.pdf` | ✅ **here** (2026-08-30) | RBI/2024-25/111, `DoR.RET.REC.57/12.01.001/2024-25` | Bank Rate **6.75% → 6.50%** w.e.f. 7 Feb 2025. ⚠️ Reported once as "not findable" — it is titled with the SHORT form, `"Change in Bank Rate"` |
+| `rbi-bank-rate-2025-04-09.pdf` | ✅ **here** (2026-08-30) | RBI/2025-26/23, `DoR.RET.REC.16/12.01.001/2025-26` | Bank Rate **6.50% → 6.25%** w.e.f. 9 Apr 2025. ⭐ The other originally-missing change |
+| `rbi-bank-rate-2025-06-06.pdf` | ✅ **here** (2026-08-30) | RBI/2025-26/45, `DoR.RET.REC.22/12.01.001/2025-26` | Bank Rate **6.25% → 5.75%** w.e.f. 6 Jun 2025 |
+| `rbi-bank-rate-2025-12-05.pdf` | ✅ **here** (2026-08-30) | RBI/2025-26/134, `DoR.RET.REC.341/12.01.001/2025-26` | Bank Rate **5.75% → 5.50%** w.e.f. 5 Dec 2025. **The current rate**, and the only Bank Rate circular here that is NOT withdrawn along with 6 Jun 2025 |
 
 ### ⚠️ What Form 140 does NOT contain — checked, not assumed
 
@@ -287,11 +298,6 @@ the EPFO/ESIC portals cannot be reached from it. Never claim a validation that w
 performed.**
 
 
-| `rbi-bank-rate-2022-08-05.pdf` | ✅ **here** (2026-08-30) | RBI/2022-23/103, `DOR.RET.REC.59/12.01.001/2022-23` | Bank Rate **5.15% → 5.65%** w.e.f. 5 Aug 2022 |
-| `rbi-bank-rate-2023-02-08.pdf` | ✅ **here** (2026-08-30) | RBI/2022-23/174, `DOR.RET.REC.101/12.01.001/2022-23` | Bank Rate **6.50% → 6.75%** w.e.f. 8 Feb 2023 |
-| `rbi-bank-rate-2025-04-09.pdf` | ✅ **here** (2026-08-30) | RBI/2025-26/23, `DoR.RET.REC.16/12.01.001/2025-26` | Bank Rate **6.50% → 6.25%** w.e.f. 9 Apr 2025 |
-| `rbi-bank-rate-2025-06-06.pdf` | ✅ **here** (2026-08-30) | RBI/2025-26/45, `DoR.RET.REC.22/12.01.001/2025-26` | Bank Rate **6.25% → 5.75%** w.e.f. 6 Jun 2025 |
-
 ---
 
 ## ⭐⭐ RBI BANK RATE — THE NOTIFICATIONS FORM A CHAIN, AND THAT IS THE WHOLE POINT
@@ -321,42 +327,97 @@ a change that had been skipped would leave a notification whose named predecesso
 table can offer that, and the table this project was originally given was in fact missing two
 changes.
 
-### ✅ WHAT THE FOUR COMMITTED FILES ALREADY ESTABLISH
+### ✅ EVERY CIRCULAR IS NOW HERE, AND THE CHAIN IS CLOSED AT BOTH ENDS
 
-**Four rate changes, quoted from RBI, plus THREE MORE dates and reference numbers** recovered from
-the predecessor citations without needing the documents themselves:
+**Eleven documents, eleven links, no gaps.** Each was read before filing; each one's *"from X per
+cent"* was checked against its predecessor's *"to"*.
 
-| Effective | Reference | Bank Rate becomes | How known |
-|---|---|---|---|
-| **8 Jun 2022** | `DOR.RET.REC.44/…/2022-23` | 5.15% | ⭐ named by the 5 Aug 2022 notification, which revises *"from 5.15 per cent"* |
-| 5 Aug 2022 | `DOR.RET.REC.59` | **5.65%** | ✅ committed |
-| **7 Dec 2022** | `DOR.RET.REC.88/…/2022-23` | 6.50% | ⭐ named by the 8 Feb 2023 notification, which revises *"from 6.50 per cent"* |
-| 8 Feb 2023 | `DOR.RET.REC.101` | **6.75%** | ✅ committed |
-| **7 Feb 2025** | `DoR.RET.REC.57/…/2024-25` | 6.50% | ⭐ named by the 9 Apr 2025 notification, which revises *"from 6.50 per cent"* |
-| 9 Apr 2025 | `DoR.RET.REC.16` | **6.25%** | ✅ committed |
-| 6 Jun 2025 | `DoR.RET.REC.22` | **5.75%** | ✅ committed |
+```
+$ for f in docs/statutory/rbi-bank-rate-*; do ... "from ([0-9.]+) per cent to ([0-9.]+) per cent" ...
 
-⭐ **NOTE HOW THE TWO ORIGINALLY-MISSING CHANGES WERE CAUGHT.** 8 June 2022 and 9 April 2025 were
-both absent from the table this project was handed. Each is now proved twice over: by the *"from X
-per cent"* wording of the notification that follows it, and by that notification naming it as the
-predecessor circular. **Neither was inferred.**
+22 May 2020   4.65 -> 4.25      <- the FLOOR
+ 4 May 2022   4.25 -> 4.65
+ 8 Jun 2022   4.65 -> 5.15
+ 5 Aug 2022   5.15 -> 5.65
+30 Sep 2022   5.65 -> 6.15
+ 7 Dec 2022   6.15 -> 6.50
+ 8 Feb 2023   6.50 -> 6.75
+ 7 Feb 2025   6.75 -> 6.50      <- a two-year hold, PROVED by the citation, not assumed from silence
+ 9 Apr 2025   6.50 -> 6.25
+ 6 Jun 2025   6.25 -> 5.75
+ 5 Dec 2025   5.75 -> 5.50      <- the current rate
+```
 
-### ⛔⛔ THREE OF THE FOUR CARRY A "WITHDRAWN" WATERMARK — AND IT DOES NOT MEAN WHAT IT LOOKS LIKE
+| Effective | Bank Rate | Reference | `NotificationUser.aspx?Id=` | Withdrawn? |
+|---|---|---|---|---|
+| 22 May 2020 | 4.65 → **4.25%** | RBI/2019-20/240, `DOR.No.Ret.BC.74` | **11897** | — (HTML capture) |
+| 4 May 2022 | 4.25 → **4.65%** | RBI/2022-23/45, `DOR.RET.REC.32` | **12312** | ⚠️ withdrawn |
+| 8 Jun 2022 | 4.65 → **5.15%** | RBI/2022-23/65, `DOR.RET.REC.44` | **12333** | ⚠️ withdrawn |
+| 5 Aug 2022 | 5.15 → **5.65%** | RBI/2022-23/103, `DOR.RET.REC.59` | **12372** | ⚠️ withdrawn |
+| 30 Sep 2022 | 5.65 → **6.15%** | RBI/2022-23/123, `DOR.RET.REC.70` | **12394** | ⚠️ withdrawn |
+| 7 Dec 2022 | 6.15 → **6.50%** | RBI/2022-23/148, `DOR.RET.REC.88` | **12420** | ⚠️ withdrawn |
+| 8 Feb 2023 | 6.50 → **6.75%** | RBI/2022-23/174, `DOR.RET.REC.101` | **12450** | ⚠️ withdrawn |
+| 7 Feb 2025 | 6.75 → **6.50%** | RBI/2024-25/111, `DoR.RET.REC.57` | **12776** | ⚠️ withdrawn |
+| 9 Apr 2025 | 6.50 → **6.25%** | RBI/2025-26/23, `DoR.RET.REC.16` | **12832** | ⚠️ withdrawn |
+| 6 Jun 2025 | 6.25 → **5.75%** | RBI/2025-26/45, `DoR.RET.REC.22` | **12857** | ✅ live |
+| 5 Dec 2025 | 5.75 → **5.50%** | RBI/2025-26/134, `DoR.RET.REC.341` | **13208** | ✅ live |
+
+⭐ **THE TWO ORIGINALLY-MISSING CHANGES ARE 8 JUN 2022 AND 9 APR 2025.** Both were absent from the
+table this project was handed. Each is proved twice over: by the *"from X per cent"* wording of the
+notification that follows it, and by that notification naming it as the predecessor circular.
+**Neither was inferred, and the chain is why they could not stay hidden.**
+
+### ⭐⭐ THE FLOOR IS NOW A DOCUMENT, NOT A BELIEF — AND FINDING IT COST ONE FETCH
+
+The 4 May 2022 circular revises *"from 4.25 per cent"* and names its predecessor:
+**`DOR.No.Ret.BC.74/12.01.001/2019-20` dated May 22, 2020**. That citation is the whole lead — the
+circular was found at **`Id=11897`** by scanning ids either side of the same policy day, and it
+says, in RBI's own words:
+
+> *"…the Bank Rate is revised downwards by 40 basis points **from 4.65 per cent to 4.25 per cent**
+> with immediate effect."*
+
+✅ **SO 4.25% BEGAN ON 22 MAY 2020.** It had been believed from secondary sources; it is now read
+from the notification. ⛔ **This README previously recorded that boundary as unverified. It is
+verified, and the entry above supersedes it.**
+
+⚠️ **THE SERIES DELIBERATELY STOPS THERE.** The May 2020 circular in turn names
+`DBR.No.Ret.BC.53/12.01.001/2019-20` **dated March 27, 2020**, and that one will name another — the
+chain regresses without end. **22 May 2020 is a chosen floor, not the beginning of history**, and
+the reason it is a *safe* choice is that it is a **verified** one: the first rate in the series has
+a known start date rather than an assumed one. It gives over six years of coverage as at
+2026-08-30, well beyond any period a receivable is realistically still being pursued.
+
+⛔ **WHAT THE ENGINE MUST DO WITH THAT.** For an anchor date before **22 May 2020**, T13 must
+**refuse to compute and say why** — naming the floor and the reason. ⛔ **It must NOT silently price
+a pre-floor period at the earliest rate it happens to hold.** That is the missing-change failure one
+step removed: it foots perfectly, it spot-checks clean everywhere outside the gap, and it is wrong.
+
+### ⛔ THE "WITHDRAWN" WATERMARK IS ON EIGHT OF THE TEN PDFs — AND IT DOES NOT MEAN WHAT IT LOOKS LIKE
 
 ```
 $ for f in docs/statutory/rbi-bank-rate-*.pdf; do
-    printf "%-30s " "$(basename $f)"; strings "$f" | /usr/bin/grep -icm1 withdrawn; done
-rbi-bank-rate-2022-08-05.pdf   1        <- WITHDRAWN
-rbi-bank-rate-2023-02-08.pdf   1        <- WITHDRAWN
-rbi-bank-rate-2025-04-09.pdf   1        <- WITHDRAWN
-rbi-bank-rate-2025-06-06.pdf   0
+    printf "%-32s grep=%s strings=%s\n" "$(basename $f)" \
+      "$(pdftotext -layout "$f" - | grep -ic withdrawn)" "$(strings "$f" | grep -ic withdrawn)"; done
+
+rbi-bank-rate-2022-05-04.pdf     grep=0 strings=4      <- WITHDRAWN, and grep cannot see it
+rbi-bank-rate-2022-06-08.pdf     grep=0 strings=4      <- WITHDRAWN
+rbi-bank-rate-2022-08-05.pdf     grep=0 strings=4      <- WITHDRAWN
+rbi-bank-rate-2022-09-30.pdf     grep=0 strings=4      <- WITHDRAWN
+rbi-bank-rate-2022-12-07.pdf     grep=0 strings=4      <- WITHDRAWN
+rbi-bank-rate-2023-02-08.pdf     grep=0 strings=4      <- WITHDRAWN
+rbi-bank-rate-2025-02-07.pdf     grep=0 strings=4      <- WITHDRAWN
+rbi-bank-rate-2025-04-09.pdf     grep=0 strings=2      <- WITHDRAWN
+rbi-bank-rate-2025-06-06.pdf     grep=0 strings=0
+rbi-bank-rate-2025-12-05.pdf     grep=0 strings=0
 ```
 
 ⚠️ **IT EXTRACTS AS SCATTERED LETTERS, NOT AS A WORD.** The stamp is a diagonal overlay, so
 `pdftotext` yields `W` / `it` / `hdr` / `aw` / `n` on separate lines and a grep for "withdrawn"
-finds **nothing**. It was noticed only because the letters interrupted a sentence mid-word
-(*"…to 6.25 per cent with**n aw ithdr W**immediate effect"*). ⛔ **A `grep -i withdrawn` over the
-text layer is a FALSE NEGATIVE here; use `strings` on the file.**
+finds **nothing** — the `grep=0` column above is that false negative, on every single file
+including the eight that carry the stamp. It was noticed only because the letters interrupted a
+sentence mid-word (*"…to 6.25 per cent with**n aw ithdr W**immediate effect"*). ⛔ **Use `strings`
+on the file, never `grep` on the text layer.**
 
 ⭐ **WHAT IT MEANS, AND WHY THESE FILES ARE STILL THE RIGHT SOURCES.** RBI withdraws a circular when
 its substance is folded into a Master Direction — the April 2025 circular points at exactly that:
@@ -366,70 +427,65 @@ an operative INSTRUCTION. It does not unmake the historical fact** that the Bank
 that date to that figure, which is the only thing T13 needs from it.
 
 ⛔ **BUT DO NOT CITE A WITHDRAWN CIRCULAR AS CURRENT AUTHORITY.** For "what is the Bank Rate today",
-the live instrument is the Master Direction (and the most recent, unwithdrawn circular). For "what
-was the Bank Rate on 12 September 2022", these files are exactly right. The distinction has to be
-written down because the two questions look identical and only one of them is T13's.
+the live instruments are the Master Direction and the **5 Dec 2025** circular — the two rows marked
+✅ live above are the only ones that answer it. For "what was the Bank Rate on 12 September 2022",
+these files are exactly right. The distinction has to be written down because the two questions look
+identical and only one of them is T13's.
 
-### ⭐ THE FEBRUARY 2025 CIRCULAR EXISTS — IT IS JUST TITLED DIFFERENTLY
+### ⛔ TWO CIRCULARS ISSUE ON EACH POLICY DAY, WITH ADJACENT IDS, AND THE WRONG ONE LOOKS RIGHT
 
-It was reported as "not findable" when browsing by month. It is at
-**`NotificationUser.aspx?Id=12776`** — RBI/2024-25/111, `DoR.RET.REC.57/12.01.001/2024-25`,
-**7 February 2025, Bank Rate 6.75% → 6.50%**.
+| Circular | Department | Carries |
+|---|---|---|
+| *"Liquidity Adjustment Facility – Change in rates"* | FMOD | repo, SDF, **MSF** |
+| ⭐ *"Change in Bank Rate"* | **DoR.RET.REC** | **the Bank Rate** |
 
-⚠️ **THE TITLE IS THE SHORT FORM, `"Change in Bank Rate"`** — not the longer *"Penal Interest on
-shortfall in CRR and SLR requirements-Change in Bank Rate"* that the 2025-26 circulars use. **Both
-spellings are in use and a search for the long one alone misses the short one.** Search for
-`Bank Rate` and nothing more.
+**The MSF rate equals the Bank Rate**, so a series built from the LAF circular would show the right
+numbers while citing the wrong instrument throughout. ⭐ **The adjacency was observed directly while
+locating two of these files** — `13206` is the FMOD/LAF circular of 5 Dec 2025 and `13208` is the
+Bank Rate one; `11893`/`11894` are the MSF and LAF circulars of 22 May 2020 and `11897` is the Bank
+Rate one. **Take the `DoR.RET.REC` one.** Every id in the table above already is.
 
-⭐⭐ **AND IT CLOSES THE LARGEST GAP IN THE SERIES.** It revises *"from 6.75 per cent"* — the figure
-set by the 8 February 2023 circular. **So the Bank Rate did not move at all between 8 Feb 2023 and
-7 Feb 2025**, and that two-year hold is now proved by the chain rather than assumed from silence.
+⚠️ **THE TITLE HAS TWO SPELLINGS.** The older circulars are titled just **"Change in Bank Rate"**;
+the 2025-26 ones are **"Penal Interest on shortfall in CRR and SLR requirements - Change in Bank
+Rate"**. Searching for the long form alone misses February 2025 — which is exactly why it was once
+reported as "not findable". **Search for `Bank Rate` and nothing more.**
 
-### ✅ EVERY CIRCULAR LOCATED, AND THE CHAIN IS UNBROKEN
+### ⚠️ RBI'S DOCUMENT HOST IS FENCED; ITS WEBSITE IS NOT
 
-All ten Bank Rate changes from 4 May 2022 to date now have a notification id, found by fetching
-`rbi.org.in` directly. ⭐ **AND THE CHAIN CLOSES: every circular's "from" equals its predecessor's
-"to", with no gaps.**
+The 22 May 2020 entry is an **HTML capture** rather than a PDF, and the reason is worth recording
+because it will recur:
 
-```
-4.25 -> 4.65 -> 5.15 -> 5.65 -> 6.15 -> 6.50 -> 6.75 -> 6.50 -> 6.25 -> 5.75 -> 5.50
-```
+| Host | Resolves to | Result |
+|---|---|---|
+| ✅ `www.rbi.org.in` | Azure Front Door (`150.171.109.145`) | **200.** The notification pages carry the FULL circular text — reference number, date, predecessor citation, the from/to sentence, and the Annex |
+| ⛔ `rbidocs.rbi.org.in` | `1.6.75.39`, `14.140.169.71` (India) | **Empty reply.** TCP connects; TLS completes against a valid `*.rbi.org.in` certificate; then the HTTP request is dropped with no response |
 
-| Effective | Bank Rate | Reference | `NotificationUser.aspx?Id=` |
-|---|---|---|---|
-| 4 May 2022 | 4.25 → **4.65%** | RBI/2022-23/45, `DOR.RET.REC.32` | **12312** |
-| 8 Jun 2022 | 4.65 → **5.15%** | RBI/2022-23/65, `DOR.RET.REC.44` | **12333** |
-| 5 Aug 2022 | 5.15 → **5.65%** | RBI/2022-23/103, `DOR.RET.REC.59` | **12372** ✅ committed |
-| 30 Sep 2022 | 5.65 → **6.15%** | RBI/2022-23/123, `DOR.RET.REC.70` | **12394** |
-| 7 Dec 2022 | 6.15 → **6.50%** | RBI/2022-23/148, `DOR.RET.REC.88` | **12420** |
-| 8 Feb 2023 | 6.50 → **6.75%** | RBI/2022-23/174, `DOR.RET.REC.101` | **12450** ✅ committed |
-| 7 Feb 2025 | 6.75 → **6.50%** | RBI/2024-25/111, `DoR.RET.REC.57` | **12776** |
-| 9 Apr 2025 | 6.50 → **6.25%** | RBI/2025-26/23, `DoR.RET.REC.16` | **12832** ✅ committed |
-| 6 Jun 2025 | 6.25 → **5.75%** | RBI/2025-26/45, `DoR.RET.REC.22` | **12857** ✅ committed |
-| 5 Dec 2025 | 5.75 → **5.50%** | RBI/2025-26/… | *(browse Dec 2025)* |
+⭐ **THE FAILURE IS ABOVE TLS, WHICH IS WHAT IDENTIFIES IT.** `openssl s_client` handshakes cleanly
+and verifies the certificate, so this is not a transport or trust problem — it is application-layer
+filtering on the document host. Retrying across both IPs, HTTP/1.1 and HTTP/2, TLS 1.2 and 1.3, and
+with browser headers and a referer changes nothing. ⚠️ **It is the same class of block as
+`samadhaan.msme.gov.in` and the NIC e-invoice hosts**, recorded below and in the project memory —
+but note it is a *different* range, so the pattern is "Indian-hosted government document servers",
+not "the 164.100.x block".
 
-⚠️ **TWO CIRCULARS ISSUE ON EACH POLICY DAY AND ONLY ONE IS THE RIGHT ONE.** RBI publishes
-*"Liquidity Adjustment Facility – Change in rates"* (FMOD, repo/SDF/MSF) and *"Change in Bank
-Rate"* (DoR.RET.REC, the Bank Rate) on the same date, with adjacent ids. **Take the DoR.RET.REC
-one.** The LAF circular gives the MSF rate, which happens to equal the Bank Rate — but it is a
-different instrument answering a different question, and a series assembled from it would be
-citing the wrong document.
+✅ **AND IT DID NOT COST ANYTHING HERE**, because `www.rbi.org.in` serves the same text. The PDF can
+be swapped in whenever a human with a browser fetches `Id=11897`; the capture is primary evidence
+from RBI's own domain in the meantime.
 
-### ⭐ WHAT THE CHAIN NOW PROVES, AND WHAT IT STILL DOES NOT
+### ⭐ WHAT THE CHAIN PROVES, AND WHAT IT STILL DOES NOT
 
-✅ **PROVED COMPLETE from 4 May 2022 to today.** No change can be missing: a skipped one would
-leave a circular whose "from" did not match its predecessor's "to", and none does.
+✅ **PROVED COMPLETE, 22 May 2020 → today.** No change can be missing inside that window: a skipped
+one would leave a circular whose *"from"* did not match its predecessor's *"to"*, and none does.
+**This is a completeness proof, not a tidiness check** — and it is not a property of any rate table,
+which is why the pasted table this project started from could be wrong in a way nobody noticed.
 
-⛔ **NOT YET ESTABLISHED: the boundary before 4 May 2022.** That circular revises *"from 4.25 per
-cent"*, so 4.25% was in force immediately before it — but when 4.25% BEGAN is unverified. It is
-believed to be 22 May 2020, from secondary sources only.
+⛔ **NOT ESTABLISHED, AND DELIBERATELY SO: anything before 22 May 2020.** See the floor section
+above. The engine refuses rather than guesses.
 
-⚠️ **THAT MATTERS ONLY FOR A BILL WHOSE INTEREST ACCRUES BEFORE 4 MAY 2022** — i.e. a receivable
-more than four years overdue. If T13 is scoped to bills inside the chain, **the series is done**.
-If not, the May 2020 circular (and any between it and May 2022) is still needed. **Record the
-scope decision rather than letting the gap sit unnamed.**
-
----
+⛔ **AND THE SERIES WILL GO STALE.** It is complete as at 2026-08-30 and RBI reviews the policy rate
+roughly every two months. **`5 Dec 2025 → 5.50%` is the last link only until the next
+announcement** — a fresh circular does not break the chain, it extends it, and the check is the same
+one: does its *"from"* equal 5.50?
 
 ## ⚠️ MSMED Act 2006 — what it settles, what it does not, and how it was obtained
 
