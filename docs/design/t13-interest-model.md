@@ -157,38 +157,6 @@ disabled input still reads as "this is the value, we just locked it"; an absent 
 ⚠️ **"Three times the Bank Rate" is a MULTIPLE OF A MOVING NUMBER.** It is not a rate this build
 gets to store. It is an arithmetic instruction over a dated series — which is §6.
 
-### 1.2 ⛔⛔ WHO IS IN REGIME (a) — STILL OPEN, AND s.7's OWN NUMBERS ARE A TRAP
-
-The Act reaches this note's mechanics but **not** its most basic precondition: which counterparties
-regime (a) applies to at all.
-
-**s.7(1) as enacted** classifies a micro manufacturing enterprise as one *"where the investment in
-plant and machinery does not exceed twenty-five lakh rupees"*. ⛔ **THOSE FIGURES ARE THE 2006
-ORIGINALS AND ARE SUPERSEDED** — replaced in 2020 by composite investment-**and**-turnover criteria
-and revised since.
-
-⛔ **AND THE FAILURE IS IN THE FLATTERING DIRECTION**, which is why it would survive review: judged
-against 2006 thresholds almost every real enterprise falls *outside* micro/small, so regime (a)
-would silently never fire, no MSMED interest would ever be computed, and **every screen would look
-clean**. There is no error state to notice.
-
-⭐ **WHAT IS STILL GOOD LAW IS s.7(1)'s MECHANISM**: the Central Government *"may, for the purposes
-of this Act, **by notification** … classify"*. Classification is delegated — the same shape as the
-EPF administrative charges blocker, where the Scheme fixes no rate and a separate notification does.
-
-⭐⭐ **THE DESIGN CONSEQUENCE, AND IT SIMPLIFIES §3.2: DO NOT DERIVE THE CLASSIFICATION.** This
-product holds no investment figure and no turnover figure for a counterparty, and must not invent
-either. What an MSE supplier actually presents is a **Udyam Registration Number** and a declared
-class. So the flag §3.2 says does not exist should store **a recorded declaration** — the Udyam
-number, the class declared, and the date it was given — and the report should say *"treated as a
-micro/small enterprise on the supplier's own Udyam declaration of <date>"*.
-
-⛔ **A DECLARATION IS NOT A DERIVATION, AND THE REPORT MUST NOT DRESS IT AS ONE.** The buyer is
-relying on what the supplier told them, which is exactly what s.22's annual-accounts disclosure also
-rests on. Recording the source of the belief is what makes the figure defensible when a debtor asks.
-
----
-
 ### 1.1 ⭐ THREE THINGS ss.15–23 CARRY THAT THIS NOTE DID NOT KNOW ABOUT
 
 **Added 2026-08-28** from a section-by-section summary supplied by the project owner.
@@ -237,6 +205,38 @@ into the tax computation as an ordinary deduction and understate the buyer's lia
 | ⛔ **The overriding-effect provision** (s.24 or equivalent) | §1's table rests on it: it is what makes an MSE party's interest terms **unreadable** rather than merely pre-filled. The summary runs 15–23 and names no override |
 | ⛔ **The definitions of micro / small** (s.7 and s.2, NOT 15–23) | They decide **who is in regime (a) at all**. Without them the flag in §3.2 has no rule behind it |
 | ⛔ **The RBI Bank Rate dated series** | The other half of §8, and the harder one. "Three times the Bank Rate" is arithmetic over a series this build does not have |
+
+---
+
+### 1.2 ⛔⛔ WHO IS IN REGIME (a) — STILL OPEN, AND s.7's OWN NUMBERS ARE A TRAP
+
+The Act reaches this note's mechanics but **not** its most basic precondition: which counterparties
+regime (a) applies to at all.
+
+**s.7(1) as enacted** classifies a micro manufacturing enterprise as one *"where the investment in
+plant and machinery does not exceed twenty-five lakh rupees"*. ⛔ **THOSE FIGURES ARE THE 2006
+ORIGINALS AND ARE SUPERSEDED** — replaced in 2020 by composite investment-**and**-turnover criteria
+and revised since.
+
+⛔ **AND THE FAILURE IS IN THE FLATTERING DIRECTION**, which is why it would survive review: judged
+against 2006 thresholds almost every real enterprise falls *outside* micro/small, so regime (a)
+would silently never fire, no MSMED interest would ever be computed, and **every screen would look
+clean**. There is no error state to notice.
+
+⭐ **WHAT IS STILL GOOD LAW IS s.7(1)'s MECHANISM**: the Central Government *"may, for the purposes
+of this Act, **by notification** … classify"*. Classification is delegated — the same shape as the
+EPF administrative charges blocker, where the Scheme fixes no rate and a separate notification does.
+
+⭐⭐ **THE DESIGN CONSEQUENCE, AND IT SIMPLIFIES §3.2: DO NOT DERIVE THE CLASSIFICATION.** This
+product holds no investment figure and no turnover figure for a counterparty, and must not invent
+either. What an MSE supplier actually presents is a **Udyam Registration Number** and a declared
+class. So the flag §3.2 says does not exist should store **a recorded declaration** — the Udyam
+number, the class declared, and the date it was given — and the report should say *"treated as a
+micro/small enterprise on the supplier's own Udyam declaration of <date>"*.
+
+⛔ **A DECLARATION IS NOT A DERIVATION, AND THE REPORT MUST NOT DRESS IT AS ONE.** The buyer is
+relying on what the supplier told them, which is exactly what s.22's annual-accounts disclosure also
+rests on. Recording the source of the belief is what makes the figure defensible when a debtor asks.
 
 ---
 
