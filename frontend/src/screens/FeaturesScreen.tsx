@@ -140,7 +140,7 @@ const FEATURES: {
       {
         name: "Interest on overdue bills",
         state: "off",
-        note: "Not built. Nothing computes interest on a receivable or payable that is past its due date, and nothing posts it. Outstandings will tell you a bill is 90 days old; it will not tell you what that has cost. The day-count basis and simple-vs-compound are configuration with statutory defaults, and inventing those defaults would be worse than the gap.",
+        note: "Not built. Nothing computes interest on a receivable or payable that is past its due date, and nothing posts it. Outstandings will tell you a bill is 90 days old; it will not tell you what that has cost. ⛔ AND THERE IS NO SINGLE ANSWER TO PASTE IN, WHICH IS WHY IT IS NOT BUILT YET. For a micro or small enterprise supplier the terms are FIXED BY THE MSMED ACT 2006 — compound, monthly rests, three times the RBI Bank Rate (s.16) — and s.24 overrides anything a contract says to the contrary, so they are not ours to offer as settings. For every other party NO STATUTORY RATE EXISTS AT ALL, and a default would simply be invented. One global toggle for the day-count basis and simple-vs-compound would therefore be wrong in both directions at once: it would let an operator vary terms that statute has already fixed, and it would dress a made-up number as a standard everywhere else.",
       },
       {
         name: "Budgets and budget-vs-actual",
@@ -301,7 +301,7 @@ const FEATURES: {
       {
         name: "Stock Summary (closing quantity AND value)",
         state: "on",
-        note: "Gateway > Stock Summary. NO STOCK VALUE IS EVER STORED: quantity is posted, and value is DERIVED at report time by replaying the movement ledger through a weighted-average valuer. That is why altering an April invoice changes the July closing value with no reversal code anywhere. DENIED to the Data Entry level by default, because the closing valuation rate is what the business PAID — an Owner can lift that in Users & Roles.",
+        note: "Gateway > Stock Summary. NO STOCK VALUE IS EVER STORED: quantity is posted, and value is DERIVED at report time by replaying the movement ledger through the valuer EACH ITEM'S OWN COSTING METHOD names — weighted average unless you switch it, and since migration 0078 either FIFO or LIFO instead. ⛔ SO ONE REPORT CAN CARRY THREE DIFFERENT VALUERS AT ONCE, one item each, and two item totals on the same page are then not on a common basis. That is why the method is printed against every item rather than stated once at the top: a Stock Summary that shows values and not the basis is a report whose figures cannot be reproduced or compared, and nothing on the page would say so. Switching an item's method is a RESTATEMENT and not an edit — it moves that item's closing stock, its cost of goods sold and therefore the Profit & Loss, on figures that were already printed and read — so it has its own route and its own audit row instead of being a field on a general master editor. And it is the same reason altering an April invoice changes the July closing value with no reversal code anywhere. DENIED to the Data Entry level by default, because the closing valuation rate is what the business PAID — an Owner can lift that in Users & Roles.",
       },
       {
         name: "Negative stock",
