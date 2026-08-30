@@ -341,6 +341,50 @@ both absent from the table this project was handed. Each is now proved twice ove
 per cent"* wording of the notification that follows it, and by that notification naming it as the
 predecessor circular. **Neither was inferred.**
 
+### ⛔⛔ THREE OF THE FOUR CARRY A "WITHDRAWN" WATERMARK — AND IT DOES NOT MEAN WHAT IT LOOKS LIKE
+
+```
+$ for f in docs/statutory/rbi-bank-rate-*.pdf; do
+    printf "%-30s " "$(basename $f)"; strings "$f" | /usr/bin/grep -icm1 withdrawn; done
+rbi-bank-rate-2022-08-05.pdf   1        <- WITHDRAWN
+rbi-bank-rate-2023-02-08.pdf   1        <- WITHDRAWN
+rbi-bank-rate-2025-04-09.pdf   1        <- WITHDRAWN
+rbi-bank-rate-2025-06-06.pdf   0
+```
+
+⚠️ **IT EXTRACTS AS SCATTERED LETTERS, NOT AS A WORD.** The stamp is a diagonal overlay, so
+`pdftotext` yields `W` / `it` / `hdr` / `aw` / `n` on separate lines and a grep for "withdrawn"
+finds **nothing**. It was noticed only because the letters interrupted a sentence mid-word
+(*"…to 6.25 per cent with**n aw ithdr W**immediate effect"*). ⛔ **A `grep -i withdrawn` over the
+text layer is a FALSE NEGATIVE here; use `strings` on the file.**
+
+⭐ **WHAT IT MEANS, AND WHY THESE FILES ARE STILL THE RIGHT SOURCES.** RBI withdraws a circular when
+its substance is folded into a Master Direction — the April 2025 circular points at exactly that:
+*"Please refer to Chapter VIII of Master Direction – Reserve Bank of India [Cash Reserve Ratio (CRR)
+and Statutory Liquidity Ratio (SLR)] Directions – 2021"*. **Withdrawal ends the circular's life as
+an operative INSTRUCTION. It does not unmake the historical fact** that the Bank Rate changed on
+that date to that figure, which is the only thing T13 needs from it.
+
+⛔ **BUT DO NOT CITE A WITHDRAWN CIRCULAR AS CURRENT AUTHORITY.** For "what is the Bank Rate today",
+the live instrument is the Master Direction (and the most recent, unwithdrawn circular). For "what
+was the Bank Rate on 12 September 2022", these files are exactly right. The distinction has to be
+written down because the two questions look identical and only one of them is T13's.
+
+### ⭐ THE FEBRUARY 2025 CIRCULAR EXISTS — IT IS JUST TITLED DIFFERENTLY
+
+It was reported as "not findable" when browsing by month. It is at
+**`NotificationUser.aspx?Id=12776`** — RBI/2024-25/111, `DoR.RET.REC.57/12.01.001/2024-25`,
+**7 February 2025, Bank Rate 6.75% → 6.50%**.
+
+⚠️ **THE TITLE IS THE SHORT FORM, `"Change in Bank Rate"`** — not the longer *"Penal Interest on
+shortfall in CRR and SLR requirements-Change in Bank Rate"* that the 2025-26 circulars use. **Both
+spellings are in use and a search for the long one alone misses the short one.** Search for
+`Bank Rate` and nothing more.
+
+⭐⭐ **AND IT CLOSES THE LARGEST GAP IN THE SERIES.** It revises *"from 6.75 per cent"* — the figure
+set by the 8 February 2023 circular. **So the Bank Rate did not move at all between 8 Feb 2023 and
+7 Feb 2025**, and that two-year hold is now proved by the chain rather than assumed from silence.
+
 ### ⛔ STILL TO DOWNLOAD — and the chain says exactly what each should say
 
 Same title every time: **"Penal Interest on shortfall in CRR and SLR requirements – Change in Bank
