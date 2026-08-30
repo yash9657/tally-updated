@@ -385,23 +385,49 @@ spellings are in use and a search for the long one alone misses the short one.**
 set by the 8 February 2023 circular. **So the Bank Rate did not move at all between 8 Feb 2023 and
 7 Feb 2025**, and that two-year hold is now proved by the chain rather than assumed from silence.
 
-### ⛔ STILL TO DOWNLOAD — and the chain says exactly what each should say
+### ✅ EVERY CIRCULAR LOCATED, AND THE CHAIN IS UNBROKEN
 
-Same title every time: **"Penal Interest on shortfall in CRR and SLR requirements – Change in Bank
-Rate"**. Browse `https://www.rbi.org.in/Scripts/NotificationUser.aspx` by year and month.
+All ten Bank Rate changes from 4 May 2022 to date now have a notification id, found by fetching
+`rbi.org.in` directly. ⭐ **AND THE CHAIN CLOSES: every circular's "from" equals its predecessor's
+"to", with no gaps.**
 
-| Date | Reference (already known from the chain) | Should say | And should name as its predecessor |
+```
+4.25 -> 4.65 -> 5.15 -> 5.65 -> 6.15 -> 6.50 -> 6.75 -> 6.50 -> 6.25 -> 5.75 -> 5.50
+```
+
+| Effective | Bank Rate | Reference | `NotificationUser.aspx?Id=` |
 |---|---|---|---|
-| **7 Feb 2025** | `DoR.RET.REC.57/12.01.001/2024-25` | 6.75% → 6.50% | ⭐ **8 Feb 2023's `REC.101`** — which would PROVE the Bank Rate never moved between Feb 2023 and Feb 2025 |
-| **7 Dec 2022** | `DOR.RET.REC.88/12.01.001/2022-23` | 6.15% → 6.50% | 30 Sep 2022's circular |
-| **30 Sep 2022** | *(named by 7 Dec 2022's)* | 5.65% → 6.15% | 5 Aug 2022's `REC.59` |
-| **8 Jun 2022** | `DOR.RET.REC.44/12.01.001/2022-23` | 4.65% → 5.15% | 4 May 2022's circular |
-| **4 May 2022** | *(named by 8 Jun 2022's)* | 4.25% → 4.65% | the 2020 circular |
-| **5 Dec 2025** | *(RBI/2025-26/…)* | 5.75% → 5.50% | 6 Jun 2025's `REC.22` |
-| **22 May 2020** | *(named by 4 May 2022's)* | → 4.25% | the tail of the chain |
+| 4 May 2022 | 4.25 → **4.65%** | RBI/2022-23/45, `DOR.RET.REC.32` | **12312** |
+| 8 Jun 2022 | 4.65 → **5.15%** | RBI/2022-23/65, `DOR.RET.REC.44` | **12333** |
+| 5 Aug 2022 | 5.15 → **5.65%** | RBI/2022-23/103, `DOR.RET.REC.59` | **12372** ✅ committed |
+| 30 Sep 2022 | 5.65 → **6.15%** | RBI/2022-23/123, `DOR.RET.REC.70` | **12394** |
+| 7 Dec 2022 | 6.15 → **6.50%** | RBI/2022-23/148, `DOR.RET.REC.88` | **12420** |
+| 8 Feb 2023 | 6.50 → **6.75%** | RBI/2022-23/174, `DOR.RET.REC.101` | **12450** ✅ committed |
+| 7 Feb 2025 | 6.75 → **6.50%** | RBI/2024-25/111, `DoR.RET.REC.57` | **12776** |
+| 9 Apr 2025 | 6.50 → **6.25%** | RBI/2025-26/23, `DoR.RET.REC.16` | **12832** ✅ committed |
+| 6 Jun 2025 | 6.25 → **5.75%** | RBI/2025-26/45, `DoR.RET.REC.22` | **12857** ✅ committed |
+| 5 Dec 2025 | 5.75 → **5.50%** | RBI/2025-26/… | *(browse Dec 2025)* |
 
-⚠️ **IF ANY PREDECESSOR CITATION NAMES A DATE NOT IN THIS TABLE, THERE IS ANOTHER CHANGE** and it
-must be downloaded too. That is the check; it is why the chain matters more than the list.
+⚠️ **TWO CIRCULARS ISSUE ON EACH POLICY DAY AND ONLY ONE IS THE RIGHT ONE.** RBI publishes
+*"Liquidity Adjustment Facility – Change in rates"* (FMOD, repo/SDF/MSF) and *"Change in Bank
+Rate"* (DoR.RET.REC, the Bank Rate) on the same date, with adjacent ids. **Take the DoR.RET.REC
+one.** The LAF circular gives the MSF rate, which happens to equal the Bank Rate — but it is a
+different instrument answering a different question, and a series assembled from it would be
+citing the wrong document.
+
+### ⭐ WHAT THE CHAIN NOW PROVES, AND WHAT IT STILL DOES NOT
+
+✅ **PROVED COMPLETE from 4 May 2022 to today.** No change can be missing: a skipped one would
+leave a circular whose "from" did not match its predecessor's "to", and none does.
+
+⛔ **NOT YET ESTABLISHED: the boundary before 4 May 2022.** That circular revises *"from 4.25 per
+cent"*, so 4.25% was in force immediately before it — but when 4.25% BEGAN is unverified. It is
+believed to be 22 May 2020, from secondary sources only.
+
+⚠️ **THAT MATTERS ONLY FOR A BILL WHOSE INTEREST ACCRUES BEFORE 4 MAY 2022** — i.e. a receivable
+more than four years overdue. If T13 is scoped to bills inside the chain, **the series is done**.
+If not, the May 2020 circular (and any between it and May 2022) is still needed. **Record the
+scope decision rather than letting the gap sit unnamed.**
 
 ---
 
