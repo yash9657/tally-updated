@@ -7,3 +7,6 @@
 # company that does not exist in their database.
 .demo-company-id
 .tenancy-company-id
+# `pnpm seed:demo -- --name "X"` writes a per-name id file beside those, for a
+# SCRATCH book that can be driven by hand and thrown away. No gate reads it.
+.*-company-id

@@ -10,8 +10,9 @@ This is that pass, or the first half of it. ⭐ **It produced one HIGH defect th
 routes, tables or code could have found** — both screens render, every figure is real, and two
 reports over one set of books disagree while one of them promises they agree.
 
-⛔ **READ §4 BEFORE TRUSTING THIS AS A FULL DAY.** The write half was not driven, and the reason
-is itself a finding.
+⛔ **READ §4 BEFORE TRUSTING THIS AS A FULL DAY.** The write half was driven a day later, once
+there was a scratch company to drive it in; it found **D107**. Printing, export, bank matching,
+stock, payroll and the GST returns are still undriven.
 
 ---
 
@@ -135,27 +136,71 @@ disagreeing with the screen looked briefly like a much larger bug.
 
 ---
 
-## 4. ⛔ WHAT THIS PASS DID **NOT** COVER, AND WHY — this is a finding too
+## 4. ✅ THE WRITE HALF — driven 2026-08-31, and it found D107
 
-**The write half was not driven.** No sale, no purchase, no receipt, no payment was entered.
+The first pass could not drive voucher ENTRY because there was nowhere safe: the only
+populated books were the demo company, which `verify:demo` and three drive scripts assert
+against. **That blocker is gone.**
 
-⛔ **THE REASON IS THAT THERE IS NOWHERE SAFE TO DO IT.** The only populated books are the demo
-company, and drives and gates assert against its figures (`pnpm verify:demo` reads 34 of them).
-Entering a day's vouchers there pollutes data other gates depend on; entering them nowhere means
-the most-used half of the product — **voucher entry, which is what a shopkeeper actually does all
-day** — is still undriven.
+```bash
+pnpm seed:demo -- --name "Scratch Traders"     # -> .scratch-company-id, gitignored
+```
 
-⭐ **SO THE FIRST THING THE NEXT PASS NEEDS IS A SCRATCH COMPANY IT CAN DIRTY AND THROW AWAY**, and
-the absence of that affordance is plausibly a large part of why this pass never happened in the
-first place. It is cheap: `make seed-demo` already builds a company end to end; what is missing is
-a second one under a name the gates ignore, and a note saying which is which (see §2.8 — two
-identically-named companies already exist by accident).
+⭐ **THE NAME AND THE ID FILE MOVE TOGETHER**, deliberately. The seeder hard-coded
+"Demo Traders" and always wrote `.demo-company-id`, so a second book was another
+identically-named company that silently replaced the id every gate reads — which is how
+nine of them accumulated and how §2.8 cost real time. A scratch book is named, writes its
+own id file, and no gate reads it. `verify:demo` still passes 34/34 against the default.
 
-⚠️ **Also not covered:** printing, export, the bank-statement import and matching loop (T4 slice
-2b, shipped 2026-08-28 and the reason a full day is finally completable), stock, payroll, and GST
-returns. **The read half of one morning is what this is.**
+### ✅ WHAT THE WRITE PATH GOT RIGHT
 
----
+**D106's entry rule works end to end, in a browser, with the message it was written with.**
+Keying a receipt on a bill-by-bill party with an empty bill-wise panel is refused:
+
+> *"ledger: this ledger is maintained bill-by-bill and posts -5000.0000, but the voucher
+> names no bill reference for it — record which bill it is against, or record it as
+> ON_ACCOUNT if you do not yet know"*
+
+⭐ **AND THE ESCAPE HATCH IS REACHABLE AND CORRECT.** `+ reference` offers Tally's four
+types by Tally's names (New Ref / Agst Ref / Advance / On Account); choosing **On Account**
+drops the bill-name field (an on-account reference names no bill) and the receipt saves,
+stored as `ref_type = ON_ACCOUNT`, `ref_name = "On Account"` — the same bucket the report
+derives into, so the two never split. Measured after, over the scratch books:
+**Outstandings 248920.0000 == Balance Sheet Sundry Debtors 248920.0000**, and
+`sum(slabs) + on_account_total == total`.
+
+### ⛔⛔ WHAT IT GOT WRONG — D107, and it is on the write path
+
+**The screen says `Saved` when Ctrl+A was merely pressed.** `VoucherScreen.tsx:2899` falls
+back to the literal word when `status` is null and `snapshot.saved` is set — and that flag
+means *"this voucher frame has been accepted at least once (Ctrl+A)"*, not "the server has
+it".
+
+Minimal repro, no network call possible:
+
+```
+F9 (empty Purchase) → Ctrl+A
+  header: "Purchase Voucher" → "Saved" → "Error: Party A/c Name is required — …"
+```
+
+⛔ **THE STEP-UP PATH MAKES IT DURABLE.** A receipt needing WebAuthn leaves `status` null
+while the passkey is pending, so the screen sits reading **`Saved`** next to *"Confirm the
+passkey prompt"* — measured with the POST returning **403** and nothing written. An operator
+keying a day of receipts who does not confirm each passkey is told every one of them saved.
+
+⚠️ **I nearly reported this as "the 403 renders as Saved" and stopped there.** It reproduced
+on an empty form with no request at all, which is what identified the real mechanism.
+Registered as **D107**.
+
+### ⚠️ STILL NOT COVERED
+
+Printing, export, the bank-statement import and matching loop, stock vouchers, payroll and
+the GST returns. Two smaller things noticed while driving and not yet registered: the
+Account combobox **ignores a mouse click on its option** (§2.3's papercut again, now on the
+entry path, where the keyboard is the documented route), and a Sales voucher to a
+bill-by-bill party **shows no bill-wise panel at all** — it relies on the client adding an
+unnamed NEW reference, which works, but means the operator cannot split an invoice into two
+bills from that screen.
 
 ## 5. THE STATE THIS WAS DRIVEN AGAINST
 
