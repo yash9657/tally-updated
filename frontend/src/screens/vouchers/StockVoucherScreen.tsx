@@ -272,6 +272,36 @@ export function StockVoucherScreen({ snapshot }: { snapshot: NavSnapshot }) {
         setSavedNo(res.voucher_no);
         setSavedID(res.voucher_id);
         setStatus("Saved");
+        // ⛔⛔ AND THE FORM IS CLEARED, ON A CREATE ONLY (D108).
+        //
+        // `navMachine`'s accept reducer replaces a saved CREATE frame with a
+        // fresh one, but `lines` / `party` / `narration` / `voucherNo` are five
+        // separate useStates inside THIS component and replacing the frame
+        // object never remounted it — so a second Ctrl+A, with nothing re-keyed,
+        // moved the goods again. Driven in a browser 2026-08-31: a third press
+        // on a screen already reading `Saved  No: 7` wrote Receipt Note No. 8
+        // and took the company's voucher count 24 -> 25.
+        //
+        // ⚠️ THIS SCREEN ALREADY HELD THE ANSWER AND CONSULTED IT ONLY FOR
+        // PRINTING: `usePrintAction` reads `loadedVoucherID ?? savedID` while
+        // the accept path reads `ctxRef.current.voucherID`, which IS
+        // `loadedVoucherID` and is therefore always null on a create.
+        //
+        // ⛔ `voucherID` is the value captured SYNCHRONOUSLY above, before the
+        // request — never re-read here, for the reason the accounting screen
+        // documents at its own clear. Empty means create; an ALTER keeps its
+        // form, because a second Ctrl+A there re-PUTs the same voucher (D89) and
+        // blanking it would empty a voucher still open on screen.
+        //
+        // ⚠️ THE DATE IS KEPT, like the accounting screen's: a run of receipt
+        // notes for one delivery is all dated the same day, and re-typing it on
+        // every voucher is what an operator would have to do if this reset it.
+        if (!voucherID) {
+          setLines([emptyStockLine()]);
+          setParty("");
+          setNarration("");
+          setVoucherNo("");
+        }
       })
       .catch((err: unknown) => {
         if (err instanceof ApiError && err.status === 403) {
@@ -443,7 +473,13 @@ export function StockVoucherScreen({ snapshot }: { snapshot: NavSnapshot }) {
         <FieldRow name="Date" value={date} testId="stock-date" onChange={setDate} />
         <FieldRow
           name="No."
-          value={savedNo ?? voucherNo}
+          // ⛔ NOT `savedNo ?? voucherNo` (D108). This row names the voucher
+          // BEING KEYED, and over a cleared form the old expression showed the
+          // number of the PREVIOUS one — worse, being a controlled input pinned
+          // to `savedNo`, it then ignored anything the operator typed into it.
+          // The number the server assigned is the header's job, beside "Saved".
+          // An alter still shows the loaded number: the hydration writes it here.
+          value={voucherNo}
           testId="stock-voucher-no"
           placeholder="auto"
           onChange={setVoucherNo}

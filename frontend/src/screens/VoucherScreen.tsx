@@ -363,6 +363,37 @@ function emptyForm(): VoucherForm {
 }
 
 /**
+ * ⛔⛔ THE FORM FOR THE **NEXT** VOUCHER IN A BULK-ENTRY RUN (D108).
+ *
+ * `navMachine`'s accept reducer has always replaced a saved CREATE frame with a
+ * fresh one — *"Ctrl+A accepts the voucher and re-opens a fresh form for bulk
+ * entry"* — and `corpora/keystroke/voucher-ctrl-a-accepts.json` specifies the
+ * same thing: Ctrl+A *"returns to a fresh voucher entry screen"*. But the form
+ * is React COMPONENT state, and replacing the frame OBJECT never remounted the
+ * component, so every keyed value survived. The frame was fresh; the form was
+ * not — and a second Ctrl+A, with nothing re-keyed, posted the whole voucher
+ * again. Driven in a browser 2026-08-31: one sale keyed, **Sales No. 4 AND
+ * No. 5**, the customer billed twice and the GST output liability doubled.
+ * There is no delete path in this product; the recovery is a hand-keyed credit
+ * note, after somebody notices.
+ *
+ * ⭐ THE DATE SURVIVES, AND THAT IS A DECISION. `emptyForm()` resets it to
+ * today(), which is right for Alt+X (a cancelled voucher has no date) and wrong
+ * here: Tally keeps the date for the next voucher in a run, and a shopkeeper
+ * keying Monday's invoices on Wednesday would otherwise re-type the date on
+ * every one of them. That is why this is a VARIANT and not an edit to
+ * `emptyForm()`, whose other two call sites want today().
+ *
+ * ⚠️ THE ENTRY MODE SURVIVES TOO, and needs nothing here — it lives in
+ * `ctx.entryModeByType` (navMachine) precisely because a fresh frame carries no
+ * config, after a run of double-entry payments was silently reverted to single
+ * entry after EVERY save. Do not re-break it by moving it onto the form.
+ */
+function nextVoucherForm(prev: VoucherForm): VoucherForm {
+  return { ...emptyForm(), date: prev.date };
+}
+
+/**
  * Seed the form from a fetched VoucherView (the GET hydration path). All alter
  * seeding flows through here so buildGstVoucherRequest / the verbatim send path
  * carry REAL posting uuids and persisted GST attrs (place_of_supply, taxable,
@@ -1732,6 +1763,20 @@ function AccountingVoucherScreen({
   } | null>(null);
   // Guard against a double-submit while an accept is in flight.
   const inFlight = useRef(false);
+  /**
+   * ⛔ BUMPED ON EVERY CLEAR OF THE FORM, AND USED AS A `key` ON THE PARTY
+   * PICKER SO THE PICKER IS REMOUNTED (D108).
+   *
+   * `SelectionList` is a type-ahead that owns its `query`, and once the operator
+   * has TYPED into it a `typed` ref stops it re-seeding from the `value` prop —
+   * deliberately, so selecting a party cannot fight the keystroke that caused
+   * it. The consequence here is that clearing `form.party` underneath it leaves
+   * the previous customer's name VISIBLE in the box while the form beneath is
+   * empty, so the operator keys the next invoice believing it is addressed to
+   * somebody it is not. Remounting is the honest reset, and it is also what the
+   * pre-existing clears (Alt+X, a class change) always needed and never had.
+   */
+  const [formGen, setFormGen] = useState(0);
 
   // =========================================================================
   // ⛔⛔ RESET THE FORM WHEN A **CREATE** FRAME CHANGES CLASS.
@@ -1788,6 +1833,7 @@ function AccountingVoucherScreen({
     setSavedNo(null);
     setSavedVoucherID(null);
     setTaxResult(null);
+    setFormGen((g) => g + 1);
   }, [type, loadedVoucherID, isDraftMode]);
 
   // Hydrate the alter form from the GET endpoint when a new voucher is drilled.
@@ -2577,6 +2623,18 @@ function AccountingVoucherScreen({
           setStatus("Saved");
           setLoadedDraft(null);
           draftSeedFormRef.current = null;
+          // ⛔⛔ AND THE FORM IS CLEARED — D108's third door, and the one with
+          // the least cover. `setLoadedDraft(null)` above takes this screen OUT
+          // of draft mode while the form still holds everything the OCR
+          // prefilled, so a second Ctrl+A does not reach `acceptPurchaseDraft`
+          // at all: it falls into the ORDINARY voucher path, with no draft id,
+          // past the durable accept memo, past assertNotAlreadyOnTheBooks and
+          // past the posting claim — every one of the four layers draftAccept.ts
+          // builds against exactly this. The 2026-08-07 audit measured the
+          // duplicate here before those layers existed and it was never
+          // registered separately; it is the same defect.
+          setForm(nextVoucherForm(formRef.current));
+          setFormGen((g) => g + 1);
         })
         .catch((err: unknown) => {
           setStatus(
@@ -2677,6 +2735,29 @@ function AccountingVoucherScreen({
         // Display the server-derived split (never the JS-computed one).
         setTaxResult({ cgst: res.cgst, sgst: res.sgst, igst: res.igst });
         setStatus("Saved");
+        // ⛔⛔ THE CLEAR (D108), AND IT IS **CREATE ONLY**.
+        //
+        // What is dropped is what the operator KEYED; what is kept is what the
+        // SERVER answered — `savedNo`, `savedVoucherID`, `taxResult`, `status`.
+        // The header then reads `Saved · No: 5` over a blank, ready form, which
+        // is both a true confirmation and the invitation to key the next one.
+        // Clearing the receipt too would leave the operator with LESS
+        // confirmation than the defect gave them, which is worse.
+        //
+        // ⛔ ON AN **ALTER**, NOTHING IS CLEARED. D89 deliberately leaves an
+        // alter frame in place so a second Ctrl+A re-PUTs the same voucher_id
+        // (harmless); blanking the form there would empty a voucher the operator
+        // still has open, on a screen headed "(Alteration)".
+        //
+        // ⛔ AND IT READS THE **CAPTURED** `ctx`, NOT `ctxRef.current`. The
+        // machine may have replaced the frame long before this promise resolved
+        // — that is the whole reason `ctx` is taken synchronously above — so a
+        // mode re-read here would be the mode of whatever frame is on screen
+        // NOW, not the one this request was built for.
+        if (ctx.mode !== "alter") {
+          setForm(nextVoucherForm(formRef.current));
+          setFormGen((g) => g + 1);
+        }
       })
       .catch((err: unknown) => {
         // ⛔ NOT AN ERROR: the voucher is queued on this machine. Checked BEFORE
@@ -2741,6 +2822,7 @@ function AccountingVoucherScreen({
     setSavedNo(null);
     setSavedVoucherID(null);
     setTaxResult(null);
+    setFormGen((g) => g + 1);
     return "Voucher cancelled — the form is cleared.";
   }, []);
 
@@ -2781,7 +2863,20 @@ function AccountingVoucherScreen({
   // credit-note/debit-note were added and rendered the raw slug
   // ("credit-note Voucher") in the header.
   const title = cfg.title;
-  const displayNo = savedNo ?? form.voucherNo;
+  /**
+   * ⛔ THE NUMBER OF THE VOUCHER **ON THE FORM**, WHICH IS NOT THE NUMBER OF THE
+   * ONE JUST SAVED (D108).
+   *
+   * This read `savedNo ?? form.voucherNo`, which was harmless only while a
+   * successful create left its own voucher on screen. Now that the form clears,
+   * the same expression would print the previous invoice's number in the "No."
+   * row of the blank invoice the operator is about to key. A create that has not
+   * been saved has no number — "auto" — and an alter carries the loaded one,
+   * hydrated by formFromView. The number the server assigned is the HEADER's
+   * job, beside "Saved", where it is a receipt rather than a claim about the
+   * form.
+   */
+  const displayNo = form.voucherNo;
 
   // Draft-mode edit affordances: whether the draft's shape is rebuildable
   // (single-line, non-RCM, non-exempt), and which OCR-confidence chips to drop
@@ -2896,13 +2991,31 @@ function AccountingVoucherScreen({
           {title} Voucher{isAlter ? " (Alteration)" : ""}
         </h1>
         <div className="flex items-center gap-3">
+          {/*
+            ⛔⛔ THERE IS NO `snapshot.saved` FALLBACK HERE ANY MORE — D107.
+            It rendered the word "Saved" off the MACHINE's flag, whose own
+            declaration says what it is: *"True once this voucher frame has been
+            accepted at least once (Ctrl+A)"*. That is a fact about a KEYPRESS.
+            The reducer that sets it is pure and can never learn whether the
+            write succeeded, or even whether one was attempted — a refusal this
+            screen makes client-side sends nothing at all. Measured 2026-08-31:
+            an EMPTY Purchase voucher went `Purchase Voucher` -> **Saved** ->
+            `Error: Party A/c Name is required`, and a receipt awaiting WebAuthn
+            step-up sat reading **Saved** beside "Confirm the passkey prompt"
+            while its POST answered 403 and nothing was written.
+
+            ⭐ WHAT IT WAS FOR: a frame reset after a REAL save still had to read
+            "Saved" once `status` was cleared. `savedNo` carries that fact
+            honestly — it is set ONLY from a VoucherResponse — and it is rendered
+            immediately below, so the branch is redundant rather than
+            load-bearing. `ScreenFrame.saved` itself STAYS: it is a legitimate
+            machine fact and both keystroke.test.ts and
+            corpora/keystroke/voucher-ctrl-a-accepts.json pin it. What changed is
+            that the SCREEN stopped rendering it as a claim about the books.
+          */}
           {status ? (
             <span className="text-tally-active" role="status">
               {status}
-            </span>
-          ) : snapshot.saved ? (
-            <span className="text-tally-active" role="status">
-              Saved
             </span>
           ) : null}
           {savedNo ? (
@@ -2951,6 +3064,9 @@ function AccountingVoucherScreen({
           className={fieldActive("party-ledger") ? "" : "opacity-70"}
         >
           <SelectionList
+            // ⛔ THE REMOUNT. See `formGen` — without it a cleared form keeps
+            // showing the last party the operator TYPED.
+            key={`party-${formGen}`}
             label={cfg.partyLabel}
             options={partyNames}
             onSelect={handleSelectParty}

@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import {
   render,
   screen,
@@ -11,7 +11,7 @@ import { AppShell } from "../../app/AppShell";
 import { CompanyProvider } from "../../app/CompanyContext";
 import { createMockClient } from "../../api/mock";
 import { ApiError } from "../../api";
-import type { CoredClient } from "../../api";
+import type { CoredClient, VoucherRequest } from "../../api";
 import {
   allocationRefusal,
   allocationsFromView,
@@ -378,9 +378,30 @@ describe("an operator can split a posting across cost centres", () => {
   it("SAVES the split and the server's own refusal appears when an axis is short", async () => {
     // ⛔ THE REACHABILITY ASSERTION: the split must reach the wire. And when it is
     // partial, the SERVER's sentence must reach the screen — captured, not retyped.
-    const client = createMockClient();
+    //
+    // ⛔⛔ THIS TEST USED TO ASSERT ONLY THAT THE HEADER READ "Saved", AND IT
+    // NEVER SAVED ANYTHING. The voucher had no ACCOUNT — `openPayment` keys a
+    // particular and nothing else — so every Ctrl+A here was refused
+    // client-side with "Account is required" and not one byte left the browser.
+    // It passed anyway because the header rendered "Saved" off `snapshot.saved`,
+    // the MACHINE's keypress flag (D107): the word appeared synchronously on the
+    // keydown, before the refusal, and `waitFor` returned on its first poll. A
+    // test written to prove the split reaches the wire was reading a fact about
+    // a keystroke. Deleting that fallback is what surfaced it — so the account
+    // is keyed now, and the assertion is on the REQUEST BODY.
+    const base = createMockClient();
+    const postPaymentVoucher = vi.fn((...a: unknown[]) =>
+      (base.postPaymentVoucher as unknown as (...x: unknown[]) => unknown)(...a),
+    );
+    const client = { ...base, postPaymentVoucher } as unknown as CoredClient;
     const app = renderShell(client);
     await openPayment(app, "1000");
+    // The account the money moves THROUGH — a single-entry payment cannot be
+    // built without one, and this is the field that was missing.
+    fireEvent.change(screen.getByRole("combobox", { name: "Account" }), {
+      target: { value: "Cash" },
+    });
+    fireEvent.mouseDown(await screen.findByText("Cash"));
     fireEvent.click(
       await screen.findByLabelText("Allocate particular 1 to cost centres"),
     );
@@ -391,8 +412,17 @@ describe("an operator can split a posting across cost centres", () => {
     fireEvent.click(screen.getByTestId("alloc:0-rest:0"));
 
     fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    // ⛔ THE WIRE, NOT THE WORD. The split is on the body the server accepted.
+    await waitFor(() => expect(postPaymentVoucher).toHaveBeenCalledTimes(1), {
+      timeout: 4000,
+    });
+    const [, req] = postPaymentVoucher.mock.calls[0]! as [string, VoucherRequest];
+    expect(req.cost_allocations).toBeTruthy();
+    expect(req.cost_allocations).toHaveLength(1);
+    expect(req.cost_allocations![0]!.amount).toBe("1000.0000");
+    // ...and only THEN is the header entitled to say so.
     await waitFor(
-      () => expect(screen.getByRole("status").textContent).toMatch(/Saved|No:/),
+      () => expect(screen.getByRole("status").textContent).toMatch(/Saved/),
       { timeout: 4000 },
     );
   });

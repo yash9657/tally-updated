@@ -769,6 +769,16 @@ describe("⛔ D81: a refused accept NAMES the masters it had already minted", ()
     });
     fireEvent.keyDown(app, { key: "F8" });
     await screen.findByTestId("gst-panel");
+    await keyTheInvoice();
+  }
+
+  /**
+   * The keying alone, on a sales form that is already open — the party is picked
+   * from the chart rather than seeded, so this can be called a second time.
+   * Needed because a successful CREATE now CLEARS the form (D108): an arm that
+   * wants two accepts on the wire has to key two invoices, which is bulk entry.
+   */
+  async function keyTheInvoice() {
     fireEvent.mouseDown(await screen.findByText("Acme Traders"));
     fireEvent.change(screen.getByTestId("gst-taxable"), { target: { value: "10000" } });
     fireEvent.change(screen.getByTestId("gst-rate"), { target: { value: "18" } });
@@ -834,6 +844,15 @@ describe("⛔ D81: a refused accept NAMES the masters it had already minted", ()
     fireEvent.keyDown(app, { key: "a", ctrlKey: true });
     await waitFor(() => expect(spies.postSalesVoucher).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.getByRole("status").textContent).toMatch(/Saved/));
+
+    // ⛔ THE INVOICE IS RE-KEYED, AND THAT IS NOT BOILERPLATE — IT IS D108.
+    // A successful CREATE now clears the form, because a second Ctrl+A on a
+    // voucher already on the books used to post it a SECOND time (one sale
+    // keyed, two tax invoices). This arm needs a second accept that reaches the
+    // wire, so it has to key a second invoice — which is bulk entry, and is
+    // exactly what an operator does. The scenario is unchanged: the four
+    // masters already exist, so this accept mints nothing.
+    await keyTheInvoice();
 
     spies.createLedger!.mockClear();
     spies.postSalesVoucher!.mockImplementationOnce(() =>

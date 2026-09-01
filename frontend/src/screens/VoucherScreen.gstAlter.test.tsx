@@ -5,6 +5,7 @@ import {
   fireEvent,
   cleanup,
   waitFor,
+  act,
 } from "@testing-library/react";
 import { AppShell } from "../app/AppShell";
 import { CompanyProvider } from "../app/CompanyContext";
@@ -102,6 +103,25 @@ async function keySale(app: HTMLElement, taxable: string, rate: string, hsn: str
   const hsnField = screen.queryByTestId("gst-hsn");
   if (hsnField) fireEvent.change(hsnField, { target: { value: hsn } });
   fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+}
+
+/**
+ * ⛔ LET THE ACCEPT CHAIN SETTLE, so "nothing was posted" is a MEASUREMENT and
+ * not a race. A `waitFor` cannot be used to assert an ABSENCE — it returns on
+ * its first successful poll, before the request it is supposed to prove did not
+ * happen would have happened. This drains microtasks across three macrotask
+ * turns, which is comfortably more than the chain needs: `createMockClient`
+ * resolves without timers, and the duplicate POST this test is about lands on
+ * the first turn (measured — reverting the fix turns the assertion below red
+ * with `2`, the number the browser measured in psql).
+ */
+async function settle() {
+  for (let i = 0; i < 3; i++) {
+    // eslint-disable-next-line no-await-in-loop
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+  }
 }
 
 /** Day Book -> the row -> Enter, the way an operator drills. */
@@ -549,5 +569,167 @@ describe("⛔ D89: the refusal's own remedy must not mint a second invoice", () 
       expect(spies.postSalesVoucher).toHaveBeenCalledTimes(2),
     );
     expect(spies.alterSalesVoucher).not.toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // ⛔⛔ D108 — AND IT IS THE CONTROL ABOVE THAT MAKES THIS ONE READABLE.
+  //
+  // The control proves a RE-KEYED second accept posts a second invoice, which
+  // is bulk entry and is correct. It says nothing about an UNTOUCHED one,
+  // because `keySale` sets every field explicitly and so is green either way —
+  // and that gap is the whole defect. Driven in a browser 2026-08-31 on scratch
+  // book 7c3ab7e9: F8, Acme Traders, taxable 10000, rate 18, HSN 7326, Ctrl+A,
+  // Ctrl+A, **nothing re-keyed between the presses** -> Sales No. 4 AND No. 5,
+  // each 10,000.00 + 900.00 CGST + 900.00 SGST. One sale keyed, two tax
+  // invoices on the books, the customer billed twice and the GST output
+  // liability doubled — and there is no delete path in this product, so the
+  // recovery is a hand-keyed credit note after somebody notices.
+  //
+  // ⛔ THE TWO CASES ARE PINNED SIDE BY SIDE ON PURPOSE. A fix written as
+  // "never accept the same frame twice" turns this test green and the control
+  // above red; a fix that clears the form on a successful create satisfies both.
+  // -------------------------------------------------------------------------
+  it("⛔ D108: an UNCHANGED second Ctrl+A posts NOTHING — one sale keyed is one invoice", async () => {
+    const base = createMockClient({ seed: false });
+    await seedParty(base);
+    const { client, spies } = spyClient(base);
+    renderShell(client);
+    const app = screen.getByRole("application");
+
+    await keySale(app, "10000", "18", "7326");
+    await waitFor(() =>
+      expect(spies.postSalesVoucher).toHaveBeenCalledTimes(1),
+    );
+
+    // ---- 1. THE RECEIPT IS ON SCREEN, and it is the SERVER's number. This is
+    // the half that must SURVIVE the clear: an operator shown nothing at all
+    // after a save has less confirmation than the defect gave them.
+    await waitFor(() =>
+      expect(screen.getByTestId("voucher-no").textContent).toMatch(/No: \S+/),
+    );
+
+    // ---- 2. ⛔⛔ THE PRESS THAT USED TO BILL THE CUSTOMER TWICE. Nothing is
+    // re-keyed between the presses; this is one keystroke and nothing else.
+    fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    await settle();
+    // ⛔ NOT "at most 2" — EXACTLY 1, and this is the assertion that goes red
+    // with the number the browser measured. The oracle there was the voucher
+    // count in psql, and it rose by one per keyed sale.
+    expect(spies.postSalesVoucher).toHaveBeenCalledTimes(1);
+    expect(spies.alterSalesVoucher).not.toHaveBeenCalled();
+    // The refusal names the field the blank form is missing, which is the
+    // honest answer to Ctrl+A on an empty voucher — and is D107's shape too.
+    expect(screen.getByRole("status").textContent).toMatch(/is required/);
+
+    // ---- 3. ⛔ AND HERE IS WHY. `navMachine`'s accept reducer has always
+    // replaced the create frame with a FRESH one — "Ctrl+A accepts the voucher
+    // and re-opens a fresh form for bulk entry", which is what
+    // corpora/keystroke/voucher-ctrl-a-accepts.json specifies. The form is React
+    // component state, so replacing the frame object never remounted it and
+    // every keyed value survived. The frame was fresh; the form was not.
+    expect(
+      (screen.getByTestId("gst-taxable") as HTMLInputElement).value,
+    ).toBe("0.0000");
+    expect((screen.getByTestId("gst-rate") as HTMLInputElement).value).toBe("");
+    expect((screen.getByTestId("gst-hsn") as HTMLInputElement).value).toBe("");
+    // ⚠️ THE PARTY BOX IS READ OFF THE DOM, NOT OFF THE FORM. SelectionList is a
+    // type-ahead holding its own `query`, so a form field cleared underneath it
+    // can still SHOW the previous party — which would leave the operator keying
+    // the next invoice under the last customer's name.
+    expect(
+      (screen.getByRole("combobox", { name: "Party A/c Name" }) as HTMLInputElement)
+        .value,
+    ).toBe("");
+  });
+
+  // -------------------------------------------------------------------------
+  // ⛔ THE DATE SURVIVES THE CLEAR, AND THAT IS A DECISION, NOT AN OVERSIGHT.
+  //
+  // `emptyForm()` resets the date to today(), which is right for Alt+X (a
+  // cancelled voucher has no date) and WRONG here: Tally keeps the date for the
+  // next voucher in a run, and a shopkeeper keying Monday's invoices on
+  // Wednesday would otherwise re-type the date on every one of them. The entry
+  // MODE survives for the same reason and already did — it lives in
+  // ctx.entryModeByType because a fresh frame carries no config (a run of
+  // double-entry payments used to revert to single entry after every save).
+  // -------------------------------------------------------------------------
+  it("⛔ D108: the keyed DATE survives the clear, so a back-dated run stays back-dated", async () => {
+    const base = createMockClient({ seed: false });
+    await seedParty(base);
+    const { client, spies } = spyClient(base);
+    renderShell(client);
+    const app = screen.getByRole("application");
+
+    fireEvent.keyDown(app, { key: "F8" });
+    fireEvent.change(await screen.findByTestId("voucher-date"), {
+      target: { value: "2026-01-15" },
+    });
+    fireEvent.mouseDown(await screen.findByText("Acme Traders"));
+    fireEvent.change(screen.getByTestId("gst-taxable"), {
+      target: { value: "10000" },
+    });
+    fireEvent.change(screen.getByTestId("gst-rate"), { target: { value: "18" } });
+    fireEvent.change(screen.getByTestId("gst-hsn"), { target: { value: "7326" } });
+    fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+
+    await waitFor(() =>
+      expect(spies.postSalesVoucher).toHaveBeenCalledTimes(1),
+    );
+    const [, req] = spies.postSalesVoucher!.mock.calls[0]!;
+    expect((req as { voucher_date: string }).voucher_date).toBe("2026-01-15");
+
+    // The next voucher in the run opens on the SAME day.
+    await waitFor(() =>
+      expect(
+        (screen.getByTestId("voucher-date") as HTMLInputElement).value,
+      ).toBe("2026-01-15"),
+    );
+  });
+
+  // -------------------------------------------------------------------------
+  // ⛔⛔ AND NOT ON AN ALTER. THIS IS D89's GUARD AND IT MUST NOT BE WEAKENED.
+  //
+  // The success handler is shared between the two modes. On an ALTER the
+  // machine deliberately leaves the frame in place — a second Ctrl+A re-PUTs
+  // the SAME voucher_id, which is harmless — so clearing the form there would
+  // blank a voucher the operator is still editing, on a screen whose heading
+  // says "(Alteration)". The clear is conditioned on the edit context CAPTURED
+  // SYNCHRONOUSLY before the request, never on a value re-read after the
+  // promise resolves.
+  // -------------------------------------------------------------------------
+  it("⛔ CONTROL: a saved ALTER keeps its form — the voucher is still open", async () => {
+    const base = createMockClient({ seed: false });
+    await seedParty(base);
+    const { client, spies } = spyClient(base);
+    renderShell(client);
+    const app = screen.getByRole("application");
+
+    await keySale(app, "10000", "18", "7326");
+    await waitFor(() => expect(spies.postSalesVoucher).toHaveBeenCalledTimes(1));
+    const posted = await spies.postSalesVoucher!.mock.results[0]!.value;
+
+    await drill(app, posted.voucher_no);
+    await waitFor(() =>
+      expect((screen.getByTestId("gst-rate") as HTMLInputElement).value).toBe(
+        "18.0000",
+      ),
+    );
+    fireEvent.keyDown(app, { key: "a", ctrlKey: true });
+    await waitFor(() =>
+      expect(spies.alterSalesVoucher).toHaveBeenCalledTimes(1),
+    );
+    await settle();
+
+    // The voucher is STILL ON THE FORM, and the frame is still the one it was
+    // altering.
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toMatch(
+      /\(Alteration\)/,
+    );
+    expect(
+      (screen.getByTestId("gst-taxable") as HTMLInputElement).value,
+    ).toBe("10000.0000");
+    expect((screen.getByTestId("gst-rate") as HTMLInputElement).value).toBe(
+      "18.0000",
+    );
   });
 });
