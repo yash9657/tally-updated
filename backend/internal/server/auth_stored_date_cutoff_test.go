@@ -1201,3 +1201,136 @@ func TestExistingVouchersNamedByRequestIgnoresReads(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// THE COMPANY-WIDE YEAR-END LOCK (migration 0089) MUST CLOSE THE SAME DOORS
+// ---------------------------------------------------------------------------
+
+// aclCloseBooks locks the company's books through `through`.
+func aclCloseBooks(t *testing.T, s *Server, base, ownerTok, through string) {
+	t.Helper()
+	rec, _ := aclRequest(t, s, http.MethodPost, base+"/books-closure", ownerTok,
+		map[string]any{"closed_through": through})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("close books through %q = %d, want 200 (%s)", through, rec.Code, rec.Body.String())
+	}
+}
+
+// TestYearEndLockRefusesADeleteOutOfAClosedYear is the round-3 attack, aimed at
+// the OTHER lock.
+//
+// ⛔⛔ THIS IS THE DEFECT THE WIRE DRIVE FOUND AND THE UNIT TESTS COULD NOT.
+// authz.Evaluate was correct from the first commit — a closed year denied every
+// write it was ASKED about. But the middleware only READS the stored voucher
+// date when `level.BackdatedCutoff != nil`, an optimisation whose whole
+// argument is "at a company that has locked no period the stored date changes
+// no decision". A company-wide year-end lock is a company that HAS locked a
+// period while every level's own cutoff is still nil — so the read was skipped,
+// StoredVoucherDate arrived nil, cutoffDeny returned early on a nil date, and
+//
+//	DELETE /v1/companies/{C}/vouchers/{id}   -> 200
+//
+// removed a voucher from a CLOSED year. Measured on the wire before the fix.
+//
+// ⚠️ THE LESSON IS ABOUT WHERE A FEATURE'S EDGES ARE. The new lock reused a
+// hardened enforcement path and inherited its correctness — but NOT the gate in
+// front of it, which was written when there was only one lock to gate on. A
+// second source of truth for "is a period locked?" needs every reader of the
+// first one to be found, and a unit test that constructs the PDP request by
+// hand cannot notice a caller that never constructs it.
+func TestYearEndLockRefusesADeleteOutOfAClosedYear(t *testing.T) {
+	s := payrollServer(t)
+	f := newSpellingFixture(t, s)
+
+	const no = "YEAR-END-DELETE-IN-LOCK"
+	vid := postJournal(t, s, f, "2026-05-01", no)
+
+	// ⛔ NO PER-LEVEL CUTOFF IS SET. That is the whole point: the only lock in
+	// force is the company's year-end, which is what a real year-end looks like.
+	aclCloseBooks(t, s, f.base, f.ownerTok, "2026-06-30")
+
+	// ------------------------------------------------------------------ CONTROL
+	rec, _ := aclRequest(t, s, http.MethodPost, f.base+"/vouchers/journal", f.ownerTok,
+		f.journal("2026-05-01", "YEAR-END-DELETE-CONTROL"))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("CONTROL: POST /vouchers/journal dated inside a closed year = %d, want 403 (%s)",
+			rec.Code, rec.Body.String())
+	}
+
+	// ------------------------------------------------------------------- ATTACK
+	rec, _ = aclRequest(t, s, http.MethodDelete, f.base+"/vouchers/"+vid, f.ownerTok, nil)
+	_, version, found := storedVoucherHead(t, s, f.base, vid, f.ownerTok)
+	inBooks := dayBookHas(t, s, f.base, no, f.ownerTok)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("ATTACK: DELETE of a voucher dated 2026-05-01 with the books CLOSED through "+
+			"2026-06-30 = %d, want 403 — a voucher was removed from a closed year. The head is now "+
+			"%s and the Day Book shows it: %v (%s)", rec.Code,
+			map[bool]string{true: "STILL PRESENT", false: "GONE FROM THE BOOKS"}[found],
+			inBooks, rec.Body.String())
+	}
+	// ⛔ ASSERT THE BOOKS TWICE, through two independent reads — a 403 that
+	// wrote the tombstone anyway is the failure this pair exists to catch.
+	if !found {
+		t.Errorf("after a refused DELETE the voucher is GONE from GET /vouchers/%s", vid)
+	}
+	if version != 1 {
+		t.Errorf("after a refused DELETE the voucher is at version %d, want 1", version)
+	}
+	if !inBooks {
+		t.Errorf("after a refused DELETE the Day Book no longer shows %s", no)
+	}
+}
+
+// TestYearEndLockRefusesAnAlterThatLiftsAVoucherOutOfAClosedYear is the other
+// door: restating a voucher with a date in the OPEN year empties the closed one
+// without ever sending a date the lock would refuse.
+func TestYearEndLockRefusesAnAlterThatLiftsAVoucherOutOfAClosedYear(t *testing.T) {
+	s := payrollServer(t)
+	f := newSpellingFixture(t, s)
+
+	const no = "YEAR-END-ALTER-OUT"
+	vid := postJournal(t, s, f, "2026-05-01", no)
+	aclCloseBooks(t, s, f.base, f.ownerTok, "2026-06-30")
+
+	// Every date IN the request is comfortably after the lock; only the date
+	// already in the books is inside it.
+	rec, _ := aclRequest(t, s, http.MethodPut, f.base+"/vouchers/journal/"+vid, f.ownerTok,
+		f.journal("2026-08-20", no))
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("ALTER lifting a voucher out of a closed year = %d, want 403 — the request "+
+			"carries no date the lock would refuse, so only the STORED date can catch it (%s)",
+			rec.Code, rec.Body.String())
+	}
+	if got := aclVoucherDate(t, s, f.base, vid, f.ownerTok); got != "2026-05-01" {
+		t.Errorf("the voucher moved to %s behind the refusal; it must still be 2026-05-01", got)
+	}
+}
+
+// TestYearEndLockStillAllowsEditingTheOPENYear is the CONTROL, and without it
+// every assertion above is satisfied by a lock that refuses all editing
+// forever. A closed year must not freeze the year the business is trading in.
+func TestYearEndLockStillAllowsEditingTheOPENYear(t *testing.T) {
+	s := payrollServer(t)
+	f := newSpellingFixture(t, s)
+
+	vid := postJournal(t, s, f, "2026-09-10", "YEAR-END-OPEN-EDIT")
+	aclCloseBooks(t, s, f.base, f.ownerTok, "2026-06-30")
+
+	rec, _ := aclRequest(t, s, http.MethodPut, f.base+"/vouchers/journal/"+vid, f.ownerTok,
+		f.journal("2026-09-20", "YEAR-END-OPEN-EDIT"))
+	if rec.Code != http.StatusOK {
+		t.Errorf("ALTER of a voucher wholly inside the OPEN year = %d, want 200 (%s)",
+			rec.Code, rec.Body.String())
+	}
+	rec, _ = aclRequest(t, s, http.MethodDelete, f.base+"/vouchers/"+vid, f.ownerTok, nil)
+	if rec.Code != http.StatusOK {
+		t.Errorf("DELETE of a voucher wholly inside the OPEN year = %d, want 200 — a year-end "+
+			"lock that freezes the current year would stop the business trading (%s)",
+			rec.Code, rec.Body.String())
+	}
+	rec, _ = aclRequest(t, s, http.MethodPost, f.base+"/vouchers/journal", f.ownerTok,
+		f.journal("2026-09-25", "YEAR-END-OPEN-CREATE"))
+	if rec.Code != http.StatusCreated {
+		t.Errorf("CREATE in the OPEN year = %d, want 201 (%s)", rec.Code, rec.Body.String())
+	}
+}

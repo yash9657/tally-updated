@@ -1334,6 +1334,11 @@ func (s *Server) routes() {
 
 		// GST.
 		r.Get("/gstr1", s.handleGSTR1)
+		// YEAR-END CLOSURE (0089). Two-touch: the routeAction arm for
+		// "/books-closure" in auth_middleware.go is the other half.
+		r.Get("/books-closure", s.handleGetBooksClosure)
+		r.Post("/books-closure", s.handleCloseBooks)
+		r.Delete("/books-closure", s.handleReopenBooks)
 		r.Get("/gstr3b", s.handleGSTR3B)
 		// THE ANNUAL RECONCILIATION (T12). Both touches of the two-touch rule:
 		// this mount, and `case "/gstr9"` in reportName() in auth_middleware.go.

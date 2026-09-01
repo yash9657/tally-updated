@@ -296,8 +296,16 @@ func (s *Server) companyAuthMiddleware(next http.Handler) http.Handler {
 		// existingVouchersNamedByRequest returns no names and no transaction is
 		// opened at all. `level` is already in hand here (it was loaded two
 		// statements ago for the rule evaluation), so the gate itself is free.
+		//
+		// ⛔ THE GATE ASKS THE LEVEL, IT DOES NOT READ THE FIELD. There are now
+		// TWO ways a period can be locked — the level's own cutoff and the
+		// company's year-end (migration 0089) — and `level.BackdatedCutoff !=
+		// nil` is blind to the second. A company that has closed a year while
+		// every level's cutoff is still nil is the ORDINARY case, and skipping
+		// the read there let a DELETE (no body, so no date anywhere in the
+		// request) remove a voucher from a closed year with a 200.
 		var storedDate *time.Time
-		if level.BackdatedCutoff != nil {
+		if level.HasCutoff() {
 			storedDate = s.storedCutoffDateForRequest(r, companyID, act)
 		}
 
@@ -1276,6 +1284,27 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 	// body carries no date, and a policy switch is not a dated document).
 	case method == http.MethodPut && (rest == "" || rest == "/"):
 		return authz.Alter, "company", "", true
+
+	// YEAR-END CLOSURE (0089): read it as a Display, set/clear it as an Alter,
+	// both over the SAME `company` token the F11 feature settings use.
+	//
+	// ⛔ ONE TOKEN FOR THE READ AND THE WRITE, for the reason the master
+	// read/write pair below gives: an ACL rule must not be able to govern the
+	// read and miss the write. And `company` specifically because closing a
+	// year IS company configuration — see handler_close_year.go's header for
+	// why neither report:NAME nor a fresh token would be safe.
+	//
+	// The writes are Alter, so they take the Owner level's WebAuthn step-up.
+	// They do NOT take the back-dated cutoff — voucherDateFromRequest returns
+	// nil here — and that is LOAD-BEARING for the DELETE: a year-end lock that
+	// applied to the request lifting the year-end lock could never be lifted.
+	case rest == "/books-closure":
+		switch method {
+		case http.MethodGet:
+			return authz.Display, "company", "", true
+		case http.MethodPost, http.MethodDelete:
+			return authz.Alter, "company", "", true
+		}
 
 	// WHOLE-COMPANY BACKUP (T14): a Display over its OWN `backup` token.
 	//
