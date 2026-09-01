@@ -173,11 +173,34 @@ function today(): string {
  * GET endpoint returns canonical "D"/"C" dr_cr which we pass through verbatim.
  */
 function postingsFromView(view: VoucherView): PostingRequest[] {
-  return view.postings.map((p) => ({
-    ledger_id: p.ledger_id,
-    dr_cr: p.dr_cr,
-    amount: p.amount,
-  }));
+  return view.postings.map((p) => {
+    const req: PostingRequest = {
+      ledger_id: p.ledger_id,
+      dr_cr: p.dr_cr,
+      amount: p.amount,
+    };
+    // ⛔⛔ T8's THREE VALUES ARE CARRIED BACK, AND THIS IS THE SEVENTH TIME
+    // THIS EXACT LINE HAS HAD TO BE WRITTEN. An alter RE-STATES: the server
+    // rewrites `posting` from the request body, so a rebuild that lists three
+    // fields by hand silently drops everything added after it was written.
+    // Here that turns a $1,000 bill into a ₹83,651.23 bill on a narration
+    // edit — and NOTHING refuses it, because the voucher still balances in
+    // base and the Balance Sheet does not move by a paisa.
+    //
+    // ⚠️ ALL THREE OR NONE, keyed off the currency: the server's all-or-none
+    // CHECK refuses a partial triple, so a `rate` emitted beside an absent
+    // `currency_id` would 422 a request that looks complete on this side.
+    //
+    // ⚠️ AND `rate` IS PASSED THROUGH UNTOUCHED. It is a ten-decimal rate, not
+    // money; re-formatting it with the fixed-4 helpers this file uses for
+    // `amount` would hand back 83.6512 and reprice the bill.
+    if (p.currency_id) {
+      req.currency_id = p.currency_id;
+      req.foreign_amount = p.foreign_amount ?? "";
+      req.rate = p.rate ?? "";
+    }
+    return req;
+  });
 }
 
 /** The form state a voucher frame edits. */

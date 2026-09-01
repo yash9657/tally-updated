@@ -2015,19 +2015,49 @@ func (s *Server) handleCreateStockItem(w http.ResponseWriter, r *http.Request) {
 // Vouchers
 // --------------------------------------------------------------------------
 
+// postingReq is one double-entry line.
+//
+// T8's THREE FOREX VALUES are all-or-none and all three are STRINGS on the
+// wire. `amount` stays the BASE amount and stays authoritative — the foreign
+// figures sit beside it and never instead of it.
+//
+// ⛔ `rate` IS NOT MONEY AND MUST NOT BE PARSED AS MONEY. It is base units per
+// one foreign unit, carried to TEN decimals (migration 0080's NUMERIC(19,10)),
+// where every other number on this body is fixed-4. The client has a distinct
+// `Rate` type for exactly this reason: its `parseFixed4` TRUNCATES the fifth
+// decimal onward, so a rate fed through the money parser silently becomes a
+// different rate — and one that round-trips through its own type perfectly.
+//
+// ⚠️ EMPTY MEANS BASE, for all three together, and that is what every voucher
+// keyed before this feature sends. The SEMANTICS are not re-checked here:
+// ledger.forexTriple.validate owns the all-or-none rule and migration 0080's
+// CHECK is the authority behind it. A second copy in this layer is a copy that
+// drifts, and the drifted one always wins for whichever caller reaches it
+// first.
 type postingReq struct {
-	LedgerID string `json:"ledger_id"`
-	DrCr     string `json:"dr_cr"`
-	Amount   string `json:"amount"`
+	LedgerID      string `json:"ledger_id"`
+	DrCr          string `json:"dr_cr"`
+	Amount        string `json:"amount"`
+	CurrencyID    string `json:"currency_id"`
+	ForeignAmount string `json:"foreign_amount"`
+	Rate          string `json:"rate"`
 }
 
+// billAllocationReq carries the same triple as postingReq, and it must:
+// reporting.Outstandings reads bill_allocation, NOT posting, so a foreign bill
+// whose currency arrived only on the posting would be a base bill on the ageing
+// report. Its `rate` is the bill's HISTORICAL rate, which is the figure a
+// settlement differences against to realise a gain or loss.
 type billAllocationReq struct {
-	LedgerID string `json:"ledger_id"`
-	RefName  string `json:"ref_name"`
-	RefType  string `json:"ref_type"`
-	DrCr     string `json:"dr_cr"`
-	Amount   string `json:"amount"`
-	DueDate  string `json:"due_date"`
+	LedgerID      string `json:"ledger_id"`
+	RefName       string `json:"ref_name"`
+	RefType       string `json:"ref_type"`
+	DrCr          string `json:"dr_cr"`
+	Amount        string `json:"amount"`
+	DueDate       string `json:"due_date"`
+	CurrencyID    string `json:"currency_id"`
+	ForeignAmount string `json:"foreign_amount"`
+	Rate          string `json:"rate"`
 }
 
 type gstLineReq struct {
@@ -2774,26 +2804,67 @@ func (s *Server) handleGetVoucher(w http.ResponseWriter, r *http.Request) {
 // voucherFullJSON serialises a fetched voucher to the documented GET shape:
 // money as fixed-4 strings, dr_cr canonical "D"/"C", optional uuids rendered as
 // "" when nil, and postings/bill_allocations as nested arrays.
+// addForexJSON adds T8's three values to a posting or bill-allocation row of the
+// GET body — and adds them ONLY when the row is foreign.
+//
+// ⛔⛔ THIS FUNCTION IS THE WHOLE OF WHETHER AN ALTER PRESERVES A FOREIGN
+// VOUCHER. `posting` is rewritten from the request body on every version, so a
+// client rebuilding an alter from this GET can only send back what this GET
+// gave it. Emitting the amount and not the currency is exactly the defect
+// `cost_allocations` above records — the Go struct right, the wire not — and
+// its cost here is that editing the narration of a $1,000 invoice rewrites it
+// as a rupee invoice, with nothing refusing it.
+//
+// ⚠️ OMITTED ON A BASE ROW RATHER THAN EMITTED EMPTY, and that is the opposite
+// of the rule `cost_allocations` and `fulfilments` follow two fields down. The
+// difference is real: an empty ARRAY is the honest answer to "which splits does
+// this voucher have?", because none is a fact about the voucher. A currency,
+// though, is all-or-none — `"currency_id": ""` is not "no currency", it is a
+// two-of-three triple that ledger.forexTriple.validate refuses, so a client
+// echoing this body back verbatim would be 422 on every base voucher in the
+// book. Absent is the only spelling that round-trips.
+//
+// ⛔ `rate` AT TEN DECIMALS, NOT StringFixed(4). Money is fixed-4 and a rate is
+// not money; a fixed-4 here would hand the client 83.6512 and the client would
+// send 83.6512 back, so the ordinary round trip would silently reprice the
+// bill. `currency` (the code) is display only and is never read back — the id
+// is the fact.
+func addForexJSON(row map[string]any, currencyID uuid.UUID, code string,
+	foreign, rate decimal.Decimal,
+) {
+	if currencyID == uuid.Nil {
+		return
+	}
+	row["currency_id"] = currencyID.String()
+	row["currency"] = code
+	row["foreign_amount"] = foreign.StringFixed(4)
+	row["rate"] = rate.StringFixed(10)
+}
+
 func voucherFullJSON(v ledger.VoucherView) map[string]any {
 	postings := make([]map[string]any, 0, len(v.Postings))
 	for _, p := range v.Postings {
-		postings = append(postings, map[string]any{
+		row := map[string]any{
 			"ledger_id": p.LedgerID.String(),
 			"ledger":    p.LedgerName,
 			"dr_cr":     p.DrCr,
 			"amount":    p.Amount.StringFixed(4),
-		})
+		}
+		addForexJSON(row, p.CurrencyID, p.CurrencyCode, p.ForeignAmount, p.Rate)
+		postings = append(postings, row)
 	}
 	bills := make([]map[string]any, 0, len(v.BillAllocations))
 	for _, b := range v.BillAllocations {
-		bills = append(bills, map[string]any{
+		row := map[string]any{
 			"ledger_id": b.LedgerID.String(),
 			"ref_name":  b.RefName,
 			"ref_type":  b.RefType,
 			"dr_cr":     b.DrCr,
 			"amount":    b.Amount.StringFixed(4),
 			"due_date":  b.DueDate,
-		})
+		}
+		addForexJSON(row, b.CurrencyID, b.CurrencyCode, b.ForeignAmount, b.Rate)
+		bills = append(bills, row)
 	}
 	// The item grid. Built by inventoryLinesJSON (handler_voucher_inventory.go),
 	// which is where the reasoning about the round trip lives.
@@ -3056,6 +3127,64 @@ func writeVoucherEditError(w http.ResponseWriter, err error) {
 
 // buildVoucherInput converts a decoded voucherReq into a ledger.VoucherInput,
 // writing a 400 and returning ok=false on any malformed field.
+// buildForex parses T8's three wire values into the domain's three.
+//
+// ⛔ IT DECIDES NOTHING ABOUT ALL-OR-NONE. Whether a two-of-three triple is
+// legal is ledger.forexTriple.validate's question and migration 0080's CHECK is
+// the authority; this function only turns strings into values and reports a
+// string that is not a number. A second copy of the all-or-none rule here would
+// be a copy that drifts, and the drifted one always wins for whichever caller
+// reaches it first — the same reasoning costAllocationReq and fulfilmentReq
+// already record.
+//
+// ⛔ decimal.NewFromString, NEVER strconv.ParseFloat. Float parsing ACCEPTS
+// "NaN" and "Inf", which blow up inside the decimal package as a panic the
+// Recoverer turns into an opaque 500 — and it would round a rate's tenth
+// decimal away, which is the one digit this whole type exists to keep.
+//
+// ⚠️ AND THE ZERO UUID IS REFUSED EXPLICITLY. uuid.Parse ACCEPTS the all-zeros
+// string, and as a "present" currency id it would satisfy the all-or-none rule,
+// reach the composite foreign key and be refused by constraint name — or, on a
+// path with no key, mark a rupee posting foreign against a currency that does
+// not exist.
+func buildForex(w http.ResponseWriter, currencyID, foreignAmount, rate, where string) (
+	uuid.UUID, decimal.Decimal, decimal.Decimal, bool,
+) {
+	var (
+		cur     uuid.UUID
+		foreign decimal.Decimal
+		r       decimal.Decimal
+	)
+	if currencyID != "" {
+		parsed, err := uuid.Parse(currencyID)
+		if err != nil || parsed == uuid.Nil {
+			writeError(w, http.StatusBadRequest,
+				"currency_id must be the uuid of a currency master"+where)
+			return cur, foreign, r, false
+		}
+		cur = parsed
+	}
+	if foreignAmount != "" {
+		parsed, err := decimal.NewFromString(foreignAmount)
+		if err != nil {
+			writeError(w, http.StatusBadRequest,
+				"foreign_amount must be a decimal number"+where)
+			return cur, foreign, r, false
+		}
+		foreign = parsed
+	}
+	if rate != "" {
+		parsed, err := decimal.NewFromString(rate)
+		if err != nil {
+			writeError(w, http.StatusBadRequest,
+				"rate must be a decimal number (base units per ONE foreign unit)"+where)
+			return cur, foreign, r, false
+		}
+		r = parsed
+	}
+	return cur, foreign, r, true
+}
+
 func buildVoucherInput(w http.ResponseWriter, class ledger.Class, req voucherReq) (ledger.VoucherInput, bool) {
 	in := ledger.VoucherInput{
 		Class:       class,
@@ -3092,7 +3221,7 @@ func buildVoucherInput(w http.ResponseWriter, class ledger.Class, req voucherReq
 		writeError(w, http.StatusBadRequest, "invalid item_ledger_id")
 		return in, false
 	}
-	for _, p := range req.Postings {
+	for i, p := range req.Postings {
 		lid, err := uuid.Parse(p.LedgerID)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "invalid posting ledger_id")
@@ -3103,13 +3232,21 @@ func buildVoucherInput(w http.ResponseWriter, class ledger.Class, req voucherReq
 			writeError(w, http.StatusBadRequest, "invalid posting amount")
 			return in, false
 		}
+		cur, foreign, rate, ok := buildForex(w, p.CurrencyID, p.ForeignAmount, p.Rate,
+			fmt.Sprintf(" on posting %d", i+1))
+		if !ok {
+			return in, false
+		}
 		in.Postings = append(in.Postings, ledger.PostingInput{
-			LedgerID: lid,
-			DrCr:     ledger.DrCr(p.DrCr),
-			Amount:   amt,
+			LedgerID:      lid,
+			DrCr:          ledger.DrCr(p.DrCr),
+			Amount:        amt,
+			CurrencyID:    cur,
+			ForeignAmount: foreign,
+			Rate:          rate,
 		})
 	}
-	for _, b := range req.BillAllocations {
+	for i, b := range req.BillAllocations {
 		lid, err := uuid.Parse(b.LedgerID)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "invalid bill allocation ledger_id")
@@ -3120,13 +3257,21 @@ func buildVoucherInput(w http.ResponseWriter, class ledger.Class, req voucherReq
 			writeError(w, http.StatusBadRequest, "invalid bill allocation amount")
 			return in, false
 		}
+		cur, foreign, rate, ok := buildForex(w, b.CurrencyID, b.ForeignAmount, b.Rate,
+			fmt.Sprintf(" on bill allocation %d", i+1))
+		if !ok {
+			return in, false
+		}
 		in.BillAllocations = append(in.BillAllocations, ledger.BillAllocationInput{
-			LedgerID: lid,
-			RefName:  b.RefName,
-			RefType:  ledger.RefType(b.RefType),
-			DrCr:     ledger.DrCr(b.DrCr),
-			Amount:   amt,
-			DueDate:  b.DueDate,
+			LedgerID:      lid,
+			RefName:       b.RefName,
+			RefType:       ledger.RefType(b.RefType),
+			DrCr:          ledger.DrCr(b.DrCr),
+			Amount:        amt,
+			DueDate:       b.DueDate,
+			CurrencyID:    cur,
+			ForeignAmount: foreign,
+			Rate:          rate,
 		})
 	}
 	for i, l := range req.Inventory {

@@ -3139,6 +3139,42 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
    * Dr/Cr totals AND a parallel set of REAL-ledger_id PostingViews (for the
    * GET /vouchers/{id} hydration path). Canonicalize dr_cr to "D"/"C".
    */
+  /**
+   * Echo T8's three forex values onto a posting or bill-allocation VIEW —
+   * present only when the row is foreign, exactly as the live GET does
+   * (server.go's addForexJSON).
+   *
+   * ⛔⛔ ABSENT ON A BASE ROW, NEVER EMPTY-STRINGED. `currency_id: ""` is not
+   * "no currency": it is a two-of-three triple, which the live server refuses.
+   * A mock that emitted empty keys would let a client that echoes the GET back
+   * verbatim pass every offline test and 422 against cored on the first base
+   * voucher — the exact class of divergence the mock/cored contract test
+   * exists to catch.
+   *
+   * ⚠️ THE RATE IS PASSED THROUGH UNCHANGED, NOT RE-FORMATTED. It is
+   * NUMERIC(19,10) on the server and every money helper in this file is
+   * fixed-4; running it through `mockUnitsToMoney` would hand back 83.6512 and
+   * make the mock the one place where the bug is invisible.
+   */
+  function mockForex(
+    c: MockCompany,
+    row: { currency_id?: string; foreign_amount?: string; rate?: string },
+  ): {
+    currency_id?: string;
+    currency?: string;
+    foreign_amount?: string;
+    rate?: string;
+  } {
+    if (!row.currency_id) return {};
+    const cur = (c.currencies ?? []).find((x) => x.id === row.currency_id);
+    return {
+      currency_id: row.currency_id,
+      currency: cur?.code ?? "",
+      foreign_amount: row.foreign_amount ?? "",
+      rate: row.rate ?? "",
+    };
+  }
+
   function summarize(
     c: MockCompany,
     req: VoucherRequest,
@@ -3168,6 +3204,12 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         ledger: ledger?.name ?? p.ledger_id,
         dr_cr: dc,
         amount,
+        // ⛔ AND RETAIN T8's THREE FOREX VALUES, for exactly the reason the
+        // ledger_id is retained one line up. A mock that dropped them would
+        // make every offline and component-test round trip of a foreign
+        // voucher look CORRECT while the live one lost the currency — and the
+        // mock is the oracle those tests trust. See mockForex.
+        ...mockForex(c, p),
       });
     }
     return { postings, postingViews, debit, credit };
@@ -4004,6 +4046,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
    *     Debtors disagree, and nothing reconciles them.
    */
   function billViews(
+    company: MockCompany,
     req: VoucherRequest,
     voucherNo: string,
     postings: readonly { ledger_id: string; dr_cr: string; amount: string }[],
@@ -4040,6 +4083,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         dr_cr: dc,
         amount: mockUnitsToMoney(units(b.amount)),
         due_date: b.due_date ?? "",
+        ...mockForex(company, b),
       });
     }
     const postedByLedger = new Map<string, bigint>();
@@ -4267,7 +4311,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       // ⚠️ Passed the FINAL posting list and the ALLOCATED number, because both
       // are things only the server knows: an item invoice's postings were
       // generated here, and the number was minted here.
-      bill_allocations: billViews(req, voucherNo, postingViews),
+      bill_allocations: billViews(c, req, voucherNo, postingViews),
       inventory: inventoryViews(c, req),
       // The ORDER LINKS. Validated first (fulfilmentViews throws the server's own
       // refusals), so an over-fulfilment never reaches the store. `null` because a
@@ -4407,7 +4451,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       postings: postingViews,
       // An ALTER keeps the voucher's existing number, so that is what an unnamed
       // reference is stamped with — never a fresh one.
-      bill_allocations: billViews(req, entry.voucher_no, postingViews),
+      bill_allocations: billViews(c, req, entry.voucher_no, postingViews),
       inventory: inventoryViews(c, req),
       // ⛔ AN ALTER RE-STATES THE LINKS: whatever this body carries becomes the
       // current version's links, and whatever it omits is GONE. That is why the

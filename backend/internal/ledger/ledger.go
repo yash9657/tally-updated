@@ -204,6 +204,111 @@ type PostingInput struct {
 	LedgerID uuid.UUID
 	DrCr     DrCr
 	Amount   decimal.Decimal
+	// CurrencyID, ForeignAmount and Rate are T8's THREE STORED VALUES, and they
+	// are ALL-OR-NONE (migration 0080's posting_forex_all_or_none).
+	//
+	// ⛔ Amount ABOVE STAYS THE BASE AMOUNT AND IS AUTHORITATIVE. It is what
+	// check_double_entry sums, what ledger_balance accumulates and what every
+	// report reads; the foreign figures go BESIDE it and never instead of it.
+	// There is a second, independent reason base cannot be derived from the
+	// other two: a multi-currency journal balances in BASE and need not balance
+	// in any foreign currency, so base is the only column in which the
+	// double-entry identity is even meaningful.
+	//
+	// ⛔ THE CURRENCY IS PER-POSTING, NOT PER-VOUCHER, and that is load-bearing
+	// rather than general-purpose. The ordinary foreign purchase is MIXED: the
+	// creditor leg is $1,000 and the expense leg is ₹83,651.23, because what
+	// the company owes is dollars and what the purchase cost the business is
+	// rupees. A voucher-level currency would retag that expense line.
+	//
+	// ⚠️ ZERO MEANS ABSENT, for all three together. uuid.Nil / decimal.Zero is
+	// how a base posting arrives, and it is the ONLY encoding of one — the same
+	// single-encoding rule the currency master's base-currency trigger exists
+	// to protect. A rate of zero is not a rate (0080 CHECKs rate > 0), so
+	// nothing legal is lost by spelling absence that way.
+	CurrencyID    uuid.UUID
+	ForeignAmount decimal.Decimal
+	// Rate is BASE UNITS PER ONE FOREIGN UNIT (1 USD = 83.65 INR), stored
+	// NUMERIC(19,10).
+	//
+	// ⛔ A RATE IS NOT MONEY. Money is fixed-4 end to end in this product; a
+	// rate needs ten decimals because base-per-foreign for a weak currency is
+	// 0.0033333333, where four decimals carry a relative error around 1.5e-4 —
+	// thousands of rupees on a fifty-lakh invoice. Every layer that carries
+	// this value must resist the pull to reuse the money formatter.
+	Rate decimal.Decimal
+}
+
+// forexTriple is the all-or-none triple, named once so posting and bill
+// allocation cannot drift into two different readings of "is this foreign?".
+type forexTriple struct {
+	CurrencyID    uuid.UUID
+	ForeignAmount decimal.Decimal
+	Rate          decimal.Decimal
+}
+
+func (f forexTriple) isBase() bool {
+	return f.CurrencyID == uuid.Nil && f.ForeignAmount.IsZero() && f.Rate.IsZero()
+}
+
+// validate turns migration 0080's CHECK into a sentence.
+//
+// ⛔ THE DATABASE REMAINS THE AUTHORITY — posting_forex_all_or_none fires
+// whatever this function concluded, exactly as check_double_entry does for the
+// balance. What this adds is the only thing the constraint cannot: a message
+// naming WHICH of the three values is missing. `violates check constraint
+// "posting_forex_all_or_none"` is true and tells the operator nothing they can
+// act on, and the whole reason the triple is all-or-none is that a
+// two-of-three row lets a report compute a plausible wrong number.
+func (f forexTriple) validate(where string) error {
+	if f.isBase() {
+		return nil
+	}
+	switch {
+	case f.CurrencyID == uuid.Nil:
+		return fmt.Errorf("ledger: %s names a foreign amount or a rate but no currency; "+
+			"a foreign figure needs all three of currency, foreign amount and rate, "+
+			"or none of them (a posting with no currency IS the base currency)", where)
+	case f.ForeignAmount.IsZero():
+		return fmt.Errorf("ledger: %s names a currency but no foreign amount; "+
+			"a foreign figure needs all three of currency, foreign amount and rate", where)
+	case f.ForeignAmount.IsNegative():
+		return fmt.Errorf("ledger: %s has a negative foreign amount (%s); direction is "+
+			"carried by dr_cr, so every amount on a posting is unsigned",
+			where, f.ForeignAmount.StringFixed(4))
+	case f.Rate.IsZero():
+		return fmt.Errorf("ledger: %s names a currency but no exchange rate; "+
+			"a foreign figure needs all three of currency, foreign amount and rate", where)
+	case f.Rate.IsNegative():
+		return fmt.Errorf("ledger: %s has a negative exchange rate (%s); a rate is "+
+			"base units per one foreign unit and is always above zero",
+			where, f.Rate.String())
+	}
+	return nil
+}
+
+// forex reads the triple off a posting.
+func (p PostingInput) forex() forexTriple {
+	return forexTriple{p.CurrencyID, p.ForeignAmount, p.Rate}
+}
+
+// forex reads the triple off a bill allocation.
+func (b BillAllocationInput) forex() forexTriple {
+	return forexTriple{b.CurrencyID, b.ForeignAmount, b.Rate}
+}
+
+// nullForex maps a triple to the three query arguments, so that "zero means
+// absent" is spelled ONCE rather than at every insert site.
+//
+// ⛔ nil, NEVER THE ZERO VALUE. uuid.Nil is a legal-looking uuid and 0 is a
+// legal-looking numeric; either would satisfy the all-or-none CHECK as a
+// PRESENT value and quietly mark a rupee posting as foreign against a currency
+// that does not exist.
+func nullForex(f forexTriple) (any, any, any) {
+	if f.isBase() {
+		return nil, nil, nil
+	}
+	return f.CurrencyID, f.ForeignAmount, f.Rate
 }
 
 // BillAllocationInput is a single bill-wise allocation against a party ledger
@@ -217,6 +322,22 @@ type BillAllocationInput struct {
 	DrCr     DrCr
 	Amount   decimal.Decimal
 	DueDate  string // ISO date (YYYY-MM-DD) or empty
+	// The same all-or-none triple PostingInput carries, and it is on this type
+	// as well for a reason the design memo's §0.2 measured rather than assumed:
+	// OUTSTANDINGS DOES NOT READ `posting`. It nets a UNION of bill_allocation
+	// and ledger_opening_bill, so a foreign bill whose currency lived only on
+	// the posting would show a correct figure in the ledger and a base-only
+	// bill on the ageing report — two presentations of one voucher that
+	// disagree, with nothing on either page revealing it.
+	//
+	// ⚠️ AND THE RATE HERE IS THE BILL'S HISTORICAL RATE, which is what makes
+	// realised gain/loss computable at all: the NEW ref carries the rate the
+	// bill was raised at and the AGAINST ref carries the settlement-date rate,
+	// and the difference between them is the gain. Step 5 reads exactly these
+	// two rows.
+	CurrencyID    uuid.UUID
+	ForeignAmount decimal.Decimal
+	Rate          decimal.Decimal
 }
 
 // GSTParams carries the inputs needed to auto-derive GST on a Sales/Purchase
@@ -668,6 +789,26 @@ type PostingView struct {
 	LedgerName string
 	DrCr       string
 	Amount     decimal.Decimal
+	// T8's three values, projected for the SAME reason CostAllocations,
+	// Fulfilments and GSTLines are projected on VoucherView below — and this is
+	// the SEVENTH occurrence of that defect, one field further along.
+	//
+	// ⛔ AN ALTER RE-STATES. `posting` is rewritten from the request body on
+	// every version, so a GET that did not carry the currency would give a form
+	// nothing to send back, and the ordinary round trip — open a foreign
+	// invoice, fix a typo in the narration, save — would rewrite a $1,000 bill
+	// as a ₹83,651.23 rupee bill. NOTHING REFUSES IT: three NULLs is a legal
+	// state, the voucher still balances in base, the Balance Sheet does not
+	// move, and the only trace is a foreign bill that quietly stops being
+	// foreign — which then disappears from the unadjusted-forex report and
+	// realises no gain when it is settled.
+	//
+	// Zero means base here exactly as it does on PostingInput, so a view fed
+	// straight back into an input is the identity.
+	CurrencyID    uuid.UUID
+	CurrencyCode  string // the master's code ("USD"), for display; never sent back
+	ForeignAmount decimal.Decimal
+	Rate          decimal.Decimal
 }
 
 // BillAllocationView is one bill-wise allocation of a fetched voucher.
@@ -678,6 +819,15 @@ type BillAllocationView struct {
 	DrCr     string
 	Amount   decimal.Decimal
 	DueDate  string // YYYY-MM-DD or empty
+	// The same three, for the same round-trip reason as PostingView above —
+	// and bill_allocation is the table where losing them costs the most, since
+	// the bill's historical rate is the figure step 5 differences a settlement
+	// rate against. An alter that dropped it would not corrupt the gain; it
+	// would make the gain uncomputable.
+	CurrencyID    uuid.UUID
+	CurrencyCode  string
+	ForeignAmount decimal.Decimal
+	Rate          decimal.Decimal
 }
 
 // VoucherView is the CURRENT (head) version of one logical voucher, projected
@@ -989,10 +1139,20 @@ func (s *Service) GetVoucher(ctx context.Context, voucherID uuid.UUID) (VoucherV
 		// column and `uuid.NewV7` is not monotonic within a millisecond, so p.id
 		// is a STABLE tie-break and nothing more — it does not recover the
 		// sequence the payload stated, and nothing here should pretend it does.
+		//
+		// ⛔ THE FOREX JOIN IS LEFT, AND THE CODE IS COALESCE'd, for the reason
+		// every other projection here gives: the POSTING is the fact, and a
+		// currency master that has been renamed or removed must not make a
+		// foreign posting vanish from the round trip. currency_id is read from
+		// the posting itself and is what gets sent back; the code is display.
 		prows, err := tx.Query(ctx,
-			`SELECT p.id, p.ledger_id, COALESCE(l.name, ''), p.dr_cr::text, p.amount
+			`SELECT p.id, p.ledger_id, COALESCE(l.name, ''), p.dr_cr::text, p.amount,
+			        p.currency_id, COALESCE(c.code, ''),
+			        COALESCE(p.foreign_amount, 0), COALESCE(p.rate, 0)
 			   FROM posting p
 			   LEFT JOIN ledger l ON l.id = p.ledger_id
+			   LEFT JOIN currency c
+			     ON c.company_id = p.company_id AND c.id = p.currency_id
 			  WHERE p.company_id = $1 AND p.voucher_version_id = $2
 			  ORDER BY p.dr_cr DESC, p.amount DESC, p.id`,
 			companyID, versionID)
@@ -1003,8 +1163,13 @@ func (s *Service) GetVoucher(ctx context.Context, voucherID uuid.UUID) (VoucherV
 		for prows.Next() {
 			var p PostingView
 			var pid uuid.UUID
-			if err := prows.Scan(&pid, &p.LedgerID, &p.LedgerName, &p.DrCr, &p.Amount); err != nil {
+			var cur *uuid.UUID
+			if err := prows.Scan(&pid, &p.LedgerID, &p.LedgerName, &p.DrCr, &p.Amount,
+				&cur, &p.CurrencyCode, &p.ForeignAmount, &p.Rate); err != nil {
 				return fmt.Errorf("ledger: scan posting: %w", err)
+			}
+			if cur != nil {
+				p.CurrencyID = *cur
 			}
 			postingSeqByID[pid] = len(v.Postings)
 			v.Postings = append(v.Postings, p)
@@ -1113,11 +1278,15 @@ func (s *Service) GetVoucher(ctx context.Context, voucherID uuid.UUID) (VoucherV
 
 		// Bill allocations of the current version (keyed by voucher_version_id).
 		brows, err := tx.Query(ctx,
-			`SELECT ledger_id, ref_name, ref_type::text, dr_cr::text, amount,
-			        COALESCE(to_char(due_date, 'YYYY-MM-DD'), '')
-			   FROM bill_allocation
-			  WHERE company_id = $1 AND voucher_version_id = $2
-			  ORDER BY created_at`,
+			`SELECT b.ledger_id, b.ref_name, b.ref_type::text, b.dr_cr::text, b.amount,
+			        COALESCE(to_char(b.due_date, 'YYYY-MM-DD'), ''),
+			        b.currency_id, COALESCE(c.code, ''),
+			        COALESCE(b.foreign_amount, 0), COALESCE(b.rate, 0)
+			   FROM bill_allocation b
+			   LEFT JOIN currency c
+			     ON c.company_id = b.company_id AND c.id = b.currency_id
+			  WHERE b.company_id = $1 AND b.voucher_version_id = $2
+			  ORDER BY b.created_at`,
 			companyID, versionID)
 		if err != nil {
 			return fmt.Errorf("ledger: query bill allocations: %w", err)
@@ -1125,8 +1294,13 @@ func (s *Service) GetVoucher(ctx context.Context, voucherID uuid.UUID) (VoucherV
 		defer brows.Close()
 		for brows.Next() {
 			var b BillAllocationView
-			if err := brows.Scan(&b.LedgerID, &b.RefName, &b.RefType, &b.DrCr, &b.Amount, &b.DueDate); err != nil {
+			var cur *uuid.UUID
+			if err := brows.Scan(&b.LedgerID, &b.RefName, &b.RefType, &b.DrCr, &b.Amount,
+				&b.DueDate, &cur, &b.CurrencyCode, &b.ForeignAmount, &b.Rate); err != nil {
 				return fmt.Errorf("ledger: scan bill allocation: %w", err)
+			}
+			if cur != nil {
+				b.CurrencyID = *cur
 			}
 			v.BillAllocations = append(v.BillAllocations, b)
 		}
@@ -2030,21 +2204,40 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 			Party:         in.Party,
 		}
 		for _, p := range in.Postings {
-			payload.Postings = append(payload.Postings, CanonicalPosting{
+			cp := CanonicalPosting{
 				LedgerID: p.LedgerID.String(),
 				DrCr:     string(p.DrCr),
 				Amount:   p.Amount.StringFixed(4),
-			})
+			}
+			// ⛔ THE THREE FOREX KEYS APPEAR ONLY ON A FOREIGN POSTING. A base
+			// posting leaves all three at "" and, being omitempty, marshals to
+			// the exact bytes it did before these fields existed — which is
+			// what keeps every hash already written in the field valid.
+			//
+			// ⚠️ AND THE RATE IS canonicalRate, NOT StringFixed(4). Money is
+			// fixed-4 and a rate is not money; see canonicalRate.
+			if f := p.forex(); !f.isBase() {
+				cp.CurrencyID = f.CurrencyID.String()
+				cp.ForeignAmount = f.ForeignAmount.StringFixed(4)
+				cp.Rate = canonicalRate(f.Rate)
+			}
+			payload.Postings = append(payload.Postings, cp)
 		}
 		for _, b := range billAllocations {
-			payload.BillAllocations = append(payload.BillAllocations, CanonicalBillAllocation{
+			cb := CanonicalBillAllocation{
 				LedgerID: b.LedgerID.String(),
 				RefName:  b.RefName,
 				RefType:  string(b.RefType),
 				DrCr:     string(b.DrCr),
 				Amount:   b.Amount.StringFixed(4),
 				DueDate:  b.DueDate,
-			})
+			}
+			if f := b.forex(); !f.isBase() {
+				cb.CurrencyID = f.CurrencyID.String()
+				cb.ForeignAmount = f.ForeignAmount.StringFixed(4)
+				cb.Rate = canonicalRate(f.Rate)
+			}
+			payload.BillAllocations = append(payload.BillAllocations, cb)
 		}
 
 		// Inventory rides in the hashed payload for the same reason postings do:
@@ -2317,11 +2510,19 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 				return fmt.Errorf("ledger: new posting id: %w", err)
 			}
 			postingIDs = append(postingIDs, postingID)
+			// ⛔ THE THREE FOREX VALUES RIDE THIS STATEMENT, and nullForex is
+			// what keeps "zero means absent" spelled once. A base posting
+			// writes three NULLs — the one and only encoding of a rupee
+			// figure — and 0080's posting_forex_all_or_none refuses anything
+			// in between whatever this layer concluded.
+			pcur, pforeign, prate := nullForex(p.forex())
 			if _, err := tx.Exec(ctx,
 				`INSERT INTO posting
-				   (id, company_id, voucher_version_id, ledger_id, dr_cr, amount)
-				 VALUES ($1, $2, $3, $4, $5, $6)`,
+				   (id, company_id, voucher_version_id, ledger_id, dr_cr, amount,
+				    currency_id, foreign_amount, rate)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
 				postingID, companyID, versionID, p.LedgerID, string(p.DrCr), p.Amount,
+				pcur, pforeign, prate,
 			); err != nil {
 				return fmt.Errorf("ledger: insert posting: %w", err)
 			}
@@ -2372,13 +2573,15 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 			if err != nil {
 				return fmt.Errorf("ledger: new bill allocation id: %w", err)
 			}
+			bcur, bforeign, brate := nullForex(b.forex())
 			if _, err := tx.Exec(ctx,
 				`INSERT INTO bill_allocation
 				   (id, company_id, voucher_version_id, ledger_id, ref_name, ref_type,
-				    dr_cr, amount, due_date)
-				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+				    dr_cr, amount, due_date, currency_id, foreign_amount, rate)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
 				allocID, companyID, versionID, b.LedgerID, b.RefName, string(b.RefType),
 				string(b.DrCr), b.Amount, nullIfEmpty(b.DueDate),
+				bcur, bforeign, brate,
 			); err != nil {
 				return fmt.Errorf("ledger: insert bill_allocation: %w", err)
 			}
@@ -2636,7 +2839,7 @@ func validatePostings(ps []PostingInput) error {
 		return errors.New("ledger: a voucher needs at least two postings")
 	}
 	debit, credit := decimal.Zero, decimal.Zero
-	for _, p := range ps {
+	for i, p := range ps {
 		if p.LedgerID == uuid.Nil {
 			return errors.New("ledger: posting ledger id is required")
 		}
@@ -2650,6 +2853,14 @@ func validatePostings(ps []PostingInput) error {
 			credit = credit.Add(p.Amount)
 		default:
 			return fmt.Errorf("ledger: invalid dr_cr %q", p.DrCr)
+		}
+		// ⚠️ THE FOREIGN FIGURES ARE NOT SUMMED, AND THAT IS THE DESIGN, NOT AN
+		// OMISSION. Only the BASE column is one in which the double-entry
+		// identity is meaningful: a sale of $1,000 settled partly in EUR does
+		// not sum to zero in dollars or in euros. A balance check over
+		// foreign_amount would refuse correct multi-currency vouchers.
+		if err := p.forex().validate(fmt.Sprintf("posting %d", i+1)); err != nil {
+			return err
 		}
 	}
 	if !debit.Equal(credit) {
@@ -2801,7 +3012,7 @@ func classPurpose(c Class) string {
 // outstanding and a negative row beside it. Both figures would be wrong and the
 // report would still foot. A settlement must say what it settles.
 func validateBillAllocations(bs []BillAllocationInput) error {
-	for _, b := range bs {
+	for i, b := range bs {
 		if b.LedgerID == uuid.Nil {
 			return errors.New("ledger: bill allocation ledger id is required")
 		}
@@ -2816,6 +3027,9 @@ func validateBillAllocations(bs []BillAllocationInput) error {
 		}
 		if b.Amount.IsNegative() {
 			return errors.New("ledger: bill allocation amount must be non-negative")
+		}
+		if err := b.forex().validate(fmt.Sprintf("bill allocation %d", i+1)); err != nil {
+			return err
 		}
 	}
 	return nil

@@ -15,6 +15,28 @@
 export type Money = string;
 
 /**
+ * An EXCHANGE RATE transported as a string: base units per ONE foreign unit,
+ * carried to TEN decimals (e.g. "83.6512345678").
+ *
+ * ⛔⛔ A RATE IS NOT `Money`, AND THIS ALIAS EXISTS TO SAY SO AT THE ONE PLACE
+ * A READER WILL LOOK. Both are `string`, so TypeScript cannot enforce the
+ * difference — which is exactly why the distinction has to be carried by the
+ * NAME. `Money` is fixed-4 end to end in this product and every money helper
+ * assumes it: `parseFixed4` (screens/vouchers/itemInvoice.ts) TRUNCATES the
+ * fifth decimal onward, and its own comment says so. Feed it a rate and
+ * 83.6512345678 silently becomes 83.6512 — a value that then round-trips
+ * through every later layer perfectly, so nothing fails and the bill is simply
+ * priced wrong.
+ *
+ * ⚠️ THE ERROR IS NOT COSMETIC AT THE FOURTH DECIMAL. Base-per-foreign for a
+ * weak currency is 0.0033333333, where four decimals give 0.0033 — a relative
+ * error around 1.5e-4, or thousands of rupees on a fifty-lakh invoice.
+ *
+ * Use `parseRate` / `formatRate` (api/rate.ts), never the money pair.
+ */
+export type Rate = string;
+
+/**
  * The voucher classes with a POST route (path segment + F-key mapping).
  *
  * The first eight are ACCOUNTING classes: they must state balanced double-entry
@@ -907,12 +929,47 @@ export interface CreateStockItemResponse {
 // Vouchers
 // ---------------------------------------------------------------------------
 
+/**
+ * One double-entry line.
+ *
+ * `amount` IS THE BASE AMOUNT AND IS AUTHORITATIVE — it is what the server's
+ * double-entry trigger sums and what every report reads. T8's three forex
+ * fields sit BESIDE it and never instead of it.
+ *
+ * ⛔ THE THREE ARE ALL-OR-NONE. Send all three or none; a two-of-three posting
+ * is refused (migration 0080's posting_forex_all_or_none, surfaced in words by
+ * the ledger). Absent means BASE — which is every voucher keyed before this
+ * feature and most vouchers for ever.
+ *
+ * ⛔ AND THE CURRENCY IS PER-POSTING, NOT PER-VOUCHER. The ordinary foreign
+ * purchase is MIXED: the creditor leg is $1,000 and the expense leg is
+ * ₹83,651.23, because what the company owes is dollars and what the purchase
+ * cost the business is rupees.
+ */
 export interface PostingRequest {
   ledger_id: string;
   dr_cr: DrCr;
   amount: Money;
+  /** The currency MASTER's uuid. Absent on a base-currency posting. */
+  currency_id?: string;
+  /** The amount in that currency. Absent on a base-currency posting. */
+  foreign_amount?: Money;
+  /** ⛔ `Rate`, NOT `Money` — ten decimals, never the fixed-4 money path. */
+  rate?: Rate;
 }
 
+/**
+ * A bill-wise reference on a party leg.
+ *
+ * It carries the SAME three forex fields as a posting, and it must: the
+ * Outstandings report reads `bill_allocation`, NOT `posting`, so a foreign bill
+ * whose currency arrived only on the posting would show correctly in the ledger
+ * and as a base bill on the ageing report.
+ *
+ * ⚠️ AND ITS `rate` IS THE BILL'S HISTORICAL RATE — the figure a later
+ * settlement is differenced against to realise an exchange gain or loss. Losing
+ * it does not corrupt the gain; it makes the gain uncomputable.
+ */
 export interface BillAllocationRequest {
   ledger_id: string;
   ref_name: string;
@@ -920,6 +977,9 @@ export interface BillAllocationRequest {
   dr_cr: DrCr;
   amount: Money;
   due_date?: string;
+  currency_id?: string;
+  foreign_amount?: Money;
+  rate?: Rate;
 }
 
 export interface GSTLineRequest {
@@ -1285,6 +1345,23 @@ export interface DeleteVoucherResponse {
 // fixed-4 strings; dr_cr is the canonical "D"/"C".
 // ---------------------------------------------------------------------------
 
+/**
+ * One posting of a fetched voucher.
+ *
+ * ⛔⛔ THE FOUR FOREX FIELDS ARE ABSENT ON A BASE POSTING, AND EVERY BUILDER
+ * THAT REBUILDS AN ALTER BODY FROM THIS VIEW MUST PASS THEM STRAIGHT BACK.
+ * An alter RE-STATES: the server rewrites `posting` from the request body, so
+ * whatever the body omits is gone. A form that echoes `amount` and drops
+ * `currency_id` turns a $1,000 bill into a ₹83,651.23 bill on an unrelated
+ * narration edit — and nothing refuses it, because the voucher still balances
+ * and the Balance Sheet does not move. This is the same defect
+ * `cost_allocations`, `fulfilments` and `gst_lines` each carry a warning about;
+ * it is the first one where the loss is a VALUE on a surviving row rather than
+ * a row.
+ *
+ * ⚠️ SPREAD THEM, DO NOT COPY THEM FIELD BY FIELD. `{...view, ...}` carries
+ * a field added later; an explicit copy list silently stops carrying it.
+ */
 export interface PostingView {
   /** The REAL posting ledger id (uuid) — never a name. */
   ledger_id: string;
@@ -1292,6 +1369,13 @@ export interface PostingView {
   ledger: string;
   dr_cr: DrCr;
   amount: Money;
+  /** Absent on a base-currency posting. Send back verbatim on an alter. */
+  currency_id?: string;
+  /** The currency's CODE ("USD") — display only; the id is the fact. */
+  currency?: string;
+  foreign_amount?: Money;
+  /** ⛔ Ten decimals. Never re-format it through a money helper. */
+  rate?: Rate;
 }
 
 export interface BillAllocationView {
@@ -1302,6 +1386,11 @@ export interface BillAllocationView {
   amount: Money;
   /** "" when no due date is recorded. */
   due_date: string;
+  /** Absent on a base-currency bill. See PostingView — same rule, same cost. */
+  currency_id?: string;
+  currency?: string;
+  foreign_amount?: Money;
+  rate?: Rate;
 }
 
 export interface VoucherView {
@@ -1669,8 +1758,8 @@ export interface CreateCurrencyResponse {
 export interface SetCurrencyRateRequest {
   code: string;
   effective_date: string;
-  /** Base units per ONE foreign unit, as a STRING. Never a number. */
-  rate: string;
+  /** Base units per ONE foreign unit. `Rate`, not `Money` — see the alias. */
+  rate: Rate;
   created_by?: string;
 }
 

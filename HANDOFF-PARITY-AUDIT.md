@@ -5057,3 +5057,163 @@ payroll screens have against a real server, it takes no company argument (it bui
 and nothing in the baseline ran it — which is how a lane could recommend payroll as untested. It is
 in the next handoff's §1 block. ⚠️ **It does NOT reap its tenant**, unlike the t4/t11/t12 drives,
 which is a deliberate choice its header explains but also means every run leaves a company behind.
+
+### L35 — 2026-09-01 · T8 STEP 4: the voucher path, and the seventh time an alter re-stated
+
+⭐ **WHAT WAS BUILT.** `posting.currency_id`, `posting.foreign_amount` and `posting.rate` — and the
+same three on `bill_allocation` — are written, signed, read back and preserved across an alter. The
+handoff's one-line summary of the state before this commit was exact:
+
+```
+grep -n "INSERT INTO posting" -A 3 backend/internal/ledger/ledger.go
+#   (id, company_id, voucher_version_id, ledger_id, dr_cr, amount)
+#   ⛔ no currency_id, no foreign_amount, no rate
+```
+
+⛔ **THE COLUMNS HAD EXISTED SINCE `20dd96f` AND NOTHING WROTE THEM.** Migration 0080 landed the
+schema, its `all_or_none` CHECK and four mutation-proved invariants; the write path named none of it.
+Every foreign figure an operator could hand the server was discarded between the request and the row,
+silently, with a 201 on the way out.
+
+#### ⛔⛔ THE ORACLE WAS NAMED BEFORE THE FIRST TEST, AND IT IS `forex_schema_test.go`'s
+
+> *"A forex test whose only assertion is that the voucher POSTED proves nothing: base, foreign and
+> rate are THREE stored values and two of them can be wrong while the voucher balances perfectly."*
+
+So every assertion in this lane names the SPECIFIC value it pins, and the fixture figures are
+mutually unmistakable — **base 83,651.23 · foreign 1,000.00 · rate 83.6512345678**. Round figures
+(1000 / 1000 / 1.0) would let a rate written into the foreign column pass. ⭐ **And the wire drive
+posts a SECOND voucher at a wholly different rate (75.1234567890)**, because one rate lets a
+hard-coded constant pass — §6.2's lesson, applied before it could bite.
+
+⚠️ **`base ≠ foreign × rate` IN THE FIXTURE, DELIBERATELY.** 1000 × 83.6512345678 is 83,651.2345678,
+which fixed-4 money cannot represent. That is Q2 made testable: base is STORED and authoritative,
+never re-derived. The mutation that recomputes it is below, and the database refuses it in words.
+
+#### ⛔ THE SEVENTH OCCURRENCE OF "AN ALTER RE-STATES" — AND THE FIRST THAT LOSES A VALUE, NOT A ROW
+
+`VoucherView.CostAllocations`, `.Fulfilments` and `.GSTLines` each carry a comment about this defect;
+`bill_allocation` was §1.5; `stock_movement` was the one with no inverse control. This is the same
+shape one field further along, and it is **worse than all six**:
+
+| | The six before | This one |
+|---|---|---|
+| What is destroyed | a ROW — a split, a link, a GST line | THREE VALUES on a row that survives |
+| What still holds | — | the posting is there, base is right, the voucher balances, **the Balance Sheet does not move by a paisa**, `verify:demo` stays 37/37 |
+| The trace | a report that stops adding up | **none** — a $1,000 bill is now a ₹83,651.23 bill |
+
+⛔ **AND IT WAS LIVE IN TWO PLACES AT ONCE**, because the round trip is only closed when BOTH ends
+carry the value: `GetVoucher` did not project the columns, and `postingsFromView`
+(`VoucherScreen.tsx`) rebuilt an alter body by listing three fields BY HAND. Either alone loses the
+data with a correct server on the other side. That is `voucher_readback_audit_test.go`'s own lesson —
+*"does the GET emit it?" is NECESSARY AND NOT SUFFICIENT* — and it is why this lane has a Go test, an
+HTTP test, a vitest and a wire drive rather than one of them.
+
+#### ⭐ THE HASH: THREE `omitempty` STRING KEYS, LAST, AND WHY EACH WORD IS LOAD-BEARING
+
+The three values ride INSIDE the signature. ⛔ **The threat is not a typo, it is a tamper:** with the
+rate outside the hash, anyone with database access could restate a bill from 83.65 to 90.00 and
+`VerifyChain` would go on reporting the book intact, because the base amount it does cover has not
+moved. The rate is the value an audit most needs to trust.
+
+- **LAST, after `amount`** — `encoding/json` emits keys in declaration order.
+- **`omitempty` on each** — a BASE posting (every posting in every book that existed before this
+  commit) must marshal byte-identically to what it always did.
+- **STRINGS** — the chain re-derives the hashed bytes by decoding the stored JSONB and re-marshalling
+  it. A rate as a JSON number would come back as `83.6512345678` or `8.36512345678e+01` by magnitude,
+  and every foreign voucher in the field would report as tampered with.
+
+⭐ **PER-FIELD `omitempty` IS SAFE HERE ONLY BECAUSE THE TRIPLE IS ALL-OR-NONE**, and `Inward`'s
+comment warns against it for exactly the reason that does not apply: 0080's CHECK admits two states
+and no third, so the key set is a function of the fact and not of its history. **That is written in
+the file**, because the next reader will otherwise see a rule broken rather than a rule qualified.
+
+#### ⛔ `Rate` IS NOT `Money`, AND THAT IS THE ONE LINE MOST LIKELY TO BE "TIDIED" INTO A BUG
+
+Every other number on a voucher body is fixed-4, so `StringFixed(4)` on a rate READS as consistency.
+It is not: base-per-foreign for a weak currency is `0.0033333333`, which at four decimals is `0.0033`
+— a relative error of ~1.5e-4, thousands of rupees on a fifty-lakh invoice. And the truncated value
+round-trips through its own type perfectly, so **nothing fails**; the book is simply signed at the
+wrong rate for ever. Hence `canonicalRate` (server) and `api/rate.ts` (client), each a separate file
+with its own name — **not one helper with a `decimals` argument, which is one default away from the
+same bug.** The client test asserts the ten-decimal round trip AND runs the same value through
+`parseFixed4` as the control, showing what reuse would have cost: `83.6512`.
+
+#### MUTATION-PROVED ON EVERY LAYER, WITH THE NUMBER THE REAL SYSTEM PRODUCED
+
+| Revert | Predicted → **observed** |
+|---|---|
+| the posting INSERT names no currency columns (**the state at `f381741`**) | `THE CURRENCY is NULL … THE RATE is NULL, want 83.6512345678` ✅ |
+| `canonicalRate` → `StringFixed(4)` | the signed payload reads **`"rate": "83.6512"`** ✅ |
+| `GetVoucher` projects none of the three | the alter is **ACCEPTED** and the row comes back all-NULL ✅ |
+| `GetVoucher` projects the amount but drops only the currency | ⭐ **caught by the all-or-none refusal instead** — the silent shape needs all three dropped, which is why the mutation was re-run that way |
+| base recomputed as `foreign × rate` | the deferred trigger: **`debit 83651.2300 <> credit 83651.2346`** ✅ |
+| `omitempty` removed from the triple | **three independent existing guards** go red — `TestExistingVoucherHashesAreUnchanged`, `…NeitherAllocationsNorFulfilments…`, `TestInwardDocIsLast…` ✅ |
+| the GET body formats `rate` as fixed-4 | the HTTP audit: `THE RATE is "83.6512"` at **four** stages ✅ |
+| `billRefsFromView` drops the triple (client) | `THE CURRENCY: expected undefined to be 'cur-usd-1'` ✅ |
+
+⛔ **AND THE GATE ITSELF WAS MUTATION-PROVED, NOT ONLY THE CODE.** cored was **rebuilt with the
+posting INSERT reverted, restarted, and verified fresh by process start time** — the wire drive went
+**37/50, and the 13 reds were exactly the posting-column probes**. The `bill_allocation` probes
+stayed green, which is correct: only the posting insert was reverted. A drive that could not go red
+proves nothing, and a drive run against a stale binary is indistinguishable from one that cannot.
+
+#### THE DRIVE — 50/50, tenant reaped, `psql` and the wire as the only oracles
+
+`frontend/scripts/drive-t8-forex-entry.mjs`. Builds its own tenant, never touches the demo book.
+Beyond the three values on both tables it pins four things worth naming:
+
+- ⭐ **THE MIXED VOUCHER.** The expense leg of the foreign purchase must stay BASE (three NULLs). A
+  write path that hung the currency off the VOUCHER passes every other probe and fails this one —
+  and would retag every rupee expense line on every foreign invoice in the book.
+- ⛔ **THE INVERSE CONTROL.** An alter that omits the three is accepted **and does destroy them**, so
+  the survival probe is the projection working rather than data that is merely immune to an alter.
+- ⛔ **ABSENT, NEVER EMPTY-STRINGED, ON A BASE ROW.** `"currency_id": ""` is not "no currency", it is
+  a two-of-three triple the server refuses — so a client echoing the GET verbatim would 422 on every
+  rupee voucher in the book. The drive asserts the key is **missing**.
+- ⭐ **`ledger_balance` = 133725.3000**, the sum of the BASE figures. This is the free oracle: a
+  foreign amount that leaked into `posting.amount` lands here, and here is what `verify:demo` reads.
+
+#### ⚠️ WHAT WAS DELIBERATELY NOT BUILT, AND WHY EACH IS NOT AN OMISSION
+
+1. **NO VOUCHER-ENTRY UI.** The memo's build order (§5) exposes the operator LAST — *"enforcement
+   first, switch second"*. A form that keys a dollar invoice the rest of the product cannot settle
+   (step 5), age (step 6) or revalue (step 7) is the `FeaturesScreen`'s own failure mode. ⭐ **The
+   round trip still had to be fixed TODAY**, because a foreign voucher can arrive from the importer,
+   a sync commit or the API, and until this commit opening one and fixing a typo destroyed it.
+2. **NO ARITHMETIC CHECK THAT `base ≈ foreign × rate`.** It would need a rounding-tolerance policy
+   the memo does not give, and Q2 makes base authoritative — a voucher whose base leg is a
+   negotiated figure rather than the day's arithmetic is an ordinary voucher. Stated rather than
+   invented.
+3. **NO MIGRATION.** 0080 already has every column. **`0081–0084` remain the T8 gap and were not
+   touched**, and `PLAN-TALLY-PARITY.md` §2.5 needs no edit this lane.
+4. **THE ROSTER ROW STAYS `off`** and its NOTE was corrected instead. An operator still cannot key a
+   foreign voucher, so flipping it would be the flattering-direction lie that file exists to refuse;
+   but *"none of them exists"* had stopped being exact, so the note now says the data path exists
+   over HTTP and that no screen offers it. ⚠️ The `partial`-vs-split decision (§4.3) belongs to
+   step 8 and is untouched.
+
+#### ⚠️ ONE THING THE GATES TAUGHT, AND IT IS NOT IN THE HANDOFF'S §2
+
+**A STALE `vite` IS AS DANGEROUS AS A STALE `cored`, AND NOTHING WARNS YOU.**
+`drive-t4-slice2b-matching` came back **34/35 and then 33/35 on a re-run**, with different probes
+failing each time — against a vite that had been up since the previous evening and whose log showed
+`hmr invalidate /src/screens/BankMatchPanel.tsx … Could not Fast Refresh` triggered by an edit to an
+unrelated file. **After restarting vite: 35/35, twice.** ⛔ Two probes were nearly written up as a
+regression in a lane that never touches bank matching. §2.1's rule — check the process start time
+against the clock — applies to **:5173** exactly as it does to **:8087**.
+
+#### THE GATES
+
+`go build` · `go vet` · `go test ./... -count=1` all green · `test_residue.sh` **OK, no residue** ·
+`tsc --noEmit` clean · `vitest` **1866 passed / 116 files** (from 1853 / 114) · `verify:demo`
+**37/37** · **`drive-t8-forex-entry` 50/50 (new)** · `drive-payroll` **38/38** · `drive-t12-gstr9`
+**33/33** · `drive-t4-slice2b-matching` **35/35** · `drive-t11-budgets` **36/36** ·
+`drive-year-end-close` **16/16 wire + 8/8 browser** · `corpora/validate.py` **OK** · register
+**117 · 107 · 6 · 0 · 4**, unchanged. **Nothing deferred.**
+
+⭐ **NEXT IS STEP 5 — REALISED GAIN/LOSS ON SETTLEMENT**, and the two rows it differences are now
+both written: the `NEW` ref carries the bill's historical rate and the `AGAINST` ref will carry the
+settlement-date rate. ⛔ Its refusal — a settlement that would realise a difference at a company with
+no `forex_gain_loss_ledger_id` — is the part to build first, and **nothing reads
+`company_forex_settings` yet**.

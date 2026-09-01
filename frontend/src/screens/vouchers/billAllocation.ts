@@ -62,6 +62,36 @@ export interface DraftBillRef {
   /** ISO date; "" when the bill carries no due date (then it never ages). */
   dueDate: string;
   /**
+   * T8's three forex values, CARRIED THROUGH THE FORM RATHER THAN EDITED IN IT.
+   *
+   * ⛔⛔ THEY ARE HERE BECAUSE AN ALTER RE-STATES, AND THIS TYPE IS THE ONLY
+   * THING STANDING BETWEEN A FETCHED FOREIGN BILL AND THE REQUEST THAT REPLACES
+   * IT. `billRefsFromView` reads the view into this shape and
+   * `buildBillAllocations` writes this shape back onto the wire; a field absent
+   * HERE is a field the round trip drops, no matter how correct the GET and the
+   * POST both are. That is the SEVENTH occurrence of the defect this file's own
+   * header describes one paragraph up — and the first where what is lost is
+   * three values on a surviving row rather than the row itself, so nothing
+   * stops adding up and no report goes blank.
+   *
+   * ⚠️ NO FORM FIELD EDITS THEM YET, and that is deliberate rather than
+   * unfinished. There is no foreign voucher ENTRY UI in this step: the build
+   * order (design memo §5) puts operator exposure last, after settlement,
+   * Outstandings and the unrealised report exist, on the principle that a
+   * toggle with nothing behind it is worse than no toggle. What must be true
+   * TODAY is that a foreign voucher which arrives by any other door — the
+   * importer, a sync commit from an offline node, the HTTP API — is not
+   * destroyed by an operator opening it and fixing a typo.
+   *
+   * ⚠️ `rate` IS A TEN-DECIMAL RATE, NOT MONEY. Never round-trip it through
+   * `parseFixed4`/`formatFixed4` like `amount` above; see api/rate.ts.
+   */
+  currencyId?: string;
+  /** Display only — the currency's code ("USD"). Never sent back. */
+  currencyCode?: string;
+  foreignAmount?: string;
+  rate?: string;
+  /**
    * TRUE while this reference is the form's own default and the operator has not
    * touched its amount.
    *
@@ -174,6 +204,15 @@ export function buildBillAllocations(
       amount: formatFixed4(amount),
     };
     if (r.dueDate) alloc.due_date = r.dueDate;
+    // ⛔ ALL THREE OR NONE, and keyed off the CURRENCY rather than off each
+    // field independently. The server refuses a two-of-three triple (migration
+    // 0080's all-or-none CHECK), so emitting `foreign_amount` beside an absent
+    // currency would 422 a request that looks complete on this side.
+    if (r.currencyId) {
+      alloc.currency_id = r.currencyId;
+      alloc.foreign_amount = r.foreignAmount ?? "";
+      alloc.rate = r.rate ?? "";
+    }
     out.push(alloc);
   }
   return out;
@@ -269,5 +308,12 @@ export function billRefsFromView(
       refName: v.ref_name,
       amount: v.amount,
       dueDate: v.due_date,
+      // Carried verbatim. The view omits all three on a base bill, so these
+      // stay undefined and `buildBillAllocations` emits nothing — which is the
+      // only spelling the server accepts for "this bill is in rupees".
+      currencyId: v.currency_id,
+      currencyCode: v.currency,
+      foreignAmount: v.foreign_amount,
+      rate: v.rate,
     }));
 }
