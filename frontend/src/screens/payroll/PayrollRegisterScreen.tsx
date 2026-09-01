@@ -46,6 +46,20 @@ import { saveStatutoryArchive } from "./statutoryDownload";
  * The server puts them on the JSON and on the printed page; dropping them here is
  * the only place that chain could break.
  */
+/**
+ * The wage month has no pay run — the server's own `NO_PAY_RUN` code.
+ *
+ * ⛔ MIRRORS `server.CodeNoPayRun` (backend/internal/server/handler_payroll.go).
+ * It is read off the BODY rather than inferred from the 404, because a status
+ * alone cannot stay unambiguous: the day a second 404 is added to these routes,
+ * a status-only test would quietly relabel it "no payroll has been run yet".
+ */
+function noPayRun(e: ApiError): boolean {
+  if (e.status !== 404) return false;
+  const body = e.body as { code?: unknown } | null | undefined;
+  return typeof body?.code === "string" && body.code === "NO_PAY_RUN";
+}
+
 export function PayrollRegisterScreen({
   snapshot,
   onSelect,
@@ -61,6 +75,16 @@ export function PayrollRegisterScreen({
   const [data, setData] = useState<PayrollRegisterResponse | null>(null);
   const [denied, setDenied] = useState(false);
   const [error, setError] = useState("");
+  /**
+   * The month the server said has no pay run, or "".
+   *
+   * ⛔ IT IS ITS OWN STATE AND NOT AN `error` STRING (D112). "You have not run
+   * September payroll yet" is the COMMONEST thing this screen has to say — its
+   * whole purpose is a month that may not have been run — and saying it in the
+   * red box reserved for failures taught the operator to read a normal state as
+   * a fault. Two states, because they are two different facts.
+   */
+  const [emptyMonth, setEmptyMonth] = useState("");
   const [busy, setBusy] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
   const [fileNotice, setFileNotice] = useState("");
@@ -80,6 +104,7 @@ export function PayrollRegisterScreen({
       }
       setBusy(true);
       setError("");
+      setEmptyMonth("");
       try {
         const res = await client.payrollRegister(companyID, month);
         setData(res);
@@ -112,6 +137,15 @@ export function PayrollRegisterScreen({
         if (e instanceof ApiError && e.status === 403) {
           setDenied(true);
           return "Refused.";
+        }
+        // ⛔ SWITCH ON THE SERVER'S CODE, NEVER ON ITS PROSE. `NO_PAY_RUN` is
+        // the wire contract (server.CodeNoPayRun); matching the sentence would
+        // break the next time somebody improves the wording, which is exactly
+        // the fragility that left this case rendering raw internals.
+        if (e instanceof ApiError && noPayRun(e)) {
+          setEmptyMonth(month);
+          const message = `No payroll has been run for ${month} yet.`;
+          return message;
         }
         const message = e instanceof Error ? e.message : String(e);
         setError(message);
@@ -229,7 +263,18 @@ export function PayrollRegisterScreen({
         </p>
       ) : null}
 
-      {data === null && error === "" ? (
+      {emptyMonth !== "" ? (
+        <p
+          data-testid="payroll-register-empty"
+          className="mt-3 max-w-3xl text-sm"
+        >
+          No payroll has been run for {emptyMonth} yet. Post one from Gateway
+          &rsaquo; Pay Run, then come back here. Nothing is wrong — a wage month
+          simply has no register until its pay run is posted.
+        </p>
+      ) : null}
+
+      {data === null && error === "" && emptyMonth === "" ? (
         <p
           data-testid="payroll-register-prompt"
           className="mt-3 max-w-3xl text-sm"

@@ -1,8 +1,12 @@
-# HANDOFF — D113 IS CLOSED. THE LARGEST GAP LEFT IS NOT A REGISTER ROW
+# HANDOFF — SIX ROWS LEFT, NONE HIGH. AND A CORRECTION THIS FILE OWES YOU
 
-**Written:** 2026-08-31, working tree CLEAN at `dc7edf2` · **Branch:** `session/t32-and-close-7-3`
-**Read time: 8 minutes.** ⭐ **Every claim in §1, §3 and §4 was MEASURED AT `dc7edf2`** and the
+**Written:** 2026-08-31, working tree CLEAN at `HEAD` · **Branch:** `session/t32-and-close-7-3`
+**Read time: 9 minutes.** ⭐ **Every claim in §1, §3 and §4 was MEASURED AT `HEAD`** and the
 command is beside it. §5 is carried from the register and says so.
+
+⛔ **§4.1 CORRECTS A FALSE CLAIM AN EARLIER VERSION OF THIS FILE MADE.** Read it before you plan
+anything: it is the clearest worked example in the repo of a real measurement supporting a wrong
+conclusion.
 
 ⛔ **THIS FILE ASSUMES YOU KNOW NOTHING ABOUT THIS REPOSITORY.** It is self-contained.
 §1–§2 get you a running app you can safely break. §3 is what is open. **§4 is the recommended
@@ -12,14 +16,22 @@ work.** §6 is the house standard your work must meet.
 
 ## 0. ⭐ THE ONE-LINE VERSION
 
-**D113, D115 and D116 are CLOSED** (`9177473`, `dc7edf2`). The demo book produces all twelve monthly GSTR-3Bs and its
-annual GSTR-9. **There is no HIGH row open. Seven rows remain, all MEDIUM or LOW.**
+**D112, D113, D115 and D116 are CLOSED** (`9177473`, `badea6f`, and this lane). The demo book produces all twelve monthly GSTR-3Bs and its
+annual GSTR-9. **There is no HIGH row open. Six rows remain, all MEDIUM or LOW.**
 
-⭐ **THE RECOMMENDED NEXT WORK IS NOT A REGISTER ROW — IT IS PAYROLL** (§4): a whole plane of the
-product that **no gate, no probe and no audit has ever run against real data**, because the seeder
-creates zero employees. It absorbs **D112** for free.
+⛔⛔ **THIS FILE'S ORIGINAL RECOMMENDATION WAS WRONG AND IS CORRECTED HERE.** It said payroll was
+*"a whole plane the product that no gate, no probe and no audit has ever run against real data."*
+**Not true** — `frontend/scripts/drive-payroll.mjs` is a full browser drive (now **38/38**) covering
+employee → salary → election → pay run → register → payslip → ECR/ESI/Form 138 with **Postgres as
+the oracle**, and the engine carries 72 + 36 test functions and all 19 golden corpora. The
+measurement behind the claim (`employees = 0` on the demo book) was right; the inference from it was
+not — **the drive builds its own tenant on purpose.** See **L34** for the full correction.
 
-⚠️ **If you would rather close rows than build, D109 is the best of the seven** (§5).
+⭐ **WHAT IS ACTUALLY LEFT IS SMALL AND NAMED (§3). D109 is the best row to take** (§5).
+
+⚠️ **TWO NARROW PAYROLL GAPS DO SURVIVE THE CORRECTION**, and neither is a plane: `drive-payroll.mjs`
+was **not in the §1 gate list** (it is now), and the demo book still has no payroll data, so
+`verify:demo` asserts nothing about it.
 
 ---
 
@@ -27,11 +39,11 @@ creates zero employees. It absorbs **D112** for free.
 
 ```bash
 cd /Users/yashbhalgat/code/tally-updated
-git log --oneline -1          # dc7edf2 fix(D116): the mock had it right and nothing ever…
+git log --oneline -1          # fix(D112): one server fact, two correct presentations
 git status --porcelain        # (empty)
 ```
 
-**Gate baselines at `dc7edf2`, ALL RE-RUN AT THAT COMMIT. Any red is yours.**
+**Gate baselines at `HEAD`, ALL RE-RUN AT THAT COMMIT. Any red is yours.**
 
 ⚠️ **EVERY LINE BELOW IS RUN FROM THE REPO ROOT** and each `cd` is contained in its own subshell for
 that reason — `cd frontend && … "$(cat frontend/.demo-company-id)"` looks right and cannot work,
@@ -43,13 +55,14 @@ the next command in the same block reads the wrong directory. Use absolute paths
 (cd backend && go build ./... && go vet ./... && go test ./... -count=1)  # all green
 bash backend/scripts/test_residue.sh                                     # OK: no residue
 (cd frontend && pnpm exec tsc --noEmit)                                  # clean
-(cd frontend && pnpm exec vitest run)                                    # 1845 passed / 114 files
+(cd frontend && pnpm exec vitest run)                                    # 1847 passed / 114 files
 (cd frontend && pnpm verify:demo "$(cat .demo-company-id)")              # 37/37  ⚠️ id is an ARGUMENT
 node frontend/scripts/drive-t4-slice2b-matching.mjs                      # 35/35, tenant reaped
 node frontend/scripts/drive-t12-gstr9.mjs                                # 33/33
 node frontend/scripts/drive-t11-budgets.mjs                              # 36/36
+node frontend/scripts/drive-payroll.mjs                                  # 38/38  ⚠️ needs vite too
 python3 corpora/validate.py                                              # OK
-python3 docs/parse-defect-register.py HANDOFF-PARITY-AUDIT.md            # 117 · 106 · 7 · 0 · 4
+python3 docs/parse-defect-register.py HANDOFF-PARITY-AUDIT.md            # 117 · 107 · 6 · 0 · 4
 ```
 
 ⛔ **THE BACKEND SUITE AND THE DRIVES NEED THE SERVICES UP (§2.1). The vitest and tsc lines do not.**
@@ -146,69 +159,79 @@ run is a write.
 
 ---
 
-## 3. ⛔ WHAT IS OPEN — measured 2026-08-31 at `dc7edf2`
+## 3. ⛔ WHAT IS OPEN — measured 2026-08-31 at `HEAD`
 
 ```bash
 python3 docs/parse-defect-register.py HANDOFF-PARITY-AUDIT.md
-# 117 REGISTERED · 106 CLOSED · 7 OPEN · 0 PARTIAL · 4 UNREADABLE
-#   OPEN: D99, D109, D110, D111, D112, D114, D117
+# 117 REGISTERED · 107 CLOSED · 6 OPEN · 0 PARTIAL · 4 UNREADABLE
+#   OPEN: D99, D109, D110, D111, D114, D117
 ```
 
-**⭐ NOTHING OPEN IS HIGH.** D113 was the last one. **D115 and D116 were found and closed in this
-session's two lanes; D117 was found in the second and is OPEN because its fix is a status decision,
-not a message edit.**
+**⭐ NOTHING OPEN IS HIGH.** D113 was the last one. **D112, D115 and D116 were found or closed across
+this session's three lanes; D117 was found in the second and is OPEN because its fix is a status
+decision, not a message edit.**
 
 | Row | Sev | One line | Shape of the work |
 |---|---|---|---|
 | **D109** | MEDIUM | A two-level report **exports flat**, so summing the money column returns exactly **2.000000×** the file's own total | A format decision (a Level column?) then a small change |
 | **D110** | MEDIUM | The Bank Reconciliation screen says *"matching is not built yet"* and **Alt+S on that same screen opens it** | One sentence, but keep the half it gets right |
 | **D111** | LOW | Every **pasted** bank statement is stored with `file_name = ''`, and the disclosure that names the unchecked file renders an empty string | One line, but **decide the name** |
-| **D112** | LOW | The Payroll Register answers an ordinary empty month with a raw internal error naming its own package **twice** | ⭐ **Absorbed by §4 for free** |
 | **D114** | LOW | The import panel says *"Esc goes back to the reconciliation statement"* and Esc goes to the **Gateway** | Pop one frame, or change the sentence |
 | **D117** | LOW | A DB/plumbing failure reaches the filer as a **422** carrying a SQL-shaped sentence — *"a dead database is not an unprocessable entity"* | ⚠️ **A status decision (422 vs 500), not a message edit. Registered from a CODE READING and never driven — reproduce it first** |
 | **D99** | LOW | ⛔ **OPEN BY DECISION, NOT BY OMISSION.** Its premise did not survive a real TallyPrime export and fixing it speculatively would make genuinely malformed numbers readable. **Leave it** | |
 
 ---
 
-## 4. ⭐⭐ THE RECOMMENDED WORK — PAYROLL, WHICH NO GATE HAS EVER RUN
+## 4. ⭐⭐ THE RECOMMENDED WORK — D109, AND WHY NOT PAYROLL
 
-### 4.1 The measurement
+### 4.1 ⛔⛔ FIRST, THE CORRECTION THIS FILE OWES YOU
+
+**An earlier version of this handoff recommended payroll, on the claim that no gate had ever run it.
+That claim was false and it is worth understanding how it was reached, because the mistake is a
+common one.**
+
+The measurement was real: `employees = 0, pay_runs = 0` on the demo book, re-measured twice. The
+INFERENCE was wrong — an empty demo book was read as an unexercised module. Measured properly:
 
 ```bash
-CO=$(cat frontend/.demo-company-id)
-psql "postgres://postgres:postgres@localhost:5433/tally?sslmode=disable" -X -A -F' | ' -c "
-SELECT (SELECT count(*) FROM employee WHERE company_id='$CO') AS employees,
-       (SELECT count(*) FROM pay_run WHERE company_id='$CO') AS pay_runs;"
-# employees | pay_runs
-# 0 | 0
+grep -h "^func Test" backend/internal/payroll/*_test.go | wc -l              # 72
+grep -h "^func Test" backend/internal/payroll/payrolldb/*_test.go | wc -l    # 36
+ls corpora/payroll/*.json | wc -l                                           # 19, all run by
+                                     # TestPayrollDerive_GoldenCorpus AND by corpora/validate.py
+node frontend/scripts/drive-payroll.mjs                                      # 38/38 in a browser
 ```
 
-**Still 0 and 0 at `9177473`.** The seeder creates no employees and no pay runs.
+`drive-payroll.mjs` drives **create employee → salary → statutory election → post a pay run → read
+the register → drill a payslip → download the ECR, the ESI return and Form 138**, with **Postgres as
+the oracle**. It builds its OWN tenant on purpose, which is exactly why the demo book is empty.
 
-### 4.2 What that means, and why it is the largest thing left
+⭐ **THE LESSON, WHICH IS THE SAME ONE L32 AND L33 KEEP TEACHING: an absence of DATA is not an
+absence of COVERAGE.** Check for the probe before concluding there isn't one — `ls
+frontend/scripts/` would have taken four seconds.
 
-**The surface is BUILT.** `backend/internal/server/server.go:1389-1419` routes the employee master,
-salary components, statutory elections, the pay run, the payroll register, `payroll-payslip` and
-`payroll-form-138`; `frontend/src/screens/payroll/` exists; `corpora/` carries **19 payroll cases**.
+⚠️ **TWO NARROW PAYROLL GAPS DO SURVIVE, and neither is a plane:**
 
-⛔ **AND NONE OF IT HAS EVER MET REAL DATA.** Pay Run, payslips, Form 138 and every EPF/ESI
-computation are undriven end to end. `verify:demo` asserts nothing about payroll because the demo
-book has no employees to assert about.
+1. `drive-payroll.mjs` **was not in the §1 gate list.** It is now. A drive nobody runs is a drive
+   that rots, and its absence is precisely what let this file claim payroll was untested.
+2. The demo book has no payroll data, so **`verify:demo` asserts nothing about payroll.** Seeding a
+   couple of employees and one pay run would let it — a real, contained piece of work, but a small
+   one, and NOT a plane of the product.
 
-⭐ **THE SHAPE OF THE WORK, in the order that keeps you honest:**
+### 4.2 ⭐ SO THE RECOMMENDATION IS D109 — the flat export
 
-1. **Seed employees and a pay run into the demo book** (`frontend/scripts/seed-demo.mts`), so the
-   plane has data at all. This is the load-bearing step — everything else is measurement.
-2. **Drive a pay run on the wire** against a fresh scratch book (§2.4), with the WebAuthn
-   authenticator installed (§2.5). ⛔ **The oracle is `psql` or the wire, never the screen.**
-3. **Assert the statutory arithmetic against `corpora/payroll/`** — those 19 cases are the oracle
-   somebody already wrote down, and nothing currently checks the running system against them.
-4. **Add payroll checks to `verify:demo`**, and ⛔ **read §4.3 before you write them.**
-5. **D112 falls out on the way:** the Payroll Register's empty-month sentence. ⚠️ **Distinguish the
-   sentinel from a real failure** rather than rewording one string — `ErrPayRunNotFound` is an EMPTY
-   STATE on the screen and a genuine refusal on the export route.
+**MEDIUM, the highest severity open.** A two-level report exports flat, so summing the money column
+in the exported file returns exactly **2.000000×** the file's own stated total, because every parent
+is duplicated by exactly one child.
 
-⚠️ **EPF/EDLI ADMIN CHARGES ARE BLOCKED** (§7) — the rest of payroll is not. Do not let that stop you.
+⛔ **IT IS A FORMAT DECISION BEFORE IT IS A BUG FIX, and §6.1's rule applies:** decide what the
+export MEANS (a Level column? parents omitted? an indent convention?) and record the decision with
+whatever you relied on, before touching code. Its row names both affected reports — **Stock Summary
+and Outstandings** — and warns that the exact `2.000000` ratio is a property of the current data,
+not a law.
+
+⚠️ **D110, D111 and D114 are each an hour** and all three are "a sentence promises something the
+code does not do". **D117 needs reproducing before it needs fixing** — its row says plainly it was
+registered from a code reading and never driven.
 
 ### 4.3 ⛔⛔ READ THIS BEFORE YOU WRITE A SINGLE PROBE — IT IS WHY D113 SURVIVED
 
@@ -231,11 +254,6 @@ be green, because summing is exactly what hides a bad summand.
 own vouchers, so it never meets the shape the seeder ships. **Two green gates, two different ways of
 never asking the real question.**
 
-⭐ **THE PAYROLL VERSION OF THIS MISTAKE IS ALREADY WAITING FOR YOU:** a probe that runs one pay run
-for one employee for one month will be green, and will tell you nothing about a month with a
-mid-month joiner, a zero-salary employee, an employee below the ESI threshold, or a month with no pay
-run at all (which is D112). **Ask the questions a payroll clerk asks.**
-
 ---
 
 ## 5. THE OTHER ROWS — carried from the register, not re-measured this session
@@ -253,7 +271,6 @@ in its fix. **Read the row before starting; each names something you would other
 - **D111** (LOW) — the nameless pasted statement. ⚠️ **Do not copy the preview's fallback**
   (`pasted.csv`): two pasted statements would be indistinguishable again, the same defect one step
   over.
-- **D112** (LOW) — ⭐ **absorbed by §4 for free.**
 - **D114** (LOW) — Esc unwinds to the Gateway. ⚠️ Check the Alt+S match panel at the same time; its
   footer makes the same promise.
 - **D99** (LOW) — ⛔ **leave it.** Open by explicit decision, recorded in §7's L27.
@@ -313,11 +330,13 @@ to a portal.** Any row that claims portal conformance is claiming more than this
 
 1. **This file.**
 2. `HANDOFF-PARITY-AUDIT.md` §7's **`### L32`** — the house format you must copy, and §4.3's lesson
-   in full.
+   in full. Then **`### L34`**, for the correction in §4.1 and for a fix that needed three layers.
 3. `backend/internal/compliance/gstr/gstr3b.go` — `clampNegatives` and its doc comment, for how a
    decision with an external source is recorded at the code.
 4. `frontend/scripts/verify-demo.mts` §8b and §8c — the checks that close the aggregate-query hole
    and the package-prefix leak, with the comments explaining why each gate was green while broken.
    ⭐ **Both were mutation-proved by rebuilding cored broken and watching them fail (§6).**
-5. `corpora/payroll/` — the 19 cases nothing currently runs against the live system (§4).
+5. `frontend/scripts/drive-payroll.mjs` — the browser drive §4.1 is about, and its §6b (D112).
+   ⭐ **Read its header**: it explains why it builds its own tenant, which is the fact an earlier
+   version of this handoff misread as "payroll is untested".
 6. `docs/usability-day-2026-08-30.md` §6.6 — what the 2026-08-31 pass did **not** cover.

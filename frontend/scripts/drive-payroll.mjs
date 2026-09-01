@@ -45,6 +45,9 @@ const CODE = `E-${stamp.toUpperCase()}`;
 const NAME = "Asha Rao";
 /** A month in the past, so nothing depends on today's date. */
 const MONTH = "2026-07";
+// A month this drive deliberately never runs payroll for, so the register has
+// an honest empty case to answer. See section 6b (D112).
+const UNRUN_MONTH = "2026-09";
 
 const j = async (method, path, { token, body } = {}) => {
   const r = await fetch(`${CORED}${path}`, {
@@ -454,6 +457,53 @@ try {
   await press("Control+a", 2500);
   const q4 = await text("form138-notice");
   rec("Q4 is refused rather than guessed at", /refused/i.test(q4), q4.slice(0, 160));
+
+  // =========================================================================
+  // 6b. AN UNRUN MONTH IS AN EMPTY STATE, NOT A CRASH  (D112)
+  // =========================================================================
+  // ⛔ THIS IS THE COMMONEST THING THIS SCREEN HAS TO SAY and it was the one
+  // case left to the server's sentence. Before the fix the operator read:
+  //
+  //   payrolldb: payroll register for 2026-09: payrolldb: pay run not found:
+  //   no live pay run for 2026-09
+  //
+  // — the Go package twice, the sentinel wrapped in its own text, and nothing
+  // they could act on. It is driven HERE, last, because everything above needs
+  // the register loaded and this deliberately unloads it.
+  await openFromGateway("Payroll Register");
+  await type("payroll-register-month", UNRUN_MONTH);
+  await page.getByRole("button", { name: "Show the register" }).click();
+  await page.waitForTimeout(1500);
+
+  rec(
+    "an unrun month draws NO error box",
+    !(await seen("payroll-register-error")),
+    (await seen("payroll-register-error")) ? await text("payroll-register-error") : "no error box",
+  );
+  const empty = (await seen("payroll-register-empty")) ? await text("payroll-register-empty") : "";
+  rec(
+    "…it draws an empty state naming the month and where to go next",
+    empty.includes(UNRUN_MONTH) && /pay run/i.test(empty),
+    empty.slice(0, 160),
+  );
+  // ⛔ THE ORACLE FOR "NO INTERNALS LEAKED" IS THE RENDERED TEXT, not the
+  // absence of a testid: a screen that printed the raw sentence into the empty
+  // state would pass every check above.
+  rec(
+    "…and it leaks no package name or sentinel wording",
+    empty !== "" && !/payrolldb|not found/i.test(empty),
+    empty.slice(0, 160),
+  );
+  // The CONTROL: the register still works for the month that WAS run, from the
+  // same screen, right after. An empty state that stuck would be a new defect.
+  await type("payroll-register-month", MONTH);
+  await page.getByRole("button", { name: "Show the register" }).click();
+  await page.waitForTimeout(1500);
+  rec(
+    "…and the month that WAS run still renders from the same screen",
+    (await seen(`payroll-register-row:${CODE}`)) && !(await seen("payroll-register-empty")),
+    await text(`payroll-register-row:${CODE}`),
+  );
 
   // =========================================================================
   // 7. NOTHING WENT WRONG QUIETLY.

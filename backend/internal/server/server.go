@@ -5132,6 +5132,21 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
+// writeCodedError is writeError plus a MACHINE-READABLE code, for the refusals a
+// client has to tell apart from every other failure of the same status.
+//
+// ⛔ THE TWO KEYS ARE FOR TWO DIFFERENT READERS and both are load-bearing — the
+// same split writeDraftAlreadyAccepted documents at length. `error` is the
+// sentence a human reads and the only key http.ts lifts into ApiError.message;
+// `code` is the stable token a screen switches on. A screen that has to
+// recognise a refusal by matching its PROSE is a screen that breaks the next
+// time somebody improves the wording — and it is why D112 shipped: the payroll
+// register had nothing but the sentence, so an ordinary unrun month and a real
+// server failure were literally indistinguishable to it.
+func writeCodedError(w http.ResponseWriter, status int, code, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg, "code": code})
+}
+
 // writeDraftAlreadyAccepted refuses a second accept of one insightd draft.
 //
 // ⛔⛔ THE BODY SHAPE IS insightd'S, NOT CORED'S, AND THAT IS THE WHOLE POINT OF

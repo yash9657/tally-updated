@@ -172,7 +172,12 @@ describe("the heading and the figures under it are always the same month", () =>
     const client = registerClient(async () => {
       calls += 1;
       if (calls === 1) return view();
-      throw new ApiError(404, "payrolldb: no pay run for wage month 2026-08");
+      // ⚠️ A GENUINE failure, not the no-pay-run one. This test's property is
+      // "a failed re-read clears the rows"; since D112 the unrun month is an
+      // EMPTY STATE with its own test above, which asserts the same clearing.
+      throw new ApiError(500, "the payroll service is unavailable, reading 2026-08", {
+        error: "the payroll service is unavailable, reading 2026-08",
+      });
     });
     renderRegister(client);
     await showMonth("2026-07");
@@ -184,6 +189,66 @@ describe("the heading and the figures under it are always the same month", () =>
     expect(
       (await screen.findByTestId("payroll-register-error")).textContent,
     ).toContain("2026-08");
+  });
+
+  it("shows an EMPTY STATE for a month nobody has run, not an error", async () => {
+    // ⛔ D112. "You have not run September payroll yet" is the COMMONEST state
+    // on this screen — its whole purpose is a month that may not have been run
+    // — and it was rendered as a red server error reading
+    //
+    //   payrolldb: payroll register for 2026-08: payrolldb: pay run not found:
+    //   no live pay run for 2026-08
+    //
+    // measured on the wire at badea6f. The screen now switches on the server's
+    // NO_PAY_RUN code, never on the prose.
+    let calls = 0;
+    const client = registerClient(async () => {
+      calls += 1;
+      if (calls === 1) return view();
+      throw new ApiError(
+        404,
+        "pay run not found for wage month 2026-08 — no payroll has been run for it yet",
+        { code: "NO_PAY_RUN", error: "pay run not found for wage month 2026-08" },
+      );
+    });
+    renderRegister(client);
+    await showMonth("2026-07");
+    expect(await screen.findByTestId("payroll-register-table")).toBeTruthy();
+
+    await showMonth("2026-08");
+
+    // It is not an error.
+    expect(screen.queryByTestId("payroll-register-error")).toBeNull();
+
+    // It is an empty state that names the month and says what to do next.
+    const empty = await screen.findByTestId("payroll-register-empty");
+    expect(empty.textContent).toContain("2026-08");
+    expect(empty.textContent).toMatch(/pay run/i);
+    // ⛔ AND IT MUST NOT LEAK THE SERVER'S INTERNALS EITHER.
+    expect(empty.textContent).not.toMatch(/payrolldb|not found/i);
+
+    // ⛔ THE ROW-CLEARING PROPERTY STILL HOLDS ON THIS PATH. An empty state that
+    // left July's figures under an August heading would be the SAME defect the
+    // error path was written to avoid, one branch over.
+    expect(screen.queryByTestId("payroll-register-table")).toBeNull();
+    expect(screen.queryByTestId("payroll-register-rulesets")).toBeNull();
+  });
+
+  it("still shows the server's own words for a REAL failure", async () => {
+    // The control. Only NO_PAY_RUN becomes an empty state; everything else
+    // keeps the server's sentence, for the reason usePrint gives — a refusal
+    // written to tell an operator what to fix must reach them intact.
+    const client = registerClient(async () => {
+      throw new ApiError(422, "employee E-0007 has no UAN", {
+        error: "employee E-0007 has no UAN",
+      });
+    });
+    renderRegister(client);
+    await showMonth("2026-08");
+    expect(screen.queryByTestId("payroll-register-empty")).toBeNull();
+    expect(
+      (await screen.findByTestId("payroll-register-error")).textContent,
+    ).toContain("E-0007 has no UAN");
   });
 
   it("refuses a malformed month locally, and makes no request", async () => {

@@ -102,7 +102,11 @@ const (
 // company in context. RLS makes another tenant's run invisible rather than
 // forbidden, so this is also the answer to a cross-tenant id — which is the
 // correct answer to give either way.
-var ErrPayRunNotFound = errors.New("payrolldb: pay run not found")
+// ⚠️ ITS TEXT NAMES NO GO PACKAGE. This sentinel reaches an operator: the
+// payroll handlers pass their message through deliberately (see
+// writePayrollError), so "payrolldb: " was the first thing on the screen. D116
+// closed the same class across compliance/gstr.
+var ErrPayRunNotFound = errors.New("pay run not found")
 
 // ErrPayRunUnbalanced is returned when a slip's own figures do not satisfy
 // net = gross - deductions, or the deductions do not account for themselves.
