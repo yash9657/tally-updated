@@ -12,6 +12,7 @@
 
 import type {
   BalanceSheetResponse,
+  BooksClosure,
   CompanyFeaturesRequest,
   CompanyFeaturesResponse,
   CompanyView,
@@ -328,6 +329,34 @@ export interface CoredClient {
    * the company does not exist yet.
    */
   restoreCompany(archive: Blob): Promise<RestoreResult>;
+
+  /**
+   * Read the company's year-end lock (GET /books-closure).
+   */
+  booksClosure(companyID: string): Promise<BooksClosure>;
+
+  /**
+   * Close the books through `closedThrough` (POST /books-closure).
+   *
+   * ⛔ IT ONLY EVER MOVES THE LOCK FORWARD. Closing over an already-later
+   * closure is a 409 carrying the code `BOOKS_ALREADY_CLOSED_LATER`, not a
+   * silent re-open — because a typo (2026-03-31 for 2027-03-31) would otherwise
+   * unlock twelve months of filed books and answer 200.
+   *
+   * @param closedThrough the LAST day of the period being closed, YYYY-MM-DD.
+   */
+  closeBooks(companyID: string, closedThrough: string): Promise<BooksClosure>;
+
+  /**
+   * Lift the year-end lock entirely (DELETE /books-closure).
+   *
+   * ⚠️ A SEPARATE, DELIBERATE ACT, and that is the whole reason it is its own
+   * method rather than `closeBooks(null)`. Re-opening a filed year is the
+   * dangerous direction; it should not be one mistyped character away from the
+   * routine one. A re-open when nothing is closed is a 409 `NOTHING_CLOSED`
+   * rather than a reassuring 200.
+   */
+  reopenBooks(companyID: string): Promise<BooksClosure>;
 
   /**
    * The Bank Reconciliation Statement for one bank ledger, as at an optional

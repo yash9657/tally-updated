@@ -5,6 +5,7 @@ import { AppShell } from "../app/AppShell";
 import { CompanyProvider } from "../app/CompanyContext";
 import { createDefaultRegistry } from "../app/defaultScreens";
 import { createMockClient } from "../api";
+import { resetMockBooksClosure } from "../api/mock";
 import type { CoredClient } from "../api";
 
 afterEach(cleanup);
@@ -180,5 +181,104 @@ describe("the Data screen renders the SERVER's sentence and never its own", () =
     });
     expect(client.backupCompany).toHaveBeenCalledWith("company-demo");
     vi.unstubAllGlobals();
+  });
+});
+
+describe("closing a financial year — the third item on Alt+Y", () => {
+  /**
+   * ⛔ THE MOCK'S CLOSURE IS MODULE STATE, so a leftover lock from one test
+   * would silently change the next one's meaning. Reset it, and assert the
+   * reset worked rather than trusting it.
+   */
+  function openData(client: CoredClient) {
+    resetMockBooksClosure();
+    renderShell(client);
+    altMacY(document.body);
+    return client;
+  }
+
+  it("says the books are OPEN before anything is closed, and does not just stay blank", async () => {
+    openData(createMockClient());
+    expect(
+      (await screen.findByTestId("data-closure-state")).textContent,
+    ).toMatch(/not been closed|open/i);
+  });
+
+  it("closes a year, and then SAYS which year is closed and who closed it", async () => {
+    openData(createMockClient());
+    fireEvent.change(await screen.findByTestId("data-close-through"), {
+      target: { value: "2027-03-31" },
+    });
+    fireEvent.click(screen.getByTestId("data-close-button"));
+
+    // ⛔ THE ORACLE IS THE STATE LINE, NOT THE BUTTON. D107 closed a defect
+    // where a screen printed "Saved" off a keypress flag before the server had
+    // answered; this reads the line that is rendered FROM the server's reply.
+    await waitFor(() =>
+      expect(screen.getByTestId("data-closure-state").textContent).toContain(
+        "2027-03-31",
+      ),
+    );
+    expect(screen.getByTestId("data-closure-state").textContent).toMatch(/closed/i);
+  });
+
+  it("⛔ REFUSES TO CLOSE BACKWARD, in the SERVER's words", async () => {
+    const client = openData(createMockClient());
+    fireEvent.change(await screen.findByTestId("data-close-through"), {
+      target: { value: "2027-03-31" },
+    });
+    fireEvent.click(screen.getByTestId("data-close-button"));
+    await waitFor(() =>
+      expect(screen.getByTestId("data-closure-state").textContent).toContain("2027-03-31"),
+    );
+
+    // The typo that would otherwise unlock twelve filed months.
+    fireEvent.change(screen.getByTestId("data-close-through"), {
+      target: { value: "2026-03-31" },
+    });
+    fireEvent.click(screen.getByTestId("data-close-button"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("data-error").textContent).toMatch(/already closed/i),
+    );
+    // ⛔ AND THE LOCK DID NOT MOVE. A refusal that still changed the state
+    // would be the worse half of this defect.
+    expect(screen.getByTestId("data-closure-state").textContent).toContain("2027-03-31");
+    expect(client).toBeTruthy();
+  });
+
+  it("re-opens, and the re-open is a SEPARATE control from closing", async () => {
+    openData(createMockClient());
+    fireEvent.change(await screen.findByTestId("data-close-through"), {
+      target: { value: "2027-03-31" },
+    });
+    fireEvent.click(screen.getByTestId("data-close-button"));
+    await waitFor(() =>
+      expect(screen.getByTestId("data-closure-state").textContent).toContain("2027-03-31"),
+    );
+
+    fireEvent.click(screen.getByTestId("data-reopen-button"));
+    await waitFor(() =>
+      expect(screen.getByTestId("data-closure-state").textContent).toMatch(
+        /not been closed|open/i,
+      ),
+    );
+  });
+
+  it("offers no re-open button while nothing is closed", async () => {
+    openData(createMockClient());
+    await screen.findByTestId("data-closure-state");
+    // ⚠️ A re-open control on books that are open is an invitation to press
+    // something that can only ever answer 409.
+    expect(screen.queryByTestId("data-reopen-button")).toBeNull();
+  });
+
+  it("SAYS what closing does before the operator does it", async () => {
+    openData(createMockClient());
+    const warn = (await screen.findByTestId("data-closure-warning")).textContent ?? "";
+    // The three facts an operator needs BEFORE pressing, not after.
+    expect(warn).toMatch(/last day/i);        // which date to type
+    expect(warn).toMatch(/read|report/i);      // a closed year stays readable
+    expect(warn).toMatch(/owner|re-open/i);    // it is reversible, deliberately
   });
 });

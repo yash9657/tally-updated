@@ -5314,3 +5314,21 @@ export interface GSTR9TaxLedgers {
   inputSGST: string;
   inputIGST: string;
 }
+
+/**
+ * The company's YEAR-END LOCK: how far the books have been closed.
+ *
+ * ⚠️ `closedThrough` IS THE LAST CLOSED DAY, INCLUSIVE — the last day of the
+ * financial year being closed (2027-03-31 for FY 2026-27), never the first day
+ * of the new one. The server's cutoff is one day later; the conversion happens
+ * there, once, and no client should ever do it.
+ *
+ * `closedAt` / `closedBy` record what HAPPENED and survive a re-open, because
+ * "was this year ever closed, and by whom?" is a question about history.
+ */
+export interface BooksClosure {
+  closed: boolean;
+  closedThrough: string | null;
+  closedAt: string | null;
+  closedBy: string | null;
+}

@@ -21,6 +21,7 @@ import {
   printTemplateSurfaceFor,
 } from "../screens/printTemplateSurface";
 import type {
+  BooksClosure,
   BalanceSheetResponse,
   CompanyFeaturesRequest,
   CompanyFeaturesResponse,
@@ -2409,6 +2410,31 @@ function mockAllocationFor(centreID: string): Money {
     default:
       return "0.0000";
   }
+}
+
+/**
+ * The mock's year-end lock. Module-level so a screen test can close, re-open
+ * and close again through one client and see the state move — a mock that
+ * forgot between calls would let a screen pass while doing nothing.
+ */
+let mockClosedThrough: string | null = null;
+let mockClosedAt: string | null = null;
+let mockClosedBy: string | null = null;
+
+function mockClosure(): BooksClosure {
+  return {
+    closed: mockClosedThrough !== null,
+    closedThrough: mockClosedThrough,
+    closedAt: mockClosedAt,
+    closedBy: mockClosedBy,
+  };
+}
+
+/** Reset the mock's year-end lock between tests. */
+export function resetMockBooksClosure(): void {
+  mockClosedThrough = null;
+  mockClosedAt = null;
+  mockClosedBy = null;
 }
 
 export function createMockClient(opts: MockClientOptions = {}): CoredClient {
@@ -9936,6 +9962,52 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
           "because it refuses no alter or delete",
       );
     },
+    // ---- YEAR-END CLOSURE (0089).
+    //
+    // ⛔ THE REFUSALS MIRROR THE SERVER'S, INCLUDING THEIR CODES. D116 closed a
+    // defect that existed only because this mock and cored disagreed about the
+    // TEXT of a refusal and nothing compared them; the screens were built
+    // against the mock and shown something else. Both 409s here carry the same
+    // `code` the server sends, because DataScreen switches on the code.
+    async booksClosure(_companyID: string): Promise<BooksClosure> {
+      return mockClosure();
+    },
+    async closeBooks(
+      _companyID: string,
+      closedThrough: string,
+    ): Promise<BooksClosure> {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(closedThrough)) {
+        throw new ApiError(
+          400,
+          "closed_through must be a date as YYYY-MM-DD, and it is the LAST day of the " +
+            "period being closed — for the financial year 2026-27 that is 2027-03-31, " +
+            "never 2027-04-01",
+        );
+      }
+      if (mockClosedThrough !== null && closedThrough <= mockClosedThrough) {
+        throw new ApiError(
+          409,
+          `the books are already closed through a later date (${mockClosedThrough}). ` +
+            "Closing only ever moves the lock FORWARD; to unlock a period that is " +
+            "already closed, re-open the books first — that is a separate, deliberate act",
+          { code: "BOOKS_ALREADY_CLOSED_LATER" },
+        );
+      }
+      mockClosedThrough = closedThrough;
+      mockClosedAt = "2026-09-01T00:00:00Z";
+      mockClosedBy = "mock-owner";
+      return mockClosure();
+    },
+    async reopenBooks(_companyID: string): Promise<BooksClosure> {
+      if (mockClosedThrough === null) {
+        throw new ApiError(409, "no period is closed, so there is nothing to re-open", {
+          code: "NOTHING_CLOSED",
+        });
+      }
+      mockClosedThrough = null;
+      return mockClosure();
+    },
+
     async resolveReconciliation(_companyID: string, reconID: string) {
       throw new ApiError(
         404,

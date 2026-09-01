@@ -12,6 +12,7 @@ import {
   type HttpClientOptions,
 } from "./http";
 import type {
+  BooksClosure,
   BalanceSheetResponse,
   CompanyFeaturesRequest,
   CompanyFeaturesResponse,
@@ -240,6 +241,29 @@ function fromRestoreWire(w: RestoreWire): RestoreResult {
   };
 }
 
+/** The wire shape of the year-end lock; see BooksClosure for the camelCase one. */
+interface BooksClosureWire {
+  closed: boolean;
+  closed_through?: string;
+  closed_at?: string;
+  closed_by?: string;
+}
+
+/**
+ * ⚠️ ABSENT KEYS BECOME null, NOT undefined. The server omits closed_through
+ * entirely when nothing is closed (omitempty), and a screen that switched on
+ * `undefined` vs `null` would read "never closed" and "closed but unknown" as
+ * the same thing.
+ */
+function fromClosureWire(w: BooksClosureWire): BooksClosure {
+  return {
+    closed: w.closed,
+    closedThrough: w.closed_through ?? null,
+    closedAt: w.closed_at ?? null,
+    closedBy: w.closed_by ?? null,
+  };
+}
+
 export function createRestClient(
   opts: HttpClientOptions | { http: HttpClient } = {},
 ): CoredClient {
@@ -310,6 +334,30 @@ export function createRestClient(
         archive,
         "application/gzip",
       ).then(fromRestoreWire);
+    },
+
+    // ---- YEAR-END CLOSURE (0089): the third item on the Alt+Y Data menu.
+    //
+    // ⛔ THE WIRE IS snake_case AND THE CLIENT IS camelCase, converted HERE and
+    // nowhere else, so a screen never sees `closed_through`. The three routes
+    // answer the SAME body shape on purpose — a client must not have to
+    // reconcile two spellings of one fact — so one mapper serves all three.
+    booksClosure(companyID) {
+      return http
+        .get<BooksClosureWire>(`${company(companyID)}/books-closure`)
+        .then(fromClosureWire);
+    },
+    closeBooks(companyID, closedThrough) {
+      return http
+        .post<BooksClosureWire>(`${company(companyID)}/books-closure`, {
+          closed_through: closedThrough,
+        })
+        .then(fromClosureWire);
+    },
+    reopenBooks(companyID) {
+      return http
+        .del<BooksClosureWire>(`${company(companyID)}/books-closure`)
+        .then(fromClosureWire);
     },
 
     // ---- Bank reconciliation (T4).

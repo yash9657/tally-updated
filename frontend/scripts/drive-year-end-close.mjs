@@ -29,7 +29,7 @@
  *
  * RUN:  (cd frontend && pnpm seed:demo -- --name "Year End Scratch")
  *       node frontend/scripts/drive-year-end-close.mjs "$(cat frontend/.year-end-scratch-company-id)"
- *       (needs cored :8087 only — there is no browser half here.)
+ *       (needs cored :8087 AND vite :5173 — §8 drives the screen in a browser.)
  */
 const B = "http://localhost:8087";
 const CO = process.argv[2];
@@ -119,5 +119,77 @@ const again = await call("DELETE", `${base}/books-closure`);
 ok(again.status === 409 && again.j?.code === "NOTHING_CLOSED",
    "re-opening when nothing is closed is refused, not silently OK", `${again.status} ${again.j?.code}`);
 
-console.log(`\n${pass}/${pass + fail} checks passed`);
-process.exit(fail ? 1 : 0);
+// ===========================================================================
+// 8. THE SCREEN, IN A REAL BROWSER, AGAINST THIS SAME SERVER
+// ===========================================================================
+// ⛔ EVERYTHING ABOVE IS THE WIRE, AND THE WIRE IS NOT THE PRODUCT. The screen
+// tests drive DataScreen against the MOCK; §1-§7 drive cored with fetch. Only
+// this section proves the two meet — which is the gap D112's own drive existed
+// to close for payroll, and the gap that let eight payroll routes ship with no
+// screen at all.
+console.log("== 8. THE SCREEN (Alt+Y > Data), in a browser ==");
+const { openApp, rec, summary } = await import("./audit-harness.mjs");
+const app = await openApp({ company: CO, expectCompany: null });
+const { page, altMac } = app;
+const testid = (t) => page.getByTestId(t);
+const textOf = async (t) => ((await testid(t).count()) ? (await testid(t).first().innerText()) : "");
+
+await altMac("y", 1200);
+rec("Alt+Y opens the Data screen", (await testid("data-screen").count()) > 0);
+
+const stateBefore = await textOf("data-closure-state");
+rec("the screen states the CURRENT position, not a blank",
+    /open|closed/i.test(stateBefore), stateBefore.slice(0, 120));
+
+await testid("data-close-through").fill("2027-03-31");
+await testid("data-close-button").click();
+await page.waitForTimeout(1500);
+const stateAfter = await textOf("data-closure-state");
+rec("closing from the screen locks the year on the SERVER",
+    stateAfter.includes("2027-03-31") && /closed/i.test(stateAfter), stateAfter.slice(0, 160));
+
+// ⛔ THE ORACLE IS THE WIRE, NEVER THE SCREEN. D107: a screen that renders
+// "closed" off its own keypress looks identical to one that closed nothing.
+const wire = await call("GET", `${base}/books-closure`);
+rec("…and the SERVER agrees the books are closed through 2027-03-31",
+    wire.j?.closed === true && wire.j?.closed_through === "2027-03-31", wire.text.slice(0, 140));
+
+// The refusal, in the server's words, on the screen.
+await testid("data-close-through").fill("2026-03-31");
+await testid("data-close-button").click();
+await page.waitForTimeout(1200);
+const err = await textOf("data-error");
+rec("closing BACKWARD is refused on screen, in the server's words",
+    /already closed/i.test(err), err.slice(0, 160));
+rec("…and the lock did NOT move",
+    (await textOf("data-closure-state")).includes("2027-03-31"));
+
+await testid("data-reopen-button").click();
+await page.waitForTimeout(1500);
+const reopenedText = await textOf("data-closure-state");
+const wire2 = await call("GET", `${base}/books-closure`);
+rec("re-opening from the screen lifts the lock on the SERVER",
+    /open|not been closed/i.test(reopenedText) && wire2.j?.closed === false,
+    `${reopenedText.slice(0, 80)} | wire ${wire2.text.slice(0, 60)}`);
+
+// ⛔ THE EXPECTED REFUSALS ARE ENUMERATED, NOT FILTERED OUT — "ignore the
+// failures" is how a probe stops measuring anything. This drive PROVOKES
+// exactly two non-2xx responses and both are designed behaviour:
+//
+//   403  the WebAuthn step-up on the session's first write (the ceremony runs
+//        and the write is retried; every drive in this repo meets it)
+//   409  the backward-close we asked for on purpose, four probes above
+//
+// Anything else — and any real JavaScript error — must still fail this.
+const expectedRefusal = /status of (403|409)/;
+const unexpected = app.consoleErrors.filter((e) => !expectedRefusal.test(e));
+rec("no javascript errors beyond the two refusals this drive provokes on purpose",
+    unexpected.length === 0,
+    unexpected.length === 0
+      ? `${app.consoleErrors.length} expected refusal log(s), 0 unexplained`
+      : unexpected.slice(0, 2).join(" | "));
+await app.browser.close();
+
+const browserFails = summary();
+console.log(`\n${pass}/${pass + fail} wire checks passed`);
+process.exit(fail || browserFails ? 1 : 0);

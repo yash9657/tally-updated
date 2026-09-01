@@ -1,7 +1,7 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError } from "../api";
-import type { RestoreResult } from "../api";
+import type { BooksClosure, RestoreResult } from "../api";
 import { useClient, useCompanyID } from "../app/CompanyContext";
 // ⛔ THE SHARED ANCHOR. This file used to carry its own copy, whose comment said
 // it was "deliberately not a third variant" — while being one. There is now
@@ -58,6 +58,8 @@ export function DataScreen(): JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [savedAs, setSavedAs] = useState<string | null>(null);
   const [restored, setRestored] = useState<RestoreResult | null>(null);
+  const [closure, setClosure] = useState<BooksClosure | null>(null);
+  const [closeThrough, setCloseThrough] = useState("");
 
   const takeBackup = useCallback(async () => {
     setBusy("backup");
@@ -95,6 +97,45 @@ export function DataScreen(): JSX.Element {
     },
     [client],
   );
+
+  // ⛔ READ THE LOCK FROM THE SERVER, ALWAYS, AND NEVER FROM WHAT WE JUST SENT.
+  // Every one of the three routes answers the SAME body, so the state on screen
+  // is the state the server holds — including after a REFUSED close, where the
+  // lock must be shown unmoved. A screen that updated from its own request
+  // would show a year closed that is not.
+  const refresh = useCallback(async () => {
+    try {
+      setClosure(await client.booksClosure(companyID));
+    } catch (e: unknown) {
+      setError(messageOf(e));
+    }
+  }, [client, companyID]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const doClose = useCallback(async () => {
+    setError(null);
+    try {
+      setClosure(await client.closeBooks(companyID, closeThrough.trim()));
+    } catch (e: unknown) {
+      setError(messageOf(e));
+      // The refusal may have been about state rather than input, so re-read
+      // rather than assume the lock is where we last saw it.
+      void refresh();
+    }
+  }, [client, companyID, closeThrough, refresh]);
+
+  const doReopen = useCallback(async () => {
+    setError(null);
+    try {
+      setClosure(await client.reopenBooks(companyID));
+    } catch (e: unknown) {
+      setError(messageOf(e));
+      void refresh();
+    }
+  }, [client, companyID, refresh]);
 
   return (
     <div className="data-screen" data-testid="data-screen">
@@ -184,6 +225,70 @@ export function DataScreen(): JSX.Element {
         )}
       </section>
 
+      <section className="data-close-year">
+        <h2>Close a Financial Year</h2>
+
+        {/*
+          ⛔ THE CONSEQUENCES BEFORE THE ACT, like the restore warning above.
+          Three facts decide whether an operator should press this, and all
+          three are things they cannot find out by pressing it.
+        */}
+        <p data-testid="data-closure-warning">
+          Closing locks the books up to and including the date you give — type
+          the LAST day of the year you are closing (31 March 2027 closes
+          2026-27), not the first day of the new one. Nothing is copied or moved:
+          the year stays exactly where it is and every report still reads it, so
+          an auditor can be given the closed year without you giving up your own
+          history. Afterwards nobody can post, alter or delete inside it —
+          including the owner — until an owner re-opens it, which is a separate,
+          deliberate act.
+        </p>
+
+        <p data-testid="data-closure-state">
+          {closure === null
+            ? "Reading the current position…"
+            : closure.closed
+              ? `The books are CLOSED through ${closure.closedThrough}.` +
+                (closure.closedBy !== null ? ` Closed by ${closure.closedBy}.` : "") +
+                (closure.closedAt !== null ? ` Closed at ${closure.closedAt}.` : "")
+              : "No year has been closed. The books are open."}
+        </p>
+
+        <label className="data-close-label">
+          Close through (the last day of the year)
+          <input
+            type="text"
+            inputMode="numeric"
+            placeholder="2027-03-31"
+            value={closeThrough}
+            onChange={(e) => setCloseThrough(e.target.value)}
+            data-testid="data-close-through"
+          />
+        </label>
+        <button
+          type="button"
+          onClick={() => void doClose()}
+          data-testid="data-close-button"
+        >
+          Close the books
+        </button>
+
+        {/*
+          ⚠️ THE RE-OPEN APPEARS ONLY WHEN THERE IS SOMETHING TO RE-OPEN. A
+          control that can only ever answer 409 is a control that teaches the
+          operator to ignore refusals.
+        */}
+        {closure !== null && closure.closed && (
+          <button
+            type="button"
+            onClick={() => void doReopen()}
+            data-testid="data-reopen-button"
+          >
+            Re-open the books
+          </button>
+        )}
+      </section>
+
       <section className="data-split">
         <h2>Split Company Data</h2>
         {/*
@@ -195,9 +300,11 @@ export function DataScreen(): JSX.Element {
           Not built, deliberately. Tally splits a company by financial year
           because it loads the whole company into memory and cannot hold the
           history. This product keeps every year queryable at once, so splitting
-          would be a workaround for a limit it does not have. Closing a year into
-          a read-only archive company is a different feature with a real reason,
-          and it is not built either.
+          would be a workaround for a limit it does not have. The real need next
+          door — freezing a finished year so nobody can change it — is built, and
+          it is the section above: the year is closed IN PLACE rather than copied
+          into a second company, so there is no archive that can drift from the
+          original.
         </p>
       </section>
 
