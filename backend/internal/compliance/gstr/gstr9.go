@@ -584,16 +584,36 @@ func (s *Service) Generate9(ctx context.Context, from, to string, opts Options3B
 		Months: make([]Month9, 0, 12),
 	}
 
+	// ⛔ EVERY MONTH IS ATTEMPTED, EVEN AFTER ONE FAILS.
+	//
+	// This loop used to return on the FIRST failing period. A twelve-month
+	// report that dies on month four and names only month four tells the
+	// operator to go and fix one month, and they discover the next one only by
+	// running the report again — four times, if four are broken. The period was
+	// already named ("which month failed" is the first thing anybody asks); the
+	// gap was that it named exactly one.
+	var failures []string
 	for n := 0; n < 12; n++ {
 		mFrom, mTo, fp := monthWindow(startYear, n)
 		m, err := s.month9(ctx, mFrom, mTo, fp, opts)
 		if err != nil {
-			// The period is named in the error because forty-eight reads have
-			// one message between them otherwise, and "which month failed" is
-			// the first thing anybody asks.
-			return GSTR9{}, fmt.Errorf("gstr: GSTR-9 %s, period %s: %w", label, fp, err)
+			failures = append(failures, fmt.Sprintf("%s: %s", fp, operatorMessage(err)))
+			continue
 		}
 		g.Months = append(g.Months, m)
+	}
+	if len(failures) > 0 {
+		// ⛔ THE YEAR IS REFUSED, NOT EMITTED WITH A HOLE. Returning the months
+		// that did work would put a statutory twelve-month grid in a filer's
+		// hands with periods silently missing, and every annual total computed
+		// over it would be understated by exactly the months nobody could see —
+		// a wrong number that looks like a right one. Validate9 already refuses
+		// a grid that is not twelve months for this reason. What changes here is
+		// that the refusal names ALL of them.
+		return GSTR9{}, fmt.Errorf("%w: %d of the 12 periods of %s failed (%d generated "+
+			"cleanly), so the annual return cannot be produced. Each failing period and its "+
+			"reason: %s",
+			ErrPeriodsFailed, len(failures), label, 12-len(failures), strings.Join(failures, " | "))
 	}
 
 	g.OutwardR1VsR3B = divergence("gstr1", "gstr3b", g.Months,
@@ -1142,6 +1162,48 @@ func disclosures9(g GSTR9) []string {
 // ErrInvalid9 reports a generated GSTR-9 that violates one of this file's own
 // honesty rules.
 var ErrInvalid9 = fmt.Errorf("gstr: generated GSTR-9 violates a validation rule")
+
+// ErrPeriodsFailed reports that one or more of the twelve periods behind a
+// GSTR-9 could not be generated. It is its OWN sentinel rather than a wrap of
+// whatever the first month returned: when three periods fail for three
+// different reasons, errors.Is on any one of them is a coin toss, and a caller
+// that branched on it would act on a reason that applies to one twelfth of the
+// problem.
+//
+// ⚠️ ITS MESSAGE CARRIES NO `gstr: ` PACKAGE PREFIX, unlike ErrInvalid3B and
+// ErrInvalid9 above. That is deliberate and it is the D93 rule applied to this
+// file's own new text: this sentence is composed for an OPERATOR, and prefixing
+// it with a Go package name is the first half of the very stack operatorMessage
+// exists to undo. (The two older sentinels keep theirs; changing a message that
+// is already on the wire for /gstr1 and /gstr3b is not this change's to make.)
+var ErrPeriodsFailed = fmt.Errorf("GSTR-9 periods could not be generated")
+
+// operatorMessage flattens the package prefixes off an internal error so the
+// sentence an operator reads begins with something they can act on.
+//
+// The wraps stack three deep by the time a monthly 3B failure reaches the
+// annual return: "gstr3b: gstr: generated GSTR-3B violates a validation rule:
+// ...". Each of those prefixes names a Go package, which tells the reader
+// nothing about what they may do — D93 is this exact class, closed on those
+// grounds for masters.CreateLedger.
+//
+// ⚠️ IT TRIMS PACKAGE NAMES ONLY. "generated GSTR-3B violates a validation
+// rule" survives, because that names a STATUTORY document and a real condition;
+// "output-tax postings" survives for the same reason. The test for whether a
+// prefix belongs here is whether it would appear on the return.
+func operatorMessage(err error) string {
+	s := err.Error()
+	for {
+		trimmed := s
+		for _, p := range []string{"gstr: ", "gstr1: ", "gstr3b: ", "gstr9: "} {
+			trimmed = strings.TrimPrefix(trimmed, p)
+		}
+		if trimmed == s {
+			return s
+		}
+		s = trimmed
+	}
+}
 
 // Validate9 enforces the properties this report's usefulness rests on. It runs
 // on every Generate9 rather than only in tests, because the failure it guards

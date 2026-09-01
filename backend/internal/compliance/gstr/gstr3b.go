@@ -323,6 +323,34 @@ type GSTR3B struct {
 	// declared LAST so that the rest of the document's bytes are unchanged
 	// from the pre-ITC-seam shape (see TestBuild3B_NilITCSourceIsByteIdentical).
 	Disclosures []string `json:"disclosures,omitempty"`
+	// Carried names every value the no-negative rule (see clampNegatives)
+	// removed from tables 3.1 and 3.2, as a POSITIVE magnitude: the amount the
+	// filer must adjust against a subsequent period's outward supply.
+	//
+	// IT IS THE HALF OF THE CLAMP THAT MAKES THE CLAMP HONEST. Zeroing a
+	// negative on its own silently destroys taxable value and tax — the filer
+	// loses the credit note and has nothing on the return telling them so. It
+	// carries `omitempty` and is declared after Disclosures for the same reason
+	// that field is declared last: a book that never goes negative marshals to
+	// exactly the bytes it did before this field existed.
+	Carried []CarriedForward `json:"carried_forward,omitempty"`
+}
+
+// CarriedForward is one value the no-negative rule removed from a table.
+//
+// Amounts are POSITIVE MAGNITUDES — "12000 of taxable value to adjust later" —
+// not the negatives that were clamped. A reader who sees a negative here would
+// reasonably add it to the table it names and get the unfilable figure back.
+type CarriedForward struct {
+	// Table is the GSTN table the value was removed from: "3.1(a)", "3.1(d)",
+	// or "3.2:27" for a table-3.2 place-of-supply bucket.
+	Table string `json:"table"`
+	// Txval, Iamt, Camt and Samt are the magnitudes clamped out of each of the
+	// row's four values. A value that was not negative is zero here.
+	Txval decimal.Decimal `json:"txval"`
+	Iamt  decimal.Decimal `json:"iamt"`
+	Camt  decimal.Decimal `json:"camt"`
+	Samt  decimal.Decimal `json:"samt"`
 }
 
 // The closed disclosure vocabulary. A token that is not in this list is a
@@ -378,6 +406,12 @@ const (
 	// of compliance/itc/clock.go and DiscSec16_6NotModelled in
 	// compliance/itc/effect.go, which mirrors this constant.
 	DiscSec16_6NotModelled = "sec-16-6-revocation-not-modelled"
+	// DiscNegativeValuesCarriedForward — at least one value in table 3.1 or 3.2
+	// netted NEGATIVE for the period (the period's credit notes exceed its
+	// supplies) and was clamped to zero, because GSTR-3B admits no negative
+	// entry. The magnitudes are in GSTR3B.Carried and the filer must adjust
+	// them against a subsequent period. See clampNegatives for the authority.
+	DiscNegativeValuesCarriedForward = "negative-values-carried-forward"
 	// DiscNotFilingReady is emitted whenever ANY other token is present. It is
 	// the single flag a frontend needs to refuse to present the return as final.
 	DiscNotFilingReady = "not-filing-ready"
@@ -389,6 +423,7 @@ var KnownDisclosures = []string{
 	Disc4D1ReclaimNotModelled,
 	DiscCessNotModelled,
 	DiscITCEligibilityNotClassified,
+	DiscNegativeValuesCarriedForward,
 	DiscNoInwardStatement,
 	DiscNotFilingReady,
 	DiscPortalSchemaUnverified,
@@ -496,11 +531,63 @@ func (g GSTR3B) ITCTax() TaxTotals { return g.T4.ItcNet.Tax() }
 // ErrInvalid3B reports a generated 3B that violates a GSTN validation rule.
 var ErrInvalid3B = fmt.Errorf("gstr: generated GSTR-3B violates a validation rule")
 
+// checkNoNegative3B reports the first negative among a table's values, naming
+// the table, the value and the reason it cannot stand. Camt/Samt are passed as
+// zero for table 3.2, which has no CGST/SGST by construction.
+func checkNoNegative3B(table string, txval, iamt, camt, samt decimal.Decimal) error {
+	for _, v := range []struct {
+		name string
+		val  decimal.Decimal
+	}{
+		{"taxable value", txval}, {"IGST", iamt}, {"CGST", camt}, {"SGST", samt},
+	} {
+		if v.val.IsNegative() {
+			return fmt.Errorf("%w: table %s %s is %s. GSTR-3B admits no negative entry "+
+				"(Circular 26/26/2017-GST para 4); a period whose credit notes exceed its "+
+				"supplies reports zero and carries the excess to a later period, which is "+
+				"what GSTR3B.Carried records",
+				ErrInvalid3B, table, v.name, v.val.StringFixed(4))
+		}
+	}
+	return nil
+}
+
 // Validate enforces the GSTN cross-table rule that table 3.2 (inter-state
 // supplies to unregistered persons) can never exceed table 3.1(a), on both the
 // taxable value and the IGST. Generate3B calls it, so an internally
 // inconsistent 3B is an error rather than a plausible-looking wrong return.
 func (g GSTR3B) Validate() error {
+	// (I0) NO NEGATIVE ENTRY IN 3.1 OR 3.2. THIS RULE IS FIRST ON PURPOSE.
+	//
+	// build3B clamps these values (clampNegatives), so in a return this package
+	// produced this check can never fire — it is a MUTATION GUARD, and its whole
+	// value is its SENTENCE. Before it existed, a negative 3.1(a) was caught
+	// further down by the 3.2 comparison, which reported
+	//
+	//	table 3.2 taxable 0.0000 exceeds 3.1(a) taxable -12000.0000
+	//
+	// about a table 3.2 that was EMPTY and could not exceed anything. That
+	// sentence sent a reader to the wrong table, and one such month aborted the
+	// whole twelve-month annual return. Checking the real rule first means the
+	// first thing that fails is the thing that is actually wrong.
+	for _, r := range []struct {
+		no  string
+		row Table31Row
+	}{
+		{"3.1(a)", g.T31.OsupDet}, {"3.1(b)", g.T31.OsupZero}, {"3.1(c)", g.T31.OsupNilExmp},
+		{"3.1(d)", g.T31.IsupRev}, {"3.1(e)", g.T31.OsupNongst},
+	} {
+		if err := checkNoNegative3B(r.no, r.row.Txval, r.row.Iamt, r.row.Camt, r.row.Samt); err != nil {
+			return err
+		}
+	}
+	for _, r := range g.T32 {
+		if err := checkNoNegative3B("3.2 (place of supply "+r.Pos+")",
+			r.Txval, r.Iamt, decimal.Zero, decimal.Zero); err != nil {
+			return err
+		}
+	}
+
 	txval := decimal.Zero
 	iamt := decimal.Zero
 	for _, r := range g.T32 {
@@ -644,9 +731,22 @@ func (r row3b) tax() TaxTotals {
 	return TaxTotals{CGST: r.cgst, SGST: r.sgst, IGST: r.igst}
 }
 
-// interState reports whether the row is an inter-state supply, derived the same
-// way GSTR-1 derives it (invoice.intra, gstr1.go:296-298): IGST charged.
-func (r row3b) interState() bool { return r.igst.GreaterThan(decimal.Zero) }
+// interState reports whether the row is an inter-state supply: IGST charged.
+//
+// ⛔ IT IS SIGN-AGNOSTIC, AND THAT IS THE DIFFERENCE FROM GSTR-1's invoice.intra
+// (gstr1.go:383-385), WHICH READS `igst > 0`. The two row sets are not the same
+// shape: GSTR-1 classifies INVOICES, whose tax is positive, and reports credit
+// notes as their own documents in CDNR/CDNUR. The 3B row set is FOLDED — a
+// credit note arrives here as a SALES row with NEGATIVE tax (see the CROSS JOIN
+// LATERAL sgn in Generate3B) — so `igst > 0` reads every inter-state credit note
+// as intra-state.
+//
+// The consequence was a refusal on correct books: the note reduced 3.1(a) but
+// never reduced the 3.2 bucket it belonged to, so an inter-state sale to an
+// unregistered party plus a partial return of it drove 3.2 above 3.1(a) and
+// Validate rejected the month. See
+// TestBuild3B_AnInterStateCreditNoteReducesTable32.
+func (r row3b) interState() bool { return !r.igst.IsZero() }
 
 // Generate3B produces the GSTR-3B summary for the [from, to] inclusive date
 // range (ISO "YYYY-MM-DD"). The period FP is taken from the `from` month.
@@ -1256,12 +1356,103 @@ func build3B(period time.Time, rows []row3b, decisions map[uuid.UUID]ITCDecision
 			Ty: "OTH", Camt: inelg.CGST, Samt: inelg.SGST, Iamt: inelg.IGST})
 	}
 
+	// THE NO-NEGATIVE RULE, APPLIED LAST — after every table 3.1 and 3.2 figure
+	// is final and before anything validates or discloses them.
+	out.Carried = clampNegatives(&out)
+
 	disc, err := disclosures3B(opts, out, unclassified)
 	if err != nil {
 		return GSTR3B{}, err
 	}
 	out.Disclosures = disc
 	return out, nil
+}
+
+// clampNegatives applies the GSTN "no negative entries" rule to tables 3.1 and
+// 3.2 and returns what it removed, as positive magnitudes.
+//
+// ⭐ THE AUTHORITY, because this function DESTROYS A FIGURE THE BOOKS PRODUCED
+// and no reader should have to take that on trust:
+//
+//   - GST portal, FAQ > Form GSTR-3B: "Negative values, if any, shall not be
+//     considered in the table and system will provide the value as zero.
+//     Negative values may arise in these tables due to credit notes and
+//     downward amendment of outward supplies."
+//   - Circular No. 26/26/2017-GST dated 29-12-2017, para 4: "While making
+//     adjustment in the output tax liability or input tax credit, there can be
+//     no negative entries in the FORM GSTR-3B." and "The amount remaining for
+//     adjustment, if any, may be adjusted in the return(s) in FORM GSTR-3B of
+//     subsequent month(s) and, in cases where such adjustment is not feasible,
+//     refund may be claimed."
+//
+// ⛔ THE CLAMP IS NOT THE FIX ON ITS OWN — THE CARRY IS. A month whose credit
+// notes exceed its sales is an ordinary month, and the filer is OBLIGED to file
+// it; refusing to produce the return would be a worse defect than the one this
+// replaces. But zeroing the negative and saying nothing would destroy the
+// filer's credit note, so every clamped magnitude is returned, disclosed
+// through DiscNegativeValuesCarriedForward, and thereby made an action the
+// operator can see and take next period.
+//
+// ⚠️ WHAT IT DOES NOT DO: it does not APPLY the carry to the next period. There
+// is no cross-period store here and inventing one would silently change a
+// figure in a return the filer may already have filed. The carry is reported,
+// not consumed — which is why the return also declares itself not filing-ready.
+//
+// ⛔ TABLE 4 IS DELIBERATELY EXCLUDED. A negative 4(C) is LEGAL and must pass —
+// Validate says so at length, and the ITC identity is an equality check and
+// never a sign check. Clamping there would manufacture credit out of nothing.
+//
+// Clamping is PER VALUE, not per row, because that is what the portal FAQ
+// describes ("negative values ... shall not be considered").
+func clampNegatives(g *GSTR3B) []CarriedForward {
+	var carried []CarriedForward
+
+	clampRow := func(label string, row *Table31Row) {
+		c := CarriedForward{Table: label, Txval: decimal.Zero, Iamt: decimal.Zero,
+			Camt: decimal.Zero, Samt: decimal.Zero}
+		any := false
+		for _, f := range []struct {
+			val  *decimal.Decimal
+			into *decimal.Decimal
+		}{
+			{&row.Txval, &c.Txval}, {&row.Iamt, &c.Iamt},
+			{&row.Camt, &c.Camt}, {&row.Samt, &c.Samt},
+		} {
+			if f.val.IsNegative() {
+				*f.into = f.val.Neg()
+				*f.val = decimal.Zero
+				any = true
+			}
+		}
+		if any {
+			carried = append(carried, c)
+		}
+	}
+
+	// 3.1, in GSTN row order, so the carried list reads down the return.
+	clampRow("3.1(a)", &g.T31.OsupDet)
+	clampRow("3.1(b)", &g.T31.OsupZero)
+	clampRow("3.1(c)", &g.T31.OsupNilExmp)
+	clampRow("3.1(d)", &g.T31.IsupRev)
+	clampRow("3.1(e)", &g.T31.OsupNongst)
+
+	// 3.2, per place-of-supply bucket. Already sorted by POS.
+	for i := range g.T32 {
+		r := &g.T32[i]
+		c := CarriedForward{Table: "3.2:" + r.Pos, Txval: decimal.Zero, Iamt: decimal.Zero,
+			Camt: decimal.Zero, Samt: decimal.Zero}
+		any := false
+		if r.Txval.IsNegative() {
+			c.Txval, r.Txval, any = r.Txval.Neg(), decimal.Zero, true
+		}
+		if r.Iamt.IsNegative() {
+			c.Iamt, r.Iamt, any = r.Iamt.Neg(), decimal.Zero, true
+		}
+		if any {
+			carried = append(carried, c)
+		}
+	}
+	return carried
 }
 
 // disclosures3B computes the closed-vocabulary disclosure set for a generated
@@ -1290,6 +1481,12 @@ func disclosures3B(opts Options3B, g GSTR3B, unclassified bool) ([]string, error
 	}
 	if opts.ITCPolicy == nil || opts.ITCPolicy.Rule42 == nil || opts.ITCPolicy.Rule43 == nil {
 		set[DiscRule4243NotComputed] = true
+	}
+	if len(g.Carried) > 0 {
+		// A figure the books produced was removed from the return and is the
+		// filer's to adjust next period. Emitted only when something was
+		// actually clamped, so it names a real outstanding action.
+		set[DiscNegativeValuesCarriedForward] = true
 	}
 	if len(g.T4.ItcRev) > 0 {
 		// The reversal is RETURN-SIDE ONLY; the filer must pass the

@@ -343,6 +343,91 @@ async function main(): Promise<void> {
     `disclosures: ${(g3b.disclosures ?? []).join(", ") || "(none)"}`,
   );
 
+  // --- 8b. EVERY MONTH SEPARATELY, AND THE ANNUAL RETURN -------------------
+  //
+  // ⛔ THIS IS THE HOLE D113 CAME THROUGH, AND IT IS WORTH UNDERSTANDING.
+  // Every check above asks for ONE 3B over the WHOLE FINANCIAL YEAR
+  // (`from=${FY.from}&to=${FY.to}`). Over a year the demo book's July sales
+  // return nets against April's invoice and every figure is positive, so a
+  // full-year window CANNOT observe a month that fails on its own — and this
+  // gate reported 34/34 while the book it asserts against could not produce a
+  // single one of its twelve monthly returns for July, nor its annual return
+  // at all. A filer files TWELVE 3Bs and ONE GSTR-9; nobody ever files the
+  // window this script was asking for.
+  //
+  // ⚠️ The lesson generalises past GST: an aggregate query is not a sample of
+  // the queries a user makes, and a gate built from one asserts what its author
+  // already believed.
+  const monthWindows: { fp: string; from: string; to: string }[] = [];
+  for (let i = 0; i < 12; i++) {
+    const y = 2026 + (i >= 9 ? 1 : 0);
+    const m = ((3 + i) % 12) + 1;
+    const mm = String(m).padStart(2, "0");
+    const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    monthWindows.push({ fp: `${mm}${y}`, from: `${y}-${mm}-01`, to: `${y}-${mm}-${last}` });
+  }
+  const monthFailures: string[] = [];
+  let carriedNote = "";
+  for (const w of monthWindows) {
+    try {
+      const m3b = await getJSON<{
+        sup_details: { osup_det: { txval: string; iamt: string; camt: string; samt: string } };
+        carried_forward?: { table: string; txval: string; iamt: string }[];
+      }>(`/v1/companies/${co}/gstr3b?from=${w.from}&to=${w.to}`, headers);
+      // No table 3.1 value may be negative: GSTR-3B admits no negative entry
+      // (Circular 26/26/2017-GST para 4), so a negative here is a return the
+      // portal would refuse.
+      const o = m3b.sup_details.osup_det;
+      for (const [k, v] of Object.entries(o)) {
+        if (money4(v) < 0n) monthFailures.push(`${w.fp}: 3.1(a) ${k} is ${v}`);
+      }
+      for (const c of m3b.carried_forward ?? []) {
+        carriedNote += ` ${w.fp} carried ${c.table} txval=${c.txval} iamt=${c.iamt};`;
+      }
+    } catch (e) {
+      monthFailures.push(`${w.fp}: ${(e as Error).message}`);
+    }
+  }
+  check(
+    "GSTR-3B generates for EACH of the twelve periods a filer actually files",
+    monthFailures.length === 0,
+    monthFailures.length === 0
+      ? `12/12 periods generated, none with a negative 3.1(a).` +
+        (carriedNote ? ` Carried forward:${carriedNote}` : " Nothing carried forward.")
+      : monthFailures.join("; "),
+  );
+
+  const ledgersForGST = (await client.listLedgers(co)).ledgers;
+  const taxLedgerId = (name: string): string =>
+    ledgersForGST.find((l) => l.name.toLowerCase() === name.toLowerCase())?.id ?? "";
+  const g9q = ([
+    ["cgst_ledger_id", "Output CGST"],
+    ["sgst_ledger_id", "Output SGST"],
+    ["igst_ledger_id", "Output IGST"],
+    ["input_cgst_ledger_id", "Input CGST"],
+    ["input_sgst_ledger_id", "Input SGST"],
+    ["input_igst_ledger_id", "Input IGST"],
+  ] as const)
+    .map(([p, n]) => `${p}=${taxLedgerId(n)}`)
+    .join("&");
+  let g9Detail = "";
+  let g9Ok = false;
+  try {
+    const g9 = await getJSON<{
+      gstr9: { months: { fp: string }[] };
+      reconciled: boolean;
+    }>(`/v1/companies/${co}/gstr9?from=${FY.from}&to=${FY.to}&${g9q}`, headers);
+    g9Ok = g9.gstr9.months.length === 12;
+    g9Detail = `${g9.gstr9.months.length}/12 periods in the grid, reconciled=${g9.reconciled}`;
+  } catch (e) {
+    g9Detail = (e as Error).message;
+  }
+  check(
+    "the demo book can produce its own ANNUAL return (GSTR-9), all twelve periods",
+    g9Ok,
+    g9Detail,
+  );
+
   // --- 9. An ALTERED sales voucher stays in the GST returns ---------------
   // The Step-0 regression, re-proved against the LIVE demo data: INV-003 was
   // altered 24,000 -> 26,500, so the return's taxable total must include the

@@ -17,6 +17,7 @@ package gstr
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -706,5 +707,48 @@ func TestKnownDisclosures9IsSortedByToken(t *testing.T) {
 			t.Fatalf("KnownDisclosures9 is not sorted: %q comes before %q",
 				KnownDisclosures9[i-1], KnownDisclosures9[i])
 		}
+	}
+}
+
+// TestOperatorMessageFlattensThePackagePrefixStack is the D93-class guard on
+// the annual return's failure sentence.
+//
+// The error a failing monthly 3B produced reached the operator as
+//
+//	gstr: GSTR-9 2026-27, period 072026: gstr3b: gstr: generated GSTR-3B
+//	violates a validation rule: table 3.2 taxable 0.0000 exceeds 3.1(a) ...
+//
+// — three package prefixes in front of the only clause that says anything the
+// reader can act on. This asserts the trimming keeps the statutory words and
+// drops the Go ones.
+func TestOperatorMessageFlattensThePackagePrefixStack(t *testing.T) {
+	// Built the way month9 builds it, from the real sentinel.
+	inner := fmt.Errorf("%w: table 3.1(a) taxable value is -12000.0000", ErrInvalid3B)
+	stacked := fmt.Errorf("gstr3b: %w", inner)
+
+	got := operatorMessage(stacked)
+
+	for _, bad := range []string{"gstr3b: ", "gstr: ", "gstr1: "} {
+		if strings.HasPrefix(got, bad) {
+			t.Fatalf("a package prefix survived: %q", got)
+		}
+	}
+	// The statutory clause and the figure must BOTH survive — trimming that
+	// ate the message would be the same defect facing the other way.
+	if !strings.HasPrefix(got, "generated GSTR-3B violates a validation rule") {
+		t.Fatalf("the statutory clause must lead the sentence, got: %q", got)
+	}
+	if !strings.Contains(got, "-12000.0000") {
+		t.Fatalf("the offending figure must survive, got: %q", got)
+	}
+}
+
+// TestOperatorMessageLeavesADescriptiveWrapAlone is the CONTROL: month9 also
+// wraps with "output-tax postings" and "input-tax postings", which name a real
+// thing rather than a package, and must be untouched.
+func TestOperatorMessageLeavesADescriptiveWrapAlone(t *testing.T) {
+	err := fmt.Errorf("output-tax postings: %w", errors.New("ledger 'Output CGST' not found"))
+	if got := operatorMessage(err); got != err.Error() {
+		t.Fatalf("a descriptive wrap must survive verbatim.\n got: %q\nwant: %q", got, err.Error())
 	}
 }
