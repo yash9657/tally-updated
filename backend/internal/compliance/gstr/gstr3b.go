@@ -529,7 +529,7 @@ func (g GSTR3B) OutwardTax() TaxTotals { return g.T31.OsupDet.Tax() }
 func (g GSTR3B) ITCTax() TaxTotals { return g.T4.ItcNet.Tax() }
 
 // ErrInvalid3B reports a generated 3B that violates a GSTN validation rule.
-var ErrInvalid3B = fmt.Errorf("gstr: generated GSTR-3B violates a validation rule")
+var ErrInvalid3B = fmt.Errorf("generated GSTR-3B violates a validation rule")
 
 // checkNoNegative3B reports the first negative among a table's values, naming
 // the table, the value and the reason it cannot stand. Camt/Samt are passed as
@@ -906,7 +906,7 @@ func (s *Service) Generate3B(ctx context.Context, from, to string, opts Options3
 // ALTERED, and falling back would quietly drop a reversal the reconciliation
 // had concluded was due — an over-claim, which is the audit-dangerous
 // direction. See ITCDecision's doc comment.
-var errStaleITCDecision = fmt.Errorf("gstr: ITC decision does not account for the voucher's posted input tax")
+var errStaleITCDecision = fmt.Errorf("ITC decision does not account for the voucher's posted input tax")
 
 // checkITCDecision enforces every structural rule an ITCDecision must obey
 // before its numbers are allowed anywhere near table 4. None of these is a

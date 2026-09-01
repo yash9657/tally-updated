@@ -946,7 +946,7 @@ func ynFlag(b bool) string {
 
 // ErrNoData is returned by callers that choose to treat an empty period as an
 // error rather than an empty return.
-var ErrNoData = errors.New("gstr: no posted sales in period")
+var ErrNoData = errors.New("no posted sales in period")
 
 // isRegistered reports whether a counter-party is a registered (B2B) recipient.
 // A recipient is registered when it carries a GSTIN and its registration type is

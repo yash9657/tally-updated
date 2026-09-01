@@ -428,6 +428,49 @@ async function main(): Promise<void> {
     g9Detail,
   );
 
+  // --- 8c. A REFUSAL IS SOMETHING THE OPERATOR CAN READ ---------------------
+  //
+  // ⛔ THIS IS CHECKED ON THE WIRE BECAUSE THAT IS WHERE IT WAS WRONG.
+  // `GSTR9Screen.tsx` renders the server's message VERBATIM
+  // (`setError(e instanceof Error ? e.message : String(e))`), so whatever the
+  // body says is what the filer reads. Every one of this package's sentinels
+  // used to open with `gstr: ` — a Go package name, first thing on the screen,
+  // telling them nothing about what they may do.
+  //
+  // ⚠️ AND THE MOCK HAD IT RIGHT ALL ALONG. `src/api/mock.ts` raises these same
+  // refusals — deliberately, so a screen's error handling cannot pass against
+  // the mock and fail against the real server — and it always spelled them
+  // WITHOUT the prefix. Nothing compared the two, so the divergence survived.
+  // The Go side pins the same rule in errors_operator_facing_test.go; this pins
+  // it where the operator actually meets it.
+  const refusals: { label: string; query: string }[] = [
+    { label: "a window that is not a financial year", query: `from=2025-01-01&to=2025-12-31` },
+    { label: "missing tax ledger ids", query: `from=${FY.from}&to=${FY.to}` },
+  ];
+  const refusalBreaks: string[] = [];
+  const refusalSeen: string[] = [];
+  for (const r of refusals) {
+    const res = await fetch(`${baseUrl}/v1/companies/${co}/gstr9?${r.query}`, { headers });
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    const msg = body.error ?? "";
+    if (res.status !== 400) {
+      refusalBreaks.push(`${r.label}: expected 400, got ${res.status}`);
+      continue;
+    }
+    // A leading lowercase identifier followed by ": " is a Go package prefix.
+    const leak = /^[a-z][a-z0-9]*: /.exec(msg);
+    if (leak) {
+      refusalBreaks.push(`${r.label}: message opens with the package prefix "${leak[0]}" — ${msg}`);
+    } else {
+      refusalSeen.push(`${r.label} -> "${msg.slice(0, 60)}…"`);
+    }
+  }
+  check(
+    "a GSTR-9 refusal reaches the operator without a Go package name in front of it",
+    refusalBreaks.length === 0,
+    refusalBreaks.length === 0 ? refusalSeen.join(" | ") : refusalBreaks.join("; "),
+  );
+
   // --- 9. An ALTERED sales voucher stays in the GST returns ---------------
   // The Step-0 regression, re-proved against the LIVE demo data: INV-003 was
   // altered 24,000 -> 26,500, so the return's taxable total must include the

@@ -1,7 +1,7 @@
 # HANDOFF — D113 IS CLOSED. THE LARGEST GAP LEFT IS NOT A REGISTER ROW
 
-**Written:** 2026-08-31, working tree CLEAN at `9177473` · **Branch:** `session/t32-and-close-7-3`
-**Read time: 8 minutes.** ⭐ **Every claim in §1, §3 and §4 was MEASURED AT `9177473`** and the
+**Written:** 2026-08-31, working tree CLEAN at `dc7edf2` · **Branch:** `session/t32-and-close-7-3`
+**Read time: 8 minutes.** ⭐ **Every claim in §1, §3 and §4 was MEASURED AT `dc7edf2`** and the
 command is beside it. §5 is carried from the register and says so.
 
 ⛔ **THIS FILE ASSUMES YOU KNOW NOTHING ABOUT THIS REPOSITORY.** It is self-contained.
@@ -12,14 +12,14 @@ work.** §6 is the house standard your work must meet.
 
 ## 0. ⭐ THE ONE-LINE VERSION
 
-**D113 and D115 are CLOSED** (`9177473`). The demo book produces all twelve monthly GSTR-3Bs and its
-annual GSTR-9. **There is no HIGH row open. Six rows remain, all MEDIUM or LOW.**
+**D113, D115 and D116 are CLOSED** (`9177473`, `dc7edf2`). The demo book produces all twelve monthly GSTR-3Bs and its
+annual GSTR-9. **There is no HIGH row open. Seven rows remain, all MEDIUM or LOW.**
 
 ⭐ **THE RECOMMENDED NEXT WORK IS NOT A REGISTER ROW — IT IS PAYROLL** (§4): a whole plane of the
 product that **no gate, no probe and no audit has ever run against real data**, because the seeder
 creates zero employees. It absorbs **D112** for free.
 
-⚠️ **If you would rather close rows than build, D109 is the best of the six** (§5).
+⚠️ **If you would rather close rows than build, D109 is the best of the seven** (§5).
 
 ---
 
@@ -27,11 +27,11 @@ creates zero employees. It absorbs **D112** for free.
 
 ```bash
 cd /Users/yashbhalgat/code/tally-updated
-git log --oneline -1          # 9177473 fix(D113, D115): the return the portal wants is…
+git log --oneline -1          # dc7edf2 fix(D116): the mock had it right and nothing ever…
 git status --porcelain        # (empty)
 ```
 
-**Gate baselines at `9177473`, ALL RE-RUN AT THAT COMMIT. Any red is yours.**
+**Gate baselines at `dc7edf2`, ALL RE-RUN AT THAT COMMIT. Any red is yours.**
 
 ⚠️ **EVERY LINE BELOW IS RUN FROM THE REPO ROOT** and each `cd` is contained in its own subshell for
 that reason — `cd frontend && … "$(cat frontend/.demo-company-id)"` looks right and cannot work,
@@ -44,18 +44,18 @@ the next command in the same block reads the wrong directory. Use absolute paths
 bash backend/scripts/test_residue.sh                                     # OK: no residue
 (cd frontend && pnpm exec tsc --noEmit)                                  # clean
 (cd frontend && pnpm exec vitest run)                                    # 1845 passed / 114 files
-(cd frontend && pnpm verify:demo "$(cat .demo-company-id)")              # 36/36  ⚠️ id is an ARGUMENT
+(cd frontend && pnpm verify:demo "$(cat .demo-company-id)")              # 37/37  ⚠️ id is an ARGUMENT
 node frontend/scripts/drive-t4-slice2b-matching.mjs                      # 35/35, tenant reaped
 node frontend/scripts/drive-t12-gstr9.mjs                                # 33/33
 node frontend/scripts/drive-t11-budgets.mjs                              # 36/36
 python3 corpora/validate.py                                              # OK
-python3 docs/parse-defect-register.py HANDOFF-PARITY-AUDIT.md            # 115 · 105 · 6 · 0 · 4
+python3 docs/parse-defect-register.py HANDOFF-PARITY-AUDIT.md            # 117 · 106 · 7 · 0 · 4
 ```
 
 ⛔ **THE BACKEND SUITE AND THE DRIVES NEED THE SERVICES UP (§2.1). The vitest and tsc lines do not.**
 
-⚠️ **`verify:demo` IS 36/36 NOW, NOT 34/34.** Two checks were added closing D113 — see §4.3, which is
-the single most transferable thing in this file.
+⚠️ **`verify:demo` IS 37/37 NOW, NOT 34/34.** Two checks were added closing D113 and one closing
+D116 — see §4.3, which is the single most transferable thing in this file.
 
 ⚠️ **THE REGISTER PRINTS `4 UNREADABLE` AND THAT IS NOT WORK WAITING FOR YOU.** D49, D80, D82 and D84
 are all CLOSED; the parser cannot read their status cells. ⛔ **Do not "fix" the parser casually** —
@@ -120,7 +120,7 @@ not the name — there are ~95 companies called "Demo Traders" among **394 compa
 
 ⭐ **The name and the id file move together.** With **no** `--name` the seeder writes
 `.demo-company-id`, which every gate reads — that is how ten identically-named books accumulated.
-After any session re-run `pnpm verify:demo "$(cat frontend/.demo-company-id)"` and expect **36/36**.
+After any session re-run `pnpm verify:demo "$(cat frontend/.demo-company-id)"` and expect **37/37**.
 
 ⚠️ **TWO SCRATCH BOOKS ALREADY CARRY DRIVE DATA — MAKE A FRESH ONE:**
 `34aee254-9027-4641-ae2a-76d79420772b` (`D108 Fix Scratch`, 28 vouchers) and
@@ -146,15 +146,17 @@ run is a write.
 
 ---
 
-## 3. ⛔ WHAT IS OPEN — measured 2026-08-31 at `9177473`
+## 3. ⛔ WHAT IS OPEN — measured 2026-08-31 at `dc7edf2`
 
 ```bash
 python3 docs/parse-defect-register.py HANDOFF-PARITY-AUDIT.md
-# 115 REGISTERED · 105 CLOSED · 6 OPEN · 0 PARTIAL · 4 UNREADABLE
-#   OPEN: D99, D109, D110, D111, D112, D114
+# 117 REGISTERED · 106 CLOSED · 7 OPEN · 0 PARTIAL · 4 UNREADABLE
+#   OPEN: D99, D109, D110, D111, D112, D114, D117
 ```
 
-**⭐ NOTHING OPEN IS HIGH.** D113 was the last one.
+**⭐ NOTHING OPEN IS HIGH.** D113 was the last one. **D115 and D116 were found and closed in this
+session's two lanes; D117 was found in the second and is OPEN because its fix is a status decision,
+not a message edit.**
 
 | Row | Sev | One line | Shape of the work |
 |---|---|---|---|
@@ -163,6 +165,7 @@ python3 docs/parse-defect-register.py HANDOFF-PARITY-AUDIT.md
 | **D111** | LOW | Every **pasted** bank statement is stored with `file_name = ''`, and the disclosure that names the unchecked file renders an empty string | One line, but **decide the name** |
 | **D112** | LOW | The Payroll Register answers an ordinary empty month with a raw internal error naming its own package **twice** | ⭐ **Absorbed by §4 for free** |
 | **D114** | LOW | The import panel says *"Esc goes back to the reconciliation statement"* and Esc goes to the **Gateway** | Pop one frame, or change the sentence |
+| **D117** | LOW | A DB/plumbing failure reaches the filer as a **422** carrying a SQL-shaped sentence — *"a dead database is not an unprocessable entity"* | ⚠️ **A status decision (422 vs 500), not a message edit. Registered from a CODE READING and never driven — reproduce it first** |
 | **D99** | LOW | ⛔ **OPEN BY DECISION, NOT BY OMISSION.** Its premise did not survive a real TallyPrime export and fixing it speculatively would make genuinely malformed numbers readable. **Leave it** | |
 
 ---
@@ -313,7 +316,8 @@ to a portal.** Any row that claims portal conformance is claiming more than this
    in full.
 3. `backend/internal/compliance/gstr/gstr3b.go` — `clampNegatives` and its doc comment, for how a
    decision with an external source is recorded at the code.
-4. `frontend/scripts/verify-demo.mts` §8b — the two checks that close the aggregate-query hole, and
-   the comment explaining why the gate was green while broken.
+4. `frontend/scripts/verify-demo.mts` §8b and §8c — the checks that close the aggregate-query hole
+   and the package-prefix leak, with the comments explaining why each gate was green while broken.
+   ⭐ **Both were mutation-proved by rebuilding cored broken and watching them fail (§6).**
 5. `corpora/payroll/` — the 19 cases nothing currently runs against the live system (§4).
 6. `docs/usability-day-2026-08-30.md` §6.6 — what the 2026-08-31 pass did **not** cover.

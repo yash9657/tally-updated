@@ -125,12 +125,12 @@ import (
 // statutory artifact in a filer's hands for a period the law does not recognise,
 // which is worse than the refusal — so the window is checked before anything is
 // read, and the message names the two dates that would work.
-var ErrNotAFinancialYear = fmt.Errorf("gstr: GSTR-9 covers an Indian financial year (1 April to 31 March)")
+var ErrNotAFinancialYear = fmt.Errorf("GSTR-9 covers an Indian financial year (1 April to 31 March)")
 
 // ErrLedgersRequired reports a GSTR-9 asked for without the tax ledger ids.
 // See the file header: without them the books column is silently zero, and a
 // books column of zeros makes every month look wrong by exactly the tax charged.
-var ErrLedgersRequired = fmt.Errorf("gstr: GSTR-9 is a reconciliation TO the books and needs the tax ledger ids")
+var ErrLedgersRequired = fmt.Errorf("GSTR-9 is a reconciliation TO the books and needs the tax ledger ids")
 
 // ---------------------------------------------------------------------------
 // THE CLOSED DISCLOSURE VOCABULARY
@@ -1161,7 +1161,7 @@ func disclosures9(g GSTR9) []string {
 
 // ErrInvalid9 reports a generated GSTR-9 that violates one of this file's own
 // honesty rules.
-var ErrInvalid9 = fmt.Errorf("gstr: generated GSTR-9 violates a validation rule")
+var ErrInvalid9 = fmt.Errorf("generated GSTR-9 violates a validation rule")
 
 // ErrPeriodsFailed reports that one or more of the twelve periods behind a
 // GSTR-9 could not be generated. It is its OWN sentinel rather than a wrap of
@@ -1170,12 +1170,12 @@ var ErrInvalid9 = fmt.Errorf("gstr: generated GSTR-9 violates a validation rule"
 // that branched on it would act on a reason that applies to one twelfth of the
 // problem.
 //
-// ⚠️ ITS MESSAGE CARRIES NO `gstr: ` PACKAGE PREFIX, unlike ErrInvalid3B and
-// ErrInvalid9 above. That is deliberate and it is the D93 rule applied to this
-// file's own new text: this sentence is composed for an OPERATOR, and prefixing
-// it with a Go package name is the first half of the very stack operatorMessage
-// exists to undo. (The two older sentinels keep theirs; changing a message that
-// is already on the wire for /gstr1 and /gstr3b is not this change's to make.)
+// ⚠️ ITS MESSAGE CARRIES NO `gstr: ` PACKAGE PREFIX, and since D116 neither does
+// any other sentinel a filer can be shown — see
+// errors_operator_facing_test.go, which pins that as a rule rather than as a
+// habit. This sentence is composed for an OPERATOR, and opening it with a Go
+// package name is the first half of the very stack operatorMessage exists to
+// undo.
 var ErrPeriodsFailed = fmt.Errorf("GSTR-9 periods could not be generated")
 
 // operatorMessage flattens the package prefixes off an internal error so the
