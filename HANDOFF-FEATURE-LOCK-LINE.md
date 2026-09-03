@@ -27,25 +27,34 @@ of reading this file; disagreeing with the list is not.**
 
 ---
 
-## 1. ⭐ THE MEASUREMENT — 54 ROWS, PARSED FROM THE SCREEN ITSELF
+## 1. ⭐ THE MEASUREMENT — 55 ROWS, PARSED FROM THE SCREEN ITSELF (re-measured 2026-09-03)
 
 ```bash
 # the roster, by state, from the source of truth an operator actually reads
 python3 - <<'PY'
 import re, collections
 s = open('frontend/src/screens/FeaturesScreen.tsx').read()
-rows = re.findall(r'name:\s*("(?:[^"\\]|\\.)*")\s*,\s*\n\s*state:\s*"([a-z]+)"', s)
-print(len(rows), collections.Counter(st for _, st in rows))
+print(collections.Counter(re.findall(r'^\s*state:\s*"([a-z]+)"', s, re.M)))
 PY
-# -> 54 {'on': 45, 'off': 7, 'always': 1, 'server': 1}
+# 2026-09-03 -> 55 {'on': 48, 'off': 4, 'always': 1, 'partial': 1, 'server': 1}
+# 2026-08-28 -> 54 {'on': 45, 'off': 7, 'always': 1, 'server': 1}
 ```
 
-| State | Count | Meaning |
-|---|---|---|
-| `on` | **45** | built, and 34 of them driven end to end by the parity audit, plus the seven of §7.5 L27 |
-| `always` | 1 | Edit Log — on by construction, cannot be switched off |
-| `server` | 1 | **Offline entry with sync** — half built (see §2.6) |
-| `off` | **7** | the gaps. One is a deliberate non-goal, so **six are real** |
+⛔⛔ **THE ORIGINAL COMMAND HERE SILENTLY UNDERCOUNTED, AND IT DROPPED EXACTLY THE ROW THAT HAD
+JUST CHANGED.** It required `name:` and `state:` to be **adjacent lines**, and T8 step 8 put a
+comment block between them on `Multi-currency` — so the census returned 54 rows and **no `partial`
+state at all**, which is the one thing step 8 added. ⚠️ **It did not error; it reported a smaller,
+tidier, wrong table.** Counting `state:` alone needs no adjacency assumption and there is exactly one
+per row. (`name:` matches 56 — one more than there are rows — so it is the wrong anchor in both
+directions.)
+
+| State | 2026-08-28 | now | Meaning |
+|---|---|---|---|
+| `on` | 45 | **48** | built and driven. **+3: T11 Budgets, T12 GSTR-9, and the T8 currency-masters row** |
+| `always` | 1 | 1 | Edit Log — on by construction, cannot be switched off |
+| `partial` | — | **1** | ⭐ **NEW STATE, added by T8 step 8** — `Multi-currency`. A row is `partial` only when its note NAMES the missing part; here that is the revaluation VOUCHER (reported, not posted) |
+| `server` | 1 | 1 | **Offline entry with sync** — half built (see §2.6) |
+| `off` | 7 | **4** | the gaps. **Only ONE of the four is inside §6's lock line: T13 Interest**, and it is blocked on §5 item 3. The other three are Split company data (deliberate non-goal), SSO (not a Tally feature) and Rule 48(4) QR (blocked on §5 item 1) |
 
 ⛔ **THE ROWS ARE THE RIGHT INSTRUMENT AND THAT IS ITSELF AN ACHIEVEMENT.** This screen has been
 audited row by row twice (34 rows, then the 7 added since — `HANDOFF-PARITY-AUDIT.md` §7.5 L27), and
@@ -214,6 +223,28 @@ longer attest to the code beneath them.
 ---
 
 ## 6. ⭐⭐ THE PROPOSED LOCK LINE, AND THE ARGUMENT FOR IT
+
+> ### ⭐⭐ STATUS 2026-09-03 — **FIVE OF THE SIX MUST-CLOSE ITEMS ARE DONE. ONE REMAINS, AND IT IS NOT ENGINEERING-BLOCKED.**
+>
+> | Must-close item | State |
+> |---|---|
+> | **T8 Multi-currency** | ✅ **CLOSED `fa99ea5`** — steps 1–8. Row reads `partial`, deliberately: the revaluation VOUCHER is deferred and the note names it. Audit `L39` |
+> | **T11 Budgets** | ✅ **ON**, `drive-t11-budgets` 36/36 |
+> | **T12 GSTR-9** | ✅ **ON**, `drive-t12-gstr9` 33/33 |
+> | **D98 · D100 · D101** | ✅ done — `9707ebe`, `7085159` |
+> | **D102** | ✅ **FIXED 2026-08-27**, mutation-proven end to end |
+> | **T13 Interest on overdue bills** | ⛔ **STILL `off` — THE ONLY MUST-CLOSE ITEM LEFT**, and it is waiting on **§5 item 3** (the day-count / simple-vs-compound statutory defaults into `docs/statutory/`), not on engineering. §2.4 argues why it must not be started without them: for an MSMED supplier the terms are FIXED BY STATUTE, and for everyone else NO statutory rate exists, so a default would be invented in one direction and unlawful in the other |
+>
+> ⛔ **SO THE ANSWER TO "ARE WE FEATURE LOCKED?" IS: NOT YET, BY ONE ITEM, AND THAT ITEM NEEDS A
+> HUMAN TO SUPPLY CITATIONS.** Everything else inside the line is closed and driven.
+>
+> ⚠️ **THREE THINGS ARE STILL OPEN THAT ARE NOT FEATURES, AND THEY SHOULD NOT BE FORGOTTEN AT THE
+> LINE:** (1) §4's **stale-evidence audit** — rows 20 / 23 / 26 were driven before T9 and T10 landed
+> underneath them, so their evidence no longer attests to the code; budget one session. (2) The
+> **archive-and-carry-forward** decision below — it is now DISCLOSED in the split-company row's note
+> but **still has no row of its own**, which is the half-measure §6 warned about. (3) The register's
+> **2 OPEN** rows (D99's comma arm fails BY DECISION — do not "fix" it for a green line).
+
 
 **Recommendation: lock on four features and two defects, and defer three items with the reason
 written down.**
