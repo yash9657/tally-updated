@@ -5408,8 +5408,26 @@ things worth naming:
 `corpora/validate.py` **OK** · register **117 · 107 · 6 · 0 · 4**, unchanged.
 **Nothing deferred within step 5. Steps 6–8 are not started and are itemised above.**
 
-⭐ **NEXT IS STEP 6 — OUTSTANDINGS GAINS TWO FIELDS AND THE CURRENCY IN ITS NETTING KEY** (§4.2), and
-the lookup it needs already exists: `openBillForex` reads the two-table UNION §0.2 describes and
-returns the bill's base, foreign, rate and currency code in one call. ⛔ Its trap is unchanged — four
-query sites, two tables, and a foreign party's OPENING bill silently becomes a base bill if only
-`bill_allocation` is handled.
+⭐ **NEXT IS STEP 6 — OUTSTANDINGS GAINS TWO FIELDS AND THE CURRENCY IN ITS NETTING KEY** (§4.2).
+⛔ Its trap is unchanged — four query sites, two tables, and a foreign party's OPENING bill silently
+becomes a base bill if only `bill_allocation` is handled.
+
+> ⛔⛔ **CORRECTION TO THIS SECTION, MEASURED AFTER IT WAS FIRST WRITTEN.** An earlier draft of this
+> paragraph said step 6 could reuse `openBillForex`. **IT CANNOT, AND THE REASON IS ARCHITECTURAL
+> RATHER THAN A MATTER OF EXPORTING IT:**
+>
+> ```bash
+> sed -n '216,217p' backend/internal/archtest/boundaries_test.go
+> #   "internal/reporting": {"internal/platform/db": true, "internal/inventory": true,
+> #                          "internal/compliance/form140": true},
+> ```
+>
+> `internal/reporting` may import those three siblings and nothing else, so it may not reach into
+> `internal/ledger` — **and `internal/ledger`'s own tests import `internal/reporting`, so the edge
+> would be a compile-time cycle as well as a policy breach.** `outstanding.go` therefore needs its
+> OWN spelling of the two-table UNION, which is no hardship because it already has four of them.
+> ⭐ **The precedent for exactly this is `OnAccountRefName`, which is DELIBERATELY DECLARED TWICE**
+> (`ledger/ledger.go:3077` and `reporting/outstanding.go:31`) with the agreement enforced by
+> `TestOnAccountRefNameAgreesAcrossTheWriteAndReadSides` in `internal/server`, the composition root
+> that may import both. ⚠️ `ledger`'s comment on that constant still claims it is *"one fact with
+> one home"*; `reporting`'s comment is the accurate one and explains why it cannot be.
