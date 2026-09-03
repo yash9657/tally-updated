@@ -522,3 +522,156 @@ describe("track C — Per-company print templates reads On, and promises no logo
     );
   });
 });
+
+/**
+ * ⭐⭐ T8 STEP 8 — MULTI-CURRENCY READS "Part built", AND THE STATE IS NEW.
+ *
+ * ⛔ THE MUTATION THIS PINS IS THE TEMPTING ONE: flip the row to "On" and move on.
+ * Q4 of the design memo asks for `partial` BY NAME, and the reason is the failure
+ * this whole screen exists to prevent — an operator who reads "On" believes the
+ * unrealised difference is posted, and it is not. These assertions go red on it.
+ */
+describe("T8 step 8 — Multi-currency reads Part built, not On and not Not built", () => {
+  it("carries the NEW badge, and it is not the flattering one", () => {
+    renderFeatures();
+    expect(badgeFor(/^Multi-currency$/)).toBe("Part built");
+  });
+
+  it("names the missing part in the note, which is what makes `partial` honest", () => {
+    renderFeatures();
+    const note = noteFor(/^Multi-currency$/);
+    // Q4's own words, required on the screen.
+    expect(note).toMatch(/REPORTED AND NOT POSTED/);
+    // ⛔ AND THE NAMED GAP. "Part built" with a vague note is "Not built" with
+    // better marketing, which is the doctrine this file's header states.
+    expect(note).toMatch(/REVALUATION VOUCHER/);
+    // ⭐ AND WHAT THE OPERATOR CAN NOW DO, with the key that reaches it — the rule
+    // this screen holds itself to is that a row flips in the change that gives
+    // them a SCREEN.
+    expect(note).toMatch(/Ctrl\+H/);
+    expect(note).toMatch(/Alt\+G > Create Currency/);
+    // ⛔ AND THE LIMITATION THAT IS A DECISION RATHER THAN AN OMISSION.
+    expect(note).toMatch(/DOUBLE ENTRY ONLY/);
+  });
+
+  it("the LEGEND explains the new state, or the badge is a word with no meaning", () => {
+    renderFeatures();
+    // A fifth badge nobody defined is worse than four: an operator cannot tell
+    // "Part built" from "Server only" without being told.
+    expect(screen.getByText(/PART BUILT \(usable from the keyboard/)).toBeTruthy();
+  });
+
+  it("the note no longer claims the row STAYS OFF — that clause had to go", () => {
+    renderFeatures();
+    const note = noteFor(/^Multi-currency$/);
+    // ⛔ THE ONE ASSERTION THAT CANNOT BE SATISFIED BY FLIPPING THE BADGE ALONE,
+    // and it caught a real defect: step 8 flipped the row to `partial` and left
+    // the step-4 paragraph BELOW it reading "⛔ NO VOUCHER SCREEN OFFERS A
+    // CURRENCY FIELD, so this row stays off". A badge reading "Part built" above
+    // a note saying the row is off is the same failure the T32 and print-template
+    // rows were each caught in — a note is not a changelog that only grows, and
+    // the clause a later wave falsifies has to GO, not sit further down the page.
+    expect(note).not.toMatch(/so this row stays off/);
+    expect(note).not.toMatch(/NO VOUCHER SCREEN OFFERS A CURRENCY FIELD/);
+    // ⭐ AND THE HISTORY SURVIVES THE CORRECTION rather than being deleted: the
+    // build order is WHY the field came last, and that reasoning is still worth
+    // an operator's time.
+    expect(note).toMatch(/step 8 is what closed that/);
+    expect(note).toMatch(/worse than no form/);
+  });
+
+  it("...and the CURRENCY-MASTERS note no longer says nothing can be keyed", () => {
+    renderFeatures();
+    const note = noteFor(
+      /^Currency masters and exchange rates \(Alt\+G > Create Currency\)/,
+    );
+    // ⛔ THE SECOND STALE CLAUSE, ON A DIFFERENT ROW. This one read "WHAT IT IS
+    // FOR RIGHT NOW: nothing you can key … no voucher screen offers a currency
+    // yet" — true when the masters shipped a wave early, false the moment step 8
+    // gave the grid its fields. ⚠️ A ROW READING "On" IS NOT ENOUGH: this row read
+    // On the whole time, so only the note could carry the lie.
+    // ⚠️ THE LIVE CLAIM, NOT THE QUOTATION OF IT. The note QUOTES its own old
+    // wording on purpose — the same treatment the double-entry row's 2026-08-06
+    // overstatement got, because a correction that deletes the error leaves the
+    // next reader unable to tell a fixed claim from one never made. So these match
+    // the ASSERTING forms, which is what would actually mislead an operator.
+    expect(note).not.toMatch(/WHAT IT IS FOR RIGHT NOW: nothing you can key/);
+    expect(note).not.toMatch(/; no voucher screen offers a currency yet/);
+    // ⭐ AND THE QUOTED HISTORY IS REQUIRED, not merely tolerated.
+    expect(note).toMatch(/THIS SENTENCE READ 'nothing you can key' UNTIL T8 STEP 8/);
+    // ⭐ AND IT NOW POINTS AT WHAT THE MASTERS ARE FOR — this screen is the switch
+    // that makes the currency fields appear at all, which is the one thing an
+    // operator who cannot find them needs to be told.
+    expect(note).toMatch(/WHAT IT IS FOR: keying a foreign voucher/);
+    expect(note).toMatch(/HIDDEN UNTIL A CURRENCY EXISTS/);
+  });
+
+  it("the currency-masters row is still its OWN row and still reads On", () => {
+    renderFeatures();
+    // ⭐ THE CONTROL FOR THE DECISION NOT TO SPLIT FURTHER. Step 3 split this one
+    // off for a real reason and it stays split; step 8 added a STATE rather than
+    // four more rows, and this asserts the existing split was not collapsed on
+    // the way.
+    expect(
+      badgeFor(/^Currency masters and exchange rates \(Alt\+G > Create Currency\)/),
+    ).toBe("On");
+  });
+});
+
+/**
+ * ⭐⭐ T8 STEP 8 — THE FOREX GAIN/LOSS LEDGER PANEL.
+ *
+ * ⛔ IT IS THE SETTING STEP 5's OWN REFUSAL NAMES: *"set
+ * company_forex_settings.forex_gain_loss_ledger_id (Gateway > F11 >
+ * Multi-currency)"*. That path did not exist — an operator following the
+ * instruction arrived at a row of prose — and a refusal an operator cannot act on
+ * is an outage.
+ */
+describe("T8 step 8 — the forex gain/loss ledger panel", () => {
+  it("says NONE CHOSEN when nothing is set, and what that means", async () => {
+    renderFeatures();
+    await waitFor(() =>
+      expect(screen.getByTestId("forex-ledger-state")).toBeTruthy(),
+    );
+    // ⛔ "NONE CHOSEN" AND WHAT IT COSTS, not a blank. A settlement that would
+    // realise a difference is REFUSED until one is chosen, and a panel that
+    // showed an empty field would leave an operator hunting for the reason.
+    expect(screen.getByTestId("forex-ledger-state").textContent).toMatch(
+      /NONE CHOSEN — a realised difference will be refused/,
+    );
+  });
+
+  it("offers only revenue and expense ledgers, never a party or a bank", async () => {
+    renderFeatures();
+    await waitFor(() =>
+      expect(screen.getByTestId("forex-ledger-pick")).toBeTruthy(),
+    );
+    const options = Array.from(
+      screen.getByTestId("forex-ledger-pick").querySelectorAll("option"),
+    ).map((o) => o.textContent ?? "");
+    // ⛔ A GAIN CREDITED TO A CUSTOMER'S OWN LEDGER makes a settled bill show a
+    // residue for ever. The server refuses it; the picker does not offer it.
+    expect(options.some((o) => /Sundry Debtors|Sundry Creditors/.test(o))).toBe(
+      false,
+    );
+    expect(options.some((o) => /Bank Accounts|Cash-in-Hand/.test(o))).toBe(false);
+  });
+
+  it("says the UNREALISED difference is a report and not this setting", async () => {
+    renderFeatures();
+    await waitFor(() =>
+      expect(screen.getByTestId("forex-ledger-state")).toBeTruthy(),
+    );
+    // ⚠️ THE TWO ARE EASY TO CONFLATE AND THE PANEL SEPARATES THEM. This ledger
+    // is where a REALISED difference posts; the unrealised one posts nowhere.
+    // ⚠️ SCOPED TO THE PANEL. The phrase legitimately appears in the roster note
+    // too, and `getByText` across the whole screen would be an assertion about
+    // which of the two happened to render — not about the panel saying it.
+    const panel = screen
+      .getByTestId("forex-ledger-state")
+      .closest("div")?.textContent ?? "";
+    expect(panel).toMatch(/REALISED exchange gain or loss/);
+    expect(panel).toMatch(/REPORTED and NOT POSTED/);
+    expect(panel).toMatch(/Alt\+G > Unadjusted Forex Gain\/Loss/);
+  });
+});

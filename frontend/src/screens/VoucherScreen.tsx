@@ -74,6 +74,7 @@ import {
 } from "./vouchers/taxDeduction";
 import {
   doubleEntryLinesFromView,
+  doubleEntryForexRefusal,
   doubleEntryRefusal,
   emptyDoubleEntryLine,
   keyedLines,
@@ -96,6 +97,11 @@ import {
 import { StockVoucherScreen } from "./vouchers/StockVoucherScreen";
 import { defaultGodownOf, isStockVoucherType } from "./vouchers/stockVoucher";
 import { acceptPurchaseDraft, ApiError } from "../api";
+// ⛔ THE RATE HELPERS, NEVER THE MONEY ONES. `api/rate.ts`'s header states why at
+// length: `parseFixed4` TRUNCATES the fifth decimal onward, so a rate put through
+// the money pair silently becomes a different rate that round-trips perfectly and
+// prices the bill wrong for ever.
+import { normaliseRate } from "../api/rate";
 import { VOUCHER_CLASS_LABELS } from "../api/types";
 import {
   QueuedOfflineSignal,
@@ -1629,6 +1635,44 @@ function AccountingVoucherScreen({
    * chart is the only way the picker can know a row is bill-by-bill.
    */
   const [chart, setChart] = useState<LedgerListItem[]>([]);
+  /**
+   * ⭐⭐ T8 STEP 8 — THE COMPANY'S FOREIGN CURRENCIES, for the Dr/Cr grid's
+   * currency picker.
+   *
+   * ⛔ AN EMPTY LIST IS THE NORMAL CASE AND MUST STAY CHEAP AND SILENT. Every
+   * company that has never defined a currency — which is every company in the
+   * field today — gets `[]`, and `DoubleEntryPanel` then renders the grid exactly
+   * as it did before step 8. So a failure here is DELIBERATELY NOT surfaced the
+   * way `partiesError` is: an empty currency list and an unreadable one produce
+   * the same form, because in both cases the operator can key a rupee voucher and
+   * nothing they can see is missing. ⚠️ A currency they DID define and cannot
+   * pick is the case worth a message, and it is not distinguishable here without
+   * asking the server a second time — so it is left, named, rather than reported
+   * with a sentence that would also fire for the base-currency majority.
+   */
+  const [currencies, setCurrencies] = useState<{ id: string; code: string }[]>(
+    [],
+  );
+  useEffect(() => {
+    let live = true;
+    client
+      .listCurrencies(companyID)
+      .then((res) => {
+        if (!live) return;
+        setCurrencies(
+          res.currencies
+            .map((c) => ({ id: c.id, code: c.code }))
+            .sort((a, b) => a.code.localeCompare(b.code)),
+        );
+      })
+      .catch(() => {
+        // See the state's own comment: silent by design, not by omission.
+        if (live) setCurrencies([]);
+      });
+    return () => {
+      live = false;
+    };
+  }, [client, companyID]);
   useEffect(() => {
     let live = true;
     client
@@ -2108,6 +2152,12 @@ function AccountingVoucherScreen({
       return resolveMasters(
         doubleEntryRefusal(f.drCrLines) ||
           doubleEntryRowRefusal(rows) ||
+          // ⛔ T8's ALL-OR-NONE RULE IS PART OF THE SAME GATE EXPRESSION, for the
+          // reason this comment block already gives about D39: the server and a
+          // DB CHECK both refuse a two-of-three triple, and refusing it AFTER
+          // `ensureLedger` has created every account the operator named costs
+          // them the form and leaves masters behind.
+          doubleEntryForexRefusal(f.drCrLines) ||
           // ⛔ THE STATUTORY BLOCK IS PART OF THE SAME GATE (D3). A half-keyed
           // deduction is refused by the server AFTER `ensureLedger` has created
           // every named account — which is D39's shape exactly, and the reason
@@ -2132,11 +2182,31 @@ function AccountingVoucherScreen({
             // right group rather than to infer one from a keystroke.
             groupName: l.side === "DR" ? "Indirect Expenses" : "Indirect Incomes",
           });
-          postings.push({
+          const posting: PostingRequest = {
             ledger_id: id,
             dr_cr: l.side,
             amount: normalizeMoney(l.amount),
-          });
+          };
+          // ⭐⭐ T8's TRIPLE, SENT FROM THE GRID — the other half of defect number
+          // nine. `doubleEntryLinesFromView` now READS it off the view; without
+          // this it would be read and then dropped, which is the same round trip
+          // with one more place to look.
+          //
+          // ⛔ ALL THREE OR NONE, KEYED OFF THE CURRENCY (0080's CHECK), and
+          // `doubleEntryForexRefusal` in the gate above has already refused a
+          // two-of-three row with a sentence naming which value is missing.
+          //
+          // ⚠️ `rate` IS NOT PUT THROUGH `normalizeMoney`. It is a ten-decimal
+          // rate; the fixed-4 helper this line uses for `amount` would hand back
+          // 83.6512 and reprice the bill. ⭐ `normaliseRate` PADS the operator's
+          // "83.65" to the stored "83.6500000000" instead, so re-opening the
+          // voucher does not report a spurious edit on a field nobody touched.
+          if ((l.currencyId ?? "") !== "") {
+            posting.currency_id = l.currencyId;
+            posting.foreign_amount = normalizeMoney(l.foreignAmount ?? "");
+            posting.rate = normaliseRate(l.rate ?? "");
+          }
+          postings.push(posting);
         }
 
         const req: VoucherRequest = {
@@ -3213,6 +3283,7 @@ function AccountingVoucherScreen({
             parties={partyNames}
             ledgerByName={ledgerByName}
             kindForGroup={kindForGroup}
+            currencies={currencies}
           />
           {/* ⛔ THE STATUTORY BLOCK (register row D3), and it is HERE and not on
               the single-entry form because withholding splits the payment three

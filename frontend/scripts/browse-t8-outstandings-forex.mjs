@@ -208,13 +208,33 @@ try {
   // which reads as a regression in the product rather than in the probe.
   const lines = text.split("\n").filter((l) => l.trim() !== "");
   const usdLines = lines.filter((l) => l.includes("USD")).length;
-  const fxbLines = lines.filter((l) => l.includes("FXB-")).length;
+  // ⛔⛔ EVERY FOREIGN BILL IN THIS BOOK, NOT ONLY THIS PROBE'S OWN.
+  //
+  // This counted `FXB-` alone, which is THIS probe's marker — and step 7's probe
+  // seeds `UFX-` bills, in USD, for the same amount, into the SAME scratch book.
+  // So the moment `browse-t8-unadjusted-forex.mjs` had ever run here, this control
+  // read "8 USD rows, 5 foreign bills" and went red for ever, reporting a currency
+  // leaking onto rupee rows when what it had actually found was its sibling's
+  // fixture. ⚠️ THE SHARED SCRATCH BOOK IS THE HAZARD: a probe that identifies
+  // "the foreign rows" by its own prefix is asserting that no other probe exists.
+  const foreignBillLines = lines.filter((l) => /FXB-|UFX-/.test(l)).length;
   rec(
     "T8/6 browser: ⭐ CONTROL — the currency reaches the FOREIGN rows and no others",
-    usdLines > 0 && usdLines === fxbLines,
-    `${usdLines} row(s) name USD and ${fxbLines} row(s) are foreign bills, out of ` +
-      `${lines.length} rows — a column stamped on every row would show far more, ` +
-      `and zero USD rows would mean it reaches none`,
+    usdLines > 0 && usdLines === foreignBillLines,
+    `${usdLines} row(s) name USD and ${foreignBillLines} row(s) are foreign bills, ` +
+      `out of ${lines.length} rows — a column stamped on every row would show far ` +
+      `more, and zero USD rows would mean it reaches none`,
+  );
+  // ⭐ AND THE SHARPER HALF OF THE SAME CLAIM, WHICH NO PREFIX CAN GO STALE ON:
+  // the overwhelming majority of this seeded book is rupee bills, and NONE of them
+  // names a currency. `usdLines === foreignBillLines` alone would still pass if the
+  // column were stamped on every row AND every row happened to be a foreign bill.
+  rec(
+    "T8/6 browser: ⛔ and the book's RUPEE rows are untouched by it",
+    usdLines < lines.length / 4,
+    `${usdLines} of ${lines.length} rows name a currency — this is a seeded demo ` +
+      `book of rupee bills, so a currency on more than a small minority of rows ` +
+      `means the column is being stamped rather than read`,
   );
   rec(
     "T8/6 browser: no unexplained javascript errors",

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { billRefsFromView, buildBillAllocations } from "./billAllocation";
+import { doubleEntryForexRefusal, doubleEntryLinesFromView } from "./doubleEntry";
 import type { BillAllocationView, PostingView } from "../../api/types";
 
 /**
@@ -158,5 +159,141 @@ describe("the posting view carries what a rebuild needs", () => {
     expect(p.currency_id).toBe(USD);
     expect(p.foreign_amount).toBe("1000.0000");
     expect(p.rate).toBe("83.6512345678");
+  });
+});
+
+/**
+ * ⛔⛔ T8 STEP 8 — THE **DOUBLE-ENTRY GRID's** OWN ROUND TRIP, AND IT WAS BROKEN.
+ *
+ * §6.1 of `HANDOFF-T8-STEPS-6-TO-8.md` tells step 8 to ask, before shipping a form:
+ * *"what does an alter through this form omit?"* — and names the answer in advance:
+ * *"A currency field that does not round-trip the triple is defect number nine."*
+ *
+ * ⛔ IT WAS ALREADY DEFECT NUMBER NINE BEFORE THE FIELD EXISTED. The tests above
+ * cover the SINGLE-ENTRY path (`postingsFromView`) and the BILL REFERENCES
+ * (`billRefsFromView`). The DOUBLE-ENTRY grid has a third, independent hop —
+ *
+ *     PostingView  ->  doubleEntryLinesFromView  ->  DoubleEntryLine
+ *                  ->  buildDoubleEntryRequest    ->  PostingRequest
+ *
+ * — and `DoubleEntryLine` did not carry the triple at all. So opening a foreign
+ * JOURNAL (F7 is ALWAYS this grid), or a foreign Receipt in Double Entry mode,
+ * fixing the narration and saving wrote a RUPEE voucher over it.
+ *
+ * ⚠️ AND NOTHING REFUSED IT, which is why it needed a test rather than a bug
+ * report: the rebuilt voucher still balances in base, the double-entry guard is
+ * satisfied, the Balance Sheet does not move by a paisa, and the only trace is that
+ * the bill quietly stops being foreign — leaving the unadjusted-forex report and
+ * realising no gain when it is settled.
+ *
+ * ⭐ MEASURED BEFORE THE FIX, with the triple removed from the type:
+ *     currencyId  undefined  (wanted "cur-usd")
+ *     foreignAmount undefined  (wanted "1000.0000")
+ *     rate        undefined  (wanted "83.6512345678")
+ */
+describe("T8/8: the DOUBLE-ENTRY grid's own forex round trip", () => {
+  const foreignPosting = {
+    ledger: "Globex LLC",
+    ledger_id: "led-globex",
+    dr_cr: "D",
+    amount: "83651.2300",
+    currency_id: "cur-usd",
+    currency: "USD",
+    foreign_amount: "1000.0000",
+    rate: "83.6512345678",
+  };
+
+  it("hydrates a foreign posting into a grid line carrying ALL THREE values", () => {
+    const [line] = doubleEntryLinesFromView(
+      [foreignPosting],
+      () => [],
+      () => [],
+    );
+    expect(line?.currencyId).toBe("cur-usd");
+    expect(line?.foreignAmount).toBe("1000.0000");
+    // ⛔ TEN DECIMALS, PASSED THROUGH UNTOUCHED. Re-formatting it with this
+    // module's money helpers would hand back 83.6512 and reprice the bill.
+    expect(line?.rate).toBe("83.6512345678");
+    // Display only, so a picker can label the field without resolving the uuid.
+    expect(line?.currencyCode).toBe("USD");
+  });
+
+  it("CONTROL: a base posting hydrates with NO forex keys at all, not empty ones", () => {
+    const [line] = doubleEntryLinesFromView(
+      [
+        {
+          ledger: "Bharat Traders",
+          ledger_id: "led-bharat",
+          dr_cr: "D",
+          amount: "50000.0000",
+        },
+      ],
+      () => [],
+      () => [],
+    );
+    // ⛔ ABSENT, NOT "". `buildDoubleEntryRequest` keys the whole triple off the
+    // currency being non-empty, and an empty-string currency would send a
+    // two-of-three row that 0080's CHECK refuses — a 422 on a request that looks
+    // complete on this side.
+    expect(line?.currencyId).toBeUndefined();
+    expect(line?.foreignAmount).toBeUndefined();
+    expect(line?.rate).toBeUndefined();
+    // And the control that says the hydration ran at all.
+    expect(line?.amount).toBe("50000.0000");
+    expect(line?.ledger).toBe("Bharat Traders");
+  });
+
+  it("refuses a HALF-KEYED triple, naming which value is missing", () => {
+    const base = {
+      ledger: "Globex LLC",
+      side: "DR" as const,
+      amount: "83651.23",
+      allocations: [],
+      billRefs: [],
+    };
+    // ⛔ ALL FOUR HALF-KEYED SHAPES, because 0080's CHECK refuses every one of
+    // them and a form that caught three would send the fourth.
+    expect(
+      doubleEntryForexRefusal([{ ...base, foreignAmount: "1000" }]),
+    ).toMatch(/no CURRENCY/);
+    expect(
+      doubleEntryForexRefusal([{ ...base, currencyId: "cur-usd" }]),
+    ).toMatch(/no FOREIGN AMOUNT/);
+    expect(
+      doubleEntryForexRefusal([
+        { ...base, currencyId: "cur-usd", foreignAmount: "1000" },
+      ]),
+    ).toMatch(/no EXCHANGE RATE/);
+    expect(
+      doubleEntryForexRefusal([
+        { ...base, currencyId: "cur-usd", foreignAmount: "-5", rate: "83.65" },
+      ]),
+    ).toMatch(/negative foreign amount/);
+  });
+
+  it("CONTROL: a complete triple and a base line are both accepted", () => {
+    const base = {
+      ledger: "Globex LLC",
+      side: "DR" as const,
+      amount: "83651.23",
+      allocations: [],
+      billRefs: [],
+    };
+    expect(
+      doubleEntryForexRefusal([
+        {
+          ...base,
+          currencyId: "cur-usd",
+          foreignAmount: "1000.00",
+          rate: "83.6512345678",
+        },
+      ]),
+    ).toBe("");
+    expect(doubleEntryForexRefusal([base])).toBe("");
+    // ⭐ AND AN UNKEYED ROW IS NOT JUDGED. The grid always offers one more line,
+    // and a refusal about a blank row would make the form unusable.
+    expect(
+      doubleEntryForexRefusal([{ ...base, ledger: "", amount: "" }]),
+    ).toBe("");
   });
 });

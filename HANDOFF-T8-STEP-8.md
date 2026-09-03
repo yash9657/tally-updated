@@ -1,3 +1,20 @@
+> # ✅ CLOSED — 2026-09-03. T8 IS DONE, STEPS 1–8.
+>
+> **The probe is finished and green: `browse-t8-foreign-entry` 26/26.** Everything below is kept as
+> the record of what was handed over, and it is ACCURATE AS OF WHEN IT WAS WRITTEN — but §3's two
+> probe bugs are fixed, and **two more it did not predict** (`vv.narration` is not a column; the
+> foreign line is not row 0 on the way back), plus §3.3's unmeasured third (the Day Book drill must
+> click the ROW, not the narration cell).
+>
+> ⚠️ **§3.4 IS WRONG AND THE CORRECTION MATTERS:** the 7 errors were NOT `act()` warnings. They were
+> uncaught `TypeError`s from `CostAllocationPicker` — the test's `listCostCentres` stub omitted
+> `cost_categories`, which `useCostMasters` reads off that same response. Fixed; the suite runs 0
+> errors.
+>
+> ⛔ **READ `HANDOFF-PARITY-AUDIT.md` §7 `### L39` INSTEAD OF THIS FILE.** It records all of it with
+> the measurements, including a COMMITTED probe (`browse-t8-outstandings-forex`) that was already red
+> for a reason that had nothing to do with step 8.
+
 # HANDOFF — T8 STEP 8. STEPS 6 AND 7 ARE COMMITTED AND GREEN. STEP 8 IS BUILT, TESTED, AND ITS BROWSER PROBE IS NOT FINISHED.
 
 **Written:** 2026-09-03 · **Branch:** `session/t32-and-close-7-3`

@@ -4,6 +4,7 @@ import { ApiError } from "../api";
 import { useClient, useCompanyContext } from "../app/CompanyContext";
 import type {
   DeductorCategory,
+  LedgerListItem,
   DeductorStatus,
   SetTDSProfileRequest,
   TCSDeclaration,
@@ -15,9 +16,14 @@ import type {
  *
  * Tally's F11 is a screen of Yes/No feature switches. Ours is deliberately a
  * STATEMENT OF FACT rather than a set of switches: a toggle that flips a flag
- * with nothing behind it is worse than no toggle at all. Four states:
+ * with nothing behind it is worse than no toggle at all. FIVE states:
  *   • "Always on"   — structural in this build (it cannot be turned off).
  *   • "On"          — built and available FROM THE KEYBOARD, here, today.
+ *   • "Part built"  — the feature is USABLE from the keyboard and a NAMED part of
+ *                     it is deliberately absent, with the note saying which part
+ *                     and why. NOT "most of it works": a row is only this if an
+ *                     operator can do the main job today AND there is a specific,
+ *                     stated thing they cannot do.
  *   • "Server only" — the server half is built, tested and reachable over HTTP,
  *                     and there is NO screen or key that reaches it. An operator
  *                     sitting in front of this application cannot use it.
@@ -34,9 +40,33 @@ import type {
  * as "we have not written it" is its own inaccuracy, and it is the one that
  * makes an accountant re-buy something they already own. So the two are now
  * separate words, and neither of them is "On".
+ *
+ * ⭐⭐ AND WHY "Part built" EXISTS AS ITS OWN STATE — T8 STEP 8, AND IT IS THE SAME
+ * ARGUMENT ONE STEP FURTHER ON.
+ * Q4 of `docs/design/t8-multi-currency-model.md` asks for it by name: *"The v1 row
+ * is `partial`, not `on`, and its note says the unrealised difference is REPORTED
+ * and not POSTED, in those words."* Multi-currency after step 8 is neither `on` nor
+ * `off` nor `server`: an operator CAN key a foreign invoice, settle it, age it and
+ * read the exposure — all from the keyboard — and there is one thing they cannot
+ * do, which is POST a revaluation of a bill that is still open. Calling that `on`
+ * overstates it in exactly the direction this screen exists to prevent; calling it
+ * `off` would tell an accountant to go and buy multi-currency they already have.
+ *
+ * ⛔ THE ALTERNATIVE WAS TO SPLIT THE ROW, and it was rejected rather than
+ * overlooked. Step 3 split "Currency masters and exchange rates" off for a real
+ * reason — the masters became keyboard-reachable a whole wave before anything
+ * could use them — and splitting again would give ONE feature five rows (masters,
+ * entry, settlement, ageing, revaluation), four of them `on` and one `off`, which
+ * is a table an operator has to reassemble in their head to answer "can I invoice
+ * in dollars". ⚠️ A state that says "yes, and here is the named gap" answers that
+ * question in one row, which is what this screen is for.
+ *
+ * ⛔ AND IT IS NOT A LICENCE. A row is `partial` only when the note NAMES the
+ * missing part and says why it is missing. "Part built" with a vague note is
+ * `off` with better marketing, which is the failure mode the whole file guards.
  */
 
-type State = "always" | "on" | "server" | "off";
+type State = "always" | "on" | "partial" | "server" | "off";
 
 const FEATURES: {
   group: string;
@@ -121,8 +151,15 @@ const FEATURES: {
         // a business that believes it can invoice in dollars finds out at the
         // moment it tries to.
         name: "Multi-currency",
-        state: "off",
-        note: "Not built yet FOR YOU, and that phrasing is exact. There is no screen in this build on which you can key a voucher in a foreign currency, settle a foreign bill or read an exchange gain or loss — those are the feature. WHAT LANDED SINCE (T8 step 5): REALISED GAIN AND LOSS, over HTTP only, and the refusal that guards it. Settle a foreign bill at a rate different from the one it was raised at and the server now works out the difference itself, from the two rates your books already hold, and REFUSES the voucher unless the exchange difference you posted is the one it derived — naming both figures. ⛔ AND IT REFUSES OUTRIGHT IF YOU HAVE NOT CHOSEN A LEDGER FOR IT: there is a setting for that now (a revenue or expense ledger; a party, bank or cash ledger is refused, because crediting a gain to a customer would make a settled bill show a residue for ever), and until you choose one, a settlement that would realise a difference is refused naming the setting rather than posted somewhere plausible or quietly absorbed. The difference is measured as the rupees the settlement actually moved less the book value it cleared, so a bill settled in parts closes at exactly zero, and a part settlement realises only the part settled. WHAT LANDED SINCE THAT (T8 step 6): OUTSTANDINGS NOW SHOWS A FOREIGN BILL AS FOREIGN, on the screen and on the printed copy. A dollar bill carries its currency and the amount still outstanding IN THAT CURRENCY, in its own column, beside the rupee figure and never instead of it — the rupee figure is the one that ties to Sundry Debtors on your Balance Sheet and it has not moved. A bill brought in on a ledger's OPENING breakup carries the same three values now, which matters if your foreign customers predate this build: until step 6 that bill could not be keyed as foreign at all, so it read as a rupee bill and could not be settled. ⛔ AND A BILL NUMBER OPEN IN TWO CURRENCIES IS SHOWN AS TWO ROWS AND MARKED, never added together: allocating a rupee receipt against a dollar invoice clears the rupee receivable and leaves the dollars uncollected, and adding the two would produce a figure in no currency at all. ⚠️ THE GRAND TOTAL, THE PARTY TOTALS AND THE AGEING BUCKETS STAY IN RUPEES ONLY, on purpose — summing dollars into a rupee total gives a number that foots and means nothing. Money on a party that names no bill (On Account) is shown in rupees with no currency, because it is worked out as your whole balance less every bill on it — many receipts at many rates — and there is no one rate it could honestly be labelled with. WHAT LANDED SINCE THAT (T8 step 7): THE UNADJUSTED FOREX GAIN/LOSS REPORT, on a screen you can reach (Alt+G > Unadjusted Forex Gain/Loss) and on paper. Between raising a foreign invoice and being paid for it the exchange rate moves and your books do not, and that difference was invisible until now: this report lists every open foreign bill — customers AND suppliers, on one page — with what is still owed in its own currency, the rate the bill was raised at, the rate as on the date you ask about, the rupee figure your books carry, and the difference between them. ⛔ THAT DIFFERENCE IS REPORTED AND NOT POSTED. No voucher is created and no ledger balance changes; the figure is what settling the whole remaining balance at that rate WOULD realise, and the screen and the printed sheet both say so in those words. A revaluation voucher is deliberately not built — it could only ever BE a voucher, because postings here are immutable, so nothing about deferring it has to be undone later. ⛔ A BILL WHOSE CURRENCY HAS NO RATE ON FILE IS LISTED AND NOT VALUED, and the report says how many: an exposure nobody can price is still an exposure, and valuing it at a rate of nothing would turn the whole bill into a loss — a large, plausible, correctly-signed figure produced by a rate you never entered. Enter a rate for that date and the row prices itself. The date you ask about does TWO jobs and the screen distinguishes them: it decides which bills are listed AND which rate values them. ⚠️ THE REPORT IS REFUSED TO THE DATA ENTRY LEVEL, both on screen and in print — it is every foreign counterparty, the terms you actually transacted on, and your whole unhedged position in one figure. An owner who disagrees deletes one rule; note that allowing it allows BOTH sides, because a net exposure is not separable into what you are owed and what you owe. ⚠️ WHAT IS STILL MISSING IS THE ENTRY HALF: no screen offers the gain/loss ledger setting, and no screen lets you key a foreign voucher or a foreign settlement — both are still API only — so this row stays off. WHAT LANDED BEFORE THAT (T8 step 4): the VOUCHER DATA PATH, over HTTP only. A voucher posted through the API can now carry a currency, a foreign amount and a rate on each posting and each bill reference; they are stored, they ride inside the tamper-evident signature, the GET returns them, and an edit that re-saves the voucher no longer destroys them. ⛔ NO VOUCHER SCREEN OFFERS A CURRENCY FIELD, so this row stays off: the build order settles settlement, the ageing report and the unadjusted-forex report BEFORE the operator is given the control, because a form that can key a dollar invoice the rest of the product cannot settle or age is worse than no form. It matters today because a foreign voucher can also arrive through an import or from an offline node, and until this landed, opening one and fixing a typo silently turned it into a rupee voucher. WHAT LANDED EARLIER (migration 0080): the SCHEMA. Every posting, bill allocation and opening bill can now carry three values together — the base amount, the foreign amount and the rate — and the database refuses two of the three, because a report can compute a plausible wrong number from a half-filled row. The base amount stays authoritative and is the figure the double-entry check sums, so a multi-currency journal balances in BASE and need not balance in any foreign currency. A rate is stored to TEN decimals and quoted as base units per one foreign unit, which is not the same type as money (money is four) — a rate read as money quantises and a fifty-lakh invoice moves by thousands. Realised gain/loss posts to a ledger you CHOOSE and nothing is auto-created — that is now enforced, as described at the top of this note. The unadjusted-forex REPORT is planned before the revaluation VOUCHER, and until the voucher exists that report will state that it posts nothing.",
+        // ⭐⭐ T8 STEP 8 FLIPPED THIS FROM `off`, AND TO `partial` RATHER THAN `on`.
+        // Q4 of the design memo asks for `partial` by name, and the rule this file
+        // has always enforced is that a row flips in the change that gives the
+        // operator a SCREEN — which step 8 is. What is deliberately absent is the
+        // revaluation VOUCHER: the unrealised difference is REPORTED and NOT
+        // POSTED, which the note below says in those words. See the `partial`
+        // paragraph in this file's header for why the row was not split instead.
+        state: "partial",
+        note: "PART BUILT, and the missing part is named. YOU CAN NOW KEY A FOREIGN INVOICE, SETTLE IT, AGE IT AND READ YOUR EXPOSURE, all from the keyboard. WHAT YOU CANNOT DO is post a revaluation of a bill that is still open: that difference is REPORTED AND NOT POSTED (Alt+G > Unadjusted Forex Gain/Loss), and the report and the printed sheet both say so on their face. HOW TO KEY ONE (T8 step 8): press Ctrl+H > Double Entry on a Sales, Purchase, Receipt or Payment — or F7 for a Journal, which is always double entry — and each Dr/Cr line gains a currency box, a foreign amount and an exchange rate. ⛔ THE CURRENCY FIELDS APPEAR ONLY ONCE YOU HAVE DEFINED A CURRENCY (Alt+G > Create Currency); until then the grid is exactly as it was, because three permanently blank boxes on every line of the form you use most is noise. ⛔ AND THEY ARE ON DOUBLE ENTRY ONLY, which is a decision and not an omission: single entry INFERS the other leg and puts the SUM of your particulars on it, so a foreign amount on one particular has no defined relationship to the leg you never keyed — the same reason the TDS/TCS block lives on double entry and nowhere else. Every foreign transaction is expressible in double entry and Ctrl+H reaches it. THE RUPEE AMOUNT STAYS THE AUTHORITATIVE FIGURE and nothing overwrites it: the '= fgn × rate' button beside each line STATES the product if you want it, and an invoice whose rupee figure is a negotiated or contracted number rather than the day's arithmetic is an ordinary invoice — so the form suggests and never decides. A rate is kept to TEN decimals, not the four money uses, because at four a rate like 0.0033333333 becomes 0.0033 and a fifty-lakh invoice moves by thousands. A LINE IS ALL THREE OR NONE — a currency with no rate, or a rate with no amount, is refused BY THE FORM before anything is sent, naming which value is missing, because a half-filled row lets a report compute a plausible wrong number. WHEN YOU SETTLE, the bill picker now shows what the bill is carried at in BOTH currencies and warns you if it is open under two; the exchange difference needs its own line to the gain/loss ledger you choose in the panel at the top of this screen, and the server works the figure out itself and refuses any other — so you cannot post a gain the books do not support, and you cannot post one to a ledger you never chose. ⛔ AND OPENING A FOREIGN VOUCHER TO FIX A TYPO NO LONGER DESTROYS IT ON THE DOUBLE-ENTRY FORM. It did until step 8: the grid rebuilt every line without its currency and the save wrote a rupee voucher over your dollar one, with nothing refusing it — the entry still balanced in rupees and the Balance Sheet did not move by a paisa. WHAT LANDED BEFORE THAT (T8 step 5): REALISED GAIN AND LOSS, over HTTP only, and the refusal that guards it. Settle a foreign bill at a rate different from the one it was raised at and the server now works out the difference itself, from the two rates your books already hold, and REFUSES the voucher unless the exchange difference you posted is the one it derived — naming both figures. ⛔ AND IT REFUSES OUTRIGHT IF YOU HAVE NOT CHOSEN A LEDGER FOR IT: there is a setting for that now (a revenue or expense ledger; a party, bank or cash ledger is refused, because crediting a gain to a customer would make a settled bill show a residue for ever), and until you choose one, a settlement that would realise a difference is refused naming the setting rather than posted somewhere plausible or quietly absorbed. The difference is measured as the rupees the settlement actually moved less the book value it cleared, so a bill settled in parts closes at exactly zero, and a part settlement realises only the part settled. WHAT LANDED SINCE THAT (T8 step 6): OUTSTANDINGS NOW SHOWS A FOREIGN BILL AS FOREIGN, on the screen and on the printed copy. A dollar bill carries its currency and the amount still outstanding IN THAT CURRENCY, in its own column, beside the rupee figure and never instead of it — the rupee figure is the one that ties to Sundry Debtors on your Balance Sheet and it has not moved. A bill brought in on a ledger's OPENING breakup carries the same three values now, which matters if your foreign customers predate this build: until step 6 that bill could not be keyed as foreign at all, so it read as a rupee bill and could not be settled. ⛔ AND A BILL NUMBER OPEN IN TWO CURRENCIES IS SHOWN AS TWO ROWS AND MARKED, never added together: allocating a rupee receipt against a dollar invoice clears the rupee receivable and leaves the dollars uncollected, and adding the two would produce a figure in no currency at all. ⚠️ THE GRAND TOTAL, THE PARTY TOTALS AND THE AGEING BUCKETS STAY IN RUPEES ONLY, on purpose — summing dollars into a rupee total gives a number that foots and means nothing. Money on a party that names no bill (On Account) is shown in rupees with no currency, because it is worked out as your whole balance less every bill on it — many receipts at many rates — and there is no one rate it could honestly be labelled with. WHAT LANDED SINCE THAT (T8 step 7): THE UNADJUSTED FOREX GAIN/LOSS REPORT, on a screen you can reach (Alt+G > Unadjusted Forex Gain/Loss) and on paper. Between raising a foreign invoice and being paid for it the exchange rate moves and your books do not, and that difference was invisible until now: this report lists every open foreign bill — customers AND suppliers, on one page — with what is still owed in its own currency, the rate the bill was raised at, the rate as on the date you ask about, the rupee figure your books carry, and the difference between them. ⛔ THAT DIFFERENCE IS REPORTED AND NOT POSTED. No voucher is created and no ledger balance changes; the figure is what settling the whole remaining balance at that rate WOULD realise, and the screen and the printed sheet both say so in those words. A revaluation voucher is deliberately not built — it could only ever BE a voucher, because postings here are immutable, so nothing about deferring it has to be undone later. ⛔ A BILL WHOSE CURRENCY HAS NO RATE ON FILE IS LISTED AND NOT VALUED, and the report says how many: an exposure nobody can price is still an exposure, and valuing it at a rate of nothing would turn the whole bill into a loss — a large, plausible, correctly-signed figure produced by a rate you never entered. Enter a rate for that date and the row prices itself. The date you ask about does TWO jobs and the screen distinguishes them: it decides which bills are listed AND which rate values them. ⚠️ THE REPORT IS REFUSED TO THE DATA ENTRY LEVEL, both on screen and in print — it is every foreign counterparty, the terms you actually transacted on, and your whole unhedged position in one figure. An owner who disagrees deletes one rule; note that allowing it allows BOTH sides, because a net exposure is not separable into what you are owed and what you owe. ⚠️ WHAT IS STILL MISSING, AND IT IS WHY THIS ROW IS `Part built` RATHER THAN `On`: the REVALUATION VOUCHER. The unrealised difference on an open bill is reported and not posted, so your Profit & Loss carries realised differences only until a bill is settled. That is deferred on purpose and costs nothing to undo later — a revaluation could only ever BE a voucher here, because postings are immutable, and the schema it would need is the schema this build already has. ⛔ ALSO NOT BUILT: GST on an export invoice is untouched, deliberately — the return needs rupees and the rule that fixes WHICH rate a return uses is not cited in this build, so nothing guesses it. WHAT LANDED BEFORE THAT (T8 step 4): the VOUCHER DATA PATH, over HTTP only. A voucher posted through the API can now carry a currency, a foreign amount and a rate on each posting and each bill reference; they are stored, they ride inside the tamper-evident signature, the GET returns them, and an edit that re-saves the voucher no longer destroys them. ⛔ AT THAT POINT NO VOUCHER SCREEN OFFERED A CURRENCY FIELD, and this row was OFF because of it — step 8 is what closed that, and the top of this note is how you key one now. The build order settled settlement, the ageing report and the unadjusted-forex report BEFORE the operator was given the control, because a form that can key a dollar invoice the rest of the product cannot settle or age is worse than no form. It matters today because a foreign voucher can also arrive through an import or from an offline node, and until this landed, opening one and fixing a typo silently turned it into a rupee voucher. WHAT LANDED EARLIER (migration 0080): the SCHEMA. Every posting, bill allocation and opening bill can now carry three values together — the base amount, the foreign amount and the rate — and the database refuses two of the three, because a report can compute a plausible wrong number from a half-filled row. The base amount stays authoritative and is the figure the double-entry check sums, so a multi-currency journal balances in BASE and need not balance in any foreign currency. A rate is stored to TEN decimals and quoted as base units per one foreign unit, which is not the same type as money (money is four) — a rate read as money quantises and a fifty-lakh invoice moves by thousands. Realised gain/loss posts to a ledger you CHOOSE and nothing is auto-created — that is now enforced, as described at the top of this note. The unadjusted-forex REPORT is planned before the revaluation VOUCHER, and until the voucher exists that report will state that it posts nothing.",
       },
       {
         // Split from the row above the day the masters became keyboard-reachable
@@ -130,7 +167,7 @@ const FEATURES: {
         // row that is half true is worse than two rows that are each wholly true.
         name: "Currency masters and exchange rates (Alt+G > Create Currency)",
         state: "on",
-        note: "Alt+G > Create Currency defines a foreign currency — a code, a symbol, a formal name and how many decimals it has — and a rate can be recorded against it for a date. WHAT IT IS FOR RIGHT NOW: nothing you can key. The masters exist ahead of the voucher work so the schema and the vocabulary are settled before anything writes to them; no voucher screen offers a currency yet. ⛔ YOUR OWN BASE CURRENCY IS NOT CREATED HERE and asking for it is refused by name: a base-currency amount is recorded with NO currency at all, so a master for it would be a second way of saying the same thing — and a voucher keyed against it would carry a rate of 1.0 for ever and sit in the forex report showing a difference of zero, indistinguishable from a genuine foreign bill that happens to be flat. A currency may have 0 to 4 decimals, because money is carried to four everywhere in this product and a currency claiming six is one the wire cannot carry; 0 is real and accepted (yen, won). A new currency has NO rate until you enter one, and the list says so with an empty rate rather than a zero — a zero would offer the currency and value the whole invoice at nothing. A rate must be greater than zero, is quoted as BASE UNITS PER ONE FOREIGN UNIT (1 USD = 83.65 INR), and is kept to ten decimals: correcting a rate is safe and changes no posted voucher, because a voucher stores its OWN rate and this table is only consulted for defaults and for the revaluation report. Re-entering a rate for a date you already have REPLACES it. WHAT IS NOT HERE: no rename, no delete and no alter of a currency — this build has no master alter for any master — and no way to remove a rate once entered.",
+        note: "Alt+G > Create Currency defines a foreign currency — a code, a symbol, a formal name and how many decimals it has — and a rate can be recorded against it for a date. WHAT IT IS FOR: keying a foreign voucher. ⚠️ THIS SENTENCE READ 'nothing you can key' UNTIL T8 STEP 8 and the correction is worth stating rather than quietly deleting — the masters shipped a wave ahead of the voucher work so the schema and the vocabulary were settled before anything wrote to them, and until step 8 no voucher screen offered a currency. One now does: define a currency here and every Dr/Cr line on a double-entry voucher gains a currency box, a foreign amount and a rate (see Multi-currency above). ⛔ THE FIELDS ARE HIDDEN UNTIL A CURRENCY EXISTS, so this screen is the switch that turns them on. ⛔ YOUR OWN BASE CURRENCY IS NOT CREATED HERE and asking for it is refused by name: a base-currency amount is recorded with NO currency at all, so a master for it would be a second way of saying the same thing — and a voucher keyed against it would carry a rate of 1.0 for ever and sit in the forex report showing a difference of zero, indistinguishable from a genuine foreign bill that happens to be flat. A currency may have 0 to 4 decimals, because money is carried to four everywhere in this product and a currency claiming six is one the wire cannot carry; 0 is real and accepted (yen, won). A new currency has NO rate until you enter one, and the list says so with an empty rate rather than a zero — a zero would offer the currency and value the whole invoice at nothing. A rate must be greater than zero, is quoted as BASE UNITS PER ONE FOREIGN UNIT (1 USD = 83.65 INR), and is kept to ten decimals: correcting a rate is safe and changes no posted voucher, because a voucher stores its OWN rate and this table is only consulted for defaults and for the revaluation report. Re-entering a rate for a date you already have REPLACES it. WHAT IS NOT HERE: no rename, no delete and no alter of a currency — this build has no master alter for any master — and no way to remove a rate once entered.",
       },
       {
         name: "Bank reconciliation",
@@ -654,6 +691,11 @@ const FEATURES: {
 const BADGE: Record<State, { text: string; className: string }> = {
   always: { text: "Always on", className: "text-tally-title" },
   on: { text: "On", className: "text-tally-title" },
+  // ⭐ T8 STEP 8. ⛔ IT IS STYLED LIKE "Server only" AND NOT LIKE "On", DELIBERATELY:
+  // the flattering direction is the one this screen has been wrong in before (see
+  // the double-entry row's own correction), so a state that means "yes, with a
+  // named gap" must not read at a glance as a state that means "yes".
+  partial: { text: "Part built", className: "text-tally-bar" },
   server: { text: "Server only", className: "text-tally-bar" },
   off: { text: "Not built", className: "text-tally-fieldText" },
 };
@@ -825,6 +867,238 @@ function NegativeStockPanel() {
       ) : null}
       {saved ? (
         <p className="mt-2 max-w-3xl text-xs text-tally-title" data-testid="negative-stock-saved">
+          {saved}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * ⭐⭐ T8 STEP 8 — THE FOREX GAIN/LOSS LEDGER. THE SETTING STEP 5's OWN REFUSAL
+ * NAMES, AND UNTIL NOW THERE WAS NOWHERE TO OBEY IT.
+ *
+ * `errForexLedgerNotChosen` in `internal/ledger/forex_settlement.go` refuses a
+ * settlement that realises an exchange difference at a company with no ledger
+ * chosen, and the message says where to go: *"set
+ * company_forex_settings.forex_gain_loss_ledger_id (Gateway > F11 >
+ * Multi-currency)"*. ⛔ THAT PATH DID NOT EXIST. An operator following the
+ * instruction arrived at a row of prose. A refusal an operator cannot act on is an
+ * outage, and this panel is the second half of it.
+ *
+ * WHY A CONTROL BELONGS ON A SCREEN WHOSE HEADER SAYS IT IS A STATEMENT OF FACT —
+ * the same answer `NegativeStockPanel` and the TDS deductor panel give: the
+ * doctrine is *"a toggle that flips a flag with nothing behind it is worse than no
+ * toggle at all"*, and this has everything behind it. Until a row exists here the
+ * settlement path REFUSES every foreign settlement that would realise a
+ * difference. It is not a decorative switch; it is the switch the rest of the
+ * feature has been waiting for since step 5.
+ *
+ * ⛔ IT READS ITS STATE BACK FROM THE SERVER AND NEVER FROM THE CALL THAT SET IT,
+ * for `NegativeStockPanel`'s stated reason (register row D43): a control that
+ * reported success from its own request would be UNABLE to detect a setter that
+ * answered 204 and wrote nothing, because a resolved promise looks identical
+ * either way. `setForexSettings` returns no body, so this panel re-GETs.
+ *
+ * ⚠️ THE PICKER OFFERS ONLY REVENUE AND EXPENSE LEDGERS, and the server refuses
+ * anything else naming what to choose. Both halves exist on purpose: the refusal
+ * is the authority, and a picker that offered a customer would be inviting an
+ * operator into a 422. ⛔ A GAIN CREDITED TO A CUSTOMER'S OWN LEDGER makes a
+ * settled bill show a residue for ever, which is why the server refuses it rather
+ * than trusting the form.
+ *
+ * ⚠️ AND CLEARING IT IS OFFERED, because it is a real operation and not a delete:
+ * it returns the company to "no ledger chosen", which is the state every company
+ * that never trades abroad is in — and a company that chose the wrong ledger
+ * needs a way back that is not a support ticket.
+ */
+function ForexGainLossPanel() {
+  const client = useClient();
+  const { company } = useCompanyContext();
+  const companyID = company?.id ?? "";
+
+  // ⛔ `null` IS "NOT READ YET" AND IS DISTINCT FROM "NONE CHOSEN". Rendering an
+  // unread setting as "none" would state a policy the screen has not looked up —
+  // and would tell an operator to go and choose one they may already have.
+  const [chosen, setChosen] = useState<{ id: string; name: string } | null>(null);
+  const [ledgers, setLedgers] = useState<LedgerListItem[]>([]);
+  const [pick, setPick] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const [saveError, setSaveError] = useState("");
+  const [saved, setSaved] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function load() {
+    if (!companyID) return;
+    try {
+      const [settings, list] = await Promise.all([
+        client.forexSettings(companyID),
+        client.listLedgers(companyID),
+      ]);
+      setChosen({
+        id: settings.gain_loss_ledger_id ?? "",
+        name: settings.gain_loss_ledger_name ?? "",
+      });
+      // ⚠️ FILTERED TO THE GROUPS THE SERVER WILL ACCEPT. The nature lives on the
+      // GROUP and not the ledger, and the wire's ledger list carries the group
+      // name — so the filter is by group name, which is what an operator reads
+      // anyway. A ledger under a user-made sub-group of Indirect Expenses is
+      // therefore NOT offered here even though the server would accept it; that
+      // is a picker that is narrower than the rule, which is the safe direction.
+      setLedgers(list.ledgers);
+      setLoadError("");
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  useEffect(() => {
+    void load();
+  }, [companyID]);
+
+  async function save(next: string) {
+    setBusy(true);
+    setSaveError("");
+    setSaved("");
+    try {
+      await client.setForexSettings(companyID, { gain_loss_ledger_id: next });
+      // THE SERVER'S ROW, not `next`. See the header.
+      const after = await client.forexSettings(companyID);
+      setChosen({
+        id: after.gain_loss_ledger_id ?? "",
+        name: after.gain_loss_ledger_name ?? "",
+      });
+      setSaved(
+        (after.gain_loss_ledger_id ?? "") === ""
+          ? "No forex gain/loss ledger is chosen. A settlement that would realise " +
+              "an exchange difference will now be REFUSED, naming this setting — it " +
+              "is not absorbed or posted somewhere plausible."
+          : `Realised exchange gains and losses will post to ${after.gain_loss_ledger_name ?? ""}. ` +
+              "The server works the figure out itself from the two rates your books " +
+              "hold and refuses any voucher whose exchange difference is not the one " +
+              "it derived.",
+      );
+      setPick("");
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 403) {
+        setSaveError(
+          "Refused: choosing this ledger needs an Owner. A Data Entry level can " +
+            "neither read nor change it — the setting decides where a gain lands " +
+            "in the Profit & Loss. " + err.message,
+        );
+      } else if (err instanceof ApiError && err.status === 422) {
+        // ⭐ THE SERVER'S OWN SENTENCE, VERBATIM. It names what to choose, which
+        // is the whole value of the refusal; paraphrasing it here would put two
+        // spellings of one rule on two sides of the wire.
+        setSaveError(err.message);
+      } else {
+        setSaveError(err instanceof Error ? err.message : String(err));
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const eligible = ledgers.filter(
+    (l) =>
+      l.group_name === "Indirect Income" ||
+      l.group_name === "Indirect Incomes" ||
+      l.group_name === "Direct Income" ||
+      l.group_name === "Direct Incomes" ||
+      l.group_name === "Indirect Expenses" ||
+      l.group_name === "Direct Expenses",
+  );
+
+  return (
+    <div className="mt-4 max-w-3xl border border-tally-panel p-3">
+      <h2 className="font-bold text-tally-title">
+        Multi-currency — forex gain/loss ledger
+      </h2>
+      <p className="mt-1 text-xs">
+        Where a REALISED exchange gain or loss is posted when a foreign bill is
+        settled at a rate other than the one it was raised at.{" "}
+        <span className="text-tally-bar">
+          Nothing is created for you. Until you choose a ledger here, a settlement
+          that would realise a difference is REFUSED and says so — it is never
+          absorbed into the party balance, never added to the bank leg, and never
+          guessed into a plausibly-named account. A Trial Balance that still
+          balances while a debtor figure is quietly wrong is the failure this
+          whole feature exists to remove.
+        </span>
+      </p>
+      <p className="mt-2 text-xs">
+        ⚠️ This is the REALISED difference only — the one that happens when money
+        actually moves. The UNREALISED difference on a bill that is still open is
+        REPORTED and NOT POSTED: read it at Alt+G &gt; Unadjusted Forex Gain/Loss.
+      </p>
+      {loadError ? (
+        <p className="mt-2 text-xs text-tally-bar" data-testid="forex-ledger-load-error">
+          Cannot read this setting: {loadError}
+        </p>
+      ) : null}
+      <p className="mt-2 text-sm" data-testid="forex-ledger-state">
+        Current setting:{" "}
+        <b className="text-tally-title">
+          {chosen === null
+            ? "not read"
+            : chosen.id === ""
+              ? "NONE CHOSEN — a realised difference will be refused"
+              : chosen.name}
+        </b>
+      </p>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <label className="text-sm">
+          Ledger{" "}
+          <select
+            className="border border-tally-panel bg-tally-bg px-1 text-sm"
+            value={pick}
+            disabled={busy || !companyID}
+            data-testid="forex-ledger-pick"
+            onChange={(e) => setPick(e.target.value)}
+          >
+            <option value="">— choose a revenue or expense ledger —</option>
+            {eligible.map((l) => (
+              <option key={l.id} value={l.id}>
+                {l.name} ({l.group_name})
+              </option>
+            ))}
+          </select>
+        </label>
+        <button
+          type="button"
+          className="border border-tally-title px-2 py-0.5 text-sm text-tally-title disabled:opacity-50"
+          disabled={busy || !companyID || pick === ""}
+          data-testid="forex-ledger-save"
+          onClick={() => void save(pick)}
+        >
+          Use this ledger
+        </button>
+        <button
+          type="button"
+          className="border border-tally-title px-2 py-0.5 text-sm text-tally-title disabled:opacity-50"
+          disabled={busy || !companyID || chosen === null || chosen.id === ""}
+          data-testid="forex-ledger-clear"
+          onClick={() => void save("")}
+        >
+          Clear the choice
+        </button>
+      </div>
+      {eligible.length === 0 && !loadError ? (
+        <p className="mt-2 text-xs text-tally-bar" data-testid="forex-ledger-none-eligible">
+          No revenue or expense ledger exists on this company yet, so there is
+          nothing to choose. Create one first (Alt+C from the Gateway) — an
+          exchange gain is income and an exchange loss is an expense, and posting
+          either to a party, bank or cash ledger would make a settled bill show a
+          residue for ever.
+        </p>
+      ) : null}
+      {saveError ? (
+        <p className="mt-2 text-xs text-tally-bar" data-testid="forex-ledger-save-error">
+          {saveError}
+        </p>
+      ) : null}
+      {saved ? (
+        <p className="mt-2 text-xs text-tally-title" data-testid="forex-ledger-saved">
           {saved}
         </p>
       ) : null}
@@ -2068,8 +2342,10 @@ export function FeaturesScreen() {
       <p className="mt-1 max-w-3xl text-sm">
         What this edition actually has. Nothing here is a decorative switch: a
         feature is either working from the keyboard, structurally always-on,
-        SERVER ONLY (built and reachable over HTTP, with no screen or key here
-        that reaches it), or openly missing. Esc goes back.
+        PART BUILT (usable from the keyboard with a NAMED part deliberately
+        absent — the note says which part and why), SERVER ONLY (built and
+        reachable over HTTP, with no screen or key here that reaches it), or
+        openly missing. Esc goes back.
       </p>
       {/* The two DEDUCTOR panels sit next to each other on purpose and are
           headed so the difference is legible: the first answers "must this
@@ -2077,6 +2353,11 @@ export function FeaturesScreen() {
           different tables with different vocabularies — see each panel's own
           comment — and nothing derives one from the other. */}
       <NegativeStockPanel />
+      {/* ⭐ T8 STEP 8. It sits with the other REAL CONTROLS rather than beside the
+          Multi-currency prose row, because step 5's refusal sends an operator to
+          "F11 > Multi-currency" and a control buried under a wall of notes is a
+          control they will not find. */}
+      <ForexGainLossPanel />
       <DeductorStatusPanel />
       <TDSReturnProfilePanel />
       <TCSDeclarationsPanel />

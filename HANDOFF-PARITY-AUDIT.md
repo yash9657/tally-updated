@@ -5969,3 +5969,179 @@ opening branch lives in the Go test and in the drive's `psql` oracle.
 - ⛔ **AND §6.1's QUESTION IS STEP 8's TO ANSWER FOR A FORM:** *what does an alter through this form
   omit?* A currency field that does not round-trip the triple is defect number nine.
   `TestReadBackAudit_ForeignCurrencySurvivesAnAlter` is the worked example.
+
+---
+
+### L39 — 2026-09-03 · T8 STEP 8: THE FORM THAT WRITES THE BOOKS, AND FOUR BUGS IN THE PROBE THAT PROVES IT
+
+⭐ **WHAT WAS BUILT.** The three things §4.3 asked for: the **`partial` roster state**, the **F11
+forex gain/loss ledger panel** that step 5's own refusal names, and the **currency triple on the
+double-entry grid** — a currency box, a foreign amount and a rate on every Dr/Cr line, plus the
+bill reference's forex line in the allocation picker. **T8 steps 1–8 are closed.**
+
+⛔ **NO BACKEND AND NO MIGRATION.** Step 8 is a form; steps 4–7 built everything it sends to.
+
+#### ⛔⛔ THE THING THIS STEP COULD NOT BE PROVED WITHOUT, AND WHY IT IS A BROWSER PROBE
+
+Steps 6 and 7 shipped READS, so a wire drive can ask *"does `cored` emit it?"*. **Step 8 ships a
+FORM, and the question is the opposite one no wire drive can ask: does what an operator TYPES become
+what the database STORES?** `vitest` proves the grid renders three boxes; it cannot prove the accept
+path SENDS them, because the request builder lives in a 4,300-line screen behind a WebAuthn step-up.
+⛔ **A form that displays a currency and posts a rupee voucher is green in every unit test ever
+written for it.** `browse-t8-foreign-entry.mjs` is the only gate that can fail on that, and the
+oracle throughout is `psql`, never the screen — the screen is what is under test.
+
+**Measured, keyboard to table, ten decimals intact:**
+
+```
+✓ ⛔⛔ AND `posting` CARRIES ALL THREE VALUES THE OPERATOR TYPED
+    psql says 01a06862-…-76ad0fabc003|1000.0000|83.6512345678|83651.2300
+```
+
+#### ⭐⭐ DEFECT NUMBER NINE IS NOW PROVED CLOSED **END TO END**, AND THE MUTATION IS THE PROOF
+
+The handoff recorded defect nine at unit level. ⛔ **The browser now carries it, and the sharpest
+measurement in this entry is the one taken with the READ hop alone reverted** — `...(p.currency_id ?`
+forced to `...(false ?` in `doubleEntryLinesFromView`, leaving the SEND hop intact:
+
+```
+✗ ⛔⛔ AN ALTER THROUGH THE GRID PRESERVES THE TRIPLE (defect nine)
+    psql before 01a06862-…|1000.0000|83.6512345678|83651.2300
+    psql after  NULL|NULL|NULL|83651.2300
+```
+
+⚠️ **THAT IS THE DEFECT ITSELF, REPRODUCED ON DEMAND: the POST carried the triple and a NARRATION
+EDIT wrote a rupee voucher over it.** The entry still balanced in base, the double-entry guard was
+satisfied, the Balance Sheet did not move by a paisa, and nothing refused it. The SEND hop reverted
+instead gives the number §4 predicted, `NULL|NULL|NULL|83651.2300`, on the POST.
+
+#### ⛔⛔ FOUR BUGS IN THE PROBE, NONE IN THE PRODUCT — AND THE HANDOFF PREDICTED TWO
+
+The handoff's §3 diagnosed two and was right about both. **Two more were not predicted**, and the
+pattern in all four is the same: *a probe asserting against a shape it assumed rather than measured.*
+
+1. ⭐ **THE GRID DOES NOT AUTO-APPEND A ROW.** `de-ledger:1` was filled without clicking
+   `de-add-line`. ⚠️ It does not fail loudly — it hangs for the full 30s locator timeout.
+   `e2e-journal.mjs:129` was the worked example all along.
+2. ⭐ **THE FOREX REFUSAL WAS ASSERTED ON AN UNBALANCED GRID.** `refusal = doubleEntryRefusal(rows)
+   || doubleEntryForexRefusal(rows)` — with line 1 unkeyed the grid was 83,651.23 out, so the
+   BALANCE refusal correctly won and the forex one was never reached. ⛔ **THE PRECEDENCE IS A DESIGN
+   DECISION WITH ITS OWN COMMENT AND WAS NOT TOUCHED**; both lines are keyed first now, and the probe
+   reads `de-refusal` rather than regexing `body()` — which is why the original failure detail came
+   back as `""` instead of naming what it saw. A CONTROL asserting the grid is SILENT when balanced
+   now stands in front of it, or the assertion cannot tell one refusal from the other.
+3. ⛔ **`vv.narration` IS NOT A COLUMN — AND psql EXITS 1, SO THE PROBE DIED**, 13 assertions in,
+   rather than returning empty. `voucher_version` keeps the body in `payload` jsonb;
+   `payload->>'narration'` is the idiom every other drive in the directory already used.
+4. ⛔⛔ **THE FOREIGN LINE IS NOT ROW 0 ON THE WAY BACK.** It was keyed as row 0; the read returns
+   this voucher **CREDIT FIRST**, so `de-currency:0` is `Export Sales` and is CORRECTLY empty.
+   ⚠️ **THIS ONE REPORTED A PRODUCT DEFECT THAT DID NOT EXIST** — *"the hydration dropped the
+   triple"* — against a wire measured carrying it. The row is found BY ITS LEDGER now, which is the
+   only handle that survives re-ordering, and a CONTROL asserts the RUPEE line came back with no
+   currency, since a hydration that stamped one on EVERY row would satisfy the rest and be just as
+   wrong.
+
+⚠️ **AND §3.3's UNMEASURED THIRD WAS REAL:** the Day Book drill clicked the narration **cell** via
+`getByText(REF)`, which does not move the grid's highlight, so the Enter that followed drilled
+nothing. The house idiom — iterate `[role="grid"] [role="row"]`, click the ROW
+(`drive-l6-alter.mjs:28`) — works, and the probe now checks the **heading** for `(Alteration)` rather
+than the body, because every voucher screen's button bar carries "F7 Journal". ⭐ **The vacuity guard
+the handoff said to keep did its job: it reported probe 5 as unproved rather than passing it.**
+
+#### ⛔⛔ A COMMITTED PROBE WAS ALREADY RED, AND THE CAUSE IS THE SHARED SCRATCH BOOK
+
+`browse-t8-outstandings-forex` measured **6/7**, and **not because of step 8**. Its control counted
+`FXB-` — **its own** marker — as "the foreign rows":
+
+```
+✗ T8/6 browser: ⭐ CONTROL — the currency reaches the FOREIGN rows and no others
+    8 row(s) name USD and 5 row(s) are foreign bills, out of 166 rows
+```
+
+The 8 USD rows were **5 `FXB-` (step 6's fixture) and 3 `UFX-` (step 7's)**, all on `Globex LLC …`
+parties. ⛔ **So the moment `browse-t8-unadjusted-forex.mjs` had ever run against the same scratch
+book, step 6's control was red for ever, reporting a currency leaking onto rupee rows when what it
+had found was its SIBLING's fixture.** ⚠️ **A probe that identifies "the foreign rows" by its own
+prefix is asserting that no other probe exists.** It counts both markers now, and a second assertion
+was added that no prefix can go stale on — that a currency appears on well under a quarter of the
+rows, this being a seeded book of rupee bills — because `usd === foreign` alone would still pass if
+the column were stamped on every row and every row happened to be foreign. **8/8, and the three
+probes are now order-independent, measured by interleaving them.**
+
+⭐ **AND STEP 8's OWN PROBE WAS CLEARED OF IT:** its parties are `Globex Journal …` and its bill-less
+foreign postings show **On Account with NO currency**, which is L37's *"currency-collapsed"* rule
+holding on real books.
+
+#### ⚠️ THE PREVIOUS HANDOFF'S §3.4 WAS WRONG, AND THE ERRORS WERE A REAL EXCEPTION
+
+§3.4 called the new test file's noise *"`act()` warnings … noise, not failures"* and left them
+deliberately. **Measured instead:**
+
+```
+vitest (clean tree, stashed)  1882 passed / 117 files   0 errors
+vitest (step 8)               1907 passed / 118 files   7 errors
+vitest (the new file ALONE)      9 passed /   1 file    7 errors
+```
+
+⛔ **Not `act()` — seven UNCAUGHT `TypeError: Cannot read properties of undefined (reading 'length')`
+thrown from `CostAllocationPicker.tsx:173` during render.** `useCostMasters` reads
+**`res.cost_categories` AND `res.cost_centres` off the SAME `listCostCentres` response** (the axes are
+served with the centres so a create form never asks for an id), and the harness stubbed only
+`cost_centres` — so `setAxes(undefined)` and `axes.length` threw, once per row rendered. ⚠️ **AND
+`as unknown as CoredClient` IS WHY THE COMPILER DID NOT SAY SO**: the cast needed to stub three
+methods of a large interface switches off the check that would have caught the missing key. The
+sibling `listCostCategories` stub beside it was never called at all — there is no second request.
+**One key fixed it; the suite now runs 0 errors, which the clean tree also did and step 8 had not.**
+
+#### ⛔ STEP 8 FALSIFIED TWO CLAUSES ON THE SCREEN IT WAS EDITING, AND BOTH SURVIVED THE FIRST PASS
+
+§4's instruction to check the `Multi-currency` note one last time was the right instruction. Its two
+CLOSING claims verified true — no revaluation voucher exists anywhere (`unadjusted_forex.go` is a
+report; there is no POST route), and Q6 is design-only and blocked. ⛔ **But two clauses further down
+were now false, and a note is not a changelog that only grows:**
+
+- **The Multi-currency note itself still read `⛔ NO VOUCHER SCREEN OFFERS A CURRENCY FIELD, so this
+  row stays off`** — under a badge step 8 had just flipped to **`Part built`**, and above its own
+  opening line saying you can now key a foreign invoice.
+- **The currency-masters row still read `WHAT IT IS FOR RIGHT NOW: nothing you can key … no voucher
+  screen offers a currency yet`.** ⚠️ **That row read `On` the whole time, so only the note could
+  carry the lie** — a badge check would never have found it.
+
+⭐ **THIS IS THE T32 AND PRINT-TEMPLATE FAILURE FOR THE THIRD AND FOURTH TIME** (*"the note no longer
+claims there is NO SCREEN — that clause had to go"*), so it got that lane's remedy: both corrected in
+the house style that **QUOTES the old wording rather than deleting it**, and **two new tests**, each
+mutation-proved. ⚠️ The guards match the **asserting** forms, not the quotation — the note now
+contains the words *"THIS SENTENCE READ 'nothing you can key' UNTIL T8 STEP 8"* on purpose, and a
+naive negative match would forbid the correction itself.
+
+#### THE GATES
+
+`go build` · `go vet` · `go test ./... -count=1` all green · `scripts/test_residue.sh` **OK, no
+residue (bound 0)** · `tsc --noEmit` clean · `vitest` **1909 passed / 118 files, 0 errors** (from
+1882 / 117 / 0 on the clean tree; step 8 as handed over was 1907 / 118 / **7**) ·
+`verify:demo` **37/37 UNCHANGED** — the control that matters most, since step 8 touches the form
+every existing book is keyed on · **`browse-t8-foreign-entry` 26/26 (new)** ·
+`browse-t8-outstandings-forex` **8/8** (was 6/7 as found, 7/7 as committed) ·
+`browse-t8-unadjusted-forex` **9/9** · `drive-t8-outstandings-forex` **46/46** ·
+`drive-t8-unadjusted-forex` **43/43** · `corpora/validate.py` **OK** · register
+**117 · 107 · 6 · 0 · 4**, unchanged. **Nothing deferred within step 8.**
+
+⭐⭐ **T8 IS CLOSED — steps 1–8 of `docs/design/t8-multi-currency-model.md`'s build order.** What
+remains is deliberately outside it: the **REVALUATION VOUCHER** (Q4 defers it; postings are immutable
+so it could only ever BE a voucher, and the schema it would need is the one this build has) and **Q6,
+GST on an export invoice**, which stops at the design document until real GST data has been through
+the importer. ⛔ **Neither is to be started as part of T8**, and the F11 note tells the operator both
+in those words.
+
+⚠️ **AND THE LESSON THIS ENTRY IS FOR, WHICH IS NOT ABOUT CURRENCY.** Nine defects were found
+closing step 8 and **seven of them were in TEST AND PROBE CODE** — five in the new probe, one in a
+COMMITTED probe, one in the new test file. The other two were stale prose on the screen step 8 was
+itself editing. ⛔ **NOT ONE WAS IN THE PRODUCT PATH**, which steps 4–7 had already driven.
+
+⭐ **THE SHAPE THEY SHARE: each asserted against a thing it ASSUMED rather than measured** — an
+incomplete stub hidden by a cast, a probe counting its own fixture prefix, a probe assuming a row
+index the server reorders, a probe asserting one refusal while another was correctly live, a note
+describing a state the same commit had just changed. ⛔ **Two of them did the worst thing a gate can
+do: reported a defect that did not exist** (the row-index one named the hydration; the prefix one
+named a currency leak), and **two hid the absence of a check** rather than failing. A gate is only as
+honest as its own assumptions, and the assumptions are what mutation-proving tests.
