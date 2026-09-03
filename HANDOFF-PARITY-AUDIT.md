@@ -5431,3 +5431,246 @@ becomes a base bill if only `bill_allocation` is handled.
 > `TestOnAccountRefNameAgreesAcrossTheWriteAndReadSides` in `internal/server`, the composition root
 > that may import both. ⚠️ `ledger`'s comment on that constant still claims it is *"one fact with
 > one home"*; `reporting`'s comment is the accurate one and explains why it cannot be.
+
+### L37 — 2026-09-03 · T8 STEP 6: OUTSTANDINGS SHOWS A FOREIGN BILL AS FOREIGN, AND A REPORT BRANCH NOTHING COULD POPULATE
+
+⭐ **WHAT WAS BUILT.** `Bill` gained `CurrencyCode`, `ForeignPending` and `CurrencyConflict`; the
+netting key gained the currency; and the base figure did not move. L36's closing line was exact:
+
+```
+sed -n '/^type Bill struct/,/^}/p' backend/internal/reporting/outstanding.go | grep -c "Currency\|Foreign"
+#   0   ⛔ re-measured at d6a4823 before the first line was written
+```
+
+⛔ **SO AN EXPORTER WITH $12,000 OUTSTANDING READ A RUPEE FIGURE THAT WAS CORRECT, AGEING THAT WAS
+CORRECT, AND COULD NOT TELL FROM ANY SCREEN IN THIS PRODUCT THAT THE DEBT WAS IN DOLLARS.** Steps
+1–5 stored three values per bill and enforced the realised difference on settlement; the whole
+foreign half was invisible to the one report that exists to answer *who owes us what, and how old is
+it*.
+
+#### ⛔⛔ Q5 SAYS "GROUP BY (ledger, ref_name, currency)" AND §4.1 OF THE HANDOFF PREDICTED A DIFFERENT SHAPE. THE KEY WON, AND THE MEASUREMENT IS WHY
+
+§4.1 predicted that a **base** `AGAINST` row against a **foreign** bill — the case L36 item 2
+deliberately does not refuse — would present as *"base pending 0.00 against a foreign pending of
+$1,000"*, one row. **It presents as TWO rows, both flagged**, and that is a deliberate divergence
+from the prediction rather than a miss. ⭐ **THE PREDICTED SHAPE IS EXACTLY WHAT THE INCOMPLETE
+IMPLEMENTATION PRODUCES, MEASURED:**
+
+```
+# with the currency taken OUT of the netting key:
+EXP-3 (base) base=0.0000 foreign=1000.0000     ← ONE row, currency code EMPTY, no flag
+# with Q5's key:
+EXP-3 USD    base=83651.2300 foreign=1000.0000 CONFLICT
+EXP-3 (base) base=-83651.2300 foreign=0.0000   CONFLICT
+```
+
+The one-row form is not wrong about the money — the exposure is on the page — but **nothing on it
+says which currency the $1,000 is in, or that a rupee receipt was allocated against a dollar bill.**
+Base IS a currency; 0080 encodes it as *no currency at all* and that is an encoding, not an absence.
+So a `ref_name` under base and under USD is a `ref_name` under two currencies, which Q5 calls a data
+error and not a sum — and the two-row form makes that structural: **USD and INR are never in one
+group, so they cannot be added, ever, by any future edit to this query.** §4.1's own instruction was
+*"make sure your netting produces it rather than hiding it"*; a negative rupee row on a party,
+flagged, hides nothing.
+
+#### ⭐⭐ THE DECISION §4.1 ASKED FOR: WHAT CURRENCY DOES `On Account` SHOW? **NONE, AND THE BUCKET IS CURRENCY-COLLAPSED ON BOTH SIDES**
+
+Three reasons, and the second decides it:
+
+1. **THE RESIDUE HAS NO SINGLE RATE.** D106 computes it as `the ledger's whole balance − every named
+   reference` — a difference of sums over many vouchers at many rates. Labelling it would invent the
+   fact the row exists to report the absence of. ⭐ The memo says the same of ADVANCE and ON_ACCOUNT:
+   *"State this rather than computing zero."*
+2. ⛔ **SPLITTING THE BUCKET GIVES A PARTY TWO `On Account` ROWS THAT EACH LOOK RIGHT** — which is,
+   word for word, the failure `TestOnAccountRefNameAgreesAcrossTheWriteAndReadSides` exists to
+   prevent, reached from the other direction: an **explicit** `ON_ACCOUNT` allocation carrying a
+   currency arrives through source 1, and the **derived** residue that cancels it arrives through
+   source 3 with no currency, so with the currency in the key they land in different groups and both
+   survive. **Measured, and the totals are identical either way:**
+   ```
+   On Account (base) base=-5000.0000    ← the unreferenced rupee receipt
+   On Account USD    base=-8365.1200    ← the explicit foreign ON_ACCOUNT allocation
+   ```
+3. `sum(SlabTotals) + OnAccountTotal == Total` is a **BASE** identity, and collapsing leaves this
+   bucket's base arithmetic bit-identical to what it was before step 6 — so the report's own
+   reconciliation holds by construction rather than by care.
+
+⚠️ **ADVANCE IS NOT COLLAPSED, AND THE DISTINCTION IS THE POINT.** An advance is a NAMED reference
+with one rate on one document and keeps its currency; `On Account` is the ABSENCE of a reference. A
+collapse written as *"anything that is not a bill"* — the obvious simplification — takes the
+advance's currency with it, and `TestAForeignADVANCEKeepsItsCurrency` is the control.
+
+#### ⛔⛔ THE ZERO SKIP WAS ONE QUESTION AND IS NOW TWO
+
+`if pending.IsZero() { continue }` was the whole test for *settled*. On a foreign bill it is not: a
+bill with nothing left in rupees and **$400 left in dollars** is exactly the row an exporter has to
+see, and the base-only skip drops it off the report entirely — a silent clean bill of health, which
+is worse than a wrong number. ⭐ **AND THE INVERSE IS CONTROLLED FOR:** widening it to `||` instead
+of `&&` drops **every base bill in the field** (their foreign column is always zero), measured as the
+grand total falling from **133,651.23 to 83,651.23**.
+
+#### ⛔⛔ A GAP THAT MADE §0.2's OWN BRANCH UNTESTABLE — AND EVERY MIGRATED FOREIGN DEBTOR UNSETTLEABLE
+
+0080 gave `ledger_opening_bill` the three currency columns, with a `COMMENT ON COLUMN` explaining
+that Outstandings nets this table in a UNION with `bill_allocation`. **No write path ever set them.**
+`masters.OpeningBill` did not carry them and neither insert wrote them, so a foreign opening bill
+could not be keyed through the product at all — which means the report branch §0.2 is a whole section
+about could only ever have been verified against hand-written SQL.
+
+⭐ **AND IT WAS WORSE THAN UNREPORTABLE. MEASURED, with the write path reverted:**
+
+```
+post the receipt RCT-OPEN: ledger: bill "OPEN-FX" is carried in the books' own currency and
+has no exchange rate, so a settlement of 200.0000 USD against it differences against nothing
+```
+
+Step 5's own engine refuses the settlement — exactly what `openBillForex`'s header warned of
+(*"every migrated foreign debtor becomes unsettleable"*). ⛔ **So the triple + `validateForex` +
+`nullForexOpening` on `masters.OpeningBill`, and the triple on `openingBillReq`, are part of step 6
+rather than scope creep.** `openingBillsFromReq` is now ONE mapper behind both doors
+(`POST /ledgers` and `PUT /ledgers/{id}/opening`), which were already duplicating the mapping before
+step 6 gave them three more fields to copy — two spellings is how a currency reaches the create path
+and not the setter, and presents as *"the opening bill loses its currency when you edit it"*.
+
+#### MUTATION-PROVED ON EVERY LAYER, WITH THE NUMBER THE REAL SYSTEM PRODUCED
+
+| Revert | Predicted → **observed** |
+|---|---|
+| the currency leaves the netting key | `EXP-3 (base) base=0.0000 foreign=`**`1000.0000`**, ONE row, code **empty**, unflagged ✅ |
+| the opening branch reads no currency (§0.2) | the opening bill is `"" 0.0000 / base 45074.0700` — **a rupee bill** — and a *settled* one **SPLITS**: `OPEN-FX (base) 45074.0700` + `OPEN-FX USD -15024.6900` ✅ |
+| `On Account` is not currency-collapsed | **two** rows, `-5000.0000` and `-8365.1200`, both spuriously `CONFLICT`, **grand total unchanged** ✅ |
+| the skip is base-only again | the half-keyed bill is **0 rows** — $400 off the report ✅ |
+| the skip widened to `\|\|` | ⭐ the **INVERSE CONTROL** fires: **every base bill vanishes**, total `133651.2300` → **`83651.2300`** ✅ |
+| the skip removed entirely | ⭐ the **INVERSE CONTROL** fires: a closed bill stays open, `EXP-1 USD base=0.0000 foreign=0.0000` ✅ |
+| the conflict flag is never set | both rows of `EXP-3` unflagged, named individually (`"USD"` and `""`) ✅ |
+| the foreign column ignores which side the books sit on | the foreign payable reports `USD `**`-1000.0000`** ✅ |
+| `masters` never writes the triple | the opening bill reads base **and the settlement is REFUSED** (quoted above) ✅ |
+| the screen renders no foreign cell | `Unable to find an element with the text: USD 800.00` ✅ |
+| the conflict is not marked on the row | `Unable to find an element with the text: /EXP-1 ⚠ two currencies/` ✅ |
+| `writeOutstandings` drops the two fields | ⭐ the **BROWSER** probe fires and nothing else does: `Present USD strings: []`, `0 row(s) name USD and 2 row(s) are foreign bills` ✅ |
+
+⛔ **AND THE GATE ITSELF WAS MUTATION-PROVED, NOT ONLY THE CODE.** cored was **rebuilt with the
+currency removed from the netting key, restarted, and verified fresh by process start time** — the
+wire drive went **46/46 → 35/46, and the 11 reds were exactly the currency-identity probes.** Every
+base control, every total, the split-date probe, all four `psql` oracles and the reap stayed green,
+which is correct: only the currency identity was removed.
+
+> #### ⛔⛔ A CORRECTION TO ONE OF MY OWN CLAIMS, AND A FALSE GREEN I SHIPPED FOR TWENTY MINUTES
+>
+> **(1) THE ROW KEY.** `ReportScreens.tsx` puts the currency in the bill row's `rowKey`, and my first
+> comment there asserted this PREVENTS A DROPPED ROW. **Measured: false.** `DrillRows` renders with
+> `key={rowKey}:{drillIndex}` and these rows are `drillable: false`, so reverting the line leaves all
+> 24 screen tests green. What it actually buys is a unique `data-rowkey`, which is what a browser
+> probe selects on — **and the comment now says exactly that, and says NO TEST ASSERTS IT.** This is
+> §5's third registration hazard in miniature: *two of the three shipped with a comment asserting the
+> control was in place.*
+>
+> **(2) A PRINT PROBE THAT PASSED AGAINST THE MUTATION.** The drive's printed-copy probe was
+> `body.includes("USD")`, and the drive's own opening bill was named **`OPEN-USD`** — so the Bill Ref
+> cell carried the substring and the probe **passed against a cored built with the currency removed**,
+> on a sheet that named no currency at all. Caught only because that probe was absent from the gate
+> mutation's red list and the absence was chased. **Fixed twice over:** the ref is now `OPEN-FX`, and
+> the assertion is `/USD\s+[\d,]+\.\d\d/` — a pair only the Foreign column can produce. Re-measured
+> against the same mutated cored: **red, `matched: []`**, and the drive went 36/46 → **35/46**.
+>
+> **(3) A PROBE THAT COULD NOT BE RE-RUN.** `browse-t8-outstandings-forex.mjs` created `Export Sales`
+> unconditionally and died on `already has a ledger named "Export Sales"` on its second run —
+> **while the mutation it was measuring went unmeasured.** That is the worst way for a probe to fail:
+> it reads as a broken harness rather than as an assertion that never ran. It resolves by name now,
+> and its currency control counts USD rows **against the foreign rows present** rather than against
+> 1, because a re-run leaves the previous run's bill in place (§2.5: existing scratch books already
+> carry drive data).
+
+#### ⛔ WHY `openBillForex` IS NOT CALLED, RE-CONFIRMED RATHER THAN CARRIED
+
+L36's correction was exact: `internal/archtest` allows `reporting` → `platform/db`, `inventory`,
+`compliance/form140` and nothing else, and `internal/ledger`'s tests import `internal/reporting`, so
+the edge is a compile-time cycle as well as a policy breach. `outstanding.go` carries its own
+spelling of the two-table UNION — its fifth. **No new cross-package constant was needed**, so
+`TestOnAccountRefNameAgreesAcrossTheWriteAndReadSides` gains no case: the currency CODE is resolved
+from the `currency` master in SQL, and the only string shared with the write side is
+`OnAccountRefName`, which was already there.
+
+#### ⭐ NO MIGRATION, AND NO ACL MIGRATION — BOTH ARE MEASURED ANSWERS
+
+0080 has every column. **No route was added**, so §5's `routeAction` and `authz.KnownResources`
+hazards do not apply and no report NAME was introduced — `/outstandings`, `/bills-payable`, the
+open-bills picker and `print/reports/outstandings` all already exist with their rules. `0088`'s
+line-274 note is the authority for a slice legitimately needing none. ⭐ **`0081–0084` REMAIN THE T8
+GAP AND WERE NOT TOUCHED**, and `PLAN-TALLY-PARITY.md` §2.5 needs no edit this lane.
+⚠️ **AND NO NEW DATE-SHAPED WIRE FIELD**, so `TestEveryDateShapedWireFieldIsAccountedForByTheCutoff`
+gains no case either. **Step 7's "as on" date is the one that will.**
+
+#### THE MOCK WAS MADE FAITHFUL, BECAUSE A LOOSER DOUBLE IS D84
+
+`api/mock.ts` nets on `ledger \0 ref \0 code` now, carries the signed foreign column, collapses the
+`On Account` bucket on both sides, applies the same two-question skip and computes the conflict count
+in the same pre-pass. **61 test files build books through that double**, and one that netted two
+currencies together would prove the old behaviour for all of them.
+⚠️ **ONE PRE-EXISTING LOOSENESS IS LEFT AND NAMED RATHER THAN WIDENED:** the mock does not model
+`ledger_opening_bill` in Outstandings **at all** — it validates the breakup's sum and stores only the
+balance. That predates step 6 and is not made worse by it; the opening branch is covered by the Go
+test and by the drive's `psql` oracle. **It is a real gap for whoever builds step 7**, whose report
+reads the same UNION.
+
+#### THE DRIVES — 46/46 on the wire, 7/7 in a browser, both tenants handled
+
+`frontend/scripts/drive-t8-outstandings-forex.mjs` (new, 46 probes) and
+`frontend/scripts/browse-t8-outstandings-forex.mjs` (new, 7 probes). Beyond the figures they pin six
+things worth naming:
+
+- ⛔ **§6.2's SHARPER VERSION IS BUILT IN.** The as-on read is **`2025-06-30`, which SPLITS the two
+  settlements** — after the first, before the second — so `EXP-1` shows `$800` while `EXP-2` is back
+  to its full `$600`. A report asked over the whole book, or unbounded, cannot tell a foreign column
+  that honours the inclusion bound from one that does not.
+- ⭐ **TWO DIFFERENT RATES, AND A THIRD ON EACH SETTLEMENT.** Step 5's own figures, so the two lanes
+  cannot disagree about arithmetic.
+- ⭐ **THE FREE ORACLE IS `psql` AGREEING WITH THE REPORT ON THE RESIDUE:** the single `On Account`
+  row equals the party's whole ledger balance, `-13365.1200`, computed two entirely different ways.
+- ⛔ **THE RATE IS ASSERTED TO SURVIVE AT TEN DECIMALS** out of `ledger_opening_bill` (§6.3):
+  `StringFixed(4)` on `75.1234567890` gives `75.1235`, which round-trips through its own type
+  perfectly and is wrong for ever.
+- ⛔ **THREE SEPARATE EMITTERS ARE PROBED**, because each is its own map literal and nothing
+  type-checks that one is complete: `/outstandings`, the **open-bills picker** (where steps 6 and 8
+  meet — §4.3's prediction was right, and it is a different handler) and the **printed copy** (D20:
+  two surfaces over one fact).
+- ⚠️ **THE REAP ADDS `ledger_opening_bill`**, which step 6 is the first drive to write. Omit it and
+  the `ledger` delete fails with the tenant half-removed — the same shape as step 5's
+  `company_forex_settings`.
+
+#### ⚠️ WHAT WAS DELIBERATELY NOT BUILT, AND WHY EACH IS NOT AN OMISSION
+
+1. **NO RATE ON THIS REPORT.** Q5 names two fields and the arithmetic a settlement form needs is the
+   two PENDING figures, not the rate (`realisedFor` differences values). ⛔ **Step 7 is where rates
+   are rendered, and it must carry its own ten-decimal formatter** — §6.3 is aimed straight at it.
+2. **NO PER-CURRENCY TOTALS.** Q5 makes the grand total, the party totals and the ageing slabs
+   base-only, explicitly as a design decision rather than parity. Adding a second total column is a
+   step-7 question, not a step-6 omission.
+3. **NO REFUSAL FOR A BASE SETTLEMENT OF A FOREIGN BILL.** Unchanged from L36 item 2 and now
+   **disclosed by the report instead**, which was the stated bargain.
+4. **STEPS 7 AND 8 ARE NOT STARTED.** No unadjusted-forex report; no screen offers the gain/loss
+   setting or a currency field. ⭐ **The roster row therefore stays `off`** and the `partial`-vs-split
+   question is still step 8's — but **its note was updated the moment step 6 landed**, because
+   *"Outstandings still shows a foreign bill as though it were a rupee bill"* had stopped being true
+   and the note's own standard is that it is exactly true. §4.3's instruction was to update it as
+   each clause falls, not once at the end.
+
+#### THE GATES
+
+`go build` · `go vet` · `go test ./... -count=1` all green · `test_residue.sh` **OK, no residue** ·
+`tsc --noEmit` clean · `vitest` **1875 passed / 117 files** (from 1872 / 117) · `verify:demo`
+**37/37 UNCHANGED** · **`drive-t8-outstandings-forex` 46/46 (new)** ·
+**`browse-t8-outstandings-forex` 7/7 (new)** · `drive-t8-forex-settlement` **35/35** ·
+`drive-t8-forex-entry` **50/50** · `drive-payroll` **38/38** · `drive-t12-gstr9` **33/33** ·
+`drive-t4-slice2b-matching` **35/35** · `drive-t11-budgets` **36/36** · `drive-year-end-close`
+**16/16 wire + 8/8 browser** · `corpora/validate.py` **OK** · register **117 · 107 · 6 · 0 · 4**,
+unchanged. **Nothing deferred within step 6. Steps 7 and 8 are not started and are itemised above.**
+
+⭐ **NEXT IS STEP 7 — THE UNADJUSTED-FOREX REPORT** (§4.2 of `HANDOFF-T8-STEPS-6-TO-8.md`). It reads
+the same two-table UNION step 6 now handles, and step 6 leaves it three things: the UNION is spelled
+a fifth time in `outstanding.go` and can be read for the pattern; the mock's **missing**
+`ledger_opening_bill` modelling is a real gap it will meet; and its ACL migration takes **0090+**,
+not the T8 gap, for the reason §4.2 measures. ⛔ Its own traps are unchanged: a report NAME forces an
+ACL migration with **both** `disallow display` and `disallow print` (D95), the "as on" date is a
+registration point for `TestEveryDateShapedWireFieldIsAccountedForByTheCutoff`, and a rate rendered
+through a money formatter is the silent wrong number §6.3 exists for.

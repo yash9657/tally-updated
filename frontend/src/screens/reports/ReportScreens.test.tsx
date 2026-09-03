@@ -310,6 +310,9 @@ describe("Outstandings shows the BILLS, not just the party totals", () => {
               overdue_days: 41,
               slab: "0-45 days",
               on_account: false,
+              currency_code: "",
+              foreign_pending: "0.0000",
+              currency_conflict: false,
             },
             {
               ref_name: "INV/0008",
@@ -318,6 +321,9 @@ describe("Outstandings shows the BILLS, not just the party totals", () => {
               overdue_days: 0,
               slab: "0-45 days",
               on_account: false,
+              currency_code: "",
+              foreign_pending: "0.0000",
+              currency_conflict: false,
             },
           ],
         },
@@ -369,6 +375,9 @@ describe("Outstandings shows the BILLS, not just the party totals", () => {
               overdue_days: 0,
               slab: "0-45 days",
               on_account: false,
+              currency_code: "",
+              foreign_pending: "0.0000",
+              currency_conflict: false,
             },
           ],
         },
@@ -493,6 +502,9 @@ describe("Outstandings states its on-account money (D106)", () => {
               overdue_days: 110,
               slab: "90-180 days",
               on_account: false,
+              currency_code: "",
+              foreign_pending: "0.0000",
+              currency_conflict: false,
             },
             {
               ref_name: "On Account",
@@ -501,6 +513,9 @@ describe("Outstandings states its on-account money (D106)", () => {
               overdue_days: 0,
               slab: "",
               on_account: true,
+              currency_code: "",
+              foreign_pending: "0.0000",
+              currency_conflict: false,
             },
           ],
         },
@@ -564,6 +579,9 @@ describe("Outstandings states its on-account money (D106)", () => {
               overdue_days: 110,
               slab: "90-180 days",
               on_account: false,
+              currency_code: "",
+              foreign_pending: "0.0000",
+              currency_conflict: false,
             },
           ],
         },
@@ -593,5 +611,168 @@ describe("onAccountLine", () => {
     // owes that no invoice covers — the opposite bookkeeping situation from an
     // unapplied receipt, and calling it "received" would be plainly false.
     expect(onAccountLine("7000.0000")).toMatch(/no invoice has been raised/);
+  });
+});
+
+/**
+ * ⭐⭐ T8 STEP 6 — OUTSTANDINGS SHOWS A FOREIGN BILL AS FOREIGN (Q5).
+ *
+ * Before step 6 `Bill` carried ONE money column and every bill landed in it, so an
+ * exporter with $1,000 outstanding read a rupee figure that was correct, ageing that
+ * was correct, and could not tell from any screen in this product that the debt was
+ * in dollars at all.
+ *
+ * ⚠️ EVERY TEST HERE CARRIES ITS BASE CONTROL. A screen that stamped a currency on
+ * every row, or that rendered the column for nobody, would satisfy half of these on
+ * its own.
+ */
+describe("Outstandings reports the foreign half of a foreign bill", () => {
+  const oneOfEach = () =>
+    vi.fn(async () => ({
+      kind: "RECEIVABLE" as const,
+      as_on: "",
+      aged_as_on: "2026-06-30",
+      parties: [
+        {
+          ledger_id: "led-fx",
+          ledger: "Foreign Exports Ltd",
+          group: "Sundry Debtors",
+          pending: "66920.9840",
+          bills: [
+            {
+              ref_name: "EXP-1",
+              pending: "66920.9840",
+              due_date: "2026-05-20",
+              overdue_days: 41,
+              slab: "0-45 days",
+              on_account: false,
+              currency_code: "USD",
+              foreign_pending: "800.0000",
+              currency_conflict: false,
+            },
+          ],
+        },
+        {
+          ledger_id: "led-inr",
+          ledger: "Domestic Traders",
+          group: "Sundry Debtors",
+          pending: "30000.0000",
+          bills: [
+            {
+              ref_name: "DOM-1",
+              pending: "30000.0000",
+              due_date: "2026-06-30",
+              overdue_days: 0,
+              slab: "0-45 days",
+              on_account: false,
+              currency_code: "",
+              foreign_pending: "0.0000",
+              currency_conflict: false,
+            },
+          ],
+        },
+      ],
+      slab_totals: [{ label: "0-45 days", amount: "96920.9840" }],
+      total: "96920.9840",
+      on_account_total: "0.0000",
+    }));
+
+  it("prints the currency and the foreign amount, and leaves a rupee bill blank", async () => {
+    renderReport(OutstandingsScreen, { getOutstandings: oneOfEach() });
+
+    await waitFor(() =>
+      expect(screen.getByText("Foreign Exports Ltd")).toBeTruthy(),
+    );
+
+    // THE SUBJECT: the dollar figure is on the page, named as dollars.
+    expect(screen.getByText("USD 800.00")).toBeTruthy();
+    // ⛔ AND THE RUPEE FIGURE IS STILL THERE AND UNCHANGED. It is the figure that
+    // ties to Sundry Debtors, and the foreign column is beside it, never instead
+    // of it.
+    // ⚠️ getAllByText: this party holds exactly one bill, so the party total and
+    // the bill row carry the same figure — which is the report working correctly.
+    expect(screen.getAllByText("66,920.98").length).toBe(2);
+
+    // ⭐ THE CONTROL: the base bill renders no currency at all. A screen that put
+    // "INR 30,000.00" here would be inventing a currency master that 0080's own
+    // trigger refuses to let exist.
+    expect(screen.getByText("DOM-1")).toBeTruthy();
+    expect(screen.queryByText(/INR/)).toBeNull();
+    expect(screen.queryByText(/^ 0.00$/)).toBeNull();
+
+    // ⚠️ THE GRAND TOTAL IS BASE-ONLY (Q5). Not 96,920.98 + 800.
+    expect(screen.getByTestId("os-total").textContent).toBe("96,920.98");
+  });
+
+  it("marks BOTH rows of a reference that is open under two currencies", async () => {
+    // ⛔ THE CASE STEP 5 DELIBERATELY DOES NOT REFUSE: a rupee receipt allocated
+    // against a dollar bill. The server returns two rows under one bill number,
+    // because netting them would be a sum of two currencies; unmarked, that reads
+    // as a customer who numbered two invoices alike.
+    const conflicted = vi.fn(async () => ({
+      kind: "RECEIVABLE" as const,
+      as_on: "",
+      aged_as_on: "2026-06-30",
+      parties: [
+        {
+          ledger_id: "led-fx",
+          ledger: "Foreign Exports Ltd",
+          group: "Sundry Debtors",
+          pending: "0.0000",
+          bills: [
+            {
+              ref_name: "EXP-1",
+              pending: "83651.2300",
+              due_date: "2026-05-20",
+              overdue_days: 41,
+              slab: "0-45 days",
+              on_account: false,
+              currency_code: "USD",
+              foreign_pending: "1000.0000",
+              currency_conflict: true,
+            },
+            {
+              ref_name: "EXP-1",
+              pending: "-83651.2300",
+              due_date: "",
+              overdue_days: 0,
+              slab: "0-45 days",
+              on_account: false,
+              currency_code: "",
+              foreign_pending: "0.0000",
+              currency_conflict: true,
+            },
+          ],
+        },
+      ],
+      slab_totals: [{ label: "0-45 days", amount: "0.0000" }],
+      total: "0.0000",
+      on_account_total: "0.0000",
+    }));
+    renderReport(OutstandingsScreen, { getOutstandings: conflicted });
+
+    await waitFor(() =>
+      expect(screen.getByText("Foreign Exports Ltd")).toBeTruthy(),
+    );
+
+    // ⛔⛔ BOTH ROWS ARE PRESENT AND BOTH ARE MARKED. A row key that ignored the
+    // currency would collide and DrillRows would drop the second row — hiding
+    // exactly the half of the disclosure the marker exists to show.
+    const marked = screen.getAllByText(/EXP-1 ⚠ two currencies/);
+    expect(marked.length).toBe(2);
+    // The dollar exposure that was never settled is on the page.
+    expect(screen.getByText("USD 1,000.00")).toBeTruthy();
+    // And so is the negative rupee row that says a rupee receipt cleared it.
+    expect(screen.getByText("-83,651.23")).toBeTruthy();
+  });
+
+  it("does not mark an ordinary foreign bill (the inverse control)", async () => {
+    renderReport(OutstandingsScreen, { getOutstandings: oneOfEach() });
+    await waitFor(() =>
+      expect(screen.getByText("Foreign Exports Ltd")).toBeTruthy(),
+    );
+    // A disclosure that fires on the normal case is noise, and noise is how a real
+    // disclosure stops being read.
+    expect(screen.queryByText(/two currencies/)).toBeNull();
   });
 });

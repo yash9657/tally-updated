@@ -753,6 +753,26 @@ export interface OpeningBillRequest {
   dr_cr?: DrCr;
   amount: Money;
   due_date?: string;
+  /**
+   * ⭐⭐ T8 STEP 6 — THE OPENING BILL'S CURRENCY, foreign amount and rate.
+   *
+   * ⛔ ALL THREE OR NONE OF THEM. Omit all three and the bill is in the books' own
+   * currency — that is the ONE encoding of base (migration 0080), and there is no
+   * other. `currency_id: ""` is not "no currency", it is a malformed triple and
+   * the server answers 400.
+   *
+   * ⚠️ `rate` IS **NOT** A `Money`. It is base units per ONE foreign unit at ten
+   * decimals, and putting it through `parseFixed4` silently truncates it —
+   * 0.0033333333 becomes 0.0033. Use `api/rate.ts` (`normaliseRate`,
+   * `formatRate`), never the money helpers.
+   *
+   * ⛔ AND IT IS THE RATE THE OPENING BILL WAS RAISED AT, the historical truth of
+   * that bill. Step 5's settlement engine differences a later receipt against
+   * exactly this value, so a wrong rate here is a wrong realised gain for ever.
+   */
+  currency_id?: string;
+  foreign_amount?: Money;
+  rate?: Rate;
 }
 
 export interface CreateLedgerRequest {
@@ -2083,6 +2103,38 @@ export interface OutstandingBill {
    * name a real bill that.
    */
   on_account: boolean;
+  /**
+   * ⭐⭐ T8 STEP 6 — THE FOREIGN HALF (Q5 of the multi-currency design memo).
+   *
+   * `currency_code` is the bill's currency ('USD'), or `""` for a bill carried in
+   * the books' own currency. `foreign_pending` is the unsettled amount in it,
+   * signed exactly as `pending` is.
+   *
+   * ⛔ TWO FIELDS, NEVER ONE COLUMN. `pending` stays the BASE figure because that
+   * is what ties to Sundry Debtors/Creditors on the Balance Sheet, and this
+   * report's caption promises that agreement. A single column that held whichever
+   * applied would change currency from row to row and foot to a total in none.
+   *
+   * ⚠️ READ `currency_code`, NEVER `foreign_pending`. A zero foreign amount does
+   * NOT mean the bill is base: a foreign bill whose foreign column has netted to
+   * zero while its base column has not is exactly the data error this report
+   * exists to disclose, and it arrives with a code and a zero.
+   */
+  currency_code: string;
+  foreign_pending: Money;
+  /**
+   * True on EVERY row of a reference that is open under more than one currency —
+   * including base-versus-foreign, because base IS a currency (encoded as no
+   * currency at all, never as an absence).
+   *
+   * ⛔⛔ RENDER IT ON THE ROW, NOT ONLY IN A FOOTNOTE. Q5 calls such a reference a
+   * data error and not a sum: the server never adds the two together (they are
+   * separate netting groups), so the operator receives TWO rows bearing ONE bill
+   * number. Unmarked, that reads as a customer who numbered two invoices alike —
+   * a harmless fact — rather than as one invoice with an allocation against it in
+   * the wrong currency.
+   */
+  currency_conflict: boolean;
 }
 
 export interface OutstandingParty {

@@ -346,6 +346,94 @@ type OpeningBill struct {
 	DrCr    string // "D" or "C"
 	Amount  decimal.Decimal
 	DueDate string // ISO date, or "" for none
+
+	// ⭐⭐ T8 STEP 6 ADDED THE TRIPLE HERE, AND IT IS A GAP RATHER THAN A FEATURE
+	// REQUEST. Migration 0080 put `currency_id`, `foreign_amount` and `rate` on
+	// `ledger_opening_bill` — with a COMMENT ON COLUMN explaining that
+	// Outstandings nets this table in a UNION with `bill_allocation`, so a
+	// base-only opening bill would net into the same ref_name group as the
+	// foreign allocations that settle it — and then NO WRITE PATH EVER SET THEM.
+	// The columns existed, the CHECK constraint guarded them, and a foreign
+	// opening bill could not be keyed through the product at all.
+	//
+	// ⛔ WHICH MADE THE REPORT BRANCH THAT READS THEM UNREACHABLE. §0.2 of the
+	// design memo is a whole section on why the opening breakup must carry a
+	// currency; step 6 could read it and could not create one to read, so the
+	// branch could be verified only against hand-written SQL — and a report
+	// branch whose only fixture is an INSERT nobody in the field can produce is
+	// a branch that is asserted, not tested.
+	//
+	// ⚠️ ALL-OR-NONE, AND THE DATABASE IS STILL THE AUTHORITY.
+	// `ledger_opening_bill_forex_all_or_none` fires whatever this struct carries;
+	// `validate` below turns it into a sentence that names WHICH of the three is
+	// missing, exactly as `ledger.forexTriple.validate` does for a posting. The
+	// two-of-three row is the dangerous one: it lets a report compute a plausible
+	// wrong number.
+	//
+	// ⛔ AND THE RATE IS THE RATE THE OPENING BILL WAS RAISED AT — the historical
+	// truth of that bill, never re-read from `currency_rate`. Step 5's engine
+	// differences a settlement against exactly this value (`openBillForex` reads
+	// this table), so a wrong rate here is a wrong realised gain later.
+	CurrencyID    uuid.UUID
+	ForeignAmount decimal.Decimal
+	Rate          decimal.Decimal
+}
+
+// isBase reports whether this opening bill is carried in the books' own currency.
+// ⛔ THE ENCODING IS 0080's AND THERE IS ONLY ONE: no currency at all. A zero uuid
+// and a zero rate are what "base" looks like on the way in; NULL is what it looks
+// like in the table, and `nullForexOpening` is the single place that maps between
+// them.
+func (b OpeningBill) isBase() bool {
+	return b.CurrencyID == uuid.Nil && b.ForeignAmount.IsZero() && b.Rate.IsZero()
+}
+
+// validateForex turns `ledger_opening_bill_forex_all_or_none` into a sentence.
+// ⚠️ IT MIRRORS `ledger.forexTriple.validate` DELIBERATELY, including its reasoning:
+// `violates check constraint "ledger_opening_bill_forex_all_or_none"` is true and
+// tells an operator nothing they can act on.
+func (b OpeningBill) validateForex() error {
+	if b.isBase() {
+		return nil
+	}
+	switch {
+	case b.CurrencyID == uuid.Nil:
+		return fmt.Errorf("masters: opening bill %q names a foreign amount or a rate but "+
+			"no currency; a foreign figure needs all three of currency, foreign amount "+
+			"and rate, or none of them (an opening bill with no currency IS the base "+
+			"currency)", b.RefName)
+	case b.ForeignAmount.IsZero():
+		return fmt.Errorf("masters: opening bill %q names a currency but no foreign "+
+			"amount; a foreign figure needs all three of currency, foreign amount and "+
+			"rate", b.RefName)
+	case b.ForeignAmount.IsNegative():
+		return fmt.Errorf("masters: opening bill %q has a negative foreign amount (%s); "+
+			"direction is carried by dr_cr, so every amount on an opening bill is "+
+			"unsigned", b.RefName, b.ForeignAmount.StringFixed(4))
+	case b.Rate.IsZero():
+		return fmt.Errorf("masters: opening bill %q names a currency but no exchange "+
+			"rate; a foreign figure needs all three of currency, foreign amount and "+
+			"rate", b.RefName)
+	case b.Rate.IsNegative():
+		return fmt.Errorf("masters: opening bill %q has a negative exchange rate (%s); a "+
+			"rate is base units per one foreign unit and is always above zero",
+			b.RefName, b.Rate.String())
+	}
+	return nil
+}
+
+// nullForexOpening maps the triple to the three query arguments.
+//
+// ⛔ nil, NEVER THE ZERO VALUE — `ledger.nullForex`'s reasoning, restated here
+// because this package cannot import it: uuid.Nil is a legal-looking uuid and 0 is
+// a legal-looking numeric, and either would satisfy the all-or-none CHECK as a
+// PRESENT value, quietly marking a rupee opening bill as foreign against a currency
+// that does not exist.
+func nullForexOpening(b OpeningBill) (any, any, any) {
+	if b.isBase() {
+		return nil, nil, nil
+	}
+	return b.CurrencyID, b.ForeignAmount, b.Rate
 }
 
 // EnsureLedger resolves a ledger by name, creating it under groupName if it does
@@ -605,6 +693,9 @@ func (s *Service) CreateLedger(ctx context.Context, l Ledger, createdBy string) 
 			if b.DrCr != "" && b.DrCr != "D" && b.DrCr != "C" {
 				return uuid.Nil, fmt.Errorf("masters: opening bill %q has invalid dr/cr %q", b.RefName, b.DrCr)
 			}
+			if err := b.validateForex(); err != nil {
+				return uuid.Nil, err
+			}
 			sum = sum.Add(b.Amount)
 		}
 		if !sum.Equal(l.OpeningBalance) {
@@ -676,11 +767,15 @@ func (s *Service) CreateLedger(ctx context.Context, l Ledger, createdBy string) 
 				// Default to the side the opening balance itself sits on.
 				drcr = l.OpeningDC
 			}
+			fxCur, fxAmt, fxRate := nullForexOpening(b)
 			if _, err := tx.Exec(ctx,
 				`INSERT INTO ledger_opening_bill
-				   (id, company_id, ledger_id, ref_name, ref_type, dr_cr, amount, due_date)
-				 VALUES ($1, $2, $3, $4, $5::bill_ref_type, $6, $7, NULLIF($8,'')::date)`,
+				   (id, company_id, ledger_id, ref_name, ref_type, dr_cr, amount, due_date,
+				    currency_id, foreign_amount, rate)
+				 VALUES ($1, $2, $3, $4, $5::bill_ref_type, $6, $7, NULLIF($8,'')::date,
+				         $9, $10, $11)`,
 				billID, companyID, id, b.RefName, refType, drcr, b.Amount, b.DueDate,
+				fxCur, fxAmt, fxRate,
 			); err != nil {
 				return fmt.Errorf("masters: insert opening bill %q: %w", b.RefName, err)
 			}
@@ -738,6 +833,9 @@ func (s *Service) SetLedgerOpening(ctx context.Context, ledgerID uuid.UUID, open
 			if b.Amount.IsNegative() {
 				return fmt.Errorf("masters: opening bill %q has a negative amount", b.RefName)
 			}
+			if err := b.validateForex(); err != nil {
+				return err
+			}
 			sum = sum.Add(b.Amount)
 		}
 		if !sum.Equal(opening) {
@@ -793,11 +891,15 @@ func (s *Service) SetLedgerOpening(ctx context.Context, ledgerID uuid.UUID, open
 			if drcr == "" {
 				drcr = openingDC
 			}
+			fxCur, fxAmt, fxRate := nullForexOpening(b)
 			if _, err := tx.Exec(ctx,
 				`INSERT INTO ledger_opening_bill
-				   (id, company_id, ledger_id, ref_name, ref_type, dr_cr, amount, due_date)
-				 VALUES ($1, $2, $3, $4, $5::bill_ref_type, $6, $7, NULLIF($8,'')::date)`,
+				   (id, company_id, ledger_id, ref_name, ref_type, dr_cr, amount, due_date,
+				    currency_id, foreign_amount, rate)
+				 VALUES ($1, $2, $3, $4, $5::bill_ref_type, $6, $7, NULLIF($8,'')::date,
+				         $9, $10, $11)`,
 				billID, companyID, ledgerID, b.RefName, refType, drcr, b.Amount, b.DueDate,
+				fxCur, fxAmt, fxRate,
 			); err != nil {
 				return fmt.Errorf("masters: insert opening bill %q: %w", b.RefName, err)
 			}

@@ -63,6 +63,9 @@ const OPEN_BILLS: PartyOpenBillsResponse = {
       overdue_days: 20,
       slab: "0-45 days",
       on_account: false,
+      currency_code: "",
+      foreign_pending: "0.0000",
+      currency_conflict: false,
     },
   ],
 };

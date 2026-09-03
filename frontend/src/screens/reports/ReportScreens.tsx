@@ -631,7 +631,12 @@ function OutstandingsLikeScreen({
     }, [client, companyID, asOn, fetchIt]),
   );
 
-  const columns = "grid-cols-[1fr_8rem_8rem]";
+  // ⭐⭐ T8 STEP 6 — A FOURTH COLUMN, AND IT IS A SEPARATE ONE (Q5). The base figure
+  // and the foreign figure are two different facts about one bill; a column that
+  // showed whichever applied would change currency from row to row and foot to a
+  // total in none. It is BLANK on a base bill, which is every bill in the field
+  // today, so the sheet reads exactly as it does now until a foreign bill exists.
+  const columns = "grid-cols-[1fr_8rem_8rem_8rem]";
   // ⛔ THE BILLS ARE THE REPORT. This screen rendered ONE ROW PER PARTY and
   // dropped `p.bills` on the floor, which made it an ageing report with no
   // ageing in it: a party's total is the one figure a Balance Sheet already
@@ -649,14 +654,23 @@ function OutstandingsLikeScreen({
   // Enter handler would otherwise open whatever the party prefix resolved to.
   const rows: DrillRow[] = [];
   for (const p of data?.parties ?? []) {
+    // ⚠️ THE PARTY ROW LEAVES THE FOREIGN CELL EMPTY RATHER THAN TOTALLING IT, which
+    // is Q5's explicit design decision: a party may hold bills in more than one
+    // currency and summing them produces a figure in none of them.
     rows.push({
       rowKey: `${LEDGER_ROW_PREFIX}${p.ledger}`,
-      values: [p.ledger, p.group, formatMoney(p.pending)],
-      exportCells: [textCell(p.ledger), textCell(p.group), moneyCell(p.pending)],
+      values: [p.ledger, p.group, "", formatMoney(p.pending)],
+      exportCells: [
+        textCell(p.ledger),
+        textCell(p.group),
+        textCell(""),
+        moneyCell(p.pending),
+      ],
       cells: (
         <>
           <span>{p.ledger}</span>
           <span>{p.group}</span>
+          <span />
           <span className="text-right">{formatMoney(p.pending)}</span>
         </>
       ),
@@ -684,37 +698,76 @@ function OutstandingsLikeScreen({
         : b.due_date
           ? `due ${b.due_date}`
           : "no due date recorded";
+      // ⭐⭐ T8 STEP 6 — THE FOREIGN CELL. It reads the CODE, never the amount: a
+      // foreign bill whose foreign column has netted to zero while its base column
+      // has not is exactly the data error this report exists to disclose, and it
+      // arrives with a code and a zero. `""` is the one encoding of base.
+      const foreign =
+        b.currency_code === ""
+          ? ""
+          : `${b.currency_code} ${formatMoney(b.foreign_pending)}`;
+      // ⛔⛔ THE CONFLICT IS MARKED ON THE ROW ITSELF. A reference open under two
+      // currencies comes back as TWO rows bearing ONE bill number, because the
+      // server never sums them (Q5: a data error, not a sum) — and two unmarked
+      // rows labelled "EXP-1" read as a customer who numbered two invoices alike,
+      // which is harmless, rather than as one invoice with an allocation against it
+      // in the wrong currency, which is not.
+      const refLabel = b.currency_conflict
+        ? `${b.ref_name} ⚠ two currencies`
+        : b.ref_name;
       rows.push({
-        rowKey: `${LEDGER_ROW_PREFIX}${p.ledger}/${b.ref_name}`,
+        // ⚠️ THE CURRENCY IS IN THE ROW KEY BECAUSE TWO ROWS NOW LEGITIMATELY SHARE
+        // A ref_name — and the claim that this PREVENTS A DROPPED ROW WAS MEASURED
+        // AND IS FALSE, so it is not made here. `DrillRows` renders with
+        // `key={rowKey}:{drillIndex}` and these bill rows are `drillable: false`,
+        // so a duplicate rowKey neither collides as a React key nor confuses
+        // selection: reverting this line leaves all 24 screen tests green.
+        //
+        // ⭐ WHAT IT ACTUALLY BUYS is a unique `data-rowkey`, which is what a
+        // browser probe or the audit harness selects on — two rows answering one
+        // selector is how a drive asserts the wrong row and passes. NO TEST ASSERTS
+        // IT, and that is stated rather than implied.
+        rowKey: `${LEDGER_ROW_PREFIX}${p.ledger}/${b.ref_name}/${b.currency_code}`,
         depth: 1,
         drillable: false,
-        values: [`${b.ref_name} — ${when}`, age, formatMoney(b.pending)],
+        values: [`${refLabel} — ${when}`, age, foreign, formatMoney(b.pending)],
         exportCells: [
-          textCell(b.ref_name),
+          textCell(refLabel),
           textCell(b.due_date),
+          textCell(foreign),
           moneyCell(b.pending),
         ],
         cells: (
           <>
             <span className="pl-4">
-              {b.ref_name}
+              {refLabel}
               <span className="text-tally-field"> — {when}</span>
             </span>
             <span className="text-tally-field">{age}</span>
+            <span className="text-right text-tally-field">{foreign}</span>
             <span className="text-right">{formatMoney(b.pending)}</span>
           </>
         ),
       });
     }
   }
+  // ⚠️ THE GRAND TOTAL IS BASE-ONLY AND ITS FOREIGN CELL IS EMPTY. Q5, stated as a
+  // design decision rather than parity: summing mixed currencies is meaningless,
+  // and a total that silently did it would still foot.
   rows.push({
     rowKey: "__total__",
     drillable: false,
-    values: ["Total", "", formatMoney(data?.total)],
-    exportCells: [textCell("Total"), textCell(""), moneyCell(data?.total)],
+    values: ["Total", "", "", formatMoney(data?.total)],
+    exportCells: [
+      textCell("Total"),
+      textCell(""),
+      textCell(""),
+      moneyCell(data?.total),
+    ],
     cells: (
       <>
         <span>Total</span>
+        <span />
         <span />
         <span className="text-right" data-testid="os-total">
           {formatMoney(data?.total)}
@@ -729,7 +782,7 @@ function OutstandingsLikeScreen({
     // header reading "Group" over a column that holds a due date on every second
     // row is the Stock Summary export's defect (a quantity under a header the
     // next column's money contradicts) — declared here instead.
-    headers: ["Party / Bill ref", "Group / Due date", "Pending"],
+    headers: ["Party / Bill ref", "Group / Due date", "Foreign", "Pending"],
     availability,
   });
 
@@ -744,6 +797,7 @@ function OutstandingsLikeScreen({
         labels={[
           { text: "Party" },
           { text: "Group" },
+          { text: "Foreign", numeric: true },
           { text: "Pending", numeric: true },
         ]}
       />

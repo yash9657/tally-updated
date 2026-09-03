@@ -2804,9 +2804,18 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
 
     // Net every reference on a CURRENT, non-deleted voucher. c.views holds
     // exactly those: an ALTER restates the view in place and a DELETE removes it.
+    // ⭐ THE KEY IS `ledger \0 ref \0 currency-code` SINCE T8 STEP 6, and `code` is
+    // on the VALUE as well so the emitted row does not have to re-split the key.
     const net = new Map<
       string,
-      { ledgerID: string; ref: string; units: bigint; due: string }
+      {
+        ledgerID: string;
+        ref: string;
+        code: string;
+        units: bigint;
+        foreign: bigint;
+        due: string;
+      }
     >();
     for (const view of c.views.values()) {
       if (bound !== "" && (view.voucher_date ?? "") > bound) continue;
@@ -2818,14 +2827,38 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
           b.dr_cr === "D"
             ? mockMoneyToUnits(b.amount)
             : -mockMoneyToUnits(b.amount);
-        const key = `${b.ledger_id}\u0000${b.ref_name}`;
+        // ⭐⭐ T8 STEP 6 — THE CURRENCY IS PART OF THE NETTING KEY, exactly as
+        // cored's GROUP BY is (Q5: "a ref_name that appears under two different
+        // currencies is a data error, not a sum"). ⛔ A DOUBLE THAT NETTED THEM
+        // TOGETHER WOULD BE LOOSER THAN THE SERVER, which is D84 and the reason
+        // this whole residue block exists: 61 test files build books through here.
+        //
+        // ⚠️ `On Account` IS COLLAPSED TO BASE, on BOTH sides, because cored
+        // collapses it: the residue is a difference of sums over many rates and
+        // has no single currency, and an explicit ON_ACCOUNT allocation carrying
+        // one would otherwise land in a different bucket from the derived residue
+        // that cancels it — two rows that each look right.
+        const code = b.ref_name === ON_ACCOUNT_REF ? "" : (b.currency ?? "");
+        const key = `${b.ledger_id}\u0000${b.ref_name}\u0000${code}`;
         const cur = net.get(key) ?? {
           ledgerID: b.ledger_id,
           ref: b.ref_name,
+          code,
           units: 0n,
+          foreign: 0n,
           due: "",
         };
         cur.units += kind === "PAYABLE" ? -signed : signed;
+        // ⛔ THE FOREIGN COLUMN IS SIGNED THE SAME WAY AND ZERO IN THE On Account
+        // BUCKET. `foreign_amount` is absent on a base row, which is 0 here — not
+        // NaN, and not the base amount.
+        if (b.ref_name !== ON_ACCOUNT_REF && b.foreign_amount) {
+          const sf =
+            b.dr_cr === "D"
+              ? mockMoneyToUnits(b.foreign_amount)
+              : -mockMoneyToUnits(b.foreign_amount);
+          cur.foreign += kind === "PAYABLE" ? -sf : sf;
+        }
         // The EARLIEST due date on the reference, as the server takes MIN().
         if (b.due_date && (cur.due === "" || b.due_date < cur.due))
           cur.due = b.due_date;
@@ -2848,7 +2881,11 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     // ⚠️ IT IS THE SAME TWO PASSES AS THE SERVER'S: add every party POSTING, then
     // take every named reference back out. A fully referenced voucher contributes
     // +X and −X and vanishes, which is why an ordinary book grows no such row.
-    const onAcctKey = (ledgerID: string) => `${ledgerID}\u0000${ON_ACCOUNT_REF}`;
+    // ⚠️ THE On Account KEY CARRIES AN EMPTY CURRENCY, and it must be spelled the
+    // same way the bill-allocation key spells base, or the collapse silently
+    // becomes two buckets that never meet.
+    const onAcctKey = (ledgerID: string) =>
+      `${ledgerID}\u0000${ON_ACCOUNT_REF}\u0000`;
     for (const view of c.views.values()) {
       if (bound !== "" && (view.voucher_date ?? "") > bound) continue;
       const bump = (ledgerID: string, units: bigint) => {
@@ -2858,9 +2895,15 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         const cur = net.get(key) ?? {
           ledgerID,
           ref: ON_ACCOUNT_REF,
+          code: "",
           units: 0n,
+          foreign: 0n,
           due: "",
         };
+        // ⛔ NO FOREIGN FIGURE ON THE RESIDUE, matching cored's residue branches:
+        // `posting` DOES carry a currency and it is deliberately not read, because
+        // these two passes compute a DIFFERENCE OF SUMS whose halves are keyed on
+        // different tables. Base-only keeps D106's identity true by construction.
         cur.units += kind === "PAYABLE" ? -units : units;
         net.set(key, cur);
       };
@@ -2889,11 +2932,28 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
     let total = 0n;
     let onAccountUnits = 0n;
 
-    for (const { ledgerID, ref, units, due } of [...net.values()].sort((a, b) =>
-      a.ref.localeCompare(b.ref),
-    )) {
+    // ⛔⛔ T8 STEP 6 — THE CONFLICT COUNT IS TAKEN BEFORE THE ROWS ARE BUILT, over
+    // the groups that SURVIVE the zero skip. A reference is in conflict only once
+    // every one of its currency groups has been seen, so it cannot be decided while
+    // the rows are being emitted — and counting closed groups too would flag a
+    // correctly settled bill for ever. cored does the same in a second pass.
+    const survives = (u: bigint, f: bigint) => u !== 0n || f !== 0n;
+    const groupsPerRef = new Map<string, number>();
+    for (const g of net.values()) {
+      if (!survives(g.units, g.foreign)) continue;
+      const rk = `${g.ledgerID}\u0000${g.ref}`;
+      groupsPerRef.set(rk, (groupsPerRef.get(rk) ?? 0) + 1);
+    }
+
+    for (const { ledgerID, ref, code, units, foreign, due } of [
+      ...net.values(),
+    ].sort((a, b) => a.ref.localeCompare(b.ref) || a.code.localeCompare(b.code))) {
       // A fully-settled bill nets to zero and is not outstanding.
-      if (units === 0n) continue;
+      //
+      // ⛔ SINCE STEP 6 THAT IS TWO QUESTIONS. A bill with nothing left in rupees
+      // and $400 left in dollars is the row an exporter has to see, and a
+      // base-only skip drops it off the report entirely.
+      if (!survives(units, foreign)) continue;
       const ledger = c.ledgers.find((l) => l.id === ledgerID);
       if (!ledger) continue;
       // ⛔ THE ON-ACCOUNT ROW IS UN-AGED AND IN NO SLAB, exactly as cored leaves
@@ -2927,6 +2987,10 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         overdue_days: overdue,
         slab,
         on_account: onAccount,
+        currency_code: code,
+        foreign_pending: mockUnitsToMoney(foreign),
+        currency_conflict:
+          (groupsPerRef.get(`${ledgerID}\u0000${ref}`) ?? 0) > 1,
       });
       party.pending = mockUnitsToMoney(mockMoneyToUnits(party.pending) + units);
       byParty.set(ledgerID, party);

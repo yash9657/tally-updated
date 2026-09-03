@@ -1826,6 +1826,52 @@ type openingBillReq struct {
 	DrCr    string `json:"dr_cr"`
 	Amount  string `json:"amount"`
 	DueDate string `json:"due_date"`
+
+	// ⭐⭐ T8 STEP 6 — THE TRIPLE ON AN OPENING BILL, WHICH HAD NO WIRE AT ALL.
+	// 0080 gave `ledger_opening_bill` the three currency columns for §0.2's stated
+	// reason (Outstandings nets this table in a UNION with `bill_allocation`), and
+	// no route could ever set them — so a MIGRATED foreign debtor, whose opening
+	// bill IS their whole history, could not be keyed as foreign, could not be
+	// reported as foreign, and could not be SETTLED at all: step 5's engine reads
+	// this very table and refuses with "bill %q is carried in the books' own
+	// currency and has no exchange rate".
+	//
+	// ⛔ ALL-OR-NONE, PARSED BY `buildForex` — the same function every voucher
+	// posting and bill allocation goes through, so `""` means absent in exactly
+	// one place and the zero uuid is refused in exactly one place.
+	CurrencyID    string `json:"currency_id"`
+	ForeignAmount string `json:"foreign_amount"`
+	Rate          string `json:"rate"`
+}
+
+// openingBillsFromReq maps the wire rows to masters rows, refusing a malformed
+// triple with a 400 that names the bill.
+//
+// ⛔ ONE MAPPER, TWO DOORS — `POST /ledgers` and `PUT /ledgers/{id}/opening` both
+// accept this array, and it was already duplicated between them before step 6 added
+// three fields to copy. Two spellings of the same mapping is how a currency reaches
+// the create path and not the setter, which presents as "the opening bill loses its
+// currency when you edit it".
+func openingBillsFromReq(w http.ResponseWriter, reqs []openingBillReq) ([]masters.OpeningBill, bool) {
+	out := make([]masters.OpeningBill, 0, len(reqs))
+	for _, b := range reqs {
+		amt, derr := optionalDecimal(b.Amount)
+		if derr != nil {
+			writeError(w, http.StatusBadRequest, "invalid opening bill amount for "+b.RefName)
+			return nil, false
+		}
+		cur, foreign, rate, ok := buildForex(w, b.CurrencyID, b.ForeignAmount, b.Rate,
+			" on opening bill "+b.RefName)
+		if !ok {
+			return nil, false
+		}
+		out = append(out, masters.OpeningBill{
+			RefName: b.RefName, RefType: b.RefType, DrCr: b.DrCr,
+			Amount: amt, DueDate: b.DueDate,
+			CurrencyID: cur, ForeignAmount: foreign, Rate: rate,
+		})
+	}
+	return out, true
 }
 
 func (s *Server) handleCreateLedger(w http.ResponseWriter, r *http.Request) {
@@ -1842,17 +1888,9 @@ func (s *Server) handleCreateLedger(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid opening_balance")
 		return
 	}
-	openingBills := make([]masters.OpeningBill, 0, len(req.OpeningBills))
-	for _, b := range req.OpeningBills {
-		amt, derr := optionalDecimal(b.Amount)
-		if derr != nil {
-			writeError(w, http.StatusBadRequest, "invalid opening bill amount for "+b.RefName)
-			return
-		}
-		openingBills = append(openingBills, masters.OpeningBill{
-			RefName: b.RefName, RefType: b.RefType, DrCr: b.DrCr,
-			Amount: amt, DueDate: b.DueDate,
-		})
+	openingBills, ok := openingBillsFromReq(w, req.OpeningBills)
+	if !ok {
+		return
 	}
 	id, err := s.masters.CreateLedger(ctx, masters.Ledger{
 		Name:               req.Name,
@@ -3810,6 +3848,25 @@ func (s *Server) handleOpenBills(w http.ResponseWriter, r *http.Request) {
 				"due_date":     b.DueDate,
 				"overdue_days": b.OverdueDays,
 				"slab":         b.SlabLabel,
+				// ⭐⭐ T8 STEP 6, AND THIS IS WHERE STEPS 6 AND 8 MEET. Step 5 chose a
+				// VERIFY design: the CLIENT computes the realised difference and the
+				// server refuses any disagreement — so a settlement form has to know
+				// what the bill is carried at in BOTH currencies before it can offer a
+				// figure. This picker is the read that feeds it.
+				//
+				// ⛔ AND THE TWO FIGURES TOGETHER ARE WHAT `realisedFor` NEEDS, not the
+				// rate: the FINAL slice must clear `Pending` exactly, and a partial
+				// slice clears the pro-rata share of the bill's book value. A picker
+				// that offered only the rupee figure would let an operator key a
+				// plausible allocation that the engine then refuses, with the operator
+				// holding no number they could have got right.
+				//
+				// ⚠️ `currency_conflict` IS FORWARDED RATHER THAN FILTERED. A reference
+				// in conflict is exactly the one a picker must not silently offer as a
+				// single settleable bill — the form has to be able to say so.
+				"currency_code":     b.CurrencyCode,
+				"foreign_pending":   b.ForeignPending.StringFixed(4),
+				"currency_conflict": b.CurrencyConflict,
 			})
 		}
 		break
@@ -3912,6 +3969,24 @@ func (s *Server) writeOutstandings(w http.ResponseWriter, r *http.Request, kind 
 				// fact from a display string, and a customer is perfectly entitled to
 				// name a real bill "On Account".
 				"on_account": b.OnAccount,
+				// ⭐⭐ T8 STEP 6 — THE FOREIGN HALF (Q5). `currency_code` is EMPTY for a
+				// bill carried in the books' own currency, which is the one encoding of
+				// base that 0080 allows; `foreign_pending` is signed exactly as
+				// `pending` is, so a client can add the two columns down the page.
+				//
+				// ⛔ NO RATE CROSSES THIS ROUTE, AND THAT IS DELIBERATE (§6.3). A rate is
+				// NUMERIC(19,10) and money is (19,4); `StringFixed(4)` on a rate READS as
+				// consistency with every other number here and silently changes it —
+				// 0.0033333333 becomes 0.0033. Step 7's unadjusted-forex report is where
+				// rates are rendered, and it must carry its own ten-decimal formatter.
+				"currency_code":   b.CurrencyCode,
+				"foreign_pending": b.ForeignPending.StringFixed(4),
+				// ⛔ EMITTED PER BILL RATHER THAN AS A REPORT-LEVEL FLAG, for the same
+				// reason `on_account` is emitted rather than inferred: the client has to
+				// mark the OFFENDING ROWS, not merely announce that the report contains a
+				// problem somewhere. A footnote with no row marker leaves an operator to
+				// find the pair by eye, on a report that may run to hundreds of bills.
+				"currency_conflict": b.CurrencyConflict,
 			})
 		}
 		parties = append(parties, map[string]any{

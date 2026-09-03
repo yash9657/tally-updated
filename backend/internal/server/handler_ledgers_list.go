@@ -28,7 +28,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
 
-	"github.com/khata/cored/internal/masters"
 	"github.com/khata/cored/internal/reporting"
 )
 
@@ -214,17 +213,9 @@ func (s *Server) handleSetLedgerOpening(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "invalid opening_balance")
 		return
 	}
-	bills := make([]masters.OpeningBill, 0, len(req.OpeningBills))
-	for _, b := range req.OpeningBills {
-		amt, derr := optionalDecimal(b.Amount)
-		if derr != nil {
-			writeError(w, http.StatusBadRequest, "invalid opening bill amount for "+b.RefName)
-			return
-		}
-		bills = append(bills, masters.OpeningBill{
-			RefName: b.RefName, RefType: b.RefType, DrCr: b.DrCr,
-			Amount: amt, DueDate: b.DueDate,
-		})
+	bills, ok := openingBillsFromReq(w, req.OpeningBills)
+	if !ok {
+		return
 	}
 
 	if err := s.masters.SetLedgerOpening(ctx, ledgerID, opening, req.OpeningDC, bills, req.CreatedBy); err != nil {

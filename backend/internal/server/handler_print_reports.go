@@ -755,15 +755,33 @@ func (s *Server) printOutstandingsOfKind(ctx context.Context, w http.ResponseWri
 	var rows []printing.Row
 	for _, p := range out.Parties {
 		rows = append(rows, printing.Row{
-			Cells: []string{p.LedgerName, p.GroupName, "", "", "", "", printMoney(p.Pending)},
+			Cells: []string{p.LedgerName, p.GroupName, "", "", "", "", "", printMoney(p.Pending)},
 			Bold:  true,
 		})
 		for _, b := range p.Bills {
+			// ⭐⭐ T8 STEP 6 — THE FOREIGN COLUMN IS ON THE PAPER TOO, AND THAT IS NOT
+			// OPTIONAL. D20's defect was two surfaces over one fact drifting apart;
+			// a printed Outstandings that showed only the rupee figure would be a
+			// statement an operator posts to a customer, of a dollar debt, with the
+			// currency silently dropped. ⚠️ THE PARTY ROW LEAVES IT BLANK rather than
+			// totalling it, for Q5's reason: mixed currencies do not add up.
+			//
+			// ⛔ AND THE CONFLICT IS MARKED ON THE ROW, not left to the footer.
+			// Two rows under one bill number on paper, with nothing between them,
+			// read as two bills — and paper has no tooltip to explain otherwise.
+			foreign := ""
+			if b.CurrencyCode != "" {
+				foreign = b.CurrencyCode + " " + printMoney(b.ForeignPending)
+			}
+			ref := b.RefName
+			if b.CurrencyConflict {
+				ref += " (!) two currencies"
+			}
 			rows = append(rows, printing.Row{
-				Cells: []string{"", "", b.RefName, printISODate(b.DueDate),
+				Cells: []string{"", "", ref, printISODate(b.DueDate),
 					// Days overdue is a COUNT, not money: strconv, and never
 					// FormatMoney, which would print "45.00 days".
-					strconv.Itoa(b.OverdueDays), b.SlabLabel, printMoney(b.Pending)},
+					strconv.Itoa(b.OverdueDays), b.SlabLabel, foreign, printMoney(b.Pending)},
 				Indent: 1,
 			})
 		}
@@ -772,11 +790,14 @@ func (s *Server) printOutstandingsOfKind(ctx context.Context, w http.ResponseWri
 	var footer []printing.Row
 	for _, st := range out.SlabTotals {
 		footer = append(footer, printing.Row{
-			Cells: []string{"Ageing " + st.Label, "", "", "", "", "", printMoney(st.Amount)},
+			Cells: []string{"Ageing " + st.Label, "", "", "", "", "", "", printMoney(st.Amount)},
 		})
 	}
+	// ⚠️ THE SLABS AND THE TOTAL ARE BASE-ONLY AND THE FOREIGN CELL IS LEFT EMPTY,
+	// which is Q5's explicit design decision rather than an omission: a total that
+	// added USD to INR would be a figure in no currency that nonetheless foots.
 	footer = append(footer, printing.Row{
-		Cells:     []string{"Total outstanding", "", "", "", "", "", printMoney(out.Total)},
+		Cells:     []string{"Total outstanding", "", "", "", "", "", "", printMoney(out.Total)},
 		Bold:      true,
 		RuleAbove: true,
 	})
@@ -802,6 +823,10 @@ func (s *Server) printOutstandingsOfKind(ctx context.Context, w http.ResponseWri
 			{Header: "Due Date", Align: printing.AlignLeft, Width: 2},
 			{Header: "Days Overdue", Align: printing.AlignRight, Width: 1.6},
 			{Header: "Ageing", Align: printing.AlignLeft, Width: 2},
+			// ⭐ T8 STEP 6. Blank on a base bill, and it is a SEPARATE column from
+			// Pending — never the same one. Two different things must never share a
+			// column, and on a printed sheet the reader cannot ask which this is.
+			{Header: "Foreign", Align: printing.AlignRight, Width: 2},
 			{Header: "Pending", Align: printing.AlignRight, Width: 2.4},
 		},
 		Rows:   rows,
