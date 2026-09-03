@@ -24,6 +24,7 @@ import type {
   CoredClient,
   DayBookResponse,
   OutstandingsResponse,
+  UnadjustedForexResponse,
   ProfitLossResponse,
   StatementNode,
   TrialBalanceResponse,
@@ -883,4 +884,235 @@ function billsPayableFetch(client: CoredClient, companyID: string, asOn?: string
   const query: { as_on?: string } = {};
   if (asOn) query.as_on = asOn;
   return client.getBillsPayable(companyID, query);
+}
+
+// ---------------------------------------------------------------------------
+// ⭐⭐ T8 STEP 7 — THE UNADJUSTED-FOREX REPORT. A REPORT THAT POSTS NOTHING.
+// ---------------------------------------------------------------------------
+
+/**
+ * The sentence that makes this screen honest, and it is exported for the reason
+ * `outstandingsScopeLine` is: it is a sentence with rules in it, and a test can hold
+ * a sentence to a rule far more cheaply than it can hold a rendered screen.
+ *
+ * ⛔ IT SAYS THREE THINGS AND NONE IS OPTIONAL:
+ *
+ *  1. THAT THE DIFFERENCE IS REPORTED AND NOT POSTED, in those words. Q4 of the
+ *     design memo requires the product to say so on the screen and in F11. ⚠️ This
+ *     is the row most at risk of the FeaturesScreen failure mode with a number
+ *     attached: a table of gains and losses reads as posted unless it says otherwise.
+ *  2. WHAT THE DATE DID — and on this report it did TWO jobs. It limited which bills
+ *     are listed AND it chose the rate they were priced at, and a caption that
+ *     conflated them is D86 with an exchange rate in it.
+ *  3. THAT IT COVERS BOTH SIDES. A reader who assumed receivables only would read a
+ *     NETTED total as a receivable figure — and netting is the whole point.
+ */
+export function unadjustedForexScopeLine(
+  asOn: string,
+  pricedAsOn: string,
+): string {
+  const bound = (asOn ?? "").trim();
+  const priced = (pricedAsOn ?? "").trim();
+  const rows =
+    bound !== ""
+      ? `Open foreign bills as on ${bound}`
+      : "NO DATE LIMIT — every open foreign bill on these books, including any " +
+        "dated AFTER today. Press F2 and set a To date to read it as at a day";
+  return (
+    `${rows}, receivable AND payable, priced at the rate as on ${priced}. ` +
+    "THIS DIFFERENCE IS REPORTED AND NOT POSTED: no voucher is created and no " +
+    "ledger balance changes. It is what settling the whole remaining balance at " +
+    "that rate would realise."
+  );
+}
+
+/**
+ * The disclosure that the total is SHORT (Decision 3 of the server's report).
+ *
+ * ⛔ A BILL WHOSE CURRENCY HAS NO RATE ON FILE IS LISTED AND NOT PRICED, because an
+ * exposure with an unknown rate is still an exposure and dropping it is how a reader
+ * takes a short report for a small one. But then the total omits it, and a column of
+ * figures beside a total is exactly the shape somebody checks by adding up — so the
+ * gap is STATED, the way `onAccountLine` states the ageing report's.
+ */
+export function unratedForexLine(count: number): string {
+  return (
+    `${String(count)} bill(s) above could NOT be priced — no exchange rate is on ` +
+    "file for their currency on or before this date — so they are listed with no " +
+    "difference and are NOT in the total. Enter a rate (Alt+G > Create Currency) " +
+    "to price them. ⛔ They are not exposures of zero; they are exposures nobody " +
+    "can value."
+  );
+}
+
+/**
+ * The unadjusted-forex (unrealised gain/loss) screen.
+ *
+ * ⚠️ IT IS ITS OWN COMPONENT AND NOT AN `OutstandingsLikeScreen`, unlike the two
+ * ageings above. That pair shares one body because they are the same report on
+ * opposite sides of the ledger; this one has different columns (two RATES, which are
+ * not money), a different row set (foreign references only, no On Account, no ageing
+ * slabs) and a caption making a different promise. Sharing a body would have meant a
+ * body with two modes, which is how the shared thing stops being the same thing.
+ */
+export function UnadjustedForexScreen({ snapshot, onSelect }: ReportProps) {
+  const client = useClient();
+  const companyID = useCompanyID();
+  // As-at, so the period's To date is what it honours — and here that date also
+  // chooses the rate. FrameOverlays classifies this name `as-at` for both reasons.
+  const asOn = snapshot.config?.periodTo;
+
+  const { data, availability } = useReportFetch<UnadjustedForexResponse>(
+    useCallback(
+      () => unadjustedForexFetch(client, companyID, asOn),
+      [client, companyID, asOn],
+    ),
+  );
+
+  const columns = "grid-cols-[1fr_7rem_9rem_9rem_8rem_8rem]";
+  const rows: DrillRow[] = [];
+  for (const b of data?.bills ?? []) {
+    // ⛔⛔ THE RATES GO THROUGH `formatRate`-SHAPED RENDERING AND NEVER THROUGH
+    // `formatMoney`. This is the one place on this screen where a wrong choice is
+    // invisible: `formatMoney` on 0.0033333333 prints "0.00" and on 83.6512345678
+    // prints "83.65" — both sit happily in a column headed "Rate", both round-trip
+    // through their own type, and both are wrong for ever. The server sends ten
+    // decimals; the screen shows them.
+    //
+    // ⚠️ AND AN UNPRICED ROW SHOWS A SENTENCE WHERE ITS RATE WOULD BE, NOT A BLANK
+    // AND NOT A ZERO. A blank reads as "the rate is 1"; a zero reads as a rate that
+    // was entered and is zero. Either would make the empty difference beside it look
+    // like a position that has not moved, which is the opposite of the truth.
+    const rateAsOn = b.has_rate_as_on ? b.rate_as_on : "no rate on file";
+    const difference = b.has_rate_as_on ? formatMoney(b.difference) : "—";
+    const label =
+      b.ref_type === "ADVANCE" ? `${b.ref_name} (advance)` : b.ref_name;
+    rows.push({
+      rowKey: `${LEDGER_ROW_PREFIX}${b.ledger}/${b.ref_name}/${b.currency_code}`,
+      drillable: false,
+      values: [
+        `${b.ledger} — ${label}`,
+        `${b.currency_code} ${formatMoney(b.foreign_pending)}`,
+        b.bill_rate,
+        rateAsOn,
+        formatMoney(b.book_value),
+        difference,
+      ],
+      exportCells: [
+        textCell(`${b.ledger} — ${label}`),
+        textCell(`${b.currency_code} ${formatMoney(b.foreign_pending)}`),
+        // ⛔ `textCell`, NOT `moneyCell`. A rate in a spreadsheet's money column is
+        // a rate rounded to two places by the spreadsheet, which is the same bug in
+        // somebody else's software.
+        textCell(b.bill_rate),
+        textCell(rateAsOn),
+        moneyCell(b.book_value),
+        b.has_rate_as_on ? moneyCell(b.difference) : textCell("—"),
+      ],
+      cells: (
+        <>
+          <span>
+            {b.ledger}
+            <span className="text-tally-field"> — {label}</span>
+          </span>
+          <span className="text-right">
+            {b.currency_code} {formatMoney(b.foreign_pending)}
+          </span>
+          <span className="text-right text-tally-field">{b.bill_rate}</span>
+          <span className="text-right text-tally-field">{rateAsOn}</span>
+          <span className="text-right">{formatMoney(b.book_value)}</span>
+          <span className="text-right">{difference}</span>
+        </>
+      ),
+    });
+  }
+  rows.push({
+    rowKey: "__total__",
+    drillable: false,
+    values: ["Net unrealised difference", "", "", "", "", formatMoney(data?.total_difference)],
+    exportCells: [
+      textCell("Net unrealised difference"),
+      textCell(""),
+      textCell(""),
+      textCell(""),
+      textCell(""),
+      moneyCell(data?.total_difference),
+    ],
+    cells: (
+      <>
+        <span>Net unrealised difference</span>
+        <span />
+        <span />
+        <span />
+        <span />
+        <span className="text-right" data-testid="uf-total">
+          {formatMoney(data?.total_difference)}
+        </span>
+      </>
+    ),
+  });
+
+  const visible = useReportView(rows, snapshot, {
+    title: "Unadjusted Forex Gain/Loss",
+    headers: [
+      "Party / Bill ref",
+      "Foreign pending",
+      "Bill rate",
+      "Rate as on",
+      "Book value",
+      "Difference",
+    ],
+    availability,
+  });
+
+  return (
+    <ReportFrame
+      title="Unadjusted Forex Gain/Loss"
+      snapshot={snapshot}
+      availability={availability}
+    >
+      <ColumnHeader
+        columnsClassName={columns}
+        labels={[
+          { text: "Party / Bill ref" },
+          { text: "Foreign pending", numeric: true },
+          { text: "Bill rate", numeric: true },
+          { text: "Rate as on", numeric: true },
+          { text: "Book value", numeric: true },
+          { text: "Difference", numeric: true },
+        ]}
+      />
+      <DrillRows
+        rows={visible}
+        onSelect={onSelect}
+        ariaLabel="Unadjusted Forex rows"
+        columnsClassName={columns}
+      />
+      {data ? (
+        <p className="mt-2 text-xs" data-testid="uf-scope">
+          {unadjustedForexScopeLine(data.as_on, data.priced_as_on)}
+        </p>
+      ) : null}
+      {/*
+        ⚠️ RENDERED ONLY WHEN THERE IS SOME, exactly as the on-account line is: a
+        permanent caption about a case that does not apply is noise, and noise is how
+        a real disclosure stops being read.
+      */}
+      {data && data.unrated_count > 0 ? (
+        <p className="mt-1 text-xs" data-testid="uf-unrated">
+          {unratedForexLine(data.unrated_count)}
+        </p>
+      ) : null}
+    </ReportFrame>
+  );
+}
+
+function unadjustedForexFetch(
+  client: CoredClient,
+  companyID: string,
+  asOn?: string,
+) {
+  const query: { as_on?: string } = {};
+  if (asOn) query.as_on = asOn;
+  return client.getUnadjustedForex(companyID, query);
 }

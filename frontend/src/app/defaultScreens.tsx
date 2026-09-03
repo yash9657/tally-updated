@@ -20,6 +20,7 @@ import {
   ProfitLossScreen,
   OutstandingsScreen,
   BillsPayableScreen,
+  UnadjustedForexScreen,
 } from "../screens/reports/ReportScreens";
 import { ReportDetailScreen } from "../screens/reports/ReportDetailScreen";
 import { StockSummaryScreen } from "../screens/reports/StockSummaryScreen";
@@ -446,6 +447,21 @@ export function createDefaultRegistry(): ScreenRegistry {
     // ?kind=PAYABLE, and needs to, for the bill-wise picker on a Payment). The rule is
     // WRITABLE at specificity 2 for a tenant that wants the split; it is not seeded.
     "report:Bills Payable": BillsPayableScreen,
+    // ---- THE UNADJUSTED-FOREX REPORT (T8 step 7). Registered BY NAME, which is
+    // what buys it the report keymap, F2, the report button bar and a place in Go To
+    // and Display More Reports. ⛔ NOTHING TYPE-CHECKS THIS LINE — a `ScreenKind`
+    // registration is not an exhaustive Record the way `REPORT_SLUGS` and
+    // `REPORT_PERIOD_SHAPE` are, so a name added to REPORT_NAMES with no entry here
+    // renders "not available in this build" over a report that is built and served.
+    //
+    // ⚠️ ITS OWN COMPONENT, NOT `OutstandingsLikeScreen`. The ageings share one body
+    // because they are the same report on two sides; this one has two RATE columns
+    // (which are not money), no ageing slabs, no On Account row and a caption making
+    // a different promise — that the difference is REPORTED AND NOT POSTED.
+    //
+    // Denied to the seeded Data Entry level by migration 0090, `disallow display` AND
+    // `disallow print`; the screen renders that refusal as the reason it is.
+    "report:Unadjusted Forex Gain/Loss": UnadjustedForexScreen,
     // Inventory: the position as at a date, replayed from the movement ledger.
     // Denied to Data Entry by migration 0026 (it prints cost prices); the
     // screen states that refusal rather than rendering an empty table.

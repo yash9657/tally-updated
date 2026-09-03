@@ -83,6 +83,21 @@ const REPORT_ALIASES: Readonly<Record<string, string>> = {
   // deliberately refused to add for "cash flow statement" (§6.5). It could not be
   // fixed before D94, because there was no payables report to point it at.
   "bills payable": "Bills Payable",
+  // ---- THE UNADJUSTED-FOREX REPORT (T8 step 7). Tally's own name for the figure is
+  // "Unadjusted Forex Gain/Loss", which is what it puts on the Balance Sheet, so
+  // that is the canonical name — and these are the words an operator actually types
+  // for it. ⚠️ "forex" ALONE IS INCLUDED DELIBERATELY: there is exactly one forex
+  // screen in this build, so the short word is unambiguous today. If a second one
+  // ever ships, this alias must be re-decided rather than pointed at whichever came
+  // first — an alias that silently answers a different question is the defect the
+  // "bills payable" comment above records.
+  "unadjusted forex": "Unadjusted Forex Gain/Loss",
+  "unadjusted forex gain/loss": "Unadjusted Forex Gain/Loss",
+  "forex gain/loss": "Unadjusted Forex Gain/Loss",
+  "unrealised gain/loss": "Unadjusted Forex Gain/Loss",
+  "unrealized gain/loss": "Unadjusted Forex Gain/Loss",
+  "exchange difference": "Unadjusted Forex Gain/Loss",
+  forex: "Unadjusted Forex Gain/Loss",
   payables: "Bills Payable",
   "accounts payable": "Bills Payable",
   "creditors ageing": "Bills Payable",

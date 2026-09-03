@@ -57,6 +57,7 @@ import type {
   OutstandingKind,
   OutstandingsQuery,
   OutstandingsResponse,
+  UnadjustedForexResponse,
   PartyOpenBillsResponse,
   ProfitLossResponse,
   TrialBalanceResponse,
@@ -1433,6 +1434,23 @@ export interface CoredClient {
     companyID: string,
     query?: OutstandingsQuery,
   ): Promise<OutstandingsResponse>;
+  /**
+   * ⭐⭐ THE UNADJUSTED-FOREX REPORT (T8 step 7): what every open FOREIGN bill is
+   * worth at the rate as on a date, against the figure the books carry it at.
+   *
+   * ⛔ IT POSTS NOTHING, and the response says so in `posts_nothing` so no client
+   * has to hard-code Q4's sentence.
+   *
+   * ⚠️ ONE METHOD FOR BOTH SIDES, and — unlike `getBillsPayable` above — that is
+   * NOT a lapse into the `?kind=` shape D94 exists to prevent. There is no kind
+   * parameter at all: the route serves receivables AND payables together because
+   * the subject is the NET exposure to a currency, which is not separable by side.
+   * cored governs it as `report:unadjusted-forex`, one flat literal, one rule.
+   */
+  getUnadjustedForex(
+    companyID: string,
+    query?: { as_on?: string },
+  ): Promise<UnadjustedForexResponse>;
   /**
    * THE PAYABLES AGEING, under its OWN report name (D94).
    *

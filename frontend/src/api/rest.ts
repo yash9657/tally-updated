@@ -56,6 +56,7 @@ import type {
   ListStockItemsResponse,
   OutstandingsQuery,
   OutstandingsResponse,
+  UnadjustedForexResponse,
   PartyOpenBillsResponse,
   ProfitLossResponse,
   StockSummaryResponse,
@@ -1193,6 +1194,15 @@ export function createRestClient(
     getOutstandings(companyID, query?: OutstandingsQuery) {
       return http.get<OutstandingsResponse>(
         `${company(companyID)}/outstandings`,
+        query,
+      );
+    },
+    getUnadjustedForex(companyID, query?: { as_on?: string }) {
+      // ⭐ A FLAT LITERAL EQUAL TO THE PDP RESOURCE NAME, like every report route
+      // here. The date rides the query and carries no authority: it chooses which
+      // bills are in AND which rate prices them, and neither is a resource.
+      return http.get<UnadjustedForexResponse>(
+        `${company(companyID)}/unadjusted-forex`,
         query,
       );
     },

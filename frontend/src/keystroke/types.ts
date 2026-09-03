@@ -639,6 +639,34 @@ export const REPORT_NAMES = [
    * FrameOverlays classifies it `as-at`.
    */
   "Bills Payable",
+  /**
+   * ---- THE UNADJUSTED-FOREX REPORT (T8 step 7). What every open FOREIGN bill is
+   * worth at the rate as on a date, against the figure the books carry it at.
+   *
+   * ⛔ IT POSTS NOTHING, AND THE SCREEN AND F11 SAY SO IN THOSE WORDS. Q4 of
+   * docs/design/t8-multi-currency-model.md makes it report-only in v1, per the repo
+   * owner's answer; the revaluation VOUCHER is deferred and costs no design debt
+   * because postings are immutable, so it could only ever BE a voucher. ⚠️ THIS IS
+   * THE ROW MOST AT RISK OF THE FeaturesScreen FAILURE MODE — "a toggle that flips a
+   * flag with nothing behind it" — with a number attached, so the response carries
+   * `posts_nothing` and the screen states it rather than hard-coding a sentence.
+   *
+   * ⛔⛔ ONE NAME COVERING **BOTH** SIDES, WHICH IS THE OPPOSITE CALL FROM THE
+   * `Outstandings` / `Bills Payable` SPLIT DIRECTLY ABOVE AND IS ARGUED RATHER THAN
+   * INHERITED. That split exists because the PDP decides on the report NAME and
+   * *"this level may see what customers owe us but not what we owe suppliers"* was
+   * otherwise unwritable. It does not reach here: the subject is the company's NET
+   * exposure to a currency, and a $1,000 receivable against a $1,000 payable at one
+   * rate is an exposure of NOTHING — so splitting would not restrict information, it
+   * would destroy the only figure the report exists to produce. Migration 0090
+   * carries the full argument and denies the name outright to the seeded Data Entry
+   * level, `disallow display` AND `disallow print`.
+   *
+   * It is a POSITION AS AT A DATE, like Outstandings and the order books, so
+   * FrameOverlays classifies it `as-at`. ⚠️ On this report the date does TWO jobs —
+   * which bills are in, and which rate prices them — and the screen says both.
+   */
+  "Unadjusted Forex Gain/Loss",
 ] as const;
 export type ReportName = (typeof REPORT_NAMES)[number];
 

@@ -54,6 +54,8 @@ import type {
   OutstandingParty,
   OutstandingsQuery,
   OutstandingsResponse,
+  UnadjustedForexResponse,
+  UnadjustedForexBill,
   PartyOpenBillsResponse,
   ProfitLossResponse,
   TrialBalanceResponse,
@@ -224,6 +226,13 @@ import type {
 // A VALUE, not a type: the recorded `payload.class` labels the server stamps.
 // The mock must agree with them exactly — see classLabel().
 import { VOUCHER_CLASS_LABELS } from "./types";
+// ⛔ THE RATE HELPERS, NEVER THE MONEY ONES. `api/rate.ts`'s header states the
+// reason at length: money is fixed-4 in this product and `parseFixed4` TRUNCATES
+// the fifth decimal onward, so a rate put through it silently becomes a different
+// rate and every figure derived from it is plausible. The mock has to be exactly as
+// careful as the screen, or the double is the one place the bug is invisible.
+import { RATE_DECIMALS, parseRate, formatRate } from "./rate";
+
 import type { QueryRequest, QueryResult } from "./query";
 import type {
   CreateSecurityLevelResponse,
@@ -361,6 +370,10 @@ function seedUnit(companyID: string, symbol: string, formalName: string): UnitLi
  * proving a layout the product never renders. That is D84's failure (this double
  * being looser than cored) wearing a different hat.
  */
+// Derived from `api/rate.ts`'s RATE_DECIMALS rather than written as a literal, so
+// the mock cannot end up on a different scale from the parser it uses.
+const MOCK_RATE_SCALE = 10n ** BigInt(RATE_DECIMALS);
+
 const ON_ACCOUNT_REF = "On Account";
 
 const QSCALE = 10_000n;
@@ -1518,6 +1531,20 @@ interface MockCompany {
    * screen test create "INR" on an INR company and pass — D84 exactly.
    */
   currencies: CurrencyListItem[];
+  /**
+   * ⭐⭐ THE RATE HISTORY, AND IT EXISTS BECAUSE T8 STEP 7 MADE `latest_rate` TOO
+   * LOOSE TO BE A DOUBLE. `CurrencyListItem` carries only the LATEST rate, which is
+   * all the currency-list screen needs. The unadjusted-forex report asks a
+   * different question — "the latest rate ON OR BEFORE this date" — and its whole
+   * Decision 3 turns on whether the answer EXISTS. A double that answered with the
+   * latest rate whatever date it was asked for would price a report from a rate
+   * entered after the date it claims to be as at, and would never produce the
+   * unpriced row this report has to disclose. That is D84's class exactly.
+   *
+   * ⚠️ IT IS NOT ON THE WIRE. cored has no rate-history route; this mirrors the
+   * `currency_rate` TABLE, which the server queries directly.
+   */
+  currencyRates: { currencyID: string; on: string; rate: string }[];
   units: UnitListItem[];
   /**
    * Head VoucherView per logical voucher_id — the GET /vouchers/{id} source.
@@ -3050,6 +3077,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         batches: [],
         stockGroups: [],
         currencies: [],
+        currencyRates: [],
         // "Nos" is seeded with every company by migration 0005's
         // seed_phase1_voucher_types, and the item form's unit picker reads this
         // list — a fresh company with an empty one could not create an item at
@@ -3143,6 +3171,7 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       godowns: [mainLocation(demoID)],
       stockGroups: [],
       currencies: [],
+      currencyRates: [],
       units: [seedUnit(demoID, "Nos", "Numbers")],
       // Two demo items with DIFFERENT GST rates, so an item invoice keyed
       // against the seeded company exercises the multi-rate grouping rather
@@ -5166,6 +5195,26 @@ function normalisedName(v: string): string {
       if (req.effective_date >= cur.latest_rate_date) {
         cur.latest_rate = req.rate;
         cur.latest_rate_date = req.effective_date;
+      }
+      // ⭐ AND THE HISTORY, which is what the unadjusted-forex report reads. ONE
+      // ROW PER (currency, day), replaced rather than appended — the server has a
+      // unique index on exactly that pair, and its comment says why: a second row
+      // for the same date is not extra information, it is an ambiguity.
+      const prior = c.currencyRates.findIndex(
+        (x) => x.currencyID === cur.id && x.on === req.effective_date,
+      );
+      if (prior >= 0) {
+        c.currencyRates[prior] = {
+          currencyID: cur.id,
+          on: req.effective_date,
+          rate: req.rate,
+        };
+      } else {
+        c.currencyRates.push({
+          currencyID: cur.id,
+          on: req.effective_date,
+          rate: req.rate,
+        });
       }
     },
     async listStockGroups(companyID): Promise<ListStockGroupsResponse> {
@@ -8462,6 +8511,159 @@ function normalisedName(v: string): string {
      * no PDP in this store, so `voucherClass` changes nothing here. That it is the
      * AUTHORITY can only be driven against real cored — see drive-l25-d97.mjs.
      */
+    async getUnadjustedForex(
+      companyID,
+      query?: { as_on?: string },
+    ): Promise<UnadjustedForexResponse> {
+      // ⛔⛔ MODELLED, NOT STUBBED, AND D84 IS THE REASON. A double that returned an
+      // empty list would let every screen test prove that a report with no rows
+      // renders — which is the one case this screen must NOT be tuned for. It nets
+      // the same open-bill universe cored does, prices it from the same rate
+      // history, and reproduces Decision 3's unpriced row.
+      //
+      // ⚠️ IT DOES **NOT** MODEL `ledger_opening_bill`, and that gap PRE-DATES this
+      // method: `setLedgerOpening` and `createLedger` store the opening BALANCE and
+      // never the breakup, so the mock's Outstandings has never carried an opening
+      // bill either. It is named here rather than quietly inherited — a foreign
+      // OPENING bill is exactly §0.2's trap, and the coverage for it lives in the Go
+      // test and in the drive's psql oracle.
+      const c = ensure(companyID);
+      const bound = (query?.as_on ?? "").trim();
+      const pricedOn = bound || new Date().toISOString().slice(0, 10);
+
+      type Grp = {
+        ledgerID: string;
+        ref: string;
+        refType: string;
+        code: string;
+        currencyID: string;
+        units: bigint;
+        foreign: bigint;
+        billRate: string;
+      };
+      const net = new Map<string, Grp>();
+      for (const view of c.views.values()) {
+        if (bound !== "" && (view.voucher_date ?? "") > bound) continue;
+        for (const b of view.bill_allocations) {
+          // FOREIGN references only, and never the On Account bucket — see the
+          // server's own comment on why the exclusion is by NAME.
+          if (!b.currency_id || b.ref_name === ON_ACCOUNT_REF) continue;
+          const ledger = c.ledgers.find((l) => l.id === b.ledger_id);
+          if (!ledger) continue;
+          if (
+            ledger.group !== "Sundry Debtors" &&
+            ledger.group !== "Sundry Creditors"
+          )
+            continue;
+          const key = `${b.ledger_id}\u0000${b.ref_name}\u0000${b.currency_id}`;
+          const cur = net.get(key) ?? {
+            ledgerID: b.ledger_id,
+            ref: b.ref_name,
+            refType: "NEW",
+            code: b.currency ?? "",
+            currencyID: b.currency_id,
+            units: 0n,
+            foreign: 0n,
+            billRate: "0",
+          };
+          // Debit-positive here, and oriented to the party's natural side below —
+          // the same two steps cored takes, in the same order.
+          const sgn = b.dr_cr === "D" ? 1n : -1n;
+          cur.units += sgn * mockMoneyToUnits(b.amount);
+          cur.foreign += sgn * mockMoneyToUnits(b.foreign_amount ?? "0");
+          // ⛔ THE OPENER'S RATE, NEVER AN `AGAINST` ROW'S. An AGAINST carries the
+          // SETTLEMENT-date rate, and taking it would report a plausible rate off
+          // the wrong document.
+          if (b.ref_type !== "AGAINST") {
+            cur.refType = b.ref_type;
+            cur.billRate = b.rate ?? "0";
+          }
+          net.set(key, cur);
+        }
+      }
+
+      // The latest rate ON OR BEFORE the date, or nothing at all.
+      const rateAsOn = (currencyID: string): string | null => {
+        let best: { on: string; rate: string } | null = null;
+        for (const r of c.currencyRates) {
+          if (r.currencyID !== currencyID) continue;
+          if (r.on > pricedOn) continue;
+          if (!best || r.on > best.on) best = { on: r.on, rate: r.rate };
+        }
+        return best ? best.rate : null;
+      };
+
+      const bills: UnadjustedForexBill[] = [];
+      let total = 0n;
+      let unrated = 0;
+      for (const g of net.values()) {
+        const ledger = c.ledgers.find((l) => l.id === g.ledgerID);
+        if (!ledger) continue;
+        const payable = ledger.group === "Sundry Creditors";
+        const book = payable ? -g.units : g.units;
+        const fgn = payable ? -g.foreign : g.foreign;
+        // Step 6's TWO-QUESTION skip: both columns zero means the reference is
+        // closed and its difference has been REALISED.
+        if (book === 0n && fgn === 0n) continue;
+
+        const r = rateAsOn(g.currencyID);
+        let difference = 0n;
+        if (r !== null) {
+          // round(foreign × rate, 4), ONE rounding on the PRODUCT — and the rate is
+          // scaled by 1e10, never quantised to money first (§6.3).
+          // ⛔ ONE ROUNDING, ON THE PRODUCT, AND THE RATE IS NEVER QUANTISED TO
+          // MONEY FIRST (§6.3). `fgn` is money in units of 1e-4 and `parseRate`
+          // returns units of 1e-10, so the product is in 1e-14 and dividing by
+          // 1e10 lands back on money. HALF-UP, to match decimal.Decimal.Round.
+          const scaled = fgn * parseRate(r);
+          const half = MOCK_RATE_SCALE / 2n;
+          const rounded =
+            scaled >= 0n
+              ? (scaled + half) / MOCK_RATE_SCALE
+              : -((-scaled + half) / MOCK_RATE_SCALE);
+          difference = rounded - book;
+          if (payable) difference = -difference;
+          total += difference;
+        } else {
+          unrated++;
+        }
+        bills.push({
+          ledger_id: g.ledgerID,
+          ledger: ledger.name,
+          group: ledger.group,
+          ref_name: g.ref,
+          ref_type: g.refType,
+          currency_code: g.code,
+          foreign_pending: mockUnitsToMoney(fgn),
+          book_value: mockUnitsToMoney(book),
+          difference: r === null ? "0.0000" : mockUnitsToMoney(difference),
+          bill_rate: formatRate(parseRate(g.billRate)),
+          rate_as_on: formatRate(parseRate(r ?? "0")),
+          has_rate_as_on: r !== null,
+        });
+      }
+      // Priced rows first, then by the ABSOLUTE difference — a loss of 50,000 is as
+      // interesting as a gain of 50,000, so sorting signed would bury every loss.
+      bills.sort((a, b) => {
+        if (a.has_rate_as_on !== b.has_rate_as_on)
+          return a.has_rate_as_on ? -1 : 1;
+        const aa = Math.abs(Number(a.difference));
+        const bb = Math.abs(Number(b.difference));
+        if (aa !== bb) return bb - aa;
+        return (
+          a.ledger.localeCompare(b.ledger) || a.ref_name.localeCompare(b.ref_name)
+        );
+      });
+      return {
+        as_on: bound,
+        priced_as_on: pricedOn,
+        bills,
+        total_difference: mockUnitsToMoney(total),
+        unrated_count: unrated,
+        posts_nothing: true,
+      };
+    },
+
     async getPartyOpenBills(
       companyID,
       _voucherClass,

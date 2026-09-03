@@ -2190,6 +2190,105 @@ export interface OutstandingsResponse {
 }
 
 /**
+ * ⭐⭐ T8 STEP 7 — ONE OPEN FOREIGN BILL'S UNREALISED POSITION.
+ *
+ * ⛔ THIS REPORT POSTS NOTHING (Q4 of the multi-currency design memo, and the repo
+ * owner's own answer). The revaluation VOUCHER is deferred; the server says so on
+ * the wire in `posts_nothing` and the screen must say so in those words.
+ */
+export interface UnadjustedForexBill {
+  ledger_id: string;
+  ledger: string;
+  group: string;
+  ref_name: string;
+  /** 'NEW' or 'ADVANCE'. An advance IS revalued — see UnadjustedForexResponse. */
+  ref_type: string;
+  currency_code: string;
+  /**
+   * What is still open in the foreign currency, signed to the party's natural side
+   * exactly as `OutstandingBill.foreign_pending` is. NEGATIVE on an advance held.
+   */
+  foreign_pending: Money;
+  /** The base figure the books carry for the part still open. */
+  book_value: Money;
+  /**
+   * The unrealised gain (positive) or loss (negative), in the books' OWN currency,
+   * and `"0.0000"` when `has_rate_as_on` is false.
+   */
+  difference: Money;
+  /**
+   * ⛔⛔ THE TWO RATES ARE `Rate`, NOT `Money`, AND THIS IS THE ONE PLACE ON THIS
+   * SCREEN WHERE A WRONG CHOICE IS INVISIBLE. They arrive at TEN decimals; putting
+   * either through `parseFixed4` or `formatMoney` gives 0.0033 for 0.0033333333 —
+   * thousands of rupees on a fifty-lakh invoice — and the truncated value
+   * round-trips through its own type perfectly, so nothing fails. Use
+   * `api/rate.ts`'s helpers, never the money ones.
+   *
+   * `bill_rate` is the rate the document was RAISED at. `rate_as_on` is the rate
+   * used to price it.
+   */
+  bill_rate: Rate;
+  rate_as_on: Rate;
+  /**
+   * ⛔ READ THIS, NEVER `rate_as_on`. `"0.0000000000"` is what "no rate was ever
+   * entered for this currency on or before the date" looks like as a decimal, and a
+   * zero rate revalues the whole exposure to nothing — a LOSS of the entire book
+   * value, correctly signed, in the right column, from a rate nobody keyed.
+   *
+   * The row is still listed: an exposure with an unknown rate is still an exposure,
+   * and dropping it is how a reader takes a short report for a small exposure.
+   */
+  has_rate_as_on: boolean;
+}
+
+/**
+ * The unadjusted-forex (unrealised gain/loss) report.
+ *
+ * ⛔⛔ IT COVERS **BOTH** SIDES — receivable and payable — IN ONE REPORT, which is
+ * the opposite call from the `Outstandings` / `Bills Payable` split and is argued
+ * rather than inherited (see migration 0090's header). The subject is the company's
+ * NET exposure to a currency: a $1,000 receivable and a $1,000 payable at one rate
+ * are an exposure of NOTHING, so two reports would show two numbers neither of which
+ * is the position. The screen states that it covers both.
+ *
+ * ⚠️ AN `ADVANCE` IS REVALUED AND `On Account` IS NOT ON THIS REPORT. An advance is
+ * a named reference with one rate on one document and a real book value; `On Account`
+ * is the derived residue of a party's balance over many rates and carries no currency
+ * at all.
+ */
+export interface UnadjustedForexResponse {
+  /**
+   * The date the ROWS are limited to, or `""` when they are not limited at all
+   * (D86 — empty is an ANSWER, not a missing field; read it with `??`, never `||`).
+   */
+  as_on: string;
+  /**
+   * The day every row was PRICED against. ALWAYS populated, including on an
+   * unbounded read. ⚠️ On this report the date genuinely does two jobs and this is
+   * the second one: a revaluation with no rate date is a number with no reference.
+   */
+  priced_as_on: string;
+  bills: UnadjustedForexBill[];
+  /**
+   * The sum of the differences of the rows that could be PRICED.
+   *
+   * ⭐ UNLIKE `OutstandingsResponse`'s foreign column this total IS meaningful: a
+   * DIFFERENCE is in the books' own currency whatever currency produced it, so a
+   * book with dollar and euro bills has one honest total — and receivable and
+   * payable rows OFFSET rather than accumulate.
+   */
+  total_difference: Money;
+  /**
+   * How many listed rows could NOT be priced. ⛔ IT IS THE DISCLOSURE THAT THE TOTAL
+   * IS SHORT — the same argument `on_account_total` exists for on the ageing report,
+   * and the screen must state it rather than leaving a reader to add the column up.
+   */
+  unrated_count: number;
+  /** Always true. Emitted so no client has to hard-code Q4's sentence. */
+  posts_nothing: boolean;
+}
+
+/**
  * Query params for the report endpoints that accept a period / as-on date.
  * The index signature lets these pass directly to the http client's query
  * serializer (which keys arbitrary string→value maps).

@@ -273,6 +273,11 @@ export const AS_AT_ONLY_REPORTS = [
   // list is silently told its F2 period does nothing, which is how a report ships
   // with a period box that changes no figure.
   "Bills Payable",
+  // ---- THE UNADJUSTED-FOREX REPORT (T8 step 7). A POSITION as at a date, and the
+  // date additionally chooses the rate that prices it. ⛔ A name in NEITHER list is
+  // silently told its F2 period does nothing, which is how a report ships with a
+  // period box that changes no figure — and here it would change every figure.
+  "Unadjusted Forex Gain/Loss",
   // Closing stock is a position, not a flow: StockSummaryScreen reads
   // `periodTo` as `asOn` and never reads `periodFrom`. It was in NEITHER list
   // and was therefore told its period did nothing.

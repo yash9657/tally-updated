@@ -141,6 +141,18 @@ func forexReportSetup(t *testing.T) *forexReportEnv {
 // which is how every control in this file is written: one helper, one difference.
 func (e *forexReportEnv) sale(no, ref string, party uuid.UUID, base string, cur uuid.UUID, foreign, rate, due string) {
 	e.t.Helper()
+	e.saleOn(no, ref, party, base, cur, foreign, rate, due, "2025-05-10")
+}
+
+// saleOn is `sale` with the VOUCHER DATE named.
+//
+// ⛔ IT EXISTS BECAUSE `sale`'s LAST ARGUMENT IS THE DUE DATE AND READS LIKE THE
+// VOUCHER DATE. A step-7 test passed "2025-07-20" as the last argument meaning "post
+// it in July", got the hard-coded 2025-05-10, and reported that the report's
+// inclusion bound was BROKEN — a fixture error dressed as a product defect, and the
+// kind that sends the next reader into the SQL.
+func (e *forexReportEnv) saleOn(no, ref string, party uuid.UUID, base string, cur uuid.UUID, foreign, rate, due, date string) {
+	e.t.Helper()
 	alloc := ledger.BillAllocationInput{
 		LedgerID: party, RefName: ref, RefType: ledger.RefNew,
 		DrCr: ledger.Debit, Amount: dec(base), DueDate: due,
@@ -154,7 +166,7 @@ func (e *forexReportEnv) sale(no, ref string, party uuid.UUID, base string, cur 
 	}
 	_, err := e.led.PostVoucher(e.ctx, ledger.VoucherInput{
 		Class: ledger.Sales, PartyLedgerID: party, VoucherNo: no,
-		VoucherDate: "2025-05-10", Party: "export", CreatedBy: "tester",
+		VoucherDate: date, Party: "export", CreatedBy: "tester",
 		Postings: []ledger.PostingInput{
 			post,
 			{LedgerID: e.sales, DrCr: ledger.Credit, Amount: dec(base)},
@@ -163,6 +175,36 @@ func (e *forexReportEnv) sale(no, ref string, party uuid.UUID, base string, cur 
 	})
 	if err != nil {
 		e.t.Fatalf("post the sale %s: %v", no, err)
+	}
+}
+
+// purchase posts a credit purchase opening `ref` on the CREDITOR — the payable
+// mirror of `sale`, and it exists because the netting sign and the revaluation sign
+// are each spelled twice in the product and a fixture that only ever posts
+// receivables can prove neither.
+func (e *forexReportEnv) purchase(no, ref, base, foreign, rate, date string) {
+	e.t.Helper()
+	purchases, err := e.ms.EnsureLedger(e.ctx, "Import Purchases", "Purchase Accounts", "tester")
+	if err != nil {
+		e.t.Fatalf("purchases ledger: %v", err)
+	}
+	if _, err := e.led.PostVoucher(e.ctx, ledger.VoucherInput{
+		Class: ledger.Purchase, PartyLedgerID: e.creditor, VoucherNo: no,
+		VoucherDate: date, Party: "import", CreatedBy: "tester",
+		Postings: []ledger.PostingInput{
+			{LedgerID: purchases, DrCr: ledger.Debit, Amount: dec(base)},
+			{
+				LedgerID: e.creditor, DrCr: ledger.Credit, Amount: dec(base),
+				CurrencyID: e.usd, ForeignAmount: dec(foreign), Rate: dec(rate),
+			},
+		},
+		BillAllocations: []ledger.BillAllocationInput{{
+			LedgerID: e.creditor, RefName: ref, RefType: ledger.RefNew,
+			DrCr: ledger.Credit, Amount: dec(base), DueDate: "2025-07-10",
+			CurrencyID: e.usd, ForeignAmount: dec(foreign), Rate: dec(rate),
+		}},
+	}); err != nil {
+		e.t.Fatalf("post the import invoice %s: %v", no, err)
 	}
 }
 

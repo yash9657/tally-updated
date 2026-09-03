@@ -138,6 +138,37 @@ func FormatRate(d decimal.Decimal) string {
 	return trimTrailingZeros(d.StringFixed(3))
 }
 
+// ExchangeRateDecimals is migration 0080's NUMERIC(19,10), spelled once on this
+// side of the wire. The client spells it once too, as `RATE_DECIMALS` in
+// `api/rate.ts`, and that file's header explains at length why the two are
+// SEPARATE from the money helpers rather than one function with a `decimals`
+// argument: "a shared helper is one default away from the same bug".
+const ExchangeRateDecimals = 10
+
+// FormatExchangeRate renders an EXCHANGE RATE at all ten decimals.
+//
+// ⛔⛔ IT IS NOT `FormatRate` AND IT IS NOT `FormatMoney`, AND CONFUSING IT WITH
+// EITHER IS THE FAILURE T8's §6.3 EXISTS FOR — WHICH ALMOST HAPPENED HERE.
+// `FormatRate` above is a TAX PERCENTAGE formatter: `StringFixed(3)`, because every
+// GST rate in force fits in three decimals. Put an exchange rate through it and
+// 83.6512345678 prints as "83.651". Put one through `FormatMoney` and it prints as
+// "83.65". Both are plausible, both sit in a column headed "Rate", both round-trip
+// through their own type perfectly, and both are wrong for ever.
+//
+// ⭐ THE COST IS MEASURED, NOT IMAGINED. Step 5 quantised the rates to money before
+// the multiplication and the realised gain came out 1,599.9700 instead of 1,600.0046
+// — the right ledger, the right side, the right magnitude. A rate is
+// NUMERIC(19,10) and money is (19,4); a rate is not money.
+//
+// ⚠️ AND THE TRAILING ZEROS ARE **KEPT**, unlike FormatRate's. A rate column whose
+// entries are "83.65" and "75.1234567890" invites a reader to believe the first is
+// exact to two places, and the whole reason this type has ten is that the low
+// decimals are the precision. The client renders all ten for the same reason
+// (`formatRate` in api/rate.ts), so the paper and the screen agree digit for digit.
+func FormatExchangeRate(d decimal.Decimal) string {
+	return d.StringFixed(ExchangeRateDecimals)
+}
+
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------

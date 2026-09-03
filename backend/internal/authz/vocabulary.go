@@ -853,6 +853,51 @@ var KnownReportNames = []string{
 	// any of them: those are internal statements, and this one carries the shape of
 	// a filed statutory return.
 	"gstr9",
+	// ⭐⭐ THE UNADJUSTED-FOREX REPORT (T8 step 7, migration 0090). What every open
+	// FOREIGN bill is worth at the rate as on a date, as against the figure the books
+	// carry it at — the UNREALISED gain or loss. Q4 of
+	// docs/design/t8-multi-currency-model.md makes it a REPORT and not a posting in
+	// v1, per the repo owner's answer, and the screen and F11 say so in those words.
+	//
+	// ⛔ A REPORT NAME BECAUSE THE REFUSAL HAD TO BE WRITABLE, which is the same
+	// sentence every entry below `reconciliation-queue` carries and is D95: migration
+	// 0011 line 249 seeds Data Entry a coarse `allow display report` against a BARE
+	// resource, and this package matches that against ANY `report:NAME` at
+	// specificity 1 — so the name GRANTS the report to every seeded clerk the day it
+	// ships. Migration 0090 writes `disallow display` AND `disallow print` at
+	// specificity 2. It is the THIRTEENTH migration to write this refusal.
+	//
+	// WHAT IT DISCLOSES, since that is the justification: every foreign customer and
+	// supplier, what each still owes or is owed in its own currency, the rate each
+	// document was raised at, and the company's whole unhedged currency exposure as
+	// one signed total. A clerk keying receipts needs none of it.
+	//
+	// ⛔⛔ AND IT IS **ONE** NAME COVERING BOTH SIDES, WHICH IS THE OPPOSITE CALL
+	// FROM `bills-payable` ABOVE AND IS ARGUED RATHER THAN INHERITED. That split
+	// exists because *"this level may see what customers owe us but not what we owe
+	// suppliers"* is a real authority a business writes. It does not reach here:
+	//
+	//   * THE SUBJECT IS THE **NET** EXPOSURE TO A CURRENCY, which is not separable
+	//     by side. A $1,000 receivable and a $1,000 payable at one rate are an
+	//     exposure of NOTHING; two reports would show two numbers neither of which is
+	//     the company's position, so splitting would not restrict information — it
+	//     would destroy the only figure the report exists to produce.
+	//   * AND NOTHING KEYS OFF IT. `bills-payable` ships with no counterweight
+	//     precisely because a clerk keying a Payment NEEDS the payable ageing for the
+	//     bill-wise picker. This report posts nothing and feeds no form.
+	//
+	// So it is denied OUTRIGHT to the seeded Data Entry level, and a tenant that
+	// grants it grants both sides — which the screen states rather than leaving to be
+	// discovered.
+	//
+	// ⚠️ IT **DOES** PRINT, unlike gstr9, the order books, the cost statements and
+	// the budget variance. That is not inconsistency: those refuse because no layout
+	// has been specified and a blank page that looks like a filed return is worse
+	// than a refusal. Here the layout is the ageing report's, one column different,
+	// and a period-end exposure statement exists to be reviewed on paper. ⛔ The
+	// `disallow print` rule is written ANYWAY and is not optional — a report that
+	// cannot be displayed but CAN be printed is a leak with a paper trail.
+	"unadjusted-forex",
 }
 
 // ValidAction reports whether a is a legal rule action (Wildcard included).

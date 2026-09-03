@@ -1032,6 +1032,10 @@ func (s *Server) routes() {
 		r.Get("/profit-and-loss", s.handleProfitAndLoss)
 		r.Get("/day-book", s.handleDayBook)
 		r.Get("/outstandings", s.handleOutstandings)
+		// ⭐⭐ T8 STEP 7 — THE UNADJUSTED-FOREX REPORT. A FLAT LITERAL equal to its PDP
+		// resource name, which is the arrangement `routeAction` and `reportName` cannot
+		// disagree about. The date rides in ?as_on=.
+		r.Get("/unadjusted-forex", s.handleUnadjustedForex)
 		// ⛔⛔ A SECOND FLAT LITERAL ROUTE, AND THE FLATNESS IS THE WHOLE POINT (D94).
 		// `routeAction` maps the literal path to the PDP resource, so a report NAME is
 		// what a rule can name and a QUERY PARAMETER is invisible to it. Serving the

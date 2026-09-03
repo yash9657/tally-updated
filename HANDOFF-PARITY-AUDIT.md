@@ -5674,3 +5674,298 @@ not the T8 gap, for the reason §4.2 measures. ⛔ Its own traps are unchanged: 
 ACL migration with **both** `disallow display` and `disallow print` (D95), the "as on" date is a
 registration point for `TestEveryDateShapedWireFieldIsAccountedForByTheCutoff`, and a rate rendered
 through a money formatter is the silent wrong number §6.3 exists for.
+
+### L38 — 2026-09-03 · T8 STEP 7: WHAT AN OPEN FOREIGN BILL IS WORTH TODAY, AND A MISSING RATE IS NOT A RATE OF ZERO
+
+⭐ **WHAT WAS BUILT.** A report — `Unadjusted Forex Gain/Loss` — that prices every open
+FOREIGN bill at the rate as on a date against the figure the books carry it at, on a screen an
+operator can reach and on paper. **It posts nothing, and the screen, the printed sheet, the wire and
+F11 all say so in those words.** L37's closing line was exact:
+
+```
+grep -rn "unadjusted\|forex" frontend/src/keystroke/types.ts frontend/src/screens/GatewayScreen.tsx
+#   (nothing)   ⛔ re-measured at 145bae9 before the first line was written
+```
+
+⛔ **SO BETWEEN RAISING A $1,000 INVOICE AT 83.65 AND BEING PAID FOR IT, THE RATE MOVED AND THE BOOKS
+DID NOT, AND NO REPORT IN THIS PRODUCT WOULD SAY SO.** Step 5 realises the difference on settlement;
+until this file existed there was nothing between the two events.
+
+#### ⭐⭐ THE ARITHMETIC IS `realisedFor`'s WITH THE FINAL-SLICE BRANCH TAKEN, AND THE ENGINE IS THE ASSERTION
+
+```
+unrealised = round(foreign_pending × rate_as_on, 4) − book_value_carried
+```
+
+Settle the whole remaining balance today at today's rate and step 5's engine derives **exactly** this
+figure: its final slice clears the remaining book value, so `base_cleared` IS `book_value_carried`.
+⛔ **IF THE TWO EVER DISAGREE, ONE OF THE TWO REPORTS IS WRONG AND NOTHING ELSE IN THE PRODUCT WOULD
+SAY WHICH.** So the drive does not assert the invariant — it **posts the report's own prediction
+through the settlement engine's verify path**, which refuses any figure it did not derive itself and
+names both. Measured: `⭐⭐ STEP 5's ENGINE ACCEPTS THE REPORT'S OWN PREDICTION (7996.6707)`, and
+`psql` confirms that figure reached the forex ledger.
+
+⚠️ **AND IT DIFFERENCES THE VALUES, NOT THE RATES**, for Decision 2 of `forex_settlement.go`:
+`foreign × (rate_as_on − bill_rate)` is short by the bill's own rounding residue and would put a
+figure on this report that a settlement could never realise.
+
+#### ⛔⛔ DECISION 3 — A MISSING RATE IS **NOT** A RATE OF ZERO. THIS IS THE THING THE REPORT CANNOT SHIP WITHOUT
+
+A currency with no rate on or before the report date cannot be priced. **Measured with the flag
+ignored, on real books:**
+
+```
+✗ T8/7: …and it is NOT PRICED — got has=true diff=-90000.0000
+```
+
+**A LOSS OF THE ENTIRE BOOK VALUE** — large, plausible, correctly signed, in the right column, from a
+rate nobody entered. `masters.RateAsOn` returns `(zero, false, nil)` for this case and **the `false`
+is the whole answer**; a report reading only the decimal publishes the zero.
+
+⛔ **THE ROW IS STILL LISTED.** A bill whose rate is unknown is still an EXPOSURE, and dropping it is
+how a reader takes a short report for a small exposure. It is listed, unpriced, excluded from the
+total, and counted in `unrated_count` — which the screen renders as a sentence, the way `onAccountLine`
+states the ageing report's gap. ⚠️ **On the printed sheet its rate cell says
+`no rate on/before this date` rather than being blank or zero:** a blank reads as "the rate is 1", a
+zero reads as a rate that was entered and is zero, and either makes the empty difference beside it
+look like a position that has not moved — the opposite of the truth.
+
+#### ⛔⛔ ONE REPORT NAME COVERING BOTH SIDES — THE OPPOSITE CALL FROM D94, ARGUED RATHER THAN INHERITED
+
+`Outstandings` and `Bills Payable` are two names because the PDP decides on the report NAME and a
+query parameter is invisible to it. **That argument does not reach here, for two reasons:**
+
+1. **THE SUBJECT IS THE NET EXPOSURE TO A CURRENCY, WHICH IS NOT SEPARABLE BY SIDE.** A $1,000
+   receivable and a $1,000 payable at one rate are an exposure of **NOTHING**. Two reports would show
+   two numbers neither of which is the company's position — so splitting would not restrict
+   information, it would **destroy the only figure the report exists to produce.**
+2. **NOTHING KEYS OFF IT.** `bills-payable` ships with no counterweight precisely because a clerk
+   keying a Payment NEEDS the payable ageing for the bill-wise picker. This report posts nothing and
+   feeds no form, so denying it costs no operator any work.
+
+⚠️ **SO A TENANT THAT GRANTS IT GRANTS BOTH SIDES, AND THE SCREEN SAYS SO** — `receivable AND
+payable`, in the caption, because a reader who assumed receivables only would read a NETTED total as
+a receivable figure.
+
+#### ⭐ WHAT IS AND IS NOT REVALUED, AND THE MEMO'S NOTE IS ABOUT Q3
+
+The memo says *"ADVANCE and ON_ACCOUNT have no bill rate to difference against … they realise
+nothing until they are allocated"*. ⭐ **THAT IS ABOUT REALISED, AND IT SAYS SO IN ITS OWN WORDS.** An
+unrealised difference is measured against the **book value carried**, not against a bill's historical
+rate, so:
+
+- **A foreign `ADVANCE` IS revalued.** It is a named reference with one rate on one document and a
+  real book value; $100 received at 83.65 and still held at 88.45 is a genuine ₹480 exposure and
+  omitting it understates the position. The row is labelled `(advance)` on the screen, because
+  "ADV-1" beside a negative figure invites a reader to think a customer is overpaid on an invoice.
+  ⚠️ **This is a design decision taken in step 7, flagged rather than folded in.**
+- **`On Account` is NOT on this report.** ⛔ And the exclusion is load-bearing for exactly one case,
+  **measured**: the DERIVED residue cannot reach this query at all (it is computed from `posting`,
+  and this query reads `bill_allocation` and `ledger_opening_bill`), so what the filter catches is an
+  **explicit** `ON_ACCOUNT` allocation carrying a currency. Reverting the line puts
+  `Walk-In Exports / On Account USD diff=-307.0741` on the page — **a partial revaluation of a bucket
+  Outstandings presents as ONE base figure**, which ties to nothing on either page.
+
+#### ⛔ THE MIGRATION TOOK **0090** AND NOT T8's OWN RESERVED 0081–0084, AND THE REASON IS APPLY ORDER
+
+`PLAN-TALLY-PARITY.md` §2.5's `⛔ DO NOT TAKE THESE` was always addressed to other lanes — this IS
+T8 — so the number is 0090 for a different reason entirely. `migrations.go` applies files in
+`sort.Strings` order and the **last** `CREATE OR REPLACE FUNCTION seed_company_auth_defaults` wins,
+so a body at 0081 is overwritten on every fresh database by 0086's and then 0087's: sixteen PERFORMs,
+none of them T8's, and the rules **would not exist for any new company.** ⛔ That is exactly the
+defect **0071** exists to repair.
+
+⭐ **THE RULE, WRITTEN INTO 0090's HEADER AND INTO §2.5: a file that RESTATES THE SEEDER takes a
+number at the END; a file that only creates a TABLE may take a reserved one.** T8 added no table
+after 0080 across steps 4–7, so **0081–0084 are now recorded as permanently unneeded** rather than
+reserved, and §2.5 was updated in place.
+
+⚠️ **AND THE TWO COMMANDS §4.2 WARNED ABOUT WERE USED IN THEIR CORRECTED FORM.** `grep -ln … | sort
+| tail -1` gave `0087_gstr9_acl.sql` stably; the function-body-scoped `awk` census gave **0087 → 16**
+where a whole-file `grep -c` gives 17 (it counts the recipe inside a comment). **0090 → 17**, and the
+comment-stripped diff of the seeder body against 0087 is **exactly one line**:
+
+```bash
+diff <(strip 0087_gstr9_acl.sql) <(strip 0090_unadjusted_forex_acl.sql)
+#   54a55
+#   >     PERFORM seed_data_entry_unadjusted_forex_rules(p_company_id);
+```
+
+**Measured after apply: 321/321 Data Entry levels covered, both rows.** `migrations/seeder_census_test.go`
+green.
+
+#### ⛔⛔ THE ACL ARM WAS PROVED RED-TO-GREEN ON A LIVE TENANT, WHICH IS THE ONLY WAY D95 CAN BE PROVED
+
+The migration is already applied and cannot be un-applied, so the proof is the other way round:
+
+```
+WITH 0090's rules present  (2 rows): clerk = 403
+WITH THEM DELETED          (0 rows): clerk = 200   ← 0011's coarse grant, unopposed (D95)
+```
+
+⭐ **AND THE DRIVE CARRIES TWO CONTROLS THAT MAKE THAT 403 A DECISION ABOUT THIS REPORT RATHER THAN
+ABOUT THIS CLERK:** the same token reads the Trial Balance (200) and the AGEING NEXT DOOR (200).
+
+⚠️ **THE `print` ARM IS PRE-EXISTING AND IS LABELLED AS SUCH IN THE DRIVE** — 0038 seeds no coarse
+print grant, so print was already default-denied and 0090's print row changes nothing observable
+today. ⭐ **BUT IT MATTERS MORE HERE THAN IN ANY EARLIER FILE, AND THAT IS NEW:** every other report
+with an ACL counterweight answers **501** on the print path, so its `disallow print` row guards a page
+that does not exist. **This report actually renders** — Owner 200, clerk 403, on a route that
+produces a real PDF — so that row is the only thing between one convenient `allow print *` and a PDF
+of the company's entire currency exposure.
+
+#### ⛔ FOUR REGISTRATION POINTS, AND THREE OF THEM FAILED THE BUILD RATHER THAN SHIPPING
+
+⭐ **THE ASYMMETRY §5 RECORDS HELD EXACTLY, AND THE GUARDED ONES EARNED THEIR KEEP:**
+
+| Point | How it presented |
+|---|---|
+| `authz.KnownResources` (the PDP vocabulary) | added with its reasoning comment; no failure — the token was added first |
+| `routeAction` arm | ⛔ **UNGUARDED, and it ships a 403.** Written deliberately (redundant with the flat-literal arm) and **PROBE 1 of the drive is that registration**, because nothing else can catch it |
+| `TestPrintedReportLayoutsGolden` | ⛔ **FAILED THE BUILD** — `total_report_names 32 → 33`, `unadjusted-forex` moved into `prints_a_layout`. The frontend reads that JSON to decide whether Alt+E offers PDF |
+| `TestTheUnimplementedReportsAreStillGovernableAndSaySo` | ⛔ **FAILED THE BUILD** — it *requires* a 501 for every report not in its `implemented` set, and this one returned a real PDF |
+| `printDisallowedBySeededMigrations` | ⛔ **FAILED THE BUILD** — *"the seeded Data Entry level carries 25 `disallow print` rows, want 24"*. The list is a hand-maintained PROMISE with a named disclosure per row, and it now carries this report's |
+| `TestEveryDateShapedWireFieldIsAccountedForByTheCutoff` | ⭐ **NO ENTRY NEEDED, AND THE HANDOFF'S PREDICTION WAS WRONG — MEASURED.** §5 said *"STEP 7 HAS ONE: the report's 'as on' date"*. It does not: that test parses package `server` for **STRUCT FIELDS** carrying a date-shaped json tag, and `as_on` is read off the QUERY STRING — as it is on `/outstandings`, `/stock-summary` and `/cash-flow`, none of which has an entry either. A request struct here WOULD have needed one. ⚠️ And the cutoff would not judge it regardless: `cutoffDeny` gates on `Action.IsWrite()` and this is a Display |
+| `ScreenKind` (`defaultScreens.tsx`) | ⛔ **UNGUARDED, and it ships D22** — a name in `REPORT_NAMES` with no component renders *"not available in this build"* over a report that is built and served. `browse-t8-unadjusted-forex.mjs`'s first probe is that door |
+
+⭐ **AND THE EXHAUSTIVE `Record<ReportName, …>` MAPS DID THEIR JOB SILENTLY:** `REPORT_SLUGS`,
+`REPORT_PERIOD_SHAPE` and the typed `CoredClient` all refused to compile until they had entries, and
+`tsc` named `getUnadjustedForex` missing from the mock — which is how the double could not be
+forgotten.
+
+#### ⛔ A NEW FORMATTER, BECAUSE `printing.FormatRate` IS A TAX PERCENTAGE AND ALMOST SHIPPED AS AN EXCHANGE RATE
+
+`printing.FormatRate` is `StringFixed(3)` — every GST rate in force fits in three decimals. **The
+printed sheet reached for it and would have printed `83.651`.** `printing.FormatExchangeRate` now
+renders all ten, spelling `ExchangeRateDecimals` once on this side of the wire as `api/rate.ts`
+spells `RATE_DECIMALS` on the other. ⚠️ **AND IT KEEPS TRAILING ZEROS, unlike `FormatRate`'s:** a
+column whose entries are `83.65` and `75.1234567890` invites a reader to believe the first is exact
+to two places, and the whole reason the type has ten is that the low decimals ARE the precision.
+
+#### MUTATION-PROVED ON EVERY LAYER, WITH THE NUMBER THE REAL SYSTEM PRODUCED
+
+| Revert | Predicted → **observed** |
+|---|---|
+| a missing rate is read as ZERO (Decision 3) | `diff=`**`-83651.2300`** in Go / **`-90000.0000`** on the wire — the whole book value as a loss ✅ |
+| the payable sign is not flipped | ⛔ **THIS ONE WAS A REAL BUG, NOT A MUTATION** — see the correction below. `+4800.0046` instead of `−4800.0046`, total `9600.0092` instead of zero ✅ |
+| the rate is quantised to money before the multiplication (§6.3) | `3840.0037` → **`3839.9760`** ✅ |
+| the rate lookup ignores the as-on date | the rate becomes `99`, and a **LOSS of 3651.23 becomes a GAIN of 15348.77** — sign-flipped ✅ |
+| only `bill_allocation` is read (§0.2) | the foreign OPENING bill is not on the report at all ✅ |
+| `On Account` is not excluded | `On Account USD diff=-307.0741` — a fragment of a collapsed bucket, revalued ✅ |
+| the skip becomes base-only | the half-keyed bill is **0 rows** — $400 off the exposure report ✅ |
+| `is_opener` also matches `AGAINST` rows | the bill rate becomes the **settlement** rate `85.2512345678` — a plausible rate off the wrong document ✅ |
+| the wire renders rates at FOUR decimals | `"83.6512"`, `"75.1235"`, `"88.4512"` ✅ |
+| the screen renders rates through `formatMoney` | `Unable to find an element with the text: 83.6512345678` ✅ |
+| an unpriced row shows its zero rate | `Unable to find an element with the text: no rate on file` ✅ |
+| the scope line drops Q4's sentence | `expected 'Open foreign bills as on 2026-08-31, …' to match /REPORTED AND NOT POSTED/` ✅ |
+| the unpriced disclosure is not rendered | `Unable to find an element by: [data-testid="uf-unrated"]` ✅ |
+| 0090's two `acl_rule` rows deleted | clerk **403 → 200** on a live tenant ✅ |
+
+⛔ **AND THE GATE ITSELF WAS MUTATION-PROVED TWICE, cored rebuilt and restarted and verified fresh by
+process start time each time:** the four-decimal rate revert took the drive **43/43 → 37/43 with the
+6 reds exactly the rate probes**; removing Decision 3 took it **43/43 → 41/43 with the 2 reds exactly
+the unpriced-row probes.** Every figure, control and `psql` oracle stayed green in both, which is
+correct: only the one thing was removed.
+
+> #### ⛔⛔ A CORRECTION TO MY OWN COMMENT, WRITTEN BEFORE IT WAS MEASURED
+>
+> The first draft of the difference calculation claimed that orienting the figures to the party's
+> natural side made the sign come out right on both sides **"with no second branch, which is the one
+> that gets forgotten"**. ⚠️ **IT WAS MEASURED WRONG BY THE TEST WRITTEN TO CHECK IT:** orienting
+> makes an open payable POSITIVE, so the expression then GAINS on both sides —
+> `the PAYABLE's difference is 4800.0046, wanted -4800.0046` and `the total is 9600.0092, wanted
+> zero`. **Wrong by TWICE the figure, with every number on the page still looking like money**, which
+> is `realisedFor`'s own stated failure mode. The branch is now there, the comment says it was
+> claimed unnecessary and measured otherwise, and `realisedFor`'s reasoning is quoted beside it.
+>
+> ⭐ **AND A SECOND, SMALLER ONE: `decimal.Decimal.String()` DROPS A TRAILING ZERO.** A test
+> asserting `BillRate.String() == "75.1234567890"` failed on a rate that was exactly right
+> (`"75.123456789"`). Rates are compared as **VALUES** in Go now, and the ten-decimal RENDERING is
+> asserted where it actually lives — on the wire, in the drive, and on the page, in the browser probe.
+>
+> ⚠️ **AND A FIXTURE ERROR THAT LOOKED LIKE A PRODUCT DEFECT.** `sale()`'s last argument is the DUE
+> date and reads like the voucher date; a step-7 test passed `"2025-07-20"` there meaning "post it in
+> July", got the helper's hard-coded `2025-05-10`, and **reported that the report's inclusion bound
+> was broken.** `saleOn()` now names the voucher date, and its comment says why it exists.
+
+#### THE DRIVES — 43/43 on the wire, 9/9 in a browser
+
+`frontend/scripts/drive-t8-unadjusted-forex.mjs` (new, 43 probes) and
+`frontend/scripts/browse-t8-unadjusted-forex.mjs` (new, 9 probes). Beyond the figures they pin:
+
+- ⛔ **PROBE 1 IS THE ROUTE REGISTRATION**, because nothing else can catch it — and the drive's own
+  header records that `no such route` (a stale cored) and `unmapped route: access denied` (a missing
+  arm) are **different failures**, which is step 5's lesson carried forward.
+- ⭐ **FOUR DISTINCT RATES ACROSS THE FILE** — two bill rates, a settlement rate and the revaluation
+  rate — plus a rate dated AFTER the report date that must not be used, and an earlier one that must
+  be used when the report is asked as at an earlier day. Measured: as at `2025-07-31` the same
+  position is a **LOSS of 2920.9840** and as at `2025-08-31` a **GAIN of 3840.0037**. One book, two
+  dates, two honest answers.
+- ⛔ **A CURRENCY WITH NO RATE AT ALL (EUR) IS IN THE FIXTURE ON PURPOSE**, and the total is asserted
+  to equal the priced rows' own sum.
+- ⭐ **THE BROWSER PROBE IS THE ONLY THING THAT CATCHES D22** — `Alt+G` reaching the report BY NAME —
+  and the only thing that proves cored's ten decimals SURVIVE to the page. vitest proves the screen
+  renders what a faithful double hands it; the drive proves cored emits ten decimals; **neither
+  proves the two meet.**
+- ⚠️ **AND THE BROWSER PROBE READS THE DEFAULT UNBOUNDED VIEW RATHER THAN DRIVING F2**, because typing
+  a date into the F2 "To" field produced `61231-02-02` and the screen showed
+  `unavailable (422). reporting: invalid as-on date "61231-02-02"`. ⭐ The server's refusal was
+  correct and named the bad date, which is the only reason that was diagnosable in one run — but **a
+  probe whose FIXTURE fails reads as a product defect**, so the interaction is avoided rather than
+  worked around. **Driving F2 properly is its own probe and is not written.**
+
+#### THE MOCK WAS GIVEN A RATE HISTORY, BECAUSE `latest_rate` WAS TOO LOOSE TO BE A DOUBLE
+
+`CurrencyListItem` carries only the LATEST rate, which is all the currency-list screen needs. This
+report asks *"the latest rate ON OR BEFORE this date"* and its whole Decision 3 turns on whether the
+answer **exists** — so a double answering with the latest rate whatever date it was asked for would
+price a report from a rate entered after the date it claims to be as at, and **would never produce the
+unpriced row this report has to disclose.** That is D84's class exactly. `MockCompany.currencyRates`
+now mirrors the `currency_rate` table, one row per (currency, day), replaced rather than appended.
+
+⚠️ **ONE PRE-EXISTING LOOSENESS IS NAMED RATHER THAN WIDENED, AND IT IS L37's:** the mock still does
+not model `ledger_opening_bill` in either report. `createLedger` and `setLedgerOpening` store the
+opening BALANCE and never the breakup, so the mock's Outstandings has never carried an opening bill
+either. **It is the gap L37 predicted step 7 would meet, and step 7 met it.** Coverage for the
+opening branch lives in the Go test and in the drive's `psql` oracle.
+
+#### ⚠️ WHAT WAS DELIBERATELY NOT BUILT, AND WHY EACH IS NOT AN OMISSION
+
+1. **NO REVALUATION VOUCHER.** Q4 defers it and §2.2 of the memo proves it could only ever BE a
+   voucher (postings are immutable), so deferring costs no design debt — v1's schema is the schema it
+   would need. ⛔ **There is no POST route anywhere in the package for this name**, which is what
+   makes "it posts nothing" a shape rather than a claim.
+2. **NO PER-CURRENCY SUB-TOTALS.** The difference is already in the books' own currency whatever
+   produced it, so ONE total is honest — the contrast with Outstandings' base-only total is stated in
+   both files.
+3. **NO F2-DRIVEN BROWSER PROBE**, itemised above with the measured reason.
+4. **STEP 8 IS NOT STARTED.** No screen offers the gain/loss ledger setting and no screen keys a
+   foreign voucher or a foreign settlement — both are still API only. ⭐ **The roster row therefore
+   stays `off` and the `partial`-vs-split question is still step 8's** — but its note was updated the
+   moment step 7 landed, because *"there is no unadjusted-forex report"* had stopped being true.
+
+#### THE GATES
+
+`go build` · `go vet` · `go test ./... -count=1` all green · `test_residue.sh` **OK, no residue** ·
+`migrations` (seeder census) green · `tsc --noEmit` clean · `vitest` **1882 passed / 117 files**
+(from 1875 / 117) · `verify:demo` **37/37 UNCHANGED** ·
+**`drive-t8-unadjusted-forex` 43/43 (new)** · **`browse-t8-unadjusted-forex` 9/9 (new)** ·
+`drive-t8-outstandings-forex` **46/46** · `browse-t8-outstandings-forex` **7/7** ·
+`drive-t8-forex-settlement` **35/35** · `drive-t8-forex-entry` **50/50** · `drive-payroll` **38/38** ·
+`drive-t12-gstr9` **33/33** · `drive-t4-slice2b-matching` **35/35** · `drive-t11-budgets` **36/36** ·
+`drive-year-end-close` **16/16 wire + 8/8 browser** · `corpora/validate.py` **OK** · register
+**117 · 107 · 6 · 0 · 4**, unchanged. **Nothing deferred within step 7 beyond the four items above.**
+
+⭐ **NEXT IS STEP 8 — F11, THE ENTRY FIELD AND THE ROSTER ROW** (§4.3 of
+`HANDOFF-T8-STEPS-6-TO-8.md`), and it is the last of T8. Steps 6 and 7 leave it three things:
+
+- ⛔ **`partial` STILL DOES NOT EXIST** in `FeaturesScreen`'s `State` union (`"always" | "on" |
+  "server" | "off"`), and Q4 asks for it by name. Add it with its rendering AND its legend, or split
+  the row the way step 3 did for the masters — **and say which was chosen.**
+- ⭐ **THE SETTLEMENT FORM'S DATA IS ALL THERE NOW.** The open-bills picker read carries
+  `currency_code`, `foreign_pending` and `currency_conflict` (step 6), and `api/rate.ts` has
+  `normaliseRate` and `foreignToBase`. §4.3's prediction that steps 6 and 8 meet at that read was
+  exact.
+- ⛔ **AND §6.1's QUESTION IS STEP 8's TO ANSWER FOR A FORM:** *what does an alter through this form
+  omit?* A currency field that does not round-trip the triple is defect number nine.
+  `TestReadBackAudit_ForeignCurrencySurvivesAnAlter` is the worked example.

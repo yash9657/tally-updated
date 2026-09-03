@@ -1227,6 +1227,25 @@ func TestTheUnimplementedReportsAreStillGovernableAndSaySo(t *testing.T) {
 		// printed forms have always shared `outstandingKindParam`, so both directions
 		// printed from one parser long before either had its own name.
 		"bills-payable": true,
+		// ⭐⭐ THE UNADJUSTED-FOREX STATEMENT PRINTS (T8 step 7), AND IT BELONGS IN
+		// `implemented` FOR `bills-payable`'s REASON RATHER THAN AGAINST THE DEFERRED
+		// SET's. Every deferred name below is deferred because its printed form would
+		// be a DIFFERENT DOCUMENT from the screen the slug names. This one is the
+		// AGEING SHEET with one column swapped: the same open-bill universe, the same
+		// party rows, the same base figures, plus the rate each document was raised at
+		// and the rate as on the date.
+		//
+		// ⛔ AND A PERIOD-END EXPOSURE STATEMENT IS A THING PEOPLE PUT ON PAPER, which
+		// is the argument the deferred names cannot make. ⚠️ ITS SUBTITLE CARRIES Q4's
+		// SENTENCE — "THIS DIFFERENCE IS REPORTED AND NOT POSTED" — because paper
+		// outlives the screen it came from and a table of gains and losses on company
+		// letterhead reads as posted unless it says otherwise.
+		//
+		// ⚠️ PRINTING IT IS STILL REFUSED TO THE SEEDED DATA ENTRY LEVEL by migration
+		// 0090's `disallow print report:unadjusted-forex`. Implemented and governable
+		// are different questions, and a report that cannot be displayed but CAN be
+		// printed is a leak with a paper trail.
+		"unadjusted-forex": true,
 	}
 	deferred := 0
 	for _, name := range authz.KnownReportNames {
@@ -2032,6 +2051,26 @@ var printDisallowedBySeededMigrations = []struct{ resource, discloses string }{
 			"the months in which this company's filed GSTR-1s and GSTR-3Bs disagree with " +
 			"its own books — i.e. exactly which periods would not survive a departmental " +
 			"look, and by how much"},
+	// ---- THE UNADJUSTED-FOREX REPORT (T8 step 7, migration 0090).
+	//
+	// ⛔⛔ THE ONLY ENTRY IN THIS TABLE WHOSE `disallow print` ROW GUARDS A ROUTE THAT
+	// ACTUALLY RENDERS. Every other row above — the order books, the cost statements,
+	// the forecast plane, the budget variance, the annual return — answers 501 on the
+	// print path, so its refusal protects a page that does not exist and is pure
+	// durability. THIS REPORT PRINTS. One convenient `allow print *` would hand over a
+	// real PDF, not a 501, which makes this row the first in the list with something
+	// immediate behind it.
+	//
+	// ⚠️ AND THE DISCLOSURE HAS A SHAPE NONE OF THE OTHERS DO: it is not what the
+	// company earns, owes, holds or planned, but THE TERMS IT TRANSACTED ON — the rate
+	// on each individual document, to ten decimals — beside its whole unhedged
+	// position as one signed figure. The tds-register entry above leaks WHO the company
+	// trades with; this leaks the PRICES it agreed with the foreign half of them.
+	{"report:unadjusted-forex",
+		"every foreign customer and supplier, what each still owes or is owed in its own " +
+			"currency, the exchange rate each document was raised at, and the company's " +
+			"whole unhedged currency exposure as one signed total — and, unlike every " +
+			"other refusal on this list, as a PDF that really renders"},
 }
 
 // TestAnOwnerWritingOneConvenientAllowPrintStarStillCannotHandOverTheWageBill is

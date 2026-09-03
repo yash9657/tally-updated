@@ -12,6 +12,7 @@ import {
   BillsPayableScreen,
   outstandingsScopeLine,
   onAccountLine,
+  UnadjustedForexScreen,
 } from "./ReportScreens";
 import { createMockClient } from "../../api";
 import type { CoredClient } from "../../api";
@@ -774,5 +775,168 @@ describe("Outstandings reports the foreign half of a foreign bill", () => {
     // A disclosure that fires on the normal case is noise, and noise is how a real
     // disclosure stops being read.
     expect(screen.queryByText(/two currencies/)).toBeNull();
+  });
+});
+
+/**
+ * ⭐⭐ T8 STEP 7 — THE UNADJUSTED-FOREX SCREEN.
+ *
+ * ⛔ TWO OF THESE TESTS ARE THE WHOLE POINT OF THE FILE AND NEITHER IS ABOUT A
+ * LAYOUT: that the RATES survive to the page at ten decimals, and that a bill nobody
+ * can price says so rather than showing a zero. Both are failures that render
+ * perfectly and are wrong for ever.
+ */
+describe("The unadjusted-forex screen", () => {
+  const oneOfEach = () =>
+    vi.fn(async () => ({
+      as_on: "2026-08-31",
+      priced_as_on: "2026-08-31",
+      bills: [
+        {
+          ledger_id: "led-fx",
+          ledger: "Globex LLC",
+          group: "Sundry Debtors",
+          ref_name: "EXP-1",
+          ref_type: "NEW",
+          currency_code: "USD",
+          foreign_pending: "800.0000",
+          book_value: "66920.9840",
+          difference: "3840.0037",
+          bill_rate: "83.6512345678",
+          rate_as_on: "88.4512345678",
+          has_rate_as_on: true,
+        },
+        {
+          ledger_id: "led-eur",
+          ledger: "Bonn Werke GmbH",
+          group: "Sundry Creditors",
+          ref_name: "EUR-1",
+          ref_type: "NEW",
+          currency_code: "EUR",
+          foreign_pending: "1000.0000",
+          book_value: "90000.0000",
+          difference: "0.0000",
+          bill_rate: "90.0000000000",
+          rate_as_on: "0.0000000000",
+          has_rate_as_on: false,
+        },
+      ],
+      total_difference: "3840.0037",
+      unrated_count: 1,
+      posts_nothing: true,
+    }));
+
+  it("renders BOTH rates at ten decimals, not as money", async () => {
+    renderReport(UnadjustedForexScreen, { getUnadjustedForex: oneOfEach() });
+    await waitFor(() => expect(screen.getByText(/Globex LLC/)).toBeTruthy());
+
+    // ⛔⛔ THE ASSERTION THIS FILE EXISTS FOR. `formatMoney` on 83.6512345678 prints
+    // "83.65"; it sits happily in a column headed "Bill rate", it round-trips
+    // through its own type perfectly, and it is wrong for ever. A rate is
+    // NUMERIC(19,10) and money is (19,4).
+    expect(screen.getByText("83.6512345678")).toBeTruthy();
+    expect(screen.getByText("88.4512345678")).toBeTruthy();
+    expect(screen.queryByText("83.65")).toBeNull();
+    expect(screen.queryByText("88.45")).toBeNull();
+
+    // The money columns ARE money, so the two conventions are visibly different on
+    // one page — which is the only way a reader can tell them apart.
+    expect(screen.getByText("66,920.98")).toBeTruthy();
+    // ⚠️ getAllByText: the one priced row's difference IS the total, which is the
+    // report working correctly, so the figure legitimately appears twice.
+    expect(screen.getAllByText("3,840.00").length).toBe(2);
+  });
+
+  it("says a bill it cannot price is unpriced, and never shows a zero rate", async () => {
+    renderReport(UnadjustedForexScreen, { getUnadjustedForex: oneOfEach() });
+    await waitFor(() => expect(screen.getByText(/Bonn Werke/)).toBeTruthy());
+
+    // ⛔ NOT "0.0000000000", WHICH IS WHAT THE WIRE CARRIES FOR AN ABSENT RATE. A
+    // zero in a rate column reads as a rate that was entered and is zero, and the
+    // empty difference beside it then reads as a position that has not moved —
+    // the opposite of the truth, which is that nobody can value it.
+    expect(screen.getByText("no rate on file")).toBeTruthy();
+    expect(screen.queryByText("0.0000000000")).toBeNull();
+    // And the disclosure that the total is SHORT.
+    expect(screen.getByTestId("uf-unrated").textContent).toMatch(
+      /could NOT be priced/,
+    );
+    // ⭐ THE TOTAL IS THE PRICED ROWS ONLY, and it must not have absorbed a zero
+    // for the unpriced one as though that were a real revaluation of nothing.
+    expect(screen.getByTestId("uf-total").textContent).toBe("3,840.00");
+  });
+
+  it("states that the difference is REPORTED AND NOT POSTED, in those words", async () => {
+    renderReport(UnadjustedForexScreen, { getUnadjustedForex: oneOfEach() });
+    await waitFor(() => expect(screen.getByTestId("uf-scope")).toBeTruthy());
+    const scope = screen.getByTestId("uf-scope").textContent ?? "";
+    // Q4 requires the product to say so on the screen and in F11.
+    expect(scope).toMatch(/REPORTED AND NOT POSTED/);
+    expect(scope).toMatch(/no voucher is created/);
+    // ⚠️ AND THAT IT COVERS BOTH SIDES — a reader who assumed receivables only
+    // would read a NETTED total as a receivable figure.
+    expect(scope).toMatch(/receivable AND payable/);
+    // ⛔ AND WHAT THE DATE DID. On this report it does two jobs.
+    expect(scope).toMatch(/priced at the rate as on 2026-08-31/);
+  });
+
+  it("hides the unpriced disclosure when every row could be priced", async () => {
+    // The inverse control: a permanent caption about a case that does not apply is
+    // noise, and noise is how a real disclosure stops being read.
+    const allPriced = vi.fn(async () => {
+      const base = await oneOfEach()();
+      return {
+        ...base,
+        bills: [base.bills[0]!],
+        unrated_count: 0,
+      };
+    });
+    renderReport(UnadjustedForexScreen, { getUnadjustedForex: allPriced });
+    await waitFor(() => expect(screen.getByText(/Globex LLC/)).toBeTruthy());
+    expect(screen.queryByTestId("uf-unrated")).toBeNull();
+  });
+
+  it("says NO DATE LIMIT when the caller named no date (D86)", async () => {
+    const unbounded = vi.fn(async () => {
+      const base = await oneOfEach()();
+      // ⛔ EMPTY IS AN ANSWER, NOT A MISSING FIELD. `priced_as_on` stays populated,
+      // because an unbounded report is still priced against SOME day and a
+      // revaluation with no rate date is a number with no reference.
+      return { ...base, as_on: "" };
+    });
+    renderReport(UnadjustedForexScreen, { getUnadjustedForex: unbounded });
+    await waitFor(() => expect(screen.getByTestId("uf-scope")).toBeTruthy());
+    const scope = screen.getByTestId("uf-scope").textContent ?? "";
+    expect(scope).toMatch(/NO DATE LIMIT/);
+    expect(scope).toMatch(/priced at the rate as on 2026-08-31/);
+  });
+
+  it("marks an ADVANCE as one, because it is revalued and is not a bill", async () => {
+    const withAdvance = vi.fn(async () => {
+      const base = await oneOfEach()();
+      return {
+        ...base,
+        bills: [
+          {
+            ...base.bills[0]!,
+            ref_name: "ADV-1",
+            ref_type: "ADVANCE",
+            foreign_pending: "-100.0000",
+            book_value: "-8365.1200",
+            difference: "-480.0035",
+          },
+        ],
+        total_difference: "-480.0035",
+        unrated_count: 0,
+      };
+    });
+    renderReport(UnadjustedForexScreen, { getUnadjustedForex: withAdvance });
+    await waitFor(() => expect(screen.getByText(/ADV-1/)).toBeTruthy());
+    // ⭐ AN ADVANCE **IS** REVALUED — it is a named reference with one rate on one
+    // document and a real book value — but it is not money owed on an invoice, and a
+    // row reading "ADV-1" beside a negative exposure invites the reader to think a
+    // customer is overpaid on a bill. The label says which it is.
+    expect(screen.getByText(/ADV-1 \(advance\)/)).toBeTruthy();
+    expect(screen.getByTestId("uf-total").textContent).toBe("-480.00");
   });
 });

@@ -180,6 +180,16 @@ func (s *Server) handlePrintReport(w http.ResponseWriter, r *http.Request) {
 		table, built = s.printPayrollPayslip(ctx, w, r)
 	case "bank-reconciliation":
 		table, built = s.printBankReconciliation(ctx, w, r, companyID)
+	// ⭐ T8 STEP 7 PRINTS, unlike gstr9, the order books, the cost statements and the
+	// budget variance, which all reach the `default` arm below. That is not
+	// inconsistency: those refuse because no layout has been SPECIFIED, and a blank
+	// page that looks like a filed return is worse than a refusal. Here the layout is
+	// the ageing report's with one column different, and a period-end exposure
+	// statement exists to be reviewed on paper. ⛔ `disallow print` is still written by
+	// migration 0090 — a report that cannot be displayed but CAN be printed is a leak
+	// with a paper trail.
+	case "unadjusted-forex":
+		table, built = s.printUnadjustedForex(ctx, w, r, companyID)
 	default:
 		// Authorized, and honestly refused. See the file header for the full list
 		// and for why these are 501 rather than absent routes.
@@ -1463,4 +1473,116 @@ func (s *Server) printPayrollPayslip(ctx context.Context, w http.ResponseWriter,
 		Rows:   rows,
 		Footer: footer,
 	}, true
+}
+
+// ---------------------------------------------------------------------------
+// T8 step 7. The unadjusted-forex statement.
+// ---------------------------------------------------------------------------
+
+// printUnadjustedForex is the printed unrealised gain/loss statement.
+//
+// ⛔ THE SUBTITLE SAYS IT POSTS NOTHING, ON EVERY SHEET, and that is not decoration.
+// Q4 requires the product to say so "on the screen and in F11"; paper is the surface
+// where the sentence matters most, because a printout outlives the screen it came
+// from and a table of gains and losses on company letterhead reads as posted unless
+// it says otherwise. The same sheet also has to say what date PRICED it — a
+// revaluation without its rate date is a number with no reference.
+func (s *Server) printUnadjustedForex(ctx context.Context, w http.ResponseWriter, r *http.Request, companyID uuid.UUID) (printing.ReportTable, bool) {
+	asOn := r.URL.Query().Get("as_on")
+	out, err := s.report.UnadjustedForex(ctx, companyID, asOn)
+	if err != nil {
+		// The JSON handler answers 422 for the same input (an unparseable as_on
+		// reaches reporting.resolveAsOn), and the printed copy matches it rather than
+		// inventing a different status for one request.
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return printing.ReportTable{}, false
+	}
+
+	var rows []printing.Row
+	for _, b := range out.Bills {
+		// ⛔ AN UNPRICED ROW PRINTS ITS RATE CELL AS A SENTENCE, NOT AS A BLANK OR A
+		// ZERO. A blank reads as "the rate is 1"; a zero reads as a rate that was
+		// entered and is zero — and either would make the empty difference beside it
+		// look like a position that has not moved, which is the opposite of the truth
+		// (it is a position nobody can price).
+		rateAsOn := "no rate on/before this date"
+		difference := ""
+		if b.HasRateAsOn {
+			rateAsOn = printing.FormatExchangeRate(b.RateAsOn)
+			difference = printMoney(b.Difference)
+		}
+		rows = append(rows, printing.Row{
+			Cells: []string{
+				b.LedgerName, b.RefName, b.CurrencyCode,
+				printMoney(b.ForeignPending),
+				printing.FormatExchangeRate(b.BillRate),
+				rateAsOn,
+				printMoney(b.BookValue),
+				difference,
+			},
+		})
+	}
+
+	// ⭐ THE TOTAL IS THE SUM OF WHAT WAS PRICED, and the line under it says how many
+	// rows were not — the same disclosure `on_account_total` is on the ageing sheet,
+	// and for the same reason: a column of figures beside a total is exactly the shape
+	// a reader checks by adding up.
+	footer := []printing.Row{{
+		Cells: []string{"Net unrealised difference", "", "", "", "", "", "",
+			printMoney(out.TotalDifference)},
+		Bold:      true,
+		RuleAbove: true,
+	}}
+	if out.UnratedCount > 0 {
+		footer = append(footer, printing.Row{
+			Cells: []string{
+				strconv.Itoa(out.UnratedCount) +
+					" bill(s) above could NOT be priced (no exchange rate on or before " +
+					out.AsOn + ") and are NOT in this total",
+				"", "", "", "", "", "", "",
+			},
+		})
+	}
+
+	return printing.ReportTable{
+		Title:     "Unadjusted Forex Gain/Loss",
+		Subtitle:  unadjustedForexSubtitle(out),
+		Landscape: true,
+		Columns: []printing.Column{
+			{Header: "Party", Align: printing.AlignLeft, Width: 3},
+			{Header: "Bill Ref", Align: printing.AlignLeft, Width: 2.4},
+			{Header: "Ccy", Align: printing.AlignLeft, Width: 0.8},
+			{Header: "Foreign Pending", Align: printing.AlignRight, Width: 2},
+			// ⛔ TWO RATE COLUMNS AND THEY ARE NOT MONEY. `FormatRate` renders ten
+			// decimals; putting either through FormatMoney would print 0.0033 for
+			// 0.0033333333 — a figure that is plausible, in the right column, and
+			// wrong for ever (§6.3).
+			{Header: "Bill Rate", Align: printing.AlignRight, Width: 2},
+			{Header: "Rate As On", Align: printing.AlignRight, Width: 2.6},
+			{Header: "Book Value", Align: printing.AlignRight, Width: 2.2},
+			{Header: "Difference", Align: printing.AlignRight, Width: 2.2},
+		},
+		Rows:   rows,
+		Footer: footer,
+	}, true
+}
+
+// unadjustedForexSubtitle is the ONE writing of this statement's scope sentence, and
+// it carries three facts that cannot be left to the reader.
+//
+// ⛔ IT SAYS "REPORTED, NOT POSTED" IN THOSE WORDS (Q4). ⛔ IT DISTINGUISHES THE TWO
+// JOBS THE DATE DOES — which bills are included, and which rate priced them — because
+// on this report they really are two questions and D86's whole lesson is that one
+// field cannot say both. ⚠️ AND IT SAYS THE SHEET COVERS BOTH SIDES, because a reader
+// who assumed receivables only would read a netted total as a receivable figure.
+func unadjustedForexSubtitle(out reporting.UnadjustedForex) string {
+	scope := "Every open foreign bill on these books, including any dated AFTER " +
+		out.AsOn
+	if out.Bounded {
+		scope = "Open foreign bills as at " + out.AsOn
+	}
+	return scope + ", receivable AND payable, priced at the exchange rate as on " +
+		out.AsOn + ". THIS DIFFERENCE IS REPORTED AND NOT POSTED: no voucher is " +
+		"created and no ledger balance changes. It is what a settlement of the whole " +
+		"remaining balance at that rate would realise."
 }

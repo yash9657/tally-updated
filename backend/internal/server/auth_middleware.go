@@ -2765,6 +2765,21 @@ func reportName(rest string) string {
 		return "day-book"
 	case "/outstandings":
 		return "outstandings"
+	// ⭐ THE UNADJUSTED-FOREX REPORT (T8 step 7). Here for the reason this function's
+	// GSTR-9 comment records: a name in `authz.KnownReportNames` that this function
+	// does not know is a name some arms serve and others default-deny, and `routes()`
+	// mounts `/print/reports/<name>` for EVERY known name — so omitting it would
+	// leave a mounted route unreachable for every level including the Owner.
+	//
+	// ⚠️ THE ARM IS REDUNDANT AND DELIBERATE. The route path is a flat literal equal
+	// to the name, so the `method == GET && reportName(rest) != ""` arm already maps
+	// it; the entries around it are written out for the same reason and the two
+	// cannot disagree. The report date rides in ?as_on=, for the flat-literal reason
+	// the /stock-item-vouchers comment below states at length — and it matters more
+	// here than usual, because the date does TWO jobs (which bills are in, and which
+	// rate prices them) and neither is a resource.
+	case "/unadjusted-forex":
+		return "unadjusted-forex"
 	// ⛔⛔ THE PAYABLES AGEING'S OWN NAME (D94). This arm is the row: the PDP decides on
 	// the resource this function returns, and it returns it from the FLAT LITERAL PATH.
 	// Until this line existed, the payables book could only be asked for as

@@ -136,6 +136,11 @@ const REPORT_SLUGS: Record<ReportName, string> = {
   "Trial Balance": "trial-balance",
   "Day Book": "day-book",
   Outstandings: "outstandings",
+  // ⭐ T8 STEP 7 PRINTS. It is one of the few names here that does — the layout is
+  // the ageing sheet's with the two rate columns added, and a period-end exposure
+  // statement is a thing people put on paper. `printed-report-layouts.json` is the
+  // generated authority and lists it under `prints_a_layout`.
+  "Unadjusted Forex Gain/Loss": "unadjusted-forex",
   "Stock Summary": "stock-summary",
   "TDS / TCS Register": "tds-register",
   // ---- THE TWO ORDER BOOKS (T3). MAPPED AND DEFERRED, exactly like the TDS/TCS
@@ -209,6 +214,11 @@ const REPORT_PERIOD_SHAPE: Record<ReportName, ReportPeriodShape> = {
   "Trial Balance": "as-at",
   "Day Book": "full-period",
   Outstandings: "as-at",
+  // ⭐ AS-AT, and on this report the upper bound does TWO jobs: it limits which
+  // bills are included AND it chooses the rate they are priced at. Bounding it
+  // BELOW would be actively wrong — it would drop the older half of exactly the
+  // exposure the report exists to show.
+  "Unadjusted Forex Gain/Loss": "as-at",
   "Stock Summary": "as-at",
   "TDS / TCS Register": "full-period",
   "Sales Order Book": "as-at",
