@@ -325,6 +325,31 @@ var KnownResources = append([]Resource{
 	// current answers.
 	"tds-profile",
 
+	// WHERE REALISED EXCHANGE DIFFERENCES GO (T8 step 5, migration 0080): the one
+	// ledger a settlement's realised gain is credited to and its realised loss
+	// debited from, chosen by the operator and never auto-created.
+	//
+	// ⛔ NOT A REPORT NAME, for the same reason as `tds-profile` and `tds-challan`
+	// above: `report:forex-settings` is reached by migration 0011's coarse
+	// `allow display report` at specificity 1 (defect D95), so it would be GRANTED
+	// to every seeded Data Entry level by a rule written years ago for another
+	// purpose, and taking it back needs a 0068-style counterweight migration. A
+	// bare token is default-DENIED for Data Entry WITH NO ACL MIGRATION AT ALL,
+	// which is the authority a Profit & Loss routing decision should have.
+	//
+	// ONE TOKEN FOR THE READ AND THE WRITE. A level that may not CHOOSE where a
+	// company's realised gains land has no use for knowing which ledger is chosen,
+	// and two tokens would let a rule grant the read and then be read as though it
+	// granted the write.
+	//
+	// NAMED `forex-settings` AND NOT `currency`, deliberately: the currency masters
+	// and their rates are clerical upkeep that a Data Entry level may legitimately
+	// be granted, while this decides which account a company's exchange gains and
+	// losses land in. Two tokens one word apart governing different authorities is
+	// how an administrator grants the wrong one. TestForexSettingsAuthMatrix pins
+	// the current answers.
+	"forex-settings",
+
 	// THE COST MASTERS (T2, migration 0040): the AXES of cost analysis (Department,
 	// Branch, Project) and the POSITIONS on them. Tally keeps them at Gateway >
 	// Accounts Info > Cost Categories / Cost Centres and ships one axis, "Primary Cost

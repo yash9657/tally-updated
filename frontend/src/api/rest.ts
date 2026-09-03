@@ -43,6 +43,8 @@ import type {
   CreateStockGroupRequest,
   CreateCurrencyRequest,
   CreateCurrencyResponse,
+  ForexSettingsResponse,
+  SetForexSettingsRequest,
   ListCurrenciesResponse,
   SetCurrencyRateRequest,
   CreateStockGroupResponse,
@@ -956,6 +958,16 @@ export function createRestClient(
     },
     async setCurrencyRate(companyID, req: SetCurrencyRateRequest) {
       await http.post(`${company(companyID)}/currencies/rates`, req);
+    },
+    forexSettings(companyID) {
+      return http.get<ForexSettingsResponse>(
+        `${company(companyID)}/forex-settings`,
+      );
+    },
+    async setForexSettings(companyID, req: SetForexSettingsRequest) {
+      // PUT with no key in the path: company_forex_settings.company_id is the
+      // whole primary key, so the company in the prefix IS the key. 204, no body.
+      await http.put(`${company(companyID)}/forex-settings`, req);
     },
     inventoryVocabulary(companyID) {
       return http.get<InventoryVocabularyResponse>(

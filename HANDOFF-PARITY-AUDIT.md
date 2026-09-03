@@ -5217,3 +5217,199 @@ both written: the `NEW` ref carries the bill's historical rate and the `AGAINST`
 settlement-date rate. ⛔ Its refusal — a settlement that would realise a difference at a company with
 no `forex_gain_loss_ledger_id` — is the part to build first, and **nothing reads
 `company_forex_settings` yet**.
+
+### L36 — 2026-09-03 · T8 STEP 5: REALISED GAIN/LOSS, AND THE MEMO'S FORMULA CANNOT BALANCE A VOUCHER
+
+⭐ **WHAT WAS BUILT.** A settlement of a foreign bill at a rate other than the one it was raised at
+now REALISES the difference: the server derives it from the two rates the books already hold,
+refuses any figure it did not derive (naming both), and refuses outright at a company that has not
+chosen a ledger for it — with a route that lets an operator choose one. L35's closing line was
+exact:
+
+```
+grep -rn "company_forex_settings\|forex_gain_loss" backend/internal --include='*.go' | grep -v _test
+#   (nothing)   ⛔ re-measured at 862f1d6 before the first line was written
+grep -rn "RefAgainst" backend/internal --include='*.go' | grep -v _test
+#   ledger.go:190,191,199,3019 — the CONSTANT and one empty-name check.
+#   ⛔ NOTHING JOINED AN `AGAINST` REF BACK TO THE `NEW` REF IT SETTLES.
+```
+
+⛔ **SO A $1,000 EXPORT INVOICE BOOKED AT 83.65 AND RECEIVED AT 85.25 POSTED HAPPILY**, the
+receivable cleared, and the 1,600 rupees the business actually gained appeared in no ledger at all.
+Nothing refused it, because a voucher whose client-chosen bank leg matches its client-chosen party
+leg balances perfectly.
+
+#### ⛔⛔ THE DECISION §4.1 LEFT OPEN: THE SERVER **VERIFIES**, IT DOES NOT **GENERATE**
+
+Measured, not chosen on taste. Three reasons, in the order that decides it:
+
+1. `validatePostings` refuses unbalanced input — *"double-entry violation: debit %s != credit %s"* —
+   **before anything could be derived**. A generate design must either skip that guard for the one
+   voucher class that most needs it, or derive a gain from postings nothing has validated.
+2. ⭐ **IT IS THE ESTABLISHED PATTERN IN THIS EXACT FUNCTION, TWICE.** `deriveAndVerifyGST`
+   cross-checks *"the posted tax lines against the derived split … This guarantees the books match
+   the engine"*, and the TDS block says of itself *"Like GST this NEVER injects a posting: it
+   refuses a voucher whose TDS leg contradicts the engine."* The item-invoice path DOES generate,
+   and its own stated reason does not apply here — *"The client had no postings to get wrong."* A
+   settlement's postings are client-stated, which puts it in the GST/TDS family.
+3. A wrong number becomes a 422 naming both figures rather than a silently inserted line.
+
+⚠️ **THE CONSEQUENCE FOR STEP 8, which §4.1 predicted:** the settlement form must know the bill's
+historical rate, so the open-bills read that feeds an `AGAINST` picker has to return it.
+`openBillForex` is that lookup and is written to be the one both use.
+
+#### ⛔⛔ THE MEMO'S FORMULA IS WRONG BY THE BILL'S OWN ROUNDING RESIDUE, AND STEP 4's FIXTURE PROVES IT
+
+`docs/design/t8-multi-currency-model.md` Q3 states `realised = foreign_settled × (rate_settlement −
+rate_bill)`. **It cannot balance a voucher against a real bank amount**, and the counter-example is
+step 4's own specimen — which Q2 makes legitimate on purpose:
+
+| | |
+|---|---|
+| rupees the bank actually receives | 1000 × 85.2512345678 = **85,251.2346** |
+| receivable that must clear to ZERO | **83,651.23** (stored, and deliberately ≠ 1000 × 83.6512345678) |
+| the difference the books require | **1,600.0046** |
+| the memo's formula, 1000 × (85.2512345678 − 83.6512345678) | **1,600.0000** |
+
+The memo's figure is 46 hundredths of a paisa short, so a voucher carrying it either **misstates the
+cash received** (bank leg 85,251.2300, tying to no statement — T4's reconciliation would never match
+it) or **strands 0.0046 on the receivable for ever**, ageing in Outstandings with nothing to clear
+it. ⭐ **SO THE ENGINE DIFFERENCES THE VALUES, NOT THE RATES:**
+
+```
+realised = round(foreign_settled × rate_settlement, 4) − base_cleared
+```
+
+⭐ **AND IT REDUCES TO THE MEMO'S FORMULA EXACTLY** when the bill's stored base is the arithmetic
+product, which is the case the memo had in mind. It differs only where the memo's would refuse a
+voucher that is right. **This is the one place this lane went beyond the memo, and it is flagged
+rather than folded in** — `forex_settlement.go`'s header carries the table above.
+
+⛔ **AND `base_cleared` IS PRO-RATA, EXCEPT THE FINAL SLICE CLEARS THE REMAINDER.** Pro-rata does not
+compose: a ₹100.00 / $3.00 bill settled in three $1 slices clears 33.3333 three times, i.e.
+99.9999, and strands 0.0001 on the party for ever — the bill is settled, the operator is square, the
+P&L is right to the paisa, and Outstandings shows a residue nothing will collect and no screen can
+clear. ⚠️ `base_cleared` is DERIVED AND VERIFIED, never taken from the body: an engine that trusted
+the client's stated allocation would derive its realised amount FROM the number under test.
+
+#### MUTATION-PROVED ON EVERY LAYER, WITH THE NUMBER THE REAL SYSTEM PRODUCED
+
+| Revert | Predicted → **observed** |
+|---|---|
+| the rate is quantised to money before the multiplication (§6.3) | `posting 1600.0046 != derived` **`1599.9700`** ✅ |
+| `base_cleared` is always pro-rata (no remainder branch) | `clears 33.3334 … engine derives` **`33.3333`** ✅ |
+| the lookup reads `bill_allocation` only (§0.2's UNION) | `settles bill "OPEN-1", which these books do not carry` ✅ |
+| this voucher is NOT excluded from the prior-settlement sums | ⭐ the **INVERSE CONTROL** fires: `bill "EXP-1" is for USD 1000.0000 and this settlement would take the total settled to` **`2000.0000`** ✅ |
+| the sign ignores which side of the books the bill sits on | `posting -1600.0046 != derived 1600.0046` ✅ |
+| a NULL choice is read as chosen rather than unset | the refusal stops naming the setting and becomes `posting 0.0000 != derived 1600.0046` ✅ |
+| ⛔ **the `routeAction` arm is removed** | `unmapped route: access denied` — **403 FOR THE OWNER** ✅ |
+| the `account_nature` vocabulary spelled "Income"/"Expenses" | ⭐ the **INVERSE CONTROL** fires: an Indirect Expenses ledger is refused too, `nature "EXPENSE"` ✅ |
+
+⛔ **AND THE GATE ITSELF WAS MUTATION-PROVED, NOT ONLY THE CODE.** cored was **rebuilt with the
+derivation call removed, restarted, and verified fresh by process start time** — the wire drive went
+**35/35 → 22/35, and the 13 reds were exactly the derivation probes**. The eight setter probes and
+the four base-currency controls stayed green, which is correct: only the derivation was removed.
+
+⚠️ **AND §2.1's TRAP COST THIS LANE ONE FALSE RUN, EXACTLY AS WRITTEN.** The drive's first execution
+came back **15/35 with `{"error":"no such route"}` on `/forex-settings`** — against a cored started
+before the routes existed. **`no such route` and a 403 are DIFFERENT failures and only one of them is
+the `routeAction` arm**, which is worth knowing: had the arm been the real fault the message would
+have been `unmapped route: access denied` (see the mutation table). Restarted and verified by start
+time: 35/35.
+
+#### ⭐ A FOURTH REGISTRATION POINT THE MEMO'S §5 DOES NOT LIST — AND AN EXISTING GUARD CAUGHT IT
+
+§5 names three registration facts. **There is a fourth:** `authz.KnownResources`, the PDP
+vocabulary. A route may have its `routeAction` arm and still be unreachable:
+
+```
+--- FAIL: TestEveryCompanyRouteIsMappedAndInVocabulary
+    route GET /v1/companies/{companyID}/forex-settings emits resource "forex-settings",
+    which is not in the PDP vocabulary (authz.KnownResources) — no ACL rule could ever name it
+```
+
+⭐ **THAT ONE IS GUARDED AND THE `routeAction` ARM IS NOT**, which is the asymmetry a reader should
+carry: the vocabulary gap fails the build, the arm gap ships a 403.
+
+#### ⛔ NO ACL MIGRATION, AND THAT IS A MEASURED ANSWER RATHER THAN AN OMISSION
+
+`forex-settings` is a **bare resource token**, not `report:forex-settings`. `internal/authz` matches
+0011's coarse `allow display report` against ANY report name at specificity 1 (defect D95), so a
+report token would be **GRANTED to every seeded Data Entry level** by a rule written years ago for
+another purpose, and taking it back needs a 0068-style counterweight migration. As a bare token both
+halves are **default-DENIED for Data Entry with no migration at all** — `handler_tds_profile.go`
+reaches the same answer the same way, and `0088`'s line-274 note is the authority for a slice
+legitimately needing none. ⭐ **`0081–0084` REMAIN THE T8 GAP AND WERE NOT TOUCHED**, and
+`PLAN-TALLY-PARITY.md` §2.5 needs no edit this lane.
+
+#### ⛔ §6.1's EIGHTH CANDIDATE — AND THE ANSWER IS STRUCTURAL RATHER THAN LUCKY
+
+§6.1 asks directly what an alter that omits the realised leg does. **It is REFUSED**, and the reason
+is a difference in kind from the seven prior occurrences: those destroyed a ROW IN A SIDE TABLE,
+where zero rows is a legal state and nothing sums it. **This value is a POSTING**, so omitting it
+either unbalances the voucher (the double-entry guard refuses it) or comes with a bank leg the
+derivation contradicts. Both shapes are pinned, and the second is the one a client that knows
+nothing about step 5 actually sends.
+
+⭐ **AND THE DERIVATION IS IN `post()`, THE SHARED PATH**, so an alter is checked exactly as a create
+is. Placed in `PostVoucher` instead, **every other test in the file would still pass** and an alter
+would silently destroy the gain. ⛔ The lookup therefore excludes THIS voucher by `voucher_id`:
+`voucher_head` still points at the PREVIOUS version when the derivation runs, so its `AGAINST` rows
+are live in the table and would count as prior settlements — the mutation table above shows that
+failure as an over-settlement refusal on a faithful alter.
+
+#### THE DRIVE — 35/35, tenant reaped, `psql` and the wire as the only oracles
+
+`frontend/scripts/drive-t8-forex-settlement.mjs`, **a separate drive from step 4's on purpose**: that
+one is the 50/50 baseline §1 quotes, and folding step 5 in would make a regression in either half
+read as a change in the other. ⚠️ Its reap adds `company_forex_settings` — step 5's own table, which
+no earlier reap lists, and whose omission fails the delete on
+`company_forex_settings_ledger_fk` with the tenant half-removed. Beyond the figures it pins five
+things worth naming:
+
+- ⛔ **PROBE 1 IS THE ROUTE REGISTRATION**, because nothing else can catch it.
+- ⛔ **THE REFUSAL WROTE NOTHING.** `RCT-NOLEDGER` leaves no row — a 422 with a voucher in the table
+  is worse than an acceptance.
+- ⭐ **THE PLAUSIBLE WRONG ANSWER IS THE ONE SENT.** `RCT-MEMO` posts **1,600.0000**, the memo's own
+  figure and the number a careful implementer arrives at independently. A probe sending 1.00 would
+  pass against an engine that only checked the sign.
+- ⭐ **`ledger_balance` on the forex ledger = 2400.0060**, the sum of the two realised gains and the
+  figure a Profit & Loss reads. This is the free oracle.
+- ⛔ **THE BASE CONTROL POSTS AND SETTLES.** A rupee bill, partially settled, at a company whose
+  choice has been cleared. A derivation that ran unconditionally — or read the setting before
+  deciding it needed the answer — takes bill-wise settlement down for **every existing user**, and
+  `verify:demo` staying **37/37** is the same fact measured on real books.
+
+#### ⚠️ WHAT WAS DELIBERATELY NOT BUILT, AND WHY EACH IS NOT AN OMISSION
+
+1. **STEPS 6, 7 AND 8 ARE NOT STARTED.** Outstandings still shows a foreign bill as a rupee bill
+   (§4.2), there is no unadjusted-forex report (§4.3), and no screen offers either the setting or a
+   currency field (§4.4). ⭐ **The roster row therefore stays `off`** — its state is step 8's
+   decision and the `partial`-vs-split question is untouched — but **its note was corrected**,
+   because "you cannot settle a foreign bill or see an exchange gain or loss" had stopped being
+   true over HTTP, and the note's own standard is that it is exactly true.
+2. **NO REFUSAL FOR A *BASE* SETTLEMENT OF A *FOREIGN* BILL.** A rupee `AGAINST` row against a
+   dollar bill is not caught, and catching it would put the bill lookup on every base settlement in
+   the product. ⚠️ **It is not silent, though:** the base nets to zero while the foreign does not, so
+   step 6's report shows base pending 0.00 against a foreign pending of $1,000 — which is the
+   disclosure Q5 asks for, arrived at by the report rather than by a refusal. Stated rather than
+   invented.
+3. **NO TOLERANCE ANYWHERE.** A settlement whose realised figure is a paisa out is refused, not
+   absorbed — bank matching's own rule, and for its stated reason.
+4. **NO MIGRATION.** 0080 has every column; the ACL answer above needs none.
+
+#### THE GATES
+
+`go build` · `go vet` · `go test ./... -count=1` all green · `test_residue.sh` **OK, no residue** ·
+`tsc --noEmit` clean · `vitest` **1872 passed / 117 files** (from 1866 / 116) · `verify:demo`
+**37/37 UNCHANGED** · **`drive-t8-forex-settlement` 35/35 (new)** · `drive-t8-forex-entry` **50/50** ·
+`drive-payroll` **38/38** · `drive-t12-gstr9` **33/33** · `drive-t4-slice2b-matching` **35/35** ·
+`drive-t11-budgets` **36/36** · `drive-year-end-close` **16/16 wire + 8/8 browser** ·
+`corpora/validate.py` **OK** · register **117 · 107 · 6 · 0 · 4**, unchanged.
+**Nothing deferred within step 5. Steps 6–8 are not started and are itemised above.**
+
+⭐ **NEXT IS STEP 6 — OUTSTANDINGS GAINS TWO FIELDS AND THE CURRENCY IN ITS NETTING KEY** (§4.2), and
+the lookup it needs already exists: `openBillForex` reads the two-table UNION §0.2 describes and
+returns the bill's base, foreign, rate and currency code in one call. ⛔ Its trap is unchanged — four
+query sites, two tables, and a foreign party's OPENING bill silently becomes a base bill if only
+`bill_allocation` is handled.

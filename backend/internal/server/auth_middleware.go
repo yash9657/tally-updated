@@ -2076,6 +2076,37 @@ func routeAction(r *http.Request) (act authz.Action, res authz.Resource, resName
 		}
 		return "", "", "", false
 
+	// WHERE REALISED EXCHANGE DIFFERENCES GO (T8 step 5, migration 0080).
+	//
+	//   GET .../forex-settings -> Display / forex-settings
+	//   PUT .../forex-settings -> Alter   / forex-settings
+	//
+	// ⛔ A BARE TOKEN, NOT `report:forex-settings`, and migration 0011 is the reason
+	// rather than taste: internal/authz matches 0011's coarse `allow display report`
+	// against ANY report name at specificity 1 (defect D95), so a report token here
+	// would be GRANTED to every seeded Data Entry level by a rule written years ago
+	// for another purpose, and taking it back needs a 0068-style counterweight
+	// migration. As a bare token both halves are default-DENIED for Data Entry with
+	// NO ACL MIGRATION AT ALL. tds-profile above reaches the same answer the same way.
+	//
+	// ONE TOKEN FOR BOTH HALVES: a level that may not CHOOSE where realised gains
+	// land has no use for knowing which ledger is chosen, and two tokens would let a
+	// rule grant the read and then read as though it granted the write.
+	//
+	// ⚠️ THIS ARM IS THE REGISTRATION NOTHING TYPE-CHECKS (memo §5, fact 2). Without
+	// it the routes above compile, pass every Go test — those call the SERVICE, not
+	// the route — and are 403 FOR THE OWNER, because an unmapped {companyID} route
+	// default-denies. Only an HTTP call through the real middleware catches it, which
+	// is why it is probe 1 of drive-t8-forex-entry.mjs's step-5 block.
+	case strings.HasPrefix(rest, "/forex-settings"):
+		switch method {
+		case http.MethodGet:
+			return authz.Display, "forex-settings", "", true
+		case http.MethodPut:
+			return authz.Alter, "forex-settings", "", true
+		}
+		return "", "", "", false
+
 	// s.394(2) MANUFACTURING DECLARATIONS (Item Zero step 3).
 	//
 	//   GET  .../tcs-declarations -> Display / tcs-declaration

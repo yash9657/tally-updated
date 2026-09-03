@@ -2130,6 +2130,29 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 			return err
 		}
 
+		// T8 STEP 5 — THE REALISED EXCHANGE DIFFERENCE. Derived from the books and
+		// VERIFIED against what the caller posted; never generated. See
+		// forex_settlement.go's header for the three measured reasons that choice is
+		// the GST/TDS one rather than the item-invoice one.
+		//
+		// ⭐ HERE, and here for the same two reasons the line above is here: this is
+		// the first point at which in.Postings is FINAL (an item invoice's were
+		// generated from the stock masters), and the first at which the bill
+		// references have been STAMPED AND RESOLVED — a settlement whose AGAINST
+		// reference had not yet been named could not be looked up.
+		//
+		// ⛔ AND IT IS IN post(), WHICH IS THE SHARED PATH, SO AN ALTER IS CHECKED
+		// EXACTLY AS A CREATE IS. That is not tidiness: the realised leg is a third
+		// posting on a voucher an operator can later open and edit, which is the
+		// shape that has cost this repository seven defects ("an alter re-states").
+		// Placed in PostVoucher instead, every test in forex_settlement_test.go
+		// would still pass and an alter that dropped the leg would silently destroy
+		// the gain.
+		if err := deriveAndVerifyRealisedForex(
+			ctx, tx, companyID, voucherID, in.Postings, billAllocations); err != nil {
+			return err
+		}
+
 		// THE DELETE GUARD FOR STOCK, single-sourced so the hashed payload and
 		// the movement rows can never disagree about what the tombstone carries.
 		// A DELETE reverses the voucher's entire contribution — accounting AND

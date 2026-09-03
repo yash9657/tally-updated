@@ -38,6 +38,8 @@ import type {
   CreateCurrencyResponse,
   ListCurrenciesResponse,
   SetCurrencyRateRequest,
+  ForexSettingsResponse,
+  SetForexSettingsRequest,
   CreateStockGroupResponse,
   InventoryVocabularyResponse,
   ListStockGroupsResponse,
@@ -1180,6 +1182,24 @@ export interface CoredClient {
     req: CreateCurrencyRequest,
   ): Promise<CreateCurrencyResponse>;
   setCurrencyRate(companyID: string, req: SetCurrencyRateRequest): Promise<void>;
+
+  // ---- WHERE REALISED EXCHANGE DIFFERENCES GO (T8 step 5) -----------------
+  //
+  // ⛔ THE OTHER HALF OF A REFUSAL. The server refuses any settlement that would
+  // realise an exchange difference at a company with no gain/loss ledger chosen,
+  // naming this setting — so a client that cannot set it turns a prompt into a
+  // wall. Nothing is auto-created: the operator names an EXISTING revenue or
+  // expense ledger, and a party, bank or cash ledger is refused with 422 because
+  // crediting a realised gain to a customer's own balance makes a fully settled
+  // bill show a permanent residue.
+  //
+  // ⚠️ `setForexSettings` WITH "" CLEARS THE CHOICE, and that is not a delete: the
+  // row survives, and every difference-realising settlement starts refusing again.
+  forexSettings(companyID: string): Promise<ForexSettingsResponse>;
+  setForexSettings(
+    companyID: string,
+    req: SetForexSettingsRequest,
+  ): Promise<void>;
 
   // ---- The COSTING METHOD (T9) -------------------------------------------
   //

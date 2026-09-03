@@ -78,6 +78,8 @@ import type {
   CreateCurrencyResponse,
   CurrencyListItem,
   ListCurrenciesResponse,
+  ForexSettingsResponse,
+  SetForexSettingsRequest,
   SetCurrencyRateRequest,
   CreateStockGroupResponse,
   InventoryVocabularyResponse,
@@ -1285,6 +1287,14 @@ interface MockCompany {
   allowNegativeStock: boolean;
   fyStartDate: string;
   baseCurrency: string;
+  /**
+   * WHERE REALISED EXCHANGE DIFFERENCES GO (T8 step 5, migration 0080). "" is "not
+   * chosen", which covers BOTH of the server's encodings of that (no
+   * company_forex_settings row at all, or a row with a NULL column) — the two are
+   * deliberately indistinguishable to a caller, so one empty string is the faithful
+   * mirror rather than a simplification.
+   */
+  forexGainLossLedgerID: string;
   /**
    * The 0015 company-profile block. Grouped rather than splayed across the
    * type so a new profile field is one edit here and one in `defaultProfile`.
@@ -2963,6 +2973,8 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         allowNegativeStock: false,
         fyStartDate: "2026-04-01",
         baseCurrency: "INR",
+        // "" is "not chosen", the state every company starts in.
+        forexGainLossLedgerID: "",
         profile: defaultProfile("2026-04-01"),
         ledgers: [],
         // Every company is seeded with exactly one system location, mirroring
@@ -3036,6 +3048,8 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
       allowNegativeStock: false,
       fyStartDate: "2026-04-01",
       baseCurrency: "INR",
+      // "" is "not chosen", the state every company starts in.
+      forexGainLossLedgerID: "",
       profile: defaultProfile("2026-04-01"),
       ledgers: [
         { id: "ledger-cash", name: "Cash", group: "Cash-in-Hand" },
@@ -4500,7 +4514,41 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
    * VISIBLE in a picker, while a trailing space and a capital letter are not,
    * and the rule is aimed at the collisions an operator cannot see.
    */
-  function normalisedName(v: string): string {
+  /**
+ * The seeded PRIMARY groups whose `account_nature` is INCOME or EXPENSE — migration
+ * 0003's six Profit & Loss groups, and the only groups a realised exchange difference
+ * may be booked under.
+ *
+ * ⛔ A NAME LIST HERE STANDS IN FOR A COLUMN THE MOCK DOES NOT HAVE, exactly as
+ * `bankParentGroup` stands in for the ltree ancestry `reporting.BankLedgerPredicate`
+ * walks. The server tests `account_group.nature IN ('INCOME','EXPENSE')`, which is
+ * the primitive; this mock has no group hierarchy and no nature column, so it matches
+ * the immediate group name against the seeded set and against the ancestor a
+ * user-created sub-group records.
+ *
+ * ⚠️ SO A LEDGER IN A USER-CREATED SUB-GROUP OF, SAY, "Indirect Expenses" IS ACCEPTED
+ * BY THE SERVER AND MAY BE REFUSED HERE. That divergence is real and is recorded in
+ * `corpora/mock-vs-cored/masters.json` rather than papered over: a screen that looks
+ * right against this mock is not evidence the setter accepts a given ledger.
+ */
+const PL_PRIMARY_GROUPS = new Set([
+  "sales accounts",
+  "purchase accounts",
+  "direct incomes",
+  "indirect incomes",
+  "direct expenses",
+  "indirect expenses",
+]);
+
+function forexLedgerIsSuitable(
+  _c: MockCompany,
+  led: { group: string; bankParentGroup?: string },
+): boolean {
+  const names = [led.group, led.bankParentGroup ?? ""];
+  return names.some((n) => PL_PRIMARY_GROUPS.has(normalisedName(n)));
+}
+
+function normalisedName(v: string): string {
     return v.trim().toLowerCase();
   }
 
@@ -4988,6 +5036,53 @@ export function createMockClient(opts: MockClientOptions = {}): CoredClient {
         latest_rate_date: "",
       });
       return { currency_id: id };
+    },
+    async forexSettings(companyID): Promise<ForexSettingsResponse> {
+      const c = ensure(companyID);
+      const id = c.forexGainLossLedgerID ?? "";
+      if (id === "") {
+        // ⛔ A 200 WITH AN EMPTY FIELD, NEVER A 404. "No forex ledger chosen" is the
+        // ordinary state of every company that never trades in a foreign currency,
+        // so reporting it the way a mistyped URL is reported would make the F11
+        // screen render an error for the common case.
+        return {};
+      }
+      const led = c.ledgers.find((l) => l.id === id);
+      return {
+        gain_loss_ledger_id: id,
+        gain_loss_ledger_name: led ? led.name : "",
+      };
+    },
+    async setForexSettings(companyID, req: SetForexSettingsRequest) {
+      const c = ensure(companyID);
+      const id = (req.gain_loss_ledger_id ?? "").trim();
+      if (id === "") {
+        // CLEARS the choice. Not a delete: the setting goes back to "not chosen",
+        // and every difference-realising settlement starts refusing again.
+        c.forexGainLossLedgerID = "";
+        return;
+      }
+      // D84: the mock refuses what the server refuses, IN THE SERVER'S ORDER —
+      // existence first (the server's SELECT finds no row), then suitability.
+      const led = c.ledgers.find((l) => l.id === id);
+      if (!led) {
+        throw new ApiError(422, `masters: no such ledger: ${id}`);
+      }
+      // ⛔ THE SUITABILITY REFUSAL IS THE POINT OF THIS SETTER, and the mock has to
+      // carry it or a screen built against the mock would offer every ledger in the
+      // chart of accounts and only discover the refusal in production. A realised
+      // gain credited to a Sundry Debtors ledger lands on a customer's own balance
+      // and makes a fully settled bill show a permanent residue.
+      if (!forexLedgerIsSuitable(c, led)) {
+        throw new ApiError(
+          422,
+          "that ledger cannot hold a realised exchange difference. Choose a revenue " +
+            "or expense ledger — a gain is credited to it and a loss debited, so a " +
+            "party, bank or cash ledger would move a balance that belongs to " +
+            "somebody else",
+        );
+      }
+      c.forexGainLossLedgerID = id;
     },
     async setCurrencyRate(companyID, req: SetCurrencyRateRequest) {
       const c = ensure(companyID);

@@ -1763,6 +1763,29 @@ export interface SetCurrencyRateRequest {
   created_by?: string;
 }
 
+/**
+ * WHERE REALISED EXCHANGE DIFFERENCES GO (T8 step 5, migration 0080).
+ *
+ * ⛔ `gain_loss_ledger_id` IS ABSENT OR "" WHEN NOTHING IS CHOSEN, NEVER THE NIL
+ * UUID. "00000000-0000-0000-0000-000000000000" is a well-formed id that names no
+ * ledger, and a client that round-tripped it back into the PUT would be sending a
+ * choice rather than clearing one.
+ *
+ * ⚠️ AND "NOT CHOSEN" IS A REAL, ORDINARY STATE — every company that never trades in
+ * a foreign currency is in it, so this is a 200 with an empty field and never a 404.
+ * A settlement that would realise a difference at such a company is REFUSED by the
+ * server naming this setting, which is the whole reason the route exists.
+ */
+export interface ForexSettingsResponse {
+  gain_loss_ledger_id?: string;
+  /** The operator's own spelling of it, so a screen need not resolve the uuid. */
+  gain_loss_ledger_name?: string;
+}
+export interface SetForexSettingsRequest {
+  /** A ledger uuid, or "" to CLEAR the choice. */
+  gain_loss_ledger_id: string;
+}
+
 export interface CreateStockGroupRequest {
   name: string;
   /** An EXISTING group, or absent for a top-level one. */

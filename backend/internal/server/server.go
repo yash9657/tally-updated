@@ -1162,6 +1162,22 @@ func (s *Server) routes() {
 		r.Get("/tds-profile", s.handleGetTDSProfile)
 		r.Put("/tds-profile", s.handleSetTDSProfile)
 
+		// WHERE REALISED EXCHANGE DIFFERENCES GO (T8 step 5, migration 0080).
+		//
+		// ⛔ THE OTHER HALF OF A REFUSAL. ledger/forex_settlement.go refuses any
+		// settlement that would realise an exchange difference at a company with no
+		// gain/loss ledger chosen, naming this setting — so without this route the
+		// refusal is a wall rather than a prompt and step 5 is unreachable from the
+		// product. Built first of step 5's parts for that reason.
+		//
+		// PUT with no key in the path: company_forex_settings.company_id is the whole
+		// primary key, so the company in the path prefix IS the key. An empty
+		// gain_loss_ledger_id CLEARS the choice — 0080 made the column nullable so
+		// that "not chosen" stays expressible, and an operator who picked the wrong
+		// ledger must be able to un-pick it.
+		r.Get("/forex-settings", s.handleGetForexSettings)
+		r.Put("/forex-settings", s.handleSetForexSettings)
+
 		// s.394(2) MANUFACTURING DECLARATIONS (Item Zero step 3). A resident
 		// buyer's written statement that goods are for manufacturing and NOT for
 		// trading, which exempts collection on Table Sl. Nos. 1-5.
