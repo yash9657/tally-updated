@@ -224,12 +224,93 @@ var allowedDeps = map[string]map[string]bool{
 	// read-only, RLS-scoped tx. It imports the db layer and nothing else (the
 	// translator is a pure leaf; the real-Claude adapter is the documented swap).
 	"internal/query": {"internal/platform/db": true},
-	// nlq (wave 2 WS1) is the real-Claude NL->DSL adapter — the ONLY query-path
-	// package that touches the network. It depends on query (the Query it emits +
-	// the Catalog it advertises) and NOTHING else (not even platform/db). The edge
-	// is ONE-WAY by design: query must stay a network-free pure leaf, so query
-	// never imports nlq (TestQueryPackageIsNetworkFree pins that).
-	"internal/nlq": {"internal/query": true},
+	// nlq (wave 2 WS1) is the NL->DSL adapter — the ONLY query-path package that
+	// touches the network. It depends on query (the Query it emits + the Catalog
+	// it advertises) and, since W0, on internal/llm. The edge is ONE-WAY by
+	// design: query must stay a network-free pure leaf, so query never imports
+	// nlq (TestQueryPackageIsNetworkFree pins that).
+	//
+	// ⛔ internal/llm IS ADDED HERE AND NOWHERE NEAR internal/query. nlq used to
+	// hold its own Messages-API structs, its own *http.Client and its own
+	// non-200 rule; W0 moved all three into internal/llm so that the retry
+	// budget, the token budget and the trajectory span are written once instead
+	// of once per feature. What must NOT follow is the mirror-image edit —
+	// putting "internal/llm" into internal/query's set two entries above,
+	// "so the compiler can call the model directly". That would give the SQL
+	// compiler a socket, and TestQueryPackageIsNetworkFree would stay GREEN
+	// while it happened, because that test scans only internal/query's own
+	// files and does not follow transitive imports. THIS LINE, in the entry
+	// above, is the real proof of the invariant.
+	"internal/nlq": {"internal/query": true, "internal/llm": true},
+	// trajectory (W0/D2) is the agent plane's span recorder: it holds the span
+	// tree, the OTLP/HTTP exporter written in stdlib, and the replay cassettes.
+	// THE EMPTY MAP IS THE POLICY, not an omission, and it is load-bearing in
+	// both directions.
+	//
+	// Outward: internal/llm, internal/actions, every future agent step and
+	// eventually any handler that wants a span will import this package, so any
+	// sibling edge it gained would be transitively linked into all of them. The
+	// first tempting one is "internal/platform/db, so a span can look up the
+	// company name" — that puts a database round-trip on the telemetry path,
+	// where a slow pool turns into a refused voucher write. The company id is
+	// already in the Scope the middleware fills in; a name is a report's job.
+	//
+	// Inward: it may be imported by anyone, which is only safe BECAUSE it can
+	// reach nothing. A recorder that could read the books would be a way for an
+	// observability concern to acquire domain authority, which is the same
+	// argument internal/notify's entry makes about a notifier.
+	//
+	// ⛔ AND NOT internal/llm, though the two are always used together. The
+	// dependency runs the other way and only in one direction — see llm's entry
+	// below: llm DECLARES the narrow Recorder interface it consumes and this
+	// package satisfies it structurally. internal/server is what joins them.
+	"internal/trajectory": {},
+	// llm (W0/D1) is the provider abstraction: five adapters over one Adapter
+	// seam, the repair loop, the encoded-body tenant-id scan, and the per-tenant
+	// token budget. Exactly ONE edge, to the db layer, and it exists for exactly
+	// one type: PGBudget, which reserves and settles tokens against
+	// llm_token_budget (migration 0091) inside the caller's RLS-scoped tx. A
+	// budget that lived in memory would reset on every deploy, which is not a
+	// budget.
+	//
+	// ⛔ NOT internal/trajectory, AND THAT ASYMMETRY IS THE W0 DECISION (D-B).
+	// This package declares a one-method Recorder interface in trace.go and
+	// accepts whatever satisfies it; internal/trajectory satisfies it
+	// structurally without either package naming the other, and internal/server
+	// — the composition root, the only place that may know both — writes the
+	// six-line adapter. Accept interfaces, return structs. The payoff is that
+	// both packages are testable with no fake imported across a boundary, and
+	// that a deployment with tracing off links no exporter at all.
+	//
+	// ⛔ AND NOT internal/query, internal/nlq OR ANY FEATURE PACKAGE. The arrow
+	// points from the feature to the provider, never back: nlq imports llm (see
+	// above). The moment llm knew what a Query was, the "one seam per provider"
+	// property would be gone and the next feature would need its own.
+	"internal/llm": {"internal/platform/db": true},
+	// actions (W0/D3) is the GENERATED ActionSpec registry: one row per (method,
+	// chi route pattern) mounted under /v1/companies/{companyID}, each carrying
+	// the ACL key the PDP will actually evaluate for it.
+	//
+	// The single edge is to internal/authz, and it is a SAFETY property rather
+	// than a convenience. ActionSpec spells its verb as `authz.Action` and its
+	// noun as `authz.Resource` — the closed vocabulary as TYPES — so a spec
+	// CANNOT name an action outside it and "the ACL key equals the arm the
+	// router took" holds by construction instead of by discipline. The
+	// alternative that was rejected is plain strings, which reintroduce exactly
+	// the drift that the deleted `export` token (authz/vocabulary.go) is a
+	// monument to.
+	//
+	// ⛔ NOT internal/server, EVER, THOUGH THE GENERATOR LIVES THERE. routeAction
+	// is unexported and the router is the oracle, so the generator is a test in
+	// package server that WALKS the real router and PUSHES a golden into this
+	// package. Every edge points inward at the composition root; an import in
+	// the other direction would be a cycle and, worse, would make the registry
+	// able to observe the thing it is supposed to be an independent record of.
+	//
+	// ⛔ AND NOT internal/platform/db. The registry is a compile-time fact about
+	// the router, not a query: it must be readable by an agent planner, a doc
+	// generator or a test with no database anywhere in sight.
+	"internal/actions": {"internal/authz": true},
 	// notify (item C) is the transactional OUTBOX for outbound notifications.
 	// It touches the db layer and nothing else — deliberately: a notifier that
 	// could reach into the ledger or the authz store would be a way for a
@@ -595,6 +676,30 @@ var allowedDeps = map[string]map[string]bool{
 		// internal/statutory. The proxy did not buy cored an import of the IRN
 		// workflow plane; it bought it an HTTP client.
 		"internal/einvoice": true,
+		// W0, the agent plane's three foundation packages. All three are here
+		// for the reason this comment block exists at all: a new internal
+		// package needs its OWN allowed set AND a line in THIS set, and only
+		// the first passes when the package is tested alone (see the ⛔ note on
+		// internal/einvoice above — "which is how it gets missed").
+		//
+		// internal/trajectory: server is where a span acquires a tenant. The
+		// scope middleware inside the /v1/companies/{companyID} block reads the
+		// company, user and subject the auth middleware already resolved and
+		// puts them in the context, because the span-creating call sites sit
+		// several frames below and have no other way to learn them.
+		"internal/trajectory": true,
+		// internal/llm: server is the composition root that reads LLM_PROVIDER
+		// and friends, refuses a half-configured provider out loud, and hands
+		// the constructed client to the feature packages. No handler may build
+		// one for itself — a second construction site is a second place for a
+		// key, a timeout and a budget to drift.
+		"internal/llm": true,
+		// internal/actions: the generated registry. server both PRODUCES it (the
+		// golden generator walks this package's router) and may READ it, and the
+		// second direction is the point of D3 — a future agent endpoint needs to
+		// enumerate what it is allowed to do without a second table of routes.
+		// The edge is safe because actions imports only authz.
+		"internal/actions": true,
 	},
 	"internal/archtest": {},
 }

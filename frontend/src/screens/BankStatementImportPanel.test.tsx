@@ -11,6 +11,7 @@ import type { CoredClient } from "../api";
 import type {
   BankReconciliationResponse,
   ImportedStatementResponse,
+  ImportStatementRequest,
   ImportStatementResponse,
   LedgerListItem,
   PreviewStatementResponse,
@@ -115,6 +116,9 @@ function importResult(
   return {
     import_id: "imp-1",
     already_imported: false,
+    // The name the SERVER stored, echoed back — see D111. A fixture that
+    // omitted it would let the panel's own display of it go untested.
+    file_name: "HDFC-april.csv",
     lines_in_file: 2,
     new_lines: 2,
     duplicate_lines: 0,
@@ -438,5 +442,159 @@ describe("refusals reach the operator", () => {
     expect(screen.getByTestId("stmt-error").textContent).toMatch(
       /NOT imported/,
     );
+  });
+});
+
+/**
+ * ⛔⛔ D111 — A PASTED STATEMENT IS STILL A NAMED STATEMENT.
+ *
+ * Measured 2026-08-31: two statements pasted into this panel were both stored
+ * with `file_name = ''` (confirmed in psql), and the combined "everything
+ * imported for this account" report then rendered its per-file disclosure as
+ *
+ *	· "" carried no running balance, so its rows were NOT balance-walked: …
+ *
+ * — a sentence whose whole job is to name WHICH file, naming neither of them.
+ *
+ * ⛔ THE FALLBACK EXISTED AND WAS APPLIED TO ONE OF THE TWO CALLS THAT NEEDED
+ * IT, ninety-nine lines apart in this component: the PREVIEW defaulted an empty
+ * name to "pasted.csv" and the IMPORT sent the bare empty one. Copying the
+ * preview's constant across would have made every paste indistinguishable from
+ * every other paste — the same defect one step over — so the name is derived by
+ * the SERVER from the statement's own period, row count and fingerprint, for
+ * every client rather than for this one.
+ */
+describe("D111 — the panel shows the name the statement was stored under", () => {
+  it("⛔ names a PASTED statement, and says the name was made for it", async () => {
+    // ⚠️ THE PARAMETERS ARE TYPED so the assertion below can read the REQUEST
+    // the panel sent. A bare `vi.fn(async () => …)` types `mock.calls` as an
+    // empty tuple and the one line that pins the client's half of D111 cannot
+    // compile.
+    const importBankStatement = vi.fn(
+      async (
+        _companyID: string,
+        _ledgerID: string,
+        _req: ImportStatementRequest,
+      ) =>
+        importResult({
+          file_name: "pasted statement 2026-04-15 to 2026-04-18, 2 rows (3f9a1c7e)",
+        }),
+    );
+    const { fire } = renderPanel({ importBankStatement });
+    expect(await screen.findByTestId("brs-as-on")).toBeTruthy();
+    await fire();
+    await waitFor(() => screen.getByTestId("stmt-paste"));
+
+    // PASTE, do not choose a file — this is the path that had no name.
+    fireEvent.change(screen.getByTestId("stmt-paste"), {
+      target: { value: CSV },
+    });
+    fireEvent.blur(screen.getByTestId("stmt-paste"));
+    await waitFor(() => screen.getByTestId("stmt-import"));
+    fireEvent.click(screen.getByTestId("stmt-import"));
+
+    const stored = await screen.findByTestId("stmt-stored-name");
+    expect(stored.textContent).toContain(
+      "pasted statement 2026-04-15 to 2026-04-18, 2 rows (3f9a1c7e)",
+    );
+    // And it says WHY it has that name, so nobody hunts for a file called that.
+    expect(stored.textContent).toMatch(/pasted, so it had no file name/);
+
+    // ⛔ THE PANEL SENDS NO INVENTED NAME. This is the line the defect lived on:
+    // an empty name reaching the server is what lets the server derive one, and
+    // a client-side "pasted.csv" would have overridden it with a constant.
+    expect(importBankStatement.mock.calls[0]![2]!.file_name).toBe("");
+  });
+
+  it("⭐ CONTROL: a CHOSEN file keeps its own name and is not explained away", async () => {
+    const { fire } = renderPanel();
+    expect(await screen.findByTestId("brs-as-on")).toBeTruthy();
+    await fire();
+    await waitFor(() => screen.getByTestId("stmt-file"));
+    chooseFile(CSV);
+    await waitFor(() => screen.getByTestId("stmt-import"));
+    fireEvent.click(screen.getByTestId("stmt-import"));
+
+    const stored = await screen.findByTestId("stmt-stored-name");
+    expect(stored.textContent).toContain("HDFC-april.csv");
+    // The "we made this name up" sentence must NOT appear on a real file name.
+    expect(stored.textContent).not.toMatch(/pasted, so it had no file name/);
+  });
+});
+
+/**
+ * ⛔ THE MOCK CLIENT MUST NOT AGREE WITH THE BUG. A mock that stores pasted
+ * statements nameless lets a screen's handling of D111 pass here and fail
+ * against the real server — which is this repository's own stated reason for
+ * keeping the mock's refusals in the same order as cored's.
+ */
+describe("D111 — the mock client names pastes too, and distinguishes them", () => {
+  const CSV_A =
+    "Value Date,Narration,Withdrawal Amt.,Deposit Amt.\n" +
+    '15/04/2026,NEFT ACME,,"1,00,000.00"\n';
+  const CSV_B =
+    "Value Date,Narration,Withdrawal Amt.,Deposit Amt.\n" +
+    '15/04/2026,NEFT BORAX,,"2,00,000.00"\n';
+  const MAPPING = {
+    encoding: "two-columns" as const,
+    date_layout: "dd/mm/yyyy",
+    value_date: "Value Date",
+    txn_date: "",
+    description: "Narration",
+    deposit: "Deposit Amt.",
+    withdrawal: "Withdrawal Amt.",
+    amount: "",
+    direction: "",
+    running_balance: "",
+    bank_reference: "",
+    cheque_number: "",
+  };
+
+  it("⛔⛔ two different pastes on one account get two different names", async () => {
+    const client = createMockClient();
+    const { ledgers } = await client.listLedgers("company-demo");
+    const bank = ledgers.find((l) => l.is_bank)!;
+
+    const a = await client.importBankStatement("company-demo", bank.id, {
+      file_name: "",
+      content: CSV_A,
+      mapping: MAPPING,
+      created_by: "ui",
+    });
+    const b = await client.importBankStatement("company-demo", bank.id, {
+      file_name: "",
+      content: CSV_B,
+      mapping: MAPPING,
+      created_by: "ui",
+    });
+
+    expect(a.file_name).toMatch(/^pasted statement 2026-04-15, 1 row \(/);
+    expect(b.file_name).toMatch(/^pasted statement 2026-04-15, 1 row \(/);
+    expect(a.file_name).not.toBe(b.file_name);
+
+    // ⛔ AND THE SECOND ONE WAS ACTUALLY STORED. Deduplicating on the name the
+    // CALLER sent meant every paste matched every other paste — both "" — so
+    // the second came back "already imported" having stored nothing.
+    expect(b.already_imported).toBe(false);
+    const both = await client.importedStatement("company-demo", bank.id);
+    expect(both.imports.map((i) => i.file_name).sort()).toEqual(
+      [a.file_name, b.file_name].sort(),
+    );
+  });
+
+  it("⭐ CONTROL: the SAME paste twice is still one import", async () => {
+    const client = createMockClient();
+    const { ledgers } = await client.listLedgers("company-demo");
+    const bank = ledgers.find((l) => l.is_bank)!;
+    const req = {
+      file_name: "",
+      content: CSV_A,
+      mapping: MAPPING,
+      created_by: "ui",
+    };
+    const first = await client.importBankStatement("company-demo", bank.id, req);
+    const again = await client.importBankStatement("company-demo", bank.id, req);
+    expect(again.already_imported).toBe(true);
+    expect(again.file_name).toBe(first.file_name);
   });
 });

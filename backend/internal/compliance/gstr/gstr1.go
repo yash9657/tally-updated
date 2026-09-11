@@ -484,7 +484,8 @@ func (s *Service) Generate(ctx context.Context, from, to string, opts Options) (
 		return rows.Err()
 	})
 	if err != nil {
-		return GSTR1{}, err
+		// Queries and scans only — see the same marking in Generate3B (D117).
+		return GSTR1{}, dataSource(err)
 	}
 
 	return build(fromT, invoices, hsnRows, opts), nil
@@ -619,7 +620,9 @@ func (s *Service) PostingTaxTotals(ctx context.Context, from, to string, opts Op
 		return nil
 	})
 	if err != nil {
-		return TaxTotals{}, err
+		// Three sums and nothing else in the closure: a failure is the server's
+		// (D117).
+		return TaxTotals{}, dataSource(err)
 	}
 	return out, nil
 }

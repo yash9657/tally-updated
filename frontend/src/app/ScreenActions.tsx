@@ -234,7 +234,33 @@ export type ScreenActionKind =
    * the whole point of the change is that the figure on screen moves. A machine
    * transition could not do that without navigating away from the answer.
    */
-  | "setValuationMethod";
+  | "setValuationMethod"
+  /**
+   * ⛔⛔ Esc — CLOSE THE PANEL THE SCREEN HAS OPEN, and ONLY then (D114).
+   *
+   * The odd one out in this list: every other kind is a key the machine has no
+   * answer for, while Esc has a very good one — it pops a frame. This exists
+   * because a screen may hold a panel the MACHINE CANNOT SEE. The Bank
+   * Reconciliation screen renders its statement-import panel and its matching
+   * panel by returning them INSTEAD of its own body, from React state; the
+   * navigation stack still holds one frame, so Esc popped that frame and the
+   * operator landed on the Gateway of Tally.
+   *
+   * Measured 2026-08-31, three times, one keypress each: `Bank Reconciliation —
+   * HDFC Bank` → Alt+O → `Import Bank Statement` → ONE Esc → `Gateway of
+   * Tally`, skipping the screen the panel's own footer names ("Esc goes back to
+   * the reconciliation statement"). It costs more than a keystroke because Bank
+   * Reconciliation is NOT in the Alt+G Go To list: an operator who has just
+   * imported a statement has to know how to find the Gateway entry again.
+   *
+   * ⚠️ A HANDLER MUST ANSWER `undefined` WHEN IT HAS NO PANEL OPEN, which is
+   * what lets Esc go on being Esc. It must also defer to an OVERLAY (F12,
+   * Configure, the period picker): the machine cancels an overlay before it
+   * pops, and a panel that closed underneath an open overlay would leave the
+   * operator looking at a dialog belonging to a screen they can no longer see.
+   * {@link screenHandled} is how a handler says it consumed the key.
+   */
+  | "closePanel";
 
 /**
  * A handler the active screen registers for a screen action. It may return a
@@ -249,7 +275,7 @@ export type ScreenActionKind =
  */
 export type ScreenActionHandler = (
   snapshot: NavSnapshot,
-) => void | string | ScreenRefusal | Promise<void | string>;
+) => void | string | ScreenRefusal | ScreenHandled | Promise<void | string>;
 
 interface ScreenActionsValue {
   /** Mutable registry of the active screen's action handlers. */
@@ -317,6 +343,22 @@ export interface ScreenActionResult {
    * the machine still moves for every action that is not an outright refusal.
    */
   refused?: boolean;
+  /**
+   * Set when the handler CONSUMED the key and did what it says — the shell shows
+   * the message and does NOT forward the key to the navigation machine.
+   *
+   * ⛔ IT IS NOT {@link ScreenActionResult.refused} WEARING A DIFFERENT NAME,
+   * and the difference is the whole reason it exists. A refusal says "nothing
+   * happened and here is why"; this says "something happened, HERE, and the
+   * machine must not also act". Esc with a panel open is the case: the panel
+   * closes and the frame must survive. Reporting that as a refusal would put a
+   * sentence in the status line claiming the operator's key was rejected at the
+   * exact moment it worked — and every existing test that reads `refused` as
+   * "the screen said no" would start being wrong.
+   *
+   * ⚠️ Only a handler that returns {@link screenHandled} sets it.
+   */
+  handled?: boolean;
 }
 
 /**
@@ -334,6 +376,32 @@ export interface ScreenRefusal {
 /** Build the refusal marker a handler returns instead of a plain message. */
 export function screenRefusal(message: string): ScreenRefusal {
   return { __screenRefusal: true, message };
+}
+
+/**
+ * The value a screen handler returns to say "I DID this; do not navigate".
+ *
+ * Branded for the same reasons {@link ScreenRefusal} is, and kept a separate
+ * brand rather than a flag on that one so the two can never be read as each
+ * other — see {@link ScreenActionResult.handled}.
+ */
+export interface ScreenHandled {
+  readonly __screenHandled: true;
+  readonly message: string;
+}
+
+/** Build the consumed-the-key marker a handler returns instead of a message. */
+export function screenHandled(message: string): ScreenHandled {
+  return { __screenHandled: true, message };
+}
+
+/** Narrow a handler's return value to a consumed key. */
+export function isScreenHandled(v: unknown): v is ScreenHandled {
+  return (
+    typeof v === "object" &&
+    v !== null &&
+    (v as ScreenHandled).__screenHandled === true
+  );
 }
 
 /** Narrow a handler's return value to a refusal. */
@@ -364,6 +432,12 @@ export function useScreenActionDispatcher(): (
     if (isScreenRefusal(out)) {
       return { ran: true, message: out.message, refused: true };
     }
+    // A CONSUMED key: the screen acted and the machine must not also act. Same
+    // position in the order as the refusal above, for the same reason — it
+    // carries a message and must not be mistaken for the plain string arm.
+    if (isScreenHandled(out)) {
+      return { ran: true, message: out.message, handled: true };
+    }
     if (typeof out === "string") return { ran: true, message: out };
     // A thenable means the handler is still working (a print fetch). Hand it back
     // so the shell can await it rather than reporting "nothing happened".
@@ -373,6 +447,27 @@ export function useScreenActionDispatcher(): (
     return { ran: true };
   };
 }
+
+/**
+ * ⛔ THERE WAS A THIRD PARAMETER HERE — a `calls?: readonly (keyof CoredClient)[]`
+ * declaration, a module-level Map of it and an exported `declaredClientCalls()`
+ * reader — AND IT WAS DELETED BECAUSE NOTHING FED IT AND NOTHING READ IT. Not one
+ * of the 47 call sites passed it, and the only reference to the exported reader
+ * anywhere in the repo was its own definition, so the Map was empty on every
+ * render and in every process.
+ *
+ * It was documented as existing "for the W0 D3 coverage gate", which is exactly
+ * why it had to go rather than be left standing: a typed, exported, commented API
+ * with no producer is how the next reader concludes the gate is fed when it is
+ * not — the mistake authz/vocabulary.go:24-57 is written about, where a setting
+ * that validated and did nothing meant the owner stopped looking.
+ *
+ * ⚠️ AND IT COULD NEVER HAVE FED THAT GATE IN THIS SHAPE. The declaration arrived
+ * through a hook, so the Map only ever held what was MOUNTED — at most one
+ * screen's worth, and nothing at all in the bare Node process that generates
+ * src/api/goldens/ui-commands.json. See that generator's header for what the
+ * keystroke-level (verb, path) claim still owed by W0 D3 would actually take.
+ */
 
 /**
  * Register (and on unmount, clear) the active screen's handler for an action.

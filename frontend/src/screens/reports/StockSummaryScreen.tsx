@@ -484,6 +484,42 @@ function StockSummaryError({
  */
 const STOCK_SUMMARY_HEADERS = [
   "Item / Location",
+  // ⛔⛔ D109 — THE LEVEL, AND IT IS NOT DECORATION. This report is TWO LEVELS
+  // deep: an item total, then that item's godown/batch positions, which hold
+  // the same money a second time. On screen they are told apart by CSS and by
+  // nothing else (the item `td` is `font-bold text-tally-title`, the position
+  // `td` is `pl-4`), and CSS does not survive Alt+E — so the exported file
+  // offered a money column in which every amount appeared TWICE with nothing in
+  // the file saying so. Measured 2026-08-31: four data rows summing to
+  // 177,037.0908 against the file's own Stock-in-Hand row of 88,518.5454,
+  // a ratio of exactly 2.000000.
+  //
+  // ⭐ THE DUPLICATION IS THE REPORT AND IS NOT THE DEFECT. Both levels are
+  // facts and the screen shows both on purpose; what was missing is the
+  // DECLARATION. With this column a spreadsheet sums `Level = "Item"` (or
+  // `= "Location"`) and gets the stated total to the paisa, which is the one
+  // thing this file exists to let somebody do.
+  //
+  // ⚠️ A COLUMN AND NOT AN INDENT OR A PREFIX ON THE LABEL. An indent survives
+  // to the eye and not to SUM(), and `Basis` — the weak discriminator that
+  // happens to be filled on an item row and empty on a position row — is
+  // declared nowhere, is not in the money column, and no SUM respects it.
+  // See docs/design/d109-two-level-export.md for the three options and why
+  // this one.
+  "Level",
+  // ⛔ D118 — WHOSE TOTAL THIS ROW'S MONEY IS PART OF: the item, on a location
+  // row, and empty on an item total. `Level` alone answers "which rows may I
+  // sum"; this answers "which rows make up THIS one", so a reader can check a
+  // single item's locations against its own line rather than only the file
+  // against its footer.
+  //
+  // ⚠️ IT IS HERE FOR CONSISTENCY AS MUCH AS FOR ITS OWN SAKE. Outstandings —
+  // the other report D109 closed — gained the same pair from the shared export
+  // layer, and two reports of identical shape carrying different columns is the
+  // drift that made D109 possible in the first place. This sheet has its own
+  // builder (Alt+E on this screen does not go through `useReportView`), so the
+  // column is written here rather than inherited.
+  "Parent",
   "Unit",
   // ⛔ THE BASIS IS A COLUMN, NOT A CAPTION (T9). Costing method is a property
   // of the ITEM, so one company's Stock Summary can mix WEIGHTED_AVG, FIFO and
@@ -517,13 +553,33 @@ const STOCK_SUMMARY_HEADERS = [
   "Closing Value",
 ] as const;
 
+/**
+ * THE SCREEN'S columns: the export's, MINUS the Level column.
+ *
+ * ⛔ THE ASYMMETRY IS THE POINT AND IT IS DELIBERATE (D109, D118). The `Level`
+ * and `Parent` columns exist because CSS does not survive Alt+E; on screen the
+ * CSS is still there and still says it — the item row is
+ * `font-bold text-tally-title`, the position row is indented, and it sits
+ * directly under the item it belongs to — so headings repeating what the eye
+ * already reads are noise on the one surface that never had the defect.
+ *
+ * ⚠️ IT IS DERIVED FROM THE EXPORT LIST RATHER THAN COPIED, so a column added
+ * to the report appears in both places from ONE edit. Only the two export-only
+ * columns are subtracted, and if either name is ever changed the filter below
+ * stops matching and the screen grows a column — loudly, in a rendered table,
+ * rather than quietly under a wrong heading.
+ */
+const STOCK_SUMMARY_SCREEN_HEADERS = STOCK_SUMMARY_HEADERS.filter(
+  (h) => h !== "Level" && h !== "Parent",
+);
+
 /** The item tree: one block per stock item, with its per-location positions. */
 function StockRows({ data }: { data: StockSummaryResponse }) {
   return (
     <table className="w-full text-sm" data-testid="stock-summary-table">
       <thead>
         <tr className="text-left text-xs text-tally-title">
-          {STOCK_SUMMARY_HEADERS.map((h, i) => (
+          {STOCK_SUMMARY_SCREEN_HEADERS.map((h, i) => (
             <th key={h} className={i < 3 ? "pr-3" : "pr-3 text-right"}>
               {h}
             </th>
@@ -623,7 +679,7 @@ function StockRows({ data }: { data: StockSummaryResponse }) {
               are left blank rather than summed here — the response carries no
               such totals, and a client-side fold would be this screen asserting
               a figure the server never derived. */}
-          <td className="pr-3" colSpan={STOCK_SUMMARY_HEADERS.length - 1}>
+          <td className="pr-3" colSpan={STOCK_SUMMARY_SCREEN_HEADERS.length - 1}>
             Stock-in-Hand
           </td>
           <td className="pr-3 text-right" data-testid="stock-total-value">
@@ -660,6 +716,11 @@ export function stockSummarySheet(
         // average. The screen shows an em dash; the file leaves it EMPTY rather
         // than exporting a punctuation mark into a numeric column.
         rate: null,
+        level: "Item",
+        // An item total is nobody's child. "" and not the stock group: this
+        // report does not show groups, and naming one would promise a row that
+        // is not in the file.
+        parent: "",
       }),
     );
     for (const pos of it.positions) {
@@ -667,15 +728,24 @@ export function stockSummarySheet(
         stockSummaryRow(
           `${pos.godown || "(no location)"}${pos.batch ? ` \u00b7 ${pos.batch}` : ""}`,
           { ...pos, valuation_method: "", base_unit: "", base_qty: "" },
-          { rate: pos.closing_rate },
+          // ⛔ "Location" AND NOT "Godown"/"Batch": the label cell already
+          // carries both (a batch is appended to its godown), and a level whose
+          // vocabulary depends on the row's contents is not something a
+          // spreadsheet filter can be written against once.
+          { rate: pos.closing_rate, level: "Location", parent: it.item },
         ),
       );
     }
   }
   // The footer states the ONE total the server states (see the table's footer).
+  // ⚠️ IT DECLARES ITS LEVEL TOO ("Total"), because a spreadsheet filtering on
+  // the Level column must be able to EXCLUDE it: a total row swept into a sum
+  // of item rows is the same doubling one row smaller.
   rows.push([
     textCell("Stock-in-Hand"),
-    ...STOCK_SUMMARY_HEADERS.slice(1, -1).map(() => textCell("")),
+    textCell("Total"),
+    textCell(""),
+    ...STOCK_SUMMARY_HEADERS.slice(3, -1).map(() => textCell("")),
     moneyCell(data.total_value),
   ]);
   return {
@@ -717,10 +787,18 @@ function stockSummaryRow(
     closing_qty: string;
     closing_value: string;
   },
-  opts: { rate: string | null },
+  opts: { rate: string | null; level: "Item" | "Location"; parent: string },
 ): ExportRow {
   return [
     textCell(label),
+    // D109 — WHICH OF THE TWO LEVELS THIS ROW IS. It is the second cell so that
+    // it sits beside the label it qualifies, and it is passed in rather than
+    // inferred from `f`: the position row is built by SPREADING the item row's
+    // shape, so any inference here ("no valuation_method means a position")
+    // would be re-deriving the caller's own fact from a field that exists for
+    // another reason.
+    textCell(opts.level),
+    textCell(opts.parent),
     textCell(f.unit),
     // The basis, on item lines only — the same rule the table follows.
     textCell(f.valuation_method ?? ""),

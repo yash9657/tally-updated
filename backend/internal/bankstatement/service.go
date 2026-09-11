@@ -82,6 +82,11 @@ type ImportRequest struct {
 // ImportResult is what happened, in the terms an operator needs.
 type ImportResult struct {
 	ImportID uuid.UUID
+	// FileName is the name the import was STORED under — the operator's own, or
+	// the one derived from the statement when they pasted rather than chose a
+	// file (D111). It is returned rather than assumed, so a client can show the
+	// operator the string the disclosures will quote back at them.
+	FileName string
 	// AlreadyImported is true when this exact file has been imported into this
 	// account before. It is a NO-OP AND A SUCCESS, not an error: the operator's
 	// intent ("this file should be in the system") is satisfied, and making a
@@ -138,6 +143,15 @@ func (s *Service) Import(ctx context.Context, companyID uuid.UUID, req ImportReq
 		OpeningBalance: st.OpeningBalance.StringFixed(4),
 		ClosingBalance: st.ClosingBalance.StringFixed(4),
 	}
+	// D111 — A STATEMENT WITH NO NAME IS STILL NAMED, from its own contents.
+	// The disclosure on the combined import report quotes this string to say
+	// WHICH file could not be balance-walked; stored empty (which is what every
+	// PASTED statement was) it renders as `""` and names nothing. See name.go
+	// for why the fallback is derived rather than constant, and note it is
+	// computed AFTER the parse because the period and the row count come from
+	// the file itself.
+	out.FileName = resolveFileName(req.FileName, out.PeriodFrom, out.PeriodTo,
+		len(st.Lines), fileHash)
 	if !st.BalanceWalked {
 		out.Disclosures = append(out.Disclosures,
 			"This file carries no running balance, so the balance walk could not run: "+
@@ -184,7 +198,7 @@ func (s *Service) Import(ctx context.Context, companyID uuid.UUID, req ImportReq
 			     period_from, period_to, line_count, imported_by)
 			VALUES ($1, $2, $3, $4, $5, 'csv', $6,
 			        $7, $8, $9::date, $10::date, $11, $12)`,
-			importID, companyID, req.LedgerID, req.FileName, fileHash,
+			importID, companyID, req.LedgerID, out.FileName, fileHash,
 			mappingJSON, nullDecimal(st, true), nullDecimal(st, false),
 			out.PeriodFrom, out.PeriodTo, len(st.Lines), req.By)
 		if err != nil {

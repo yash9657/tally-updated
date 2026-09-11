@@ -617,6 +617,26 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 			VALUES ($1)`,
 			[]any{cid}},
 
+		// W0 — the per-tenant LLM token budget (migration 0091).
+		//
+		// ⚠️ POSITION: LAST AMONG THE UUID-company_id ROWS, AND IT MAY GO
+		// ANYWHERE. This table has no foreign key at all — not even to
+		// `company` — so unlike stock_group-before-stock_item above, nothing
+		// about the delete ORDER is exercised by where it sits. It is placed at
+		// the end of the ordinary rows so the two SPECIAL tenancy rows below
+		// (TEXT company_id, and no company_id at all) stay adjacent to each
+		// other and to the comments that explain them.
+		//
+		// The values are the shape internal/llm's PGBudget actually writes:
+		// period_start is the FIRST of a month (llm_token_budget_period_is_month_start
+		// refuses anything else), the limit is positive, and
+		// cached_prompt_tokens <= prompt_tokens.
+		{"llm_token_budget", `INSERT INTO llm_token_budget
+			(id, company_id, period_start, feature, limit_tokens, reserved_tokens,
+			 prompt_tokens, cached_prompt_tokens, completion_tokens, calls, released)
+			VALUES ($1, $2, DATE '2026-09-01', 'fixture.feature', 1000000, 0, 1200, 800, 300, 4, 1)`,
+			[]any{id(), cid}},
+
 		// TEXT company_id. This is the row that the "AND data_type='uuid'"
 		// mutation orphans, and the reason the enumeration query must not filter
 		// on type.

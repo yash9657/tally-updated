@@ -868,7 +868,12 @@ func (s *Service) Generate3B(ctx context.Context, from, to string, opts Options3
 		return q.Err()
 	})
 	if err != nil {
-		return GSTR3B{}, err
+		// D117 — EVERYTHING INSIDE THAT CLOSURE IS A QUERY OR A SCAN, so a
+		// failure out of it is the SERVER's, not the filer's. Marked here rather
+		// than at each `%w` above because the two failures that carry no `gstr: `
+		// prefix — a transaction that could not BEGIN, and `q.Err()` from a
+		// connection that died mid-iteration — are the dead-database case itself.
+		return GSTR3B{}, dataSource(err)
 	}
 
 	// The ITC decisions are resolved AFTER the row transaction and OUTSIDE it:
@@ -885,7 +890,14 @@ func (s *Service) Generate3B(ctx context.Context, from, to string, opts Options3
 	if opts.ITC != nil {
 		decisions, err = opts.ITC.Decisions(ctx, from, to)
 		if err != nil {
-			return GSTR3B{}, fmt.Errorf("gstr: resolve ITC decisions: %w", err)
+			// The ITC source issues its own reads against its own tables, so a
+			// failure here is plumbing too (D117) — with ONE exception the
+			// caller must keep able to see: itc's own sentinels
+			// (ErrWindowNotOnePeriod, ErrNoAsOn) are refusals about the REQUEST,
+			// and writeGSTR3BError checks for them BEFORE it asks about the data
+			// source. Marking here does not hide them; `errors.Is` still finds
+			// them further down the same chain.
+			return GSTR3B{}, dataSource(fmt.Errorf("gstr: resolve ITC decisions: %w", err))
 		}
 	}
 
@@ -1584,7 +1596,9 @@ func (s *Service) ITCPostingTotals(ctx context.Context, from, to string, opts Op
 		return nil
 	})
 	if err != nil {
-		return TaxTotals{}, err
+		// Three sums and nothing else in the closure: a failure is the server's
+		// (D117).
+		return TaxTotals{}, dataSource(err)
 	}
 	return out, nil
 }

@@ -27,6 +27,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -36,6 +37,14 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/jackc/pgx/v5"
+	// actions (W0/D3) is the GENERATED ActionSpec registry. server both produces
+	// it (action_registry_golden_test.go walks this package's router) and, here,
+	// consumes exactly one thing from it: RuleResource, the single renderer that
+	// spells a resource the way an ACL RULE spells it. The scope middleware needs
+	// that spelling so a trace row says `report:day-book` rather than a bare
+	// `report`, and calling the renderer is what stops this file from becoming a
+	// second place that knows a colon goes between them.
+	"github.com/khata/cored/internal/actions"
 	"github.com/khata/cored/internal/authn"
 	"github.com/khata/cored/internal/authz"
 
@@ -54,6 +63,7 @@ import (
 	// disagree about which date a <VOUCHER> asked for. See peekTallyXMLVoucherDate.
 	"github.com/khata/cored/internal/integration"
 	"github.com/khata/cored/internal/ledger"
+	"github.com/khata/cored/internal/llm"
 	"github.com/khata/cored/internal/masters"
 	"github.com/khata/cored/internal/migration"
 	"github.com/khata/cored/internal/nlq"
@@ -65,6 +75,7 @@ import (
 	"github.com/khata/cored/internal/query"
 	"github.com/khata/cored/internal/reporting"
 	"github.com/khata/cored/internal/sync"
+	"github.com/khata/cored/internal/trajectory"
 	"github.com/khata/cored/internal/webauthn"
 )
 
@@ -314,6 +325,17 @@ func New(ctx context.Context, appDSN string) (*Server, error) {
 	waService := webauthn.NewService(webauthn.Config{RPID: rpID, Origin: origin}, waStore)
 	locker := authn.NewLocker(authn.DefaultLockoutPolicy(), authn.NewPGLockoutStore(pool.Raw()), time.Now)
 
+	// The NL->DSL translator (W0). ⛔ ITS ERROR IS A BOOT FAILURE, in the shape
+	// buildAuth already established two calls above: a deployment that named a
+	// provider it cannot speak to, or named one and gave it no credential, must
+	// find out now rather than at the first question a person asks. The pool is
+	// closed on the way out because we own it and nothing else has it yet.
+	translator, err := buildTranslator(pool)
+	if err != nil {
+		pool.Close()
+		return nil, err
+	}
+
 	s := &Server{
 		pool:     pool,
 		identity: identity.NewService(pool),
@@ -343,12 +365,13 @@ func New(ctx context.Context, appDSN string) (*Server, error) {
 		gstr:     gstr.NewService(pool),
 		importer: migration.NewImporter(m, l, pool),
 		sync:     sync.NewService(l, pool),
-		// Conversational query (Phase 3 + wave-2 WS1). buildTranslator selects the
-		// real-Claude adapter when ANTHROPIC_API_KEY is present, else the
-		// deterministic, shipped-by-default FakeTranslator. Either way the LLM emits
-		// ONLY the typed DSL; execution runs through the same read-only,
+		// Conversational query (Phase 3 + wave-2 WS1, re-pointed at internal/llm by
+		// W0). buildTranslator selects a provider from LLM_PROVIDER, else the
+		// pre-W0 ANTHROPIC_API_KEY path, else the deterministic,
+		// shipped-by-default FakeTranslator. Either way the model emits ONLY the
+		// typed DSL; execution runs through the same read-only,
 		// company-GUC-scoped pool as every report, so the safety model is identical.
-		query: query.NewService(pool, buildTranslator()),
+		query: query.NewService(pool, translator),
 		// ITC reconciliation (0032) and payroll (0034). Both take the same
 		// tenant-scoped pool as gstr/query, so their transactions and RLS
 		// semantics are identical; payroll additionally takes the ONE ledger
@@ -445,33 +468,504 @@ func envOr(name, def string) string {
 	return def
 }
 
-// buildTranslator selects the NL->DSL translator (wave-2 WS1). With
-// ANTHROPIC_API_KEY set it returns the real-Claude adapter (nlq.ClaudeTranslator);
-// otherwise the deterministic FakeTranslator that ships by default. This mirrors
-// the insightd adapter pattern: the network translator is built ONLY when a key
-// is present, and it is the sole query-path code that touches the network.
+// ---------------------------------------------------------------------------
+// THE AGENT PLANE'S COMPOSITION ROOT (PLAN-AGENTIC W0).
+// ---------------------------------------------------------------------------
 //
-//   - QUERY_TRANSLATOR_MODEL    overrides the model (default claude-haiku-4-5)
-//   - QUERY_TRANSLATOR_BASE_URL overrides the API host (proxy/gateway, and the
-//     test-injection seam — server_test.go points it at a dead loopback port to
-//     prove the 503 path without a network)
+// internal/llm owns the wire, internal/trajectory owns the span, and NEITHER
+// IMPORTS THE OTHER — llm declares the one-method Recorder interface it consumes
+// (llm/trace.go) and trajectory satisfies it structurally. This file is the only
+// place in the product that may know both types, so this file is where the
+// six-line adapter lives, where the environment is read, and where a
+// half-configured deployment is refused out loud. Decision D-B in the W0 brief;
+// archtest holds the shape (internal/llm's allowed set does not contain
+// internal/trajectory, and never may).
+
+// llmSettings is one deployment's provider selection, resolved from the
+// environment exactly once at boot.
+//
+// ⛔ THE ZERO VALUE IS NOT A PROVIDER. buildLLM returns (zero, false) when
+// LLM_PROVIDER is unset, and every caller must branch on that bool rather than
+// on a field being empty — an empty Provider that reached llm.New would be
+// refused there anyway, but two frames later and with a message about an unknown
+// provider rather than about an unconfigured deployment.
+type llmSettings struct {
+	Provider llm.Provider
+	APIKey   string
+	Model    string
+	BaseURL  string
+	// Timeout is zero when LLM_TIMEOUT was unset or unusable, which means "let
+	// the feature package choose". nlq's 15s is right for an interactive query
+	// box and wrong for a background agent step, so there is deliberately no
+	// single number here.
+	Timeout time.Duration
+}
+
+// buildLLM resolves the provider selection from the environment.
+//
+//   - LLM_PROVIDER  fireworks | deepinfra | sarvam | vllm | anthropic.
+//     UNSET is the shipped default and means "no provider": the caller keeps
+//     whatever behaviour it had before W0. SET-BUT-UNKNOWN is a REFUSAL, never a
+//     fallback — see below.
+//   - LLM_API_KEY   the credential. ⛔ THERE IS NO COMPILED-IN DEFAULT AND THERE
+//     NEVER MAY BE, the same rule insightd_proxy.go applies to
+//     its service credential: a default credential is a credential
+//     in the binary.
+//   - LLM_MODEL     the model id. Required for every provider except Anthropic,
+//     which keeps the model this deployment has been answering
+//     questions with since wave 2 (nlq.DefaultModel) so that
+//     "we refactored the LLM layer" cannot present in the field as
+//     "NL query got worse".
+//   - LLM_BASE_URL  a proxy/gateway host, and the httptest seam. "" lets the
+//     chosen adapter supply its own default host — which is why
+//     this must NOT be defaulted to any one provider's host.
+//   - LLM_TIMEOUT   a Go duration. Unparseable is LOGGED and then ignored,
+//     never silently honoured as zero.
+//
+// ⛔ WHY AN UNKNOWN PROVIDER REFUSES TO BOOT RATHER THAN FALLING BACK. The
+// fallback that suggests itself is "unknown provider, use the deterministic
+// FakeTranslator" — and it is the worst available option, because a keyword
+// matcher answering accounting questions is indistinguishable at the API from a
+// model doing it (nlq/translate.go says so at llmClient). An operator who typed
+// LLM_PROVIDER=fireworks.ai would get plausible answers to some questions and
+// silence about the rest, forever. Refusing to start is loud, immediate, and
+// costs one restart.
+func buildLLM() (llmSettings, bool, error) {
+	name := os.Getenv("LLM_PROVIDER")
+	if name == "" {
+		return llmSettings{}, false, nil
+	}
+	provider := llm.Provider(name)
+	if _, ok := llm.AdapterFor(provider); !ok {
+		return llmSettings{}, false, fmt.Errorf(
+			"server: LLM_PROVIDER=%q is not a provider this binary can speak to (known: %v). Refusing to start rather than falling back to the deterministic FakeTranslator, which would answer accounting questions by keyword match while the operator believed a model was running",
+			name, llm.KnownProviders)
+	}
+
+	model := os.Getenv("LLM_MODEL")
+	if model == "" {
+		if provider != llm.ProviderAnthropic {
+			return llmSettings{}, false, fmt.Errorf(
+				"server: LLM_PROVIDER=%s is set but LLM_MODEL is empty. A model id is meaningless without the provider that serves it and this repo has a default for exactly one of them (%s). Set LLM_MODEL. Refusing to start",
+				provider, llm.ProviderAnthropic)
+		}
+		model = nlq.DefaultModel
+	}
+
+	set := llmSettings{
+		Provider: provider,
+		APIKey:   os.Getenv("LLM_API_KEY"),
+		Model:    model,
+		BaseURL:  os.Getenv("LLM_BASE_URL"),
+		Timeout:  llmTimeout(),
+	}
+
+	// ⚠️ THE CREDENTIAL CHECK IS A DRY RUN OF llm.New RATHER THAN A RESTATEMENT
+	// OF ITS RULE. llm.New exempts exactly one provider from needing a key (a
+	// self-hosted vLLM started without --api-key genuinely has none), and a
+	// second copy of that exemption here is a second thing to update the day it
+	// moves. So this asks the real constructor, with the real configuration, and
+	// throws the client away: the object is cheap, opens no socket, and the
+	// answer is the one the feature package will get at its first question —
+	// except that here it arrives at boot, where somebody is watching.
+	if _, err := llm.New(llm.Config{
+		Provider: set.Provider,
+		Model:    set.Model,
+		APIKey:   set.APIKey,
+		BaseURL:  set.BaseURL,
+	}); err != nil {
+		return llmSettings{}, false, fmt.Errorf(
+			"server: LLM_PROVIDER=%s is set but the configuration is incomplete: %w. Refusing to start rather than serving 503s that look like an outage",
+			provider, err)
+	}
+	return set, true, nil
+}
+
+// llmTimeout parses LLM_TIMEOUT, or returns 0 meaning "the feature package
+// chooses".
+//
+// ⛔ AN UNPARSEABLE VALUE IS LOGGED AND THEN IGNORED, exactly the shape
+// statutorydTimeout uses and for the same reason: refusing to start over one
+// optional knob takes the whole server down, and honouring it silently would let
+// a deployment that meant 5m sit at 15s forever with nothing anywhere saying why.
+func llmTimeout() time.Duration {
+	raw := os.Getenv("LLM_TIMEOUT")
+	if raw == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		log.Printf("cored: LLM_TIMEOUT=%q is not a positive Go duration (e.g. \"20s\"); the calling feature's own default stands", raw)
+		return 0
+	}
+	return d
+}
+
+// buildBudget selects the per-tenant token budget.
+//
+// ⚠️ WHAT THIS BUDGET WRITES, AND WHY IT IS NOT A CONTRADICTION OF
+// actions.ActionSpec.IsWrite. llm.PGBudget's Reserve/Settle/Release each run
+// db.Pool.RunInTx — an ordinary READ-WRITE transaction — issuing an
+// INSERT ... ON CONFLICT DO NOTHING and an UPDATE against llm_token_budget. So
+// POST /v1/companies/{companyID}/query, which the generated action registry
+// correctly records as `display query` with is_write=false, causes rows to be
+// created and updated on behalf of a principal holding only display rights.
+//
+// That is METERING, not books: one row per (company, calendar month, feature),
+// tenant-scoped by RLS (ENABLE + FORCE, USING and WITH CHECK), carrying counters
+// and no ledger data. IsWrite is authz.Action.IsWrite — the same predicate the
+// back-dated cutoff and the WebAuthn step-up hang off — and it describes what
+// happens to THE BOOKS. A policy layer that read it as "this action touches no
+// table" would be wrong here, and it is worth knowing before W2 decides which
+// steps need a HumanInterrupt: the metering plane writes on every action,
+// including every read.
+//
+// ⚠️ THE DEFAULT IS NoBudget AND IT SAYS SO OUT LOUD. internal/llm's own doc on
+// llm.NoBudget/llm.DiscardRecorder makes this the composition root's job in
+// terms: "this deployment has no token cap" must be a sentence somebody wrote,
+// not a field nobody filled in. So the uncapped case prints one line at boot
+// rather than being an absence in a struct literal.
+//
+// LLM_BUDGET_TOKENS_PER_MONTH is the cap, per (company, calendar month,
+// feature), enforced against llm_token_budget (migration 0091) inside the
+// caller's own RLS-scoped transaction. It has NO default: llm.PGBudget refuses a
+// zero limit rather than reading it as either "unlimited" (a cap that is not one)
+// or "nothing" (every call refused on a deployment that merely forgot).
+//
+// ⛔ SET-BUT-UNPARSEABLE IS A REFUSAL TO BOOT, NOT A DEGRADATION, AND THAT IS THE
+// SAME CALL buildLLM MAKES ABOUT LLM_PROVIDER=fireworks.ai. It shipped as a
+// logged fallback to NoBudget, which means `LLM_BUDGET_TOKENS_PER_MONTH="100_000"`
+// or a trailing space produced an UNCAPPED deployment whose operator believed a
+// cap was in force — a spend control that is not where the person who set it
+// thinks it is. A cost/abuse cap belongs in the class of the provider name, not
+// in the class of INSIGHTD_TIMEOUT and STATUTORYD_TIMEOUT: those degrade to a
+// stated default of the same KIND, whereas this one degrades to the ABSENCE of
+// the control. UNSET stays the logged NoBudget default — a deployment that never
+// asked for a cap is not surprised by not having one.
+func buildBudget(pool *db.Pool) (llm.Budget, error) {
+	raw := os.Getenv("LLM_BUDGET_TOKENS_PER_MONTH")
+	if raw == "" {
+		log.Printf("cored: LLM_BUDGET_TOKENS_PER_MONTH is unset — any model call this deployment makes is NOT capped per tenant (llm.NoBudget). Set it to a positive integer to enforce migration 0091's budget")
+		return llm.NoBudget{}, nil
+	}
+	limit, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || limit <= 0 {
+		return nil, fmt.Errorf(
+			"server: LLM_BUDGET_TOKENS_PER_MONTH=%q is not a positive integer (plain digits, e.g. \"2000000\" — no separators, no suffix). Refusing to start rather than serving uncapped model calls to a deployment that asked for a cap",
+			raw)
+	}
+	log.Printf("cored: per-tenant model budget enforced at %d tokens per calendar month per feature", limit)
+	return &llm.PGBudget{Pool: pool, DefaultLimitTokens: limit, Now: time.Now}, nil
+}
+
+// trajectoryRecorder adapts internal/trajectory to internal/llm's Recorder seam.
+//
+// ⛔ THIS SIX-LINE TYPE IS THE ENTIRE REASON internal/llm DOES NOT IMPORT
+// internal/trajectory (decision D-B). llm declares the interface it consumes;
+// trajectory satisfies it structurally; the composition root — the one package
+// archtest lets import both — joins them. The payoff is not tidiness: it is that
+// a test of either package needs no fake from the other, and that a deployment
+// with tracing off links no exporter at all.
+//
+// ⚠️ IT IS INSTALLED UNCONDITIONALLY, and that is safe BECAUSE trajectory.Start
+// has a zero-allocation nop path when no Recorder is installed (span.go). There
+// is deliberately no "if tracing is on" branch here: a knob that changes which
+// code runs is a knob that gets exercised in exactly one of its two positions.
+type trajectoryRecorder struct{}
+
+// StartLLMCall opens the chat span and stamps everything about the REQUEST that
+// is safe to keep.
+//
+// ⛔ NOTHING HERE IS CONTENT. SpanStart carries a prompt HASH and a prompt
+// VERSION and no prompt; the tenant, user and subject come from the ambient
+// Scope the middleware installed. The one thing this stamps that the Scope
+// cannot is the feature, because the feature is named by the CALL SITE (nlq
+// says "nlq.translate") and a middleware that guessed it from the route would be
+// guessing.
+func (trajectoryRecorder) StartLLMCall(ctx context.Context, s llm.SpanStart) (context.Context, llm.LLMSpan) {
+	ctx, sp := trajectory.Start(ctx, trajectory.KindChat, trajectory.OpChat+" "+s.ModelID)
+	if s.Feature != "" {
+		sp.SetString(trajectory.AttrFeature, s.Feature)
+	}
+	// A tenant disagreement between the ambient Scope and the call's own
+	// TenantID is a WIRING DEFECT — one request's span attributed to another
+	// company — so it is said out loud rather than silently resolved in favour
+	// of either. It cannot be resolved here: neither value is more authoritative
+	// than the other, and picking one would hide the bug in whichever produced
+	// the wrong one.
+	if scope, ok := trajectory.ScopeFromContext(ctx); ok && s.TenantID != uuid.Nil && scope.TenantID != s.TenantID {
+		log.Printf("cored: trajectory scope tenant %s disagrees with the llm call's tenant %s for feature %q — one of the two is wrong and the span is attributed to the request scope",
+			scope.TenantID, s.TenantID, s.Feature)
+	}
+	sp.SetModelRequest(trajectory.ModelRequest{
+		System:        string(s.Provider),
+		ModelID:       s.ModelID,
+		PromptVersion: s.PromptVersion,
+		PromptHash:    s.PromptHash,
+	})
+	return ctx, &trajectorySpan{sp: sp}
+}
+
+type trajectorySpan struct{ sp *trajectory.Span }
+
+// End closes the span. resp may be non-nil WITH a non-nil err — that is the
+// refusal case, where the call was served and billed and the fingerprint is the
+// only evidence of what served it, so both halves are recorded rather than the
+// error alone.
+func (t *trajectorySpan) End(resp *llm.Response, err error) {
+	if resp != nil {
+		var reasons []string
+		if resp.FinishReason != "" {
+			reasons = []string{resp.FinishReason}
+		}
+		t.sp.SetModelResponse(trajectory.ModelResponse{
+			ModelID:           resp.Fingerprint.ServedModel,
+			Fingerprint:       resp.Fingerprint.SystemFingerprint,
+			ResponseID:        resp.Fingerprint.ResponseID,
+			FinishReasons:     reasons,
+			InputTokens:       resp.Usage.PromptTokens,
+			OutputTokens:      resp.Usage.CompletionTokens,
+			CachedInputTokens: resp.Usage.CachedPromptTokens,
+			RepairAttempts:    resp.Repairs,
+		})
+	}
+	if err != nil {
+		// SetError records error.type and NEVER the message: a provider message
+		// can quote the prompt back, and a prompt is content.
+		t.sp.SetError(err)
+		// ⛔ AND error.type ALONE IS "*fmt.wrapError" FOR ALMOST EVERY FAILURE
+		// THIS SEAM SEES, WHICH IS THE SAME AS RECORDING NOTHING. SetError
+		// stamps fmt.Sprintf("%T", err), and internal/llm wraps every sentinel
+		// with fmt.Errorf("%w: …") — so a trace store asking the question a
+		// trace store exists to answer ("was that an exhausted budget or a dead
+		// provider?") got one indistinguishable Go type for the exhausted
+		// budget, the 500, the over-size refusal and the tenant-id gate. The
+		// on-call response to each of those is different, and the taxonomy that
+		// names the difference (llm/errors.go: whose FAULT it is) was reachable
+		// only from the caller's own log, inside the tenant boundary.
+		//
+		// ⚠️ THE SENTINEL TEXT IS SAFE TO RECORD AND THE WRAPPED MESSAGE IS NOT.
+		// Each sentinel is a package-level errors.New with a fixed English
+		// string that no caller interpolates into — content-free by
+		// construction — whereas the wrap around it carries a provider snippet,
+		// a feature name, or a status line. So the NAME is what goes on the
+		// span, and it is written out as a literal rather than derived from the
+		// error, because deriving it would mean recording err.Error().
+		if name, ok := llmSentinelName(err); ok {
+			t.sp.SetString(trajectory.AttrErrorType, name)
+		}
+	}
+	t.sp.End()
+}
+
+// llmSentinelName renders the llm error taxonomy for a trace attribute.
+//
+// ⛔ THE ORDER IS NOT ALPHABETICAL AND MUST STAY MOST-SPECIFIC-FIRST. errors.Is
+// walks the wrap chain, so a sentinel that some other sentinel wraps would win
+// the wrong arm if it came first. Today none of them wrap each other and the
+// only Unwrap in llm/errors.go is UpstreamError -> ErrUpstreamUnavailable
+// (which is why an *llm.UpstreamError correctly reports the upstream arm rather
+// than its own struct type). The rule is written down for the sentinel somebody
+// adds later.
+//
+// ⚠️ A MISS IS NOT AN ERROR. An error from outside this taxonomy — an adapter
+// decode failure, a context deadline — keeps SetError's %T, which is the honest
+// answer for it. Returning ok=false rather than a placeholder is what keeps
+// "unclassified" distinguishable from "classified as other".
+func llmSentinelName(err error) (string, bool) {
+	for _, s := range []struct {
+		sentinel error
+		name     string
+	}{
+		// TENANT fault: this company has spent its cap. The one an operator
+		// looks for when a screen says the assistant is unavailable and every
+		// provider dashboard is green.
+		{llm.ErrBudgetExhausted, "llm.ErrBudgetExhausted"},
+		// DEPLOYMENT faults, all three: a PGBudget with no limit, a caller
+		// billing a company other than the one in scope, and a provider wired
+		// without a credential.
+		{llm.ErrBudgetNotConfigured, "llm.ErrBudgetNotConfigured"},
+		{llm.ErrBudgetScopeMismatch, "llm.ErrBudgetScopeMismatch"},
+		{llm.ErrNotConfigured, "llm.ErrNotConfigured"},
+		// OPERATOR fault: every non-2xx and every transport failure.
+		{llm.ErrUpstreamUnavailable, "llm.ErrUpstreamUnavailable"},
+		// MODEL fault: served, billed, and unusable after the repair bound.
+		{llm.ErrNoStructuredOutput, "llm.ErrNoStructuredOutput"},
+		// CALLER faults: an over-size prompt, and the tenant-id gate — which is
+		// a SECURITY control, so it must be legible in the trace store rather
+		// than only in a log line somebody has to go looking for.
+		{llm.ErrInputTooLarge, "llm.ErrInputTooLarge"},
+		{llm.ErrTenantIDInPrompt, "llm.ErrTenantIDInPrompt"},
+	} {
+		if errors.Is(err, s.sentinel) {
+			return s.name, true
+		}
+	}
+	return "", false
+}
+
+// Compile-time proof that the adapter satisfies the seam llm declares. If
+// somebody widens llm.Recorder, THIS LINE is what breaks first — which is the
+// point of writing it down here rather than relying on the assignment below.
+var _ llm.Recorder = trajectoryRecorder{}
+
+// trajectoryScopeMiddleware installs the ambient trajectory.Scope for the
+// /v1/companies/{companyID} subtree.
+//
+// WHY A MIDDLEWARE AND NOT A PARAMETER. The code that opens a span — internal/llm
+// on a model call, a tool implementation, W2's agent loop — sits four or five
+// frames below anything that knows whose request this is. A Scope threaded
+// through all of them as an argument is an argument somebody eventually forgets
+// to pass, and the result is an unattributed trace row that looks exactly like a
+// correct one (trajectory/span.go says this at length on Scope).
+//
+// ⛔ IT MOUNTS NO ROUTE OF ITS OWN, AND MUST NOT. Every route inside {companyID}
+// needs a routeAction() arm or it is default-denied;
+// TestEveryCompanyRouteIsMappedAndInVocabulary walks this router and goes red for
+// a route with no arm, so a middleware that quietly added, say, /v1/companies/
+// {companyID}/_trace would turn that suite red and, worse, would be a route the
+// PDP never evaluated.
+//
+// ⚠️ IT CALLS routeAction A SECOND TIME, and that is safe rather than merely
+// cheap: routeAction inspects the METHOD and the PATH only and never touches the
+// request body (auth_middleware.go states it in terms, and it is the reason the
+// service-principal branch may call it before the sync/import handlers read
+// their payloads). Only voucherDateFromRequest peeks a body, and it is not this.
+// Re-deriving the pair is what keeps the trace row honest: the alternative is
+// stashing the middleware's own copy in the context, which is a second source of
+// truth for route identity, and auth_middleware.go's ⛔ THE ROUTER IS THE ORACLE,
+// NOT A SECOND TABLE is about exactly that.
+//
+// An UNMAPPED route leaves Action and Resource empty rather than inventing a
+// pair. It should be unreachable — companyAuthMiddleware has already 403'd an
+// unmapped sub-path for both people and service principals — so if one ever shows
+// up in the trace store with no action, that is a finding and not a gap to be
+// papered over with a placeholder.
+func trajectoryScopeMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		// Every one of these is already in the context, put there by
+		// companyAuthMiddleware. The `_` on each is deliberate: a service
+		// principal has a subject and NO user row, so a missing user id is a
+		// normal state and uuid.Nil is what trajectory expects for it (it omits
+		// enduser.id rather than emitting the all-zero UUID as if it were a
+		// person).
+		companyID, _ := db.CompanyFromContext(ctx)
+		userID, _ := db.UserFromContext(ctx)
+		subject, _ := db.SubjectFromContext(ctx)
+
+		sc := trajectory.Scope{
+			TenantID: companyID,
+			UserID:   userID,
+			Subject:  subject,
+			// chi's RequestID honours an inbound X-Request-Id, so this is
+			// CLIENT-SUPPLIABLE and trajectory treats it as a correlation hint
+			// only — never as authority, never as a file name.
+			RequestID: middleware.GetReqID(ctx),
+			// Feature is deliberately EMPTY here. It is the coarse product
+			// surface ("nlq.translate", "extraction") and the cassette directory
+			// name, and it is named by the CALL SITE, which is the only place
+			// that knows it; the adapter stamps it from llm.SpanStart. A route
+			// pattern is not a feature, and guessing one from it would put a
+			// wrong directory name in a cassette path.
+		}
+		if act, res, resName, mapped := routeAction(r); mapped {
+			sc.Action = string(act)
+			// RuleResource is the ONE renderer for "resource, with the report
+			// name after a colon". Calling it rather than concatenating here is
+			// what stops a trace row saying `report` where a rule says
+			// `report:day-book`, which would make the two impossible to join.
+			sc.Resource = string(actions.ActionSpec{Resource: res, ResourceName: resName}.RuleResource())
+		}
+		next.ServeHTTP(w, r.WithContext(trajectory.WithScope(ctx, sc)))
+	})
+}
+
+// buildTranslator selects the NL->DSL translator (wave-2 WS1, re-pointed at
+// internal/llm by W0).
+//
+// THREE MODES, IN PRECEDENCE ORDER:
+//
+//  1. LLM_PROVIDER set: the W0 path. Any of internal/llm's five adapters, with
+//     LLM_API_KEY / LLM_MODEL / LLM_BASE_URL / LLM_TIMEOUT. A broken selection
+//     REFUSES TO BOOT (buildLLM).
+//  2. LLM_PROVIDER unset, ANTHROPIC_API_KEY set: the pre-W0 path, byte for byte
+//     — same env vars, same default model, same default host. A deployment that
+//     has been answering questions since wave 2 must not change behaviour on the
+//     day the agent plane lands.
+//  3. Neither: the deterministic FakeTranslator that ships by default.
+//
+// ⛔ MODE 3 IS THE SHIPPED DEFAULT AND IT MUST STAY HERMETIC. Every CI gate in
+// this repo runs with no keys and no network; the day this function needs either
+// to return, the whole test suite starts depending on somebody's API budget.
+//
+//   - QUERY_TRANSLATOR_MODEL    overrides the model in mode 2 (default claude-haiku-4-5)
+//   - QUERY_TRANSLATOR_BASE_URL overrides the API host in mode 2 (proxy/gateway,
+//     and the test-injection seam — query_test.go points it at a dead loopback
+//     port to prove the 503 path without a network)
+//
+// ⚠️ QUERY_TRANSLATOR_BASE_URL IS DELIBERATELY NOT HONOURED IN MODE 1, and
+// LLM_BASE_URL is deliberately not defaulted to nlq.DefaultBaseURL. Passing
+// Anthropic's host unconditionally is what would send a Fireworks request to
+// api.anthropic.com, where the failure reads as a 404 on a model id — the exact
+// trap nlq/translate.go's comment on DefaultBaseURL names.
 //
 // Whatever Query the translator returns is re-validated by the query compiler and
 // executed read-only, so the safety model does not depend on which translator ran.
-func buildTranslator() query.Translator {
+func buildTranslator(pool *db.Pool) (query.Translator, error) {
+	set, configured, err := buildLLM()
+	if err != nil {
+		return nil, err
+	}
+	// ⛔ THE BUDGET IS RESOLVED BEFORE THE MODE IS CHOSEN. A cap validated only on
+	// the deployments that happen to have a provider configured is a cap whose
+	// typo is discovered at the moment it was supposed to start mattering — the
+	// first time somebody sets LLM_PROVIDER on a box that has carried a malformed
+	// LLM_BUDGET_TOKENS_PER_MONTH for a month.
+	budget, err := buildBudget(pool)
+	if err != nil {
+		return nil, err
+	}
+	if configured {
+		var httpc *http.Client
+		if set.Timeout > 0 {
+			httpc = &http.Client{Timeout: set.Timeout}
+		}
+		log.Printf("cored: NL query translator = %s/%s (trajectory spans recorded)", set.Provider, set.Model)
+		return &nlq.Translator{
+			APIKey:   set.APIKey,
+			Model:    set.Model,
+			BaseURL:  set.BaseURL,
+			Client:   httpc,
+			Provider: set.Provider,
+			Recorder: trajectoryRecorder{},
+			Budget:   budget,
+			Now:      time.Now,
+		}, nil
+	}
+
 	key := os.Getenv("ANTHROPIC_API_KEY")
 	if key == "" {
-		return query.FakeTranslator{Now: time.Now}
+		return query.FakeTranslator{Now: time.Now}, nil
 	}
+	log.Printf("cored: NL query translator = %s/%s via ANTHROPIC_API_KEY (pre-W0 path; set LLM_PROVIDER to select any provider)",
+		nlq.DefaultProvider, envOr("QUERY_TRANSLATOR_MODEL", nlq.DefaultModel))
 	// Now is wired for the SAME reason FakeTranslator gets one: the prompt's
 	// resolved period windows are built from it, and a translator with no clock
 	// guesses what "last quarter" means (D21).
+	//
+	// Recorder and Budget are wired here TOO, and that is not scope creep: this
+	// is the same translator making the same billed calls, and a trajectory that
+	// covered only deployments which had migrated to LLM_PROVIDER would be a
+	// trajectory with a hole in it exactly where the existing traffic is.
 	return &nlq.ClaudeTranslator{
-		APIKey:  key,
-		Model:   envOr("QUERY_TRANSLATOR_MODEL", nlq.DefaultModel),
-		BaseURL: envOr("QUERY_TRANSLATOR_BASE_URL", nlq.DefaultBaseURL),
-		Now:     time.Now,
-	}
+		APIKey:   key,
+		Model:    envOr("QUERY_TRANSLATOR_MODEL", nlq.DefaultModel),
+		BaseURL:  envOr("QUERY_TRANSLATOR_BASE_URL", nlq.DefaultBaseURL),
+		Recorder: trajectoryRecorder{},
+		Budget:   budget,
+		Now:      time.Now,
+	}, nil
 }
 
 // buildAuth selects the authentication mode FAIL-CLOSED. A stock binary with no
@@ -580,13 +1074,48 @@ func (s *Server) Close() { s.pool.Close() }
 func (s *Server) Router() http.Handler { return s.router }
 
 // ListenAndServe starts the HTTP server on addr.
-func (s *Server) ListenAndServe(addr string) error {
+func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 	httpSrv := &http.Server{
 		Addr:              addr,
 		Handler:           s.router,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	return httpSrv.ListenAndServe()
+
+	// ⛔ IT RETURNS ON ctx.Done(), AND THAT IS WHAT MAKES cmd/cored's DEFERS RUN.
+	// Before this, the method was a bare httpSrv.ListenAndServe() that only ever
+	// returned on a listen error, and `cored serve` handled no signal at all — so
+	// on every deploy the process was killed inside ListenAndServe and NOTHING
+	// deferred in runServe executed. Measured, not supposed: with an OTLP sink on
+	// loopback and the binary sent SIGTERM, the log ended at "cored serving on
+	// :8080" and the trajectory flush, close and exported/failed/dropped
+	// accounting never printed. The exporter batches (512 spans or 5s), so the
+	// last batch — the one containing whatever the operator was looking at when
+	// they restarted the process — was silently lost every time, by a block of
+	// code whose comment promised otherwise.
+	errc := make(chan error, 1)
+	go func() { errc <- httpSrv.ListenAndServe() }()
+	select {
+	case err := <-errc:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	case <-ctx.Done():
+		// ⚠️ A FRESH CONTEXT FOR THE SHUTDOWN, NOT ctx. ctx is the one that just
+		// fired; passing it to Shutdown would cancel in-flight requests
+		// immediately, which is a hard stop wearing a graceful stop's name. The
+		// deadline is the grace period: finish what is running, then go.
+		shutCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		log.Printf("cored: shutdown signal received; draining in-flight requests (up to 15s)")
+		if err := httpSrv.Shutdown(shutCtx); err != nil {
+			// Say it and keep going: the caller's deferred telemetry flush is
+			// worth more than a non-zero exit over a connection that would not
+			// close.
+			log.Printf("cored: graceful shutdown did not complete: %v", err)
+		}
+		return nil
+	}
 }
 
 func (s *Server) routes() {
@@ -644,6 +1173,13 @@ func (s *Server) routes() {
 	r.Route("/v1/companies/{companyID}", func(r chi.Router) {
 		// Every route in this subtree is authn'd + PDP-enforced.
 		r.Use(s.companyAuthMiddleware)
+		// ...and every route in this subtree carries a trajectory Scope, so any
+		// model call made below it is attributable. ⛔ ORDER IS LOAD-BEARING: it
+		// runs AFTER companyAuthMiddleware because everything it copies —
+		// company, user, subject — is put in the context BY that middleware, and
+		// because a span for a request that was about to be 403'd is a span for
+		// a thing that never happened.
+		r.Use(trajectoryScopeMiddleware)
 
 		// Company master read-back (WS8a). The frontend hydrates
 		// CompanyInfo.homeStateCode from state_code so the in-browser GST split
@@ -4099,7 +4635,9 @@ func (s *Server) handleGSTR1(w http.ResponseWriter, r *http.Request) {
 	if opts.CGSTLedgerID != uuid.Nil || opts.SGSTLedgerID != uuid.Nil || opts.IGSTLedgerID != uuid.Nil {
 		g, rec, err := s.gstr.Reconcile(ctx, from, to, opts)
 		if err != nil {
-			writeError(w, http.StatusUnprocessableEntity, err.Error())
+			// D117 — the same status decision the other two returns make. This
+			// arm was named in D117's row as "check /gstr1 at the same time".
+			writeGSTR1Error(w, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -4111,10 +4649,21 @@ func (s *Server) handleGSTR1(w http.ResponseWriter, r *http.Request) {
 
 	g, err := s.gstr.Generate(ctx, from, to, opts)
 	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		writeGSTR1Error(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, g)
+}
+
+// writeGSTR1Error is /gstr1's half of the D117 status decision: a refusal about
+// the books keeps its 422 and its sentence; a failure to READ them is a 500 the
+// operator can report. Both /gstr1 arms go through it so the two cannot drift.
+func writeGSTR1Error(w http.ResponseWriter, err error) {
+	if gstr.IsDataSource(err) {
+		writeBooksUnreadable(w, "GSTR-1", err)
+		return
+	}
+	writeError(w, http.StatusUnprocessableEntity, err.Error())
 }
 
 // --------------------------------------------------------------------------

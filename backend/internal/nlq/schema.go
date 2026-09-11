@@ -84,17 +84,67 @@ const emitQuerySchema = `{
   }
 }`
 
-// systemPrompt builds the NL->DSL system prompt from query.Catalog() at runtime,
-// so a whitelist widening automatically reaches the model. It carries NAMES ONLY
-// (never SQL) plus the compiler traps, the resolved period windows and the
-// few-shot NL->DSL pairs. NO tenant data (company id, ledger/party names) ever
-// appears here — the catalog is the fixed server-authored surface, and the
-// caller's question is the only per-request input, carried in the user message,
-// never interpolated here.
+// ---------------------------------------------------------------------------
+// THE PROMPT, SPLIT INTO ITS CACHEABLE HALF AND ITS PER-CALL HALF.
+// ---------------------------------------------------------------------------
+//
+// ⛔ THE SPLIT IS A COST CONTRACT, NOT A TIDY-UP.
+//
+// Every provider we send this to bills a REPEATED prompt prefix at a fraction of
+// a fresh one, and every one of them matches that prefix BYTE FOR BYTE from the
+// first byte of the request. Until W0 this prompt was one string with today's
+// date and the resolved period windows baked into the middle of it — which means
+// the prefix changed at midnight, every night, for every tenant, and the ~6 KB
+// catalogue-and-rules preamble was re-billed at full price on every single
+// question anybody had ever asked. Nothing failed; the only symptom was the
+// invoice, which is exactly why it survived three lanes unnoticed.
+//
+// So: staticPrompt() is what is identical across every call of this prompt
+// version — the catalogue, the compiler traps, the refusal rules. It goes in
+// llm.Request.Static. dynamicPrompt() is what a clock or a company changes —
+// today's date, the financial-year month, the resolved windows, and the worked
+// examples that interpolate a live window. It goes in llm.Request.Dynamic,
+// AFTER the static half.
+//
+// ⚠️ THE EXAMPLES ARE DYNAMIC AND THAT IS DELIBERATE. They look like teaching
+// material and teaching material looks static, so the tempting move is to hoist
+// them into staticPrompt() and freeze the quarter they name. That is D21 exactly
+// — a frozen example window is what once taught the model to answer "this
+// quarter" with a quarter three years gone — and it would cost a few hundred
+// bytes of cache to avoid. The catalogue and the rules are the bulk; the
+// examples are four lines. Freeze them and the cache saves nothing it did not
+// already save, while the answers go wrong.
+//
+// TestStaticPromptIsClockIndependent (translate_test.go) is the detector: it
+// builds the request under two clocks years apart and requires identical Static
+// bytes, a DIFFERENT Dynamic, and — the control — a Static that actually
+// carries the catalogue, so a "split" that put everything in Dynamic (leaving
+// Static trivially stable because it is empty) fails instead of passing.
+
+// systemPrompt is the whole prompt, static half followed by dynamic half, in the
+// order they go over the wire.
+//
+// ⚠️ IT SURVIVES THE SPLIT AS A REAL FUNCTION, not as a test helper. Six tests in
+// schema_test.go assert on the RENDERED prompt — that no SQL leaks into it, that
+// every worked example compiles, that the window the model is told to copy is the
+// window FakeTranslator answers with — and those are assertions about what the
+// model actually reads, which is the concatenation. Splitting them into two
+// half-prompt test suites would let a rule land in one half and the example that
+// contradicts it in the other, with each half passing on its own.
+func systemPrompt(now time.Time, fyStartMonth int) string {
+	return staticPrompt() + dynamicPrompt(now, fyStartMonth)
+}
+
+// staticPrompt builds the cacheable half from query.Catalog() at runtime, so a
+// whitelist widening automatically reaches the model. It carries NAMES ONLY
+// (never SQL) plus the compiler traps and the refusal rules. NO tenant data
+// (company id, ledger/party names) ever appears here — the catalog is the fixed
+// server-authored surface, and the caller's question is the only per-request
+// input, carried in the user message, never interpolated here.
 //
 // ⛔ THE PROMPT IS PART OF THE PRODUCT, NOT DOCUMENTATION FOR IT (L5). Whatever
 // this file teaches IS what a real deployment answers: server.go swaps
-// FakeTranslator for ClaudeTranslator the moment ANTHROPIC_API_KEY is set, and
+// FakeTranslator for the real translator the moment a provider key is set, and
 // the compiler downstream only rejects ILLEGAL queries — it cannot reject a
 // legal query that measures the wrong thing. Three of L5's four defects are
 // therefore restated here as rules the model must obey, because fixing them in
@@ -102,22 +152,18 @@ const emitQuerySchema = `{
 //
 //   - D51: the worked example used to be sum(taxable_value) over voucher type
 //     "Sales" — the exact figure that matched no report. Rule 6 now forbids it
-//     and the example emits the postings/natural_net/pl_group shape instead.
+//     and the example (in dynamicPrompt) emits the postings/natural_net/pl_group
+//     shape instead.
 //   - D21: the example used to carry a HARD-CODED quarter and the model was
 //     given no clock at all, so every relative phrase was a guess. The resolved
-//     windows below come from query.NamedWindows — the same parser
-//     FakeTranslator answers with — and rule 7 says to copy them verbatim.
+//     windows come from query.NamedWindows — the same parser FakeTranslator
+//     answers with — and rule 7 says to copy them verbatim.
 //   - D50: rule R1 refuses a question that names another company's books.
 //
-// now/fyStartMonth are the request clock and the company financial-year start;
-// they are calendar facts, not tenant data.
-func systemPrompt(now time.Time, fyStartMonth int) string {
-	// Resolved ONCE, from query's own parser, and used by BOTH the window table
-	// and the worked example — so the example can never teach a window the table
-	// contradicts.
-	windows := query.NamedWindows(func() time.Time { return now }, fyStartMonth)
-	thisQuarter := windowFor(windows, "this quarter")
-
+// ⛔ IT TAKES NO ARGUMENTS, AND THAT IS THE POINT. A parameter here is a byte of
+// per-call data in the cache prefix; the compiler is what keeps the next person
+// from adding one. Anything a caller could vary belongs in dynamicPrompt.
+func staticPrompt() string {
 	var b strings.Builder
 	b.WriteString("You translate an accountant's natural-language question about their books ")
 	b.WriteString("into a single typed query by calling the emit_query tool. You NEVER write SQL. ")
@@ -125,6 +171,11 @@ func systemPrompt(now time.Time, fyStartMonth int) string {
 	b.WriteString("If the question cannot be answered from this catalog, or if any REFUSE rule applies, ")
 	b.WriteString("call emit_query with entity \"\" (empty string).\n\n")
 	b.WriteString("CATALOG (names only):\n")
+	// query.Catalog() sorts entities, dimensions, metrics, filters and date
+	// columns before returning them, and metricLines/filterLines sort again —
+	// so this loop is byte-stable across processes. That determinism is not
+	// cosmetic here: a map-order catalogue would produce a different prefix in
+	// every replica, and the cache would never hit anywhere.
 	for _, e := range query.Catalog() {
 		b.WriteString("- entity ")
 		b.WriteString(e.Entity)
@@ -157,7 +208,27 @@ R1. The question names a scope other than the signed-in company: another company
 R2. The question names a multi-period window ("last 6 months", "past 3 years") or two different windows at once ("last month and this year"). One date_range expresses neither, and answering for one of the periods is a wrong answer that looks like a right one.
 R3. The question asks for an outstandings position at a past or future date ("receivables as at March", "what was overdue last quarter") — see rule 8.
 R4. The catalog cannot express the question at all.
+`)
+	return b.String()
+}
 
+// dynamicPrompt builds the per-call half: today's date, the company's
+// financial-year start month, the resolved period windows, and the worked
+// examples that quote one of those windows.
+//
+// now/fyStartMonth are the request clock and the company financial-year start;
+// they are calendar facts, not tenant data — which is why they may cross the
+// wire at all. (The company's IDENTITY may not, and llm.Client checks the
+// encoded body for it before opening a socket.)
+func dynamicPrompt(now time.Time, fyStartMonth int) string {
+	// Resolved ONCE, from query's own parser, and used by BOTH the window table
+	// and the worked example — so the example can never teach a window the table
+	// contradicts.
+	windows := query.NamedWindows(func() time.Time { return now }, fyStartMonth)
+	thisQuarter := windowFor(windows, "this quarter")
+
+	var b strings.Builder
+	b.WriteString(`
 TODAY IS ` + iso(now) + `. The financial year starts in ` + query.FYStartMonth(fyStartMonth).String() + `; "year"/"annum"/"fy" mean that financial year, while "quarter" means the CALENDAR quarter.
 
 RESOLVED PERIOD WINDOWS (inclusive, on voucher_date — copy these dates exactly):

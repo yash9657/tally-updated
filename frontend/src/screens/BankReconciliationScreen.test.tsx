@@ -699,3 +699,57 @@ describe("Ctrl+P says WHICH account and WHICH date went to paper", () => {
     );
   });
 });
+
+/**
+ * ⛔⛔ D110 — THE SCREEN MUST NOT DENY A FEATURE THAT IS ON IT.
+ *
+ * The closing paragraph read "Matching those rows to vouchers is not built yet"
+ * while Alt+S ON THIS SCREEN opened a complete matcher — with an exception
+ * report, a basis-of-values view, set-aside, withdraw and a bulk accept. The
+ * sentence was correct when written (matching shipped 2026-08-28) and was never
+ * revisited, so the product contradicted itself in writing: the import report
+ * two screens away says "Matching now works: press Alt+S on the Bank
+ * Reconciliation screen."
+ *
+ * ⚠️ THE COST IS NOT THE SENTENCE. An operator who meets the denial FIRST — it
+ * is on the landing screen, while the correct sentence is behind Alt+O and only
+ * after a successful import — hand-ticks a whole bank statement one Bank Date
+ * at a time and never presses the key.
+ *
+ * ⭐ AND THE CONTROL IS THE HALF THE OLD SENTENCE GOT RIGHT: this paragraph
+ * exists to stop an operator believing the ticks are automatic. The matcher does
+ * not tick either — it PROPOSES — so the replacement has to keep saying so, and
+ * a "fix" that only deleted the stale clause would have deleted that too.
+ */
+describe("D110 — the closing paragraph names the key that does the matching", () => {
+  const note = () => screen.getByTestId("brs-import-note").textContent ?? "";
+
+  it("⛔ names Alt+S, and no longer says matching is unbuilt", async () => {
+    renderScreen({
+      listLedgers: async () => ({ ledgers: [ledger({})] }),
+      bankReconciliation: async () => brs(),
+    });
+    await screen.findByTestId("brs-as-on");
+
+    expect(note()).toMatch(/Alt\+S/);
+    // The exact clause that was false, and the family it belongs to.
+    expect(note()).not.toMatch(/not built/i);
+    expect(note()).not.toMatch(/matching[^.]*is not/i);
+  });
+
+  it("⭐ CONTROL: it still says nothing is ticked for the operator", async () => {
+    renderScreen({
+      listLedgers: async () => ({ ledgers: [ledger({})] }),
+      bankReconciliation: async () => brs(),
+    });
+    await screen.findByTestId("brs-as-on");
+
+    // Both halves: the matcher PROPOSES, and the assertion stays the
+    // operator's. Without this a paragraph reading "Alt+S matches your rows"
+    // would satisfy the arm above and teach exactly the wrong thing.
+    expect(note()).toMatch(/PROPOSES/);
+    expect(note()).toMatch(/Nothing on this screen is ticked for you/);
+    // And Alt+O keeps its half of the sentence.
+    expect(note()).toMatch(/Alt\+O/);
+  });
+});

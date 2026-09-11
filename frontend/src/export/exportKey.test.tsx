@@ -259,16 +259,25 @@ describe("Alt+E on the real shell", () => {
     pressAltE(app);
 
     const grid = lastCsvGrid();
-    expect(grid[0]).toEqual(["Ledger", "Debit", "Credit"]);
+    // ⚠️ THE `Level` AND `Parent` COLUMNS ARE D118's, and this line is why the
+    // assertion below now indexes BY HEADER NAME. It read `r[1]` and `r[2]` for
+    // Debit and Credit, and when the sheet was widened those numbers silently
+    // pointed at two text columns — so the money assertion stopped being about
+    // money while still passing its own regex on an empty list. Same blindness
+    // reportSheets.test.ts already carries a warning about.
+    expect(grid[0]).toEqual(["Ledger", "Level", "Parent", "Debit", "Credit"]);
     const body = grid.slice(1);
     expect(body.length).toBeGreaterThan(0);
+    const at = (row: string[], header: string) => row[grid[0]!.indexOf(header)]!;
 
     // ⛔ THE ASSERTION THAT DISTINGUISHES THIS BUILD FROM THE PREVIOUS ONE. The
     // export used to write `values` — the DISPLAY strings, which are Indian-
     // grouped and truncated to two decimals by formatMoney. So the old file's
     // amounts carried thousands commas and exactly two decimals; this one's are
     // the four-decimal wire strings with no grouping at all.
-    const amounts = body.flatMap((r) => [r[1]!, r[2]!]).filter((v) => v !== "");
+    const amounts = body
+      .flatMap((r) => [at(r, "Debit"), at(r, "Credit")])
+      .filter((v) => v !== "");
     expect(amounts.length).toBeGreaterThan(0);
     for (const a of amounts) {
       expect(a).toMatch(/^-?\d+\.\d{4}$/);

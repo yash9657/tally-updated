@@ -195,11 +195,18 @@ func (s *Server) handleImportBankStatement(w http.ResponseWriter, r *http.Reques
 		// error: the operator's intent is satisfied either way and making a
 		// double-click fail is friction with no safety gain.
 		"already_imported": res.AlreadyImported,
-		"lines_in_file":    res.LinesInFile,
-		"new_lines":        res.NewLines,
-		"duplicate_lines":  res.DuplicateLines,
-		"opening_balance":  res.OpeningBalance,
-		"closing_balance":  res.ClosingBalance,
+		// THE NAME IT WAS STORED UNDER (D111). Echoed because it is not always
+		// the name the caller sent: a statement PASTED rather than chosen
+		// arrives with no name at all, and the server derives one from the
+		// file's own period, row count and fingerprint. The disclosures on the
+		// combined import report quote this string, so a client that cannot see
+		// it cannot tell an operator which of two pastes a warning is about.
+		"file_name":       res.FileName,
+		"lines_in_file":   res.LinesInFile,
+		"new_lines":       res.NewLines,
+		"duplicate_lines": res.DuplicateLines,
+		"opening_balance": res.OpeningBalance,
+		"closing_balance": res.ClosingBalance,
 		// FALSE MEANS THE DROPPED-ROW CHECK NEVER RAN. A client must not render
 		// this the same way as a check that passed.
 		"balance_walked": res.BalanceWalked,

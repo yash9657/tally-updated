@@ -1,7 +1,7 @@
 import { SelectionList } from "./SelectionList";
 
 /** Top-level Gateway of Tally menu (RESEARCH.md sec 4). */
-const GATEWAY_MENU = [
+export const GATEWAY_MENU = [
   "Vouchers",
   "Bill Inbox",
   "Query",

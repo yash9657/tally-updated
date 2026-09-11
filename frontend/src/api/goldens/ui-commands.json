@@ -1,0 +1,4222 @@
+{
+  "note": "GENERATED ARTEFACT — do not hand-edit. Emitted by src/actions/uiCommandManifest.ts and COMPARED (not written) by its test. Regenerate with: UPDATE_UI_MANIFEST=1 pnpm run test:run -- uiCommandManifest",
+  "keymap_profile": "tallyprime",
+  "counts": {
+    "screen_kinds": 37,
+    "route_keys": 50,
+    "commands": 281,
+    "global_bindings": 54,
+    "screen_scoped_bindings": 199,
+    "gateway_entries": 28,
+    "client_routes": 159,
+    "client_calls": 165,
+    "unused_client_methods": 10,
+    "dead_commands": 2
+  },
+  "screen_kinds": [
+    "bank-reconciliation",
+    "bill-inbox",
+    "boms",
+    "budget-variance",
+    "budgets",
+    "company-select",
+    "cost-category-summary",
+    "cost-centre-summary",
+    "cost-centres",
+    "data",
+    "e-invoice",
+    "e-way-bill",
+    "edit-log",
+    "employees",
+    "features",
+    "gateway",
+    "goto-overlay",
+    "gstr9",
+    "help",
+    "master-create",
+    "members",
+    "menu",
+    "offline-outbox",
+    "payroll-form-138",
+    "payroll-payslip",
+    "payroll-register",
+    "payroll-run",
+    "print-templates",
+    "purchase-orders",
+    "query",
+    "reconciliation",
+    "report",
+    "report-detail",
+    "sales-orders",
+    "tally-import",
+    "tds-challans",
+    "voucher"
+  ],
+  "route_keys": [
+    {
+      "key": "bank-reconciliation",
+      "registered": true
+    },
+    {
+      "key": "bill-inbox",
+      "registered": true
+    },
+    {
+      "key": "boms",
+      "registered": true
+    },
+    {
+      "key": "budget-variance",
+      "registered": true
+    },
+    {
+      "key": "budgets",
+      "registered": true
+    },
+    {
+      "key": "company-select",
+      "registered": true
+    },
+    {
+      "key": "cost-category-summary",
+      "registered": true
+    },
+    {
+      "key": "cost-centre-summary",
+      "registered": true
+    },
+    {
+      "key": "cost-centres",
+      "registered": true
+    },
+    {
+      "key": "data",
+      "registered": true
+    },
+    {
+      "key": "e-invoice",
+      "registered": true
+    },
+    {
+      "key": "e-way-bill",
+      "registered": true
+    },
+    {
+      "key": "edit-log",
+      "registered": true
+    },
+    {
+      "key": "employees",
+      "registered": true
+    },
+    {
+      "key": "features",
+      "registered": true
+    },
+    {
+      "key": "gateway",
+      "registered": true
+    },
+    {
+      "key": "goto-overlay",
+      "registered": true
+    },
+    {
+      "key": "gstr9",
+      "registered": true
+    },
+    {
+      "key": "help",
+      "registered": true
+    },
+    {
+      "key": "master-create",
+      "registered": true
+    },
+    {
+      "key": "members",
+      "registered": true
+    },
+    {
+      "key": "menu",
+      "registered": true
+    },
+    {
+      "key": "offline-outbox",
+      "registered": true
+    },
+    {
+      "key": "payroll-form-138",
+      "registered": true
+    },
+    {
+      "key": "payroll-payslip",
+      "registered": true
+    },
+    {
+      "key": "payroll-register",
+      "registered": true
+    },
+    {
+      "key": "payroll-run",
+      "registered": true
+    },
+    {
+      "key": "print-templates",
+      "registered": true
+    },
+    {
+      "key": "purchase-orders",
+      "registered": true
+    },
+    {
+      "key": "query",
+      "registered": true
+    },
+    {
+      "key": "reconciliation",
+      "registered": true
+    },
+    {
+      "key": "report",
+      "registered": true
+    },
+    {
+      "key": "report-detail",
+      "registered": true
+    },
+    {
+      "key": "report:Anomalies",
+      "registered": true
+    },
+    {
+      "key": "report:Balance Sheet",
+      "registered": true
+    },
+    {
+      "key": "report:Bills Payable",
+      "registered": true
+    },
+    {
+      "key": "report:Cash Flow",
+      "registered": true
+    },
+    {
+      "key": "report:Day Book",
+      "registered": true
+    },
+    {
+      "key": "report:Outstandings",
+      "registered": true
+    },
+    {
+      "key": "report:Profit & Loss A/c",
+      "registered": true
+    },
+    {
+      "key": "report:Purchase Order Book",
+      "registered": true
+    },
+    {
+      "key": "report:Sales Order Book",
+      "registered": true
+    },
+    {
+      "key": "report:Stock Summary",
+      "registered": true
+    },
+    {
+      "key": "report:TDS / TCS Register",
+      "registered": true
+    },
+    {
+      "key": "report:Trial Balance",
+      "registered": true
+    },
+    {
+      "key": "report:Unadjusted Forex Gain/Loss",
+      "registered": true
+    },
+    {
+      "key": "sales-orders",
+      "registered": true
+    },
+    {
+      "key": "tally-import",
+      "registered": true
+    },
+    {
+      "key": "tds-challans",
+      "registered": true
+    },
+    {
+      "key": "voucher",
+      "registered": true
+    }
+  ],
+  "commands": [
+    {
+      "id": "key:*:Alt+2",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Alt+2",
+      "action": "duplicate",
+      "label": "Duplicate the loaded voucher",
+      "screen_action": "duplicate",
+      "dispatch": "screen-action"
+    },
+    {
+      "id": "key:*:Alt+C",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Alt+C",
+      "action": "createMaster",
+      "label": "Create ledger on the fly",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:*:Alt+D",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Alt+D",
+      "action": "delete",
+      "label": "Delete the loaded voucher",
+      "screen_action": "delete",
+      "dispatch": "screen-action"
+    },
+    {
+      "id": "key:*:Alt+E",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Alt+E",
+      "action": "exportScreen",
+      "label": "Export the rows on screen (CSV or Excel XML)",
+      "screen_action": "export",
+      "dispatch": "screen-action"
+    },
+    {
+      "id": "key:*:Alt+F1",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Alt+F1",
+      "action": "detailed",
+      "label": "Detailed (expand all levels)",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:*:Alt+F10",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Alt+F10",
+      "action": "voucher",
+      "label": "Physical-stock voucher",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:*:Alt+F2",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Alt+F2",
+      "action": "period",
+      "label": "Period (From / To)",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:*:Alt+F3",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Alt+F3",
+      "action": "unavailable",
+      "label": "Select Company (Alt+F3)",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:*:Alt+F5",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Alt+F5",
+      "action": "voucher",
+      "label": "Debit-note voucher",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:*:Alt+F6",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Alt+F6",
+      "action": "voucher",
+      "label": "Credit-note voucher",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:*:Alt+F7",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Alt+F7",
+      "action": "voucher",
+      "label": "Stock-journal voucher",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:*:Alt+F8",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Alt+F8",
+      "action": "voucher",
+      "label": "Delivery-note voucher",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:*:Alt+F9",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Alt+F9",
+      "action": "voucher",
+      "label": "Receipt-note voucher",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:*:Alt+G",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Alt+G",
+      "action": "goto",
+      "label": "Go To (keeps this screen)",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:*:Alt+I",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Alt+I",
+      "action": "eInvoice",
+      "label": "e-Invoice (report to IRP)",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:*:Alt+M",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Alt+M",
+      "action": "emailDocument",
+      "label": "E-Mail this document (saves the PDF, opens your mail client)",
+      "screen_action": "emailDocument",
+      "dispatch": "screen-action"
+    },
+    {
+      "id": "key:*:Alt+O",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Alt+O",
+      "action": "tallyImport",
+      "label": "Import from Tally (XML export)",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:*:Alt+P",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Alt+P",
+      "action": "print",
+      "label": "Print (with defaults — no options menu in this build)",
+      "screen_action": "print",
+      "dispatch": "screen-action"
+    },
+    {
+      "id": "key:*:Alt+Q",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Alt+Q",
+      "action": "offlineOutbox",
+      "label": "Offline Outbox (queued, not posted)",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:*:Alt+R",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Alt+R",
+      "action": "reconciliationQueue",
+      "label": "Reconciliation (refused changes)",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:*:Alt+X",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Alt+X",
+      "action": "cancelVoucher",
+      "label": "Cancel the voucher being entered",
+      "screen_action": "cancelVoucher",
+      "dispatch": "screen-action"
+    },
+    {
+      "id": "key:*:Alt+Y",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Alt+Y",
+      "action": "dataScreen",
+      "label": "Data (backup / restore)",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:*:Alt+Z",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Alt+Z",
+      "action": "eWayBill",
+      "label": "e-Way Bill (Rule 138)",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:*:Ctrl+A",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Ctrl+A",
+      "action": "accept",
+      "label": "Accept (save) the screen",
+      "screen_action": "accept",
+      "dispatch": "screen-action"
+    },
+    {
+      "id": "key:*:Ctrl+F",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Ctrl+F",
+      "action": "filter",
+      "label": "Filter rows",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:*:Ctrl+F1",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Ctrl+F1",
+      "action": "help",
+      "label": "Help — keystroke reference",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:*:Ctrl+F3",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Ctrl+F3",
+      "action": "unavailable",
+      "label": "Shut Company (Ctrl+F3)",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:*:Ctrl+F4",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Ctrl+F4",
+      "action": "payRun",
+      "label": "Pay run — compute and post a whole wage month",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:*:Ctrl+F7",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Ctrl+F7",
+      "action": "unavailable",
+      "label": "Physical Stock (Ctrl+F7 — TallyPrime moved it to Alt+F10)",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:*:Ctrl+F8",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Ctrl+F8",
+      "action": "orderRegister",
+      "label": "Sales orders — what customers have committed to buy",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:*:Ctrl+F9",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Ctrl+F9",
+      "action": "orderRegister",
+      "label": "Purchase orders — what we have committed to buy",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:*:Ctrl+G",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Ctrl+G",
+      "action": "switchTo",
+      "label": "Switch To (replaces this screen)",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:*:Ctrl+H",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Ctrl+H",
+      "action": "changeMode",
+      "label": "Change Mode",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:*:Ctrl+N",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Ctrl+N",
+      "action": "calculator",
+      "label": "Calculator",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:*:Ctrl+P",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Ctrl+P",
+      "action": "print",
+      "label": "Print this voucher / report",
+      "screen_action": "print",
+      "dispatch": "screen-action"
+    },
+    {
+      "id": "key:*:Ctrl+Q",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Ctrl+Q",
+      "action": "quit",
+      "label": "Quit the screen without saving",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:*:Enter",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Enter",
+      "action": "enter",
+      "label": "Next field / drill down",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:*:Esc",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Esc",
+      "action": "escape",
+      "label": "Back / cancel",
+      "screen_action": "closePanel",
+      "dispatch": "screen-action"
+    },
+    {
+      "id": "key:*:F1",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "F1",
+      "action": "help",
+      "label": "Help — keystroke reference",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:*:F10",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "F10",
+      "action": "unavailable",
+      "label": "Other Vouchers (F10) — the MENU, not the vouchers on it",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:*:F11",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "F11",
+      "action": "features",
+      "label": "Company Features",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:*:F12",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "F12",
+      "action": "configure",
+      "label": "Configure this screen",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:*:F2",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "F2",
+      "action": "date",
+      "label": "Date",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:*:F3",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "F3",
+      "action": "switchCompany",
+      "label": "Switch Company",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:*:F4",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "F4",
+      "action": "voucher",
+      "label": "Contra voucher",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:*:F5",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "F5",
+      "action": "voucher",
+      "label": "Payment voucher",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:*:F6",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "F6",
+      "action": "voucher",
+      "label": "Receipt voucher",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:*:F7",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "F7",
+      "action": "voucher",
+      "label": "Journal voucher",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:*:F8",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "F8",
+      "action": "voucher",
+      "label": "Sales voucher",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:*:F9",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "F9",
+      "action": "voucher",
+      "label": "Purchase voucher",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:*:PageDown",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "PageDown",
+      "action": "nextVoucher",
+      "label": "Next saved voucher",
+      "screen_action": "nextVoucher",
+      "dispatch": "screen-action"
+    },
+    {
+      "id": "key:*:PageUp",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "PageUp",
+      "action": "prevVoucher",
+      "label": "Previous saved voucher",
+      "screen_action": "prevVoucher",
+      "dispatch": "screen-action"
+    },
+    {
+      "id": "key:*:Shift+Tab",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Shift+Tab",
+      "action": "prevField",
+      "label": "Previous field",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:*:Tab",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Tab",
+      "action": "nextField",
+      "label": "Next field",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:bank-reconciliation:Alt+F5",
+      "surface": "keymap-screen",
+      "scope": "bank-reconciliation",
+      "combo": "Alt+F5",
+      "action": "detailed",
+      "label": "Detailed (expand all levels)",
+      "screen_action": null,
+      "dispatch": "dead"
+    },
+    {
+      "id": "key:bank-reconciliation:Alt+F8",
+      "surface": "keymap-screen",
+      "scope": "bank-reconciliation",
+      "combo": "Alt+F8",
+      "action": "unlinkBankMatch",
+      "label": "Withdraw this match, and the bank date it recorded",
+      "screen_action": "unlinkBankMatch",
+      "dispatch": "screen-action"
+    },
+    {
+      "id": "key:bank-reconciliation:Alt+O",
+      "surface": "keymap-screen",
+      "scope": "bank-reconciliation",
+      "combo": "Alt+O",
+      "action": "importBankStatement",
+      "label": "Import a bank statement (CSV)",
+      "screen_action": "importBankStatement",
+      "dispatch": "screen-action"
+    },
+    {
+      "id": "key:bank-reconciliation:Alt+S",
+      "surface": "keymap-screen",
+      "scope": "bank-reconciliation",
+      "combo": "Alt+S",
+      "action": "matchBankRows",
+      "label": "Match imported bank rows to vouchers (proposals — nothing is cleared)",
+      "screen_action": "matchBankRows",
+      "dispatch": "screen-action"
+    },
+    {
+      "id": "key:bank-reconciliation:Ctrl+B",
+      "surface": "keymap-screen",
+      "scope": "bank-reconciliation",
+      "combo": "Ctrl+B",
+      "action": "bankBasisOfValues",
+      "label": "Basis of values — how these proposals were arrived at",
+      "screen_action": "bankBasisOfValues",
+      "dispatch": "screen-action"
+    },
+    {
+      "id": "key:bank-reconciliation:Ctrl+H",
+      "surface": "keymap-screen",
+      "scope": "bank-reconciliation",
+      "combo": "Ctrl+H",
+      "action": "changeView",
+      "label": "Change View",
+      "screen_action": null,
+      "dispatch": "dead"
+    },
+    {
+      "id": "key:bank-reconciliation:Ctrl+J",
+      "surface": "keymap-screen",
+      "scope": "bank-reconciliation",
+      "combo": "Ctrl+J",
+      "action": "bankExceptionReport",
+      "label": "Exception report — what is still unmatched, and why",
+      "screen_action": "bankExceptionReport",
+      "dispatch": "screen-action"
+    },
+    {
+      "id": "key:bank-reconciliation:F2",
+      "surface": "keymap-screen",
+      "scope": "bank-reconciliation",
+      "combo": "F2",
+      "action": "period",
+      "label": "Period (From / To)",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:bank-reconciliation:F4",
+      "surface": "keymap-screen",
+      "scope": "bank-reconciliation",
+      "combo": "F4",
+      "action": "bankReconciliation",
+      "label": "Bank Reconciliation (tick items off the bank statement)",
+      "screen_action": "bankReconciliation",
+      "dispatch": "screen-action"
+    },
+    {
+      "id": "key:bank-reconciliation:F5",
+      "surface": "keymap-screen",
+      "scope": "bank-reconciliation",
+      "combo": "F5",
+      "action": "unavailable",
+      "label": "Amount view (F5)",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:bank-reconciliation:F8",
+      "surface": "keymap-screen",
+      "scope": "bank-reconciliation",
+      "combo": "F8",
+      "action": "modifyBankMatch",
+      "label": "Re-match this bank row (withdraws the current match first)",
+      "screen_action": "modifyBankMatch",
+      "dispatch": "screen-action"
+    },
+    {
+      "id": "key:bank-reconciliation:F9",
+      "surface": "keymap-screen",
+      "scope": "bank-reconciliation",
+      "combo": "F9",
+      "action": "setAsideBankRow",
+      "label": "Set this bank row aside — it matches nothing in the books",
+      "screen_action": "setAsideBankRow",
+      "dispatch": "screen-action"
+    },
+    {
+      "id": "key:boms:Alt+C",
+      "surface": "keymap-screen",
+      "scope": "boms",
+      "combo": "Alt+C",
+      "action": "createBom",
+      "label": "Define a bill of materials (a recipe)",
+      "screen_action": "createBom",
+      "dispatch": "screen-action"
+    },
+    {
+      "id": "key:boms:Alt+F10",
+      "surface": "keymap-screen",
+      "scope": "boms",
+      "combo": "Alt+F10",
+      "action": "unavailable",
+      "label": "Physical Stock (Alt+F10) — not from the bill of materials screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:boms:Alt+F5",
+      "surface": "keymap-screen",
+      "scope": "boms",
+      "combo": "Alt+F5",
+      "action": "unavailable",
+      "label": "Debit Note (Alt+F5) — not from the bill of materials screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:boms:Alt+F6",
+      "surface": "keymap-screen",
+      "scope": "boms",
+      "combo": "Alt+F6",
+      "action": "unavailable",
+      "label": "Credit Note (Alt+F6) — not from the bill of materials screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:boms:Alt+F7",
+      "surface": "keymap-screen",
+      "scope": "boms",
+      "combo": "Alt+F7",
+      "action": "unavailable",
+      "label": "Stock Journal (Alt+F7) — not from the bill of materials screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:boms:Alt+F8",
+      "surface": "keymap-screen",
+      "scope": "boms",
+      "combo": "Alt+F8",
+      "action": "unavailable",
+      "label": "Delivery Note (Alt+F8) — not from the bill of materials screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:boms:Alt+F9",
+      "surface": "keymap-screen",
+      "scope": "boms",
+      "combo": "Alt+F9",
+      "action": "unavailable",
+      "label": "Receipt Note (Alt+F9) — not from the bill of materials screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:boms:Alt+X",
+      "surface": "keymap-screen",
+      "scope": "boms",
+      "combo": "Alt+X",
+      "action": "explodeBom",
+      "label": "Explode this recipe for a quantity (a preview — nothing moves)",
+      "screen_action": "explodeBom",
+      "dispatch": "screen-action"
+    },
+    {
+      "id": "key:boms:F2",
+      "surface": "keymap-screen",
+      "scope": "boms",
+      "combo": "F2",
+      "action": "unavailable",
+      "label": "Period (F2)",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:boms:F4",
+      "surface": "keymap-screen",
+      "scope": "boms",
+      "combo": "F4",
+      "action": "unavailable",
+      "label": "Contra voucher (F4) — not from the bill of materials screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:boms:F5",
+      "surface": "keymap-screen",
+      "scope": "boms",
+      "combo": "F5",
+      "action": "unavailable",
+      "label": "Payment voucher (F5) — not from the bill of materials screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:boms:F6",
+      "surface": "keymap-screen",
+      "scope": "boms",
+      "combo": "F6",
+      "action": "unavailable",
+      "label": "Receipt voucher (F6) — not from the bill of materials screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:boms:F7",
+      "surface": "keymap-screen",
+      "scope": "boms",
+      "combo": "F7",
+      "action": "unavailable",
+      "label": "Journal voucher (F7) — not from the bill of materials screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:boms:F8",
+      "surface": "keymap-screen",
+      "scope": "boms",
+      "combo": "F8",
+      "action": "unavailable",
+      "label": "Sales voucher (F8) — not from the bill of materials screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:boms:F9",
+      "surface": "keymap-screen",
+      "scope": "boms",
+      "combo": "F9",
+      "action": "unavailable",
+      "label": "Purchase voucher (F9) — not from the bill of materials screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:budget-variance:Alt+C",
+      "surface": "keymap-screen",
+      "scope": "budget-variance",
+      "combo": "Alt+C",
+      "action": "unavailable",
+      "label": "New Column (Alt+C)",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:budget-variance:F2",
+      "surface": "keymap-screen",
+      "scope": "budget-variance",
+      "combo": "F2",
+      "action": "unavailable",
+      "label": "Period (F2) — fixed by the plan",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:budget-variance:F4",
+      "surface": "keymap-screen",
+      "scope": "budget-variance",
+      "combo": "F4",
+      "action": "selectBudget",
+      "label": "Choose the budget this variance report compares against",
+      "screen_action": "selectBudget",
+      "dispatch": "screen-action"
+    },
+    {
+      "id": "key:budgets:Alt+C",
+      "surface": "keymap-screen",
+      "scope": "budgets",
+      "combo": "Alt+C",
+      "action": "createBudget",
+      "label": "Create a budget, or add a line to the open one",
+      "screen_action": "createBudget",
+      "dispatch": "screen-action"
+    },
+    {
+      "id": "key:budgets:F2",
+      "surface": "keymap-screen",
+      "scope": "budgets",
+      "combo": "F2",
+      "action": "unavailable",
+      "label": "Period (F2)",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:budgets:F4",
+      "surface": "keymap-screen",
+      "scope": "budgets",
+      "combo": "F4",
+      "action": "unavailable",
+      "label": "Contra voucher (F4) — not from this screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:cost-category-summary:Alt+C",
+      "surface": "keymap-screen",
+      "scope": "cost-category-summary",
+      "combo": "Alt+C",
+      "action": "unavailable",
+      "label": "New Column (Alt+C)",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:cost-category-summary:Alt+F1",
+      "surface": "keymap-screen",
+      "scope": "cost-category-summary",
+      "combo": "Alt+F1",
+      "action": "unavailable",
+      "label": "Detailed (Alt+F1)",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:cost-category-summary:Alt+F5",
+      "surface": "keymap-screen",
+      "scope": "cost-category-summary",
+      "combo": "Alt+F5",
+      "action": "unavailable",
+      "label": "Detailed (Alt+F5)",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:cost-category-summary:F2",
+      "surface": "keymap-screen",
+      "scope": "cost-category-summary",
+      "combo": "F2",
+      "action": "period",
+      "label": "Period (From / To)",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:cost-category-summary:F4",
+      "surface": "keymap-screen",
+      "scope": "cost-category-summary",
+      "combo": "F4",
+      "action": "unavailable",
+      "label": "Cost Category (F4) — not on this report",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:cost-category-summary:F5",
+      "surface": "keymap-screen",
+      "scope": "cost-category-summary",
+      "combo": "F5",
+      "action": "unavailable",
+      "label": "Ledger-wise / group-wise (F5)",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:cost-centre-summary:Alt+C",
+      "surface": "keymap-screen",
+      "scope": "cost-centre-summary",
+      "combo": "Alt+C",
+      "action": "unavailable",
+      "label": "New Column (Alt+C)",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:cost-centre-summary:Alt+F1",
+      "surface": "keymap-screen",
+      "scope": "cost-centre-summary",
+      "combo": "Alt+F1",
+      "action": "unavailable",
+      "label": "Detailed (Alt+F1)",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:cost-centre-summary:Alt+F5",
+      "surface": "keymap-screen",
+      "scope": "cost-centre-summary",
+      "combo": "Alt+F5",
+      "action": "unavailable",
+      "label": "Detailed (Alt+F5)",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:cost-centre-summary:F2",
+      "surface": "keymap-screen",
+      "scope": "cost-centre-summary",
+      "combo": "F2",
+      "action": "period",
+      "label": "Period (From / To)",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:cost-centre-summary:F4",
+      "surface": "keymap-screen",
+      "scope": "cost-centre-summary",
+      "combo": "F4",
+      "action": "selectCostCategory",
+      "label": "Choose the cost category (the axis) this report is for",
+      "screen_action": "selectCostCategory",
+      "dispatch": "screen-action"
+    },
+    {
+      "id": "key:cost-centre-summary:F5",
+      "surface": "keymap-screen",
+      "scope": "cost-centre-summary",
+      "combo": "F5",
+      "action": "unavailable",
+      "label": "Ledger-wise / group-wise (F5)",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:cost-centres:Alt+C",
+      "surface": "keymap-screen",
+      "scope": "cost-centres",
+      "combo": "Alt+C",
+      "action": "createCostMaster",
+      "label": "Create a cost category (axis) or a cost centre",
+      "screen_action": "createCostMaster",
+      "dispatch": "screen-action"
+    },
+    {
+      "id": "key:cost-centres:Alt+F10",
+      "surface": "keymap-screen",
+      "scope": "cost-centres",
+      "combo": "Alt+F10",
+      "action": "unavailable",
+      "label": "Physical Stock (Alt+F10) — not from this screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:cost-centres:Alt+F5",
+      "surface": "keymap-screen",
+      "scope": "cost-centres",
+      "combo": "Alt+F5",
+      "action": "unavailable",
+      "label": "Debit Note (Alt+F5) — not from this screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:cost-centres:Alt+F6",
+      "surface": "keymap-screen",
+      "scope": "cost-centres",
+      "combo": "Alt+F6",
+      "action": "unavailable",
+      "label": "Credit Note (Alt+F6) — not from this screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:cost-centres:Alt+F7",
+      "surface": "keymap-screen",
+      "scope": "cost-centres",
+      "combo": "Alt+F7",
+      "action": "unavailable",
+      "label": "Stock Journal (Alt+F7) — not from this screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:cost-centres:Alt+F8",
+      "surface": "keymap-screen",
+      "scope": "cost-centres",
+      "combo": "Alt+F8",
+      "action": "unavailable",
+      "label": "Delivery Note (Alt+F8) — not from this screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:cost-centres:Alt+F9",
+      "surface": "keymap-screen",
+      "scope": "cost-centres",
+      "combo": "Alt+F9",
+      "action": "unavailable",
+      "label": "Receipt Note (Alt+F9) — not from this screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:cost-centres:F2",
+      "surface": "keymap-screen",
+      "scope": "cost-centres",
+      "combo": "F2",
+      "action": "unavailable",
+      "label": "Period (F2)",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:cost-centres:F4",
+      "surface": "keymap-screen",
+      "scope": "cost-centres",
+      "combo": "F4",
+      "action": "unavailable",
+      "label": "Contra voucher (F4) — not from this screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:cost-centres:F5",
+      "surface": "keymap-screen",
+      "scope": "cost-centres",
+      "combo": "F5",
+      "action": "unavailable",
+      "label": "Payment voucher (F5) — not from this screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:cost-centres:F6",
+      "surface": "keymap-screen",
+      "scope": "cost-centres",
+      "combo": "F6",
+      "action": "unavailable",
+      "label": "Receipt voucher (F6) — not from this screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:cost-centres:F7",
+      "surface": "keymap-screen",
+      "scope": "cost-centres",
+      "combo": "F7",
+      "action": "unavailable",
+      "label": "Journal voucher (F7) — not from this screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:cost-centres:F8",
+      "surface": "keymap-screen",
+      "scope": "cost-centres",
+      "combo": "F8",
+      "action": "unavailable",
+      "label": "Sales voucher (F8) — not from this screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:cost-centres:F9",
+      "surface": "keymap-screen",
+      "scope": "cost-centres",
+      "combo": "F9",
+      "action": "unavailable",
+      "label": "Purchase voucher (F9) — not from this screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:e-invoice:Alt+F10",
+      "surface": "keymap-screen",
+      "scope": "e-invoice",
+      "combo": "Alt+F10",
+      "action": "unavailable",
+      "label": "Physical Stock (Alt+F10) — not from the e-invoice screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:e-invoice:Alt+F5",
+      "surface": "keymap-screen",
+      "scope": "e-invoice",
+      "combo": "Alt+F5",
+      "action": "unavailable",
+      "label": "Debit Note (Alt+F5) — not from the e-invoice screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:e-invoice:Alt+F6",
+      "surface": "keymap-screen",
+      "scope": "e-invoice",
+      "combo": "Alt+F6",
+      "action": "unavailable",
+      "label": "Credit Note (Alt+F6) — not from the e-invoice screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:e-invoice:Alt+F7",
+      "surface": "keymap-screen",
+      "scope": "e-invoice",
+      "combo": "Alt+F7",
+      "action": "unavailable",
+      "label": "Stock Journal (Alt+F7) — not from the e-invoice screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:e-invoice:Alt+F8",
+      "surface": "keymap-screen",
+      "scope": "e-invoice",
+      "combo": "Alt+F8",
+      "action": "unavailable",
+      "label": "Delivery Note (Alt+F8) — not from the e-invoice screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:e-invoice:Alt+F9",
+      "surface": "keymap-screen",
+      "scope": "e-invoice",
+      "combo": "Alt+F9",
+      "action": "unavailable",
+      "label": "Receipt Note (Alt+F9) — not from the e-invoice screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:e-invoice:F2",
+      "surface": "keymap-screen",
+      "scope": "e-invoice",
+      "combo": "F2",
+      "action": "unavailable",
+      "label": "Period (F2)",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:e-invoice:F4",
+      "surface": "keymap-screen",
+      "scope": "e-invoice",
+      "combo": "F4",
+      "action": "unavailable",
+      "label": "Contra voucher (F4) — not from the e-invoice screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:e-invoice:F5",
+      "surface": "keymap-screen",
+      "scope": "e-invoice",
+      "combo": "F5",
+      "action": "unavailable",
+      "label": "Payment voucher (F5) — not from the e-invoice screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:e-invoice:F6",
+      "surface": "keymap-screen",
+      "scope": "e-invoice",
+      "combo": "F6",
+      "action": "unavailable",
+      "label": "Receipt voucher (F6) — not from the e-invoice screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:e-invoice:F7",
+      "surface": "keymap-screen",
+      "scope": "e-invoice",
+      "combo": "F7",
+      "action": "unavailable",
+      "label": "Journal voucher (F7) — not from the e-invoice screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:e-invoice:F8",
+      "surface": "keymap-screen",
+      "scope": "e-invoice",
+      "combo": "F8",
+      "action": "unavailable",
+      "label": "Sales voucher (F8) — not from the e-invoice screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:e-invoice:F9",
+      "surface": "keymap-screen",
+      "scope": "e-invoice",
+      "combo": "F9",
+      "action": "unavailable",
+      "label": "Purchase voucher (F9) — not from the e-invoice screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:e-way-bill:Alt+F10",
+      "surface": "keymap-screen",
+      "scope": "e-way-bill",
+      "combo": "Alt+F10",
+      "action": "unavailable",
+      "label": "Physical Stock (Alt+F10) — not from the e-way bill screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:e-way-bill:Alt+F5",
+      "surface": "keymap-screen",
+      "scope": "e-way-bill",
+      "combo": "Alt+F5",
+      "action": "unavailable",
+      "label": "Debit Note (Alt+F5) — not from the e-way bill screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:e-way-bill:Alt+F6",
+      "surface": "keymap-screen",
+      "scope": "e-way-bill",
+      "combo": "Alt+F6",
+      "action": "unavailable",
+      "label": "Credit Note (Alt+F6) — not from the e-way bill screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:e-way-bill:Alt+F7",
+      "surface": "keymap-screen",
+      "scope": "e-way-bill",
+      "combo": "Alt+F7",
+      "action": "unavailable",
+      "label": "Stock Journal (Alt+F7) — not from the e-way bill screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:e-way-bill:Alt+F8",
+      "surface": "keymap-screen",
+      "scope": "e-way-bill",
+      "combo": "Alt+F8",
+      "action": "unavailable",
+      "label": "Delivery Note (Alt+F8) — not from the e-way bill screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:e-way-bill:Alt+F9",
+      "surface": "keymap-screen",
+      "scope": "e-way-bill",
+      "combo": "Alt+F9",
+      "action": "unavailable",
+      "label": "Receipt Note (Alt+F9) — not from the e-way bill screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:e-way-bill:F2",
+      "surface": "keymap-screen",
+      "scope": "e-way-bill",
+      "combo": "F2",
+      "action": "unavailable",
+      "label": "Period (F2)",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:e-way-bill:F4",
+      "surface": "keymap-screen",
+      "scope": "e-way-bill",
+      "combo": "F4",
+      "action": "unavailable",
+      "label": "Contra voucher (F4) — not from the e-way bill screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:e-way-bill:F5",
+      "surface": "keymap-screen",
+      "scope": "e-way-bill",
+      "combo": "F5",
+      "action": "unavailable",
+      "label": "Payment voucher (F5) — not from the e-way bill screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:e-way-bill:F6",
+      "surface": "keymap-screen",
+      "scope": "e-way-bill",
+      "combo": "F6",
+      "action": "unavailable",
+      "label": "Receipt voucher (F6) — not from the e-way bill screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:e-way-bill:F7",
+      "surface": "keymap-screen",
+      "scope": "e-way-bill",
+      "combo": "F7",
+      "action": "unavailable",
+      "label": "Journal voucher (F7) — not from the e-way bill screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:e-way-bill:F8",
+      "surface": "keymap-screen",
+      "scope": "e-way-bill",
+      "combo": "F8",
+      "action": "unavailable",
+      "label": "Sales voucher (F8) — not from the e-way bill screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:e-way-bill:F9",
+      "surface": "keymap-screen",
+      "scope": "e-way-bill",
+      "combo": "F9",
+      "action": "unavailable",
+      "label": "Purchase voucher (F9) — not from the e-way bill screen",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:employees:Alt+C",
+      "surface": "keymap-screen",
+      "scope": "employees",
+      "combo": "Alt+C",
+      "action": "createEmployee",
+      "label": "Create an employee",
+      "screen_action": "createEmployee",
+      "dispatch": "screen-action"
+    },
+    {
+      "id": "key:employees:Alt+F10",
+      "surface": "keymap-screen",
+      "scope": "employees",
+      "combo": "Alt+F10",
+      "action": "unavailable",
+      "label": "Physical Stock (Alt+F10) — not from the employee master",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:employees:Alt+F5",
+      "surface": "keymap-screen",
+      "scope": "employees",
+      "combo": "Alt+F5",
+      "action": "unavailable",
+      "label": "Debit Note (Alt+F5) — not from the employee master",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:employees:Alt+F6",
+      "surface": "keymap-screen",
+      "scope": "employees",
+      "combo": "Alt+F6",
+      "action": "unavailable",
+      "label": "Credit Note (Alt+F6) — not from the employee master",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:employees:Alt+F7",
+      "surface": "keymap-screen",
+      "scope": "employees",
+      "combo": "Alt+F7",
+      "action": "unavailable",
+      "label": "Stock Journal (Alt+F7) — not from the employee master",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:employees:Alt+F8",
+      "surface": "keymap-screen",
+      "scope": "employees",
+      "combo": "Alt+F8",
+      "action": "unavailable",
+      "label": "Delivery Note (Alt+F8) — not from the employee master",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:employees:Alt+F9",
+      "surface": "keymap-screen",
+      "scope": "employees",
+      "combo": "Alt+F9",
+      "action": "unavailable",
+      "label": "Receipt Note (Alt+F9) — not from the employee master",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:employees:Alt+S",
+      "surface": "keymap-screen",
+      "scope": "employees",
+      "combo": "Alt+S",
+      "action": "setEmployeePay",
+      "label": "Set this employee's salary and statutory election (needed before they can be paid)",
+      "screen_action": "setEmployeePay",
+      "dispatch": "screen-action"
+    },
+    {
+      "id": "key:employees:F2",
+      "surface": "keymap-screen",
+      "scope": "employees",
+      "combo": "F2",
+      "action": "unavailable",
+      "label": "Period (F2)",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:employees:F4",
+      "surface": "keymap-screen",
+      "scope": "employees",
+      "combo": "F4",
+      "action": "unavailable",
+      "label": "Contra voucher (F4) — not from the employee master",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:employees:F5",
+      "surface": "keymap-screen",
+      "scope": "employees",
+      "combo": "F5",
+      "action": "unavailable",
+      "label": "Payment voucher (F5) — not from the employee master",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:employees:F6",
+      "surface": "keymap-screen",
+      "scope": "employees",
+      "combo": "F6",
+      "action": "unavailable",
+      "label": "Receipt voucher (F6) — not from the employee master",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:employees:F7",
+      "surface": "keymap-screen",
+      "scope": "employees",
+      "combo": "F7",
+      "action": "unavailable",
+      "label": "Journal voucher (F7) — not from the employee master",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:employees:F8",
+      "surface": "keymap-screen",
+      "scope": "employees",
+      "combo": "F8",
+      "action": "unavailable",
+      "label": "Sales voucher (F8) — not from the employee master",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:employees:F9",
+      "surface": "keymap-screen",
+      "scope": "employees",
+      "combo": "F9",
+      "action": "unavailable",
+      "label": "Purchase voucher (F9) — not from the employee master",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:gstr9:Alt+C",
+      "surface": "keymap-screen",
+      "scope": "gstr9",
+      "combo": "Alt+C",
+      "action": "unavailable",
+      "label": "New Column (Alt+C)",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:gstr9:F2",
+      "surface": "keymap-screen",
+      "scope": "gstr9",
+      "combo": "F2",
+      "action": "unavailable",
+      "label": "Period (F2) — this report is annual",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:gstr9:F4",
+      "surface": "keymap-screen",
+      "scope": "gstr9",
+      "combo": "F4",
+      "action": "selectFinancialYear",
+      "label": "Choose the financial year this annual return reconciles",
+      "screen_action": "selectFinancialYear",
+      "dispatch": "screen-action"
+    },
+    {
+      "id": "key:master-create:Alt+F10",
+      "surface": "keymap-screen",
+      "scope": "master-create",
+      "combo": "Alt+F10",
+      "action": "unavailable",
+      "label": "Physical Stock (Alt+F10) — not from the master create form",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:master-create:Alt+F5",
+      "surface": "keymap-screen",
+      "scope": "master-create",
+      "combo": "Alt+F5",
+      "action": "unavailable",
+      "label": "Debit Note (Alt+F5) — not from the master create form",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:master-create:Alt+F6",
+      "surface": "keymap-screen",
+      "scope": "master-create",
+      "combo": "Alt+F6",
+      "action": "unavailable",
+      "label": "Credit Note (Alt+F6) — not from the master create form",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:master-create:Alt+F7",
+      "surface": "keymap-screen",
+      "scope": "master-create",
+      "combo": "Alt+F7",
+      "action": "unavailable",
+      "label": "Stock Journal (Alt+F7) — not from the master create form",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:master-create:Alt+F8",
+      "surface": "keymap-screen",
+      "scope": "master-create",
+      "combo": "Alt+F8",
+      "action": "unavailable",
+      "label": "Delivery Note (Alt+F8) — not from the master create form",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:master-create:Alt+F9",
+      "surface": "keymap-screen",
+      "scope": "master-create",
+      "combo": "Alt+F9",
+      "action": "unavailable",
+      "label": "Receipt Note (Alt+F9) — not from the master create form",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:master-create:F4",
+      "surface": "keymap-screen",
+      "scope": "master-create",
+      "combo": "F4",
+      "action": "unavailable",
+      "label": "Contra voucher (F4) — not from the master create form",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:master-create:F5",
+      "surface": "keymap-screen",
+      "scope": "master-create",
+      "combo": "F5",
+      "action": "unavailable",
+      "label": "Payment voucher (F5) — not from the master create form",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:master-create:F6",
+      "surface": "keymap-screen",
+      "scope": "master-create",
+      "combo": "F6",
+      "action": "unavailable",
+      "label": "Receipt voucher (F6) — not from the master create form",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:master-create:F7",
+      "surface": "keymap-screen",
+      "scope": "master-create",
+      "combo": "F7",
+      "action": "unavailable",
+      "label": "Journal voucher (F7) — not from the master create form",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:master-create:F8",
+      "surface": "keymap-screen",
+      "scope": "master-create",
+      "combo": "F8",
+      "action": "unavailable",
+      "label": "Sales voucher (F8) — not from the master create form",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:master-create:F9",
+      "surface": "keymap-screen",
+      "scope": "master-create",
+      "combo": "F9",
+      "action": "unavailable",
+      "label": "Purchase voucher (F9) — not from the master create form",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:payroll-form-138:Alt+F10",
+      "surface": "keymap-screen",
+      "scope": "payroll-form-138",
+      "combo": "Alt+F10",
+      "action": "unavailable",
+      "label": "Physical Stock (Alt+F10) — not from the Form 138 statement",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:payroll-form-138:Alt+F5",
+      "surface": "keymap-screen",
+      "scope": "payroll-form-138",
+      "combo": "Alt+F5",
+      "action": "unavailable",
+      "label": "Debit Note (Alt+F5) — not from the Form 138 statement",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:payroll-form-138:Alt+F6",
+      "surface": "keymap-screen",
+      "scope": "payroll-form-138",
+      "combo": "Alt+F6",
+      "action": "unavailable",
+      "label": "Credit Note (Alt+F6) — not from the Form 138 statement",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:payroll-form-138:Alt+F7",
+      "surface": "keymap-screen",
+      "scope": "payroll-form-138",
+      "combo": "Alt+F7",
+      "action": "unavailable",
+      "label": "Stock Journal (Alt+F7) — not from the Form 138 statement",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:payroll-form-138:Alt+F8",
+      "surface": "keymap-screen",
+      "scope": "payroll-form-138",
+      "combo": "Alt+F8",
+      "action": "unavailable",
+      "label": "Delivery Note (Alt+F8) — not from the Form 138 statement",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:payroll-form-138:Alt+F9",
+      "surface": "keymap-screen",
+      "scope": "payroll-form-138",
+      "combo": "Alt+F9",
+      "action": "unavailable",
+      "label": "Receipt Note (Alt+F9) — not from the Form 138 statement",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:payroll-form-138:F2",
+      "surface": "keymap-screen",
+      "scope": "payroll-form-138",
+      "combo": "F2",
+      "action": "unavailable",
+      "label": "Period (F2)",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:payroll-form-138:F4",
+      "surface": "keymap-screen",
+      "scope": "payroll-form-138",
+      "combo": "F4",
+      "action": "unavailable",
+      "label": "Contra voucher (F4) — not from the Form 138 statement",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:payroll-form-138:F5",
+      "surface": "keymap-screen",
+      "scope": "payroll-form-138",
+      "combo": "F5",
+      "action": "unavailable",
+      "label": "Payment voucher (F5) — not from the Form 138 statement",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:payroll-form-138:F6",
+      "surface": "keymap-screen",
+      "scope": "payroll-form-138",
+      "combo": "F6",
+      "action": "unavailable",
+      "label": "Receipt voucher (F6) — not from the Form 138 statement",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:payroll-form-138:F7",
+      "surface": "keymap-screen",
+      "scope": "payroll-form-138",
+      "combo": "F7",
+      "action": "unavailable",
+      "label": "Journal voucher (F7) — not from the Form 138 statement",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:payroll-form-138:F8",
+      "surface": "keymap-screen",
+      "scope": "payroll-form-138",
+      "combo": "F8",
+      "action": "unavailable",
+      "label": "Sales voucher (F8) — not from the Form 138 statement",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:payroll-form-138:F9",
+      "surface": "keymap-screen",
+      "scope": "payroll-form-138",
+      "combo": "F9",
+      "action": "unavailable",
+      "label": "Purchase voucher (F9) — not from the Form 138 statement",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:payroll-payslip:F2",
+      "surface": "keymap-screen",
+      "scope": "payroll-payslip",
+      "combo": "F2",
+      "action": "unavailable",
+      "label": "Period (F2)",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:payroll-register:Alt+S",
+      "surface": "keymap-screen",
+      "scope": "payroll-register",
+      "combo": "Alt+S",
+      "action": "payrollStatutoryFiles",
+      "label": "Statutory files for this month — the EPFO ECR and the ESIC return (generated, not validated)",
+      "screen_action": "payrollStatutoryFiles",
+      "dispatch": "screen-action"
+    },
+    {
+      "id": "key:payroll-register:F2",
+      "surface": "keymap-screen",
+      "scope": "payroll-register",
+      "combo": "F2",
+      "action": "unavailable",
+      "label": "Period (F2)",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:payroll-run:Alt+F10",
+      "surface": "keymap-screen",
+      "scope": "payroll-run",
+      "combo": "Alt+F10",
+      "action": "unavailable",
+      "label": "Physical Stock (Alt+F10) — not from the pay run",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:payroll-run:Alt+F5",
+      "surface": "keymap-screen",
+      "scope": "payroll-run",
+      "combo": "Alt+F5",
+      "action": "unavailable",
+      "label": "Debit Note (Alt+F5) — not from the pay run",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:payroll-run:Alt+F6",
+      "surface": "keymap-screen",
+      "scope": "payroll-run",
+      "combo": "Alt+F6",
+      "action": "unavailable",
+      "label": "Credit Note (Alt+F6) — not from the pay run",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:payroll-run:Alt+F7",
+      "surface": "keymap-screen",
+      "scope": "payroll-run",
+      "combo": "Alt+F7",
+      "action": "unavailable",
+      "label": "Stock Journal (Alt+F7) — not from the pay run",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:payroll-run:Alt+F8",
+      "surface": "keymap-screen",
+      "scope": "payroll-run",
+      "combo": "Alt+F8",
+      "action": "unavailable",
+      "label": "Delivery Note (Alt+F8) — not from the pay run",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:payroll-run:Alt+F9",
+      "surface": "keymap-screen",
+      "scope": "payroll-run",
+      "combo": "Alt+F9",
+      "action": "unavailable",
+      "label": "Receipt Note (Alt+F9) — not from the pay run",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:payroll-run:F2",
+      "surface": "keymap-screen",
+      "scope": "payroll-run",
+      "combo": "F2",
+      "action": "unavailable",
+      "label": "Period (F2)",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:payroll-run:F4",
+      "surface": "keymap-screen",
+      "scope": "payroll-run",
+      "combo": "F4",
+      "action": "unavailable",
+      "label": "Contra voucher (F4) — not from the pay run",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:payroll-run:F5",
+      "surface": "keymap-screen",
+      "scope": "payroll-run",
+      "combo": "F5",
+      "action": "unavailable",
+      "label": "Payment voucher (F5) — not from the pay run",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:payroll-run:F6",
+      "surface": "keymap-screen",
+      "scope": "payroll-run",
+      "combo": "F6",
+      "action": "unavailable",
+      "label": "Receipt voucher (F6) — not from the pay run",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:payroll-run:F7",
+      "surface": "keymap-screen",
+      "scope": "payroll-run",
+      "combo": "F7",
+      "action": "unavailable",
+      "label": "Journal voucher (F7) — not from the pay run",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:payroll-run:F8",
+      "surface": "keymap-screen",
+      "scope": "payroll-run",
+      "combo": "F8",
+      "action": "unavailable",
+      "label": "Sales voucher (F8) — not from the pay run",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:payroll-run:F9",
+      "surface": "keymap-screen",
+      "scope": "payroll-run",
+      "combo": "F9",
+      "action": "unavailable",
+      "label": "Purchase voucher (F9) — not from the pay run",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:purchase-orders:Alt+C",
+      "surface": "keymap-screen",
+      "scope": "purchase-orders",
+      "combo": "Alt+C",
+      "action": "createOrder",
+      "label": "Record an order",
+      "screen_action": "createOrder",
+      "dispatch": "screen-action"
+    },
+    {
+      "id": "key:purchase-orders:Alt+F10",
+      "surface": "keymap-screen",
+      "scope": "purchase-orders",
+      "combo": "Alt+F10",
+      "action": "unavailable",
+      "label": "Physical Stock (Alt+F10) — not from the purchase order register",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:purchase-orders:Alt+F5",
+      "surface": "keymap-screen",
+      "scope": "purchase-orders",
+      "combo": "Alt+F5",
+      "action": "unavailable",
+      "label": "Debit Note (Alt+F5) — not from the purchase order register",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:purchase-orders:Alt+F6",
+      "surface": "keymap-screen",
+      "scope": "purchase-orders",
+      "combo": "Alt+F6",
+      "action": "unavailable",
+      "label": "Credit Note (Alt+F6) — not from the purchase order register",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:purchase-orders:Alt+F7",
+      "surface": "keymap-screen",
+      "scope": "purchase-orders",
+      "combo": "Alt+F7",
+      "action": "unavailable",
+      "label": "Stock Journal (Alt+F7) — not from the purchase order register",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:purchase-orders:Alt+F8",
+      "surface": "keymap-screen",
+      "scope": "purchase-orders",
+      "combo": "Alt+F8",
+      "action": "unavailable",
+      "label": "Delivery Note (Alt+F8) — not from the purchase order register",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:purchase-orders:Alt+F9",
+      "surface": "keymap-screen",
+      "scope": "purchase-orders",
+      "combo": "Alt+F9",
+      "action": "unavailable",
+      "label": "Receipt Note (Alt+F9) — not from the purchase order register",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:purchase-orders:Alt+W",
+      "surface": "keymap-screen",
+      "scope": "purchase-orders",
+      "combo": "Alt+W",
+      "action": "closeOrder",
+      "label": "Pre-close (abandon) this order, with a reason — NOT 'mark it delivered'",
+      "screen_action": "closeOrder",
+      "dispatch": "screen-action"
+    },
+    {
+      "id": "key:purchase-orders:F2",
+      "surface": "keymap-screen",
+      "scope": "purchase-orders",
+      "combo": "F2",
+      "action": "unavailable",
+      "label": "Period (F2)",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:purchase-orders:F4",
+      "surface": "keymap-screen",
+      "scope": "purchase-orders",
+      "combo": "F4",
+      "action": "unavailable",
+      "label": "Contra voucher (F4) — not from the purchase order register",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:purchase-orders:F5",
+      "surface": "keymap-screen",
+      "scope": "purchase-orders",
+      "combo": "F5",
+      "action": "unavailable",
+      "label": "Payment voucher (F5) — not from the purchase order register",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:purchase-orders:F6",
+      "surface": "keymap-screen",
+      "scope": "purchase-orders",
+      "combo": "F6",
+      "action": "unavailable",
+      "label": "Receipt voucher (F6) — not from the purchase order register",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:purchase-orders:F7",
+      "surface": "keymap-screen",
+      "scope": "purchase-orders",
+      "combo": "F7",
+      "action": "unavailable",
+      "label": "Journal voucher (F7) — not from the purchase order register",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:purchase-orders:F8",
+      "surface": "keymap-screen",
+      "scope": "purchase-orders",
+      "combo": "F8",
+      "action": "unavailable",
+      "label": "Sales voucher (F8) — not from the purchase order register",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:purchase-orders:F9",
+      "surface": "keymap-screen",
+      "scope": "purchase-orders",
+      "combo": "F9",
+      "action": "unavailable",
+      "label": "Purchase voucher (F9) — not from the purchase order register",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:report-detail:Alt+F5",
+      "surface": "keymap-screen",
+      "scope": "report-detail",
+      "combo": "Alt+F5",
+      "action": "detailed",
+      "label": "Detailed (expand all levels)",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:report-detail:Ctrl+H",
+      "surface": "keymap-screen",
+      "scope": "report-detail",
+      "combo": "Ctrl+H",
+      "action": "changeView",
+      "label": "Change View",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:report-detail:F2",
+      "surface": "keymap-screen",
+      "scope": "report-detail",
+      "combo": "F2",
+      "action": "period",
+      "label": "Period (From / To)",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:report-detail:F5",
+      "surface": "keymap-screen",
+      "scope": "report-detail",
+      "combo": "F5",
+      "action": "ledgerWise",
+      "label": "Ledger-wise / group-wise",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:report:Alt+F5",
+      "surface": "keymap-screen",
+      "scope": "report",
+      "combo": "Alt+F5",
+      "action": "detailed",
+      "label": "Detailed (expand all levels)",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:report:Alt+V",
+      "surface": "keymap-screen",
+      "scope": "report",
+      "combo": "Alt+V",
+      "action": "setValuationMethod",
+      "label": "Costing method of a stock item — re-values its whole history (Avg. Cost / FIFO / LIFO)",
+      "screen_action": "setValuationMethod",
+      "dispatch": "screen-action"
+    },
+    {
+      "id": "key:report:Ctrl+H",
+      "surface": "keymap-screen",
+      "scope": "report",
+      "combo": "Ctrl+H",
+      "action": "changeView",
+      "label": "Change View",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:report:F2",
+      "surface": "keymap-screen",
+      "scope": "report",
+      "combo": "F2",
+      "action": "period",
+      "label": "Period (From / To)",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:report:F5",
+      "surface": "keymap-screen",
+      "scope": "report",
+      "combo": "F5",
+      "action": "ledgerWise",
+      "label": "Ledger-wise / group-wise",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "key:sales-orders:Alt+C",
+      "surface": "keymap-screen",
+      "scope": "sales-orders",
+      "combo": "Alt+C",
+      "action": "createOrder",
+      "label": "Record an order",
+      "screen_action": "createOrder",
+      "dispatch": "screen-action"
+    },
+    {
+      "id": "key:sales-orders:Alt+F10",
+      "surface": "keymap-screen",
+      "scope": "sales-orders",
+      "combo": "Alt+F10",
+      "action": "unavailable",
+      "label": "Physical Stock (Alt+F10) — not from the sales order register",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:sales-orders:Alt+F5",
+      "surface": "keymap-screen",
+      "scope": "sales-orders",
+      "combo": "Alt+F5",
+      "action": "unavailable",
+      "label": "Debit Note (Alt+F5) — not from the sales order register",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:sales-orders:Alt+F6",
+      "surface": "keymap-screen",
+      "scope": "sales-orders",
+      "combo": "Alt+F6",
+      "action": "unavailable",
+      "label": "Credit Note (Alt+F6) — not from the sales order register",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:sales-orders:Alt+F7",
+      "surface": "keymap-screen",
+      "scope": "sales-orders",
+      "combo": "Alt+F7",
+      "action": "unavailable",
+      "label": "Stock Journal (Alt+F7) — not from the sales order register",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:sales-orders:Alt+F8",
+      "surface": "keymap-screen",
+      "scope": "sales-orders",
+      "combo": "Alt+F8",
+      "action": "unavailable",
+      "label": "Delivery Note (Alt+F8) — not from the sales order register",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:sales-orders:Alt+F9",
+      "surface": "keymap-screen",
+      "scope": "sales-orders",
+      "combo": "Alt+F9",
+      "action": "unavailable",
+      "label": "Receipt Note (Alt+F9) — not from the sales order register",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:sales-orders:Alt+W",
+      "surface": "keymap-screen",
+      "scope": "sales-orders",
+      "combo": "Alt+W",
+      "action": "closeOrder",
+      "label": "Pre-close (abandon) this order, with a reason — NOT 'mark it delivered'",
+      "screen_action": "closeOrder",
+      "dispatch": "screen-action"
+    },
+    {
+      "id": "key:sales-orders:F2",
+      "surface": "keymap-screen",
+      "scope": "sales-orders",
+      "combo": "F2",
+      "action": "unavailable",
+      "label": "Period (F2)",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:sales-orders:F4",
+      "surface": "keymap-screen",
+      "scope": "sales-orders",
+      "combo": "F4",
+      "action": "unavailable",
+      "label": "Contra voucher (F4) — not from the sales order register",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:sales-orders:F5",
+      "surface": "keymap-screen",
+      "scope": "sales-orders",
+      "combo": "F5",
+      "action": "unavailable",
+      "label": "Payment voucher (F5) — not from the sales order register",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:sales-orders:F6",
+      "surface": "keymap-screen",
+      "scope": "sales-orders",
+      "combo": "F6",
+      "action": "unavailable",
+      "label": "Receipt voucher (F6) — not from the sales order register",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:sales-orders:F7",
+      "surface": "keymap-screen",
+      "scope": "sales-orders",
+      "combo": "F7",
+      "action": "unavailable",
+      "label": "Journal voucher (F7) — not from the sales order register",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:sales-orders:F8",
+      "surface": "keymap-screen",
+      "scope": "sales-orders",
+      "combo": "F8",
+      "action": "unavailable",
+      "label": "Sales voucher (F8) — not from the sales order register",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:sales-orders:F9",
+      "surface": "keymap-screen",
+      "scope": "sales-orders",
+      "combo": "F9",
+      "action": "unavailable",
+      "label": "Purchase voucher (F9) — not from the sales order register",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:tds-challans:Alt+A",
+      "surface": "keymap-screen",
+      "scope": "tds-challans",
+      "combo": "Alt+A",
+      "action": "allocateTDSChallan",
+      "label": "Say what an already-recorded deposit also paid for",
+      "screen_action": "allocateTDSChallan",
+      "dispatch": "screen-action"
+    },
+    {
+      "id": "key:tds-challans:Alt+C",
+      "surface": "keymap-screen",
+      "scope": "tds-challans",
+      "combo": "Alt+C",
+      "action": "recordTDSChallan",
+      "label": "Record a TDS deposit (challan)",
+      "screen_action": "recordTDSChallan",
+      "dispatch": "screen-action"
+    },
+    {
+      "id": "key:tds-challans:Alt+F10",
+      "surface": "keymap-screen",
+      "scope": "tds-challans",
+      "combo": "Alt+F10",
+      "action": "unavailable",
+      "label": "Physical Stock (Alt+F10) — not from this form",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:tds-challans:Alt+F5",
+      "surface": "keymap-screen",
+      "scope": "tds-challans",
+      "combo": "Alt+F5",
+      "action": "unavailable",
+      "label": "Debit Note (Alt+F5) — not from this form",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:tds-challans:Alt+F6",
+      "surface": "keymap-screen",
+      "scope": "tds-challans",
+      "combo": "Alt+F6",
+      "action": "unavailable",
+      "label": "Credit Note (Alt+F6) — not from this form",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:tds-challans:Alt+F7",
+      "surface": "keymap-screen",
+      "scope": "tds-challans",
+      "combo": "Alt+F7",
+      "action": "unavailable",
+      "label": "Stock Journal (Alt+F7) — not from this form",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:tds-challans:Alt+F8",
+      "surface": "keymap-screen",
+      "scope": "tds-challans",
+      "combo": "Alt+F8",
+      "action": "unavailable",
+      "label": "Delivery Note (Alt+F8) — not from this form",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:tds-challans:Alt+F9",
+      "surface": "keymap-screen",
+      "scope": "tds-challans",
+      "combo": "Alt+F9",
+      "action": "unavailable",
+      "label": "Receipt Note (Alt+F9) — not from this form",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:tds-challans:F2",
+      "surface": "keymap-screen",
+      "scope": "tds-challans",
+      "combo": "F2",
+      "action": "unavailable",
+      "label": "Period (F2)",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:tds-challans:F4",
+      "surface": "keymap-screen",
+      "scope": "tds-challans",
+      "combo": "F4",
+      "action": "unavailable",
+      "label": "Contra voucher (F4) — not from this form",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:tds-challans:F5",
+      "surface": "keymap-screen",
+      "scope": "tds-challans",
+      "combo": "F5",
+      "action": "unavailable",
+      "label": "Payment voucher (F5) — not from this form",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:tds-challans:F6",
+      "surface": "keymap-screen",
+      "scope": "tds-challans",
+      "combo": "F6",
+      "action": "unavailable",
+      "label": "Receipt voucher (F6) — not from this form",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:tds-challans:F7",
+      "surface": "keymap-screen",
+      "scope": "tds-challans",
+      "combo": "F7",
+      "action": "unavailable",
+      "label": "Journal voucher (F7) — not from this form",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:tds-challans:F8",
+      "surface": "keymap-screen",
+      "scope": "tds-challans",
+      "combo": "F8",
+      "action": "unavailable",
+      "label": "Sales voucher (F8) — not from this form",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:tds-challans:F9",
+      "surface": "keymap-screen",
+      "scope": "tds-challans",
+      "combo": "F9",
+      "action": "unavailable",
+      "label": "Purchase voucher (F9) — not from this form",
+      "screen_action": null,
+      "dispatch": "unavailable"
+    },
+    {
+      "id": "key:voucher:Alt+L",
+      "surface": "keymap-screen",
+      "scope": "voucher",
+      "combo": "Alt+L",
+      "action": "editLog",
+      "label": "Edit Log (every version of this voucher)",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "menu:gateway:Balance Sheet",
+      "surface": "gateway-menu",
+      "scope": "gateway",
+      "combo": null,
+      "action": null,
+      "label": "Balance Sheet",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "menu:gateway:Bank Reconciliation",
+      "surface": "gateway-menu",
+      "scope": "gateway",
+      "combo": null,
+      "action": null,
+      "label": "Bank Reconciliation",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "menu:gateway:Bill Inbox",
+      "surface": "gateway-menu",
+      "scope": "gateway",
+      "combo": null,
+      "action": null,
+      "label": "Bill Inbox",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "menu:gateway:Bills of Materials",
+      "surface": "gateway-menu",
+      "scope": "gateway",
+      "combo": null,
+      "action": null,
+      "label": "Bills of Materials",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "menu:gateway:Budget Variance",
+      "surface": "gateway-menu",
+      "scope": "gateway",
+      "combo": null,
+      "action": null,
+      "label": "Budget Variance",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "menu:gateway:Budgets",
+      "surface": "gateway-menu",
+      "scope": "gateway",
+      "combo": null,
+      "action": null,
+      "label": "Budgets",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "menu:gateway:Cost Category Summary",
+      "surface": "gateway-menu",
+      "scope": "gateway",
+      "combo": null,
+      "action": null,
+      "label": "Cost Category Summary",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "menu:gateway:Cost Centre Summary",
+      "surface": "gateway-menu",
+      "scope": "gateway",
+      "combo": null,
+      "action": null,
+      "label": "Cost Centre Summary",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "menu:gateway:Cost Centres",
+      "surface": "gateway-menu",
+      "scope": "gateway",
+      "combo": null,
+      "action": null,
+      "label": "Cost Centres",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "menu:gateway:Day Book",
+      "surface": "gateway-menu",
+      "scope": "gateway",
+      "combo": null,
+      "action": null,
+      "label": "Day Book",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "menu:gateway:Display More Reports",
+      "surface": "gateway-menu",
+      "scope": "gateway",
+      "combo": null,
+      "action": null,
+      "label": "Display More Reports",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "menu:gateway:Employees",
+      "surface": "gateway-menu",
+      "scope": "gateway",
+      "combo": null,
+      "action": null,
+      "label": "Employees",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "menu:gateway:Form 138 (Salary TDS)",
+      "surface": "gateway-menu",
+      "scope": "gateway",
+      "combo": null,
+      "action": null,
+      "label": "Form 138 (Salary TDS)",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "menu:gateway:GSTR-9",
+      "surface": "gateway-menu",
+      "scope": "gateway",
+      "combo": null,
+      "action": null,
+      "label": "GSTR-9",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "menu:gateway:Import from Tally",
+      "surface": "gateway-menu",
+      "scope": "gateway",
+      "combo": null,
+      "action": null,
+      "label": "Import from Tally",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "menu:gateway:Offline Outbox",
+      "surface": "gateway-menu",
+      "scope": "gateway",
+      "combo": null,
+      "action": null,
+      "label": "Offline Outbox",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "menu:gateway:Pay Run",
+      "surface": "gateway-menu",
+      "scope": "gateway",
+      "combo": null,
+      "action": null,
+      "label": "Pay Run",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "menu:gateway:Payroll Register",
+      "surface": "gateway-menu",
+      "scope": "gateway",
+      "combo": null,
+      "action": null,
+      "label": "Payroll Register",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "menu:gateway:Print Templates",
+      "surface": "gateway-menu",
+      "scope": "gateway",
+      "combo": null,
+      "action": null,
+      "label": "Print Templates",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "menu:gateway:Profit & Loss A/c",
+      "surface": "gateway-menu",
+      "scope": "gateway",
+      "combo": null,
+      "action": null,
+      "label": "Profit & Loss A/c",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "menu:gateway:Purchase Orders",
+      "surface": "gateway-menu",
+      "scope": "gateway",
+      "combo": null,
+      "action": null,
+      "label": "Purchase Orders",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "menu:gateway:Query",
+      "surface": "gateway-menu",
+      "scope": "gateway",
+      "combo": null,
+      "action": null,
+      "label": "Query",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "menu:gateway:Reconciliation Queue",
+      "surface": "gateway-menu",
+      "scope": "gateway",
+      "combo": null,
+      "action": null,
+      "label": "Reconciliation Queue",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "menu:gateway:Sales Orders",
+      "surface": "gateway-menu",
+      "scope": "gateway",
+      "combo": null,
+      "action": null,
+      "label": "Sales Orders",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "menu:gateway:Stock Summary",
+      "surface": "gateway-menu",
+      "scope": "gateway",
+      "combo": null,
+      "action": null,
+      "label": "Stock Summary",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "menu:gateway:TDS Challans",
+      "surface": "gateway-menu",
+      "scope": "gateway",
+      "combo": null,
+      "action": null,
+      "label": "TDS Challans",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "menu:gateway:Users & Roles",
+      "surface": "gateway-menu",
+      "scope": "gateway",
+      "combo": null,
+      "action": null,
+      "label": "Users & Roles",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
+      "id": "menu:gateway:Vouchers",
+      "surface": "gateway-menu",
+      "scope": "gateway",
+      "combo": null,
+      "action": null,
+      "label": "Vouchers",
+      "screen_action": null,
+      "dispatch": "machine"
+    }
+  ],
+  "client_routes": [
+    "addBudgetLine",
+    "allocateToTDSChallan",
+    "alterBudget",
+    "alterBudgetLine",
+    "alterContraVoucher",
+    "alterCostCentre",
+    "alterCreditNoteVoucher",
+    "alterDebitNoteVoucher",
+    "alterDeliveryNoteVoucher",
+    "alterJournalVoucher",
+    "alterPaymentVoucher",
+    "alterPhysicalStockVoucher",
+    "alterPurchaseVoucher",
+    "alterReceiptNoteVoucher",
+    "alterReceiptVoucher",
+    "alterSalesVoucher",
+    "alterStockJournalVoucher",
+    "anomalies",
+    "backupCompany",
+    "bankReconciliation",
+    "bankStatementMatches",
+    "booksClosure",
+    "budgetVariance",
+    "cashFlow",
+    "clearBankDate",
+    "clearPrintTemplate",
+    "closeBooks",
+    "closePurchaseOrder",
+    "closeSalesOrder",
+    "costCategorySummary",
+    "costCentreSummary",
+    "createBom",
+    "createBudget",
+    "createCompany",
+    "createCostCategory",
+    "createCostCentre",
+    "createCurrency",
+    "createEmployee",
+    "createGroup",
+    "createLedger",
+    "createPurchaseOrder",
+    "createSalesOrder",
+    "createSecurityLevel",
+    "createStockGroup",
+    "createStockItem",
+    "createTCSDeclaration",
+    "createTDSChallan",
+    "createUnit",
+    "createVoucherType",
+    "deleteBudget",
+    "deleteBudgetLine",
+    "deleteSecurityLevel",
+    "deleteVoucher",
+    "explodeBom",
+    "forexSettings",
+    "generateGSTR1",
+    "getBalanceSheet",
+    "getBillsPayable",
+    "getBom",
+    "getCompany",
+    "getDayBook",
+    "getEInvoice",
+    "getEWayBill",
+    "getMe",
+    "getOutstandings",
+    "getPartyOpenBills",
+    "getPrintTemplate",
+    "getProfitLoss",
+    "getPurchaseOrder",
+    "getSalesOrder",
+    "getSecurityVocabulary",
+    "getStockSummary",
+    "getTDSProfile",
+    "getTrialBalance",
+    "getUnadjustedForex",
+    "getVoucher",
+    "getVoucherHistory",
+    "gstr9",
+    "importBankStatement",
+    "importTallyXML",
+    "importedStatement",
+    "inventoryVocabulary",
+    "inviteMember",
+    "listBoms",
+    "listBudgetLines",
+    "listBudgets",
+    "listCostCategories",
+    "listCostCentres",
+    "listCurrencies",
+    "listDeductorStatus",
+    "listEmployees",
+    "listGodowns",
+    "listGroups",
+    "listLedgers",
+    "listMembers",
+    "listPurchaseOrders",
+    "listSalaryComponents",
+    "listSalesOrders",
+    "listSecurityLevels",
+    "listStatutoryElections",
+    "listStockBatches",
+    "listStockGroups",
+    "listStockItems",
+    "listTCSDeclarations",
+    "listTDSChallans",
+    "listUnits",
+    "payrollESIReturn",
+    "payrollForm138",
+    "payrollPFECR",
+    "payrollRegister",
+    "payrollVocabulary",
+    "payslip",
+    "postContraVoucher",
+    "postCreditNoteVoucher",
+    "postDebitNoteVoucher",
+    "postDeliveryNoteVoucher",
+    "postJournalVoucher",
+    "postPaymentVoucher",
+    "postPhysicalStockVoucher",
+    "postPurchaseVoucher",
+    "postReceiptNoteVoucher",
+    "postReceiptVoucher",
+    "postSalesVoucher",
+    "postStockJournalVoucher",
+    "previewBankStatement",
+    "printReport",
+    "printVoucher",
+    "purchaseOrderBook",
+    "query",
+    "raiseEInvoice",
+    "raiseEWayBill",
+    "reconciliationPayload",
+    "reconciliationQueue",
+    "removeMember",
+    "renameCostCategory",
+    "reopenBooks",
+    "resolveReconciliation",
+    "restoreCompany",
+    "restoreStatementLine",
+    "revokeInvite",
+    "runPayroll",
+    "salesOrderBook",
+    "savePrintTemplate",
+    "setAsideStatementLine",
+    "setBankDate",
+    "setCompanyFeatures",
+    "setCurrencyRate",
+    "setDeductorStatus",
+    "setForexSettings",
+    "setLedgerOpening",
+    "setSalaryComponent",
+    "setStatutoryElection",
+    "setStockItemValuationMethod",
+    "setTDSProfile",
+    "syncCommit",
+    "taxSections",
+    "tdsRegister",
+    "updateMember",
+    "updateSecurityLevel"
+  ],
+  "client_calls": [
+    {
+      "method": "addBudgetLine",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/budgets/{budgetID}/lines",
+      "used": true
+    },
+    {
+      "method": "allocateToTDSChallan",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/tds-challans/{challanID}/allocations",
+      "used": true
+    },
+    {
+      "method": "alterBudget",
+      "verb": "PUT",
+      "path": "/v1/companies/{companyID}/budgets/{budgetID}",
+      "used": false
+    },
+    {
+      "method": "alterBudgetLine",
+      "verb": "PUT",
+      "path": "/v1/companies/{companyID}/budgets/{budgetID}/lines/{lineID}",
+      "used": false
+    },
+    {
+      "method": "alterContraVoucher",
+      "verb": "PUT",
+      "path": "/v1/companies/{companyID}/vouchers/contra/{voucherID}",
+      "used": true
+    },
+    {
+      "method": "alterCostCentre",
+      "verb": "PUT",
+      "path": "/v1/companies/{companyID}/cost-centres/{centreID}",
+      "used": false
+    },
+    {
+      "method": "alterCreditNoteVoucher",
+      "verb": "PUT",
+      "path": "/v1/companies/{companyID}/vouchers/credit-note/{voucherID}",
+      "used": true
+    },
+    {
+      "method": "alterDebitNoteVoucher",
+      "verb": "PUT",
+      "path": "/v1/companies/{companyID}/vouchers/debit-note/{voucherID}",
+      "used": true
+    },
+    {
+      "method": "alterDeliveryNoteVoucher",
+      "verb": "PUT",
+      "path": "/v1/companies/{companyID}/vouchers/delivery-note/{voucherID}",
+      "used": true
+    },
+    {
+      "method": "alterJournalVoucher",
+      "verb": "PUT",
+      "path": "/v1/companies/{companyID}/vouchers/journal/{voucherID}",
+      "used": true
+    },
+    {
+      "method": "alterPaymentVoucher",
+      "verb": "PUT",
+      "path": "/v1/companies/{companyID}/vouchers/payment/{voucherID}",
+      "used": true
+    },
+    {
+      "method": "alterPhysicalStockVoucher",
+      "verb": "PUT",
+      "path": "/v1/companies/{companyID}/vouchers/physical-stock/{voucherID}",
+      "used": true
+    },
+    {
+      "method": "alterPurchaseVoucher",
+      "verb": "PUT",
+      "path": "/v1/companies/{companyID}/vouchers/purchase/{voucherID}",
+      "used": true
+    },
+    {
+      "method": "alterReceiptNoteVoucher",
+      "verb": "PUT",
+      "path": "/v1/companies/{companyID}/vouchers/receipt-note/{voucherID}",
+      "used": true
+    },
+    {
+      "method": "alterReceiptVoucher",
+      "verb": "PUT",
+      "path": "/v1/companies/{companyID}/vouchers/receipt/{voucherID}",
+      "used": true
+    },
+    {
+      "method": "alterSalesVoucher",
+      "verb": "PUT",
+      "path": "/v1/companies/{companyID}/vouchers/sales/{voucherID}",
+      "used": true
+    },
+    {
+      "method": "alterStockJournalVoucher",
+      "verb": "PUT",
+      "path": "/v1/companies/{companyID}/vouchers/stock-journal/{voucherID}",
+      "used": true
+    },
+    {
+      "method": "anomalies",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/anomalies",
+      "used": true
+    },
+    {
+      "method": "backupCompany",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/backup",
+      "used": true
+    },
+    {
+      "method": "bankReconciliation",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/bank-reconciliation/{ledgerID}",
+      "used": true
+    },
+    {
+      "method": "bankStatementMatches",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/bank-statement/{ledgerID}/matches",
+      "used": true
+    },
+    {
+      "method": "booksClosure",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/books-closure",
+      "used": true
+    },
+    {
+      "method": "budgetVariance",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/budget-variance",
+      "used": true
+    },
+    {
+      "method": "cashFlow",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/cash-flow",
+      "used": true
+    },
+    {
+      "method": "claim",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/drafts/{draftId}/claim",
+      "used": true
+    },
+    {
+      "method": "clearBankDate",
+      "verb": "DELETE",
+      "path": "/v1/companies/{companyID}/bank-reconciliation/{ledgerID}/{voucherID}/{legNo}",
+      "used": true
+    },
+    {
+      "method": "clearPrintTemplate",
+      "verb": "DELETE",
+      "path": "/v1/companies/{companyID}/print-templates/{docKind}",
+      "used": true
+    },
+    {
+      "method": "closeBooks",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/books-closure",
+      "used": true
+    },
+    {
+      "method": "closePurchaseOrder",
+      "verb": "PUT",
+      "path": "/v1/companies/{companyID}/purchase-orders/{orderID}/close",
+      "used": true
+    },
+    {
+      "method": "closeSalesOrder",
+      "verb": "PUT",
+      "path": "/v1/companies/{companyID}/sales-orders/{orderID}/close",
+      "used": true
+    },
+    {
+      "method": "costCategorySummary",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/cost-category-summary",
+      "used": true
+    },
+    {
+      "method": "costCentreSummary",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/cost-centre-summary",
+      "used": true
+    },
+    {
+      "method": "createBom",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/boms",
+      "used": true
+    },
+    {
+      "method": "createBudget",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/budgets",
+      "used": true
+    },
+    {
+      "method": "createCompany",
+      "verb": "POST",
+      "path": "/v1/companies",
+      "used": true
+    },
+    {
+      "method": "createCostCategory",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/cost-categories",
+      "used": true
+    },
+    {
+      "method": "createCostCentre",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/cost-centres",
+      "used": true
+    },
+    {
+      "method": "createCurrency",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/currencies",
+      "used": true
+    },
+    {
+      "method": "createDraft",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/drafts",
+      "used": true
+    },
+    {
+      "method": "createEmployee",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/employees",
+      "used": true
+    },
+    {
+      "method": "createGroup",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/groups",
+      "used": true
+    },
+    {
+      "method": "createLedger",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/ledgers",
+      "used": true
+    },
+    {
+      "method": "createPurchaseOrder",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/purchase-orders",
+      "used": true
+    },
+    {
+      "method": "createSalesOrder",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/sales-orders",
+      "used": true
+    },
+    {
+      "method": "createSecurityLevel",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/security-levels",
+      "used": true
+    },
+    {
+      "method": "createStockGroup",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/stock-groups",
+      "used": true
+    },
+    {
+      "method": "createStockItem",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/stock-items",
+      "used": true
+    },
+    {
+      "method": "createTCSDeclaration",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/tcs-declarations",
+      "used": true
+    },
+    {
+      "method": "createTDSChallan",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/tds-challans",
+      "used": true
+    },
+    {
+      "method": "createUnit",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/units",
+      "used": true
+    },
+    {
+      "method": "createVoucherType",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/voucher-types",
+      "used": true
+    },
+    {
+      "method": "deleteBudget",
+      "verb": "DELETE",
+      "path": "/v1/companies/{companyID}/budgets/{budgetID}",
+      "used": false
+    },
+    {
+      "method": "deleteBudgetLine",
+      "verb": "DELETE",
+      "path": "/v1/companies/{companyID}/budgets/{budgetID}/lines/{lineID}",
+      "used": false
+    },
+    {
+      "method": "deleteSecurityLevel",
+      "verb": "DELETE",
+      "path": "/v1/companies/{companyID}/security-levels/{levelID}",
+      "used": true
+    },
+    {
+      "method": "deleteVoucher",
+      "verb": "DELETE",
+      "path": "/v1/companies/{companyID}/vouchers/{voucherID}",
+      "used": true
+    },
+    {
+      "method": "explodeBom",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/boms/{bomID}/explode",
+      "used": true
+    },
+    {
+      "method": "forexSettings",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/forex-settings",
+      "used": true
+    },
+    {
+      "method": "generateGSTR1",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/gstr1",
+      "used": false
+    },
+    {
+      "method": "getBalanceSheet",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/balance-sheet",
+      "used": true
+    },
+    {
+      "method": "getBillsPayable",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/bills-payable",
+      "used": true
+    },
+    {
+      "method": "getBom",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/boms/{bomID}",
+      "used": true
+    },
+    {
+      "method": "getCompany",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}",
+      "used": true
+    },
+    {
+      "method": "getDayBook",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/day-book",
+      "used": true
+    },
+    {
+      "method": "getDraft",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/drafts/{draftID}",
+      "used": true
+    },
+    {
+      "method": "getEInvoice",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/e-invoices/{voucherID}",
+      "used": true
+    },
+    {
+      "method": "getEWayBill",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/e-way-bills/{voucherID}",
+      "used": true
+    },
+    {
+      "method": "getMe",
+      "verb": "GET",
+      "path": "/v1/me",
+      "used": true
+    },
+    {
+      "method": "getOutstandings",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/outstandings",
+      "used": true
+    },
+    {
+      "method": "getPartyOpenBills",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/vouchers/{voucherClass}/open-bills/{ledgerID}",
+      "used": true
+    },
+    {
+      "method": "getPrintTemplate",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/print-templates/{docKind}",
+      "used": true
+    },
+    {
+      "method": "getProfitLoss",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/profit-and-loss",
+      "used": true
+    },
+    {
+      "method": "getPurchaseOrder",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/purchase-orders/{orderID}",
+      "used": true
+    },
+    {
+      "method": "getSalesOrder",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/sales-orders/{orderID}",
+      "used": true
+    },
+    {
+      "method": "getSecurityVocabulary",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/security-levels/vocabulary",
+      "used": true
+    },
+    {
+      "method": "getStockSummary",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/stock-summary",
+      "used": true
+    },
+    {
+      "method": "getTDSProfile",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/tds-profile",
+      "used": true
+    },
+    {
+      "method": "getTrialBalance",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/trial-balance",
+      "used": true
+    },
+    {
+      "method": "getUnadjustedForex",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/unadjusted-forex",
+      "used": true
+    },
+    {
+      "method": "getVoucher",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/vouchers/{voucherID}",
+      "used": true
+    },
+    {
+      "method": "getVoucherHistory",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/vouchers/{voucherID}/history",
+      "used": true
+    },
+    {
+      "method": "gstr9",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/gstr9",
+      "used": true
+    },
+    {
+      "method": "importBankStatement",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/bank-statement/{ledgerID}/import",
+      "used": true
+    },
+    {
+      "method": "importTallyXML",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/import/tally-xml",
+      "used": true
+    },
+    {
+      "method": "importedStatement",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/bank-statement/{ledgerID}",
+      "used": true
+    },
+    {
+      "method": "inventoryVocabulary",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/inventory-vocabulary",
+      "used": true
+    },
+    {
+      "method": "inviteMember",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/members/invites",
+      "used": true
+    },
+    {
+      "method": "listBoms",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/boms",
+      "used": true
+    },
+    {
+      "method": "listBudgetLines",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/budgets/{budgetID}/lines",
+      "used": true
+    },
+    {
+      "method": "listBudgets",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/budgets",
+      "used": true
+    },
+    {
+      "method": "listCostCategories",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/cost-categories",
+      "used": true
+    },
+    {
+      "method": "listCostCentres",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/cost-centres",
+      "used": true
+    },
+    {
+      "method": "listCurrencies",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/currencies",
+      "used": true
+    },
+    {
+      "method": "listDeductorStatus",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/deductor-status",
+      "used": true
+    },
+    {
+      "method": "listDrafts",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/drafts",
+      "used": true
+    },
+    {
+      "method": "listEmployees",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/employees",
+      "used": true
+    },
+    {
+      "method": "listGodowns",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/godowns",
+      "used": true
+    },
+    {
+      "method": "listGroups",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/groups",
+      "used": true
+    },
+    {
+      "method": "listLedgers",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/ledgers",
+      "used": true
+    },
+    {
+      "method": "listMembers",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/members",
+      "used": true
+    },
+    {
+      "method": "listPurchaseOrders",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/purchase-orders",
+      "used": true
+    },
+    {
+      "method": "listSalaryComponents",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/employees/{employeeID}/salary-components",
+      "used": true
+    },
+    {
+      "method": "listSalesOrders",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/sales-orders",
+      "used": true
+    },
+    {
+      "method": "listSecurityLevels",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/security-levels",
+      "used": true
+    },
+    {
+      "method": "listStatutoryElections",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/employees/{employeeID}/statutory-elections",
+      "used": true
+    },
+    {
+      "method": "listStockBatches",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/batches",
+      "used": false
+    },
+    {
+      "method": "listStockGroups",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/stock-groups",
+      "used": true
+    },
+    {
+      "method": "listStockItems",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/stock-items",
+      "used": true
+    },
+    {
+      "method": "listTCSDeclarations",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/tcs-declarations",
+      "used": true
+    },
+    {
+      "method": "listTDSChallans",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/tds-challans",
+      "used": true
+    },
+    {
+      "method": "listUnits",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/units",
+      "used": true
+    },
+    {
+      "method": "payrollESIReturn",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/payroll-esi-return?month={month}&leaving_reason=toString=()+=>+value&leaving_reason=valueOf=()+=>+value&leaving_reason=map=()+=>+[]",
+      "used": true
+    },
+    {
+      "method": "payrollForm138",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/payroll-form-138?tax_year={tax_year}&quarter={quarter}&tan={tan}&deductor_pan={deductor_pan}&deductor_name={deductor_name}&form_number={form_number}&file_creation_date={file_creation_date}&file_sequence={file_sequence}",
+      "used": true
+    },
+    {
+      "method": "payrollPFECR",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/payroll-pf-ecr",
+      "used": true
+    },
+    {
+      "method": "payrollRegister",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/payroll-register",
+      "used": true
+    },
+    {
+      "method": "payrollVocabulary",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/payroll-vocabulary",
+      "used": true
+    },
+    {
+      "method": "payslip",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/payroll-payslip",
+      "used": true
+    },
+    {
+      "method": "postContraVoucher",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/vouchers/contra",
+      "used": true
+    },
+    {
+      "method": "postCreditNoteVoucher",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/vouchers/credit-note",
+      "used": true
+    },
+    {
+      "method": "postDebitNoteVoucher",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/vouchers/debit-note",
+      "used": true
+    },
+    {
+      "method": "postDeliveryNoteVoucher",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/vouchers/delivery-note",
+      "used": true
+    },
+    {
+      "method": "postJournalVoucher",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/vouchers/journal",
+      "used": true
+    },
+    {
+      "method": "postPaymentVoucher",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/vouchers/payment",
+      "used": true
+    },
+    {
+      "method": "postPhysicalStockVoucher",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/vouchers/physical-stock",
+      "used": true
+    },
+    {
+      "method": "postPurchaseVoucher",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/vouchers/purchase",
+      "used": true
+    },
+    {
+      "method": "postReceiptNoteVoucher",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/vouchers/receipt-note",
+      "used": true
+    },
+    {
+      "method": "postReceiptVoucher",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/vouchers/receipt",
+      "used": true
+    },
+    {
+      "method": "postSalesVoucher",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/vouchers/sales",
+      "used": true
+    },
+    {
+      "method": "postStockJournalVoucher",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/vouchers/stock-journal",
+      "used": true
+    },
+    {
+      "method": "previewBankStatement",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/bank-statement/{ledgerID}/preview",
+      "used": true
+    },
+    {
+      "method": "printReport",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/print/reports/{slug}",
+      "used": true
+    },
+    {
+      "method": "printVoucher",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/print/vouchers/{voucherClass}/{voucherID}",
+      "used": true
+    },
+    {
+      "method": "purchaseOrderBook",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/purchase-order-book",
+      "used": true
+    },
+    {
+      "method": "query",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/query",
+      "used": true
+    },
+    {
+      "method": "raiseEInvoice",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/e-invoices",
+      "used": true
+    },
+    {
+      "method": "raiseEWayBill",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/e-way-bills",
+      "used": true
+    },
+    {
+      "method": "reconciliationPayload",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/reconciliation-queue/{reconID}/payload",
+      "used": true
+    },
+    {
+      "method": "reconciliationQueue",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/reconciliation-queue",
+      "used": true
+    },
+    {
+      "method": "recordAccepted",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/drafts/{draftId}/accepted",
+      "used": true
+    },
+    {
+      "method": "releaseClaim",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/drafts/{draftId}/claim/release",
+      "used": true
+    },
+    {
+      "method": "removeMember",
+      "verb": "DELETE",
+      "path": "/v1/companies/{companyID}/members/{userID}",
+      "used": true
+    },
+    {
+      "method": "renameCostCategory",
+      "verb": "PUT",
+      "path": "/v1/companies/{companyID}/cost-categories/{categoryID}",
+      "used": false
+    },
+    {
+      "method": "reopenBooks",
+      "verb": "DELETE",
+      "path": "/v1/companies/{companyID}/books-closure",
+      "used": true
+    },
+    {
+      "method": "resolveReconciliation",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/reconciliation-queue/{reconID}/resolve",
+      "used": true
+    },
+    {
+      "method": "restoreCompany",
+      "verb": "POST",
+      "path": "/v1/companies/restore",
+      "used": true
+    },
+    {
+      "method": "restoreStatementLine",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/bank-statement/{ledgerID}/lines/{lineID}/restore",
+      "used": true
+    },
+    {
+      "method": "revokeInvite",
+      "verb": "DELETE",
+      "path": "/v1/companies/{companyID}/members/invites/{inviteID}",
+      "used": true
+    },
+    {
+      "method": "runPayroll",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/vouchers/payroll",
+      "used": true
+    },
+    {
+      "method": "salesOrderBook",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/sales-order-book",
+      "used": true
+    },
+    {
+      "method": "savePrintTemplate",
+      "verb": "PUT",
+      "path": "/v1/companies/{companyID}/print-templates/{docKind}",
+      "used": true
+    },
+    {
+      "method": "setAsideStatementLine",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/bank-statement/{ledgerID}/lines/{lineID}/set-aside",
+      "used": true
+    },
+    {
+      "method": "setBankDate",
+      "verb": "PUT",
+      "path": "/v1/companies/{companyID}/bank-reconciliation/{ledgerID}/{voucherID}/{legNo}",
+      "used": true
+    },
+    {
+      "method": "setCompanyFeatures",
+      "verb": "PUT",
+      "path": "/v1/companies/{companyID}",
+      "used": true
+    },
+    {
+      "method": "setCurrencyRate",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/currencies/rates",
+      "used": false
+    },
+    {
+      "method": "setDeductorStatus",
+      "verb": "PUT",
+      "path": "/v1/companies/{companyID}/deductor-status/{taxYearStart}",
+      "used": true
+    },
+    {
+      "method": "setForexSettings",
+      "verb": "PUT",
+      "path": "/v1/companies/{companyID}/forex-settings",
+      "used": true
+    },
+    {
+      "method": "setLedgerOpening",
+      "verb": "PUT",
+      "path": "/v1/companies/{companyID}/ledgers/{ledgerID}/opening",
+      "used": false
+    },
+    {
+      "method": "setSalaryComponent",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/employees/{employeeID}/salary-components",
+      "used": true
+    },
+    {
+      "method": "setStatutoryElection",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/employees/{employeeID}/statutory-elections",
+      "used": true
+    },
+    {
+      "method": "setStockItemValuationMethod",
+      "verb": "PUT",
+      "path": "/v1/companies/{companyID}/stock-items/{stockItemID}/valuation-method",
+      "used": true
+    },
+    {
+      "method": "setTDSProfile",
+      "verb": "PUT",
+      "path": "/v1/companies/{companyID}/tds-profile",
+      "used": true
+    },
+    {
+      "method": "syncCommit",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/sync/commit",
+      "used": true
+    },
+    {
+      "method": "taxSections",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/tds-sections",
+      "used": true
+    },
+    {
+      "method": "tdsRegister",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/tds-register",
+      "used": true
+    },
+    {
+      "method": "updateMember",
+      "verb": "PUT",
+      "path": "/v1/companies/{companyID}/members/{userID}",
+      "used": true
+    },
+    {
+      "method": "updateSecurityLevel",
+      "verb": "PUT",
+      "path": "/v1/companies/{companyID}/security-levels/{levelID}",
+      "used": true
+    }
+  ]
+}

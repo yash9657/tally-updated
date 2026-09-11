@@ -143,7 +143,7 @@ const COMPANY_SCOPED_SCREENS = new Set<NavSnapshot["screen"]>([
  * the registered handler with the PRE-transition snapshot, then lets the
  * machine move the stack.
  */
-const SCREEN_ACTIONS: Partial<Record<KeymapAction["kind"], ScreenActionKind>> = {
+export const SCREEN_ACTIONS: Partial<Record<KeymapAction["kind"], ScreenActionKind>> = {
   accept: "accept",
   delete: "delete",
   exportScreen: "export",
@@ -180,6 +180,13 @@ const SCREEN_ACTIONS: Partial<Record<KeymapAction["kind"], ScreenActionKind>> = 
   // key below resolves, finds no screen action, and is forwarded to a machine
   // case that deliberately does nothing — silently, with every unit test still
   // passing, because they call the dispatcher directly and bypass this map.
+  // ⛔⛔ Esc — GIVE THE SCREEN FIRST REFUSAL ON IT (D114). Every other entry in
+  // this map routes a key the machine has no answer for; this one routes a key
+  // the machine answers WELL — it pops a frame — to a screen that may be
+  // holding a panel the machine cannot see. A handler that has no panel open
+  // returns undefined and Esc goes on being Esc, so this line changes nothing
+  // on the twenty-odd screens that register no handler for it.
+  escape: "closePanel",
   matchBankRows: "matchBankRows",
   modifyBankMatch: "modifyBankMatch",
   unlinkBankMatch: "unlinkBankMatch",
@@ -216,6 +223,26 @@ const SCREEN_ACTIONS: Partial<Record<KeymapAction["kind"], ScreenActionKind>> = 
   // The report has NO default plan, so without this entry a company with several
   // budgets could never re-point the report after the first choice.
   selectBudget: "selectBudget",
+  // F4 on the GSTR-9 ANNUAL RETURN — choose the FINANCIAL YEAR (T12).
+  //
+  // ⛔⛔ THIS LINE WAS MISSING AND THE KEY WAS DEAD IN THE SHIPPED PRODUCT. Every
+  // other registration for it was present and correct — the keymap binding
+  // (keymaps/tallyprime.ts `gstr9.F4`), the KeymapAction (types.ts), the
+  // actionLabel, the ScreenActionKind (ScreenActions.tsx) and the screen's own
+  // useRegisterScreenAction (reports/GSTR9Screen.tsx) — so the omission was
+  // invisible in review from any one of those six files. The shell resolved F4,
+  // found no screen action, forwarded it to a machine with no `selectFinancialYear`
+  // case, saw an unchanged stack and printed "F4 — Choose the financial year does
+  // not apply on this screen." THE YEAR PICKER COULD NOT BE REOPENED: it renders
+  // once when the screen has no year, and after the first pick the report was
+  // pinned to that year for the life of the frame.
+  //
+  // ⚠️ FOUND BY THE UI-COMMAND CENSUS (src/actions/uiCommandManifest.ts), not by
+  // a test of this screen, and that is the argument for the census: no unit test
+  // could see it, because they all call the dispatcher directly and bypass this
+  // map. It is the same failure `importBankStatement` above records, and it had
+  // been shipped a second time in a different quarter of the app.
+  selectFinancialYear: "selectFinancialYear",
   // ---- THE FOUR T3 SCREEN ACTIONS (Alt+C / Alt+W on the two order registers,
   // Alt+C / Alt+X on the BOM screen).
   //
@@ -419,6 +446,23 @@ function AppShellInner({
       // Only a handler that returns `screenRefusal(...)` takes this path, so
       // every other action behaves exactly as it did.
       if (effect.refused) {
+        ev.preventDefault();
+        if (effect.message) showStatus(effect.message);
+        return;
+      }
+
+      // ⛔ A KEY THE SCREEN ALREADY ANSWERED DOES NOT REACH THE MACHINE EITHER
+      // (register row D114). Esc with an in-screen panel open is the case: the
+      // panel closes and the FRAME MUST SURVIVE, because the machine's escape
+      // reducer pops a frame it cannot see a panel on — which put an operator
+      // who pressed Esc in the statement-import panel on the Gateway of Tally,
+      // two screens from where the panel's own footer said they would be, and
+      // Bank Reconciliation is not in Alt+G Go To to get back with.
+      //
+      // ⚠️ SEPARATE FROM `refused` ON PURPOSE. That branch means "nothing
+      // happened and here is why"; this one means "it happened HERE". Merging
+      // them would report a working key as a rejected one.
+      if (effect.handled) {
         ev.preventDefault();
         if (effect.message) showStatus(effect.message);
         return;

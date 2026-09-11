@@ -265,6 +265,12 @@ export function TrialBalanceScreen({ snapshot, onSelect }: ReportProps) {
     // Ledger-wise rows drill into that ledger's vouchers; group-wise rows drill
     // into the group's ledgers first (Tally's group > ledger > voucher path).
     rowKey: `${ledgerWise ? LEDGER_ROW_PREFIX : GROUP_ROW_PREFIX}${r.label}`,
+    // ⚠️ D118 — THE LEVEL FOLLOWS F5, exactly as the column header does. This
+    // report is FLAT either way (one row per ledger, or one per group, never
+    // both), so the level's job here is not nesting — it is to make the Total
+    // row below distinguishable, which it was not: summing the Debit column
+    // returned 1,708,730.2400 against the file's own Total of 854,365.1200.
+    level: ledgerWise ? "Ledger" : "Group",
     values: [r.label, formatMoney(r.debit), formatMoney(r.credit)],
     exportCells: [textCell(r.label), moneyCell(r.debit), moneyCell(r.credit)],
     cells: (
@@ -277,6 +283,7 @@ export function TrialBalanceScreen({ snapshot, onSelect }: ReportProps) {
   }));
   rows.push({
     rowKey: "__total__",
+    level: "Total",
     drillable: false,
     values: ["Total", formatMoney(data?.total_debit), formatMoney(data?.total_credit)],
     exportCells: [
@@ -302,6 +309,11 @@ export function TrialBalanceScreen({ snapshot, onSelect }: ReportProps) {
     title: "Trial Balance",
     headers: [ledgerWise ? "Ledger" : "Group", "Debit", "Credit"],
     availability,
+    // D118 — flat, but it carries a TOTAL row, and an unmarked total is the same
+    // doubling one row smaller. ⚠️ `Parent` is empty on every row here and that
+    // is correct: nothing on a Trial Balance is anybody's child, and naming the
+    // group would make the sum double-count the day a group row appeared.
+    levels: true,
   });
   return (
     <ReportFrame
@@ -347,10 +359,21 @@ function groupWise(
 // Balance Sheet + Profit & Loss (statement trees).
 // ---------------------------------------------------------------------------
 
+/**
+ * D118 — a statement node's kind, in the words the export uses. `COMPUTED` is
+ * neither a group nor a ledger (Closing Stock, the cumulative P&L balance): it
+ * is a figure the server derived, and calling it either of the other two would
+ * put it in a sum it does not belong to.
+ */
+function levelOfNode(kind: StatementNode["kind"]): string {
+  return kind === "GROUP" ? "Group" : kind === "LEDGER" ? "Ledger" : "Computed";
+}
+
 function flattenNodes(nodes: readonly StatementNode[], depth = 0): DrillRow[] {
   const out: DrillRow[] = [];
   for (const n of nodes) {
     out.push({
+      level: levelOfNode(n.kind),
       // The row key carries the row's KIND (group vs ledger), which is how the
       // machine knows a group drills one more level than a ledger. Names — not
       // uuids — because the drill screen resolves against the Trial Balance and
@@ -415,9 +438,15 @@ export function BalanceSheetScreen({ snapshot, onSelect }: ReportProps) {
   }
 
   const visible = useReportView(rows, snapshot, {
-    title: "Balance Sheet",
+    title: statementTitle("Balance Sheet", snapshot),
     headers: ["Particulars", "Amount"],
     availability,
+    // D118 — this file is a three-deep tree and every parent carries its
+    // subtree's money. Without the two columns, summing the Amount column
+    // returned 4.2× the section total on the demo book.
+    levels: true,
+    // The refusal sentence names the report, not the file.
+    label: "Balance Sheet",
   });
 
   return (
@@ -443,15 +472,54 @@ export function BalanceSheetScreen({ snapshot, onSelect }: ReportProps) {
   );
 }
 
-/** A non-drillable section heading row carrying the section total. */
+/**
+ * ⛔⛔ D118 — THE FILE SAYS WHICH VIEW PRODUCED IT, IN ITS OWN NAME.
+ *
+ * `Balance-Sheet-condensed.csv` / `Balance-Sheet-detailed.csv`, because the two
+ * are genuinely different documents and a reader cannot tell them apart from the
+ * inside. **In the CONDENSED view a group's children may be only PARTLY in the
+ * file** — `condense` drops drillable rows deeper than level 1 but keeps every
+ * non-drillable row AND its chain of ancestors, so `Current Assets` appears with
+ * `Stock-in-Hand` under it (kept only because `Closing Stock` must never be
+ * dropped) and without its three siblings. Measured on the demo book: the rows
+ * under `Current Assets` sum to **75,094.9091** against its own
+ * **746,314.9091**.
+ *
+ * ⭐ THE TOP LEVEL IS COMPLETE IN BOTH VIEWS — `condense` never drops a depth-1
+ * row — so `SUMIF(Parent, "<section>")` foots either way. The suffix is about
+ * the DEEPER sums, which only the `Parent` column made possible in the first
+ * place: this hazard arrived with the fix, so it ships with the fix.
+ *
+ * ⚠️ ON BOTH VIEWS AND NOT ONLY THE DANGEROUS ONE. "No suffix" is exactly the
+ * silence that makes a condensed file look complete.
+ *
+ * ⛔ AND ON THESE TWO SCREENS ONLY. They are the only reports in the product
+ * that nest past depth 1; anywhere else the word would describe nothing.
+ * Precedent: the Stock Summary already puts its scope in its title, for the same
+ * reason and with the same consequence for the file name.
+ */
+function statementTitle(name: string, snapshot: NavSnapshot): string {
+  return `${name} (${snapshot.config?.detailed ? "detailed" : "condensed"})`;
+}
+
+/**
+ * A non-drillable section heading row carrying the section total.
+ *
+ * ⛔ `level` IS A PARAMETER AND NOT A CONSTANT `"Section"` (D118). The P&L's
+ * `Net Profit` is built by this helper and is NOT a section: it is Income minus
+ * Expenses, and no row in the file rolls up into it. Labelling it `Section`
+ * would invite exactly the sum that is wrong.
+ */
 function sectionHeaderRow(
   key: string,
   title: string,
   total: string,
   testId: string,
+  level: string = "Section",
 ): DrillRow {
   return {
     rowKey: key,
+    level,
     drillable: false,
     values: [title, formatMoney(total)],
     exportCells: [textCell(title), moneyCell(total)],
@@ -503,14 +571,19 @@ export function ProfitLossScreen({ snapshot, onSelect }: ReportProps) {
         "Net Profit",
         data.net_profit,
         "pl-net-profit",
+        // NOT a section: nothing in this file rolls up into it. See the helper.
+        "Computed",
       ),
     );
   }
 
   const visible = useReportView(rows, snapshot, {
-    title: "Profit and Loss",
+    title: statementTitle("Profit and Loss", snapshot),
     headers: ["Particulars", "Amount"],
     availability,
+    // D118 — same shape as the Balance Sheet: section headers over groups that
+    // roll up into them, and a `Net Profit` row that is neither.
+    levels: true,
     // The FILE is "Profit-and-Loss.csv"; the SCREEN is headed "Profit & Loss
     // A/c". A refusal names the screen, because that is what the operator is
     // looking at when they read the status line.
@@ -660,6 +733,14 @@ function OutstandingsLikeScreen({
     // currency and summing them produces a figure in none of them.
     rows.push({
       rowKey: `${LEDGER_ROW_PREFIX}${p.ledger}`,
+      // ⛔⛔ D109's Level, NOW DECLARED RATHER THAN HAND-WRITTEN INTO THE CELLS
+      // (D118). It used to be a literal `textCell("Party")` spliced into
+      // `exportCells` here, with a matching literal in the headers below — three
+      // places to keep in step. The shared layer writes both the header and the
+      // cell from this one word now, and the same edit gave this file a `Parent`
+      // column it did not have: a bill's parent is its party, so one party's
+      // bills can be summed on their own.
+      level: "Party",
       values: [p.ledger, p.group, "", formatMoney(p.pending)],
       exportCells: [
         textCell(p.ledger),
@@ -730,6 +811,7 @@ function OutstandingsLikeScreen({
         // IT, and that is stated rather than implied.
         rowKey: `${LEDGER_ROW_PREFIX}${p.ledger}/${b.ref_name}/${b.currency_code}`,
         depth: 1,
+        level: "Bill",
         drillable: false,
         values: [`${refLabel} — ${when}`, age, foreign, formatMoney(b.pending)],
         exportCells: [
@@ -757,6 +839,10 @@ function OutstandingsLikeScreen({
   // and a total that silently did it would still foot.
   rows.push({
     rowKey: "__total__",
+    // ⚠️ THE TOTAL ROW DECLARES ITS LEVEL TOO, so a spreadsheet filtering on the
+    // Level column can EXCLUDE it: a total swept into a sum of party rows is the
+    // same doubling one row smaller.
+    level: "Total",
     drillable: false,
     values: ["Total", "", "", formatMoney(data?.total)],
     exportCells: [
@@ -783,7 +869,28 @@ function OutstandingsLikeScreen({
     // header reading "Group" over a column that holds a due date on every second
     // row is the Stock Summary export's defect (a quantity under a header the
     // next column's money contradicts) — declared here instead.
+    // ⛔⛔ D109 — `Level` NAMES WHAT EACH ROW IS, AND WITHOUT IT THIS FILE
+    // CANNOT BE SUMMED. This report is two levels deep: a party total followed
+    // by that party's open bills, which hold the same money a second time. On
+    // screen the two are told apart by CSS (the bill's label cell is `pl-4`,
+    // its figures are `text-tally-field`) and by nothing else, and CSS does not
+    // survive Alt+E — measured 2026-08-31, party rows plus bill rows summing to
+    // 555,040 against the file's own Total of 277,520, a ratio of exactly
+    // 2.000000. With that column a spreadsheet sums `Level = "Bill"` (or
+    // `= "Party"`) and gets the stated total to the paisa.
+    //
+    // ⚠️ IT REPLACES A DISCRIMINATOR THAT WAS NEVER DECLARED AND WHICH FAILED
+    // OUTRIGHT: "a group name on a party row against a due date on a bill row"
+    // is nothing a SUM respects, it is not in the money column, and A BILL WITH
+    // NO DUE DATE HAS BOTH CELLS EMPTY — two invoices exported as
+    // `Sales/2026-27/4`, empty cell, `11800`, indistinguishable from a party
+    // that happens to be in no group.
+    //
+    // ⭐ `Level` AND `Parent` ARE WRITTEN BY THE SHARED LAYER SINCE D118, from
+    // the `level` on each row and from its depth — so this header list no longer
+    // names them and cannot fall out of step with the cells.
     headers: ["Party / Bill ref", "Group / Due date", "Foreign", "Pending"],
+    levels: true,
     availability,
   });
 
@@ -989,6 +1096,10 @@ export function UnadjustedForexScreen({ snapshot, onSelect }: ReportProps) {
       b.ref_type === "ADVANCE" ? `${b.ref_name} (advance)` : b.ref_name;
     rows.push({
       rowKey: `${LEDGER_ROW_PREFIX}${b.ledger}/${b.ref_name}/${b.currency_code}`,
+      // D118 — flat, but it carries a total row below, and an unmarked total is
+      // a row a spreadsheet sums twice. Same vocabulary as Outstandings, which
+      // reports the same bills in their base currency.
+      level: "Bill",
       drillable: false,
       values: [
         `${b.ledger} — ${label}`,
@@ -1028,6 +1139,7 @@ export function UnadjustedForexScreen({ snapshot, onSelect }: ReportProps) {
   }
   rows.push({
     rowKey: "__total__",
+    level: "Total",
     drillable: false,
     values: ["Net unrealised difference", "", "", "", "", formatMoney(data?.total_difference)],
     exportCells: [
@@ -1063,6 +1175,9 @@ export function UnadjustedForexScreen({ snapshot, onSelect }: ReportProps) {
       "Difference",
     ],
     availability,
+    // D118 — the Total row was indistinguishable from a bill row, so summing
+    // `Difference` returned twice the stated net.
+    levels: true,
   });
 
   return (

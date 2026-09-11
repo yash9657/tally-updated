@@ -593,11 +593,19 @@ func (s *Service) Generate9(ctx context.Context, from, to string, opts Options3B
 	// already named ("which month failed" is the first thing anybody asks); the
 	// gap was that it named exactly one.
 	var failures []string
+	// ⛔ D117 — WHETHER ANY OF THE TWELVE FAILED FOR A REASON THAT IS OURS.
+	// The loop below FLATTENS each period's error into a sentence, which is
+	// right for the operator and destroys the chain `errors.Is` would need: a
+	// dead database fails all twelve, and the annual return would have gone on
+	// telling the filer their data was unprocessable. So the classification is
+	// carried alongside the strings rather than recovered from them.
+	dataSourceFailure := false
 	for n := 0; n < 12; n++ {
 		mFrom, mTo, fp := monthWindow(startYear, n)
 		m, err := s.month9(ctx, mFrom, mTo, fp, opts)
 		if err != nil {
 			failures = append(failures, fmt.Sprintf("%s: %s", fp, operatorMessage(err)))
+			dataSourceFailure = dataSourceFailure || IsDataSource(err)
 			continue
 		}
 		g.Months = append(g.Months, m)
@@ -610,10 +618,17 @@ func (s *Service) Generate9(ctx context.Context, from, to string, opts Options3B
 		// a wrong number that looks like a right one. Validate9 already refuses
 		// a grid that is not twelve months for this reason. What changes here is
 		// that the refusal names ALL of them.
-		return GSTR9{}, fmt.Errorf("%w: %d of the 12 periods of %s failed (%d generated "+
+		refusal := fmt.Errorf("%w: %d of the 12 periods of %s failed (%d generated "+
 			"cleanly), so the annual return cannot be produced. Each failing period and its "+
 			"reason: %s",
 			ErrPeriodsFailed, len(failures), label, 12-len(failures), strings.Join(failures, " | "))
+		// ⚠️ ONE FAILING PERIOD IS ENOUGH TO MAKE THIS OURS. Eleven clean months
+		// and one that could not be read is still a server fault, and the filer
+		// can do nothing about the twelfth by editing the eleven.
+		if dataSourceFailure {
+			return GSTR9{}, dataSource(refusal)
+		}
+		return GSTR9{}, refusal
 	}
 
 	g.OutwardR1VsR3B = divergence("gstr1", "gstr3b", g.Months,

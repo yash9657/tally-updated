@@ -295,7 +295,13 @@ export function BankMatchPanel({
   }, [setAside, restore, unlink, acceptAll, data]);
 
   return (
-    <section className="flex h-full flex-col overflow-auto bg-tally-bg p-4 text-tally-field">
+    <section
+      // A root test id, so a probe (and Esc's own suite) can say THIS PANEL IS
+      // OPEN rather than inferring it from whichever child happens to render —
+      // an empty proposal list has no rows to select on. See D114.
+      data-testid="bank-match-panel"
+      className="flex h-full flex-col overflow-auto bg-tally-bg p-4 text-tally-field"
+    >
       <h1 className="mb-1 text-center font-mono text-lg font-bold text-tally-title">
         Match Bank Statement — {ledgerName}
       </h1>

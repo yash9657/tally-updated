@@ -1723,6 +1723,41 @@ const MOCK_IMPORT_DISCLOSURE =
   "deduplicated row by row, and NOT checked against this account's number. " +
   "The server does all three and refuses files this accepts.";
 
+/**
+ * D111 — the name a statement is stored under when the operator PASTED it
+ * rather than choosing a file.
+ *
+ * ⛔ IT MIRRORS THE SERVER'S SHAPE AND NOT ITS BYTES, and that is stated rather
+ * than implied: cored derives the same sentence (`name.go`), but its fingerprint
+ * is the first eight characters of the file's SHA-256 and this one is a 32-bit
+ * FNV-1a — there is no synchronous SHA-256 in a browser. So the two names AGREE
+ * IN FORM and will differ in the parenthesis, and nothing may compare a mock
+ * name with a cored name expecting equality. What they do share is the property
+ * the defect is about: two different pastes get two different names.
+ *
+ * The alternative — leaving the mock naming pastes `""` — is worse than a
+ * divergence: it is the mock agreeing with the BUG, which is exactly how a
+ * screen's handling of a defect passes here and fails against the real server.
+ */
+function mockStatementName(
+  supplied: string,
+  periodFrom: string,
+  periodTo: string,
+  lines: number,
+  content: string,
+): string {
+  const name = (supplied ?? "").trim();
+  if (name !== "") return name;
+  const when = periodTo === periodFrom ? periodFrom : `${periodFrom} to ${periodTo}`;
+  let h = 0x811c9dc5;
+  for (let i = 0; i < content.length; i++) {
+    h ^= content.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  const fingerprint = h.toString(16).padStart(8, "0");
+  return `pasted statement ${when}, ${lines} ${lines === 1 ? "row" : "rows"} (${fingerprint})`;
+}
+
 function mockEmptyMapping(): StatementColumnMapping {
   return {
     encoding: "",
@@ -8149,13 +8184,42 @@ function normalisedName(v: string): string {
       };
       c.bankStatements.set(ledgerID, store);
 
+      // ⚠️ PARSE BEFORE DEDUPLICATING, which is the order cored uses too ("PARSE
+      // BEFORE OPENING THE TRANSACTION"). It matters since D111: the name a
+      // PASTED statement is stored under is derived from the file's own period
+      // and row count, so it does not exist until the file has been read — and
+      // the dedup below is by name.
+      const importID = `mock-import-${store.imports.length + 1}`;
+      const parsed = mockParseStatement(req.content, req.mapping, importID);
+      if (parsed.length === 0) {
+        throw new ApiError(
+          400,
+          "bankstatement: the file has no transaction rows: it has a header row and nothing under it",
+        );
+      }
+      const dates = parsed.map((l) => l.value_date).sort();
+      const fileName = mockStatementName(
+        req.file_name,
+        dates[0]!,
+        dates[dates.length - 1]!,
+        parsed.length,
+        req.content,
+      );
+
       // Only an identical FILE is caught, unlike the server, which dedups by
       // TRANSACTION. Named in the state comment.
-      const already = store.imports.find((i) => i.file_name === req.file_name);
+      //
+      // ⛔ IT IS THE RESOLVED NAME THAT IS COMPARED, NOT THE ONE THE CALLER
+      // SENT. Comparing `req.file_name` meant every PASTED statement matched
+      // every other pasted statement — both are "" — so the second paste on an
+      // account came back `already_imported` having stored nothing. That is
+      // D111 wearing the mock's clothes.
+      const already = store.imports.find((i) => i.file_name === fileName);
       if (already) {
         return {
           import_id: already.import_id,
           already_imported: true,
+          file_name: already.file_name,
           lines_in_file: already.line_count,
           new_lines: 0,
           duplicate_lines: already.line_count,
@@ -8168,19 +8232,10 @@ function normalisedName(v: string): string {
         };
       }
 
-      const importID = `mock-import-${store.imports.length + 1}`;
-      const parsed = mockParseStatement(req.content, req.mapping, importID);
-      if (parsed.length === 0) {
-        throw new ApiError(
-          400,
-          "bankstatement: the file has no transaction rows: it has a header row and nothing under it",
-        );
-      }
       store.lines.push(...parsed);
-      const dates = parsed.map((l) => l.value_date).sort();
       const im: BankStatementImport = {
         import_id: importID,
-        file_name: req.file_name,
+        file_name: fileName,
         imported_by: req.created_by,
         imported_at: new Date().toISOString(),
         period_from: dates[0]!,
@@ -8195,6 +8250,7 @@ function normalisedName(v: string): string {
       return {
         import_id: importID,
         already_imported: false,
+        file_name: fileName,
         lines_in_file: parsed.length,
         new_lines: parsed.length,
         duplicate_lines: 0,

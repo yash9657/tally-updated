@@ -271,7 +271,14 @@ export function BankStatementImportPanel({
             onChange={(e) => setContent(e.target.value)}
             onBlur={() => {
               if (content.trim()) {
-                runPreview(fileName || "pasted.csv", content);
+                // ⛔ NO INVENTED NAME HERE ANY MORE (D111). This call used to
+                // send "pasted.csv" while the IMPORT ninety-nine lines up sent
+                // the bare (empty) name — one of the two calls that needed a
+                // fallback got one, which is how every pasted statement came to
+                // be stored nameless. The fallback now lives in ONE place, the
+                // server, where the file's own period and row count are known
+                // and can tell two pastes apart; a constant here could not.
+                runPreview(fileName, content);
               }
             }}
           />
@@ -432,6 +439,22 @@ export function BankStatementImportPanel({
           ) : null}
           <p className="mt-1 text-xs">
             {result.period_from} to {result.period_to}
+          </p>
+          {/* ⛔ THE NAME IT WAS STORED UNDER, AND IT IS NOT ALWAYS THE ONE SENT
+              (D111). A statement PASTED rather than chosen has no file name, so
+              the server derives one from the file's own period, row count and
+              fingerprint. Shown here because the disclosures on the combined
+              import report QUOTE this string — an operator who has pasted twice
+              cannot otherwise tell which of the two a warning is about. */}
+          <p className="mt-1 text-xs" data-testid="stmt-stored-name">
+            Stored as <strong>{result.file_name}</strong>
+            {fileName.trim() === "" ? (
+              <>
+                {" "}
+                — this statement was pasted, so it had no file name of its own
+                and one was made from its contents.
+              </>
+            ) : null}
           </p>
 
           {/* ⚠️ A CHECK THAT DID NOT RUN MUST NOT LOOK LIKE A CHECK THAT

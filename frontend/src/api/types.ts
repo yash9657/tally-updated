@@ -524,6 +524,19 @@ export interface ImportStatementRequest {
 export interface ImportStatementResponse {
   import_id: string;
   /**
+   * The name the import was STORED under — which is not always the name that
+   * was sent (D111). A statement PASTED rather than chosen arrives with no file
+   * name at all, and the server derives one from the file's own period, row
+   * count and fingerprint ("pasted statement 2026-04-01 to 2026-04-30, 42 rows
+   * (3f9a1c7e)") rather than storing "".
+   *
+   * ⛔ IT MATTERS BECAUSE A DISCLOSURE QUOTES IT. The combined "everything
+   * imported for this account" report names the file that could NOT be
+   * balance-walked; stored empty, that sentence read `"" carried no running
+   * balance…` and, with two pasted imports on one account, named neither.
+   */
+  file_name: string;
+  /**
    * True when this exact file was already imported into this account. A SUCCESS
    * and a no-op, not an error: the operator's intent is satisfied either way.
    */

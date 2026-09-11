@@ -132,8 +132,15 @@ describe("stockSummarySheet", () => {
     // Every other cell of the footer is blank: the response carries no
     // opening/inward/outward totals, and a client-side fold would be this sheet
     // asserting a figure the server never derived.
+    //
+    // ⚠️ THE FOOTER'S `Level` IS NOT BLANK, AND MUST NOT BE (D109). A total row
+    // with no level is a row a spreadsheet cannot exclude from a sum of item
+    // rows — the same doubling this column exists to end, one row smaller. See
+    // export/twoLevelExport.test.tsx for the sums themselves.
+    expect(at(footer, "Level")).toBe("Total");
     expect(footer.filter((c) => c !== "")).toEqual([
       "Stock-in-Hand",
+      "Total",
       "9999.1234",
     ]);
   });

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useClient, useCompanyID } from "../app/CompanyContext";
-import { useRegisterScreenAction } from "../app/ScreenActions";
+import { screenHandled, useRegisterScreenAction } from "../app/ScreenActions";
 import { LEDGER_ROW_PREFIX } from "../keystroke/navMachine";
+import type { NavSnapshot } from "../keystroke/navMachine";
 import type { ScreenComponentProps } from "../app/screenRegistry";
 import { ApiError } from "../api";
 import type {
@@ -38,10 +39,11 @@ import { usePrintAction } from "./usePrint";
  *  - It does not default a bank date. A reconciliation is an assertion copied off
  *    a bank statement, and defaulting it to today would invent the one fact the
  *    feature exists to record. The server refuses an empty one.
- *  - It does not compute a match. Alt+O imports the bank's own CSV (T4 slice
- *    2a) and shows what the bank said; MATCHING those rows to vouchers is slice
- *    2b and is not built, so every tick on this screen is still manual and the
- *    four matching keys still answer "not built".
+ *  - It does not compute a match FOR YOU. Alt+O imports the bank's own CSV (T4
+ *    slice 2a) and shows what the bank said; Alt+S opens the matcher (slice 2b,
+ *    shipped 2026-08-28), which PROPOSES matches and ticks nothing. Every Bank
+ *    Date on this screen is still an operator's assertion — accepting a
+ *    proposal is how one gets made, not an exception to it.
  *
  * The account number and IFSC ARE shown now — migration 0064 stores them — and
  * they are rendered as the words "not recorded" when absent, because a blank
@@ -205,6 +207,28 @@ export function BankReconciliationScreen({ snapshot }: ScreenComponentProps) {
     if (ledgerID) load(ledgerID);
   }, [ledgerID, load]);
 
+  /**
+   * Closing each panel, ONCE — because it now happens from two places: the
+   * panel's own Close button and Esc (D114). Two copies of "which state to
+   * reset" is how one of them keeps the matcher's selected row alive behind a
+   * closed panel, and F9/Alt+F8 then act on a row nobody can see.
+   */
+  const closeImportPanel = useCallback(() => {
+    setImporting(false);
+    // Re-read the statement on the way out. An import writes no bank dates by
+    // itself, but the rows it adds are what Alt+S then proposes matches from,
+    // and a stale statement behind a fresh import is the kind of thing nobody
+    // thinks to re-check.
+    if (ledgerID) load(ledgerID);
+  }, [ledgerID, load]);
+
+  const closeMatchPanel = useCallback(() => {
+    setMatching(false);
+    setMatchRow(null);
+    setMatchView("match");
+    if (ledgerID) load(ledgerID);
+  }, [ledgerID, load]);
+
   // Ctrl+P. This screen prints since HANDOFF-PARITY-SPRINT.md §3.4 took the
   // route-shape decision: /print/reports/bank-reconciliation?ledger_id=<uuid>.
   //
@@ -296,6 +320,50 @@ export function BankReconciliationScreen({ snapshot }: ScreenComponentProps) {
       setImporting(true);
       return "Import a bank statement (CSV).";
     }, [ledgerID]),
+  );
+
+  /**
+   * ⛔⛔ Esc — CLOSE THE OPEN PANEL, AND ONLY THEN (D114).
+   *
+   * Both panels below are rendered by RETURNING them instead of this screen's
+   * body, out of React state the navigation machine cannot see. The machine
+   * therefore did the only thing it could with Esc — pop the one frame on the
+   * stack — and an operator who pressed Esc in the import panel landed on the
+   * `Gateway of Tally`, two screens from where that panel's own footer says
+   * they will be ("Esc goes back to the reconciliation statement"). Driven
+   * 2026-08-31, three times, one keypress each.
+   *
+   * ⚠️ IT COSTS MORE THAN A KEYSTROKE. Bank Reconciliation is not in the Alt+G
+   * Go To list (§2.2), so an operator who has just imported a statement and
+   * wants to tick against it has to know to find the Gateway entry again.
+   *
+   * ⛔ THE ORDER IS MATCHING, THEN IMPORT, THEN NOTHING — and the last arm is
+   * the load-bearing one: with no panel open this returns `undefined`, the key
+   * is forwarded, and Esc goes on popping the frame exactly as before. An
+   * OVERLAY (F12 Configure, the F2 period) also wins over both panels, because
+   * that is the machine's own precedence and a panel closing underneath an open
+   * dialog would leave the operator holding a dialog for a screen they can no
+   * longer see.
+   */
+  useRegisterScreenAction(
+    "closePanel",
+    useCallback(
+      (snap: NavSnapshot) => {
+        if (snap.overlay) return undefined;
+        if (matching) {
+          closeMatchPanel();
+          return screenHandled(
+            "Closed the matching panel. Nothing was accepted that you did not accept.",
+          );
+        }
+        if (importing) {
+          closeImportPanel();
+          return screenHandled("Back to the reconciliation statement.");
+        }
+        return undefined;
+      },
+      [closeImportPanel, closeMatchPanel, importing, matching],
+    ),
   );
 
   // ---- T4 SLICE 2b — the five matching keys (RESEARCH.md:879).
@@ -483,12 +551,7 @@ export function BankReconciliationScreen({ snapshot }: ScreenComponentProps) {
           setWriteGen((g) => g + 1);
           load(ledgerID);
         }}
-        onClose={() => {
-          setMatching(false);
-          setMatchRow(null);
-          setMatchView("match");
-          load(ledgerID);
-        }}
+        onClose={closeMatchPanel}
       />
     );
   }
@@ -502,14 +565,7 @@ export function BankReconciliationScreen({ snapshot }: ScreenComponentProps) {
         ledgerName={bank?.name ?? brs?.ledger_name ?? ""}
         bankAccountNumber={bank?.bank_account_number ?? ""}
         bankIFSC={bank?.bank_ifsc ?? ""}
-        onClose={() => {
-          setImporting(false);
-          // Re-read the statement on the way out. An import changes nothing on
-          // the BRS today — matching is slice 2b — but it will the day 2b lands,
-          // and a stale statement behind a fresh import is the kind of thing
-          // nobody thinks to re-check.
-          load(ledgerID);
-        }}
+        onClose={closeImportPanel}
       />
     );
   }
@@ -685,17 +741,32 @@ export function BankReconciliationScreen({ snapshot }: ScreenComponentProps) {
         </p>
       ) : null}
 
-      <p className="mt-4 max-w-3xl text-xs">
+      <p className="mt-4 max-w-3xl text-xs" data-testid="brs-import-note">
         Reconciling never touches a voucher: the bank date is recorded beside it,
         outside the hash chain, because it is a fact about the bank and not about
         the voucher.{" "}
-        {/* HALF of statement import has shipped, so this sentence names WHICH
-            half. Saying "import is not built" on a screen with a working Alt+O
-            teaches an operator to distrust every other refusal in the product;
-            saying nothing would imply the ticks below are automatic. */}
+        {/* ⛔⛔ D109's SIBLING, AND THE REASON THIS COMMENT IS LONGER THAN THE
+            SENTENCE. This paragraph used to end "Matching those rows to
+            vouchers is not built yet". That was TRUE when it was written and
+            stopped being true on 2026-08-28, when Alt+S shipped a complete
+            matcher ON THIS SCREEN — and nothing brought the sentence back.
+            Measured 2026-08-31: an operator read the denial here, hand-ticked a
+            whole statement a Bank Date at a time, and never pressed the key,
+            while the import report two screens away said the opposite in
+            writing ("Matching now works: press Alt+S").
+
+            ⭐ THE HALF IT GOT RIGHT IS KEPT, and it is the half that matters:
+            this paragraph exists to stop an operator believing the ticks above
+            are automatic. THEY ARE NOT, AND THE MATCHER DOES NOT TICK EITHER —
+            it PROPOSES, and accepting a proposal is the operator's assertion.
+            That is what the match screen says on its own face
+            ("NOTHING ON THIS SCREEN HAS BEEN RECONCILED"), so the two now agree
+            rather than contradicting each other in two directions. */}
         <strong>Alt+O imports your bank&apos;s CSV statement</strong> and shows
-        what the bank said. Matching those rows to vouchers is not built yet, so
-        every tick in the Bank Date column above is still yours to make.
+        what the bank said. <strong>Alt+S matches those rows against your
+        vouchers</strong> — it only ever PROPOSES a match, and accepting one
+        writes the bank&apos;s own value date into the Bank Date column above.
+        Nothing on this screen is ticked for you, by hand or by Alt+S.
       </p>
     </section>
   );

@@ -171,6 +171,14 @@ func writeGSTR9Error(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, gstr.ErrNotAFinancialYear), errors.Is(err, gstr.ErrLedgersRequired):
 		writeError(w, http.StatusBadRequest, err.Error())
+	// ⛔⛔ D117 — A DEAD DATABASE IS NOT AN UNPROCESSABLE ENTITY. Checked BEFORE
+	// the default arm and AFTER the two request refusals above, which is the
+	// same order writeGSTR3BError uses and for the same reason. Note this one
+	// catches a year in which as few as ONE of the twelve periods failed to be
+	// READ: gstr flattens each period's error into a sentence for the operator,
+	// so the classification travels alongside them rather than in the chain.
+	case gstr.IsDataSource(err):
+		writeBooksUnreadable(w, "GSTR-9", err)
 	default:
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 	}
