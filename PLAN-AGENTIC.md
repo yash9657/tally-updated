@@ -87,7 +87,7 @@ Builds on: W0 registry, `authz` PDP, `webauthn` step-up, voucher API validators,
 Deliverables:
 - `internal/agent`: plan-and-execute loop; always-loaded core tools (`actions.search`, `actions.preview`, `actions.commit`, `actions.status`, `query_books`, `get_draft`, `list_pending`); domain packs retrieved by embedding/BM25 over tool descriptions; deterministic verifier = the voucher/GST/master validators, fed back as structured errors, one bounded retry; structured output on every decision step.
 - `internal/policy`: agent principal `{agent_id, on_behalf_of, delegation}`; effective rights = ACL(user) ∩ ACL(agent) ∩ delegation; risk classes on every `ActionSpec`; autonomy table `(tenant, user, action, amount_band) → L0..L3` defaulting to L1; structural rules (agent-created parties born blocked; no delete/ACL/period-lock/delegation actions; agent never checker).
-- Durable runs: DBOS Transact Go (or Restate after the W0 spike) — run = workflow, LLM/tool call = step, approval = `Recv` on a per-run topic with a days-long timeout; the decision is written to the chain.
+- Durable runs: **`statutory.Run` + `PGStore` + a poll-driven re-invoker, per D120 — not DBOS, not Restate** — run = workflow, LLM/tool call = step, approval = a step that reads the decisions table and parks (returns `ErrParked`, recording nothing) until a decision exists or the days-long window closes; the decision is written to the chain. ⛔ A per-run advisory lock across `Run` is mandatory (D120 §4), and expiry must be made terminal by writing a decision (D120 §6 F2).
 - **Intent log** table (INSERT-only role, `prev_hash`, nightly anchor) and the **approval inbox** (approve / edit-then-approve / reject / ask-back) as a new `ScreenKind` reachable from the Gateway and Alt+G, with the diff view mandatory above L1 thresholds and undo as a generated reversal.
 - Frontend: agent side panel driven by AG-UI events; the panel pre-fills the *same* native screens (F8/F9/F5…) so Ctrl+A remains the accept key; `preview` renders as the ledger-effect diff the human would see anyway.
 - First write actions live: all voucher classes (create/alter via compensating version), masters, sales/purchase orders, bank-reconciliation match/unmatch, reminders (utility templates), exports/prints. Read actions: every report in the vocabulary.
@@ -199,7 +199,13 @@ Report these per tenant and per cohort, monthly, and publish the tenant's own vi
 ## 7. Decisions to take now
 
 1. Approve the model bake-off (W1) as the first spend; it decides D3 with our data.
-2. Choose DBOS Transact Go vs Restate after a one-week spike (three-day approval across a restart).
+2. ~~Choose DBOS Transact Go vs Restate after a one-week spike (three-day approval across a restart).~~
+   **✅ DECIDED 2026-09-11 — NEITHER.** The spike ran the gate itself against `statutory.Run` + `PGStore`
+   (already in production on the IRN path) and it held: a 72-hour approval survived four real process
+   restarts with the money step executing exactly once. `IMPLEMENTATION_PLAN.md:25` §1.1 stands
+   unamended. ⛔ **Conditional on a per-run `pg_try_advisory_lock` — without it two concurrent pollers
+   were measured executing the money step twice while the step store recorded once.** See
+   `docs/design/d120-durable-runs-spike.md` §6 for the five things W2 owes before adopting it.
 3. Confirm the residency posture for pilot tenants (Fireworks Tier-A egress with redaction and consent vs India-only from day one).
 4. Pick the WhatsApp path for the pilot (BSP for Payments/Forms speed vs direct Cloud API).
 5. Confirm with counsel the GST filing boundary (Rule 26 / Rule 83(8)) and the DPDP reading of the priors schema before W7.

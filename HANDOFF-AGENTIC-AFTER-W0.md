@@ -1,7 +1,7 @@
-# Handoff — the agent plane: **W0 CLOSED, W8 TIER 0 CLOSED**, W1a next. ⛔ DRIVER: `PLAN-AGENTIC.md` §3
+# Handoff — the agent plane: **W0 CLOSED, W8 TIER 0 CLOSED, §7-2 DECIDED**, W1a next. ⛔ DRIVER: `PLAN-AGENTIC.md` §3
 Updated: 2026-09-09 (after W0 — foundations landed, adversarially reviewed, every gate green,
-**nothing committed**). ⛔ **Two things are blocked on the user: §6.1 (bake-off spend + provider keys)
-and §6.2 (the durable-runs decision, which §5 reframes).**
+**nothing committed**). ⛔ **One thing is blocked on the user: §6.1 (bake-off spend + provider keys). §6.2 is
+RESOLVED — the spike ran; see §5 and `docs/design/d120-durable-runs-spike.md`.**
 
 ⛔ **READ `docs/design/d119-agentic-w0-foundations.md` FIRST.** It is W0's ADR: five decisions, the one
 line of `RESEARCH-AGENTIC.md` they overruled, and §7's honest account of the half of D3 that is owed.
@@ -194,6 +194,7 @@ broken the thing that lets anyone work on this repo.
 | frontend tests | `cd frontend && pnpm run test:run` | **122 files / 1954 tests** |
 | corpora | `python3 corpora/validate.py` | `tax=14 tds=15 tcs=5 keystroke=33 isolation=13 migration=6 forecast=4 inventory=11 gstr2b=17 ims=12 payroll=19` |
 | **Tier 0** | `make tier0` (or `CORED_SKIP_DB=1 TRAJECTORY_RECORD= go test ./internal/trajectory/`) | **2 cassettes / 3 interactions / 2 features** |
+| durable spike | `go test ./internal/statutory/ -run 'TestDurablePark\|TestConcurrentPollers\|TestAdvisoryLock'` | 4 pids, commit×1; F5 defect + fix both green |
 | insightd | `cd insightd && .venv/bin/python -m pytest` | **166 passed** (unchanged by W0) |
 
 ⚠️ **JUDGE THE FRONTEND BY ITS PRINTED `Test Files` LINE, NEVER BY THE EXIT CODE.** Measured again this
@@ -291,7 +292,8 @@ measure success, **malformed-call rate**, tokens, latency, ₹ per task. Gate: a
 decision **with numbers**, replacing D3's assumptions — and then, and only then, change
 `nlq.DefaultModel` + `nlq.DefaultProvider` together (§1.4).
 
-**4.4 W2 — action layer, agent loop, approval inbox (6 wk). The big one. Read §5 before planning it.**
+**4.4 W2 — action layer, agent loop, approval inbox (6 wk). The big one. ⛔ Read `d120` §6 first —
+five things W2 owes the durable-runs design before it adopts it.**
 W0 handed it the registry, the PDP join, the provider client, the budget and the span. What it needs
 that does not exist: `internal/agent` (plan-and-execute, tool search, the deterministic verifier =
 the existing voucher/GST/master validators), `internal/policy` (agent principal, risk classes, autonomy
@@ -348,12 +350,28 @@ approvals table; if absent, return a sentinel"* — the run aborts, nothing is r
 unrecorded step plus a row in a table. A three-day approval surviving a restart is not a feature you
 buy; it is the **absence** of durable in-process state.
 
-**So the spike is no longer "DBOS or Restate?" It is: does `statutory.Run` + `PGStore` + a poll-driven
-re-invoker satisfy the W2 gate?** Run the gate itself — a three-day approval across a `cored` restart —
-against that design *first*, for a week. If it holds, §7-2 resolves to "neither, and §1.1 stands". If it
-does not, you have a measured reason to amend §1.1, which is the only honest way to take a dependency
-here. ⛔ **Either way the amendment must be written into `IMPLEMENTATION_PLAN.md:25` in the same commit,
-or every subsequent PR checklist is a lie.**
+### ✅ RESOLVED 2026-09-11 — **neither DBOS nor Restate. §1.1 stands, unamended.**
+
+⛔ **READ `docs/design/d120-durable-runs-spike.md`.** The spike ran the W2 gate itself against
+`statutory.Run` + `PGStore`, against the live database, with **real process restarts** (four distinct
+pids, asserted). Evidence: `backend/internal/statutory/park_resume_spike_test.go`.
+
+**A 72-hour approval survived four process lifetimes and the money step executed exactly once.** The gate
+clause is met with one substitution — park-by-polling instead of `Recv` on a topic — and that
+substitution is the point: a topic subscription is in-process state to lose; the polled design has none.
+
+⛔⛔ **BUT THE SPIKE FOUND THE THING THAT DECIDES THE DESIGN, AND IT IS NOT IN THE PLAN.** `PGStore`
+discharges its no-row-lock race with *"single-instance statutoryd remains the deployment shape"*. **That
+assumption does not carry over: the agent plane runs inside `cored`, which is horizontally scaled.**
+Measured — **two concurrent pollers executed the money step 2 times while the step store recorded 1.**
+The durable record does not reveal the double execution; the books get two vouchers and the store shows
+one. The fix is measured too: a per-run `pg_try_advisory_lock(hashtext(workflow_id))` held across `Run`
+→ **exactly once under contention**, with no new table, no migration and no new dependency.
+
+⛔ **W2 owes five things before adopting this — d120 §6.** F1 `Run` cannot distinguish parked from
+failed (needs an exported `ErrParked`); F2 **expiry is not terminal — a late approval still commits**,
+measured; F3 the advisory lock is mandatory, not an optimisation; F4 plumb `ctx` through `StepStore` at
+adoption, not later; F5 the poller itself does not exist.
 
 ⚠️ `statutory.StepStore`'s methods predate context plumbing (`pgstore.go:25-33` says so and says the
 fix is worth doing). If W2 adopts it, plumb `ctx` **then**, not later.
@@ -367,8 +385,10 @@ spend"). W1a needs neither; **W1b cannot start without both**. Needed: Fireworks
 accounts, and a ceiling. Without this, the model-routing half of D3 stays an assumption and
 `nlq.DefaultModel` stays on Claude.
 
-**6.2 ⛔ The durable-runs decision — but read §5 first.** The question is no longer the one §7-2 asks.
-Recommended: spend the spike week on `statutory.Run` + `PGStore` and run the W2 gate against it.
+**6.2 ✅ RESOLVED 2026-09-11 — no longer a decision to take.** The spike ran; see §5 and
+`docs/design/d120-durable-runs-spike.md`. Verdict: neither DBOS nor Restate; build on `statutory.Run` +
+`PGStore` + a poll-driven re-invoker **with a per-run advisory lock**. `IMPLEMENTATION_PLAN.md:25` §1.1
+stands unamended.
 
 **6.3 Residency posture for pilot tenants** (§7-3): Fireworks Tier-A egress with redaction and a consent
 flag, versus India-only from day one. This decides whether W9 is a late optimisation or an early
