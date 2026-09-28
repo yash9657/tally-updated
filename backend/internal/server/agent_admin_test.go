@@ -256,6 +256,16 @@ func TestAgentExportIsProducedNotRead(t *testing.T) {
 	})
 	t.Run("delegated: produced, and only its size reaches the model", func(t *testing.T) {
 		_, m := runToQuiet(t, srv, b, s, map[string]any{"instruction": "Print voucher " + vid + ".", "delegate": []string{"print report:day-book"}})
+		// ⛔ FIRST: the document's text never reached the model — asserted
+		// before anything about the result's shape, so a result that carried
+		// the text in some other wrapping still fails HERE.
+		for _, req := range m.requests {
+			for _, msg := range req.Messages {
+				if strings.Contains(msg.Content, "SENTINEL-EXPORT") {
+					t.Fatal("the printed document's text reached the model")
+				}
+			}
+		}
 		r := profileResult(t, m, 0)
 		res := asMap(r["result"])
 		if r["ok"] != true || res["produced"] != true || res["bytes"].(float64) < 100 {
@@ -264,12 +274,28 @@ func TestAgentExportIsProducedNotRead(t *testing.T) {
 		if src := asList(r["sources"]); len(src) != 1 || src[0] != "books" {
 			t.Fatalf("export labelled %v", src)
 		}
-		for _, req := range m.requests {
-			for _, msg := range req.Messages {
-				if strings.Contains(msg.Content, "SENTINEL-EXPORT") {
-					t.Fatal("the printed document's text reached the model")
-				}
-			}
-		}
 	})
+}
+
+// TestAgentApproverWithoutTheActionMayNotApprove closes D121 §9 item 9: a
+// custom level that holds agent-approval (full access) but is refused create
+// payment may reject or ask back, and never approve.
+func TestAgentApproverWithoutTheActionMayNotApprove(t *testing.T) {
+	srv := newAgentServer(t)
+	b := newAgentBooks(t, srv)
+	_, id, _ := parkPayment(t, srv, b, nil)
+	tok := memberWithRules(t, srv, b, []map[string]string{{"effect": "disallow", "action": "create", "resource": "payment"}})
+	rec, _ := doRaw(t, srv, http.MethodPost, b.base+"/agent/approvals/"+id+"/decision", tok, map[string]any{"decision": "approve"})
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "may not approve an action you may not take yourself") {
+		t.Fatalf("approve by a level refused create payment = %d %s, want 403", rec.Code, rec.Body.String())
+	}
+	// CONTROL: the same member may still decide what commits nothing.
+	rec, _ = doRaw(t, srv, http.MethodPost, b.base+"/agent/approvals/"+id+"/decision", tok, map[string]any{"decision": "reject", "note": "not mine to approve"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reject by the same member = %d %s", rec.Code, rec.Body.String())
+	}
+	pollUntilQuiet(t, srv)
+	if n := countVouchers(t, b.companyID); n != 0 {
+		t.Fatalf("%d voucher(s)", n)
+	}
 }
