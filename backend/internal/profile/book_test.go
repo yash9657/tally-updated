@@ -254,4 +254,8 @@ func (b *book) seed(t *testing.T) {
 		}
 		b.payRent(t, mo+"-"+rentDays[i], amt)
 	}
+	// A ONE-OFF to the same ledger (a repair, 20 March): it must break the
+	// run, never join it — and it gives the stream reconciler a neighbour, so
+	// "grouped a one-off in" is a failure the gate can actually see.
+	b.payRent(t, "2026-03-20", "8000")
 }

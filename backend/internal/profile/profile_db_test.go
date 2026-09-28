@@ -3,9 +3,12 @@ package profile_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -223,15 +226,24 @@ func TestEveryProfileFactReconcilesToItsReport(t *testing.T) {
 		case "day-book/purchases_window":
 			want = dayBookLegs("Purchase", r.entityKey, "C", nil)
 		case "day-book/stream_total_window":
-			only := map[uuid.UUID]bool{}
-			for _, e := range r.evidence {
-				only[e] = true
-			}
-			side := "D"
+			// ⛔ NOT THE SUM OF THE FACT'S OWN EVIDENCE. That reconciler was
+			// circular — it proved the job added up the vouchers it chose, not
+			// that it chose the right ones — so a one-off grouped into the rent,
+			// or a dropped month, stayed green (the wave-1 review). The run is
+			// RE-DERIVED from the day book: every leg to the ledger on the
+			// stream's side, in date order; the evidence must be exactly one
+			// contiguous stretch of it (nothing skipped inside it), every
+			// member inside the ±5% / ±3-day bands, and neither neighbour able
+			// to extend it (the detector's "longest run" rule).
+			class, side := "Payment", "D"
 			if strings.HasPrefix(r.entityKey, "receipt:") {
-				side = "C"
+				class, side = "Receipt", "C"
 			}
-			want = dayBookLegs("", r.qKey, side, only)
+			var why string
+			want, why = streamFromDayBook(dayBook.Entries, class, r.qKey, side, r.evidence)
+			if why != "" {
+				t.Errorf("stream %s: %s", r.name, why)
+			}
 		case "day-book/vouchers_window":
 			want = decimal.NewFromInt(int64(len(dayBook.Entries)))
 		case "stock-item-vouchers/item_purchase_amount":
@@ -346,7 +358,7 @@ func TestEveryProfileFactReconcilesToItsReport(t *testing.T) {
 		{"company", "sales_seasonality_index", "04", "1.9368"},
 		{"company", "receivables_total", "", "6500"},
 		{"company", "payables_total", "", "21500"},
-		{"company", "vouchers_window", "", "50"},
+		{"company", "vouchers_window", "", "51"}, // 50 + the one-off rent repair (book_test.go)
 	} {
 		got := factValue(t, fs, c.entity, c.key, c.q)
 		if gd, err := decimal.NewFromString(got); err == nil {
@@ -680,4 +692,108 @@ func TestOperatorNotesAreVersionedAndBounded(t *testing.T) {
 	if _, err := profile.SetUserNotes(b.ctx, b.pool, b.cid, strings.Repeat("क", profile.MaxUserNotes), "o"); !errors.Is(err, profile.ErrProfileTooLong) {
 		t.Errorf("notes that blow the token cap must be refused: %v", err)
 	}
+}
+
+// streamLeg is one day-book leg of a candidate stream.
+type streamLeg struct {
+	date   time.Time
+	amount decimal.Decimal
+	id     uuid.UUID
+}
+
+// streamFromDayBook re-derives a stream's total from the day book and returns
+// a non-empty reason when the fact's evidence is not the run the rules give.
+// It re-implements the detection rules (PLAN-AGENTIC W3: ±3 days, ±5%, >= 3)
+// here on purpose: a gate that called profile's own detector would share its
+// bug.
+func streamFromDayBook(entries []reporting.VoucherEntry, class, ledgerID, side string, evidence []uuid.UUID) (decimal.Decimal, string) {
+	var legs []streamLeg
+	for _, e := range entries {
+		if e.Class != class {
+			continue
+		}
+		d, err := time.Parse("2006-01-02", e.Date)
+		if err != nil {
+			return decimal.Zero, "unparseable day-book date " + e.Date
+		}
+		for _, p := range e.Postings {
+			if p.LedgerID.String() == ledgerID && p.DrCr == side {
+				legs = append(legs, streamLeg{d, p.Amount, e.VoucherID})
+			}
+		}
+	}
+	sort.SliceStable(legs, func(i, j int) bool {
+		if !legs[i].date.Equal(legs[j].date) {
+			return legs[i].date.Before(legs[j].date)
+		}
+		return legs[i].id.String() < legs[j].id.String()
+	})
+	ev := map[uuid.UUID]bool{}
+	for _, id := range evidence {
+		ev[id] = true
+	}
+	lo, hi := -1, -1
+	for i, l := range legs {
+		if ev[l.id] {
+			if lo < 0 {
+				lo = i
+			}
+			hi = i
+		}
+	}
+	if lo < 0 || hi-lo+1 != len(ev) || len(ev) != len(evidence) {
+		return decimal.Zero, fmt.Sprintf("the evidence (%d vouchers) is not one contiguous stretch of the ledger's %d day-book legs — a leg inside the run was skipped, or evidence is not a leg at all", len(evidence), len(legs))
+	}
+	run := legs[lo : hi+1]
+	if !bandsHold(run) {
+		return decimal.Zero, "a member of the run is outside the ±5% amount or ±3-day interval band — a one-off was grouped in"
+	}
+	if lo > 0 && bandsHold(legs[lo-1:hi+1]) {
+		return decimal.Zero, "the leg before the run also fits it — the run is not the longest (a month was dropped)"
+	}
+	if hi+1 < len(legs) && bandsHold(legs[lo:hi+2]) {
+		return decimal.Zero, "the leg after the run also fits it — the run is not the longest (a month was dropped)"
+	}
+	total := decimal.Zero
+	for _, l := range run {
+		total = total.Add(l.amount)
+	}
+	return total, ""
+}
+
+func bandsHold(run []streamLeg) bool {
+	if len(run) < 3 {
+		return false
+	}
+	var iv []int
+	var am []decimal.Decimal
+	for k, l := range run {
+		am = append(am, l.amount)
+		if k > 0 {
+			iv = append(iv, int(l.date.Sub(run[k-1].date).Hours()/24))
+		}
+	}
+	// The LOWER median, as profile documents it (a value that occurred).
+	sort.Ints(iv)
+	mi := iv[(len(iv)-1)/2]
+	if mi <= 0 {
+		return false
+	}
+	for _, d := range iv {
+		if d-mi > 3 || mi-d > 3 {
+			return false
+		}
+	}
+	sort.Slice(am, func(i, j int) bool { return am[i].LessThan(am[j]) })
+	ma := am[(len(am)-1)/2]
+	if !ma.IsPositive() {
+		return false
+	}
+	band := ma.Mul(decimal.RequireFromString("0.05"))
+	for _, a := range am {
+		if a.Sub(ma).Abs().GreaterThan(band) {
+			return false
+		}
+	}
+	return true
 }
