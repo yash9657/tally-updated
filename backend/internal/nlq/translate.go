@@ -120,7 +120,13 @@ const translatorFeature = "nlq.translate"
 // v3 (W3) is v2 plus three catalogue entities (stock_movements,
 // bank_statement_lines, profile_facts) and rules 9-10: the text the model reads
 // changed, so a v2 score must not be credited to it.
-const translatorPromptVersion = "nlq-dsl-v3"
+// v4 (W3 wave 2) feeds the semantic catalogue in: an ENTITY GUIDE and rule 11
+// in Static (constant text, still cacheable), and per-question CATALOGUE
+// HINTS — the reports catalogue.Select ranks, with an example shape — as a
+// new Dynamic system message. This is the "with catalogue + selector" arm of
+// W3's +15 pt gate; a v3 score is the "without" arm and must stay credited
+// to v3.
+const translatorPromptVersion = "nlq-dsl-v4"
 
 // emitQueryTool is the single tool the model is forced to call. The name is
 // referenced by the schema comment, the prompt text and the response decoder;
@@ -300,6 +306,10 @@ func (c *Translator) request(companyID uuid.UUID, nl string) *llm.Request {
 		Static: []llm.Message{{Role: llm.RoleSystem, Content: staticPrompt()}},
 		Dynamic: []llm.Message{
 			{Role: llm.RoleSystem, Content: dynamicPrompt(c.now(), c.FYStartMonth)},
+			// Per-question catalogue hints (schema.go hintsPrompt): after the
+			// clock half, before the question — the last system text the
+			// model reads is the part chosen for this question.
+			{Role: llm.RoleSystem, Content: hintsPrompt(nl)},
 			{Role: llm.RoleUser, Content: nl},
 		},
 

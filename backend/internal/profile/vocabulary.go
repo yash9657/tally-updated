@@ -99,6 +99,11 @@ var Facts = []FactDef{
 	{Key: "purchases_window", Kind: KindParty, Unit: UnitINR, Label: "billed to us in the window", ReconcilesTo: "day-book", Job: JobSupplier},
 	{Key: "payment_lag_p50_days", Kind: KindParty, Unit: UnitDays, Label: "median days we take to pay", Statistic: true, Job: JobSupplier},
 	{Key: "payment_lag_p90_days", Kind: KindParty, Unit: UnitDays, Label: "90th-percentile days we take to pay", Statistic: true, Job: JobSupplier},
+	// W3 wave 2: purchase order line -> the receipt that COMPLETED it (jobs.go
+	// leadTimes). A statistic: no report prints a lead time.
+	{Key: "lead_time_p50_days", Kind: KindParty, Unit: UnitDays, Label: "median days from purchase order to full receipt", Statistic: true, Job: JobSupplier},
+	{Key: "lead_time_p90_days", Kind: KindParty, Unit: UnitDays, Label: "90th-percentile days from purchase order to full receipt", Statistic: true, Job: JobSupplier},
+	{Key: "lead_time_lines_count", Kind: KindParty, Unit: UnitCount, Label: "purchase order lines fully received in the window", Statistic: true, Job: JobSupplier},
 	// Qualified by ITEM.
 	{Key: "item_purchase_amount", Kind: KindParty, Unit: UnitINR, Label: "bought of this item (as entered)", ReconcilesTo: "stock-item-vouchers", Job: JobSupplier},
 	{Key: "item_first_rate", Kind: KindParty, Unit: UnitINR, Label: "first rate in the window", Statistic: true, Job: JobSupplier},

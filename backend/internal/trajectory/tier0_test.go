@@ -77,8 +77,16 @@ const (
 	// W2 (D121) added internal/server/testdata/cassettes/agent.decide/: the
 	// payment run (5 decisions) and the sales run with its verifier retry (6),
 	// taking the corpus from 2 files / 3 interactions to 4 / 14.
-	tier0MinInteractions = 14
-	tier0MinCassettes    = 4
+	//
+	// W3 wave 2 (d122 "Wave 2") added internal/nlq/testdata/cassettes/
+	// nlq.translate/: four tau nl_query utterances through the v4 prompt,
+	// one interaction each, replayed by a key re-derived from the wire in
+	// nlq's TestTranslatorReplaysItsCassettes — 8 files / 18 interactions;
+	// and internal/embed/testdata/cassettes/embed.index/: one embeddings
+	// batch through llm.Client.Embed, keyed off the wire in embed's
+	// TestLLMEmbedderReplaysItsCassette — 9 files / 19 interactions.
+	tier0MinInteractions = 19
+	tier0MinCassettes    = 9
 )
 
 // tier0MinFeatures guards the per-feature directory layout the same way

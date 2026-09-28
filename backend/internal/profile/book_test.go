@@ -18,6 +18,7 @@ import (
 
 	"github.com/khata/cored/internal/identity"
 	"github.com/khata/cored/internal/ledger"
+	"github.com/khata/cored/internal/orders"
 	"github.com/khata/cored/internal/platform/db"
 	"github.com/khata/cored/internal/platform/testdb"
 	"github.com/khata/cored/migrations"
@@ -132,9 +133,36 @@ func line(item uuid.UUID, dir ledger.Direction, qty, rate string) ledger.Invento
 	return ledger.InventoryLine{StockItemID: item, Direction: dir, Qty: q, Rate: r, Amount: q.Mul(r).Round(4)}
 }
 
-func (b *book) purchase(t *testing.T, supplier uuid.UUID, supplierName, date, ref string, l ledger.InventoryLine) {
+// purchaseOrder places a one-line PURCHASE order and returns the line's id,
+// for a later purchase to fulfil.
+func (b *book) purchaseOrder(t *testing.T, supplier, item uuid.UUID, date, qty, rate string) uuid.UUID {
 	t.Helper()
-	b.post(t, ledger.VoucherInput{
+	svc := orders.NewService(b.pool)
+	id, err := svc.Create(b.ctx, orders.Input{Direction: orders.Purchase, OrderNo: b.no("PO"), OrderDate: date,
+		PartyLedgerID: supplier, CreatedBy: "profile-test",
+		Lines: []orders.LineInput{{StockItemID: item, Qty: dec(qty), Rate: dec(rate)}}})
+	if err != nil {
+		t.Fatalf("purchase order on %s: %v", date, err)
+	}
+	o, err := svc.Get(b.ctx, id)
+	if err != nil || len(o.Lines) != 1 {
+		t.Fatalf("read back purchase order: %v", err)
+	}
+	return o.Lines[0].ID
+}
+
+// fulfil links a purchase's single inventory line to an order line.
+func fulfil(orderLine uuid.UUID, qty string) ledger.FulfilmentInput {
+	return ledger.FulfilmentInput{LineNo: 1, OrderLineID: orderLine, Qty: dec(qty)}
+}
+
+func (b *book) purchase(t *testing.T, supplier uuid.UUID, supplierName, date, ref string, l ledger.InventoryLine, fs ...ledger.FulfilmentInput) uuid.UUID {
+	t.Helper()
+	return b.post(t, b.purchaseInput(supplier, supplierName, date, ref, l, fs...))
+}
+
+func (b *book) purchaseInput(supplier uuid.UUID, supplierName, date, ref string, l ledger.InventoryLine, fs ...ledger.FulfilmentInput) ledger.VoucherInput {
+	return ledger.VoucherInput{
 		Class: ledger.Purchase, VoucherNo: b.no("PUR"), VoucherDate: date, Party: supplierName, PartyLedgerID: supplier,
 		Postings: []ledger.PostingInput{
 			{LedgerID: b.purchases, DrCr: ledger.Debit, Amount: l.Amount},
@@ -142,7 +170,8 @@ func (b *book) purchase(t *testing.T, supplier uuid.UUID, supplierName, date, re
 		},
 		BillAllocations: []ledger.BillAllocationInput{{LedgerID: supplier, RefName: ref, RefType: ledger.RefNew, DrCr: ledger.Credit, Amount: l.Amount}},
 		Inventory:       []ledger.InventoryLine{l},
-	})
+		Fulfilments:     fs,
+	}
 }
 
 func (b *book) sale(t *testing.T, customer uuid.UUID, customerName, date, ref string, l ledger.InventoryLine) {
@@ -210,15 +239,41 @@ func (b *book) seed(t *testing.T) {
 	// SUPPLIERS. Bharat: Widget 100@50, 100@52, 100@55 -> drift +10.00%,
 	// amount 15700; each bill paid after 45 days -> payment lag 45.
 	// Deccan: Gadget 50@200, 50@190 -> -5.00%; Bolt 1000@2 (C item); never paid.
-	b.purchase(t, b.bharat, "Bharat Metals", "2025-04-02", "BM-1", line(b.widget, ledger.Inward, "100", "50"))
-	b.purchase(t, b.bharat, "Bharat Metals", "2025-07-02", "BM-2", line(b.widget, ledger.Inward, "100", "52"))
-	b.purchase(t, b.bharat, "Bharat Metals", "2025-10-02", "BM-3", line(b.widget, ledger.Inward, "100", "55"))
+	//
+	// LEAD TIMES (W3 wave 2): every purchase fulfils a purchase order line.
+	// Bharat's three orders, each received in full by one purchase:
+	//   PO 2025-03-25 -> BM-1 2025-04-02 =  8 days (ordered BEFORE the window;
+	//                                           completed inside it, so counted)
+	//   PO 2025-06-20 -> BM-2 2025-07-02 = 12 days
+	//   PO 2025-09-12 -> BM-3 2025-10-02 = 20 days
+	//   -> p50 12 (rank ceil(1.5) = 2), p90 20 (rank ceil(2.7) = 3), 3 lines.
+	// Deccan's Gadget order of 100 (2025-04-01) arrives in TWO drops, 50 on
+	// 04-10 and 50 on 09-10: COMPLETED 09-10 -> 162 days, one line — never the
+	// 9 days of the first drop. Its Bolt order of 2000 got 1000: never
+	// completed, so no lead time. DS-1 is then ALTERED (re-stated, same
+	// content): with the current-version join missing, its fulfilment would
+	// count twice (50 + 50 on 04-10) and the Gadget line would "complete" in
+	// 9 days — the mutation that join exists for.
+	b.purchase(t, b.bharat, "Bharat Metals", "2025-04-02", "BM-1", line(b.widget, ledger.Inward, "100", "50"),
+		fulfil(b.purchaseOrder(t, b.bharat, b.widget, "2025-03-25", "100", "50"), "100"))
+	b.purchase(t, b.bharat, "Bharat Metals", "2025-07-02", "BM-2", line(b.widget, ledger.Inward, "100", "52"),
+		fulfil(b.purchaseOrder(t, b.bharat, b.widget, "2025-06-20", "100", "52"), "100"))
+	b.purchase(t, b.bharat, "Bharat Metals", "2025-10-02", "BM-3", line(b.widget, ledger.Inward, "100", "55"),
+		fulfil(b.purchaseOrder(t, b.bharat, b.widget, "2025-09-12", "100", "55"), "100"))
 	b.payBill(t, b.bharat, "2025-05-17", "BM-1", "5000")
 	b.payBill(t, b.bharat, "2025-08-16", "BM-2", "5200")
 	b.payBill(t, b.bharat, "2025-11-16", "BM-3", "5500")
-	b.purchase(t, b.deccan, "Deccan Steel", "2025-04-10", "DS-1", line(b.gadget, ledger.Inward, "50", "200"))
-	b.purchase(t, b.deccan, "Deccan Steel", "2025-09-10", "DS-2", line(b.gadget, ledger.Inward, "50", "190"))
-	b.purchase(t, b.deccan, "Deccan Steel", "2025-05-01", "DS-3", line(b.bolt, ledger.Inward, "1000", "2"))
+	gadgetPO := b.purchaseOrder(t, b.deccan, b.gadget, "2025-04-01", "100", "200")
+	boltPO := b.purchaseOrder(t, b.deccan, b.bolt, "2025-04-25", "2000", "2")
+	ds1In := b.purchaseInput(b.deccan, "Deccan Steel", "2025-04-10", "DS-1", line(b.gadget, ledger.Inward, "50", "200"), fulfil(gadgetPO, "50"))
+	ds1 := b.post(t, ds1In)
+	b.purchase(t, b.deccan, "Deccan Steel", "2025-09-10", "DS-2", line(b.gadget, ledger.Inward, "50", "190"), fulfil(gadgetPO, "50"))
+	b.purchase(t, b.deccan, "Deccan Steel", "2025-05-01", "DS-3", line(b.bolt, ledger.Inward, "1000", "2"), fulfil(boltPO, "1000"))
+	ds1In.CreatedBy = "profile-test"
+	ds1In.Narration = "re-stated"
+	if _, err := b.led.AlterVoucher(b.ctx, ds1, ds1In); err != nil {
+		t.Fatalf("alter DS-1: %v", err)
+	}
 
 	// CUSTOMERS. Kaveri: 20 Widget @80 = 1600 on the 15th of every month,
 	// Apr..Mar (12 invoices, 19200); each paid 30 days later EXCEPT Feb and

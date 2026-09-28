@@ -23,7 +23,26 @@ var files embed.FS
 // supplied conn must authenticate as an admin/owner role. Each migration runs
 // in its own transaction so a failure leaves earlier migrations committed and
 // the failing one rolled back.
+//
+// ⛔ ONE APPLIER AT A TIME, PER DATABASE. `go test ./... -p N` starts N
+// package binaries that each call Apply on the same database; on an empty
+// one they all read "nothing applied" and ran 0001 at once, failing with
+// `duplicate key … pg_type_typname_nsp_index` / `relation … already exists`
+// (HANDOFF-AGENTIC-WAVE-1 §4.1). So Apply holds a SESSION advisory lock from
+// before it creates schema_migrations until it returns, and reads the
+// applied set only once it holds it: a waiter wakes to find the work done.
+// Advisory locks are scoped to the current database, so appliers on other
+// databases of the cluster never wait on this one. The two-int key space
+// (migrateLockClass, 1) is disjoint from durable's bigint keys and from
+// intentlog's (0x1A7E, …). A connection that dies releases the lock.
 func Apply(ctx context.Context, conn *pgx.Conn) error {
+	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1, 1)", migrateLockClass); err != nil {
+		return fmt.Errorf("migrations: take the apply lock: %w", err)
+	}
+	defer func() {
+		// Background: the unlock must be attempted even when ctx is done.
+		_, _ = conn.Exec(context.Background(), "SELECT pg_advisory_unlock($1, 1)", migrateLockClass)
+	}()
 	if err := ensureMigrationsTable(ctx, conn); err != nil {
 		return err
 	}
@@ -53,6 +72,9 @@ func Apply(ctx context.Context, conn *pgx.Conn) error {
 	}
 	return nil
 }
+
+// migrateLockClass is the advisory-lock class for Apply ("MG").
+const migrateLockClass int32 = 0x4D47
 
 // Names returns the ordered migration file names. Exported for tooling/tests.
 func Names() ([]string, error) { return migrationNames() }

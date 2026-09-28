@@ -331,6 +331,11 @@ func TestEveryProfileFactReconcilesToItsReport(t *testing.T) {
 		{"Bharat Metals", "payment_lag_p50_days", "", "45"},
 		{"Bharat Metals", "item_price_drift_pct", "Widget", "10"},
 		{"Bharat Metals", "item_purchase_amount", "Widget", "15700"},
+		{"Bharat Metals", "lead_time_p50_days", "", "12"},
+		{"Bharat Metals", "lead_time_p90_days", "", "20"},
+		{"Bharat Metals", "lead_time_lines_count", "", "3"},
+		{"Deccan Steel", "lead_time_p50_days", "", "162"},  // completion, not the first drop (9)
+		{"Deccan Steel", "lead_time_lines_count", "", "1"}, // the Bolt line never completed
 		{"Deccan Steel", "payable_outstanding", "", "21500"},
 		{"Deccan Steel", "item_price_drift_pct", "Gadget", "-5"},
 		{"Widget", "closing_qty", "", "60"},

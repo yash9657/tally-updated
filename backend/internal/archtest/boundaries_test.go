@@ -241,7 +241,14 @@ var allowedDeps = map[string]map[string]bool{
 	// while it happened, because that test scans only internal/query's own
 	// files and does not follow transitive imports. THIS LINE, in the entry
 	// above, is the real proof of the invariant.
-	"internal/nlq": {"internal/query": true, "internal/llm": true},
+	//
+	// W3 wave 2 adds internal/catalogue: the translator prompt now carries
+	// the semantic catalogue (the entity guide in the cacheable half, the
+	// selected reports per question in the dynamic half). The edge points
+	// the SAFE way — nlq (which may reach the network) reads the catalogue
+	// (constant data over authz/query/actions); the catalogue must never
+	// import nlq or llm, and its own line below still says so.
+	"internal/nlq": {"internal/query": true, "internal/llm": true, "internal/catalogue": true},
 	// W3's semantic catalogue: report metadata keyed by authz's vocabulary,
 	// example DSL re-validated by query.Compile, display routes resolved from
 	// the generated actions registry. All three edges are READS of constant
@@ -261,6 +268,12 @@ var allowedDeps = map[string]map[string]bool{
 	// path sharing code with the first would couple their failure modes), the
 	// llm client, or any feature package.
 	"internal/tierb": {"internal/platform/db": true},
+	// W3 wave 2: the retrieval store (0098). platform/db for the RLS-scoped
+	// tables; llm for the ONE production Embedder (llm.Client.Embed, which
+	// carries the budget, the content-free span and the tenant-id needle
+	// check). Not query — a served golden DSL is re-compiled by the CALLER
+	// (golden.go says so) — and no feature package: retrieval is a leaf.
+	"internal/embed": {"internal/platform/db": true, "internal/llm": true},
 	// trajectory (W0/D2) is the agent plane's span recorder: it holds the span
 	// tree, the OTLP/HTTP exporter written in stdlib, and the replay cassettes.
 	// THE EMPTY MAP IS THE POLICY, not an omission, and it is load-bearing in
@@ -1097,7 +1110,8 @@ func TestQueryPackageIsNetworkFree(t *testing.T) {
 func TestW3PackagesAreNetworkFree(t *testing.T) {
 	root := backendRoot(t)
 	fset := token.NewFileSet()
-	for _, pkg := range []string{"tierb", "profile", "catalogue"} {
+	// embed (W3 wave 2) is in the list: its model calls go through llm.Client.Embed.
+	for _, pkg := range []string{"tierb", "profile", "catalogue", "embed"} {
 		scanned := 0
 		dir := filepath.Join(root, "internal", pkg)
 		err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {

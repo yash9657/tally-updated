@@ -1,7 +1,8 @@
 # CI — Phase-0 verification gates.
 #
 # Mirrors the Makefile targets and PLAN.md Part C gates:
-#   backend  -> migrate + go build / vet / test (against postgres:16 service)
+#   backend  -> migrate + go build / vet / test (against a pgvector/pgvector:pg16-trixie
+#               service — Postgres 16 + pgvector; 0098's vector half is required here)
 #   frontend -> pnpm install + vitest + tsc
 #   corpora  -> python corpora/validate.py (the golden-corpus gate)
 #   security -> gitleaks + semgrep + trivy fs
@@ -40,7 +41,14 @@ jobs:
       contents: read
     services:
       postgres:
-        image: postgres:16
+        # pgvector/pgvector:pg16 is the official postgres:16 image plus the
+        # pgvector extension (a Postgres extension, not a Go module — §1.1
+        # does not reach it). Migration 0098 would degrade to lexical-only on
+        # plain postgres:16; EMB_REQUIRE_VECTOR below makes that a failure
+        # HERE, so CI cannot silently lose the vector half. -trixie: the same
+        # Debian (glibc 2.41) as postgres:16 and docker-compose.yml, so CI and
+        # dev sort text identically (docker-compose.yml says why it matters).
+        image: pgvector/pgvector:pg16-trixie
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: tally
@@ -55,6 +63,7 @@ jobs:
       # Match the Makefile connection conventions (admin for migrate, app for tests).
       ADMIN_DATABASE_URL: postgres://postgres:postgres@localhost:5433/tally?sslmode=disable
       DATABASE_URL: postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable
+      EMB_REQUIRE_VECTOR: "1"
     steps:
       - uses: actions/checkout@v4
 

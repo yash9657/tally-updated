@@ -60,6 +60,12 @@ type fixtureRow struct {
 	Args  []any
 }
 
+// optionalFixtureTables are fixture tables a migration creates only when the
+// cluster supports them, each with the reason.
+var optionalFixtureTables = map[string]string{
+	"emb_vector": "0098 creates it only where pgvector is installed (emb_enable_vectors)",
+}
+
 // buildFixture returns one INSERT per table in the delete plan.
 //
 // The set of tables it covers is asserted to EQUAL the plan's table set before
@@ -96,6 +102,9 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 		// T11 — a budget and one line on it (migration 0085). Captured because the
 		// line has to hang off this exact budget.
 		budgetID = id()
+
+		// W3 wave 2 — the vector row hangs off this exact document.
+		embDocID = id()
 
 		// T3 — a purchase order, its line, and the link from the stock_movement
 		// below (migrations 0042 and 0043).
@@ -710,6 +719,20 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 			VALUES ($1, $2, 'create payment', 1, $3)`,
 			[]any{id(), cid, id()}},
 
+		// W3 wave 2 — the retrieval store (migration 0098). emb_vector's
+		// composite FK points at emb_document, so the plan must delete the
+		// vector first; emb_vector exists only on a pgvector cluster, which
+		// is what optionalFixtureTables below is for.
+		{"emb_document", `INSERT INTO emb_document (id, company_id, kind, source_ref, content, content_hash, untrusted)
+			VALUES ($1, $2, 'narration', 'fixture-line', 'NEFT FIXTURE', repeat('a', 64), true)`,
+			[]any{embDocID, cid}},
+		{"emb_vector", `INSERT INTO emb_vector (id, company_id, document_id, version, model_id, embedding)
+			VALUES ($1, $2, $3, 'fixture@1024/v1', 'fixture', array_fill(0.5, ARRAY[1024])::real[]::halfvec)`,
+			[]any{id(), cid, embDocID}},
+		{"emb_golden_query", `INSERT INTO emb_golden_query (id, company_id, question, dsl, prompt_version, proposed_by)
+			VALUES ($1, $2, 'fixture question', '{}'::jsonb, 'nlq-dsl-v4', 'fixture')`,
+			[]any{id(), cid}},
+
 		// TEXT company_id. This is the row that the "AND data_type='uuid'"
 		// mutation orphans, and the reason the enumeration query must not filter
 		// on type.
@@ -745,6 +768,23 @@ func seedCompany(t *testing.T, cid uuid.UUID) {
 		t.Fatalf("load plan: %v", err)
 	}
 	rows := buildFixture(cid)
+
+	// A table that exists only on some clusters is seeded only where the plan
+	// has it — and only a table NAMED here may be skipped, with its reason,
+	// so this cannot quietly become "seed whatever the plan happens to have".
+	inPlan := map[string]bool{}
+	for _, tbl := range pl.Tables() {
+		inPlan[tbl] = true
+	}
+	kept := rows[:0]
+	for _, r := range rows {
+		if _, optional := optionalFixtureTables[r.Table]; optional && !inPlan[r.Table] {
+			t.Logf("fixture: %s not on this cluster (%s)", r.Table, optionalFixtureTables[r.Table])
+			continue
+		}
+		kept = append(kept, r)
+	}
+	rows = kept
 
 	// The fixture must cover EXACTLY the plan. Anything else and the test proves
 	// less than it claims.

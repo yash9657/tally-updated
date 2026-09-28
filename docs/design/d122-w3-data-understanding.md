@@ -288,3 +288,347 @@ against `tally_w3` by repointing them temporarily (restored; not committed).
 | frontend query tests | `pnpm exec vitest run QueryScreen query` | `Test Files 1 passed (1)`, `Tests 11 passed (11)` |
 | corpora | `python3 corpora/validate.py` | OK, counts unchanged |
 | insightd | — | not touched by W3; not run |
+
+
+---
+---
+
+# Wave 2 — W3 follow-ons + security (branch `agentic/w3-followons`)
+
+**Written:** 2026-09-28, on `agentic/w3-followons` from `session/t32-and-close-7-3` @ `4e7cfff`, after
+the code landed. **Every figure below was printed by a command run in this lane**, against the lane's
+own database `tally_w2_w3f` on the shared cluster (`tally_pg`, postgres:16, port 5433) or on a
+separate pgvector container (`tally_pg_vec`, pgvector/pgvector:pg16, port 5434, 512 MB, removed at
+the end). The shared `tally` database and the `tally_pg` container were not touched.
+
+Binding rules held: `git diff 4e7cfff -- backend/go.mod backend/go.sum frontend/package.json
+frontend/pnpm-lock.yaml insightd/requirements.txt | wc -l` = **0**. Migrations used: **0098, 0099**
+(this lane's block). No ACL rule was written and the seeder census is unchanged (17 PERFORMs).
+`internal/agent` and `internal/policy` were not modified.
+
+| # | Priority (lane brief) | Status |
+|---|---|---|
+| W2-1 | ⛔ Close the Tier B GUC residual | **DONE**, and a second, worse hole found and closed with it (§W2-1) |
+| W2-2 | Migrate lock (wave-1 §4.1) | **DONE** (§W2-2) |
+| W2-3 | Catalogue into the nlq prompt | **DONE**, prompt `nlq-dsl-v4` (§W2-3) |
+| W2-4 | Embeddings: pgvector image, halfvec tables, pg_trgm, provider path, golden queries | **DONE** for the store, the provider path and the golden-query store; partitioning and the model choice are owed (§W2-4) |
+| W2-5 | More DSL entities; supplier lead time / GSTR-2B facts | **Supplier lead time DONE.** New DSL entities **NOT built, on purpose** — a security finding blocks them (§W2-5). GSTR-2B regularity has no data to read (owed) |
+
+---
+
+## W2-1. Tier B: the database alone now keeps raw SQL in its tenant (migration 0099)
+
+### What 0097 left open — measured before any change
+
+A throwaway probe ran raw SQL through the wave-1 path (`tierb.RunRawAsAgent`, the executor minus the
+validator) as tenant B, with tenant A's books present:
+
+| Raw SQL as "agent_ro" | Result on 0097 |
+|---|---|
+| `SELECT set_config('role','tally_app',true), current_user` | `[[tally_app tally_app]]` — **the role switch undone** |
+| `SELECT set_config('role','tally_app',true), set_config('app.current_company_id','<A>',true), query_to_xml('select name, company_id from public.ledger',true,false,'')::text` | **tenant A's ledger names, from the BASE table** (marker found) |
+| `SELECT count(*) FROM (SELECT set_config('app.current_company_id','<A>',true)) s, agent.items` | non-zero (the pinned wave-1 residual) |
+| `SELECT * FROM public.auth_session_state('x')` | ran (0074 never revoked PUBLIC EXECUTE) |
+
+So there were **two** holes, and the second was not in the wave-1 record: `SET LOCAL ROLE agent_ro` is
+not a boundary against SQL that runs after it, because `SET ROLE` is checked against the SESSION user
+(`tally_app`), and `set_config('role', …)` is `SET ROLE` in function form. Once back as `tally_app`,
+the SQL could re-point the GUC and read any base table, narrations included.
+
+### D122-12. The design: two properties the database enforces by itself
+
+**(a) The untrusted text runs only inside a SECURITY DEFINER frame.** `agent.tier_b_run(sql, max_rows)`
+and `agent.tier_b_plan(sql)` are SECURITY DEFINER, owned by `agent_ro`, and run the text with
+`FOR r IN EXECUTE`. Inside a security-definer function Postgres refuses to change `role` or
+`session_authorization` at all (verified: `cannot set parameter "role" within security-definer
+function`), and a cursor loop refuses anything that is not a row-returning query (`cannot open SET /
+RESET / DO / COPY / PREPARE query as cursor`, `cannot open multi-query plan as cursor`). The Go side
+sends the text to Postgres in exactly two ways: as the `$1` of those functions, and as a
+Parse/Describe (`tx.Conn().Prepare`) to learn the result columns' names and types — which executes
+nothing. A bind parameter also keeps the text out of `pg_stat_activity`.
+
+**(b) The tenant is bound by a row agent_ro cannot write.** `agent.tier_b_binding (backend_pid, xid8)
+-> company` is written by `tally_app` through `agent.tier_b_bind()` at the top of the Tier-B
+transaction — BEFORE `SET LOCAL transaction_read_only = on` and before any untrusted text exists in
+it. It takes no argument (it binds the company the transaction's GUC already names), the primary key
+makes a second bind in one transaction a duplicate-key error, and the transaction is always rolled
+back (`errRollback`), so the row never commits. A **RESTRICTIVE** policy `tier_b_bound` on each of the
+16 base tables the views read, `TO agent_view_owner` only, ANDs `company_id = (SELECT
+agent.tier_b_company())` onto the permissive GUC policy. Re-pointing the GUC now yields
+A's rows ∩ B's binding = nothing; an unbound transaction reads nothing; `tier_b_run` refuses to start
+unbound or writable (loud, never an empty answer).
+
+The executor's order is load-bearing and is in `tierb/exec.go`'s header: bind (must write, trusts
+the GUC only because nothing untrusted has run) → READ ONLY (cannot be undone after a query) →
+timeouts / search_path → `SET LOCAL ROLE agent_ro` → Describe → plan → run.
+
+**Rejected alternatives** (0099's header has the same list):
+- `REVOKE EXECUTE ON set_config FROM PUBLIC` — `SET` and `RESET` are statements and stay open;
+  every app transaction uses set_config. Closes neither hole.
+- `GRANT SET ON PARAMETER` — only restricts SUSET parameters; a placeholder GUC is USERSET for all.
+- A LOGIN role for Tier B (session user = agent_ro) — kills the role escape, but adds a credential to
+  provision and rotate and a second pool, and still needs (b). (a) gives the same property with no
+  credential.
+- Making `app_current_company_id()` honour a binding — every RLS check in the product would pay a
+  lookup. The restrictive policy is scoped to `agent_view_owner`; no other role's plan changes.
+
+**Also closed:** 0074's `auth_session_state()` and `auth_admin_clear_lock()` are SECURITY DEFINER,
+superuser-owned, and were EXECUTE-able by PUBLIC (a lock-state read by subject, and a
+company-membership oracle through clear_lock's boolean). 0099 revokes PUBLIC; `tally_app` keeps its
+explicit grant. `grep` shows only cored's `tally_app` paths call them.
+
+### The gates (`go test ./internal/tierb/ -v`, both clusters)
+
+| Test | Measured |
+|---|---|
+| `TestRawSQLCannotLeaveItsTenant` (the inverted residual pin) | "raw tamper suite: **22 attacks refused for the named reason, 6 ran and returned only tenant B's own answer (each with a live control), 8 views differential**". Refused: SET / SET LOCAL / RESET / RESET ALL / RESET ROLE / SET ROLE; set_config of `role` (alone, with the GUC + base-table `query_to_xml`, to `none`) and of `session_authorization`; DO; two statements; turning READ ONLY off; calling `tier_b_bind`, reading or writing `tier_b_binding`; base table via `query_to_xml`; both 0074 functions; `pg_read_file`; PREPARE; COPY. Ran: set_config GUC (local and session-wide) joined to a view, GUC then `query_to_xml` over a view, a nested `tier_b_run` under a tampered GUC, an empty GUC. Every running attack is re-run **as A aimed at A** and must find A's marker/rows (the control). Per view, B re-pointed at A counts **0** rows while A counts rows in all 8 |
+| `TestTheBindingCannotBeMovedOrSkipped` | second bind (even after re-pointing the GUC) → `tier_b_binding_pkey`; bind in a READ ONLY tx refused; `tier_b_run` unbound → "no tenant binding", writable → "must be READ ONLY"; unbound view read as A → 0 rows; **0** binding rows left after a call |
+| `TestNoSecurityDefinerDoorForAgentRo` | "security-definer functions agent_ro may execute: **[agent.tier_b_company agent.tier_b_plan agent.tier_b_run]**; **16** base tables behind the views, all with tier_b_bound" |
+| `TestOtherSessionsQueryTextIsHidden` | a concurrent `tally_app` session's SQL is visible to the admin (control) and **not** to agent_ro |
+| `TestStatementTimeoutCannotBeTalkedAway` | `set_config('statement_timeout','0',true), pg_sleep(30)` "stopped after **5s** by … canceling statement due to statement timeout" — the timer is armed at statement start, so text cannot talk it away inside its one statement; the Go deadline (timeout + 2 s) is the backstop |
+| `TestJSONDecodeRendersLikeTheNativeDriver` | "render parity over the accepted corpus as tenant A: **1054 identical, 1154 refused by both, 0 differ**" |
+| `TestAcceptedAdversarialQueriesLeakNothing` (wave-1 gate, now through the new path) | "2208 queries, **1055** ran as tenant B, 1153 refused by Postgres (type errors), **0 leaked** (0 by marker); **834** of the 1055 that ran would register a leak" (1056/1152 on another run of the same code — one data-dependent type error; it was 1056 at the wave-1 merge) |
+
+**Mutations run (each observed red, then restored):**
+
+| Mutation | Caught by |
+|---|---|
+| drop `tier_b_bound` on `ledger` and `stock_item` | `CROSS-TENANT LEAK (set_config GUC session-wide…)`: `[[1]] vs untampered [[0]]`; `agent.items` "B re-pointed at A counts 1 rows, want 0"; census "WITHOUT the restrictive tier_b_bound policy: [ledger stock_item]". (Dropping it on `ledger` alone did not leak `agent.ledgers`, because the view's `account_group` join was still bound — the census is what names it.) |
+| `ALTER FUNCTION agent.tier_b_run … SECURITY INVOKER` | 4 attacks stop being refused: `set_config('role','tally_app')` → `[[tally_app tally_app]]`; role + GUC + `query_to_xml('… public.ledger')` returned **A's base-table ledger names**; `role` → none; `session_authorization` → tally_app |
+| executor skips `tier_b_bind()` | every call fails loudly: "tier_b_run: no tenant binding in this transaction (call agent.tier_b_bind() first)" / "tier_b_plan: no tenant binding" |
+| `GRANT EXECUTE ON FUNCTION auth_session_state(TEXT) TO PUBLIC` | census "[… public.auth_session_state], want exactly […] — a new one needs REVOKE ALL … FROM PUBLIC"; the attack is no longer refused |
+
+**Found on the way — a render bug in the pre-0099 path.** The oracle for the JSON decode first
+disagreed on 2 of 2,208 queries: `date_trunc('month', voucher_date)` rendered April as **2025-03-31**
+through the old native path, because pgx hands a `timestamptz` back in the GO PROCESS's zone (the
+host was PDT, the session UTC). The new path renders in the session's zone (2025-04-01). The oracle
+(`native_export_test.go`, test-only) now converts to the session zone, and the parity is 0 differ.
+
+**Residuals that remain (stated, not claimed away):** timing/row-count side channels within one's own
+tenant are not a cross-tenant channel; a CPU-heavy query can still use its 5 s; `TEMP` on the database
+is still granted to PUBLIC but every DDL is refused in a READ ONLY transaction; the Parse/Describe of
+the untrusted text runs outside the definer frame (it executes nothing — no planning, no function
+call); any NEW security-definer function added to `public` without `REVOKE … FROM PUBLIC` is caught by
+the census test only on a database the test runs against.
+
+## W2-2. The migrate lock (HANDOFF-AGENTIC-WAVE-1 §4.1)
+
+`migrations.Apply` now holds `pg_advisory_lock(0x4D47, 1)` (a two-int key, disjoint from durable's
+bigint keys and intentlog's `(0x1A7E, …)`) from before `schema_migrations` is created until it
+returns, and reads the applied set under it; the unlock runs on a background context. Advisory locks
+are per database, so lanes on other databases never wait.
+`TestConcurrentAppliesOnAnEmptyDatabase` creates a throwaway database and races 4 appliers: "**4
+concurrent appliers on an empty database: 0 failed, 79 migrations recorded once each**" (80 with
+0098). Mutation — the lock replaced by `SELECT $1::int`: "applier 1 of 4 … duplicate key value
+violates unique constraint "pg_type_typname_nsp_index"", 3 of 4 failed.
+
+## W2-3. The semantic catalogue is in the NL→DSL prompt (`nlq-dsl-v4`)
+
+- **Static (cached, byte-identical across calls AND questions):** an ENTITY GUIDE rendered from
+  `catalogue.Entities()` (description, synonyms, Hinglish words per DSL entity), and rule 11 — hints
+  are keyword-selected shapes; replace an example's party name with the question's; a "the DSL cannot
+  answer this report" hint means refuse (R4). Static grew to 8,244 bytes.
+- **Dynamic (per question):** a new system message, CATALOGUE HINTS — the top-3 reports
+  `catalogue.Select` ranks, each with title, description, DSL entities and one example rendered
+  exactly as the `emit_query` schema demands (every property present, arrays never null), or the
+  `NoDSLReason`. It sits after the clock half and before the user turn, so `dynamicPrompt` is still a
+  function of (clock, FY month) alone and the six wave-0 prompt assertions keep their meaning. It never
+  echoes the question (`TestHintsNeverEchoTheQuestion`).
+- `internal/archtest`: `internal/nlq` may import `internal/catalogue` (the safe direction; the
+  catalogue still may not import nlq or llm).
+
+Measured (`go test ./internal/nlq/ -v`): Static identical across two questions and two clocks
+(`TestTheEntityGuideIsStaticAndComplete`, `TestStaticPromptIsClockIndependent`); **13** hint examples,
+each schema-shaped, strictly decodable and compiling; over W1a's 30 tau `nl_query` utterances,
+"**21/30** reach an answering entity (en 8/10, hinglish 8/10, hi 5/10)". The floor is pinned at 21;
+the nine misses are logged and **the catalogue was not tuned to them** (the wave-1 review's finding 8
+is what tuning to a test set looks like). The Devanagari misses are the owed Devanagari phrasings;
+"output GST by head" and "electricity/telephone charges" have no catalogue words.
+
+**Cassettes (the per-feature replay test starting from the input):** four tau utterances
+(`nlq-bank-000-hinglish`, `nlq-creditor-002-en`, `nlq-debtor-005-hinglish`, `nlq-sales-003-en`) run
+through the production Translator; the fake provider re-derives the key from the ENCODED wire body
+(system text + every message) and replays a scripted `emit_query` input; the test asserts the wire
+carried the ENTITY GUIDE and this question's hint, one provider call, and a compiling DSL. SeedNote:
+the answers are scripted, not a model's. Mutations: rewording the hint header → all 4 cassettes miss
+("The prompt changed, so its key changed. Re-record"); moving the hints into Static → "Static differs
+between two QUESTIONS — the hints leaked into the prefix; first difference at byte 8331" plus the
+wave-0 clock test red.
+
+⚠️ **The +15 pt accuracy gate is still owed** — it needs a model (W1b). v3 is the "without catalogue"
+arm and v4 the "with" arm; a score must be credited to its version.
+
+## W2-4. Embeddings and the golden-query store (migration 0098, `internal/embed`, `llm.Client.Embed`)
+
+### D122-13. Split the store so it degrades LOUDLY on a server without pgvector
+
+The shared cluster and every other lane's database run postgres:16, which has no pgvector, and must
+keep migrating. So 0098 creates the lexical half always and the vector half only where it can:
+
+- **Always:** `pg_trgm`; `emb_document` (closed `kind`; `untrusted` tied to kind by CHECK —
+  narration, bank line and document chunk are third-party text, PLAN-AGENTIC §2.4; content ≤ 4,000;
+  sha256 natural key for idempotent re-indexing; trigram GIN); `emb_golden_query` (question, DSL,
+  prompt version, proposer; accepted/rejected ONCE by trigger, question/DSL immutable, and a
+  column-scoped UPDATE grant as the second wall); `emb_vector_status()`.
+- **Only with pgvector:** `emb_enable_vectors()` creates `emb_vector` (halfvec(1024), version =
+  embedding scheme, composite FK to the document) and its HNSW `halfvec_cosine_ops` index. Every
+  statement naming a pgvector type is inside `EXECUTE`, so the file parses on postgres:16; the
+  function is idempotent and is what an operator re-runs after the image switch.
+- All three tables: ENABLE + FORCE RLS, USING + WITH CHECK, `(company_id, id)` UNIQUE.
+
+**Loud, three ways:** the function RAISEs a WARNING naming the fix; `cored migrate` reads
+`emb_vector_status()` and logs it (pgx does not print notices) — measured on 5433: "embeddings:
+DISABLED — pgvector is not installed on this server; run Postgres from pgvector/pgvector:pg16, then
+SELECT emb_enable_vectors(); (lexical search only; …)", and on 5434: "embeddings: enabled: pgvector
+0.8.6"; and `internal/embed` returns `ErrVectorUnavailable` from `Vector` and sets `Degraded` on
+`Index`, `Search` and `NearestGolden`. CI now sets `EMB_REQUIRE_VECTOR=1`, which turns the degraded
+branch of the store test into a failure.
+
+### What is built
+
+- **`llm.Client.Embed`** (`internal/llm/embed.go`): the same walls as `Complete`, in the same order —
+  Feature and Version required, pure encode, size gate, the tenant-id needle on the encoded body,
+  reserve → content-free span (the prompt hash is a hash of model + dimensions + inputs) → one call →
+  settle-or-release exactly once. Per-provider paths (Fireworks `/v1/embeddings`, DeepInfra
+  `/v1/openai/embeddings`, vLLM `/v1/embeddings`); Anthropic and Sarvam refused with
+  `ErrNotConfigured` before the network. A response whose count, index set or dimensions do not match
+  the request is refused (`ErrNoStructuredOutput`) and never carries a partial batch.
+- **`internal/embed`** (allowedDeps `{platform/db, llm}`, network-free by `TestW3PackagesAreNetworkFree`):
+  `Store.Index` (idempotent; the provider call is OUTSIDE any transaction — insert, embed, insert —
+  and a crash between leaves documents the next Index re-embeds), `Lexical` (pg_trgm
+  `word_similarity`, threshold 0.3), `Vector` (cosine over one scheme version; `hnsw.iterative_scan =
+  relaxed_order`), `Search` (reciprocal-rank fusion, k = 60), `Hit.Untrusted` carried through;
+  `ProposeGolden` / `DecideGolden` / `NearestGolden` (only human-accepted examples are served).
+- **`LLMEmbedder`** is the one production Embedder. The test double (`trigramEmbedder`, hashed
+  character trigrams) lives only in `_test.go` and says why: a "semantic" search backed by it would be
+  lexical search in disguise.
+
+### Measured (`go test ./internal/embed/ -v`, both clusters)
+
+| Cluster | Result |
+|---|---|
+| 5433, postgres:16 (no pgvector) | "this cluster: enabled=false (disabled: pgvector is not installed on this server; …)"; lexical search as A finds the Kaveri lines, **B finds none**; Index/Search/NearestGolden report `Degraded` with that reason; `Vector` → `ErrVectorUnavailable` naming `pgvector/pgvector:pg16`; the provider is never called |
+| 5434, pgvector 0.8.6 | 4 vectors written, a text's own vector ranks first (score ≈ 1) and the other Kaveri line second; a query under another scheme version finds nothing; **B's vector search finds 0 and B counts 0 rows in emb_vector (A: 4)**; B cannot hang a vector off A's document; a 3-component vector is refused by `halfvec(1024)`; hybrid top hit correct |
+| both | golden: 3 proposed, 1 accepted, 1 rejected, 1 undecided → **served 1**; re-deciding and editing a question refused by the trigger; B served none of A's; 0098's CHECK refuses every kind with the wrong `untrusted` flag (7 of 7) |
+
+`TestLLMEmbedderReplaysItsCassette` replays one Fireworks-shaped embeddings batch by a key re-derived
+from the wire body; mutation `Dimensions: 768` → "The request changed, so its key changed.
+Re-record". Tier 0 now: "**replayed 19 interactions across 9 cassettes in 4 directories, features
+[agent.decide embed.index extraction nlq.translate]**" (pins updated: 9 / 19).
+
+**A measured limit, not a claim:** under RLS on a book this small the planner reads `emb_vector`
+through the `company_id` index and an exact sort, not HNSW (correct results, no ANN). The HNSW index
+is used when asked as the admin with `enable_seqscan = off` (`TestTheStoreOnThisCluster` checks
+that). At scale one shared HNSW graph filtered by RLS is the wrong shape; **tenant-hash partitioning
+(or per-tenant partial indexes) is owed**, as the plan said.
+
+`internal/platform/testdb`'s teardown fixture seeds `emb_document`, `emb_golden_query` and — only on a
+cluster that has it, via a named `optionalFixtureTables` entry with its reason — `emb_vector`
+(teardown and census green on both clusters: "classified 90 base tables: 83 by company_id, 1
+SpecialTenancy, 6 NotTenantScoped" on 5434).
+
+### The image: `pgvector/pgvector:pg16-trixie` (docker-compose.yml and ci.yml)
+
+pgvector is a Postgres extension, not a Go module or npm package, so §1.1 does not forbid it; HANDOFF
+§6.6 asks the user to accept it as infrastructure — this lane made it switchable, not mandatory.
+
+⛔ **The `-trixie` tag is a measured decision.** `tally_pg` runs `postgres:16` = 16.14 on Debian 13
+(glibc 2.41); the bare `pgvector/pgvector:pg16` tag is 16.15 on **Debian 12 (glibc 2.36)**. On a
+throwaway volume created by `postgres:16` (a 1,000-row text-keyed table):
+
+| Started under | Result |
+|---|---|
+| `pgvector/pgvector:pg16-trixie` (16.15, Debian 13) | 1,000 rows; `datcollversion` / actual = **2.41 / 2.41**; `CREATE EXTENSION vector` → 0.8.6; halfvec cosine works |
+| `pgvector/pgvector:pg16` (16.15, Debian 12) | "**WARNING: database "probe" has a collation version mismatch** — created using collation version 2.41, but the operating system provides version 2.36" — every text index would need a REINDEX |
+
+**How the integrator / user switches `tally_pg` later** (not done here — other lanes share it):
+
+1. Stop everything writing to it (cored, insightd, statutoryd, every lane's tests).
+2. Recreate the container on the SAME volume with the new image. The volume is
+   `tally-updated_tally_pgdata` (from `docker inspect tally_pg`). With compose (the file now names the
+   image): `docker compose up -d db`. Without compose: `docker stop tally_pg && docker rm tally_pg &&
+   docker run -d --name tally_pg -p 5433:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=tally -v
+   tally-updated_tally_pgdata:/var/lib/postgresql/data pgvector/pgvector:pg16-trixie`. Same major
+   version (16), same data-directory format: no `pg_upgrade`, no dump/restore; 16.14 → 16.15 is a
+   minor-version step.
+3. Verify: `SELECT version();` (16.x, Debian 13) and `SELECT datname, datcollversion,
+   pg_database_collation_actual_version(oid) FROM pg_database;` — the two columns must be equal. If
+   they are not (someone used a non-trixie tag): `REINDEX DATABASE <db>;` then `ALTER DATABASE <db>
+   REFRESH COLLATION VERSION;` for each database.
+4. For every database ALREADY migrated past 0098 on the old image (it recorded 0098 as applied with
+   the vector half skipped): `SELECT emb_enable_vectors();` as postgres → `enabled: pgvector 0.8.6`.
+   A database not yet at 0098 gets it from `make migrate`.
+5. `make migrate` must now log "embeddings: enabled: pgvector …".
+
+## W2-5. Supplier lead time — and why no new DSL entity
+
+**Supplier lead time (DONE).** Three statistics per supplier — `lead_time_p50_days`,
+`lead_time_p90_days`, `lead_time_lines_count` — from `order_fulfilment` joined to CURRENT, non-deleted
+voucher versions, bounded by as-of, measured to the receipt that COMPLETES the line (not the first
+drop — a trickle-shipper must not look fastest). The seeded book gains purchase orders on every
+purchase, a two-drop Gadget order, an order never completed, and an ALTERED receipt. Hand-computed
+and pinned: Bharat p50 **12**, p90 **20**, **3** lines (one ordered before the window, completed
+inside it); Deccan p50 **162** (not 9), **1** line (the Bolt line never completed). "refresh wrote
+**121** facts" (was 115); "reconciled **55** facts across **16** keys" (unchanged). Mutation — the
+current-version join dropped from `leadTimes`: "Deccan Steel lead_time_p50_days[] = 9.0000,
+hand-computed 162". The facts reach `agent.facts`, the `profile_facts` DSL twin and the supplier tool
+automatically (`TestEveryToolEqualsItsDSLTwin` green).
+
+**⛔ FINDING — why the orders / GST-return / cost-centre DSL entities were NOT added.** `POST /query`
+is decided by the PDP as ONE token, `display query` (`auth_middleware.go` routeAction), and the DSL
+compiler serves whatever entity the body names. So every entity the DSL gains is readable by anyone
+holding `query`, whatever the report split says. It is already true once: the `outstandings` entity
+answers `nature = LIABILITY` — the payables book — and the catalogue's own `bills-payable` example
+uses it, so a level with `allow display query` and `disallow display report:bills-payable` reads the
+payables figures through `/query`. That is the D97 shape exactly ("the rule governed the DOOR, not the
+bytes"). The order books are split into `report:sales-order-book` and `report:purchase-order-book`
+precisely so they can be granted separately (reporting/orderbook.go says so), so an `orders` entity
+would widen the hole to purchase commitments. The fix is a PDP decision (decide `/query` per entity —
+or per entity and filter for outstandings — against the covering report names), which belongs to the
+authz/server owners and has to keep "the PDP lives in one place" (`server.go`: "a 403 written here
+would be the first authorization decision inside a handler"). **OWED, and it gates W3's remaining
+DSL entities.** Not measured by a test in this lane (the evidence is the route mapping and the
+compiler's entity table).
+
+**GSTR-2B regularity: owed.** No migration persists GSTR-2B data (`grep gstr2b migrations/` is
+empty); the 2B match runs over an uploaded file. A regularity fact needs a stored history of 2B
+periods per supplier first.
+
+## W2-6. ⛔ OWED after wave 2 (W3's list, updated)
+
+1. **The +15 pt NL accuracy gate** (v3 vs v4) — needs W1b and a provider.
+2. **The embedding model** — W1a's Hinglish retrieval eval decides it; `LLMEmbedder.Scheme` carries
+   the choice. **No indexer is wired**: nothing yet calls `Store.Index` for narrations, bank lines,
+   parties, items, document chunks or the catalogue, and nothing calls `ProposeGolden` from an accepted
+   `/query` answer or serves `NearestGolden` into the nlq prompt (the obvious next step: accepted
+   examples as a Dynamic few-shot message, re-compiled under the current prompt version first).
+3. **Tenant-hash partitioning / per-tenant HNSW** — measured: HNSW is not chosen under RLS at small
+   scale.
+4. **The `/query` per-entity authorization** (W2-5 finding), then the orders, GST-return and
+   cost-centre allocation entities.
+5. **GSTR-2B regularity** (needs persisted 2B), **item margin**, the **cold-start miner**, **≤400-token
+   narratives**, a **nightly `profile.Refresh`** and history backfill — unchanged from §6.
+6. **Switching `tally_pg`** to `pgvector/pgvector:pg16-trixie` (steps above) — the integrator's call,
+   with HANDOFF §6.6.
+7. **Devanagari catalogue phrasings** (5 of the 9 tau misses), and catalogue words for "output GST by
+   head" / expense heads.
+8. Routes and UI for Tier B, the catalogue, the tenant card and the retrieval store (bare tokens).
+9. The retrieval hit's `Untrusted` flag must be honoured by the agent's taint rule when W2 wires
+   retrieval in (`internal/agent` is W2-breadth's).
+
+## W2-7. Gate figures at the end of the lane
+
+| Gate | Command | Result |
+|---|---|---|
+| build / vet | `cd backend && go build ./... && go vet ./...` | clean |
+| no new deps | `git diff 4e7cfff -- backend/go.mod backend/go.sum frontend/package.json frontend/pnpm-lock.yaml insightd/requirements.txt \| wc -l` | **0** |
+| full backend suite, postgres:16 (shared cluster, lane DB `tally_w2_w3f`) | `go test ./... -count=1 -p 4 -timeout 60m`, all four DSN envs on the lane DB | **exit 0, 48 packages ok, 7 with no test files** (47 at the wave-1 merge + `internal/embed`). server 59.9 s, evals/tau 51.5 s |
+| full backend suite, pgvector 0.8.6 (`tally_pg_vec`, port 5434, `EMB_REQUIRE_VECTOR=1` — what CI now runs) | same, `-p 3` | **47 ok, 1 FAIL**: `cmd/statutoryd` `TestNewStepStore_UnprivilegedRoleFailsAtBoot` — its probe DSN is HARDCODED to `localhost:5433/tally` (`cmd/statutoryd/main_test.go:156`), so on another port it creates the probe role on one cluster and connects to the other. Pre-existing harness defect (the §8 incident's class), unrelated to pgvector; it passes on 5433 and on CI (which is 5433/tally). Owed: route it through `testdb`. embed 2.0 s, tierb 56.9 s, server 79.0 s, evals/tau 103.2 s all ok |
+| Tier 0 | `make tier0` | ok — "replayed **19** interactions across **9** cassettes in 4 directories, features [agent.decide embed.index extraction nlq.translate]" |
+| migrations on a fresh database | `make migrate` on 5433 / 5434 | "migrations applied (**80** files)"; "embeddings: DISABLED — …" / "embeddings: enabled: pgvector 0.8.6" |
+| 0099 idempotence | 0099 applied twice inside `BEGIN … ROLLBACK` (psql) | clean; 16 `tier_b_bound` policies |
+| frontend / insightd / corpora | — | not touched by this lane; not run |
+
+Commits on `agentic/w3-followons`: `c71a63f` (0099, Tier B), `a40aabe` (migrate lock), `d32d451`
+(catalogue → nlq v4), `6685b58` + `60376e5` (0098, embed, llm.Embed), `07e413e` (pg16-trixie pin),
+`63d2dce` (supplier lead time), and this ADR / §2.5 row.
