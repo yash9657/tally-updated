@@ -41,10 +41,18 @@ Measured (`go test ./internal/catalogue/ -v`):
 
 - `33 reports, 33 catalogue entries`; `13 entries with DSL (6 exact), 20 without`.
 - `self-retrieval top-3: 82/82`.
-- held-out (40 questions written before any tuning, kept out of `entries.go`):
-  **`top-1 38/40 (95.0%), top-3 39/40 (97.5%)`**. The one miss, kept and not tuned away:
-  `"items expiring soon"` → want `batch-summary`, got `stock-item-vouchers`, `stock-movement`,
-  `reconciliation-queue`. The floor `heldOutTop3Floor` is pinned at the measured **0.975**.
+- held-out (40 questions written before any tuning, kept out of `entries.go`): first measured
+  `top-1 38/40 (95.0%), top-3 39/40 (97.5%)` — **but five of those questions named the catalogue's own
+  example parties** (Kaveri, Bharat Metals, Ramesh, HDFC, Widget are in `entries.go`'s Questions), so
+  part of that figure was memorised names (wave-1 review). With those names replaced by ones the index
+  has never seen (`heldOutNames`, pinned unseen by `TestHeldOutNamesAreUnseen`) and nothing else
+  changed: **`top-1 36/40 (90.0%), top-3 38/40 (95.0%)`**. The two misses, kept and not tuned away:
+  `"what do we have to pay Sunrise Steel"` → want `bills-payable`, got `payroll-payslip`,
+  `payroll-register`, `gstr3b`; `"items expiring soon"` → want `batch-summary`, got
+  `stock-item-vouchers`, `stock-movement`, `reconciliation-queue`. The floor `heldOutTop3Floor` is
+  re-pinned at the re-measured **0.95**.
+- `lenadari` (receivables) was listed under Bills Payable and `denadari` (payables) nowhere; corrected
+  and pinned by `TestReceivableAndPayableWordsPointTheRightWay`.
 
 Decisions:
 
@@ -174,7 +182,7 @@ Measured (`go test ./internal/tierb/ -v`):
 | payload injection at every token boundary of 23 valid queries × 25 payloads | **13,450** | 167 | every accepted one held to the 6 re-emission invariants |
 | random token soup | **3,000** | 0 | — |
 | grammar-shaped random with dangerous splices | **4,000** | 2,018 | every accepted one held to the invariants |
-| **DB replay of every accepted query as tenant B, tenant A's books present** | **2,208** | — | **1,055–1,056 ran, 1,152–1,153 refused by Postgres (type errors, never permission/read-only), 0 leaked** (two runs) |
+| **DB replay of every accepted query as tenant B, tenant A's books present** | **2,208** | — | **1,056 ran, 1,152 refused by Postgres (type errors, never permission/read-only), 0 leaked**. ⚠️ The first oracle (A's marker string in a result cell) could register a leak in only ~154 queries; the oracle is now DIFFERENTIAL (B's answer before vs after A's books exist), and **834 of the 1,056 that run are sensitive** to A's data. Mutation: `agent.stock_movements` re-owned to `postgres` → 86 leaks flagged, only 17 by the marker. |
 
 The six invariants (`invariantsOf`): no `;`/comment/`$`/`::`/`?` outside strings; every relation is a
 published `agent."<view>"`; every function allow-listed; a trailing `LIMIT ≤ maxRows`; no catalog /

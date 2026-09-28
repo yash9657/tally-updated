@@ -17,10 +17,10 @@ var heldOut = []struct {
 	q    string
 	want string
 }{
-	{"how much does Kaveri Traders owe", "outstandings"},
+	{"how much does Sunrise Traders owe", "outstandings"},
 	{"customers ka paisa kitna baki hai", "outstandings"},
 	{"overdue receivables above 60 days", "outstandings"},
-	{"what do we have to pay Bharat Metals", "bills-payable"},
+	{"what do we have to pay Sunrise Steel", "bills-payable"},
 	{"creditors list with dues", "bills-payable"},
 	{"net profit for the quarter", "profit-and-loss"},
 	{"is saal ka nafa", "profit-and-loss"},
@@ -35,7 +35,7 @@ var heldOut = []struct {
 	{"any duplicate entries in the books", "anomalies"},
 	{"GSTR-1 for september", "gstr1"},
 	{"GST payable for this month", "gstr3b"},
-	{"bank reconciliation for HDFC", "bank-reconciliation"},
+	{"bank reconciliation for Canara", "bank-reconciliation"},
 	{"uncleared cheques", "bank-reconciliation"},
 	{"deposits in the bank statement", "bank-statement"},
 	{"TDS deducted under 194C", "tds-register"},
@@ -44,13 +44,13 @@ var heldOut = []struct {
 	{"open purchase orders", "purchase-order-book"},
 	{"closing stock value", "stock-summary"},
 	{"maal kitna bacha hai godam me", "stock-summary"},
-	{"units sold of Widget", "stock-movement"},
+	{"units sold of Sprocket", "stock-movement"},
 	{"stock in each warehouse", "godown-summary"},
 	{"items expiring soon", "batch-summary"},
 	{"invoices missing in GSTR-2B", "itc-reconciliation"},
 	{"accept or reject invoices in IMS", "ims-inbox"},
 	{"salary register for june", "payroll-register"},
-	{"salary slip of Ramesh", "payroll-payslip"},
+	{"salary slip of Suresh", "payroll-payslip"},
 	{"PF challan for august", "payroll-pf-ecr"},
 	{"ESIC contribution return", "payroll-esi-return"},
 	{"budget vs actual for marketing", "budget-variance"},
@@ -59,11 +59,22 @@ var heldOut = []struct {
 	{"entries that did not match on import", "reconciliation-queue"},
 }
 
-// heldOutTop3Floor is the MEASURED top-3 accuracy on heldOut at the first
-// run, before any tuning (d122 §2 records the number and the misses). A
-// change to the tokenizer, the weights or the entries that loses one is a
-// regression; one that gains may raise this constant.
-const heldOutTop3Floor = 0.975
+// heldOutNames are the party, bank, employee and item names the held-out
+// questions use. ⛔ NONE MAY APPEAR IN THE INDEX (TestHeldOutNamesAreUnseen).
+// The first set reused the catalogue's own example names — Kaveri, Bharat
+// Metals, Ramesh, HDFC, Widget are all in entries.go's Questions — so part of
+// the 38/40 top-1 was the selector recognising a memorised party, not routing
+// the question (the wave-1 review). A tenant's questions name the tenant's
+// parties, which the index has never seen and which therefore score zero.
+var heldOutNames = []string{"Sunrise Traders", "Sunrise Steel", "Canara", "Suresh", "Sprocket"}
+
+// heldOutTop3Floor is the MEASURED top-3 accuracy on heldOut. First pinned at
+// 0.975 (top-1 38/40, top-3 39/40); RE-MEASURED at 0.95 (top-1 36/40, top-3
+// 38/40) once the held-out names were replaced with ones the index has never
+// seen — no synonym, weight or entry was changed to recover the loss, because
+// that would be tuning on the test set. d122 §2 records both. A change that
+// loses one is a regression; one that gains may raise this constant.
+const heldOutTop3Floor = 0.95
 
 func rankOf(ms []Match, report string) int {
 	for i, m := range ms {
@@ -112,6 +123,64 @@ func TestSelectorHeldOut(t *testing.T) {
 	t.Logf("held-out: top-1 %d/%d (%.1f%%), top-3 %d/%d (%.1f%%)", top1, len(heldOut), 100*float64(top1)/n, top3, len(heldOut), 100*float64(top3)/n)
 	if float64(top3)/n < heldOutTop3Floor {
 		t.Errorf("held-out top-3 accuracy %.3f fell below the measured floor %.2f", float64(top3)/n, heldOutTop3Floor)
+	}
+}
+
+// TestHeldOutNamesAreUnseen: the held-out set measures routing, not recall of
+// the catalogue's example parties. Every name it uses must be absent from the
+// index, and every held-out question naming a party must use one of them.
+func TestHeldOutNamesAreUnseen(t *testing.T) {
+	for _, name := range heldOutNames {
+		for _, tok := range tokens(name) {
+			if idx.df[tok] > 0 {
+				t.Errorf("held-out name %q: token %q is in the index (%d reports) — the held-out set would measure memorisation", name, tok, idx.df[tok])
+			}
+		}
+	}
+	// The catalogue's own example names, which the held-out set must not use.
+	for _, seen := range []string{"kaveri", "bharat", "ramesh", "hdfc", "widget", "gadget"} {
+		if idx.df[seen] == 0 {
+			continue // no longer an example name; nothing to guard
+		}
+		for _, h := range heldOut {
+			for _, tok := range tokens(h.q) {
+				if tok == seen {
+					t.Errorf("held-out question %q uses %q, a name the catalogue's own questions contain", h.q, seen)
+				}
+			}
+		}
+	}
+}
+
+// TestReceivableAndPayableWordsPointTheRightWay: लेनदारी (lenadari) is what
+// we are OWED and देनदारी (denadari) what we OWE. The first cut listed
+// lenadari under Bills Payable and denadari nowhere, so a Hinglish question
+// about receivables opened the payables report and the payables word selected
+// nothing (the wave-1 review). The root rule is pinned too: no "lena" word
+// names the payables report and no "dena" word names the receivables one.
+func TestReceivableAndPayableWordsPointTheRightWay(t *testing.T) {
+	for _, c := range []struct{ q, want string }{
+		{"lenadari kitni hai", "outstandings"},
+		{"customers ki lenadari", "outstandings"},
+		{"denadari kitni hai", "bills-payable"},
+		{"suppliers ki denadari", "bills-payable"},
+	} {
+		got := Select(c.q, 3)
+		if len(got) == 0 || got[0].Report != c.want {
+			t.Errorf("%q should select %s first; got %v", c.q, c.want, got)
+		}
+	}
+	for _, e := range Reports() {
+		for _, h := range e.Hinglish {
+			for _, tok := range tokens(h) {
+				if e.Report == "bills-payable" && (tok == "lena" || tok == "lenadari") {
+					t.Errorf("bills-payable lists the receivables word %q (in %q)", tok, h)
+				}
+				if e.Report == "outstandings" && (tok == "dena" || tok == "denadari") {
+					t.Errorf("outstandings lists the payables word %q (in %q)", tok, h)
+				}
+			}
+		}
 	}
 }
 

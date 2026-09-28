@@ -317,10 +317,21 @@ func TestTheSecondWallStandsWithoutTheValidator(t *testing.T) {
 	// validator is what excludes it — set_config/current_setting are not in
 	// the function allow-list and SET is not a SELECT — and the hermetic
 	// suite pins those refusals. Proven here so nobody believes otherwise.
+	//
+	// ⛔ PINNED BOTH WAYS. It used to be a t.Logf, so the residual could close
+	// or widen without anyone noticing, while 0097's header claimed the
+	// database half held on its own. Now: if raw set_config stops re-scoping,
+	// this FAILS and says to update 0097's header, internal/tierb's package
+	// doc and d122 §5; while it re-scopes, the validator refusals below are
+	// the only thing between agent_ro and another tenant.
 	res, err := tierb.RunRawAsAgent(b.ctx, pool,
 		`SELECT count(*) FROM (SELECT set_config('app.current_company_id', '`+a.cid.String()+`', true)) s, agent.items`)
-	if err == nil && len(res.Rows) == 1 && res.Rows[0][0] != "0" {
-		t.Logf("RESIDUAL CONFIRMED: raw SQL with set_config re-scoped to tenant A (%s rows). The validator refuses this; see d122.", res.Rows[0][0])
+	residual := err == nil && len(res.Rows) == 1 && res.Rows[0][0] != "0"
+	if !residual {
+		t.Errorf("the GUC-tamper residual no longer reproduces (err=%v rows=%v): the database half may now hold on its own — "+
+			"update migration 0097's header, internal/tierb's package doc and d122 §5, then invert this assertion", err, res.Rows)
+	} else {
+		t.Logf("RESIDUAL CONFIRMED (pinned): raw SQL with set_config re-scoped to tenant A (%s rows). Only the validator refuses this.", res.Rows[0][0])
 	}
 	for _, src := range []string{
 		`SELECT set_config('app.current_company_id', '` + a.cid.String() + `', true) FROM items`,

@@ -2,9 +2,17 @@
 -- W3 TIER B (PLAN-AGENTIC §2.3, §3 W3): "Tier B only over security_barrier
 -- views under agent_ro with AST allow-list, READ ONLY, 5 s timeout, forced
 -- LIMIT." This file is the DATABASE half — the role, the schema and the
--- views. internal/tierb is the validator half; either must hold on its own,
--- and internal/tierb's DB test runs raw, UNVALIDATED SQL as agent_ro to prove
--- this half does.
+-- views. internal/tierb is the validator half. internal/tierb's DB test runs
+-- raw, UNVALIDATED SQL as agent_ro to prove this half stops base-table reads,
+-- writes and default cross-tenant reads on its own.
+--
+-- ⚠️ IT DOES NOT HOLD ON ITS OWN AGAINST GUC TAMPERING (the first cut of this
+-- header said "either must hold on its own", which was not true). The tenant
+-- GUC app.current_company_id is a session setting agent_ro may change with
+-- set_config or SET, and the owner's RLS check reads it — so raw SQL that
+-- knows another company's id re-scopes to that tenant. The validator is the
+-- only wall there (set_config/current_setting are not allow-listed; SET is not
+-- a SELECT). The DB test pins the residual; d122 §5 records the owed fix.
 --
 -- ===========================================================================
 -- ⛔ THE THREE ROLES AND WHY THERE ARE THREE

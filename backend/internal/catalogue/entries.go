@@ -72,7 +72,7 @@ var reportEntries = []Entry{
 		Description: "Bill-wise amounts customers still owe, with ageing, including opening bills. Always an as-at-today position in the DSL. " +
 			"Supplier dues are the separate bills-payable report.",
 		Synonyms:    []string{"outstandings", "receivables", "debtors", "who owes us", "overdue bills", "ageing", "pending payments from customers"},
-		Hinglish:    []string{"baki", "udhaar", "lena baki", "paisa aana baki", "kiska paisa baki hai", "vasooli"},
+		Hinglish:    []string{"baki", "udhaar", "lena baki", "paisa aana baki", "kiska paisa baki hai", "vasooli", "lenadari"},
 		Questions:   []string{"who owes us money", "Kaveri ka kitna baki hai", "which customer bills are overdue by 90 days"},
 		DSL:         []query.Query{{Entity: query.EntityOutstandings, Dimensions: []string{"ledger_name"}, Metrics: []query.Metric{m(query.AggSum, "pending", "pending")}, Filters: []query.Filter{f("nature", query.OpEq, "ASSET")}, OrderBy: desc("pending")}},
 		DSLFidelity: "exact", ParityTest: "TestExecute_OutstandingsMatchesTheOutstandingsReport",
@@ -81,7 +81,7 @@ var reportEntries = []Entry{
 		Report: "bills-payable", Title: "Bills Payable",
 		Description: "Bill-wise amounts we still owe suppliers, with ageing. The payables half of outstandings, named separately so it can be granted separately.",
 		Synonyms:    []string{"bills payable", "payables", "creditors", "what we owe suppliers", "supplier dues"},
-		Hinglish:    []string{"dena baki", "supplier ko kitna dena hai", "lenadari", "creditor ka baki"},
+		Hinglish:    []string{"dena baki", "supplier ko kitna dena hai", "denadari", "creditor ka baki"},
 		Questions:   []string{"how much do we owe suppliers", "Bharat Metals ko kitna dena hai", "which supplier bills are due this week"},
 		DSL:         []query.Query{{Entity: query.EntityOutstandings, Dimensions: []string{"ledger_name"}, Metrics: []query.Metric{m(query.AggSum, "pending", "pending")}, Filters: []query.Filter{f("nature", query.OpEq, "LIABILITY")}, OrderBy: desc("pending")}},
 		DSLFidelity: "exact", ParityTest: "TestExecute_OutstandingsMatchesTheOutstandingsReport",
