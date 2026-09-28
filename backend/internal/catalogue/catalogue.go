@@ -66,7 +66,7 @@ type Entry struct {
 	// to the report. The completeness test finds it in the source tree, so an
 	// "exact" claim with no test behind it — or one whose test was renamed
 	// away — is a red build rather than a label a model trusts.
-	ParityTest string `json:"parity_test,omitempty"`
+	ParityTest  string `json:"parity_test,omitempty"`
 	NoDSLReason string `json:"no_dsl_reason,omitempty"`
 	// Sensitive marks reports carrying personal identifiers (PAN, UAN, salary)
 	// that migration 0035 disallows by default. The agent may still read them
