@@ -364,6 +364,30 @@ var allowedDeps = map[string]map[string]bool{
 	// NOT internal/llm: a policy that could ask a model is a policy a prompt
 	// injection can argue with.
 	"internal/policy": {"internal/authz": true, "internal/actions": true},
+	// agent (W2, D121) is the loop: durable runs, model decisions, tools, the
+	// approval park, the poller.
+	//
+	// ⛔ ITS EDGES ARE THE WHOLE SECURITY ARGUMENT, SO READ WHAT IS ABSENT.
+	// NOT internal/ledger, internal/masters, internal/orders, internal/banking
+	// or any feature package: the agent has no service it could call to write
+	// the books. Its only write path is the Dispatcher interface, which
+	// internal/server implements by running the real router in process — so a
+	// write that skipped the PDP, the handler's decoding or the validators
+	// would need an import this line forbids. NOT internal/server (the
+	// dispatcher is injected; agent -> server would be a cycle and a side
+	// door). NOT internal/statutory: the engine is internal/durable.
+	// internal/platform/db is for its own tables (runs, steps, approvals,
+	// decisions) under RLS; internal/llm is the model; internal/actions the
+	// registry it searches; internal/policy the gate; internal/intentlog the
+	// record.
+	"internal/agent": {
+		"internal/durable":     true,
+		"internal/llm":         true,
+		"internal/actions":     true,
+		"internal/policy":      true,
+		"internal/intentlog":   true,
+		"internal/platform/db": true,
+	},
 	// statutory/rules is the PURE statutory leaf, and its empty allowed set is
 	// load-bearing in BOTH directions.
 	//
@@ -729,6 +753,21 @@ var allowedDeps = map[string]map[string]bool{
 		// enumerate what it is allowed to do without a second table of routes.
 		// The edge is safe because actions imports only authz.
 		"internal/actions": true,
+		// W2 (D121), the agent plane. server is its composition root and its
+		// only write path: agent_dispatch.go runs the agent's requests through
+		// THIS package's router, and companyAuthMiddleware applies
+		// internal/policy to them. durable and intentlog are here only because
+		// server reads a run's events and wires the engine; the engine itself
+		// lives in internal/agent.
+		//
+		// ⛔ STILL NOT internal/statutory. The step engine the agent runs on was
+		// lifted into internal/durable precisely so that this set did not have
+		// to gain the IRN plane (see the ⛔ notes on internal/ewaybill and
+		// internal/einvoice above).
+		"internal/agent":     true,
+		"internal/policy":    true,
+		"internal/intentlog": true,
+		"internal/durable":   true,
 	},
 	"internal/archtest": {},
 }

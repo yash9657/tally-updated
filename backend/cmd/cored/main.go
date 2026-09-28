@@ -185,6 +185,12 @@ func runServe(ctx context.Context) error {
 	defer stopNotify()
 	go srv.RunNotifications(notifyCtx, 15*time.Second)
 
+	// The agent poller (W2, D121 / D120 F5): re-invokes due agent runs —
+	// parked approvals, transient retries — and anchors the intent log daily.
+	// Safe on every replica at once: each run is advanced under its own
+	// advisory lock, so a second poller on the same run returns immediately.
+	go srv.RunAgentPoller(notifyCtx, 2*time.Second)
+
 	addr := ":" + port
 	log.Printf("cored serving on %s", addr)
 	if err := srv.ListenAndServe(ctx, addr); err != nil && !errors.Is(err, context.Canceled) {

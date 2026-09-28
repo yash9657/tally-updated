@@ -61,6 +61,13 @@ CREATE TABLE IF NOT EXISTS agent_run (
     -- The human the agent acts FOR. Every commit is judged against this
     -- user's ACL (intersected with the agent's and the delegation's).
     created_by    UUID NOT NULL,
+    -- The same human's JWT subject, captured from the authenticated request
+    -- that started the run. The agent's in-process requests authenticate AS
+    -- this subject through the router's own middleware (membership, level,
+    -- rules, cutoff, session revocation), so a user locked out after starting
+    -- a run has that run's commits refused exactly as their own keystrokes
+    -- would be.
+    created_by_subject TEXT NOT NULL,
     agent_id      TEXT NOT NULL,
     channel       TEXT NOT NULL,
     -- What the human asked, verbatim. Stored because the approver must be able

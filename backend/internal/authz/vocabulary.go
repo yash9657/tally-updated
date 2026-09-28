@@ -472,6 +472,27 @@ var KnownResources = append([]Resource{
 	// note says the same thing at the other end of the stack.
 	"e-way-bill",
 
+	// THE AGENT PLANE (W2, D121): runs, and the approval inbox.
+	//
+	// TWO BARE TOKENS, AND WHY THERE ARE TWO. `agent-run` is starting and
+	// reading the agent's work; `agent-approval` is DECIDING it — the checker's
+	// seat. An owner must be able to let an operator ask the agent for things
+	// without letting that operator approve the agent's money-moving commits,
+	// and one token could not say that.
+	//
+	// ⛔ BARE, NOT report:NAME, and they need no ACL migration for the reason
+	// the block above records: Data Entry's default_access is 'none' and no
+	// seeded rule names either, so both are DENIED for every seeded non-Owner
+	// level on the day they ship. Only an Owner (or a level an owner grants)
+	// can start runs or decide approvals.
+	//
+	// ⛔ AND BOTH ARE STRUCTURALLY FORBIDDEN TO AN AGENT (internal/actions
+	// risk.go classes them governance; internal/policy's AgentRules disallow
+	// them): an agent that could read its approval inbox could phrase its next
+	// step at the approver, and one that could write it would be the checker.
+	"agent-run",
+	"agent-approval",
+
 	// THE e-INVOICE / IRN: the Invoice Reference Number the NIC portal issues
 	// against a B2B tax invoice, statutorily mandatory in India above a turnover
 	// threshold.

@@ -174,6 +174,71 @@ func Run(ctx context.Context, store StepStore, workflowID string, steps []Step) 
 	return completed, nil
 }
 
+// Next decides the step after everything recorded so far. It is called with
+// the recorded steps IN ORDER and returns the next step to execute, or
+// ok=false when the workflow is finished.
+//
+// ⛔ IT MUST BE A PURE FUNCTION OF done. That is the entire replay contract: a
+// re-invocation after a restart reloads the same recorded steps, so a pure
+// Next derives the same next step, and nothing already recorded runs again.
+// A Next that consulted the clock, the database or a model would make the
+// resumed run a different run.
+type Next func(done []StepResult) (step Step, ok bool, err error)
+
+// RunDynamic is Run for a workflow whose shape is only known as it unfolds —
+// an agent loop, where step k+1 depends on what the model decided at step k.
+// Same lock, same memoisation, same park semantics as Run: it takes the
+// workflow's lock, loads what is recorded, and asks next for each following
+// step until next says done or a step errors (a parked step records nothing).
+//
+// It returns the recorded steps in order.
+func RunDynamic(ctx context.Context, store StepStore, workflowID string, next Next) ([]StepResult, error) {
+	release, ok, err := store.TryLock(ctx, workflowID)
+	if err != nil {
+		return nil, fmt.Errorf("durable: lock workflow %q: %w", workflowID, err)
+	}
+	if !ok {
+		return nil, ErrLocked
+	}
+	defer release()
+
+	done, err := store.Load(ctx, workflowID)
+	if err != nil {
+		return nil, fmt.Errorf("durable: load workflow %q: %w", workflowID, err)
+	}
+	seen := make(map[string]bool, len(done))
+	completed := make(map[string]json.RawMessage, len(done))
+	for _, r := range done {
+		seen[r.Name] = true
+		completed[r.Name] = r.Output
+	}
+	for {
+		step, more, err := next(done)
+		if err != nil {
+			return done, err
+		}
+		if !more {
+			return done, nil
+		}
+		// A Next that proposes a recorded name has a bug that would otherwise
+		// loop forever (Append of a recorded name is a silent no-op, so the
+		// same step would be proposed again and again).
+		if seen[step.Name] {
+			return done, fmt.Errorf("durable: next proposed %q, which is already recorded for %q", step.Name, workflowID)
+		}
+		out, err := step.Run(ctx, completed)
+		if err != nil {
+			return done, err
+		}
+		if err := store.Append(ctx, workflowID, StepResult{Name: step.Name, Output: out}); err != nil {
+			return done, fmt.Errorf("durable: persist step %q: %w", step.Name, err)
+		}
+		seen[step.Name] = true
+		completed[step.Name] = out
+		done = append(done, StepResult{Name: step.Name, Output: out})
+	}
+}
+
 // MemStore is the in-memory StepStore — the tested path and the one the local
 // statutoryd binary uses. It is concurrency-safe, and its TryLock is a real
 // per-workflow try-lock within the process (it cannot exclude another process,

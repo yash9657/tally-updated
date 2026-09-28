@@ -180,3 +180,53 @@ func TestAdvisoryLockerExcludesAcrossSessions(t *testing.T) {
 	}
 	relB()
 }
+
+// TestRunDynamicReplaysAPureNext drives a loop whose next step depends on the
+// previous step's output, parks it half way, and resumes it: nothing recorded
+// runs twice, and the resumed run continues where it stopped.
+func TestRunDynamicReplaysAPureNext(t *testing.T) {
+	store := NewMemStore()
+	var executed []string
+	gate := false
+	next := func(done []StepResult) (Step, bool, error) {
+		n := len(done)
+		if n == 4 {
+			return Step{}, false, nil
+		}
+		name := fmt.Sprintf("s%d", n)
+		return Step{Name: name, Run: func(context.Context, map[string]json.RawMessage) (json.RawMessage, error) {
+			if n == 2 && !gate {
+				return nil, Park(name, "waiting")
+			}
+			executed = append(executed, name)
+			return json.RawMessage(fmt.Sprintf(`{"n":%d}`, n)), nil
+		}}, true, nil
+	}
+	done, err := RunDynamic(context.Background(), store, "wf", next)
+	if !errors.Is(err, ErrParked) || len(done) != 2 {
+		t.Fatalf("first run: done=%d err=%v, want 2 recorded and parked", len(done), err)
+	}
+	gate = true
+	done, err = RunDynamic(context.Background(), store, "wf", next)
+	if err != nil || len(done) != 4 {
+		t.Fatalf("resume: done=%d err=%v", len(done), err)
+	}
+	if got := fmt.Sprint(executed); got != "[s0 s1 s2 s3]" {
+		t.Fatalf("executions %s, want each step exactly once", got)
+	}
+	// A Next that re-proposes a recorded step is refused, not looped on.
+	_, err = RunDynamic(context.Background(), store, "wf", func([]StepResult) (Step, bool, error) {
+		return Step{Name: "s0", Run: func(context.Context, map[string]json.RawMessage) (json.RawMessage, error) {
+			return json.RawMessage(`{}`), nil
+		}}, true, nil
+	})
+	if err == nil {
+		t.Fatal("a Next re-proposing a recorded step was not refused")
+	}
+	// And the lock applies to RunDynamic too.
+	rel, _, _ := store.TryLock(context.Background(), "wf")
+	if _, err := RunDynamic(context.Background(), store, "wf", next); !errors.Is(err, ErrLocked) {
+		t.Fatalf("RunDynamic under a held lock: %v, want ErrLocked", err)
+	}
+	rel()
+}

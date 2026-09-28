@@ -104,6 +104,23 @@ var actionsWithNoHumanPathYet = map[string]string{
 	// ---- Two routes that are deliberately not screen-facing.
 	"post.sales": "the backward-compatible alias for the original F8 endpoint (server.go's own comment). The client posts /vouchers/sales, which IS reached; this row is the old spelling, kept for callers outside the browser",
 	"post.vouchers._voucherid.external-reference": "the offline/reconciliation plane records an external reference against a voucher; no screen calls it",
+
+	// ---- The W2 agent plane (D121). The backend lane lands the routes; the W2
+	// FRONTEND lane builds the side panel and the approval-inbox ScreenKind on
+	// the same branch against the contract written in
+	// docs/design/d121-w2-agent-plane.md ("Frontend contract"), and wiring
+	// those client calls deletes these eight rows. ⛔ NONE OF THEM IS A DOOR
+	// AN AGENT CAN WALK THROUGH: all eight are RiskGovernance, structurally
+	// forbidden to an agent by internal/policy and refused again by the
+	// router's agent gate, so "an agent is the first caller" cannot happen here.
+	"get.agent.runs":                            "W2 frontend lane: the agent side panel's run list",
+	"get.agent.runs._runid":                     "W2 frontend lane: the side panel's run detail",
+	"get.agent.runs._runid.events":              "W2 frontend lane: the side panel's event poll (AG-UI shape)",
+	"post.agent.runs":                           "W2 frontend lane: Alt+G / the side panel starts a run",
+	"post.agent.runs._runid.cancel":             "W2 frontend lane: the side panel's cancel",
+	"get.agent.approvals":                       "W2 frontend lane: the approval inbox ScreenKind",
+	"get.agent.approvals._approvalid":           "W2 frontend lane: the inbox's diff view",
+	"post.agent.approvals._approvalid.decision": "W2 frontend lane: approve / edit-then-approve / reject / ask-back",
 }
 
 // maxActionsWithNoHumanPathYet is the ceiling on that map.
@@ -119,7 +136,10 @@ var actionsWithNoHumanPathYet = map[string]string{
 // ⛔ THE NUMBER IS EXPECTED TO GO DOWN. Ten of the 27 are routes whose client
 // method exists and which no screen calls — half-wired features, not
 // machine-to-machine planes — and wiring any one of them deletes a row here.
-const maxActionsWithNoHumanPathYet = 27
+//
+// W2 (D121) RAISED IT TO 35, by exactly the eight agent-plane routes above:
+// the backend lane lands before the frontend lane that wires them.
+const maxActionsWithNoHumanPathYet = 35
 
 // ---------------------------------------------------------------------------
 // Vacuity floors

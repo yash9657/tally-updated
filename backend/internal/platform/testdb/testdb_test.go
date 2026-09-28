@@ -649,8 +649,8 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 		// point of seeding them: a plan that tried a plain DELETE would fail
 		// here, loudly, rather than leak an agent's intent log per test run.
 		{"agent_run", `INSERT INTO agent_run
-			(id, company_id, created_by, agent_id, channel, instruction, delegation, status, next_poll_at)
-			VALUES ($1, $2, $3, 'khata-agent', 'panel', 'fixture', '{}'::jsonb, 'parked', now())`,
+			(id, company_id, created_by, created_by_subject, agent_id, channel, instruction, delegation, status, next_poll_at)
+			VALUES ($1, $2, $3, 'fixture-subject', 'khata-agent', 'panel', 'fixture', '{}'::jsonb, 'parked', now())`,
 			[]any{agentRunID, cid, id()}},
 		{"agent_run_step", `INSERT INTO agent_run_step (company_id, run_id, step_name, output)
 			VALUES ($1, $2, 'decide:0', '{}'::jsonb)`,
