@@ -427,3 +427,22 @@ NSDL/Protean FVU, the EPFO Unified Portal or the ESIC employer portal; none of
 them can run in this environment. Every rate was curated from secondary sources.
 The corpus is a **substitute** for validation, not evidence of it — see the RATE
 PROVENANCE banner in `backend/internal/payroll/payroll.go`.
+
+## 9. `tau/`, `extraction/`, `embedding/` — the W1a agent golden sets (d124)
+
+⛔ **ALL THREE ARE SYNTHETIC AND GENERATED.** Each has a `generate.py` beside it;
+`validate.py`'s `check_generator_drift` fails if a committed file differs from
+what its generator emits, so the way to change a fixture is to change the
+generator. Every file declares `"synthetic": true` and a `SYNTHETIC` provenance
+line, and every extraction document says so in its **first line of text**.
+Nothing in them came from a customer's books. Design and figures:
+`docs/design/d124-w1a-golden-sets.md`.
+
+| family | count (printed by `validate.py`) | consumed by | re-derived here |
+|---|---|---|---|
+| `tau/` | 200 task files | `backend/internal/evals/tau` (Go harness, pass^k) | balance, GST legs via `derive_tax`, every question's figure from the expected books, GSTIN checksums, script vs language |
+| `extraction/` | 150 documents (100 invoices, 50 statements) | `insightd/insightd/evals/extraction.py` (field-level F1) | every header label GROUNDED in the text via its evidence surface; invoice arithmetic and tax; statement running balance |
+| `embedding/` | 2,342 judged rows (1,278 narrations, 218 queries) | `insightd/insightd/evals/retrieval.py` (recall@k, MRR, nDCG, triplet) | every grade re-derived from intent/key metadata; no relevant document left unjudged |
+
+Each family has a `_poison/` directory (see §8) and a `make_poison.py` that
+writes it.

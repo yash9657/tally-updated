@@ -229,15 +229,28 @@ func failures(rep tau.Report, limit int) string {
 func TestSuiteReferenceAgentSolvesEveryTask(t *testing.T) {
 	r := newRig(t)
 	tasks := loadSuite(t)
-	rep := run(t, r, tasks, tau.NewReferenceAgent(tasks), 1)
+	// k=1 by default (a PR-time run: 200 companies, ~12 s). TAU_K=5 is the
+	// Tier 2 shape — 1,000 companies — and is what d124 reports.
+	k := 1
+	if v := os.Getenv("TAU_K"); v != "" {
+		if _, err := fmt.Sscanf(v, "%d", &k); err != nil || k < 1 {
+			t.Fatalf("TAU_K=%q is not a positive integer", v)
+		}
+	}
+	rep := run(t, r, tasks, tau.NewReferenceAgent(tasks), k)
 	if rep.Passed() != suiteTasks {
 		t.Fatalf("reference agent passed %d/%d — a fixture disagrees with the engine:%s",
 			rep.Passed(), suiteTasks, failures(rep, 12))
 	}
 	for _, tr := range rep.Tasks {
-		if tr.Trials[0].AgentErr != "" {
-			t.Errorf("%s: reference agent errored yet passed: %s", tr.TaskID, tr.Trials[0].AgentErr)
+		for _, trial := range tr.Trials {
+			if trial.AgentErr != "" {
+				t.Errorf("%s trial %d: reference agent errored yet passed: %s", tr.TaskID, trial.Trial, trial.AgentErr)
+			}
 		}
+	}
+	if got := rep.PassHatK(k); got != 1 {
+		t.Errorf("reference pass^%d = %v, want 1", k, got)
 	}
 	for _, dim := range []string{"family", "language"} {
 		for _, b := range rep.By(dim) {
@@ -266,11 +279,29 @@ func TestSuiteWrongAgentFailsEveryTask(t *testing.T) {
 	r := newRig(t)
 	tasks := loadSuite(t)
 	rep := run(t, r, tasks, tau.NewWrongAgent(tasks), 1)
+	// WHY each trial failed matters as much as THAT it failed. A wrong agent
+	// that mostly CRASHED (a transposed name making a later {@ledger:…}
+	// lookup miss) would leave the books untouched, and "untouched" is caught
+	// by the null agent already — it would be evidence about the harness, not
+	// about the judge's eye for a wrong-but-plausible write. So the failures
+	// are split, and the clean ones must dominate.
+	clean, crashed := 0, 0
 	for _, tr := range rep.Tasks {
 		if tr.Successes != 0 {
 			t.Errorf("%s: the wrong agent PASSED — the judge cannot see the slip this task exists to catch "+
 				"(answer %q)", tr.TaskID, tr.Trials[0].Answer)
 		}
+		if tr.Trials[0].AgentErr == "" {
+			clean++
+		} else {
+			crashed++
+		}
+	}
+	t.Logf("wrong agent: %d tasks failed on a clean run (a plausible wrong state or answer), %d after an error",
+		clean, crashed)
+	if clean < suiteTasks*9/10 {
+		t.Errorf("only %d/%d wrong-agent failures were clean runs; the rest prove only that a crash is caught",
+			clean, suiteTasks)
 	}
 }
 
