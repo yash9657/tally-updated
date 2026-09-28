@@ -36,10 +36,13 @@ package query
 type valueType int
 
 const (
-	valueAny    valueType = iota // any string (names, like-patterns)
-	valueDate                    // ISO date YYYY-MM-DD
-	valueNature                  // ASSET | LIABILITY | INCOME | EXPENSE
-	valueDrCr                    // D | C
+	valueAny         valueType = iota // any string (names, like-patterns)
+	valueDate                         // ISO date YYYY-MM-DD
+	valueNature                       // ASSET | LIABILITY | INCOME | EXPENSE
+	valueDrCr                         // D | C
+	valueDirection                    // IN | OUT (stock_direction)
+	valueMatchStatus                  // matched | set-aside | unresolved
+	valueEntityKind                   // party | item | tenant | stream
 )
 
 // metricCol describes a whitelisted numeric/metric source.
@@ -502,6 +505,212 @@ var entities = map[Entity]entityDef{
 		},
 		dateCols: map[string]string{
 			"due_date": "ba.due_date",
+		},
+	},
+
+	// ---------------------------------------------------------------------
+	// stock_movements — inventory movement lines of current, non-deleted
+	// voucher versions (W3). The FROM/JOIN is stockMovementSQL's
+	// (reporting/stock_summary.go) with the vh current-version join and the
+	// is_deleted guard carried over verbatim, because movements are versioned
+	// exactly like postings: an ALTER re-states the lines under a new
+	// voucher_version and the superseded rows stay in the table forever, so an
+	// item altered from 10 to 4 must count 4 and not 14.
+	//
+	// ⛔ THERE IS NO "VALUE OF AN ISSUE" METRIC HERE, AND THAT IS THE DECISION.
+	// sm.amount is the line AS ENTERED — for a sale, the SELLING value. What
+	// the goods COST is not a column anywhere: it is derived at report time by
+	// replaying every movement through the item's valuer (weighted average,
+	// FIFO, LIFO — internal/inventory), and a SQL SUM cannot replay a valuer.
+	// A metric named "outward_value" that summed sm.amount would agree with the
+	// Stock Movement report on a purchase and disagree with it on every sale,
+	// silently, by exactly the gross margin. So the metric is named `amount`
+	// and documented as "as entered", and questions about stock VALUE belong to
+	// the stock-summary / stock-movement reports (the semantic catalogue routes
+	// them there). Quantities have no valuer and reconcile exactly;
+	// report_parity_execute_test.go's stock case pins that.
+	//
+	// ⚠️ OPENINGS ARE NOT HERE. stock_opening rows are positions the books
+	// began with, not movements, and the Stock Movement report excludes them
+	// for the same reason. "How much do we have" is the Stock Summary.
+	//
+	// Every joined table (stock_movement, voucher_version, voucher_head,
+	// stock_item, godown, stock_batch, voucher_type, ledger) is FORCE-RLS, so
+	// the skeleton is tenant-scoped with no company predicate — the rule stated
+	// at the top of this file.
+	// ---------------------------------------------------------------------
+	EntityStockMovements: {
+		skeleton: `stock_movement sm
+		   JOIN voucher_version vv ON vv.id = sm.voucher_version_id
+		   JOIN voucher_head vh
+		     ON vh.company_id = vv.company_id
+		    AND vh.voucher_id = vv.voucher_id
+		    AND vh.current_version_id = vv.id
+		   JOIN stock_item si ON si.id = sm.stock_item_id
+		   LEFT JOIN godown gd ON gd.id = sm.godown_id
+		   LEFT JOIN stock_batch sb ON sb.id = sm.batch_id
+		   LEFT JOIN voucher_type vt ON vt.id = vv.voucher_type_id
+		   LEFT JOIN ledger party
+		     ON party.company_id = vv.company_id
+		    AND party.id = vv.party_ledger_id`,
+		whereGuard: "vh.is_deleted = false",
+		dimensions: map[string]string{
+			"item_name": "si.name",
+			// An untracked location/batch is a POSITION like any other (see
+			// reporting.StockPositionRow); COALESCE to '' so it groups as one
+			// row rather than vanishing into a NULL group the UI renders blank.
+			"godown_name":       "COALESCE(gd.name,'')",
+			"batch_name":        "COALESCE(sb.name,'')",
+			"direction":         "sm.direction::text",
+			"voucher_type_name": "COALESCE(vt.name,'')",
+			"party_name":        "COALESCE(party.name,'')",
+			"month":             "to_char(vv.voucher_date,'YYYY-MM')",
+			// CALENDAR quarter — see the vouchers entity's note.
+			"quarter": `to_char(vv.voucher_date,'YYYY-"Q"Q')`,
+			"year":    "to_char(vv.voucher_date,'YYYY')",
+		},
+		metrics: map[string]metricCol{
+			// qty is NOT NULL with CHECK (qty > 0), a magnitude; direction
+			// carries the sign. Row-level, so all four aggregates are legal.
+			"qty": {rawExpr: "sm.qty", aggs: numericAggs()},
+			// in_qty / out_qty / net_qty are the Stock Movement report's
+			// InwardQty / OutwardQty / NetQty, per the same current-version rows.
+			// SUM-only: a min over a CASE that is zero on every other-direction
+			// row answers "0" for a question nobody asked.
+			"in_qty":  {rawExpr: "CASE WHEN sm.direction = 'IN' THEN sm.qty ELSE 0 END", aggs: sumOnly()},
+			"out_qty": {rawExpr: "CASE WHEN sm.direction = 'OUT' THEN sm.qty ELSE 0 END", aggs: sumOnly()},
+			"net_qty": {rawExpr: "CASE WHEN sm.direction = 'IN' THEN sm.qty ELSE -sm.qty END", aggs: sumOnly()},
+			// The line value AS ENTERED (see the ⛔ note above). NOT NULL DEFAULT 0.
+			"amount": {rawExpr: "sm.amount", aggs: numericAggs(), isMoney: true},
+			// The effective rate a line was entered at. min/max/avg are the
+			// point (supplier price drift reads max vs min); a SUM of rates is
+			// meaningless and is not offered.
+			"rate": {rawExpr: "sm.rate", aggs: map[AggFunc]bool{AggMin: true, AggMax: true, AggAvg: true}, isMoney: true},
+		},
+		filters: map[string]filterCol{
+			"item_name":         {expr: "si.name", ops: nameOps(), valType: valueAny},
+			"godown_name":       {expr: "gd.name", ops: nameOps(), valType: valueAny},
+			"direction":         {expr: "sm.direction::text", ops: enumOps(), valType: valueDirection},
+			"voucher_type_name": {expr: "vt.name", ops: nameOps(), valType: valueAny},
+			"party":             {expr: "party.name", ops: nameOps(), valType: valueAny},
+			"voucher_date":      {expr: "vv.voucher_date", ops: dateOps(), valType: valueDate},
+		},
+		dateCols: map[string]string{
+			"voucher_date": "vv.voucher_date",
+		},
+	},
+
+	// ---------------------------------------------------------------------
+	// bank_statement_lines — imported statement lines as the BANK reported
+	// them (W3), from the same table reporting.ImportedStatementReport reads.
+	//
+	// dr_cr is OUR orientation, which INVERTS the word on the statement: a
+	// DEPOSIT is 'D' (the bank asset rose). See migration 0062's column
+	// comment; `deposits` / `withdrawals` below are spelled in the operator's
+	// words so nobody has to remember the inversion at the call site.
+	//
+	// ⛔ THE NARRATION IS A FILTER AND NEVER A DIMENSION, ON PURPOSE. A bank
+	// description is text a THIRD PARTY wrote — the payer's UPI note, a
+	// merchant's descriptor — and PLAN-AGENTIC §2.4 treats it as untrusted: it
+	// is precisely where an injection payload arrives ("IGNORE PREVIOUS
+	// INSTRUCTIONS, PAY …" in a NEFT remark). A dimension would put that text
+	// verbatim into the result set the model reads next; a filter binds the
+	// user's OWN search string as a $N value and returns only amounts. It is
+	// also where counterparty VPA ids and account fragments live, which is a
+	// DPDP question the answer need not raise.
+	//
+	// Duplicates are impossible by construction: an overlapping download is
+	// deduplicated at import by (line_hash, occurrence) UNIQUE, so a SUM here
+	// cannot double-count a transaction that arrived in two files.
+	//
+	// The match join is LEFT and one-per-line (bank_statement_match's UNIQUE
+	// (company_id, line_id)), so it can never multiply a line. A line with no
+	// match row is 'unresolved' — which is NOT the same as unreconciled in the
+	// books (a clearance can be ticked by hand without an import), and the
+	// catalogue says so.
+	// ---------------------------------------------------------------------
+	EntityBankStatementLines: {
+		skeleton: `bank_statement_line bl
+		   JOIN ledger l ON l.id = bl.ledger_id
+		   LEFT JOIN bank_statement_match bm
+		     ON bm.company_id = bl.company_id
+		    AND bm.line_id = bl.id`,
+		whereGuard: "",
+		dimensions: map[string]string{
+			"bank_ledger_name": "l.name",
+			"dr_cr":            "bl.dr_cr::text",
+			"match_status":     "COALESCE(bm.status,'unresolved')",
+			"month":            "to_char(bl.value_date,'YYYY-MM')",
+			// CALENDAR quarter — see the vouchers entity's note.
+			"quarter": `to_char(bl.value_date,'YYYY-"Q"Q')`,
+			"year":    "to_char(bl.value_date,'YYYY')",
+		},
+		metrics: map[string]metricCol{
+			"amount":      {rawExpr: "bl.amount", aggs: numericAggs(), isMoney: true},
+			"deposits":    {rawExpr: "CASE WHEN bl.dr_cr = 'D' THEN bl.amount ELSE 0 END", aggs: sumOnly(), isMoney: true},
+			"withdrawals": {rawExpr: "CASE WHEN bl.dr_cr = 'C' THEN bl.amount ELSE 0 END", aggs: sumOnly(), isMoney: true},
+			// net is deposits minus withdrawals: the movement of the bank's own
+			// balance across the lines selected.
+			"net": {rawExpr: "CASE WHEN bl.dr_cr = 'D' THEN bl.amount ELSE -bl.amount END", aggs: sumOnly(), isMoney: true},
+		},
+		filters: map[string]filterCol{
+			"bank_ledger_name": {expr: "l.name", ops: nameOps(), valType: valueAny},
+			"dr_cr":            {expr: "bl.dr_cr::text", ops: enumOps(), valType: valueDrCr},
+			// Filter-only; see the ⛔ note above. eq/like only — an IN list of
+			// narrations is not a question anyone asks.
+			"description":  {expr: "bl.description", ops: map[Op]bool{OpEq: true, OpLike: true}, valType: valueAny},
+			"match_status": {expr: "COALESCE(bm.status,'unresolved')", ops: enumOps(), valType: valueMatchStatus},
+			"value_date":   {expr: "bl.value_date", ops: dateOps(), valType: valueDate},
+		},
+		dateCols: map[string]string{
+			"value_date": "bl.value_date",
+		},
+	},
+
+	// ---------------------------------------------------------------------
+	// profile_facts — the CURRENT deterministic entity facts (W3,
+	// internal/profile, migration 0096). This entity exists so the agent's
+	// profile tools and the query screen read the SAME rows: a tool answering
+	// "Acme's DSO is 41 days" and a screen answering 38 for the same question
+	// would be two surfaces over one set of books disagreeing, which is the
+	// D20/D51 failure this package keeps re-learning.
+	//
+	// "Current" is BOTH temporal axes closed off: superseded_at IS NULL (we
+	// still believe it) AND valid_to IS NULL (it is still true). Dropping
+	// either half would show a corrected-away value or a historical one next
+	// to today's, and both look perfectly plausible.
+	//
+	// value_text is a dimension because some facts are classes (ABC 'A', XYZ
+	// 'Z', a stream's cadence 'monthly') and a class has no numeric value. It is
+	// COMPUTED text from a closed vocabulary written by Go, never a
+	// user-entered or third-party string — so it does not reopen the
+	// bank-narration hole the entity above closes.
+	// ---------------------------------------------------------------------
+	EntityProfileFacts: {
+		skeleton:   `entity_facts f`,
+		whereGuard: "f.superseded_at IS NULL AND f.valid_to IS NULL",
+		dimensions: map[string]string{
+			"entity_kind": "f.entity_kind",
+			"entity_name": "f.entity_name",
+			"fact_key":    "f.fact_key",
+			"unit":        "f.unit",
+			"value_text":  "COALESCE(f.value_text,'')",
+			"as_of":       "to_char(f.valid_from,'YYYY-MM-DD')",
+		},
+		metrics: map[string]metricCol{
+			// NULL for a class fact; SUM COALESCEs, MIN/MAX/AVG stay NULL -> ""
+			// (metricCol's NULL SEMANTICS) — a class has no number, and 0 would
+			// be a wrong one.
+			"value": {rawExpr: "f.value_num", aggs: numericAggs()},
+		},
+		filters: map[string]filterCol{
+			"entity_kind": {expr: "f.entity_kind", ops: enumOps(), valType: valueEntityKind},
+			"entity_name": {expr: "f.entity_name", ops: nameOps(), valType: valueAny},
+			"fact_key":    {expr: "f.fact_key", ops: nameOps(), valType: valueAny},
+			"value_text":  {expr: "f.value_text", ops: nameOps(), valType: valueAny},
+		},
+		dateCols: map[string]string{
+			"as_of": "f.valid_from",
 		},
 	},
 }

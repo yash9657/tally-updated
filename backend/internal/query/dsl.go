@@ -39,6 +39,18 @@ const (
 	EntityPostings Entity = "postings"
 	// EntityOutstandings projects bill-wise pending amounts of current versions.
 	EntityOutstandings Entity = "outstandings"
+	// EntityStockMovements projects inventory movement lines of current,
+	// non-deleted voucher versions (W3). Quantities, and the line value AS
+	// ENTERED — never the valued cost of an issue, which only the valuer knows.
+	EntityStockMovements Entity = "stock_movements"
+	// EntityBankStatementLines projects imported bank statement lines, as the
+	// BANK reported them (W3), with the operator's match decision joined in.
+	EntityBankStatementLines Entity = "bank_statement_lines"
+	// EntityProfileFacts projects the CURRENT deterministic entity facts
+	// (internal/profile, migration 0096) — the same rows the agent's profile
+	// tools read, so the query screen and the agent can never show two numbers
+	// for one question (W3 deliverable: "each also a DSL report").
+	EntityProfileFacts Entity = "profile_facts"
 )
 
 // AggFunc is one of the FIXED aggregate functions a Metric may apply. The set is

@@ -23,7 +23,13 @@ export type QueryEntity =
   | "ledger_balances"
   | "vouchers"
   | "postings"
-  | "outstandings";
+  | "outstandings"
+  // W3 (backend internal/query/whitelist.go). stock_movements' `amount` is the
+  // line value AS ENTERED, never the valued cost of goods issued; the
+  // bank_statement_lines narration is a filter only and never a column.
+  | "stock_movements"
+  | "bank_statement_lines"
+  | "profile_facts";
 
 /** Supported aggregate functions for a {@link QueryMetric}. */
 export type AggFunc = "sum" | "count" | "min" | "max" | "avg";
