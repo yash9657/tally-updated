@@ -119,6 +119,8 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 		// W2 — the agent run and approval the agent_* children hang off.
 		agentRunID      = id()
 		agentApprovalID = id()
+		// W6 — the MCP grant the fixture session hangs off.
+		mcpGrantID = id()
 
 		// Track 2 — GSTR-2A/2B inward statement and the IMS worklist.
 		statementID = id()
@@ -709,6 +711,18 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 		{"agent_autonomy", `INSERT INTO agent_autonomy (id, company_id, acl_key, level, set_by)
 			VALUES ($1, $2, 'create payment', 1, $3)`,
 			[]any{id(), cid, id()}},
+		// W6 — the MCP server (migration 0105). The grant, then a session on
+		// it tied to the agent_run above. ⛔ BOTH REFUSE DELETE BY TRIGGER
+		// (only revocation / closing may change them), so like the agent
+		// tables they are only removable under the teardown's replica role.
+		{"agent_mcp_grant", `INSERT INTO agent_mcp_grant
+			(id, company_id, user_id, client_name, acl_keys, expires_at, created_at)
+			VALUES ($1, $2, $3, 'fixture client', ARRAY['create payment'], now() + interval '1 day', now())`,
+			[]any{mcpGrantID, cid, id()}},
+		{"agent_mcp_session", `INSERT INTO agent_mcp_session
+			(id, company_id, grant_id, run_id, protocol_version, manifest_hash, created_at, last_seen_at)
+			VALUES ($1, $2, $3, $4, '2025-06-18', repeat('0', 64), now(), now())`,
+			[]any{id(), cid, mcpGrantID, agentRunID}},
 
 		// TEXT company_id. This is the row that the "AND data_type='uuid'"
 		// mutation orphans, and the reason the enumeration query must not filter
