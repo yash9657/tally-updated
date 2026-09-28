@@ -74,6 +74,9 @@ type BankStatementImport struct {
 	// case the dropped-row check never ran. Carried per import, not per report,
 	// because a screen may show one file that walked and one that could not.
 	BalanceWalked bool
+	// BalanceProof is migration 0101's balance_proof — "running", "declared",
+	// "running+declared" — or "" for an import written before W5.
+	BalanceProof string
 }
 
 // ImportedStatement is every line imported for one bank account over a period,
@@ -119,10 +122,14 @@ const importsSQL = `
 	       COALESCE(to_char(i.period_from, 'YYYY-MM-DD'), ''),
 	       COALESCE(to_char(i.period_to, 'YYYY-MM-DD'), ''),
 	       i.line_count,
-	       -- The walk RAN if and only if the file carried balances, which is
-	       -- exactly when we stored one. NULL here is "could not check", never
-	       -- "checked and found nothing".
-	       (i.opening_balance IS NOT NULL)
+	       -- Did the RUNNING-BALANCE walk run? Before 0101 it ran iff an
+	       -- opening balance was stored. ⛔ SINCE 0101 THAT IS NO LONGER TRUE:
+	       -- a statement proved by DECLARED balances stores an opening balance
+	       -- and was never walked, so balance_proof decides whenever it is set,
+	       -- and the 0062 reading is kept only for the rows written before it.
+	       CASE WHEN i.balance_proof IS NULL THEN i.opening_balance IS NOT NULL
+	            ELSE i.balance_proof IN ('running', 'running+declared') END,
+	       COALESCE(i.balance_proof, '')
 	  FROM bank_statement_import i
 	 WHERE i.company_id = $1
 	   AND i.ledger_id  = $2
@@ -180,7 +187,7 @@ func (s *Service) ImportedStatementReport(
 		for rows.Next() {
 			var im BankStatementImport
 			if err := rows.Scan(&im.ID, &im.FileName, &im.ImportedBy, &im.ImportedAt,
-				&im.PeriodFrom, &im.PeriodTo, &im.LineCount, &im.BalanceWalked); err != nil {
+				&im.PeriodFrom, &im.PeriodTo, &im.LineCount, &im.BalanceWalked, &im.BalanceProof); err != nil {
 				return fmt.Errorf("reporting: scan import: %w", err)
 			}
 			out.Imports = append(out.Imports, im)
@@ -231,6 +238,13 @@ func (s *Service) ImportedStatementReport(
 			"nothing on this report says which. Matching now works: press Alt+S on the Bank "+
 			"Reconciliation screen. Reconciling by hand, a Bank Date at a time, still works too.")
 	for _, im := range out.Imports {
+		if !im.BalanceWalked && im.BalanceProof == "declared" {
+			out.Disclosures = append(out.Disclosures, fmt.Sprintf(
+				"%q carried no running balance and was proved by its opening and closing balance instead "+
+					"(opening + deposits − withdrawals = closing): one missing or duplicated row would have been "+
+					"refused, two errors of equal and opposite amount would not.", im.FileName))
+			continue
+		}
 		if !im.BalanceWalked {
 			out.Disclosures = append(out.Disclosures, fmt.Sprintf(
 				"%q carried no running balance, so its rows were NOT balance-walked: a row dropped or "+

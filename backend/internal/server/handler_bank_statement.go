@@ -11,10 +11,13 @@ package server
 // real dates that was never a transaction.
 
 import (
+	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 
 	"github.com/khata/cored/internal/bankstatement"
 )
@@ -39,6 +42,10 @@ type columnMappingReq struct {
 	RunningBalance string `json:"running_balance"`
 	BankReference  string `json:"bank_reference"`
 	ChequeNumber   string `json:"cheque_number"`
+	// BalanceSign is the Cr/Dr column carrying the running balance's SIGN
+	// (W5; Kotak's second "Dr / Cr"). omitempty so every client written before
+	// it sends and receives exactly the bytes it always did.
+	BalanceSign string `json:"balance_sign,omitempty"`
 }
 
 func (m columnMappingReq) toDomain() bankstatement.ColumnMapping {
@@ -55,6 +62,7 @@ func (m columnMappingReq) toDomain() bankstatement.ColumnMapping {
 		RunningBalance: m.RunningBalance,
 		BankReference:  m.BankReference,
 		ChequeNumber:   m.ChequeNumber,
+		BalanceSign:    m.BalanceSign,
 	}
 }
 
@@ -72,6 +80,7 @@ func viewColumnMapping(m bankstatement.ColumnMapping) columnMappingReq {
 		RunningBalance: m.RunningBalance,
 		BankReference:  m.BankReference,
 		ChequeNumber:   m.ChequeNumber,
+		BalanceSign:    m.BalanceSign,
 	}
 }
 
@@ -94,6 +103,24 @@ type importBankStatementReq struct {
 	// the two disagree, the import is refused — see the service.
 	StatementAccountNumber string `json:"statement_account_number"`
 	CreatedBy              string `json:"created_by"`
+	// The opening and closing balance PRINTED ON THE STATEMENT, keyed by the
+	// operator (W5). Decimal STRINGS, never JSON numbers: a float64 on the wire
+	// is how a paisa is lost before the proof ever sees it. Empty = not keyed.
+	DeclaredOpeningBalance string `json:"declared_opening_balance"`
+	DeclaredClosingBalance string `json:"declared_closing_balance"`
+}
+
+// declaredBalance parses one keyed balance, "" meaning "not keyed".
+func declaredBalance(raw, which string) (*decimal.Decimal, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	d, err := decimal.NewFromString(strings.ReplaceAll(raw, ",", ""))
+	if err != nil {
+		return nil, fmt.Errorf("declared_%s_balance must be a decimal number such as 150000.00, got %q", which, raw)
+	}
+	return &d, nil
 }
 
 // handlePreviewBankStatement proposes a mapping. It writes nothing.
@@ -136,6 +163,12 @@ func (s *Server) handlePreviewBankStatement(w http.ResponseWriter, r *http.Reque
 		// silently moves a whole statement by up to eleven months.
 		"unresolved": nonNilStrings(p.Unresolved),
 		"notes":      nonNilStrings(p.Notes),
+		// W5: the bank whose header signature matched IN FULL ("" if none),
+		// whether that signature has been checked against a real export (never,
+		// yet — the notes say so), and the delimiter the file was read with.
+		"bank":          p.Bank,
+		"bank_verified": p.BankVerified,
+		"delimiter":     p.Delimiter,
 		// The pickers the client needs, from the engine rather than duplicated
 		// in the client, so a layout added there appears here without a second
 		// edit.
@@ -168,6 +201,17 @@ func (s *Server) handleImportBankStatement(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	opening, err := declaredBalance(req.DeclaredOpeningBalance, "opening")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	closing, err := declaredBalance(req.DeclaredClosingBalance, "closing")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	res, err := s.bankstmt.Import(ctx, companyID, bankstatement.ImportRequest{
 		LedgerID:               ledgerID,
 		FileName:               req.FileName,
@@ -175,6 +219,7 @@ func (s *Server) handleImportBankStatement(w http.ResponseWriter, r *http.Reques
 		Mapping:                req.Mapping.toDomain(),
 		By:                     req.CreatedBy,
 		StatementAccountNumber: req.StatementAccountNumber,
+		Declared:               bankstatement.Declared{Opening: opening, Closing: closing},
 	})
 	if err != nil {
 		// EVERY REFUSAL ON THIS ROUTE IS THE CALLER'S ERROR AND EVERY ONE NAMES
@@ -210,9 +255,15 @@ func (s *Server) handleImportBankStatement(w http.ResponseWriter, r *http.Reques
 		// FALSE MEANS THE DROPPED-ROW CHECK NEVER RAN. A client must not render
 		// this the same way as a check that passed.
 		"balance_walked": res.BalanceWalked,
-		"period_from":    res.PeriodFrom,
-		"period_to":      res.PeriodTo,
-		"disclosures":    nonNilStrings(res.Disclosures),
+		// W5: WHICH PROOF HELD, and every comparison it made. Never empty on a
+		// 200 — a statement that cannot be proved is refused, not imported.
+		"balance_proof":       string(res.BalanceProof),
+		"balance_declared_by": res.BalanceDeclaredBy,
+		"row_order":           string(res.RowOrder),
+		"proof_checks":        nonNilStrings(res.ProofChecks),
+		"period_from":         res.PeriodFrom,
+		"period_to":           res.PeriodTo,
+		"disclosures":         nonNilStrings(res.Disclosures),
 	})
 }
 
@@ -246,6 +297,8 @@ func (s *Server) handleImportedStatement(w http.ResponseWriter, r *http.Request)
 			"period_to":      im.PeriodTo,
 			"line_count":     im.LineCount,
 			"balance_walked": im.BalanceWalked,
+			// "" for an import written before W5 (migration 0101).
+			"balance_proof": im.BalanceProof,
 		})
 	}
 

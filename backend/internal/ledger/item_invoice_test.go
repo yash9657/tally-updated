@@ -39,9 +39,9 @@ import (
 	"github.com/khata/cored/migrations"
 )
 
-const (
-	itemInvAdminDSN = "postgres://postgres:postgres@localhost:5433/tally?sslmode=disable"
-	itemInvAppDSN   = "postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable"
+var (
+	itemInvAdminDSN = testdb.AdminDSNValue()
+	itemInvAppDSN   = testdb.AppDSNValue()
 )
 
 // stateHome / stateAway are the two GST state codes every fixture here uses.

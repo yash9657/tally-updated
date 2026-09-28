@@ -26,9 +26,9 @@ import (
 	"github.com/khata/cored/migrations"
 )
 
-const (
-	stockAdminDSN = "postgres://postgres:postgres@localhost:5433/tally?sslmode=disable"
-	stockAppDSN   = "postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable"
+var (
+	stockAdminDSN = testdb.AdminDSNValue()
+	stockAppDSN   = testdb.AppDSNValue()
 )
 
 // stockEnv is one isolated company with everything an inventory voucher needs:

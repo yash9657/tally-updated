@@ -19,9 +19,9 @@ import (
 // DB test discipline (§1.4): CORED_SKIP_DB guard FIRST, then connect-or-FAIL.
 // The two DSNs are copied verbatim from internal/forecast/forecast_db_test.go —
 // _test.go identifiers do not cross packages.
-const (
-	adminDSN = "postgres://postgres:postgres@localhost:5433/tally?sslmode=disable"
-	appDSN   = "postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable"
+var (
+	adminDSN = testdb.AdminDSNValue()
+	appDSN   = testdb.AppDSNValue()
 )
 
 // budgetFixture migrates, opens the app pool, creates a company and registers

@@ -122,10 +122,10 @@ const (
 
 // goLayout maps a named layout to Go's reference time.
 var goLayout = map[DateLayout]string{
-	DMYSlash:  "02/01/2006",
-	DMYDash:   "02-01-2006",
-	DMonY:     "02-Jan-2006",
-	YMDDash:   "2006-01-02",
+	DMYSlash:   "02/01/2006",
+	DMYDash:    "02-01-2006",
+	DMonY:      "02-Jan-2006",
+	YMDDash:    "2006-01-02",
 	DMYSlash2:  "02/01/06",
 	MDYSlash:   "01/02/2006",
 	DMonYSpace: "02 Jan 2006",

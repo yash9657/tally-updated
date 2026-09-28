@@ -112,7 +112,7 @@ func formatCases() []formatCase {
 		{name: "SBI — tab-separated .xls, dd Mon yyyy, operator-declared balances", content: sbiExport,
 			bank: "State Bank of India", delimiter: "tab", layout: DMonYSpace,
 			operator: Declared{Opening: dec("50000"), Closing: dec("30500")},
-			lines: 3, order: OldestFirst, method: ProofRunningDeclared, opening: "50000.00", closing: "30500.00",
+			lines:    3, order: OldestFirst, method: ProofRunningDeclared, opening: "50000.00", closing: "30500.00",
 			firstLineNo: 6},
 		{name: "Axis — newest first", content: axisExport,
 			bank: "Axis Bank", delimiter: "comma", layout: DMYDash, lines: 3, order: NewestFirst,

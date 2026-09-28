@@ -2,6 +2,7 @@ package authn
 
 import (
 	"context"
+	"github.com/khata/cored/internal/platform/testdb"
 	"os"
 	"sync"
 	"testing"
@@ -321,9 +322,9 @@ func TestLockoutExpiresAfterLockDuration(t *testing.T) {
 
 // ---- Postgres-backed store test (skips if 0011 not applied) ---------------
 
-const (
-	pgAdminDSN = "postgres://postgres:postgres@localhost:5433/tally?sslmode=disable"
-	pgAppDSN   = "postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable"
+var (
+	pgAdminDSN = testdb.AdminDSNValue()
+	pgAppDSN   = testdb.AppDSNValue()
 )
 
 // tablePresent reports whether a table exists (used to skip when WS1's 0011
@@ -672,11 +673,11 @@ func TestLockoutBacksOffExponentiallyAndIsCapped(t *testing.T) {
 		priorLocks int
 		want       time.Duration
 	}{
-		{0, 15 * time.Minute},  // the honest typo: unchanged
+		{0, 15 * time.Minute}, // the honest typo: unchanged
 		{1, 30 * time.Minute},
-		{2, time.Hour},         // reaches the cap
-		{3, time.Hour},         // and stays there
-		{50, time.Hour},        // no overflow, no lock measured in years
+		{2, time.Hour},  // reaches the cap
+		{3, time.Hour},  // and stays there
+		{50, time.Hour}, // no overflow, no lock measured in years
 	} {
 		if got := p.lockDuration(tc.priorLocks); got != tc.want {
 			t.Fatalf("lockDuration(%d) = %v, want %v", tc.priorLocks, got, tc.want)

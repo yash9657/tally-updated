@@ -27,9 +27,9 @@ import (
 // receivables total; (3) the anomaly loader reads voucher_date + created_at (a
 // 2025-dated voucher entered now() is BACKDATED).
 
-const (
-	adminDSN = "postgres://postgres:postgres@localhost:5433/tally?sslmode=disable"
-	appDSN   = "postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable"
+var (
+	adminDSN = testdb.AdminDSNValue()
+	appDSN   = testdb.AppDSNValue()
 )
 
 func dec(s string) decimal.Decimal { return decimal.RequireFromString(s) }

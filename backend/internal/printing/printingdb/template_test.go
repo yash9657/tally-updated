@@ -44,7 +44,7 @@ import (
 	"github.com/khata/cored/migrations"
 )
 
-const appDSN = "postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable"
+var appDSN = testdb.AppDSNValue()
 
 // setup migrates the live database (idempotent), opens an APP-ROLE pool, and
 // returns a freshly created throwaway company.

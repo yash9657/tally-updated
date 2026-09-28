@@ -81,12 +81,31 @@ var (
 	poolErr  error
 )
 
+// AppDSNEnv is AdminDSNEnv's twin for the application role.
+//
+// ⛔ THE TWO MUST MOVE TOGETHER, AND UNTIL W5 ONLY ONE COULD. Most DB tests
+// migrate through the ADMIN DSN and then connect as the APP role; with only the
+// admin half overridable, a run pointed at a private database migrated that
+// database and then queried the shared one — which, with concurrent lanes each
+// adding migrations, reads as a missing column in a file nobody touched. Every
+// test DSN in the tree now goes through these two functions.
+const AppDSNEnv = "TESTDB_APP_DSN"
+
 // AdminDSNValue returns the admin DSN in force, honouring TESTDB_ADMIN_DSN.
 func AdminDSNValue() string {
 	if v := os.Getenv(AdminDSNEnv); v != "" {
 		return v
 	}
 	return AdminDSN
+}
+
+// AppDSNValue returns the application-role DSN in force, honouring
+// TESTDB_APP_DSN.
+func AppDSNValue() string {
+	if v := os.Getenv(AppDSNEnv); v != "" {
+		return v
+	}
+	return AppDSN
 }
 
 // adminPool returns the ONE process-wide admin pool, created lazily.

@@ -28,9 +28,9 @@ import (
 	"github.com/khata/cored/migrations"
 )
 
-const (
-	adminDSN = "postgres://postgres:postgres@localhost:5433/tally?sslmode=disable"
-	appDSN   = "postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable"
+var (
+	adminDSN = testdb.AdminDSNValue()
+	appDSN   = testdb.AppDSNValue()
 )
 
 func dec(s string) decimal.Decimal { return decimal.RequireFromString(s) }
@@ -153,11 +153,40 @@ func (f *matchFixture) importCSV(t *testing.T, csv string) {
 			Encoding:    bankstatement.TwoColumns,
 			Description: "Narration",
 		},
-		By: "tester",
+		Declared: declaredFor(t, csv),
+		By:       "tester",
 	})
 	if err != nil {
 		t.Fatalf("import: %v", err)
 	}
+}
+
+// declaredFor states an opening of zero and the closing the file's own rows
+// imply, for fixtures that carry no running balance.
+//
+// ⚠️ TAUTOLOGICAL ON PURPOSE, AND ONLY HERE. Since W5 an import is refused
+// without a balance proof (proof.go), and these tests are about MATCHING, not
+// about the proof — so they declare the one pair of figures that proves any
+// file. The proof itself is pinned where it is tested: formats_test.go and
+// TestAnUnprovableStatementIsRefusedAndWritesNothing below.
+func declaredFor(t *testing.T, csv string) bankstatement.Declared {
+	t.Helper()
+	st, err := bankstatement.Parse(csv, bankstatement.ColumnMapping{
+		ValueDate: "Date", DateLayout: bankstatement.YMDDash, Withdrawal: "Withdrawal",
+		Deposit: "Deposit", Encoding: bankstatement.TwoColumns, Description: "Narration",
+	})
+	if err != nil {
+		t.Fatalf("declaredFor: %v", err)
+	}
+	opening, closing := decimal.Zero, decimal.Zero
+	for _, l := range st.Lines {
+		if l.DrCr == "D" {
+			closing = closing.Add(l.Amount)
+		} else {
+			closing = closing.Sub(l.Amount)
+		}
+	}
+	return bankstatement.Declared{Opening: &opening, Closing: &closing}
 }
 
 // clearances counts the bank_reconciliation rows for this company — the ONE
