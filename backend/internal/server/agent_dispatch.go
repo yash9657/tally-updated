@@ -150,6 +150,7 @@ func (d agentDispatcher) Dispatch(ctx context.Context, c agent.Caller, req agent
 		voucherIDs []uuid.UUID
 		fired      bool
 		dupKey     bool
+		overCeil   string
 	)
 	var hook *db.TxHook
 	switch req.Mode {
@@ -243,6 +244,25 @@ func (d agentDispatcher) Dispatch(ctx context.Context, c agent.Caller, req agent
 			if len(ids) == 0 {
 				return nil // this write transaction created no voucher
 			}
+			// ⛔ THE DELEGATED CEILING, ON WHAT THIS TRANSACTION ACTUALLY
+			// WROTE. The gate judged the ceiling on the preview; an approver's
+			// edited body is never previewed again, so this is the one place
+			// its amount is known. Above the ceiling the voucher rolls back.
+			if req.MaxDebitPaise != nil {
+				var debit string
+				if err := tx.QueryRow(ctx, `SELECT COALESCE(sum(amount),0)::text FROM (`+postingsWrittenSQL+`) p WHERE dr_cr = 'D'`,
+					companyID).Scan(&debit); err != nil {
+					return err
+				}
+				paise, err := toPaise(debit)
+				if err != nil {
+					return err
+				}
+				if paise > *req.MaxDebitPaise {
+					overCeil = fmt.Sprintf("the committed debit of %d paise exceeds this run's delegated ceiling of %d paise", paise, *req.MaxDebitPaise)
+					return errors.New("agent: " + overCeil)
+				}
+			}
 			var approval any
 			if req.ApprovalID != uuid.Nil {
 				approval = req.ApprovalID
@@ -305,6 +325,9 @@ func (d agentDispatcher) Dispatch(ctx context.Context, c agent.Caller, req agent
 			res.Effect = effect
 		}
 	case agent.ModeCommit:
+		if overCeil != "" {
+			return agent.Result{Status: http.StatusForbidden, Body: jsonError("agent: " + overCeil)}, nil
+		}
 		if dupKey {
 			// Lost the race to a concurrent dispatch of the same key: answer
 			// from the winner's record.

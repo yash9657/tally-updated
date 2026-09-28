@@ -143,6 +143,18 @@ type Caller struct {
 	IssuedAt time.Time
 	// WebAuthn is true only for a commit whose approving human stepped up.
 	WebAuthn bool
+	// Approver is the human whose "approve" a commit rides on (uuid.Nil for
+	// an autonomous commit and every read or preview).
+	//
+	// ⛔ THE CHECKER'S OWN AUTHORITY IS JUDGED ON THE REAL BODY, IN THE ROUTER.
+	// The request still authenticates as the run's creator (the voucher is
+	// theirs, made on their delegation), but the router ALSO evaluates the
+	// approver's level and rules against the same concrete request — the date
+	// the body carries, the date already stored, the year-end lock — and
+	// refuses if either human could not have made this write themselves.
+	// Without it an approver whose cutoff forbids a back-dated voucher could
+	// edit the date back and have it posted under the creator's cutoff.
+	Approver uuid.UUID
 }
 
 // Request is one in-process call.
@@ -160,6 +172,12 @@ type Request struct {
 	IdempotencyKey string
 	ApprovalID     uuid.UUID
 	RunID          uuid.UUID
+	// MaxDebitPaise, on a commit, is the run's delegated ceiling
+	// (Delegation.MaxAmountPaise). The dispatcher sums the debits the
+	// handler's OWN transaction wrote and rolls it back above the ceiling —
+	// the only place the amount of an approver-EDITED body is ever known,
+	// since an edited body is not previewed again.
+	MaxDebitPaise *int64
 }
 
 // Posting is one line of a ledger effect, read back from the handler's own

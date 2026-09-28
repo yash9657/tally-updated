@@ -360,6 +360,15 @@ func (s *Server) companyAuthMiddleware(next http.Handler) http.Handler {
 				writeError(w, http.StatusForbidden, reason)
 				return
 			}
+			// A commit behind an approval: the APPROVER must be able to make
+			// this exact write too (agent.Caller.Approver). Same request, same
+			// PDP, the approver's own level, rules, cutoff and step-up.
+			if call.caller.Approver != uuid.Nil {
+				if reason := s.approverDenies(r, companyID, call.caller.Approver, req, level.HasCutoff(), act); reason != "" {
+					writeError(w, http.StatusForbidden, "the approver may not make this write themselves: "+reason)
+					return
+				}
+			}
 		}
 
 		// (6) Authorized: inject the authz-verified identity + company into ctx.
@@ -2965,6 +2974,38 @@ func reportName(rest string) string {
 		return "payroll-pf-ecr"
 	case "/payroll-esi-return":
 		return "payroll-esi-return"
+	}
+	return ""
+}
+
+// approverDenies evaluates the approving human's own level and rules against
+// the request the agent is committing — base is the run creator's
+// authz.Request, already carrying the body's date. Returns "" to allow.
+//
+// ⛔ FAILS CLOSED. An approver who is no longer a member, or whose level
+// cannot be read, has not approved anything the router can vouch for.
+func (s *Server) approverDenies(r *http.Request, companyID, approver uuid.UUID, base authz.Request, storedKnown bool, act authz.Action) string {
+	ctx := r.Context()
+	levelID, member, err := s.authStore.Membership(ctx, approver, companyID)
+	if err != nil || !member {
+		return "not a member of this company"
+	}
+	level, err := s.authStore.Level(ctx, companyID, levelID)
+	if err != nil {
+		return "security level unavailable"
+	}
+	rules, err := s.authStore.Rules(ctx, companyID, levelID)
+	if err != nil {
+		return "rules unavailable"
+	}
+	req := base
+	req.UserID = approver
+	if !storedKnown && level.HasCutoff() {
+		// The creator's level has no cutoff, so the stored date was never read.
+		req.StoredVoucherDate = s.storedCutoffDateForRequest(r, companyID, act)
+	}
+	if d := authz.Evaluate(level, rules, req); !d.Allow {
+		return d.Reason
 	}
 	return ""
 }

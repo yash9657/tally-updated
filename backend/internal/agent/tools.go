@@ -726,6 +726,7 @@ func (l *loop) execStep(k int) durable.Step {
 		// behind an approval carries the APPROVER's (set below), never the
 		// starter's.
 		webauthn := l.run.Delegation.StepUp
+		var approver uuid.UUID
 		if g.Gate.Mode == policy.ModeApproval {
 			// ⛔ A COMMIT BEHIND AN APPROVAL RE-READS THE DECISION HERE, not
 			// only in await:k. await recorded "approve"; this is the belt to
@@ -744,14 +745,18 @@ func (l *loop) execStep(k int) durable.Step {
 				body = a.Decision.EditedArgs
 			}
 			webauthn = a.Decision.DecidedWebAuthn
+			approver = *a.Decision.DecidedBy
 		}
 		path, err := concretePath(spec, l.run.CompanyID, t.Preview.Params)
 		if err != nil {
 			return nil, err
 		}
 		key := IdempotencyKey(l.run.ID, k)
-		res, err := l.e.Dispatch.Dispatch(ctx, l.caller(webauthn), Request{Mode: ModeCommit, Spec: spec, Path: path,
-			Body: body, IdempotencyKey: key, ApprovalID: approvalID, RunID: l.run.ID})
+		caller := l.caller(webauthn)
+		caller.Approver = approver
+		res, err := l.e.Dispatch.Dispatch(ctx, caller, Request{Mode: ModeCommit, Spec: spec, Path: path,
+			Body: body, IdempotencyKey: key, ApprovalID: approvalID, RunID: l.run.ID,
+			MaxDebitPaise: l.run.Delegation.MaxAmountPaise})
 		if err != nil {
 			return nil, err
 		}

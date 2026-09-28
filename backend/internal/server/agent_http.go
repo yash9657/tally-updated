@@ -407,7 +407,16 @@ func (s *Server) handleAgentDecide(w http.ResponseWriter, r *http.Request) {
 	// agent's `create payment` is exercising `create payment`; a member whose
 	// own ACL refuses that key may reject or ask back, never approve.
 	if req.Decision == "approve" {
-		if reason, allowed := s.userMayTake(ctx, companyID, userID, a.ActionID); !allowed {
+		// The body that will commit: the approver's edit, else the preview's.
+		body := []byte(req.EditedBody)
+		if len(body) == 0 {
+			var args struct {
+				Body json.RawMessage `json:"body"`
+			}
+			_ = json.Unmarshal(a.Args, &args)
+			body = args.Body
+		}
+		if reason, allowed := s.userMayTake(ctx, companyID, userID, a.ActionID, body); !allowed {
 			writeError(w, http.StatusForbidden, "you may not approve an action you may not take yourself: "+reason)
 			return
 		}
@@ -430,9 +439,15 @@ func (s *Server) handleAgentDecide(w http.ResponseWriter, r *http.Request) {
 }
 
 // userMayTake evaluates the user's OWN level and rules for an action, through
-// the real PDP. Dates are not judged here — the commit itself runs through the
-// router, where the cutoff and the year-end lock apply to the real body.
-func (s *Server) userMayTake(ctx context.Context, companyID, userID uuid.UUID, actionID string) (string, bool) {
+// the real PDP, dated by the body that will commit — so an approver whose
+// cutoff or the year-end lock forbids that date is refused HERE, with a
+// reason, rather than approving a commit that then fails.
+//
+// ⛔ THIS IS THE EARLY ANSWER, NOT THE CONTROL. The control is the router:
+// exec:k carries the approver (agent.Caller.Approver) and
+// companyAuthMiddleware re-judges them on the concrete request
+// (approverDenies), which is also what judges a date this peek cannot see.
+func (s *Server) userMayTake(ctx context.Context, companyID, userID uuid.UUID, actionID string, body []byte) (string, bool) {
 	spec, ok := actions.ByID(actionID)
 	if !ok {
 		return "unknown action", false
@@ -450,7 +465,8 @@ func (s *Server) userMayTake(ctx context.Context, companyID, userID uuid.UUID, a
 		return "rules unavailable", false
 	}
 	d := authz.Evaluate(level, rules, authz.Request{UserID: userID, CompanyID: companyID, Action: spec.Action,
-		Resource: spec.Resource, ResourceName: spec.ResourceName, HasWebAuthn: stepUpFrom(ctx)})
+		Resource: spec.Resource, ResourceName: spec.ResourceName, HasWebAuthn: stepUpFrom(ctx),
+		VoucherDate: peekVoucherDate(body)})
 	return d.Reason, d.Allow
 }
 
