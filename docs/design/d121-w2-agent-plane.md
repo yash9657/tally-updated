@@ -379,3 +379,110 @@ accept, as on the native screens.
     `cmd/...`, `migrations` against `tally_w2`, all ok. Test DSNs in `internal/server`, `internal/security`
     and `internal/statutory` now honour `ADMIN_DATABASE_URL`/`DATABASE_URL` (Makefile defaults unchanged).
 13. **Load** — two contending pollers and eight contending commits are measured; hundreds are not.
+
+---
+
+## Frontend (W2 frontend lane, `agentic/w2-frontend`, built on `80dc5b8`)
+
+**Written:** 2026-09-28, after the code landed, every figure printed by a command run in this session.
+Item 1 of §9 above is now largely discharged; what remains of it is in §F.4. No migration consumed, no
+new frontend package, `git diff 80dc5b8 -- backend/go.mod backend/go.sum frontend/package.json
+frontend/pnpm-lock.yaml | wc -l` = **0**. `git diff --stat 80dc5b8`: **42 files, +3,978 / −50**;
+1,695 lines of new implementation in 7 new files, 1,114 lines of new tests and fixtures.
+
+### F.1 What exists now
+
+| surface | door | keys | file |
+|---|---|---|---|
+| **Approval Inbox** — new `ScreenKind` `approval-inbox` | Gateway › Approval Inbox; Alt+G › Approval Inbox (`SCREEN_GOTO_ENTRIES`) | ↑/↓ highlight · **Enter** open in native voucher · **Ctrl+A** approve as previewed · **Alt+X** reject (optional note) · **Alt+B** ask back (note required) | `screens/ApprovalInboxScreen.tsx` |
+| **Agent side panel** | **Ctrl+K** from any screen (shell-owned screen action `agentPanel`) | Tab through; Esc / Ctrl+K close; buttons: Start run, Cancel run, Open proposal | `app/AgentPanel.tsx` |
+| **Proposal mode of the native voucher screen** | Enter on an inbox row, or the panel's Open | the ordinary F4/F5/F6/F7 form; **Ctrl+A approves**; Alt+X sets the proposal aside undecided | `screens/VoucherScreen.tsx`, `screens/vouchers/agentProposal.ts`, `app/LoadedProposal.tsx` |
+| Shared read-only block: reasons verbatim, provenance warnings, ledger-effect table | inbox, panel cards, proposal mode | — | `screens/AgentProposalPanel.tsx` |
+| Features row "Agent — side panel (Ctrl+K) and Approval Inbox" | F11 | state **Part built** | `screens/FeaturesScreen.tsx` |
+| Client: the eight §8 routes on `CoredClient` (rest + mock) | — | — | `api/agent.ts`, `api/rest.ts`, `api/mock.ts` |
+
+### F.2 Decisions
+
+1. **The prefill goes through `formFromView`, the alter hydration.** `viewFromApproval` turns the approval
+   into a `VoucherView` (postings from `args.body`, **ledger names from `preview.effect`**, number and id
+   blank because it is a create), and the audited alter path builds the form. No agent-only hydration exists.
+2. **Ctrl+A in proposal mode records a decision and posts nothing.** It runs the SAME builder an ordinary
+   Ctrl+A runs (refusals, master gate, single-entry orientation), then `editedFrom(built, proposed)`:
+   unchanged ⇒ `{decision:"approve"}` (server commits its recorded preview); changed ⇒ `approve` +
+   `edited_body` = the native form's body. The comparison errs toward "edited" (any extra bill/cost/GST
+   field counts). The handler returns `screenHandled`, so the machine does not replace the frame before the
+   decision answers — a refused decision (403/409) leaves the operator still in proposal mode, never in an
+   ordinary form whose next Ctrl+A would post the figures.
+3. **The frame is bound to the approval.** The machine's `proposalFrame` puts the approval id on the create
+   frame's `detailOf`; VoucherScreen treats the LoadedProposal slot as live only while the frame names it. Esc
+   and a later plain F5 is a plain F5.
+4. **Which proposals can be opened:** Payment / Receipt / Contra (single entry when exactly one leg is on
+   the class's primary side, else double) and Journal (double). **Sales / Purchase / Credit Note / Debit
+   Note are refused** — their native form is the GST invoice, which re-derives tax from a taxable value, and
+   "As Voucher" is not built; they are approved or rejected from the diff. A body carrying any key the form
+   would not send back (`bill_allocations`, …), or a ledger the preview does not name, is also refused.
+5. **The diff is mandatory at every autonomy level**, not only above L1: the inbox refuses Ctrl+A (before
+   any request) on a proposal whose `preview.effect` is missing, and every approve (inbox or native form)
+   first re-reads the approval (`GET /agent/approvals/{id}`) and refuses if it is no longer pending or its
+   effect differs from the one drawn on screen (`assertStillAsShown`).
+6. **The panel owns the keyboard while focused**: every key but Ctrl+K is stopped at its edge (the shell
+   listens on `document`), so an instruction's Enter cannot drill the Gateway and Ctrl+A cannot post the
+   voucher behind it. Opening a proposal over a voucher / master create / Go To is refused (machine and panel
+   both), because the voucher form is state on one component instance.
+7. **Keys:** Ctrl+K (RESEARCH.md documents no Ctrl+K; Alt+K is TallyPrime's `K: Company`), Alt+X on the inbox
+   (the screen-scoped meaning of Tally's cancel key), Alt+B on the inbox (unbound globally). Ctrl+A and Enter
+   keep their global meanings. The bar says "Approve", never "Accept (save)".
+8. **Delegation defaults to nothing ticked**; the eight previewable voucher creates are offered as
+   checkboxes. The max amount is parsed rupees → paise exactly (no float).
+
+### F.3 Gates and what each printed
+
+- `pnpm exec tsc --noEmit`: exit **0**.
+- Full frontend suite, `pnpm exec vitest run`: **126 files / 2,013 tests passed**.
+- New files: `api/agent.test.ts` 18 tests, `screens/ApprovalInboxScreen.test.tsx` 15, `screens/VoucherScreen.agentProposal.test.tsx` 6, `app/AgentPanel.test.tsx` 11,
+  `FeaturesScreen.test.tsx` +3; `keystroke.test.ts` 55 (was 50) with **5 new corpus cases**
+  (`gateway-approval-inbox-enter-opens-inbox`, `alt-g-approval-inbox-opens-inbox`,
+  `approval-inbox-enter-opens-native-payment`, `approval-inbox-enter-refuses-unopenable-row`,
+  `approval-inbox-double-entry-journal-then-esc`) and a `detailOf` expect key; `buttons.test.ts` walks the
+  inbox bar.
+- `python3 corpora/validate.py`: "corpora validation OK (… keystroke=38 …)" (`approval-inbox` added to
+  `KNOWN_SCREENS`).
+- UI-command manifest regenerated: screen_kinds 37→**38**, commands 281→**285**, gateway_entries 28→**29**,
+  client_routes 159→**167**, client_calls 165→**173**, unused_client_methods **10** (unchanged — all eight
+  new methods are used), dead_commands **2** (unchanged, both pre-existing on bank-reconciliation).
+- Action registry regenerated (`UPDATE_GOLDENS=1 go test ./internal/server/ -run TestActionRegistryGolden`):
+  the eight agent specs moved `channel "none"` → `"client"`; their eight `actionsWithNoHumanPathYet` rows
+  were deleted and `maxActionsWithNoHumanPathYet` went **35 → 27**.
+- Backend: `go build ./...`, `go vet ./...` clean; `go test ./internal/{actions,policy,archtest,trajectory}`
+  ok; `make tier0` ok; `CORED_SKIP_DB=1 go test ./...` — every package ok except `internal/server`'s four
+  GSTR-3B pins that refuse to skip by design (the same four the backend lane reported).
+
+**Mutation proofs (each restored after; `scratchpad/w2fe_mutate.py`, all 11 went red):**
+M1 proposal Ctrl+A falls through to the ordinary post → 3 proposal tests fail (posts > 0); M2 detailOf binding
+dropped → "Esc then plain F5" fails; M3 inbox approves with no preview → the mandatory-diff test fails; M4 panel
+stops no keys → 2 panel tests fail; M5 inbox Enter drills a non-proposal row → corpus case fails; M6
+`editedFrom` always false → 2 tests fail (edit not sent); M7 Sales treated as prefillable → 3 tests fail; M8
+re-read ignores a changed preview → 1 fails; M9 `SCREEN_ACTIONS.rejectApproval` removed → Alt+X tests fail; M10
+rest client stops D/C translation of an edited body → 1 fails; M11 ledger names not taken from the preview → 5
+fail. Backend: re-adding `get.agent.runs` to `actionsWithNoHumanPathYet` → `TestNoHumanPathOptOutsAreDeclared`
+"is BOTH reachable from the UI (channel "client", command "client.listAgentRuns") AND listed".
+
+### F.4 ⛔ What the frontend still OWES
+
+1. **Editing invoice-class proposals** (Sales / Purchase / Credit / Debit Note) — needs Tally's "As Voucher"
+   mode on the invoice classes, or a restatement of a postings body into the GST form that provably posts the
+   previewed legs. Until then those are approve/reject only.
+2. **No browser drive.** Everything is jsdom through the real `AppShell`; nothing was driven in a real browser
+   against a running `cored` (no model keys exist, so a live run cannot be produced anyway). The WebAuthn
+   step-up on an Owner level relies on the transport's existing transparent retry and is untested here.
+3. **No autonomy screen** (backend §9 item 8 is still owed on both sides).
+4. **Ask-back / reject from the native voucher screen** are not keys there (only in the inbox) — deliberate,
+   but a reviewer may want Alt+B there too.
+5. **The panel polls** (1 s, per §8.2); no SSE/WebSocket. It re-reads the run on decision/commit events only.
+6. **`commit_refused` for an edited body** is shown as an event line in the panel; nothing reopens the inbox
+   row or tells the approver outside the panel.
+7. **The parity gate** (50 traces UI vs agent) still does not exist; the prefill round trip is proven for one
+   payment shape (single entry, one expense leg) and by unit tests for the double-entry routing.
+8. **A decision made by the native form after ledgers were created by the builder** (the operator typed a new
+   ledger name) and then refused by the server leaves those masters — the same orphan class D81 discloses on
+   the ordinary path, not disclosed here.
