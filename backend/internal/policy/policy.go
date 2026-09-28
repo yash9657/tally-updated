@@ -217,6 +217,11 @@ const (
 	SourceWhatsApp Source = "whatsapp"  // a forwarded message
 	SourceTallyXML Source = "tally_xml" // a Tally XML import (e.g. <NARRATION>)
 	SourceEmail    Source = "email"
+	// SourceStoredText is free text read back OUT of the books — a voucher
+	// narration, an order's remarks — whose author the server cannot vouch
+	// for: typed by a user, imported from Tally XML, pasted from a message.
+	// Being stored in the tenant's own database does not make it trusted.
+	SourceStoredText Source = "stored_text"
 )
 
 // Trusted reports whether a value from s may by itself authorise anything.
@@ -225,7 +230,7 @@ func (s Source) Trusted() bool { return s == SourceUser || s == SourceBooks }
 // ValidSource is the closed vocabulary.
 func ValidSource(s Source) bool {
 	switch s {
-	case SourceUser, SourceBooks, SourceDocument, SourceBank, SourceWhatsApp, SourceTallyXML, SourceEmail:
+	case SourceUser, SourceBooks, SourceDocument, SourceBank, SourceWhatsApp, SourceTallyXML, SourceEmail, SourceStoredText:
 		return true
 	}
 	return false

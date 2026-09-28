@@ -31,7 +31,8 @@ export type AgentProvenanceSource =
   | "bank"
   | "whatsapp"
   | "tally_xml"
-  | "email";
+  | "email"
+  | "stored_text";
 
 /** One piece of UNTRUSTED material a run is handed (agent.Input). */
 export interface AgentInput {

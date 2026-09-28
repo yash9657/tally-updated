@@ -299,7 +299,9 @@ func (l *loop) runTool(ctx context.Context, prev map[string]json.RawMessage, d M
 		if err != nil {
 			return toolOut{}, err
 		}
-		return toolOut{Tool: d.Tool, OK: res.OK(), Result: trimBody(res.Body), Sources: []policy.Source{policy.SourceBooks},
+		// ⛔ THE LABEL IS THE SPEC'S, NOT "books" (readsource.go): a bank
+		// statement or a day book read is untrusted text reaching the model.
+		return toolOut{Tool: d.Tool, OK: res.OK(), Result: trimBody(res.Body), Sources: []policy.Source{readSourceFor(spec)},
 			Error: map[bool]string{false: fmt.Sprintf("status %d", res.Status)}[res.OK()]}, nil
 
 	case ToolStatus, ToolListPending:
@@ -337,6 +339,10 @@ func (l *loop) runTool(ctx context.Context, prev map[string]json.RawMessage, d M
 		if err != nil {
 			return toolOut{}, err
 		}
+		// "books" is honest HERE and only here among the generic reads: the
+		// query whitelist never PROJECTS a prose column — bank_lines.description
+		// is filter-only (query/whitelist.go) — so what comes back is master
+		// names and computed figures.
 		return toolOut{Tool: d.Tool, OK: res.OK(), Result: trimBody(res.Body), Sources: []policy.Source{policy.SourceBooks},
 			Error: map[bool]string{false: fmt.Sprintf("status %d", res.Status)}[res.OK()]}, nil
 
