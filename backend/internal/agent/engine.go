@@ -248,9 +248,16 @@ func (e *Engine) Resume(ctx context.Context, companyID, runID uuid.UUID) (Status
 		return run.Status, nil
 	}
 	lp := &loop{e: e, run: run}
-	done, err := durable.RunDynamic(ctx, e.store(), runID.String(), lp.next)
+	done, err := durable.RunDynamic(ctx, e.store(), runID.String(), e.stopWhenEnded(companyID, runID, lp.next))
 	now := e.now()
 	switch {
+	case errors.Is(err, errRunEnded):
+		// Cancelled (or otherwise finished) while this Resume held the run:
+		// the row already says so, and nothing further was executed.
+		if r, gerr := e.GetRun(ctx, companyID, runID); gerr == nil {
+			return r.Status, nil
+		}
+		return StatusCancelled, nil
 	case errors.Is(err, durable.ErrLocked):
 		// Another poller holds the run; it is doing the work.
 		return run.Status, nil
@@ -284,6 +291,45 @@ func (e *Engine) Resume(ctx context.Context, companyID, runID uuid.UUID) (Status
 	}
 	out, _ := json.Marshal(fin)
 	return st, e.setState(ctx, runID, st, out, "", run.Attempts, nil)
+}
+
+// errRunEnded stops a Resume whose run was finished by someone else — a
+// Cancel — while it was executing.
+var errRunEnded = errors.New("agent: the run was ended while executing")
+
+// stopWhenEnded wraps next so that EVERY step re-reads the run's status before
+// it runs.
+//
+// ⛔ CANCEL DOES NOT WAIT FOR THE RUN LOCK, SO THE RUNNING RESUME MUST NOTICE.
+// Resume checks the status once, before RunDynamic takes the advisory lock;
+// a Cancel that lands while a decide:k model call is in flight (seconds to
+// minutes) used to be answered 200 "cancelled" while the same Resume went on
+// to gate and commit. Cancel deliberately does not take the lock — it would
+// block the user behind that model call — so the check is here, per step, and
+// the commit itself re-checks under a row lock in the voucher's own
+// transaction (agent_dispatch.go), which closes the gap between this read
+// and the write. next stays pure; the check is in the step, not in next.
+func (e *Engine) stopWhenEnded(companyID, runID uuid.UUID, next durable.Next) durable.Next {
+	return func(done []durable.StepResult) (durable.Step, bool, error) {
+		step, ok, err := next(done)
+		if err != nil || !ok {
+			return step, ok, err
+		}
+		run := step.Run
+		step.Run = func(ctx context.Context, prev map[string]json.RawMessage) (json.RawMessage, error) {
+			var st Status
+			if err := e.Pool.RunInReadOnlyTx(db.WithCompany(ctx, companyID), func(ctx context.Context, tx pgx.Tx) error {
+				return tx.QueryRow(ctx, `SELECT status FROM agent_run WHERE id = $1`, runID).Scan(&st)
+			}); err != nil {
+				return nil, err
+			}
+			if st.Finished() {
+				return nil, errRunEnded
+			}
+			return run(ctx, prev)
+		}
+		return step, true, nil
+	}
 }
 
 func (e *Engine) setState(ctx context.Context, runID uuid.UUID, st Status, outcome json.RawMessage, lastErr string, attempts int, next *time.Time) error {

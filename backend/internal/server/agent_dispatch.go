@@ -151,6 +151,7 @@ func (d agentDispatcher) Dispatch(ctx context.Context, c agent.Caller, req agent
 		fired      bool
 		dupKey     bool
 		overCeil   string
+		runEnded   bool
 	)
 	var hook *db.TxHook
 	switch req.Mode {
@@ -244,6 +245,21 @@ func (d agentDispatcher) Dispatch(ctx context.Context, c agent.Caller, req agent
 			if len(ids) == 0 {
 				return nil // this write transaction created no voucher
 			}
+			// ⛔ THE RUN MUST STILL BE LIVE, UNDER A ROW LOCK, IN THIS
+			// TRANSACTION. FOR SHARE makes a concurrent Cancel's UPDATE wait
+			// for this commit (the voucher then predates the cancel), and a
+			// Cancel that committed first is seen here and rolls the voucher
+			// back. The engine's per-step status read cannot close that gap.
+			if req.RunID != uuid.Nil {
+				var st string
+				if err := tx.QueryRow(ctx, `SELECT status FROM agent_run WHERE id = $1 FOR SHARE`, req.RunID).Scan(&st); err != nil {
+					return err
+				}
+				if st != "running" && st != "parked" {
+					runEnded = true
+					return fmt.Errorf("agent: run %s is %s; nothing it proposed may commit", req.RunID, st)
+				}
+			}
 			// ⛔ THE DELEGATED CEILING, ON WHAT THIS TRANSACTION ACTUALLY
 			// WROTE. The gate judged the ceiling on the preview; an approver's
 			// edited body is never previewed again, so this is the one place
@@ -325,6 +341,9 @@ func (d agentDispatcher) Dispatch(ctx context.Context, c agent.Caller, req agent
 			res.Effect = effect
 		}
 	case agent.ModeCommit:
+		if runEnded {
+			return agent.Result{Status: http.StatusConflict, Body: jsonError("agent: the run was cancelled; nothing it proposed may commit")}, nil
+		}
 		if overCeil != "" {
 			return agent.Result{Status: http.StatusForbidden, Body: jsonError("agent: " + overCeil)}, nil
 		}

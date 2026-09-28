@@ -7,12 +7,15 @@ package server_test
 // approver's edited body under the run creator's identity and cutoff only.
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 
+	"github.com/khata/cored/internal/agent"
+	"github.com/khata/cored/internal/policy"
 	"github.com/khata/cored/internal/server"
 )
 
@@ -136,4 +139,42 @@ func TestAgentApproverIsJudgedOnTheCommittedBody(t *testing.T) {
 			t.Fatal("the over-ceiling commit is not recorded as refused")
 		}
 	})
+}
+
+// TestAgentCancelStopsARunMidResume: the user cancels while a decide:k model
+// call is in flight (the fake model issues the cancel from inside its own
+// round trip). The same Resume must not go on to gate and commit — before the
+// fix it posted the voucher and the run page kept saying "cancelled".
+func TestAgentCancelStopsARunMidResume(t *testing.T) {
+	srv := newAgentServer(t)
+	b := newAgentBooks(t, srv)
+	setAutonomy(t, b.companyID, "create payment", policy.L3)
+	var runID string
+	cancelled := 0
+	s := func(t *testing.T, turn int, res []json.RawMessage) agent.ModelDecision {
+		if turn == 3 && cancelled == 0 {
+			rec, _ := do(t, srv, http.MethodPost, b.base+"/agent/runs/"+runID+"/cancel", nil)
+			cancelled = rec.Code
+		}
+		return paymentScript(t, turn, res)
+	}
+	model := scriptedModel(t, s)
+	srv.ConfigureAgent(server.AgentOptions{LLM: model.client(t)})
+	runID = startRun(t, srv, b, map[string]any{"instruction": cassetteCases[0].instruction, "delegate": []string{"create payment"}})
+	pollUntilQuiet(t, srv)
+	if cancelled != http.StatusOK {
+		t.Fatalf("cancel from inside the model call = %d, want 200 (the scenario did not happen)", cancelled)
+	}
+	if n := countVouchers(t, b.companyID); n != 0 {
+		t.Fatalf("a run cancelled mid-Resume committed %d voucher(s)", n)
+	}
+	if st := getRun(t, srv, b, runID)["status"]; st != "cancelled" {
+		t.Fatalf("status %v", st)
+	}
+	// The step guard, not only the commit's row lock, stopped it: no policy
+	// decision was even made after the cancel.
+	kinds := intentKinds(t, b.companyID, runID)
+	if strings.Contains(kinds, "policy") || strings.Contains(kinds, "commit") {
+		t.Fatalf("the run kept executing after the cancel: %s", kinds)
+	}
 }
