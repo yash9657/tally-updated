@@ -20,6 +20,7 @@ cored's ruleset (display only). cored re-derives authoritatively on POST.
 from __future__ import annotations
 
 import datetime as _dt
+import re
 import uuid
 from decimal import Decimal, InvalidOperation
 
@@ -43,7 +44,11 @@ from ..contracts.pipeline import (
     RedactionReport,
     TenantContext,
 )
+from ..provenance import ground, grounding_validations
+from ..redaction import recognizers
 from ..redaction.persistence import PersistGuard, assert_body_clean
+from ..validators.hsn import validate_line_hsn
+from ..validators.totals import validate_totals
 from . import tax as taxmod
 
 # --------------------------------------------------------------------------- #
@@ -60,6 +65,10 @@ OVERALL_FLOOR = 0.85
 # overall = min(bucket overalls), but weights document intent).
 HEADER_WEIGHT = 0.5
 LINE_WEIGHT = 0.5
+
+# "line[3].hsn" -> (3, "hsn"): a validator's field token, mapped onto the line
+# confidence map it lowers.
+_LINE_FIELD = re.compile(r"^line\[(\d+)\]\.(\w+)$")
 
 
 def _structural_defects(inferred: InferredInvoice, derived) -> list[str]:
@@ -153,7 +162,14 @@ class PureVoucherDraftMapper:
         mean_confidence: float,
         source: str,
         company_id: str,
+        ocr=None,
+        pre_validations=None,
     ) -> PurchaseVoucherDraft:
+        # ``ocr`` is the REDACTED OCR the model saw (for provenance), and
+        # ``pre_validations`` are checks that had to run BEFORE redaction — the
+        # GSTIN checksum, on the raw text (validators/gstin.py). Both optional so
+        # a caller that has neither still gets a draft; it just carries less
+        # evidence and every provenance entry is ungrounded.
         unresolved: list[str] = []
 
         # ⛔ THE PERSISTENCE BOUNDARY. Everything below that becomes a voucher
@@ -417,6 +433,65 @@ class PureVoucherDraftMapper:
         header_cm = self._header_confidence(
             inferred, cls, supplier_conf, party_ledger_id, derived_gst, pcf
         )
+
+        # --- W5: validators and provenance DECIDE confidence -------------
+        #
+        # ⛔ ONE-WAY. A failed check zeroes the field and names it in
+        # ``unresolved``; a passing check changes nothing (validators/__init__.py
+        # says why a pass is never a licence). This runs BEFORE the floor loop
+        # below so a zeroed field is caught by the same rule as a low one.
+        validations = list(pre_validations or [])
+        validations += validate_totals(inferred, derived)
+        known_hsn = set(ctx.known_hsn)
+        for idx, li in enumerate(inferred.line_items):
+            validations.append(validate_line_hsn(idx, li.hsn, known_hsn))
+
+        def _money(v):
+            # A money field that is not a number grounds nothing and must not
+            # carry its string into the draft: it is model output, unguarded.
+            try:
+                Decimal(str(v))
+                return str(v)
+            except (InvalidOperation, ValueError, TypeError):
+                return None
+
+        prov_fields = {
+            # A value the persistence guard had to scrub is not searched for:
+            # the placeholder is not on the bill, and the operator retypes it.
+            "invoice_no": ("text", None if "invoice_no" in guard.fields else body.voucher_no),
+            "invoice_date": ("date", inferred.invoice_date),
+            "supplier": ("text", party_name),
+            "totals": ("money", _money(inferred.totals.invoice_total)),
+        }
+        for idx, li in enumerate(inferred.line_items):
+            prov_fields[f"line[{idx}].taxable_value"] = ("money", _money(li.taxable_value))
+            prov_fields[f"line[{idx}].hsn"] = ("text", gst_lines[idx].hsn)
+        provenance = ground(prov_fields, ocr, inferred.field_evidence)
+        # Belt and braces on the persistence boundary: no provenance value may
+        # carry PII, whatever route it took to get here.
+        for p in provenance.values():
+            if p.value is not None and recognizers.any_pii(p.value):
+                p.value = None
+        validations += grounding_validations(provenance, ocr)
+
+        for v in validations:
+            if v.outcome != "fail":
+                continue
+            m = _LINE_FIELD.match(v.field)
+            if v.field in header_cm:
+                old = header_cm[v.field]
+                header_cm[v.field] = FieldConfidence(
+                    value_present=old.value_present, confidence=0.0, source="derived"
+                )
+            elif m and int(m.group(1)) < len(line_conf_maps) and m.group(2) in line_conf_maps[int(m.group(1))]:
+                i, key = int(m.group(1)), m.group(2)
+                old = line_conf_maps[i][key]
+                line_conf_maps[i][key] = FieldConfidence(
+                    value_present=old.value_present, confidence=0.0, source="derived"
+                )
+            if v.field not in unresolved:
+                unresolved.append(v.field)
+
         for key, fc in header_cm.items():
             if fc.confidence < HEADER_FIELD_FLOOR or not fc.value_present:
                 if key not in unresolved:
@@ -479,6 +554,8 @@ class PureVoucherDraftMapper:
             ),
             unresolved=unresolved,
             derived_gst=derived_gst,
+            validations=validations,
+            provenance=provenance,
         )
 
     # ------------------------------------------------------------------ #

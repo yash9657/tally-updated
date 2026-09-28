@@ -1,0 +1,369 @@
+{
+ "fixture": "intra-state-18-1line-clean",
+ "request": {
+  "messages": [
+   {
+    "content": "You extract a structured purchase invoice from REDACTED Indian-invoice OCR text (PAN/GSTIN/Aadhaar/IFSC appear as <<TYPE:hash>> tags; never emit a raw one). Return ONLY JSON matching the schema. Extract line items, HSN/SAC, taxable values, GST rate %, place of supply, reverse charge, the printed totals and any printed round-off. DO NOT compute CGST/SGST/IGST \u2014 they are re-derived downstream. Copy numbers exactly as printed; do not correct a number you cannot read \u2014 leave it null. Map each line to a ledger from the tenant chart of accounts by id.",
+    "role": "system"
+   },
+   {
+    "content": "OCR (redacted):\nTAX INVOICE\nInvoice No: INV-2025-0042\nDate: 2025-05-11\nSupplier: Acme Components Pvt Ltd\nGSTIN: <<GSTIN:1792>>\nPAN: <<PAN:a8c6>>\nAadhaar: <<AADHAAR:bbcb>>\nBank IFSC: <<IFSC:0f62>>\nPlace of Supply: 27\nSteel widgets HSN 8471 qty 2.0000 rate 500.0000 1000.0000 @ 18.0000%\n\nTenant chart of accounts (masked): [{\"ledger_id\": \"L-PARTY-1\", \"name\": \"Acme Components Pvt Ltd\", \"kind\": \"party\"}, {\"ledger_id\": \"L-PUR-RM\", \"name\": \"Purchase - Raw Material\", \"kind\": \"purchase\"}, {\"ledger_id\": \"L-PUR-CONS\", \"name\": \"Purchase - Consumables\", \"kind\": \"purchase\"}, {\"ledger_id\": \"L-PUR-SVC\", \"name\": \"Purchase - Services\", \"kind\": \"purchase\"}, {\"ledger_id\": \"L-CGST\", \"name\": \"Input CGST\", \"kind\": \"tax\"}, {\"ledger_id\": \"L-SGST\", \"name\": \"Input SGST\", \"kind\": \"tax\"}, {\"ledger_id\": \"L-IGST\", \"name\": \"Input IGST\", \"kind\": \"tax\"}]\n\nClassifier supplier match: {\"ledger_id\": \"L-PARTY-1\", \"name\": \"Acme Components Pvt Ltd\", \"gstin_masked\": \"<<GSTIN:1792>>\", \"match_confidence\": 0.98, \"candidate_ledger_ids\": []}",
+    "role": "user"
+   }
+  ],
+  "model": "accounts/fireworks/models/qwen3p8-27b-instruct",
+  "response_format": {
+   "json_schema": {
+    "name": "inferred_invoice",
+    "schema": {
+     "$defs": {
+      "FieldEvidence": {
+       "additionalProperties": false,
+       "description": "Where the MODEL says it read a field \u2014 carried, never trusted.\n\nAn image-native model (the open-weight adapter's contract) can return the\npage and box it read a value from. provenance.py prefers its own\ndeterministic OCR search and uses this only when that search finds nothing,\nmarking the result ``source=\"model\"`` and ungrounded.",
+       "properties": {
+        "bbox": {
+         "items": {
+          "type": "number"
+         },
+         "title": "Bbox",
+         "type": "array"
+        },
+        "page": {
+         "title": "Page",
+         "type": "integer"
+        }
+       },
+       "required": [
+        "page",
+        "bbox"
+       ],
+       "title": "FieldEvidence",
+       "type": "object"
+      },
+      "InferredTotals": {
+       "additionalProperties": false,
+       "description": "LLM-reported totals. NOTE: cgst/sgst/igst here are NOT trusted \u2014 the\nmapper RE-derives them against cored's ruleset. Only taxable + invoice_total\nare echoed for a sanity/foot check.",
+       "properties": {
+        "cgst": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "default": null,
+         "title": "Cgst"
+        },
+        "igst": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "default": null,
+         "title": "Igst"
+        },
+        "invoice_total": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "default": null,
+         "title": "Invoice Total"
+        },
+        "round_off": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "default": null,
+         "title": "Round Off"
+        },
+        "sgst": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "default": null,
+         "title": "Sgst"
+        },
+        "taxable": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "default": null,
+         "title": "Taxable"
+        }
+       },
+       "title": "InferredTotals",
+       "type": "object"
+      },
+      "LedgerGuess": {
+       "additionalProperties": false,
+       "properties": {
+        "confidence": {
+         "default": 0.0,
+         "title": "Confidence",
+         "type": "number"
+        },
+        "ledger_id": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "default": null,
+         "title": "Ledger Id"
+        },
+        "name": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "default": null,
+         "title": "Name"
+        }
+       },
+       "title": "LedgerGuess",
+       "type": "object"
+      },
+      "LineItem": {
+       "additionalProperties": false,
+       "properties": {
+        "description": {
+         "title": "Description",
+         "type": "string"
+        },
+        "gst_rate_pct": {
+         "title": "Gst Rate Pct",
+         "type": "string"
+        },
+        "hsn": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "default": null,
+         "title": "Hsn"
+        },
+        "ledger_guess": {
+         "$ref": "#/$defs/LedgerGuess",
+         "default": {
+          "confidence": 0.0,
+          "ledger_id": null,
+          "name": null
+         }
+        },
+        "qty": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "default": null,
+         "title": "Qty"
+        },
+        "rate": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "default": null,
+         "title": "Rate"
+        },
+        "taxable_value": {
+         "title": "Taxable Value",
+         "type": "string"
+        },
+        "unit": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "default": null,
+         "title": "Unit"
+        }
+       },
+       "required": [
+        "description",
+        "taxable_value",
+        "gst_rate_pct"
+       ],
+       "title": "LineItem",
+       "type": "object"
+      }
+     },
+     "additionalProperties": false,
+     "properties": {
+      "exempt": {
+       "default": false,
+       "title": "Exempt",
+       "type": "boolean"
+      },
+      "field_evidence": {
+       "additionalProperties": {
+        "$ref": "#/$defs/FieldEvidence"
+       },
+       "default": {},
+       "title": "Field Evidence",
+       "type": "object"
+      },
+      "invoice_date": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Invoice Date"
+      },
+      "invoice_no": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Invoice No"
+      },
+      "line_items": {
+       "default": [],
+       "items": {
+        "$ref": "#/$defs/LineItem"
+       },
+       "title": "Line Items",
+       "type": "array"
+      },
+      "per_field_confidence": {
+       "additionalProperties": {
+        "type": "number"
+       },
+       "default": {},
+       "title": "Per Field Confidence",
+       "type": "object"
+      },
+      "place_of_supply_state_code": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Place Of Supply State Code"
+      },
+      "reverse_charge": {
+       "default": false,
+       "title": "Reverse Charge",
+       "type": "boolean"
+      },
+      "supplier_gstin_masked": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Supplier Gstin Masked"
+      },
+      "totals": {
+       "$ref": "#/$defs/InferredTotals",
+       "default": {
+        "cgst": null,
+        "igst": null,
+        "invoice_total": null,
+        "round_off": null,
+        "sgst": null,
+        "taxable": null
+       }
+      }
+     },
+     "title": "InferredInvoice",
+     "type": "object"
+    },
+    "strict": true
+   },
+   "type": "json_schema"
+  },
+  "temperature": 0
+ },
+ "request_sha256": "96ead1113fa9565710ced494e010ac3825ad1728913689ed457fe94935448595",
+ "responses": [
+  {
+   "choices": [
+    {
+     "finish_reason": "stop",
+     "index": 0,
+     "message": {
+      "content": "{\"invoice_no\": \"INV-2025-0042\", \"invoice_date\": \"2025-05-11\", \"supplier_gstin_masked\": null, \"place_of_supply_state_code\": \"27\", \"reverse_charge\": false, \"exempt\": false, \"line_items\": [{\"description\": \"Steel widgets\", \"hsn\": \"8471\", \"qty\": \"2.0000\", \"unit\": null, \"rate\": \"500.0000\", \"taxable_value\": \"1000.0000\", \"gst_rate_pct\": \"18.0000\", \"ledger_guess\": {\"ledger_id\": \"L-PUR-RM\", \"name\": \"Steel widgets\", \"confidence\": 0.95}}], \"totals\": {\"taxable\": \"1000.0000\", \"invoice_total\": \"1180.0000\"}, \"per_field_confidence\": {\"invoice_no\": 0.97, \"invoice_date\": 0.96, \"place_of_supply_state_code\": 0.95}, \"field_evidence\": {\"totals\": {\"page\": 0, \"bbox\": [400, 620, 560, 640]}}}",
+      "role": "assistant"
+     }
+    }
+   ],
+   "id": "cmpl-synthetic-w5",
+   "model": "accounts/fireworks/models/qwen3p8-27b-instruct",
+   "object": "chat.completion",
+   "usage": {
+    "completion_tokens": 214,
+    "prompt_tokens": 812,
+    "total_tokens": 1026
+   }
+  }
+ ],
+ "synthetic": true
+}

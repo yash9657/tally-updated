@@ -35,7 +35,7 @@ def aadhaar(prefix11: str) -> str:
 
 def tenant(home_state: str = "27", extra_party: bool = False) -> dict:
     ledgers = [
-        {"id": "L-PARTY-1", "name": "Acme Components Pvt Ltd", "gstin_masked": "27ABC…1Z5", "state_code": "27", "kind": "party"},
+        {"id": "L-PARTY-1", "name": "Acme Components Pvt Ltd", "gstin_masked": "27ABC…1Z0", "state_code": "27", "kind": "party"},
         {"id": "L-PUR-RM", "name": "Purchase - Raw Material", "kind": "purchase"},
         {"id": "L-PUR-CONS", "name": "Purchase - Consumables", "kind": "purchase"},
         {"id": "L-PUR-SVC", "name": "Purchase - Services", "kind": "purchase"},
@@ -45,7 +45,7 @@ def tenant(home_state: str = "27", extra_party: bool = False) -> dict:
     ]
     if extra_party:
         ledgers.append(
-            {"id": "L-PARTY-2", "name": "Acme Components (Mumbai)", "gstin_masked": "27ABC…1Z5", "state_code": "27", "kind": "party"}
+            {"id": "L-PARTY-2", "name": "Acme Components (Mumbai)", "gstin_masked": "27ABC…1Z0", "state_code": "27", "kind": "party"}
         )
     return {
         "company_id": "CO-DEMO",
@@ -98,7 +98,7 @@ def make(
         classify = {"doc_type": "purchase_invoice", "is_purchase": True, "supplier_ledger_id": "L-PARTY-1"}
 
     planted = {
-        "GSTIN": ["27ABCDE1234F1Z5"],
+        "GSTIN": ["27ABCDE1234F1Z0"],
         "PAN": ["ABCDE1234F"],
         "AADHAAR": [aadhaar("12345678901")],
         "IFSC": ["HDFC0001234"],
@@ -112,7 +112,7 @@ def make(
     ]
     if plant_pii:
         ocr_lines += [
-            {"text": "GSTIN: 27ABCDE1234F1Z5", "bbox": [10, 130, 300, 150], "confidence": 0.96},
+            {"text": "GSTIN: 27ABCDE1234F1Z0", "bbox": [10, 130, 300, 150], "confidence": 0.96},
             {"text": "PAN: ABCDE1234F", "bbox": [10, 160, 250, 180], "confidence": 0.96},
             {"text": f"Aadhaar: {planted['AADHAAR'][0]}", "bbox": [10, 190, 320, 210], "confidence": 0.95},
             {"text": "Bank IFSC: HDFC0001234", "bbox": [10, 220, 320, 240], "confidence": 0.95},

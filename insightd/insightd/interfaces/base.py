@@ -73,4 +73,6 @@ class VoucherDraftMapper(Protocol):
         mean_confidence: float,
         source: str,
         company_id: str,
+        ocr: RedactedOCR | None = None,
+        pre_validations: list | None = None,
     ) -> PurchaseVoucherDraft: ...

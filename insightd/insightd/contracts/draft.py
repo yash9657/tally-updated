@@ -80,6 +80,59 @@ class ConfidenceMap(BaseModel):
     overall: float
 
 
+ValidationOutcome = Literal["pass", "fail", "unverified", "not_run"]
+
+
+class Validation(BaseModel):
+    """One deterministic check's verdict on the draft (W5; validators/).
+
+    ``fail`` LOWERS the named field to unresolved; ``pass`` confirms and never
+    raises; ``unverified`` is a check that ran against incomplete reference data
+    (an HSN this company has not used, with no directory loaded) and is shown,
+    not acted on; ``not_run`` is a check with nothing to check — reported so its
+    silence is not read as a pass.
+
+    ⛔ ``detail`` IS COUNTS AND ARITHMETIC, NEVER A RAW IDENTIFIER. The GSTIN
+    check runs on the raw OCR and reports how many GSTINs failed, not which.
+    """
+
+    model_config = _FORBID
+
+    check: str
+    outcome: ValidationOutcome
+    # The draft field the verdict is about ("supplier", "totals",
+    # "line[0].hsn", "duplicate") — the same tokens ``unresolved`` uses.
+    field: str
+    detail: str = ""
+    # For duplicate_bill: the other drafts this one duplicates.
+    related_draft_ids: list[str] = []
+
+
+class FieldProvenance(BaseModel):
+    """WHERE ON THE DOCUMENT a draft field came from (W5).
+
+    ``page``/``bbox`` locate the OCR line the value was found on, so the Bill
+    Inbox can put the operator's eye on the evidence instead of the whole page.
+    ``grounded`` is True only when the value was FOUND in the OCR text by
+    provenance.py's deterministic search; a location the model merely claimed
+    (``source="model"``) is carried but not trusted. ``confidence`` is that OCR
+    line's recogniser confidence when grounded, else 0.
+
+    ⛔ ``value`` IS THE PERSISTED DRAFT VALUE (already through the persistence
+    guard), never the OCR text: a PAN on the same line as an invoice number must
+    not ride into the draft via its provenance.
+    """
+
+    model_config = _FORBID
+
+    value: str | None = None
+    page: int | None = None  # 0-based page index
+    bbox: list[float] | None = None  # [x0, y0, x1, y1] in the page's pixel space
+    confidence: float = 0.0
+    grounded: bool = False
+    source: Literal["ocr", "model", "none"] = "none"
+
+
 class RedactionReportSummary(BaseModel):
     """Counts only — proves PII was scrubbed; carries NO raw values."""
 
@@ -171,3 +224,13 @@ class PurchaseVoucherDraft(BaseModel):
     claimed_by: str | None = None  # display-only label ("who/what is posting it")
     claimed_at: str | None = None  # ISO-8601 UTC
     claim_expires_at: str | None = None  # ISO-8601 UTC; past == no live claim
+
+    # --- W5: the evidence behind the numbers ----------------------------------
+    #
+    # ``validations`` is every deterministic check's verdict (validators/), and
+    # ``provenance`` maps a field path ("invoice_no", "invoice_date", "totals",
+    # "line[0].taxable_value") to where on the document it was found. Both
+    # DEFAULT EMPTY so a draft stored before W5 still rehydrates under
+    # ``extra='forbid'`` (pg_store validates the stored jsonb strictly).
+    validations: list[Validation] = []
+    provenance: dict[str, FieldProvenance] = {}
