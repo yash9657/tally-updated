@@ -79,6 +79,13 @@ CREATE TABLE IF NOT EXISTS entity_facts (
     -- fact_key is a CODE identifier from internal/profile's closed vocabulary
     -- ('receivable_outstanding', 'dso_days', 'abc_class' ...). Never free text.
     fact_key      TEXT NOT NULL,
+    -- The fact's QUALIFIER, '' when it has none: the item a supplier's price
+    -- drift is about, the month a tenant's sales figure is for. It is part of
+    -- the identity (the unique index below), which is why it is NOT NULL with
+    -- '' rather than NULL — a NULL would make two "current" rows for one fact
+    -- legal, since NULLs are distinct in a unique index.
+    qualifier_key  TEXT NOT NULL DEFAULT '',
+    qualifier_name TEXT NOT NULL DEFAULT '',
     -- Exactly one of the two is set: a number, or a class from a closed
     -- vocabulary written by Go. value_num is NUMERIC(19,4) because money
     -- facts are money; days and quantities share the column and `unit` says
@@ -142,7 +149,7 @@ CREATE TABLE IF NOT EXISTS entity_facts (
 -- as-of supersedes; two concurrent jobs racing to write the same fact collide
 -- here instead of both becoming "current".
 CREATE UNIQUE INDEX IF NOT EXISTS entity_facts_one_current
-    ON entity_facts (company_id, entity_kind, entity_key, fact_key, valid_from)
+    ON entity_facts (company_id, entity_kind, entity_key, fact_key, qualifier_key, valid_from)
     WHERE superseded_at IS NULL;
 CREATE INDEX IF NOT EXISTS entity_facts_lookup
     ON entity_facts (company_id, entity_kind, entity_key)

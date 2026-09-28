@@ -693,9 +693,12 @@ var entities = map[Entity]entityDef{
 			"entity_kind": "f.entity_kind",
 			"entity_name": "f.entity_name",
 			"fact_key":    "f.fact_key",
-			"unit":        "f.unit",
-			"value_text":  "COALESCE(f.value_text,'')",
-			"as_of":       "to_char(f.valid_from,'YYYY-MM-DD')",
+			// The item a supplier's price drift is about, the month a sales
+			// figure is for; '' when the fact has none.
+			"qualifier_name": "f.qualifier_name",
+			"unit":           "f.unit",
+			"value_text":     "COALESCE(f.value_text,'')",
+			"as_of":          "to_char(f.valid_from,'YYYY-MM-DD')",
 		},
 		metrics: map[string]metricCol{
 			// NULL for a class fact; SUM COALESCEs, MIN/MAX/AVG stay NULL -> ""
@@ -704,10 +707,11 @@ var entities = map[Entity]entityDef{
 			"value": {rawExpr: "f.value_num", aggs: numericAggs()},
 		},
 		filters: map[string]filterCol{
-			"entity_kind": {expr: "f.entity_kind", ops: enumOps(), valType: valueEntityKind},
-			"entity_name": {expr: "f.entity_name", ops: nameOps(), valType: valueAny},
-			"fact_key":    {expr: "f.fact_key", ops: nameOps(), valType: valueAny},
-			"value_text":  {expr: "f.value_text", ops: nameOps(), valType: valueAny},
+			"entity_kind":    {expr: "f.entity_kind", ops: enumOps(), valType: valueEntityKind},
+			"entity_name":    {expr: "f.entity_name", ops: nameOps(), valType: valueAny},
+			"fact_key":       {expr: "f.fact_key", ops: nameOps(), valType: valueAny},
+			"qualifier_name": {expr: "f.qualifier_name", ops: nameOps(), valType: valueAny},
+			"value_text":     {expr: "f.value_text", ops: nameOps(), valType: valueAny},
 		},
 		dateCols: map[string]string{
 			"as_of": "f.valid_from",

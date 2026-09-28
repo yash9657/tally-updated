@@ -249,6 +249,13 @@ var allowedDeps = map[string]map[string]bool{
 	// catalogue is NOT inside internal/query (whose set must stay
 	// {platform/db} — see the ⛔ note on internal/nlq above).
 	"internal/catalogue": {"internal/authz": true, "internal/query": true, "internal/actions": true},
+	// W3's entity profiles. reporting because a money fact a report prints is
+	// TAKEN from that report, never re-derived (the D20/D51 lesson — see
+	// profile/vocabulary.go); query because every profile tool has a DSL
+	// twin over the profile_facts entity. No llm, no network: the feature
+	// jobs are deterministic Go, and the ≤400-token LLM narratives the plan
+	// mentions are owed to a package that may import internal/llm.
+	"internal/profile": {"internal/platform/db": true, "internal/reporting": true, "internal/query": true},
 	// trajectory (W0/D2) is the agent plane's span recorder: it holds the span
 	// tree, the OTLP/HTTP exporter written in stdlib, and the replay cassettes.
 	// THE EMPTY MAP IS THE POLICY, not an omission, and it is load-bearing in

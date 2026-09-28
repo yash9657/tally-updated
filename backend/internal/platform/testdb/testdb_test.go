@@ -637,6 +637,31 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 			VALUES ($1, $2, DATE '2026-09-01', 'fixture.feature', 1000000, 0, 1200, 800, 300, 4, 1)`,
 			[]any{id(), cid}},
 
+		// W3 — the entity facts, edges and tenant card (migration 0096). No
+		// foreign keys, so, like llm_token_budget, their position exercises
+		// nothing about delete ORDER. The values satisfy every named CHECK
+		// (exactly one of value_num/value_text, a known unit/source/kind, the
+		// tenant row with no entity_id, a token estimate under the 1500 cap).
+		// ⚠️ The teardown can delete them only because replica mode disarms
+		// w3_only_supersede — tally_app has no DELETE grant on any of the
+		// three, by design.
+		{"entity_facts", `INSERT INTO entity_facts
+			(id, company_id, entity_kind, entity_key, entity_name, fact_key, value_num, unit,
+			 source, job, job_version, valid_from)
+			VALUES ($1, $2, 'tenant', 'tenant', 'company', 'receivables_total', 100, 'inr',
+			        'computed', 'tenant.runrate', 'fixture', DATE '2026-03-31')`,
+			[]any{id(), cid}},
+		{"entity_edges", `INSERT INTO entity_edges
+			(id, company_id, src_kind, src_key, src_name, dst_kind, dst_key, dst_name, edge_kind,
+			 weight, source, job, job_version, valid_from)
+			VALUES ($1, $2, 'party', 's', 'Supplier', 'item', 'i', 'Item', 'supplies_item',
+			        10, 'computed', 'party.supplier', 'fixture', DATE '2026-03-31')`,
+			[]any{id(), cid}},
+		{"tenant_profile", `INSERT INTO tenant_profile
+			(id, company_id, version, as_of, body, body_json, token_estimate, job_version)
+			VALUES ($1, $2, 1, DATE '2026-03-31', 'fixture card', '{}'::jsonb, 4, 'fixture')`,
+			[]any{id(), cid}},
+
 		// TEXT company_id. This is the row that the "AND data_type='uuid'"
 		// mutation orphans, and the reason the enumeration query must not filter
 		// on type.
