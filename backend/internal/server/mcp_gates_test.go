@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -564,5 +565,51 @@ func TestMCPRevokingAGrantStopsItsRuns(t *testing.T) {
 	gs, _ := list["grants"].([]any)
 	if len(gs) != 1 || gs[0].(map[string]any)["revoked_at"] == nil {
 		t.Fatalf("grants after revocation: %v", list)
+	}
+}
+
+// TestMCPIdleRunNeverAsksAModel: an MCP run's decide step PARKS when no call
+// is supplied, so the poller visiting it — however often — records nothing
+// and calls no model. The control: an in-app run labelled channel "mcp"
+// through POST /agent/runs is still model-driven, because the agent id (never
+// caller-chosen), not the channel label, is what makes a run external.
+func TestMCPIdleRunNeverAsksAModel(t *testing.T) {
+	srv := newAgentServer(t)
+	b := newAgentBooks(t, srv)
+	clock := &fixedClock{}
+	clock.Set(time.Now().UTC())
+	model := scriptedModel(t, func(t *testing.T, turn int, _ []json.RawMessage) agent.ModelDecision {
+		return finish("nothing to do")
+	})
+	srv.ConfigureAgent(server.AgentOptions{LLM: model.client(t), Now: clock.Now})
+	grant := createMCPGrant(t, srv, b.base, []string{"create payment"}, nil)
+	c := newMCPClient(t, srv, b.base, grant, ownerToken(t, srv))
+	c.initialize("2025-06-18")
+	runID := sessionRunID(t, c)
+	for i := 0; i < 5; i++ {
+		pollUntilQuiet(t, srv)
+		clock.Set(clock.Now().Add(2 * time.Minute))
+	}
+	if model.calls != 0 {
+		t.Fatalf("an idle MCP run asked the model %d time(s)", model.calls)
+	}
+	if n := runDecisions(t, b.companyID, runID); n != 0 {
+		t.Fatalf("an idle MCP run recorded %d decision(s)", n)
+	}
+	if st := getRun(t, srv, b, runID)["status"]; st != "parked" {
+		t.Fatalf("idle MCP run status %v, want parked", st)
+	}
+	// The session still works after all that polling.
+	if r := c.tool("get_ledgers", map[string]any{}); r.isError() {
+		t.Fatalf("after idle polls: %s", r.raw)
+	}
+
+	inApp := startRun(t, srv, b, map[string]any{"instruction": "Nothing, just finish.", "channel": "mcp"})
+	pollUntilQuiet(t, srv)
+	if model.calls != 1 {
+		t.Fatalf("an in-app run labelled channel mcp made %d model calls, want 1", model.calls)
+	}
+	if st := getRun(t, srv, b, inApp)["status"]; st != "completed" {
+		t.Fatalf("in-app run status %v", st)
 	}
 }
