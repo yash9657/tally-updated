@@ -685,8 +685,9 @@ half is owed (§B.9). The "model" is the trace replayer (no provider keys exist)
 | frontend | `pnpm exec tsc --noEmit`; `pnpm exec vitest run` | exit 0; **Test Files 127 passed (127), Tests 2032 passed (2032)** |
 | corpora | `python3 corpora/validate.py` | `keystroke=40` (+2: Gateway and Alt+G doors to `agent-settings`) |
 
-Full-suite and build figures for the lane's HEAD are in the lane report (`go build ./... && go vet ./...`
-clean; `go test ./... -p 4` on `tally_w2_breadth`).
+At the lane's HEAD: `cd backend && go build ./... && go vet ./...` clean; `go test ./... -count=1 -p 4
+-timeout 60m` with all four DSN envs on `tally_w2_breadth` (pre-migrated): **exit 0, 47 packages ok, 7 with no
+test files** (server 75 s, evals/tau 35 s); `make tier0` ok.
 
 ### B.8 Mutation proofs run in this session (each restored after; `scratchpad/w2b_mutate.py`)
 
