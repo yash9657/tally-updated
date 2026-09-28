@@ -355,6 +355,15 @@ var allowedDeps = map[string]map[string]bool{
 	// handed and reaches no sibling, so the hash-chain code can be read and
 	// re-implemented by an auditor without reading anything else in the tree.
 	"internal/intentlog": {},
+	// policy (W2, D121) decides what an agent may do: structural rules, the
+	// agent's own ACL, delegation, autonomy, the provenance gate. It imports
+	// authz FOR THE EVALUATOR — ACL(agent) is authz.Evaluate over AgentRules,
+	// not a second evaluator — and actions for the typed registry rows whose
+	// Risk it keys on. ⛔ NOT internal/server (the router is where ACL(user)
+	// is judged, and policy is consulted from there, never the reverse) and
+	// NOT internal/llm: a policy that could ask a model is a policy a prompt
+	// injection can argue with.
+	"internal/policy": {"internal/authz": true, "internal/actions": true},
 	// statutory/rules is the PURE statutory leaf, and its empty allowed set is
 	// load-bearing in BOTH directions.
 	//
