@@ -2892,9 +2892,15 @@ type voucherReq struct {
 	// reason Inventory and CostAllocations are: syncIntentReq.Payload IS a
 	// voucherReq and buildVoucherInput is the single translator, so an accept
 	// replayed from an offline node keeps its once-only key for free.
-	DraftID string  `json:"draft_id"`
-	GST     *gstReq `json:"gst"`
-	TDS     *tdsReq `json:"tds"`
+	DraftID string `json:"draft_id"`
+	// IdempotencyKey names THIS REQUEST (W5, migration 0100): a retry under
+	// the same key and body is answered with the first request's result instead
+	// of posting a second voucher. Also accepted as the Idempotency-Key header;
+	// carried in the body too because syncIntentReq.Payload IS a voucherReq, so
+	// an outbox replay keeps its key without a second transport.
+	IdempotencyKey string  `json:"idempotency_key"`
+	GST            *gstReq `json:"gst"`
+	TDS            *tdsReq `json:"tds"`
 	// TCS is the collection-side mirror, honoured on Sales only. It carries no
 	// exemption flag: a s.394(2) declaration is read from the declarations table
 	// inside the post transaction, never asserted here.
@@ -2913,6 +2919,17 @@ func (s *Server) postVoucher(class ledger.Class) http.HandlerFunc {
 		if !decodeJSON(w, r, &req) {
 			return
 		}
+		// The header and the body field are ONE key. Both present and different
+		// is refused: silently preferring one would replay (or not) on a key the
+		// caller did not mean.
+		if h := strings.TrimSpace(r.Header.Get("Idempotency-Key")); h != "" {
+			if req.IdempotencyKey != "" && req.IdempotencyKey != h {
+				writeError(w, http.StatusBadRequest,
+					"the Idempotency-Key header and the body's idempotency_key disagree; send one")
+				return
+			}
+			req.IdempotencyKey = h
+		}
 		in, ok := buildVoucherInput(w, class, req)
 		if !ok {
 			return
@@ -2921,6 +2938,20 @@ func (s *Server) postVoucher(class ledger.Class) http.HandlerFunc {
 		if err != nil {
 			if errors.Is(err, db.ErrNoCompany) {
 				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			if errors.Is(err, ledger.ErrBadIdempotencyKey) {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			// THE SAME KEY, A DIFFERENT REQUEST. 422 with a machine-readable code,
+			// because a client must not retry this under the same key — and must
+			// not read it as "posted".
+			if errors.Is(err, ledger.ErrIdempotencyKeyReused) {
+				writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+					"error": err.Error(),
+					"code":  "idempotency_key_reused",
+				})
 				return
 			}
 			// THE DUPLICATED AI BILL — 409, not 422, and in insightd's OWN refusal
@@ -2933,7 +2964,15 @@ func (s *Server) postVoucher(class ledger.Class) http.HandlerFunc {
 			writeError(w, http.StatusUnprocessableEntity, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusCreated, voucherResultJSON(res))
+		out := voucherResultJSON(res)
+		if res.Replayed {
+			// A REPLAY IS THE ORIGINAL ANSWER, SAID AGAIN — same status, same
+			// voucher — and it SAYS it is a replay, so a client can tell the
+			// operator "already posted as No. 5" rather than "saved".
+			out["idempotent_replay"] = true
+			w.Header().Set("Idempotent-Replayed", "true")
+		}
+		writeJSON(w, http.StatusCreated, out)
 	}
 }
 
@@ -3794,6 +3833,8 @@ func buildVoucherInput(w http.ResponseWriter, class ledger.Class, req voucherReq
 		// 0077's CHECK refuses the empty string; nullIfEmpty in the ledger maps ""
 		// to NULL before it can get there.
 		SourceDraftID: req.DraftID,
+		// Validated in the ledger (shape) and honoured on CREATE only.
+		IdempotencyKey: req.IdempotencyKey,
 	}
 	var err error
 	if in.VoucherTypeID, err = optionalUUID(req.VoucherTypeID); err != nil {
