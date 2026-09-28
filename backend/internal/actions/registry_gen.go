@@ -17,7 +17,7 @@ package actions
 var Source = Provenance{
 	RouteArms:         244,
 	UICommandsJoined:  0,
-	ClientCallsJoined: 170,
+	ClientCallsJoined: 176,
 	ClientCallsUnused: 10,
 	UIManifestPresent: true,
 	UIManifestPath:    "frontend/src/api/goldens/ui-commands.json",
@@ -175,7 +175,8 @@ var Specs = []ActionSpec{
 		IsWrite:        false,
 		StepUpEligible: false,
 		Risk:           "governance",
-		Channel:        "none",
+		Channel:        "client",
+		UICommand:      "client.verifyAgentAnchors",
 		Label:          "display agent-run (GET /v1/companies/{companyID}/agent/anchors/verify)",
 	},
 	{
@@ -216,7 +217,8 @@ var Specs = []ActionSpec{
 		IsWrite:        false,
 		StepUpEligible: false,
 		Risk:           "governance",
-		Channel:        "none",
+		Channel:        "client",
+		UICommand:      "client.listAgentAutonomy",
 		Label:          "display agent-autonomy (GET /v1/companies/{companyID}/agent/autonomy)",
 	},
 	{
@@ -271,7 +273,8 @@ var Specs = []ActionSpec{
 		IsWrite:        false,
 		StepUpEligible: false,
 		Risk:           "governance",
-		Channel:        "none",
+		Channel:        "client",
+		UICommand:      "client.verifyAgentRun",
 		Label:          "display agent-run (GET /v1/companies/{companyID}/agent/runs/{runID}/verify)",
 	},
 	{
@@ -2216,7 +2219,8 @@ var Specs = []ActionSpec{
 		IsWrite:        true,
 		StepUpEligible: true,
 		Risk:           "governance",
-		Channel:        "none",
+		Channel:        "client",
+		UICommand:      "client.previewAgentEdit",
 		Label:          "alter agent-approval (POST /v1/companies/{companyID}/agent/approvals/{approvalID}/preview)",
 	},
 	{
@@ -2657,7 +2661,8 @@ var Specs = []ActionSpec{
 		IsWrite:        true,
 		StepUpEligible: true,
 		Risk:           "governance",
-		Channel:        "none",
+		Channel:        "client",
+		UICommand:      "client.unblockLedger",
 		Label:          "alter master-unblock (POST /v1/companies/{companyID}/ledgers/{ledgerID}/unblock)",
 	},
 	{
@@ -3102,7 +3107,8 @@ var Specs = []ActionSpec{
 		IsWrite:        true,
 		StepUpEligible: true,
 		Risk:           "governance",
-		Channel:        "none",
+		Channel:        "client",
+		UICommand:      "client.setAgentAutonomy",
 		Label:          "alter agent-autonomy (PUT /v1/companies/{companyID}/agent/autonomy)",
 	},
 	{

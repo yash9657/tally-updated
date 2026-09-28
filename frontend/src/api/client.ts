@@ -172,6 +172,12 @@ import type {
   AgentApprovalResponse,
   AgentApprovalsResponse,
   AgentDecisionRequest,
+  AgentAutonomyResponse,
+  AgentEditPreviewResponse,
+  AgentVerifyAnchorsResponse,
+  AgentVerifyRunResponse,
+  SetAgentAutonomyRequest,
+  UnblockLedgerResponse,
   AgentEventsResponse,
   AgentRunResponse,
   AgentRunsResponse,
@@ -1967,4 +1973,34 @@ export interface CoredClient {
     approvalID: string,
     req: AgentDecisionRequest,
   ): Promise<AgentApprovalResponse>;
+
+  // ---- W2 BREADTH (D121 "Wave 2 breadth") -------------------------------
+
+  /**
+   * Dry-run an approver's edited body against the approval's action (`alter
+   * agent-approval`): the effect the approver will be approving, drawn by the
+   * server's real handler. 422 EDIT_REFUSED carries the validators' sentence.
+   */
+  previewAgentEdit(
+    companyID: string,
+    approvalID: string,
+    editedBody: Record<string, unknown>,
+  ): Promise<AgentEditPreviewResponse>;
+  /** The autonomy table (`display agent-autonomy`, Owners only). */
+  listAgentAutonomy(companyID: string): Promise<AgentAutonomyResponse>;
+  /**
+   * Set one autonomy row (`alter agent-autonomy`). Owners only, ALWAYS with a
+   * WebAuthn step-up (403 STEPUP_REQUIRED otherwise, which the transport's
+   * step-up retry answers).
+   */
+  setAgentAutonomy(companyID: string, req: SetAgentAutonomyRequest): Promise<AgentAutonomyResponse>;
+  /** Recompute one run's intent chain. */
+  verifyAgentRun(companyID: string, runID: string): Promise<AgentVerifyRunResponse>;
+  /** Recompute every intent-log anchor of the company. */
+  verifyAgentAnchors(companyID: string): Promise<AgentVerifyAnchorsResponse>;
+  /**
+   * Release an agent-created ledger for posting (`alter master-unblock`, a
+   * person's act only). 409 NOT_BLOCKED when it is not blocked.
+   */
+  unblockLedger(companyID: string, ledgerID: string): Promise<UnblockLedgerResponse>;
 }

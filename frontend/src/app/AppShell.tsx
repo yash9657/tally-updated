@@ -142,6 +142,9 @@ const COMPANY_SCOPED_SCREENS = new Set<NavSnapshot["screen"]>([
   // taking the whole shell down over the one screen that decides what an agent
   // may put in these books.
   "approval-inbox",
+  // AGENT SETTINGS (W2 breadth): every route is company-scoped
+  // (/agent/autonomy, /ledgers/{id}/unblock, /agent/anchors/verify).
+  "agent-settings",
 ]);
 
 /**
@@ -788,6 +791,8 @@ function screenTitle(snap: NavSnapshot): string {
     // an agent may put in these books.
     case "approval-inbox":
       return "Approval Inbox";
+    case "agent-settings":
+      return "Agent Settings";
     default:
       return "Tally";
   }

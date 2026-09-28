@@ -70,6 +70,9 @@ export function decisionErrorText(err: unknown): string {
       const st = body.approval?.state ?? "decided";
       return `this proposal was already decided (${st.replace("_", " ")}) — refresh the inbox.`;
     }
+    if (body.code === "EDIT_REFUSED") {
+      return `the server refused YOUR edit, so nothing was approved: ${err.message}. Fix the form and press Ctrl+A again.`;
+    }
     if (body.code === "APPROVAL_EXPIRED") {
       return "the 72-hour approval window closed before this decision, and it has been recorded as EXPIRED. Nothing will be committed.";
     }
@@ -108,6 +111,124 @@ export function LedgerEffectTable({ effect }: { effect: AgentEffect }) {
         </tr>
       </tbody>
     </table>
+  );
+}
+
+/**
+ * THE REST OF THE DIFF (W2 breadth): what an alteration replaces, and what a
+ * stock voucher, a master, an order or a bank tick changes — each read back by
+ * the server from what its real handler wrote, never from the proposed body.
+ *
+ * ⛔ A MASTER'S BANK DETAILS ARE DRAWN IN THE WARNING COLOUR. A forged "our
+ * bank details have changed" letter is the fraud a master create exists to
+ * carry; the approver must read the account number, not skim past it.
+ */
+export function EffectDetails({ effect }: { effect: AgentEffect }) {
+  const loud = new Set(["bank_account_number", "bank_ifsc", "gstin", "pan"]);
+  return (
+    <div data-testid="effect-details">
+      {(effect.replaces ?? []).map((r) => (
+        <div key={`${r.voucher_id}-${r.version_no}`} className="mt-1 text-sm" data-testid="effect-replaces">
+          <p>
+            <span className="text-tally-title">Replaces</span> version {r.version_no} of this voucher (Dr{" "}
+            {formatPaise(r.debit_paise)}). The old version is not changed; it stays in the Edit Log and a new
+            version supersedes it.
+          </p>
+          <LedgerEffectTable effect={{ postings: r.postings, debit_paise: r.debit_paise, credit_paise: r.credit_paise, vouchers: 1 }} />
+        </div>
+      ))}
+      {(effect.delta ?? []).length > 0 ? (
+        <table className="mt-1 text-sm" data-testid="effect-delta">
+          <thead>
+            <tr className="text-left text-tally-title">
+              <th className="pr-4">Ledger</th>
+              <th className="pr-4 text-right">Before</th>
+              <th className="pr-4 text-right">After</th>
+              <th className="text-right">Change (Dr +)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(effect.delta ?? []).map((d) => (
+              <tr key={d.ledger_id} data-testid="effect-delta-row">
+                <td className="pr-4">{d.ledger}</td>
+                <td className="pr-4 text-right">{formatPaise(d.before_paise)}</td>
+                <td className="pr-4 text-right">{formatPaise(d.after_paise)}</td>
+                <td className="text-right font-bold">{formatPaise(d.change_paise)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : null}
+      {(effect.stock ?? []).length > 0 ? (
+        <table className="mt-1 text-sm" data-testid="effect-stock">
+          <thead>
+            <tr className="text-left text-tally-title">
+              <th className="pr-4">Item</th>
+              <th className="pr-4">Godown</th>
+              <th className="pr-4">In/Out</th>
+              <th className="pr-4 text-right">Qty</th>
+              <th className="pr-4 text-right">Rate</th>
+              <th className="text-right">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(effect.stock ?? []).map((m) => (
+              <tr key={`${m.voucher_id}-${m.line_no}`} data-testid="effect-stock-row">
+                <td className="pr-4">{m.item}</td>
+                <td className="pr-4">{m.godown || "—"}</td>
+                <td className="pr-4">{m.direction}</td>
+                <td className="pr-4 text-right">{m.qty}</td>
+                <td className="pr-4 text-right">{m.rate}</td>
+                <td className="text-right">{m.amount}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : null}
+      {(effect.masters ?? []).map((m, i) => (
+        <div key={`${m.entity_id}-${i}`} className="mt-1 text-sm" data-testid="effect-master">
+          <p>
+            <span className="text-tally-title">{m.op === "CREATE" ? "Creates" : "Changes"} {m.entity.replace("_", " ")}</span>
+            {m.after?.["blocked"] === true ? " — born BLOCKED: nothing can post to it until a person unblocks it (Agent Settings)" : ""}
+          </p>
+          <ul className="ml-4">
+            {Object.entries(m.after ?? {})
+              .filter(([k, v]) => k !== "blocked" && k !== "created_by_run" && v !== "" && v !== null && v !== false)
+              .map(([k, v]) => {
+                const before = m.before?.[k];
+                return (
+                  <li key={k} style={loud.has(k) ? WARN : undefined} className={loud.has(k) ? "font-bold" : undefined}>
+                    {k.replace(/_/g, " ")}: {before !== undefined && before !== v ? `${String(before)} → ` : ""}
+                    {String(v)}
+                  </li>
+                );
+              })}
+          </ul>
+        </div>
+      ))}
+      {(effect.orders ?? []).map((o) => (
+        <div key={o.order_id} className="mt-1 text-sm" data-testid="effect-order">
+          <p>
+            <span className="text-tally-title">{o.direction === "SALES" ? "Sales" : "Purchase"} order</span> {o.order_no}{" "}
+            dated {o.date}
+            {o.closed ? " — CLOSED" : ""}
+          </p>
+          <ul className="ml-4">
+            {(o.lines ?? []).map((l) => (
+              <li key={l.line_no}>
+                {l.item}: {l.qty} @ {l.rate}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+      {(effect.bank_dates ?? []).map((b) => (
+        <p key={`${b.voucher_id}-${b.ledger_id}-${b.leg_no}`} className="mt-1 text-sm" data-testid="effect-bank-date">
+          <span className="text-tally-title">Bank date</span>: {b.before ?? "not reconciled"} →{" "}
+          <span className="font-bold">{b.after ?? "not reconciled"}</span>
+        </p>
+      ))}
+    </div>
   );
 }
 
@@ -155,10 +276,13 @@ export function ProposalFacts({ approval }: { approval: AgentApproval }) {
       ))}
       <div className="mt-2">
         <span className="text-sm text-tally-title">
-          Ledger effect (the server's preview, rolled back — nothing is posted yet):
+          Effect on the books (the server's preview, rolled back — nothing is posted yet):
         </span>
         {effect ? (
-          <LedgerEffectTable effect={effect} />
+          <>
+            {effect.postings.length > 0 ? <LedgerEffectTable effect={effect} /> : null}
+            <EffectDetails effect={effect} />
+          </>
         ) : (
           <p className="text-sm" style={WARN} data-testid="ledger-effect-missing">
             The server sent no preview for this proposal. It cannot be approved

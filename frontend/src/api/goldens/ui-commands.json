@@ -2,18 +2,19 @@
   "note": "GENERATED ARTEFACT — do not hand-edit. Emitted by src/actions/uiCommandManifest.ts and COMPARED (not written) by its test. Regenerate with: UPDATE_UI_MANIFEST=1 pnpm run test:run -- uiCommandManifest",
   "keymap_profile": "tallyprime",
   "counts": {
-    "screen_kinds": 38,
-    "route_keys": 51,
-    "commands": 285,
+    "screen_kinds": 39,
+    "route_keys": 52,
+    "commands": 286,
     "global_bindings": 55,
     "screen_scoped_bindings": 201,
-    "gateway_entries": 29,
-    "client_routes": 167,
-    "client_calls": 173,
+    "gateway_entries": 30,
+    "client_routes": 173,
+    "client_calls": 179,
     "unused_client_methods": 10,
     "dead_commands": 2
   },
   "screen_kinds": [
+    "agent-settings",
     "approval-inbox",
     "bank-reconciliation",
     "bill-inbox",
@@ -54,6 +55,10 @@
     "voucher"
   ],
   "route_keys": [
+    {
+      "key": "agent-settings",
+      "registered": true
+    },
     {
       "key": "approval-inbox",
       "registered": true
@@ -2821,6 +2826,16 @@
       "dispatch": "machine"
     },
     {
+      "id": "menu:gateway:Agent Settings",
+      "surface": "gateway-menu",
+      "scope": "gateway",
+      "combo": null,
+      "action": null,
+      "label": "Agent Settings",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
       "id": "menu:gateway:Approval Inbox",
       "surface": "gateway-menu",
       "scope": "gateway",
@@ -3201,6 +3216,7 @@
     "inventoryVocabulary",
     "inviteMember",
     "listAgentApprovals",
+    "listAgentAutonomy",
     "listAgentRuns",
     "listBoms",
     "listBudgetLines",
@@ -3243,6 +3259,7 @@
     "postReceiptVoucher",
     "postSalesVoucher",
     "postStockJournalVoucher",
+    "previewAgentEdit",
     "previewBankStatement",
     "printReport",
     "printVoucher",
@@ -3262,6 +3279,7 @@
     "runPayroll",
     "salesOrderBook",
     "savePrintTemplate",
+    "setAgentAutonomy",
     "setAsideStatementLine",
     "setBankDate",
     "setCompanyFeatures",
@@ -3277,8 +3295,11 @@
     "syncCommit",
     "taxSections",
     "tdsRegister",
+    "unblockLedger",
     "updateMember",
-    "updateSecurityLevel"
+    "updateSecurityLevel",
+    "verifyAgentAnchors",
+    "verifyAgentRun"
   ],
   "client_calls": [
     {
@@ -3834,6 +3855,12 @@
       "used": true
     },
     {
+      "method": "listAgentAutonomy",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/agent/autonomy",
+      "used": true
+    },
+    {
       "method": "listAgentRuns",
       "verb": "GET",
       "path": "/v1/companies/{companyID}/agent/runs",
@@ -4092,6 +4119,12 @@
       "used": true
     },
     {
+      "method": "previewAgentEdit",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/agent/approvals/{approvalID}/preview",
+      "used": true
+    },
+    {
       "method": "previewBankStatement",
       "verb": "POST",
       "path": "/v1/companies/{companyID}/bank-statement/{ledgerID}/preview",
@@ -4218,6 +4251,12 @@
       "used": true
     },
     {
+      "method": "setAgentAutonomy",
+      "verb": "PUT",
+      "path": "/v1/companies/{companyID}/agent/autonomy",
+      "used": true
+    },
+    {
       "method": "setAsideStatementLine",
       "verb": "POST",
       "path": "/v1/companies/{companyID}/bank-statement/{ledgerID}/lines/{lineID}/set-aside",
@@ -4308,6 +4347,12 @@
       "used": true
     },
     {
+      "method": "unblockLedger",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/ledgers/{ledgerID}/unblock",
+      "used": true
+    },
+    {
       "method": "updateMember",
       "verb": "PUT",
       "path": "/v1/companies/{companyID}/members/{userID}",
@@ -4317,6 +4362,18 @@
       "method": "updateSecurityLevel",
       "verb": "PUT",
       "path": "/v1/companies/{companyID}/security-levels/{levelID}",
+      "used": true
+    },
+    {
+      "method": "verifyAgentAnchors",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/agent/anchors/verify",
+      "used": true
+    },
+    {
+      "method": "verifyAgentRun",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/agent/runs/{runID}/verify",
       "used": true
     }
   ]

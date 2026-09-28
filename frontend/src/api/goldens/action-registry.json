@@ -4,7 +4,7 @@
   "source": {
     "route_arms": 244,
     "ui_commands_joined": 0,
-    "client_calls_joined": 170,
+    "client_calls_joined": 176,
     "client_calls_unused": 10,
     "ui_manifest_present": true,
     "ui_manifest_path": "frontend/src/api/goldens/ui-commands.json"
@@ -20,7 +20,7 @@
     },
     "writes": 101,
     "reads": 143,
-    "with_human_path": 211,
+    "with_human_path": 217,
     "dated_subjects": 3,
     "distinct_acl_keys": 176
   },
@@ -174,7 +174,8 @@
       "is_write": false,
       "step_up_eligible": false,
       "risk": "governance",
-      "channel": "none",
+      "channel": "client",
+      "ui_command": "client.verifyAgentAnchors",
       "label": "display agent-run (GET /v1/companies/{companyID}/agent/anchors/verify)"
     },
     {
@@ -215,7 +216,8 @@
       "is_write": false,
       "step_up_eligible": false,
       "risk": "governance",
-      "channel": "none",
+      "channel": "client",
+      "ui_command": "client.listAgentAutonomy",
       "label": "display agent-autonomy (GET /v1/companies/{companyID}/agent/autonomy)"
     },
     {
@@ -270,7 +272,8 @@
       "is_write": false,
       "step_up_eligible": false,
       "risk": "governance",
-      "channel": "none",
+      "channel": "client",
+      "ui_command": "client.verifyAgentRun",
       "label": "display agent-run (GET /v1/companies/{companyID}/agent/runs/{runID}/verify)"
     },
     {
@@ -2215,7 +2218,8 @@
       "is_write": true,
       "step_up_eligible": true,
       "risk": "governance",
-      "channel": "none",
+      "channel": "client",
+      "ui_command": "client.previewAgentEdit",
       "label": "alter agent-approval (POST /v1/companies/{companyID}/agent/approvals/{approvalID}/preview)"
     },
     {
@@ -2656,7 +2660,8 @@
       "is_write": true,
       "step_up_eligible": true,
       "risk": "governance",
-      "channel": "none",
+      "channel": "client",
+      "ui_command": "client.unblockLedger",
       "label": "alter master-unblock (POST /v1/companies/{companyID}/ledgers/{ledgerID}/unblock)"
     },
     {
@@ -3101,7 +3106,8 @@
       "is_write": true,
       "step_up_eligible": true,
       "risk": "governance",
-      "channel": "none",
+      "channel": "client",
+      "ui_command": "client.setAgentAutonomy",
       "label": "alter agent-autonomy (PUT /v1/companies/{companyID}/agent/autonomy)"
     },
     {

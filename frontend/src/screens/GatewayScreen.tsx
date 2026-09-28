@@ -15,6 +15,11 @@ export const GATEWAY_MENU = [
   // "inbox" offers both inboxes, Bill Inbox first; neither label contains the
   // other.
   "Approval Inbox",
+  // Agent Settings (W2 breadth) — the owner's half of the agent plane: which
+  // commits may happen without a person, the agent-created ledgers waiting to
+  // be unblocked, and the intent log's verification. Beside the inbox because
+  // they are one plane; also in Alt+G.
+  "Agent Settings",
   "Day Book",
   "Balance Sheet",
   "Profit & Loss A/c",

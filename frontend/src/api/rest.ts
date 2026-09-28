@@ -178,6 +178,12 @@ import type {
   AgentRunResponse,
   AgentRunsResponse,
   StartAgentRunRequest,
+  AgentAutonomyResponse,
+  AgentEditPreviewResponse,
+  AgentVerifyAnchorsResponse,
+  AgentVerifyRunResponse,
+  SetAgentAutonomyRequest,
+  UnblockLedgerResponse,
 } from "./agent";
 
 function company(companyID: string): string {
@@ -1619,6 +1625,33 @@ export function createRestClient(
       return http.post<AgentApprovalResponse>(
         `${company(companyID)}/agent/approvals/${encodeURIComponent(approvalID)}/decision`,
         body,
+      );
+    },
+    // ---- W2 BREADTH: six routes, one per method (see the census note above).
+    previewAgentEdit(companyID, approvalID, editedBody: Record<string, unknown>) {
+      // The same dr_cr boundary the decision's edited body crosses.
+      return http.post<AgentEditPreviewResponse>(
+        `${company(companyID)}/agent/approvals/${encodeURIComponent(approvalID)}/preview`,
+        { edited_body: wireVoucher(editedBody as VoucherRequest) as Record<string, unknown> },
+      );
+    },
+    listAgentAutonomy(companyID) {
+      return http.get<AgentAutonomyResponse>(`${company(companyID)}/agent/autonomy`);
+    },
+    setAgentAutonomy(companyID, req: SetAgentAutonomyRequest) {
+      return http.put<AgentAutonomyResponse>(`${company(companyID)}/agent/autonomy`, req);
+    },
+    verifyAgentRun(companyID, runID) {
+      return http.get<AgentVerifyRunResponse>(
+        `${company(companyID)}/agent/runs/${encodeURIComponent(runID)}/verify`,
+      );
+    },
+    verifyAgentAnchors(companyID) {
+      return http.get<AgentVerifyAnchorsResponse>(`${company(companyID)}/agent/anchors/verify`);
+    },
+    unblockLedger(companyID, ledgerID) {
+      return http.post<UnblockLedgerResponse>(
+        `${company(companyID)}/ledgers/${encodeURIComponent(ledgerID)}/unblock`,
       );
     },
   };

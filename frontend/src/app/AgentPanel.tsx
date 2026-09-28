@@ -278,6 +278,22 @@ export function AgentPanel({
     }
   }, [client, companyID, selected, loadRuns, loadDetail]);
 
+  // W2 breadth: recompute the selected run's intent chain on the server — the
+  // record of what was asked, shown and decided, verified link by link.
+  const verifyRun = useCallback(async () => {
+    if (!companyID || !selected) return;
+    try {
+      const v = await client.verifyAgentRun(companyID, selected);
+      setMessage(
+        v.ok
+          ? `The run's record is intact: ${v.events} event(s) re-hashed and chained.`
+          : `The run's record does NOT verify: ${v.error ?? "a link is broken"}.`,
+      );
+    } catch (e) {
+      setMessage(errorText(e));
+    }
+  }, [client, companyID, selected]);
+
   const openProposal = useCallback(
     (a: AgentApproval) => {
       const target = proposalTarget(a);
@@ -460,6 +476,14 @@ export function AgentPanel({
                     Cancel run
                   </button>
                 ) : null}
+                <button
+                  type="button"
+                  data-testid="agent-verify-run"
+                  className="ml-2 underline"
+                  onClick={() => void verifyRun()}
+                >
+                  Verify record
+                </button>
               </p>
               {run.outcome?.final ? (
                 <p data-testid="agent-run-final">

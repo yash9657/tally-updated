@@ -2857,16 +2857,23 @@ function AccountingVoucherScreen({
         .then(() => buildRequest())
         .then((req) => {
           const edited = editedFrom(req, proposed);
-          return client
-            .decideAgentApproval(
-              companyID,
-              proposal.approval.id,
-              edited
-                ? {
-                    decision: "approve",
-                    edited_body: req as unknown as Record<string, unknown>,
-                  }
-                : { decision: "approve" },
+          const body = req as unknown as Record<string, unknown>;
+          // ⛔ AN EDIT IS PREVIEWED BY THE SERVER BEFORE IT IS APPROVED (W2
+          // breadth). The real handler dry-runs YOUR body; a body its validators
+          // refuse comes back 422 EDIT_REFUSED with their sentence, and nothing
+          // is decided — the proposal stays open on this form to fix. (The
+          // decision re-previews it too and records the effect; this read is so
+          // the refusal lands HERE, before a decision exists.)
+          const check = edited
+            ? client.previewAgentEdit(companyID, proposal.approval.id, body)
+            : Promise.resolve(null);
+          return check
+            .then(() =>
+              client.decideAgentApproval(
+                companyID,
+                proposal.approval.id,
+                edited ? { decision: "approve", edited_body: body } : { decision: "approve" },
+              ),
             )
             .then(() => edited);
         })

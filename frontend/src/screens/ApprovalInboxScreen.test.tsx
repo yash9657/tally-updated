@@ -5,7 +5,7 @@ import { ApiError, createMockClient, type AgentApproval, type CoredClient } from
 import { mockAgentDecisions } from "../api/mock";
 import { AppShell } from "../app/AppShell";
 import { CompanyProvider } from "../app/CompanyContext";
-import { blindApproval, paymentApproval, salesApproval } from "./agentFixtures";
+import { alterApproval, blindApproval, masterApproval, paymentApproval, salesApproval } from "./agentFixtures";
 
 /**
  * THE APPROVAL INBOX, DRIVEN THROUGH THE REAL SHELL (W2).
@@ -268,3 +268,28 @@ describe("Approval Inbox — the decisions, by key", () => {
     );
   });
 });
+
+describe("Approval Inbox — W2 breadth: diffs that are not ledger legs", () => {
+  it("a master create shows the master's audit row, its bank details LOUDLY, the block — and can be approved", async () => {
+    const client = clientWith([masterApproval()]);
+    renderShell(client);
+    await openInboxFromGateway();
+    const m = await screen.findByTestId("effect-master");
+    expect(m.textContent).toMatch(/Creates ledger/);
+    expect(m.textContent).toMatch(/born BLOCKED/);
+    expect(m.textContent).toContain("bank account number: 50100123456789");
+    expect(screen.queryByTestId("ledger-effect-missing")).toBeNull();
+    ctrlA();
+    await waitFor(() => expect(mockAgentDecisions(client)).toHaveLength(1));
+    expect(mockAgentDecisions(client)[0]).toEqual({ approvalID: "appr-master-1", decision: "approve" });
+  });
+
+  it("an alteration shows what it replaces and the net change per ledger", async () => {
+    renderShell(clientWith([alterApproval()]));
+    await openInboxFromGateway();
+    expect((await screen.findByTestId("effect-replaces")).textContent).toMatch(/Replaces version 1/);
+    const delta = screen.getAllByTestId("effect-delta-row").map((r) => r.textContent);
+    expect(delta).toEqual(["HDFC Bank-25000.00-26000.00-1000.00", "Office Rent25000.0026000.001000.00"]);
+  });
+});
+
