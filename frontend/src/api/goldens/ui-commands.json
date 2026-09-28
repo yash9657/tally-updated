@@ -2,18 +2,19 @@
   "note": "GENERATED ARTEFACT — do not hand-edit. Emitted by src/actions/uiCommandManifest.ts and COMPARED (not written) by its test. Regenerate with: UPDATE_UI_MANIFEST=1 pnpm run test:run -- uiCommandManifest",
   "keymap_profile": "tallyprime",
   "counts": {
-    "screen_kinds": 37,
-    "route_keys": 50,
-    "commands": 281,
-    "global_bindings": 54,
-    "screen_scoped_bindings": 199,
-    "gateway_entries": 28,
-    "client_routes": 159,
-    "client_calls": 165,
+    "screen_kinds": 38,
+    "route_keys": 51,
+    "commands": 285,
+    "global_bindings": 55,
+    "screen_scoped_bindings": 201,
+    "gateway_entries": 29,
+    "client_routes": 167,
+    "client_calls": 173,
     "unused_client_methods": 10,
     "dead_commands": 2
   },
   "screen_kinds": [
+    "approval-inbox",
     "bank-reconciliation",
     "bill-inbox",
     "boms",
@@ -53,6 +54,10 @@
     "voucher"
   ],
   "route_keys": [
+    {
+      "key": "approval-inbox",
+      "registered": true
+    },
     {
       "key": "bank-reconciliation",
       "registered": true
@@ -586,6 +591,16 @@
       "dispatch": "machine"
     },
     {
+      "id": "key:*:Ctrl+K",
+      "surface": "keymap-global",
+      "scope": "*",
+      "combo": "Ctrl+K",
+      "action": "agentPanel",
+      "label": "Agent panel (runs and proposals)",
+      "screen_action": "agentPanel",
+      "dispatch": "screen-action"
+    },
+    {
       "id": "key:*:Ctrl+N",
       "surface": "keymap-global",
       "scope": "*",
@@ -794,6 +809,26 @@
       "label": "Next field",
       "screen_action": null,
       "dispatch": "machine"
+    },
+    {
+      "id": "key:approval-inbox:Alt+B",
+      "surface": "keymap-screen",
+      "scope": "approval-inbox",
+      "combo": "Alt+B",
+      "action": "askBackApproval",
+      "label": "Ask the agent back (with a note)",
+      "screen_action": "askBackApproval",
+      "dispatch": "screen-action"
+    },
+    {
+      "id": "key:approval-inbox:Alt+X",
+      "surface": "keymap-screen",
+      "scope": "approval-inbox",
+      "combo": "Alt+X",
+      "action": "rejectApproval",
+      "label": "Reject the agent's proposal",
+      "screen_action": "rejectApproval",
+      "dispatch": "screen-action"
     },
     {
       "id": "key:bank-reconciliation:Alt+F5",
@@ -2786,6 +2821,16 @@
       "dispatch": "machine"
     },
     {
+      "id": "menu:gateway:Approval Inbox",
+      "surface": "gateway-menu",
+      "scope": "gateway",
+      "combo": null,
+      "action": null,
+      "label": "Approval Inbox",
+      "screen_action": null,
+      "dispatch": "machine"
+    },
+    {
       "id": "menu:gateway:Balance Sheet",
       "surface": "gateway-menu",
       "scope": "gateway",
@@ -3068,6 +3113,7 @@
   ],
   "client_routes": [
     "addBudgetLine",
+    "agentRunEvents",
     "allocateToTDSChallan",
     "alterBudget",
     "alterBudgetLine",
@@ -3090,6 +3136,7 @@
     "bankStatementMatches",
     "booksClosure",
     "budgetVariance",
+    "cancelAgentRun",
     "cashFlow",
     "clearBankDate",
     "clearPrintTemplate",
@@ -3116,6 +3163,7 @@
     "createTDSChallan",
     "createUnit",
     "createVoucherType",
+    "decideAgentApproval",
     "deleteBudget",
     "deleteBudgetLine",
     "deleteSecurityLevel",
@@ -3123,6 +3171,8 @@
     "explodeBom",
     "forexSettings",
     "generateGSTR1",
+    "getAgentApproval",
+    "getAgentRun",
     "getBalanceSheet",
     "getBillsPayable",
     "getBom",
@@ -3150,6 +3200,8 @@
     "importedStatement",
     "inventoryVocabulary",
     "inviteMember",
+    "listAgentApprovals",
+    "listAgentRuns",
     "listBoms",
     "listBudgetLines",
     "listBudgets",
@@ -3221,6 +3273,7 @@
     "setStatutoryElection",
     "setStockItemValuationMethod",
     "setTDSProfile",
+    "startAgentRun",
     "syncCommit",
     "taxSections",
     "tdsRegister",
@@ -3232,6 +3285,12 @@
       "method": "addBudgetLine",
       "verb": "POST",
       "path": "/v1/companies/{companyID}/budgets/{budgetID}/lines",
+      "used": true
+    },
+    {
+      "method": "agentRunEvents",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/agent/runs/{runID}/events",
       "used": true
     },
     {
@@ -3364,6 +3423,12 @@
       "method": "budgetVariance",
       "verb": "GET",
       "path": "/v1/companies/{companyID}/budget-variance",
+      "used": true
+    },
+    {
+      "method": "cancelAgentRun",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/agent/runs/{runID}/cancel",
       "used": true
     },
     {
@@ -3535,6 +3600,12 @@
       "used": true
     },
     {
+      "method": "decideAgentApproval",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/agent/approvals/{approvalID}/decision",
+      "used": true
+    },
+    {
       "method": "deleteBudget",
       "verb": "DELETE",
       "path": "/v1/companies/{companyID}/budgets/{budgetID}",
@@ -3575,6 +3646,18 @@
       "verb": "GET",
       "path": "/v1/companies/{companyID}/gstr1",
       "used": false
+    },
+    {
+      "method": "getAgentApproval",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/agent/approvals/{approvalID}",
+      "used": true
+    },
+    {
+      "method": "getAgentRun",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/agent/runs/{runID}",
+      "used": true
     },
     {
       "method": "getBalanceSheet",
@@ -3742,6 +3825,18 @@
       "method": "inviteMember",
       "verb": "POST",
       "path": "/v1/companies/{companyID}/members/invites",
+      "used": true
+    },
+    {
+      "method": "listAgentApprovals",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/agent/approvals",
+      "used": true
+    },
+    {
+      "method": "listAgentRuns",
+      "verb": "GET",
+      "path": "/v1/companies/{companyID}/agent/runs",
       "used": true
     },
     {
@@ -4186,6 +4281,12 @@
       "method": "setTDSProfile",
       "verb": "PUT",
       "path": "/v1/companies/{companyID}/tds-profile",
+      "used": true
+    },
+    {
+      "method": "startAgentRun",
+      "verb": "POST",
+      "path": "/v1/companies/{companyID}/agent/runs",
       "used": true
     },
     {

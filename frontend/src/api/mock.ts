@@ -254,6 +254,15 @@ import type {
   UpdateMemberResponse,
   UpdateSecurityLevelResponse,
 } from "./admin";
+import {
+  AGENT_UNCONFIGURED,
+  runFinished,
+  type AgentApproval,
+  type AgentDecisionRequest,
+  type AgentEvent,
+  type AgentRun,
+  type StartAgentRunRequest,
+} from "./agent";
 import { deriveGstSplit } from "../screens/vouchers/gstDerive";
 import { taxableValueOf } from "../screens/vouchers/itemInvoice";
 
@@ -2300,6 +2309,71 @@ function validateDefaultAccess(da: string): void {
 export interface MockClientOptions {
   /** Seed a demo company so reports are non-empty. Default true. */
   seed?: boolean;
+  /**
+   * THE AGENT PLANE's tables, pre-filled (W2). The mock has no agent loop, so a
+   * test that wants something in the approval inbox or the side panel seeds it
+   * here. `model: true` makes startAgentRun record a run instead of answering
+   * 503 AGENT_UNCONFIGURED (the shipped server default, and the mock's).
+   */
+  agent?: {
+    model?: boolean;
+    runs?: AgentRun[];
+    approvals?: AgentApproval[];
+    events?: Record<string, AgentEvent[]>;
+  };
+}
+
+/** What a mock client holds of the agent plane — per client, like `companies`. */
+interface MockAgentState {
+  model: boolean;
+  runs: AgentRun[];
+  approvals: AgentApproval[];
+  events: Map<string, AgentEvent[]>;
+  decisions: ({ approvalID: string } & AgentDecisionRequest)[];
+}
+
+const mockAgentStates = new WeakMap<CoredClient, MockAgentState>();
+
+/**
+ * Every decision a mock client has recorded, in order (tests only).
+ *
+ * It exists so a test can assert what was DECIDED — the one thing a screen in
+ * this plane sends that matters — and, as importantly, what was NOT: a prefilled
+ * voucher whose Ctrl+A posted through createVoucher instead of through here
+ * would leave the approval pending and put a second, unapproved voucher on the
+ * books the moment somebody approved the first.
+ */
+export function mockAgentDecisions(
+  client: CoredClient,
+): readonly ({ approvalID: string } & AgentDecisionRequest)[] {
+  return mockAgentStates.get(client)?.decisions ?? [];
+}
+
+/**
+ * Add an approval to a mock client's inbox after construction (tests only) —
+ * for a fixture whose ledger ids exist only once the test has created the
+ * ledgers through the same client.
+ */
+export function mockAddAgentApproval(client: CoredClient, a: AgentApproval): void {
+  const st = mockAgentStates.get(client);
+  if (!st) throw new Error("mockAddAgentApproval: not a mock client");
+  st.approvals.push(JSON.parse(JSON.stringify(a)) as AgentApproval);
+}
+
+function newMockAgentState(opts: MockClientOptions): MockAgentState {
+  // Deep-copied so a decision never mutates a test's own fixture object — a
+  // fixture reused by a second test would otherwise arrive already decided.
+  return {
+    model: opts.agent?.model ?? false,
+    runs: (opts.agent?.runs ?? []).map((r) => JSON.parse(JSON.stringify(r)) as AgentRun),
+    approvals: (opts.agent?.approvals ?? []).map(
+      (a) => JSON.parse(JSON.stringify(a)) as AgentApproval,
+    ),
+    events: new Map(
+      Object.entries(opts.agent?.events ?? {}).map(([k, v]) => [k, v.slice()]),
+    ),
+    decisions: [],
+  };
 }
 
 /** Construct a fresh in-memory CoredClient. State is isolated per instance. */
@@ -2510,6 +2584,16 @@ export function resetMockBooksClosure(): void {
 }
 
 export function createMockClient(opts: MockClientOptions = {}): CoredClient {
+  const agentState = newMockAgentState(opts);
+  const client = createMockClientWith(opts, agentState);
+  mockAgentStates.set(client, agentState);
+  return client;
+}
+
+function createMockClientWith(
+  opts: MockClientOptions,
+  agentState: MockAgentState,
+): CoredClient {
   const companies = new Map<string, MockCompany>();
 
   /**
@@ -10475,6 +10559,159 @@ function normalisedName(v: string): string {
         `no open reconciliation entry with that id (${reconID}); the mock parks none ` +
           "because it refuses no alter or delete",
       );
+    },
+
+    // ---- THE AGENT PLANE (W2, D121 §8) --------------------------------
+    //
+    // ⚠️ THE MOCK HAS NO AGENT, ONLY THE AGENT'S TABLES. It cannot run a loop
+    // (there is no model and no preview here), so a run started against it
+    // either answers 503 AGENT_UNCONFIGURED — the shipped server default — or,
+    // with `agent.model: true`, records a `running` run and its run_started
+    // event and then sits there. What it DOES model faithfully is the decision
+    // contract the inbox is built on: one decision per approval (409), the
+    // 72-hour window (409 APPROVAL_EXPIRED, recorded as expired), ask_back
+    // without a note and an edit beside a reject (422). It never posts a
+    // voucher on approve, because the real server does not either: the commit
+    // is the agent poller's, afterwards.
+    async startAgentRun(_companyID: string, req: StartAgentRunRequest) {
+      const msg = "no agent model is configured on this server (set LLM_PROVIDER and friends)";
+      if (!agentState.model) {
+        throw new ApiError(503, msg, { code: AGENT_UNCONFIGURED, error: msg });
+      }
+      if (!(req.instruction ?? "").trim()) {
+        throw new ApiError(422, "agent: invalid request: an instruction is required");
+      }
+      const now = new Date().toISOString();
+      const run: AgentRun = {
+        id: `mock-run-${agentState.runs.length + 1}`,
+        created_by: "mock-user",
+        agent_id: "khata-agent",
+        channel: "panel",
+        instruction: req.instruction,
+        inputs: req.inputs ?? [],
+        delegation: {
+          acl_keys: req.delegate ?? [],
+          ...(req.max_amount_paise !== undefined ? { max_amount_paise: req.max_amount_paise } : {}),
+          expires_at: now,
+          step_up: false,
+        },
+        status: "running",
+        attempts: 0,
+        created_at: now,
+        updated_at: now,
+      };
+      agentState.runs.unshift(run);
+      agentState.events.set(run.id, [
+        {
+          seq: 1,
+          type: "RUN_STARTED",
+          kind: "run_started",
+          at: now,
+          actor_kind: "user",
+          actor_id: "mock-user",
+          data: { channel: "panel" },
+          hash: "0".repeat(64),
+        },
+      ]);
+      return { run };
+    },
+    async listAgentRuns(_companyID: string, limit?: number) {
+      const n = limit && limit > 0 ? limit : 50;
+      return { runs: agentState.runs.slice(0, n).map((r) => ({ ...r })) };
+    },
+    async getAgentRun(_companyID: string, runID: string) {
+      const run = agentState.runs.find((r) => r.id === runID);
+      if (!run) throw new ApiError(404, "not found");
+      return {
+        run: {
+          ...run,
+          approvals: agentState.approvals.filter((a) => a.run_id === runID).map((a) => ({ ...a })),
+        },
+      };
+    },
+    async agentRunEvents(_companyID: string, runID: string, after?: number) {
+      const run = agentState.runs.find((r) => r.id === runID);
+      if (!run) throw new ApiError(404, "not found");
+      const all = agentState.events.get(runID) ?? [];
+      const events = all.filter((e) => e.seq > (after ?? 0));
+      const last = events[events.length - 1];
+      return {
+        run_id: runID,
+        status: run.status,
+        finished: runFinished(run.status),
+        next_after: last ? last.seq : (after ?? 0),
+        events,
+      };
+    },
+    async cancelAgentRun(_companyID: string, runID: string) {
+      const run = agentState.runs.find((r) => r.id === runID);
+      if (!run) throw new ApiError(404, "not found");
+      if (!runFinished(run.status)) {
+        run.status = "cancelled";
+        run.finished_at = new Date().toISOString();
+      }
+      return { run: { ...run } };
+    },
+    async listAgentApprovals(
+      _companyID: string,
+      query?: { state?: "pending" | "all"; run_id?: string },
+    ) {
+      const rows = agentState.approvals.filter(
+        (a) =>
+          (query?.state !== "pending" || a.state === "pending") &&
+          (!query?.run_id || a.run_id === query.run_id),
+      );
+      return { approvals: rows.map((a) => ({ ...a })) };
+    },
+    async getAgentApproval(_companyID: string, approvalID: string) {
+      const a = agentState.approvals.find((x) => x.id === approvalID);
+      if (!a) throw new ApiError(404, "not found");
+      return { approval: { ...a } };
+    },
+    async decideAgentApproval(
+      _companyID: string,
+      approvalID: string,
+      req: AgentDecisionRequest,
+    ) {
+      const a = agentState.approvals.find((x) => x.id === approvalID);
+      if (!a) throw new ApiError(404, "not found");
+      if (req.decision !== "approve" && req.decision !== "reject" && req.decision !== "ask_back") {
+        throw new ApiError(422, `agent: invalid request: unknown decision ${String(req.decision)}`);
+      }
+      if (req.decision === "ask_back" && !(req.note ?? "").trim()) {
+        throw new ApiError(422, "agent: invalid request: ask_back needs a note");
+      }
+      if (req.edited_body !== undefined && req.decision !== "approve") {
+        throw new ApiError(422, "agent: invalid request: an edited body is only meaningful with approve");
+      }
+      if (a.state !== "pending") {
+        throw new ApiError(409, "this approval has already been decided", {
+          code: "ALREADY_DECIDED",
+          approval: { ...a },
+        });
+      }
+      const now = new Date();
+      const expired = now.getTime() > Date.parse(a.deadline_at);
+      agentState.decisions.push({ approvalID, ...req });
+      a.decision = {
+        id: `mock-decision-${approvalID}`,
+        decision: expired ? "expired" : req.decision,
+        ...(req.edited_body && !expired ? { edited_args: req.edited_body } : {}),
+        ...(req.note && !expired ? { note: req.note } : {}),
+        decided_webauthn: false,
+        decided_at: now.toISOString(),
+      };
+      if (expired) {
+        a.state = "expired";
+        throw new ApiError(
+          409,
+          "the approval window closed before this decision; it has been recorded as expired",
+          { code: "APPROVAL_EXPIRED", approval: { ...a } },
+        );
+      }
+      a.state =
+        req.decision === "approve" ? "approved" : req.decision === "reject" ? "rejected" : "ask_back";
+      return { approval: { ...a } };
     },
   };
 }

@@ -236,6 +236,23 @@ export type ScreenActionKind =
    */
   | "setValuationMethod"
   /**
+   * Ctrl+K — open or close the AGENT SIDE PANEL (W2).
+   *
+   * ⚠️ THE ONE KIND REGISTERED BY THE SHELL AND NOT BY A SCREEN. The panel is
+   * mounted beside every screen and outlives them all, so its handler is always
+   * present; no screen registers this kind, which is what keeps the single-slot
+   * registry below from being fought over.
+   */
+  | "agentPanel"
+  /**
+   * Alt+X / Alt+B on the APPROVAL INBOX — reject the highlighted proposal, or ask
+   * the agent back with the note typed on the screen. Screen actions because the
+   * highlighted approval, the note and the client belong to the screen; neither
+   * navigates — the operator is still looking at the inbox the row leaves.
+   */
+  | "rejectApproval"
+  | "askBackApproval"
+  /**
    * ⛔⛔ Esc — CLOSE THE PANEL THE SCREEN HAS OPEN, and ONLY then (D114).
    *
    * The odd one out in this list: every other kind is a key the machine has no

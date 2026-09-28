@@ -1,0 +1,18 @@
+{
+  "id": "approval-inbox-double-entry-journal-then-esc",
+  "description": "W2: a Journal proposal opens the native F7 Journal in double entry, and Esc returns to the Approval Inbox without deciding anything (the frame pops; the approval stays pending on the server)",
+  "keymapProfile": "tallyprime",
+  "startScreen": "gateway",
+  "events": [
+    { "type": "select", "menuItem": "Approval Inbox" },
+    { "type": "key", "combo": "Enter" },
+    { "type": "select", "menuItem": "proposal:journal:double:6b1f7a52-9c1e-4d3a-8f2b-0c9d8e7f6a53" },
+    { "type": "key", "combo": "Enter" },
+    { "type": "key", "combo": "Esc" }
+  ],
+  "expect": {
+    "screen": "approval-inbox",
+    "parentScreen": "gateway",
+    "screenStackDepth": 2
+  }
+}

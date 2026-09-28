@@ -12,6 +12,12 @@ import type {
 } from "./types";
 import { resolveAction, resolveKeymap } from "./keymaps/tallyprime";
 import { parseVoucherRowKey } from "./voucherClass";
+import {
+  OPEN_AGENT_PROPOSAL_PREFIX,
+  PROPOSAL_ROW_PREFIX,
+  parseProposalKey,
+  type ProposalKey,
+} from "./proposalKey";
 
 /**
  * navMachine — a deterministic XState v5 model of Tally's SCREEN STACK
@@ -239,6 +245,11 @@ export const SCREEN_GOTO_ENTRIES: Readonly<Record<string, ScreenKind>> = {
   // `gstr1`/`gstr3b` instead. The two are independent and neither should be
   // "made consistent" with the other — see the migration 0087 header.
   "GSTR-9": "gstr9",
+  // W2 — THE APPROVAL INBOX. PLAN-AGENTIC names both doors ("reachable from the
+  // Gateway and Alt+G"); this entry is the Alt+G one, and the Gateway arm below
+  // is the other. ⚠️ Literal rather than APPROVAL_INBOX_LABEL because that const
+  // is declared further down this module and a Record initialiser runs at load.
+  "Approval Inbox": "approval-inbox",
 };
 
 /** Case-insensitive index of {@link SCREEN_GOTO_ENTRIES}, built once. */
@@ -584,6 +595,24 @@ export const PURCHASE_ORDERS_LABEL = "Purchase Orders";
 export const BOMS_LABEL = "Bills of Materials";
 
 /**
+ * The Gateway (and Alt+G Go To) entry that opens THE APPROVAL INBOX (W2).
+ *
+ * ⛔ SAME ORDERING REQUIREMENT AS EVERY LABEL ABOVE: matched BEFORE the
+ * canonicalReportName fallback, or selecting it pushes a `report` frame named
+ * "Approval Inbox" that renders "not available in this build" over a screen
+ * that is the only place an agent's proposals can be decided.
+ *
+ * ⚠️ CHECKED FOR THE SUBSTRING COLLISION THAT COST "Reconciliation Queue" TWO
+ * BROWSER RUNS. The Gateway is driven by typing into its search box, so a label
+ * that CONTAINS a shipped one (or is contained by one) opens the wrong screen.
+ * "Approval Inbox" contains neither "Bill Inbox" nor any other shipped label or
+ * REPORT_NAMES entry, and none of them contains it. Typing "inbox" offers BOTH
+ * inboxes — the Bill Inbox first, as the list is ordered — which is a choice
+ * the operator makes, not a wrong turn.
+ */
+export const APPROVAL_INBOX_LABEL = "Approval Inbox";
+
+/**
  * The Ctrl+H Change Mode labels the machine acts on. Kept here (not in the
  * screen) because the MACHINE owns what a selection does; the screen owns which
  * options a voucher class offers. Any other label — including the "not built"
@@ -721,6 +750,25 @@ function newVoucherFrame(
     field: "date",
     saved: false,
     ...(entryMode ? { config: { entryMode } } : {}),
+  };
+}
+
+/**
+ * The native CREATE frame an agent proposal is reviewed in (W2).
+ *
+ * ⛔ THE APPROVAL ID RIDES ON `detailOf`, AND THAT IS WHAT BINDS THE PREFILL TO
+ * THIS ONE FRAME. The approval itself sits in the LoadedProposal slot, which
+ * outlives the frame; VoucherScreen treats the slot as live only while the top
+ * frame names the same approval. Without the binding, Esc out of a proposal and
+ * a plain F5 later would open the SAME proposal again — prefilled, with Ctrl+A
+ * meaning "approve" on a screen the operator opened to key their own payment.
+ * The accept reducer's fresh frame after Ctrl+A carries no `detailOf`, so bulk
+ * entry after an approval is ordinary entry again.
+ */
+function proposalFrame(key: ProposalKey): ScreenFrame {
+  return {
+    ...newVoucherFrame(key.voucherType, "create", key.entryMode),
+    detailOf: key.approvalID,
   };
 }
 
@@ -1088,6 +1136,24 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
         });
         return { stack };
       }
+      if (active.screen === "approval-inbox") {
+        // ENTER OPENS THE HIGHLIGHTED PROPOSAL IN ITS NATIVE VOUCHER SCREEN — a
+        // CREATE frame of the proposal's own class, in the entry mode that
+        // restates its postings line for line. VoucherScreen finds the approval
+        // in the LoadedProposal slot (the inbox filled it before publishing the
+        // row key) and prefills; Ctrl+A THERE records the approval, never a post.
+        //
+        // ⛔ A ROW WITH NO PROPOSAL KEY IS NOT DRILLED. The inbox publishes a key
+        // only for a proposal the native form can restate; for any other (a GST
+        // invoice body, which the accounting-invoice form would RE-DERIVE tax on)
+        // Enter is a no-op and the screen says why. Pushing a frame anyway would
+        // be the create-in-disguise hazard: a prefilled-looking voucher whose
+        // Ctrl+A posts something other than what was previewed.
+        const key = parseProposalKey(active.selectedItem, PROPOSAL_ROW_PREFIX);
+        if (!key) return {};
+        stack.push(proposalFrame(key));
+        return { stack };
+      }
       if (active.screen === "master-create") {
         // Enter advances the master-create field cursor.
         active.field = nextMasterField(active.field);
@@ -1314,6 +1380,15 @@ function reduceKey(ctx: NavContext, combo: string): Partial<NavContext> {
         }
         if (active.selectedItem?.toLowerCase() === BOMS_LABEL.toLowerCase()) {
           stack.push({ screen: "boms" });
+          return { stack };
+        }
+        // THE APPROVAL INBOX (W2). Ordering as above: BEFORE the report fallback,
+        // which would push a `report` frame named "Approval Inbox".
+        if (
+          active.selectedItem?.toLowerCase() ===
+          APPROVAL_INBOX_LABEL.toLowerCase()
+        ) {
+          stack.push({ screen: "approval-inbox" });
           return { stack };
         }
         // "Display More Reports" opens the second-level report MENU (Tally's
@@ -1927,6 +2002,31 @@ function reduceSelect(ctx: NavContext, menuItem: string): Partial<NavContext> {
   const stack = ctx.stack.slice();
   const active = { ...top(stack) };
 
+  // THE AGENT SIDE PANEL OPENS A PROPOSAL (W2). Checked FIRST because the panel
+  // is not a screen: it sits beside whatever frame is on top, so this is the one
+  // SELECT that is not interpreted by the active frame's own arm below. The
+  // panel has already put the approval in the LoadedProposal slot; the machine
+  // only pushes the native create frame, exactly as Enter on the inbox does.
+  //
+  // ⛔ REFUSED OVER A FORM BEING KEYED — a voucher, a master create, or the Go To
+  // picker. VoucherScreen's form is React state on ONE component instance, so a
+  // second voucher frame pushed over a half-keyed one would either inherit its
+  // lines or throw them away, and neither is something the operator asked for.
+  // The panel says so on its face (it reads the same snapshot); the machine's
+  // part is to not move.
+  const opened = parseProposalKey(menuItem, OPEN_AGENT_PROPOSAL_PREFIX);
+  if (opened) {
+    if (
+      active.screen === "voucher" ||
+      active.screen === "master-create" ||
+      active.screen === "goto-overlay"
+    ) {
+      return {};
+    }
+    stack.push(proposalFrame(opened));
+    return { stack };
+  }
+
   // CTRL+H CHANGE MODE: picking a mode applies it and closes the overlay.
   //
   // Unlike the Go To pick-list below, this needs no confirming Enter — Tally's
@@ -2030,6 +2130,7 @@ function reduceSelect(ctx: NavContext, menuItem: string): Partial<NavContext> {
       menuItem.toLowerCase() === PAY_RUN_LABEL.toLowerCase() ||
       menuItem.toLowerCase() === PAYROLL_REGISTER_LABEL.toLowerCase() ||
       menuItem.toLowerCase() === FORM_138_LABEL.toLowerCase() ||
+      menuItem.toLowerCase() === APPROVAL_INBOX_LABEL.toLowerCase() ||
       canonicalReportName(menuItem) !== undefined
     ) {
       active.selectedItem = menuItem;
@@ -2067,6 +2168,16 @@ function reduceSelect(ctx: NavContext, menuItem: string): Partial<NavContext> {
   // screen is a ScreenKind — see keystroke/types.ts for why the register is not a
   // `report` frame despite `payroll-register` being a real report NAME.
   if (active.screen === "payroll-register") {
+    active.selectedItem = menuItem;
+    stack[stack.length - 1] = active;
+    return { stack };
+  }
+
+  // THE APPROVAL INBOX: a selection highlights the proposal Enter will open.
+  // Recorded verbatim, including a non-proposal key — the Enter arm is what
+  // refuses to drill one, so a highlight of an un-prefillable row is a no-op on
+  // Enter rather than a stale highlight of the previous row.
+  if (active.screen === "approval-inbox") {
     active.selectedItem = menuItem;
     stack[stack.length - 1] = active;
     return { stack };

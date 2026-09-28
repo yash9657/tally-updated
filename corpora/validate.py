@@ -128,6 +128,12 @@ KNOWN_SCREENS = {
     # — whose whole shape is "ask the server for rows" — could not render it even
     # in principle. It also carries two writes: commit the queue, discard a row.
     "offline-outbox",
+    # W2 — THE APPROVAL INBOX: the agent's proposals waiting for a human, with
+    # the ledger-effect diff. Reached from Gateway of Tally > Approval Inbox and
+    # from Alt+G Go To; Enter opens a proposal in its native voucher screen. A
+    # ScreenKind under the bare `agent-approval` token, and it carries writes
+    # (the decisions), which no report frame does.
+    "approval-inbox",
     # The Bank Reconciliation Statement (T4): a bank ledger's postings with the
     # ONE editable column, Bank Date. Reached from the Gateway (TallyPrime's own
     # route is Alt+G > Banking Activities); F4 picks the account.

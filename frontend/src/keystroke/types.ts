@@ -359,7 +359,29 @@ export type ScreenKind =
    * live in this browser's IndexedDB. It also carries two WRITES (commit the
    * queue, discard a row), and no report frame does.
    */
-  | "offline-outbox";
+  | "offline-outbox"
+  /**
+   * THE APPROVAL INBOX (W2, D121 §8.3) — every agent proposal waiting for a
+   * human: what was asked, what the agent would post (the LEDGER-EFFECT DIFF the
+   * server's real handler derived during a rolled-back preview), WHY a human is
+   * being asked (`reasons`, verbatim) and which values came from untrusted input.
+   * Ctrl+A approves the highlighted proposal as previewed; Enter opens it in the
+   * SAME native voucher screen an operator keys by hand (F4/F5/F6/F7), prefilled,
+   * so an edit is keyed where every other edit is and Ctrl+A there approves the
+   * edited version; Alt+X rejects; Alt+B asks the agent back with a note.
+   *
+   * ⛔ A ScreenKind AND NOT A "report:NAME", for the reason every bare-token
+   * screen above gives: the server serves it under the bare `agent-approval`
+   * token (authz/vocabulary.go), which a coarse `allow display report` can never
+   * match — and it carries WRITES (the decisions), which no report frame does.
+   *
+   * ⛔ AND IT NEVER RENDERS A VOUCHER FORM OF ITS OWN. The diff is read-only; the
+   * only place a proposal's figures can be changed is the native voucher screen,
+   * so the validators, the master gate and the keyboard an operator already
+   * trusts are the ones that apply to an agent's work too (PLAN-AGENTIC W2: "the
+   * panel pre-fills the same native screens so Ctrl+A remains the accept key").
+   */
+  | "approval-inbox";
 
 /**
  * An in-frame overlay: a sub-screen that keeps its parent frame alive and is
@@ -855,6 +877,39 @@ export type KeymapAction =
    * shadows nothing.
    */
   | { kind: "offlineOutbox" }
+  /**
+   * Ctrl+K — the AGENT SIDE PANEL (W2): start a run, watch its steps, open a
+   * proposal it is waiting on.
+   *
+   * ⚠️ Ctrl+K WAS FREE, AND Alt+K WAS NOT. TallyPrime's top menu is opened with
+   * Alt+letter and `K: Company` is one of them (RESEARCH.md:361, :415, :1310) —
+   * this build does not bind Alt+K yet, but taking it would be taking Tally's
+   * key for something else. RESEARCH.md documents no Ctrl+K anywhere, and no
+   * screen in this build binds it.
+   *
+   * A SCREEN ACTION owned by the SHELL's panel rather than a machine transition:
+   * the panel is not a frame — it stays open while the operator moves between
+   * screens, which is the point of a side panel — so the pure machine has no
+   * frame to put it on.
+   */
+  | { kind: "agentPanel" }
+  /**
+   * Alt+X on the APPROVAL INBOX — REJECT the highlighted proposal (with the
+   * optional note). The screen-scoped meaning of Tally's "cancel this voucher"
+   * key: the proposal is a voucher nobody has accepted, and this is how it is
+   * cancelled. Nothing is posted and the run finishes.
+   */
+  | { kind: "rejectApproval" }
+  /**
+   * Alt+B on the APPROVAL INBOX — ASK BACK: hand the note to the agent, which
+   * may propose again (a NEW approval). The server refuses an ask-back with no
+   * note (422), and so does the screen, before any request.
+   *
+   * ⚠️ Alt+B IS SCREEN-SCOPED HERE ONLY. Tally uses Alt+B for "settle bills" in
+   * the outstandings reports (RESEARCH.md:799) and this build does not bind it
+   * globally, so nothing is shadowed.
+   */
+  | { kind: "askBackApproval" }
   | { kind: "configure" } // F12 — screen/report Configure
   | { kind: "createMaster"; masterKind: MasterKind } // Alt+C — inline create
   /**

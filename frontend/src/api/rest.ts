@@ -170,6 +170,15 @@ import type {
   UpdateMemberResponse,
   UpdateSecurityLevelResponse,
 } from "./admin";
+import type {
+  AgentApprovalResponse,
+  AgentApprovalsResponse,
+  AgentDecisionRequest,
+  AgentEventsResponse,
+  AgentRunResponse,
+  AgentRunsResponse,
+  StartAgentRunRequest,
+} from "./agent";
 
 function company(companyID: string): string {
   return `/v1/companies/${encodeURIComponent(companyID)}`;
@@ -1547,6 +1556,69 @@ export function createRestClient(
       // caller could supply.
       return http.post<ResolveReconciliationResponse>(
         `${company(companyID)}/reconciliation-queue/${encodeURIComponent(reconID)}/resolve`,
+      );
+    },
+
+    // ---- THE AGENT PLANE (W2, D121 §8) --------------------------------
+    // Eight routes, one per method, so the UI-command census can join each to
+    // its ActionSpec by (verb, path) — see uiCommandManifest.ts. Every id is a
+    // path SEGMENT and is encoded, for the reason printTemplate() gives.
+    startAgentRun(companyID, req: StartAgentRunRequest) {
+      return http.post<AgentRunResponse>(`${company(companyID)}/agent/runs`, {
+        channel: "panel",
+        ...req,
+      });
+    },
+    listAgentRuns(companyID, limit?: number) {
+      return http.get<AgentRunsResponse>(`${company(companyID)}/agent/runs`, {
+        limit,
+      });
+    },
+    getAgentRun(companyID, runID) {
+      return http.get<AgentRunResponse>(
+        `${company(companyID)}/agent/runs/${encodeURIComponent(runID)}`,
+      );
+    },
+    agentRunEvents(companyID, runID, after?: number) {
+      return http.get<AgentEventsResponse>(
+        `${company(companyID)}/agent/runs/${encodeURIComponent(runID)}/events`,
+        { after },
+      );
+    },
+    cancelAgentRun(companyID, runID) {
+      return http.post<AgentRunResponse>(
+        `${company(companyID)}/agent/runs/${encodeURIComponent(runID)}/cancel`,
+      );
+    },
+    listAgentApprovals(companyID, query?: { state?: "pending" | "all"; run_id?: string }) {
+      return http.get<AgentApprovalsResponse>(
+        `${company(companyID)}/agent/approvals`,
+        query ? { state: query.state, run_id: query.run_id } : undefined,
+      );
+    },
+    getAgentApproval(companyID, approvalID) {
+      return http.get<AgentApprovalResponse>(
+        `${company(companyID)}/agent/approvals/${encodeURIComponent(approvalID)}`,
+      );
+    },
+    decideAgentApproval(companyID, approvalID, req: AgentDecisionRequest) {
+      // ⛔ AN EDITED BODY IS A VOUCHER BODY, SO IT CROSSES THE SAME dr_cr
+      // BOUNDARY EVERY VOUCHER POST DOES. The native voucher screen builds it in
+      // the domain's "DR"/"CR"; the server's validators accept only "D"/"C", and
+      // an edit refused for its spelling would surface as a `commit_refused`
+      // event hours later rather than as an error here.
+      const body: AgentDecisionRequest = req.edited_body
+        ? {
+            ...req,
+            edited_body: wireVoucher(req.edited_body as VoucherRequest) as Record<
+              string,
+              unknown
+            >,
+          }
+        : req;
+      return http.post<AgentApprovalResponse>(
+        `${company(companyID)}/agent/approvals/${encodeURIComponent(approvalID)}/decision`,
+        body,
       );
     },
   };

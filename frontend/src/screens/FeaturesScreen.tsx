@@ -408,6 +408,24 @@ const FEATURES: {
         note: "Gateway > Query. Natural language compiles to a closed query DSL, then to parameterized, read-only, tenant-scoped SQL.",
       },
       /**
+       * W2 — THE AGENT. `partial` AND NOT `on`, and each of the three named gaps
+       * is a reason on its own. What IS driven from the keyboard: Ctrl+K opens the
+       * side panel (start a run, watch its steps, cancel it); Gateway > Approval
+       * Inbox and Alt+G reach the inbox (Ctrl+A approve, Alt+X reject, Alt+B ask
+       * back, over the server's ledger-effect diff); Enter opens a payment,
+       * receipt, contra or journal proposal in the NATIVE F-key screen, where
+       * Ctrl+A approves the operator's edited version. ⛔ It would be `off` with
+       * better marketing to call this `on` while the shipped server has no model:
+       * the default deployment answers every start with AGENT_UNCONFIGURED.
+       */
+      {
+        name: "Agent — side panel (Ctrl+K) and Approval Inbox",
+        state: "partial",
+        note:
+          "Ctrl+K opens the agent panel: say what to do, paste any untrusted text (a bank line, a WhatsApp forward) with where it came from, tick what you hand over (nothing is ticked by default), and watch the steps the server records. Nothing the agent does reaches the books without a person: every write it wants waits in Gateway > Approval Inbox (also Alt+G), which shows WHY a human is being asked in the policy's own words, flags any value copied verbatim from untrusted input, and shows the LEDGER EFFECT the server's real voucher handler produced in a preview it then rolled back. Ctrl+A approves as previewed, Alt+X rejects, Alt+B asks the agent back with a question. Enter opens a Payment, Receipt, Contra or Journal proposal in the ordinary F5/F6/F4/F7 screen, prefilled — edit it there and Ctrl+A approves YOUR version, through the same validators; the agent never draws a voucher form of its own. Approving posts nothing by itself: the agent commits afterwards, exactly once, and the panel shows the commit. " +
+          "WHAT IS NOT THERE: (1) no agent model is configured in the shipped server (LLM_PROVIDER unset), so starting a run says so and no new proposal can appear until one is; (2) a Sales, Purchase, Credit Note or Debit Note proposal can be approved or rejected from its diff but NOT edited — its F-key form is the GST invoice, which re-derives the tax, and Tally's 'As Voucher' mode is not built; (3) the agent can propose only the eight accounting voucher creates — no alterations, stock vouchers, masters, orders or bank matching yet — and there is no screen to set how much it may do without asking (autonomy levels are server-side only).",
+      },
+      /**
        * ⛔ ONE ROW BECAME TWO, AND THE SPLIT IS THE HONEST PART.
        *
        * This was a single row reading "Cash-flow projection and anomaly

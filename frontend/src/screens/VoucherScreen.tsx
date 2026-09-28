@@ -7,10 +7,17 @@ import {
   useCompanyID,
   useHomeStateCode,
 } from "../app/CompanyContext";
-import { useRegisterScreenAction } from "../app/ScreenActions";
+import { screenHandled, useRegisterScreenAction } from "../app/ScreenActions";
 import { usePrintAction } from "./usePrint";
 import { useLoadedVoucher } from "../app/LoadedVoucher";
 import { useLoadedDraft } from "../app/LoadedDraft";
+import { useLoadedProposal, type LoadedProposal } from "../app/LoadedProposal";
+import { editedFrom, viewFromApproval } from "./vouchers/agentProposal";
+import {
+  AgentProposalPanel,
+  assertStillAsShown,
+  decisionErrorText,
+} from "./AgentProposalPanel";
 import {
   acceptVoucher,
   deleteLoadedVoucher,
@@ -1610,6 +1617,23 @@ function AccountingVoucherScreen({
   const isDraftMode =
     type === "purchase" && !isAlter && loadedDraft != null;
 
+  // AGENT PROPOSAL MODE (W2): this create screen is REVIEWING an agent's
+  // proposal. The form is prefilled from the approval's previewed postings, and
+  // Ctrl+A records an APPROVAL — with the operator's edited body when they
+  // changed anything — instead of posting. See app/LoadedProposal.tsx.
+  //
+  // ⛔ LIVE ONLY WHILE THE FRAME NAMES THIS APPROVAL (`detailOf`, set by the
+  // machine's proposalFrame). The slot outlives the frame; the frame does not
+  // outlive an Esc, so a later plain F5 is plain F5 again.
+  const { loaded: loadedProposal, setLoaded: setLoadedProposal } =
+    useLoadedProposal();
+  const isProposalMode =
+    !isAlter &&
+    !isDraftMode &&
+    loadedProposal != null &&
+    loadedProposal.key.voucherType === type &&
+    snapshot.detailOf === loadedProposal.approval.id;
+
   // SINGLE vs DOUBLE entry (Ctrl+H). Undefined config means "the class default",
   // so Payment / Receipt / Contra open in SINGLE entry the way a Tally operator
   // expects, and a class that has no single form (Journal, and the GST vouchers)
@@ -1894,14 +1918,14 @@ function AccountingVoucherScreen({
   useEffect(() => {
     if (formClassRef.current === type) return;
     formClassRef.current = type;
-    if (loadedVoucherID || isDraftMode) return; // a hydration owns the form
+    if (loadedVoucherID || isDraftMode || isProposalMode) return; // a hydration owns the form
     setForm(emptyForm());
     setStatus(null);
     setSavedNo(null);
     setSavedVoucherID(null);
     setTaxResult(null);
     setFormGen((g) => g + 1);
-  }, [type, loadedVoucherID, isDraftMode]);
+  }, [type, loadedVoucherID, isDraftMode, isProposalMode]);
 
   // Hydrate the alter form from the GET endpoint when a new voucher is drilled.
   //
@@ -1956,6 +1980,34 @@ function AccountingVoucherScreen({
       setForm(seeded);
     }
   }, [draftID, loadedDraft]);
+
+  // Seed the form from an AGENT PROPOSAL (W2), once per approval — the same
+  // guard shape as the draft seed above, so a re-render never clobbers an edit.
+  //
+  // ⛔ THROUGH `formFromView`, THE ALTER HYDRATION, not through a new mapping —
+  // see screens/vouchers/agentProposal.ts for why that is the decision. The
+  // number is blanked: this is a create, and the server allocates it when the
+  // agent commits.
+  //
+  // ⚠️ `setFormGen` REMOUNTS THE ACCOUNT PICKER, for the reason formGen exists
+  // (D108): SelectionList re-seeds from `value` only until something is typed,
+  // and the seeded account must be visible, not just present in the form.
+  const proposalSeedRef = useRef<string | null>(null);
+  const proposalSeedFormRef = useRef<VoucherForm | null>(null);
+  const proposalID = isProposalMode ? loadedProposal.approval.id : null;
+  useEffect(() => {
+    if (!proposalID || proposalSeedRef.current === proposalID || !loadedProposal) {
+      return;
+    }
+    proposalSeedRef.current = proposalID;
+    const seeded: VoucherForm = {
+      ...formFromView(viewFromApproval(loadedProposal.approval, type)),
+      voucherNo: "",
+    };
+    proposalSeedFormRef.current = seeded;
+    setForm(seeded);
+    setFormGen((g) => g + 1);
+  }, [proposalID, loadedProposal, type]);
 
   // Keep the latest form/ctx in refs so the registered action handlers (stable
   // across renders) always read current state without re-registering.
@@ -2663,6 +2715,9 @@ function AccountingVoucherScreen({
   // current draft without re-registering. null when not in draft mode.
   const draftBodyRef = useRef<VoucherDraftBody | null>(null);
   draftBodyRef.current = isDraftMode ? loadedDraft.draft.body : null;
+  // Likewise the proposal under review, or null outside proposal mode.
+  const proposalRef = useRef<LoadedProposal | null>(null);
+  proposalRef.current = isProposalMode ? loadedProposal : null;
 
   const onAccept = useCallback(() => {
     if (inFlight.current) return;
@@ -2764,6 +2819,76 @@ function AccountingVoucherScreen({
               : // The stock classes, whose bodies carry no postings at all and
                 // are built by StockVoucherScreen. Left on the verbatim path.
                 Promise.resolve(buildPlainRequest(f));
+    // =====================================================================
+    // ⛔⛔ AGENT PROPOSAL MODE (W2): Ctrl+A RECORDS AN APPROVAL AND POSTS NOTHING.
+    // =====================================================================
+    // The body is built by THE SAME builder an ordinary Ctrl+A on this form
+    // uses — the refusals, the master gate, the single-entry orientation all
+    // apply — and then, instead of acceptVoucher, it is compared with what the
+    // agent previewed: unchanged ⇒ `approve` (the server commits the recorded
+    // preview, byte for byte); changed ⇒ `approve` with `edited_body` (the
+    // server commits THIS body, through the same validators).
+    //
+    // ⛔ IT MUST NEVER FALL THROUGH TO acceptVoucher. A direct post leaves the
+    // approval PENDING, and the moment anybody approves it in the inbox the same
+    // payment is on the books twice — once by the human here, once by the
+    // agent's commit — with nothing on either voucher saying so. The test
+    // `VoucherScreen.agentProposal.test.tsx` asserts no voucher is created.
+    //
+    // ⛔ AND IT RETURNS `screenHandled`, SO THE MACHINE DOES NOT MOVE. The accept
+    // reducer would replace this frame with a fresh one — dropping `detailOf`,
+    // i.e. leaving proposal mode — before the decision answered; a refused
+    // decision (409 already decided, 403 not your authority) would then leave
+    // the proposal's figures in an ORDINARY form whose next Ctrl+A posts them.
+    // Staying on the frame keeps a failed approval retryable, and a successful
+    // one clears the form itself below.
+    //
+    // ⚠️ NEVER QUEUED OFFLINE. A decision is not a voucher: queueOrRethrow's
+    // outbox replays voucher posts, and a transport failure here is shown as the
+    // error it is.
+    const proposal = proposalRef.current;
+    if (proposal) {
+      const proposed = proposal.approval.args?.body ?? {};
+      // The server must still hold the proposal this screen was prefilled
+      // from — see assertStillAsShown — BEFORE the builder runs, because the
+      // builder may create a ledger the operator typed and a stale proposal is
+      // no reason to leave one behind.
+      assertStillAsShown(client, companyID, proposal.approval)
+        .then(() => buildRequest())
+        .then((req) => {
+          const edited = editedFrom(req, proposed);
+          return client
+            .decideAgentApproval(
+              companyID,
+              proposal.approval.id,
+              edited
+                ? {
+                    decision: "approve",
+                    edited_body: req as unknown as Record<string, unknown>,
+                  }
+                : { decision: "approve" },
+            )
+            .then(() => edited);
+        })
+        .then((edited) => {
+          setStatus(
+            edited
+              ? "Approved WITH YOUR EDIT — the agent commits your version on its next poll (its validators still apply). Nothing is posted by this screen; see Ctrl+K for the commit."
+              : "Approved as previewed — the agent commits it on its next poll. Nothing is posted by this screen; see Ctrl+K for the commit.",
+          );
+          setLoadedProposal(null);
+          proposalSeedFormRef.current = null;
+          setForm(nextVoucherForm(formRef.current));
+          setFormGen((g) => g + 1);
+        })
+        .catch((err: unknown) => {
+          setStatus(`Error: ${decisionErrorText(err)}`);
+        })
+        .finally(() => {
+          inFlight.current = false;
+        });
+      return screenHandled("Sending the approval…");
+    }
     // =====================================================================
     // ⛔⛔ THE CHART AS IT STOOD BEFORE THIS ACCEPT — D81's HALF, AND IT MUST BE
     // READ BEFORE THE BUILDER RUNS.
@@ -2884,6 +3009,7 @@ function AccountingVoucherScreen({
     client,
     companyID,
     setLoadedDraft,
+    setLoadedProposal,
   ]);
 
   // Alt+D Delete (alter mode only): tombstone the loaded voucher, then clear the
@@ -2909,6 +3035,19 @@ function AccountingVoucherScreen({
   const onCancelVoucher = useCallback((): string => {
     if (ctxRef.current.voucherID) {
       return "A saved voucher cannot be cancelled in this build — Alt+D deletes it (appends a delete version; nothing is erased).";
+    }
+    // ⛔ Alt+X ON A PROPOSAL LEAVES PROPOSAL MODE, AND SAYS WHAT IT DID NOT DO.
+    // A cleared form still in proposal mode would make the next Ctrl+A an
+    // "approve with this edit" of whatever is keyed next. Cancelling here is NOT
+    // a rejection — that is Alt+X on the inbox, where the operator can see which
+    // proposal they are refusing.
+    if (proposalRef.current) {
+      setLoadedProposal(null);
+      proposalSeedFormRef.current = null;
+      setForm(emptyForm());
+      setStatus(null);
+      setFormGen((g) => g + 1);
+      return "Proposal set aside — the form is cleared and nothing was decided; it is still pending in the Approval Inbox.";
     }
     setForm(emptyForm());
     setStatus(null);
@@ -3120,6 +3259,20 @@ function AccountingVoucherScreen({
       </header>
 
       <p className="mb-2 text-xs text-tally-field">{cfg.hint}</p>
+
+      {/* ABOVE THE FORM, not below it: the reasons a human is being asked are
+          what the operator must read before touching a figure, and the
+          ledger-effect diff is what the approval will commit if they touch
+          none. See AgentProposalPanel. */}
+      {isProposalMode ? (
+        <AgentProposalPanel
+          approval={loadedProposal.approval}
+          edited={
+            proposalSeedFormRef.current !== null &&
+            JSON.stringify(proposalSeedFormRef.current) !== JSON.stringify(form)
+          }
+        />
+      ) : null}
 
       <div className="bg-tally-panel p-3">
         {/*

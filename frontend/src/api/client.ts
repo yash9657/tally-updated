@@ -169,6 +169,16 @@ import type {
 } from "./admin";
 
 import type {
+  AgentApprovalResponse,
+  AgentApprovalsResponse,
+  AgentDecisionRequest,
+  AgentEventsResponse,
+  AgentRunResponse,
+  AgentRunsResponse,
+  StartAgentRunRequest,
+} from "./agent";
+
+import type {
   ReconciliationPayloadResponse,
   ReconciliationQueueResponse,
   ResolveReconciliationResponse,
@@ -1920,4 +1930,41 @@ export interface CoredClient {
     companyID: string,
     reconID: string,
   ): Promise<ResolveReconciliationResponse>;
+
+  // ---- THE AGENT PLANE (W2, D121 §8) ------------------------------------
+  //
+  // ⛔ NONE OF THESE WRITES TO THE BOOKS. The run routes read or start the
+  // agent's own workflow; the decision route records a HUMAN's verdict on a
+  // proposal. The voucher an approval leads to is committed by the agent's
+  // poller afterwards, replaying the recorded preview (or the approver's edit),
+  // under an idempotency key — so a screen that has just approved must never
+  // report a voucher number it does not have.
+
+  /** Start a run (`create agent-run`). 503 AGENT_UNCONFIGURED when no model is set. */
+  startAgentRun(companyID: string, req: StartAgentRunRequest): Promise<AgentRunResponse>;
+  /** Runs for this company, newest first. */
+  listAgentRuns(companyID: string, limit?: number): Promise<AgentRunsResponse>;
+  /** One run, with every approval it raised. */
+  getAgentRun(companyID: string, runID: string): Promise<AgentRunResponse>;
+  /** The run's intent log as AG-UI events, after `after` (pass back next_after). */
+  agentRunEvents(companyID: string, runID: string, after?: number): Promise<AgentEventsResponse>;
+  /** Cancel a run (`alter agent-run`); nothing it parked will ever commit. */
+  cancelAgentRun(companyID: string, runID: string): Promise<AgentRunResponse>;
+  /** The approval inbox (`display agent-approval`). */
+  listAgentApprovals(
+    companyID: string,
+    query?: { state?: "pending" | "all"; run_id?: string },
+  ): Promise<AgentApprovalsResponse>;
+  /** One approval, with its preview (the ledger-effect diff). */
+  getAgentApproval(companyID: string, approvalID: string): Promise<AgentApprovalResponse>;
+  /**
+   * Approve / edit-then-approve / reject / ask-back (`alter agent-approval`).
+   * 409 ALREADY_DECIDED | APPROVAL_EXPIRED carries the approval as it now is;
+   * 403 when the caller may not take the underlying action themselves.
+   */
+  decideAgentApproval(
+    companyID: string,
+    approvalID: string,
+    req: AgentDecisionRequest,
+  ): Promise<AgentApprovalResponse>;
 }

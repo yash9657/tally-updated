@@ -675,3 +675,37 @@ describe("T8 step 8 — the forex gain/loss ledger panel", () => {
     expect(panel).toMatch(/Alt\+G > Unadjusted Forex Gain\/Loss/);
   });
 });
+
+/**
+ * W2 — THE AGENT ROW.
+ *
+ * ⛔ THE MUTATION THIS PINS is flipping the row to "On" because the screens now
+ * exist. The shipped server has NO MODEL, so every start answers
+ * AGENT_UNCONFIGURED — a row reading "On" over a deployment where no run can
+ * begin is the overstatement this screen exists to refuse.
+ */
+describe("W2 — the agent reads Part built, and names its three gaps", () => {
+  const ROW = /^Agent — side panel \(Ctrl\+K\) and Approval Inbox$/;
+
+  it("reads Part built, not On", () => {
+    renderFeatures();
+    expect(badgeFor(ROW)).toBe("Part built");
+  });
+
+  it("names every door it has, by key", () => {
+    renderFeatures();
+    const note = noteFor(ROW);
+    expect(note).toMatch(/Ctrl\+K/);
+    expect(note).toMatch(/Gateway > Approval Inbox \(also Alt\+G\)/);
+    expect(note).toMatch(/Ctrl\+A approves as previewed, Alt\+X rejects, Alt\+B asks/);
+    expect(note).toMatch(/never draws a voucher form of its own/);
+  });
+
+  it("⛔ and says what is NOT there: no model, no invoice editing, no breadth", () => {
+    renderFeatures();
+    const note = noteFor(ROW);
+    expect(note).toMatch(/LLM_PROVIDER unset/);
+    expect(note).toMatch(/'As Voucher' mode is not built/);
+    expect(note).toMatch(/only the eight accounting voucher creates/);
+  });
+});
