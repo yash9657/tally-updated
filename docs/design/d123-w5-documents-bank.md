@@ -103,7 +103,11 @@ never raises anything. Outcomes: `pass | fail | unverified | not_run`, carried o
   let OCR `300:00` ground `300.00`, the exact WS10 misread; the test caught it), dates in printed
   renderings of the one ISO date, text as whole tokens. A model-claimed location is carried as
   `source="model"`, ungrounded. An ungrounded **total** is a `fail` only when the document prints a
-  total label; otherwise `unverified` (the synthetic corpus OCR prints no total line).
+  total label; otherwise `unverified` (the synthetic corpus OCR prints no total line). On a bill
+  that labels its total, the total grounds ONLY on the labelled line (or the line under a bare
+  label): the first cut matched any line, so a total misread as the quantity, a rate, the HSN code
+  or the GST percentage "grounded" and the box pointed at the wrong line (wave-1 review;
+  `test_a_total_that_is_a_quantity_rate_hsn_or_rate_percent_is_not_grounded`).
   Provenance values are the persisted (guarded) values, re-scanned for PII.
 
 ## 4. Idempotency keys — closing row 30's class

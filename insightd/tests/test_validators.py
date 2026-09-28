@@ -249,3 +249,20 @@ def test_a_stored_pre_w5_draft_still_rehydrates():
     from insightd.contracts.draft import PurchaseVoucherDraft
     back = PurchaseVoucherDraft.model_validate(raw)
     assert back.validations == [] and back.provenance == {}
+
+
+def test_a_total_that_is_a_quantity_rate_hsn_or_rate_percent_is_not_grounded():
+    """The wave-1 review: any number printed on the bill grounded the total."""
+    ocr = _ocr("Grand Total 1,18,000.00", "Qty 5000 @ 20.00", "HSN 8471 GST 18%")
+    for wrong in ("5000", "20", "8471", "18"):
+        prov = ground({"totals": ("money", wrong)}, ocr)
+        assert not prov["totals"].grounded, wrong
+        assert prov["totals"].bbox is None, wrong
+        assert [x.outcome for x in grounding_validations(prov, ocr) if x.field == "totals"] == ["fail"], wrong
+    # The real total still grounds on its labelled line ...
+    assert ground({"totals": ("money", "118000")}, ocr)["totals"].bbox == [1, 0, 100, 8]
+    # ... including a two-line layout where the label stands alone.
+    two = _ocr("Qty 5000 @ 20.00", "Grand Total", "1,18,000.00")
+    p = ground({"totals": ("money", "118000")}, two)["totals"]
+    assert p.grounded and p.bbox == [1, 20, 100, 28]
+    assert not ground({"totals": ("money", "5000")}, two)["totals"].grounded

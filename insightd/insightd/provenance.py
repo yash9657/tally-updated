@@ -25,7 +25,10 @@ THE SEARCH IS DETERMINISTIC AND DELIBERATELY NARROW
     (dd/mm/yyyy, dd-mm-yyyy, dd.mm.yyyy, dd/mm/yy, dd-Mon-yyyy, dd Mon yyyy,
     yyyy-mm-dd) of the ONE date the model returned — never parsed out of the
     line, which would reopen the dd/mm vs mm/dd question;
-  * text (invoice number, HSN, party) is a case-insensitive whole-token match.
+  * text (invoice number, HSN, party) is a case-insensitive whole-token match;
+  * the invoice TOTAL, on a bill that labels one, is matched only on the
+    labelled line (or the line under a bare label) — any-line matching let a
+    quantity, a rate or an HSN code "ground" a misread total.
 
 A model-claimed location (``InferredInvoice.field_evidence``) is used only when
 this search finds nothing, and is marked ``source="model"``, ungrounded.
@@ -112,7 +115,16 @@ def ground(fields: dict[str, tuple[str, str | None]], ocr, evidence=None) -> dic
                 except InvalidOperation:
                     want = None
                 if want is not None:
-                    prov = _locate(ocr, lambda t, w=want: w in _numbers(t))
+                    if path == "totals" and document_labels_a_total(ocr):
+                        # ⛔ THE TOTAL MUST BE FOUND ON THE TOTAL'S LINE. Matched
+                        # against every line, a model that returned the line
+                        # quantity, a rate, the HSN code or the GST percentage
+                        # as the invoice total was "grounded" on that line and
+                        # the operator was shown a box around it (wave-1
+                        # review). A bill that labels its total is held to it.
+                        prov = _locate_total(ocr, want)
+                    else:
+                        prov = _locate(ocr, lambda t, w=want: w in _numbers(t))
             elif kind == "date":
                 renders = _date_renderings(value)
                 prov = _locate(ocr, lambda t, r=renders: any(_token_in(x, t) for x in r))
@@ -138,6 +150,23 @@ def ground(fields: dict[str, tuple[str, str | None]], ocr, evidence=None) -> dic
 _TOTAL_LABEL = re.compile(r"(?i)\b(grand\s+total|invoice\s+total|total\s+amount|amount\s+payable|net\s+amount|total)\b")
 
 
+def _locate_total(ocr, want: Decimal) -> FieldProvenance | None:
+    """``want`` on a line that labels the total — or, where the label stands
+    alone with no number (a two-line layout: "Grand Total" / "1,18,000.00"),
+    on the line directly after it."""
+    for pidx, page in enumerate(ocr.pages):
+        label_alone = False
+        for line in page.lines:
+            labelled = _TOTAL_LABEL.search(line.text) is not None
+            if (labelled or label_alone) and want in _numbers(line.text):
+                return FieldProvenance(
+                    page=pidx, bbox=list(line.bbox), confidence=float(line.confidence),
+                    grounded=True, source="ocr",
+                )
+            label_alone = labelled and not _numbers(line.text)
+    return None
+
+
 def document_labels_a_total(ocr) -> bool:
     if ocr is None:
         return False
@@ -153,8 +182,8 @@ def grounding_validations(prov: dict[str, FieldProvenance], ocr=None) -> list[Va
                                   detail=f"found on page {p.page + 1}"))
         elif path in must_ground:
             out.append(Validation(check="grounded", outcome="fail", field=path,
-                                  detail="the value was not found anywhere in the document's text — "
-                                         "the model did not read it off the bill"))
+                                  detail="the value was not found on the line that labels the bill's total — "
+                                         "the model did not read it off the bill's total"))
         else:
             out.append(Validation(check="grounded", outcome="unverified", field=path,
                                   detail="not found verbatim in the document's text"))
