@@ -81,12 +81,44 @@ var (
 	poolErr  error
 )
 
-// AdminDSNValue returns the admin DSN in force, honouring TESTDB_ADMIN_DSN.
+// AppDSNEnv is AdminDSNEnv's twin for the application role.
+//
+// ⛔ THE TWO MUST MOVE TOGETHER, AND UNTIL W5 ONLY ONE COULD. Most DB tests
+// migrate through the ADMIN DSN and then connect as the APP role; with only the
+// admin half overridable, a run pointed at a private database migrated that
+// database and then queried the shared one — which, with concurrent lanes each
+// adding migrations, reads as a missing column in a file nobody touched. Every
+// test DSN in the tree now goes through these two functions.
+const AppDSNEnv = "TESTDB_APP_DSN"
+
+// AdminDSNValue returns the admin DSN in force, honouring TESTDB_ADMIN_DSN
+// and then ADMIN_DATABASE_URL.
+//
+// The second name exists because W3 and W5 fixed the same hazard (a test
+// migrating the shared database) in parallel under different names: W3 read
+// the Makefile's ADMIN_DATABASE_URL / DATABASE_URL, W5 introduced TESTDB_*.
+// Honouring both means a lane that exported either one is really pointed at
+// its own database, and nobody's recipe silently falls back to "tally".
 func AdminDSNValue() string {
 	if v := os.Getenv(AdminDSNEnv); v != "" {
 		return v
 	}
+	if v := os.Getenv("ADMIN_DATABASE_URL"); v != "" {
+		return v
+	}
 	return AdminDSN
+}
+
+// AppDSNValue returns the application-role DSN in force, honouring
+// TESTDB_APP_DSN and then DATABASE_URL (see AdminDSNValue).
+func AppDSNValue() string {
+	if v := os.Getenv(AppDSNEnv); v != "" {
+		return v
+	}
+	if v := os.Getenv("DATABASE_URL"); v != "" {
+		return v
+	}
+	return AppDSN
 }
 
 // adminPool returns the ONE process-wide admin pool, created lazily.

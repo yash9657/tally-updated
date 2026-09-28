@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"github.com/khata/cored/internal/platform/testdb"
 	"log"
 	"os"
 	"strings"
@@ -23,9 +24,9 @@ import (
 // Every DB-touching case is connect-or-skip, so `go test ./cmd/...` stays green
 // offline and with CORED_SKIP_DB set.
 
-const (
-	testAdminDSN = "postgres://postgres:postgres@localhost:5433/tally?sslmode=disable"
-	testAppDSN   = "postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable"
+var (
+	testAdminDSN = testdb.AdminDSNValue()
+	testAppDSN   = testdb.AppDSNValue()
 	// Same server, a database that will never hold statutory_step.
 	testNoTableDSN = "postgres://tally_app:tally_app@localhost:5433/postgres?sslmode=disable"
 )

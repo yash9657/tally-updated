@@ -60,9 +60,9 @@ import (
 	"github.com/khata/cored/migrations"
 )
 
-const (
-	payrollAdminDSN = "postgres://postgres:postgres@localhost:5433/tally?sslmode=disable"
-	payrollAppDSN   = "postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable"
+var (
+	payrollAdminDSN = testdb.AdminDSNValue()
+	payrollAppDSN   = testdb.AppDSNValue()
 )
 
 // payrollWageMonth is the month every test in this file runs.

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from fastapi.testclient import TestClient
 
 from insightd.api.app import create_app
@@ -209,7 +211,23 @@ def test_post_draft_returns_201_and_ready():
     assert draft["body"]["voucher_class"] == "purchase"
     assert draft["body"]["party_ledger_id"] == "L-PARTY-1"
     # masked-only: no raw GSTIN anywhere in the response
-    assert "27ABCDE1234F1Z5" not in r.text
+    assert "27ABCDE1234F1Z0" not in r.text
+
+
+def test_the_same_bill_uploaded_twice_is_flagged_as_a_duplicate_by_the_route():
+    """W5 — the duplicate check needs the STORE, so it lives on the route; this
+    pins that it is wired there (validators/duplicates.py)."""
+    client, _ = _client()
+    first = _post_fixture(client, "intra-state-18-1line-clean").json()
+    second = _post_fixture(client, "intra-state-18-1line-clean").json()
+    assert first["status"] == "ready"
+    assert second["status"] == "low_confidence_manual"
+    assert second["unresolved"][0] == "duplicate"
+    dup = [v for v in second["validations"] if v["check"] == "duplicate_bill"][0]
+    assert dup["related_draft_ids"] == [first["draft_id"]]
+    # Provenance rides the wire, locating fields without carrying OCR text.
+    assert second["provenance"]["invoice_no"]["grounded"] is True
+    assert "27ABCDE1234F1Z0" not in json.dumps(second)
 
 
 def test_adversarial_post_routes_to_manual():

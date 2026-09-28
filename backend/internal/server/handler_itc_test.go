@@ -53,7 +53,7 @@ import (
 // itcTestAppDSN is the application-role DSN. It is duplicated from
 // server_test.go rather than shared because that file is in the EXTERNAL test
 // package (server_test) and its consts are not visible here.
-const itcTestAppDSN = "postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable"
+var itcTestAppDSN = testdb.AppDSNValue()
 
 // noDBServer is a Server whose ITC service holds a NIL TxRunner.
 //

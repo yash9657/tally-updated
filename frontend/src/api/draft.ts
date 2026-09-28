@@ -65,6 +65,39 @@ export interface FieldConfidence {
 }
 
 /**
+ * W5 — one deterministic check's verdict on the draft (insightd/validators).
+ * `fail` lowered the named field to unresolved; `pass` confirms and NEVER
+ * raises; `unverified` ran against incomplete reference data (an HSN this
+ * company has not used, with no directory loaded); `not_run` had nothing to
+ * check. `detail` is counts and arithmetic, never a raw identifier.
+ */
+export interface DraftValidation {
+  check: string;
+  outcome: "pass" | "fail" | "unverified" | "not_run";
+  /** The same field token `unresolved` uses: "supplier", "totals", "line[0].hsn", "duplicate". */
+  field: string;
+  detail: string;
+  /** duplicate_bill only: the other drafts this one duplicates. */
+  related_draft_ids: string[];
+}
+
+/**
+ * W5 — WHERE ON THE DOCUMENT a draft field was found. `grounded` is true only
+ * when insightd found the value in the OCR text itself; a `source: "model"`
+ * location is the model's claim and is not trusted. `value` is the persisted
+ * draft value, never OCR text. `bbox` is `[x0, y0, x1, y1]` in the page's pixel
+ * space; `page` is 0-based.
+ */
+export interface FieldProvenance {
+  value: string | null;
+  page: number | null;
+  bbox: number[] | null;
+  confidence: number;
+  grounded: boolean;
+  source: "ocr" | "model" | "none";
+}
+
+/**
  * Per-field confidence, bucketed header vs line-items, with rolled-up overalls.
  * `overall = min(overall_header, overall_line_items)`.
  */
@@ -168,6 +201,14 @@ export interface PurchaseVoucherDraft {
   unresolved: string[];
   /** display-only re-derivation */
   derived_gst?: GSTAmounts | null;
+  /**
+   * W5 — the evidence behind the numbers. Optional because drafts stored
+   * before W5 (and the mock) carry neither; absent means "no evidence
+   * recorded", never "every check passed".
+   */
+  validations?: DraftValidation[];
+  /** Field path ("invoice_no", "totals", "line[0].taxable_value") → location. */
+  provenance?: Record<string, FieldProvenance>;
   /**
    * The acceptance link, set together with `status: "accepted"` — see
    * {@link DraftStatus}. All three are null/absent for every non-accepted draft.

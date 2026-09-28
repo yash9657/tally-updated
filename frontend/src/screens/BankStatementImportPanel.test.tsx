@@ -329,6 +329,64 @@ describe("a check that did not run must not look like one that passed", () => {
   });
 });
 
+describe("W5 — the mandatory balance proof", () => {
+  it("sends the keyed statement balances as STRINGS and says a totals proof is not a walk", async () => {
+    const importBankStatement: CoredClient["importBankStatement"] = vi.fn(
+      async () =>
+        importResult({
+          balance_walked: false,
+          balance_proof: "declared",
+          balance_declared_by: "operator",
+        }),
+    );
+    const { fire } = renderPanel({ importBankStatement });
+    expect(await screen.findByTestId("brs-as-on")).toBeTruthy();
+    await fire();
+    await waitFor(() => screen.getByTestId("stmt-file"));
+    chooseFile(CSV);
+    await waitFor(() => screen.getByTestId("stmt-import"));
+
+    fireEvent.change(screen.getByTestId("stmt-declared-opening"), {
+      target: { value: "2,50,000.00" },
+    });
+    fireEvent.change(screen.getByTestId("stmt-declared-closing"), {
+      target: { value: "325000.00" },
+    });
+    fireEvent.click(screen.getByTestId("stmt-import"));
+
+    await waitFor(() => expect(importBankStatement).toHaveBeenCalled());
+    const req = vi.mocked(importBankStatement).mock.calls[0]![2];
+    // Verbatim strings: the proof is the SERVER's arithmetic, in decimals.
+    expect(req.declared_opening_balance).toBe("2,50,000.00");
+    expect(req.declared_closing_balance).toBe("325000.00");
+
+    const walk = await screen.findByTestId("stmt-walk");
+    expect(walk.textContent).toMatch(/PROVED by totals, not row by row/);
+    expect(walk.textContent).not.toMatch(/PASSED/);
+    // Still set apart from a pass: a weaker proof is not a walk.
+    expect(walk.className).toMatch(/font-bold/);
+  });
+
+  it("sends no declared balance at all when none was keyed", async () => {
+    const importBankStatement: CoredClient["importBankStatement"] = vi.fn(
+      async () => importResult(),
+    );
+    const { fire } = renderPanel({ importBankStatement });
+    expect(await screen.findByTestId("brs-as-on")).toBeTruthy();
+    await fire();
+    await waitFor(() => screen.getByTestId("stmt-file"));
+    chooseFile(CSV);
+    await waitFor(() => screen.getByTestId("stmt-import"));
+    fireEvent.click(screen.getByTestId("stmt-import"));
+    await waitFor(() => expect(importBankStatement).toHaveBeenCalled());
+    const req = vi.mocked(importBankStatement).mock.calls[0]![2];
+    // Absent, not "": an empty string would be a declared balance of nothing.
+    expect(req).not.toHaveProperty("declared_opening_balance", "");
+    expect(req.declared_opening_balance).toBeUndefined();
+    expect(req.declared_closing_balance).toBeUndefined();
+  });
+});
+
 describe("the account identity (I-11)", () => {
   it("says NOT RECORDED in words when the ledger has no account number", async () => {
     const { fire } = renderPanel({

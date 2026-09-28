@@ -32,6 +32,7 @@ import {
   drainPendingDraftConfirms,
   pendingDraftConfirmCount,
   _setDraftLifecyclePort,
+  billInboxIdempotencyKey,
 } from "./draftAccept";
 import { _resetLedgerCache, _resetOutputTaxLedgerCache } from "./gstVoucher";
 
@@ -252,7 +253,12 @@ describe("acceptPurchaseDraft (the only write path)", () => {
     expect(spy).toHaveBeenCalledTimes(1);
     // The posted body equals the converted body (balanced, fixed-4 strings).
     const [, postedReq] = spy.mock.calls[0]!;
-    expect(postedReq).toEqual(draftBodyToVoucherRequest(balancedBody()));
+    // ...plus the W5 idempotency key, which is derived FROM that body.
+    const converted = draftBodyToVoucherRequest(balancedBody());
+    expect(postedReq).toEqual({
+      ...converted,
+      idempotency_key: billInboxIdempotencyKey(converted),
+    });
 
     // The mock echoes the intra @18 split from gst.lines: 90 / 90 / 0.
     expect(res.cgst).toBe("90.0000");
@@ -2279,5 +2285,74 @@ describe("§7.3 B — the pending-confirm queue", () => {
     expect(fake.rows[0]!.status).toBe("accepted");
     expect(fake.rows[0]!.accepted_voucher_no).toBe(first.voucher_no);
     expect(pendingDraftConfirmCount(COMPANY)).toBe(0);
+  });
+});
+
+
+// W5 (migration 0100) — LAYER 7, the request's own name. The server-side proof
+// that one key posts one voucher is backend/internal/ledger/idempotency_test.go;
+// these pin the CLIENT half: that the key is sent, that it is the same key when
+// the accept is recomputed from scratch (the reload / second-browser case), and
+// that a replayed answer is treated as the success it is.
+describe("the Bill Inbox idempotency key (W5)", () => {
+  beforeEach(() => {
+    _resetAcceptedDraftCache();
+    _resetDurableAcceptRecords();
+    _resetPendingDraftConfirms();
+    _resetLedgerCache();
+    _resetOutputTaxLedgerCache();
+  });
+
+  it("is deterministic across a cold recompute, and different for a different bill", () => {
+    const a = draftBodyToVoucherRequest(balancedBody());
+    const b = draftBodyToVoucherRequest(balancedBody());
+    expect(billInboxIdempotencyKey(a)).toBe(billInboxIdempotencyKey(b));
+
+    const other = balancedBody();
+    other.voucher_date = "2026-04-03";
+    expect(billInboxIdempotencyKey(draftBodyToVoucherRequest(other))).not.toBe(
+      billInboxIdempotencyKey(a),
+    );
+  });
+
+  it("fits the shape migration 0100 accepts (8..200 chars, no white space)", () => {
+    const k = billInboxIdempotencyKey(draftBodyToVoucherRequest(balancedBody()));
+    expect(k).toMatch(/^bill-inbox:[0-9a-f]{28}$/);
+    expect(k.length).toBeGreaterThanOrEqual(8);
+    expect(k.length).toBeLessThanOrEqual(200);
+  });
+
+  it("sends the SAME key on two independent accepts of one bill", async () => {
+    const keys: string[] = [];
+    for (let i = 0; i < 2; i++) {
+      // Everything a reload forgets is forgotten between the two.
+      _resetAcceptedDraftCache();
+      _resetDurableAcceptRecords();
+      _resetLedgerCache();
+      const client = createMockClient({ seed: false });
+      const spy = vi.spyOn(client, "postPurchaseVoucher");
+      await acceptPurchaseDraft(client, COMPANY, balancedBody());
+      keys.push(spy.mock.calls[0]![1].idempotency_key ?? "");
+    }
+    expect(keys[0]).not.toBe("");
+    expect(keys[1]).toBe(keys[0]);
+  });
+
+  it("treats a replayed answer as the posted voucher, not a failure", async () => {
+    const client = createMockClient({ seed: false });
+    const spy = vi.spyOn(client, "postPurchaseVoucher").mockResolvedValue({
+      voucher_id: "v-first",
+      voucher_version_id: "vv-first",
+      version_no: 1,
+      voucher_no: "7",
+      cgst: "90.0000",
+      sgst: "90.0000",
+      igst: "0.0000",
+      idempotent_replay: true,
+    });
+    const res = await acceptPurchaseDraft(client, COMPANY, balancedBody());
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(res.voucher_id).toBe("v-first");
+    expect(res.idempotent_replay).toBe(true);
   });
 });

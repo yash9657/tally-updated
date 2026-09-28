@@ -534,6 +534,12 @@ type VoucherInput struct {
 	// A conflict is reported as *DraftAlreadyAcceptedError, which names the
 	// voucher the draft DID produce — see post().
 	SourceDraftID string
+	// IdempotencyKey is the CLIENT's name for this request (W5, migration
+	// 0100). A second request under the same key and the same content is
+	// answered with the first one's result instead of posting; the same key
+	// with different content is refused. Empty = no idempotency, which is every
+	// caller written before W5. Honoured on CREATE only — see idempotency.go.
+	IdempotencyKey string
 }
 
 // SalesVoucherInput describes an F8 Sales voucher to post. Retained for
@@ -572,6 +578,10 @@ type PostResult struct {
 	// did — NONE, EXEMPT or INVALID_NO_PAN — which is the fact a zero amount
 	// alone cannot express.
 	TCS compliance.TCSResult
+	// Replayed is true when this result was NOT written by this call: the
+	// request's idempotency key had already created the voucher, and this is
+	// that first request's stored result (idempotency.go). Nothing was posted.
+	Replayed bool `json:"-"`
 }
 
 // Service is the ledger application service.
@@ -1436,6 +1446,31 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 	if !validClasses[in.Class] {
 		return PostResult{}, fmt.Errorf("ledger: invalid voucher class %q", in.Class)
 	}
+
+	// ⛔ IDEMPOTENCY FIRST, AND THE FINGERPRINT BEFORE ANYTHING IS NORMALISED
+	// (idempotency.go, migration 0100). A known key answers here with the first
+	// request's result and does no work at all — no numbering read, no GST
+	// derivation, no ledger lookups. The concurrent case (two requests racing
+	// past this read) is caught by the key row INSIDE the transaction below.
+	var fingerprint string
+	if op != OpCreate {
+		in.IdempotencyKey = ""
+	}
+	in.IdempotencyKey = normaliseIdempotencyKey(in.IdempotencyKey)
+	if in.IdempotencyKey != "" {
+		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
+			return PostResult{}, err
+		}
+		fp, err := requestFingerprint(in)
+		if err != nil {
+			return PostResult{}, err
+		}
+		fingerprint = fp
+		if res, done, err := s.replayKnownKey(ctx, in.IdempotencyKey, fingerprint); done {
+			return res, err
+		}
+	}
+
 	// THE ACCOUNTING DECISION, MADE IN EXACTLY ONE PLACE. It reads a
 	// compile-time closed set and NEVER voucher_type.is_accounting: flipping one
 	// row in the database must not be able to turn a Sales invoice into a
@@ -2680,14 +2715,41 @@ func (s *Service) post(ctx context.Context, voucherID uuid.UUID, op Op, in Vouch
 			TDS:              tdsRes,
 			TCS:              tcsRes,
 		}
+		// THE KEY ROW IS THE LAST WRITE, so it records the result that is about
+		// to commit. A concurrent request under the same key blocks HERE on
+		// 0100's primary key until this transaction ends; if this one commits,
+		// that one trips the key, rolls back everything above, and replays.
+		if fingerprint != "" {
+			if err := recordIdempotencyKey(ctx, tx, companyID, in.IdempotencyKey, fingerprint, result); err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 	if err != nil {
+		// A CONCURRENT REQUEST UNDER THE SAME KEY WON. This transaction has
+		// rolled back, so the winner's committed row is read and replayed (or
+		// refused as a reuse, if its content differed).
+		if errors.Is(err, errIdempotentConflict) {
+			res, _, rerr := s.replayKnownKey(ctx, in.IdempotencyKey, fingerprint)
+			return res, rerr
+		}
 		// THE DUPLICATED AI BILL. The transaction has rolled back by the time we
 		// get here, so the winner is read in its own transaction and folded into
 		// the error the operator sees. A failure to read it degrades the MESSAGE
 		// and never the REFUSAL — see DraftAlreadyAcceptedError.
 		if errors.Is(err, errDraftAlreadyAccepted) {
+			// ⛔ THE DRAFT INDEX FIRES BEFORE THE KEY ROW IS REACHED, so two
+			// concurrent deliveries of ONE draft accept under ONE key would
+			// otherwise answer the loser "already accepted" — a refusal for a
+			// request that succeeded, which is row 30's ambiguous-timeout window
+			// again. If the winner holds THIS key and THIS content, it is a
+			// replay; only a DIFFERENT request on the same draft is the conflict.
+			if fingerprint != "" {
+				if res, done, rerr := s.replayKnownKey(ctx, in.IdempotencyKey, fingerprint); done {
+					return res, rerr
+				}
+			}
 			return PostResult{}, s.draftConflictError(ctx, in.SourceDraftID)
 		}
 		return PostResult{}, err

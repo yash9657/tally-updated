@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/khata/cored/internal/platform/testdb"
 	"os"
 	"reflect"
 	"strings"
@@ -24,9 +25,9 @@ import (
 // stays green offline.
 // ---------------------------------------------------------------------------
 
-const (
-	statAdminDSN = "postgres://postgres:postgres@localhost:5433/tally?sslmode=disable"
-	statAppDSN   = "postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable"
+var (
+	statAdminDSN = testdb.AdminDSNValue()
+	statAppDSN   = testdb.AppDSNValue()
 )
 
 func statTablePresent(ctx context.Context, conn *pgx.Conn, name string) bool {

@@ -32,6 +32,7 @@ from .interfaces.base import (
     VoucherDraftMapper,
 )
 from .redaction.boundary import Boundary
+from .validators.gstin import validate_document_gstins
 
 
 @dataclass
@@ -59,6 +60,12 @@ class Pipeline:
 
         # 2. OCR.
         ocr = self.ocr.extract(doc)
+
+        # 2b. ⛔ CHECKS THAT NEED THE RAW TEXT RUN HERE, IN-PROCESS, BEFORE THE
+        #     BOUNDARY — and emit counts only. The GSTIN check character cannot
+        #     be computed after redaction (the value is gone), and this is the
+        #     one place in the pipeline it is allowed to be read.
+        pre_validations = [validate_document_gstins(ocr.full_text)]
 
         # 3. PII REDACTION — the cross-border boundary. From here on only the
         #    redacted payload may be handed to a stage that can make an LLM call.
@@ -88,6 +95,8 @@ class Pipeline:
             mean_confidence=ocr.mean_confidence,
             source=doc.source,
             company_id=ctx.company_id,
+            ocr=redacted,
+            pre_validations=pre_validations,
         )
         return draft
 

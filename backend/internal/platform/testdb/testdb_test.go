@@ -208,6 +208,12 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 		{"voucher_head", `INSERT INTO voucher_head (company_id, voucher_id, current_version_id, version_no, op, voucher_date)
 			VALUES ($1, $2, $3, 1, 'CREATE', DATE '2024-05-01')`,
 			[]any{cid, voucherID, versionID}},
+		// W5 — migration 0100. Hangs off THIS voucher (its company-scoped FK), and
+		// the teardown must get past the table's no-mutate trigger to delete it.
+		{"voucher_idempotency", `INSERT INTO voucher_idempotency
+			(company_id, idempotency_key, request_sha256, voucher_id, result)
+			VALUES ($1, 'fixture-key-0001', repeat('a', 64), $2, '{}'::jsonb)`,
+			[]any{cid, voucherID}},
 		{"posting", `INSERT INTO posting (id, company_id, voucher_version_id, ledger_id, dr_cr, amount)
 			VALUES ($1, $2, $3, $4, 'D', 100)`,
 			[]any{postingID, cid, versionID, ledgerID}},

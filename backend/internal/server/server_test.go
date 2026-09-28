@@ -35,16 +35,9 @@ import (
 // branch with an unmerged migration migrated everyone's database the moment
 // this package ran (W3 lane, 2026-09-28).
 var (
-	adminDSN = envOrDefault("ADMIN_DATABASE_URL", "postgres://postgres:postgres@localhost:5433/tally?sslmode=disable")
-	appDSN   = envOrDefault("DATABASE_URL", "postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable")
+	adminDSN = testdb.AdminDSNValue()
+	appDSN   = testdb.AppDSNValue()
 )
-
-func envOrDefault(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
-}
 
 // newServer applies migrations (idempotent) and returns a wired Server. It
 // skips the test when Postgres is unavailable so the suite stays green offline.

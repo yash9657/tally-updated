@@ -55,7 +55,7 @@
           "confidence": 0.97
         },
         {
-          "text": "GSTIN: 27ABCDE1234F1Z5",
+          "text": "GSTIN: 27ABCDE1234F1Z0",
           "bbox": [
             10,
             130,
@@ -158,7 +158,7 @@
         {
           "id": "L-PARTY-1",
           "name": "Acme Components Pvt Ltd",
-          "gstin_masked": "27ABC…1Z5",
+          "gstin_masked": "27ABC…1Z0",
           "state_code": "27",
           "kind": "party"
         },
@@ -199,7 +199,7 @@
     },
     "planted_pii": {
       "GSTIN": [
-        "27ABCDE1234F1Z5"
+        "27ABCDE1234F1Z0"
       ],
       "PAN": [
         "ABCDE1234F"

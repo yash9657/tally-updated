@@ -24,16 +24,9 @@ import (
 // development database — a side effect nobody asked for, invisible until
 // another checkout found a table its branch does not know about.
 var (
-	adminDSN = envOr("ADMIN_DATABASE_URL", "postgres://postgres:postgres@localhost:5433/tally?sslmode=disable")
-	appDSN   = envOr("DATABASE_URL", "postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable")
+	adminDSN = testdb.AdminDSNValue()
+	appDSN   = testdb.AppDSNValue()
 )
-
-func envOr(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
-}
 
 func dec(s string) decimal.Decimal { return decimal.RequireFromString(s) }
 

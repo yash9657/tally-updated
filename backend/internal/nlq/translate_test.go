@@ -28,9 +28,9 @@ import (
 // DB test discipline (§1.4): CORED_SKIP_DB guard FIRST, then connect-or-skip. The
 // two DSNs are copied verbatim from internal/query/execute_test.go — _test.go
 // identifiers do not cross packages.
-const (
-	adminDSN = "postgres://postgres:postgres@localhost:5433/tally?sslmode=disable"
-	appDSN   = "postgres://tally_app:tally_app@localhost:5433/tally?sslmode=disable"
+var (
+	adminDSN = testdb.AdminDSNValue()
+	appDSN   = testdb.AppDSNValue()
 )
 
 // injectionPayloads copied verbatim from query_security_test.go (external test

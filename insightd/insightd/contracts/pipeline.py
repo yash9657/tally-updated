@@ -54,6 +54,11 @@ class TenantContext(BaseModel):
     igst_ledger_id: str | None = None
     # The buyer's own state — used to decide intra vs inter-state place of supply.
     home_state_code: str | None = None
+    # W5 — the HSN/SAC codes this company has used on its own stock items and
+    # vouchers. The ONLY "existence" evidence for an HSN in this build: there is
+    # no HSN directory loaded (validators/hsn.py says why). Empty = unknown, and
+    # every structurally valid code then reads ``unverified``, never ``fail``.
+    known_hsn: list[str] = []
 
 
 # --------------------------------------------------------------------------- #
@@ -221,6 +226,25 @@ class InferredTotals(BaseModel):
     sgst: Money | None = None
     igst: Money | None = None
     invoice_total: Money | None = None
+    # W5 — the "Round Off" line the bill prints, signed (+0.37 / -0.40). The
+    # totals validator allows exactly this and no tolerance; see
+    # validators/totals.py for the implied-round-off rule when it is absent.
+    round_off: Money | None = None
+
+
+class FieldEvidence(BaseModel):
+    """Where the MODEL says it read a field — carried, never trusted.
+
+    An image-native model (the open-weight adapter's contract) can return the
+    page and box it read a value from. provenance.py prefers its own
+    deterministic OCR search and uses this only when that search finds nothing,
+    marking the result ``source="model"`` and ungrounded.
+    """
+
+    model_config = _FORBID
+
+    page: int
+    bbox: list[float]
 
 
 class InferredInvoice(BaseModel):
@@ -235,3 +259,6 @@ class InferredInvoice(BaseModel):
     line_items: list[LineItem] = []
     totals: InferredTotals = InferredTotals()
     per_field_confidence: dict[str, float] = {}
+    # W5 — optional model-claimed locations, keyed by the same field paths as
+    # PurchaseVoucherDraft.provenance. See FieldEvidence.
+    field_evidence: dict[str, FieldEvidence] = {}

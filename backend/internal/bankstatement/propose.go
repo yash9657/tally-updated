@@ -43,11 +43,11 @@ var synonyms = map[string][]string{
 	"value_date":      {"valuedate", "valuedt", "valuedate", "date", "postingdate", "postdate"},
 	"txn_date":        {"transactiondate", "txndate", "trandate", "date2"},
 	"description":     {"description", "narration", "particulars", "details", "remarks", "transactionremarks"},
-	"deposit":         {"deposit", "depositamt", "depositamount", "credit", "creditamt", "creditamount", "cr"},
-	"withdrawal":      {"withdrawal", "withdrawalamt", "withdrawalamount", "debit", "debitamt", "debitamount", "dr"},
+	"deposit":         {"deposit", "depositamt", "depositamount", "credit", "creditamt", "creditamount", "cr", "depositamountinr"},
+	"withdrawal":      {"withdrawal", "withdrawalamt", "withdrawalamount", "debit", "debitamt", "debitamount", "dr", "withdrawalamountinr"},
 	"amount":          {"amount", "amt", "transactionamount", "txnamount"},
 	"direction":       {"drcr", "crdr", "type", "transactiontype", "debitcredit"},
-	"running_balance": {"balance", "closingbalance", "runningbalance", "balanceamt", "availablebalance"},
+	"running_balance": {"balance", "closingbalance", "runningbalance", "balanceamt", "availablebalance", "bal", "balanceinr"},
 	"bank_reference":  {"reference", "refno", "referencenumber", "utr", "utrnumber", "transactionid", "refnochequeno"},
 	"cheque_number":   {"chequeno", "chequenumber", "chqno", "instrumentno", "instrumentnumber"},
 }
@@ -68,6 +68,27 @@ type Proposal struct {
 	// mapped to. They are worth showing because an unmapped column is often
 	// the one the operator actually wanted.
 	Notes []string
+	// Bank is the bank whose export layout the header matched IN FULL
+	// (profiles.go), or "" when none did. BankVerified is that profile's
+	// Verified flag — false for every profile today, and the Notes say so.
+	Bank         string
+	BankVerified bool
+	// Delimiter is what the file was read with: "comma", "tab", "semicolon"
+	// or "pipe". Shown because a ".xls" that is really tab-separated text is
+	// otherwise a mystery when it parses.
+	Delimiter string
+}
+
+func delimiterName(d rune) string {
+	switch d {
+	case '\t':
+		return "tab"
+	case ';':
+		return "semicolon"
+	case '|':
+		return "pipe"
+	}
+	return "comma"
 }
 
 // normaliseHeader reduces a header cell to its comparison form.
@@ -84,15 +105,19 @@ func normaliseHeader(h string) string {
 // ProposeMapping reads a CSV's header (and its dates) and suggests how to read
 // it. It writes nothing and decides nothing: the operator confirms.
 func ProposeMapping(content string) (Proposal, error) {
-	header, records, err := readCSV(content)
+	t, err := readTable(content)
 	if err != nil {
 		return Proposal{}, err
+	}
+	header, records := t.header, t.body
+	for len(records) > 0 && allBlank(records[len(records)-1]) {
+		records = records[:len(records)-1]
 	}
 	if len(records) == 0 {
 		return Proposal{}, fmt.Errorf("%w: it has a header row and nothing under it", ErrEmptyFile)
 	}
 
-	p := Proposal{Header: header}
+	p := Proposal{Header: header, Delimiter: delimiterName(t.delimiter)}
 	matched := map[int]string{}    // header position -> field it was matched to
 	ambiguous := map[string]bool{} // fields left unproposed because SEVERAL columns fitted
 
@@ -145,10 +170,44 @@ func ProposeMapping(content string) (Proposal, error) {
 	m.BankReference = pick("bank_reference")
 	m.ChequeNumber = pick("cheque_number")
 
+	// A BANK WHOSE WHOLE HEADER SIGNATURE IS PRESENT REPLACES THE SYNONYM
+	// READING — and nothing else changes: the date layout is still read off the
+	// file's own dates below, and the operator still confirms. See profiles.go
+	// for why a signature cannot mis-place a column.
+	if prof, ok := recogniseBank(header); ok {
+		pm := prof.Mapping
+		for _, f := range []*string{&pm.ValueDate, &pm.TxnDate, &pm.Description, &pm.Deposit,
+			&pm.Withdrawal, &pm.Amount, &pm.Direction, &pm.RunningBalance, &pm.BalanceSign,
+			&pm.BankReference, &pm.ChequeNumber} {
+			*f = headerNamed(header, *f)
+		}
+		m = pm
+		p.Unresolved = nil
+		ambiguous = map[string]bool{}
+		matched = map[int]string{}
+		for i, h := range header {
+			for _, name := range []string{m.ValueDate, m.TxnDate, m.Description, m.Deposit, m.Withdrawal,
+				m.Amount, m.Direction, m.RunningBalance, m.BalanceSign, m.BankReference, m.ChequeNumber} {
+				if name != "" && h == name {
+					matched[i] = "profile"
+				}
+			}
+		}
+		p.Bank, p.BankVerified = prof.Bank, prof.Verified
+		if !prof.Verified {
+			p.Notes = append(p.Notes, fmt.Sprintf(
+				"the header matches %s's export layout, so the columns were proposed from it — but that layout has "+
+					"NOT been checked against a real %s export in this build. Confirm every column before importing; "+
+					"the balance proof will refuse the file if a column is wrong.", prof.Bank, prof.Bank))
+		}
+	}
+
 	// THE ENCODING FOLLOWS FROM WHICH COLUMNS EXIST, and only when the answer
 	// is unambiguous. A file with a deposit column AND a lone amount column has
 	// been read wrongly by this function, not by the bank.
 	switch {
+	case p.Bank != "":
+		// The profile states its encoding; nothing to infer.
 	case m.Deposit != "" && m.Withdrawal != "" && m.Amount == "":
 		m.Encoding = TwoColumns
 	case m.Amount != "" && m.Direction != "" && m.Deposit == "" && m.Withdrawal == "":
@@ -177,7 +236,25 @@ func ProposeMapping(content string) (Proposal, error) {
 		// The layout is not proposed either: it is read FROM the value-date
 		// column, and there is not yet one to read.
 	} else {
-		m.DateLayout = proposeDateLayout(header, records, m.ValueDate, &p)
+		// The FOOTER is not dates. Without this split HDFC's summary block
+		// ("Debits" under the Value Dt column) made every layout fail to fit.
+		// A row is dated here if ANY layout reads it, because the layout is the
+		// thing being decided.
+		dateCol := -1
+		for i, h := range header {
+			if h == m.ValueDate {
+				dateCol = i
+			}
+		}
+		body, _ := splitFooter(records, dateCol, func(v string) bool {
+			for _, l := range goLayout {
+				if _, err := time.Parse(l, v); err == nil {
+					return true
+				}
+			}
+			return false
+		})
+		m.DateLayout = proposeDateLayout(header, body, m.ValueDate, &p)
 	}
 	if m.Description == "" && !ambiguous["description"] {
 		p.Unresolved = append(p.Unresolved,

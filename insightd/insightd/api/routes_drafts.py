@@ -60,6 +60,7 @@ from ..contracts.draft import (
     RedactionReportSummary,
 )
 from ..contracts.pipeline import NormalizedDoc, RawUpload, TenantContext
+from ..validators.duplicates import apply_duplicate_check
 from ..pipeline import Pipeline
 from .authn import require_proxy
 from .deps import get_draft_store, get_pipeline
@@ -208,6 +209,9 @@ def create_draft(
         return placeholder
 
     draft = pipeline.run(upload, ctx, normalized=normalized)
+    # W5 — the one check that needs the STORE: is this bill already a draft of
+    # this company? It only lowers (validators/duplicates.py).
+    draft = apply_duplicate_check(draft, store.list_for_company(company_id))
     store.put(draft)
     return draft
 
@@ -230,6 +234,7 @@ def _run_and_store(
     try:
         draft = pipeline.run(upload, ctx, normalized=normalized)
         draft = draft.model_copy(update={"draft_id": draft_id})
+        draft = apply_duplicate_check(draft, store.list_for_company(ctx.company_id))
         store.put(draft)
     except Exception as exc:  # noqa: BLE001 - the reason must reach the operator
         failed = _processing_placeholder(ctx, upload.source, upload.filename)

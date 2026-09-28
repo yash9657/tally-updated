@@ -47,7 +47,8 @@ func (f *matchFixture) importNameless(t *testing.T, csv string) bankstatement.Im
 				Encoding:    bankstatement.TwoColumns,
 				Description: "Narration",
 			},
-			By: "tester",
+			Declared: declaredFor(t, csv),
+			By:       "tester",
 		})
 	if err != nil {
 		t.Fatalf("import: %v", err)

@@ -2207,6 +2207,17 @@ async function postDraftBody(
     // the client layers exactly as it did before, which is disclosed on
     // postDraftBody's residual note.
     if (claimDraftId !== null) req.draft_id = claimDraftId;
+    // ⛔⛔ LAYER 7 — NAME THE REQUEST (W5, migration 0100). Layer 6 needs a draft
+    // id; this does not. The key is DERIVED FROM THE REQUEST ITSELF, so a retry
+    // after a lost response — from this page, after a reload, or from another
+    // browser holding the same bill — carries the same key and is answered with
+    // the voucher the first request posted, instead of posting a second (no
+    // draft id) or being refused 409 for a request that succeeded (with one).
+    // That closes the "no draft id resolvable" and "ambiguous failure" windows
+    // on postDraftBody's residual note. The server binds the key to the body's
+    // fingerprint, so a hash collision can only ever produce a REFUSAL
+    // (idempotency_key_reused), never a wrong replay.
+    req.idempotency_key = billInboxIdempotencyKey(req);
     try {
       res = await client.postPurchaseVoucher(companyID, req);
     } catch (err) {
@@ -2242,6 +2253,46 @@ async function postDraftBody(
   // inside the catch above, where a throw would be dressed up as a refused POST.
   recordAcceptance(companyID, identity, opts, lifecycle, res);
   return res;
+}
+
+/**
+ * The Bill Inbox's idempotency key for one voucher request: `bill-inbox:` plus a
+ * 106-bit content hash of the request as it will be POSTed.
+ *
+ * DETERMINISTIC AND SYNCHRONOUS ON PURPOSE. Deterministic, because the whole
+ * point is that a retry computed from scratch — after a reload, on another
+ * machine — lands on the same key; a random key would protect only the
+ * in-memory retry. Synchronous, because `crypto.subtle` is async and absent on
+ * plain-http origins, and a key that sometimes could not be computed would make
+ * this layer probabilistic — the quality that made the first duplicate fix
+ * insufficient. It does not need to be cryptographic: cored stores the body's
+ * own sha256 beside the key and refuses a mismatch, so a collision costs a 422,
+ * never a replay of the wrong voucher.
+ *
+ * ⚠️ IT KEYS ON CONTENT, so two genuinely separate bills whose requests are
+ * byte-identical (same supplier, no invoice number, same date, same lines, same
+ * operator) are ONE request to the server. The durable memo (layer 3) already
+ * treats that pair as one bill, so this adds no new refusal — it turns a
+ * second post into a replay that says so (`idempotent_replay`).
+ */
+export function billInboxIdempotencyKey(req: VoucherRequest): string {
+  const text = JSON.stringify(req);
+  return `bill-inbox:${hash53(text, 0x9e3779b9)}${hash53(text, 0x85ebca6b)}`;
+}
+
+/** cyrb53: a 53-bit string hash, rendered as 14 hex digits. */
+function hash53(str: string, seed: number): string {
+  let h1 = 0xdeadbeef ^ seed;
+  let h2 = 0x41c6ce57 ^ seed;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  const n = 4294967296 * (2097151 & h2) + (h1 >>> 0);
+  return n.toString(16).padStart(14, "0");
 }
 
 /**

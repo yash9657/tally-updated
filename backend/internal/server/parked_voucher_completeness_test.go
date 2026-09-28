@@ -41,6 +41,7 @@ var rendered = map[string]string{
 	"CreatedBy":       "created_by",
 	"SourceGUID":      "source_guid",
 	"SourceDraftID":   "source_draft_id",
+	"IdempotencyKey":  "idempotency_key",
 	"Postings":        "postings",
 	"BillAllocations": "bill_allocations",
 	"Inventory":       "inventory",
