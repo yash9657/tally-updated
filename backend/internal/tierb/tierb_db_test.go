@@ -334,40 +334,99 @@ func TestTheSecondWallStandsWithoutTheValidator(t *testing.T) {
 
 // TestAcceptedAdversarialQueriesLeakNothing replays, against the DATABASE,
 // every generated query the validator accepted (tierb.AcceptedCorpus), as
-// tenant B, with tenant A's books present. Zero rows may carry A's marker.
+// tenant B, with tenant A's books present.
+//
+// ⛔ THE ORACLE IS DIFFERENTIAL, NOT A MARKER. The first cut flagged a leak
+// only when a result cell contained A's marker string, and most accepted
+// queries project aggregates, numbers, dates or ids, which can never carry it:
+// a count(*) or sum(amount) over A's rows read as "no leak" (the wave-1 review
+// measured 154 of 2208 queries able to register one). Now every query runs as
+// B TWICE — before A's books exist and after — and ANY change in B's answer is
+// a leak: B's own books did not change, so nothing else may move its result.
+// The marker check stays as a second, cheaper signal.
+//
+// The replay also measures its own SENSITIVITY: the queries whose answer AS
+// A, after seeding, differs from B's baseline. Those are the queries that
+// would register a leak of A's rows; the figure is logged and floored so the
+// gate cannot quietly go blind again.
 func TestAcceptedAdversarialQueriesLeakNothing(t *testing.T) {
 	pool := setup(t)
 	a := newTenant(t, pool, "TierB CorpusA")
-	seedA(t, a)
 	b := newTenant(t, pool, "TierB CorpusB")
 	corpus := tierb.AcceptedCorpus()
 	if len(corpus) < 500 {
 		t.Fatalf("accepted corpus has %d queries; the DB replay must cover >= 500", len(corpus))
 	}
-	ran, dbErr, leaked := 0, 0, 0
-	for _, q := range corpus {
-		res, err := tierb.RunQuery(b.ctx, pool, q, tierb.Options{MaxCost: 1e9})
-		if err != nil {
-			// A type error from Postgres (sum over text, etc.) is a refusal
-			// by the database, not an escape — but it must be a plain query
-			// error, never a permission or read-only one (those would mean
-			// the SQL tried to reach something).
-			if strings.Contains(err.Error(), "permission denied") || strings.Contains(err.Error(), "read-only") {
-				t.Errorf("accepted query reached for something agent_ro may not touch: %v\n  %s", err, q.SQL(200))
+	type outcome struct {
+		ok  bool
+		key string
+		res tierb.Result
+	}
+	runAll := func(tn tenant) []outcome {
+		out := make([]outcome, len(corpus))
+		for i, q := range corpus {
+			res, err := tierb.RunQuery(tn.ctx, pool, q, tierb.Options{MaxCost: 1e9})
+			if err != nil {
+				// A type error from Postgres (sum over text, etc.) is a refusal
+				// by the database, not an escape — but it must be a plain query
+				// error, never a permission or read-only one (those would mean
+				// the SQL tried to reach something).
+				if strings.Contains(err.Error(), "permission denied") || strings.Contains(err.Error(), "read-only") {
+					t.Errorf("accepted query reached for something agent_ro may not touch: %v\n  %s", err, q.SQL(200))
+				}
+				continue
 			}
+			out[i] = outcome{ok: true, key: canonicalRows(res), res: res}
+		}
+		return out
+	}
+	baseline := runAll(b)
+	seedA(t, a)
+	after := runAll(b)
+	asA := runAll(a)
+
+	ran, dbErr, leaked, marker, sensitive := 0, 0, 0, 0, 0
+	for i, q := range corpus {
+		if !after[i].ok {
 			dbErr++
 			continue
 		}
 		ran++
-		if leaks(res) {
+		if leaks(after[i].res) {
+			marker++
+		}
+		if !baseline[i].ok || baseline[i].key != after[i].key || leaks(after[i].res) {
 			leaked++
-			t.Errorf("CROSS-TENANT LEAK: %s", q.SQL(200))
+			if leaked <= 10 {
+				t.Errorf("CROSS-TENANT LEAK: tenant B's answer changed when tenant A's books were added: %s", q.SQL(200))
+			}
+		}
+		if asA[i].ok && asA[i].key != baseline[i].key {
+			sensitive++
 		}
 	}
-	t.Logf("accepted corpus: %d queries, %d ran as tenant B, %d refused by Postgres (type errors), %d leaked", len(corpus), ran, dbErr, leaked)
+	t.Logf("accepted corpus: %d queries, %d ran as tenant B, %d refused by Postgres (type errors), %d leaked (%d by marker); "+
+		"%d of the %d that ran would register a leak of A's rows (their answer as A differs from B's)",
+		len(corpus), ran, dbErr, leaked, marker, sensitive, ran)
 	if ran < 200 {
 		t.Errorf("only %d accepted queries actually ran — the replay is too thin to mean anything", ran)
 	}
+	// The marker oracle reached ~7%; the differential one must reach most of
+	// what runs, or the replay is not measuring isolation.
+	if sensitive*2 < ran {
+		t.Errorf("only %d of %d queries are sensitive to tenant A's data — the leak oracle is mostly blind", sensitive, ran)
+	}
+}
+
+// canonicalRows is a result as an order-independent string: SQL without an
+// ORDER BY may return rows in any order between two runs.
+func canonicalRows(res tierb.Result) string {
+	rows := make([]string, len(res.Rows))
+	for i, r := range res.Rows {
+		rows[i] = strings.Join(r, "\x1f")
+	}
+	sort.Strings(rows)
+	return strings.Join(rows, "\x1e")
 }
 
 // TestCostGateAndForcedLimit: the gate refuses when the plan is priced above
