@@ -511,6 +511,15 @@ var KnownResources = append([]Resource{
 	// refused by default); governance, so no agent can unblock anything.
 	"master-unblock",
 
+	// THE INSIGHT ENGINE (W4, d125): the inbox, its evidence, verdicts,
+	// suppressions and the morning digest. BARE, per the 0091 row of
+	// PLAN-TALLY-PARITY §2.5 and for the same reason as the agent tokens: it is
+	// DENIED for every seeded non-Owner level with zero acl_rule rows, where a
+	// report:NAME would have been granted to every operator by 0011's coarse
+	// `allow display report` — and the inbox names debtors, suppliers, TDS
+	// arrears and which user back-dated what.
+	"insights",
+
 	// THE e-INVOICE / IRN: the Invoice Reference Number the NIC portal issues
 	// against a B2B tax invoice, statutorily mandatory in India above a turnover
 	// threshold.

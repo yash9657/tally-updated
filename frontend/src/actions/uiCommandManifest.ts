@@ -110,6 +110,7 @@ const SCREEN_KIND_MEMBERS: Readonly<Record<ScreenKind, true>> = {
   "offline-outbox": true,
   "approval-inbox": true,
   "agent-settings": true,
+  insights: true,
 };
 
 /** Every ScreenKind, sorted, as runtime data. */

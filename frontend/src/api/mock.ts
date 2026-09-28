@@ -265,6 +265,14 @@ import {
   type SetAgentAutonomyRequest,
   type StartAgentRunRequest,
 } from "./agent";
+import type {
+  Insight,
+  InsightDigest,
+  InsightState,
+  InsightSuppression,
+  InsightVerdict,
+  SuppressInsightRequest,
+} from "./insights";
 import { deriveGstSplit } from "../screens/vouchers/gstDerive";
 import { taxableValueOf } from "../screens/vouchers/itemInvoice";
 
@@ -2330,6 +2338,12 @@ export interface MockClientOptions {
     /** Whether the signed-in member is an Owner (default true). */
     owner?: boolean;
   };
+  /**
+   * THE INSIGHT ENGINE's rows, pre-filled (W4). The mock has no detectors —
+   * they are Go and their numbers are evidence-checked there — so a screen
+   * test seeds the inbox it wants here. Default: empty.
+   */
+  insights?: Insight[];
 }
 
 /** What a mock client holds of the agent plane — per client, like `companies`. */
@@ -2636,6 +2650,23 @@ function createMockClientWith(
   agentState: MockAgentState,
 ): CoredClient {
   const companies = new Map<string, MockCompany>();
+  // W4: the mock's insight tables. No detector runs here (see
+  // MockClientOptions.insights); verdicts, suppressions and digests are
+  // recorded exactly as the server's routes record them.
+  const insightState = {
+    insights: (opts.insights ?? []).map((i) => ({ ...i, verdicts: { ...i.verdicts } })),
+    suppressions: [] as InsightSuppression[],
+    digests: new Map<string, InsightDigest>(),
+  };
+  const mockDigestItems = () =>
+    insightState.insights
+      .filter((i) => i.state === "open" && !insightState.suppressions.some((s) => s.type === i.type && (s.entity_key === "" || s.entity_key === i.entity_key)))
+      .slice(0, 5)
+      .map((i, n) => ({
+        insight_id: i.id, type: i.type, title: i.title, fingerprint: i.fingerprint, entity_name: i.entity_name,
+        rank: n + 1, score: 0, impact_inr: i.impact_inr, p_real: 0, actionability: 0, novelty: 1, affinity: 1,
+        payload: i.payload, voucher_ids: i.voucher_ids, text: i.summary,
+      }));
 
   /**
    * PRINT TEMPLATES (track C): one row per (company, doc_kind), which is exactly
@@ -10829,6 +10860,80 @@ function normalisedName(v: string): string {
       l.blocked = false;
       l.blockedReason = undefined;
       return { ledger_id: ledgerID, blocked: false as const };
+    },
+    // ---- THE INSIGHT ENGINE (W4) -------------------------------------------
+    async listInsights(_companyID: string, query?: { state?: InsightState; type?: string }) {
+      const state = query?.state ?? "open";
+      return {
+        insights: insightState.insights
+          .filter((i) => i.state === state && (!query?.type || i.type === query.type))
+          .map((i) => ({ ...i })),
+        types: [],
+        owed: [],
+      };
+    },
+    async getInsight(_companyID: string, insightID: string) {
+      const i = insightState.insights.find((x) => x.id === insightID);
+      if (!i) throw new ApiError(404, "not found");
+      return { ...i };
+    },
+    async verifyInsight(_companyID: string, insightID: string) {
+      if (!insightState.insights.some((x) => x.id === insightID)) throw new ApiError(404, "not found");
+      return { reproduces: true };
+    },
+    async insightFeedback(_companyID: string, insightID: string, verdict: InsightVerdict) {
+      const i = insightState.insights.find((x) => x.id === insightID);
+      if (!i) throw new ApiError(404, "not found");
+      if (verdict !== "useful" && verdict !== "not_useful" && verdict !== "wrong") {
+        throw new ApiError(422, "insights: verdict must be useful, not_useful or wrong");
+      }
+      i.verdicts = { ...i.verdicts, [verdict]: (i.verdicts[verdict] ?? 0) + 1 };
+      if (verdict !== "useful" && i.state === "open") i.state = "dismissed";
+      return { ...i };
+    },
+    async getInsightDigest(_companyID: string, date?: string) {
+      const d = insightState.digests.get(date ?? "today");
+      if (!d) throw new ApiError(404, "not found");
+      return d;
+    },
+    async composeInsightDigest(_companyID: string, date?: string) {
+      const key = date ?? "today";
+      const existing = insightState.digests.get(key);
+      if (existing) return existing;
+      const items = mockDigestItems();
+      const d: InsightDigest = {
+        id: `mock-digest-${key}`, digest_date: key, recipient: "", items,
+        narrative: items.map((it, n) => `${n + 1}. ${it.text}\n`).join(""),
+        narrator: "template", model_id: "", prompt_version: "", narration_rejected: "",
+      };
+      insightState.digests.set(key, d);
+      return d;
+    },
+    async listInsightSuppressions() {
+      return { suppressions: insightState.suppressions.map((s) => ({ ...s })) };
+    },
+    async suppressInsight(_companyID: string, req: SuppressInsightRequest) {
+      if (!req.type || !req.reason.trim()) throw new ApiError(400, "suppress needs a known type, days >= 0 and a reason");
+      const id = `mock-supp-${insightState.suppressions.length + 1}`;
+      insightState.suppressions = insightState.suppressions.filter(
+        (s) => !(s.type === req.type && s.entity_key === (req.entity_key ?? "")),
+      );
+      insightState.suppressions.push({
+        id, type: req.type, entity_key: req.entity_key ?? "", until: null, reason: req.reason,
+        created_by: "mock", created_at: new Date().toISOString(),
+      });
+      return { suppression_id: id };
+    },
+    async unsuppressInsight(_companyID: string, suppressionID: string) {
+      const n = insightState.suppressions.length;
+      insightState.suppressions = insightState.suppressions.filter((s) => s.id !== suppressionID);
+      if (insightState.suppressions.length === n) throw new ApiError(404, "not found");
+    },
+    async runInsightsNow() {
+      return {
+        events: { events: 0, skipped: 0, raised: {} },
+        nightly: { as_of: "", profile_facts: 0, by_type: {}, expired: 0 },
+      };
     },
   };
 }

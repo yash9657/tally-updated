@@ -20,6 +20,10 @@ export const GATEWAY_MENU = [
   // be unblocked, and the intent log's verification. Beside the inbox because
   // they are one plane; also in Alt+G.
   "Agent Settings",
+  // Insights (W4) — what the insight engine found, and the morning digest.
+  // Beside the other AI-native doors. ⚠️ CHECKED FOR THE SUBSTRING COLLISION:
+  // "Insights" contains no shipped label and none contains it.
+  "Insights",
   "Day Book",
   "Balance Sheet",
   "Profit & Loss A/c",

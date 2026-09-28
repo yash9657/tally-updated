@@ -89,9 +89,14 @@ const (
 	// W2 breadth (D121 "Wave 2 breadth") added two more agent.decide runs —
 	// an alteration as a compensating version (4 decisions) and a supplier
 	// born blocked whose payment the validators then refuse (5) — +2 files /
-	// +9 interactions, to 11 / 28 once both lanes merged.
-	tier0MinInteractions = 28
-	tier0MinCassettes    = 11
+	// +9 interactions.
+	//
+	// W4 (d125) added internal/insights/narrate/testdata/cassettes/
+	// insight.narrate/three-findings.jsonl: one digest narration (keys only,
+	// no tenant values), replayed from its input by TestNarrateCassette —
+	// +1 file / +1 interaction. All three lanes merged: 12 / 29.
+	tier0MinInteractions = 29
+	tier0MinCassettes    = 12
 )
 
 // tier0MinFeatures guards the per-feature directory layout the same way

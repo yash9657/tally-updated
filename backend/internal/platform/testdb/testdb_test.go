@@ -129,6 +129,9 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 		agentRunID      = id()
 		agentApprovalID = id()
 
+		// W4 — the insight the feedback row hangs off.
+		insightID = id()
+
 		// Track 2 — GSTR-2A/2B inward statement and the IMS worklist.
 		statementID = id()
 		inwardDocID = id()
@@ -732,6 +735,32 @@ func buildFixture(cid uuid.UUID) []fixtureRow {
 		{"emb_golden_query", `INSERT INTO emb_golden_query (id, company_id, question, dsl, prompt_version, proposed_by)
 			VALUES ($1, $2, 'fixture question', '{}'::jsonb, 'nlq-dsl-v4', 'fixture')`,
 			[]any{id(), cid}},
+		// W4 — the insight engine (migration 0102). ⛔ FOUR OF THE SIX ARE
+		// APPEND-ONLY BY TRIGGER (feedback, run, digest) or refuse DELETE
+		// (insight itself), so, like the agent tables above, only a
+		// replica-mode teardown can remove them — and insight_feedback's
+		// composite FK to insight exercises the delete ORDER.
+		{"insight", `INSERT INTO insight
+			(id, company_id, insight_type, cadence, entity_kind, entity_key, entity_name, fingerprint,
+			 as_of, impact_inr, actionability, payload_json, evidence_sql, detector_version)
+			VALUES ($1, $2, 'dead_stock', 'nightly', 'item', 'x', 'Fixture', 'dead_stock:x',
+			        DATE '2024-05-01', 1, 1, '{}'::jsonb, 'SELECT 1', 'fixture')`,
+			[]any{insightID, cid}},
+		{"insight_feedback", `INSERT INTO insight_feedback (id, company_id, insight_id, insight_type, verdict, given_by)
+			VALUES ($1, $2, $3, 'dead_stock', 'useful', 'fixture')`,
+			[]any{id(), cid, insightID}},
+		{"insight_suppression", `INSERT INTO insight_suppression (id, company_id, insight_type, reason, created_by)
+			VALUES ($1, $2, 'dead_stock', 'fixture', 'fixture')`,
+			[]any{id(), cid}},
+		{"insight_run", `INSERT INTO insight_run (id, company_id, run_date, kind, stats)
+			VALUES ($1, $2, DATE '2024-05-01', 'nightly', '{}'::jsonb)`,
+			[]any{id(), cid}},
+		{"insight_digest", `INSERT INTO insight_digest (id, company_id, digest_date, items, narrative, narrator)
+			VALUES ($1, $2, DATE '2024-05-01', '[]'::jsonb, '', 'template')`,
+			[]any{id(), cid}},
+		{"insight_voucher_event", `INSERT INTO insight_voucher_event (id, company_id, voucher_id, version_id, op)
+			VALUES ($1, $2, $3, $4, 'CREATE')`,
+			[]any{id(), cid, voucherID, id()}},
 
 		// TEXT company_id. This is the row that the "AND data_type='uuid'"
 		// mutation orphans, and the reason the enumeration query must not filter

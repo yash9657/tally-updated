@@ -274,6 +274,32 @@ var allowedDeps = map[string]map[string]bool{
 	// check). Not query — a served golden DSL is re-compiled by the CALLER
 	// (golden.go says so) — and no feature package: retrieval is a leaf.
 	"internal/embed": {"internal/platform/db": true, "internal/llm": true},
+	// W4's insight engine (d125). Every edge is a READ of something another
+	// lane owns and must not be re-derived here: profile for W3's facts (and
+	// Refresh, which the nightly run calls), reporting for Outstandings,
+	// forecast for the 13-week projection, statutory/rules for Rule 138's
+	// threshold (a pure leaf), compliance/itc for NormalizeDocNo — the ONE
+	// place a supplier document number is normalised (0032's rule).
+	//
+	// ⛔ NOT internal/llm. The detectors, the evidence gate and the ranker are
+	// deterministic and network-free (TestW3PackagesAreNetworkFree covers this
+	// package too); only the narrator below may reach a model, and the engine
+	// talks to it through the insights.Narrator interface it declares.
+	// ⛔ AND NOT internal/ledger or any writer: an insight names an action a
+	// human takes; it has no service it could call to take one.
+	"internal/insights": {
+		"internal/platform/db":     true,
+		"internal/profile":         true,
+		"internal/reporting":       true,
+		"internal/forecast":        true,
+		"internal/statutory/rules": true,
+		"internal/compliance/itc":  true,
+	},
+	// The digest narrator: the insight engine's only model edge, and the
+	// number-provenance check that decides whether the model's words are shown.
+	// insights for the item and template types, llm for the client. Nothing
+	// with a database: it narrates what it is handed.
+	"internal/insights/narrate": {"internal/insights": true, "internal/llm": true},
 	// trajectory (W0/D2) is the agent plane's span recorder: it holds the span
 	// tree, the OTLP/HTTP exporter written in stdlib, and the replay cassettes.
 	// THE EMPTY MAP IS THE POLICY, not an omission, and it is load-bearing in
@@ -669,14 +695,17 @@ var allowedDeps = map[string]map[string]bool{
 		"internal/platform/tenant": true,
 	},
 	"internal/server": {
-		"internal/backup":      true,
-		"internal/platform/db": true,
-		"internal/authn":       true,
-		"internal/authz":       true,
-		"internal/webauthn":    true,
-		"internal/ledger":      true,
-		"internal/masters":     true,
-		"internal/reporting":   true,
+		// W4: the insight routes, the poller, and the narrator's composition.
+		"internal/insights":         true,
+		"internal/insights/narrate": true,
+		"internal/backup":           true,
+		"internal/platform/db":      true,
+		"internal/authn":            true,
+		"internal/authz":            true,
+		"internal/webauthn":         true,
+		"internal/ledger":           true,
+		"internal/masters":          true,
+		"internal/reporting":        true,
 		// Bank reconciliation (T4) is TWO edges because it is two halves: the
 		// read model lives in reporting (which stays read-only by its package
 		// contract) and the WRITE lives in banking. server is the composition
@@ -1117,7 +1146,7 @@ func TestW3PackagesAreNetworkFree(t *testing.T) {
 	root := backendRoot(t)
 	fset := token.NewFileSet()
 	// embed (W3 wave 2) is in the list: its model calls go through llm.Client.Embed.
-	for _, pkg := range []string{"tierb", "profile", "catalogue", "embed"} {
+	for _, pkg := range []string{"tierb", "profile", "catalogue", "embed", "insights"} {
 		scanned := 0
 		dir := filepath.Join(root, "internal", pkg)
 		err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {

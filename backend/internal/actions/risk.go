@@ -105,6 +105,9 @@ var resourceRisk = map[authz.Resource]Risk{
 	// higher level, or a party it made becoming payable — so each is the
 	// human's alone.
 	"agent-autonomy": RiskGovernance, "master-unblock": RiskGovernance,
+	// W4: a verdict, a suppression or a digest trains and steers what the
+	// owner is shown; an agent doing either would be grading its own ranker.
+	"insights": RiskGovernance,
 }
 
 // governanceReads are DISPLAY actions that are nevertheless governance: a
@@ -123,6 +126,11 @@ var governanceReads = map[authz.Resource]bool{
 	// The autonomy table: an agent that can read which of its commits need no
 	// human can aim at exactly those.
 	"agent-autonomy": true,
+	// W4: the insight inbox and digest. The digest is model-written text and
+	// the inbox is the owner's whole picture of the business; the agent's
+	// insight TOOLS are W2-breadth's to add, with a provenance class of their
+	// own (d125 OWED), not a read inherited from a route.
+	"insights": true,
 	// The ACL itself.
 	"security": true,
 }

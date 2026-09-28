@@ -93,6 +93,8 @@ function screenLabel(screen: NavSnapshot["screen"] | undefined): string {
       return "the Approval Inbox";
     case "agent-settings":
       return "Agent Settings";
+    case "insights":
+      return "the Insights inbox";
     case undefined:
       return "the Gateway";
     default:

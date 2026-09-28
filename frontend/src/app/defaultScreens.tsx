@@ -59,6 +59,7 @@ import type { ScreenComponent, ScreenComponentProps } from "./screenRegistry";
 import { OfflineOutboxScreen } from "../screens/OfflineOutboxScreen";
 import { ApprovalInboxScreen } from "../screens/ApprovalInboxScreen";
 import { AgentSettingsScreen } from "../screens/AgentSettingsScreen";
+import { InsightsScreen } from "../screens/InsightsScreen";
 import { ScreenRegistry } from "./screenRegistry";
 
 /**
@@ -432,6 +433,7 @@ export function createDefaultRegistry(): ScreenRegistry {
     "approval-inbox": ApprovalInboxScreen,
     // AGENT SETTINGS (W2 breadth): autonomy, blocked ledgers, the record.
     "agent-settings": () => <AgentSettingsScreen />,
+    insights: InsightsScreen,
     // Live, per-name report screens (override the generic fallback).
     "report:Day Book": DayBookScreen,
     "report:Trial Balance": TrialBalanceScreen,

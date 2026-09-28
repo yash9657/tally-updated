@@ -20,6 +20,15 @@ var notRestored = map[string]string{
 		"users who need not exist in this database, and silently recreating access rights from a " +
 		"file somebody handed you is a privilege-escalation vector. The restore seeds the RESTORING " +
 		"user as Owner against the archive's own Owner level, and reports the rest by name.",
+	// W4 (d125). A QUEUE OF WORK, NOT A FACT. The restore's own voucher_head
+	// inserts fire 0102's trigger, which enqueues every restored voucher afresh,
+	// so recreating the archived rows as well would judge each voucher twice —
+	// and an archived row marked processed would claim a judgement this database
+	// never made. What the insight engine CONCLUDED is in `insight` and is
+	// restored; this table only says what it has yet to look at.
+	"insight_voucher_event": "the real-time detector queue: restoring voucher_head re-enqueues " +
+		"every restored voucher through 0102's trigger, so the archived queue rows would be a " +
+		"second, stale copy of work the restored company is about to do anyway",
 }
 
 // NotRestoredTables lists the registry's tables, sorted so the archive header is

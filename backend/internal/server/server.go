@@ -64,6 +64,8 @@ import (
 	// disagree about which date a <VOUCHER> asked for. See peekTallyXMLVoucherDate.
 	"github.com/khata/cored/internal/integration"
 	"github.com/khata/cored/internal/ledger"
+	"github.com/khata/cored/internal/insights"
+	"github.com/khata/cored/internal/insights/narrate"
 	"github.com/khata/cored/internal/llm"
 	"github.com/khata/cored/internal/masters"
 	"github.com/khata/cored/internal/migration"
@@ -278,6 +280,11 @@ type Server struct {
 	agent       *agent.Engine
 	agentPoller *agent.Poller
 	agentKick   chan struct{}
+
+	// insightNarrator narrates the morning digest (W4, d125): the agent's
+	// model client under the insight.narrate feature, or the templates alone
+	// when no model is configured (the hermetic default).
+	insightNarrator insights.Narrator
 }
 
 // authSeeder seeds the Owner security level + membership for a freshly created
@@ -423,6 +430,7 @@ func New(ctx context.Context, appDSN string) (*Server, error) {
 		return nil, err
 	}
 	s.initAgent(agentLLM)
+	s.insightNarrator = narrate.Model{Client: agentLLM}
 	s.routes()
 	return s, nil
 }
@@ -1284,6 +1292,11 @@ func (s *Server) routes() {
 		// agent_http.go for the contract and routeAction's /agent/ arm for
 		// the two bare tokens (agent-run, agent-approval).
 		s.agentRoutes(r)
+
+		// THE INSIGHT ENGINE (W4, d125) — the inbox, evidence, feedback,
+		// suppressions, the digest. insights_http.go; routeAction's
+		// /insights arm maps every route to the bare token `insights`.
+		s.insightRoutes(r)
 
 		// ===================================================================
 		// PER-COMPANY PRINT TEMPLATES (track C). handler_print_templates.go.
@@ -2378,6 +2391,11 @@ type ledgerReq struct {
 	// is D43's shape on a second route, and it is why D87's form could not have
 	// carried the field honestly without this line.
 	CreditDays *int `json:"credit_days"`
+	// CreditLimit (0103, W4) is the party's credit limit as a decimal string;
+	// "" means no limit agreed and is stored NULL — never 0, which is the
+	// different instruction "no credit at all". It is what the insight
+	// engine's credit-limit-breach detector compares the debtor's balance to.
+	CreditLimit string `json:"credit_limit"`
 
 	CreatedBy string `json:"created_by"`
 
@@ -2496,7 +2514,17 @@ func (s *Server) handleCreateLedger(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	var creditLimit *decimal.Decimal
+	if strings.TrimSpace(req.CreditLimit) != "" {
+		cl, err := decimal.NewFromString(strings.TrimSpace(req.CreditLimit))
+		if err != nil || cl.IsNegative() {
+			writeError(w, http.StatusBadRequest, "invalid credit_limit: a non-negative amount, or empty for no limit")
+			return
+		}
+		creditLimit = &cl
+	}
 	id, err := s.masters.CreateLedger(ctx, masters.Ledger{
+		CreditLimit:        creditLimit,
 		Name:               req.Name,
 		GroupName:          req.GroupName,
 		OpeningBalance:     opening,

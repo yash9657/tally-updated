@@ -827,6 +827,19 @@ var writeRoutesNamingADocumentButNotMovingIt = map[string]string{
 		"unblocking an agent-created ledger clears a master's block flag; a ledger carries no document " +
 		"date and the unblock posts nothing",
 
+	// ---- W4 THE INSIGHT ENGINE (d125). TWO WRITE ROUTES, ONE REASON: what they
+	// name is an INSIGHT (a finding ABOUT the books) or a SUPPRESSION of one,
+	// never a ledger document. Neither writes a voucher_version, a posting or a
+	// balance, and neither request carries a date. If an insight ever gains a
+	// one-tap ACTION that posts, that action must be a request to the voucher
+	// route, judged by the cutoff there — as the agent's commit is above.
+	"POST /v1/companies/{companyID}/insights/{insightID}/feedback": "" +
+		"a verdict writes an insight_feedback row and may dismiss the insight; nothing in the " +
+		"books moves and the request carries no date",
+	"DELETE /v1/companies/{companyID}/insights/suppressions/{suppressionID}": "" +
+		"lifting a suppression deletes an insight_suppression row — which findings reach the " +
+		"digest — and nothing in the books; no date",
+
 	// ---- T11 BUDGETS (migrations 0085/0086). FIVE WRITE ROUTES, ONE REASON.
 	//
 	// ⛔ THE DOCUMENT THESE NAME IS NOT A LEDGER DOCUMENT. The census matches them

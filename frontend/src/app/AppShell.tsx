@@ -145,6 +145,8 @@ const COMPANY_SCOPED_SCREENS = new Set<NavSnapshot["screen"]>([
   // AGENT SETTINGS (W2 breadth): every route is company-scoped
   // (/agent/autonomy, /ledgers/{id}/unblock, /agent/anchors/verify).
   "agent-settings",
+  // THE INSIGHTS INBOX (W4): every route is company-scoped (/insights).
+  "insights",
 ]);
 
 /**
@@ -793,6 +795,8 @@ function screenTitle(snap: NavSnapshot): string {
       return "Approval Inbox";
     case "agent-settings":
       return "Agent Settings";
+    case "insights":
+      return "Insights";
     default:
       return "Tally";
   }
@@ -929,6 +933,18 @@ function hintsFor(snap: NavSnapshot): string[] {
         "Alt+X: Reject",
         "Alt+B: Ask back",
         "Ctrl+K: Agent",
+        ...common,
+      ];
+    // W4 — the screen-local letters, and Enter only where it drills (a voucher
+    // highlighted in the insight's voucher list).
+    case "insights":
+      return [
+        "↑/↓: Insight",
+        "U/N/W: Useful/Not useful/Wrong",
+        "V: Evidence",
+        "S/L: Suppress/Lift",
+        "D: Digest",
+        "Tab+Enter: Voucher",
         ...common,
       ];
     default:
