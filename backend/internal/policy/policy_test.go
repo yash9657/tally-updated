@@ -115,6 +115,10 @@ func TestGateMatrix(t *testing.T) {
 	sales := spec(t, "post.vouchers.sales")
 	master := spec(t, "post.ledgers")
 	del := spec(t, "delete.vouchers._voucherid")
+	tick := spec(t, "put.bank-reconciliation._ledgerid._voucherid._legno")
+	alter := spec(t, "put.vouchers.payment._voucherid")
+	unblock := spec(t, "post.ledgers._ledgerid.unblock")
+	autonomy := spec(t, "put.agent.autonomy")
 	clean := Provenance{ContextSources: []Source{SourceUser, SourceBooks}}
 	bank := Provenance{ContextSources: []Source{SourceUser, SourceBank}}
 	cases := []struct {
@@ -134,6 +138,13 @@ func TestGateMatrix(t *testing.T) {
 		{"L0 is refused", pay, L0, paise(1), clean, ModeRefuse},
 		{"L3 master create still waits (born blocked)", master, L3, nil, clean, ModeApproval},
 		{"L3 delete is refused", del, L3, nil, clean, ModeRefuse},
+		// W2 breadth.
+		{"L3 clean bank tick is autonomous", tick, L3, nil, clean, ModeAutonomous},
+		{"L3 bank tick after a bank narration waits (operational is taint-sensitive)", tick, L3, nil, bank, ModeApproval},
+		{"L3 clean alteration is autonomous", alter, L3, paise(2600000), clean, ModeAutonomous},
+		{"L3 alteration after a document waits", alter, L3, paise(2600000), Provenance{ContextSources: []Source{SourceDocument}}, ModeApproval},
+		{"an unblock is refused (governance)", unblock, L3, nil, clean, ModeRefuse},
+		{"an autonomy change is refused (governance)", autonomy, L3, nil, clean, ModeRefuse},
 	}
 	for _, c := range cases {
 		p := principal(c.spec.ACLKey)
