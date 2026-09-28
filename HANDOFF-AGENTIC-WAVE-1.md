@@ -65,7 +65,8 @@ any of it**, because there are no provider keys (§6.1).
 
 ### W3: data understanding. Branch `agentic/w3`, merge `1cfd706`
 - **`internal/catalogue`**: an entry for each of the 33 `authz.KnownReportNames`, and a deterministic
-  BM25 selector. Held-out results: top-1 38/40, top-3 39/40.
+  BM25 selector. Held-out results: top-1 36/40, top-3 38/40 (re-measured with unseen party names; the
+  first figure, 38/40 and 39/40, partly measured memorised names — see §8).
 - **DSL entities** `stock_movements`, `bank_statement_lines` (narration can be filtered on, never
   returned) and `profile_facts`. The nlq enum is pinned to `query.Catalog()`; prompt `nlq-dsl-v3`.
 - **`internal/profile`** + 0096: bi-temporal `entity_facts` / `entity_edges` / `tenant_profile`, built
@@ -169,11 +170,11 @@ are owed.
 | offline build | `GOFLAGS=-mod=readonly GOPROXY=off go build ./...` | clean |
 | backend tests | `go test ./... -count=1 -p 4 -timeout 60m` with all four DSN envs on `tally_integ` (pre-migrated, see §4.1) | **exit 0, 47 packages ok**, 7 with no test files (was 39 after W0). server 68 s, evals/tau 96 s |
 | Tier 0 | `make tier0` | ok: **"replayed 14 interactions across 4 cassettes in 2 directories, features [agent.decide extraction nlq.translate]"** |
-| Tier B leak replay | `go test ./internal/tierb/` | "2208 queries, 1056 ran as tenant B, 1152 refused by Postgres (type errors), **0 leaked**" |
+| Tier B leak replay | `go test ./internal/tierb/` | "2208 queries, 1056 ran as tenant B, 1152 refused by Postgres (type errors), **0 leaked** (0 by marker); **834 of the 1056** that ran would register a leak" (differential oracle since the review, §8) |
 | action registry | `frontend/src/api/goldens/action-registry.json` | 238 specs; channel client 211 / none 27; cap 27 |
 | frontend types | `cd frontend && pnpm exec tsc --noEmit` | exit 0 |
 | frontend tests | `pnpm exec vitest run` | **Test Files 126 passed (126), Tests 2019 passed (2019)** (read the printed line, not the exit code) |
-| insightd | `cd insightd && .venv/bin/python -m pytest` | **248 passed** (166 + 31 W1a + 51 W5) |
+| insightd | `cd insightd && .venv/bin/python -m pytest` | **248 passed** (166 + 31 W1a + 51 W5); **249** after the review (§8) |
 | corpora | `python3 corpora/validate.py` | `tax=14, tds=15, tcs=5, keystroke=38, isolation=13, migration=6, forecast=4, inventory=11, gstr2b=17, ims=12, payroll=19, tau=200, extraction=150, embedding=2342` |
 | migrations on fresh DB | `make migrate` against `tally_integ` | "migrations applied (78 files)", max `0101_bank_statement_proof_and_narration` |
 
@@ -283,3 +284,41 @@ in the lane ADRs still resolves. 6.2 (durable runs) is resolved; 6.6–6.8 are n
     decision"; there is no `ledger.blocked` column.
   - Owner-level approvals need a WebAuthn step-up.
 - **Carried: the budget-variance deny** (0086) is still an assumption the owner has not ruled on.
+
+---
+
+## 8. Review outcome (wave-1 review, verified and fixed on `session/t32-and-close-7-3`)
+
+Each finding was re-checked against the code first (a reproduction or a failing test), then fixed with
+a test that fails before the fix. Mutations named are the ones actually run; every figure below was
+printed by a command run on the database `tally_fix`.
+
+| # | Finding | Verdict | Fix / commit | Gate and mutation |
+|---|---|---|---|---|
+| 1 | CaMeL gate bypass: every `actions.read` labelled `books` (trusted), so a bank narration or a draft read through the generic door left the context clean and an L2 payment committed autonomously | **CONFIRMED, fixed** | `a51c107`: `agent/readsource.go` classifies all 79 GET read specs (bank / document / new `stored_text` / books), unlisted falls closed; `query_books` stays `books` (the query whitelist never projects a prose column) | `TestReadOfUntrustedStoredTextTaintsTheGate` (bank statement, draft via actions.read, day book, recon queue all force approval at L2; trial balance control stays autonomous). Mutation: label back to `books` → 4 cases commit autonomously. `TestReadSourcesCoverEveryReadSpec`: deleting one entry fails it |
+| 2 | Approver's authority judged without date/body; commit ran as the creator only; edited body never re-gated | **CONFIRMED, fixed** (authorship left as designed) | `d4abc44`: `Caller.Approver`; `companyAuthMiddleware` re-evaluates the approver's level, rules, cutoff and step-up on the concrete commit request (`approverDenies`); the decision's early check dates from the body that will commit; the commit hook rolls back debits above `Delegation.MaxAmountPaise` | `TestAgentApproverIsJudgedOnTheCommittedBody`, 4 subtests. Mutations: no date at decision → subtest 1 fails; no router re-judge → "cutoff set between approval and commit" fails; no ceiling → Rs 4,90,000 edit commits past a Rs 30,000 ceiling. The voucher is still authored by the run's creator (it is their delegation); the approver is in `agent_approval_decision` and the intent log. Re-previewing an edited body (so the approver sees the recomputed effect) is **OWED** |
+| 3 | Cancel does not stop a run mid-Resume | **CONFIRMED, fixed** | `21baf44`: every step re-reads `agent_run.status` (`stopWhenEnded`); the commit hook takes `FOR SHARE` on the run row inside the voucher's transaction | `TestAgentCancelStopsARunMidResume` (cancel issued from inside the fake model's round trip). Mutations: guard off → `commit_refused` recorded (hook catches it); guard + hook off → 1 voucher commits |
+| 4 | Any `agent_commit` insert error treated as a lost race → 200 Replayed with no voucher | **CONFIRMED, fixed** | `afa08f9`: only SQLSTATE 23505 is a replay; other failures are transient errors (step retried under the same key); a collided key with no visible winner is an error | `TestAgentCommitBookkeepingFailureIsRetriedNotReplayed` (company-scoped trigger raises 40001, then is dropped; retry commits exactly 1). Mutation: restore "any error is dupKey" + ignore `found` → run completes with a `commit` intent and 0 vouchers |
+| 5 | 0092 claims per-run appends are serialised by the run lock; Decide/Cancel append without it | **CONFIRMED, fixed** | `61c3be2`: `intentlog.Append` takes `pg_advisory_xact_lock(0x1A7E, hashtext(run))` (two-int key space, disjoint from durable's bigint lock); Cancel now appends before updating `agent_run` (Decide's order, no deadlock); 0092 header corrected (comment only) | `TestConcurrentAppendsToOneRunSerialise` (8 writers). Mutation: lock removed → "7 of 8 concurrent appends failed … agent_intent_log_one_seq_per_run" |
+| 6 | Balance proof accepts a swapped Deposit/Withdrawal mapping on identical-amount rows | **CONFIRMED, fixed** | `982d357`: when the mirror image (other order, every sign inverted) also walks, the dates decide; a contradiction is refused (`ErrBalanceWalk`), undecidable dates leave `BalanceWalked` false so declared balances are required | `TestASwappedMappingOnIdenticalRowsIsRefusedByTheDates`, `TestAnUndecidableMirrorNeedsDeclaredBalances`. Mutation: mirror check off → "err=<nil> order=newest-first proof=running opening=6000.00 lines=DDD" |
+| 7 | Tier B leak gate mostly blind (marker only visible to name-projecting queries) | **CONFIRMED, fixed** | `7ae3c25`: differential oracle — every accepted query runs as B before and after A's books exist; any change is a leak; sensitivity measured and floored (≥ half of what runs) | "2208 queries, 1056 ran as tenant B, 1152 refused by Postgres (type errors), 0 leaked (0 by marker); 834 of the 1056 that ran would register a leak". Mutation: `agent.stock_movements` re-owned to `postgres` → **86 leaks flagged, only 17 by the marker** |
+| 8 | Held-out selector set contaminated by the catalogue's example party names | **CONFIRMED, fixed** | `52f6444`: held-out names replaced with unseen ones (`heldOutNames`), pinned unseen by `TestHeldOutNamesAreUnseen`; floor re-pinned 0.975 → **0.95**; no synonym or weight tuned | Re-measured "held-out: top-1 36/40 (90.0%), top-3 38/40 (95.0%)"; new miss "what do we have to pay Sunrise Steel" → payroll-payslip. Mutation: "Kaveri Traders" back in a question → the unseen test fails. d122 §2 updated |
+| 9 | `lenadari` (receivables) listed under Bills Payable; `denadari` nowhere | **CONFIRMED, fixed** | `52f6444`: `lenadari` → Outstandings, `denadari` → Bills Payable | `TestReceivableAndPayableWordsPointTheRightWay`. Mutation: original entries → "lenadari kitni hai" selects bills-payable, "denadari kitni hai" selects nothing |
+| 10 | Invoice total "grounded" by any number on any OCR line (qty, rate, HSN, GST %) | **CONFIRMED, fixed** | `dad8188`: on a bill that labels its total, the total grounds only on the labelled line or the line under a bare label; otherwise `fail` | `test_a_total_that_is_a_quantity_rate_hsn_or_rate_percent_is_not_grounded` (5000, 20, 8471, 18 all ungrounded + fail; real total and a two-line layout still ground). Mutation: labelled-line rule off → test fails. insightd **249 passed** |
+| 11 | tau judge passes a shotgun answer; Dr/Cr never judged on read-only tasks | **CONFIRMED; shotgun fixed, direction DEFERRED** | `3ece263`: money-shaped figures the task did not ask for are bounded at one per expected output (min 1); the reference agent still solves every task | `TestJudgeRefusesAShotgunAnswer`. Mutation: bound off → both trial-balance dumps pass. The Dr/Cr half needs a side per output across 204 fixtures and a prose side reader: **OWED** (d124 §3) |
+| 12 | `stream_total_window` reconciler circular (sums its own evidence) | **CONFIRMED, fixed** | `7eafc5c`: the run is re-derived from the day book — evidence must be one contiguous stretch of the ledger's legs, inside the ±5% / ±3-day bands, not extendable by either neighbour; the seed gains a one-off rent repair (vouchers_window 50 → 51) | Still "reconciled 55 facts across 16 keys". Mutations in `detectStream`: drop the latest month → "the leg after the run also fits it"; group the one-off in → "a member of the run is outside the ±5% … band" |
+| 13 | 0097 header says either half holds alone; the GUC-tamper residual is only `t.Logf`'d | **CONFIRMED (doc/test), residual itself DEFERRED** | `52f6444`: 0097 header and `tierb` package doc state the residual; the test now PINS it (fails if it stops reproducing, telling the reader what to update) | "RESIDUAL CONFIRMED (pinned): raw SQL with set_config re-scoped to tenant A". Closing it (RLS keyed to something agent_ro cannot set, since `SET` is also open to it) is **OWED** — d122 §5 item 12 |
+
+New owed items from the review: re-preview an approver's edited body (#2), Dr/Cr in read-only answers
+(#11), the GUC-tamper hardening (#13, already listed).
+
+Gates re-run after the fixes, at `7eafc5c`, on the database `tally_fix`:
+
+- `cd backend && go build ./... && go vet ./...`: clean. `git diff 743e39a -- backend/go.mod backend/go.sum
+  frontend/package.json frontend/pnpm-lock.yaml insightd/requirements.txt | wc -l`: **0**.
+- `go test ./... -count=1` (ADMIN_DATABASE_URL / DATABASE_URL on `tally_fix`): **exit 0, 47 packages ok,
+  7 with no test files**.
+- `make tier0`: `ok github.com/khata/cored/internal/trajectory` (no cassettes added or changed).
+- `cd frontend && pnpm exec tsc --noEmit`: exit 0. `pnpm exec vitest run`: **Test Files 126 passed (126),
+  Tests 2019 passed (2019)** (`AgentProvenanceSource` gained `stored_text`).
+- `cd insightd && .venv/bin/python -m pytest`: **249 passed**.
