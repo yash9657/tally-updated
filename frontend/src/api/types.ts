@@ -477,6 +477,12 @@ export interface StatementColumnMapping {
   running_balance: string;
   bank_reference: string;
   cheque_number: string;
+  /**
+   * W5 — a Cr/Dr column carrying the RUNNING BALANCE's sign (Kotak prints the
+   * balance unsigned beside its own flag). "Dr" there is an OVERDRAWN, negative
+   * balance. Optional; omitted by every client written before it.
+   */
+  balance_sign?: string;
 }
 
 export interface PreviewStatementRequest {
@@ -502,6 +508,16 @@ export interface PreviewStatementResponse {
   unresolved: string[];
   /** Observations that do not block — e.g. a column nothing was mapped to. */
   notes: string[];
+  /**
+   * W5 — the bank whose export layout the header matched IN FULL, "" when none
+   * did. ⚠️ `bank_verified` is false for every layout today (no real export has
+   * been checked in this build) and `notes` says so; render it as "recognised",
+   * never as "verified".
+   */
+  bank?: string;
+  bank_verified?: boolean;
+  /** "comma" | "tab" | "semicolon" | "pipe" — how the file was read. */
+  delimiter?: string;
   known_date_layouts: string[];
   known_encodings: StatementDirectionEncoding[];
 }
@@ -519,6 +535,15 @@ export interface ImportStatementRequest {
    */
   statement_account_number?: string;
   created_by: string;
+  /**
+   * W5 — the opening and closing balance PRINTED ON THE STATEMENT, as decimal
+   * strings. The import is REFUSED without a balance proof: a file with no
+   * running balance and no summary of its own can only be proved by these
+   * (opening + deposits − withdrawals = closing). If the file states them too,
+   * the two must agree.
+   */
+  declared_opening_balance?: string;
+  declared_closing_balance?: string;
 }
 
 export interface ImportStatementResponse {
@@ -554,6 +579,17 @@ export interface ImportStatementResponse {
    * the outside, and only one of them is safe.
    */
   balance_walked: boolean;
+  /**
+   * W5 — WHICH balance proof held: "running" (row by row), "declared" (opening
+   * + deposits − withdrawals = closing on declared figures — a walk did NOT
+   * run), or "running+declared" (both). Never empty on a successful import.
+   */
+  balance_proof?: "running" | "declared" | "running+declared";
+  balance_declared_by?: "" | "file" | "operator" | "file+operator";
+  /** "oldest-first" | "newest-first", or "" when the file carries no balance. */
+  row_order?: string;
+  /** Each comparison the proof ran and passed, in words. */
+  proof_checks?: string[];
   period_from: string;
   period_to: string;
   /** What this import could not verify, in the operator's own words. */
@@ -594,6 +630,8 @@ export interface BankStatementImport {
   line_count: number;
   /** False when this file carried no running balance to walk. */
   balance_walked: boolean;
+  /** W5 — see ImportStatementResponse.balance_proof; "" before W5. */
+  balance_proof?: string;
 }
 
 /** GET /bank-statement/{ledgerID} — what the bank said, over a period. */
@@ -1295,6 +1333,18 @@ export interface VoucherRequest {
    * one draft spell it identically.
    */
   draft_id?: string;
+  /**
+   * W5 (migration 0100) — the CLIENT's name for THIS REQUEST. A second POST
+   * under the same key and the same body is answered with the FIRST one's
+   * result (`idempotent_replay: true`) instead of posting a second voucher; the
+   * same key with a different body is refused 422 `idempotency_key_reused`.
+   *
+   * ⛔ IT CLOSES WHAT `draft_id` CANNOT: a body with no draft id (the Bill
+   * Inbox's "no draft id resolvable" window) and a retry after an ambiguous
+   * timeout, which `draft_id` alone answers with a 409 for a request that in
+   * fact succeeded. 8..200 characters, no white space. Honoured on CREATE only.
+   */
+  idempotency_key?: string;
 }
 
 /**
@@ -1352,6 +1402,12 @@ export interface VoucherResponse {
   cgst: Money;
   sgst: Money;
   igst: Money;
+  /**
+   * W5 — true when this answer was NOT written by this request: its
+   * `idempotency_key` had already created the voucher, and this is that first
+   * request's result, replayed. Nothing was posted. Absent otherwise.
+   */
+  idempotent_replay?: boolean;
 }
 
 /**
@@ -4957,6 +5013,8 @@ export interface ParkedVoucher {
   created_by: string;
   source_guid: string;
   source_draft_id: string;
+  /** W5 (0100) — the parked request's idempotency key, "" when it carried none. */
+  idempotency_key?: string;
   postings: { ledger_id: string; dr_cr: string; amount: string }[];
   bill_allocations: { ledger_id: string; ref_name: string; ref_type: string; amount: string }[];
   inventory: {

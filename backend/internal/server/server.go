@@ -3338,17 +3338,20 @@ func parkedVoucherJSON(v ledger.VoucherInput) map[string]any {
 	}
 
 	return map[string]any{
-		"class":            string(v.Class),
-		"voucher_type_id":  uuidOrEmpty(v.VoucherTypeID),
-		"party_ledger_id":  uuidOrEmpty(v.PartyLedgerID),
-		"item_ledger_id":   uuidOrEmpty(v.ItemLedgerID),
-		"voucher_no":       v.VoucherNo,
-		"voucher_date":     v.VoucherDate,
-		"narration":        v.Narration,
-		"party":            v.Party,
-		"created_by":       v.CreatedBy,
-		"source_guid":      v.SourceGUID,
-		"source_draft_id":  v.SourceDraftID,
+		"class":           string(v.Class),
+		"voucher_type_id": uuidOrEmpty(v.VoucherTypeID),
+		"party_ledger_id": uuidOrEmpty(v.PartyLedgerID),
+		"item_ledger_id":  uuidOrEmpty(v.ItemLedgerID),
+		"voucher_no":      v.VoucherNo,
+		"voucher_date":    v.VoucherDate,
+		"narration":       v.Narration,
+		"party":           v.Party,
+		"created_by":      v.CreatedBy,
+		"source_guid":     v.SourceGUID,
+		"source_draft_id": v.SourceDraftID,
+		// W5 (0100): the request's once-only name. Shown so two panes that
+		// differ only in it are not presented as identical.
+		"idempotency_key":  v.IdempotencyKey,
 		"postings":         postings,
 		"bill_allocations": bills,
 		"inventory":        inventory,
