@@ -156,4 +156,3 @@ func (s *Store) NearestGolden(ctx context.Context, question string, k int) (Gold
 	}
 	return out, nil
 }
-
